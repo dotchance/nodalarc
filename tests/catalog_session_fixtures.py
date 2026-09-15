@@ -32,19 +32,6 @@ def shipped_read_view() -> FilesystemCatalogReadView:
     return FilesystemCatalogReadView(CatalogRoots.from_catalog_root(SHIPPED_ROOT))
 
 
-FIXTURE_USER_ROOT = SHIPPED_ROOT.parents[1] / "tests" / "fixtures" / "catalog" / "user"
-
-
-def fixture_read_view() -> FilesystemCatalogReadView:
-    """Shipped catalog plus the test-specific `user:` objects under tests/fixtures/catalog/user.
-
-    Session fixtures that reference `user:` objects resolve against this view.
-    Today it holds only the TEMPORARY ID-23 objects of the MBB acceptance session.
-    """
-
-    return FilesystemCatalogReadView(CatalogRoots(root=SHIPPED_ROOT, user_root=FIXTURE_USER_ROOT))
-
-
 def shipped_snapshot(user_root: Path) -> CatalogReadSnapshot:
     """Repository snapshot over the shipped catalog plus one empty user scope."""
 

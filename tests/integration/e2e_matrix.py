@@ -9,6 +9,7 @@ Usage: make test-runtime-matrix
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -20,7 +21,6 @@ from pathlib import Path
 import requests
 from nodalarc.catalog_closure import FilesystemCatalogReadView
 from nodalarc.configuration_yaml import load_configuration_yaml
-from nodalarc.models.segment_session import SegmentSessionConfig
 from nodalarc.runtime_naming import gs_bridge_port_name
 from nodalarc.workload_target import (
     NODE_ID_LABEL,
@@ -37,19 +37,11 @@ BASE_URL = f"http://{VS_API_HOST}"
 KUBECTL = "sudo KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl"
 
 
-MBB_ACCEPTANCE_SESSION = Path("tests/fixtures/sessions/earth-leo-mbb-acceptance.yaml")
-# TEMPORARY (ID-23): the acceptance session references test-specific `user:` catalog
-# objects, a two-terminal copy of the shipped Hawthorne site and a site set that
-# carries it, so the 36-satellite ring brings one station to its MBB steady limit.
-# The proper fix is a 36-satellite acceptance session that exercises MBB with the
-# shipped stations; when it lands, delete these fixtures and this block, and point
-# the session back at the shipped site set. Written to the runtime's `user:` catalog
-# through the builder API before each acceptance deploy; never shipped.
-ACCEPTANCE_USER_CATALOG_ROOT = Path("tests/fixtures/catalog/user")
-ACCEPTANCE_USER_CATALOG_REFS = (
-    "user:sites/earth/us/earth-us-hawthorne.yaml",
-    "user:site-sets/earth/leo/earth-leo-mbb-acceptance-sites.yaml",
-)
+# The MBB acceptance lanes run this shipped session unchanged: deployed through
+# the catalog contract like every shipped permutation, with the transition's
+# document digest compared against the checkout's file. No fixture, no rewrite,
+# no overlap substitution: the experiment is the one users get.
+MBB_ACCEPTANCE_SESSION_ID = "earth-leo-walker"
 MBB_BAD_OPS_CODES = {
     "KERNEL_DIRTY",
     "ACTUATION_BLOCKED",
@@ -560,73 +552,6 @@ def _link_as_sat_sat(
     return None
 
 
-def deploy_session(token: str, yaml_str: str) -> dict:
-    """Deploy session via wizard API."""
-    return request_json(
-        "POST",
-        "/api/v1/session/deploy-from-yaml",
-        token=token,
-        json={"yaml": yaml_str},
-        retries=3,
-    )
-
-
-def deploy_yaml_and_wait(
-    token: str,
-    yaml_str: str,
-    *,
-    timeout: int = 600,
-    provenance: dict[str, str] | None = None,
-) -> dict:
-    """Deploy session YAML through the VS-API and wait for the admitted
-    transition to finish, the same contract the catalog path uses: the
-    deploy answers with an operation id, the transition's terminal state
-    decides, and the transition's runtime facts must name the checkout
-    under test. Returns PASS with the responses and the observed runtime,
-    or FAIL with a reason."""
-    deploy_response = deploy_session(token, yaml_str)
-    operation_id = deploy_response.get("operation_id")
-    if deploy_response.get("status") != "accepted" or not operation_id:
-        return {
-            "result": "FAIL",
-            "reason": f"Deploy rejected: {deploy_response}",
-            "deploy_response": deploy_response,
-        }
-    transition = wait_for_transition(token, operation_id, timeout=timeout)
-    if transition.get("state") != "succeeded":
-        return {
-            "result": "FAIL",
-            "reason": f"Transition {transition.get('state')}: {transition.get('failure')}",
-            "deploy_response": deploy_response,
-            "transition": transition,
-        }
-    facts = transition.get("facts") or {}
-    observed_runtime = {
-        "release": facts.get("release"),
-        "build": facts.get("build"),
-        "document_digest": facts.get("document_digest"),
-        "closure_digest": facts.get("closure_digest"),
-        "resolved_semantic_digest": facts.get("resolved_semantic_digest"),
-    }
-    identity_error = _runtime_identity_error(
-        provenance if provenance is not None else _run_provenance_from_environment(), facts
-    )
-    if identity_error is not None:
-        return {
-            "result": "FAIL",
-            "reason": identity_error,
-            "deploy_response": deploy_response,
-            "transition": transition,
-            "observed_runtime": observed_runtime,
-        }
-    return {
-        "result": "PASS",
-        "deploy_response": deploy_response,
-        "transition": transition,
-        "observed_runtime": observed_runtime,
-    }
-
-
 def deploy_catalog_session(token: str, perm: dict) -> dict:
     """Deploy the exact shipped catalog revision represented by one permutation."""
     session_ref = f"nodalarc:sessions/{perm['id']}.yaml"
@@ -674,6 +599,59 @@ def deploy_catalog_session(token: str, perm: dict) -> dict:
         },
         retries=3,
     )
+
+
+def deploy_shipped_and_wait(token: str, perm: dict, *, timeout: int = 600) -> dict:
+    """Deploy one shipped permutation through the catalog contract and wait for
+    its admitted transition: the guarded switch answers with an operation id,
+    the transition's terminal state decides, the transition's runtime facts must
+    name the checkout under test, and the deployed document digest must be the
+    checkout's file. Returns PASS with the responses and the observed runtime,
+    or FAIL with a reason. Every acceptance lane and every matrix permutation
+    deploys through this one path."""
+    deploy_response = deploy_catalog_session(token, perm)
+    operation_id = deploy_response.get("operation_id")
+    if deploy_response.get("status") != "accepted" or not operation_id:
+        return {
+            "result": "FAIL",
+            "reason": f"Deploy refused: {deploy_response}",
+            "deploy_response": deploy_response,
+        }
+    transition = wait_for_transition(token, str(operation_id), timeout=timeout)
+    if transition.get("state") != "succeeded":
+        return {
+            "result": "FAIL",
+            "reason": f"Transition failed: {transition}",
+            "deploy_response": deploy_response,
+            "transition": transition,
+        }
+    facts = transition.get("facts") or {}
+    observed_runtime = {
+        "release": facts.get("release"),
+        "build": facts.get("build"),
+        "document_digest": facts.get("document_digest"),
+        "closure_digest": facts.get("closure_digest"),
+        "resolved_semantic_digest": facts.get("resolved_semantic_digest"),
+    }
+    outcome = {
+        "deploy_response": deploy_response,
+        "transition": transition,
+        "observed_runtime": observed_runtime,
+    }
+    identity_error = _runtime_identity_error(perm["run_provenance"], facts)
+    if identity_error is not None:
+        return {"result": "FAIL", "reason": identity_error, **outcome}
+    expected_digest = f"sha256:{perm['document_sha256']}"
+    if observed_runtime["document_digest"] != expected_digest:
+        return {
+            "result": "FAIL",
+            "reason": (
+                f"Deployed document digest {observed_runtime['document_digest']} is not the "
+                f"checkout's {perm['id']} ({expected_digest})"
+            ),
+            **outcome,
+        }
+    return {"result": "PASS", **outcome}
 
 
 def wait_for_transition(token: str, operation_id: str, timeout: int = 600) -> dict:
@@ -1938,92 +1916,6 @@ def check_mbb_packet_behavior(
     }
 
 
-def _catalog_get(token: str, ref: str) -> tuple[int, dict]:
-    """One builder catalog read; 404 is an answer (absent), not an error."""
-    response = requests.post(
-        f"{BASE_URL}/api/v1/builder/catalog/get",
-        headers=headers(token),
-        json={"ref": ref},
-        timeout=10,
-    )
-    if response.status_code not in (200, 404):
-        raise RuntimeError(
-            f"catalog get {ref} returned {response.status_code}: {response.text[:300]}"
-        )
-    return response.status_code, (response.json() if response.status_code == 200 else {})
-
-
-def _ensure_acceptance_catalog(token: str) -> dict[str, dict]:
-    """TEMPORARY (ID-23): write the acceptance's test-specific `user:` objects.
-
-    Each fixture document under ACCEPTANCE_USER_CATALOG_ROOT is written to the
-    runtime's user catalog through the builder's write route: created when
-    absent, replaced at its current revision when it differs, reused when it
-    is already identical. Returns what happened per ref for the evidence.
-    """
-    outcomes: dict[str, dict] = {}
-    for ref in ACCEPTANCE_USER_CATALOG_REFS:
-        relative = ref.split(":", 1)[1]
-        document = load_configuration_yaml(
-            (ACCEPTANCE_USER_CATALOG_ROOT / relative).read_text(encoding="utf-8")
-        )
-        status, existing = _catalog_get(token, ref)
-        if status == 200 and existing.get("canonical_json") == document:
-            outcomes[ref] = {"action": "reused", "revision": existing.get("revision")}
-            continue
-        written = request_json(
-            "POST",
-            "/api/v1/builder/catalog/write",
-            token=token,
-            json={
-                "ref": ref,
-                "document": document,
-                "expected_revision": existing.get("revision") if status == 200 else None,
-            },
-        )
-        result = (written or {}).get("document") or {}
-        if result.get("ref") != ref or not result.get("revision"):
-            raise RuntimeError(f"catalog write for {ref} was not accepted: {written}")
-        outcomes[ref] = {
-            "action": "updated" if status == 200 else "created",
-            "revision": result["revision"],
-        }
-    return outcomes
-
-
-def _prepare_acceptance_session(
-    token: str,
-    *,
-    session_name: str,
-    mbb_overlap_ticks: int | None = None,
-) -> tuple[str, dict[str, dict]]:
-    """The acceptance session YAML, after its TEMPORARY user catalog objects exist."""
-    catalog = _ensure_acceptance_catalog(token)
-    return (
-        _acceptance_session_yaml(session_name=session_name, mbb_overlap_ticks=mbb_overlap_ticks),
-        catalog,
-    )
-
-
-def _acceptance_session_yaml(
-    *,
-    session_name: str,
-    mbb_overlap_ticks: int | None = None,
-) -> str:
-    import yaml
-
-    data = load_configuration_yaml(MBB_ACCEPTANCE_SESSION.read_text())
-    data.setdefault("session", {})["name"] = session_name
-    if mbb_overlap_ticks is not None:
-        ground = next(segment for segment in data["segments"] if segment["id"] == "ground")
-        ground["apply"]["scheduling"]["mbb_overlap_ticks"] = mbb_overlap_ticks
-    validated = SegmentSessionConfig.model_validate(data)
-    return yaml.safe_dump(
-        validated.model_dump(mode="json", by_alias=True, exclude_none=True),
-        sort_keys=False,
-    )
-
-
 def _active_ground_link_with_interfaces(token: str, *, wait_s: int = 180) -> dict | None:
     deadline = time.monotonic() + wait_s
     while time.monotonic() < deadline:
@@ -2189,25 +2081,21 @@ def _events_since(
     return [event for event in events if _event_at_or_after(event, started_at)]
 
 
-def run_dirty_repair_acceptance() -> dict:
+def run_dirty_repair_acceptance(provenance: dict[str, str] | None = None) -> dict:
+    perm = acceptance_permutation(provenance or _run_provenance_from_environment())
     evidence: dict = {
         "id": "P6-REPAIR",
         "label": "forced-kernel-dirty-operator-repair",
-        "session_file": str(MBB_ACCEPTANCE_SESSION),
+        "session_ref": perm["session_ref"],
+        "document_sha256": perm["document_sha256"],
         "started_at": datetime.now(UTC).isoformat(),
     }
-    if not MBB_ACCEPTANCE_SESSION.exists():
-        return {**evidence, "result": "ERROR", "error": "MBB acceptance session missing"}
     try:
         acceptance_progress("dirty-repair: acquiring token")
         token = get_token()
-        acceptance_progress("dirty-repair: deploying session")
-        yaml_str, evidence["acceptance_catalog"] = _prepare_acceptance_session(
-            token,
-            session_name=f"dirty-repair-{int(time.time())}",
-        )
-        deployed = deploy_yaml_and_wait(token, yaml_str)
-        evidence["deploy_response"] = deployed["deploy_response"]
+        acceptance_progress("dirty-repair: deploying the shipped session")
+        deployed = deploy_shipped_and_wait(token, perm)
+        evidence["deploy_response"] = deployed.get("deploy_response")
         evidence["transition"] = deployed.get("transition")
         evidence["observed_runtime"] = deployed.get("observed_runtime")
         if deployed["result"] != "PASS":
@@ -2559,26 +2447,107 @@ def check_declared_connectivity(token: str, perm: dict) -> dict:
     return check_ping(token, perm)
 
 
-def run_seek_during_mbb_acceptance() -> dict:
+SEEK_INTO_OVERLAP_OFFSET_S = 10
+
+
+def _seek_target_for_overlap(
+    sample: dict,
+    *,
+    overlap_ticks: int,
+    step_seconds: int,
+    offset_s: int = SEEK_INTO_OVERLAP_OFFSET_S,
+) -> dict:
+    """Where the seek lane aims inside an observed MBB overlap, from one fresh
+    sample of the station's links. The overlap started ``overlap_ticks`` minus
+    the teardown link's remaining ticks before the sample's sim time; the target
+    is that start plus ``offset_s`` sim-seconds. The opportunity is pending only
+    while the sample still carries the teardown link with remaining ticks; a
+    sample without it is an expired opportunity, never a test."""
+    link = sample.get("teardown_link") or {}
+    remaining = link.get("teardown_remaining_ticks")
+    if not link or remaining is None or int(remaining) <= 0:
+        return {
+            "pending": False,
+            "reason": "the sample carries no pending teardown for the observed overlap",
+            "sample_sim_time": sample.get("sim_time"),
+        }
+    sim = _parse_api_datetime(sample["sim_time"])
+    elapsed_ticks = max(0, overlap_ticks - int(remaining))
+    start = sim - timedelta(seconds=elapsed_ticks * step_seconds)
+    target = start + timedelta(seconds=offset_s)
+    return {
+        "pending": True,
+        "sample_sim_time": sample["sim_time"],
+        "remaining_ticks": int(remaining),
+        "overlap_ticks": overlap_ticks,
+        "overlap_start_sim_time": start.isoformat(),
+        "target_sim_time": target.isoformat(),
+        "direction": "backward" if target < sim else "forward",
+    }
+
+
+def _pre_seek_sample(token: str, gs_id: str, old_pair: list[str]) -> dict:
+    """One fresh, receipt-stamped read of the station's links and the decision
+    epoch, taken immediately before the seek request."""
+    started = datetime.now(UTC)
+    state = request_json("GET", "/api/v1/state", token=token)
+    decisions = request_json("GET", "/api/v1/ground-link-decisions", token=token)
+    finished = datetime.now(UTC)
+    links = _ground_links_by_gs(state).get(gs_id, [])
+    teardown_link = next(
+        (
+            link
+            for link in links
+            if {link.get("node_a"), link.get("node_b")} == set(old_pair)
+            and (
+                link.get("scheduling_state") == "teardown"
+                or link.get("teardown_remaining_ticks") is not None
+            )
+        ),
+        None,
+    )
+    return {
+        "sim_time": state.get("sim_time"),
+        "epoch_id": decisions.get("epoch_id"),
+        "decision_snapshot_seq": decisions.get("snapshot_seq"),
+        "read_started_wall": started.isoformat(),
+        "read_finished_wall": finished.isoformat(),
+        "teardown_link": teardown_link,
+        "active_ground_links": links,
+    }
+
+
+def _invalidation_matches(
+    event: dict, *, old_pair: list, successor_pair: list, epoch_id, target: str
+) -> bool:
+    details = event.get("details") or {}
+    if details.get("terminal_outcome") != "teardown_invalidated_by_epoch":
+        return False
+    if details.get("old_pair") != old_pair or details.get("successor_pair") != successor_pair:
+        return False
+    if epoch_id is not None and details.get("epoch_id") != epoch_id:
+        return False
+    recorded = details.get("seek_target_sim_time")
+    if recorded is None:
+        return False
+    return _parse_api_datetime(str(recorded)) == _parse_api_datetime(target)
+
+
+def run_seek_during_mbb_acceptance(provenance: dict[str, str] | None = None) -> dict:
+    perm = acceptance_permutation(provenance or _run_provenance_from_environment())
     evidence: dict = {
         "id": "P6-SEEK-MBB",
         "label": "seek-during-mbb-overlap",
-        "session_file": str(MBB_ACCEPTANCE_SESSION),
+        "session_ref": perm["session_ref"],
+        "document_sha256": perm["document_sha256"],
         "started_at": datetime.now(UTC).isoformat(),
     }
-    if not MBB_ACCEPTANCE_SESSION.exists():
-        return {**evidence, "result": "ERROR", "error": "MBB acceptance session missing"}
     try:
         acceptance_progress("seek-mbb: acquiring token")
         token = get_token()
-        yaml_str, evidence["acceptance_catalog"] = _prepare_acceptance_session(
-            token,
-            session_name=f"seek-mbb-{int(time.time())}",
-            mbb_overlap_ticks=600,
-        )
-        acceptance_progress("seek-mbb: deploying session")
-        deployed = deploy_yaml_and_wait(token, yaml_str)
-        evidence["deploy_response"] = deployed["deploy_response"]
+        acceptance_progress("seek-mbb: deploying the shipped session")
+        deployed = deploy_shipped_and_wait(token, perm)
+        evidence["deploy_response"] = deployed.get("deploy_response")
         evidence["transition"] = deployed.get("transition")
         evidence["observed_runtime"] = deployed.get("observed_runtime")
         if deployed["result"] != "PASS":
@@ -2603,19 +2572,45 @@ def run_seek_during_mbb_acceptance() -> dict:
             evidence["error"] = "No MBB overlap available for seek test"
             return evidence
 
-        current_sim = _parse_api_datetime(overlap["sim_time"])
-        seek_target = current_sim + timedelta(seconds=30)
-        acceptance_progress(f"seek-mbb: requesting seek to {seek_target.isoformat()}")
+        # The seek aims inside the observed overlap, at its start plus ten
+        # sim-seconds, from a fresh sample taken right before the request; an
+        # overlap no longer pending at that sample is an expired opportunity.
+        station = perm["mbb_stations"].get(overlap["gs_id"]) or {}
+        sample = _pre_seek_sample(token, overlap["gs_id"], overlap["old_pair"])
+        target = _seek_target_for_overlap(
+            sample,
+            overlap_ticks=int(station.get("mbb_overlap_ticks") or 0),
+            step_seconds=int(perm["step_seconds"]),
+        )
+        evidence["pre_seek_sample"] = sample
+        evidence["seek_target"] = target
+        if not target["pending"]:
+            evidence["result"] = "FAIL"
+            evidence["opportunity"] = "expired"
+            evidence["error"] = (
+                "MBB overlap no longer pending when the seek was to be requested; "
+                "no seek-during-overlap test was performed"
+            )
+            return evidence
+        seek_target = target["target_sim_time"]
+        acceptance_progress(f"seek-mbb: requesting seek to {seek_target}")
+        requested_wall = datetime.now(UTC)
         seek_response = request_json(
             "POST",
             "/api/v1/playback",
             token=token,
-            json={"action": "seek", "target_sim_time": seek_target.isoformat()},
+            json={"action": "seek", "target_sim_time": seek_target},
             retries=3,
         )
+        accepted_wall = datetime.now(UTC)
         evidence["seek_request"] = {
-            "target_sim_time": seek_target.isoformat(),
+            "target_sim_time": seek_target,
             "response": seek_response,
+            "requested_wall": requested_wall.isoformat(),
+            "accepted_wall": accepted_wall.isoformat(),
+            "sample_age_at_request_s": (
+                requested_wall - datetime.fromisoformat(sample["read_finished_wall"])
+            ).total_seconds(),
         }
         if seek_response.get("state") != "seeking" or "epoch_id" not in seek_response:
             evidence["result"] = "FAIL"
@@ -2632,15 +2627,18 @@ def run_seek_during_mbb_acceptance() -> dict:
             for event in events
             if event.get("source") == "ome" and event.get("code") == "MBB_TEARDOWN_TERMINAL"
         ]
-        expected_old_pair = overlap.get("old_pair")
-        expected_successor_pair = overlap.get("successor_pair")
+        # The invalidation must be of this particular old-epoch teardown: same
+        # pairs, the epoch the sample saw, and the seek target that was requested.
         invalidated = [
             event
             for event in lifecycle
-            if (event.get("details") or {}).get("terminal_outcome")
-            == "teardown_invalidated_by_epoch"
-            and (event.get("details") or {}).get("old_pair") == expected_old_pair
-            and (event.get("details") or {}).get("successor_pair") == expected_successor_pair
+            if _invalidation_matches(
+                event,
+                old_pair=list(overlap.get("old_pair") or []),
+                successor_pair=list(overlap.get("successor_pair") or []),
+                epoch_id=sample.get("epoch_id"),
+                target=seek_target,
+            )
         ]
         bad = [event for event in events if event.get("code") in MBB_BAD_OPS_CODES]
         state_after = request_json("GET", "/api/v1/state", token=token)
@@ -2663,35 +2661,30 @@ def run_seek_during_mbb_acceptance() -> dict:
     return evidence
 
 
-def run_mbb_acceptance() -> dict:
+def run_mbb_acceptance(provenance: dict[str, str] | None = None) -> dict:
+    perm = acceptance_permutation(provenance or _run_provenance_from_environment())
     evidence: dict = {
         "id": "C-J",
         "label": "mbb-routing-packet-observation",
-        "session_file": str(MBB_ACCEPTANCE_SESSION),
+        "session_ref": perm["session_ref"],
+        "document_sha256": perm["document_sha256"],
         "started_at": datetime.now(UTC).isoformat(),
     }
-    if not MBB_ACCEPTANCE_SESSION.exists():
-        return {**evidence, "result": "ERROR", "error": "MBB acceptance session missing"}
     try:
         token = get_token()
-        yaml_str, evidence["acceptance_catalog"] = _prepare_acceptance_session(
-            token,
-            session_name=f"cj-mbb-{int(time.time())}",
-            mbb_overlap_ticks=60,
-        )
-        evidence["yaml_length"] = len(yaml_str)
-        deployed = deploy_yaml_and_wait(token, yaml_str)
-        evidence["deploy_response"] = deployed["deploy_response"]
+        acceptance_progress("mbb: deploying the shipped session")
+        deployed = deploy_shipped_and_wait(token, perm)
+        evidence["deploy_response"] = deployed.get("deploy_response")
         evidence["transition"] = deployed.get("transition")
         evidence["observed_runtime"] = deployed.get("observed_runtime")
         if deployed["result"] != "PASS":
             evidence["result"] = "FAIL"
             evidence["error"] = deployed["reason"]
             return evidence
-        acceptance_progress("seek-mbb: waiting for session readiness")
+        acceptance_progress("mbb: waiting for session readiness")
         ready_result = wait_for_ready(token, timeout=600)
         evidence["ready_result"] = ready_result
-        acceptance_progress(f"seek-mbb: readiness result {ready_result}")
+        acceptance_progress(f"mbb: readiness result {ready_result}")
         if ready_result.get("phase") != "Ready":
             evidence["result"] = "FAIL"
             evidence["error"] = f"Did not reach Ready: {ready_result}"
@@ -2759,37 +2752,13 @@ def run_permutation(perm: dict) -> dict:
 
         # Deploy
         print("  Deploying guarded shipped catalog revision...")
-        deploy_result = deploy_catalog_session(token, perm)
-        evidence["deploy_response"] = deploy_result
-        operation_id = deploy_result.get("operation_id")
-        if deploy_result.get("status") != "accepted" or not operation_id:
+        deployed = deploy_shipped_and_wait(token, perm)
+        evidence["deploy_response"] = deployed.get("deploy_response")
+        evidence["transition_result"] = deployed.get("transition")
+        evidence["observed_runtime"] = deployed.get("observed_runtime")
+        if deployed["result"] != "PASS":
             evidence["result"] = "FAIL"
-            evidence["error"] = f"Deploy refused: {deploy_result}"
-            print(f"  FAIL: {evidence['error']}")
-            return evidence
-
-        print(f"  Waiting for transition {operation_id}...")
-        transition_result = wait_for_transition(token, str(operation_id), timeout=600)
-        evidence["transition_result"] = transition_result
-        if transition_result.get("state") != "succeeded":
-            evidence["result"] = "FAIL"
-            evidence["error"] = f"Transition failed: {transition_result}"
-            print(f"  FAIL: {evidence['error']}")
-            return evidence
-        transition_facts = transition_result.get("facts") or {}
-        provenance = perm["run_provenance"]
-        observed_runtime = {
-            "release": transition_facts.get("release"),
-            "build": transition_facts.get("build"),
-            "document_digest": transition_facts.get("document_digest"),
-            "closure_digest": transition_facts.get("closure_digest"),
-            "resolved_semantic_digest": transition_facts.get("resolved_semantic_digest"),
-        }
-        evidence["observed_runtime"] = observed_runtime
-        identity_error = _runtime_identity_error(provenance, transition_facts)
-        if identity_error is not None:
-            evidence["result"] = "FAIL"
-            evidence["error"] = identity_error
+            evidence["error"] = deployed["reason"]
             print(f"  FAIL: {evidence['error']}")
             return evidence
 
@@ -2879,7 +2848,7 @@ def run_permutation(perm: dict) -> dict:
     return evidence
 
 
-def catalog_permutations() -> list[dict]:
+def catalog_permutations(session_id: str | None = None) -> list[dict]:
     """The shipped catalog sessions, deployed verbatim — network truth
     for the worked examples before any generated permutations. Protocol
     is derived from the session's own routing domains via the production
@@ -2893,7 +2862,7 @@ def catalog_permutations() -> list[dict]:
     from nodalarc.resolve_session import resolve_session_with_assets
 
     roots = CatalogRoots.from_catalog_root(repo / "catalog" / "nodalarc")
-    only = os.environ.get("NODALARC_E2E_ONLY", "")
+    only = session_id or os.environ.get("NODALARC_E2E_ONLY", "")
     perms = []
     for path in sorted((repo / "catalog" / "nodalarc" / "sessions").glob("*.yaml")):
         if only and path.stem != only:
@@ -2922,16 +2891,40 @@ def catalog_permutations() -> list[dict]:
             for node in resolved.nodes
             if node.kind == "ground_station" and node.surface_position is not None
         }
+        # Each station's resolved handover facts: the allocator's steady limit is
+        # terminal capacity minus the MBB reserve, so a limit of one means every
+        # handover at that station is an MBB overlap. Read from the resolver's
+        # per-station scheduling, never from the session text.
+        mbb_stations = {}
+        for node in resolved.nodes:
+            if node.kind != "ground_station" or node.ground_scheduling is None:
+                continue
+            scheduling = node.ground_scheduling
+            capacity = sum(block.count for block in node.terminal_inventory)
+            reserve = int(scheduling.mbb_reserve or 0)
+            mbb_stations[node.node_id] = {
+                "site": node.namespace,
+                "handover_mode": scheduling.handover_mode,
+                "terminal_capacity": capacity,
+                "mbb_reserve": reserve,
+                "mbb_overlap_ticks": int(scheduling.mbb_overlap_ticks or 0),
+                "steady_limit": capacity - reserve
+                if scheduling.handover_mode == "mbb"
+                else capacity,
+            }
         perms.append(
             {
                 "id": path.stem,
                 "label": f"catalog-{path.stem}",
+                "session_ref": f"nodalarc:sessions/{path.stem}.yaml",
+                "document_sha256": hashlib.sha256(text.encode("utf-8")).hexdigest(),
                 "protocol": protocols[0],
                 "protocols": protocols,
                 # Derived from the resolved session, never hand-stated:
                 # the ground-truth predicate for the ping/adjacency checks.
                 "gs": ground_ids,
                 "ground_topology": ground_topology,
+                "mbb_stations": mbb_stations,
                 "session_start_time": str(resolved.time.start_time),
                 "connectivity_expectation": _connectivity_expectation(path.stem),
                 "step_seconds": int(resolved.time.step_seconds),
@@ -2940,6 +2933,16 @@ def catalog_permutations() -> list[dict]:
             }
         )
     return perms
+
+
+def acceptance_permutation(provenance: dict[str, str]) -> dict:
+    """The shipped MBB acceptance session as one catalog permutation, resolved
+    and digested like every other shipped session, carrying the run's
+    provenance for the identity gate."""
+    perms = catalog_permutations(session_id=MBB_ACCEPTANCE_SESSION_ID)
+    if len(perms) != 1:
+        raise RuntimeError(f"shipped session {MBB_ACCEPTANCE_SESSION_ID} not found in the catalog")
+    return {**perms[0], "run_provenance": provenance}
 
 
 def main():
@@ -3005,7 +3008,7 @@ def main():
                 evidence_file.write_text(json.dumps(evidence, indent=2))
 
         if os.environ.get("NODALARC_RUN_MBB_ACCEPTANCE") == "1":
-            evidence = run_mbb_acceptance()
+            evidence = run_mbb_acceptance(provenance)
             evidence["provenance"] = provenance
             results.append(evidence)
             evidence_file = evidence_dir / "cj-mbb-packet-behavior.json"
@@ -3016,7 +3019,7 @@ def main():
                 failed += 1
 
         if os.environ.get("NODALARC_RUN_DIRTY_REPAIR") == "1":
-            evidence = run_dirty_repair_acceptance()
+            evidence = run_dirty_repair_acceptance(provenance)
             evidence["provenance"] = provenance
             results.append(evidence)
             evidence_file = evidence_dir / "dirty-repair.json"
@@ -3027,7 +3030,7 @@ def main():
                 failed += 1
 
         if os.environ.get("NODALARC_RUN_SEEK_MBB") == "1":
-            evidence = run_seek_during_mbb_acceptance()
+            evidence = run_seek_during_mbb_acceptance(provenance)
             evidence["provenance"] = provenance
             results.append(evidence)
             evidence_file = evidence_dir / "seek-during-mbb.json"

@@ -14,13 +14,7 @@ import subprocess
 from pathlib import Path
 from types import SimpleNamespace
 
-import pytest
 import yaml
-from nodalarc.configuration_yaml import load_configuration_yaml
-from nodalarc.models.segment_session import SegmentSessionConfig
-from nodalarc.resolve_session import resolve_session
-
-from tests.catalog_session_fixtures import fixture_read_view
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -156,24 +150,6 @@ def test_wait_for_transition_is_bound_to_operation_terminal_state(monkeypatch) -
         "/api/v1/session-transitions/0123456789abcdef",
         "/api/v1/session-transitions/0123456789abcdef",
     ]
-
-
-def test_mbb_acceptance_mutation_stays_in_canonical_session_grammar() -> None:
-    rendered = e2e_matrix._acceptance_session_yaml(  # noqa: SLF001
-        session_name="mbb-mutated",
-        mbb_overlap_ticks=17,
-    )
-    document = load_configuration_yaml(rendered)
-
-    parsed = SegmentSessionConfig.model_validate(document)
-    resolved = resolve_session(document, catalog=fixture_read_view())
-    ground = next(segment for segment in document["segments"] if segment["id"] == "ground")
-
-    assert parsed.session.name == "mbb-mutated"
-    assert ground["apply"]["scheduling"]["mbb_overlap_ticks"] == 17
-    assert document["segments"][0]["source"].startswith("nodalarc:")
-    assert resolved.nodes
-    assert resolved.link_candidates
 
 
 def test_mbb_packet_acceptance_requires_successor_fib_overlap() -> None:
@@ -906,95 +882,6 @@ def test_handover_packet_window_starts_nothing_when_a_target_is_unresolved(monke
     assert "expected one live session pod" in result["reason"]
 
 
-def test_yaml_deployments_use_the_transition_contract_and_the_identity_gate(monkeypatch) -> None:
-    """The acceptance paths deploy the way the catalog path does: an accepted
-    operation id, the transition's terminal state, and the transition's
-    runtime facts naming the checkout under test."""
-    provenance = {
-        "source_git_sha": "abc",
-        "source_tree_tag": "abc-1",
-        "namespace": "nodalarc",
-        "expected_runtime_release": "0.7.1+test",
-        "expected_runtime_build": "abc-1",
-    }
-    facts = {"release": "0.7.1+test", "build": "abc-1", "document_digest": "sha256:d"}
-    waited: list[str] = []
-    monkeypatch.setattr(
-        e2e_matrix,
-        "deploy_session",
-        lambda token, yaml_str: {"status": "accepted", "operation_id": "op-1"},
-    )
-    monkeypatch.setattr(
-        e2e_matrix,
-        "wait_for_transition",
-        lambda token, operation_id, timeout=600: (
-            waited.append(operation_id),
-            {"state": "succeeded", "facts": facts},
-        )[1],
-    )
-    passed = e2e_matrix.deploy_yaml_and_wait("t", "yaml", provenance=provenance)
-    assert passed["result"] == "PASS"
-    assert passed["observed_runtime"]["build"] == "abc-1"
-    assert waited == ["op-1"]
-
-    # A succeeded transition of another build is a failure, not a deployment.
-    wrong = {"release": "0.7.1+test", "build": "zzz-9"}
-    monkeypatch.setattr(
-        e2e_matrix,
-        "wait_for_transition",
-        lambda token, operation_id, timeout=600: {"state": "succeeded", "facts": wrong},
-    )
-    mismatched = e2e_matrix.deploy_yaml_and_wait("t", "yaml", provenance=provenance)
-    assert mismatched["result"] == "FAIL"
-    assert "runtime identity differs" in mismatched["reason"]
-    assert mismatched["observed_runtime"]["build"] == "zzz-9"
-
-    # A succeeded transition that states no runtime facts is a failure too.
-    monkeypatch.setattr(
-        e2e_matrix,
-        "wait_for_transition",
-        lambda token, operation_id, timeout=600: {"state": "succeeded"},
-    )
-    assert e2e_matrix.deploy_yaml_and_wait("t", "yaml", provenance=provenance)["result"] == "FAIL"
-
-    # Without an explicit provenance the gate reads the run's environment.
-    monkeypatch.setattr(e2e_matrix, "_run_provenance_from_environment", lambda: provenance)
-    monkeypatch.setattr(
-        e2e_matrix,
-        "wait_for_transition",
-        lambda token, operation_id, timeout=600: {"state": "succeeded", "facts": facts},
-    )
-    assert e2e_matrix.deploy_yaml_and_wait("t", "yaml")["result"] == "PASS"
-
-    monkeypatch.setattr(
-        e2e_matrix,
-        "wait_for_transition",
-        lambda token, operation_id, timeout=600: {
-            "state": "failed",
-            "failure": {"message": "wiring failed"},
-        },
-    )
-    failed = e2e_matrix.deploy_yaml_and_wait("t", "yaml", provenance=provenance)
-    assert failed["result"] == "FAIL" and "wiring failed" in failed["reason"]
-
-    for response in (
-        {"error": "Switch already in progress"},
-        {"status": "switching"},
-        {"status": "accepted"},
-    ):
-        monkeypatch.setattr(e2e_matrix, "deploy_session", lambda token, yaml_str, r=response: r)
-        rejected = e2e_matrix.deploy_yaml_and_wait("t", "yaml", provenance=provenance)
-        assert rejected["result"] == "FAIL" and rejected["reason"].startswith("Deploy rejected"), (
-            response
-        )
-
-    source = Path(e2e_matrix.__file__).read_text()
-    # The deploy-response check on the retired vocabulary is gone; the VS-API's
-    # session_status value "switching" that wait_for_ready polls is unrelated.
-    assert '.get("status") != "switching"' not in source
-    assert "_route_dev(" not in source
-
-
 def test_handover_window_decides_pings_no_route_answer_with_the_one_reader() -> None:
     """The interrupted-window parser and the synchronous probes share one decision
     about a no-route answer: only a line ping printed, in either C library's wording."""
@@ -1026,130 +913,188 @@ def test_handover_overlap_reads_adjacency_and_route_through_the_observation_pars
     assert source.count("def _route_egress_dev") == 1 and "def _route_dev" not in source
 
 
-# --- TEMPORARY (ID-23): the MBB acceptance's test-specific user catalog objects ---
+# --- the MBB acceptance lanes run the shipped walker unchanged ---
 
 
-def _acceptance_fixture_documents() -> dict[str, dict]:
-    return {
-        ref: load_configuration_yaml(
-            (e2e_matrix.ACCEPTANCE_USER_CATALOG_ROOT / ref.split(":", 1)[1]).read_text()
-        )
-        for ref in e2e_matrix.ACCEPTANCE_USER_CATALOG_REFS
+_PROVENANCE = {
+    "source_git_sha": "abc",
+    "source_tree_tag": "abc-1",
+    "namespace": "nodalarc",
+    "expected_runtime_release": "0.7.1+test",
+    "expected_runtime_build": "abc-1",
+}
+
+
+def test_acceptance_permutation_is_the_unchanged_shipped_walker_with_resolved_station_facts() -> (
+    None
+):
+    import hashlib
+
+    perm = e2e_matrix.acceptance_permutation(_PROVENANCE)
+    walker = ROOT / "catalog/nodalarc/sessions/earth-leo-walker.yaml"
+
+    assert perm["id"] == "earth-leo-walker"
+    assert perm["session_ref"] == "nodalarc:sessions/earth-leo-walker.yaml"
+    assert perm["document_sha256"] == hashlib.sha256(walker.read_bytes()).hexdigest()
+    assert perm["session_yaml"] == walker.read_text()
+    assert perm["run_provenance"] == _PROVENANCE
+    assert perm["protocol"] == "isis" and perm["step_seconds"] == 1
+    stations = perm["mbb_stations"]
+    assert {s["handover_mode"] for s in stations.values()} == {"mbb"}
+    assert {s["mbb_overlap_ticks"] for s in stations.values()} == {30}
+    assert {s["mbb_reserve"] for s in stations.values()} == {1}
+    assert {node: s["steady_limit"] for node, s in stations.items()} == {
+        "earth-us-hawthorne-gw1": 7,
+        "earth-us-co-denver-gw1": 3,
+        "earth-us-co-denver-gw2": 1,
+        "earth-us-va-ashburn-gw1": 1,
+        "earth-de-frankfurt-gw1": 1,
     }
+    assert set(perm["ground_topology"]) == set(stations)
+    assert perm["ground_topology"]["earth-us-va-ashburn-gw1"]["wan_ifnames"] == ["term0", "term1"]
+    assert perm["ground_topology"]["earth-us-co-denver-gw2"]["site"] == "earth-us-co-denver"
 
 
-def test_acceptance_user_catalog_fixtures_are_valid_temporary_two_terminal_hawthorne() -> None:
-    from nodalarc.catalog_registry import validate_referenced_configuration_document
-
-    documents = _acceptance_fixture_documents()
-    site_ref, set_ref = e2e_matrix.ACCEPTANCE_USER_CATALOG_REFS
-    for ref, document in documents.items():
-        validate_referenced_configuration_document(ref, document)
-        text = (e2e_matrix.ACCEPTANCE_USER_CATALOG_ROOT / ref.split(":", 1)[1]).read_text()
-        assert "TEMPORARY" in text, ref
-    site = documents[site_ref]["site"]
-    assert site["id"] == "earth-us-hawthorne"
-    assert site["nodes"][0]["terminals"]["access_ka"]["installed_count"] == 2
-    shipped = load_configuration_yaml(
-        (ROOT / "catalog/nodalarc/sites/earth/us/earth-us-hawthorne.yaml").read_text()
-    )["site"]
-    assert shipped["nodes"][0]["terminals"]["access_ka"]["installed_count"] == 8
-    site_set = documents[set_ref]["site_set"]
-    assert site_set["id"] == "earth-leo-mbb-acceptance-sites"
-    assert site_set["sites"] == [
-        "user:sites/earth/us/earth-us-hawthorne.yaml",
-        "nodalarc:sites/earth/us/co/earth-us-co-denver.yaml",
-        "nodalarc:sites/earth/us/va/earth-us-va-ashburn.yaml",
-        "nodalarc:sites/earth/de/earth-de-frankfurt.yaml",
-    ]
-    session_text = e2e_matrix.MBB_ACCEPTANCE_SESSION.read_text()
-    assert "TEMPORARY" in session_text
-    assert f"from_site_set: {set_ref}" in session_text
-
-
-def test_acceptance_session_resolves_hawthorne_to_two_terminals_and_others_as_shipped() -> None:
-    raw = load_configuration_yaml(
-        e2e_matrix._acceptance_session_yaml(session_name="unit", mbb_overlap_ticks=60)  # noqa: SLF001
-    )
-    resolved = resolve_session(raw, catalog=fixture_read_view())
-    counts = {
-        node.node_id: sum(block.count for block in node.terminal_inventory)
-        for node in resolved.nodes
-        if node.kind == "ground_station"
+def test_shipped_deploy_checks_the_transition_identity_and_the_document_digest(monkeypatch) -> None:
+    perm = {
+        "id": "earth-leo-walker",
+        "document_sha256": "d" * 64,
+        "run_provenance": _PROVENANCE,
     }
-    assert counts == {
-        "earth-us-hawthorne-gw1": 2,
-        "earth-us-co-denver-gw1": 4,
-        "earth-us-co-denver-gw2": 2,
-        "earth-us-va-ashburn-gw1": 2,
-        "earth-de-frankfurt-gw1": 2,
-    }
-    ground = next(s for s in raw["segments"] if s["id"] == "ground")
-    assert ground["apply"]["scheduling"]["mbb_overlap_ticks"] == 60
-
-
-def test_ensure_acceptance_catalog_creates_updates_or_reuses_through_the_write_route(
-    monkeypatch,
-) -> None:
-    documents = _acceptance_fixture_documents()
-    site_ref, set_ref = e2e_matrix.ACCEPTANCE_USER_CATALOG_REFS
-    writes: list[dict] = []
-
-    def fake_write(method, path, *, token=None, json=None, **kwargs):
-        assert (method, path) == ("POST", "/api/v1/builder/catalog/write")
-        writes.append(json)
-        return {"document": {"ref": json["ref"], "revision": f"rev-{len(writes)}"}}
-
-    monkeypatch.setattr(e2e_matrix, "request_json", fake_write)
-
-    # Absent: both created, site before site set, with no expected revision.
-    monkeypatch.setattr(e2e_matrix, "_catalog_get", lambda token, ref: (404, {}))
-    outcome = e2e_matrix._ensure_acceptance_catalog("t")  # noqa: SLF001
-    assert [w["ref"] for w in writes] == [site_ref, set_ref]
-    assert all(w["expected_revision"] is None for w in writes)
-    assert writes[0]["document"] == documents[site_ref]
-    assert outcome[site_ref]["action"] == "created" and outcome[set_ref]["action"] == "created"
-
-    # Present and identical: reused, nothing written.
-    writes.clear()
+    facts = {"release": "0.7.1+test", "build": "abc-1", "document_digest": "sha256:" + "d" * 64}
+    waited: list[str] = []
     monkeypatch.setattr(
         e2e_matrix,
-        "_catalog_get",
-        lambda token, ref: (200, {"canonical_json": documents[ref], "revision": "r7"}),
+        "deploy_catalog_session",
+        lambda token, perm: {"status": "accepted", "operation_id": "op-1"},
     )
-    outcome = e2e_matrix._ensure_acceptance_catalog("t")  # noqa: SLF001
-    assert writes == []
-    assert {o["action"] for o in outcome.values()} == {"reused"}
-    assert outcome[site_ref]["revision"] == "r7"
-
-    # Present and different: replaced at the current revision.
-    writes.clear()
     monkeypatch.setattr(
         e2e_matrix,
-        "_catalog_get",
-        lambda token, ref: (200, {"canonical_json": {"stale": True}, "revision": "r9"}),
+        "wait_for_transition",
+        lambda token, operation_id, timeout=600: (
+            waited.append(operation_id),
+            {"state": "succeeded", "facts": facts},
+        )[1],
     )
-    outcome = e2e_matrix._ensure_acceptance_catalog("t")  # noqa: SLF001
-    assert [w["expected_revision"] for w in writes] == ["r9", "r9"]
-    assert {o["action"] for o in outcome.values()} == {"updated"}
+    passed = e2e_matrix.deploy_shipped_and_wait("t", perm)
+    assert passed["result"] == "PASS"
+    assert passed["observed_runtime"]["document_digest"] == "sha256:" + "d" * 64
+    assert waited == ["op-1"]
 
-    # A rejected write is a failure, not a deployment on stale objects.
-    monkeypatch.setattr(e2e_matrix, "_catalog_get", lambda token, ref: (404, {}))
+    other_build = {**facts, "build": "zzz-9"}
     monkeypatch.setattr(
-        e2e_matrix, "request_json", lambda *a, **k: {"code": "catalog_authoring.invalid"}
+        e2e_matrix,
+        "wait_for_transition",
+        lambda token, operation_id, timeout=600: {"state": "succeeded", "facts": other_build},
     )
-    with pytest.raises(RuntimeError, match="was not accepted"):
-        e2e_matrix._ensure_acceptance_catalog("t")  # noqa: SLF001
+    mismatched = e2e_matrix.deploy_shipped_and_wait("t", perm)
+    assert mismatched["result"] == "FAIL" and "runtime identity differs" in mismatched["reason"]
+
+    other_document = {**facts, "document_digest": "sha256:" + "e" * 64}
+    monkeypatch.setattr(
+        e2e_matrix,
+        "wait_for_transition",
+        lambda token, operation_id, timeout=600: {"state": "succeeded", "facts": other_document},
+    )
+    rewritten = e2e_matrix.deploy_shipped_and_wait("t", perm)
+    assert rewritten["result"] == "FAIL" and "document digest" in rewritten["reason"]
+
+    monkeypatch.setattr(
+        e2e_matrix,
+        "wait_for_transition",
+        lambda token, operation_id, timeout=600: {
+            "state": "failed",
+            "failure": {"message": "wiring"},
+        },
+    )
+    assert e2e_matrix.deploy_shipped_and_wait("t", perm)["result"] == "FAIL"
+
+    monkeypatch.setattr(
+        e2e_matrix, "deploy_catalog_session", lambda token, perm: {"error": "switch in progress"}
+    )
+    refused = e2e_matrix.deploy_shipped_and_wait("t", perm)
+    assert refused["result"] == "FAIL" and refused["reason"].startswith("Deploy refused")
 
 
-def test_every_acceptance_path_prepares_the_temporary_catalog_before_deploying() -> None:
+def test_every_acceptance_lane_deploys_the_shipped_walker_through_the_catalog_contract() -> None:
     source = Path(e2e_matrix.__file__).read_text()
     for name in (
         "run_dirty_repair_acceptance",
         "run_seek_during_mbb_acceptance",
         "run_mbb_acceptance",
+        "run_permutation",
     ):
         body = source.split(f"def {name}(")[1].split("\ndef ")[0]
-        assert "_prepare_acceptance_session(" in body, name
-        assert "_acceptance_session_yaml(" not in body, name
-    assert "TEMPORARY (ID-23)" in source
+        assert "deploy_shipped_and_wait(" in body, name
+        if name != "run_permutation":
+            assert "acceptance_permutation(" in body, name
+    assert e2e_matrix.MBB_ACCEPTANCE_SESSION_ID == "earth-leo-walker"
+    for gone in (
+        "deploy_yaml_and_wait",
+        "def deploy_session(",
+        "_acceptance_session_yaml",
+        "_ensure_acceptance_catalog",
+        "_prepare_acceptance_session",
+        "mbb_overlap_ticks=600",
+        "mbb_overlap_ticks=60",
+        "TEMPORARY",
+    ):
+        assert gone not in source, gone
+    assert not (ROOT / "tests/fixtures/sessions").exists()
+    assert not (ROOT / "tests/fixtures/catalog").exists()
+
+
+def test_seek_target_aims_ten_seconds_into_a_pending_overlap_or_reports_expiry() -> None:
+    sample = {
+        "sim_time": "2026-06-08T00:10:00Z",
+        "teardown_link": {"scheduling_state": "teardown", "teardown_remaining_ticks": 25},
+    }
+    target = e2e_matrix._seek_target_for_overlap(sample, overlap_ticks=30, step_seconds=1)  # noqa: SLF001
+    assert target["pending"] is True
+    assert target["overlap_start_sim_time"] == "2026-06-08T00:09:55+00:00"
+    assert target["target_sim_time"] == "2026-06-08T00:10:05+00:00"
+    assert target["direction"] == "forward"
+
+    late = {**sample, "teardown_link": {"teardown_remaining_ticks": 10}}
+    target = e2e_matrix._seek_target_for_overlap(late, overlap_ticks=30, step_seconds=1)  # noqa: SLF001
+    assert target["target_sim_time"] == "2026-06-08T00:09:50+00:00"
+    assert target["direction"] == "backward"
+
+    for expired in (
+        {**sample, "teardown_link": None},
+        {**sample, "teardown_link": {"teardown_remaining_ticks": 0}},
+        {**sample, "teardown_link": {"scheduling_state": "teardown"}},
+    ):
+        verdict = e2e_matrix._seek_target_for_overlap(expired, overlap_ticks=30, step_seconds=1)  # noqa: SLF001
+        assert verdict["pending"] is False and "target_sim_time" not in verdict
+
+
+def test_invalidation_proof_requires_the_pairs_the_epoch_and_the_requested_target() -> None:
+    old_pair = ["gs-a", "sat-1"]
+    successor_pair = ["gs-a", "sat-2"]
+    target = "2026-06-08T00:10:05+00:00"
+
+    def event(**overrides):
+        details = {
+            "terminal_outcome": "teardown_invalidated_by_epoch",
+            "old_pair": old_pair,
+            "successor_pair": successor_pair,
+            "epoch_id": 4,
+            "seek_target_sim_time": "2026-06-08T00:10:05Z",
+        }
+        details.update(overrides)
+        return {"details": details}
+
+    matches = e2e_matrix._invalidation_matches  # noqa: SLF001
+    kwargs = {
+        "old_pair": old_pair,
+        "successor_pair": successor_pair,
+        "epoch_id": 4,
+        "target": target,
+    }
+    assert matches(event(), **kwargs)
+    assert not matches(event(terminal_outcome="teardown_completed"), **kwargs)
+    assert not matches(event(old_pair=["gs-a", "sat-9"]), **kwargs)
+    assert not matches(event(epoch_id=5), **kwargs)
+    assert not matches(event(seek_target_sim_time="2026-06-08T00:10:35Z"), **kwargs)
+    assert not matches(event(seek_target_sim_time=None), **kwargs)

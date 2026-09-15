@@ -27,10 +27,6 @@ rules:
   - apiGroups: [""]
     resources: ["pods"]
     verbs: ["create", "delete", "get", "list", "patch", "watch"]
-  # Pod exec — Operator touches /etc/frr/.config-ready sentinel in each pod.
-  - apiGroups: [""]
-    resources: ["pods/exec"]
-    verbs: ["create", "get"]
   # Runtime readiness proof — read-only proxy to OME/Scheduler /readyz.
   - apiGroups: [""]
     resources: ["pods/proxy"]

@@ -448,7 +448,6 @@ def test_operator_mutation_rbac_is_namespace_bound_and_discovery_is_read_only() 
         "constellationspecs/status",
         "events",
         "pods",
-        "pods/exec",
         "pods/proxy",
         "configmaps",
         "secrets",
@@ -457,6 +456,10 @@ def test_operator_mutation_rbac_is_namespace_bound_and_discovery_is_read_only() 
         assert f'resources: ["{resource}"]' in role
         assert f'resources: ["{resource}"]' not in cluster_role
 
+    # The Operator execs into no pod; its former pods/exec grant and the
+    # sentinel comment that described it are gone with their last consumer.
+    assert 'resources: ["pods/exec"]' not in role
+    assert ".config-ready" not in template
     assert set(re.findall(r'resources: \["([^"]+)"\]', cluster_role)) == {
         "customresourcedefinitions",
         "namespaces",

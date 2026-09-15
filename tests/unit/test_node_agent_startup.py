@@ -4,7 +4,6 @@ from pathlib import Path
 import pytest
 from node_agent import ops_events
 from node_agent.__main__ import (
-    _explicit_fence_from_env,
     _require_host_ip_for_vxlan_capable_startup,
     _require_ready_fence,
 )
@@ -261,25 +260,6 @@ def test_unreadable_builtin_inventory_keeps_its_error_in_the_diagnostic(tmp_path
     assert not probe.present
     assert "modules.builtin: No such file or directory" in probe.detail
     assert "loaded=no" in probe.detail
-
-
-def test_explicit_pid_map_fence_requires_both_identity_fields(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setenv("NODE_AGENT_SESSION_ID", "demo")
-    monkeypatch.delenv("NODE_AGENT_WIRING_GENERATION", raising=False)
-
-    with pytest.raises(RuntimeError, match="must be provided together"):
-        _explicit_fence_from_env()
-
-
-def test_explicit_pid_map_fence_sanitizes_session_id(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("NODE_AGENT_SESSION_ID", "demo.session")
-    monkeypatch.setenv("NODE_AGENT_WIRING_GENERATION", "sha256:" + "a" * 64)
-
-    fence = _explicit_fence_from_env()
-
-    assert fence == RuntimeFence(session_id="demo-session", wiring_generation="sha256:" + "a" * 64)
 
 
 def test_ready_fence_missing_identity_fails_before_subscription(

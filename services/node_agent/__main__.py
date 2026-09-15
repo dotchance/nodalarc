@@ -86,25 +86,6 @@ def _require_host_ip_for_vxlan_capable_startup() -> None:
         raise RuntimeError(f"HOST_IP env var is not a valid IP address: {host_ip!r}") from exc
 
 
-def _explicit_fence_from_env() -> RuntimeFence | None:
-    session_id = os.environ.get("NODE_AGENT_SESSION_ID", "").strip()
-    wiring_generation = os.environ.get("NODE_AGENT_WIRING_GENERATION", "").strip()
-    if not session_id and not wiring_generation:
-        return None
-    if not session_id or not wiring_generation:
-        raise RuntimeError(
-            "NODE_AGENT_SESSION_ID and NODE_AGENT_WIRING_GENERATION must be provided together"
-        )
-    if not wiring_generation.startswith("sha256:") or len(wiring_generation) != len("sha256:") + 64:
-        raise RuntimeError("NODE_AGENT_WIRING_GENERATION must be sha256:<64 hex chars>")
-    from nodalarc.nats_channels import sanitize_session_id
-
-    return RuntimeFence(
-        session_id=sanitize_session_id(session_id),
-        wiring_generation=wiring_generation,
-    )
-
-
 def _require_ready_fence(fence: RuntimeFence) -> None:
     if fence.session_id and fence.wiring_generation:
         return
@@ -131,10 +112,6 @@ async def main() -> None:
         "--platform-config",
         default="configs/platform.yaml",
         help="Path to platform configuration YAML",
-    )
-    parser.add_argument(
-        "--pid-map",
-        help="Path to pid_map.json (from na-deploy). If not provided, discovers PIDs during wiring.",
     )
     args = parser.parse_args()
 
@@ -200,53 +177,12 @@ async def main() -> None:
     # -----------------------------------------------------------------------
     # Shared state between wiring and request/reply server
     # -----------------------------------------------------------------------
-    from node_agent.pid_discovery import NamespaceHandle, netns_identity
+    from node_agent.pid_discovery import NamespaceHandle
 
     shared_handles: dict[str, NamespaceHandle] = {}
     dispatch_gate = DispatchGate()
     current_fence = RuntimeFence(session_id="", wiring_generation="")
     first_wiring_done = asyncio.Event()
-
-    # If --pid-map provided, skip wiring discovery
-    if args.pid_map:
-        explicit_fence = _explicit_fence_from_env()
-        if explicit_fence is None:
-            ops_events.spool_failure(
-                code="STARTUP_WIRING_IDENTITY_MISSING",
-                message="--pid-map requires NODE_AGENT_SESSION_ID and NODE_AGENT_WIRING_GENERATION",
-                details={"pid_map": args.pid_map},
-                session_id="",
-            )
-            raise RuntimeError(
-                "--pid-map requires NODE_AGENT_SESSION_ID and NODE_AGENT_WIRING_GENERATION"
-            )
-        for explicit_node_id, explicit_pid in json.loads(Path(args.pid_map).read_text()).items():
-            explicit_netns = netns_identity(int(explicit_pid))
-            if explicit_netns is None:
-                raise RuntimeError(
-                    f"--pid-map entry {explicit_node_id}={explicit_pid} has no live "
-                    "network namespace"
-                )
-            shared_handles[explicit_node_id] = NamespaceHandle(
-                node_id=explicit_node_id,
-                # Explicitly unmanaged: this path bypasses pod discovery, so
-                # there is no pod or sandbox identity to bind. The netns
-                # identity is real and still verified per request.
-                pod_uid="explicit",
-                sandbox_id="explicit",
-                sandbox_attempt=0,
-                pid=int(explicit_pid),
-                netns_id=explicit_netns,
-            )
-        current_fence = explicit_fence
-        from node_agent import substrate_monitor as _substrate_monitor
-
-        _substrate_monitor.set_identity(
-            current_fence.session_id,
-            current_fence.wiring_generation,
-        )
-        log.info("Loaded pid_map from %s (%d entries)", args.pid_map, len(shared_handles))
-        first_wiring_done.set()
 
     # -----------------------------------------------------------------------
     # Wiring watcher — runs in thread pool executor (synchronous code).
@@ -463,7 +399,7 @@ async def main() -> None:
     _require_ready_fence(current_fence)
 
     # -----------------------------------------------------------------------
-    # NATS request/reply server — subscribes AFTER wiring (pid_map gate)
+    # NATS request/reply server — subscribes AFTER wiring (handle gate)
     # -----------------------------------------------------------------------
     agent_subject = node_agent_subject(hostname)
 

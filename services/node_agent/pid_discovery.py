@@ -31,6 +31,7 @@ import json
 import logging
 import os
 import subprocess
+from collections.abc import Mapping
 from dataclasses import dataclass
 
 from nodalarc.substrate.manifest_contract import (
@@ -53,6 +54,10 @@ class NamespaceHandle:
     discovery time. Consumers must re-verify the handle (``verify_handle``)
     before kernel mutations: a sandbox recreation invalidates the handle
     even though the pod UID is unchanged.
+
+    ``mpls_enable`` is the wiring manifest's requirement for this node,
+    bound when the handle is built so every consumer of a published handle
+    reads the manifest's value and never a default.
     """
 
     node_id: str
@@ -61,6 +66,7 @@ class NamespaceHandle:
     sandbox_attempt: int
     pid: int
     netns_id: str
+    mpls_enable: bool
 
 
 def netns_identity(pid: int) -> str | None:
@@ -128,7 +134,13 @@ def _ready_sandboxes_by_pod_uid() -> dict[str, tuple[str, int]] | None:
 
 
 def _validated_sandbox_handle(
-    node_id: str, pod_uid: str, sandbox_id: str, attempt: int, pod_ip: str | None
+    node_id: str,
+    pod_uid: str,
+    sandbox_id: str,
+    attempt: int,
+    pod_ip: str | None,
+    *,
+    mpls_enable: bool,
 ) -> NamespaceHandle | None:
     """Inspect one sandbox and return a fully validated handle, or None.
 
@@ -216,6 +228,7 @@ def _validated_sandbox_handle(
         sandbox_attempt=attempt,
         pid=pid,
         netns_id=netns,
+        mpls_enable=mpls_enable,
     )
 
 
@@ -225,6 +238,7 @@ def discover_local_pod_handles(
     *,
     session_run_id: str,
     owner_uid: str,
+    requirements: Mapping[str, bool],
 ) -> dict[str, NamespaceHandle]:
     """Discover validated namespace handles for current-run pods on this node.
 
@@ -232,6 +246,11 @@ def discover_local_pod_handles(
     active run identity and passed every validation step. Missing entries
     mean pending; callers retry against the manifest's expected-local set
     and never conclude from this map alone.
+
+    ``requirements`` maps every node the manifest places on this host to its
+    MPLS requirement. It is the only source of a handle's ``mpls_enable``;
+    a current-run pod whose node is not in it is not expected here and gets
+    no handle.
     """
     import kubernetes
     import kubernetes.client
@@ -239,6 +258,8 @@ def discover_local_pod_handles(
 
     if not session_run_id or not owner_uid:
         raise ValueError("discovery requires the active session_run_id and owner_uid")
+    if not requirements:
+        raise ValueError("discovery requires the manifest's expected-local node requirements")
 
     if namespace is None:
         from nodalarc.platform_config import get_platform_config
@@ -276,6 +297,9 @@ def discover_local_pod_handles(
         node_id = pod.metadata.labels.get(NODE_ID_LABEL)
         if not node_id:
             continue
+        if node_id not in requirements:
+            log.info("Current-run pod for %s is not expected on this host by the manifest", node_id)
+            continue
         if node_id in candidates:
             duplicates.add(node_id)
             continue
@@ -294,7 +318,9 @@ def discover_local_pod_handles(
         if sandbox is None:
             log.info("No ready sandbox yet for %s (pod UID %s)", node_id, pod_uid)
             continue
-        handle = _validated_sandbox_handle(node_id, pod_uid, *sandbox, pod_ip)
+        handle = _validated_sandbox_handle(
+            node_id, pod_uid, *sandbox, pod_ip, mpls_enable=requirements[node_id]
+        )
         if handle is None:
             continue
         result[node_id] = handle

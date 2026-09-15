@@ -126,8 +126,14 @@ class _Recorder:
 
 
 def _discover(
-    pods: list[SimpleNamespace], crictl: _FakeCrictl, monkeypatch: pytest.MonkeyPatch
+    pods: list[SimpleNamespace],
+    crictl: _FakeCrictl,
+    monkeypatch: pytest.MonkeyPatch,
+    requirements: dict[str, bool] | None = None,
 ) -> tuple[dict[str, NamespaceHandle], _Recorder]:
+    """Discover with the manifest requirement given, or every listed pod expected without MPLS."""
+    if requirements is None:
+        requirements = {"sat-0-0": False, "sat-0-1": False}
     monkeypatch.delenv("CONTAINER_RUNTIME_ENDPOINT", raising=False)
     monkeypatch.setattr(pid_discovery, "netns_identity", _fake_netns)
     api = _Recorder(pods)
@@ -141,6 +147,7 @@ def _discover(
             node_name="node02",
             session_run_id=RUN_ID,
             owner_uid=OWNER_UID,
+            requirements=requirements,
         )
     return result, api
 
@@ -263,8 +270,40 @@ def test_listing_failure_returns_empty(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_missing_run_identity_is_refused() -> None:
     with pytest.raises(ValueError, match="session_run_id"):
         pid_discovery.discover_local_pod_handles(
-            namespace="testns", node_name="node02", session_run_id="", owner_uid=OWNER_UID
+            namespace="testns",
+            node_name="node02",
+            session_run_id="",
+            owner_uid=OWNER_UID,
+            requirements={"sat-0-0": False},
         )
+
+
+def test_missing_requirements_are_refused() -> None:
+    with pytest.raises(ValueError, match="requirements"):
+        pid_discovery.discover_local_pod_handles(
+            namespace="testns",
+            node_name="node02",
+            session_run_id=RUN_ID,
+            owner_uid=OWNER_UID,
+            requirements={},
+        )
+
+
+def test_handle_carries_the_manifest_requirement_and_unexpected_pods_get_none(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The manifest's MPLS requirement is bound at discovery; a current-run pod the
+    manifest does not place here is not published at all, with any default."""
+    crictl = _FakeCrictl(
+        [_sandbox("uid-1", "sb-1"), _sandbox("uid-2", "sb-2")],
+        {"sb-1": _inspectp("uid-1", LIVE_PID), "sb-2": _inspectp("uid-2", LIVE_PID)},
+    )
+    pods = [_pod("sat-0-0", "uid-1"), _pod("sat-0-1", "uid-2")]
+
+    result, _ = _discover(pods, crictl, monkeypatch, requirements={"sat-0-0": True})
+
+    assert set(result) == {"sat-0-0"}
+    assert result["sat-0-0"].mpls_enable is True
 
 
 def test_verify_handle_detects_namespace_replacement() -> None:
@@ -275,6 +314,7 @@ def test_verify_handle_detects_namespace_replacement() -> None:
         sandbox_attempt=0,
         pid=LIVE_PID,
         netns_id=netns_identity(LIVE_PID) or "0",
+        mpls_enable=False,
     )
     assert verify_handle(live)
     replaced = NamespaceHandle(
@@ -284,6 +324,7 @@ def test_verify_handle_detects_namespace_replacement() -> None:
         sandbox_attempt=0,
         pid=LIVE_PID,
         netns_id="1",
+        mpls_enable=False,
     )
     assert not verify_handle(replaced)
 

@@ -28,7 +28,7 @@ from node_agent.wiring import (
 LOCAL_NODE = "node02"
 
 
-def _manifest(hosts: dict[str, str]) -> WiringManifest:
+def _manifest(hosts: dict[str, str], mpls: frozenset[str] = frozenset()) -> WiringManifest:
     nodes = {}
     for index, (node_id, host) in enumerate(sorted(hosts.items())):
         nodes[node_id] = {
@@ -37,7 +37,7 @@ def _manifest(hosts: dict[str, str]) -> WiringManifest:
             "sysctls": {"net.ipv4.ip_forward": "1"},
             "isl_interfaces": [],
             "gnd_interfaces": [],
-            "mpls_enable": False,
+            "mpls_enable": node_id in mpls,
             "segment_routing": False,
             "mtu": 1500,
             "remove_default_route": False,
@@ -74,6 +74,7 @@ def _handle(node_id: str, netns_id: str = "4026532100") -> NamespaceHandle:
         sandbox_attempt=0,
         pid=4242,
         netns_id=netns_id,
+        mpls_enable=False,
     )
 
 
@@ -125,6 +126,24 @@ def test_complete_discovery_returns_exactly_the_expected_set(
     assert set(result) == {"sat-a"}
 
 
+def test_discovery_receives_the_manifest_requirement_for_every_expected_node(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The manifest's MPLS requirement reaches discovery on every call, so a handle
+    rebuilt for replacement or Case B carries the same manifest value."""
+    manifest = _manifest({"sat-a": LOCAL_NODE, "sat-b": LOCAL_NODE}, mpls=frozenset({"sat-a"}))
+    with patch(
+        "node_agent.wiring.discover_local_pod_handles",
+        return_value={"sat-a": _handle("sat-a"), "sat-b": _handle("sat-b")},
+    ) as discover:
+        discover_expected_handles(manifest, "testns", {"sat-a", "sat-b"})
+        discover_expected_handles(manifest, "testns", {"sat-a", "sat-b"})
+    assert [call.kwargs["requirements"] for call in discover.call_args_list] == [
+        {"sat-a": True, "sat-b": False},
+        {"sat-a": True, "sat-b": False},
+    ]
+
+
 def test_expected_local_nodes_from_manifest_host(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("NODE_NAME", LOCAL_NODE)
     manifest = _manifest({"sat-a": LOCAL_NODE, "sat-c": "node03"})
@@ -174,6 +193,7 @@ def test_case_b_binds_rows_to_live_incarnations() -> None:
             sandbox_attempt=1,
             pid=4242,
             netns_id="4026532100",
+            mpls_enable=False,
         )
     }
     assert wiring_status_is_current(v1, "testns", manifest, replaced_sandbox) is False

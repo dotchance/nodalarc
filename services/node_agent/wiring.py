@@ -282,6 +282,10 @@ def discover_expected_handles(
     """
     import time
 
+    # The manifest owns each node's MPLS requirement; discovery binds it to
+    # the handle before the handle can be published, so no consumer reads a
+    # default. Rebuilt on every discovery: replacement and Case B included.
+    requirements = {node_id: manifest.nodes[node_id].mpls_enable for node_id in expected_local}
     handles: dict[str, NamespaceHandle] = {}
     for attempt in range(1, max_attempts + 1):
         try:
@@ -289,6 +293,7 @@ def discover_expected_handles(
                 namespace,
                 session_run_id=manifest.session_run_id,
                 owner_uid=manifest.owner_uid,
+                requirements=requirements,
             )
         except Exception as exc:
             # A transient Kubernetes or CRI failure is a pending attempt,

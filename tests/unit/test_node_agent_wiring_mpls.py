@@ -85,7 +85,7 @@ def _manifest(*, mpls: bool = True) -> WiringManifest:
     )
 
 
-def _handles() -> dict[str, NamespaceHandle]:
+def _handles(*, mpls: bool = True) -> dict[str, NamespaceHandle]:
     return {
         node_id: NamespaceHandle(
             node_id=node_id,
@@ -94,6 +94,7 @@ def _handles() -> dict[str, NamespaceHandle]:
             sandbox_attempt=0,
             pid=4000 + index,
             netns_id=f"40265321{index:02d}",
+            mpls_enable=mpls and node_id != "sat-c",
         )
         for index, node_id in enumerate(("sat-a", "sat-b", "sat-c", "gs-x"))
     }
@@ -175,8 +176,8 @@ class _Run:
         for item in self._patches:
             item.stop()
 
-    def wire(self, manifest: WiringManifest):
-        return execute_wiring(manifest, namespace="testns", handles=_handles())
+    def wire(self, manifest: WiringManifest, *, mpls: bool = True):
+        return execute_wiring(manifest, namespace="testns", handles=_handles(mpls=mpls))
 
 
 def test_support_check_runs_once_before_the_first_sysctl_write(monkeypatch) -> None:
@@ -234,7 +235,7 @@ def test_available_support_after_a_failed_modprobe_proceeds_with_every_mpls_writ
 
 def test_wiring_without_an_mpls_node_never_checks(monkeypatch) -> None:
     with _Run(monkeypatch, None) as run:
-        statuses = run.wire(_manifest(mpls=False))
+        statuses = run.wire(_manifest(mpls=False), mpls=False)
 
     assert all(status.status == "ready" for status in statuses.values())
     assert [c for c in run.calls if c[0] == "ensure_mpls_kernel_support"] == []

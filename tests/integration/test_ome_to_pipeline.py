@@ -339,9 +339,13 @@ class TestPolarVisibilityTransitions:
         corotating = set(by_pair) - seam
         assert len(seam) == 6 and len(corotating) == 30
         for pair in corotating:
+            # The control: exactly one event, at exactly time zero, then the
+            # shared range and allocation checks on that event.
             (only,) = by_pair[pair]
-            assert (only["t"], only["visible"], only["reason"]) == (0.0, True, "ok"), pair
-            assert only["scheduled"] is True and only["unscheduled_reason"] is None, pair
+            assert only["t"] == 0.0, (pair, only)
+            self._assert_pair_follows_reference(
+                shell, pair, by_pair[pair], [(0.0, True, "ok")], max_range_km=max_range_km
+            )
         for pair in sorted(seam):
             slot = self._plane_slot(pair[0])[1]
             expected = self._expected_events(
@@ -411,6 +415,38 @@ class TestPolarVisibilityTransitions:
     @staticmethod
     def _isl(event) -> bool:
         return event["event_type"] == "VisibilityEvent" and event["data"]["elevation_deg"] is None
+
+    def _corotating(self, event) -> bool:
+        data = event["data"]
+        return self._isl(event) and {data["node_a"][-6:-3], data["node_b"][-6:-3]} != {"p00", "p05"}
+
+    def test_checker_rejects_corotating_ranges_beyond_the_limit(self, polar_seam_timeline):
+        """All thirty co-rotating control events reporting 7000 km, beyond the 6000 km
+        hardware limit, while feasible: the reported range must agree with the
+        reference and sit inside the limit, so this must fail."""
+        events = _load_events(polar_seam_timeline)
+        changed = 0
+        for event in events:
+            if self._corotating(event):
+                event["data"]["range_km"] = 7000.0
+                changed += 1
+        assert changed == 30
+        with pytest.raises(AssertionError):
+            self.check_range_experiment(events, self._declared_start("earth-leo-polar-seam.yaml"))
+
+    def test_checker_rejects_corotating_control_in_teardown(self, polar_seam_timeline):
+        """All thirty co-rotating control events in scheduling state teardown while
+        reporting feasible, scheduled links: an uncontended feasible pair must be
+        active, so this must fail."""
+        events = _load_events(polar_seam_timeline)
+        changed = 0
+        for event in events:
+            if self._corotating(event):
+                event["data"]["scheduling_state"] = "teardown"
+                changed += 1
+        assert changed == 30
+        with pytest.raises(AssertionError):
+            self.check_range_experiment(events, self._declared_start("earth-leo-polar-seam.yaml"))
 
     def test_checker_rejects_a_uniformly_late_timeline(self, polar_seam_tracking_timeline):
         """Every ISL event shifted 60 s later, clock ticks unchanged: a timeline that

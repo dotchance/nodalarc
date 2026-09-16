@@ -35,8 +35,13 @@ from nodalarc.runtime_config import (
 )
 from nodalarc.semantic_projection import resolved_session_semantic_digest
 from nodalarc.substrate.manifest_contract import REQUIRED_WIRING_PHASES, WiringManifest
+from nodalarc.substrate.measurement_contract import (
+    SubstrateStatusDocument,
+    substrate_status_configmap_name,
+)
 from nodalarc.substrate.wiring_status import (
     READY_PHASE_JQ_CLAUSE,
+    WIRING_STATUS_CONFIGMAP,
     failed_status,
     status_configmap_data,
     wiring_row,
@@ -945,14 +950,15 @@ def _existing_session_pod(
 class TestWiringManifest:
     """Tests write_wiring_manifest() - the contract between Operator and Node Agent."""
 
-    def _build_and_extract(self, tmp_path, spec=None, **kwargs):
+    def _build_and_extract(self, tmp_path, spec=None, *, mock_v1=None, **kwargs):
         if spec is None:
             spec = _make_catalog_spec(tmp_path, **kwargs)
-        mock_v1 = create_autospec(kubernetes.client.CoreV1Api, instance=True)
-        # wiring-status delete returns 404 (normal for fresh deploy)
-        mock_v1.delete_namespaced_config_map.side_effect = kubernetes.client.rest.ApiException(
-            status=404
-        )
+        if mock_v1 is None:
+            mock_v1 = create_autospec(kubernetes.client.CoreV1Api, instance=True)
+            # wiring-status delete returns 404 (normal for fresh deploy)
+            mock_v1.delete_namespaced_config_map.side_effect = kubernetes.client.rest.ApiException(
+                status=404
+            )
         owner_ref = {
             "apiVersion": "nodalarc.io/v1alpha1",
             "kind": "ConstellationSpec",
@@ -985,6 +991,52 @@ class TestWiringManifest:
             )
             write_wiring_manifest(spec, "nodalarc", owner_ref, "run-test-0001")
         return _extract_manifest(mock_v1)
+
+    def test_manifest_switch_preserves_agent_status_during_refresh(self, tmp_path):
+        from node_agent.substrate_monitor import _write_status_document
+
+        mock_v1 = create_autospec(kubernetes.client.CoreV1Api, instance=True)
+        name = substrate_status_configmap_name("node03")
+        status = kubernetes.client.V1ConfigMap(
+            metadata=kubernetes.client.V1ObjectMeta(name=name), data={}
+        )
+        stored = {name: status}
+        mock_v1.list_namespaced_config_map.return_value = kubernetes.client.V1ConfigMapList(
+            items=[status]
+        )
+        document = SubstrateStatusDocument(
+            session_id="old-session",
+            wiring_generation="sha256:" + "a" * 64,
+            source_node="node03",
+            measurements={},
+        )
+
+        def create(namespace, body):
+            if body.metadata.name == name:
+                # The create saw an existing status. Switch before the agent
+                # handles that conflict and attempts its replacement.
+                assert name in stored
+                self._build_and_extract(tmp_path, mock_v1=mock_v1)
+                raise kubernetes.client.rest.ApiException(status=409)
+
+        def replace(replaced_name, namespace, body):
+            if replaced_name not in stored:
+                raise kubernetes.client.rest.ApiException(status=404)
+            stored[replaced_name] = body
+
+        mock_v1.create_namespaced_config_map.side_effect = create
+        mock_v1.replace_namespaced_config_map.side_effect = replace
+        mock_v1.delete_namespaced_config_map.side_effect = lambda deleted_name, namespace: (
+            stored.pop(deleted_name, None)
+        )
+
+        _write_status_document(mock_v1, "nodalarc", document)
+
+        assert json.loads(stored[name].data["status.json"]) == document.model_dump(mode="json")
+        mock_v1.replace_namespaced_config_map.assert_called_once()
+        mock_v1.delete_namespaced_config_map.assert_called_once_with(
+            WIRING_STATUS_CONFIGMAP, "nodalarc"
+        )
 
     def test_manifest_node_agent_schema(self, tmp_path):
         manifest = self._build_and_extract(tmp_path)

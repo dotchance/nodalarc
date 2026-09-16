@@ -27,6 +27,7 @@ import logging
 import os
 import signal
 import socket
+import threading
 from pathlib import Path
 
 import nats
@@ -183,6 +184,7 @@ async def main() -> None:
     dispatch_gate = DispatchGate()
     current_fence = RuntimeFence(session_id="", wiring_generation="")
     first_wiring_done = asyncio.Event()
+    stop = threading.Event()
 
     # -----------------------------------------------------------------------
     # Wiring watcher — runs in thread pool executor (synchronous code).
@@ -190,7 +192,6 @@ async def main() -> None:
     # -----------------------------------------------------------------------
     def _wiring_watcher() -> None:
         nonlocal current_fence
-        import time
 
         from node_agent import substrate_monitor as _substrate_monitor
 
@@ -210,7 +211,7 @@ async def main() -> None:
         v1 = kubernetes.client.CoreV1Api()
         last_resource_version = ""
 
-        while True:
+        while not stop.is_set():
             try:
                 cm = v1.read_namespaced_config_map("nodalarc-topology-wiring", ns)
                 rv = cm.metadata.resource_version or ""
@@ -233,7 +234,7 @@ async def main() -> None:
                         )
                         last_resource_version = ""
                         continue
-                    time.sleep(5)
+                    stop.wait(5)
                     continue
 
                 # New manifest detected. Handles are NOT withdrawn here:
@@ -282,7 +283,7 @@ async def main() -> None:
 
                 if not nodes:
                     last_resource_version = rv
-                    time.sleep(5)
+                    stop.wait(5)
                     continue
 
                 _substrate_monitor.configure_required_measurements(
@@ -321,11 +322,11 @@ async def main() -> None:
                 if not expected_local:
                     log.info("Manifest places no pods on this node — nothing to wire")
                     if not replace_handles_when_idle(dispatch_gate, shared_handles, {}):
-                        time.sleep(5)
+                        stop.wait(5)
                         continue
                     loop.call_soon_threadsafe(first_wiring_done.set)
                     last_resource_version = rv
-                    time.sleep(5)
+                    stop.wait(5)
                     continue
 
                 handles = discover_expected_handles(manifest_model, ns, expected_local)
@@ -334,7 +335,7 @@ async def main() -> None:
                         "Wiring pending: incomplete handle discovery — existing "
                         "kernel state left untouched; retrying the current manifest"
                     )
-                    time.sleep(5)
+                    stop.wait(5)
                     continue
 
                 # Case B: every local row names the exact live incarnation
@@ -345,11 +346,11 @@ async def main() -> None:
                         len(nodes),
                     )
                     if not replace_handles_when_idle(dispatch_gate, shared_handles, handles):
-                        time.sleep(5)
+                        stop.wait(5)
                         continue
                     loop.call_soon_threadsafe(first_wiring_done.set)
                     last_resource_version = rv
-                    time.sleep(5)
+                    stop.wait(5)
                     continue
 
                 rewired = perform_rewire(
@@ -364,7 +365,7 @@ async def main() -> None:
                 if rewired is None:
                     # Drain timed out: nothing was mutated and dispatch was
                     # restored. Retry the same manifest.
-                    time.sleep(5)
+                    stop.wait(5)
                     continue
                 loop.call_soon_threadsafe(first_wiring_done.set)
                 last_resource_version = rv
@@ -387,79 +388,87 @@ async def main() -> None:
                             )
                 else:
                     log.warning("Wiring watcher error: %s", exc)
-            time.sleep(5)
+            stop.wait(5)
 
     # Start wiring watcher in thread pool.
-    loop.run_in_executor(None, _wiring_watcher)
+    wiring_task = loop.run_in_executor(None, _wiring_watcher)
+    sub = None
+    monitor_task = None
+    try:
+        # Wait for first wiring pass to complete before accepting requests.
+        log.debug("Waiting for wiring to complete before accepting NATS requests...")
+        await first_wiring_done.wait()
+        log.debug("Wiring ready — %d namespace handles", len(shared_handles))
+        _require_ready_fence(current_fence)
 
-    # Wait for first wiring pass to complete before accepting requests
-    log.debug("Waiting for wiring to complete before accepting NATS requests...")
-    await first_wiring_done.wait()
-    log.debug("Wiring ready — %d namespace handles", len(shared_handles))
-    _require_ready_fence(current_fence)
+        # NATS subscribes only after the handles and runtime fence are ready.
+        agent_subject = node_agent_subject(hostname)
 
-    # -----------------------------------------------------------------------
-    # NATS request/reply server — subscribes AFTER wiring (handle gate)
-    # -----------------------------------------------------------------------
-    agent_subject = node_agent_subject(hostname)
+        async def _handle_request(msg):
+            try:
+                response_bytes = await loop.run_in_executor(
+                    None, dispatch, msg.data, shared_handles, current_fence, dispatch_gate
+                )
+                await msg.respond(response_bytes)
+            except Exception as exc:
+                log.error("Handler error: %s", exc, exc_info=True)
+                from nodalarc.proto import node_agent_pb2
 
-    async def _handle_request(msg):
+                await msg.respond(
+                    node_agent_pb2.CommandFailureResponse(
+                        success=False,
+                        error_code=node_agent_pb2.NODE_AGENT_INTERNAL_ERROR,
+                        error_message=f"handler error: {exc}",
+                        dirty_kernel=True,
+                    ).SerializeToString()
+                )
+
+        sub = await nc.subscribe(agent_subject, cb=_handle_request)
+        log.debug("NodeAgent NATS listening on subject %s", agent_subject)
+
+        # Start substrate status refresh monitor.
+        from node_agent import substrate_monitor
+
+        substrate_monitor.init(hostname)
+        monitor_task = asyncio.create_task(substrate_monitor.monitor_loop(hostname))
+
+        def _monitor_done(task: asyncio.Task) -> None:
+            if task.cancelled():
+                return
+            exc = task.exception()
+            if exc is not None:
+                log.critical(
+                    "Substrate monitor stopped unexpectedly: %s",
+                    exc,
+                    exc_info=(type(exc), exc, exc.__traceback__),
+                )
+                stop.set()
+
+        monitor_task.add_done_callback(_monitor_done)
+
+        for sig in (signal.SIGTERM, signal.SIGINT):
+            loop.add_signal_handler(sig, stop.set)
+
+        await asyncio.to_thread(stop.wait)
+        if monitor_task.done():
+            monitor_task.result()
+    finally:
+        log.info("Shutting down...")
+        stop.set()
+        if monitor_task is not None:
+            monitor_task.cancel()
+            await asyncio.gather(monitor_task, return_exceptions=True)
         try:
-            response_bytes = await loop.run_in_executor(
-                None, dispatch, msg.data, shared_handles, current_fence, dispatch_gate
-            )
-            await msg.respond(response_bytes)
-        except Exception as exc:
-            log.error("Handler error: %s", exc, exc_info=True)
-            from nodalarc.proto import node_agent_pb2
-
-            await msg.respond(
-                node_agent_pb2.CommandFailureResponse(
-                    success=False,
-                    error_code=node_agent_pb2.NODE_AGENT_INTERNAL_ERROR,
-                    error_message=f"handler error: {exc}",
-                    dirty_kernel=True,
-                ).SerializeToString()
-            )
-
-    sub = await nc.subscribe(agent_subject, cb=_handle_request)
-    log.debug("NodeAgent NATS listening on subject %s", agent_subject)
-
-    # Start substrate status refresh monitor.
-    from node_agent import substrate_monitor
-
-    stop = asyncio.Event()
-    substrate_monitor.init(hostname)
-    monitor_task = asyncio.create_task(substrate_monitor.monitor_loop(hostname))
-
-    def _monitor_done(task: asyncio.Task) -> None:
-        if task.cancelled():
-            return
-        exc = task.exception()
-        if exc is not None:
-            log.critical(
-                "Substrate monitor stopped unexpectedly: %s",
-                exc,
-                exc_info=(type(exc), exc, exc.__traceback__),
-            )
-            stop.set()
-
-    monitor_task.add_done_callback(_monitor_done)
-
-    # -----------------------------------------------------------------------
-    # Serve until signal
-    # -----------------------------------------------------------------------
-    for sig in (signal.SIGTERM, signal.SIGINT):
-        loop.add_signal_handler(sig, stop.set)
-
-    await stop.wait()
-    log.info("Shutting down...")
-
-    monitor_task.cancel()
-    # wiring_task is a long-lived executor task — it dies with the process
-    await sub.unsubscribe()
-    await nc.close()
-    log.info("Node Agent stopped")
+            # A running wiring pass still publishes progress on this loop.
+            # Finish it before closing its NATS connection or the event loop.
+            await wiring_task
+        finally:
+            try:
+                if sub is not None:
+                    await sub.unsubscribe()
+            finally:
+                await nc.close()
+        log.info("Node Agent stopped")
 
 
 def perform_rewire(

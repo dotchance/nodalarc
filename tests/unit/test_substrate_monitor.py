@@ -4,9 +4,11 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from unittest.mock import MagicMock
 
 import pytest
+from kubernetes.client.rest import ApiException
 from nodalarc.substrate.manifest_contract import REQUIRED_WIRING_PHASES, WiringManifest
 from nodalarc.substrate.measurement_contract import (
     RequiredSubstratePair,
@@ -14,6 +16,10 @@ from nodalarc.substrate.measurement_contract import (
     decode_status_configmap_data,
 )
 from node_agent import substrate_monitor
+from scheduler.substrate_latency import (
+    load_substrate_status_documents,
+    validate_required_substrate_measurements,
+)
 
 SESSION_ID = "test-session"
 WIRING_GENERATION = "sha256:" + "a" * 64
@@ -176,6 +182,72 @@ def test_manifest_required_measurements_write_status_document(
     body = v1.create_namespaced_config_map.call_args.args[1]
     decoded = decode_status_configmap_data(body.data)
     assert decoded == document
+
+
+@pytest.mark.parametrize(
+    ("session_id", "generation"),
+    [("next-session", WIRING_GENERATION), (SESSION_ID, "sha256:" + "b" * 64)],
+)
+def test_retained_status_blocks_new_identity_until_agent_replaces_it(
+    monkeypatch, session_id, generation
+):
+    monkeypatch.setenv("HOST_IP", "10.0.0.1")
+    v1 = MagicMock()
+    stored = {}
+
+    def create(namespace, body):
+        name = body.metadata.name
+        if name in stored:
+            raise ApiException(status=409)
+        stored[name] = body
+
+    def replace(name, namespace, body):
+        assert name in stored
+        stored[name] = body
+
+    v1.create_namespaced_config_map.side_effect = create
+    v1.replace_namespaced_config_map.side_effect = replace
+    v1.list_namespaced_config_map.side_effect = lambda *args, **kwargs: MagicMock(
+        items=list(stored.values())
+    )
+    substrate_monitor.configure_required_measurements(
+        v1=v1,
+        namespace="nodalarc",
+        hostname="node-a",
+        manifest=_manifest(),
+        measure_fn=_measurement,
+    )
+    manifest = _manifest(session_id=session_id, wiring_generation=generation)
+    substrate_monitor.set_identity(session_id, generation)
+
+    def gate():
+        return validate_required_substrate_measurements(
+            required_pairs=manifest.required_substrate_pairs,
+            documents_by_source=load_substrate_status_documents(k8s_v1=v1, namespace="nodalarc"),
+            session_id=session_id,
+            wiring_generation=generation,
+            now=datetime.now(UTC),
+        )
+
+    with pytest.raises(ValueError, match="identity mismatch"):
+        gate()
+    with pytest.raises(RuntimeError, match="has not been measured"):
+        substrate_monitor.require_fresh_measurement_for_remote_ip("10.0.0.2")
+
+    substrate_monitor.configure_required_measurements(
+        v1=v1,
+        namespace="nodalarc",
+        hostname="node-a",
+        manifest=manifest,
+        measure_fn=lambda pair: _measurement(
+            pair, session_id=session_id, wiring_generation=generation
+        ),
+    )
+
+    assert gate()["node-a->node-b"].median_rtt_ms == 1.25
+    substrate_monitor.require_fresh_measurement_for_remote_ip("10.0.0.2")
+    v1.replace_namespaced_config_map.assert_called_once()
+    v1.delete_namespaced_config_map.assert_not_called()
 
 
 def test_failed_required_measurement_is_written_then_raised(

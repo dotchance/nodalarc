@@ -645,31 +645,6 @@ def _required_substrate_pairs(
     return sorted(pairs, key=lambda pair: pair["directional_key"])
 
 
-def _delete_stale_substrate_status_configmaps(
-    v1: kubernetes.client.CoreV1Api,
-    namespace: str,
-) -> None:
-    """Remove old substrate status documents before publishing a new manifest."""
-    from nodalarc.substrate.measurement_contract import (
-        STATUS_CONFIGMAP_LABEL_KEY,
-        STATUS_CONFIGMAP_LABEL_VALUE,
-    )
-
-    try:
-        cms = v1.list_namespaced_config_map(
-            namespace,
-            label_selector=f"{STATUS_CONFIGMAP_LABEL_KEY}={STATUS_CONFIGMAP_LABEL_VALUE}",
-        )
-        for cm in getattr(cms, "items", []) or []:
-            name = cm.metadata.name
-            if name:
-                v1.delete_namespaced_config_map(name, namespace)
-                log.debug("Deleted stale substrate status ConfigMap %s", name)
-    except kubernetes.client.rest.ApiException as exc:
-        if exc.status != 404:
-            raise
-
-
 def _platform_placement_policy() -> Any:
     cfg = get_platform_config()
     return {
@@ -1397,7 +1372,8 @@ def write_wiring_manifest(
         node_ips=node_ips,
         ground_candidate_satellites_by_gs=resolved_session.ground_candidate_satellites_by_gs(),
     )
-    _delete_stale_substrate_status_configmaps(v1, namespace)
+    # Node Agents own their per-host substrate status across session switches.
+    # Readers reject the previous session/generation until each agent replaces it.
 
     try:
         manifest_session_id = sanitize_session_id(session_run_id)

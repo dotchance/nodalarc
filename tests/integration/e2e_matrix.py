@@ -2047,15 +2047,26 @@ def _parse_link_line(text: str) -> dict | None:
 
 
 _KERNEL_READ_COMPONENTS = ("route", "incumbent", "successor", "neighbors")
+_KERNEL_READ_END = "end"
+
+
+def _pod_shell_argument(script: str) -> str:
+    """Quote a pod shell script as one double-quoted argument for the
+    workstation shell that launches kubectl exec: the workstation shell must
+    hand the script through unexpanded."""
+    escaped = script.replace("\\", "\\\\").replace('"', '\\"').replace("$", "\\$")
+    return f'sh -c "{escaped}"'
 
 
 def _kernel_read_command(dst_ip: str, incumbent_if: str, successor_if: str, protocol: str) -> str:
     """One command in the pod: the flow's route first, then the incumbent's and
     the successor's link state, then the neighbor table. What follows the
     route in the same command was read after the route. Each component's
-    stdout, stderr and exit status are emitted in their own marked sections,
-    so the pod shell's final status and merged stream never stand in for a
-    component's own outcome and diagnostics."""
+    stdout, stderr and exit status are emitted in their own marked sections
+    and the command ends with an end marker, so a truncated or partial result
+    is recognizable and the pod shell's final status and merged stream never
+    stand in for a component's own outcome. Scratch files live in a private
+    directory made for the invocation and removed when it exits."""
     neighbor = _routing_neighbor_command(protocol)
     components = (
         ("route", f"ip route get {dst_ip}"),
@@ -2063,43 +2074,70 @@ def _kernel_read_command(dst_ip: str, incumbent_if: str, successor_if: str, prot
         ("successor", f"ip -o link show dev {successor_if}"),
         ("neighbors", f"vtysh -c '{neighbor}'"),
     )
-    # \$ reaches the pod shell as $: the workstation shell must not expand it.
-    script = "; ".join(
-        f"{command} >/tmp/.na_read_out 2>/tmp/.na_read_err; rc=\\$?; "
-        f"echo '{_KERNEL_READ_MARK} {name} rc='\\$rc; cat /tmp/.na_read_out; "
-        f"echo '{_KERNEL_READ_MARK} {name} stderr'; cat /tmp/.na_read_err"
-        for name, command in components
-    )
-    return f'sh -c "{script}"'
+    mark = _KERNEL_READ_MARK
+    steps = [
+        "d=$(mktemp -d /tmp/.na_read.XXXXXX) || exit 97",
+        'trap \'[ -n "$d" ] && case "$d" in /tmp/.na_read.*) rm -rf "$d";; esac\' EXIT',
+    ]
+    for name, command in components:
+        steps.append(
+            f"{command} >$d/out 2>$d/err; rc=$?; echo '{mark} {name} rc='$rc; cat $d/out; "
+            f"echo '{mark} {name} stderr'; cat $d/err"
+        )
+    steps.append(f"echo '{mark} {_KERNEL_READ_END}'")
+    return _pod_shell_argument("; ".join(steps))
 
 
 def _parse_kernel_read(stdout: str) -> dict[str, dict] | None:
-    """Each component's own rc, stdout and stderr from the marked sections;
-    None when the four components are not all present."""
+    """Each component's own rc, stdout and stderr from the marked sections.
+
+    The result must be complete and unambiguous: every component in order,
+    each with its rc section and then its stderr section, closed by the end
+    marker with nothing after it. Anything else, a cut before any boundary,
+    a repeated or unknown section, a missing end, is None."""
+    lines = stdout.splitlines()
+    prefix = _KERNEL_READ_MARK + " "
+    expected = list(_KERNEL_READ_COMPONENTS)
     components: dict[str, dict] = {}
     current: dict | None = None
     stream: str | None = None
-    for line in stdout.splitlines():
-        if line.startswith(_KERNEL_READ_MARK + " "):
-            fields = line[len(_KERNEL_READ_MARK) + 1 :].split()
-            if len(fields) == 2 and fields[1].startswith("rc="):
-                try:
-                    rc = int(fields[1][3:])
-                except ValueError:
-                    return None
-                current = components.setdefault(fields[0], {"rc": rc, "stdout": [], "stderr": []})
-                current["rc"] = rc
-                stream = "stdout"
-                continue
-            if len(fields) == 2 and fields[1] == "stderr" and fields[0] in components:
-                current = components[fields[0]]
-                stream = "stderr"
-                continue
+    ended = False
+    for line in lines:
+        if ended:
             return None
-        if current is None or stream is None:
+        if not line.startswith(prefix):
+            if current is None or stream is None:
+                return None
+            current[stream].append(line)
             continue
-        current[stream].append(line)
-    if set(components) != set(_KERNEL_READ_COMPONENTS):
+        fields = line[len(prefix) :].split()
+        if fields == [_KERNEL_READ_END]:
+            if expected or stream != "stderr":
+                return None
+            ended = True
+            continue
+        if len(fields) != 2:
+            return None
+        name, kind = fields
+        if kind.startswith("rc="):
+            if stream not in (None, "stderr") or not expected or expected[0] != name:
+                return None
+            try:
+                rc = int(kind[3:])
+            except ValueError:
+                return None
+            expected.pop(0)
+            current = {"rc": rc, "stdout": [], "stderr": []}
+            components[name] = current
+            stream = "stdout"
+            continue
+        if kind == "stderr":
+            if current is None or stream != "stdout" or components.get(name) is not current:
+                return None
+            stream = "stderr"
+            continue
+        return None
+    if not ended:
         return None
     return {
         name: {
@@ -2170,19 +2208,31 @@ def _sample_station(token: str, src: str, probes: list[dict], *, protocol: str =
             components = (
                 None if result.get("resolution_error") else _parse_kernel_read(result["stdout"])
             )
-            if components is None:
-                # The exec itself failed or the sections did not come back: a
-                # failed measurement with the exec's own diagnostics kept.
+            if result.get("resolution_error"):
+                failure = result["resolution_error"]
+            elif result["rc"] != 0:
+                failure = f"combined kernel read exec failed (rc={result['rc']})"
+            elif components is None:
+                failure = "combined kernel read returned an incomplete or ambiguous result"
+            else:
+                failure = None
+            if failure is not None:
+                # The exec failed, or the result is not complete: a failed
+                # measurement with the exec's own output and status kept, no
+                # component of it read as an observation.
+                unobserved = {"rc": result["rc"], "stdout": "", "stderr": failure}
                 routes[probe["key"]] = {
-                    **_route_observation(result, probe["dst_ip"]),
+                    **_route_observation(
+                        {**unobserved, "resolution_error": result.get("resolution_error")},
+                        probe["dst_ip"],
+                    ),
                     "stdout": result["stdout"],
                     "stderr": result["stderr"],
                     "rc": result["rc"],
                 }
                 kernel_after_route[probe["key"]] = {
                     **overlap,
-                    "error": result.get("resolution_error")
-                    or "combined kernel read did not return its four components",
+                    "error": failure,
                     "raw": result["stdout"],
                     "stderr": result["stderr"],
                     "rc": result["rc"],
@@ -2365,6 +2415,22 @@ def _bind_overlap_to_terminal(overlap: dict, event: dict, link_events: list[dict
     except TypeError, ValueError:
         pre_before = False
     if not pre_before:
+        return {"bound": False, "reason": "overlap_ordering_uncertain", **evidence}
+    # Eligibility: every component of the kernel read must be a valid
+    # measurement by its own classifier before its content can order anything.
+    # Diagnostics retained beside a verdict never replace the verdict.
+    validity = {
+        "kernel_read_complete": bool(kernel) and kernel.get("error") is None,
+        "incumbent_link_read": bool(incumbent_link)
+        and (kernel.get("incumbent_link_read") or {}).get("rc") == 0,
+        "successor_link_read": bool(kernel.get("successor_link"))
+        and (kernel.get("successor_link_read") or {}).get("rc") == 0,
+        "neighbor_query_observed": bool(
+            (kernel.get("neighbor_observation_after_route") or {}).get("observed")
+        ),
+    }
+    evidence["validity"] = validity
+    if not all(validity.values()):
         return {"bound": False, "reason": "overlap_ordering_uncertain", **evidence}
     incumbent_up = bool(incumbent_link.get("lower_up")) and incumbent_link.get("state") == "UP"
     adjacency_held = incumbent_adjacency.get("state") == "Up" and incumbent_adjacency.get(

@@ -14,6 +14,7 @@ import subprocess
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
 import yaml
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -1199,8 +1200,20 @@ def _sample(*, links, neighbors, route_dev, sim="2026-06-08T00:14:56Z", incumben
                 "successor_interface": "term0",
                 "incumbent_sat": "sat-1",
                 "incumbent_link": _parse_link(_link_line("term1", up=incumbent_up)),
+                "incumbent_link_read": {
+                    "rc": 0,
+                    "stdout": _link_line("term1", up=incumbent_up),
+                    "stderr": "",
+                },
                 "successor_link": _parse_link(_link_line("term0", up=True)),
+                "successor_link_read": {
+                    "rc": 0,
+                    "stdout": _link_line("term0", up=True),
+                    "stderr": "",
+                },
                 "neighbors_after_route": e2e_matrix._isis_neighbor_rows(table),  # noqa: SLF001
+                "neighbor_read": {"rc": 0, "stdout": table, "stderr": ""},
+                "neighbor_observation_after_route": {"observed": True, "positive": True},
                 "incumbent_adjacency_after_route": (
                     {"system_id": "sat-1", "interface": "term1", "level": "3", "state": "Up"}
                     if incumbent_up
@@ -1879,7 +1892,8 @@ _ISIS_HEADER = "Area NODAL:\n System Id  Interface  L  State  Holdtime SNPA\n"
 
 
 def _render_kernel_read(**components) -> str:
-    """The marked sections the generated pod command prints, one per component."""
+    """The marked sections the generated pod command prints, one per component,
+    closed by the end marker."""
     mark = e2e_matrix._KERNEL_READ_MARK  # noqa: SLF001
     out = []
     for name in e2e_matrix._KERNEL_READ_COMPONENTS:  # noqa: SLF001
@@ -1890,6 +1904,7 @@ def _render_kernel_read(**components) -> str:
         out.append(f"{mark} {name} stderr")
         if stderr:
             out.append(stderr.rstrip("\n"))
+    out.append(f"{mark} {getattr(e2e_matrix, '_KERNEL_READ_END', 'end')}")
     return "\n".join(out) + "\n"
 
 
@@ -2290,6 +2305,193 @@ def test_kernel_read_parser_refuses_incomplete_sections_and_the_sampler_keeps_th
     monkeypatch.setattr(e2e_matrix, "request_json", lambda method, path, **k: next(readings))
     sample = e2e_matrix._sample_station("t", "gs-a", [_PROBE])  # noqa: SLF001
     kernel = sample["kernel_after_route"]["gs-a->gs-b"]
-    assert "four components" in kernel["error"] and kernel["rc"] == 137
+    # the outer exec failure is what is retained and reported
+    assert "rc=137" in kernel["error"] and kernel["rc"] == 137
+    assert "exit code 137" in kernel["stderr"]
     assert sample["routes"]["gs-a->gs-b"]["observed"] is False
-    assert "exit code 137" in sample["routes"]["gs-a->gs-b"]["reason"]
+    assert "rc=137" in sample["routes"]["gs-a->gs-b"]["reason"]
+
+
+# --- a command result must be complete and every component valid before it can order anything ---
+
+
+_FULL_READ = {
+    "route": (0, "100.64.0.2 via 10.0.0.1 dev term0 src 10.0.0.9", ""),
+    "incumbent": (0, _link_line("term1", up=True), ""),
+    "successor": (0, _link_line("term0", up=True), ""),
+    "neighbors": (
+        0,
+        _ISIS_HEADER
+        + " sat-2  term0  3  Up  3  2020.2020.2020\n sat-1  term1  3  Up  3  2020.2020.2020",
+        "",
+    ),
+}
+
+
+def _sample_from_exec(monkeypatch, *, stdout: str, rc: int, stderr: str = "") -> dict:
+    monkeypatch.setattr(
+        e2e_matrix,
+        "_kubectl_exec",
+        lambda node_id, command, *, timeout=20: {
+            "rc": rc,
+            "stdout": stdout,
+            "stderr": stderr,
+            "target": {},
+            "resolution_error": None,
+        },
+    )
+    readings = iter(
+        [
+            {
+                "session_id": "run-1",
+                "sim_time": "2026-06-08T00:14:56Z",
+                "nodes": _NODES,
+                "links": _OVERLAP_LINKS,
+            },
+            {
+                "snapshot_seq": 906,
+                "epoch_id": 1,
+                "sim_time": "2026-06-08T00:14:56Z",
+                "allocation_events": [],
+            },
+        ]
+        * 2
+    )
+    monkeypatch.setattr(e2e_matrix, "request_json", lambda method, path, **k: next(readings))
+    return e2e_matrix._sample_station("t", "gs-a", [_PROBE])  # noqa: SLF001
+
+
+def _binding_of(sample: dict) -> dict:
+    overlap = e2e_matrix._overlap_gate_fields(sample, _PROBE)  # noqa: SLF001
+    return e2e_matrix._bind_overlap_to_terminal(overlap, _lifecycle(1), [])  # noqa: SLF001
+
+
+def test_a_truncated_command_result_is_refused_at_every_section_boundary(monkeypatch) -> None:
+    full = _render_kernel_read(**_FULL_READ)
+    mark = e2e_matrix._KERNEL_READ_MARK  # noqa: SLF001
+    assert e2e_matrix._parse_kernel_read(full) is not None  # noqa: SLF001
+    boundaries = [i for i, line in enumerate(full.splitlines()) if line.startswith(mark)]
+    assert len(boundaries) == 9  # four rc, four stderr, one end
+    for cut in boundaries:
+        truncated = "\n".join(full.splitlines()[:cut]) + "\n"
+        assert e2e_matrix._parse_kernel_read(truncated) is None, cut  # noqa: SLF001
+        # the exec terminated: the outer status is retained and nothing is read as an observation
+        sample = _sample_from_exec(
+            monkeypatch, stdout=truncated, rc=137, stderr="command terminated with exit code 137"
+        )
+        kernel = sample["kernel_after_route"]["gs-a->gs-b"]
+        assert "rc=137" in kernel["error"] and kernel["rc"] == 137
+        assert "exit code 137" in kernel["stderr"]
+        assert sample["routes"]["gs-a->gs-b"]["observed"] is False
+        binding = _binding_of(sample)
+        assert binding["bound"] is False and binding["validity"]["kernel_read_complete"] is False
+    # cut just before the final neighbor-stderr section with a clean exit status: still incomplete
+    last_stderr = boundaries[-2]
+    truncated = "\n".join(full.splitlines()[:last_stderr]) + "\n"
+    sample = _sample_from_exec(monkeypatch, stdout=truncated, rc=0)
+    assert "incomplete or ambiguous" in sample["kernel_after_route"]["gs-a->gs-b"]["error"]
+    assert _binding_of(sample)["bound"] is False
+    # trailing text after the end marker, or a repeated section, is ambiguous
+    assert e2e_matrix._parse_kernel_read(full + "stray\n") is None  # noqa: SLF001
+    assert (
+        e2e_matrix._parse_kernel_read(full.replace(f"{mark} successor rc=0", f"{mark} route rc=0"))
+        is None
+    )  # noqa: SLF001
+
+
+def test_a_complete_result_with_a_failed_exec_is_not_an_observation(monkeypatch) -> None:
+    sample = _sample_from_exec(
+        monkeypatch, stdout=_render_kernel_read(**_FULL_READ), rc=137, stderr="killed"
+    )
+    kernel = sample["kernel_after_route"]["gs-a->gs-b"]
+    assert "rc=137" in kernel["error"] and kernel["stderr"] == "killed"
+    assert sample["routes"]["gs-a->gs-b"]["observed"] is False
+    assert _binding_of(sample)["bound"] is False
+
+
+@pytest.mark.parametrize("component", ["route", "incumbent", "successor", "neighbors"])
+def test_each_failed_required_component_prevents_qualification(tmp_path, monkeypatch, component):
+    failures = {
+        "route": {
+            "NA_ROUTE_OUT": "",
+            "NA_ROUTE_ERR": "RTNETLINK answers: Operation not permitted\n",
+            "NA_ROUTE_RC": 2,
+        },
+        "incumbent": {
+            "NA_INC_OUT": "",
+            "NA_INC_ERR": 'Device "term1" does not exist.\n',
+            "NA_INC_RC": 1,
+        },
+        "successor": {
+            "NA_SUCC_RC": 1,
+            "NA_SUCC_OUT": "",
+            "NA_SUCC_ERR": 'Device "term0" does not exist.\n',
+        },
+        "neighbors": {
+            "NA_NEIGH_OUT": "",
+            "NA_NEIGH_ERR": "Exiting: failed to connect to any daemons.\n",
+            "NA_NEIGH_RC": 1,
+        },
+    }
+    sample, _ = _pod_shell(tmp_path, monkeypatch, **failures[component])
+    overlap = e2e_matrix._overlap_gate_fields(sample, _PROBE)  # noqa: SLF001
+    binding = e2e_matrix._bind_overlap_to_terminal(overlap, _lifecycle(1), [])  # noqa: SLF001
+    if component == "route":
+        assert sample["routes"]["gs-a->gs-b"]["observed"] is False
+        assert overlap["successor_fib_ready"] is False
+    else:
+        assert binding["bound"] is False
+        assert (
+            binding["validity"][
+                {
+                    "incumbent": "incumbent_link_read",
+                    "successor": "successor_link_read",
+                    "neighbors": "neighbor_query_observed",
+                }[component]
+            ]
+            is False
+        )
+    assert not e2e_matrix._mbb_packet_window_passed(  # noqa: SLF001
+        {"protocol_observed": True},
+        {"successor_fib_ready": overlap["successor_fib_ready"] and binding["bound"]},
+        [],
+    )
+
+
+def test_a_refused_neighbor_query_with_plausible_rows_never_qualifies(
+    tmp_path, monkeypatch
+) -> None:
+    rows = (
+        _ISIS_HEADER
+        + " sat-2  term0  3  Up  3  2020.2020.2020\n sat-1  term1  3  Up  3  2020.2020.2020\n"
+    )
+    sample, _ = _pod_shell(
+        tmp_path,
+        monkeypatch,
+        NA_NEIGH_OUT=rows,
+        NA_NEIGH_ERR="Exiting: failed to connect to any daemons.\n",
+        NA_NEIGH_RC=1,
+    )
+    kernel = sample["kernel_after_route"]["gs-a->gs-b"]
+    assert kernel["incumbent_adjacency_after_route"] is not None  # the rows were there
+    assert sample["neighbor_observation"]["observed"] is False
+    assert kernel["neighbor_observation_after_route"]["observed"] is False
+    binding = _binding_of(sample)
+    assert binding["bound"] is False
+    assert binding["validity"]["neighbor_query_observed"] is False
+    assert "daemons" in binding["neighbor_read"]["stderr"]
+
+
+def test_the_combined_read_uses_private_scratch_files_and_removes_them(
+    tmp_path, monkeypatch
+) -> None:
+    import os
+
+    before = {name for name in os.listdir("/tmp") if name.startswith(".na_read.")}
+    sample, commands = _pod_shell(tmp_path, monkeypatch)
+    after = {name for name in os.listdir("/tmp") if name.startswith(".na_read.")}
+    assert after == before
+    command = commands[0]
+    assert "mktemp -d /tmp/.na_read.XXXXXX" in command and "trap '" in command
+    assert "/tmp/.na_read_out" not in command
+    assert sample["routes"]["gs-a->gs-b"]["positive"] is True

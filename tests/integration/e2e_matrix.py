@@ -2046,22 +2046,91 @@ def _parse_link_line(text: str) -> dict | None:
     return {"flags": flags, "state": state, "lower_up": "LOWER_UP" in flags, "raw": line}
 
 
+_KERNEL_READ_COMPONENTS = ("route", "incumbent", "successor", "neighbors")
+
+
 def _kernel_read_command(dst_ip: str, incumbent_if: str, successor_if: str, protocol: str) -> str:
-    """One command in the pod: the flow's route first, then the incumbent's
-    and the successor's link state, then the neighbor table. What follows the
-    route in the same command was read after the route."""
+    """One command in the pod: the flow's route first, then the incumbent's and
+    the successor's link state, then the neighbor table. What follows the
+    route in the same command was read after the route. Each component's
+    stdout, stderr and exit status are emitted in their own marked sections,
+    so the pod shell's final status and merged stream never stand in for a
+    component's own outcome and diagnostics."""
     neighbor = _routing_neighbor_command(protocol)
-    return (
-        f'sh -c "ip route get {dst_ip}; echo {_KERNEL_READ_MARK}; '
-        f"ip -o link show dev {incumbent_if}; echo {_KERNEL_READ_MARK}; "
-        f"ip -o link show dev {successor_if}; echo {_KERNEL_READ_MARK}; "
-        f"vtysh -c '{neighbor}'\""
+    components = (
+        ("route", f"ip route get {dst_ip}"),
+        ("incumbent", f"ip -o link show dev {incumbent_if}"),
+        ("successor", f"ip -o link show dev {successor_if}"),
+        ("neighbors", f"vtysh -c '{neighbor}'"),
     )
+    # \$ reaches the pod shell as $: the workstation shell must not expand it.
+    script = "; ".join(
+        f"{command} >/tmp/.na_read_out 2>/tmp/.na_read_err; rc=\\$?; "
+        f"echo '{_KERNEL_READ_MARK} {name} rc='\\$rc; cat /tmp/.na_read_out; "
+        f"echo '{_KERNEL_READ_MARK} {name} stderr'; cat /tmp/.na_read_err"
+        for name, command in components
+    )
+    return f'sh -c "{script}"'
 
 
-def _split_kernel_read(stdout: str) -> list[str] | None:
-    parts = [part.strip("\n") for part in stdout.split(_KERNEL_READ_MARK)]
-    return parts if len(parts) == 4 else None
+def _parse_kernel_read(stdout: str) -> dict[str, dict] | None:
+    """Each component's own rc, stdout and stderr from the marked sections;
+    None when the four components are not all present."""
+    components: dict[str, dict] = {}
+    current: dict | None = None
+    stream: str | None = None
+    for line in stdout.splitlines():
+        if line.startswith(_KERNEL_READ_MARK + " "):
+            fields = line[len(_KERNEL_READ_MARK) + 1 :].split()
+            if len(fields) == 2 and fields[1].startswith("rc="):
+                try:
+                    rc = int(fields[1][3:])
+                except ValueError:
+                    return None
+                current = components.setdefault(fields[0], {"rc": rc, "stdout": [], "stderr": []})
+                current["rc"] = rc
+                stream = "stdout"
+                continue
+            if len(fields) == 2 and fields[1] == "stderr" and fields[0] in components:
+                current = components[fields[0]]
+                stream = "stderr"
+                continue
+            return None
+        if current is None or stream is None:
+            continue
+        current[stream].append(line)
+    if set(components) != set(_KERNEL_READ_COMPONENTS):
+        return None
+    return {
+        name: {
+            "rc": part["rc"],
+            "stdout": "\n".join(part["stdout"]).strip("\n"),
+            "stderr": "\n".join(part["stderr"]).strip("\n"),
+        }
+        for name, part in components.items()
+    }
+
+
+def _component_result(component: dict) -> dict:
+    """A component's own outcome in the shape the classifiers read."""
+    return {
+        "rc": component["rc"],
+        "stdout": component["stdout"],
+        "stderr": component["stderr"],
+        "target": None,
+        "resolution_error": None,
+    }
+
+
+def _link_read(component: dict) -> dict:
+    """A link-state component: the parsed line when it read, the diagnostics kept either way."""
+    parsed = _parse_link_line(component["stdout"]) if component["rc"] == 0 else None
+    return {
+        "link": parsed,
+        "rc": component["rc"],
+        "stdout": component["stdout"],
+        "stderr": component["stderr"],
+    }
 
 
 def _sample_station(token: str, src: str, probes: list[dict], *, protocol: str = "isis") -> dict:
@@ -2098,50 +2167,62 @@ def _sample_station(token: str, src: str, probes: list[dict], *, protocol: str =
                 protocol,
             )
             result = _kubectl_exec(src, command, timeout=15)
-            parts = _split_kernel_read(result["stdout"])
-            if parts is None:
+            components = (
+                None if result.get("resolution_error") else _parse_kernel_read(result["stdout"])
+            )
+            if components is None:
+                # The exec itself failed or the sections did not come back: a
+                # failed measurement with the exec's own diagnostics kept.
                 routes[probe["key"]] = {
                     **_route_observation(result, probe["dst_ip"]),
                     "stdout": result["stdout"],
                     "stderr": result["stderr"],
+                    "rc": result["rc"],
                 }
                 kernel_after_route[probe["key"]] = {
                     **overlap,
-                    "error": "combined kernel read did not return its four parts",
+                    "error": result.get("resolution_error")
+                    or "combined kernel read did not return its four components",
                     "raw": result["stdout"],
                     "stderr": result["stderr"],
+                    "rc": result["rc"],
                 }
                 continue
-            route_text, incumbent_text, successor_text, neighbor_text = parts
+            route = components["route"]
             routes[probe["key"]] = {
-                **_route_observation(
-                    {**result, "stdout": route_text, "stderr": ""}, probe["dst_ip"]
-                ),
-                "stdout": route_text,
-                "stderr": result["stderr"],
+                **_route_observation(_component_result(route), probe["dst_ip"]),
+                "stdout": route["stdout"],
+                "stderr": route["stderr"],
+                "rc": route["rc"],
             }
-            rows_after = _isis_neighbor_rows(neighbor_text)
+            incumbent_read = _link_read(components["incumbent"])
+            successor_read = _link_read(components["successor"])
+            neighbors = components["neighbors"]
+            rows_after = _isis_neighbor_rows(neighbors["stdout"])
             kernel_after_route[probe["key"]] = {
                 **overlap,
-                "incumbent_link": _parse_link_line(incumbent_text),
-                "successor_link": _parse_link_line(successor_text),
+                "incumbent_link": incumbent_read["link"],
+                "incumbent_link_read": incumbent_read,
+                "successor_link": successor_read["link"],
+                "successor_link_read": successor_read,
                 "neighbors_after_route": rows_after,
+                "neighbor_read": neighbors,
+                "neighbor_observation_after_route": _adjacency_observation(
+                    _component_result(neighbors), protocol
+                ),
                 "incumbent_adjacency_after_route": _adjacency_on(
                     rows_after, overlap["incumbent_interface"]
                 ),
                 "raw": result["stdout"],
             }
-            neighbor_stdout = neighbor_text
+            neighbor_stdout = neighbors["stdout"]
+            neighbor_observation = _adjacency_observation(_component_result(neighbors), protocol)
         if neighbor_stdout is None:
             neigh = _kubectl_exec(
                 src, f"vtysh -c '{_routing_neighbor_command(protocol)}'", timeout=10
             )
             neighbor_stdout = neigh["stdout"]
             neighbor_observation = _adjacency_observation(neigh, protocol)
-        else:
-            neighbor_observation = _adjacency_observation(
-                {"rc": 0, "stdout": neighbor_stdout, "stderr": ""}, protocol
-            )
         kernel_finished = datetime.now(UTC)
         post = _bracket(token, src)
     except Exception as exc:  # a read that failed is a stamped sample error, never an escape
@@ -2267,7 +2348,9 @@ def _bind_overlap_to_terminal(overlap: dict, event: dict, link_events: list[dict
         "incumbent_interface": kernel.get("incumbent_interface"),
         "incumbent_sat": kernel.get("incumbent_sat"),
         "incumbent_link_after_route": incumbent_link or None,
+        "incumbent_link_read": kernel.get("incumbent_link_read"),
         "incumbent_adjacency_after_route": incumbent_adjacency or None,
+        "neighbor_read": kernel.get("neighbor_read"),
         "kernel_read_error": kernel.get("error"),
     }
     try:

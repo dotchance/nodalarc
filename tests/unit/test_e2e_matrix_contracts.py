@@ -1878,6 +1878,21 @@ _NODES = [
 _ISIS_HEADER = "Area NODAL:\n System Id  Interface  L  State  Holdtime SNPA\n"
 
 
+def _render_kernel_read(**components) -> str:
+    """The marked sections the generated pod command prints, one per component."""
+    mark = e2e_matrix._KERNEL_READ_MARK  # noqa: SLF001
+    out = []
+    for name in e2e_matrix._KERNEL_READ_COMPONENTS:  # noqa: SLF001
+        rc, stdout, stderr = components[name]
+        out.append(f"{mark} {name} rc={rc}")
+        if stdout:
+            out.append(stdout.rstrip("\n"))
+        out.append(f"{mark} {name} stderr")
+        if stderr:
+            out.append(stderr.rstrip("\n"))
+    return "\n".join(out) + "\n"
+
+
 def _world(monkeypatch, *, enact_before_route_read: bool, api_delivers: bool, epoch: int = 1):
     """The real sampler and window against a kernel and an API that progress
     independently. The kernel enacts the teardown (incumbent carrier drops, the
@@ -1931,9 +1946,11 @@ def _world(monkeypatch, *, enact_before_route_read: bool, api_delivers: bool, ep
             reads["kernel"] += 1
             route = f"100.64.0.2 via 10.0.0.1 dev {kernel['route_dev']} src 10.0.0.9"
             if mark is not None and mark in command:
-                stdout = (
-                    f"{route}\n{mark}\n{_link_line('term1', up=not kernel['enacted'])}\n{mark}\n"
-                    f"{_link_line('term0', up=True)}\n{mark}\n{neighbor_rows()}"
+                stdout = _render_kernel_read(
+                    route=(0, route, ""),
+                    incumbent=(0, _link_line("term1", up=not kernel["enacted"]), ""),
+                    successor=(0, _link_line("term0", up=True), ""),
+                    neighbors=(0, neighbor_rows(), ""),
                 )
                 return {**ok, "stdout": stdout}
             return {**ok, "stdout": route}
@@ -2054,3 +2071,225 @@ def test_binding_reports_uncertainty_or_missing_identity_instead_of_readiness() 
     other_run = _lifecycle(1)
     other_run["details"]["session_id"] = "run-2"
     assert bind(ready, other_run, [])["reason"] == "overlap_identity_mismatch"
+
+
+# --- the combined pod command keeps each component's own outcome and diagnostics ---
+
+
+_STUB_IP = """#!/bin/sh
+case "$1 $2" in
+  "route get") printf '%s' "$NA_ROUTE_OUT"; printf '%s' "$NA_ROUTE_ERR" >&2; exit "$NA_ROUTE_RC" ;;
+  "-o link")
+    dev="$5"
+    if [ "$dev" = "term1" ]; then printf '%s' "$NA_INC_OUT"; printf '%s' "$NA_INC_ERR" >&2; exit "$NA_INC_RC"; fi
+    printf '%s' "$NA_SUCC_OUT"; exit 0 ;;
+esac
+echo "unexpected ip arguments: $*" >&2; exit 99
+"""
+_STUB_VTYSH = """#!/bin/sh
+printf '%s' "$NA_NEIGH_OUT"; printf '%s' "$NA_NEIGH_ERR" >&2; exit "$NA_NEIGH_RC"
+"""
+
+
+def _pod_shell(tmp_path, monkeypatch, **outcomes):
+    """Run the generated command the way the pod shell would: real `sh -c` with
+    stub `ip` and `vtysh` whose outputs and exit codes are controlled."""
+    import os
+    import stat
+
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    for name, body in (("ip", _STUB_IP), ("vtysh", _STUB_VTYSH)):
+        path = bin_dir / name
+        path.write_text(body)
+        path.chmod(path.stat().st_mode | stat.S_IEXEC)
+    env = {
+        **os.environ,
+        "PATH": f"{bin_dir}:{os.environ['PATH']}",
+        "NA_ROUTE_OUT": "100.64.0.2 via 10.0.0.1 dev term0 src 10.0.0.9\n",
+        "NA_ROUTE_ERR": "",
+        "NA_ROUTE_RC": "0",
+        "NA_INC_OUT": _link_line("term1", up=True) + "\n",
+        "NA_INC_ERR": "",
+        "NA_INC_RC": "0",
+        "NA_SUCC_OUT": _link_line("term0", up=True) + "\n",
+        "NA_NEIGH_OUT": _ISIS_HEADER
+        + " sat-2  term0  3  Up  3  2020.2020.2020\n sat-1  term1  3  Up  3  2020.2020.2020\n",
+        "NA_NEIGH_ERR": "",
+        "NA_NEIGH_RC": "0",
+    }
+    env.update({key: str(value) for key, value in outcomes.items()})
+    commands: list[str] = []
+
+    def kubectl(node_id, command, *, timeout=20):
+        commands.append(command)
+        run = subprocess.run(command, shell=True, capture_output=True, text=True, env=env)
+        return {
+            "rc": run.returncode,
+            "stdout": run.stdout,
+            "stderr": run.stderr,
+            "target": {},
+            "resolution_error": None,
+        }
+
+    monkeypatch.setattr(e2e_matrix, "_kubectl_exec", kubectl)
+    readings = iter(
+        [
+            {
+                "session_id": "run-1",
+                "sim_time": "2026-06-08T00:14:56Z",
+                "nodes": _NODES,
+                "links": _OVERLAP_LINKS,
+            },
+            {
+                "snapshot_seq": 906,
+                "epoch_id": 1,
+                "sim_time": "2026-06-08T00:14:56Z",
+                "allocation_events": [],
+            },
+        ]
+        * 2
+    )
+    monkeypatch.setattr(e2e_matrix, "request_json", lambda method, path, **k: next(readings))
+    sample = e2e_matrix._sample_station("t", "gs-a", [_PROBE])  # noqa: SLF001
+    return sample, commands
+
+
+def test_combined_read_keeps_a_no_route_answer_as_an_observed_negative(tmp_path, monkeypatch):
+    sample, commands = _pod_shell(
+        tmp_path,
+        monkeypatch,
+        NA_ROUTE_OUT="",
+        NA_ROUTE_ERR="RTNETLINK answers: Network unreachable\n",
+        NA_ROUTE_RC=2,
+    )
+    assert len(commands) == 1 and e2e_matrix._KERNEL_READ_MARK in commands[0]  # noqa: SLF001
+    route = sample["routes"]["gs-a->gs-b"]
+    assert route["rc"] == 2 and "Network unreachable" in route["stderr"]
+    assert route["observed"] is True and route["positive"] is False
+    assert route["reason"] == "kernel answered Network unreachable"
+    # the other components read fine and kept their own outcomes
+    kernel = sample["kernel_after_route"]["gs-a->gs-b"]
+    assert kernel["incumbent_link"]["lower_up"] is True and kernel["incumbent_link_read"]["rc"] == 0
+    assert kernel["neighbor_read"]["rc"] == 0 and sample["neighbor_observation"]["observed"] is True
+
+
+def test_combined_read_keeps_a_permission_failure_as_a_failed_measurement(tmp_path, monkeypatch):
+    sample, _ = _pod_shell(
+        tmp_path,
+        monkeypatch,
+        NA_ROUTE_OUT="",
+        NA_ROUTE_ERR="RTNETLINK answers: Operation not permitted\n",
+        NA_ROUTE_RC=2,
+    )
+    route = sample["routes"]["gs-a->gs-b"]
+    assert route["observed"] is False and route["positive"] is False
+    assert "rc=2" in route["reason"] and "Operation not permitted" in route["reason"]
+
+
+def test_combined_read_keeps_link_and_daemon_failures_with_their_diagnostics(tmp_path, monkeypatch):
+    sample, _ = _pod_shell(
+        tmp_path,
+        monkeypatch,
+        NA_INC_OUT="",
+        NA_INC_ERR='Device "term1" does not exist.\n',
+        NA_INC_RC=1,
+        NA_NEIGH_OUT="",
+        NA_NEIGH_ERR="Exiting: failed to connect to any daemons.\n",
+        NA_NEIGH_RC=1,
+    )
+    kernel = sample["kernel_after_route"]["gs-a->gs-b"]
+    assert kernel["incumbent_link"] is None
+    assert kernel["incumbent_link_read"]["rc"] == 1
+    assert 'Device "term1" does not exist.' in kernel["incumbent_link_read"]["stderr"]
+    assert kernel["neighbor_read"]["rc"] == 1
+    assert sample["neighbor_observation"]["observed"] is False
+    assert "refused" in sample["neighbor_observation"]["reason"]
+    # the route component itself read fine
+    assert sample["routes"]["gs-a->gs-b"]["positive"] is True
+    # and the binding reports uncertainty with the diagnostics, never readiness
+    overlap = e2e_matrix._overlap_gate_fields(sample, _PROBE)  # noqa: SLF001
+    binding = e2e_matrix._bind_overlap_to_terminal(overlap, _lifecycle(1), [])  # noqa: SLF001
+    assert binding["bound"] is False and binding["reason"] == "overlap_ordering_uncertain"
+    assert 'Device "term1" does not exist.' in binding["incumbent_link_read"]["stderr"]
+    assert binding["neighbor_read"]["rc"] == 1
+
+
+def test_combined_read_valid_control_still_qualifies(tmp_path, monkeypatch):
+    sample, _ = _pod_shell(tmp_path, monkeypatch)
+    route = sample["routes"]["gs-a->gs-b"]
+    assert route["observed"] and route["positive"] and route["egress_dev"] == "term0"
+    kernel = sample["kernel_after_route"]["gs-a->gs-b"]
+    assert kernel["incumbent_link"]["state"] == "UP"
+    assert kernel["incumbent_adjacency_after_route"]["system_id"] == "sat-1"
+    overlap = e2e_matrix._overlap_gate_fields(sample, _PROBE)  # noqa: SLF001
+    assert overlap["successor_fib_ready"] is True
+    binding = e2e_matrix._bind_overlap_to_terminal(overlap, _lifecycle(1), [])  # noqa: SLF001
+    assert binding["bound"] is True
+
+
+def test_kernel_read_parser_refuses_incomplete_sections_and_the_sampler_keeps_the_exec_output(
+    monkeypatch,
+):
+    parse = e2e_matrix._parse_kernel_read  # noqa: SLF001
+    assert parse("garbage\n") is None
+    assert (
+        parse(
+            _render_kernel_read(
+                route=(0, "x", ""),
+                incumbent=(0, "", ""),
+                successor=(0, "", ""),
+                neighbors=(0, "", ""),
+            ).rsplit("\n", 3)[0]
+        )
+        is None
+    )
+    full = parse(
+        _render_kernel_read(
+            route=(2, "", "RTNETLINK answers: Network unreachable"),
+            incumbent=(0, _link_line("term1", up=True), ""),
+            successor=(0, _link_line("term0", up=True), ""),
+            neighbors=(1, "", "Exiting: failed to connect to any daemons."),
+        )
+    )
+    assert full["route"] == {
+        "rc": 2,
+        "stdout": "",
+        "stderr": "RTNETLINK answers: Network unreachable",
+    }
+    assert full["neighbors"]["rc"] == 1 and "daemons" in full["neighbors"]["stderr"]
+
+    monkeypatch.setattr(
+        e2e_matrix,
+        "_kubectl_exec",
+        lambda node_id, command, *, timeout=20: {
+            "rc": 137,
+            "stdout": "",
+            "stderr": "command terminated with exit code 137",
+            "target": {},
+            "resolution_error": None,
+        },
+    )
+    readings = iter(
+        [
+            {
+                "session_id": "run-1",
+                "sim_time": "2026-06-08T00:14:56Z",
+                "nodes": _NODES,
+                "links": _OVERLAP_LINKS,
+            },
+            {
+                "snapshot_seq": 906,
+                "epoch_id": 1,
+                "sim_time": "2026-06-08T00:14:56Z",
+                "allocation_events": [],
+            },
+        ]
+        * 2
+    )
+    monkeypatch.setattr(e2e_matrix, "request_json", lambda method, path, **k: next(readings))
+    sample = e2e_matrix._sample_station("t", "gs-a", [_PROBE])  # noqa: SLF001
+    kernel = sample["kernel_after_route"]["gs-a->gs-b"]
+    assert "four components" in kernel["error"] and kernel["rc"] == 137
+    assert sample["routes"]["gs-a->gs-b"]["observed"] is False
+    assert "exit code 137" in sample["routes"]["gs-a->gs-b"]["reason"]

@@ -27,10 +27,14 @@ LOCAL_NODE = "node02"
 MPLS_SYSCTLS = {"net.ipv4.ip_forward": "1", "net.mpls.platform_labels": "1048575"}
 
 
-def _manifest(*, mpls: bool = True, cross_peer: bool = False) -> WiringManifest:
+def _manifest(
+    *, mpls: bool = True, cross_peer: bool = False, site_lan: bool = False
+) -> WiringManifest:
     """Two MPLS satellites joined by one local ISL, one MPLS ground station with one
-    ground interface, one satellite that never asked for MPLS, and optionally a
-    peer on another host reachable only through a cross-host ISL."""
+    ground interface, one satellite that never asked for MPLS, optionally a peer
+    on another host reachable only through a cross-host ISL, and optionally a
+    site LAN joining the MPLS ground station with a second one that never asked
+    for MPLS."""
     sysctls = MPLS_SYSCTLS if mpls else {"net.ipv4.ip_forward": "1"}
     satellite = {
         "node_type": "satellite",
@@ -74,6 +78,36 @@ def _manifest(*, mpls: bool = True, cross_peer: bool = False) -> WiringManifest:
             "remove_default_route": False,
         },
     }
+    ground_bridges: dict[str, dict] = {"gs-x": {}}
+    site_lans: dict[str, dict] = {}
+    if site_lan:
+        nodes["gs-y"] = {
+            **nodes["gs-x"],
+            "gs_name": "gs-y",
+            "gs_index": 1,
+            "sysctls": {"net.ipv4.ip_forward": "1"},
+            "mpls_enable": False,
+        }
+        ground_bridges["gs-y"] = {}
+        site_lans["site-a-lan0"] = {
+            "vni": 4242,
+            "members": [
+                {
+                    "node_id": "gs-x",
+                    "interface": "terr0",
+                    "addresses": ["172.16.1.1/24"],
+                    "k3s_node": LOCAL_NODE,
+                    "host_ip": "192.0.2.2",
+                },
+                {
+                    "node_id": "gs-y",
+                    "interface": "terr0",
+                    "addresses": ["172.16.1.2/24"],
+                    "k3s_node": LOCAL_NODE,
+                    "host_ip": "192.0.2.2",
+                },
+            ],
+        }
     if cross_peer:
         nodes["sat-d"] = {
             **satellite,
@@ -89,15 +123,16 @@ def _manifest(*, mpls: bool = True, cross_peer: bool = False) -> WiringManifest:
             "wiring_generation": "sha256:" + "a" * 64,
             "required_phases": list(REQUIRED_WIRING_PHASES),
             "nodes": nodes,
-            "ground_bridges": {"gs-x": {}},
-            "site_lans": {},
+            "ground_bridges": ground_bridges,
+            "site_lans": site_lans,
             "required_substrate_pairs": [],
             "isl_link_count": 2 if cross_peer else 1,
         }
     )
 
 
-def _handles(*, mpls: bool = True) -> dict[str, NamespaceHandle]:
+def _handles(*, mpls: bool = True, site_lan: bool = False) -> dict[str, NamespaceHandle]:
+    node_ids = ("sat-a", "sat-b", "sat-c", "gs-x") + (("gs-y",) if site_lan else ())
     return {
         node_id: NamespaceHandle(
             node_id=node_id,
@@ -106,9 +141,9 @@ def _handles(*, mpls: bool = True) -> dict[str, NamespaceHandle]:
             sandbox_attempt=0,
             pid=4000 + index,
             netns_id=f"40265321{index:02d}",
-            mpls_enable=mpls and node_id != "sat-c",
+            mpls_enable=mpls and node_id not in ("sat-c", "gs-y"),
         )
-        for index, node_id in enumerate(("sat-a", "sat-b", "sat-c", "gs-x"))
+        for index, node_id in enumerate(node_ids)
     }
 
 
@@ -144,7 +179,8 @@ class _Run:
     ``created`` is the mediated ISL creator's answer for (end a, end b);
     ``ground_created`` the ground creators' answer; ``configure_failures`` maps
     (pid, ifname) to the exception the MPLS input step raises there;
-    ``ground_creator_failure`` makes the ground bridge creator itself fail.
+    ``ground_creator_failure`` makes the ground bridge creator itself fail;
+    ``site_wiring_failure`` makes the site LAN creator fail for every site.
     """
 
     def __init__(
@@ -156,14 +192,17 @@ class _Run:
         ground_created: bool = True,
         configure_failures: dict[tuple[int, str], Exception] | None = None,
         ground_creator_failure: Exception | None = None,
+        site_wiring_failure: Exception | None = None,
     ) -> None:
         monkeypatch.setenv("NODE_NAME", LOCAL_NODE)
+        monkeypatch.setenv("HOST_IP", "192.0.2.2")
         self.calls: list[tuple] = []
         self.support = support
         self.created = created
         self.ground_created = ground_created
         self.configure_failures = configure_failures or {}
         self.ground_creator_failure = ground_creator_failure
+        self.site_wiring_failure = site_wiring_failure
 
     def __enter__(self) -> _Run:
         calls = self.calls
@@ -198,6 +237,13 @@ class _Run:
             calls.append(("create_satellite_ground_veth", node_id, ifname))
             return PodVeth(f"_gnd-{node_id}", ifname, created=run.ground_created)
 
+        def site_wire(plan):
+            calls.append(
+                ("wire_site_lan", plan.site_id, tuple(p.node_id for p in plan.local_members))
+            )
+            if run.site_wiring_failure is not None:
+                raise run.site_wiring_failure
+
         self._patches = [
             patch("node_agent.wiring._cleanup_stale_interfaces", lambda *a, **k: None),
             patch("node_agent.wiring._write_sysctl_in_netns", sysctl),
@@ -208,6 +254,11 @@ class _Run:
             patch("node_agent.wiring.configure_interface", lambda *a, **k: None),
             patch("node_agent.wiring.finalize_pod_network", lambda *a, **k: (None, None)),
             patch("node_agent.wiring.ensure_mpls_kernel_support", check),
+            patch("node_agent.site_lan.wire_site_lan", site_wire),
+            patch(
+                "node_agent.site_lan.ensure_site_lan_transit",
+                lambda: calls.append(("ensure_site_lan_transit",)),
+            ),
             # execute_wiring loads the in-cluster config once for its progress
             # writes; outside a cluster those writes are replaced by a stub client.
             patch("node_agent.wiring.kubernetes.config.load_incluster_config", lambda: None),
@@ -221,8 +272,10 @@ class _Run:
         for item in self._patches:
             item.stop()
 
-    def wire(self, manifest: WiringManifest, *, mpls: bool = True):
-        return execute_wiring(manifest, namespace="testns", handles=_handles(mpls=mpls))
+    def wire(self, manifest: WiringManifest, *, mpls: bool = True, site_lan: bool = False):
+        return execute_wiring(
+            manifest, namespace="testns", handles=_handles(mpls=mpls, site_lan=site_lan)
+        )
 
     def configured(self) -> list[tuple]:
         return [c[1:] for c in self.calls if c[0] == "configure_mpls_input"]
@@ -403,3 +456,73 @@ def test_every_wiring_attempt_checks_the_kernel_again(monkeypatch) -> None:
         run.wire(_manifest())
 
     assert [c[0] for c in run.calls].count("ensure_mpls_kernel_support") == 2
+
+
+_SITE_STEP = ("configure_mpls_input", 4003, "terr0", True, "site LAN site-a-lan0/gs-x/terr0")
+_SITE_WIRED = ("wire_site_lan", "site-a-lan0", ("gs-x", "gs-y"))
+
+
+def test_site_lan_member_interfaces_are_configured_after_the_site_is_wired(monkeypatch) -> None:
+    """The site LAN creator recreates every member veth, so each MPLS member's
+    interface gets the input step as created, after the site is wired; the member
+    whose node never asked for MPLS is not touched."""
+    with _Run(monkeypatch, _support(available=True)) as run:
+        statuses = run.wire(_manifest(site_lan=True), site_lan=True)
+
+    assert all(status.status == "ready" for status in statuses.values()), statuses
+    assert _SITE_STEP in run.calls
+    assert (4004, "terr0") not in {(pid, ifname) for pid, ifname, *_ in run.configured()}
+    assert run.calls.index(_SITE_WIRED) < run.calls.index(_SITE_STEP)
+
+
+def test_refused_member_gets_no_site_lan_mpls_step(monkeypatch) -> None:
+    with _Run(monkeypatch, _support(available=False)) as run:
+        statuses = run.wire(_manifest(site_lan=True), site_lan=True)
+
+    assert _SITE_WIRED in run.calls
+    assert run.configured() == []
+    assert _phase(statuses["gs-x"], "mpls").status == "dirty_kernel"
+    assert statuses["gs-y"].status == "ready"
+
+
+def test_site_lan_mpls_step_failure_lands_under_mpls_for_that_member_only(monkeypatch) -> None:
+    failure = MplsInputError(
+        "site LAN site-a-lan0/gs-x/terr0",
+        "terr0",
+        "written but not read back: mpls input disabled on terr0",
+        ("device=terr0", "expected=1", "observed=0"),
+    )
+    with _Run(
+        monkeypatch, _support(available=True), configure_failures={(4003, "terr0"): failure}
+    ) as run:
+        statuses = run.wire(_manifest(site_lan=True), site_lan=True)
+
+    gs = statuses["gs-x"]
+    assert gs.status == "dirty_kernel"
+    assert _phase(gs, "mpls").status == "dirty_kernel"
+    assert (
+        "written but not read back: mpls input disabled on terr0"
+        " [device=terr0, expected=1, observed=0]"
+    ) in _phase(gs, "mpls").error_message
+    assert _phase(gs, "terrestrial_interfaces").status != "dirty_kernel"
+    assert _phase(gs, "terrestrial_interfaces").error_message == ""
+    assert statuses["gs-y"].status == "ready"
+    # The step neither re-wires nor tears the site down.
+    assert [c for c in run.calls if c[0] == "wire_site_lan"] == [_SITE_WIRED]
+
+
+def test_site_lan_wiring_failure_stays_terrestrial_and_runs_no_mpls_step(monkeypatch) -> None:
+    with _Run(
+        monkeypatch,
+        _support(available=True),
+        site_wiring_failure=RuntimeError("bridge add failed"),
+    ) as run:
+        statuses = run.wire(_manifest(site_lan=True), site_lan=True)
+
+    for node_id in ("gs-x", "gs-y"):
+        phase = _phase(statuses[node_id], "terrestrial_interfaces")
+        assert phase.status == "dirty_kernel", (node_id, phase)
+        assert "bridge add failed" in phase.error_message
+    assert (4003, "terr0") not in {(pid, ifname) for pid, ifname, *_ in run.configured()}
+    # The ground interface's own step happened earlier and keeps its attribution.
+    assert (4003, "gnd0", True, "ground gs-x/gnd0") in run.configured()

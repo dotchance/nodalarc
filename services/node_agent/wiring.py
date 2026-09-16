@@ -710,6 +710,8 @@ def execute_wiring(
             site_plans = []
 
     wired_sites = 0
+    site_mpls_members = 0
+    site_mpls_verified = 0
     with ThreadPoolExecutor(max_workers=8) as pool:
         site_futures = {pool.submit(wire_site_lan, plan): plan for plan in site_plans}
         for fut in as_completed(site_futures):
@@ -725,7 +727,36 @@ def execute_wiring(
                         "terrestrial_interfaces",
                         f"site LAN {plan.site_id} wiring failed: {exc}",
                     )
+                continue
+            # The site LAN creator removes stale devices and creates every
+            # member veth afresh, so the pod-side interface it just gave each
+            # member is created, never reused: a member whose node requires
+            # MPLS gets the creating operation's input step, written and read
+            # back, with a failure recorded under the mpls phase for that
+            # member alone. Members without the requirement, and members of a
+            # node the capability check refused, are not touched.
+            for port in plan.local_members:
+                node_spec = nodes.get(port.node_id) or {}
+                if not node_spec.get("mpls_enable") or port.node_id in mpls_refused:
+                    continue
+                site_mpls_members += 1
+                try:
+                    configure_mpls_input(
+                        port.pid,
+                        port.interface,
+                        created=True,
+                        subject=f"site LAN {plan.site_id}/{port.node_id}/{port.interface}",
+                    )
+                    site_mpls_verified += 1
+                except Exception as exc:
+                    _record_failure(port.node_id, "mpls", str(exc))
     log.info("%d site LANs wired on this host", wired_sites)
+    if site_mpls_members:
+        log.info(
+            "MPLS input configured and read back on %d of %d site LAN member interfaces",
+            site_mpls_verified,
+            site_mpls_members,
+        )
     _write_progress(
         f"Terrestrial interfaces created. Finalizing {total_nodes} pods (routes + security)..."
     )

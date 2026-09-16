@@ -139,3 +139,70 @@ def expected_transitions(
             previous = v
         t += resolution_s
     return out
+
+
+def declared_shell(constellation_path, catalog_root) -> DeclaredShell:
+    """The shell as the catalog declares it: the constellation document and the
+    orbit it references, read from the catalog root, nothing computed."""
+    from pathlib import Path
+
+    import yaml
+
+    constellation = yaml.safe_load(Path(constellation_path).read_text())["constellation"]
+    orbit_ref = constellation["orbit"].split(":", 1)[1]
+    orbit = yaml.safe_load((Path(catalog_root) / orbit_ref).read_text())["orbit"]
+    return DeclaredShell(
+        altitude_km=float(orbit["shape"]["altitude_km"]),
+        inclination_deg=float(orbit["orientation"]["inclination_deg"]),
+        raan_spacing_deg=float(constellation["planes"]["raan_spacing_deg"]),
+        slots_per_plane=int(constellation["slots_per_plane"]),
+        phase_offset_deg=float(constellation["phasing"]["phase_offset_deg"]),
+    )
+
+
+def terminal_limits(terminal_path) -> tuple[float, float]:
+    """The ISL terminal's declared range and tracking limits: (max_range_km, max_rate_deg_s)."""
+    from pathlib import Path
+
+    import yaml
+
+    terminal = yaml.safe_load(Path(terminal_path).read_text())["terminal"]
+    return float(terminal["max_range_km"]), float(terminal["limits"]["max_tracking_rate_deg_s"])
+
+
+def visibility_changes(
+    shell,
+    a,
+    b,
+    *,
+    horizon_s: float,
+    sample_s: float,
+    max_range_km: float,
+    max_rate_deg_s: float,
+) -> list[tuple[float, bool, str]]:
+    """The verdict sequence collapsed to visibility changes, as the runtime enacts
+    them: (time, visible, reason) for each change after t=0, plus a t=0 entry when
+    the pair starts feasible; a verdict change between two infeasible reasons is
+    no visibility change and produces nothing."""
+    verdicts = expected_transitions(
+        shell,
+        a,
+        b,
+        duration_s=horizon_s,
+        sample_s=sample_s,
+        max_range_km=max_range_km,
+        max_rate_deg_s=max_rate_deg_s,
+    )
+    changes: list[tuple[float, bool, str]] = []
+    visible = None
+    for t_s, verdict in verdicts:
+        now_visible = verdict == "ok"
+        if visible is None:
+            if now_visible:
+                changes.append((t_s, True, "ok"))
+            visible = now_visible
+            continue
+        if now_visible != visible:
+            changes.append((t_s, now_visible, verdict))
+            visible = now_visible
+    return changes

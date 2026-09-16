@@ -153,19 +153,188 @@ def test_wait_for_transition_is_bound_to_operation_terminal_state(monkeypatch) -
     ]
 
 
-def test_mbb_packet_acceptance_requires_successor_fib_overlap() -> None:
-    output = {"protocol_observed": True, "packet_outcome": "loss_observed", "zero_loss": False}
+_OVERLAP_STARTED = [
+    {
+        "category": "mbb_overlap_started",
+        "pair": ["gs-a", "sat-1"],
+        "successor_pair": ["gs-a", "sat-2"],
+        "message": "MBB overlap started for incumbent ('gs-a', 'sat-1') with successor ('gs-a', 'sat-2'); overlap_ticks=30",
+    }
+]
 
-    assert e2e_matrix._mbb_packet_window_passed(  # noqa: SLF001
-        output, {"successor_fib_ready": True}, []
+
+def _dispatch(seq, timestamp, *, up=(), down=()):
+    parts = []
+    if up:
+        parts.append("up=[" + ", ".join(f"{a}<->{b}" for a, b in up) + "]")
+    if down:
+        parts.append("down=[" + ", ".join(f"{a}<->{b}" for a, b in down) + "]")
+    return {
+        "seq": seq,
+        "source": "scheduler",
+        "code": "DISPATCHER",
+        "level": "info",
+        "hostname": "nodalarc-scheduler-abc-xyz",
+        "timestamp": timestamp,
+        "message": f"Link state changed [{', '.join(parts)}, active=7]",
+        "details": None,
+    }
+
+
+_DISPATCH_UP = _dispatch(50, "2026-09-14T23:53:33.100000+00:00", up=[("gs-a", "sat-2")])
+_DISPATCH_DOWN = _dispatch(51, "2026-09-14T23:53:35.200000+00:00", down=[("gs-a", "sat-1")])
+
+
+def _station_sample(
+    index, *, links, sim="2026-06-08T00:14:56Z", allocation=None, epoch=1, incumbent_up=True
+):
+    sample = _sample(
+        links=links,
+        neighbors=[("term1", "Up")],
+        route_dev="term1",
+        sim=sim,
+        incumbent_up=incumbent_up,
+        allocation_events=_OVERLAP_STARTED if allocation is None else allocation,
     )
-    assert not e2e_matrix._mbb_packet_window_passed(  # noqa: SLF001
-        output, {"successor_fib_ready": False}, []
+    sample["index"] = index
+    sample["src"] = "gs-a"
+    sample["epoch_id"] = epoch
+    sample["pre"]["epoch_id"] = epoch
+    return sample
+
+
+def _assess(*, samples, events, bad=(), terminal=None, terminal_index=3, ticks=30):
+    return e2e_matrix.assess_mbb_obligations(
+        terminal_event=terminal or _lifecycle(1),
+        terminal_sample_index=terminal_index,
+        samples=samples,
+        ops_events=events,
+        bad_events=list(bad),
+        probe_key="gs-a->gs-b",
+        configured_overlap_ticks=ticks,
     )
-    assert not e2e_matrix._mbb_packet_window_passed(output, None, [])  # noqa: SLF001
-    assert not e2e_matrix._mbb_packet_window_passed(  # noqa: SLF001
-        output, {"successor_fib_ready": True}, [{"code": "KERNEL_DIRTY"}]
+
+
+def test_obligations_pass_from_records_and_samples_and_never_from_the_fib() -> None:
+    """The four agreed obligations judged from the Scheduler's own records and the
+    station's samples inside the overlap; where the route pointed is recorded
+    elsewhere and decides nothing."""
+    samples = [
+        _station_sample(0, links=_OVERLAP_LINKS[:1], allocation=[]),
+        _station_sample(1, links=_OVERLAP_LINKS),
+        _station_sample(2, links=_OVERLAP_LINKS),
+    ]
+    result = _assess(samples=samples, events=[_lifecycle(1), _DISPATCH_UP, _DISPATCH_DOWN])
+    assert result["verdict"] == "PASS"
+    assert result["successor_verified_before_release"]["verdict"] == "established"
+    assert result["successor_verified_before_release"]["state_samples_with_both_links"] == [1, 2]
+    assert result["incumbent_retained_through_overlap"]["verdict"] == "established"
+    assert result["incumbent_retained_through_overlap"]["samples_with_incumbent_present"] == [1, 2]
+    assert result["terminal_driven_release"]["verdict"] == "established"
+    assert result["terminal_driven_release"]["release_delay_s"] == pytest.approx(1.0197, abs=0.001)
+    assert result["failures_exposed"] == {"verdict": "clean", "events": []}
+    assert (
+        result["occurrence"]["overlap_class"] == "unknown"
+    )  # the fixture's message carries no ticks
+    assert "not an obligation" in result["note"]
+
+
+def test_obligation_violations_and_missing_evidence_are_distinct() -> None:
+    samples = [_station_sample(1, links=_OVERLAP_LINKS), _station_sample(2, links=_OVERLAP_LINKS)]
+    # release reported before the successor came up: violated
+    early = _dispatch(51, "2026-09-14T23:53:32.000000+00:00", down=[("gs-a", "sat-1")])
+    result = _assess(samples=samples, events=[_lifecycle(1), _DISPATCH_UP, early])
+    assert result["verdict"] == "FAIL"
+    assert result["successor_verified_before_release"]["verdict"] == "violated"
+    # the release recorded before the terminal record: retention violated, release order not established
+    assert result["incumbent_retained_through_overlap"]["verdict"] == "violated"
+    assert result["terminal_driven_release"]["verdict"] == "not_established"
+    assert result["terminal_driven_release"]["release_delay_s"] < 0
+
+    # no successor-up record inside the window: not established, never a pass
+    result = _assess(samples=samples, events=[_lifecycle(1), _DISPATCH_DOWN])
+    assert result["verdict"] == "INCOMPLETE"
+    assert result["successor_verified_before_release"]["verdict"] == "not_established"
+
+    # a sample inside the overlap without the incumbent: violated
+    gone = _station_sample(2, links=_OVERLAP_LINKS[1:])
+    result = _assess(
+        samples=[samples[0], gone], events=[_lifecycle(1), _DISPATCH_UP, _DISPATCH_DOWN]
     )
+    assert result["verdict"] == "FAIL"
+    assert result["incumbent_retained_through_overlap"]["samples_without_incumbent"] == [2]
+
+    # no sample inside the overlap (its start never seen): not established
+    unseen = [_station_sample(1, links=_OVERLAP_LINKS, allocation=[])]
+    result = _assess(samples=unseen, events=[_lifecycle(1), _DISPATCH_UP, _DISPATCH_DOWN])
+    assert result["verdict"] == "INCOMPLETE"
+    assert result["incumbent_retained_through_overlap"]["verdict"] == "not_established"
+
+    # samples of another run or epoch never count as retention evidence
+    foreign = [_station_sample(1, links=_OVERLAP_LINKS, epoch=2)]
+    result = _assess(samples=foreign, events=[_lifecycle(1), _DISPATCH_UP, _DISPATCH_DOWN])
+    assert result["incumbent_retained_through_overlap"]["samples_of_other_identity"] == [1]
+    assert result["verdict"] == "INCOMPLETE"
+
+    # an exposed actuation failure fails the occurrence and is listed with its instance
+    dirty = {
+        "code": "KERNEL_DIRTY",
+        "timestamp": "2026-09-14T23:53:00Z",
+        "hostname": "nodalarc-scheduler-old-1",
+        "message": "Ground station gs-c actuation is kernel_dirty: KernelInventoryAudit",
+        "details": {"scheduler_instance_id": "nodalarc-scheduler-old-1-1-1", "gs_id": "gs-c"},
+    }
+    result = _assess(
+        samples=samples, events=[_lifecycle(1), _DISPATCH_UP, _DISPATCH_DOWN], bad=[dirty]
+    )
+    assert result["verdict"] == "FAIL"
+    assert result["failures_exposed"]["verdict"] == "actuation_failure_present"
+    assert (
+        result["failures_exposed"]["events"][0]["scheduler_instance_id"]
+        == "nodalarc-scheduler-old-1-1-1"
+    )
+
+
+def test_terminal_overlap_facts_and_dispatcher_records_are_read_from_the_runtime_shapes() -> None:
+    facts = e2e_matrix._terminal_overlap_facts(  # noqa: SLF001
+        _lifecycle(
+            1,
+            message="MBB teardown completed for old pair ('gs-a', 'sat-1'); successor ('gs-a', 'sat-2') remains scheduled; elapsed_ticks=1; old_pair_visible=False",
+        )
+    )
+    assert facts == {"elapsed_ticks": 1, "old_pair_visible": False}
+    typed = _lifecycle(1)
+    typed["details"]["extra"] = {"elapsed_ticks": 30}
+    typed["details"]["authority_before"] = {"old": {"pair": ["gs-a", "sat-1"], "visible": True}}
+    assert e2e_matrix._terminal_overlap_facts(typed) == {
+        "elapsed_ticks": 30,
+        "old_pair_visible": True,
+    }  # noqa: SLF001
+    assert e2e_matrix._overlap_class({"elapsed_ticks": 30, "old_pair_visible": True}, 30) == "full"  # noqa: SLF001
+    assert (
+        e2e_matrix._overlap_class({"elapsed_ticks": 1, "old_pair_visible": False}, 30)
+        == "shortened_incumbent_lost"
+    )  # noqa: SLF001
+    assert (
+        e2e_matrix._overlap_class({"elapsed_ticks": 4, "old_pair_visible": True}, 30)
+        == "shortened_other"
+    )  # noqa: SLF001
+
+    records = e2e_matrix._dispatcher_transitions(  # noqa: SLF001
+        [
+            _DISPATCH_DOWN,
+            _DISPATCH_UP,
+            {
+                "source": "ome",
+                "code": "MBB_TEARDOWN_TERMINAL",
+                "message": "Link state changed [up=[x<->y]]",
+            },
+            _dispatch(52, "2026-09-14T23:53:36Z", up=[("gs-b", "sat-9")], down=[("gs-a", "sat-2")]),
+        ]
+    )
+    assert [record["seq"] for record in records] == [50, 51, 52]
+    assert records[0]["up"] == [["gs-a", "sat-2"]] and records[0]["down"] == []
+    assert records[2]["up"] == [["gs-b", "sat-9"]] and records[2]["down"] == [["gs-a", "sat-2"]]
 
 
 def test_check_ping_fails_ground_session_when_ground_probe_is_not_proven(monkeypatch) -> None:
@@ -226,9 +395,13 @@ def test_check_ping_allows_skip_only_for_satellite_only_topology(monkeypatch) ->
     assert result["active_link_count"] == 0
 
 
-def test_connectivity_expectation_marks_only_polar_session_intermittent() -> None:
+def test_connectivity_expectation_marks_polar_intermittent_and_the_seam_experiments_physical() -> (
+    None
+):
     polar = e2e_matrix._connectivity_expectation("earth-leo-polar")  # noqa: SLF001
     ordinary = e2e_matrix._connectivity_expectation("earth-leo-simple")  # noqa: SLF001
+    seam = e2e_matrix._connectivity_expectation("earth-leo-polar-seam")  # noqa: SLF001
+    tracking = e2e_matrix._connectivity_expectation("earth-leo-polar-seam-tracking")  # noqa: SLF001
 
     assert polar == {
         "mode": "intermittent",
@@ -236,6 +409,218 @@ def test_connectivity_expectation_marks_only_polar_session_intermittent() -> Non
         "settle_seconds": 30,
     }
     assert ordinary == {"mode": "continuous"}
+    assert seam["mode"] == "physical_transitions"
+    assert seam["constellation"].endswith("earth-leo-polar-36.yaml")
+    assert tracking["mode"] == "physical_transitions"
+    assert tracking["constellation"].endswith("earth-leo-polar-36-seam-crossing.yaml")
+    for expectation in (seam, tracking):
+        assert expectation["terminal"].endswith("optical-low-orbit-isl.yaml")
+        assert expectation["horizon_s"] == 1200
+
+
+_SEAM_SESSION = """
+session:
+  name: seam-test
+segments:
+- id: leo
+  source: nodalarc:constellations/earth/leo/earth-leo-polar-36-seam-crossing.yaml
+- id: ground
+  placement:
+    from_site_set: nodalarc:site-sets/earth/leo/earth-leo-polar-gateway-sites.yaml
+link_rules:
+- id: leo_isl
+  topology:
+    mode: explicit_pairs
+    pairs:
+    - {a: sat-p05s02, b: sat-p00s04}
+    - {a: sat-p05s05, b: sat-p00s01}
+    - {a: sat-p01s00, b: sat-p02s00}
+  endpoints:
+  - select: {segment: leo}
+  - select: {segment: leo}
+"""
+
+
+def _seam_perm(session_id="earth-leo-polar-seam-tracking", session_yaml=_SEAM_SESSION):
+    return {
+        "id": session_id,
+        "session_yaml": session_yaml,
+        "session_start_time": "2026-06-08T00:00:00+00:00",
+        "connectivity_expectation": e2e_matrix._connectivity_expectation(session_id),  # noqa: SLF001
+        "gs": [],
+        "ground_topology": {},
+    }
+
+
+def test_seam_pairs_come_from_the_declared_explicit_pairs_between_planes_five_and_zero() -> None:
+    pairs = e2e_matrix._seam_pairs_from_session(_SEAM_SESSION)  # noqa: SLF001
+    assert [entry["pair"] for entry in pairs] == [
+        ["leo-sat-p00s04", "leo-sat-p05s02"],
+        ["leo-sat-p00s01", "leo-sat-p05s05"],
+    ]
+    assert pairs[0]["plane_slot"] == {"leo-sat-p00s04": (0, 4), "leo-sat-p05s02": (5, 2)}
+
+
+def test_seam_predictions_and_windows_follow_the_declared_reference() -> None:
+    """The reference's visibility changes for the declared pairs inside the horizon,
+    with one watch window per change (merged when they touch) and a seek target
+    ahead of each so the post-seek re-enactment settles first."""
+    perm = _seam_perm()
+    pairs = e2e_matrix._seam_pairs_from_session(perm["session_yaml"])  # noqa: SLF001
+    predictions = e2e_matrix._seam_predictions(perm, pairs)  # noqa: SLF001
+    crossing = predictions[("leo-sat-p00s04", "leo-sat-p05s02")]
+    # gain by range, loss by tracking at the close pass, recovery: the tracking experiment
+    assert [(round(t), visible, reason) for t, visible, reason in crossing] == [
+        (456, True, "ok"),
+        (866, False, "tracking_exceeded"),
+        (895, True, "ok"),
+    ]
+    windows = e2e_matrix._plan_watch_windows(predictions)  # noqa: SLF001
+    assert [w["start"] for w in windows] == [436.0, 846.0]
+    assert windows[1]["end"] == 920.0 and len(windows[1]["expected"]) == 4
+    assert windows[0]["seek_to"] == 346.0
+    assert all(w["seek_to"] == w["start"] - e2e_matrix.SEAM_SEEK_LEAD_S for w in windows)
+
+
+def test_seam_transition_matching_applies_the_accepted_tolerances_only() -> None:
+    expected = [
+        {"t": 456.0, "pair": ["a", "b"], "visible": True, "reason": "ok"},
+        {"t": 866.0, "pair": ["a", "b"], "visible": False, "reason": "tracking_exceeded"},
+    ]
+    observed = [
+        {"pair": ["a", "b"], "visible": True, "t": 459.0},  # inside the enactment bound
+        {"pair": ["a", "b"], "visible": False, "t": 880.0},  # 14 s late: outside
+        {"pair": ["c", "d"], "visible": False, "t": 460.0},  # nobody predicted it
+    ]
+    result = e2e_matrix._match_seam_transitions(expected, observed)  # noqa: SLF001
+    assert [m["delay_s"] for m in result["matched"]] == [3.0]
+    assert [m["t"] for m in result["missing"]] == [866.0]
+    assert [u["pair"] for u in result["unexpected"]] == [["a", "b"], ["c", "d"]]
+    # one reference sample early is inside the tolerance, more is not
+    early = [{"pair": ["a", "b"], "visible": True, "t": 455.0}]
+    assert e2e_matrix._match_seam_transitions(expected[:1], early)["missing"] == []  # noqa: SLF001
+    earlier = [{"pair": ["a", "b"], "visible": True, "t": 454.0}]
+    assert e2e_matrix._match_seam_transitions(expected[:1], earlier)["missing"] == expected[:1]  # noqa: SLF001
+
+
+class _SeamRuntime:
+    """A fake runtime for the seam check: the clock runs from wherever the last seek
+    put it, one second per sample, and each seam pair is active exactly when its
+    scripted state says so at that time; pings are recorded, never judged."""
+
+    def __init__(self, monkeypatch, states):
+        self.states = states  # pair -> function(t) -> active
+        self.t = 0.0
+        self.seeks: list[str] = []
+        self.pings = 0
+        monkeypatch.setattr(e2e_matrix, "request_json", self.request)
+        monkeypatch.setattr(e2e_matrix, "_seek_playback", self.seek)
+        monkeypatch.setattr(e2e_matrix, "check_ping", self.ping)
+        monkeypatch.setattr(e2e_matrix.time, "sleep", lambda _s: None)
+        self.clock = 0.0
+        monkeypatch.setattr(e2e_matrix.time, "monotonic", self.monotonic)
+
+    def monotonic(self):
+        self.clock += 0.5
+        return self.clock
+
+    def request(self, method, path, **kwargs):
+        assert "/api/v1/state" in path
+        sim = e2e_matrix._parse_api_datetime("2026-06-08T00:00:00+00:00") + e2e_matrix.timedelta(  # noqa: SLF001
+            seconds=self.t
+        )
+        links = [
+            {"node_a": a, "node_b": b, "state": "active", "link_type": "isl"}
+            for (a, b), active in self.states.items()
+            if active(self.t)
+        ]
+        self.t += 1.0
+        return {"sim_time": sim.isoformat(), "links": links}
+
+    def seek(self, token, target):
+        self.seeks.append(target)
+        self.t = (
+            e2e_matrix._parse_api_datetime(target)
+            - e2e_matrix._parse_api_datetime("2026-06-08T00:00:00+00:00")
+        ).total_seconds()  # noqa: SLF001
+        return {"result": "PASS"}
+
+    def ping(self, token, perm, *, ground_wait_s=None):
+        self.pings += 1
+        return {"result": "FAIL", "failure_kind": "connectivity", "reason": "no route"}
+
+
+def test_seam_physics_check_passes_when_the_runtime_enacts_the_reference(monkeypatch) -> None:
+    crossing = ("leo-sat-p00s04", "leo-sat-p05s02")
+    other = ("leo-sat-p00s01", "leo-sat-p05s05")
+    # enacted three seconds after each predicted change, inside the bound
+    runtime = _SeamRuntime(
+        monkeypatch,
+        {
+            crossing: lambda t: 459 <= t < 869 or t >= 898,
+            other: lambda t: 459 <= t < 869 or t >= 898,
+        },
+    )
+    result = e2e_matrix.check_seam_physics("t", _seam_perm())
+    assert result["result"] == "PASS", result.get("reason")
+    assert result["matching"]["missing"] == [] and result["matching"]["unexpected"] == []
+    assert len(result["matching"]["matched"]) == 6
+    assert all(m["delay_s"] == pytest.approx(3.0, abs=1.0) for m in result["matching"]["matched"])
+    assert len(runtime.seeks) == 2 and runtime.pings == 1
+    assert result["ground_probe_observation"]["result"] == "FAIL"
+    assert "no requirement" in result["ground_probe_observation"]["note"]
+    assert result["initial_mismatches"] == []
+
+
+def test_seam_physics_check_fails_on_a_missing_or_unexpected_transition(monkeypatch) -> None:
+    crossing = ("leo-sat-p00s04", "leo-sat-p05s02")
+    other = ("leo-sat-p00s01", "leo-sat-p05s05")
+    # the tracking loss never enacted: the link stays up through the close pass
+    _SeamRuntime(
+        monkeypatch, {crossing: lambda t: t >= 459, other: lambda t: 459 <= t < 869 or t >= 898}
+    )
+    result = e2e_matrix.check_seam_physics("t", _seam_perm())
+    assert result["result"] == "FAIL"
+    assert [m["t"] for m in result["matching"]["missing"]] == [866.0, 895.0]
+    assert "not enacted" in result["reason"]
+
+    # a seam pair dropping and returning inside a watch window when nothing predicts it
+    _SeamRuntime(
+        monkeypatch,
+        {
+            crossing: lambda t: 459 <= t < 869 or t >= 898,
+            other: lambda t: (459 <= t < 470) or (480 <= t < 869) or t >= 898,
+        },
+    )
+    result = e2e_matrix.check_seam_physics("t", _seam_perm())
+    assert result["result"] == "FAIL"
+    assert "does not predict" in result["reason"]
+    assert [u["pair"] for u in result["matching"]["unexpected"]] == [list(other), list(other)]
+
+    # a seam pair up at the first reading when the reference says it cannot be
+    _SeamRuntime(
+        monkeypatch, {crossing: lambda t: True, other: lambda t: 459 <= t < 869 or t >= 898}
+    )
+    result = e2e_matrix.check_seam_physics("t", _seam_perm())
+    assert result["result"] == "FAIL"
+    assert [m["pair"] for m in result["initial_mismatches"]] == [list(crossing)]
+
+
+def test_declared_connectivity_dispatches_the_seam_experiments_to_the_physical_check(
+    monkeypatch,
+) -> None:
+    calls = []
+    monkeypatch.setattr(
+        e2e_matrix,
+        "check_seam_physics",
+        lambda token, perm: calls.append(perm["id"]) or {"result": "PASS"},
+    )
+    monkeypatch.setattr(e2e_matrix, "check_ping", lambda token, perm, **k: {"result": "FAIL"})
+    assert (
+        e2e_matrix.check_declared_connectivity("t", _seam_perm("earth-leo-polar-seam"))["result"]
+        == "PASS"
+    )
+    assert calls == ["earth-leo-polar-seam"]
 
 
 def test_intermittent_connectivity_accepts_proven_runtime_unreachability(monkeypatch) -> None:
@@ -1171,7 +1556,15 @@ def _parse_link(line: str):
     return parse(line) if parse else None
 
 
-def _sample(*, links, neighbors, route_dev, sim="2026-06-08T00:14:56Z", incumbent_up=True):
+def _sample(
+    *,
+    links,
+    neighbors,
+    route_dev,
+    sim="2026-06-08T00:14:56Z",
+    incumbent_up=True,
+    allocation_events=None,
+):
     table = "Area NODAL:\n System Id  Interface  L  State  Holdtime SNPA\n" + "".join(
         f" sat-{iface}   {iface}   3  {state}  3  2020.2020.2020\n" for iface, state in neighbors
     )
@@ -1181,11 +1574,13 @@ def _sample(*, links, neighbors, route_dev, sim="2026-06-08T00:14:56Z", incumben
         "sim_time": sim,
         "decision_snapshot_seq": 906,
         "active_ground_links": links,
+        "allocation_events": _OVERLAP_STARTED if allocation_events is None else allocation_events,
     }
     return {
         "session_id": "run-1",
         "epoch_id": 1,
         "sim_time": sim,
+        "allocation_events": bracket["allocation_events"],
         "read_started_wall": "2026-09-15T00:00:00+00:00",
         "read_finished_wall": "2026-09-15T00:00:01+00:00",
         "kernel_read_started_wall": "2026-09-15T00:00:00.2+00:00",
@@ -1490,6 +1885,7 @@ def test_packet_window_grades_the_first_overlap_sample_and_never_a_post_teardown
             neighbors=[("term1", "Up")],
             route_dev="term1",
             sim="2026-06-08T00:14:50Z",
+            allocation_events=[],
         ),
         _sample(
             links=_OVERLAP_LINKS, neighbors=[("term0", "Up"), ("term1", "Up")], route_dev="term1"
@@ -1529,12 +1925,23 @@ def test_packet_window_grades_the_first_overlap_sample_and_never_a_post_teardown
     monkeypatch.setattr(e2e_matrix, "_event_at_or_after", lambda event, started_at: True)
     monkeypatch.setattr(e2e_matrix.time, "sleep", lambda _s: None)
 
+    lifecycle_with_records = lifecycle + [_DISPATCH_UP, _DISPATCH_DOWN]
+    event_batches = itertools.chain([[], []], itertools.repeat(lifecycle_with_records))
+    monkeypatch.setattr(
+        e2e_matrix,
+        "request_json",
+        lambda method, path, **k: next(event_batches) if "ops/events" in path else [],
+    )
     result = e2e_matrix._run_mbb_packet_window(  # noqa: SLF001
         "t", perm, count=5, interval_s=0.2, post_terminal_s=0.05
     )
 
-    assert result["result"] == "FAIL"
-    # the gate's input is the first overlap sighting (index 1), route still on the incumbent
+    # the obligations are met by the records and the retained overlap samples; where
+    # the route pointed during the overlap is recorded and decides nothing
+    assert result["result"] == "PASS"
+    assert result["obligations"]["verdict"] == "PASS"
+    assert result["fib_preference_policy"] == "recorded_not_gated"
+    # the routing observation's input is the first overlap sighting (index 1), route still on the incumbent
     assert result["overlap_proof"]["sample_index"] == 1
     assert result["overlap_proof"]["successor_fib_ready"] is False
     assert result["routing_layer_outcome"] == "fib_still_points_to_other_interface"
@@ -1546,7 +1953,8 @@ def test_packet_window_grades_the_first_overlap_sample_and_never_a_post_teardown
     assert result["terminal_observation"]["sample_index_at_receipt"] == 3
     assert [sample["index"] for sample in result["timeline"][:4]] == [0, 1, 2, 3]
     assert len(result["timeline"]) >= 4
-    assert len(result["ops_events"]) == 2 and len(result["lifecycle_occurrences"]) == 1
+    # two terminal records of one occurrence plus the Scheduler's two link records
+    assert len(result["ops_events"]) == 4 and len(result["lifecycle_occurrences"]) == 1
     assert result["lifecycle_occurrences"][0]["duplicate_records"] is True
     assert result["link_events"] == [_INCUMBENT_DOWN_LATER]
     assert result["probe_outputs"]["gs-a->gs-b"]["reply_count"] == 5
@@ -1584,6 +1992,13 @@ def test_packet_behavior_retains_every_attempt_in_full(monkeypatch) -> None:
                 "terminal_event": None,
             },
             {
+                "result": "FAIL",
+                "incomplete": True,
+                "reason": "incumbent_retained_through_overlap: not_established",
+                "timeline": [{"index": 0}],
+                "terminal_event": {"seq": 7},
+            },
+            {
                 "result": "PASS",
                 "timeline": [{"index": 0}, {"index": 1}],
                 "terminal_event": {"seq": 9},
@@ -1600,10 +2015,42 @@ def test_packet_behavior_retains_every_attempt_in_full(monkeypatch) -> None:
     result = e2e_matrix.check_mbb_packet_behavior("t", {}, max_wait_s=900)
 
     assert result["result"] == "PASS"
-    assert len(result["attempts"]) == 2
+    assert len(result["attempts"]) == 3
     assert result["attempts"][0]["result"] == "FAIL" and result["attempts"][0]["timeline"] == [
         {"index": 0}
     ]
+    assert result["attempts"][1]["incomplete"] is True
+
+    # a graded occurrence whose obligations are broken ends the run at once
+    violated = iter(
+        [{"result": "FAIL", "incomplete": False, "timeline": [], "terminal_event": {"seq": 3}}]
+    )
+    monkeypatch.setattr(
+        e2e_matrix,
+        "_run_mbb_packet_window",
+        lambda token, perm, *, count, interval_s: next(violated),
+    )
+    result = e2e_matrix.check_mbb_packet_behavior("t", {}, max_wait_s=900)
+    assert result["result"] == "FAIL" and len(result["attempts"]) == 1
+
+    # incomplete occurrences until the deadline: the last one is returned as the
+    # failure with every attempt kept, never turned into a pass
+    clock = iter([0.0, 0.0, 0.0, 100.0, 100.0, 1000.0, 1000.0, 1000.0])
+    monkeypatch.setattr(e2e_matrix.time, "monotonic", lambda: next(clock))
+    incomplete = iter(
+        [
+            {"result": "FAIL", "incomplete": True, "timeline": [], "terminal_event": {"seq": 4}},
+            {"result": "FAIL", "incomplete": True, "timeline": [], "terminal_event": {"seq": 5}},
+        ]
+    )
+    monkeypatch.setattr(
+        e2e_matrix,
+        "_run_mbb_packet_window",
+        lambda token, perm, *, count, interval_s: next(incomplete),
+    )
+    result = e2e_matrix.check_mbb_packet_behavior("t", {}, max_wait_s=900)
+    assert result["result"] == "FAIL" and result["incomplete"] is True
+    assert len(result["attempts"]) == 2 and "incomplete" in result["reason"]
 
 
 def test_station_sampler_reads_adjacency_and_route_through_the_observation_parsers() -> None:
@@ -1631,13 +2078,20 @@ def test_cj_is_a_default_matrix_entry_and_the_other_lanes_keep_their_opt_ins() -
 # --- correction batch: the window must tell what happened, or say it could not ---
 
 
-def _window(monkeypatch, *, samples, event_batches, post_terminal_s=0.05):
+def _window(monkeypatch, *, samples, event_batches, post_terminal_s=0.05, dispatcher=True):
+    """One packet window over fake samples and event batches; the Scheduler's
+    up-then-down records for the standard handover ride beside every non-empty
+    batch unless a test switches them off."""
     import itertools
 
     perm = {
         "ground_topology": {"gs-a": {}},
         "mbb_stations": {"gs-a": {"steady_limit": 1, "handover_mode": "mbb"}},
     }
+    if dispatcher:
+        event_batches = [
+            batch + [_DISPATCH_UP, _DISPATCH_DOWN] if batch else batch for batch in event_batches
+        ]
     sample_iter = itertools.chain(samples[:-1], itertools.repeat(samples[-1]))
     events_iter = itertools.chain(event_batches[:-1], itertools.repeat(event_batches[-1]))
     monkeypatch.setattr(e2e_matrix, "_find_all_routed_ground_probes", lambda token, perm: [_PROBE])
@@ -1679,14 +2133,17 @@ def test_overlap_sample_must_precede_and_name_the_graded_teardown(monkeypatch) -
     # the sample was taken after the teardown it is supposed to precede
     late = _lifecycle(1, snapshot=900, master_sim_time="2026-06-08T00:14:50Z")
     result = _window(monkeypatch, samples=[_READY_OVERLAP], event_batches=[[], [late]])
-    assert result["result"] == "FAIL"
+    # the route observation cannot claim the overlap; the obligations, judged from
+    # the Scheduler's records and the station samples, stand on their own
     assert result["overlap_proof"]["successor_fib_ready"] is False
     assert result["routing_layer_outcome"] == "overlap_ordering_uncertain"
+    assert result["obligations"]["verdict"] == "PASS"
 
-    # the terminal event names another handover at the same station
+    # the terminal event names another handover at the same station: nothing binds
+    # and no record names that handover, so the obligations are incomplete
     other = _lifecycle(1, old_pair=("gs-a", "sat-7"), successor_pair=("gs-a", "sat-8"))
     result = _window(monkeypatch, samples=[_READY_OVERLAP], event_batches=[[], [other]])
-    assert result["result"] == "FAIL"
+    assert result["result"] == "FAIL" and result["incomplete"] is True
     assert result["routing_layer_outcome"] == "overlap_of_another_handover"
 
     # two links, one successor, but no link marked as the teardown: the handover is unidentified
@@ -1704,7 +2161,6 @@ def test_overlap_sample_must_precede_and_name_the_graded_teardown(monkeypatch) -
         links=unmarked, neighbors=[("term0", "Up"), ("term1", "Up")], route_dev="term0"
     )
     result = _window(monkeypatch, samples=[sample], event_batches=[[], [_lifecycle(1)]])
-    assert result["result"] == "FAIL"
     assert result["routing_layer_outcome"] == "overlap_handover_unidentified"
 
 
@@ -1829,9 +2285,7 @@ def test_packet_classes_stay_distinct_and_an_invalid_measurement_never_qualifies
         [_instance(0, _reply_lines(3) + [("stderr", "error: unable to upgrade connection")])]
     )
     assert broken["reply_count"] == 3 and broken["protocol_observed"] is False
-    assert not e2e_matrix._mbb_packet_window_passed(  # noqa: SLF001
-        broken, {"successor_fib_ready": True}, []
-    )
+    assert broken["packet_outcome"] == "observer_error" and broken["measurement_valid"] is False
 
     # measured loss and explicit unreachable answers stay their own classes
     lossy = aggregate(
@@ -1927,13 +2381,13 @@ def _world(monkeypatch, *, enact_before_route_read: bool, api_delivers: bool, ep
 
     def request(method, path, **kwargs):
         if "ops/events" in path:
-            return [_lifecycle(1)] if reads["kernel"] >= 1 else []
+            return [_lifecycle(1), _DISPATCH_UP, _DISPATCH_DOWN] if reads["kernel"] >= 1 else []
         if "ground-link-decisions" in path:
             return {
                 "snapshot_seq": 906 if api_stale() else 912,
                 "epoch_id": epoch,
                 "sim_time": api_sim(),
-                "allocation_events": [],
+                "allocation_events": _OVERLAP_STARTED,
             }
         if "/api/v1/links" in path:
             return [_INCUMBENT_DOWN_LATER]
@@ -2451,11 +2905,8 @@ def test_each_failed_required_component_prevents_qualification(tmp_path, monkeyp
             ]
             is False
         )
-    assert not e2e_matrix._mbb_packet_window_passed(  # noqa: SLF001
-        {"protocol_observed": True},
-        {"successor_fib_ready": overlap["successor_fib_ready"] and binding["bound"]},
-        [],
-    )
+    # the routing observation cannot claim the successor's FIB from a failed read
+    assert not (overlap["successor_fib_ready"] and binding["bound"])
 
 
 def test_a_refused_neighbor_query_with_plausible_rows_never_qualifies(

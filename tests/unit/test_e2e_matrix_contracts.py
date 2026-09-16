@@ -569,6 +569,17 @@ def test_adjacency_observation_requires_the_daemons_table() -> None:
         assert obs(failure, "isis")["observed"] is False, failure
 
 
+def _instance(n, lines):
+    return {
+        "instance": n,
+        "started_wall": f"2026-09-15T00:0{n}:00+00:00",
+        "ended_wall": f"2026-09-15T00:0{n}:30+00:00",
+        "returncode": 0,
+        "stopped_by_harness": False,
+        "lines": [{"receipt_wall": "t", "stream": stream, "text": text} for stream, text in lines],
+    }
+
+
 def test_ping_statistics_are_parsed_numerically_not_by_substring() -> None:
     parse = e2e_matrix._parse_ping_statistics  # noqa: SLF001
     assert parse(_PING_ZERO_LOSS)["loss_class"] == "zero_loss"
@@ -578,11 +589,16 @@ def test_ping_statistics_are_parsed_numerically_not_by_substring() -> None:
     # The old substring rule called both of these zero loss.
     assert "0% packet loss" in _PING_TOTAL_LOSS and "0% packet loss" in _PING_PARTIAL_LOSS
 
-    outcome = e2e_matrix._ping_packet_outcome  # noqa: SLF001
-    assert outcome(_PING_TOTAL_LOSS, "", 1)["zero_loss"] is False
-    assert outcome(_PING_TOTAL_LOSS, "", 1)["loss_class"] == "total_loss"
-    assert outcome(_PING_PARTIAL_LOSS, "", 1)["packet_outcome"] == "loss_observed"
-    assert outcome(_PING_ZERO_LOSS, "", 0)["zero_loss"] is True
+    # the observer path reads the same numbers: loss is counted, never inferred
+    def observed(stdout: str) -> dict:
+        return e2e_matrix._instance_observation(  # noqa: SLF001
+            _instance(0, [("stdout", line) for line in stdout.splitlines()])
+        )
+
+    assert observed(_PING_TOTAL_LOSS)["measured_loss"] is True
+    assert observed(_PING_TOTAL_LOSS)["statistics"]["loss_class"] == "total_loss"
+    assert observed(_PING_PARTIAL_LOSS)["measured_loss"] is True
+    assert observed(_PING_ZERO_LOSS)["measured_loss"] is False
 
 
 def test_packet_observation_requires_statistics_or_a_kernel_answer() -> None:
@@ -674,7 +690,6 @@ def test_harness_targets_no_container_by_literal_name_or_derived_pod_name() -> N
 def test_ping_statistics_must_be_consistent_numbers_from_a_transmission() -> None:
     parse = e2e_matrix._parse_ping_statistics  # noqa: SLF001
     obs = e2e_matrix._packet_observation  # noqa: SLF001
-    outcome = e2e_matrix._ping_packet_outcome  # noqa: SLF001
     for line, problem in (
         ("0 packets transmitted, 0 packets received, 0% packet loss", "no packet was transmitted"),
         ("5 packets transmitted, 7 received, 0% packet loss, time 4ms", "exceeds"),
@@ -686,10 +701,10 @@ def test_ping_statistics_must_be_consistent_numbers_from_a_transmission() -> Non
             parsed is not None and parsed["consistent"] is False and problem in parsed["problem"]
         ), line
         assert obs({"rc": 0, "stdout": line, "stderr": ""})["observed"] is False, line
-        window = outcome(line, "", 0)
-        assert window["packet_outcome"] == "probe_error" and window["protocol_observed"] is False, (
-            line
-        )
+        # in the window the same line invalidates the instance's measurement
+        window = e2e_matrix._instance_observation(_instance(0, [("stdout", line)]))  # noqa: SLF001
+        assert window["protocol_observed"] is False, line
+        assert any("inconsistent ping statistics" in f["kind"] for f in window["observer_failures"])
     consistent = parse("10 packets transmitted, 9 received, 10% packet loss, time 9012ms")
     assert consistent["consistent"] is True and consistent["loss_class"] == "partial_loss"
     rounded = parse("3 packets transmitted, 2 packets received, 33% packet loss")
@@ -805,25 +820,6 @@ def test_ground_probe_records_the_kernel_answer_and_runs_nothing_without_a_publi
     assert "kernel answered Network unreachable" in negative["reason"]
     assert negative["observation"]["route"] == "kernel answered Network unreachable"
     assert "RTNETLINK answers: Network unreachable" in negative["route_stderr"]
-
-
-def test_handover_window_decides_pings_no_route_answer_with_the_one_reader() -> None:
-    """The interrupted-window parser and the synchronous probes share one decision
-    about a no-route answer: only a line ping printed, in either C library's wording."""
-    outcome = e2e_matrix._ping_packet_outcome  # noqa: SLF001
-    for answer in ("Network is unreachable", "Network unreachable", "No route to host"):
-        observed = outcome("", f"ping: sendto: {answer}", 1)
-        assert observed["packet_outcome"] == "routing_unreachable", answer
-        assert observed["protocol_observed"] is True
-    for diagnostic in (
-        "error: unable to upgrade connection: Network unreachable",
-        "Error from server: dial tcp 10.42.0.5:10250: connect: Network is unreachable",
-    ):
-        unobserved = outcome("", diagnostic, 1)
-        assert unobserved["protocol_observed"] is False, diagnostic
-        assert unobserved["packet_outcome"] == "probe_error", diagnostic
-    source = Path(e2e_matrix.__file__).read_text()
-    assert source.count('"Network unreachable" in') == 0
 
 
 # --- the MBB acceptance lanes run the shipped walker unchanged ---
@@ -1141,7 +1137,7 @@ def test_instance_observation_keeps_loss_unreachable_observer_failure_and_silenc
     aggregate = e2e_matrix._probe_packet_observation  # noqa: SLF001
     assert (
         aggregate([record([("stderr", "Network is unreachable (kubectl)")])])["packet_outcome"]
-        == "probe_error"
+        == "observer_error"
     )
     assert aggregate([record([])])["packet_outcome"] == "no_replies"
 
@@ -1245,7 +1241,16 @@ def test_overlap_gate_fields_read_the_flow_route_and_the_successors_own_adjacenc
 
 
 def _lifecycle(
-    seq, *, step=905, snapshot=906, outcome="teardown_completed", message="done", epoch=1
+    seq,
+    *,
+    step=905,
+    snapshot=910,
+    outcome="teardown_completed",
+    message="done",
+    epoch=1,
+    old_pair=("gs-a", "sat-1"),
+    successor_pair=("gs-a", "sat-2"),
+    master_sim_time="2026-06-08T00:15:05Z",
 ):
     return {
         "seq": seq,
@@ -1257,7 +1262,10 @@ def _lifecycle(
             "epoch_id": epoch,
             "allocator_step": step,
             "snapshot_seq": snapshot,
-            "teardown_id": "gs-a:sat-1->gs-a:sat-2",
+            "master_sim_time": master_sim_time,
+            "teardown_id": f"{old_pair[0]}:{old_pair[1]}->{successor_pair[0]}:{successor_pair[1]}",
+            "old_pair": list(old_pair),
+            "successor_pair": list(successor_pair),
             "gs_id": "gs-a",
             "terminal_outcome": outcome,
             "message": message,
@@ -1557,3 +1565,253 @@ def test_cj_is_a_default_matrix_entry_and_the_other_lanes_keep_their_opt_ins() -
     cj = main.split("run_mbb_acceptance(provenance)")[0].rsplit("\n", 6)[0]
     assert "NODALARC_RUN_DIRTY_REPAIR" in main and "NODALARC_RUN_SEEK_MBB" in main
     assert 'os.environ.get("NODALARC_RUN' not in cj.rsplit("\n", 3)[-1]
+
+
+# --- correction batch: the window must tell what happened, or say it could not ---
+
+
+def _window(monkeypatch, *, samples, event_batches, post_terminal_s=0.05):
+    import itertools
+
+    perm = {
+        "ground_topology": {"gs-a": {}},
+        "mbb_stations": {"gs-a": {"steady_limit": 1, "handover_mode": "mbb"}},
+    }
+    sample_iter = itertools.chain(samples[:-1], itertools.repeat(samples[-1]))
+    events_iter = itertools.chain(event_batches[:-1], itertools.repeat(event_batches[-1]))
+    monkeypatch.setattr(e2e_matrix, "_find_all_routed_ground_probes", lambda token, perm: [_PROBE])
+    monkeypatch.setattr(e2e_matrix, "_workload_target", lambda node_id: (_target(), None))
+    monkeypatch.setattr(e2e_matrix, "_PingObserver", _FakeObserver)
+    monkeypatch.setattr(
+        e2e_matrix,
+        "_sample_station",
+        lambda token, src, probes, protocol="isis": dict(next(sample_iter)),
+    )
+    monkeypatch.setattr(
+        e2e_matrix,
+        "request_json",
+        lambda method, path, **k: next(events_iter) if "ops/events" in path else [],
+    )
+    monkeypatch.setattr(e2e_matrix, "_link_events_for", lambda token, nodes, *, start_sim: [])
+    monkeypatch.setattr(e2e_matrix, "_event_at_or_after", lambda event, started_at: True)
+    monkeypatch.setattr(e2e_matrix.time, "sleep", lambda _s: None)
+    return e2e_matrix._run_mbb_packet_window(  # noqa: SLF001
+        "t", perm, count=5, interval_s=0.2, post_terminal_s=post_terminal_s
+    )
+
+
+_READY_OVERLAP = _sample(
+    links=_OVERLAP_LINKS, neighbors=[("term0", "Up"), ("term1", "Up")], route_dev="term0"
+)
+
+
+def test_overlap_sample_must_precede_and_name_the_graded_teardown(monkeypatch) -> None:
+    """A route sample can only prove the overlap of the handover that was graded, and
+    only when it was taken before that teardown; uncertain ordering proves nothing."""
+    # sane: sample at snapshot 906 / 00:14:56, teardown at snapshot 910 / 00:15:05, same pairs
+    result = _window(monkeypatch, samples=[_READY_OVERLAP], event_batches=[[], [_lifecycle(1)]])
+    assert result["result"] == "PASS"
+    assert result["overlap_proof"]["binding"]["bound"] is True
+
+    # the sample was taken after the teardown it is supposed to precede
+    late = _lifecycle(1, snapshot=900, master_sim_time="2026-06-08T00:14:50Z")
+    result = _window(monkeypatch, samples=[_READY_OVERLAP], event_batches=[[], [late]])
+    assert result["result"] == "FAIL"
+    assert result["overlap_proof"]["successor_fib_ready"] is False
+    assert result["routing_layer_outcome"] == "overlap_ordering_uncertain"
+
+    # the terminal event names another handover at the same station
+    other = _lifecycle(1, old_pair=("gs-a", "sat-7"), successor_pair=("gs-a", "sat-8"))
+    result = _window(monkeypatch, samples=[_READY_OVERLAP], event_batches=[[], [other]])
+    assert result["result"] == "FAIL"
+    assert result["routing_layer_outcome"] == "overlap_of_another_handover"
+
+    # two links, one successor, but no link marked as the teardown: the handover is unidentified
+    unmarked = [
+        {
+            "node_a": "gs-a",
+            "node_b": "sat-1",
+            "interface_a": "term1",
+            "link_reason": "",
+            "scheduling_state": "active",
+        },
+        _OVERLAP_LINKS[1],
+    ]
+    sample = _sample(
+        links=unmarked, neighbors=[("term0", "Up"), ("term1", "Up")], route_dev="term0"
+    )
+    result = _window(monkeypatch, samples=[sample], event_batches=[[], [_lifecycle(1)]])
+    assert result["result"] == "FAIL"
+    assert result["routing_layer_outcome"] == "overlap_handover_unidentified"
+
+
+def test_every_stamped_reply_and_raw_line_is_retained() -> None:
+    lines = [
+        {
+            "receipt_wall": f"2026-09-15T00:00:0{n}+00:00",
+            "stream": "stdout",
+            "text": f"64 bytes from 100.64.0.2: seq={n} ttl=64 time=1.0 ms",
+        }
+        for n in range(3)
+    ]
+    record = {
+        "instance": 0,
+        "started_wall": "s",
+        "ended_wall": "e",
+        "returncode": 0,
+        "stopped_by_harness": False,
+        "lines": lines,
+    }
+    observation = e2e_matrix._instance_observation(record)  # noqa: SLF001
+    assert [reply["receipt_wall"] for reply in observation["replies"]] == [
+        "2026-09-15T00:00:00+00:00",
+        "2026-09-15T00:00:01+00:00",
+        "2026-09-15T00:00:02+00:00",
+    ]
+    assert observation["raw_lines"] == lines
+
+
+def test_a_failing_read_or_a_dead_observer_keeps_the_collected_window(monkeypatch) -> None:
+    real_observer = e2e_matrix._PingObserver  # noqa: SLF001
+
+    # a kubectl timeout inside the station sample is a stamped sample error, not an escape
+    def timed_out(node_id, command, *, timeout=20):
+        raise subprocess.TimeoutExpired(command, timeout)
+
+    monkeypatch.setattr(e2e_matrix, "_kubectl_exec", timed_out)
+    monkeypatch.setattr(
+        e2e_matrix,
+        "request_json",
+        lambda method, path, **k: {"nodes": [], "links": [], "sim_time": "x"},
+    )
+    sample = e2e_matrix._sample_station("t", "gs-a", [_PROBE])  # noqa: SLF001
+    assert "sample_error" in sample and "TimeoutExpired" in sample["sample_error"]
+    assert sample["read_started_wall"] and sample["read_finished_wall"]
+
+    # an exception escaping the collection loop ends the window with its evidence retained
+    calls = {"n": 0}
+
+    def sampler(token, src, probes, protocol="isis"):
+        calls["n"] += 1
+        if calls["n"] == 2:
+            raise RuntimeError("collector died")
+        return dict(_READY_OVERLAP)
+
+    monkeypatch.setattr(e2e_matrix, "_find_all_routed_ground_probes", lambda token, perm: [_PROBE])
+    monkeypatch.setattr(e2e_matrix, "_workload_target", lambda node_id: (_target(), None))
+    monkeypatch.setattr(e2e_matrix, "_PingObserver", _FakeObserver)
+    monkeypatch.setattr(e2e_matrix, "_sample_station", sampler)
+    monkeypatch.setattr(e2e_matrix, "request_json", lambda method, path, **k: [])
+    monkeypatch.setattr(e2e_matrix, "_link_events_for", lambda token, nodes, *, start_sim: [])
+    monkeypatch.setattr(e2e_matrix.time, "sleep", lambda _s: None)
+    perm = {
+        "ground_topology": {"gs-a": {}},
+        "mbb_stations": {"gs-a": {"steady_limit": 1, "handover_mode": "mbb"}},
+    }
+    result = e2e_matrix._run_mbb_packet_window("t", perm, count=5, interval_s=0.2)  # noqa: SLF001
+    assert result["result"] == "FAIL"
+    assert "collector died" in result["collector"]["collection_error"]
+    assert len(result["timeline"]) == 1
+    assert result["probe_outputs"]["gs-a->gs-b"]["reply_count"] == 5
+
+    # a process that cannot start is a recorded observer failure, not a silent dead thread
+    def cannot_start(cmd, **kwargs):
+        raise OSError("kubectl: command not found")
+
+    monkeypatch.setattr(subprocess, "Popen", cannot_start)
+    observer = real_observer(
+        "gs-a->gs-b",
+        _target(),
+        "100.64.0.2",
+        count=2,
+        interval_s=0.2,
+        max_restarts=3,
+        restart_delay_s=0,
+    )
+    observer.start()
+    observer._thread.join(timeout=5)  # noqa: SLF001
+    assert observer.finished()
+    assert len(observer.instances) == 1
+    assert "command not found" in observer.instances[0]["startup_error"]
+    packets = e2e_matrix._probe_packet_observation(observer.instances)  # noqa: SLF001
+    assert packets["observer_failures"] and packets["protocol_observed"] is False
+    assert packets["packet_outcome"] == "observer_error"
+
+
+def _reply_lines(count):
+    return [
+        ("stdout", f"64 bytes from 100.64.0.2: seq={n} ttl=64 time=1.0 ms") for n in range(count)
+    ]
+
+
+def test_packet_classes_stay_distinct_and_an_invalid_measurement_never_qualifies() -> None:
+    aggregate = e2e_matrix._probe_packet_observation  # noqa: SLF001
+
+    # two complete zero-loss instances: no loss was measured; the restart is an unobserved gap
+    two = aggregate([_instance(0, _reply_lines(5)), _instance(1, _reply_lines(5))])
+    assert two["packet_outcome"] == "no_loss_measured"
+    assert two["measured_loss"] is False and two["unobserved_gap_count"] == 1
+    assert two["protocol_observed"] is True
+
+    # an unrecognized ping error is an observer failure, never dropped
+    odd = aggregate(
+        [_instance(0, _reply_lines(2) + [("stderr", "ping: sendto: Operation not permitted")])]
+    )
+    assert len(odd["observer_failures"]) == 1
+    assert odd["unreachable_answers"] == [] and odd["protocol_observed"] is False
+    assert odd["packet_outcome"] == "observer_error"
+
+    # replies followed by a kubectl failure do not qualify the gate input
+    broken = aggregate(
+        [_instance(0, _reply_lines(3) + [("stderr", "error: unable to upgrade connection")])]
+    )
+    assert broken["reply_count"] == 3 and broken["protocol_observed"] is False
+    assert not e2e_matrix._mbb_packet_window_passed(  # noqa: SLF001
+        broken, {"successor_fib_ready": True}, []
+    )
+
+    # measured loss and explicit unreachable answers stay their own classes
+    lossy = aggregate(
+        [
+            _instance(
+                0,
+                _reply_lines(2)
+                + [("stdout", "64 bytes from 100.64.0.2: seq=4 ttl=64 time=1.0 ms")],
+            )
+        ]
+    )
+    assert lossy["measured_loss"] is True and lossy["packet_outcome"] == "measured_loss"
+    unreachable = aggregate(
+        [_instance(0, _reply_lines(2) + [("stderr", "ping: sendto: Network is unreachable")])]
+    )
+    assert unreachable["packet_outcome"] == "routing_unreachable"
+    assert [a["answer"] for a in unreachable["unreachable_answers"]] == ["Network is unreachable"]
+    glibc = aggregate([_instance(0, [("stderr", "ping: sendto: No route to host")])])
+    assert glibc["unreachable_answers"][0]["answer"] == "No route to host"
+    # a kubectl diagnostic carrying the same words is not a routing answer
+    diag = aggregate([_instance(0, [("stderr", "error: Network is unreachable (kubectl)")])])
+    assert diag["unreachable_answers"] == [] and diag["observer_failures"]
+
+
+def test_conflicting_terminal_outcomes_within_one_occurrence_are_detected(monkeypatch) -> None:
+    events = [_lifecycle(1), _lifecycle(2, outcome="successor_aborted", message="aborted")]
+    groups = e2e_matrix._lifecycle_occurrences(events)  # noqa: SLF001
+    assert len(groups) == 1
+    assert groups[0]["conflicting_records"] is True
+    assert sorted(groups[0]["outcomes"]) == ["successor_aborted", "teardown_completed"]
+
+    monkeypatch.setattr(e2e_matrix, "request_json", lambda *a, **k: events)
+    result = e2e_matrix.check_mbb_lifecycle_and_ops("t", wait_s=1)
+    assert result["result"] == "FAIL"
+    assert result["completed_count"] == 0
+    assert len(result["conflicting_record_groups"]) == 1
+
+
+def test_the_retired_packet_interpreter_is_gone() -> None:
+    source = Path(e2e_matrix.__file__).read_text()
+    for gone in (
+        "def _ping_packet_outcome",
+        "def _packet_handover_correlation",
+        "def _seq_near_ranges",
+    ):
+        assert gone not in source, gone

@@ -1996,27 +1996,152 @@ def _bracket(token: str, src: str) -> dict:
     }
 
 
+_KERNEL_READ_MARK = "===nodalarc-read==="
+
+
+def _gs_interface(link: dict, gs_id: str) -> str | None:
+    return link.get("interface_a") if link.get("node_a") == gs_id else link.get("interface_b")
+
+
+def _overlap_interfaces(links: list[dict], gs_id: str) -> dict | None:
+    """The incumbent and successor of the overlap the station's links show,
+    with the satellite behind the incumbent; None when no overlap is shown."""
+    gained = [link for link in links if link.get("link_reason") == "vis_gained"]
+    if len(links) < 2 or len(gained) != 1:
+        return None
+    successor = gained[0]
+    incumbent = next(
+        (
+            link
+            for link in links
+            if link is not successor
+            and (
+                link.get("scheduling_state") == "teardown"
+                or link.get("teardown_remaining_ticks") is not None
+                or link.get("successor_pair")
+            )
+        ),
+        None,
+    )
+    if incumbent is None:
+        return None
+    incumbent_sat = (
+        incumbent.get("node_b") if incumbent.get("node_a") == gs_id else incumbent.get("node_a")
+    )
+    return {
+        "incumbent_interface": _gs_interface(incumbent, gs_id),
+        "successor_interface": _gs_interface(successor, gs_id),
+        "incumbent_sat": incumbent_sat,
+    }
+
+
+def _parse_link_line(text: str) -> dict | None:
+    """Flags and operational state from one `ip -o link show` line."""
+    line = text.strip()
+    if "<" not in line or ">" not in line:
+        return None
+    flags = line.split("<", 1)[1].split(">", 1)[0].split(",")
+    tokens = line.split()
+    state = tokens[tokens.index("state") + 1] if "state" in tokens else None
+    return {"flags": flags, "state": state, "lower_up": "LOWER_UP" in flags, "raw": line}
+
+
+def _kernel_read_command(dst_ip: str, incumbent_if: str, successor_if: str, protocol: str) -> str:
+    """One command in the pod: the flow's route first, then the incumbent's
+    and the successor's link state, then the neighbor table. What follows the
+    route in the same command was read after the route."""
+    neighbor = _routing_neighbor_command(protocol)
+    return (
+        f'sh -c "ip route get {dst_ip}; echo {_KERNEL_READ_MARK}; '
+        f"ip -o link show dev {incumbent_if}; echo {_KERNEL_READ_MARK}; "
+        f"ip -o link show dev {successor_if}; echo {_KERNEL_READ_MARK}; "
+        f"vtysh -c '{neighbor}'\""
+    )
+
+
+def _split_kernel_read(stdout: str) -> list[str] | None:
+    parts = [part.strip("\n") for part in stdout.split(_KERNEL_READ_MARK)]
+    return parts if len(parts) == 4 else None
+
+
 def _sample_station(token: str, src: str, probes: list[dict], *, protocol: str = "isis") -> dict:
-    """One receipt-stamped reading of a station. The kernel reads (every
-    adjacency row from the routing daemon, the kernel route of each monitored
-    flow) are bracketed by two VS-API readings, ``pre`` and ``post``, so the
-    interval in which the kernel was read is bounded on both sides by the
-    OME's own sequence as the VS-API held it. Records when every read started
-    and finished; claims no finer precision."""
+    """One receipt-stamped reading of a station. The kernel reads are bracketed
+    by two VS-API readings, ``pre`` and ``post``, which bound the decision
+    timeline the VS-API had received; they cannot order the kernel reads
+    against the teardown, because the VS-API delivers snapshots with a lag.
+    When ``pre`` shows an overlap, each flow's route is read in one command
+    together with the incumbent's link state and the neighbor table, read
+    after the route: those are the kernel's own word on whether the incumbent
+    was still up when the route was read."""
     started = datetime.now(UTC)
     try:
         pre = _bracket(token, src)
+        overlap = _overlap_interfaces(pre["active_ground_links"], src)
         kernel_started = datetime.now(UTC)
-        neigh = _kubectl_exec(src, f"vtysh -c '{_routing_neighbor_command(protocol)}'", timeout=10)
-        routes = {}
+        routes: dict[str, dict] = {}
+        kernel_after_route: dict[str, dict] = {}
+        neighbor_stdout: str | None = None
         for probe in probes:
-            route = _kubectl_exec(src, f"ip route get {probe['dst_ip']}", timeout=10)
-            observation = _route_observation(route, probe["dst_ip"])
+            if overlap is None:
+                route = _kubectl_exec(src, f"ip route get {probe['dst_ip']}", timeout=10)
+                observation = _route_observation(route, probe["dst_ip"])
+                routes[probe["key"]] = {
+                    **observation,
+                    "stdout": route["stdout"],
+                    "stderr": route["stderr"],
+                }
+                continue
+            command = _kernel_read_command(
+                probe["dst_ip"],
+                overlap["incumbent_interface"],
+                overlap["successor_interface"],
+                protocol,
+            )
+            result = _kubectl_exec(src, command, timeout=15)
+            parts = _split_kernel_read(result["stdout"])
+            if parts is None:
+                routes[probe["key"]] = {
+                    **_route_observation(result, probe["dst_ip"]),
+                    "stdout": result["stdout"],
+                    "stderr": result["stderr"],
+                }
+                kernel_after_route[probe["key"]] = {
+                    **overlap,
+                    "error": "combined kernel read did not return its four parts",
+                    "raw": result["stdout"],
+                    "stderr": result["stderr"],
+                }
+                continue
+            route_text, incumbent_text, successor_text, neighbor_text = parts
             routes[probe["key"]] = {
-                **observation,
-                "stdout": route["stdout"],
-                "stderr": route["stderr"],
+                **_route_observation(
+                    {**result, "stdout": route_text, "stderr": ""}, probe["dst_ip"]
+                ),
+                "stdout": route_text,
+                "stderr": result["stderr"],
             }
+            rows_after = _isis_neighbor_rows(neighbor_text)
+            kernel_after_route[probe["key"]] = {
+                **overlap,
+                "incumbent_link": _parse_link_line(incumbent_text),
+                "successor_link": _parse_link_line(successor_text),
+                "neighbors_after_route": rows_after,
+                "incumbent_adjacency_after_route": _adjacency_on(
+                    rows_after, overlap["incumbent_interface"]
+                ),
+                "raw": result["stdout"],
+            }
+            neighbor_stdout = neighbor_text
+        if neighbor_stdout is None:
+            neigh = _kubectl_exec(
+                src, f"vtysh -c '{_routing_neighbor_command(protocol)}'", timeout=10
+            )
+            neighbor_stdout = neigh["stdout"]
+            neighbor_observation = _adjacency_observation(neigh, protocol)
+        else:
+            neighbor_observation = _adjacency_observation(
+                {"rc": 0, "stdout": neighbor_stdout, "stderr": ""}, protocol
+            )
         kernel_finished = datetime.now(UTC)
         post = _bracket(token, src)
     except Exception as exc:  # a read that failed is a stamped sample error, never an escape
@@ -2042,10 +2167,11 @@ def _sample_station(token: str, src: str, probes: list[dict], *, protocol: str =
         "successor_interface": _successor_interface(links),
         "kernel_read_started_wall": kernel_started.isoformat(),
         "kernel_read_finished_wall": kernel_finished.isoformat(),
-        "neighbors": _isis_neighbor_rows(neigh["stdout"]),
-        "neighbor_observation": _adjacency_observation(neigh, protocol),
-        "isis_stdout": neigh["stdout"],
+        "neighbors": _isis_neighbor_rows(neighbor_stdout),
+        "neighbor_observation": neighbor_observation,
+        "isis_stdout": neighbor_stdout,
         "routes": routes,
+        "kernel_after_route": kernel_after_route,
         "pre": pre,
         "post": post,
     }
@@ -2057,20 +2183,6 @@ def _sorted_pair(link: dict) -> list[str]:
 
 def _handover_id(teardown_pair: list[str] | None, successor_pair: list[str] | None) -> str:
     return f"{teardown_pair}->{successor_pair}"
-
-
-def _pending_teardown_link(links: list[dict], teardown_pair: list[str] | None) -> dict | None:
-    """The link of ``teardown_pair`` while its teardown is still pending."""
-    if teardown_pair is None:
-        return None
-    for link in links:
-        if _sorted_pair(link) != teardown_pair:
-            continue
-        remaining = link.get("teardown_remaining_ticks")
-        pending = link.get("scheduling_state") == "teardown" or remaining is not None
-        if pending and (remaining is None or int(remaining) > 0):
-            return link
-    return None
 
 
 def _incumbent_link_down(link_events: list[dict], teardown_pair: list[str] | None) -> dict | None:
@@ -2087,17 +2199,19 @@ def _incumbent_link_down(link_events: list[dict], teardown_pair: list[str] | Non
 
 def _bind_overlap_to_terminal(overlap: dict, event: dict, link_events: list[dict]) -> dict:
     """Whether an overlap sample proves the overlap of the teardown that was
-    graded. The sample must show that handover's own pairs, belong to the same
-    run and epoch as the terminal event, and its kernel reads must have ended
-    before the teardown. The ending is established causally, on the OME's and
-    the Scheduler's own clock, never by comparing the harness's clock with
-    theirs: the VS-API reading taken after the kernel reads (``post``) must
-    still show the incumbent's teardown pending and must precede the teardown
-    in the OME's snapshot sequence and sim time, and the Scheduler's LinkDown
-    for the incumbent, which it publishes only after its kernel proof, must
-    carry a later sim tick than that reading. A read that straddles the
-    teardown, a stale or mixed reading, a missing identity or an order that
-    cannot be established proves nothing."""
+    graded. The sample must show that handover's own pairs and belong to the
+    same run and epoch as the terminal event on both of its VS-API readings.
+    Its route must have been read before the teardown was enacted on the
+    station's kernel: the VS-API readings cannot establish that, since they
+    deliver the OME's snapshots with a lag, so the proof is the kernel's own,
+    read in the same command right after the route: the incumbent's link still
+    carrying LOWER_UP in state UP and the incumbent satellite's adjacency still
+    Up on that interface. A teardown is enacted by dropping the incumbent's
+    carrier, and any route change it causes follows that drop, so a route read
+    while the carrier was still up preceded the enactment. Anything less, a
+    dropped or unreadable incumbent, another satellite on its interface, a
+    missing identity, a run or epoch mismatch, or a pre reading that already
+    carried the teardown, is reported as uncertain with the evidence kept."""
     details = event.get("details") or {}
     old_pair = sorted(str(node) for node in (details.get("old_pair") or []))
     successor_pair = sorted(str(node) for node in (details.get("successor_pair") or []))
@@ -2119,8 +2233,9 @@ def _bind_overlap_to_terminal(overlap: dict, event: dict, link_events: list[dict
         }
     pre, post = overlap.get("pre") or {}, overlap.get("post") or {}
     identity = {
-        "sample_session_id": pre.get("session_id"),
-        "sample_epoch_id": pre.get("epoch_id"),
+        "pre_session_id": pre.get("session_id"),
+        "post_session_id": post.get("session_id"),
+        "pre_epoch_id": pre.get("epoch_id"),
         "post_epoch_id": post.get("epoch_id"),
         "terminal_session_id": details.get("session_id"),
         "terminal_epoch_id": details.get("epoch_id"),
@@ -2128,16 +2243,17 @@ def _bind_overlap_to_terminal(overlap: dict, event: dict, link_events: list[dict
     if any(value is None for value in identity.values()):
         return {"bound": False, "reason": "overlap_identity_missing", **identity}
     if not (
-        identity["sample_session_id"] == identity["terminal_session_id"]
-        and identity["sample_epoch_id"]
-        == identity["terminal_epoch_id"]
-        == identity["post_epoch_id"]
+        identity["pre_session_id"] == identity["post_session_id"] == identity["terminal_session_id"]
+        and identity["pre_epoch_id"] == identity["post_epoch_id"] == identity["terminal_epoch_id"]
     ):
         return {"bound": False, "reason": "overlap_identity_mismatch", **identity}
     terminal_seq = details.get("snapshot_seq")
     terminal_sim = details.get("master_sim_time")
     link_down = _incumbent_link_down(link_events, teardown_pair)
-    ordering = {
+    kernel = overlap.get("kernel_after_route") or {}
+    incumbent_link = kernel.get("incumbent_link") or {}
+    incumbent_adjacency = kernel.get("incumbent_adjacency_after_route") or {}
+    evidence = {
         **identity,
         "pre_decision_snapshot_seq": pre.get("decision_snapshot_seq"),
         "post_decision_snapshot_seq": post.get("decision_snapshot_seq"),
@@ -2148,36 +2264,36 @@ def _bind_overlap_to_terminal(overlap: dict, event: dict, link_events: list[dict
         "incumbent_link_down_sim_time": link_down.get("sim_time") if link_down else None,
         "kernel_read_started_wall": overlap.get("kernel_read_started_wall"),
         "kernel_read_finished_wall": overlap.get("kernel_read_finished_wall"),
+        "incumbent_interface": kernel.get("incumbent_interface"),
+        "incumbent_sat": kernel.get("incumbent_sat"),
+        "incumbent_link_after_route": incumbent_link or None,
+        "incumbent_adjacency_after_route": incumbent_adjacency or None,
+        "kernel_read_error": kernel.get("error"),
     }
-
-    def before(seq, sim) -> bool:
-        try:
-            return (
-                seq is not None
-                and terminal_seq is not None
-                and int(seq) < int(terminal_seq)
-                and sim is not None
-                and terminal_sim is not None
-                and _parse_api_datetime(str(sim)) < _parse_api_datetime(str(terminal_sim))
-            )
-        except TypeError, ValueError:
-            return False
-
-    if not before(pre.get("decision_snapshot_seq"), pre.get("sim_time")):
-        return {"bound": False, "reason": "overlap_ordering_uncertain", **ordering}
-    if _pending_teardown_link(
-        post.get("active_ground_links") or [], teardown_pair
-    ) is None or not before(post.get("decision_snapshot_seq"), post.get("sim_time")):
-        return {"bound": False, "reason": "overlap_read_straddles_teardown", **ordering}
     try:
-        down_after_read = link_down is not None and _parse_api_datetime(
-            str(link_down.get("sim_time"))
-        ) > _parse_api_datetime(str(post.get("sim_time")))
+        pre_before = (
+            pre.get("decision_snapshot_seq") is not None
+            and terminal_seq is not None
+            and int(pre["decision_snapshot_seq"]) < int(terminal_seq)
+            and pre.get("sim_time") is not None
+            and terminal_sim is not None
+            and _parse_api_datetime(str(pre["sim_time"])) < _parse_api_datetime(str(terminal_sim))
+        )
     except TypeError, ValueError:
-        down_after_read = False
-    if not down_after_read:
-        return {"bound": False, "reason": "overlap_ordering_uncertain", **ordering}
-    return {"bound": True, "reason": "kernel reads ended before the graded teardown", **ordering}
+        pre_before = False
+    if not pre_before:
+        return {"bound": False, "reason": "overlap_ordering_uncertain", **evidence}
+    incumbent_up = bool(incumbent_link.get("lower_up")) and incumbent_link.get("state") == "UP"
+    adjacency_held = incumbent_adjacency.get("state") == "Up" and incumbent_adjacency.get(
+        "system_id"
+    ) == kernel.get("incumbent_sat")
+    if not (incumbent_up and adjacency_held):
+        return {"bound": False, "reason": "overlap_ordering_uncertain", **evidence}
+    return {
+        "bound": True,
+        "reason": "the incumbent was still up on the kernel when the route was read",
+        **evidence,
+    }
 
 
 def _overlap_gate_fields(sample: dict, probe: dict) -> dict | None:
@@ -2226,6 +2342,7 @@ def _overlap_gate_fields(sample: dict, probe: dict) -> dict | None:
         "decision_snapshot_seq": sample.get("decision_snapshot_seq"),
         "pre": sample.get("pre"),
         "post": sample.get("post"),
+        "kernel_after_route": (sample.get("kernel_after_route") or {}).get(probe["key"]),
         "active_ground_links": links,
         "successor_interface": successor_if,
         "route_dev": route_dev,

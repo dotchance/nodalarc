@@ -1159,7 +1159,18 @@ def test_isis_neighbor_rows_identify_each_adjacency_individually() -> None:
     assert e2e_matrix._adjacency_on(rows, None) is None  # noqa: SLF001
 
 
-def _sample(*, links, neighbors, route_dev, sim="2026-06-08T00:14:56Z"):
+def _link_line(ifname: str, *, up: bool) -> str:
+    flags = "BROADCAST,MULTICAST,UP,LOWER_UP" if up else "BROADCAST,MULTICAST,UP"
+    state = "UP" if up else "LOWERLAYERDOWN"
+    return f"5: {ifname}@if12: <{flags}> mtu 1500 qdisc noqueue state {state} mode DEFAULT"
+
+
+def _parse_link(line: str):
+    parse = getattr(e2e_matrix, "_parse_link_line", None)
+    return parse(line) if parse else None
+
+
+def _sample(*, links, neighbors, route_dev, sim="2026-06-08T00:14:56Z", incumbent_up=True):
     table = "Area NODAL:\n System Id  Interface  L  State  Holdtime SNPA\n" + "".join(
         f" sat-{iface}   {iface}   3  {state}  3  2020.2020.2020\n" for iface, state in neighbors
     )
@@ -1182,6 +1193,21 @@ def _sample(*, links, neighbors, route_dev, sim="2026-06-08T00:14:56Z"):
         "active_ground_links": links,
         "pre": dict(bracket),
         "post": dict(bracket),
+        "kernel_after_route": {
+            "gs-a->gs-b": {
+                "incumbent_interface": "term1",
+                "successor_interface": "term0",
+                "incumbent_sat": "sat-1",
+                "incumbent_link": _parse_link(_link_line("term1", up=incumbent_up)),
+                "successor_link": _parse_link(_link_line("term0", up=True)),
+                "neighbors_after_route": e2e_matrix._isis_neighbor_rows(table),  # noqa: SLF001
+                "incumbent_adjacency_after_route": (
+                    {"system_id": "sat-1", "interface": "term1", "level": "3", "state": "Up"}
+                    if incumbent_up
+                    else None
+                ),
+            }
+        },
         "neighbors": e2e_matrix._isis_neighbor_rows(table),  # noqa: SLF001
         "neighbor_observation": {"observed": True, "positive": True},
         "isis_stdout": table,
@@ -1841,7 +1867,7 @@ def test_the_retired_packet_interpreter_is_gone() -> None:
         assert gone not in source, gone
 
 
-# --- the kernel read interval itself must end before the teardown ---
+# --- the kernel observation itself must precede the teardown's enactment ---
 
 
 _NODES = [
@@ -1849,67 +1875,71 @@ _NODES = [
     {"node_id": "sat-1", "node_type": "satellite"},
     {"node_id": "sat-2", "node_type": "satellite"},
 ]
-_ISIS_BOTH_UP = (
-    "Area NODAL:\n System Id  Interface  L  State  Holdtime SNPA\n"
-    " sat-2  term0  3  Up  3  2020.2020.2020\n sat-1  term1  3  Up  3  2020.2020.2020\n"
-)
+_ISIS_HEADER = "Area NODAL:\n System Id  Interface  L  State  Holdtime SNPA\n"
 
 
-def _world(monkeypatch, *, teardown_during_route_read: bool, epoch: int = 1):
-    """The real sampler against a scripted OME view: the overlap is pending until,
-    optionally, the route query itself advances the teardown; the terminal event
-    is delivered after the first sample; the incumbent's LinkDown is retained."""
+def _world(monkeypatch, *, enact_before_route_read: bool, api_delivers: bool, epoch: int = 1):
+    """The real sampler and window against a kernel and an API that progress
+    independently. The kernel enacts the teardown (incumbent carrier drops, the
+    route moves to the successor) either never or at the moment the first route
+    read begins, so the route read follows the enactment. The API delivers the
+    teardown's snapshots only if ``api_delivers``; otherwise both bracket
+    readings stay on the older snapshot throughout. The terminal event arrives
+    after the first kernel read; the incumbent's LinkDown is retained."""
+    kernel = {"enacted": False, "route_dev": "term1" if enact_before_route_read else "term0"}
+    reads = {"kernel": 0}
 
-    world = {"torn_down": False}
+    def api_stale() -> bool:
+        return not api_delivers or not kernel["enacted"]
 
-    def links():
-        return _OVERLAP_LINKS[1:] if world["torn_down"] else _OVERLAP_LINKS
-
-    def sim():
-        return "2026-06-08T00:15:06Z" if world["torn_down"] else "2026-06-08T00:14:56Z"
-
-    sample_count = {"n": 0}
+    def api_sim():
+        return "2026-06-08T00:14:56Z" if api_stale() else "2026-06-08T00:15:06Z"
 
     def request(method, path, **kwargs):
         if "ops/events" in path:
-            return [_lifecycle(1)] if sample_count["n"] >= 1 else []
+            return [_lifecycle(1)] if reads["kernel"] >= 1 else []
         if "ground-link-decisions" in path:
             return {
-                "snapshot_seq": 912 if world["torn_down"] else 906,
+                "snapshot_seq": 906 if api_stale() else 912,
                 "epoch_id": epoch,
-                "sim_time": sim(),
+                "sim_time": api_sim(),
                 "allocation_events": [],
             }
         if "/api/v1/links" in path:
-            return [
-                {
-                    **_INCUMBENT_DOWN_LATER,
-                    "sim_time": "2026-06-08T00:15:05+00:00"
-                    if teardown_during_route_read
-                    else "2026-06-08T00:15:06+00:00",
-                }
-            ]
-        return {"session_id": "run-1", "sim_time": sim(), "nodes": _NODES, "links": links()}
+            return [_INCUMBENT_DOWN_LATER]
+        return {
+            "session_id": "run-1",
+            "sim_time": api_sim(),
+            "nodes": _NODES,
+            "links": _OVERLAP_LINKS if api_stale() else _OVERLAP_LINKS[1:],
+        }
+
+    mark = getattr(e2e_matrix, "_KERNEL_READ_MARK", None)
+
+    def neighbor_rows():
+        rows = " sat-2  term0  3  Up  3  2020.2020.2020\n"
+        if not kernel["enacted"]:
+            rows += " sat-1  term1  3  Up  3  2020.2020.2020\n"
+        return _ISIS_HEADER + rows
 
     def kubectl(node_id, command, *, timeout=20):
+        ok = {"rc": 0, "stderr": "", "target": {}, "resolution_error": None}
+        if "ip route get" in command:
+            if enact_before_route_read:
+                kernel["enacted"] = True  # the teardown is enacted; the route then moves
+                kernel["route_dev"] = "term0"
+            reads["kernel"] += 1
+            route = f"100.64.0.2 via 10.0.0.1 dev {kernel['route_dev']} src 10.0.0.9"
+            if mark is not None and mark in command:
+                stdout = (
+                    f"{route}\n{mark}\n{_link_line('term1', up=not kernel['enacted'])}\n{mark}\n"
+                    f"{_link_line('term0', up=True)}\n{mark}\n{neighbor_rows()}"
+                )
+                return {**ok, "stdout": stdout}
+            return {**ok, "stdout": route}
         if command.startswith("vtysh"):
-            return {
-                "rc": 0,
-                "stdout": _ISIS_BOTH_UP,
-                "stderr": "",
-                "target": {},
-                "resolution_error": None,
-            }
-        if teardown_during_route_read:
-            world["torn_down"] = True  # the teardown occurs before the route query completes
-        sample_count["n"] += 1
-        return {
-            "rc": 0,
-            "stdout": "100.64.0.2 via 10.0.0.1 dev term0 src 10.0.0.9",
-            "stderr": "",
-            "target": {},
-            "resolution_error": None,
-        }
+            return {**ok, "stdout": neighbor_rows()}
+        return {**ok, "stdout": ""}
 
     monkeypatch.setattr(e2e_matrix, "request_json", request)
     monkeypatch.setattr(e2e_matrix, "_kubectl_exec", kubectl)
@@ -1927,62 +1957,100 @@ def _world(monkeypatch, *, teardown_during_route_read: bool, epoch: int = 1):
     )
 
 
-def test_a_route_read_after_the_teardown_cannot_prove_overlap_readiness(monkeypatch) -> None:
-    """Pre-teardown snapshots, then the teardown, then a route already on the successor:
-    the real sampler's reading straddles the teardown and must not pass."""
-    result = _world(monkeypatch, teardown_during_route_read=True)
+def test_a_route_read_after_the_enacted_teardown_cannot_qualify_even_with_stale_api_readings(
+    monkeypatch,
+) -> None:
+    """Teardown enacted, the route then on the successor, and both API readings still
+    carrying the older snapshot: the API cannot order the kernel read, the kernel can."""
+    result = _world(monkeypatch, enact_before_route_read=True, api_delivers=False)
     assert result["result"] == "FAIL"
-    assert result["overlap_proof"]["binding"]["bound"] is False
-    assert result["routing_layer_outcome"] == "overlap_read_straddles_teardown"
-    assert result["overlap_proof"]["successor_fib_ready"] is False
-    # the reading is retained with both brackets, so the straddle is visible
     binding = result["overlap_proof"]["binding"]
+    assert binding["bound"] is False
+    assert result["routing_layer_outcome"] == "overlap_ordering_uncertain"
+    assert result["overlap_proof"]["successor_fib_ready"] is False
+    # both API readings were stale and say nothing; the kernel said the incumbent was down
     assert (
-        binding["pre_decision_snapshot_seq"] == 906 and binding["post_decision_snapshot_seq"] == 912
+        binding["pre_decision_snapshot_seq"] == 906 and binding["post_decision_snapshot_seq"] == 906
     )
+    assert binding["incumbent_link_after_route"]["state"] == "LOWERLAYERDOWN"
+    assert binding["incumbent_adjacency_after_route"] is None
+    # the evidence is retained, including the route that was read
+    assert result["overlap_proof"]["route_dev"] == "term0"
+
+
+def test_a_route_read_after_the_enacted_teardown_cannot_qualify_when_the_api_has_caught_up(
+    monkeypatch,
+) -> None:
+    result = _world(monkeypatch, enact_before_route_read=True, api_delivers=True)
+    assert result["result"] == "FAIL"
+    assert result["routing_layer_outcome"] == "overlap_ordering_uncertain"
 
 
 def test_an_overlap_sample_of_another_epoch_never_binds(monkeypatch) -> None:
-    result = _world(monkeypatch, teardown_during_route_read=False, epoch=2)
+    result = _world(monkeypatch, enact_before_route_read=False, api_delivers=False, epoch=2)
     assert result["result"] == "FAIL"
     assert result["routing_layer_outcome"] == "overlap_identity_mismatch"
-    assert result["overlap_proof"]["binding"]["sample_epoch_id"] == 2
+    assert result["overlap_proof"]["binding"]["pre_epoch_id"] == 2
     assert result["overlap_proof"]["binding"]["terminal_epoch_id"] == 1
 
 
-def test_a_reading_that_ended_before_the_teardown_still_passes(monkeypatch) -> None:
-    result = _world(monkeypatch, teardown_during_route_read=False)
+def test_a_route_read_while_the_incumbent_was_still_up_qualifies(monkeypatch) -> None:
+    result = _world(monkeypatch, enact_before_route_read=False, api_delivers=False)
     assert result["result"] == "PASS"
     binding = result["overlap_proof"]["binding"]
     assert binding["bound"] is True
-    assert binding["post_decision_snapshot_seq"] == 906
-    assert binding["incumbent_link_down_sim_time"] == "2026-06-08T00:15:06+00:00"
+    assert binding["incumbent_link_after_route"]["lower_up"] is True
+    assert binding["incumbent_adjacency_after_route"]["system_id"] == "sat-1"
     assert result["overlap_proof"]["successor_fib_ready"] is True
 
 
-def test_binding_refuses_missing_identity_and_an_incumbent_down_at_or_before_the_reading() -> None:
+def test_binding_reports_uncertainty_or_missing_identity_instead_of_readiness() -> None:
     bind = e2e_matrix._bind_overlap_to_terminal  # noqa: SLF001
     gate = e2e_matrix._overlap_gate_fields  # noqa: SLF001
-    overlap = gate(_READY_OVERLAP, _PROBE)
     event = _lifecycle(1)
+    ready = gate(_READY_OVERLAP, _PROBE)
+    assert bind(ready, event, [])["bound"] is True
 
-    assert bind(overlap, event, [_INCUMBENT_DOWN_LATER])["bound"] is True
-    # no LinkDown retained: the order of the kernel reads against the enactment is unknown
-    assert bind(overlap, event, [])["reason"] == "overlap_ordering_uncertain"
-    # LinkDown at the same sim tick as the post reading: within one tick nothing is ordered
-    same_tick = {**_INCUMBENT_DOWN_LATER, "sim_time": "2026-06-08T00:14:56+00:00"}
-    assert bind(overlap, event, [same_tick])["reason"] == "overlap_ordering_uncertain"
-    # the post reading no longer shows the incumbent pending: the reads straddled the teardown
-    straddled = {**overlap, "post": {**overlap["post"], "active_ground_links": _OVERLAP_LINKS[1:]}}
-    assert (
-        bind(straddled, event, [_INCUMBENT_DOWN_LATER])["reason"]
-        == "overlap_read_straddles_teardown"
+    # the incumbent's carrier was already down when read after the route
+    down = gate(
+        _sample(
+            links=_OVERLAP_LINKS,
+            neighbors=[("term0", "Up")],
+            route_dev="term0",
+            incumbent_up=False,
+        ),
+        _PROBE,
     )
-    # identity missing on either side
-    no_epoch = {**overlap, "pre": {**overlap["pre"], "epoch_id": None}}
-    assert bind(no_epoch, event, [_INCUMBENT_DOWN_LATER])["reason"] == "overlap_identity_missing"
+    assert bind(down, event, [])["reason"] == "overlap_ordering_uncertain"
+    # another satellite's adjacency on the incumbent's interface: not the incumbent
+    other_sat = {
+        **ready,
+        "kernel_after_route": {
+            **ready["kernel_after_route"],
+            "incumbent_adjacency_after_route": {
+                "system_id": "sat-9",
+                "interface": "term1",
+                "level": "3",
+                "state": "Up",
+            },
+        },
+    }
+    assert bind(other_sat, event, [])["reason"] == "overlap_ordering_uncertain"
+    # no kernel-level evidence at all
+    no_kernel = {**ready, "kernel_after_route": None}
+    assert bind(no_kernel, event, [])["reason"] == "overlap_ordering_uncertain"
+    # the pre reading already carried the teardown: this cannot be the graded overlap
+    late_pre = {**ready, "pre": {**ready["pre"], "decision_snapshot_seq": 911}}
+    assert bind(late_pre, event, [])["reason"] == "overlap_ordering_uncertain"
+    # identity: the post reading's run and epoch count too
+    for field, value, reason in (
+        ("session_id", "run-2", "overlap_identity_mismatch"),
+        ("session_id", None, "overlap_identity_missing"),
+        ("epoch_id", 2, "overlap_identity_mismatch"),
+        ("epoch_id", None, "overlap_identity_missing"),
+    ):
+        changed = {**ready, "post": {**ready["post"], field: value}}
+        assert bind(changed, event, [])["reason"] == reason, (field, value)
     other_run = _lifecycle(1)
     other_run["details"]["session_id"] = "run-2"
-    assert (
-        bind(overlap, other_run, [_INCUMBENT_DOWN_LATER])["reason"] == "overlap_identity_mismatch"
-    )
+    assert bind(ready, other_run, [])["reason"] == "overlap_identity_mismatch"

@@ -1372,9 +1372,6 @@ def write_wiring_manifest(
         node_ips=node_ips,
         ground_candidate_satellites_by_gs=resolved_session.ground_candidate_satellites_by_gs(),
     )
-    # Node Agents own their per-host substrate status across session switches.
-    # Readers reject the previous session/generation until each agent replaces it.
-
     try:
         manifest_session_id = sanitize_session_id(session_run_id)
     except Exception as exc:

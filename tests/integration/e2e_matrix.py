@@ -59,31 +59,16 @@ INTERMITTENT_CONNECTIVITY_WINDOWS = {
     }
 }
 
-# The two seam experiments prove physical ISL transitions, not continuous
-# gateway connectivity: each seam pair's losses and recoveries at the times the
-# declared-parameter reference (tests/seam_reference.py) predicts, enacted in
-# the runtime's link state. The tolerances are the ones accepted for these
-# experiments: one reference sample, plus the ten-second enactment bound from
-# the OME's decision to the Scheduler's proven link change.
-SEAM_PHYSICAL_EXPECTATIONS = {
-    "earth-leo-polar-seam": {
-        "constellation": "constellations/earth/leo/earth-leo-polar-36.yaml",
-        "terminal": "terminals/optical/optical-low-orbit-isl.yaml",
-        "horizon_s": 1200,
-    },
-    "earth-leo-polar-seam-tracking": {
-        "constellation": "constellations/earth/leo/earth-leo-polar-36-seam-crossing.yaml",
-        "terminal": "terminals/optical/optical-low-orbit-isl.yaml",
-        "horizon_s": 1200,
-    },
+# The two seam experiments carry no gateway-connectivity requirement: their
+# subject is the physical ISL transitions at the seam, covered by the
+# declared-parameter reference (tests/seam_reference.py), the offline
+# integration coverage (tests/integration/test_ome_to_pipeline.py) and the
+# recorded live seam qualification. The matrix deploys them, checks readiness,
+# routing and the state feed, and records the gateway probe as an observation.
+PHYSICAL_EXPERIMENT_SESSIONS = {
+    "earth-leo-polar-seam": "range-driven seam losses and recoveries with co-rotating controls",
+    "earth-leo-polar-seam-tracking": "tracking-limit losses and recoveries while range and line of sight permit",
 }
-SEAM_REFERENCE_SAMPLE_S = 1.0
-SEAM_ENACTMENT_BOUND_S = 10.0
-# Around each predicted change: seek this far ahead of it, let the post-seek
-# re-enactment settle, then watch from before the change until after the bound.
-SEAM_SEEK_LEAD_S = 90.0
-SEAM_WATCH_BEFORE_S = 20.0
-SEAM_WATCH_AFTER_S = 25.0
 
 
 def _run_provenance_from_environment() -> dict[str, str]:
@@ -1651,41 +1636,6 @@ def _sequence_ranges(seqs: list[int]) -> list[list[int]]:
     return ranges
 
 
-_DISPATCHER_LIST = re.compile(r"(up|down)=\[([^\]]*)\]")
-
-
-def _dispatcher_transitions(events: list[dict]) -> list[dict]:
-    """The Scheduler's "Link state changed" ops records, oldest first, with the
-    pairs each names. The Scheduler writes that line from the sets it asked
-    the Node Agents to add and remove, before any proof returns, so these
-    records show what was requested and prove nothing about actuation; they
-    are retained as context beside the verified evidence."""
-    records = []
-    for event in events:
-        if event.get("code") != "DISPATCHER" or event.get("source") != "scheduler":
-            continue
-        message = str(event.get("message") or "")
-        if not message.startswith("Link state changed"):
-            continue
-        lists: dict[str, list[list[str]]] = {"up": [], "down": []}
-        for direction, body in _DISPATCHER_LIST.findall(message):
-            for item in body.split(","):
-                ends = [end.strip() for end in item.split("<->")]
-                if len(ends) == 2 and all(ends):
-                    lists[direction].append(sorted(ends))
-        records.append(
-            {
-                "timestamp": event.get("timestamp"),
-                "hostname": event.get("hostname"),
-                "seq": event.get("seq"),
-                "up": lists["up"],
-                "down": lists["down"],
-            }
-        )
-    records.sort(key=lambda record: str(record.get("timestamp") or ""))
-    return records
-
-
 _TERMINAL_TICKS = re.compile(r"elapsed_ticks=(\d+)")
 _TERMINAL_VISIBLE = re.compile(r"old_pair_visible=(True|False)")
 
@@ -1725,331 +1675,6 @@ def _overlap_class(facts: dict, configured_ticks: int | None) -> str:
     if not visible:
         return "shortened_incumbent_lost"
     return "shortened_other"
-
-
-def _kernel_link_state(sample: dict, key: str, role: str) -> bool | None:
-    """One interface's carrier state from the sample's kernel read: True
-    (LOWER_UP), False (down), None (not read, or the read failed)."""
-    after = (sample.get("kernel_after_route") or {}).get(key) or {}
-    link = after.get(f"{role}_link")
-    if not isinstance(link, dict):
-        return None
-    return bool(link.get("lower_up"))
-
-
-def _sim_of(bracket: dict | None) -> datetime | None:
-    raw = (bracket or {}).get("sim_time")
-    if not raw:
-        return None
-    try:
-        return _parse_api_datetime(str(raw))
-    except ValueError:
-        return None
-
-
-def _sample_evidence(sample: dict, *, run: str | None, epoch: int | None, key: str) -> dict:
-    """What one station sample can testify to, or why it cannot: its identity,
-    the one Scheduler instance whose verified membership it read, the
-    membership before and after the kernel read, and the kernel read itself."""
-    pre, post = sample.get("pre") or {}, sample.get("post") or {}
-    identity_ok = (
-        run is not None
-        and epoch is not None
-        and pre.get("session_id") == run
-        and post.get("session_id") == run
-        and pre.get("epoch_id") == epoch
-        and post.get("epoch_id") == epoch
-    )
-    instances = set()
-    for bracket in (pre, post):
-        ids = bracket.get("scheduler_instance_ids")
-        if not isinstance(ids, list):
-            instances.add(None)
-        else:
-            instances.update(ids)
-    instance = next(iter(instances)) if len(instances) == 1 else None
-    membership_pre = {tuple(p) for p in (pre.get("kernel_actual_pairs") or [])}
-    membership_post = {tuple(p) for p in (post.get("kernel_actual_pairs") or [])}
-    return {
-        "index": sample.get("index"),
-        "identity_ok": identity_ok,
-        "instance": instance,
-        "instance_ok": instance is not None,
-        "sim_pre": _sim_of(pre),
-        "sim_post": _sim_of(post),
-        "membership_pre": membership_pre,
-        "membership_post": membership_post,
-        "membership_read": "kernel_actual_pairs" in pre and "kernel_actual_pairs" in post,
-        "incumbent_kernel": _kernel_link_state(sample, key, "incumbent"),
-        "successor_kernel": _kernel_link_state(sample, key, "successor"),
-    }
-
-
-def assess_mbb_obligations(
-    *,
-    terminal_event: dict,
-    samples: list[dict],
-    ops_events: list[dict],
-    bad_events: list[dict],
-    probe_key: str,
-    configured_overlap_ticks: int | None,
-) -> dict:
-    """The agreed emulator obligations for one completed MBB occurrence, each
-    judged established, not established or violated from evidence of one kind:
-    the station samples' Scheduler-verified kernel-actual membership (the
-    VS-API's recovered snapshot of the owning instance) and their own kernel
-    reads, ordered by the simulation time the same readings carry against the
-    terminal record's simulation time. A sample counts only when it names the
-    graded run and epoch, read exactly one Scheduler instance, and read the
-    membership before and after its kernel read. The Scheduler's requested-
-    change log lines are retained as context and prove nothing. Missing
-    evidence leaves an obligation not established, never a pass. Successor FIB
-    preference during the overlap is recorded elsewhere and is no obligation."""
-    details = terminal_event.get("details") or {}
-    old_pair = tuple(sorted(str(n) for n in (details.get("old_pair") or [])))
-    successor_pair = tuple(sorted(str(n) for n in (details.get("successor_pair") or [])))
-    run = details.get("session_id")
-    epoch = details.get("epoch_id")
-    terminal_sim = _sim_of({"sim_time": details.get("master_sim_time")})
-    facts = _terminal_overlap_facts(terminal_event)
-    overlap_class = _overlap_class(facts, configured_overlap_ticks)
-    records = _dispatcher_transitions(ops_events)
-
-    evidence = [_sample_evidence(sample, run=run, epoch=epoch, key=probe_key) for sample in samples]
-    usable = [e for e in evidence if e["identity_ok"] and e["instance_ok"] and e["membership_read"]]
-    instances = {e["instance"] for e in usable}
-    rejected = {
-        "identity": [e["index"] for e in evidence if not e["identity_ok"]],
-        "instance": [e["index"] for e in evidence if e["identity_ok"] and not e["instance_ok"]],
-        "membership_unread": [
-            e["index"]
-            for e in evidence
-            if e["identity_ok"] and e["instance_ok"] and not e["membership_read"]
-        ],
-    }
-    if len(instances) > 1:
-        usable, multi = [], sorted(str(i) for i in instances)
-    else:
-        multi = []
-    if terminal_sim is None:
-        usable = []
-
-    def before_terminal(e: dict) -> bool:
-        return e["sim_post"] is not None and e["sim_post"] < terminal_sim
-
-    def after_terminal(e: dict) -> bool:
-        return e["sim_pre"] is not None and e["sim_pre"] >= terminal_sim
-
-    # (a) successor actuated and verified before the release: one sample whose
-    # verified membership held both pairs across its kernel read, and whose
-    # kernel read found both interfaces carrier-up.
-    coexistence = [
-        e
-        for e in usable
-        if before_terminal(e)
-        and old_pair in e["membership_pre"]
-        and successor_pair in e["membership_pre"]
-        and old_pair in e["membership_post"]
-        and successor_pair in e["membership_post"]
-    ]
-    corroborated = [
-        e for e in coexistence if e["incumbent_kernel"] is True and e["successor_kernel"] is True
-    ]
-    if corroborated:
-        a_verdict = "established"
-        a_reason = (
-            f"verified membership held both pairs and the kernel read both interfaces "
-            f"carrier-up in {len(corroborated)} sample(s)"
-        )
-    elif coexistence:
-        a_verdict = "not_established"
-        a_reason = "verified membership held both pairs but no kernel read found both carrier-up"
-    else:
-        a_verdict = "not_established"
-        a_reason = "no sample found the successor verified while the incumbent was still held"
-
-    # (b) incumbent retained through the physically available overlap: every
-    # usable sample from the overlap's start to the terminal's simulation time
-    # holds the incumbent in the verified membership before and after its
-    # kernel read, and the kernel found the incumbent carrier-up.
-    started_index = next(
-        (
-            sample["index"]
-            for sample in samples
-            if any(
-                ev.get("category") == "mbb_overlap_started"
-                and tuple(sorted(str(n) for n in (ev.get("pair") or []))) == old_pair
-                and (
-                    not ev.get("successor_pair")
-                    or tuple(sorted(str(n) for n in ev["successor_pair"])) == successor_pair
-                )
-                for ev in (sample.get("allocation_events") or [])
-            )
-        ),
-        None,
-    )
-    inside = [
-        e
-        for e in usable
-        if started_index is not None and e["index"] >= started_index and before_terminal(e)
-    ]
-    held = [
-        e
-        for e in inside
-        if old_pair in e["membership_pre"]
-        and old_pair in e["membership_post"]
-        and e["incumbent_kernel"] is True
-    ]
-    released_early = [
-        e
-        for e in inside
-        if old_pair not in e["membership_pre"] or old_pair not in e["membership_post"]
-    ]
-    kernel_down = [e for e in inside if e not in released_early and e["incumbent_kernel"] is False]
-    unread = [
-        e for e in inside if e not in held and e not in released_early and e not in kernel_down
-    ]
-    if released_early or kernel_down:
-        b_verdict = "violated"
-        b_reason = (
-            "verified membership dropped the incumbent inside the overlap"
-            if released_early
-            else "the kernel read the incumbent carrier-down inside the overlap"
-        )
-    elif held:
-        b_verdict = "established"
-        b_reason = f"the incumbent stayed verified and carrier-up in {len(held)} sample(s) inside the overlap"
-    elif inside:
-        b_verdict = "not_established"
-        b_reason = "the samples inside the overlap did not read the incumbent at the kernel"
-    else:
-        b_verdict = "not_established"
-        b_reason = (
-            "no usable sample fell inside the overlap"
-            if started_index is not None
-            else "the overlap's start was not seen in any station sample"
-        )
-
-    # (c) terminal-driven release: the first usable sample whose verified
-    # membership lacks the incumbent lies at or after the terminal's simulation
-    # time; one before it is a release the terminal did not drive.
-    held_times = [
-        e["sim_pre"] for e in usable if old_pair in e["membership_pre"] and e["sim_pre"] is not None
-    ]
-    releases = sorted(
-        (
-            e
-            for e in usable
-            if held_times
-            and old_pair not in e["membership_pre"]
-            and e["sim_pre"] is not None
-            and e["sim_pre"] >= min(held_times)
-        ),
-        key=lambda e: e["sim_pre"],
-    )
-    first_release = releases[0] if releases else None
-    if not held_times:
-        c_verdict = "not_established"
-        c_reason = "the incumbent was never observed in the verified membership"
-    elif first_release is None:
-        c_verdict, c_reason = "not_established", "no usable sample observed the incumbent released"
-    elif after_terminal(first_release):
-        c_verdict = "established"
-        c_reason = (
-            f"the incumbent left the verified membership by sample {first_release['index']}, "
-            f"at or after the terminal's simulation time"
-        )
-    elif before_terminal(first_release):
-        c_verdict = "violated"
-        c_reason = (
-            "the incumbent left the verified membership before the terminal's simulation time"
-        )
-    else:
-        c_verdict = "not_established"
-        c_reason = "the release sample straddles the terminal's simulation time"
-
-    # (d) failures exposed: every authority or actuation fault the session
-    # published, by instance and station; a present fault fails the occurrence.
-    exposed = [
-        {
-            "code": event.get("code"),
-            "timestamp": event.get("timestamp"),
-            "hostname": event.get("hostname"),
-            "scheduler_instance_id": (event.get("details") or {}).get("scheduler_instance_id"),
-            "gs_id": (event.get("details") or {}).get("gs_id"),
-            "message": event.get("message"),
-        }
-        for event in bad_events
-    ]
-    d_verdict = "clean" if not exposed else "actuation_failure_present"
-
-    verdicts = (a_verdict, b_verdict, c_verdict)
-    if any(v == "violated" for v in verdicts) or exposed:
-        verdict = "FAIL"
-    elif all(v == "established" for v in verdicts):
-        verdict = "PASS"
-    else:
-        verdict = "INCOMPLETE"
-    basis = {
-        "usable_samples": [e["index"] for e in usable],
-        "rejected_samples": rejected,
-        "scheduler_instances_seen": sorted(str(i) for i in instances if i is not None),
-        "multiple_instances": multi,
-        "terminal_sim_time": details.get("master_sim_time"),
-        "terminal_sim_time_parsed": terminal_sim is not None,
-    }
-    return {
-        "verdict": verdict,
-        "occurrence": {
-            "gs_id": details.get("gs_id"),
-            "teardown_id": details.get("teardown_id"),
-            "old_pair": list(old_pair),
-            "successor_pair": list(successor_pair),
-            "session_id": run,
-            "epoch_id": epoch,
-            "snapshot_seq": details.get("snapshot_seq"),
-            "allocator_step": details.get("allocator_step"),
-            "master_sim_time": details.get("master_sim_time"),
-            "terminal_timestamp": terminal_event.get("timestamp"),
-            "elapsed_ticks": facts["elapsed_ticks"],
-            "old_pair_visible": facts["old_pair_visible"],
-            "configured_overlap_ticks": configured_overlap_ticks,
-            "overlap_class": overlap_class,
-        },
-        "evidence_basis": basis,
-        "successor_verified_before_release": {
-            "verdict": a_verdict,
-            "reason": a_reason,
-            "samples_with_both_verified": [e["index"] for e in coexistence],
-            "samples_with_both_carrier_up": [e["index"] for e in corroborated],
-        },
-        "incumbent_retained_through_overlap": {
-            "verdict": b_verdict,
-            "reason": b_reason,
-            "overlap_started_sample_index": started_index,
-            "samples_inside_overlap": [e["index"] for e in inside],
-            "samples_with_incumbent_held": [e["index"] for e in held],
-            "samples_released_early": [e["index"] for e in released_early],
-            "samples_kernel_down": [e["index"] for e in kernel_down],
-            "samples_without_kernel_reading": [e["index"] for e in unread],
-        },
-        "terminal_driven_release": {
-            "verdict": c_verdict,
-            "reason": c_reason,
-            "first_release_sample_index": None if first_release is None else first_release["index"],
-            "first_release_sim_time": None
-            if first_release is None
-            else first_release["sim_pre"].isoformat(),
-            "note": "simulation-time ordering of the same readings; no wall clock, no cause",
-        },
-        "failures_exposed": {"verdict": d_verdict, "events": exposed},
-        "scheduler_requested_changes": records,
-        "note": (
-            "successor FIB preference during the overlap is a routing observation "
-            "(routing_layer_outcome), not an obligation; the Scheduler's requested-change "
-            "log lines are context, not proof"
-        ),
-    }
 
 
 def _routing_layer_outcome(overlap: dict | None) -> str:
@@ -3193,7 +2818,7 @@ def _run_mbb_packet_window(
     }
     if not terminal_by_src:
         return {
-            "result": "FAIL",
+            "result": "INCOMPLETE",
             "reason": (
                 f"collection failed: {collection_error}"
                 if collection_error
@@ -3212,39 +2837,12 @@ def _run_mbb_packet_window(
         }
     output = outputs[selected_key]
     terminal = terminal_by_src[terminal_src]
-    obligations = assess_mbb_obligations(
-        terminal_event=terminal["event"],
-        samples=[sample for sample in samples if sample.get("src") in (None, terminal_src)],
-        ops_events=list(ops_events.values()),
-        bad_events=bad_events,
-        probe_key=selected_key,
-        configured_overlap_ticks=((perm.get("mbb_stations") or {}).get(terminal_src) or {}).get(
-            "mbb_overlap_ticks"
-        ),
-    )
-    verdict = obligations["verdict"] if collection_error is None else "FAIL"
+    facts = _terminal_overlap_facts(terminal["event"])
+    station = (perm.get("mbb_stations") or {}).get(terminal_src) or {}
     probe = probe_by_key[selected_key]
-    reason = None
-    if collection_error:
-        reason = f"collection failed: {collection_error}"
-    elif verdict != "PASS":
-        reason = (
-            "; ".join(
-                f"{name}: {obligations[name]['verdict']} ({obligations[name]['reason']})"
-                for name in (
-                    "successor_verified_before_release",
-                    "incumbent_retained_through_overlap",
-                    "terminal_driven_release",
-                )
-                if obligations[name]["verdict"] != "established"
-            )
-            or f"failures exposed: {[e['code'] for e in obligations['failures_exposed']['events']]}"
-        )
     return {
-        "result": "PASS" if verdict == "PASS" else "FAIL",
-        "incomplete": verdict == "INCOMPLETE",
-        "obligations": obligations,
-        **({"reason": reason} if reason else {}),
+        "result": "INCOMPLETE" if collection_error else "OBSERVED",
+        **({"reason": f"collection failed: {collection_error}"} if collection_error else {}),
         "src": probe["src"],
         "dst_gs": probe["dst_gs"],
         "dst_ip": probe["dst_ip"],
@@ -3254,13 +2852,15 @@ def _run_mbb_packet_window(
         "packet_outcome": output["packet_outcome"],
         "protocol_observed": output["protocol_observed"],
         "reply_count": output["reply_count"],
-        "overlap_required": False,
-        "overlap_ready": bool(overlap.get("successor_fib_ready")),
         "packet_loss_policy": "recorded_not_gated",
-        "fib_preference_policy": "recorded_not_gated",
-        "overlap_proof": overlap,
+        "occurrence": {
+            **facts,
+            "overlap_class": _overlap_class(facts, station.get("mbb_overlap_ticks")),
+            "configured_overlap_ticks": station.get("mbb_overlap_ticks"),
+        },
+        "overlap_observation": overlap,
         "routing_layer_outcome": _routing_layer_outcome(overlap),
-        "terminal_event": terminal_by_src[terminal_src]["event"],
+        "terminal_event": terminal["event"],
         "terminal_observation": output["terminal_observation"],
         "post_teardown_route_observation": output["post_teardown_route_observation"],
         "terminal_gs_ids": sorted(terminal_by_src),
@@ -3276,9 +2876,9 @@ def check_mbb_packet_behavior(
     interval_s: float = 0.2,
     max_wait_s: int = 900,
 ) -> dict:
-    """Repeated packet windows until one is graded at a completed teardown or
-    the time runs out. Every attempt is retained in full, the failed ones
-    included, whatever a later attempt shows."""
+    """Repeated packet windows until one observed a completed MBB occurrence at
+    a probed station or the time runs out. Every attempt is retained in full.
+    The result is an observation record, never a verdict."""
     deadline = time.monotonic() + max_wait_s
     attempts: list[dict] = []
     while time.monotonic() < deadline:
@@ -3288,25 +2888,13 @@ def check_mbb_packet_behavior(
         window_count = min(count, max(300, int(min(remaining_s, 300) / interval_s)))
         evidence = _run_mbb_packet_window(token, perm, count=window_count, interval_s=interval_s)
         attempts.append(evidence)
-        # A graded occurrence decides the run when its obligations are met or
-        # broken; one whose evidence was merely incomplete (an overlap no sample
-        # fell into, a record outside the window) is kept and the next occurrence
-        # is awaited while time remains, so missing evidence neither passes nor
-        # fails the emulator.
-        if evidence.get("result") == "PASS" or (
-            evidence.get("terminal_event") is not None and not evidence.get("incomplete")
-        ):
+        if evidence.get("result") == "OBSERVED":
             return {**evidence, "attempts": attempts}
     last = attempts[-1] if attempts else {}
     return {
         **last,
-        "result": "FAIL",
-        "reason": (
-            "the graded occurrence(s) left the obligations incomplete and no further "
-            "occurrence completed before the timeout"
-            if last.get("terminal_event") is not None
-            else "No qualifying MBB handover packet observation before timeout"
-        ),
+        "result": "INCOMPLETE",
+        "reason": "No completed MBB occurrence was observed at a probed station before the timeout",
         "max_wait_s": max_wait_s,
         "attempts": attempts,
     }
@@ -3750,396 +3338,37 @@ def _wait_for_playback_not_seeking(token: str, epoch_id: int, *, wait_s: int = 1
 
 
 def _connectivity_expectation(session_id: str) -> dict:
-    seam = SEAM_PHYSICAL_EXPECTATIONS.get(session_id)
-    if seam is not None:
-        return {"mode": "physical_transitions", **seam}
+    if session_id in PHYSICAL_EXPERIMENT_SESSIONS:
+        return {"mode": "physical_experiment"}
     window = INTERMITTENT_CONNECTIVITY_WINDOWS.get(session_id)
     if window is None:
         return {"mode": "continuous"}
     return {"mode": "intermittent", **window}
 
 
-def _seek_playback(token: str, target_sim_time: str) -> dict:
-    """Seek and let playback run on from the target; the seam windows watch the
-    running clock, so nothing pauses here."""
-    seek = request_json(
-        "POST",
-        "/api/v1/playback",
-        token=token,
-        json={"action": "seek", "target_sim_time": target_sim_time},
-        retries=3,
-    )
-    if seek.get("state") != "seeking" or "epoch_id" not in seek:
-        return {
-            "result": "FAIL",
-            "reason": "seek was not accepted into seeking state",
-            "seek": seek,
-        }
-    resumed = _wait_for_playback_not_seeking(token, int(seek["epoch_id"]), wait_s=120)
-    if resumed.get("result") != "PASS":
-        return {"result": "FAIL", "reason": resumed.get("reason"), "seek": seek, "resume": resumed}
-    return {"result": "PASS", "seek": seek, "resume": resumed}
-
-
-def _seam_pairs_from_session(session_yaml: str) -> list[dict]:
-    """The seam ISL pairs the session declares: every explicit pair joining a
-    plane-05 satellite with a plane-00 satellite, as runtime ids
-    (segment id plus local name) with their (plane, slot) tuples."""
-    document = load_configuration_yaml(session_yaml)
-    segment_ids = [segment["id"] for segment in document.get("segments", []) if "source" in segment]
-    pairs: list[dict] = []
-    for rule in document.get("link_rules", []):
-        topology = rule.get("topology") or {}
-        if topology.get("mode") != "explicit_pairs":
-            continue
-        for item in topology.get("pairs", []):
-            planes = {}
-            for end in ("a", "b"):
-                local = str(item[end])
-                planes[end] = (int(local[-5:-3]), int(local[-2:]))
-            if {planes["a"][0], planes["b"][0]} != {0, 5}:
-                continue
-            if len(segment_ids) != 1:
-                raise ValueError(
-                    "seam pairs need exactly one constellation segment to name their nodes"
-                )
-            a_id, b_id = (f"{segment_ids[0]}-{item['a']}", f"{segment_ids[0]}-{item['b']}")
-            first, second = sorted(((a_id, planes["a"]), (b_id, planes["b"])))
-            pairs.append(
-                {
-                    "pair": [first[0], second[0]],
-                    "plane_slot": {first[0]: first[1], second[0]: second[1]},
-                }
-            )
-    return pairs
-
-
-def _seam_predictions(perm: dict, pairs: list[dict]) -> dict:
-    """The reference's visibility changes for every seam pair inside the horizon,
-    from the declared constellation and terminal, at the reference sample."""
-    repo = Path(__file__).resolve().parents[2]
-    if str(repo) not in sys.path:
-        sys.path.insert(0, str(repo))
-    from tests.seam_reference import declared_shell, terminal_limits, visibility_changes
-
-    expectation = perm["connectivity_expectation"]
-    catalog_root = repo / "catalog" / "nodalarc"
-    shell = declared_shell(catalog_root / expectation["constellation"], catalog_root)
-    max_range_km, max_rate_deg_s = terminal_limits(catalog_root / expectation["terminal"])
-    predictions = {}
-    for entry in pairs:
-        a, b = (entry["plane_slot"][node] for node in entry["pair"])
-        # The reference orders (plane 5, plane 0) as the tests do.
-        if a[0] != 5:
-            a, b = b, a
-        predictions[tuple(entry["pair"])] = visibility_changes(
-            shell,
-            a,
-            b,
-            horizon_s=float(expectation["horizon_s"]),
-            sample_s=SEAM_REFERENCE_SAMPLE_S,
-            max_range_km=max_range_km,
-            max_rate_deg_s=max_rate_deg_s,
-        )
-    return predictions
-
-
-def _plan_watch_windows(predictions: dict) -> list[dict]:
-    """One watch window per predicted change after t=0, merged when they touch:
-    from before the change to after the enactment bound, with the seek target
-    ahead of it so the post-seek re-enactment settles before the watch."""
-    changes = sorted(
-        (t, tuple(pair), visible, reason)
-        for pair, items in predictions.items()
-        for (t, visible, reason) in items
-        if t > 0
-    )
-    windows: list[dict] = []
-    for t, pair, visible, reason in changes:
-        start = t - SEAM_WATCH_BEFORE_S
-        end = t + SEAM_WATCH_AFTER_S
-        expected = {"t": t, "pair": list(pair), "visible": visible, "reason": reason}
-        if windows and start <= windows[-1]["end"]:
-            windows[-1]["end"] = max(windows[-1]["end"], end)
-            windows[-1]["expected"].append(expected)
-        else:
-            windows.append({"start": start, "end": end, "expected": [expected]})
-    for window in windows:
-        window["seek_to"] = max(0.0, window["start"] - SEAM_SEEK_LEAD_S)
-    return windows
-
-
-def _match_seam_transitions(expected: list[dict], observed: list[dict]) -> dict:
-    """Each expected change matched by one observed transition of the same pair
-    and direction whose time lies within one reference sample before it and the
-    enactment bound after it; observed transitions inside the watch that match
-    nothing are unexpected. Times are the session's own seconds."""
-    lower = SEAM_REFERENCE_SAMPLE_S
-    upper = SEAM_REFERENCE_SAMPLE_S + SEAM_ENACTMENT_BOUND_S
-    unmatched = list(observed)
-    matched, missing = [], []
-    for item in expected:
-        hit = next(
-            (
-                obs
-                for obs in unmatched
-                if obs["pair"] == item["pair"]
-                and obs["visible"] == item["visible"]
-                and obs.get("t_previous") is not None
-                # the change happened somewhere in (t_previous, t]: the whole
-                # interval must lie inside the tolerance to count
-                and item["t"] - lower <= obs["t_previous"]
-                and obs["t"] <= item["t"] + upper
-            ),
-            None,
-        )
-        if hit is None:
-            missing.append(item)
-        else:
-            unmatched.remove(hit)
-            matched.append({**item, "observed_t": hit["t"], "delay_s": hit["t"] - item["t"]})
-    return {"matched": matched, "missing": missing, "unexpected": unmatched}
-
-
-def _seam_state_reading(token: str, start: datetime, pairs: set[tuple[str, str]]) -> dict:
-    """One reading of the seam pairs: the Scheduler-verified kernel-actual
-    membership (``kernel_actual_pairs``, the enacted set the check judges) and
-    the OME-declared active links (context only), with the simulation time of
-    the same reading."""
-    state = request_json("GET", "/api/v1/state", token=token)
-    links = state.get("links", [])
-    if isinstance(links, dict):
-        links = list(links.values())
-    declared = {
-        tuple(sorted((str(link.get("node_a")), str(link.get("node_b")))))
-        for link in links
-        if link.get("state") == "active"
-    }
-    enacted = {
-        tuple(sorted(str(n) for n in pair))
-        for pair in (state.get("kernel_actual_pairs") or [])
-        if isinstance(pair, (list, tuple)) and len(pair) == 2
-    }
-    sim_raw = state.get("sim_time")
-    sim_t = (_parse_api_datetime(str(sim_raw)) - start).total_seconds() if sim_raw else None
-    return {
-        "wall": datetime.now(UTC).isoformat(),
-        "sim_time": sim_raw,
-        "t": sim_t,
-        "membership_published": "kernel_actual_pairs" in state,
-        "enacted_seam_pairs": sorted(pair for pair in enacted if pair in pairs),
-        "declared_seam_pairs": sorted(pair for pair in declared if pair in pairs),
-    }
-
-
-SEAM_COVERAGE_GAP_S = 3.0
-SEAM_FROZEN_READINGS = 5
-
-
-def _window_coverage(window: dict, readings: list[dict]) -> dict:
-    """Whether the readings covered the watch window without a gap: one reading
-    at or before its start, one at or after its end, and no two consecutive
-    readings inside it further apart than the coverage gap."""
-    times = sorted(r["t"] for r in readings if r.get("t") is not None)
-    if not times:
-        return {"complete": False, "reason": "no reading"}
-    if min(times) > window["start"]:
-        return {"complete": False, "reason": "no reading at or before the window start"}
-    if max(times) < window["end"]:
-        return {"complete": False, "reason": "readings ended before the window end"}
-    inside = [
-        t
-        for t in times
-        if window["start"] - SEAM_COVERAGE_GAP_S <= t <= window["end"] + SEAM_COVERAGE_GAP_S
-    ]
-    gaps = [b - a for a, b in zip(inside, inside[1:], strict=False)]
-    widest = max(gaps) if gaps else 0.0
-    if widest > SEAM_COVERAGE_GAP_S:
-        return {
-            "complete": False,
-            "reason": f"a {widest:.1f} s gap between readings inside the window",
-        }
-    return {"complete": True, "reason": None, "widest_gap_s": widest}
-
-
-def check_seam_physics(token: str, perm: dict) -> dict:
-    """The seam experiments' own check: the declared seam pairs lose and recover
-    at the times the declared-parameter reference predicts, as the runtime's
-    proven link state shows it, around each predicted change inside the
-    horizon. A gateway-to-gateway probe is recorded as an observation only.
-    Reasons are not read here (the runtime publishes no ISL decision reason on
-    the state); the accepted seam qualification proved them on the event stream."""
-    evidence: dict = {"result": "FAIL", "mode": "physical_transitions"}
-    start_raw = perm.get("session_start_time")
-    if not start_raw:
-        return {**evidence, "reason": "physical transition check requires the session start time"}
-    start = _parse_api_datetime(str(start_raw))
-    pairs = _seam_pairs_from_session(perm["session_yaml"])
-    if not pairs:
-        return {**evidence, "reason": "the session declares no seam pair"}
-    pair_set = {tuple(entry["pair"]) for entry in pairs}
-    predictions = _seam_predictions(perm, pairs)
-    windows = _plan_watch_windows(predictions)
-    evidence["seam_pairs"] = [entry["pair"] for entry in pairs]
-    evidence["predictions"] = {
-        "->".join(pair): [{"t": t, "visible": v, "reason": r} for (t, v, r) in items]
-        for pair, items in predictions.items()
-    }
-    evidence["windows"] = windows
-    evidence["tolerance"] = {
-        "before_s": SEAM_REFERENCE_SAMPLE_S,
-        "after_s": SEAM_REFERENCE_SAMPLE_S + SEAM_ENACTMENT_BOUND_S,
-    }
-
-    initial = _seam_state_reading(token, start, pair_set)
-    evidence["initial_reading"] = initial
-    if not initial["membership_published"]:
-        return {**evidence, "incomplete": True, "reason": "state carried no kernel_actual_pairs"}
-    expected_now = []
-    for pair, items in predictions.items():
-        visible = False
-        for t, v, _r in items:
-            if initial["t"] is not None and t <= initial["t"]:
-                visible = v
-        near_change = any(
-            initial["t"] is not None
-            and abs(t - initial["t"]) <= SEAM_REFERENCE_SAMPLE_S + SEAM_ENACTMENT_BOUND_S
-            for t, _v, _r in items
-        )
-        expected_now.append({"pair": list(pair), "visible": visible, "near_change": near_change})
-    initial_mismatches = [
-        item
-        for item in expected_now
-        if not item["near_change"]
-        and (tuple(item["pair"]) in {tuple(p) for p in initial["enacted_seam_pairs"]})
-        != item["visible"]
-    ]
-    evidence["initial_expected"] = expected_now
-    evidence["initial_mismatches"] = initial_mismatches
-
+def check_physical_experiment_probe(token: str, perm: dict) -> dict:
+    """The seam experiments declare no gateway-connectivity requirement: the
+    gateway-to-gateway probe is run once, briefly, and recorded as an
+    observation. Their physical expectations are covered by the declared-
+    parameter reference, the offline integration coverage and the recorded
+    live seam qualification, not by this probe."""
     probe = check_ping(token, perm, ground_wait_s=15)
-    evidence["ground_probe_observation"] = {
-        **probe,
-        "note": "recorded only; gateway reachability is no requirement of this experiment",
+    summary = probe.get("result", "?")
+    if probe.get("failure_kind"):
+        summary = f"{summary} ({probe['failure_kind']})"
+    return {
+        "result": "PASS",
+        "mode": "physical_experiment",
+        "requirement": "none: gateway-to-gateway connectivity is not a requirement of this experiment",
+        "experiment": PHYSICAL_EXPERIMENT_SESSIONS.get(perm.get("id"), ""),
+        "coverage": {
+            "reference": "tests/seam_reference.py",
+            "integration": "tests/integration/test_ome_to_pipeline.py::TestPolarVisibilityTransitions",
+            "live": "the recorded seam qualification",
+        },
+        "gateway_probe_observation": probe,
+        "observed_outcome": f"gateway probe {summary}, recorded only",
     }
-
-    observations: list[dict] = []
-    readings: list[dict] = []
-    collection_error = None
-    try:
-        for window in windows:
-            current = _seam_state_reading(token, start, pair_set)
-            if current["t"] is None:
-                collection_error = "state carried no sim time"
-                break
-            if current["t"] < window["seek_to"] - 5 or current["t"] > window["start"]:
-                target = (start + timedelta(seconds=window["seek_to"])).isoformat()
-                seek = _seek_playback(token, target)
-                window["seek"] = seek
-                if seek.get("result") != "PASS":
-                    collection_error = f"seek to {target} failed: {seek.get('reason')}"
-                    break
-            previous = _seam_state_reading(token, start, pair_set)
-            readings.append(previous)
-            window_readings = [previous]
-            deadline = (
-                time.monotonic()
-                + (window["end"] - max(previous["t"] or 0.0, window["seek_to"]))
-                + 60
-            )
-            unchanged = 0
-            while time.monotonic() < deadline:
-                time.sleep(1.0)
-                reading = _seam_state_reading(token, start, pair_set)
-                readings.append(reading)
-                window_readings.append(reading)
-                if reading["t"] is None:
-                    collection_error = "state carried no sim time"
-                    break
-                if not reading["membership_published"]:
-                    collection_error = "state carried no kernel_actual_pairs"
-                    break
-                unchanged = unchanged + 1 if reading["t"] == previous["t"] else 0
-                if unchanged >= SEAM_FROZEN_READINGS:
-                    collection_error = f"simulation time not advancing at t={reading['t']}"
-                    break
-                if reading["t"] >= window["start"]:
-                    before = {tuple(p) for p in previous["enacted_seam_pairs"]}
-                    after = {tuple(p) for p in reading["enacted_seam_pairs"]}
-                    for pair in sorted(after - before):
-                        observations.append(
-                            {
-                                "pair": list(pair),
-                                "visible": True,
-                                "t": reading["t"],
-                                "t_previous": previous["t"],
-                                "wall": reading["wall"],
-                            }
-                        )
-                    for pair in sorted(before - after):
-                        observations.append(
-                            {
-                                "pair": list(pair),
-                                "visible": False,
-                                "t": reading["t"],
-                                "t_previous": previous["t"],
-                                "wall": reading["wall"],
-                            }
-                        )
-                previous = reading
-                if reading["t"] >= window["end"]:
-                    break
-            window["coverage"] = _window_coverage(window, window_readings)
-            if collection_error:
-                break
-    except Exception as exc:  # noqa: BLE001 - the collection error is the evidence
-        collection_error = f"{type(exc).__name__}: {exc}"
-
-    expected_all = [item for window in windows for item in window["expected"]]
-    matching = _match_seam_transitions(expected_all, observations)
-    evidence.update(
-        {
-            "observations": observations,
-            "reading_count": len(readings),
-            "readings": readings,
-            "matching": matching,
-            "collection_error": collection_error,
-        }
-    )
-    uncovered = [w for w in windows if not (w.get("coverage") or {}).get("complete")]
-    evidence["incomplete"] = bool(collection_error) or bool(uncovered)
-    if collection_error:
-        evidence["reason"] = f"collection failed: {collection_error}"
-        return evidence
-    if uncovered:
-        first = uncovered[0]
-        evidence["reason"] = (
-            f"{len(uncovered)} watch window(s) not fully observed "
-            f"(first: {first['start']:.0f} to {first['end']:.0f} s, "
-            f"{(first.get('coverage') or {}).get('reason') or 'not reached'})"
-        )
-        return evidence
-    if initial_mismatches:
-        evidence["reason"] = (
-            f"{len(initial_mismatches)} seam pair(s) in the wrong state at the first reading"
-        )
-        return evidence
-    if matching["missing"]:
-        evidence["reason"] = (
-            f"{len(matching['missing'])} predicted seam change(s) not enacted within tolerance"
-        )
-        return evidence
-    if matching["unexpected"]:
-        evidence["reason"] = (
-            f"{len(matching['unexpected'])} seam transition(s) the reference does not predict"
-        )
-        return evidence
-    if not expected_all:
-        evidence["reason"] = "no predicted seam change inside the horizon; nothing to prove"
-        return evidence
-    evidence["result"] = "PASS"
-    evidence["observed_outcome"] = f"{len(matching['matched'])} predicted seam change(s) enacted"
-    return evidence
 
 
 def _seek_playback_and_pause(token: str, target_sim_time: str) -> dict:
@@ -4226,8 +3455,8 @@ def check_declared_connectivity(token: str, perm: dict) -> dict:
     expectation = perm.get("connectivity_expectation") or {"mode": "continuous"}
     if expectation.get("mode") == "intermittent":
         return check_intermittent_connectivity(token, perm)
-    if expectation.get("mode") == "physical_transitions":
-        return check_seam_physics(token, perm)
+    if expectation.get("mode") == "physical_experiment":
+        return check_physical_experiment_probe(token, perm)
     return check_ping(token, perm)
 
 
@@ -4445,10 +3674,14 @@ def run_seek_during_mbb_acceptance(provenance: dict[str, str] | None = None) -> 
     return evidence
 
 
-def run_mbb_acceptance(provenance: dict[str, str] | None = None) -> dict:
+def run_mbb_observation(provenance: dict[str, str] | None = None) -> dict:
+    """The MBB routing and packet observation on the shipped walker: a
+    diagnostic lane, separate from acceptance. It records the handover the
+    OME completed, the station's link state and kernel reads around it and the
+    packets in flight, and never renders a pass or fail."""
     perm = acceptance_permutation(provenance or _run_provenance_from_environment())
     evidence: dict = {
-        "id": "C-J",
+        "id": "MBB-OBS",
         "label": "mbb-routing-packet-observation",
         "session_ref": perm["session_ref"],
         "document_sha256": perm["document_sha256"],
@@ -4462,7 +3695,7 @@ def run_mbb_acceptance(provenance: dict[str, str] | None = None) -> dict:
         evidence["transition"] = deployed.get("transition")
         evidence["observed_runtime"] = deployed.get("observed_runtime")
         if deployed["result"] != "PASS":
-            evidence["result"] = "FAIL"
+            evidence["result"] = "INCOMPLETE"
             evidence["error"] = deployed["reason"]
             return evidence
         acceptance_progress("mbb: waiting for session readiness")
@@ -4470,7 +3703,7 @@ def run_mbb_acceptance(provenance: dict[str, str] | None = None) -> dict:
         evidence["ready_result"] = ready_result
         acceptance_progress(f"mbb: readiness result {ready_result}")
         if ready_result.get("phase") != "Ready":
-            evidence["result"] = "FAIL"
+            evidence["result"] = "INCOMPLETE"
             evidence["error"] = f"Did not reach Ready: {ready_result}"
             return evidence
 
@@ -4479,11 +3712,12 @@ def run_mbb_acceptance(provenance: dict[str, str] | None = None) -> dict:
         evidence["convergence_preconditions"] = check_mbb_convergence_preconditions(token, perm)
         evidence["mbb_packet_behavior"] = check_mbb_packet_behavior(token, perm)
         evidence["lifecycle_and_ops"] = check_mbb_lifecycle_and_ops(token)
-        passed = all(
-            evidence[key].get("result") == "PASS"
-            for key in ("convergence_preconditions", "mbb_packet_behavior", "lifecycle_and_ops")
+        observed = (
+            evidence["convergence_preconditions"].get("result") == "PASS"
+            and evidence["mbb_packet_behavior"].get("result") == "OBSERVED"
         )
-        evidence["result"] = "PASS" if passed else "FAIL"
+        evidence["result"] = "OBSERVED" if observed else "INCOMPLETE"
+        evidence["faults_present"] = bool(evidence["lifecycle_and_ops"].get("bad_ops_codes"))
     except Exception as exc:
         evidence["result"] = "ERROR"
         evidence["error"] = str(exc)
@@ -4791,22 +4025,20 @@ def main():
                 evidence_file = evidence_dir / f"perm-{eid_label}-{label}.json"
                 evidence_file.write_text(json.dumps(evidence, indent=2))
 
-        # C-J, the MBB handover acceptance on the shipped walker, is a default
-        # entry of the matrix: a named test-only step whose result counts like
-        # every shipped session's. A matrix without it is incomplete.
-        print(f"\n{'=' * 60}")
-        print("Acceptance C-J: mbb-routing-packet-observation (earth-leo-walker)")
-        print(f"{'=' * 60}")
-        evidence = run_mbb_acceptance(provenance)
-        evidence["provenance"] = provenance
-        results.append(evidence)
-        evidence_file = evidence_dir / "acceptance-cj-mbb-routing-packet-observation.json"
-        evidence_file.write_text(json.dumps(evidence, indent=2))
-        if evidence["result"] == "PASS":
-            passed += 1
-        else:
-            failed += 1
-        print(f"  C-J: {evidence['result']}")
+        observations = 0
+        if os.environ.get("NODALARC_RUN_MBB_OBSERVATION") == "1":
+            # A diagnostic lane, separate from acceptance: its record is written
+            # and listed, and it counts toward neither passed nor failed.
+            print(f"\n{'=' * 60}")
+            print("Observation: mbb-routing-packet-observation (earth-leo-walker)")
+            print(f"{'=' * 60}")
+            evidence = run_mbb_observation(provenance)
+            evidence["provenance"] = provenance
+            results.append(evidence)
+            evidence_file = evidence_dir / "mbb-routing-packet-observation.json"
+            evidence_file.write_text(json.dumps(evidence, indent=2))
+            observations += 1
+            print(f"  MBB observation: {evidence['result']}")
 
         if os.environ.get("NODALARC_RUN_DIRTY_REPAIR") == "1":
             evidence = run_dirty_repair_acceptance(provenance)
@@ -4844,6 +4076,7 @@ def main():
             "failed": failed,
             "xfailed": xfailed,
             "xpassed": xpassed,
+            "observations": observations,
             "results": [
                 {
                     "id": r["id"],

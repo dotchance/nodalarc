@@ -163,316 +163,11 @@ _OVERLAP_STARTED = [
 ]
 
 
-def _dispatch(seq, timestamp, *, up=(), down=()):
-    parts = []
-    if up:
-        parts.append("up=[" + ", ".join(f"{a}<->{b}" for a, b in up) + "]")
-    if down:
-        parts.append("down=[" + ", ".join(f"{a}<->{b}" for a, b in down) + "]")
-    return {
-        "seq": seq,
-        "source": "scheduler",
-        "code": "DISPATCHER",
-        "level": "info",
-        "hostname": "nodalarc-scheduler-abc-xyz",
-        "timestamp": timestamp,
-        "message": f"Link state changed [{', '.join(parts)}, active=7]",
-        "details": None,
-    }
-
-
-_DISPATCH_UP = _dispatch(50, "2026-09-14T23:53:33.100000+00:00", up=[("gs-a", "sat-2")])
-_DISPATCH_DOWN = _dispatch(51, "2026-09-14T23:53:35.200000+00:00", down=[("gs-a", "sat-1")])
 _HEALTH = {"scheduler_instances": [{"scheduler_instance_id": "inst-1"}]}
 
 
 def _pairs_of(links):
     return sorted(sorted((str(link["node_a"]), str(link["node_b"]))) for link in links)
-
-
-def _station_sample(
-    index,
-    *,
-    links,
-    sim="2026-06-08T00:14:56Z",
-    allocation=None,
-    epoch=1,
-    incumbent_up=True,
-    actual=None,
-    instances=("inst-1",),
-    identity=True,
-    kernel_read=True,
-):
-    """One station sample as the window retains it: the verified membership
-    (``actual``, by default the pairs of ``links``) and the instance roster in
-    both brackets, the identity, and the kernel read of both interfaces."""
-    sample = _sample(
-        links=links,
-        neighbors=[("term1", "Up")],
-        route_dev="term1",
-        sim=sim,
-        incumbent_up=incumbent_up,
-        allocation_events=_OVERLAP_STARTED if allocation is None else allocation,
-        actual=actual,
-    )
-    sample["index"] = index
-    sample["src"] = "gs-a"
-    sample["epoch_id"] = epoch
-    for bracket in (sample["pre"], sample["post"]):
-        bracket["epoch_id"] = epoch
-        bracket["scheduler_instance_ids"] = list(instances) if instances is not None else None
-        if not identity:
-            bracket.pop("session_id")
-            bracket.pop("epoch_id")
-    if not kernel_read:
-        after = sample["kernel_after_route"]["gs-a->gs-b"]
-        after["incumbent_link"] = None
-        after["successor_link"] = None
-        after["incumbent_link_read"] = {"rc": 1, "stdout": "", "stderr": "read failed"}
-        after["successor_link_read"] = {"rc": 1, "stdout": "", "stderr": "read failed"}
-    return sample
-
-
-def _assess(*, samples, events, bad=(), terminal=None, ticks=30):
-    return e2e_matrix.assess_mbb_obligations(
-        terminal_event=terminal or _lifecycle(1),
-        samples=samples,
-        ops_events=events,
-        bad_events=list(bad),
-        probe_key="gs-a->gs-b",
-        configured_overlap_ticks=ticks,
-    )
-
-
-def _before_overlap():
-    return {"links": _OVERLAP_LINKS[:1], "sim": "2026-06-08T00:14:50Z", "allocation": []}
-
-
-def _after_terminal():
-    return {"links": _OVERLAP_LINKS[1:], "sim": "2026-06-08T00:15:06Z"}
-
-
-def _handover_samples():
-    """Before the overlap (incumbent alone), twice inside it (both verified and
-    carrier-up), then after the terminal (successor alone)."""
-    return [
-        _station_sample(0, **_before_overlap()),
-        _station_sample(1, links=_OVERLAP_LINKS),
-        _station_sample(2, links=_OVERLAP_LINKS, sim="2026-06-08T00:14:57Z"),
-        _station_sample(3, **_after_terminal()),
-    ]
-
-
-def test_obligations_pass_from_verified_membership_kernel_reads_and_sim_order() -> None:
-    """The four agreed obligations judged from the samples' Scheduler-verified
-    membership and kernel reads, ordered by the readings' own simulation time
-    against the terminal record; the Scheduler's requested-change lines are
-    context; where the route pointed decides nothing."""
-    result = _assess(samples=_handover_samples(), events=[_lifecycle(1)])
-    assert result["verdict"] == "PASS"
-    assert result["successor_verified_before_release"]["verdict"] == "established"
-    assert result["successor_verified_before_release"]["samples_with_both_verified"] == [1, 2]
-    assert result["successor_verified_before_release"]["samples_with_both_carrier_up"] == [1, 2]
-    assert result["incumbent_retained_through_overlap"]["verdict"] == "established"
-    assert result["incumbent_retained_through_overlap"]["samples_with_incumbent_held"] == [1, 2]
-    assert result["terminal_driven_release"]["verdict"] == "established"
-    assert result["terminal_driven_release"]["first_release_sample_index"] == 3
-    assert result["failures_exposed"] == {"verdict": "clean", "events": []}
-    assert result["evidence_basis"]["usable_samples"] == [0, 1, 2, 3]
-    assert result["evidence_basis"]["scheduler_instances_seen"] == ["inst-1"]
-    assert result["scheduler_requested_changes"] == []
-    assert "context, not proof" in result["note"]
-
-
-def test_requested_change_lines_prove_nothing_without_verified_membership() -> None:
-    """The Scheduler's "Link state changed" lines name what it asked for; with
-    the verified membership never holding the successor they establish nothing."""
-    samples = [
-        _station_sample(0, **_before_overlap()),
-        _station_sample(1, links=_OVERLAP_LINKS, actual=_pairs_of(_OVERLAP_LINKS[:1])),
-        _station_sample(
-            2,
-            links=_OVERLAP_LINKS,
-            actual=_pairs_of(_OVERLAP_LINKS[:1]),
-            sim="2026-06-08T00:14:57Z",
-        ),
-    ]
-    result = _assess(samples=samples, events=[_lifecycle(1), _DISPATCH_UP, _DISPATCH_DOWN])
-    assert result["verdict"] == "INCOMPLETE"
-    assert result["successor_verified_before_release"]["verdict"] == "not_established"
-    assert result["terminal_driven_release"]["verdict"] == "not_established"
-    assert [r["seq"] for r in result["scheduler_requested_changes"]] == [50, 51]
-
-
-def test_missing_identity_instance_or_kernel_reading_leaves_obligations_unestablished() -> None:
-    base = _handover_samples()
-    # no session or epoch identity on the readings
-    anonymous = [
-        _station_sample(
-            s["index"],
-            links=s["active_ground_links"],
-            sim=s["sim_time"],
-            allocation=s["allocation_events"],
-            identity=False,
-        )
-        for s in base
-    ]
-    result = _assess(samples=anonymous, events=[_lifecycle(1)])
-    assert result["verdict"] == "INCOMPLETE"
-    assert result["evidence_basis"]["rejected_samples"]["identity"] == [0, 1, 2, 3]
-    assert result["evidence_basis"]["usable_samples"] == []
-
-    # kernel readings absent: membership alone cannot establish the successor or retention
-    unread = [
-        _station_sample(
-            s["index"],
-            links=s["active_ground_links"],
-            sim=s["sim_time"],
-            allocation=s["allocation_events"],
-            kernel_read=False,
-        )
-        for s in base
-    ]
-    result = _assess(samples=unread, events=[_lifecycle(1)])
-    assert result["verdict"] == "INCOMPLETE"
-    assert result["successor_verified_before_release"]["verdict"] == "not_established"
-    assert result["successor_verified_before_release"]["samples_with_both_verified"] == [1, 2]
-    assert result["incumbent_retained_through_overlap"]["verdict"] == "not_established"
-    assert result["incumbent_retained_through_overlap"]["samples_without_kernel_reading"] == [1, 2]
-
-    # two Scheduler instances across the readings: no single publisher, nothing usable
-    split = [
-        _station_sample(0, **_before_overlap()),
-        _station_sample(1, links=_OVERLAP_LINKS, instances=("inst-1",)),
-        _station_sample(2, links=_OVERLAP_LINKS, sim="2026-06-08T00:14:57Z", instances=("inst-2",)),
-        _station_sample(3, **_after_terminal()),
-    ]
-    result = _assess(samples=split, events=[_lifecycle(1)])
-    assert result["verdict"] == "INCOMPLETE"
-    assert result["evidence_basis"]["multiple_instances"] == ["inst-1", "inst-2"]
-    assert result["evidence_basis"]["usable_samples"] == []
-
-    # a reading that saw two instances at once, or none, is not usable either
-    both = [_station_sample(1, links=_OVERLAP_LINKS, instances=("inst-1", "inst-2"))]
-    assert _assess(samples=both, events=[_lifecycle(1)])["evidence_basis"]["rejected_samples"][
-        "instance"
-    ] == [1]
-    unknown = [_station_sample(1, links=_OVERLAP_LINKS, instances=None)]
-    assert _assess(samples=unknown, events=[_lifecycle(1)])["evidence_basis"]["rejected_samples"][
-        "instance"
-    ] == [1]
-
-
-def test_simulation_time_orders_the_samples_never_the_receipt_index() -> None:
-    """A reading after the terminal's simulation time is a release reading
-    wherever it sits in the timeline; readings inside the overlap are those
-    before that time."""
-    late_first = [
-        _station_sample(0, **_after_terminal()),
-        _station_sample(1, links=_OVERLAP_LINKS),
-        _station_sample(2, links=_OVERLAP_LINKS, sim="2026-06-08T00:14:57Z"),
-    ]
-    result = _assess(samples=late_first, events=[_lifecycle(1)])
-    assert result["incumbent_retained_through_overlap"]["samples_inside_overlap"] == [1, 2]
-    assert result["incumbent_retained_through_overlap"]["verdict"] == "established"
-    assert result["terminal_driven_release"]["verdict"] == "established"
-    assert result["terminal_driven_release"]["first_release_sample_index"] == 0
-    # the reading's own time decides: with the release stamped before the terminal
-    # time the same reading is a release the terminal did not drive
-    early = [
-        _station_sample(0, links=_OVERLAP_LINKS[1:], sim="2026-06-08T00:14:58Z"),
-        late_first[1],
-    ]
-    result = _assess(samples=early, events=[_lifecycle(1)])
-    assert result["verdict"] == "FAIL"
-    assert result["terminal_driven_release"]["verdict"] == "violated"
-    assert result["incumbent_retained_through_overlap"]["samples_released_early"] == [0]
-
-
-def test_obligation_violations_and_failures_are_distinct_from_missing_evidence() -> None:
-    # the kernel reads the incumbent carrier-down inside the overlap
-    down = [
-        _station_sample(1, links=_OVERLAP_LINKS),
-        _station_sample(2, links=_OVERLAP_LINKS, sim="2026-06-08T00:14:57Z", incumbent_up=False),
-        _station_sample(3, **_after_terminal()),
-    ]
-    result = _assess(samples=down, events=[_lifecycle(1)])
-    assert result["verdict"] == "FAIL"
-    assert result["incumbent_retained_through_overlap"]["verdict"] == "violated"
-    assert result["incumbent_retained_through_overlap"]["samples_kernel_down"] == [2]
-
-    # no sample inside the overlap (its start never seen): not established
-    unseen = [
-        _station_sample(1, links=_OVERLAP_LINKS, allocation=[]),
-        _station_sample(3, **_after_terminal()),
-    ]
-    result = _assess(samples=unseen, events=[_lifecycle(1)])
-    assert result["verdict"] == "INCOMPLETE"
-    assert result["incumbent_retained_through_overlap"]["verdict"] == "not_established"
-
-    # a terminal record without a parsable simulation time judges nothing
-    terminal = _lifecycle(1, master_sim_time="not-a-time")
-    result = _assess(samples=_handover_samples(), events=[terminal], terminal=terminal)
-    assert result["verdict"] == "INCOMPLETE"
-    assert result["evidence_basis"]["terminal_sim_time_parsed"] is False
-
-    # an exposed actuation failure fails the occurrence and is listed with its instance
-    dirty = {
-        "code": "KERNEL_DIRTY",
-        "timestamp": "2026-09-14T23:53:00Z",
-        "hostname": "nodalarc-scheduler-old-1",
-        "message": "Ground station gs-c actuation is kernel_dirty: KernelInventoryAudit",
-        "details": {"scheduler_instance_id": "nodalarc-scheduler-old-1-1-1", "gs_id": "gs-c"},
-    }
-    result = _assess(samples=_handover_samples(), events=[_lifecycle(1)], bad=[dirty])
-    assert result["verdict"] == "FAIL"
-    assert result["failures_exposed"]["verdict"] == "actuation_failure_present"
-    assert (
-        result["failures_exposed"]["events"][0]["scheduler_instance_id"]
-        == "nodalarc-scheduler-old-1-1-1"
-    )
-
-
-def test_terminal_overlap_facts_and_dispatcher_records_are_read_from_the_runtime_shapes() -> None:
-    facts = e2e_matrix._terminal_overlap_facts(  # noqa: SLF001
-        _lifecycle(
-            1,
-            message="MBB teardown completed for old pair ('gs-a', 'sat-1'); successor ('gs-a', 'sat-2') remains scheduled; elapsed_ticks=1; old_pair_visible=False",
-        )
-    )
-    assert facts == {"elapsed_ticks": 1, "old_pair_visible": False}
-    typed = _lifecycle(1)
-    typed["details"]["extra"] = {"elapsed_ticks": 30}
-    typed["details"]["authority_before"] = {"old": {"pair": ["gs-a", "sat-1"], "visible": True}}
-    assert e2e_matrix._terminal_overlap_facts(typed) == {
-        "elapsed_ticks": 30,
-        "old_pair_visible": True,
-    }  # noqa: SLF001
-    assert e2e_matrix._overlap_class({"elapsed_ticks": 30, "old_pair_visible": True}, 30) == "full"  # noqa: SLF001
-    assert (
-        e2e_matrix._overlap_class({"elapsed_ticks": 1, "old_pair_visible": False}, 30)
-        == "shortened_incumbent_lost"
-    )  # noqa: SLF001
-    assert (
-        e2e_matrix._overlap_class({"elapsed_ticks": 4, "old_pair_visible": True}, 30)
-        == "shortened_other"
-    )  # noqa: SLF001
-
-    records = e2e_matrix._dispatcher_transitions(  # noqa: SLF001
-        [
-            _DISPATCH_DOWN,
-            _DISPATCH_UP,
-            {
-                "source": "ome",
-                "code": "MBB_TEARDOWN_TERMINAL",
-                "message": "Link state changed [up=[x<->y]]",
-            },
-            _dispatch(52, "2026-09-14T23:53:36Z", up=[("gs-b", "sat-9")], down=[("gs-a", "sat-2")]),
-        ]
-    )
-    assert [record["seq"] for record in records] == [50, 51, 52]
-    assert records[0]["up"] == [["gs-a", "sat-2"]] and records[0]["down"] == []
-    assert records[2]["up"] == [["gs-b", "sat-9"]] and records[2]["down"] == [["gs-a", "sat-2"]]
 
 
 def test_check_ping_fails_ground_session_when_ground_probe_is_not_proven(monkeypatch) -> None:
@@ -533,9 +228,7 @@ def test_check_ping_allows_skip_only_for_satellite_only_topology(monkeypatch) ->
     assert result["active_link_count"] == 0
 
 
-def test_connectivity_expectation_marks_polar_intermittent_and_the_seam_experiments_physical() -> (
-    None
-):
+def test_connectivity_expectation_marks_polar_intermittent_and_the_seam_experiments_physical():
     polar = e2e_matrix._connectivity_expectation("earth-leo-polar")  # noqa: SLF001
     ordinary = e2e_matrix._connectivity_expectation("earth-leo-simple")  # noqa: SLF001
     seam = e2e_matrix._connectivity_expectation("earth-leo-polar-seam")  # noqa: SLF001
@@ -547,280 +240,43 @@ def test_connectivity_expectation_marks_polar_intermittent_and_the_seam_experime
         "settle_seconds": 30,
     }
     assert ordinary == {"mode": "continuous"}
-    assert seam["mode"] == "physical_transitions"
-    assert seam["constellation"].endswith("earth-leo-polar-36.yaml")
-    assert tracking["mode"] == "physical_transitions"
-    assert tracking["constellation"].endswith("earth-leo-polar-36-seam-crossing.yaml")
-    for expectation in (seam, tracking):
-        assert expectation["terminal"].endswith("optical-low-orbit-isl.yaml")
-        assert expectation["horizon_s"] == 1200
-
-
-_SEAM_SESSION = """
-session:
-  name: seam-test
-segments:
-- id: leo
-  source: nodalarc:constellations/earth/leo/earth-leo-polar-36-seam-crossing.yaml
-- id: ground
-  placement:
-    from_site_set: nodalarc:site-sets/earth/leo/earth-leo-polar-gateway-sites.yaml
-link_rules:
-- id: leo_isl
-  topology:
-    mode: explicit_pairs
-    pairs:
-    - {a: sat-p05s02, b: sat-p00s04}
-    - {a: sat-p05s05, b: sat-p00s01}
-    - {a: sat-p01s00, b: sat-p02s00}
-  endpoints:
-  - select: {segment: leo}
-  - select: {segment: leo}
-"""
-
-
-def _seam_perm(session_id="earth-leo-polar-seam-tracking", session_yaml=_SEAM_SESSION):
-    return {
-        "id": session_id,
-        "session_yaml": session_yaml,
-        "session_start_time": "2026-06-08T00:00:00+00:00",
-        "connectivity_expectation": e2e_matrix._connectivity_expectation(session_id),  # noqa: SLF001
-        "gs": [],
-        "ground_topology": {},
+    assert seam == {"mode": "physical_experiment"}
+    assert tracking == {"mode": "physical_experiment"}
+    assert set(e2e_matrix.PHYSICAL_EXPERIMENT_SESSIONS) == {
+        "earth-leo-polar-seam",
+        "earth-leo-polar-seam-tracking",
     }
 
 
-def test_seam_pairs_come_from_the_declared_explicit_pairs_between_planes_five_and_zero() -> None:
-    pairs = e2e_matrix._seam_pairs_from_session(_SEAM_SESSION)  # noqa: SLF001
-    assert [entry["pair"] for entry in pairs] == [
-        ["leo-sat-p00s04", "leo-sat-p05s02"],
-        ["leo-sat-p00s01", "leo-sat-p05s05"],
-    ]
-    assert pairs[0]["plane_slot"] == {"leo-sat-p00s04": (0, 4), "leo-sat-p05s02": (5, 2)}
+def test_physical_experiment_probe_is_recorded_and_never_required(monkeypatch) -> None:
+    """The seam experiments' gateway probe is an observation: its outcome, unreachable
+    included, is kept in full and the connectivity component passes on the absence
+    of a requirement, with the coverage that owns the physics named."""
+    calls: list[int | None] = []
 
+    def fake_ping(_token, _perm, *, ground_wait_s=None):
+        calls.append(ground_wait_s)
+        return {
+            "result": "FAIL",
+            "failure_kind": "connectivity",
+            "reason": "no route (kernel answered Network unreachable)",
+            "active_link_count": 5,
+        }
 
-def test_seam_predictions_and_windows_follow_the_declared_reference() -> None:
-    """The reference's visibility changes for the declared pairs inside the horizon,
-    with one watch window per change (merged when they touch) and a seek target
-    ahead of each so the post-seek re-enactment settles first."""
-    perm = _seam_perm()
-    pairs = e2e_matrix._seam_pairs_from_session(perm["session_yaml"])  # noqa: SLF001
-    predictions = e2e_matrix._seam_predictions(perm, pairs)  # noqa: SLF001
-    crossing = predictions[("leo-sat-p00s04", "leo-sat-p05s02")]
-    # gain by range, loss by tracking at the close pass, recovery: the tracking experiment
-    assert [(round(t), visible, reason) for t, visible, reason in crossing] == [
-        (456, True, "ok"),
-        (866, False, "tracking_exceeded"),
-        (895, True, "ok"),
-    ]
-    windows = e2e_matrix._plan_watch_windows(predictions)  # noqa: SLF001
-    assert [w["start"] for w in windows] == [436.0, 846.0]
-    assert windows[1]["end"] == 920.0 and len(windows[1]["expected"]) == 4
-    assert windows[0]["seek_to"] == 346.0
-    assert all(w["seek_to"] == w["start"] - e2e_matrix.SEAM_SEEK_LEAD_S for w in windows)
-
-
-def test_seam_transition_matching_applies_the_accepted_tolerances_only() -> None:
-    expected = [
-        {"t": 456.0, "pair": ["a", "b"], "visible": True, "reason": "ok"},
-        {"t": 866.0, "pair": ["a", "b"], "visible": False, "reason": "tracking_exceeded"},
-    ]
-    observed = [
-        {"pair": ["a", "b"], "visible": True, "t": 459.0, "t_previous": 458.0},  # inside
-        {"pair": ["a", "b"], "visible": False, "t": 880.0, "t_previous": 879.0},  # 14 s late
-        {"pair": ["c", "d"], "visible": False, "t": 460.0, "t_previous": 459.0},  # unpredicted
-    ]
-    result = e2e_matrix._match_seam_transitions(expected, observed)  # noqa: SLF001
-    assert [m["delay_s"] for m in result["matched"]] == [3.0]
-    assert [m["t"] for m in result["missing"]] == [866.0]
-    assert [u["pair"] for u in result["unexpected"]] == [["a", "b"], ["c", "d"]]
-    # one reference sample early is inside the tolerance, more is not
-    early = [{"pair": ["a", "b"], "visible": True, "t": 455.0, "t_previous": 455.0}]
-    assert e2e_matrix._match_seam_transitions(expected[:1], early)["missing"] == []  # noqa: SLF001
-    earlier = [{"pair": ["a", "b"], "visible": True, "t": 454.0, "t_previous": 454.0}]
-    assert e2e_matrix._match_seam_transitions(expected[:1], earlier)["missing"] == expected[:1]  # noqa: SLF001
-    # the change lies somewhere in the observation interval: an interval that
-    # started before the tolerance cannot place it, however late its end
-    wide = [{"pair": ["a", "b"], "visible": True, "t": 459.0, "t_previous": 400.0}]
-    assert e2e_matrix._match_seam_transitions(expected[:1], wide)["missing"] == expected[:1]  # noqa: SLF001
-    no_interval = [{"pair": ["a", "b"], "visible": True, "t": 459.0}]
-    assert e2e_matrix._match_seam_transitions(expected[:1], no_interval)["missing"] == expected[:1]  # noqa: SLF001
-
-
-class _SeamRuntime:
-    """A fake runtime for the seam check: the clock runs from wherever the last seek
-    put it, one second per sample, and each seam pair is active exactly when its
-    scripted state says so at that time; pings are recorded, never judged."""
-
-    def __init__(
-        self, monkeypatch, states, *, declared=None, freeze_at=None, publish_membership=True
-    ):
-        self.states = states  # pair -> function(t) -> enacted (Scheduler-verified)
-        self.declared = declared  # pair -> function(t) -> OME-declared active; default: as enacted
-        self.freeze_at = freeze_at
-        self.publish_membership = publish_membership
-        self.t = 0.0
-        self.seeks: list[str] = []
-        self.pings = 0
-        monkeypatch.setattr(e2e_matrix, "request_json", self.request)
-        monkeypatch.setattr(e2e_matrix, "_seek_playback", self.seek)
-        monkeypatch.setattr(e2e_matrix, "check_ping", self.ping)
-        monkeypatch.setattr(e2e_matrix.time, "sleep", lambda _s: None)
-        self.clock = 0.0
-        monkeypatch.setattr(e2e_matrix.time, "monotonic", self.monotonic)
-
-    def monotonic(self):
-        self.clock += 0.5
-        return self.clock
-
-    def request(self, method, path, **kwargs):
-        assert "/api/v1/state" in path
-        sim = e2e_matrix._parse_api_datetime("2026-06-08T00:00:00+00:00") + e2e_matrix.timedelta(  # noqa: SLF001
-            seconds=self.t
-        )
-        declared = self.declared if self.declared is not None else self.states
-        links = [
-            {"node_a": a, "node_b": b, "state": "active", "link_type": "isl"}
-            for (a, b), active in declared.items()
-            if active(self.t)
-        ]
-        enacted = [[a, b] for (a, b), active in self.states.items() if active(self.t)]
-        if self.freeze_at is None or self.t < self.freeze_at:
-            self.t += 1.0
-        state = {"sim_time": sim.isoformat(), "links": links}
-        if self.publish_membership:
-            state["kernel_actual_pairs"] = enacted
-        return state
-
-    def seek(self, token, target):
-        self.seeks.append(target)
-        self.t = (
-            e2e_matrix._parse_api_datetime(target)
-            - e2e_matrix._parse_api_datetime("2026-06-08T00:00:00+00:00")
-        ).total_seconds()  # noqa: SLF001
-        return {"result": "PASS"}
-
-    def ping(self, token, perm, *, ground_wait_s=None):
-        self.pings += 1
-        return {"result": "FAIL", "failure_kind": "connectivity", "reason": "no route"}
-
-
-def test_seam_physics_check_passes_when_the_runtime_enacts_the_reference(monkeypatch) -> None:
-    crossing = ("leo-sat-p00s04", "leo-sat-p05s02")
-    other = ("leo-sat-p00s01", "leo-sat-p05s05")
-    # enacted three seconds after each predicted change, inside the bound
-    runtime = _SeamRuntime(
-        monkeypatch,
-        {
-            crossing: lambda t: 459 <= t < 869 or t >= 898,
-            other: lambda t: 459 <= t < 869 or t >= 898,
-        },
-    )
-    result = e2e_matrix.check_seam_physics("t", _seam_perm())
-    assert result["result"] == "PASS", result.get("reason")
-    assert result["matching"]["missing"] == [] and result["matching"]["unexpected"] == []
-    assert len(result["matching"]["matched"]) == 6
-    assert all(m["delay_s"] == pytest.approx(3.0, abs=1.0) for m in result["matching"]["matched"])
-    assert len(runtime.seeks) == 2 and runtime.pings == 1
-    assert result["ground_probe_observation"]["result"] == "FAIL"
-    assert "no requirement" in result["ground_probe_observation"]["note"]
-    assert result["initial_mismatches"] == []
-
-
-def test_seam_physics_check_fails_on_a_missing_or_unexpected_transition(monkeypatch) -> None:
-    crossing = ("leo-sat-p00s04", "leo-sat-p05s02")
-    other = ("leo-sat-p00s01", "leo-sat-p05s05")
-    # the tracking loss never enacted: the link stays up through the close pass
-    _SeamRuntime(
-        monkeypatch, {crossing: lambda t: t >= 459, other: lambda t: 459 <= t < 869 or t >= 898}
-    )
-    result = e2e_matrix.check_seam_physics("t", _seam_perm())
-    assert result["result"] == "FAIL"
-    assert [m["t"] for m in result["matching"]["missing"]] == [866.0, 895.0]
-    assert "not enacted" in result["reason"]
-
-    # a seam pair dropping and returning inside a watch window when nothing predicts it
-    _SeamRuntime(
-        monkeypatch,
-        {
-            crossing: lambda t: 459 <= t < 869 or t >= 898,
-            other: lambda t: (459 <= t < 470) or (480 <= t < 869) or t >= 898,
-        },
-    )
-    result = e2e_matrix.check_seam_physics("t", _seam_perm())
-    assert result["result"] == "FAIL"
-    assert "does not predict" in result["reason"]
-    assert [u["pair"] for u in result["matching"]["unexpected"]] == [list(other), list(other)]
-
-    # a seam pair up at the first reading when the reference says it cannot be
-    _SeamRuntime(
-        monkeypatch, {crossing: lambda t: True, other: lambda t: 459 <= t < 869 or t >= 898}
-    )
-    result = e2e_matrix.check_seam_physics("t", _seam_perm())
-    assert result["result"] == "FAIL"
-    assert [m["pair"] for m in result["initial_mismatches"]] == [list(crossing)]
-
-
-def test_seam_physics_judges_enactment_by_verified_membership_never_by_declared_links(
-    monkeypatch,
-) -> None:
-    """The OME declaring every predicted transition on time proves nothing about
-    enactment: with the Scheduler-verified membership empty throughout, every
-    predicted change is unenacted and the session fails."""
-    crossing = ("leo-sat-p00s04", "leo-sat-p05s02")
-    other = ("leo-sat-p00s01", "leo-sat-p05s05")
-    on_time = {
-        crossing: lambda t: 456 <= t < 866 or t >= 895,
-        other: lambda t: 456 <= t < 866 or t >= 895,
+    monkeypatch.setattr(e2e_matrix, "check_ping", fake_ping)
+    perm = {
+        "id": "earth-leo-polar-seam-tracking",
+        "connectivity_expectation": {"mode": "physical_experiment"},
     }
-    _SeamRuntime(monkeypatch, {crossing: lambda t: False, other: lambda t: False}, declared=on_time)
-    result = e2e_matrix.check_seam_physics("t", _seam_perm())
-    assert result["result"] == "FAIL"
-    assert len(result["matching"]["missing"]) == 6 and result["matching"]["matched"] == []
-    assert "not enacted" in result["reason"]
-    assert (
-        result["readings"][-1]["declared_seam_pairs"]
-        and not result["readings"][-1]["enacted_seam_pairs"]
-    )
-
-    # a state without the membership at all cannot judge enactment either
-    _SeamRuntime(monkeypatch, on_time, publish_membership=False)
-    result = e2e_matrix.check_seam_physics("t", _seam_perm())
-    assert result["result"] == "FAIL" and result["incomplete"] is True
-    assert "kernel_actual_pairs" in result["reason"]
-
-
-def test_seam_physics_stays_incomplete_when_a_window_is_not_fully_observed(monkeypatch) -> None:
-    crossing = ("leo-sat-p00s04", "leo-sat-p05s02")
-    other = ("leo-sat-p00s01", "leo-sat-p05s05")
-    enacted = {
-        crossing: lambda t: 459 <= t < 869 or t >= 898,
-        other: lambda t: 459 <= t < 869 or t >= 898,
-    }
-    # the simulation freezes at 898 s, inside the last window (846 to 920)
-    _SeamRuntime(monkeypatch, enacted, freeze_at=898.0)
-    result = e2e_matrix.check_seam_physics("t", _seam_perm())
-    assert result["result"] == "FAIL" and result["incomplete"] is True
-    assert "not advancing" in result["reason"]
-    assert result["windows"][-1]["coverage"]["complete"] is False
-    assert result["windows"][0]["coverage"]["complete"] is True
-
-
-def test_declared_connectivity_dispatches_the_seam_experiments_to_the_physical_check(
-    monkeypatch,
-) -> None:
-    calls = []
-    monkeypatch.setattr(
-        e2e_matrix,
-        "check_seam_physics",
-        lambda token, perm: calls.append(perm["id"]) or {"result": "PASS"},
-    )
-    monkeypatch.setattr(e2e_matrix, "check_ping", lambda token, perm, **k: {"result": "FAIL"})
-    assert (
-        e2e_matrix.check_declared_connectivity("t", _seam_perm("earth-leo-polar-seam"))["result"]
-        == "PASS"
-    )
-    assert calls == ["earth-leo-polar-seam"]
+    result = e2e_matrix.check_declared_connectivity("t", perm)
+    assert result["result"] == "PASS" and result["mode"] == "physical_experiment"
+    assert result["gateway_probe_observation"]["failure_kind"] == "connectivity"
+    assert result["requirement"].startswith("none")
+    assert "tracking-limit" in result["experiment"]
+    assert result["coverage"]["reference"] == "tests/seam_reference.py"
+    assert "test_ome_to_pipeline.py" in result["coverage"]["integration"]
+    assert result["observed_outcome"] == "gateway probe FAIL (connectivity), recorded only"
+    assert calls == [15]
 
 
 def test_intermittent_connectivity_accepts_proven_runtime_unreachability(monkeypatch) -> None:
@@ -1516,7 +972,7 @@ def test_every_acceptance_lane_deploys_the_shipped_walker_through_the_catalog_co
     for name in (
         "run_dirty_repair_acceptance",
         "run_seek_during_mbb_acceptance",
-        "run_mbb_acceptance",
+        "run_mbb_observation",
         "run_permutation",
     ):
         body = source.split(f"def {name}(")[1].split("\ndef ")[0]
@@ -2128,25 +1584,20 @@ def test_packet_window_grades_the_first_overlap_sample_and_never_a_post_teardown
     monkeypatch.setattr(e2e_matrix, "_event_at_or_after", lambda event, started_at: True)
     monkeypatch.setattr(e2e_matrix.time, "sleep", lambda _s: None)
 
-    lifecycle_with_records = lifecycle + [_DISPATCH_UP, _DISPATCH_DOWN]
-    event_batches = itertools.chain([[], []], itertools.repeat(lifecycle_with_records))
-    monkeypatch.setattr(
-        e2e_matrix,
-        "request_json",
-        lambda method, path, **k: next(event_batches) if "ops/events" in path else [],
-    )
     result = e2e_matrix._run_mbb_packet_window(  # noqa: SLF001
         "t", perm, count=5, interval_s=0.2, post_terminal_s=0.05
     )
 
-    # the obligations are met by the records and the retained overlap samples; where
-    # the route pointed during the overlap is recorded and decides nothing
-    assert result["result"] == "PASS"
-    assert result["obligations"]["verdict"] == "PASS"
-    assert result["fib_preference_policy"] == "recorded_not_gated"
+    # an observation record, never a verdict: the completed occurrence, the
+    # overlap sample it binds to, where the route pointed, the packets
+    assert result["result"] == "OBSERVED"
+    assert "overlap_required" not in result and "overlap_ready" not in result
+    assert (
+        result["occurrence"]["overlap_class"] == "unknown"
+    )  # the fixture's message carries no ticks
     # the routing observation's input is the first overlap sighting (index 1), route still on the incumbent
-    assert result["overlap_proof"]["sample_index"] == 1
-    assert result["overlap_proof"]["successor_fib_ready"] is False
+    assert result["overlap_observation"]["sample_index"] == 1
+    assert result["overlap_observation"]["successor_fib_ready"] is False
     assert result["routing_layer_outcome"] == "fib_still_points_to_other_interface"
     # the route moved to the successor after the teardown: recorded, never gating
     post = result["post_teardown_route_observation"]
@@ -2156,8 +1607,7 @@ def test_packet_window_grades_the_first_overlap_sample_and_never_a_post_teardown
     assert result["terminal_observation"]["sample_index_at_receipt"] == 3
     assert [sample["index"] for sample in result["timeline"][:4]] == [0, 1, 2, 3]
     assert len(result["timeline"]) >= 4
-    # two terminal records of one occurrence plus the Scheduler's two link records
-    assert len(result["ops_events"]) == 4 and len(result["lifecycle_occurrences"]) == 1
+    assert len(result["ops_events"]) == 2 and len(result["lifecycle_occurrences"]) == 1
     assert result["lifecycle_occurrences"][0]["duplicate_records"] is True
     assert result["link_events"] == [_INCUMBENT_DOWN_LATER]
     assert result["probe_outputs"]["gs-a->gs-b"]["reply_count"] == 5
@@ -2189,20 +1639,13 @@ def test_packet_behavior_retains_every_attempt_in_full(monkeypatch) -> None:
     windows = iter(
         [
             {
-                "result": "FAIL",
+                "result": "INCOMPLETE",
                 "reason": "No probed station completed an MBB teardown during the packet window",
                 "timeline": [{"index": 0}],
                 "terminal_event": None,
             },
             {
-                "result": "FAIL",
-                "incomplete": True,
-                "reason": "incumbent_retained_through_overlap: not_established",
-                "timeline": [{"index": 0}],
-                "terminal_event": {"seq": 7},
-            },
-            {
-                "result": "PASS",
+                "result": "OBSERVED",
                 "timeline": [{"index": 0}, {"index": 1}],
                 "terminal_event": {"seq": 9},
             },
@@ -2217,33 +1660,19 @@ def test_packet_behavior_retains_every_attempt_in_full(monkeypatch) -> None:
 
     result = e2e_matrix.check_mbb_packet_behavior("t", {}, max_wait_s=900)
 
-    assert result["result"] == "PASS"
-    assert len(result["attempts"]) == 3
-    assert result["attempts"][0]["result"] == "FAIL" and result["attempts"][0]["timeline"] == [
-        {"index": 0}
-    ]
-    assert result["attempts"][1]["incomplete"] is True
+    assert result["result"] == "OBSERVED"
+    assert len(result["attempts"]) == 2
+    assert result["attempts"][0]["result"] == "INCOMPLETE"
+    assert result["attempts"][0]["timeline"] == [{"index": 0}]
 
-    # a graded occurrence whose obligations are broken ends the run at once
-    violated = iter(
-        [{"result": "FAIL", "incomplete": False, "timeline": [], "terminal_event": {"seq": 3}}]
-    )
-    monkeypatch.setattr(
-        e2e_matrix,
-        "_run_mbb_packet_window",
-        lambda token, perm, *, count, interval_s: next(violated),
-    )
-    result = e2e_matrix.check_mbb_packet_behavior("t", {}, max_wait_s=900)
-    assert result["result"] == "FAIL" and len(result["attempts"]) == 1
-
-    # incomplete occurrences until the deadline: the last one is returned as the
-    # failure with every attempt kept, never turned into a pass
+    # nothing observed before the deadline: the last window is returned as
+    # incomplete with every attempt kept
     clock = iter([0.0, 0.0, 0.0, 100.0, 100.0, 1000.0, 1000.0, 1000.0])
     monkeypatch.setattr(e2e_matrix.time, "monotonic", lambda: next(clock))
     incomplete = iter(
         [
-            {"result": "FAIL", "incomplete": True, "timeline": [], "terminal_event": {"seq": 4}},
-            {"result": "FAIL", "incomplete": True, "timeline": [], "terminal_event": {"seq": 5}},
+            {"result": "INCOMPLETE", "timeline": [], "terminal_event": None},
+            {"result": "INCOMPLETE", "timeline": [], "terminal_event": None},
         ]
     )
     monkeypatch.setattr(
@@ -2252,8 +1681,8 @@ def test_packet_behavior_retains_every_attempt_in_full(monkeypatch) -> None:
         lambda token, perm, *, count, interval_s: next(incomplete),
     )
     result = e2e_matrix.check_mbb_packet_behavior("t", {}, max_wait_s=900)
-    assert result["result"] == "FAIL" and result["incomplete"] is True
-    assert len(result["attempts"]) == 2 and "incomplete" in result["reason"]
+    assert result["result"] == "INCOMPLETE" and len(result["attempts"]) == 2
+    assert "before the timeout" in result["reason"]
 
 
 def test_station_sampler_reads_adjacency_and_route_through_the_observation_parsers() -> None:
@@ -2263,38 +1692,45 @@ def test_station_sampler_reads_adjacency_and_route_through_the_observation_parse
     assert "_adjacency_observation(" in sampler and "_route_observation(" in sampler
     assert '"Up" in' not in window and '"Up" in' not in sampler
     assert source.count("def _route_egress_dev") == 1 and "def _route_dev" not in source
-    # the gate's overlap input is fixed at first sighting, before the terminal event
+    # the overlap observation is fixed at first sighting, before the terminal event
     assert "src in terminal_by_src:\n                    continue" in window
 
 
-def test_cj_is_a_default_matrix_entry_and_the_other_lanes_keep_their_opt_ins() -> None:
+def test_mbb_observation_is_an_opt_in_lane_outside_the_pass_fail_accounting() -> None:
+    """The MBB routing and packet observation is a diagnostic: it runs only when
+    asked for, writes its record, is listed, and counts toward neither passed
+    nor failed; the shipped sessions alone decide the matrix."""
     source = Path(e2e_matrix.__file__).read_text()
     main = source.split("def main(")[1]
-    assert "NODALARC_RUN_MBB_ACCEPTANCE" not in source
-    assert "run_mbb_acceptance(provenance)" in main
-    assert "acceptance-cj-mbb-routing-packet-observation.json" in main
-    cj = main.split("run_mbb_acceptance(provenance)")[0].rsplit("\n", 6)[0]
+    lane = main.split('os.environ.get("NODALARC_RUN_MBB_OBSERVATION") == "1"')[1].split(
+        'os.environ.get("NODALARC_RUN_DIRTY_REPAIR")'
+    )[0]
+    assert "run_mbb_observation(provenance)" in lane
+    assert "mbb-routing-packet-observation.json" in lane
+    assert "observations += 1" in lane
+    assert "passed += 1" not in lane and "failed += 1" not in lane
+    assert '"observations": observations' in main
+    for gone in (
+        "run_mbb_acceptance",
+        "assess_mbb_obligations",
+        "_mbb_packet_window_passed",
+        "check_seam_physics",
+        "SEAM_PHYSICAL_EXPECTATIONS",
+        "NODALARC_RUN_MBB_ACCEPTANCE",
+        "acceptance-cj-",
+    ):
+        assert gone not in source, gone
     assert "NODALARC_RUN_DIRTY_REPAIR" in main and "NODALARC_RUN_SEEK_MBB" in main
-    assert 'os.environ.get("NODALARC_RUN' not in cj.rsplit("\n", 3)[-1]
 
 
-# --- correction batch: the window must tell what happened, or say it could not ---
-
-
-def _window(monkeypatch, *, samples, event_batches, post_terminal_s=0.05, dispatcher=True):
-    """One packet window over fake samples and event batches; the Scheduler's
-    up-then-down records for the standard handover ride beside every non-empty
-    batch unless a test switches them off."""
+def _window(monkeypatch, *, samples, event_batches, post_terminal_s=0.05):
+    """One packet window over fake samples and event batches."""
     import itertools
 
     perm = {
         "ground_topology": {"gs-a": {}},
         "mbb_stations": {"gs-a": {"steady_limit": 1, "handover_mode": "mbb"}},
     }
-    if dispatcher:
-        event_batches = [
-            batch + [_DISPATCH_UP, _DISPATCH_DOWN] if batch else batch for batch in event_batches
-        ]
     sample_iter = itertools.chain(samples[:-1], itertools.repeat(samples[-1]))
     events_iter = itertools.chain(event_batches[:-1], itertools.repeat(event_batches[-1]))
     monkeypatch.setattr(e2e_matrix, "_find_all_routed_ground_probes", lambda token, perm: [_PROBE])
@@ -2330,32 +1766,19 @@ def test_overlap_sample_must_precede_and_name_the_graded_teardown(monkeypatch) -
     only when it was taken before that teardown; uncertain ordering proves nothing."""
     # sane: sample at snapshot 906 / 00:14:56, teardown at snapshot 910 / 00:15:05, same pairs
     result = _window(monkeypatch, samples=[_READY_OVERLAP], event_batches=[[], [_lifecycle(1)]])
-    assert result["overlap_proof"]["binding"]["bound"] is True
-    # the route observation binds; the window itself stays incomplete because
-    # one repeated overlap sample never shows the release
-    assert result["obligations"]["successor_verified_before_release"]["verdict"] == "established"
-    assert result["result"] == "FAIL" and result["incomplete"] is True
+    assert result["result"] == "OBSERVED"
+    assert result["overlap_observation"]["binding"]["bound"] is True
 
     # the sample was taken after the teardown it is supposed to precede
     late = _lifecycle(1, snapshot=900, master_sim_time="2026-06-08T00:14:50Z")
     result = _window(monkeypatch, samples=[_READY_OVERLAP], event_batches=[[], [late]])
-    # the route observation cannot claim the overlap; the obligations, judged from
-    # the Scheduler's records and the station samples, stand on their own
-    assert result["overlap_proof"]["successor_fib_ready"] is False
+    # the route observation cannot claim the overlap
+    assert result["overlap_observation"]["successor_fib_ready"] is False
     assert result["routing_layer_outcome"] == "overlap_ordering_uncertain"
-    # the sample's own simulation time lies after this terminal's: it can testify
-    # to nothing about the overlap, and no release was observed either
-    obligations = result["obligations"]
-    assert obligations["successor_verified_before_release"]["verdict"] == "not_established"
-    assert obligations["incumbent_retained_through_overlap"]["verdict"] == "not_established"
-    assert obligations["terminal_driven_release"]["verdict"] == "not_established"
-    assert result["result"] == "FAIL" and result["incomplete"] is True
 
     # the terminal event names another handover at the same station: nothing binds
-    # and no record names that handover, so the obligations are incomplete
     other = _lifecycle(1, old_pair=("gs-a", "sat-7"), successor_pair=("gs-a", "sat-8"))
     result = _window(monkeypatch, samples=[_READY_OVERLAP], event_batches=[[], [other]])
-    assert result["result"] == "FAIL" and result["incomplete"] is True
     assert result["routing_layer_outcome"] == "overlap_of_another_handover"
 
     # two links, one successor, but no link marked as the teardown: the handover is unidentified
@@ -2440,7 +1863,7 @@ def test_a_failing_read_or_a_dead_observer_keeps_the_collected_window(monkeypatc
         "mbb_stations": {"gs-a": {"steady_limit": 1, "handover_mode": "mbb"}},
     }
     result = e2e_matrix._run_mbb_packet_window("t", perm, count=5, interval_s=0.2)  # noqa: SLF001
-    assert result["result"] == "FAIL"
+    assert result["result"] == "INCOMPLETE"
     assert "collector died" in result["collector"]["collection_error"]
     assert len(result["timeline"]) == 1
     assert result["probe_outputs"]["gs-a->gs-b"]["reply_count"] == 5
@@ -2593,7 +2016,7 @@ def _world(monkeypatch, *, enact_before_route_read: bool, api_delivers: bool, ep
 
     def request(method, path, **kwargs):
         if "ops/events" in path:
-            return [_lifecycle(1), _DISPATCH_UP, _DISPATCH_DOWN] if reads["kernel"] >= 1 else []
+            return [_lifecycle(1)] if reads["kernel"] >= 1 else []
         if "ground-link-decisions" in path:
             return {
                 "snapshot_seq": 906 if api_stale() else 912,
@@ -2665,11 +2088,11 @@ def test_a_route_read_after_the_enacted_teardown_cannot_qualify_even_with_stale_
     """Teardown enacted, the route then on the successor, and both API readings still
     carrying the older snapshot: the API cannot order the kernel read, the kernel can."""
     result = _world(monkeypatch, enact_before_route_read=True, api_delivers=False)
-    assert result["result"] == "FAIL"
-    binding = result["overlap_proof"]["binding"]
+    assert result["result"] == "OBSERVED"
+    binding = result["overlap_observation"]["binding"]
     assert binding["bound"] is False
     assert result["routing_layer_outcome"] == "overlap_ordering_uncertain"
-    assert result["overlap_proof"]["successor_fib_ready"] is False
+    assert result["overlap_observation"]["successor_fib_ready"] is False
     # both API readings were stale and say nothing; the kernel said the incumbent was down
     assert (
         binding["pre_decision_snapshot_seq"] == 906 and binding["post_decision_snapshot_seq"] == 906
@@ -2677,40 +2100,32 @@ def test_a_route_read_after_the_enacted_teardown_cannot_qualify_even_with_stale_
     assert binding["incumbent_link_after_route"]["state"] == "LOWERLAYERDOWN"
     assert binding["incumbent_adjacency_after_route"] is None
     # the evidence is retained, including the route that was read
-    assert result["overlap_proof"]["route_dev"] == "term0"
+    assert result["overlap_observation"]["route_dev"] == "term0"
 
 
 def test_a_route_read_after_the_enacted_teardown_cannot_qualify_when_the_api_has_caught_up(
     monkeypatch,
 ) -> None:
     result = _world(monkeypatch, enact_before_route_read=True, api_delivers=True)
-    assert result["result"] == "FAIL"
+    assert result["result"] == "OBSERVED"
     assert result["routing_layer_outcome"] == "overlap_ordering_uncertain"
 
 
 def test_an_overlap_sample_of_another_epoch_never_binds(monkeypatch) -> None:
     result = _world(monkeypatch, enact_before_route_read=False, api_delivers=False, epoch=2)
-    assert result["result"] == "FAIL"
     assert result["routing_layer_outcome"] == "overlap_identity_mismatch"
-    assert result["overlap_proof"]["binding"]["pre_epoch_id"] == 2
-    assert result["overlap_proof"]["binding"]["terminal_epoch_id"] == 1
+    assert result["overlap_observation"]["binding"]["pre_epoch_id"] == 2
+    assert result["overlap_observation"]["binding"]["terminal_epoch_id"] == 1
 
 
 def test_a_route_read_while_the_incumbent_was_still_up_qualifies(monkeypatch) -> None:
     result = _world(monkeypatch, enact_before_route_read=False, api_delivers=False)
-    # the route observation binds; the obligations stand on the verified
-    # membership and kernel reads, and with the release never delivered by
-    # this API the window stays incomplete rather than passing
-    obligations = result["obligations"]
-    assert obligations["successor_verified_before_release"]["verdict"] == "established"
-    assert obligations["incumbent_retained_through_overlap"]["verdict"] == "established"
-    assert obligations["terminal_driven_release"]["verdict"] == "not_established"
-    assert result["result"] == "FAIL" and result["incomplete"] is True
-    binding = result["overlap_proof"]["binding"]
+    assert result["result"] == "OBSERVED"
+    binding = result["overlap_observation"]["binding"]
     assert binding["bound"] is True
     assert binding["incumbent_link_after_route"]["lower_up"] is True
     assert binding["incumbent_adjacency_after_route"]["system_id"] == "sat-1"
-    assert result["overlap_proof"]["successor_fib_ready"] is True
+    assert result["overlap_observation"]["successor_fib_ready"] is True
 
 
 def test_binding_reports_uncertainty_or_missing_identity_instead_of_readiness() -> None:

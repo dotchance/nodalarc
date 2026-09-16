@@ -1655,11 +1655,11 @@ _DISPATCHER_LIST = re.compile(r"(up|down)=\[([^\]]*)\]")
 
 
 def _dispatcher_transitions(events: list[dict]) -> list[dict]:
-    """The Scheduler's own link-change records, oldest first: each "Link state
-    changed" ops record with the pairs it reported up and down. The Scheduler
-    writes this line after its kernel-actual set changed, and a pair enters that
-    set only on a verified Node Agent proof, so an "up" here is a successor
-    actuated and verified, and a "down" a release the Scheduler completed."""
+    """The Scheduler's "Link state changed" ops records, oldest first, with the
+    pairs each names. The Scheduler writes that line from the sets it asked
+    the Node Agents to add and remove, before any proof returns, so these
+    records show what was requested and prove nothing about actuation; they
+    are retained as context beside the verified evidence."""
     records = []
     for event in events:
         if event.get("code") != "DISPATCHER" or event.get("source") != "scheduler":
@@ -1686,11 +1686,6 @@ def _dispatcher_transitions(events: list[dict]) -> list[dict]:
     return records
 
 
-def _scheduler_record_for(records: list[dict], pair: list[str], direction: str) -> dict | None:
-    wanted = sorted(str(node) for node in pair)
-    return next((record for record in records if wanted in record[direction]), None)
-
-
 _TERMINAL_TICKS = re.compile(r"elapsed_ticks=(\d+)")
 _TERMINAL_VISIBLE = re.compile(r"old_pair_visible=(True|False)")
 
@@ -1709,7 +1704,7 @@ def _terminal_overlap_facts(event: dict) -> dict:
         ticks = int(found.group(1)) if found else None
     old_pair = sorted(str(node) for node in (details.get("old_pair") or []))
     visible = None
-    for key, authority in (details.get("authority_before") or {}).items():
+    for authority in (details.get("authority_before") or {}).values():
         if (
             isinstance(authority, dict)
             and sorted(str(n) for n in (authority.get("pair") or [])) == old_pair
@@ -1732,24 +1727,67 @@ def _overlap_class(facts: dict, configured_ticks: int | None) -> str:
     return "shortened_other"
 
 
-def _link_pairs(links: list[dict]) -> list[list[str]]:
-    return [sorted(str(n) for n in (link.get("node_a"), link.get("node_b"))) for link in links]
-
-
-def _kernel_incumbent_state(sample: dict, key: str) -> bool | None:
-    """The incumbent's carrier state from the kernel read of one sample, when it
-    was read: True (LOWER_UP), False (down), None (not read or unreadable)."""
+def _kernel_link_state(sample: dict, key: str, role: str) -> bool | None:
+    """One interface's carrier state from the sample's kernel read: True
+    (LOWER_UP), False (down), None (not read, or the read failed)."""
     after = (sample.get("kernel_after_route") or {}).get(key) or {}
-    link = after.get("incumbent_link")
+    link = after.get(f"{role}_link")
     if not isinstance(link, dict):
         return None
     return bool(link.get("lower_up"))
 
 
+def _sim_of(bracket: dict | None) -> datetime | None:
+    raw = (bracket or {}).get("sim_time")
+    if not raw:
+        return None
+    try:
+        return _parse_api_datetime(str(raw))
+    except ValueError:
+        return None
+
+
+def _sample_evidence(sample: dict, *, run: str | None, epoch: int | None, key: str) -> dict:
+    """What one station sample can testify to, or why it cannot: its identity,
+    the one Scheduler instance whose verified membership it read, the
+    membership before and after the kernel read, and the kernel read itself."""
+    pre, post = sample.get("pre") or {}, sample.get("post") or {}
+    identity_ok = (
+        run is not None
+        and epoch is not None
+        and pre.get("session_id") == run
+        and post.get("session_id") == run
+        and pre.get("epoch_id") == epoch
+        and post.get("epoch_id") == epoch
+    )
+    instances = set()
+    for bracket in (pre, post):
+        ids = bracket.get("scheduler_instance_ids")
+        if not isinstance(ids, list):
+            instances.add(None)
+        else:
+            instances.update(ids)
+    instance = next(iter(instances)) if len(instances) == 1 else None
+    membership_pre = {tuple(p) for p in (pre.get("kernel_actual_pairs") or [])}
+    membership_post = {tuple(p) for p in (post.get("kernel_actual_pairs") or [])}
+    return {
+        "index": sample.get("index"),
+        "identity_ok": identity_ok,
+        "instance": instance,
+        "instance_ok": instance is not None,
+        "sim_pre": _sim_of(pre),
+        "sim_post": _sim_of(post),
+        "membership_pre": membership_pre,
+        "membership_post": membership_post,
+        "membership_read": "kernel_actual_pairs" in pre and "kernel_actual_pairs" in post,
+        "incumbent_kernel": _kernel_link_state(sample, key, "incumbent"),
+        "successor_kernel": _kernel_link_state(sample, key, "successor"),
+    }
+
+
 def assess_mbb_obligations(
     *,
     terminal_event: dict,
-    terminal_sample_index: int,
     samples: list[dict],
     ops_events: list[dict],
     bad_events: list[dict],
@@ -1757,140 +1795,178 @@ def assess_mbb_obligations(
     configured_overlap_ticks: int | None,
 ) -> dict:
     """The agreed emulator obligations for one completed MBB occurrence, each
-    judged as established, not established or violated from the retained
-    records, never inferred from packets or from what routing did with the
-    interfaces: the successor actuated and verified before the incumbent's
-    release; the incumbent retained through the physically available overlap;
-    the release driven by the terminal lifecycle record; authority and
-    actuation failures exposed. Missing evidence is not established, never a
-    pass. Successor FIB preference during the overlap is recorded elsewhere as
-    a routing observation and is no obligation."""
+    judged established, not established or violated from evidence of one kind:
+    the station samples' Scheduler-verified kernel-actual membership (the
+    VS-API's recovered snapshot of the owning instance) and their own kernel
+    reads, ordered by the simulation time the same readings carry against the
+    terminal record's simulation time. A sample counts only when it names the
+    graded run and epoch, read exactly one Scheduler instance, and read the
+    membership before and after its kernel read. The Scheduler's requested-
+    change log lines are retained as context and prove nothing. Missing
+    evidence leaves an obligation not established, never a pass. Successor FIB
+    preference during the overlap is recorded elsewhere and is no obligation."""
     details = terminal_event.get("details") or {}
-    old_pair = sorted(str(n) for n in (details.get("old_pair") or []))
-    successor_pair = sorted(str(n) for n in (details.get("successor_pair") or []))
-    terminal_ts = _parse_event_time(terminal_event)
+    old_pair = tuple(sorted(str(n) for n in (details.get("old_pair") or [])))
+    successor_pair = tuple(sorted(str(n) for n in (details.get("successor_pair") or [])))
+    run = details.get("session_id")
+    epoch = details.get("epoch_id")
+    terminal_sim = _sim_of({"sim_time": details.get("master_sim_time")})
     facts = _terminal_overlap_facts(terminal_event)
     overlap_class = _overlap_class(facts, configured_overlap_ticks)
     records = _dispatcher_transitions(ops_events)
-    up_record = _scheduler_record_for(records, successor_pair, "up")
-    down_record = _scheduler_record_for(records, old_pair, "down")
-    up_ts = _parse_event_time(up_record) if up_record else None
-    down_ts = _parse_event_time(down_record) if down_record else None
 
-    # (a) successor actuated and verified before the release: the Scheduler's own
-    # record order, one publisher, one clock.
-    before_terminal = [
-        sample for sample in samples if int(sample.get("index", -1)) < terminal_sample_index
-    ]
-    coexistence = [
-        sample["index"]
-        for sample in before_terminal
-        if old_pair in _link_pairs(sample.get("active_ground_links") or [])
-        and successor_pair in _link_pairs(sample.get("active_ground_links") or [])
-    ]
-    if up_record is None or down_record is None:
-        a_verdict = "not_established"
-        a_reason = (
-            "no Scheduler record of the successor coming up inside the window"
-            if up_record is None
-            else "no Scheduler record of the incumbent's release inside the window"
-        )
-    elif up_ts is not None and down_ts is not None and up_ts <= down_ts:
-        a_verdict, a_reason = "established", "successor reported up before the incumbent's release"
+    evidence = [_sample_evidence(sample, run=run, epoch=epoch, key=probe_key) for sample in samples]
+    usable = [e for e in evidence if e["identity_ok"] and e["instance_ok"] and e["membership_read"]]
+    instances = {e["instance"] for e in usable}
+    rejected = {
+        "identity": [e["index"] for e in evidence if not e["identity_ok"]],
+        "instance": [e["index"] for e in evidence if e["identity_ok"] and not e["instance_ok"]],
+        "membership_unread": [
+            e["index"]
+            for e in evidence
+            if e["identity_ok"] and e["instance_ok"] and not e["membership_read"]
+        ],
+    }
+    if len(instances) > 1:
+        usable, multi = [], sorted(str(i) for i in instances)
     else:
-        a_verdict, a_reason = (
-            "violated",
-            "the incumbent's release was reported before the successor came up",
+        multi = []
+    if terminal_sim is None:
+        usable = []
+
+    def before_terminal(e: dict) -> bool:
+        return e["sim_post"] is not None and e["sim_post"] < terminal_sim
+
+    def after_terminal(e: dict) -> bool:
+        return e["sim_pre"] is not None and e["sim_pre"] >= terminal_sim
+
+    # (a) successor actuated and verified before the release: one sample whose
+    # verified membership held both pairs across its kernel read, and whose
+    # kernel read found both interfaces carrier-up.
+    coexistence = [
+        e
+        for e in usable
+        if before_terminal(e)
+        and old_pair in e["membership_pre"]
+        and successor_pair in e["membership_pre"]
+        and old_pair in e["membership_post"]
+        and successor_pair in e["membership_post"]
+    ]
+    corroborated = [
+        e for e in coexistence if e["incumbent_kernel"] is True and e["successor_kernel"] is True
+    ]
+    if corroborated:
+        a_verdict = "established"
+        a_reason = (
+            f"verified membership held both pairs and the kernel read both interfaces "
+            f"carrier-up in {len(corroborated)} sample(s)"
         )
+    elif coexistence:
+        a_verdict = "not_established"
+        a_reason = "verified membership held both pairs but no kernel read found both carrier-up"
+    else:
+        a_verdict = "not_established"
+        a_reason = "no sample found the successor verified while the incumbent was still held"
 
     # (b) incumbent retained through the physically available overlap: every
-    # retained sample of the station between the overlap's start and the
-    # terminal record must still carry the incumbent; a sample that does not,
-    # or a release record before the terminal, is a violation; no sample inside
-    # the overlap establishes nothing.
+    # usable sample from the overlap's start to the terminal's simulation time
+    # holds the incumbent in the verified membership before and after its
+    # kernel read, and the kernel found the incumbent carrier-up.
     started_index = next(
         (
             sample["index"]
             for sample in samples
             if any(
                 ev.get("category") == "mbb_overlap_started"
-                and sorted(str(n) for n in (ev.get("pair") or [])) == old_pair
+                and tuple(sorted(str(n) for n in (ev.get("pair") or []))) == old_pair
                 and (
                     not ev.get("successor_pair")
-                    or sorted(str(n) for n in ev["successor_pair"]) == successor_pair
+                    or tuple(sorted(str(n) for n in ev["successor_pair"])) == successor_pair
                 )
                 for ev in (sample.get("allocation_events") or [])
             )
         ),
         None,
     )
-    terminal_run = details.get("session_id")
-    terminal_epoch = details.get("epoch_id")
-    same_identity = [
-        sample
-        for sample in before_terminal
-        if (sample.get("session_id") in (None, terminal_run))
-        and (sample.get("epoch_id") in (None, terminal_epoch))
-    ]
-    other_identity = [s["index"] for s in before_terminal if s not in same_identity]
     inside = [
-        sample
-        for sample in same_identity
-        if started_index is not None and sample["index"] >= started_index
+        e
+        for e in usable
+        if started_index is not None and e["index"] >= started_index and before_terminal(e)
     ]
-    retained_samples = [
-        sample["index"]
-        for sample in inside
-        if old_pair in _link_pairs(sample.get("active_ground_links") or [])
-        and _kernel_incumbent_state(sample, probe_key) is not False
+    held = [
+        e
+        for e in inside
+        if old_pair in e["membership_pre"]
+        and old_pair in e["membership_post"]
+        and e["incumbent_kernel"] is True
     ]
-    dropped_samples = [
-        sample["index"] for sample in inside if sample["index"] not in retained_samples
+    released_early = [
+        e
+        for e in inside
+        if old_pair not in e["membership_pre"] or old_pair not in e["membership_post"]
     ]
-    release_before_terminal = (
-        down_ts is not None and terminal_ts is not None and down_ts < terminal_ts
-    )
-    if release_before_terminal or dropped_samples:
+    kernel_down = [e for e in inside if e not in released_early and e["incumbent_kernel"] is False]
+    unread = [
+        e for e in inside if e not in held and e not in released_early and e not in kernel_down
+    ]
+    if released_early or kernel_down:
         b_verdict = "violated"
         b_reason = (
-            "the incumbent's release was recorded before the terminal record"
-            if release_before_terminal
-            else "a sample inside the overlap no longer carried the incumbent"
+            "verified membership dropped the incumbent inside the overlap"
+            if released_early
+            else "the kernel read the incumbent carrier-down inside the overlap"
         )
-    elif not inside:
+    elif held:
+        b_verdict = "established"
+        b_reason = f"the incumbent stayed verified and carrier-up in {len(held)} sample(s) inside the overlap"
+    elif inside:
+        b_verdict = "not_established"
+        b_reason = "the samples inside the overlap did not read the incumbent at the kernel"
+    else:
         b_verdict = "not_established"
         b_reason = (
-            "no station sample fell inside the overlap"
+            "no usable sample fell inside the overlap"
             if started_index is not None
             else "the overlap's start was not seen in any station sample"
         )
-    else:
-        b_verdict, b_reason = (
-            "established",
-            f"the incumbent stayed present in {len(retained_samples)} sample(s) inside the overlap",
-        )
 
-    # (c) terminal-driven release: the Scheduler's release record names the old
-    # pair and follows the OME's terminal record; a release recorded earlier is
-    # not adjudicated here (publication stamps from two producers).
-    if down_record is None or down_ts is None or terminal_ts is None:
-        c_verdict, c_reason = (
-            "not_established",
-            "no release record for the old pair inside the window",
+    # (c) terminal-driven release: the first usable sample whose verified
+    # membership lacks the incumbent lies at or after the terminal's simulation
+    # time; one before it is a release the terminal did not drive.
+    held_times = [
+        e["sim_pre"] for e in usable if old_pair in e["membership_pre"] and e["sim_pre"] is not None
+    ]
+    releases = sorted(
+        (
+            e
+            for e in usable
+            if held_times
+            and old_pair not in e["membership_pre"]
+            and e["sim_pre"] is not None
+            and e["sim_pre"] >= min(held_times)
+        ),
+        key=lambda e: e["sim_pre"],
+    )
+    first_release = releases[0] if releases else None
+    if not held_times:
+        c_verdict = "not_established"
+        c_reason = "the incumbent was never observed in the verified membership"
+    elif first_release is None:
+        c_verdict, c_reason = "not_established", "no usable sample observed the incumbent released"
+    elif after_terminal(first_release):
+        c_verdict = "established"
+        c_reason = (
+            f"the incumbent left the verified membership by sample {first_release['index']}, "
+            f"at or after the terminal's simulation time"
         )
-        release_delay_s = None
+    elif before_terminal(first_release):
+        c_verdict = "violated"
+        c_reason = (
+            "the incumbent left the verified membership before the terminal's simulation time"
+        )
     else:
-        release_delay_s = (down_ts - terminal_ts).total_seconds()
-        if release_delay_s >= 0:
-            c_verdict, c_reason = (
-                "established",
-                f"release recorded {release_delay_s:.3f} s after the terminal record",
-            )
-        else:
-            c_verdict, c_reason = (
-                "not_established",
-                f"release recorded {-release_delay_s:.3f} s before the terminal record by publication stamps",
-            )
+        c_verdict = "not_established"
+        c_reason = "the release sample straddles the terminal's simulation time"
 
     # (d) failures exposed: every authority or actuation fault the session
     # published, by instance and station; a present fault fails the occurrence.
@@ -1914,13 +1990,23 @@ def assess_mbb_obligations(
         verdict = "PASS"
     else:
         verdict = "INCOMPLETE"
+    basis = {
+        "usable_samples": [e["index"] for e in usable],
+        "rejected_samples": rejected,
+        "scheduler_instances_seen": sorted(str(i) for i in instances if i is not None),
+        "multiple_instances": multi,
+        "terminal_sim_time": details.get("master_sim_time"),
+        "terminal_sim_time_parsed": terminal_sim is not None,
+    }
     return {
         "verdict": verdict,
         "occurrence": {
             "gs_id": details.get("gs_id"),
             "teardown_id": details.get("teardown_id"),
-            "old_pair": old_pair,
-            "successor_pair": successor_pair,
+            "old_pair": list(old_pair),
+            "successor_pair": list(successor_pair),
+            "session_id": run,
+            "epoch_id": epoch,
             "snapshot_seq": details.get("snapshot_seq"),
             "allocator_step": details.get("allocator_step"),
             "master_sim_time": details.get("master_sim_time"),
@@ -1930,33 +2016,38 @@ def assess_mbb_obligations(
             "configured_overlap_ticks": configured_overlap_ticks,
             "overlap_class": overlap_class,
         },
+        "evidence_basis": basis,
         "successor_verified_before_release": {
             "verdict": a_verdict,
             "reason": a_reason,
-            "successor_up_record": up_record,
-            "incumbent_down_record": down_record,
-            "state_samples_with_both_links": coexistence,
+            "samples_with_both_verified": [e["index"] for e in coexistence],
+            "samples_with_both_carrier_up": [e["index"] for e in corroborated],
         },
         "incumbent_retained_through_overlap": {
             "verdict": b_verdict,
             "reason": b_reason,
             "overlap_started_sample_index": started_index,
-            "samples_of_other_identity": other_identity,
-            "samples_inside_overlap": [sample["index"] for sample in inside],
-            "samples_with_incumbent_present": retained_samples,
-            "samples_without_incumbent": dropped_samples,
+            "samples_inside_overlap": [e["index"] for e in inside],
+            "samples_with_incumbent_held": [e["index"] for e in held],
+            "samples_released_early": [e["index"] for e in released_early],
+            "samples_kernel_down": [e["index"] for e in kernel_down],
+            "samples_without_kernel_reading": [e["index"] for e in unread],
         },
         "terminal_driven_release": {
             "verdict": c_verdict,
             "reason": c_reason,
-            "release_delay_s": release_delay_s,
-            "note": "publication stamps of two producers; ordering only, no cause",
+            "first_release_sample_index": None if first_release is None else first_release["index"],
+            "first_release_sim_time": None
+            if first_release is None
+            else first_release["sim_pre"].isoformat(),
+            "note": "simulation-time ordering of the same readings; no wall clock, no cause",
         },
         "failures_exposed": {"verdict": d_verdict, "events": exposed},
-        "scheduler_records": records,
+        "scheduler_requested_changes": records,
         "note": (
             "successor FIB preference during the overlap is a routing observation "
-            "(routing_layer_outcome), not an obligation"
+            "(routing_layer_outcome), not an obligation; the Scheduler's requested-change "
+            "log lines are context, not proof"
         ),
     }
 
@@ -2310,6 +2401,8 @@ def _bracket(token: str, src: str) -> dict:
     started = datetime.now(UTC)
     state = request_json("GET", "/api/v1/state", token=token)
     decisions = request_json("GET", "/api/v1/ground-link-decisions", token=token)
+    health = request_json("GET", "/api/v1/ops/health", token=token)
+    instances = health.get("scheduler_instances") if isinstance(health, dict) else None
     return {
         "read_started_wall": started.isoformat(),
         "read_finished_wall": datetime.now(UTC).isoformat(),
@@ -2320,6 +2413,21 @@ def _bracket(token: str, src: str) -> dict:
         "epoch_id": decisions.get("epoch_id"),
         "allocation_events": decisions.get("allocation_events", []),
         "active_ground_links": _ground_links_by_gs(state).get(src, []),
+        # The Scheduler-verified kernel-actual membership the VS-API recovered
+        # from the owning instance's snapshot: the only state here that means
+        # "actuated and proven". The OME-declared link list above is context.
+        "kernel_actual_pairs": sorted(
+            sorted(str(n) for n in pair)
+            for pair in (state.get("kernel_actual_pairs") or [])
+            if isinstance(pair, (list, tuple)) and len(pair) == 2
+        ),
+        "scheduler_instance_ids": sorted(
+            str(item.get("scheduler_instance_id"))
+            for item in (instances or [])
+            if isinstance(item, dict) and item.get("scheduler_instance_id")
+        )
+        if isinstance(instances, list)
+        else None,
     }
 
 
@@ -3106,7 +3214,6 @@ def _run_mbb_packet_window(
     terminal = terminal_by_src[terminal_src]
     obligations = assess_mbb_obligations(
         terminal_event=terminal["event"],
-        terminal_sample_index=terminal["sample_index_at_receipt"],
         samples=[sample for sample in samples if sample.get("src") in (None, terminal_src)],
         ops_events=list(ops_events.values()),
         bad_events=bad_events,
@@ -3778,7 +3885,11 @@ def _match_seam_transitions(expected: list[dict], observed: list[dict]) -> dict:
                 for obs in unmatched
                 if obs["pair"] == item["pair"]
                 and obs["visible"] == item["visible"]
-                and item["t"] - lower <= obs["t"] <= item["t"] + upper
+                and obs.get("t_previous") is not None
+                # the change happened somewhere in (t_previous, t]: the whole
+                # interval must lie inside the tolerance to count
+                and item["t"] - lower <= obs["t_previous"]
+                and obs["t"] <= item["t"] + upper
             ),
             None,
         )
@@ -3791,14 +3902,23 @@ def _match_seam_transitions(expected: list[dict], observed: list[dict]) -> dict:
 
 
 def _seam_state_reading(token: str, start: datetime, pairs: set[tuple[str, str]]) -> dict:
+    """One reading of the seam pairs: the Scheduler-verified kernel-actual
+    membership (``kernel_actual_pairs``, the enacted set the check judges) and
+    the OME-declared active links (context only), with the simulation time of
+    the same reading."""
     state = request_json("GET", "/api/v1/state", token=token)
     links = state.get("links", [])
     if isinstance(links, dict):
         links = list(links.values())
-    active = {
+    declared = {
         tuple(sorted((str(link.get("node_a")), str(link.get("node_b")))))
         for link in links
         if link.get("state") == "active"
+    }
+    enacted = {
+        tuple(sorted(str(n) for n in pair))
+        for pair in (state.get("kernel_actual_pairs") or [])
+        if isinstance(pair, (list, tuple)) and len(pair) == 2
     }
     sim_raw = state.get("sim_time")
     sim_t = (_parse_api_datetime(str(sim_raw)) - start).total_seconds() if sim_raw else None
@@ -3806,8 +3926,40 @@ def _seam_state_reading(token: str, start: datetime, pairs: set[tuple[str, str]]
         "wall": datetime.now(UTC).isoformat(),
         "sim_time": sim_raw,
         "t": sim_t,
-        "active_seam_pairs": sorted(pair for pair in active if pair in pairs),
+        "membership_published": "kernel_actual_pairs" in state,
+        "enacted_seam_pairs": sorted(pair for pair in enacted if pair in pairs),
+        "declared_seam_pairs": sorted(pair for pair in declared if pair in pairs),
     }
+
+
+SEAM_COVERAGE_GAP_S = 3.0
+SEAM_FROZEN_READINGS = 5
+
+
+def _window_coverage(window: dict, readings: list[dict]) -> dict:
+    """Whether the readings covered the watch window without a gap: one reading
+    at or before its start, one at or after its end, and no two consecutive
+    readings inside it further apart than the coverage gap."""
+    times = sorted(r["t"] for r in readings if r.get("t") is not None)
+    if not times:
+        return {"complete": False, "reason": "no reading"}
+    if min(times) > window["start"]:
+        return {"complete": False, "reason": "no reading at or before the window start"}
+    if max(times) < window["end"]:
+        return {"complete": False, "reason": "readings ended before the window end"}
+    inside = [
+        t
+        for t in times
+        if window["start"] - SEAM_COVERAGE_GAP_S <= t <= window["end"] + SEAM_COVERAGE_GAP_S
+    ]
+    gaps = [b - a for a, b in zip(inside, inside[1:], strict=False)]
+    widest = max(gaps) if gaps else 0.0
+    if widest > SEAM_COVERAGE_GAP_S:
+        return {
+            "complete": False,
+            "reason": f"a {widest:.1f} s gap between readings inside the window",
+        }
+    return {"complete": True, "reason": None, "widest_gap_s": widest}
 
 
 def check_seam_physics(token: str, perm: dict) -> dict:
@@ -3841,6 +3993,8 @@ def check_seam_physics(token: str, perm: dict) -> dict:
 
     initial = _seam_state_reading(token, start, pair_set)
     evidence["initial_reading"] = initial
+    if not initial["membership_published"]:
+        return {**evidence, "incomplete": True, "reason": "state carried no kernel_actual_pairs"}
     expected_now = []
     for pair, items in predictions.items():
         visible = False
@@ -3857,7 +4011,7 @@ def check_seam_physics(token: str, perm: dict) -> dict:
         item
         for item in expected_now
         if not item["near_change"]
-        and (tuple(item["pair"]) in {tuple(p) for p in initial["active_seam_pairs"]})
+        and (tuple(item["pair"]) in {tuple(p) for p in initial["enacted_seam_pairs"]})
         != item["visible"]
     ]
     evidence["initial_expected"] = expected_now
@@ -3887,21 +4041,31 @@ def check_seam_physics(token: str, perm: dict) -> dict:
                     break
             previous = _seam_state_reading(token, start, pair_set)
             readings.append(previous)
+            window_readings = [previous]
             deadline = (
                 time.monotonic()
                 + (window["end"] - max(previous["t"] or 0.0, window["seek_to"]))
                 + 60
             )
+            unchanged = 0
             while time.monotonic() < deadline:
                 time.sleep(1.0)
                 reading = _seam_state_reading(token, start, pair_set)
                 readings.append(reading)
+                window_readings.append(reading)
                 if reading["t"] is None:
                     collection_error = "state carried no sim time"
                     break
+                if not reading["membership_published"]:
+                    collection_error = "state carried no kernel_actual_pairs"
+                    break
+                unchanged = unchanged + 1 if reading["t"] == previous["t"] else 0
+                if unchanged >= SEAM_FROZEN_READINGS:
+                    collection_error = f"simulation time not advancing at t={reading['t']}"
+                    break
                 if reading["t"] >= window["start"]:
-                    before = {tuple(p) for p in previous["active_seam_pairs"]}
-                    after = {tuple(p) for p in reading["active_seam_pairs"]}
+                    before = {tuple(p) for p in previous["enacted_seam_pairs"]}
+                    after = {tuple(p) for p in reading["enacted_seam_pairs"]}
                     for pair in sorted(after - before):
                         observations.append(
                             {
@@ -3925,6 +4089,7 @@ def check_seam_physics(token: str, perm: dict) -> dict:
                 previous = reading
                 if reading["t"] >= window["end"]:
                     break
+            window["coverage"] = _window_coverage(window, window_readings)
             if collection_error:
                 break
     except Exception as exc:  # noqa: BLE001 - the collection error is the evidence
@@ -3941,8 +4106,18 @@ def check_seam_physics(token: str, perm: dict) -> dict:
             "collection_error": collection_error,
         }
     )
+    uncovered = [w for w in windows if not (w.get("coverage") or {}).get("complete")]
+    evidence["incomplete"] = bool(collection_error) or bool(uncovered)
     if collection_error:
         evidence["reason"] = f"collection failed: {collection_error}"
+        return evidence
+    if uncovered:
+        first = uncovered[0]
+        evidence["reason"] = (
+            f"{len(uncovered)} watch window(s) not fully observed "
+            f"(first: {first['start']:.0f} to {first['end']:.0f} s, "
+            f"{(first.get('coverage') or {}).get('reason') or 'not reached'})"
+        )
         return evidence
     if initial_mismatches:
         evidence["reason"] = (

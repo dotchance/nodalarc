@@ -159,18 +159,13 @@ sudo KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl get namespace nodalarc -o json
 
 **Symptom:** VXLAN tunnels or veth pairs from a previous session interfere with a new deployment.
 
-**Check:**
+**Check:** `make teardown` runs the Node Agent's cleaner on every host that carries the `nodalarc.io/node-agent=true` label, judges each host by the cleaner's report and refuses to uninstall while any host is unverified. Its output names the host and the devices that remain. For a read-only look at one host:
 ```bash
-ip link show | grep -E "vx[0-9]{5}|vh[0-9]{5}|vp[0-9]{5}"
+ssh node02 "ip -o link show"
 ```
+NodalArc's device names come from `lib/nodalarc/runtime_naming.py`.
 
-**Fix:** The teardown script cleans these, but if state persists:
-```bash
-# Remove all nodalarc-created interfaces
-for iface in $(ip link show | grep -oE "(vx|vh|vp)[0-9]{5}" | sort -u); do
-  sudo ip link del $iface
-done
-```
+**Fix:** Rerun `make teardown` once the cause it reported is addressed. Do not delete devices by hand: the cleaner is the one implementation that recognizes every managed device and verifies its absence, and the teardown's report is the record. If the namespace is already gone, `make teardown` can verify only the workstation and says so; `make install` restores the Node Agents, and the next `make teardown` verifies every host.
 
 ## Performance Issues
 

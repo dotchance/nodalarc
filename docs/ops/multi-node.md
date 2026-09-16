@@ -134,8 +134,9 @@ Initial tunnel creation on cold start takes about 30 seconds for 176 tunnels. Th
 ## Monitoring Cross-Node Health
 
 ```bash
-# Count VXLAN tunnels on a specific node
-ssh node02 "ip link show | grep -cE 'vx[0-9]{5}'"
+# Count NodalArc VXLAN tunnels on a specific node (tunnel devices are named
+# vx plus six hex digits by lib/nodalarc/runtime_naming.py)
+ssh node02 "ip -o link show type vxlan | grep -c ': vx'"
 
 # Check substrate latency measurements
 sudo KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl logs -l app=nodalarc-node-agent -n nodalarc | grep substrate

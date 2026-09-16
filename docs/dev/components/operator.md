@@ -135,5 +135,6 @@ The kopf handler on `@kopf.on.delete` performs cleanup that GC doesn't handle (l
 | `__main__.py` | kopf entry point |
 | `handlers.py` | kopf handlers, reconciliation logic, error handling |
 | `session_deployer.py` | Pod creation, placement, config delivery, wiring |
-| `runtime_session.py` | Verified runtime loading from the uploaded catalog closure |
 | `workloads/` | Profile admission, environment resolution, composition, and adapter rendering |
+
+Verified runtime loading from the uploaded catalog closure lives in the shared library, `lib/nodalarc/cr_runtime_config.py` (`load_cr_runtime_config`), which `handlers.py` and `session_deployer.py` call.

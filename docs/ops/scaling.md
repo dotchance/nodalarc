@@ -104,6 +104,7 @@ TOKEN=$(curl -s http://localhost:8080/api/v1/auth/token | python3 -c "import jso
 curl -s -H "Authorization: Bearer $TOKEN" http://localhost:8080/api/v1/state | \
   python3 -c "import json,sys; d=json.load(sys.stdin); print(f'{len(d[\"links\"])} active links')"
 
-# VXLAN tunnel count per node
-ssh node02 "ip link show | grep -cE 'vx[0-9]{5}'"
+# NodalArc VXLAN tunnel count per node (tunnel devices are named vx plus six
+# hex digits by lib/nodalarc/runtime_naming.py)
+ssh node02 "ip -o link show type vxlan | grep -c ': vx'"
 ```

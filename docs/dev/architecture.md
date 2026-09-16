@@ -158,7 +158,7 @@ smuggle state through side channels.
 | `NODALARC_OME` | VisibilityEvent, ClockTick, HeartbeatTick | Limits-based history for two orbital periods |
 | `NODALARC_LINKS` | LinkUp, LinkDown, LatencyUpdate, LinkStateSnapshot, GroundLinkDecisionSnapshot, ActualLinkSnapshot | Replace-not-merge latest state per subject; bounded link-event history |
 | `NODALARC_SESSION` | SessionEphemeris, PlaybackState | Latest value per subject |
-| `NODALARC_MI` | Measurement and instrumentation events | Bounded event history |
+| `NODALARC_MI` | Declared in the registry for the deferred measurement service; no chart creates it and it is outside the deployed-stream table | Not deployed |
 | `NODALARC_OPS` | Operational events, including OME MBB terminal lifecycle events | Four-hour transient transport; terminal lifecycle events that matter after the run are persisted by VS-API into SQLite/session artifacts |
 | `NODALARC_DEBUG` | On-demand debug events | Five-minute transient history |
 

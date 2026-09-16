@@ -30,4 +30,4 @@ stable.
 
 ## Scope notes (current code)
 
-- MI does not subscribe to the link up and down subjects (`link_up_subject(session_id)` / `link_down_subject(session_id)`). Those events reach live subscribers only: the `NODALARC_LINKS` stream keeps the latest message per subject, so it holds no link-state history. Mirroring the events into SQLite is a follow-up for the deferred MI work, not a current responsibility.
+- MI does not subscribe to the link up and down subjects (`link_up_subject(session_id)` / `link_down_subject(session_id)`). `NODALARC_LINKS` retains the latest message per subject, not a chronological history of link transitions. Mirroring the events into SQLite is a follow-up for the deferred MI work, not a current responsibility.

@@ -24,6 +24,9 @@ from node_agent.handlers import (
     handle_set_latency,
 )
 
+pytestmark = pytest.mark.usefixtures("_node_agent_ops_spool_path")
+
+
 # All tests pass handles={} — an initialized but empty map.
 # This represents a node where wiring completed but no session pods
 # are scheduled. handles=None means wiring never happened and is

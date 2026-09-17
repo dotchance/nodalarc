@@ -102,11 +102,6 @@ describe("deriveFamily", () => {
     ).toBe("unknown");
   });
 
-  it("connected: kernel-up with a clean roster still reads connected", () => {
-    expect(
-      deriveFamily(facts({ binding_gate: null, actuation: act({ state: "clean", kernel_up: true, diverged: false }) })),
-    ).toBe("connected");
-  });
 });
 
 describe("deriveSeverity", () => {

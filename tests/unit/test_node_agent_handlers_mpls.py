@@ -31,6 +31,9 @@ from node_agent.kernel_verifier import KernelStateConflict, Proof
 from node_agent.mpls import MplsInputError
 from node_agent.pid_discovery import NamespaceHandle
 
+pytestmark = pytest.mark.usefixtures("_node_agent_ops_spool_path")
+
+
 FENCE = RuntimeFence(session_id="demo", wiring_generation="sha256:" + "a" * 64)
 SAT = "sat-P00S00"
 GS = "gs-den"

@@ -88,7 +88,7 @@ def _restore_process_logging():
     nodal_logging._nats_handler = nats_handler
 
 
-@pytest.fixture(autouse=True)
+@pytest.fixture
 def _node_agent_ops_spool_path(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
     """Keep Node Agent pre-init OpsEvent spooling inside the test temp dir."""
     monkeypatch.setenv("NODE_AGENT_OPS_SPOOL", str(tmp_path / "node-agent-ops-events.jsonl"))

@@ -25,84 +25,49 @@ pytestmark = pytest.mark.integration
 PROJECT_ROOT = Path(__file__).parent.parent.parent
 
 
-def _temporary_session(source_name: str, *, step_seconds: int) -> str:
+def _generate_timeline(source_name: str, output_dir: Path, run_id: str):
     import tempfile
 
     import yaml
+    from ome.main import run as ome_run
 
     source = PROJECT_ROOT / "catalog" / "nodalarc" / "sessions" / source_name
     session = load_configuration_yaml(source.read_text(encoding="utf-8"))
-    session["time"]["step_seconds"] = step_seconds
-    with tempfile.NamedTemporaryFile(
-        mode="w",
-        suffix=".yaml",
-        dir=str(PROJECT_ROOT),
-        delete=False,
-    ) as file_handle:
-        yaml.safe_dump(session, file_handle, sort_keys=False)
-        return file_handle.name
+    session["time"]["step_seconds"] = 10
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", dir=PROJECT_ROOT) as handle:
+        yaml.safe_dump(session, handle, sort_keys=False)
+        handle.flush()
+        return ome_run(handle.name, str(output_dir), run_id=run_id)
 
 
-@pytest.fixture
-def short_session_path():
-    """Create a temporary canonical session for the short pipeline run."""
-    return _temporary_session("earth-leo-simple.yaml", step_seconds=10)
-
-
-@pytest.fixture
-def sample_session_path():
-    """Create a segment-session fixture for the sample timeline."""
-    return _temporary_session("earth-leo-walker.yaml", step_seconds=10)
-
-
-@pytest.fixture
-def polar_seam_session_path():
-    """The range experiment: the polar sky plus the six same-slot seam pairs."""
-    return _temporary_session("earth-leo-polar-seam.yaml", step_seconds=10)
-
-
-@pytest.fixture
-def polar_seam_tracking_session_path():
-    """The tracking experiment: the seam-crossing phasing, six two-slot-offset seam pairs."""
-    return _temporary_session("earth-leo-polar-seam-tracking.yaml", step_seconds=10)
-
-
-@pytest.fixture
-def short_timeline(short_session_path, tmp_path):
-    from ome.main import run as ome_run
-
-    path = ome_run(short_session_path, str(tmp_path), run_id="test-short-pipeline")
-    Path(short_session_path).unlink(missing_ok=True)
-    return path
-
-
-@pytest.fixture
-def sample_timeline(sample_session_path, tmp_path):
-    from ome.main import run as ome_run
-
-    path = ome_run(sample_session_path, str(tmp_path), run_id="test-sample")
-    Path(sample_session_path).unlink(missing_ok=True)
-    return path
-
-
-@pytest.fixture
-def polar_seam_timeline(polar_seam_session_path, tmp_path):
-    from ome.main import run as ome_run
-
-    path = ome_run(polar_seam_session_path, str(tmp_path), run_id="test-polar-seam")
-    Path(polar_seam_session_path).unlink(missing_ok=True)
-    return path
-
-
-@pytest.fixture
-def polar_seam_tracking_timeline(polar_seam_tracking_session_path, tmp_path):
-    from ome.main import run as ome_run
-
-    path = ome_run(
-        polar_seam_tracking_session_path, str(tmp_path), run_id="test-polar-seam-tracking"
+@pytest.fixture(scope="module")
+def short_timeline(tmp_path_factory):
+    return _generate_timeline(
+        "earth-leo-simple.yaml", tmp_path_factory.mktemp("short"), "test-short-pipeline"
     )
-    Path(polar_seam_tracking_session_path).unlink(missing_ok=True)
-    return path
+
+
+@pytest.fixture(scope="module")
+def sample_timeline(tmp_path_factory):
+    return _generate_timeline(
+        "earth-leo-walker.yaml", tmp_path_factory.mktemp("sample"), "test-sample"
+    )
+
+
+@pytest.fixture(scope="module")
+def polar_seam_timeline(tmp_path_factory):
+    return _generate_timeline(
+        "earth-leo-polar-seam.yaml", tmp_path_factory.mktemp("seam"), "test-polar-seam"
+    )
+
+
+@pytest.fixture(scope="module")
+def polar_seam_tracking_timeline(tmp_path_factory):
+    return _generate_timeline(
+        "earth-leo-polar-seam-tracking.yaml",
+        tmp_path_factory.mktemp("seam-tracking"),
+        "test-polar-seam-tracking",
+    )
 
 
 def _load_events(path):
@@ -115,20 +80,10 @@ def _load_events(path):
 
 
 class TestCanonicalPipeline:
-    def test_timeline_contains_clock_ticks(self, short_timeline):
-        events = _load_events(short_timeline)
-        types = {e["event_type"] for e in events}
-        assert "ClockTick" in types
-
     def test_timeline_event_types(self, short_timeline):
         events = _load_events(short_timeline)
         types = {e["event_type"] for e in events}
         assert types == {"ClockTick", "VisibilityEvent"}
-
-    def test_timeline_contains_visibility_events(self, short_timeline):
-        events = _load_events(short_timeline)
-        types = {e["event_type"] for e in events}
-        assert "VisibilityEvent" in types
 
     def test_all_events_deserialize(self, short_timeline):
         """All timeline event types must be recognized and schema-valid."""
@@ -516,16 +471,16 @@ class TestPolarVisibilityTransitions:
                 kept, self._declared_start("earth-leo-polar-seam-tracking.yaml")
             )
 
-    def test_tracking_experiment_resolves_its_declared_facts(
-        self, polar_seam_tracking_session_path
-    ):
+    def test_tracking_experiment_resolves_its_declared_facts(self):
         """Resolution carries the declared phasing, orbit and terminal limits into OME's inputs."""
         import math
 
         from ome.main import _load_session_config
 
-        cfg = _load_session_config(polar_seam_tracking_session_path, run_id="test-seam-facts")
-        Path(polar_seam_tracking_session_path).unlink(missing_ok=True)
+        cfg = _load_session_config(
+            PROJECT_ROOT / "catalog/nodalarc/sessions/earth-leo-polar-seam-tracking.yaml",
+            run_id="test-seam-facts",
+        )
         elements = {sat.node_id: sat.elements for sat in cfg.satellites}
         limits = {sat.node_id: sat.isl_terminals[0] for sat in cfg.satellites}
         max_range_km, max_rate_deg_s = self._terminal_limits()

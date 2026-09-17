@@ -16,7 +16,14 @@ from nodalarc.models.events import (
 )
 from nodalarc.models.ground_policy import HandoverPolicySpec, SelectionPolicySpec
 from nodalarc.models.session import GroundSchedulingConfig
-from nodalarc.ome_runtime import IslTerminal, SatelliteNode
+from nodalarc.models.terminal_physics import TerminalBoresight
+from nodalarc.ome_runtime import (
+    GroundStation,
+    GroundStationFile,
+    GroundTerminal,
+    IslTerminal,
+    SatelliteNode,
+)
 from ome.event_stream import build_link_state_snapshot, build_session_ephemeris, build_step_context
 from ome.snapshot_builder import LinkSnapshotSource
 
@@ -33,41 +40,83 @@ def _ground_scheduling() -> GroundSchedulingConfig:
 
 
 def _load_test_ctx():
-    """Load a small test constellation and build StepContext."""
-    session, _resolved, gs_file, sats, addressing, neighbors, candidates = (
-        load_runtime_ome_test_inputs(origin="test.session_ephemeris")
+    """Two independently mutable satellites and one fixed node for ephemeris checks."""
+    sats = [
+        SatelliteNode(
+            plane=0,
+            slot=slot,
+            elements=earth_elements_from_params(550.0, 53.0, 22.5, 45.0 + slot * 90.0),
+            elements_epoch_unix=EPOCH,
+            isl_terminal_count=0,
+            ground_terminal_count=0,
+            node_id=f"sat-p00s{slot:02d}",
+            central_body="earth",
+            propagator_id="j2-mean-elements",
+        )
+        for slot in range(2)
+    ]
+    gs_file = GroundStationFile(
+        default_terminals=[
+            GroundTerminal(
+                type="rf",
+                count=1,
+                interface_indices=(0,),
+                bandwidth_mbps=100.0,
+                tracking_capacity=1,
+                max_range_km=2000.0,
+                field_of_regard_deg=120.0,
+                max_tracking_rate_deg_s=1.5,
+                boresight=TerminalBoresight(mode="local_vertical"),
+            )
+        ],
+        stations=[
+            GroundStation(name="gs-test", lat_deg=39.0, lon_deg=-77.0, reference_body="earth")
+        ],
+        default_selection_policy=SelectionPolicySpec(name="highest-elevation", params={}),
+    )
+    addressing = StaticOmeAddressing(
+        satellite_ids=tuple(sat.node_id for sat in sats),
+        ground_station_ids=("gs-test",),
     )
 
     ctx = build_step_context(
         satellites=sats,
         addressing=addressing,
         gs_file=gs_file,
-        neighbors=neighbors,
-        propagator_id=session.orbit.propagator,
-        ground_scheduling=session.scheduling.ground,
-        ground_candidate_satellites_by_gs=candidates,
-        ground_link_model=session.ground_link_model,
-        body_frames=session.body_frames,
+        neighbors=frozenset(),
+        propagator_id="j2-mean-elements",
+        ground_scheduling=_ground_scheduling(),
+        ground_candidate_satellites_by_gs={"gs-test": ()},
+        body_frames=EARTH_TEST_BODY_FRAMES,
     )
     return ctx, sats, gs_file
 
 
-# The loaded session's start time: the owned validity anchor of every
-# satellite's working elements. Guarded by test_epoch_matches_the_owned_anchor.
+# Element validity epoch, also declared by the shipped catalog session below.
 EPOCH = 1780876800.0  # 2026-06-08T00:00:00 UTC
 
 
 class TestBuildSessionEphemeris:
     def test_epoch_matches_the_owned_anchor(self):
-        """EPOCH must be the elements' validity anchor, not an arbitrary date.
-
-        A hard-coded 2025 epoch against 2026-anchored elements once blessed
-        a 523-day silent relabeling on the wire. This pins the alignment so
-        a changed session fixture cannot quietly reintroduce it.
-        """
-        ctx, sats, _ = _load_test_ctx()
+        """The shipped session's element epoch and node population reach the wire."""
+        session, _resolved, gs_file, sats, addressing, neighbors, candidates = (
+            load_runtime_ome_test_inputs(origin="test.session_ephemeris")
+        )
+        ctx = build_step_context(
+            satellites=sats,
+            addressing=addressing,
+            gs_file=gs_file,
+            neighbors=neighbors,
+            propagator_id=session.orbit.propagator,
+            ground_scheduling=session.scheduling.ground,
+            ground_candidate_satellites_by_gs=candidates,
+            ground_link_model=session.ground_link_model,
+            body_frames=session.body_frames,
+        )
         for sat in sats:
             assert sat.elements_epoch_unix == EPOCH
+        eph = build_session_ephemeris(ctx, EPOCH, epoch_id=0)
+        assert set(eph.nodes) == {sat.node_id for sat in sats} | set(ctx.gs_positions)
 
     def test_wire_elements_are_advanced_to_a_later_epoch(self):
         """A later wire epoch carries every advanced field, never a relabel.
@@ -110,7 +159,7 @@ class TestBuildSessionEphemeris:
             ctx.satellites.remove(eccentric)
 
         for sat in probe_sats:
-            nid = sat.node_id or ctx.addressing.sat_id(sat.plane, sat.slot)
+            nid = sat.node_id
             node = eph.nodes[nid]
             expected = advance_mean_elements(
                 sat.elements,
@@ -137,7 +186,7 @@ class TestBuildSessionEphemeris:
     def test_satellite_mapped_to_configured_mean_element_propagator(self):
         ctx, sats, _ = _load_test_ctx()
         eph = build_session_ephemeris(ctx, EPOCH, epoch_id=0)
-        sat = eph.nodes[ctx.addressing.sat_id(0, 0)]
+        sat = eph.nodes[sats[0].node_id]
         assert isinstance(sat, EphemerisNodeKeplerian)
         assert sat.type == "keplerian"
         assert sat.plane == 0
@@ -159,7 +208,7 @@ class TestBuildSessionEphemeris:
             body_frames=ctx.body_frames,
         )
         eph = build_session_ephemeris(ctx, EPOCH, epoch_id=0)
-        sat = eph.nodes[ctx.addressing.sat_id(0, 0)]
+        sat = eph.nodes[sats[0].node_id]
         assert isinstance(sat, EphemerisNodeKeplerian)
         assert sat.propagator == "j2-mean-elements"
 
@@ -183,8 +232,8 @@ class TestBuildSessionEphemeris:
 
         eph = build_session_ephemeris(ctx, EPOCH, epoch_id=0)
 
-        first = eph.nodes[ctx.addressing.sat_id(sats[0].plane, sats[0].slot)]
-        second = eph.nodes[ctx.addressing.sat_id(sats[1].plane, sats[1].slot)]
+        first = eph.nodes[sats[0].node_id]
+        second = eph.nodes[sats[1].node_id]
         assert isinstance(first, EphemerisNodeKeplerian)
         assert isinstance(second, EphemerisNodeKeplerian)
         assert first.propagator == "two-body"
@@ -251,7 +300,7 @@ class TestBuildSessionEphemeris:
 
     def test_node_metadata_carried_into_session_ephemeris(self):
         ctx, sats, gs_file = _load_test_ctx()
-        sat_id = ctx.addressing.sat_id(sats[0].plane, sats[0].slot)
+        sat_id = sats[0].node_id
         gs_id = next(iter(ctx.gs_positions))
         ctx = build_step_context(
             satellites=sats,
@@ -325,7 +374,7 @@ class TestBuildSessionEphemeris:
         import math
 
         for sat in sats[:3]:
-            nid = ctx.addressing.sat_id(sat.plane, sat.slot)
+            nid = sat.node_id
             node = eph.nodes[nid]
             assert isinstance(node, EphemerisNodeKeplerian)
             assert abs(node.semi_major_axis_km - sat.elements.semi_major_axis_km) < 0.001

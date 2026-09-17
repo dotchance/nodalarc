@@ -159,12 +159,12 @@ class TestEphemerisNodeFixed:
 class TestSessionEphemeris:
     def _make(self) -> SessionEphemeris:
         return SessionEphemeris(
-            epoch_id=0,
+            epoch_id=42,
             sim_time=datetime(2025, 1, 1, tzinfo=UTC),
             epoch_unix=1735689600.0,
             body_frames=EARTH_TEST_EPHEMERIS_BODY_FRAMES,
             nodes={
-                "sat-P00S00": _keplerian_node(),
+                "sat-P00S00": _keplerian_node(raan_deg=22.5, mean_anomaly_deg=45.0),
                 "gs-ashburn": EphemerisNodeFixed(
                     lat_deg=39.04,
                     lon_deg=-77.49,
@@ -180,6 +180,8 @@ class TestSessionEphemeris:
         json_str = eph.model_dump_json()
         restored = SessionEphemeris.model_validate_json(json_str)
         assert restored == eph
+        assert isinstance(restored.nodes["sat-P00S00"], EphemerisNodeKeplerian)
+        assert isinstance(restored.nodes["gs-ashburn"], EphemerisNodeFixed)
 
     def test_segment_metadata_round_trip_json(self):
         eph = SessionEphemeris(
@@ -257,17 +259,14 @@ class TestSessionEphemeris:
 
 
 class TestPlaybackState:
-    def test_round_trip(self):
-        ps = PlaybackState(epoch_id=3, state="seeking")
+    @pytest.mark.parametrize("state", ["seeking", "playing", "paused"])
+    def test_round_trip(self, state):
+        ps = PlaybackState(epoch_id=3, state=state)
         data = ps.model_dump(mode="json")
         restored = PlaybackState.model_validate(data)
         assert restored == ps
-        assert data["state"] == "seeking"
-
-    def test_valid_states(self):
-        for state in ("seeking", "playing", "paused"):
-            ps = PlaybackState(epoch_id=0, state=state)
-            assert ps.state == state
+        assert data["state"] == state
+        assert PlaybackState.model_validate_json(ps.model_dump_json()) == ps
 
     def test_invalid_state_rejected(self):
         with pytest.raises(ValidationError):
@@ -301,6 +300,7 @@ class TestClockTickEpochId:
             epoch_id=5,
         )
         assert ct.epoch_id == 5
+        assert ct.model_dump(mode="json")["epoch_id"] == 5
 
     def test_round_trip_preserves_epoch_id(self):
         ct = ClockTick(
@@ -350,6 +350,9 @@ class TestLinkStateSnapshotEpochId:
             interval_s=5.0,
         )
         assert snap.epoch_id == 0
+        payload = snap.model_dump(mode="json")
+        del payload["epoch_id"]
+        assert LinkStateSnapshot.model_validate(payload).epoch_id == 0
 
     def test_explicit_epoch_id(self):
         snap = LinkStateSnapshot(
@@ -360,6 +363,7 @@ class TestLinkStateSnapshotEpochId:
             epoch_id=7,
         )
         assert snap.epoch_id == 7
+        assert snap.model_dump(mode="json")["epoch_id"] == 7
 
     def test_round_trip_preserves_epoch_id(self):
         snap = LinkStateSnapshot(

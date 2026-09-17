@@ -25,6 +25,9 @@ from node_agent.wiring import (
     expected_local_nodes,
 )
 
+pytestmark = pytest.mark.usefixtures("_node_agent_ops_spool_path")
+
+
 LOCAL_NODE = "node02"
 
 

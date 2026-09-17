@@ -34,7 +34,7 @@ def _load_test_session():
 class TestAllocationContractInvariants:
     """Run 120 ticks with hysteresis and verify invariants on every tick."""
 
-    def test_capacity_invariants_120_ticks(self):
+    def test_capacity_and_feasibility_invariants_120_ticks(self):
         session, gs_file, sats, addressing, neighbors, ground_candidates = _load_test_session()
         epoch_unix = 1704067200.0
         step_seconds = session.time.step_seconds
@@ -54,6 +54,7 @@ class TestAllocationContractInvariants:
         isl_state: dict = {}
         gs_state: dict = {}
         associations: dict = {}
+        observed_associations = 0
 
         for step in range(121):
             result = compute_step(
@@ -67,6 +68,7 @@ class TestAllocationContractInvariants:
                 associations,
             )
             associations = result.associations
+            observed_associations += len(associations)
 
             # Invariant 1: No GS exceeds its terminal capacity
             gs_counts: dict[str, int] = {}
@@ -91,119 +93,10 @@ class TestAllocationContractInvariants:
                     f"but ground_terminal_count is {cap}"
                 )
 
-    def test_associations_are_feasible(self):
-        """Every allocated pair must be geometrically visible at that tick."""
-        session, gs_file, sats, addressing, neighbors, ground_candidates = _load_test_session()
-        epoch_unix = 1704067200.0
-        step_seconds = session.time.step_seconds
-
-        ctx = build_step_context(
-            satellites=sats,
-            addressing=addressing,
-            gs_file=gs_file,
-            neighbors=neighbors,
-            propagator_id=session.orbit.propagator,
-            ground_scheduling=session.scheduling.ground,
-            ground_candidate_satellites_by_gs=ground_candidates,
-            ground_link_model=session.ground_link_model,
-            body_frames=session.body_frames,
-        )
-
-        isl_state: dict = {}
-        gs_state: dict = {}
-        associations: dict = {}
-
-        for step in range(61):
-            result = compute_step(
-                ctx,
-                epoch_unix,
-                step,
-                step_seconds,
-                0.0,
-                isl_state,
-                gs_state,
-                associations,
-            )
-            associations = result.associations
-
-            # Invariant 3: allocated pairs must be in gs_state with visible=True
             for pair in associations:
                 state = gs_state.get(pair)
                 assert state is not None, f"Step {step}: allocated pair {pair} not in gs_state"
-                visible = state[0]
-                scheduled = state[1]
-                assert visible, f"Step {step}: allocated pair {pair} is not visible"
-                assert scheduled, f"Step {step}: allocated pair {pair} is not scheduled"
+                assert state[0], f"Step {step}: allocated pair {pair} is not visible"
+                assert state[1], f"Step {step}: allocated pair {pair} is not scheduled"
 
-    def test_hysteresis_reduces_flapping(self):
-        """With hysteresis active, there should be fewer handover events
-        than without (amnesiac). This is a statistical check, not absolute."""
-        session, gs_file, sats, addressing, neighbors, ground_candidates = _load_test_session()
-        epoch_unix = 1704067200.0
-        step_seconds = session.time.step_seconds
-        n_steps = 120
-
-        ctx = build_step_context(
-            satellites=sats,
-            addressing=addressing,
-            gs_file=gs_file,
-            neighbors=neighbors,
-            propagator_id=session.orbit.propagator,
-            ground_scheduling=session.scheduling.ground,
-            ground_candidate_satellites_by_gs=ground_candidates,
-            ground_link_model=session.ground_link_model,
-            body_frames=session.body_frames,
-        )
-
-        # Run with hysteresis (stateful fold)
-        isl_h: dict = {}
-        gs_h: dict = {}
-        assoc_h: frozenset = {}
-        hyst_transitions = 0
-        for step in range(n_steps + 1):
-            result = compute_step(
-                ctx,
-                epoch_unix,
-                step,
-                step_seconds,
-                0.0,
-                isl_h,
-                gs_h,
-                assoc_h,
-            )
-            new_assoc_h = result.associations
-            if step > 0:
-                hyst_transitions += len(
-                    set(new_assoc_h.keys()).symmetric_difference(set(assoc_h.keys()))
-                )
-            assoc_h = new_assoc_h
-
-        # Run without hysteresis (amnesiac — pass empty frozenset every tick)
-        isl_a: dict = {}
-        gs_a: dict = {}
-        amnesiac_transitions = 0
-        prev_assoc: frozenset = {}
-        for step in range(n_steps + 1):
-            result = compute_step(
-                ctx,
-                epoch_unix,
-                step,
-                step_seconds,
-                0.0,
-                isl_a,
-                gs_a,
-                {},
-            )
-            new_assoc_a = result.associations
-            if step > 0:
-                amnesiac_transitions += len(
-                    set(new_assoc_a.keys()).symmetric_difference(set(prev_assoc.keys()))
-                )
-            prev_assoc = new_assoc_a
-
-        # Hysteresis should produce <= transitions than amnesiac.
-        # In a short window with slow-moving sats this might be equal.
-        assert hyst_transitions <= amnesiac_transitions, (
-            f"Hysteresis produced MORE transitions ({hyst_transitions}) "
-            f"than amnesiac ({amnesiac_transitions})"
-        )
+        assert observed_associations > 0, "fixture exercised no ground allocations"

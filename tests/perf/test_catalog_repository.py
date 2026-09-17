@@ -1,11 +1,13 @@
-"""Release qualification for hundreds of reusable components and sessions."""
+"""Catalog transactions at small size and explicit qualification scale."""
 
 from __future__ import annotations
 
 import gc
+import os
 from copy import deepcopy
 from pathlib import Path
 
+import pytest
 import yaml
 from nodalarc.catalog_refs import CatalogRef
 from nodalarc.catalog_repository import CatalogScope
@@ -14,14 +16,30 @@ from vs_api.builder_compiler import canonicalize_persisted_configuration
 
 ROOT = Path(__file__).resolve().parents[2]
 SHIPPED_ROOT = ROOT / "catalog/nodalarc"
-ARTIFACT_COUNT = 200
 
 
 def _generation_directories(scope_root: Path) -> list[Path]:
     return [path for path in (scope_root / "generations").iterdir() if path.is_dir()]
 
 
-def test_repository_handles_hundreds_of_components_and_sessions(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    "artifact_count",
+    [
+        pytest.param(2, id="small"),
+        pytest.param(
+            200,
+            id="scale",
+            marks=pytest.mark.skipif(
+                os.environ.get("NODALARC_PERF") != "1",
+                reason="catalog scale qualification runs with make perf-test (NODALARC_PERF=1)",
+            ),
+        ),
+    ],
+)
+def test_repository_transaction_preserves_documents_and_collects_generations(
+    tmp_path: Path,
+    artifact_count: int,
+) -> None:
     scope = CatalogScope()
     scope_root = tmp_path / "user-catalog"
     repository = FilesystemCatalogRepository(
@@ -37,7 +55,7 @@ def test_repository_handles_hundreds_of_components_and_sessions(tmp_path: Path) 
         (SHIPPED_ROOT / "sessions/earth-leo-simple.yaml").read_text(encoding="utf-8")
     )
 
-    for index in range(ARTIFACT_COUNT):
+    for index in range(artifact_count):
         terminal_id = f"scale-terminal-{index:03d}"
         terminal_ref = CatalogRef(f"user:terminals/scale/{terminal_id}.yaml")
         terminal = deepcopy(terminal_template)
@@ -46,7 +64,7 @@ def test_repository_handles_hundreds_of_components_and_sessions(tmp_path: Path) 
         canonical = canonicalize_persisted_configuration(terminal_ref, terminal)
         transaction.write_bytes(terminal_ref, canonical.yaml_bytes, expected_revision=None)
 
-    for index in range(ARTIFACT_COUNT):
+    for index in range(artifact_count):
         session_id = f"scale-session-{index:03d}"
         session_ref = CatalogRef(f"user:sessions/scale/{session_id}.yaml")
         session = deepcopy(session_template)
@@ -57,9 +75,9 @@ def test_repository_handles_hundreds_of_components_and_sessions(tmp_path: Path) 
 
     committed = transaction.commit()
 
-    assert len(committed.list(namespace="user", family="terminals")) == ARTIFACT_COUNT
-    assert len(committed.list(namespace="user", family="sessions")) == ARTIFACT_COUNT
-    assert committed.get("user:sessions/scale/scale-session-199.yaml").content
+    assert len(committed.list(namespace="user", family="terminals")) == artifact_count
+    assert len(committed.list(namespace="user", family="sessions")) == artifact_count
+    assert committed.get(f"user:sessions/scale/scale-session-{artifact_count - 1:03d}.yaml").content
 
     # Copy-on-write cleanup retains only CURRENT plus generations pinned by a
     # live snapshot; releasing that snapshot reclaims the old generation.

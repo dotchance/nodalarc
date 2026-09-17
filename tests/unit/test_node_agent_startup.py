@@ -13,6 +13,8 @@ from node_agent.__main__ import (
 from node_agent.command_contract import RuntimeFence
 from node_agent.mpls import ensure_mpls_kernel_support, module_is_builtin, probe_encapsulation
 
+pytestmark = pytest.mark.usefixtures("_node_agent_ops_spool_path")
+
 
 def test_startup_rejects_missing_host_ip_in_k8s(monkeypatch: pytest.MonkeyPatch) -> None:
     spooled: list[dict] = []

@@ -2,9 +2,8 @@
 # Licensed under the Apache License, Version 2.0. See LICENSE file.
 """Prove deterministic dispatch and allocation ordering.
 
-Two runs with identical inputs must produce identical output regardless of
-Python hash seed. These tests construct inputs where multiple pairs compete
-for the same resource and assert that the winner is always the same.
+Candidate input order must not change the selected winner. Scheduler checks
+exercise authority freshness and dispatch ordering separately.
 """
 
 from __future__ import annotations
@@ -14,6 +13,7 @@ import json
 from datetime import UTC, datetime
 from unittest.mock import MagicMock
 
+import pytest
 from nodalarc.models.ground_policy import (
     HandoverPolicySpec,
     HysteresisParameters,
@@ -48,64 +48,8 @@ def _sat_body_pools(sat_terminals: dict[str, int]) -> dict[str, dict[str, tuple[
 class TestGroundAllocatorDeterminism:
     """The OME ground allocator sort must resolve all ties deterministically."""
 
-    def test_equal_score_pairs_produce_stable_allocation_order(self):
-        """Two GS-sat pairs with identical priority, score, and sat capacity
-        must always select the same winner when only one terminal is available.
-
-        Without the (gs_id, sat_id) tiebreaker in the allocator sort key,
-        the winner depends on dict iteration order from upstream, which varies
-        with PYTHONHASHSEED.
-        """
-        gs_id = "gs-A"
-        sat_a = "sat-P00S00"
-        sat_b = "sat-P00S01"
-
-        visible = [
-            GroundVisibility(
-                sat_id=sat_a,
-                visible=True,
-                elevation_deg=45.0,
-                range_km=1000.0,
-                remaining_visible_s=None,
-                reject_reason="ok",
-            ),
-            GroundVisibility(
-                sat_id=sat_b,
-                visible=True,
-                elevation_deg=45.0,
-                range_km=1000.0,
-                remaining_visible_s=None,
-                reject_reason="ok",
-            ),
-        ]
-
-        results = []
-        for _ in range(50):
-            result = allocate_ground_links(
-                step=0,
-                visible_per_station={gs_id: visible},
-                ground_station_ids={gs_id},
-                current_associations={},
-                pending_teardowns={},
-                gs_terminal_indices={gs_id: (0,)},
-                sat_ground_terminals={sat_a: 1, sat_b: 1},
-                sat_ground_terminal_indices_by_body=_sat_body_pools({sat_a: 1, sat_b: 1}),
-                **_policy_kwargs(gs_id),
-                gs_min_elevations={gs_id: 25.0},
-                gs_service_priorities={gs_id: 10},
-                gs_tenant_ids={gs_id: "default"},
-                gs_reference_bodies={gs_id: "earth"},
-            )
-            winner = next(iter(result.scheduled_pairs)) if result.scheduled_pairs else None
-            results.append(winner)
-
-        # All 50 runs must select the same winner
-        assert len(set(results)) == 1, (
-            f"Nondeterministic allocation: got {len(set(results))} distinct winners "
-            f"from 50 runs with identical inputs: {set(results)}"
-        )
-
-    def test_tiebreaker_selects_lexicographically_first_pair(self):
+    @pytest.mark.parametrize("reverse", [False, True], ids=["ascending", "descending"])
+    def test_tiebreaker_selects_lexicographically_first_pair(self, reverse):
         """When priority, score, and sat capacity are equal, the allocator
         must select the pair with the lexicographically smaller (gs_id, sat_id).
         """
@@ -132,6 +76,7 @@ class TestGroundAllocatorDeterminism:
             ),
         ]
 
+        visible.sort(key=lambda candidate: candidate.sat_id, reverse=reverse)
         result = allocate_ground_links(
             step=0,
             visible_per_station={gs_id: visible},
@@ -150,7 +95,8 @@ class TestGroundAllocatorDeterminism:
 
         # (gs-A, sat-P00S00) < (gs-A, sat-P01S00) lexicographically
         expected_pair = (min(gs_id, sat_a), max(gs_id, sat_a))
-        assert expected_pair in result.scheduled_pairs
+        assert result.scheduled_pairs == frozenset({expected_pair})
+        assert result.associations == {expected_pair: (0, 0)}
 
 
 class TestAuthorityFreshnessOnStableLinks:

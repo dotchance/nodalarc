@@ -47,10 +47,9 @@ def _stub(path: Path, name: str, body: str) -> None:
     script.chmod(0o755)
 
 
-def test_shell_scripts_are_parseable() -> None:
-    scripts = sorted(str(path.relative_to(ROOT)) for path in (ROOT / "scripts").glob("*.sh"))
-    assert scripts
-    result = _run(["bash", "-n", *scripts])
+@pytest.mark.parametrize("script", sorted((ROOT / "scripts").glob("*.sh")), ids=lambda p: p.name)
+def test_shell_scripts_are_parseable(script: Path) -> None:
+    result = _run(["bash", "-n", str(script)])
     assert result.returncode == 0, result.stderr
 
 

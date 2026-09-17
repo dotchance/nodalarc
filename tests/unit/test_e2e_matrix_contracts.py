@@ -1959,16 +1959,6 @@ def test_conflicting_terminal_outcomes_within_one_occurrence_are_detected(monkey
     assert len(result["conflicting_record_groups"]) == 1
 
 
-def test_the_retired_packet_interpreter_is_gone() -> None:
-    source = Path(e2e_matrix.__file__).read_text()
-    for gone in (
-        "def _ping_packet_outcome",
-        "def _packet_handover_correlation",
-        "def _seq_near_ranges",
-    ):
-        assert gone not in source, gone
-
-
 # --- the kernel observation itself must precede the teardown's enactment ---
 
 

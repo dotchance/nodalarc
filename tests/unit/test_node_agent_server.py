@@ -4,9 +4,13 @@
 
 from __future__ import annotations
 
+import pytest
 from nodalarc.proto import node_agent_pb2
 from node_agent.command_contract import RuntimeFence
 from node_agent.server import DispatchGate, dispatch
+
+pytestmark = pytest.mark.usefixtures("_node_agent_ops_spool_path")
+
 
 SESSION_ID = "test-session"
 WIRING_GENERATION = "sha256:" + "a" * 64

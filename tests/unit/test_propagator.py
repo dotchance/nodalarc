@@ -10,82 +10,37 @@ import math
 
 import pytest
 from nodalarc.geo import compute_range_km
-from ome.propagator import (
+from nodalarc.propagator import (
+    J2000_UNIX,
+    EcefVec3,
     GeoPosition,
     OrbitalElements,
     Vec3,
-    ecef_to_geodetic,
-    eci_to_ecef_velocity,
     elements_from_params,
-    geodetic_to_ecef,
+    gmst,
     j2_circular_secular_rates,
     j2_mean_element_secular_rates,
-    orbital_period,
     orbital_period_for_body,
-    orbital_velocity,
-    propagate_eci,
-    propagate_j2_mean_elements,
     propagate_keplerian,
 )
 
-from tests.physics_fixtures import EARTH_TEST_BODY_FRAME
+from tests.physics_fixtures import (
+    EARTH_TEST_BODY_FRAME,
+    earth_ecef_to_geodetic,
+    earth_eci_to_ecef_velocity,
+    earth_elements_from_params,
+    earth_geodetic_to_ecef,
+    earth_orbital_period,
+    earth_orbital_velocity,
+    earth_propagate_eci,
+    earth_propagate_j2_mean_elements,
+    earth_propagate_keplerian,
+)
 
 # Reference epoch: 2025-01-01T00:00:00 UTC
 EPOCH = 1735689600.0
 EARTH_MU = EARTH_TEST_BODY_FRAME.gravitational_parameter_km3_s2
 EARTH_RADIUS_KM = EARTH_TEST_BODY_FRAME.mean_radius_km
-
-
-def earth_elements_from_params(
-    altitude_km: float,
-    inclination_deg: float,
-    raan_deg: float,
-    true_anomaly_deg: float,
-) -> OrbitalElements:
-    return elements_from_params(
-        altitude_km,
-        inclination_deg,
-        raan_deg,
-        true_anomaly_deg,
-        reference_radius_km=EARTH_TEST_BODY_FRAME.mean_radius_km,
-    )
-
-
-def earth_orbital_period(altitude_km: float) -> float:
-    return orbital_period(altitude_km, body_frame=EARTH_TEST_BODY_FRAME)
-
-
-def earth_orbital_velocity(altitude_km: float) -> float:
-    return orbital_velocity(altitude_km, body_frame=EARTH_TEST_BODY_FRAME)
-
-
-def earth_propagate_eci(elements: OrbitalElements, dt: float):
-    return propagate_eci(elements, dt, body_frame=EARTH_TEST_BODY_FRAME)
-
-
-def earth_propagate_keplerian(elements: OrbitalElements, epoch: float, dt: float):
-    return propagate_keplerian(elements, epoch, dt, body_frame=EARTH_TEST_BODY_FRAME)
-
-
-def earth_propagate_j2_mean_elements(elements: OrbitalElements, epoch: float, dt: float):
-    return propagate_j2_mean_elements(elements, epoch, dt, body_frame=EARTH_TEST_BODY_FRAME)
-
-
-def earth_geodetic_to_ecef(geo: GeoPosition):
-    return geodetic_to_ecef(geo, EARTH_TEST_BODY_FRAME)
-
-
-def earth_ecef_to_geodetic(ecef):
-    return ecef_to_geodetic(ecef, body_frame=EARTH_TEST_BODY_FRAME)
-
-
-def earth_eci_to_ecef_velocity(pos_eci, vel_eci, unix_timestamp: float):
-    return eci_to_ecef_velocity(
-        pos_eci,
-        vel_eci,
-        unix_timestamp,
-        body_frame=EARTH_TEST_BODY_FRAME,
-    )
 
 
 @pytest.fixture
@@ -117,6 +72,18 @@ def molniya_elements():
     )
 
 
+def test_gmst_at_j2000():
+    assert 4.8 < gmst(J2000_UNIX) < 5.0
+
+
+def test_ome_reexports_shared_propagator():
+    from ome import propagator as ome_propagator
+
+    assert ome_propagator.GeoPosition is GeoPosition
+    assert ome_propagator.propagate_keplerian is propagate_keplerian
+    assert ome_propagator.elements_from_params is elements_from_params
+
+
 class TestOrbitalPeriod:
     def test_550km_period(self):
         period = earth_orbital_period(550.0)
@@ -126,7 +93,7 @@ class TestOrbitalPeriod:
     def test_408km_period(self):
         period = earth_orbital_period(408.0)
         # ISS: ~92.7 minutes = ~5562 seconds
-        assert 5500.0 < period < 5620.0
+        assert 5500.0 < period < 5600.0
 
     def test_geostationary_period(self):
         # GEO: ~35786 km altitude, period ~86164 seconds (23h 56m 4s)
@@ -312,6 +279,15 @@ class TestInclinationBounds:
 
 
 class TestECEFGeodeticRoundTrip:
+    def test_known_ecef_equatorial_point_and_inverse(self):
+        original = EcefVec3(Vec3(6928.137, 0.0, 0.0))
+        geo = earth_ecef_to_geodetic(original)
+        assert abs(geo.lat_deg) < 0.01
+        assert abs(geo.lon_deg) < 0.01
+        assert abs(geo.alt_km - 550.0) < 1.0
+        restored = earth_geodetic_to_ecef(geo)
+        assert compute_range_km(original, restored) < 0.001
+
     def test_round_trip_equator(self):
         original = GeoPosition(lat_deg=0.0, lon_deg=0.0, alt_km=550.0)
         ecef = earth_geodetic_to_ecef(original)
@@ -360,6 +336,7 @@ class TestAltitude:
             _, _, geo = earth_propagate_keplerian(starlink_elements, EPOCH, dt)
             alts.append(geo.alt_km)
         alt_range = max(alts) - min(alts)
+        assert all(540.0 < altitude < 560.0 for altitude in alts)
         # Due to WGS84 oblateness, altitude varies slightly but should be < 25 km
         assert alt_range < 25.0
 

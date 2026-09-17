@@ -22,7 +22,11 @@ from contextlib import contextmanager
 import pytest
 from nodalarc.runtime_naming import vxlan_host_ifnames
 
-pytestmark = [pytest.mark.integration, pytest.mark.requires_root]
+pytestmark = [
+    pytest.mark.usefixtures("_node_agent_ops_spool_path"),
+    pytest.mark.integration,
+    pytest.mark.requires_root,
+]
 
 
 def _require_netns_tools() -> None:

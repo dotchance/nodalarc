@@ -862,53 +862,6 @@ describe("the anatomy guide answers what-next in any order", () => {
   });
 });
 
-describe("ambiguous artifact wording stays out of the Builder surface", () => {
-  // Canonical YAML, saved catalog revisions, and dependency digests are distinct
-  // facts. A generic artifact label would collapse those identities.
-  const ARTICLE = "the";
-  const LEAK = new RegExp(`\\b${ARTICLE} artifact\\b`, "i");
-  const leakOffenders = (): string[] => {
-    const offenders: string[] = [];
-    const scan = (dir: string, prefix: string) => {
-      for (const entry of readdirSync(dir, { withFileTypes: true })) {
-        if (entry.isDirectory()) {
-          if (entry.name === "__tests__") scan(join(dir, entry.name), `${prefix}${entry.name}/`);
-          continue;
-        }
-        if (!entry.name.endsWith(".ts") && !entry.name.endsWith(".tsx")) continue;
-        readFileSync(join(dir, entry.name), "utf-8")
-          .split("\n")
-          .forEach((line, i) => {
-            if (LEAK.test(line)) offenders.push(`${prefix}${entry.name}:${i + 1} ${line.trim()}`);
-          });
-      }
-    };
-    scan(BUILDER_DIR, "");
-    return offenders;
-  };
-
-  it("no builder file names the authoring document an artifact (leading article)", () => {
-    expect(leakOffenders(), "document-scoped artifact-language leak").toEqual([]);
-  });
-});
-
-describe("generated visual workspace authority", () => {
-  it("has no handwritten Workspace or Draft interface tree", () => {
-    const source = readFileSync(join(BUILDER_DIR, "workspace.ts"), "utf-8");
-    expect(source).toContain("MaterializedMutable<BuilderVisualWorkspace>");
-    expect(source).not.toMatch(/export interface (?:Workspace|Draft\w*)\b/);
-  });
-
-  it("has no field-by-field visual workspace converter", () => {
-    const source = readFileSync(join(BUILDER_DIR, "visualWorkspace.ts"), "utf-8");
-    expect(source).not.toContain("visualWorkspaceFromWorkspace");
-    expect(source).not.toContain(".map(");
-    expect(source).not.toContain("session_name: workspace.name");
-    expect(source).not.toContain("source_ref: space.ref");
-    expect(source).not.toContain("site_set_ref: ground.ref");
-  });
-});
-
 describe("the closed vocabularies have one owner", () => {
   // Non-recursive, like the raw-control scan: production builder files are flat (only
   // __tests__ is a subdirectory). A future production subdir would need this

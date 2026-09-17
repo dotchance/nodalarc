@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import pytest
 from nodalarc.models.ground_policy import (
     HandoverPolicySpec,
     HysteresisParameters,
@@ -850,6 +851,80 @@ def test_handover_policy_none_displaces_without_hysteresis_margin():
     replaced = [u for u in result.unscheduled_pairs if u.pair == old_pair]
     assert len(replaced) == 1
     assert replaced[0].unscheduled_reason == "replaced_by_successor"
+
+
+@pytest.mark.parametrize(
+    ("candidates", "capacity", "expected"),
+    [
+        pytest.param(
+            [("a", 85.0, 10, False), ("b", 30.0, 1, False)],
+            1,
+            {"b"},
+            id="priority-before-score",
+        ),
+        pytest.param(
+            [("a", 40.0, 10, True), ("b", 30.0, 1, False)],
+            1,
+            {"b"},
+            id="priority-before-incumbency",
+        ),
+        pytest.param(
+            [("a", 40.0, 10, False), ("b", 60.0, 10, False)],
+            1,
+            {"b"},
+            id="equal-priority-score",
+        ),
+        pytest.param(
+            [("a", 40.0, 10, True), ("b", 44.0, 10, False)],
+            1,
+            {"b"},
+            id="raw-score-with-incumbent",
+        ),
+        pytest.param(
+            [("a", 80.0, 20, False), ("b", 30.0, 1, False), ("c", 60.0, 5, False)],
+            2,
+            {"b", "c"},
+            id="three-priority-tiers",
+        ),
+    ],
+)
+def test_station_ranking_arbitrates_satellite_capacity(candidates, capacity, expected):
+    stations = {name for name, *_ in candidates}
+    result = allocate_ground_links(
+        step=10,
+        visible_per_station={
+            name: [
+                GroundVisibility(
+                    sat_id="sat-shared",
+                    visible=True,
+                    elevation_deg=elevation,
+                    range_km=1000.0,
+                    remaining_visible_s=None,
+                    reject_reason="ok",
+                )
+            ]
+            for name, elevation, _priority, _active in candidates
+        },
+        ground_station_ids=stations,
+        current_associations={
+            (name, "sat-shared"): (0, 0)
+            for name, _elevation, _priority, active in candidates
+            if active
+        },
+        pending_teardowns={},
+        gs_terminal_indices=_gs_pools(dict.fromkeys(stations, 1)),
+        **_policy_kwargs(stations),
+        gs_min_elevations=dict.fromkeys(stations, 25.0),
+        gs_service_priorities={
+            name: priority for name, _elevation, priority, _active in candidates
+        },
+        gs_tenant_ids=dict.fromkeys(stations, "default"),
+        gs_reference_bodies=dict.fromkeys(stations, "earth"),
+        sat_ground_terminals={"sat-shared": capacity},
+        sat_ground_terminal_indices_by_body=_sat_body_pools({"sat-shared": capacity}),
+    )
+    assert result.scheduled_pairs == frozenset((name, "sat-shared") for name in expected)
+    assert set(result.associations) == set(result.scheduled_pairs)
 
 
 def test_default_ranking_order_prefers_candidate_specific_scarce_satellite_capacity():

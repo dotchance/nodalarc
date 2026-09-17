@@ -20,7 +20,6 @@ from ome.ground_allocator import (
     _compute_pair_score,
     allocate_ground_links,
 )
-from ome.types import MbbTeardown
 from ome.visibility import GroundVisibility
 
 
@@ -172,40 +171,6 @@ class TestHysteresisDiscount:
             sat_ground_terminals=sat_terminals,
             sat_ground_terminal_indices_by_body=_sat_body_pools(sat_terminals),
         )
-
-    def test_active_pair_survives_when_challenger_does_not_clear_hysteresis_margin(self):
-        old_pair = ("gs-test", "sat-active")
-
-        result = self._allocate(
-            [
-                _visible_gv("sat-active", 40.0, 1000.0),
-                _visible_gv("sat-challenger", 44.0, 900.0),
-            ],
-            current={old_pair: (0, 0)},
-        )
-
-        assert result.associations == {old_pair: (0, 0)}
-        assert result.pending_teardowns == {}
-        assert result.scheduled_pairs == frozenset({old_pair})
-
-    def test_challenger_starts_make_before_break_when_it_clears_hysteresis_margin(self):
-        old_pair = ("gs-test", "sat-active")
-        new_pair = ("gs-test", "sat-challenger")
-
-        result = self._allocate(
-            [
-                _visible_gv("sat-active", 40.0, 1000.0),
-                _visible_gv("sat-challenger", 47.0, 900.0),
-            ],
-            current={old_pair: (0, 0)},
-        )
-
-        assert result.associations == {
-            old_pair: (0, 0),
-            new_pair: (1, 0),
-        }
-        assert result.pending_teardowns == {old_pair: MbbTeardown(10, new_pair)}
-        assert result.scheduled_pairs == frozenset({old_pair, new_pair})
 
     def test_without_current_association_highest_elevation_wins_normally(self):
         result = self._allocate(

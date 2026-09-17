@@ -1,76 +1,109 @@
 // Copyright 2024-2026 .chance (dotchance)
 // Licensed under the Apache License, Version 2.0. See LICENSE file.
-/** InstancedMesh raycast staleness — the contract Constellation depends on.
- *
- * Three caches InstancedMesh.boundingSphere on the first raycast and never
- * invalidates it when instance matrices change. After a session switch moves
- * satellites outside the cached sphere, every click ray misses the sphere
- * and the raycast skips all instances — satellite clicks go dead until a
- * page reload. Constellation nulls the sphere after each matrix write; this
- * test pins both the failure mode and the invalidation fix, so a Three
- * upgrade that changes the caching behavior surfaces here.
- */
-import { describe, it, expect } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
+import { cleanup, renderHook } from "@testing-library/react";
+import type { ComponentProps, ReactElement, RefObject } from "react";
 import * as THREE from "three";
+import { Constellation } from "../Constellation";
+import { clearPositions } from "../positions";
+import type { NodeState } from "../../../types";
+import { catalogEarthEphemeris } from "../../../sim/__tests__/bodyModelFixture";
 
-function makeMesh(radius: number, count: number): THREE.InstancedMesh {
-  const mesh = new THREE.InstancedMesh(
-    new THREE.SphereGeometry(0.02, 8, 8),
-    new THREE.MeshBasicMaterial(),
-    100,
-  );
-  const m = new THREE.Matrix4();
-  for (let i = 0; i < count; i++) {
-    const angle = (i / count) * Math.PI * 2;
-    m.makeTranslation(radius * Math.cos(angle), 0, radius * Math.sin(angle));
-    mesh.setMatrixAt(i, m);
-  }
-  mesh.count = count;
-  mesh.instanceMatrix.needsUpdate = true;
-  return mesh;
-}
+const frame = vi.hoisted(() => ({ callback: () => {} }));
+vi.mock("@react-three/fiber", () => ({
+  useFrame: (callback: () => void) => {
+    frame.callback = callback;
+  },
+}));
+vi.mock("../BodyFrame", () => ({
+  useBodyFrame: () => ({ id: "earth", radiusRender: 1, kmPerRenderUnit: 1000 }),
+}));
+vi.mock("../../../sim/simClock", () => ({ interpolatedSimTimeMs: () => 1735689600000 }));
+vi.mock("../../../sim/workerBridge", () => ({
+  isWorkerReady: () => true,
+  requestPropagate: vi.fn(),
+  readPosition: (_id: string, _time: number, target: THREE.Vector3) => {
+    Object.assign(target, { x: 6, y: 0, z: 0 });
+    return true;
+  },
+}));
 
-function raycastHits(
-  mesh: THREE.InstancedMesh,
-  target: THREE.Vector3,
-  origin: THREE.Vector3,
-): number {
-  const raycaster = new THREE.Raycaster();
-  raycaster.set(origin, target.clone().sub(origin).normalize());
-  const hits: THREE.Intersection[] = [];
-  mesh.raycast(raycaster, hits);
-  return hits.length;
-}
-
-describe("InstancedMesh raycast across constellation changes", () => {
-  it("misses relocated instances while the cached sphere is stale, hits after invalidation", () => {
-    const mesh = makeMesh(1.1, 8);
-    mesh.updateMatrixWorld(true);
-
-    // First raycast caches the bounding sphere over the small shell.
-    const nearTarget = new THREE.Vector3(1.1, 0, 0);
-    expect(raycastHits(mesh, nearTarget, nearTarget.clone().multiplyScalar(3))).toBeGreaterThan(0);
-    expect(mesh.boundingSphere).not.toBeNull();
-
-    // "Session switch": same mesh, satellites now on a much larger shell
-    // (a different session's render scale moves them orders of magnitude).
-    const m = new THREE.Matrix4();
-    for (let i = 0; i < 8; i++) {
-      const angle = (i / 8) * Math.PI * 2;
-      m.makeTranslation(6 * Math.cos(angle), 0, 6 * Math.sin(angle));
-      mesh.setMatrixAt(i, m);
-    }
-    mesh.instanceMatrix.needsUpdate = true;
-
-    // A click whose ray does not graze the stale sphere — any satellite away
-    // from the old shell's projected disk, e.g. viewed from above the pole —
-    // misses every instance.
-    const target = new THREE.Vector3(6, 0, 0);
-    const overhead = new THREE.Vector3(6, 5, 0);
-    expect(raycastHits(mesh, target, overhead)).toBe(0);
-
-    // Constellation's fix: null the sphere after matrix writes.
-    mesh.boundingSphere = null;
-    expect(raycastHits(mesh, target, overhead)).toBeGreaterThan(0);
-  });
+afterEach(() => {
+  cleanup();
+  clearPositions();
 });
+
+function hits(mesh: THREE.InstancedMesh, x: number): number {
+  const ray = new THREE.Raycaster(new THREE.Vector3(x, 5, 0), new THREE.Vector3(0, -1, 0));
+  const intersections: THREE.Intersection[] = [];
+  mesh.raycast(ray, intersections);
+  return intersections.length;
+}
+
+it.each(["snapshot", "frame"] as const)(
+  "Constellation keeps relocated satellites pickable after a %s update",
+  (update) => {
+    const node = {
+      node_id: "sat",
+      node_type: "satellite",
+      lat_deg: 0,
+      lon_deg: 0,
+      alt_km: 100,
+      reference_body: "earth",
+      frame_id: "earth",
+      plane: 0,
+      slot: 0,
+    } as NodeState;
+    const ephemeris = catalogEarthEphemeris();
+    ephemeris.nodes = {
+      sat: {
+        type: "keplerian",
+        propagator: "two-body",
+        semi_major_axis_km: 6928,
+        eccentricity: 0,
+        inclination_deg: 53,
+        raan_deg: 0,
+        argument_of_perigee_deg: 0,
+        mean_anomaly_deg: 0,
+        plane: 0,
+        slot: 0,
+        reference_body: "earth",
+        frame_id: "earth",
+      },
+    };
+    const props: ComponentProps<typeof Constellation> = {
+      nodes: [],
+      ephemeris,
+      colorMode: "plane",
+      relations: null,
+      regimeById: new Map(),
+      onSelect: vi.fn(),
+      onFocusNode: vi.fn(),
+      onTogglePin: vi.fn(),
+      onHover: vi.fn(),
+    };
+    const { result, rerender, unmount } = renderHook((p) => Constellation(p), { initialProps: props });
+    const element = result.current as ReactElement<{
+      ref: RefObject<THREE.InstancedMesh>;
+      args: [THREE.SphereGeometry, THREE.MeshBasicMaterial, number];
+    }>;
+    const mesh = new THREE.InstancedMesh(...element.props.args);
+    element.props.ref.current = mesh;
+    try {
+      rerender({ ...props, nodes: [node] });
+      mesh.updateMatrixWorld(true);
+      expect(hits(mesh, 1.1)).toBeGreaterThan(0);
+      expect(mesh.boundingSphere).not.toBeNull();
+      if (update === "snapshot") {
+        rerender({ ...props, nodes: [{ ...node, alt_km: 5000 }] });
+      } else {
+        frame.callback();
+      }
+      expect(hits(mesh, 6)).toBeGreaterThan(0);
+      expect(hits(mesh, 1.1)).toBe(0);
+    } finally {
+      unmount();
+      mesh.dispose();
+    }
+  },
+);

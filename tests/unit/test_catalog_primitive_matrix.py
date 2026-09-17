@@ -224,6 +224,17 @@ def test_every_site_places_into_a_session(path: Path) -> None:
             }
         },
     )
+    # Site compatibility needs the authored orbit and terminal model with two peers.
+    # Full constellation layouts are exercised by the constellation cases above.
+    minimal = raw.read_catalog(constellation)
+    minimal["constellation"]["id"] = "site-compatibility-pair"
+    minimal["constellation"]["planes"]["count"] = 1
+    minimal["constellation"]["slots_per_plane"] = 2
+    minimal["constellation"]["phasing"]["mode"] = "evenly_spaced_mean_anomaly"
+    minimal["constellation"]["phasing"]["phase_offset_deg"] = 0
+    minimal_ref = "user:constellations/site-compatibility-pair.yaml"
+    raw.create_catalog(minimal_ref, minimal)
+    raw["segments"][0]["source"] = minimal_ref
     _select_exact_access_mount(raw, "access_s" if body == "luna" else "access_ka")
     if body != "earth":
         raw["ephemeris"] = LUNA_EPHEMERIS

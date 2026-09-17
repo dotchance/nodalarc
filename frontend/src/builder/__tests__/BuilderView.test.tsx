@@ -5,7 +5,7 @@
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { act, render, screen, fireEvent, waitFor, cleanup, within } from "@testing-library/react";
-import type { BuilderVisualDraftEnvelope } from "../generated/builderApi";
+import type { BuilderIssue, BuilderVisualDraftEnvelope } from "../generated/builderApi";
 import { AUTHORING_FACTS } from "./fixtures/authoringFacts";
 
 vi.mock("../../globe/r3f/Scene", () => ({ Scene: () => null }));
@@ -91,57 +91,15 @@ function structuredVisualDraft(
 function compileResponse(
   request: Record<string, any>,
   preview: unknown = null,
-  forcedBlocker: string | null = null,
+  assemblyIssues: readonly BuilderIssue[] = [],
   canonicalYaml: string | null = null,
 ) {
   const visualDraft = request.draft;
   const visualWorkspace = visualDraft.authoring_workspace ?? visualDraft.applied_workspace;
-  const emptyGroundIndex = visualWorkspace?.ground?.findIndex(
-    (ground: { members?: unknown[] }) => (ground.members ?? []).length === 0,
-  );
-  const incomplete = typeof emptyGroundIndex === "number" && emptyGroundIndex >= 0;
   const targetName =
     String(visualDraft.target_ref).split("/").pop()?.replace(/\.ya?ml$/, "") ?? "";
   const sessionName =
     visualWorkspace?.session_name ?? (targetName || "draft");
-  const identityMismatch = sessionName !== targetName;
-  const assemblyIssues = [
-    ...(incomplete
-      ? [
-        {
-          code: "builder.draft.site_set_sites_required",
-          stage: "draft",
-          severity: "error",
-          message: "Ground sites requires at least one site",
-          blocks: ["save", "deploy"],
-          source_ref: visualDraft.target_ref,
-          draft_path: `workspace.ground.${emptyGroundIndex}.members`,
-        },
-      ]
-      : []),
-    ...(identityMismatch
-      ? [{
-          code: "builder.draft.session_identity_mismatch",
-          stage: "draft",
-          severity: "error",
-          message: `session.name ${sessionName} does not match target ${targetName}`,
-          blocks: ["save", "deploy"],
-          source_ref: visualDraft.target_ref,
-          draft_path: "workspace.session_name",
-        }]
-      : []),
-    ...(forcedBlocker
-      ? [{
-          code: "builder.draft.forced_test_blocker",
-          stage: "draft",
-          severity: "error",
-          message: forcedBlocker,
-          blocks: ["save", "deploy"],
-          source_ref: visualDraft.target_ref,
-          draft_path: "workspace.session_name",
-        }]
-      : []),
-  ];
   const blocked = assemblyIssues.length > 0;
   const assembledDraft = {
     contract_version: 1,
@@ -384,35 +342,25 @@ function visualCommandResponse(request: Record<string, any>) {
         mean_anomaly_deg: 0,
         propagator: "j2_mean_elements",
       },
-      planes: command.phasing_mode === "evenly_spaced_mean_anomaly" ? 1 : 3,
-      raan_spacing_deg: command.phasing_mode === "evenly_spaced_mean_anomaly" ? 360 : 120,
+      planes: 3,
+      raan_spacing_deg: 120,
       slots_per_plane: 8,
-      phasing_mode: command.phasing_mode,
-      phase_offset_deg: command.phasing_mode === "evenly_spaced_mean_anomaly" ? 0 : 15,
+      phasing_mode: "walker_delta",
+      phase_offset_deg: 15,
     });
   } else if (command.operation === "set_space_population") {
     affectedId = command.segment_id;
     const space = workspace.space.find(
       (candidate: { segment_id: string }) => candidate.segment_id === command.segment_id,
     );
-    let phasingMode = command.phasing_mode ?? space.phasing_mode;
-    let planes = command.planes ?? space.planes;
-    const slotsPerPlane = command.slots_per_plane ?? space.slots_per_plane;
-    if (command.phasing_mode) {
-      planes = phasingMode === "evenly_spaced_mean_anomaly" ? 1 : Math.max(2, planes);
-    } else if (command.planes === 1) {
-      phasingMode = "evenly_spaced_mean_anomaly";
-    } else if (command.planes && phasingMode === "evenly_spaced_mean_anomaly") {
-      phasingMode = "walker_delta";
-    }
-    const singlePlane = phasingMode === "evenly_spaced_mean_anomaly";
-    space.phasing_mode = phasingMode;
-    space.planes = planes;
-    space.slots_per_plane = slotsPerPlane;
-    space.raan_spacing_deg = singlePlane
-      ? 360
-      : (phasingMode === "walker_star" ? 180 : 360) / planes;
-    space.phase_offset_deg = singlePlane ? 0 : 360 / (planes * slotsPerPlane);
+    // A supplied backend response; the browser must adopt these facts.
+    Object.assign(space, {
+      phasing_mode: "evenly_spaced_mean_anomaly",
+      planes: 1,
+      slots_per_plane: 8,
+      raan_spacing_deg: 360,
+      phase_offset_deg: 0,
+    });
   } else if (command.operation === "add_ground") {
     const number = workspace.ground.length + 1;
     affectedKind = "ground";
@@ -544,40 +492,14 @@ function visualCommandResponse(request: Record<string, any>) {
   } else if (command.operation === "connect_segments") {
     affectedKind = "link";
     affectedId = `link-${workspace.links.length + 1}`;
-    const segments = [
-      ...workspace.space_refs.map((segment: any) => ({ ...segment, kind: "space" })),
-      ...workspace.space.map((segment: any) => ({ ...segment, kind: "space" })),
-      ...workspace.ground_refs.map((segment: any) => ({ ...segment, kind: "ground" })),
-      ...workspace.ground.map((segment: any) => ({ ...segment, kind: "ground" })),
-    ];
-    const source = segments.find(
-      (segment: any) => segment.segment_id === command.from_segment_id,
-    );
-    const target = segments.find((segment: any) => segment.segment_id === command.to_segment_id);
-    const [first, second] =
-      source.kind === "ground" || target.kind !== "ground"
-        ? [source, target]
-        : [target, source];
-    const access = first.kind === "ground" || second.kind === "ground";
-    const mesh = first.segment_id === second.segment_id;
-    const role = access ? "access" : mesh ? "isl" : "crosslink";
-    const endpoint = (segment: any) => ({
-      segment_id: segment.segment_id,
-      tag: null,
-      role,
-      medium: access ? "rf" : "optical",
-      min_elevation_deg: access && segment.kind === "ground" ? 25 : null,
-    });
     workspace.links.push({
       rule_id: affectedId,
-      label: mesh
-        ? `${first.display_name ?? first.label} mesh`
-        : `${first.display_name ?? first.label} to ${second.display_name ?? second.label}`,
+      label: "Constellation 1 to Constellation 2",
       enabled: true,
-      a: endpoint(first),
-      b: endpoint(second),
-      topology_mode: access ? "visible_candidates" : "nearest_n",
-      topology_n: mesh ? 2 : 1,
+      a: { segment_id: "space-1", tag: null, role: "crosslink", medium: "optical", min_elevation_deg: null },
+      b: { segment_id: "space-2", tag: null, role: "crosslink", medium: "optical", min_elevation_deg: null },
+      topology_mode: "nearest_n",
+      topology_n: 1,
       max_range_km: null,
     });
   } else if (command.operation === "set_scheduling_preset") {
@@ -934,7 +856,7 @@ describe("BuilderView resolve and world synchronization", () => {
         compileResponse(
           request,
           null,
-          null,
+          [],
           request.draft.draft_revision > 0 ? canonicalYaml : null,
         ),
       applyYamlHandler: (request) => {
@@ -1020,7 +942,7 @@ describe("BuilderView resolve and world synchronization", () => {
         compileResponse(
           request,
           null,
-          null,
+          [],
           request.draft.draft_revision > 0 ? canonicalYaml : null,
         ),
       applyYamlHandler: (request) => {
@@ -1171,8 +1093,16 @@ describe("BuilderView resolve and world synchronization", () => {
           request,
           null,
           request.draft.target_ref === "user:sessions/bar.yaml"
-            ? "the new target is blocked"
-            : null,
+            ? [{
+                code: "builder.draft.forced_test_blocker",
+                stage: "draft",
+                severity: "error",
+                message: "the new target is blocked",
+                blocks: ["save", "deploy"],
+                source_ref: "user:sessions/bar.yaml",
+                draft_path: "workspace.session_name",
+              }]
+            : [],
         ),
     });
     render(<BuilderView {...PROPS} />);
@@ -1569,7 +1499,17 @@ describe("BuilderView resolve and world synchronization", () => {
   });
 
   it("submits incomplete content and shows the backend's typed save blocker", async () => {
-    const fetchMock = stubFetch();
+    const fetchMock = stubFetch({
+      compileHandler: (request) => compileResponse(request, null, [{
+        code: "builder.draft.site_set_sites_required",
+        stage: "draft",
+        severity: "error",
+        message: "Ground sites requires at least one site",
+        blocks: ["save", "deploy"],
+        source_ref: "user:sessions/untitled-session.yaml",
+        draft_path: "workspace.ground.0.members",
+      }]),
+    });
     render(<BuilderView {...PROPS} />);
 
     // New session → the guide; then add a ground segment (memberless → held back).

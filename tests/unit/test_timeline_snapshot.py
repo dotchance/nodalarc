@@ -112,7 +112,7 @@ def _four_node_runtime():
     return nodes, addressing, frozenset(assignments)
 
 
-@pytest.fixture
+@pytest.fixture(scope="module")
 def four_node_timeline():
     """Precompute a short timeline for the custom-example constellation."""
     sats, addressing, neighbors = _four_node_runtime()
@@ -155,7 +155,7 @@ def four_node_timeline():
         ground_candidate_satellites_by_gs={"gs-equator": tuple(str(sat.node_id) for sat in sats)},
         body_frames=EARTH_TEST_BODY_FRAMES,
     )
-    return events
+    return tuple(events)
 
 
 class TestClockTickEmission:

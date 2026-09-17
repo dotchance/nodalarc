@@ -34,19 +34,21 @@ SESSIONS_DIR = Path(__file__).resolve().parents[2] / "catalog" / "nodalarc" / "s
 SESSION_PATHS = sorted(SESSIONS_DIR.glob("*.yaml"))
 
 
-def _resolved(path: Path):
-    return load_session_resolution_from_file(
+@pytest.fixture(scope="module", params=SESSION_PATHS, ids=lambda p: p.stem)
+def shipped_session(request):
+    path = request.param
+    resolved = load_session_resolution_from_file(
         path, origin="test.shipped_sessions", run_id="run-test-0042", catalog=shipped_read_view()
     ).resolved
+    return path, resolved
 
 
 def test_session_inventory_is_nonempty() -> None:
     assert SESSION_PATHS, f"no shipped sessions found under {SESSIONS_DIR}"
 
 
-@pytest.mark.parametrize("path", SESSION_PATHS, ids=lambda p: p.stem)
-def test_shipped_session_passes_full_readiness_gate(path: Path) -> None:
-    resolved = _resolved(path)
+def test_shipped_session_passes_full_readiness_gate(shipped_session) -> None:
+    path, resolved = shipped_session
 
     findings = validate_session_readiness(resolved, available_node_count=3)
     errors = [f for f in findings if f.level == "error"]
@@ -129,8 +131,7 @@ def test_shipped_session_computes_real_steps(path: Path) -> None:
     )
 
 
-@pytest.mark.parametrize("path", SESSION_PATHS, ids=lambda p: p.stem)
-def test_shipped_session_renders_template_vars_for_every_node(path: Path) -> None:
+def test_shipped_session_renders_template_vars_for_every_node(shipped_session) -> None:
     """Every node of every shipped session must reach the deploy-time
     render stage. The geo sessions deployed zero times after the resolver
     cutover because template-vars building hard-required plane/slot —
@@ -140,7 +141,7 @@ def test_shipped_session_renders_template_vars_for_every_node(path: Path) -> Non
     catalog: resolve AND render, not merely resolve."""
     from nodalarc.template_vars import build_template_vars_from_resolved
 
-    resolved = _resolved(path)
+    path, resolved = shipped_session
     for node in resolved.nodes:
         if node.forwarding == "host":
             # Processing hosts run no routing stack and render nothing.
@@ -154,9 +155,8 @@ def test_shipped_session_renders_template_vars_for_every_node(path: Path) -> Non
             )
 
 
-@pytest.mark.parametrize("path", SESSION_PATHS, ids=lambda p: p.stem)
-def test_shipped_session_domains_are_single_components(path: Path) -> None:
-    resolved = _resolved(path)
+def test_shipped_session_domains_are_single_components(shipped_session) -> None:
+    path, resolved = shipped_session
 
     lan_members: dict[str, list[str]] = defaultdict(list)
     for node in resolved.nodes:
@@ -196,9 +196,8 @@ def test_shipped_session_domains_are_single_components(path: Path) -> None:
         )
 
 
-@pytest.mark.parametrize("path", SESSION_PATHS, ids=lambda p: p.stem)
-def test_shipped_session_access_rules_all_produce_candidates(path: Path) -> None:
-    resolved = _resolved(path)
+def test_shipped_session_access_rules_all_produce_candidates(shipped_session) -> None:
+    path, resolved = shipped_session
     access_rules = {r.rule_id for r in resolved.link_rules if r.kind == "access" and r.enabled}
     rules_with_candidates = {c.rule_id for c in resolved.link_candidates if c.kind == "access"}
     silent = sorted(access_rules - rules_with_candidates)

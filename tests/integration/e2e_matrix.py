@@ -1056,26 +1056,6 @@ def check_nodalpath_mpls(token: str, perm: dict) -> dict:
     }
 
 
-def _active_ground_pair(token: str) -> tuple[str, str, str] | None:
-    state = request_json("GET", "/api/v1/state", token=token)
-    nodes = state.get("nodes", [])
-    nodes_by_id = _nodes_by_id(nodes)
-    links = state.get("links", [])
-    if isinstance(links, dict):
-        links = list(links.values())
-    for link in links:
-        if link.get("state") != "active":
-            continue
-        pair = _link_as_ground_sat(link, nodes_by_id)
-        if pair is None:
-            continue
-        gs_id, sat_id = pair
-        dst_ip = _published_loopback_ip(sat_id, nodes_by_id)
-        if dst_ip:
-            return gs_id, sat_id, dst_ip
-    return None
-
-
 def _kubectl_exec(node_id: str, command: str, *, timeout: int = 20) -> dict:
     """Run a command in the node's published primary workload container."""
     return _workload_exec(node_id, command, timeout=timeout)

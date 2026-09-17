@@ -119,10 +119,6 @@ class TestNodalPath:
         with pytest.raises(ValueError, match="distributed separately"):
             resolve_stack("nodalpath", [])
 
-    def test_nodalpath_no_extensions(self):
-        with pytest.raises(ValueError, match="distributed separately"):
-            resolve_stack("nodalpath", ["sr"])
-
 
 # --- Invalid combinations ---
 

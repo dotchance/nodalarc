@@ -36,8 +36,8 @@ def _custom_example_period_s() -> float:
     return orbital_period_for_body(elements, body_frame)
 
 
-@pytest.fixture
-def ring_timeline(tmp_path):
+@pytest.fixture(scope="module")
+def ring_timeline(tmp_path_factory):
     """Generate a canonical 550 km LEO timeline."""
     import tempfile
 
@@ -53,14 +53,10 @@ def ring_timeline(tmp_path):
         mode="w",
         suffix=".yaml",
         dir=str(PROJECT_ROOT),
-        delete=False,
     ) as f:
         yaml.safe_dump(session, f, sort_keys=False)
-        session_path = f.name
-
-    path = ome_run(session_path, str(tmp_path), run_id="test-rolling-window")
-    Path(session_path).unlink(missing_ok=True)
-    return path
+        f.flush()
+        return ome_run(f.name, str(tmp_path_factory.mktemp("ring")), run_id="test-rolling-window")
 
 
 def _load_events(path):

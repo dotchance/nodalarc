@@ -1,3 +1,4 @@
+// @vitest-environment node
 // Copyright 2024-2026 .chance (dotchance)
 // Licensed under the Apache License, Version 2.0. See LICENSE file.
 import { describe, it, expect } from "vitest";
@@ -14,29 +15,67 @@ const EARTH_KM_PER_RENDER_UNIT = EARTH_BODY.kmPerRenderUnit;
 const EARTH_SURFACE_RENDER = EARTH_BODY.equatorialRadiusKm / EARTH_KM_PER_RENDER_UNIT;
 const ORBIT_BASE_RADIUS_KM = EARTH_BODY.meanRadiusKm;
 
-describe("orbitalMath", () => {
-  describe("gmstRadians matches astronomy.ts contract", () => {
-    it("produces [0, 2π) at J2000 epoch", () => {
-      const g = gmstRadians(J2000_UNIX_SECONDS);
-      expect(g).toBeGreaterThanOrEqual(0);
-      expect(g).toBeLessThan(2 * Math.PI);
-    });
+describe("gmstRadians — backend contract", () => {
+  // Reference values computed from services/ome/propagator.py:gmst().
+  // Do not edit without re-running the backend reference computation.
+  const REFERENCE_VALUES: Array<{
+    name: string;
+    unixSeconds: number;
+    expectedGmstRad: number;
+  }> = [
+    { name: "J2000 epoch", unixSeconds: 946728000.0, expectedGmstRad: 4.894961212735793 },
+    { name: "J2000 + 12h", unixSeconds: 946771200.0, expectedGmstRad: 1.761969955048685 },
+    { name: "J2000 + 1 sidereal day", unixSeconds: 946814164.0905, expectedGmstRad: 4.894961210487280 },
+    { name: "2026-04-04T00:00:00Z", unixSeconds: 1775260800.0, expectedGmstRad: 3.356722590080810 },
+    { name: "2026-04-04T12:00:00Z", unixSeconds: 1775304000.0, expectedGmstRad: 0.223731332394507 },
+    { name: "Far future 2050-01-01", unixSeconds: 2524608000.0, expectedGmstRad: 1.760088545761268 },
+  ];
 
-    it("advances ~360° per sidereal day", () => {
-      const siderealDayS = 86164.0905;
-      const g0 = gmstRadians(J2000_UNIX_SECONDS);
-      const g1 = gmstRadians(J2000_UNIX_SECONDS + siderealDayS);
-      const diff = Math.abs(g1 - g0);
-      expect(diff).toBeLessThan(0.001);
+  for (const ref of REFERENCE_VALUES) {
+    it(`matches backend gmst() at ${ref.name}`, () => {
+      const actual = gmstRadians(ref.unixSeconds);
+      // 1e-9 rad ≈ 0.2 milliarcseconds — far below any visual resolution.
+      expect(Math.abs(actual - ref.expectedGmstRad)).toBeLessThan(1e-9);
+      expect(actual).toBeGreaterThanOrEqual(0);
+      expect(actual).toBeLessThan(2 * Math.PI);
     });
+  }
 
-    it("matches known J2000 value (~280.46°)", () => {
-      const g = gmstRadians(J2000_UNIX_SECONDS);
-      const gDeg = (g * 180) / Math.PI;
-      expect(gDeg).toBeCloseTo(280.46, 1);
-    });
+  it("handles negative days (pre-J2000) without sign errors", () => {
+    // NodalArc sessions won't encounter these, but correctness over
+    // assumption: JS % of float differs from Python for negative inputs.
+    const preJ2000 = J2000_UNIX_SECONDS - 86400; // 1999-12-31 12:00:00 UTC
+    const g = gmstRadians(preJ2000);
+    expect(g).toBeGreaterThanOrEqual(0);
+    expect(g).toBeLessThan(2 * Math.PI);
+    expect(Number.isFinite(g)).toBe(true);
   });
 
+  it("increases monotonically over short spans (modulo wrap)", () => {
+    // GMST advances ~7.29e-5 rad/s. Over 1 second it advances but doesn't
+    // wrap. Check that adjacent samples differ by roughly the right amount.
+    const t0 = 1775260800; // 2026-04-04T00:00:00Z
+    const t1 = t0 + 1;
+    const g0 = gmstRadians(t0);
+    const g1 = gmstRadians(t1);
+    const delta = g1 - g0;
+    // Expect ~7.292e-5 rad per second (sidereal rate, 360.985/86400 deg/sec).
+    expect(delta).toBeGreaterThan(7.2e-5);
+    expect(delta).toBeLessThan(7.4e-5);
+  });
+
+  it("wraps cleanly across the 2π boundary", () => {
+    // The J2000 angle and sidereal rate place the first wrap at 19037.33 s.
+    const before = gmstRadians(J2000_UNIX_SECONDS + 19037);
+    const after = gmstRadians(J2000_UNIX_SECONDS + 19038);
+    expect(before).toBeGreaterThan(2 * Math.PI - 0.0001);
+    expect(before).toBeLessThan(2 * Math.PI);
+    expect(after).toBeGreaterThanOrEqual(0);
+    expect(after).toBeLessThan(0.0001);
+  });
+});
+
+describe("orbitalMath", () => {
   describe("geoToSceneXYZ geometric correctness", () => {
     it("equator/prime meridian → positive X, near-zero Y and Z", () => {
       const [x, y, z] = geoToSceneXYZ(

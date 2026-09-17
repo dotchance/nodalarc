@@ -1,16 +1,6 @@
+// @vitest-environment node
 // Copyright 2024-2026 .chance (dotchance)
 // Licensed under the Apache License, Version 2.0. See LICENSE file.
-/** Contract tests for astronomy.ts.
- *
- *  gmstRadians() MUST match services/ome/propagator.py:gmst() to machine
- *  precision. The reference values below were computed by running the
- *  backend's gmst() with the listed Unix timestamps.
- *
- *  If any value here diverges from backend output, frontend Earth rotation
- *  will drift relative to backend-computed satellite positions and the
- *  ground-track alignment will be wrong.
- */
-
 import { describe, it, expect } from "vitest";
 import * as THREE from "three";
 import {
@@ -19,84 +9,17 @@ import {
   simTimeIsoToUnixSeconds,
   J2000_UNIX_SECONDS,
 } from "../astronomy";
+import {
+  gmstRadians as sharedGmstRadians,
+  J2000_UNIX_SECONDS as SHARED_J2000,
+} from "../../sim/orbitalMath";
 import { catalogEarthFrame } from "../../sim/__tests__/bodyModelFixture";
 
 const ROTATION_RATE_FROM_EPHEMERIS_RAD_S = catalogEarthFrame().rotation_rate_rad_s;
 
-describe("gmstRadians — backend contract", () => {
-  // Reference values computed from services/ome/propagator.py:gmst().
-  // Do not edit without re-running the backend reference computation.
-  const REFERENCE_VALUES: Array<{
-    name: string;
-    unixSeconds: number;
-    expectedGmstRad: number;
-  }> = [
-    { name: "J2000 epoch", unixSeconds: 946728000.0, expectedGmstRad: 4.894961212735793 },
-    { name: "J2000 + 12h", unixSeconds: 946771200.0, expectedGmstRad: 1.761969955048685 },
-    { name: "J2000 + 1 sidereal day", unixSeconds: 946814164.0905, expectedGmstRad: 4.894961210487280 },
-    { name: "2026-04-04T00:00:00Z", unixSeconds: 1775260800.0, expectedGmstRad: 3.356722590080810 },
-    { name: "2026-04-04T12:00:00Z", unixSeconds: 1775304000.0, expectedGmstRad: 0.223731332394507 },
-    { name: "Far future 2050-01-01", unixSeconds: 2524608000.0, expectedGmstRad: 1.760088545761268 },
-  ];
-
-  for (const ref of REFERENCE_VALUES) {
-    it(`matches backend gmst() at ${ref.name}`, () => {
-      const actual = gmstRadians(ref.unixSeconds);
-      // 1e-9 rad ≈ 0.2 milliarcseconds — far below any visual resolution.
-      expect(Math.abs(actual - ref.expectedGmstRad)).toBeLessThan(1e-9);
-    });
-  }
-
-  it("returns values in [0, 2π)", () => {
-    // Sample across a year at 1-hour intervals — all results must be wrapped.
-    for (let h = 0; h < 24 * 365; h++) {
-      const t = J2000_UNIX_SECONDS + h * 3600;
-      const g = gmstRadians(t);
-      expect(g).toBeGreaterThanOrEqual(0);
-      expect(g).toBeLessThan(2 * Math.PI);
-    }
-  });
-
-  it("handles negative days (pre-J2000) without sign errors", () => {
-    // NodalArc sessions won't encounter these, but correctness over
-    // assumption: JS % of float differs from Python for negative inputs.
-    const preJ2000 = J2000_UNIX_SECONDS - 86400; // 1999-12-31 12:00:00 UTC
-    const g = gmstRadians(preJ2000);
-    expect(g).toBeGreaterThanOrEqual(0);
-    expect(g).toBeLessThan(2 * Math.PI);
-    expect(Number.isFinite(g)).toBe(true);
-  });
-
-  it("increases monotonically over short spans (modulo wrap)", () => {
-    // GMST advances ~7.29e-5 rad/s. Over 1 second it advances but doesn't
-    // wrap. Check that adjacent samples differ by roughly the right amount.
-    const t0 = 1775260800; // 2026-04-04T00:00:00Z
-    const t1 = t0 + 1;
-    const g0 = gmstRadians(t0);
-    const g1 = gmstRadians(t1);
-    const delta = g1 - g0;
-    // Expect ~7.292e-5 rad per second (sidereal rate, 360.985/86400 deg/sec).
-    expect(delta).toBeGreaterThan(7.2e-5);
-    expect(delta).toBeLessThan(7.4e-5);
-  });
-
-  it("wraps cleanly across the 2π boundary", () => {
-    // Find a span where gmst wraps from just-below-2π to just-above-0.
-    // Sidereal day ≈ 86164.0905s; pick start where gmst is near 2π.
-    // We'll search from J2000 forward until we find the wrap.
-    let prev = gmstRadians(J2000_UNIX_SECONDS);
-    for (let i = 1; i < 90000; i++) {
-      const curr = gmstRadians(J2000_UNIX_SECONDS + i);
-      if (curr < prev) {
-        // Wrap found: curr should be small, prev should be near 2π.
-        expect(prev).toBeGreaterThan(2 * Math.PI - 0.01);
-        expect(curr).toBeLessThan(0.01);
-        return;
-      }
-      prev = curr;
-    }
-    throw new Error("No wrap found in 90000s — sidereal day is ~86164s");
-  });
+it("reexports the shared GMST function and epoch", () => {
+  expect(gmstRadians).toBe(sharedGmstRadians);
+  expect(J2000_UNIX_SECONDS).toBe(SHARED_J2000);
 });
 
 describe("simTimeIsoToUnixSeconds", () => {

@@ -467,5 +467,3 @@ def test_catalog_source_change_changes_resolved_session() -> None:
 
     assert baseline.model_dump(mode="python") != updated.model_dump(mode="python")
     assert all("changed" in node.tags for node in updated.nodes if node.segment_id == "leo_a")
-
-

@@ -80,16 +80,6 @@ BuilderSessionSaveRefusalCode = Literal[
     "builder_session_save.persistence_failed",
     "builder_session_save.storage_verification_failed",
 ]
-BuilderSessionDeployRefusalCode = Literal[
-    "builder_session_deploy.invalid_precondition",
-    "builder_session_deploy.source_not_found",
-    "builder_session_deploy.stale_source",
-    "builder_session_deploy.not_ready",
-    "builder_session_deploy.conflict",
-    "builder_session_deploy.repository_unavailable",
-    "builder_session_deploy.unsupported",
-    "builder_session_deploy.preparation_failed",
-]
 WizardOrbitPropagator = Literal["two_body", "j2_mean_elements", "sgp4_tle"]
 WizardConstellationSourceKind = Literal[
     "constellation",
@@ -776,9 +766,14 @@ class BuilderSessionDeployAccepted(_BuilderApplicationModel):
 
 
 class BuilderSessionDeployRefusal(_BuilderApplicationModel):
-    """Stable, path-free refusal for one guarded saved-session deployment."""
+    """Stable, path-free refusal for one guarded saved-session deployment.
 
-    code: BuilderSessionDeployRefusalCode
+    ``code`` is the refusing component's own vocabulary, the same one the
+    ``ApiRefusal`` envelope carries; this model adds the deployment's identity
+    and precondition evidence.
+    """
+
+    code: str = Field(min_length=1)
     message: str = Field(min_length=1)
     session_ref: SessionRef
     expected: str | None = None

@@ -42,9 +42,6 @@ from nodal.logging import uvicorn_settings as _uvicorn_logging_settings
 from nodalarc.catalog_closure import (
     CatalogClosureCollector,
     CatalogClosureError,
-    CatalogDocumentNotFound,
-    CatalogReadFailed,
-    CatalogReadRejected,
     load_catalog_object,
 )
 from nodalarc.catalog_refs import SessionRef
@@ -53,9 +50,7 @@ from nodalarc.catalog_registry import (
 )
 from nodalarc.catalog_repository import (
     CatalogConflictError,
-    CatalogNotFoundError,
     CatalogReadSnapshot,
-    CatalogRepositoryError,
     CatalogValidationError,
 )
 from nodalarc.catalog_upload import DEFAULT_CATALOG_UPLOAD_LIMITS
@@ -82,6 +77,7 @@ from nodalarc.kubernetes_runtime_config import (
     KubernetesRuntimeConfigError,
     KubernetesRuntimeConfigErrorCode,
 )
+from nodalarc.models.api_refusal import ApiRefusal
 from nodalarc.models.builder_api import (
     WizardAvailableStation,
     WizardAvailableStationResponse,
@@ -130,7 +126,6 @@ from nodalarc.resolve_session import (
     SessionResolution,
 )
 from nodalarc.runtime_config import ResolvedRuntimeConfig, RuntimeConfigError
-from nodalarc.runtime_support import UnsupportedFeatureError
 from urllib3.exceptions import HTTPError as TransportHTTPError
 from yaml import YAMLError
 
@@ -146,12 +141,18 @@ from vs_api.catalog_upload_store import (
     KubernetesCatalogUploadStore,
 )
 from vs_api.continuous_tracer import ContinuousTracer
-from vs_api.introspect import VTYSH_COMMANDS, run_vtysh
+from vs_api.introspect import VTYSH_COMMANDS, IntrospectRequest, IntrospectResult, run_vtysh
 from vs_api.ops_log import (
     OPS_LOG_TOKEN,
     is_operator_visible_ops_event,
     operator_visible_ops_events,
     stamp_ops_event,
+)
+from vs_api.refusals import (
+    install_refusal_handlers,
+    internal_error_refusal,
+    refusal_from_exception,
+    refusal_response,
 )
 from vs_api.resolved_runtime_views import tracer_node_registry
 from vs_api.session_context import SessionContext, _link_key
@@ -562,11 +563,12 @@ async def _enable_debug_source(source: str) -> bool:
             )
             return False
     except Exception as exc:
-        log.error("Debug enable failed for %s: %s", source, exc)
+        log.error("Debug enable failed for %s: %s", source, exc, exc_info=True)
         await _publish_system_ops_event(
             "error",
             "DEBUG_ENABLE_FAILED",
-            f"Failed to enable debug for {source}: {exc}",
+            f"Failed to enable debug for {source}",
+            {"cause_type": type(exc).__name__},
         )
         return False
 
@@ -585,11 +587,12 @@ async def _enable_debug_source(source: str) -> bool:
                 cb=_on_debug_event,
             )
         except Exception as exc:
-            log.error("Failed to subscribe to debug stream: %s", exc)
+            log.error("Failed to subscribe to debug stream: %s", exc, exc_info=True)
             await _publish_system_ops_event(
                 "error",
                 "DEBUG_SUBSCRIBE_FAILED",
-                f"Failed to subscribe to NODALARC_DEBUG: {exc}",
+                "Failed to subscribe to NODALARC_DEBUG",
+                {"cause_type": type(exc).__name__},
             )
 
     log.info("Debug enabled for %s", source)
@@ -1702,6 +1705,25 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="Nodal Arc VS-API", version=project_version(), lifespan=lifespan)
+install_refusal_handlers(app)
+# OpenAPI for the routes that refuse through the envelope: every refusal is an
+# ApiRefusal; a 422 is also FastAPI's own request-validation body.
+_REFUSAL_RESPONSES = {
+    **{status: {"model": ApiRefusal} for status in (400, 404, 409, 500, 502, 503)},
+    422: {
+        "description": "Refused, or the request failed validation",
+        "content": {
+            "application/json": {
+                "schema": {
+                    "anyOf": [
+                        {"$ref": "#/components/schemas/ApiRefusal"},
+                        {"$ref": "#/components/schemas/HTTPValidationError"},
+                    ]
+                }
+            }
+        },
+    },
+}
 app.mount(
     "/docs/ops",
     StaticFiles(directory=Path(__file__).resolve().parents[2] / "docs" / "ops"),
@@ -2241,7 +2263,7 @@ async def ws_terminal(websocket: WebSocket, node_id: str) -> None:
             ssh_key = await asyncio.to_thread(_load_ssh_key, namespace)
         except RuntimeError as e:
             log.warning("Terminal key error: %s", e)
-            await websocket.close(code=4503, reason=str(e))
+            await websocket.close(code=4503, reason="Terminal key unavailable")
             return
         session = TerminalSession(pod_ip, ssh_key)
     else:
@@ -3266,6 +3288,7 @@ def list_sessions(
 @app.get(
     "/api/v1/sessions/yaml",
     response_class=Response,
+    responses=_REFUSAL_RESPONSES,
     dependencies=[Depends(_require_api_key)],
 )
 def download_session_yaml(
@@ -3273,14 +3296,7 @@ def download_session_yaml(
     catalog_context: CatalogContext = Depends(get_catalog_context),
 ) -> Response:
     """Return exact stored YAML for one scoped catalog session reference."""
-    try:
-        root_yaml = CatalogSessionService(catalog_context).read_session_yaml(session_ref)
-    except CatalogNotFoundError:
-        raise HTTPException(status_code=404, detail="Catalog session was not found") from None
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from None
-    except CatalogRepositoryError:
-        raise HTTPException(status_code=503, detail="Catalog storage is unavailable") from None
+    root_yaml = CatalogSessionService(catalog_context).read_session_yaml(session_ref)
     return Response(content=root_yaml, media_type="application/yaml")
 
 
@@ -3376,7 +3392,6 @@ def _constellation_spec_observation(cr: Any) -> TransitionConstellationSpecObser
 
 
 async def _deploy_builder_catalog_session(request: Any, catalog_context: Any) -> Any:
-    from nodalarc.catalog_repository import CatalogRepositoryError
     from nodalarc.models.builder_api import (
         BuilderSessionDeployAccepted,
         BuilderSessionDeployRefusal,
@@ -3390,6 +3405,7 @@ async def _deploy_builder_catalog_session(request: Any, catalog_context: Any) ->
     )
 
     def refuse(
+        status_code: int,
         code: str,
         message: str,
         *,
@@ -3405,14 +3421,30 @@ async def _deploy_builder_catalog_session(request: Any, catalog_context: Any) ->
                 expected=expected,
                 observed=observed,
                 cause_type=cause_type,
-            )
+            ),
+            status_code=status_code,
+        )
+
+    def refuse_translated(exc: Exception, *, expected: str | None, observed: str | None) -> None:
+        # One translation for the whole service; this seam only adds the
+        # deployment's identity and precondition evidence.
+        outcome = refusal_from_exception(exc)
+        if outcome is None:
+            log.error("Builder deployment preparation failed", exc_info=exc)
+            refusal = internal_error_refusal("Session deployment preparation failed")
+            refuse(500, refusal.code, refusal.message)
+            return
+        refuse(
+            outcome.status_code,
+            outcome.refusal.code,
+            outcome.refusal.message,
+            expected=expected,
+            observed=observed,
+            cause_type=outcome.refusal.cause_type,
         )
 
     if _session_manager is None:
-        refuse(
-            "builder_session_deploy.repository_unavailable",
-            "Session deployment is unavailable",
-        )
+        refuse(503, "vs_api.session_manager_unavailable", "Session deployment is unavailable")
     available_node_count = await asyncio.to_thread(_available_session_node_count)
     try:
         deployment = await asyncio.to_thread(
@@ -3425,61 +3457,18 @@ async def _deploy_builder_catalog_session(request: Any, catalog_context: Any) ->
             available_node_count=available_node_count,
         )
     except SessionDeploymentPreparationError as exc:
-        code = "builder_session_deploy.stale_source"
-        if exc.code.value.endswith("source_not_found"):
-            code = "builder_session_deploy.source_not_found"
-        elif exc.code.value.endswith("invalid_precondition"):
-            code = "builder_session_deploy.invalid_precondition"
-        refuse(
-            code,
-            exc.evidence.message,
-            expected=exc.evidence.expected,
-            observed=exc.evidence.observed,
-            cause_type=exc.evidence.cause_type,
-        )
+        refuse_translated(exc, expected=exc.evidence.expected, observed=exc.evidence.observed)
     except PreparedSessionError as exc:
-        code = (
-            "builder_session_deploy.stale_source"
-            if "stale" in exc.code.value
-            else "builder_session_deploy.not_ready"
-        )
-        refuse(
-            code,
-            exc.evidence.message,
-            expected=exc.evidence.expected,
-            observed=exc.evidence.actual,
-            cause_type=exc.evidence.cause_type,
-        )
-    except CatalogRepositoryError as exc:
-        log.error("Builder deployment repository unavailable: %s", type(exc).__name__)
-        refuse(
-            "builder_session_deploy.repository_unavailable",
-            "Catalog repository is unavailable",
-            cause_type=type(exc).__name__,
-        )
-    except UnsupportedFeatureError as exc:
-        refuse(
-            "builder_session_deploy.unsupported",
-            str(exc),
-            cause_type=type(exc).__name__,
-        )
+        refuse_translated(exc, expected=exc.evidence.expected, observed=exc.evidence.actual)
     except Exception as exc:
-        log.error("Builder deployment preparation failed", exc_info=True)
-        refuse(
-            "builder_session_deploy.preparation_failed",
-            "Session deployment preparation failed",
-            cause_type=type(exc).__name__,
-        )
+        refuse_translated(exc, expected=None, observed=None)
 
     operation_id = await _admit_transition(
         lambda: _run_catalog_switch(deployment, catalog_context),
         reservation=_prepared_transition_reservation(deployment),
     )
     if operation_id is None:
-        refuse(
-            "builder_session_deploy.conflict",
-            "A session transition is already active",
-        )
+        refuse(409, "session_switch.conflict", "A session transition is already active")
     return BuilderSessionDeployAccepted(
         operation_id=operation_id,
         source=request,
@@ -3523,6 +3512,7 @@ async def get_session_transition(
 @app.post(
     "/api/v1/sessions/switch",
     response_model=CatalogSessionSwitchAccepted,
+    responses=_REFUSAL_RESPONSES,
     dependencies=[Depends(_require_api_key), Depends(_rate_limit_session_switch)],
 )
 async def switch_session(
@@ -3531,58 +3521,29 @@ async def switch_session(
 ) -> CatalogSessionSwitchAccepted | Response:
     """Deploy one reviewed session revision from the request catalog scope."""
     from vs_api.session_deployment import (
-        SessionDeploymentPreparationError,
         prepare_catalog_session_deployment,
     )
 
     if _session_manager is None:
-        return JSONResponse(status_code=503, content={"error": "Session manager not initialized"})
-    try:
-        available_node_count = await asyncio.to_thread(_available_session_node_count)
-        deployment = await asyncio.to_thread(
-            prepare_catalog_session_deployment,
-            catalog_context,
-            session_ref=str(body.source.session_ref),
-            available_node_count=available_node_count,
-            expected_session_revision=str(body.expected_source_revision),
-            expected_document_digest=str(body.expected_document_digest),
-            expected_closure_digest=str(body.expected_dependency_digest),
+        return refusal_response(
+            503, "vs_api.session_manager_unavailable", "Session manager not initialized"
         )
-    except SessionDeploymentPreparationError as exc:
-        return JSONResponse(
-            status_code=422,
-            content={"error": exc.evidence.message, "code": exc.code.value},
-        )
-    except CatalogRepositoryError:
-        return JSONResponse(status_code=503, content={"error": "Catalog storage is unavailable"})
-    except UnsupportedFeatureError as exc:
-        return JSONResponse(
-            status_code=422,
-            content={"error": str(exc), "code": "catalog_session.unsupported"},
-        )
-    except Exception as exc:
-        evidence = getattr(exc, "evidence", None)
-        message = getattr(evidence, "message", None) or str(exc)
-        log.info(
-            "Catalog session preparation refused for %s (%s)",
-            body.source.session_ref,
-            type(exc).__name__,
-        )
-        return JSONResponse(
-            status_code=422,
-            content={
-                "error": message,
-                "code": str(
-                    getattr(getattr(exc, "code", None), "value", "catalog_session.invalid")
-                ),
-            },
-        )
+    available_node_count = await asyncio.to_thread(_available_session_node_count)
+    deployment = await asyncio.to_thread(
+        prepare_catalog_session_deployment,
+        catalog_context,
+        session_ref=str(body.source.session_ref),
+        available_node_count=available_node_count,
+        expected_session_revision=str(body.expected_source_revision),
+        expected_document_digest=str(body.expected_document_digest),
+        expected_closure_digest=str(body.expected_dependency_digest),
+    )
     operation_id = await _admit_transition(
         lambda: _run_catalog_switch(deployment, catalog_context),
         reservation=_prepared_transition_reservation(deployment),
     )
     if operation_id is None:
-        return JSONResponse(status_code=409, content={"error": "Switch already in progress"})
+        return refusal_response(409, "session_switch.conflict", "Switch already in progress")
     return CatalogSessionSwitchAccepted(
         operation_id=operation_id,
         source=body.source,
@@ -3721,21 +3682,16 @@ def wizard_extension_rules() -> WizardExtensionRulesResponse:
     return wizard_extension_rules_response()
 
 
-def _error_response(status_code: int, message: str) -> JSONResponse:
-    return JSONResponse(status_code=status_code, content={"error": message})
-
-
 @app.post(
     "/api/v1/session/preview-coverage",
     response_model=CoveragePreviewResult,
+    responses=_REFUSAL_RESPONSES,
     dependencies=[Depends(_require_api_key)],
 )
 async def preview_coverage(
     request: WizardCoverageRequest,
 ) -> CoveragePreviewResult | JSONResponse:
     """Run OME coverage preview from typed Wizard intent and scoped catalog facts."""
-    from nodalarc.catalog_closure import CatalogClosureError
-    from nodalarc.catalog_repository import CatalogRepositoryError
     from ome.coverage_preview import compute_coverage_preview
 
     from vs_api.wizard_builder import wizard_preview_inputs
@@ -3752,27 +3708,24 @@ async def preview_coverage(
 
     try:
         result = await asyncio.to_thread(compute)
-    except CatalogClosureError as exc:
-        log.info("Invalid coverage preview reference: %s", exc)
-        return _error_response(422, exc.evidence.message)
-    except CatalogRepositoryError, CatalogReadFailed:
-        return _error_response(503, "Catalog storage is unavailable")
-    except CatalogDocumentNotFound:
-        return _error_response(400, "Catalog reference not found")
-    except CatalogReadRejected as exc:
-        return _error_response(400, str(exc))
     except ValueError as exc:
+        # Typed refusals are ValueError subclasses; they keep their own
+        # translation. A plain ValueError is a preview input the intent
+        # grammar admitted and the preview refused.
+        outcome = refusal_from_exception(exc)
+        if outcome is not None:
+            return outcome.response()
         log.info("Invalid coverage preview request: %s", exc)
-        return _error_response(400, "Coverage preview request is invalid")
-    except Exception as exc:
-        log.error("Coverage preview internal error: %s", exc, exc_info=True)
-        return _error_response(500, "Coverage preview failed")
+        return refusal_response(
+            400, "coverage_preview.invalid", "Coverage preview request is invalid"
+        )
     return result
 
 
 @app.post(
     "/api/v1/session/deploy-from-yaml",
     response_model=CatalogSessionSwitchAccepted,
+    responses=_REFUSAL_RESPONSES,
     dependencies=[Depends(_require_api_key)],
 )
 async def deploy_from_yaml(
@@ -3781,25 +3734,23 @@ async def deploy_from_yaml(
 ) -> CatalogSessionSwitchAccepted | Response:
     """Save standard session YAML in the user catalog and deploy that exact ref."""
     from vs_api.builder_compiler import canonicalize_persisted_configuration
-    from vs_api.session_deployment import (
-        SessionDeploymentPreparationError,
-        prepare_catalog_session_deployment,
-    )
+    from vs_api.session_deployment import prepare_catalog_session_deployment
 
     yaml_str = body.yaml
     try:
         raw = await asyncio.to_thread(load_configuration_yaml, yaml_str)
     except (UnicodeError, YAMLError) as exc:
         log.info("Invalid session YAML rejected: %s", exc)
-        return _error_response(400, "Invalid session YAML")
+        return refusal_response(400, "session_yaml.invalid", "Invalid session YAML")
     try:
         persisted = catalog_family_spec("sessions").validate_document(raw)
         session_ref = SessionRef(f"user:sessions/{persisted.session.name}.yaml")
         canonical = canonicalize_persisted_configuration(session_ref, raw)
     except (TypeError, ValueError) as exc:
         log.info("Invalid persisted session rejected: %s", exc)
-        return _error_response(
+        return refusal_response(
             422,
+            "session_yaml.not_ref_composed",
             "Single-file YAML upload must satisfy the ref-composed published grammar",
         )
 
@@ -3826,52 +3777,35 @@ async def deploy_from_yaml(
     try:
         saved, closure = await asyncio.to_thread(persist_session)
     except CatalogConflictError:
-        return JSONResponse(
-            status_code=409,
-            content={"error": f"Catalog session already exists: {session_ref}"},
+        return refusal_response(
+            409, "catalog_repository.conflict", f"Catalog session already exists: {session_ref}"
         )
     except CatalogValidationError as exc:
         log.info("Uploaded session catalog graph refused: %s", exc)
-        return JSONResponse(
-            status_code=422,
-            content={
-                "error": "Session references unresolved catalog content; "
-                "import all referenced user component YAML files through Session Builder"
-            },
+        return refusal_response(
+            422,
+            "catalog_repository.invalid_document",
+            "Session references unresolved catalog content; "
+            "import all referenced user component YAML files through Session Builder",
         )
-    except CatalogRepositoryError:
-        return JSONResponse(status_code=503, content={"error": "Catalog storage is unavailable"})
 
-    try:
-        available_node_count = await asyncio.to_thread(_available_session_node_count)
-        deployment = await asyncio.to_thread(
-            prepare_catalog_session_deployment,
-            catalog_context,
-            session_ref=str(session_ref),
-            expected_session_revision=str(saved.revision),
-            expected_document_digest=closure.document_digest,
-            expected_closure_digest=closure.closure_digest,
-            available_node_count=available_node_count,
-        )
-    except SessionDeploymentPreparationError as exc:
-        return JSONResponse(
-            status_code=422,
-            content={"error": exc.evidence.message, "code": exc.code.value},
-        )
-    except UnsupportedFeatureError as exc:
-        return JSONResponse(
-            status_code=422,
-            content={"error": str(exc), "code": "catalog_session.unsupported"},
-        )
-    except CatalogRepositoryError:
-        return JSONResponse(status_code=503, content={"error": "Catalog storage is unavailable"})
+    available_node_count = await asyncio.to_thread(_available_session_node_count)
+    deployment = await asyncio.to_thread(
+        prepare_catalog_session_deployment,
+        catalog_context,
+        session_ref=str(session_ref),
+        expected_session_revision=str(saved.revision),
+        expected_document_digest=closure.document_digest,
+        expected_closure_digest=closure.closure_digest,
+        available_node_count=available_node_count,
+    )
 
     operation_id = await _admit_transition(
         lambda: _run_catalog_switch(deployment, catalog_context),
         reservation=_prepared_transition_reservation(deployment),
     )
     if operation_id is None:
-        return JSONResponse(status_code=409, content={"error": "Switch already in progress"})
+        return refusal_response(409, "session_switch.conflict", "Switch already in progress")
     return CatalogSessionSwitchAccepted(
         operation_id=operation_id,
         source=CatalogSessionSourceId(session_ref=session_ref),
@@ -3888,27 +3822,22 @@ def introspect_commands() -> list[str]:
 
 
 @app.post(
-    "/api/v1/introspect", dependencies=[Depends(_require_api_key), Depends(_rate_limit_introspect)]
+    "/api/v1/introspect",
+    response_model=IntrospectResult,
+    responses=_REFUSAL_RESPONSES,
+    dependencies=[Depends(_require_api_key), Depends(_rate_limit_introspect)],
 )
-def introspect(body: dict) -> dict:
+def introspect(body: IntrospectRequest) -> IntrospectResult | JSONResponse:
     """Run a whitelisted vtysh command on a node's FRR container."""
-    node_id = body.get("node_id", "")
-    command = body.get("command", "")
-    if not node_id:
-        return JSONResponse(status_code=400, content={"error": "node_id is required"})
-    if command not in VTYSH_COMMANDS:
-        return JSONResponse(status_code=400, content={"error": f"Command not allowed: {command}"})
+    if body.command not in VTYSH_COMMANDS:
+        return refusal_response(
+            400, "introspect.command_not_allowed", f"Command not allowed: {body.command}"
+        )
     try:
-        result = run_vtysh(node_id, command)
+        return run_vtysh(body.node_id, body.command)
     except ValueError as exc:
         log.info("Invalid introspection request: %s", exc)
-        return _error_response(400, "Invalid introspection request")
-    except Exception as exc:
-        log.warning("Introspection command failed: %s", exc, exc_info=True)
-        return _error_response(500, "Introspection command failed")
-    if result.get("error") == "Command timed out":
-        return JSONResponse(status_code=504, content=result)
-    return result
+        return refusal_response(400, "introspect.invalid_request", "Invalid introspection request")
 
 
 async def _run_catalog_switch(
@@ -4222,8 +4151,13 @@ async def _poll_cr_until_ready() -> None:
                 exc_info=exc,
             )
             if _session_manager:
+                outcome = refusal_from_exception(exc)
                 _session_manager._status = "error"
-                _session_manager.status_detail = f"{type(exc).__name__}: {exc}"
+                _session_manager.status_detail = (
+                    outcome.refusal.message
+                    if outcome is not None
+                    else "Runtime ConstellationSpec poll failed"
+                )
             return
 
     if _session_manager:

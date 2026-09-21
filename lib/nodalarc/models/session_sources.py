@@ -7,6 +7,7 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 from nodalarc.catalog_refs import SessionRef
+from nodalarc.models.api_refusal import ApiRefusal
 from nodalarc.models.builder_api import Sha256Digest
 
 
@@ -24,14 +25,6 @@ class CatalogSessionSourceId(_SessionSourceModel):
 SessionSourceId = CatalogSessionSourceId
 
 
-class CatalogSessionBlocker(_SessionSourceModel):
-    """Safe typed reason one catalog session cannot deploy."""
-
-    code: str = Field(min_length=1, max_length=160)
-    message: str = Field(min_length=1, max_length=1024)
-    cause_type: str | None = Field(default=None, min_length=1, max_length=160)
-
-
 class CatalogSessionSummary(_SessionSourceModel):
     """Revisioned browser listing for one scoped catalog session."""
 
@@ -44,7 +37,7 @@ class CatalogSessionSummary(_SessionSourceModel):
     source_revision: Sha256Digest | None = None
     document_digest: Sha256Digest | None = None
     dependency_digest: Sha256Digest | None = None
-    blockers: tuple[CatalogSessionBlocker, ...] = ()
+    blockers: tuple[ApiRefusal, ...] = ()
     active: bool = False
 
 

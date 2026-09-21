@@ -400,9 +400,9 @@ export interface BuilderSessionDeployAccepted {
   readonly source: BuilderSessionDeployRequest;
 }
 
-/** Stable, path-free refusal for one guarded saved-session deployment. */
+/** Stable, path-free refusal for one guarded saved-session deployment. ``code`` is the refusing component's own vocabulary, the same one the ``ApiRefusal`` envelope carries; this model adds the deployment's identity and precondition evidence. */
 export interface BuilderSessionDeployRefusal {
-  readonly code: "builder_session_deploy.invalid_precondition" | "builder_session_deploy.source_not_found" | "builder_session_deploy.stale_source" | "builder_session_deploy.not_ready" | "builder_session_deploy.conflict" | "builder_session_deploy.repository_unavailable" | "builder_session_deploy.unsupported" | "builder_session_deploy.preparation_failed";
+  readonly code: string;
   readonly message: string;
   readonly session_ref: SessionRef;
   readonly expected?: string | null;
@@ -908,17 +908,17 @@ export interface BuilderVisualDraftAssemblyResult {
   readonly assembly_issues?: ReadonlyArray<BuilderIssue>;
 }
 
+/** Stable, path-free refusal evidence for one request. ``code`` is the refusing component's own vocabulary (an exception family's enum value or one fixed name per family). ``message`` names the declared inputs and catalog references involved; the host filesystem and other exceptions' text never appear in it. ``cause_type`` is the class name of a wrapped cause when the refusal carries one. */
+export interface ApiRefusal {
+  readonly code: string;
+  readonly message: string;
+  readonly cause_type?: string | null;
+}
+
 /** First-class catalog session selected inside a server-owned scope. */
 export interface CatalogSessionSourceId {
   readonly kind?: "catalog";
   readonly session_ref: SessionRef;
-}
-
-/** Safe typed reason one catalog session cannot deploy. */
-export interface CatalogSessionBlocker {
-  readonly code: string;
-  readonly message: string;
-  readonly cause_type?: string | null;
 }
 
 /** Revisioned browser listing for one scoped catalog session. */
@@ -932,7 +932,7 @@ export interface CatalogSessionSummary {
   readonly source_revision?: Sha256Digest | null;
   readonly document_digest?: Sha256Digest | null;
   readonly dependency_digest?: Sha256Digest | null;
-  readonly blockers?: ReadonlyArray<CatalogSessionBlocker>;
+  readonly blockers?: ReadonlyArray<ApiRefusal>;
   readonly active?: boolean;
 }
 
@@ -954,6 +954,20 @@ export interface CatalogSessionSwitchAccepted {
 /** One standard persisted session document to save into the user catalog. */
 export interface CatalogSessionYamlUploadRequest {
   readonly yaml: string;
+}
+
+/** One whitelisted vtysh command addressed to one runtime node. */
+export interface IntrospectRequest {
+  readonly node_id: string;
+  readonly command: string;
+}
+
+/** The exact output of one executed vtysh command. */
+export interface IntrospectResult {
+  readonly node_id: string;
+  readonly command: string;
+  readonly output: string;
+  readonly exit_code: number;
 }
 
 /**  */

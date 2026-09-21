@@ -605,13 +605,14 @@ def test_deploy_refusal_is_typed_and_path_free(catalog_context: CatalogContext) 
     async def refuse_deploy(request, _context):
         raise BuilderSessionDeployError(
             BuilderSessionDeployRefusal(
-                code="builder_session_deploy.stale_source",
+                code="session_deployment.stale_source",
                 message="Saved session changed after review",
                 session_ref=request.session_ref,
                 expected="sha256:" + "a" * 64,
                 observed="sha256:" + "b" * 64,
                 cause_type="CatalogConflictError",
-            )
+            ),
+            status_code=409,
         )
 
     client = TestClient(_application(catalog_context, deploy_callback=refuse_deploy))
@@ -627,7 +628,7 @@ def test_deploy_refusal_is_typed_and_path_free(catalog_context: CatalogContext) 
 
     assert response.status_code == 409
     assert response.json() == {
-        "code": "builder_session_deploy.stale_source",
+        "code": "session_deployment.stale_source",
         "message": "Saved session changed after review",
         "session_ref": "user:sessions/deploy-me.yaml",
         "expected": "sha256:" + "a" * 64,

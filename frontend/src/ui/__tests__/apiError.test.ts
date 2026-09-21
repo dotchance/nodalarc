@@ -1,8 +1,9 @@
 // Copyright 2024-2026 .chance (dotchance)
 // Licensed under the Apache License, Version 2.0. See LICENSE file.
-/** One error-message policy: the envelope's `error` reaches the user verbatim,
- *  with a status fallback for a non-envelope body and a named
- *  constant for a network failure that carries no Response. */
+/** One error-message policy: the envelope's `message` (or a legacy route's
+ *  `error`) reaches the user verbatim, with a status fallback for a
+ *  non-envelope body and a named constant for a network failure that carries
+ *  no Response. */
 import { describe, it, expect } from "vitest";
 import { apiErrorMessage, apiErrorFromException, NETWORK_ERROR_MESSAGE } from "../apiError";
 
@@ -11,7 +12,24 @@ function resp(status: number, json: () => Promise<unknown>): Response {
 }
 
 describe("apiErrorMessage", () => {
-  it("surfaces the JSON envelope's error field verbatim (the resolver's refusal)", async () => {
+  it("surfaces the ApiRefusal envelope's message verbatim", async () => {
+    const r = resp(422, () =>
+      Promise.resolve({ code: "session_resolution.invalid", message: "segment 'leo' has no satellites" }),
+    );
+    expect(await apiErrorMessage(r)).toBe("segment 'leo' has no satellites");
+  });
+
+  it("prefers the envelope's message over a legacy error field", async () => {
+    const r = resp(422, () => Promise.resolve({ message: "typed refusal", error: "legacy" }));
+    expect(await apiErrorMessage(r)).toBe("typed refusal");
+  });
+
+  it("falls back to the status code for an empty envelope message", async () => {
+    const r = resp(422, () => Promise.resolve({ code: "x", message: "" }));
+    expect(await apiErrorMessage(r)).toBe("request failed (422)");
+  });
+
+  it("surfaces a legacy route's error field verbatim (the resolver's refusal)", async () => {
     const r = resp(422, () => Promise.resolve({ error: "segment 'leo' has no satellites" }));
     expect(await apiErrorMessage(r)).toBe("segment 'leo' has no satellites");
   });

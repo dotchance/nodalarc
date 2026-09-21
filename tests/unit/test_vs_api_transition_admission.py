@@ -638,12 +638,17 @@ def _assert_polling_continued(manager: SimpleNamespace, custom: _ScriptedCustomO
 
 
 def _assert_terminal(
-    manager: SimpleNamespace, custom: _ScriptedCustomObjectsApi, prefix: str
+    manager: SimpleNamespace, custom: _ScriptedCustomObjectsApi, caplog, diagnostic: str
 ) -> None:
+    """The poll ended in error; the operator sees fixed text, the log the cause."""
     assert custom.calls == 1
     assert manager._status == "error"
-    assert manager.status_detail.startswith(prefix)
-    assert "timed out" not in manager.status_detail
+    assert manager.status_detail == "Runtime ConstellationSpec poll failed"
+    assert diagnostic not in manager.status_detail
+    assert any(
+        "nodalarc/current-session failed: " + diagnostic in record.getMessage()
+        for record in caplog.records
+    )
 
 
 def test_poll_continues_past_a_connection_failure_in_the_upload_gc_list(monkeypatch) -> None:
@@ -672,13 +677,10 @@ def test_poll_ends_on_a_malformed_upload_gc_list_response(monkeypatch, caplog) -
     _assert_terminal(
         manager,
         custom,
+        caplog,
         "CatalogUploadStoreError: Could not list catalog upload resources",
     )
-    assert "has no items" in manager.status_detail
-    assert any(
-        "nodalarc/current-session failed: CatalogUploadStoreError" in record.getMessage()
-        for record in caplog.records
-    )
+    assert any("has no items" in record.getMessage() for record in caplog.records)
 
 
 @pytest.mark.parametrize("logic_failure_first", [False, True])
@@ -702,6 +704,7 @@ def test_poll_ends_when_any_failed_delete_is_not_transport(
     _assert_terminal(
         manager,
         custom,
+        caplog,
         "CatalogUploadStoreError: Could not garbage-collect catalog upload stale",
     )
     assert core.delete_calls == list(STALE_NAMES)
@@ -745,7 +748,7 @@ def test_poll_continues_past_a_raw_api_failure_reading_the_cr(monkeypatch) -> No
     _assert_polling_continued(manager, custom)
 
 
-def test_poll_ends_on_a_strict_status_parse_failure(monkeypatch) -> None:
+def test_poll_ends_on_a_strict_status_parse_failure(monkeypatch, caplog) -> None:
     import vs_api.main as main
 
     custom = _ScriptedCustomObjectsApi(
@@ -753,10 +756,11 @@ def test_poll_ends_on_a_strict_status_parse_failure(monkeypatch) -> None:
     )
     core = _ScriptedCoreV1Api(list_results=[SimpleNamespace(items=[])])
 
-    manager = _run_poll(monkeypatch, main, custom=custom, core=core)
+    with caplog.at_level("ERROR", logger="vs_api.main"):
+        manager = _run_poll(monkeypatch, main, custom=custom, core=core)
 
-    _assert_terminal(manager, custom, "ValidationError:")
-    assert "readyPods" in manager.status_detail
+    _assert_terminal(manager, custom, caplog, "ValidationError:")
+    assert any("readyPods" in record.getMessage() for record in caplog.records)
 
 
 def _closure_entry(yaml_bytes: bytes) -> CatalogClosureEntry:

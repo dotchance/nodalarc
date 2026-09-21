@@ -71,7 +71,9 @@ def test_switch_refusal_names_the_declared_kernel_and_hides_the_host_filesystem(
     response = scoped_client.post("/api/v1/sessions/switch", json=request)
 
     assert response.status_code == 422
-    message = response.json()["error"]
+    body = response.json()
+    assert body["code"] == "session_resolution.invalid"
+    message = body["message"]
     assert str(injected_root) not in message
     assert "Errno" not in message
     assert DECLARED_KERNEL in message

@@ -388,7 +388,12 @@ import json
 import sys
 
 value = json.load(sys.stdin)
-print(value.get("error") or value.get("detail") or "session switch was refused")
+print(
+    value.get("message")
+    or value.get("error")
+    or value.get("detail")
+    or "session switch was refused"
+)
 ' < "$response_file" 2>/dev/null || printf 'HTTP %s' "$http_status"
     )"
     echo "[session] ERROR: $api_error" >&2

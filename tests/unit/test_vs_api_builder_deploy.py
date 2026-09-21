@@ -268,7 +268,7 @@ def test_typed_route_prepares_direct_and_transitive_user_refs_for_switch(
         },
     )
     assert stale.status_code == 409
-    assert stale.json()["code"] == "builder_session_deploy.stale_source"
+    assert stale.json()["code"] == "session_deployment.stale_source"
     assert len(captured) == 1
 
 

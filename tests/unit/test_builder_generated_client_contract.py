@@ -52,6 +52,12 @@ def test_generated_contract_exposes_visual_drafts_and_path_free_session_sources(
     assert "WizardProtocolExtensionRule" not in generated
     assert 'readonly severity: "info" | "note" | "warning" | "error";' in generated
     assert "export type SessionSourceId = CatalogSessionSourceId;" in generated
+    assert "export interface ApiRefusal" in generated
+    assert "readonly blockers?: ReadonlyArray<ApiRefusal>;" in generated
+    assert "export interface IntrospectRequest" in generated
+    assert "export interface IntrospectResult" in generated
+    assert "CatalogSessionBlocker" not in generated
+    assert "BuilderSessionDeployRefusalCode" not in generated
     assert "LegacySession" not in generated
 
 

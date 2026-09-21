@@ -19,6 +19,7 @@ import {
   saveBuilderSession,
 } from "../builder/builderApiClient";
 import { writeSessionYamlExport } from "../builder/sessionYamlTransfer";
+import { apiErrorMessage } from "../ui/apiError";
 import { downloadBlob } from "../ui/downloadBlob";
 import type {
   BuilderCompileResult,
@@ -187,9 +188,8 @@ export function useWizardApi() {
         headers: authHeaders({ "Content-Type": "application/json" }),
         body: JSON.stringify({ yaml }),
       });
-      const data = await resp.json();
       if (!resp.ok) {
-        setError(data.error || "Deploy failed");
+        setError(await apiErrorMessage(resp));
         return false;
       }
       return true;

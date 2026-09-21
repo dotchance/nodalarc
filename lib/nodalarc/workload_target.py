@@ -123,9 +123,9 @@ def read_workload_target(core_v1: Any, namespace: str, node_id: str) -> Workload
     try:
         listed = core_v1.list_namespaced_pod(namespace, label_selector=f"{NODE_ID_LABEL}={node_id}")
     except kubernetes.client.rest.ApiException as exc:
-        raise WorkloadTargetError(
-            node_id, f"pod listing failed: HTTP {exc.status} {exc.reason}"
-        ) from exc
+        # ``reason`` carries the client's own exception text for transport
+        # failures; it stays on the chained cause for the server log.
+        raise WorkloadTargetError(node_id, f"pod listing failed: HTTP {exc.status}") from exc
     serializer = kubernetes.client.ApiClient.sanitize_for_serialization
     pods = [
         item if isinstance(item, Mapping) else serializer(core_v1.api_client, item)

@@ -70,3 +70,29 @@ def test_listing_collects_each_session_once_and_keeps_digests_on_blocked_rows(
     shipped = by_ref["nodalarc:sessions/earth-leo-simple.yaml"]
     assert shipped.deploy_allowed is True
     assert shipped.document_digest is not None
+
+
+def test_a_failure_that_is_not_a_refusal_is_listed_as_an_internal_error(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    context = _context(tmp_path)
+    private = "PRIVATE_DIAGNOSTIC_TEXT"
+
+    def broken_preparer(*_args, **_kwargs):
+        raise RuntimeError(private)
+
+    monkeypatch.setattr(service_module, "prepare_collected_session", broken_preparer)
+
+    summaries = CatalogSessionService(context).list_sessions(
+        active_session_ref=None, available_node_count=1_000_000
+    )
+
+    assert summaries
+    for summary in summaries:
+        assert summary.deploy_allowed is False
+        (blocker,) = summary.blockers
+        assert blocker.code == "vs_api.internal_error"
+        assert blocker.message == "Session preparation failed"
+        assert blocker.cause_type is None
+        assert private not in blocker.message

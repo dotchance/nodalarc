@@ -279,16 +279,9 @@ _SAVE_REFUSAL_STATUS = {
     "builder_session_save.persistence_failed": 503,
     "builder_session_save.storage_verification_failed": 500,
 }
-_DEPLOY_REFUSAL_STATUS = {
-    "builder_session_deploy.invalid_precondition": 422,
-    "builder_session_deploy.source_not_found": 404,
-    "builder_session_deploy.stale_source": 409,
-    "builder_session_deploy.not_ready": 422,
-    "builder_session_deploy.conflict": 409,
-    "builder_session_deploy.repository_unavailable": 503,
-    "builder_session_deploy.unsupported": 422,
-    "builder_session_deploy.preparation_failed": 500,
-}
+# The deployment seam translates through vs_api.refusals; these are the statuses
+# that translation and the seam's own refusals can produce.
+_DEPLOY_REFUSAL_STATUSES = (400, 404, 409, 422, 500, 503)
 _CATALOG_ERROR_RESPONSES = {
     status: {"model": CatalogOperationRefusal}
     for status in sorted(set(_CATALOG_REFUSAL_STATUS.values()))
@@ -298,17 +291,19 @@ _SAVE_ERROR_RESPONSES = {
     for status in sorted(set(_SAVE_REFUSAL_STATUS.values()))
 }
 _DEPLOY_ERROR_RESPONSES = {
-    status: {"model": BuilderSessionDeployRefusal}
-    for status in sorted(set(_DEPLOY_REFUSAL_STATUS.values()))
+    status: {"model": BuilderSessionDeployRefusal} for status in _DEPLOY_REFUSAL_STATUSES
 }
 
 
 class BuilderSessionDeployError(ValueError):
     """Transport-neutral typed refusal raised by the deployment application seam."""
 
-    def __init__(self, refusal: BuilderSessionDeployRefusal) -> None:
+    def __init__(self, refusal: BuilderSessionDeployRefusal, *, status_code: int) -> None:
+        if status_code not in _DEPLOY_REFUSAL_STATUSES:
+            raise ValueError(f"undeclared deployment refusal status {status_code}")
         super().__init__(refusal.message)
         self.refusal = refusal
+        self.status_code = status_code
 
 
 def _catalog_refusal_response(error: CatalogAuthoringError) -> JSONResponse:
@@ -819,7 +814,7 @@ def create_builder_router(
                 return await selected.deploy_callback(request, context)
             except BuilderSessionDeployError as error:
                 return JSONResponse(
-                    status_code=_DEPLOY_REFUSAL_STATUS[error.refusal.code],
+                    status_code=error.status_code,
                     content=error.refusal.model_dump(mode="json", exclude_none=True),
                 )
 

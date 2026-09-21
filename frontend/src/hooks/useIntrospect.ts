@@ -3,7 +3,9 @@
 /** Hook for running whitelisted vtysh commands via VS-API introspect endpoint. */
 
 import { useState, useEffect, useCallback } from "react";
+import type { IntrospectResult } from "../builder/generated/builderApi";
 import { REST_URL, authHeaders } from "../config";
+import { apiErrorMessage, apiErrorFromException } from "../ui/apiError";
 
 interface UseIntrospectResult {
   loading: boolean;
@@ -46,17 +48,14 @@ export function useIntrospect(): UseIntrospectResult {
         headers: authHeaders({ "Content-Type": "application/json" }),
         body: JSON.stringify({ node_id: nodeId, command }),
       });
-      const data = await res.json();
       if (!res.ok) {
-        setError(data.error ?? `HTTP ${res.status}`);
-      } else if (data.error) {
-        setError(data.error);
-        setOutput(data.output || null);
-      } else {
-        setOutput(data.output);
+        setError(await apiErrorMessage(res));
+        return;
       }
+      const data = (await res.json()) as IntrospectResult;
+      setOutput(data.output);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Network error");
+      setError(apiErrorFromException(err));
     } finally {
       setLoading(false);
     }

@@ -25,6 +25,7 @@ sys.path.insert(0, str(ROOT / "lib"))
 sys.path.insert(0, str(ROOT / "services"))
 
 from nodalarc.catalog_refs import CatalogFamily, CatalogRef, SessionRef  # noqa: E402
+from nodalarc.models.api_refusal import ApiRefusal  # noqa: E402
 from nodalarc.models.builder_api import (  # noqa: E402
     BuilderBlockedOperation,
     BuilderCatalogDocument,
@@ -230,7 +231,6 @@ from nodalarc.models.builder_visual_api import (  # noqa: E402
 from nodalarc.models.builder_world import BuilderWorld  # noqa: E402
 from nodalarc.models.coverage import CoveragePreviewResult  # noqa: E402
 from nodalarc.models.session_sources import (  # noqa: E402
-    CatalogSessionBlocker,
     CatalogSessionSourceId,
     CatalogSessionSummary,
     CatalogSessionSwitchAccepted,
@@ -238,6 +238,7 @@ from nodalarc.models.session_sources import (  # noqa: E402
     CatalogSessionYamlUploadRequest,
 )
 from pydantic import BaseModel, TypeAdapter  # noqa: E402
+from vs_api.introspect import IntrospectRequest, IntrospectResult  # noqa: E402
 from vs_api.transition_operations import (  # noqa: E402
     TransitionOperation,
     TransitionOperationEvent,
@@ -349,12 +350,14 @@ MODEL_TYPES: tuple[type[BaseModel], ...] = (
     BuilderVisualDraftRetargetRequest,
     BuilderVisualDraftCompileRequest,
     BuilderVisualDraftAssemblyResult,
+    ApiRefusal,
     CatalogSessionSourceId,
-    CatalogSessionBlocker,
     CatalogSessionSummary,
     CatalogSessionSwitchRequest,
     CatalogSessionSwitchAccepted,
     CatalogSessionYamlUploadRequest,
+    IntrospectRequest,
+    IntrospectResult,
     TransitionOperationSource,
     TransitionOperationFacts,
     TransitionOperationEvent,

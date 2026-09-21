@@ -15,10 +15,10 @@ import kubernetes.config
 import kubernetes.stream
 from nodalarc.platform_config import get_platform_config
 from nodalarc.workload_target import (
-    WorkloadTargetError,
     read_workload_target,
     validate_node_id,
 )
+from pydantic import BaseModel, ConfigDict, Field
 
 log = logging.getLogger(__name__)
 
@@ -38,11 +38,40 @@ VTYSH_COMMANDS = {
 }
 
 
-def run_vtysh(node_id: str, command: str) -> dict:
+class IntrospectRequest(BaseModel):
+    """One whitelisted vtysh command addressed to one runtime node."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid", strict=True)
+
+    node_id: str = Field(min_length=1)
+    command: str = Field(min_length=1)
+
+
+class IntrospectResult(BaseModel):
+    """The exact output of one executed vtysh command."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid", strict=True)
+
+    node_id: str
+    command: str
+    output: str
+    exit_code: int
+
+
+class IntrospectExecError(Exception):
+    """The command could not be executed inside the node's workload container.
+
+    The message is fixed per failure kind; the Kubernetes client's text stays on
+    the chained cause for the server log.
+    """
+
+
+def run_vtysh(node_id: str, command: str) -> IntrospectResult:
     """Execute a whitelisted vtysh command in a node's FRR container.
 
-    Uses kubernetes client exec directly — no deploy daemon needed.
-    Returns dict with: node_id, command, output, exit_code, error.
+    Raises ``ValueError`` for an invalid request, ``WorkloadTargetError`` when
+    the node has no published workload target, and ``IntrospectExecError`` when
+    the exec itself fails.
     """
     if not node_id:
         raise ValueError("node_id is required")
@@ -60,17 +89,7 @@ def run_vtysh(node_id: str, command: str) -> dict:
 
     v1 = kubernetes.client.CoreV1Api()
 
-    try:
-        target = read_workload_target(v1, namespace, node_id)
-    except WorkloadTargetError as exc:
-        log.warning("Workload target unavailable for %s cmd=%s: %s", node_id, command, exc)
-        return {
-            "node_id": node_id,
-            "command": command,
-            "output": "",
-            "exit_code": -1,
-            "error": f"workload target unavailable: {exc}",
-        }
+    target = read_workload_target(v1, namespace, node_id)
 
     try:
         stdout = kubernetes.stream.stream(
@@ -84,42 +103,20 @@ def run_vtysh(node_id: str, command: str) -> dict:
             stdin=False,
             tty=False,
         )
-        stderr = ""
-        exit_code = 0
     except kubernetes.client.rest.ApiException as exc:
         log.warning(
             "Kubernetes exec failed for %s cmd=%s: %s", node_id, command, exc, exc_info=True
         )
-        return {
-            "node_id": node_id,
-            "command": command,
-            "output": "",
-            "exit_code": -1,
-            "error": "Kubernetes exec failed",
-        }
+        raise IntrospectExecError("Kubernetes exec failed") from exc
     except Exception as exc:
         log.warning("vtysh exec failed for %s cmd=%s: %s", node_id, command, exc, exc_info=True)
-        return {
-            "node_id": node_id,
-            "command": command,
-            "output": "",
-            "exit_code": -1,
-            "error": "vtysh exec failed",
-        }
+        raise IntrospectExecError("vtysh exec failed") from exc
 
     if stdout is None:
         log.error("vtysh exec returned None stdout for %s cmd=%s", node_id, command)
-        raise ValueError("vtysh exec returned no output")
+        raise IntrospectExecError("vtysh exec returned no output")
     max_bytes = cfg.vs_api_introspect_max_response_bytes
     if len(stdout) > max_bytes:
         stdout = stdout[:max_bytes] + "\n... (truncated)"
 
-    error = stderr.strip() if stderr and exit_code != 0 else None
-
-    return {
-        "node_id": node_id,
-        "command": command,
-        "output": stdout,
-        "exit_code": exit_code,
-        "error": error,
-    }
+    return IntrospectResult(node_id=node_id, command=command, output=stdout, exit_code=0)

@@ -197,7 +197,7 @@ def test_deploy_sanitizes_yaml_parser_errors(catalog_client):
     response = scoped_client.post("/api/v1/session/deploy-from-yaml", json={"yaml": "session: ["})
 
     assert response.status_code == 400
-    assert response.json()["error"] == "Invalid session YAML"
+    assert response.json()["message"] == "Invalid session YAML"
 
 
 def test_deploy_rejects_session_name_with_path_separator(catalog_client):
@@ -208,7 +208,7 @@ def test_deploy_rejects_session_name_with_path_separator(catalog_client):
     )
 
     assert response.status_code == 422
-    assert "ref-composed published grammar" in response.json()["error"]
+    assert "ref-composed published grammar" in response.json()["message"]
 
 
 def test_legacy_deploy_alias_is_retired():
@@ -233,7 +233,7 @@ def test_single_file_upload_requires_referenced_user_content(catalog_client):
     )
 
     assert response.status_code == 422
-    assert "user component YAML files" in response.json()["error"]
+    assert "user component YAML files" in response.json()["message"]
 
 
 def test_upload_saves_canonical_user_catalog_session_and_admits_catalog_deploy(

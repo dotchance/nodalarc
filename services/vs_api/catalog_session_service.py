@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import logging
+
 from nodalarc.catalog_closure import CatalogClosureCollector
 from nodalarc.catalog_refs import SessionRef
 from nodalarc.catalog_repository import CatalogNotFoundError
+from nodalarc.models.api_refusal import ApiRefusal
 from nodalarc.models.session_sources import (
-    CatalogSessionBlocker,
     CatalogSessionSourceId,
     CatalogSessionSummary,
 )
@@ -14,31 +16,25 @@ from nodalarc.prepared_session import (
     PreparedSessionSource,
     prepare_collected_session,
 )
-from nodalarc.runtime_support import UnsupportedFeatureError
 
 from .catalog_context import CatalogContext
+from .refusals import internal_error_refusal, refusal_from_exception
 from .resolved_runtime_views import constellation_label, routing_label
 
+log = logging.getLogger(__name__)
 
-def _safe_blocker(exc: Exception) -> CatalogSessionBlocker:
-    if isinstance(exc, UnsupportedFeatureError):
-        return CatalogSessionBlocker(
-            code="catalog_session.unsupported",
-            message=str(exc)[:1024],
-            cause_type=type(exc).__name__[:160],
-        )
-    raw_code = getattr(getattr(exc, "code", None), "value", None)
-    code = raw_code if isinstance(raw_code, str) else "catalog_session.invalid"
-    if code.startswith(("prepared_session.", "session_deployment.")):
-        raw_message = getattr(getattr(exc, "evidence", None), "message", None)
-        message = raw_message if isinstance(raw_message, str) else "Session preflight failed"
-    else:
-        message = "The session does not satisfy the published configuration contract"
-    return CatalogSessionBlocker(
-        code=code[:160],
-        message=message[:1024],
-        cause_type=type(exc).__name__[:160],
-    )
+
+def _blocker(session_ref: SessionRef, exc: Exception) -> ApiRefusal:
+    """The listing row's reason: the typed refusal, or an internal error.
+
+    A failure that is not a refusal is reported as one, never as a contract
+    violation the session did not commit.
+    """
+    outcome = refusal_from_exception(exc)
+    if outcome is not None:
+        return outcome.refusal
+    log.error("Catalog session %s could not be prepared for listing", session_ref, exc_info=exc)
+    return internal_error_refusal("Session preparation failed")
 
 
 class CatalogSessionService:
@@ -102,7 +98,7 @@ class CatalogSessionService:
                     source_revision=str(document.revision),
                     document_digest=document_digest,
                     dependency_digest=closure_digest,
-                    blockers=(_safe_blocker(exc),),
+                    blockers=(_blocker(session_ref, exc),),
                     active=str(session_ref) == active_session_ref,
                 )
             summaries.append(summary)

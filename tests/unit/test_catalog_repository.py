@@ -20,6 +20,7 @@ from nodalarc.catalog_repository import (
     CatalogContainmentError,
     CatalogNotFoundError,
     CatalogReadOnlyError,
+    CatalogRepositoryError,
     CatalogScope,
     CatalogTransactionOrderError,
     CatalogValidationError,
@@ -704,3 +705,92 @@ def test_snapshot_read_normalizes_filesystem_errors_to_read_errors(
     with pytest.raises(CatalogDocumentNotFound) as gone:
         snapshot.read(ref)
     assert gone.value.ref == ref
+
+
+PRIVATE_DIAGNOSTIC = "PRIVATE_STORAGE_DIAGNOSTIC"
+
+
+def _deny_yaml_resolution(monkeypatch: pytest.MonkeyPatch, error: type[OSError]) -> None:
+    """Fail ``Path.resolve`` for catalog documents only; roots still resolve."""
+    real_resolve = Path.resolve
+
+    def denied(self: Path, *args: Any, **kwargs: Any) -> Path:
+        if self.suffix == ".yaml":
+            raise error(f"{PRIVATE_DIAGNOSTIC}: {self}")
+        return real_resolve(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "resolve", denied)
+
+
+def _deny_yaml_read(monkeypatch: pytest.MonkeyPatch, error: type[OSError]) -> None:
+    def denied(self: Path) -> bytes:
+        raise error(f"{PRIVATE_DIAGNOSTIC}: {self}")
+
+    monkeypatch.setattr(Path, "read_bytes", denied)
+
+
+def _assert_public_message(message: str, *, ref: str, tmp_path: Path, cause: str) -> None:
+    assert ref in message
+    assert cause in message
+    assert PRIVATE_DIAGNOSTIC not in message
+    assert str(tmp_path) not in message
+
+
+@pytest.mark.parametrize("deny", [_deny_yaml_resolution, _deny_yaml_read])
+def test_snapshot_read_storage_failure_names_the_reference_only(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, deny
+) -> None:
+    repository, shipped_root, (scope,), _roots = _repository(tmp_path)
+    _write_document(shipped_root, "nodes/router.yaml", _node_document("router"))
+    snapshot = repository.snapshot(scope)
+    ref = CatalogRef("nodalarc:nodes/router.yaml")
+    deny(monkeypatch, PermissionError)
+
+    with pytest.raises(CatalogReadFailed) as failed:
+        snapshot.read(ref)
+
+    assert failed.value.ref == ref
+    _assert_public_message(
+        str(failed.value), ref=str(ref), tmp_path=tmp_path, cause="PermissionError"
+    )
+
+
+@pytest.mark.parametrize("deny", [_deny_yaml_resolution, _deny_yaml_read])
+def test_snapshot_read_disappearance_is_not_found_without_host_details(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, deny
+) -> None:
+    repository, shipped_root, (scope,), _roots = _repository(tmp_path)
+    _write_document(shipped_root, "nodes/router.yaml", _node_document("router"))
+    snapshot = repository.snapshot(scope)
+    ref = CatalogRef("nodalarc:nodes/router.yaml")
+    deny(monkeypatch, FileNotFoundError)
+
+    with pytest.raises(CatalogDocumentNotFound) as gone:
+        snapshot.read(ref)
+
+    assert gone.value.ref == ref
+    assert PRIVATE_DIAGNOSTIC not in str(gone.value)
+    assert str(tmp_path) not in str(gone.value)
+
+
+@pytest.mark.parametrize("deny", [_deny_yaml_resolution, _deny_yaml_read])
+def test_snapshot_get_keeps_storage_failure_and_missing_document_distinct(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, deny
+) -> None:
+    repository, shipped_root, (scope,), _roots = _repository(tmp_path)
+    _write_document(shipped_root, "nodes/router.yaml", _node_document("router"))
+    snapshot = repository.snapshot(scope)
+
+    deny(monkeypatch, PermissionError)
+    with pytest.raises(CatalogRepositoryError) as failed:
+        snapshot.get("nodalarc:nodes/router.yaml")
+    assert type(failed.value) is CatalogRepositoryError
+    _assert_public_message(
+        str(failed.value), ref="nodes/router.yaml", tmp_path=tmp_path, cause="PermissionError"
+    )
+
+    deny(monkeypatch, FileNotFoundError)
+    with pytest.raises(CatalogNotFoundError) as gone:
+        snapshot.get("nodalarc:nodes/router.yaml")
+    assert PRIVATE_DIAGNOSTIC not in str(gone.value)
+    assert str(tmp_path) not in str(gone.value)

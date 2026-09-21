@@ -111,11 +111,13 @@ def _resolve_local_path(path: str, *, base_dir: Path | None = None) -> Path:
         raise EphemerisValidationError(f"ephemeris kernel file does not exist: {path}") from exc
     except OSError as exc:
         raise EphemerisValidationError(
-            f"ephemeris kernel path could not be resolved: {path}: {exc}"
+            f"ephemeris kernel path could not be resolved: {path} ({type(exc).__name__})"
         ) from exc
 
 
-def _sha256(path: Path) -> str:
+def _sha256(path: Path, *, declared: str) -> str:
+    # The refusal names the declared kernel; the resolved host path and the
+    # operating system's text stay on the chained cause for the server log.
     digest = hashlib.sha256()
     try:
         with path.open("rb") as fh:
@@ -123,7 +125,7 @@ def _sha256(path: Path) -> str:
                 digest.update(chunk)
     except OSError as exc:
         raise EphemerisValidationError(
-            f"ephemeris kernel file could not be read: {path}: {exc}"
+            f"ephemeris kernel file could not be read: {declared} ({type(exc).__name__})"
         ) from exc
     return digest.hexdigest()
 
@@ -172,7 +174,7 @@ def validate_ephemeris_manifest(
     for kernel in config.kernels:
         path = _resolve_local_path(kernel.path, base_dir=base_dir)
         expected = _expected_checksum(kernel.checksum)
-        actual = _sha256(path)
+        actual = _sha256(path, declared=kernel.path)
         if actual != expected:
             raise EphemerisValidationError(
                 f"ephemeris kernel {kernel.id!r} checksum mismatch: expected {expected}, got {actual}"

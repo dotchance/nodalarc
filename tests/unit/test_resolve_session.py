@@ -1291,4 +1291,6 @@ def test_inaccessible_ephemeris_kernel_is_a_typed_resolution_failure(
         resolver_module.resolve_session(session, catalog=shipped_read_view())
 
     assert diagnostic in str(raised.value)
-    assert injected in str(raised.value)
+    assert "PermissionError" in str(raised.value)
+    assert injected not in str(raised.value)
+    assert injected in str(raised.value.__cause__.__cause__)

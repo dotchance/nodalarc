@@ -13,8 +13,9 @@ KERNEL_DENIAL_STAGES = ("resolve", "open")
 def deny_kernel_access(monkeypatch: pytest.MonkeyPatch, stage: str) -> tuple[str, str]:
     """Make every ``.bsp`` path fail at one access stage.
 
-    Returns the owner's diagnostic fragment and the injected error text, both
-    of which the typed failure must carry.
+    Returns the owner's diagnostic fragment and the injected error text. The
+    typed failure's message carries the fragment and the error's type name;
+    the injected text stays on the chained cause for the server log.
     """
 
     if stage == "resolve":

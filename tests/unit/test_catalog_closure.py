@@ -585,6 +585,8 @@ def test_filesystem_read_view_rejects_symlink_escape(
     assert raised.value.code is CatalogClosureErrorCode.REFERENCE_PATH_REJECTED
     assert raised.value.evidence.ref == "user:constellations/demo-constellation.yaml"
     assert raised.value.evidence.cause_type == "CatalogReadRejected"
+    assert str(closure_fixture.roots.root.parent) not in raised.value.evidence.message
+    assert "'user' catalog root" in raised.value.evidence.message
 
 
 def test_yml_suffix_is_preserved_as_a_catalog_identity(
@@ -774,6 +776,94 @@ def test_filesystem_read_view_reports_a_read_time_disappearance_as_not_found(
         FilesystemCatalogReadView(closure_fixture.roots).read(ref)
 
     assert raised.value.ref == ref
+
+
+PRIVATE_DIAGNOSTIC = "PRIVATE_STORAGE_DIAGNOSTIC"
+
+
+def _deny_yaml_resolution(monkeypatch: pytest.MonkeyPatch, error: type[OSError]) -> None:
+    """Fail ``Path.resolve`` for catalog documents only; roots still resolve."""
+    real_resolve = Path.resolve
+
+    def denied(self: Path, *args: Any, **kwargs: Any) -> Path:
+        if self.suffix == ".yaml":
+            raise error(f"{PRIVATE_DIAGNOSTIC}: {self}")
+        return real_resolve(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "resolve", denied)
+
+
+def _deny_yaml_read(monkeypatch: pytest.MonkeyPatch, error: type[OSError]) -> None:
+    def denied(self: Path) -> bytes:
+        raise error(f"{PRIVATE_DIAGNOSTIC}: {self}")
+
+    monkeypatch.setattr(Path, "read_bytes", denied)
+
+
+def _assert_public_message(message: str, *, ref: str, roots: CatalogRoots, cause: str) -> None:
+    assert ref in message
+    assert cause in message
+    assert PRIVATE_DIAGNOSTIC not in message
+    assert str(roots.root.parent) not in message
+
+
+@pytest.mark.parametrize("deny", [_deny_yaml_resolution, _deny_yaml_read])
+def test_filesystem_read_view_storage_failure_names_the_reference_only(
+    closure_fixture: ClosureFixture,
+    monkeypatch: pytest.MonkeyPatch,
+    deny,
+) -> None:
+    ref = CatalogRef("user:constellations/demo-constellation.yaml")
+    deny(monkeypatch, PermissionError)
+
+    with pytest.raises(CatalogReadFailed) as raised:
+        FilesystemCatalogReadView(closure_fixture.roots).read(ref)
+
+    assert raised.value.ref == ref
+    assert isinstance(raised.value.__cause__, PermissionError)
+    _assert_public_message(
+        str(raised.value), ref=str(ref), roots=closure_fixture.roots, cause="PermissionError"
+    )
+
+
+@pytest.mark.parametrize("deny", [_deny_yaml_resolution, _deny_yaml_read])
+def test_filesystem_read_view_disappearance_is_not_found_without_host_details(
+    closure_fixture: ClosureFixture,
+    monkeypatch: pytest.MonkeyPatch,
+    deny,
+) -> None:
+    ref = CatalogRef("user:constellations/demo-constellation.yaml")
+    deny(monkeypatch, FileNotFoundError)
+
+    with pytest.raises(CatalogDocumentNotFound) as raised:
+        FilesystemCatalogReadView(closure_fixture.roots).read(ref)
+
+    assert raised.value.ref == ref
+    assert PRIVATE_DIAGNOSTIC not in str(raised.value)
+    assert str(closure_fixture.roots.root.parent) not in str(raised.value)
+
+
+@pytest.mark.parametrize("deny", [_deny_yaml_resolution, _deny_yaml_read])
+def test_collector_evidence_from_a_real_storage_failure_hides_host_details(
+    closure_fixture: ClosureFixture,
+    monkeypatch: pytest.MonkeyPatch,
+    deny,
+) -> None:
+    deny(monkeypatch, PermissionError)
+
+    with pytest.raises(CatalogClosureError) as raised:
+        CatalogClosureCollector.collect(
+            closure_fixture.root_yaml, FilesystemCatalogReadView(closure_fixture.roots)
+        )
+
+    assert raised.value.code is CatalogClosureErrorCode.READ_FAILED
+    assert raised.value.evidence.cause_type == "CatalogReadFailed"
+    _assert_public_message(
+        raised.value.evidence.message,
+        ref=raised.value.evidence.ref or "",
+        roots=closure_fixture.roots,
+        cause="PermissionError",
+    )
 
 
 def test_closure_read_view_serves_only_the_captured_bytes() -> None:

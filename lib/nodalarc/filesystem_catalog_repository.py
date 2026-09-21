@@ -130,7 +130,9 @@ def _assert_no_symlink(root: Path, relative: Path) -> None:
     for part in relative.parts:
         current = current / part
         if current.is_symlink():
-            raise CatalogContainmentError(f"catalog path contains symlink {current}")
+            raise CatalogContainmentError(
+                f"catalog path contains symlink {current.relative_to(root).as_posix()}"
+            )
 
 
 def _contained_file(root: Path, relative: Path) -> Path:
@@ -148,7 +150,20 @@ def _contained_file(root: Path, relative: Path) -> Path:
 
 
 def _read_exact_file(root: Path, relative: Path) -> bytes:
-    return _contained_file(root, relative).read_bytes()
+    try:
+        return _contained_file(root, relative).read_bytes()
+    except FileNotFoundError as exc:
+        # The document passed the existence check and vanished before the
+        # resolution or the read.
+        raise CatalogNotFoundError(
+            f"catalog document does not exist: {relative.as_posix()}"
+        ) from exc
+    except OSError as exc:
+        # The refusal names the catalog path; the host path and the operating
+        # system's text stay on the chained cause for the server log.
+        raise CatalogRepositoryError(
+            f"catalog document could not be read: {relative.as_posix()} ({type(exc).__name__})"
+        ) from exc
 
 
 def _iter_document_refs(
@@ -156,7 +171,7 @@ def _iter_document_refs(
     namespace: CatalogNamespace,
 ) -> tuple[CatalogRef, ...]:
     if not root.is_dir():
-        raise CatalogContainmentError(f"catalog root is unavailable: {root}")
+        raise CatalogContainmentError(f"catalog root for namespace {namespace!r} is unavailable")
 
     refs: list[CatalogRef] = []
     for path in root.rglob("*"):
@@ -165,7 +180,9 @@ def _iter_document_refs(
         if path.is_dir():
             continue
         if not path.is_file():
-            raise CatalogContainmentError(f"catalog entry is not a regular file: {path}")
+            raise CatalogContainmentError(
+                f"catalog entry is not a regular file: {relative.as_posix()}"
+            )
         if path.suffix.lower() not in _YAML_SUFFIXES:
             raise CatalogValidationError(f"catalog contains non-YAML file: {relative.as_posix()}")
         ref, parsed_namespace, _family = _parsed_ref(f"{namespace}:{relative.as_posix()}")
@@ -287,13 +304,6 @@ class FilesystemCatalogSnapshot(CatalogReadSnapshot):
         except CatalogContainmentError as exc:
             raise CatalogReadRejected(parsed_ref, str(exc)) from exc
         except CatalogRepositoryError as exc:
-            raise CatalogReadFailed(parsed_ref, f"could not read {parsed_ref}: {exc}") from exc
-        except FileNotFoundError as exc:
-            # The document passed the existence check and vanished before the read.
-            raise CatalogDocumentNotFound(
-                parsed_ref, f"no catalog document for {parsed_ref}"
-            ) from exc
-        except OSError as exc:
             raise CatalogReadFailed(parsed_ref, f"could not read {parsed_ref}: {exc}") from exc
         return CatalogReadDocument(
             family=family,

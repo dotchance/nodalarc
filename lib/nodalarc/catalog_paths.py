@@ -72,7 +72,7 @@ def resolve_catalog_reference(
         resolved.relative_to(root_resolved)
     except ValueError as exc:
         raise CatalogReferenceError(
-            f"{label} escapes approved catalog root: {root}",
+            f"{label} escapes the approved {parsed.namespace!r} catalog root",
             code=CatalogReferenceErrorCode.PATH_REJECTED,
         ) from exc
     return resolved

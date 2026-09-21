@@ -136,14 +136,16 @@ class FilesystemCatalogReadView:
         except FileNotFoundError as exc:
             raise CatalogDocumentNotFound(ref, f"no catalog document for {ref}") from exc
         except OSError as exc:
-            raise CatalogReadFailed(ref, f"could not resolve {ref}: {exc}") from exc
+            # The refusal names the reference; the host path and the operating
+            # system's text stay on the chained cause for the server log.
+            raise CatalogReadFailed(ref, f"could not resolve {ref} ({type(exc).__name__})") from exc
         try:
             yaml_bytes = path.read_bytes()
         except FileNotFoundError as exc:
             # The document resolved and vanished before the read.
             raise CatalogDocumentNotFound(ref, f"no catalog document for {ref}") from exc
         except OSError as exc:
-            raise CatalogReadFailed(ref, f"could not read {ref}: {exc}") from exc
+            raise CatalogReadFailed(ref, f"could not read {ref} ({type(exc).__name__})") from exc
         return CatalogReadDocument(
             family=cast(CatalogFamily, family),
             preserved_path=preserved_catalog_path(ref),

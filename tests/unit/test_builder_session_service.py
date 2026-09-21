@@ -555,7 +555,8 @@ def test_post_commit_kernel_access_failure_blocks_deploy_and_keeps_the_save(
     )
     ((diagnostic, injected),) = expected
     assert diagnostic in blocker.message
-    assert injected in blocker.message
+    assert "PermissionError" in blocker.message
+    assert injected not in blocker.message
     assert harness.repository.snapshot(harness.scope).read_bytes(request.target_ref) == (
         result.session.canonical_yaml.encode("utf-8")
     )

@@ -7,6 +7,7 @@ from unittest.mock import create_autospec
 
 import kubernetes.client
 import pytest
+from nodalarc.substrate.manifest_contract import WIRING_MANIFEST_CONFIGMAP
 from nodalarc_operator.session_pods import (
     DeletionOutcome,
     OwnerIdentity,
@@ -493,8 +494,8 @@ class TestTeardownRunIds:
             [_pod("sat-p00s00", run="run-a", terminating=True, selection=None)],
             {
                 "nodalarc-session": _configmap("nodalarc-session", {"session_run_id": "run-b"}),
-                "nodalarc-topology-wiring": _configmap(
-                    "nodalarc-topology-wiring", {"session_id": "run-c"}
+                WIRING_MANIFEST_CONFIGMAP: _configmap(
+                    WIRING_MANIFEST_CONFIGMAP, {"session_id": "run-c"}
                 ),
             },
         )

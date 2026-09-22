@@ -16,9 +16,6 @@ machine (old pods cleared → pods created → routing ready → wired → Ready
 from __future__ import annotations
 
 import asyncio
-import base64
-import gzip
-import json
 import logging
 import os
 from collections.abc import Mapping
@@ -41,6 +38,11 @@ from nodalarc.cr_runtime_config import (
 from nodalarc.nats_channels import sanitize_session_id
 from nodalarc.runtime_config import ResolvedRuntimeConfig, RuntimeDeploymentContext
 from nodalarc.session_identity import derive_session_run_id
+from nodalarc.substrate.manifest_contract import (
+    WIRING_MANIFEST_CONFIGMAP,
+    WiringManifestPayloadError,
+    decode_wiring_manifest_payload,
+)
 
 from nodalarc_operator import session_deployer as _deployer
 from nodalarc_operator.session_deployer import (
@@ -400,7 +402,7 @@ def _wiring_manifest_matches_spec(
 
     v1 = _get_v1()
     try:
-        cm = v1.read_namespaced_config_map("nodalarc-topology-wiring", namespace)
+        cm = v1.read_namespaced_config_map(WIRING_MANIFEST_CONFIGMAP, namespace)
     except kubernetes.client.rest.ApiException as e:
         if e.status == 404:
             return False
@@ -432,17 +434,16 @@ def _wiring_manifest_matches_spec(
         )
         return False
 
-    encoded = data.get("manifest.json.gz.b64")
-    if not encoded:
-        log.info(
-            "Reconcile: wiring manifest payload missing for session %s, rewriting",
-            desired_session_id,
-        )
-        return False
     try:
-        manifest = json.loads(gzip.decompress(base64.b64decode(encoded)))
-    except Exception as exc:
-        log.warning("Reconcile: wiring manifest payload invalid (%s), rewriting", exc)
+        manifest = decode_wiring_manifest_payload(data)
+    except WiringManifestPayloadError as exc:
+        if exc.stage == "missing":
+            log.info(
+                "Reconcile: wiring manifest payload missing for session %s, rewriting",
+                desired_session_id,
+            )
+        else:
+            log.warning("Reconcile: wiring manifest payload invalid (%s), rewriting", exc)
         return False
 
     manifest_nodes = manifest.get("nodes")

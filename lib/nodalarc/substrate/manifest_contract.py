@@ -1,11 +1,16 @@
 # Copyright 2024-2026 .chance (dotchance)
 # Licensed under the Apache License, Version 2.0. See LICENSE file.
-"""Typed Node Agent wiring manifest contract."""
+"""Typed Node Agent wiring manifest contract and its ConfigMap wire encoding."""
 
 from __future__ import annotations
 
+import base64
+import binascii
+import gzip
 import hashlib
 import json
+import zlib
+from collections.abc import Mapping
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -33,6 +38,71 @@ def derive_wiring_generation(data: dict[str, Any]) -> str:
     material = dict(data)
     material.pop("wiring_generation", None)
     return "sha256:" + hashlib.sha256(canonical_manifest_json(material).encode()).hexdigest()
+
+
+# The ConfigMap the Operator publishes the manifest in, and the data key that
+# carries the encoded manifest.
+WIRING_MANIFEST_CONFIGMAP = "nodalarc-topology-wiring"
+WIRING_MANIFEST_PAYLOAD_KEY = "manifest.json.gz.b64"
+
+
+class WiringManifestPayloadError(ValueError):
+    """The manifest payload in ConfigMap data could not be decoded.
+
+    ``stage`` names the step that refused it: ``missing``, ``base64``,
+    ``gzip``, ``utf-8``, ``json`` or ``shape``. The message carries the
+    underlying diagnostic; the original exception is also chained.
+    """
+
+    def __init__(self, stage: str, detail: str) -> None:
+        super().__init__(f"wiring manifest payload refused at {stage}: {detail}")
+        self.stage = stage
+
+
+def encode_wiring_manifest_payload(manifest: Mapping[str, Any]) -> str:
+    """The manifest as its ConfigMap payload: canonical JSON, gzip, base64.
+
+    The JSON escapes non-ASCII characters; readers accept only BOM-free UTF-8.
+    """
+    raw_json = json.dumps(manifest, sort_keys=True, separators=(",", ":")).encode()
+    return base64.b64encode(gzip.compress(raw_json)).decode()
+
+
+def decode_wiring_manifest_payload(data: Mapping[str, str] | None) -> dict[str, Any]:
+    """The manifest JSON object from ConfigMap data, without model validation."""
+    encoded = (data or {}).get(WIRING_MANIFEST_PAYLOAD_KEY)
+    if not encoded:
+        raise WiringManifestPayloadError(
+            "missing", f"ConfigMap data is missing {WIRING_MANIFEST_PAYLOAD_KEY}"
+        )
+    try:
+        compressed = base64.b64decode(encoded)
+    except (binascii.Error, ValueError) as exc:
+        raise WiringManifestPayloadError("base64", str(exc)) from exc
+    try:
+        raw = gzip.decompress(compressed)
+    except (OSError, EOFError, zlib.error) as exc:
+        raise WiringManifestPayloadError("gzip", str(exc)) from exc
+    try:
+        text = raw.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise WiringManifestPayloadError("utf-8", str(exc)) from exc
+    try:
+        document = json.loads(text)
+    except ValueError as exc:
+        # JSONDecodeError is a ValueError; the parser also raises a plain
+        # ValueError for an integer beyond the interpreter's digit limit.
+        raise WiringManifestPayloadError("json", str(exc)) from exc
+    if not isinstance(document, dict):
+        raise WiringManifestPayloadError(
+            "shape", f"payload is a JSON {type(document).__name__}, not an object"
+        )
+    return document
+
+
+def decode_wiring_manifest(data: Mapping[str, str] | None) -> WiringManifest:
+    """The validated manifest from ConfigMap data."""
+    return WiringManifest.model_validate(decode_wiring_manifest_payload(data))
 
 
 # Session pod labels carrying the deployment-run identity. The Operator

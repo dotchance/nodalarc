@@ -9,7 +9,6 @@ Uses create_autospec for K8s client mocks to catch signature drift.
 from __future__ import annotations
 
 import base64
-import gzip
 import hashlib
 import json
 import math
@@ -35,7 +34,14 @@ from nodalarc.runtime_config import (
     RuntimeDeploymentContext,
 )
 from nodalarc.semantic_projection import resolved_session_semantic_digest
-from nodalarc.substrate.manifest_contract import REQUIRED_WIRING_PHASES, WiringManifest
+from nodalarc.substrate.manifest_contract import (
+    REQUIRED_WIRING_PHASES,
+    WIRING_MANIFEST_CONFIGMAP,
+    WIRING_MANIFEST_PAYLOAD_KEY,
+    WiringManifest,
+    decode_wiring_manifest_payload,
+    encode_wiring_manifest_payload,
+)
 from nodalarc.substrate.measurement_contract import (
     SubstrateStatusDocument,
     substrate_status_configmap_name,
@@ -225,13 +231,11 @@ def _make_wiring_manifest(node_ids=("sat-P00S00", "sat-P00S01")):
 
 
 def _manifest_configmap(manifest: WiringManifest):
-    payload = manifest.model_dump(mode="json")
-    encoded = base64.b64encode(
-        gzip.compress(json.dumps(payload, sort_keys=True, separators=(",", ":")).encode())
-    ).decode()
     cm = MagicMock()
     cm.data = {
-        "manifest.json.gz.b64": encoded,
+        WIRING_MANIFEST_PAYLOAD_KEY: encode_wiring_manifest_payload(
+            manifest.model_dump(mode="json")
+        ),
         "session_id": manifest.session_id,
         "wiring_generation": manifest.wiring_generation,
         "node_count": str(len(manifest.nodes)),
@@ -429,7 +433,7 @@ class TestWiringCompletion:
 
         def read_cm(name, namespace):
             assert namespace == "nodalarc"
-            if name == "nodalarc-topology-wiring":
+            if name == WIRING_MANIFEST_CONFIGMAP:
                 return _manifest_configmap(manifest)
             if name == "nodalarc-wiring-status":
                 return _status_configmap(status_data)
@@ -471,7 +475,7 @@ class TestWiringCompletion:
 
         def read_cm(name, namespace):
             assert namespace == "nodalarc"
-            if name == "nodalarc-topology-wiring":
+            if name == WIRING_MANIFEST_CONFIGMAP:
                 return _manifest_configmap(manifest)
             if name == "nodalarc-wiring-status":
                 return _status_configmap(status_data)
@@ -512,7 +516,7 @@ class TestWiringCompletion:
 
         def read_cm(name, namespace):
             assert namespace == "nodalarc"
-            if name == "nodalarc-topology-wiring":
+            if name == WIRING_MANIFEST_CONFIGMAP:
                 return _manifest_configmap(manifest)
             if name == "nodalarc-wiring-status":
                 return _status_configmap(status_data)
@@ -523,6 +527,35 @@ class TestWiringCompletion:
         with patch("nodalarc_operator.session_deployer._get_v1", return_value=mock_v1):
             with pytest.raises(ValueError, match="first failure: sat-P00S00 sysctls"):
                 check_wiring_complete("nodalarc", 2)
+
+    @staticmethod
+    def _completion_with_manifest_data(data):
+        mock_v1 = create_autospec(kubernetes.client.CoreV1Api, instance=True)
+        manifest_cm = MagicMock()
+        manifest_cm.data = data
+        mock_v1.read_namespaced_config_map.return_value = manifest_cm
+        with patch("nodalarc_operator.session_deployer._get_v1", return_value=mock_v1):
+            return check_wiring_complete("nodalarc", 2)
+
+    def test_missing_manifest_payload_keeps_its_refusal(self):
+        with pytest.raises(ValueError, match="^topology wiring manifest payload is missing$"):
+            self._completion_with_manifest_data({"session_id": "demo"})
+
+    def test_undecodable_manifest_payload_is_refused_with_its_stage(self):
+        with pytest.raises(
+            ValueError,
+            match="topology wiring manifest payload is invalid: "
+            "wiring manifest payload refused at gzip: ",
+        ):
+            self._completion_with_manifest_data(
+                {WIRING_MANIFEST_PAYLOAD_KEY: base64.b64encode(b"plain").decode()}
+            )
+
+    def test_manifest_failing_model_validation_is_refused(self):
+        with pytest.raises(ValueError, match="topology wiring manifest payload is invalid: "):
+            self._completion_with_manifest_data(
+                {WIRING_MANIFEST_PAYLOAD_KEY: encode_wiring_manifest_payload({"nodes": {}})}
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -773,23 +806,29 @@ def _make_catalog_spec(
     }
 
 
-def _extract_manifest(mock_v1):
-    """Extract and decompress the wiring manifest from the mock K8s client."""
+def _written_manifest_data(mock_v1) -> dict[str, str]:
+    """The wiring manifest ConfigMap data the Operator wrote to the mock K8s client."""
     for call in mock_v1.create_namespaced_config_map.call_args_list:
         body = call[1].get("body") or call[0][1]
-        if hasattr(body, "data") and body.data and "manifest.json.gz.b64" in body.data:
-            compressed = body.data["manifest.json.gz.b64"]
-            raw = gzip.decompress(base64.b64decode(compressed))
-            return json.loads(raw)
+        if hasattr(body, "data") and body.data and WIRING_MANIFEST_PAYLOAD_KEY in body.data:
+            return body.data
     for call in mock_v1.patch_namespaced_config_map.call_args_list:
         args = call[0] if call[0] else ()
         kwargs = call[1] if call[1] else {}
         body = kwargs.get("body") or (args[2] if len(args) > 2 else None)
-        if body and hasattr(body, "data") and body.data and "manifest.json.gz.b64" in body.data:
-            compressed = body.data["manifest.json.gz.b64"]
-            raw = gzip.decompress(base64.b64decode(compressed))
-            return json.loads(raw)
+        if (
+            body
+            and hasattr(body, "data")
+            and body.data
+            and WIRING_MANIFEST_PAYLOAD_KEY in body.data
+        ):
+            return body.data
     pytest.fail("Wiring manifest ConfigMap not found in mock calls")
+
+
+def _extract_manifest(mock_v1):
+    """The wiring manifest the Operator wrote, decoded through the shared codec."""
+    return decode_wiring_manifest_payload(_written_manifest_data(mock_v1))
 
 
 def _existing_terminal_secret(uid="test-uid", name="current-session"):
@@ -1227,9 +1266,8 @@ class TestWiringManifest:
             )
         manifest = _extract_manifest(mock_v1)
         assert len(manifest["nodes"]) == 1602
-        raw_json = json.dumps(manifest).encode()
-        compressed = base64.b64encode(gzip.compress(raw_json))
-        size_bytes = len(compressed)
+        # The ConfigMap value exactly as written, not a re-encoding of it.
+        size_bytes = len(_written_manifest_data(mock_v1)[WIRING_MANIFEST_PAYLOAD_KEY])
         assert size_bytes < 1_048_576, (
             f"Compressed manifest is {size_bytes} bytes ({size_bytes / 1024:.0f} KB), exceeds 1 MiB K8s ConfigMap limit"
         )

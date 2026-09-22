@@ -10,9 +10,6 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-import base64
-import gzip
-import json
 import logging
 import os
 import time as _time
@@ -39,7 +36,11 @@ from nodalarc.runtime_service_config import (
 from nodalarc.session_identity import (
     require_resolved_session_run_id,
 )
-from nodalarc.substrate.manifest_contract import WiringManifest
+from nodalarc.substrate.manifest_contract import (
+    WIRING_MANIFEST_CONFIGMAP,
+    WiringManifest,
+    decode_wiring_manifest,
+)
 from nodalarc.substrate.wiring_status import (
     WIRING_STATUS_CONFIGMAP,
     failed_status_summary,
@@ -291,14 +292,8 @@ def _make_lifecycle_identity_reader(
 
 
 def read_wiring_manifest_identity(k8s_v1: Any, namespace: str) -> WiringManifest:
-    cm = k8s_v1.read_namespaced_config_map("nodalarc-topology-wiring", namespace)
-    if not cm.data:
-        raise RuntimeError("nodalarc-topology-wiring ConfigMap has no data")
-    compressed = cm.data.get("manifest.json.gz.b64")
-    if not compressed:
-        raise RuntimeError("nodalarc-topology-wiring missing manifest.json.gz.b64")
-    manifest_json = gzip.decompress(base64.b64decode(compressed)).decode()
-    return WiringManifest.model_validate(json.loads(manifest_json))
+    cm = k8s_v1.read_namespaced_config_map(WIRING_MANIFEST_CONFIGMAP, namespace)
+    return decode_wiring_manifest(cm.data)
 
 
 def wait_for_wiring_manifest_identity(
@@ -326,7 +321,7 @@ def wait_for_wiring_manifest_identity(
             if getattr(exc, "status", None) != 404:
                 raise
         sleep(poll_s)
-    raise RuntimeError(f"nodalarc-topology-wiring ConfigMap not found after {timeout_s:.0f}s")
+    raise RuntimeError(f"{WIRING_MANIFEST_CONFIGMAP} ConfigMap not found after {timeout_s:.0f}s")
 
 
 def _build_argument_parser() -> argparse.ArgumentParser:

@@ -21,6 +21,11 @@ import pytest
 from nodalarc.catalog_upload import CatalogUploadSelection
 from nodalarc.nats_channels import sanitize_session_id
 from nodalarc.runtime_config import ResolvedRuntimeConfig, RuntimeConfigProof
+from nodalarc.substrate.manifest_contract import (
+    WIRING_MANIFEST_CONFIGMAP,
+    WIRING_MANIFEST_PAYLOAD_KEY,
+    encode_wiring_manifest_payload,
+)
 from nodalarc_operator.workloads.preparation import WorkloadPreparationError
 
 from tests.unit.test_operator_session_pods import _pod
@@ -1221,8 +1226,8 @@ def test_on_delete_reads_a_superseded_run_id_from_a_terminating_pod() -> None:
                 "nodalarc-session": _session_configmap(
                     "nodalarc-session", {"session_run_id": "run-b"}
                 ),
-                "nodalarc-topology-wiring": _session_configmap(
-                    "nodalarc-topology-wiring", {"session_id": "run-b"}
+                WIRING_MANIFEST_CONFIGMAP: _session_configmap(
+                    WIRING_MANIFEST_CONFIGMAP, {"session_id": "run-b"}
                 ),
             },
         )
@@ -1306,3 +1311,76 @@ def test_on_delete_refuses_an_owned_record_without_its_run_id() -> None:
                 configmaps={"nodalarc-session": _session_configmap("nodalarc-session", {})},
             )
         harness.mock_v1.delete_namespaced_config_map.assert_not_called()
+
+
+class TestWiringManifestCurrency:
+    """The reconciler rewrites any payload it cannot read as the current manifest."""
+
+    RUN_ID = "run-currency-0001"
+    PLATFORM_HASH = "platform-hash"
+
+    def _data(self, payload: str | None, **overrides) -> dict[str, str]:
+        from nodalarc.nats_channels import sanitize_session_id
+
+        data = {
+            "session_id": sanitize_session_id(self.RUN_ID),
+            "platform_hash": self.PLATFORM_HASH,
+            "node_count": "2",
+            "wiring_generation": "sha256:" + "a" * 64,
+            **overrides,
+        }
+        if payload is not None:
+            data[WIRING_MANIFEST_PAYLOAD_KEY] = payload
+        return data
+
+    def _current(self, data: dict[str, str]) -> bool:
+        v1 = create_autospec(kubernetes.client.CoreV1Api, instance=True)
+        v1.read_namespaced_config_map.return_value = SimpleNamespace(data=data)
+        with patch("nodalarc_operator.session_deployer._get_v1", return_value=v1):
+            current = handlers_mod._wiring_manifest_matches_spec(
+                "nodalarc", 2, self.RUN_ID, self.PLATFORM_HASH
+            )
+        v1.read_namespaced_config_map.assert_called_once_with(WIRING_MANIFEST_CONFIGMAP, "nodalarc")
+        return current
+
+    def _manifest_payload(self, **overrides) -> str:
+        from nodalarc.nats_channels import sanitize_session_id
+
+        return encode_wiring_manifest_payload(
+            {
+                "session_id": sanitize_session_id(self.RUN_ID),
+                "wiring_generation": "sha256:" + "a" * 64,
+                "nodes": {"a": {}, "b": {}},
+                **overrides,
+            }
+        )
+
+    def test_a_current_manifest_is_kept_without_full_model_validation(self):
+        # The payload's node specs would fail WiringManifest validation; the
+        # currency check compares identity fields only.
+        assert self._current(self._data(self._manifest_payload())) is True
+
+    def test_a_missing_payload_is_rewritten(self, caplog):
+        with caplog.at_level("INFO", logger="nodalarc_operator.handlers"):
+            assert self._current(self._data(None)) is False
+        assert "wiring manifest payload missing" in caplog.text
+
+    @pytest.mark.parametrize(
+        ("raw", "stage"),
+        [
+            (b"{not json", "json"),
+            (b'{"n": ' + b"9" * 4301 + b"}", "json"),
+            (b"[1, 2]", "shape"),
+            (b"\xef\xbb\xbf{}", "json"),
+            ("{}".encode("utf-16"), "utf-8"),
+        ],
+        ids=["json-syntax", "json-digit-limit", "not-an-object", "utf-8-bom", "utf-16"],
+    )
+    def test_an_unreadable_payload_is_rewritten(self, caplog, raw, stage):
+        import base64
+        import gzip
+
+        payload = base64.b64encode(gzip.compress(raw)).decode()
+        with caplog.at_level("WARNING", logger="nodalarc_operator.handlers"):
+            assert self._current(self._data(payload)) is False
+        assert f"wiring manifest payload refused at {stage}" in caplog.text

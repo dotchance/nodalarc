@@ -46,6 +46,7 @@ from nodalarc.runtime_service_config import (
 from nodalarc.session_identity import require_resolved_session_run_id
 from nodalarc.session_validator import validate_session_readiness
 from nodalarc.stack_resolver import ResolvedStack, resolve_domain_stack, validate_sid_indices
+from nodalarc.substrate.manifest_contract import WIRING_MANIFEST_CONFIGMAP
 from nodalarc.substrate.wiring_status import WIRING_STATUS_CONFIGMAP
 from nodalarc.template_vars import build_template_vars_from_resolved
 
@@ -893,12 +894,13 @@ def write_wiring_manifest(
 
     Returns the number of ISL links in the manifest.
     """
-    import json as _json
 
     from nodalarc.nats_channels import sanitize_session_id
     from nodalarc.substrate.manifest_contract import (
         REQUIRED_WIRING_PHASES,
+        WIRING_MANIFEST_PAYLOAD_KEY,
         derive_wiring_generation,
+        encode_wiring_manifest_payload,
     )
 
     if not session_run_id:
@@ -1074,18 +1076,14 @@ def write_wiring_manifest(
     }
     manifest["wiring_generation"] = derive_wiring_generation(manifest)
 
-    import base64 as _base64
-    import gzip as _gzip
-
-    raw_json = _json.dumps(manifest, sort_keys=True, separators=(",", ":")).encode()
-    compressed = _base64.b64encode(_gzip.compress(raw_json)).decode()
+    payload = encode_wiring_manifest_payload(manifest)
 
     _create_or_update_configmap(
         v1,
-        "nodalarc-topology-wiring",
+        WIRING_MANIFEST_CONFIGMAP,
         namespace,
         {
-            "manifest.json.gz.b64": compressed,
+            WIRING_MANIFEST_PAYLOAD_KEY: payload,
             "session_id": manifest_session_id,
             "platform_hash": platform_hash
             or compute_platform_hash(spec, active_session=operator_session, namespace=namespace),
@@ -1096,12 +1094,11 @@ def write_wiring_manifest(
     )
     log.info(
         "Wrote topology wiring manifest: %d nodes, %d ISL links, %d substrate pairs "
-        "(%d bytes raw, %d bytes compressed)",
+        "(%d bytes encoded)",
         len(nodes),
         len(isl_pairs),
         len(required_substrate_pairs),
-        len(raw_json),
-        len(compressed),
+        len(payload),
     )
     return len(isl_pairs)
 
@@ -1334,7 +1331,7 @@ def teardown_session(namespace: str, session_ids: Sequence[str]) -> None:
         "nodalarc-constellation",
         "nodalarc-ground-stations",
         "nodalarc-pod-ips",
-        "nodalarc-topology-wiring",
+        WIRING_MANIFEST_CONFIGMAP,
         WIRING_STATUS_CONFIGMAP,
     ]:
         _delete_configmap_or_absent(v1, cm_name, namespace)
@@ -1430,22 +1427,21 @@ def check_wiring_complete(namespace: str, expected_count: int) -> tuple[bool, in
 
     Pure query — no side effects.
     """
-    import base64
-    import gzip
-
-    from nodalarc.substrate.manifest_contract import WiringManifest
+    from nodalarc.substrate.manifest_contract import (
+        WiringManifestPayloadError,
+        decode_wiring_manifest,
+    )
     from nodalarc.substrate.wiring_status import failed_status_summary, parse_status_configmap
 
     v1 = _get_v1()
-    manifest_cm = v1.read_namespaced_config_map("nodalarc-topology-wiring", namespace)
-    manifest_data = manifest_cm.data or {}
-    encoded_manifest = manifest_data.get("manifest.json.gz.b64")
-    if not encoded_manifest:
-        raise ValueError("topology wiring manifest payload is missing")
+    manifest_cm = v1.read_namespaced_config_map(WIRING_MANIFEST_CONFIGMAP, namespace)
     try:
-        manifest_payload = json.loads(gzip.decompress(base64.b64decode(encoded_manifest)))
-        manifest = WiringManifest.model_validate(manifest_payload)
-    except Exception as exc:
+        manifest = decode_wiring_manifest(manifest_cm.data)
+    except WiringManifestPayloadError as exc:
+        if exc.stage == "missing":
+            raise ValueError("topology wiring manifest payload is missing") from exc
+        raise ValueError(f"topology wiring manifest payload is invalid: {exc}") from exc
+    except ValueError as exc:
         raise ValueError(f"topology wiring manifest payload is invalid: {exc}") from exc
 
     if len(manifest.nodes) != expected_count:

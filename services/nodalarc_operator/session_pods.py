@@ -25,7 +25,11 @@ from typing import Any
 import kubernetes
 from nodalarc.nats_channels import sanitize_session_id
 from nodalarc.runtime_service_config import SESSION_RUN_ID_FILENAME
-from nodalarc.substrate.manifest_contract import POD_OWNER_UID_LABEL, POD_SESSION_RUN_LABEL
+from nodalarc.substrate.manifest_contract import (
+    POD_OWNER_UID_LABEL,
+    POD_SESSION_RUN_LABEL,
+    WIRING_MANIFEST_CONFIGMAP,
+)
 from nodalarc.workload_target import NODE_ID_LABEL
 
 from nodalarc_operator.workloads.materializer import WORKLOAD_SELECTION_ANNOTATION
@@ -506,7 +510,7 @@ def delete_all_owned_pods(
 
 _OWNED_RUN_ID_CONFIGMAPS: tuple[tuple[str, str], ...] = (
     ("nodalarc-session", SESSION_RUN_ID_FILENAME),
-    ("nodalarc-topology-wiring", "session_id"),
+    (WIRING_MANIFEST_CONFIGMAP, "session_id"),
 )
 
 

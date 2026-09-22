@@ -296,6 +296,10 @@ def test_agent_shutdown_joins_wiring_before_closing_nats(shutdown):
         import kubernetes.config
         import nodal.logging
         import nodalarc.platform_config
+        from nodalarc.substrate.manifest_contract import (
+            WIRING_MANIFEST_PAYLOAD_KEY,
+            encode_wiring_manifest_payload,
+        )
         from node_agent import __main__ as agent, substrate_monitor
 
         shutdown = sys.argv[1]
@@ -345,8 +349,10 @@ def test_agent_shutdown_joins_wiring_before_closing_nats(shutdown):
                 if shutdown == "cancel":
                     loop.call_soon_threadsafe(task.cancel)
                     raise kubernetes.client.rest.ApiException(status=404)
-                return SimpleNamespace(metadata=SimpleNamespace(resource_version="1"),
-                                       data={"manifest.json": "{}"})
+                return SimpleNamespace(
+                    metadata=SimpleNamespace(resource_version="1"),
+                    data={WIRING_MANIFEST_PAYLOAD_KEY: encode_wiring_manifest_payload({})},
+                )
             v1.read_namespaced_config_map.side_effect = read
             try:
                 await task
@@ -393,3 +399,97 @@ def test_agent_shutdown_joins_wiring_before_closing_nats(shutdown):
     )
     assert result.returncode == 0, result.stdout + result.stderr
     assert "agent process stopped" in result.stdout
+
+
+def test_an_undecodable_manifest_is_logged_and_retried_until_one_decodes():
+    """The watcher logs the refused stage, keeps running and wires the next readable manifest."""
+    script = textwrap.dedent(
+        """
+        import asyncio
+        import logging
+        import os
+        import signal
+        import sys
+        from types import SimpleNamespace
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        import kubernetes.client
+        import kubernetes.config
+        import nodal.logging
+        import nodalarc.platform_config
+        from nodalarc.substrate.manifest_contract import (
+            WIRING_MANIFEST_PAYLOAD_KEY,
+            encode_wiring_manifest_payload,
+        )
+        from node_agent import __main__ as agent, substrate_monitor
+
+        sys.argv = ["node-agent"]
+        warnings = []
+
+        class _Collect(logging.Handler):
+            def emit(self, record):
+                warnings.append(record.getMessage())
+
+        agent.log.addHandler(_Collect(level=logging.WARNING))
+        manifest = SimpleNamespace(
+            session_id="test-session", wiring_generation="sha256:" + "a" * 64,
+            nodes={"sat-a": {}}, site_lans={},
+        )
+        payloads = [
+            "H4sIAAAAAAAA/w==",
+            encode_wiring_manifest_payload({}),
+        ]
+        reads = []
+
+        def read(name, namespace):
+            reads.append(name)
+            payload = payloads[min(len(reads), len(payloads)) - 1]
+            return SimpleNamespace(
+                metadata=SimpleNamespace(resource_version=str(len(reads))),
+                data={WIRING_MANIFEST_PAYLOAD_KEY: payload},
+            )
+
+        v1 = MagicMock()
+        v1.read_namespaced_config_map.side_effect = read
+        nc = AsyncMock()
+        nc.subscribe.return_value = AsyncMock()
+        validate = MagicMock(return_value=manifest)
+
+        async def monitor(hostname):
+            asyncio.get_running_loop().call_soon(os.kill, os.getpid(), signal.SIGTERM)
+            await asyncio.Event().wait()
+
+        os.environ["HOST_IP"] = "10.0.0.1"
+        with (
+            patch.object(nodal.logging, "configure"),
+            patch.object(nodal.logging, "connect", new=AsyncMock()),
+            patch.object(nodalarc.platform_config, "init_platform_config"),
+            patch.object(nodalarc.platform_config, "get_platform_config",
+                         return_value=SimpleNamespace(kubernetes_namespace="nodalarc")),
+            patch.object(kubernetes.config, "load_incluster_config"),
+            patch.object(kubernetes.client, "CoreV1Api", return_value=v1),
+            patch.object(agent.nats, "connect", new=AsyncMock(return_value=nc)),
+            patch.object(agent, "nats_url", return_value="nats://unused:4222"),
+            patch.object(agent.ops_events, "init", new=AsyncMock()),
+            patch.object(agent.WiringManifest, "model_validate", new=validate),
+            patch.object(agent, "expected_local_nodes", return_value=set()),
+            patch.object(substrate_monitor, "configure_required_measurements"),
+            patch.object(substrate_monitor, "monitor_loop", new=monitor),
+        ):
+            asyncio.run(agent.main())
+        refusals = [m for m in warnings if m.startswith("Wiring watcher error: ")]
+        assert refusals and "refused at gzip: " in refusals[0], warnings
+        assert len(reads) >= 2, reads
+        assert validate.call_count == 1, validate.call_count
+        print("retried after refusal")
+        """
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", script],
+        env={**os.environ, "PYTHONPATH": os.pathsep.join(sys.path)},
+        capture_output=True,
+        text=True,
+        timeout=20,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "retried after refusal" in result.stdout

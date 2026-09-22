@@ -37,7 +37,11 @@ from nodalarc.nats_channels import (
     node_agent_subject,
     wiring_progress_subject,
 )
-from nodalarc.substrate.manifest_contract import WiringManifest
+from nodalarc.substrate.manifest_contract import (
+    WIRING_MANIFEST_CONFIGMAP,
+    WiringManifest,
+    decode_wiring_manifest,
+)
 from nodalarc.substrate.wiring_status import wiring_row
 
 from node_agent import ops_events
@@ -213,7 +217,7 @@ async def main() -> None:
 
         while not stop.is_set():
             try:
-                cm = v1.read_namespaced_config_map("nodalarc-topology-wiring", ns)
+                cm = v1.read_namespaced_config_map(WIRING_MANIFEST_CONFIGMAP, ns)
                 rv = cm.metadata.resource_version or ""
 
                 if rv == last_resource_version:
@@ -242,31 +246,12 @@ async def main() -> None:
                 # no-local/Case B terminal states below), and the fence flip
                 # below already rejects any request from the previous
                 # generation.
-                compressed = cm.data.get("manifest.json.gz.b64")
-                if compressed:
-                    import base64
-                    import gzip
-
-                    manifest_json = gzip.decompress(base64.b64decode(compressed)).decode()
-                else:
-                    manifest_json = cm.data.get("manifest.json", "{}")
-                manifest = json.loads(manifest_json)
-                manifest_model = WiringManifest.model_validate(manifest)
+                # The manifest model refuses an empty session_id or
+                # wiring_generation; both scope NATS subjects and fence commands.
+                manifest_model = decode_wiring_manifest(cm.data)
                 nodes = manifest_model.nodes
-
-                # Extract session_id for NATS subject scoping
                 manifest_session_id = manifest_model.session_id
-                if not manifest_session_id:
-                    log.error(
-                        "FATAL: Wiring manifest has no session_id — cannot scope NATS subjects"
-                    )
-                    raise ValueError("Wiring manifest missing session_id")
                 wiring_generation = manifest_model.wiring_generation
-                if not wiring_generation:
-                    log.error(
-                        "FATAL: Wiring manifest has no wiring_generation — cannot fence commands"
-                    )
-                    raise ValueError("Wiring manifest missing wiring_generation")
                 from nodalarc.nats_channels import sanitize_session_id
 
                 monitor_session_id = sanitize_session_id(manifest_session_id)

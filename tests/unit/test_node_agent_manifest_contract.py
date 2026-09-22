@@ -1,8 +1,16 @@
+import base64
+import gzip
+
 import pytest
 from nodalarc.substrate.manifest_contract import (
     REQUIRED_WIRING_PHASES,
+    WIRING_MANIFEST_PAYLOAD_KEY,
     WiringManifest,
+    WiringManifestPayloadError,
+    decode_wiring_manifest,
+    decode_wiring_manifest_payload,
     derive_wiring_generation,
+    encode_wiring_manifest_payload,
 )
 from pydantic import ValidationError
 
@@ -145,3 +153,99 @@ def test_manifest_contract_requires_unique_substrate_pair_directions() -> None:
         ValidationError, match="required_substrate_pairs must not contain duplicate directions"
     ):
         WiringManifest.model_validate(data)
+
+
+# --- ConfigMap wire encoding -------------------------------------------------
+
+
+def _stdlib_decode(encoded: str) -> bytes:
+    """The encoded payload's JSON bytes, read without the codec under test."""
+    return gzip.decompress(base64.b64decode(encoded))
+
+
+def _payload(raw: bytes) -> dict[str, str]:
+    return {WIRING_MANIFEST_PAYLOAD_KEY: base64.b64encode(gzip.compress(raw)).decode()}
+
+
+def test_encoded_bytes_are_the_existing_wire_format() -> None:
+    """Sorted keys, compact separators, non-ASCII escaped: pinned byte for byte."""
+    encoded = encode_wiring_manifest_payload({"b": "Zürich", "a": [1, {"d": None, "c": True}]})
+
+    assert _stdlib_decode(encoded) == (b'{"a":[1,{"c":true,"d":null}],"b":"Z\\u00fcrich"}')
+
+
+def test_payload_escapes_non_ascii_while_the_generation_hash_does_not() -> None:
+    data = _manifest()
+    data["nodes"]["gs-den"]["gs_name"] = "Zürich"
+    encoded = encode_wiring_manifest_payload(data)
+
+    assert b"Z\\u00fcrich" in _stdlib_decode(encoded)
+    ascii_material = dict(data)
+    ascii_material["nodes"] = {
+        **data["nodes"],
+        "gs-den": {**data["nodes"]["gs-den"], "gs_name": "Z\\u00fcrich"},
+    }
+    # The hash reads the characters themselves, so the escaped spelling differs.
+    assert derive_wiring_generation(data) != derive_wiring_generation(ascii_material)
+
+
+def test_round_trip_through_the_codec() -> None:
+    data = _manifest()
+    decoded = decode_wiring_manifest(
+        {WIRING_MANIFEST_PAYLOAD_KEY: encode_wiring_manifest_payload(data)}
+    )
+
+    assert decoded == WiringManifest.model_validate(data)
+
+
+@pytest.mark.parametrize(
+    ("data", "stage"),
+    [
+        (None, "missing"),
+        ({}, "missing"),
+        ({WIRING_MANIFEST_PAYLOAD_KEY: ""}, "missing"),
+        ({"manifest.json": "{}"}, "missing"),
+        ({WIRING_MANIFEST_PAYLOAD_KEY: "not base64!"}, "base64"),
+        ({WIRING_MANIFEST_PAYLOAD_KEY: base64.b64encode(b"plain").decode()}, "gzip"),
+        (_payload(b"\xff\xfe{}"), "utf-8"),
+        (_payload("{}".encode("utf-16")), "utf-8"),
+        (_payload("{}".encode("utf-32")), "utf-8"),
+        (_payload(b"\xef\xbb\xbf{}"), "json"),
+        (_payload(b"{not json"), "json"),
+        pytest.param(
+            _payload(b'{"n": ' + b"9" * 4301 + b"}"), "json", id="json-integer-digit-limit"
+        ),
+        (_payload(b"[1, 2]"), "shape"),
+        (_payload(b'"text"'), "shape"),
+    ],
+)
+def test_each_decode_failure_is_refused_at_its_stage(data, stage) -> None:
+    with pytest.raises(WiringManifestPayloadError) as raised:
+        decode_wiring_manifest_payload(data)
+
+    assert raised.value.stage == stage
+    assert f"refused at {stage}: " in str(raised.value)
+    if stage in ("missing", "shape"):
+        assert raised.value.__cause__ is None
+    else:
+        # The underlying diagnostic is chained and also in the logged message.
+        assert raised.value.__cause__ is not None
+        assert str(raised.value.__cause__) in str(raised.value)
+
+
+def test_the_uncompressed_manifest_key_is_not_read() -> None:
+    with pytest.raises(WiringManifestPayloadError, match="missing manifest.json.gz.b64"):
+        decode_wiring_manifest_payload({"manifest.json": '{"session_id": "demo"}'})
+
+
+def test_decode_payload_does_not_validate_the_model() -> None:
+    encoded = encode_wiring_manifest_payload({"nodes": {}})
+
+    assert decode_wiring_manifest_payload({WIRING_MANIFEST_PAYLOAD_KEY: encoded}) == {"nodes": {}}
+
+
+def test_decode_manifest_validates_the_model() -> None:
+    encoded = encode_wiring_manifest_payload({"nodes": {}})
+
+    with pytest.raises(ValidationError):
+        decode_wiring_manifest({WIRING_MANIFEST_PAYLOAD_KEY: encoded})

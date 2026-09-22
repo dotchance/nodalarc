@@ -4,13 +4,17 @@
 
 from __future__ import annotations
 
-import base64
-import gzip
-import json
 from types import SimpleNamespace
 
 import pytest
-from nodalarc.substrate.manifest_contract import REQUIRED_WIRING_PHASES, WiringManifest
+from nodalarc.substrate.manifest_contract import (
+    REQUIRED_WIRING_PHASES,
+    WIRING_MANIFEST_CONFIGMAP,
+    WIRING_MANIFEST_PAYLOAD_KEY,
+    WiringManifest,
+    WiringManifestPayloadError,
+    encode_wiring_manifest_payload,
+)
 from nodalarc.substrate.measurement_contract import (
     RequiredSubstratePair,
     SubstrateMeasurement,
@@ -98,7 +102,7 @@ class _ManifestK8s:
         self.calls = 0
 
     def read_namespaced_config_map(self, name: str, namespace: str):
-        assert name == "nodalarc-topology-wiring"
+        assert name == WIRING_MANIFEST_CONFIGMAP
         assert namespace == "nodalarc"
         self.calls += 1
         response = self.responses.pop(0)
@@ -141,8 +145,9 @@ def _manifest_model() -> WiringManifest:
 
 
 def _manifest_configmap() -> SimpleNamespace:
-    encoded = base64.b64encode(gzip.compress(json.dumps(_manifest_dict()).encode())).decode()
-    return SimpleNamespace(data={"manifest.json.gz.b64": encoded})
+    return SimpleNamespace(
+        data={WIRING_MANIFEST_PAYLOAD_KEY: encode_wiring_manifest_payload(_manifest_dict())}
+    )
 
 
 def test_wiring_manifest_gate_waits_through_creation_race() -> None:
@@ -176,7 +181,7 @@ def test_wiring_manifest_gate_fails_closed_on_missing_manifest_timeout() -> None
 
 
 def test_wiring_manifest_gate_fails_immediately_on_malformed_manifest() -> None:
-    with pytest.raises(RuntimeError, match="missing manifest.json.gz.b64"):
+    with pytest.raises(WiringManifestPayloadError, match="missing manifest.json.gz.b64"):
         wait_for_wiring_manifest_identity(
             k8s_v1=_ManifestK8s([SimpleNamespace(data={"other": "value"})]),
             namespace="nodalarc",
@@ -402,3 +407,24 @@ def test_substrate_gate_fails_closed_on_missing_measurement() -> None:
             monotonic=clock.monotonic,
             sleep=clock.sleep,
         )
+
+
+def test_wiring_manifest_gate_refuses_an_undecodable_payload_without_waiting() -> None:
+    k8s = _ManifestK8s(
+        [
+            SimpleNamespace(data={WIRING_MANIFEST_PAYLOAD_KEY: "H4sIAAAAAAAA/w=="}),
+            _manifest_configmap(),
+        ]
+    )
+
+    with pytest.raises(WiringManifestPayloadError) as raised:
+        wait_for_wiring_manifest_identity(
+            k8s_v1=k8s,
+            namespace="nodalarc",
+            timeout_s=5.0,
+            poll_s=0.0,
+            sleep=lambda _seconds: None,
+        )
+
+    assert raised.value.stage == "gzip"
+    assert k8s.calls == 1

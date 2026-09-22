@@ -32,7 +32,6 @@ from nodalarc.platform_config import (
     compute_pod_placement,
     get_platform_config,
 )
-from nodalarc.resolve_session import SessionResolution
 from nodalarc.runtime_config import (
     RUNTIME_DEPLOYMENT_CONTEXT_FILENAME,
     SESSION_YAML_FILENAME,
@@ -47,16 +46,16 @@ from nodalarc.runtime_service_config import (
 from nodalarc.session_identity import require_resolved_session_run_id
 from nodalarc.session_validator import validate_session_readiness
 from nodalarc.stack_resolver import ResolvedStack, resolve_domain_stack, validate_sid_indices
-from nodalarc.substrate.manifest_contract import (
-    POD_OWNER_UID_LABEL,
-    POD_SESSION_RUN_LABEL,
-)
 from nodalarc.substrate.wiring_status import WIRING_STATUS_CONFIGMAP
 from nodalarc.template_vars import build_template_vars_from_resolved
-from nodalarc.workload_target import NODE_ID_LABEL
 
+from nodalarc_operator.session_pods import (
+    PodClass,
+    SessionPodIdentity,
+    canonical_node_id,
+    delete_conflicting_pod,
+)
 from nodalarc_operator.workloads.materializer import (
-    WORKLOAD_SELECTION_ANNOTATION,
     build_session_pod,
 )
 from nodalarc_operator.workloads.preparation import (
@@ -143,72 +142,6 @@ def _proof_hash_fields(proof: RuntimeConfigProof) -> dict[str, str | int]:
     }
 
 
-def _metadata(obj: Any) -> Any:
-    return getattr(obj, "metadata", None)
-
-
-def _labels(obj: Any) -> dict[str, str]:
-    metadata = _metadata(obj)
-    return dict(getattr(metadata, "labels", None) or {})
-
-
-def _pod_node_id(pod: Any) -> str:
-    labels = _labels(pod)
-    node_id = str(labels.get(NODE_ID_LABEL) or "")
-    if node_id:
-        return node_id.lower()
-    metadata = _metadata(pod)
-    return str(getattr(metadata, "name", "") or "").lower()
-
-
-def _pod_deleting(pod: Any) -> bool:
-    metadata = _metadata(pod)
-    return bool(getattr(metadata, "deletion_timestamp", None))
-
-
-def _owner_ref_field(ref: Any, field: str) -> str:
-    if isinstance(ref, dict):
-        return str(ref.get(field) or "")
-    return str(getattr(ref, field, "") or "")
-
-
-def _pod_owned_by(pod: Any, owner_ref: dict | None) -> bool:
-    if owner_ref is None:
-        return False
-    expected_uid = str(owner_ref.get("uid") or "")
-    expected_name = str(owner_ref.get("name") or "")
-    if not expected_uid or not expected_name:
-        return False
-    metadata = _metadata(pod)
-    for ref in getattr(metadata, "owner_references", None) or []:
-        if (
-            _owner_ref_field(ref, "uid") == expected_uid
-            and _owner_ref_field(ref, "name") == expected_name
-        ):
-            return True
-    return False
-
-
-def _pod_current_for_runtime(pod: Any, session_id: str, owner_ref: dict | None) -> bool:
-    labels = _labels(pod)
-    return (
-        not _pod_deleting(pod)
-        and labels.get(POD_SESSION_RUN_LABEL) == session_id
-        and _pod_owned_by(pod, owner_ref)
-    )
-
-
-def _pod_selection_identity(pod: Any) -> str:
-    """The pod's stamped built-in-or-explicit selection identity.
-
-    An absent annotation means the identity is unknown, which never matches
-    any desired identity: an unverifiable pod is deleted and recreated.
-    """
-    metadata = _metadata(pod)
-    annotations = getattr(metadata, "annotations", None) or {}
-    return str(annotations.get(WORKLOAD_SELECTION_ANNOTATION) or "")
-
-
 def _ensure_immutable_configmap(
     v1: kubernetes.client.CoreV1Api,
     namespace: str,
@@ -266,211 +199,6 @@ def _ensure_immutable_configmap(
         raise WorkloadPreparationError(
             f"workload artifact ConfigMap {name!r} exists with unexpected plain data"
         )
-
-
-def _list_session_pods(v1: kubernetes.client.CoreV1Api, namespace: str) -> list[Any]:
-    return list(v1.list_namespaced_pod(namespace, label_selector=NODE_ID_LABEL).items)
-
-
-_OWNED_RUN_ID_CONFIGMAPS: tuple[tuple[str, str], ...] = (
-    ("nodalarc-session", SESSION_RUN_ID_FILENAME),
-    ("nodalarc-topology-wiring", "session_id"),
-)
-
-
-def owned_session_run_ids(namespace: str, owner_ref: dict) -> tuple[str, ...]:
-    """The distinct run ids of the session resources one ConstellationSpec owns.
-
-    The identity is read from the records that carry it, never from the CR's
-    status or desired generation: every session pod, terminating pods included
-    (after a generation change the superseded run id can survive only on one),
-    and the two session ConfigMaps that name a run id, each accepted only when
-    its owner reference names the CR. A session object with another owner, or
-    an owned record without its run id, is a refusal: deletion must not proceed
-    on an identity it cannot prove. An empty result means nothing is deployed
-    under this CR. Every value passes through ``sanitize_session_id`` because
-    the pod label and the wiring key are sanitized at write and the session key
-    is raw.
-    """
-    v1 = _get_v1()
-    owner_uid = str(owner_ref.get("uid") or "")
-    run_ids: set[str] = set()
-    for pod in _list_session_pods(v1, namespace):
-        metadata = _metadata(pod)
-        pod_name = str(getattr(metadata, "name", "") or "")
-        if not _pod_owned_by(pod, owner_ref):
-            raise ValueError(
-                f"session pod {pod_name!r} is not owned by ConstellationSpec {owner_uid!r}"
-            )
-        labels = dict(getattr(metadata, "labels", None) or {})
-        run_id = str(labels.get(POD_SESSION_RUN_LABEL) or "").strip()
-        if not run_id:
-            raise ValueError(
-                f"owned session pod {pod_name!r} carries no {POD_SESSION_RUN_LABEL} label"
-            )
-        run_ids.add(sanitize_session_id(run_id))
-    for cm_name, key in _OWNED_RUN_ID_CONFIGMAPS:
-        try:
-            cm = v1.read_namespaced_config_map(cm_name, namespace)
-        except kubernetes.client.rest.ApiException as exc:
-            if exc.status == 404:
-                continue
-            raise
-        # The ownership predicate reads metadata.owner_references, the same
-        # shape on a ConfigMap as on a pod.
-        if not _pod_owned_by(cm, owner_ref):
-            raise ValueError(
-                f"ConfigMap {cm_name!r} is not owned by ConstellationSpec {owner_uid!r}"
-            )
-        value = str((cm.data or {}).get(key) or "").strip()
-        if not value:
-            raise ValueError(f"owned ConfigMap {cm_name!r} carries no {key!r}")
-        run_ids.add(sanitize_session_id(value))
-    return tuple(sorted(run_ids))
-
-
-def _delete_pod_preconditioned(v1: kubernetes.client.CoreV1Api, namespace: str, pod: Any) -> bool:
-    """Delete exactly the observed pod, never a same-name replacement.
-
-    The delete is preconditioned on the observed pod UID: a stale
-    reconciliation pass whose target was already replaced gets a 409 and
-    removes nothing. Returns True when the delete was accepted.
-    """
-    metadata = _metadata(pod)
-    pod_name = str(getattr(metadata, "name", "") or "")
-    pod_uid = str(getattr(metadata, "uid", "") or "")
-    if not pod_name or not pod_uid:
-        raise ValueError("cannot delete a session pod without a name and uid")
-    try:
-        v1.delete_namespaced_pod(
-            pod_name,
-            namespace,
-            body=kubernetes.client.V1DeleteOptions(
-                preconditions=kubernetes.client.V1Preconditions(uid=pod_uid)
-            ),
-        )
-    except kubernetes.client.rest.ApiException as error:
-        if error.status in (404, 409):
-            log.info(
-                "Skipped deleting pod %s: already gone or replaced (HTTP %s)",
-                pod_name,
-                error.status,
-            )
-            return False
-        raise
-    return True
-
-
-def ensure_session_pod_identity(
-    namespace: str,
-    expected_ids: set[str] | frozenset[str],
-    session_id: str,
-    owner_ref: dict,
-    selection_identity: str,
-) -> int:
-    """Delete same-CR session pods whose workload identity or run differs.
-
-    Pods from a different CR UID are never adopted. Every session pod carries
-    the prepared workload identity; a pod whose stamp or run ID differs from
-    the desired session is deleted here (UID-preconditioned) and recreated
-    through ordinary reconciliation, because its immutable artifacts belong
-    to other content.
-    """
-    if not selection_identity:
-        raise ValueError("selection_identity is required to evaluate session pod identity")
-    v1 = _get_v1()
-    expected = {node_id.lower() for node_id in expected_ids}
-    replaced = 0
-    for pod in _list_session_pods(v1, namespace):
-        if _pod_node_id(pod) not in expected:
-            continue
-        if _pod_deleting(pod) or not _pod_owned_by(pod, owner_ref):
-            continue
-        labels = _labels(pod)
-        run_is_current = labels.get(POD_SESSION_RUN_LABEL) == session_id and labels.get(
-            POD_OWNER_UID_LABEL
-        ) == str(owner_ref.get("uid") or "")
-        if _pod_selection_identity(pod) == selection_identity and run_is_current:
-            continue
-        log.info(
-            "Deleting session pod %s: workload identity or run differs from the "
-            "desired session; reconciliation recreates it",
-            str(getattr(_metadata(pod), "name", "") or ""),
-        )
-        if _delete_pod_preconditioned(v1, namespace, pod):
-            replaced += 1
-    if replaced:
-        log.info(
-            "Deleted %d session pods whose workload identity or run differed; "
-            "reconciliation recreates them",
-            replaced,
-        )
-    return replaced
-
-
-def current_session_pod_node_ids(
-    namespace: str,
-    session_id: str,
-    owner_ref: dict,
-) -> set[str]:
-    """Return node IDs for pods owned by this CR and stamped with this run ID."""
-    v1 = _get_v1()
-    return {
-        _pod_node_id(pod)
-        for pod in _list_session_pods(v1, namespace)
-        if _pod_current_for_runtime(pod, session_id, owner_ref)
-    }
-
-
-def delete_owned_session_pods(namespace: str, owner_ref: dict) -> tuple[int, int]:
-    """Drive this CR UID's session pods toward zero; report what remains.
-
-    The convergent action for a deterministic selection failure: the CR's
-    desired workloads cannot be realized, so leaving previous workloads
-    running would misrepresent session state. Deletes are preconditioned on
-    each observed pod UID, so a stale pass can never remove a replacement
-    pod. Returns (remaining, requested): ``remaining`` counts every owned
-    pod still present — including ones already terminating — so the caller
-    publishes a terminal phase only once zero is observed. Pods of other CR
-    UIDs are untouched.
-    """
-    v1 = _get_v1()
-    remaining = 0
-    requested = 0
-    for pod in _list_session_pods(v1, namespace):
-        if not _pod_owned_by(pod, owner_ref):
-            continue
-        remaining += 1
-        if _pod_deleting(pod):
-            continue
-        if _delete_pod_preconditioned(v1, namespace, pod):
-            requested += 1
-    if requested:
-        log.info(
-            "Requested deletion of %d owned session pods after terminal "
-            "selection failure (%d still present)",
-            requested,
-            remaining,
-        )
-    return remaining, requested
-
-
-def count_stale_session_pods(
-    namespace: str,
-    expected_ids: set[str] | frozenset[str],
-    session_id: str,
-    owner_ref: dict,
-) -> int:
-    """Count expected-name pods that cannot belong to the active runtime."""
-    v1 = _get_v1()
-    expected = {node_id.lower() for node_id in expected_ids}
-    stale = 0
-    for pod in _list_session_pods(v1, namespace):
-        if _pod_node_id(pod) not in expected:
-            continue
-        if not _pod_current_for_runtime(pod, session_id, owner_ref):
-            stale += 1
-    return stale
 
 
 def _cluster_pod_cidr(v1: kubernetes.client.CoreV1Api) -> str | None:
@@ -542,36 +270,6 @@ def _node_internal_ips(
     if missing:
         raise ValueError("missing InternalIP for Kubernetes nodes: " + ", ".join(missing))
     return ips
-
-
-def _discover_session_pod_placement(
-    v1: kubernetes.client.CoreV1Api,
-    namespace: str,
-    expected_node_ids: set[str],
-) -> dict[str, str]:
-    """Read actual session pod placement from Running pod specs."""
-    pods = v1.list_namespaced_pod(namespace, label_selector=NODE_ID_LABEL)
-    placement: dict[str, str] = {}
-    duplicates: list[str] = []
-    for pod in pods.items:
-        labels = pod.metadata.labels or {}
-        node_id = labels.get(NODE_ID_LABEL, "")
-        if node_id not in expected_node_ids:
-            continue
-        k8s_node = pod.spec.node_name or ""
-        if not k8s_node:
-            raise ValueError(f"session pod {pod.metadata.name} has no Kubernetes node assignment")
-        if node_id in placement and placement[node_id] != k8s_node:
-            duplicates.append(node_id)
-        placement[node_id] = k8s_node
-    if duplicates:
-        raise ValueError("duplicate session pod placement for: " + ", ".join(sorted(duplicates)))
-    missing = sorted(expected_node_ids - set(placement))
-    if missing:
-        raise ValueError(
-            "missing session pod placement for manifest nodes: " + ", ".join(missing[:20])
-        )
-    return placement
 
 
 def _required_substrate_pairs(
@@ -963,6 +661,7 @@ def ensure_session_pods(
     context: dict,
     namespace: str,
     owner_ref: dict,
+    pod_identity: SessionPodIdentity,
     progress_fn: Any | None = None,
 ) -> int:
     """Create ONLY missing session pods from a prepared context.
@@ -971,12 +670,15 @@ def ensure_session_pods(
     pods already exist and creates only the missing ones. Returns the total
     expected pod count (not just created count).
 
-    Idempotent — K8s returns 409 for existing pods, handled as success.
+    Idempotent — a 409 on create is resolved through the shared session-pod
+    classification: a current pod is kept, an ineligible owned pod is deleted
+    by its observed UID, a foreign or terminating pod is refused.
 
     Args:
         context: Dict from ensure_session_configmaps().
         namespace: K8s namespace.
         owner_ref: ownerReferences entry for garbage collection.
+        pod_identity: The desired session-pod identity for this reconciliation.
         progress_fn: Optional callback(message: str) for status updates.
 
     Returns:
@@ -988,11 +690,18 @@ def ensure_session_pods(
         if progress_fn:
             progress_fn(msg)
 
-    v1 = _get_v1()
     node_vars = context["node_vars"]
     pod_placement = context["pod_placement"]
     session_id = context["session_id"]
+    prepared_workloads = context["prepared_workloads"]
+    if (
+        pod_identity.selection_identity != prepared_workloads.identity
+        or pod_identity.run_label != session_id
+        or pod_identity.expected_node_ids != {canonical_node_id(node_id) for node_id in node_vars}
+    ):
+        raise ValueError("session pod identity does not describe the prepared deployment context")
 
+    v1 = _get_v1()
     total_pods = len(node_vars)
     _progress(f"Creating {total_pods} session pods")
 
@@ -1033,45 +742,45 @@ def ensure_session_pods(
 
     heartbeat = threading.Thread(target=_heartbeat, daemon=True)
     heartbeat.start()
+    try:
+        with ThreadPoolExecutor(max_workers=16) as pool:
+            futures = {}
+            for ps in pod_specs:
+                fut = pool.submit(
+                    _create_workload_pod,
+                    v1=v1,
+                    pod_name=ps["pod_name"],
+                    namespace=namespace,
+                    node_id=ps["node_id"],
+                    node_type=ps["node_type"],
+                    plane=ps["plane"],
+                    slot=ps["slot"],
+                    gs_name=ps["gs_name"],
+                    composed=prepared_workloads.composed[ps["node_id"]],
+                    target_node=ps["target_node"],
+                    owner_ref=owner_ref,
+                    pod_identity=pod_identity,
+                )
+                futures[fut] = ps["node_id"]
 
-    prepared_workloads = context["prepared_workloads"]
-
-    with ThreadPoolExecutor(max_workers=16) as pool:
-        futures = {}
-        for ps in pod_specs:
-            fut = pool.submit(
-                _create_workload_pod,
-                v1=v1,
-                pod_name=ps["pod_name"],
-                namespace=namespace,
-                node_id=ps["node_id"],
-                node_type=ps["node_type"],
-                plane=ps["plane"],
-                slot=ps["slot"],
-                gs_name=ps["gs_name"],
-                composed=prepared_workloads.composed[ps["node_id"]],
-                target_node=ps["target_node"],
-                owner_ref=owner_ref,
-                session_id=session_id,
-                selection_identity=prepared_workloads.identity,
-            )
-            futures[fut] = ps["node_id"]
-
-        for fut in as_completed(futures):
-            node_id = futures[fut]
-            try:
-                fut.result()
-                created_pods += 1
-                _progress(f"Creating session pods: {created_pods}/{total_pods}")
-            except kubernetes.client.rest.ApiException as exc:
-                api_failures.append(exc)
-                errors.append(f"{node_id}: {exc}")
-                log.error("Pod creation failed for %s: %s", node_id, exc)
-            except Exception as exc:
-                errors.append(f"{node_id}: {exc}")
-                log.error("Pod creation failed for %s: %s", node_id, exc)
-
-    _pod_creation_done.set()
+            for fut in as_completed(futures):
+                node_id = futures[fut]
+                try:
+                    fut.result()
+                    created_pods += 1
+                    _progress(f"Creating session pods: {created_pods}/{total_pods}")
+                except kubernetes.client.rest.ApiException as exc:
+                    api_failures.append(exc)
+                    errors.append(f"{node_id}: {exc}")
+                    log.error("Pod creation failed for %s: %s", node_id, exc)
+                except Exception as exc:
+                    errors.append(f"{node_id}: {exc}")
+                    log.error("Pod creation failed for %s: %s", node_id, exc)
+    finally:
+        # Every exit stops progress reporting before the caller publishes a
+        # phase: no heartbeat may overwrite it afterwards.
+        _pod_creation_done.set()
+        heartbeat.join()
 
     if errors:
         log.error("Pod creation: %d failures out of %d", len(errors), total_pods)
@@ -1087,53 +796,6 @@ def ensure_session_pods(
     log.info("Created %d session pods (total expected: %d)", created_pods, total_pods)
 
     return total_pods
-
-
-def deploy_session(
-    spec: dict,
-    name: str,
-    namespace: str,
-    owner_ref: dict,
-    progress_fn: Any | None = None,
-    session_run_id: str | None = None,
-    active_session: ResolvedRuntimeConfig | None = None,
-    deployment_context: RuntimeDeploymentContext | None = None,
-) -> dict:
-    """Deploy a full session from a ConstellationSpec CR spec.
-
-    Convenience wrapper that calls ensure_session_configmaps() followed by
-    ensure_session_pods().
-
-    Args:
-        spec: The CR's .spec dict.
-        name: CR metadata.name (used for session_id).
-        namespace: K8s namespace.
-        owner_ref: ownerReferences entry for garbage collection.
-        progress_fn: Optional callback(message: str) for status updates.
-
-    Returns:
-        Status dict with phase, podCount, readyPods, sessionId, message.
-    """
-    context = ensure_session_configmaps(
-        spec,
-        name,
-        namespace,
-        owner_ref,
-        progress_fn,
-        session_run_id,
-        active_session,
-        deployment_context,
-    )
-    total_pods = ensure_session_pods(context, namespace, owner_ref, progress_fn)
-
-    return {
-        "phase": "Creating",
-        "sessionId": context["session_id"],
-        "podCount": total_pods,
-        "readyPods": 0,
-        "wiredPods": 0,
-        "message": f"Created {total_pods} pods, waiting for Running",
-    }
 
 
 def _site_lans_for_manifest(
@@ -1216,15 +878,18 @@ def _site_lans_for_manifest(
 def write_wiring_manifest(
     spec: dict,
     namespace: str,
-    owner_ref: dict | None = None,
-    session_run_id: str | None = None,
-    active_session: ResolvedRuntimeConfig | None = None,
-    platform_hash: str | None = None,
+    owner_ref: dict | None,
+    session_run_id: str,
+    active_session: ResolvedRuntimeConfig | None,
+    platform_hash: str | None,
+    pod_placement: Mapping[str, str],
 ) -> int:
     """Generate and write the topology wiring manifest ConfigMap.
 
-    Called after pods are Running. The Node Agent watches this ConfigMap
-    and executes all data plane wiring operations.
+    Called once every current session pod has a provisioned network. The Node
+    Agent watches this ConfigMap and executes all data plane wiring operations.
+    ``pod_placement`` maps each canonical node id to its Kubernetes node, from
+    the reconciliation's session-pod observation.
 
     Returns the number of ISL links in the manifest.
     """
@@ -1359,10 +1024,16 @@ def write_wiring_manifest(
         if candidate.kind != "access":
             isl_pairs.add((candidate.node_a, candidate.node_b))
 
-    pod_placement = _discover_session_pod_placement(v1, namespace, set(nodes))
+    missing_placement = sorted(
+        node_id for node_id in nodes if canonical_node_id(node_id) not in pod_placement
+    )
+    if missing_placement:
+        raise ValueError(
+            "missing session pod placement for manifest nodes: " + ", ".join(missing_placement[:20])
+        )
     for manifest_node_id in nodes:
-        nodes[manifest_node_id]["host"] = pod_placement[manifest_node_id]
-    k8s_nodes = set(pod_placement.values())
+        nodes[manifest_node_id]["host"] = pod_placement[canonical_node_id(manifest_node_id)]
+    k8s_nodes = {nodes[manifest_node_id]["host"] for manifest_node_id in nodes}
     node_ips = _node_internal_ips(v1, k8s_nodes)
     site_lans = _site_lans_for_manifest(resolved_session, pod_placement, node_ips)
     required_substrate_pairs = _required_substrate_pairs(
@@ -1741,127 +1412,6 @@ def purge_session_runtime_state(namespace: str, session_id: str) -> None:
         raise
 
 
-def _current_session_pods(
-    namespace: str,
-    session_id: str | None = None,
-    owner_ref: dict | None = None,
-    expected_ids: set[str] | frozenset[str] | None = None,
-) -> list:
-    """List session pods filtered to the active CR and runtime identity."""
-    v1 = _get_v1()
-    expected = {node_id.lower() for node_id in expected_ids} if expected_ids else None
-    pods = _list_session_pods(v1, namespace)
-    filtered = []
-    for pod in pods:
-        if expected is not None and _pod_node_id(pod) not in expected:
-            continue
-        if session_id is not None and not _pod_current_for_runtime(pod, session_id, owner_ref):
-            continue
-        filtered.append(pod)
-    return filtered
-
-
-def _pod_network_provisioned(pod) -> bool:
-    """A scheduled pod holding a pod IP: its sandbox network namespace exists.
-
-    This is true from sandbox creation onward, before any container starts,
-    and is exactly the state Node Agent wiring needs.
-    """
-    return bool(pod.spec and pod.spec.node_name and pod.status and pod.status.pod_ip)
-
-
-def _pod_workloads_running(pod) -> bool:
-    """Every authored regular container is actually running.
-
-    Pod phase Running only means at least one container is alive; a
-    multi-container workload (FRR plus an observer, or any authored
-    composition) counts only when each declared regular container has
-    state.running. Readiness probes are deliberately not consulted.
-    """
-    if not pod.status or pod.status.phase != "Running":
-        return False
-    if not pod.spec or not pod.spec.containers:
-        return False
-    statuses = pod.status.container_statuses or []
-    if len(statuses) != len(pod.spec.containers):
-        return False
-    return all(status.state and status.state.running for status in statuses)
-
-
-def check_pods_ready(
-    namespace: str,
-    session_id: str | None = None,
-    owner_ref: dict | None = None,
-    expected_ids: set[str] | frozenset[str] | None = None,
-) -> tuple[int, int]:
-    """Count total and running session pods. Returns (total, running).
-
-    When session_id/owner_ref are supplied, only pods owned by the active CR and
-    stamped with the active runtime identity are counted.
-    """
-    filtered = _current_session_pods(namespace, session_id, owner_ref, expected_ids)
-    total = len(filtered)
-    ready = sum(1 for p in filtered if _pod_workloads_running(p))
-    return total, ready
-
-
-def check_old_pods_terminated(
-    namespace: str,
-    session_id: str | None = None,
-    owner_ref: dict | None = None,
-    expected_ids: set[str] | frozenset[str] | None = None,
-) -> bool:
-    """Return True when no stale expected-name session pods remain.
-
-    Pure query — no side effects. Used before deploying a new session
-    to ensure the previous session's pods have fully terminated.
-    """
-    if session_id is None or owner_ref is None or expected_ids is None:
-        total, _ = check_pods_ready(namespace)
-        return total == 0
-    return count_stale_session_pods(namespace, expected_ids, session_id, owner_ref) == 0
-
-
-def check_all_pods_running(
-    namespace: str,
-    expected_count: int,
-    session_id: str | None = None,
-    owner_ref: dict | None = None,
-    expected_ids: set[str] | frozenset[str] | None = None,
-) -> tuple[bool, int, int]:
-    """Check whether all expected session pods are Running.
-
-    Returns (all_ready, total, ready) where all_ready is True
-    if ready >= expected_count.
-
-    Pure query — no side effects.
-    """
-    total, ready = check_pods_ready(namespace, session_id, owner_ref, expected_ids)
-    return ready >= expected_count, total, ready
-
-
-def check_all_pods_provisioned(
-    namespace: str,
-    expected_count: int,
-    session_id: str | None = None,
-    owner_ref: dict | None = None,
-    expected_ids: set[str] | frozenset[str] | None = None,
-) -> tuple[bool, int, int]:
-    """Check whether every expected session pod has a provisioned network.
-
-    Provisioned means scheduled with an assigned pod IP: the pod sandbox and
-    its network namespace exist. Containers need not have started — wiring
-    must be able to proceed before they do. Returns
-    (all_provisioned, provisioned, running).
-
-    Pure query — no side effects.
-    """
-    filtered = _current_session_pods(namespace, session_id, owner_ref, expected_ids)
-    provisioned = sum(1 for p in filtered if _pod_network_provisioned(p))
-    running = sum(1 for p in filtered if _pod_workloads_running(p))
-    return provisioned >= expected_count, provisioned, running
-
-
 def check_wiring_complete(namespace: str, expected_count: int) -> tuple[bool, int, str | None]:
     """Check whether Node Agent wiring is complete.
 
@@ -2044,139 +1594,15 @@ def compute_runtime_hash(
     return hashlib.sha256(canonical.encode()).hexdigest()
 
 
-def compute_expected_pod_count(
-    spec: dict,
-    *,
-    active_session: ResolvedRuntimeConfig | None = None,
-    namespace: str = "nodalarc",
-) -> int:
-    """Compute how many session pods SHOULD exist from the CRD spec.
+def write_pod_ips_configmap(namespace: str, pod_ips: Mapping[str, str]) -> None:
+    """Write nodalarc-pod-ips ConfigMap from the current session pods' addresses.
 
-    Pure computation — parses sessionYaml, expands constellation, counts
-    satellites + ground stations. No K8s API calls, no template rendering,
-    no ConfigMap creation. Fast enough for every reconciler invocation.
-
-    Raises on invalid config — caller sets CR phase to Error with the
-    message so the user sees what went wrong in the browser.
-    """
-    operator_session = _operator_session_config(
-        spec,
-        active_session,
-        namespace=namespace,
-        origin="operator.expected_pod_count",
-    )
-    count = len(operator_session.resolution.resolved.nodes)
-    if count == 0:
-        raise ValueError(
-            "Session expands to 0 nodes — check constellation and ground station configs"
-        )
-    return count
-
-
-def _placement_node_vars_from_resolution(resolution: SessionResolution) -> dict[str, dict]:
-    """Build placement inputs from the same resolved assets used for pod creation."""
-
-    node_vars: dict[str, dict] = {}
-    ground_indices = resolution.resolved.ground_index_by_node_id()
-    for node in resolution.resolved.nodes:
-        if node.kind == "satellite":
-            # Optional grid coordinates: placement reads plane via
-            # .get("plane", 0), so a non-grid satellite (GEO longitude
-            # slot, state vector) lands in bucket 0 deterministically.
-            node_vars[node.node_id] = {
-                "node_type": "satellite",
-                **(
-                    {"plane": node.plane, "slot": node.slot}
-                    if node.plane is not None and node.slot is not None
-                    else {}
-                ),
-            }
-        elif node.kind == "ground_station":
-            node_vars[node.node_id] = {
-                "node_type": "ground_station",
-                "gs_name": node.local_node_id,
-                "gs_index": ground_indices[node.node_id],
-            }
-    return node_vars
-
-
-def compute_expected_placement_node_count(
-    spec: dict,
-    available_nodes: list[str],
-    *,
-    active_session: ResolvedRuntimeConfig | None = None,
-    namespace: str = "nodalarc",
-) -> int:
-    """Compute how many Kubernetes nodes the active placement policy should use.
-
-    This is the pure equivalent of the operator deployment path's placement step.
-    It intentionally uses ``resolution.resolved.nodes`` so multi-segment
-    sessions include relay/space segments in the expected placement
-    distribution.
-    """
-
-    operator_session = _operator_session_config(
-        spec,
-        active_session,
-        namespace=namespace,
-        origin="operator.expected_placement",
-    )
-    node_vars = _placement_node_vars_from_resolution(operator_session.resolution)
-    if not node_vars:
-        raise ValueError("Session expands to 0 nodes — cannot compute placement")
-    placement = compute_pod_placement(
-        _platform_placement_policy(),
-        node_vars,
-        available_nodes,
-    )
-    return len(set(placement.values()))
-
-
-def check_pods_ready_condition(namespace: str) -> tuple[int, int]:
-    """Count session pods with K8s Ready condition = True.
-
-    Ready means the readiness probe passed: config version sentinel matches
-    the ConfigMap mount (NOS loaded the intended config) AND the NOS is
-    responsive (e.g., vtysh -c "show version" for FRR).
-
-    Returns (total, ready_count).
+    ``pod_ips`` comes from the reconciliation's session-pod observation. Stores
+    the map as a single 'pod-ips.json' key so it can be volume-mounted directly
+    as a JSON file by the NodalPath Deployment.
     """
     v1 = _get_v1()
-    pods = v1.list_namespaced_pod(namespace, label_selector=NODE_ID_LABEL)
-    total = len(pods.items)
-    ready = 0
-    for pod in pods.items:
-        if pod.status and pod.status.conditions:
-            for cond in pod.status.conditions:
-                if cond.type == "Ready" and cond.status == "True":
-                    ready += 1
-                    break
-    return total, ready
-
-
-def write_pod_ips_configmap(
-    namespace: str,
-    session_id: str | None = None,
-    owner_ref: dict | None = None,
-    expected_ids: set[str] | frozenset[str] | None = None,
-) -> None:
-    """Write nodalarc-pod-ips ConfigMap from running session pods.
-
-    Stores the IP map as a single 'pod-ips.json' key so it can be
-    volume-mounted directly as a JSON file by the NodalPath Deployment.
-    """
-    v1 = _get_v1()
-    expected = {node_id.lower() for node_id in expected_ids} if expected_ids else None
-    pods = _list_session_pods(v1, namespace)
-    ip_map = {}
-    for pod in pods:
-        if expected is not None and _pod_node_id(pod) not in expected:
-            continue
-        if session_id is not None and not _pod_current_for_runtime(pod, session_id, owner_ref):
-            continue
-        node_id = pod.metadata.labels.get(NODE_ID_LABEL, "")
-        if node_id and pod.status and pod.status.pod_ip:
-            ip_map[node_id] = pod.status.pod_ip
+    ip_map = dict(sorted(pod_ips.items()))
     data = {"pod-ips.json": json.dumps(ip_map)}
     _create_or_update_configmap(v1, "nodalarc-pod-ips", namespace, data, owner_ref=None)
     log.info("Wrote nodalarc-pod-ips with %d entries", len(ip_map))
@@ -2387,36 +1813,25 @@ def _create_pod_with_conflict_check(
     pod: kubernetes.client.V1Pod,
     namespace: str,
     pod_name: str,
-    owner_ref: dict,
-    session_id: str,
-    selection_identity: str,
+    pod_identity: SessionPodIdentity,
 ) -> None:
     """The one create/409 path every session pod uses."""
     try:
         v1.create_namespaced_pod(namespace, pod)
     except kubernetes.client.rest.ApiException as e:
-        if e.status == 409:  # Already exists
-            existing = v1.read_namespaced_pod(pod_name, namespace)
-            if not _pod_owned_by(existing, owner_ref):
-                raise RuntimeError(
-                    f"Pod {pod_name} already exists but is not owned by the "
-                    "current ConstellationSpec"
-                ) from e
-            if _pod_deleting(existing):
-                raise RuntimeError(f"Pod {pod_name} already exists and is deleting") from e
-            if _pod_selection_identity(existing) != selection_identity or not (
-                _pod_current_for_runtime(existing, session_id, owner_ref)
-            ):
-                log.info(
-                    "Deleting existing pod %s: its workload identity or run differs "
-                    "from the desired session; reconciliation recreates it",
-                    pod_name,
-                )
-                _delete_pod_preconditioned(v1, namespace, existing)
-                return
+        if e.status != 409:
+            raise
+        existing = v1.read_namespaced_pod(pod_name, namespace)
+        if pod_identity.classify(existing) is PodClass.CURRENT:
             log.info("Pod %s already exists with the desired workload and run", pod_name)
             return
-        raise
+        deletion = delete_conflicting_pod(v1, namespace, existing, pod_identity)
+        log.info(
+            "Existing pod %s blocks creation: its run, owner or workload differs from "
+            "the desired session; deletion %s, reconciliation reobserves",
+            pod_name,
+            deletion.outcome,
+        )
 
 
 def _create_workload_pod(
@@ -2430,8 +1845,7 @@ def _create_workload_pod(
     gs_name: str | None,
     composed: Any,
     owner_ref: dict,
-    session_id: str,
-    selection_identity: str,
+    pod_identity: SessionPodIdentity,
     target_node: str | None = None,
 ) -> None:
     """Create one explicitly selected workload pod.
@@ -2452,14 +1866,12 @@ def _create_workload_pod(
         namespace=namespace,
         node_id=node_id,
         role=node_type.replace("_", "-"),
-        session_id=session_id,
+        session_id=pod_identity.run_label,
         owner_ref=owner_ref,
         composition=composed.composition,
-        selection_identity=selection_identity,
+        selection_identity=pod_identity.selection_identity,
         terminal_access=composed.terminal_access,
         target_node=target_node,
         extra_labels=extra_labels,
     )
-    _create_pod_with_conflict_check(
-        v1, pod, namespace, pod_name, owner_ref, session_id, selection_identity
-    )
+    _create_pod_with_conflict_check(v1, pod, namespace, pod_name, pod_identity)

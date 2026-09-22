@@ -22,6 +22,7 @@ import json
 import logging
 import os
 from collections.abc import Mapping
+from dataclasses import dataclass
 from typing import Any
 
 import kopf
@@ -40,27 +41,17 @@ from nodalarc.cr_runtime_config import (
 from nodalarc.nats_channels import sanitize_session_id
 from nodalarc.runtime_config import ResolvedRuntimeConfig, RuntimeDeploymentContext
 from nodalarc.session_identity import derive_session_run_id
-from nodalarc.workload_target import NODE_ID_LABEL
 
+from nodalarc_operator import session_deployer as _deployer
 from nodalarc_operator.session_deployer import (
     RetryableSessionDependency,
     build_runtime_session_config_data,
-    check_all_pods_provisioned,
-    check_all_pods_running,
-    check_old_pods_terminated,
     check_platform_runtime_ready,
-    check_pods_ready,
     check_wiring_complete,
-    compute_expected_pod_count,
     compute_platform_hash,
     compute_runtime_hash,
-    count_stale_session_pods,
-    current_session_pod_node_ids,
-    delete_owned_session_pods,
     ensure_session_configmaps,
-    ensure_session_pod_identity,
     ensure_session_pods,
-    owned_session_run_ids,
     prepare_session_workloads,
     restart_platform_pods,
     set_nodalpath_mode,
@@ -68,7 +59,17 @@ from nodalarc_operator.session_deployer import (
     write_pod_ips_configmap,
     write_wiring_manifest,
 )
-from nodalarc_operator.workloads.preparation import WorkloadPreparationError
+from nodalarc_operator.session_pods import (
+    DeletionOutcome,
+    OwnerIdentity,
+    SessionPodIdentity,
+    SessionPodStateError,
+    delete_all_owned_pods,
+    delete_ineligible_pods,
+    observe_session_pods,
+    owned_session_run_ids,
+)
+from nodalarc_operator.workloads.preparation import PreparedWorkloads, WorkloadPreparationError
 
 log = logging.getLogger(__name__)
 
@@ -135,9 +136,66 @@ def _build_owner_ref(name: str, meta: dict) -> dict:
     }
 
 
-def _compute_expected_node_ids(active_session: ResolvedRuntimeConfig) -> frozenset[str]:
-    """Return expected pod names from the reconciliation's verified resolution."""
-    return frozenset(node_id.lower() for node_id in active_session.resolution.resolved.node_ids())
+def _with_core_v1(function, *args):
+    """Run a session-pod operation with the Operator's CoreV1 client.
+
+    Called inside the executor thread: building the client can load the
+    in-cluster configuration, which must never run on the event loop.
+    """
+    return function(_deployer._get_v1(), *args)
+
+
+def _session_pod_identity(
+    owner_ref: dict,
+    session_run_id: str,
+    prepared_workloads: PreparedWorkloads,
+    active_session: ResolvedRuntimeConfig,
+) -> SessionPodIdentity:
+    """The desired session-pod identity from the reconciliation's verified inputs."""
+    return SessionPodIdentity.for_session(
+        owner_ref=owner_ref,
+        session_run_id=session_run_id,
+        selection_identity=prepared_workloads.identity,
+        node_ids=active_session.resolution.resolved.node_ids(),
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class _RuntimeVerification:
+    """The runtime identity one reconciliation publishes and verifies against."""
+
+    platform_hash: str
+    deployment_context: RuntimeDeploymentContext
+    runtime_hash: str
+    proof_fields: dict
+
+
+def _verify_runtime(
+    spec_dict: dict,
+    meta: dict,
+    namespace: str,
+    session_run_id: str,
+    active_session: ResolvedRuntimeConfig,
+) -> _RuntimeVerification:
+    """Hashes and proof fields shared by reconciliation and the Ready check."""
+    platform_hash = compute_platform_hash(
+        spec_dict,
+        active_session=active_session,
+        namespace=namespace,
+    )
+    deployment_context = _runtime_deployment_context(active_session, meta, session_run_id)
+    runtime_hash = compute_runtime_hash(
+        platform_hash,
+        session_run_id,
+        active_session.proof,
+        deployment_context,
+    )
+    return _RuntimeVerification(
+        platform_hash=platform_hash,
+        deployment_context=deployment_context,
+        runtime_hash=runtime_hash,
+        proof_fields=_runtime_proof_status(active_session, deployment_context).to_patch(),
+    )
 
 
 def _resolve_active_session(
@@ -193,9 +251,21 @@ async def _converge_selection_failure(
     if not await loop.run_in_executor(None, _cr_generation_is_current, name, namespace, meta):
         log.info("Reconcile: skipping workload zeroing; CR generation advanced")
         return
-    remaining, requested = await loop.run_in_executor(
-        None, delete_owned_session_pods, namespace, owner_ref
+    remaining, deletions = await loop.run_in_executor(
+        None,
+        _with_core_v1,
+        delete_all_owned_pods,
+        namespace,
+        OwnerIdentity.from_owner_ref(owner_ref),
     )
+    if deletions:
+        log.info(
+            "Requested deletion of %d owned session pods after terminal selection failure "
+            "(%d still present): %s",
+            len(deletions),
+            remaining,
+            ", ".join(f"{d.pod_name}={d.outcome}" for d in deletions),
+        )
     if remaining:
         _update_status(
             name,
@@ -287,29 +357,6 @@ def _runtime_session_config_matches(
         for reference in (getattr(metadata, "owner_references", None) or [])
     }
     return deployment_context.cr_uid in owner_uids
-
-
-def _delete_obsolete_pods(expected_ids: set[str], namespace: str) -> int:
-    """Delete session pods whose names are not in expected_ids.
-
-    Takes pre-computed expected_ids (from _compute_expected_node_ids)
-    to avoid re-expanding the constellation on every reconciler tick.
-    """
-    from nodalarc_operator.session_deployer import _get_v1
-
-    v1 = _get_v1()
-    pods = v1.list_namespaced_pod(namespace, label_selector=NODE_ID_LABEL)
-    deleted = 0
-    for pod in pods.items:
-        pod_name = pod.metadata.name
-        if pod_name not in expected_ids:
-            try:
-                v1.delete_namespaced_pod(pod_name, namespace)
-                deleted += 1
-                log.info("Deleted obsolete pod %s", pod_name)
-            except Exception as exc:
-                log.error("Failed to delete obsolete pod %s: %s", pod_name, exc)
-    return deleted
 
 
 def _session_name_from_spec(spec: dict) -> str:
@@ -491,25 +538,13 @@ async def _reconcile_session(
             )
         elif active_session.proof.run_id != session_run_id:
             raise ValueError("verified Operator session has the wrong runtime identity")
-        platform_hash = await asyncio.to_thread(
-            compute_platform_hash,
-            spec_dict,
-            active_session=active_session,
-            namespace=namespace,
+        verification = await asyncio.to_thread(
+            _verify_runtime, spec_dict, meta, namespace, session_run_id, active_session
         )
-        deployment_context = _runtime_deployment_context(
-            active_session,
-            meta,
-            session_run_id,
-        )
-        runtime_hash = compute_runtime_hash(
-            platform_hash,
-            session_run_id,
-            active_session.proof,
-            deployment_context,
-        )
-        proof_fields = _runtime_proof_status(active_session, deployment_context).to_patch()
-        status_fields = {**identity_fields, **proof_fields}
+        platform_hash = verification.platform_hash
+        deployment_context = verification.deployment_context
+        runtime_hash = verification.runtime_hash
+        status_fields = {**identity_fields, **verification.proof_fields}
     except Exception as exc:
         error_msg = str(exc)
         log.error("Reconcile: invalid session config: %s", error_msg, exc_info=True)
@@ -546,20 +581,15 @@ async def _reconcile_session(
         )
         return
 
-    # Compute desired state from spec — this is what makes it a REAL reconciler.
-    # No K8s calls, no template rendering — just parse YAML and count nodes.
-    # If the session config is invalid, compute_expected_pod_count raises.
-    # Set CR phase to Error so VS-API can relay the message to the browser.
+    # Desired session-pod identity: the resolved node set, this run and the
+    # prepared workload selection. An empty or colliding node set is refused.
     try:
-        expected_count = await asyncio.to_thread(
-            compute_expected_pod_count,
-            spec_dict,
-            active_session=active_session,
-            namespace=namespace,
+        pod_identity = _session_pod_identity(
+            owner_ref, session_run_id, prepared_workloads, active_session
         )
-    except Exception as exc:
+    except SessionPodStateError as exc:
         error_msg = str(exc)
-        log.error("Reconcile: invalid session config: %s", error_msg, exc_info=True)
+        log.error("Reconcile: invalid session configuration: %s", error_msg)
         _update_status(
             name,
             namespace,
@@ -573,14 +603,16 @@ async def _reconcile_session(
             ),
         )
         return
+    expected_count = pod_identity.expected_count
 
-    expected_ids = _compute_expected_node_ids(active_session)
-    if len(expected_ids) != expected_count:
-        message = (
-            "Expected node identity set does not match expected pod count "
-            f"({len(expected_ids)} IDs for {expected_count} pods)"
+    # One observation of the session pods drives every decision in this pass.
+    try:
+        view = await loop.run_in_executor(
+            None, _with_core_v1, observe_session_pods, namespace, pod_identity
         )
-        log.error("Reconcile: %s", message)
+    except SessionPodStateError as exc:
+        error_msg = str(exc)
+        log.error("Reconcile: session pod observation refused: %s", error_msg)
         _update_status(
             name,
             namespace,
@@ -588,20 +620,21 @@ async def _reconcile_session(
                 meta,
                 {
                     "phase": "Error",
-                    "message": message,
+                    "message": f"Session pod state refused: {error_msg}",
                     **status_fields,
                 },
             ),
         )
         return
 
-    deleted_obsolete = await loop.run_in_executor(
-        None, _delete_obsolete_pods, expected_ids, namespace
-    )
-    if deleted_obsolete:
-        log.info(
-            "Reconcile: deleted %d obsolete pods before readiness evaluation",
-            deleted_obsolete,
+    # --- Condition 1: no session pod of another owner ---
+    # A foreign session pod is never counted, adopted or deleted.
+    if view.foreign:
+        log.warning(
+            "Reconcile: %d session pod(s) not owned by ConstellationSpec %s: %s",
+            len(view.foreign),
+            pod_identity.owner.describe(),
+            view.describe_foreign(),
         )
         _update_status(
             name,
@@ -609,81 +642,34 @@ async def _reconcile_session(
             _with_observed_generation(
                 meta,
                 {
-                    "phase": "Creating",
-                    "message": f"Pruning {deleted_obsolete} pod(s) from a previous session",
-                    "podCount": expected_count,
+                    "phase": "Pending",
+                    "message": (
+                        f"{len(view.foreign)} session pod(s) not owned by ConstellationSpec "
+                        f"{pod_identity.owner.describe()}: {view.describe_foreign()}"
+                    )[:500],
                     **status_fields,
                 },
             ),
         )
         return
 
-    await loop.run_in_executor(
-        None,
-        ensure_session_pod_identity,
-        namespace,
-        expected_ids,
-        session_run_id,
-        owner_ref,
-        prepared_workloads.identity,
-    )
-
-    # --- Condition 1: Old pods terminated ---
-    # A same-count old CR must not be allowed to satisfy the new generation.
-    stale_count = await loop.run_in_executor(
-        None,
-        count_stale_session_pods,
-        namespace,
-        expected_ids,
-        session_run_id,
-        owner_ref,
-    )
-    if stale_count:
-        cleared = await loop.run_in_executor(
-            None,
-            check_old_pods_terminated,
-            namespace,
-            session_run_id,
-            owner_ref,
-            expected_ids,
+    # --- Condition 2: no owned pod of another run, owner or workload, or of an
+    # unexpected node ---
+    if view.deletable:
+        deletions = await loop.run_in_executor(
+            None, _with_core_v1, delete_ineligible_pods, namespace, view
         )
-        if not cleared:
-            log.debug("Reconcile: waiting for %d stale session pods to terminate", stale_count)
-            _update_status(
-                name,
-                namespace,
-                _with_observed_generation(
-                    meta,
-                    {
-                        "phase": "Pending",
-                        "message": f"Waiting for {stale_count} old session pods to terminate",
-                        **status_fields,
-                    },
-                ),
+        conflicts = [d for d in deletions if d.outcome is DeletionOutcome.CONFLICT]
+        message = (
+            f"Replacing {len(view.deletable)} session pod(s) whose run, owner or workload "
+            "differs or whose node is not expected"
+        )
+        if conflicts:
+            message += (
+                f"; deletion of {conflicts[0].pod_name} conflicted "
+                f"({conflicts[0].reason or 'HTTP 409'}), reobserving"
             )
-            return
-
-    # --- Condition 2: Session deployed (correct number of pods) ---
-    current_ids = await loop.run_in_executor(
-        None,
-        current_session_pod_node_ids,
-        namespace,
-        session_run_id,
-        owner_ref,
-    )
-    missing_ids = expected_ids - current_ids
-    obsolete_ids = current_ids - expected_ids
-    total, ready = await loop.run_in_executor(
-        None,
-        check_pods_ready,
-        namespace,
-        session_run_id,
-        owner_ref,
-        expected_ids,
-    )
-
-    if obsolete_ids:
-        # Scale-down: compute expected_ids once, delete pods not in the set.
+        log.info("Reconcile: %s", message)
         _update_status(
             name,
             namespace,
@@ -691,22 +677,34 @@ async def _reconcile_session(
                 meta,
                 {
                     "phase": "Creating",
-                    "message": f"Scaling down: {len(current_ids)} pods exist, {expected_count} expected",
+                    "message": message,
                     "podCount": expected_count,
                     **status_fields,
                 },
             ),
         )
-        deleted = await loop.run_in_executor(None, _delete_obsolete_pods, expected_ids, namespace)
-        log.info(
-            "Reconcile: deleted %d obsolete pods (%d → %d)",
-            deleted,
-            len(current_ids),
-            expected_count,
-        )
-        return  # Timer re-enters to verify
+        return
 
-    if missing_ids:
+    # --- Condition 3: owned pods already deleting have gone ---
+    if view.terminating:
+        log.debug("Reconcile: waiting for %d session pods to terminate", len(view.terminating))
+        _update_status(
+            name,
+            namespace,
+            _with_observed_generation(
+                meta,
+                {
+                    "phase": "Pending",
+                    "message": f"Waiting for {len(view.terminating)} old session pods to terminate",
+                    **status_fields,
+                },
+            ),
+        )
+        return
+
+    # --- Condition 4: every expected node has a current pod ---
+    ready = view.running_count
+    if view.missing_node_ids:
         # Pods missing — run the full ensure pipeline to converge
         _update_status(
             name,
@@ -715,7 +713,7 @@ async def _reconcile_session(
                 meta,
                 {
                     "phase": "Creating",
-                    "message": f"Deploying: {total}/{expected_count} pods exist",
+                    "message": f"Deploying: {len(view.current)}/{expected_count} pods exist",
                     "podCount": expected_count,
                     **status_fields,
                 },
@@ -751,7 +749,7 @@ async def _reconcile_session(
                 prepared_workloads,
             )
             await loop.run_in_executor(
-                None, ensure_session_pods, context, namespace, owner_ref, _progress
+                None, ensure_session_pods, context, namespace, owner_ref, pod_identity, _progress
             )
         except RetryableSessionDependency as exc:
             log.info("Reconcile: waiting on runtime dependency: %s", exc)
@@ -828,16 +826,9 @@ async def _reconcile_session(
         )
         return  # Timer will re-enter to check network provisioning
 
-    all_provisioned, provisioned, ready = await loop.run_in_executor(
-        None,
-        check_all_pods_provisioned,
-        namespace,
-        expected_count,
-        session_run_id,
-        owner_ref,
-        expected_ids,
-    )
-    if not all_provisioned:
+    # --- Condition 5: every current pod has a provisioned network ---
+    provisioned = view.provisioned_count
+    if provisioned < expected_count:
         _update_status(
             name,
             namespace,
@@ -931,14 +922,7 @@ async def _reconcile_session(
                 deployment_context,
             )
             if not manifest_current:
-                await loop.run_in_executor(
-                    None,
-                    write_pod_ips_configmap,
-                    namespace,
-                    session_run_id,
-                    owner_ref,
-                    expected_ids,
-                )
+                await loop.run_in_executor(None, write_pod_ips_configmap, namespace, view.pod_ips())
                 await loop.run_in_executor(
                     None,
                     write_wiring_manifest,
@@ -948,6 +932,7 @@ async def _reconcile_session(
                     session_run_id,
                     active_session,
                     platform_hash,
+                    view.placement(),
                 )
 
                 await loop.run_in_executor(None, set_nodalpath_mode, namespace, "console")
@@ -1069,16 +1054,7 @@ async def _reconcile_session(
     # Wiring is complete — every session container must be Running before
     # the session may be declared Ready. Under the earlier provisioned-gate
     # this is no longer implied, and Ready must never mask starting pods.
-    all_running, _running_total, ready = await loop.run_in_executor(
-        None,
-        check_all_pods_running,
-        namespace,
-        expected_count,
-        session_run_id,
-        owner_ref,
-        expected_ids,
-    )
-    if not all_running:
+    if ready < expected_count:
         _update_status(
             name,
             namespace,
@@ -1229,7 +1205,13 @@ async def on_delete(name, namespace, spec=None, meta=None, status=None, **_):
     log.info("ConstellationSpec '%s' deleted, tearing down session", name)
     loop = asyncio.get_running_loop()
     owner_ref = _build_owner_ref(name, dict(meta or {}))
-    run_ids = await loop.run_in_executor(None, owned_session_run_ids, namespace, owner_ref)
+    run_ids = await loop.run_in_executor(
+        None,
+        _with_core_v1,
+        owned_session_run_ids,
+        namespace,
+        OwnerIdentity.from_owner_ref(owner_ref),
+    )
     if run_ids:
         log.info("Owned session resources name run ids %s; purging each", ", ".join(run_ids))
     else:
@@ -1270,31 +1252,17 @@ async def wiring_check(spec, name, namespace, meta, status, **_):
         except Exception:
             await _reconcile_session(spec, name, namespace, meta, status)
             return
+        session_run_id = identity_fields["sessionRunId"]
         try:
             active_session = await asyncio.to_thread(
                 _resolve_active_session,
                 dict(spec),
                 namespace,
-                identity_fields["sessionRunId"],
+                session_run_id,
             )
-            platform_hash = await asyncio.to_thread(
-                compute_platform_hash,
-                dict(spec),
-                active_session=active_session,
-                namespace=namespace,
+            verification = await asyncio.to_thread(
+                _verify_runtime, dict(spec), meta, namespace, session_run_id, active_session
             )
-            deployment_context = _runtime_deployment_context(
-                active_session,
-                meta,
-                identity_fields["sessionRunId"],
-            )
-            runtime_hash = compute_runtime_hash(
-                platform_hash,
-                identity_fields["sessionRunId"],
-                active_session.proof,
-                deployment_context,
-            )
-            proof_fields = _runtime_proof_status(active_session, deployment_context).to_patch()
         except Exception as exc:
             log.error("Ready session verification failed: %s", exc, exc_info=True)
             _update_status(
@@ -1311,25 +1279,53 @@ async def wiring_check(spec, name, namespace, meta, status, **_):
             )
             return
         # Ready is a claim about the session, not only the platform: a
-        # missing, replaced, or non-running pod, or wiring proof that is no
-        # longer current, must take the session back through normal
-        # reconciliation instead of remaining advertised as Ready.
+        # missing, replaced, foreign or non-running pod, or wiring proof that
+        # is no longer current, must take the session back through normal
+        # reconciliation instead of remaining advertised as Ready. Pod
+        # membership is judged by the same identity and classification the
+        # reconciler uses.
+        owner_ref = _build_owner_ref(name, meta)
         try:
-            expected_count = await asyncio.to_thread(
-                compute_expected_pod_count, dict(spec), active_session=active_session
+            prepared_workloads = await asyncio.to_thread(
+                prepare_session_workloads,
+                active_session.resolution,
+                namespace=namespace,
+                owner_ref=owner_ref,
             )
-            expected_ids = _compute_expected_node_ids(active_session)
-            owner_ref = _build_owner_ref(name, meta)
-            all_running, _total, _running = await asyncio.to_thread(
-                check_all_pods_running,
-                namespace,
-                expected_count,
-                identity_fields["sessionRunId"],
-                owner_ref,
-                expected_ids,
+            pod_identity = _session_pod_identity(
+                owner_ref, session_run_id, prepared_workloads, active_session
+            )
+        except (WorkloadPreparationError, SessionPodStateError) as exc:
+            log.warning("Ready session no longer prepares (%s) — reconciling", exc)
+            await _reconcile_session(spec, name, namespace, meta, status, active_session)
+            return
+        expected_count = pod_identity.expected_count
+        try:
+            view = await asyncio.to_thread(
+                _with_core_v1, observe_session_pods, namespace, pod_identity
             )
         except kubernetes.client.rest.ApiException as exc:
             log.warning("Ready session pod membership check failed: %s", exc)
+            return
+        except SessionPodStateError as exc:
+            log.warning("Ready session pod state refused (%s) — reconciling", exc)
+            await _reconcile_session(spec, name, namespace, meta, status, active_session)
+            return
+        pods_current = view.complete and view.running_count == expected_count
+        if not pods_current:
+            # Known-invalid membership is acted on before any further read:
+            # a failed wiring-proof query must not leave Ready standing.
+            log.warning(
+                "Ready session pods not current (foreign=%d, replace=%d, terminating=%d, "
+                "missing=%d, running=%d/%d) — reconciling",
+                len(view.foreign),
+                len(view.deletable),
+                len(view.terminating),
+                len(view.missing_node_ids),
+                view.running_count,
+                expected_count,
+            )
+            await _reconcile_session(spec, name, namespace, meta, status, active_session)
             return
         wiring_ok = False
         try:
@@ -1341,12 +1337,8 @@ async def wiring_check(spec, name, namespace, meta, status, **_):
             return
         except ValueError as exc:
             log.warning("Ready session wiring proof invalid: %s", exc)
-        if not all_running or not wiring_ok:
-            log.warning(
-                "Ready session degraded (all_running=%s, wiring_current=%s) — reconciling",
-                all_running,
-                wiring_ok,
-            )
+        if not wiring_ok:
+            log.warning("Ready session wiring proof not current — reconciling")
             await _reconcile_session(
                 spec,
                 name,
@@ -1361,9 +1353,9 @@ async def wiring_check(spec, name, namespace, meta, status, **_):
             platform_ready, _ = await asyncio.to_thread(
                 check_platform_runtime_ready,
                 namespace,
-                runtime_hash,
+                verification.runtime_hash,
                 active_session.proof,
-                deployment_context,
+                verification.deployment_context,
             )
         except kubernetes.client.rest.ApiException as exc:
             log.warning("Ready session platform proof check failed: %s", exc)
@@ -1381,9 +1373,9 @@ async def wiring_check(spec, name, namespace, meta, status, **_):
         intended = ConstellationSpecStatus.from_cr(
             {
                 **identity_fields,
-                **proof_fields,
-                "platformHash": platform_hash,
-                "runtimeHash": runtime_hash,
+                **verification.proof_fields,
+                "platformHash": verification.platform_hash,
+                "runtimeHash": verification.runtime_hash,
             }
         )
         if not ConstellationSpecStatus.from_cr(status).carries(intended):

@@ -116,9 +116,9 @@ The hash intentionally excludes only operator-owned runtime lineage such as `ses
 
 ## Error Propagation
 
-Runtime loading and `compute_expected_pod_count()` raise on validation errors
+Runtime loading and session-pod identity construction raise on validation errors
 (missing or altered upload files, invalid segment, missing catalog asset,
-unsupported runtime feature). The handler catches the
+unsupported runtime feature, an empty or colliding resolved node set). The handler catches the
 exception and sets CR `status.phase = "Error"` with the error message. This
 surfaces bad configs immediately instead of silently deploying zero pods.
 

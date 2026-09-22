@@ -13,6 +13,7 @@ import gzip
 import hashlib
 import json
 import math
+from collections.abc import Mapping
 from datetime import UTC, datetime
 from pathlib import Path
 from unittest.mock import MagicMock, create_autospec, patch
@@ -49,10 +50,7 @@ from nodalarc.substrate.wiring_status import (
 from nodalarc_operator.session_deployer import (
     _create_terminal_ssh_keys,
     _required_substrate_pairs,
-    check_all_pods_provisioned,
     check_wiring_complete,
-    compute_expected_placement_node_count,
-    compute_expected_pod_count,
     compute_platform_hash,
     compute_runtime_hash,
     discover_available_nodes,
@@ -61,6 +59,7 @@ from nodalarc_operator.session_deployer import (
     teardown_session,
     write_wiring_manifest,
 )
+from nodalarc_operator.session_pods import SessionPodIdentity
 
 from tests.catalog_session_fixtures import build_catalog_session_fixture
 
@@ -402,75 +401,6 @@ class TestDeterministicNode:
         assert _deterministic_node("gs-anything", ["only-node"]) == "only-node"
 
 
-class TestPodNetworkProvisioning:
-    """check_all_pods_provisioned() counts sandbox networks, never containers."""
-
-    @staticmethod
-    def _pod(
-        node_name: str | None,
-        pod_ip: str | None,
-        phase: str,
-        *,
-        containers: int = 1,
-        running: int | None = None,
-    ) -> MagicMock:
-        pod = MagicMock()
-        pod.spec.node_name = node_name
-        pod.spec.containers = [MagicMock() for _ in range(containers)]
-        pod.status.pod_ip = pod_ip
-        pod.status.phase = phase
-        running_count = containers if running is None else running
-        statuses = []
-        for index in range(containers):
-            status = MagicMock()
-            status.state.running = MagicMock() if index < running_count else None
-            statuses.append(status)
-        pod.status.container_statuses = statuses
-        return pod
-
-    def _check(self, pods: list[MagicMock], expected_count: int) -> tuple[bool, int, int]:
-        mock_v1 = MagicMock()
-        mock_v1.list_namespaced_pod.return_value.items = pods
-        with patch("nodalarc_operator.session_deployer._get_v1", return_value=mock_v1):
-            return check_all_pods_provisioned("nodalarc", expected_count)
-
-    def test_scheduled_pods_with_ips_count_before_any_container_runs(self):
-        pods = [
-            self._pod("node02", "10.42.0.5", "Pending"),
-            self._pod("node03", "10.42.1.7", "Pending"),
-        ]
-        all_provisioned, provisioned, running = self._check(pods, expected_count=2)
-        assert all_provisioned is True
-        assert provisioned == 2
-        assert running == 0
-
-    def test_pod_without_ip_is_not_provisioned(self):
-        pods = [self._pod("node02", "10.42.0.5", "Running"), self._pod("node03", None, "Pending")]
-        all_provisioned, provisioned, running = self._check(pods, expected_count=2)
-        assert all_provisioned is False
-        assert provisioned == 1
-        assert running == 1
-
-    def test_unscheduled_pod_is_not_provisioned(self):
-        pods = [self._pod(None, None, "Pending")]
-        all_provisioned, provisioned, running = self._check(pods, expected_count=1)
-        assert all_provisioned is False
-        assert provisioned == 0
-        assert running == 0
-
-    def test_running_requires_every_authored_container(self):
-        """Pod phase Running is not enough: a multi-container workload counts
-        only when each declared regular container has state.running."""
-        half_started = self._pod("node02", "10.42.0.5", "Running", containers=2, running=1)
-        fully_started = self._pod("node03", "10.42.1.7", "Running", containers=2)
-        all_provisioned, provisioned, running = self._check(
-            [half_started, fully_started], expected_count=2
-        )
-        assert all_provisioned is True
-        assert provisioned == 2
-        assert running == 1
-
-
 # ---------------------------------------------------------------------------
 # Class 3: TestWiringCompletion
 # ---------------------------------------------------------------------------
@@ -757,7 +687,23 @@ class TestRuntimeIdentityCleanup:
 
 
 class TestExpectedPodCount:
-    """Tests compute_expected_pod_count() - must raise on invalid, never return 0."""
+    """The expected session-pod count is the resolved node set: never 0, refused when invalid."""
+
+    @staticmethod
+    def _expected_count(spec: dict) -> int:
+        import nodalarc_operator.session_deployer as sd
+
+        # Through the module attribute: the autouse fixture substitutes the
+        # offline catalog resolution at the one boundary.
+        session = sd._operator_session_config(
+            spec, None, namespace="nodalarc", origin="test.expected_pod_count"
+        )
+        return SessionPodIdentity.for_session(
+            owner_ref={"name": "current-session", "uid": "test-uid"},
+            session_run_id="run-test-0001",
+            selection_identity="profiles@sha256:" + "0" * 64,
+            node_ids=session.resolution.resolved.node_ids(),
+        ).expected_count
 
     def test_inline_config_count(self):
         spec = {
@@ -766,8 +712,7 @@ class TestExpectedPodCount:
                 site_set_ref=("nodalarc:site-sets/earth/leo/earth-leo-polar-gateway-sites.yaml"),
             )
         }
-        count = compute_expected_pod_count(spec)
-        assert count > 0
+        assert self._expected_count(spec) > 0
 
     def test_ref_composed_36_satellite_session_regression(self):
         spec = {
@@ -776,11 +721,11 @@ class TestExpectedPodCount:
                 site_set_ref=("nodalarc:site-sets/earth/leo/earth-leo-polar-gateway-sites.yaml"),
             )
         }
-        assert compute_expected_pod_count(spec) == 45
+        assert self._expected_count(spec) == 45
 
     def test_missing_session_yaml_raises(self):
         with pytest.raises(ValueError, match="sessionYaml"):
-            compute_expected_pod_count({})
+            self._expected_count({})
 
     def test_dangling_constellation_ref_raises(self):
         spec = {
@@ -789,50 +734,7 @@ class TestExpectedPodCount:
             )
         }
         with pytest.raises(Exception):
-            compute_expected_pod_count(spec)
-
-
-class TestExpectedPlacementNodeCount:
-    """Expected placement must use all resolved segments, not only the primary constellation."""
-
-    def test_multi_segment_session_counts_relay_segment_placement(self):
-        body = yaml.safe_load(_make_session_yaml())
-        relay_segment = dict(body["segments"][0])
-        relay_segment["id"] = "relay"
-        body["segments"].append(relay_segment)
-        body["addressing"]["loopbacks"].append(
-            {
-                "id": "relay-loopbacks-v4",
-                "applies_to": {"segment": "relay"},
-                "ipv4_pool": "10.2.0.0/16",
-                "prefix_length": 32,
-                "allocation": "by_node_order",
-            }
-        )
-        body["addressing"]["loopbacks"].append(
-            {
-                "id": "relay-loopbacks-v6",
-                "applies_to": {"segment": "relay"},
-                "ipv6_pool": "fd00:2::/64",
-                "prefix_length": 128,
-                "allocation": "by_node_order",
-            }
-        )
-        body["routing"]["domains"][0]["selectors"] = [
-            {"any": [{"segment": "space"}, {"segment": "relay"}, {"segment": "ground"}]}
-        ]
-        session_yaml = yaml.safe_dump(body)
-
-        count = compute_expected_placement_node_count(
-            {"sessionYaml": session_yaml},
-            ["node01", "node02", "node03"],
-        )
-
-        assert count == 3
-
-    def test_missing_session_yaml_raises(self):
-        with pytest.raises(ValueError, match="sessionYaml"):
-            compute_expected_placement_node_count({}, ["node01"])
+            self._expected_count(spec)
 
 
 # ---------------------------------------------------------------------------
@@ -906,6 +808,35 @@ def _existing_terminal_secret(uid="test-uid", name="current-session"):
     )
 
 
+def _pod_identity(context: dict, owner_ref: dict) -> SessionPodIdentity:
+    """The session-pod identity a reconciliation passes with this context."""
+    return SessionPodIdentity.for_session(
+        owner_ref=owner_ref,
+        session_run_id=context["session_run_id"],
+        selection_identity=context["prepared_workloads"].identity,
+        node_ids=context["node_vars"],
+    )
+
+
+class _EveryNodeOn(Mapping[str, str]):
+    """Placement of every manifest node on one Kubernetes node."""
+
+    def __init__(self, k8s_node: str) -> None:
+        self._k8s_node = k8s_node
+
+    def __contains__(self, key: object) -> bool:
+        return isinstance(key, str)
+
+    def __getitem__(self, key: str) -> str:
+        return self._k8s_node
+
+    def __iter__(self):
+        return iter(())
+
+    def __len__(self) -> int:
+        return 0
+
+
 def _existing_session_pod(
     pod_name="sat-p00s00",
     node_id="sat-P00S00",
@@ -968,10 +899,6 @@ class TestWiringManifest:
         with (
             patch("nodalarc_operator.session_deployer._get_v1", return_value=mock_v1),
             patch(
-                "nodalarc_operator.session_deployer._discover_session_pod_placement",
-                side_effect=lambda _v1, _ns, expected: dict.fromkeys(expected, "node01"),
-            ),
-            patch(
                 "nodalarc_operator.session_deployer._node_internal_ips",
                 side_effect=lambda _v1, required: dict.fromkeys(required, "10.0.0.1"),
             ),
@@ -989,7 +916,9 @@ class TestWiringManifest:
                     )
                 ]
             )
-            write_wiring_manifest(spec, "nodalarc", owner_ref, "run-test-0001")
+            write_wiring_manifest(
+                spec, "nodalarc", owner_ref, "run-test-0001", None, None, _EveryNodeOn("node01")
+            )
         return _extract_manifest(mock_v1)
 
     def test_manifest_switch_preserves_agent_status_during_refresh(self, tmp_path):
@@ -1187,7 +1116,7 @@ class TestWiringManifest:
         spec = _make_catalog_spec(tmp_path)
 
         with pytest.raises(ValueError, match="session_run_id is required"):
-            write_wiring_manifest(spec, "nodalarc", None)
+            write_wiring_manifest(spec, "nodalarc", None, "", None, None, _EveryNodeOn("node01"))
 
     def test_isl_peer_symmetry_graph_walk(self, tmp_path):
         manifest = self._build_and_extract(tmp_path)
@@ -1262,15 +1191,13 @@ class TestWiringManifest:
         with (
             patch("nodalarc_operator.session_deployer._get_v1", return_value=mock_v1),
             patch(
-                "nodalarc_operator.session_deployer._discover_session_pod_placement",
-                side_effect=lambda _v1, _ns, expected: dict.fromkeys(expected, "node01"),
-            ),
-            patch(
                 "nodalarc_operator.session_deployer._node_internal_ips",
                 side_effect=lambda _v1, required: dict.fromkeys(required, "10.0.0.1"),
             ),
         ):
-            write_wiring_manifest(spec, "nodalarc", owner_ref, "run-test-0001")
+            write_wiring_manifest(
+                spec, "nodalarc", owner_ref, "run-test-0001", None, None, _EveryNodeOn("node01")
+            )
         manifest = _extract_manifest(mock_v1)
         assert isinstance(manifest, dict)
         assert len(manifest["nodes"]) > 0
@@ -1291,15 +1218,13 @@ class TestWiringManifest:
         with (
             patch("nodalarc_operator.session_deployer._get_v1", return_value=mock_v1),
             patch(
-                "nodalarc_operator.session_deployer._discover_session_pod_placement",
-                side_effect=lambda _v1, _ns, expected: dict.fromkeys(expected, "node01"),
-            ),
-            patch(
                 "nodalarc_operator.session_deployer._node_internal_ips",
                 side_effect=lambda _v1, required: dict.fromkeys(required, "10.0.0.1"),
             ),
         ):
-            write_wiring_manifest(spec, "nodalarc", owner_ref, "run-test-0001")
+            write_wiring_manifest(
+                spec, "nodalarc", owner_ref, "run-test-0001", None, None, _EveryNodeOn("node01")
+            )
         manifest = _extract_manifest(mock_v1)
         assert len(manifest["nodes"]) == 1602
         raw_json = json.dumps(manifest).encode()
@@ -1724,7 +1649,7 @@ class TestOnePathWorkloads:
                 session_run_id="run-test-0001",
                 deployment_context=_test_deployment_context(spec, owner_uid="test-uid-456"),
             )
-            ensure_session_pods(context, "nodalarc", owner_ref)
+            ensure_session_pods(context, "nodalarc", owner_ref, _pod_identity(context, owner_ref))
         pods = []
         for call in mock_v1.create_namespaced_pod.call_args_list:
             pod = call[1].get("body") or call[0][1]
@@ -1752,117 +1677,6 @@ class TestOnePathWorkloads:
         ]
         assert not [n for n in cm_names if n and n.startswith("frr-config-")]
         assert [n for n in cm_names if n and n.startswith("wl-")]
-
-
-class TestSelectionIdentityReplacement:
-    """A pod whose selection identity differs is deleted, never re-stamped."""
-
-    OWNER_REF = {
-        "apiVersion": "nodalarc.io/v1alpha1",
-        "kind": "ConstellationSpec",
-        "name": "current-session",
-        "uid": "test-uid",
-        "blockOwnerDeletion": True,
-    }
-    EXPLICIT = "profiles@sha256:" + "a" * 64
-
-    def _identity_pass(self, pods, selection_identity, session_id="run-test-0002"):
-        from nodalarc_operator.session_deployer import ensure_session_pod_identity
-
-        mock_v1 = create_autospec(kubernetes.client.CoreV1Api, instance=True)
-        mock_v1.list_namespaced_pod.return_value = kubernetes.client.V1PodList(items=pods)
-        with patch("nodalarc_operator.session_deployer._get_v1", return_value=mock_v1):
-            patched = ensure_session_pod_identity(
-                "nodalarc",
-                {"sat-p00s00"},
-                session_id,
-                self.OWNER_REF,
-                selection_identity,
-            )
-        return mock_v1, patched
-
-    def _assert_preconditioned_delete(self, mock_v1, pod_name, pod_uid):
-        mock_v1.delete_namespaced_pod.assert_called_once()
-        args, kwargs = mock_v1.delete_namespaced_pod.call_args
-        assert args[0] == pod_name
-        assert args[1] == "nodalarc"
-        assert kwargs["body"].preconditions.uid == pod_uid
-
-    def test_pod_identity_deletes_differing_selection(self):
-        builtin_pod = _existing_session_pod(run_id="run-old-0001")
-        mock_v1, _ = self._identity_pass([builtin_pod], self.EXPLICIT)
-        self._assert_preconditioned_delete(mock_v1, "sat-p00s00", "pod-uid-0001")
-        mock_v1.patch_namespaced_pod.assert_not_called()
-
-    def test_pod_identity_recreates_explicit_on_run_change(self):
-        # Same explicit pair, new run: the pod's immutable artifacts belong
-        # to the previous run's content. Recreated, never re-stamped.
-        explicit_pod = _existing_session_pod(
-            run_id="run-old-0001", selection_identity=self.EXPLICIT
-        )
-        mock_v1, _ = self._identity_pass([explicit_pod], self.EXPLICIT)
-        self._assert_preconditioned_delete(mock_v1, "sat-p00s00", "pod-uid-0001")
-        mock_v1.patch_namespaced_pod.assert_not_called()
-
-    def test_matching_identity_and_run_is_left_alone(self):
-        current = _existing_session_pod(run_id="run-test-0002", selection_identity=self.EXPLICIT)
-        mock_v1, replaced = self._identity_pass([current], self.EXPLICIT)
-        assert replaced == 0
-        mock_v1.delete_namespaced_pod.assert_not_called()
-        mock_v1.patch_namespaced_pod.assert_not_called()
-
-    def test_prefeature_unannotated_pod_is_replaced_for_explicit(self):
-        unannotated = _existing_session_pod(run_id="run-old-0001", selection_identity=None)
-        mock_v1, _ = self._identity_pass([unannotated], self.EXPLICIT)
-        self._assert_preconditioned_delete(mock_v1, "sat-p00s00", "pod-uid-0001")
-        mock_v1.patch_namespaced_pod.assert_not_called()
-
-    def test_conflict_check_deletes_differing_selection(self):
-        from nodalarc_operator.session_deployer import _create_pod_with_conflict_check
-
-        existing = _existing_session_pod()
-        mock_v1 = create_autospec(kubernetes.client.CoreV1Api, instance=True)
-        mock_v1.create_namespaced_pod.side_effect = kubernetes.client.rest.ApiException(status=409)
-        mock_v1.read_namespaced_pod.return_value = existing
-        _create_pod_with_conflict_check(
-            mock_v1,
-            kubernetes.client.V1Pod(),
-            "nodalarc",
-            "sat-p00s00",
-            self.OWNER_REF,
-            "run-test-0001",
-            self.EXPLICIT,
-        )
-        self._assert_preconditioned_delete(mock_v1, "sat-p00s00", "pod-uid-0001")
-        mock_v1.patch_namespaced_pod.assert_not_called()
-
-    def test_delete_owned_reports_remaining_and_preconditions(self):
-        from nodalarc_operator.session_deployer import delete_owned_session_pods
-
-        running = _existing_session_pod(pod_name="sat-a", node_id="sat-A", pod_uid="uid-a")
-        terminating = _existing_session_pod(pod_name="sat-b", node_id="sat-B", pod_uid="uid-b")
-        terminating.metadata.deletion_timestamp = "2026-08-08T00:00:00Z"
-        mock_v1 = create_autospec(kubernetes.client.CoreV1Api, instance=True)
-        mock_v1.list_namespaced_pod.return_value = kubernetes.client.V1PodList(
-            items=[running, terminating]
-        )
-        with patch("nodalarc_operator.session_deployer._get_v1", return_value=mock_v1):
-            remaining, requested = delete_owned_session_pods("nodalarc", self.OWNER_REF)
-        # The terminating pod still counts toward remaining — Error is only
-        # honest once zero owned pods are observed.
-        assert (remaining, requested) == (2, 1)
-        self._assert_preconditioned_delete(mock_v1, "sat-a", "uid-a")
-
-    def test_delete_owned_skips_replaced_pod_on_conflict(self):
-        from nodalarc_operator.session_deployer import delete_owned_session_pods
-
-        running = _existing_session_pod(pod_name="sat-a", node_id="sat-A", pod_uid="uid-a")
-        mock_v1 = create_autospec(kubernetes.client.CoreV1Api, instance=True)
-        mock_v1.list_namespaced_pod.return_value = kubernetes.client.V1PodList(items=[running])
-        mock_v1.delete_namespaced_pod.side_effect = kubernetes.client.rest.ApiException(status=409)
-        with patch("nodalarc_operator.session_deployer._get_v1", return_value=mock_v1):
-            remaining, requested = delete_owned_session_pods("nodalarc", self.OWNER_REF)
-        assert (remaining, requested) == (1, 0)
 
 
 class TestPodSpec:
@@ -1909,7 +1723,7 @@ class TestPodSpec:
                 session_run_id="run-test-0001",
                 deployment_context=_test_deployment_context(spec, owner_uid="test-uid-456"),
             )
-            ensure_session_pods(context, "nodalarc", owner_ref)
+            ensure_session_pods(context, "nodalarc", owner_ref, _pod_identity(context, owner_ref))
 
         pods = []
         for call in mock_v1.create_namespaced_pod.call_args_list:
@@ -2068,7 +1882,9 @@ class TestPodSpec:
                 session_run_id="run-test-0001",
                 deployment_context=_test_deployment_context(spec),
             )
-            total = ensure_session_pods(context, "nodalarc", owner_ref)
+            total = ensure_session_pods(
+                context, "nodalarc", owner_ref, _pod_identity(context, owner_ref)
+            )
         assert total > 0
         # A matching-identity pod is reused, never deleted or recreated.
         mock_v1.delete_namespaced_pod.assert_not_called()
@@ -2123,7 +1939,9 @@ class TestPodSpec:
                 deployment_context=_test_deployment_context(spec),
             )
             with pytest.raises(kubernetes.client.rest.ApiException):
-                ensure_session_pods(context, "nodalarc", owner_ref)
+                ensure_session_pods(
+                    context, "nodalarc", owner_ref, _pod_identity(context, owner_ref)
+                )
         assert calls["n"] > 1
 
     def test_409_conflict_rejects_pod_owned_by_previous_cr(self, tmp_path):
@@ -2172,4 +1990,67 @@ class TestPodSpec:
                 deployment_context=_test_deployment_context(spec),
             )
             with pytest.raises(RuntimeError, match="not owned by the current ConstellationSpec"):
-                ensure_session_pods(context, "nodalarc", owner_ref)
+                ensure_session_pods(
+                    context, "nodalarc", owner_ref, _pod_identity(context, owner_ref)
+                )
+
+
+class TestPodCreationProgress:
+    """Progress reporting never outlives pod creation."""
+
+    OWNER_REF = {"name": "current-session", "uid": "test-uid"}
+
+    def _context(self):
+        return {
+            "node_vars": {"sat-a": {"node_type": "satellite"}},
+            "pod_placement": {"sat-a": "node01"},
+            "session_id": "run-test-0001",
+            "session_run_id": "run-test-0001",
+            "prepared_workloads": MagicMock(
+                identity="profiles@sha256:" + "a" * 64, composed={"sat-a": MagicMock()}
+            ),
+        }
+
+    def test_context_refusal_starts_no_progress_work(self):
+        import threading
+
+        context = self._context()
+        wrong = SessionPodIdentity.for_session(
+            owner_ref=self.OWNER_REF,
+            session_run_id="run-test-0001",
+            selection_identity="profiles@sha256:" + "b" * 64,
+            node_ids=["sat-a"],
+        )
+        progress = MagicMock()
+        threads_before = threading.active_count()
+        with patch("nodalarc_operator.session_deployer._get_v1") as get_v1:
+            with pytest.raises(ValueError, match="does not describe the prepared"):
+                ensure_session_pods(context, "nodalarc", self.OWNER_REF, wrong, progress)
+        progress.assert_not_called()
+        get_v1.assert_not_called()
+        assert threading.active_count() == threads_before
+
+    def test_a_failed_creation_stops_the_heartbeat_before_returning(self):
+        import threading
+
+        context = self._context()
+        progress = MagicMock()
+        threads_before = threading.active_count()
+        with (
+            patch("nodalarc_operator.session_deployer._get_v1"),
+            patch(
+                "nodalarc_operator.session_deployer._create_workload_pod",
+                side_effect=RuntimeError("render failed"),
+            ),
+        ):
+            with pytest.raises(RuntimeError, match="render failed"):
+                ensure_session_pods(
+                    context,
+                    "nodalarc",
+                    self.OWNER_REF,
+                    _pod_identity(context, self.OWNER_REF),
+                    progress,
+                )
+        calls_at_return = progress.call_count
+        assert threading.active_count() == threads_before
+        assert progress.call_count == calls_at_return

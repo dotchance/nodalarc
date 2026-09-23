@@ -58,7 +58,7 @@ from nodalarc.models.decision_explanation import (
 )
 from nodalarc.models.link_decisions import GroundLinkDecisionSnapshot
 from nodalarc.models.link_events import LatencyUpdate, LinkDown, LinkUp
-from nodalarc.models.resolved_session import ResolvedNode
+from nodalarc.models.resolved_session import InterfaceRates, ResolvedNode
 from nodalarc.models.scheduler_ops import ActualLinkSnapshot, ActuationState, parse_actuation_state
 from nodalarc.models.vs_api import (
     AlmanacState,
@@ -737,7 +737,7 @@ class SessionContext:
                     link_rule_id=link.link_rule_id,
                     endpoint_segments=link.endpoint_segments,
                 )
-                transmit_a, transmit_b = self._link_transmit_rates(
+                terminal_rates = self._link_terminal_rates(
                     link.node_a, link.interface_a, link.node_b, link.interface_b
                 )
                 new_links[key] = LinkState(
@@ -747,8 +747,7 @@ class SessionContext:
                     link_type=public_link_type,
                     link_reason="",
                     latency_ms=link.latency_ms,
-                    transmit_mbps_a=transmit_a,
-                    transmit_mbps_b=transmit_b,
+                    **terminal_rates,
                     range_km=link.range_km,
                     traffic_load_pct=None,
                     interface_a=link.interface_a,
@@ -855,15 +854,11 @@ class SessionContext:
             reason_counts=reason_counts,
         )
 
-    def _link_transmit_rates(
+    def _link_terminal_rates(
         self, node_a: str, interface_a: str, node_b: str, interface_b: str
-    ) -> tuple[float, float]:
-        """Each end's own terminal transmit rate, from the resolved session.
-
-        node_a to node_b runs at node_a's transmit rate and node_b to node_a
-        at node_b's; neither end's receive rate enters either value.
-        """
-        transmit: list[float] = []
+    ) -> dict[str, float]:
+        """Each end's own terminal transmit and receive rates, as link record fields."""
+        ends: list[InterfaceRates] = []
         for node_id, interface in ((node_a, interface_a), (node_b, interface_b)):
             rates = self._interface_rates.get((node_id, interface))
             if rates is None:
@@ -874,8 +869,14 @@ class SessionContext:
                     f"active link end {node_id}/{interface} has no terminal rates in the "
                     "resolved session"
                 )
-            transmit.append(rates.transmit_mbps)
-        return transmit[0], transmit[1]
+            ends.append(rates)
+        end_a, end_b = ends
+        return {
+            "transmit_mbps_a": end_a.transmit_mbps,
+            "receive_mbps_a": end_a.receive_mbps,
+            "transmit_mbps_b": end_b.transmit_mbps,
+            "receive_mbps_b": end_b.receive_mbps,
+        }
 
     def _open_history(self, conn: sqlite3.Connection) -> None:
         """Create or reopen this session's history file; record what it holds once."""
@@ -955,7 +956,7 @@ class SessionContext:
             endpoint_segments=data.get("endpoint_segments"),
         )
         trace = self._trace_from_link_event(data, link_type=public_link_type)
-        transmit_a, transmit_b = self._link_transmit_rates(
+        terminal_rates = self._link_terminal_rates(
             node_a, data["interface_a"], node_b, data["interface_b"]
         )
         with self.state_lock:
@@ -966,8 +967,7 @@ class SessionContext:
                 link_type=public_link_type,
                 link_reason=data["reason"],
                 latency_ms=data["latency_ms"],
-                transmit_mbps_a=transmit_a,
-                transmit_mbps_b=transmit_b,
+                **terminal_rates,
                 range_km=data["range_km"],
                 traffic_load_pct=None,
                 interface_a=data["interface_a"],

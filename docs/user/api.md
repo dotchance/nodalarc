@@ -211,7 +211,7 @@ stopped.
 The state snapshot contains:
 
 - **nodes** - array of all satellites, relay nodes, and ground nodes with position, link counts, segment metadata, and body/frame metadata
-- **links** - array of all active links with latency, each direction's transmit rate (`transmit_mbps_a` for node_a to node_b, `transmit_mbps_b` for node_b to node_a), type, and rule-derived relationship where available
+- **links** - array of all active links with latency, each end's terminal rates (`transmit_mbps_a` and `receive_mbps_a` for node_a, `transmit_mbps_b` and `receive_mbps_b` for node_b), type, and rule-derived relationship where available. A direction carries no more than its sender transmits or its receiver takes in.
 - **recent_events** - last 50 link state changes and handoffs
 - **network_health** - convergence status
 - **sim_time** / **wall_time** - current simulation and wall-clock time

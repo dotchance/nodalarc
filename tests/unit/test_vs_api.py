@@ -690,7 +690,9 @@ class TestStateSnapshot:
                 link_reason=event["reason"],
                 latency_ms=event["latency_ms"],
                 transmit_mbps_a=1000.0,
+                receive_mbps_a=1000.0,
                 transmit_mbps_b=1000.0,
+                receive_mbps_b=1000.0,
                 range_km=event["range_km"],
                 traffic_load_pct=None,
                 interface_a=event["interface_a"],
@@ -713,7 +715,9 @@ class TestStateSnapshot:
                 link_reason="vis_gained",
                 latency_ms=5.0,
                 transmit_mbps_a=1000.0,
+                receive_mbps_a=1000.0,
                 transmit_mbps_b=1000.0,
+                receive_mbps_b=1000.0,
                 range_km=1500.0,
                 traffic_load_pct=None,
                 interface_a="isl0",
@@ -738,7 +742,9 @@ class TestStateSnapshot:
                 link_reason="vis_gained",
                 latency_ms=5.0,
                 transmit_mbps_a=1000.0,
+                receive_mbps_a=1000.0,
                 transmit_mbps_b=1000.0,
+                receive_mbps_b=1000.0,
                 range_km=1500.0,
                 traffic_load_pct=None,
                 interface_a="isl0",
@@ -790,7 +796,9 @@ class TestSnapshotModel:
                     link_reason="vis_gained",
                     latency_ms=5.0,
                     transmit_mbps_a=1000.0,
+                    receive_mbps_a=1000.0,
                     transmit_mbps_b=1000.0,
+                    receive_mbps_b=1000.0,
                     range_km=1500.0,
                     traffic_load_pct=None,
                     interface_a="isl0",
@@ -1238,7 +1246,12 @@ class TestLinkDecisionTraceState:
 
         key = _link_key("sat-P00S00", "sat-P00S01")
         link = ctx.links[key]
-        assert (link.transmit_mbps_a, link.transmit_mbps_b) == (2000.0, 100.0)
+        assert (
+            link.transmit_mbps_a,
+            link.receive_mbps_a,
+            link.transmit_mbps_b,
+            link.receive_mbps_b,
+        ) == (2000.0, 1500.0, 100.0, 2000.0)
         trace = ctx.link_decision_traces[key]
         assert isinstance(trace, LinkDecisionTrace)
         assert trace.geometry_authority == "ome"
@@ -1565,7 +1578,12 @@ class TestSubscriberResilience:
         assert link.interface_a == "isl0"
         assert link.interface_b == "isl1"
         # Each direction runs at its sending end's terminal transmit rate.
-        assert (link.transmit_mbps_a, link.transmit_mbps_b) == (2000.0, 100.0)
+        assert (
+            link.transmit_mbps_a,
+            link.receive_mbps_a,
+            link.transmit_mbps_b,
+            link.receive_mbps_b,
+        ) == (2000.0, 1500.0, 100.0, 2000.0)
         assert link.scheduling_state == "teardown"
         assert link.teardown_remaining_ticks == 7
         assert link.successor_pair == ("sat-P00S00", "sat-P00S02")
@@ -1625,7 +1643,9 @@ class TestSubscriberResilience:
             link_reason="vis_gained",
             latency_ms=5.0,
             transmit_mbps_a=1000.0,
+            receive_mbps_a=1000.0,
             transmit_mbps_b=1000.0,
+            receive_mbps_b=1000.0,
             range_km=1500.0,
             traffic_load_pct=None,
             interface_a="isl0",

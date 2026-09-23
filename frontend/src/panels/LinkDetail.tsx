@@ -22,9 +22,65 @@ interface LinkHistoryEntry {
   node_b: string;
 }
 
-/** A terminal transmit rate, keeping a fractional declared rate such as 23.6 Mbps. */
-function formatRate(mbps: number): string {
-  return `${Number.isInteger(mbps) ? mbps.toFixed(0) : mbps.toFixed(1)} Mbps`;
+/** A terminal rate in Gb/s from 1000 Mb/s up and in Mb/s below, keeping one
+ *  decimal where the declared rate has one (1.2 Gb/s, 23.6 Mb/s). */
+export function formatRate(mbps: number): string {
+  const [value, unit] = mbps >= 1000 ? [mbps / 1000, "Gb/s"] : [mbps, "Mb/s"];
+  const shown = Number.isInteger(value) ? value.toFixed(0) : value.toFixed(1);
+  return `${shown} ${unit}`;
+}
+
+/** Which end holds a direction back: the lower of the sender's transmit and
+ *  the receiver's receive. Equal rates hold neither back. */
+function directionLimit(senderTransmit: number, receiverReceive: number): "sender" | "receiver" | null {
+  if (senderTransmit < receiverReceive) return "sender";
+  if (receiverReceive < senderTransmit) return "receiver";
+  return null;
+}
+
+function RateValue({
+  label,
+  mbps,
+  limiting,
+  end,
+}: {
+  label: "TX" | "RX";
+  mbps: number;
+  limiting: boolean;
+  end?: boolean;
+}) {
+  const classes = ["link-rate"];
+  if (end) classes.push("link-rate--end");
+  if (limiting) classes.push("link-rate--limiting");
+  return (
+    <span className={classes.join(" ")} data-limiting={limiting ? "true" : undefined}>
+      <span className="link-rate-label">{label}</span>
+      {formatRate(mbps)}
+    </span>
+  );
+}
+
+/** The link's two directions, each drawn from its sender's transmit rate to
+ *  its receiver's receive rate. The value that holds a direction back is
+ *  highlighted. */
+function LinkRates({ link }: { link: LinkState }) {
+  const aToB = directionLimit(link.transmit_mbps_a, link.receive_mbps_b);
+  const bToA = directionLimit(link.transmit_mbps_b, link.receive_mbps_a);
+  return (
+    <div className="link-rates" role="group" aria-label="Terminal rates">
+      <span className="link-rates-node" title={link.node_a}>{link.node_a}</span>
+      <span />
+      <span className="link-rates-node link-rates-node--end" title={link.node_b}>{link.node_b}</span>
+
+      <RateValue label="TX" mbps={link.transmit_mbps_a} limiting={aToB === "sender"} />
+      <span className="link-rates-arrow link-rates-arrow--to-b" aria-hidden="true" />
+      <RateValue label="RX" mbps={link.receive_mbps_b} limiting={aToB === "receiver"} end />
+
+      <RateValue label="RX" mbps={link.receive_mbps_a} limiting={bToA === "receiver"} />
+      <span className="link-rates-arrow link-rates-arrow--to-a" aria-hidden="true" />
+      <RateValue label="TX" mbps={link.transmit_mbps_b} limiting={bToA === "sender"} end />
+    </div>
+  );
 }
 
 export function LinkDetail({ link, snapshot }: LinkDetailProps) {
@@ -123,17 +179,10 @@ export function LinkDetail({ link, snapshot }: LinkDetailProps) {
         <span className="detail-value">{link.latency_ms.toFixed(1)} ms</span>
       </div>
       <div className="detail-row">
-        <span className="detail-label">{link.node_a} → {link.node_b}</span>
-        <span className="detail-value">{formatRate(link.transmit_mbps_a)}</span>
-      </div>
-      <div className="detail-row">
-        <span className="detail-label">{link.node_b} → {link.node_a}</span>
-        <span className="detail-value">{formatRate(link.transmit_mbps_b)}</span>
-      </div>
-      <div className="detail-row">
         <span className="detail-label">Range</span>
         <span className="detail-value">{link.range_km.toFixed(0)} km</span>
       </div>
+      <LinkRates link={link} />
       {link.traffic_load_pct != null && (
         <div className="detail-row">
           <span className="detail-label">Load</span>

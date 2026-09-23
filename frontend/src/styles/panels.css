@@ -498,6 +498,72 @@
   font-size: var(--font-size-xs);
 }
 
+/* Link rates: the link's two directions, each from its sender's transmit rate
+   to its receiver's receive rate. */
+.link-rates {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(40px, 0.9fr) minmax(0, 1fr);
+  align-items: center;
+  column-gap: var(--space-3);
+  row-gap: var(--space-2);
+  margin: var(--space-3) 0;
+  font-size: var(--font-size-sm);
+}
+
+.link-rates-node {
+  color: var(--text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.link-rates-node--end,
+.link-rate--end {
+  text-align: right;
+}
+
+.link-rate {
+  color: var(--text-primary);
+  white-space: nowrap;
+}
+
+.link-rate-label {
+  color: var(--text-dim);
+  font-size: var(--font-size-xs);
+  margin-right: var(--space-2);
+}
+
+.link-rate--limiting {
+  color: var(--accent-amber);
+  font-weight: var(--font-weight-semibold);
+}
+
+.link-rates-arrow {
+  position: relative;
+  height: 2px;
+  background: var(--border-strong);
+}
+
+.link-rates-arrow::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  border: 5px solid transparent;
+}
+
+.link-rates-arrow--to-b::after {
+  right: -1px;
+  border-right-width: 0;
+  border-left-color: var(--border-strong);
+}
+
+.link-rates-arrow--to-a::after {
+  left: -1px;
+  border-left-width: 0;
+  border-right-color: var(--border-strong);
+}
+
 .trace-hops {
   font-family: var(--font-mono);
   font-size: var(--font-size-xxs);

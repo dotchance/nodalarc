@@ -298,8 +298,16 @@
           "title": "Transmit Mbps A",
           "type": "number"
         },
+        "receive_mbps_a": {
+          "title": "Receive Mbps A",
+          "type": "number"
+        },
         "transmit_mbps_b": {
           "title": "Transmit Mbps B",
+          "type": "number"
+        },
+        "receive_mbps_b": {
+          "title": "Receive Mbps B",
           "type": "number"
         },
         "range_km": {
@@ -421,7 +429,9 @@
         "link_reason",
         "latency_ms",
         "transmit_mbps_a",
+        "receive_mbps_a",
         "transmit_mbps_b",
+        "receive_mbps_b",
         "range_km",
         "traffic_load_pct"
       ],

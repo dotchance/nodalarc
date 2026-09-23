@@ -1,8 +1,8 @@
 // Copyright 2024-2026 .chance (dotchance)
 // Licensed under the Apache License, Version 2.0. See LICENSE file.
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { LinkDetail } from "../LinkDetail";
+import { LinkDetail, formatRate } from "../LinkDetail";
 import type { LinkState, StateSnapshot } from "../../types";
 
 function link(overrides: Partial<LinkState> = {}): LinkState {
@@ -14,7 +14,9 @@ function link(overrides: Partial<LinkState> = {}): LinkState {
     link_reason: "link_state_snapshot",
     latency_ms: 42,
     transmit_mbps_a: 1000,
+    receive_mbps_a: 1000,
     transmit_mbps_b: 1000,
+    receive_mbps_b: 1000,
     range_km: 12000,
     traffic_load_pct: null,
     interface_a: "isl0",
@@ -97,20 +99,56 @@ describe("LinkDetail", () => {
     expect(url).toContain("/api/v1/links?node=leo-sat-p00s00");
   });
 
-  it("shows each direction at its sending end's transmit rate", () => {
+  it("draws each direction from its sender's TX to its receiver's RX and highlights the lower", () => {
     render(
       <LinkDetail
-        link={link({ transmit_mbps_a: 50, transmit_mbps_b: 23.6 })}
+        link={link({
+          transmit_mbps_a: 5000,
+          receive_mbps_a: 5000,
+          transmit_mbps_b: 1000,
+          receive_mbps_b: 1000,
+        })}
         snapshot={snapshot()}
       />,
     );
 
-    expect(screen.getByText("leo-sat-p00s00 → meo-sat-p00s00").nextSibling?.textContent).toBe(
-      "50 Mbps",
+    const rates = within(screen.getByRole("group", { name: "Terminal rates" }));
+    const values = rates.getAllByText(/Gb\/s|Mb\/s/).map((el) => ({
+      text: el.textContent,
+      limiting: el.getAttribute("data-limiting") === "true",
+    }));
+    // Row order: A's TX → B's RX, then A's RX ← B's TX.
+    expect(values).toEqual([
+      { text: "TX5 Gb/s", limiting: false },
+      { text: "RX1 Gb/s", limiting: true },
+      { text: "RX5 Gb/s", limiting: false },
+      { text: "TX1 Gb/s", limiting: true },
+    ]);
+    expect(rates.getByText("leo-sat-p00s00")).toBeTruthy();
+    expect(rates.getByText("meo-sat-p00s00")).toBeTruthy();
+    expect(screen.queryByText("leo-sat-p00s00 → meo-sat-p00s00")).toBeNull();
+  });
+
+  it("highlights nothing in a direction whose two rates are equal", () => {
+    render(<LinkDetail link={link()} snapshot={snapshot()} />);
+
+    const rates = within(screen.getByRole("group", { name: "Terminal rates" }));
+    expect(rates.getAllByText(/Gb\/s|Mb\/s/).some((el) => el.hasAttribute("data-limiting"))).toBe(
+      false,
     );
-    expect(screen.getByText("meo-sat-p00s00 → leo-sat-p00s00").nextSibling?.textContent).toBe(
-      "23.6 Mbps",
-    );
-    expect(screen.queryByText("Bandwidth")).toBeNull();
+  });
+});
+
+describe("formatRate", () => {
+  it("writes Gb/s from 1000 Mb/s up and Mb/s below, keeping one declared decimal", () => {
+    expect([200_000, 5000, 1200, 1000, 600, 23.6, 3].map(formatRate)).toEqual([
+      "200 Gb/s",
+      "5 Gb/s",
+      "1.2 Gb/s",
+      "1 Gb/s",
+      "600 Mb/s",
+      "23.6 Mb/s",
+      "3 Mb/s",
+    ]);
   });
 });

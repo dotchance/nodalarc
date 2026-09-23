@@ -20,9 +20,14 @@ if TYPE_CHECKING:
 
 # Reference bandwidth for fixed-link IGP metrics: the metric of a fixed link
 # is this value over the transmit rate of the interface's own terminal,
-# truncated to an integer. Each end of a link sends at its own rate, so the
-# two ends of an asymmetric link carry different metrics.
-_REFERENCE_BANDWIDTH_MBPS = 10000
+# truncated to an integer and never below 1, so every terminal at or above
+# 100 Gb/s costs 1. Each end of a link sends at its own rate, so the two ends
+# of an asymmetric link carry different metrics.
+_REFERENCE_BANDWIDTH_MBPS = 100_000
+_MINIMUM_IGP_METRIC = 1
+# The largest interface metric each IGP accepts: the OSPF cost, and the IS-IS
+# wide metric below 2^24 - 1, which removes a link from SPF (RFC 5305).
+_MAXIMUM_IGP_METRIC = {"isis": 16_777_214, "ospf": 65_535}
 # IGP metric of an access (ground) link.
 _ACCESS_LINK_METRIC = 10
 # Share of a terminal's transmit rate advertised as reservable, and as
@@ -113,6 +118,22 @@ def _transmit_mbps(node: ResolvedNode, interface: str, *, purpose: str) -> float
     return block.transmit_mbps
 
 
+def _igp_metric(node: ResolvedNode, interface: str, protocol: str) -> int:
+    """A fixed link's IGP metric from its own terminal's transmit rate.
+
+    A metric above what the protocol accepts is refused rather than clipped.
+    """
+    transmit = _transmit_mbps(node, interface, purpose="IGP metric")
+    metric = max(_MINIMUM_IGP_METRIC, int(_REFERENCE_BANDWIDTH_MBPS / transmit))
+    maximum = _MAXIMUM_IGP_METRIC[protocol]
+    if metric > maximum:
+        raise ValueError(
+            f"node {node.node_id!r} interface {interface!r} transmits {transmit} Mb/s, "
+            f"so its {protocol} metric {metric} exceeds the protocol maximum {maximum}"
+        )
+    return metric
+
+
 def _te_link_params(node: ResolvedNode, interface: str) -> dict[str, str]:
     """MPLS-TE bandwidth for one WAN interface, from its own terminal.
 
@@ -171,14 +192,13 @@ def _wan_interfaces(
             # A static_ip boundary link carries no IGP, so no IGP BFD or TE.
             "bfd": bfd_enabled and not static_only,
             "te": _te_link_params(node, name) if te_enabled and not static_only else None,
-            "metric": int(
-                _REFERENCE_BANDWIDTH_MBPS / _transmit_mbps(node, name, purpose="IGP metric")
-            ),
             "peer_loopback_ipv4": _ip_from_interface(
                 peer.interfaces.lo0.ipv4,
                 field=f"{peer.node_id}.lo0.ipv4",
             ),
         }
+        if domain.protocol in _MAXIMUM_IGP_METRIC:
+            entry["metric"] = _igp_metric(node, name, domain.protocol)
         # The peer is a router in exactly one domain whatever the protocol;
         # OSPF also reads its area.
         peer_domain = resolved.routing_domain_for(peer_id)

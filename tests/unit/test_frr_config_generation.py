@@ -410,11 +410,83 @@ def test_wan_interface_metrics_follow_own_transmit_rate_and_access_links() -> No
     assert fixed
     for entry in vars_for_node["wan_interfaces"]:
         if entry["name"] in fixed:
-            transmit = rates[(node_id, entry["name"])].transmit_mbps
-            assert entry["metric"] == int(10000 / transmit)
+            # The fixture's ISL terminal transmits 2000 Mb/s: 100000 / 2000.
+            assert rates[(node_id, entry["name"])].transmit_mbps == 2000.0
+            assert entry["metric"] == 50
         else:
             assert entry["name"].startswith("gnd")
             assert entry["metric"] == 10
+
+
+@pytest.mark.parametrize(
+    ("transmit_mbps", "metric"),
+    [
+        (200_000, 1),
+        (100_000, 1),
+        (10_000, 10),
+        (3_500, 28),
+        (1_000, 100),
+        (260, 384),
+        (3, 33_333),
+    ],
+)
+def test_the_igp_metric_is_100_gbps_over_transmit_and_never_below_one(
+    transmit_mbps: float, metric: int
+) -> None:
+    from adapters.frr import template_vars
+
+    node = _node_with_isl_transmit(transmit_mbps)
+
+    assert template_vars._igp_metric(node, "isl0", "isis") == metric
+    assert template_vars._igp_metric(node, "isl0", "ospf") == metric
+
+
+def test_a_metric_above_the_protocol_maximum_is_refused() -> None:
+    from adapters.frr import template_vars
+
+    node = _node_with_isl_transmit(1.0)
+
+    assert template_vars._igp_metric(node, "isl0", "isis") == 100_000
+    with pytest.raises(ValueError, match="ospf metric 100000 exceeds the protocol maximum 65535"):
+        template_vars._igp_metric(node, "isl0", "ospf")
+
+
+def _node_with_isl_transmit(transmit_mbps: float):
+    resolved = _resolved(protocol="isis")
+    node = resolved.node_by_id(_first_satellite(resolved))
+    assert node is not None
+    wan = next(wan for wan in node.wan_interfaces if wan.name == "isl0")
+    inventory = tuple(
+        block.model_copy(update={"transmit_mbps": transmit_mbps})
+        if block.terminal_id == wan.terminal_id
+        else block
+        for block in node.terminal_inventory
+    )
+    return node.model_copy(update={"terminal_inventory": inventory})
+
+
+def test_every_shipped_session_renders_valid_igp_metrics() -> None:
+    from nodalarc.catalog_closure import FilesystemCatalogReadView
+    from nodalarc.catalog_paths import CatalogRoots
+
+    from adapters.frr import template_vars
+
+    catalog = FilesystemCatalogReadView(CatalogRoots.from_catalog_root("catalog/nodalarc"))
+    sessions = sorted(Path("catalog/nodalarc/sessions").glob("*.yaml"))
+    assert sessions
+    checked = 0
+    for path in sessions:
+        resolved = load_session_resolution_from_file(path, catalog=catalog).resolved
+        for domain in resolved.routing_domains:
+            maximum = template_vars._MAXIMUM_IGP_METRIC.get(domain.protocol)
+            if maximum is None:
+                continue
+            for node_id in domain.node_ids:
+                for entry in _vars_for(resolved, node_id)["wan_interfaces"]:
+                    if "metric" in entry:
+                        assert 1 <= entry["metric"] <= maximum, (path.name, node_id, entry)
+                        checked += 1
+    assert checked
 
 
 def test_each_end_of_an_asymmetric_fixed_link_carries_its_own_metric() -> None:
@@ -445,7 +517,7 @@ def test_each_end_of_an_asymmetric_fixed_link_carries_its_own_metric() -> None:
     b_transmit = asymmetric.interface_terminal_rates()[
         (candidate.node_b, interface_b)
     ].transmit_mbps
-    assert b_transmit != 100.0
+    assert b_transmit == 2000.0
 
     metric_a = next(
         e["metric"]
@@ -458,8 +530,9 @@ def test_each_end_of_an_asymmetric_fixed_link_carries_its_own_metric() -> None:
         if e["name"] == interface_b
     )
 
-    assert metric_a == 100
-    assert metric_b == int(10000 / b_transmit)
+    # 100000 / 100 on end A; 100000 / 2000 on end B.
+    assert metric_a == 1000
+    assert metric_b == 50
 
 
 # ---------------------------------------------------------------------------

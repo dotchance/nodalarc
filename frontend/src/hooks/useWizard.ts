@@ -124,11 +124,18 @@ export function useWizard() {
 
   const selectProtocol = useCallback((protocol: Protocol) => {
     setState((s) => {
-      return { ...s, protocol, extensions: [], step: "extensions" as WizardStep };
+      const facts = data.rules?.protocols.find((item) => item.id === protocol);
+      // A protocol without rendered BFD shows no BFD controls, so the
+      // submitted intent must not keep BFD enabled from another protocol.
+      const routingTimers =
+        s.routingTimers && data.rules && facts && facts.bfd_timer_fields == null
+          ? { ...s.routingTimers, [data.rules.bfd.enabled_field]: false }
+          : s.routingTimers;
+      return { ...s, protocol, extensions: [], routingTimers, step: "extensions" as WizardStep };
     });
     api.clearYaml();
     api.clearError();
-  }, [api]);
+  }, [api, data.rules]);
 
   const toggleExtension = useCallback((ext: WizardExtension) => {
     setState((s) => {

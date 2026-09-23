@@ -275,13 +275,12 @@ export interface WizardAvailableStationResponse {
   readonly stations: ReadonlyArray<WizardAvailableStation>;
 }
 
-/** Backend-owned presentation and field facts for Wizard BFD controls. */
+/** Backend-owned presentation facts for the Wizard BFD controls. The timer controls and their bounds belong to each protocol, because the bounds are what the runtime renders for that protocol. */
 export interface WizardBfdMetadata {
   readonly heading: string;
   readonly enabled_field: "bfd";
   readonly enable_label: string;
   readonly enable_description: string;
-  readonly timer_fields: ReadonlyArray<WizardRoutingTimerFieldMetadata>;
 }
 
 /** Presentation facts for one backend-supported Wizard extension. */
@@ -299,6 +298,7 @@ export interface WizardRoutingTimerFieldMetadata {
   readonly description: string;
   readonly guidance: string;
   readonly minimum: number;
+  readonly maximum?: number | null;
 }
 
 /** One selectable routing protocol and its backend-owned Wizard behavior. */
@@ -310,6 +310,7 @@ export interface WizardProtocolMetadata {
   readonly extension_constraints: Readonly<Record<string, ReadonlyArray<WizardExtension>>>;
   readonly timer_label: string;
   readonly timer_fields: ReadonlyArray<WizardRoutingTimerFieldMetadata>;
+  readonly bfd_timer_fields?: ReadonlyArray<WizardRoutingTimerFieldMetadata> | null;
   readonly non_flat_area_warning?: string | null;
 }
 
@@ -1848,7 +1849,8 @@ export interface ResolvedTerminalBlock {
   readonly min_elevation_deg: number | null;
   readonly field_of_regard_deg: number | null;
   readonly tracking_rate_deg_s: number | null;
-  readonly bandwidth_mbps: number | null;
+  readonly transmit_mbps: number | null;
+  readonly receive_mbps: number | null;
   readonly boresight: TerminalBoresight | SatGroundTerminalBoresight | null;
   readonly source_ref: string;
 }

@@ -405,8 +405,22 @@ def _two_node_site_session() -> dict:
 class TestRenderAndReadiness:
     def test_multi_node_site_runs_terr0_active_single_node_stays_passive(self) -> None:
         from nodalarc.models.resolved_session import SourceContext
-        from nodalarc.stack_resolver import resolve_domain_stack
-        from nodalarc.template_vars import build_template_vars_from_resolved
+
+        from adapters.frr.stack import resolve_domain_stack
+        from adapters.frr.template_vars import build_template_vars_from_resolved
+
+        def terr0_facts(resolved, node):
+            domain = resolved.routing_domain_for(node.node_id)
+            vars_for_node = build_template_vars_from_resolved(
+                resolved,
+                node,
+                domain=domain,
+                stack=resolve_domain_stack(domain),
+                node_sid_index=None,
+            )
+            return next(
+                seg for seg in vars_for_node["segment_interfaces"] if seg["name"] == "terr0"
+            )
 
         resolved = resolve_session(
             _two_node_site_session(),
@@ -414,17 +428,8 @@ class TestRenderAndReadiness:
         )
         ground = [n for n in resolved.nodes if n.kind == "ground_station"]
         assert len(ground) == 2
-
-        domain = resolved.routing_domains[0]
-        stack = resolve_domain_stack(domain)
         for node in ground:
-            vars_for_node = build_template_vars_from_resolved(
-                resolved, node.node_id, stack_variables=stack.template_variables
-            )
-            terr0 = next(
-                seg for seg in vars_for_node["segment_interfaces"] if seg["name"] == "terr0"
-            )
-            assert terr0["igp_active"] is True
+            assert terr0_facts(resolved, node)["igp_active"] is True
 
         single = resolve_session(
             build_catalog_session_fixture(
@@ -435,11 +440,7 @@ class TestRenderAndReadiness:
             source_context=SourceContext(origin="test.site_lan", run_id="run-test-0002"),
         )
         lone = next(n for n in single.nodes if n.kind == "ground_station")
-        lone_vars = build_template_vars_from_resolved(
-            single, lone.node_id, stack_variables=stack.template_variables
-        )
-        lone_terr0 = next(seg for seg in lone_vars["segment_interfaces"] if seg["name"] == "terr0")
-        assert lone_terr0["igp_active"] is False
+        assert terr0_facts(single, lone)["igp_active"] is False
 
     def test_site_lan_membership_satisfies_domain_connectivity(self) -> None:
         from nodalarc.models.resolved_session import SourceContext

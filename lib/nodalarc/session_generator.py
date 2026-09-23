@@ -31,7 +31,6 @@ from nodalarc.models.resolved_session import ResolvedNode, ResolvedSession, Sour
 from nodalarc.models.segment_session import RoutingTimers
 from nodalarc.resolve_session import resolve_session
 from nodalarc.runtime_support import RuntimeSupport, UnsupportedFeatureError
-from nodalarc.stack_resolver import normalize_extensions, resolve_stack
 
 ConstellationPreset = WizardConstellationPreset
 
@@ -321,14 +320,65 @@ def constellation_source_mode(
     return wrapper
 
 
+# The Wizard's routing-extension vocabulary. Aliases normalize to the short
+# form; anything else is rejected, never silently ignored.
+_EXTENSION_ALIASES: dict[str, str] = {
+    "te": "te",
+    "traffic-engineering": "te",
+    "sr": "sr",
+    "segment-routing": "sr",
+    "mpls": "mpls",
+}
+# The routing-domain capability each extension declares, in the order the
+# generated session lists them.
+EXTENSION_CAPABILITIES: dict[str, str] = {
+    "mpls": "mpls",
+    "sr": "segment_routing",
+    "te": "traffic_engineering",
+}
+
+
+def normalize_extensions(extensions: list[str] | tuple[str, ...]) -> tuple[str, ...]:
+    """Canonicalize routing-extension aliases to {te, sr, mpls}.
+
+    Raises ValueError on unknown or duplicate extensions.
+    """
+    normalized: list[str] = []
+    for ext in extensions:
+        canon = _EXTENSION_ALIASES.get(ext)
+        if canon is None:
+            raise ValueError(
+                f"unknown routing extension {ext!r}; valid: "
+                "te/traffic-engineering, sr/segment-routing, mpls"
+            )
+        normalized.append(canon)
+    if len(set(normalized)) != len(normalized):
+        raise ValueError("routing extensions must not contain duplicates")
+    return tuple(normalized)
+
+
+def _check_routing_choice(
+    protocol: str, extensions: tuple[str, ...], runtime_support: RuntimeSupport
+) -> None:
+    """Refuse a protocol or extension no registered adapter renders."""
+    unsupported = []
+    if feature := runtime_support.check_routing_protocol(protocol):
+        unsupported.append(feature)
+    else:
+        for extension in extensions:
+            capability = EXTENSION_CAPABILITIES[extension]
+            if feature := runtime_support.check_routing_capability(protocol, capability):
+                unsupported.append(feature)
+    if unsupported:
+        raise UnsupportedFeatureError(unsupported)
+
+
 def _routing_capabilities(extensions: tuple[str, ...]) -> dict[str, Any] | None:
-    capabilities: dict[str, Any] = {}
-    if "mpls" in extensions:
-        capabilities["mpls"] = {}
-    if "sr" in extensions:
-        capabilities["segment_routing"] = {"data_plane": "mpls"}
-    if "te" in extensions:
-        capabilities["traffic_engineering"] = {}
+    capabilities: dict[str, Any] = {
+        capability: {"data_plane": "mpls"} if capability == "segment_routing" else {}
+        for extension, capability in EXTENSION_CAPABILITIES.items()
+        if extension in extensions
+    }
     return capabilities or None
 
 
@@ -559,9 +609,8 @@ def assemble_session_document(
     warnings: list[str] = []
     protocol = validate_catalog_name(protocol, label="protocol")
     normalized_extensions = normalize_extensions(tuple(extensions))
-    resolve_stack(protocol, list(normalized_extensions))
-
     runtime_support = RuntimeSupport.earth_luna()
+    _check_routing_choice(protocol, normalized_extensions, runtime_support)
     if unsupported := runtime_support.check_propagator(orbit_propagator):
         raise UnsupportedFeatureError([unsupported])
 

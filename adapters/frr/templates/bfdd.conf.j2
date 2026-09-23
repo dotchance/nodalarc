@@ -1,0 +1,9 @@
+{# The domain's authored BFD timers, applied to every IGP interface through
+   one profile. #}
+bfd
+ profile NODAL
+  detect-multiplier {{ bfd_detect_multiplier }}
+  receive-interval {{ bfd_rx_interval }}
+  transmit-interval {{ bfd_tx_interval }}
+ exit
+exit

@@ -70,7 +70,8 @@ def _terminal_projection(node: ResolvedNode) -> list[dict[str, Any]]:
                 "min_elevation_deg": terminal.min_elevation_deg,
                 "field_of_regard_deg": terminal.field_of_regard_deg,
                 "tracking_rate_deg_s": terminal.tracking_rate_deg_s,
-                "bandwidth_mbps": terminal.bandwidth_mbps,
+                "transmit_mbps": terminal.transmit_mbps,
+                "receive_mbps": terminal.receive_mbps,
                 "boresight": _model_json(terminal.boresight),
             }
         )

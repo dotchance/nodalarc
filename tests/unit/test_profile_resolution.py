@@ -292,3 +292,117 @@ def test_shipped_quic_session_records_node_level_endpoint_profiles() -> None:
     routers = [node for node in resolution.nodes if node.profile == FRR_PROFILE]
     assert routers
     assert all(node.profile_level == "node_definition" for node in routers)
+
+
+def _narrow_adapter_session(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, domain: dict):
+    """One site node runs a routing adapter that renders plain IS-IS only."""
+    import nodalarc.runtime_support as runtime_support
+    from nodalarc.workloads.adapter import AdapterSupport, RoutingProtocolSupport
+
+    from adapters.frr.support import FRR_SUPPORT
+
+    monkeypatch.setattr(
+        runtime_support,
+        "registered_adapter_support",
+        lambda: {
+            "frr": FRR_SUPPORT,
+            "narrow": AdapterSupport(routing={"isis": RoutingProtocolSupport()}),
+        },
+    )
+
+    def use_narrow_adapter(site):
+        site["nodes"][0]["profile"] = "user:profiles/narrow-router.yaml"
+
+    def add_domain(session, _ground_segment):
+        session["routing"] = {"domains": [domain]}
+
+    session, roots = _session_with_user_ground(
+        tmp_path, site_mutation=use_narrow_adapter, segment_mutation=add_domain
+    )
+    narrow = _user_profile_document("narrow-router")
+    narrow["profile"]["adapter"] = "narrow"
+    _write_yaml(tmp_path / "user" / "profiles" / "narrow-router.yaml", narrow)
+    return session, roots
+
+
+def _domain(**fields) -> dict[str, Any]:
+    return {
+        "id": "earth_domain",
+        "protocol": "isis",
+        "selectors": [{"any": [{"segment": "leo"}, {"segment": "ground"}]}],
+        **fields,
+    }
+
+
+def test_member_whose_adapter_lacks_a_capability_is_refused_by_name(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    session, roots = _narrow_adapter_session(
+        tmp_path, monkeypatch, _domain(capabilities={"mpls": {}})
+    )
+
+    with pytest.raises(UnsupportedFeatureError) as refused:
+        resolve_session(session, catalog=FilesystemCatalogReadView(roots))
+
+    [feature] = refused.value.features
+    assert feature.category == "routing_capability"
+    assert feature.value == "isis:mpls"
+    assert "routing domain 'earth_domain'" in feature.message
+    assert "workload adapter 'narrow'" in feature.message
+    assert "profile-test-site-" in feature.message
+
+
+def test_member_whose_adapter_lacks_the_protocol_is_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    session, roots = _narrow_adapter_session(tmp_path, monkeypatch, _domain(protocol="ospf"))
+
+    with pytest.raises(UnsupportedFeatureError) as refused:
+        resolve_session(session, catalog=FilesystemCatalogReadView(roots))
+
+    [feature] = refused.value.features
+    assert feature.category == "routing_protocol"
+    assert feature.value == "ospf"
+    assert "workload adapter 'narrow'" in feature.message
+
+
+def test_members_rendering_the_domain_join_it_whatever_their_adapter(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    session, roots = _narrow_adapter_session(tmp_path, monkeypatch, _domain())
+
+    resolution = resolve_session(session, catalog=FilesystemCatalogReadView(roots))
+
+    narrow = [node for node in resolution.nodes if node.profile.endswith("narrow-router.yaml")]
+    [domain] = resolution.routing_domains
+    assert len(narrow) == 1
+    assert narrow[0].node_id in domain.node_ids
+
+
+def test_bfd_timers_outside_the_frr_range_are_refused(tmp_path: Path) -> None:
+    def add_domain(session, _ground_segment):
+        session["routing"] = {
+            "domains": [
+                _domain(
+                    timers={
+                        "bfd": {
+                            "enabled": True,
+                            "detect_multiplier": 300,
+                            "rx_interval_ms": 5,
+                            "tx_interval_ms": 300,
+                        }
+                    }
+                )
+            ]
+        }
+
+    session, roots = _session_with_user_ground(tmp_path, segment_mutation=add_domain)
+
+    with pytest.raises(UnsupportedFeatureError) as refused:
+        resolve_session(session, catalog=FilesystemCatalogReadView(roots))
+
+    assert [feature.value for feature in refused.value.features] == [
+        "bfd.detect_multiplier=300",
+        "bfd.rx_interval_ms=5",
+    ]
+    assert all("workload adapter 'frr'" in f.message for f in refused.value.features)

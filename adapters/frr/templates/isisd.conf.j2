@@ -1,6 +1,3 @@
-hostname {{ hostname }}
-log file /var/log/frr/isisd.log informational
-
 {# system_id is a resolver-owned globally-unique identity fact supplied by
    the producer and consumed verbatim. plane/slot restart per segment and
    must never be encoded into identity. #}
@@ -11,9 +8,13 @@ router isis NODAL
  net {{ area_id }}.{{ system_id }}.00
  is-type level-1-2
  metric-style wide
-{% if sr_enabled | default(false) %}
+{% if te_enabled %}
+ mpls-te on
+ mpls-te router-address {{ ipv4_loopback }}
+{% endif %}
+{% if sr_enabled %}
  segment-routing on
- segment-routing global-block {{ srgb_start }} {{ srgb_end }} local-block 40000 49999
+ segment-routing global-block {{ srgb_start }} {{ srgb_end }} local-block {{ srlb_start }} {{ srlb_end }}
  segment-routing prefix {{ ipv4_loopback }}/32 index {{ node_sid_index }}
 {% endif %}
 {% if redistribute_static %}
@@ -23,40 +24,29 @@ router isis NODAL
  spf-delay-ietf init-delay {{ spf_init_delay }} short-delay {{ spf_short_delay }} long-delay {{ spf_long_delay }} holddown {{ spf_holddown }} time-to-learn {{ spf_time_to_learn }}
  max-lsp-lifetime 1200
  lsp-refresh-interval 150
-exit
-
-{% for iface_name, info in interface_info.items() %}
-{% if not info.static_only %}
-interface {{ iface_name }}
- ip router isis NODAL
- isis network point-to-point
- isis metric {{ (reference_bandwidth / info.bandwidth_mbps) | int }}
- isis hello-interval {{ isis_hello_interval }}
- isis hello-multiplier {{ isis_hello_multiplier }}
-{% if bfd_enabled %}
- isis bfd
+{% if default_route_originate %}
+ default-information originate ipv4 level-2 always metric {{ default_route_metric }}
 {% endif %}
 exit
-{% endif %}
-{% endfor %}
-
-{% for iface in gnd_interfaces %}
-interface {{ iface }}
- ip router isis NODAL
- isis network point-to-point
- isis metric 10
- isis hello-interval {{ isis_hello_interval }}
- isis hello-multiplier {{ isis_hello_multiplier }}
-{% if bfd_enabled %}
- isis bfd
-{% endif %}
-exit
-{% endfor %}
 
 interface lo
  ip router isis NODAL
  isis passive
 exit
+
+{% for iface in wan_interfaces if not iface.static_only %}
+interface {{ iface.name }}
+ ip router isis NODAL
+ isis network point-to-point
+ isis metric {{ iface.metric }}
+ isis hello-interval {{ isis_hello_interval }}
+ isis hello-multiplier {{ isis_hello_multiplier }}
+{% if iface.bfd %}
+ isis bfd
+ isis bfd profile NODAL
+{% endif %}
+exit
+{% endfor %}
 
 {% for segment in segment_interfaces %}
 {% if segment.igp_enabled %}
@@ -66,12 +56,10 @@ interface {{ segment.name }}
  isis passive
 {% endif %}
  isis metric {{ segment.metric }}
+{% if segment.bfd %}
+ isis bfd
+ isis bfd profile NODAL
+{% endif %}
 exit
 {% endif %}
 {% endfor %}
-
-{% if default_route_originate %}
-router isis NODAL
- default-information originate ipv4 level-2 always metric {{ default_route_metric }}
-exit
-{% endif %}

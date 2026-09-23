@@ -43,7 +43,56 @@ const RULES: ExtensionRules = {
           minimum: 0,
         },
       ],
+      bfd_timer_fields: [
+        {
+          id: "bfd_detect_multiplier",
+          label: "Backend Detect Field",
+          unit: null,
+          description: "Backend detect description",
+          guidance: "Backend detect guidance",
+          minimum: 1,
+          maximum: 255,
+        },
+        {
+          id: "bfd_rx_interval",
+          label: "Backend RX Field",
+          unit: "backend-ms",
+          description: "Backend RX description",
+          guidance: "Backend RX guidance",
+          minimum: 10,
+          maximum: 4294967,
+        },
+        {
+          id: "bfd_tx_interval",
+          label: "Backend TX Field",
+          unit: "backend-ms",
+          description: "Backend TX description",
+          guidance: "Backend TX guidance",
+          minimum: 11,
+          maximum: 4294966,
+        },
+      ],
       non_flat_area_warning: "Backend area warning",
+    },
+    {
+      id: "isis",
+      label: "Backend IS-IS Label",
+      description: "Backend IS-IS description",
+      extensions: [],
+      extension_constraints: {},
+      timer_label: "Backend IS-IS Timers",
+      timer_fields: [
+        {
+          id: "isis_hello_interval",
+          label: "Backend Hello",
+          unit: "s",
+          description: "Backend hello description",
+          guidance: "Backend hello guidance",
+          minimum: 1,
+        },
+      ],
+      bfd_timer_fields: null,
+      non_flat_area_warning: null,
     },
   ],
   extensions: [
@@ -56,32 +105,6 @@ const RULES: ExtensionRules = {
     enabled_field: "bfd",
     enable_label: "Backend BFD Enable",
     enable_description: "Backend BFD enable description",
-    timer_fields: [
-      {
-        id: "bfd_detect_multiplier",
-        label: "Backend Detect Field",
-        unit: null,
-        description: "Backend detect description",
-        guidance: "Backend detect guidance",
-        minimum: 1,
-      },
-      {
-        id: "bfd_rx_interval",
-        label: "Backend RX Field",
-        unit: "backend-ms",
-        description: "Backend RX description",
-        guidance: "Backend RX guidance",
-        minimum: 2,
-      },
-      {
-        id: "bfd_tx_interval",
-        label: "Backend TX Field",
-        unit: "backend-ms",
-        description: "Backend TX description",
-        guidance: "Backend TX guidance",
-        minimum: 3,
-      },
-    ],
   },
   routing_timer_defaults: TIMERS,
 };
@@ -171,5 +194,53 @@ describe("ProtocolPanel backend authority", () => {
     expect(screen.getByText("Backend RX Field")).toBeTruthy();
     expect(screen.getAllByText("backend-ms")).toHaveLength(2);
     expect(screen.getByText("Backend TX description")).toBeTruthy();
+  });
+
+  it("bounds each BFD control by the range the backend says the runtime renders", () => {
+    render(
+      <ExtensionsPanel
+        protocol="ospf"
+        extensions={[]}
+        areaStrategy="flat"
+        rules={RULES}
+        routingTimers={{ ...TIMERS, bfd: true }}
+        onToggleExtension={vi.fn()}
+        onSetAreaStrategy={vi.fn()}
+        onUpdateTimers={vi.fn()}
+        isExtensionAllowed={() => true}
+        isExtensionEnabled={() => true}
+      />,
+    );
+
+    const bounds = screen
+      .getAllByRole("spinbutton")
+      .slice(1)
+      .map((input) => [input.getAttribute("min"), input.getAttribute("max")]);
+    expect(bounds).toEqual([
+      ["1", "255"],
+      ["10", "4294967"],
+      ["11", "4294966"],
+    ]);
+  });
+
+  it("offers no BFD controls for a protocol the runtime renders no BFD for", () => {
+    render(
+      <ExtensionsPanel
+        protocol="isis"
+        extensions={[]}
+        areaStrategy="flat"
+        rules={RULES}
+        routingTimers={{ ...TIMERS, bfd: true }}
+        onToggleExtension={vi.fn()}
+        onSetAreaStrategy={vi.fn()}
+        onUpdateTimers={vi.fn()}
+        isExtensionAllowed={() => true}
+        isExtensionEnabled={() => true}
+      />,
+    );
+
+    expect(screen.getByText("Backend IS-IS Timers")).toBeTruthy();
+    expect(screen.queryByText("Backend BFD Heading")).toBeNull();
+    expect(screen.queryByText("Backend Detect Field")).toBeNull();
   });
 });

@@ -1,18 +1,18 @@
 # Copyright 2024-2026 .chance (dotchance)
 # Licensed under the Apache License, Version 2.0. See LICENSE file.
-"""Tests for resolved-session na-reconfig helpers."""
+"""Tests for na-reconfig's resolved-session probe-flow operations."""
 
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 
 import pytest
 from nodalarc.catalog_closure import FilesystemCatalogReadView
 from nodalarc.resolve_session import resolve_session_with_assets
 
-from tests.catalog_session_fixtures import build_catalog_session_fixture, shipped_read_view
+from tests.catalog_session_fixtures import build_catalog_session_fixture
 from tools import na_reconfig
-from tools.na_reconfig import _match_target, _validate_plane_target_scope
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -27,91 +27,6 @@ def _session_resolution(tmp_path: Path, *, stations: list[str] | None = None):
     return resolve_session_with_assets(fixture, catalog=FilesystemCatalogReadView(fixture.roots))
 
 
-class TestMatchTargetAll:
-    def test_all_matches_satellite(self):
-        assert _match_target("all", "space-sat-p00s00", "satellite", 0, "49.0001")
-
-    def test_all_matches_ground_station(self):
-        assert _match_target("all", "ground-gs-hawthorne", "ground_station", None, "49.0001")
-
-
-class TestMatchTargetNode:
-    def test_exact_node_match(self):
-        assert _match_target("node:space-sat-p03s07", "space-sat-p03s07", "satellite", 3, "49.0002")
-
-    def test_node_no_match(self):
-        assert not _match_target(
-            "node:space-sat-p03s07", "space-sat-p00s07", "satellite", 0, "49.0001"
-        )
-
-    def test_node_gs_match(self):
-        assert _match_target(
-            "node:ground-gs-hawthorne",
-            "ground-gs-hawthorne",
-            "ground_station",
-            None,
-            "49.0001",
-        )
-
-
-class TestMatchTargetPlane:
-    def test_plane_match(self):
-        assert _match_target("plane:3", "space-sat-p03s07", "satellite", 3, "49.0002")
-
-    def test_plane_no_match(self):
-        assert not _match_target("plane:3", "space-sat-p00s07", "satellite", 0, "49.0001")
-
-    def test_plane_none_for_gs(self):
-        assert not _match_target(
-            "plane:0", "ground-gs-hawthorne", "ground_station", None, "49.0001"
-        )
-
-    def test_plane_zero(self):
-        assert _match_target("plane:0", "space-sat-p00s00", "satellite", 0, "49.0001")
-
-
-class TestMatchTargetArea:
-    def test_area_match(self):
-        assert _match_target("area:1", "space-sat-p00s00", "satellite", 0, "49.0001")
-
-    def test_area_no_match(self):
-        assert not _match_target("area:2", "space-sat-p00s00", "satellite", 0, "49.0001")
-
-    def test_area_ospf_format(self):
-        assert _match_target("area:1", "space-sat-p00s00", "satellite", 0, "0.0.0.0001")
-
-    def test_area_gs_match(self):
-        assert _match_target("area:0", "ground-gs-hawthorne", "ground_station", None, "49.0000")
-
-
-class TestMatchTargetType:
-    def test_type_satellite(self):
-        assert _match_target("type:satellite", "space-sat-p00s00", "satellite", 0, "49.0001")
-
-    def test_type_satellite_rejects_gs(self):
-        assert not _match_target(
-            "type:satellite", "ground-gs-hawthorne", "ground_station", None, "49.0001"
-        )
-
-    def test_type_ground_station(self):
-        assert _match_target(
-            "type:ground_station", "ground-gs-hawthorne", "ground_station", None, "49.0001"
-        )
-
-    def test_type_ground_station_rejects_sat(self):
-        assert not _match_target(
-            "type:ground_station", "space-sat-p00s00", "satellite", 0, "49.0001"
-        )
-
-
-class TestInvalidTarget:
-    def test_unknown_target_returns_false(self):
-        assert not _match_target("unknown:foo", "space-sat-p00s00", "satellite", 0, "49.0001")
-
-    def test_empty_string_returns_false(self):
-        assert not _match_target("", "space-sat-p00s00", "satellite", 0, "49.0001")
-
-
 def test_reconfig_source_does_not_use_old_runtime_projection() -> None:
     source = (ROOT / "tools" / "na_reconfig.py").read_text(encoding="utf-8")
 
@@ -119,42 +34,23 @@ def test_reconfig_source_does_not_use_old_runtime_projection() -> None:
     assert ".primary_constellation" not in source
     assert ".primary_ground_set" not in source
     assert "AddressingScheme" not in source
-    assert "build_template_vars(" not in source
     assert "load_cr_runtime_config" in source
     assert 'source.add_argument(\n        "--live"' in source
 
 
-def test_reconfig_targets_resolved_ground_nodes(monkeypatch, tmp_path: Path) -> None:
-    resolution = _session_resolution(tmp_path, stations=["a", "b"])
-    pushed: list[str] = []
-
+def test_cli_offers_no_node_configuration_push(monkeypatch, capsys) -> None:
+    """Node configuration reaches a pod only through its workload adapter
+    and the artifact ConfigMap delivered at session start."""
     monkeypatch.setattr(
-        na_reconfig,
-        "_render_and_push",
-        lambda _env, _stack, node_id, _vars: pushed.append(node_id),
+        sys, "argv", ["na_reconfig", "--session", "session.yaml", "--target", "all"]
     )
 
-    na_reconfig.reconfig(None, "type:ground_station", resolution=resolution)
+    with pytest.raises(SystemExit) as exit_info:
+        na_reconfig.main()
 
-    assert pushed == [
-        "reconfig-catalog-session-a-router",
-        "reconfig-catalog-session-b-router",
-    ]
-
-
-def test_reconfig_targets_resolved_plane(monkeypatch, tmp_path: Path) -> None:
-    resolution = _session_resolution(tmp_path, stations=["a"])
-    pushed: list[str] = []
-
-    monkeypatch.setattr(
-        na_reconfig,
-        "_render_and_push",
-        lambda _env, _stack, node_id, _vars: pushed.append(node_id),
-    )
-
-    na_reconfig.reconfig(None, "plane:1", resolution=resolution)
-
-    assert pushed == ["space-sat-p01s00", "space-sat-p01s01"]
+    assert exit_info.value.code == 2
+    assert "unrecognized arguments: --target all" in capsys.readouterr().err
+    assert not hasattr(na_reconfig, "reconfig")
 
 
 def test_add_flow_resolves_destination_from_resolved_session(monkeypatch, tmp_path: Path) -> None:
@@ -210,31 +106,3 @@ def test_remove_flow_scans_resolved_ground_node_ids(monkeypatch, tmp_path: Path)
         "reconfig-catalog-session-b-router",
     ]
     assert deleted == [("10.42.0.8", "flow-1")]
-
-
-def test_bare_plane_target_refused_on_multi_space_segment_sessions(tmp_path) -> None:
-    """Plane numbers restart per segment; a bare plane target over the
-    flagship session would silently reconfigure every segment's plane N."""
-    from pathlib import Path
-
-    from nodalarc.resolve_session import load_session_resolution_from_file
-
-    resolved = load_session_resolution_from_file(
-        Path("catalog/nodalarc/sessions/earth-leo-heo-geo-luna-reachability.yaml"),
-        catalog=shipped_read_view(),
-    ).resolved
-
-    with pytest.raises(RuntimeError, match="ambiguous across space segments"):
-        _validate_plane_target_scope("plane:0", resolved)
-
-    # Segment-qualified targets stay valid and scope correctly.
-    leo_a_plane0 = [
-        node.node_id
-        for node in resolved.nodes
-        if node.kind == "satellite"
-        and _match_target(
-            "plane:leo_a:0", node.node_id, "satellite", node.plane, "", node.segment_id
-        )
-    ]
-    assert leo_a_plane0
-    assert all(node_id.startswith("leo-a-") for node_id in leo_a_plane0)

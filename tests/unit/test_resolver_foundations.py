@@ -123,7 +123,8 @@ def _terminal(
         count=count,
         tracking_capacity=1,
         max_range_km=5000.0,
-        bandwidth_mbps=10000.0,
+        transmit_mbps=10000.0,
+        receive_mbps=10000.0,
         boresight=boresight,
         source_ref=f"test:{terminal_id}",
     )
@@ -695,3 +696,27 @@ def test_unsupported_feature_error_message() -> None:
     assert "space_node_set" in str(err)
     assert "mars" in str(err)
     assert len(err.features) == 2
+
+
+def test_resolved_terminal_declares_both_rates_or_neither() -> None:
+    with pytest.raises(ValidationError, match="one of transmit and receive rates"):
+        ResolvedTerminalBlock(
+            terminal_id="t",
+            owner_node_id="n",
+            endpoint_role="crosslink",
+            medium="rf",
+            count=1,
+            transmit_mbps=2.0,
+            source_ref="test:t",
+        )
+    block = ResolvedTerminalBlock(
+        terminal_id="t",
+        owner_node_id="n",
+        endpoint_role="crosslink",
+        medium="rf",
+        count=1,
+        transmit_mbps=2.0,
+        receive_mbps=100.0,
+        source_ref="test:t",
+    )
+    assert block.slowest_direction_mbps == 2.0

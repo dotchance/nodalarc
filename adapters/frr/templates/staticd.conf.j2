@@ -1,0 +1,16 @@
+{# Static routes to a static_ip boundary peer's loopback over the
+   point-to-point boundary link. #}
+{% for iface in wan_interfaces if iface.static_only %}
+ip route {{ iface.peer_loopback_ipv4 }}/32 {{ iface.name }}
+{% endfor %}
+
+{# Routing-boundary exports (adapter: static_ip): materialized intent from
+   routing.boundaries[].export; next hop recurses over the peer-loopback
+   route above. #}
+{% for route in boundary_static_routes %}
+{% if route.family == "ipv6" %}
+ipv6 route {{ route.prefix }} {{ route.via }}
+{% else %}
+ip route {{ route.prefix }} {{ route.via }}
+{% endif %}
+{% endfor %}

@@ -123,10 +123,32 @@ class ResolvedTerminalBlock(BaseModel):
     min_elevation_deg: float | None = Field(default=None, ge=-90.0, le=90.0, allow_inf_nan=False)
     field_of_regard_deg: float | None = Field(default=None, gt=0, le=360.0, allow_inf_nan=False)
     tracking_rate_deg_s: float | None = Field(default=None, gt=0, allow_inf_nan=False)
-    bandwidth_mbps: float | None = Field(default=None, gt=0, allow_inf_nan=False)
+    # The terminal's own rates, independent of any peer: what it can send and
+    # what it can receive.
+    transmit_mbps: float | None = Field(default=None, gt=0, allow_inf_nan=False)
+    receive_mbps: float | None = Field(default=None, gt=0, allow_inf_nan=False)
     boresight: TerminalBoresight | SatGroundTerminalBoresight | None = None
     # Provenance for audit/debug only (e.g. "satellite_type:starlink-v2-laser#isl[0]").
     source_ref: NonEmptyReference
+
+    @model_validator(mode="after")
+    def _rates_are_paired(self) -> ResolvedTerminalBlock:
+        if (self.transmit_mbps is None) != (self.receive_mbps is None):
+            raise ValueError(
+                f"terminal {self.terminal_id!r} declares one of transmit and receive rates"
+            )
+        return self
+
+    @property
+    def slowest_direction_mbps(self) -> float | None:
+        """The slower of the transmit and receive rates.
+
+        Link shaping currently applies one rate to both directions of a link
+        and uses this value for it.
+        """
+        if self.transmit_mbps is None or self.receive_mbps is None:
+            return None
+        return min(self.transmit_mbps, self.receive_mbps)
 
 
 class ResolvedInterfaceAddress(BaseModel):
@@ -737,11 +759,26 @@ class ResolvedSession(BaseModel):
                 return node
         return None
 
+    def routing_domain_for(self, node_id: str) -> ResolvedRoutingDomain:
+        """The one routing domain that contains ``node_id``.
+
+        A node in no domain, or in several, is a loud failure: every consumer
+        that asks is rendering or wiring a router, and a router belongs to
+        exactly one domain.
+        """
+        domains = [domain for domain in self.routing_domains if node_id in domain.node_ids]
+        if len(domains) != 1:
+            raise ValueError(
+                f"node {node_id!r} must belong to exactly one routing domain; "
+                f"got {[domain.domain_id for domain in domains]}"
+            )
+        return domains[0]
+
     def node_index_by_node_id(self) -> dict[str, int]:
         """Resolution-order index for every node — the session's only
         globally-unique numeric node identity.
 
-        Consumers that need a compact unique number (FRR system IDs, future
+        Consumers that need a compact unique number (IS-IS system IDs, future
         per-node identity encodings) read this; nothing may derive identity
         from per-segment facts like plane/slot or from enumeration the
         consumer performs itself.
@@ -897,7 +934,7 @@ class ResolvedSession(BaseModel):
         }
 
     def sid_index_by_node_id(self) -> dict[str, int]:
-        """Return deterministic FRR prefix-SID indices for every resolved node."""
+        """Return deterministic prefix-SID indices for every resolved node."""
         result: dict[str, int] = {}
         for block in sorted(self.sid_blocks, key=lambda item: item.domain_id):
             ordered_nodes = tuple(sorted(block.node_ids))

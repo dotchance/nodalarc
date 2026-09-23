@@ -76,6 +76,7 @@ describe("useWizardData", () => {
               extension_constraints: {},
               timer_label: "IS-IS Timers",
               timer_fields: [],
+              bfd_timer_fields: null,
               non_flat_area_warning: null,
             },
             {
@@ -86,6 +87,7 @@ describe("useWizardData", () => {
               extension_constraints: {},
               timer_label: "OSPF Timers",
               timer_fields: [],
+              bfd_timer_fields: null,
               non_flat_area_warning: "warning",
             },
           ],
@@ -97,11 +99,6 @@ describe("useWizardData", () => {
             enabled_field: "bfd",
             enable_label: "Enable BFD",
             enable_description: "Detect failures",
-            timer_fields: [
-              { id: "bfd_detect_multiplier", label: "Multiplier", unit: null, description: "Multiplier", guidance: "Three", minimum: 1 },
-              { id: "bfd_rx_interval", label: "RX", unit: "ms", description: "Receive", guidance: "300", minimum: 1 },
-              { id: "bfd_tx_interval", label: "TX", unit: "ms", description: "Transmit", guidance: "300", minimum: 1 },
-            ],
           },
           routing_timer_defaults: {
             bfd: false,

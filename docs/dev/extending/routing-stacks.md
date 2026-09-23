@@ -19,12 +19,16 @@ Three pieces cooperate, and each lives in a different place:
    image pinned by digest, the command that starts it, capabilities,
    volumes, the terminal surface, and optionally the `adapter` that renders
    its native configuration
-2. An **adapter** (a module under `adapters/`) translates resolved per-node
-   facts into the image's native config format. The frr adapter renders the
-   Jinja2 templates in `configs/templates/frr/` into per-node files
+2. An **adapter** (a module under `adapters/`) declares the session
+   features it renders and translates resolved per-node facts into the
+   image's native config format. The frr adapter assembles the Jinja2
+   fragments in `adapters/frr/templates/` into one `frr.conf` and writes the
+   `daemons` file for exactly the daemons it selected
 3. The **session** declares `routing.domains`, each naming a `protocol` and
-   selectors. Domain membership derives from the routers: the nodes whose
-   effective profile's adapter renders that protocol
+   selectors. Domain membership is the selected routers: the nodes whose
+   effective profile's adapter declares routing support. The resolver
+   refuses a member whose adapter does not render the domain's protocol,
+   capabilities or BFD timers
 
 Rendered files arrive in the pod as a read-only mount at the path the
 profile declares as `config_mount`. The workload's own entrypoint decides
@@ -33,30 +37,32 @@ configure it.
 
 ## Adding an FRR Protocol (Simplest Path)
 
-### Step 1: Create a Jinja2 template
+### Step 1: Create a Jinja2 fragment
 
 ```
-configs/templates/frr/{protocol_name}.conf.j2
+adapters/frr/templates/{daemon_name}.conf.j2
 ```
 
-Templates receive resolved facts: the node's loopbacks, its WAN interfaces
-with peer and bandwidth context, its Ethernet segment interfaces with
-allocated addresses and origination flags, area assignments, and SID
-indexes. `lib/nodalarc/template_vars.py` is the authority on what exists;
-read it before inventing a variable.
+Fragments receive resolved facts: the node's loopbacks, its WAN interfaces
+with metric and area context, its Ethernet segment interfaces with
+allocated addresses and origination flags, area assignments, timers, and
+SID indexes. `adapters/frr/template_vars.py` is the authority on what
+exists; read it before inventing a variable. The hostname and logging
+lines live once, in `global.conf.j2`.
 
 ### Step 2: Teach the frr adapter
 
-The frr adapter in `adapters/frr/` selects which templates render for a
-node from its routing domain's protocol and declared capabilities. Add your
-protocol to that selection.
+`adapters/frr/stack.py` selects the daemons and fragments for a domain
+from its protocol, capabilities and BFD setting. Add your daemon and
+fragment to that selection.
 
-### Step 3: Declare runtime support
+### Step 3: Declare support
 
-The resolver refuses a session whose domain names a protocol the runtime
-cannot execute. Extend the supported protocol set and the adapter's
-renderability declaration in `lib/nodalarc/runtime_support.py` so the gate
-admits it. Until then the refusal is the correct behavior, not a bug.
+The resolver refuses a session whose domain names a protocol no
+registered adapter renders, and refuses each member whose own adapter
+does not render it. Add the protocol, with the capabilities and BFD
+bounds the adapter renders, to `adapters/frr/support.py` so the gate
+admits it. Until then the refusal is the correct behavior.
 
 ### Step 4: Test
 
@@ -129,9 +135,11 @@ picture.
    integration.
 2. **With rendering.** If the stack needs per-node native configuration
    generated from resolved facts, write an adapter module under
-   `adapters/`, add it to the registry in `adapters/registry.py`, and
-   declare it in runtime support. That single edit is the whole coupling
-   surface between core and your technology.
+   `adapters/` with a `support` declaration of what it renders, and add it
+   to the registry in `adapters/registry.py`. That single edit is the whole
+   coupling surface between core and your technology. Keep the declaration
+   free of rendering dependencies: every service that resolves sessions
+   reads it.
 
 ### Constraints
 
@@ -147,14 +155,27 @@ picture.
 
 ## Capabilities
 
-IS-IS and OSPF domains can declare capabilities in the session, and the frr
-templates branch on them:
+IS-IS and OSPF domains can declare capabilities in the session. The frr
+adapter declares which ones it renders for each protocol, and the resolver
+refuses the rest:
 
-| Capability | What it adds |
-|-----------|-------------|
-| `traffic_engineering` | IS-IS/OSPF TE TLVs, bandwidth advertisement |
-| `segment_routing` | SID advertisement, SRGB/SRLB |
-| `mpls` | MPLS forwarding, label tables, label distribution |
+| Capability | Protocols | What it adds |
+|-----------|-----------|-------------|
+| `mpls` | IS-IS, OSPF | MPLS forwarding with LDP label distribution |
+| `segment_routing` | IS-IS, OSPF | Prefix SIDs from the resolver's allocation, SRGB/SRLB, SR-MPLS in place of LDP |
+| `traffic_engineering` | IS-IS, OSPF | MPLS-TE on the IGP router with the loopback as router address, and link parameters on every IGP link |
+
+OSPF enables opaque LSAs whenever a domain declares segment routing or
+traffic engineering, because both flood opaque LSAs.
+
+Traffic-engineering link parameters come from the interface's own terminal:
+maximum bandwidth is the terminal's transmit rate, and 98% of it is
+advertised as reservable and as unreserved at every priority. Each end of a
+link advertises its own terminal, so asymmetric terminals advertise
+different values. Site LANs carry no terminal and no link parameters.
+
+A domain with BFD enabled runs `bfdd` and applies one BFD profile, carrying
+the authored timers, to every interface where the IGP runs actively.
 
 BGP is structurally defined in the grammar and gated by runtime support
 until its execution path exists. DTN bundle *boundary adapters* are gated

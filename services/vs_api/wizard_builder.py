@@ -33,7 +33,9 @@ from nodalarc.models.builder_api import (
     WizardSessionIntent,
 )
 from nodalarc.models.segment_session import RoutingTimers
+from nodalarc.runtime_support import registered_routing_support
 from nodalarc.session_generator import (
+    EXTENSION_CAPABILITIES,
     WIZARD_CUSTOM_GEOMETRY_DEFAULT_NODE,
     assemble_session_document,
     constellation_source_runtime_capability,
@@ -71,44 +73,58 @@ _WIZARD_BFD_METADATA = WizardBfdMetadata(
     enable_description=(
         "Sub-second link failure detection independent of routing protocol hellos."
     ),
-    timer_fields=(
-        WizardRoutingTimerFieldMetadata(
-            id="bfd_detect_multiplier",
-            label="Detect Multiplier",
-            description=(
+)
+
+# Presentation for each BFD timer control, keyed by the grammar field whose
+# rendered bounds the control carries.
+_WIZARD_BFD_FIELD_PRESENTATION = (
+    (
+        "detect_multiplier",
+        {
+            "id": "bfd_detect_multiplier",
+            "label": "Detect Multiplier",
+            "description": (
                 "Missed BFD packets before declaring failure. Detection time equals "
                 "the multiplier times the interval."
             ),
-            guidance="Typical: 3 (900ms detection at 300ms interval).",
-            minimum=1,
-        ),
-        WizardRoutingTimerFieldMetadata(
-            id="bfd_rx_interval",
-            label="RX Interval",
-            unit="ms",
-            description="Minimum interval for receiving BFD control packets.",
-            guidance="Aggressive: 100ms. Typical: 300ms.",
-            minimum=1,
-        ),
-        WizardRoutingTimerFieldMetadata(
-            id="bfd_tx_interval",
-            label="TX Interval",
-            unit="ms",
-            description="Minimum interval for transmitting BFD control packets.",
-            guidance="Aggressive: 100ms. Typical: 300ms.",
-            minimum=1,
-        ),
+            "guidance": "Typical: 3 (900ms detection at 300ms interval).",
+        },
+    ),
+    (
+        "rx_interval_ms",
+        {
+            "id": "bfd_rx_interval",
+            "label": "RX Interval",
+            "unit": "ms",
+            "description": "Minimum interval for receiving BFD control packets.",
+            "guidance": "Aggressive: 100ms. Typical: 300ms.",
+        },
+    ),
+    (
+        "tx_interval_ms",
+        {
+            "id": "bfd_tx_interval",
+            "label": "TX Interval",
+            "unit": "ms",
+            "description": "Minimum interval for transmitting BFD control packets.",
+            "guidance": "Aggressive: 100ms. Typical: 300ms.",
+        },
     ),
 )
-_WIZARD_PROTOCOL_METADATA = (
-    WizardProtocolMetadata(
-        id="ospf",
-        label="OSPF",
-        description="Open Shortest Path First distributed link-state routing.",
-        extensions=("sr", "te", "mpls"),
-        extension_constraints={},
-        timer_label="OSPF Timers",
-        timer_fields=(
+
+# The order in which each protocol lists its available extensions.
+_WIZARD_PROTOCOL_EXTENSION_ORDER = ("sr", "te", "mpls")
+
+# Presentation for each Wizard protocol. Extension availability and BFD
+# bounds come from the registered adapters' declarations at request time.
+_WIZARD_PROTOCOL_PRESENTATION = (
+    {
+        "id": "ospf",
+        "label": "OSPF",
+        "description": "Open Shortest Path First distributed link-state routing.",
+        "extension_constraints": {},
+        "timer_label": "OSPF Timers",
+        "timer_fields": (
             WizardRoutingTimerFieldMetadata(
                 id="ospf_hello_interval",
                 label="Hello Interval",
@@ -150,20 +166,19 @@ _WIZARD_PROTOCOL_METADATA = (
                 minimum=0,
             ),
         ),
-        non_flat_area_warning=(
+        "non_flat_area_warning": (
             "OSPF multi-area with dynamic constellation topologies may lose backbone "
             "contiguity when cross-plane ISLs drop at polar latitudes. Use the flat area "
             "strategy when contiguous area 0 cannot be guaranteed."
         ),
-    ),
-    WizardProtocolMetadata(
-        id="isis",
-        label="IS-IS",
-        description="Intermediate System to Intermediate System native CLNS routing.",
-        extensions=("sr", "te", "mpls"),
-        extension_constraints={},
-        timer_label="IS-IS Timers",
-        timer_fields=(
+    },
+    {
+        "id": "isis",
+        "label": "IS-IS",
+        "description": "Intermediate System to Intermediate System native CLNS routing.",
+        "extension_constraints": {},
+        "timer_label": "IS-IS Timers",
+        "timer_fields": (
             WizardRoutingTimerFieldMetadata(
                 id="isis_hello_interval",
                 label="Hello Interval",
@@ -212,7 +227,7 @@ _WIZARD_PROTOCOL_METADATA = (
                 minimum=0,
             ),
         ),
-    ),
+    },
 )
 
 
@@ -466,11 +481,42 @@ def wizard_routing_timer_defaults() -> WizardRoutingTimerIntent:
     )
 
 
+def _wizard_protocol_metadata(presentation: dict[str, Any]) -> WizardProtocolMetadata:
+    """One Wizard protocol: presentation plus what the registered adapters render."""
+    protocol = presentation["id"]
+    support = registered_routing_support(protocol)
+    if support is None:
+        raise ValueError(f"Wizard protocol {protocol!r} is rendered by no registered adapter")
+    extensions = tuple(
+        extension
+        for extension in _WIZARD_PROTOCOL_EXTENSION_ORDER
+        if EXTENSION_CAPABILITIES[extension] in support.capabilities
+    )
+    bfd_timer_fields = (
+        None
+        if support.bfd is None
+        else tuple(
+            WizardRoutingTimerFieldMetadata(
+                **field,
+                minimum=getattr(support.bfd, bound)[0],
+                maximum=getattr(support.bfd, bound)[1],
+            )
+            for bound, field in _WIZARD_BFD_FIELD_PRESENTATION
+        )
+    )
+    return WizardProtocolMetadata(
+        **presentation, extensions=extensions, bfd_timer_fields=bfd_timer_fields
+    )
+
+
 def wizard_extension_rules_response() -> WizardExtensionRulesResponse:
     """Return the complete backend-owned Wizard routing inventory and presentation facts."""
 
     return WizardExtensionRulesResponse(
-        protocols=_WIZARD_PROTOCOL_METADATA,
+        protocols=tuple(
+            _wizard_protocol_metadata(presentation)
+            for presentation in _WIZARD_PROTOCOL_PRESENTATION
+        ),
         extensions=_WIZARD_EXTENSION_METADATA,
         area_strategies=("flat", "stripe", "per_plane"),
         default_area_strategy="flat",
@@ -503,6 +549,8 @@ def _validate_routing_choices(intent: WizardSessionIntent) -> None:
     }
     if missing:
         raise ValueError(f"Wizard extension dependencies are not satisfied: {missing}")
+    if intent.routing_timers.bfd and protocol.bfd_timer_fields is None:
+        raise ValueError(f"Wizard protocol {intent.protocol!r} offers no BFD; BFD must be off")
     if intent.area_strategy not in facts.area_strategies:
         raise ValueError(f"Wizard area strategy {intent.area_strategy!r} is not available")
 

@@ -1081,11 +1081,13 @@ effective profile's `adapter` renders routing-protocol configuration; which
 adapters render which protocols and capabilities is declared by the adapter
 modules and is runtime support. Domain membership derives from that router
 population: the domain's selectors resolve against the session's nodes, and
-its members are the routers among them whose adapter renders the domain's
-protocol and declared capabilities. A node running no routing workload is
-never a membership candidate, whatever its wiring class; a host is reached
-through the router serving its network, which originates the host's network
-into its own domain.
+its members are the routers among them. Each member's own adapter must render
+the domain's protocol, its declared capabilities and, when BFD is enabled, its
+BFD timers; resolution refuses a member whose adapter does not, naming the
+node, the adapter, the domain and the unrendered requirement. A node running
+no routing workload is never a membership candidate, whatever its wiring
+class; a host is reached through the router serving its network, which
+originates the host's network into its own domain.
 
 When `routing` is present, every router belongs to exactly one domain, and
 every domain contains at least one member. With `routing` omitted, the
@@ -1585,6 +1587,10 @@ construct. The production Earth-Luna profile currently supports:
 - loopback address pools using `by_node_order` allocation;
 - IS-IS, OSPF, and static FRR routing domains;
 - MPLS, segment routing, and traffic engineering on IS-IS and OSPF domains;
+- BFD on IS-IS and OSPF domains, with a detect multiplier of 1 to 255 and
+  receive and transmit intervals of 10 to 4294967 ms, on every interface
+  where the IGP runs actively: point-to-point links and site LANs with a
+  routed peer in the domain;
 - `static_ip` routing boundaries;
 - serialized ground handovers with `handover_concurrency: one_at_a_time`, at
   most one reserved MBB overlap, and one-tick BBM acquisition;
@@ -1610,6 +1616,9 @@ runtime execution:
 - `by_attach_index`, `by_plane_slot`, and `by_ground_index` allocation;
 - BGP routing domains;
 - routing capabilities on BGP or static domains;
+- BFD timers outside the ranges the member's adapter renders;
+- a routing-domain member whose adapter does not render the domain's
+  protocol, capabilities or BFD timers;
 - `bgp` and `dtn_bundle` routing boundaries;
 - `spice_kernel_stack` and `operator_supplied_spk` ephemeris providers;
 - ephemeris kernel frames other than `gcrs`;

@@ -1,0 +1,9 @@
+mpls ldp
+ router-id {{ ipv4_loopback }}
+ address-family ipv4
+  discovery transport-address {{ ipv4_loopback }}
+{% for iface in wan_interfaces %}
+  interface {{ iface.name }}
+{% endfor %}
+ exit-address-family
+exit

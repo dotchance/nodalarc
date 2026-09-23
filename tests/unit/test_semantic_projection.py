@@ -286,7 +286,7 @@ def test_projection_digest_changes_for_runtime_semantic_changes(resolved) -> Non
         )
 
     terminal = satellite.terminal_inventory[0]
-    changed_terminal = terminal.model_copy(update={"bandwidth_mbps": terminal.bandwidth_mbps + 1})
+    changed_terminal = terminal.model_copy(update={"transmit_mbps": terminal.transmit_mbps + 1})
     changed_satellite = satellite.model_copy(
         update={"terminal_inventory": (changed_terminal, *satellite.terminal_inventory[1:])}
     )

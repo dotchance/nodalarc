@@ -16,7 +16,9 @@ from enum import StrEnum
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from nodalarc.stack_resolver import SUPPORTED_STACK_PROTOCOLS
+from adapters.registry import registered_adapter_support
+from nodalarc.models.segment_session import BfdConfig
+from nodalarc.workloads.adapter import BfdSupport, RoutingProtocolSupport
 
 
 class FeatureCategory(StrEnum):
@@ -33,6 +35,7 @@ class FeatureCategory(StrEnum):
     FRAME_REALIZATION = "frame_realization"
     ROUTING_PROTOCOL = "routing_protocol"
     ROUTING_CAPABILITY = "routing_capability"
+    ROUTING_TIMER = "routing_timer"
     ADDRESSING_POOL = "addressing_pool"
     ADDRESS_ALLOCATION = "address_allocation"
     LINK_TOPOLOGY = "link_topology"
@@ -68,9 +71,6 @@ FEATURE_SUPPORT_NOTES: dict[tuple[FeatureCategory, str], str] = {
     (FeatureCategory.EPHEMERIS_FRAME, "gcrs"): "supported by the Earth-Luna runtime",
     (FeatureCategory.EPHEMERIS_PROVIDER, "spice_kernel_stack"): "future runtime capability",
     (FeatureCategory.EPHEMERIS_PROVIDER, "operator_supplied_spk"): "future runtime capability",
-    (FeatureCategory.ROUTING_PROTOCOL, "isis"): "supported FRR routing stack",
-    (FeatureCategory.ROUTING_PROTOCOL, "ospf"): "supported FRR routing stack",
-    (FeatureCategory.ROUTING_PROTOCOL, "static"): "supported FRR routing stack",
     (FeatureCategory.ROUTING_PROTOCOL, "bgp"): "planned runtime capability (eBGP-first)",
     (FeatureCategory.ADDRESSING_POOL, "loopbacks"): "supported pool class",
     (FeatureCategory.ADDRESSING_POOL, "point_to_point"): (
@@ -85,41 +85,38 @@ FEATURE_SUPPORT_NOTES: dict[tuple[FeatureCategory, str], str] = {
     (FeatureCategory.GROUND_SCHEDULING, "handover_concurrency:all_at_once"): (
         "future runtime capability - the current allocator serializes ground handovers"
     ),
-    (FeatureCategory.WORKLOAD_ADAPTER, "frr"): "supported by the Earth-Luna runtime",
-}
-
-# What each adapter module renders, by protocol. This is adapter truth
-# projected for resolution; the registry contract test keeps it aligned with
-# the adapter packages. A node is a router exactly when its profile's adapter
-# appears here.
-ADAPTER_RENDERED_CAPABILITIES: dict[str, dict[str, frozenset[str]]] = {
-    "frr": {
-        "isis": frozenset({"mpls", "segment_routing", "traffic_engineering"}),
-        "ospf": frozenset({"mpls", "segment_routing", "traffic_engineering"}),
-        "static": frozenset(),
-    },
 }
 
 
-def adapter_renders(
-    adapter: str | None,
-    protocol: str,
-    capabilities: tuple[str, ...] = (),
-) -> bool:
-    """Whether an adapter renders one protocol with the declared capabilities."""
+def _registered_routing_protocols() -> frozenset[str]:
+    """Routing protocols some registered adapter renders."""
+    return frozenset(
+        protocol
+        for support in registered_adapter_support().values()
+        for protocol in support.routing
+    )
 
-    if adapter is None:
-        return False
-    rendered = ADAPTER_RENDERED_CAPABILITIES.get(adapter)
-    if rendered is None or protocol not in rendered:
-        return False
-    return set(capabilities) <= rendered[protocol]
+
+def _registered_routing_capabilities() -> frozenset[str]:
+    """``protocol:capability`` pairs some registered adapter renders."""
+    return frozenset(
+        f"{protocol}:{capability}"
+        for support in registered_adapter_support().values()
+        for protocol, protocol_support in support.routing.items()
+        for capability in protocol_support.capabilities
+    )
 
 
 def adapter_renders_routing(adapter: str | None) -> bool:
-    """Whether an adapter renders any routing protocol at all."""
+    """Whether an adapter renders any routing protocol at all.
 
-    return adapter is not None and bool(ADAPTER_RENDERED_CAPABILITIES.get(adapter))
+    A node is a router exactly when its profile's adapter declares routing
+    support.
+    """
+    if adapter is None:
+        return False
+    support = registered_adapter_support().get(adapter)
+    return support is not None and bool(support.routing)
 
 
 class UnsupportedFeature(BaseModel):
@@ -140,6 +137,112 @@ class UnsupportedFeatureError(ValueError):
         self.features = tuple(features)
         joined = "; ".join(f"{f.category}={f.value!r} ({f.message})" for f in features)
         super().__init__(f"session uses runtime-unsupported features: {joined}")
+
+
+# BFD timer fields, named identically in the grammar and in BfdSupport.
+_BFD_TIMER_FIELDS = ("detect_multiplier", "rx_interval_ms", "tx_interval_ms")
+_NAMED_MEMBER_LIMIT = 5
+
+
+def _named_members(node_ids: tuple[str, ...]) -> str:
+    ordered = sorted(node_ids)
+    if len(ordered) <= _NAMED_MEMBER_LIMIT:
+        return f"node(s) {', '.join(ordered)}"
+    shown = ", ".join(ordered[:_NAMED_MEMBER_LIMIT])
+    return f"{len(ordered)} nodes ({shown} and {len(ordered) - _NAMED_MEMBER_LIMIT} more)"
+
+
+def registered_routing_support(protocol: str) -> RoutingProtocolSupport | None:
+    """What the registered adapters render for ``protocol``, combined.
+
+    The capabilities are every capability some adapter renders for the
+    protocol; the BFD bounds span the ranges of the adapters that render BFD
+    for it. Authoring surfaces offer these choices, so an adapter that a
+    session does not use never narrows them. Resolution decides for each
+    domain member against its own adapter. None when no registered adapter
+    renders the protocol.
+    """
+    declared = [
+        support.routing[protocol]
+        for support in registered_adapter_support().values()
+        if protocol in support.routing
+    ]
+    if not declared:
+        return None
+    capabilities = frozenset().union(*(item.capabilities for item in declared))
+    bfd_declared = [item.bfd for item in declared if item.bfd is not None]
+    if not bfd_declared:
+        return RoutingProtocolSupport(capabilities=capabilities)
+    bounds = {
+        name: (
+            min(getattr(item, name)[0] for item in bfd_declared),
+            max(getattr(item, name)[1] for item in bfd_declared),
+        )
+        for name in _BFD_TIMER_FIELDS
+    }
+    return RoutingProtocolSupport(capabilities=capabilities, bfd=BfdSupport(**bounds))
+
+
+def check_routing_members(
+    *,
+    domain_id: str,
+    protocol: str,
+    capabilities: tuple[str, ...],
+    bfd: BfdConfig,
+    adapter: str,
+    node_ids: tuple[str, ...],
+) -> list[UnsupportedFeature]:
+    """Check routing-domain members against their own adapter's declaration.
+
+    Every node in ``node_ids`` runs ``adapter``, so the adapter's declaration
+    decides for each of them. Each refusal names the domain, the adapter, the
+    unsupported requirement and the members.
+    """
+    support = registered_adapter_support().get(adapter)
+    if support is None:
+        raise ValueError(f"workload adapter {adapter!r} is not registered")
+    gaps: list[tuple[FeatureCategory, str, str]] = []
+    protocol_support = support.routing.get(protocol)
+    if protocol_support is None:
+        gaps.append((FeatureCategory.ROUTING_PROTOCOL, protocol, f"protocol {protocol!r}"))
+    else:
+        for capability in capabilities:
+            if capability not in protocol_support.capabilities:
+                gaps.append(
+                    (
+                        FeatureCategory.ROUTING_CAPABILITY,
+                        f"{protocol}:{capability}",
+                        f"capability {capability!r} on protocol {protocol!r}",
+                    )
+                )
+        if bfd.enabled and protocol_support.bfd is None:
+            gaps.append(
+                (FeatureCategory.ROUTING_TIMER, f"{protocol}:bfd", f"BFD on protocol {protocol!r}")
+            )
+        elif bfd.enabled:
+            for name in _BFD_TIMER_FIELDS:
+                value = getattr(bfd, name)
+                low, high = getattr(protocol_support.bfd, name)
+                if not low <= value <= high:
+                    gaps.append(
+                        (
+                            FeatureCategory.ROUTING_TIMER,
+                            f"bfd.{name}={value}",
+                            f"BFD {name} {value}, outside the rendered range {low}..{high}",
+                        )
+                    )
+    members = _named_members(node_ids)
+    return [
+        UnsupportedFeature(
+            category=category,
+            value=value,
+            message=(
+                f"routing domain {domain_id!r} requires {requirement}; workload adapter "
+                f"{adapter!r} does not render it for {members}"
+            ),
+        )
+        for category, value, requirement in gaps
+    ]
 
 
 class RuntimeSupport(BaseModel):
@@ -186,12 +289,8 @@ class RuntimeSupport(BaseModel):
             supported_protocol_adapters=frozenset(),
             supported_ephemeris_providers=frozenset(),
             supported_ephemeris_frames=frozenset(),
-            supported_routing_protocols=SUPPORTED_STACK_PROTOCOLS,
-            supported_routing_capabilities=frozenset(
-                f"{protocol}:{capability}"
-                for protocol in ("isis", "ospf")
-                for capability in ("mpls", "segment_routing", "traffic_engineering")
-            ),
+            supported_routing_protocols=_registered_routing_protocols(),
+            supported_routing_capabilities=_registered_routing_capabilities(),
             supported_addressing_pools=frozenset({"loopbacks"}),
             supported_address_allocation_modes=frozenset({"by_node_order"}),
             supported_link_topologies=frozenset(
@@ -203,7 +302,7 @@ class RuntimeSupport(BaseModel):
             supported_ground_bbm_acquire_timeout_ticks=frozenset({1}),
             supported_clock_models=frozenset({"session"}),
             supported_propagators=frozenset({"two_body", "j2_mean_elements", "sgp4_tle"}),
-            supported_workload_adapters=frozenset({"frr"}),
+            supported_workload_adapters=frozenset(registered_adapter_support()),
             supports_payloads=True,
             ephemeris_required_bodies=frozenset({"luna", "mars"}),
         )
@@ -219,12 +318,8 @@ class RuntimeSupport(BaseModel):
             supported_protocol_adapters=frozenset({"static_ip"}),
             supported_ephemeris_providers=frozenset({"skyfield_bsp"}),
             supported_ephemeris_frames=frozenset({"gcrs"}),
-            supported_routing_protocols=SUPPORTED_STACK_PROTOCOLS,
-            supported_routing_capabilities=frozenset(
-                f"{protocol}:{capability}"
-                for protocol in ("isis", "ospf")
-                for capability in ("mpls", "segment_routing", "traffic_engineering")
-            ),
+            supported_routing_protocols=_registered_routing_protocols(),
+            supported_routing_capabilities=_registered_routing_capabilities(),
             supported_addressing_pools=frozenset({"loopbacks"}),
             supported_address_allocation_modes=frozenset({"by_node_order"}),
             supported_link_topologies=frozenset(
@@ -236,7 +331,7 @@ class RuntimeSupport(BaseModel):
             supported_ground_bbm_acquire_timeout_ticks=frozenset({1}),
             supported_clock_models=frozenset({"session"}),
             supported_propagators=frozenset({"two_body", "j2_mean_elements", "sgp4_tle"}),
-            supported_workload_adapters=frozenset({"frr"}),
+            supported_workload_adapters=frozenset(registered_adapter_support()),
             supports_payloads=True,
             ephemeris_required_bodies=frozenset({"luna"}),
         )

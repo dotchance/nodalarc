@@ -162,6 +162,7 @@ export function ExtensionsPanel({
                     value={timerValue(routingTimers, field.id)}
                     onChange={(value) => onUpdateTimers(timerPatch(field.id, value))}
                     min={field.minimum}
+                    max={field.maximum ?? undefined}
                     desc={field.description}
                     range={field.guidance}
                   />
@@ -169,6 +170,7 @@ export function ExtensionsPanel({
               </div>
             </div>
 
+            {protocolFacts.bfd_timer_fields && (
             <div className="wizard-section">
               <h3 className="wizard-section-title">{rules.bfd.heading}</h3>
               <label className="wizard-ext-item">
@@ -182,7 +184,7 @@ export function ExtensionsPanel({
               </label>
               {bfdEnabled && (
                 <div className="wizard-timer-list" style={{ marginTop: 8 }}>
-                  {rules.bfd.timer_fields.map((field) => (
+                  {protocolFacts.bfd_timer_fields.map((field) => (
                     <TimerField
                       key={field.id}
                       label={field.label}
@@ -190,6 +192,7 @@ export function ExtensionsPanel({
                       value={timerValue(routingTimers, field.id)}
                       onChange={(value) => onUpdateTimers(timerPatch(field.id, value))}
                       min={field.minimum}
+                      max={field.maximum ?? undefined}
                       desc={field.description}
                       range={field.guidance}
                     />
@@ -197,6 +200,7 @@ export function ExtensionsPanel({
                 </div>
               )}
             </div>
+            )}
           </>
       )}
     </>
@@ -205,9 +209,9 @@ export function ExtensionsPanel({
 
 // --- Timer field component ---
 
-function TimerField({ label, unit, value, onChange, desc, range, min }: {
+function TimerField({ label, unit, value, onChange, desc, range, min, max }: {
   label: string; unit?: string; value: number; onChange: (v: number) => void;
-  desc?: string; range?: string; min: number;
+  desc?: string; range?: string; min: number; max?: number;
 }) {
   return (
     <div className="wizard-timer-row">
@@ -219,6 +223,7 @@ function TimerField({ label, unit, value, onChange, desc, range, min }: {
             className="wizard-input wizard-input--sm"
             value={value}
             min={min}
+            max={max}
             onChange={(e) => {
               const v = Number(e.target.value);
               if (Number.isInteger(v)) onChange(v);

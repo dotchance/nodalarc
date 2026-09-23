@@ -56,9 +56,9 @@ from nodalarc.session_identity import (
     read_runtime_session_run_id_file,
     require_resolved_session_run_id,
 )
-from nodalarc.stack_resolver import ResolvedStack, resolve_domain_stack
 from nodalarc.workload_target import NODE_ID_LABEL
 
+from adapters.frr.stack import ResolvedStack, resolve_domain_stack
 from measurement.adapters import create_adapter
 from measurement.convergence_gate import ConvergenceGate
 
@@ -456,7 +456,6 @@ def _mi_stack_config_from_resolved(resolved: ResolvedSession) -> RoutingStackCon
         template_variables=stack.template_variables,
         mi_adapter=stack.mi_adapter,
         segment_routing=stack.segment_routing,
-        ttl_propagation=stack.ttl_propagation,
         max_compression=stack.max_compression,
     )
 

@@ -2,9 +2,10 @@
 set -e
 
 # Wait for ConfigMap volume mount to be populated by kubelet.
-# The Operator creates a per-node ConfigMap (frr-config-<node-id>) mounted
-# at /etc/frr-config/. kubelet populates the volume when the pod is
-# scheduled — no exec or sentinel file needed.
+# The Operator mounts the node's workload artifact ConfigMap at
+# /etc/frr-config/: the FRR adapter's frr.conf, daemons and _config_version.
+# kubelet populates the volume when the pod is scheduled — no exec or
+# sentinel file needed.
 CONFIG_SRC="/etc/frr-config/frr.conf"
 TIMEOUT=120
 WAITED=0
@@ -19,6 +20,13 @@ while [ ! -f "$CONFIG_SRC" ]; do
     fi
 done
 echo "ConfigMap mounted after ${WAITED}s"
+
+# The adapter's daemons file is the only daemon selection. /etc/frr is an
+# emptyDir, so without it watchfrr would start no daemons.
+if [ ! -f /etc/frr-config/daemons ]; then
+    echo "ERROR: /etc/frr-config/daemons is missing; the FRR adapter selects the daemons, exiting"
+    exit 1
+fi
 
 # Copy ConfigMap contents to writable /etc/frr/ (tmpfs emptyDir).
 # ConfigMap mounts are read-only; FRR needs to write to /etc/frr/.
@@ -139,12 +147,6 @@ if ip link show eth0 >/dev/null 2>&1; then
     ip link set eth0 name cni0
     echo "Renamed eth0 → cni0"
 fi
-
-# Ensure BFD daemon is enabled. The Dockerfile COPYs daemons with bfdd=yes,
-# but stale image caches may serve the base image's bfdd=no. This sed is
-# idempotent and guarantees bfdd runs regardless of which image layer wins.
-# The daemon is idle (zero overhead) when no protocol config requests BFD.
-sed -i 's/^bfdd=no/bfdd=yes/' /etc/frr/daemons
 
 # Hand off to FRR's stock docker-start (watchfrr reads /etc/frr/daemons)
 exec /usr/lib/frr/docker-start

@@ -1,36 +1,48 @@
 # Copyright 2024-2026 .chance (dotchance)
 # Licensed under the Apache License, Version 2.0. See LICENSE file.
-"""Template variable builder for catalog-resolved runtime sessions."""
+"""FRR template inputs for one routed node of a resolved session."""
 
 from __future__ import annotations
 
 import ipaddress
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from nodalarc.models.resolved_session import ResolvedNode, ResolvedRoutingDomain, ResolvedSession
+if TYPE_CHECKING:
+    from nodalarc.models.resolved_session import (
+        ResolvedNode,
+        ResolvedRoutingDomain,
+        ResolvedSession,
+    )
+
+    from adapters.frr.stack import ResolvedStack
+
+# Reference bandwidth for fixed-link IGP metrics: the metric of a fixed link
+# is this value over the link bandwidth, truncated to an integer.
+_REFERENCE_BANDWIDTH_MBPS = 10000
+# IGP metric of an access (ground) link.
+_ACCESS_LINK_METRIC = 10
+# Share of a terminal's transmit rate advertised as reservable, and as
+# unreserved at every priority, in MPLS-TE link parameters.
+_TE_RESERVABLE_FRACTION = 0.98
 
 
 def build_template_vars_from_resolved(
     resolved: ResolvedSession,
-    node_id: str,
+    node: ResolvedNode,
     *,
-    stack_variables: dict[str, Any] | None = None,
-    node_sid_index: int | None = None,
+    domain: ResolvedRoutingDomain,
+    stack: ResolvedStack,
+    node_sid_index: int | None,
 ) -> dict[str, Any]:
-    """Build FRR template variables from the catalog-resolved runtime view."""
-    node = resolved.node_by_id(node_id)
-    if node is None:
-        raise ValueError(f"unknown resolved node_id {node_id!r}")
+    """Build one node's FRR template inputs from the resolved runtime view."""
     if node.interfaces is None:
-        raise ValueError(f"resolved node {node_id!r} has no interface addresses")
-    if resolved.time is None:
-        raise ValueError("resolved session is missing time configuration for FRR rendering")
-    domain = _single_routing_domain_for_node(resolved, node)
-    result: dict[str, Any] = dict(stack_variables or {})
+        raise ValueError(f"resolved node {node.node_id!r} has no interface addresses")
+    result: dict[str, Any] = dict(stack.template_variables)
     if result.get("sr_enabled"):
         if node_sid_index is None:
             raise ValueError(
-                f"segment routing is enabled but no resolved SID index was provided for {node_id}"
+                f"segment routing is enabled but no resolved SID index was provided for "
+                f"{node.node_id}"
             )
         result["node_sid_index"] = node_sid_index
 
@@ -43,14 +55,9 @@ def build_template_vars_from_resolved(
     result["default_route_metric"] = default_metric
     result.update(
         {
-            "node_id": node.node_id,
             "hostname": node.node_id,
-            "node_type": "satellite" if node.kind == "satellite" else "ground_station",
             "area_id": _resolved_area_id(domain, node),
             "system_id": _isis_system_id(resolved, node),
-            "mgmt_interface": "eth0",
-            "compression_factor": resolved.time.compression,
-            "protocol": domain.protocol,
             "ipv4_loopback": _ip_from_interface(node.interfaces.lo0.ipv4, field="lo0.ipv4"),
             # v4-only nodes are a legitimate resolved shape; templates render
             # the v6 loopback only when the resolver assigned one.
@@ -59,8 +66,9 @@ def build_template_vars_from_resolved(
                 if node.interfaces.lo0.ipv6 is not None
                 else None
             ),
-            "interface_info": _resolved_interface_info(resolved, node, domain),
-            "neighbors": _resolved_neighbors(resolved, node),
+            "wan_interfaces": _wan_interfaces(
+                resolved, node, domain, te_enabled=stack.template_variables["te_enabled"]
+            ),
         }
     )
     boundary_routes = _boundary_static_routes(resolved, node, domain)
@@ -68,43 +76,121 @@ def build_template_vars_from_resolved(
     # Border nodes must redistribute boundary statics into their IGP, or the
     # rest of the domain never learns the exported reachability.
     result["redistribute_static"] = bool(boundary_routes) and domain.protocol in {"isis", "ospf"}
-
-    if node.kind == "satellite":
-        gnd_interfaces = [
-            iface.name for iface in node.wan_interfaces if iface.name.startswith("gnd")
-        ]
-        isl_interfaces = [
-            iface.name for iface in node.wan_interfaces if iface.name.startswith("isl")
-        ]
-        result.update(
-            {
-                "gnd_interfaces": gnd_interfaces,
-                "isl_interfaces": isl_interfaces,
-                "isl_count": len(isl_interfaces),
-            }
-        )
-        # Grid coordinates exist only for grid-born satellites (walker/
-        # ring planes). Individually placed satellites — GEO longitude
-        # slots, raw state vectors — legitimately have neither: no FRR
-        # template consumes them, identity never derives from them
-        # (system_id uses the resolver node index), and pod placement
-        # defaults an absent plane to bucket 0. Emitting them only when
-        # present keeps every consumer on its documented absent-key path.
-        if node.plane is not None and node.slot is not None:
-            result.update({"plane": node.plane, "slot": node.slot})
-        return result
-
-    if node.kind != "ground_station":
-        raise ValueError(f"unsupported resolved node kind for FRR rendering: {node.kind!r}")
-    result.update(
-        {
-            "gs_name": node.local_node_id,
-            "gnd_interfaces": [iface.name for iface in node.wan_interfaces],
-            "isl_interfaces": [],
-            "isl_count": 0,
-        }
-    )
     return result
+
+
+def _access_interface_names(node: ResolvedNode) -> list[str]:
+    """The node's access (ground-link) WAN interfaces."""
+    if node.kind == "satellite":
+        return [iface.name for iface in node.wan_interfaces if iface.name.startswith("gnd")]
+    if node.kind == "ground_station":
+        return [iface.name for iface in node.wan_interfaces]
+    raise ValueError(f"unsupported resolved node kind for FRR rendering: {node.kind!r}")
+
+
+def _te_link_params(node: ResolvedNode, interface: str) -> dict[str, str]:
+    """MPLS-TE bandwidth for one WAN interface, from its own terminal.
+
+    Maximum bandwidth is the terminal's transmit rate: what this end can send
+    over the link, whatever terminal the peer carries. FRR takes bytes per
+    second.
+    """
+    terminal_id = next(
+        (wan.terminal_id for wan in node.wan_interfaces if wan.name == interface), None
+    )
+    block = next(
+        (item for item in node.terminal_inventory if item.terminal_id == terminal_id), None
+    )
+    if block is None or block.transmit_mbps is None:
+        raise ValueError(
+            f"node {node.node_id!r} interface {interface!r} has no terminal transmit rate "
+            "for its traffic-engineering link parameters"
+        )
+    max_bw = block.transmit_mbps * 1_000_000 / 8
+    return {
+        "max_bw": f"{max_bw:g}",
+        "reservable_bw": f"{max_bw * _TE_RESERVABLE_FRACTION:g}",
+    }
+
+
+def _wan_interfaces(
+    resolved: ResolvedSession,
+    node: ResolvedNode,
+    domain: ResolvedRoutingDomain,
+    *,
+    te_enabled: bool,
+) -> list[dict[str, Any]]:
+    """Every WAN interface the node's FRR configuration names, once each.
+
+    Fixed links come from the node's non-access link candidates, in candidate
+    order; access links follow. ``static_only`` marks a fixed link that a
+    ``static_ip`` routing boundary crosses: it carries static routes and no
+    IGP. ``bfd`` marks every IGP link of a BFD-enabled domain; ``te`` carries
+    the MPLS-TE link parameters of every IGP link of a TE domain. ``ospf_area``
+    is present for OSPF domains: a fixed link whose peer sits in another
+    domain or area, and every access link, run in the backbone.
+    """
+    static_rules = _static_boundary_rule_ids(resolved)
+    node_area = _resolved_area_id(domain, node)
+    is_ospf = domain.protocol == "ospf"
+    bfd_enabled = domain.timers.bfd.enabled
+    interfaces: list[dict[str, Any]] = []
+    for candidate in resolved.link_candidates:
+        if candidate.kind == "access":
+            continue
+        interface_a, interface_b = candidate.fixed_interfaces
+        if candidate.node_a == node.node_id:
+            name, peer_id = interface_a, candidate.node_b
+        elif candidate.node_b == node.node_id:
+            name, peer_id = interface_b, candidate.node_a
+        else:
+            continue
+        peer = resolved.node_by_id(peer_id)
+        if peer is None or peer.interfaces is None:
+            raise ValueError(
+                f"link candidate {candidate.rule_id!r} references unresolved peer {peer_id!r}"
+            )
+        static_only = candidate.rule_id in static_rules
+        entry: dict[str, Any] = {
+            "name": name,
+            "static_only": static_only,
+            # A static_ip boundary link carries no IGP, so no IGP BFD or TE.
+            "bfd": bfd_enabled and not static_only,
+            "te": _te_link_params(node, name) if te_enabled and not static_only else None,
+            "metric": int(_REFERENCE_BANDWIDTH_MBPS / float(candidate.bandwidth_mbps)),
+            "peer_loopback_ipv4": _ip_from_interface(
+                peer.interfaces.lo0.ipv4,
+                field=f"{peer.node_id}.lo0.ipv4",
+            ),
+        }
+        # The peer is a router in exactly one domain whatever the protocol;
+        # OSPF also reads its area.
+        peer_domain = resolved.routing_domain_for(peer_id)
+        if is_ospf:
+            cross_area = domain.domain_id != peer_domain.domain_id or node_area != (
+                _resolved_area_id(peer_domain, peer)
+            )
+            entry["ospf_area"] = "0.0.0.0" if cross_area else node_area
+        interfaces.append(entry)
+    for name in _access_interface_names(node):
+        entry = {
+            "name": name,
+            "static_only": False,
+            "bfd": bfd_enabled,
+            "te": _te_link_params(node, name) if te_enabled else None,
+            "metric": _ACCESS_LINK_METRIC,
+        }
+        if is_ospf:
+            entry["ospf_area"] = "0.0.0.0"
+        interfaces.append(entry)
+    names = [entry["name"] for entry in interfaces]
+    duplicates = sorted({name for name in names if names.count(name) > 1})
+    if duplicates:
+        raise ValueError(
+            f"node {node.node_id!r} names WAN interface(s) {duplicates} as both a fixed "
+            "link and an access link"
+        )
+    return interfaces
 
 
 def _segment_peer_count(
@@ -140,7 +226,6 @@ def _timer_template_facts(domain: ResolvedRoutingDomain) -> dict[str, Any]:
     """
     timers = domain.timers
     facts: dict[str, Any] = {
-        "bfd_enabled": timers.bfd.enabled,
         "bfd_detect_multiplier": timers.bfd.detect_multiplier,
         "bfd_rx_interval": timers.bfd.rx_interval_ms,
         "bfd_tx_interval": timers.bfd.tx_interval_ms,
@@ -188,19 +273,6 @@ def _isis_system_id(resolved: ResolvedSession, node: ResolvedNode) -> str:
     return f"0000.{(value >> 16) & 0xFFFF:04x}.{value & 0xFFFF:04x}"
 
 
-def _single_routing_domain_for_node(
-    resolved: ResolvedSession,
-    node: ResolvedNode,
-) -> ResolvedRoutingDomain:
-    domains = [domain for domain in resolved.routing_domains if node.node_id in domain.node_ids]
-    if len(domains) != 1:
-        raise ValueError(
-            f"node {node.node_id!r} must resolve to exactly one routing domain for current "
-            f"FRR rendering; got {[domain.domain_id for domain in domains]}"
-        )
-    return domains[0]
-
-
 def _resolved_area_id(domain: ResolvedRoutingDomain, node: ResolvedNode) -> str:
     assignment = domain.area_assignment
     is_ospf = domain.protocol == "ospf"
@@ -246,63 +318,6 @@ def _resolved_area_id(domain: ResolvedRoutingDomain, node: ResolvedNode) -> str:
             f"for node {node.node_id!r}"
         )
     raise ValueError(f"unsupported area assignment strategy {assignment.strategy!r}")
-
-
-def _resolved_interface_info(
-    resolved: ResolvedSession,
-    node: ResolvedNode,
-    domain: ResolvedRoutingDomain,
-) -> dict[str, dict[str, Any]]:
-    static_rules = _static_boundary_rule_ids(resolved)
-    info: dict[str, dict[str, Any]] = {}
-    for candidate in resolved.link_candidates:
-        if candidate.kind == "access":
-            continue
-        interface_a, interface_b = candidate.fixed_interfaces
-        if candidate.node_a == node.node_id:
-            iface = interface_a
-            peer_id = candidate.node_b
-        elif candidate.node_b == node.node_id:
-            iface = interface_b
-            peer_id = candidate.node_a
-        else:
-            continue
-        peer = resolved.node_by_id(peer_id)
-        if peer is None or peer.interfaces is None:
-            raise ValueError(
-                f"link candidate {candidate.rule_id!r} references unresolved peer {peer_id!r}"
-            )
-        peer_domain = _single_routing_domain_for_node(resolved, peer)
-        node_area = _resolved_area_id(domain, node)
-        peer_area = _resolved_area_id(peer_domain, peer)
-        static_only = candidate.rule_id in static_rules
-        info[iface] = {
-            "peer_node_id": peer_id,
-            "link_type": f"{'static_ip' if static_only else 'link_rule'}:{candidate.rule_id}",
-            "priority": candidate.priority,
-            "peer_area_id": peer_area,
-            "cross_area": domain.domain_id != peer_domain.domain_id or node_area != peer_area,
-            "bandwidth_mbps": float(candidate.bandwidth_mbps),
-            "static_only": static_only,
-            "peer_loopback_ipv4": _ip_from_interface(
-                peer.interfaces.lo0.ipv4,
-                field=f"{peer.node_id}.lo0.ipv4",
-            ),
-        }
-    return info
-
-
-def _resolved_neighbors(resolved: ResolvedSession, node: ResolvedNode) -> dict[str, str]:
-    neighbors: dict[str, str] = {}
-    for candidate in resolved.link_candidates:
-        if candidate.kind == "access":
-            continue
-        interface_a, interface_b = candidate.fixed_interfaces
-        if candidate.node_a == node.node_id:
-            neighbors[interface_a] = candidate.node_b
-        elif candidate.node_b == node.node_id:
-            neighbors[interface_b] = candidate.node_a
-    return neighbors
 
 
 def _static_boundary_rule_ids(resolved: ResolvedSession) -> set[str]:
@@ -438,7 +453,8 @@ def _segment_template_facts(
     A segment joins the IGP exactly when the node originates its allocated
     prefix; it runs active only where the wired segment has a routed
     same-domain peer (broadcast adjacency on a real L2 segment) and stays
-    passive otherwise — the honest stub posture.
+    passive otherwise — the honest stub posture. BFD runs on every active
+    segment of a BFD-enabled domain and never on a passive one.
     """
     if node.interfaces is None or not node.interfaces.ethernet:
         return [], _originates_default(node), 100
@@ -466,14 +482,23 @@ def _segment_template_facts(
             addresses.append({"host_address": value, "metric": 10, "prefix": str(iface.network)})
             networks.add(str(iface.network))
         igp_enabled = bool(networks & originated_networks)
+        igp_active = _segment_peer_count(resolved, node, domain, name) >= 1
         covered.update(networks & originated_networks)
+        bfd = domain.timers.bfd.enabled and igp_enabled and igp_active
+        if bfd and segment.ipv4 is None:
+            raise ValueError(
+                f"node {node.node_id!r} runs {domain.protocol} with BFD actively on "
+                f"{name!r}, which has no IPv4 address; the FRR adapter configures the IGP "
+                "and its BFD sessions over IPv4"
+            )
         interfaces.append(
             {
                 "name": name,
                 "addresses": addresses,
                 "metric": 10,
                 "igp_enabled": igp_enabled,
-                "igp_active": _segment_peer_count(resolved, node, domain, name) >= 1,
+                "igp_active": igp_active,
+                "bfd": bfd,
             }
         )
     uncovered = sorted(originated_networks - covered)

@@ -550,7 +550,7 @@ def _isl_terminal(block: ResolvedTerminalBlock) -> IslTerminal:
         count=block.count,
         role=None,
         max_range_km=_required(block.max_range_km, block, "max_range_km"),
-        bandwidth_mbps=_required(block.bandwidth_mbps, block, "bandwidth_mbps"),
+        bandwidth_mbps=_required(block.slowest_direction_mbps, block, "bandwidth_mbps"),
         max_tracking_rate_deg_s=_required(
             block.tracking_rate_deg_s,
             block,
@@ -568,7 +568,7 @@ def _satellite_ground_terminal(
         type=block.medium,
         count=block.count,
         interface_indices=selection.interface_indices,
-        bandwidth_mbps=_required(block.bandwidth_mbps, block, "bandwidth_mbps"),
+        bandwidth_mbps=_required(block.slowest_direction_mbps, block, "bandwidth_mbps"),
         max_range_km=_required(block.max_range_km, block, "max_range_km"),
         field_of_regard_deg=_required(
             block.field_of_regard_deg,
@@ -591,7 +591,7 @@ def _ground_terminal(selection: ResolvedAccessTerminalSelection) -> GroundTermin
         type=block.medium,
         count=block.count,
         interface_indices=selection.interface_indices,
-        bandwidth_mbps=_required(block.bandwidth_mbps, block, "bandwidth_mbps"),
+        bandwidth_mbps=_required(block.slowest_direction_mbps, block, "bandwidth_mbps"),
         tracking_capacity=block.tracking_capacity or 1,
         max_range_km=_required(block.max_range_km, block, "max_range_km"),
         field_of_regard_deg=_required(

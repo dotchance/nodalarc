@@ -93,7 +93,7 @@ def _deterministic_node(node_id: str, available_nodes: list[str]) -> str:
 
 def compute_pod_placement(
     placement: Any,
-    node_vars: dict[str, dict],
+    pod_inventory: dict[str, dict],
     available_nodes: list[str],
 ) -> dict[str, str]:
     """Compute Kubernetes node placement from the platform-owned policy."""
@@ -112,25 +112,25 @@ def compute_pod_placement(
 
     if policy == "allOnOne":
         target = available_nodes[0]
-        return dict.fromkeys(node_vars, target)
+        return dict.fromkeys(pod_inventory, target)
 
     if policy == "planePerNode":
         result: dict[str, str] = {}
-        for node_id, variables in node_vars.items():
-            if variables.get("node_type") == "ground_station":
+        for node_id, facts in pod_inventory.items():
+            if facts.get("node_type") == "ground_station":
                 result[node_id] = _deterministic_node(node_id, available_nodes)
             else:
-                plane = variables.get("plane", 0)
+                plane = facts.get("plane", 0)
                 result[node_id] = available_nodes[plane % len(available_nodes)]
         return result
 
     if policy == "planeGroupPerNode":
         result = {}
-        for node_id, variables in node_vars.items():
-            if variables.get("node_type") == "ground_station":
+        for node_id, facts in pod_inventory.items():
+            if facts.get("node_type") == "ground_station":
                 result[node_id] = _deterministic_node(node_id, available_nodes)
             else:
-                plane = variables.get("plane", 0)
+                plane = facts.get("plane", 0)
                 group = plane // planes_per_group
                 result[node_id] = available_nodes[group % len(available_nodes)]
         return result

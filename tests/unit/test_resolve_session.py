@@ -705,7 +705,7 @@ def test_site_terminal_narrowing_and_boresight_placement_resolve(tmp_path: Path)
     ground = next(node for node in resolved.nodes if node.kind == "ground_station")
     terminal = ground.terminal_inventory[0]
 
-    assert terminal.bandwidth_mbps == 3500
+    assert (terminal.transmit_mbps, terminal.receive_mbps) == (4000, 3500)
     assert terminal.tracking_capacity == 1
     assert terminal.max_range_km == 1000
     assert terminal.min_elevation_deg == 20

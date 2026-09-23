@@ -21,6 +21,9 @@ from pathlib import Path
 from typing import Any, get_args
 
 ROOT = Path(__file__).resolve().parents[1]
+# The repository root carries the adapter packages that session resolution
+# reads; lib and services take precedence over it.
+sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "lib"))
 sys.path.insert(0, str(ROOT / "services"))
 

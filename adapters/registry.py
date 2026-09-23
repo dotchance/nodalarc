@@ -6,15 +6,24 @@ Core selects an adapter per node through this registry, keyed by adapter
 name: the value a profile's ``adapter:`` field carries. It is deliberately a
 plain, imported list — no filesystem discovery, no dynamic import. A new
 adapter enters the platform by being imported here and added to
-``_ADAPTERS``. That single edit, plus its runtime-support declaration, is the
-whole coupling surface between core and any one technology.
+``_ADAPTERS``; its ``support`` declaration travels with it. That single edit
+is the whole coupling surface between core and any one technology.
+
+Importing this module loads every adapter's declaration and no rendering
+dependency, so every service that resolves sessions can import it.
 """
 
 from __future__ import annotations
 
-from nodalarc.workloads.adapter import WorkloadAdapter
+from types import MappingProxyType
+from typing import TYPE_CHECKING
+
+from nodalarc.workloads.adapter import AdapterSupport, WorkloadAdapter
 
 from adapters.frr import FrrAdapter
+
+if TYPE_CHECKING:
+    from collections.abc import Mapping
 
 # Every adapter the platform knows, one instance each. Add a technology by
 # importing its adapter and listing it here.
@@ -24,7 +33,18 @@ _BY_NAME: dict[str, WorkloadAdapter] = {}
 for _adapter in _ADAPTERS:
     if _adapter.name in _BY_NAME:
         raise ValueError(f"two adapters claim the name {_adapter.name!r}")
+    if not isinstance(_adapter.support, AdapterSupport):
+        raise TypeError(f"adapter {_adapter.name!r} declares no AdapterSupport")
     _BY_NAME[_adapter.name] = _adapter
+
+_SUPPORT_BY_NAME: Mapping[str, AdapterSupport] = MappingProxyType(
+    {name: adapter.support for name, adapter in _BY_NAME.items()}
+)
+
+
+def registered_adapter_support() -> Mapping[str, AdapterSupport]:
+    """Every registered adapter's support declaration, keyed by adapter name."""
+    return _SUPPORT_BY_NAME
 
 
 def adapter_named(name: str | None) -> WorkloadAdapter | None:

@@ -117,8 +117,11 @@ export function BuilderInspector({ node, ephemeris }: BuilderInspectorProps) {
             {block.max_range_km !== null && (
               <KeyValueRow label="max range">{block.max_range_km.toFixed(0)} km</KeyValueRow>
             )}
-            {block.bandwidth_mbps !== null && (
-              <KeyValueRow label="bandwidth">{block.bandwidth_mbps.toFixed(0)} Mbps</KeyValueRow>
+            {block.transmit_mbps !== null && (
+              <KeyValueRow label="transmit">{block.transmit_mbps.toFixed(0)} Mbps</KeyValueRow>
+            )}
+            {block.receive_mbps !== null && (
+              <KeyValueRow label="receive">{block.receive_mbps.toFixed(0)} Mbps</KeyValueRow>
             )}
             {block.min_elevation_deg !== null && (
               <KeyValueRow label="min elevation">{block.min_elevation_deg.toFixed(1)}°</KeyValueRow>

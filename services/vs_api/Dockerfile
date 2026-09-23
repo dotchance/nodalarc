@@ -55,6 +55,9 @@ ENV PYTHONUNBUFFERED=1
 
 # Copy the shared library, canonical configuration models, and resolver.
 COPY lib/ lib/
+# Workload adapter support declarations: session resolution reads them
+# through the adapter registry. /app is already on PYTHONPATH.
+COPY adapters/ adapters/
 
 # Copy VS-API service
 COPY services/vs_api/ services/vs_api/

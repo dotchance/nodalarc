@@ -301,7 +301,7 @@ class TestWorkloadPreparationReconciliation:
     def test_missing_pods_are_created_with_the_prepared_identity(self):
         with _ReconcilerHarness(expected_count=7) as h:
             h.pods = []
-            h.mock("ensure_cm").return_value = {"session_id": "t", "node_vars": {}}
+            h.mock("ensure_cm").return_value = {"session_id": "t", "pod_inventory": {}}
             _run(_reconcile(h, phase="Creating"))
             pod_identity = h.mock("ensure_pods").call_args.args[3]
             assert pod_identity.selection_identity == _PREPARED_IDENTITY
@@ -403,7 +403,7 @@ class TestReconcileStateMachine:
     def test_fewer_pods_triggers_create(self):
         with _ReconcilerHarness(expected_count=7) as h:
             h.pods = [h.pod(f"p{i}") for i in range(3)]
-            h.mock("ensure_cm").return_value = {"session_id": "t", "node_vars": {}}
+            h.mock("ensure_cm").return_value = {"session_id": "t", "pod_inventory": {}}
             h.mock("ensure_pods").return_value = 7
             _run(_reconcile(h, phase="Creating"))
             h.mock("ensure_cm").assert_called_once()
@@ -761,7 +761,7 @@ class TestReconcileStateMachine:
     def test_ready_with_missing_pod_triggers_recreate(self):
         with _ReconcilerHarness(expected_count=7) as h:
             h.pods = [h.pod(f"p{i}") for i in range(6)]
-            h.mock("ensure_cm").return_value = {"session_id": "t", "node_vars": {}}
+            h.mock("ensure_cm").return_value = {"session_id": "t", "pod_inventory": {}}
             h.mock("ensure_pods").return_value = 7
             _run(_reconcile(h, phase="Ready"))
             h.mock("ensure_cm").assert_called_once()

@@ -73,8 +73,8 @@ from nodalarc.runtime_support import (
     RuntimeSupport,
     UnsupportedFeature,
     UnsupportedFeatureError,
-    adapter_renders,
     adapter_renders_routing,
+    check_routing_members,
 )
 from nodalarc.tle import tle_mean_elements
 
@@ -1522,9 +1522,8 @@ def _terminal_blocks_for_node(
                     access=mount["role"] == "access",
                 ),
                 tracking_rate_deg_s=float(limits["max_tracking_rate_deg_s"]),
-                # Slowest direction governs the usable link rate (codebase
-                # convention) — the optimistic max overstated asymmetric pairs.
-                bandwidth_mbps=float(min(bandwidth["transmit"], bandwidth["receive"])),
+                transmit_mbps=float(bandwidth["transmit"]),
+                receive_mbps=float(bandwidth["receive"]),
                 boresight=boresight,
                 source_ref=str(mount["terminal"]),
             )
@@ -2363,35 +2362,57 @@ def _check_workload_adapter_support(
             raise UnsupportedFeatureError([feature])
 
 
+def _check_domain_members(
+    domain: ResolvedRoutingDomain,
+    routers: list[_RuntimeNode],
+) -> None:
+    """Refuse a domain whose selected routers' adapters cannot render it.
+
+    Each router is checked against its own adapter's declaration; a union
+    across adapters cannot establish one node's support.
+    """
+    by_adapter: dict[str, list[str]] = {}
+    for item in routers:
+        assert item.profile_adapter is not None  # routers carry a routing adapter
+        by_adapter.setdefault(item.profile_adapter, []).append(item.node.node_id)
+    unsupported = [
+        feature
+        for adapter, node_ids in sorted(by_adapter.items())
+        for feature in check_routing_members(
+            domain_id=domain.domain_id,
+            protocol=domain.protocol,
+            capabilities=domain.capabilities,
+            bfd=domain.timers.bfd,
+            adapter=adapter,
+            node_ids=tuple(node_ids),
+        )
+    ]
+    if unsupported:
+        raise UnsupportedFeatureError(unsupported)
+
+
 def _resolve_routing_domains(
     cfg: SegmentSessionConfig,
     runtime_nodes: tuple[_RuntimeNode, ...],
 ) -> list[ResolvedRoutingDomain]:
     # A routing domain is a declaration about routers. A node is a router
-    # exactly when its profile's adapter renders routing configuration;
-    # membership derives from that router population.
+    # exactly when its profile's adapter declares routing support;
+    # membership derives from that router population, and every member's
+    # adapter must render the domain.
     if cfg.routing is None:
-        routers = tuple(
-            sorted(
-                item.node.node_id
-                for item in runtime_nodes
-                if adapter_renders(item.profile_adapter, "isis")
-            )
-        )
+        routers = [item for item in runtime_nodes if adapter_renders_routing(item.profile_adapter)]
         if not routers:
-            raise SessionResolutionError(
-                "session declares no routing and resolves zero routers rendering IS-IS"
-            )
-        return [
-            ResolvedRoutingDomain(
-                domain_id="default_domain",
-                protocol="isis",
-                timers=_effective_routing_timers("isis", None),
-                node_ids=routers,
-                capabilities=(),
-                area_assignment=None,
-            )
-        ]
+            raise SessionResolutionError("session declares no routing and resolves zero routers")
+        default_domain = ResolvedRoutingDomain(
+            domain_id="default_domain",
+            protocol="isis",
+            timers=_effective_routing_timers("isis", None),
+            node_ids=tuple(sorted(item.node.node_id for item in routers)),
+            capabilities=(),
+            area_assignment=None,
+        )
+        _check_domain_members(default_domain, routers)
+        return [default_domain]
     domains: list[ResolvedRoutingDomain] = []
     for domain in cfg.routing.domains:
         selected_ids: set[str] = set()
@@ -2409,30 +2430,26 @@ def _resolve_routing_domains(
                 capabilities.append("segment_routing")
             if domain.capabilities.traffic_engineering is not None:
                 capabilities.append("traffic_engineering")
-        # Membership is the routers among the selected nodes whose adapter
-        # renders this domain's protocol and declared capabilities.
-        selected_ids = {
-            item.node.node_id
+        # Membership is the routers among the selected nodes; selected hosts
+        # run no routing and stay outside.
+        routers = [
+            item
             for item in runtime_nodes
-            if item.node.node_id in selected_ids
-            and adapter_renders(item.profile_adapter, domain.protocol, tuple(capabilities))
-        }
-        if not selected_ids:
+            if item.node.node_id in selected_ids and adapter_renders_routing(item.profile_adapter)
+        ]
+        if not routers:
             raise SessionResolutionError(f"routing domain {domain.id!r} contains zero routers")
-        selected_nodes = tuple(
-            item.node for item in runtime_nodes if item.node.node_id in selected_ids
+        _validate_area_assignment(domain, tuple(item.node for item in routers))
+        resolved_domain = ResolvedRoutingDomain(
+            domain_id=domain.id,
+            protocol=domain.protocol,
+            timers=_effective_routing_timers(domain.protocol, domain.timers),
+            node_ids=tuple(sorted(item.node.node_id for item in routers)),
+            capabilities=tuple(capabilities),
+            area_assignment=domain.area_assignment,
         )
-        _validate_area_assignment(domain, selected_nodes)
-        domains.append(
-            ResolvedRoutingDomain(
-                domain_id=domain.id,
-                protocol=domain.protocol,
-                timers=_effective_routing_timers(domain.protocol, domain.timers),
-                node_ids=tuple(sorted(selected_ids)),
-                capabilities=tuple(capabilities),
-                area_assignment=domain.area_assignment,
-            )
-        )
+        _check_domain_members(resolved_domain, routers)
+        domains.append(resolved_domain)
     _validate_routing_domain_partition(domains, runtime_nodes)
     return domains
 
@@ -2639,7 +2656,7 @@ def _validate_routing_domain_partition(
     runtime_nodes: tuple[_RuntimeNode, ...],
 ) -> None:
     # Coverage is owed to the routers: the nodes whose profile's adapter
-    # renders routing configuration.
+    # declares routing support.
     domain_ids_by_node: dict[str, list[str]] = {
         item.node.node_id: []
         for item in runtime_nodes
@@ -3213,12 +3230,14 @@ def _matching_terminal_bandwidth_mbps(
             f"node {node.node_id!r} has no terminal block for role={role!r} "
             f"medium={medium!r} mount={terminal_id!r}"
         )
-    if any(block.bandwidth_mbps is None for block in matches):
+    if any(block.slowest_direction_mbps is None for block in matches):
         raise SessionResolutionError(
             f"node {node.node_id!r} matching terminal mount is missing bandwidth"
         )
     bandwidths = {
-        float(block.bandwidth_mbps) for block in matches if block.bandwidth_mbps is not None
+        float(block.slowest_direction_mbps)
+        for block in matches
+        if block.slowest_direction_mbps is not None
     }
     if len(bandwidths) != 1:
         mounts = [block.terminal_id for block in matches]

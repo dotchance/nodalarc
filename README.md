@@ -247,7 +247,7 @@ lib/            Shared Python library
 images/         Container images built and loaded with the platform
 catalog/        Shipped catalog: bodies, terminals, orbits, nodes, sites, profiles, payloads, sessions
 deploy/         Helm chart and deployment tooling
-configs/        Runtime templates and platform configuration
+configs/        Platform configuration and ephemerides
 tests/          Unit and integration tests
 docs/           User, operations, and developer documentation
 scripts/        Lifecycle, host bootstrap, and operational scripts

@@ -55,6 +55,7 @@ from nodalarc.substrate.wiring_status import (
 )
 from nodalarc_operator.session_deployer import (
     _create_terminal_ssh_keys,
+    _pod_inventory,
     _required_substrate_pairs,
     check_wiring_complete,
     compute_platform_hash,
@@ -67,7 +68,7 @@ from nodalarc_operator.session_deployer import (
 )
 from nodalarc_operator.session_pods import SessionPodIdentity
 
-from tests.catalog_session_fixtures import build_catalog_session_fixture
+from tests.catalog_session_fixtures import build_catalog_session_fixture, resolve_catalog_session
 
 PROJECT_ROOT = Path(__file__).parent.parent.parent
 
@@ -135,8 +136,8 @@ def _spec_catalog(spec: dict) -> FilesystemCatalogReadView:
     return FilesystemCatalogReadView(roots)
 
 
-def _make_node_vars(planes=4, sats_per_plane=3, gs_count=2):
-    """Build minimal node_vars dict for placement tests.
+def _make_pod_inventory(planes=4, sats_per_plane=3, gs_count=2):
+    """Build a minimal pod inventory for placement tests.
     Pure dict construction - no file I/O, no K8s, no constellation expansion."""
     nv = {}
     for p in range(planes):
@@ -258,20 +259,20 @@ class TestPodPlacement:
     """Tests compute_pod_placement() - assigns pods to K8s nodes."""
 
     def test_all_on_one_single_node(self):
-        nv = _make_node_vars(planes=2, sats_per_plane=3, gs_count=2)
+        nv = _make_pod_inventory(planes=2, sats_per_plane=3, gs_count=2)
         placement = {"policy": "allOnOne"}
         result = compute_pod_placement(placement, nv, ["node01"])
         assert all(v == "node01" for v in result.values())
         assert len(result) == len(nv)
 
     def test_all_on_one_ignores_extra_nodes(self):
-        nv = _make_node_vars(planes=2, sats_per_plane=3, gs_count=2)
+        nv = _make_pod_inventory(planes=2, sats_per_plane=3, gs_count=2)
         placement = {"policy": "allOnOne"}
         result = compute_pod_placement(placement, nv, ["node01", "node02", "node03", "node04"])
         assert all(v == "node01" for v in result.values())
 
     def test_plane_per_node_same_plane_same_node(self):
-        nv = _make_node_vars(planes=4, sats_per_plane=3, gs_count=0)
+        nv = _make_pod_inventory(planes=4, sats_per_plane=3, gs_count=0)
         placement = {"policy": "planePerNode"}
         nodes = ["node01", "node02", "node03", "node04"]
         result = compute_pod_placement(placement, nv, nodes)
@@ -282,7 +283,7 @@ class TestPodPlacement:
         assert plane0_nodes != plane1_nodes
 
     def test_plane_per_node_wraps_modulo(self):
-        nv = _make_node_vars(planes=6, sats_per_plane=2, gs_count=0)
+        nv = _make_pod_inventory(planes=6, sats_per_plane=2, gs_count=0)
         placement = {"policy": "planePerNode"}
         nodes = ["node01", "node02", "node03", "node04"]
         result = compute_pod_placement(placement, nv, nodes)
@@ -291,7 +292,7 @@ class TestPodPlacement:
         assert plane0_node == plane4_node
 
     def test_plane_per_node_gs_uses_hrw(self):
-        nv = _make_node_vars(planes=2, sats_per_plane=2, gs_count=7)
+        nv = _make_pod_inventory(planes=2, sats_per_plane=2, gs_count=7)
         placement = {"policy": "planePerNode"}
         nodes = ["node01", "node02", "node03", "node04"]
         result = compute_pod_placement(placement, nv, nodes)
@@ -299,7 +300,7 @@ class TestPodPlacement:
         assert len(gs_nodes) > 1
 
     def test_plane_group_per_node_groups(self):
-        nv = _make_node_vars(planes=4, sats_per_plane=2, gs_count=0)
+        nv = _make_pod_inventory(planes=4, sats_per_plane=2, gs_count=0)
         placement = {"policy": "planeGroupPerNode", "planes_per_group": 2}
         nodes = ["node01", "node02", "node03", "node04"]
         result = compute_pod_placement(placement, nv, nodes)
@@ -311,12 +312,12 @@ class TestPodPlacement:
         with pytest.raises(ValueError, match="planes_per_group"):
             compute_pod_placement(
                 {"policy": "planeGroupPerNode"},
-                _make_node_vars(planes=1, sats_per_plane=1, gs_count=0),
+                _make_pod_inventory(planes=1, sats_per_plane=1, gs_count=0),
                 ["node01"],
             )
 
     def test_no_nodes_raises(self):
-        nv = _make_node_vars(planes=1, sats_per_plane=1, gs_count=0)
+        nv = _make_pod_inventory(planes=1, sats_per_plane=1, gs_count=0)
         placement = {"policy": "allOnOne"}
         with pytest.raises(ValueError, match="No available"):
             compute_pod_placement(placement, nv, [])
@@ -325,7 +326,7 @@ class TestPodPlacement:
         with pytest.raises(ValueError, match="Unknown placement policy"):
             compute_pod_placement(
                 {"policy": "bogus"},
-                _make_node_vars(planes=1, sats_per_plane=1, gs_count=0),
+                _make_pod_inventory(planes=1, sats_per_plane=1, gs_count=0),
                 ["node01"],
             )
 
@@ -853,7 +854,7 @@ def _pod_identity(context: dict, owner_ref: dict) -> SessionPodIdentity:
         owner_ref=owner_ref,
         session_run_id=context["session_run_id"],
         selection_identity=context["prepared_workloads"].identity,
-        node_ids=context["node_vars"],
+        node_ids=context["pod_inventory"],
     )
 
 
@@ -915,6 +916,39 @@ def _existing_session_pod(
 # ---------------------------------------------------------------------------
 # Class 5: TestWiringManifest
 # ---------------------------------------------------------------------------
+
+
+class TestPodInventory:
+    """The Operator's pod inventory comes from resolved nodes alone."""
+
+    def test_inventory_carries_kind_grid_position_and_site_for_every_node(self, tmp_path):
+        resolved = resolve_catalog_session(
+            build_catalog_session_fixture(
+                name="inventory-session",
+                constellation={"planes": {"count": 2, "sats_per_plane": 2}},
+                ground_stations={"stations": ["a", "b"]},
+                base_path=tmp_path,
+            )
+        )
+
+        inventory = _pod_inventory(resolved)
+
+        assert set(inventory) == {node.node_id for node in resolved.nodes}
+        for node in resolved.nodes:
+            expected = {"node_type": "satellite" if node.kind == "satellite" else "ground_station"}
+            if node.kind == "ground_station":
+                expected["gs_name"] = node.local_node_id
+            if node.plane is not None and node.slot is not None:
+                expected.update({"plane": node.plane, "slot": node.slot})
+            assert inventory[node.node_id] == expected
+
+    def test_operator_deployer_imports_no_adapter_internals(self):
+        source = (
+            PROJECT_ROOT / "services" / "nodalarc_operator" / "session_deployer.py"
+        ).read_text(encoding="utf-8")
+
+        assert "adapters.frr" not in source
+        assert "template_vars" not in source
 
 
 class TestWiringManifest:
@@ -1150,6 +1184,33 @@ class TestWiringManifest:
 
         assert manifest["nodes"]
         assert all(node["mpls_enable"] is True for node in manifest["nodes"].values())
+
+    @pytest.mark.parametrize(
+        ("extensions", "mpls_sysctls", "segment_routing"),
+        [
+            (
+                ["sr"],
+                {"net.mpls.platform_labels": "100000", "net.mpls.ip_ttl_propagate": "0"},
+                True,
+            ),
+            (["mpls"], {"net.mpls.platform_labels": "100000"}, False),
+        ],
+    )
+    def test_manifest_applies_the_domain_kernel_requirements(
+        self, tmp_path, extensions, mpls_sysctls, segment_routing
+    ):
+        spec = _make_catalog_spec(tmp_path, protocol="isis", extensions=extensions)
+        manifest = self._build_and_extract(tmp_path, spec=spec)
+
+        assert manifest["nodes"]
+        for node in manifest["nodes"].values():
+            mpls = {
+                key: value for key, value in node["sysctls"].items() if key.startswith("net.mpls.")
+            }
+            assert mpls == mpls_sysctls
+            assert node["mpls_enable"] is True
+            assert node["segment_routing"] is segment_routing
+            assert node["sysctls"]["net.ipv4.conf.all.rp_filter"] == "0"
 
     def test_manifest_requires_runtime_session_id(self, tmp_path):
         spec = _make_catalog_spec(tmp_path)
@@ -2040,7 +2101,7 @@ class TestPodCreationProgress:
 
     def _context(self):
         return {
-            "node_vars": {"sat-a": {"node_type": "satellite"}},
+            "pod_inventory": {"sat-a": {"node_type": "satellite"}},
             "pod_placement": {"sat-a": "node01"},
             "session_id": "run-test-0001",
             "session_run_id": "run-test-0001",

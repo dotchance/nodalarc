@@ -1,5 +1,3 @@
-hostname {{ hostname }}
-log syslog informational
 ip forwarding
 ipv6 forwarding
 
@@ -8,32 +6,23 @@ interface lo
 {% if ipv6_loopback %}
  ipv6 address {{ ipv6_loopback }}/128
 {% endif %}
-{% if protocol == "isis" %}
- ip router isis NODAL
- isis passive
-{% endif %}
 exit
 
-{% for iface_name, info in interface_info.items() %}
-interface {{ iface_name }}
+{% for iface in wan_interfaces %}
+interface {{ iface.name }}
  ip address {{ ipv4_loopback }}/32
-{% if protocol == "isis" and not info.static_only %}
- ip router isis NODAL
-{% endif %}
 {% if protocol != "static" %}
  no ipv6 nd suppress-ra
 {% endif %}
-exit
+{% if iface.te %}
+ link-params
+  enable
+  max-bw {{ iface.te.max_bw }}
+  max-rsv-bw {{ iface.te.reservable_bw }}
+{% for priority in range(8) %}
+  unrsv-bw {{ priority }} {{ iface.te.reservable_bw }}
 {% endfor %}
-
-{% for iface in gnd_interfaces %}
-interface {{ iface }}
- ip address {{ ipv4_loopback }}/32
-{% if protocol == "isis" %}
- ip router isis NODAL
-{% endif %}
-{% if protocol != "static" %}
- no ipv6 nd suppress-ra
+ exit-link-params
 {% endif %}
 exit
 {% endfor %}

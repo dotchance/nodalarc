@@ -67,6 +67,66 @@ class AdapterNodeConfig:
             object.__setattr__(self, "args", args)
 
 
+def _check_bounds(name: str, bounds: tuple[int, int]) -> None:
+    low, high = bounds
+    if not 1 <= low <= high:
+        raise ValueError(f"{name} bounds must satisfy 1 <= low <= high; got {bounds}")
+
+
+@dataclass(frozen=True, slots=True)
+class BfdSupport:
+    """The BFD timer values an adapter renders, as inclusive bounds.
+
+    Field names match the session grammar's ``timers.bfd`` fields, so the
+    common support check compares each authored value with the bound of the
+    same name.
+    """
+
+    detect_multiplier: tuple[int, int]
+    rx_interval_ms: tuple[int, int]
+    tx_interval_ms: tuple[int, int]
+
+    def __post_init__(self) -> None:
+        _check_bounds("detect_multiplier", self.detect_multiplier)
+        _check_bounds("rx_interval_ms", self.rx_interval_ms)
+        _check_bounds("tx_interval_ms", self.tx_interval_ms)
+
+
+@dataclass(frozen=True, slots=True)
+class RoutingProtocolSupport:
+    """What an adapter renders for one routing-domain protocol.
+
+    ``capabilities`` are the domain capability names the adapter renders for
+    the protocol. ``bfd`` is None when the adapter renders no BFD for it.
+    """
+
+    capabilities: frozenset[str] = frozenset()
+    bfd: BfdSupport | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class AdapterSupport:
+    """An adapter's declaration of the session features it renders.
+
+    ``routing`` maps each routing-domain protocol the adapter renders to what
+    it renders for that protocol; an empty mapping declares a non-routing
+    adapter. The declaration is plain data: reading it loads no template and
+    imports no rendering dependency, so every service that resolves sessions
+    can read it.
+    """
+
+    routing: Mapping[str, RoutingProtocolSupport] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        routing = MappingProxyType(dict(self.routing))
+        for protocol, support in routing.items():
+            if not isinstance(protocol, str) or not protocol:
+                raise ValueError("adapter routing protocols must be non-empty strings")
+            if not isinstance(support, RoutingProtocolSupport):
+                raise TypeError(f"adapter routing support for {protocol!r} has the wrong type")
+        object.__setattr__(self, "routing", routing)
+
+
 @dataclass(frozen=True, slots=True)
 class SessionContext:
     """Read access to the whole resolved session for one adapter invocation.
@@ -91,12 +151,14 @@ class WorkloadAdapter(Protocol):
     """Translate one resolved node into its image's native configuration.
 
     ``name`` is the adapter's identity: the value a profile's ``adapter:``
-    field carries, matching the runtime-support renderability declaration.
-    The explicit registry keys on it. ``render_node`` is pure: resolved facts
-    in, native config out, no I/O and no Kubernetes calls.
+    field carries. The explicit registry keys on it. ``support`` declares the
+    session features the adapter renders; runtime support reads it to gate
+    sessions and to derive router populations. ``render_node`` is pure:
+    resolved facts in, native config out, no I/O and no Kubernetes calls.
     """
 
     name: str
+    support: AdapterSupport
 
     def render_node(
         self,

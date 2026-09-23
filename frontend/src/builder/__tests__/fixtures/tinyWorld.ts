@@ -32,7 +32,8 @@ function block(
     min_elevation_deg: elev,
     field_of_regard_deg: null,
     tracking_rate_deg_s: null,
-    bandwidth_mbps: null,
+    transmit_mbps: null,
+    receive_mbps: null,
     boresight: null,
     source_ref: "x",
   };

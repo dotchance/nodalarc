@@ -1,19 +1,28 @@
-hostname {{ hostname }}
-log file /var/log/frr/ospfd.log informational
-
 {# Timer and BFD values are resolver-owned per-domain facts supplied by the
    producer (routing.domains[].timers); the template carries no fallbacks. #}
-
 router ospf
 {% if redistribute_static %}
  redistribute static
 {% endif %}
  ospf router-id {{ ipv4_loopback }}
-{% if te_enabled | default(false) %}
+{# Traffic engineering and segment routing both flood opaque LSAs, which
+   ospfd originates only with the opaque capability enabled. #}
+{% if te_enabled or sr_enabled %}
+ capability opaque
+{% endif %}
+{% if te_enabled %}
  mpls-te on
  mpls-te router-address {{ ipv4_loopback }}
 {% endif %}
+{% if sr_enabled %}
+ segment-routing on
+ segment-routing global-block {{ srgb_start }} {{ srgb_end }} local-block {{ srlb_start }} {{ srlb_end }}
+ segment-routing prefix {{ ipv4_loopback }}/32 index {{ node_sid_index }}
+{% endif %}
  timers throttle spf {{ ospf_spf_delay }} {{ ospf_spf_initial_hold }} {{ ospf_spf_max_hold }}
+{% if default_route_originate %}
+ default-information originate always metric {{ default_route_metric }}
+{% endif %}
 exit
 
 interface lo
@@ -21,34 +30,16 @@ interface lo
  ip ospf passive
 exit
 
-{% for iface_name, info in interface_info.items() %}
-{% if not info.static_only %}
-interface {{ iface_name }}
-{% if info.cross_area %}
- ip ospf area 0.0.0.0
-{% else %}
- ip ospf area {{ area_id }}
-{% endif %}
+{% for iface in wan_interfaces if not iface.static_only %}
+interface {{ iface.name }}
+ ip ospf area {{ iface.ospf_area }}
  ip ospf network point-to-point
- ip ospf cost {{ (reference_bandwidth / info.bandwidth_mbps) | int }}
+ ip ospf cost {{ iface.metric }}
  ip ospf hello-interval {{ ospf_hello_interval }}
  ip ospf dead-interval {{ ospf_dead_interval }}
-{% if bfd_enabled %}
+{% if iface.bfd %}
  ip ospf bfd
-{% endif %}
-exit
-{% endif %}
-{% endfor %}
-
-{% for iface in gnd_interfaces %}
-interface {{ iface }}
- ip ospf area 0.0.0.0
- ip ospf network point-to-point
- ip ospf cost 10
- ip ospf hello-interval {{ ospf_hello_interval }}
- ip ospf dead-interval {{ ospf_dead_interval }}
-{% if bfd_enabled %}
- ip ospf bfd
+ ip ospf bfd profile NODAL
 {% endif %}
 exit
 {% endfor %}
@@ -60,12 +51,10 @@ interface {{ segment.name }}
 {% if not segment.igp_active %}
  ip ospf passive
 {% endif %}
+{% if segment.bfd %}
+ ip ospf bfd
+ ip ospf bfd profile NODAL
+{% endif %}
 exit
 {% endif %}
 {% endfor %}
-
-{% if default_route_originate %}
-router ospf
- default-information originate always metric {{ default_route_metric }}
-exit
-{% endif %}

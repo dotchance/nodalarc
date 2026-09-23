@@ -3854,6 +3854,8 @@ def catalog_permutations(session_id: str | None = None) -> list[dict]:
     import sys as _sys
 
     repo = Path(__file__).resolve().parents[2]
+    # Session resolution reads the adapter packages at the repository root.
+    _sys.path.insert(0, str(repo))
     _sys.path.insert(0, str(repo / "lib"))
     from nodalarc.catalog_paths import CatalogRoots
     from nodalarc.models.resolved_session import SourceContext

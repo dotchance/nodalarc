@@ -40,6 +40,9 @@ ENV PYTHONPATH=/app/lib:/app/services:/app
 
 # Copy shared library, OME module, and static catalog data
 COPY lib/ lib/
+# Workload adapter support declarations: session resolution reads them
+# through the adapter registry. /app is already on PYTHONPATH.
+COPY adapters/ adapters/
 COPY services/ome/ services/ome/
 COPY catalog/ catalog/
 COPY configs/ephemerides/ configs/ephemerides/

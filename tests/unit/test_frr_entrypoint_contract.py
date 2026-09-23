@@ -5,7 +5,7 @@
 The session pod owns its config lifecycle: the entrypoint's watcher must
 converge the RUNNING daemons to the ConfigMap's intended config, and the
 readiness sentinel may only move when that convergence actually happened.
-Two failure classes are pinned here:
+Three failure classes are pinned here:
 
 1. Additive reload theater — ``vtysh -f`` only sources commands, so config
    REMOVED in a new version silently survives in the daemons (a reused pod
@@ -14,6 +14,9 @@ Two failure classes are pinned here:
 2. A lying sentinel — copying ``.config_version`` unconditionally makes the
    readiness probe report "converged" for a pod whose daemons still run the
    old config. The sentinel copy must be gated on reload success.
+3. An image that overrides the adapter — the FRR adapter's ``daemons`` file
+   is the only daemon selection. The image ships no daemons file of its own,
+   edits none, and refuses to start FRR when the mounted one is missing.
 """
 
 from __future__ import annotations
@@ -21,7 +24,8 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-ENTRYPOINT = Path(__file__).resolve().parents[2] / "images" / "frr" / "entrypoint.sh"
+IMAGE_DIR = Path(__file__).resolve().parents[2] / "images" / "frr"
+ENTRYPOINT = IMAGE_DIR / "entrypoint.sh"
 
 
 def _watcher_code_lines() -> list[str]:
@@ -79,3 +83,29 @@ def test_sentinel_only_moves_on_reload_success() -> None:
         "only; on failure the sentinel stays stale so the probe reports the "
         "pod as not converged"
     )
+
+
+def _code_lines(text: str) -> list[str]:
+    return [
+        line for line in text.splitlines() if line.strip() and not line.lstrip().startswith("#")
+    ]
+
+
+def test_image_ships_and_edits_no_daemon_selection() -> None:
+    assert not (IMAGE_DIR / "daemons").exists()
+    dockerfile = _code_lines((IMAGE_DIR / "Dockerfile").read_text())
+    assert not any("daemons" in line for line in dockerfile if line.startswith("COPY"))
+    entrypoint = _code_lines(ENTRYPOINT.read_text())
+    assert not any("sed" in line and "daemons" in line for line in entrypoint)
+
+
+def test_entrypoint_refuses_to_start_frr_without_the_adapter_daemons_file() -> None:
+    code = _code_lines(ENTRYPOINT.read_text())
+
+    check = next((i for i, line in enumerate(code) if "! -f /etc/frr-config/daemons" in line), None)
+    handoff = next(i for i, line in enumerate(code) if "exec /usr/lib/frr/docker-start" in line)
+    assert check is not None, "entrypoint must check for the mounted daemons file"
+    assert check < handoff
+    refusal = code[check : check + 4]
+    assert any("ERROR" in line for line in refusal)
+    assert any(line.strip() == "exit 1" for line in refusal)

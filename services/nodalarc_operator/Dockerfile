@@ -48,7 +48,7 @@ COPY services/nodalarc_operator/ services/nodalarc_operator/
 # calls through the explicit registry). /app is already on PYTHONPATH.
 COPY adapters/ adapters/
 
-# Copy deployment templates and static catalog data used by the resolver.
+# Copy platform configuration and static catalog data used by the resolver.
 COPY configs/ configs/
 COPY catalog/ catalog/
 

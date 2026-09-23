@@ -131,28 +131,44 @@ def test_shipped_session_computes_real_steps(path: Path) -> None:
     )
 
 
-def test_shipped_session_renders_template_vars_for_every_node(shipped_session) -> None:
+def test_shipped_session_renders_every_node_through_its_adapter(shipped_session) -> None:
     """Every node of every shipped session must reach the deploy-time
     render stage. The geo sessions deployed zero times after the resolver
-    cutover because template-vars building hard-required plane/slot —
-    grid coordinates that individually placed satellites (GEO longitude
-    slots) legitimately lack — and nothing exercised the render stage
-    until a live `make session`. This closes that gap for the whole
-    catalog: resolve AND render, not merely resolve."""
-    from nodalarc.template_vars import build_template_vars_from_resolved
+    cutover because rendering hard-required plane/slot — grid coordinates
+    that individually placed satellites (GEO longitude slots) legitimately
+    lack — and nothing exercised the render stage until a live
+    `make session`. This closes that gap for the whole catalog: resolve AND
+    render through each node's own adapter, not merely resolve."""
+    from nodalarc.workloads.adapter import SessionContext
+    from nodalarc_operator.session_deployer import _pod_inventory
 
-    path, resolved = shipped_session
+    from adapters.registry import adapter_named
+
+    path, _resolved = shipped_session
+    resolution = load_session_resolution_from_file(
+        path, origin="test.shipped_sessions", run_id="run-test-0042", catalog=shipped_read_view()
+    )
+    resolved = resolution.resolved
+    context = SessionContext(resolved)
+    rendered = 0
     for node in resolved.nodes:
-        if node.forwarding == "host":
-            # Processing hosts run no routing stack and render nothing.
+        adapter = adapter_named(resolution.workload_profiles[node.profile].adapter)
+        if adapter is None:
+            # A profile without an adapter is self-describing; nothing renders.
             continue
-        result = build_template_vars_from_resolved(resolved, node.node_id)
-        assert result["node_id"] == node.node_id
+        files = adapter.render_node(node, context).files
+        assert files, f"{path.name}: {node.node_id} rendered no configuration"
+        rendered += 1
+    assert rendered, f"{path.name}: no node rendered adapter configuration"
+
+    inventory = _pod_inventory(resolved)
+    for node in resolved.nodes:
         if node.kind == "satellite" and (node.plane is None or node.slot is None):
-            assert "plane" not in result and "slot" not in result, (
+            assert "plane" not in inventory[node.node_id], (
                 f"{path.name}: non-grid satellite {node.node_id} must not "
                 "carry fabricated grid coordinates"
             )
+            assert "slot" not in inventory[node.node_id]
 
 
 def test_shipped_session_domains_are_single_components(shipped_session) -> None:

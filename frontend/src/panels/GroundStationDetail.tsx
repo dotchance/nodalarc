@@ -17,6 +17,7 @@ import { Icon } from "../ui/icons/Icon";
 import { TaxonomyChip } from "../ui/Badge";
 import { REGIME_TINT } from "../taxonomy/regime";
 import { tokens } from "../styles/tokens";
+import { areaCSSColor } from "../globe/colors";
 
 interface GroundStationDetailProps {
   node: NodeState;
@@ -208,13 +209,10 @@ export function GroundStationDetail({ node, snapshot, onSelect }: GroundStationD
         </div>
       ) : null}
       <div className="detail-row">
-        <span className="detail-label">Role</span>
-        <span className="detail-value">Gateway</span>
-      </div>
-
-      <div className="detail-row">
-        <span className="detail-label">Area</span>
-        <span className="detail-value">ground</span>
+        <span className="detail-label">Routing Area</span>
+        <span className="detail-value" style={{ color: areaCSSColor(node.routing_area) }}>
+          {node.routing_area ?? "none"}
+        </span>
       </div>
       {node.prefix && (
         <div className="detail-row">

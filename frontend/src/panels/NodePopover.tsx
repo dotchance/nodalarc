@@ -39,7 +39,7 @@ export function NodePopover({ snapshot, selection, regime, onClose, onOpenCli }:
     }
     if (node.routing_area) linkedAreas.add(node.routing_area);
     role = node.node_type === "ground_station"
-      ? "Gateway"
+      ? "Ground station"
       : linkedAreas.size > 1 ? "Router (ABR)" : "Router";
   }
 

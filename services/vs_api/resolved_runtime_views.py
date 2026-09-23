@@ -15,6 +15,10 @@ class TracerNode:
     node_type: str
     sid: int | None
     loopback_ipv4: str
+    # Every IPv4 address the resolver assigned the node: its loopback, then
+    # its numbered Ethernet interfaces. A traceroute hop answering from any of
+    # them is this node.
+    addresses_ipv4: tuple[str, ...]
     # TEMPORARY (host-node trace stopgap): a host-forwarding node runs no
     # routing daemon and its container carries no trace tooling, so it cannot
     # be a real trace endpoint. Until there is a proper substrate-truth path
@@ -55,6 +59,11 @@ def tracer_node_registry(resolution: SessionResolution) -> dict[str, TracerNode]
         if node.interfaces is None or node.interfaces.lo0.ipv4 is None:
             continue
         loopback = str(ipaddress.ip_interface(node.interfaces.lo0.ipv4).ip)
+        ethernet = tuple(
+            str(ipaddress.ip_interface(address.ipv4).ip)
+            for address in node.interfaces.ethernet.values()
+            if address.ipv4 is not None
+        )
         # TEMPORARY: a host node's derived attachment names its FRR gateway;
         # the tracer substitutes it because the host itself cannot be traced.
         gateway = node.host_attachment.gateway_node_id if node.host_attachment else None
@@ -63,6 +72,7 @@ def tracer_node_registry(resolution: SessionResolution) -> dict[str, TracerNode]
             node_type=node.kind,
             sid=sid_by_node.get(node.node_id),
             loopback_ipv4=loopback,
+            addresses_ipv4=(loopback, *ethernet),
             trace_gateway_node_id=gateway,
         )
     return nodes

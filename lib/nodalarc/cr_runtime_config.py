@@ -22,6 +22,14 @@ CR_KIND = "ConstellationSpec"
 CR_PLURAL = "constellationspecs"
 CR_NAME = "current-session"
 
+# Provenance annotations VS-API writes on every ConstellationSpec it creates.
+SOURCE_KIND_ANNOTATION = "nodalarc.io/source-kind"
+SOURCE_ID_ANNOTATION = "nodalarc.io/source-id"
+SOURCE_REVISION_ANNOTATION = "nodalarc.io/source-revision"
+DOCUMENT_DIGEST_ANNOTATION = "nodalarc.io/document-digest"
+CLOSURE_DIGEST_ANNOTATION = "nodalarc.io/closure-digest"
+CATALOG_GENERATION_ANNOTATION = "nodalarc.io/catalog-generation"
+
 
 class ConstellationSpecSpec(BaseModel):
     """The one shape of ``spec`` every writer emits and every reader accepts.

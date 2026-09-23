@@ -93,21 +93,31 @@ export interface LinkDecisionTrace {
   endpoint_segments?: [string, string] | null;
 }
 
+export type TraceState = "running" | "reached" | "not_reached" | "failed";
+
+/** The live measured path between two nodes, one traceroute per direction.
+ *  Each hop is the node that owns the answering address, an address no node
+ *  owns, or "*" when nothing answered. rtt_ms exists only when the destination answered; error exists
+ *  only when the trace could not run. */
 export interface TracedPath {
   flow_id: string;
   src_node: string;
   dst_node: string;
   hops: string[];
-  reverse_hops?: string[];
-  hop_rtts?: (number | null)[];
-  reverse_hop_rtts?: (number | null)[];
-  rtt_ms?: number;
-  reverse_rtt_ms?: number;
-  asymmetry_detected?: boolean;
-  method?: string;
-  path_valid_until?: string;
-  path_valid_seconds?: number;
-  traced_at?: string;
+  hop_rtts: (number | null)[];
+  state: TraceState;
+  rtt_ms: number | null;
+  error: string | null;
+  reverse_hops: string[];
+  reverse_hop_rtts: (number | null)[];
+  reverse_state: TraceState;
+  reverse_rtt_ms: number | null;
+  reverse_error: string | null;
+  asymmetry_detected: boolean | null;
+  /** False once the trace loop has stopped; the last result stays shown. */
+  tracing: boolean;
+  traced_at: string;
+  sim_time: string;
 }
 
 export interface NetworkHealth {

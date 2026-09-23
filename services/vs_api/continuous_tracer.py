@@ -1,17 +1,13 @@
 # Copyright 2024-2026 .chance (dotchance)
 # Licensed under the Apache License, Version 2.0. See LICENSE file.
-"""Continuous path tracer — traces forward and reverse paths in a loop.
+"""Continuous live path trace between two nodes.
 
-Runs as an asyncio task, executing tracepath (or CSPF) at regular intervals.
-Enriches each link with live netem delay from the kernel. Predicts the next
-topology change by scanning the OME timeline.
-
-Per spec: uses tracepath (not traceroute). tracepath doesn't need -s source
-binding because once IS-IS/OSPF converges, the FRR routing table has specific
-routes to destination loopbacks via ISL/ground interfaces, which are more
-specific than the K3s default route.
-
-Forward and reverse traces run concurrently (spec line 358).
+Each cycle runs traceroute from each end toward the other end's loopback,
+inside the nodes' own workloads, so the path shown is the path real packets
+took through the forwarding plane. Each direction reports what answered at
+every hop and how the trace ended: running, reached, not_reached, or failed
+with the reason it could not run. The trace repeats on an interval, and at
+once when a link on the traced path changes.
 """
 
 from __future__ import annotations
@@ -20,76 +16,106 @@ import asyncio
 import concurrent.futures
 import contextlib
 import logging
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
+from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Any
 
-from nodalarc.models.path import (
-    LiveTraceDirection,
-    LiveTraceLink,
-    LiveTraceResult,
-    PathHop,
-    TracepathResult,
-)
-from nodalarc.models.vs_api import TracedPath
-from nodalarc.platform_config import PlatformConfig
-from nodalarc.tracepath_parser import parse_tracepath
+import kubernetes.client
+import kubernetes.stream
+from nodalarc.models.vs_api import TracedPath, TraceState
 from nodalarc.workload_target import WorkloadTargetError, read_workload_target
 
-from vs_api.timeline_scanner import TimelineScanner
+from vs_api.resolved_runtime_views import TracerNode
+from vs_api.traceroute import TracerouteHop, TracerouteOutputError, parse_traceroute
 
 log = logging.getLogger(__name__)
 
+TRACE_FLOW_ID = "__continuous_trace__"
+SILENT_HOP = "*"
+
+# A direction that did not reach its destination is traced again after this
+# many seconds, so a path that comes up is shown within a second.
+_UNREACHED_RETRACE_SECONDS = 1.0
+
+# BusyBox traceroute: ICMP, numeric, one probe per hop. The per-hop wait is an
+# integer number of seconds (BusyBox rejects a fractional -w) and must exceed
+# the cumulative round trip to the farthest hop, because traceroute stops early
+# only when the destination answers: an Earth-Luna path sits near 3.1 s, so four
+# seconds reaches the lunar hops. The hop limit fails a down path fast.
+_TRACEROUTE_WAIT_S = 4
+_TRACEROUTE_MAX_HOPS = 20
+# Poll the exec stream at this interval so each printed hop reaches the UI
+# within about two seconds.
+_EXEC_POLL_S = 2
+
+
+class UntraceableNodeError(ValueError):
+    """A trace endpoint has no loopback address to trace to or from."""
+
+
+@dataclass(frozen=True, slots=True)
+class _Direction:
+    hops: tuple[str, ...]
+    hop_rtts: tuple[float | None, ...]
+    state: TraceState
+    rtt_ms: float | None
+    error: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class _Endpoint:
+    """A traced node and the node whose workload runs its traceroute.
+
+    TEMPORARY host-node stopgap: a host node has no routing daemon and no
+    trace tooling, so its traceroute runs from the FRR gateway it attaches
+    to. The shown path then omits the host-to-gateway LAN hop.
+    """
+
+    node: TracerNode
+    runs_from: TracerNode
+
 
 class ContinuousTracer:
-    """Async continuous path tracer."""
+    """Traces one node pair in both directions until stopped."""
 
     def __init__(
         self,
-        node_registry: dict[str, Any],
-        interface_map: dict[tuple[str, str], tuple[str, str]],
-        pid_map: dict[str, int],
-        trace_mode: str,
-        config: PlatformConfig,
-        timeline_path: str | None,
-        get_sim_time: Callable[[], str],
-        on_path_change: Callable[[str, str, list[str], list[str]], None] | None = None,
+        *,
+        node_registry: Mapping[str, TracerNode],
+        namespace: str,
+        interval_s: float,
+        core_v1: Callable[[], kubernetes.client.CoreV1Api],
+        read_sim_time: Callable[[], str],
+        on_path_change: Callable[[str, str, list[str], list[str]], None],
     ) -> None:
         self._node_registry = node_registry
-        self._interface_map = interface_map
-        self._pid_map = pid_map
-        self._trace_mode = trace_mode
-        self._config = config
-        self._get_sim_time = get_sim_time
-        self._on_path_change = on_path_change
-
-        # Build IP → node_id lookup
-        self._ip_to_node: dict[str, str] = {}
+        self._node_by_address: dict[str, str] = {}
         for node_id, node in node_registry.items():
-            loopback = node.get("loopback_ipv4") if isinstance(node, dict) else node.loopback_ipv4
-            self._ip_to_node[loopback] = node_id
-
-        self._timeline_scanner = TimelineScanner(timeline_path) if timeline_path else None
+            for address in node.addresses_ipv4:
+                owner = self._node_by_address.setdefault(address, node_id)
+                if owner != node_id:
+                    raise ValueError(f"address {address} is assigned to {owner} and {node_id}")
+        self._namespace = namespace
+        self._interval_s = interval_s
+        self._core_v1 = core_v1
+        self._read_sim_time = read_sim_time
+        self._on_path_change = on_path_change
         self._task: asyncio.Task | None = None
-        self._latest: LiveTraceResult | None = None
-        self._src: str = ""
-        self._dst: str = ""
-        # Set by notify_topology_change() to wake the trace loop early
+        self._latest: TracedPath | None = None
+        self._src: _Endpoint | None = None
+        self._dst: _Endpoint | None = None
+        # Set by notify_topology_change() to wake the trace loop early.
         self._retrace_event = asyncio.Event()
-        # Seconds to wait after a topology change before re-tracing,
-        # giving OSPF time to converge with the new satellite.
-        self._convergence_delay_s = 2.0
 
     async def start(self, src: str, dst: str) -> None:
-        """Start continuous tracing between src and dst."""
+        """Start tracing between src and dst, replacing any running trace."""
         await self.stop()
-        self._src = src
-        self._dst = dst
-        self._latest = None
+        self._src = self._endpoint(src)
+        self._dst = self._endpoint(dst)
         self._task = asyncio.create_task(self._trace_loop())
 
     async def stop(self) -> None:
-        """Stop the trace loop."""
+        """Stop the trace loop and forget its result."""
         if self._task is not None:
             self._task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
@@ -98,27 +124,13 @@ class ContinuousTracer:
         self._latest = None
 
     def notify_topology_change(self, node_a: str, node_b: str) -> None:
-        """Signal that a link changed — wake the trace loop early.
-
-        Called by the VS-API link event handler when a LinkUp or LinkDown
-        affects a ground station.  The trace loop wakes, waits for OSPF
-        convergence, then re-traces.
-        """
-        if not self.active:
+        """Wake the trace loop when a link change touches the traced path."""
+        if not self.active or self._src is None or self._dst is None:
             return
-        # Only wake if the change involves src, dst, or a node in the current path.
-        # Do NOT retrace on every topology change when no result exists yet —
-        # that causes starvation because ISL links cycle continuously.
-        traced_nodes: set[str] = set()
+        watched = {self._src.node.node_id, self._dst.node.node_id}
         if self._latest is not None:
-            traced_nodes = {h.node_id for h in self._latest.forward.hops}
-            traced_nodes |= {h.node_id for h in self._latest.reverse.hops}
-        if (
-            node_a in (self._src, self._dst)
-            or node_b in (self._src, self._dst)
-            or node_a in traced_nodes
-            or node_b in traced_nodes
-        ):
+            watched |= set(self._latest.hops) | set(self._latest.reverse_hops)
+        if node_a in watched or node_b in watched:
             self._retrace_event.set()
 
     @property
@@ -126,591 +138,286 @@ class ContinuousTracer:
         return self._task is not None and not self._task.done()
 
     @property
-    def src(self) -> str:
-        return self._src
+    def src(self) -> str | None:
+        return self._src.node.node_id if self._src is not None else None
 
     @property
-    def dst(self) -> str:
-        return self._dst
-
-    @property
-    def latest_result(self) -> LiveTraceResult | None:
-        return self._latest
+    def dst(self) -> str | None:
+        return self._dst.node.node_id if self._dst is not None else None
 
     @property
     def traced_path(self) -> TracedPath | None:
-        """Convert latest result to TracedPath for StateSnapshot."""
-        r = self._latest
-        if r is None:
-            return None
-        fwd_hops = [h.node_id for h in r.forward.hops]
-        rev_hops = [h.node_id for h in r.reverse.hops]
-        fwd_rtts = [h.rtt_ms for h in r.forward.hops]
-        rev_rtts = [h.rtt_ms for h in r.reverse.hops]
-        return TracedPath(
-            flow_id="__continuous_trace__",
-            src_node=r.src,
-            dst_node=r.dst,
-            hops=fwd_hops,
-            reverse_hops=rev_hops,
-            hop_rtts=fwd_rtts,
-            reverse_hop_rtts=rev_rtts,
-            rtt_ms=r.forward.rtt_ms,
-            reverse_rtt_ms=r.reverse.rtt_ms,
-            asymmetry_detected=r.forward.asymmetry_detected or r.reverse.asymmetry_detected,
-            method=r.method,
-            path_valid_until=r.path_valid_until,
-            path_valid_seconds=r.path_valid_seconds,
-            traced_at=r.traced_at,
-        )
+        """The latest trace, including one that stopped on an internal error."""
+        return self._latest
+
+    def _endpoint(self, node_id: str) -> _Endpoint:
+        node = self._node_registry.get(node_id)
+        if node is None:
+            raise UntraceableNodeError(f"{node_id} has no loopback address to trace")
+        gateway_id = node.trace_gateway_node_id
+        if gateway_id is None:
+            return _Endpoint(node=node, runs_from=node)
+        gateway = self._node_registry.get(gateway_id)
+        if gateway is None:
+            raise UntraceableNodeError(
+                f"{node_id} is traced from its gateway {gateway_id}, which has no loopback address"
+            )
+        return _Endpoint(node=node, runs_from=gateway)
 
     async def _trace_loop(self) -> None:
-        """Main trace loop — runs until cancelled."""
         loop = asyncio.get_running_loop()
-        prev_fwd_hops: list[str] = []
-
-        while True:
-            try:
-                sim_time = self._get_sim_time()
-                now = datetime.now(UTC).isoformat()
-
-                if self._trace_mode == "cspf":
-                    result = await self._trace_cspf(sim_time, now)
-                else:
-                    result = await loop.run_in_executor(
-                        None,
-                        self._trace_tracepath,
-                        sim_time,
-                        now,
+        previous_hops: list[str] | None = None
+        try:
+            while True:
+                result = await loop.run_in_executor(None, self._trace_once)
+                self._latest = result
+                if previous_hops is not None and result.hops != previous_hops:
+                    self._on_path_change(
+                        result.src_node, result.dst_node, previous_hops, result.hops
                     )
+                previous_hops = result.hops
 
-                if result is not None:
-                    fwd_hops = [h.node_id for h in result.forward.hops]
-                    # Path change detection
-                    if prev_fwd_hops and fwd_hops != prev_fwd_hops and self._on_path_change:
-                        try:
-                            self._on_path_change(self._src, self._dst, prev_fwd_hops, fwd_hops)
-                        except Exception as exc:
-                            log.warning("on_path_change callback error: %s", exc)
-                    prev_fwd_hops = fwd_hops
-                    self._latest = result
-
-                # Adaptive sleep — wake early if a topology change is signalled
-                interval = self._config.trace_interval_seconds
-                if result and result.path_valid_seconds is not None:  # noqa: SIM102
-                    if result.path_valid_seconds < self._config.trace_fast_window_seconds:
-                        interval = self._config.trace_interval_fast_seconds
-
-                # On failed trace, retry faster (1s) instead of full interval
-                if result is not None and len(result.forward.hops) <= 1:
-                    interval = 1.0
-
+                both_reached = result.state == "reached" and result.reverse_state == "reached"
+                interval = self._interval_s if both_reached else _UNREACHED_RETRACE_SECONDS
                 self._retrace_event.clear()
-                try:
+                with contextlib.suppress(TimeoutError):
                     await asyncio.wait_for(self._retrace_event.wait(), timeout=interval)
-                    # Woke early from topology change — wait for OSPF convergence
-                    log.info(
-                        "Topology change detected, waiting %.1fs for convergence",
-                        self._convergence_delay_s,
-                    )
-                    await asyncio.sleep(self._convergence_delay_s)
-                except TimeoutError:
-                    pass  # Normal interval elapsed
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            # The loop ends; the dialog shows the failure until the user stops
+            # or restarts the trace.
+            log.error(
+                "Continuous trace %s -> %s stopped: %s", self.src, self.dst, exc, exc_info=exc
+            )
+            self._latest = self._stopped(
+                f"The trace stopped on an internal error ({type(exc).__name__}); see the VS-API log"
+            )
 
-            except asyncio.CancelledError:
-                raise
-            except Exception as exc:
-                log.error("Trace loop error: %s", exc, exc_info=True)
-                await asyncio.sleep(self._config.trace_interval_seconds)
+    def _trace_once(self) -> TracedPath:
+        """Trace both directions concurrently and assemble the result."""
+        src, dst = self._require_endpoints()
+        sim_time = self._read_sim_time()
+        traced_at = datetime.now(UTC).isoformat()
+        running = _Direction(
+            hops=(dst.node.node_id,),
+            hop_rtts=(None,),
+            state="running",
+            rtt_ms=None,
+            error=None,
+        )
 
-    def _run_tracepath(self, node_id: str, target: str, on_partial=None) -> dict:
-        """Run ICMP traceroute via kubernetes client exec from one node's workload.
+        def publish_forward_progress(forward: _Direction) -> None:
+            self._latest = self._assemble(
+                forward, running, tracing=True, traced_at=traced_at, sim_time=sim_time
+            )
 
-        Uses traceroute -I (ICMP), 1 query per hop. The per-hop timeout is an
-        INTEGER number of seconds: the FRR image ships BusyBox traceroute,
-        which rejects a fractional -w (a sub-second value fails the whole
-        command and the trace silently returns nothing).
+        # Until the first cycle completes, the forward path grows hop by hop in
+        # the UI. After that, each completed cycle replaces the last one whole.
+        first_cycle = self._latest is None or self._latest.state == "running"
+        progress = publish_forward_progress if first_cycle else None
+        with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
+            forward_future = pool.submit(self._trace_direction, src, dst, progress)
+            reverse_future = pool.submit(self._trace_direction, dst, src, None)
+            forward = forward_future.result()
+            reverse = reverse_future.result()
+        return self._assemble(
+            forward, reverse, tracing=True, traced_at=traced_at, sim_time=sim_time
+        )
 
-        The timeout must exceed the CUMULATIVE round-trip time to the farthest
-        hop, because traceroute only stops early when it actually reaches the
-        destination. For an Earth-Luna path the cislunar crosslink adds ~2.56 s
-        RTT on top of the ~0.6 s Earth-side latency, so the lunar hops sit near
-        3.1 s cumulative — just over a 3 s window, which is why a 3 s timeout
-        never reached Luna and instead ran every silent hop out to the max.
-        Four seconds clears the cislunar hops so the trace reaches the
-        destination and stops. -m is bounded to a realistic path length so a
-        genuinely-down path fails fast instead of walking 30 silent hops.
+    def _trace_direction(
+        self,
+        origin: _Endpoint,
+        target: _Endpoint,
+        on_progress: Callable[[_Direction], None] | None,
+    ) -> _Direction:
+        target_address = target.runs_from.loopback_ipv4
 
-        A responsive hop still returns immediately; only a silent hop costs the
-        full timeout. Output is traceroute format — the tracepath parser
-        handles both.
+        def progress(stdout: str) -> None:
+            if on_progress is None:
+                return
+            complete = stdout[: stdout.rfind("\n") + 1]
+            hops = parse_traceroute(complete)
+            if hops:
+                on_progress(self._direction(origin, hops, target_address, finished=False))
 
-        This IS the real path: a well-known tool sending real packets through
-        the actual forwarding plane, so its output is trusted ground truth.
-        Slow is acceptable; wrong is not. What is not acceptable is hanging
-        with no output — real traceroute prints each hop as it resolves — so
-        the caller streams partial hops through ``on_partial`` as they arrive.
-        A model/SPF-computed path (what the platform PREDICTS forwarding would
-        do) is a separate thing entirely and must be labeled as a prediction,
-        never shown in place of this measured path.
+        try:
+            stdout, error = self._run_traceroute(origin.runs_from.node_id, target_address, progress)
+            if error is not None:
+                return self._failed(origin, error)
+            hops = parse_traceroute(stdout)
+        except TracerouteOutputError as exc:
+            return self._failed(origin, f"unreadable traceroute output: {exc}")
+        return self._direction(origin, hops, target_address, finished=True)
+
+    def _run_traceroute(
+        self, node_id: str, target_address: str, on_output: Callable[[str], None]
+    ) -> tuple[str, str | None]:
+        """Run traceroute in a node's workload; return its output and any failure.
+
+        The workload is read on every trace, so a replaced pod is traced
+        where it runs now.
         """
-        import kubernetes.client
-        import kubernetes.config
-        import kubernetes.stream
-
+        v1 = self._core_v1()
         try:
-            kubernetes.config.load_incluster_config()
-        except kubernetes.config.ConfigException:
-            kubernetes.config.load_kube_config()
-
-        v1 = kubernetes.client.CoreV1Api()
-        ns = self._config.kubernetes_namespace
-
-        try:
-            workload = read_workload_target(v1, ns, node_id)
+            workload = read_workload_target(v1, self._namespace, node_id)
         except WorkloadTargetError as exc:
-            return {"ok": False, "error": str(exc), "stdout": "", "stderr": ""}
+            return "", str(exc)
 
+        stdout = ""
+        stderr = ""
         try:
             resp = kubernetes.stream.stream(
                 v1.connect_get_namespaced_pod_exec,
                 workload.pod_name,
-                ns,
+                self._namespace,
                 container=workload.container,
-                command=["traceroute", "-I", "-n", "-w", "4", "-q", "1", "-m", "20", target],
+                command=[
+                    "traceroute",
+                    "-I",
+                    "-n",
+                    "-w",
+                    str(_TRACEROUTE_WAIT_S),
+                    "-q",
+                    "1",
+                    "-m",
+                    str(_TRACEROUTE_MAX_HOPS),
+                    target_address,
+                ],
                 stderr=True,
                 stdout=True,
                 stdin=False,
                 tty=False,
                 _preload_content=False,
             )
-            stdout = ""
-            stderr = ""
-            published_hops = 0
-            while resp.is_open():
-                # Poll at 2 s so a newly-printed hop reaches the UI within
-                # ~2 s. An idle poll (a slow hop still in flight) just returns
-                # nothing and costs one wasted tick — harmless.
-                resp.update(timeout=2)
+        except Exception as exc:
+            # The exec boundary: whatever stops the command from starting is
+            # this direction's failure, shown with its cause class.
+            log.error("traceroute exec in %s failed: %s", workload.pod_name, exc, exc_info=exc)
+            return "", f"traceroute could not start in {workload.pod_name} ({type(exc).__name__})"
+        try:
+            # One read after the stream closes collects output that arrived
+            # with the close.
+            closed = False
+            while not closed:
+                closed = not resp.is_open()
+                if not closed:
+                    resp.update(timeout=_EXEC_POLL_S)
                 chunk = resp.read_stdout()
                 if chunk:
                     stdout += chunk
-                    # Stream to the caller each time a new complete hop line
-                    # lands, so the UI grows the path hop by hop instead of
-                    # waiting for the whole (possibly slow) command to finish.
-                    if on_partial is not None:
-                        complete_hops = stdout.count("\n")
-                        if complete_hops > published_hops:
-                            published_hops = complete_hops
-                            try:
-                                on_partial(stdout)
-                            except Exception as exc:  # never let streaming break the trace
-                                log.debug("partial trace callback error: %s", exc)
-                err_chunk = resp.read_stderr()
-                if err_chunk:
-                    stderr += err_chunk
-            # Convert traceroute output to tracepath format for the parser
-            stdout = self._traceroute_to_tracepath(stdout, target)
-            return {"ok": True, "stdout": stdout, "stderr": stderr}
-        except Exception as exc:
-            return {"ok": False, "error": str(exc), "stdout": "", "stderr": ""}
+                    on_output(stdout)
+                stderr += resp.read_stderr()
+            returncode = resp.returncode
+        finally:
+            resp.close()
+        if returncode != 0:
+            detail = stderr.strip().splitlines()[-1] if stderr.strip() else "no error output"
+            return stdout, f"traceroute exited {returncode} in {workload.pod_name}: {detail}"
+        return stdout, None
 
-    @staticmethod
-    def _traceroute_to_tracepath(traceroute_output: str, target: str) -> str:
-        """Convert traceroute output to tracepath format for the existing parser.
-
-        traceroute: ' 1  10.0.0.1  5.123 ms'  or  ' 1  *'
-        tracepath:  ' 1:  10.0.0.1  5.123ms reached'
-        """
-        import re
-
-        lines = []
-        last_hop = 0
-        for line in traceroute_output.splitlines():
-            if line.startswith("traceroute to"):
-                continue
-            m = re.match(r"^\s*(\d+)\s+(\d+\.\d+\.\d+\.\d+)\s+([\d.]+)\s+ms", line)
-            if m:
-                hop_num = int(m.group(1))
-                ip = m.group(2)
-                rtt = m.group(3)
-                reached = " reached" if ip == target else ""
-                lines.append(f" {hop_num}:  {ip}  {rtt}ms{reached}")
-                last_hop = hop_num
-        if last_hop > 0:
-            lines.append(f"     Resume: pmtu 9000 hops {last_hop} back {last_hop}")
-        return "\n".join(lines) + "\n"
-
-    def _trace_endpoint(self, node):
-        """TEMPORARY: the node to actually run a trace from/to.
-
-        For a routed node this is the node itself. For a host node — which
-        has no routing daemon and no in-container trace tooling — this is the
-        FRR gateway it attaches to. A proper fix would trace the real LAN-to-
-        constellation path; this substitution is a stopgap only.
-        """
-        gateway_id = node.trace_gateway_node_id
-        if gateway_id is None:
-            return node
-        gateway = self._node_registry.get(gateway_id)
-        return gateway if gateway is not None else node
-
-    def _trace_tracepath(self, sim_time: str, now: str) -> LiveTraceResult | None:
-        """Run forward + reverse tracepath concurrently, then enrich."""
-        src_node = self._node_registry.get(self._src)
-        dst_node = self._node_registry.get(self._dst)
-        if not src_node or not dst_node:
-            return None
-
-        # TEMPORARY HACK — host-node trace stopgap. A host-forwarding node
-        # (an application endpoint on a site LAN) runs no routing daemon and
-        # its container ships no trace tooling, so it cannot be a trace
-        # endpoint. Until there is an honest host-aware path view, trace from
-        # the FRR gateway the host attaches to, toward the other endpoint's
-        # gateway. This shows the real CONSTELLATION path but OMITS the
-        # host<->gateway LAN hop at each end, so it is not the true end-to-end
-        # path. Replace with a substrate-truth trace that models the LAN
-        # segment. When neither endpoint is a host, this is a no-op and the
-        # trace runs exactly as before.
-        src_exec = self._trace_endpoint(src_node)
-        dst_exec = self._trace_endpoint(dst_node)
-
-        # Stream the forward path: publish each hop as traceroute prints it so
-        # the UI shows the path growing (hop 1, hop 2, ...) instead of hanging
-        # for a full slow cycle. The partial view carries the forward hops so
-        # far with the reverse still empty; the complete result (with reverse
-        # and full enrichment) replaces it when the cycle finishes.
-        def _publish_partial_forward(raw_traceroute: str) -> None:
-            parsed = parse_tracepath(
-                self._traceroute_to_tracepath(raw_traceroute, dst_exec.loopback_ipv4)
-            )
-            hops = self._map_hops(parsed, src_node)
-            if len(hops) <= 1:
-                return  # only the source seed so far — nothing to show yet
-            self._latest = LiveTraceResult(
-                src=self._src,
-                dst=self._dst,
-                forward=LiveTraceDirection(
-                    hops=hops,
-                    links=self._build_links(hops),
-                    rtt_ms=self._extract_rtt(parsed),
-                    asymmetry_detected=False,
-                ),
-                reverse=LiveTraceDirection(hops=[], links=[], rtt_ms=0.0, asymmetry_detected=False),
-                traced_at=now,
-                sim_time=sim_time,
-                topology_state_id="",
-                method="tracepath",
-                trace_mode=self._trace_mode,
-            )
-
-        # Run forward and reverse concurrently (spec line 358)
-        with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
-            fwd_future = pool.submit(
-                self._run_tracepath,
-                src_exec.node_id,
-                dst_exec.loopback_ipv4,
-                _publish_partial_forward,
-            )
-            rev_future = pool.submit(
-                self._run_tracepath,
-                dst_exec.node_id,
-                src_exec.loopback_ipv4,
-            )
-            fwd_resp = fwd_future.result()
-            rev_resp = rev_future.result()
-
-        fwd_stdout = fwd_resp.get("stdout", "")
-        rev_stdout = rev_resp.get("stdout", "")
-
-        if not fwd_stdout and not fwd_resp.get("ok", True):
-            log.warning(
-                "Forward tracepath %s→%s failed: %s",
-                self._src,
-                self._dst,
-                fwd_resp.get("error", "unknown"),
-            )
-        if not rev_stdout and not rev_resp.get("ok", True):
-            log.warning(
-                "Reverse tracepath %s→%s failed: %s",
-                self._dst,
-                self._src,
-                rev_resp.get("error", "unknown"),
-            )
-
-        # Parse with tracepath parser
-        fwd_parsed = parse_tracepath(fwd_stdout)
-        rev_parsed = parse_tracepath(rev_stdout)
-
-        fwd_hops = self._map_hops(fwd_parsed, src_node)
-        rev_hops = self._map_hops(rev_parsed, dst_node)
-
-        # Build links and read netem delays
-        fwd_links = self._build_links(fwd_hops)
-        rev_links = self._build_links(rev_hops)
-
-        all_links = fwd_links + rev_links
-        fwd_links = all_links[: len(fwd_links)]
-        rev_links = all_links[len(fwd_links) :]
-
-        # Path validity — spec line 258: path_valid_until is ISO 8601 sim_time
-        path_valid_until: str | None = None
-        path_valid_seconds: float | None = None
-        if self._timeline_scanner is not None:
-            all_node_ids = {h.node_id for h in fwd_hops} | {h.node_id for h in rev_hops}
-            next_event_time = self._timeline_scanner.scan_next_event(all_node_ids, sim_time)
-            if next_event_time:
-                path_valid_until = next_event_time
-                try:
-                    t_next = datetime.fromisoformat(next_event_time)
-                    t_now_sim = datetime.fromisoformat(sim_time)
-                    path_valid_seconds = max(0.0, (t_next - t_now_sim).total_seconds())
-                except Exception:
-                    pass
-
-        fwd_rtt = self._extract_rtt(fwd_parsed)
-        rev_rtt = self._extract_rtt(rev_parsed)
-        fwd_asymm = any(h.asymm is not None for h in fwd_parsed.hops)
-        rev_asymm = any(h.asymm is not None for h in rev_parsed.hops)
-
-        return LiveTraceResult(
-            src=self._src,
-            dst=self._dst,
-            forward=LiveTraceDirection(
-                hops=fwd_hops,
-                links=fwd_links,
-                rtt_ms=fwd_rtt,
-                asymmetry_detected=fwd_asymm,
-                pmtu=fwd_parsed.pmtu,
-                raw_output=fwd_stdout if len(fwd_hops) <= 1 else None,
-            ),
-            reverse=LiveTraceDirection(
-                hops=rev_hops,
-                links=rev_links,
-                rtt_ms=rev_rtt,
-                asymmetry_detected=rev_asymm,
-                pmtu=rev_parsed.pmtu,
-                raw_output=rev_stdout if len(rev_hops) <= 1 else None,
-            ),
-            traced_at=now,
-            sim_time=sim_time,
-            topology_state_id="",
-            path_valid_until=path_valid_until,
-            path_valid_seconds=path_valid_seconds,
-            method="tracepath",
-            trace_mode=self._trace_mode,
-        )
-
-    async def _trace_cspf(self, sim_time: str, now: str) -> LiveTraceResult | None:
-        """Run CSPF path derivation via NodalPath HTTP API."""
-        import httpx
-        from nodalarc.platform_config import get_platform_config
-
-        cfg = get_platform_config()
-        # NodalPath may run in a K8s container (NodePort 31100) or on the host (port 3100)
-        np_host = cfg.service_host("nodalpath")
-        if np_host == cfg.default_service_host:  # noqa: SIM108
-            # Fallback to global host → NodalPath is on the host or via NodePort
-            # Try NodePort first (31100), fall back to direct port (3100)
-            np_port = 31100
+    def _direction(
+        self,
+        origin: _Endpoint,
+        hops: tuple[TracerouteHop, ...],
+        target_address: str,
+        *,
+        finished: bool,
+    ) -> _Direction:
+        labels = [origin.node.node_id]
+        rtts: list[float | None] = [None]
+        for hop in hops:
+            labels.append(self._hop_label(hop))
+            rtts.append(hop.rtt_ms)
+        last = hops[-1] if hops else None
+        reached = last is not None and last.address == target_address
+        state: TraceState
+        if not finished:
+            state = "running"
+        elif reached:
+            state = "reached"
         else:
-            np_port = cfg.nodalpath_console_http_port
-
-        try:
-            async with httpx.AsyncClient(timeout=5.0) as client:
-                fwd_resp, rev_resp = await asyncio.gather(
-                    client.get(
-                        f"http://{np_host}:{np_port}/api/v1/path",
-                        params={"src": self._src, "dst": self._dst},
-                    ),
-                    client.get(
-                        f"http://{np_host}:{np_port}/api/v1/path",
-                        params={"src": self._dst, "dst": self._src},
-                    ),
-                )
-        except Exception as exc:
-            log.warning("CSPF trace failed: %s", exc)
-            return None
-
-        fwd_data = fwd_resp.json() if fwd_resp.status_code == 200 else {}
-        rev_data = rev_resp.json() if rev_resp.status_code == 200 else {}
-
-        fwd_hops = self._cspf_hops(fwd_data)
-        rev_hops = self._cspf_hops(rev_data)
-
-        fwd_links = self._cspf_links(fwd_data)
-        rev_links = self._cspf_links(rev_data)
-
-        fwd_ids = [h.node_id for h in fwd_hops]
-        rev_ids = [h.node_id for h in rev_hops]
-
-        return LiveTraceResult(
-            src=self._src,
-            dst=self._dst,
-            forward=LiveTraceDirection(
-                hops=fwd_hops,
-                links=fwd_links,
-                rtt_ms=fwd_data.get("total_latency_ms", 0.0),
-                asymmetry_detected=fwd_ids != list(reversed(rev_ids)),
-            ),
-            reverse=LiveTraceDirection(
-                hops=rev_hops,
-                links=rev_links,
-                rtt_ms=rev_data.get("total_latency_ms", 0.0),
-                asymmetry_detected=fwd_ids != list(reversed(rev_ids)),
-            ),
-            traced_at=now,
-            sim_time=sim_time,
-            topology_state_id=fwd_data.get("topology_state_id", ""),
-            method="cspf",
-            trace_mode="cspf",
+            state = "not_reached"
+        return _Direction(
+            hops=tuple(labels),
+            hop_rtts=tuple(rtts),
+            state=state,
+            rtt_ms=last.rtt_ms if state == "reached" and last is not None else None,
+            error=None,
         )
 
-    def _map_hops(self, parsed: TracepathResult, src_node: Any) -> list[PathHop]:
-        """Map parsed tracepath hops to PathHop list.
+    def _hop_label(self, hop: TracerouteHop) -> str:
+        if hop.address is None:
+            return SILENT_HOP
+        return self._node_by_address.get(hop.address, hop.address)
 
-        Deduplicates by hop_num — tracepath reports the same hop_num
-        multiple times (retries at the same TTL).  We take the first
-        entry with a valid, resolvable IP at each hop_num.
+    @staticmethod
+    def _failed(origin: _Endpoint, error: str) -> _Direction:
+        return _Direction(
+            hops=(origin.node.node_id,),
+            hop_rtts=(None,),
+            state="failed",
+            rtt_ms=None,
+            error=error,
+        )
+
+    def _assemble(
+        self,
+        forward: _Direction,
+        reverse: _Direction,
+        *,
+        tracing: bool,
+        traced_at: str,
+        sim_time: str,
+    ) -> TracedPath:
+        src, dst = self._require_endpoints()
+        return TracedPath(
+            flow_id=TRACE_FLOW_ID,
+            src_node=src.node.node_id,
+            dst_node=dst.node.node_id,
+            hops=list(forward.hops),
+            hop_rtts=list(forward.hop_rtts),
+            state=forward.state,
+            rtt_ms=forward.rtt_ms,
+            error=forward.error,
+            reverse_hops=list(reverse.hops),
+            reverse_hop_rtts=list(reverse.hop_rtts),
+            reverse_state=reverse.state,
+            reverse_rtt_ms=reverse.rtt_ms,
+            reverse_error=reverse.error,
+            asymmetry_detected=self._asymmetry(forward, reverse),
+            tracing=tracing,
+            traced_at=traced_at,
+            sim_time=sim_time,
+        )
+
+    def _asymmetry(self, forward: _Direction, reverse: _Direction) -> bool | None:
+        """Whether the two directions crossed different nodes between the ends.
+
+        Known only when both directions reached their destination and every
+        hop between the ends answered from a node's address. The ends are left
+        out: each direction starts at its own endpoint and ends at the other
+        endpoint's traceroute host.
         """
-        hops: list[PathHop] = [
-            PathHop(
-                node_id=src_node.node_id,
-                node_type=src_node.node_type,
-                sid=src_node.sid,
-                rtt_ms=0.0,
-            )
-        ]
-        # Collect the first resolvable IP per hop_num
-        best_per_hop: dict[int, TracepathHop] = {}  # noqa: F821
-        for th in parsed.hops:
-            if th.ip is None:
-                continue
-            if th.hop_num in best_per_hop:
-                continue  # already have a valid entry for this hop
-            if self._ip_to_node.get(th.ip) is not None:
-                best_per_hop[th.hop_num] = th
+        if forward.state != "reached" or reverse.state != "reached":
+            return None
+        forward_between = forward.hops[1:-1]
+        reverse_between = reverse.hops[1:-1]
+        if not all(hop in self._node_registry for hop in forward_between + reverse_between):
+            return None
+        return forward_between != tuple(reversed(reverse_between))
 
-        for hop_num in sorted(best_per_hop):
-            th = best_per_hop[hop_num]
-            node_id = self._ip_to_node[th.ip]
-            if node_id == src_node.node_id:
-                continue
-            node = self._node_registry[node_id]
-            hops.append(
-                PathHop(
-                    node_id=node_id,
-                    node_type=node.node_type,
-                    sid=node.sid,
-                    rtt_ms=round(th.rtt_ms, 3) if th.rtt_ms is not None else None,
-                    responding_ip=th.ip,
-                )
-            )
-        return hops
+    def _stopped(self, error: str) -> TracedPath:
+        src, dst = self._require_endpoints()
+        return self._assemble(
+            self._failed(src, error),
+            self._failed(dst, error),
+            tracing=False,
+            traced_at=datetime.now(UTC).isoformat(),
+            sim_time=self._read_sim_time(),
+        )
 
-    def _build_links(self, hops: list[PathHop]) -> list[LiveTraceLink]:
-        """Build LiveTraceLink list from consecutive hop pairs."""
-        links: list[LiveTraceLink] = []
-        for i in range(len(hops) - 1):
-            a, b = hops[i].node_id, hops[i + 1].node_id
-            key = (min(a, b), max(a, b))
-            iface_pair = self._interface_map.get(key)
-            iface = ""
-            link_type = None
-            if iface_pair:
-                iface = iface_pair[0] if a == key[0] else iface_pair[1]
-                link_type = (
-                    "ground"
-                    if ("term" in iface_pair[0] or "gnd" in iface_pair[0])
-                    and ("term" in iface_pair[1] or "gnd" in iface_pair[1])
-                    else "isl"
-                )
-            links.append(
-                LiveTraceLink(
-                    from_node=a,
-                    to_node=b,
-                    interface=iface,
-                    link_type=link_type,
-                )
-            )
-        return links
-
-    def _build_delay_queries(self, links: list[LiveTraceLink]) -> list[dict]:
-        """Build batch delay queries for links that have PID + interface info."""
-        queries: list[dict] = []
-        for link in links:
-            pid = self._pid_map.get(link.from_node)
-            if pid and link.interface:
-                queries.append({"pid": pid, "ifname": link.interface})
-            else:
-                queries.append({"pid": 0, "ifname": ""})  # placeholder
-        return queries
-
-    def _apply_delays(self, links: list[LiveTraceLink], delays: list[dict]) -> None:
-        """Apply delay results back to links by replacing frozen objects in-place."""
-        for i, delay_info in enumerate(delays):
-            if i < len(links) and delay_info.get("delay_ms") is not None:
-                old = links[i]
-                links[i] = LiveTraceLink(
-                    from_node=old.from_node,
-                    to_node=old.to_node,
-                    interface=old.interface,
-                    netem_delay_ms=delay_info["delay_ms"],
-                    link_type=old.link_type,
-                )
-
-    @staticmethod
-    def _extract_rtt(parsed: TracepathResult) -> float:
-        """Extract end-to-end RTT from the last hop with an IP."""
-        for hop in reversed(parsed.hops):
-            if hop.rtt_ms is not None:
-                return round(hop.rtt_ms, 3)
-        return 0.0
-
-    @staticmethod
-    def _cspf_hops(data: dict) -> list[PathHop]:
-        """Build PathHop list from CSPF response.
-
-        Computes cumulative rtt_ms from per-hop latency_to_next_ms so the
-        frontend can display per-hop timing. The CSPF response provides
-        one-way latency per hop; cumulative values give increasing RTT
-        from source to each hop (one-way, not round-trip).
-        """
-        raw_hops = data.get("hops", [])
-        result = []
-        cumulative_ms = 0.0
-        for h in raw_hops:
-            if isinstance(h, dict):
-                # Override rtt_ms with cumulative latency before validation
-                # (PathHop is frozen, so we set it during construction)
-                h_copy = dict(h)
-                h_copy["rtt_ms"] = cumulative_ms
-                result.append(PathHop.model_validate(h_copy))
-                cumulative_ms += h["latency_to_next_ms"]
-            elif isinstance(h, str):
-                result.append(PathHop(node_id=h, node_type="satellite", rtt_ms=cumulative_ms))
-        return result
-
-    @staticmethod
-    def _cspf_links(data: dict) -> list[LiveTraceLink]:
-        """Build LiveTraceLink list from CSPF response hop details."""
-        raw_hops = data.get("hops", [])
-        links: list[LiveTraceLink] = []
-        for i in range(len(raw_hops) - 1):
-            h = raw_hops[i]
-            h_next = raw_hops[i + 1]
-            if isinstance(h, dict) and isinstance(h_next, dict):
-                from_id = h.get("node_id", "")
-                to_id = h_next.get("node_id", "")
-                links.append(
-                    LiveTraceLink(
-                        from_node=from_id,
-                        to_node=to_id,
-                        interface=h.get("out_interface", ""),
-                        netem_delay_ms=h.get("latency_to_next_ms"),
-                        link_type="ground"
-                        if h.get("out_interface", "").startswith("gnd")
-                        else "isl",
-                    )
-                )
-        return links
+    def _require_endpoints(self) -> tuple[_Endpoint, _Endpoint]:
+        if self._src is None or self._dst is None:
+            raise RuntimeError("the tracer has no endpoints; start() sets them")
+        return self._src, self._dst

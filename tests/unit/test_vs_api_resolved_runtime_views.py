@@ -44,6 +44,12 @@ def test_tracer_view_uses_resolved_loopbacks_interfaces_and_sid_indices():
         resolved = resolution.resolved.node_by_id(node_id)
         assert tracer_node.node_type == resolved.kind
         assert "/" not in tracer_node.loopback_ipv4
+        assert tracer_node.addresses_ipv4[0] == tracer_node.loopback_ipv4
+        assert tracer_node.addresses_ipv4[1:] == tuple(
+            address.ipv4.split("/")[0]
+            for address in resolved.interfaces.ethernet.values()
+            if address.ipv4 is not None
+        )
         assert tracer_node.sid == resolution.resolved.sid_index_by_node_id().get(node_id)
 
 

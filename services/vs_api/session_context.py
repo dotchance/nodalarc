@@ -104,6 +104,16 @@ BULK_CHANGE_THRESHOLD: float = 0.10
 GROUND_DECISION_SAMPLE_LIMIT: int = 720
 
 
+class SessionInactiveError(RuntimeError):
+    """A request needs the active session and none is active.
+
+    ``detail`` is public lifecycle text fixed in source, never failure detail.
+    """
+
+    def __init__(self, detail: str = "") -> None:
+        super().__init__(f"No active session: {detail}" if detail else "No active session")
+
+
 class SessionContext:
     """Per-session state container with NATS subscription lifecycle.
 
@@ -333,6 +343,8 @@ class SessionContext:
         is unreachable (9 subscriptions × ~2s each worst case).
         """
         self._stopped = True
+        if self.continuous_tracer is not None:
+            await self.continuous_tracer.stop()
         if self._subscriber_task and not self._subscriber_task.done():
             self._subscriber_task.cancel()
             try:
@@ -1536,6 +1548,29 @@ class SessionContext:
     def _notify_topology_change(self, node_a: str, node_b: str) -> None:
         if self.continuous_tracer is not None:
             self.continuous_tracer.notify_topology_change(node_a, node_b)
+
+    def read_sim_time(self) -> str:
+        """This session's current sim time."""
+        with self.state_lock:
+            return self.sim_time
+
+    def record_path_change(
+        self, src: str, dst: str, old_hops: list[str], new_hops: list[str]
+    ) -> None:
+        """Add a PATH_CHANGE recent event for the traced pair."""
+
+        def shown(hops: list[str]) -> str:
+            text = " -> ".join(hops[:4])
+            return f"{text} ({len(hops)} hops)" if len(hops) > 4 else text
+
+        self._add_recent_event(
+            {
+                "sim_time": self.read_sim_time(),
+                "node_id": src,
+                "reason": f"Path {src} -> {dst}: {shown(old_hops)} => {shown(new_hops)}",
+            },
+            "PATH_CHANGE",
+        )
 
     def _public_link_type(
         self,

@@ -19,19 +19,16 @@ The Scheduler uses this to:
 
 from __future__ import annotations
 
-import json
 import logging
 
+from nodalarc.substrate.manifest_contract import POD_SESSION_RUN_LABEL
 from nodalarc.workload_target import NODE_ID_LABEL
 
 log = logging.getLogger(__name__)
 
 
 class PodLocationMap:
-    """Maps canonical node IDs to K3s node locations.
-
-    Built from K8s API (live) or from a pid_map.json file (legacy).
-    """
+    """Maps canonical node IDs to K3s node locations, read from the K8s API."""
 
     def __init__(self) -> None:
         # canonical_node_id -> k3s node name
@@ -85,67 +82,34 @@ class PodLocationMap:
             return []
         return [nid for nid, k3s in self._node_of.items() if k3s == target_k3s]
 
-    def load_from_pid_map_file(self, path: str) -> None:
-        """Load from na_deploy's pid_map.json.
-
-        The pid_map.json is keyed by canonical node IDs (from discover_pod_pids
-        which reads the nodalarc.io/node-id label).
-
-        Discovers the K3s node name from the API and maps all pods to it.
-        """
-        with open(path) as f:
-            pid_map: dict[str, int] = json.load(f)
-
-        # Discover K3s node name
-        k3s_node = _discover_k3s_node()
-        for nid in pid_map:
-            self._node_of[nid] = k3s_node
-        self._agent_addrs[k3s_node] = k3s_node
-
-        log.info(
-            "Loaded %d pods from pid_map, all on node %s, agent=%s",
-            len(pid_map),
-            k3s_node,
-            self._agent_addrs[k3s_node],
-        )
-
     def load_from_k8s_api(
         self,
-        namespace: str | None = None,
         *,
-        expected_node_ids: set[str] | frozenset[str] | None = None,
-        session_id: str | None = None,
+        namespace: str,
+        expected_node_ids: set[str] | frozenset[str],
+        session_id: str,
     ) -> None:
-        """Load pod locations from K8s API.
+        """Load the active session's pod locations from the K8s API.
 
-        Reads canonical node IDs from nodalarc.io/node-id label and
-        K3s node from pod.spec.nodeName. Node Agent NATS subjects are
-        the K3s node name (e.g. nodalarc.agent.{node_name}).
+        Reads canonical node IDs from the nodalarc.io/node-id label and the
+        K3s node from pod.spec.nodeName. Node Agent NATS subjects are the K3s
+        node name (e.g. nodalarc.agent.{node_name}).
 
-        When expected_node_ids/session_id are supplied, this loader is
-        intentionally strict: the Scheduler is only allowed to locate pods for
-        the resolved active session. Namespace-wide pod discovery would let
-        stale pods from a previous session enter the dispatch/wiring authority.
+        Only pods of the resolved active session are located: namespace-wide
+        discovery would let stale pods from a previous session enter the
+        dispatch and wiring authority. The Scheduler runs only in-cluster, so
+        the in-cluster configuration is the only one it loads.
         """
-        import kubernetes
         import kubernetes.client
         import kubernetes.config
 
-        if namespace is None:
-            from nodalarc.platform_config import get_platform_config
+        expected = set(expected_node_ids)
+        if not expected:
+            raise ValueError("expected_node_ids must not be empty")
 
-            namespace = get_platform_config().kubernetes_namespace
-
-        try:
-            kubernetes.config.load_incluster_config()
-        except kubernetes.config.config_exception.ConfigException:
-            kubernetes.config.load_kube_config()
-
+        kubernetes.config.load_incluster_config()
         v1 = kubernetes.client.CoreV1Api()
         pods = v1.list_namespaced_pod(namespace, label_selector=NODE_ID_LABEL)
-        expected = set(expected_node_ids or ())
-        if expected_node_ids is not None and not expected:
-            raise ValueError("expected_node_ids must not be empty")
 
         for pod in pods.items:
             # Canonical node ID from label — NOT from pod.metadata.name
@@ -153,9 +117,9 @@ class PodLocationMap:
             node_id = labels.get(NODE_ID_LABEL)
             if not node_id:
                 continue
-            if expected_node_ids is not None and node_id not in expected:
+            if node_id not in expected:
                 continue
-            if session_id is not None and labels.get("nodalarc.io/session-run-id") != session_id:
+            if labels.get(POD_SESSION_RUN_LABEL) != session_id:
                 continue
             if node_id in self._node_of:
                 raise RuntimeError(f"Duplicate active session pod location for node {node_id}")
@@ -168,12 +132,9 @@ class PodLocationMap:
                 continue
             self._node_of[node_id] = k3s_node
 
-        if expected_node_ids is not None:
-            missing = sorted(expected - set(self._node_of))
-            if missing:
-                raise RuntimeError(
-                    "Missing active session pod location(s): " + ", ".join(missing[:20])
-                )
+        missing = sorted(expected - set(self._node_of))
+        if missing:
+            raise RuntimeError("Missing active session pod location(s): " + ", ".join(missing[:20]))
 
         # Build agent addresses — NATS uses K8s node name as subject
         k3s_nodes = set(self._node_of.values())
@@ -181,22 +142,17 @@ class PodLocationMap:
             if k3s:
                 self._agent_addrs[k3s] = k3s  # Node name = NATS subject
 
-        # Discover node IPs (InternalIP) for VXLAN tunnel endpoints
-        try:
-            nodes = v1.list_node()
-            for node in nodes.items:
-                name = node.metadata.name
-                for addr in node.status.addresses or []:
-                    if addr.type == "InternalIP":
-                        self._node_ips[name] = addr.address
-                        break
-            if self._node_ips:
-                log.info(
-                    "Node IPs: %s",
-                    ", ".join(f"{n}={ip}" for n, ip in sorted(self._node_ips.items())),
-                )
-        except Exception as exc:
-            log.warning("Failed to discover node IPs: %s", exc)
+        # Node IPs (InternalIP) are the VXLAN tunnel endpoints.
+        for node in v1.list_node().items:
+            name = node.metadata.name
+            for addr in node.status.addresses or []:
+                if addr.type == "InternalIP":
+                    self._node_ips[name] = addr.address
+                    break
+        log.info(
+            "Node IPs: %s",
+            ", ".join(f"{n}={ip}" for n, ip in sorted(self._node_ips.items())),
+        )
 
         log.info(
             "Loaded %d pods across %d K3s nodes from API",
@@ -215,10 +171,3 @@ class PodLocationMap:
             if len(pods) > 5:
                 lines.append(f"    ... and {len(pods) - 5} more")
         return "\n".join(lines)
-
-
-def _discover_k3s_node() -> str:
-    """Discover the local K3s node name."""
-    import socket
-
-    return socket.gethostname()

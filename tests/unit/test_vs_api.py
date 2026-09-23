@@ -256,7 +256,11 @@ def _constellation_cr(
         status["sessionName"] = session_name
     _prepared, upload = _runtime_fixture(root_yaml, session_run_id)
     return {
-        "metadata": {"generation": generation},
+        "metadata": {
+            "generation": generation,
+            "namespace": "nodalarc",
+            "annotations": {"nodalarc.io/source-id": "nodalarc:sessions/earth-leo-simple.yaml"},
+        },
         "spec": {
             "sessionYaml": root_yaml,
             "catalogUpload": upload.selection.model_dump(mode="json"),
@@ -275,7 +279,6 @@ def _extract_ready_session(main, cr: dict):
             spec["sessionYaml"],
             str((cr.get("status") or {}).get("sessionRunId") or ""),
         ),
-        namespace="nodalarc",
     )
 
 
@@ -484,6 +487,21 @@ class TestConstellationCRReadiness:
         with pytest.raises(ValueError, match=field):
             _extract_ready_session(m, cr)
 
+    @pytest.mark.parametrize(
+        ("remove", "match"),
+        [
+            ("annotations", "nodalarc.io/source-id"),
+            ("namespace", "namespace"),
+        ],
+    )
+    def test_extract_ready_cr_session_requires_its_source_id_and_namespace(self, remove, match):
+        import vs_api.main as m
+
+        cr = _constellation_cr()
+        del cr["metadata"][remove]
+        with pytest.raises(ValueError, match=match):
+            _extract_ready_session(m, cr)
+
     def test_extract_ready_cr_session_fails_loudly_without_session_yaml(self):
         import vs_api.main as m
 
@@ -494,7 +512,6 @@ class TestConstellationCRReadiness:
                 cr,
                 require_ready=True,
                 core_v1=object(),
-                namespace="nodalarc",
             )
 
 
@@ -653,9 +670,8 @@ class TestStateSnapshot:
 
         assert response.status_code == 503
         assert response.json() == {
-            "error": "No active session",
-            "session_status": "switching",
-            "session_status_detail": "Session switch in progress",
+            "code": "session.inactive",
+            "message": "No active session: Session switch in progress",
         }
         assert "abc123" not in response.text
         assert "/var/run/secrets" not in response.text
@@ -2036,12 +2052,14 @@ class TestLinkDecisionsEndpoint:
         asyncio.run(ctx._on_ground_link_decision_snapshot(msg))
         return ctx
 
-    def test_returns_404_when_no_session(self, monkeypatch):
+    def test_refused_when_no_session(self, monkeypatch):
         import vs_api.main as m
 
+        monkeypatch.setattr(m, "_API_KEY", "")
         monkeypatch.setattr(m, "_active_context", None)
         r = TestClient(m.app).get("/api/v1/ground-link-decisions")
-        assert r.status_code == 404
+        assert r.status_code == 503
+        assert r.json() == {"code": "session.inactive", "message": "No active session"}
 
     def test_returns_404_when_no_snapshot_received(self, monkeypatch):
         import vs_api.main as m
@@ -2767,6 +2785,100 @@ def _message(payload: dict):
     msg = MagicMock()
     msg.data = json.dumps(payload).encode()
     return msg
+
+
+@pytest.mark.parametrize(
+    ("method", "path", "body"),
+    [
+        ("GET", "/api/v1/ops/health", None),
+        ("POST", "/api/v1/ops/repair", {"gs_id": "gs", "reason": "r"}),
+        ("GET", "/api/v1/link-decision-traces", None),
+        ("GET", "/api/v1/decision-explanation?gs=gs", None),
+        ("GET", "/api/v1/decision-explanation/timeline?gs=gs", None),
+        ("GET", "/api/v1/ground-link-decisions", None),
+        ("POST", "/api/v1/trace/start", {"src_node": "a", "dst_node": "b"}),
+        ("GET", "/api/v1/links", None),
+    ],
+)
+def test_every_session_route_refuses_the_same_way_without_a_session(
+    monkeypatch, method, path, body
+):
+    import vs_api.main as m
+
+    monkeypatch.setattr(m, "_API_KEY", "")
+    monkeypatch.setattr(m, "_active_context", None)
+
+    response = TestClient(m.app).request(method, path, json=body)
+
+    assert response.status_code == 503
+    assert response.json() == {"code": "session.inactive", "message": "No active session"}
+
+
+class TestContinuousTraceSession:
+    """The live trace belongs to its session context."""
+
+    def test_stopping_the_session_stops_its_trace(self):
+        import asyncio
+
+        stopped: list[bool] = []
+
+        class _Tracer:
+            async def stop(self) -> None:
+                stopped.append(True)
+
+        ctx = SessionContext.__new__(SessionContext)
+        ctx._init_state_only()
+        ctx.continuous_tracer = _Tracer()
+
+        asyncio.run(ctx.stop())
+
+        assert stopped == [True]
+        assert ctx.continuous_tracer is None
+
+    def test_a_path_change_is_a_recent_event_at_session_sim_time(self):
+        ctx = SessionContext.__new__(SessionContext)
+        ctx._init_state_only()
+        ctx.sim_time = "2026-06-08T00:10:00+00:00"
+
+        ctx.record_path_change("gs-a", "gs-b", ["gs-a", "sat-1", "gs-b"], ["gs-a", "sat-2", "gs-b"])
+
+        event = ctx.recent_events[-1]
+        assert (event.event_type, event.node_id) == ("PATH_CHANGE", "gs-a")
+        assert event.summary == "Path gs-a -> gs-b: gs-a -> sat-1 -> gs-b => gs-a -> sat-2 -> gs-b"
+        assert event.sim_time.isoformat() == "2026-06-08T00:10:00+00:00"
+
+    def test_trace_start_refuses_a_node_it_cannot_trace(self, monkeypatch):
+        import vs_api.main as m
+        from vs_api.continuous_tracer import ContinuousTracer
+
+        ctx = SessionContext.__new__(SessionContext)
+        ctx._init_state_only()
+        ctx.nodes = {"site-host": object(), "gs-b": object()}
+        monkeypatch.setattr(m, "_API_KEY", "")
+        monkeypatch.setattr(m, "_active_context", ctx)
+        monkeypatch.setattr(
+            m,
+            "_create_continuous_tracer",
+            lambda context: ContinuousTracer(
+                node_registry={},
+                namespace="nodalarc",
+                interval_s=3.0,
+                core_v1=lambda: None,
+                read_sim_time=context.read_sim_time,
+                on_path_change=context.record_path_change,
+            ),
+        )
+
+        response = TestClient(m.app).post(
+            "/api/v1/trace/start", json={"src_node": "site-host", "dst_node": "gs-b"}
+        )
+
+        assert response.status_code == 400
+        assert response.json() == {
+            "code": "trace.untraceable_node",
+            "message": "site-host has no loopback address to trace",
+        }
+        assert ctx.continuous_tracer is None
 
 
 class TestSessionHistory:

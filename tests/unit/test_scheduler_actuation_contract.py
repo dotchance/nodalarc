@@ -1640,16 +1640,16 @@ def _actuation_state_event(*, instance: str, gs_id: str, code: str, after: str) 
     }
 
 
-def test_ops_health_payloads_validate_against_the_vs_api_contract(monkeypatch) -> None:
-    """Both payloads the health route returns are instances of the one published
-    contract, ``nodalarc.models.vs_api.ActuationHealth``; the Scheduler side
-    defines no health shape of its own."""
+def test_ops_health_refuses_without_a_session_and_validates_with_one(monkeypatch) -> None:
+    """The health route refuses without a session and otherwise returns the one
+    published contract, ``nodalarc.models.vs_api.ActuationHealth``; the
+    Scheduler side defines no health shape of its own."""
     from vs_api import main as vs_api_main
-    from vs_api.session_context import SessionContext
+    from vs_api.session_context import SessionContext, SessionInactiveError
 
     monkeypatch.setattr(vs_api_main, "_active_context", None)
-    without_session = ActuationHealth.model_validate(vs_api_main.get_ops_health())
-    assert without_session == ActuationHealth(session_id="", wiring_generation="")
+    with pytest.raises(SessionInactiveError):
+        vs_api_main.get_ops_health()
 
     ctx = SessionContext.__new__(SessionContext)
     ctx._init_state_only()

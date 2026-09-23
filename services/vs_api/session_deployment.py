@@ -18,7 +18,18 @@ from nodalarc.catalog_repository import (
     CatalogNotFoundError,
 )
 from nodalarc.catalog_upload import CatalogUpload, encode_catalog_upload
-from nodalarc.cr_runtime_config import CR_API_VERSION, CR_KIND, CR_NAME, ConstellationSpecSpec
+from nodalarc.cr_runtime_config import (
+    CATALOG_GENERATION_ANNOTATION,
+    CLOSURE_DIGEST_ANNOTATION,
+    CR_API_VERSION,
+    CR_KIND,
+    CR_NAME,
+    DOCUMENT_DIGEST_ANNOTATION,
+    SOURCE_ID_ANNOTATION,
+    SOURCE_KIND_ANNOTATION,
+    SOURCE_REVISION_ANNOTATION,
+    ConstellationSpecSpec,
+)
 from nodalarc.models.builder_api import Sha256Digest
 from nodalarc.prepared_session import (
     PreparedSessionFiles,
@@ -279,14 +290,14 @@ def constellation_spec_body(
     selection = deployment.receipt.selection
     session_ref = str(deployment.prepared.source.logical_id)
     annotations = {
-        "nodalarc.io/source-kind": "catalog_session",
-        "nodalarc.io/source-id": session_ref,
-        "nodalarc.io/source-revision": deployment.prepared.source_revision,
-        "nodalarc.io/document-digest": deployment.prepared.document_digest,
-        "nodalarc.io/closure-digest": deployment.prepared.closure_digest,
+        SOURCE_KIND_ANNOTATION: "catalog_session",
+        SOURCE_ID_ANNOTATION: session_ref,
+        SOURCE_REVISION_ANNOTATION: deployment.prepared.source_revision,
+        DOCUMENT_DIGEST_ANNOTATION: deployment.prepared.document_digest,
+        CLOSURE_DIGEST_ANNOTATION: deployment.prepared.closure_digest,
     }
     if deployment.repository_generation is not None:
-        annotations["nodalarc.io/catalog-generation"] = str(deployment.repository_generation)
+        annotations[CATALOG_GENERATION_ANNOTATION] = str(deployment.repository_generation)
     spec = ConstellationSpecSpec.of(
         session_yaml=deployment.prepared.root_yaml.decode("utf-8"),
         catalog_upload=selection,

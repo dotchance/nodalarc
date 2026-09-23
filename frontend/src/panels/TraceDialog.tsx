@@ -1,29 +1,41 @@
 // Copyright 2024-2026 .chance (dotchance)
 // Licensed under the Apache License, Version 2.0. See LICENSE file.
-/** Trace path dialog — continuous live trace with side-by-side forward/reverse,
- *  per-hop latency, netem delays, and path validity countdown.
+/** Trace path dialog — continuous live traceroute in both directions, side by
+ *  side, with per-hop round trips and how each direction ended.
  */
 
-import { useState, useEffect, useMemo, useRef, useCallback } from "react";
+import { useState, useEffect, useMemo, useCallback } from "react";
 import { REST_URL, authHeaders } from "../config";
-import type { NodeState, TracedPath, StateSnapshot } from "../types";
+import type { NodeState, StateSnapshot, TraceState } from "../types";
 import { isGroundNode } from "../networkIdentity";
 
 interface TraceDialogProps {
   nodes: NodeState[];
   selectedNodeId?: string | null;
-  onTraceResult?: (path: TracedPath | null) => void;
   snapshot?: StateSnapshot | null;
 }
 
-export function TraceDialog({ nodes, selectedNodeId, onTraceResult, snapshot }: TraceDialogProps) {
+/** What a direction's outcome says beyond its hop list, or null when it reached. */
+function directionOutcome(
+  label: string,
+  state: TraceState,
+  hopCount: number,
+  error: string | null,
+): string | null {
+  if (state === "running") return `${label}: tracing…`;
+  if (state === "failed") return `${label} trace could not run: ${error ?? ""}`;
+  if (state === "not_reached") {
+    return `${label}: destination did not answer after ${hopCount - 1} hop${hopCount - 1 === 1 ? "" : "s"}`;
+  }
+  return null;
+}
+
+export function TraceDialog({ nodes, selectedNodeId, snapshot }: TraceDialogProps) {
   const [src, setSrc] = useState("");
   const [dst, setDst] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [continuous, setContinuous] = useState(false);
-  const [countdown, setCountdown] = useState<string | null>(null);
-  const countdownRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   useEffect(() => {
     if (selectedNodeId) setSrc(selectedNodeId);
@@ -49,37 +61,6 @@ export function TraceDialog({ nodes, selectedNodeId, onTraceResult, snapshot }: 
   useEffect(() => {
     if (tp) { setSrc(tp.src_node); setDst(tp.dst_node); }
   }, [tp?.src_node, tp?.dst_node]);
-
-  // Pass to parent for globe/topo rendering
-  useEffect(() => {
-    if (isTracing && tp) onTraceResult?.(tp);
-  }, [isTracing, tp, onTraceResult]);
-
-  // Countdown from path_valid_seconds — sim-time delta that resets each trace.
-  // Snapshot the value and wall-clock arrival time, tick down by elapsed wall time.
-  useEffect(() => {
-    if (countdownRef.current) { clearInterval(countdownRef.current); countdownRef.current = null; }
-    const secs = tp?.path_valid_seconds;
-    if (secs == null || secs <= 0) {
-      setCountdown(secs != null && secs <= 0 ? "Path change expected" : null);
-      return;
-    }
-    const startWall = Date.now();
-    const tick = () => {
-      const elapsed = (Date.now() - startWall) / 1000;
-      const remaining = secs - elapsed;
-      if (remaining <= 0) {
-        setCountdown("Path change expected");
-      } else {
-        const m = Math.floor(remaining / 60);
-        const s = Math.floor(remaining % 60);
-        setCountdown(`Path change expected in: ${m > 0 ? `${m}m ${s}s` : `${s}s`}`);
-      }
-    };
-    tick();
-    countdownRef.current = setInterval(tick, 1000);
-    return () => { if (countdownRef.current) clearInterval(countdownRef.current); };
-  }, [tp?.path_valid_seconds, tp?.traced_at]);
 
   const handleTrace = useCallback(async () => {
     if (!src || !dst || src === dst) return;
@@ -108,9 +89,7 @@ export function TraceDialog({ nodes, selectedNodeId, onTraceResult, snapshot }: 
       await fetch(`${REST_URL}/api/v1/trace/stop`, { method: "POST", headers: authHeaders() });
     } catch {}
     setContinuous(false);
-    setCountdown(null);
-    onTraceResult?.(null);
-  }, [onTraceResult]);
+  }, []);
 
   return (
     <div className="trace-dialog">
@@ -144,22 +123,30 @@ export function TraceDialog({ nodes, selectedNodeId, onTraceResult, snapshot }: 
         <div style={{ marginTop: 8 }}>
           {/* Summary line */}
           <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4 }}>
-            <span className="trace-live">LIVE</span>
+            {tp.tracing ? (
+              <span className="trace-live">LIVE</span>
+            ) : (
+              <span className="trace-warn">STOPPED</span>
+            )}
             <span style={{ fontSize: 11, color: "var(--text-primary)", fontWeight: 600 }}>
               {tp.hops.length} hops
               {tp.rtt_ms != null && ` · ${tp.rtt_ms.toFixed(1)}ms fwd`}
               {tp.reverse_rtt_ms != null && ` / ${tp.reverse_rtt_ms.toFixed(1)}ms rev`}
-              {tp.method && ` [${tp.method}]`}
             </span>
           </div>
 
-          {tp.asymmetry_detected && (
+          {tp.asymmetry_detected === true && (
             <div className="trace-warn">Path asymmetry detected</div>
           )}
 
-          {countdown !== null && (
-            <div className="trace-countdown">{countdown}</div>
-          )}
+          {[
+            directionOutcome("Forward", tp.state, tp.hops.length, tp.error),
+            directionOutcome("Reverse", tp.reverse_state, tp.reverse_hops.length, tp.reverse_error),
+          ]
+            .filter((line): line is string => line !== null)
+            .map((line) => (
+              <div key={line} className="trace-warn trace-warn--block">{line}</div>
+            ))}
 
           {/* Side-by-side forward + reverse */}
           <div style={{ display: "flex", gap: 12 }}>
@@ -167,7 +154,7 @@ export function TraceDialog({ nodes, selectedNodeId, onTraceResult, snapshot }: 
               <div style={{ fontSize: 9, fontWeight: 600, color: "var(--text-dim)", textTransform: "uppercase" as const, letterSpacing: "0.05em", marginBottom: 4 }}>Forward</div>
               <HopList hops={tp.hops} hopRtts={tp.hop_rtts} nodesById={nodesById} />
             </div>
-            {tp.reverse_hops && tp.reverse_hops.length > 0 && (
+            {tp.reverse_hops.length > 0 && (
               <div style={{ flex: 1, minWidth: 0 }}>
                 <div style={{ fontSize: 9, fontWeight: 600, color: "var(--text-dim)", textTransform: "uppercase" as const, letterSpacing: "0.05em", marginBottom: 4 }}>Reverse</div>
                 <HopList hops={tp.reverse_hops} hopRtts={tp.reverse_hop_rtts} nodesById={nodesById} />
@@ -180,22 +167,6 @@ export function TraceDialog({ nodes, selectedNodeId, onTraceResult, snapshot }: 
       {isTracing && !tp && (
         <div style={{ marginTop: 8, fontSize: 11, color: "var(--text-dim)" }}>Tracing path...</div>
       )}
-      {isTracing && tp && tp.hops.length <= 1 && (() => {
-        // Check if src/dst have any active links
-        const links = snapshot?.links ?? [];
-        const srcLinks = links.filter(l => (l.node_a === src || l.node_b === src) && l.state === "active");
-        const dstLinks = links.filter(l => (l.node_a === dst || l.node_b === dst) && l.state === "active");
-        const issues: string[] = [];
-        if (srcLinks.length === 0) issues.push(`${src} has no active links`);
-        if (dstLinks.length === 0) issues.push(`${dst} has no active links`);
-        return (
-          <div className="trace-warn trace-warn--block">
-            {issues.length > 0
-              ? `Waiting for connectivity — ${issues.join(", ")}`
-              : "Waiting for route convergence..."}
-          </div>
-        );
-      })()}
     </div>
   );
 }
@@ -207,7 +178,7 @@ function HopList({
   nodesById,
 }: {
   hops: string[];
-  hopRtts?: (number | null)[];
+  hopRtts: (number | null)[];
   nodesById: ReadonlyMap<string, NodeState>;
 }) {
   return (
@@ -215,9 +186,10 @@ function HopList({
       {hops.map((hop, i) => {
         const node = nodesById.get(hop);
         const isGS = node ? isGroundNode(node) : false;
-        const rtt = hopRtts?.[i] ?? null;
-        const prevRtt = i > 0 ? (hopRtts?.[i - 1] ?? null) : null;
-        // Per-hop delay = delta between consecutive cumulative RTTs from tracepath
+        const rtt = hopRtts[i] ?? null;
+        // Per-hop delay = delta between consecutive cumulative traceroute round
+        // trips. Row 1 is the trace's source, whose round trip to itself is zero.
+        const prevRtt = i === 1 ? 0 : i > 1 ? (hopRtts[i - 1] ?? null) : null;
         const delta = rtt != null && prevRtt != null ? rtt - prevRtt : null;
 
         return (
@@ -227,11 +199,6 @@ function HopList({
             {delta != null && delta > 0 && (
               <span style={{ color: "var(--text-secondary)", fontSize: 9, flexShrink: 0 }}>
                 {delta.toFixed(1)}ms
-              </span>
-            )}
-            {i === 0 && rtt != null && rtt > 0 && (
-              <span style={{ color: "var(--text-secondary)", fontSize: 9, flexShrink: 0 }}>
-                {rtt.toFixed(1)}ms
               </span>
             )}
           </div>

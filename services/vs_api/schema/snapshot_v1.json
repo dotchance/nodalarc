@@ -782,7 +782,8 @@
       "type": "object"
     },
     "TracedPath": {
-      "description": "Forwarding path trace for a traffic flow.",
+      "additionalProperties": false,
+      "description": "The live measured path between two nodes: one traceroute per direction.\n\nEach direction lists what answered at every hop, in hop order, after the\nnode the trace starts from: a node id when the resolver assigned the\nanswering address to that node, the address itself when no node owns it,\nand ``*`` when nothing answered. ``state`` says how the trace ended. ``rtt_ms`` is the\ndestination's round trip and exists only when the destination answered;\n``error`` exists only when the trace could not run. ``asymmetry_detected``\nexists only when both directions reached their destination and every hop\nbetween the ends answered from a node's address. ``tracing`` is false once\nthe trace loop has stopped; the last result then stays until the trace is\nstopped or restarted.",
       "properties": {
         "flow_id": {
           "title": "Flow Id",
@@ -803,16 +804,7 @@
           "title": "Hops",
           "type": "array"
         },
-        "reverse_hops": {
-          "default": [],
-          "items": {
-            "type": "string"
-          },
-          "title": "Reverse Hops",
-          "type": "array"
-        },
         "hop_rtts": {
-          "default": [],
           "items": {
             "anyOf": [
               {
@@ -826,8 +818,46 @@
           "title": "Hop Rtts",
           "type": "array"
         },
+        "state": {
+          "enum": [
+            "running",
+            "reached",
+            "not_reached",
+            "failed"
+          ],
+          "title": "State",
+          "type": "string"
+        },
+        "rtt_ms": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Rtt Ms"
+        },
+        "error": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Error"
+        },
+        "reverse_hops": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Reverse Hops",
+          "type": "array"
+        },
         "reverse_hop_rtts": {
-          "default": [],
           "items": {
             "anyOf": [
               {
@@ -841,39 +871,17 @@
           "title": "Reverse Hop Rtts",
           "type": "array"
         },
-        "rtt_ms": {
-          "default": 0.0,
-          "title": "Rtt Ms",
-          "type": "number"
-        },
-        "reverse_rtt_ms": {
-          "default": 0.0,
-          "title": "Reverse Rtt Ms",
-          "type": "number"
-        },
-        "asymmetry_detected": {
-          "default": false,
-          "title": "Asymmetry Detected",
-          "type": "boolean"
-        },
-        "method": {
-          "default": "tracepath",
-          "title": "Method",
+        "reverse_state": {
+          "enum": [
+            "running",
+            "reached",
+            "not_reached",
+            "failed"
+          ],
+          "title": "Reverse State",
           "type": "string"
         },
-        "path_valid_until": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Path Valid Until"
-        },
-        "path_valid_seconds": {
+        "reverse_rtt_ms": {
           "anyOf": [
             {
               "type": "number"
@@ -882,10 +890,9 @@
               "type": "null"
             }
           ],
-          "default": null,
-          "title": "Path Valid Seconds"
+          "title": "Reverse Rtt Ms"
         },
-        "traced_at": {
+        "reverse_error": {
           "anyOf": [
             {
               "type": "string"
@@ -894,15 +901,50 @@
               "type": "null"
             }
           ],
-          "default": null,
-          "title": "Traced At"
+          "title": "Reverse Error"
+        },
+        "asymmetry_detected": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Asymmetry Detected"
+        },
+        "tracing": {
+          "title": "Tracing",
+          "type": "boolean"
+        },
+        "traced_at": {
+          "title": "Traced At",
+          "type": "string"
+        },
+        "sim_time": {
+          "title": "Sim Time",
+          "type": "string"
         }
       },
       "required": [
         "flow_id",
         "src_node",
         "dst_node",
-        "hops"
+        "hops",
+        "hop_rtts",
+        "state",
+        "rtt_ms",
+        "error",
+        "reverse_hops",
+        "reverse_hop_rtts",
+        "reverse_state",
+        "reverse_rtt_ms",
+        "reverse_error",
+        "asymmetry_detected",
+        "tracing",
+        "traced_at",
+        "sim_time"
       ],
       "title": "TracedPath",
       "type": "object"

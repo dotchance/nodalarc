@@ -860,14 +860,51 @@ class TestLinkState:
 
 
 class TestTracedPath:
+    @staticmethod
+    def _reached(**overrides) -> dict:
+        fields = {
+            "flow_id": "ashburn-to-frankfurt",
+            "src_node": "gs-ashburn",
+            "dst_node": "gs-frankfurt",
+            "hops": ["gs-ashburn", "sat-P02S05", "gs-frankfurt"],
+            "hop_rtts": [None, 5.0, 12.0],
+            "state": "reached",
+            "rtt_ms": 12.0,
+            "error": None,
+            "reverse_hops": ["gs-frankfurt", "sat-P02S05", "gs-ashburn"],
+            "reverse_hop_rtts": [None, 6.0, 12.5],
+            "reverse_state": "reached",
+            "reverse_rtt_ms": 12.5,
+            "reverse_error": None,
+            "asymmetry_detected": False,
+            "tracing": True,
+            "traced_at": "2026-09-23T00:00:00+00:00",
+            "sim_time": "2026-06-08T00:00:00+00:00",
+        }
+        return {**fields, **overrides}
+
     def test_round_trip(self):
-        tp = TracedPath(
-            flow_id="ashburn-to-frankfurt",
-            src_node="gs-ashburn",
-            dst_node="gs-frankfurt",
-            hops=["gs-ashburn", "sat-P02S05", "sat-P02S06", "sat-P03S06", "gs-frankfurt"],
-        )
-        _round_trip(tp)
+        _round_trip(TracedPath(**self._reached()))
+
+    @pytest.mark.parametrize(
+        ("overrides", "match"),
+        [
+            ({"state": "not_reached"}, "rtt_ms exists only when it reached"),
+            ({"rtt_ms": None}, "rtt_ms exists only when it reached"),
+            (
+                {"reverse_state": "failed", "reverse_rtt_ms": None},
+                "error exists only when it failed",
+            ),
+            ({"hop_rtts": [None, 5.0]}, "3 hops and 2 round trips"),
+            (
+                {"reverse_state": "not_reached", "reverse_rtt_ms": None},
+                "asymmetry is known only when both directions reached",
+            ),
+        ],
+    )
+    def test_outcomes_must_agree_with_their_states(self, overrides, match):
+        with pytest.raises(ValidationError, match=match):
+            TracedPath(**self._reached(**overrides))
 
 
 class TestNetworkHealth:

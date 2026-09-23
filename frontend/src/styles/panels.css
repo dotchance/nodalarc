@@ -520,13 +520,6 @@
   font-size: var(--font-size-xs);
 }
 
-.trace-countdown {
-  font-size: var(--font-size-xs);
-  color: var(--accent-blue);
-  font-weight: var(--font-weight-semibold);
-  margin-bottom: var(--space-3);
-}
-
 .trace-hops {
   font-family: var(--font-mono);
   font-size: var(--font-size-xxs);

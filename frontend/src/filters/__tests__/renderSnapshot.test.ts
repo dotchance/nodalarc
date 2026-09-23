@@ -2,7 +2,29 @@
 // Licensed under the Apache License, Version 2.0. See LICENSE file.
 import { describe, expect, it } from "vitest";
 import { filterSnapshotForRender } from "../renderSnapshot";
-import type { LinkState, NodeState, StateSnapshot } from "../../types";
+import type { LinkState, NodeState, StateSnapshot, TracedPath } from "../../types";
+
+function traced(flowId: string, hops: string[], reverseHops: string[]): TracedPath {
+  return {
+    flow_id: flowId,
+    src_node: hops[0]!,
+    dst_node: hops[hops.length - 1]!,
+    hops,
+    hop_rtts: hops.map(() => null),
+    state: "not_reached",
+    rtt_ms: null,
+    error: null,
+    reverse_hops: reverseHops,
+    reverse_hop_rtts: reverseHops.map(() => null),
+    reverse_state: "not_reached",
+    reverse_rtt_ms: null,
+    reverse_error: null,
+    asymmetry_detected: null,
+    tracing: true,
+    traced_at: "2026-09-23T00:00:00Z",
+    sim_time: "2026-09-23T00:00:00Z",
+  };
+}
 
 function node(node_id: string, segment_id: string, plane: number | null): NodeState {
   return {
@@ -66,15 +88,13 @@ function snapshot(): StateSnapshot {
       ["ground-gs-denver", "leo-sat-p00s00"],
     ],
     traced_paths: [
-      { flow_id: "kept", src_node: "ground-gs-denver", dst_node: "leo-sat-p00s00", hops: ["ground-gs-denver", "leo-sat-p00s00"] },
-      { flow_id: "hidden", src_node: "leo-sat-p00s00", dst_node: "meo-sat-p00s00", hops: ["leo-sat-p00s00", "meo-sat-p00s00"] },
-      {
-        flow_id: "hidden-reverse",
-        src_node: "ground-gs-denver",
-        dst_node: "leo-sat-p00s00",
-        hops: ["ground-gs-denver", "leo-sat-p00s00"],
-        reverse_hops: ["leo-sat-p00s00", "meo-sat-p00s00"],
-      },
+      traced("kept", ["ground-gs-denver", "leo-sat-p00s00"], []),
+      traced("hidden", ["leo-sat-p00s00", "meo-sat-p00s00"], []),
+      traced(
+        "hidden-reverse",
+        ["ground-gs-denver", "leo-sat-p00s00"],
+        ["leo-sat-p00s00", "meo-sat-p00s00"],
+      ),
     ],
     active_flows: [
       {

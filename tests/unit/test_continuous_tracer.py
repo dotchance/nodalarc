@@ -1,368 +1,313 @@
-"""Tests for vs_api/continuous_tracer.py — unit tests for helper methods."""
+"""The continuous tracer reports what traceroute measured, and nothing else."""
 
+from __future__ import annotations
+
+import asyncio
 from types import SimpleNamespace
+from unittest.mock import patch
 
-from nodalarc.models.path import LiveTraceLink, PathHop, TracepathHop, TracepathResult
-from vs_api.continuous_tracer import ContinuousTracer
+import pytest
+from nodalarc.workload_target import NODE_ID_LABEL
+from vs_api.continuous_tracer import TRACE_FLOW_ID, ContinuousTracer, UntraceableNodeError
+from vs_api.resolved_runtime_views import TracerNode
 
 from tests.unit.test_workload_target import pod_document
 
+SIM_TIME = "2026-03-13T10:00:00+00:00"
 
-def _make_tracer(
-    node_registry=None,
-    interface_map=None,
-    pid_map=None,
-) -> ContinuousTracer:
-    """Create a ContinuousTracer with minimal config for unit testing."""
-    if node_registry is None:
-        node_registry = {
-            "gs-alpha": SimpleNamespace(
-                node_id="gs-alpha",
-                node_type="ground_station",
-                sid=24000,
-                loopback_ipv4="10.2.0.1",
-            ),
-            "sat-P00S00": SimpleNamespace(
-                node_id="sat-P00S00",
-                node_type="satellite",
-                sid=16001,
-                loopback_ipv4="10.0.0.1",
-                plane=0,
-                slot=0,
-            ),
-            "sat-P00S01": SimpleNamespace(
-                node_id="sat-P00S01",
-                node_type="satellite",
-                sid=16002,
-                loopback_ipv4="10.0.0.2",
-                plane=0,
-                slot=1,
-            ),
-            "gs-beta": SimpleNamespace(
-                node_id="gs-beta",
-                node_type="ground_station",
-                sid=24001,
-                loopback_ipv4="10.2.1.1",
-            ),
-        }
-    if interface_map is None:
-        interface_map = {
-            ("sat-P00S00", "sat-P00S01"): ("isl0", "isl0"),
-        }
-    if pid_map is None:
-        pid_map = {
-            "gs-alpha": 1001,
-            "sat-P00S00": 1002,
-            "sat-P00S01": 1003,
-            "gs-beta": 1004,
-        }
 
-    from nodalarc.platform_config import get_platform_config
+def _node(
+    node_id: str, loopback: str, gateway: str | None = None, lan: tuple[str, ...] = ()
+) -> TracerNode:
+    return TracerNode(
+        node_id=node_id,
+        node_type="ground_station" if node_id.startswith("gs") else "satellite",
+        sid=None,
+        loopback_ipv4=loopback,
+        addresses_ipv4=(loopback, *lan),
+        trace_gateway_node_id=gateway,
+    )
 
-    config = get_platform_config()
 
+REGISTRY = {
+    "gs-alpha": _node("gs-alpha", "10.2.0.1", lan=("172.16.1.1",)),
+    "sat-a": _node("sat-a", "10.0.0.1"),
+    "sat-b": _node("sat-b", "10.0.0.2"),
+    "gs-beta": _node("gs-beta", "10.2.1.1"),
+    "site-host": _node("site-host", "10.9.0.1", gateway="gs-alpha"),
+}
+
+
+class _Stream:
+    """A finished exec whose stdout arrives in chunks."""
+
+    def __init__(self, chunks: list[str], *, returncode: int = 0, stderr: str = "") -> None:
+        self._chunks = list(chunks)
+        self._stderr = stderr
+        self.returncode = returncode
+        self.closed = False
+
+    def is_open(self) -> bool:
+        return bool(self._chunks)
+
+    def update(self, timeout: int) -> None:
+        pass
+
+    def read_stdout(self) -> str:
+        return self._chunks.pop(0) if self._chunks else ""
+
+    def read_stderr(self) -> str:
+        stderr, self._stderr = self._stderr, ""
+        return stderr
+
+    def close(self) -> None:
+        self.closed = True
+
+
+class _Cluster:
+    """CoreV1 pod listing for the registry's nodes; exec output per origin node."""
+
+    def __init__(self, outputs: dict[str, _Stream], missing: frozenset[str] = frozenset()):
+        self.outputs = outputs
+        self.missing = missing
+
+    def list_namespaced_pod(self, namespace: str, *, label_selector: str):
+        node_id = label_selector.removeprefix(f"{NODE_ID_LABEL}=")
+        if node_id in self.missing:
+            return SimpleNamespace(items=[])
+        return SimpleNamespace(items=[pod_document(node_id, primary="frr", containers=("frr",))])
+
+    def connect_get_namespaced_pod_exec(self, *args, **kwargs):  # pragma: no cover
+        raise AssertionError("exec goes through kubernetes.stream.stream")
+
+    def stream(self, _exec, pod_name: str, _namespace: str, **_kwargs):
+        return self.outputs[pod_name]
+
+
+def _tracer(cluster: _Cluster, path_changes: list | None = None) -> ContinuousTracer:
     return ContinuousTracer(
-        node_registry=node_registry,
-        interface_map=interface_map,
-        pid_map=pid_map,
-        trace_mode="ip",
-        config=config,
-        timeline_path=None,
-        get_sim_time=lambda: "2026-03-13T10:00:00Z",
-    )
-
-
-def test_map_hops():
-    """TracepathResult + ip_to_node -> correct PathHop list."""
-    tracer = _make_tracer()
-    src_node = tracer._node_registry["gs-alpha"]
-    parsed = TracepathResult(
-        hops=[
-            TracepathHop(hop_num=1, ip="10.0.0.1", rtt_ms=5.0),
-            TracepathHop(hop_num=2, ip="10.0.0.2", rtt_ms=12.0),
-            TracepathHop(hop_num=3, ip="10.2.1.1", rtt_ms=20.0, reached=True),
-        ],
-        raw_output="test",
-    )
-    hops = tracer._map_hops(parsed, src_node)
-    assert len(hops) == 4  # src + 3 traced
-    assert hops[0].node_id == "gs-alpha"
-    assert hops[0].rtt_ms == 0.0
-    assert hops[1].node_id == "sat-P00S00"
-    assert hops[1].rtt_ms == 5.0
-    assert hops[2].node_id == "sat-P00S01"
-    assert hops[3].node_id == "gs-beta"
-
-
-def test_build_links_uses_only_known_fixed_interfaces():
-    """Dynamic access hops stay unidentified rather than claiming term0/gnd0."""
-    tracer = _make_tracer()
-    hops = [
-        PathHop(node_id="gs-alpha", node_type="ground_station"),
-        PathHop(node_id="sat-P00S00", node_type="satellite"),
-        PathHop(node_id="sat-P00S01", node_type="satellite"),
-        PathHop(node_id="gs-beta", node_type="ground_station"),
-    ]
-    links = tracer._build_links(hops)
-    assert len(links) == 3
-    assert links[0].from_node == "gs-alpha"
-    assert links[0].to_node == "sat-P00S00"
-    assert links[0].interface == ""
-    assert links[0].link_type is None
-    assert links[1].from_node == "sat-P00S00"
-    assert links[1].to_node == "sat-P00S01"
-    assert links[1].interface == "isl0"
-    assert links[1].link_type == "isl"
-    assert links[2].interface == ""
-    assert links[2].link_type is None
-
-
-def test_build_delay_queries():
-    """Hop pairs + interface_map -> correct delay queries."""
-    tracer = _make_tracer()
-    links = [
-        LiveTraceLink(from_node="gs-alpha", to_node="sat-P00S00", interface="term0"),
-        LiveTraceLink(from_node="sat-P00S00", to_node="sat-P00S01", interface="isl0"),
-    ]
-    queries = tracer._build_delay_queries(links)
-    assert len(queries) == 2
-    assert queries[0]["pid"] == 1001
-    assert queries[0]["ifname"] == "term0"
-    assert queries[1]["pid"] == 1002
-    assert queries[1]["ifname"] == "isl0"
-
-
-def test_adaptive_interval():
-    """Fast interval when near path change, normal otherwise."""
-    from nodalarc.platform_config import get_platform_config
-
-    config = get_platform_config()
-
-    # Near path change (5s < 30s window)
-    assert 5.0 < config.trace_fast_window_seconds
-    # Would select fast interval
-    assert config.trace_interval_fast_seconds < config.trace_interval_seconds
-
-    # No predicted change (None) -> normal interval
-    # (This is tested indirectly through the trace loop logic)
-
-
-def test_path_change_detection():
-    """Different hop sequences trigger on_path_change callback."""
-    changes = []
-
-    def on_change(src, dst, old_hops, new_hops):
-        changes.append((src, dst, old_hops, new_hops))
-
-    tracer = _make_tracer()
-    tracer._on_path_change = on_change
-
-    # Simulate: first result has path A, second has path B
-    # We test the detection logic directly
-    prev = ["gs-alpha", "sat-P00S00", "gs-beta"]
-    curr = ["gs-alpha", "sat-P00S01", "gs-beta"]
-    assert prev != curr
-
-    # The callback would be called if prev != curr
-    if prev and curr != prev:
-        on_change("gs-alpha", "gs-beta", prev, curr)
-    assert len(changes) == 1
-    assert changes[0][2] == prev
-    assert changes[0][3] == curr
-
-
-def test_traced_path_conversion():
-    """LiveTraceResult -> TracedPath conversion."""
-    from nodalarc.models.path import LiveTraceDirection, LiveTraceResult
-
-    fwd = LiveTraceDirection(
-        hops=[
-            PathHop(node_id="gs-alpha", node_type="ground_station"),
-            PathHop(node_id="sat-P00S00", node_type="satellite"),
-            PathHop(node_id="gs-beta", node_type="ground_station"),
-        ],
-        links=[],
-        rtt_ms=35.5,
-        asymmetry_detected=True,
-    )
-    rev = LiveTraceDirection(
-        hops=[
-            PathHop(node_id="gs-beta", node_type="ground_station"),
-            PathHop(node_id="sat-P00S01", node_type="satellite"),
-            PathHop(node_id="gs-alpha", node_type="ground_station"),
-        ],
-        links=[],
-        rtt_ms=40.2,
-        asymmetry_detected=False,
-    )
-    result = LiveTraceResult(
-        src="gs-alpha",
-        dst="gs-beta",
-        forward=fwd,
-        reverse=rev,
-        traced_at="2026-03-13T10:00:00Z",
-        sim_time="2026-03-13T10:00:00Z",
-        topology_state_id="abc",
-        path_valid_until="2026-03-13T10:05:00Z",
-        path_valid_seconds=300.0,
-        method="tracepath",
-        trace_mode="ip",
-    )
-
-    tracer = _make_tracer()
-    tracer._latest = result
-    tp = tracer.traced_path
-    assert tp is not None
-    assert tp.flow_id == "__continuous_trace__"
-    assert tp.src_node == "gs-alpha"
-    assert tp.dst_node == "gs-beta"
-    assert tp.hops == ["gs-alpha", "sat-P00S00", "gs-beta"]
-    assert tp.reverse_hops == ["gs-beta", "sat-P00S01", "gs-alpha"]
-    assert tp.rtt_ms == 35.5
-    assert tp.reverse_rtt_ms == 40.2
-    assert tp.asymmetry_detected is True
-    assert tp.path_valid_seconds == 300.0
-
-
-def test_extract_rtt():
-    """Extract RTT from last hop with IP."""
-    parsed = TracepathResult(
-        hops=[
-            TracepathHop(hop_num=1, ip="10.0.0.1", rtt_ms=5.0),
-            TracepathHop(hop_num=2, ip="10.0.0.2", rtt_ms=12.345),
-        ],
-        raw_output="test",
-    )
-    assert ContinuousTracer._extract_rtt(parsed) == 12.345
-
-
-def test_extract_rtt_empty():
-    """Extract RTT from empty parsed result."""
-    parsed = TracepathResult(hops=[], raw_output="")
-    assert ContinuousTracer._extract_rtt(parsed) == 0.0
-
-
-def test_tracer_accepts_dict_node_registry():
-    """External path engines may provide plain dict node records."""
-    tracer = _make_tracer(
-        node_registry={
-            "gs-alpha": {"node_id": "gs-alpha", "loopback_ipv4": "10.2.0.1"},
-            "gs-beta": {"node_id": "gs-beta", "loopback_ipv4": "10.2.1.1"},
-        },
-        interface_map={},
-        pid_map={},
-    )
-    assert tracer._ip_to_node["10.2.0.1"] == "gs-alpha"
-
-
-def test_trace_endpoint_substitutes_gateway_for_host_nodes():
-    """TEMPORARY host-node trace stopgap: a host endpoint traces from its FRR
-    gateway; a routed endpoint traces from itself."""
-    registry = {
-        "madrid-gw": SimpleNamespace(
-            node_id="madrid-gw",
-            node_type="ground_station",
-            sid=24001,
-            loopback_ipv4="10.2.0.1",
-            trace_gateway_node_id=None,
+        node_registry=REGISTRY,
+        namespace="nodalarc",
+        interval_s=3.0,
+        core_v1=lambda: cluster,
+        read_sim_time=lambda: SIM_TIME,
+        on_path_change=lambda *change: (path_changes if path_changes is not None else []).append(
+            change
         ),
-        "quic-client": SimpleNamespace(
-            node_id="quic-client",
-            node_type="host",
-            sid=None,
-            loopback_ipv4="10.255.0.241",
-            trace_gateway_node_id="madrid-gw",
-        ),
-    }
-    tracer = _make_tracer(node_registry=registry)
-
-    # A host node resolves to its gateway for tracing.
-    host = tracer._node_registry["quic-client"]
-    assert tracer._trace_endpoint(host).node_id == "madrid-gw"
-    # A routed node resolves to itself.
-    router = tracer._node_registry["madrid-gw"]
-    assert tracer._trace_endpoint(router).node_id == "madrid-gw"
+    )
 
 
-def test_trace_endpoint_falls_back_to_self_when_gateway_missing():
-    """A missing gateway (never expected) must not crash the trace — it falls
-    back to the node itself rather than raising."""
-    registry = {
-        "quic-client": SimpleNamespace(
-            node_id="quic-client",
-            node_type="host",
-            sid=None,
-            loopback_ipv4="10.255.0.241",
-            trace_gateway_node_id="absent-gw",
-        ),
-    }
-    tracer = _make_tracer(node_registry=registry)
-    host = tracer._node_registry["quic-client"]
-    assert tracer._trace_endpoint(host).node_id == "quic-client"
+def _trace_once(tracer: ContinuousTracer, cluster: _Cluster, src: str, dst: str):
+    tracer._src = tracer._endpoint(src)
+    tracer._dst = tracer._endpoint(dst)
+    with patch("kubernetes.stream.stream", side_effect=cluster.stream):
+        return tracer._trace_once()
 
 
-def test_run_tracepath_streams_partial_hops():
-    """traceroute output arriving in chunks streams each new complete hop line
-    to on_partial, so the UI grows the path instead of waiting for the whole
-    (possibly slow) command. This is the fix for the 'hangs then dumps' UX."""
-    from unittest.mock import patch
+def _output(*hop_lines: str) -> list[str]:
+    return ["traceroute to x (x), 20 hops max, 46 byte packets\n", *(f"{h}\n" for h in hop_lines)]
 
-    tracer = _make_tracer()
 
-    class _FakeStream:
-        def __init__(self, lines):
-            self._lines = list(lines)
-            self._open = True
+def test_both_directions_reached_report_the_destination_round_trip_and_symmetry() -> None:
+    cluster = _Cluster(
+        {
+            "gs-alpha": _Stream(
+                _output(" 1  10.0.0.1  5.0 ms", " 2  10.0.0.2  9.0 ms", " 3  10.2.1.1  14.0 ms")
+            ),
+            "gs-beta": _Stream(
+                _output(" 1  10.0.0.2  4.0 ms", " 2  10.0.0.1  8.0 ms", " 3  10.2.0.1  13.0 ms")
+            ),
+        }
+    )
 
-        def is_open(self):
-            return self._open
+    result = _trace_once(_tracer(cluster), cluster, "gs-alpha", "gs-beta")
 
-        def update(self, timeout=5):
-            pass
+    assert result.flow_id == TRACE_FLOW_ID
+    assert result.hops == ["gs-alpha", "sat-a", "sat-b", "gs-beta"]
+    assert result.hop_rtts == [None, 5.0, 9.0, 14.0]
+    assert (result.state, result.rtt_ms, result.error) == ("reached", 14.0, None)
+    assert result.reverse_hops == ["gs-beta", "sat-b", "sat-a", "gs-alpha"]
+    assert (result.reverse_state, result.reverse_rtt_ms) == ("reached", 13.0)
+    assert result.asymmetry_detected is False
+    assert result.tracing is True
+    assert result.sim_time == SIM_TIME
 
-        def read_stdout(self):
-            if self._lines:
-                return self._lines.pop(0)
-            self._open = False
-            return ""
 
-        def read_stderr(self):
-            return ""
+def test_different_nodes_between_the_ends_are_asymmetry() -> None:
+    cluster = _Cluster(
+        {
+            "gs-alpha": _Stream(_output(" 1  10.0.0.1  5.0 ms", " 2  10.2.1.1  9.0 ms")),
+            "gs-beta": _Stream(_output(" 1  10.0.0.2  4.0 ms", " 2  10.2.0.1  8.0 ms")),
+        }
+    )
 
-    lines = [
-        "traceroute to 10.0.0.9 (10.0.0.9), 20 hops max\n",
-        " 1  10.2.0.1  5.0 ms\n",
-        " 2  10.0.0.1  120.0 ms\n",
-        " 3  10.0.0.9  2800.0 ms\n",
-    ]
+    result = _trace_once(_tracer(cluster), cluster, "gs-alpha", "gs-beta")
 
-    partials: list[int] = []
+    assert result.asymmetry_detected is True
 
-    with (
-        patch("kubernetes.config.load_incluster_config"),
-        patch("kubernetes.client.CoreV1Api") as core_api,
-        patch("kubernetes.stream.stream", return_value=_FakeStream(lines)),
-    ):
-        core_api.return_value.list_namespaced_pod.return_value.items = [
-            pod_document("gs-alpha", primary="frr-router", containers=("observer", "frr-router"))
-        ]
-        result = tracer._run_tracepath(
-            "gs-alpha", "10.0.0.9", lambda raw: partials.append(raw.count("\n"))
+
+def test_a_hop_answering_from_a_node_lan_address_is_that_node() -> None:
+    cluster = _Cluster(
+        {
+            "gs-beta": _Stream(
+                _output(" 1  10.0.0.2  4.0 ms", " 2  172.16.1.1  8.0 ms", " 3  10.2.0.1  8.1 ms")
+            ),
+            "gs-alpha": _Stream(_output(" 1  10.2.1.1  8.0 ms")),
+        }
+    )
+
+    result = _trace_once(_tracer(cluster), cluster, "gs-beta", "gs-alpha")
+
+    assert result.hops == ["gs-beta", "sat-b", "gs-alpha", "gs-alpha"]
+
+
+def test_an_address_assigned_to_two_nodes_is_refused() -> None:
+    with pytest.raises(ValueError, match="10.0.0.1 is assigned to sat-a and sat-c"):
+        ContinuousTracer(
+            node_registry={**REGISTRY, "sat-c": _node("sat-c", "10.0.0.1")},
+            namespace="nodalarc",
+            interval_s=3.0,
+            core_v1=lambda: None,
+            read_sim_time=lambda: SIM_TIME,
+            on_path_change=lambda *_: None,
         )
 
-    assert result["ok"] is True, result
-    # on_partial fired incrementally as each new complete line arrived (not
-    # once at the end), so the UI would have seen the path grow.
-    assert partials == sorted(partials)  # monotonically increasing
-    assert len(partials) >= 3  # at least once per hop line
-    assert max(partials) >= 4  # header + 3 hop lines all complete
+
+def test_silent_and_unknown_hops_stay_in_the_path_and_leave_asymmetry_unknown() -> None:
+    cluster = _Cluster(
+        {
+            "gs-alpha": _Stream(_output(" 1  *", " 2  192.0.2.7  9.0 ms", " 3  10.2.1.1  14.0 ms")),
+            "gs-beta": _Stream(
+                _output(" 1  10.0.0.2  4.0 ms", " 2  10.0.0.1  8.0 ms", " 3  10.2.0.1  13.0 ms")
+            ),
+        }
+    )
+
+    result = _trace_once(_tracer(cluster), cluster, "gs-alpha", "gs-beta")
+
+    assert result.hops == ["gs-alpha", "*", "192.0.2.7", "gs-beta"]
+    assert result.hop_rtts == [None, None, 9.0, 14.0]
+    assert result.asymmetry_detected is None
 
 
-def test_run_tracepath_reads_the_live_target_on_every_trace():
-    """A replaced pod is traced through its new identity: no name-keyed cache."""
-    from unittest.mock import patch
+def test_a_trace_that_ends_short_of_the_destination_did_not_reach_it() -> None:
+    cluster = _Cluster(
+        {
+            "gs-alpha": _Stream(_output(" 1  10.0.0.1  5.0 ms", " 2  *", " 3  *")),
+            "gs-beta": _Stream(_output(" 1  10.0.0.2  4.0 ms", " 2  10.2.0.1  8.0 ms")),
+        }
+    )
 
-    tracer = _make_tracer()
+    result = _trace_once(_tracer(cluster), cluster, "gs-alpha", "gs-beta")
+
+    assert (result.state, result.rtt_ms, result.error) == ("not_reached", None, None)
+    assert result.hops == ["gs-alpha", "sat-a", "*", "*"]
+    assert result.reverse_state == "reached"
+    assert result.asymmetry_detected is None
+
+
+def test_a_node_without_a_workload_fails_its_direction_with_the_reason() -> None:
+    cluster = _Cluster(
+        {"gs-beta": _Stream(_output(" 1  10.2.0.1  8.0 ms"))},
+        missing=frozenset({"gs-alpha"}),
+    )
+
+    result = _trace_once(_tracer(cluster), cluster, "gs-alpha", "gs-beta")
+
+    assert result.state == "failed"
+    assert result.hops == ["gs-alpha"]
+    assert result.rtt_ms is None
+    assert "gs-alpha: expected one live session pod, found 0" in result.error
+    assert result.reverse_state == "reached"
+
+
+def test_a_traceroute_that_exits_nonzero_fails_with_its_own_words() -> None:
+    cluster = _Cluster(
+        {
+            "gs-alpha": _Stream(
+                [], returncode=1, stderr="traceroute: sendto: Network unreachable\n"
+            ),
+            "gs-beta": _Stream(_output(" 1  10.2.0.1  8.0 ms")),
+        }
+    )
+
+    result = _trace_once(_tracer(cluster), cluster, "gs-alpha", "gs-beta")
+
+    assert result.state == "failed"
+    assert result.error == (
+        "traceroute exited 1 in gs-alpha: traceroute: sendto: Network unreachable"
+    )
+    assert cluster.outputs["gs-alpha"].closed
+
+
+def test_unreadable_output_fails_the_direction() -> None:
+    cluster = _Cluster(
+        {
+            "gs-alpha": _Stream(["bogus line\n"]),
+            "gs-beta": _Stream(_output(" 1  10.2.0.1  8.0 ms")),
+        }
+    )
+
+    result = _trace_once(_tracer(cluster), cluster, "gs-alpha", "gs-beta")
+
+    assert result.state == "failed"
+    assert result.error == "unreadable traceroute output: not a traceroute hop line: 'bogus line'"
+
+
+def test_the_forward_path_is_published_while_it_grows() -> None:
+    tracer_ref: list[ContinuousTracer] = []
+    seen: list[tuple[str, list[str]]] = []
+
+    class _Recording(_Stream):
+        def read_stdout(self) -> str:
+            latest = tracer_ref[0].traced_path
+            if latest is not None:
+                seen.append((latest.state, latest.hops))
+            return super().read_stdout()
+
+    cluster = _Cluster(
+        {
+            "gs-alpha": _Recording(
+                _output(" 1  10.0.0.1  5.0 ms", " 2  10.0.0.2  9.0 ms", " 3  10.2.1.1  14.0 ms")
+            ),
+            "gs-beta": _Stream(_output(" 1  10.2.0.1  8.0 ms")),
+        }
+    )
+    tracer = _tracer(cluster)
+    tracer_ref.append(tracer)
+
+    _trace_once(tracer, cluster, "gs-alpha", "gs-beta")
+
+    running = [hops for state, hops in seen if state == "running"]
+    assert running == sorted(running, key=len)
+    assert ["gs-alpha", "sat-a"] in running
+
+
+def test_a_completed_trace_is_replaced_whole_by_the_next_cycle() -> None:
+    def cluster() -> _Cluster:
+        return _Cluster(
+            {
+                "gs-alpha": _Stream(_output(" 1  10.0.0.1  5.0 ms", " 2  10.2.1.1  9.0 ms")),
+                "gs-beta": _Stream(_output(" 1  10.2.0.1  8.0 ms")),
+            }
+        )
+
+    first = cluster()
+    tracer = _tracer(first)
+    tracer._latest = _trace_once(tracer, first, "gs-alpha", "gs-beta")
+    completed = tracer.traced_path
+
+    second = cluster()
+    tracer._core_v1 = lambda: second
+    with patch.object(tracer, "_assemble", wraps=tracer._assemble) as assemble:
+        _trace_once(tracer, second, "gs-alpha", "gs-beta")
+
+    assert tracer.traced_path is completed
+    assert assemble.call_count == 1
+
+
+def test_the_workload_is_read_on_every_trace() -> None:
+    cluster = _Cluster({})
     listings = [
         [pod_document("gs-alpha", uid="uid-1", primary="frr-router", containers=("frr-router",))],
         [
@@ -374,52 +319,101 @@ def test_run_tracepath_reads_the_live_target_on_every_trace():
                 containers=("frr-router",),
             ),
             pod_document(
-                "gs-alpha",
-                uid="uid-2",
-                primary="custom-router",
-                containers=("observer", "custom-router"),
+                "gs-alpha", uid="uid-2", primary="custom-router", containers=("custom-router",)
             ),
         ],
     ]
+    cluster.list_namespaced_pod = lambda namespace, *, label_selector: SimpleNamespace(
+        items=listings.pop(0)
+    )
+    tracer = _tracer(cluster)
 
-    class _DoneStream:
-        def is_open(self):
-            return False
+    with patch("kubernetes.stream.stream", return_value=_Stream([])) as stream:
+        tracer._run_traceroute("gs-alpha", "10.2.1.1", lambda _stdout: None)
+        stream.return_value = _Stream([])
+        tracer._run_traceroute("gs-alpha", "10.2.1.1", lambda _stdout: None)
 
-        def read_stdout(self):
-            return ""
-
-        def read_stderr(self):
-            return ""
-
-    with (
-        patch("kubernetes.config.load_incluster_config"),
-        patch("kubernetes.client.CoreV1Api") as core_api,
-        patch("kubernetes.stream.stream", return_value=_DoneStream()) as stream,
-    ):
-        core_api.return_value.list_namespaced_pod.side_effect = [
-            SimpleNamespace(items=items) for items in listings
-        ]
-        first = tracer._run_tracepath("gs-alpha", "10.0.0.9")
-        second = tracer._run_tracepath("gs-alpha", "10.0.0.9")
-
-    assert first["ok"] and second["ok"]
-    containers = [call.kwargs["container"] for call in stream.call_args_list]
-    assert containers == ["frr-router", "custom-router"]
+    assert [call.kwargs["container"] for call in stream.call_args_list] == [
+        "frr-router",
+        "custom-router",
+    ]
 
 
-def test_run_tracepath_reports_a_missing_target_instead_of_tracing():
-    from unittest.mock import patch
+def test_a_host_node_is_traced_from_its_gateway() -> None:
+    tracer = _tracer(_Cluster({}))
 
-    tracer = _make_tracer()
-    with (
-        patch("kubernetes.config.load_incluster_config"),
-        patch("kubernetes.client.CoreV1Api") as core_api,
-        patch("kubernetes.stream.stream") as stream,
-    ):
-        core_api.return_value.list_namespaced_pod.return_value.items = []
-        result = tracer._run_tracepath("gs-alpha", "10.0.0.9")
+    endpoint = tracer._endpoint("site-host")
 
-    assert result["ok"] is False
-    assert "gs-alpha: expected one live session pod, found 0" in result["error"]
-    stream.assert_not_called()
+    assert endpoint.node.node_id == "site-host"
+    assert endpoint.runs_from.node_id == "gs-alpha"
+
+
+def test_a_node_without_a_loopback_cannot_be_traced() -> None:
+    tracer = ContinuousTracer(
+        node_registry={"site-host": _node("site-host", "10.9.0.1", gateway="gs-gone")},
+        namespace="nodalarc",
+        interval_s=3.0,
+        core_v1=lambda: None,
+        read_sim_time=lambda: SIM_TIME,
+        on_path_change=lambda *_: None,
+    )
+
+    with pytest.raises(UntraceableNodeError, match="gateway gs-gone"):
+        tracer._endpoint("site-host")
+    with pytest.raises(UntraceableNodeError, match="ghost has no loopback"):
+        tracer._endpoint("ghost")
+
+
+def test_an_internal_error_stops_the_loop_and_shows_the_failure() -> None:
+    tracer = _tracer(_Cluster({}))
+
+    async def run() -> None:
+        with patch.object(tracer, "_trace_once", side_effect=KeyError("boom")):
+            await tracer.start("gs-alpha", "gs-beta")
+            await asyncio.wait_for(tracer._task, timeout=5)
+
+    asyncio.run(run())
+
+    result = tracer.traced_path
+    assert result is not None
+    assert result.tracing is False
+    assert (result.state, result.reverse_state) == ("failed", "failed")
+    assert result.error == "The trace stopped on an internal error (KeyError); see the VS-API log"
+    assert tracer.active is False
+
+
+def test_a_path_change_is_recorded_when_the_forward_path_changes() -> None:
+    changes: list = []
+    forward_outputs = [
+        _output(" 1  10.0.0.1  5.0 ms", " 2  10.2.1.1  9.0 ms"),
+        _output(" 1  10.0.0.2  5.0 ms", " 2  10.2.1.1  9.0 ms"),
+    ]
+    reverse_output = _output(" 1  10.2.0.1  8.0 ms")
+    tracer = _tracer(_Cluster({}), changes)
+
+    def next_stream(_exec, pod_name, _namespace, **_kwargs):
+        if pod_name == "gs-beta":
+            return _Stream(reverse_output)
+        # The last forward output repeats once the list is down to one.
+        return _Stream(forward_outputs.pop(0) if len(forward_outputs) > 1 else forward_outputs[0])
+
+    async def run() -> None:
+        with patch("kubernetes.stream.stream", side_effect=next_stream):
+            tracer._interval_s = 0.01
+            await tracer.start("gs-alpha", "gs-beta")
+            for _ in range(500):
+                if changes:
+                    break
+                await asyncio.sleep(0.01)
+            await tracer.stop()
+
+    asyncio.run(run())
+
+    assert changes == [
+        (
+            "gs-alpha",
+            "gs-beta",
+            ["gs-alpha", "sat-a", "gs-beta"],
+            ["gs-alpha", "sat-b", "gs-beta"],
+        )
+    ]

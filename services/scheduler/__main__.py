@@ -338,7 +338,6 @@ def _build_argument_parser() -> argparse.ArgumentParser:
         default=DEFAULT_INSTALLED_SHIPPED_CATALOG_ROOT,
         help="Installed read-only nodalarc catalog root",
     )
-    parser.add_argument("--pid-map", help="Path to pid_map.json from na-deploy")
     parser.add_argument(
         "--platform-config",
         default="configs/platform.yaml",
@@ -351,7 +350,7 @@ def main() -> None:
     _configure_logging("nodal.arc.scheduler", nats_level=logging.INFO)
     args = _build_argument_parser().parse_args()
 
-    from nodalarc.platform_config import init_platform_config
+    from nodalarc.platform_config import get_platform_config, init_platform_config
 
     init_platform_config(Path(args.platform_config))
 
@@ -382,10 +381,11 @@ def main() -> None:
 
     # Pod location map — canonical node IDs from K8s labels
     loc = PodLocationMap()
-    if args.pid_map:
-        loc.load_from_pid_map_file(args.pid_map)
-    else:
-        loc.load_from_k8s_api(expected_node_ids=expected_nodes, session_id=session_id)
+    loc.load_from_k8s_api(
+        namespace=get_platform_config().kubernetes_namespace,
+        expected_node_ids=expected_nodes,
+        session_id=session_id,
+    )
     log.debug("Pod locations:\n%s", loc.summary())
 
     # --- Wiring gate: wait for Node Agent to complete wiring ---
@@ -394,7 +394,6 @@ def main() -> None:
     # Same check the Operator uses (handlers.py:188-189).
     # K8s config already loaded by loc.load_from_k8s_api() above.
     import kubernetes.client
-    from nodalarc.platform_config import get_platform_config
 
     k8s_v1 = kubernetes.client.CoreV1Api()
     ns = get_platform_config().kubernetes_namespace

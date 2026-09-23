@@ -32,7 +32,6 @@ import { BuilderView } from "./builder/BuilderView";
 import { WS_URL, fetchApiKey } from "./config";
 import { setLabelsEnabled, getLabelsEnabled } from "./globe/labels";
 import { setGsLabelsEnabled, getGsLabelsEnabled } from "./globe/groundStations";
-import type { TracedPath } from "./types";
 import type { GlobeActions } from "./globe/actions";
 
 import "./styles/fonts.css";
@@ -126,7 +125,6 @@ function AppInner() {
   }, []);
   const canSplit = windowWidth >= 1280;
 
-  const [userTrace, setUserTrace] = useState<TracedPath | null>(null);
   const [visiblePlanes, setVisiblePlanes] = useState<Set<number> | null>(null);
   const [visibleSegments, setVisibleSegments] = useState<Set<string> | null>(null);
   const globeActionsRef = useRef<GlobeActions | null>(null);
@@ -302,21 +300,12 @@ function AppInner() {
     if (viewMode === "builder") setBuilderEntered(true);
   }, [viewMode]);
 
-  const augmentedSnapshot = useMemo(() => {
-    if (!snapshot) return snapshot;
-    const hasContinuous = snapshot.traced_paths.some(p => p.flow_id === "__continuous_trace__");
-    if (hasContinuous) return snapshot;
-    if (!userTrace) return snapshot;
-    const serverPaths = snapshot.traced_paths.filter(p => p.flow_id !== "__user_trace__");
-    return { ...snapshot, traced_paths: [...serverPaths, userTrace] };
-  }, [snapshot, userTrace]);
-
   // Authored-orbit regime per node (static per ephemeris epoch).
   const regimeById = useMemo(() => buildRegimeIndex(ephemeris), [ephemeris]);
 
   const renderedSnapshot = useMemo(
-    () => filterSnapshotForRender(augmentedSnapshot, visibleSegments, visiblePlanes),
-    [augmentedSnapshot, visibleSegments, visiblePlanes],
+    () => filterSnapshotForRender(snapshot, visibleSegments, visiblePlanes),
+    [snapshot, visibleSegments, visiblePlanes],
   );
 
   // --- Build zone content ---
@@ -456,7 +445,7 @@ function AppInner() {
       </div>
       {viewMode === "dashboard" && (
         <div className="full-pane" style={{ background: "var(--bg-main)", overflow: "auto" }}>
-          <Dashboard snapshot={augmentedSnapshot} />
+          <Dashboard snapshot={snapshot} />
         </div>
       )}
       {builderEntered && (
@@ -539,7 +528,7 @@ function AppInner() {
         <div className="filter-panel-overlay" onClick={() => setFilterOpen(false)}>
           <div className="filter-panel-drawer" onClick={(e) => e.stopPropagation()}>
             <FilterPanel
-              snapshot={augmentedSnapshot}
+              snapshot={snapshot}
               showIslLinks={showIslLinks}
               showGroundLinks={showGroundLinks}
               showSatPaths={showSatPaths}
@@ -568,12 +557,11 @@ function AppInner() {
 
   const rightPanelContent = (
     <InfoPanel
-      snapshot={augmentedSnapshot}
+      snapshot={snapshot}
       selection={selection}
       anchorGsId={anchorGsId}
       regimeById={regimeById}
       onSelect={select}
-      onTraceResult={setUserTrace}
     />
   );
 

@@ -8,7 +8,7 @@ StateSnapshot is the complete payload sent over WebSocket at ~1Hz.
 from datetime import datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from nodalarc.body_frames import SupportedSurfaceBody
 from nodalarc.models.scheduler_ops import ActuationState
@@ -116,25 +116,67 @@ class LinkDecisionTrace(BaseModel):
     endpoint_segments: tuple[str, str] | None = None
 
 
-class TracedPath(BaseModel):
-    """Forwarding path trace for a traffic flow."""
+TraceState = Literal["running", "reached", "not_reached", "failed"]
 
-    model_config = ConfigDict(frozen=True)
+
+class TracedPath(BaseModel):
+    """The live measured path between two nodes: one traceroute per direction.
+
+    Each direction lists what answered at every hop, in hop order, after the
+    node the trace starts from: a node id when the resolver assigned the
+    answering address to that node, the address itself when no node owns it,
+    and ``*`` when nothing answered. ``state`` says how the trace ended. ``rtt_ms`` is the
+    destination's round trip and exists only when the destination answered;
+    ``error`` exists only when the trace could not run. ``asymmetry_detected``
+    exists only when both directions reached their destination and every hop
+    between the ends answered from a node's address. ``tracing`` is false once
+    the trace loop has stopped; the last result then stays until the trace is
+    stopped or restarted.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
     flow_id: str
     src_node: str
     dst_node: str
     hops: list[str]
-    reverse_hops: list[str] = []
-    hop_rtts: list[float | None] = []
-    reverse_hop_rtts: list[float | None] = []
-    rtt_ms: float = 0.0
-    reverse_rtt_ms: float = 0.0
-    asymmetry_detected: bool = False
-    method: str = "tracepath"
-    path_valid_until: str | None = None
-    path_valid_seconds: float | None = None
-    traced_at: str | None = None
+    hop_rtts: list[float | None]
+    state: TraceState
+    rtt_ms: float | None
+    error: str | None
+    reverse_hops: list[str]
+    reverse_hop_rtts: list[float | None]
+    reverse_state: TraceState
+    reverse_rtt_ms: float | None
+    reverse_error: str | None
+    asymmetry_detected: bool | None
+    tracing: bool
+    traced_at: str
+    sim_time: str
+
+    @model_validator(mode="after")
+    def _outcomes_match_their_states(self) -> TracedPath:
+        for label, hops, rtts, state, rtt_ms, error in (
+            ("forward", self.hops, self.hop_rtts, self.state, self.rtt_ms, self.error),
+            (
+                "reverse",
+                self.reverse_hops,
+                self.reverse_hop_rtts,
+                self.reverse_state,
+                self.reverse_rtt_ms,
+                self.reverse_error,
+            ),
+        ):
+            if len(hops) != len(rtts):
+                raise ValueError(f"{label} trace has {len(hops)} hops and {len(rtts)} round trips")
+            if (rtt_ms is not None) != (state == "reached"):
+                raise ValueError(f"{label} trace rtt_ms exists only when it reached")
+            if (error is not None) != (state == "failed"):
+                raise ValueError(f"{label} trace error exists only when it failed")
+        both_reached = self.state == "reached" and self.reverse_state == "reached"
+        if self.asymmetry_detected is not None and not both_reached:
+            raise ValueError("asymmetry is known only when both directions reached")
+        return self
 
 
 class NetworkHealth(BaseModel):

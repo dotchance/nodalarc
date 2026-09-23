@@ -29,6 +29,7 @@ from nodalarc.prepared_session import (
 from nodalarc.resolve_session import SessionResolutionError
 from nodalarc.runtime_support import UnsupportedFeature, UnsupportedFeatureError
 from nodalarc.workload_target import WorkloadTargetError
+from vs_api.continuous_tracer import UntraceableNodeError
 from vs_api.introspect import IntrospectExecError
 from vs_api.refusals import (
     CATALOG_CLOSURE_STATUS,
@@ -39,6 +40,7 @@ from vs_api.refusals import (
     refusal_from_exception,
     refusal_response,
 )
+from vs_api.session_context import SessionInactiveError
 from vs_api.session_deployment import (
     SessionDeploymentPreparationError,
     SessionDeploymentPreparationErrorCode,
@@ -137,6 +139,17 @@ def _cases() -> list[tuple[BaseException, int, str]]:
             "workload_target.unavailable",
         ),
         (IntrospectExecError("Kubernetes exec failed"), 502, "introspect.exec_failed"),
+        (SessionInactiveError(), 503, "session.inactive"),
+        (
+            SessionInactiveError("Session switch in progress"),
+            503,
+            "session.inactive",
+        ),
+        (
+            UntraceableNodeError("site-host has no loopback address to trace"),
+            400,
+            "trace.untraceable_node",
+        ),
     ]
 
 

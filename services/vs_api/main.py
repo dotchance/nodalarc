@@ -60,6 +60,7 @@ from nodalarc.cr_runtime_config import (
     CR_NAME,
     CR_PLURAL,
     CR_VERSION,
+    SOURCE_ID_ANNOTATION,
     ConstellationSpecSpec,
     ConstellationSpecStatus,
     cr_status_observes_current_generation,
@@ -123,6 +124,7 @@ from nodalarc.runtime_config import ResolvedRuntimeConfig, RuntimeConfigError
 from urllib3.exceptions import HTTPError as TransportHTTPError
 from yaml import YAMLError
 
+from vs_api import k8s
 from vs_api.catalog_context import CatalogContext, get_catalog_context
 from vs_api.catalog_session_service import CatalogSessionService
 from vs_api.catalog_upload_lifecycle import (
@@ -149,7 +151,7 @@ from vs_api.refusals import (
     refusal_response,
 )
 from vs_api.resolved_runtime_views import tracer_node_registry
-from vs_api.session_context import SessionContext
+from vs_api.session_context import SessionContext, SessionInactiveError
 from vs_api.session_manager import SessionManager
 from vs_api.terminal import TerminalManager
 from vs_api.transition_operations import (
@@ -817,7 +819,7 @@ def _build_snapshot(*, ops_after: int = 0) -> dict | None:
         health = ctx.network_health
 
         _traced: list[TracedPath] = []
-        if ctx.continuous_tracer is not None and ctx.continuous_tracer.active:
+        if ctx.continuous_tracer is not None:
             tp = ctx.continuous_tracer.traced_path
             if tp is not None:
                 _traced.append(tp)
@@ -911,9 +913,7 @@ def _load_cr_runtime_session(
 ) -> ResolvedRuntimeConfig:
     ConstellationSpecSpec.from_cr(spec)
     if core_v1 is None:
-        import kubernetes.client
-
-        core_v1 = kubernetes.client.CoreV1Api()
+        core_v1 = k8s.core_v1()
     return load_cr_runtime_config(
         spec,
         core_v1=core_v1,
@@ -957,7 +957,6 @@ def _extract_cr_session(
     *,
     require_ready: bool,
     core_v1: Any | None = None,
-    namespace: str | None = None,
 ) -> CRSessionIdentity | None:
     """Return the CR session only when status carries current runtime identity.
 
@@ -985,7 +984,9 @@ def _extract_cr_session(
     cr_spec = ConstellationSpecSpec.from_cr(spec)
     session_yaml = cr_spec.session_yaml
 
-    runtime_namespace = str(metadata.get("namespace") or namespace or "nodalarc")
+    runtime_namespace = metadata.get("namespace")
+    if not isinstance(runtime_namespace, str) or not runtime_namespace:
+        raise ValueError("ConstellationSpec metadata has no namespace")
     runtime_config = _load_cr_runtime_session(
         spec,
         namespace=runtime_namespace,
@@ -1015,11 +1016,9 @@ def _extract_cr_session(
             "ConstellationSpec status.sessionName does not match spec.session.name "
             f"({status_name!r} != {session.session.name!r})"
         )
-    annotations = metadata.get("annotations") or {}
-    source_id = str(
-        annotations.get("nodalarc.io/source-id")
-        or f"constellationspec:{runtime_namespace}/{CR_NAME}"
-    )
+    source_id = (metadata.get("annotations") or {}).get(SOURCE_ID_ANNOTATION)
+    if not isinstance(source_id, str) or not source_id:
+        raise ValueError(f"ConstellationSpec is missing the {SOURCE_ID_ANNOTATION} annotation")
     return CRSessionIdentity(
         session_id=session_run_id,
         session_name=session.session.name,
@@ -1097,14 +1096,10 @@ async def _reconcile_interrupted_transition(cr: dict[str, Any] | None) -> None:
         detail = reconciliation.detail
         if state is TransitionOperationState.SUCCEEDED:
             try:
-                runtime_namespace = str(
-                    (cr or {}).get("metadata", {}).get("namespace") or "nodalarc"
-                )
                 verified = await asyncio.to_thread(
                     _extract_cr_session,
                     cr,
                     require_ready=True,
-                    namespace=runtime_namespace,
                 )
                 if verified is None:
                     raise ValueError("Ready runtime identity is not generation-consistent")
@@ -1342,7 +1337,6 @@ async def _monitor_cr_session(api: Any, core_v1_api: Any, namespace: str) -> Non
                 cr,
                 require_ready=True,
                 core_v1=core_v1_api,
-                namespace=namespace,
             )
             if ready is None:
                 continue
@@ -1527,18 +1521,8 @@ async def _nats_subscriber() -> None:
     # Bootstrap from the live ConstellationSpec. Its root YAML and catalogUpload
     # selection identify the ordinary files that every runtime consumer verifies
     # and resolves through the shared configuration path.
-    import kubernetes.client as _k8s
-    import kubernetes.config as _k8s_config
-
-    def _load_k8s_config() -> None:
-        try:
-            _k8s_config.load_incluster_config()
-        except _k8s_config.ConfigException:
-            _k8s_config.load_kube_config()
-
-    await asyncio.to_thread(_load_k8s_config)
-    _cr_api = _k8s.CustomObjectsApi()
-    _cr_core_api = _k8s.CoreV1Api()
+    _cr_api = await asyncio.to_thread(k8s.custom_objects)
+    _cr_core_api = await asyncio.to_thread(k8s.core_v1)
     _cr_ns = get_platform_config().kubernetes_namespace
 
     _cr_session: CRSessionIdentity | None = None
@@ -1915,9 +1899,7 @@ def get_auth_token() -> dict:
 @app.get("/api/v1/ops/health", dependencies=[Depends(_require_api_key)])
 def get_ops_health() -> dict:
     """Return latest Scheduler actuation health derived from typed OpsEvents."""
-    ctx = _active_context
-    if ctx is None:
-        return {"session_id": "", "wiring_generation": "", "scheduler_instances": []}
+    ctx = _require_active_context()
     with ctx.state_lock:
         return ctx.build_actuation_health()
 
@@ -1925,10 +1907,8 @@ def get_ops_health() -> dict:
 @app.post("/api/v1/ops/repair", dependencies=[Depends(_require_api_key)])
 async def request_operator_repair(body: dict) -> dict:
     """Explicit operator-triggered GS repair routed to the reporting Scheduler."""
-    ctx = _active_context
+    ctx = _require_active_context()
     nc = _nats_connection
-    if ctx is None:
-        return JSONResponse(status_code=503, content={"error": "No active session"})
     if nc is None:
         return JSONResponse(status_code=503, content={"error": "NATS not connected"})
     gs_id = body.get("gs_id", "")
@@ -1991,6 +1971,14 @@ async def get_ops_events(
     if level:
         events = [e for e in events if e.get("level") == level]
     return events[-limit:]
+
+
+def _require_active_context(detail: str = "") -> SessionContext:
+    """The active session context; a request without one is refused."""
+    ctx = _active_context
+    if ctx is None:
+        raise SessionInactiveError(detail)
+    return ctx
 
 
 def _public_no_active_session_detail(status: str) -> str:
@@ -2301,19 +2289,12 @@ async def get_node_config(node_id: str) -> Response:
 
 
 @app.get("/api/v1/state", response_model=None, dependencies=[Depends(_require_api_key)])
-def get_state() -> dict | JSONResponse:
+def get_state() -> dict:
     """Current state snapshot."""
     snapshot = _build_snapshot()
     if snapshot is None:
         session_status = _session_manager.status if _session_manager else "idle"
-        return JSONResponse(
-            status_code=503,
-            content={
-                "error": "No active session",
-                "session_status": session_status,
-                "session_status_detail": _public_no_active_session_detail(session_status),
-            },
-        )
+        raise SessionInactiveError(_public_no_active_session_detail(session_status))
     return snapshot
 
 
@@ -2407,9 +2388,7 @@ async def get_path(src: str, dst: str, sim_time: str | None = None) -> JSONRespo
 
 def _history_session() -> tuple[SessionContext | None, Response | None]:
     """The active session whose history is readable, or the refusal that says why not."""
-    ctx = _active_context
-    if ctx is None:
-        return None, refusal_response(503, "session.inactive", "No active session")
+    ctx = _require_active_context()
     if ctx.history_path is None:
         return None, refusal_response(
             409, "history.not_recorded", "History recording is off for this session"
@@ -2483,9 +2462,7 @@ def get_link_decision_traces(
     node_b: str = Query(None),
 ) -> list[dict] | dict | JSONResponse:
     """Return active-link decision traces retained by the current session."""
-    ctx = _active_context
-    if ctx is None:
-        return []
+    ctx = _require_active_context()
     if (node_a is None) != (node_b is None):
         return JSONResponse(
             status_code=400,
@@ -2530,9 +2507,7 @@ def get_decision_explanation(
     """
     from nodalarc.explain import compose_gs_explanation
 
-    ctx = _active_context
-    if ctx is None:
-        return JSONResponse(status_code=404, content={"error": "No active session"})
+    ctx = _require_active_context()
     with ctx.state_lock:
         snapshot = ctx.latest_ground_link_decision_snapshot
         active_pairs = ctx.actual_kernel_pairs()
@@ -2585,9 +2560,7 @@ def get_decision_explanation_timeline(
     the UI can roll up recent no-link causes without polling the full GS×sat
     matrix.
     """
-    ctx = _active_context
-    if ctx is None:
-        return JSONResponse(status_code=404, content={"error": "No active session"})
+    ctx = _require_active_context()
     timeline = ctx.ground_decision_timeline(gs, limit=limit)
     if timeline is None:
         return JSONResponse(
@@ -2639,9 +2612,7 @@ def get_ground_link_decisions(
     ``404`` if no snapshot has been received yet; ``404`` for a
     specific pair the OME's ground decision set does not cover.
     """
-    ctx = _active_context
-    if ctx is None:
-        return JSONResponse(status_code=404, content={"error": "No active session"})
+    ctx = _require_active_context()
     if (node_a is None) != (node_b is None):
         return JSONResponse(
             status_code=400,
@@ -2765,14 +2736,7 @@ def _live_trace_grpc(src: str, dst: str, nodes: list, links: list) -> dict | Non
 
     def get_pod_ip(node_id: str) -> str | None:
         try:
-            import kubernetes.client
-            import kubernetes.config
-
-            try:
-                kubernetes.config.load_incluster_config()
-            except kubernetes.config.ConfigException:
-                kubernetes.config.load_kube_config()
-            v1 = kubernetes.client.CoreV1Api()
+            v1 = k8s.core_v1()
             pod = v1.read_namespaced_pod(node_id.lower(), cfg.kubernetes_namespace)
             return pod.status.pod_ip if pod.status else None
         except Exception:
@@ -3055,43 +3019,10 @@ def trace_path(body: dict) -> dict:
 # --- Continuous trace endpoints ---
 
 
-def _get_sim_time_str() -> str:
-    """Return current sim_time as string for the continuous tracer."""
-    ctx = _active_context
-    if ctx is None:
-        return datetime.now(UTC).isoformat()
-    with ctx.state_lock:
-        return ctx.sim_time
-
-
-def _on_path_change(src: str, dst: str, old_hops: list[str], new_hops: list[str]) -> None:
-    """Callback when the traced path changes — add a RecentEvent."""
-    ctx = _active_context
-    if ctx is None:
-        return
-    sim_time = _get_sim_time_str()
-    old_str = " -> ".join(old_hops[:4])
-    new_str = " -> ".join(new_hops[:4])
-    if len(old_hops) > 4:
-        old_str += f" ({len(old_hops)} hops)"
-    if len(new_hops) > 4:
-        new_str += f" ({len(new_hops)} hops)"
-    ctx._add_recent_event(
-        {
-            "sim_time": sim_time,
-            "node_id": src,
-            "reason": f"Path {src} -> {dst}: {old_str} => {new_str}",
-        },
-        "PATH_CHANGE",
-    )
-
-
 @app.post("/api/v1/trace/start", dependencies=[Depends(_require_api_key)])
 async def start_continuous_trace(body: dict) -> dict:
     """Start continuous path tracing between two nodes."""
-    ctx = _active_context
-    if ctx is None:
-        return JSONResponse(status_code=409, content={"error": "No active session"})
+    ctx = _require_active_context()
 
     src = body.get("src_node", "")
     dst = body.get("dst_node", "")
@@ -3108,15 +3039,9 @@ async def start_continuous_trace(body: dict) -> dict:
         await ctx.continuous_tracer.stop()
         ctx.continuous_tracer = None
 
-    # Load trace context
-    try:
-        tracer = await asyncio.to_thread(_create_continuous_tracer)
-    except Exception as exc:
-        log.warning("Failed to create continuous tracer: %s", exc, exc_info=True)
-        return JSONResponse(status_code=500, content={"error": "Tracer initialization failed"})
-
-    ctx.continuous_tracer = tracer
+    tracer = _create_continuous_tracer(ctx)
     await tracer.start(src, dst)
+    ctx.continuous_tracer = tracer
     return {"ok": True, "src": src, "dst": dst}
 
 
@@ -3132,56 +3057,30 @@ async def stop_continuous_trace() -> dict:
 
 @app.get("/api/v1/trace/status", dependencies=[Depends(_require_api_key)])
 def get_trace_status() -> dict:
-    """Return current continuous trace status."""
+    """The running trace's endpoints and latest result, or that none runs."""
     ctx = _active_context
-    if ctx is None or ctx.continuous_tracer is None or not ctx.continuous_tracer.active:
+    tracer = ctx.continuous_tracer if ctx is not None else None
+    if tracer is None:
         return {"active": False, "src": None, "dst": None, "result": None}
-
-    result = ctx.continuous_tracer.latest_result
+    result = tracer.traced_path
     return {
-        "active": True,
-        "src": ctx.continuous_tracer.src,
-        "dst": ctx.continuous_tracer.dst,
-        "result": result.model_dump(mode="json") if result else None,
+        "active": tracer.active,
+        "src": tracer.src,
+        "dst": tracer.dst,
+        "result": result.model_dump(mode="json") if result is not None else None,
     }
 
 
-def _create_continuous_tracer() -> ContinuousTracer:
-    """Create a ContinuousTracer from the current session context."""
+def _create_continuous_tracer(ctx: SessionContext) -> ContinuousTracer:
+    """A tracer over the session's resolved nodes, bound to that session."""
     cfg = get_platform_config()
-
-    node_registry: dict = {}
-    interface_map: dict = {}
-    pid_map: dict = {}
-    timeline_path: str | None = None
-    trace_mode = "ip"
-
-    runtime_context = _active_context
-    if runtime_context is not None and runtime_context.session_resolution is not None:
-        node_registry = tracer_node_registry(runtime_context.session_resolution)
-        interface_map = runtime_context.session_resolution.resolved.link_interface_map()
-        log.info(
-            "Loaded resolved trace view: %d nodes, %d interfaces",
-            len(node_registry),
-            len(interface_map),
-        )
-
-        routing_stack = runtime_context.routing_stack
-        if routing_stack:
-            if "isis-sr" in routing_stack or "static-sr" in routing_stack:
-                trace_mode = "sr-uniform"
-            elif routing_stack.startswith("nodalpath"):
-                trace_mode = "cspf"
-
     return ContinuousTracer(
-        node_registry=node_registry,
-        interface_map=interface_map,
-        pid_map=pid_map,
-        trace_mode=trace_mode,
-        config=cfg,
-        timeline_path=timeline_path,
-        get_sim_time=_get_sim_time_str,
-        on_path_change=_on_path_change,
+        node_registry=tracer_node_registry(ctx.session_resolution),
+        namespace=cfg.kubernetes_namespace,
+        interval_s=cfg.trace_interval_seconds,
+        core_v1=k8s.core_v1,
+        read_sim_time=ctx.read_sim_time,
+        on_path_change=ctx.record_path_change,
     )
 
 
@@ -3821,18 +3720,8 @@ async def _run_prepared_switch_locked(
     if _session_manager is None:
         raise RuntimeError("Session manager is not initialized")
 
-    import kubernetes.client
-    import kubernetes.config
-
-    def _load_k8s_config() -> None:
-        try:
-            kubernetes.config.load_incluster_config()
-        except kubernetes.config.ConfigException:
-            kubernetes.config.load_kube_config()
-
-    await asyncio.to_thread(_load_k8s_config)
-    custom_objects_api = kubernetes.client.CustomObjectsApi()
-    core_v1_api = kubernetes.client.CoreV1Api()
+    custom_objects_api = await asyncio.to_thread(k8s.custom_objects)
+    core_v1_api = await asyncio.to_thread(k8s.core_v1)
     namespace = get_platform_config().kubernetes_namespace
     upload_store = KubernetesCatalogUploadStore(core_v1_api, namespace)
     old_context = _active_context
@@ -3931,7 +3820,6 @@ async def _run_prepared_switch_locked(
             ready_cr,
             require_ready=True,
             core_v1=core_v1_api,
-            namespace=namespace,
         )
         if ready is None:
             raise RuntimeError("Operator returned Ready without current runtime identity")
@@ -4007,18 +3895,8 @@ async def _poll_cr_until_ready() -> None:
     """
     global _active_context, _active_cr_generation
     log.info("_poll_cr_until_ready: starting background CR polling task")
-    import kubernetes.client
-    import kubernetes.config
-
-    def _load_k8s_config() -> None:
-        try:
-            kubernetes.config.load_incluster_config()
-        except kubernetes.config.ConfigException:
-            kubernetes.config.load_kube_config()
-
-    await asyncio.to_thread(_load_k8s_config)
-    api = kubernetes.client.CustomObjectsApi()
-    core_v1_api = kubernetes.client.CoreV1Api()
+    api = await asyncio.to_thread(k8s.custom_objects)
+    core_v1_api = await asyncio.to_thread(k8s.core_v1)
     ns = get_platform_config().kubernetes_namespace
     upload_reconciled = False
 
@@ -4182,14 +4060,7 @@ def main() -> None:
     # not parse --session with default catalog roots: uploaded user: closures
     # are selected by spec.catalogUpload and verified by _extract_cr_session.
     try:
-        import kubernetes.client as _k8s_client
-        import kubernetes.config as _k8s_config
-
-        try:
-            _k8s_config.load_incluster_config()
-        except _k8s_config.ConfigException:
-            _k8s_config.load_kube_config()
-        cr = _k8s_client.CustomObjectsApi().get_namespaced_custom_object(
+        cr = k8s.custom_objects().get_namespaced_custom_object(
             group=CR_GROUP,
             version=CR_VERSION,
             namespace=get_platform_config().kubernetes_namespace,

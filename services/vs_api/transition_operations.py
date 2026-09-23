@@ -21,7 +21,16 @@ from typing import Annotated, Any, Final, Literal
 
 from nodalarc.catalog_refs import SessionRef
 from nodalarc.content_identity import sha256_digest
-from nodalarc.cr_runtime_config import ConstellationSpecSpec, ConstellationSpecStatus
+from nodalarc.cr_runtime_config import (
+    CATALOG_GENERATION_ANNOTATION,
+    CLOSURE_DIGEST_ANNOTATION,
+    DOCUMENT_DIGEST_ANNOTATION,
+    SOURCE_ID_ANNOTATION,
+    SOURCE_KIND_ANNOTATION,
+    SOURCE_REVISION_ANNOTATION,
+    ConstellationSpecSpec,
+    ConstellationSpecStatus,
+)
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 _OPERATION_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{15,127}$")
@@ -808,17 +817,17 @@ def reconcile_transition_operation(
     )
     upload = parsed.catalog_upload if parsed is not None else None
     expected_annotations = {
-        "nodalarc.io/source-kind": "catalog_session",
-        "nodalarc.io/source-id": operation.source.logical_id,
-        "nodalarc.io/source-revision": operation.provenance.source_revision,
-        "nodalarc.io/document-digest": operation.facts.document_digest,
-        "nodalarc.io/closure-digest": operation.facts.closure_digest,
+        SOURCE_KIND_ANNOTATION: "catalog_session",
+        SOURCE_ID_ANNOTATION: operation.source.logical_id,
+        SOURCE_REVISION_ANNOTATION: operation.provenance.source_revision,
+        DOCUMENT_DIGEST_ANNOTATION: operation.facts.document_digest,
+        CLOSURE_DIGEST_ANNOTATION: operation.facts.closure_digest,
     }
     expected_generation = operation.provenance.repository_generation
     generation_matches = (
-        annotations.get("nodalarc.io/catalog-generation") == expected_generation
+        annotations.get(CATALOG_GENERATION_ANNOTATION) == expected_generation
         if expected_generation is not None
-        else "nodalarc.io/catalog-generation" not in annotations
+        else CATALOG_GENERATION_ANNOTATION not in annotations
     )
     runtime_plan = operation.provenance.runtime_plan
     observed_runtime = operation.provenance.constellation_spec

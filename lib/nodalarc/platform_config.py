@@ -56,10 +56,8 @@ class PlatformConfig(BaseModel):
     vs_api_session_switch_max_requests_per_minute: int
     vs_api_introspect_max_response_bytes: int
 
-    # Continuous trace intervals
+    # Continuous trace interval
     trace_interval_seconds: float
-    trace_interval_fast_seconds: float
-    trace_fast_window_seconds: float
 
     # Service host resolution — for inter-service HTTP calls (not NATS).
     # Keys: service names (vs-api, nodalpath, etc.). Values: hostnames.

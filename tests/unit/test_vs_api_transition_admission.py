@@ -483,9 +483,8 @@ def test_startup_reconciliation_keeps_matching_wiring_operation_then_completes(
         monkeypatch.setattr(
             main,
             "_extract_cr_session",
-            lambda *_args, **_kwargs: SimpleNamespace(
-                session_id="recovered-run",
-                generation=9,
+            _extraction_with_the_real_signature(
+                main, SimpleNamespace(session_id="recovered-run", generation=9)
             ),
         )
         await main._reconcile_interrupted_transition(cr)
@@ -842,3 +841,96 @@ def test_poll_rule_requires_a_retained_cause_behind_a_transport_wrapper() -> Non
     )
 
     assert main._poll_failure_is_transport(orphan) is False
+
+
+def _extraction_with_the_real_signature(main, identity):
+    """A stand-in for ``_extract_cr_session`` that accepts only calls the real one accepts."""
+    import inspect
+
+    signature = inspect.signature(main._extract_cr_session)
+
+    def extract(*args, **kwargs):
+        signature.bind(*args, **kwargs)
+        return identity
+
+    return extract
+
+
+def test_a_prepared_switch_extracts_the_ready_session_through_the_real_signature(monkeypatch):
+    import vs_api.main as main
+    from vs_api import k8s
+
+    ready_cr = {"metadata": {"generation": 3}}
+    identity = SimpleNamespace(session_id="run-switched", generation=3)
+    activated: list = []
+
+    class _Manager:
+        status = "switching"
+
+        async def switch_catalog(self, deployment, **_kwargs):
+            return ready_cr
+
+    async def _no_op(*_args, **_kwargs) -> None:
+        return None
+
+    async def _activate(ready, *, source, transition_already_started):
+        activated.append((ready, source, transition_already_started))
+
+    monkeypatch.setattr(main, "_session_manager", _Manager())
+    monkeypatch.setattr(k8s, "custom_objects", lambda: object())
+    monkeypatch.setattr(k8s, "core_v1", lambda: object())
+    monkeypatch.setattr(main, "KubernetesCatalogUploadStore", lambda *_args: object())
+    monkeypatch.setattr(main, "_reconcile_catalog_upload_lifecycle", _no_op)
+    monkeypatch.setattr(
+        main, "_extract_cr_session", _extraction_with_the_real_signature(main, identity)
+    )
+    monkeypatch.setattr(main, "_activate_session_context_from_cr", _activate)
+    deployment = SimpleNamespace(
+        prepared=SimpleNamespace(source=SimpleNamespace(logical_id="user:sessions/demo.yaml"))
+    )
+
+    result = asyncio.run(main._run_prepared_switch_locked(deployment, catalog_context=object()))
+
+    assert (result.session_id, result.generation) == ("run-switched", 3)
+    assert activated == [(identity, "catalog-switch", True)]
+
+
+def test_the_cr_monitor_adopts_a_new_ready_session_through_the_real_signature(monkeypatch):
+    import vs_api.main as main
+
+    identity = SimpleNamespace(
+        session_id="run-adopted", generation=4, session=object(), source_id="user:sessions/x.yaml"
+    )
+    adopted = asyncio.Event()
+
+    class _Api:
+        def get_namespaced_custom_object(self, **_kwargs):
+            return {"metadata": {"generation": 4}}
+
+    async def _no_op(*_args, **_kwargs) -> None:
+        return None
+
+    async def _activate(ready, *, source):
+        assert (ready, source) == (identity, "cr-monitor")
+        adopted.set()
+
+    monkeypatch.setattr(main, "_CR_MONITOR_INTERVAL_SECONDS", 0)
+    monkeypatch.setattr(main, "_active_context", None)
+    monkeypatch.setattr(main, "_reconcile_interrupted_transition", _no_op)
+    monkeypatch.setattr(main, "_reconcile_catalog_upload_lifecycle", _no_op)
+    monkeypatch.setattr(main, "_cr_ready_identity", lambda _cr: (4, "run-adopted"))
+    monkeypatch.setattr(
+        main, "_extract_cr_session", _extraction_with_the_real_signature(main, identity)
+    )
+    monkeypatch.setattr(main, "_activate_session_context_from_cr", _activate)
+
+    async def exercise() -> None:
+        monitor = asyncio.create_task(main._monitor_cr_session(_Api(), object(), "nodalarc"))
+        try:
+            await asyncio.wait_for(adopted.wait(), timeout=5)
+        finally:
+            monitor.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await monitor
+
+    asyncio.run(exercise())

@@ -36,7 +36,6 @@ function node(node_id: string, node_type: "satellite" | "ground_station" = "sate
     plane: null,
     slot: null,
     routing_area: null,
-    neighbor_count: 0,
     isl_count: 0,
     gnd_count: 0,
     prefix: null,

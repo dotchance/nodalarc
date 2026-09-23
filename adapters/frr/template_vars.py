@@ -7,6 +7,8 @@ from __future__ import annotations
 import ipaddress
 from typing import TYPE_CHECKING, Any
 
+from nodalarc.models.resolved_session import ROUTING_AREA_PROTOCOLS
+
 if TYPE_CHECKING:
     from nodalarc.models.resolved_session import (
         ResolvedNode,
@@ -55,10 +57,11 @@ def build_template_vars_from_resolved(
     result["segment_interfaces"] = segment_interfaces
     result["default_route_originate"] = default_route
     result["default_route_metric"] = default_metric
+    if domain.protocol in ROUTING_AREA_PROTOCOLS:
+        result["area_id"] = domain.area_id_for(node)
     result.update(
         {
             "hostname": node.node_id,
-            "area_id": _resolved_area_id(domain, node),
             "system_id": _isis_system_id(resolved, node),
             "ipv4_loopback": _ip_from_interface(node.interfaces.lo0.ipv4, field="lo0.ipv4"),
             # v4-only nodes are a legitimate resolved shape; templates render
@@ -142,8 +145,8 @@ def _wan_interfaces(
     domain or area, and every access link, run in the backbone.
     """
     static_rules = _static_boundary_rule_ids(resolved)
-    node_area = _resolved_area_id(domain, node)
     is_ospf = domain.protocol == "ospf"
+    node_area = domain.area_id_for(node) if is_ospf else None
     bfd_enabled = domain.timers.bfd.enabled
     interfaces: list[dict[str, Any]] = []
     for candidate in resolved.link_candidates:
@@ -181,7 +184,7 @@ def _wan_interfaces(
         peer_domain = resolved.routing_domain_for(peer_id)
         if is_ospf:
             cross_area = domain.domain_id != peer_domain.domain_id or node_area != (
-                _resolved_area_id(peer_domain, peer)
+                peer_domain.area_id_for(peer)
             )
             entry["ospf_area"] = "0.0.0.0" if cross_area else node_area
         interfaces.append(entry)
@@ -284,53 +287,6 @@ def _isis_system_id(resolved: ResolvedSession, node: ResolvedNode) -> str:
     """
     value = resolved.node_index_by_node_id()[node.node_id] + 1
     return f"0000.{(value >> 16) & 0xFFFF:04x}.{value & 0xFFFF:04x}"
-
-
-def _resolved_area_id(domain: ResolvedRoutingDomain, node: ResolvedNode) -> str:
-    assignment = domain.area_assignment
-    is_ospf = domain.protocol == "ospf"
-    default = "0.0.0.0" if is_ospf else "49.0001"
-    if assignment is None or assignment.strategy == "flat":
-        return (
-            assignment.gs_area_id if assignment is not None and assignment.gs_area_id else default
-        )
-    if node.kind != "satellite":
-        if assignment.strategy == "explicit":
-            matches = [
-                mapping.area_id
-                for mapping in assignment.assignments or ()
-                if mapping.ground_stations == "all"
-                or (
-                    isinstance(mapping.ground_stations, tuple)
-                    and node.local_node_id in mapping.ground_stations
-                )
-            ]
-            if len(matches) > 1:
-                raise ValueError(
-                    f"explicit area assignment in domain {domain.domain_id!r} maps ground "
-                    f"station {node.local_node_id!r} more than once"
-                )
-            if matches:
-                return matches[0]
-        return assignment.gs_area_id or default
-    if node.plane is None:
-        raise ValueError(f"node {node.node_id!r} is missing plane for area assignment")
-    if assignment.strategy == "per_plane":
-        return f"0.0.0.{node.plane + 1}" if is_ospf else f"49.{node.plane + 1:04d}"
-    if assignment.strategy == "stripe":
-        if assignment.planes_per_stripe is None:
-            raise ValueError("stripe area assignment requires planes_per_stripe")
-        stripe_index = node.plane // assignment.planes_per_stripe
-        return f"0.0.0.{stripe_index + 1}" if is_ospf else f"49.{stripe_index + 1:04d}"
-    if assignment.strategy == "explicit":
-        for mapping in assignment.assignments or ():
-            if mapping.planes is not None and node.plane in mapping.planes:
-                return mapping.area_id
-        raise ValueError(
-            f"explicit area assignment in domain {domain.domain_id!r} has no plane mapping "
-            f"for node {node.node_id!r}"
-        )
-    raise ValueError(f"unsupported area assignment strategy {assignment.strategy!r}")
 
 
 def _static_boundary_rule_ids(resolved: ResolvedSession) -> set[str]:

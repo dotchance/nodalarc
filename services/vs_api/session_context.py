@@ -142,11 +142,14 @@ class SessionContext:
             self._node_addresses_by_id,
             self._node_primary_prefix_by_id,
         ) = self._build_node_network_identity_map(resolution)
+        # The routing area of every IS-IS or OSPF router; other nodes have none.
+        self._routing_area_by_node_id = resolved.routing_area_by_node_id()
         self._resolved_static_nodes_by_id = self._build_resolved_static_node_states(
             resolved,
             addresses_by_id=self._node_addresses_by_id,
             primary_prefix_by_id=self._node_primary_prefix_by_id,
             min_elevation_by_id=self.gs_elevation_map,
+            routing_area_by_node_id=self._routing_area_by_node_id,
         )
         self._resolved_link_kind_by_rule_id = {
             rule.rule_id: rule.kind for rule in resolved.link_rules
@@ -266,6 +269,7 @@ class SessionContext:
         self._resolved_static_nodes_by_id = {}
         self._resolved_link_kind_by_rule_id = {}
         self._interface_rates = {}
+        self._routing_area_by_node_id = {}
         self.history_path = None
         self.history_error = None
         self._history_lock = threading.Lock()
@@ -1334,8 +1338,7 @@ class SessionContext:
                         vel_z_km_s=vel_ecef.z,
                         plane=node.plane,
                         slot=node.slot,
-                        routing_area=existing.routing_area if existing else None,
-                        neighbor_count=existing.neighbor_count if existing else 0,
+                        routing_area=self._routing_area_by_node_id.get(node_id),
                         prefix=prefix,
                         addresses=addresses,
                         beam_falloff_exponent=self.beam_falloff_exponent,
@@ -1396,8 +1399,7 @@ class SessionContext:
                         vel_z_km_s=vel_ecef.z,
                         plane=node.plane,
                         slot=node.slot,
-                        routing_area=existing.routing_area if existing else None,
-                        neighbor_count=existing.neighbor_count if existing else 0,
+                        routing_area=self._routing_area_by_node_id.get(node_id),
                         prefix=prefix,
                         addresses=addresses,
                         beam_falloff_exponent=self.beam_falloff_exponent,
@@ -1429,8 +1431,7 @@ class SessionContext:
                         vel_z_km_s=0.0,
                         plane=None,
                         slot=None,
-                        routing_area=existing.routing_area if existing else None,
-                        neighbor_count=existing.neighbor_count if existing else 0,
+                        routing_area=self._routing_area_by_node_id.get(node_id),
                         prefix=prefix,
                         addresses=addresses,
                         min_elevation_deg=self.gs_elevation_map.get(node_id),
@@ -1732,6 +1733,7 @@ class SessionContext:
         addresses_by_id: dict[str, tuple[NodeAddress, ...]],
         primary_prefix_by_id: dict[str, str],
         min_elevation_by_id: dict[str, float],
+        routing_area_by_node_id: dict[str, str],
     ) -> dict[str, NodeState]:
         """Build VS-API state for resolved body-fixed nodes.
 
@@ -1747,6 +1749,7 @@ class SessionContext:
                 addresses=addresses_by_id.get(node.node_id, ()),
                 prefix=primary_prefix_by_id.get(node.node_id),
                 min_elevation_deg=min_elevation_by_id.get(node.node_id),
+                routing_area=routing_area_by_node_id.get(node.node_id),
             )
             for node in resolved.nodes
             if node.kind == "ground_station"
@@ -1759,6 +1762,7 @@ class SessionContext:
         addresses: tuple[NodeAddress, ...],
         prefix: str | None,
         min_elevation_deg: float | None,
+        routing_area: str | None,
     ) -> NodeState:
         if node.surface_position is None or node.reference_body is None:
             raise ValueError(f"resolved ground node {node.node_id!r} is missing fixed position")
@@ -1773,8 +1777,7 @@ class SessionContext:
             vel_z_km_s=0.0,
             plane=None,
             slot=None,
-            routing_area=None,
-            neighbor_count=0,
+            routing_area=routing_area,
             prefix=prefix,
             addresses=addresses,
             min_elevation_deg=min_elevation_deg,

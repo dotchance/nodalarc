@@ -232,7 +232,7 @@ export function SatelliteDetail({ node, snapshot, anchorGsId,
         <span className="detail-value">P{node.plane ?? "?"} / S{node.slot ?? "?"}</span>
       </div>
 
-      <h3>Adjacencies ({node.neighbor_count})</h3>
+      <h3>Links</h3>
       <div className="detail-row">
         <span className="detail-label">ISL links</span>
         <span className="detail-value">{node.isl_count}</span>

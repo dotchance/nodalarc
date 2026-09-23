@@ -26,8 +26,8 @@ export interface NodeState {
   vel_z_km_s: number | null;
   plane: number | null;
   slot: number | null;
+  /** Resolved routing area of an IS-IS or OSPF router; null for other nodes. */
   routing_area: string | null;
-  neighbor_count: number;
   isl_count: number;
   gnd_count: number;
   prefix: string | null;

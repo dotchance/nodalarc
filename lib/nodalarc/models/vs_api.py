@@ -41,8 +41,9 @@ class NodeState(BaseModel):
     vel_z_km_s: float | None
     plane: int | None  # None for ground stations
     slot: int | None
+    # The resolved routing area of an IS-IS or OSPF router; None for a node
+    # that runs no area-based routing protocol.
     routing_area: str | None = None
-    neighbor_count: int = 0
     isl_count: int = 0
     gnd_count: int = 0
     prefix: str | None = None  # Ground station advertised prefix

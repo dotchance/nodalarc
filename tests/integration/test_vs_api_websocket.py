@@ -39,7 +39,6 @@ def test_vs_api_state_snapshot_schema():
                 plane=0,
                 slot=0,
                 routing_area="49.0001",
-                neighbor_count=2,
                 isl_count=2,
                 gnd_count=0,
                 reference_body="earth",

@@ -17,7 +17,6 @@ function node(node_id: string, segment_id: string, plane: number | null): NodeSt
     plane,
     slot: plane === null ? null : 0,
     routing_area: null,
-    neighbor_count: 0,
     isl_count: 0,
     gnd_count: 0,
     prefix: null,

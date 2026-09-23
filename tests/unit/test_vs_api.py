@@ -756,7 +756,6 @@ class TestSnapshotModel:
                     plane=0,
                     slot=0,
                     routing_area=None,
-                    neighbor_count=2,
                     isl_count=2,
                     gnd_count=0,
                     prefix=None,

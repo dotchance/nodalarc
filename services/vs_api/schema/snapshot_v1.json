@@ -618,11 +618,6 @@
           "default": null,
           "title": "Routing Area"
         },
-        "neighbor_count": {
-          "default": 0,
-          "title": "Neighbor Count",
-          "type": "integer"
-        },
         "isl_count": {
           "default": 0,
           "title": "Isl Count",

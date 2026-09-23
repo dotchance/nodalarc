@@ -5,7 +5,7 @@ from nodalarc.catalog_closure import FilesystemCatalogReadView
 from nodalarc.catalog_paths import CatalogRoots
 from nodalarc.models.resolved_session import SourceContext
 from nodalarc.resolve_session import resolve_session_with_assets
-from vs_api.resolved_runtime_views import tracer_node_registry
+from vs_api.resolved_runtime_views import routing_label, tracer_node_registry
 from vs_api.session_context import SessionContext
 
 
@@ -68,3 +68,27 @@ def test_tracer_view_names_the_gateway_for_host_nodes():
     # A routed node carries no trace gateway.
     routed = next(n for n in resolution.resolved.nodes if n.forwarding == "routed")
     assert registry[routed.node_id].trace_gateway_node_id is None
+
+
+def test_a_session_without_authored_routing_reports_the_domain_it_runs():
+    """earth-leo-simple has no routing section; its routers run the resolver's
+    default IS-IS domain, and VS-API says so."""
+    resolution = _resolution()
+    resolved = resolution.resolved
+    assert resolved.routing is None
+
+    context = SessionContext(
+        "run-test-resolved-0001",
+        resolution=resolution,
+        source_id="nodalarc:sessions/earth-leo-simple.yaml",
+        history_path=None,
+    )
+
+    assert routing_label(resolved) == "default_domain:isis"
+    assert context.routing_stack == "default_domain:isis"
+    [domain] = resolved.routing_domains
+    areas = resolved.routing_area_by_node_id()
+    assert set(areas) == set(domain.node_ids)
+    assert set(areas.values()) == {"49.0001"}
+    ground = next(n for n in resolved.nodes if n.kind == "ground_station")
+    assert context.nodes[ground.node_id].routing_area == "49.0001"

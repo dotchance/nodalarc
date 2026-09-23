@@ -251,6 +251,10 @@ class ResolvedWanInterface(BaseModel):
     borrows: Literal["lo0"] = "lo0"
 
 
+# Routing protocols whose domains are divided into areas.
+ROUTING_AREA_PROTOCOLS = frozenset({"isis", "ospf"})
+
+
 class ResolvedRoutingDomain(BaseModel):
     """One routing domain after selector resolution."""
 
@@ -270,6 +274,69 @@ class ResolvedRoutingDomain(BaseModel):
         if len(set(self.node_ids)) != len(self.node_ids):
             raise ValueError(f"routing domain {self.domain_id!r} contains duplicate node ids")
         return self
+
+    def area_id_for(self, node: ResolvedNode) -> str:
+        """The routing area of one member router, in its protocol's area format.
+
+        IS-IS areas are area addresses (49.0001) and OSPF areas dotted IDs
+        (0.0.0.0). A domain with no assignment, or a flat one, is one area:
+        the assignment's ground-station area when it names one, else the
+        protocol's first area. Only IS-IS and OSPF domains have areas.
+        """
+        if self.protocol not in ROUTING_AREA_PROTOCOLS:
+            raise ValueError(
+                f"routing domain {self.domain_id!r} runs {self.protocol}, which has no areas"
+            )
+        if node.node_id not in self.node_ids:
+            raise ValueError(
+                f"node {node.node_id!r} is not a member of routing domain {self.domain_id!r}"
+            )
+        assignment = self.area_assignment
+        is_ospf = self.protocol == "ospf"
+        first_area = "0.0.0.0" if is_ospf else "49.0001"
+        if assignment is None or assignment.strategy == "flat":
+            return (
+                assignment.gs_area_id
+                if assignment is not None and assignment.gs_area_id
+                else first_area
+            )
+        if node.kind != "satellite":
+            if assignment.strategy == "explicit":
+                matches = [
+                    mapping.area_id
+                    for mapping in assignment.assignments or ()
+                    if mapping.ground_stations == "all"
+                    or (
+                        isinstance(mapping.ground_stations, tuple)
+                        and node.local_node_id in mapping.ground_stations
+                    )
+                ]
+                if len(matches) > 1:
+                    raise ValueError(
+                        f"explicit area assignment in domain {self.domain_id!r} maps ground "
+                        f"station {node.local_node_id!r} more than once"
+                    )
+                if matches:
+                    return matches[0]
+            return assignment.gs_area_id or first_area
+        if node.plane is None:
+            raise ValueError(f"node {node.node_id!r} is missing plane for area assignment")
+        if assignment.strategy == "per_plane":
+            return f"0.0.0.{node.plane + 1}" if is_ospf else f"49.{node.plane + 1:04d}"
+        if assignment.strategy == "stripe":
+            if assignment.planes_per_stripe is None:
+                raise ValueError("stripe area assignment requires planes_per_stripe")
+            stripe_index = node.plane // assignment.planes_per_stripe
+            return f"0.0.0.{stripe_index + 1}" if is_ospf else f"49.{stripe_index + 1:04d}"
+        if assignment.strategy == "explicit":
+            for mapping in assignment.assignments or ():
+                if mapping.planes is not None and node.plane in mapping.planes:
+                    return mapping.area_id
+            raise ValueError(
+                f"explicit area assignment in domain {self.domain_id!r} has no plane mapping "
+                f"for node {node.node_id!r}"
+            )
+        raise ValueError(f"unsupported area assignment strategy {assignment.strategy!r}")
 
 
 class ResolvedEphemerisKernel(BaseModel):
@@ -755,6 +822,26 @@ class ResolvedSession(BaseModel):
             if node.node_id == node_id:
                 return node
         return None
+
+    def routing_area_by_node_id(self) -> dict[str, str]:
+        """The routing area of every router in an IS-IS or OSPF domain.
+
+        A node absent from the mapping runs no area-based routing protocol.
+        """
+        areas: dict[str, str] = {}
+        for domain in self.routing_domains:
+            if domain.protocol not in ROUTING_AREA_PROTOCOLS:
+                continue
+            for node_id in domain.node_ids:
+                node = self.node_by_id(node_id)
+                if node is None:
+                    raise ValueError(
+                        f"routing domain {domain.domain_id!r} names unknown node {node_id!r}"
+                    )
+                if node_id in areas:
+                    raise ValueError(f"node {node_id!r} belongs to more than one routing domain")
+                areas[node_id] = domain.area_id_for(node)
+        return areas
 
     def routing_domain_for(self, node_id: str) -> ResolvedRoutingDomain:
         """The one routing domain that contains ``node_id``.

@@ -23,7 +23,7 @@ from nodalarc.models.resolved_session import (
     SidBlock,
     SourceContext,
 )
-from nodalarc.models.segment_session import SessionMeta, TimeConfig
+from nodalarc.models.segment_session import AreaAssignment, SessionMeta, TimeConfig
 from nodalarc.models.segments import GroundScheduling
 from nodalarc.models.terminal_physics import TerminalBoresight
 from nodalarc.runtime_support import (
@@ -714,3 +714,26 @@ def test_resolved_terminal_declares_both_rates_or_neither() -> None:
         source_ref="test:t",
     )
     assert (block.transmit_mbps, block.receive_mbps) == (2.0, 100.0)
+
+
+def test_routing_areas_are_resolved_for_area_protocol_routers_only() -> None:
+    """Per-plane OSPF areas come from the resolved domain; a static domain has none."""
+    plane0 = _satellite("leo-sat-p00s00")
+    plane1 = _satellite("leo-sat-p01s00").model_copy(update={"plane": 1})
+    gs = _ground()
+    ospf = ResolvedRoutingDomain(
+        domain_id="leo_domain",
+        protocol="ospf",
+        node_ids=(plane0.node_id, plane1.node_id),
+        area_assignment=AreaAssignment(strategy="per_plane", gs_area_id="0.0.0.0"),
+    )
+    static = ResolvedRoutingDomain(
+        domain_id="ground_domain", protocol="static", node_ids=(gs.node_id,)
+    )
+    rs = _resolved_session(nodes=(plane0, plane1, gs), routing_domains=(ospf, static))
+
+    assert rs.routing_area_by_node_id() == {plane0.node_id: "0.0.0.1", plane1.node_id: "0.0.0.2"}
+    with pytest.raises(ValueError, match="runs static, which has no areas"):
+        static.area_id_for(gs)
+    with pytest.raises(ValueError, match="is not a member of routing domain 'leo_domain'"):
+        ospf.area_id_for(gs)

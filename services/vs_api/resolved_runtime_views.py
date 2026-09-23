@@ -26,11 +26,16 @@ class TracerNode:
 
 
 def routing_label(resolved: ResolvedSession) -> str:
-    """Return the compact routing-domain label used by VS-API views."""
-    routing = resolved.routing
-    if routing is None or not routing.domains:
+    """The compact label of the routing domains the session runs.
+
+    Read from the resolved runtime domains: a session with no authored routing
+    section still runs the resolver's default domain over its routers.
+    """
+    if not resolved.routing_domains:
         return "unrouted"
-    return " + ".join(f"{domain.id}:{domain.protocol}" for domain in routing.domains)
+    return " + ".join(
+        f"{domain.domain_id}:{domain.protocol}" for domain in resolved.routing_domains
+    )
 
 
 def constellation_label(resolved: ResolvedSession) -> str:

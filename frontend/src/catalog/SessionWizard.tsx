@@ -267,7 +267,22 @@ export function SessionWizard({
             </section>
           )}
 
-          {view === "build" && (
+          {view === "build" && wizard.authoring.state !== "ready" && (
+            <section className="launcher-content" aria-label="Build a session">
+              {wizard.authoring.state === "loading" ? (
+                <div className="wizard-loading">
+                  <p>Loading Wizard authoring facts from VS-API…</p>
+                </div>
+              ) : (
+                <div className="wizard-error">
+                  Wizard authoring facts did not load from VS-API:{" "}
+                  {wizard.authoring.failures.join("; ")}
+                </div>
+              )}
+            </section>
+          )}
+
+          {view === "build" && wizard.authoring.state === "ready" && (
             <section className="launcher-content" aria-label="Build a session">
               <div className="wizard-steps">
                 <button

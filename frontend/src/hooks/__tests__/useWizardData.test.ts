@@ -155,4 +155,36 @@ describe("useWizardData", () => {
       "sgp4_tle",
     ]);
   });
+
+  it("reports loading until every source settles, then ready", async () => {
+    const { result } = renderHook(() => useWizardData());
+
+    expect(result.current.authoring).toEqual({ state: "loading" });
+    await waitFor(() => expect(result.current.authoring).toEqual({ state: "ready" }));
+  });
+
+  it("names a failed source and its reason instead of showing it as empty", async () => {
+    const succeed = globalThis.fetch;
+    globalThis.fetch = vi.fn((input: string | URL | Request, init?: RequestInit) => {
+      const path = new URL(String(input)).pathname;
+      if (path === "/api/v1/presets/satellite-types") {
+        return Promise.resolve({
+          ok: false,
+          status: 503,
+          json: () =>
+            Promise.resolve({ code: "catalog.unavailable", message: "catalog read failed" }),
+        });
+      }
+      return (succeed as typeof fetch)(input, init);
+    }) as unknown as typeof fetch;
+
+    const { result } = renderHook(() => useWizardData());
+
+    await waitFor(() => expect(result.current.authoring.state).toBe("failed"));
+    const failures =
+      result.current.authoring.state === "failed" ? result.current.authoring.failures : [];
+    expect(failures).toEqual(["satellite node models: catalog read failed"]);
+    // Sources that loaded still apply their facts.
+    expect(result.current.presets).toHaveLength(1);
+  });
 });

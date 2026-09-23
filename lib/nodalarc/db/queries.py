@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from collections.abc import Iterable
+from datetime import datetime
 
 from nodalarc.models.link_events import LatencyUpdate, LinkDown, LinkUp
 from nodalarc.models.metrics import AdapterEvent, ConvergenceResult, ProbeResult
@@ -89,6 +91,34 @@ def insert_latency_update(
     )
     conn.commit()
     return cur.lastrowid
+
+
+def insert_active_links(
+    conn: sqlite3.Connection,
+    pairs: Iterable[tuple[str, str]],
+    *,
+    session_id: str,
+    sim_time: datetime,
+    wall_time: datetime,
+) -> None:
+    """Record the kernel-actual links at the start of a session's recording.
+
+    LinkUp rows exist only from the moment recording subscribes, so a
+    recording opens with one LinkActive row per link the Scheduler had
+    already proven up, reason recording_start. Interfaces, latency and range
+    are not part of the kernel-actual set and stay empty.
+    """
+    rows = [
+        (session_id, sim_time.isoformat(), wall_time.isoformat(), node_a, node_b)
+        for node_a, node_b in pairs
+    ]
+    conn.executemany(
+        """INSERT INTO link_events (session_id, sim_time, wall_time, event_type, node_a,
+           node_b, reason)
+           VALUES (?, ?, ?, 'LinkActive', ?, ?, 'recording_start')""",
+        rows,
+    )
+    conn.commit()
 
 
 def query_link_events(

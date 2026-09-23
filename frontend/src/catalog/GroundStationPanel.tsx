@@ -101,7 +101,7 @@ export function GroundStationPanel({
   }
 
   if (groundStationSets.length === 0) {
-    return <div className="wizard-loading"><p>Loading ground station sets...</p></div>;
+    return <div className="wizard-error">VS-API returned no ground station sets.</div>;
   }
 
   return (

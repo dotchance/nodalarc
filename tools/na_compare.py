@@ -214,7 +214,7 @@ def report_link_events(conn: sqlite3.Connection, sessions: dict[str, str]) -> st
     header = f"  {'event_type':<20}" + "".join(f"  {a:<10}" for a in aliases)
     lines.append(header)
     lines.append("  " + "-" * (len(header) - 2))
-    for etype in ["LinkUp", "LinkDown", "LatencyUpdate"]:
+    for etype in ["LinkActive", "LinkUp", "LinkDown", "LatencyUpdate"]:
         row = f"  {etype:<20}"
         for a in aliases:
             cnt = conn.execute(

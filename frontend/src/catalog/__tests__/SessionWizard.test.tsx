@@ -215,3 +215,39 @@ describe("SessionWizard download errors", () => {
     expect(await screen.findByText("Failed to fetch")).toBeTruthy();
   });
 });
+
+describe("SessionWizard authoring facts", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("shows loading, then names every source that failed, never an empty Wizard", async () => {
+    const pending: ((reason: Error) => void)[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        () =>
+          new Promise((_resolve, reject) => {
+            pending.push(reject);
+          }),
+      ),
+    );
+    render(
+      <SessionWizard
+        onDeployStarted={vi.fn()}
+        onClose={undefined}
+        deploying={false}
+        sessions={[]}
+        onLaunchSession={vi.fn()}
+      />,
+    );
+    fireEvent.click(screen.getByText("Wizard"));
+
+    expect(screen.getByText("Loading Wizard authoring facts from VS-API…")).toBeTruthy();
+    expect(screen.queryByText(/did not load/)).toBeNull();
+
+    for (const reject of pending) reject(new Error("VS-API unreachable"));
+    expect(
+      await screen.findByText(/Wizard authoring facts did not load from VS-API: .*constellation presets: VS-API unreachable/),
+    ).toBeTruthy();
+  });
+});
+

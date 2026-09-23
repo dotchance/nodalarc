@@ -198,7 +198,7 @@ def report_link_events(conn: sqlite3.Connection, session_id: str) -> str:
 
     lines.append("Event counts by type:")
     lines.append("-" * 40)
-    for etype in ["LinkUp", "LinkDown", "LatencyUpdate"]:
+    for etype in ["LinkActive", "LinkUp", "LinkDown", "LatencyUpdate"]:
         cnt = type_counts.get(etype, 0)
         lines.append(f"  {etype:<20} {cnt:>8}")
     lines.append("")

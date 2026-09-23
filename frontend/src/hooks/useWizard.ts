@@ -221,6 +221,7 @@ export function useWizard() {
 
   return {
     // Data
+    authoring: data.authoring,
     presets: data.presets,
     customConstellationCapability: data.customConstellationCapability,
     customConstellationSeed: data.customConstellationSeed,

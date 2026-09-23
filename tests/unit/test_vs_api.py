@@ -2863,6 +2863,120 @@ class TestSessionHistory:
             ("sat-P00S00", "LinkUp")
         ]
 
+    _BASELINE_SIM_TIME = datetime(2026, 9, 23, 12, 0, 5, tzinfo=UTC)
+
+    def _deliver_actual_links(self, ctx, *, stream_seq: int, pairs, sim_time=_BASELINE_SIM_TIME):
+        import asyncio
+        from unittest.mock import MagicMock
+
+        from nodalarc.models.scheduler_ops import ActualLinkSnapshot
+
+        msg = MagicMock()
+        msg.metadata.sequence.stream = stream_seq
+        msg.data = (
+            ActualLinkSnapshot(
+                session_id=ctx.session_id,
+                wiring_generation="gen-1",
+                scheduler_instance_id="sched-1",
+                hostname="sched-1-host",
+                sim_time=sim_time,
+                active_pairs=[list(p) for p in pairs],
+                emitted_at=datetime(2026, 9, 23, 12, 0, 6, tzinfo=UTC),
+            )
+            .model_dump_json()
+            .encode()
+        )
+        asyncio.run(ctx._on_actual_links(msg))
+
+    @staticmethod
+    def _link_rows(path) -> list[tuple]:
+        import sqlite3
+
+        from nodalarc.db.queries import query_link_events
+
+        conn = sqlite3.connect(path)
+        try:
+            events = query_link_events(conn, session_id="run-history-0001")
+        finally:
+            conn.close()
+        return [
+            (e["event_type"], e["reason"], e["node_a"], e["node_b"], e["sim_time"]) for e in events
+        ]
+
+    def test_recording_opens_with_the_kernel_actual_links_published_after_the_fence(self, tmp_path):
+        path = tmp_path / "run-history-0001.db"
+        ctx = _recorded_context(path)
+        ctx._record_history("session metadata", ctx._open_history)
+        ctx._history_baseline_after_seq = 40
+
+        # Published before the newest unrecorded transition: it can still list a
+        # link whose LinkDown followed it, so it opens nothing.
+        self._deliver_actual_links(ctx, stream_seq=39, pairs=[("sat-a", "sat-b")])
+        assert self._link_rows(path) == []
+
+        self._deliver_actual_links(
+            ctx, stream_seq=41, pairs=[("sat-c", "sat-d"), ("gs-x", "sat-a")]
+        )
+        # Later kernel-actual sets change nothing: transitions arrive as their own rows.
+        self._deliver_actual_links(ctx, stream_seq=45, pairs=[("sat-e", "sat-f")])
+
+        sim_time = self._BASELINE_SIM_TIME.isoformat()
+        assert ctx.history_error is None
+        assert self._link_rows(path) == [
+            ("LinkActive", "recording_start", "gs-x", "sat-a", sim_time),
+            ("LinkActive", "recording_start", "sat-c", "sat-d", sim_time),
+        ]
+
+    def test_no_baseline_before_the_link_event_subscriptions_exist(self, tmp_path):
+        path = tmp_path / "run-history-0001.db"
+        ctx = _recorded_context(path)
+        ctx._record_history("session metadata", ctx._open_history)
+
+        self._deliver_actual_links(ctx, stream_seq=41, pairs=[("sat-c", "sat-d")])
+
+        assert self._link_rows(path) == []
+
+    def test_unrecorded_session_writes_no_baseline(self, tmp_path):
+        ctx = _recorded_context(None)
+        ctx._history_baseline_after_seq = 0
+
+        self._deliver_actual_links(ctx, stream_seq=41, pairs=[("sat-c", "sat-d")])
+
+        assert list(tmp_path.iterdir()) == []
+
+    def test_a_baseline_without_sim_time_stops_recording(self, tmp_path):
+        ctx = _recorded_context(tmp_path / "run-history-0001.db")
+        ctx._history_baseline_after_seq = 0
+
+        self._deliver_actual_links(ctx, stream_seq=1, pairs=[("sat-c", "sat-d")], sim_time=None)
+
+        assert ctx.history_error == "failed to record links active at recording start"
+
+    def test_the_fence_is_the_newest_link_up_or_link_down_on_the_stream(self):
+        import asyncio
+        from types import SimpleNamespace
+
+        from nats.js.errors import NotFoundError
+        from nodalarc.nats_channels import STREAM_LINK_EVENTS, link_down_subject, link_up_subject
+
+        ctx = _recorded_context(None)
+
+        class _Stream:
+            def __init__(self, last_seq_by_subject: dict[str, int]):
+                self.last_seq_by_subject = last_seq_by_subject
+
+            async def get_last_msg(self, stream_name: str, subject: str):
+                assert stream_name == STREAM_LINK_EVENTS
+                if subject not in self.last_seq_by_subject:
+                    raise NotFoundError()
+                return SimpleNamespace(seq=self.last_seq_by_subject[subject])
+
+        up, down = link_up_subject(ctx.session_id), link_down_subject(ctx.session_id)
+        fence = ctx._last_link_transition_seq
+        assert asyncio.run(fence(_Stream({up: 12, down: 30}))) == 30
+        assert asyncio.run(fence(_Stream({up: 12}))) == 12
+        assert asyncio.run(fence(_Stream({}))) == 0
+
     @pytest.mark.parametrize("record_history", [True, False])
     def test_the_cr_spec_decides_whether_a_run_is_recorded(self, monkeypatch, record_history):
         import vs_api.main as m

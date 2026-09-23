@@ -313,8 +313,8 @@ export function ConstellationPanel({
   if (presets.length === 0 || !customFactsReady || orbitModels.length === 0) {
     return (
       <div className="wizard-error">
-        Constellation authoring facts did not load. The wizard cannot build a session
-        without VS-API catalog and capability data.
+        VS-API returned no constellation presets, custom geometry facts or orbit models.
+        The Wizard cannot build a session without them.
       </div>
     );
   }

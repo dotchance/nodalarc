@@ -40,6 +40,7 @@ from typing import Literal
 import nats
 from nodalarc.db.queries import (
     get_metadata,
+    insert_active_links,
     insert_latency_update,
     insert_link_down,
     insert_link_up,
@@ -245,6 +246,12 @@ class SessionContext:
         # clock) give skew-free divergence age without cross-pod NTP drift.
         self.actual_links_by_instance: dict[str, dict] = {}
         self.ome_lifecycle_notices_by_key: dict[tuple[str, str], dict] = {}
+        # Recorded sessions open their link history with the kernel-actual links.
+        # _history_baseline_after_seq is the link-stream sequence of the newest
+        # LinkUp or LinkDown published before the link-event subscriptions existed;
+        # None until those subscriptions exist.
+        self._history_baseline_after_seq: int | None = None
+        self._history_baseline_recorded = False
         self._subscriptions: list = []
         self._subscriber_task: asyncio.Task | None = None
         self._ready = asyncio.Event()
@@ -445,6 +452,8 @@ class SessionContext:
                     cb=self._on_latency_update,
                 )
             )
+            if self.history_path is not None:
+                self._history_baseline_after_seq = await self._last_link_transition_seq(js)
             self._subscriptions.append(
                 await js.subscribe(
                     ome_clock_subject(sid),
@@ -540,6 +549,62 @@ class SessionContext:
                     log.warning("Failed to unsubscribe: %s", exc)
             self._subscriptions.clear()
             log.info("SessionContext subscriptions cleaned: session_id=%s", sid)
+
+    async def _last_link_transition_seq(self, js) -> int:
+        """Link-stream sequence of the newest LinkUp or LinkDown for this session.
+
+        Called once the LinkUp and LinkDown subscriptions exist: every transition
+        at or below this sequence was published before recording began and has no
+        row. Zero when the session has published no transition yet.
+        """
+        from nats.js.errors import NotFoundError
+
+        newest = 0
+        for subject in (link_up_subject(self.session_id), link_down_subject(self.session_id)):
+            try:
+                last = await js.get_last_msg(STREAM_LINK_EVENTS, subject)
+            except NotFoundError:
+                # The subscription above proved the stream exists, so NotFound means
+                # this subject has no message: no transition of this kind yet.
+                continue
+            newest = max(newest, last.seq)
+        return newest
+
+    async def _record_history_baseline(
+        self, msg, snap: ActualLinkSnapshot, pairs: frozenset[tuple[str, str]]
+    ) -> None:
+        """Record the kernel-actual links once, when this session's recording starts.
+
+        LinkUp and LinkDown rows exist only from subscription on. The Scheduler
+        publishes its kernel-actual set after the transitions that change it, so
+        the first set published after the newest unrecorded transition already
+        reflects every unrecorded transition. Every later transition arrives as its
+        own row. An earlier set is skipped: it can still list a link whose unrecorded
+        LinkDown followed it.
+        """
+        after_seq = self._history_baseline_after_seq
+        if self.history_path is None or self._history_baseline_recorded or after_seq is None:
+            return
+        if msg.metadata.sequence.stream <= after_seq:
+            return
+        self._history_baseline_recorded = True
+        if not pairs:
+            return
+
+        def write(conn: sqlite3.Connection) -> None:
+            if snap.sim_time is None:
+                raise ValueError(
+                    f"ActualLinkSnapshot from {snap.scheduler_instance_id} has no sim_time"
+                )
+            insert_active_links(
+                conn,
+                sorted(pairs),
+                session_id=self.session_id,
+                sim_time=snap.sim_time,
+                wall_time=snap.emitted_at,
+            )
+
+        await asyncio.to_thread(self._record_history, "links active at recording start", write)
 
     # ------------------------------------------------------------------
     # NATS message handlers
@@ -1051,6 +1116,7 @@ class SessionContext:
                 "emitted_at": snap.emitted_at,
                 "received_at": received_at,
             }
+        await self._record_history_baseline(msg, snap, pairs)
 
     def actual_kernel_pairs(self) -> frozenset[tuple[str, str]]:
         """Scheduler-verified kernel-actual pairs for the current session owner.

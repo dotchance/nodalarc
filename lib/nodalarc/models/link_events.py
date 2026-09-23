@@ -10,8 +10,8 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict
 
-# The authoritative vocabulary of LinkUp/LinkDown `reason` codes (the link-lifecycle vocabulary,
-# distinct from the ground-decision funnel reasons in link_decisions.py). Kept as a constant — not
+# The authoritative vocabulary of link-event `reason` codes: LinkUp/LinkDown on the wire and the
+# LinkActive rows that open a recorded history (the link-lifecycle vocabulary, distinct from the ground-decision funnel reasons in link_decisions.py). Kept as a constant — not
 # a Literal on the wire field — so a live Scheduler emitting a not-yet-listed code degrades to the
 # raw code in the UI rather than crashing validation; the frontend mirrors this set in
 # explain/linkEvents.ts (LINK_EVENT_REASONS) and the cross-language contract test asserts they match
@@ -30,6 +30,8 @@ LINK_EVENT_REASONS: frozenset[str] = frozenset(
         "terminal_exhausted",
         "scenario_inject_down",
         "satellite_loss",
+        # recorded history: a link the kernel already had up when recording began
+        "recording_start",
     }
 )
 

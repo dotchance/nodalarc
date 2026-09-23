@@ -26,8 +26,17 @@ import type {
   OrbitModel,
   WalkerPattern,
 } from "../catalog/wizardTypes";
+import { apiErrorFromException } from "../ui/apiError";
+
+/** Whether the Wizard's authoring facts have loaded from VS-API. A failed load
+ *  names every source that failed and the reason VS-API gave. */
+export type WizardAuthoringStatus =
+  | { readonly state: "loading" }
+  | { readonly state: "ready" }
+  | { readonly state: "failed"; readonly failures: readonly string[] };
 
 export interface WizardData {
+  authoring: WizardAuthoringStatus;
   presets: ConstellationPreset[];
   customConstellationCapability: WizardConstellationCapability | null;
   customConstellationSeed: WizardConstellationGeometry | null;
@@ -56,36 +65,53 @@ export function useWizardData(): WizardData {
   const [groundStationSets, setGroundStationSets] = useState<GroundStationSet[]>([]);
   const [availableStations, setAvailableStations] = useState<AvailableStation[]>([]);
 
+  const [authoring, setAuthoring] = useState<WizardAuthoringStatus>({ state: "loading" });
+
   useEffect(() => {
-    getWizardConstellationPresets()
-      .then((data) => {
+    let current = true;
+    const failures: string[] = [];
+    // Each source either applies its facts or names why it failed, including a
+    // response it cannot apply; a failed source is reported, never shown as an
+    // empty list.
+    const load = async <T,>(source: string, request: Promise<T>, apply: (value: T) => void) => {
+      try {
+        const value = await request;
+        if (current) apply(value);
+      } catch (err: unknown) {
+        failures.push(`${source}: ${apiErrorFromException(err)}`);
+      }
+    };
+
+    void Promise.all([
+      load("constellation presets", getWizardConstellationPresets(), (data) => {
         setPresets(data.presets.map((preset) => ({ ...preset, custom_geometry: null })));
         setCustomConstellationCapability(data.custom_geometry);
         setCustomConstellationSeed(data.custom_geometry_seed);
         setCustomConstellationDefaultNode(data.custom_geometry_default_node);
         setCustomConstellationPatterns([...data.custom_geometry_patterns]);
         setOrbitModels([...data.orbit_models]);
-      })
-      .catch(() => {});
-
-    getWizardExtensionRules()
-      .then(setRules)
-      .catch(() => {});
-
-    getWizardSatelliteTypes()
-      .then((data) => setSatelliteTypes([...data.presets]))
-      .catch(() => {});
-
-    getWizardGroundStationSets()
-      .then((data) => setGroundStationSets(data.presets.map((preset) => ({ ...preset }))))
-      .catch(() => {});
-
-    getWizardAvailableStations()
-      .then((data) => setAvailableStations([...data.stations]))
-      .catch(() => {});
+      }),
+      load("routing choices", getWizardExtensionRules(), setRules),
+      load("satellite node models", getWizardSatelliteTypes(), (data) =>
+        setSatelliteTypes([...data.presets]),
+      ),
+      load("ground station sets", getWizardGroundStationSets(), (data) =>
+        setGroundStationSets(data.presets.map((preset) => ({ ...preset }))),
+      ),
+      load("ground stations", getWizardAvailableStations(), (data) =>
+        setAvailableStations([...data.stations]),
+      ),
+    ]).then(() => {
+      if (!current) return;
+      setAuthoring(failures.length > 0 ? { state: "failed", failures } : { state: "ready" });
+    });
+    return () => {
+      current = false;
+    };
   }, []);
 
   return {
+    authoring,
     presets,
     customConstellationCapability,
     customConstellationSeed,

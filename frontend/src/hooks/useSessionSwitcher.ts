@@ -52,7 +52,7 @@ export function useSessionSwitcher(sessionTransitioning: boolean) {
   }, [switching, sessionTransitioning, fetchSessions]);
 
   const switchSession = useCallback(
-    async (session: SessionInfo) => {
+    async (session: SessionInfo, recordHistory: boolean) => {
       if (switching) return;
       if (
         !session.deploy_allowed
@@ -68,6 +68,7 @@ export function useSessionSwitcher(sessionTransitioning: boolean) {
           expected_source_revision: session.source_revision,
           expected_document_digest: session.document_digest,
           expected_dependency_digest: session.dependency_digest,
+          record_history: recordHistory,
         };
         const resp = await fetch(`${REST_URL}/api/v1/sessions/switch`, {
           method: "POST",

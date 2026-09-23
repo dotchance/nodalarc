@@ -315,6 +315,7 @@ def _restore_source_session(endpoint: _VSAPIEndpoint) -> dict[str, Any]:
         "expected_session_revision": source["source_revision"],
         "expected_document_digest": source["document_digest"],
         "expected_dependency_digest": source["dependency_digest"],
+        "record_history": False,
     }
     accepted = endpoint.request_json(
         "POST",
@@ -851,6 +852,7 @@ def test_builder_user_component_closure_reaches_verified_runtime(
             "expected_session_revision": saved["session"]["revision"],
             "expected_document_digest": saved["digests"]["document"],
             "expected_dependency_digest": saved["digests"]["dependency"],
+            "record_history": False,
         }
         accepted = vs_api.request_json(
             "POST",

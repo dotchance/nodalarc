@@ -25,6 +25,7 @@ def test_session_context_accepts_authoritative_resolution_without_session_file()
         "run-test-resolved-0001",
         resolution=resolution,
         source_id="user:sessions/resolved-test.yaml",
+        history_path=None,
     )
 
     assert context.session_file == ""

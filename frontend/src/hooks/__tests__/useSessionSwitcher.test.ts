@@ -40,7 +40,7 @@ describe("useSessionSwitcher", () => {
   it("switchSession sends deploy request", async () => {
     const { result } = renderHook(() => useSessionSwitcher(false));
     const selected = session("session-01");
-    await act(async () => { await result.current.switchSession(selected); });
+    await act(async () => { await result.current.switchSession(selected, true); });
     const switchCall = fetchMock.mock.calls.find(
       (c: unknown[]) => String(c[0]).includes("/sessions/switch"),
     );
@@ -51,13 +51,14 @@ describe("useSessionSwitcher", () => {
       expected_source_revision: digest,
       expected_document_digest: digest,
       expected_dependency_digest: digest,
+      record_history: true,
     });
   });
 
   it("no double switch while already switching", async () => {
     const { result } = renderHook(() => useSessionSwitcher(false));
-    await act(async () => { await result.current.switchSession(session("session-01")); });
-    await act(async () => { await result.current.switchSession(session("session-02")); });
+    await act(async () => { await result.current.switchSession(session("session-01"), false); });
+    await act(async () => { await result.current.switchSession(session("session-02"), false); });
     const switchCalls = fetchMock.mock.calls.filter(
       (c: unknown[]) => String(c[0]).includes("/sessions/switch"),
     );
@@ -70,7 +71,7 @@ describe("useSessionSwitcher", () => {
       .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve([]) })
       .mockRejectedValueOnce(new Error("network error"));
     const { result } = renderHook(() => useSessionSwitcher(false));
-    await act(async () => { await result.current.switchSession(session("session-03")); });
+    await act(async () => { await result.current.switchSession(session("session-03"), false); });
     expect(result.current.switching).toBe(false);
   });
 
@@ -79,7 +80,7 @@ describe("useSessionSwitcher", () => {
       ({ transitioning }) => useSessionSwitcher(transitioning),
       { initialProps: { transitioning: false } },
     );
-    await act(async () => { await result.current.switchSession(session("session-04")); });
+    await act(async () => { await result.current.switchSession(session("session-04"), false); });
     expect(result.current.switching).toBe(true);
 
     // The websocket lifecycle takes over, then ends — the regression this
@@ -96,7 +97,7 @@ describe("useSessionSwitcher", () => {
       ({ transitioning }) => useSessionSwitcher(transitioning),
       { initialProps: { transitioning: false } },
     );
-    await act(async () => { await result.current.switchSession(session("session-05")); });
+    await act(async () => { await result.current.switchSession(session("session-05"), false); });
     // No transition seen yet — a rerender without one must not clear.
     rerender({ transitioning: false });
     expect(result.current.switching).toBe(true);

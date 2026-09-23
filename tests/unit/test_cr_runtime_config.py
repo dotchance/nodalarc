@@ -34,7 +34,7 @@ def _selection() -> CatalogUploadSelection:
 
 def test_spec_round_trips_through_its_cr_shape() -> None:
     spec = ConstellationSpecSpec.of(
-        session_yaml="session:\n  name: x\n", catalog_upload=_selection()
+        session_yaml="session:\n  name: x\n", catalog_upload=_selection(), record_history=True
     )
 
     written = spec.to_cr()
@@ -46,6 +46,7 @@ def test_spec_round_trips_through_its_cr_shape() -> None:
             "closure_digest": DIGEST,
             "file_count": 3,
         },
+        "recordHistory": True,
     }
     assert ConstellationSpecSpec.from_cr(written) == spec
 
@@ -57,6 +58,7 @@ def test_spec_round_trips_through_its_cr_shape() -> None:
             {
                 "sessionYaml": "x",
                 "catalogUpload": _selection().model_dump(mode="json"),
+                "recordHistory": False,
                 "sessionFile": "old",
             },
             "Extra inputs are not permitted",
@@ -65,6 +67,18 @@ def test_spec_round_trips_through_its_cr_shape() -> None:
         ({"catalogUpload": _selection().model_dump(mode="json")}, "sessionYaml"),
         ({"sessionYaml": "", "catalogUpload": _selection().model_dump(mode="json")}, "sessionYaml"),
         ({"sessionYaml": "x", "catalogUpload": {"upload_id": "u"}}, "catalogUpload"),
+        (
+            {"sessionYaml": "x", "catalogUpload": _selection().model_dump(mode="json")},
+            "recordHistory",
+        ),
+        (
+            {
+                "sessionYaml": "x",
+                "catalogUpload": _selection().model_dump(mode="json"),
+                "recordHistory": "yes",
+            },
+            "recordHistory",
+        ),
         (
             {"session_yaml": "x", "catalog_upload": _selection().model_dump(mode="json")},
             "Extra inputs are not permitted",

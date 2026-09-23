@@ -767,6 +767,8 @@ class BuilderSessionDeployRequest(_BuilderApplicationModel):
     expected_session_revision: OpaqueRevision
     expected_document_digest: Sha256Digest
     expected_dependency_digest: Sha256Digest
+    # Keep a history database for this session run.
+    record_history: bool
 
 
 class BuilderSessionDeployAccepted(_BuilderApplicationModel):

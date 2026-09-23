@@ -39,9 +39,9 @@ def session_db(tmp_path: Path) -> str:
     create_tables(conn)
 
     # Metadata
-    set_metadata(conn, "session_name", "isis-test-run")
-    set_metadata(conn, "constellation", "custom-example")
-    set_metadata(conn, "routing_stack", "frr-isis")
+    set_metadata(conn, key="session_name", value="isis-test-run", session_id="run-test")
+    set_metadata(conn, key="source_id", value="catalog:earth-leo-simple", session_id="run-test")
+    set_metadata(conn, key="routing_stack", value="frr-isis", session_id="run-test")
 
     now = datetime.now(UTC)
 
@@ -60,6 +60,7 @@ def session_db(tmp_path: Path) -> str:
             range_km=1049.273603,
             reason="vis_gained",
         ),
+        session_id="run-test",
     )
     insert_link_up(
         conn,
@@ -75,6 +76,7 @@ def session_db(tmp_path: Path) -> str:
             range_km=3597.509496,
             reason="vis_gained",
         ),
+        session_id="run-test",
     )
     insert_link_down(
         conn,
@@ -88,6 +90,7 @@ def session_db(tmp_path: Path) -> str:
             interface_b="isl0",
             reason="vis_lost",
         ),
+        session_id="run-test",
     )
 
     # Convergence events
@@ -105,6 +108,7 @@ def session_db(tmp_path: Path) -> str:
             packets_sent=100,
             triggering_link_event_id=1,
         ),
+        session_id="run-test",
     )
     insert_convergence_result(
         conn,
@@ -120,6 +124,7 @@ def session_db(tmp_path: Path) -> str:
             packets_sent=100,
             triggering_link_event_id=3,
         ),
+        session_id="run-test",
     )
 
     # Probe results
@@ -138,6 +143,7 @@ def session_db(tmp_path: Path) -> str:
             latency_avg_ms=15.0,
             jitter_ms=2.5,
         ),
+        session_id="run-test",
     )
     insert_probe_result(
         conn,
@@ -154,6 +160,7 @@ def session_db(tmp_path: Path) -> str:
             latency_avg_ms=14.0,
             jitter_ms=2.0,
         ),
+        session_id="run-test",
     )
     insert_probe_result(
         conn,
@@ -170,6 +177,7 @@ def session_db(tmp_path: Path) -> str:
             latency_avg_ms=30.0,
             jitter_ms=5.0,
         ),
+        session_id="run-test",
     )
 
     conn.close()
@@ -192,7 +200,6 @@ TABLE_NAMES = {
     "probe_results",
     "adapter_events",
     "session_metadata",
-    "config_changes",
     "snapshots",
 }
 
@@ -200,7 +207,7 @@ TABLE_NAMES = {
 def _run_db_report(db_path: str, report_fn) -> str:
     conn = sqlite3.connect(db_path)
     try:
-        return report_fn(conn)
+        return report_fn(conn, "run-test")
     finally:
         conn.close()
 
@@ -209,7 +216,7 @@ def _parse_metadata(output: str) -> dict[str, str]:
     metadata = {}
     for line in output.splitlines():
         parts = line.split(maxsplit=1)
-        if len(parts) == 2 and parts[0] in {"session_name", "constellation", "routing_stack"}:
+        if len(parts) == 2 and parts[0] in {"session_name", "source_id", "routing_stack"}:
             metadata[parts[0]] = parts[1]
     return metadata
 
@@ -296,7 +303,7 @@ class TestReportSummary:
 
         assert _parse_metadata(output) == {
             "session_name": "isis-test-run",
-            "constellation": "custom-example",
+            "source_id": "catalog:earth-leo-simple",
             "routing_stack": "frr-isis",
         }
         counts = _parse_table_counts(output)
@@ -405,6 +412,10 @@ class TestReportProbeResults:
 
 
 class TestRunReport:
+    def test_a_file_that_records_no_session_is_refused(self, empty_db: str):
+        with pytest.raises(ValueError, match="records 0 sessions"):
+            run_report(empty_db, "summary")
+
     def test_summary_via_run_report(self, session_db: str):
         output = run_report(session_db, "summary")
         assert _parse_table_counts(output)["link_events"] == 3

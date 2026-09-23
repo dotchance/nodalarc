@@ -19,7 +19,13 @@ spec:
               required:
                 - sessionYaml
                 - catalogUpload
+                - recordHistory
               properties:
+                recordHistory:
+                  type: boolean
+                  description: >-
+                    Whether VS-API keeps a history database for this session run,
+                    chosen when the session is deployed.
                 sessionYaml:
                   type: string
                   description: Complete session YAML content. The Operator parses this directly.

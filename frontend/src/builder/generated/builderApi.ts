@@ -392,6 +392,7 @@ export interface BuilderSessionDeployRequest {
   readonly expected_session_revision: string;
   readonly expected_document_digest: Sha256Digest;
   readonly expected_dependency_digest: Sha256Digest;
+  readonly record_history: boolean;
 }
 
 /** Opaque accepted operation bound to the exact requested catalog source. */
@@ -943,6 +944,7 @@ export interface CatalogSessionSwitchRequest {
   readonly expected_source_revision: Sha256Digest;
   readonly expected_document_digest: Sha256Digest;
   readonly expected_dependency_digest: Sha256Digest;
+  readonly record_history: boolean;
 }
 
 /** Accepted catalog deployment operation. */
@@ -955,6 +957,7 @@ export interface CatalogSessionSwitchAccepted {
 /** One standard persisted session document to save into the user catalog. */
 export interface CatalogSessionYamlUploadRequest {
   readonly yaml: string;
+  readonly record_history: boolean;
 }
 
 /** One whitelisted vtysh command addressed to one runtime node. */

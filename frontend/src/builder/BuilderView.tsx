@@ -652,6 +652,8 @@ export function BuilderView({
   });
   const [structuredRecoveryRevision, setStructuredRecoveryRevision] = useState(0);
   const [saveState, setSaveState] = useState<SaveState>({ kind: "idle" });
+  // Whether the next deploy records the session run's history.
+  const [recordHistory, setRecordHistory] = useState(false);
   const adoptAppliedYaml = useCallback(
     (result: BuilderVisualDraftApplyYamlResult) => {
       if (!result.applied) return result;
@@ -2232,6 +2234,17 @@ export function BuilderView({
               openEditor({ kind: "save-session" });
             }}
           />
+          <label
+            className="builder-toolbar-toggle"
+            title="Record the deployed session run's state snapshots and link events"
+          >
+            <input
+              type="checkbox"
+              checked={recordHistory}
+              onChange={(e) => setRecordHistory(e.target.checked)}
+            />
+            Record history
+          </label>
           <IconButton
             className="builder-toolbar-btn"
             icon="rocket"
@@ -2265,6 +2278,7 @@ export function BuilderView({
                   expected_session_revision: sessionRevision,
                   expected_document_digest: deployVerdict.digests.document,
                   expected_dependency_digest: deployVerdict.digests.dependency,
+                  record_history: recordHistory,
                 });
                 setSaveState({
                   kind: "deploy-accepted",

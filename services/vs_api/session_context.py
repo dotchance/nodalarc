@@ -32,11 +32,23 @@ import sqlite3
 import threading
 import time as _time
 from collections import Counter, deque
+from collections.abc import Callable
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Literal
 
 import nats
-from nodalarc.db.queries import insert_ome_lifecycle_event, insert_operator_intervention_event
+from nodalarc.db.queries import (
+    get_metadata,
+    insert_latency_update,
+    insert_link_down,
+    insert_link_up,
+    insert_ome_lifecycle_event,
+    insert_operator_intervention_event,
+    insert_snapshot,
+    set_metadata,
+)
+from nodalarc.db.schema import create_tables
 from nodalarc.explain import compose_gs_decision_timeline_sample
 from nodalarc.models.decision_explanation import (
     GsDecisionReasonCount,
@@ -44,6 +56,7 @@ from nodalarc.models.decision_explanation import (
     PendingActuation,
 )
 from nodalarc.models.link_decisions import GroundLinkDecisionSnapshot
+from nodalarc.models.link_events import LatencyUpdate, LinkDown, LinkUp
 from nodalarc.models.resolved_session import ResolvedNode
 from nodalarc.models.scheduler_ops import ActualLinkSnapshot, ActuationState, parse_actuation_state
 from nodalarc.models.vs_api import (
@@ -104,6 +117,7 @@ class SessionContext:
         *,
         resolution: SessionResolution,
         source_id: str,
+        history_path: Path | None,
     ) -> None:
         if not session_id:
             log.error("FATAL: SessionContext created with empty session_id")
@@ -145,6 +159,13 @@ class SessionContext:
         self.actuation_expected_latency_ms: float = platform.vs_api_actuation_expected_latency_ms
         self.actuation_fault_after_ms: float = platform.vs_api_actuation_fault_after_ms
 
+        # This session's history file, or None when the session is not
+        # recorded. A recorded session that fails to write stops recording and
+        # keeps the failure in history_error, which every history read reports.
+        self.history_path = history_path
+        self.history_error: str | None = None
+        self._history_lock = threading.Lock()
+
         self._init_runtime_state()
         self._seed_resolved_static_nodes()
 
@@ -153,7 +174,6 @@ class SessionContext:
         _init_state_only. Single source of truth — adding a field here
         covers both production and test paths.
         """
-        self.db_path: str = ""
         self.state_lock = threading.Lock()
         if not hasattr(self, "_node_addresses_by_id"):
             self._node_addresses_by_id = {}
@@ -246,6 +266,9 @@ class SessionContext:
         self._resolved_static_nodes_by_id = {}
         self._resolved_link_kind_by_rule_id = {}
         self._interface_rates = {}
+        self.history_path = None
+        self.history_error = None
+        self._history_lock = threading.Lock()
         self.beam_falloff_exponent = 2.0
         self.actuation_expected_latency_ms = 250.0
         self.actuation_fault_after_ms = 1200.0
@@ -278,6 +301,8 @@ class SessionContext:
         """
         if self._stopped:
             raise RuntimeError("Cannot start a stopped SessionContext")
+        if self.history_path is not None:
+            await asyncio.to_thread(self._record_history, "session metadata", self._open_history)
 
         self._subscriber_task = asyncio.create_task(
             self._subscriber_loop(nc, mode),
@@ -771,26 +796,77 @@ class SessionContext:
             transmit.append(rates.transmit_mbps)
         return transmit[0], transmit[1]
 
+    def _open_history(self, conn: sqlite3.Connection) -> None:
+        """Create or reopen this session's history file; record what it holds once."""
+        create_tables(conn)
+        if get_metadata(conn, session_id=self.session_id, key="session_name") is not None:
+            return
+        for key, value in (
+            ("session_name", self.constellation_name),
+            ("routing_stack", self.routing_stack),
+            ("source_id", self.session_source_id),
+            ("start_time", datetime.now(UTC).isoformat()),
+        ):
+            set_metadata(conn, session_id=self.session_id, key=key, value=value)
+
+    def _record_history(self, what: str, write: Callable[[sqlite3.Connection], object]) -> None:
+        """Run one write against this session's history file.
+
+        A session that is not recorded writes nothing. The first failed write
+        stops recording for the session: it is logged as an error and kept in
+        history_error, which every history read reports in place of data.
+        """
+        if self.history_path is None:
+            return
+        with self._history_lock:
+            if self.history_error is not None:
+                return
+            try:
+                self.history_path.parent.mkdir(parents=True, exist_ok=True)
+                conn = sqlite3.connect(self.history_path)
+                try:
+                    write(conn)
+                finally:
+                    conn.close()
+            except Exception as exc:
+                self.history_error = f"failed to record {what}"
+                log.error(
+                    "History recording stopped for session %s: failed to record %s in %s: %s",
+                    self.session_id,
+                    what,
+                    self.history_path,
+                    exc,
+                    exc_info=exc,
+                )
+
+    def record_snapshot(self, snapshot: dict) -> None:
+        """Record one full state snapshot in this session's history."""
+        self._record_history(
+            "state snapshot",
+            lambda conn: insert_snapshot(
+                conn,
+                session_id=self.session_id,
+                sim_time=snapshot["sim_time"],
+                wall_time=snapshot["wall_time"],
+                snapshot_json=json.dumps(snapshot),
+            ),
+        )
+
+    @staticmethod
+    def _parse_link_event[EventT: (LinkUp, LinkDown, LatencyUpdate)](
+        model: type[EventT], msg
+    ) -> EventT:
+        try:
+            return model.model_validate_json(msg.data)
+        except ValidationError:
+            log.error("Malformed %s: %s", model.__name__, msg.data)
+            raise
+
     async def _on_link_up(self, msg) -> None:
         self.last_link_event_wall_time = _time.monotonic()
-        data = json.loads(msg.data)
-        node_a = data.get("node_a")
-        node_b = data.get("node_b")
-        if not node_a or not node_b:
-            log.error("Malformed LinkUp — missing node_a=%r or node_b=%r", node_a, node_b)
-            raise ValueError(f"LinkUp missing required fields: node_a={node_a}, node_b={node_b}")
-        for field in (
-            "interface_a",
-            "interface_b",
-            "latency_ms",
-            "range_km",
-            "reason",
-            "link_type",
-            "provenance",
-        ):
-            if field not in data or data[field] is None:
-                log.error("Malformed LinkUp — missing %s: %s", field, data)
-                raise ValueError(f"LinkUp missing required field: {field}")
+        event = self._parse_link_event(LinkUp, msg)
+        data = event.model_dump(mode="json")
+        node_a, node_b = event.node_a, event.node_b
         key = _link_key(node_a, node_b)
         public_link_type = self._public_link_type(
             data["link_type"],
@@ -822,37 +898,34 @@ class SessionContext:
             self.link_decision_traces[key] = trace
         self._notify_topology_change(node_a, node_b)
         self._add_recent_event(data, "link_up")
+        await asyncio.to_thread(
+            self._record_history,
+            "LinkUp",
+            lambda conn: insert_link_up(conn, event, session_id=self.session_id),
+        )
 
     async def _on_link_down(self, msg) -> None:
         self.last_link_event_wall_time = _time.monotonic()
-        data = json.loads(msg.data)
-        node_a = data.get("node_a")
-        node_b = data.get("node_b")
-        if not node_a or not node_b:
-            log.error("Malformed LinkDown — missing node_a=%r or node_b=%r", node_a, node_b)
-            raise ValueError(f"LinkDown missing required fields: node_a={node_a}, node_b={node_b}")
-        if data.get("link_type") is None:
-            log.error("Malformed LinkDown — missing link_type: %s", data)
-            raise ValueError("LinkDown missing required field: link_type")
+        event = self._parse_link_event(LinkDown, msg)
+        data = event.model_dump(mode="json")
+        node_a, node_b = event.node_a, event.node_b
         key = _link_key(node_a, node_b)
         with self.state_lock:
             self.links.pop(key, None)
             self.link_decision_traces.pop(key, None)
         self._notify_topology_change(node_a, node_b)
         self._add_recent_event(data, "link_down")
+        await asyncio.to_thread(
+            self._record_history,
+            "LinkDown",
+            lambda conn: insert_link_down(conn, event, session_id=self.session_id),
+        )
 
     async def _on_latency_update(self, msg) -> None:
-        data = json.loads(msg.data)
-        node_a = data.get("node_a")
-        node_b = data.get("node_b")
-        if not node_a or not node_b:
-            log.error("Malformed LatencyUpdate — missing node_a=%r or node_b=%r", node_a, node_b)
-            raise ValueError("LatencyUpdate missing required fields")
-        latency_ms = data.get("latency_ms")
-        range_km = data.get("range_km")
-        if latency_ms is None or range_km is None:
-            log.error("Malformed LatencyUpdate — missing latency_ms or range_km: %s", data)
-            raise ValueError("LatencyUpdate missing latency_ms or range_km")
+        event = self._parse_link_event(LatencyUpdate, msg)
+        data = event.model_dump(mode="json")
+        node_a, node_b = event.node_a, event.node_b
+        latency_ms, range_km = event.latency_ms, event.range_km
         if data.get("provenance") is None:
             log.error("Malformed LatencyUpdate — missing provenance: %s", data)
             raise ValueError("LatencyUpdate missing required field: provenance")
@@ -865,6 +938,11 @@ class SessionContext:
                     update={"latency_ms": latency_ms, "range_km": range_km}
                 )
                 self.link_decision_traces[key] = trace
+        await asyncio.to_thread(
+            self._record_history,
+            "LatencyUpdate",
+            lambda conn: insert_latency_update(conn, event, session_id=self.session_id),
+        )
 
     async def _on_almanac(self, msg) -> None:
         data = json.loads(msg.data)
@@ -1086,31 +1164,24 @@ class SessionContext:
         self.ome_lifecycle_notices_by_key[(gs_id, teardown_id)] = notice
 
     def _persist_operator_intervention(self, event: dict) -> None:
-        details = event.get("details") or {}
-        if not details.get("intervention_id") or not self.db_path:
+        """Record an ops event that belongs to an operator intervention."""
+        if not (event.get("details") or {}).get("intervention_id"):
             return
-        try:
-            conn = sqlite3.connect(self.db_path)
-            try:
-                insert_operator_intervention_event(conn, event)
-            finally:
-                conn.close()
-        except Exception as exc:
-            log.error("Failed to persist operator intervention event: %s", exc)
+        self._record_history(
+            "operator intervention event",
+            lambda conn: insert_operator_intervention_event(
+                conn, event, session_id=self.session_id
+            ),
+        )
 
     def _persist_ome_lifecycle_event(self, event: dict) -> None:
+        """Record an OME terminal-lifecycle ops event."""
         if event.get("source") != "ome" or event.get("code") != "MBB_TEARDOWN_TERMINAL":
             return
-        if not self.db_path:
-            return
-        try:
-            conn = sqlite3.connect(self.db_path)
-            try:
-                insert_ome_lifecycle_event(conn, event)
-            finally:
-                conn.close()
-        except Exception as exc:
-            log.error("Failed to persist OME lifecycle event: %s", exc)
+        self._record_history(
+            "OME lifecycle event",
+            lambda conn: insert_ome_lifecycle_event(conn, event, session_id=self.session_id),
+        )
 
     def build_actuation_health(self) -> dict:
         by_instance: dict[str, dict] = {}

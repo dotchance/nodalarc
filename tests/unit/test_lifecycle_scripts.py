@@ -229,6 +229,9 @@ def test_session_readiness_requires_reviewed_transition_and_live_pod_counts() ->
     assert '"$api_base/api/v1/session-transitions/$operation_id"' in script
     assert '"expected_document_digest"' in script
     assert '"expected_dependency_digest"' in script
+    # make session deploys without history recording; recording is chosen per
+    # deploy in the product (deploy dialogs and the deploy API).
+    assert '"record_history": False' in script
     assert "kubectl apply" not in script
     assert "kubectl delete constellationspec current-session" not in script
     assert '{.metadata.generation}{"|"}{.status.phase}{"|"}{.status.observedGeneration}' in script

@@ -52,6 +52,7 @@ def test_restart_protects_the_live_cr_after_operation_completion() -> None:
         "spec": {
             "sessionYaml": "session:\n  name: recovered\n",
             "catalogUpload": selection.model_dump(mode="json"),
+            "recordHistory": False,
         }
     }
 

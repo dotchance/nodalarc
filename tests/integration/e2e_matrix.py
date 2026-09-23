@@ -607,6 +607,7 @@ def deploy_catalog_session(token: str, perm: dict) -> dict:
             "expected_source_revision": summary["source_revision"],
             "expected_document_digest": summary["document_digest"],
             "expected_dependency_digest": summary["dependency_digest"],
+            "record_history": False,
         },
         retries=3,
     )

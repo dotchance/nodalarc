@@ -165,6 +165,7 @@ def _prepared(context: CatalogContext, saved):
         expected_document_digest=saved.digests.document,
         expected_closure_digest=saved.digests.dependency,
         available_node_count=1_000_000,
+        record_history=False,
     )
 
 

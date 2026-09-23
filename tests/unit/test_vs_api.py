@@ -260,6 +260,7 @@ def _constellation_cr(
         "spec": {
             "sessionYaml": root_yaml,
             "catalogUpload": upload.selection.model_dump(mode="json"),
+            "recordHistory": False,
         },
         "status": status,
     }
@@ -315,6 +316,7 @@ def _make_link_up_event(node_a="sat-P00S00", node_b="sat-P00S01", **overrides):
         "range_km": 1500.0,
         "reason": "vis_gained",
         "sim_time": datetime.now(UTC).isoformat(),
+        "wall_time": datetime.now(UTC).isoformat(),
         "link_type": "isl",
         "provenance": _make_provenance(),
     }
@@ -331,6 +333,7 @@ def _make_link_down_event(node_a="sat-P00S00", node_b="sat-P00S01", **overrides)
         "interface_b": "isl1",
         "reason": "vis_lost",
         "sim_time": datetime.now(UTC).isoformat(),
+        "wall_time": datetime.now(UTC).isoformat(),
         "link_type": "isl",
     }
     event.update(overrides)
@@ -505,6 +508,7 @@ class TestSessionContextNetworkIdentity:
                 catalog=shipped_read_view(),
             ),
             source_id="nodalarc:sessions/earth-leo-heo-geo-luna-reachability.yaml",
+            history_path=None,
         )
 
         assert (
@@ -536,6 +540,7 @@ class TestSessionContextNetworkIdentity:
                 catalog=shipped_read_view(),
             ),
             source_id="test-session",
+            history_path=None,
         )
 
         resolution = resolve_session_with_assets(
@@ -574,6 +579,7 @@ class TestSessionContextNetworkIdentity:
                 catalog=shipped_read_view(),
             ),
             source_id="nodalarc:sessions/earth-leo-simple.yaml",
+            history_path=None,
         )
         inactive_id = "earth-us-co-denver-gw2"
         active_id = "earth-us-co-denver-gw1"
@@ -849,10 +855,10 @@ class TestSQLiteQueries:
             range_km=1500.0,
             reason="vis_gained",
         )
-        insert_link_up(conn, event)
+        insert_link_up(conn, event, session_id="run-test")
         from nodalarc.db.queries import query_link_events
 
-        results = query_link_events(conn)
+        results = query_link_events(conn, session_id="run-test")
         assert len(results) >= 1
         conn.close()
 
@@ -871,10 +877,10 @@ class TestSQLiteQueries:
             wall_time_start=t,
             wall_time_end=t,
         )
-        insert_convergence_result(conn, result)
+        insert_convergence_result(conn, result, session_id="run-test")
         from nodalarc.db.queries import query_convergence_events
 
-        results = query_convergence_events(conn)
+        results = query_convergence_events(conn, session_id="run-test")
         assert len(results) >= 1
         conn.close()
 
@@ -890,8 +896,11 @@ class TestSnapshotStorage:
             sim_time="2025-01-01T00:00:00+00:00",
             wall_time="2025-01-01T00:00:00+00:00",
             snapshot_json='{"nodes":[],"links":[]}',
+            session_id="run-test",
         )
-        result = query_nearest_snapshot(conn, "2025-01-01T00:00:00+00:00")
+        result = query_nearest_snapshot(
+            conn, sim_time="2025-01-01T00:00:00+00:00", session_id="run-test"
+        )
         assert result is not None
         data = json.loads(result["snapshot_json"])
         assert data["nodes"] == []
@@ -905,8 +914,16 @@ class TestSnapshotStorage:
             "2025-01-01T00:05:00+00:00",
             "2025-01-01T00:10:00+00:00",
         ]:
-            insert_snapshot(conn, sim_time=t, wall_time=t, snapshot_json=f'{{"sim_time":"{t}"}}')
-        result = query_nearest_snapshot(conn, "2025-01-01T00:04:00+00:00")
+            insert_snapshot(
+                conn,
+                sim_time=t,
+                wall_time=t,
+                snapshot_json=f'{{"sim_time":"{t}"}}',
+                session_id="run-test",
+            )
+        result = query_nearest_snapshot(
+            conn, sim_time="2025-01-01T00:04:00+00:00", session_id="run-test"
+        )
         assert result is not None
         data = json.loads(result["snapshot_json"])
         assert "00:05:00" in data["sim_time"] or "00:00:00" in data["sim_time"]
@@ -915,7 +932,9 @@ class TestSnapshotStorage:
     def test_no_snapshots_returns_none(self):
         conn = sqlite3.connect(":memory:")
         create_tables(conn)
-        result = query_nearest_snapshot(conn, "2025-01-01T00:00:00+00:00")
+        result = query_nearest_snapshot(
+            conn, sim_time="2025-01-01T00:00:00+00:00", session_id="run-test"
+        )
         assert result is None
         conn.close()
 
@@ -1300,6 +1319,8 @@ class TestLinkDecisionTraceState:
         latency = MagicMock()
         latency.data = json.dumps(
             {
+                "sim_time": datetime.now(UTC).isoformat(),
+                "wall_time": datetime.now(UTC).isoformat(),
                 "node_a": "sat-P00S00",
                 "node_b": "sat-P00S01",
                 "latency_ms": 6.0,
@@ -2730,3 +2751,132 @@ class TestOmeLifecycleNotices:
             {"source": "scheduler", "code": "MBB_TEARDOWN_TERMINAL", "details": {}}
         )
         assert ctx.ome_lifecycle_notices_by_key == {}
+
+
+def _recorded_context(history_path) -> SessionContext:
+    ctx = SessionContext.__new__(SessionContext)
+    ctx._init_state_only()
+    ctx.session_id = "run-history-0001"
+    ctx._interface_rates = _ISL_RATES
+    ctx.history_path = history_path
+    return ctx
+
+
+def _message(payload: dict):
+    from unittest.mock import MagicMock
+
+    msg = MagicMock()
+    msg.data = json.dumps(payload).encode()
+    return msg
+
+
+class TestSessionHistory:
+    """A session run deployed with recording keeps one history file; others keep none."""
+
+    def test_recorded_session_writes_metadata_and_typed_link_events_to_its_file(self, tmp_path):
+        import asyncio
+        import sqlite3
+
+        from nodalarc.db.queries import get_metadata, query_link_events, recorded_session_id
+
+        path = tmp_path / "history" / "run-history-0001.db"
+        ctx = _recorded_context(path)
+        ctx._record_history("session metadata", ctx._open_history)
+
+        asyncio.run(ctx._on_link_up(_message(_make_link_up_event())))
+        asyncio.run(ctx._on_link_down(_message(_make_link_down_event())))
+
+        assert ctx.history_error is None
+        conn = sqlite3.connect(path)
+        try:
+            assert recorded_session_id(conn) == "run-history-0001"
+            assert get_metadata(conn, session_id="run-history-0001", key="session_name") == "test"
+            events = query_link_events(conn, session_id="run-history-0001")
+        finally:
+            conn.close()
+        assert [e["event_type"] for e in events] == ["LinkUp", "LinkDown"]
+        assert {e["session_id"] for e in events} == {"run-history-0001"}
+
+    def test_session_not_recorded_writes_nothing(self, tmp_path):
+        import asyncio
+
+        ctx = _recorded_context(None)
+        asyncio.run(ctx._on_link_up(_message(_make_link_up_event())))
+
+        assert ctx.history_error is None
+        assert list(tmp_path.iterdir()) == []
+
+    def test_history_reads_refuse_when_the_session_is_not_recorded(self, monkeypatch):
+        import vs_api.main as m
+
+        monkeypatch.setattr(m, "_API_KEY", "")
+        monkeypatch.setattr(m, "_active_context", _recorded_context(None))
+
+        response = TestClient(m.app).get("/api/v1/links")
+
+        assert response.status_code == 409
+        assert response.json() == {
+            "code": "history.not_recorded",
+            "message": "History recording is off for this session",
+        }
+
+    def test_a_failed_write_stops_recording_and_every_read_reports_it(self, tmp_path, monkeypatch):
+        import asyncio
+
+        import vs_api.main as m
+
+        blocker = tmp_path / "history"
+        blocker.write_text("a file where the history directory belongs")
+        ctx = _recorded_context(blocker / "run-history-0001.db")
+
+        asyncio.run(ctx._on_link_up(_message(_make_link_up_event())))
+        assert ctx.history_error == "failed to record LinkUp"
+
+        monkeypatch.setattr(m, "_API_KEY", "")
+        monkeypatch.setattr(m, "_active_context", ctx)
+        response = TestClient(m.app).get("/api/v1/links")
+        assert response.status_code == 503
+        assert response.json()["code"] == "history.failed"
+
+    def test_recorded_session_serves_its_link_history_by_node(self, tmp_path, monkeypatch):
+        import asyncio
+
+        import vs_api.main as m
+
+        ctx = _recorded_context(tmp_path / "run-history-0001.db")
+        ctx._interface_rates = {
+            **_ISL_RATES,
+            ("sat-P00S05", "isl0"): InterfaceRates(transmit_mbps=2000.0, receive_mbps=2000.0),
+            ("sat-P00S06", "isl1"): InterfaceRates(transmit_mbps=2000.0, receive_mbps=2000.0),
+        }
+        ctx._record_history("session metadata", ctx._open_history)
+        asyncio.run(ctx._on_link_up(_message(_make_link_up_event())))
+        asyncio.run(
+            ctx._on_link_up(_message(_make_link_up_event(node_a="sat-P00S05", node_b="sat-P00S06")))
+        )
+
+        monkeypatch.setattr(m, "_API_KEY", "")
+        monkeypatch.setattr(m, "_active_context", ctx)
+        response = TestClient(m.app).get("/api/v1/links", params={"node": "sat-P00S00"})
+
+        assert response.status_code == 200
+        assert [(e["node_a"], e["event_type"]) for e in response.json()] == [
+            ("sat-P00S00", "LinkUp")
+        ]
+
+    @pytest.mark.parametrize("record_history", [True, False])
+    def test_the_cr_spec_decides_whether_a_run_is_recorded(self, monkeypatch, record_history):
+        import vs_api.main as m
+
+        cr = _constellation_cr()
+        cr["spec"]["recordHistory"] = record_history
+        identity = _extract_ready_session(m, cr)
+
+        assert identity.record_history is record_history
+        path = m._history_path(identity)
+        if record_history:
+            assert path == Path(m.get_platform_config().session_data_root) / "history" / (
+                f"{identity.session_id}.db"
+            )
+        else:
+            assert path is None

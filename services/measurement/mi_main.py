@@ -235,7 +235,7 @@ class MIService:
             for event in events:
                 with self._db_lock:
                     try:
-                        insert_adapter_event(self._db_conn, event)
+                        insert_adapter_event(self._db_conn, event, session_id=self._session_id)
                     except Exception as exc:
                         log.warning(f"DB insert failed: {exc}")
                 self._publish_sync(self._subj_adapter, event.model_dump_json().encode())
@@ -260,7 +260,9 @@ class MIService:
                     )
                     with self._db_lock:
                         try:
-                            insert_probe_result(self._db_conn, probe_result)
+                            insert_probe_result(
+                                self._db_conn, probe_result, session_id=self._session_id
+                            )
                         except Exception as exc:
                             log.warning(f"DB probe insert failed: {exc}")
                     self._publish_sync(
@@ -285,7 +287,7 @@ class MIService:
             result = ConvergenceResult.model_validate_json(response)
             with self._db_lock:
                 try:
-                    insert_convergence_result(self._db_conn, result)
+                    insert_convergence_result(self._db_conn, result, session_id=self._session_id)
                 except Exception as exc:
                     log.warning(f"DB convergence insert failed: {exc}")
 

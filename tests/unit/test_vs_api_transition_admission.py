@@ -368,6 +368,7 @@ def test_catalog_switch_admission_is_revision_and_closure_bound(monkeypatch) -> 
         expected_source_revision=DIGEST_A,
         expected_document_digest=DIGEST_B,
         expected_dependency_digest=DIGEST_C,
+        record_history=True,
     )
     response = asyncio.run(main.switch_session(request, catalog_context))
 
@@ -383,6 +384,7 @@ def test_catalog_switch_admission_is_revision_and_closure_bound(monkeypatch) -> 
             "expected_session_revision": DIGEST_A,
             "expected_document_digest": DIGEST_B,
             "expected_closure_digest": DIGEST_C,
+            "record_history": True,
         },
     )
 
@@ -446,6 +448,7 @@ def test_startup_reconciliation_keeps_matching_wiring_operation_then_completes(
             "spec": {
                 "sessionYaml": ROOT_YAML,
                 "catalogUpload": _catalog_selection("catalog-recovered").model_dump(mode="json"),
+                "recordHistory": False,
             },
             "status": {
                 "observedGeneration": 9,
@@ -590,6 +593,7 @@ def _polled_cr(status: dict) -> dict:
         "spec": {
             "sessionYaml": ROOT_YAML,
             "catalogUpload": _catalog_selection("catalog-live").model_dump(mode="json"),
+            "recordHistory": False,
         },
         "status": status,
     }

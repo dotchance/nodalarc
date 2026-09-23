@@ -33,7 +33,7 @@ interface SessionWizardProps {
   systemNotice?: string;
   /** Scoped user and shipped catalog sessions, deployable as-is via session switch. */
   sessions: SessionInfo[];
-  onLaunchSession: (session: SessionInfo) => void;
+  onLaunchSession: (session: SessionInfo, recordHistory: boolean) => void;
   /** Feature-gated session-builder entry: navigates to the builder view.
    *  Day-0 authoring needs no deployed session, so this bypasses the
    *  hasEverDeployed close gate — it goes somewhere, not to nothing. */
@@ -97,16 +97,19 @@ export function SessionWizard({
     || wizard.state.step === "ground-stations"
     || wizard.state.step === "constellation";
 
+  // Every deploy from this launcher records the session run's history when set.
+  const [recordHistory, setRecordHistory] = useState(false);
+
   const handleDeploy = useCallback(async () => {
     if (!wizard.generatedYaml) {
       await wizard.generate();
       return;
     }
-    const ok = await wizard.deploy();
+    const ok = await wizard.deploy(recordHistory);
     if (ok) {
       onDeployStarted();
     }
-  }, [wizard, onDeployStarted]);
+  }, [wizard, onDeployStarted, recordHistory]);
 
   const handleUpload = useCallback(
     async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -115,14 +118,14 @@ export function SessionWizard({
       setUploadError(null);
       try {
         const text = await file.text();
-        const ok = await wizard.deployUploadedYaml(text);
+        const ok = await wizard.deployUploadedYaml(text, recordHistory);
         if (ok) onDeployStarted();
       } catch (err) {
         setUploadError(err instanceof Error ? err.message : "Upload failed");
       }
       if (fileInputRef.current) fileInputRef.current.value = "";
     },
-    [wizard, onDeployStarted],
+    [wizard, onDeployStarted, recordHistory],
   );
 
   const handleDownload = useCallback(async () => {
@@ -138,6 +141,17 @@ export function SessionWizard({
       <div className="launcher-shell">
         <header className="launcher-head">
           <h1>Sessions</h1>
+          <label
+            className="launcher-record-history"
+            title="Keep this session run's state snapshots and link events for later analysis"
+          >
+            <input
+              type="checkbox"
+              checked={recordHistory}
+              onChange={(e) => setRecordHistory(e.target.checked)}
+            />
+            Record session history
+          </label>
           {onClose && <IconButton icon="x" label="Close (Esc)" onClick={onClose} />}
         </header>
         {systemNotice && <div className="wizard-warning">{systemNotice}</div>}
@@ -192,7 +206,7 @@ export function SessionWizard({
                             className="launcher-row"
                             onClick={() => {
                               if (s.active || deploying || !s.deploy_allowed) return;
-                              onLaunchSession(s);
+                              onLaunchSession(s, recordHistory);
                               onDeployStarted();
                             }}
                             disabled={s.active || deploying || !s.deploy_allowed}

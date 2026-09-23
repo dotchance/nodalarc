@@ -66,13 +66,11 @@ from nodalarc.cr_runtime_config import (
     load_cr_runtime_config,
 )
 from nodalarc.db.queries import (
-    insert_snapshot,
     query_convergence_events,
     query_link_events,
     query_nearest_snapshot,
     query_probe_results,
 )
-from nodalarc.db.schema import create_tables
 from nodalarc.kubernetes_runtime_config import (
     KubernetesRuntimeConfigError,
     KubernetesRuntimeConfigErrorCode,
@@ -101,10 +99,6 @@ from nodalarc.models.session_sources import (
     CatalogSessionYamlUploadRequest,
 )
 from nodalarc.models.vs_api import (
-    LinkState,
-    NetworkHealth,
-    NodeState,
-    RecentEvent,
     StateSnapshot,
     TracedPath,
 )
@@ -155,7 +149,7 @@ from vs_api.refusals import (
     refusal_response,
 )
 from vs_api.resolved_runtime_views import tracer_node_registry
-from vs_api.session_context import SessionContext, _link_key
+from vs_api.session_context import SessionContext
 from vs_api.session_manager import SessionManager
 from vs_api.terminal import TerminalManager
 from vs_api.transition_operations import (
@@ -896,6 +890,8 @@ class CRSessionIdentity:
     runtime_config: ResolvedRuntimeConfig
     source_id: str
     generation: int
+    # The deploy request's choice to keep this session run's history database.
+    record_history: bool
 
 
 def _as_positive_int(value: Any) -> int | None:
@@ -986,7 +982,8 @@ def _extract_cr_session(
             return None
         session_run_id = sanitize_session_id(status.session_run_id)
 
-    session_yaml = ConstellationSpecSpec.from_cr(spec).session_yaml
+    cr_spec = ConstellationSpecSpec.from_cr(spec)
+    session_yaml = cr_spec.session_yaml
 
     runtime_namespace = str(metadata.get("namespace") or namespace or "nodalarc")
     runtime_config = _load_cr_runtime_session(
@@ -1032,7 +1029,20 @@ def _extract_cr_session(
         runtime_config=runtime_config,
         source_id=source_id,
         generation=generation,
+        record_history=cr_spec.record_history,
     )
+
+
+def _history_path(identity: CRSessionIdentity) -> Path | None:
+    """The history file of a recorded session run; None for a session not recorded.
+
+    VS-API owns every history file: one per recorded run, named by its run id,
+    under the platform's session data root.
+    """
+    if not identity.record_history:
+        return None
+    root = Path(get_platform_config().session_data_root)
+    return root / "history" / f"{identity.session_id}.db"
 
 
 def _extract_current_cr_session(cr: dict[str, Any]) -> CRSessionIdentity | None:
@@ -1200,6 +1210,7 @@ async def _activate_session_context_from_cr(
         ready.session_id,
         resolution=ready.resolution,
         source_id=ready.source_id,
+        history_path=_history_path(ready),
     )
     await new_ctx.start(_nats_connection, mode="recovery")
 
@@ -1619,6 +1630,7 @@ async def _nats_subscriber() -> None:
             session_id,
             resolution=_cr_session.resolution,
             source_id=_cr_session.source_id,
+            history_path=_history_path(_cr_session),
         )
         await ctx.start(nc, mode="recovery")
         _active_context = ctx
@@ -1694,12 +1706,25 @@ async def lifespan(app: FastAPI):
 
     sub_task.add_done_callback(_on_subscriber_done)
 
-    broadcast_task = asyncio.create_task(_ws_broadcaster())
+    recorder_task = asyncio.create_task(
+        _history_snapshot_recorder(), name="history-snapshot-recorder"
+    )
+
+    def _on_recorder_done(task: asyncio.Task) -> None:
+        if not task.cancelled() and task.exception() is not None:
+            log.error(
+                "History snapshot recorder DIED; no further snapshots are recorded until "
+                "restart: %s",
+                task.exception(),
+                exc_info=task.exception(),
+            )
+
+    recorder_task.add_done_callback(_on_recorder_done)
 
     yield
 
     sub_task.cancel()
-    broadcast_task.cancel()
+    recorder_task.cancel()
     watchdog_task.cancel()
     frame_builder_task.cancel()
 
@@ -1968,89 +1993,6 @@ async def get_ops_events(
     return events[-limit:]
 
 
-def _restore_state_from_db(db_path: str) -> bool:
-    """Load the most recent snapshot from SQLite into the active context.
-
-    Returns True if state was restored, False otherwise.
-    """
-    ctx = _active_context
-    if ctx is None:
-        return False
-    if not db_path or not Path(db_path).exists():
-        return False
-
-    try:
-        conn = sqlite3.connect(db_path)
-        row = conn.execute(
-            "SELECT snapshot_json FROM snapshots ORDER BY rowid DESC LIMIT 1"
-        ).fetchone()
-        conn.close()
-
-        if not row:
-            log.info("No snapshots in DB to restore from")
-            return False
-
-        snapshot = json.loads(row[0])
-
-        with ctx.state_lock:
-            for node in snapshot.get("nodes", []):
-                node_id = node.get("node_id")
-                if not node_id:
-                    log.error("Corrupt DB snapshot — node missing node_id: %s", node)
-                    raise ValueError("DB snapshot node missing node_id")
-                ctx.nodes[node_id] = NodeState(**node)
-
-            for link in snapshot.get("links", []):
-                na = link.get("node_a")
-                nb = link.get("node_b")
-                if not na or not nb:
-                    log.error("Corrupt DB snapshot — link missing node_a/node_b: %s", link)
-                    raise ValueError("DB snapshot link missing node_a or node_b")
-                key = _link_key(na, nb)
-                ctx.links[key] = LinkState(**link)
-
-            ctx.recent_events.clear()
-            for e in snapshot.get("recent_events", []):
-                sim_time_raw = e.get("sim_time")
-                if sim_time_raw is None:
-                    log.error("Corrupt DB snapshot — event missing sim_time: %s", e)
-                    raise ValueError("DB snapshot event missing sim_time")
-                sim_time_dt = (
-                    datetime.fromisoformat(sim_time_raw)
-                    if isinstance(sim_time_raw, str)
-                    else sim_time_raw
-                )
-                ctx.recent_events.append(
-                    RecentEvent(
-                        sim_time=sim_time_dt,
-                        node_id=e["node_id"],
-                        event_type=e["event_type"],
-                        summary=e["summary"],
-                    )
-                )
-
-            if "network_health" in snapshot:
-                nh = snapshot["network_health"]
-                ctx.network_health = NetworkHealth(
-                    status=nh["status"],
-                    converging_since_ms=nh.get("converging_since_ms"),
-                    unreachable_flows=nh["unreachable_flows"],
-                    last_convergence_ms=nh.get("last_convergence_ms"),
-                )
-
-            if "sim_time" in snapshot:
-                ctx.sim_time = snapshot["sim_time"]
-
-        node_count = len(snapshot.get("nodes", []))
-        link_count = len(snapshot.get("links", []))
-        log.info(f"Restored state from DB: {node_count} nodes, {link_count} links")
-        return True
-
-    except Exception as exc:
-        log.warning(f"Failed to restore state from DB: {exc}")
-        return False
-
-
 def _public_no_active_session_detail(status: str) -> str:
     """Return public lifecycle text without echoing internal failure details."""
     if status == "switching":
@@ -2064,32 +2006,18 @@ def _public_no_active_session_detail(status: str) -> str:
     return ""
 
 
-async def _ws_broadcaster() -> None:
-    """Record StateSnapshot to SQLite every ~10 seconds for historical playback."""
+async def _history_snapshot_recorder() -> None:
+    """Record a full state snapshot about every ten seconds for a recorded session."""
     tick = 0
     while True:
         await asyncio.sleep(0.1)
         tick += 1
         ctx = _active_context
-        if tick % 100 == 0 and ctx and ctx.db_path:
-            try:
-                snapshot = _build_snapshot()
-                if snapshot is None:
-                    continue
-
-                def _store(snap=snapshot, db_path=ctx.db_path):
-                    conn = sqlite3.connect(db_path)
-                    insert_snapshot(
-                        conn,
-                        sim_time=snap["sim_time"],
-                        wall_time=snap["wall_time"],
-                        snapshot_json=json.dumps(snap),
-                    )
-                    conn.close()
-
-                await asyncio.to_thread(_store)
-            except Exception as exc:
-                log.warning(f"Failed to store snapshot: {exc}")
+        if tick % 100 == 0 and ctx is not None and ctx.history_path is not None:
+            snapshot = _build_snapshot()
+            if snapshot is None:
+                continue
+            await asyncio.to_thread(ctx.record_snapshot, snapshot)
 
 
 @app.websocket("/ws/v1/state")
@@ -2477,36 +2405,72 @@ async def get_path(src: str, dst: str, sim_time: str | None = None) -> JSONRespo
     return JSONResponse(result)
 
 
-@app.get("/api/v1/state/{sim_time}", dependencies=[Depends(_require_api_key)])
-def get_historical_state(sim_time: str) -> dict:
-    """Historical state at a specific sim_time (nearest snapshot from SQLite)."""
+def _history_session() -> tuple[SessionContext | None, Response | None]:
+    """The active session whose history is readable, or the refusal that says why not."""
     ctx = _active_context
-    if not ctx or not ctx.db_path:
-        return {"error": "No database configured"}
-    conn = sqlite3.connect(ctx.db_path)
+    if ctx is None:
+        return None, refusal_response(503, "session.inactive", "No active session")
+    if ctx.history_path is None:
+        return None, refusal_response(
+            409, "history.not_recorded", "History recording is off for this session"
+        )
+    if ctx.history_error is not None:
+        return None, refusal_response(
+            503,
+            "history.failed",
+            "History recording failed for this session and stopped; see the VS-API log",
+        )
+    return ctx, None
+
+
+def _read_history(ctx: SessionContext, read: Callable[[sqlite3.Connection], Any]) -> Any:
+    conn = sqlite3.connect(f"file:{ctx.history_path}?mode=ro", uri=True)
     try:
-        result = query_nearest_snapshot(conn, sim_time)
-        if result is None:
-            return JSONResponse(status_code=404, content={"error": "No snapshots available"})
-        return json.loads(result["snapshot_json"])
+        return read(conn)
     finally:
         conn.close()
 
 
-@app.get("/api/v1/links", dependencies=[Depends(_require_api_key)])
+@app.get(
+    "/api/v1/state/{sim_time}",
+    responses=_REFUSAL_RESPONSES,
+    dependencies=[Depends(_require_api_key)],
+)
+def get_historical_state(sim_time: str) -> Any:
+    """The recorded session's state nearest a sim_time, from its history snapshots."""
+    ctx, refusal = _history_session()
+    if refusal is not None:
+        return refusal
+    result = _read_history(
+        ctx, lambda conn: query_nearest_snapshot(conn, session_id=ctx.session_id, sim_time=sim_time)
+    )
+    if result is None:
+        return refusal_response(
+            404, "history.no_snapshot", "No state snapshot is recorded for this session yet"
+        )
+    return json.loads(result["snapshot_json"])
+
+
+@app.get(
+    "/api/v1/links",
+    responses=_REFUSAL_RESPONSES,
+    dependencies=[Depends(_require_api_key)],
+)
 def get_link_events(
     start: str = Query(None),
     end: str = Query(None),
-) -> list[dict]:
-    """Query link events from SQLite."""
-    ctx = _active_context
-    if not ctx or not ctx.db_path:
-        return []
-    conn = sqlite3.connect(ctx.db_path)
-    try:
-        return query_link_events(conn, start_time=start, end_time=end)
-    finally:
-        conn.close()
+    node: str = Query(None),
+) -> Any:
+    """The recorded session's link events, optionally for one node's links."""
+    ctx, refusal = _history_session()
+    if refusal is not None:
+        return refusal
+    return _read_history(
+        ctx,
+        lambda conn: query_link_events(
+            conn, session_id=ctx.session_id, start_time=start, end_time=end, node=node
+        ),
+    )
 
 
 @app.get(
@@ -2736,37 +2700,47 @@ def get_ground_link_decisions(
     return json.loads(snapshot.model_dump_json())
 
 
-@app.get("/api/v1/metrics/convergence", dependencies=[Depends(_require_api_key)])
+@app.get(
+    "/api/v1/metrics/convergence",
+    responses=_REFUSAL_RESPONSES,
+    dependencies=[Depends(_require_api_key)],
+)
 def get_convergence_events(
     start: str = Query(None),
     end: str = Query(None),
-) -> list[dict]:
-    """Query convergence events from SQLite."""
-    ctx = _active_context
-    if not ctx or not ctx.db_path:
-        return []
-    conn = sqlite3.connect(ctx.db_path)
-    try:
-        return query_convergence_events(conn)
-    finally:
-        conn.close()
+) -> Any:
+    """The recorded session's convergence events."""
+    ctx, refusal = _history_session()
+    if refusal is not None:
+        return refusal
+    return _read_history(
+        ctx,
+        lambda conn: query_convergence_events(
+            conn, session_id=ctx.session_id, start_time=start, end_time=end
+        ),
+    )
 
 
-@app.get("/api/v1/metrics/flows/{flow_id}", dependencies=[Depends(_require_api_key)])
+@app.get(
+    "/api/v1/metrics/flows/{flow_id}",
+    responses=_REFUSAL_RESPONSES,
+    dependencies=[Depends(_require_api_key)],
+)
 def get_flow_metrics(
     flow_id: str,
     start: str = Query(None),
     end: str = Query(None),
-) -> list[dict]:
-    """Query probe results for a flow from SQLite."""
-    ctx = _active_context
-    if not ctx or not ctx.db_path:
-        return []
-    conn = sqlite3.connect(ctx.db_path)
-    try:
-        return query_probe_results(conn, flow_id=flow_id, start_time=start, end_time=end)
-    finally:
-        conn.close()
+) -> Any:
+    """The recorded session's probe results for one flow."""
+    ctx, refusal = _history_session()
+    if refusal is not None:
+        return refusal
+    return _read_history(
+        ctx,
+        lambda conn: query_probe_results(
+            conn, session_id=ctx.session_id, flow_id=flow_id, start_time=start, end_time=end
+        ),
+    )
 
 
 def _live_trace_grpc(src: str, dst: str, nodes: list, links: list) -> dict | None:
@@ -3192,23 +3166,6 @@ def _create_continuous_tracer() -> ContinuousTracer:
             len(interface_map),
         )
 
-        if _session_manager and _session_manager._current_data_dir:
-            pid_path = Path(_session_manager._current_data_dir) / "pid_map.json"
-            if pid_path.exists():
-                try:
-                    pid_map = json.loads(pid_path.read_text())
-                except Exception as exc:
-                    log.warning("Failed to read pid_map.json: %s", exc)
-
-            # Read timeline path from session-state.json
-            state_path = Path(_session_manager._current_data_dir) / "session-state.json"
-            if state_path.exists():
-                try:
-                    state_data = json.loads(state_path.read_text())
-                    timeline_path = state_data.get("timeline")
-                except Exception as exc:
-                    log.warning("Failed to read session-state.json: %s", exc)
-
         routing_stack = runtime_context.routing_stack
         if routing_stack:
             if "isis-sr" in routing_stack or "static-sr" in routing_stack:
@@ -3455,6 +3412,7 @@ async def _deploy_builder_catalog_session(request: Any, catalog_context: Any) ->
             expected_document_digest=str(request.expected_document_digest),
             expected_closure_digest=str(request.expected_dependency_digest),
             available_node_count=available_node_count,
+            record_history=request.record_history,
         )
     except SessionDeploymentPreparationError as exc:
         refuse_translated(exc, expected=exc.evidence.expected, observed=exc.evidence.observed)
@@ -3537,6 +3495,7 @@ async def switch_session(
         expected_session_revision=str(body.expected_source_revision),
         expected_document_digest=str(body.expected_document_digest),
         expected_closure_digest=str(body.expected_dependency_digest),
+        record_history=body.record_history,
     )
     operation_id = await _admit_transition(
         lambda: _run_catalog_switch(deployment, catalog_context),
@@ -3798,6 +3757,7 @@ async def deploy_from_yaml(
         expected_document_digest=closure.document_digest,
         expected_closure_digest=closure.closure_digest,
         available_node_count=available_node_count,
+        record_history=body.record_history,
     )
 
     operation_id = await _admit_transition(
@@ -4184,7 +4144,6 @@ def main() -> None:
 
     parser = argparse.ArgumentParser(description="VS-API server")
     parser.add_argument("--session", default=None, help="Path to session YAML (optional)")
-    parser.add_argument("--db", default=None, help="Path to SQLite database (optional)")
     parser.add_argument("--port", type=int, default=None, help="HTTP port")
     parser.add_argument(
         "--platform-config", default="configs/platform.yaml", help="Path to platform config YAML"
@@ -4215,14 +4174,9 @@ def main() -> None:
 
     global _session_manager, _pending_cr_poll
 
-    _session_manager = SessionManager(initial_db_path=args.db)
+    _session_manager = SessionManager()
 
     log.info("VS-API starting [build=%s]", os.environ.get("NODAL_BUILD", "dev"))
-
-    if args.db:
-        conn = sqlite3.connect(args.db)
-        create_tables(conn)
-        conn.close()
 
     # The live ConstellationSpec is the sole runtime bootstrap authority. Do
     # not parse --session with default catalog roots: uploaded user: closures

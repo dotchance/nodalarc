@@ -43,10 +43,14 @@ _SELECTION = {
     "closure_digest": "sha256:" + "a" * 64,
     "file_count": 0,
 }
-_SPEC = {"sessionYaml": _SESSION_YAML, "catalogUpload": _SELECTION}
+_SPEC = {"sessionYaml": _SESSION_YAML, "catalogUpload": _SELECTION, "recordHistory": False}
 _META = {"name": "current-session", "uid": "test-uid", "generation": 1}
 _PREPARED_IDENTITY = "profiles@sha256:" + "f" * 64
-_INVALID_SPEC = {"sessionYaml": _INVALID_SESSION_YAML, "catalogUpload": _SELECTION}
+_INVALID_SPEC = {
+    "sessionYaml": _INVALID_SESSION_YAML,
+    "catalogUpload": _SELECTION,
+    "recordHistory": False,
+}
 
 
 @pytest.fixture(autouse=True)

@@ -5,7 +5,8 @@
 import { useEffect, useState } from "react";
 import { translateLinkType } from "../translate";
 import { linkEventLabel } from "../explain/linkEvents";
-import { REST_URL } from "../config";
+import { REST_URL, authHeaders } from "../config";
+import { apiErrorFromException, apiErrorMessage } from "../ui/apiError";
 import type { LinkState, StateSnapshot } from "../types";
 
 interface LinkDetailProps {
@@ -28,29 +29,41 @@ function formatRate(mbps: number): string {
 
 export function LinkDetail({ link, snapshot }: LinkDetailProps) {
   const [history, setHistory] = useState<LinkHistoryEntry[]>([]);
+  // Why no history is shown: recording is off for the session, recording
+  // failed, or the request failed. Stated, never shown as an empty history.
+  const [historyUnavailable, setHistoryUnavailable] = useState<string | null>(null);
 
-  // Fetch link history from REST API on select
+  // Fetch the recorded link history of this link's first node on select.
   useEffect(() => {
+    let current = true;
     const fetchHistory = async () => {
+      setHistory([]);
+      setHistoryUnavailable(null);
       try {
         const res = await fetch(
-          `${REST_URL}/api/v1/links?start=&end=`,
+          `${REST_URL}/api/v1/links?node=${encodeURIComponent(link.node_a)}`,
+          { headers: authHeaders() },
         );
-        if (res.ok) {
-          const data = (await res.json()) as LinkHistoryEntry[];
-          // Filter to this link's nodes
-          const filtered = data.filter(
-            (e) =>
-              (e.node_a === link.node_a && e.node_b === link.node_b) ||
-              (e.node_a === link.node_b && e.node_b === link.node_a),
-          );
-          setHistory(filtered.slice(-20));
+        if (!res.ok) {
+          const message = await apiErrorMessage(res);
+          if (current) setHistoryUnavailable(message);
+          return;
         }
-      } catch {
-        // Ignore fetch errors
+        const data = (await res.json()) as LinkHistoryEntry[];
+        const onThisLink = data.filter(
+          (e) =>
+            (e.node_a === link.node_a && e.node_b === link.node_b) ||
+            (e.node_a === link.node_b && e.node_b === link.node_a),
+        );
+        if (current) setHistory(onThisLink.slice(-20));
+      } catch (err) {
+        if (current) setHistoryUnavailable(apiErrorFromException(err));
       }
     };
     fetchHistory();
+    return () => {
+      current = false;
+    };
   }, [link.node_a, link.node_b]);
 
   // Find flows traversing this link
@@ -140,6 +153,14 @@ export function LinkDetail({ link, snapshot }: LinkDetailProps) {
         </>
       )}
 
+      {historyUnavailable !== null && (
+        <>
+          <h3>History</h3>
+          <div className="detail-row">
+            <span className="detail-value">{historyUnavailable}</span>
+          </div>
+        </>
+      )}
       {history.length > 0 && (
         <>
           <h3>History (last {history.length})</h3>

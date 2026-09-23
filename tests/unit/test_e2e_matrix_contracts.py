@@ -125,6 +125,7 @@ def test_catalog_deploy_uses_guarded_shipped_revision_and_exact_yaml(monkeypatch
         "expected_source_revision": "a" * 64,
         "expected_document_digest": "b" * 64,
         "expected_dependency_digest": "c" * 64,
+        "record_history": False,
     }
 
 

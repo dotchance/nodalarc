@@ -78,6 +78,25 @@ describe("LinkDetail", () => {
     expect(screen.getByText("leo ↔ meo")).toBeTruthy();
   });
 
+  it("states why no history is shown when the session is not recorded", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: false,
+        status: 409,
+        json: async () => ({
+          code: "history.not_recorded",
+          message: "History recording is off for this session",
+        }),
+      }),
+    );
+    render(<LinkDetail link={link()} snapshot={snapshot()} />);
+
+    expect(await screen.findByText("History recording is off for this session")).toBeTruthy();
+    const url = String((globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls[0]![0]);
+    expect(url).toContain("/api/v1/links?node=leo-sat-p00s00");
+  });
+
   it("shows each direction at its sending end's transmit rate", () => {
     render(
       <LinkDetail

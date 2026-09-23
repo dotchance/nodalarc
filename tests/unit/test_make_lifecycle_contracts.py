@@ -709,7 +709,8 @@ def test_constellationspec_catalog_upload_schema_is_required_and_exact() -> None
     spec_schema = crd["spec"]["versions"][0]["schema"]["openAPIV3Schema"]["properties"]["spec"]
     upload = spec_schema["properties"]["catalogUpload"]
 
-    assert set(spec_schema["required"]) == {"sessionYaml", "catalogUpload"}
+    assert set(spec_schema["required"]) == {"sessionYaml", "catalogUpload", "recordHistory"}
+    assert spec_schema["properties"]["recordHistory"]["type"] == "boolean"
     assert "additionalProperties" not in spec_schema
     assert "additionalProperties" not in upload
     assert "x-kubernetes-preserve-unknown-fields" not in spec_schema

@@ -99,6 +99,7 @@ def _matching_cr(*, phase: str = "Ready") -> dict:
         "spec": {
             "sessionYaml": ROOT_YAML,
             "catalogUpload": _selection().model_dump(mode="json"),
+            "recordHistory": False,
         },
         "status": {
             "observedGeneration": 7,

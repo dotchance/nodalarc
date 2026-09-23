@@ -48,6 +48,7 @@ def _persist_luna_session(context, name: str) -> tuple[SessionRef, dict]:
         "expected_source_revision": str(saved.revision),
         "expected_document_digest": closure.document_digest,
         "expected_dependency_digest": closure.closure_digest,
+        "record_history": False,
     }
 
 

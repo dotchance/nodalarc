@@ -580,6 +580,7 @@ def test_deploy_callback_receives_only_exact_saved_source_and_server_context(
         "expected_session_revision": "session-revision-7",
         "expected_document_digest": f"sha256:{'a' * 64}",
         "expected_dependency_digest": f"sha256:{'b' * 64}",
+        "record_history": False,
     }
     accepted = client.post("/api/v1/builder/session/deploy", json=request)
 
@@ -623,6 +624,7 @@ def test_deploy_refusal_is_typed_and_path_free(catalog_context: CatalogContext) 
             "expected_session_revision": "session-revision-7",
             "expected_document_digest": f"sha256:{'a' * 64}",
             "expected_dependency_digest": f"sha256:{'b' * 64}",
+            "record_history": False,
         },
     )
 

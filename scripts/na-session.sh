@@ -363,6 +363,7 @@ payload = {
     "expected_source_revision": sys.argv[2],
     "expected_document_digest": sys.argv[3],
     "expected_dependency_digest": sys.argv[4],
+    "record_history": False,
 }
 print(json.dumps(payload, separators=(",", ":")))
 ' "$session_ref" "$source_revision" "$document_digest" "$dependency_digest"

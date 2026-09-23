@@ -1,16 +1,28 @@
 # Copyright 2024-2026 .chance (dotchance)
 # Licensed under the Apache License, Version 2.0. See LICENSE file.
-"""SQLite schema for Nodal Arc event storage.
+"""SQLite schema for the session history database.
 
-All 6 tables + indexes. WAL mode enabled for concurrent reads.
-Column names match Pydantic model field names for consistency.
+VS-API owns one database file for every session's history; each row carries
+the run id of the session it belongs to. WAL mode serves concurrent reads.
+Column names match Pydantic model field names.
+
+PRAGMA user_version records SCHEMA_VERSION. A database at another version was
+written by another release; it is refused, never migrated.
 """
 
 import sqlite3
 
+SCHEMA_VERSION = 1
+
+
+class HistorySchemaError(RuntimeError):
+    """The database holds tables from a schema version this release does not write."""
+
+
 DDL_LINK_EVENTS = """
 CREATE TABLE IF NOT EXISTS link_events (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id TEXT NOT NULL,
     sim_time TEXT NOT NULL,
     wall_time TEXT NOT NULL,
     event_type TEXT NOT NULL,
@@ -27,6 +39,7 @@ CREATE TABLE IF NOT EXISTS link_events (
 DDL_CONVERGENCE_EVENTS = """
 CREATE TABLE IF NOT EXISTS convergence_events (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id TEXT NOT NULL,
     event_id TEXT NOT NULL UNIQUE,
     sim_time_start TEXT NOT NULL,
     sim_time_end TEXT NOT NULL,
@@ -43,6 +56,7 @@ CREATE TABLE IF NOT EXISTS convergence_events (
 DDL_PROBE_RESULTS = """
 CREATE TABLE IF NOT EXISTS probe_results (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id TEXT NOT NULL,
     sim_time TEXT NOT NULL,
     wall_time TEXT NOT NULL,
     flow_id TEXT NOT NULL,
@@ -60,6 +74,7 @@ CREATE TABLE IF NOT EXISTS probe_results (
 DDL_ADAPTER_EVENTS = """
 CREATE TABLE IF NOT EXISTS adapter_events (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id TEXT NOT NULL,
     sim_time TEXT NOT NULL,
     wall_time TEXT NOT NULL,
     node_id TEXT NOT NULL,
@@ -70,25 +85,17 @@ CREATE TABLE IF NOT EXISTS adapter_events (
 
 DDL_SESSION_METADATA = """
 CREATE TABLE IF NOT EXISTS session_metadata (
-    key TEXT PRIMARY KEY,
-    value TEXT NOT NULL
-);
-"""
-
-DDL_CONFIG_CHANGES = """
-CREATE TABLE IF NOT EXISTS config_changes (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    sim_time TEXT NOT NULL,
-    wall_time TEXT NOT NULL,
-    change_type TEXT NOT NULL,
-    description TEXT NOT NULL,
-    config_snapshot TEXT
+    session_id TEXT NOT NULL,
+    key TEXT NOT NULL,
+    value TEXT NOT NULL,
+    PRIMARY KEY (session_id, key)
 );
 """
 
 DDL_SNAPSHOTS = """
 CREATE TABLE IF NOT EXISTS snapshots (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id TEXT NOT NULL,
     sim_time TEXT NOT NULL,
     wall_time TEXT NOT NULL,
     snapshot_json TEXT NOT NULL
@@ -132,14 +139,15 @@ CREATE TABLE IF NOT EXISTS operator_interventions (
 """
 
 INDEXES = [
-    "CREATE INDEX IF NOT EXISTS idx_link_events_sim_time ON link_events(sim_time);",
-    "CREATE INDEX IF NOT EXISTS idx_link_events_nodes ON link_events(node_a, node_b);",
-    "CREATE INDEX IF NOT EXISTS idx_convergence_sim_time ON convergence_events(sim_time_start);",
-    "CREATE INDEX IF NOT EXISTS idx_probe_results_sim_time ON probe_results(sim_time);",
-    "CREATE INDEX IF NOT EXISTS idx_probe_results_flow ON probe_results(flow_id);",
-    "CREATE INDEX IF NOT EXISTS idx_adapter_events_sim_time ON adapter_events(sim_time);",
-    "CREATE INDEX IF NOT EXISTS idx_adapter_events_node ON adapter_events(node_id);",
-    "CREATE INDEX IF NOT EXISTS idx_snapshots_sim_time ON snapshots(sim_time);",
+    "CREATE INDEX IF NOT EXISTS idx_link_events_time ON link_events(session_id, sim_time);",
+    "CREATE INDEX IF NOT EXISTS idx_link_events_nodes ON link_events(session_id, node_a, node_b);",
+    "CREATE INDEX IF NOT EXISTS idx_convergence_time"
+    " ON convergence_events(session_id, sim_time_start);",
+    "CREATE INDEX IF NOT EXISTS idx_probe_results_time ON probe_results(session_id, sim_time);",
+    "CREATE INDEX IF NOT EXISTS idx_probe_results_flow ON probe_results(session_id, flow_id);",
+    "CREATE INDEX IF NOT EXISTS idx_adapter_events_time ON adapter_events(session_id, sim_time);",
+    "CREATE INDEX IF NOT EXISTS idx_adapter_events_node ON adapter_events(session_id, node_id);",
+    "CREATE INDEX IF NOT EXISTS idx_snapshots_time ON snapshots(session_id, sim_time);",
     "CREATE INDEX IF NOT EXISTS idx_ome_lifecycle_session ON ome_lifecycle_events(session_id);",
     "CREATE INDEX IF NOT EXISTS idx_ome_lifecycle_pair ON ome_lifecycle_events(session_id, old_pair, successor_pair);",
     "CREATE INDEX IF NOT EXISTS idx_ome_lifecycle_outcome ON ome_lifecycle_events(terminal_outcome);",
@@ -154,18 +162,41 @@ ALL_DDL = [
     DDL_PROBE_RESULTS,
     DDL_ADAPTER_EVENTS,
     DDL_SESSION_METADATA,
-    DDL_CONFIG_CHANGES,
     DDL_SNAPSHOTS,
     DDL_OME_LIFECYCLE_EVENTS,
     DDL_OPERATOR_INTERVENTIONS,
 ]
 
 
+def require_schema_version(conn: sqlite3.Connection, schema: str = "main") -> None:
+    """Refuse a history database written at another schema version."""
+    version = conn.execute(f"PRAGMA {schema}.user_version").fetchone()[0]
+    if version != SCHEMA_VERSION:
+        raise HistorySchemaError(
+            f"history database schema version {version} is not {SCHEMA_VERSION}: another "
+            "NodalArc release wrote it"
+        )
+
+
 def create_tables(conn: sqlite3.Connection) -> None:
-    """Create all tables and indexes. Enable WAL mode."""
+    """Create the schema in an empty database, or accept one at SCHEMA_VERSION.
+
+    Raises HistorySchemaError when the database already holds tables at
+    another version.
+    """
+    version = conn.execute("PRAGMA user_version").fetchone()[0]
+    tables = conn.execute(
+        "SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'"
+    ).fetchone()[0]
+    if tables and version != SCHEMA_VERSION:
+        raise HistorySchemaError(
+            f"history database schema version {version} is not {SCHEMA_VERSION}: another "
+            "NodalArc release wrote it; remove the database file so this release creates it"
+        )
     conn.execute("PRAGMA journal_mode=WAL;")
     for ddl in ALL_DDL:
         conn.execute(ddl)
     for idx in INDEXES:
         conn.execute(idx)
+    conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
     conn.commit()

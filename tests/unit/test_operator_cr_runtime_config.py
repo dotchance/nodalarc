@@ -98,6 +98,7 @@ def _spec(upload: CatalogUpload) -> dict[str, Any]:
     return {
         "sessionYaml": upload.root_yaml.decode("utf-8"),
         "catalogUpload": upload.selection.model_dump(mode="json"),
+        "recordHistory": False,
     }
 
 

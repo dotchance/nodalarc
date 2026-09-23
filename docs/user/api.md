@@ -98,13 +98,26 @@ computation, then continuous state updates.
 | Method | Path | Description |
 |--------|------|-------------|
 | GET | `/api/v1/state` | Current full state snapshot |
-| GET | `/api/v1/state/{sim_time}` | Historical snapshot nearest to given time |
+| GET | `/api/v1/state/{sim_time}` | Recorded snapshot nearest to given time (recorded sessions only) |
 | POST | `/api/v1/trace` | Forwarding path trace between two nodes |
-| GET | `/api/v1/links` | Link events with optional time range filter |
+| GET | `/api/v1/links` | Recorded link events, with optional `start`, `end` and `node` filters (recorded sessions only) |
 | POST | `/api/v1/playback` | Playback control: pause, resume, set_speed, seek |
 | GET | `/api/v1/health` | Health check (no auth required) |
 | GET | `/api/v1/auth/token` | Get auth token (no auth required) |
 | WS | `/ws/v1/state` | Real-time state stream (~1 Hz) |
+
+## Session History
+
+History recording is chosen each time a session is deployed: the
+"Record session history" checkbox in the Sessions launcher or the Session
+Builder, or `"record_history": true` in the body of a deploy request
+(`POST /api/v1/sessions/switch`, `POST /api/v1/session/deploy-from-yaml`,
+`POST /api/v1/builder/session/deploy`). A recorded session run keeps one
+history file with its state snapshots (about every ten seconds), link events,
+operator interventions and OME lifecycle events. The history endpoints answer
+for the active session: `409 history.not_recorded` when it was deployed
+without recording, and `503 history.failed` when a write failed and recording
+stopped.
 
 ## State Snapshot Schema
 

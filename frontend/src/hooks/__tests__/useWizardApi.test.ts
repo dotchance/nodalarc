@@ -259,9 +259,9 @@ describe("useWizardApi", () => {
 
     await act(async () => { await result.current.generate(wizardState()); });
     let deployed = false;
-    await act(async () => { deployed = await result.current.deploy(); });
+    await act(async () => { deployed = await result.current.deploy(true); });
     let redeployed = false;
-    await act(async () => { redeployed = await result.current.deploy(); });
+    await act(async () => { redeployed = await result.current.deploy(true); });
 
     expect(deployed).toBe(true);
     expect(redeployed).toBe(true);
@@ -277,6 +277,7 @@ describe("useWizardApi", () => {
       expected_session_revision: "revision-1",
       expected_document_digest: saved.digests.document,
       expected_dependency_digest: saved.digests.dependency,
+      record_history: true,
     });
     expect(JSON.parse(fetchMock.mock.calls[3]![1]!.body as string)).toEqual(deployBody);
   });

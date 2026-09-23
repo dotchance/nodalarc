@@ -194,7 +194,9 @@ def test_preview_coverage_openapi_uses_generated_request_and_response_contracts(
 
 def test_deploy_sanitizes_yaml_parser_errors(catalog_client):
     scoped_client, _context = catalog_client
-    response = scoped_client.post("/api/v1/session/deploy-from-yaml", json={"yaml": "session: ["})
+    response = scoped_client.post(
+        "/api/v1/session/deploy-from-yaml", json={"yaml": "session: [", "record_history": False}
+    )
 
     assert response.status_code == 400
     assert response.json()["message"] == "Invalid session YAML"
@@ -204,7 +206,7 @@ def test_deploy_rejects_session_name_with_path_separator(catalog_client):
     scoped_client, _context = catalog_client
     response = scoped_client.post(
         "/api/v1/session/deploy-from-yaml",
-        json={"yaml": _demo_session_with_name("../../outside")},
+        json={"yaml": _demo_session_with_name("../../outside"), "record_history": False},
     )
 
     assert response.status_code == 422
@@ -229,7 +231,7 @@ def test_single_file_upload_requires_referenced_user_content(catalog_client):
 
     response = scoped_client.post(
         "/api/v1/session/deploy-from-yaml",
-        json={"yaml": yaml.safe_dump(raw, sort_keys=False)},
+        json={"yaml": yaml.safe_dump(raw, sort_keys=False), "record_history": False},
     )
 
     assert response.status_code == 422
@@ -255,7 +257,7 @@ def test_upload_saves_canonical_user_catalog_session_and_admits_catalog_deploy(
     uploaded_yaml = _demo_session_with_name("uploaded-generated")
     response = scoped_client.post(
         "/api/v1/session/deploy-from-yaml",
-        json={"yaml": uploaded_yaml},
+        json={"yaml": uploaded_yaml, "record_history": False},
     )
 
     assert response.status_code == 200

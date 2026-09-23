@@ -74,8 +74,27 @@ describe("SessionWizard catalog sessions", () => {
     );
 
     fireEvent.click(screen.getByText("earth-geo-tdrs"));
-    expect(onLaunchSession).toHaveBeenCalledWith(SESSIONS[1]);
+    expect(onLaunchSession).toHaveBeenCalledWith(SESSIONS[1], false);
     expect(onDeployStarted).toHaveBeenCalled();
+  });
+
+  it("launches with history recording when the launcher toggle is set", () => {
+    const onLaunchSession = vi.fn();
+    render(
+      <SessionWizard
+        onDeployStarted={vi.fn()}
+        onClose={undefined}
+        deploying={false}
+        sessions={SESSIONS}
+        onLaunchSession={onLaunchSession}
+      />,
+    );
+
+    const toggle = screen.getByLabelText("Record session history") as HTMLInputElement;
+    expect(toggle.checked).toBe(false);
+    fireEvent.click(toggle);
+    fireEvent.click(screen.getByText("earth-geo-tdrs"));
+    expect(onLaunchSession).toHaveBeenCalledWith(SESSIONS[1], true);
   });
 
   it("disables the currently running session", () => {
@@ -145,7 +164,7 @@ describe("SessionWizard catalog sessions", () => {
     ).toBeTruthy();
 
     fireEvent.click(within(yours).getByText("earth-geo-tdrs"));
-    expect(onLaunchSession).toHaveBeenCalledWith(user);
+    expect(onLaunchSession).toHaveBeenCalledWith(user, false);
   });
 });
 

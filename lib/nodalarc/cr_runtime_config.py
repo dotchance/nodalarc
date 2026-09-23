@@ -34,14 +34,25 @@ class ConstellationSpecSpec(BaseModel):
 
     session_yaml: str = Field(alias="sessionYaml", min_length=1)
     catalog_upload: CatalogUploadSelection = Field(alias="catalogUpload")
+    # Whether VS-API keeps this session's history database, chosen per deploy.
+    record_history: bool = Field(alias="recordHistory")
 
     @classmethod
     def of(
-        cls, *, session_yaml: str, catalog_upload: CatalogUploadSelection
+        cls,
+        *,
+        session_yaml: str,
+        catalog_upload: CatalogUploadSelection,
+        record_history: bool,
     ) -> ConstellationSpecSpec:
         """Build the spec a writer will emit."""
         return cls.model_validate(
-            {"sessionYaml": session_yaml, "catalogUpload": catalog_upload}, strict=True
+            {
+                "sessionYaml": session_yaml,
+                "catalogUpload": catalog_upload,
+                "recordHistory": record_history,
+            },
+            strict=True,
         )
 
     @classmethod

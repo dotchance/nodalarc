@@ -67,6 +67,8 @@ class PreparedCatalogSessionDeployment:
     repository_generation: CatalogGeneration | None
     prepared: PreparedSessionFiles
     upload: CatalogUpload
+    # The deploy request's choice to keep this session run's history database.
+    record_history: bool
     receipt: CatalogUploadStoreReceipt | None = None
 
     def __post_init__(self) -> None:
@@ -108,6 +110,7 @@ def prepare_catalog_session_deployment(
     expected_document_digest: str,
     expected_closure_digest: str,
     available_node_count: int,
+    record_history: bool,
     run_id: str | None = None,
 ) -> PreparedCatalogSessionDeployment:
     """Re-read current repository head and prepare one exact deployable file set."""
@@ -187,6 +190,7 @@ def prepare_catalog_session_deployment(
         repository_generation=snapshot.generation,
         prepared=prepared,
         upload=encode_catalog_upload(prepared),
+        record_history=record_history,
     )
 
 
@@ -249,6 +253,7 @@ def persist_catalog_session_upload(
         repository_generation=deployment.repository_generation,
         prepared=deployment.prepared,
         upload=deployment.upload,
+        record_history=deployment.record_history,
         receipt=receipt,
     )
 
@@ -285,6 +290,7 @@ def constellation_spec_body(
     spec = ConstellationSpecSpec.of(
         session_yaml=deployment.prepared.root_yaml.decode("utf-8"),
         catalog_upload=selection,
+        record_history=deployment.record_history,
     ).to_cr()
     return {
         "apiVersion": CR_API_VERSION,

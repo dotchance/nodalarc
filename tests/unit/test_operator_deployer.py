@@ -352,8 +352,18 @@ class TestPodPlacement:
         with patch("nodalarc_operator.session_deployer._get_v1", return_value=mock_v1):
             result = discover_available_nodes()
 
-        assert "node02" in result
-        assert "node03" not in result
+        assert result == ["node02"]
+        mock_v1.list_node.assert_called_once_with(label_selector="nodalarc.io/node-agent=true")
+
+    def test_a_failed_node_listing_raises(self):
+        mock_v1 = create_autospec(kubernetes.client.CoreV1Api, instance=True)
+        mock_v1.list_node.side_effect = kubernetes.client.rest.ApiException(status=503)
+
+        with (
+            patch("nodalarc_operator.session_deployer._get_v1", return_value=mock_v1),
+            pytest.raises(kubernetes.client.rest.ApiException),
+        ):
+            discover_available_nodes()
 
 
 # ---------------------------------------------------------------------------

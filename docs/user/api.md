@@ -53,23 +53,107 @@ for link in s['links']:
 "
 ```
 
-### Trace the forwarding path between two nodes
+### Trace the path between two nodes
+
+NodalArc traces a path by running traceroute inside the two nodes' own
+containers, one run from each end toward the other. The result is the path
+real packets took through the forwarding plane at that moment.
 
 ```bash
 curl -s -X POST -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
   http://localhost:8080/api/v1/trace \
-  -d '{"src_node": "earth-us-hawthorne-gw1", "dst_node": "earth-de-frankfurt-gw1"}'
+  -d '{"src_node": "earth-it-fucino-gw1", "dst_node": "earth-us-ca-goldstone-gw1"}'
 ```
 
-Returns the hop-by-hop path and total latency:
+The request returns when both traceroutes finish. A destination that does not
+answer costs up to 20 hops at 4 seconds each. The response, from an
+`earth-geo-tdrs` session:
 
 ```json
 {
-  "hops": ["earth-us-hawthorne-gw1", "leo-sat-p02s03", "leo-sat-p02s04", "leo-sat-p03s04", "earth-de-frankfurt-gw1"],
-  "success": true,
-  "total_latency_ms": 42.3
+  "flow_id": "__trace__",
+  "src_node": "earth-it-fucino-gw1",
+  "dst_node": "earth-us-ca-goldstone-gw1",
+  "hops": [
+    "earth-it-fucino-gw1",
+    "geo-tdrs-049w",
+    "geo-tdrs-085w",
+    "geo-tdrs-111w",
+    "geo-tdrs-171w",
+    "earth-us-ca-goldstone-gw1"
+  ],
+  "hop_rtts": [
+    null,
+    260.158,
+    434.503,
+    561.195,
+    842.272,
+    1103.524
+  ],
+  "state": "reached",
+  "rtt_ms": 1103.524,
+  "error": null,
+  "reverse_hops": [
+    "earth-us-ca-goldstone-gw1",
+    "geo-tdrs-171w",
+    "geo-tdrs-111w",
+    "geo-tdrs-085w",
+    "geo-tdrs-049w",
+    "earth-it-fucino-gw1"
+  ],
+  "reverse_hop_rtts": [
+    null,
+    261.621,
+    543.337,
+    669.568,
+    843.685,
+    1104.216
+  ],
+  "reverse_state": "reached",
+  "reverse_rtt_ms": 1104.216,
+  "reverse_error": null,
+  "asymmetry_detected": false,
+  "tracing": false,
+  "traced_at": "2026-09-23T20:41:57.253131+00:00",
+  "sim_time": "2026-06-08T00:00:00+00:00"
 }
 ```
+
+Each direction lists what answered at every hop, starting with the node the
+trace runs from:
+
+- A node id means the answering address belongs to that node.
+- An address means no node in the session owns it.
+- `*` means nothing answered at that hop.
+
+`hop_rtts` gives the round trip to each hop. The source has none.
+
+`state` says how each direction ended:
+
+- `reached`: the destination answered. `rtt_ms` is its round trip.
+- `not_reached`: the trace ended without an answer from the destination.
+- `failed`: the trace could not run. `error` gives the reason.
+
+`asymmetry_detected` is `null` unless both directions reached their destination
+and every hop between the ends answered from a node's address.
+
+### Trace a path continuously
+
+The Trace Path panel in the browser uses the live trace. It repeats the trace
+every few seconds, and again whenever a link on the path changes, until you
+stop it:
+
+```bash
+curl -s -X POST -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  http://localhost:8080/api/v1/trace/start \
+  -d '{"src_node": "earth-it-fucino-gw1", "dst_node": "earth-us-ca-goldstone-gw1"}'
+curl -s -H "Authorization: Bearer $TOKEN" http://localhost:8080/api/v1/trace/status
+curl -s -X POST -H "Authorization: Bearer $TOKEN" http://localhost:8080/api/v1/trace/stop
+```
+
+`/api/v1/trace/status` returns the trace's endpoints and its latest result in
+the same form as above. The latest result also appears in every state snapshot
+under `traced_paths`.
 
 ### Stream live state over WebSocket
 
@@ -99,7 +183,10 @@ computation, then continuous state updates.
 |--------|------|-------------|
 | GET | `/api/v1/state` | Current full state snapshot |
 | GET | `/api/v1/state/{sim_time}` | Recorded snapshot nearest to given time (recorded sessions only) |
-| POST | `/api/v1/trace` | Forwarding path trace between two nodes |
+| POST | `/api/v1/trace` | Trace the path between two nodes once, in both directions |
+| POST | `/api/v1/trace/start` | Start the live trace between two nodes |
+| GET | `/api/v1/trace/status` | The live trace's endpoints and latest result |
+| POST | `/api/v1/trace/stop` | Stop the live trace |
 | GET | `/api/v1/links` | Recorded link events, with optional `start`, `end` and `node` filters (recorded sessions only) |
 | POST | `/api/v1/playback` | Playback control: pause, resume, set_speed, seek |
 | GET | `/api/v1/health` | Health check (no auth required) |

@@ -112,28 +112,6 @@
   font-weight: var(--font-weight-semibold);
 }
 
-/* Inline trace button */
-.trace-btn {
-  margin-left: var(--space-3);
-  padding: 1px var(--space-3);
-  font-size: var(--font-size-xxs);
-  border-radius: var(--radius-sm);
-  border: 1px solid var(--accent-blue);
-  color: var(--accent-blue);
-  background: transparent;
-  cursor: pointer;
-}
-
-.trace-btn:hover {
-  background: var(--accent-blue);
-  color: var(--bg-main);
-}
-
-.trace-btn:disabled {
-  opacity: 0.5;
-  cursor: default;
-}
-
 .section-divider {
   border: none;
   border-top: 1px solid var(--border);

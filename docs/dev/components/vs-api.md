@@ -36,8 +36,11 @@ NATS Streams --subscribe---> VS-API --WebSocket/REST---> Clients
 |--------|------|-------------|
 | GET | `/api/v1/state` | Current full state snapshot |
 | GET | `/api/v1/state/{sim_time}` | Recorded snapshot nearest to a sim time (recorded sessions only) |
-| POST | `/api/v1/trace` | Forwarding path trace between two nodes |
 | GET | `/api/v1/links` | Recorded link events; `start`, `end`, `node` filters (recorded sessions only) |
+| POST | `/api/v1/trace` | Trace the path between two nodes once, in both directions; returns a `TracedPath` |
+| POST | `/api/v1/trace/start` | Start the live trace between two nodes; its result rides every state snapshot |
+| GET | `/api/v1/trace/status` | The live trace's endpoints and latest `TracedPath` |
+| POST | `/api/v1/trace/stop` | Stop the live trace |
 | GET | `/api/v1/health` | Health check (no auth) |
 | GET | `/api/v1/auth/token` | Get auth token (no auth) |
 | GET | `/api/v1/metrics/convergence` | Recorded convergence events (recorded sessions only) |

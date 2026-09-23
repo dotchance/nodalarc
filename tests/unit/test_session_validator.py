@@ -116,7 +116,7 @@ def test_old_session_shape_is_not_accepted() -> None:
     old_shape = {"session": {"name": "old"}, "constellation": "configs/constellations/demo.yaml"}
 
     try:
-        validate_session_readiness(old_shape)  # type: ignore[arg-type]
+        validate_session_readiness(old_shape, available_node_count=1)  # type: ignore[arg-type]
     except TypeError as exc:
         assert "ResolvedSession" in str(exc)
     else:
@@ -261,16 +261,40 @@ def test_complete_sgp4_tle_session_has_no_ome_readiness_error() -> None:
     assert "E020" not in _codes(results)
 
 
-def test_available_node_count_warning_is_non_blocking() -> None:
+def test_pods_beyond_the_nodes_capacity_warn_without_blocking(monkeypatch) -> None:
+    import nodalarc.session_validator as validator
+
     resolved = _resolved(constellation={"planes": {"count": 3, "sats_per_plane": 3}})
+    pods = len(resolved.nodes)
+    monkeypatch.setattr(validator, "SESSION_PODS_PER_NODE", pods - 1)
 
     results = validate_session_readiness(resolved, available_node_count=1)
     report = build_validation_report(resolved, results)
 
-    assert "W004" in _codes(results)
+    (warning,) = [result for result in results if result.code == "W004"]
+    assert warning.message == (
+        f"Session needs {pods} session pods; the 1 available Kubernetes node(s) "
+        f"hold about {pods - 1} ({pods - 1} per node)."
+    )
     assert report.status == "valid"
     assert report.dispatchable is True
-    assert report.warnings
+
+
+def test_pods_within_the_nodes_capacity_do_not_warn(monkeypatch) -> None:
+    import nodalarc.session_validator as validator
+
+    resolved = _resolved(constellation={"planes": {"count": 3, "sats_per_plane": 3}})
+    monkeypatch.setattr(validator, "SESSION_PODS_PER_NODE", len(resolved.nodes))
+
+    results = validate_session_readiness(resolved, available_node_count=1)
+
+    assert "W004" not in _codes(results)
+
+
+def test_one_session_node_holds_two_hundred_session_pods() -> None:
+    import nodalarc.session_validator as validator
+
+    assert validator.SESSION_PODS_PER_NODE == 200
 
 
 def test_validation_report_blocks_on_errors() -> None:

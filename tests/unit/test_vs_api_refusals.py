@@ -29,8 +29,8 @@ from nodalarc.prepared_session import (
 from nodalarc.resolve_session import SessionResolutionError
 from nodalarc.runtime_support import UnsupportedFeature, UnsupportedFeatureError
 from nodalarc.workload_target import WorkloadTargetError
-from vs_api.continuous_tracer import UntraceableNodeError
 from vs_api.introspect import IntrospectExecError
+from vs_api.path_tracer import UntraceableNodeError
 from vs_api.refusals import (
     CATALOG_CLOSURE_STATUS,
     INTERNAL_ERROR_CODE,

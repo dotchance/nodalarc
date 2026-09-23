@@ -95,17 +95,12 @@ export function NetworkSummary({ snapshot }: NetworkSummaryProps) {
       {snapshot.active_flows.length > 0 && (
         <>
           <h3>Flow Health</h3>
-          {snapshot.active_flows.map((f) => {
-            const trace = snapshot.traced_paths.find((t) => t.flow_id === f.flow_id);
-            return (
-              <div className="detail-row" key={f.flow_id}>
-                <span className="detail-label">{f.src_node} → {f.dst_node}</span>
-                <span className="detail-value">
-                  {trace ? `${trace.hops.length} hops` : "no trace"} — {f.protocol}
-                </span>
-              </div>
-            );
-          })}
+          {snapshot.active_flows.map((f) => (
+            <div className="detail-row" key={f.flow_id}>
+              <span className="detail-label">{f.src_node} → {f.dst_node}</span>
+              <span className="detail-value">{f.protocol}</span>
+            </div>
+          ))}
         </>
       )}
 

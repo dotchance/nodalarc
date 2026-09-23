@@ -25,7 +25,7 @@ VALID_SCHEDULING_POLICIES = VALID_SELECTION_POLICY_NAMES
 def validate_session_readiness(
     resolved: ResolvedSession,
     *,
-    available_node_count: int = 1,
+    available_node_count: int,
 ) -> list[ValidationResult]:
     """Validate a resolved catalog session before deployment.
 
@@ -410,26 +410,33 @@ def _check_access_geometry_feasibility(resolved: ResolvedSession) -> list[Valida
     return results
 
 
+# Session pods one Kubernetes node is assumed to hold. A placeholder until
+# per-node capacity is measured.
+SESSION_PODS_PER_NODE = 200
+
+
 def _check_available_node_count(
     resolved: ResolvedSession,
     available_node_count: int,
 ) -> list[ValidationResult]:
-    """Warn when routed pods outnumber available Kubernetes nodes."""
-    routed_nodes = [node for node in resolved.nodes if node.forwarding == "routed"]
-    if available_node_count <= 0 or len(routed_nodes) <= available_node_count:
+    """Warn when the session's pods exceed what the available nodes hold.
+
+    Every resolved node runs one session pod.
+    """
+    pod_count = len(resolved.nodes)
+    capacity = available_node_count * SESSION_PODS_PER_NODE
+    if pod_count <= capacity:
         return []
     return [
         ValidationResult(
             level="warning",
             code="W004",
             message=(
-                f"Session has {len(routed_nodes)} routed nodes but only "
-                f"{available_node_count} Kubernetes node(s) available."
+                f"Session needs {pod_count} session pods; the {available_node_count} "
+                f"available Kubernetes node(s) hold about {capacity} "
+                f"({SESSION_PODS_PER_NODE} per node)."
             ),
-            remediation=(
-                "Use a placement policy appropriate for the cluster size or add "
-                "Kubernetes worker nodes."
-            ),
+            remediation="Add Kubernetes nodes labelled for session pods.",
             field_path="segments",
         )
     ]

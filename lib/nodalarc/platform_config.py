@@ -34,10 +34,8 @@ class PlatformConfig(BaseModel):
 
     # HTTP/WebSocket service ports
     vs_api_http_port: int
-    nodalpath_console_http_port: int
 
     # Container-internal service ports
-    nodalpath_fwd_grpc_port: int
     probe_daemon_http_api_port: int
     probe_daemon_udp_data_port: int
 
@@ -58,16 +56,6 @@ class PlatformConfig(BaseModel):
 
     # Continuous trace interval
     trace_interval_seconds: float
-
-    # Service host resolution — for inter-service HTTP calls (not NATS).
-    # Keys: service names (vs-api, nodalpath, etc.). Values: hostnames.
-    # Falls back to default_service_host if service not in dict.
-    default_service_host: str
-    service_hosts: dict[str, str] = {}
-
-    def service_host(self, service: str) -> str:
-        """Resolve hostname for a named service, falling back to default."""
-        return self.service_hosts.get(service, self.default_service_host)
 
     @model_validator(mode="after")
     def _validate_actuation_bounds(self) -> PlatformConfig:

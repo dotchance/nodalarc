@@ -41,6 +41,7 @@ from nodalarc.runtime_service_config import (
     SESSION_RUN_ID_FILENAME,
 )
 from nodalarc.session_identity import require_resolved_session_run_id
+from nodalarc.session_nodes import available_session_nodes
 from nodalarc.session_validator import validate_session_readiness
 from nodalarc.substrate.manifest_contract import WIRING_MANIFEST_CONFIGMAP
 from nodalarc.substrate.routing_requirements import routing_kernel_requirements
@@ -233,20 +234,8 @@ def _cluster_pod_cidr(v1: kubernetes.client.CoreV1Api) -> str | None:
 
 
 def discover_available_nodes() -> list[str]:
-    """Discover K3s nodes available for session pods.
-
-    Returns node names that have the nodalarc.io/node-agent=true label
-    and do not have the nodalarc.io/not-ready taint.
-    """
-    v1 = _get_v1()
-    nodes = v1.list_node(label_selector="nodalarc.io/node-agent=true")
-    available = []
-    for node in nodes.items:
-        taints = node.spec.taints or []
-        blocked = any(t.key == "nodalarc.io/not-ready" and t.effect == "NoSchedule" for t in taints)
-        if not blocked:
-            available.append(node.metadata.name)
-    return sorted(available)
+    """The Kubernetes nodes that accept session pods."""
+    return available_session_nodes(_get_v1())
 
 
 def _node_internal_ips(

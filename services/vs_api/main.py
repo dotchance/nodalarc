@@ -29,7 +29,6 @@ from pathlib import Path
 from typing import Any, Literal
 
 import asyncssh
-import httpx
 import nats
 from fastapi import Depends, FastAPI, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
@@ -121,6 +120,7 @@ from nodalarc.resolve_session import (
     SessionResolution,
 )
 from nodalarc.runtime_config import ResolvedRuntimeConfig, RuntimeConfigError
+from nodalarc.session_nodes import available_session_nodes
 from urllib3.exceptions import HTTPError as TransportHTTPError
 from yaml import YAMLError
 
@@ -144,6 +144,7 @@ from vs_api.ops_log import (
     operator_visible_ops_events,
     stamp_ops_event,
 )
+from vs_api.path_tracer import PathTracer
 from vs_api.refusals import (
     install_refusal_handlers,
     internal_error_refusal,
@@ -2298,94 +2299,6 @@ def get_state() -> dict:
     return snapshot
 
 
-_NODALPATH_TIMEOUT = 1.0
-
-
-def _nodalpath_base_url() -> str:
-    from nodalarc.platform_config import get_platform_config
-
-    cfg = get_platform_config()
-    host = cfg.service_host("nodalpath")
-    port = cfg.nodalpath_console_http_port
-    return f"http://{host}:{port}"
-
-
-async def _fetch_nodalpath_status() -> dict | None:
-    """Fetch the NodalPath console status snapshot.
-
-    Returns the parsed JSON dict on success, or None if NodalPath is not reachable.
-    Intentionally silent on connection errors — callers handle the None case.
-    """
-    try:
-        async with httpx.AsyncClient(timeout=_NODALPATH_TIMEOUT) as client:
-            r = await client.get(f"{_nodalpath_base_url()}/api/status")
-            r.raise_for_status()
-            return r.json()
-    except httpx.ConnectError, httpx.TimeoutException, httpx.HTTPStatusError:
-        return None
-
-
-@app.get("/api/v1/almanac/status", dependencies=[Depends(_require_api_key)])
-async def get_almanac_status() -> dict:
-    """Current NodalPath almanac push status (proxied from NodalPath console)."""
-    raw = await _fetch_nodalpath_status()
-    if raw is None:
-        return {"available": False}
-
-    return {
-        "available": True,
-        "session_path": raw.get("session_path"),
-        "transport": raw.get("transport"),
-        "dry_run": raw.get("dry_run", False),
-        "start_wall_time": raw.get("start_wall_time"),
-        "nodes_in_registry": raw.get("nodes_in_registry", 0),
-        "transition_count": raw.get("transition_count", 0),
-        "deviation_count": raw.get("deviation_count", 0),
-        "recomputation_count": raw.get("recomputation_count", 0),
-        "last_topology_state_id": raw.get("last_topology_state_id"),
-        "last_sim_time": raw.get("last_sim_time"),
-        "recent_pushes": raw["push_history"][:5],
-        "recent_deviations": raw["deviation_history"][:5],
-    }
-
-
-async def _fetch_nodalpath_path(params: dict) -> dict:
-    """Fetch path from NodalPath console. Returns unavailable dict on failure."""
-    _unavailable = {
-        "reachable": False,
-        "unreachable_reason": "NodalPath not available",
-        "src": params.get("src", ""),
-        "dst": params.get("dst", ""),
-        "hops": [],
-        "total_latency_ms": 0.0,
-        "method": "derived",
-        "sim_time": params.get("sim_time", ""),
-        "topology_state_id": "",
-    }
-    try:
-        async with httpx.AsyncClient(timeout=3.0) as client:
-            r = await client.get(
-                f"{_nodalpath_base_url()}/api/v1/path",
-                params=params,
-            )
-            if r.status_code == 200:
-                return r.json()
-            return _unavailable
-    except Exception:
-        return _unavailable
-
-
-@app.get("/api/v1/path", dependencies=[Depends(_require_api_key)])
-async def get_path(src: str, dst: str, sim_time: str | None = None) -> JSONResponse:
-    """Unified path endpoint — proxies to NodalPath for derived paths."""
-    params = {"src": src, "dst": dst}
-    if sim_time is not None:
-        params["sim_time"] = sim_time
-
-    result = await _fetch_nodalpath_path(params)
-    return JSONResponse(result)
-
-
 def _history_session() -> tuple[SessionContext | None, Response | None]:
     """The active session whose history is readable, or the refusal that says why not."""
     ctx = _require_active_context()
@@ -2714,326 +2627,50 @@ def get_flow_metrics(
     )
 
 
-def _live_trace_grpc(src: str, dst: str, nodes: list, links: list) -> dict | None:
-    """Walk real forwarding tables on live containers via gRPC.
+# --- Path trace endpoints ---
 
-    Queries each node's nodalpath-fwd sidecar to read the installed
-    MPLS forwarding state, then follows the label chain hop-by-hop
-    from src to dst.  Returns None if gRPC is unavailable.
-    """
-
-    import grpc
-    from nodalarc.platform_config import get_platform_config
-
-    cfg = get_platform_config()
-    grpc_port = cfg.nodalpath_fwd_grpc_port
-
-    # Build node_id -> pod_ip map via K8s API
-    prefix_by_node: dict[str, str] = {}
-    for n in nodes:
-        if n.get("prefix"):
-            prefix_by_node[n["node_id"]] = n["prefix"]
-
-    def get_pod_ip(node_id: str) -> str | None:
-        try:
-            v1 = k8s.core_v1()
-            pod = v1.read_namespaced_pod(node_id.lower(), cfg.kubernetes_namespace)
-            return pod.status.pod_ip if pod.status else None
-        except Exception:
-            return None
-
-    def query_fwd_table(pod_ip: str) -> tuple[list, list] | None:
-        """Query a node's live forwarding table via gRPC. Returns (lsr, ler) or None."""
-        try:
-            from nodalpath.proto import Action, Empty
-            from nodalpath.proto.forwarding_pb2_grpc import ForwardingServiceStub
-
-            channel = grpc.insecure_channel(f"{pod_ip}:{grpc_port}")
-            grpc.channel_ready_future(channel).result(timeout=3)
-            stub = ForwardingServiceStub(channel)
-            fwd = stub.GetForwardingTable(Empty(), timeout=3)
-
-            action_map = {Action.SWAP: "SWAP", Action.POP: "POP", Action.PUSH: "PUSH"}
-            lsr = []
-            for e in fwd.lsr_entries:
-                lsr.append(
-                    {
-                        "in_label": e.in_label,
-                        "action": action_map.get(e.action, str(e.action)),
-                        "out_label": e.out_label,
-                        "out_interface": e.out_interface,
-                    }
-                )
-            ler = []
-            for e in fwd.ler_entries:
-                ler.append(
-                    {
-                        "dst_prefix": e.dst_prefix,
-                        "push_label": e.push_label,
-                        "out_interface": e.out_interface,
-                    }
-                )
-            channel.close()
-            return lsr, ler
-        except Exception:
-            return None
-
-    sid_to_node: dict[int, str] = {}
-    runtime_context = _active_context
-    if runtime_context is not None and runtime_context.session_resolution is not None:
-        prefix_by_node.update(runtime_context._node_primary_prefix_by_id)
-        for node_id, node in tracer_node_registry(runtime_context.session_resolution).items():
-            if node.sid is not None:
-                sid_to_node[node.sid] = node_id
-
-    # Find destination prefix
-    dst_prefix = prefix_by_node.get(dst)
-    if not dst_prefix:
-        return None
-
-    # Step 1: Get source forwarding table
-    src_ip = get_pod_ip(src)
-    if not src_ip:
-        return None
-    src_fwd = query_fwd_table(src_ip)
-    if not src_fwd:
-        return None
-    _src_lsr, src_ler = src_fwd
-
-    # Find ingress rule for dst_prefix
-    ingress = None
-    for rule in src_ler:
-        if rule["dst_prefix"] == dst_prefix:
-            ingress = rule
-            break
-    if not ingress:
-        return None
-
-    # Build hop list
-    hop_details = []
-    hop_ids = [src]
-
-    # Source node — PUSH
-    hop_details.append(
-        {
-            "node_id": src,
-            "action": "PUSH",
-            "in_label": None,
-            "out_label": ingress["push_label"],
-            "out_interface": ingress["out_interface"],
-            "latency_to_next_ms": None,
-        }
-    )
-
-    current_label = ingress["push_label"]
-    current_node = sid_to_node.get(current_label)
-    visited = {src}
-    MAX_HOPS = 20
-
-    for _ in range(MAX_HOPS):
-        if not current_node or current_node in visited:
-            break
-        visited.add(current_node)
-        hop_ids.append(current_node)
-
-        if current_node == dst:
-            hop_details.append(
-                {
-                    "node_id": current_node,
-                    "action": None,
-                    "in_label": current_label,
-                    "out_label": None,
-                    "out_interface": None,
-                    "latency_to_next_ms": None,
-                }
-            )
-            break
-
-        # Query this node's live forwarding table
-        node_ip = get_pod_ip(current_node)
-        if not node_ip:
-            break
-        fwd_result = query_fwd_table(node_ip)
-        if not fwd_result:
-            break
-        node_lsr, node_ler = fwd_result
-
-        # Find LSR binding for current_label
-        binding = None
-        for b in node_lsr:
-            if b["in_label"] == current_label:
-                binding = b
-                break
-
-        if not binding:
-            # Maybe it's an LER ingress (dst is directly connected)
-            # Check if there's a rule for dst_prefix
-            for rule in node_ler:
-                if rule["dst_prefix"] == dst_prefix:
-                    hop_details.append(
-                        {
-                            "node_id": current_node,
-                            "action": "PUSH",
-                            "in_label": current_label,
-                            "out_label": rule["push_label"],
-                            "out_interface": rule["out_interface"],
-                            "latency_to_next_ms": None,
-                        }
-                    )
-                    next_node = sid_to_node.get(rule["push_label"])
-                    current_label = rule["push_label"]
-                    current_node = next_node
-                    continue
-            break
-
-        hop_details.append(
-            {
-                "node_id": current_node,
-                "action": binding["action"],
-                "in_label": binding["in_label"],
-                "out_label": binding["out_label"] if binding["action"] == "SWAP" else None,
-                "out_interface": binding["out_interface"],
-                "latency_to_next_ms": None,
-            }
-        )
-
-        if binding["action"] == "POP":
-            # Next node is the destination (PHP)
-            hop_ids.append(dst)
-            hop_details.append(
-                {
-                    "node_id": dst,
-                    "action": None,
-                    "in_label": None,
-                    "out_label": None,
-                    "out_interface": None,
-                    "latency_to_next_ms": None,
-                }
-            )
-            break
-        elif binding["action"] == "SWAP":
-            current_label = binding["out_label"]
-            current_node = sid_to_node.get(current_label)
-        else:
-            break
-
-    if len(hop_ids) < 2:
-        return None
-
-    # Add latencies from the link state
-    link_latency: dict[str, float] = {}
-    for l in links:
-        key_fwd = f"{l['node_a']}:{l['node_b']}"
-        key_rev = f"{l['node_b']}:{l['node_a']}"
-        lat = l.get("latency_ms", 0)
-        link_latency[key_fwd] = lat
-        link_latency[key_rev] = lat
-
-    total_latency = 0.0
-    for i, hd in enumerate(hop_details):
-        if i < len(hop_ids) - 1:
-            key = f"{hop_ids[i]}:{hop_ids[i + 1]}"
-            lat = link_latency.get(key, 0)
-            hd["latency_to_next_ms"] = lat
-            total_latency += lat
-
-    return {
-        "hops": hop_ids,
-        "hop_details": hop_details,
-        "success": True,
-        "method": "live",
-        "total_latency_ms": total_latency,
-    }
+ONE_SHOT_TRACE_FLOW_ID = "__trace__"
 
 
-@app.post("/api/v1/trace", dependencies=[Depends(_require_api_key)])
-def trace_path(body: dict) -> dict:
-    """Trace forwarding path by querying live container MPLS tables.
-
-    Walks the real forwarding tables installed on each node's
-    nodalpath-fwd gRPC sidecar, hop by hop from source to destination.
-    Falls back to NodalPath CSPF if live trace is unavailable.
-    """
-    src = body.get("src_node", "")
-    dst = body.get("dst_node", "")
-    if not src or not dst:
-        return {"hops": [], "error": "src_node and dst_node required"}
-
-    _rctx = _active_context
-    _rs = _rctx.routing_stack if _rctx else None
-    if not _rs or not _rs.startswith("nodalpath"):
-        raise HTTPException(
-            status_code=400,
-            detail=f"Trace not available for routing stack '{_rs}'. "
-            "Trace requires a NodalPath session (MPLS forwarding tables).",
-        )
-
-    # Get current snapshot for node/link info
-    try:
-        snap = _build_snapshot()
-        nodes_list = [
-            n.model_dump() if hasattr(n, "model_dump") else n for n in snap.get("nodes", [])
-        ]
-        links_list = [
-            l.model_dump() if hasattr(l, "model_dump") else l for l in snap.get("links", [])
-        ]
-    except Exception:
-        nodes_list = []
-        links_list = []
-
-    # Try live gRPC trace first (real forwarding tables)
-    try:
-        result = _live_trace_grpc(src, dst, nodes_list, links_list)
-        if result:
-            return result
-    except Exception as exc:
-        log.debug(f"Live gRPC trace failed: {exc}")
-
-    # Fall back to NodalPath CSPF
-    try:
-        np_resp = httpx.get(
-            f"{_nodalpath_base_url()}/api/v1/path",
-            params={"src": src, "dst": dst},
-            timeout=5.0,
-        )
-        if np_resp.status_code == 200:
-            data = np_resp.json()
-            if data.get("reachable") and data.get("hops"):
-                hop_ids = [h["node_id"] for h in data["hops"]]
-                return {
-                    "hops": hop_ids,
-                    "hop_details": data["hops"],
-                    "success": True,
-                    "method": "cspf",
-                    "total_latency_ms": data.get("total_latency_ms", 0),
-                }
-            if data.get("reachable") is False:
-                reason = data.get("unreachable_reason", "no path found")
-                return {"hops": [], "success": False, "method": "cspf", "note": reason}
-    except Exception as exc:
-        log.debug(f"NodalPath CSPF trace failed: {exc}")
-
-    return {"hops": [], "error": "Trace unavailable"}
-
-
-# --- Continuous trace endpoints ---
-
-
-@app.post("/api/v1/trace/start", dependencies=[Depends(_require_api_key)])
-async def start_continuous_trace(body: dict) -> dict:
-    """Start continuous path tracing between two nodes."""
-    ctx = _require_active_context()
-
+def _trace_request_endpoints(ctx: SessionContext, body: dict) -> tuple[str, str] | JSONResponse:
+    """The request's source and destination nodes, or the refusal that says why not."""
     src = body.get("src_node", "")
     dst = body.get("dst_node", "")
     if not src or not dst:
         return JSONResponse(status_code=400, content={"error": "src_node and dst_node required"})
-
     with ctx.state_lock:
-        if src not in ctx.nodes:
-            return JSONResponse(status_code=400, content={"error": f"Unknown node: {src}"})
-        if dst not in ctx.nodes:
-            return JSONResponse(status_code=400, content={"error": f"Unknown node: {dst}"})
+        for node_id in (src, dst):
+            if node_id not in ctx.nodes:
+                return JSONResponse(status_code=400, content={"error": f"Unknown node: {node_id}"})
+    return src, dst
+
+
+@app.post("/api/v1/trace", dependencies=[Depends(_require_api_key)])
+async def trace_between(body: dict) -> Any:
+    """Trace the path between two nodes once, in both directions.
+
+    The request returns when both traceroutes finish; a destination that does
+    not answer costs up to the traceroute hop limit times its per-hop wait.
+    """
+    ctx = _require_active_context()
+    endpoints = _trace_request_endpoints(ctx, body)
+    if isinstance(endpoints, JSONResponse):
+        return endpoints
+    src, dst = endpoints
+    result = await asyncio.to_thread(
+        _create_path_tracer(ctx).trace_between, src, dst, flow_id=ONE_SHOT_TRACE_FLOW_ID
+    )
+    return result.model_dump(mode="json")
+
+
+@app.post("/api/v1/trace/start", dependencies=[Depends(_require_api_key)])
+async def start_continuous_trace(body: dict) -> Any:
+    """Start continuous path tracing between two nodes."""
+    ctx = _require_active_context()
+    endpoints = _trace_request_endpoints(ctx, body)
+    if isinstance(endpoints, JSONResponse):
+        return endpoints
+    src, dst = endpoints
 
     if ctx.continuous_tracer is not None:
         await ctx.continuous_tracer.stop()
@@ -3071,15 +2708,21 @@ def get_trace_status() -> dict:
     }
 
 
-def _create_continuous_tracer(ctx: SessionContext) -> ContinuousTracer:
-    """A tracer over the session's resolved nodes, bound to that session."""
-    cfg = get_platform_config()
-    return ContinuousTracer(
+def _create_path_tracer(ctx: SessionContext) -> PathTracer:
+    """A path tracer over the session's resolved nodes, reading that session's sim time."""
+    return PathTracer(
         node_registry=tracer_node_registry(ctx.session_resolution),
-        namespace=cfg.kubernetes_namespace,
-        interval_s=cfg.trace_interval_seconds,
+        namespace=get_platform_config().kubernetes_namespace,
         core_v1=k8s.core_v1,
         read_sim_time=ctx.read_sim_time,
+    )
+
+
+def _create_continuous_tracer(ctx: SessionContext) -> ContinuousTracer:
+    """A live tracer bound to the session, recording its path changes there."""
+    return ContinuousTracer(
+        path_tracer=_create_path_tracer(ctx),
+        interval_s=get_platform_config().trace_interval_seconds,
         on_path_change=ctx.record_path_change,
     )
 
@@ -3157,18 +2800,8 @@ def download_session_yaml(
 
 
 def _available_session_node_count() -> int:
-    """Best-effort count of cluster nodes that run session pods. It only feeds
-    the readiness validator's node-count WARNING, never a deploy refusal, so a
-    failed query falls back high rather than blocking a switch."""
-    try:
-        import kubernetes.client
-
-        nodes = kubernetes.client.CoreV1Api().list_node(
-            label_selector="nodalarc.io/node-agent=true"
-        )
-        return max(1, len(nodes.items))
-    except Exception:
-        return 1_000_000
+    """The number of nodes that accept session pods; a failed listing raises."""
+    return len(available_session_nodes(k8s.core_v1()))
 
 
 def _prepared_transition_reservation(deployment: Any) -> TransitionOperationReservation:
@@ -4031,21 +3664,6 @@ def main() -> None:
     from nodalarc.platform_config import init_platform_config
 
     init_platform_config(Path(args.platform_config))
-
-    # NodalPath is distributed separately. Initialize it when present so
-    # NodalPath-specific trace routes can use live SID lookups; absence of that
-    # package must not prevent ordinary NodalArc sessions from starting.
-    try:
-        from nodalpath.platform import init_nodalpath_config
-
-        init_nodalpath_config(Path("configs/nodalpath.yaml"))
-        log.info("Initialized NodalPath config")
-    except ModuleNotFoundError as exc:
-        log.info("NodalPath package unavailable; NodalPath-specific routes disabled: %s", exc)
-    except Exception as exc:
-        log.warning(
-            "NodalPath config initialization failed; NodalPath-specific routes disabled: %s", exc
-        )
 
     if args.port is None:
         args.port = get_platform_config().vs_api_http_port

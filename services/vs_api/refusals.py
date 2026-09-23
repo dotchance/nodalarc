@@ -42,8 +42,8 @@ from nodalarc.runtime_support import UnsupportedFeatureError
 from nodalarc.workload_target import WorkloadTargetError
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
-from vs_api.continuous_tracer import UntraceableNodeError
 from vs_api.introspect import IntrospectExecError
+from vs_api.path_tracer import UntraceableNodeError
 from vs_api.session_context import SessionInactiveError
 from vs_api.session_deployment import (
     SessionDeploymentPreparationError,

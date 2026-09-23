@@ -123,8 +123,5 @@ nats:
   storageClass: "local-path"
   storageSize: "4Gi"
 
-# Node where session pods are created (auto-detected if empty, or set to your node name).
-sessionNodeName: ""
-
 # Node for platform pods (auto-detected if empty, or set to your node name).
 controlPlaneNode: ""

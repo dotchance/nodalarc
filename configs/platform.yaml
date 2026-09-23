@@ -34,18 +34,8 @@ platform:
   # management. Binds to 0.0.0.0 (all interfaces).
   vs_api_http_port: 8080
 
-  # NodalPath operator console — FastAPI server with React frontend
-  # for topology graph, forwarding table inspection, timeline scrubber.
-  # Binds to 0.0.0.0.
-  nodalpath_console_http_port: 3100
-
   # ── Container-Internal Service Ports ────────────────────────────────
   # These ports are inside pod network namespaces, accessed via pod IP.
-
-  # gRPC ForwardingService inside nodalpath-fwd sidecar containers.
-  # NodalPath pushes MPLS forwarding tables to each pod on this port.
-  # Protocol: gRPC (HTTP/2). One channel per push, no connection pooling.
-  nodalpath_fwd_grpc_port: 50052
 
   # Probe daemon REST API inside ground station sidecar containers.
   # MI configures and controls probe flows via this HTTP endpoint.
@@ -106,12 +96,3 @@ platform:
   # Seconds between trace cycles while both directions reach their
   # destination. A link change on the traced path starts a cycle at once.
   trace_interval_seconds: 3.0
-
-  # ── Networking ──────────────────────────────────────────────────────
-
-  # Service host resolution — for inter-service HTTP calls.
-  # Falls back to default_service_host if service not listed.
-  default_service_host: "127.0.0.1"
-  service_hosts:
-    vs-api: "nodalarc-vs-api"
-    nodalpath: "nodalpath"

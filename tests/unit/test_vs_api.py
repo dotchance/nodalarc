@@ -2797,6 +2797,7 @@ def _message(payload: dict):
         ("GET", "/api/v1/decision-explanation/timeline?gs=gs", None),
         ("GET", "/api/v1/ground-link-decisions", None),
         ("POST", "/api/v1/trace/start", {"src_node": "a", "dst_node": "b"}),
+        ("POST", "/api/v1/trace", {"src_node": "a", "dst_node": "b"}),
         ("GET", "/api/v1/links", None),
     ],
 )
@@ -2847,9 +2848,10 @@ class TestContinuousTraceSession:
         assert event.summary == "Path gs-a -> gs-b: gs-a -> sat-1 -> gs-b => gs-a -> sat-2 -> gs-b"
         assert event.sim_time.isoformat() == "2026-06-08T00:10:00+00:00"
 
-    def test_trace_start_refuses_a_node_it_cannot_trace(self, monkeypatch):
+    @staticmethod
+    def _session_with_untraceable_nodes(monkeypatch):
         import vs_api.main as m
-        from vs_api.continuous_tracer import ContinuousTracer
+        from vs_api.path_tracer import PathTracer
 
         ctx = SessionContext.__new__(SessionContext)
         ctx._init_state_only()
@@ -2858,20 +2860,21 @@ class TestContinuousTraceSession:
         monkeypatch.setattr(m, "_active_context", ctx)
         monkeypatch.setattr(
             m,
-            "_create_continuous_tracer",
-            lambda context: ContinuousTracer(
+            "_create_path_tracer",
+            lambda context: PathTracer(
                 node_registry={},
                 namespace="nodalarc",
-                interval_s=3.0,
                 core_v1=lambda: None,
                 read_sim_time=context.read_sim_time,
-                on_path_change=context.record_path_change,
             ),
         )
+        return m, ctx
 
-        response = TestClient(m.app).post(
-            "/api/v1/trace/start", json={"src_node": "site-host", "dst_node": "gs-b"}
-        )
+    @pytest.mark.parametrize("path", ["/api/v1/trace/start", "/api/v1/trace"])
+    def test_both_trace_routes_refuse_a_node_they_cannot_trace(self, monkeypatch, path):
+        m, ctx = self._session_with_untraceable_nodes(monkeypatch)
+
+        response = TestClient(m.app).post(path, json={"src_node": "site-host", "dst_node": "gs-b"})
 
         assert response.status_code == 400
         assert response.json() == {
@@ -2879,6 +2882,76 @@ class TestContinuousTraceSession:
             "message": "site-host has no loopback address to trace",
         }
         assert ctx.continuous_tracer is None
+
+    @pytest.mark.parametrize("path", ["/api/v1/trace/start", "/api/v1/trace"])
+    def test_both_trace_routes_refuse_an_unknown_node(self, monkeypatch, path):
+        m, _ctx = self._session_with_untraceable_nodes(monkeypatch)
+
+        response = TestClient(m.app).post(path, json={"src_node": "site-host", "dst_node": "ghost"})
+
+        assert response.status_code == 400
+        assert response.json() == {"error": "Unknown node: ghost"}
+
+    def test_a_one_shot_trace_returns_the_measured_path(self, monkeypatch):
+        import vs_api.main as m
+        from nodalarc.models.vs_api import TracedPath
+
+        measured = TracedPath(
+            flow_id=m.ONE_SHOT_TRACE_FLOW_ID,
+            src_node="gs-a",
+            dst_node="gs-b",
+            hops=["gs-a", "sat-1", "gs-b"],
+            hop_rtts=[None, 5.0, 9.0],
+            state="reached",
+            rtt_ms=9.0,
+            error=None,
+            reverse_hops=["gs-b", "sat-1", "gs-a"],
+            reverse_hop_rtts=[None, 4.0, 8.5],
+            reverse_state="reached",
+            reverse_rtt_ms=8.5,
+            reverse_error=None,
+            asymmetry_detected=False,
+            tracing=False,
+            traced_at="2026-09-23T00:00:00+00:00",
+            sim_time="2026-06-08T00:00:00+00:00",
+        )
+        calls: list = []
+
+        class _Tracer:
+            def trace_between(self, src, dst, *, flow_id):
+                calls.append((src, dst, flow_id))
+                return measured
+
+        ctx = SessionContext.__new__(SessionContext)
+        ctx._init_state_only()
+        ctx.nodes = {"gs-a": object(), "gs-b": object()}
+        monkeypatch.setattr(m, "_API_KEY", "")
+        monkeypatch.setattr(m, "_active_context", ctx)
+        monkeypatch.setattr(m, "_create_path_tracer", lambda context: _Tracer())
+
+        response = TestClient(m.app).post(
+            "/api/v1/trace", json={"src_node": "gs-a", "dst_node": "gs-b"}
+        )
+
+        assert response.status_code == 200
+        assert response.json() == measured.model_dump(mode="json")
+        assert calls == [("gs-a", "gs-b", "__trace__")]
+        assert ctx.continuous_tracer is None
+
+
+def test_the_session_node_count_fails_loudly_when_the_listing_fails(monkeypatch):
+    import kubernetes.client
+    import vs_api.main as m
+    from vs_api import k8s
+
+    class _Nodes:
+        def list_node(self, *, label_selector):
+            raise kubernetes.client.rest.ApiException(status=503)
+
+    monkeypatch.setattr(k8s, "core_v1", lambda: _Nodes())
+
+    with pytest.raises(kubernetes.client.rest.ApiException):
+        m._available_session_node_count()
 
 
 class TestSessionHistory:

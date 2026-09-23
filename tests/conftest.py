@@ -37,10 +37,7 @@ def _init_platform_config():
     cfg = PlatformConfig(
         kubernetes_namespace="nodalarc",
         ome_link_state_snapshot_interval_s=5.0,
-        default_service_host="127.0.0.1",
         vs_api_http_port=8080,
-        nodalpath_console_http_port=3100,
-        nodalpath_fwd_grpc_port=50051,
         probe_daemon_http_api_port=9100,
         probe_daemon_udp_data_port=19100,
         session_data_root="/var/nodalarc/sessions",

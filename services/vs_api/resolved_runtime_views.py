@@ -12,8 +12,6 @@ from nodalarc.resolve_session import SessionResolution
 @dataclass(frozen=True, slots=True)
 class TracerNode:
     node_id: str
-    node_type: str
-    sid: int | None
     loopback_ipv4: str
     # Every IPv4 address the resolver assigned the node: its loopback, then
     # its numbered Ethernet interfaces. A traceroute hop answering from any of
@@ -53,7 +51,6 @@ def tracer_node_registry(resolution: SessionResolution) -> dict[str, TracerNode]
     if not isinstance(resolution, SessionResolution):
         raise TypeError("resolution must be a SessionResolution")
     resolved = resolution.resolved
-    sid_by_node = resolved.sid_index_by_node_id()
     nodes: dict[str, TracerNode] = {}
     for node in resolved.nodes:
         if node.interfaces is None or node.interfaces.lo0.ipv4 is None:
@@ -69,8 +66,6 @@ def tracer_node_registry(resolution: SessionResolution) -> dict[str, TracerNode]
         gateway = node.host_attachment.gateway_node_id if node.host_attachment else None
         nodes[node.node_id] = TracerNode(
             node_id=node.node_id,
-            node_type=node.kind,
-            sid=sid_by_node.get(node.node_id),
             loopback_ipv4=loopback,
             addresses_ipv4=(loopback, *ethernet),
             trace_gateway_node_id=gateway,

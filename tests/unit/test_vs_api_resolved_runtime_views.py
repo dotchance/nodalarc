@@ -34,7 +34,7 @@ def test_session_context_accepts_authoritative_resolution_without_session_file()
     assert context.constellation_name == resolution.resolved.session.name
 
 
-def test_tracer_view_uses_resolved_loopbacks_interfaces_and_sid_indices():
+def test_tracer_view_uses_resolved_loopbacks_and_interface_addresses():
     resolution = _resolution()
 
     registry = tracer_node_registry(resolution)
@@ -42,7 +42,6 @@ def test_tracer_view_uses_resolved_loopbacks_interfaces_and_sid_indices():
     assert set(registry) == set(resolution.resolved.node_ids())
     for node_id, tracer_node in registry.items():
         resolved = resolution.resolved.node_by_id(node_id)
-        assert tracer_node.node_type == resolved.kind
         assert "/" not in tracer_node.loopback_ipv4
         assert tracer_node.addresses_ipv4[0] == tracer_node.loopback_ipv4
         assert tracer_node.addresses_ipv4[1:] == tuple(
@@ -50,7 +49,6 @@ def test_tracer_view_uses_resolved_loopbacks_interfaces_and_sid_indices():
             for address in resolved.interfaces.ethernet.values()
             if address.ipv4 is not None
         )
-        assert tracer_node.sid == resolution.resolved.sid_index_by_node_id().get(node_id)
 
 
 def test_tracer_view_names_the_gateway_for_host_nodes():

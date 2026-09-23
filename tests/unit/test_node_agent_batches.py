@@ -10,6 +10,7 @@ from nodalarc.proto import node_agent_pb2
 from scheduler.desired_state import ActiveLinkInfo
 from scheduler.latency_compensator import LatencyCompensation
 from scheduler.node_agent_batches import build_link_down_batch_plan, build_link_up_batch_plan
+from scheduler.pod_locator import PodLocationError
 
 from tests.terminal_rate_fixtures import ANY_INTERFACE_RATES
 
@@ -19,7 +20,7 @@ class _Locator:
         self._locality = locality
         self._node_ips = node_ips or {}
 
-    def link_locality(self, node_a: str, node_b: str) -> int | None:
+    def link_locality(self, node_a: str, node_b: str) -> int:
         return self._locality
 
     def agent_addr(self, node_id: str) -> str:
@@ -28,8 +29,10 @@ class _Locator:
     def k3s_node(self, node_id: str) -> str:
         return f"k3s-{node_id}"
 
-    def node_ip(self, k3s_node: str) -> str | None:
-        return self._node_ips.get(k3s_node)
+    def node_ip(self, k3s_node: str) -> str:
+        if k3s_node not in self._node_ips:
+            raise PodLocationError(f"no InternalIP for Kubernetes node {k3s_node}")
+        return self._node_ips[k3s_node]
 
 
 def _compensation(_node_a: str, _node_b: str, orbital_ms: float) -> LatencyCompensation:
@@ -103,7 +106,7 @@ def test_cross_node_link_up_missing_remote_ip_fails_loudly():
         )
     }
 
-    with pytest.raises(RuntimeError, match="missing IP"):
+    with pytest.raises(PodLocationError, match="no InternalIP for Kubernetes node k3s-sat-b"):
         build_link_up_batch_plan(
             interface_rates=ANY_INTERFACE_RATES,
             pairs={pair},

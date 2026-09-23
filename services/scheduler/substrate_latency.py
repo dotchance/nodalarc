@@ -109,11 +109,6 @@ def resolve_substrate_rtt_ms(
     """
     k3s_a = locator.k3s_node(node_a)
     k3s_b = locator.k3s_node(node_b)
-    if not k3s_a or not k3s_b:
-        raise ValueError(
-            f"Missing Kubernetes node placement for {node_a}<->{node_b}; "
-            "refusing to treat unknown substrate locality as local"
-        )
     if k3s_a == k3s_b:
         return 0.0
 
@@ -121,11 +116,6 @@ def resolve_substrate_rtt_ms(
         raise ValueError("session_id and wiring_generation are required for substrate RTT")
     ip_a = locator.node_ip(k3s_a)
     ip_b = locator.node_ip(k3s_b)
-    if not ip_a or not ip_b:
-        raise ValueError(
-            f"Missing Kubernetes node IP for cross-node link {node_a}<->{node_b} "
-            f"({k3s_a}={ip_a!r}, {k3s_b}={ip_b!r})"
-        )
     key = substrate_directional_key(k3s_a, k3s_b)
     measurement = measurements_by_direction.get(key)
     if measurement is not None:

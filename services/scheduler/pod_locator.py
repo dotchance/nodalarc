@@ -27,6 +27,10 @@ from nodalarc.workload_target import NODE_ID_LABEL
 log = logging.getLogger(__name__)
 
 
+class PodLocationError(LookupError):
+    """A node or Kubernetes node the loaded session placement does not contain."""
+
+
 class PodLocationMap:
     """Maps canonical node IDs to K3s node locations, read from the K8s API."""
 
@@ -43,44 +47,34 @@ class PodLocationMap:
         return list(self._node_of.keys())
 
     def k3s_node(self, node_id: str) -> str:
-        """Get K3s node name for a canonical node ID."""
-        return self._node_of.get(node_id, "")
+        """The K3s node hosting a session node's pod."""
+        k3s = self._node_of.get(node_id)
+        if k3s is None:
+            raise PodLocationError(f"no pod location for node {node_id}")
+        return k3s
 
     def agent_addr(self, node_id: str) -> str:
-        """Get Node Agent NATS subject for the K3s node hosting this pod."""
-        k3s = self._node_of.get(node_id, "")
-        return self._agent_addrs.get(k3s, "")
+        """The Node Agent NATS subject for the K3s node hosting this pod."""
+        return self._agent_addrs[self.k3s_node(node_id)]
 
     def node_ip(self, k3s_node: str) -> str:
-        """Get the InternalIP for a K3s node. Empty string if unknown."""
-        return self._node_ips.get(k3s_node, "")
+        """The InternalIP of a K3s node that hosts session pods."""
+        ip = self._node_ips.get(k3s_node)
+        if ip is None:
+            raise PodLocationError(f"no InternalIP for Kubernetes node {k3s_node}")
+        return ip
 
-    def link_locality(self, node_a: str, node_b: str) -> int | None:
-        """Determine link locality. Returns None if either pod is unscheduled."""
+    def link_locality(self, node_a: str, node_b: str) -> int:
+        """Whether a link's two pods share a K3s node."""
         from nodalarc.proto import node_agent_pb2
 
-        k3s_a = self._node_of.get(node_a, "")
-        k3s_b = self._node_of.get(node_b, "")
-        if not k3s_a or not k3s_b:
-            return None
-        if k3s_a != k3s_b:
+        if self.k3s_node(node_a) != self.k3s_node(node_b):
             return node_agent_pb2.LOCALITY_CROSS_NODE
         return node_agent_pb2.LOCALITY_LOCAL
 
     def all_agent_addrs(self) -> list[str]:
         """All unique Node Agent NATS subjects."""
         return list(set(self._agent_addrs.values()))
-
-    def nodes_on_agent(self, agent_addr: str) -> list[str]:
-        """All node IDs hosted by a given agent."""
-        target_k3s = None
-        for k3s, addr in self._agent_addrs.items():
-            if addr == agent_addr:
-                target_k3s = k3s
-                break
-        if target_k3s is None:
-            return []
-        return [nid for nid, k3s in self._node_of.items() if k3s == target_k3s]
 
     def load_from_k8s_api(
         self,
@@ -139,8 +133,7 @@ class PodLocationMap:
         # Build agent addresses — NATS uses K8s node name as subject
         k3s_nodes = set(self._node_of.values())
         for k3s in k3s_nodes:
-            if k3s:
-                self._agent_addrs[k3s] = k3s  # Node name = NATS subject
+            self._agent_addrs[k3s] = k3s  # Node name = NATS subject
 
         # Node IPs (InternalIP) are the VXLAN tunnel endpoints.
         for node in v1.list_node().items:
@@ -149,6 +142,12 @@ class PodLocationMap:
                 if addr.type == "InternalIP":
                     self._node_ips[name] = addr.address
                     break
+        without_ip = sorted(k3s_nodes - set(self._node_ips))
+        if without_ip:
+            raise PodLocationError(
+                "Kubernetes node(s) hosting session pods have no InternalIP: "
+                + ", ".join(without_ip)
+            )
         log.info(
             "Node IPs: %s",
             ", ".join(f"{n}={ip}" for n, ip in sorted(self._node_ips.items())),

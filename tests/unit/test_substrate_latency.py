@@ -12,6 +12,7 @@ from nodalarc.substrate.measurement_contract import (
     SubstrateMeasurement,
     SubstrateStatusDocument,
 )
+from scheduler.pod_locator import PodLocationError
 from scheduler.substrate_latency import (
     resolve_substrate_rtt_ms,
     validate_required_substrate_measurements,
@@ -23,15 +24,21 @@ NOW = datetime(2026, 1, 1, tzinfo=UTC)
 
 
 class _Locator:
+    """Answers like PodLocationMap: an unknown node or node IP raises."""
+
     def __init__(self) -> None:
-        self.nodes: dict[str, str | None] = {}
-        self.ips: dict[str, str | None] = {}
+        self.nodes: dict[str, str] = {}
+        self.ips: dict[str, str] = {}
 
-    def k3s_node(self, node_id: str) -> str | None:
-        return self.nodes.get(node_id)
+    def k3s_node(self, node_id: str) -> str:
+        if node_id not in self.nodes:
+            raise PodLocationError(f"no pod location for node {node_id}")
+        return self.nodes[node_id]
 
-    def node_ip(self, k3s_node: str) -> str | None:
-        return self.ips.get(k3s_node)
+    def node_ip(self, k3s_node: str) -> str:
+        if k3s_node not in self.ips:
+            raise PodLocationError(f"no InternalIP for Kubernetes node {k3s_node}")
+        return self.ips[k3s_node]
 
 
 def _measurement(
@@ -148,7 +155,7 @@ def test_missing_placement_is_not_treated_as_local() -> None:
     loc = _Locator()
     loc.nodes["sat-a"] = "node-a"
 
-    with pytest.raises(ValueError, match="Missing Kubernetes node placement"):
+    with pytest.raises(PodLocationError, match="no pod location for node sat-b"):
         resolve_substrate_rtt_ms(
             locator=loc,
             measurements_by_direction={},

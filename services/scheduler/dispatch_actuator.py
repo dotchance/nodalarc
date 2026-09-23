@@ -345,10 +345,6 @@ def _ground_inventory_entries_for_pair(
     node_a, node_b = pair
     gs_id, sat_id, gs_iface, sat_iface = required_ground_endpoints(pair, info, gs_capacities)
     locality = locator.link_locality(node_a, node_b)
-    if locality is None:
-        raise RuntimeError(
-            f"Cannot verify KernelInventory for {node_a}<->{node_b}: pod placement is unknown"
-        )
     vni = (
         compute_vni(gs_id, sat_id, gs_iface, sat_iface)
         if locality == node_agent_pb2.LOCALITY_CROSS_NODE
@@ -372,14 +368,7 @@ def _ground_inventory_entries_for_pair(
     def _remote_ip(peer_node: str) -> str:
         if locality != node_agent_pb2.LOCALITY_CROSS_NODE:
             return ""
-        peer_k3s = locator.k3s_node(peer_node)
-        remote_ip = locator.node_ip(peer_k3s)
-        if not remote_ip:
-            raise RuntimeError(
-                f"CROSS_NODE KernelInventory {gs_id}<->{sat_id}: "
-                f"missing IP for Kubernetes node {peer_k3s}"
-            )
-        return remote_ip
+        return locator.node_ip(locator.k3s_node(peer_node))
 
     def _add(agent: str, node_id: str, iface: str, peer_node: str, peer_iface: str) -> None:
         entry = node_agent_pb2.KernelInventoryEntry(
@@ -532,9 +521,6 @@ async def send_batch_down(
         locator=locator,
         gs_capacities=gs_capacities,
     )
-    for node_a, node_b in plan.skipped_unscheduled:
-        log.warning("Skipping DOWN %s-%s: pod(s) not yet scheduled", node_a, node_b)
-
     agent_results: list[AgentCommandResult] = []
     agent_addrs = list(plan.agent_ifaces.keys())
     dispatch_started = time.monotonic()
@@ -752,10 +738,6 @@ async def send_authoritative_latency_updates(
                 pair, info, gs_capacities
             )
             locality = locator.link_locality(node_a, node_b)
-            if locality is None:
-                raise RuntimeError(
-                    f"Cannot update ground latency for {node_a}<->{node_b}: pod placement unknown"
-                )
             endpoint_agents = [(sat_id, sat_iface, locator.agent_addr(sat_id))]
             if locality == node_agent_pb2.LOCALITY_LOCAL:
                 endpoint_agents.append((gs_id, gs_iface, locator.agent_addr(sat_id)))

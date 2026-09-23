@@ -25,7 +25,7 @@ from nodalarc.models.scheduler_ops import ActuationFailureClass, SchedulerOpsCod
 from nodalarc.proto import node_agent_pb2
 from nodalarc.substrate.measurement_contract import SubstrateMeasurement
 from scheduler.dispatcher import ActiveLinkInfo, Dispatcher
-from scheduler.pod_locator import PodLocationMap
+from scheduler.pod_locator import PodLocationError, PodLocationMap
 
 from tests.terminal_rate_fixtures import ANY_INTERFACE_RATES
 
@@ -645,7 +645,7 @@ class TestDispatcherLiveDispatch:
         d, _ = _make_dispatcher()
         d._loc._node_of.pop("sat-P00S01")
 
-        with pytest.raises(ValueError, match="Missing Kubernetes node placement"):
+        with pytest.raises(PodLocationError, match="no pod location for node sat-P00S01"):
             d._netem_delay_ms("sat-P00S00", "sat-P00S01", 10.0)
 
     def test_cross_node_missing_remote_ip_fails_loudly(self):
@@ -667,7 +667,7 @@ class TestDispatcherLiveDispatch:
             )
         }
 
-        with pytest.raises(ValueError, match="Missing Kubernetes node IP"):
+        with pytest.raises(PodLocationError, match="no InternalIP for Kubernetes node node-a"):
             asyncio.run(
                 d._send_batch_up({pair}, desired, "sim", datetime(2026, 1, 1, tzinfo=UTC), d._nc)
             )

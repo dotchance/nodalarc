@@ -30,13 +30,13 @@ InterfaceAck = tuple[str, str, str]  # agent_addr, node_id, interface_name
 class LinkLocator(Protocol):
     """Placement methods needed to build Node Agent interface operations."""
 
-    def link_locality(self, node_a: str, node_b: str) -> int | None: ...
+    def link_locality(self, node_a: str, node_b: str) -> int: ...
 
     def agent_addr(self, node_id: str) -> str: ...
 
     def k3s_node(self, node_id: str) -> str: ...
 
-    def node_ip(self, k3s_node: str) -> str | None: ...
+    def node_ip(self, k3s_node: str) -> str: ...
 
 
 @dataclass(frozen=True)
@@ -54,7 +54,6 @@ class LinkDownBatchPlan:
 
     agent_ifaces: dict[str, list[node_agent_pb2.InterfaceDown]]
     pair_agent_ifaces: dict[LinkPair, set[InterfaceAck]]
-    skipped_unscheduled: frozenset[LinkPair]
 
 
 def _ack_key(agent_addr: str, iface_msg) -> InterfaceAck:
@@ -81,12 +80,9 @@ def build_link_down_batch_plan(
     """Build per-agent BatchLinkDown operations.
 
     Missing actual links are ignored because there is nothing to remove.
-    Unknown placement is reported to the caller as skipped rather than silently
-    represented as success.
     """
     agent_ifaces: dict[str, list[node_agent_pb2.InterfaceDown]] = {}
     pair_agent_ifaces: dict[LinkPair, set[InterfaceAck]] = {}
-    skipped_unscheduled: set[LinkPair] = set()
 
     for pair in pairs:
         info = actual_links.get(pair)
@@ -95,9 +91,6 @@ def build_link_down_batch_plan(
 
         node_a, node_b = pair
         locality = locator.link_locality(node_a, node_b)
-        if locality is None:
-            skipped_unscheduled.add(pair)
-            continue
 
         if info.link_type == "ground":
             gs_id, sat_id, gs_iface, sat_iface = required_ground_endpoints(
@@ -133,13 +126,7 @@ def build_link_down_batch_plan(
                     iface = gs_iface if nid == gs_id else sat_iface
                     peer_nid = sat_id if nid == gs_id else gs_id
                     peer_iface = sat_iface if nid == gs_id else gs_iface
-                    peer_k3s = locator.k3s_node(peer_nid)
-                    remote_ip = locator.node_ip(peer_k3s)
-                    if not remote_ip:
-                        raise RuntimeError(
-                            f"CROSS_NODE GS LinkDown {gs_id}<->{sat_id}: "
-                            f"missing IP for Kubernetes node {peer_k3s}"
-                        )
+                    remote_ip = locator.node_ip(locator.k3s_node(peer_nid))
                     iface_msg = node_agent_pb2.InterfaceDown(
                         node_id=nid,
                         interface_name=iface,
@@ -168,13 +155,7 @@ def build_link_down_batch_plan(
             agent = locator.agent_addr(nid)
             remote_ip = ""
             if locality == node_agent_pb2.LOCALITY_CROSS_NODE:
-                peer_k3s = locator.k3s_node(peer_nid)
-                remote_ip = locator.node_ip(peer_k3s)
-                if not remote_ip:
-                    raise RuntimeError(
-                        f"CROSS_NODE ISL LinkDown {node_a}<->{node_b}: "
-                        f"missing IP for Kubernetes node {peer_k3s}"
-                    )
+                remote_ip = locator.node_ip(locator.k3s_node(peer_nid))
             iface_msg = node_agent_pb2.InterfaceDown(
                 node_id=nid,
                 interface_name=ifname,
@@ -191,7 +172,6 @@ def build_link_down_batch_plan(
     return LinkDownBatchPlan(
         agent_ifaces=agent_ifaces,
         pair_agent_ifaces=pair_agent_ifaces,
-        skipped_unscheduled=frozenset(skipped_unscheduled),
     )
 
 
@@ -243,10 +223,6 @@ def build_link_up_batch_plan(
 
         node_a, node_b = pair
         locality = locator.link_locality(node_a, node_b)
-        if locality is None:
-            raise RuntimeError(
-                f"Cannot dispatch LinkUp for {node_a}<->{node_b}: pod placement is unknown"
-            )
 
         compensation = compensation_for_pair(node_a, node_b, info.latency_ms)
         pair_compensation[pair] = compensation
@@ -287,13 +263,7 @@ def build_link_up_batch_plan(
                 pair_agent_ifaces.setdefault(pair, set()).add(_ack_key(agent, iface_msg))
             else:
                 for nid, peer_nid in [(sat_id, gs_id), (gs_id, sat_id)]:
-                    peer_k3s = locator.k3s_node(peer_nid)
-                    remote_ip = locator.node_ip(peer_k3s)
-                    if not remote_ip:
-                        raise RuntimeError(
-                            f"CROSS_NODE GS LinkUp {gs_id}<->{sat_id}: "
-                            f"missing IP for Kubernetes node {peer_k3s}"
-                        )
+                    remote_ip = locator.node_ip(locator.k3s_node(peer_nid))
                     iface = gs_iface if nid == gs_id else sat_iface
                     peer_iface = sat_iface if nid == gs_id else gs_iface
                     agent_addr = locator.agent_addr(nid)
@@ -327,13 +297,7 @@ def build_link_up_batch_plan(
             agent = locator.agent_addr(nid)
             remote_ip = ""
             if locality == node_agent_pb2.LOCALITY_CROSS_NODE:
-                peer_k3s = locator.k3s_node(peer_nid)
-                remote_ip = locator.node_ip(peer_k3s)
-                if not remote_ip:
-                    raise RuntimeError(
-                        f"CROSS_NODE ISL LinkUp {node_a}<->{node_b}: "
-                        f"missing IP for Kubernetes node {peer_k3s}"
-                    )
+                remote_ip = locator.node_ip(locator.k3s_node(peer_nid))
             iface_msg = node_agent_pb2.InterfaceUp(
                 node_id=nid,
                 interface_name=ifname,

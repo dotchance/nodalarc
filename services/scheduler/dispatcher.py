@@ -3169,10 +3169,6 @@ class Dispatcher:
                 f"authority_sequence={info.authority_sequence})"
             )
 
-    def _link_locality(self, node_a: str, node_b: str) -> int | None:
-        """Determine locality for a link pair. None if either pod unscheduled."""
-        return self._loc.link_locality(node_a, node_b)
-
     async def _reconcile_links(
         self,
         desired: dict[tuple[str, str], ActiveLinkInfo],

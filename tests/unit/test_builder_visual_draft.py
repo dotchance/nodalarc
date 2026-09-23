@@ -1464,6 +1464,7 @@ def test_connect_command_uses_backend_resolved_terminal_facts(
                         endpoint_role="crosslink",
                         medium="rf",
                         count=1,
+                        tracking_capacity=1,
                         source_ref="test:resolved-terminal-facts",
                     ),
                 ),

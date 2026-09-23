@@ -126,9 +126,7 @@ export function BuilderInspector({ node, ephemeris }: BuilderInspectorProps) {
             {block.min_elevation_deg !== null && (
               <KeyValueRow label="min elevation">{block.min_elevation_deg.toFixed(1)}°</KeyValueRow>
             )}
-            {block.tracking_capacity !== null && (
-              <KeyValueRow label="tracking capacity">{block.tracking_capacity}</KeyValueRow>
-            )}
+            <KeyValueRow label="tracking capacity">{block.tracking_capacity}</KeyValueRow>
           </div>
         ))}
       </EditorCard>

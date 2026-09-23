@@ -585,7 +585,7 @@ def _ground_terminal(selection: ResolvedAccessTerminalSelection) -> GroundTermin
         type=block.medium,
         count=block.count,
         interface_indices=selection.interface_indices,
-        tracking_capacity=block.tracking_capacity or 1,
+        tracking_capacity=block.tracking_capacity,
         max_range_km=_required(block.max_range_km, block, "max_range_km"),
         field_of_regard_deg=_required(
             block.field_of_regard_deg,

@@ -27,7 +27,7 @@ function block(
     source_terminal_id: null,
     link_role: null,
     count: 1,
-    tracking_capacity: null,
+    tracking_capacity: 1,
     max_range_km: null,
     min_elevation_deg: elev,
     field_of_regard_deg: null,

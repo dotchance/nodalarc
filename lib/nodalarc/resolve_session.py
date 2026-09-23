@@ -2870,7 +2870,7 @@ def _refuse_selected_multi_user_terminals(
         for endpoint, selector in zip(rule.endpoints, selectors[rule.rule_id], strict=True):
             for node_id in endpoint.node_ids:
                 for block in node_by_id[node_id].terminal_inventory:
-                    if block.tracking_capacity is None or block.tracking_capacity <= 1:
+                    if block.tracking_capacity <= 1:
                         continue
                     if not _terminal_matches(block, selector):
                         continue

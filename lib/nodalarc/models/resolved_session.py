@@ -111,8 +111,8 @@ class ResolvedTerminalBlock(BaseModel):
 
     Built from the resolved satellite_type (satellites) or station/ground-set
     terminal config (ground stations). Consumers read this; they do not reload
-    the source file. ``tracking_capacity`` is a ground-station-terminal concept
-    (simultaneous links per terminal) and is ``None`` for satellite terminals.
+    the source file. ``tracking_capacity`` is the terminal's simultaneous-link
+    capacity; every catalog terminal declares it, so every block carries it.
     Optional fields are ``None`` only when the source legitimately omits them; the
     resolver fails (never invents a default) when a value is required for a
     supported runtime feature.
@@ -127,7 +127,7 @@ class ResolvedTerminalBlock(BaseModel):
     source_terminal_id: NonEmptyReference | None = None
     link_role: NonEmptyReference | None = None
     count: int = Field(gt=0)
-    tracking_capacity: int | None = Field(default=None, gt=0)
+    tracking_capacity: int = Field(gt=0)
     max_range_km: float | None = Field(default=None, gt=0, allow_inf_nan=False)
     min_elevation_deg: float | None = Field(default=None, ge=-90.0, le=90.0, allow_inf_nan=False)
     field_of_regard_deg: float | None = Field(default=None, gt=0, le=360.0, allow_inf_nan=False)
@@ -495,11 +495,6 @@ class ResolvedNode(BaseModel):
                 raise ValueError(
                     f"terminal {block.terminal_id!r} owner_node_id "
                     f"{block.owner_node_id!r} != node_id {self.node_id!r}"
-                )
-            if block.tracking_capacity is None:
-                raise ValueError(
-                    f"node {self.node_id!r} terminal {block.terminal_id!r} "
-                    "requires tracking_capacity"
                 )
             if block.endpoint_role == "access":
                 if self.kind == "ground_station" and not isinstance(

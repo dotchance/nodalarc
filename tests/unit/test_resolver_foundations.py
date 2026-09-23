@@ -692,6 +692,18 @@ def test_unsupported_feature_error_message() -> None:
     assert len(err.features) == 2
 
 
+def test_resolved_terminal_requires_its_tracking_capacity() -> None:
+    with pytest.raises(ValidationError, match="tracking_capacity"):
+        ResolvedTerminalBlock(
+            terminal_id="t",
+            owner_node_id="n",
+            endpoint_role="access",
+            medium="rf",
+            count=1,
+            source_ref="test:t",
+        )
+
+
 def test_resolved_terminal_declares_both_rates_or_neither() -> None:
     with pytest.raises(ValidationError, match="one of transmit and receive rates"):
         ResolvedTerminalBlock(
@@ -700,6 +712,7 @@ def test_resolved_terminal_declares_both_rates_or_neither() -> None:
             endpoint_role="crosslink",
             medium="rf",
             count=1,
+            tracking_capacity=1,
             transmit_mbps=2.0,
             source_ref="test:t",
         )
@@ -709,6 +722,7 @@ def test_resolved_terminal_declares_both_rates_or_neither() -> None:
         endpoint_role="crosslink",
         medium="rf",
         count=1,
+        tracking_capacity=1,
         transmit_mbps=2.0,
         receive_mbps=100.0,
         source_ref="test:t",

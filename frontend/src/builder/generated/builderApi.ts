@@ -1838,7 +1838,7 @@ export interface ResolvedSurfacePosition {
   readonly alt_m: number;
 }
 
-/** Materialized terminal truth for one terminal block on one node. Built from the resolved satellite_type (satellites) or station/ground-set terminal config (ground stations). Consumers read this; they do not reload the source file. ``tracking_capacity`` is a ground-station-terminal concept (simultaneous links per terminal) and is ``None`` for satellite terminals. Optional fields are ``None`` only when the source legitimately omits them; the resolver fails (never invents a default) when a value is required for a supported runtime feature. */
+/** Materialized terminal truth for one terminal block on one node. Built from the resolved satellite_type (satellites) or station/ground-set terminal config (ground stations). Consumers read this; they do not reload the source file. ``tracking_capacity`` is the terminal's simultaneous-link capacity; every catalog terminal declares it, so every block carries it. Optional fields are ``None`` only when the source legitimately omits them; the resolver fails (never invents a default) when a value is required for a supported runtime feature. */
 export interface ResolvedTerminalBlock {
   readonly terminal_id: string;
   readonly owner_node_id: string;
@@ -1847,7 +1847,7 @@ export interface ResolvedTerminalBlock {
   readonly source_terminal_id: string | null;
   readonly link_role: string | null;
   readonly count: number;
-  readonly tracking_capacity: number | null;
+  readonly tracking_capacity: number;
   readonly max_range_km: number | null;
   readonly min_elevation_deg: number | null;
   readonly field_of_regard_deg: number | null;

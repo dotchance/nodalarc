@@ -49,7 +49,7 @@ says store. VS-API gathers what happened. VF shows it to a human.
                     |  pyroute2 kernel operations      |
                     +-----------|---|------------------+
                                 |   |
-                      veth pairs|   |tc netem/tbf
+                      veth pairs|   |tc netem/htb
                                 v   v
     +----------+ +----------+ +----------+ +----------+
     | sat      | | sat      | | dtn host | | ground gw|
@@ -87,8 +87,8 @@ The full cycle looks like this:
    Agents. It updates active state only after exact verified ACKs.
 
 3. **Node Agent** performs kernel operations on the host: veth creation, VXLAN
-   tunnel setup, carrier changes, `tc netem` latency, `tc tbf` bandwidth
-   shaping, and ground bridge attachment. It reports success only after
+   tunnel setup, carrier changes, `tc netem` latency, `tc htb` transmit and
+   receive rate shaping per terminal, and ground bridge attachment. It reports success only after
    checking the kernel postcondition for each requested entry.
 
 4. **Workloads** inside each session pod react to interface state. IS-IS

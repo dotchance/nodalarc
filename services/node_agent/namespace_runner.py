@@ -8,14 +8,12 @@ Verification code uses this instead of shelling out to nsenter.
 
 from __future__ import annotations
 
-import ctypes
-import os
 from collections.abc import Callable
 from typing import TypeVar
 
 from pyroute2 import IPRoute
 
-from node_agent.namespace_ops import _CLONE_NEWNET, _get_host_ns_fd, _in_namespace, _libc, _ns_lock
+from node_agent.namespace_ops import _in_namespace, in_host_namespace
 
 _T = TypeVar("_T")
 
@@ -27,13 +25,4 @@ def run_in_pod_namespace(pid: int, fn: Callable[[IPRoute], _T]) -> _T:
 
 def run_in_host_namespace(fn: Callable[[IPRoute], _T]) -> _T:
     """Run a short pyroute2 operation inside the host network namespace."""
-    with _ns_lock:
-        ret = _libc.setns(_get_host_ns_fd(), _CLONE_NEWNET)
-        if ret != 0:
-            errno = ctypes.get_errno()
-            raise OSError(errno, f"setns to host failed: {os.strerror(errno)}")
-        ipr = IPRoute()
-        try:
-            return fn(ipr)
-        finally:
-            ipr.close()
+    return in_host_namespace(fn)

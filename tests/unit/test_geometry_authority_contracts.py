@@ -31,6 +31,7 @@ from scheduler.dispatcher import Dispatcher
 from scheduler.pod_locator import PodLocationMap
 
 from tests.physics_fixtures import EARTH_TEST_BODY_FRAME, earth_geodetic_to_ecef
+from tests.terminal_rate_fixtures import ANY_INTERFACE_RATES
 
 SIM = datetime(2026, 1, 1, tzinfo=UTC)
 RANGE_TOL_KM = 1e-6
@@ -82,6 +83,7 @@ def _dispatcher() -> Dispatcher:
     return Dispatcher(
         interface_map={pair: ("isl0", "isl1")},
         bandwidth_map={pair: 1234.0},
+        interface_rates=ANY_INTERFACE_RATES,
         pod_locator=loc,
         agent_pool=pool,
         session_id="test-session",

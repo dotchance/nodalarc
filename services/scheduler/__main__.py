@@ -376,6 +376,7 @@ def main() -> None:
     runtime_health.mark_loaded(runtime_config)
     interface_map = resolved.link_interface_map()
     bandwidth_map = resolved.link_bandwidth_map()
+    interface_rates = resolved.interface_terminal_rates()
     log.debug("Interface map: %d link pairs", len(interface_map))
     session_id = require_resolved_session_run_id(resolved)
     expected_nodes = set(resolved.node_ids())
@@ -450,6 +451,7 @@ def main() -> None:
     dispatcher = Dispatcher(
         interface_map=interface_map,
         bandwidth_map=bandwidth_map,
+        interface_rates=interface_rates,
         pod_locator=loc,
         agent_pool=pool,
         max_latency_age_s=max_latency_age_s,

@@ -13,11 +13,14 @@ from unittest.mock import MagicMock
 
 from scheduler.dispatcher import ActiveLinkInfo, Dispatcher
 
+from tests.terminal_rate_fixtures import ANY_INTERFACE_RATES
+
 
 def _make_dispatcher(**overrides) -> Dispatcher:
     defaults = {
         "interface_map": {},
         "bandwidth_map": {},
+        "interface_rates": ANY_INTERFACE_RATES,
         "pod_locator": MagicMock(),
         "agent_pool": MagicMock(),
         "session_id": "test-session",

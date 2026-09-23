@@ -111,13 +111,21 @@ message BatchLinkDownResponse {
 
 // --- BatchLinkUp ---
 
+// One terminal's own rates: what it can send and what it can receive,
+// independent of the terminal at the other end of the link.
+message TerminalRates {
+  double transmit_mbps = 1;
+  double receive_mbps = 2;
+}
+
 message InterfaceUp {
   string node_id = 1;
   string interface_name = 2;
   // field 3 reserved — PID looked up by Node Agent internally
   LinkType link_type = 4;
   double latency_ms = 5;
-  double bandwidth_mbps = 6;
+  // field 6 reserved — one symmetric pair rate, replaced by per-terminal rates
+  reserved 6;
   string gs_id = 7;
   string sat_id = 8;
   // fields 9-10 reserved — PID looked up by Node Agent internally
@@ -132,6 +140,11 @@ message InterfaceUp {
   // Peer info for host-mediated ISL (host-side veth name computation)
   string peer_node_id = 15;
   string peer_interface_name = 16;
+  // Rates of the terminal behind (node_id, interface_name).
+  TerminalRates rates = 17;
+  // Rates of the terminal behind (peer_node_id, peer_interface_name); set
+  // only on LOCAL ground entries, where one entry wires both ends.
+  TerminalRates peer_rates = 18;
 }
 
 message BatchLinkUpRequest {
@@ -162,6 +175,9 @@ message LatencyEntry {
   string gs_id = 6;
   string sat_id = 7;
   // fields 8-9 reserved — PID looked up by Node Agent internally
+  // Transmit rate of the terminal behind this interface. The netem queue
+  // limit follows rate times delay, so every delay change carries it.
+  double transmit_mbps = 10;
 }
 
 message SetLatencyRequest {
@@ -203,9 +219,14 @@ message KernelInventoryEntry {
   Locality locality = 8;
   int32 vni = 9;
   double latency_ms = 10;
-  double bandwidth_mbps = 11;
+  // field 11 reserved — one symmetric pair rate, replaced by per-terminal rates
+  reserved 11;
   bool expected_admin_up = 12;
   string remote_node_ip = 13;
+  // Expected-up entries: rates of the terminal behind (node_id,
+  // interface_name), and on LOCAL entries the peer terminal's rates.
+  TerminalRates rates = 14;
+  TerminalRates peer_rates = 15;
 }
 
 message KernelInventoryRequest {

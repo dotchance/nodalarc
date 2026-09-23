@@ -27,6 +27,8 @@ from nodalarc.proto import node_agent_pb2
 from scheduler.dispatcher import ActiveLinkInfo, Dispatcher, DispatchIntent
 from scheduler.pod_locator import PodLocationMap
 
+from tests.terminal_rate_fixtures import ANY_INTERFACE_RATES
+
 SIM = datetime(2026, 1, 1, tzinfo=UTC)
 OME_RANGE_KM = 1000.0
 
@@ -116,6 +118,7 @@ def _make_dispatcher(mbb=False):
     d = Dispatcher(
         interface_map=interface_map,
         bandwidth_map=bandwidth_map,
+        interface_rates=ANY_INTERFACE_RATES,
         pod_locator=loc,
         agent_pool=pool,
         session_id="test-session",

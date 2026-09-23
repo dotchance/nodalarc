@@ -15,6 +15,7 @@ from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
 from typing import Protocol
 
+from nodalarc.models.resolved_session import InterfaceRates
 from nodalarc.proto import node_agent_pb2
 from nodalarc.vxlan import compute_vni
 
@@ -194,6 +195,29 @@ def build_link_down_batch_plan(
     )
 
 
+def interface_terminal_rates(
+    interface_rates: Mapping[tuple[str, str], InterfaceRates], node_id: str, interface: str
+) -> InterfaceRates:
+    """One WAN interface's own terminal rates; absence is a loud failure."""
+    rates = interface_rates.get((node_id, interface))
+    if rates is None:
+        raise RuntimeError(
+            f"no terminal rates for {node_id}/{interface}: the resolved session "
+            "names no terminal behind this interface"
+        )
+    return rates
+
+
+def terminal_rates_message(
+    interface_rates: Mapping[tuple[str, str], InterfaceRates], node_id: str, interface: str
+) -> node_agent_pb2.TerminalRates:
+    """The command form of one WAN interface's own terminal rates."""
+    rates = interface_terminal_rates(interface_rates, node_id, interface)
+    return node_agent_pb2.TerminalRates(
+        transmit_mbps=rates.transmit_mbps, receive_mbps=rates.receive_mbps
+    )
+
+
 def build_link_up_batch_plan(
     *,
     pairs: Iterable[LinkPair],
@@ -201,8 +225,13 @@ def build_link_up_batch_plan(
     locator: LinkLocator,
     gs_capacities: Mapping[str, int],
     compensation_for_pair: Callable[[str, str, float], LatencyCompensation],
+    interface_rates: Mapping[tuple[str, str], InterfaceRates],
 ) -> LinkUpBatchPlan:
-    """Build per-agent BatchLinkUp operations and per-pair latency provenance."""
+    """Build per-agent BatchLinkUp operations and per-pair latency provenance.
+
+    Every entry carries the terminal rates of the interfaces it wires, so the
+    Node Agent shapes each end as its own terminal.
+    """
     agent_ifaces: dict[str, list[node_agent_pb2.InterfaceUp]] = {}
     pair_agent_ifaces: dict[LinkPair, set[InterfaceAck]] = {}
     pair_compensation: dict[LinkPair, LatencyCompensation] = {}
@@ -246,7 +275,8 @@ def build_link_up_batch_plan(
                     peer_interface_name=sat_iface,
                     link_type=node_agent_pb2.LINK_TYPE_GROUND,
                     latency_ms=netem_ms,
-                    bandwidth_mbps=info.bandwidth_mbps,
+                    rates=terminal_rates_message(interface_rates, gs_id, gs_iface),
+                    peer_rates=terminal_rates_message(interface_rates, sat_id, sat_iface),
                     gs_id=gs_id,
                     sat_id=sat_id,
                     locality=locality,
@@ -274,7 +304,7 @@ def build_link_up_batch_plan(
                         peer_interface_name=peer_iface,
                         link_type=node_agent_pb2.LINK_TYPE_GROUND,
                         latency_ms=netem_ms,
-                        bandwidth_mbps=info.bandwidth_mbps,
+                        rates=terminal_rates_message(interface_rates, nid, iface),
                         gs_id=gs_id,
                         sat_id=sat_id,
                         locality=locality,
@@ -309,7 +339,7 @@ def build_link_up_batch_plan(
                 interface_name=ifname,
                 link_type=node_agent_pb2.LINK_TYPE_ISL,
                 latency_ms=netem_ms,
-                bandwidth_mbps=info.bandwidth_mbps,
+                rates=terminal_rates_message(interface_rates, nid, ifname),
                 locality=locality,
                 remote_node_ip=remote_ip,
                 vni=vni,

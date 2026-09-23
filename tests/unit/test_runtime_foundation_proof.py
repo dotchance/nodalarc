@@ -49,6 +49,7 @@ from scheduler.dispatcher import ActiveLinkInfo, Dispatcher
 from scheduler.pod_locator import PodLocationMap
 
 from tests.physics_fixtures import EARTH_TEST_EPHEMERIS_BODY_FRAMES
+from tests.terminal_rate_fixtures import ANY_INTERFACE_RATES
 
 BASE = datetime(2026, 5, 27, 12, 0, 0, tzinfo=UTC)
 OLD = ("gs-multi", "sat-old")
@@ -96,6 +97,7 @@ def _dispatcher(*, now=None) -> Dispatcher:
     d = Dispatcher(
         interface_map=interface_map,
         bandwidth_map=dict.fromkeys(interface_map, 100.0),
+        interface_rates=ANY_INTERFACE_RATES,
         pod_locator=loc,
         agent_pool=pool,
         session_id="foundation-proof",
@@ -708,6 +710,7 @@ def _dispatcher_for_captured_records(
     d = Dispatcher(
         interface_map=interface_map,
         bandwidth_map=bandwidth_map,
+        interface_rates=ANY_INTERFACE_RATES,
         pod_locator=loc,
         agent_pool=MagicMock(),
         session_id=session_id,

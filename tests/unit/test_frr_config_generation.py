@@ -392,12 +392,13 @@ def test_daemons_file_refuses_an_empty_or_unknown_selection() -> None:
         _daemons_file(("zebra", "notad"))
 
 
-def test_wan_interface_metrics_follow_link_bandwidth_and_access_links() -> None:
+def test_wan_interface_metrics_follow_own_transmit_rate_and_access_links() -> None:
     resolved = _resolved(protocol="isis")
     node_id = _first_satellite(resolved)
     vars_for_node = _vars_for(resolved, node_id)
-    bandwidth = {
-        name: candidate.bandwidth_mbps
+    rates = resolved.interface_terminal_rates()
+    fixed = {
+        name
         for candidate in resolved.link_candidates
         if candidate.kind != "access"
         for owner, name in zip(
@@ -406,13 +407,59 @@ def test_wan_interface_metrics_follow_link_bandwidth_and_access_links() -> None:
         if owner == node_id
     }
 
-    assert bandwidth
+    assert fixed
     for entry in vars_for_node["wan_interfaces"]:
-        if entry["name"] in bandwidth:
-            assert entry["metric"] == int(10000 / float(bandwidth[entry["name"]]))
+        if entry["name"] in fixed:
+            transmit = rates[(node_id, entry["name"])].transmit_mbps
+            assert entry["metric"] == int(10000 / transmit)
         else:
             assert entry["name"].startswith("gnd")
             assert entry["metric"] == 10
+
+
+def test_each_end_of_an_asymmetric_fixed_link_carries_its_own_metric() -> None:
+    """The metric of a link end follows what that end transmits, not the peer."""
+    resolved = _resolved(protocol="isis")
+    candidate = next(c for c in resolved.link_candidates if c.kind != "access")
+    interface_a, interface_b = candidate.fixed_interfaces
+    node_a = resolved.node_by_id(candidate.node_a)
+    assert node_a is not None
+    terminal_a = next(w.terminal_id for w in node_a.wan_interfaces if w.name == interface_a)
+    # End A's terminal transmits at 100 Mbit/s and still receives at its
+    # declared rate; end B keeps its declared terminal.
+    slow_a = node_a.model_copy(
+        update={
+            "terminal_inventory": tuple(
+                block.model_copy(update={"transmit_mbps": 100.0})
+                if block.terminal_id == terminal_a
+                else block
+                for block in node_a.terminal_inventory
+            )
+        }
+    )
+    asymmetric = resolved.model_copy(
+        update={
+            "nodes": tuple(slow_a if n.node_id == node_a.node_id else n for n in resolved.nodes)
+        }
+    )
+    b_transmit = asymmetric.interface_terminal_rates()[
+        (candidate.node_b, interface_b)
+    ].transmit_mbps
+    assert b_transmit != 100.0
+
+    metric_a = next(
+        e["metric"]
+        for e in _vars_for(asymmetric, candidate.node_a)["wan_interfaces"]
+        if e["name"] == interface_a
+    )
+    metric_b = next(
+        e["metric"]
+        for e in _vars_for(asymmetric, candidate.node_b)["wan_interfaces"]
+        if e["name"] == interface_b
+    )
+
+    assert metric_a == 100
+    assert metric_b == int(10000 / b_transmit)
 
 
 # ---------------------------------------------------------------------------

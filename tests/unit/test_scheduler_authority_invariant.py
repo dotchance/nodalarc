@@ -25,6 +25,8 @@ from nodalarc.proto import node_agent_pb2
 from scheduler.dispatcher import ActiveLinkInfo, Dispatcher
 from scheduler.pod_locator import PodLocationMap
 
+from tests.terminal_rate_fixtures import ANY_INTERFACE_RATES
+
 SIM_T0 = datetime(2026, 5, 27, 12, 0, 0, tzinfo=UTC)
 
 
@@ -128,6 +130,7 @@ def _make_dispatcher_with_two_terminal_gs() -> Dispatcher:
     d = Dispatcher(
         interface_map=interface_map,
         bandwidth_map=bandwidth_map,
+        interface_rates=ANY_INTERFACE_RATES,
         pod_locator=loc,
         agent_pool=pool,
         session_id="test-c-a-repro",

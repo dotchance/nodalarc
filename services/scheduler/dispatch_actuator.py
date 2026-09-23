@@ -18,6 +18,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from nodalarc.models.link_events import LatencyUpdate, LinkDown, LinkUp
+from nodalarc.models.resolved_session import InterfaceRates
 from nodalarc.models.scheduler_ops import ActuationFailureClass
 from nodalarc.proto import node_agent_pb2
 from nodalarc.vxlan import compute_vni
@@ -36,7 +37,9 @@ from scheduler.latency_compensator import LatencyCompensation
 from scheduler.node_agent_batches import (
     build_link_down_batch_plan,
     build_link_up_batch_plan,
+    interface_terminal_rates,
     required_ground_endpoints,
+    terminal_rates_message,
 )
 
 log = logging.getLogger(__name__)
@@ -335,6 +338,7 @@ def _ground_inventory_entries_for_pair(
     expected_admin_up: bool,
     locator: Any,
     gs_capacities: Mapping[str, int],
+    interface_rates: Mapping[tuple[str, str], InterfaceRates],
 ) -> tuple[dict[str, list[node_agent_pb2.KernelInventoryEntry]], set[InterfaceAck]]:
     if info.link_type != "ground":
         raise ValueError(f"KernelInventory is ground-only; got {pair} type={info.link_type!r}")
@@ -351,7 +355,6 @@ def _ground_inventory_entries_for_pair(
         else 0
     )
     latency_ms = 0.0
-    bandwidth_mbps = 0.0
     if expected_admin_up:
         # Prove the kernel against what was COMMANDED, never against a live
         # recomputation: compensation reads measured substrate RTT, which
@@ -362,7 +365,6 @@ def _ground_inventory_entries_for_pair(
         latency_ms = (
             info.netem_one_way_ms if info.netem_one_way_ms is not None else NETEM_NOT_ASSERTED
         )
-        bandwidth_mbps = info.bandwidth_mbps
 
     entries_by_agent: dict[str, list[node_agent_pb2.KernelInventoryEntry]] = {}
     ack_keys: set[InterfaceAck] = set()
@@ -392,9 +394,16 @@ def _ground_inventory_entries_for_pair(
             vni=vni,
             remote_node_ip=_remote_ip(peer_node),
             latency_ms=latency_ms,
-            bandwidth_mbps=bandwidth_mbps,
             expected_admin_up=expected_admin_up,
         )
+        if expected_admin_up:
+            # Each end is proven against its own terminal; a LOCAL entry
+            # proves both ends on the one agent that owns them.
+            entry.rates.CopyFrom(terminal_rates_message(interface_rates, node_id, iface))
+            if locality == node_agent_pb2.LOCALITY_LOCAL:
+                entry.peer_rates.CopyFrom(
+                    terminal_rates_message(interface_rates, peer_node, peer_iface)
+                )
         entries_by_agent.setdefault(agent, []).append(entry)
         ack_keys.add((agent, node_id, iface))
 
@@ -441,6 +450,7 @@ async def verify_ground_kernel_inventory(
     sim_iso: str,
     sim_time: datetime,
     gs_capacities: Mapping[str, int],
+    interface_rates: Mapping[tuple[str, str], InterfaceRates],
     session_id: str,
     wiring_generation: str,
 ) -> ActuationResult:
@@ -463,6 +473,7 @@ async def verify_ground_kernel_inventory(
                 expected_admin_up=expected_admin_up,
                 locator=locator,
                 gs_capacities=gs_capacities,
+                interface_rates=interface_rates,
             )
             pair_agent_ifaces.setdefault(pair, set()).update(ack_keys)
             for agent, entries in agent_entries.items():
@@ -602,6 +613,7 @@ async def send_batch_up(
     latency_compensation: LatencyCompensationFn,
     validate_authority_freshness: AuthorityFreshnessValidator,
     link_provenance: LinkProvenanceBuilder,
+    interface_rates: Mapping[tuple[str, str], InterfaceRates],
     session_id: str,
     wiring_generation: str,
 ) -> ActuationResult:
@@ -619,6 +631,7 @@ async def send_batch_up(
         locator=locator,
         gs_capacities=gs_capacities,
         compensation_for_pair=latency_compensation,
+        interface_rates=interface_rates,
     )
 
     agent_results: list[AgentCommandResult] = []
@@ -700,10 +713,15 @@ async def send_authoritative_latency_updates(
     latency_compensation: LatencyCompensationFn,
     validate_authority_freshness: AuthorityFreshnessValidator,
     link_provenance: LinkProvenanceBuilder,
+    interface_rates: Mapping[tuple[str, str], InterfaceRates],
     session_id: str,
     wiring_generation: str,
 ) -> ActuationResult:
-    """Apply OME-authoritative latency changes for already-active links."""
+    """Apply OME-authoritative latency changes for already-active links.
+
+    Each entry carries its interface's own transmit rate: the Node Agent sizes
+    the netem queue limit from rate and delay.
+    """
     agent_entries: dict[str, list[node_agent_pb2.LatencyEntry]] = {}
     pair_compensation: dict[LinkPair, LatencyCompensation] = {}
     pair_agent_ifaces: dict[LinkPair, set[InterfaceAck]] = {}
@@ -752,6 +770,9 @@ async def send_authoritative_latency_updates(
                         node_id=endpoint_id,
                         interface_name=endpoint_iface,
                         latency_ms=netem_ms,
+                        transmit_mbps=interface_terminal_rates(
+                            interface_rates, endpoint_id, endpoint_iface
+                        ).transmit_mbps,
                         link_type=node_agent_pb2.LINK_TYPE_GROUND,
                         gs_id=gs_id,
                         sat_id=sat_id,
@@ -766,6 +787,9 @@ async def send_authoritative_latency_updates(
                         node_id=nid,
                         interface_name=ifname,
                         latency_ms=netem_ms,
+                        transmit_mbps=interface_terminal_rates(
+                            interface_rates, nid, ifname
+                        ).transmit_mbps,
                         link_type=node_agent_pb2.LINK_TYPE_ISL,
                     ),
                 )

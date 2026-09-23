@@ -17,7 +17,9 @@ if TYPE_CHECKING:
     from adapters.frr.stack import ResolvedStack
 
 # Reference bandwidth for fixed-link IGP metrics: the metric of a fixed link
-# is this value over the link bandwidth, truncated to an integer.
+# is this value over the transmit rate of the interface's own terminal,
+# truncated to an integer. Each end of a link sends at its own rate, so the
+# two ends of an asymmetric link carry different metrics.
 _REFERENCE_BANDWIDTH_MBPS = 10000
 # IGP metric of an access (ground) link.
 _ACCESS_LINK_METRIC = 10
@@ -88,12 +90,11 @@ def _access_interface_names(node: ResolvedNode) -> list[str]:
     raise ValueError(f"unsupported resolved node kind for FRR rendering: {node.kind!r}")
 
 
-def _te_link_params(node: ResolvedNode, interface: str) -> dict[str, str]:
-    """MPLS-TE bandwidth for one WAN interface, from its own terminal.
+def _transmit_mbps(node: ResolvedNode, interface: str, *, purpose: str) -> float:
+    """The transmit rate of the terminal behind one WAN interface.
 
-    Maximum bandwidth is the terminal's transmit rate: what this end can send
-    over the link, whatever terminal the peer carries. FRR takes bytes per
-    second.
+    This is what this end can send over the link, whatever terminal the peer
+    carries.
     """
     terminal_id = next(
         (wan.terminal_id for wan in node.wan_interfaces if wan.name == interface), None
@@ -104,9 +105,19 @@ def _te_link_params(node: ResolvedNode, interface: str) -> dict[str, str]:
     if block is None or block.transmit_mbps is None:
         raise ValueError(
             f"node {node.node_id!r} interface {interface!r} has no terminal transmit rate "
-            "for its traffic-engineering link parameters"
+            f"for its {purpose}"
         )
-    max_bw = block.transmit_mbps * 1_000_000 / 8
+    return block.transmit_mbps
+
+
+def _te_link_params(node: ResolvedNode, interface: str) -> dict[str, str]:
+    """MPLS-TE bandwidth for one WAN interface, from its own terminal.
+
+    Maximum bandwidth is the terminal's transmit rate. FRR takes bytes per
+    second.
+    """
+    transmit_mbps = _transmit_mbps(node, interface, purpose="traffic-engineering link parameters")
+    max_bw = transmit_mbps * 1_000_000 / 8
     return {
         "max_bw": f"{max_bw:g}",
         "reservable_bw": f"{max_bw * _TE_RESERVABLE_FRACTION:g}",
@@ -157,7 +168,9 @@ def _wan_interfaces(
             # A static_ip boundary link carries no IGP, so no IGP BFD or TE.
             "bfd": bfd_enabled and not static_only,
             "te": _te_link_params(node, name) if te_enabled and not static_only else None,
-            "metric": int(_REFERENCE_BANDWIDTH_MBPS / float(candidate.bandwidth_mbps)),
+            "metric": int(
+                _REFERENCE_BANDWIDTH_MBPS / _transmit_mbps(node, name, purpose="IGP metric")
+            ),
             "peer_loopback_ipv4": _ip_from_interface(
                 peer.interfaces.lo0.ipv4,
                 field=f"{peer.node_id}.lo0.ipv4",

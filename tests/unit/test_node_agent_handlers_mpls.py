@@ -78,7 +78,7 @@ def _cross_isl_up(op: str = "up") -> node_agent_pb2.BatchLinkUpRequest:
                 link_type=node_agent_pb2.LINK_TYPE_ISL,
                 locality=node_agent_pb2.LOCALITY_CROSS_NODE,
                 latency_ms=4.5,
-                bandwidth_mbps=100.0,
+                rates=node_agent_pb2.TerminalRates(transmit_mbps=100.0, receive_mbps=100.0),
                 peer_node_id="sat-P01S00",
                 peer_interface_name="isl1",
                 remote_node_ip="10.0.0.2",
@@ -116,7 +116,7 @@ def _local_isl_up() -> node_agent_pb2.BatchLinkUpRequest:
                 link_type=node_agent_pb2.LINK_TYPE_ISL,
                 locality=node_agent_pb2.LOCALITY_LOCAL,
                 latency_ms=4.5,
-                bandwidth_mbps=100.0,
+                rates=node_agent_pb2.TerminalRates(transmit_mbps=100.0, receive_mbps=100.0),
                 peer_node_id="sat-P00S01",
                 peer_interface_name="isl1",
             )
@@ -134,7 +134,8 @@ def _local_ground_up() -> node_agent_pb2.BatchLinkUpRequest:
                 link_type=node_agent_pb2.LINK_TYPE_GROUND,
                 locality=node_agent_pb2.LOCALITY_LOCAL,
                 latency_ms=4.5,
-                bandwidth_mbps=100.0,
+                rates=node_agent_pb2.TerminalRates(transmit_mbps=100.0, receive_mbps=100.0),
+                peer_rates=node_agent_pb2.TerminalRates(transmit_mbps=100.0, receive_mbps=100.0),
                 gs_id=GS,
                 sat_id=SAT,
                 peer_node_id=SAT,
@@ -190,15 +191,20 @@ class _Kernel:
                 "observed=1",
             )
 
-        def shape(pid, ifname, latency, bandwidth):
-            calls.append(("apply_link_shaping", pid, ifname))
+        def shape(pid, ifname, latency, transmit):
+            calls.append(("apply_transmit_shaping", pid, ifname))
 
         ok = kernel_verifier.Proof.ok
         monkeypatch.setattr(vxlan, "create_vxlan_link", create)
         monkeypatch.setattr(vxlan, "destroy_vxlan_link", destroy)
         monkeypatch.setattr(handlers, "configure_mpls_input", configure)
         monkeypatch.setattr(kernel_verifier, "verify_mpls_input", read)
-        monkeypatch.setattr(namespace_ops, "apply_link_shaping", shape)
+        monkeypatch.setattr(namespace_ops, "apply_transmit_shaping", shape)
+        monkeypatch.setattr(
+            namespace_ops,
+            "apply_receive_shaping",
+            lambda host_ifname, receive: calls.append(("apply_receive_shaping", host_ifname)),
+        )
         monkeypatch.setattr(
             ground_bridge, "attach_isl", lambda *a, **k: calls.append(("attach_isl",))
         )
@@ -217,7 +223,12 @@ class _Kernel:
         monkeypatch.setattr(
             kernel_verifier,
             "verify_qdisc",
-            lambda pid, ifname, *, delay_ms, rate_mbps=None: ok("qdisc"),
+            lambda pid, ifname, *, delay_ms, transmit_mbps=None: ok("qdisc"),
+        )
+        monkeypatch.setattr(
+            kernel_verifier,
+            "verify_receive_shaping",
+            lambda host_ifname, *, receive_mbps: ok("receive"),
         )
         monkeypatch.setattr(
             kernel_verifier,
@@ -245,7 +256,7 @@ def test_cross_host_isl_creation_configures_then_the_reply_carries_the_read_back
     assert kernel.of("configure_mpls_input") == [(1234, "isl0", True, f"VNI 1001 {SAT}/isl0")]
     kinds = [c[0] for c in kernel.calls]
     assert kinds.index("create_vxlan_link") < kinds.index("configure_mpls_input")
-    assert kinds.index("configure_mpls_input") < kinds.index("apply_link_shaping")
+    assert kinds.index("configure_mpls_input") < kinds.index("apply_transmit_shaping")
     assert kernel.of("verify_mpls_input") == [(1234, "isl0")]
 
 
@@ -304,7 +315,8 @@ def test_failed_configuration_fails_the_entry_and_skips_the_carrier_stage(monkey
     assert result.error_code == node_agent_pb2.NODE_AGENT_KERNEL_MUTATION_FAILED
     assert result.dirty_kernel is True
     assert str(failure) in result.error_message
-    assert kernel.of("apply_link_shaping") == []
+    assert kernel.of("apply_transmit_shaping") == []
+    assert kernel.of("apply_receive_shaping") == []
     assert kernel.of("verify_mpls_input") == []
 
 
@@ -380,7 +392,6 @@ def test_inventory_carries_the_proof_for_required_endpoints_in_both_expected_sta
         peer_node_id=SAT,
         peer_interface_name="gnd0",
         latency_ms=0.0,
-        bandwidth_mbps=0.0,
         expected_admin_up=False,
     )
     cross = node_agent_pb2.KernelInventoryEntry(
@@ -395,7 +406,7 @@ def test_inventory_carries_the_proof_for_required_endpoints_in_both_expected_sta
         remote_node_ip="10.0.0.2",
         vni=1001,
         latency_ms=4.5,
-        bandwidth_mbps=100.0,
+        rates=node_agent_pb2.TerminalRates(transmit_mbps=100.0, receive_mbps=100.0),
         expected_admin_up=True,
     )
     req = node_agent_pb2.KernelInventoryRequest(

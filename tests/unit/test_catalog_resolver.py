@@ -14,6 +14,7 @@ from nodalarc.catalog_paths import CatalogRoots
 from nodalarc.catalog_refs import CatalogRef
 from nodalarc.catalog_registry import validate_referenced_configuration_document
 from nodalarc.configuration_yaml import load_configuration_yaml
+from nodalarc.models.resolved_session import InterfaceRates
 from nodalarc.resolve_session import (
     SessionResolutionError,
     _derive_link_label,
@@ -467,3 +468,29 @@ def test_catalog_source_change_changes_resolved_session() -> None:
 
     assert baseline.model_dump(mode="python") != updated.model_dump(mode="python")
     assert all("changed" in node.tags for node in updated.nodes if node.segment_id == "leo_a")
+
+
+def test_each_wan_interface_carries_its_own_terminal_rates() -> None:
+    """Shaping authority is per terminal and per direction.
+
+    The shipped TDRS session pairs 50/600 Mbit/s relay terminals with ground
+    terminals that transmit 600 and receive 50. Each interface keeps its own
+    terminal's rates; neither end inherits the other's or a pair minimum.
+    """
+    resolved = resolve_session(_load("earth-geo-tdrs.yaml"), catalog=shipped_read_view())
+    rates = resolved.interface_terminal_rates()
+
+    wan_interfaces = {
+        (node.node_id, wan.name) for node in resolved.nodes for wan in node.wan_interfaces
+    }
+    assert set(rates) == wan_interfaces
+
+    kinds = {node.node_id: node.kind for node in resolved.nodes}
+    satellite_rates = {
+        value for (node_id, _), value in rates.items() if kinds[node_id] == "satellite"
+    }
+    ground_rates = {
+        value for (node_id, _), value in rates.items() if kinds[node_id] == "ground_station"
+    }
+    assert InterfaceRates(transmit_mbps=50.0, receive_mbps=600.0) in satellite_rates
+    assert InterfaceRates(transmit_mbps=600.0, receive_mbps=50.0) in ground_rates

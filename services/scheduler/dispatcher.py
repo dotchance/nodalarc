@@ -47,7 +47,7 @@ import json
 import logging
 import os
 import socket
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from contextlib import suppress
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
@@ -58,6 +58,7 @@ from nodalarc.models.events import OpsEvent, PlaybackState, SessionEphemeris, Vi
 from nodalarc.models.link_decisions import GroundLinkDecisionSnapshot
 from nodalarc.models.link_events import LinkDecisionProvenance
 from nodalarc.models.link_state import LinkStateSnapshot
+from nodalarc.models.resolved_session import InterfaceRates
 from nodalarc.models.scheduler_ops import (
     ActualLinkSnapshot,
     ActuationFailureClass,
@@ -197,6 +198,7 @@ class Dispatcher:
         self,
         interface_map: dict[tuple[str, str], tuple[str, str]],
         bandwidth_map: dict[tuple[str, str], float],
+        interface_rates: Mapping[tuple[str, str], InterfaceRates],
         pod_locator: PodLocationMap,
         agent_pool: AgentPool,
         session_id: str,
@@ -225,6 +227,9 @@ class Dispatcher:
         self._read_lifecycle_identity = read_lifecycle_identity
         self._interface_map = interface_map
         self._bandwidth_map = bandwidth_map
+        # Each WAN interface's own terminal rates; link shaping applies them
+        # per interface, independent of the terminal at the other end.
+        self._interface_rates = interface_rates
         self._loc = pod_locator
         self._pool = agent_pool
         if max_latency_age_s <= 0:
@@ -1514,6 +1519,7 @@ class Dispatcher:
             sim_iso=sim_time.isoformat(),
             sim_time=sim_time,
             gs_capacities=self._gs_capacities,
+            interface_rates=self._interface_rates,
             session_id=self._session_id,
             wiring_generation=self._wiring_generation,
         )
@@ -3359,6 +3365,7 @@ class Dispatcher:
             latency_compensation=self._latency_compensation,
             validate_authority_freshness=self._validate_authority_freshness,
             link_provenance=self._link_provenance,
+            interface_rates=self._interface_rates,
             session_id=self._session_id,
             wiring_generation=self._wiring_generation,
         )
@@ -3579,6 +3586,7 @@ class Dispatcher:
             latency_compensation=self._latency_compensation,
             validate_authority_freshness=self._validate_authority_freshness,
             link_provenance=self._link_provenance,
+            interface_rates=self._interface_rates,
             session_id=self._session_id,
             wiring_generation=self._wiring_generation,
         )

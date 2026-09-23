@@ -22,6 +22,8 @@ from nodalarc.models.ground_policy import (
 from ome.ground_allocator import allocate_ground_links
 from ome.visibility import GroundVisibility
 
+from tests.terminal_rate_fixtures import ANY_INTERFACE_RATES
+
 
 def _policy_kwargs(gs_id: str) -> dict:
     return {
@@ -124,6 +126,7 @@ class TestAuthorityFreshnessOnStableLinks:
         d = Dispatcher(
             interface_map=iface_map,
             bandwidth_map=bw_map,
+            interface_rates=ANY_INTERFACE_RATES,
             pod_locator=loc,
             agent_pool=pool,
             session_id="test",
@@ -417,6 +420,7 @@ class TestActuatorEventPublicationOrder:
 
         asyncio.run(
             send_batch_up(
+                interface_rates=ANY_INTERFACE_RATES,
                 pairs=pairs,
                 desired=desired,
                 locator=self._locator(),

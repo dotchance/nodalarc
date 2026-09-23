@@ -11,7 +11,7 @@ node sets.
 
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Literal
+from typing import Literal, NamedTuple
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -39,6 +39,15 @@ from nodalarc.models.terminal_physics import SatGroundTerminalBoresight, Termina
 from nodalarc.tle import tle_epoch_unix, tle_norad_id, validate_tle_pair
 
 NodeKind = Literal["satellite", "ground_station", "relay"]
+
+
+class InterfaceRates(NamedTuple):
+    """The rates of the terminal behind one WAN interface."""
+
+    transmit_mbps: float
+    receive_mbps: float
+
+
 TerminalMediumLiteral = Literal["rf", "optical"]
 
 
@@ -143,8 +152,9 @@ class ResolvedTerminalBlock(BaseModel):
     def slowest_direction_mbps(self) -> float | None:
         """The slower of the transmit and receive rates.
 
-        Link shaping currently applies one rate to both directions of a link
-        and uses this value for it.
+        A link candidate reports this value as its bandwidth. Link shaping does
+        not use it: each interface is shaped at its own transmit and receive
+        rates (``ResolvedSession.interface_terminal_rates``).
         """
         if self.transmit_mbps is None or self.receive_mbps is None:
             return None
@@ -959,6 +969,27 @@ class ResolvedSession(BaseModel):
             for candidate in self.link_candidates
             if candidate.kind != "access"
         }
+
+    def interface_terminal_rates(self) -> dict[tuple[str, str], InterfaceRates]:
+        """Each WAN interface's own terminal rates, keyed by (node_id, interface).
+
+        Link shaping applies them per interface: egress at the terminal's
+        transmit rate and ingress at its receive rate. A WAN interface whose
+        terminal carries no rates cannot be shaped, which is a loud failure.
+        """
+        rates: dict[tuple[str, str], InterfaceRates] = {}
+        for node in self.nodes:
+            blocks = {block.terminal_id: block for block in node.terminal_inventory}
+            for wan in node.wan_interfaces:
+                block = blocks.get(wan.terminal_id)
+                if block is None or block.transmit_mbps is None or block.receive_mbps is None:
+                    raise ValueError(
+                        f"WAN interface {node.node_id}/{wan.name} has no terminal rates"
+                    )
+                rates[(node.node_id, wan.name)] = InterfaceRates(
+                    block.transmit_mbps, block.receive_mbps
+                )
+        return rates
 
     def link_bandwidth_map(self) -> dict[tuple[str, str], float]:
         """Return concrete bottleneck bandwidth keyed by canonical node pair."""

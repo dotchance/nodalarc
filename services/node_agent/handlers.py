@@ -389,7 +389,7 @@ def _isl_link_down(
 
     LOCAL ISLs: detaches host-side veths (brings host-side DOWN → carrier
     drops on pod-side). Pod-side interface remains admin UP in LOWERLAYERDOWN
-    state. Pod-side tc qdiscs are left in place — apply_link_shaping uses
+    state. Pod-side tc qdiscs are left in place — apply_transmit_shaping uses
     replace semantics on the next LinkUp, so orphaned qdiscs are harmless.
 
     CROSS_NODE ISLs: destroys the VXLAN tunnel (handled separately in the
@@ -437,7 +437,7 @@ def _ground_link_down(
     3. Bring satellite gnd0 DOWN
 
     Pod-side tc qdiscs on both gnd0 interfaces are left in place —
-    apply_link_shaping uses replace semantics on the next LinkUp.
+    apply_transmit_shaping uses replace semantics on the next LinkUp.
 
     No explicit admin state manipulation on GS gnd0 — host-side veth state
     drives carrier which drives FRR behavior.
@@ -471,6 +471,32 @@ def _ground_link_down(
         return _fail(node_agent_pb2.NODE_AGENT_KERNEL_MUTATION_FAILED, msg, dirty_kernel=True)
 
 
+def _ground_terminal_rates(
+    entry: node_agent_pb2.InterfaceUp | node_agent_pb2.KernelInventoryEntry,
+) -> tuple[node_agent_pb2.TerminalRates, node_agent_pb2.TerminalRates]:
+    """(ground station rates, satellite rates) of a LOCAL ground entry.
+
+    ``rates`` belongs to the entry's own node and ``peer_rates`` to its peer.
+    """
+    if entry.node_id == entry.gs_id and entry.peer_node_id == entry.sat_id:
+        return entry.rates, entry.peer_rates
+    if entry.node_id == entry.sat_id and entry.peer_node_id == entry.gs_id:
+        return entry.peer_rates, entry.rates
+    raise ValueError(
+        f"ground entry {entry.node_id}<->{entry.peer_node_id} does not name "
+        f"{entry.gs_id} and {entry.sat_id}"
+    )
+
+
+def _isl_host_ifname(iface: node_agent_pb2.InterfaceUp) -> str:
+    """The host-side veth that feeds a pod ISL interface."""
+    if iface.locality == node_agent_pb2.LOCALITY_CROSS_NODE:
+        return vxlan_host_ifnames(iface.vni).host_veth
+    return ground_bridge._isl_host_name(
+        iface.node_id, ground_bridge._isl_idx_from_ifname(iface.interface_name)
+    )
+
+
 def _ground_link_up(
     iface: node_agent_pb2.InterfaceUp, handles: dict[str, NamespaceHandle] | None = None
 ) -> EntryOutcome:
@@ -479,8 +505,9 @@ def _ground_link_up(
     Ground LinkUp sequence:
     1. attach_to_ground_bridge (host veths UP, sat gnd0 UP, mirred redirect)
        — carrier arrives on GS gnd0 automatically (LOWERLAYERDOWN → UP)
-    2. Apply tc shaping on GS gnd0
-    3. Apply tc shaping on satellite gnd0
+    2. Shape each end as its own terminal: pod egress at the terminal's
+       transmit rate with the link delay, and the host-side veth feeding the
+       pod at the terminal's receive rate
 
     No explicit admin state manipulation on GS gnd0 — host-side veth state
     drives carrier which drives FRR behavior.
@@ -504,23 +531,36 @@ def _ground_link_up(
             gs_ifname=gs_ifname,
             sat_ifname=sat_ifname,
         )
-        namespace_ops.apply_link_shaping(gs_pid, gs_ifname, iface.latency_ms, iface.bandwidth_mbps)
-        namespace_ops.apply_link_shaping(
-            sat_pid, sat_ifname, iface.latency_ms, iface.bandwidth_mbps
-        )
+        gs_rates, sat_rates = _ground_terminal_rates(iface)
         gs_port = ground_bridge._gs_host_veth(iface.gs_id, gs_ifname)
         sat_host = ground_bridge._sat_host_veth(iface.sat_id, sat_ifname)
+        namespace_ops.apply_transmit_shaping(
+            gs_pid, gs_ifname, iface.latency_ms, gs_rates.transmit_mbps
+        )
+        namespace_ops.apply_transmit_shaping(
+            sat_pid, sat_ifname, iface.latency_ms, sat_rates.transmit_mbps
+        )
+        namespace_ops.apply_receive_shaping(gs_port, gs_rates.receive_mbps)
+        namespace_ops.apply_receive_shaping(sat_host, sat_rates.receive_mbps)
         proofs = [
             kernel_verifier.verify_host_interface_state(gs_port, admin_up=True),
             kernel_verifier.verify_host_interface_state(sat_host, admin_up=True),
             kernel_verifier.verify_mirred(gs_port, sat_host),
             kernel_verifier.verify_mirred(sat_host, gs_port),
             kernel_verifier.verify_qdisc(
-                gs_pid, gs_ifname, delay_ms=iface.latency_ms, rate_mbps=iface.bandwidth_mbps
+                gs_pid,
+                gs_ifname,
+                delay_ms=iface.latency_ms,
+                transmit_mbps=gs_rates.transmit_mbps,
             ),
             kernel_verifier.verify_qdisc(
-                sat_pid, sat_ifname, delay_ms=iface.latency_ms, rate_mbps=iface.bandwidth_mbps
+                sat_pid,
+                sat_ifname,
+                delay_ms=iface.latency_ms,
+                transmit_mbps=sat_rates.transmit_mbps,
             ),
+            kernel_verifier.verify_receive_shaping(gs_port, receive_mbps=gs_rates.receive_mbps),
+            kernel_verifier.verify_receive_shaping(sat_host, receive_mbps=sat_rates.receive_mbps),
         ]
         # Each endpoint by its own manifest requirement.
         if _requires_mpls(iface.gs_id, pm):
@@ -537,7 +577,7 @@ def _ground_link_up(
 def _update_latency_entry(
     entry: node_agent_pb2.LatencyEntry, handles: dict[str, NamespaceHandle] | None = None
 ) -> EntryOutcome:
-    """Update netem delay on a single interface.
+    """Update the netem delay and queue limit on a single interface.
 
     Uses tc "change" — does NOT touch admin state or re-add qdiscs.
     """
@@ -557,11 +597,13 @@ def _update_latency_entry(
                         pid,
                         entry.interface_name,
                         entry.latency_ms,
+                        entry.transmit_mbps,
                     ),
                     verify=lambda: kernel_verifier.verify_qdisc(
                         pid,
                         entry.interface_name,
                         delay_ms=entry.latency_ms,
+                        transmit_mbps=entry.transmit_mbps,
                     ),
                     dirty_on_failure=True,
                 ),
@@ -758,6 +800,10 @@ def _isl_link_up_carrier_stage(
 ) -> EntryOutcome:
     """ISL link-up carrier stage: attach host-side + shaping. No NDP yet.
 
+    The pod interface's egress carries its terminal's transmit rate and the
+    link delay; the host-side veth that feeds it carries the terminal's
+    receive rate.
+
     LOCAL ISLs: pod-side interface is already admin UP (from wiring). Attaches
     host-side veths (UP + tc mirred) → carrier appears on pod-side.
 
@@ -777,16 +823,21 @@ def _isl_link_up_carrier_stage(
                 iface.peer_node_id,
                 iface.peer_interface_name,
             )
-        namespace_ops.apply_link_shaping(
-            pid, iface.interface_name, iface.latency_ms, iface.bandwidth_mbps
+        host_ifname = _isl_host_ifname(iface)
+        namespace_ops.apply_transmit_shaping(
+            pid, iface.interface_name, iface.latency_ms, iface.rates.transmit_mbps
         )
+        namespace_ops.apply_receive_shaping(host_ifname, iface.rates.receive_mbps)
         proofs = [
             kernel_verifier.verify_pod_interface_exists(pid, iface.interface_name),
             kernel_verifier.verify_qdisc(
                 pid,
                 iface.interface_name,
                 delay_ms=iface.latency_ms,
-                rate_mbps=iface.bandwidth_mbps,
+                transmit_mbps=iface.rates.transmit_mbps,
+            ),
+            kernel_verifier.verify_receive_shaping(
+                host_ifname, receive_mbps=iface.rates.receive_mbps
             ),
         ]
         if _requires_mpls(iface.node_id, handles):
@@ -820,8 +871,10 @@ def handle_batch_link_up(
     """Handle BatchLinkUp command.
 
     Preparation stage (sequential): create VXLAN tunnels for CROSS_NODE interfaces.
-    Carrier stage (concurrent): bring host-side veth carrier UP and apply
-      tc tbf + tc netem shaping on every interface. ACK as soon as this stage
+    Carrier stage (concurrent): bring host-side veth carrier UP, shape each
+      pod interface's egress at its terminal's transmit rate with the link's
+      netem delay, and shape the host-side veth that feeds it at the
+      terminal's receive rate. ACK as soon as this stage
       is complete — Layer 2 carrier transitions are the Node Agent's
       contract with the Scheduler.
 
@@ -936,12 +989,13 @@ def handle_batch_link_up(
                     sat_pid=sat_pid if is_sat else None,
                     sat_ifname=sat_ifname,
                 )
-                namespace_ops.apply_link_shaping(
+                namespace_ops.apply_transmit_shaping(
                     local_pid,
                     iface.interface_name,
                     iface.latency_ms,
-                    iface.bandwidth_mbps,
+                    iface.rates.transmit_mbps,
                 )
+                namespace_ops.apply_receive_shaping(host_ifname, iface.rates.receive_mbps)
                 substrate_monitor.add_peer_ref(
                     substrate_monitor.PeerRef(
                         session_id=fence.session_id,
@@ -962,7 +1016,10 @@ def handle_batch_link_up(
                         local_pid,
                         iface.interface_name,
                         delay_ms=iface.latency_ms,
-                        rate_mbps=iface.bandwidth_mbps,
+                        transmit_mbps=iface.rates.transmit_mbps,
+                    ),
+                    kernel_verifier.verify_receive_shaping(
+                        host_ifname, receive_mbps=iface.rates.receive_mbps
                     ),
                 ]
                 if _requires_mpls(iface.node_id, pm):
@@ -1177,16 +1234,12 @@ def _verify_kernel_inventory_entry(
         if entry.expected_admin_up:
             proofs = [
                 kernel_verifier.verify_host_interface_state(host_ifname, admin_up=True),
-                kernel_verifier.verify_qdisc(
-                    local_pid,
-                    local_ifname,
-                    delay_ms=entry.latency_ms,
-                    rate_mbps=entry.bandwidth_mbps,
-                ),
             ]
             if entry.locality == node_agent_pb2.LOCALITY_LOCAL:
                 # LOCAL ground links are verified on the one agent that owns
-                # both pod namespaces and both host-side veths.
+                # both pod namespaces and both host-side veths; each end is
+                # proven against its own terminal's rates.
+                gs_rates, sat_rates = _ground_terminal_rates(entry)
                 gs_pid = _require_pid(entry.gs_id, pm)
                 sat_pid = _require_pid(entry.sat_id, pm)
                 gs_port = ground_bridge._gs_host_veth(entry.gs_id, gs_ifname)
@@ -1201,28 +1254,48 @@ def _verify_kernel_inventory_entry(
                             gs_pid,
                             gs_ifname,
                             delay_ms=entry.latency_ms,
-                            rate_mbps=entry.bandwidth_mbps,
+                            transmit_mbps=gs_rates.transmit_mbps,
                         ),
                         kernel_verifier.verify_qdisc(
                             sat_pid,
                             sat_ifname,
                             delay_ms=entry.latency_ms,
-                            rate_mbps=entry.bandwidth_mbps,
+                            transmit_mbps=sat_rates.transmit_mbps,
+                        ),
+                        kernel_verifier.verify_receive_shaping(
+                            gs_port, receive_mbps=gs_rates.receive_mbps
+                        ),
+                        kernel_verifier.verify_receive_shaping(
+                            sat_host, receive_mbps=sat_rates.receive_mbps
                         ),
                     ]
                 )
-            elif entry.vni:
-                local_ip = _discover_local_ip()
-                vxlan_if = vxlan_host_ifnames(entry.vni).tunnel
+            else:
                 proofs.extend(
                     [
-                        kernel_verifier.verify_vxlan(
-                            entry.vni, local_ip=local_ip, remote_ip=entry.remote_node_ip
+                        kernel_verifier.verify_qdisc(
+                            local_pid,
+                            local_ifname,
+                            delay_ms=entry.latency_ms,
+                            transmit_mbps=entry.rates.transmit_mbps,
                         ),
-                        kernel_verifier.verify_mirred(host_ifname, vxlan_if),
-                        kernel_verifier.verify_mirred(vxlan_if, host_ifname),
+                        kernel_verifier.verify_receive_shaping(
+                            host_ifname, receive_mbps=entry.rates.receive_mbps
+                        ),
                     ]
                 )
+                if entry.vni:
+                    local_ip = _discover_local_ip()
+                    vxlan_if = vxlan_host_ifnames(entry.vni).tunnel
+                    proofs.extend(
+                        [
+                            kernel_verifier.verify_vxlan(
+                                entry.vni, local_ip=local_ip, remote_ip=entry.remote_node_ip
+                            ),
+                            kernel_verifier.verify_mirred(host_ifname, vxlan_if),
+                            kernel_verifier.verify_mirred(vxlan_if, host_ifname),
+                        ]
+                    )
             proofs.extend(_mpls_proofs())
             return _combine_proofs("KernelInventory expected-up verified", proofs)
 

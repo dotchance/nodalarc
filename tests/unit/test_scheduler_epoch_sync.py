@@ -24,12 +24,15 @@ from nodalarc.models.link_state import LinkStateSnapshot
 from scheduler.dispatcher import Dispatcher
 from scheduler.epoch_sync import EpochSyncState
 
+from tests.terminal_rate_fixtures import ANY_INTERFACE_RATES
+
 
 def _make_dispatcher(**overrides) -> Dispatcher:
     """Create a minimal Dispatcher for state machine testing."""
     defaults = {
         "interface_map": {},
         "bandwidth_map": {},
+        "interface_rates": ANY_INTERFACE_RATES,
         "pod_locator": MagicMock(),
         "agent_pool": MagicMock(),
         "session_id": "test-session",
@@ -361,6 +364,7 @@ class TestDispatcherRequiresSessionId:
             Dispatcher(
                 interface_map={},
                 bandwidth_map={},
+                interface_rates=ANY_INTERFACE_RATES,
                 pod_locator=MagicMock(),
                 agent_pool=MagicMock(),
                 gs_terminal_capacities={},
@@ -374,6 +378,7 @@ class TestDispatcherRequiresSessionId:
             Dispatcher(
                 interface_map={},
                 bandwidth_map={},
+                interface_rates=ANY_INTERFACE_RATES,
                 pod_locator=MagicMock(),
                 agent_pool=MagicMock(),
                 session_id="test",

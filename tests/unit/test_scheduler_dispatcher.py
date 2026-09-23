@@ -27,6 +27,8 @@ from nodalarc.substrate.measurement_contract import SubstrateMeasurement
 from scheduler.dispatcher import ActiveLinkInfo, Dispatcher
 from scheduler.pod_locator import PodLocationMap
 
+from tests.terminal_rate_fixtures import ANY_INTERFACE_RATES
+
 WIRING_GENERATION = "sha256:" + "a" * 64
 
 
@@ -184,6 +186,7 @@ def _make_dispatcher(interface_map=None, stub_success=True):
     d = Dispatcher(
         interface_map=interface_map,
         bandwidth_map=bandwidth_map,
+        interface_rates=ANY_INTERFACE_RATES,
         pod_locator=loc,
         agent_pool=pool,
         session_id="test-session",

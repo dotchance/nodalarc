@@ -26,6 +26,8 @@ from scheduler.actuation import ActuationResult, AgentCommandResult, PairActuati
 from scheduler.dispatcher import Dispatcher, DispatcherSuperseded
 from scheduler.pod_locator import PodLocationMap
 
+from tests.terminal_rate_fixtures import ANY_INTERFACE_RATES
+
 OWN_SESSION = "run-old"
 OWN_GENERATION = "sha256:" + "a" * 64
 NEW_GENERATION = "sha256:" + "b" * 64
@@ -43,6 +45,7 @@ def _make_dispatcher(read_lifecycle_identity=None) -> Dispatcher:
     dispatcher = Dispatcher(
         interface_map=interface_map,
         bandwidth_map=dict.fromkeys(interface_map, 1000.0),
+        interface_rates=ANY_INTERFACE_RATES,
         pod_locator=loc,
         agent_pool=MagicMock(),
         session_id=OWN_SESSION,

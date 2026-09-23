@@ -32,6 +32,7 @@ from scheduler.actuation import (
 )
 from scheduler.dispatcher import ActiveLinkInfo
 
+from tests.terminal_rate_fixtures import ANY_INTERFACE_RATES
 from tests.unit.test_scheduler_authority_invariant import _make_dispatcher_with_two_terminal_gs
 
 SIM_TIME = datetime(2026, 5, 27, 12, 0, 0, tzinfo=UTC)
@@ -1330,6 +1331,7 @@ def test_inventory_entries_assert_commanded_netem_not_live_recomputation() -> No
         netem_one_way_ms=3.25,
     )
     entries, _acks = _ground_inventory_entries_for_pair(
+        interface_rates=ANY_INTERFACE_RATES,
         pair=("gs-multi", "sat-old"),
         info=info,
         expected_admin_up=True,
@@ -1341,6 +1343,7 @@ def test_inventory_entries_assert_commanded_netem_not_live_recomputation() -> No
 
     bare = ActiveLinkInfo("term0", "gnd0", 12.0, 1000.0, link_type="ground")
     entries, _acks = _ground_inventory_entries_for_pair(
+        interface_rates=ANY_INTERFACE_RATES,
         pair=("gs-multi", "sat-old"),
         info=bare,
         expected_admin_up=True,

@@ -29,6 +29,8 @@ from nodalarc.proto import node_agent_pb2
 from scheduler.dispatcher import ActiveLinkInfo, Dispatcher
 from scheduler.pod_locator import PodLocationMap
 
+from tests.terminal_rate_fixtures import ANY_INTERFACE_RATES
+
 
 def _make_vis(
     node_a: str,
@@ -152,6 +154,7 @@ def _make_dispatcher(interface_map=None):
     d = Dispatcher(
         interface_map=interface_map,
         bandwidth_map=bandwidth_map,
+        interface_rates=ANY_INTERFACE_RATES,
         pod_locator=loc,
         agent_pool=pool,
         session_id="test-session",

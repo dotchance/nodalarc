@@ -11,6 +11,7 @@ those are not substitutes for these local root proofs.
 
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import subprocess
@@ -21,6 +22,7 @@ from contextlib import contextmanager
 
 import pytest
 from nodalarc.runtime_naming import vxlan_host_ifnames
+from node_agent.tc_units import mbps_to_bytes_per_second, netem_limit_packets
 
 pytestmark = [
     pytest.mark.usefixtures("_node_agent_ops_spool_path"),
@@ -50,16 +52,55 @@ def _run_optional(*args: str) -> None:
     subprocess.run(list(args), capture_output=True, text=True, check=False)
 
 
-def _qdisc_text(namespace: str, ifname: str) -> str:
-    return _run("ip", "netns", "exec", namespace, "tc", "qdisc", "show", "dev", ifname).stdout
+def _tc(*args: str, namespace: str | None = None) -> str:
+    """tc output in ``namespace``, or in the test's own (host) namespace."""
+    prefix = ("ip", "netns", "exec", namespace) if namespace else ()
+    return _run(*prefix, "tc", *args).stdout
 
 
-def _assert_qdisc(namespace: str, ifname: str, delay_ms: float) -> None:
-    qdisc = _qdisc_text(namespace, ifname)
-    delay_int = int(delay_ms)
-    assert "tbf" in qdisc
-    assert "netem" in qdisc
-    assert f"delay {delay_int}ms" in qdisc or f"delay {float(delay_ms)}ms" in qdisc
+def _tc_rate(rate_mbps: float) -> str:
+    """A rate as iproute2 prints it: bits per second in 1000-based units."""
+    value = mbps_to_bytes_per_second(rate_mbps) * 8
+    units = ("", "K", "M", "G", "T")
+    unit = 0
+    while unit < len(units) - 1 and value >= 1000 and value % 1000 == 0:
+        value //= 1000
+        unit += 1
+    return f"{value}{units[unit]}bit"
+
+
+def _assert_shaper(namespace: str | None, ifname: str, *, rate_mbps: float) -> list[dict]:
+    """iproute2's view of the shaper: HTB root 1: into class 1:1 at ``rate_mbps``."""
+    qdiscs = json.loads(_tc("-j", "qdisc", "show", "dev", ifname, namespace=namespace))
+    root = next(q for q in qdiscs if q.get("root"))
+    assert (root["kind"], root["handle"], root["options"]["default"]) == ("htb", "1:", "0x1")
+    rate = _tc_rate(rate_mbps)
+    classes = _tc("class", "show", "dev", ifname, namespace=namespace)
+    assert "class htb 1:1 root" in classes and f"rate {rate} ceil {rate}" in classes, classes
+    return qdiscs
+
+
+def _assert_transmit_shaping(
+    namespace: str, ifname: str, *, delay_ms: float, transmit_mbps: float
+) -> None:
+    """A pod interface's egress: transmit rate, then netem delay and queue limit."""
+    qdiscs = _assert_shaper(namespace, ifname, rate_mbps=transmit_mbps)
+    netem = next(q for q in qdiscs if q["kind"] == "netem")
+    assert (netem["handle"], netem["parent"]) == ("10:", "1:1")
+    assert netem["options"]["delay"]["delay"] == pytest.approx(delay_ms / 1000.0)
+    assert netem["options"]["limit"] == netem_limit_packets(transmit_mbps, delay_ms)
+
+
+def _assert_receive_shaping(host_ifname: str, *, receive_mbps: float) -> None:
+    """The host-side veth feeding a pod interface: receive rate, no second delay."""
+    qdiscs = _assert_shaper(None, host_ifname, rate_mbps=receive_mbps)
+    assert not any(q["kind"] == "netem" for q in qdiscs)
+
+
+def _rates(transmit_mbps: float, receive_mbps: float):
+    from nodalarc.proto import node_agent_pb2
+
+    return node_agent_pb2.TerminalRates(transmit_mbps=transmit_mbps, receive_mbps=receive_mbps)
 
 
 def _handles(pids: dict[str, int]) -> dict:
@@ -228,7 +269,7 @@ def _create_host_dummy(ifname: str, cidr: str) -> None:
 def test_namespace_ops_apply_and_update_netem_kernel_state():
     _require_netns_tools()
 
-    from node_agent import namespace_ops
+    from node_agent import kernel_verifier, namespace_ops
 
     suffix = uuid.uuid4().hex[:8]
     namespace = f"na-netem-{suffix}"
@@ -251,13 +292,45 @@ def test_namespace_ops_apply_and_update_netem_kernel_state():
         if proc.poll() is not None:
             raise RuntimeError("namespace keeper process exited before shaping test")
 
-        namespace_ops.apply_link_shaping(proc.pid, "isl0", delay_ms=12.0, rate_mbps=1000.0)
-        _assert_qdisc(namespace, "isl0", 12.0)
+        # isl0 starts with the former shaper: tbf root 1: and netem 10: under 1:1.
+        _run(
+            "ip", "netns", "exec", namespace, "tc", "qdisc", "add", "dev", "isl0",
+            "root", "handle", "1:", "tbf", "rate", "8gbit", "burst", "1mb", "latency", "50ms",
+        )  # fmt: skip
+        _run(
+            "ip", "netns", "exec", namespace, "tc", "qdisc", "add", "dev", "isl0",
+            "parent", "1:1", "handle", "10:", "netem", "delay", "6ms",
+        )  # fmt: skip
+        namespace_ops.apply_transmit_shaping(proc.pid, "isl0", 12.0, 2000.0)
+        _assert_transmit_shaping(namespace, "isl0", delay_ms=12.0, transmit_mbps=2000.0)
 
-        namespace_ops.update_delay(proc.pid, "isl0", delay_ms=7.0)
-        qdisc = _qdisc_text(namespace, "isl0")
-        assert "netem" in qdisc
-        assert "delay 7ms" in qdisc or "delay 7.0ms" in qdisc
+        # A delay change keeps the rate and moves the queue limit with the delay.
+        namespace_ops.update_delay(proc.pid, "isl0", 7.0, 2000.0)
+        _assert_transmit_shaping(namespace, "isl0", delay_ms=7.0, transmit_mbps=2000.0)
+
+        # A repeat LinkUp keeps the HTB root and changes the class, including
+        # to a rate above HTB's 32-bit field.
+        namespace_ops.apply_transmit_shaping(proc.pid, "isl0", 1.0, 200_000.0)
+        _assert_transmit_shaping(namespace, "isl0", delay_ms=1.0, transmit_mbps=200_000.0)
+        namespace_ops.apply_transmit_shaping(proc.pid, "isl0", 1280.0, 2.0)
+        _assert_transmit_shaping(namespace, "isl0", delay_ms=1280.0, transmit_mbps=2.0)
+        assert kernel_verifier.verify_qdisc(
+            proc.pid, "isl0", delay_ms=1280.0, transmit_mbps=2.0
+        ).verified
+        assert not kernel_verifier.verify_qdisc(
+            proc.pid, "isl0", delay_ms=1280.0, transmit_mbps=16.0
+        ).verified
+
+        # The host-side veth carries the receive rate. An HTB root that sends
+        # traffic to another class fails proof and is replaced.
+        _run("ip", "link", "set", host_if, "up")
+        _run("tc", "qdisc", "add", "dev", host_if, "root", "handle", "1:", "htb", "default", "10")
+        assert not kernel_verifier.verify_receive_shaping(host_if, receive_mbps=600.0).verified
+        namespace_ops.apply_receive_shaping(host_if, 600.0)
+        _assert_receive_shaping(host_if, receive_mbps=600.0)
+        namespace_ops.apply_receive_shaping(host_if, 100.0)
+        _assert_receive_shaping(host_if, receive_mbps=100.0)
+        assert kernel_verifier.verify_receive_shaping(host_if, receive_mbps=100.0).verified
 
     finally:
         if proc is not None and proc.poll() is None:
@@ -304,7 +377,7 @@ def test_handle_batch_link_up_down_proves_local_isl_kernel_state():
                         link_type=node_agent_pb2.LINK_TYPE_ISL,
                         locality=node_agent_pb2.LOCALITY_LOCAL,
                         latency_ms=6.0,
-                        bandwidth_mbps=1000.0,
+                        rates=_rates(2000.0, 1500.0),
                         peer_node_id=node_b,
                         peer_interface_name="isl1",
                     ),
@@ -314,7 +387,7 @@ def test_handle_batch_link_up_down_proves_local_isl_kernel_state():
                         link_type=node_agent_pb2.LINK_TYPE_ISL,
                         locality=node_agent_pb2.LOCALITY_LOCAL,
                         latency_ms=6.0,
-                        bandwidth_mbps=1000.0,
+                        rates=_rates(100.0, 2000.0),
                         peer_node_id=node_a,
                         peer_interface_name="isl0",
                     ),
@@ -329,8 +402,12 @@ def test_handle_batch_link_up_down_proves_local_isl_kernel_state():
 
             assert response.success is True
             assert all(result.verified for result in response.interface_results)
-            _assert_qdisc(ns_a, "isl0", 6.0)
-            _assert_qdisc(ns_b, "isl1", 6.0)
+            # Each end is its own terminal: A sends 2000 and receives 1500,
+            # B sends 100 and receives 2000.
+            _assert_transmit_shaping(ns_a, "isl0", delay_ms=6.0, transmit_mbps=2000.0)
+            _assert_transmit_shaping(ns_b, "isl1", delay_ms=6.0, transmit_mbps=100.0)
+            _assert_receive_shaping(host_a, receive_mbps=1500.0)
+            _assert_receive_shaping(host_b, receive_mbps=2000.0)
             assert kernel_verifier.verify_host_interface_state(host_a, admin_up=True).verified
             assert kernel_verifier.verify_host_interface_state(host_b, admin_up=True).verified
 
@@ -469,7 +546,8 @@ def test_handle_batch_link_up_down_proves_local_ground_mirred_and_qdisc():
                         link_type=node_agent_pb2.LINK_TYPE_GROUND,
                         locality=node_agent_pb2.LOCALITY_LOCAL,
                         latency_ms=8.0,
-                        bandwidth_mbps=100.0,
+                        rates=_rates(600.0, 50.0),
+                        peer_rates=_rates(50.0, 600.0),
                         gs_id=gs_id,
                         sat_id=sat_id,
                         peer_node_id=sat_id,
@@ -487,8 +565,11 @@ def test_handle_batch_link_up_down_proves_local_ground_mirred_and_qdisc():
             assert response.interface_results[0].verified is True
             assert kernel_verifier.verify_mirred(gs_port, sat_host).verified
             assert kernel_verifier.verify_mirred(sat_host, gs_port).verified
-            _assert_qdisc(gs_ns, "term0", 8.0)
-            _assert_qdisc(sat_ns, "gnd0", 8.0)
+            # The station sends 600 and receives 50; the satellite the reverse.
+            _assert_transmit_shaping(gs_ns, "term0", delay_ms=8.0, transmit_mbps=600.0)
+            _assert_transmit_shaping(sat_ns, "gnd0", delay_ms=8.0, transmit_mbps=50.0)
+            _assert_receive_shaping(gs_port, receive_mbps=50.0)
+            _assert_receive_shaping(sat_host, receive_mbps=600.0)
 
             down = node_agent_pb2.BatchLinkDownRequest(
                 envelope=_env("BatchLinkDown", "root-local-ground-down", generation),
@@ -558,7 +639,7 @@ def test_handle_batch_link_up_down_proves_cross_node_isl_vxlan_and_qdisc(monkeyp
                         link_type=node_agent_pb2.LINK_TYPE_ISL,
                         locality=node_agent_pb2.LOCALITY_CROSS_NODE,
                         latency_ms=5.0,
-                        bandwidth_mbps=1000.0,
+                        rates=_rates(2000.0, 1500.0),
                         peer_node_id="sat-remote",
                         peer_interface_name="isl1",
                         remote_node_ip=remote_ip,
@@ -577,7 +658,8 @@ def test_handle_batch_link_up_down_proves_cross_node_isl_vxlan_and_qdisc(monkeyp
             assert kernel_verifier.verify_vxlan(
                 vni, local_ip=local_ip, remote_ip=remote_ip
             ).verified
-            _assert_qdisc(namespace, "isl0", 5.0)
+            _assert_transmit_shaping(namespace, "isl0", delay_ms=5.0, transmit_mbps=2000.0)
+            _assert_receive_shaping(veth_host, receive_mbps=1500.0)
             assert [ref.remote_ip for ref in substrate_monitor.get_active_refs()] == [remote_ip]
 
             down = node_agent_pb2.BatchLinkDownRequest(
@@ -655,7 +737,7 @@ def test_handle_batch_link_up_down_proves_cross_node_ground_vxlan_mirred_and_qdi
                         link_type=node_agent_pb2.LINK_TYPE_GROUND,
                         locality=node_agent_pb2.LOCALITY_CROSS_NODE,
                         latency_ms=9.0,
-                        bandwidth_mbps=100.0,
+                        rates=_rates(50.0, 600.0),
                         gs_id=gs_id,
                         sat_id=sat_id,
                         peer_node_id=gs_id,
@@ -678,7 +760,8 @@ def test_handle_batch_link_up_down_proves_cross_node_ground_vxlan_mirred_and_qdi
             ).verified
             assert kernel_verifier.verify_mirred(vxlan_if, sat_host).verified
             assert kernel_verifier.verify_mirred(sat_host, vxlan_if).verified
-            _assert_qdisc(namespace, "gnd0", 9.0)
+            _assert_transmit_shaping(namespace, "gnd0", delay_ms=9.0, transmit_mbps=50.0)
+            _assert_receive_shaping(sat_host, receive_mbps=600.0)
             assert [ref.remote_ip for ref in substrate_monitor.get_active_refs()] == [remote_ip]
 
             down = node_agent_pb2.BatchLinkDownRequest(
@@ -739,7 +822,7 @@ def test_handle_set_latency_proves_kernel_qdisc_state():
         if proc.poll() is not None:
             raise RuntimeError("namespace keeper process exited before handler test")
 
-        namespace_ops.apply_link_shaping(proc.pid, "isl0", delay_ms=12.0, rate_mbps=1000.0)
+        namespace_ops.apply_transmit_shaping(proc.pid, "isl0", 12.0, 1000.0)
         generation = _generation()
         request = node_agent_pb2.SetLatencyRequest(
             envelope=_env("SetLatency", "root-set-latency", generation),
@@ -748,6 +831,7 @@ def test_handle_set_latency_proves_kernel_qdisc_state():
                     node_id="sat-a",
                     interface_name="isl0",
                     latency_ms=7.0,
+                    transmit_mbps=1000.0,
                     link_type=node_agent_pb2.LINK_TYPE_ISL,
                 )
             ],
@@ -761,9 +845,7 @@ def test_handle_set_latency_proves_kernel_qdisc_state():
 
         assert response.success is True
         assert response.entry_results[0].verified is True
-        qdisc = _qdisc_text(namespace, "isl0")
-        assert "netem" in qdisc
-        assert "delay 7ms" in qdisc or "delay 7.0ms" in qdisc
+        _assert_transmit_shaping(namespace, "isl0", delay_ms=7.0, transmit_mbps=1000.0)
 
     finally:
         if proc is not None and proc.poll() is None:
@@ -797,7 +879,7 @@ def _isl_up(node_id: str, vni: int, remote_ip: str, generation: str, op_id: str)
                 link_type=node_agent_pb2.LINK_TYPE_ISL,
                 locality=node_agent_pb2.LOCALITY_CROSS_NODE,
                 latency_ms=5.0,
-                bandwidth_mbps=1000.0,
+                rates=_rates(2000.0, 1500.0),
                 peer_node_id="sat-remote",
                 peer_interface_name="isl1",
                 remote_node_ip=remote_ip,
@@ -1051,10 +1133,6 @@ def test_vnis_folded_together_by_the_retired_rule_coexist_on_one_host(monkeypatc
         substrate_monitor._reset_for_tests()
 
 
-def _tc(*args: str) -> str:
-    return _run("tc", *args).stdout
-
-
 def _ingress_state(ifname: str) -> str:
     """The interface's ingress side as tc reports it: its ingress-parent qdisc and every filter."""
     qdiscs = [
@@ -1164,7 +1242,7 @@ def test_cross_node_ground_refuses_an_occupied_local_interface(monkeypatch, occu
                             link_type=node_agent_pb2.LINK_TYPE_GROUND,
                             locality=node_agent_pb2.LOCALITY_CROSS_NODE,
                             latency_ms=9.0,
-                            bandwidth_mbps=100.0,
+                            rates=_rates(50.0, 600.0),
                             gs_id=gs_id,
                             sat_id=sat_id,
                             peer_node_id=gs_id,
@@ -1203,7 +1281,8 @@ def _local_ground_up(gs_id: str, sat_id: str, generation: str, op_id: str):
                 link_type=node_agent_pb2.LINK_TYPE_GROUND,
                 locality=node_agent_pb2.LOCALITY_LOCAL,
                 latency_ms=8.0,
-                bandwidth_mbps=100.0,
+                rates=_rates(600.0, 50.0),
+                peer_rates=_rates(50.0, 600.0),
                 gs_id=gs_id,
                 sat_id=sat_id,
                 peer_node_id=sat_id,

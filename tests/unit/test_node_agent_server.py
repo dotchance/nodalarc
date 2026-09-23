@@ -96,7 +96,7 @@ def test_unspecified_enum_is_rejected_through_full_dispatch_path() -> None:
                 interface_name="isl0",
                 locality=node_agent_pb2.LOCALITY_LOCAL,
                 latency_ms=1.0,
-                bandwidth_mbps=1000.0,
+                rates=node_agent_pb2.TerminalRates(transmit_mbps=1000.0, receive_mbps=1000.0),
                 peer_node_id="sat-b",
                 peer_interface_name="isl1",
             )

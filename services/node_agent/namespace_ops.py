@@ -20,8 +20,19 @@ from collections.abc import Callable
 from typing import TypeVar
 
 from pyroute2 import IPRoute
+from pyroute2.netlink.rtnl import TC_H_ROOT
 
-from node_agent.tc_units import delay_ms_to_netem_us
+from node_agent.kernel_constants import (
+    NETEM_HANDLE,
+    SHAPER_CLASS_HANDLE,
+    SHAPER_DEFAULT_CLASS,
+    SHAPER_ROOT_HANDLE,
+)
+from node_agent.tc_units import (
+    delay_ms_to_netem_us,
+    mbps_to_bytes_per_second,
+    netem_limit_packets,
+)
 
 log = logging.getLogger(__name__)
 
@@ -84,6 +95,20 @@ def _in_namespace(pid: int, fn: Callable[[IPRoute], _T]) -> _T:
         os.close(target_fd)
 
 
+def in_host_namespace(fn: Callable[[IPRoute], _T]) -> _T:
+    """Execute fn(ipr) in the host network namespace, serialized with _ns_lock."""
+    with _ns_lock:
+        ret = _libc.setns(_get_host_ns_fd(), _CLONE_NEWNET)
+        if ret != 0:
+            errno = ctypes.get_errno()
+            raise OSError(errno, f"setns to host failed: {os.strerror(errno)}")
+        ipr = IPRoute()
+        try:
+            return fn(ipr)
+        finally:
+            ipr.close()
+
+
 # ---------------------------------------------------------------------------
 # MAC helper (link_manager.py L357-364)
 # ---------------------------------------------------------------------------
@@ -138,70 +163,127 @@ def set_interface_down(pid: int, ifname: str) -> None:
 # ---------------------------------------------------------------------------
 
 
-def apply_link_shaping(
-    pid: int,
-    ifname: str,
-    delay_ms: float,
-    rate_mbps: float,
-) -> None:
-    """Apply tc tbf root + netem child for bandwidth and delay.
+# Egress shaping hierarchy on one interface: an HTB root whose one class
+# carries the terminal's rate (HTB carries 64-bit rates, so terminals above
+# 34 Gbit/s are shaped at their declared rate), with a netem child for the
+# one-way delay on the transmitting side.
+_SHAPER_ROOT = SHAPER_ROOT_HANDLE  # 1:
+_SHAPER_CLASS = SHAPER_CLASS_HANDLE  # 1:1
+_NETEM_HANDLE = NETEM_HANDLE  # 10:
+# Link MTU from the wiring manifest; the token bucket always holds at least
+# one full frame.
+_JUMBO_FRAME_BYTES = 9000
+# One class, so the quantum only has to cover one jumbo frame.
+_SHAPER_QUANTUM_BYTES = 16384
 
-    Strictly idempotent via NLM_F_REPLACE | NLM_F_CREATE: creates the
-    qdisc if it doesn't exist, replaces it in-place if it does. No
-    need to delete first, no race window, safe to call regardless of
-    prior interface state (fresh, previously shaped, or orphaned from
-    a prior LinkDown that skipped shaping removal).
 
-    Deterministic handle hierarchy:
-      TBF root:   handle 0x00010000  (1:0 in tc notation)
-      netem child: handle 0x00100000  (16:0) parent 0x00010001 (1:1)
+def _is_shaper_root(qdisc) -> bool:
+    """True for the HTB root at 1: that sends all traffic to class 1:1."""
+    if qdisc["handle"] != _SHAPER_ROOT or qdisc.get_attr("TCA_KIND") != "htb":
+        return False
+    init = qdisc.get_attr("TCA_OPTIONS").get_attr("TCA_HTB_INIT")
+    return init is not None and init["defcls"] == SHAPER_DEFAULT_CLASS
 
-    Called on LinkUp. Subsequent delay-only changes use update_delay().
+
+def _install_shaper_root(ipr: IPRoute, idx: int) -> None:
+    """Make the interface's root qdisc the HTB shaper root.
+
+    The kernel cannot change an HTB root in place, so an existing shaper root
+    stays as it is. Any other root the interface carries (the former tbf
+    shaper, or an HTB root with another default class) is deleted first; the
+    device's default qdisc (handle 0) is replaced by the add itself.
     """
-    rate_bps = int(rate_mbps * 1_000_000)
-    if rate_bps > 0xFFFFFFFF:
-        rate_bps = 0xFFFFFFFF
-    burst = max(9000, rate_bps // 250)
-    if burst > 0xFFFFFFFF:
-        burst = 0xFFFFFFFF
-    latency_us = 50000  # 50ms buffer
+    root = next((q for q in ipr.get_qdiscs(index=idx) if q["parent"] == TC_H_ROOT), None)
+    if root is not None and _is_shaper_root(root):
+        return
+    if root is not None and root["handle"] != 0:
+        log.info(
+            "Replacing root qdisc %s (handle %#x) on ifindex %s with the HTB shaper",
+            root.get_attr("TCA_KIND"),
+            root["handle"],
+            idx,
+        )
+        ipr.tc("del", index=idx, parent=TC_H_ROOT)
+    ipr.tc("add", kind="htb", index=idx, handle=_SHAPER_ROOT, default=SHAPER_DEFAULT_CLASS)
+
+
+def _rate_limit_egress(ipr: IPRoute, idx: int, rate_mbps: float) -> None:
+    """Shape an interface's egress to ``rate_mbps`` through HTB class 1:1."""
+    rate = mbps_to_bytes_per_second(rate_mbps)
+    burst = max(_JUMBO_FRAME_BYTES, rate // 250)
+    _install_shaper_root(ipr, idx)
+    ipr.tc(
+        "replace-class",
+        kind="htb",
+        index=idx,
+        handle=_SHAPER_CLASS,
+        parent=_SHAPER_ROOT,
+        rate=rate,
+        ceil=rate,
+        burst=burst,
+        cburst=burst,
+        quantum=_SHAPER_QUANTUM_BYTES,
+    )
+
+
+def apply_transmit_shaping(pid: int, ifname: str, delay_ms: float, transmit_mbps: float) -> None:
+    """Shape a pod interface's egress: the terminal's transmit rate and the link delay.
+
+    Strictly idempotent through replace semantics: safe on a fresh, a
+    previously shaped or an orphaned interface. Called on LinkUp; later
+    delay-only changes use update_delay().
+    """
     delay_us = delay_ms_to_netem_us(delay_ms)
+    limit = netem_limit_packets(transmit_mbps, delay_ms)
 
     def _op(ipr: IPRoute) -> None:
         links = ipr.link_lookup(ifname=ifname)
         if not links:
             raise FileNotFoundError(f"Interface {ifname} not found in ns({pid})")
         idx = links[0]
+        _rate_limit_egress(ipr, idx, transmit_mbps)
         ipr.tc(
             "replace",
-            kind="tbf",
+            kind="netem",
             index=idx,
-            handle=0x00010000,
-            rate=rate_bps,
-            burst=burst,
-            latency=latency_us,
-        )
-        ipr.tc(
-            "replace", kind="netem", index=idx, handle=0x00100000, parent=0x00010001, delay=delay_us
+            handle=_NETEM_HANDLE,
+            parent=_SHAPER_CLASS,
+            delay=delay_us,
+            limit=limit,
         )
 
     _in_namespace(pid, _op)
     log.debug(
-        "Applied shaping on ns(%s)/%s: %sms, %sMbps",
-        pid,
-        ifname,
-        delay_ms,
-        rate_mbps,
+        "Applied transmit shaping on ns(%s)/%s: %sms, %sMbps", pid, ifname, delay_ms, transmit_mbps
     )
 
 
-def update_delay(pid: int, ifname: str, delay_ms: float) -> None:
-    """Update netem delay on an existing qdisc chain.
+def apply_receive_shaping(host_ifname: str, receive_mbps: float) -> None:
+    """Shape what a pod interface receives: its terminal's receive rate.
 
-    Uses tc "change" — NOT "add" or "replace". The qdisc must already
-    exist from apply_link_shaping(). This only modifies the delay parameter.
+    Every pod interface is fed through its host-side veth, so that veth's
+    egress is the pod interface's ingress.
+    """
+
+    def _op(ipr: IPRoute) -> None:
+        links = ipr.link_lookup(ifname=host_ifname)
+        if not links:
+            raise FileNotFoundError(f"Host interface {host_ifname} not found")
+        _rate_limit_egress(ipr, links[0], receive_mbps)
+
+    in_host_namespace(_op)
+    log.debug("Applied receive shaping on host/%s: %sMbps", host_ifname, receive_mbps)
+
+
+def update_delay(pid: int, ifname: str, delay_ms: float, transmit_mbps: float) -> None:
+    """Change the netem delay, and the queue limit that follows it, on a shaped interface.
+
+    Uses tc "change": the shaper from apply_transmit_shaping() must exist.
+    Every change carries the limit, because pyroute2 sets a change that
+    omits it to the kernel default of 1000 packets.
     """
     delay_us = delay_ms_to_netem_us(delay_ms)
+    limit = netem_limit_packets(transmit_mbps, delay_ms)
 
     def _op(ipr: IPRoute) -> None:
         links = ipr.link_lookup(ifname=ifname)
@@ -211,9 +293,10 @@ def update_delay(pid: int, ifname: str, delay_ms: float) -> None:
             "change",
             kind="netem",
             index=links[0],
-            handle=0x00100000,
-            parent=0x00010001,
+            handle=_NETEM_HANDLE,
+            parent=_SHAPER_CLASS,
             delay=delay_us,
+            limit=limit,
         )
 
     _in_namespace(pid, _op)

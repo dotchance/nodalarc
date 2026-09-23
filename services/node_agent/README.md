@@ -10,7 +10,8 @@ payload messages only.
 ## Operations
 
 - Create host-mediated veth pairs with tc mirred redirect (carrier-gated model: pod-side always admin UP, host-side admin state controls carrier)
-- Apply tc netem (latency) and tc tbf (bandwidth) shaping
+- Shape each pod interface from its own terminal: HTB transmit rate plus netem
+  delay on the pod interface, HTB receive rate on the host-side veth that feeds it
 - Apply and verify cross-node ground shaping on the local terminal endpoint
 - Manage ground station bridge and tc mirred redirect attachments
 - Enable MPLS forwarding on interfaces

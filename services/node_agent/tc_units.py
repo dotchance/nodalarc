@@ -21,6 +21,34 @@ def delay_ms_to_netem_us(delay_ms: float) -> int:
     return int(math.floor(delay_ms * 1000.0 + 0.5))
 
 
+def mbps_to_bytes_per_second(rate_mbps: float) -> int:
+    """Convert a terminal rate in megabits per second to tc's bytes per second.
+
+    tc rate fields count bytes per second; a rate in bits per second would
+    shape the link eight times faster than the terminal it emulates.
+    """
+    if not rate_mbps > 0:
+        raise ValueError(f"shaping rate must be positive, got {rate_mbps}")
+    return int(math.floor(rate_mbps * 1_000_000 / 8 + 0.5))
+
+
+# Netem counts packets, and it holds every packet for the link delay. Its limit
+# is the packets a link carries in flight at the terminal's transmit rate,
+# counted at a standard Ethernet MTU, plus a buffer for packets waiting to be
+# sent. The buffer is the kernel's default netem limit, which every link ran
+# with before the in-flight room was added.
+NETEM_IN_FLIGHT_PACKET_BYTES = 1500
+NETEM_BUFFER_PACKETS = 1000
+
+
+def netem_limit_packets(transmit_mbps: float, delay_ms: float) -> int:
+    """The netem queue limit for a link end transmitting at ``transmit_mbps``."""
+    if delay_ms < 0:
+        raise ValueError(f"netem delay must be non-negative, got {delay_ms}")
+    in_flight_bytes = mbps_to_bytes_per_second(transmit_mbps) * delay_ms / 1000.0
+    return math.ceil(in_flight_bytes / NETEM_IN_FLIGHT_PACKET_BYTES) + NETEM_BUFFER_PACKETS
+
+
 def netem_us_to_ticks(delay_us: int) -> int:
     """Convert netem microseconds to the scheduler ticks reported by pyroute2."""
     if delay_us < 0:

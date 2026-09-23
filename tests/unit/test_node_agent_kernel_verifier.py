@@ -3,41 +3,100 @@ import struct
 
 import pytest
 from node_agent import kernel_verifier
-from node_agent.tc_units import delay_ms_to_netem_us, netem_us_to_ticks
+from node_agent.tc_units import delay_ms_to_netem_us, netem_limit_packets, netem_us_to_ticks
 from pyroute2.netlink.rtnl import TC_H_INGRESS
 from pyroute2.netlink.rtnl.tcmsg import common as tc_common
 
 
-def _qdisc_rows(*, delay_ticks: int, rate_bps: int = 1_000_000_000):
-    return [
-        {
-            "kind": "tbf",
-            "options": {"attrs": [("TCA_TBF_PARMS", {"rate": rate_bps})]},
-            "raw": "tbf raw",
-        },
-        {
-            "kind": "netem",
-            "options": {"delay": delay_ticks},
-            "raw": "netem raw",
-        },
-    ]
+class _Nlmsg(dict):
+    """A netlink message as pyroute2 decodes it: header fields plus attributes."""
+
+    def __init__(self, fields: dict, attrs: dict) -> None:
+        super().__init__(fields)
+        self._attrs = attrs
+
+    def get_attr(self, name: str):
+        return self._attrs.get(name)
+
+
+def _htb_class_options(rate_bytes: int) -> _Nlmsg:
+    """HTB class options: rates of 2**32 bytes/s and above travel in RATE64."""
+    if rate_bytes >= 1 << 32:
+        return _Nlmsg({}, {"TCA_HTB_PARMS": {"rate": (1 << 32) - 1}, "TCA_HTB_RATE64": rate_bytes})
+    return _Nlmsg({}, {"TCA_HTB_PARMS": {"rate": rate_bytes}})
+
+
+class _ShaperIpr:
+    """One interface's egress shaper as the kernel reports it."""
+
+    def __init__(
+        self,
+        *,
+        rate_bytes: int | None,
+        delay_ticks: int | None,
+        root_kind: str = "htb",
+        default_class: int = 1,
+        limit: int | None = None,
+    ) -> None:
+        root_options = (
+            _Nlmsg({}, {"TCA_HTB_INIT": {"defcls": default_class}}) if root_kind == "htb" else None
+        )
+        self.qdiscs = [
+            _Nlmsg(
+                {"handle": 0x00010000, "parent": 0xFFFFFFFF},
+                {"TCA_KIND": root_kind, "TCA_OPTIONS": root_options},
+            )
+        ]
+        if delay_ticks is not None:
+            self.qdiscs.append(
+                _Nlmsg(
+                    {"handle": 0x00100000, "parent": 0x00010001},
+                    {
+                        "TCA_KIND": "netem",
+                        "TCA_OPTIONS": {"delay": delay_ticks}
+                        | ({} if limit is None else {"limit": limit}),
+                    },
+                )
+            )
+        self.classes = []
+        if rate_bytes is not None:
+            self.classes.append(
+                _Nlmsg(
+                    {"handle": 0x00010001, "parent": 0x00010000},
+                    {"TCA_KIND": "htb", "TCA_OPTIONS": _htb_class_options(rate_bytes)},
+                )
+            )
+
+    def link_lookup(self, *, ifname: str):
+        return [7]
+
+    def get_qdiscs(self, index: int):
+        assert index == 7
+        return self.qdiscs
+
+    def get_classes(self, index: int):
+        assert index == 7
+        return self.classes
+
+
+def _in_pod(ipr: _ShaperIpr, pid_expected: int = 1234):
+    def _run(pid, fn):
+        assert pid == pid_expected
+        return fn(ipr)
+
+    return _run
 
 
 def test_verify_qdisc_compares_netem_delay_in_tc_scheduler_ticks(monkeypatch):
     expected_ticks = int(tc_common.time2tick(6000))
-
-    def _fake_run_in_pod_namespace(pid, fn):
-        assert pid == 1234
-        return _qdisc_rows(delay_ticks=expected_ticks)
-
-    monkeypatch.setattr(kernel_verifier, "run_in_pod_namespace", _fake_run_in_pod_namespace)
-
-    proof = kernel_verifier.verify_qdisc(
-        1234,
-        "isl0",
-        delay_ms=6.0,
-        rate_mbps=1000.0,
+    ipr = _ShaperIpr(
+        rate_bytes=125_000_000,
+        delay_ticks=expected_ticks,
+        limit=netem_limit_packets(1000.0, 6.0),
     )
+    monkeypatch.setattr(kernel_verifier, "run_in_pod_namespace", _in_pod(ipr))
+
+    proof = kernel_verifier.verify_qdisc(1234, "isl0", delay_ms=6.0, transmit_mbps=1000.0)
 
     assert proof.verified is True
     assert f"delay_ticks={expected_ticks}" in proof.evidence
@@ -46,43 +105,156 @@ def test_verify_qdisc_compares_netem_delay_in_tc_scheduler_ticks(monkeypatch):
 def test_verify_qdisc_uses_shared_fractional_delay_normalization(monkeypatch):
     delay_ms = 3.2466744768292792
     expected_us = delay_ms_to_netem_us(delay_ms)
-    expected_ticks = netem_us_to_ticks(expected_us)
-
-    def _fake_run_in_pod_namespace(pid, fn):
-        assert pid == 1234
-        return _qdisc_rows(delay_ticks=expected_ticks)
-
-    monkeypatch.setattr(kernel_verifier, "run_in_pod_namespace", _fake_run_in_pod_namespace)
-
-    proof = kernel_verifier.verify_qdisc(
-        1234,
-        "term0",
-        delay_ms=delay_ms,
-        rate_mbps=1000.0,
+    ipr = _ShaperIpr(
+        rate_bytes=125_000_000,
+        delay_ticks=netem_us_to_ticks(expected_us),
+        limit=netem_limit_packets(1000.0, delay_ms),
     )
+    monkeypatch.setattr(kernel_verifier, "run_in_pod_namespace", _in_pod(ipr))
+
+    proof = kernel_verifier.verify_qdisc(1234, "term0", delay_ms=delay_ms, transmit_mbps=1000.0)
 
     assert proof.verified is True
     assert f"delay_us={expected_us}" in proof.evidence
 
 
 def test_verify_qdisc_rejects_unconverted_microsecond_delay(monkeypatch):
-    def _fake_run_in_pod_namespace(pid, fn):
-        assert pid == 1234
-        return _qdisc_rows(delay_ticks=6000)
+    ipr = _ShaperIpr(rate_bytes=125_000_000, delay_ticks=6000)
+    monkeypatch.setattr(kernel_verifier, "run_in_pod_namespace", _in_pod(ipr))
 
-    monkeypatch.setattr(kernel_verifier, "run_in_pod_namespace", _fake_run_in_pod_namespace)
-
-    proof = kernel_verifier.verify_qdisc(
-        1234,
-        "isl0",
-        delay_ms=6.0,
-        rate_mbps=1000.0,
-    )
+    proof = kernel_verifier.verify_qdisc(1234, "isl0", delay_ms=6.0, transmit_mbps=1000.0)
 
     assert proof.verified is False
     assert proof.summary == "netem delay mismatch on isl0"
     assert any(evidence.startswith("expected_ticks=") for evidence in proof.evidence)
     assert "actual_ticks=6000" in proof.evidence
+
+
+def test_verify_qdisc_proves_the_transmit_rate_in_bytes_per_second(monkeypatch):
+    """1000 Mbit/s is 125,000,000 bytes/s. The former bits-as-bytes command
+    (1,000,000,000) shaped eight times faster than the terminal and must fail."""
+    ticks = netem_us_to_ticks(delay_ms_to_netem_us(6.0))
+    limit = netem_limit_packets(1000.0, 6.0)
+    correct = _ShaperIpr(rate_bytes=125_000_000, delay_ticks=ticks, limit=limit)
+    monkeypatch.setattr(kernel_verifier, "run_in_pod_namespace", _in_pod(correct))
+    assert kernel_verifier.verify_qdisc(1234, "isl0", delay_ms=6.0, transmit_mbps=1000.0).verified
+
+    eightfold = _ShaperIpr(rate_bytes=1_000_000_000, delay_ticks=ticks, limit=limit)
+    monkeypatch.setattr(kernel_verifier, "run_in_pod_namespace", _in_pod(eightfold))
+    proof = kernel_verifier.verify_qdisc(1234, "isl0", delay_ms=6.0, transmit_mbps=1000.0)
+    assert proof.verified is False
+    assert proof.summary == "htb rate mismatch on isl0"
+    assert "expected_bytes_per_s=125000000" in proof.evidence
+    assert "actual_bytes_per_s=1000000000" in proof.evidence
+
+
+def test_verify_qdisc_proves_the_netem_limit_follows_rate_and_delay(monkeypatch):
+    """1000 Mbit/s over 6 ms holds 500 full-size packets in flight, plus the
+    1000-packet buffer. The kernel default of 1000 caps the link below its rate."""
+    ticks = netem_us_to_ticks(delay_ms_to_netem_us(6.0))
+    assert netem_limit_packets(1000.0, 6.0) == 1500
+
+    default_limit = _ShaperIpr(rate_bytes=125_000_000, delay_ticks=ticks, limit=1000)
+    monkeypatch.setattr(kernel_verifier, "run_in_pod_namespace", _in_pod(default_limit))
+    proof = kernel_verifier.verify_qdisc(1234, "isl0", delay_ms=6.0, transmit_mbps=1000.0)
+
+    assert proof.verified is False
+    assert proof.summary == "netem limit mismatch on isl0"
+    assert "expected_packets=1500" in proof.evidence
+    assert "actual_packets=1000" in proof.evidence
+
+
+def test_verify_qdisc_reads_rates_above_the_32_bit_field(monkeypatch):
+    """A 200 Gbit/s terminal shapes at 25e9 bytes/s through HTB's RATE64."""
+    ticks = netem_us_to_ticks(delay_ms_to_netem_us(1.0))
+    ipr = _ShaperIpr(
+        rate_bytes=25_000_000_000,
+        delay_ticks=ticks,
+        limit=netem_limit_packets(200_000.0, 1.0),
+    )
+    monkeypatch.setattr(kernel_verifier, "run_in_pod_namespace", _in_pod(ipr))
+
+    proof = kernel_verifier.verify_qdisc(1234, "isl0", delay_ms=1.0, transmit_mbps=200_000.0)
+
+    assert proof.verified is True
+
+
+def test_verify_qdisc_refuses_the_former_tbf_shaper(monkeypatch):
+    ticks = netem_us_to_ticks(delay_ms_to_netem_us(6.0))
+    ipr = _ShaperIpr(rate_bytes=None, delay_ticks=ticks, root_kind="tbf")
+    monkeypatch.setattr(kernel_verifier, "run_in_pod_namespace", _in_pod(ipr))
+
+    proof = kernel_verifier.verify_qdisc(1234, "isl0", delay_ms=6.0, transmit_mbps=1000.0)
+
+    assert proof.verified is False
+    assert proof.summary == "missing htb shaper on isl0"
+
+
+def test_verify_qdisc_reads_delay_only_from_netem_options(monkeypatch):
+    """The netem delay comes from the kernel's TCA_OPTIONS field and nowhere else.
+
+    A netem qdisc whose options carry no delay fails the proof, even when its
+    printed form mentions one.
+    """
+    ipr = _ShaperIpr(rate_bytes=125_000_000, delay_ticks=netem_us_to_ticks(6000))
+    netem = ipr.qdiscs[1]
+    netem._attrs["TCA_OPTIONS"] = {}
+    monkeypatch.setattr(kernel_verifier, "run_in_pod_namespace", _in_pod(ipr))
+    monkeypatch.setattr(_Nlmsg, "__repr__", lambda self: "{'delay': 93750}")
+
+    proof = kernel_verifier.verify_qdisc(1234, "isl0", delay_ms=6.0, transmit_mbps=1000.0)
+
+    assert proof.verified is False
+    assert proof.summary == "cannot read netem delay for isl0"
+
+
+def test_verify_qdisc_requires_netem_beneath_the_rate_class(monkeypatch):
+    """A netem qdisc anywhere else does not carry the link delay under the shaper."""
+    ipr = _ShaperIpr(rate_bytes=125_000_000, delay_ticks=netem_us_to_ticks(6000))
+    ipr.qdiscs[1] = _Nlmsg(
+        {"handle": 0x00100000, "parent": 0xFFFFFFFF},
+        {"TCA_KIND": "netem", "TCA_OPTIONS": {"delay": netem_us_to_ticks(6000)}},
+    )
+    monkeypatch.setattr(kernel_verifier, "run_in_pod_namespace", _in_pod(ipr))
+
+    proof = kernel_verifier.verify_qdisc(1234, "isl0", delay_ms=6.0, transmit_mbps=1000.0)
+
+    assert proof.verified is False
+    assert proof.summary == "missing netem qdisc on isl0"
+
+
+def test_rate_proof_requires_the_root_to_send_traffic_to_the_rate_class(monkeypatch):
+    """An HTB root whose default class is not 1:1 leaves traffic unshaped."""
+    ipr = _ShaperIpr(rate_bytes=75_000_000, delay_ticks=None, default_class=0x10)
+    monkeypatch.setattr(kernel_verifier, "run_in_host_namespace", lambda fn: fn(ipr))
+
+    proof = kernel_verifier.verify_receive_shaping("vh0003e9", receive_mbps=600.0)
+
+    assert proof.verified is False
+    assert (
+        proof.summary == "htb shaper root on host/vh0003e9 does not send traffic to its rate class"
+    )
+    assert "actual_default_class=16" in proof.evidence
+
+
+def test_verify_receive_shaping_proves_the_host_veth_rate(monkeypatch):
+    """The host-side veth feeding a pod interface carries its terminal's receive rate."""
+    ipr = _ShaperIpr(rate_bytes=75_000_000, delay_ticks=None)
+    monkeypatch.setattr(kernel_verifier, "run_in_host_namespace", lambda fn: fn(ipr))
+
+    proof = kernel_verifier.verify_receive_shaping("vh0003e9", receive_mbps=600.0)
+    assert proof.verified is True
+    assert "bytes_per_s=75000000" in proof.evidence
+
+    slower = kernel_verifier.verify_receive_shaping("vh0003e9", receive_mbps=50.0)
+    assert slower.verified is False
+    assert slower.summary == "htb rate mismatch on host/vh0003e9"
+
+    unshaped = _ShaperIpr(rate_bytes=None, delay_ticks=None, root_kind="noqueue")
+    monkeypatch.setattr(kernel_verifier, "run_in_host_namespace", lambda fn: fn(unshaped))
+    missing = kernel_verifier.verify_receive_shaping("vh0003e9", receive_mbps=600.0)
+    assert missing.verified is False
+    assert missing.summary == "missing htb shaper root on host/vh0003e9"
 
 
 _ETH_P_ALL_INFO = socket.htons(0x0003)
@@ -463,28 +635,22 @@ def test_verify_qdisc_sentinel_skips_delay_but_still_proves_presence_and_rate(mo
     """delay_ms < 0 is the explicit do-not-assert sentinel: the prover has no
     commanded netem value, so the delay must not be compared against an
     invented expectation - but shaping presence and rate stay proven."""
+    ipr = _ShaperIpr(rate_bytes=125_000_000, delay_ticks=12345)
+    monkeypatch.setattr(kernel_verifier, "run_in_pod_namespace", _in_pod(ipr))
 
-    def _fake_run_in_pod_namespace(pid, fn):
-        return _qdisc_rows(delay_ticks=12345)
-
-    monkeypatch.setattr(kernel_verifier, "run_in_pod_namespace", _fake_run_in_pod_namespace)
-
-    proof = kernel_verifier.verify_qdisc(1234, "term0", delay_ms=-1.0, rate_mbps=1000.0)
+    proof = kernel_verifier.verify_qdisc(1234, "term0", delay_ms=-1.0, transmit_mbps=1000.0)
     assert proof.verified is True
     assert "not asserted" in proof.summary
 
     # Rate is still asserted under the sentinel.
-    wrong_rate = kernel_verifier.verify_qdisc(1234, "term0", delay_ms=-1.0, rate_mbps=4.0)
+    wrong_rate = kernel_verifier.verify_qdisc(1234, "term0", delay_ms=-1.0, transmit_mbps=4.0)
     assert wrong_rate.verified is False
     assert "rate mismatch" in wrong_rate.summary
 
     # Missing shaping is still a failure under the sentinel.
-    def _no_netem(pid, fn):
-        rows = [r for r in _qdisc_rows(delay_ticks=1) if r["kind"] != "netem"]
-        return rows
-
-    monkeypatch.setattr(kernel_verifier, "run_in_pod_namespace", _no_netem)
-    missing = kernel_verifier.verify_qdisc(1234, "term0", delay_ms=-1.0, rate_mbps=1000.0)
+    no_netem = _ShaperIpr(rate_bytes=125_000_000, delay_ticks=None)
+    monkeypatch.setattr(kernel_verifier, "run_in_pod_namespace", _in_pod(no_netem))
+    missing = kernel_verifier.verify_qdisc(1234, "term0", delay_ms=-1.0, transmit_mbps=1000.0)
     assert missing.verified is False
 
 

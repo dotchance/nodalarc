@@ -114,7 +114,7 @@ ground node. The OME computes orbital visibility and publishes facts over NATS.
 The Scheduler consumes visibility and desired topology snapshots, reconciles
 desired state against active state, and dispatches fenced operations to Node
 Agents. Node Agents run as privileged DaemonSets and perform host kernel work:
-veths, VXLAN, carrier state, `tc netem`, `tc tbf`, namespace entry, ground
+veths, VXLAN, carrier state, `tc netem`, `tc htb`, namespace entry, ground
 bridge attachment, and proof checks.
 
 Routing is real for the supported distributed modes. In OSPF or IS-IS mode,
@@ -218,7 +218,7 @@ but they cannot be checked here at implementation level.
 | Offline route replay | No for IGP modes | No for OSPF mode | Yes, emulator path model | Partly precomputed topology | Topology polling and reconfiguration | Yes | Yes, paper-derived |
 | Dynamic ISL/GSL changes | Yes | Yes | Yes | Yes | Yes | Yes | Paper-derived |
 | Make-before-break handoff model | Yes | No verified MBB proof | No first-class MBB | No verified MBB | No verified MBB | Handover modeled for SaTCP | Paper-only |
-| Delay injection backend | `tc netem`/`tbf` | TC eBPF timestamping + `fq` | `tc` or eBPF backend | `tc netem` | `tc`/netlink paths | Mininet `TCLink` | Paper-only |
+| Delay injection backend | `tc netem`/`htb` | TC eBPF timestamping + `fq` | `tc` or eBPF backend | `tc netem` | `tc`/netlink paths | Mininet `TCLink` | Paper-only |
 | Substrate latency compensation | Yes | Not needed single-host | Yes | No | Not verified | No | Paper-only |
 | Proof-bearing kernel ACKs | Yes | No | No equivalent | No | No equivalent observed | No | Paper-only |
 | Dirty-kernel/fail-closed contract | Yes | No | No equivalent | No | No equivalent observed | No | Paper-only |

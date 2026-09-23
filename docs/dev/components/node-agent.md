@@ -62,8 +62,18 @@ def _in_namespace(pid: int, fn: Callable):
 ### BatchLinkUp (LOCAL)
 
 1. Bring host-side veth admin UP -> carrier arrives on pod-side interface
-2. Apply tc netem (latency) and tc tbf (bandwidth) on pod-side interface
-3. For ground links: attach to ground bridge via tc mirred redirect
+2. Shape the pod-side interface's egress: an HTB class at the terminal's
+   transmit rate with a netem child carrying the link delay
+3. Shape the host-side veth that feeds the pod-side interface at the
+   terminal's receive rate (HTB class, no delay)
+4. For ground links: attach to ground bridge via tc mirred redirect
+
+Each end of a link is shaped from its own terminal. A terminal that transmits
+at 2 Mbit/s and receives at 100 Mbit/s keeps those two rates regardless of the
+terminal at the other end. The `rates` field of each `InterfaceUp` entry
+carries them; a LOCAL ground entry wires both ends and also carries
+`peer_rates`. HTB carries 64-bit byte rates, so terminals above 34 Gbit/s are
+shaped at their declared rate.
 
 ### BatchLinkUp (CROSS_NODE)
 
@@ -73,8 +83,9 @@ ISL and ground links use different CROSS_NODE paths:
   to the veth host end with tc mirred, move the pod end into the target
   namespace, bring it UP, then apply shaping.
 - **Ground:** attach a VXLAN interface to the already-wired local host-side
-  ground interface with tc mirred, apply tc tbf/netem on the local terminal
-  endpoint, and verify VXLAN, mirred, and qdisc state before ACK.
+  ground interface with tc mirred, shape the local terminal endpoint (transmit
+  on the pod interface, receive on its host-side veth), and verify VXLAN,
+  mirred, and qdisc state before ACK.
 
 ### BatchLinkDown
 
@@ -86,10 +97,17 @@ ISL and ground links use different CROSS_NODE paths:
 
 ### SetLatency
 
-Update tc netem delay value on an existing interface:
-```python
-tc qdisc change dev isl0 root netem delay {latency_ms}ms
+Update the netem delay beneath an existing shaper; the rate class is
+unchanged. Each entry carries the interface's transmit rate, because the netem
+queue limit follows rate and delay:
 ```
+tc qdisc change dev isl0 parent 1:1 handle 10: netem delay {latency_us}us limit {packets}
+```
+
+Netem holds every packet for the link delay, so its limit is the packets the
+link carries in flight at the transmit rate, counted at 1500 bytes, plus a
+1000-packet buffer. Traffic beyond that is dropped, as it would be on a real
+link.
 
 The response contains one `LatencyResult` per requested entry. Aggregate
 success is true only when every entry succeeded and was verified.
@@ -105,8 +123,9 @@ Batch operations are not advertised as atomic Linux transactions. The honest con
 5. set `dirty_kernel=true` when cleanup, rollback, or proof fails
 
 MVP proof verifies the postcondition that would make an ACK false if absent:
-pod interface existence, host state, VXLAN identity, mirred redirects, tbf/netem
-qdisc delay/rate, and cleanup after LinkDown. `SetLatency` runs through the
+pod interface existence, host state, VXLAN identity, mirred redirects, netem
+delay, the HTB transmit rate on the pod interface, the HTB receive rate on its
+host-side veth, and cleanup after LinkDown. `SetLatency` runs through the
 operation plan executor and fails if qdisc proof does not match the requested
 delay.
 

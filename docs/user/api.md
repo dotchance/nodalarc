@@ -27,7 +27,7 @@ TOKEN=$(curl -s http://localhost:8080/api/v1/auth/token | python3 -c "import jso
 curl -s -H "Authorization: Bearer $TOKEN" http://localhost:8080/api/v1/state | python3 -m json.tool
 ```
 
-Returns a JSON snapshot with all nodes (positions, link counts), all links (latency, bandwidth, type), recent events, and network health status.
+Returns a JSON snapshot with all nodes (positions, link counts), all links (latency, each direction's transmit rate, type), recent events, and network health status.
 
 ### Count satellites, ground nodes, and links
 
@@ -111,7 +111,7 @@ computation, then continuous state updates.
 The state snapshot contains:
 
 - **nodes** - array of all satellites, relay nodes, and ground nodes with position, link counts, segment metadata, and body/frame metadata
-- **links** - array of all active links with latency, bandwidth, type, and rule-derived relationship where available
+- **links** - array of all active links with latency, each direction's transmit rate (`transmit_mbps_a` for node_a to node_b, `transmit_mbps_b` for node_b to node_a), type, and rule-derived relationship where available
 - **recent_events** - last 50 link state changes and handoffs
 - **network_health** - convergence status
 - **sim_time** / **wall_time** - current simulation and wall-clock time

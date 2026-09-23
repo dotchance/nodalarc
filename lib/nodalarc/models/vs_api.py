@@ -71,7 +71,10 @@ class LinkState(BaseModel):
     link_type: str | None  # intra_plane_isl, cross_plane_isl, ground_uplink, ground_downlink
     link_reason: str | None
     latency_ms: float
-    bandwidth_mbps: float
+    # Each direction runs at its sending end's terminal transmit rate:
+    # node_a to node_b at transmit_mbps_a, node_b to node_a at transmit_mbps_b.
+    transmit_mbps_a: float
+    transmit_mbps_b: float
     range_km: float
     traffic_load_pct: float | None  # None = no probe data (distinct from 0)
     interface_a: str = ""

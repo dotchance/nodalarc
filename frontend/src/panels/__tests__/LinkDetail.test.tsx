@@ -13,7 +13,8 @@ function link(overrides: Partial<LinkState> = {}): LinkState {
     link_type: "isl",
     link_reason: "link_state_snapshot",
     latency_ms: 42,
-    bandwidth_mbps: 1000,
+    transmit_mbps_a: 1000,
+    transmit_mbps_b: 1000,
     range_km: 12000,
     traffic_load_pct: null,
     interface_a: "isl0",
@@ -75,5 +76,22 @@ describe("LinkDetail", () => {
     expect(screen.getByText("nearest_n")).toBeTruthy();
     expect(screen.getByText("Segments")).toBeTruthy();
     expect(screen.getByText("leo ↔ meo")).toBeTruthy();
+  });
+
+  it("shows each direction at its sending end's transmit rate", () => {
+    render(
+      <LinkDetail
+        link={link({ transmit_mbps_a: 50, transmit_mbps_b: 23.6 })}
+        snapshot={snapshot()}
+      />,
+    );
+
+    expect(screen.getByText("leo-sat-p00s00 → meo-sat-p00s00").nextSibling?.textContent).toBe(
+      "50 Mbps",
+    );
+    expect(screen.getByText("meo-sat-p00s00 → leo-sat-p00s00").nextSibling?.textContent).toBe(
+      "23.6 Mbps",
+    );
+    expect(screen.queryByText("Bandwidth")).toBeNull();
   });
 });

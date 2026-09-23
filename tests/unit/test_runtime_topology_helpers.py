@@ -18,7 +18,6 @@ def _resolved_assignments() -> frozenset[tuple[str, NeighborAssignment]]:
                     peer_node_id="shell-a-sat-2",
                     link_type="intra_plane_isl",
                     priority=1,
-                    bandwidth_mbps=1000.0,
                 ),
             ),
             (
@@ -28,7 +27,6 @@ def _resolved_assignments() -> frozenset[tuple[str, NeighborAssignment]]:
                     peer_node_id="shell-b-sat-1",
                     link_type="cross_plane_isl",
                     priority=0,
-                    bandwidth_mbps=500.0,
                 ),
             ),
             (
@@ -38,7 +36,6 @@ def _resolved_assignments() -> frozenset[tuple[str, NeighborAssignment]]:
                     peer_node_id="shell-a-sat-1",
                     link_type="intra_plane_isl",
                     priority=0,
-                    bandwidth_mbps=1000.0,
                 ),
             ),
             (
@@ -48,7 +45,6 @@ def _resolved_assignments() -> frozenset[tuple[str, NeighborAssignment]]:
                     peer_node_id="shell-a-sat-1",
                     link_type="cross_plane_isl",
                     priority=0,
-                    bandwidth_mbps=500.0,
                 ),
             ),
         }

@@ -61,7 +61,6 @@ def test_visibility_event_builds_desired_link_without_recomputing_geometry():
     pair, info = desired_link_from_visibility(
         event,
         interface_map={PAIR: ("isl0", "isl1")},
-        bandwidth_map={PAIR: 1000.0},
         ground_station_ids=frozenset(),
     )
 
@@ -70,7 +69,6 @@ def test_visibility_event_builds_desired_link_without_recomputing_geometry():
     assert info.interface_b == "isl1"
     assert info.range_km == event.range_km
     assert info.latency_ms == event.latency_ms
-    assert info.bandwidth_mbps == 1000.0
     assert info.authority_sim_time == SIM
     assert info.authority_source == "visibility_event"
 
@@ -96,7 +94,6 @@ def test_ground_visibility_event_uses_terminal_indices():
     pair, info = desired_link_from_visibility(
         event,
         interface_map={},
-        bandwidth_map={("gs-a", "sat-a"): 500.0},
         ground_station_ids=frozenset({"gs-a"}),
     )
 
@@ -127,7 +124,6 @@ def test_ground_visibility_event_maps_interfaces_by_endpoint_role_for_sat_first_
     pair, info = desired_link_from_visibility(
         event,
         interface_map={},
-        bandwidth_map={("luna-sat-p01s00", "lunar-ground-gs-nearside-relay-site"): 250.0},
         ground_station_ids=frozenset({"lunar-ground-gs-nearside-relay-site"}),
     )
 
@@ -159,7 +155,6 @@ def test_ground_visibility_event_requires_exactly_one_ground_endpoint():
         desired_link_from_visibility(
             event,
             interface_map={},
-            bandwidth_map={("sat-a", "sat-b"): 250.0},
             ground_station_ids=frozenset({"gs-a"}),
         )
 
@@ -167,7 +162,6 @@ def test_ground_visibility_event_requires_exactly_one_ground_endpoint():
         desired_link_from_visibility(
             event,
             interface_map={},
-            bandwidth_map={("sat-a", "sat-b"): 250.0},
             ground_station_ids=frozenset({"sat-a", "sat-b"}),
         )
 
@@ -192,7 +186,6 @@ def test_missing_isl_interface_map_fails_loudly():
         desired_link_from_visibility(
             event,
             interface_map={},
-            bandwidth_map={PAIR: 1000.0},
             ground_station_ids=frozenset(),
         )
 
@@ -208,7 +201,6 @@ def test_snapshot_link_builds_desired_link_and_skips_down_links():
         routing=RoutingState.UNKNOWN,
         range_km=None,
         latency_ms=None,
-        bandwidth_mbps=1000.0,
         link_type="isl",
         sim_time=SIM,
     )
@@ -216,7 +208,6 @@ def test_snapshot_link_builds_desired_link_and_skips_down_links():
         desired_link_from_snapshot_link(
             down,
             interface_map={PAIR: ("isl0", "isl1")},
-            bandwidth_map={PAIR: 1000.0},
             ground_station_ids=frozenset(),
             snapshot_sim_time=SIM,
             snapshot_seq=42,
@@ -235,7 +226,6 @@ def test_snapshot_link_builds_desired_link_and_skips_down_links():
     pair, info = desired_link_from_snapshot_link(
         up,
         interface_map={PAIR: ("isl0", "isl1")},
-        bandwidth_map={PAIR: 1000.0},
         ground_station_ids=frozenset(),
         snapshot_sim_time=SIM,
         snapshot_seq=42,
@@ -260,7 +250,6 @@ def test_snapshot_ground_link_maps_interfaces_by_endpoint_role_for_sat_first_pai
         routing=RoutingState.UNKNOWN,
         range_km=1800.0,
         latency_ms=6.0,
-        bandwidth_mbps=250.0,
         link_type="ground",
         sim_time=SIM,
         gs_terminal_index=0,
@@ -270,7 +259,6 @@ def test_snapshot_ground_link_maps_interfaces_by_endpoint_role_for_sat_first_pai
     built_pair, info = desired_link_from_snapshot_link(
         link,
         interface_map={},
-        bandwidth_map={pair: 250.0},
         ground_station_ids=frozenset({"lunar-ground-gs-nearside-relay-site"}),
         snapshot_sim_time=SIM,
         snapshot_seq=11,
@@ -293,7 +281,6 @@ def test_snapshot_link_sim_time_mismatch_fails_loudly():
         routing=RoutingState.UNKNOWN,
         range_km=3333.0,
         latency_ms=11.118,
-        bandwidth_mbps=1000.0,
         link_type="isl",
         sim_time=SIM - timedelta(seconds=1),
     )
@@ -302,41 +289,7 @@ def test_snapshot_link_sim_time_mismatch_fails_loudly():
         desired_link_from_snapshot_link(
             link,
             interface_map={PAIR: ("isl0", "isl1")},
-            bandwidth_map={PAIR: 1000.0},
             ground_station_ids=frozenset(),
             snapshot_sim_time=SIM,
             snapshot_seq=42,
-        )
-
-
-def test_missing_or_nonpositive_bandwidth_fails_loudly():
-    event = VisibilityEvent(
-        sim_time=SIM,
-        node_a=PAIR[0],
-        node_b=PAIR[1],
-        visible=True,
-        scheduled=True,
-        range_km=2222.25,
-        latency_ms=7.412,
-        elevation_deg=None,
-        terminal_type="optical",
-        link_type="isl",
-        visibility_reject_reason="ok",
-        unscheduled_reason=None,
-    )
-
-    with pytest.raises(ValueError, match="unknown physical rate"):
-        desired_link_from_visibility(
-            event,
-            interface_map={PAIR: ("isl0", "isl1")},
-            bandwidth_map={},
-            ground_station_ids=frozenset(),
-        )
-
-    with pytest.raises(ValueError, match="unknown physical rate"):
-        desired_link_from_visibility(
-            event,
-            interface_map={PAIR: ("isl0", "isl1")},
-            bandwidth_map={PAIR: 0.0},
-            ground_station_ids=frozenset(),
         )

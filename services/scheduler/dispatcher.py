@@ -197,7 +197,6 @@ class Dispatcher:
     def __init__(
         self,
         interface_map: dict[tuple[str, str], tuple[str, str]],
-        bandwidth_map: dict[tuple[str, str], float],
         interface_rates: Mapping[tuple[str, str], InterfaceRates],
         pod_locator: PodLocationMap,
         agent_pool: AgentPool,
@@ -226,7 +225,6 @@ class Dispatcher:
         # fatal failure fatal.
         self._read_lifecycle_identity = read_lifecycle_identity
         self._interface_map = interface_map
-        self._bandwidth_map = bandwidth_map
         # Each WAN interface's own terminal rates; link shaping applies them
         # per interface, independent of the terminal at the other end.
         self._interface_rates = interface_rates
@@ -1588,7 +1586,6 @@ class Dispatcher:
             info.interface_a,
             info.interface_b,
             info.latency_ms,
-            info.bandwidth_mbps,
             link_type=info.link_type,
             range_km=info.range_km,
             authority_sim_time=info.authority_sim_time,
@@ -2315,7 +2312,6 @@ class Dispatcher:
                     _pair, info = desired_link_from_visibility(
                         vis,
                         interface_map=self._interface_map,
-                        bandwidth_map=self._bandwidth_map,
                         ground_station_ids=ground_station_ids,
                     )
                     self._desired_links[pair] = info
@@ -2393,7 +2389,6 @@ class Dispatcher:
             built = desired_link_from_snapshot_link(
                 link,
                 interface_map=self._interface_map,
-                bandwidth_map=self._bandwidth_map,
                 ground_station_ids=ground_station_ids,
                 snapshot_sim_time=snapshot.sim_time,
                 snapshot_seq=snapshot.snapshot_seq,

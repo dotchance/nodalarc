@@ -72,7 +72,6 @@ class ResolvedOmeInputs:
     period: float
     propagator_id: SessionPropagatorId
     interface_map: dict[tuple[str, str], tuple[str, str]]
-    bandwidth_map: dict[tuple[str, str], float]
     rule_map: dict[tuple[str, str], LinkRuleMetadata]
     ground_candidate_satellites_by_gs: dict[str, tuple[str, ...]]
     node_metadata: dict[str, dict[str, object]]
@@ -197,7 +196,6 @@ def build_ome_inputs_from_resolved(resolved: ResolvedSession) -> ResolvedOmeInpu
         period=period,
         propagator_id=propagator_id,
         interface_map=resolved.link_interface_map(),
-        bandwidth_map=resolved.link_bandwidth_map(),
         rule_map=_rule_map_from_resolved(resolved),
         ground_candidate_satellites_by_gs=ground_candidate_satellites_by_gs,
         node_metadata=_node_metadata(resolved),
@@ -479,7 +477,6 @@ def _neighbors_from_resolved(
                     peer_node_id=candidate.node_b,
                     link_type=link_type,
                     priority=candidate.priority,
-                    bandwidth_mbps=candidate.bandwidth_mbps,
                 ),
             )
         )
@@ -491,7 +488,6 @@ def _neighbors_from_resolved(
                     peer_node_id=candidate.node_a,
                     link_type=link_type,
                     priority=candidate.priority,
-                    bandwidth_mbps=candidate.bandwidth_mbps,
                 ),
             )
         )
@@ -550,7 +546,6 @@ def _isl_terminal(block: ResolvedTerminalBlock) -> IslTerminal:
         count=block.count,
         role=None,
         max_range_km=_required(block.max_range_km, block, "max_range_km"),
-        bandwidth_mbps=_required(block.slowest_direction_mbps, block, "bandwidth_mbps"),
         max_tracking_rate_deg_s=_required(
             block.tracking_rate_deg_s,
             block,
@@ -568,7 +563,6 @@ def _satellite_ground_terminal(
         type=block.medium,
         count=block.count,
         interface_indices=selection.interface_indices,
-        bandwidth_mbps=_required(block.slowest_direction_mbps, block, "bandwidth_mbps"),
         max_range_km=_required(block.max_range_km, block, "max_range_km"),
         field_of_regard_deg=_required(
             block.field_of_regard_deg,
@@ -591,7 +585,6 @@ def _ground_terminal(selection: ResolvedAccessTerminalSelection) -> GroundTermin
         type=block.medium,
         count=block.count,
         interface_indices=selection.interface_indices,
-        bandwidth_mbps=_required(block.slowest_direction_mbps, block, "bandwidth_mbps"),
         tracking_capacity=block.tracking_capacity or 1,
         max_range_km=_required(block.max_range_km, block, "max_range_km"),
         field_of_regard_deg=_required(

@@ -294,8 +294,12 @@
           "title": "Latency Ms",
           "type": "number"
         },
-        "bandwidth_mbps": {
-          "title": "Bandwidth Mbps",
+        "transmit_mbps_a": {
+          "title": "Transmit Mbps A",
+          "type": "number"
+        },
+        "transmit_mbps_b": {
+          "title": "Transmit Mbps B",
           "type": "number"
         },
         "range_km": {
@@ -416,7 +420,8 @@
         "link_type",
         "link_reason",
         "latency_ms",
-        "bandwidth_mbps",
+        "transmit_mbps_a",
+        "transmit_mbps_b",
         "range_km",
         "traffic_load_pct"
       ],

@@ -75,7 +75,6 @@ def _make_dispatcher_with_two_terminal_gs() -> Dispatcher:
         ("gs-multi", "sat-old"): ("term0", "gnd0"),
         ("gs-multi", "sat-new"): ("term1", "gnd0"),
     }
-    bandwidth_map = dict.fromkeys(interface_map, 1000.0)
 
     loc = PodLocationMap()
     for pair in interface_map:
@@ -129,7 +128,6 @@ def _make_dispatcher_with_two_terminal_gs() -> Dispatcher:
 
     d = Dispatcher(
         interface_map=interface_map,
-        bandwidth_map=bandwidth_map,
         interface_rates=ANY_INTERFACE_RATES,
         pod_locator=loc,
         agent_pool=pool,
@@ -152,7 +150,6 @@ def _old_active_info() -> ActiveLinkInfo:
         interface_a="term0",
         interface_b="gnd0",
         latency_ms=3.0,
-        bandwidth_mbps=1000.0,
         link_type="ground",
         range_km=900.0,
         authority_sim_time=SIM_T0,

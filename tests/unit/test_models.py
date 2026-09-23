@@ -519,7 +519,6 @@ class TestLinkUp:
             interface_a="isl0",
             interface_b="isl1",
             latency_ms=5.0,
-            bandwidth_mbps=1000.0,
             range_km=1500.0,
             reason="vis_gained",
             provenance=provenance,
@@ -537,7 +536,6 @@ class TestLinkUp:
             interface_a="isl0",
             interface_b="isl1",
             latency_ms=5.0,
-            bandwidth_mbps=1000.0,
             range_km=1500.0,
             reason="vis_gained",
         )
@@ -554,7 +552,6 @@ class TestLinkUp:
                 interface_a="isl0",
                 interface_b="isl1",
                 latency_ms=5.0,
-                bandwidth_mbps=1000.0,
                 range_km=1500.0,
                 reason="vis_gained",
             )
@@ -628,7 +625,6 @@ class TestConvergenceRequest:
             interface_a="isl0",
             interface_b="isl1",
             latency_ms=5.0,
-            bandwidth_mbps=1000.0,
             range_km=1500.0,
             reason="vis_gained",
         )
@@ -828,7 +824,8 @@ class TestLinkState:
             link_type="intra_plane_isl",
             link_reason=None,
             latency_ms=3.2,
-            bandwidth_mbps=1000.0,
+            transmit_mbps_a=1000.0,
+            transmit_mbps_b=1000.0,
             range_km=960.0,
             traffic_load_pct=None,
         )
@@ -843,7 +840,8 @@ class TestLinkState:
             link_type=None,
             link_reason=None,
             latency_ms=5.0,
-            bandwidth_mbps=100.0,
+            transmit_mbps_a=100.0,
+            transmit_mbps_b=100.0,
             range_km=500.0,
             traffic_load_pct=None,
         )
@@ -854,7 +852,8 @@ class TestLinkState:
             link_type=None,
             link_reason=None,
             latency_ms=5.0,
-            bandwidth_mbps=100.0,
+            transmit_mbps_a=100.0,
+            transmit_mbps_b=100.0,
             range_km=500.0,
             traffic_load_pct=0.0,
         )
@@ -942,7 +941,8 @@ class TestStateSnapshot:
                     link_type="intra_plane_isl",
                     link_reason=None,
                     latency_ms=3.0,
-                    bandwidth_mbps=1000.0,
+                    transmit_mbps_a=1000.0,
+                    transmit_mbps_b=1000.0,
                     range_km=900.0,
                     traffic_load_pct=None,
                 ),

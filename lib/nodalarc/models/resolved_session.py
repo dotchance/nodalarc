@@ -148,18 +148,6 @@ class ResolvedTerminalBlock(BaseModel):
             )
         return self
 
-    @property
-    def slowest_direction_mbps(self) -> float | None:
-        """The slower of the transmit and receive rates.
-
-        A link candidate reports this value as its bandwidth. Link shaping does
-        not use it: each interface is shaped at its own transmit and receive
-        rates (``ResolvedSession.interface_terminal_rates``).
-        """
-        if self.transmit_mbps is None or self.receive_mbps is None:
-            return None
-        return min(self.transmit_mbps, self.receive_mbps)
-
 
 class ResolvedInterfaceAddress(BaseModel):
     """A numbered interface address set."""
@@ -346,7 +334,6 @@ class ResolvedLinkCandidate(BaseModel):
     node_b: NonEmptyReference
     interface_a: NonEmptyReference | None = None
     interface_b: NonEmptyReference | None = None
-    bandwidth_mbps: float = Field(gt=0, allow_inf_nan=False)
     topology_mode: NonEmptyReference
     priority: int = Field(ge=0)
     endpoint_segments: tuple[NonEmptyReference, NonEmptyReference]
@@ -990,10 +977,6 @@ class ResolvedSession(BaseModel):
                     block.transmit_mbps, block.receive_mbps
                 )
         return rates
-
-    def link_bandwidth_map(self) -> dict[tuple[str, str], float]:
-        """Return concrete bottleneck bandwidth keyed by canonical node pair."""
-        return {candidate.pair: candidate.bandwidth_mbps for candidate in self.link_candidates}
 
     def ground_candidate_satellites_by_gs(self) -> dict[str, tuple[str, ...]]:
         """Return access candidate satellites keyed by ground station node id."""

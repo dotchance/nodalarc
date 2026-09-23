@@ -43,7 +43,6 @@ def _info(interface_a: str = "term0", interface_b: str = "gnd0") -> ActiveLinkIn
         interface_a=interface_a,
         interface_b=interface_b,
         latency_ms=1.0,
-        bandwidth_mbps=100.0,
         link_type="ground",
         range_km=100.0,
         authority_sim_time=SIM_TIME,
@@ -1326,7 +1325,6 @@ def test_inventory_entries_assert_commanded_netem_not_live_recomputation() -> No
         "term0",
         "gnd0",
         12.0,
-        1000.0,
         link_type="ground",
         netem_one_way_ms=3.25,
     )
@@ -1341,7 +1339,7 @@ def test_inventory_entries_assert_commanded_netem_not_live_recomputation() -> No
     entry = entries["agent-a"][0]
     assert entry.latency_ms == 3.25
 
-    bare = ActiveLinkInfo("term0", "gnd0", 12.0, 1000.0, link_type="ground")
+    bare = ActiveLinkInfo("term0", "gnd0", 12.0, link_type="ground")
     entries, _acks = _ground_inventory_entries_for_pair(
         interface_rates=ANY_INTERFACE_RATES,
         pair=("gs-multi", "sat-old"),

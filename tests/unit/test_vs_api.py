@@ -23,7 +23,7 @@ from nodalarc.db.schema import create_tables
 from nodalarc.models.events import EphemerisNodeFixed, EphemerisNodeTLE, SessionEphemeris
 from nodalarc.models.link_events import LinkUp
 from nodalarc.models.metrics import ConvergenceResult
-from nodalarc.models.resolved_session import SourceContext
+from nodalarc.models.resolved_session import InterfaceRates, SourceContext
 from nodalarc.models.vs_api import (
     LinkDecisionTrace,
     LinkState,
@@ -296,6 +296,14 @@ def _make_provenance(**overrides):
     return provenance
 
 
+# The resolved terminal rates of the ISL both link tests use. Each end is its
+# own terminal: sat-P00S00 sends 2000 and sat-P00S01 sends 100.
+_ISL_RATES = {
+    ("sat-P00S00", "isl0"): InterfaceRates(transmit_mbps=2000.0, receive_mbps=1500.0),
+    ("sat-P00S01", "isl1"): InterfaceRates(transmit_mbps=100.0, receive_mbps=2000.0),
+}
+
+
 def _make_link_up_event(node_a="sat-P00S00", node_b="sat-P00S01", **overrides):
     """Create a complete LinkUp event dict with all required fields."""
     event = {
@@ -304,7 +312,6 @@ def _make_link_up_event(node_a="sat-P00S00", node_b="sat-P00S01", **overrides):
         "interface_a": "isl0",
         "interface_b": "isl1",
         "latency_ms": 5.0,
-        "bandwidth_mbps": 1000.0,
         "range_km": 1500.0,
         "reason": "vis_gained",
         "sim_time": datetime.now(UTC).isoformat(),
@@ -660,7 +667,8 @@ class TestStateSnapshot:
                 link_type="intra_plane_isl",
                 link_reason=event["reason"],
                 latency_ms=event["latency_ms"],
-                bandwidth_mbps=event["bandwidth_mbps"],
+                transmit_mbps_a=1000.0,
+                transmit_mbps_b=1000.0,
                 range_km=event["range_km"],
                 traffic_load_pct=None,
                 interface_a=event["interface_a"],
@@ -682,7 +690,8 @@ class TestStateSnapshot:
                 link_type="intra_plane_isl",
                 link_reason="vis_gained",
                 latency_ms=5.0,
-                bandwidth_mbps=1000.0,
+                transmit_mbps_a=1000.0,
+                transmit_mbps_b=1000.0,
                 range_km=1500.0,
                 traffic_load_pct=None,
                 interface_a="isl0",
@@ -706,7 +715,8 @@ class TestStateSnapshot:
                 link_type="intra_plane_isl",
                 link_reason="vis_gained",
                 latency_ms=5.0,
-                bandwidth_mbps=1000.0,
+                transmit_mbps_a=1000.0,
+                transmit_mbps_b=1000.0,
                 range_km=1500.0,
                 traffic_load_pct=None,
                 interface_a="isl0",
@@ -758,7 +768,8 @@ class TestSnapshotModel:
                     link_type="intra_plane_isl",
                     link_reason="vis_gained",
                     latency_ms=5.0,
-                    bandwidth_mbps=1000.0,
+                    transmit_mbps_a=1000.0,
+                    transmit_mbps_b=1000.0,
                     range_km=1500.0,
                     traffic_load_pct=None,
                     interface_a="isl0",
@@ -835,7 +846,6 @@ class TestSQLiteQueries:
             interface_a="isl0",
             interface_b="isl1",
             latency_ms=5.0,
-            bandwidth_mbps=1000.0,
             range_km=1500.0,
             reason="vis_gained",
         )
@@ -1181,6 +1191,7 @@ class TestLinkDecisionTraceState:
     def test_link_up_records_decision_trace(self):
         ctx = SessionContext.__new__(SessionContext)
         ctx._init_state_only()
+        ctx._interface_rates = _ISL_RATES
 
         import asyncio
         from unittest.mock import MagicMock
@@ -1192,6 +1203,8 @@ class TestLinkDecisionTraceState:
         asyncio.run(ctx._on_link_up(msg))
 
         key = _link_key("sat-P00S00", "sat-P00S01")
+        link = ctx.links[key]
+        assert (link.transmit_mbps_a, link.transmit_mbps_b) == (2000.0, 100.0)
         trace = ctx.link_decision_traces[key]
         assert isinstance(trace, LinkDecisionTrace)
         assert trace.geometry_authority == "ome"
@@ -1233,6 +1246,7 @@ class TestLinkDecisionTraceState:
     def test_snapshot_records_ome_authority_trace(self):
         ctx = SessionContext.__new__(SessionContext)
         ctx._init_state_only()
+        ctx._interface_rates = _ISL_RATES
 
         import asyncio
         from unittest.mock import MagicMock
@@ -1255,7 +1269,6 @@ class TestLinkDecisionTraceState:
                         "routing": "UNKNOWN",
                         "range_km": 900.0,
                         "latency_ms": 3.0,
-                        "bandwidth_mbps": 1000.0,
                         "link_type": "isl",
                         "sim_time": "2025-01-01T00:00:00+00:00",
                     }
@@ -1275,6 +1288,7 @@ class TestLinkDecisionTraceState:
     def test_latency_update_refreshes_decision_trace(self):
         ctx = SessionContext.__new__(SessionContext)
         ctx._init_state_only()
+        ctx._interface_rates = _ISL_RATES
 
         import asyncio
         from unittest.mock import MagicMock
@@ -1475,6 +1489,7 @@ class TestSubscriberResilience:
         """VS-API must not derive range from latency or discard interfaces."""
         ctx = SessionContext.__new__(SessionContext)
         ctx._init_state_only()
+        ctx._interface_rates = _ISL_RATES
 
         import asyncio
         from unittest.mock import MagicMock
@@ -1497,7 +1512,6 @@ class TestSubscriberResilience:
                         "routing": "UNKNOWN",
                         "range_km": 900.0,
                         "latency_ms": 3.0,
-                        "bandwidth_mbps": 1000.0,
                         "link_type": "isl",
                         "scheduling_state": "teardown",
                         "teardown_remaining_ticks": 7,
@@ -1514,10 +1528,53 @@ class TestSubscriberResilience:
         assert link.range_km == 900.0
         assert link.interface_a == "isl0"
         assert link.interface_b == "isl1"
+        # Each direction runs at its sending end's terminal transmit rate.
+        assert (link.transmit_mbps_a, link.transmit_mbps_b) == (2000.0, 100.0)
         assert link.scheduling_state == "teardown"
         assert link.teardown_remaining_ticks == 7
         assert link.successor_pair == ("sat-P00S00", "sat-P00S02")
         assert ctx.last_snapshot_seq == 12
+
+    def test_snapshot_link_without_resolved_terminal_rates_is_refused(self):
+        """A link end the resolved session gives no terminal is refused loudly."""
+        ctx = SessionContext.__new__(SessionContext)
+        ctx._init_state_only()
+        ctx._interface_rates = {("sat-P00S00", "isl0"): _ISL_RATES[("sat-P00S00", "isl0")]}
+
+        import asyncio
+        from unittest.mock import MagicMock
+
+        msg = MagicMock()
+        msg.data = json.dumps(
+            {
+                "snapshot_seq": 12,
+                "sim_time": "2025-01-01T00:00:00+00:00",
+                "interval_s": 1.0,
+                "epoch_id": 0,
+                "links": [
+                    {
+                        "node_a": "sat-P00S00",
+                        "node_b": "sat-P00S01",
+                        "interface_a": "isl0",
+                        "interface_b": "isl1",
+                        "admin": "UP",
+                        "carrier": "UP",
+                        "routing": "UNKNOWN",
+                        "range_km": 900.0,
+                        "latency_ms": 3.0,
+                        "link_type": "isl",
+                        "scheduling_state": "teardown",
+                        "teardown_remaining_ticks": 7,
+                        "successor_pair": ["sat-P00S00", "sat-P00S02"],
+                        "sim_time": "2025-01-01T00:00:00+00:00",
+                    }
+                ],
+            }
+        ).encode()
+
+        with pytest.raises(ValueError, match="sat-P00S01/isl1 has no terminal rates"):
+            asyncio.run(ctx._on_link_state_snapshot(msg))
+        assert ctx.links == {}
 
     def test_malformed_snapshot_does_not_advance_sequence_or_replace_state(self):
         ctx = SessionContext.__new__(SessionContext)
@@ -1531,7 +1588,8 @@ class TestSubscriberResilience:
             link_type="intra_plane_isl",
             link_reason="vis_gained",
             latency_ms=5.0,
-            bandwidth_mbps=1000.0,
+            transmit_mbps_a=1000.0,
+            transmit_mbps_b=1000.0,
             range_km=1500.0,
             traffic_load_pct=None,
             interface_a="isl0",
@@ -1558,7 +1616,6 @@ class TestSubscriberResilience:
                         "carrier": "UP",
                         "routing": "UNKNOWN",
                         "latency_ms": 3.0,
-                        "bandwidth_mbps": 1000.0,
                         "link_type": "isl",
                         "sim_time": "2025-01-01T00:00:00+00:00",
                     }

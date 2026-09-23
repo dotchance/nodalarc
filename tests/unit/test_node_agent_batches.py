@@ -49,7 +49,6 @@ def test_cross_node_isl_link_up_plan_builds_two_remote_interfaces():
             interface_a="isl0",
             interface_b="isl1",
             latency_ms=10.0,
-            bandwidth_mbps=1000.0,
             link_type="isl",
             range_km=2997.9,
         )
@@ -99,7 +98,6 @@ def test_cross_node_link_up_missing_remote_ip_fails_loudly():
             interface_a="isl0",
             interface_b="isl1",
             latency_ms=10.0,
-            bandwidth_mbps=1000.0,
             link_type="isl",
             range_km=2997.9,
         )
@@ -125,7 +123,6 @@ def test_local_ground_link_down_plan_preserves_single_agent_bridge_operation():
             interface_a="term0",
             interface_b="gnd0",
             latency_ms=5.0,
-            bandwidth_mbps=1000.0,
             link_type="ground",
             range_km=1500.0,
         )
@@ -154,7 +151,6 @@ def test_link_up_without_terminal_rates_for_an_interface_fails_loudly():
             interface_a="isl0",
             interface_b="isl1",
             latency_ms=10.0,
-            bandwidth_mbps=1000.0,
             link_type="isl",
             range_km=2997.9,
         )

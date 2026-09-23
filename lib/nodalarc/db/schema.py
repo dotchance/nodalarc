@@ -19,7 +19,6 @@ CREATE TABLE IF NOT EXISTS link_events (
     interface_a TEXT,
     interface_b TEXT,
     latency_ms REAL,
-    bandwidth_mbps REAL,
     range_km REAL,
     reason TEXT
 );

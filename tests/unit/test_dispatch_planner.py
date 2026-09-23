@@ -13,7 +13,6 @@ def _info(latency: float = 3.0, range_km: float = 1000.0, link_type: str = "isl"
         "isl0",
         "isl1",
         latency,
-        1000.0,
         link_type=link_type,
         range_km=range_km,
     )

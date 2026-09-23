@@ -251,10 +251,11 @@ channelization, or polarization; link-rule terminal selection must therefore
 name the intended compatible mounts explicitly whenever medium alone is
 ambiguous.
 
-The persisted bandwidth is directional, but the current runtime exposes one
-conservative shaped rate per link rather than independent directional rates.
-That rate is the minimum of transmit and receive values across both selected
-endpoint mounts.
+The bandwidth is directional, and each terminal is shaped on its own. An
+interface sends at its terminal's transmit rate and receives at its
+terminal's receive rate, whatever terminal the other end carries. A link
+direction runs at the sending end's transmit rate; when the receiving
+terminal receives slower, its receive shaping limits what arrives.
 
 ## Payload
 

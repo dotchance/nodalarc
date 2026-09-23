@@ -44,7 +44,6 @@ def _make_dispatcher(read_lifecycle_identity=None) -> Dispatcher:
     loc._agent_addrs["nodal"] = "127.0.0.1:50100"
     dispatcher = Dispatcher(
         interface_map=interface_map,
-        bandwidth_map=dict.fromkeys(interface_map, 1000.0),
         interface_rates=ANY_INTERFACE_RATES,
         pod_locator=loc,
         agent_pool=MagicMock(),

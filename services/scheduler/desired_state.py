@@ -3,8 +3,8 @@
 """Scheduler desired-state construction helpers.
 
 This module is the Scheduler-side OME authority boundary. It preserves
-OME-provided range and one-way latency, derives configured interfaces and
-bandwidth, and fails loudly when required authority is missing.
+OME-provided range and one-way latency, derives configured interfaces, and
+fails loudly when required authority is missing.
 """
 
 from __future__ import annotations
@@ -31,7 +31,6 @@ class ActiveLinkInfo:
         "interface_b",
         "latency_ms",
         "netem_one_way_ms",
-        "bandwidth_mbps",
         "link_type",
         "range_km",
         "authority_sim_time",
@@ -44,7 +43,6 @@ class ActiveLinkInfo:
         interface_a: str,
         interface_b: str,
         latency_ms: float,
-        bandwidth_mbps: float,
         *,
         link_type: str,
         range_km: float | None = None,
@@ -63,7 +61,6 @@ class ActiveLinkInfo:
         # against a live recomputation - compensation inputs drift between
         # dispatch and proof, and that drift is not kernel divergence.
         self.netem_one_way_ms = netem_one_way_ms
-        self.bandwidth_mbps = bandwidth_mbps
         self.link_type = link_type
         self.range_km = range_km
         self.authority_sim_time = authority_sim_time
@@ -125,26 +122,10 @@ def _ground_interfaces(
     return sat_iface, gs_iface
 
 
-def _configured_bandwidth(
-    pair: tuple[str, str],
-    bandwidth_map: dict[tuple[str, str], float],
-    *,
-    source: str,
-) -> float:
-    bandwidth = bandwidth_map.get(pair)
-    if bandwidth is None or bandwidth <= 0:
-        raise ValueError(
-            f"{source} for {pair} has no config-derived bandwidth; "
-            "refusing to dispatch a link with unknown physical rate"
-        )
-    return bandwidth
-
-
 def desired_link_from_visibility(
     vis: VisibilityEvent,
     *,
     interface_map: dict[tuple[str, str], tuple[str, str]],
-    bandwidth_map: dict[tuple[str, str], float],
     ground_station_ids: frozenset[str],
 ) -> tuple[tuple[str, str], ActiveLinkInfo]:
     """Build one desired link from a scheduled visible OME event."""
@@ -171,12 +152,10 @@ def desired_link_from_visibility(
                 "refusing to dispatch an unmapped link"
             )
 
-    bandwidth = _configured_bandwidth(pair, bandwidth_map, source="VisibilityEvent")
     return pair, ActiveLinkInfo(
         interface_a=ifaces[0],
         interface_b=ifaces[1],
         latency_ms=latency,
-        bandwidth_mbps=bandwidth,
         link_type=vis.link_type,
         range_km=range_km,
         authority_sim_time=vis.sim_time,
@@ -188,7 +167,6 @@ def desired_link_from_snapshot_link(
     link: LinkState,
     *,
     interface_map: dict[tuple[str, str], tuple[str, str]],
-    bandwidth_map: dict[tuple[str, str], float],
     ground_station_ids: frozenset[str],
     snapshot_sim_time: datetime,
     snapshot_seq: int,
@@ -226,12 +204,10 @@ def desired_link_from_snapshot_link(
                 "refusing to dispatch an unmapped link"
             )
 
-    bandwidth = _configured_bandwidth(pair, bandwidth_map, source="LinkStateSnapshot")
     return pair, ActiveLinkInfo(
         interface_a=ifaces[0],
         interface_b=ifaces[1],
         latency_ms=latency,
-        bandwidth_mbps=bandwidth,
         link_type=link.link_type,
         range_km=range_km,
         authority_sim_time=snapshot_sim_time,

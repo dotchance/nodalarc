@@ -205,7 +205,6 @@ def test_catalog_resolver_materializes_runtime_domains_and_link_candidates() -> 
     ]
     assert fixed_candidates
     assert all(candidate.interface_a and candidate.interface_b for candidate in fixed_candidates)
-    assert all(candidate.bandwidth_mbps > 0 for candidate in resolved.link_candidates)
 
     access_candidates = [
         candidate for candidate in resolved.link_candidates if candidate.kind == "access"

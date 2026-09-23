@@ -2,7 +2,7 @@
 # Licensed under the Apache License, Version 2.0. See LICENSE file.
 """Scheduler entry point.
 
-Loads session config, builds interface/bandwidth maps, discovers pod
+Loads session config, builds the interface map and terminal rates, discovers pod
 locations, initializes agent pool, and runs the async dispatch loop.
 """
 
@@ -375,7 +375,6 @@ def main() -> None:
     resolved = runtime_config.config.resolution.resolved
     runtime_health.mark_loaded(runtime_config)
     interface_map = resolved.link_interface_map()
-    bandwidth_map = resolved.link_bandwidth_map()
     interface_rates = resolved.interface_terminal_rates()
     log.debug("Interface map: %d link pairs", len(interface_map))
     session_id = require_resolved_session_run_id(resolved)
@@ -450,7 +449,6 @@ def main() -> None:
 
     dispatcher = Dispatcher(
         interface_map=interface_map,
-        bandwidth_map=bandwidth_map,
         interface_rates=interface_rates,
         pod_locator=loc,
         agent_pool=pool,

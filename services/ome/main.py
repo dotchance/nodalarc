@@ -68,7 +68,6 @@ class _SessionBundle(NamedTuple):
     latitude_threshold_deg: float
     propagator_id: str
     interface_map: dict[tuple[str, str], tuple[str, str]]
-    bandwidth_map: dict[tuple[str, str], float]
     rule_map: dict[tuple[str, str], LinkRuleMetadata]
     ground_candidate_satellites_by_gs: dict[str, tuple[str, ...]]
     ground_scheduling: GroundSchedulingConfig
@@ -166,7 +165,6 @@ def _session_bundle_from_resolution(resolution: SessionResolution) -> _SessionBu
         latitude_threshold_deg=latitude_threshold_deg,
         propagator_id=runtime.propagator_id,
         interface_map=runtime.interface_map,
-        bandwidth_map=runtime.bandwidth_map,
         rule_map=runtime.rule_map,
         ground_candidate_satellites_by_gs=runtime.ground_candidate_satellites_by_gs,
         ground_scheduling=runtime.ground_scheduling,
@@ -751,7 +749,6 @@ def _run_pacing(
     platform_snapshot_interval_s = get_platform_config().ome_link_state_snapshot_interval_s
 
     interface_map = cfg.interface_map
-    bandwidth_map = cfg.bandwidth_map
     rule_map = cfg.rule_map
 
     # Optional file output
@@ -1102,7 +1099,6 @@ def _run_pacing(
             DeferredLinkStateSnapshot(
                 source=step_result.link_snapshot_source,
                 interface_map=interface_map,
-                bandwidth_map=bandwidth_map,
                 rule_map=rule_map,
                 sim_time=step_result.sim_time,
                 seq=snapshot_seq,

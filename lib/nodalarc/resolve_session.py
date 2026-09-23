@@ -3013,18 +3013,6 @@ def _resolve_link_candidates(
         role_a, role_b = _candidate_side_roles(
             candidate, node_a, node_b, rules_by_id[candidate.rule_id]
         )
-        terminal_id_a, terminal_id_b = _candidate_side_terminal_ids(
-            candidate, node_a, node_b, rules_by_id[candidate.rule_id]
-        )
-        bandwidth = _candidate_bandwidth_mbps(
-            left,
-            right,
-            role_left=role_a,
-            role_right=role_b,
-            medium=candidate.terminal_medium,
-            terminal_id_left=terminal_id_a,
-            terminal_id_right=terminal_id_b,
-        )
         candidates.append(
             ResolvedLinkCandidate(
                 rule_id=candidate.rule_id,
@@ -3035,7 +3023,6 @@ def _resolve_link_candidates(
                 node_b=node_b,
                 interface_a=iface_a,
                 interface_b=iface_b,
-                bandwidth_mbps=bandwidth,
                 topology_mode=candidate.topology_mode,
                 priority=candidate.priority,
                 endpoint_segments=candidate.endpoint_segments,
@@ -3163,89 +3150,6 @@ def _candidate_side_roles(
         )
 
     return _role_for(node_a), _role_for(node_b)
-
-
-def _candidate_side_terminal_ids(
-    candidate: Any,
-    node_a: str,
-    node_b: str,
-    rule: ResolvedLinkRule,
-) -> tuple[str | None, str | None]:
-    """Map endpoint-ordered exact mount IDs onto candidate pair order."""
-
-    def _terminal_id_for(node_id: str) -> str | None:
-        for endpoint, terminal_id in zip(
-            rule.endpoints, candidate.endpoint_terminal_ids, strict=True
-        ):
-            if node_id in endpoint.node_ids:
-                return terminal_id
-        raise SessionResolutionError(
-            f"candidate node {node_id!r} belongs to neither endpoint of rule {rule.rule_id!r}"
-        )
-
-    return _terminal_id_for(node_a), _terminal_id_for(node_b)
-
-
-def _candidate_bandwidth_mbps(
-    left: ResolvedNode,
-    right: ResolvedNode,
-    *,
-    role_left: str,
-    role_right: str,
-    medium: str | None,
-    terminal_id_left: str | None,
-    terminal_id_right: str | None,
-) -> float:
-    left_bandwidth = _matching_terminal_bandwidth_mbps(
-        left,
-        role=role_left,
-        medium=medium,
-        terminal_id=terminal_id_left,
-    )
-    right_bandwidth = _matching_terminal_bandwidth_mbps(
-        right,
-        role=role_right,
-        medium=medium,
-        terminal_id=terminal_id_right,
-    )
-    return min(left_bandwidth, right_bandwidth)
-
-
-def _matching_terminal_bandwidth_mbps(
-    node: ResolvedNode,
-    *,
-    role: str,
-    medium: str | None,
-    terminal_id: str | None,
-) -> float:
-    matches = [
-        block
-        for block in node.terminal_inventory
-        if block.endpoint_role == role
-        and (medium is None or block.medium == medium)
-        and (terminal_id is None or block.terminal_id == terminal_id)
-    ]
-    if not matches:
-        raise SessionResolutionError(
-            f"node {node.node_id!r} has no terminal block for role={role!r} "
-            f"medium={medium!r} mount={terminal_id!r}"
-        )
-    if any(block.slowest_direction_mbps is None for block in matches):
-        raise SessionResolutionError(
-            f"node {node.node_id!r} matching terminal mount is missing bandwidth"
-        )
-    bandwidths = {
-        float(block.slowest_direction_mbps)
-        for block in matches
-        if block.slowest_direction_mbps is not None
-    }
-    if len(bandwidths) != 1:
-        mounts = [block.terminal_id for block in matches]
-        raise SessionResolutionError(
-            f"node {node.node_id!r} terminal selector matches mounts {mounts} with "
-            f"heterogeneous bandwidths {sorted(bandwidths)}; select one exact mount"
-        )
-    return next(iter(bandwidths))
 
 
 def _validate_fixed_interface_capacity(

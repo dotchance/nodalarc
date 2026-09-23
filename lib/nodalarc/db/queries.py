@@ -22,7 +22,7 @@ from nodalarc.models.metrics import AdapterEvent, ConvergenceResult, ProbeResult
 def insert_link_up(conn: sqlite3.Connection, event: LinkUp) -> int:
     cur = conn.execute(
         """INSERT INTO link_events (sim_time, wall_time, event_type, node_a, node_b,
-           interface_a, interface_b, latency_ms, bandwidth_mbps, reason)
+           interface_a, interface_b, latency_ms, range_km, reason)
            VALUES (?, ?, 'LinkUp', ?, ?, ?, ?, ?, ?, ?)""",
         (
             event.sim_time.isoformat(),
@@ -32,7 +32,7 @@ def insert_link_up(conn: sqlite3.Connection, event: LinkUp) -> int:
             event.interface_a,
             event.interface_b,
             event.latency_ms,
-            event.bandwidth_mbps,
+            event.range_km,
             event.reason,
         ),
     )

@@ -452,7 +452,6 @@ def test_link_candidate_maps_and_ground_candidates() -> None:
         terminal_medium="rf",
         node_a=gs.node_id,
         node_b=sat.node_id,
-        bandwidth_mbps=1000,
         topology_mode="visible_candidates",
         priority=0,
         endpoint_segments=("ground", "leo"),
@@ -465,7 +464,6 @@ def test_link_candidate_maps_and_ground_candidates() -> None:
     )
 
     assert rs.link_interface_map() == {}
-    assert rs.link_bandwidth_map()[(gs.node_id, sat.node_id)] == 1000
     assert rs.ground_candidate_satellites_by_gs() == {gs.node_id: (sat.node_id,)}
 
 
@@ -491,7 +489,6 @@ def test_link_interface_map_contains_only_fixed_candidates() -> None:
         node_b=right.node_id,
         interface_a="isl0",
         interface_b="isl0",
-        bandwidth_mbps=1000,
         topology_mode="visible_candidates",
         priority=0,
         endpoint_segments=("leo", "leo"),
@@ -516,7 +513,6 @@ def test_access_candidate_rejects_fabricated_fixed_interfaces() -> None:
             node_b="sat",
             interface_a="term0",
             interface_b="gnd0",
-            bandwidth_mbps=1,
             topology_mode="visible_candidates",
             priority=0,
             endpoint_segments=("ground", "leo"),
@@ -533,7 +529,6 @@ def test_fixed_candidate_requires_both_interfaces() -> None:
             node_a="sat-a",
             node_b="sat-b",
             interface_a="isl0",
-            bandwidth_mbps=1,
             topology_mode="visible_candidates",
             priority=0,
             endpoint_segments=("leo", "leo"),
@@ -551,7 +546,6 @@ def test_link_candidate_rejects_self_pair() -> None:
             node_b="sat",
             interface_a="isl0",
             interface_b="isl1",
-            bandwidth_mbps=1,
             topology_mode="visible_candidates",
             priority=0,
             endpoint_segments=("leo", "leo"),
@@ -719,4 +713,4 @@ def test_resolved_terminal_declares_both_rates_or_neither() -> None:
         receive_mbps=100.0,
         source_ref="test:t",
     )
-    assert block.slowest_direction_mbps == 2.0
+    assert (block.transmit_mbps, block.receive_mbps) == (2.0, 100.0)

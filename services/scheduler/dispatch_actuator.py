@@ -690,7 +690,6 @@ async def send_batch_up(
             interface_a=info.interface_a,
             interface_b=info.interface_b,
             latency_ms=info.latency_ms,
-            bandwidth_mbps=info.bandwidth_mbps,
             range_km=info.range_km,
             reason="vis_gained",
             link_type=info.link_type,

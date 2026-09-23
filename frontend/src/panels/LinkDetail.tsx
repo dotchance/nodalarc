@@ -21,6 +21,11 @@ interface LinkHistoryEntry {
   node_b: string;
 }
 
+/** A terminal transmit rate, keeping a fractional declared rate such as 23.6 Mbps. */
+function formatRate(mbps: number): string {
+  return `${Number.isInteger(mbps) ? mbps.toFixed(0) : mbps.toFixed(1)} Mbps`;
+}
+
 export function LinkDetail({ link, snapshot }: LinkDetailProps) {
   const [history, setHistory] = useState<LinkHistoryEntry[]>([]);
 
@@ -105,8 +110,12 @@ export function LinkDetail({ link, snapshot }: LinkDetailProps) {
         <span className="detail-value">{link.latency_ms.toFixed(1)} ms</span>
       </div>
       <div className="detail-row">
-        <span className="detail-label">Bandwidth</span>
-        <span className="detail-value">{link.bandwidth_mbps.toFixed(0)} Mbps</span>
+        <span className="detail-label">{link.node_a} → {link.node_b}</span>
+        <span className="detail-value">{formatRate(link.transmit_mbps_a)}</span>
+      </div>
+      <div className="detail-row">
+        <span className="detail-label">{link.node_b} → {link.node_a}</span>
+        <span className="detail-value">{formatRate(link.transmit_mbps_b)}</span>
       </div>
       <div className="detail-row">
         <span className="detail-label">Range</span>

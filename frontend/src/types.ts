@@ -54,7 +54,9 @@ export interface LinkState {
   link_type: string | null;
   link_reason: string | null;
   latency_ms: number;
-  bandwidth_mbps: number;
+  // Each direction runs at its sending end's terminal transmit rate.
+  transmit_mbps_a: number;
+  transmit_mbps_b: number;
   range_km: number;
   traffic_load_pct: number | null;
   interface_a: string;

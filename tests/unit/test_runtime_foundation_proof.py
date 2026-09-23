@@ -75,7 +75,6 @@ def _info(pair: tuple[str, str]) -> ActiveLinkInfo:
         interface_a="term0" if pair == OLD else "term1",
         interface_b="gnd0",
         latency_ms=1.0,
-        bandwidth_mbps=100.0,
         link_type="ground",
         range_km=100.0,
         authority_sim_time=BASE,
@@ -96,7 +95,6 @@ def _dispatcher(*, now=None) -> Dispatcher:
     pool = MagicMock()
     d = Dispatcher(
         interface_map=interface_map,
-        bandwidth_map=dict.fromkeys(interface_map, 100.0),
         interface_rates=ANY_INTERFACE_RATES,
         pod_locator=loc,
         agent_pool=pool,
@@ -188,7 +186,6 @@ def _snapshot(
             routing=RoutingState.ADJACENT,
             range_km=100.0,
             latency_ms=1.0,
-            bandwidth_mbps=100.0,
             link_type="ground",
             gs_terminal_index=0,
             sat_terminal_index=0,
@@ -670,7 +667,6 @@ def _dispatcher_for_captured_records(
     *, session_id: str, records: list[tuple[str, bytes]], now_base: datetime
 ) -> Dispatcher:
     interface_map: dict[tuple[str, str], tuple[str, str]] = {}
-    bandwidth_map: dict[tuple[str, str], float] = {}
     nodes: set[str] = set()
     gs_ids: set[str] = set()
 
@@ -681,7 +677,6 @@ def _dispatcher_for_captured_records(
         for link in snapshot.links:
             pair = (link.node_a, link.node_b)
             interface_map[pair] = (link.interface_a, link.interface_b)
-            bandwidth_map[pair] = link.bandwidth_mbps or 100.0
             nodes.update(pair)
             if link.link_type == "ground" and (link.interface_a or link.interface_b):
                 # Identity rule I007: never infer role from node-id shape.
@@ -709,7 +704,6 @@ def _dispatcher_for_captured_records(
     sat_ids = {node_id for node_id in nodes if node_id not in gs_ids}
     d = Dispatcher(
         interface_map=interface_map,
-        bandwidth_map=bandwidth_map,
         interface_rates=ANY_INTERFACE_RATES,
         pod_locator=loc,
         agent_pool=MagicMock(),

@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pytest
 import yaml
-from nodalarc.models.resolved_session import SourceContext
+from nodalarc.models.resolved_session import InterfaceRates, SourceContext
 from nodalarc.models.terminal_physics import SatGroundTerminalBoresight, TerminalBoresight
 from nodalarc.ome_inputs import ResolvedAddressingView, build_ome_inputs_from_resolved
 from nodalarc.resolve_session import SessionResolutionError, load_session_resolution_from_file
@@ -185,28 +185,28 @@ def test_tdrs_access_rule_selects_reciprocal_ka_mounts_with_global_indices() -> 
         "ka_sa",
     )
     assert cfg.ground_link_model == "terminal_physics"
-    assert {
-        candidate.bandwidth_mbps
-        for candidate in cfg.resolved.link_candidates
-        if candidate.kind == "access"
-    } == {50.0}
     assert cfg.gs_file is not None
     assert all(
-        tuple(
-            (terminal.id, terminal.interface_indices, terminal.bandwidth_mbps)
-            for terminal in station.terminals or ()
-        )
-        == (("tdrs_ka_sa", (2, 3), 50.0),)
+        tuple((terminal.id, terminal.interface_indices) for terminal in station.terminals or ())
+        == (("tdrs_ka_sa", (2, 3)),)
         for station in cfg.gs_file.stations
     )
     assert all(
-        tuple(
-            (terminal.interface_indices, terminal.bandwidth_mbps)
-            for terminal in satellite.ground_terminals
-        )
-        == (((5, 6), 50.0),)
+        tuple(terminal.interface_indices for terminal in satellite.ground_terminals) == ((5, 6),)
         for satellite in cfg.satellites
     )
+    # The selected mounts carry their own terminals: the station's Ka SA
+    # terminal sends 600 and receives 50, the relay's SA terminal the reverse.
+    rates = cfg.resolved.interface_terminal_rates()
+    assert {
+        rates[(station.name, f"term{index}")]
+        for station in cfg.gs_file.stations
+        for index in (2, 3)
+    } == {InterfaceRates(transmit_mbps=600.0, receive_mbps=50.0)}
+    satellites = {node.node_id for node in cfg.resolved.nodes if node.kind == "satellite"}
+    assert {rates[(node_id, f"gnd{index}")] for node_id in satellites for index in (5, 6)} == {
+        InterfaceRates(transmit_mbps=50.0, receive_mbps=600.0)
+    }
 
     context = _step_context_from_bundle(cfg)
 
@@ -228,11 +228,6 @@ def test_inmarsat_access_rule_remains_on_standard_geo_mounts() -> None:
         "access_ka",
         "access_ka",
     )
-    assert {
-        candidate.bandwidth_mbps
-        for candidate in cfg.resolved.link_candidates
-        if candidate.kind == "access"
-    } == {750.0}
     assert cfg.gs_file is not None
     assert all(
         tuple(terminal.id for terminal in station.terminals or ()) == ("access_ka",)

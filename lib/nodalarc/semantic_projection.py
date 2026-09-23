@@ -277,7 +277,6 @@ def _link_candidate_projection(candidate: ResolvedLinkCandidate) -> dict[str, An
             "kind": candidate.kind,
             "terminal_medium": candidate.terminal_medium,
             "endpoints": endpoints,
-            "bandwidth_mbps": candidate.bandwidth_mbps,
             "topology_mode": candidate.topology_mode,
             "priority": candidate.priority,
         }

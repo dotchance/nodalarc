@@ -44,7 +44,6 @@ def _link_up(sim_time=T0) -> LinkUp:
         interface_a="isl0",
         interface_b="isl1",
         latency_ms=2.5,
-        bandwidth_mbps=1000.0,
         range_km=749.481145,
         reason="visibility",
     )
@@ -156,7 +155,6 @@ class TestLinkEventQueries:
                 interface_a="isl0",
                 interface_b="isl1",
                 latency_ms=2.5,
-                bandwidth_mbps=1000.0,
                 range_km=749.481145,
                 reason="vis",
             ),

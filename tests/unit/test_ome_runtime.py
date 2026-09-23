@@ -18,20 +18,19 @@ ISS_TLE_LINE_1 = "1 25544U 98067A   21075.51041667  .00001264  00000-0  29660-4 
 ISS_TLE_LINE_2 = "2 25544  51.6442  21.5417 0002426  95.1670  21.8444 15.48974333273145"
 
 
-def _isl_terminal(*, count: int, bandwidth_mbps: float) -> IslTerminal:
+def _isl_terminal(*, count: int) -> IslTerminal:
     return IslTerminal(
         type="optical",
         count=count,
         max_range_km=5000.0,
-        bandwidth_mbps=bandwidth_mbps,
         max_tracking_rate_deg_s=3.0,
     )
 
 
 def test_interface_index_selects_the_owning_resolved_terminal_block():
     terminals = (
-        _isl_terminal(count=2, bandwidth_mbps=100_000.0),
-        _isl_terminal(count=2, bandwidth_mbps=10_000.0),
+        _isl_terminal(count=2),
+        _isl_terminal(count=2),
     )
 
     assert isl_terminal_for_interface(terminals, "isl0") is terminals[0]
@@ -42,7 +41,7 @@ def test_interface_index_selects_the_owning_resolved_terminal_block():
 
 @pytest.mark.parametrize("interface_name", ["gnd0", "islx", "isl4"])
 def test_interface_lookup_rejects_invalid_or_unowned_indices(interface_name: str):
-    terminals = (_isl_terminal(count=2, bandwidth_mbps=100_000.0),)
+    terminals = (_isl_terminal(count=2),)
 
     with pytest.raises(ValueError):
         isl_terminal_for_interface(terminals, interface_name)

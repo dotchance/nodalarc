@@ -137,6 +137,7 @@ class SessionContext:
         self._resolved_link_kind_by_rule_id = {
             rule.rule_id: rule.kind for rule in resolved.link_rules
         }
+        self._interface_rates = resolved.interface_terminal_rates()
         self.beam_falloff_exponent: float = platform.vs_api_visual_beam_falloff_exponent
 
         # Wall-clock actuation-latency contract (platform vs_api_actuation_*) — the
@@ -244,6 +245,7 @@ class SessionContext:
         self._node_primary_prefix_by_id = {}
         self._resolved_static_nodes_by_id = {}
         self._resolved_link_kind_by_rule_id = {}
+        self._interface_rates = {}
         self.beam_falloff_exponent = 2.0
         self.actuation_expected_latency_ms = 250.0
         self.actuation_fault_after_ms = 1200.0
@@ -611,7 +613,6 @@ class SessionContext:
                     field
                     for field in (
                         "latency_ms",
-                        "bandwidth_mbps",
                         "range_km",
                         "interface_a",
                         "interface_b",
@@ -630,6 +631,9 @@ class SessionContext:
                     link_rule_id=link.link_rule_id,
                     endpoint_segments=link.endpoint_segments,
                 )
+                transmit_a, transmit_b = self._link_transmit_rates(
+                    link.node_a, link.interface_a, link.node_b, link.interface_b
+                )
                 new_links[key] = LinkState(
                     node_a=link.node_a,
                     node_b=link.node_b,
@@ -637,7 +641,8 @@ class SessionContext:
                     link_type=public_link_type,
                     link_reason="",
                     latency_ms=link.latency_ms,
-                    bandwidth_mbps=link.bandwidth_mbps,
+                    transmit_mbps_a=transmit_a,
+                    transmit_mbps_b=transmit_b,
                     range_km=link.range_km,
                     traffic_load_pct=None,
                     interface_a=link.interface_a,
@@ -744,6 +749,28 @@ class SessionContext:
             reason_counts=reason_counts,
         )
 
+    def _link_transmit_rates(
+        self, node_a: str, interface_a: str, node_b: str, interface_b: str
+    ) -> tuple[float, float]:
+        """Each end's own terminal transmit rate, from the resolved session.
+
+        node_a to node_b runs at node_a's transmit rate and node_b to node_a
+        at node_b's; neither end's receive rate enters either value.
+        """
+        transmit: list[float] = []
+        for node_id, interface in ((node_a, interface_a), (node_b, interface_b)):
+            rates = self._interface_rates.get((node_id, interface))
+            if rates is None:
+                log.error(
+                    "Active link end %s/%s has no resolved terminal rates", node_id, interface
+                )
+                raise ValueError(
+                    f"active link end {node_id}/{interface} has no terminal rates in the "
+                    "resolved session"
+                )
+            transmit.append(rates.transmit_mbps)
+        return transmit[0], transmit[1]
+
     async def _on_link_up(self, msg) -> None:
         self.last_link_event_wall_time = _time.monotonic()
         data = json.loads(msg.data)
@@ -756,7 +783,6 @@ class SessionContext:
             "interface_a",
             "interface_b",
             "latency_ms",
-            "bandwidth_mbps",
             "range_km",
             "reason",
             "link_type",
@@ -772,6 +798,9 @@ class SessionContext:
             endpoint_segments=data.get("endpoint_segments"),
         )
         trace = self._trace_from_link_event(data, link_type=public_link_type)
+        transmit_a, transmit_b = self._link_transmit_rates(
+            node_a, data["interface_a"], node_b, data["interface_b"]
+        )
         with self.state_lock:
             self.links[key] = LinkState(
                 node_a=node_a,
@@ -780,7 +809,8 @@ class SessionContext:
                 link_type=public_link_type,
                 link_reason=data["reason"],
                 latency_ms=data["latency_ms"],
-                bandwidth_mbps=data["bandwidth_mbps"],
+                transmit_mbps_a=transmit_a,
+                transmit_mbps_b=transmit_b,
                 range_km=data["range_km"],
                 traffic_load_pct=None,
                 interface_a=data["interface_a"],

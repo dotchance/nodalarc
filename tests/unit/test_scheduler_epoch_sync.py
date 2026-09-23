@@ -31,7 +31,6 @@ def _make_dispatcher(**overrides) -> Dispatcher:
     """Create a minimal Dispatcher for state machine testing."""
     defaults = {
         "interface_map": {},
-        "bandwidth_map": {},
         "interface_rates": ANY_INTERFACE_RATES,
         "pod_locator": MagicMock(),
         "agent_pool": MagicMock(),
@@ -209,7 +208,6 @@ class TestSeekEntersSuspended:
         pair = ("sat-a", "sat-b")
         d = _make_dispatcher(
             interface_map={pair: ("isl0", "isl1")},
-            bandwidth_map={pair: 1000.0},
         )
         d._pending_visibility_events.append(_make_visibility_event(old_time, pair))
         d._last_visibility_sim_time = old_time
@@ -363,7 +361,6 @@ class TestDispatcherRequiresSessionId:
         with pytest.raises(TypeError, match="session_id"):
             Dispatcher(
                 interface_map={},
-                bandwidth_map={},
                 interface_rates=ANY_INTERFACE_RATES,
                 pod_locator=MagicMock(),
                 agent_pool=MagicMock(),
@@ -377,7 +374,6 @@ class TestDispatcherRequiresSessionId:
         with pytest.raises(ValueError, match="gs_terminal_capacities is required"):
             Dispatcher(
                 interface_map={},
-                bandwidth_map={},
                 interface_rates=ANY_INTERFACE_RATES,
                 pod_locator=MagicMock(),
                 agent_pool=MagicMock(),

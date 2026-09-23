@@ -75,7 +75,6 @@ class LinkUp(BaseModel):
     interface_a: str
     interface_b: str
     latency_ms: float
-    bandwidth_mbps: float
     range_km: float
     reason: str  # vis_gained, gs_above_horizon, scenario_inject_up, scenario_reconciliation
     link_type: Literal["isl", "ground"]

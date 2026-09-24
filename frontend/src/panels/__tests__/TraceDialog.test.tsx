@@ -208,6 +208,16 @@ describe("TraceDialog outcomes", () => {
     }
   });
 
+  it("counts hops as traceroute does: the source is hop 0", () => {
+    render(<TraceDialog nodes={NODES} snapshot={snapshotWithActiveTrace()} />);
+    // madrid-gw -> leo-1 -> geo-1 -> luna-gw is three hops.
+    expect(screen.getByText(/^3 hops/)).toBeTruthy();
+    const numbers = screen
+      .getAllByText("madrid-gw", { selector: ".trace-hop-name" })
+      .map((name) => name.previousElementSibling?.textContent);
+    expect(numbers).toEqual(["0", "3"]);
+  });
+
   it("shows forward hops in the forward line color and reverse hops in the reverse one", () => {
     render(<TraceDialog nodes={NODES} snapshot={snapshotWithActiveTrace()} />);
     const [forwardName, reverseName] = screen.getAllByText("madrid-gw", { selector: ".trace-hop-name" });

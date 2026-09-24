@@ -891,7 +891,6 @@ def write_wiring_manifest(
                 "isl_interfaces": [],
                 "gnd_interfaces": [],
                 "mpls_enable": False,
-                "segment_routing": False,
                 "remove_default_route": True,
             }
             continue
@@ -923,7 +922,6 @@ def write_wiring_manifest(
                     if iface.name.startswith("gnd")
                 ],
                 "mpls_enable": requirements.mpls_enable,
-                "segment_routing": requirements.segment_routing,
                 "remove_default_route": True,
             }
             continue
@@ -936,7 +934,6 @@ def write_wiring_manifest(
                 "isl_interfaces": [],
                 "gnd_interfaces": [{"name": iface.name} for iface in node.wan_interfaces],
                 "mpls_enable": requirements.mpls_enable,
-                "segment_routing": requirements.segment_routing,
                 "remove_default_route": True,
             }
             ground_bridges[node.node_id] = {}
@@ -1027,41 +1024,6 @@ def write_wiring_manifest(
     return len(isl_pairs)
 
 
-def set_nodalpath_mode(namespace: str, protocol: str) -> None:
-    """Patch the NodalPath Deployment to use --mode live for NodalPath sessions,
-    --mode console for all others. Called before restarting the NodalPath pod.
-    """
-    mode = "live" if protocol == "nodalpath" else "console"
-    apps_v1 = _get_apps_v1()
-    try:
-        deployments = apps_v1.list_namespaced_deployment(
-            namespace, label_selector="app=nodalarc-nodalpath"
-        )
-        if not deployments.items:
-            log.debug("NodalPath deployment not found — skipping mode patch")
-            return
-        deployment = deployments.items[0]
-        deploy_name = deployment.metadata.name
-    except kubernetes.client.rest.ApiException:
-        log.debug("NodalPath deployment not found — skipping mode patch")
-        return
-
-    for container in deployment.spec.template.spec.containers:
-        if container.name == "nodalpath":
-            args = list(container.args or [])
-            for i, arg in enumerate(args):
-                if arg == "--mode" and i + 1 < len(args):
-                    if args[i + 1] != mode:
-                        args[i + 1] = mode
-                        container.args = args
-                        apps_v1.patch_namespaced_deployment(deploy_name, namespace, deployment)
-                        log.info("NodalPath mode set to %s", mode)
-                    else:
-                        log.debug("NodalPath mode already %s", mode)
-                    return
-    log.warning("NodalPath container --mode arg not found in deployment spec")
-
-
 def restart_platform_pods(namespace: str, config_hash: str = "") -> None:
     """Trigger rolling restart of session-scoped platform pods.
 
@@ -1092,7 +1054,6 @@ def restart_platform_pods(namespace: str, config_hash: str = "") -> None:
     for label in [
         "app=nodalarc-ome",
         "app=nodalarc-scheduler",
-        "app=nodalarc-nodalpath",
     ]:
         deployments = apps_v1.list_namespaced_deployment(namespace, label_selector=label)
         for deploy in deployments.items:
@@ -1254,7 +1215,6 @@ def teardown_session(namespace: str, session_ids: Sequence[str]) -> None:
         "nodalarc-session",
         "nodalarc-constellation",
         "nodalarc-ground-stations",
-        "nodalarc-pod-ips",
         WIRING_MANIFEST_CONFIGMAP,
         WIRING_STATUS_CONFIGMAP,
     ]:
@@ -1446,7 +1406,7 @@ def compute_platform_hash(
 ) -> str:
     """Hash resolved runtime truth for service restart detection.
 
-    OME, Scheduler, and NodalPath currently load session truth at startup. Any
+    OME and Scheduler load session truth at startup. Any
     user-authored YAML field or referenced catalog asset that can affect runtime
     computation must therefore change this hash and trigger a platform-pod
     restart. Hashing the raw segment YAML is insufficient because a session can
@@ -1506,20 +1466,6 @@ def compute_runtime_hash(
         payload["deployment_context"] = deployment_context.model_dump(mode="json")
     canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(canonical.encode()).hexdigest()
-
-
-def write_pod_ips_configmap(namespace: str, pod_ips: Mapping[str, str]) -> None:
-    """Write nodalarc-pod-ips ConfigMap from the current session pods' addresses.
-
-    ``pod_ips`` comes from the reconciliation's session-pod observation. Stores
-    the map as a single 'pod-ips.json' key so it can be volume-mounted directly
-    as a JSON file by the NodalPath Deployment.
-    """
-    v1 = _get_v1()
-    ip_map = dict(sorted(pod_ips.items()))
-    data = {"pod-ips.json": json.dumps(ip_map)}
-    _create_or_update_configmap(v1, "nodalarc-pod-ips", namespace, data, owner_ref=None)
-    log.info("Wrote nodalarc-pod-ips with %d entries", len(ip_map))
 
 
 # ---------------------------------------------------------------------------

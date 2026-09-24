@@ -18,7 +18,6 @@ function isStateSnapshot(value: unknown): value is StateSnapshot {
     Array.isArray(v.nodes) &&
     Array.isArray(v.links) &&
     Array.isArray(v.traced_paths) &&
-    Array.isArray(v.active_flows) &&
     Array.isArray(v.recent_events)
   );
 }
@@ -33,6 +32,7 @@ interface SnapshotState {
   sessionTransitioning: boolean;
   sessionError: string | null;
   switchDetail: string | null;
+  tokenError: string | null;
   historicalMode: boolean;
   setHistoricalMode: (val: boolean) => void;
   fetchHistorical: (simTime: string) => Promise<boolean>;
@@ -51,6 +51,7 @@ export function useSnapshot(): SnapshotState {
     sessionTransitioning,
     sessionError,
     switchDetail,
+    tokenError,
     sendMessage,
   } = useWebSocket();
   const [historicalMode, setHistoricalModeState] = useState(false);
@@ -125,6 +126,7 @@ export function useSnapshot(): SnapshotState {
     sessionTransitioning,
     sessionError,
     switchDetail,
+    tokenError,
     historicalMode,
     setHistoricalMode,
     fetchHistorical,

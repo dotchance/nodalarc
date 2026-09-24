@@ -30,7 +30,7 @@ function station(role: NodeRole, instances: NodeRoutingInstance[]): NodeState {
 }
 
 function snapshot(node: NodeState): StateSnapshot {
-  return { nodes: [node], links: [], active_flows: [], traced_paths: [] } as unknown as StateSnapshot;
+  return { nodes: [node], links: [], traced_paths: [] } as unknown as StateSnapshot;
 }
 
 const ISIS: NodeRoutingInstance = {

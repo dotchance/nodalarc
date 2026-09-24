@@ -18,6 +18,8 @@ interface WebSocketState {
   sessionTransitioning: boolean;
   sessionError: string | null;
   switchDetail: string | null;
+  /** Why the last token fetch failed while reconnecting; null once one succeeds. */
+  tokenError: string | null;
   sendMessage: (data: Record<string, unknown>) => void;
 }
 
@@ -32,6 +34,7 @@ export function useWebSocket(): WebSocketState {
   const [sessionTransitioning, setSessionTransitioning] = useState(false);
   const [sessionError, setSessionError] = useState<string | null>(null);
   const [switchDetail, setSwitchDetail] = useState<string | null>(null);
+  const [tokenError, setTokenError] = useState<string | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
   const retriesRef = useRef(0);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -138,7 +141,7 @@ export function useWebSocket(): WebSocketState {
         if (ev.code === 4401 || ev.code === 4003 || ev.code === 1008) {
           retriesRef.current = 0;
         }
-        fetchApiKey().finally(() => scheduleReconnect());
+        scheduleReconnect();
       }
     };
 
@@ -147,11 +150,27 @@ export function useWebSocket(): WebSocketState {
     };
   }, []);
 
+  // Reconnect with a fresh token. A failed token fetch is shown and retried;
+  // the stored key never stands in for it.
+  const reconnectRef = useRef<() => void>(() => {});
+  reconnectRef.current = () => {
+    fetchApiKey().then(
+      () => {
+        setTokenError(null);
+        connect();
+      },
+      (err: unknown) => {
+        setTokenError(err instanceof Error ? err.message : String(err));
+        scheduleReconnect();
+      },
+    );
+  };
+
   const scheduleReconnect = useCallback(() => {
     const backoff = Math.min(1000 * Math.pow(2, retriesRef.current), 30000);
     retriesRef.current++;
-    timerRef.current = setTimeout(connect, backoff);
-  }, [connect]);
+    timerRef.current = setTimeout(() => reconnectRef.current(), backoff);
+  }, []);
 
   useEffect(() => {
     connect();
@@ -177,6 +196,7 @@ export function useWebSocket(): WebSocketState {
     sessionTransitioning,
     sessionError,
     switchDetail,
+    tokenError,
     sendMessage,
   };
 }

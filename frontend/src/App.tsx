@@ -65,14 +65,33 @@ function subtractMsIso(iso: string, deltaMs: number): string {
 }
 
 export function App() {
-  const [ready, setReady] = useState(false);
-  useEffect(() => { fetchApiKey().finally(() => setReady(true)); }, []);
-  if (!ready) return null;
+  const [token, setToken] = useState<
+    { state: "pending" } | { state: "ready" } | { state: "failed"; message: string }
+  >({ state: "pending" });
+  useEffect(() => {
+    fetchApiKey().then(
+      () => setToken({ state: "ready" }),
+      (err: unknown) =>
+        setToken({ state: "failed", message: err instanceof Error ? err.message : String(err) }),
+    );
+  }, []);
+  if (token.state === "pending") return null;
+  if (token.state === "failed") {
+    return (
+      <div className="connection-startup-error">
+        <div className="startup-error-box">
+          <h2>Cannot get a VS-API token</h2>
+          <p>{token.message}</p>
+          <button onClick={() => window.location.reload()}>Retry</button>
+        </div>
+      </div>
+    );
+  }
   return <AppInner />;
 }
 
 function AppInner() {
-  const { snapshot, ephemeris, playbackState, connected, hasEverConnected, kicked, sessionTransitioning, sessionError, switchDetail, historicalMode, setHistoricalMode, fetchHistorical, historicalError, sendMessage } =
+  const { snapshot, ephemeris, playbackState, connected, hasEverConnected, kicked, sessionTransitioning, sessionError, switchDetail, tokenError, historicalMode, setHistoricalMode, fetchHistorical, historicalError, sendMessage } =
     useSnapshot();
   const { selection, select, clearSelection, anchorGsId } = useSelection();
   const preselectedAppliedRef = useRef(false);
@@ -362,7 +381,10 @@ function AppInner() {
       {viewMode !== "builder" && (
       <div className="banner-stack">
         {!kicked && !connected && hasEverConnected && (
-          <div className="connection-banner">Connection lost. Reconnecting...</div>
+          <div className="connection-banner">
+            Connection lost. Reconnecting...
+            {tokenError !== null && ` VS-API token: ${tokenError}`}
+          </div>
         )}
         {connected && !switching && sessionStatus !== "wiring" && (!snapshot || snapshot.nodes.length === 0) && (
           <div className="connection-banner">Initializing constellation...</div>

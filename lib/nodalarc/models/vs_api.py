@@ -12,7 +12,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from nodalarc.body_frames import SupportedSurfaceBody
 from nodalarc.model_validation import AddressFamily
-from nodalarc.models.resolved_session import NodeRole
+from nodalarc.models.resolved_session import NodeKind, NodeRole
 from nodalarc.models.scheduler_ops import ActuationState
 from nodalarc.models.segment_session import LINK_STATE_PROTOCOLS, RoutingProtocol
 
@@ -20,7 +20,7 @@ from nodalarc.models.segment_session import LINK_STATE_PROTOCOLS, RoutingProtoco
 class NodeAddress(BaseModel):
     """Configured network identity/address associated with one node."""
 
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
     purpose: Literal["router_loopback", "site_interface", "site_prefix"]
     family: AddressFamily
@@ -32,7 +32,7 @@ class NodeAddress(BaseModel):
 class NodeInstanceInterface(BaseModel):
     """One interface a node runs a routing instance on."""
 
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
     name: str
     # The interface's OSPF area. IS-IS and static interfaces carry no area.
@@ -42,7 +42,7 @@ class NodeInstanceInterface(BaseModel):
 class NodeRoutingInstance(BaseModel):
     """A node's participation in one routing instance (a ``routing.domains`` entry)."""
 
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
     domain_id: str
     protocol: RoutingProtocol
@@ -76,10 +76,10 @@ class NodeRoutingInstance(BaseModel):
 class NodeState(BaseModel):
     """State of a single node in the constellation."""
 
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
     node_id: str
-    node_type: str  # "satellite" or "ground_station"
+    node_type: NodeKind
     lat_deg: float
     lon_deg: float
     alt_km: float
@@ -112,7 +112,7 @@ class NodeState(BaseModel):
 class LinkState(BaseModel):
     """State of a single link between two nodes."""
 
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
     node_a: str
     node_b: str
@@ -143,7 +143,7 @@ class LinkState(BaseModel):
 class LinkDecisionTrace(BaseModel):
     """Why an active link exists and which authority produced its values."""
 
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
     node_a: str
     node_b: str
@@ -241,7 +241,7 @@ class TracedPath(BaseModel):
 class NetworkHealth(BaseModel):
     """Overall network health status."""
 
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
     status: str  # "converged", "converging", or "degraded"
     converging_since_ms: int | None
@@ -249,22 +249,10 @@ class NetworkHealth(BaseModel):
     last_convergence_ms: float | None
 
 
-class ActiveFlow(BaseModel):
-    """Active traffic flow configuration."""
-
-    model_config = ConfigDict(frozen=True)
-
-    flow_id: str
-    src_node: str
-    dst_node: str
-    protocol: str  # "udp" or "tcp"
-    probe_type: str  # "continuous" or "burst"
-
-
 class RecentEvent(BaseModel):
     """Recent event for the VF event log."""
 
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
     sim_time: datetime
     node_id: str
@@ -275,7 +263,7 @@ class RecentEvent(BaseModel):
 class ActuationNotice(BaseModel):
     """User-visible Scheduler actuation problem for one ground station."""
 
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
     gs_id: str
     actuation_state: ActuationState
@@ -294,7 +282,7 @@ class ActuationNotice(BaseModel):
 class ActuationHealthGroundStation(BaseModel):
     """Latest actuation state for one GS on one Scheduler instance."""
 
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
     gs_id: str
     actuation_state: ActuationState
@@ -308,7 +296,7 @@ class ActuationHealthGroundStation(BaseModel):
 class ActuationHealthInstance(BaseModel):
     """Aggregated actuation health for one Scheduler instance."""
 
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
     scheduler_instance_id: str
     hostname: str
@@ -319,7 +307,7 @@ class ActuationHealthInstance(BaseModel):
 class ActuationHealth(BaseModel):
     """Session-level Scheduler actuation health."""
 
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
     session_id: str
     wiring_generation: str
@@ -329,7 +317,7 @@ class ActuationHealth(BaseModel):
 class AlmanacState(BaseModel):
     """NodalPath almanac push tracking state."""
 
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
     last_topology_state_id: str | None = None
     last_push_sim_time: str | None = None
@@ -348,7 +336,7 @@ class StateSnapshot(BaseModel):
     if behind, never queue.
     """
 
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
     sim_time: datetime
     wall_time: datetime
@@ -364,7 +352,6 @@ class StateSnapshot(BaseModel):
     # (honest: nothing proven), never a masked connected.
     kernel_actual_pairs: list[list[str]] = Field(default_factory=list)
     traced_paths: list[TracedPath]
-    active_flows: list[ActiveFlow]
     recent_events: list[RecentEvent]
     network_health: NetworkHealth
     routing_stack: str | None = None

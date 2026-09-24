@@ -57,8 +57,6 @@ spec:
 {{- end }}
             - name: PROBE_IMAGE
               value: {{ required "images.probe is required" .Values.images.probe | quote }}
-            - name: NODALPATH_FWD_IMAGE
-              value: {{ required "images.nodalpathFwd is required" .Values.images.nodalpathFwd | quote }}
             - name: IMAGE_PULL_POLICY
               value: {{ .Values.imagePullPolicy | quote }}
           ports:

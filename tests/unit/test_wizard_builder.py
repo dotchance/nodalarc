@@ -484,7 +484,7 @@ def test_wizard_offers_only_what_some_registered_adapter_renders(monkeypatch) ->
 def test_wizard_refuses_an_extension_no_adapter_renders(monkeypatch, tmp_path: Path) -> None:
     from nodalarc.workloads.adapter import AdapterSupport, RoutingProtocolSupport
 
-    from adapters.frr.support import FRR_BFD_SUPPORT
+    from adapters.frr.support import FRR_ISIS_BFD_SUPPORT, FRR_OSPF_BFD_SUPPORT
 
     _register(
         monkeypatch,
@@ -493,13 +493,13 @@ def test_wizard_refuses_an_extension_no_adapter_renders(monkeypatch, tmp_path: P
                 routing={
                     "isis": RoutingProtocolSupport(
                         frozenset({"mpls"}),
-                        FRR_BFD_SUPPORT,
+                        FRR_ISIS_BFD_SUPPORT,
                         address_families=frozenset({"ipv4", "ipv6"}),
                         domains_per_router=1,
                     ),
                     "ospf": RoutingProtocolSupport(
                         frozenset({"mpls"}),
-                        FRR_BFD_SUPPORT,
+                        FRR_OSPF_BFD_SUPPORT,
                         address_families=frozenset({"ipv4", "ipv6"}),
                         domains_per_router=1,
                     ),

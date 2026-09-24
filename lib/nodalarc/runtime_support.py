@@ -197,10 +197,25 @@ def registered_routing_support(protocol: str) -> RoutingProtocolSupport | None:
     }
     return RoutingProtocolSupport(
         capabilities=capabilities,
-        bfd=BfdSupport(**bounds),
+        bfd=BfdSupport(
+            **bounds,
+            mixed_family_peers=any(item.mixed_family_peers for item in bfd_declared),
+        ),
         address_families=address_families,
         domains_per_router=domains_per_router,
     )
+
+
+def bfd_spans_mixed_family_peers(adapter: str, protocol: str) -> bool:
+    """Whether ``adapter``'s BFD for ``protocol`` runs on an interface whose
+    possible peers mix IPv6 and IPv4-only nodes."""
+    support = registered_adapter_support().get(adapter)
+    if support is None:
+        raise ValueError(f"workload adapter {adapter!r} is not registered")
+    protocol_support = support.routing.get(protocol)
+    if protocol_support is None or protocol_support.bfd is None:
+        raise ValueError(f"workload adapter {adapter!r} renders no BFD for {protocol!r}")
+    return protocol_support.bfd.mixed_family_peers
 
 
 def check_routing_members(

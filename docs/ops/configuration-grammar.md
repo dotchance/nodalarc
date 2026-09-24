@@ -1128,8 +1128,8 @@ adapter renders, naming the nodes, the instances and the adapter.
 
 When `routing` is present, every node running a routing workload participates
 in an instance, and every instance has at least one participant. With
-`routing` omitted, the default instance's participants are the nodes whose
-adapter renders IS-IS.
+`routing` omitted, the default instance runs IS-IS and its participants are
+every node running a routing workload; each one's adapter must render IS-IS.
 
 These rules govern what the platform renders and delivers. They state
 nothing about protocol behavior: what the running images do with their
@@ -1480,9 +1480,9 @@ value. Materialization omits a route to the receiving node's own loopback and
 the peer-loopback seed route.
 
 When `routing` is omitted, the resolver creates `default_domain`, running
-IS-IS over the routers whose adapter renders IS-IS, and requires at least one
-such node. A session with no `routing` block whose routers cannot render
-IS-IS is invalid; declare routing explicitly.
+IS-IS over every node that runs a routing workload, and requires at least one
+such node. A session with no `routing` block in which any such node's adapter
+cannot render IS-IS is refused; declare routing explicitly.
 
 ## Simulation, time, ephemeris, and dispatch
 
@@ -1656,15 +1656,17 @@ construct. The production Earth-Luna profile currently supports:
   IS-IS instance, one OSPF instance, and any number of static instances on
   one router;
 - IPv4 and IPv6 on IS-IS, OSPF, and static instances. IS-IS routes IPv6 in its
-  IPv6 unicast topology, so IPv6 follows only adjacencies whose two ends
-  carry IPv6. OSPF participants that carry IPv6 run OSPFv3 beside OSPFv2,
+  IPv6 unicast topology, on an interface only where a possible neighbor
+  carries IPv6, so IPv6 follows only adjacencies whose two ends carry IPv6. OSPF participants that carry IPv6 run OSPFv3 beside OSPFv2,
   with the same router id, areas, costs, timers, and BFD;
 - MPLS, segment routing, and traffic engineering on IS-IS and OSPF
   instances, for IPv4;
-- BFD on IS-IS and OSPF instances, with a detect multiplier of 1 to 255 and
-  receive and transmit intervals of 10 to 4294967 ms, on every interface
-  where the IGP runs actively: point-to-point links and site LANs with
-  another participant of the instance;
+- BFD on IS-IS and OSPF instances, within the detect multiplier and interval
+  ranges the FRR adapter declares, on every interface where the IGP runs
+  actively: point-to-point links and site LANs with another participant of
+  the instance. IS-IS BFD is refused on an interface of an IPv6 router that
+  reaches both IPv6 and IPv4-only neighbors, since FRR's isisd starts BFD
+  there only toward neighbors that carry IPv6;
 - `static_ip` routing boundaries;
 - serialized ground handovers with `handover_concurrency: one_at_a_time`, at
   most one reserved MBB overlap, and one-tick BBM acquisition;

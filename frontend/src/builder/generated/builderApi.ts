@@ -1712,7 +1712,7 @@ export interface BuilderWorldNode {
   readonly local_node_id: string;
   readonly segment_id: string;
   readonly namespace: string | null;
-  readonly kind: "satellite" | "ground_station" | "relay";
+  readonly kind: "satellite" | "ground_station";
   readonly plane: number | null;
   readonly slot: number | null;
   readonly tags: ReadonlyArray<string>;

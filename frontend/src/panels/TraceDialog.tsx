@@ -26,18 +26,23 @@ interface TraceDialogProps {
   snapshot?: StateSnapshot | null;
 }
 
+/** Hops as traceroute counts them: its probe rows. The hop list starts at the
+ *  source, which is hop 0 and not a hop of the path. */
+function hopsText(hops: readonly string[]): string {
+  const count = hops.length - 1;
+  return `${count} hop${count === 1 ? "" : "s"}`;
+}
+
 /** What a direction's outcome says beyond its hop list, or null when it reached. */
 function directionOutcome(
   label: string,
   state: TraceState,
-  hopCount: number,
+  hops: readonly string[],
   error: string | null,
 ): string | null {
   if (state === "running") return `${label}: tracing…`;
   if (state === "failed") return `${label} trace could not run: ${error ?? ""}`;
-  if (state === "not_reached") {
-    return `${label}: destination did not answer after ${hopCount - 1} hop${hopCount - 1 === 1 ? "" : "s"}`;
-  }
+  if (state === "not_reached") return `${label}: destination did not answer after ${hopsText(hops)}`;
   return null;
 }
 
@@ -152,7 +157,7 @@ export function TraceDialog({ nodes, selectedNodeId, snapshot }: TraceDialogProp
               </span>
             )}
             <span style={{ fontSize: 11, color: "var(--text-primary)", fontWeight: 600 }}>
-              {tp.hops.length} hops
+              {hopsText(tp.hops)}
               {tp.rtt_ms != null && ` · ${tp.rtt_ms.toFixed(1)}ms fwd`}
               {tp.reverse_rtt_ms != null && ` / ${tp.reverse_rtt_ms.toFixed(1)}ms rev`}
             </span>
@@ -167,8 +172,8 @@ export function TraceDialog({ nodes, selectedNodeId, snapshot }: TraceDialogProp
           )}
 
           {[
-            directionOutcome("Forward", tp.state, tp.hops.length, tp.error),
-            directionOutcome("Reverse", tp.reverse_state, tp.reverse_hops.length, tp.reverse_error),
+            directionOutcome("Forward", tp.state, tp.hops, tp.error),
+            directionOutcome("Reverse", tp.reverse_state, tp.reverse_hops, tp.reverse_error),
           ]
             .filter((line): line is string => line !== null)
             .map((line) => (
@@ -214,13 +219,13 @@ function HopList({
       {hops.map((hop, i) => {
         const rtt = hopRtts[i] ?? null;
         // Per-hop delay = delta between consecutive cumulative traceroute round
-        // trips. Row 1 is the trace's source, whose round trip to itself is zero.
+        // trips. Hop 0 is the trace's source, whose round trip to itself is zero.
         const prevRtt = i === 1 ? 0 : i > 1 ? (hopRtts[i - 1] ?? null) : null;
         const delta = rtt != null && prevRtt != null ? rtt - prevRtt : null;
 
         return (
           <div key={i} style={{ display: "flex", gap: 6, alignItems: "baseline" }}>
-            <span style={{ color: "var(--text-dim)", width: 16, textAlign: "right", flexShrink: 0 }}>{i + 1}</span>
+            <span style={{ color: "var(--text-dim)", width: 16, textAlign: "right", flexShrink: 0 }}>{i}</span>
             <span className="trace-hop-name" style={{ color }}>{hop}</span>
             {delta != null && delta > 0 && (
               <span style={{ color: "var(--text-secondary)", fontSize: 9, flexShrink: 0 }}>

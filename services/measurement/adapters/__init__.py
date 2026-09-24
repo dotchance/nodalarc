@@ -29,6 +29,10 @@ class ProtocolAdapter(Protocol):
         """Drain buffered events since last call (non-blocking)."""
         ...
 
+    def poll(self, node_id: str) -> None:
+        """Poll a node's protocol state now, buffering the events it finds."""
+        ...
+
     def trace_path(self, node_id: str, dst_ip: str) -> list[str]:
         """Trace forwarding path from node to destination IP."""
         ...

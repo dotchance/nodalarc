@@ -138,17 +138,6 @@ export function NetworkSummary({ snapshot }: NetworkSummaryProps) {
         </div>
       ))}
 
-      {snapshot.active_flows.length > 0 && (
-        <>
-          <h3>Flow Health</h3>
-          {snapshot.active_flows.map((f) => (
-            <div className="detail-row" key={f.flow_id}>
-              <span className="detail-label">{f.src_node} → {f.dst_node}</span>
-              <span className="detail-value">{f.protocol}</span>
-            </div>
-          ))}
-        </>
-      )}
 
     </div>
   );

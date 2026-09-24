@@ -209,7 +209,6 @@ def _make_wiring_manifest(node_ids=("sat-P00S00", "sat-P00S01")):
             "isl_interfaces": [],
             "gnd_interfaces": [],
             "mpls_enable": False,
-            "segment_routing": False,
             "remove_default_route": False,
             "plane": 0,
             "slot": index,
@@ -1073,7 +1072,6 @@ class TestWiringManifest:
             assert "sysctls" in node, f"{node_id} missing sysctls"
             assert isinstance(node["sysctls"], dict), f"{node_id} sysctls not dict"
             assert "mpls_enable" in node, f"{node_id} missing mpls_enable"
-            assert "segment_routing" in node, f"{node_id} missing segment_routing"
             assert "remove_default_route" in node, f"{node_id} missing remove_default_route"
 
     def test_manifest_carries_a_cluster_pod_cidr_for_the_management_path(self, tmp_path):
@@ -1195,18 +1193,17 @@ class TestWiringManifest:
         assert all(node["mpls_enable"] is True for node in manifest["nodes"].values())
 
     @pytest.mark.parametrize(
-        ("extensions", "mpls_sysctls", "segment_routing"),
+        ("extensions", "mpls_sysctls"),
         [
             (
                 ["sr"],
                 {"net.mpls.platform_labels": "100000", "net.mpls.ip_ttl_propagate": "0"},
-                True,
             ),
-            (["mpls"], {"net.mpls.platform_labels": "100000"}, False),
+            (["mpls"], {"net.mpls.platform_labels": "100000"}),
         ],
     )
     def test_manifest_applies_the_domain_kernel_requirements(
-        self, tmp_path, extensions, mpls_sysctls, segment_routing
+        self, tmp_path, extensions, mpls_sysctls
     ):
         spec = _make_catalog_spec(tmp_path, protocol="isis", extensions=extensions)
         manifest = self._build_and_extract(tmp_path, spec=spec)
@@ -1218,7 +1215,6 @@ class TestWiringManifest:
             }
             assert mpls == mpls_sysctls
             assert node["mpls_enable"] is True
-            assert node["segment_routing"] is segment_routing
             assert node["sysctls"]["net.ipv4.conf.all.rp_filter"] == "0"
 
     def test_manifest_requires_runtime_session_id(self, tmp_path):
@@ -1794,15 +1790,7 @@ class TestConfigRendering:
                 f"{cm_name} missing 'router isis'"
             )
 
-    def test_config_version_hash_present(self, tmp_path):
-        configs, _ = self._render_configs(tmp_path)
-        assert configs
-        for cm_name, data in configs.items():
-            assert any(len(text) == 16 for text in data.values()), (
-                f"{cm_name} missing a 16-character _config_version artifact"
-            )
-
-    def test_config_version_changes_with_content(self, tmp_path):
+    def test_configmap_names_change_with_content(self, tmp_path):
         """Different routing configs produce different content-addressed names."""
         configs_ospf, _ = self._render_configs(tmp_path, protocol="ospf")
         configs_isis, _ = self._render_configs(tmp_path, protocol="isis")
@@ -1914,7 +1902,6 @@ class TestPodSpec:
                     "FRR_IMAGE": "test/frr:1",
                     "WIRING_GATE_IMAGE": "test/base:1",
                     "PROBE_IMAGE": "test/probe:1",
-                    "NODALPATH_FWD_IMAGE": "test/nodalpath-fwd:1",
                     "IMAGE_PULL_POLICY": "Never",
                 },
             ),
@@ -2073,7 +2060,6 @@ class TestPodSpec:
                     "FRR_IMAGE": "test/frr:1",
                     "WIRING_GATE_IMAGE": "test/base:1",
                     "PROBE_IMAGE": "test/probe:1",
-                    "NODALPATH_FWD_IMAGE": "test/nodalpath-fwd:1",
                     "IMAGE_PULL_POLICY": "Never",
                 },
             ),
@@ -2129,7 +2115,6 @@ class TestPodSpec:
                     "FRR_IMAGE": "test/frr:1",
                     "WIRING_GATE_IMAGE": "test/base:1",
                     "PROBE_IMAGE": "test/probe:1",
-                    "NODALPATH_FWD_IMAGE": "test/nodalpath-fwd:1",
                     "IMAGE_PULL_POLICY": "Never",
                 },
             ),
@@ -2180,7 +2165,6 @@ class TestPodSpec:
                     "FRR_IMAGE": "test/frr:1",
                     "WIRING_GATE_IMAGE": "test/base:1",
                     "PROBE_IMAGE": "test/probe:1",
-                    "NODALPATH_FWD_IMAGE": "test/nodalpath-fwd:1",
                     "IMAGE_PULL_POLICY": "Never",
                 },
             ),

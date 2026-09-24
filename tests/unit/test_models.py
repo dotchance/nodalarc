@@ -30,7 +30,6 @@ from nodalarc.models.metrics import (
     TraceResponse,
 )
 from nodalarc.models.vs_api import (
-    ActiveFlow,
     LinkState,
     NetworkHealth,
     NodeInstanceInterface,
@@ -937,18 +936,6 @@ class TestNetworkHealth:
         _round_trip(nh)
 
 
-class TestActiveFlow:
-    def test_round_trip(self):
-        af = ActiveFlow(
-            flow_id="ashburn-to-frankfurt",
-            src_node="gs-ashburn",
-            dst_node="gs-frankfurt",
-            protocol="udp",
-            probe_type="continuous",
-        )
-        _round_trip(af)
-
-
 class TestRecentEvent:
     def test_round_trip(self):
         re = RecentEvent(
@@ -1004,7 +991,6 @@ class TestStateSnapshot:
                 ),
             ],
             traced_paths=[],
-            active_flows=[],
             recent_events=[],
             network_health=NetworkHealth(
                 status="converged",

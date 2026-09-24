@@ -34,7 +34,7 @@ import {
   TRACE_WIDTH,
 } from "../../config";
 import { TraceFades } from "../../trace/traceFades";
-import { traceSegments } from "../../trace/traceSegments";
+import { drawsReverse, traceSegments } from "../../trace/traceSegments";
 import { bodyWorldSpheres, getNodeWorldPosition } from "./positions";
 import { MAX_TRACE_LINE_POINTS, traceLinePoints, type BodySphere } from "./linkCurve";
 import { SegmentLineBuffer } from "./segmentLineBuffer";
@@ -133,11 +133,6 @@ function disposeDirection(direction: DirectionLines | null, group: THREE.Group |
 function disposeEntry(entry: FlowPathEntry, group: THREE.Group | null): void {
   disposeDirection(entry.forward, group);
   disposeDirection(entry.reverse, group);
-}
-
-/** Whether a path has an asymmetric reverse leg to draw. */
-function hasReverse(path: TracedPath): boolean {
-  return path.reverse_hops.length > 0 && path.asymmetry_detected === true;
 }
 
 /** Place the direction's hops for this frame; a hop that cannot be placed is absent. */
@@ -283,7 +278,7 @@ export function FlowPaths({ tracedPaths, groundNodeIds }: FlowPathsProps) {
         entries.set(path.flow_id, entry);
       }
       entry.forward.hops = path.hops;
-      if (hasReverse(path)) {
+      if (drawsReverse(path)) {
         entry.reverse ??= makeDirection(group, path.reverse_hops, TRACE_REVERSE_COLOR, resolution());
         entry.reverse.hops = path.reverse_hops;
       } else {

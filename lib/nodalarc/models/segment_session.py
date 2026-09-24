@@ -275,7 +275,7 @@ def _validate_protocol_area_id(protocol: str, area_id: str) -> None:
 
 
 class AggregateOf(BaseModel):
-    """Resolver-derived prefix set (grammar C046): the from-domain's
+    """Resolver-derived prefix set: the from-domain's
     originated prefixes, per address family the boundary can install."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")

@@ -86,12 +86,15 @@ class BfdSupport:
 
     Field names match the session grammar's ``timers.bfd`` fields, so the
     common support check compares each authored value with the bound of the
-    same name.
+    same name. ``mixed_family_peers`` is true when the adapter's BFD runs on an
+    interface whose possible peers mix IPv6 and IPv4-only nodes; an adapter
+    that does not say so is refused there.
     """
 
     detect_multiplier: tuple[int, int]
     rx_interval_ms: tuple[int, int]
     tx_interval_ms: tuple[int, int]
+    mixed_family_peers: bool = False
 
     def __post_init__(self) -> None:
         _check_bounds("detect_multiplier", self.detect_multiplier)

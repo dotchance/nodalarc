@@ -886,7 +886,10 @@ def test_image_tags_are_content_addressed() -> None:
         (repo / "a.txt").write_text("one\n")
         assert tag() == clean
         (repo / "new.txt").write_text("x\n")
-        assert tag() != clean, "untracked files must dirty the tag"
+        with_new = tag()
+        assert with_new != clean, "untracked files must dirty the tag"
+        (repo / "new.txt").write_text("y\n")
+        assert tag() != with_new, "an edit to an untracked file must change the tag"
 
 
 def test_deploy_targets_name_the_service_only() -> None:

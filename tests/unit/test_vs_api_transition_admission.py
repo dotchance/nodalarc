@@ -607,8 +607,7 @@ def _operator_error_cr() -> dict:
 
 
 def _run_poll(monkeypatch, main, *, custom, core) -> SimpleNamespace:
-    import kubernetes.client
-    import kubernetes.config
+    from vs_api import k8s
 
     _install_store(monkeypatch, main)
     manager = SimpleNamespace(_status="wiring", status_detail="")
@@ -618,9 +617,8 @@ def _run_poll(monkeypatch, main, *, custom, core) -> SimpleNamespace:
         "get_platform_config",
         lambda: SimpleNamespace(kubernetes_namespace="nodalarc"),
     )
-    monkeypatch.setattr(kubernetes.config, "load_incluster_config", lambda: None)
-    monkeypatch.setattr(kubernetes.client, "CustomObjectsApi", lambda: custom)
-    monkeypatch.setattr(kubernetes.client, "CoreV1Api", lambda: core)
+    monkeypatch.setattr(k8s, "custom_objects", lambda: custom)
+    monkeypatch.setattr(k8s, "core_v1", lambda: core)
 
     async def no_sleep(_seconds) -> None:
         return None

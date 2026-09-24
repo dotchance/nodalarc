@@ -99,10 +99,6 @@ export function GroundStationDetail({ node, snapshot, onSelect }: GroundStationD
     )
     .sort((a, b) => a.nodeId.localeCompare(b.nodeId));
 
-  const flows = snapshot.active_flows.filter(
-    (f) => f.src_node === node.node_id || f.dst_node === node.node_id,
-  );
-
   // Count ground link terminals (active links = terminals in use)
   const terminalCount = connectedLinks.length;
 
@@ -290,20 +286,6 @@ export function GroundStationDetail({ node, snapshot, onSelect }: GroundStationD
           </div>
         );
       })}
-
-      {flows.length > 0 && (
-        <>
-          <h3>Flows</h3>
-          {flows.map((f) => (
-            <div className="detail-row" key={f.flow_id}>
-              <span className="detail-label">{f.flow_id}</span>
-              <span className="detail-value">
-                {f.src_node} → {f.dst_node}
-              </span>
-            </div>
-          ))}
-        </>
-      )}
 
       <h3>Position</h3>
       <div className="detail-row">

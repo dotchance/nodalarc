@@ -46,7 +46,7 @@ export interface NodeRoutingInstance {
 
 export interface NodeState {
   node_id: string;
-  node_type: string; // "satellite" | "ground_station"
+  node_type: "satellite" | "ground_station";
   lat_deg: number;
   lon_deg: number;
   alt_km: number;
@@ -164,14 +164,6 @@ export interface NetworkHealth {
   last_convergence_ms: number | null;
 }
 
-export interface ActiveFlow {
-  flow_id: string;
-  src_node: string;
-  dst_node: string;
-  protocol: string;
-  probe_type: string;
-}
-
 export interface RecentEvent {
   sim_time: string;
   node_id: string;
@@ -256,7 +248,6 @@ export interface StateSnapshot {
    *  dimmed — so a beam never reads connected while the card says in_flight/faulted. */
   kernel_actual_pairs?: [string, string][];
   traced_paths: TracedPath[];
-  active_flows: ActiveFlow[];
   recent_events: RecentEvent[];
   network_health: NetworkHealth;
   routing_stack: string | null;

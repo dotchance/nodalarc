@@ -1,40 +1,7 @@
 {
   "$defs": {
-    "ActiveFlow": {
-      "description": "Active traffic flow configuration.",
-      "properties": {
-        "flow_id": {
-          "title": "Flow Id",
-          "type": "string"
-        },
-        "src_node": {
-          "title": "Src Node",
-          "type": "string"
-        },
-        "dst_node": {
-          "title": "Dst Node",
-          "type": "string"
-        },
-        "protocol": {
-          "title": "Protocol",
-          "type": "string"
-        },
-        "probe_type": {
-          "title": "Probe Type",
-          "type": "string"
-        }
-      },
-      "required": [
-        "flow_id",
-        "src_node",
-        "dst_node",
-        "protocol",
-        "probe_type"
-      ],
-      "title": "ActiveFlow",
-      "type": "object"
-    },
     "ActuationHealth": {
+      "additionalProperties": false,
       "description": "Session-level Scheduler actuation health.",
       "properties": {
         "session_id": {
@@ -61,6 +28,7 @@
       "type": "object"
     },
     "ActuationHealthGroundStation": {
+      "additionalProperties": false,
       "description": "Latest actuation state for one GS on one Scheduler instance.",
       "properties": {
         "gs_id": {
@@ -118,6 +86,7 @@
       "type": "object"
     },
     "ActuationHealthInstance": {
+      "additionalProperties": false,
       "description": "Aggregated actuation health for one Scheduler instance.",
       "properties": {
         "scheduler_instance_id": {
@@ -149,6 +118,7 @@
       "type": "object"
     },
     "ActuationNotice": {
+      "additionalProperties": false,
       "description": "User-visible Scheduler actuation problem for one ground station.",
       "properties": {
         "gs_id": {
@@ -254,6 +224,7 @@
       "type": "string"
     },
     "LinkState": {
+      "additionalProperties": false,
       "description": "State of a single link between two nodes.",
       "properties": {
         "node_a": {
@@ -439,6 +410,7 @@
       "type": "object"
     },
     "NetworkHealth": {
+      "additionalProperties": false,
       "description": "Overall network health status.",
       "properties": {
         "status": {
@@ -482,6 +454,7 @@
       "type": "object"
     },
     "NodeAddress": {
+      "additionalProperties": false,
       "description": "Configured network identity/address associated with one node.",
       "properties": {
         "purpose": {
@@ -539,6 +512,7 @@
       "type": "object"
     },
     "NodeInstanceInterface": {
+      "additionalProperties": false,
       "description": "One interface a node runs a routing instance on.",
       "properties": {
         "name": {
@@ -565,6 +539,7 @@
       "type": "object"
     },
     "NodeRoutingInstance": {
+      "additionalProperties": false,
       "description": "A node's participation in one routing instance (a ``routing.domains`` entry).",
       "properties": {
         "domain_id": {
@@ -616,6 +591,7 @@
       "type": "object"
     },
     "NodeState": {
+      "additionalProperties": false,
       "description": "State of a single node in the constellation.",
       "properties": {
         "node_id": {
@@ -623,6 +599,10 @@
           "type": "string"
         },
         "node_type": {
+          "enum": [
+            "satellite",
+            "ground_station"
+          ],
           "title": "Node Type",
           "type": "string"
         },
@@ -845,6 +825,7 @@
       "type": "object"
     },
     "RecentEvent": {
+      "additionalProperties": false,
       "description": "Recent event for the VF event log.",
       "properties": {
         "sim_time": {
@@ -1059,6 +1040,7 @@
       "type": "object"
     }
   },
+  "additionalProperties": false,
   "description": "Complete constellation state sent via WebSocket at ~1Hz.\n\nFull snapshots only \u2014 no deltas. Drop intermediate frames\nif behind, never queue.",
   "properties": {
     "sim_time": {
@@ -1108,13 +1090,6 @@
         "$ref": "#/$defs/TracedPath"
       },
       "title": "Traced Paths",
-      "type": "array"
-    },
-    "active_flows": {
-      "items": {
-        "$ref": "#/$defs/ActiveFlow"
-      },
-      "title": "Active Flows",
       "type": "array"
     },
     "recent_events": {
@@ -1242,7 +1217,6 @@
     "nodes",
     "links",
     "traced_paths",
-    "active_flows",
     "recent_events",
     "network_health"
   ],

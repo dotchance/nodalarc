@@ -807,7 +807,6 @@ class TestSnapshotModel:
                 )
             ],
             traced_paths=[],
-            active_flows=[],
             recent_events=[],
             network_health=NetworkHealth(
                 status="converged",
@@ -841,7 +840,6 @@ class TestSnapshotModel:
             nodes=[],
             links=[],
             traced_paths=[],
-            active_flows=[],
             recent_events=[],
             network_health=NetworkHealth(
                 status="converged",
@@ -1172,6 +1170,7 @@ class TestEphemerisPositionPropagation:
         ctx = SessionContext.__new__(SessionContext)
         ctx._init_state_only()
         ctx._role_by_node_id = {"sat-P00S00": "router"}
+        ctx._kind_by_node_id = {"sat-P00S00": "satellite"}
         ctx.cached_ephemeris_obj = SessionEphemeris(
             epoch_id=0,
             sim_time=datetime.fromtimestamp(ISS_TLE_EPOCH, UTC),
@@ -1209,6 +1208,7 @@ class TestEphemerisPositionPropagation:
         ctx = SessionContext.__new__(SessionContext)
         ctx._init_state_only()
         ctx._role_by_node_id = {"ground-gs-denver": "router"}
+        ctx._kind_by_node_id = {"ground-gs-denver": "ground_station"}
         ctx.cached_ephemeris_obj = SessionEphemeris(
             epoch_id=0,
             sim_time=datetime(2025, 1, 1, tzinfo=UTC),
@@ -2829,6 +2829,8 @@ def _message(payload: dict):
         ("GET", "/api/v1/ground-link-decisions", None),
         ("POST", "/api/v1/trace/start", {"src_node": "a", "dst_node": "b"}),
         ("POST", "/api/v1/trace", {"src_node": "a", "dst_node": "b"}),
+        ("POST", "/api/v1/trace/stop", None),
+        ("GET", "/api/v1/trace/status", None),
         ("GET", "/api/v1/links", None),
     ],
 )

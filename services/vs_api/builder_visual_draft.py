@@ -348,24 +348,24 @@ def _site_summary(site: Site) -> str | None:
     return normalized or None
 
 
-def _capabilities_by_segment(world: BuilderWorld | None) -> dict[str, _SegmentCapability]:
+def _capabilities_by_segment(world: BuilderWorld) -> dict[str, _SegmentCapability]:
     capabilities: dict[str, _SegmentCapability] = {}
-    if world is None:
-        return capabilities
     for node in world.nodes:
         capability = capabilities.setdefault(node.segment_id, _SegmentCapability(pairs=set()))
         for block in node.terminal_inventory:
             capability.pairs.add((block.endpoint_role, block.medium))
-            if block.endpoint_role == "access" and block.min_elevation_deg is not None:
-                capability.access_min_elevation_deg = max(
-                    capability.access_min_elevation_deg or 0,
-                    block.min_elevation_deg,
+            if block.endpoint_role == "access":
+                floor = capability.access_min_elevation_deg
+                capability.access_min_elevation_deg = (
+                    block.min_elevation_deg
+                    if floor is None
+                    else max(floor, block.min_elevation_deg)
                 )
     return capabilities
 
 
 def _derive_link_physics(
-    world: BuilderWorld | None,
+    world: BuilderWorld,
     first: _PlacedSegment,
     second: _PlacedSegment,
 ) -> _DerivedLinkPhysics:
@@ -3390,13 +3390,23 @@ class BuilderVisualDraftService:
         *,
         available_node_count: int,
         preview_factory: PreviewFactory | None,
-    ) -> BuilderWorld | None:
+    ) -> BuilderWorld:
+        """The draft's resolved world; a draft that does not resolve is refused
+        with its compile issues, since its terminals are then unknown."""
         compiled = self.compile(
             BuilderVisualDraftCompileRequest(draft=draft),
             available_node_count=available_node_count,
             preview_factory=preview_factory,
         )
-        return compiled.compile_result.resolved_preview
+        preview = compiled.compile_result.resolved_preview
+        if preview is None:
+            issues = "; ".join(issue.message for issue in compiled.compile_result.issues)
+            raise self._command_error(
+                draft,
+                f"The draft does not resolve, so its terminals are unknown: {issues}",
+                code="catalog_authoring.invalid_graph",
+            )
+        return preview
 
     def apply_command(
         self,

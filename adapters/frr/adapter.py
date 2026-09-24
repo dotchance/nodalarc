@@ -6,8 +6,7 @@ FRR is the reference implementation of the workload adapter contract. It
 renders one routed node's resolved facts into the files the FRR image loads
 from its configuration mount: ``frr.conf`` (the integrated configuration),
 ``daemons`` (exactly the daemons its stack selects for the address families
-the node carries) and ``_config_version`` (the readiness proof). The
-configuration fragments behind ``frr.conf`` are rendering inputs and are never
+the node carries). The configuration fragments behind ``frr.conf`` are rendering inputs and are never
 delivered. The image's ENTRYPOINT reads the mount on its own; this adapter sets
 no environment and appends no arguments.
 
@@ -18,7 +17,6 @@ imported on the first render.
 
 from __future__ import annotations
 
-import hashlib
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -119,9 +117,6 @@ class FrrAdapter:
             files={
                 "frr.conf": frr_conf.encode(),
                 "daemons": _daemons_file(stack.daemons).encode(),
-                # The entrypoint writes this after loading, and the readiness
-                # probe diffs it to prove the intended configuration is live.
-                "_config_version": hashlib.sha256(frr_conf.encode()).hexdigest()[:16].encode(),
             }
         )
 

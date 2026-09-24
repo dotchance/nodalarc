@@ -92,10 +92,18 @@ platform:
   # constellations) from exhausting server memory.
   vs_api_introspect_max_response_bytes: 65536
 
+  # ── Session Pod Capacity ────────────────────────────────────────────
+  # Session pods one Kubernetes node is taken to hold. Readiness warns when a
+  # session needs more than the available nodes hold; it does not block.
+  session_pods_per_node: 200
+
   # ── Continuous Trace Interval ───────────────────────────────────────
   # Seconds between trace cycles while both directions reach their
   # destination. A link change on the traced path starts a cycle at once.
   trace_interval_seconds: 3.0
+  # Seconds between trace cycles while a direction does not reach its
+  # destination, so a path that comes up is shown within a second.
+  trace_unreached_retrace_seconds: 1.0
   # A continuous trace stops this many seconds after it starts, so a trace
   # nobody stopped does not run on. A new start runs it again.
   trace_max_seconds: 180.0

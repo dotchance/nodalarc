@@ -62,7 +62,6 @@ def test_vs_api_state_snapshot_schema():
             ),
         ],
         traced_paths=[],
-        active_flows=[],
         recent_events=[],
         network_health=NetworkHealth(
             status="converged",

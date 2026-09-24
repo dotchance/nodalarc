@@ -4,6 +4,7 @@
  *  Visual tokens (colors, sizes) sourced from tokens.ts.
  *  Re-exported here for backwards compatibility with existing consumers. */
 
+import { apiErrorFromException, apiErrorMessage } from "./ui/apiError";
 import { tokens } from "./styles/tokens";
 
 export const EARTH_RADIUS = tokens.earthRadius;
@@ -89,19 +90,22 @@ export function setApiKey(key: string): void {
   }
 }
 
-/** Fetch API key from VS-API token endpoint and store it. */
+/** Fetch the API key from VS-API's token endpoint and store it. A failure
+ *  rejects with VS-API's reason; the stored key never stands in for it. */
 export async function fetchApiKey(): Promise<string> {
+  let resp: Response;
   try {
-    const resp = await fetch(`${REST_URL}/api/v1/auth/token`);
-    if (resp.ok) {
-      const data = await resp.json();
-      if (data.token) {
-        setApiKey(data.token);
-        return data.token;
-      }
-    }
-  } catch { /* VS-API not reachable yet */ }
-  return getApiKey();
+    resp = await fetch(`${REST_URL}/api/v1/auth/token`);
+  } catch (err) {
+    throw new Error(apiErrorFromException(err));
+  }
+  if (!resp.ok) throw new Error(await apiErrorMessage(resp));
+  const data = (await resp.json()) as { token?: unknown };
+  if (typeof data.token !== "string" || data.token === "") {
+    throw new Error("VS-API answered the token request without a token");
+  }
+  setApiKey(data.token);
+  return data.token;
 }
 
 /** Build WebSocket URL with auth token as query parameter. */

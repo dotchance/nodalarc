@@ -42,7 +42,6 @@ def _manifest(
         "sysctls": dict(sysctls),
         "gnd_interfaces": [],
         "mpls_enable": mpls,
-        "segment_routing": False,
         "remove_default_route": False,
         "plane": 0,
     }
@@ -72,7 +71,6 @@ def _manifest(
             "isl_interfaces": [],
             "gnd_interfaces": [{"name": "gnd0"}],
             "mpls_enable": mpls,
-            "segment_routing": False,
             "remove_default_route": False,
         },
     }

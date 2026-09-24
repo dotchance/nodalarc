@@ -654,6 +654,7 @@ def test_router_is_auth_neutral_and_root_can_apply_a_guard(
     guarded.include_router(
         create_builder_router(
             BuilderRouterServices(
+                available_node_count_provider=lambda: 1_000_000,
                 context_provider=lambda: catalog_context,
                 catalog_service_factory=_catalog_service,
             )

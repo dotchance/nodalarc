@@ -47,7 +47,7 @@ from nodalarc.models.segments import GroundScheduling, SegmentClock
 from nodalarc.models.terminal_physics import SatGroundTerminalBoresight, TerminalBoresight
 from nodalarc.tle import tle_epoch_unix, tle_norad_id, validate_tle_pair
 
-NodeKind = Literal["satellite", "ground_station", "relay"]
+NodeKind = Literal["satellite", "ground_station"]
 
 
 class InterfaceRates(NamedTuple):
@@ -323,7 +323,7 @@ class ResolvedHostAttachment(BaseModel):
 
     Derived at resolution: the host's segment address is its allocated
     assignment on the segment its interface joins, and its gateway is the
-    routed node serving that segment. Host attachment is substrate
+    router on that segment with the lowest node id. Host attachment is substrate
     configuration — the platform acting as the network's address authority,
     the way DHCP would — never a protocol-derived forwarding decision. The
     Node Agent applies these facts at wiring time so the host's containers
@@ -1505,6 +1505,28 @@ class ResolvedSession(BaseModel):
                     block.transmit_mbps, block.receive_mbps
                 )
         return rates
+
+    def wan_interface_peers(self) -> dict[tuple[str, str], frozenset[str]]:
+        """The nodes each WAN interface can reach, keyed by (node_id, interface).
+
+        A fixed link's interface reaches its one peer. An access interface can
+        carry any of its node's access candidates, since OME assigns the
+        interface when it schedules an association.
+        """
+        peers: dict[tuple[str, str], set[str]] = {}
+        access_peers: dict[str, set[str]] = {}
+        for candidate in self.link_candidates:
+            if candidate.kind == "access":
+                access_peers.setdefault(candidate.node_a, set()).add(candidate.node_b)
+                access_peers.setdefault(candidate.node_b, set()).add(candidate.node_a)
+                continue
+            interface_a, interface_b = candidate.fixed_interfaces
+            peers.setdefault((candidate.node_a, interface_a), set()).add(candidate.node_b)
+            peers.setdefault((candidate.node_b, interface_b), set()).add(candidate.node_a)
+        for node in self.nodes:
+            for interface in node.access_interfaces:
+                peers[(node.node_id, interface)] = access_peers.get(node.node_id, set())
+        return {key: frozenset(value) for key, value in peers.items()}
 
     def ground_candidate_satellites_by_gs(self) -> dict[str, tuple[str, ...]]:
         """Return access candidate satellites keyed by ground station node id."""

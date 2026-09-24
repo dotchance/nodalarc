@@ -48,7 +48,6 @@ describe("NetworkSummary", () => {
         node("host", "ground_station", "host", []),
       ],
       links: [],
-      active_flows: [],
     } as unknown as StateSnapshot;
 
     render(<NetworkSummary snapshot={snapshot} />);

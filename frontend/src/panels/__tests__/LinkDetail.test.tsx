@@ -38,7 +38,6 @@ function snapshot(): StateSnapshot {
     links: [],
     kernel_actual_pairs: [],
     traced_paths: [],
-    active_flows: [],
     recent_events: [],
     network_health: {
       status: "converged",

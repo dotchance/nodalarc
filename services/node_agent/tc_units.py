@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import math
+from typing import NamedTuple
 
 from pyroute2.netlink.rtnl.tcmsg import common as tc_common
 
@@ -30,6 +31,34 @@ def mbps_to_bytes_per_second(rate_mbps: float) -> int:
     if not rate_mbps > 0:
         raise ValueError(f"shaping rate must be positive, got {rate_mbps}")
     return int(math.floor(rate_mbps * 1_000_000 / 8 + 0.5))
+
+
+# The shaper has one class, so its quantum only has to cover one jumbo frame.
+SHAPER_QUANTUM_BYTES = 16384
+
+
+class HtbClass(NamedTuple):
+    """HTB class 1:1 as it is commanded: rates in bytes per second, bursts in bytes."""
+
+    rate: int
+    ceil: int
+    burst: int
+    cburst: int
+    quantum: int
+
+
+def htb_class(rate_mbps: float, mtu_bytes: int) -> HtbClass:
+    """The shaper class for a link at ``rate_mbps``: ceiling at the rate, and a
+    burst of 4 ms at line rate that always holds one full frame of ``mtu_bytes``."""
+    rate = mbps_to_bytes_per_second(rate_mbps)
+    burst = max(mtu_bytes, rate // 250)
+    return HtbClass(rate=rate, ceil=rate, burst=burst, cburst=burst, quantum=SHAPER_QUANTUM_BYTES)
+
+
+def htb_burst_ticks(rate: int, burst: int) -> int:
+    """A burst as HTB carries it: the time to send it at ``rate``, in scheduler
+    ticks. pyroute2 sends this value and the kernel reports it back unchanged."""
+    return tc_common.calc_xmittime(rate, burst)
 
 
 # Netem counts packets, and it holds every packet for the link delay. Its limit

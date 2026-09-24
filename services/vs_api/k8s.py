@@ -4,7 +4,9 @@
 
 VS-API runs only as a pod in the cluster, so the in-cluster service-account
 configuration is the only configuration it loads. A pod without it fails
-here, at its first Kubernetes call.
+here, at its first Kubernetes call. Every call builds its own client:
+``kubernetes.stream`` swaps a client's request function while an exec runs, so
+a client shared across threads would send other calls over that exec.
 """
 
 from __future__ import annotations

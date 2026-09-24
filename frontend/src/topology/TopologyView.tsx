@@ -7,9 +7,9 @@ import { computeLayout } from "./layout";
 import { drawNode, drawAreaBounds, hitTestNode } from "./nodes";
 import { drawLinks, hitTestLink, type FlowDrawing } from "./topoLinks";
 import { TraceFades } from "../trace/traceFades";
-import { traceSegments } from "../trace/traceSegments";
+import { drawsReverse, traceSegments } from "../trace/traceSegments";
 import { setupInteraction, type ViewTransform } from "./interaction";
-import { FAIL_HOLD_MS, FAIL_FADE_MS, TRACE_FORWARD_COLOR, hexToCSS } from "../config";
+import { FAIL_HOLD_MS, FAIL_FADE_MS, TRACE_FORWARD_COLOR, TRACE_REVERSE_COLOR, hexToCSS } from "../config";
 import { tokens } from "../styles/tokens";
 import type { Regime } from "../taxonomy/regime";
 import type { StateSnapshot, Selection, LinkState, ColorMode, NodeState } from "../types";
@@ -43,6 +43,9 @@ interface TopologyViewProps {
 function bandOf(areaColoring: AreaColoring): (node: NodeState) => string | null {
   return (node) => areaColoring.entryOf(node)?.label ?? null;
 }
+
+const FORWARD_STROKE = hexToCSS(TRACE_FORWARD_COLOR);
+const REVERSE_STROKE = hexToCSS(TRACE_REVERSE_COLOR);
 
 export function TopologyView({
   regimeById, snapshot, selection, onSelect, onFlyTo, colorMode = "area", areaColoring, showIslLinks = true, showGroundLinks = true }: TopologyViewProps) {
@@ -148,31 +151,41 @@ export function TopologyView({
 
     // Draw links first (below nodes)
     traceFadesRef.current.observe(snapshot.traced_paths, now);
-    const flowPath = traceFadesRef.current.drawn(now)[0] ?? null;
-    const flow: FlowDrawing | null = flowPath && {
-      segments: traceSegments(flowPath.path.hops, (hop) => nodeMap.has(hop)),
-      opacity: flowPath.opacity,
-      animate: flowPath.animate,
-    };
+    const drawnTrace = traceFadesRef.current.drawn(now)[0] ?? null;
+    // Each drawn leg with its color and where its hop numbers sit: forward above
+    // the node, reverse below it.
+    const legs: { hops: readonly string[]; color: string; labelDy: number }[] = [];
+    if (drawnTrace) {
+      legs.push({ hops: drawnTrace.path.hops, color: FORWARD_STROKE, labelDy: -10 });
+      if (drawsReverse(drawnTrace.path)) {
+        legs.push({ hops: drawnTrace.path.reverse_hops, color: REVERSE_STROKE, labelDy: 18 });
+      }
+    }
+    const flows: FlowDrawing[] = legs.map((leg) => ({
+      segments: traceSegments(leg.hops, (hop) => nodeMap.has(hop)),
+      color: leg.color,
+      opacity: drawnTrace!.opacity,
+      animate: drawnTrace!.animate,
+    }));
     // Build failTimes map for drawLinks fade animation
     const failTimes = new Map<string, number>();
     for (const [key, fl] of failedLinksRef.current) {
       failTimes.set(key, fl.failTime);
     }
-    drawLinks(ctx, layout.links, nodeMap, flow, dashOffsetRef.current, failTimes, showIslLinks, showGroundLinks);
+    drawLinks(ctx, layout.links, nodeMap, flows, dashOffsetRef.current, failTimes, showIslLinks, showGroundLinks);
 
-    // Draw hop index numbers on the traced path's nodes
-    if (flowPath) {
-      const flowHops = flowPath.path.hops;
+    // Hop numbers on each leg's nodes, as traceroute counts them: the source is 0.
+    if (drawnTrace) {
       ctx.save();
-      ctx.globalAlpha = flowPath.opacity;
-      ctx.fillStyle = hexToCSS(TRACE_FORWARD_COLOR);
+      ctx.globalAlpha = drawnTrace.opacity;
       ctx.font = `9px ${tokens.fontFamilyCli}`;
       ctx.textAlign = "left";
-      for (let i = 0; i < flowHops.length; i++) {
-        const hopNode = nodeMap.get(flowHops[i]!);
-        if (!hopNode) continue;
-        ctx.fillText(String(i + 1), hopNode.x + 12, hopNode.y - 10);
+      for (const leg of legs) {
+        ctx.fillStyle = leg.color;
+        leg.hops.forEach((hop, index) => {
+          const hopNode = nodeMap.get(hop);
+          if (hopNode) ctx.fillText(String(index), hopNode.x + 12, hopNode.y + leg.labelDy);
+        });
       }
       ctx.restore();
     }

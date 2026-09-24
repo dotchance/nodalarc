@@ -56,7 +56,6 @@ def _manifest_data() -> dict:
                 "isl_interfaces": [],
                 "gnd_interfaces": [{"name": "term0"}],
                 "mpls_enable": False,
-                "segment_routing": False,
                 "remove_default_route": True,
             },
             "site-a-gw2": {
@@ -68,7 +67,6 @@ def _manifest_data() -> dict:
                 "isl_interfaces": [],
                 "gnd_interfaces": [{"name": "term0"}],
                 "mpls_enable": False,
-                "segment_routing": False,
                 "remove_default_route": True,
             },
         },
@@ -220,7 +218,6 @@ class TestManifestContract:
             "isl_interfaces": [],
             "gnd_interfaces": [],
             "mpls_enable": False,
-            "segment_routing": False,
             "remove_default_route": True,
         }
         data["site_lans"]["site-a-lan0"]["members"].append(

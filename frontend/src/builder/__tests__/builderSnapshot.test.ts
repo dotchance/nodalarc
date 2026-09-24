@@ -267,7 +267,6 @@ describe("distinctGroundStationSites (site count)", () => {
       node("ground_station", "earth-denver"), // one site (shared namespace)
       node("ground_station", "earth-ames"), // a second site
       node("satellite", "leo-plane-0"), // satellites do not count
-      node("relay", "relay-a"), // relays do not count
     ];
     expect(distinctGroundStationSites(nodes)).toBe(2);
   });

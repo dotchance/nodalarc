@@ -19,6 +19,7 @@ import type { SessionSwitchResult } from "../hooks/useSessionSwitcher";
 import type { CatalogSessionSourceId } from "../builder/generated/builderApi";
 import { REST_URL, authHeaders } from "../config";
 import { apiErrorMessage, apiErrorFromException } from "../ui/apiError";
+import { RecordHistoryToggle } from "../ui/RecordHistoryToggle";
 import { downloadBlob } from "../ui/downloadBlob";
 import { Badge } from "../ui/Badge";
 import { Button, IconButton } from "../ui/Button";
@@ -148,17 +149,11 @@ export function SessionWizard({
       <div className="launcher-shell">
         <header className="launcher-head">
           <h1>Sessions</h1>
-          <label
+          <RecordHistoryToggle
             className="launcher-record-history"
-            title="Keep this session run's state snapshots and link events for later analysis"
-          >
-            <input
-              type="checkbox"
-              checked={recordHistory}
-              onChange={(e) => setRecordHistory(e.target.checked)}
-            />
-            Record session history
-          </label>
+            checked={recordHistory}
+            onChange={setRecordHistory}
+          />
           {onClose && <IconButton icon="x" label="Close (Esc)" onClick={onClose} />}
         </header>
         {systemNotice && <div className="wizard-warning">{systemNotice}</div>}

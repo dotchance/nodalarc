@@ -58,7 +58,7 @@ from nodalarc.models.decision_explanation import (
 )
 from nodalarc.models.link_decisions import GroundLinkDecisionSnapshot
 from nodalarc.models.link_events import LatencyUpdate, LinkDown, LinkUp
-from nodalarc.models.resolved_session import InterfaceRates, NodeRole, ResolvedNode
+from nodalarc.models.resolved_session import InterfaceRates, NodeKind, NodeRole, ResolvedNode
 from nodalarc.models.scheduler_ops import ActualLinkSnapshot, ActuationState, parse_actuation_state
 from nodalarc.models.vs_api import (
     AlmanacState,
@@ -164,6 +164,7 @@ class SessionContext:
         # The routing instances every participant runs; other nodes have none.
         self._routing_instances_by_node_id = routing_instances_by_node_id(resolved)
         self._role_by_node_id = resolved.node_roles()
+        self._kind_by_node_id = {node.node_id: node.kind for node in resolved.nodes}
         self._resolved_static_nodes_by_id = self._build_resolved_static_node_states(
             resolved,
             addresses_by_id=self._node_addresses_by_id,
@@ -283,6 +284,15 @@ class SessionContext:
         self._snapshot_received = False
         self._stopped = False
 
+    def _kind_of(self, node_id: str) -> NodeKind:
+        """The resolved kind of a node the ephemeris names."""
+        kind = self._kind_by_node_id.get(node_id)
+        if kind is None:
+            raise ValueError(
+                f"session ephemeris names node {node_id!r}, which the resolved session does not"
+            )
+        return kind
+
     def _role_of(self, node_id: str) -> NodeRole:
         """The resolved routing role of a node the ephemeris names."""
         role = self._role_by_node_id.get(node_id)
@@ -311,6 +321,7 @@ class SessionContext:
         self._interface_rates = {}
         self._routing_instances_by_node_id = {}
         self._role_by_node_id = {}
+        self._kind_by_node_id = {}
         self.history_path = None
         self.history_error = None
         self._history_lock = threading.Lock()
@@ -1432,7 +1443,7 @@ class SessionContext:
                     )
                     self.nodes[node_id] = NodeState(
                         node_id=node_id,
-                        node_type="satellite",
+                        node_type=self._kind_of(node_id),
                         lat_deg=geo.lat_deg,
                         lon_deg=geo.lon_deg,
                         alt_km=geo.alt_km,
@@ -1494,7 +1505,7 @@ class SessionContext:
                     )
                     self.nodes[node_id] = NodeState(
                         node_id=node_id,
-                        node_type="satellite",
+                        node_type=self._kind_of(node_id),
                         lat_deg=geo.lat_deg,
                         lon_deg=geo.lon_deg,
                         alt_km=geo.alt_km,
@@ -1527,7 +1538,7 @@ class SessionContext:
                     )
                     self.nodes[node_id] = NodeState(
                         node_id=node_id,
-                        node_type="ground_station",
+                        node_type=self._kind_of(node_id),
                         lat_deg=node.lat_deg,
                         lon_deg=node.lon_deg,
                         alt_km=node.alt_km,
@@ -1908,7 +1919,7 @@ class SessionContext:
             raise ValueError(f"resolved ground node {node.node_id!r} is missing fixed position")
         return NodeState(
             node_id=node.node_id,
-            node_type="ground_station",
+            node_type=node.kind,
             lat_deg=node.surface_position.lat_deg,
             lon_deg=node.surface_position.lon_deg,
             alt_km=node.surface_position.alt_m / 1000.0,

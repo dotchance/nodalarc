@@ -41,7 +41,6 @@ def _manifest(hosts: dict[str, str], mpls: frozenset[str] = frozenset()) -> Wiri
             "isl_interfaces": [],
             "gnd_interfaces": [],
             "mpls_enable": node_id in mpls,
-            "segment_routing": False,
             "remove_default_route": False,
             "plane": 0,
             "slot": index,

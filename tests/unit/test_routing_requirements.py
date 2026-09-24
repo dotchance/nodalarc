@@ -21,22 +21,20 @@ _LDP_SYSCTLS = {"net.mpls.platform_labels": "100000"}
 
 
 @pytest.mark.parametrize(
-    ("protocol", "capabilities", "sysctls", "segment_routing"),
+    ("protocol", "capabilities", "sysctls"),
     [
-        ("isis", (), {}, False),
-        ("isis", ("traffic_engineering",), {}, False),
-        ("isis", ("mpls",), _LDP_SYSCTLS, False),
-        ("isis", ("mpls", "traffic_engineering"), _LDP_SYSCTLS, False),
-        ("isis", ("segment_routing",), _SR_SYSCTLS, True),
-        ("isis", ("mpls", "segment_routing"), _SR_SYSCTLS, True),
-        ("ospf", ("mpls",), _LDP_SYSCTLS, False),
-        ("ospf", ("segment_routing", "traffic_engineering"), _SR_SYSCTLS, True),
-        ("static", (), {}, False),
+        ("isis", (), {}),
+        ("isis", ("traffic_engineering",), {}),
+        ("isis", ("mpls",), _LDP_SYSCTLS),
+        ("isis", ("mpls", "traffic_engineering"), _LDP_SYSCTLS),
+        ("isis", ("segment_routing",), _SR_SYSCTLS),
+        ("isis", ("mpls", "segment_routing"), _SR_SYSCTLS),
+        ("ospf", ("mpls",), _LDP_SYSCTLS),
+        ("ospf", ("segment_routing", "traffic_engineering"), _SR_SYSCTLS),
+        ("static", (), {}),
     ],
 )
-def test_kernel_requirements_follow_the_domain_data_plane(
-    protocol, capabilities, sysctls, segment_routing
-) -> None:
+def test_kernel_requirements_follow_the_domain_data_plane(protocol, capabilities, sysctls) -> None:
     requirements = routing_kernel_requirements(
         (
             ResolvedRoutingDomain(
@@ -47,7 +45,6 @@ def test_kernel_requirements_follow_the_domain_data_plane(
 
     assert requirements.sysctls == sysctls
     assert requirements.mpls_enable is bool(sysctls)
-    assert requirements.segment_routing is segment_routing
 
 
 def test_a_node_needs_what_any_of_its_domains_needs() -> None:
@@ -59,7 +56,7 @@ def test_a_node_needs_what_any_of_its_domains_needs() -> None:
     assert routing_kernel_requirements((plain, labelled)).sysctls == _LDP_SYSCTLS
     assert routing_kernel_requirements((plain, labelled)).mpls_enable is True
     none = routing_kernel_requirements(())
-    assert (none.sysctls, none.mpls_enable, none.segment_routing) == ({}, False, False)
+    assert (none.sysctls, none.mpls_enable) == ({}, False)
 
 
 def _shipped(name: str):

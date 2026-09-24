@@ -10,6 +10,14 @@
  *  is drawn in its own style. Hops after the last placed hop draw nothing.
  */
 
+import type { TracedPath } from "../types";
+
+/** Whether a trace's reverse leg is drawn: only when it measured a different path
+ *  back; a symmetric reverse leg would lie on the forward one. */
+export function drawsReverse(path: TracedPath): boolean {
+  return path.reverse_hops.length > 0 && path.asymmetry_detected === true;
+}
+
 export interface TraceSegment {
   from: string;
   to: string;

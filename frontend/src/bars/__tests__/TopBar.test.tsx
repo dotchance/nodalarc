@@ -16,7 +16,6 @@ function snapshotWithActuationNotice(): StateSnapshot {
     nodes: [],
     links: [],
     traced_paths: [],
-    active_flows: [],
     recent_events: [],
     network_health: {
       status: "converged",

@@ -9,6 +9,7 @@ import struct
 from dataclasses import dataclass, field
 from typing import Any
 
+from nodalarc.platform_config import get_platform_config
 from nodalarc.runtime_naming import vxlan_host_ifnames
 from nodalarc.vxlan import VXLAN_DST_PORT
 from pyroute2.netlink.rtnl import TC_H_INGRESS
@@ -23,10 +24,12 @@ from node_agent.kernel_constants import (
     SHAPER_ROOT_HANDLE,
     mpls_input_sysctl,
 )
-from node_agent.namespace_runner import run_in_host_namespace, run_in_pod_namespace
+from node_agent.namespace_ops import _in_namespace, in_host_namespace
 from node_agent.tc_units import (
+    HtbClass,
     delay_ms_to_netem_us,
-    mbps_to_bytes_per_second,
+    htb_burst_ticks,
+    htb_class,
     netem_limit_packets,
     netem_us_to_ticks,
 )
@@ -67,7 +70,7 @@ def verify_pod_interface_exists(pid: int, ifname: str) -> Proof:
     def _op(ipr):
         return _link_rows(ipr, ifname)
 
-    rows = run_in_pod_namespace(pid, _op)
+    rows = _in_namespace(pid, _op)
     if not rows:
         return Proof.fail(f"pod interface {ifname} missing", f"pid={pid}")
     return Proof.ok(f"pod interface {ifname} exists", f"pid={pid}", rows[0]["raw"])
@@ -88,7 +91,7 @@ def verify_mpls_input(pid: int, ifname: str) -> Proof:
             return handle.read().strip()
 
     try:
-        observed = run_in_pod_namespace(pid, _read)
+        observed = _in_namespace(pid, _read)
     except OSError as exc:
         return Proof.fail(
             f"mpls input unreadable on {ifname}",
@@ -116,7 +119,7 @@ def verify_host_interface_state(ifname: str, *, admin_up: bool | None = None) ->
     def _op(ipr):
         return _link_rows(ipr, ifname)
 
-    rows = run_in_host_namespace(_op)
+    rows = in_host_namespace(_op)
     if not rows:
         return Proof.fail(f"host interface {ifname} missing")
     flags = rows[0]["flags"]
@@ -137,7 +140,7 @@ def verify_host_interface_absent(ifname: str) -> Proof:
     def _op(ipr):
         return _link_rows(ipr, ifname)
 
-    rows = run_in_host_namespace(_op)
+    rows = in_host_namespace(_op)
     if rows:
         return Proof.fail(f"host interface {ifname} still exists", rows[0]["raw"])
     return Proof.ok(f"host interface {ifname} absent")
@@ -205,37 +208,47 @@ def _netem_limit(netem: dict[str, Any]) -> int | None:
     return limit if isinstance(limit, int) else None
 
 
-def _shaper_class_rate(ipr, ifname: str) -> tuple[int | None, list[str]]:
-    """The byte rate of HTB class 1:1 on an interface, with its raw evidence.
+def _shaper_class(ipr, ifname: str) -> tuple[HtbClass | None, list[str]]:
+    """HTB class 1:1 on an interface as the kernel reports it, with its raw evidence.
 
-    HTB reports rates of 2**32 bytes per second and above in TCA_HTB_RATE64;
-    below that, the class parameters carry the rate.
+    Rates are bytes per second; HTB reports rates of 2**32 bytes per second and
+    above in TCA_HTB_RATE64 and TCA_HTB_CEIL64. Bursts are the scheduler ticks
+    HTB carries them in.
     """
     idxs = ipr.link_lookup(ifname=ifname)
     if not idxs:
         raise FileNotFoundError(f"Interface {ifname} not found")
     evidence: list[str] = []
-    rate: int | None = None
+    observed: HtbClass | None = None
     for tclass in ipr.get_classes(index=idxs[0]):
         evidence.append(repr(tclass))
         if tclass["handle"] != SHAPER_CLASS_HANDLE or tclass.get_attr("TCA_KIND") != "htb":
             continue
         options = tclass.get_attr("TCA_OPTIONS")
+        parms = options.get_attr("TCA_HTB_PARMS")
         rate64 = options.get_attr("TCA_HTB_RATE64")
-        rate = int(rate64) if rate64 else int(options.get_attr("TCA_HTB_PARMS")["rate"])
-    return rate, evidence
+        ceil64 = options.get_attr("TCA_HTB_CEIL64")
+        observed = HtbClass(
+            rate=int(rate64) if rate64 else int(parms["rate"]),
+            ceil=int(ceil64) if ceil64 else int(parms["ceil"]),
+            burst=int(parms["buffer"]),
+            cburst=int(parms["cbuffer"]),
+            quantum=int(parms["quantum"]),
+        )
+    return observed, evidence
 
 
 def _prove_rate(
     rows: list[dict[str, Any]],
-    rate: int | None,
+    observed: HtbClass | None,
     class_evidence: list[str],
     *,
     where: str,
     rate_mbps: float,
     evidence: list[str],
 ) -> Proof | None:
-    """A failed proof when the HTB shaper does not carry ``rate_mbps``; else None."""
+    """A failed proof when HTB class 1:1 is not the class commanded for
+    ``rate_mbps`` (rate, ceiling, bursts and quantum); else None."""
     roots = [row for row in rows if row["kind"] == "htb" and row["handle"] == SHAPER_ROOT_HANDLE]
     if not roots:
         return Proof.fail(f"missing htb shaper root on {where}", *evidence)
@@ -247,17 +260,25 @@ def _prove_rate(
             f"actual_default_class={default_class}",
             *evidence,
         )
-    expected = mbps_to_bytes_per_second(rate_mbps)
-    if rate is None:
+    if observed is None:
         return Proof.fail(f"missing htb rate class on {where}", *evidence, *class_evidence)
-    if rate != expected:
-        return Proof.fail(
-            f"htb rate mismatch on {where}",
-            f"expected_bytes_per_s={expected}",
-            f"actual_bytes_per_s={rate}",
-            *evidence,
-            *class_evidence,
-        )
+    commanded = htb_class(rate_mbps, get_platform_config().veth_interface_mtu_bytes)
+    expected = HtbClass(
+        rate=commanded.rate,
+        ceil=commanded.ceil,
+        burst=htb_burst_ticks(commanded.rate, commanded.burst),
+        cburst=htb_burst_ticks(commanded.ceil, commanded.cburst),
+        quantum=commanded.quantum,
+    )
+    for name in HtbClass._fields:
+        if getattr(observed, name) != getattr(expected, name):
+            return Proof.fail(
+                f"htb {name} mismatch on {where}",
+                f"expected_{name}={getattr(expected, name)}",
+                f"actual_{name}={getattr(observed, name)}",
+                *evidence,
+                *class_evidence,
+            )
     return None
 
 
@@ -266,11 +287,11 @@ def verify_qdisc(pid: int, ifname: str, *, delay_ms: float, transmit_mbps: float
 
     def _op(ipr):
         rows = _qdisc_rows(ipr, ifname)
-        rate, class_evidence = _shaper_class_rate(ipr, ifname)
-        return rows, rate, class_evidence
+        observed, class_evidence = _shaper_class(ipr, ifname)
+        return rows, observed, class_evidence
 
     try:
-        rows, rate, class_evidence = run_in_pod_namespace(pid, _op)
+        rows, observed, class_evidence = _in_namespace(pid, _op)
     except Exception as exc:
         return Proof.fail(f"qdisc proof failed for {ifname}", f"pid={pid}", str(exc))
 
@@ -310,7 +331,7 @@ def verify_qdisc(pid: int, ifname: str, *, delay_ms: float, transmit_mbps: float
 
     failed = _prove_rate(
         rows,
-        rate,
+        observed,
         class_evidence,
         where=ifname,
         rate_mbps=transmit_mbps,
@@ -332,17 +353,17 @@ def verify_receive_shaping(host_ifname: str, *, receive_mbps: float) -> Proof:
 
     def _op(ipr):
         rows = _qdisc_rows(ipr, host_ifname)
-        rate, class_evidence = _shaper_class_rate(ipr, host_ifname)
-        return rows, rate, class_evidence
+        observed, class_evidence = _shaper_class(ipr, host_ifname)
+        return rows, observed, class_evidence
 
     try:
-        rows, rate, class_evidence = run_in_host_namespace(_op)
+        rows, observed, class_evidence = in_host_namespace(_op)
     except Exception as exc:
         return Proof.fail(f"receive shaping proof failed for {host_ifname}", str(exc))
     evidence = [f"host_ifname={host_ifname}", *(row["raw"] for row in rows)]
     failed = _prove_rate(
         rows,
-        rate,
+        observed,
         class_evidence,
         where=f"host/{host_ifname}",
         rate_mbps=receive_mbps,
@@ -352,7 +373,7 @@ def verify_receive_shaping(host_ifname: str, *, receive_mbps: float) -> Proof:
         return failed
     return Proof.ok(
         f"receive shaping verified on host/{host_ifname}",
-        f"bytes_per_s={rate}",
+        f"receive_mbps={receive_mbps}",
         *evidence,
     )
 
@@ -421,7 +442,7 @@ def pod_veth_end(pid: int, ifname: str) -> PodVethEnd | None:
             mtu=link.get_attr("IFLA_MTU"),
         )
 
-    return run_in_pod_namespace(pid, _read)
+    return _in_namespace(pid, _read)
 
 
 def prove_vxlan_device(ipr, vxlan_if: str, *, vni: int, local_ip: str, remote_ip: str) -> Proof:
@@ -791,7 +812,7 @@ def prove_mirred_redirect(ipr, src_ifname: str, dst_ifname: str) -> Proof:
 
 def verify_vxlan(vni: int, *, local_ip: str, remote_ip: str) -> Proof:
     names = vxlan_host_ifnames(vni)
-    return run_in_host_namespace(
+    return in_host_namespace(
         lambda ipr: prove_vxlan_device(
             ipr, names.tunnel, vni=vni, local_ip=local_ip, remote_ip=remote_ip
         )
@@ -812,4 +833,4 @@ def verify_vxlan_absent(vni: int) -> Proof:
 
 
 def verify_mirred(src_ifname: str, dst_ifname: str) -> Proof:
-    return run_in_host_namespace(lambda ipr: prove_mirred_redirect(ipr, src_ifname, dst_ifname))
+    return in_host_namespace(lambda ipr: prove_mirred_redirect(ipr, src_ifname, dst_ifname))

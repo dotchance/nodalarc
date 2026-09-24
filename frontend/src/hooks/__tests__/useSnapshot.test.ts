@@ -13,7 +13,6 @@ function makeSnapshot(overrides: Partial<StateSnapshot> = {}): StateSnapshot {
     nodes: [{ node_id: "sat-1", node_type: "satellite" } as StateSnapshot["nodes"][number]],
     links: [],
     traced_paths: [],
-    active_flows: [],
     recent_events: [],
     debug_events: [],
     debug_sources: [],

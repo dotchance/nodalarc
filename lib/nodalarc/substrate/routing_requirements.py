@@ -27,12 +27,10 @@ class RoutingKernelRequirements:
     """Per-node kernel settings that one routing domain requires.
 
     ``mpls_enable`` is true exactly when a ``net.mpls.*`` sysctl is required.
-    ``segment_routing`` records that the domain's MPLS data plane is SR-MPLS.
     """
 
     sysctls: dict[str, str]
     mpls_enable: bool
-    segment_routing: bool
 
 
 def routing_kernel_requirements(
@@ -62,7 +60,6 @@ def routing_kernel_requirements(
     return RoutingKernelRequirements(
         sysctls=sysctls,
         mpls_enable=any(name.startswith("net.mpls.") for name in sysctls),
-        segment_routing=segment_routing,
     )
 
 

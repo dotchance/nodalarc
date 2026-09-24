@@ -234,16 +234,13 @@ CatalogContextProvider = Callable[..., CatalogContext | Awaitable[CatalogContext
 AvailableNodeCountProvider = Callable[..., int | Awaitable[int]]
 
 
-def _default_available_node_count() -> int:
-    return 1
-
-
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True, slots=True, kw_only=True)
 class BuilderRouterServices:
     """Injectable backend application services; no browser-selected authority."""
 
+    # The session nodes the cluster offers; every caller names its source.
+    available_node_count_provider: AvailableNodeCountProvider
     context_provider: CatalogContextProvider = get_catalog_context
-    available_node_count_provider: AvailableNodeCountProvider = _default_available_node_count
     compiler: BuilderCompiler = compile_builder_draft
     wizard_request_builder: WizardRequestBuilder = build_wizard_compile_request
     session_service: BuilderSessionService = save_builder_session
@@ -344,9 +341,7 @@ def _save_refusal_response(error: BuilderSessionSaveError) -> JSONResponse:
     )
 
 
-def create_builder_router(
-    services: BuilderRouterServices | None = None,
-) -> APIRouter:
+def create_builder_router(services: BuilderRouterServices) -> APIRouter:
     """Create an auth-neutral router over server-selected Builder services.
 
     The caller owns authentication and may apply a guard with
@@ -356,7 +351,7 @@ def create_builder_router(
     or upload handle.
     """
 
-    selected = services or BuilderRouterServices()
+    selected = services
     router = APIRouter(prefix=BUILDER_API_PREFIX, tags=["builder"])
     Context = Annotated[CatalogContext, Depends(selected.context_provider)]
     NodeCount = Annotated[int, Depends(selected.available_node_count_provider)]

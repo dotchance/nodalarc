@@ -1505,6 +1505,41 @@ def test_connect_command_uses_backend_resolved_terminal_facts(
     )
 
 
+def test_connect_refuses_a_draft_that_does_not_resolve(
+    service: BuilderVisualDraftService,
+) -> None:
+    draft = service.create(BuilderVisualDraftCreateRequest(session_name="unresolved-connect"))
+    for _ in range(2):
+        draft = service.apply_command(
+            BuilderVisualDraftCommandRequest(
+                draft=draft,
+                expected_draft_revision=draft.draft_revision,
+                command={"operation": "add_generated_space", "phasing_mode": "walker_delta"},
+            ),
+            available_node_count=1_000_000,
+            preview_factory=_preview,
+        ).draft
+
+    def failing_preview(resolution: SessionResolution) -> BuilderWorld:
+        raise ValueError("preview could not be built")
+
+    # Without a resolved world the terminals are unknown; connect does not guess them.
+    with pytest.raises(BuilderVisualDraftCommandError, match="does not resolve"):
+        service.apply_command(
+            BuilderVisualDraftCommandRequest(
+                draft=draft,
+                expected_draft_revision=draft.draft_revision,
+                command={
+                    "operation": "connect_segments",
+                    "from_segment_id": "space-1",
+                    "to_segment_id": "space-2",
+                },
+            ),
+            available_node_count=1_000_000,
+            preview_factory=failing_preview,
+        )
+
+
 def test_visual_authoring_assembly_creates_ref_composed_component_proposals(
     service: BuilderVisualDraftService,
 ) -> None:

@@ -21,6 +21,7 @@ def _live(path_changes: list | None = None, *, max_seconds: float = 60.0) -> Con
             read_sim_time=lambda: SIM_TIME,
         ),
         interval_s=0.01,
+        unreached_retrace_s=0.01,
         max_seconds=max_seconds,
         on_path_change=lambda *change: (path_changes if path_changes is not None else []).append(
             change

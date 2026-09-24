@@ -6,6 +6,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
 from nodalarc.models.resolved_session import ResolvedRoutingDomain
 from nodalarc.models.segments import GroundScheduling
 from nodalarc.session_validator import build_validation_report, validate_session_readiness
@@ -261,12 +262,24 @@ def test_complete_sgp4_tle_session_has_no_ome_readiness_error() -> None:
     assert "E020" not in _codes(results)
 
 
-def test_pods_beyond_the_nodes_capacity_warn_without_blocking(monkeypatch) -> None:
-    import nodalarc.session_validator as validator
+@pytest.fixture
+def pods_per_node():
+    """Set the platform's session pods per node for one test."""
+    from nodalarc.platform_config import get_platform_config, init_platform_config
 
+    base = get_platform_config()
+
+    def _set(count: int) -> None:
+        init_platform_config(base.model_copy(update={"session_pods_per_node": count}))
+
+    yield _set
+    init_platform_config(base)
+
+
+def test_pods_beyond_the_nodes_capacity_warn_without_blocking(pods_per_node) -> None:
     resolved = _resolved(constellation={"planes": {"count": 3, "sats_per_plane": 3}})
     pods = len(resolved.nodes)
-    monkeypatch.setattr(validator, "SESSION_PODS_PER_NODE", pods - 1)
+    pods_per_node(pods - 1)
 
     results = validate_session_readiness(resolved, available_node_count=1)
     report = build_validation_report(resolved, results)
@@ -280,21 +293,13 @@ def test_pods_beyond_the_nodes_capacity_warn_without_blocking(monkeypatch) -> No
     assert report.dispatchable is True
 
 
-def test_pods_within_the_nodes_capacity_do_not_warn(monkeypatch) -> None:
-    import nodalarc.session_validator as validator
-
+def test_pods_within_the_nodes_capacity_do_not_warn(pods_per_node) -> None:
     resolved = _resolved(constellation={"planes": {"count": 3, "sats_per_plane": 3}})
-    monkeypatch.setattr(validator, "SESSION_PODS_PER_NODE", len(resolved.nodes))
+    pods_per_node(len(resolved.nodes))
 
     results = validate_session_readiness(resolved, available_node_count=1)
 
     assert "W004" not in _codes(results)
-
-
-def test_one_session_node_holds_two_hundred_session_pods() -> None:
-    import nodalarc.session_validator as validator
-
-    assert validator.SESSION_PODS_PER_NODE == 200
 
 
 def test_validation_report_blocks_on_errors() -> None:

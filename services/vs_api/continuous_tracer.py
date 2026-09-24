@@ -27,10 +27,6 @@ log = logging.getLogger(__name__)
 
 TRACE_FLOW_ID = "__continuous_trace__"
 
-# A direction that did not reach its destination is traced again after this
-# many seconds, so a path that comes up is shown within a second.
-_UNREACHED_RETRACE_SECONDS = 1.0
-
 
 class ContinuousTracer:
     """Traces one node pair in both directions until stopped or out of time."""
@@ -40,11 +36,13 @@ class ContinuousTracer:
         *,
         path_tracer: PathTracer,
         interval_s: float,
+        unreached_retrace_s: float,
         max_seconds: float,
         on_path_change: Callable[[str, str, list[str], list[str]], None],
     ) -> None:
         self._path_tracer = path_tracer
         self._interval_s = interval_s
+        self._unreached_retrace_s = unreached_retrace_s
         self._max_seconds = max_seconds
         self._on_path_change = on_path_change
         self._task: asyncio.Task | None = None
@@ -172,7 +170,7 @@ class ContinuousTracer:
                 previous = self._report_path_changes(previous, result)
 
                 both_reached = result.state == "reached" and result.reverse_state == "reached"
-                interval = self._interval_s if both_reached else _UNREACHED_RETRACE_SECONDS
+                interval = self._interval_s if both_reached else self._unreached_retrace_s
                 with contextlib.suppress(TimeoutError):
                     await asyncio.wait_for(self._retrace_event.wait(), timeout=interval)
             self._latest = self._stopped_result("time_limit", self._last_complete())

@@ -97,3 +97,23 @@ def test_mi_service_uses_resolved_runtime_identity(tmp_path: Path) -> None:
 
     assert service._session_id == "run-mi-0002"
     service._db_conn.close()
+
+
+def test_a_trace_request_traces_to_the_destination_loopback(tmp_path: Path) -> None:
+    from nodalarc.models.metrics import TraceRequest
+
+    resolved = _resolution(run_id="run-mi-0003").resolved
+    traced: list[tuple[str, str]] = []
+    adapter = SimpleNamespace(
+        trace_path=lambda node_id, dst_ip: traced.append((node_id, dst_ip)) or [node_id, dst_ip]
+    )
+    service = MIService(resolved=resolved, adapter=adapter, db_path=str(tmp_path / "mi.db"))
+    src, dst = [
+        node for node in resolved.nodes if node.interfaces is not None and node.interfaces.lo0.ipv4
+    ][:2]
+
+    response = service._resolve_trace(TraceRequest(src_node=src.node_id, dst_node=dst.node_id))
+
+    assert traced == [(src.node_id, dst.interfaces.lo0.ipv4.split("/")[0])]
+    assert response.success is True
+    service._db_conn.close()

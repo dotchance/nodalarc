@@ -19,6 +19,7 @@ import threading
 from collections.abc import Callable
 from typing import TypeVar
 
+from nodalarc.platform_config import get_platform_config
 from pyroute2 import IPRoute
 from pyroute2.netlink.rtnl import TC_H_ROOT
 
@@ -30,7 +31,7 @@ from node_agent.kernel_constants import (
 )
 from node_agent.tc_units import (
     delay_ms_to_netem_us,
-    mbps_to_bytes_per_second,
+    htb_class,
     netem_limit_packets,
 )
 
@@ -170,11 +171,6 @@ def set_interface_down(pid: int, ifname: str) -> None:
 _SHAPER_ROOT = SHAPER_ROOT_HANDLE  # 1:
 _SHAPER_CLASS = SHAPER_CLASS_HANDLE  # 1:1
 _NETEM_HANDLE = NETEM_HANDLE  # 10:
-# Link MTU from the wiring manifest; the token bucket always holds at least
-# one full frame.
-_JUMBO_FRAME_BYTES = 9000
-# One class, so the quantum only has to cover one jumbo frame.
-_SHAPER_QUANTUM_BYTES = 16384
 
 
 def _is_shaper_root(qdisc) -> bool:
@@ -209,8 +205,7 @@ def _install_shaper_root(ipr: IPRoute, idx: int) -> None:
 
 def _rate_limit_egress(ipr: IPRoute, idx: int, rate_mbps: float) -> None:
     """Shape an interface's egress to ``rate_mbps`` through HTB class 1:1."""
-    rate = mbps_to_bytes_per_second(rate_mbps)
-    burst = max(_JUMBO_FRAME_BYTES, rate // 250)
+    shaper = htb_class(rate_mbps, get_platform_config().veth_interface_mtu_bytes)
     _install_shaper_root(ipr, idx)
     ipr.tc(
         "replace-class",
@@ -218,11 +213,11 @@ def _rate_limit_egress(ipr: IPRoute, idx: int, rate_mbps: float) -> None:
         index=idx,
         handle=_SHAPER_CLASS,
         parent=_SHAPER_ROOT,
-        rate=rate,
-        ceil=rate,
-        burst=burst,
-        cburst=burst,
-        quantum=_SHAPER_QUANTUM_BYTES,
+        rate=shaper.rate,
+        ceil=shaper.ceil,
+        burst=shaper.burst,
+        cburst=shaper.cburst,
+        quantum=shaper.quantum,
     )
 
 

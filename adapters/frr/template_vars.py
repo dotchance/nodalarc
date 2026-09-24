@@ -234,7 +234,12 @@ def _domain_facts(
         link = links.get(name)
         if link is None:
             continue
-        entry: dict[str, Any] = {"name": name, "bfd": bfd_enabled}
+        entry: dict[str, Any] = {
+            "name": name,
+            "bfd": bfd_enabled,
+            # IPv6 runs on an interface that reaches a peer carrying it.
+            "ipv6": "ipv6" in node.address_families and link["reaches_ipv6"],
+        }
         if is_igp:
             entry["metric"] = (
                 _ACCESS_LINK_METRIC if link["access"] else _igp_metric(node, name, domain.protocol)
@@ -296,9 +301,12 @@ def _wan_links(resolved: ResolvedSession, node: ResolvedNode) -> dict[str, dict[
     Fixed links come from the node's non-access link candidates, in candidate
     order, each with its peer; ``static_only`` marks a fixed link a
     ``static_ip`` routing boundary crosses. Access links follow, with no
-    fixed peer.
+    fixed peer. ``reaches_ipv6`` marks an interface some possible peer of
+    which carries IPv6.
     """
     static_rules = _static_boundary_rule_ids(resolved)
+    carries_ipv6 = {other.node_id for other in resolved.nodes if "ipv6" in other.address_families}
+    peers = resolved.wan_interface_peers()
     links: dict[str, dict[str, Any]] = {}
     for candidate in resolved.link_candidates:
         if candidate.kind == "access" or node.node_id not in (candidate.node_a, candidate.node_b):
@@ -317,6 +325,7 @@ def _wan_links(resolved: ResolvedSession, node: ResolvedNode) -> dict[str, dict[
             "peer": peer,
             "static_only": candidate.rule_id in static_rules,
             "access": False,
+            "reaches_ipv6": peer_id in carries_ipv6,
         }
     for name in node.access_interfaces:
         if name in links:
@@ -324,7 +333,12 @@ def _wan_links(resolved: ResolvedSession, node: ResolvedNode) -> dict[str, dict[
                 f"node {node.node_id!r} names WAN interface {name!r} as both a fixed "
                 "link and an access link"
             )
-        links[name] = {"peer": None, "static_only": False, "access": True}
+        links[name] = {
+            "peer": None,
+            "static_only": False,
+            "access": True,
+            "reaches_ipv6": bool(peers.get((node.node_id, name), frozenset()) & carries_ipv6),
+        }
     return links
 
 
@@ -424,8 +438,7 @@ def _boundary_export_prefixes(
     """The concrete per-family prefix set one export rule declares.
 
     ``aggregate_of: originated`` derives the from-domain's originated
-    prefixes (grammar C046). Literal prefix lists pass through split by
-    family.
+    prefixes. Literal prefix lists pass through split by family.
     """
     prefixes: dict[str, list[str]] = {"ipv4": [], "ipv6": []}
     declared = export.prefixes
@@ -478,7 +491,7 @@ def _boundary_static_routes(
     for item in resolved.boundary_imports():
         if item.node_id != node.node_id or item.export.to != domain.domain_id:
             continue
-        boundary, export, iface, peer_id = item.boundary, item.export, item.interface, item.peer_id
+        boundary, export, peer_id = item.boundary, item.export, item.peer_id
         from_domain = domains_by_id[export.from_]
         peer = resolved.node_by_id(peer_id)
         if peer is None:
@@ -507,7 +520,7 @@ def _boundary_static_routes(
                         )
                     continue
             else:
-                via = iface if export.install_via == iface else export.install_via
+                via = export.install_via
             for prefix in exports[family]:
                 if _lo0_address(node, family) == prefix.split("/")[0]:
                     continue  # never route our own loopback

@@ -52,7 +52,7 @@ exit
 {% for iface in domain.interfaces %}
 interface {{ iface.name }}
  ip router isis {{ domain.domain_id }}
-{% if "ipv6" in address_families %}
+{% if iface.ipv6 %}
  ipv6 router isis {{ domain.domain_id }}
 {% endif %}
  isis network point-to-point

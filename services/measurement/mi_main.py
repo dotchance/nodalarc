@@ -215,10 +215,9 @@ class MIService:
 
             try:
                 self._adapter.poll(node_id)
-            except AttributeError:
-                pass
             except Exception as exc:
-                log.debug(f"Poll failed for {node_id}: {exc}")
+                # One node's failed poll does not stop collection from the others.
+                log.error("Poll failed for %s: %s", node_id, exc, exc_info=exc)
 
             try:
                 events = self._adapter.get_events(node_id)
@@ -311,8 +310,17 @@ class MIService:
 
     def _resolve_trace(self, req: TraceRequest) -> TraceResponse:
         """Resolve a forwarding path trace between two nodes."""
+        dst = self._resolved.node_by_id(req.dst_node)
+        if dst is None or dst.interfaces is None or dst.interfaces.lo0.ipv4 is None:
+            return TraceResponse(
+                src_node=req.src_node,
+                dst_node=req.dst_node,
+                hops=[],
+                success=False,
+                error=f"{req.dst_node} has no IPv4 loopback to trace to",
+            )
         try:
-            hops = self._adapter.trace_path(req.src_node, req.dst_node)
+            hops = self._adapter.trace_path(req.src_node, dst.interfaces.lo0.ipv4.split("/")[0])
             return TraceResponse(
                 src_node=req.src_node,
                 dst_node=req.dst_node,

@@ -10,7 +10,7 @@ from nodalarc.proto import node_agent_pb2
 from scheduler.desired_state import ActiveLinkInfo
 from scheduler.latency_compensator import LatencyCompensation
 from scheduler.node_agent_batches import build_link_down_batch_plan, build_link_up_batch_plan
-from scheduler.pod_locator import PodLocationError
+from scheduler.pod_locator import PodLocationError, PodLocationMap
 
 from tests.terminal_rate_fixtures import ANY_INTERFACE_RATES
 
@@ -106,14 +106,18 @@ def test_cross_node_link_up_missing_remote_ip_fails_loudly():
         )
     }
 
+    # The real locator: sat-b's hosting node has no InternalIP.
+    locator = PodLocationMap()
+    locator._node_of.update({"sat-a": "k3s-sat-a", "sat-b": "k3s-sat-b"})
+    locator._agent_addrs.update({"k3s-sat-a": "agent-a", "k3s-sat-b": "agent-b"})
+    locator._node_ips["k3s-sat-a"] = "10.0.0.1"
+
     with pytest.raises(PodLocationError, match="no InternalIP for Kubernetes node k3s-sat-b"):
         build_link_up_batch_plan(
             interface_rates=ANY_INTERFACE_RATES,
             pairs={pair},
             desired=desired,
-            locator=_Locator(
-                node_agent_pb2.LOCALITY_CROSS_NODE, node_ips={"k3s-sat-a": "10.0.0.1"}
-            ),
+            locator=locator,
             gs_capacities={},
             compensation_for_pair=_compensation,
         )

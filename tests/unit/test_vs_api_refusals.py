@@ -309,7 +309,6 @@ def test_a_request_that_fails_validation_answers_with_the_declared_validation_bo
 def test_introspect_route_hides_the_kubernetes_client_reason_text(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    import kubernetes.client
     from kubernetes.client.rest import ApiException
 
     class _DeniedCore:
@@ -319,8 +318,7 @@ def test_introspect_route_hides_the_kubernetes_client_reason_text(
             )
 
     monkeypatch.setattr(main, "_API_KEY", "")
-    monkeypatch.setattr(kubernetes.config, "load_incluster_config", lambda: None)
-    monkeypatch.setattr(kubernetes.client, "CoreV1Api", lambda: _DeniedCore())
+    monkeypatch.setattr(main.k8s, "core_v1", lambda: _DeniedCore())
 
     response = TestClient(main.app).post(
         "/api/v1/introspect", json={"node_id": "sat-p00s00", "command": "show isis neighbor"}

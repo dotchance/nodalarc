@@ -17,6 +17,7 @@ from collections.abc import Iterable
 from nodalarc.models.events import ValidationReport, ValidationResult
 from nodalarc.models.ground_policy import VALID_SELECTION_POLICY_NAMES
 from nodalarc.models.resolved_session import ResolvedSession
+from nodalarc.platform_config import get_platform_config
 
 # Kept as the public constant for callers that surface scheduling-policy help.
 VALID_SCHEDULING_POLICIES = VALID_SELECTION_POLICY_NAMES
@@ -403,11 +404,6 @@ def _check_access_geometry_feasibility(resolved: ResolvedSession) -> list[Valida
     return results
 
 
-# Session pods one Kubernetes node is assumed to hold. A placeholder until
-# per-node capacity is measured.
-SESSION_PODS_PER_NODE = 200
-
-
 def _check_available_node_count(
     resolved: ResolvedSession,
     available_node_count: int,
@@ -416,8 +412,9 @@ def _check_available_node_count(
 
     Every resolved node runs one session pod.
     """
+    pods_per_node = get_platform_config().session_pods_per_node
     pod_count = len(resolved.nodes)
-    capacity = available_node_count * SESSION_PODS_PER_NODE
+    capacity = available_node_count * pods_per_node
     if pod_count <= capacity:
         return []
     return [
@@ -427,7 +424,7 @@ def _check_available_node_count(
             message=(
                 f"Session needs {pod_count} session pods; the {available_node_count} "
                 f"available Kubernetes node(s) hold about {capacity} "
-                f"({SESSION_PODS_PER_NODE} per node)."
+                f"({pods_per_node} per node)."
             ),
             remediation="Add Kubernetes nodes labelled for session pods.",
             field_path="segments",

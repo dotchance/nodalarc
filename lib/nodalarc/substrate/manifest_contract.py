@@ -226,7 +226,6 @@ class NodeSpec(_StrictModel):
     isl_interfaces: list[IslInterface]
     gnd_interfaces: list[InterfaceName]
     mpls_enable: bool
-    segment_routing: bool
     remove_default_route: bool
     plane: int | None = None
     slot: int | None = None

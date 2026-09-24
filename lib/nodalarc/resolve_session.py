@@ -79,6 +79,7 @@ from nodalarc.runtime_support import (
     UnsupportedFeature,
     UnsupportedFeatureError,
     adapter_renders_routing,
+    bfd_spans_mixed_family_peers,
     check_router_domains,
     check_routing_members,
 )
@@ -250,6 +251,7 @@ def resolve_session_with_assets(
         for reference in sorted({node.profile for node in resolved_nodes})
     }
     _check_profile_env(workload_profiles, resolved_nodes)
+    _refuse_bfd_where_peers_mix_families(resolved, workload_profiles)
     return SessionResolution(
         resolved=resolved,
         catalog_session=cfg,
@@ -2362,9 +2364,19 @@ def _check_node_workloads(
         raise UnsupportedFeatureError(unsupported)
 
 
+def _routing_adapters(runtime_nodes: tuple[_RuntimeNode, ...]) -> dict[str, str]:
+    """Each node whose profile's adapter renders routing, with that adapter."""
+    return {
+        item.node.node_id: adapter
+        for item in runtime_nodes
+        if (adapter := item.profile_adapter) is not None and adapter_renders_routing(adapter)
+    }
+
+
 def _check_domain_members(
     domain: ResolvedRoutingDomain,
     routers: list[_RuntimeNode],
+    adapters: dict[str, str],
 ) -> None:
     """Refuse a domain whose selected routers' adapters cannot render it.
 
@@ -2374,8 +2386,7 @@ def _check_domain_members(
     """
     by_adapter: dict[str, dict[str, frozenset[AddressFamily]]] = {}
     for item in routers:
-        assert item.profile_adapter is not None  # routers carry a routing adapter
-        by_adapter.setdefault(item.profile_adapter, {})[item.node.node_id] = (
+        by_adapter.setdefault(adapters[item.node.node_id], {})[item.node.node_id] = (
             item.node.address_families
         )
     unsupported = [
@@ -2403,10 +2414,9 @@ def _resolve_routing_domains(
     # adapter must render the domain. A selected node that runs no routing is
     # inside the domain without participating. Participation alone does not
     # make a router; a router also forwards between subnets.
+    adapters = _routing_adapters(runtime_nodes)
     if cfg.routing is None:
-        participants = [
-            item for item in runtime_nodes if adapter_renders_routing(item.profile_adapter)
-        ]
+        participants = [item for item in runtime_nodes if item.node.node_id in adapters]
         if not participants:
             raise SessionResolutionError(
                 "session declares no routing and no node runs a routing workload"
@@ -2419,7 +2429,7 @@ def _resolve_routing_domains(
             capabilities=(),
             area_assignment=None,
         )
-        _check_domain_members(default_domain, participants)
+        _check_domain_members(default_domain, participants, adapters)
         return [default_domain]
     domains: list[ResolvedRoutingDomain] = []
     for domain in cfg.routing.domains:
@@ -2439,7 +2449,7 @@ def _resolve_routing_domains(
         participants = [
             item
             for item in runtime_nodes
-            if item.node.node_id in selected_ids and adapter_renders_routing(item.profile_adapter)
+            if item.node.node_id in selected_ids and item.node.node_id in adapters
         ]
         if not participants:
             raise SessionResolutionError(
@@ -2454,16 +2464,17 @@ def _resolve_routing_domains(
             capabilities=tuple(capabilities),
             area_assignment=domain.area_assignment,
         )
-        _check_domain_members(resolved_domain, participants)
+        _check_domain_members(resolved_domain, participants, adapters)
         domains.append(resolved_domain)
     _validate_routing_domain_partition(domains, runtime_nodes)
-    _check_router_domains(domains, runtime_nodes)
+    _check_router_domains(domains, runtime_nodes, adapters)
     return domains
 
 
 def _check_router_domains(
     domains: list[ResolvedRoutingDomain],
     runtime_nodes: tuple[_RuntimeNode, ...],
+    adapters: dict[str, str],
 ) -> None:
     """Refuse a router in more domains of a protocol than its adapter renders."""
     memberships: dict[str, list[tuple[str, str]]] = {}
@@ -2473,8 +2484,7 @@ def _check_router_domains(
     by_adapter: dict[str, dict[str, tuple[tuple[str, str], ...]]] = {}
     for item in runtime_nodes:
         if item.node.node_id in memberships:
-            assert item.profile_adapter is not None  # participants carry a routing adapter
-            by_adapter.setdefault(item.profile_adapter, {})[item.node.node_id] = tuple(
+            by_adapter.setdefault(adapters[item.node.node_id], {})[item.node.node_id] = tuple(
                 memberships[item.node.node_id]
             )
     unsupported = [
@@ -2513,8 +2523,12 @@ def _validate_area_assignment(
         if assignment.strategy == "per_plane":
             highest_area_index = max(selected_planes) + 1
         else:
-            assert assignment.planes_per_stripe is not None
-            highest_area_index = max(selected_planes) // assignment.planes_per_stripe + 1
+            planes_per_stripe = assignment.planes_per_stripe
+            if planes_per_stripe is None:
+                raise SessionResolutionError(
+                    f"stripe area assignment in domain {domain.id!r} declares no planes_per_stripe"
+                )
+            highest_area_index = max(selected_planes) // planes_per_stripe + 1
         maximum = 255 if domain.protocol == "ospf" else 9999
         if highest_area_index > maximum:
             raise SessionResolutionError(
@@ -2743,6 +2757,59 @@ def _refuse_divergent_bfd_on_shared_interfaces(resolved: ResolvedSession) -> Non
             f"routing domains declare different BFD timers on shared interfaces: {shown}{more}; "
             "every protocol on an interface shares one BFD session with each neighbor, so "
             "domains enabling BFD on one interface must declare the same BFD timers"
+        )
+
+
+def _refuse_bfd_where_peers_mix_families(
+    resolved: ResolvedSession, workload_profiles: Mapping[str, Profile]
+) -> None:
+    """Refuse BFD on a router interface that reaches both IPv6 and IPv4-only
+    peers, where the router's adapter declares its BFD cannot run there.
+
+    A router carrying IPv6 routes it on an interface that reaches an IPv6 peer,
+    and some engines start BFD on such an interface only toward peers that
+    carry IPv6. The interface would then keep an adjacency to its IPv4-only
+    peers with no BFD session behind it.
+    """
+    nodes = {node.node_id: node for node in resolved.nodes}
+    domains = {domain.domain_id: domain for domain in resolved.routing_domains}
+    peers = resolved.wan_interface_peers()
+    mixed: dict[tuple[str, str, str], list[str]] = {}
+    for node_id, interfaces_by_domain in resolved.domain_interfaces_by_node().items():
+        node = nodes[node_id]
+        adapter = workload_profiles[node.profile].adapter
+        if "ipv6" not in node.address_families or adapter is None:
+            continue
+        for domain_id, interfaces in interfaces_by_domain.items():
+            domain = domains[domain_id]
+            if not domain.timers.bfd.enabled or bfd_spans_mixed_family_peers(
+                adapter, domain.protocol
+            ):
+                continue
+            for interface in interfaces:
+                reach = {
+                    "ipv6" in nodes[peer].address_families
+                    for peer in peers.get((node_id, interface), ())
+                }
+                if len(reach) > 1:
+                    mixed.setdefault((domain_id, domain.protocol, adapter), []).append(
+                        f"{node_id} {interface}"
+                    )
+    if mixed:
+        raise UnsupportedFeatureError(
+            [
+                UnsupportedFeature(
+                    category=FeatureCategory.ROUTING_TIMER,
+                    value=f"{protocol}:bfd",
+                    message=(
+                        f"routing domain {domain_id!r} enables BFD on interfaces that reach "
+                        f"both IPv6 and IPv4-only peers ({', '.join(sorted(where)[:5])}"
+                        f"{' and more' if len(where) > 5 else ''}); adapter {adapter!r} "
+                        f"starts {protocol} BFD there only toward peers that carry IPv6"
+                    ),
+                )
+                for (domain_id, protocol, adapter), where in sorted(mixed.items())
+            ]
         )
 
 

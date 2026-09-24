@@ -21,7 +21,6 @@ def _manifest() -> WiringManifest:
                     "isl_interfaces": [],
                     "gnd_interfaces": [],
                     "mpls_enable": True,
-                    "segment_routing": False,
                     "remove_default_route": True,
                 }
             },

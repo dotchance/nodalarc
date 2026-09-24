@@ -4,7 +4,6 @@
 
 from __future__ import annotations
 
-import hashlib
 import re
 from collections import Counter
 from pathlib import Path
@@ -338,10 +337,7 @@ def test_adapter_delivers_exactly_the_integrated_configuration_files(protocol, e
         assert node is not None
         stack = resolve_router_stack(resolved.routing_domains_for(node_id), node.address_families)
 
-        assert set(files) == {"frr.conf", "daemons", "_config_version"}
-        assert (
-            files["_config_version"] == hashlib.sha256(files["frr.conf"].encode()).hexdigest()[:16]
-        )
+        assert set(files) == {"frr.conf", "daemons"}
         assert [line.split("=")[0] for line in files["daemons"].splitlines()] == list(FRR_DAEMONS)
         assert _enabled_daemons(files["daemons"]) == set(stack.daemons)
         separators = [line for line in files["frr.conf"].splitlines() if line.startswith("! === ")]
@@ -1056,7 +1052,7 @@ def test_an_ipv4_only_router_renders_no_ipv6_at_all() -> None:
     assert "suppress-ra" not in conf
 
 
-def test_a_router_on_a_declared_ipv6_lan_routes_ipv6_in_its_own_topology() -> None:
+def test_a_router_on_a_declared_ipv6_lan_routes_ipv6_over_the_lan_only() -> None:
     resolved = _simple_session()
     router_id = _denver_router(resolved)
     router = resolved.node_by_id(router_id)
@@ -1072,7 +1068,8 @@ def test_a_router_on_a_declared_ipv6_lan_routes_ipv6_in_its_own_topology() -> No
     for wan in router.wan_interfaces:
         lines = _stanza_lines(conf, f"interface {wan.name}")
         assert f" ip router isis {_DEFAULT_DOMAIN}" in lines
-        assert f" ipv6 router isis {_DEFAULT_DOMAIN}" in lines
+        # Its ground terminals reach only IPv4-only satellites.
+        assert f" ipv6 router isis {_DEFAULT_DOMAIN}" not in lines
         # No IPv6 loopback is declared, so the WAN borrows none.
         assert not [line for line in lines if line.startswith(" ipv6 address")]
     lan = _stanza_lines(conf, "interface terr0")
@@ -1164,6 +1161,64 @@ def _reachability_with_ipv6_loopbacks() -> ResolvedSession:
         }
     )
     return resolve_session(raw, source_context=SourceContext(origin="test.frr.ipv6"))
+
+
+def _reachability_with_ipv6_on_one_leo_a_satellite(*, bfd: bool) -> dict[str, Any]:
+    """The cislunar session with an IPv6 loopback on the leo_a satellite in slot
+    0 only. Its ground stations carry IPv6 from their site LANs, so each leo_a
+    ground terminal reaches one satellite that carries IPv6 and others that do
+    not."""
+    from nodalarc.configuration_yaml import load_configuration_yaml
+
+    raw = load_configuration_yaml(
+        Path("catalog/nodalarc/sessions/earth-leo-heo-geo-luna-reachability.yaml").read_text(
+            encoding="utf-8"
+        )
+    )
+    raw["addressing"]["loopbacks"].append(
+        {
+            "id": "leo_a_slot0_loopbacks_v6",
+            "applies_to": {"all": [{"segment": "leo_a"}, {"slot": 0}]},
+            "ipv6_pool": "fd00:6e2::/64",
+            "prefix_length": 128,
+        }
+    )
+    if bfd:
+        earth = next(d for d in raw["routing"]["domains"] if d["id"] == "earth_domain")
+        earth["timers"] = {"bfd": {"enabled": True}}
+    return raw
+
+
+def test_ipv6_is_is_runs_on_an_interface_only_where_a_peer_carries_ipv6() -> None:
+    resolved = resolve_session(
+        _reachability_with_ipv6_on_one_leo_a_satellite(bfd=False),
+        source_context=SourceContext(origin="test.frr.ipv6.mixed"),
+    )
+    carrier = _frr_conf(resolved, "leo-a-sat-p00s00")
+    # Its ground terminal reaches ground stations that carry IPv6; its ISLs
+    # reach the slot 1 and slot 35 satellites, which do not.
+    assert " ipv6 router isis earth_domain" in _stanza_lines(carrier, "interface gnd0")
+    for interface in ("isl0", "isl1"):
+        assert " ipv6 router isis earth_domain" not in _stanza_lines(
+            carrier, f"interface {interface}"
+        )
+    # Denver's ground terminals reach the slot 0 satellite among others.
+    denver = _frr_conf(resolved, "earth-us-co-denver-gw1")
+    assert " ipv6 router isis earth_domain" in _stanza_lines(denver, "interface term0")
+
+
+def test_is_is_bfd_is_refused_where_an_interface_reaches_ipv6_and_ipv4_only_peers() -> None:
+    from nodalarc.runtime_support import UnsupportedFeatureError
+
+    with pytest.raises(UnsupportedFeatureError) as refused:
+        resolve_session(
+            _reachability_with_ipv6_on_one_leo_a_satellite(bfd=True),
+            source_context=SourceContext(origin="test.frr.ipv6.mixed.bfd"),
+        )
+    (feature,) = refused.value.features
+    assert feature.value == "isis:bfd"
+    assert "earth-au-perth-gw1 term0" in feature.message
+    assert "adapter 'frr'" in feature.message
 
 
 def _luna_border(resolved: ResolvedSession) -> str:

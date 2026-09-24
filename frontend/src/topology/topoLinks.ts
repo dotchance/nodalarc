@@ -13,7 +13,6 @@ import {
   LINK_ISL_COLOR,
   LINK_FAIL_COLOR,
   TRACE_BRIDGED_COLOR,
-  TRACE_FORWARD_COLOR,
   hexToCSS,
 } from "../config";
 import { withAlpha } from "../styles/tokens";
@@ -21,13 +20,14 @@ import type { TraceSegment } from "../trace/traceSegments";
 
 const GROUND_STROKE = withAlpha(hexToCSS(LINK_GROUND_COLOR), 0.6);
 const ISL_STROKE = withAlpha(hexToCSS(LINK_ISL_COLOR), 0.5);
-const FLOW_STROKE = hexToCSS(TRACE_FORWARD_COLOR);
 const FLOW_BRIDGED_STROKE = hexToCSS(TRACE_BRIDGED_COLOR);
 
-/** The traced path to draw: its segments by the shared trace rule, its opacity
- *  (below 1 while a stopped trace fades), and whether its dash flows. */
+/** One traced leg to draw: its segments by the shared trace rule, the color of
+ *  its direction, its opacity (below 1 while a stopped trace fades), and whether
+ *  its dash flows. */
 export interface FlowDrawing {
   segments: TraceSegment[];
+  color: string;
   opacity: number;
   animate: boolean;
 }
@@ -68,7 +68,7 @@ export function drawLinks(
   ctx: CanvasRenderingContext2D,
   links: LayoutLink[],
   nodeMap: Map<string, LayoutNode>,
-  flow: FlowDrawing | null,
+  flows: readonly FlowDrawing[],
   dashOffset: number = 0,
   failTimes?: Map<string, number>,
   showIslLinks: boolean = true,
@@ -189,9 +189,10 @@ export function drawLinks(
     ctx.setLineDash([]);
   }
 
-  // Traced path overlay: measured segments dashed in the flow color, bridged
-  // segments dotted and thin in their own color.
-  if (flow && flow.segments.length > 0) {
+  // Traced legs: measured segments dashed in the leg's color, bridged segments
+  // dotted and thin in their own color.
+  for (const flow of flows) {
+    if (flow.segments.length === 0) continue;
     ctx.save();
     ctx.globalAlpha = flow.opacity;
     for (const segment of flow.segments) {
@@ -199,7 +200,7 @@ export function drawLinks(
       const b = nodeMap.get(segment.to);
       if (!a || !b) continue;
       if (segment.measured) {
-        ctx.strokeStyle = FLOW_STROKE;
+        ctx.strokeStyle = flow.color;
         ctx.lineWidth = 3;
         ctx.setLineDash([6, 3]);
         ctx.lineDashOffset = flow.animate ? -dashOffset : 0;

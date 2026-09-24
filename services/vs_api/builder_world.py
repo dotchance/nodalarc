@@ -171,12 +171,10 @@ _PREVIEW_DRAW_CAP = 800
 
 def _preview_body_of(node: ResolvedNode) -> str | None:
     """The body a node sits on — ``central_body`` for satellites,
-    ``reference_body`` for ground; a relay may carry either."""
+    ``reference_body`` for ground."""
     if node.kind == "satellite":
         return node.central_body
-    if node.kind == "ground_station":
-        return node.reference_body
-    return node.reference_body or node.central_body
+    return node.reference_body
 
 
 def _preview_scope(rule: ResolvedLinkRule, node_by_id: dict[str, ResolvedNode]) -> str:

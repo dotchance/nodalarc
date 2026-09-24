@@ -208,7 +208,6 @@ class TestObservation:
         v1 = _v1(_current_set())
         view = observe_session_pods(v1, "nodalarc", _identity())
         view.placement()
-        view.pod_ips()
         _ = (view.running_count, view.provisioned_count, view.missing_node_ids)
         v1.list_namespaced_pod.assert_called_once_with(
             "nodalarc", label_selector="nodalarc.io/node-id"
@@ -274,15 +273,6 @@ class TestObservation:
         view = observe_session_pods(_v1(pods), "nodalarc", _identity())
         with pytest.raises(SessionPodStateError, match="missing session pod placement.*gs-denver"):
             view.placement()
-
-    def test_pod_ips_come_from_current_pods_only(self):
-        pods = [
-            _pod("sat-p00s00", pod_ip="10.42.0.1"),
-            _pod("sat-p00s01", pod_ip=None, phase="Pending", running=0),
-            _pod("gs-denver", run="run-old", pod_ip="10.42.9.9"),
-        ]
-        view = observe_session_pods(_v1(pods), "nodalarc", _identity())
-        assert view.pod_ips() == {"sat-p00s00": "10.42.0.1"}
 
 
 def _delete_call(v1):

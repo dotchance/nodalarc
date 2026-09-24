@@ -848,7 +848,6 @@ def _build_snapshot(*, ops_after: int = 0) -> dict | None:
             links=links,
             kernel_actual_pairs=[[a, b] for (a, b) in sorted(ctx.actual_kernel_pairs())],
             traced_paths=_traced,
-            active_flows=[],
             recent_events=recent,
             network_health=health,
             routing_stack=ctx.routing_stack,
@@ -2743,20 +2742,20 @@ async def start_continuous_trace(body: dict) -> Any:
 )
 async def stop_continuous_trace() -> dict:
     """Stop continuous path tracing and forget its result."""
-    ctx = _active_context
-    if ctx is not None:
-        async with ctx.trace_lock:
-            if ctx.continuous_tracer is not None:
-                await ctx.continuous_tracer.stop()
-                ctx.continuous_tracer = None
+    ctx = _require_active_context()
+    async with ctx.trace_lock:
+        if ctx.continuous_tracer is not None:
+            await ctx.continuous_tracer.stop()
+            ctx.continuous_tracer = None
     return {"ok": True}
 
 
-@app.get("/api/v1/trace/status", dependencies=[Depends(_require_api_key)])
+@app.get(
+    "/api/v1/trace/status", responses=_REFUSAL_RESPONSES, dependencies=[Depends(_require_api_key)]
+)
 def get_trace_status() -> dict:
     """The running trace's endpoints and latest result, or that none runs."""
-    ctx = _active_context
-    tracer = ctx.continuous_tracer if ctx is not None else None
+    tracer = _require_active_context().continuous_tracer
     if tracer is None:
         return {"active": False, "src": None, "dst": None, "result": None}
     result = tracer.traced_path
@@ -2783,6 +2782,7 @@ def _create_continuous_tracer(ctx: SessionContext) -> ContinuousTracer:
     return ContinuousTracer(
         path_tracer=_create_path_tracer(ctx),
         interval_s=get_platform_config().trace_interval_seconds,
+        unreached_retrace_s=get_platform_config().trace_unreached_retrace_seconds,
         max_seconds=get_platform_config().trace_max_seconds,
         on_path_change=ctx.record_path_change,
     )

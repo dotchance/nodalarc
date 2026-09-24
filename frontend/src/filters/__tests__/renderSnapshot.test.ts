@@ -100,22 +100,6 @@ function snapshot(): StateSnapshot {
         ["leo-sat-p00s00", "meo-sat-p00s00"],
       ),
     ],
-    active_flows: [
-      {
-        flow_id: "kept",
-        src_node: "ground-gs-denver",
-        dst_node: "leo-sat-p00s00",
-        protocol: "udp",
-        probe_type: "continuous",
-      },
-      {
-        flow_id: "hidden",
-        src_node: "leo-sat-p00s00",
-        dst_node: "meo-sat-p00s00",
-        protocol: "udp",
-        probe_type: "continuous",
-      },
-    ],
     recent_events: [],
     network_health: {
       status: "converged",
@@ -153,7 +137,6 @@ describe("filterSnapshotForRender", () => {
       "hidden",
       "hidden-reverse",
     ]);
-    expect(filtered?.active_flows.map((flow) => flow.flow_id)).toEqual(["kept"]);
   });
 
   it("filters satellite planes without hiding ground stations", () => {

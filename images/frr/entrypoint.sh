@@ -3,7 +3,7 @@ set -e
 
 # Wait for ConfigMap volume mount to be populated by kubelet.
 # The Operator mounts the node's workload artifact ConfigMap at
-# /etc/frr-config/: the FRR adapter's frr.conf, daemons and _config_version.
+# /etc/frr-config/: the FRR adapter's frr.conf and daemons.
 # kubelet populates the volume when the pod is scheduled — no exec or
 # sentinel file needed.
 CONFIG_SRC="/etc/frr-config/frr.conf"
@@ -31,54 +31,7 @@ fi
 # Copy ConfigMap contents to writable /etc/frr/ (tmpfs emptyDir).
 # ConfigMap mounts are read-only; FRR needs to write to /etc/frr/.
 cp /etc/frr-config/* /etc/frr/
-# Write config version sentinel for readiness probe.
-# _config_version is a file in the ConfigMap containing a hash of frr.conf.
-# The readiness probe diffs /etc/frr/.config_version against the ConfigMap
-# mount to verify this container has loaded the intended config version.
-if [ -f /etc/frr-config/_config_version ]; then
-    cp /etc/frr-config/_config_version /etc/frr/.config_version
-fi
 echo "Copied config from /etc/frr-config/ to /etc/frr/"
-
-# Background config watcher — detects ConfigMap updates and reloads FRR.
-# K8s kubelet syncs ConfigMap volume mounts on a polling interval (~60s).
-# When frr.conf changes (new session config, routing parameter update),
-# the watcher copies the new files and tells FRR to reload gracefully.
-# This is the NOS-agnostic contract: the container owns its own config
-# lifecycle. The Operator just mounts the ConfigMap.
-_watch_config() {
-    local last_hash
-    last_hash=$(md5sum /etc/frr-config/frr.conf 2>/dev/null | awk '{print $1}')
-    while true; do
-        sleep 10
-        local current_hash
-        current_hash=$(md5sum /etc/frr-config/frr.conf 2>/dev/null | awk '{print $1}')
-        if [ -n "$current_hash" ] && [ "$current_hash" != "$last_hash" ]; then
-            echo "ConfigMap change detected, reloading FRR config"
-            cp /etc/frr-config/* /etc/frr/
-            chown -R frr:frr /etc/frr
-            # Declarative reload — frr-reload.py diffs the running config
-            # against the intended file and applies additions AND removals.
-            # (vtysh -f only sources commands additively: config removed in
-            # the new version would silently survive in the daemons.)
-            if python3 /usr/lib/frr/frr-reload.py --reload /etc/frr/frr.conf; then
-                # The sentinel is a claim that the running NOS has converged
-                # to this config version. It moves only on reload success;
-                # on failure the readiness probe must report the pod stale.
-                if [ -f /etc/frr-config/_config_version ]; then
-                    cp /etc/frr-config/_config_version /etc/frr/.config_version
-                fi
-                echo "FRR config reloaded"
-                last_hash="$current_hash"
-            else
-                # last_hash intentionally not advanced: the watcher keeps
-                # reconciling toward the intended config on every poll.
-                echo "ERROR: FRR declarative reload failed; running config is stale and readiness will report it"
-            fi
-        fi
-    done
-}
-_watch_config &
 
 # Create vtysh.conf if it doesn't exist — suppresses the
 # "Can't open configuration file /etc/frr/vtysh.conf" warning

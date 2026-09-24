@@ -36,7 +36,9 @@ def _valid_config_dict() -> dict:
         "vs_api_playback_max_requests_per_minute": 30,
         "vs_api_session_switch_max_requests_per_minute": 5,
         "vs_api_introspect_max_response_bytes": 65536,
+        "session_pods_per_node": 200,
         "trace_interval_seconds": 3.0,
+        "trace_unreached_retrace_seconds": 1.0,
         "trace_max_seconds": 180.0,
     }
 

@@ -17,11 +17,21 @@ from nodalarc.workloads.adapter import AdapterSupport, BfdSupport, RoutingProtoc
 FRR_ADAPTER_NAME = "frr"
 
 # FRR 10.3 accepts a detect multiplier of 1..255 and receive and transmit
-# intervals of 10..4294967 milliseconds (bfdd's CLI ranges).
-FRR_BFD_SUPPORT = BfdSupport(
+# intervals of 10..4294967 milliseconds (bfdd's CLI ranges). isisd starts BFD
+# on a circuit that routes IPv6 only for an adjacency with an IPv6 link-local
+# address (isis_bfd.c, bfd_handle_adj_up), so IS-IS BFD never starts toward an
+# IPv4-only peer on an interface that also reaches IPv6 peers. OSPFv2 and
+# OSPFv3 keep one BFD peer per family.
+FRR_ISIS_BFD_SUPPORT = BfdSupport(
     detect_multiplier=(1, 255),
     rx_interval_ms=(10, 4294967),
     tx_interval_ms=(10, 4294967),
+)
+FRR_OSPF_BFD_SUPPORT = BfdSupport(
+    detect_multiplier=(1, 255),
+    rx_interval_ms=(10, 4294967),
+    tx_interval_ms=(10, 4294967),
+    mixed_family_peers=True,
 )
 
 # Both IGP fragments render LDP-distributed MPLS, SR-MPLS prefix SIDs and
@@ -42,13 +52,13 @@ FRR_SUPPORT = AdapterSupport(
     routing={
         "isis": RoutingProtocolSupport(
             capabilities=_IGP_CAPABILITIES,
-            bfd=FRR_BFD_SUPPORT,
+            bfd=FRR_ISIS_BFD_SUPPORT,
             address_families=_BOTH_FAMILIES,
             domains_per_router=1,
         ),
         "ospf": RoutingProtocolSupport(
             capabilities=_IGP_CAPABILITIES,
-            bfd=FRR_BFD_SUPPORT,
+            bfd=FRR_OSPF_BFD_SUPPORT,
             address_families=_BOTH_FAMILIES,
             domains_per_router=1,
         ),

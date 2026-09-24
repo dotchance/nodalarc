@@ -27,6 +27,7 @@ import { VisualizationErrorBoundary } from "../globe/VisualizationErrorBoundary"
 import { buildRegimeIndex } from "../taxonomy/regime";
 import { Button, IconButton } from "../ui/Button";
 import { FloatingWindow } from "../ui/FloatingWindow";
+import { RecordHistoryToggle } from "../ui/RecordHistoryToggle";
 import type { GlobeActions } from "../globe/actions";
 import type {
   ColorMode,
@@ -2245,17 +2246,11 @@ export function BuilderView({
               openEditor({ kind: "save-session" });
             }}
           />
-          <label
+          <RecordHistoryToggle
             className="builder-toolbar-toggle"
-            title="Record the deployed session run's state snapshots and link events"
-          >
-            <input
-              type="checkbox"
-              checked={recordHistory}
-              onChange={(e) => setRecordHistory(e.target.checked)}
-            />
-            Record history
-          </label>
+            checked={recordHistory}
+            onChange={setRecordHistory}
+          />
           <IconButton
             className="builder-toolbar-btn"
             icon="rocket"

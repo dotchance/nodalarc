@@ -193,9 +193,7 @@ class _ReconcilerHarness:
         self._p("ensure_cm", "nodalarc_operator.handlers.ensure_session_configmaps")
         self._p("ensure_pods", "nodalarc_operator.handlers.ensure_session_pods")
         self._p("write_wiring", "nodalarc_operator.handlers.write_wiring_manifest")
-        self._p("write_ips", "nodalarc_operator.handlers.write_pod_ips_configmap")
         self._p("restart", "nodalarc_operator.handlers.restart_platform_pods")
-        self._p("nodalpath", "nodalarc_operator.handlers.set_nodalpath_mode")
         return self
 
     def __enter__(self):
@@ -493,7 +491,7 @@ class TestReconcileStateMachine:
             assert status["phase"] == "Error"
             assert "0 nodes" in status["message"]
 
-    def test_wiring_publishes_placement_and_addresses_of_current_pods_only(self):
+    def test_wiring_publishes_the_placement_of_current_pods_only(self):
         with _ReconcilerHarness(expected_count=2) as h:
             h.mock("manifest_current").return_value = False
             h.pods = [
@@ -501,10 +499,6 @@ class TestReconcileStateMachine:
                 h.pod("p1", k8s_node="node03", pod_ip="10.42.3.1"),
             ]
             _run(_reconcile(h, phase="Creating"))
-            assert h.mock("write_ips").call_args.args == (
-                "nodalarc",
-                {"p0": "10.42.2.1", "p1": "10.42.3.1"},
-            )
             assert h.mock("write_wiring").call_args.args[6] == {"p0": "node02", "p1": "node03"}
 
     def test_provisioned_pod_networks_write_wiring(self):
@@ -514,7 +508,6 @@ class TestReconcileStateMachine:
             h.mock("ensure_cm").assert_called_once()
             assert h.mock("ensure_cm").call_args.args[5].startswith("run-")
             h.mock("write_wiring").assert_called_once()
-            h.mock("write_ips").assert_called_once()
             # Platform services are NOT restarted at publication: they roll
             # only after wiring completes and all workloads run.
             h.mock("restart").assert_not_called()
@@ -528,7 +521,6 @@ class TestReconcileStateMachine:
             h.pods = [h.pod(f"p{i}", phase="Pending", running=0) for i in range(7)]
             _run(_reconcile(h, phase="Creating"))
             h.mock("write_wiring").assert_called_once()
-            h.mock("write_ips").assert_called_once()
 
     def test_unprovisioned_pod_networks_block_wiring_publication(self):
         with _ReconcilerHarness(expected_count=7) as h:
@@ -539,7 +531,6 @@ class TestReconcileStateMachine:
             ]
             _run(_reconcile(h, phase="Creating"))
             h.mock("write_wiring").assert_not_called()
-            h.mock("write_ips").assert_not_called()
             status = _last_status(h)
             assert status["phase"] == "Creating"
             assert "networked" in status["message"]
@@ -572,7 +563,6 @@ class TestReconcileStateMachine:
             h.mock("ensure_cm").assert_called_once()
             assert h.mock("ensure_cm").call_args.args[5].startswith("run-")
             h.mock("write_wiring").assert_called_once()
-            h.mock("write_ips").assert_called_once()
             h.mock("restart").assert_not_called()
             status = _last_status(h)
             assert status["phase"] == "Wiring"
@@ -586,7 +576,6 @@ class TestReconcileStateMachine:
 
             h.mock("ensure_cm").assert_called_once()
             h.mock("write_wiring").assert_not_called()
-            h.mock("write_ips").assert_not_called()
             h.mock("restart").assert_not_called()
             status = _last_status(h)
             assert status["phase"] == "Wiring"
@@ -699,10 +688,9 @@ class TestReconcileStateMachine:
         """Absence of every owned record proves nothing was deployed: the
         status is not read, no purge runs, and the ConfigMap sweep still runs."""
         with _ReconcilerHarness(expected_count=7) as harness:
-            teardown, nodalpath_mode = _run_on_delete(harness, pods=[], configmaps={})
+            teardown = _run_on_delete(harness, pods=[], configmaps={})
 
         teardown.assert_called_once_with("nodalarc", ())
-        nodalpath_mode.assert_called_once_with("nodalarc", "console")
 
     def test_current_error_generation_is_terminal_until_user_changes_spec(self):
         with _ReconcilerHarness(expected_count=7):
@@ -1174,7 +1162,7 @@ def _run_on_delete(
     *,
     pods: list[SimpleNamespace],
     configmaps: dict[str, SimpleNamespace],
-) -> tuple[MagicMock, MagicMock]:
+) -> MagicMock:
     """Run on_delete against fake owned resources; the CR status is deliberately
     one the strict model refuses, proving the handler never reads it."""
     harness.pods = list(pods)
@@ -1185,10 +1173,7 @@ def _run_on_delete(
         raise kubernetes.client.rest.ApiException(status=404)
 
     harness.mock_v1.read_namespaced_config_map.side_effect = _read
-    with (
-        patch("nodalarc_operator.handlers.teardown_session") as teardown,
-        patch("nodalarc_operator.handlers.set_nodalpath_mode") as nodalpath_mode,
-    ):
+    with patch("nodalarc_operator.handlers.teardown_session") as teardown:
         _run(
             handlers_mod.on_delete(
                 "current-session",
@@ -1198,19 +1183,19 @@ def _run_on_delete(
                 status={"phase": "not-a-phase"},
             )
         )
-    return teardown, nodalpath_mode
+    return teardown
 
 
 def test_on_delete_purges_the_one_owned_run_id_then_sweeps() -> None:
     with _ReconcilerHarness(expected_count=7) as harness:
-        teardown, _ = _run_on_delete(harness, pods=[_session_pod("run-a")], configmaps={})
+        teardown = _run_on_delete(harness, pods=[_session_pod("run-a")], configmaps={})
 
     teardown.assert_called_once_with("nodalarc", ("run-a",))
 
 
 def test_on_delete_purges_every_distinct_owned_run_id() -> None:
     with _ReconcilerHarness(expected_count=7) as harness:
-        teardown, _ = _run_on_delete(
+        teardown = _run_on_delete(
             harness,
             pods=[_session_pod("run-a"), _session_pod("run-b"), _session_pod("run-a")],
             configmaps={},
@@ -1223,7 +1208,7 @@ def test_on_delete_reads_a_superseded_run_id_from_a_terminating_pod() -> None:
     """After a generation change the old run id survives only on a terminating
     owned pod while the ConfigMaps name the new run: both are purged."""
     with _ReconcilerHarness(expected_count=7) as harness:
-        teardown, _ = _run_on_delete(
+        teardown = _run_on_delete(
             harness,
             pods=[_session_pod("run-a", terminating=True)],
             configmaps={
@@ -1252,7 +1237,7 @@ def _run_on_delete_with_real_teardown(
     harness: _ReconcilerHarness,
     *,
     delete_side_effect,
-) -> tuple[MagicMock, MagicMock]:
+) -> MagicMock:
     """Run on_delete with the real teardown_session against the fake API: one
     owned pod naming run-a, no run-id ConfigMaps, no FRR ConfigMaps."""
     harness.pods = [_session_pod("run-a")]
@@ -1261,10 +1246,7 @@ def _run_on_delete_with_real_teardown(
     )
     harness.mock_v1.list_namespaced_config_map.return_value = SimpleNamespace(items=[])
     harness.mock_v1.delete_namespaced_config_map.side_effect = delete_side_effect
-    with (
-        patch("nodalarc_operator.session_deployer.purge_session_runtime_state") as purge,
-        patch("nodalarc_operator.handlers.set_nodalpath_mode") as nodalpath_mode,
-    ):
+    with patch("nodalarc_operator.session_deployer.purge_session_runtime_state") as purge:
         _run(
             handlers_mod.on_delete(
                 "current-session",
@@ -1274,7 +1256,7 @@ def _run_on_delete_with_real_teardown(
                 status=None,
             )
         )
-    return purge, nodalpath_mode
+    return purge
 
 
 def test_on_delete_propagates_a_failed_configmap_delete() -> None:
@@ -1298,12 +1280,9 @@ def test_on_delete_tolerates_absent_configmaps_in_the_sweep() -> None:
         raise kubernetes.client.rest.ApiException(status=404)
 
     with _ReconcilerHarness(expected_count=7) as harness:
-        purge, nodalpath_mode = _run_on_delete_with_real_teardown(
-            harness, delete_side_effect=_absent
-        )
+        purge = _run_on_delete_with_real_teardown(harness, delete_side_effect=_absent)
 
     purge.assert_called_once_with("nodalarc", "run-a")
-    nodalpath_mode.assert_called_once_with("nodalarc", "console")
 
 
 def test_on_delete_refuses_an_owned_record_without_its_run_id() -> None:

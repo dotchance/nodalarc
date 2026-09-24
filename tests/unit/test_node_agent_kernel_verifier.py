@@ -2,8 +2,15 @@ import socket
 import struct
 
 import pytest
+from nodalarc.platform_config import get_platform_config
 from node_agent import kernel_verifier
-from node_agent.tc_units import delay_ms_to_netem_us, netem_limit_packets, netem_us_to_ticks
+from node_agent.tc_units import (
+    delay_ms_to_netem_us,
+    htb_burst_ticks,
+    htb_class,
+    netem_limit_packets,
+    netem_us_to_ticks,
+)
 from pyroute2.netlink.rtnl import TC_H_INGRESS
 from pyroute2.netlink.rtnl.tcmsg import common as tc_common
 
@@ -19,11 +26,26 @@ class _Nlmsg(dict):
         return self._attrs.get(name)
 
 
-def _htb_class_options(rate_bytes: int) -> _Nlmsg:
-    """HTB class options: rates of 2**32 bytes/s and above travel in RATE64."""
-    if rate_bytes >= 1 << 32:
-        return _Nlmsg({}, {"TCA_HTB_PARMS": {"rate": (1 << 32) - 1}, "TCA_HTB_RATE64": rate_bytes})
-    return _Nlmsg({}, {"TCA_HTB_PARMS": {"rate": rate_bytes}})
+def _htb_class_options(rate_bytes: int, **reported: int) -> _Nlmsg:
+    """HTB class options as the kernel reports the class the Node Agent commands
+    for ``rate_bytes``; ``reported`` replaces reported fields. Rates of 2**32
+    bytes/s and above travel in RATE64 and CEIL64, bursts in scheduler ticks."""
+    commanded = htb_class(
+        rate_bytes * 8 / 1_000_000, get_platform_config().veth_interface_mtu_bytes
+    )
+    fields = {
+        "rate": commanded.rate,
+        "ceil": commanded.ceil,
+        "buffer": htb_burst_ticks(commanded.rate, commanded.burst),
+        "cbuffer": htb_burst_ticks(commanded.ceil, commanded.cburst),
+        "quantum": commanded.quantum,
+    } | reported
+    attrs: dict = {}
+    for key, attr in (("rate", "TCA_HTB_RATE64"), ("ceil", "TCA_HTB_CEIL64")):
+        if fields[key] >= 1 << 32:
+            attrs[attr] = fields[key]
+            fields[key] = (1 << 32) - 1
+    return _Nlmsg({}, {"TCA_HTB_PARMS": fields, **attrs})
 
 
 class _ShaperIpr:
@@ -94,7 +116,7 @@ def test_verify_qdisc_compares_netem_delay_in_tc_scheduler_ticks(monkeypatch):
         delay_ticks=expected_ticks,
         limit=netem_limit_packets(1000.0, 6.0),
     )
-    monkeypatch.setattr(kernel_verifier, "run_in_pod_namespace", _in_pod(ipr))
+    monkeypatch.setattr(kernel_verifier, "_in_namespace", _in_pod(ipr))
 
     proof = kernel_verifier.verify_qdisc(1234, "isl0", delay_ms=6.0, transmit_mbps=1000.0)
 
@@ -110,7 +132,7 @@ def test_verify_qdisc_uses_shared_fractional_delay_normalization(monkeypatch):
         delay_ticks=netem_us_to_ticks(expected_us),
         limit=netem_limit_packets(1000.0, delay_ms),
     )
-    monkeypatch.setattr(kernel_verifier, "run_in_pod_namespace", _in_pod(ipr))
+    monkeypatch.setattr(kernel_verifier, "_in_namespace", _in_pod(ipr))
 
     proof = kernel_verifier.verify_qdisc(1234, "term0", delay_ms=delay_ms, transmit_mbps=1000.0)
 
@@ -120,7 +142,7 @@ def test_verify_qdisc_uses_shared_fractional_delay_normalization(monkeypatch):
 
 def test_verify_qdisc_rejects_unconverted_microsecond_delay(monkeypatch):
     ipr = _ShaperIpr(rate_bytes=125_000_000, delay_ticks=6000)
-    monkeypatch.setattr(kernel_verifier, "run_in_pod_namespace", _in_pod(ipr))
+    monkeypatch.setattr(kernel_verifier, "_in_namespace", _in_pod(ipr))
 
     proof = kernel_verifier.verify_qdisc(1234, "isl0", delay_ms=6.0, transmit_mbps=1000.0)
 
@@ -136,16 +158,30 @@ def test_verify_qdisc_proves_the_transmit_rate_in_bytes_per_second(monkeypatch):
     ticks = netem_us_to_ticks(delay_ms_to_netem_us(6.0))
     limit = netem_limit_packets(1000.0, 6.0)
     correct = _ShaperIpr(rate_bytes=125_000_000, delay_ticks=ticks, limit=limit)
-    monkeypatch.setattr(kernel_verifier, "run_in_pod_namespace", _in_pod(correct))
+    monkeypatch.setattr(kernel_verifier, "_in_namespace", _in_pod(correct))
     assert kernel_verifier.verify_qdisc(1234, "isl0", delay_ms=6.0, transmit_mbps=1000.0).verified
 
     eightfold = _ShaperIpr(rate_bytes=1_000_000_000, delay_ticks=ticks, limit=limit)
-    monkeypatch.setattr(kernel_verifier, "run_in_pod_namespace", _in_pod(eightfold))
+    monkeypatch.setattr(kernel_verifier, "_in_namespace", _in_pod(eightfold))
     proof = kernel_verifier.verify_qdisc(1234, "isl0", delay_ms=6.0, transmit_mbps=1000.0)
     assert proof.verified is False
     assert proof.summary == "htb rate mismatch on isl0"
-    assert "expected_bytes_per_s=125000000" in proof.evidence
-    assert "actual_bytes_per_s=1000000000" in proof.evidence
+    assert "expected_rate=125000000" in proof.evidence
+    assert "actual_rate=1000000000" in proof.evidence
+
+
+def test_verify_qdisc_proves_every_commanded_class_field(monkeypatch):
+    """The class is proven as commanded: a right rate with another burst or quantum fails."""
+    ticks = netem_us_to_ticks(delay_ms_to_netem_us(6.0))
+    limit = netem_limit_packets(1000.0, 6.0)
+    for field, value in (("buffer", 1), ("cbuffer", 1), ("quantum", 1500), ("ceil", 1)):
+        ipr = _ShaperIpr(rate_bytes=125_000_000, delay_ticks=ticks, limit=limit)
+        ipr.classes[0]._attrs["TCA_OPTIONS"] = _htb_class_options(125_000_000, **{field: value})
+        monkeypatch.setattr(kernel_verifier, "_in_namespace", _in_pod(ipr))
+        proof = kernel_verifier.verify_qdisc(1234, "isl0", delay_ms=6.0, transmit_mbps=1000.0)
+        name = {"buffer": "burst", "cbuffer": "cburst"}.get(field, field)
+        assert proof.verified is False
+        assert proof.summary == f"htb {name} mismatch on isl0"
 
 
 def test_verify_qdisc_proves_the_netem_limit_follows_rate_and_delay(monkeypatch):
@@ -155,7 +191,7 @@ def test_verify_qdisc_proves_the_netem_limit_follows_rate_and_delay(monkeypatch)
     assert netem_limit_packets(1000.0, 6.0) == 1500
 
     default_limit = _ShaperIpr(rate_bytes=125_000_000, delay_ticks=ticks, limit=1000)
-    monkeypatch.setattr(kernel_verifier, "run_in_pod_namespace", _in_pod(default_limit))
+    monkeypatch.setattr(kernel_verifier, "_in_namespace", _in_pod(default_limit))
     proof = kernel_verifier.verify_qdisc(1234, "isl0", delay_ms=6.0, transmit_mbps=1000.0)
 
     assert proof.verified is False
@@ -172,7 +208,7 @@ def test_verify_qdisc_reads_rates_above_the_32_bit_field(monkeypatch):
         delay_ticks=ticks,
         limit=netem_limit_packets(200_000.0, 1.0),
     )
-    monkeypatch.setattr(kernel_verifier, "run_in_pod_namespace", _in_pod(ipr))
+    monkeypatch.setattr(kernel_verifier, "_in_namespace", _in_pod(ipr))
 
     proof = kernel_verifier.verify_qdisc(1234, "isl0", delay_ms=1.0, transmit_mbps=200_000.0)
 
@@ -182,7 +218,7 @@ def test_verify_qdisc_reads_rates_above_the_32_bit_field(monkeypatch):
 def test_verify_qdisc_refuses_the_former_tbf_shaper(monkeypatch):
     ticks = netem_us_to_ticks(delay_ms_to_netem_us(6.0))
     ipr = _ShaperIpr(rate_bytes=None, delay_ticks=ticks, root_kind="tbf")
-    monkeypatch.setattr(kernel_verifier, "run_in_pod_namespace", _in_pod(ipr))
+    monkeypatch.setattr(kernel_verifier, "_in_namespace", _in_pod(ipr))
 
     proof = kernel_verifier.verify_qdisc(1234, "isl0", delay_ms=6.0, transmit_mbps=1000.0)
 
@@ -199,7 +235,7 @@ def test_verify_qdisc_reads_delay_only_from_netem_options(monkeypatch):
     ipr = _ShaperIpr(rate_bytes=125_000_000, delay_ticks=netem_us_to_ticks(6000))
     netem = ipr.qdiscs[1]
     netem._attrs["TCA_OPTIONS"] = {}
-    monkeypatch.setattr(kernel_verifier, "run_in_pod_namespace", _in_pod(ipr))
+    monkeypatch.setattr(kernel_verifier, "_in_namespace", _in_pod(ipr))
     monkeypatch.setattr(_Nlmsg, "__repr__", lambda self: "{'delay': 93750}")
 
     proof = kernel_verifier.verify_qdisc(1234, "isl0", delay_ms=6.0, transmit_mbps=1000.0)
@@ -215,7 +251,7 @@ def test_verify_qdisc_requires_netem_beneath_the_rate_class(monkeypatch):
         {"handle": 0x00100000, "parent": 0xFFFFFFFF},
         {"TCA_KIND": "netem", "TCA_OPTIONS": {"delay": netem_us_to_ticks(6000)}},
     )
-    monkeypatch.setattr(kernel_verifier, "run_in_pod_namespace", _in_pod(ipr))
+    monkeypatch.setattr(kernel_verifier, "_in_namespace", _in_pod(ipr))
 
     proof = kernel_verifier.verify_qdisc(1234, "isl0", delay_ms=6.0, transmit_mbps=1000.0)
 
@@ -226,7 +262,7 @@ def test_verify_qdisc_requires_netem_beneath_the_rate_class(monkeypatch):
 def test_rate_proof_requires_the_root_to_send_traffic_to_the_rate_class(monkeypatch):
     """An HTB root whose default class is not 1:1 leaves traffic unshaped."""
     ipr = _ShaperIpr(rate_bytes=75_000_000, delay_ticks=None, default_class=0x10)
-    monkeypatch.setattr(kernel_verifier, "run_in_host_namespace", lambda fn: fn(ipr))
+    monkeypatch.setattr(kernel_verifier, "in_host_namespace", lambda fn: fn(ipr))
 
     proof = kernel_verifier.verify_receive_shaping("vh0003e9", receive_mbps=600.0)
 
@@ -240,18 +276,18 @@ def test_rate_proof_requires_the_root_to_send_traffic_to_the_rate_class(monkeypa
 def test_verify_receive_shaping_proves_the_host_veth_rate(monkeypatch):
     """The host-side veth feeding a pod interface carries its terminal's receive rate."""
     ipr = _ShaperIpr(rate_bytes=75_000_000, delay_ticks=None)
-    monkeypatch.setattr(kernel_verifier, "run_in_host_namespace", lambda fn: fn(ipr))
+    monkeypatch.setattr(kernel_verifier, "in_host_namespace", lambda fn: fn(ipr))
 
     proof = kernel_verifier.verify_receive_shaping("vh0003e9", receive_mbps=600.0)
     assert proof.verified is True
-    assert "bytes_per_s=75000000" in proof.evidence
+    assert "receive_mbps=600.0" in proof.evidence
 
     slower = kernel_verifier.verify_receive_shaping("vh0003e9", receive_mbps=50.0)
     assert slower.verified is False
     assert slower.summary == "htb rate mismatch on host/vh0003e9"
 
     unshaped = _ShaperIpr(rate_bytes=None, delay_ticks=None, root_kind="noqueue")
-    monkeypatch.setattr(kernel_verifier, "run_in_host_namespace", lambda fn: fn(unshaped))
+    monkeypatch.setattr(kernel_verifier, "in_host_namespace", lambda fn: fn(unshaped))
     missing = kernel_verifier.verify_receive_shaping("vh0003e9", receive_mbps=600.0)
     assert missing.verified is False
     assert missing.summary == "missing htb shaper root on host/vh0003e9"
@@ -438,7 +474,7 @@ class _MirredIpr:
 def _mirred_proof(monkeypatch, filters, *, qdisc: str | None = "ingress"):
     monkeypatch.setattr(
         kernel_verifier,
-        "run_in_host_namespace",
+        "in_host_namespace",
         lambda fn: fn(_MirredIpr(filters, qdisc=qdisc)),
     )
     return kernel_verifier.verify_mirred("src0", "dst0")
@@ -701,7 +737,7 @@ def test_verify_mpls_input_reads_the_switch_inside_the_pod_namespace(monkeypatch
         seen.append(pid)
         return "1"
 
-    monkeypatch.setattr(kernel_verifier, "run_in_pod_namespace", _fake_run_in_pod_namespace)
+    monkeypatch.setattr(kernel_verifier, "_in_namespace", _fake_run_in_pod_namespace)
 
     proof = kernel_verifier.verify_mpls_input(1234, "isl0")
 
@@ -712,7 +748,7 @@ def test_verify_mpls_input_reads_the_switch_inside_the_pod_namespace(monkeypatch
 
 
 def test_verify_mpls_input_zero_fails_with_expected_and_observed(monkeypatch):
-    monkeypatch.setattr(kernel_verifier, "run_in_pod_namespace", lambda pid, fn: "0")
+    monkeypatch.setattr(kernel_verifier, "_in_namespace", lambda pid, fn: "0")
 
     proof = kernel_verifier.verify_mpls_input(1234, "gnd0")
 
@@ -725,7 +761,7 @@ def test_verify_mpls_input_unreadable_switch_keeps_the_error(monkeypatch):
     def _missing(pid, fn):
         raise FileNotFoundError(2, "No such file or directory")
 
-    monkeypatch.setattr(kernel_verifier, "run_in_pod_namespace", _missing)
+    monkeypatch.setattr(kernel_verifier, "_in_namespace", _missing)
 
     proof = kernel_verifier.verify_mpls_input(1234, "isl3")
 

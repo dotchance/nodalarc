@@ -38,7 +38,7 @@ rules:
   - apiGroups: [""]
     resources: ["secrets"]
     verbs: ["create", "update", "delete", "get", "list"]
-  # Deployment patching (NodalPath mode switch).
+  # Deployment patching (restart_platform_pods rolls OME and Scheduler).
   - apiGroups: ["apps"]
     resources: ["deployments"]
     verbs: ["get", "list", "patch"]

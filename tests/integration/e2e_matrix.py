@@ -17,6 +17,7 @@ import sys
 import time
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from urllib.parse import urlencode
 
 import requests
 from nodalarc.catalog_closure import FilesystemCatalogReadView
@@ -2559,9 +2560,18 @@ def _link_events_for(token: str, nodes: set[str], *, start_sim: str | None) -> l
     stations since the window began, with their original sim and wall times:
     the successor's LinkUp and the incumbent's LinkDown, as published after
     proof, not as inferred."""
-    query = f"/api/v1/links?start={start_sim}" if start_sim else "/api/v1/links"
+    filters = {"start": start_sim} if start_sim else {}
+    events: list[dict] = []
+    cursor = None
     try:
-        events = request_json("GET", query, token=token)
+        # The route returns one page at a time; follow next_cursor to the end.
+        while True:
+            params = {**filters, "cursor": cursor} if cursor else filters
+            page = request_json("GET", f"/api/v1/links?{urlencode(params)}", token=token)
+            events.extend(page["events"])
+            cursor = page["next_cursor"]
+            if cursor is None:
+                break
     except Exception as exc:
         return [{"link_events_error": str(exc)}]
     return [

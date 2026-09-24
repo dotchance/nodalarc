@@ -171,6 +171,33 @@ export interface RecentEvent {
   summary: string;
 }
 
+/** One recorded link event of a session deployed with history recording. */
+export interface LinkHistoryEvent {
+  id: number;
+  session_id: string;
+  sim_time: string;
+  wall_time: string;
+  event_type: "LinkUp" | "LinkDown" | "LatencyUpdate" | "LinkActive";
+  node_a: string;
+  node_b: string;
+  interface_a: string | null;
+  interface_b: string | null;
+  latency_ms: number | null;
+  range_km: number | null;
+  reason: string | null;
+}
+
+/** One page of recorded link events: `returned` of `total`, and the cursor of
+ *  the next page (null on the last). `retained_from` is set once the history
+ *  size budget dropped older rows. */
+export interface LinkHistoryPage {
+  events: LinkHistoryEvent[];
+  returned: number;
+  total: number;
+  next_cursor: string | null;
+  retained_from: string | null;
+}
+
 export interface OpsEvent {
   timestamp: string;
   session_id: string;

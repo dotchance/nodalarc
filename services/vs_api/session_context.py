@@ -49,6 +49,7 @@ from nodalarc.db.queries import (
     insert_snapshot,
     set_metadata,
 )
+from nodalarc.db.retention import enforce_history_budget
 from nodalarc.db.schema import create_tables
 from nodalarc.explain import compose_gs_decision_timeline_sample
 from nodalarc.models.decision_explanation import (
@@ -190,6 +191,7 @@ class SessionContext:
         self.history_path = history_path
         self.history_error: str | None = None
         self._history_lock = threading.Lock()
+        self._history_max_bytes: int = platform.vs_api_history_max_bytes
 
         self._init_runtime_state()
         self._seed_resolved_static_nodes()
@@ -325,6 +327,7 @@ class SessionContext:
         self.history_path = None
         self.history_error = None
         self._history_lock = threading.Lock()
+        self._history_max_bytes = get_platform_config().vs_api_history_max_bytes
         self.beam_falloff_exponent = 2.0
         self.actuation_expected_latency_ms = 250.0
         self.actuation_fault_after_ms = 1200.0
@@ -501,7 +504,7 @@ class SessionContext:
                 )
             )
             if self.history_path is not None:
-                self._history_baseline_after_seq = await self._last_link_transition_seq(js)
+                await self._start_history_baseline(js)
             self._subscriptions.append(
                 await js.subscribe(
                     ome_clock_subject(sid),
@@ -597,6 +600,16 @@ class SessionContext:
                     log.warning("Failed to unsubscribe: %s", exc)
             self._subscriptions.clear()
             log.info("SessionContext subscriptions cleaned: session_id=%s", sid)
+
+    async def _start_history_baseline(self, js) -> None:
+        """Find where this recording starts. A failure stops recording, never live state."""
+        try:
+            self._history_baseline_after_seq = await self._last_link_transition_seq(js)
+        except Exception as exc:
+            # The lock can be held by a write in a worker thread; wait for it there.
+            await asyncio.to_thread(
+                self._stop_history_locked, "failed to find where recording starts", exc
+            )
 
     async def _last_link_transition_seq(self, js) -> int:
         """Link-stream sequence of the newest LinkUp or LinkDown for this session.
@@ -930,8 +943,10 @@ class SessionContext:
     def _record_history(self, what: str, write: Callable[[sqlite3.Connection], object]) -> None:
         """Run one write against this session's history file.
 
-        A session that is not recorded writes nothing. The first failed write
-        stops recording for the session: it is logged as an error and kept in
+        A session that is not recorded writes nothing. Every write is followed
+        by the history size budget, which drops the oldest recorded data when
+        all recordings together pass it. The first failed write stops
+        recording for the session: it is logged as an error and kept in
         history_error, which every history read reports in place of data.
         """
         if self.history_path is None:
@@ -944,18 +959,33 @@ class SessionContext:
                 conn = sqlite3.connect(self.history_path)
                 try:
                     write(conn)
+                    enforce_history_budget(
+                        conn,
+                        history_path=self.history_path,
+                        session_id=self.session_id,
+                        max_bytes=self._history_max_bytes,
+                    )
                 finally:
                     conn.close()
             except Exception as exc:
-                self.history_error = f"failed to record {what}"
-                log.error(
-                    "History recording stopped for session %s: failed to record %s in %s: %s",
-                    self.session_id,
-                    what,
-                    self.history_path,
-                    exc,
-                    exc_info=exc,
-                )
+                self._stop_history(f"failed to record {what}", exc)
+
+    def _stop_history_locked(self, failure: str, exc: Exception) -> None:
+        """Stop recording this session after a failure outside a history write."""
+        with self._history_lock:
+            self._stop_history(failure, exc)
+
+    def _stop_history(self, failure: str, exc: Exception) -> None:
+        """Stop recording this session after a failure; caller holds the history lock."""
+        self.history_error = failure
+        log.error(
+            "History recording stopped for session %s: %s in %s: %s",
+            self.session_id,
+            failure,
+            self.history_path,
+            exc,
+            exc_info=exc,
+        )
 
     def record_snapshot(self, snapshot: dict) -> None:
         """Record one full state snapshot in this session's history."""

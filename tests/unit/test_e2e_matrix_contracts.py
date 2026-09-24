@@ -2016,7 +2016,13 @@ def _world(monkeypatch, *, enact_before_route_read: bool, api_delivers: bool, ep
                 "allocation_events": _OVERLAP_STARTED,
             }
         if "/api/v1/links" in path:
-            return [_INCUMBENT_DOWN_LATER]
+            return {
+                "events": [_INCUMBENT_DOWN_LATER],
+                "returned": 1,
+                "total": 1,
+                "next_cursor": None,
+                "retained_from": None,
+            }
         if "ops/health" in path:
             return _HEALTH
         links = _OVERLAP_LINKS if api_stale() else _OVERLAP_LINKS[1:]

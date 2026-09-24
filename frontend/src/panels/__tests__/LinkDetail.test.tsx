@@ -3,7 +3,7 @@
 import { cleanup, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { LinkDetail, formatRate } from "../LinkDetail";
-import type { LinkState, StateSnapshot } from "../../types";
+import type { LinkHistoryEvent, LinkHistoryPage, LinkState, StateSnapshot } from "../../types";
 
 function link(overrides: Partial<LinkState> = {}): LinkState {
   return {
@@ -55,11 +55,42 @@ function snapshot(): StateSnapshot {
   };
 }
 
+function historyPage(overrides: Partial<LinkHistoryPage> = {}): LinkHistoryPage {
+  return {
+    events: [],
+    returned: 0,
+    total: 0,
+    next_cursor: null,
+    retained_from: null,
+    ...overrides,
+  };
+}
+
+function historyEvent(
+  sim_time: string,
+  event_type: LinkHistoryEvent["event_type"],
+): LinkHistoryEvent {
+  return {
+    id: 1,
+    session_id: "run-1",
+    sim_time,
+    wall_time: sim_time,
+    event_type,
+    node_a: "leo-sat-p00s00",
+    node_b: "meo-sat-p00s00",
+    interface_a: null,
+    interface_b: null,
+    latency_ms: 42,
+    range_km: 12000,
+    reason: null,
+  };
+}
+
 describe("LinkDetail", () => {
   beforeEach(() => {
     vi.stubGlobal(
       "fetch",
-      vi.fn().mockResolvedValue({ ok: true, json: async () => [] }),
+      vi.fn().mockResolvedValue({ ok: true, json: async () => historyPage() }),
     );
   });
 
@@ -94,8 +125,60 @@ describe("LinkDetail", () => {
     render(<LinkDetail link={link()} snapshot={snapshot()} />);
 
     expect(await screen.findByText("History recording is off for this session")).toBeTruthy();
-    const url = String((globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls[0]![0]);
-    expect(url).toContain("/api/v1/links?node=leo-sat-p00s00");
+  });
+
+  it("asks for the newest events of this one link and shows them oldest first, X of Y", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () =>
+          historyPage({
+            events: [
+              historyEvent("2026-01-01T00:00:09+00:00", "LatencyUpdate"),
+              historyEvent("2026-01-01T00:00:05+00:00", "LinkUp"),
+            ],
+            returned: 2,
+            total: 57,
+            next_cursor: "cursor",
+          }),
+      }),
+    );
+    render(<LinkDetail link={link()} snapshot={snapshot()} />);
+
+    expect(await screen.findByText("History (last 2 of 57)")).toBeTruthy();
+    const url = new URL(String((globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls[0]![0]));
+    expect(url.pathname).toBe("/api/v1/links");
+    expect(Object.fromEntries(url.searchParams)).toEqual({
+      node: "leo-sat-p00s00",
+      peer: "meo-sat-p00s00",
+      order: "newest_first",
+      limit: "20",
+    });
+    const times = screen.getAllByText(/^00:00:0\d$/).map((el) => el.textContent);
+    expect(times).toEqual(["00:00:05", "00:00:09"]);
+    expect(screen.queryByText(/dropped to keep history within its size budget/)).toBeNull();
+  });
+
+  it("says when the size budget dropped older events", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () =>
+          historyPage({
+            events: [historyEvent("2026-01-01T00:00:05+00:00", "LinkUp")],
+            returned: 1,
+            total: 1,
+            retained_from: "2026-01-01T00:00:01+00:00",
+          }),
+      }),
+    );
+    render(<LinkDetail link={link()} snapshot={snapshot()} />);
+
+    expect(
+      await screen.findByText("Older events were dropped to keep history within its size budget"),
+    ).toBeTruthy();
   });
 
   it("draws each direction from its sender's TX to its receiver's RX and highlights the lower", () => {

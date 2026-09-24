@@ -92,6 +92,11 @@ platform:
   # constellations) from exhausting server memory.
   vs_api_introspect_max_response_bytes: 65536
 
+  # Bytes every session history recording together may occupy on the
+  # session data volume (250 MiB). Past it the oldest recorded data goes
+  # first: earlier runs' recordings, then the oldest rows of the current one.
+  vs_api_history_max_bytes: 262144000
+
   # ── Session Pod Capacity ────────────────────────────────────────────
   # Session pods one Kubernetes node is taken to hold. Readiness warns when a
   # session needs more than the available nodes hold; it does not block.

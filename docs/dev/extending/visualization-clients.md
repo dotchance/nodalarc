@@ -102,7 +102,7 @@ ws.onmessage = (event) => {
 |--------|------|-------------|
 | GET | `/api/v1/state` | Current full snapshot |
 | GET | `/api/v1/state/{iso_time}` | Historical snapshot nearest to time |
-| GET | `/api/v1/links?start=...&end=...&node=...` | Recorded link events (sessions deployed with history recording) |
+| GET | `/api/v1/links?start=...&end=...&node=...&peer=...&order=...&limit=...&cursor=...` | One page of recorded link events, at most 200; `next_cursor` requests the next page (sessions deployed with history recording) |
 | POST | `/api/v1/trace` | Trace the path between two nodes once, in both directions; returns a `TracedPath` |
 | POST | `/api/v1/trace/start` | Start the live trace between two nodes; its result rides every state snapshot |
 | GET | `/api/v1/trace/status` | The live trace's endpoints and latest `TracedPath` |

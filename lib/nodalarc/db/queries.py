@@ -121,6 +121,32 @@ def insert_active_links(
     conn.commit()
 
 
+def _link_event_filter(
+    session_id: str,
+    start_time: str | None,
+    end_time: str | None,
+    node: str | None,
+    peer: str | None,
+) -> tuple[str, list]:
+    where = "session_id = ?"
+    params: list = [session_id]
+    if start_time is not None:
+        where += " AND sim_time >= ?"
+        params.append(start_time)
+    if end_time is not None:
+        where += " AND sim_time <= ?"
+        params.append(end_time)
+    if peer is not None:
+        if node is None:
+            raise ValueError("a peer filter names the other end of a node's link; name the node")
+        where += " AND ((node_a = ? AND node_b = ?) OR (node_a = ? AND node_b = ?))"
+        params.extend([node, peer, peer, node])
+    elif node is not None:
+        where += " AND (node_a = ? OR node_b = ?)"
+        params.extend([node, node])
+    return where, params
+
+
 def query_link_events(
     conn: sqlite3.Connection,
     *,
@@ -128,23 +154,45 @@ def query_link_events(
     start_time: str | None = None,
     end_time: str | None = None,
     node: str | None = None,
+    peer: str | None = None,
+    newest_first: bool = False,
+    after: tuple[str, int] | None = None,
+    limit: int | None = None,
 ) -> list[dict]:
-    """One session's link events, with optional time range and node filter."""
-    sql = "SELECT * FROM link_events WHERE session_id = ?"
-    params: list = [session_id]
-    if start_time is not None:
-        sql += " AND sim_time >= ?"
-        params.append(start_time)
-    if end_time is not None:
-        sql += " AND sim_time <= ?"
-        params.append(end_time)
-    if node is not None:
-        sql += " AND (node_a = ? OR node_b = ?)"
-        params.extend([node, node])
-    sql += " ORDER BY sim_time"
+    """One session's link events in (sim_time, id) order.
+
+    Optional filters: a sim-time range, one node's links, or the one link
+    between ``node`` and ``peer``. ``after`` is the (sim_time, id) of a row
+    already read; the rows returned follow it in the chosen order. ``limit``
+    bounds how many rows are returned.
+    """
+    where, params = _link_event_filter(session_id, start_time, end_time, node, peer)
+    if after is not None:
+        beyond = "<" if newest_first else ">"
+        where += f" AND (sim_time {beyond} ? OR (sim_time = ? AND id {beyond} ?))"
+        params.extend([after[0], after[0], after[1]])
+    direction = "DESC" if newest_first else "ASC"
+    sql = f"SELECT * FROM link_events WHERE {where} ORDER BY sim_time {direction}, id {direction}"
+    if limit is not None:
+        sql += " LIMIT ?"
+        params.append(limit)
     conn.row_factory = sqlite3.Row
     rows = conn.execute(sql, params).fetchall()
     return [dict(row) for row in rows]
+
+
+def count_link_events(
+    conn: sqlite3.Connection,
+    *,
+    session_id: str,
+    start_time: str | None = None,
+    end_time: str | None = None,
+    node: str | None = None,
+    peer: str | None = None,
+) -> int:
+    """How many of one session's link events match the filters of ``query_link_events``."""
+    where, params = _link_event_filter(session_id, start_time, end_time, node, peer)
+    return conn.execute(f"SELECT count(*) FROM link_events WHERE {where}", params).fetchone()[0]
 
 
 # ---------------------------------------------------------------------------

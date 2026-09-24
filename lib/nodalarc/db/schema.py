@@ -156,6 +156,19 @@ INDEXES = [
     "CREATE INDEX IF NOT EXISTS idx_operator_interventions_gs ON operator_interventions(gs_id);",
 ]
 
+# Every table that grows with the recording, with the column that says when each
+# row was recorded. The size budget drops rows oldest first by these columns;
+# session_metadata is the only table outside it.
+TIME_ORDERED_COLUMNS: tuple[tuple[str, str], ...] = (
+    ("link_events", "wall_time"),
+    ("convergence_events", "wall_time_start"),
+    ("probe_results", "wall_time"),
+    ("adapter_events", "wall_time"),
+    ("snapshots", "wall_time"),
+    ("ome_lifecycle_events", "event_time"),
+    ("operator_interventions", "event_time"),
+)
+
 ALL_DDL = [
     DDL_LINK_EVENTS,
     DDL_CONVERGENCE_EVENTS,

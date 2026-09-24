@@ -187,7 +187,7 @@ computation, then continuous state updates.
 | POST | `/api/v1/trace/start` | Start the live trace between two nodes |
 | GET | `/api/v1/trace/status` | The live trace's endpoints and latest result |
 | POST | `/api/v1/trace/stop` | Stop the live trace |
-| GET | `/api/v1/links` | Recorded link events, with optional `start`, `end` and `node` filters (recorded sessions only) |
+| GET | `/api/v1/links` | One page of recorded link events, at most 200, with optional `start`, `end`, `node`, `peer` and `order` filters (recorded sessions only) |
 | POST | `/api/v1/playback` | Playback control: pause, resume, set_speed, seek |
 | GET | `/api/v1/health` | Health check (no auth required) |
 | GET | `/api/v1/auth/token` | Get auth token (no auth required) |
@@ -206,11 +206,23 @@ for the active session: `409 history.not_recorded` when it was deployed
 without recording, and `503 history.failed` when a write failed and recording
 stopped.
 
+`GET /api/v1/links` returns one page: `events`, `returned` of `total` matching
+events, and `next_cursor`. `limit` sets the page size, at most 200. The next
+page is requested with `cursor` set to `next_cursor` and the same filters;
+`next_cursor` is null on the last page. `order` is `oldest_first` (default) or
+`newest_first`; `peer` narrows `node` to the one link between the two nodes.
+
+All recordings together stay within the platform's `vs_api_history_max_bytes`
+(250 MiB). Past it the oldest recorded data goes first: earlier runs'
+recordings, then the oldest rows of the current one. A recording that lost
+rows reports when its oldest kept data was recorded as `retained_from` on
+each link-event page.
+
 ## State Snapshot Schema
 
 The state snapshot contains:
 
-- **nodes** - array of all satellites, relay nodes, and ground nodes with position, link counts, segment metadata, and body/frame metadata
+- **nodes** - array of all satellites and ground nodes with position, link counts, segment metadata, and body/frame metadata
 - **links** - array of all active links with latency, each end's terminal rates (`transmit_mbps_a` and `receive_mbps_a` for node_a, `transmit_mbps_b` and `receive_mbps_b` for node_b), type, and rule-derived relationship where available. A direction carries no more than its sender transmits or its receiver takes in.
 - **recent_events** - last 50 link state changes and handoffs
 - **network_health** - convergence status

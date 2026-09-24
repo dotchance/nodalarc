@@ -3239,9 +3239,16 @@ class TestSessionHistory:
         response = TestClient(m.app).get("/api/v1/links", params={"node": "sat-P00S00"})
 
         assert response.status_code == 200
-        assert [(e["node_a"], e["event_type"]) for e in response.json()] == [
+        page = response.json()
+        assert [(e["node_a"], e["event_type"]) for e in page["events"]] == [
             ("sat-P00S00", "LinkUp")
         ]
+        assert (page["returned"], page["total"], page["next_cursor"], page["retained_from"]) == (
+            1,
+            1,
+            None,
+            None,
+        )
 
     _BASELINE_SIM_TIME = datetime(2026, 9, 23, 12, 0, 5, tzinfo=UTC)
 
@@ -3373,3 +3380,186 @@ class TestSessionHistory:
             )
         else:
             assert path is None
+
+    @staticmethod
+    def _recorded_link_rows(tmp_path) -> SessionContext:
+        """A recorded session holding 450 link rows: three links at 150 instants."""
+        from datetime import timedelta
+
+        from nodalarc.db.queries import insert_active_links
+
+        ctx = _recorded_context(tmp_path / "run-history-0001.db")
+        ctx._record_history("session metadata", ctx._open_history)
+        start = datetime(2026, 9, 24, 12, 0, tzinfo=UTC)
+
+        def write(conn):
+            for step in range(150):
+                at = start + timedelta(seconds=step)
+                insert_active_links(
+                    conn,
+                    [("sat-a", "sat-b"), ("sat-a", "sat-c"), ("sat-d", "sat-e")],
+                    session_id=ctx.session_id,
+                    sim_time=at,
+                    wall_time=at,
+                )
+
+        ctx._record_history("link rows", write)
+        assert ctx.history_error is None
+        return ctx
+
+    def test_link_history_pages_hold_at_most_200_and_follow_the_cursor(self, tmp_path, monkeypatch):
+        import vs_api.main as m
+
+        monkeypatch.setattr(m, "_API_KEY", "")
+        monkeypatch.setattr(m, "_active_context", self._recorded_link_rows(tmp_path))
+        client = TestClient(m.app)
+
+        pages, params = [], {}
+        while True:
+            response = client.get("/api/v1/links", params=params)
+            assert response.status_code == 200
+            pages.append(response.json())
+            if pages[-1]["next_cursor"] is None:
+                break
+            params = {"cursor": pages[-1]["next_cursor"]}
+
+        assert [(page["returned"], page["total"]) for page in pages] == [
+            (200, 450),
+            (200, 450),
+            (50, 450),
+        ]
+        events = [event for page in pages for event in page["events"]]
+        positions = [(event["sim_time"], event["id"]) for event in events]
+        assert positions == sorted(positions)
+        assert len({event["id"] for event in events}) == 450
+
+    def test_one_links_newest_events_come_first_and_the_next_page_continues_older(
+        self, tmp_path, monkeypatch
+    ):
+        import vs_api.main as m
+
+        monkeypatch.setattr(m, "_API_KEY", "")
+        monkeypatch.setattr(m, "_active_context", self._recorded_link_rows(tmp_path))
+        client = TestClient(m.app)
+        params = {"node": "sat-b", "peer": "sat-a", "order": "newest_first", "limit": 20}
+
+        first = client.get("/api/v1/links", params=params).json()
+        second = client.get(
+            "/api/v1/links", params={**params, "cursor": first["next_cursor"]}
+        ).json()
+
+        assert (first["returned"], first["total"]) == (20, 150)
+        assert {(e["node_a"], e["node_b"]) for e in first["events"]} == {("sat-a", "sat-b")}
+        first_times = [event["sim_time"] for event in first["events"]]
+        assert first_times[0] == "2026-09-24T12:02:29+00:00"
+        assert first_times == sorted(first_times, reverse=True)
+        assert second["events"][0]["sim_time"] == "2026-09-24T12:02:09+00:00"
+
+    @pytest.mark.parametrize(
+        ("params", "status", "code"),
+        [
+            ({"limit": 201}, 422, None),
+            ({"limit": 0}, 422, None),
+            ({"peer": "sat-a"}, 400, "history.peer_without_node"),
+            ({"cursor": "not-a-cursor"}, 400, "history.invalid_cursor"),
+        ],
+    )
+    def test_link_history_refuses_what_it_cannot_page(
+        self, tmp_path, monkeypatch, params, status, code
+    ):
+        import vs_api.main as m
+
+        monkeypatch.setattr(m, "_API_KEY", "")
+        monkeypatch.setattr(m, "_active_context", self._recorded_link_rows(tmp_path))
+
+        response = TestClient(m.app).get("/api/v1/links", params=params)
+
+        assert response.status_code == status
+        if code is not None:
+            assert response.json()["code"] == code
+
+    def test_the_recorder_keeps_history_within_its_budget_oldest_first(self, tmp_path, monkeypatch):
+        from datetime import timedelta
+
+        import vs_api.main as m
+        from nodalarc.db.retention import used_bytes
+
+        ctx = _recorded_context(tmp_path / "history" / "run-history-0001.db")
+        ctx._history_max_bytes = 400_000
+        ctx._record_history("session metadata", ctx._open_history)
+        start = datetime(2026, 9, 24, 12, 0, tzinfo=UTC)
+        for step in range(60):
+            at = (start + timedelta(seconds=10 * step)).isoformat()
+            ctx.record_snapshot({"sim_time": at, "wall_time": at, "payload": "x" * 20_000})
+
+        assert ctx.history_error is None
+        conn = sqlite3.connect(ctx.history_path)
+        try:
+            assert used_bytes(conn) <= 400_000
+            kept = [row[0] for row in conn.execute("SELECT sim_time FROM snapshots ORDER BY id")]
+        finally:
+            conn.close()
+        assert kept[-1] == (start + timedelta(seconds=590)).isoformat()
+        assert kept[0] > start.isoformat()
+
+        monkeypatch.setattr(m, "_API_KEY", "")
+        monkeypatch.setattr(m, "_active_context", ctx)
+        assert TestClient(m.app).get("/api/v1/links").json()["retained_from"] is not None
+
+    @pytest.mark.parametrize(
+        ("path", "message"),
+        [
+            ("/api/v1/metrics/convergence", "VS-API does not record convergence events"),
+            ("/api/v1/metrics/flows/flow-1", "VS-API does not record probe results"),
+        ],
+    )
+    def test_metrics_routes_refuse_data_no_component_records(self, monkeypatch, path, message):
+        import vs_api.main as m
+
+        monkeypatch.setattr(m, "_API_KEY", "")
+
+        response = TestClient(m.app).get(path)
+
+        assert response.status_code == 501
+        assert response.json() == {"code": "history.not_collected", "message": message}
+
+    def test_a_failure_finding_where_recording_starts_stops_recording_not_live_state(
+        self, tmp_path
+    ):
+        import asyncio
+
+        from nats.errors import TimeoutError as NatsTimeoutError
+        from nodalarc.nats_channels import actual_links_subscribe_subject
+
+        ctx = _recorded_context(tmp_path / "run-history-0001.db")
+        subscribed: list[str] = []
+
+        class _Subscription:
+            async def unsubscribe(self) -> None:
+                return None
+
+        class _JetStream:
+            async def subscribe(self, subject, **_kwargs):
+                subscribed.append(subject)
+                return _Subscription()
+
+            async def get_last_msg(self, stream_name, subject):
+                raise NatsTimeoutError()
+
+        class _Nats:
+            def jetstream(self):
+                return _JetStream()
+
+        async def run() -> bool:
+            task = asyncio.create_task(ctx._subscriber_loop(_Nats(), "switch"))
+            last_subject = actual_links_subscribe_subject(ctx.session_id)
+            while last_subject not in subscribed and not task.done():
+                await asyncio.sleep(0.01)
+            alive = not task.done()
+            ctx._stopped = True
+            await asyncio.wait_for(task, timeout=3)
+            return alive
+
+        assert asyncio.run(run())
+        assert actual_links_subscribe_subject(ctx.session_id) in subscribed
+        assert ctx.history_error == "failed to find where recording starts"

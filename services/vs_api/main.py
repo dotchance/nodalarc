@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import base64
 import contextlib
 import json
 import logging
@@ -66,11 +67,12 @@ from nodalarc.cr_runtime_config import (
     load_cr_runtime_config,
 )
 from nodalarc.db.queries import (
-    query_convergence_events,
+    count_link_events,
+    get_metadata,
     query_link_events,
     query_nearest_snapshot,
-    query_probe_results,
 )
+from nodalarc.db.retention import RETAINED_FROM_KEY
 from nodalarc.kubernetes_runtime_config import (
     KubernetesRuntimeConfigError,
     KubernetesRuntimeConfigErrorCode,
@@ -99,6 +101,9 @@ from nodalarc.models.session_sources import (
     CatalogSessionYamlUploadRequest,
 )
 from nodalarc.models.vs_api import (
+    LINK_HISTORY_PAGE_MAX,
+    LinkHistoryEvent,
+    LinkHistoryPage,
     StateSnapshot,
     TracedPath,
 )
@@ -121,6 +126,7 @@ from nodalarc.resolve_session import (
 )
 from nodalarc.runtime_config import ResolvedRuntimeConfig, RuntimeConfigError
 from nodalarc.session_nodes import available_session_nodes
+from pydantic import TypeAdapter
 from urllib3.exceptions import HTTPError as TransportHTTPError
 from yaml import YAMLError
 
@@ -2387,17 +2393,71 @@ def get_link_events(
     start: str = Query(None),
     end: str = Query(None),
     node: str = Query(None),
+    peer: str = Query(None, description="The node at the other end of the link; needs node"),
+    order: Literal["oldest_first", "newest_first"] = Query("oldest_first"),
+    limit: int = Query(LINK_HISTORY_PAGE_MAX, ge=1, le=LINK_HISTORY_PAGE_MAX),
+    cursor: str = Query(None, description="next_cursor of the previous page"),
 ) -> Any:
-    """The recorded session's link events, optionally for one node's links."""
+    """One page of the recorded session's link events, optionally for one node's
+    links or one link. Further pages follow ``next_cursor`` with the same filters."""
     ctx, refusal = _history_session()
     if refusal is not None:
         return refusal
-    return _read_history(
-        ctx,
-        lambda conn: query_link_events(
-            conn, session_id=ctx.session_id, start_time=start, end_time=end, node=node
-        ),
+    if peer is not None and node is None:
+        return refusal_response(
+            400, "history.peer_without_node", "A peer filter needs the node at the link's other end"
+        )
+    after = None
+    if cursor is not None:
+        after = _decode_link_history_cursor(cursor)
+        if after is None:
+            return refusal_response(
+                400, "history.invalid_cursor", "The cursor is not one this API returned"
+            )
+    filters = {"start_time": start, "end_time": end, "node": node, "peer": peer}
+
+    def read(conn: sqlite3.Connection) -> tuple[list[dict], int, str | None]:
+        # One read transaction: the page, its total and retained_from describe the
+        # same state of the file. One row past the page tells whether another follows.
+        conn.execute("BEGIN")
+        rows = query_link_events(
+            conn,
+            session_id=ctx.session_id,
+            newest_first=order == "newest_first",
+            after=after,
+            limit=limit + 1,
+            **filters,
+        )
+        total = count_link_events(conn, session_id=ctx.session_id, **filters)
+        retained_from = get_metadata(conn, session_id=ctx.session_id, key=RETAINED_FROM_KEY)
+        return rows, total, retained_from
+
+    rows, total, retained_from = _read_history(ctx, read)
+    page = rows[:limit]
+    return LinkHistoryPage(
+        events=[LinkHistoryEvent.model_validate(row) for row in page],
+        returned=len(page),
+        total=total,
+        next_cursor=_link_history_cursor(page[-1]) if len(rows) > limit else None,
+        retained_from=retained_from,
     )
+
+
+_LINK_HISTORY_CURSOR = TypeAdapter(tuple[str, int])
+
+
+def _link_history_cursor(row: dict) -> str:
+    """The opaque cursor after one link event: its (sim_time, id) position."""
+    return base64.urlsafe_b64encode(
+        _LINK_HISTORY_CURSOR.dump_json((row["sim_time"], row["id"]))
+    ).decode()
+
+
+def _decode_link_history_cursor(cursor: str) -> tuple[str, int] | None:
+    try:
+        return _LINK_HISTORY_CURSOR.validate_json(base64.urlsafe_b64decode(cursor.encode()))
+    except ValueError:
+        return None
 
 
 @app.get(
@@ -2624,19 +2684,10 @@ def get_ground_link_decisions(
     responses=_REFUSAL_RESPONSES,
     dependencies=[Depends(_require_api_key)],
 )
-def get_convergence_events(
-    start: str = Query(None),
-    end: str = Query(None),
-) -> Any:
-    """The recorded session's convergence events."""
-    ctx, refusal = _history_session()
-    if refusal is not None:
-        return refusal
-    return _read_history(
-        ctx,
-        lambda conn: query_convergence_events(
-            conn, session_id=ctx.session_id, start_time=start, end_time=end
-        ),
+def get_convergence_events() -> JSONResponse:
+    """Refused: VS-API records no convergence events, so a history would be empty."""
+    return refusal_response(
+        501, "history.not_collected", "VS-API does not record convergence events"
     )
 
 
@@ -2645,21 +2696,9 @@ def get_convergence_events(
     responses=_REFUSAL_RESPONSES,
     dependencies=[Depends(_require_api_key)],
 )
-def get_flow_metrics(
-    flow_id: str,
-    start: str = Query(None),
-    end: str = Query(None),
-) -> Any:
-    """The recorded session's probe results for one flow."""
-    ctx, refusal = _history_session()
-    if refusal is not None:
-        return refusal
-    return _read_history(
-        ctx,
-        lambda conn: query_probe_results(
-            conn, session_id=ctx.session_id, flow_id=flow_id, start_time=start, end_time=end
-        ),
-    )
+def get_flow_metrics() -> JSONResponse:
+    """Refused: VS-API records no probe results, so a history would be empty."""
+    return refusal_response(501, "history.not_collected", "VS-API does not record probe results")
 
 
 # --- Path trace endpoints ---

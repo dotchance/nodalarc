@@ -61,6 +61,9 @@ class PlatformConfig(BaseModel):
     vs_api_playback_max_requests_per_minute: int
     vs_api_session_switch_max_requests_per_minute: int
     vs_api_introspect_max_response_bytes: int
+    # Bytes every history recording together may occupy; past it the oldest
+    # recorded data goes first
+    vs_api_history_max_bytes: int = Field(gt=0)
 
     # Session pods one Kubernetes node is taken to hold, for the readiness
     # capacity warning

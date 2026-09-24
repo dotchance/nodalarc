@@ -7,7 +7,7 @@ import { translateLinkType } from "../translate";
 import { linkEventLabel } from "../explain/linkEvents";
 import { REST_URL, authHeaders } from "../config";
 import { apiErrorFromException, apiErrorMessage } from "../ui/apiError";
-import type { LinkState, StateSnapshot } from "../types";
+import type { LinkHistoryPage, LinkState, StateSnapshot } from "../types";
 import { instanceLabel, interfaceInstances } from "../routing/instances";
 
 interface LinkDetailProps {
@@ -15,13 +15,8 @@ interface LinkDetailProps {
   snapshot: StateSnapshot;
 }
 
-interface LinkHistoryEntry {
-  sim_time: string;
-  event_type: string;
-  reason: string;
-  node_a: string;
-  node_b: string;
-}
+/** Recorded events the panel shows: the newest of the selected link. */
+const HISTORY_SHOWN = 20;
 
 /** The routing instances one end runs on its interface of the link, with the
  *  interface's OSPF area. */
@@ -118,34 +113,32 @@ function LinkRates({ link }: { link: LinkState }) {
 }
 
 export function LinkDetail({ link, snapshot }: LinkDetailProps) {
-  const [history, setHistory] = useState<LinkHistoryEntry[]>([]);
+  const [history, setHistory] = useState<LinkHistoryPage | null>(null);
   // Why no history is shown: recording is off for the session, recording
   // failed, or the request failed. Stated, never shown as an empty history.
   const [historyUnavailable, setHistoryUnavailable] = useState<string | null>(null);
 
-  // Fetch the recorded link history of this link's first node on select.
+  // Fetch the newest recorded events of this link on select.
   useEffect(() => {
     let current = true;
     const fetchHistory = async () => {
-      setHistory([]);
+      setHistory(null);
       setHistoryUnavailable(null);
+      const query = new URLSearchParams({
+        node: link.node_a,
+        peer: link.node_b,
+        order: "newest_first",
+        limit: String(HISTORY_SHOWN),
+      });
       try {
-        const res = await fetch(
-          `${REST_URL}/api/v1/links?node=${encodeURIComponent(link.node_a)}`,
-          { headers: authHeaders() },
-        );
+        const res = await fetch(`${REST_URL}/api/v1/links?${query}`, { headers: authHeaders() });
         if (!res.ok) {
           const message = await apiErrorMessage(res);
           if (current) setHistoryUnavailable(message);
           return;
         }
-        const data = (await res.json()) as LinkHistoryEntry[];
-        const onThisLink = data.filter(
-          (e) =>
-            (e.node_a === link.node_a && e.node_b === link.node_b) ||
-            (e.node_a === link.node_b && e.node_b === link.node_a),
-        );
-        if (current) setHistory(onThisLink.slice(-20));
+        const page = (await res.json()) as LinkHistoryPage;
+        if (current) setHistory(page);
       } catch (err) {
         if (current) setHistoryUnavailable(apiErrorFromException(err));
       }
@@ -246,10 +239,17 @@ export function LinkDetail({ link, snapshot }: LinkDetailProps) {
           </div>
         </>
       )}
-      {history.length > 0 && (
+      {history !== null && history.returned > 0 && (
         <>
-          <h3>History (last {history.length})</h3>
-          {history.map((h, i) => (
+          <h3>History (last {history.returned} of {history.total})</h3>
+          {history.retained_from !== null && (
+            <div className="detail-row">
+              <span className="detail-value" style={{ fontSize: 10 }}>
+                Older events were dropped to keep history within its size budget
+              </span>
+            </div>
+          )}
+          {[...history.events].reverse().map((h, i) => (
             <div className="detail-row" key={i}>
               <span className="detail-label" style={{ fontSize: 10 }}>
                 {h.sim_time?.substring(11, 19) ?? ""}

@@ -371,3 +371,47 @@ class StateSnapshot(BaseModel):
     actuation_notices: list[ActuationNotice] = Field(default_factory=list)
     ome_lifecycle_notices: list[dict[str, Any]] = Field(default_factory=list)
     actuation_health: ActuationHealth | None = None
+
+
+class LinkHistoryEvent(BaseModel):
+    """One recorded link event: a transition, a latency change, or a link
+    active when the recording started (``LinkActive``, reason
+    ``recording_start``)."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    id: int
+    session_id: str
+    sim_time: str
+    wall_time: str
+    event_type: Literal["LinkUp", "LinkDown", "LatencyUpdate", "LinkActive"]
+    node_a: str
+    node_b: str
+    interface_a: str | None
+    interface_b: str | None
+    latency_ms: float | None
+    range_km: float | None
+    reason: str | None
+
+
+# The most link events one history page returns.
+LINK_HISTORY_PAGE_MAX = 200
+
+
+class LinkHistoryPage(BaseModel):
+    """One page of a recorded session's link events.
+
+    ``returned`` of ``total`` matching events are in ``events``. A further page
+    is requested with ``next_cursor`` and the same filters; it is None when no
+    event follows. ``retained_from`` is when the oldest kept data was recorded,
+    once the history size budget dropped older rows; None while the recording
+    is complete.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    events: list[LinkHistoryEvent]
+    returned: int
+    total: int
+    next_cursor: str | None
+    retained_from: str | None

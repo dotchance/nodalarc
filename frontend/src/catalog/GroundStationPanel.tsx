@@ -28,10 +28,11 @@ function CustomGroundStationsForm({ stations, onSubmit, onCancel }: {
   const selectAll = () => setSelected(new Set(stations.map((s) => s.file)));
   const selectNone = () => setSelected(new Set());
 
+  // The Wizard shows this form once its facts loaded, so an empty list is VS-API's answer.
   if (stations.length === 0) {
     return (
       <div className="wizard-custom-form">
-        <p className="wizard-loading">Loading available stations...</p>
+        <div className="wizard-error">VS-API returned no ground stations.</div>
         <div className="wizard-nav" style={{ marginTop: 16 }}>
           <button className="wizard-nav-btn" onClick={onCancel}>Cancel</button>
         </div>

@@ -15,6 +15,7 @@ import { useState, useCallback, useRef } from "react";
 import { useWizard } from "../hooks/useWizard";
 import type { WizardStep } from "./wizardTypes";
 import type { SessionInfo } from "../types";
+import type { SessionSwitchResult } from "../hooks/useSessionSwitcher";
 import type { CatalogSessionSourceId } from "../builder/generated/builderApi";
 import { REST_URL, authHeaders } from "../config";
 import { apiErrorMessage, apiErrorFromException } from "../ui/apiError";
@@ -33,7 +34,10 @@ interface SessionWizardProps {
   systemNotice?: string;
   /** Scoped user and shipped catalog sessions, deployable as-is via session switch. */
   sessions: SessionInfo[];
-  onLaunchSession: (session: SessionInfo, recordHistory: boolean) => void;
+  /** Why the session list did not load from VS-API; null once it loaded. */
+  sessionsError: string | null;
+  /** Ask VS-API to switch to a session; resolves with its answer. */
+  onLaunchSession: (session: SessionInfo, recordHistory: boolean) => Promise<SessionSwitchResult>;
   /** Feature-gated session-builder entry: navigates to the builder view.
    *  Day-0 authoring needs no deployed session, so this bypasses the
    *  hasEverDeployed close gate — it goes somewhere, not to nothing. */
@@ -52,9 +56,12 @@ export function SessionWizard({
   deploying,
   systemNotice,
   sessions,
+  sessionsError,
   onLaunchSession,
   onOpenBuilder,
 }: SessionWizardProps) {
+  // Why the last launch was refused; the launcher stays open to show it.
+  const [launchError, setLaunchError] = useState<string | null>(null);
   const wizard = useWizard();
   const [view, setView] = useState<"launch" | "build">(sessions.length > 0 ? "launch" : "build");
   // Any listed session's stored YAML is downloadable, including the running one.
@@ -183,6 +190,16 @@ export function SessionWizard({
                 Sessions in your current catalog scope, separated by ownership and deployed as
                 authored. Use the Wizard or Session Builder to create your own sessions.
               </p>
+              {sessionsError && (
+                <div className="wizard-error" role="alert">
+                  Sessions did not load from VS-API: {sessionsError}
+                </div>
+              )}
+              {launchError && (
+                <div className="wizard-error" role="alert">
+                  {launchError}
+                </div>
+              )}
               <div className="launcher-sessions">
                 {sessionGroups.map((group) => group.sessions.length > 0 && (
                   <section
@@ -204,10 +221,15 @@ export function SessionWizard({
                         <div key={s.source_id.session_ref} className="launcher-row-shell">
                           <button
                             className="launcher-row"
-                            onClick={() => {
+                            onClick={async () => {
                               if (s.active || deploying || !s.deploy_allowed) return;
-                              onLaunchSession(s, recordHistory);
-                              onDeployStarted();
+                              setLaunchError(null);
+                              const result = await onLaunchSession(s, recordHistory);
+                              if (result.ok) {
+                                onDeployStarted();
+                              } else {
+                                setLaunchError(result.message);
+                              }
                             }}
                             disabled={s.active || deploying || !s.deploy_allowed}
                             title={

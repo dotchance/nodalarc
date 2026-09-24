@@ -10,6 +10,7 @@ import {
   getNodeBodySphere,
   getNodeLocalPosition,
   getNodeWorldPosition,
+  bodyWorldSpheres,
   removeNode,
   setBodyFrame,
   setNodeLocalPosition,
@@ -130,5 +131,26 @@ describe("r3f position registry (per-body)", () => {
     const t = new THREE.Vector3();
     getNodeLocalPosition("s", t);
     expect([t.x, t.y, t.z]).toEqual([9, 9, 9]);
+  });
+});
+
+describe("bodyWorldSpheres", () => {
+  beforeEach(() => {
+    setBodyFrame("earth", null);
+    setBodyFrame("luna", null);
+  });
+
+  it("lists every registered body where it is, and none once cleared", () => {
+    setBodyFrame("earth", new THREE.Group(), 100);
+    const luna = new THREE.Group();
+    luna.position.set(1000, 0, 0);
+    setBodyFrame("luna", luna, 27);
+    expect(bodyWorldSpheres().map((s) => [s.center.toArray(), s.radius])).toEqual([
+      [[0, 0, 0], 100],
+      [[1000, 0, 0], 27],
+    ]);
+    setBodyFrame("earth", null);
+    setBodyFrame("luna", null);
+    expect(bodyWorldSpheres()).toEqual([]);
   });
 });

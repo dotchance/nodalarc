@@ -134,7 +134,7 @@ function snapshot(): StateSnapshot {
 }
 
 describe("filterSnapshotForRender", () => {
-  it("filters nodes, links, kernel pairs, and traced paths by visible segment", () => {
+  it("filters nodes, links and kernel pairs by visible segment and keeps every trace", () => {
     const filtered = filterSnapshotForRender(snapshot(), new Set(["leo", "ground"]), null);
 
     expect(filtered?.nodes.map((n) => n.node_id)).toEqual([
@@ -147,7 +147,12 @@ describe("filterSnapshotForRender", () => {
     expect(filtered?.kernel_actual_pairs).toEqual([
       ["ground-gs-denver", "leo-sat-p00s00"],
     ]);
-    expect(filtered?.traced_paths.map((path) => path.flow_id)).toEqual(["kept"]);
+    // A trace is drawn whole; hops on hidden nodes are bridged where it is drawn.
+    expect(filtered?.traced_paths.map((path) => path.flow_id)).toEqual([
+      "kept",
+      "hidden",
+      "hidden-reverse",
+    ]);
     expect(filtered?.active_flows.map((flow) => flow.flow_id)).toEqual(["kept"]);
   });
 

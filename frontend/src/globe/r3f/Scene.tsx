@@ -35,6 +35,7 @@ import {
 } from "../../sim/ephemeris";
 import type { ColorMode, GlobeMode, NodeState, ReferenceFrame, Selection, StateSnapshot } from "../../types";
 import type { GlobeActions } from "../actions";
+import { isGroundNode } from "../../networkIdentity";
 import { Universe } from "./Universe";
 import { GlobeActionsBridge } from "./GlobeActionsBridge";
 import { Body } from "./Body";
@@ -153,6 +154,10 @@ export function Scene({
   // declaratively via their resetKeys below; orbit rings re-seed on their own.
   const constellation = snapshot?.constellation_name ?? null;
   const nodes = snapshot?.nodes ?? [];
+  const groundNodeIds = useMemo(
+    () => new Set(nodes.filter(isGroundNode).map((node) => node.node_id)),
+    [nodes],
+  );
   const earthNodes = useMemo(
     () => nodes.filter((node) => node.reference_body === "earth"),
     [nodes],
@@ -400,7 +405,7 @@ export function Scene({
           showGroundLinks={showGroundLinks}
           resetKey={constellation ?? "none"}
         />
-        <FlowPaths tracedPaths={snapshot?.traced_paths ?? []} />
+        <FlowPaths tracedPaths={snapshot?.traced_paths ?? []} groundNodeIds={groundNodeIds} />
         {worldLayers}
         {kmPerRenderUnit !== null && bodies.map((body) => {
           const bodyNodes = nodes.filter((node) => node.reference_body === body.id);

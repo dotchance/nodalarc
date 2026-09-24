@@ -6,12 +6,31 @@
  *  variables, so the stroke strings are precomputed from token values.
  */
 
-import { FAIL_HOLD_MS, FAIL_FADE_MS, LINK_GROUND_COLOR, LINK_ISL_COLOR, LINK_FAIL_COLOR, LINK_FLOW_COLOR, hexToCSS } from "../config";
+import {
+  FAIL_HOLD_MS,
+  FAIL_FADE_MS,
+  LINK_GROUND_COLOR,
+  LINK_ISL_COLOR,
+  LINK_FAIL_COLOR,
+  TRACE_BRIDGED_COLOR,
+  TRACE_FORWARD_COLOR,
+  hexToCSS,
+} from "../config";
 import { withAlpha } from "../styles/tokens";
+import type { TraceSegment } from "../trace/traceSegments";
 
 const GROUND_STROKE = withAlpha(hexToCSS(LINK_GROUND_COLOR), 0.6);
 const ISL_STROKE = withAlpha(hexToCSS(LINK_ISL_COLOR), 0.5);
-const FLOW_STROKE = hexToCSS(LINK_FLOW_COLOR);
+const FLOW_STROKE = hexToCSS(TRACE_FORWARD_COLOR);
+const FLOW_BRIDGED_STROKE = hexToCSS(TRACE_BRIDGED_COLOR);
+
+/** The traced path to draw: its segments by the shared trace rule, its opacity
+ *  (below 1 while a stopped trace fades), and whether its dash flows. */
+export interface FlowDrawing {
+  segments: TraceSegment[];
+  opacity: number;
+  animate: boolean;
+}
 const FAIL_RGB = [(LINK_FAIL_COLOR >> 16) & 0xff, (LINK_FAIL_COLOR >> 8) & 0xff, LINK_FAIL_COLOR & 0xff] as const;
 import type { LayoutLink, LayoutNode } from "./layout";
 
@@ -49,7 +68,7 @@ export function drawLinks(
   ctx: CanvasRenderingContext2D,
   links: LayoutLink[],
   nodeMap: Map<string, LayoutNode>,
-  flowPath: string[] | null,
+  flow: FlowDrawing | null,
   dashOffset: number = 0,
   failTimes?: Map<string, number>,
   showIslLinks: boolean = true,
@@ -170,17 +189,26 @@ export function drawLinks(
     ctx.setLineDash([]);
   }
 
-  // Draw flow path overlay with animated dash
-  if (flowPath && flowPath.length >= 2) {
-    ctx.strokeStyle = FLOW_STROKE;
-    ctx.lineWidth = 3;
-    ctx.setLineDash([6, 3]);
-    ctx.lineDashOffset = -dashOffset;
-
-    for (let i = 0; i < flowPath.length - 1; i++) {
-      const a = nodeMap.get(flowPath[i]!);
-      const b = nodeMap.get(flowPath[i + 1]!);
+  // Traced path overlay: measured segments dashed in the flow color, bridged
+  // segments dotted and thin in their own color.
+  if (flow && flow.segments.length > 0) {
+    ctx.save();
+    ctx.globalAlpha = flow.opacity;
+    for (const segment of flow.segments) {
+      const a = nodeMap.get(segment.from);
+      const b = nodeMap.get(segment.to);
       if (!a || !b) continue;
+      if (segment.measured) {
+        ctx.strokeStyle = FLOW_STROKE;
+        ctx.lineWidth = 3;
+        ctx.setLineDash([6, 3]);
+        ctx.lineDashOffset = flow.animate ? -dashOffset : 0;
+      } else {
+        ctx.strokeStyle = FLOW_BRIDGED_STROKE;
+        ctx.lineWidth = 1.5;
+        ctx.setLineDash([1, 5]);
+        ctx.lineDashOffset = 0;
+      }
 
       // Ring-wrap detection: same plane, slot difference > half ring
       const isRingWrap = a.type === "satellite" && b.type === "satellite"
@@ -210,8 +238,6 @@ export function drawLinks(
         ctx.stroke();
       }
     }
-
-    ctx.setLineDash([]);
-    ctx.lineDashOffset = 0;
+    ctx.restore();
   }
 }

@@ -4,8 +4,8 @@ import { describe, it, expect, beforeAll } from "vitest";
 import { tokens, applyTheme, THEMES } from "../tokens";
 import {
   LINK_ISL_COLOR, LINK_GROUND_COLOR, LINK_FAIL_COLOR,
-  LINK_INACTIVE_COLOR, LINK_FLOW_COLOR, LINK_FLOW_SECONDARY_COLOR,
-  LINK_ISL_WIDTH, LINK_GROUND_WIDTH, LINK_FLOW_WIDTH,
+  LINK_INACTIVE_COLOR, TRACE_FORWARD_COLOR, TRACE_REVERSE_COLOR,
+  LINK_ISL_WIDTH, LINK_GROUND_WIDTH, TRACE_WIDTH,
   GS_COLOR, SELECTION_COLOR, FAIL_HOLD_MS, FAIL_FADE_MS,
   EARTH_RADIUS, SAT_RADIUS, SAT_SEGMENTS, GS_SIZE,
   CAMERA_FOV, CAMERA_DISTANCE, CAMERA_MIN_DISTANCE, CAMERA_MAX_DISTANCE,
@@ -31,14 +31,14 @@ describe("token system", () => {
       expect(LINK_GROUND_COLOR).toBe(tokens.colorLinkGround);
       expect(LINK_FAIL_COLOR).toBe(tokens.colorLinkFail);
       expect(LINK_INACTIVE_COLOR).toBe(tokens.colorLinkInactive);
-      expect(LINK_FLOW_COLOR).toBe(tokens.colorLinkFlow);
-      expect(LINK_FLOW_SECONDARY_COLOR).toBe(tokens.colorLinkFlowSecondary);
+      expect(TRACE_FORWARD_COLOR).toBe(tokens.colorTraceForward);
+      expect(TRACE_REVERSE_COLOR).toBe(tokens.colorTraceReverse);
     });
 
     it("link widths match their token source", () => {
       expect(LINK_ISL_WIDTH).toBe(tokens.linkWidthIsl);
       expect(LINK_GROUND_WIDTH).toBe(tokens.linkWidthGround);
-      expect(LINK_FLOW_WIDTH).toBe(tokens.linkWidthFlow);
+      expect(TRACE_WIDTH).toBe(tokens.traceWidth);
     });
 
     it("node colors match their token source", () => {
@@ -269,7 +269,7 @@ describe("token system", () => {
 
     it("link widths are ordered: ISL < ground < flow", () => {
       expect(tokens.linkWidthIsl).toBeLessThan(tokens.linkWidthGround);
-      expect(tokens.linkWidthGround).toBeLessThan(tokens.linkWidthFlow);
+      expect(tokens.linkWidthGround).toBeLessThan(tokens.traceWidth);
     });
 
     it("satellite radius is smaller than earth (scene proportions)", () => {

@@ -252,31 +252,41 @@ def test_unreadable_output_fails_the_direction() -> None:
     assert result.error == "unreadable traceroute output: not a traceroute hop line: 'bogus line'"
 
 
-def test_the_forward_path_is_published_while_it_grows() -> None:
-    seen: list[tuple[str, list[str], str]] = []
+def test_both_directions_are_published_while_they_grow() -> None:
+    seen: list = []
     cluster = _Cluster(
         {
             "gs-alpha": _Stream(
                 _output(" 1  10.0.0.1  5.0 ms", " 2  10.0.0.2  9.0 ms", " 3  10.2.1.1  14.0 ms")
             ),
-            "gs-beta": _Stream(_output(" 1  10.2.0.1  8.0 ms")),
+            "gs-beta": _Stream(_output(" 1  10.0.0.2  4.0 ms", " 2  10.2.0.1  8.0 ms")),
         }
     )
 
-    _trace_once(
-        _tracer(cluster),
-        cluster,
-        "gs-alpha",
-        "gs-beta",
-        on_progress=lambda progress: seen.append(
-            (progress.state, progress.hops, progress.reverse_state)
-        ),
-    )
+    _trace_once(_tracer(cluster), cluster, "gs-alpha", "gs-beta", on_progress=seen.append)
 
-    assert seen == [
-        ("running", ["gs-alpha", "sat-a"], "running"),
-        ("running", ["gs-alpha", "sat-a", "sat-b"], "running"),
-        ("running", ["gs-alpha", "sat-a", "sat-b", "gs-beta"], "running"),
+    # First both directions just started, then each printed hop, in each direction's order.
+    assert (seen[0].hops, seen[0].reverse_hops) == (["gs-alpha"], ["gs-beta"])
+    assert all("running" == p.state == p.reverse_state for p in seen)
+
+    def grew(direction: str) -> list[list[str]]:
+        steps: list[list[str]] = []
+        for progress in seen:
+            hops = getattr(progress, direction)
+            if not steps or steps[-1] != hops:
+                steps.append(hops)
+        return steps
+
+    assert grew("hops") == [
+        ["gs-alpha"],
+        ["gs-alpha", "sat-a"],
+        ["gs-alpha", "sat-a", "sat-b"],
+        ["gs-alpha", "sat-a", "sat-b", "gs-beta"],
+    ]
+    assert grew("reverse_hops") == [
+        ["gs-beta"],
+        ["gs-beta", "sat-b"],
+        ["gs-beta", "sat-b", "gs-alpha"],
     ]
 
 

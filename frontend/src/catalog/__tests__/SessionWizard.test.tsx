@@ -7,7 +7,7 @@
  * left the UI with no way to start a shipped session).
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, fireEvent, cleanup, within } from "@testing-library/react";
+import { render, screen, fireEvent, cleanup, within, waitFor } from "@testing-library/react";
 import type { SessionInfo } from "../../types";
 
 afterEach(cleanup);
@@ -60,8 +60,8 @@ describe("SessionWizard catalog sessions", () => {
     );
   });
 
-  it("launches an inactive catalog session via the switch path", () => {
-    const onLaunchSession = vi.fn();
+  it("launches an inactive catalog session via the switch path", async () => {
+    const onLaunchSession = vi.fn().mockResolvedValue({ ok: true });
     const onDeployStarted = vi.fn();
     render(
       <SessionWizard
@@ -69,23 +69,63 @@ describe("SessionWizard catalog sessions", () => {
         onClose={undefined}
         deploying={false}
         sessions={SESSIONS}
+        sessionsError={null}
         onLaunchSession={onLaunchSession}
       />,
     );
 
     fireEvent.click(screen.getByText("earth-geo-tdrs"));
     expect(onLaunchSession).toHaveBeenCalledWith(SESSIONS[1], false);
-    expect(onDeployStarted).toHaveBeenCalled();
+    await waitFor(() => expect(onDeployStarted).toHaveBeenCalled());
   });
 
-  it("launches with history recording when the launcher toggle is set", () => {
-    const onLaunchSession = vi.fn();
+  it("stays open and shows VS-API's reason when a switch is refused", async () => {
+    const onLaunchSession = vi.fn().mockResolvedValue({
+      ok: false,
+      message: "Prepared session is not deploy-ready",
+    });
+    const onDeployStarted = vi.fn();
+    render(
+      <SessionWizard
+        onDeployStarted={onDeployStarted}
+        onClose={undefined}
+        deploying={false}
+        sessions={SESSIONS}
+        sessionsError={null}
+        onLaunchSession={onLaunchSession}
+      />,
+    );
+
+    fireEvent.click(screen.getByText("earth-geo-tdrs"));
+
+    expect(await screen.findByText("Prepared session is not deploy-ready")).toBeTruthy();
+    expect(onDeployStarted).not.toHaveBeenCalled();
+  });
+
+  it("says why the session list did not load", () => {
     render(
       <SessionWizard
         onDeployStarted={vi.fn()}
         onClose={undefined}
         deploying={false}
         sessions={SESSIONS}
+        sessionsError="request failed (503)"
+        onLaunchSession={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText("Sessions did not load from VS-API: request failed (503)")).toBeTruthy();
+  });
+
+  it("launches with history recording when the launcher toggle is set", () => {
+    const onLaunchSession = vi.fn().mockResolvedValue({ ok: true });
+    render(
+      <SessionWizard
+        onDeployStarted={vi.fn()}
+        onClose={undefined}
+        deploying={false}
+        sessions={SESSIONS}
+        sessionsError={null}
         onLaunchSession={onLaunchSession}
       />,
     );
@@ -98,13 +138,14 @@ describe("SessionWizard catalog sessions", () => {
   });
 
   it("disables the currently running session", () => {
-    const onLaunchSession = vi.fn();
+    const onLaunchSession = vi.fn().mockResolvedValue({ ok: true });
     render(
       <SessionWizard
         onDeployStarted={vi.fn()}
         onClose={undefined}
         deploying={false}
         sessions={SESSIONS}
+        sessionsError={null}
         onLaunchSession={onLaunchSession}
       />,
     );
@@ -130,13 +171,14 @@ describe("SessionWizard catalog sessions", () => {
       source: "user",
       active: false,
     };
-    const onLaunchSession = vi.fn();
+    const onLaunchSession = vi.fn().mockResolvedValue({ ok: true });
     render(
       <SessionWizard
         onDeployStarted={vi.fn()}
         onClose={undefined}
         deploying={false}
         sessions={[shipped, user]}
+        sessionsError={null}
         onLaunchSession={onLaunchSession}
       />,
     );
@@ -176,6 +218,7 @@ describe("SessionWizard download errors", () => {
         onClose={undefined}
         deploying={false}
         sessions={SESSIONS}
+        sessionsError={null}
         onLaunchSession={vi.fn()}
       />,
     );
@@ -236,6 +279,7 @@ describe("SessionWizard authoring facts", () => {
         onClose={undefined}
         deploying={false}
         sessions={[]}
+        sessionsError={null}
         onLaunchSession={vi.fn()}
       />,
     );

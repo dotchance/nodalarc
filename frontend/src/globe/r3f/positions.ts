@@ -18,6 +18,7 @@
  */
 
 import * as THREE from "three";
+import type { BodySphere } from "./linkCurve";
 
 interface NodeEntry {
   v: THREE.Vector3;
@@ -147,4 +148,20 @@ export function getBodyWorldSphere(
   centerTarget.set(0, 0, 0);
   frame.localToWorld(centerTarget);
   return { body: bodyId, radius };
+}
+
+const _bodySpheres: BodySphere[] = [];
+
+/** Every registered body's world-space center and render radius (reused array; read, don't keep). */
+export function bodyWorldSpheres(): readonly BodySphere[] {
+  let count = 0;
+  for (const bodyId of bodyRadii.keys()) {
+    const sphere = (_bodySpheres[count] ??= { center: new THREE.Vector3(), radius: 0 });
+    const found = getBodyWorldSphere(bodyId, sphere.center);
+    if (found === null) continue;
+    sphere.radius = found.radius;
+    count++;
+  }
+  _bodySpheres.length = count;
+  return _bodySpheres;
 }

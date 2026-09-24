@@ -4,8 +4,14 @@ import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { TraceDialog } from "../TraceDialog";
 import type { NodeState, StateSnapshot, TracedPath } from "../../types";
+import { TRACE_FORWARD_COLOR, TRACE_REVERSE_COLOR } from "../../config";
 
 afterEach(cleanup);
+
+/** How the DOM reports a 0xRRGGBB color set on an element. */
+function hexRgb(hex: number): string {
+  return `rgb(${(hex >> 16) & 0xff}, ${(hex >> 8) & 0xff}, ${hex & 0xff})`;
+}
 
 function node(node_id: string): NodeState {
   return {
@@ -146,8 +152,9 @@ describe("TraceDialog outcomes", () => {
     expect(screen.queryByText("LIVE")).toBeNull();
     expect(screen.getByText("Trace")).toBeTruthy();
     expect(screen.queryByText("Stop Trace")).toBeNull();
-    // The last result stays shown.
+    // The last result stays shown, with the sim time it was measured at.
     expect(screen.getAllByText("geo-1", { selector: ".trace-hop-name" })).toHaveLength(2);
+    expect(screen.getByText("Measured at sim 2026-09-23 00:00:00 UTC")).toBeTruthy();
   });
 
   it("says a trace stopped on an internal error", () => {
@@ -199,6 +206,13 @@ describe("TraceDialog outcomes", () => {
     } finally {
       vi.unstubAllGlobals();
     }
+  });
+
+  it("shows forward hops in the forward line color and reverse hops in the reverse one", () => {
+    render(<TraceDialog nodes={NODES} snapshot={snapshotWithActiveTrace()} />);
+    const [forwardName, reverseName] = screen.getAllByText("madrid-gw", { selector: ".trace-hop-name" });
+    expect(forwardName!.style.color).toBe(hexRgb(TRACE_FORWARD_COLOR));
+    expect(reverseName!.style.color).toBe(hexRgb(TRACE_REVERSE_COLOR));
   });
 
   it("reports asymmetry only when the trace measured it", () => {

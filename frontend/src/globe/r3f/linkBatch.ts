@@ -30,8 +30,8 @@ import {
 } from "../../config";
 import type { LinkState } from "../../types";
 import { isGroundLinkState } from "../../networkIdentity";
+import { SEGMENTS_PER_ISL, writeBowedArc } from "./linkCurve";
 
-const SEGMENTS_PER_ISL = 16;
 const MIN_ISL_SLOTS = 200;
 const MIN_GROUND_SLOTS = 100;
 /** Brightness factor for an OME-desired link the kernel has not proven (in-flight/desired). */
@@ -50,33 +50,11 @@ const INACTIVE_R = ((LINK_INACTIVE_COLOR >> 16) & 0xff) / 255;
 const INACTIVE_G = ((LINK_INACTIVE_COLOR >> 8) & 0xff) / 255;
 const INACTIVE_B = (LINK_INACTIVE_COLOR & 0xff) / 255;
 
-const _mid = new THREE.Vector3();
-const _outward = new THREE.Vector3();
 const _posA = new THREE.Vector3();
 const _posB = new THREE.Vector3();
 
 export function linkKey(a: string, b: string): string {
   return a < b ? `${a}:${b}` : `${b}:${a}`;
-}
-
-function writeBowedSegments(buffer: Float32Array, offset: number, a: THREE.Vector3, b: THREE.Vector3): void {
-  _mid.lerpVectors(a, b, 0.5);
-  _outward.copy(_mid).normalize();
-  const chord = a.distanceTo(b);
-  const lift = chord * 0.03;
-  for (let i = 0; i < SEGMENTS_PER_ISL; i++) {
-    const t0 = i / SEGMENTS_PER_ISL;
-    const t1 = (i + 1) / SEGMENTS_PER_ISL;
-    const bow0 = 4 * t0 * (1 - t0) * lift;
-    const bow1 = 4 * t1 * (1 - t1) * lift;
-    const idx = offset + i * 6;
-    buffer[idx] = a.x + (b.x - a.x) * t0 + _outward.x * bow0;
-    buffer[idx + 1] = a.y + (b.y - a.y) * t0 + _outward.y * bow0;
-    buffer[idx + 2] = a.z + (b.z - a.z) * t0 + _outward.z * bow0;
-    buffer[idx + 3] = a.x + (b.x - a.x) * t1 + _outward.x * bow1;
-    buffer[idx + 4] = a.y + (b.y - a.y) * t1 + _outward.y * bow1;
-    buffer[idx + 5] = a.z + (b.z - a.z) * t1 + _outward.z * bow1;
-  }
 }
 
 function writeNaN(buffer: Float32Array, segmentIndex: number, segmentCount: number): void {
@@ -331,7 +309,7 @@ export class LinkBatch {
         pos[off + 4] = _posB.y;
         pos[off + 5] = _posB.z;
       } else {
-        writeBowedSegments(pos, entry.bufferIndex * 6, _posA, _posB);
+        writeBowedArc(pos, entry.bufferIndex * 6, _posA, _posB);
       }
       if (entry.state === "failing" && entry.failTime !== null) {
         const elapsed = now - entry.failTime;

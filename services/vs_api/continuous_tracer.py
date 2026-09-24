@@ -3,15 +3,18 @@
 """Continuous live path trace between two nodes.
 
 The live trace repeats a ``PathTracer`` trace on an interval, and at once
-when a link on the traced path changes, until it is stopped or reaches its
-time limit. The latest result is what the UI shows; after the time limit it
-stays, marked stopped.
+when a link near the traced path changes, until it is stopped or reaches its
+time limit. The latest result is what the UI shows. When a link on the shown
+path goes down, that path no longer exists: the cycle in flight is closed and
+the next measurement is shown as its hops arrive. After the time limit the
+last finished cycle stays, marked stopped.
 """
 
 from __future__ import annotations
 
 import asyncio
 import contextlib
+import itertools
 import logging
 import threading
 from collections.abc import Callable
@@ -45,13 +48,19 @@ class ContinuousTracer:
         self._max_seconds = max_seconds
         self._on_path_change = on_path_change
         self._task: asyncio.Task | None = None
+        # What the UI shows: a finished cycle, or a measurement still arriving.
         self._latest: TracedPath | None = None
+        # The latest cycle that finished; what stays at the time limit.
+        self._last_finished: TracedPath | None = None
         self._src: TraceEndpoint | None = None
         self._dst: TraceEndpoint | None = None
-        # Set by notify_topology_change() to wake the trace loop early.
+        # Set by notify_link_change() to wake the trace loop early.
         self._retrace_event = asyncio.Event()
-        # Set to close a running traceroute: on stop and at the time limit.
-        self._stopped = threading.Event()
+        # Closes the cycle in flight: on stop, at the time limit, and when a link
+        # on the shown path goes down. Each cycle gets its own.
+        self._cycle_closed = threading.Event()
+        # Orders writes to _latest between the trace threads and the event loop.
+        self._show_lock = threading.Lock()
         self._expired = False
         self._expiry: asyncio.TimerHandle | None = None
 
@@ -60,7 +69,7 @@ class ContinuousTracer:
         await self.stop()
         self._src = self._path_tracer.endpoint(src)
         self._dst = self._path_tracer.endpoint(dst)
-        self._stopped = threading.Event()
+        self._cycle_closed = threading.Event()
         self._expired = False
         self._expiry = asyncio.get_running_loop().call_later(self._max_seconds, self._expire)
         self._task = asyncio.create_task(self._trace_loop())
@@ -69,22 +78,39 @@ class ContinuousTracer:
         """Stop the trace loop and forget its result."""
         self._cancel_expiry()
         if self._task is not None:
-            self._stopped.set()
+            self._cycle_closed.set()
             self._task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await self._task
             self._task = None
         self._latest = None
+        self._last_finished = None
 
-    def notify_topology_change(self, node_a: str, node_b: str) -> None:
-        """Wake the trace loop when a link change touches the traced path."""
-        if not self.active or self._src is None or self._dst is None:
+    def notify_link_change(self, node_a: str, node_b: str, *, up: bool) -> None:
+        """Wake the trace loop for a link change that touches the traced nodes.
+
+        A link going down between two consecutive hops of the shown path means
+        that path no longer exists: the cycle in flight is closed and the shown
+        path is replaced at once by a new measurement.
+        """
+        if not self.active:
             return
-        watched = {self._src.node.node_id, self._dst.node.node_id}
-        if self._latest is not None:
-            watched |= set(self._latest.hops) | set(self._latest.reverse_hops)
-        if node_a in watched or node_b in watched:
-            self._retrace_event.set()
+        src, dst = self._require_endpoints()
+        shown = self._latest
+        watched = {src.node.node_id, dst.node.node_id}
+        if shown is not None:
+            watched |= set(shown.hops) | set(shown.reverse_hops)
+        if node_a not in watched and node_b not in watched:
+            return
+        if (
+            not up
+            and shown is not None
+            and (_joins(shown.hops, node_a, node_b) or _joins(shown.reverse_hops, node_a, node_b))
+        ):
+            with self._show_lock:
+                self._cycle_closed.set()
+                self._latest = self._path_tracer.measuring(src, dst, flow_id=TRACE_FLOW_ID)
+        self._retrace_event.set()
 
     @property
     def active(self) -> bool:
@@ -106,7 +132,7 @@ class ContinuousTracer:
     def _expire(self) -> None:
         """The time limit: close the running traceroute and end the loop."""
         self._expired = True
-        self._stopped.set()
+        self._cycle_closed.set()
         self._retrace_event.set()
 
     def _cancel_expiry(self) -> None:
@@ -121,16 +147,32 @@ class ContinuousTracer:
         previous: TracedPath | None = None
         try:
             while not self._expired:
-                result = await loop.run_in_executor(None, self._trace_once)
+                with self._show_lock:
+                    closed = threading.Event()
+                    self._cycle_closed = closed
+                    # The first cycle, and the cycle after the shown path broke,
+                    # show their hops as they arrive; a later cycle replaces the
+                    # shown result whole when it finishes.
+                    streaming = self._latest is None or "running" in (
+                        self._latest.state,
+                        self._latest.reverse_state,
+                    )
+                # A link change during this cycle wakes the loop when it ends.
+                self._retrace_event.clear()
+                result = await loop.run_in_executor(None, self._trace_once, closed, streaming)
                 if self._expired:
                     # The limit closed this cycle's traceroutes part way.
                     break
-                self._latest = result
+                if closed.is_set():
+                    # A link on the shown path went down during this cycle.
+                    continue
+                with self._show_lock:
+                    self._latest = result
+                self._last_finished = result
                 previous = self._report_path_changes(previous, result)
 
                 both_reached = result.state == "reached" and result.reverse_state == "reached"
                 interval = self._interval_s if both_reached else _UNREACHED_RETRACE_SECONDS
-                self._retrace_event.clear()
                 with contextlib.suppress(TimeoutError):
                     await asyncio.wait_for(self._retrace_event.wait(), timeout=interval)
             self._latest = self._stopped_result("time_limit", self._last_complete())
@@ -184,9 +226,8 @@ class ContinuousTracer:
 
     def _last_complete(self) -> TracedPath:
         """The latest finished cycle, or a failed result when no cycle finished."""
-        latest = self._latest
-        if latest is not None and "running" not in (latest.state, latest.reverse_state):
-            return latest
+        if self._last_finished is not None:
+            return self._last_finished
         src, dst = self._require_endpoints()
         return self._path_tracer.failed(
             src,
@@ -201,25 +242,30 @@ class ContinuousTracer:
             {**result.model_dump(), "tracing": False, "stop_reason": reason}
         )
 
-    def _trace_once(self) -> TracedPath:
+    def _trace_once(self, closed: threading.Event, streaming: bool) -> TracedPath:
         src, dst = self._require_endpoints()
 
-        def publish(progress: TracedPath) -> None:
-            self._latest = progress
+        def show(progress: TracedPath) -> None:
+            with self._show_lock:
+                # A closed cycle's late hops never replace what replaced them.
+                if not closed.is_set():
+                    self._latest = progress
 
-        # Until the first cycle completes, the forward path grows hop by hop in
-        # the UI. After that, each completed cycle replaces the last one whole.
-        first_cycle = self._latest is None or self._latest.state == "running"
         return self._path_tracer.trace(
             src,
             dst,
             flow_id=TRACE_FLOW_ID,
             tracing=True,
-            on_progress=publish if first_cycle else None,
-            stopped=self._stopped,
+            on_progress=show if streaming else None,
+            stopped=closed,
         )
 
     def _require_endpoints(self) -> tuple[TraceEndpoint, TraceEndpoint]:
         if self._src is None or self._dst is None:
             raise RuntimeError("the tracer has no endpoints; start() sets them")
         return self._src, self._dst
+
+
+def _joins(hops: list[str], node_a: str, node_b: str) -> bool:
+    """Whether two consecutive hops are the two ends of a link."""
+    return any({here, there} == {node_a, node_b} for here, there in itertools.pairwise(hops))

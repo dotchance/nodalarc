@@ -4,11 +4,15 @@
  *  side, with per-hop round trips and how each direction ended.
  */
 
-import { useState, useEffect, useMemo, useCallback } from "react";
-import { REST_URL, authHeaders } from "../config";
+import { useState, useEffect, useCallback } from "react";
+import { REST_URL, TRACE_FORWARD_COLOR, TRACE_REVERSE_COLOR, authHeaders, hexToCSS } from "../config";
 import type { NodeState, StateSnapshot, TraceState, TraceStopReason } from "../types";
-import { isGroundNode } from "../networkIdentity";
 import { apiErrorFromException, apiErrorMessage } from "../ui/apiError";
+import { formatTime } from "../translate";
+
+// Forward and reverse hops take their line colors, so the lists match the globe.
+const FORWARD_CSS = hexToCSS(TRACE_FORWARD_COLOR);
+const REVERSE_CSS = hexToCSS(TRACE_REVERSE_COLOR);
 
 /** Why a stopped trace stopped, as the dialog says it. */
 const STOP_REASON_TEXT: Record<TraceStopReason, string> = {
@@ -52,7 +56,6 @@ export function TraceDialog({ nodes, selectedNodeId, snapshot }: TraceDialogProp
     if (a.node_type !== b.node_type) return a.node_type === "ground_station" ? -1 : 1;
     return a.node_id.localeCompare(b.node_id);
   });
-  const nodesById = useMemo(() => new Map(nodes.map((node) => [node.node_id, node])), [nodes]);
 
   // Get continuous trace result from WebSocket snapshot. The continuous trace
   // is a single server-side singleton, so its presence here is the source of
@@ -60,7 +63,7 @@ export function TraceDialog({ nodes, selectedNodeId, snapshot }: TraceDialogProp
   // lost when this dialog unmounts (navigating to another node and back). A
   // trace started earlier keeps rendering in the globe, so the Stop control
   // must appear whenever the server reports an active trace, from any view.
-  const tp = snapshot?.traced_paths?.find(p => p.flow_id === "__continuous_trace__") ?? null;
+  const tp = snapshot?.traced_paths.find(p => p.flow_id === "__continuous_trace__") ?? null;
   // A result that stopped (at the time limit or on an error) stays shown and
   // the Trace control returns, with the same source and destination.
   const isTracing = tp != null ? tp.tracing : continuous;
@@ -155,6 +158,10 @@ export function TraceDialog({ nodes, selectedNodeId, snapshot }: TraceDialogProp
             </span>
           </div>
 
+          <div style={{ fontSize: 10, color: "var(--text-dim)", marginBottom: 4 }}>
+            Measured at sim {formatTime(tp.sim_time)}
+          </div>
+
           {tp.asymmetry_detected === true && (
             <div className="trace-warn">Path asymmetry detected</div>
           )}
@@ -171,13 +178,13 @@ export function TraceDialog({ nodes, selectedNodeId, snapshot }: TraceDialogProp
           {/* Side-by-side forward + reverse */}
           <div style={{ display: "flex", gap: 12 }}>
             <div style={{ flex: 1, minWidth: 0 }}>
-              <div style={{ fontSize: 9, fontWeight: 600, color: "var(--text-dim)", textTransform: "uppercase" as const, letterSpacing: "0.05em", marginBottom: 4 }}>Forward</div>
-              <HopList hops={tp.hops} hopRtts={tp.hop_rtts} nodesById={nodesById} />
+              <div style={{ fontSize: 9, fontWeight: 600, color: FORWARD_CSS, textTransform: "uppercase" as const, letterSpacing: "0.05em", marginBottom: 4 }}>Forward</div>
+              <HopList hops={tp.hops} hopRtts={tp.hop_rtts} color={FORWARD_CSS} />
             </div>
             {tp.reverse_hops.length > 0 && (
               <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{ fontSize: 9, fontWeight: 600, color: "var(--text-dim)", textTransform: "uppercase" as const, letterSpacing: "0.05em", marginBottom: 4 }}>Reverse</div>
-                <HopList hops={tp.reverse_hops} hopRtts={tp.reverse_hop_rtts} nodesById={nodesById} />
+                <div style={{ fontSize: 9, fontWeight: 600, color: REVERSE_CSS, textTransform: "uppercase" as const, letterSpacing: "0.05em", marginBottom: 4 }}>Reverse</div>
+                <HopList hops={tp.reverse_hops} hopRtts={tp.reverse_hop_rtts} color={REVERSE_CSS} />
               </div>
             )}
           </div>
@@ -195,17 +202,16 @@ export function TraceDialog({ nodes, selectedNodeId, snapshot }: TraceDialogProp
 function HopList({
   hops,
   hopRtts,
-  nodesById,
+  color,
 }: {
   hops: string[];
   hopRtts: (number | null)[];
-  nodesById: ReadonlyMap<string, NodeState>;
+  /** The direction's color, the same as its line on the globe. */
+  color: string;
 }) {
   return (
     <div className="trace-hops">
       {hops.map((hop, i) => {
-        const node = nodesById.get(hop);
-        const isGS = node ? isGroundNode(node) : false;
         const rtt = hopRtts[i] ?? null;
         // Per-hop delay = delta between consecutive cumulative traceroute round
         // trips. Row 1 is the trace's source, whose round trip to itself is zero.
@@ -215,7 +221,7 @@ function HopList({
         return (
           <div key={i} style={{ display: "flex", gap: 6, alignItems: "baseline" }}>
             <span style={{ color: "var(--text-dim)", width: 16, textAlign: "right", flexShrink: 0 }}>{i + 1}</span>
-            <span className={`trace-hop-name ${isGS ? "trace-hop-name--ground" : "trace-hop-name--sat"}`}>{hop}</span>
+            <span className="trace-hop-name" style={{ color }}>{hop}</span>
             {delta != null && delta > 0 && (
               <span style={{ color: "var(--text-secondary)", fontSize: 9, flexShrink: 0 }}>
                 {delta.toFixed(1)}ms

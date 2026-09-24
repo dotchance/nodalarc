@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import time
 from unittest.mock import patch
 
 from vs_api.continuous_tracer import TRACE_FLOW_ID, ContinuousTracer
@@ -227,5 +228,110 @@ def test_stopping_a_trace_signals_its_running_traceroutes() -> None:
 
     asyncio.run(run())
 
-    assert signals and all(signal.is_set() for signal in signals)
+    # The cycle in flight when the trace stopped was closed.
+    assert signals and signals[-1].is_set()
     assert tracer.traced_path is None
+
+
+class _OpenStream(_Stream):
+    """A traceroute that keeps running until its exec is closed."""
+
+    def __init__(self) -> None:
+        super().__init__([])
+
+    def is_open(self) -> bool:
+        return not self.closed
+
+    def update(self, timeout: int) -> None:
+        time.sleep(0.005)
+
+
+async def _until(done) -> None:
+    for _ in range(500):
+        if done():
+            return
+        await asyncio.sleep(0.01)
+    raise AssertionError("the condition never held")
+
+
+VIA_SAT_A = ["gs-alpha", "sat-a", "gs-beta"]
+VIA_SAT_B = ["gs-alpha", "sat-b", "gs-beta"]
+
+
+def test_a_link_down_on_the_shown_path_replaces_it_and_streams_the_next_measurement() -> None:
+    tracer = _live()
+    forward = [
+        lambda: _Stream(_output(" 1  10.0.0.1  5.0 ms", " 2  10.2.1.1  9.0 ms")),
+        _OpenStream,
+        lambda: _Stream(_output(" 1  10.0.0.2  5.0 ms", " 2  10.2.1.1  9.0 ms")),
+    ]
+    forward_cycles = [0]
+    streaming: list[bool] = []
+    shown_at_once: list = []
+    real_trace = tracer._path_tracer.trace
+
+    def recording_trace(*args, **kwargs):
+        streaming.append(kwargs["on_progress"] is not None)
+        return real_trace(*args, **kwargs)
+
+    def streams(_exec, pod_name, _namespace, **_kwargs):
+        if pod_name == "gs-beta":
+            return _Stream(_output(" 1  10.0.0.1  4.0 ms", " 2  10.2.0.1  8.0 ms"))
+        forward_cycles[0] += 1
+        return (forward.pop(0) if len(forward) > 1 else forward[0])()
+
+    async def run() -> None:
+        with (
+            patch("kubernetes.stream.stream", side_effect=streams),
+            patch.object(tracer._path_tracer, "trace", side_effect=recording_trace),
+        ):
+            await tracer.start("gs-alpha", "gs-beta")
+            # The first cycle finished via sat-a; the second is running and never ends.
+            await _until(lambda: forward_cycles[0] >= 2)
+            assert tracer.traced_path.hops == VIA_SAT_A
+            tracer.notify_link_change("sat-a", "gs-alpha", up=False)
+            shown_at_once.append(tracer.traced_path)
+            await _until(
+                lambda: (
+                    tracer.traced_path.hops == VIA_SAT_B and tracer.traced_path.state == "reached"
+                )
+            )
+            await tracer.stop()
+
+    asyncio.run(run())
+
+    measuring = shown_at_once[0]
+    assert (measuring.hops, measuring.reverse_hops) == (["gs-alpha"], ["gs-beta"])
+    assert (measuring.state, measuring.reverse_state, measuring.tracing) == (
+        "running",
+        "running",
+        True,
+    )
+    # The first cycle streamed, the second did not, and the one after the break did.
+    assert streaming[:3] == [True, False, True]
+
+
+def test_only_a_link_down_between_consecutive_shown_hops_replaces_the_shown_path() -> None:
+    tracer = _live()
+    streams = _streams(
+        [_output(" 1  10.0.0.1  5.0 ms", " 2  10.2.1.1  9.0 ms")],
+        _output(" 1  10.0.0.1  4.0 ms", " 2  10.2.0.1  8.0 ms"),
+    )
+    shown: list = []
+
+    async def run() -> None:
+        with patch("kubernetes.stream.stream", side_effect=streams):
+            await tracer.start("gs-alpha", "gs-beta")
+            await _until(
+                lambda: tracer.traced_path is not None and tracer.traced_path.state == "reached"
+            )
+            # Both ends are on the path but not linked in it; a link up is no break.
+            tracer.notify_link_change("gs-alpha", "gs-beta", up=False)
+            shown.append(tracer.traced_path.hops)
+            tracer.notify_link_change("gs-alpha", "sat-a", up=True)
+            shown.append(tracer.traced_path.hops)
+            await tracer.stop()
+
+    asyncio.run(run())
+
+    assert shown == [VIA_SAT_A, VIA_SAT_A]

@@ -5,9 +5,11 @@
 import { useEffect, useRef, useCallback, useState } from "react";
 import { computeLayout } from "./layout";
 import { drawNode, drawAreaBounds, hitTestNode } from "./nodes";
-import { drawLinks, hitTestLink } from "./topoLinks";
+import { drawLinks, hitTestLink, type FlowDrawing } from "./topoLinks";
+import { TraceFades } from "../trace/traceFades";
+import { traceSegments } from "../trace/traceSegments";
 import { setupInteraction, type ViewTransform } from "./interaction";
-import { FAIL_HOLD_MS, FAIL_FADE_MS, LINK_FLOW_COLOR, hexToCSS } from "../config";
+import { FAIL_HOLD_MS, FAIL_FADE_MS, TRACE_FORWARD_COLOR, hexToCSS } from "../config";
 import { tokens } from "../styles/tokens";
 import type { Regime } from "../taxonomy/regime";
 import type { StateSnapshot, Selection, LinkState, ColorMode, NodeState } from "../types";
@@ -52,6 +54,9 @@ export function TopologyView({
   const lastCanvasSizeRef = useRef({ w: 0, h: 0 });
   const [tooltipContent, setTooltipContent] = useState<string | null>(null);
   const [tooltipPos, setTooltipPos] = useState({ x: 0, y: 0 });
+
+  // When the traced path is drawn: live, fading after it stopped, or not at all.
+  const traceFadesRef = useRef(new TraceFades());
 
   // Fail-flash: track links that disappeared from the snapshot
   const prevLinkKeysRef = useRef<Set<string>>(new Set());
@@ -142,26 +147,34 @@ export function TopologyView({
     });
 
     // Draw links first (below nodes)
-    const flowPath = snapshot.traced_paths.length > 0
-      ? snapshot.traced_paths[0]!.hops
-      : null;
+    traceFadesRef.current.observe(snapshot.traced_paths, now);
+    const flowPath = traceFadesRef.current.drawn(now)[0] ?? null;
+    const flow: FlowDrawing | null = flowPath && {
+      segments: traceSegments(flowPath.path.hops, (hop) => nodeMap.has(hop)),
+      opacity: flowPath.opacity,
+      animate: flowPath.animate,
+    };
     // Build failTimes map for drawLinks fade animation
     const failTimes = new Map<string, number>();
     for (const [key, fl] of failedLinksRef.current) {
       failTimes.set(key, fl.failTime);
     }
-    drawLinks(ctx, layout.links, nodeMap, flowPath, dashOffsetRef.current, failTimes, showIslLinks, showGroundLinks);
+    drawLinks(ctx, layout.links, nodeMap, flow, dashOffsetRef.current, failTimes, showIslLinks, showGroundLinks);
 
-    // Draw hop index numbers on flow path nodes
-    if (flowPath && flowPath.length >= 2) {
-      ctx.fillStyle = hexToCSS(LINK_FLOW_COLOR);
+    // Draw hop index numbers on the traced path's nodes
+    if (flowPath) {
+      const flowHops = flowPath.path.hops;
+      ctx.save();
+      ctx.globalAlpha = flowPath.opacity;
+      ctx.fillStyle = hexToCSS(TRACE_FORWARD_COLOR);
       ctx.font = `9px ${tokens.fontFamilyCli}`;
       ctx.textAlign = "left";
-      for (let i = 0; i < flowPath.length; i++) {
-        const hopNode = nodeMap.get(flowPath[i]!);
+      for (let i = 0; i < flowHops.length; i++) {
+        const hopNode = nodeMap.get(flowHops[i]!);
         if (!hopNode) continue;
         ctx.fillText(String(i + 1), hopNode.x + 12, hopNode.y - 10);
       }
+      ctx.restore();
     }
 
     // Isolated nodes have no active links; the ABR badge marks the colored

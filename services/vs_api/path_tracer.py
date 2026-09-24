@@ -131,9 +131,9 @@ class PathTracer:
     ) -> TracedPath:
         """Trace both directions concurrently and assemble the result.
 
-        ``on_progress`` receives the result so far each time the forward
-        traceroute prints a hop, with the reverse direction still running.
-        Setting ``stopped`` closes both traceroutes within one exec poll.
+        ``on_progress`` receives the result so far: first with both directions
+        just started, then each time either traceroute prints a hop. Setting
+        ``stopped`` closes both traceroutes within one exec poll.
         """
         sim_time = self._read_sim_time()
         traced_at = datetime.now(UTC).isoformat()
@@ -151,24 +151,43 @@ class PathTracer:
             )
 
         forward_progress = None
+        reverse_progress = None
         if on_progress is not None:
-            reverse_running = _Direction(
-                hops=(dst.node.node_id,),
-                hop_rtts=(None,),
-                state="running",
-                rtt_ms=None,
-                error=None,
-            )
+            # Each direction's latest progress, joined into one result.
+            so_far = {"forward": self._running(src), "reverse": self._running(dst)}
+            progress_lock = threading.Lock()
 
-            def forward_progress(forward: _Direction) -> None:
-                on_progress(assemble(forward, reverse_running))
+            def progress_of(direction: str) -> Callable[[_Direction], None]:
+                def report(progress: _Direction) -> None:
+                    with progress_lock:
+                        so_far[direction] = progress
+                        on_progress(assemble(so_far["forward"], so_far["reverse"]))
+
+                return report
+
+            forward_progress = progress_of("forward")
+            reverse_progress = progress_of("reverse")
+            on_progress(assemble(so_far["forward"], so_far["reverse"]))
 
         with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
             forward_future = pool.submit(self._trace_direction, src, dst, forward_progress, stopped)
-            reverse_future = pool.submit(self._trace_direction, dst, src, None, stopped)
+            reverse_future = pool.submit(self._trace_direction, dst, src, reverse_progress, stopped)
             forward = forward_future.result()
             reverse = reverse_future.result()
         return assemble(forward, reverse)
+
+    def measuring(self, src: TraceEndpoint, dst: TraceEndpoint, *, flow_id: str) -> TracedPath:
+        """A live result whose two directions have just started and measured no hop yet."""
+        return self._assemble(
+            src,
+            dst,
+            self._running(src),
+            self._running(dst),
+            flow_id=flow_id,
+            tracing=True,
+            traced_at=datetime.now(UTC).isoformat(),
+            sim_time=self._read_sim_time(),
+        )
 
     def failed(
         self, src: TraceEndpoint, dst: TraceEndpoint, error: str, *, flow_id: str
@@ -326,6 +345,16 @@ class PathTracer:
         if hop.address is None:
             return SILENT_HOP
         return self._node_by_address.get(hop.address, hop.address)
+
+    @staticmethod
+    def _running(origin: TraceEndpoint) -> _Direction:
+        return _Direction(
+            hops=(origin.node.node_id,),
+            hop_rtts=(None,),
+            state="running",
+            rtt_ms=None,
+            error=None,
+        )
 
     @staticmethod
     def _failed(origin: TraceEndpoint, error: str) -> _Direction:

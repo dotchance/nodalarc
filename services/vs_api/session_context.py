@@ -1002,7 +1002,7 @@ class SessionContext:
                 endpoint_segments=data.get("endpoint_segments"),
             )
             self.link_decision_traces[key] = trace
-        self._notify_topology_change(node_a, node_b)
+        self._notify_link_change(node_a, node_b, up=True)
         self._add_recent_event(data, "link_up")
         await asyncio.to_thread(
             self._record_history,
@@ -1019,7 +1019,7 @@ class SessionContext:
         with self.state_lock:
             self.links.pop(key, None)
             self.link_decision_traces.pop(key, None)
-        self._notify_topology_change(node_a, node_b)
+        self._notify_link_change(node_a, node_b, up=False)
         self._add_recent_event(data, "link_down")
         await asyncio.to_thread(
             self._record_history,
@@ -1573,9 +1573,9 @@ class SessionContext:
             if len(self.recent_events) > 50:
                 del self.recent_events[:-50]
 
-    def _notify_topology_change(self, node_a: str, node_b: str) -> None:
+    def _notify_link_change(self, node_a: str, node_b: str, *, up: bool) -> None:
         if self.continuous_tracer is not None:
-            self.continuous_tracer.notify_topology_change(node_a, node_b)
+            self.continuous_tracer.notify_link_change(node_a, node_b, up=up)
 
     @property
     def stopped(self) -> bool:

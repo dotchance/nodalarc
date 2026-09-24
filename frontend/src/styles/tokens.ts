@@ -192,13 +192,17 @@ export const tokens = {
   colorLinkGround: 0x8edcff,
   colorLinkInterbody: 0xd7d4cc,
   colorLinkInactive: 0x3a4452,
-  colorLinkFlow: 0xf2a34b,
-  colorLinkFlowSecondary: 0x7ed4df,
+  // A traced path: forward orange, reverse blue, wherever a trace is shown.
+  colorTraceForward: 0xf2a34b,
+  colorTraceReverse: 0x7ed4df,
+  // A traced path's segment across hops that could not be placed on screen.
+  colorTraceBridged: 0xb8c0c8,
 
   // --- Link widths (px) ---
   linkWidthIsl: 1.5,
   linkWidthGround: 2,
-  linkWidthFlow: 4,
+  traceWidth: 4,
+  traceWidthBridged: 1.5,
 
   // --- Area colors (IS-IS/OSPF routing areas, Three.js hex) ---
   areaRed: 0xcc4444,

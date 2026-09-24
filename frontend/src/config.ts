@@ -153,13 +153,15 @@ export const LINK_ISL_COLOR = tokens.colorLinkIsl;
 export const LINK_GROUND_COLOR = tokens.colorLinkGround;
 export const LINK_FAIL_COLOR = tokens.colorLinkFail;
 export const LINK_INACTIVE_COLOR = tokens.colorLinkInactive;
-export const LINK_FLOW_COLOR = tokens.colorLinkFlow;
-export const LINK_FLOW_SECONDARY_COLOR = tokens.colorLinkFlowSecondary;
+export const TRACE_FORWARD_COLOR = tokens.colorTraceForward;
+export const TRACE_REVERSE_COLOR = tokens.colorTraceReverse;
+export const TRACE_BRIDGED_COLOR = tokens.colorTraceBridged;
 
 /** Link widths (px) */
 export const LINK_ISL_WIDTH = tokens.linkWidthIsl;
 export const LINK_GROUND_WIDTH = tokens.linkWidthGround;
-export const LINK_FLOW_WIDTH = tokens.linkWidthFlow;
+export const TRACE_WIDTH = tokens.traceWidth;
+export const TRACE_BRIDGED_WIDTH = tokens.traceWidthBridged;
 
 /** Plane colors */
 export const PLANE_COLORS: readonly number[] = tokens.planeColors;

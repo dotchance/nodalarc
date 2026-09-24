@@ -581,5 +581,3 @@
 }
 
 /* Hop endpoint class colors agree with the scene node palette. */
-.trace-hop-name--ground { color: var(--accent-teal); }
-.trace-hop-name--sat { color: var(--accent-orange); }

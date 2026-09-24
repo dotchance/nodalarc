@@ -169,6 +169,9 @@ class LinkDecisionTrace(BaseModel):
 
 
 TraceState = Literal["running", "reached", "not_reached", "failed"]
+# Why a continuous trace stopped on its own: its time limit, or an internal
+# error in the trace loop.
+TraceStopReason = Literal["time_limit", "internal_error"]
 
 
 class TracedPath(BaseModel):
@@ -183,7 +186,8 @@ class TracedPath(BaseModel):
     exists only when both directions reached their destination and every hop
     between the ends answered from a node's address. ``tracing`` is false once
     the trace loop has stopped; the last result then stays until the trace is
-    stopped or restarted.
+    stopped or restarted. ``stop_reason`` says why a continuous trace stopped
+    on its own; a one-shot trace and a running trace have none.
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
@@ -205,6 +209,7 @@ class TracedPath(BaseModel):
     tracing: bool
     traced_at: str
     sim_time: str
+    stop_reason: TraceStopReason | None = None
 
     @model_validator(mode="after")
     def _outcomes_match_their_states(self) -> TracedPath:
@@ -228,6 +233,8 @@ class TracedPath(BaseModel):
         both_reached = self.state == "reached" and self.reverse_state == "reached"
         if self.asymmetry_detected is not None and not both_reached:
             raise ValueError("asymmetry is known only when both directions reached")
+        if self.stop_reason is not None and self.tracing:
+            raise ValueError("a trace has a stop reason only once it stopped")
         return self
 
 

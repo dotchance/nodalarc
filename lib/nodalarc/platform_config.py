@@ -62,8 +62,9 @@ class PlatformConfig(BaseModel):
     vs_api_session_switch_max_requests_per_minute: int
     vs_api_introspect_max_response_bytes: int
 
-    # Continuous trace interval
-    trace_interval_seconds: float
+    # Continuous trace interval, and how long a continuous trace runs
+    trace_interval_seconds: float = Field(gt=0)
+    trace_max_seconds: float = Field(gt=0)
 
     @model_validator(mode="after")
     def _validate_actuation_bounds(self) -> PlatformConfig:

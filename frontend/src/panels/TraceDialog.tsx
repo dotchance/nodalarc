@@ -6,8 +6,15 @@
 
 import { useState, useEffect, useMemo, useCallback } from "react";
 import { REST_URL, authHeaders } from "../config";
-import type { NodeState, StateSnapshot, TraceState } from "../types";
+import type { NodeState, StateSnapshot, TraceState, TraceStopReason } from "../types";
 import { isGroundNode } from "../networkIdentity";
+import { apiErrorFromException, apiErrorMessage } from "../ui/apiError";
+
+/** Why a stopped trace stopped, as the dialog says it. */
+const STOP_REASON_TEXT: Record<TraceStopReason, string> = {
+  time_limit: "STOPPED · time limit reached",
+  internal_error: "STOPPED · internal error",
+};
 
 interface TraceDialogProps {
   nodes: NodeState[];
@@ -54,7 +61,9 @@ export function TraceDialog({ nodes, selectedNodeId, snapshot }: TraceDialogProp
   // trace started earlier keeps rendering in the globe, so the Stop control
   // must appear whenever the server reports an active trace, from any view.
   const tp = snapshot?.traced_paths?.find(p => p.flow_id === "__continuous_trace__") ?? null;
-  const isTracing = continuous || tp != null;
+  // A result that stopped (at the time limit or on an error) stays shown and
+  // the Trace control returns, with the same source and destination.
+  const isTracing = tp != null ? tp.tracing : continuous;
 
   // Reflect the running trace's endpoints so the user sees what they're about
   // to stop even when they returned to this dialog fresh.
@@ -71,24 +80,33 @@ export function TraceDialog({ nodes, selectedNodeId, snapshot }: TraceDialogProp
         headers: authHeaders({ "Content-Type": "application/json" }),
         body: JSON.stringify({ src_node: src, dst_node: dst }),
       });
-      const data = await res.json();
-      if (res.ok && data.ok) {
+      if (res.ok) {
         setContinuous(true);
       } else {
-        setError(data.error ?? data.detail ?? `Failed (${res.status})`);
+        setError(await apiErrorMessage(res));
       }
-    } catch {
-      setError("Trace failed");
+    } catch (err) {
+      setError(apiErrorFromException(err));
     } finally {
       setLoading(false);
     }
   }, [src, dst]);
 
   const handleStop = useCallback(async () => {
+    setError(null);
     try {
-      await fetch(`${REST_URL}/api/v1/trace/stop`, { method: "POST", headers: authHeaders() });
-    } catch {}
-    setContinuous(false);
+      const res = await fetch(`${REST_URL}/api/v1/trace/stop`, {
+        method: "POST",
+        headers: authHeaders(),
+      });
+      if (!res.ok) {
+        setError(await apiErrorMessage(res));
+        return;
+      }
+      setContinuous(false);
+    } catch (err) {
+      setError(apiErrorFromException(err));
+    }
   }, []);
 
   return (
@@ -118,15 +136,17 @@ export function TraceDialog({ nodes, selectedNodeId, snapshot }: TraceDialogProp
 
       {error && <div className="trace-error">{error}</div>}
 
-      {/* Live trace results */}
-      {isTracing && tp && (
+      {/* Live and stopped trace results */}
+      {tp && (
         <div style={{ marginTop: 8 }}>
           {/* Summary line */}
           <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4 }}>
             {tp.tracing ? (
               <span className="trace-live">LIVE</span>
             ) : (
-              <span className="trace-warn">STOPPED</span>
+              <span className="trace-warn">
+                {tp.stop_reason ? STOP_REASON_TEXT[tp.stop_reason] : "STOPPED"}
+              </span>
             )}
             <span style={{ fontSize: 11, color: "var(--text-primary)", fontWeight: 600 }}>
               {tp.hops.length} hops

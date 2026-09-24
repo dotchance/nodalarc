@@ -96,3 +96,6 @@ platform:
   # Seconds between trace cycles while both directions reach their
   # destination. A link change on the traced path starts a cycle at once.
   trace_interval_seconds: 3.0
+  # A continuous trace stops this many seconds after it starts, so a trace
+  # nobody stopped does not run on. A new start runs it again.
+  trace_max_seconds: 180.0

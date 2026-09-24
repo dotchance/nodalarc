@@ -14,6 +14,8 @@ from __future__ import annotations
 
 import concurrent.futures
 import logging
+import threading
+import time
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -38,8 +40,12 @@ SILENT_HOP = "*"
 _TRACEROUTE_WAIT_S = 4
 _TRACEROUTE_MAX_HOPS = 20
 # Poll the exec stream at this interval so each printed hop is read within
-# about two seconds.
+# about two seconds, and a stop or the deadline is noticed as quickly.
 _EXEC_POLL_S = 2
+# A traceroute that has not finished by the time its hop limit and per-hop
+# wait allow, plus this margin for starting the exec, is closed.
+_EXEC_MARGIN_S = 10
+TRACE_DEADLINE_S = _TRACEROUTE_MAX_HOPS * _TRACEROUTE_WAIT_S + _EXEC_MARGIN_S
 
 
 class UntraceableNodeError(ValueError):
@@ -109,6 +115,10 @@ class PathTracer:
         """Trace once between two node ids. Nothing retraces the result."""
         return self.trace(self.endpoint(src), self.endpoint(dst), flow_id=flow_id, tracing=False)
 
+    def names_nodes(self, hops: list[str]) -> bool:
+        """Whether every hop answered from an address the session assigned to a node."""
+        return all(hop in self._node_registry for hop in hops)
+
     def trace(
         self,
         src: TraceEndpoint,
@@ -117,11 +127,13 @@ class PathTracer:
         flow_id: str,
         tracing: bool,
         on_progress: Callable[[TracedPath], None] | None = None,
+        stopped: threading.Event | None = None,
     ) -> TracedPath:
         """Trace both directions concurrently and assemble the result.
 
         ``on_progress`` receives the result so far each time the forward
         traceroute prints a hop, with the reverse direction still running.
+        Setting ``stopped`` closes both traceroutes within one exec poll.
         """
         sim_time = self._read_sim_time()
         traced_at = datetime.now(UTC).isoformat()
@@ -152,8 +164,8 @@ class PathTracer:
                 on_progress(assemble(forward, reverse_running))
 
         with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
-            forward_future = pool.submit(self._trace_direction, src, dst, forward_progress)
-            reverse_future = pool.submit(self._trace_direction, dst, src, None)
+            forward_future = pool.submit(self._trace_direction, src, dst, forward_progress, stopped)
+            reverse_future = pool.submit(self._trace_direction, dst, src, None, stopped)
             forward = forward_future.result()
             reverse = reverse_future.result()
         return assemble(forward, reverse)
@@ -178,6 +190,7 @@ class PathTracer:
         origin: TraceEndpoint,
         target: TraceEndpoint,
         on_progress: Callable[[_Direction], None] | None,
+        stopped: threading.Event | None,
     ) -> _Direction:
         target_address = target.runs_from.loopback_ipv4
 
@@ -190,7 +203,9 @@ class PathTracer:
                 on_progress(self._direction(origin, hops, target_address, finished=False))
 
         try:
-            stdout, error = self._run_traceroute(origin.runs_from.node_id, target_address, progress)
+            stdout, error = self._run_traceroute(
+                origin.runs_from.node_id, target_address, progress, stopped
+            )
             if error is not None:
                 return self._failed(origin, error)
             hops = parse_traceroute(stdout)
@@ -199,12 +214,17 @@ class PathTracer:
         return self._direction(origin, hops, target_address, finished=True)
 
     def _run_traceroute(
-        self, node_id: str, target_address: str, on_output: Callable[[str], None]
+        self,
+        node_id: str,
+        target_address: str,
+        on_output: Callable[[str], None],
+        stopped: threading.Event | None,
     ) -> tuple[str, str | None]:
         """Run traceroute in a node's workload; return its output and any failure.
 
         The workload is read on every trace, so a replaced pod is traced
-        where it runs now.
+        where it runs now. The exec is closed when ``stopped`` is set or when
+        it runs past ``TRACE_DEADLINE_S``.
         """
         v1 = self._core_v1()
         try:
@@ -243,11 +263,19 @@ class PathTracer:
             # this direction's failure, shown with its cause class.
             log.error("traceroute exec in %s failed: %s", workload.pod_name, exc, exc_info=exc)
             return "", f"traceroute could not start in {workload.pod_name} ({type(exc).__name__})"
+        deadline = time.monotonic() + TRACE_DEADLINE_S
         try:
             # One read after the stream closes collects output that arrived
             # with the close.
             closed = False
             while not closed:
+                if stopped is not None and stopped.is_set():
+                    return stdout, "the trace was stopped before this direction finished"
+                if time.monotonic() > deadline:
+                    return stdout, (
+                        f"traceroute did not finish within {TRACE_DEADLINE_S} s "
+                        f"in {workload.pod_name}"
+                    )
                 closed = not resp.is_open()
                 if not closed:
                     resp.update(timeout=_EXEC_POLL_S)

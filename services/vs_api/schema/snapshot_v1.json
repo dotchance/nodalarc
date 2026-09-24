@@ -876,7 +876,7 @@
     },
     "TracedPath": {
       "additionalProperties": false,
-      "description": "The live measured path between two nodes: one traceroute per direction.\n\nEach direction lists what answered at every hop, in hop order, after the\nnode the trace starts from: a node id when the resolver assigned the\nanswering address to that node, the address itself when no node owns it,\nand ``*`` when nothing answered. ``state`` says how the trace ended. ``rtt_ms`` is the\ndestination's round trip and exists only when the destination answered;\n``error`` exists only when the trace could not run. ``asymmetry_detected``\nexists only when both directions reached their destination and every hop\nbetween the ends answered from a node's address. ``tracing`` is false once\nthe trace loop has stopped; the last result then stays until the trace is\nstopped or restarted.",
+      "description": "The live measured path between two nodes: one traceroute per direction.\n\nEach direction lists what answered at every hop, in hop order, after the\nnode the trace starts from: a node id when the resolver assigned the\nanswering address to that node, the address itself when no node owns it,\nand ``*`` when nothing answered. ``state`` says how the trace ended. ``rtt_ms`` is the\ndestination's round trip and exists only when the destination answered;\n``error`` exists only when the trace could not run. ``asymmetry_detected``\nexists only when both directions reached their destination and every hop\nbetween the ends answered from a node's address. ``tracing`` is false once\nthe trace loop has stopped; the last result then stays until the trace is\nstopped or restarted. ``stop_reason`` says why a continuous trace stopped\non its own; a one-shot trace and a running trace have none.",
       "properties": {
         "flow_id": {
           "title": "Flow Id",
@@ -1018,6 +1018,22 @@
         "sim_time": {
           "title": "Sim Time",
           "type": "string"
+        },
+        "stop_reason": {
+          "anyOf": [
+            {
+              "enum": [
+                "time_limit",
+                "internal_error"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Stop Reason"
         }
       },
       "required": [

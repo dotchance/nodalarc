@@ -2887,6 +2887,7 @@ class TestContinuousTraceSession:
         ctx = SessionContext.__new__(SessionContext)
         ctx._init_state_only()
         ctx.nodes = {"site-host": object(), "gs-b": object()}
+        ctx.sim_time = "2026-06-08T00:00:00+00:00"
         monkeypatch.setattr(m, "_API_KEY", "")
         monkeypatch.setattr(m, "_active_context", ctx)
         monkeypatch.setattr(
@@ -2920,8 +2921,66 @@ class TestContinuousTraceSession:
 
         response = TestClient(m.app).post(path, json={"src_node": "site-host", "dst_node": "ghost"})
 
+        assert response.status_code == 404
+        assert response.json() == {"code": "trace.unknown_node", "message": "Unknown node: ghost"}
+
+    @pytest.mark.parametrize("path", ["/api/v1/trace/start", "/api/v1/trace"])
+    def test_both_trace_routes_refuse_a_request_without_both_nodes(self, monkeypatch, path):
+        m, _ctx = self._session_with_untraceable_nodes(monkeypatch)
+
+        response = TestClient(m.app).post(path, json={"src_node": "site-host"})
+
         assert response.status_code == 400
-        assert response.json() == {"error": "Unknown node: ghost"}
+        assert response.json() == {
+            "code": "trace.invalid_request",
+            "message": "src_node and dst_node are required",
+        }
+
+    @pytest.mark.parametrize("path", ["/api/v1/trace/start", "/api/v1/trace"])
+    def test_both_trace_routes_wait_for_the_session_clock(self, monkeypatch, path):
+        m, ctx = self._session_with_untraceable_nodes(monkeypatch)
+        ctx.sim_time = None
+
+        response = TestClient(m.app).post(path, json={"src_node": "site-host", "dst_node": "gs-b"})
+
+        assert response.status_code == 503
+        assert response.json() == {
+            "code": "session.clock_pending",
+            "message": "The session clock has not reported its sim time yet",
+        }
+        assert ctx.continuous_tracer is None
+
+    def test_a_one_shot_trace_is_refused_while_another_runs(self, monkeypatch):
+        import asyncio
+
+        m, _ctx = self._session_with_untraceable_nodes(monkeypatch)
+        monkeypatch.setattr(m, "_one_shot_trace_lock", asyncio.Lock())
+
+        async def held() -> None:
+            await m._one_shot_trace_lock.acquire()
+
+        asyncio.run(held())
+        response = TestClient(m.app).post(
+            "/api/v1/trace", json={"src_node": "site-host", "dst_node": "gs-b"}
+        )
+
+        assert response.status_code == 409
+        assert response.json() == {
+            "code": "trace.busy",
+            "message": "A one-shot trace is already running; try again when it finishes",
+        }
+
+    def test_a_context_being_torn_down_takes_no_new_trace(self, monkeypatch):
+        m, ctx = self._session_with_untraceable_nodes(monkeypatch)
+        ctx._stopped = True
+
+        response = TestClient(m.app).post(
+            "/api/v1/trace/start", json={"src_node": "site-host", "dst_node": "gs-b"}
+        )
+
+        assert response.status_code == 503
+        assert response.json()["code"] == "session.inactive"
+        assert ctx.continuous_tracer is None
 
     def test_a_one_shot_trace_returns_the_measured_path(self, monkeypatch):
         import vs_api.main as m
@@ -2956,6 +3015,7 @@ class TestContinuousTraceSession:
         ctx = SessionContext.__new__(SessionContext)
         ctx._init_state_only()
         ctx.nodes = {"gs-a": object(), "gs-b": object()}
+        ctx.sim_time = "2026-06-08T00:00:00+00:00"
         monkeypatch.setattr(m, "_API_KEY", "")
         monkeypatch.setattr(m, "_active_context", ctx)
         monkeypatch.setattr(m, "_create_path_tracer", lambda context: _Tracer())
@@ -2968,6 +3028,108 @@ class TestContinuousTraceSession:
         assert response.json() == measured.model_dump(mode="json")
         assert calls == [("gs-a", "gs-b", "__trace__")]
         assert ctx.continuous_tracer is None
+
+
+def test_tearing_down_a_context_stops_its_trace_and_marks_it_stopped():
+    import asyncio
+
+    ctx = SessionContext.__new__(SessionContext)
+    ctx._init_state_only()
+    stopped: list = []
+
+    class _Tracer:
+        async def stop(self) -> None:
+            stopped.append(True)
+
+    ctx.continuous_tracer = _Tracer()
+    asyncio.run(ctx.stop())
+
+    assert stopped == [True]
+    assert ctx.continuous_tracer is None
+    assert ctx.stopped
+
+
+def test_a_running_trace_has_no_stop_reason():
+    from nodalarc.models.vs_api import TracedPath
+
+    with pytest.raises(ValueError, match="a stop reason only once it stopped"):
+        TracedPath(
+            flow_id="__continuous_trace__",
+            src_node="gs-a",
+            dst_node="gs-b",
+            hops=["gs-a"],
+            hop_rtts=[None],
+            state="running",
+            rtt_ms=None,
+            error=None,
+            reverse_hops=["gs-b"],
+            reverse_hop_rtts=[None],
+            reverse_state="running",
+            reverse_rtt_ms=None,
+            reverse_error=None,
+            asymmetry_detected=None,
+            tracing=True,
+            traced_at="2026-09-24T00:00:00+00:00",
+            sim_time="2026-06-08T00:00:00+00:00",
+            stop_reason="time_limit",
+        )
+
+
+def test_no_snapshot_is_built_before_the_session_clock_reports(monkeypatch):
+    import vs_api.main as m
+
+    ctx = SessionContext.__new__(SessionContext)
+    ctx._init_state_only()
+    monkeypatch.setattr(m, "_active_context", ctx)
+
+    assert ctx.sim_time is None
+    assert m._build_snapshot() is None
+
+
+class TestRuntimeSessionBootstrap:
+    """A runtime session CR that cannot be read is retried or shown, never hidden."""
+
+    @staticmethod
+    def _manager():
+        from types import SimpleNamespace
+
+        return SimpleNamespace(_status="idle", status_detail="")
+
+    def test_a_transport_failure_is_retried_and_changes_no_status(self):
+        import kubernetes.client
+        import vs_api.main as m
+
+        manager = self._manager()
+
+        m._report_cr_bootstrap_failure(kubernetes.client.rest.ApiException(status=503), manager)
+
+        assert (manager._status, manager.status_detail) == ("idle", "")
+
+    def test_a_refused_cr_is_a_session_error_with_its_reason(self):
+        import vs_api.main as m
+
+        manager = self._manager()
+
+        m._report_cr_bootstrap_failure(
+            m.CRSessionRefusal("ConstellationSpec metadata has no namespace"), manager
+        )
+
+        assert (manager._status, manager.status_detail) == (
+            "error",
+            "ConstellationSpec metadata has no namespace",
+        )
+
+    def test_any_other_failure_is_a_session_error_naming_the_log(self):
+        import vs_api.main as m
+
+        manager = self._manager()
+
+        m._report_cr_bootstrap_failure(RuntimeError("secret internals"), manager)
+
+        assert (manager._status, manager.status_detail) == (
+            "error",
+            "The runtime session could not be activated; see the VS-API log",
+        )
 
 
 def test_the_session_node_count_fails_loudly_when_the_listing_fails(monkeypatch):

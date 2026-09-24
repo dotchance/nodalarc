@@ -115,6 +115,13 @@ class SessionInactiveError(RuntimeError):
         super().__init__(f"No active session: {detail}" if detail else "No active session")
 
 
+class SessionClockPendingError(RuntimeError):
+    """The session's sim time is needed and its clock has not reported yet."""
+
+    def __init__(self) -> None:
+        super().__init__("The session clock has not reported its sim time yet")
+
+
 class SessionContext:
     """Per-session state container with NATS subscription lifecycle.
 
@@ -218,7 +225,9 @@ class SessionContext:
             last_convergence_ms=None,
         )
         self.mi_active: bool = False
-        self.sim_time: str = datetime.now(UTC).isoformat()
+        # Unknown until the session clock reports it; no reader substitutes
+        # wall time for it.
+        self.sim_time: str | None = None
         self.playback_paused: bool = False
         self.playback_speed: float = 1.0
         self.playback_achieved: float | None = None
@@ -246,6 +255,8 @@ class SessionContext:
         self.almanac_lock = threading.Lock()
         self.almanac: AlmanacState = AlmanacState()
         self.continuous_tracer = None
+        # Serializes starting, stopping and tearing down the continuous trace.
+        self.trace_lock = asyncio.Lock()
         self.session_ops_events: deque = deque(maxlen=500)
         self.actuation_notices_by_key: dict[tuple[str, str], dict] = {}
         self.actuation_latest_by_gs: dict[tuple[str, str], dict] = {}
@@ -355,9 +366,11 @@ class SessionContext:
         the task triggers it. Timeout of 15s prevents hanging if NATS
         is unreachable (9 subscriptions × ~2s each worst case).
         """
-        self._stopped = True
-        if self.continuous_tracer is not None:
-            await self.continuous_tracer.stop()
+        async with self.trace_lock:
+            self._stopped = True
+            if self.continuous_tracer is not None:
+                await self.continuous_tracer.stop()
+                self.continuous_tracer = None
         if self._subscriber_task and not self._subscriber_task.done():
             self._subscriber_task.cancel()
             try:
@@ -374,7 +387,6 @@ class SessionContext:
             self.recent_events.clear()
         with self.almanac_lock:
             self.almanac = AlmanacState()
-        self.continuous_tracer = None
         self.session_ops_events.clear()
         log.info(
             "SessionContext stopped: session_id=%s, %d subscriptions cleaned",
@@ -1565,10 +1577,18 @@ class SessionContext:
         if self.continuous_tracer is not None:
             self.continuous_tracer.notify_topology_change(node_a, node_b)
 
+    @property
+    def stopped(self) -> bool:
+        """Whether this context has begun tearing down."""
+        return self._stopped
+
     def read_sim_time(self) -> str:
-        """This session's current sim time."""
+        """This session's current sim time; refused until the session clock reports it."""
         with self.state_lock:
-            return self.sim_time
+            sim_time = self.sim_time
+        if sim_time is None:
+            raise SessionClockPendingError
+        return sim_time
 
     def record_path_change(
         self, src: str, dst: str, old_hops: list[str], new_hops: list[str]

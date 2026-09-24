@@ -131,6 +131,9 @@ export type TraceState = "running" | "reached" | "not_reached" | "failed";
  *  Each hop is the node that owns the answering address, an address no node
  *  owns, or "*" when nothing answered. rtt_ms exists only when the destination answered; error exists
  *  only when the trace could not run. */
+/** Why a continuous trace stopped on its own. */
+export type TraceStopReason = "time_limit" | "internal_error";
+
 export interface TracedPath {
   flow_id: string;
   src_node: string;
@@ -148,6 +151,8 @@ export interface TracedPath {
   asymmetry_detected: boolean | null;
   /** False once the trace loop has stopped; the last result stays shown. */
   tracing: boolean;
+  /** Why a continuous trace stopped on its own; absent while it runs. */
+  stop_reason: TraceStopReason | null;
   traced_at: string;
   sim_time: string;
 }

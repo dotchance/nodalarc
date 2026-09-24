@@ -319,9 +319,9 @@ def test_the_workload_is_read_on_every_trace() -> None:
     tracer = _tracer(cluster)
 
     with patch("kubernetes.stream.stream", return_value=_Stream([])) as stream:
-        tracer._run_traceroute("gs-alpha", "10.2.1.1", lambda _stdout: None)
+        tracer._run_traceroute("gs-alpha", "10.2.1.1", lambda _stdout: None, None)
         stream.return_value = _Stream([])
-        tracer._run_traceroute("gs-alpha", "10.2.1.1", lambda _stdout: None)
+        tracer._run_traceroute("gs-alpha", "10.2.1.1", lambda _stdout: None, None)
 
     assert [call.kwargs["container"] for call in stream.call_args_list] == [
         "frr-router",
@@ -350,3 +350,52 @@ def test_a_node_without_a_loopback_cannot_be_traced() -> None:
         tracer.endpoint("site-host")
     with pytest.raises(UntraceableNodeError, match="ghost has no loopback"):
         tracer.endpoint("ghost")
+
+
+class _OpenStream(_Stream):
+    """An exec that never finishes on its own."""
+
+    def is_open(self) -> bool:
+        return True
+
+
+def test_a_traceroute_past_its_deadline_is_closed_and_reported(monkeypatch) -> None:
+    import vs_api.path_tracer as path_tracer
+
+    cluster = _Cluster({})
+    tracer = _tracer(cluster)
+    stream = _OpenStream(_output(" 1  10.0.0.1  5.0 ms"))
+    clock = iter([0.0, 1.0, 2.0, 500.0])
+    monkeypatch.setattr(path_tracer.time, "monotonic", lambda: next(clock))
+
+    with patch("kubernetes.stream.stream", return_value=stream):
+        stdout, error = tracer._run_traceroute("gs-alpha", "10.2.1.1", lambda _stdout: None, None)
+
+    assert error == (
+        f"traceroute did not finish within {path_tracer.TRACE_DEADLINE_S} s in gs-alpha"
+    )
+    assert "10.0.0.1" in stdout
+    assert stream.closed
+
+
+def test_a_stopped_trace_closes_its_traceroute_within_one_poll() -> None:
+    import threading
+
+    tracer = _tracer(_Cluster({}))
+    stream = _OpenStream([])
+    stopped = threading.Event()
+    stopped.set()
+
+    with patch("kubernetes.stream.stream", return_value=stream):
+        _stdout, error = tracer._run_traceroute(
+            "gs-alpha", "10.2.1.1", lambda _stdout: None, stopped
+        )
+
+    assert error == "the trace was stopped before this direction finished"
+    assert stream.closed
+
+
+def test_the_deadline_is_the_hop_limit_times_the_per_hop_wait_plus_a_margin() -> None:
+    import vs_api.path_tracer as path_tracer
+
+    assert path_tracer.TRACE_DEADLINE_S == 20 * 4 + 10

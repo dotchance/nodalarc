@@ -23,6 +23,7 @@ function traced(flowId: string, hops: string[], reverseHops: string[]): TracedPa
     tracing: true,
     traced_at: "2026-09-23T00:00:00Z",
     sim_time: "2026-09-23T00:00:00Z",
+    stop_reason: null,
   };
 }
 

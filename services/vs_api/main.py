@@ -146,6 +146,7 @@ from vs_api.ops_log import (
 )
 from vs_api.path_tracer import PathTracer
 from vs_api.refusals import (
+    REFUSAL_FAMILIES,
     install_refusal_handlers,
     internal_error_refusal,
     refusal_from_exception,
@@ -784,15 +785,19 @@ def _carry_unsent_increments(pending: dict | None, snapshot: dict) -> dict:
 def _build_snapshot(*, ops_after: int = 0) -> dict | None:
     """Build a StateSnapshot dict from the active SessionContext.
 
-    Returns None if no active context (mid-transition or no session).
-    Takes a local reference to _active_context to prevent mixed-state
-    reads if the context is swapped mid-tick.
+    Returns None if no active context (mid-transition or no session), or
+    before the session clock has reported its sim time. Takes a local
+    reference to _active_context to prevent mixed-state reads if the context
+    is swapped mid-tick.
     """
     ctx = _active_context
     if ctx is None:
         return None
 
     with ctx.state_lock:
+        if ctx.sim_time is None:
+            return None
+        sim_time = datetime.fromisoformat(ctx.sim_time)
         now = datetime.now(UTC)
         links = list(ctx.links.values())
 
@@ -826,9 +831,7 @@ def _build_snapshot(*, ops_after: int = 0) -> dict | None:
                 _traced.append(tp)
 
         snapshot = StateSnapshot(
-            sim_time=datetime.fromisoformat(ctx.sim_time)
-            if isinstance(ctx.sim_time, str)
-            else ctx.sim_time,
+            sim_time=sim_time,
             # Engine-stamped wall clock. During play this is the same
             # instant as sim_time (stamped together on each ClockTick);
             # during pause it advances via heartbeats while sim freezes —
@@ -905,6 +908,35 @@ def _as_positive_int(value: Any) -> int | None:
     return parsed if parsed > 0 else None
 
 
+class CRSessionRefusal(ValueError):
+    """The ConstellationSpec's content cannot become the active session.
+
+    The message names the CR field at fault and nothing else.
+    """
+
+
+def _report_cr_bootstrap_failure(exc: Exception, session_manager: SessionManager | None) -> None:
+    """Report one failed read of the runtime session CR during bootstrap.
+
+    A transport failure is retried by the next poll. Any other failure means
+    the CR exists and cannot become the active session: it stays a visible
+    session error, with the refusal's own message when it is a typed refusal,
+    until the CR changes.
+    """
+    if _poll_failure_is_transport(exc):
+        log.warning("Reading the runtime session CR failed on transport; retrying: %s", exc)
+        return
+    log.error("The runtime session CR cannot be activated: %s", exc, exc_info=exc)
+    if session_manager is None:
+        return
+    session_manager._status = "error"
+    session_manager.status_detail = (
+        str(exc)
+        if isinstance(exc, (*REFUSAL_FAMILIES, CRSessionRefusal))
+        else "The runtime session could not be activated; see the VS-API log"
+    )
+
+
 def _load_cr_runtime_session(
     spec: dict[str, Any],
     *,
@@ -944,7 +976,7 @@ def _cr_ready_identity(cr: dict[str, Any]) -> tuple[int, str] | None:
     if status.ready_pod_count() is None:
         return None
     if not status.session_run_id:
-        raise ValueError("Ready ConstellationSpec is missing status.sessionRunId")
+        raise CRSessionRefusal("Ready ConstellationSpec is missing status.sessionRunId")
     return generation, sanitize_session_id(status.session_run_id)
 
 
@@ -987,7 +1019,7 @@ def _extract_cr_session(
 
     runtime_namespace = metadata.get("namespace")
     if not isinstance(runtime_namespace, str) or not runtime_namespace:
-        raise ValueError("ConstellationSpec metadata has no namespace")
+        raise CRSessionRefusal("ConstellationSpec metadata has no namespace")
     runtime_config = _load_cr_runtime_session(
         spec,
         namespace=runtime_namespace,
@@ -1005,21 +1037,23 @@ def _extract_cr_session(
         build=_runtime_build_identity(),
     )
     if mismatches:
-        raise ValueError(
+        raise CRSessionRefusal(
             "ConstellationSpec status does not match verified runtime configuration: "
             + ", ".join(f"status.{key}" for key in mismatches)
         )
     status_name = status.session_name or ""
     if require_ready and not status_name:
-        raise ValueError("Ready ConstellationSpec is missing status.sessionName")
+        raise CRSessionRefusal("Ready ConstellationSpec is missing status.sessionName")
     if status_name and status_name != session.session.name:
-        raise ValueError(
+        raise CRSessionRefusal(
             "ConstellationSpec status.sessionName does not match spec.session.name "
             f"({status_name!r} != {session.session.name!r})"
         )
     source_id = (metadata.get("annotations") or {}).get(SOURCE_ID_ANNOTATION)
     if not isinstance(source_id, str) or not source_id:
-        raise ValueError(f"ConstellationSpec is missing the {SOURCE_ID_ANNOTATION} annotation")
+        raise CRSessionRefusal(
+            f"ConstellationSpec is missing the {SOURCE_ID_ANNOTATION} annotation"
+        )
     return CRSessionIdentity(
         session_id=session_run_id,
         session_name=session.session.name,
@@ -1568,6 +1602,7 @@ async def _nats_subscriber() -> None:
             _cr_session = await asyncio.to_thread(_candidate_from_cr, _cr)
         except Exception as exc:
             if getattr(exc, "status", None) == 404:
+                # No ConstellationSpec yet: the session has not been deployed.
                 await _reconcile_interrupted_transition(None)
                 with contextlib.suppress(Exception):
                     await _reconcile_catalog_upload_lifecycle(
@@ -1575,7 +1610,8 @@ async def _nats_subscriber() -> None:
                         core_v1_api=_cr_core_api,
                         namespace=_cr_ns,
                     )
-            log.debug("Waiting for runtime session identity from CR: %s", exc)
+            else:
+                _report_cr_bootstrap_failure(exc, _session_manager)
         if _cr_session is None:
             log.info("No active Ready or wiring runtime session CR — waiting for session to deploy")
             await asyncio.sleep(5)
@@ -2632,63 +2668,87 @@ def get_flow_metrics(
 ONE_SHOT_TRACE_FLOW_ID = "__trace__"
 
 
+# One one-shot trace runs at a time: each holds traceroute execs and threads
+# for up to the trace deadline.
+_one_shot_trace_lock = asyncio.Lock()
+
+
 def _trace_request_endpoints(ctx: SessionContext, body: dict) -> tuple[str, str] | JSONResponse:
     """The request's source and destination nodes, or the refusal that says why not."""
     src = body.get("src_node", "")
     dst = body.get("dst_node", "")
     if not src or not dst:
-        return JSONResponse(status_code=400, content={"error": "src_node and dst_node required"})
+        return refusal_response(400, "trace.invalid_request", "src_node and dst_node are required")
     with ctx.state_lock:
         for node_id in (src, dst):
             if node_id not in ctx.nodes:
-                return JSONResponse(status_code=400, content={"error": f"Unknown node: {node_id}"})
+                return refusal_response(404, "trace.unknown_node", f"Unknown node: {node_id}")
+    # A trace records the session's sim time; refuse until the clock reports.
+    ctx.read_sim_time()
     return src, dst
 
 
-@app.post("/api/v1/trace", dependencies=[Depends(_require_api_key)])
+@app.post("/api/v1/trace", responses=_REFUSAL_RESPONSES, dependencies=[Depends(_require_api_key)])
 async def trace_between(body: dict) -> Any:
     """Trace the path between two nodes once, in both directions.
 
-    The request returns when both traceroutes finish; a destination that does
-    not answer costs up to the traceroute hop limit times its per-hop wait.
+    The request returns when both traceroutes finish, within the trace
+    deadline. One one-shot trace runs at a time; another request is refused
+    while it runs.
     """
     ctx = _require_active_context()
     endpoints = _trace_request_endpoints(ctx, body)
     if isinstance(endpoints, JSONResponse):
         return endpoints
     src, dst = endpoints
-    result = await asyncio.to_thread(
-        _create_path_tracer(ctx).trace_between, src, dst, flow_id=ONE_SHOT_TRACE_FLOW_ID
-    )
+    if _one_shot_trace_lock.locked():
+        return refusal_response(
+            409, "trace.busy", "A one-shot trace is already running; try again when it finishes"
+        )
+    async with _one_shot_trace_lock:
+        result = await asyncio.to_thread(
+            _create_path_tracer(ctx).trace_between, src, dst, flow_id=ONE_SHOT_TRACE_FLOW_ID
+        )
     return result.model_dump(mode="json")
 
 
-@app.post("/api/v1/trace/start", dependencies=[Depends(_require_api_key)])
+@app.post(
+    "/api/v1/trace/start", responses=_REFUSAL_RESPONSES, dependencies=[Depends(_require_api_key)]
+)
 async def start_continuous_trace(body: dict) -> Any:
-    """Start continuous path tracing between two nodes."""
+    """Start continuous path tracing between two nodes, replacing a running trace.
+
+    The trace stops on its own after the platform's trace time limit.
+    """
     ctx = _require_active_context()
     endpoints = _trace_request_endpoints(ctx, body)
     if isinstance(endpoints, JSONResponse):
         return endpoints
     src, dst = endpoints
-
-    if ctx.continuous_tracer is not None:
-        await ctx.continuous_tracer.stop()
-        ctx.continuous_tracer = None
-
-    tracer = _create_continuous_tracer(ctx)
-    await tracer.start(src, dst)
-    ctx.continuous_tracer = tracer
+    async with ctx.trace_lock:
+        # A context that began tearing down takes no new trace.
+        if ctx.stopped or ctx is not _active_context:
+            raise SessionInactiveError("Session switch in progress")
+        if ctx.continuous_tracer is not None:
+            await ctx.continuous_tracer.stop()
+            ctx.continuous_tracer = None
+        tracer = _create_continuous_tracer(ctx)
+        await tracer.start(src, dst)
+        ctx.continuous_tracer = tracer
     return {"ok": True, "src": src, "dst": dst}
 
 
-@app.post("/api/v1/trace/stop", dependencies=[Depends(_require_api_key)])
+@app.post(
+    "/api/v1/trace/stop", responses=_REFUSAL_RESPONSES, dependencies=[Depends(_require_api_key)]
+)
 async def stop_continuous_trace() -> dict:
-    """Stop continuous path tracing."""
+    """Stop continuous path tracing and forget its result."""
     ctx = _active_context
-    if ctx is not None and ctx.continuous_tracer is not None:
-        await ctx.continuous_tracer.stop()
-        ctx.continuous_tracer = None
+    if ctx is not None:
+        async with ctx.trace_lock:
+            if ctx.continuous_tracer is not None:
+                await ctx.continuous_tracer.stop()
+                ctx.continuous_tracer = None
     return {"ok": True}
 
 
@@ -2723,6 +2783,7 @@ def _create_continuous_tracer(ctx: SessionContext) -> ContinuousTracer:
     return ContinuousTracer(
         path_tracer=_create_path_tracer(ctx),
         interval_s=get_platform_config().trace_interval_seconds,
+        max_seconds=get_platform_config().trace_max_seconds,
         on_path_change=ctx.record_path_change,
     )
 

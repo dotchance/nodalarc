@@ -43,6 +43,7 @@ function reachedTrace(): TracedPath {
     tracing: true,
     traced_at: "2026-09-23T00:00:00Z",
     sim_time: "2026-09-23T00:00:00Z",
+    stop_reason: null,
   };
 }
 
@@ -134,10 +135,70 @@ describe("TraceDialog outcomes", () => {
     expect(screen.getAllByText("*")).toHaveLength(2);
   });
 
-  it("marks a trace whose loop stopped", () => {
-    render(<TraceDialog nodes={NODES} snapshot={snapshotWith({ ...reachedTrace(), tracing: false })} />);
-    expect(screen.getByText("STOPPED")).toBeTruthy();
+  it("keeps a trace stopped at its time limit, says why, and offers Trace again", () => {
+    render(
+      <TraceDialog
+        nodes={NODES}
+        snapshot={snapshotWith({ ...reachedTrace(), tracing: false, stop_reason: "time_limit" })}
+      />,
+    );
+    expect(screen.getByText("STOPPED · time limit reached")).toBeTruthy();
     expect(screen.queryByText("LIVE")).toBeNull();
+    expect(screen.getByText("Trace")).toBeTruthy();
+    expect(screen.queryByText("Stop Trace")).toBeNull();
+    // The last result stays shown.
+    expect(screen.getAllByText("geo-1", { selector: ".trace-hop-name" })).toHaveLength(2);
+  });
+
+  it("says a trace stopped on an internal error", () => {
+    render(
+      <TraceDialog
+        nodes={NODES}
+        snapshot={snapshotWith({ ...reachedTrace(), tracing: false, stop_reason: "internal_error" })}
+      />,
+    );
+    expect(screen.getByText("STOPPED · internal error")).toBeTruthy();
+  });
+
+  it("shows the refusal's own message when a trace cannot start", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: false,
+      status: 503,
+      json: async () => ({
+        code: "session.clock_pending",
+        message: "The session clock has not reported its sim time yet",
+      }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    try {
+      render(<TraceDialog nodes={NODES} snapshot={null} />);
+      const [source, destination] = screen.getAllByRole("combobox");
+      fireEvent.change(source!, { target: { value: "madrid-gw" } });
+      fireEvent.change(destination!, { target: { value: "luna-gw" } });
+      fireEvent.click(screen.getByText("Trace"));
+      expect(
+        await screen.findByText("The session clock has not reported its sim time yet"),
+      ).toBeTruthy();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("shows why a stop failed and keeps the Stop control", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: false,
+      status: 503,
+      json: async () => ({ code: "session.inactive", message: "No active session" }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    try {
+      render(<TraceDialog nodes={NODES} snapshot={snapshotWithActiveTrace()} />);
+      fireEvent.click(screen.getByText("Stop Trace"));
+      expect(await screen.findByText("No active session")).toBeTruthy();
+      expect(screen.getByText("Stop Trace")).toBeTruthy();
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 
   it("reports asymmetry only when the trace measured it", () => {

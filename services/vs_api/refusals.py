@@ -44,7 +44,7 @@ from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from vs_api.introspect import IntrospectExecError
 from vs_api.path_tracer import UntraceableNodeError
-from vs_api.session_context import SessionInactiveError
+from vs_api.session_context import SessionClockPendingError, SessionInactiveError
 from vs_api.session_deployment import (
     SessionDeploymentPreparationError,
     SessionDeploymentPreparationErrorCode,
@@ -176,6 +176,8 @@ def refusal_from_exception(exc: BaseException) -> RefusalOutcome | None:
         return _outcome(502, "introspect.exec_failed", str(exc))
     if isinstance(exc, SessionInactiveError):
         return _outcome(503, "session.inactive", str(exc))
+    if isinstance(exc, SessionClockPendingError):
+        return _outcome(503, "session.clock_pending", str(exc))
     if isinstance(exc, UntraceableNodeError):
         return _outcome(400, "trace.untraceable_node", str(exc))
     return None
@@ -203,6 +205,7 @@ REFUSAL_FAMILIES: tuple[type[BaseException], ...] = (
     WorkloadTargetError,
     IntrospectExecError,
     SessionInactiveError,
+    SessionClockPendingError,
     UntraceableNodeError,
 )
 

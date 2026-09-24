@@ -53,6 +53,7 @@ def _init_platform_config():
         vs_api_session_switch_max_requests_per_minute=5,
         vs_api_introspect_max_response_bytes=65536,
         trace_interval_seconds=3.0,
+        trace_max_seconds=180.0,
         # Unit tests must not silently bind to a developer's live local NATS.
     )
     init_platform_config(cfg)

@@ -31,6 +31,7 @@ from nodalarc.ephemeris_runtime import (
     validate_ephemeris_manifest,
 )
 from nodalarc.link_rule_candidates import generate_declared_link_candidates
+from nodalarc.model_validation import ADDRESS_FAMILIES, AddressFamily
 from nodalarc.models.catalog import EnvValueFrom, Profile, ResolvedEnvEntry
 from nodalarc.models.identity import IdentityMode
 from nodalarc.models.link_rules import LinkRule, NodeSelector, TerminalSelector
@@ -79,8 +80,10 @@ from nodalarc.runtime_support import (
 from nodalarc.tle import tle_mean_elements
 
 _NORMALIZE_RE = re.compile(r"[^a-z0-9-]+")
-_DEFAULT_GENERATED_SPACE_LOOPBACK_IPV4_POOL = ipaddress.ip_network("100.64.0.0/10")
-_DEFAULT_GENERATED_SPACE_LOOPBACK_IPV6_POOL = ipaddress.ip_network("fd00:6e0::/64")
+# The resolver-owned IPv4 loopback pool for routers without an explicit
+# IPv4 loopback assignment. There is no IPv6 counterpart: an IPv6 loopback
+# exists only where the session declares one.
+_DEFAULT_LOOPBACK_IPV4_POOL = ipaddress.ip_network("100.64.0.0/10")
 
 
 class SessionResolutionError(ValueError):
@@ -1806,10 +1809,42 @@ def _wan_interfaces_for_site_node(
     return interfaces
 
 
-_SEGMENT_SUBNET_IPV4_POOL = ipaddress.ip_network("172.16.0.0/12")
-_SEGMENT_SUBNET_IPV6_POOL = ipaddress.ip_network("fd00:da7a::/32")
-_SEGMENT_IPV4_PREFIX = 24
-_SEGMENT_IPV6_PREFIX = 64
+_SEGMENT_SUBNET_POOL: dict[AddressFamily, ipaddress.IPv4Network | ipaddress.IPv6Network] = {
+    "ipv4": ipaddress.ip_network("172.16.0.0/12"),
+    "ipv6": ipaddress.ip_network("fd00:da7a::/32"),
+}
+_SEGMENT_PREFIX: dict[AddressFamily, int] = {"ipv4": 24, "ipv6": 64}
+_DEFAULT_ROUTE: dict[AddressFamily, str] = {"ipv4": "0.0.0.0/0", "ipv6": "::/0"}
+
+# A segment's allocation key: (site id or carrier runtime id, segment id).
+_SegmentKey = tuple[str, str]
+
+
+def _origination_entries(
+    item: _RuntimeNode, family: AddressFamily
+) -> tuple[_SegmentKey | None, ...]:
+    """One node's origination targets in one family, in authored order.
+
+    A segment name becomes the allocation key of the segment the node joins
+    under that name; ``default`` becomes None, the default route. A name
+    the node does not join refuses.
+    """
+    targets = item.origination_targets
+    names = getattr(targets, family) if targets is not None else None
+    joined = {segment: (site_id, segment) for _, site_id, segment in item.ethernet_bindings}
+    entries: list[_SegmentKey | None] = []
+    for name in names or ():
+        if name == "default":
+            entries.append(None)
+            continue
+        key = joined.get(name)
+        if key is None:
+            raise SessionResolutionError(
+                f"node {item.node.node_id!r} originates segment {name!r}, but is not "
+                "bound or attached to it"
+            )
+        entries.append(key)
+    return tuple(entries)
 
 
 def _allocate_segment_addressing(
@@ -1820,143 +1855,113 @@ def _allocate_segment_addressing(
     Deterministic by stable ids: segments order by (site, segment id) and
     receive consecutive subnets from the resolver-owned pools; within a
     segment, routed environments order before hosts, each class sorted by
-    node id, and receive consecutive host addresses. Loopbacks for
-    ground-placed environments come from the same resolver-owned loopback
-    pools the generated space nodes use. Symbolic origination resolves
-    against the allocated subnets; a target naming a segment the node is
-    not attached to refuses.
+    node id, and receive consecutive host addresses. Every segment is
+    IPv4. A segment is IPv6 exactly when a member originates it into IPv6:
+    only then does it receive an IPv6 subnet and each member an IPv6
+    address. Ground-placed environments receive an IPv4 loopback from the
+    resolver-owned loopback pool; an IPv6 loopback exists only where an
+    addressing assignment declares one. Symbolic origination resolves
+    against the allocated subnets for every node that declares it.
     """
-
     segment_keys = sorted(
         {(site_id, segment) for item in nodes for _, site_id, segment in item.ethernet_bindings}
     )
-    if not segment_keys:
-        return nodes, ()
-
-    ipv4_subnets = _SEGMENT_SUBNET_IPV4_POOL.subnets(new_prefix=_SEGMENT_IPV4_PREFIX)
-    ipv6_subnets = _SEGMENT_SUBNET_IPV6_POOL.subnets(new_prefix=_SEGMENT_IPV6_PREFIX)
-    subnet_by_key: dict[tuple[str, str], tuple[Any, Any]] = {}
-    for key in segment_keys:
-        try:
-            subnet_by_key[key] = (next(ipv4_subnets), next(ipv6_subnets))
-        except StopIteration:  # pragma: no cover - 4096 /24s deep
-            raise SessionResolutionError(
-                f"segment subnet pool exhausted allocating {key[0]}/{key[1]}"
-            ) from None
+    ipv6_keys = {
+        key for item in nodes for key in _origination_entries(item, "ipv6") if key is not None
+    }
+    subnet_by_key: dict[_SegmentKey, dict[AddressFamily, Any]] = {key: {} for key in segment_keys}
+    for family in ADDRESS_FAMILIES:
+        subnets = _SEGMENT_SUBNET_POOL[family].subnets(new_prefix=_SEGMENT_PREFIX[family])
+        for key in segment_keys:
+            if family == "ipv6" and key not in ipv6_keys:
+                continue
+            try:
+                subnet_by_key[key][family] = next(subnets)
+            except StopIteration:  # pragma: no cover - 4096 /24s deep
+                raise SessionResolutionError(
+                    f"segment {family} subnet pool exhausted allocating {key[0]}/{key[1]}"
+                ) from None
 
     def _segment_order(item: _RuntimeNode) -> tuple[int, str]:
         return (0 if item.node.forwarding == "routed" else 1, item.node.node_id)
 
-    members_by_key: dict[tuple[str, str], list[_RuntimeNode]] = {}
+    members_by_key: dict[_SegmentKey, list[_RuntimeNode]] = {}
     for item in nodes:
         for _, site_id, segment in item.ethernet_bindings:
             members_by_key.setdefault((site_id, segment), []).append(item)
 
-    address_by_node_segment: dict[tuple[str, tuple[str, str]], tuple[str, str]] = {}
+    address_by_node_segment: dict[tuple[str, _SegmentKey], ResolvedInterfaceAddress] = {}
     for key, members in members_by_key.items():
-        ipv4_net, ipv6_net = subnet_by_key[key]
-        ipv4_hosts = ipv4_net.hosts()
-        ipv6_hosts = ipv6_net.hosts()
+        hosts = {family: subnet.hosts() for family, subnet in subnet_by_key[key].items()}
         for item in sorted(members, key=_segment_order):
             try:
-                ipv4_host = next(ipv4_hosts)
-                ipv6_host = next(ipv6_hosts)
+                allocated = {
+                    family: f"{next(family_hosts)}/{_SEGMENT_PREFIX[family]}"
+                    for family, family_hosts in hosts.items()
+                }
             except StopIteration:
                 raise SessionResolutionError(
                     f"segment {key[0]}/{key[1]} has more members than its allocated subnet holds"
                 ) from None
-            address_by_node_segment[(item.node.node_id, key)] = (
-                f"{ipv4_host}/{_SEGMENT_IPV4_PREFIX}",
-                f"{ipv6_host}/{_SEGMENT_IPV6_PREFIX}",
+            address_by_node_segment[(item.node.node_id, key)] = ResolvedInterfaceAddress(
+                **allocated
             )
 
-    existing_ipv4, existing_ipv6 = _existing_loopback_addresses(nodes)
-    lo_ipv4 = _available_host_addresses(_DEFAULT_GENERATED_SPACE_LOOPBACK_IPV4_POOL, existing_ipv4)
-    lo_ipv6 = _available_host_addresses(_DEFAULT_GENERATED_SPACE_LOOPBACK_IPV6_POOL, existing_ipv6)
+    existing_ipv4, _ = _existing_loopback_addresses(nodes)
+    lo_ipv4 = _available_host_addresses(_DEFAULT_LOOPBACK_IPV4_POOL, existing_ipv4)
 
     next_nodes: list[_RuntimeNode] = []
     for item in sorted(nodes, key=lambda entry: entry.node.node_id):
-        if not item.ethernet_bindings:
-            next_nodes.append(item)
-            continue
-        ethernet: dict[str, ResolvedInterfaceAddress] = {}
-        bound_segments: dict[str, tuple[str, str]] = {}
-        for interface, site_id, segment in item.ethernet_bindings:
-            key = (site_id, segment)
-            ipv4_address, ipv6_address = address_by_node_segment[(item.node.node_id, key)]
-            ethernet[interface] = ResolvedInterfaceAddress(ipv4=ipv4_address, ipv6=ipv6_address)
-            bound_segments[segment] = key
-        interfaces = ResolvedNodeInterfaces(
-            lo0=ResolvedInterfaceAddress(ipv4=f"{next(lo_ipv4)}/32", ipv6=f"{next(lo_ipv6)}/128"),
-            ethernet=ethernet,
-        )
-        originated = _resolve_origination(
-            item.node.node_id,
-            item.origination_targets,
-            bound_segments,
-            subnet_by_key,
-        )
-        next_nodes.append(
-            replace(
-                item,
-                node=item.node.model_copy(
-                    update={"interfaces": interfaces, "originated_prefixes": originated}
-                ),
+        update: dict[str, Any] = {}
+        if item.ethernet_bindings:
+            update["interfaces"] = ResolvedNodeInterfaces(
+                lo0=ResolvedInterfaceAddress(ipv4=f"{next(lo_ipv4)}/32"),
+                ethernet={
+                    interface: address_by_node_segment[(item.node.node_id, (site_id, segment))]
+                    for interface, site_id, segment in item.ethernet_bindings
+                },
             )
+        originated = _resolve_origination(item, subnet_by_key)
+        if originated is not None:
+            update["originated_prefixes"] = originated
+        next_nodes.append(
+            replace(item, node=item.node.model_copy(update=update)) if update else item
         )
     order = {item.node.node_id: index for index, item in enumerate(nodes)}
     next_nodes.sort(key=lambda entry: order[entry.node.node_id])
 
-    segment_records: list[ResolvedEthernetSegment] = []
-    for key in segment_keys:
-        ipv4_net, ipv6_net = subnet_by_key[key]
-        segment_records.append(
-            ResolvedEthernetSegment(
-                scope_id=key[0],
-                segment_id=key[1],
-                ipv4_subnet=str(ipv4_net),
-                ipv6_subnet=str(ipv6_net),
-                members=tuple(
-                    ResolvedSegmentMember(node_id=item.node.node_id, interface=interface)
-                    for item in sorted(members_by_key[key], key=_segment_order)
-                    for interface, site_id, segment in item.ethernet_bindings
-                    if (site_id, segment) == key
-                ),
-            )
+    segment_records = tuple(
+        ResolvedEthernetSegment(
+            scope_id=key[0],
+            segment_id=key[1],
+            ipv4_subnet=str(subnet_by_key[key]["ipv4"]),
+            ipv6_subnet=(str(subnet_by_key[key]["ipv6"]) if "ipv6" in subnet_by_key[key] else None),
+            members=tuple(
+                ResolvedSegmentMember(node_id=item.node.node_id, interface=interface)
+                for item in sorted(members_by_key[key], key=_segment_order)
+                for interface, site_id, segment in item.ethernet_bindings
+                if (site_id, segment) == key
+            ),
         )
-    return next_nodes, tuple(segment_records)
+        for key in segment_keys
+    )
+    return next_nodes, segment_records
 
 
 def _resolve_origination(
-    node_id: str,
-    targets: Any,
-    bound_segments: dict[str, tuple[str, str]],
-    subnet_by_key: dict[tuple[str, str], tuple[Any, Any]],
+    item: _RuntimeNode,
+    subnet_by_key: dict[_SegmentKey, dict[AddressFamily, Any]],
 ) -> ResolvedOriginatedPrefixes | None:
-    if targets is None:
-        return None
-    resolved: dict[str, list[str]] = {}
-    defaults = {"ipv4": "0.0.0.0/0", "ipv6": "::/0"}
-    for family_index, family in enumerate(("ipv4", "ipv6")):
-        entries = getattr(targets, family, None)
-        if not entries:
-            continue
+    """One node's origination as literal prefixes, repeats collapsed."""
+    resolved: dict[AddressFamily, list[str]] = {}
+    for family in ADDRESS_FAMILIES:
         prefixes: list[str] = []
-        for entry in entries:
-            if entry == "default":
-                prefixes.append(defaults[family])
-                continue
-            key = bound_segments.get(entry)
-            if key is None:
-                raise SessionResolutionError(
-                    f"node {node_id!r} originates segment {entry!r}, but is not "
-                    "bound or attached to it"
-                )
-            prefixes.append(str(subnet_by_key[key][family_index]))
-        seen: set[str] = set()
-        resolved[family] = [
-            prefix for prefix in prefixes if not (prefix in seen or seen.add(prefix))
-        ]
+        for key in _origination_entries(item, family):
+            prefix = _DEFAULT_ROUTE[family] if key is None else str(subnet_by_key[key][family])
+            if prefix not in prefixes:
+                prefixes.append(prefix)
+        if prefixes:
+            resolved[family] = prefixes
     if not resolved:
         return None
     return ResolvedOriginatedPrefixes.model_validate(resolved)
@@ -2076,40 +2081,40 @@ def _apply_addressing(
 
 
 def _apply_default_generated_space_loopbacks(nodes: list[_RuntimeNode]) -> list[_RuntimeNode]:
-    """Assign resolver-owned loopbacks to generated routed space nodes.
+    """Assign resolver-owned IPv4 loopbacks to generated routed space nodes.
 
-    Placed ground routers get their loopback from the site placement. Generated
-    constellation nodes do not have a site placement, but FRR still needs one
-    stable loopback for unnumbered WAN interfaces and routing protocols. The
-    resolver owns that runtime-only allocation and keeps it deterministic by
-    walking the resolved node order. It does not mask missing placement data for
-    non-space nodes.
+    Placed ground routers get their loopback from the site placement.
+    Generated constellation nodes have no site placement, but a router
+    needs one stable IPv4 loopback for its unnumbered WAN interfaces and
+    its routing identity. A routed satellite that no assignment gives an
+    IPv4 loopback receives one here, deterministically in resolved node
+    order, beside any IPv6 loopback an assignment declared. No IPv6
+    loopback is ever assigned here. Missing placement data for non-space
+    nodes is not masked.
     """
 
-    existing_ipv4, existing_ipv6 = _existing_loopback_addresses(nodes)
-    ipv4_iter = _available_host_addresses(
-        _DEFAULT_GENERATED_SPACE_LOOPBACK_IPV4_POOL, existing_ipv4
-    )
-    ipv6_iter = _available_host_addresses(
-        _DEFAULT_GENERATED_SPACE_LOOPBACK_IPV6_POOL, existing_ipv6
-    )
+    existing_ipv4, _ = _existing_loopback_addresses(nodes)
+    ipv4_iter = _available_host_addresses(_DEFAULT_LOOPBACK_IPV4_POOL, existing_ipv4)
 
     next_nodes: list[_RuntimeNode] = []
     for item in nodes:
         node = item.node
-        if node.forwarding != "routed" or node.kind != "satellite" or node.interfaces is not None:
+        interfaces = node.interfaces
+        if (
+            node.forwarding != "routed"
+            or node.kind != "satellite"
+            or (interfaces is not None and interfaces.lo0.ipv4 is not None)
+        ):
             next_nodes.append(item)
             continue
-        loopback = ResolvedInterfaceAddress(
-            ipv4=f"{next(ipv4_iter)}/32",
-            ipv6=f"{next(ipv6_iter)}/128",
-        )
-        next_nodes.append(
-            replace(
-                item,
-                node=node.model_copy(update={"interfaces": ResolvedNodeInterfaces(lo0=loopback)}),
+        ipv4 = f"{next(ipv4_iter)}/32"
+        if interfaces is None:
+            interfaces = ResolvedNodeInterfaces(lo0=ResolvedInterfaceAddress(ipv4=ipv4))
+        else:
+            interfaces = interfaces.model_copy(
+                update={"lo0": interfaces.lo0.model_copy(update={"ipv4": ipv4})}
             )
-        )
+        next_nodes.append(replace(item, node=node.model_copy(update={"interfaces": interfaces})))
     return next_nodes
 
 
@@ -2136,7 +2141,7 @@ def _available_host_addresses(
     for address in network.hosts():
         if address not in reserved:
             yield address
-    raise SessionResolutionError(f"generated space loopback pool {network} is exhausted")
+    raise SessionResolutionError(f"resolver loopback pool {network} is exhausted")
 
 
 def _merge_loopback_assignment(
@@ -2149,8 +2154,8 @@ def _merge_loopback_assignment(
     """An explicit assignment owns the families it pools.
 
     Every loopback in the session is resolver-allocated; a family the
-    assignment pools replaces the resolver default, and a family it does
-    not pool keeps the default.
+    assignment pools replaces what the node holds, and a family it does
+    not pool keeps it.
     """
     return ResolvedInterfaceAddress(
         ipv4=allocated.ipv4 if ipv4_pool is not None else current.ipv4,
@@ -2216,7 +2221,7 @@ def _merge_originated_prefixes(*sources):
     for source in reversed(sources):
         if not source:
             continue
-        for family in ("ipv4", "ipv6"):
+        for family in ADDRESS_FAMILIES:
             if source.get(family):
                 data.setdefault(family, []).extend(source[family])
     if not data:
@@ -2348,23 +2353,26 @@ def _check_domain_members(
 ) -> None:
     """Refuse a domain whose selected routers' adapters cannot render it.
 
-    Each router is checked against its own adapter's declaration; a union
-    across adapters cannot establish one node's support.
+    Each router is checked against its own adapter's declaration, with the
+    address families the session gives it; a union across adapters cannot
+    establish one node's support.
     """
-    by_adapter: dict[str, list[str]] = {}
+    by_adapter: dict[str, dict[str, frozenset[AddressFamily]]] = {}
     for item in routers:
         assert item.profile_adapter is not None  # routers carry a routing adapter
-        by_adapter.setdefault(item.profile_adapter, []).append(item.node.node_id)
+        by_adapter.setdefault(item.profile_adapter, {})[item.node.node_id] = (
+            item.node.address_families
+        )
     unsupported = [
         feature
-        for adapter, node_ids in sorted(by_adapter.items())
+        for adapter, members in sorted(by_adapter.items())
         for feature in check_routing_members(
             domain_id=domain.domain_id,
             protocol=domain.protocol,
             capabilities=domain.capabilities,
             bfd=domain.timers.bfd,
             adapter=adapter,
-            node_ids=tuple(node_ids),
+            members=members,
         )
     ]
     if unsupported:
@@ -2560,18 +2568,21 @@ def _derive_host_attachments(
     A host node attaches to the segment its allocated Ethernet address
     names; its gateway is the routed node holding an address on that same
     subnet. With more than one routed node on the segment the lowest node
-    id is the gateway, deterministically. Host attachment is substrate
-    configuration derived from allocation; nothing here is a protocol
-    decision.
+    id is the gateway, deterministically. On an IPv6 segment the host's
+    IPv6 address and the same gateway's IPv6 address on the segment join
+    the attachment. Host attachment is substrate configuration derived
+    from allocation; nothing here is a protocol decision.
     """
-    routed_segment_ports: list[tuple[str, Any]] = []
+    routed_segment_ports: list[tuple[str, Any, ResolvedInterfaceAddress]] = []
     for item in runtime_nodes:
         node = item.node
         if node.forwarding != "routed" or node.interfaces is None:
             continue
         for address in node.interfaces.ethernet.values():
             if address.ipv4:
-                routed_segment_ports.append((node.node_id, ipaddress.ip_interface(address.ipv4)))
+                routed_segment_ports.append(
+                    (node.node_id, ipaddress.ip_interface(address.ipv4), address)
+                )
     routed_segment_ports.sort(key=lambda entry: entry[0])
 
     # A session with zero routed nodes refuses at routing-domain
@@ -2605,8 +2616,8 @@ def _derive_host_attachments(
         host_port = ipaddress.ip_interface(host_address.ipv4)
         gateway = next(
             (
-                (gateway_id, gateway_port)
-                for gateway_id, gateway_port in routed_segment_ports
+                (gateway_id, gateway_port, gateway_address)
+                for gateway_id, gateway_port, gateway_address in routed_segment_ports
                 if gateway_port.network == host_port.network
             ),
             None,
@@ -2616,13 +2627,23 @@ def _derive_host_attachments(
                 f"host node {node.node_id!r} has no routed gateway on its "
                 f"segment {host_port.network}"
             )
-        gateway_id, gateway_port = gateway
+        gateway_id, gateway_port, gateway_address = gateway
+        gateway_ipv6 = None
+        if host_address.ipv6 is not None:
+            if gateway_address.ipv6 is None:
+                raise SessionResolutionError(
+                    f"host node {node.node_id!r} is IPv6 on segment {host_port.network}, "
+                    f"but its gateway {gateway_id!r} holds no IPv6 address there"
+                )
+            gateway_ipv6 = str(ipaddress.ip_interface(gateway_address.ipv6).ip)
         attached = node.model_copy(
             update={
                 "host_attachment": ResolvedHostAttachment(
                     interface=interface_name,
                     ipv4=str(host_port),
                     gateway_ipv4=str(gateway_port.ip),
+                    ipv6=host_address.ipv6,
+                    gateway_ipv6=gateway_ipv6,
                     gateway_node_id=gateway_id,
                 )
             }

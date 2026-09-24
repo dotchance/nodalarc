@@ -390,9 +390,19 @@ addressing:
     allocation: by_node_order
 ```
 
-When no loopback assignment covers a node, the resolver provides
-deterministic resolver-owned IPv4 and IPv6 loopbacks. No catalog object
-authors a loopback.
+When no IPv4 loopback assignment covers a router, the resolver provides a
+deterministic resolver-owned IPv4 loopback. The resolver never provides an
+IPv6 loopback: a node has one only where an assignment with an `ipv6_pool`
+selects it. No catalog object authors a loopback.
+
+A node carries IPv6 only where the session or its catalog objects declare
+it: an IPv6 loopback assignment, or an `ipv6` entry in `originated_prefixes`.
+The site example above names `lan0` under `ipv6`, so `lan0` receives an IPv6
+subnet, every member of `lan0` receives an IPv6 address on it, and hosts on
+`lan0` receive an IPv6 default route. A site that names `lan0` under `ipv4`
+alone has an IPv4-only LAN. IPv6 crosses a link only where both ends carry
+IPv6: a satellite without an IPv6 loopback or IPv6 origination neither
+forwards nor routes IPv6.
 
 Point-to-point and terrestrial-prefix pools, and allocation modes other than
 `by_node_order`, are structurally defined but not currently executable. WAN

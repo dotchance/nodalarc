@@ -286,11 +286,8 @@ def test_generated_space_nodes_get_deterministic_runtime_loopbacks() -> None:
         "100.64.0.7/32",
         "100.64.0.8/32",
     ]
-    assert [node.interfaces.lo0.ipv6 for node in satellites[:3] if node.interfaces] == [
-        "fd00:6e0::6/128",
-        "fd00:6e0::7/128",
-        "fd00:6e0::8/128",
-    ]
+    # The session declares no IPv6 loopback, so no node holds one.
+    assert all(node.interfaces.lo0.ipv6 is None for node in satellites if node.interfaces)
 
 
 def test_session_without_routing_gets_one_default_runtime_domain() -> None:
@@ -390,7 +387,8 @@ def test_placed_ground_nodes_get_deterministic_allocated_loopbacks(tmp_path: Pat
     for node in ground:
         assert node.interfaces is not None
         assert node.interfaces.lo0.ipv4 is not None
-        assert node.interfaces.lo0.ipv6 is not None
+        # No addressing assignment declares an IPv6 loopback.
+        assert node.interfaces.lo0.ipv6 is None
 
     again = resolve_session(raw, catalog=FilesystemCatalogReadView(roots))
     assert {

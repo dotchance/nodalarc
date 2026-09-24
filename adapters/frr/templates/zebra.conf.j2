@@ -1,6 +1,6 @@
-ip forwarding
-ipv6 forwarding
-
+{# Kernel forwarding is substrate state the wiring manifest sets per node
+   and family; this configuration carries only addresses and interface
+   parameters. #}
 interface lo
  ip address {{ ipv4_loopback }}/32
 {% if ipv6_loopback %}
@@ -8,11 +8,13 @@ interface lo
 {% endif %}
 exit
 
+{# WAN interfaces are unnumbered: each borrows the loopback address of every
+   family the node holds a loopback in. #}
 {% for iface in wan_interfaces %}
 interface {{ iface.name }}
  ip address {{ ipv4_loopback }}/32
-{% if protocol != "static" %}
- no ipv6 nd suppress-ra
+{% if ipv6_loopback %}
+ ipv6 address {{ ipv6_loopback }}/128
 {% endif %}
 {% if iface.te %}
  link-params
@@ -29,11 +31,11 @@ exit
 
 {% for segment in segment_interfaces %}
 interface {{ segment.name }}
-{% for tp in segment.addresses %}
-{% if ':' in tp.host_address %}
- ipv6 address {{ tp.host_address }}
+{% for assigned in segment.addresses %}
+{% if assigned.family == "ipv6" %}
+ ipv6 address {{ assigned.address }}
 {% else %}
- ip address {{ tp.host_address }}
+ ip address {{ assigned.address }}
 {% endif %}
 {% endfor %}
 exit

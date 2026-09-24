@@ -1173,13 +1173,14 @@ class TestWiringManifest:
         for node_id, node in hosts.items():
             member = members_by_id[node_id]
             assert member["addresses"]
-            assert member["gateway"] in router_ips
+            assert member["gateways"]
+            assert set(member["gateways"]) <= router_ips
             assert node["isl_interfaces"] == []
             assert node["gnd_interfaces"] == []
             assert node_id not in manifest["ground_bridges"]
             assert node_id in member_ids
         for node_id in routers:
-            assert members_by_id[node_id].get("gateway") is None
+            assert members_by_id[node_id]["gateways"] == []
         WiringManifest.model_validate(manifest)
 
     def test_manifest_disables_mpls_for_plain_igp(self, tmp_path):
@@ -1279,6 +1280,28 @@ class TestWiringManifest:
             assert sysctls.get("net.ipv4.ping_group_range") == "0 2147483647", (
                 f"{node_id} missing unprivileged ICMP ping_group_range"
             )
+
+    def test_sysctls_state_forwarding_per_node_and_family(self, tmp_path):
+        """Forwarding is explicit for both families on every node: routers
+        forward the families the session gives them, hosts forward nothing.
+        The fixture declares IPv6 loopbacks for the space segment and IPv6
+        site LANs, so every node here carries IPv6."""
+        manifest = self._build_and_extract(
+            tmp_path,
+            ground_stations={
+                "stations": [{"name": "alpha", "lat_deg": 34.0, "lon_deg": -118.0, "alt_m": 20}],
+                "host_endpoints": True,
+            },
+        )
+        kinds = {node["node_type"] for node in manifest["nodes"].values()}
+        assert kinds == {"satellite", "ground_station", "host"}
+        for node_id, node in manifest["nodes"].items():
+            sysctls = node["sysctls"]
+            forwards = "0" if node["node_type"] == "host" else "1"
+            assert sysctls["net.ipv4.ip_forward"] == forwards, node_id
+            assert sysctls["net.ipv6.conf.all.forwarding"] == forwards, node_id
+            assert sysctls["net.ipv6.conf.all.dad_transmits"] == "0", node_id
+            assert sysctls["net.ipv6.conf.default.dad_transmits"] == "0", node_id
 
     def test_ground_bridges_match_gs_nodes(self, tmp_path):
         manifest = self._build_and_extract(tmp_path)

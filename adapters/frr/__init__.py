@@ -5,7 +5,8 @@
 FRR is the reference implementation of the workload adapter contract. It
 renders one routed node's resolved facts into the files the FRR image loads
 from its configuration mount: ``frr.conf`` (the integrated configuration),
-``daemons`` (exactly the daemons its stack selected) and ``_config_version``
+``daemons`` (exactly the daemons its stack selects for the address families
+the node carries) and ``_config_version``
 (the readiness proof). The configuration fragments behind ``frr.conf`` are
 rendering inputs and are never delivered. The image's ENTRYPOINT reads the
 mount on its own; this adapter sets no environment and appends no arguments.
@@ -23,7 +24,7 @@ from typing import TYPE_CHECKING
 
 from nodalarc.workloads.adapter import AdapterNodeConfig, SessionContext
 
-from adapters.frr.stack import ResolvedStack, resolve_domain_stack, validate_sid_indices
+from adapters.frr.stack import resolve_domain_stack, validate_sid_indices
 from adapters.frr.support import FRR_SUPPORT
 from adapters.frr.template_vars import build_template_vars_from_resolved
 
@@ -124,22 +125,23 @@ class FrrAdapter:
             stack=stack,
             node_sid_index=sid_by_node.get(node_id) if stack.segment_routing else None,
         )
-        frr_conf = self._frr_conf(stack, template_vars)
+        families = resolved_node.address_families
+        frr_conf = self._frr_conf(stack.member_fragments(families), template_vars)
         return AdapterNodeConfig(
             files={
                 "frr.conf": frr_conf.encode(),
-                "daemons": _daemons_file(stack.daemons).encode(),
+                "daemons": _daemons_file(stack.member_daemons(families)).encode(),
                 # The entrypoint writes this after loading, and the readiness
                 # probe diffs it to prove the intended configuration is live.
                 "_config_version": hashlib.sha256(frr_conf.encode()).hexdigest()[:16].encode(),
             }
         )
 
-    def _frr_conf(self, stack: ResolvedStack, template_vars: dict[str, Any]) -> str:
-        """Assemble the integrated configuration from the stack's fragments."""
+    def _frr_conf(self, fragments: tuple[str, ...], template_vars: dict[str, Any]) -> str:
+        """Assemble the integrated configuration from the member's fragments."""
         env = self._environment()
         parts: list[str] = []
-        for fragment in stack.fragments:
+        for fragment in fragments:
             parts.append(f"! === {fragment} ===")
             parts.append(env.get_template(f"{fragment}.conf.j2").render(**template_vars))
         # FRR reads a blank line inside an interface or router block as an

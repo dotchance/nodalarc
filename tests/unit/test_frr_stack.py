@@ -48,6 +48,9 @@ def _expected_selection(
     if protocol != "static":
         daemons.append(f"{protocol}d")
         fragments.append(f"{protocol}d")
+    if protocol == "ospf":
+        daemons.append("ospf6d")
+        fragments.append("ospf6d")
     if "segment_routing" in capabilities:
         daemons.append("pathd")
         fragments.append("pathd")
@@ -80,12 +83,43 @@ def test_igp_stack_selects_exactly_the_domain_daemons(protocol, capabilities, bf
     assert stack.image == "frr"
 
 
+_IPV4 = frozenset({"ipv4"})
+_DUAL = frozenset({"ipv4", "ipv6"})
+
+
+@pytest.mark.parametrize("bfd", [False, True])
+def test_only_ipv6_ospf_members_run_ospfv3(bfd) -> None:
+    stack = resolve_domain_stack(_domain("ospf", ("mpls",), bfd=bfd))
+
+    assert stack.member_daemons(_DUAL) == stack.daemons
+    assert stack.member_fragments(_DUAL) == stack.fragments
+    assert stack.member_daemons(_IPV4) == tuple(d for d in stack.daemons if d != "ospf6d")
+    assert stack.member_fragments(_IPV4) == tuple(f for f in stack.fragments if f != "ospf6d")
+    # OSPFv3 assembles after OSPFv2 and after the BFD profile it references.
+    fragments = stack.member_fragments(_DUAL)
+    assert fragments.index("ospf6d") == fragments.index("ospfd") + 1
+
+
+@pytest.mark.parametrize("protocol", ["isis", "static"])
+def test_ipv6_needs_no_extra_daemon_outside_ospf(protocol) -> None:
+    stack = resolve_domain_stack(_domain(protocol))
+
+    assert stack.member_daemons(_DUAL) == stack.member_daemons(_IPV4) == stack.daemons
+    assert stack.member_fragments(_DUAL) == stack.member_fragments(_IPV4) == stack.fragments
+
+
 def test_frr_declares_the_capabilities_its_fragments_render() -> None:
     igp = {"mpls", "segment_routing", "traffic_engineering"}
     assert FRR_SUPPORT.routing["isis"].capabilities == igp
     assert FRR_SUPPORT.routing["ospf"].capabilities == igp
     assert FRR_SUPPORT.routing["static"].capabilities == frozenset()
     assert FRR_SUPPORT.routing["static"].bfd is None
+
+
+def test_frr_routes_both_address_families_on_every_protocol() -> None:
+    assert {
+        protocol: support.address_families for protocol, support in FRR_SUPPORT.routing.items()
+    } == {"isis": _DUAL, "ospf": _DUAL, "static": _DUAL}
 
 
 def test_static_stack_runs_zebra_and_staticd_without_an_igp_log() -> None:

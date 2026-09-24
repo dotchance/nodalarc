@@ -8,6 +8,7 @@ import base64
 import binascii
 import gzip
 import hashlib
+import ipaddress
 import json
 import zlib
 from collections.abc import Mapping
@@ -141,14 +142,15 @@ class IslInterface(_StrictModel):
 
 class SiteLanMember(_StrictModel):
     """One environment attached to an Ethernet segment: its in-pod interface
-    name, its allocated addresses, an optional host default-route gateway
-    (substrate configuration, never present for a routed member), and its
-    operator-assigned placement."""
+    name, its allocated addresses, its host default-route gateways (substrate
+    configuration, never present for a routed member; at most one per
+    address family, each in a family the member holds an address in), and
+    its operator-assigned placement."""
 
     node_id: str
     interface: str
     addresses: list[str] = Field(min_length=1)
-    gateway: str | None = None
+    gateways: list[str]
     k3s_node: str
     host_ip: str
 
@@ -158,6 +160,18 @@ class SiteLanMember(_StrictModel):
         if not value:
             raise ValueError("segment member fields must be non-empty")
         return value
+
+    @model_validator(mode="after")
+    def _gateways_follow_addresses(self) -> SiteLanMember:
+        held = {ipaddress.ip_interface(address).version for address in self.addresses}
+        versions = [ipaddress.ip_address(gateway).version for gateway in self.gateways]
+        if len(set(versions)) != len(versions):
+            raise ValueError(f"member {self.node_id!r} declares two gateways in one family")
+        if not set(versions) <= held:
+            raise ValueError(
+                f"member {self.node_id!r} declares a gateway in a family it holds no address in"
+            )
+        return self
 
 
 class SiteLanUplink(_StrictModel):
@@ -357,7 +371,7 @@ class WiringManifest(_StrictModel):
                 memberships.setdefault(member.node_id, []).append(member)
         for node_id, node in self.nodes.items():
             members = memberships.get(node_id, [])
-            gateways = [member for member in members if member.gateway is not None]
+            gateways = [member for member in members if member.gateways]
             if node.node_type == "host":
                 if len(members) != 1:
                     raise ValueError(

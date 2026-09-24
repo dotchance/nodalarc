@@ -1269,11 +1269,17 @@ free addresses. An omitted or null `allocation` is interpreted as
 
 No catalog object authors addresses. Ethernet segment subnets (site segments
 and node-carried buses alike), member addresses on those segments, and
-loopbacks are resolver-allocated, deterministically. Nodes without an
-explicit loopback assignment receive deterministic resolver-owned IPv4 and
-IPv6 loopbacks. Across the fully resolved session, a loopback host address
-belongs to exactly one node per address family; duplicate allocated `lo0`
-addresses are invalid.
+loopbacks are resolver-allocated, deterministically. A router without an
+explicit IPv4 loopback assignment receives a deterministic resolver-owned
+IPv4 loopback. An IPv6 loopback exists only where an assignment with an
+`ipv6_pool` selects the node. Across the fully resolved session, a loopback
+host address belongs to exactly one node per address family; duplicate
+allocated `lo0` addresses are invalid.
+
+Every Ethernet segment is IPv4. A segment is also IPv6 exactly when a member
+names it in `originated_prefixes.ipv6`. Every member of an IPv6 segment then
+receives an IPv6 address on it. A host on an IPv6 segment receives an IPv6
+default route through the same gateway as its IPv4 default route.
 
 ## Routing
 
@@ -1552,7 +1558,15 @@ context-free EBNF alone:
   route. No literal prefix appears in configuration. A segment id entry must
   name a segment the originating node is bound or attached to. Origination
   never allocates or infers address ownership, and a segment is never
-  advertised merely because it exists.
+  advertised merely because it exists. An `ipv6` entry naming a segment is
+  the declaration that makes the segment IPv6.
+- A node carries an address family when it holds a loopback or segment
+  address in that family or originates prefixes in it. No other statement
+  gives a node a family. A routed node's kernel forwards exactly the
+  families it carries, a host's kernel forwards neither family, and a
+  node's routing configuration routes exactly the families it carries. A
+  routing domain refuses a member that carries a family its adapter does not
+  route.
 - Every resolved node has exactly one effective workload profile, taken from
   the most specific of its own node entry, its segment, and its node model. A
   node with no profile statement at any level fails resolution. The resolved
@@ -1587,7 +1601,12 @@ construct. The production Earth-Luna profile currently supports:
 - the `max_links_per_node` link constraint;
 - loopback address pools using `by_node_order` allocation;
 - IS-IS, OSPF, and static FRR routing domains;
-- MPLS, segment routing, and traffic engineering on IS-IS and OSPF domains;
+- IPv4 and IPv6 on IS-IS, OSPF, and static domains. IS-IS routes IPv6 in its
+  IPv6 unicast topology, so IPv6 follows only adjacencies whose two ends
+  carry IPv6. OSPF members that carry IPv6 run OSPFv3 beside OSPFv2, with the
+  same router id, areas, costs, timers, and BFD;
+- MPLS, segment routing, and traffic engineering on IS-IS and OSPF domains,
+  for IPv4;
 - BFD on IS-IS and OSPF domains, with a detect multiplier of 1 to 255 and
   receive and transmit intervals of 10 to 4294967 ms, on every interface
   where the IGP runs actively: point-to-point links and site LANs with a

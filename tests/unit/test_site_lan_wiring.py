@@ -83,6 +83,7 @@ def _manifest_data() -> dict:
                         "node_id": "site-a-gw1",
                         "interface": "terr0",
                         "addresses": ["172.16.1.1/24"],
+                        "gateways": [],
                         "k3s_node": "node01",
                         "host_ip": "10.0.0.1",
                     },
@@ -90,6 +91,7 @@ def _manifest_data() -> dict:
                         "node_id": "site-a-gw2",
                         "interface": "terr0",
                         "addresses": ["172.16.1.2/24"],
+                        "gateways": [],
                         "k3s_node": "node02",
                         "host_ip": "10.0.0.2",
                     },
@@ -196,6 +198,7 @@ class TestManifestContract:
                 "node_id": "ghost",
                 "interface": "terr0",
                 "addresses": ["172.16.1.3/24"],
+                "gateways": [],
                 "k3s_node": "node01",
                 "host_ip": "10.0.0.1",
             }
@@ -227,27 +230,46 @@ class TestManifestContract:
                 "node_id": "site-a-host",
                 "interface": "terr0",
                 "addresses": ["172.16.1.9/24"],
-                "gateway": "172.16.1.1",
+                "gateways": ["172.16.1.1"],
                 "k3s_node": "node01",
                 "host_ip": "10.0.0.1",
             }
         )
         WiringManifest.model_validate(data)
 
+        dual_stack = deepcopy(data)
+        host = dual_stack["site_lans"]["site-a-lan0"]["members"][2]
+        host["addresses"] = ["172.16.1.9/24", "fd00:da7a::9/64"]
+        host["gateways"] = ["172.16.1.1", "fd00:da7a::1"]
+        WiringManifest.model_validate(dual_stack)
+
         missing_gateway = deepcopy(data)
-        missing_gateway["site_lans"]["site-a-lan0"]["members"][2]["gateway"] = None
+        missing_gateway["site_lans"]["site-a-lan0"]["members"][2]["gateways"] = []
         with pytest.raises(ValidationError, match="requires a segment gateway"):
             WiringManifest.model_validate(missing_gateway)
 
         router_with_gateway = deepcopy(data)
-        router_with_gateway["site_lans"]["site-a-lan0"]["members"][0]["gateway"] = "172.16.1.1"
+        router_with_gateway["site_lans"]["site-a-lan0"]["members"][0]["gateways"] = ["172.16.1.1"]
         with pytest.raises(ValidationError, match="only host nodes carry"):
             WiringManifest.model_validate(router_with_gateway)
+
+    def test_member_gateways_follow_the_member_address_families(self) -> None:
+        data = _manifest_data()
+        member = data["site_lans"]["site-a-lan0"]["members"][0]
+
+        member["gateways"] = ["172.16.1.254", "172.16.1.253"]
+        with pytest.raises(ValidationError, match="two gateways in one family"):
+            WiringManifest.model_validate(data)
+
+        member["gateways"] = ["fd00:da7a::1"]
+        with pytest.raises(ValidationError, match="holds no address in"):
+            WiringManifest.model_validate(data)
 
     def test_plan_threads_gateway_to_member_port(self) -> None:
         data = _manifest_data()
         spec, nodes = data["site_lans"]["site-a-lan0"], data["nodes"]
-        spec["members"][0]["gateway"] = "172.16.1.254"
+        spec["members"][0]["addresses"] = ["172.16.1.1/24", "fd00:da7a::1/64"]
+        spec["members"][0]["gateways"] = ["172.16.1.254", "fd00:da7a::fe"]
         plan = plan_site_lan(
             "site-a-lan0",
             spec,
@@ -258,9 +280,9 @@ class TestManifestContract:
             base_mtu=9000,
         )
         assert plan is not None
-        assert plan.local_members[0].gateway == "172.16.1.254"
+        assert plan.local_members[0].gateways == ("172.16.1.254", "fd00:da7a::fe")
         assert plan.local_members[0].interface == "terr0"
-        assert plan.local_members[0].addresses == ("172.16.1.1/24",)
+        assert plan.local_members[0].addresses == ("172.16.1.1/24", "fd00:da7a::1/64")
 
     def test_segment_vnis_must_be_distinct(self) -> None:
         data = _manifest_data()
@@ -529,6 +551,94 @@ class _FakeIPRoute:
 
     def fdb(self, action: str, **kwargs):
         self.ops.append(("fdb", action, kwargs))
+
+
+class _RoutingFakeIPRoute(_FakeIPRoute):
+    """Keeps one default route per family and answers lookups through it."""
+
+    def __init__(self, *args, lookup_override: dict[int, str] | None = None, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.defaults: dict[int, str] = {}
+        self.lookup_override = dict(lookup_override or {})
+
+    def route(self, action: str, **kwargs):
+        self.ops.append(("route", action, kwargs))
+        if action == "replace":
+            self.defaults[kwargs["family"]] = kwargs["gateway"]
+            return []
+        family = kwargs["family"]
+        gateway = self.lookup_override.get(family, self.defaults.get(family))
+        return [{"attrs": [("RTA_GATEWAY", gateway)]}] if gateway else [{"attrs": []}]
+
+
+def _host_port(addresses: tuple[str, ...], gateways: tuple[str, ...]):
+    from node_agent import site_lan
+
+    return site_lan.MemberPort(
+        interface="terr0",
+        node_id="site-a-host",
+        pid=111,
+        host_ifname="sm0000424200",
+        pod_ifname="sp0000424200",
+        addresses=addresses,
+        gateways=gateways,
+    )
+
+
+class TestHostDefaultRoutes:
+    """A host gets one proven default route per family its segment carries."""
+
+    def test_each_family_gets_its_default_route_through_its_gateway(self, monkeypatch) -> None:
+        import socket
+
+        from node_agent import site_lan
+
+        fake = _RoutingFakeIPRoute(existing={"sp0000424200": 7})
+        monkeypatch.setattr(site_lan, "_in_namespace", lambda pid, fn: fn(fake))
+        site_lan._configure_member_pod(
+            _host_port(("172.16.1.9/24", "fd00:da7a::9/64"), ("172.16.1.1", "fd00:da7a::1"))
+        )
+
+        assert fake.defaults == {socket.AF_INET: "172.16.1.1", socket.AF_INET6: "fd00:da7a::1"}
+        lookups = [op[2] for op in fake.ops if op[:2] == ("route", "get")]
+        assert lookups == [
+            {"dst": "8.8.8.8", "family": socket.AF_INET},
+            {"dst": "2001:4860:4860::8888", "family": socket.AF_INET6},
+        ]
+
+    def test_an_ipv4_host_gets_no_ipv6_route(self, monkeypatch) -> None:
+        import socket
+
+        from node_agent import site_lan
+
+        fake = _RoutingFakeIPRoute(existing={"sp0000424200": 7})
+        monkeypatch.setattr(site_lan, "_in_namespace", lambda pid, fn: fn(fake))
+        site_lan._configure_member_pod(_host_port(("172.16.1.9/24",), ("172.16.1.1",)))
+
+        assert fake.defaults == {socket.AF_INET: "172.16.1.1"}
+
+    def test_a_route_that_does_not_read_back_fails_wiring(self, monkeypatch) -> None:
+        import socket
+
+        from node_agent import site_lan
+
+        fake = _RoutingFakeIPRoute(
+            existing={"sp0000424200": 7}, lookup_override={socket.AF_INET6: "fd00:da7a::2"}
+        )
+        monkeypatch.setattr(site_lan, "_in_namespace", lambda pid, fn: fn(fake))
+        with pytest.raises(RuntimeError, match="via fd00:da7a::1 on site-a-host did not verify"):
+            site_lan._configure_member_pod(
+                _host_port(("172.16.1.9/24", "fd00:da7a::9/64"), ("172.16.1.1", "fd00:da7a::1"))
+            )
+
+    def test_a_routed_member_gets_no_default_route(self, monkeypatch) -> None:
+        from node_agent import site_lan
+
+        fake = _RoutingFakeIPRoute(existing={"sp0000424200": 7})
+        monkeypatch.setattr(site_lan, "_in_namespace", lambda pid, fn: fn(fake))
+        site_lan._configure_member_pod(_host_port(("172.16.1.1/24", "fd00:da7a::1/64"), ()))
+
+        assert not [op for op in fake.ops if op[0] == "route"]
 
 
 class TestActuationIdempotency:

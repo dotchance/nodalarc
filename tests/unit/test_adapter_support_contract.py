@@ -34,12 +34,16 @@ _STUB_SUPPORT = {
                     rx_interval_ms=(50, 1000),
                     tx_interval_ms=(50, 1000),
                 ),
+                address_families=frozenset({"ipv4"}),
             ),
-            "static": RoutingProtocolSupport(),
+            "static": RoutingProtocolSupport(address_families=frozenset({"ipv4", "ipv6"})),
         }
     ),
     "host-only": AdapterSupport(),
 }
+
+_IPV4 = frozenset({"ipv4"})
+_DUAL = frozenset({"ipv4", "ipv6"})
 
 
 @pytest.fixture
@@ -124,7 +128,7 @@ def _check(**overrides):
         "capabilities": (),
         "bfd": BfdConfig(),
         "adapter": "stub",
-        "node_ids": ("sat-a", "sat-b"),
+        "members": {"sat-a": _IPV4, "sat-b": _IPV4},
     }
     arguments.update(overrides)
     return check_routing_members(**arguments)
@@ -178,9 +182,31 @@ def test_member_check_refuses_each_bfd_timer_outside_the_rendered_bounds(
 
 
 def test_member_check_names_a_bounded_sample_of_many_members(stub_declarations) -> None:
-    [feature] = _check(protocol="ospf", node_ids=tuple(f"sat-{index:02d}" for index in range(12)))
+    [feature] = _check(protocol="ospf", members={f"sat-{index:02d}": _IPV4 for index in range(12)})
 
     assert "12 nodes (sat-00, sat-01, sat-02, sat-03, sat-04 and 7 more)" in feature.message
+
+
+def test_member_check_refuses_a_family_the_adapter_does_not_route(stub_declarations) -> None:
+    [feature] = _check(members={"gs-a": _DUAL, "sat-a": _IPV4, "gs-b": _DUAL})
+
+    assert feature.category == FeatureCategory.ROUTING_ADDRESS_FAMILY
+    assert feature.value == "isis:ipv6"
+    assert "ipv6 routing on protocol 'isis'" in feature.message
+    # Only the members carrying the family are named.
+    assert "node(s) gs-a, gs-b" in feature.message
+    assert "sat-a" not in feature.message
+
+
+def test_member_check_accepts_every_family_the_adapter_routes(stub_declarations) -> None:
+    assert _check(protocol="static", members={"gs-a": _DUAL, "sat-a": _IPV4}) == []
+
+
+def test_routing_support_declares_known_address_families() -> None:
+    with pytest.raises(ValueError, match="declare the address families"):
+        RoutingProtocolSupport(address_families=frozenset())
+    with pytest.raises(ValueError, match="unknown address families"):
+        RoutingProtocolSupport(address_families=frozenset({"ipv4", "appletalk"}))
 
 
 def test_registered_support_combines_every_adapter_rendering_the_protocol(
@@ -200,31 +226,41 @@ def test_registered_support_combines_every_adapter_rendering_the_protocol(
         lambda: {
             "a": AdapterSupport(
                 routing={
-                    "isis": RoutingProtocolSupport(frozenset({"mpls", "segment_routing"}), wide),
-                    "ospf": RoutingProtocolSupport(frozenset({"mpls"})),
-                    "static": RoutingProtocolSupport(),
+                    "isis": RoutingProtocolSupport(
+                        frozenset({"mpls", "segment_routing"}), wide, address_families=_IPV4
+                    ),
+                    "ospf": RoutingProtocolSupport(frozenset({"mpls"}), address_families=_IPV4),
+                    "static": RoutingProtocolSupport(address_families=_IPV4),
                 }
             ),
             "b": AdapterSupport(
                 routing={
-                    "isis": RoutingProtocolSupport(frozenset({"traffic_engineering"}), narrow),
-                    "ospf": RoutingProtocolSupport(frozenset({"mpls"}), narrow),
+                    "isis": RoutingProtocolSupport(
+                        frozenset({"traffic_engineering"}), narrow, address_families=_DUAL
+                    ),
+                    "ospf": RoutingProtocolSupport(
+                        frozenset({"mpls"}), narrow, address_families=_IPV4
+                    ),
                 }
             ),
             "host-only": AdapterSupport(),
         },
     )
 
-    # Every capability some adapter renders; BFD bounds spanning both ranges.
+    # Every capability and family some adapter renders; BFD bounds spanning
+    # both ranges.
     assert registered_routing_support("isis") == RoutingProtocolSupport(
         frozenset({"mpls", "segment_routing", "traffic_engineering"}),
         BfdSupport(
             detect_multiplier=(1, 255), rx_interval_ms=(10, 5000), tx_interval_ms=(10, 9000)
         ),
+        address_families=_DUAL,
     )
     # One adapter renders OSPF BFD, so its range is offered.
-    assert registered_routing_support("ospf") == RoutingProtocolSupport(frozenset({"mpls"}), narrow)
-    assert registered_routing_support("static") == RoutingProtocolSupport()
+    assert registered_routing_support("ospf") == RoutingProtocolSupport(
+        frozenset({"mpls"}), narrow, address_families=_IPV4
+    )
+    assert registered_routing_support("static") == RoutingProtocolSupport(address_families=_IPV4)
     assert registered_routing_support("bgp") is None
 
 
@@ -240,7 +276,9 @@ def test_an_unused_adapter_never_narrows_registered_support(
         "registered_adapter_support",
         lambda: {
             "frr": FRR_SUPPORT,
-            "narrow": AdapterSupport(routing={"isis": RoutingProtocolSupport(frozenset())}),
+            "narrow": AdapterSupport(
+                routing={"isis": RoutingProtocolSupport(frozenset(), address_families=_IPV4)}
+            ),
         },
     )
 

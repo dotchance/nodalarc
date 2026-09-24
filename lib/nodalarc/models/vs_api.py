@@ -11,6 +11,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from nodalarc.body_frames import SupportedSurfaceBody
+from nodalarc.model_validation import AddressFamily
 from nodalarc.models.scheduler_ops import ActuationState
 
 
@@ -20,7 +21,7 @@ class NodeAddress(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     purpose: Literal["router_loopback", "site_interface", "site_prefix"]
-    family: Literal["ipv4", "ipv6"]
+    family: AddressFamily
     address: str
     interface: str | None = None
     metric: int | None = None

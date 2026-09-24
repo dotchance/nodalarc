@@ -20,13 +20,21 @@ FRR_BFD_SUPPORT = BfdSupport(
 )
 
 # Both IGP fragments render LDP-distributed MPLS, SR-MPLS prefix SIDs and
-# MPLS-TE router-level enablement.
+# MPLS-TE router-level enablement, each for IPv4.
 _IGP_CAPABILITIES = frozenset({"mpls", "segment_routing", "traffic_engineering"})
+
+# IS-IS routes IPv6 in its own topology (multi-topology), OSPF with OSPFv3
+# beside OSPFv2, and static routes carry either family.
+_BOTH_FAMILIES = frozenset({"ipv4", "ipv6"})
 
 FRR_SUPPORT = AdapterSupport(
     routing={
-        "isis": RoutingProtocolSupport(capabilities=_IGP_CAPABILITIES, bfd=FRR_BFD_SUPPORT),
-        "ospf": RoutingProtocolSupport(capabilities=_IGP_CAPABILITIES, bfd=FRR_BFD_SUPPORT),
-        "static": RoutingProtocolSupport(),
+        "isis": RoutingProtocolSupport(
+            capabilities=_IGP_CAPABILITIES, bfd=FRR_BFD_SUPPORT, address_families=_BOTH_FAMILIES
+        ),
+        "ospf": RoutingProtocolSupport(
+            capabilities=_IGP_CAPABILITIES, bfd=FRR_BFD_SUPPORT, address_families=_BOTH_FAMILIES
+        ),
+        "static": RoutingProtocolSupport(address_families=_BOTH_FAMILIES),
     }
 )

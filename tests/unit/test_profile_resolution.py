@@ -306,7 +306,11 @@ def _narrow_adapter_session(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, dom
         "registered_adapter_support",
         lambda: {
             "frr": FRR_SUPPORT,
-            "narrow": AdapterSupport(routing={"isis": RoutingProtocolSupport()}),
+            "narrow": AdapterSupport(
+                routing={
+                    "isis": RoutingProtocolSupport(address_families=frozenset({"ipv4", "ipv6"}))
+                }
+            ),
         },
     )
 

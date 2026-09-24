@@ -1,11 +1,13 @@
 # Copyright 2024-2026 .chance (dotchance)
 # Licensed under the Apache License, Version 2.0. See LICENSE file.
-"""Kernel requirements a routing domain places on its members' namespaces.
+"""Kernel requirements a node's session facts place on its namespace.
 
 These are substrate facts: any forwarding engine that runs a domain with an
 MPLS data plane needs the same kernel label table, whoever computes the
-labels. The Operator writes them into the wiring manifest and the Node Agent
-applies them.
+labels, and whether a node forwards a family follows from its role and the
+address families the session gives it, whatever engine it runs. The
+Operator writes them into the wiring manifest and the Node Agent applies
+them.
 """
 
 from __future__ import annotations
@@ -14,7 +16,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from nodalarc.models.resolved_session import ResolvedRoutingDomain
+    from nodalarc.models.resolved_session import ResolvedNode, ResolvedRoutingDomain
 
 # Kernel MPLS label table size for an MPLS data plane.
 _MPLS_PLATFORM_LABELS = "100000"
@@ -57,3 +59,24 @@ def routing_kernel_requirements(domain: ResolvedRoutingDomain) -> RoutingKernelR
         mpls_enable=any(name.startswith("net.mpls.") for name in sysctls),
         segment_routing=segment_routing,
     )
+
+
+def address_family_sysctls(node: ResolvedNode) -> dict[str, str]:
+    """Kernel settings for the address families the session gives one node.
+
+    Forwarding is stated for both families on every node: a routed node
+    forwards each family it carries and no other, and a host forwards
+    nothing. An IPv6 node skips duplicate address detection, so the
+    addresses the substrate and the routing engine assign are usable at
+    once; a node without IPv6 keeps the kernel's own setting.
+    """
+    families = node.address_families
+    routed = node.forwarding == "routed"
+    sysctls = {
+        "net.ipv4.ip_forward": "1" if routed and "ipv4" in families else "0",
+        "net.ipv6.conf.all.forwarding": "1" if routed and "ipv6" in families else "0",
+    }
+    if "ipv6" in families:
+        sysctls["net.ipv6.conf.all.dad_transmits"] = "0"
+        sysctls["net.ipv6.conf.default.dad_transmits"] = "0"
+    return sysctls

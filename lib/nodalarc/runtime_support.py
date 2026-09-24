@@ -12,11 +12,13 @@ The matrix is data, not code branches: ``resolve_session`` takes a
 supported sets, with no change to call sites.
 """
 
+from collections.abc import Mapping
 from enum import StrEnum
 
 from pydantic import BaseModel, ConfigDict, Field
 
 from adapters.registry import registered_adapter_support
+from nodalarc.model_validation import ADDRESS_FAMILIES, AddressFamily
 from nodalarc.models.segment_session import BfdConfig
 from nodalarc.workloads.adapter import BfdSupport, RoutingProtocolSupport
 
@@ -36,6 +38,7 @@ class FeatureCategory(StrEnum):
     ROUTING_PROTOCOL = "routing_protocol"
     ROUTING_CAPABILITY = "routing_capability"
     ROUTING_TIMER = "routing_timer"
+    ROUTING_ADDRESS_FAMILY = "routing_address_family"
     ADDRESSING_POOL = "addressing_pool"
     ADDRESS_ALLOCATION = "address_allocation"
     LINK_TOPOLOGY = "link_topology"
@@ -155,12 +158,12 @@ def _named_members(node_ids: tuple[str, ...]) -> str:
 def registered_routing_support(protocol: str) -> RoutingProtocolSupport | None:
     """What the registered adapters render for ``protocol``, combined.
 
-    The capabilities are every capability some adapter renders for the
-    protocol; the BFD bounds span the ranges of the adapters that render BFD
-    for it. Authoring surfaces offer these choices, so an adapter that a
-    session does not use never narrows them. Resolution decides for each
-    domain member against its own adapter. None when no registered adapter
-    renders the protocol.
+    The capabilities and address families are every capability and family
+    some adapter renders for the protocol; the BFD bounds span the ranges of
+    the adapters that render BFD for it. Authoring surfaces offer these
+    choices, so an adapter that a session does not use never narrows them.
+    Resolution decides for each domain member against its own adapter. None
+    when no registered adapter renders the protocol.
     """
     declared = [
         support.routing[protocol]
@@ -170,9 +173,10 @@ def registered_routing_support(protocol: str) -> RoutingProtocolSupport | None:
     if not declared:
         return None
     capabilities = frozenset().union(*(item.capabilities for item in declared))
+    address_families = frozenset().union(*(item.address_families for item in declared))
     bfd_declared = [item.bfd for item in declared if item.bfd is not None]
     if not bfd_declared:
-        return RoutingProtocolSupport(capabilities=capabilities)
+        return RoutingProtocolSupport(capabilities=capabilities, address_families=address_families)
     bounds = {
         name: (
             min(getattr(item, name)[0] for item in bfd_declared),
@@ -180,7 +184,11 @@ def registered_routing_support(protocol: str) -> RoutingProtocolSupport | None:
         )
         for name in _BFD_TIMER_FIELDS
     }
-    return RoutingProtocolSupport(capabilities=capabilities, bfd=BfdSupport(**bounds))
+    return RoutingProtocolSupport(
+        capabilities=capabilities,
+        bfd=BfdSupport(**bounds),
+        address_families=address_families,
+    )
 
 
 def check_routing_members(
@@ -190,21 +198,27 @@ def check_routing_members(
     capabilities: tuple[str, ...],
     bfd: BfdConfig,
     adapter: str,
-    node_ids: tuple[str, ...],
+    members: Mapping[str, frozenset[AddressFamily]],
 ) -> list[UnsupportedFeature]:
     """Check routing-domain members against their own adapter's declaration.
 
-    Every node in ``node_ids`` runs ``adapter``, so the adapter's declaration
-    decides for each of them. Each refusal names the domain, the adapter, the
-    unsupported requirement and the members.
+    ``members`` maps each member that runs ``adapter`` to the address
+    families it carries, so the adapter's declaration decides for each of
+    them. Each refusal names the domain, the adapter, the unsupported
+    requirement and the members it applies to: every member for a protocol,
+    capability or timer, and the members carrying the family for an address
+    family.
     """
     support = registered_adapter_support().get(adapter)
     if support is None:
         raise ValueError(f"workload adapter {adapter!r} is not registered")
-    gaps: list[tuple[FeatureCategory, str, str]] = []
+    every_member = tuple(members)
+    gaps: list[tuple[FeatureCategory, str, str, tuple[str, ...]]] = []
     protocol_support = support.routing.get(protocol)
     if protocol_support is None:
-        gaps.append((FeatureCategory.ROUTING_PROTOCOL, protocol, f"protocol {protocol!r}"))
+        gaps.append(
+            (FeatureCategory.ROUTING_PROTOCOL, protocol, f"protocol {protocol!r}", every_member)
+        )
     else:
         for capability in capabilities:
             if capability not in protocol_support.capabilities:
@@ -213,11 +227,17 @@ def check_routing_members(
                         FeatureCategory.ROUTING_CAPABILITY,
                         f"{protocol}:{capability}",
                         f"capability {capability!r} on protocol {protocol!r}",
+                        every_member,
                     )
                 )
         if bfd.enabled and protocol_support.bfd is None:
             gaps.append(
-                (FeatureCategory.ROUTING_TIMER, f"{protocol}:bfd", f"BFD on protocol {protocol!r}")
+                (
+                    FeatureCategory.ROUTING_TIMER,
+                    f"{protocol}:bfd",
+                    f"BFD on protocol {protocol!r}",
+                    every_member,
+                )
             )
         elif bfd.enabled:
             for name in _BFD_TIMER_FIELDS:
@@ -229,19 +249,30 @@ def check_routing_members(
                             FeatureCategory.ROUTING_TIMER,
                             f"bfd.{name}={value}",
                             f"BFD {name} {value}, outside the rendered range {low}..{high}",
+                            every_member,
                         )
                     )
-    members = _named_members(node_ids)
+        for family in ADDRESS_FAMILIES:
+            carriers = tuple(node_id for node_id, families in members.items() if family in families)
+            if carriers and family not in protocol_support.address_families:
+                gaps.append(
+                    (
+                        FeatureCategory.ROUTING_ADDRESS_FAMILY,
+                        f"{protocol}:{family}",
+                        f"{family} routing on protocol {protocol!r}",
+                        carriers,
+                    )
+                )
     return [
         UnsupportedFeature(
             category=category,
             value=value,
             message=(
                 f"routing domain {domain_id!r} requires {requirement}; workload adapter "
-                f"{adapter!r} does not render it for {members}"
+                f"{adapter!r} does not render it for {_named_members(node_ids)}"
             ),
         )
-        for category, value, requirement in gaps
+        for category, value, requirement, node_ids in gaps
     ]
 
 

@@ -22,6 +22,8 @@ from dataclasses import dataclass, field
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
+from nodalarc.model_validation import ADDRESS_FAMILIES, AddressFamily
+
 if TYPE_CHECKING:
     from collections.abc import Mapping
 
@@ -98,10 +100,22 @@ class RoutingProtocolSupport:
 
     ``capabilities`` are the domain capability names the adapter renders for
     the protocol. ``bfd`` is None when the adapter renders no BFD for it.
+    ``address_families`` are the IP address families the adapter routes
+    with the protocol; every declaration names them.
     """
 
     capabilities: frozenset[str] = frozenset()
     bfd: BfdSupport | None = None
+    address_families: frozenset[AddressFamily] = field(kw_only=True)
+
+    def __post_init__(self) -> None:
+        families = frozenset(self.address_families)
+        if not families:
+            raise ValueError("routing support must declare the address families it routes")
+        unknown = sorted(families - frozenset(ADDRESS_FAMILIES))
+        if unknown:
+            raise ValueError(f"routing support declares unknown address families {unknown}")
+        object.__setattr__(self, "address_families", families)
 
 
 @dataclass(frozen=True, slots=True)

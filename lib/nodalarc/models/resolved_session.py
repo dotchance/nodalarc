@@ -16,7 +16,7 @@ from typing import Literal, NamedTuple
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from nodalarc.body_frames import FrameBodyName, SupportedSurfaceBody
-from nodalarc.model_validation import NonEmptyReference
+from nodalarc.model_validation import ADDRESS_FAMILIES, AddressFamily, NonEmptyReference
 from nodalarc.models.catalog import MountRole
 from nodalarc.models.identity import IdentityMode
 from nodalarc.models.link_rules import (
@@ -208,7 +208,9 @@ class ResolvedEthernetSegment(BaseModel):
 
     `scope_id` names the owner (a site id, or a carrier's runtime node id),
     `segment_id` the owner's declared segment. Subnets and membership are
-    allocation facts the substrate wires verbatim.
+    allocation facts the substrate wires verbatim. Every segment is IPv4;
+    `ipv6_subnet` is present exactly when a member originates the segment
+    into IPv6, and then every member holds an IPv6 address on it.
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
@@ -216,7 +218,7 @@ class ResolvedEthernetSegment(BaseModel):
     scope_id: NonEmptyReference
     segment_id: NonEmptyReference
     ipv4_subnet: NonEmptyReference
-    ipv6_subnet: NonEmptyReference
+    ipv6_subnet: NonEmptyReference | None = None
     members: tuple[ResolvedSegmentMember, ...] = Field(min_length=1)
 
 
@@ -229,7 +231,8 @@ class ResolvedHostAttachment(BaseModel):
     configuration — the platform acting as the network's address authority,
     the way DHCP would — never a protocol-derived forwarding decision. The
     Node Agent applies these facts at wiring time so the host's containers
-    need no networking capability of their own.
+    need no networking capability of their own. The IPv6 address and
+    gateway are present exactly when the host's segment is IPv6.
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
@@ -237,7 +240,15 @@ class ResolvedHostAttachment(BaseModel):
     interface: NonEmptyReference
     ipv4: NonEmptyReference
     gateway_ipv4: NonEmptyReference
+    ipv6: NonEmptyReference | None = None
+    gateway_ipv6: NonEmptyReference | None = None
     gateway_node_id: NonEmptyReference
+
+    @model_validator(mode="after")
+    def _ipv6_paired(self) -> ResolvedHostAttachment:
+        if (self.ipv6 is None) != (self.gateway_ipv6 is None):
+            raise ValueError("host attachment ipv6 and gateway_ipv6 are present together")
+        return self
 
 
 class ResolvedWanInterface(BaseModel):
@@ -481,6 +492,30 @@ class ResolvedNode(BaseModel):
     # Complete resolved policy for ground stations; None for space nodes.
     ground_scheduling: GroundScheduling | None = None
     clock: SegmentClock = SegmentClock()
+
+    @property
+    def address_families(self) -> frozenset[AddressFamily]:
+        """The IP address families this node carries, as the session declares them.
+
+        A family is carried when the node holds a loopback or segment
+        address in it, or originates prefixes in it: a node originating an
+        IPv6 default route routes IPv6 without an IPv6 address of its own.
+        Every consumer that enables, configures or routes a family on a node
+        reads this one fact.
+        """
+        carried: set[AddressFamily] = set()
+        if self.interfaces is not None:
+            for address in (self.interfaces.lo0, *self.interfaces.ethernet.values()):
+                carried.update(
+                    family for family in ADDRESS_FAMILIES if getattr(address, family) is not None
+                )
+        if self.originated_prefixes is not None:
+            carried.update(
+                family
+                for family in ADDRESS_FAMILIES
+                if getattr(self.originated_prefixes, family) is not None
+            )
+        return frozenset(carried)
 
     @model_validator(mode="after")
     def _validate_terminals(self) -> ResolvedNode:
@@ -805,6 +840,48 @@ class ResolvedSession(BaseModel):
             if missing:
                 raise ValueError(
                     f"routing domain {domain.domain_id!r} references unknown node(s): {missing}"
+                )
+
+        # A segment's families are its members' families on it: an IPv6
+        # segment gives every member an IPv6 address, an IPv4-only segment
+        # gives none.
+        nodes_by_id = {n.node_id: n for n in self.nodes}
+        for segment in self.ethernet_segments:
+            for member in segment.members:
+                node = nodes_by_id.get(member.node_id)
+                address = (
+                    node.interfaces.ethernet.get(member.interface)
+                    if node is not None and node.interfaces is not None
+                    else None
+                )
+                if address is None:
+                    raise ValueError(
+                        f"segment {segment.scope_id}/{segment.segment_id} member "
+                        f"{member.node_id!r} has no address on {member.interface!r}"
+                    )
+                if address.ipv4 is None or (address.ipv6 is None) != (segment.ipv6_subnet is None):
+                    raise ValueError(
+                        f"segment {segment.scope_id}/{segment.segment_id} member "
+                        f"{member.node_id!r} holds address families that differ from "
+                        "the segment's"
+                    )
+        # A host attaches with exactly the addresses of its attached interface.
+        for node in self.nodes:
+            attachment = node.host_attachment
+            if attachment is None:
+                continue
+            address = (
+                node.interfaces.ethernet.get(attachment.interface)
+                if node.interfaces is not None
+                else None
+            )
+            if address is None or (address.ipv4, address.ipv6) != (
+                attachment.ipv4,
+                attachment.ipv6,
+            ):
+                raise ValueError(
+                    f"host node {node.node_id!r} attachment addresses differ from its "
+                    f"{attachment.interface!r} interface addresses"
                 )
         return self
 

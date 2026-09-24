@@ -44,7 +44,10 @@ from nodalarc.session_identity import require_resolved_session_run_id
 from nodalarc.session_nodes import available_session_nodes
 from nodalarc.session_validator import validate_session_readiness
 from nodalarc.substrate.manifest_contract import WIRING_MANIFEST_CONFIGMAP
-from nodalarc.substrate.routing_requirements import routing_kernel_requirements
+from nodalarc.substrate.routing_requirements import (
+    address_family_sysctls,
+    routing_kernel_requirements,
+)
 from nodalarc.substrate.wiring_status import WIRING_STATUS_CONFIGMAP
 
 from nodalarc_operator.session_pods import (
@@ -766,10 +769,14 @@ def _site_lans_for_manifest(
                     f"Kubernetes node {k3s_node!r} (hosting {member.node_id!r}) has "
                     "no InternalIP; segment wiring cannot be derived"
                 )
-            gateway = None
+            gateways: list[str] = []
             attachment = node.host_attachment
             if attachment is not None and attachment.interface == member.interface:
-                gateway = attachment.gateway_ipv4
+                gateways = [
+                    gateway
+                    for gateway in (attachment.gateway_ipv4, attachment.gateway_ipv6)
+                    if gateway is not None
+                ]
             members.append(
                 {
                     "node_id": member.node_id,
@@ -779,7 +786,7 @@ def _site_lans_for_manifest(
                         for address in (address_set.ipv4, address_set.ipv6)
                         if address is not None
                     ],
-                    **({"gateway": gateway} if gateway is not None else {}),
+                    "gateways": gateways,
                     "k3s_node": k3s_node,
                     "host_ip": host_ip,
                 }
@@ -848,14 +855,11 @@ def write_wiring_manifest(
     except kubernetes.client.rest.ApiException as e:
         if e.status != 404:
             raise
-    # Platform-level sysctls merged with the kernel requirements of each
-    # routed node's routing domain.
+    # Platform-level sysctls merged with each node's address-family settings
+    # and, for a routed node, the kernel requirements of its routing domain.
     base_sysctls = {
-        "net.ipv6.conf.all.forwarding": "1",
         "net.ipv4.conf.all.rp_filter": "0",
         "net.ipv4.conf.default.rp_filter": "0",
-        "net.ipv6.conf.all.dad_transmits": "0",
-        "net.ipv6.conf.default.dad_transmits": "0",
         # Unprivileged ICMP echo for every gid: workload containers run with
         # all capabilities dropped and NoNewPrivs, where a file-capability
         # ping cannot even exec. Datagram ICMP sockets need no capability.
@@ -879,7 +883,7 @@ def write_wiring_manifest(
                 )
             nodes[node.node_id] = {
                 "node_type": "host",
-                "sysctls": dict(base_sysctls),
+                "sysctls": {**base_sysctls, **address_family_sysctls(node)},
                 "isl_interfaces": [],
                 "gnd_interfaces": [],
                 "mpls_enable": False,
@@ -891,7 +895,11 @@ def write_wiring_manifest(
         requirements = routing_kernel_requirements(
             resolved_session.routing_domain_for(node.node_id)
         )
-        node_sysctls = {**base_sysctls, **requirements.sysctls}
+        node_sysctls = {
+            **base_sysctls,
+            **address_family_sysctls(node),
+            **requirements.sysctls,
+        }
         if node.kind == "satellite":
             # plane/slot are optional grid coordinates — individually
             # placed satellites (GEO longitude slots, state vectors) have

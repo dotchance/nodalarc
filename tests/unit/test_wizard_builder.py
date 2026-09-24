@@ -397,8 +397,14 @@ def test_an_unused_registered_adapter_does_not_narrow_the_wizard(
             # Registered, but no shipped profile selects it.
             "narrow": AdapterSupport(
                 routing={
-                    "isis": RoutingProtocolSupport(frozenset({"mpls"}), narrow_bfd),
-                    "ospf": RoutingProtocolSupport(frozenset()),
+                    "isis": RoutingProtocolSupport(
+                        frozenset({"mpls"}),
+                        narrow_bfd,
+                        address_families=frozenset({"ipv4", "ipv6"}),
+                    ),
+                    "ospf": RoutingProtocolSupport(
+                        frozenset(), address_families=frozenset({"ipv4", "ipv6"})
+                    ),
                 }
             ),
         },
@@ -435,8 +441,11 @@ def test_wizard_offers_only_what_some_registered_adapter_renders(monkeypatch) ->
                             rx_interval_ms=(50, 900),
                             tx_interval_ms=(60, 800),
                         ),
+                        address_families=frozenset({"ipv4", "ipv6"}),
                     ),
-                    "ospf": RoutingProtocolSupport(frozenset({"mpls"})),
+                    "ospf": RoutingProtocolSupport(
+                        frozenset({"mpls"}), address_families=frozenset({"ipv4", "ipv6"})
+                    ),
                 }
             )
         },
@@ -464,8 +473,16 @@ def test_wizard_refuses_an_extension_no_adapter_renders(monkeypatch, tmp_path: P
         {
             "frr": AdapterSupport(
                 routing={
-                    "isis": RoutingProtocolSupport(frozenset({"mpls"}), FRR_BFD_SUPPORT),
-                    "ospf": RoutingProtocolSupport(frozenset({"mpls"}), FRR_BFD_SUPPORT),
+                    "isis": RoutingProtocolSupport(
+                        frozenset({"mpls"}),
+                        FRR_BFD_SUPPORT,
+                        address_families=frozenset({"ipv4", "ipv6"}),
+                    ),
+                    "ospf": RoutingProtocolSupport(
+                        frozenset({"mpls"}),
+                        FRR_BFD_SUPPORT,
+                        address_families=frozenset({"ipv4", "ipv6"}),
+                    ),
                 }
             )
         },
@@ -483,8 +500,13 @@ def test_wizard_refuses_bfd_for_a_protocol_that_renders_none(monkeypatch, tmp_pa
         {
             "frr": AdapterSupport(
                 routing={
-                    "isis": RoutingProtocolSupport(frozenset({"mpls", "traffic_engineering"})),
-                    "ospf": RoutingProtocolSupport(frozenset({"mpls"})),
+                    "isis": RoutingProtocolSupport(
+                        frozenset({"mpls", "traffic_engineering"}),
+                        address_families=frozenset({"ipv4", "ipv6"}),
+                    ),
+                    "ospf": RoutingProtocolSupport(
+                        frozenset({"mpls"}), address_families=frozenset({"ipv4", "ipv6"})
+                    ),
                 }
             )
         },

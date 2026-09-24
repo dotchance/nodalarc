@@ -31,8 +31,10 @@ picked would let placement leak into protocol-visible behavior.
 from __future__ import annotations
 
 import ctypes
+import ipaddress
 import logging
 import os
+import socket
 import subprocess
 from dataclasses import dataclass
 
@@ -50,6 +52,11 @@ log = logging.getLogger(__name__)
 
 _CLONE_NEWNET = 0x40000000
 _ALL_ZEROS_MAC = "00:00:00:00:00:00"
+_AF = {4: socket.AF_INET, 6: socket.AF_INET6}
+# Per IP version, a destination outside the resolver's segment pools and the
+# cluster pod network: a host reaches it only through its default route, so
+# the lookup proves which gateway that route uses.
+_DEFAULT_ROUTE_PROBE = {4: "8.8.8.8", 6: "2001:4860:4860::8888"}
 
 # br_netfilter (bridge-nf-call-iptables=1, standard on Kubernetes hosts) runs
 # bridged frames through the host's iptables FORWARD chain, so a host-level
@@ -138,10 +145,11 @@ class MemberPort:
     # The kernel interface name inside the member's environment.
     interface: str
     addresses: tuple[str, ...]
-    # Host-attachment members only: the default-route target installed in
-    # the pod netns after addressing. None on routed members, whose
-    # forwarding system owns every routing decision.
-    gateway: str | None = None
+    # Host-attachment members only: the default-route targets installed in
+    # the pod netns after addressing, one per address family the host
+    # carries. Empty on routed members, whose forwarding system owns every
+    # routing decision.
+    gateways: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -213,7 +221,7 @@ def plan_site_lan(
                 pod_ifname=site_lan_member_pod_ifname(vni, index),
                 interface=interface,
                 addresses=addresses,
-                gateway=member.get("gateway"),
+                gateways=tuple(member["gateways"]),
             )
         )
 
@@ -372,22 +380,23 @@ def _configure_member_pod(port: MemberPort) -> None:
                     continue
                 raise
         ns_ipr.link("set", index=idx, state="up")
-        if port.gateway is not None:
-            # Host attachment: the platform installs the default route the
-            # way DHCP would — via the site's routed gateway, on-link over
-            # terr0. Verified by readback: an unproven route is a wiring
-            # failure, never a silent absence.
-            ns_ipr.route("replace", dst="default", gateway=port.gateway, oif=idx)
-            routes = ns_ipr.route("get", dst="8.8.8.8")
+        for gateway in port.gateways:
+            # Host attachment: the platform installs the default route of
+            # each family the way DHCP would, via the site's routed gateway,
+            # on-link over the segment interface. Verified by readback: an
+            # unproven route is a wiring failure, never a silent absence.
+            family = ipaddress.ip_address(gateway).version
+            ns_ipr.route("replace", dst="default", gateway=gateway, oif=idx, family=_AF[family])
+            routes = ns_ipr.route("get", dst=_DEFAULT_ROUTE_PROBE[family], family=_AF[family])
             via = {
                 attr[1]
                 for route in routes
                 for attr in route.get("attrs", ())
                 if attr[0] == "RTA_GATEWAY"
             }
-            if port.gateway not in via:
+            if gateway not in via:
                 raise RuntimeError(
-                    f"host default route via {port.gateway} on {port.node_id} "
+                    f"host default route via {gateway} on {port.node_id} "
                     "did not verify after install"
                 )
 

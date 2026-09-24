@@ -28,6 +28,7 @@ from nodalarc.catalog_refs import (
     TerminalRef,
 )
 from nodalarc.model_validation import (
+    AddressFamily,
     AwareTimestamp,
     EnvName,
     FiniteFloat,
@@ -327,7 +328,7 @@ class EnvValueFrom(_FrozenModel):
 
     tag: Identifier
     interface: Identifier
-    family: Literal["ipv4", "ipv6"]
+    family: AddressFamily
 
 
 class LiteralEnvEntry(_FrozenModel):

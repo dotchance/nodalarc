@@ -1,7 +1,8 @@
 {# Timer and BFD values are resolver-owned per-domain facts supplied by the
-   producer (routing.domains[].timers); the template carries no fallbacks. #}
+   producer (routing.domains[].timers); the template carries no fallbacks.
+   OSPFv2 routes IPv4; IPv6 nodes also run OSPFv3 (the ospf6d fragment). #}
 router ospf
-{% if redistribute_static %}
+{% if "ipv4" in redistribute_static %}
  redistribute static
 {% endif %}
  ospf router-id {{ ipv4_loopback }}
@@ -20,7 +21,7 @@ router ospf
  segment-routing prefix {{ ipv4_loopback }}/32 index {{ node_sid_index }}
 {% endif %}
  timers throttle spf {{ ospf_spf_delay }} {{ ospf_spf_initial_hold }} {{ ospf_spf_max_hold }}
-{% if default_route_originate %}
+{% if "ipv4" in default_route_families %}
  default-information originate always metric {{ default_route_metric }}
 {% endif %}
 exit
@@ -44,8 +45,7 @@ interface {{ iface.name }}
 exit
 {% endfor %}
 
-{% for segment in segment_interfaces %}
-{% if segment.igp_enabled %}
+{% for segment in segment_interfaces if "ipv4" in segment.igp_families %}
 interface {{ segment.name }}
  ip ospf area {{ area_id }}
 {% if not segment.igp_active %}
@@ -56,5 +56,4 @@ interface {{ segment.name }}
  ip ospf bfd profile NODAL
 {% endif %}
 exit
-{% endif %}
 {% endfor %}

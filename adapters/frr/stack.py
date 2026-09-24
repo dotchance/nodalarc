@@ -5,8 +5,9 @@
 The stack is the FRR adapter's selection for a domain: which FRR daemons run,
 which configuration fragments assemble into ``frr.conf`` and in what order,
 and the stack-level template inputs. It is derived from the domain's
-protocol, capabilities and BFD setting alone, so every node of a domain runs
-the same stack.
+protocol, capabilities and BFD setting alone. A member runs the stack's
+daemons and fragments for the address families the session gives it: the
+IPv6-only entries (OSPFv3 beside OSPFv2) run on IPv6 members only.
 
 Kernel requirements (MPLS labels, TTL propagation) are engine-neutral
 substrate facts and live in ``nodalarc.substrate.routing_requirements``.
@@ -34,10 +35,11 @@ _SRLB_END = 49999
 class ResolvedStack:
     """FRR's selection for one routing domain.
 
-    ``daemons`` are the FRR daemons the node runs, in the order they were
-    selected. ``fragments`` name the configuration templates that assemble
-    into ``frr.conf``, in assembly order. ``image``, ``mi_adapter`` and
-    ``max_compression`` are read by the measurement service only.
+    ``daemons`` are the FRR daemons the domain's members run, in the order
+    they were selected. ``fragments`` name the configuration templates that
+    assemble into ``frr.conf``, in assembly order. ``ipv6_only`` names the
+    daemons and fragments only IPv6 members run. ``image``, ``mi_adapter``
+    and ``max_compression`` are read by the measurement service only.
     """
 
     daemons: tuple[str, ...]
@@ -46,7 +48,23 @@ class ResolvedStack:
     image: str
     mi_adapter: str | None
     segment_routing: bool
+    ipv6_only: frozenset[str] = frozenset()
     max_compression: int = 10
+
+    def member_daemons(self, address_families: frozenset[str]) -> tuple[str, ...]:
+        """The daemons one member runs for the address families it carries."""
+        return self._for_families(self.daemons, address_families)
+
+    def member_fragments(self, address_families: frozenset[str]) -> tuple[str, ...]:
+        """The fragments one member's ``frr.conf`` assembles, in order."""
+        return self._for_families(self.fragments, address_families)
+
+    def _for_families(
+        self, selected: tuple[str, ...], address_families: frozenset[str]
+    ) -> tuple[str, ...]:
+        if "ipv6" in address_families:
+            return selected
+        return tuple(name for name in selected if name not in self.ipv6_only)
 
 
 def validate_sid_indices(stack: ResolvedStack, sid_by_node: Mapping[str, int]) -> None:
@@ -108,6 +126,7 @@ def resolve_domain_stack(domain: ResolvedRoutingDomain) -> ResolvedStack:
         # The BFD profile precedes the IGP interfaces that reference it.
         daemons.append("bfdd")
         fragments.append("bfdd")
+    ipv6_only: set[str] = set()
     if domain.protocol in {"isis", "ospf"}:
         igp_daemon = f"{domain.protocol}d"
         daemons.append(igp_daemon)
@@ -115,6 +134,11 @@ def resolve_domain_stack(domain: ResolvedRoutingDomain) -> ResolvedStack:
         # Every daemon logs to the IGP's log file in the integrated
         # configuration; the measurement adapters tail it.
         template_vars["log_file"] = f"/var/log/frr/{igp_daemon}.log"
+    if domain.protocol == "ospf":
+        # OSPFv2 routes IPv4 only; IPv6 members also run OSPFv3.
+        daemons.append("ospf6d")
+        fragments.append("ospf6d")
+        ipv6_only.add("ospf6d")
     segment_routing = "segment_routing" in capabilities
     if segment_routing:
         # SR-MPLS provides the MPLS data plane; LDP does not run.
@@ -145,4 +169,5 @@ def resolve_domain_stack(domain: ResolvedRoutingDomain) -> ResolvedStack:
         image="frr",
         mi_adapter={"isis": "frr_isis_adapter", "ospf": "frr_ospf_adapter"}.get(domain.protocol),
         segment_routing=segment_routing,
+        ipv6_only=frozenset(ipv6_only),
     )

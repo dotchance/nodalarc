@@ -721,7 +721,7 @@ def test_non_border_nodes_render_no_boundary_routes_or_redistribution() -> None:
     node_id = _first_satellite(resolved)
     vars_for_node = _vars_for(resolved, node_id)
     assert vars_for_node["boundary_static_routes"] == []
-    assert vars_for_node["redistribute_static"] is False
+    assert vars_for_node["redistribute_static"] == ()
     assert "redistribute" not in _frr_conf(resolved, node_id)
 
 
@@ -808,35 +808,6 @@ def test_bfd_covers_every_active_igp_interface_and_no_passive_one(
         "  transmit-interval 180",
         " exit",
     ]
-
-
-def test_bfd_on_an_active_igp_interface_without_ipv4_is_refused() -> None:
-    resolved = _simple_session_with_bfd("isis")
-    node = resolved.node_by_id("earth-us-co-denver-gw1")
-    assert node is not None and node.interfaces is not None
-    terr0 = node.interfaces.ethernet["terr0"]
-    v6_only = node.model_copy(
-        update={
-            "interfaces": node.interfaces.model_copy(
-                update={
-                    "ethernet": {
-                        **node.interfaces.ethernet,
-                        "terr0": terr0.model_copy(update={"ipv4": None}),
-                    }
-                }
-            )
-        }
-    )
-    session = resolved.model_copy(
-        update={
-            "nodes": tuple(
-                v6_only if item.node_id == node.node_id else item for item in resolved.nodes
-            )
-        }
-    )
-
-    with pytest.raises(ValueError, match="'terr0', which has no IPv4 address"):
-        _ADAPTER.render_node(v6_only, SessionContext(session))
 
 
 def _router_block(conf: str, header: str) -> list[str]:
@@ -1009,3 +980,198 @@ def test_traffic_engineering_without_a_terminal_rate_is_refused() -> None:
 
     with pytest.raises(ValueError, match="has no terminal transmit rate"):
         _ADAPTER.render_node(stripped, SessionContext(session))
+
+
+# IPv6 exactly as the session declares it. earth-leo-simple declares IPv6
+# only on its site LANs: the site routers carry both families and the
+# satellites carry IPv4 alone.
+
+
+def _simple_session() -> ResolvedSession:
+    return load_session_resolution_from_file(
+        Path("catalog/nodalarc/sessions/earth-leo-simple.yaml"), catalog=shipped_read_view()
+    ).resolved
+
+
+def _denver_router(resolved: ResolvedSession) -> str:
+    return next(
+        node.node_id for node in resolved.nodes if node.node_id.startswith("earth-us-co-denver-gw")
+    )
+
+
+def test_an_ipv4_only_router_renders_no_ipv6_at_all() -> None:
+    resolved = _simple_session()
+    satellite = resolved.node_by_id(_first_satellite(resolved))
+    assert satellite is not None and satellite.address_families == {"ipv4"}
+
+    conf = _frr_conf(resolved, satellite.node_id)
+
+    assert "ipv6" not in conf
+    assert "topology ipv6-unicast" not in conf
+    # Forwarding is substrate state, and no router advertisements are sent.
+    assert "forwarding" not in conf
+    assert "suppress-ra" not in conf
+
+
+def test_a_router_on_a_declared_ipv6_lan_routes_ipv6_in_its_own_topology() -> None:
+    resolved = _simple_session()
+    router_id = _denver_router(resolved)
+    router = resolved.node_by_id(router_id)
+    assert router is not None and router.interfaces is not None
+    assert router.address_families == {"ipv4", "ipv6"}
+    assert router.interfaces.lo0.ipv6 is None
+    terr0 = router.interfaces.ethernet["terr0"]
+    assert terr0.ipv6 is not None
+
+    conf = _frr_conf(resolved, router_id)
+
+    assert " topology ipv6-unicast" in _router_block(conf, "router isis NODAL")
+    for wan in router.wan_interfaces:
+        lines = _stanza_lines(conf, f"interface {wan.name}")
+        assert " ip router isis NODAL" in lines
+        assert " ipv6 router isis NODAL" in lines
+        # No IPv6 loopback is declared, so the WAN borrows none.
+        assert not [line for line in lines if line.startswith(" ipv6 address")]
+    lan = _stanza_lines(conf, "interface terr0")
+    assert f" ipv6 address {terr0.ipv6}" in lan
+    assert " ip router isis NODAL" in lan
+    assert " ipv6 router isis NODAL" in lan
+    # The loopback holds no IPv6 address, so it joins IPv6 routing nowhere.
+    assert " ipv6 router isis NODAL" not in _stanza_lines(conf, "interface lo")
+
+
+def test_default_origination_renders_per_declared_family() -> None:
+    from nodalarc.configuration_yaml import load_configuration_yaml
+
+    # The shipped sites originate an IPv4 default only.
+    simple = _simple_session()
+    plain = _router_block(_frr_conf(simple, _denver_router(simple)), "router isis NODAL")
+    assert " default-information originate ipv4 level-2 always metric 100" in plain
+    assert not [line for line in plain if "originate ipv6" in line]
+
+    raw = load_configuration_yaml(
+        Path("catalog/nodalarc/sessions/earth-leo-simple.yaml").read_text(encoding="utf-8")
+    )
+    ground = next(segment for segment in raw["segments"] if segment["id"] == "ground")
+    ground["apply"] = {
+        **(ground.get("apply") or {}),
+        "originated_prefixes": {"ipv6": ["default"]},
+    }
+    resolved = resolve_session(raw, source_context=SourceContext(origin="test.frr.ipv6"))
+
+    router = _router_block(_frr_conf(resolved, _denver_router(resolved)), "router isis NODAL")
+
+    assert " default-information originate ipv4 level-2 always metric 100" in router
+    assert " default-information originate ipv6 level-2 always metric 100" in router
+
+
+def test_ospf_runs_ospfv3_beside_ospfv2_on_ipv6_routers_only() -> None:
+    resolved = _simple_session_with_bfd("ospf")
+    satellite_id = _first_satellite(resolved)
+    router_id = _denver_router(resolved)
+    router = resolved.node_by_id(router_id)
+    assert router is not None
+
+    satellite_files = _files(resolved, satellite_id)
+    assert "ospf6d" not in _enabled_daemons(satellite_files["daemons"])
+    assert "ospf6" not in satellite_files["frr.conf"]
+
+    files = _files(resolved, router_id)
+    assert {"ospfd", "ospf6d", "bfdd"} <= _enabled_daemons(files["daemons"])
+    conf = files["frr.conf"]
+    area = _vars_for(resolved, router_id)["area_id"]
+    ospf6 = _router_block(conf, "router ospf6")
+    assert f" ospf6 router-id {_vars_for(resolved, router_id)['ipv4_loopback']}" in ospf6
+    for wan in router.wan_interfaces:
+        lines = _stanza_lines(conf, f"interface {wan.name}")
+        assert " ipv6 ospf6 network point-to-point" in lines
+        assert " ipv6 ospf6 area 0.0.0.0" in lines
+        assert " ipv6 ospf6 cost 10" in lines
+        assert " ipv6 ospf6 bfd profile NODAL" in lines
+        assert [line for line in lines if line.startswith(" ipv6 ospf6 hello-interval")]
+        assert [line for line in lines if line.startswith(" ipv6 ospf6 dead-interval")]
+    # Denver wires two routers to one LAN, so the LAN runs OSPFv3 actively.
+    lan = _stanza_lines(conf, "interface terr0")
+    assert f" ipv6 ospf6 area {area}" in lan
+    assert " ipv6 ospf6 passive" not in lan
+    assert " ipv6 ospf6 bfd profile NODAL" in lan
+    assert f" ip ospf area {area}" in lan
+
+
+def _reachability_with_ipv6_loopbacks() -> ResolvedSession:
+    """The cislunar session with an IPv6 loopback declared beside every IPv4 one."""
+    from nodalarc.configuration_yaml import load_configuration_yaml
+
+    raw = load_configuration_yaml(
+        Path("catalog/nodalarc/sessions/earth-leo-heo-geo-luna-reachability.yaml").read_text(
+            encoding="utf-8"
+        )
+    )
+    [ipv4] = raw["addressing"]["loopbacks"]
+    raw["addressing"]["loopbacks"].append(
+        {
+            "id": "node_loopbacks_v6",
+            "applies_to": ipv4["applies_to"],
+            "ipv6_pool": "fd00:6e1::/64",
+            "prefix_length": 128,
+        }
+    )
+    return resolve_session(raw, source_context=SourceContext(origin="test.frr.ipv6"))
+
+
+def _luna_border(resolved: ResolvedSession) -> str:
+    boundary = resolved.routing.boundaries[0]
+    luna_domain = next(d for d in resolved.routing_domains if d.domain_id == "luna_domain")
+    return next(
+        node_id
+        for candidate in resolved.link_candidates
+        if candidate.rule_id == boundary.over
+        for node_id in (candidate.node_a, candidate.node_b)
+        if node_id in luna_domain.node_ids
+    )
+
+
+def test_ipv6_boundary_exports_install_over_an_ipv6_seed_and_redistribute() -> None:
+    resolved = _reachability_with_ipv6_loopbacks()
+    border = _luna_border(resolved)
+    vars_for_node = _vars_for(resolved, border)
+    seeds = [
+        entry["peer_loopback_ipv6"]
+        for entry in vars_for_node["wan_interfaces"]
+        if entry["static_only"]
+    ]
+    assert seeds and all(seeds)
+    ipv6_routes = [r for r in vars_for_node["boundary_static_routes"] if r["family"] == "ipv6"]
+    assert ipv6_routes
+    assert {route["via"] for route in ipv6_routes} <= set(seeds)
+    assert vars_for_node["redistribute_static"] == ("ipv4", "ipv6")
+
+    conf = _frr_conf(resolved, border)
+    for seed in seeds:
+        assert f"ipv6 route {seed}/128 " in conf
+    assert f"ipv6 route {ipv6_routes[0]['prefix']} {ipv6_routes[0]['via']}" in conf
+    router = _router_block(conf, "router isis NODAL")
+    assert " redistribute ipv4 static level-2" in router
+    assert " redistribute ipv6 static level-2" in router
+    # The unnumbered boundary link borrows the IPv6 loopback, so the peer's
+    # seed next hop is on-link.
+    loopback = vars_for_node["ipv6_loopback"]
+    static_link = next(e["name"] for e in vars_for_node["wan_interfaces"] if e["static_only"])
+    assert f" ipv6 address {loopback}/128" in _stanza_lines(conf, f"interface {static_link}")
+
+
+def test_no_ipv6_static_route_renders_where_no_ipv6_loopback_is_declared() -> None:
+    resolved = load_session_resolution_from_file(
+        Path("catalog/nodalarc/sessions/earth-leo-heo-geo-luna-reachability.yaml"),
+        catalog=shipped_read_view(),
+    ).resolved
+
+    for node in resolved.nodes:
+        if node.forwarding != "routed":
+            continue
+        vars_for_node = _vars_for(resolved, node.node_id)
+        assert not [r for r in vars_for_node["boundary_static_routes"] if r["family"] == "ipv6"]
+        assert "ipv6" not in vars_for_node["redistribute_static"]
+        assert all(
+            entry.get("peer_loopback_ipv6") is None for entry in vars_for_node["wan_interfaces"]
+        )

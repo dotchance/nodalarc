@@ -502,9 +502,6 @@ def build_step_context(
     sat_ground_terminal_indices_by_body: dict[str, dict[str, tuple[int, ...]]] = {}
     ignored_capacity_fields: list[str] = []
     require_ground_physics = ground_link_model == "terminal_physics" and has_ground_stations
-    terminal_pool_link_model: Literal["geometry_only", "terminal_physics"] = (
-        "terminal_physics" if require_ground_physics else "geometry_only"
-    )
     for sat in satellites:
         nid = satellite_node_id(sat, addressing)
         sat_isl_terminals[nid] = sat.isl_terminal_count
@@ -514,7 +511,6 @@ def build_step_context(
                 satellite_terminal_index_pools_by_target_body(
                     tuple(sat.ground_terminals),
                     total_count=sat.ground_terminal_count,
-                    ground_link_model=terminal_pool_link_model,
                 )
             )
         if has_ground_stations and sat.ground_terminals:
@@ -530,7 +526,6 @@ def build_step_context(
                     tuple(sat.ground_terminals),
                     profile_id=f"{nid}.ground_terminals",
                     endpoint="satellite",
-                    require_constraints=True,
                 )
         constraints_by_iface: dict[str, IslTerminalConstraints] = {}
         for idx in range(sat.isl_terminal_count):
@@ -611,7 +606,6 @@ def build_step_context(
                     tuple(effective_terminals),
                     profile_id=f"{node_id}.terminals",
                     endpoint="ground",
-                    require_constraints=True,
                 )
             selection_policy = station_scheduling.selection_policy.model_copy(deep=True)
             handover_policy = _normalize_handover_policy(station_scheduling.handover_policy)

@@ -21,6 +21,7 @@ from nodalarc.models.resolved_session import (
     ResolvedSession,
     ResolvedSurfacePosition,
     ResolvedTerminalBlock,
+    ResolvedWanInterface,
     SidBlock,
     SourceContext,
 )
@@ -124,6 +125,9 @@ def _terminal(
         count=count,
         tracking_capacity=1,
         max_range_km=5000.0,
+        min_elevation_deg=0.0,
+        field_of_regard_deg=180.0 if role == "access" else 360.0,
+        tracking_rate_deg_s=3.0,
         transmit_mbps=10000.0,
         receive_mbps=10000.0,
         boresight=boresight,
@@ -338,6 +342,31 @@ def test_duplicate_node_id_rejected() -> None:
             routing_domains=(),
             sid_blocks=(),
         )
+
+
+def test_a_wan_interface_naming_a_terminal_outside_the_inventory_is_refused() -> None:
+    def node(terminal_id: str) -> ResolvedNode:
+        return ResolvedNode(
+            forwarding="routed",
+            profile="nodalarc:profiles/frr-router.yaml",
+            profile_level="node_definition",
+            node_id="n",
+            local_node_id="n",
+            segment_id="leo",
+            namespace="leo",
+            kind="satellite",
+            frame_id="earth",
+            central_body="earth",
+            terminal_inventory=(_terminal("n"),),
+            wan_interfaces=(
+                ResolvedWanInterface(name="isl0", owner_node_id="n", terminal_id=terminal_id),
+            ),
+            orbit=_orbit(),
+        )
+
+    assert node("isl_optical").wan_terminal("isl0").terminal_id == "isl_optical"
+    with pytest.raises(ValidationError, match="not in its terminal inventory"):
+        node("isl_rf")
 
 
 def test_terminal_owner_mismatch_rejected() -> None:
@@ -728,32 +757,6 @@ def test_resolved_terminal_requires_its_tracking_capacity() -> None:
             count=1,
             source_ref="test:t",
         )
-
-
-def test_resolved_terminal_declares_both_rates_or_neither() -> None:
-    with pytest.raises(ValidationError, match="one of transmit and receive rates"):
-        ResolvedTerminalBlock(
-            terminal_id="t",
-            owner_node_id="n",
-            endpoint_role="crosslink",
-            medium="rf",
-            count=1,
-            tracking_capacity=1,
-            transmit_mbps=2.0,
-            source_ref="test:t",
-        )
-    block = ResolvedTerminalBlock(
-        terminal_id="t",
-        owner_node_id="n",
-        endpoint_role="crosslink",
-        medium="rf",
-        count=1,
-        tracking_capacity=1,
-        transmit_mbps=2.0,
-        receive_mbps=100.0,
-        source_ref="test:t",
-    )
-    assert (block.transmit_mbps, block.receive_mbps) == (2.0, 100.0)
 
 
 def test_routing_areas_are_resolved_for_area_protocol_routers_only() -> None:

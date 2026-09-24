@@ -631,12 +631,6 @@ describe("beam footprints read the terminals, never a default", () => {
     expect(accessBeamElevationDeg(node)).toBe(30);
   });
 
-  it("an access terminal with no declared floor serves to the horizon", () => {
-    const node = mutableClone(world.nodes.find((n) => n.segment_id === "shell")!);
-    for (const block of node.terminal_inventory) block.min_elevation_deg = null;
-    expect(accessBeamElevationDeg(node)).toBe(0);
-  });
-
   it("no access terminal means no beam, not an invented one", () => {
     const node = mutableClone(world.nodes.find((n) => n.segment_id === "shell")!);
     node.terminal_inventory = node.terminal_inventory.filter(

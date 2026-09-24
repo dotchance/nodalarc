@@ -24,6 +24,7 @@ def _isl_terminal(*, count: int) -> IslTerminal:
         count=count,
         max_range_km=5000.0,
         max_tracking_rate_deg_s=3.0,
+        field_of_regard_deg=360.0,
     )
 
 

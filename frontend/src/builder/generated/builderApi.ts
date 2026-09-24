@@ -1855,7 +1855,7 @@ export interface ResolvedSurfacePosition {
   readonly alt_m: number;
 }
 
-/** Materialized terminal truth for one terminal block on one node. Built from the resolved satellite_type (satellites) or station/ground-set terminal config (ground stations). Consumers read this; they do not reload the source file. ``tracking_capacity`` is the terminal's simultaneous-link capacity; every catalog terminal declares it, so every block carries it. Optional fields are ``None`` only when the source legitimately omits them; the resolver fails (never invents a default) when a value is required for a supported runtime feature. */
+/** Materialized terminal truth for one terminal block on one node. Built from the resolved satellite_type (satellites) or station/ground-set terminal config (ground stations). Consumers read this; they do not reload the source file. The catalog requires every physical fact a block carries (capacity, range, elevation limit, field of regard, tracking rate and both rates), so every block carries them. ``boresight`` exists exactly on access terminals. */
 export interface ResolvedTerminalBlock {
   readonly terminal_id: string;
   readonly owner_node_id: string;
@@ -1865,12 +1865,12 @@ export interface ResolvedTerminalBlock {
   readonly link_role: string | null;
   readonly count: number;
   readonly tracking_capacity: number;
-  readonly max_range_km: number | null;
-  readonly min_elevation_deg: number | null;
-  readonly field_of_regard_deg: number | null;
-  readonly tracking_rate_deg_s: number | null;
-  readonly transmit_mbps: number | null;
-  readonly receive_mbps: number | null;
+  readonly max_range_km: number;
+  readonly min_elevation_deg: number;
+  readonly field_of_regard_deg: number;
+  readonly tracking_rate_deg_s: number;
+  readonly transmit_mbps: number;
+  readonly receive_mbps: number;
   readonly boresight: TerminalBoresight | SatGroundTerminalBoresight | null;
   readonly source_ref: string;
 }

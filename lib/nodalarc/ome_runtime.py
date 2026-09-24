@@ -62,7 +62,7 @@ class IslTerminal(BaseModel):
     role: Literal["intra-plane", "cross-plane"] | None = None
     max_range_km: float = Field(gt=0)
     max_tracking_rate_deg_s: float = Field(gt=0)
-    field_of_regard_deg: float = Field(default=360.0, ge=0, le=360)
+    field_of_regard_deg: float = Field(gt=0, le=360)
 
 
 class SatelliteGroundTerminal(BaseModel):
@@ -73,10 +73,10 @@ class SatelliteGroundTerminal(BaseModel):
     type: str
     count: int = Field(gt=0)
     interface_indices: tuple[int, ...] = Field(min_length=1)
-    max_range_km: float | None = Field(default=None, gt=0)
-    field_of_regard_deg: float | None = Field(default=None, gt=0, le=180)
-    max_tracking_rate_deg_s: float | None = Field(default=None, gt=0)
-    boresight: SatGroundTerminalBoresight | None = None
+    max_range_km: float = Field(gt=0)
+    field_of_regard_deg: float = Field(gt=0, le=180)
+    max_tracking_rate_deg_s: float = Field(gt=0)
+    boresight: SatGroundTerminalBoresight
 
     @model_validator(mode="after")
     def _interface_count_matches(self):
@@ -99,10 +99,10 @@ class GroundTerminal(BaseModel):
     count: int = Field(gt=0)
     interface_indices: tuple[int, ...] = Field(min_length=1)
     tracking_capacity: int = Field(gt=0)
-    max_range_km: float | None = Field(default=None, gt=0)
-    field_of_regard_deg: float | None = Field(default=None, gt=0, le=180)
-    max_tracking_rate_deg_s: float | None = Field(default=None, gt=0)
-    boresight: TerminalBoresight | None = None
+    max_range_km: float = Field(gt=0)
+    field_of_regard_deg: float = Field(gt=0, le=180)
+    max_tracking_rate_deg_s: float = Field(gt=0)
+    boresight: TerminalBoresight
 
     @model_validator(mode="after")
     def _interface_count_matches(self):

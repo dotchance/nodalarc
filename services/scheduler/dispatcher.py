@@ -1501,13 +1501,6 @@ class Dispatcher:
         expected_down: dict[tuple[str, str], ActiveLinkInfo],
         sim_time: datetime,
     ) -> ActuationResult:
-        # Overlay the commanded netem from kernel-actual bookkeeping: desired
-        # infos come from the latest OME snapshot and carry no dispatch
-        # provenance, but the kernel can only be expected to hold what was
-        # last COMMANDED for the pair.
-        expected_up = {
-            pair: self._info_with_commanded_netem(pair, info) for pair, info in expected_up.items()
-        }
         result = await verify_ground_kernel_inventory(
             gs_id=gs_id,
             expected_up=expected_up,
@@ -1573,26 +1566,6 @@ class Dispatcher:
                         reason=summary,
                     ),
                 )
-
-    def _info_with_commanded_netem(
-        self, pair: tuple[str, str], info: ActiveLinkInfo
-    ) -> ActiveLinkInfo:
-        if info.netem_one_way_ms is not None:
-            return info
-        actual = self._actual_links.get(pair)
-        if actual is None or actual.netem_one_way_ms is None:
-            return info
-        return ActiveLinkInfo(
-            info.interface_a,
-            info.interface_b,
-            info.latency_ms,
-            link_type=info.link_type,
-            range_km=info.range_km,
-            authority_sim_time=info.authority_sim_time,
-            authority_source=info.authority_source,
-            authority_sequence=info.authority_sequence,
-            netem_one_way_ms=actual.netem_one_way_ms,
-        )
 
     async def _mark_gs_clean(
         self,

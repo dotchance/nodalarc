@@ -1309,10 +1309,7 @@ def test_inventory_entries_assert_commanded_netem_not_live_recomputation() -> No
     """Kernel proofs must use the netem value that was COMMANDED at dispatch.
     Recomputing compensation at proof time reads live substrate RTT, and that
     measurement drift was reported as kernel divergence - false dirty."""
-    from scheduler.dispatch_actuator import (
-        NETEM_NOT_ASSERTED,
-        _ground_inventory_entries_for_pair,
-    )
+    from scheduler.dispatch_actuator import _ground_inventory_entries_for_pair
 
     class _Locator:
         def link_locality(self, a, b):
@@ -1339,42 +1336,18 @@ def test_inventory_entries_assert_commanded_netem_not_live_recomputation() -> No
     entry = entries["agent-a"][0]
     assert entry.latency_ms == 3.25
 
+    # Only commanded links are proven up; one with no commanded delay is a
+    # Scheduler bookkeeping fault, refused before any command is built.
     bare = ActiveLinkInfo("term0", "gnd0", 12.0, link_type="ground")
-    entries, _acks = _ground_inventory_entries_for_pair(
-        interface_rates=ANY_INTERFACE_RATES,
-        pair=("gs-multi", "sat-old"),
-        info=bare,
-        expected_admin_up=True,
-        locator=_Locator(),
-        gs_capacities={"gs-multi": 2},
-    )
-    assert entries["agent-a"][0].latency_ms == NETEM_NOT_ASSERTED
-
-
-def test_verify_overlays_commanded_netem_from_kernel_actual_bookkeeping() -> None:
-    """Desired infos come from the latest OME snapshot and carry no dispatch
-    provenance; the proof must inherit the commanded netem from the actual
-    link the scheduler dispatched."""
-    d = _make_dispatcher_with_two_terminal_gs()
-    pair = ("gs-multi", "sat-old")
-    actual = _info()
-    actual.netem_one_way_ms = 7.5
-    d._actual_links[pair] = actual
-
-    desired = _info()
-    assert desired.netem_one_way_ms is None
-    patched = d._info_with_commanded_netem(pair, desired)
-    assert patched.netem_one_way_ms == 7.5
-    assert patched.latency_ms == desired.latency_ms
-
-    # A pair with its own commanded value keeps it.
-    own = _info()
-    own.netem_one_way_ms = 2.0
-    assert d._info_with_commanded_netem(pair, own).netem_one_way_ms == 2.0
-
-    # No actual bookkeeping -> unchanged (proof sends the do-not-assert sentinel).
-    other = ("gs-multi", "sat-new")
-    assert d._info_with_commanded_netem(other, desired).netem_one_way_ms is None
+    with pytest.raises(ValueError, match="no commanded delay"):
+        _ground_inventory_entries_for_pair(
+            interface_rates=ANY_INTERFACE_RATES,
+            pair=("gs-multi", "sat-old"),
+            info=bare,
+            expected_admin_up=True,
+            locator=_Locator(),
+            gs_capacities={"gs-multi": 2},
+        )
 
 
 def test_audit_through_real_inventory_path_keeps_clean_on_transport_failure() -> None:
@@ -1385,7 +1358,9 @@ def test_audit_through_real_inventory_path_keeps_clean_on_transport_failure() ->
     unreachable tests bypass - the merge precedence hole lived here."""
     d = _make_dispatcher_with_two_terminal_gs()
     pair = ("gs-multi", "sat-old")
-    d._actual_links[pair] = _info()
+    commanded = _info()
+    commanded.netem_one_way_ms = 3.0
+    d._actual_links[pair] = commanded
     d._js.publish = AsyncMock()
 
     failing_stub = MagicMock()

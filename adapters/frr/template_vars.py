@@ -260,32 +260,12 @@ def _domain_facts(
     return facts
 
 
-def _transmit_mbps(node: ResolvedNode, interface: str, *, purpose: str) -> float:
-    """The transmit rate of the terminal behind one WAN interface.
-
-    This is what this end can send over the link, whatever terminal the peer
-    carries.
-    """
-    terminal_id = next(
-        (wan.terminal_id for wan in node.wan_interfaces if wan.name == interface), None
-    )
-    block = next(
-        (item for item in node.terminal_inventory if item.terminal_id == terminal_id), None
-    )
-    if block is None or block.transmit_mbps is None:
-        raise ValueError(
-            f"node {node.node_id!r} interface {interface!r} has no terminal transmit rate "
-            f"for its {purpose}"
-        )
-    return block.transmit_mbps
-
-
 def _igp_metric(node: ResolvedNode, interface: str, protocol: str) -> int:
     """A fixed link's IGP metric from its own terminal's transmit rate.
 
     A metric above what the protocol accepts is refused rather than clipped.
     """
-    transmit = _transmit_mbps(node, interface, purpose="IGP metric")
+    transmit = node.wan_terminal(interface).transmit_mbps
     metric = max(_MINIMUM_IGP_METRIC, int(_REFERENCE_BANDWIDTH_MBPS / transmit))
     maximum = _MAXIMUM_IGP_METRIC[protocol]
     if metric > maximum:
@@ -302,7 +282,7 @@ def _te_link_params(node: ResolvedNode, interface: str) -> dict[str, str]:
     Maximum bandwidth is the terminal's transmit rate. FRR takes bytes per
     second.
     """
-    transmit_mbps = _transmit_mbps(node, interface, purpose="traffic-engineering link parameters")
+    transmit_mbps = node.wan_terminal(interface).transmit_mbps
     max_bw = transmit_mbps * 1_000_000 / 8
     return {
         "max_bw": f"{max_bw:g}",

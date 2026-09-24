@@ -113,6 +113,7 @@ class TestTrackingRateCalibration:
             count=4,
             max_range_km=5400,
             max_tracking_rate_deg_s=3.0,
+            field_of_regard_deg=360.0,
         )
 
         assert terminal.max_tracking_rate_deg_s == 3.0

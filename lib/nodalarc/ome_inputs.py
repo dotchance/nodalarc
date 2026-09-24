@@ -545,13 +545,9 @@ def _isl_terminal(block: ResolvedTerminalBlock) -> IslTerminal:
         type=block.source_terminal_id or block.medium,
         count=block.count,
         role=None,
-        max_range_km=_required(block.max_range_km, block, "max_range_km"),
-        max_tracking_rate_deg_s=_required(
-            block.tracking_rate_deg_s,
-            block,
-            "tracking_rate_deg_s",
-        ),
-        field_of_regard_deg=_required(block.field_of_regard_deg, block, "field_of_regard_deg"),
+        max_range_km=block.max_range_km,
+        max_tracking_rate_deg_s=block.tracking_rate_deg_s,
+        field_of_regard_deg=block.field_of_regard_deg,
     )
 
 
@@ -563,17 +559,9 @@ def _satellite_ground_terminal(
         type=block.medium,
         count=block.count,
         interface_indices=selection.interface_indices,
-        max_range_km=_required(block.max_range_km, block, "max_range_km"),
-        field_of_regard_deg=_required(
-            block.field_of_regard_deg,
-            block,
-            "field_of_regard_deg",
-        ),
-        max_tracking_rate_deg_s=_required(
-            block.tracking_rate_deg_s,
-            block,
-            "tracking_rate_deg_s",
-        ),
+        max_range_km=block.max_range_km,
+        field_of_regard_deg=block.field_of_regard_deg,
+        max_tracking_rate_deg_s=block.tracking_rate_deg_s,
         boresight=block.boresight,
     )
 
@@ -586,27 +574,11 @@ def _ground_terminal(selection: ResolvedAccessTerminalSelection) -> GroundTermin
         count=block.count,
         interface_indices=selection.interface_indices,
         tracking_capacity=block.tracking_capacity,
-        max_range_km=_required(block.max_range_km, block, "max_range_km"),
-        field_of_regard_deg=_required(
-            block.field_of_regard_deg,
-            block,
-            "field_of_regard_deg",
-        ),
-        max_tracking_rate_deg_s=_required(
-            block.tracking_rate_deg_s,
-            block,
-            "tracking_rate_deg_s",
-        ),
+        max_range_km=block.max_range_km,
+        field_of_regard_deg=block.field_of_regard_deg,
+        max_tracking_rate_deg_s=block.tracking_rate_deg_s,
         boresight=block.boresight,
     )
-
-
-def _required(value: float | None, block: ResolvedTerminalBlock, field: str) -> float:
-    if value is None:
-        raise ValueError(
-            f"resolved terminal {block.owner_node_id}:{block.terminal_id} is missing {field}"
-        )
-    return float(value)
 
 
 # Effective ground elevation masks are resolved-session truth

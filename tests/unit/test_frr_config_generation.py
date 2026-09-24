@@ -1030,34 +1030,6 @@ def test_link_parameters_only_on_traffic_engineering_igp_links() -> None:
     assert _link_params(te_conf, "lo") == []
 
 
-def test_traffic_engineering_without_a_terminal_rate_is_refused() -> None:
-    resolved = _tdrs_session({"traffic_engineering": {}})
-    node = resolved.node_by_id("geo-tdrs-041w")
-    stripped = node.model_copy(
-        update={
-            "terminal_inventory": tuple(
-                block.model_copy(update={"transmit_mbps": None, "receive_mbps": None})
-                for block in node.terminal_inventory
-            )
-        }
-    )
-    session = resolved.model_copy(
-        update={
-            "nodes": tuple(
-                stripped if item.node_id == node.node_id else item for item in resolved.nodes
-            )
-        }
-    )
-
-    with pytest.raises(ValueError, match="has no terminal transmit rate"):
-        _ADAPTER.render_node(stripped, SessionContext(session))
-
-
-# IPv6 exactly as the session declares it. earth-leo-simple declares IPv6
-# only on its site LANs: the site routers carry both families and the
-# satellites carry IPv4 alone.
-
-
 def _simple_session() -> ResolvedSession:
     return load_session_resolution_from_file(
         Path("catalog/nodalarc/sessions/earth-leo-simple.yaml"), catalog=shipped_read_view()

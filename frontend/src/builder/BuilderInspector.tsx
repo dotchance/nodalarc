@@ -114,18 +114,10 @@ export function BuilderInspector({ node, ephemeris }: BuilderInspectorProps) {
             <div className="builder-terminal-head">
               {block.terminal_id} · {block.endpoint_role} · {block.medium} ×{block.count}
             </div>
-            {block.max_range_km !== null && (
-              <KeyValueRow label="max range">{block.max_range_km.toFixed(0)} km</KeyValueRow>
-            )}
-            {block.transmit_mbps !== null && (
-              <KeyValueRow label="transmit">{block.transmit_mbps.toFixed(0)} Mbps</KeyValueRow>
-            )}
-            {block.receive_mbps !== null && (
-              <KeyValueRow label="receive">{block.receive_mbps.toFixed(0)} Mbps</KeyValueRow>
-            )}
-            {block.min_elevation_deg !== null && (
-              <KeyValueRow label="min elevation">{block.min_elevation_deg.toFixed(1)}°</KeyValueRow>
-            )}
+            <KeyValueRow label="max range">{block.max_range_km.toFixed(0)} km</KeyValueRow>
+            <KeyValueRow label="transmit">{block.transmit_mbps.toFixed(0)} Mbps</KeyValueRow>
+            <KeyValueRow label="receive">{block.receive_mbps.toFixed(0)} Mbps</KeyValueRow>
+            <KeyValueRow label="min elevation">{block.min_elevation_deg.toFixed(1)}°</KeyValueRow>
             <KeyValueRow label="tracking capacity">{block.tracking_capacity}</KeyValueRow>
           </div>
         ))}

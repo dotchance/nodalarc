@@ -88,11 +88,6 @@ def _log_actuation_latency(
 LinkPair = tuple[str, str]
 LatencyCompensationFn = Callable[[str, str, float], LatencyCompensation]
 
-# Kernel-proof sentinel: "shaping must exist, but no specific netem delay is
-# asserted" - used when this scheduler instance has not commanded a netem
-# value for the pair. The agent verifier skips the delay comparison for
-# negative expectations rather than failing against an invented number.
-NETEM_NOT_ASSERTED = -1.0
 AuthorityFreshnessValidator = Callable[..., None]
 LinkProvenanceBuilder = Callable[..., object]
 
@@ -355,12 +350,14 @@ def _ground_inventory_entries_for_pair(
         # Prove the kernel against what was COMMANDED, never against a live
         # recomputation: compensation reads measured substrate RTT, which
         # drifts between dispatch and proof, and that drift is not kernel
-        # divergence. When no commanded value is known for this scheduler
-        # instance (pair never dispatched here), send the explicit
-        # do-not-assert sentinel instead of inventing an expectation.
-        latency_ms = (
-            info.netem_one_way_ms if info.netem_one_way_ms is not None else NETEM_NOT_ASSERTED
-        )
+        # divergence. A link is only proven up after this Scheduler commanded
+        # it, and dispatch records the commanded delay on its info.
+        if info.netem_one_way_ms is None:
+            raise ValueError(
+                f"ground link {pair} is proven up with no commanded delay; "
+                "only commanded links are proven"
+            )
+        latency_ms = info.netem_one_way_ms
 
     entries_by_agent: dict[str, list[node_agent_pb2.KernelInventoryEntry]] = {}
     ack_keys: set[InterfaceAck] = set()

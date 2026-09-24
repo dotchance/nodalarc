@@ -20,22 +20,14 @@ export interface SegmentCapability {
   access_min_elevation_deg: number | null;
 }
 
-/** The elevation floor a node's access beam is drawn with. Declared floors
- *  win (strictest when several blocks declare one — the same reading as
- *  capabilitiesBySegment); an access terminal with no declared floor serves
- *  to the geometric horizon (0). No access terminal, no beam: null. */
+/** The elevation floor a node's access beam is drawn with: the strictest
+ *  floor its access terminals declare (the same reading as
+ *  capabilitiesBySegment). No access terminal, no beam: null. */
 export function accessBeamElevationDeg(node: BuilderWorldNode): number | null {
-  let floor: number | null = null;
-  let hasAccess = false;
-  for (const block of node.terminal_inventory) {
-    if (block.endpoint_role !== "access") continue;
-    hasAccess = true;
-    if (block.min_elevation_deg !== null) {
-      floor = Math.max(floor ?? 0, block.min_elevation_deg);
-    }
-  }
-  if (!hasAccess) return null;
-  return floor ?? 0;
+  const floors = node.terminal_inventory
+    .filter((block) => block.endpoint_role === "access")
+    .map((block) => block.min_elevation_deg);
+  return floors.length === 0 ? null : Math.max(...floors);
 }
 
 /** Collect each segment's terminal capability from the resolved world. */
@@ -52,11 +44,10 @@ export function capabilitiesBySegment(
     }
     for (const block of node.terminal_inventory) {
       capability.pairs.add(`${block.endpoint_role}|${block.medium}`);
-      if (block.endpoint_role === "access" && block.min_elevation_deg !== null) {
-        capability.access_min_elevation_deg = Math.max(
-          capability.access_min_elevation_deg ?? 0,
-          block.min_elevation_deg,
-        );
+      if (block.endpoint_role === "access") {
+        const floor = capability.access_min_elevation_deg;
+        capability.access_min_elevation_deg =
+          floor === null ? block.min_elevation_deg : Math.max(floor, block.min_elevation_deg);
       }
     }
   }

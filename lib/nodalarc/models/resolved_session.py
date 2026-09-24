@@ -216,11 +216,10 @@ class ResolvedTerminalBlock(BaseModel):
 
     Built from the resolved satellite_type (satellites) or station/ground-set
     terminal config (ground stations). Consumers read this; they do not reload
-    the source file. ``tracking_capacity`` is the terminal's simultaneous-link
-    capacity; every catalog terminal declares it, so every block carries it.
-    Optional fields are ``None`` only when the source legitimately omits them; the
-    resolver fails (never invents a default) when a value is required for a
-    supported runtime feature.
+    the source file. The catalog requires every physical fact a block carries
+    (capacity, range, elevation limit, field of regard, tracking rate and both
+    rates), so every block carries them. ``boresight`` exists exactly on access
+    terminals.
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
@@ -233,25 +232,17 @@ class ResolvedTerminalBlock(BaseModel):
     link_role: NonEmptyReference | None = None
     count: int = Field(gt=0)
     tracking_capacity: int = Field(gt=0)
-    max_range_km: float | None = Field(default=None, gt=0, allow_inf_nan=False)
-    min_elevation_deg: float | None = Field(default=None, ge=-90.0, le=90.0, allow_inf_nan=False)
-    field_of_regard_deg: float | None = Field(default=None, gt=0, le=360.0, allow_inf_nan=False)
-    tracking_rate_deg_s: float | None = Field(default=None, gt=0, allow_inf_nan=False)
+    max_range_km: float = Field(gt=0, allow_inf_nan=False)
+    min_elevation_deg: float = Field(ge=-90.0, le=90.0, allow_inf_nan=False)
+    field_of_regard_deg: float = Field(gt=0, le=360.0, allow_inf_nan=False)
+    tracking_rate_deg_s: float = Field(gt=0, allow_inf_nan=False)
     # The terminal's own rates, independent of any peer: what it can send and
     # what it can receive.
-    transmit_mbps: float | None = Field(default=None, gt=0, allow_inf_nan=False)
-    receive_mbps: float | None = Field(default=None, gt=0, allow_inf_nan=False)
+    transmit_mbps: float = Field(gt=0, allow_inf_nan=False)
+    receive_mbps: float = Field(gt=0, allow_inf_nan=False)
     boresight: TerminalBoresight | SatGroundTerminalBoresight | None = None
     # Provenance for audit/debug only (e.g. "satellite_type:starlink-v2-laser#isl[0]").
     source_ref: NonEmptyReference
-
-    @model_validator(mode="after")
-    def _rates_are_paired(self) -> ResolvedTerminalBlock:
-        if (self.transmit_mbps is None) != (self.receive_mbps is None):
-            raise ValueError(
-                f"terminal {self.terminal_id!r} declares one of transmit and receive rates"
-            )
-        return self
 
 
 class ResolvedInterfaceAddress(BaseModel):
@@ -636,6 +627,15 @@ class ResolvedNode(BaseModel):
         }
         return tuple(wan.name for wan in self.wan_interfaces if wan.terminal_id in access_terminals)
 
+    def wan_terminal(self, interface: str) -> ResolvedTerminalBlock:
+        """The terminal block behind one of this node's WAN interfaces."""
+        wan = next((wan for wan in self.wan_interfaces if wan.name == interface), None)
+        if wan is None:
+            raise KeyError(f"node {self.node_id!r} has no WAN interface {interface!r}")
+        return next(
+            block for block in self.terminal_inventory if block.terminal_id == wan.terminal_id
+        )
+
     @model_validator(mode="after")
     def _validate_terminals(self) -> ResolvedNode:
         seen: set[str] = set()
@@ -674,6 +674,12 @@ class ResolvedNode(BaseModel):
                 raise ValueError(
                     f"node {self.node_id!r} non-access terminal {block.terminal_id!r} "
                     "must not carry an access boresight"
+                )
+        for wan in self.wan_interfaces:
+            if wan.terminal_id not in seen:
+                raise ValueError(
+                    f"node {self.node_id!r} WAN interface {wan.name!r} names terminal "
+                    f"{wan.terminal_id!r}, which is not in its terminal inventory"
                 )
         if self.kind == "ground_station":
             if self.reference_body is None:
@@ -1489,18 +1495,12 @@ class ResolvedSession(BaseModel):
         """Each WAN interface's own terminal rates, keyed by (node_id, interface).
 
         Link shaping applies them per interface: egress at the terminal's
-        transmit rate and ingress at its receive rate. A WAN interface whose
-        terminal carries no rates cannot be shaped, which is a loud failure.
+        transmit rate and ingress at its receive rate.
         """
         rates: dict[tuple[str, str], InterfaceRates] = {}
         for node in self.nodes:
-            blocks = {block.terminal_id: block for block in node.terminal_inventory}
             for wan in node.wan_interfaces:
-                block = blocks.get(wan.terminal_id)
-                if block is None or block.transmit_mbps is None or block.receive_mbps is None:
-                    raise ValueError(
-                        f"WAN interface {node.node_id}/{wan.name} has no terminal rates"
-                    )
+                block = node.wan_terminal(wan.name)
                 rates[(node.node_id, wan.name)] = InterfaceRates(
                     block.transmit_mbps, block.receive_mbps
                 )

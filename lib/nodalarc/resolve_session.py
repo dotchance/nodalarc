@@ -2932,14 +2932,12 @@ def _refuse_uncollapsible_access_physics(resolved: ResolvedSession) -> None:
                     tuple(_ground_terminal(entry) for entry in entries),
                     profile_id=f"{node.node_id}.terminals",
                     endpoint="ground",
-                    require_constraints=True,
                 )
             elif node.kind == "satellite":
                 terminal_physics_profiles(
                     tuple(_satellite_ground_terminal(entry) for entry in entries),
                     profile_id=f"{node.node_id}.ground_terminals",
                     endpoint="satellite",
-                    require_constraints=True,
                 )
         except ValueError as error:
             unsupported.append(

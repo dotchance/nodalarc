@@ -631,29 +631,6 @@ def test_prove_veth_peer_refuses_when_the_kernel_assigned_no_namespace_id(monkey
     assert proof.summary == "veth vh000001 peer namespace mismatch"
 
 
-def test_verify_qdisc_sentinel_skips_delay_but_still_proves_presence_and_rate(monkeypatch):
-    """delay_ms < 0 is the explicit do-not-assert sentinel: the prover has no
-    commanded netem value, so the delay must not be compared against an
-    invented expectation - but shaping presence and rate stay proven."""
-    ipr = _ShaperIpr(rate_bytes=125_000_000, delay_ticks=12345)
-    monkeypatch.setattr(kernel_verifier, "run_in_pod_namespace", _in_pod(ipr))
-
-    proof = kernel_verifier.verify_qdisc(1234, "term0", delay_ms=-1.0, transmit_mbps=1000.0)
-    assert proof.verified is True
-    assert "not asserted" in proof.summary
-
-    # Rate is still asserted under the sentinel.
-    wrong_rate = kernel_verifier.verify_qdisc(1234, "term0", delay_ms=-1.0, transmit_mbps=4.0)
-    assert wrong_rate.verified is False
-    assert "rate mismatch" in wrong_rate.summary
-
-    # Missing shaping is still a failure under the sentinel.
-    no_netem = _ShaperIpr(rate_bytes=125_000_000, delay_ticks=None)
-    monkeypatch.setattr(kernel_verifier, "run_in_pod_namespace", _in_pod(no_netem))
-    missing = kernel_verifier.verify_qdisc(1234, "term0", delay_ms=-1.0, transmit_mbps=1000.0)
-    assert missing.verified is False
-
-
 class _LinkIpr:
     """Links by name, as the lock-free proof primitives read them."""
 

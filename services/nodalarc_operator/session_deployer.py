@@ -267,9 +267,12 @@ def _required_substrate_pairs(
     isl_pairs: set[tuple[str, str]],
     pod_placement: dict[str, str],
     node_ips: dict[str, str],
+    site_lans: Mapping[str, dict[str, Any]],
     ground_candidate_satellites_by_gs: Mapping[str, tuple[str, ...]] | None = None,
 ) -> list[dict[str, Any]]:
-    """Collapse possible cross-node links into required directional node pairs."""
+    """Collapse every cross-node path the session can use into required
+    directional node pairs: possible ISLs, possible ground links, and the
+    members of each site LAN."""
     from nodalarc.substrate.measurement_contract import RequiredSubstratePair
 
     reasons_by_direction: dict[tuple[str, str], set[str]] = {}
@@ -284,6 +287,12 @@ def _required_substrate_pairs(
 
     for node_a, node_b in isl_pairs:
         _add_reason(node_a, node_b, "isl")
+
+    for spec in site_lans.values():
+        member_ids = sorted({member["node_id"] for member in spec["members"]})
+        for index, node_a in enumerate(member_ids):
+            for node_b in member_ids[index + 1 :]:
+                _add_reason(node_a, node_b, "site_lan")
 
     all_ground_ids = {
         node_id for node_id, spec in nodes.items() if spec["node_type"] == "ground_station"
@@ -888,7 +897,6 @@ def write_wiring_manifest(
                 "gnd_interfaces": [],
                 "mpls_enable": False,
                 "segment_routing": False,
-                "mtu": 9000,
                 "remove_default_route": True,
             }
             continue
@@ -921,7 +929,6 @@ def write_wiring_manifest(
                 ],
                 "mpls_enable": requirements.mpls_enable,
                 "segment_routing": requirements.segment_routing,
-                "mtu": 9000,
                 "remove_default_route": True,
             }
             continue
@@ -935,7 +942,6 @@ def write_wiring_manifest(
                 "gnd_interfaces": [{"name": iface.name} for iface in node.wan_interfaces],
                 "mpls_enable": requirements.mpls_enable,
                 "segment_routing": requirements.segment_routing,
-                "mtu": 9000,
                 "remove_default_route": True,
             }
             ground_bridges[node.node_id] = {}
@@ -966,6 +972,7 @@ def write_wiring_manifest(
         pod_placement=pod_placement,
         node_ips=node_ips,
         ground_candidate_satellites_by_gs=resolved_session.ground_candidate_satellites_by_gs(),
+        site_lans=site_lans,
     )
     try:
         manifest_session_id = sanitize_session_id(session_run_id)

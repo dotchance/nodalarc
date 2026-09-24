@@ -38,7 +38,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 
 from nodalarc.runtime_naming import VxlanHostNames, vxlan_host_ifnames
-from nodalarc.vxlan import VXLAN_DST_PORT, VXLAN_OVERHEAD_BYTES
+from nodalarc.vxlan import VXLAN_DST_PORT
 
 from node_agent import kernel_verifier
 from node_agent.ground_bridge import _tc_mirred_remove, install_redirect_pair
@@ -133,14 +133,15 @@ def create_vxlan_link(
         local_ip: This node's IP (VXLAN local endpoint).
         remote_ip: Peer node's IP (VXLAN remote endpoint).
         vni: VXLAN Network Identifier.
-        mtu: Inner MTU. Default: platform MTU - VXLAN overhead.
+        mtu: Inner MTU. Default: the platform MTU; the host network carries
+            the VXLAN overhead, so placement never changes a link's MTU.
     """
     from pyroute2 import IPRoute
 
     if mtu is None:
         from nodalarc.platform_config import get_platform_config
 
-        mtu = get_platform_config().veth_interface_mtu_bytes - VXLAN_OVERHEAD_BYTES
+        mtu = get_platform_config().veth_interface_mtu_bytes
 
     names: VxlanHostNames = vxlan_host_ifnames(vni)
     pod_end = kernel_verifier.pod_veth_end(pid, ifname)

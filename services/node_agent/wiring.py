@@ -19,6 +19,7 @@ from typing import Any
 
 import kubernetes.client
 import kubernetes.config
+from nodalarc.platform_config import get_platform_config
 from nodalarc.runtime_naming import is_managed_host_ifname
 from nodalarc.substrate.manifest_contract import WiringManifest
 from nodalarc.substrate.wiring_status import (
@@ -28,6 +29,7 @@ from nodalarc.substrate.wiring_status import (
     status_configmap_data,
     wiring_row,
 )
+from nodalarc.vxlan import host_path_mtu_for
 from pydantic import ValidationError
 from pyroute2 import IPRoute
 
@@ -43,6 +45,7 @@ from node_agent.namespace_ops import (
     configure_interface,
 )
 from node_agent.pid_discovery import NamespaceHandle, discover_local_pod_handles
+from node_agent.substrate_monitor import prove_host_path_mtu
 
 _IPTABLES_RULES = (
     "*filter\n"
@@ -321,6 +324,30 @@ def discover_expected_handles(
     return None
 
 
+def _host_path_refusal(manifest: WiringManifest, local_node: str) -> str | None:
+    """Prove each host path this host's session traffic can take, or say why not.
+
+    The required size is the emulated MTU plus the VXLAN encapsulation for
+    the target's address family.
+    """
+    inner_mtu = get_platform_config().veth_interface_mtu_bytes
+    failures: list[str] = []
+    for pair in manifest.required_substrate_pairs:
+        if pair.source_node != local_node:
+            continue
+        proof = prove_host_path_mtu(pair, host_path_mtu_for(inner_mtu, pair.target_ip))
+        if proof.carried:
+            log.info("Host path proven: %s", proof.diagnostic())
+        else:
+            failures.append(proof.diagnostic())
+    if not failures:
+        return None
+    return (
+        f"the host network does not carry {inner_mtu}-byte emulated packets inside VXLAN: "
+        + "; ".join(failures)
+    )
+
+
 def execute_wiring(
     manifest: dict[str, Any] | WiringManifest,
     namespace: str,
@@ -373,6 +400,27 @@ def execute_wiring(
     statuses: dict[str, NodeWiringStatus] = {}
     node_failures: dict[str, tuple[str, str]] = {}
     total_nodes = len(handles)
+
+    # The host network carries every emulated packet whole inside VXLAN, so
+    # no link's MTU depends on where its pods run. Proven once per wiring
+    # attempt, before anything is created, to every host this one shares a
+    # session path with. A failure refuses this host's wiring with nothing
+    # touched.
+    host_path_refusal = _host_path_refusal(manifest_model, local_node)
+    if host_path_refusal is not None:
+        log.error("Host path refused: %s", host_path_refusal)
+        return {
+            node_id: failed_status(
+                node_id,
+                manifest_model,
+                pod_uid=handle.pod_uid,
+                sandbox_id=handle.sandbox_id,
+                netns_id=handle.netns_id,
+                phase="host_path_mtu",
+                error_message=host_path_refusal,
+            )
+            for node_id, handle in handles.items()
+        }
 
     def _record_failure(node_id: str, phase: str, message: str) -> None:
         node_failures.setdefault(node_id, (phase, message))
@@ -655,8 +703,6 @@ def execute_wiring(
     # Wire site LANs (terr0 as bridge ports, parallelized per site).
     # A site's LAN is one L2 segment: per-host bridge, member terr0 veths as
     # ports, VXLAN head-end replication between hosts that share the site.
-    from nodalarc.platform_config import get_platform_config
-
     from node_agent.site_lan import plan_site_lan, wire_site_lan
 
     local_ip = os.environ.get("HOST_IP", "")

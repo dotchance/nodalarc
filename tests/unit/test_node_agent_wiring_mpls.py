@@ -43,7 +43,6 @@ def _manifest(
         "gnd_interfaces": [],
         "mpls_enable": mpls,
         "segment_routing": False,
-        "mtu": 1500,
         "remove_default_route": False,
         "plane": 0,
     }
@@ -74,7 +73,6 @@ def _manifest(
             "gnd_interfaces": [{"name": "gnd0"}],
             "mpls_enable": mpls,
             "segment_routing": False,
-            "mtu": 1500,
             "remove_default_route": False,
         },
     }

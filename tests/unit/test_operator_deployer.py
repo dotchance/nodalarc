@@ -210,7 +210,6 @@ def _make_wiring_manifest(node_ids=("sat-P00S00", "sat-P00S01")):
             "gnd_interfaces": [],
             "mpls_enable": False,
             "segment_routing": False,
-            "mtu": 1500,
             "remove_default_route": False,
             "plane": 0,
             "slot": index,
@@ -1076,7 +1075,6 @@ class TestWiringManifest:
             assert "mpls_enable" in node, f"{node_id} missing mpls_enable"
             assert "segment_routing" in node, f"{node_id} missing segment_routing"
             assert "remove_default_route" in node, f"{node_id} missing remove_default_route"
-            assert "mtu" in node, f"{node_id} missing mtu"
 
     def test_manifest_carries_a_cluster_pod_cidr_for_the_management_path(self, tmp_path):
         """The Node Agent replaces the CNI default with a management route to
@@ -1382,6 +1380,7 @@ class TestRequiredSubstratePairs:
             "gs-den": {"node_type": "ground_station"},
         }
         pairs = _required_substrate_pairs(
+            site_lans={},
             nodes=nodes,
             isl_pairs={("sat-a", "sat-b")},
             pod_placement={"sat-a": "node01", "sat-b": "node01", "gs-den": "node01"},
@@ -1396,6 +1395,7 @@ class TestRequiredSubstratePairs:
             "sat-b": {"node_type": "satellite"},
         }
         pairs = _required_substrate_pairs(
+            site_lans={},
             nodes=nodes,
             isl_pairs={("sat-a", "sat-b")},
             pod_placement={"sat-a": "node01", "sat-b": "node02"},
@@ -1415,6 +1415,7 @@ class TestRequiredSubstratePairs:
             "gs-den": {"node_type": "ground_station"},
         }
         pairs = _required_substrate_pairs(
+            site_lans={},
             nodes=nodes,
             isl_pairs={("sat-a", "sat-b")},
             pod_placement={"sat-a": "node01", "sat-b": "node02", "gs-den": "node02"},
@@ -1426,6 +1427,37 @@ class TestRequiredSubstratePairs:
         assert by_key["node01->node02"]["reasons"] == ["ground", "isl"]
         assert by_key["node02->node01"]["reasons"] == ["ground", "isl"]
 
+    def test_cross_host_site_lan_members_emit_both_directions(self):
+        nodes = {
+            "gs-a": {"node_type": "ground_station"},
+            "gs-b": {"node_type": "ground_station"},
+            "host-c": {"node_type": "host"},
+        }
+        site_lans = {
+            "site-lan0": {
+                "members": [
+                    {"node_id": "gs-a"},
+                    {"node_id": "gs-b"},
+                    {"node_id": "host-c"},
+                ]
+            }
+        }
+        pairs = _required_substrate_pairs(
+            site_lans=site_lans,
+            nodes=nodes,
+            isl_pairs=set(),
+            pod_placement={"gs-a": "node01", "gs-b": "node02", "host-c": "node01"},
+            node_ips={"node01": "10.0.0.1", "node02": "10.0.0.2"},
+            ground_candidate_satellites_by_gs={},
+        )
+
+        # gs-a and host-c share node01, so only the node01/node02 path is required.
+        assert {pair["directional_key"] for pair in pairs} == {
+            "node01->node02",
+            "node02->node01",
+        }
+        assert all(pair["reasons"] == ["site_lan"] for pair in pairs)
+
     def test_resolved_candidate_map_scopes_active_ground_universe(self):
         nodes = {
             "sat-a": {"node_type": "satellite"},
@@ -1434,6 +1466,7 @@ class TestRequiredSubstratePairs:
             "gs-meo-unused": {"node_type": "ground_station"},
         }
         pairs = _required_substrate_pairs(
+            site_lans={},
             nodes=nodes,
             isl_pairs=set(),
             pod_placement={
@@ -1455,6 +1488,7 @@ class TestRequiredSubstratePairs:
     def test_resolved_candidate_map_rejects_unknown_ground_node(self):
         with pytest.raises(ValueError, match="unknown ground station"):
             _required_substrate_pairs(
+                site_lans={},
                 nodes={"sat-a": {"node_type": "satellite"}},
                 isl_pairs=set(),
                 pod_placement={"sat-a": "node01", "gs-missing": "node02"},
@@ -1465,6 +1499,7 @@ class TestRequiredSubstratePairs:
     def test_resolved_candidate_map_rejects_unknown_satellite_node(self):
         with pytest.raises(ValueError, match="unknown substrate candidate satellite"):
             _required_substrate_pairs(
+                site_lans={},
                 nodes={"gs-den": {"node_type": "ground_station"}},
                 isl_pairs=set(),
                 pod_placement={"gs-den": "node01", "sat-missing": "node02"},

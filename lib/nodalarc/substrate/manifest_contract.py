@@ -20,6 +20,7 @@ from nodalarc.substrate.measurement_contract import RequiredSubstratePair
 from nodalarc.vxlan import VNI_MAX, VNI_MIN
 
 REQUIRED_WIRING_PHASES: tuple[str, ...] = (
+    "host_path_mtu",
     "managed_interface_cleanup",
     "sysctls",
     "isl_interfaces",
@@ -226,7 +227,6 @@ class NodeSpec(_StrictModel):
     gnd_interfaces: list[InterfaceName]
     mpls_enable: bool
     segment_routing: bool
-    mtu: int
     remove_default_route: bool
     plane: int | None = None
     slot: int | None = None

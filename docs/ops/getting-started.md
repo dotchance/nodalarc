@@ -26,6 +26,14 @@ If you don't already have Kubernetes, the bootstrap script installs K3s.
 - Port 8080: VS-API (REST/WebSocket)
 - Ports 22 (per pod IP): SSH terminal access (internal cluster network)
 - Inter-node: UDP 4789 (VXLAN) for multi-node deployments
+- Host MTU: 9100 bytes on the interface that carries cluster traffic, and a
+  switch between the hosts that carries jumbo frames. Every emulated
+  interface carries 9000-byte packets. Between hosts those packets travel
+  inside VXLAN, which adds 50 bytes over IPv4 and 70 over IPv6, so the hosts
+  carry the overhead and no emulated link loses MTU to its placement. When a
+  session deploys, the Node Agent sends unfragmentable 9000-byte packets,
+  wrapped to their VXLAN size, to every other host the session uses, and
+  refuses to wire the session when the host network does not carry them.
 
 ## Step 1: Bootstrap (Fresh Machine)
 
@@ -45,6 +53,7 @@ This installs:
 | Node.js 22 | Builds the visualization frontend |
 | uv | Python package manager |
 | Kernel modules | `mpls_router`, `mpls_iptunnel` for MPLS forwarding |
+| Host MTU | 9100 bytes on the cluster interface, persistent in `/etc/netplan/60-nodalarc-mtu.yaml` |
 | Sysctls | IPv4/IPv6 forwarding, MPLS platform labels |
 
 The script is idempotent - safe to run multiple times. It does NOT modify an existing Kubernetes installation.

@@ -15,6 +15,12 @@ from typing import Any, Literal
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+# The largest MTU any emulated interface may have. Hosts run a 9100-byte
+# MTU so that a 9000-byte emulated packet crosses hosts whole inside VXLAN.
+MAX_EMULATED_MTU_BYTES = 9000
+# IPv6 requires every link to carry 1280 bytes (RFC 8200).
+IPV6_MINIMUM_MTU_BYTES = 1280
+
 
 class PlatformConfig(BaseModel):
     """Frozen Pydantic model for platform configuration.
@@ -41,7 +47,9 @@ class PlatformConfig(BaseModel):
 
     session_data_root: str
 
-    veth_interface_mtu_bytes: int
+    # The MTU of every emulated interface, whether its link stays on one
+    # host or crosses hosts; the hosts carry the VXLAN overhead.
+    veth_interface_mtu_bytes: int = Field(ge=IPV6_MINIMUM_MTU_BYTES, le=MAX_EMULATED_MTU_BYTES)
 
     vs_api_visual_beam_falloff_exponent: float = Field(gt=0)
     vs_api_actuation_expected_latency_ms: float = Field(gt=0)

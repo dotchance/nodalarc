@@ -8,14 +8,28 @@ Pure computation — no I/O, no pyroute2, no kernel operations.
 from __future__ import annotations
 
 import hashlib
+import ipaddress
 
 # The 24-bit VXLAN identifier space; 0 and 16777215 are reserved.
 VNI_MIN = 1
 VNI_MAX = 16777214
 # Default destination port for VXLAN (IANA standard).
 VXLAN_DST_PORT = 4789
-# VXLAN overhead: 8 VXLAN + 8 UDP + 20 IP + 14 outer Ethernet = 50 bytes.
-VXLAN_OVERHEAD_BYTES = 50
+# Bytes VXLAN wraps around an inner IP packet besides the outer IP header:
+# the inner Ethernet header (14), UDP (8) and VXLAN (8).
+_VXLAN_ENCAPSULATION_BYTES = 14 + 8 + 8
+_OUTER_IP_HEADER_BYTES = {4: 20, 6: 40}
+
+
+def host_path_mtu_for(inner_mtu: int, outer_ip: str) -> int:
+    """The host path MTU that carries a VXLAN link's largest inner packet whole.
+
+    Emulated interfaces keep their full MTU wherever their pods run, so the
+    host network carries the encapsulation: 50 bytes over IPv4 hosts, 70 over
+    IPv6 hosts.
+    """
+    version = ipaddress.ip_address(outer_ip).version
+    return inner_mtu + _VXLAN_ENCAPSULATION_BYTES + _OUTER_IP_HEADER_BYTES[version]
 
 
 def compute_vni(node_a: str, node_b: str, iface_a: str, iface_b: str) -> int:

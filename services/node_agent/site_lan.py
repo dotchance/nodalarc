@@ -23,9 +23,10 @@ Kernel layout per host, per site:
     Pod namespace (member i):
       <interface>        veth pod-end, carries the member's allocated addresses
 
-MTU is uniform at (platform veth MTU - VXLAN overhead) regardless of
-placement: an L2 segment whose MTU depended on which hosts the scheduler
-picked would let placement leak into protocol-visible behavior.
+MTU is the platform MTU regardless of placement: an L2 segment whose MTU
+depended on which hosts the scheduler picked would let placement leak into
+protocol-visible behavior. The host network carries the VXLAN overhead; the
+Node Agent proves it before wiring (wiring.py, host_path_mtu).
 """
 
 from __future__ import annotations
@@ -44,7 +45,7 @@ from nodalarc.runtime_naming import (
     site_lan_member_pod_ifname,
     site_lan_vxlan_name,
 )
-from nodalarc.vxlan import VXLAN_DST_PORT, VXLAN_OVERHEAD_BYTES
+from nodalarc.vxlan import VXLAN_DST_PORT
 
 from node_agent.namespace_ops import _get_host_ns_fd, _in_namespace, _libc, _ns_lock
 
@@ -238,7 +239,7 @@ def plan_site_lan(
         site_id=site_id,
         vni=vni,
         bridge=site_lan_bridge_name(vni),
-        mtu=base_mtu - VXLAN_OVERHEAD_BYTES,
+        mtu=base_mtu,
         local_members=tuple(local_ports),
         vxlan_ifname=site_lan_vxlan_name(vni) if spans_hosts else None,
         vxlan_local_ip=local_ip if spans_hosts else None,

@@ -36,6 +36,7 @@ def _manifest_data() -> dict:
         "owner_uid": "owner-uid-1",
         "wiring_generation": "sha256:" + "a" * 64,
         "required_phases": [
+            "host_path_mtu",
             "managed_interface_cleanup",
             "sysctls",
             "isl_interfaces",
@@ -56,7 +57,6 @@ def _manifest_data() -> dict:
                 "gnd_interfaces": [{"name": "term0"}],
                 "mpls_enable": False,
                 "segment_routing": False,
-                "mtu": 9000,
                 "remove_default_route": True,
             },
             "site-a-gw2": {
@@ -69,7 +69,6 @@ def _manifest_data() -> dict:
                 "gnd_interfaces": [{"name": "term0"}],
                 "mpls_enable": False,
                 "segment_routing": False,
-                "mtu": 9000,
                 "remove_default_route": True,
             },
         },
@@ -222,7 +221,6 @@ class TestManifestContract:
             "gnd_interfaces": [],
             "mpls_enable": False,
             "segment_routing": False,
-            "mtu": 9000,
             "remove_default_route": True,
         }
         data["site_lans"]["site-a-lan0"]["members"].append(
@@ -324,7 +322,8 @@ class TestPlanner:
         assert plan.local_members[0].addresses == ("172.16.1.1/24",)
         assert plan.peer_host_ips == ("10.0.0.2",)
         assert plan.vxlan_ifname is not None
-        assert plan.mtu == 9000 - 50
+        # The hosts carry the VXLAN overhead, so a cross-host LAN keeps the full MTU.
+        assert plan.mtu == 9000
         for name in (
             plan.bridge,
             plan.vxlan_ifname,
@@ -351,6 +350,8 @@ class TestPlanner:
         assert len(plan.local_members) == 2
         assert plan.vxlan_ifname is None
         assert plan.peer_host_ips == ()
+        # Placement never changes the LAN's MTU: single-host equals cross-host.
+        assert plan.mtu == 9000
         # Member interface names are index-deterministic across hosts.
         assert plan.local_members[0].host_ifname != plan.local_members[1].host_ifname
 

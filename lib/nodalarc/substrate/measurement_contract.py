@@ -16,7 +16,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, field_validator, model_validator
 
-SubstrateReason = Literal["isl", "ground"]
+SubstrateReason = Literal["isl", "ground", "site_lan"]
 SubstrateMeasurementStatus = Literal["ok", "failed"]
 
 STATUS_CONFIGMAP_PREFIX = "nodalarc-substrate-status-"

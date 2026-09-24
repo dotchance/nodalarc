@@ -15,8 +15,10 @@ measurement and are not dispatch authority.
 from __future__ import annotations
 
 import asyncio
+import ipaddress
 import logging
 import os
+import re
 import subprocess
 import threading
 from collections.abc import Callable
@@ -327,6 +329,85 @@ def measure_required_pair(
         min_rtt_ms=result.min_rtt_ms,
         max_rtt_ms=result.max_rtt_ms,
         error_message=result.error_message,
+    )
+
+
+# What an ICMP echo carries beyond its payload: the IP header of its family
+# and the 8-byte echo header.
+_ICMP_ECHO_OVERHEAD_BYTES = {4: 20 + 8, 6: 40 + 8}
+_RECEIVED_RE = re.compile(r"(\d+) (?:packets )?received")
+
+
+@dataclass(frozen=True, slots=True)
+class HostPathProof:
+    """Whether the host network carried one whole packet of a size to a peer host."""
+
+    target_node: str
+    target_ip: str
+    packet_bytes: int
+    carried: bool
+    evidence: str
+
+    def diagnostic(self) -> str:
+        verdict = "carried" if self.carried else "not carried"
+        return (
+            f"{self.packet_bytes}-byte packets to {self.target_node} ({self.target_ip}) "
+            f"{verdict}: {self.evidence}"
+        )
+
+
+def prove_host_path_mtu(
+    pair: RequiredSubstratePair, packet_bytes: int, *, count: int = 3
+) -> HostPathProof:
+    """Send unfragmentable ICMP echoes of exactly ``packet_bytes`` to the pair's target.
+
+    The host path carries the size when an echo returns: the request crossed
+    whole with fragmentation forbidden and the reply came back at the same
+    size. A local refusal (this host's own interface MTU is smaller), no
+    reply, or a probe that cannot run is a failed proof, with ping's own
+    words as the evidence.
+    """
+    version = ipaddress.ip_address(pair.target_ip).version
+    payload = packet_bytes - _ICMP_ECHO_OVERHEAD_BYTES[version]
+    command = [
+        "ping",
+        f"-{version}",
+        "-M",
+        "do",
+        "-s",
+        str(payload),
+        "-c",
+        str(count),
+        "-i",
+        "0.2",
+        "-W",
+        "1",
+        pair.target_ip,
+    ]
+    try:
+        completed = subprocess.run(command, capture_output=True, text=True, timeout=15, check=False)
+    except (OSError, subprocess.SubprocessError) as exc:
+        return HostPathProof(
+            target_node=pair.target_node,
+            target_ip=pair.target_ip,
+            packet_bytes=packet_bytes,
+            carried=False,
+            evidence=f"probe could not run: {exc}",
+        )
+    output = f"{completed.stdout}\n{completed.stderr}"
+    received = _RECEIVED_RE.search(output)
+    carried = completed.returncode == 0 and received is not None and int(received.group(1)) > 0
+    evidence = "; ".join(
+        line.strip()
+        for line in output.splitlines()
+        if "received" in line or "error" in line.lower() or "too long" in line
+    )
+    return HostPathProof(
+        target_node=pair.target_node,
+        target_ip=pair.target_ip,
+        packet_bytes=packet_bytes,
+        carried=carried,
+        evidence=evidence or f"ping exited {completed.returncode} with no summary",
     )
 
 

@@ -1987,21 +1987,8 @@ def _apply_addressing(
                 ]
             )
             by_id = {item.node.node_id: item for item in selected}
-
-            def _needs(item: _RuntimeNode, family: str) -> bool:
-                del item, family
-                return True
-
-            ipv4_ids = (
-                [nid for nid, item in by_id.items() if _needs(item, "ipv4")]
-                if assignment.ipv4_pool is not None
-                else []
-            )
-            ipv6_ids = (
-                [nid for nid, item in by_id.items() if _needs(item, "ipv6")]
-                if assignment.ipv6_pool is not None
-                else []
-            )
+            ipv4_ids = list(by_id) if assignment.ipv4_pool is not None else []
+            ipv6_ids = list(by_id) if assignment.ipv6_pool is not None else []
             ipv4_by_id = dict(
                 zip(
                     ipv4_ids,
@@ -2052,9 +2039,6 @@ def _apply_addressing(
                         loopback,
                         ipv4_pool=assignment.ipv4_pool,
                         ipv6_pool=assignment.ipv6_pool,
-                        prefix_length=assignment.prefix_length,
-                        assignment_id=assignment.id,
-                        node_id=item.node.node_id,
                     )
                     next_nodes.append(
                         replace(
@@ -2161,9 +2145,6 @@ def _merge_loopback_assignment(
     *,
     ipv4_pool: str | None,
     ipv6_pool: str | None,
-    prefix_length: int | None,
-    assignment_id: str,
-    node_id: str,
 ) -> ResolvedInterfaceAddress:
     """An explicit assignment owns the families it pools.
 
@@ -2171,7 +2152,6 @@ def _merge_loopback_assignment(
     assignment pools replaces the resolver default, and a family it does
     not pool keeps the default.
     """
-    del prefix_length, assignment_id, node_id
     return ResolvedInterfaceAddress(
         ipv4=allocated.ipv4 if ipv4_pool is not None else current.ipv4,
         ipv6=allocated.ipv6 if ipv6_pool is not None else current.ipv6,

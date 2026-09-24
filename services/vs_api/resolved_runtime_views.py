@@ -5,7 +5,8 @@ from __future__ import annotations
 import ipaddress
 from dataclasses import dataclass
 
-from nodalarc.models.resolved_session import ResolvedSession
+from nodalarc.models.resolved_session import IsisInstanceAreas, OspfInstanceAreas, ResolvedSession
+from nodalarc.models.vs_api import NodeInstanceInterface, NodeRoutingInstance
 from nodalarc.resolve_session import SessionResolution
 
 
@@ -71,3 +72,54 @@ def tracer_node_registry(resolution: SessionResolution) -> dict[str, TracerNode]
             trace_gateway_node_id=gateway,
         )
     return nodes
+
+
+def routing_instances_by_node_id(
+    resolved: ResolvedSession,
+) -> dict[str, tuple[NodeRoutingInstance, ...]]:
+    """Every participant's routing instances, from the resolved session's facts.
+
+    A node that participates in no instance is absent.
+    """
+    interfaces_by_node = resolved.domain_interfaces_by_node()
+    areas_by_node = {
+        (node_id, areas.domain_id): areas
+        for node_id, node_areas in resolved.instance_areas_by_node().items()
+        for areas in node_areas
+    }
+    area_border = {
+        (node_id, domain_id)
+        for node_id, domain_ids in resolved.area_border_instances_by_node().items()
+        for domain_id in domain_ids
+    }
+    as_boundary = {
+        (node_id, domain_id)
+        for node_id, domain_ids in resolved.as_boundary_instances_by_node().items()
+        for domain_id in domain_ids
+    }
+    instances: dict[str, list[NodeRoutingInstance]] = {}
+    for domain in resolved.routing_domains:
+        for node_id in domain.node_ids:
+            key = (node_id, domain.domain_id)
+            areas = areas_by_node.get(key)
+            names = interfaces_by_node[node_id][domain.domain_id]
+            if isinstance(areas, OspfInstanceAreas):
+                area_list = areas.areas
+                interfaces = tuple(
+                    NodeInstanceInterface(name=name, area_id=areas.interface_areas[name])
+                    for name in names
+                )
+            else:
+                area_list = areas.area_addresses if isinstance(areas, IsisInstanceAreas) else ()
+                interfaces = tuple(NodeInstanceInterface(name=name, area_id=None) for name in names)
+            instances.setdefault(node_id, []).append(
+                NodeRoutingInstance(
+                    domain_id=domain.domain_id,
+                    protocol=domain.protocol,
+                    areas=area_list,
+                    interfaces=interfaces,
+                    area_border=key in area_border,
+                    as_boundary=key in as_boundary,
+                )
+            )
+    return {node_id: tuple(items) for node_id, items in instances.items()}

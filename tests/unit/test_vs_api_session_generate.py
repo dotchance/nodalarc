@@ -135,16 +135,18 @@ def test_wizard_extension_rules_use_catalog_area_strategy_tokens():
     response = client.get("/api/v1/wizard/extensions")
 
     assert response.status_code == 200
-    assert response.json()["area_strategies"] == ["flat", "stripe", "per_plane"]
     payload = response.json()
+    assert "area_strategies" not in payload
+    assert {protocol["id"]: protocol["area_strategies"] for protocol in payload["protocols"]} == {
+        "ospf": ["flat"],
+        "isis": ["flat", "stripe", "per_plane"],
+    }
     assert [protocol["id"] for protocol in payload["protocols"]] == ["ospf", "isis"]
     assert [extension["id"] for extension in payload["extensions"]] == ["te", "mpls", "sr"]
     assert all(protocol["extensions"] == ["sr", "te", "mpls"] for protocol in payload["protocols"])
     assert all(protocol["extension_constraints"] == {} for protocol in payload["protocols"])
     assert all(protocol["label"] and protocol["description"] for protocol in payload["protocols"])
     assert all(protocol["timer_fields"] for protocol in payload["protocols"])
-    ospf = next(protocol for protocol in payload["protocols"] if protocol["id"] == "ospf")
-    assert ospf["non_flat_area_warning"]
 
 
 def test_wizard_data_endpoints_publish_closed_response_models():

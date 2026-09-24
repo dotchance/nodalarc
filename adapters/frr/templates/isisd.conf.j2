@@ -12,7 +12,9 @@
    routing and traffic engineering apply to IPv4. #}
 {% for domain in domains if domain.protocol == "isis" %}
 router isis {{ domain.domain_id }}
- net {{ domain.area_id }}.{{ system_id }}.00
+{% for area in domain.area_addresses %}
+ net {{ area }}.{{ system_id }}.00
+{% endfor %}
  is-type level-1-2
  metric-style wide
 {% if "ipv6" in address_families %}

@@ -166,17 +166,19 @@ _WIZARD_PROTOCOL_PRESENTATION = (
                 minimum=0,
             ),
         ),
-        "non_flat_area_warning": (
-            "OSPF multi-area with dynamic constellation topologies may lose backbone "
-            "contiguity when cross-plane ISLs drop at polar latitudes. Use the flat area "
-            "strategy when contiguous area 0 cannot be guaranteed."
-        ),
+        # The session grammar assigns areas per router, so no OSPF router can
+        # join two areas and resolution refuses a multi-area OSPF instance.
+        "area_strategies": ("flat",),
+        "default_area_strategy": "flat",
     },
     {
         "id": "isis",
         "label": "IS-IS",
         "description": "Intermediate System to Intermediate System native CLNS routing.",
         "extension_constraints": {},
+        # Routers in different IS-IS areas form Level 2 adjacencies.
+        "area_strategies": ("flat", "stripe", "per_plane"),
+        "default_area_strategy": "flat",
         "timer_label": "IS-IS Timers",
         "timer_fields": (
             WizardRoutingTimerFieldMetadata(
@@ -518,8 +520,6 @@ def wizard_extension_rules_response() -> WizardExtensionRulesResponse:
             for presentation in _WIZARD_PROTOCOL_PRESENTATION
         ),
         extensions=_WIZARD_EXTENSION_METADATA,
-        area_strategies=("flat", "stripe", "per_plane"),
-        default_area_strategy="flat",
         bfd=_WIZARD_BFD_METADATA,
         routing_timer_defaults=wizard_routing_timer_defaults(),
     )
@@ -551,8 +551,11 @@ def _validate_routing_choices(intent: WizardSessionIntent) -> None:
         raise ValueError(f"Wizard extension dependencies are not satisfied: {missing}")
     if intent.routing_timers.bfd and protocol.bfd_timer_fields is None:
         raise ValueError(f"Wizard protocol {intent.protocol!r} offers no BFD; BFD must be off")
-    if intent.area_strategy not in facts.area_strategies:
-        raise ValueError(f"Wizard area strategy {intent.area_strategy!r} is not available")
+    if intent.area_strategy not in protocol.area_strategies:
+        raise ValueError(
+            f"Wizard area strategy {intent.area_strategy!r} is not available for "
+            f"{intent.protocol!r}"
+        )
 
 
 def _assert_selected_refs_resolve(

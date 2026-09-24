@@ -161,22 +161,10 @@ export const LINK_ISL_WIDTH = tokens.linkWidthIsl;
 export const LINK_GROUND_WIDTH = tokens.linkWidthGround;
 export const LINK_FLOW_WIDTH = tokens.linkWidthFlow;
 
-/** Area colors — routing area → color mapping */
-export const AREA_COLORS: Record<string, number> = {
-  "49.0001": tokens.areaRed,
-  "49.0002": tokens.areaGreen,
-  "49.0003": tokens.areaBlue,
-  "49.0004": tokens.areaAmber,
-  "0.0.0.0": tokens.areaRed,
-  "0.0.0.1": tokens.areaGreen,
-  "0.0.0.2": tokens.areaBlue,
-  "0.0.0.3": tokens.areaAmber,
-};
-
 /** Plane colors */
 export const PLANE_COLORS: readonly number[] = tokens.planeColors;
 
-/** Unmapped area/plane fallback tint — one source for scene + panels. */
+/** Tint for an unmapped plane — one source for scene + panels. */
 export const UNKNOWN_TINT = tokens.colorNodeUnknown;
 
 /** Three.js hex number → CSS color string. */

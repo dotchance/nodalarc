@@ -12,12 +12,12 @@ import { candidateStatus } from "../explain/derive";
 import { CandidateRow } from "../explain/components/CandidateRow";
 import { GroundStationCard } from "../explain/components/GroundStationCard";
 import { PairInspectorView } from "../explain/components/PairInspectorView";
-import { areaKey, areasLabel, selectionTypeForNodeId } from "../networkIdentity";
+import { selectionTypeForNodeId } from "../networkIdentity";
+import { RoutingRows } from "./RoutingRows";
 import { Icon } from "../ui/icons/Icon";
 import { TaxonomyChip } from "../ui/Badge";
 import { REGIME_TINT } from "../taxonomy/regime";
 import { tokens } from "../styles/tokens";
-import { areaCSSColor } from "../globe/colors";
 
 interface GroundStationDetailProps {
   node: NodeState;
@@ -208,12 +208,7 @@ export function GroundStationDetail({ node, snapshot, onSelect }: GroundStationD
           <span className="detail-value">Unavailable: {candidateError}</span>
         </div>
       ) : null}
-      <div className="detail-row">
-        <span className="detail-label">Routing Area</span>
-        <span className="detail-value" style={{ color: areaCSSColor(areaKey(node)) }}>
-          {areasLabel(node)}
-        </span>
-      </div>
+      <RoutingRows node={node} />
       {node.prefix && (
         <div className="detail-row">
           <span className="detail-label">Prefix</span>

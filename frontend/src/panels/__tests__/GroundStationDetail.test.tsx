@@ -3,9 +3,9 @@
 import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { GroundStationDetail } from "../GroundStationDetail";
-import type { NodeState, StateSnapshot } from "../../types";
+import type { NodeRole, NodeRoutingInstance, NodeState, StateSnapshot } from "../../types";
 
-function station(areas: NodeState["routing_areas"]): NodeState {
+function station(role: NodeRole, instances: NodeRoutingInstance[]): NodeState {
   return {
     node_id: "earth-de-frankfurt-gw1",
     node_type: "ground_station",
@@ -17,7 +17,8 @@ function station(areas: NodeState["routing_areas"]): NodeState {
     vel_z_km_s: null,
     plane: null,
     slot: null,
-    routing_areas: areas,
+    routing_instances: instances,
+    role,
     isl_count: 0,
     gnd_count: 0,
     prefix: null,
@@ -32,9 +33,26 @@ function snapshot(node: NodeState): StateSnapshot {
   return { nodes: [node], links: [], active_flows: [], traced_paths: [] } as unknown as StateSnapshot;
 }
 
-function routingAreaValue(): string | null {
-  return screen.getByText("Routing Area").nextElementSibling?.textContent ?? null;
-}
+const ISIS: NodeRoutingInstance = {
+  domain_id: "orbital",
+  protocol: "isis",
+  areas: ["49.0001"],
+  interfaces: [{ name: "term0", area_id: null }],
+  area_border: false,
+  as_boundary: false,
+};
+
+const OSPF_ABR: NodeRoutingInstance = {
+  domain_id: "terrestrial",
+  protocol: "ospf",
+  areas: ["0.0.0.0", "0.0.0.1"],
+  interfaces: [
+    { name: "terr0", area_id: "0.0.0.0" },
+    { name: "terr1", area_id: "0.0.0.1" },
+  ],
+  area_border: true,
+  as_boundary: true,
+};
 
 describe("GroundStationDetail", () => {
   beforeEach(() => {
@@ -47,29 +65,25 @@ describe("GroundStationDetail", () => {
     cleanup();
   });
 
-  it("shows the routing area VS-API resolved for the station", () => {
-    const node = station([{ domain_id: "earth_domain", area_id: "49.0001" }]);
+  it("shows the role and each instance's areas the backend resolved", () => {
+    const node = station("router", [ISIS, OSPF_ABR]);
     render(<GroundStationDetail node={node} snapshot={snapshot(node)} onSelect={vi.fn()} />);
 
-    expect(routingAreaValue()).toBe("49.0001");
+    expect(screen.getByTestId("routing-role").textContent).toBe("Router");
+    expect(screen.getByText("IS-IS orbital")).toBeTruthy();
+    expect(screen.getByTestId("routing-instance-orbital").textContent).toBe("area 49.0001");
+    expect(screen.getByText("OSPF terrestrial")).toBeTruthy();
+    expect(screen.getByTestId("routing-instance-terrestrial").textContent).toBe(
+      "areas 0.0.0.0, 0.0.0.1 · ABR · ASBR",
+    );
     expect(screen.queryByText("Gateway")).toBeNull();
-    expect(screen.queryByText("ground")).toBeNull();
   });
 
-  it("says none for a station that runs no area protocol", () => {
-    const node = station([]);
+  it("says so for a host in no routing instance", () => {
+    const node = station("host", []);
     render(<GroundStationDetail node={node} snapshot={snapshot(node)} onSelect={vi.fn()} />);
 
-    expect(routingAreaValue()).toBe("none");
-  });
-
-  it("lists every area of a station in several routing domains", () => {
-    const node = station([
-      { domain_id: "earth_domain", area_id: "49.0001" },
-      { domain_id: "site_domain", area_id: "0.0.0.0" },
-    ]);
-    render(<GroundStationDetail node={node} snapshot={snapshot(node)} onSelect={vi.fn()} />);
-
-    expect(routingAreaValue()).toBe("49.0001, 0.0.0.0");
+    expect(screen.getByTestId("routing-role").textContent).toBe("Host");
+    expect(screen.getByText("no routing instance")).toBeTruthy();
   });
 });

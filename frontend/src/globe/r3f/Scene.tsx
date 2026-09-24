@@ -33,13 +33,14 @@ import {
   type PlaybackStateMsg,
   type SessionEphemeris,
 } from "../../sim/ephemeris";
-import type { ColorMode, GlobeMode, ReferenceFrame, Selection, StateSnapshot } from "../../types";
+import type { ColorMode, GlobeMode, NodeState, ReferenceFrame, Selection, StateSnapshot } from "../../types";
 import type { GlobeActions } from "../actions";
 import { Universe } from "./Universe";
 import { GlobeActionsBridge } from "./GlobeActionsBridge";
 import { Body } from "./Body";
 import { Earth, Moon, Starfield } from "./Earth";
-import { Constellation } from "./Constellation";
+import { Constellation, satColor } from "./Constellation";
+import type { AreaColoring } from "../../routing/instances";
 import { GroundStations } from "./GroundStation";
 import { GroundTracks } from "./GroundTracks";
 import type { Regime } from "../../taxonomy/regime";
@@ -76,6 +77,8 @@ interface SceneProps {
   showSatPaths: boolean;
   showGroundTracks: boolean;
   regimeById: ReadonlyMap<string, Regime>;
+  /** Area colors of the chosen IS-IS or OSPF instance. */
+  areaColoring: AreaColoring;
   showTrails: boolean;
   selection: Selection | null;
   onSelect: (sel: Selection | null) => void;
@@ -109,6 +112,7 @@ export function Scene({
   showSatPaths,
   showGroundTracks,
   regimeById,
+  areaColoring,
   showTrails,
   selection,
   onSelect,
@@ -133,6 +137,10 @@ export function Scene({
   const [pinnedIds, setPinnedIds] = useState<string[]>([]);
   const [hover, setHover] = useState<HoverInfo | null>(null);
   const [cameraFocusLabel, setCameraFocusLabel] = useState("Scene");
+  const trackColorOf = useCallback(
+    (node: NodeState) => satColor(node, colorMode, regimeById.get(node.node_id), areaColoring),
+    [colorMode, regimeById, areaColoring],
+  );
   const togglePin = useCallback((id: string) => {
     setPinnedIds((prev) =>
       prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id].slice(-MAX_PINS),
@@ -421,6 +429,7 @@ export function Scene({
                 onHover={setHover}
                 relations={relations}
                 regimeById={regimeById}
+                areaColoring={areaColoring}
               />
               <GroundStations
                 nodes={bodyNodes}
@@ -432,7 +441,7 @@ export function Scene({
                 onFocusNode={focusNode}
                 onHover={setHover}
               />
-              <GroundTracks nodes={bodyNodes} enabled={showGroundTracks} />
+              <GroundTracks nodes={bodyNodes} enabled={showGroundTracks} colorOf={trackColorOf} />
               <CoverageFootprint selection={selection} nodes={bodyNodes} beams={beamFootprints} />
             </Body>
           );

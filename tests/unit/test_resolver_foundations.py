@@ -8,7 +8,7 @@ import pytest
 from nodalarc.models.identity import IdentityMode
 from nodalarc.models.link_rules import VisibleCandidatesTopology
 from nodalarc.models.resolved_session import (
-    DomainArea,
+    OspfInstanceAreas,
     ResolvedBodyFacts,
     ResolvedEndpoint,
     ResolvedInterfaceAddress,
@@ -757,7 +757,7 @@ def test_resolved_terminal_declares_both_rates_or_neither() -> None:
 
 
 def test_routing_areas_are_resolved_for_area_protocol_routers_only() -> None:
-    """Per-plane OSPF areas come from the resolved domain; a static domain has none."""
+    """Per-plane OSPF areas come from the resolved instance; a static instance has none."""
     plane0 = _satellite("leo-sat-p00s00")
     plane1 = _satellite("leo-sat-p01s00").model_copy(update={"plane": 1})
     gs = _ground()
@@ -772,9 +772,11 @@ def test_routing_areas_are_resolved_for_area_protocol_routers_only() -> None:
     )
     rs = _resolved_session(nodes=(plane0, plane1, gs), routing_domains=(ospf, static))
 
-    assert rs.routing_areas_by_node_id() == {
-        plane0.node_id: (DomainArea("leo_domain", "0.0.0.1"),),
-        plane1.node_id: (DomainArea("leo_domain", "0.0.0.2"),),
+    # The session assigns areas per router: the loopback and every interface
+    # of the instance take the router's area.
+    assert rs.instance_areas_by_node() == {
+        plane0.node_id: (OspfInstanceAreas("leo_domain", loopback_area="0.0.0.1"),),
+        plane1.node_id: (OspfInstanceAreas("leo_domain", loopback_area="0.0.0.2"),),
     }
     with pytest.raises(ValueError, match="runs static, which has no areas"):
         static.area_id_for(gs)

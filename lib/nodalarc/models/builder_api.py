@@ -527,12 +527,18 @@ class WizardProtocolMetadata(_BuilderApplicationModel):
     # BFD timer controls with the bounds the runtime renders for this
     # protocol; None when the runtime renders no BFD for it.
     bfd_timer_fields: tuple[WizardRoutingTimerFieldMetadata, ...] | None = None
-    non_flat_area_warning: str | None = Field(default=None, min_length=1, max_length=2048)
+    # The area strategies a session of this protocol resolves with.
+    area_strategies: tuple[WizardAreaStrategy, ...] = Field(min_length=1)
+    default_area_strategy: WizardAreaStrategy
 
     @model_validator(mode="after")
     def _facts_are_consistent(self) -> WizardProtocolMetadata:
         if len(set(self.extensions)) != len(self.extensions):
             raise ValueError("Wizard protocol extensions must be unique")
+        if len(set(self.area_strategies)) != len(self.area_strategies):
+            raise ValueError("Wizard area strategies must be unique")
+        if self.default_area_strategy not in self.area_strategies:
+            raise ValueError("default Wizard area strategy must be available")
         available = set(self.extensions)
         for extension, dependencies in self.extension_constraints.items():
             if extension not in available or any(item not in available for item in dependencies):
@@ -582,17 +588,11 @@ class WizardExtensionRulesResponse(_BuilderApplicationModel):
 
     protocols: tuple[WizardProtocolMetadata, ...] = Field(min_length=1)
     extensions: tuple[WizardExtensionMetadata, ...] = Field(min_length=1)
-    area_strategies: tuple[WizardAreaStrategy, ...]
-    default_area_strategy: WizardAreaStrategy
     bfd: WizardBfdMetadata
     routing_timer_defaults: WizardRoutingTimerIntent
 
     @model_validator(mode="after")
     def _defaults_are_available(self) -> WizardExtensionRulesResponse:
-        if len(set(self.area_strategies)) != len(self.area_strategies):
-            raise ValueError("Wizard area strategies must be unique")
-        if self.default_area_strategy not in self.area_strategies:
-            raise ValueError("default Wizard area strategy must be available")
         protocol_ids = [protocol.id for protocol in self.protocols]
         if len(set(protocol_ids)) != len(protocol_ids):
             raise ValueError("Wizard routing protocols must be unique")

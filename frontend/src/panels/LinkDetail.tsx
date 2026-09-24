@@ -8,6 +8,7 @@ import { linkEventLabel } from "../explain/linkEvents";
 import { REST_URL, authHeaders } from "../config";
 import { apiErrorFromException, apiErrorMessage } from "../ui/apiError";
 import type { LinkState, StateSnapshot } from "../types";
+import { instanceLabel, interfaceInstances } from "../routing/instances";
 
 interface LinkDetailProps {
   link: LinkState;
@@ -20,6 +21,39 @@ interface LinkHistoryEntry {
   reason: string;
   node_a: string;
   node_b: string;
+}
+
+/** The routing instances one end runs on its interface of the link, with the
+ *  interface's OSPF area. */
+function LinkEndRouting({
+  snapshot,
+  nodeId,
+  interfaceName,
+}: {
+  snapshot: StateSnapshot;
+  nodeId: string;
+  interfaceName: string;
+}) {
+  const node = snapshot.nodes.find((candidate) => candidate.node_id === nodeId);
+  if (!node || interfaceName === "") return null;
+  const entries = interfaceInstances(node, interfaceName);
+  const text =
+    entries.length === 0
+      ? "no routing instance"
+      : entries
+          .map(({ instance, areaId }) => {
+            const label = instanceLabel({ domainId: instance.domain_id, protocol: instance.protocol });
+            return areaId === null ? label : `${label} area ${areaId}`;
+          })
+          .join("; ");
+  return (
+    <div className="detail-row">
+      <span className="detail-label">
+        {nodeId} {interfaceName}
+      </span>
+      <span className="detail-value">{text}</span>
+    </div>
+  );
 }
 
 /** A terminal rate in Gb/s from 1000 Mb/s up and in Mb/s below, keeping one
@@ -172,6 +206,8 @@ export function LinkDetail({ link, snapshot }: LinkDetailProps) {
           <span className="detail-value">{link.endpoint_segments.join(" ↔ ")}</span>
         </div>
       )}
+      <LinkEndRouting snapshot={snapshot} nodeId={link.node_a} interfaceName={link.interface_a} />
+      <LinkEndRouting snapshot={snapshot} nodeId={link.node_b} interfaceName={link.interface_b} />
 
       <h3>Metrics</h3>
       <div className="detail-row">

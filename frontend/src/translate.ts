@@ -8,8 +8,8 @@
 
 /** VF spec Section 8.4 — link type translation */
 const LINK_TYPE_MAP: Record<string, string> = {
-  intra_plane_isl: "Intra-area ISL",
-  cross_plane_isl: "Cross-area ISL (ABR link)",
+  intra_plane_isl: "Intra-plane ISL",
+  cross_plane_isl: "Cross-plane ISL",
   isl: "ISL",
   inter_constellation: "Inter-constellation ISL",
   inter_body_relay: "Inter-body relay",

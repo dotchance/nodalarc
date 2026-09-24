@@ -72,7 +72,8 @@ const RULES: ExtensionRules = {
           maximum: 4294966,
         },
       ],
-      non_flat_area_warning: "Backend area warning",
+      area_strategies: ["flat"],
+      default_area_strategy: "flat",
     },
     {
       id: "isis",
@@ -92,14 +93,13 @@ const RULES: ExtensionRules = {
         },
       ],
       bfd_timer_fields: null,
-      non_flat_area_warning: null,
+      area_strategies: ["flat", "per_plane"],
+      default_area_strategy: "flat",
     },
   ],
   extensions: [
     { id: "te", label: "Backend TE Label", description: "Backend TE description" },
   ],
-  area_strategies: ["flat", "per_plane"],
-  default_area_strategy: "flat",
   bfd: {
     heading: "Backend BFD Heading",
     enabled_field: "bfd",
@@ -123,7 +123,7 @@ describe("ProtocolPanel backend authority", () => {
       <ExtensionsPanel
         protocol="ospf"
         extensions={[]}
-        areaStrategy="per_plane"
+        areaStrategy="flat"
         rules={RULES}
         routingTimers={TIMERS}
         onToggleExtension={vi.fn()}
@@ -135,7 +135,10 @@ describe("ProtocolPanel backend authority", () => {
     );
 
     expect(screen.getByText("Backend TE Label")).toBeTruthy();
-    expect(screen.getByText("Backend area warning")).toBeTruthy();
+    // The area strategy choices are the selected protocol's own.
+    expect(
+      screen.getAllByRole("option").map((option) => option.textContent),
+    ).toEqual(["flat"]);
     expect(screen.getByText("Backend OSPF Timers")).toBeTruthy();
     expect(screen.getByText("Backend SPF Delay")).toBeTruthy();
     expect(screen.queryByText("Open Shortest Path First")).toBeNull();

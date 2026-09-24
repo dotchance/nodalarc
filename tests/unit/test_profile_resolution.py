@@ -437,6 +437,7 @@ def test_a_host_may_participate_in_routing_without_being_a_router() -> None:
 
     [host] = [node for node in resolution.nodes if node.forwarding == "host"]
     assert resolution.routing_domains_for(host.node_id)
+    assert resolution.node_roles()[host.node_id] == "host"
     assert host.host_attachment is not None
     gateway = resolution.node_by_id(host.host_attachment.gateway_node_id)
     assert gateway is not None and gateway.forwarding == "routed"
@@ -489,5 +490,6 @@ def test_a_routed_node_without_a_routing_workload_participates_in_no_domain(tmp_
 
     assert probe.forwarding == "routed"
     assert resolution.routing_domains_for(probe.node_id) == ()
+    assert resolution.node_roles()[probe.node_id] == "forwarding_only"
     with pytest.raises(ValueError, match="participates in no routing domain"):
         FrrAdapter().render_node(probe, SessionContext(resolution))

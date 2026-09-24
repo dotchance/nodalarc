@@ -133,19 +133,10 @@ export function ExtensionsPanel({
           value={areaStrategy}
           onChange={(e) => onSetAreaStrategy(e.target.value as AreaStrategy)}
         >
-          {rules?.area_strategies.map((s) => (
+          {protocolFacts?.area_strategies.map((s) => (
             <option key={s} value={s}>{s}</option>
           ))}
         </select>
-        {protocolFacts?.non_flat_area_warning && areaStrategy !== "flat" && (
-          <div className="wizard-warning" style={{
-            marginTop: 8, padding: "8px 12px", background: "rgba(200, 160, 40, 0.15)",
-            border: "1px solid rgba(200, 160, 40, 0.4)", borderRadius: 4, fontSize: 12,
-            color: "var(--text-dim, #aaa)", lineHeight: 1.4,
-          }}>
-            {protocolFacts.non_flat_area_warning}
-          </div>
-        )}
       </div>
 
       {/* Protocol Timers */}

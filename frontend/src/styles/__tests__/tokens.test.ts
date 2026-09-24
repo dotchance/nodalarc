@@ -9,8 +9,9 @@ import {
   GS_COLOR, SELECTION_COLOR, FAIL_HOLD_MS, FAIL_FADE_MS,
   EARTH_RADIUS, SAT_RADIUS, SAT_SEGMENTS, GS_SIZE,
   CAMERA_FOV, CAMERA_DISTANCE, CAMERA_MIN_DISTANCE, CAMERA_MAX_DISTANCE,
-  AREA_COLORS, PLANE_COLORS, getPlaneColor,
+  PLANE_COLORS, getPlaneColor,
 } from "../../config";
+import { areaColorAt } from "../../routing/instances";
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-ignore -- Node built-ins available at vitest runtime
 import { readFileSync, readdirSync } from "node:fs";
@@ -61,11 +62,13 @@ describe("token system", () => {
       expect(CAMERA_MAX_DISTANCE).toBe(tokens.cameraMaxDistance);
     });
 
-    it("area colors use token values", () => {
-      expect(AREA_COLORS["49.0001"]).toBe(tokens.areaRed);
-      expect(AREA_COLORS["49.0002"]).toBe(tokens.areaGreen);
-      expect(AREA_COLORS["49.0003"]).toBe(tokens.areaBlue);
-      expect(AREA_COLORS["49.0004"]).toBe(tokens.areaAmber);
+    it("the first area colors use token values", () => {
+      expect([0, 1, 2, 3].map(areaColorAt)).toEqual([
+        tokens.areaRed,
+        tokens.areaGreen,
+        tokens.areaBlue,
+        tokens.areaAmber,
+      ]);
     });
 
     it("plane colors array is the same reference as tokens", () => {

@@ -5,6 +5,7 @@ import { cleanup, renderHook } from "@testing-library/react";
 import type { ComponentProps, ReactElement, RefObject } from "react";
 import * as THREE from "three";
 import { Constellation } from "../Constellation";
+import { buildAreaColoring } from "../../../routing/instances";
 import { clearPositions } from "../positions";
 import type { NodeState } from "../../../types";
 import { catalogEarthEphemeris } from "../../../sim/__tests__/bodyModelFixture";
@@ -53,7 +54,8 @@ it.each(["snapshot", "frame"] as const)(
       frame_id: "earth",
       plane: 0,
       slot: 0,
-      routing_areas: [] as NodeState["routing_areas"],
+      routing_instances: [] as NodeState["routing_instances"],
+      role: "router",
     } as NodeState;
     const ephemeris = catalogEarthEphemeris();
     ephemeris.nodes = {
@@ -78,6 +80,7 @@ it.each(["snapshot", "frame"] as const)(
       colorMode: "plane",
       relations: null,
       regimeById: new Map(),
+      areaColoring: buildAreaColoring([], null),
       onSelect: vi.fn(),
       onFocusNode: vi.fn(),
       onTogglePin: vi.fn(),

@@ -777,7 +777,8 @@ class TestSnapshotModel:
                     vel_z_km_s=None,
                     plane=0,
                     slot=0,
-                    routing_area=None,
+                    routing_instances=(),
+                    role="router",
                     isl_count=2,
                     gnd_count=0,
                     prefix=None,
@@ -1170,6 +1171,7 @@ class TestEphemerisPositionPropagation:
     def test_tle_ephemeris_updates_satellite_position(self):
         ctx = SessionContext.__new__(SessionContext)
         ctx._init_state_only()
+        ctx._role_by_node_id = {"sat-P00S00": "router"}
         ctx.cached_ephemeris_obj = SessionEphemeris(
             epoch_id=0,
             sim_time=datetime.fromtimestamp(ISS_TLE_EPOCH, UTC),
@@ -1195,9 +1197,18 @@ class TestEphemerisPositionPropagation:
         assert node.lon_deg == pytest.approx(152.9363, abs=1e-3)
         assert node.alt_km > 400.0
 
+    def test_an_ephemeris_node_the_resolved_session_lacks_is_refused(self):
+        ctx = SessionContext.__new__(SessionContext)
+        ctx._init_state_only()
+        ctx._role_by_node_id = {}
+
+        with pytest.raises(ValueError, match="names node 'sat-P00S00', which the resolved"):
+            ctx._role_of("sat-P00S00")
+
     def test_ephemeris_metadata_updates_node_state(self):
         ctx = SessionContext.__new__(SessionContext)
         ctx._init_state_only()
+        ctx._role_by_node_id = {"ground-gs-denver": "router"}
         ctx.cached_ephemeris_obj = SessionEphemeris(
             epoch_id=0,
             sim_time=datetime(2025, 1, 1, tzinfo=UTC),

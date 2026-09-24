@@ -413,9 +413,9 @@ separate assignments when the desired IPv4 and IPv6 prefix lengths differ.
 
 ## Routing
 
-Routing is an optional set of domains. Each explicit domain selects its nodes
-and declares its own protocol; the selected nodes that run a routing workload
-participate in it. The current runtime supports `isis`, `ospf`, and `static`.
+Routing is an optional set of routing instances, listed under
+`routing.domains`. Each instance selects its nodes and declares its own
+protocol; the selected nodes that run a routing workload participate in it. The current runtime supports `isis`, `ospf`, and `static`.
 BGP is structurally defined but currently rejected by the runtime-support
 gate.
 
@@ -467,39 +467,46 @@ routing:
       install_via: peer_loopback
 ```
 
-A routing domain is one instance of a routing protocol. When an explicit
-`routing` block is present, every node running a routing workload
-participates in a domain, and a domain's participants are its selected nodes
-whose adapter renders its protocol. A router forwards packets between multiple
-subnets and participates in the IGPs or EGPs, or both. A router can be part of
-multiple routing domains. A host is reached through a router serving its
-network, which is its gateway.
+When an explicit `routing` block is present, every node running a routing
+workload participates in an instance, and an instance's participants are its
+selected nodes whose adapter renders its protocol. A router forwards packets
+between multiple subnets and participates in the IGPs or EGPs, or both. A
+router can participate in several instances. A host is reached through a
+router serving its network, which is its gateway.
 
-A router runs each domain on its own interfaces. Its loopback belongs to every
-domain it participates in. A fixed link belongs to the domains its two ends
-share. An access interface belongs to the domains its router shares with the
-nodes it can reach over access links. A site LAN interface belongs to the
-domains its router shares with the LAN's other participants, or to all of the
-router's domains when it shares none. The FRR adapter renders one IS-IS
-domain, one OSPF domain, and any number of static domains on one router. A
-session that places a router in two IS-IS domains or two OSPF domains is
-refused with a typed reason.
+A router runs each instance on its own interfaces. Its loopback belongs to
+every instance it participates in. A fixed link belongs to the instances its
+two ends share. An access interface belongs to the instances its router
+shares with the nodes it can reach over access links. A site LAN interface
+belongs to the instances its router shares with the LAN's other participants,
+or to all of the router's instances when it shares none. The FRR adapter
+renders one IS-IS instance, one OSPF instance, and any number of static
+instances on one router. A session that places a router in two IS-IS
+instances or two OSPF instances is refused with a typed reason.
 
 BFD runs one session per neighbor on an interface, shared by every routing
-protocol on it. Domains that enable BFD on a shared interface must declare the
-same BFD timers; resolution refuses a session where they differ.
+protocol on it. Instances that enable BFD on a shared interface must declare
+the same BFD timers; resolution refuses a session where they differ.
 
-A fixed link rule that can join two routers sharing no domain must have a
+A fixed link rule that can join two routers sharing no instance must have a
 declared boundary over it. The current runtime supports the `static_ip`
 boundary adapter; `bgp` and `dtn_bundle` adapters are support-gated.
 
-IS-IS and OSPF domains may declare MPLS, segment routing, and traffic
-engineering capabilities. Static domains carry no IGP capabilities.
+IS-IS and OSPF instances may declare MPLS, segment routing, and traffic
+engineering capabilities. Static instances carry no IGP capabilities.
 
 OSPF area ids use canonical dotted IPv4 notation such as `0.0.0.0`. IS-IS area
 ids use the lower-case hexadecimal dotted form defined by the formal grammar.
 The IS-IS-only SPF `holddown_ms` and `time_to_learn_ms` fields are invalid in
-an OSPF domain.
+an OSPF instance.
+
+IS-IS and OSPF areas are different things. An IS-IS router has an area
+address; IS-IS routers in different areas form Level 2 adjacencies, and a
+router with such an adjacency is an area border router. An OSPF area belongs
+to an interface. Area `0.0.0.0` is the backbone, and every other area of an
+OSPF instance attaches to it through an area border router, a router with
+interfaces in the backbone and in that area. Area numbers are unique only
+inside their instance.
 
 With no area assignment, or with `strategy: flat`, the runtime uses
 `49.0001` for IS-IS and `0.0.0.0` for OSPF unless `gs_area_id` is supplied.
@@ -511,8 +518,15 @@ current IS-IS format. A ground-only `explicit` assignment is valid; otherwise
 `explicit` requires every selected satellite plane to be mapped exactly once.
 Ground mappings use site-qualified local node ids.
 
-If `routing` is omitted, the resolver creates one `default_domain` running
-IS-IS over the routers whose adapter renders IS-IS.
+Area assignment is per router: every OSPF interface of a router takes its
+router's area. Resolution refuses an OSPF instance with more than one area
+unless its backbone is contiguous over the instance's possible links and every
+other area has an area border router. No router joins two areas under
+per-router assignment, so a multi-area OSPF instance is refused, and the
+Wizard offers only `flat` for OSPF. IS-IS instances may use every strategy.
+
+If `routing` is omitted, the resolver creates one instance, `default_domain`,
+running IS-IS over the routers whose adapter renders IS-IS.
 
 ## Time and ephemeris
 
@@ -584,7 +598,7 @@ make session DEFAULT_SESSION=catalog/nodalarc/sessions/earth-leo-walker.yaml
 | `earth-luna-quic` | Earth-to-Luna QUIC application path with host endpoints at both ends. |
 
 The shipped sessions are examples assembled from a larger reusable catalog.
-Eight omit explicit routing and therefore use the default IS-IS domain. The
-Earth-Luna reachability session demonstrates explicit multiple domains and a
+Eight omit explicit routing and therefore use the default IS-IS instance. The
+Earth-Luna reachability session demonstrates two IS-IS instances joined by a
 `static_ip` boundary. A deployed session may legitimately converge slowly or
 remain unreachable; NodalArc does not repair an experimental routing result.

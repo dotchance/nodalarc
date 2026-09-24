@@ -178,7 +178,7 @@ export const tokens = {
   colorNodeSatellite: 0xccddee,
   colorNodeGs: 0x7ed4df,
   colorNodeSelected: 0xffffff,
-  colorNodeUnknown: 0xaabbcc, // unmapped area/plane fallback tint
+  colorNodeUnknown: 0xaabbcc, // unmapped plane tint; unclassified regime
   colorBodyPolitical: 0x18202b, // matte schematic globe (political mode)
   colorTrail: 0x6699dd, // satellite motion-history trails
   colorFootprint: 0x8edcff, // selected-sat coverage disc (access-relation family)
@@ -205,6 +205,10 @@ export const tokens = {
   areaGreen: 0x44aa44,
   areaBlue: 0x4477bb,
   areaAmber: 0xcc8844,
+  // An area border router of the instance being colored.
+  areaBorder: 0xe8e8e8,
+  // A node outside the instance being colored.
+  areaOutside: 0x4f5963,
 
   // --- Plane colors (orbital planes, Three.js hex) ---
   planeColors: [

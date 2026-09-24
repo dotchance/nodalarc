@@ -11,7 +11,12 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from nodalarc.models.resolved_session import ResolvedSession, SourceContext
+from nodalarc.models.resolved_session import (
+    IsisInstanceAreas,
+    OspfInstanceAreas,
+    ResolvedSession,
+    SourceContext,
+)
 from nodalarc.resolve_session import load_session_resolution_from_file
 from nodalarc.workloads.adapter import SessionContext
 
@@ -196,24 +201,79 @@ def test_ospf_satellite_uses_resolved_point_to_point_links_te_and_ldp() -> None:
     assert {"ospfd", "ldpd"} <= _enabled_daemons(files["daemons"])
 
 
-def test_ospf_cross_area_link_uses_backbone_area_from_resolved_area_assignment() -> None:
-    raw = _raw_session(protocol="ospf", planes=2, slots=1)
-    raw["link_rules"][1]["topology"] = {
-        "mode": "explicit_pairs",
-        "pairs": [{"a": "sat-p00s00", "b": "sat-p01s00"}],
-    }
-    raw["routing"]["domains"][0]["area_assignment"] = {"strategy": "per_plane"}
-    resolved = resolve_session(raw, source_context=SourceContext(origin="test.frr"))
-    domain_vars = _domain_vars(resolved, "space-sat-p00s00")
+def test_ospf_renders_every_interface_in_its_resolved_area(monkeypatch) -> None:
+    """The adapter renders the resolved OSPF areas and decides none itself.
 
-    isl = next(entry for entry in domain_vars["interfaces"] if entry["name"].startswith("isl"))
-    assert domain_vars["area_id"] == "0.0.0.1"
-    assert isl["ospf_area"] == "0.0.0.0"
-    stanzas = _stanzas(_frr_conf(resolved, "space-sat-p00s00"))
-    isl_body = [
-        line for header, body in stanzas if header == f"interface {isl['name']}" for line in body
-    ]
-    assert " ip ospf area 0.0.0.0" in isl_body
+    The session grammar assigns areas per router, so this router's areas are
+    supplied as resolved facts: its access interfaces in the backbone, its
+    loopback and other interfaces in area 0.0.0.1, which makes it an ABR.
+    """
+    resolved = _resolved(protocol="ospf")
+    node_id = _first_satellite(resolved)
+    node = resolved.node_by_id(node_id)
+    assert node is not None
+    resolved_areas = ResolvedSession.instance_areas_by_node
+
+    def with_an_abr(self):
+        areas = resolved_areas(self)
+        [ospf] = areas[node_id]
+        areas[node_id] = (
+            OspfInstanceAreas(
+                ospf.domain_id,
+                loopback_area="0.0.0.1",
+                interface_areas={
+                    name: "0.0.0.0" if name in node.access_interfaces else "0.0.0.1"
+                    for name in ospf.interface_areas
+                },
+            ),
+        )
+        return areas
+
+    monkeypatch.setattr(ResolvedSession, "instance_areas_by_node", with_an_abr)
+    [ospf] = resolved.instance_areas_by_node()[node_id]
+    assert ospf.area_border
+    conf = _frr_conf(resolved, node_id)
+
+    assert " ip ospf area 0.0.0.1" in _stanza_lines(conf, "interface lo")
+    for name, area in ospf.interface_areas.items():
+        assert f" ip ospf area {area}" in _stanza_lines(conf, f"interface {name}")
+    assert {"0.0.0.0", "0.0.0.1"} == set(ospf.interface_areas.values())
+
+
+def test_isis_renders_a_net_for_each_area_address(monkeypatch) -> None:
+    resolved = _resolved(protocol="isis")
+    node_id = _first_satellite(resolved)
+    resolved_areas = ResolvedSession.instance_areas_by_node
+
+    def two_addresses(self):
+        areas = resolved_areas(self)
+        [isis] = areas[node_id]
+        areas[node_id] = (IsisInstanceAreas(isis.domain_id, ("49.0001", "49.0002")),)
+        return areas
+
+    monkeypatch.setattr(ResolvedSession, "instance_areas_by_node", two_addresses)
+    router = _router_block(_frr_conf(resolved, node_id), f"router isis {_FIXTURE_DOMAIN}")
+
+    # A NET is the area address, the system id (three groups) and the selector.
+    nets = [line.removeprefix(" net ") for line in router if line.startswith(" net ")]
+    assert [net.rsplit(".", 4)[0] for net in nets] == ["49.0001", "49.0002"]
+
+
+def test_a_single_ospf_area_outside_the_backbone_renders_on_every_interface() -> None:
+    raw = _raw_session(protocol="ospf", planes=2, slots=1)
+    raw["routing"]["domains"][0]["area_assignment"] = {
+        "strategy": "explicit",
+        "assignments": [
+            {"planes": [0, 1], "area_id": "0.0.0.5"},
+            {"ground_stations": "all", "area_id": "0.0.0.5"},
+        ],
+    }
+    resolved = resolve_session(raw, source_context=SourceContext(origin="test.frr"))
+
+    for node_id in (_first_satellite(resolved), _first_ground(resolved)):
+        conf = _frr_conf(resolved, node_id)
+        areas = {line.strip() for line in conf.splitlines() if line.startswith(" ip ospf area ")}
+        assert areas == {"ip ospf area 0.0.0.5"}
 
 
 def test_explicit_area_assignment_applies_ground_station_area() -> None:
@@ -233,7 +293,7 @@ def test_explicit_area_assignment_applies_ground_station_area() -> None:
     resolved = resolve_session(raw)
     target = next(node for node in resolved.nodes if node.local_node_id == target_local_id)
 
-    assert _domain_vars(resolved, target.node_id)["area_id"] == "49.1234"
+    assert _domain_vars(resolved, target.node_id)["area_addresses"] == ("49.1234",)
     assert " net 49.1234." in _frr_conf(resolved, target.node_id)
 
 
@@ -1094,7 +1154,7 @@ def test_ospf_runs_ospfv3_beside_ospfv2_on_ipv6_routers_only() -> None:
     files = _files(resolved, router_id)
     assert {"ospfd", "ospf6d", "bfdd"} <= _enabled_daemons(files["daemons"])
     conf = files["frr.conf"]
-    area = _domain_vars(resolved, router_id)["area_id"]
+    area = _domain_vars(resolved, router_id)["loopback_area"]
     ospf6 = _router_block(conf, "router ospf6")
     assert f" ospf6 router-id {_vars_for(resolved, router_id)['ipv4_loopback']}" in ospf6
     for wan in router.wan_interfaces:
@@ -1249,42 +1309,6 @@ def test_an_active_site_lan_runs_the_domain_timers_and_every_lan_carries_its_cos
             assert f" {version} passive" in passive_lan
             assert f" {version} cost 10" in passive_lan
         assert not [line for line in passive_lan if "interval" in line]
-
-
-def test_an_ospf_link_to_another_area_of_the_domain_runs_in_the_backbone() -> None:
-    resolved = _resolved(
-        protocol="ospf",
-        planes=2,
-        slots=1,
-        routing={
-            "domains": [
-                {
-                    "id": "leo_domain",
-                    "protocol": "ospf",
-                    "selectors": [{"any": [{"segment": "space"}, {"segment": "ground"}]}],
-                    "area_assignment": {"strategy": "per_plane", "gs_area_id": "0.0.0.0"},
-                }
-            ]
-        },
-    )
-    node_id = _first_satellite(resolved)
-    [domain] = resolved.routing_domains
-    node = resolved.node_by_id(node_id)
-    assert node is not None
-    area = domain.area_id_for(node)
-    assert area != "0.0.0.0"
-    areas = {
-        entry["name"]: entry["ospf_area"] for entry in _domain_vars(resolved, node_id)["interfaces"]
-    }
-    for candidate in resolved.link_candidates:
-        if candidate.kind == "access" or node_id not in (candidate.node_a, candidate.node_b):
-            continue
-        side = 0 if candidate.node_a == node_id else 1
-        peer = resolved.node_by_id(candidate.node_b if side == 0 else candidate.node_a)
-        assert peer is not None
-        expected = area if domain.area_id_for(peer) == area else "0.0.0.0"
-        assert areas[candidate.fixed_interfaces[side]] == expected
-    assert "0.0.0.0" in areas.values()
 
 
 def test_a_fixed_link_to_a_node_outside_the_domain_carries_no_igp() -> None:

@@ -311,15 +311,14 @@ export interface WizardProtocolMetadata {
   readonly timer_label: string;
   readonly timer_fields: ReadonlyArray<WizardRoutingTimerFieldMetadata>;
   readonly bfd_timer_fields?: ReadonlyArray<WizardRoutingTimerFieldMetadata> | null;
-  readonly non_flat_area_warning?: string | null;
+  readonly area_strategies: ReadonlyArray<WizardAreaStrategy>;
+  readonly default_area_strategy: WizardAreaStrategy;
 }
 
 /** Closed backend-owned Wizard protocol and area-strategy rules. */
 export interface WizardExtensionRulesResponse {
   readonly protocols: ReadonlyArray<WizardProtocolMetadata>;
   readonly extensions: ReadonlyArray<WizardExtensionMetadata>;
-  readonly area_strategies: ReadonlyArray<WizardAreaStrategy>;
-  readonly default_area_strategy: WizardAreaStrategy;
   readonly bfd: WizardBfdMetadata;
   readonly routing_timer_defaults: WizardRoutingTimerIntent;
 }
@@ -1720,6 +1719,8 @@ export interface BuilderWorldNode {
   readonly surface_position: ResolvedSurfacePosition | null;
   readonly epoch_position: NodePosition | null;
   readonly forwarding: "routed" | "host" | "bridge" | "control_only" | null;
+  readonly role: "router" | "host" | "forwarding_only";
+  readonly routing_instances: ReadonlyArray<NodeRoutingInstance>;
   readonly terminal_inventory: ReadonlyArray<ResolvedTerminalBlock>;
   readonly interfaces: ResolvedNodeInterfaces | null;
   readonly originated_prefixes: ResolvedOriginatedPrefixes | null;
@@ -1802,6 +1803,12 @@ export interface EphemerisNodeTLE {
   readonly frame_id: string;
 }
 
+/** One interface a node runs a routing instance on. */
+export interface NodeInstanceInterface {
+  readonly name: string;
+  readonly area_id: string | null;
+}
+
 /** Position and velocity of a single node. Position is geodetic (WGS84). Velocity is ECEF (Earth-Centered Earth-Fixed) in km/s — includes Earth rotation subtraction, so it represents motion relative to the rotating Earth. Ground stations have zero velocity. The frontend's worldVelocity() function in astronomy.ts expects ECEF velocity and applies the view-frame rotation to produce world-frame velocity. */
 export interface NodePosition {
   readonly lat_deg: number;
@@ -1810,6 +1817,16 @@ export interface NodePosition {
   readonly vel_x_km_s: number;
   readonly vel_y_km_s: number;
   readonly vel_z_km_s: number;
+}
+
+/** A node's participation in one routing instance (a ``routing.domains`` entry). */
+export interface NodeRoutingInstance {
+  readonly domain_id: string;
+  readonly protocol: "isis" | "ospf" | "bgp" | "static";
+  readonly areas: ReadonlyArray<string>;
+  readonly interfaces: ReadonlyArray<NodeInstanceInterface>;
+  readonly area_border: boolean;
+  readonly as_boundary: boolean;
 }
 
 /** A numbered interface address set. */

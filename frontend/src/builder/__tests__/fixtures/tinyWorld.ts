@@ -57,6 +57,8 @@ function node(
     surface_position: null,
     epoch_position: null,
     forwarding: null,
+    role: "forwarding_only",
+    routing_instances: [],
     terminal_inventory: blocks,
     interfaces: null,
     originated_prefixes: null,

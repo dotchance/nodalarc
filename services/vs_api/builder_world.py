@@ -35,6 +35,8 @@ from ome.event_stream import build_session_ephemeris, build_step_context
 from ome.propagation_engine import PropagatedState, propagate_satellites
 from ome.visibility import check_ground_visibility, check_isl_visibility
 
+from vs_api.resolved_runtime_views import routing_instances_by_node_id
+
 
 def _builder_link_rule(
     rule: ResolvedLinkRule,
@@ -623,6 +625,8 @@ def world_from_resolution(resolution: SessionResolution) -> BuilderWorld:
     local_to_runtime = {
         (node.segment_id, node.local_node_id): node.node_id for node in resolved.nodes
     }
+    roles = resolved.node_roles()
+    routing_instances = routing_instances_by_node_id(resolved)
     nodes = tuple(
         BuilderWorldNode(
             node_id=node.node_id,
@@ -636,6 +640,8 @@ def world_from_resolution(resolution: SessionResolution) -> BuilderWorld:
             surface_position=node.surface_position,
             epoch_position=epoch_positions.get(node.node_id),
             forwarding=node.forwarding,
+            role=roles[node.node_id],
+            routing_instances=routing_instances.get(node.node_id, ()),
             terminal_inventory=node.terminal_inventory,
             interfaces=node.interfaces,
             originated_prefixes=node.originated_prefixes,

@@ -16,7 +16,7 @@ import ipaddress
 from typing import TYPE_CHECKING, Any
 
 from nodalarc.model_validation import ADDRESS_FAMILIES
-from nodalarc.models.segment_session import LINK_STATE_PROTOCOLS
+from nodalarc.models.resolved_session import IsisInstanceAreas, OspfInstanceAreas
 
 from adapters.frr.stack import LOG_FILE, SRGB, SRLB
 
@@ -24,6 +24,7 @@ if TYPE_CHECKING:
     from collections.abc import Mapping
 
     from nodalarc.models.resolved_session import (
+        InstanceAreas,
         ResolvedNode,
         ResolvedRoutingDomain,
         ResolvedSession,
@@ -61,6 +62,9 @@ def build_template_vars_from_resolved(
     if node.interfaces is None:
         raise ValueError(f"resolved node {node.node_id!r} has no interface addresses")
     interfaces_by_domain = resolved.domain_interfaces(node.node_id)
+    areas_by_domain = {
+        areas.domain_id: areas for areas in resolved.instance_areas_by_node().get(node.node_id, ())
+    }
     links = _wan_links(resolved, node)
     segments = _segment_facts(node)
     te_interfaces = {
@@ -147,6 +151,7 @@ def build_template_vars_from_resolved(
                 resolved,
                 node,
                 domain,
+                areas=areas_by_domain.get(domain.domain_id),
                 interfaces=interfaces_by_domain[domain.domain_id],
                 links=links,
                 segments=segments,
@@ -164,27 +169,33 @@ def _domain_facts(
     node: ResolvedNode,
     domain: ResolvedRoutingDomain,
     *,
+    areas: InstanceAreas | None,
     interfaces: tuple[str, ...],
     links: dict[str, dict[str, Any]],
     segments: dict[str, dict[str, Any]],
     routes: list[dict[str, str]],
     sid_by_domain: Mapping[str, Mapping[str, int]],
 ) -> dict[str, Any]:
-    """One domain's part of the router: its instance and its interfaces.
+    """One instance's part of the router: its instance and its interfaces.
 
-    A fixed link in the domain runs the IGP at a metric from its own
-    terminal's transmit rate; an access link at the access metric. In OSPF a
-    fixed link whose peer sits in another area of the domain, and every
-    access link, run in the backbone. A segment joins the IGP in each family
-    whose prefix the router originates, actively where another participant
-    of the domain shares the segment and passively otherwise. The router
-    originates its prefixes and default routes into every domain it
-    participates in, and redistributes into a domain the boundary routes
-    exported to it.
+    A fixed link in the instance runs the IGP at a metric from its own
+    terminal's transmit rate; an access link at the access metric. Every
+    area comes from the resolved session: an IS-IS router's area addresses,
+    and the area of each OSPF interface and of the loopback. A segment joins
+    the IGP in each family whose prefix the router originates, actively
+    where another participant of the instance shares the segment and
+    passively otherwise. The router originates its prefixes and default
+    routes into every instance it participates in, and redistributes into
+    an instance the boundary routes exported to it.
     """
     is_igp = domain.protocol in _MAXIMUM_IGP_METRIC
-    is_ospf = domain.protocol == "ospf"
-    area = domain.area_id_for(node) if domain.protocol in LINK_STATE_PROTOCOLS else None
+    isis_areas = areas if isinstance(areas, IsisInstanceAreas) else None
+    ospf_areas = areas if isinstance(areas, OspfInstanceAreas) else None
+    if is_igp and areas is None:
+        raise ValueError(
+            f"router {node.node_id!r} has no resolved areas in {domain.protocol} instance "
+            f"{domain.domain_id!r}"
+        )
     bfd_enabled = domain.timers.bfd.enabled
     sr_enabled = "segment_routing" in domain.capabilities
     node_sid_index = None
@@ -199,7 +210,8 @@ def _domain_facts(
     facts: dict[str, Any] = {
         "domain_id": domain.domain_id,
         "protocol": domain.protocol,
-        "area_id": area,
+        "area_addresses": isis_areas.area_addresses if isis_areas is not None else (),
+        "loopback_area": ospf_areas.loopback_area if ospf_areas is not None else None,
         "bfd_profile": domain.domain_id if bfd_enabled else None,
         "sr_enabled": sr_enabled,
         "te_enabled": "traffic_engineering" in domain.capabilities,
@@ -227,14 +239,14 @@ def _domain_facts(
             entry["metric"] = (
                 _ACCESS_LINK_METRIC if link["access"] else _igp_metric(node, name, domain.protocol)
             )
-        if is_ospf:
-            cross_area = link["access"] or area != domain.area_id_for(link["peer"])
-            entry["ospf_area"] = "0.0.0.0" if cross_area else area
+        if ospf_areas is not None:
+            entry["ospf_area"] = ospf_areas.interface_areas[name]
         wan.append(entry)
     facts["interfaces"] = wan
     facts["segments"] = [
         {
             "name": name,
+            "ospf_area": ospf_areas.interface_areas[name] if ospf_areas is not None else None,
             "metric": _SEGMENT_METRIC,
             "igp_families": segments[name]["igp_families"],
             "igp_active": _segment_has_participant(resolved, node, domain, name),
@@ -246,14 +258,6 @@ def _domain_facts(
         if name in segments
     ]
     return facts
-
-
-def _access_interfaces(node: ResolvedNode) -> list[str]:
-    """The node's access-link WAN interfaces: those behind access terminals."""
-    access_terminals = {
-        block.terminal_id for block in node.terminal_inventory if block.endpoint_role == "access"
-    }
-    return [wan.name for wan in node.wan_interfaces if wan.terminal_id in access_terminals]
 
 
 def _transmit_mbps(node: ResolvedNode, interface: str, *, purpose: str) -> float:
@@ -334,7 +338,7 @@ def _wan_links(resolved: ResolvedSession, node: ResolvedNode) -> dict[str, dict[
             "static_only": candidate.rule_id in static_rules,
             "access": False,
         }
-    for name in _access_interfaces(node):
+    for name in node.access_interfaces:
         if name in links:
             raise ValueError(
                 f"node {node.node_id!r} names WAN interface {name!r} as both a fixed "
@@ -488,66 +492,51 @@ def _boundary_static_routes(
     semantics are per installable family. Literal prefixes of a family that
     is not installable are an authoring error and refuse.
     """
-    if resolved.routing is None or not resolved.routing.boundaries:
-        return []
     routes: list[dict[str, str]] = []
     emitted: set[tuple[str, str]] = set()
-    for boundary in resolved.routing.boundaries:
-        if boundary.adapter != "static_ip":
+    domains_by_id = {item.domain_id: item for item in resolved.routing_domains}
+    for item in resolved.boundary_imports():
+        if item.node_id != node.node_id or item.export.to != domain.domain_id:
             continue
-        for export in boundary.export:
-            if export.to not in (domain.domain_id,):
+        boundary, export, iface, peer_id = item.boundary, item.export, item.interface, item.peer_id
+        from_domain = domains_by_id[export.from_]
+        peer = resolved.node_by_id(peer_id)
+        if peer is None:
+            raise ValueError(f"boundary candidate references unresolved peer {peer_id!r}")
+        exports = _boundary_export_prefixes(export, from_domain, resolved)
+        for family in ADDRESS_FAMILIES:
+            if family not in node.address_families:
+                if isinstance(export.prefixes, tuple) and exports[family]:
+                    raise ValueError(
+                        f"boundary over {boundary.over!r} exports {family} prefixes "
+                        f"to {node.node_id!r}, which carries no {family}"
+                    )
                 continue
-            from_domain = next(d for d in resolved.routing_domains if d.domain_id == export.from_)
-            for candidate in resolved.link_candidates:
-                if candidate.rule_id != boundary.over:
+            if export.install_via is None or export.install_via == "peer_loopback":
+                via = _lo0_address(peer, family)
+                if via is None:
+                    # Family not installable over this peer; the
+                    # aggregate is defined per installable family.
+                    # Literal prefixes of an uninstallable family are
+                    # an authoring error — fail loud.
+                    if isinstance(export.prefixes, tuple) and exports[family]:
+                        raise ValueError(
+                            f"boundary over {boundary.over!r} exports {family} "
+                            f"prefixes but peer {peer_id!r} has no {family} "
+                            "loopback for install_via: peer_loopback"
+                        )
                     continue
-                interface_a, interface_b = candidate.fixed_interfaces
-                if candidate.node_a == node.node_id:
-                    peer_id, iface = candidate.node_b, interface_a
-                elif candidate.node_b == node.node_id:
-                    peer_id, iface = candidate.node_a, interface_b
-                else:
-                    continue
-                if peer_id not in from_domain.node_ids:
-                    continue
-                peer = resolved.node_by_id(peer_id)
-                if peer is None:
-                    raise ValueError(f"boundary candidate references unresolved peer {peer_id!r}")
-                exports = _boundary_export_prefixes(export, from_domain, resolved)
-                for family in ADDRESS_FAMILIES:
-                    if family not in node.address_families:
-                        if isinstance(export.prefixes, tuple) and exports[family]:
-                            raise ValueError(
-                                f"boundary over {boundary.over!r} exports {family} prefixes "
-                                f"to {node.node_id!r}, which carries no {family}"
-                            )
-                        continue
-                    if export.install_via is None or export.install_via == "peer_loopback":
-                        via = _lo0_address(peer, family)
-                        if via is None:
-                            # Family not installable over this peer; the
-                            # aggregate is defined per installable family.
-                            # Literal prefixes of an uninstallable family are
-                            # an authoring error — fail loud.
-                            if isinstance(export.prefixes, tuple) and exports[family]:
-                                raise ValueError(
-                                    f"boundary over {boundary.over!r} exports {family} "
-                                    f"prefixes but peer {peer_id!r} has no {family} "
-                                    "loopback for install_via: peer_loopback"
-                                )
-                            continue
-                    else:
-                        via = iface if export.install_via == iface else export.install_via
-                    for prefix in exports[family]:
-                        if _lo0_address(node, family) == prefix.split("/")[0]:
-                            continue  # never route our own loopback
-                        if via == prefix.split("/")[0]:
-                            continue  # peer's own loopback is the seed route
-                        key = (prefix, via)
-                        if key not in emitted:
-                            emitted.add(key)
-                            routes.append({"prefix": prefix, "via": via, "family": family})
+            else:
+                via = iface if export.install_via == iface else export.install_via
+            for prefix in exports[family]:
+                if _lo0_address(node, family) == prefix.split("/")[0]:
+                    continue  # never route our own loopback
+                if via == prefix.split("/")[0]:
+                    continue  # peer's own loopback is the seed route
+                key = (prefix, via)
+                if key not in emitted:
+                    emitted.add(key)
+                    routes.append({"prefix": prefix, "via": via, "family": family})
     return routes
 
 

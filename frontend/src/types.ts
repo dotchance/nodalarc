@@ -15,9 +15,33 @@ export interface NodeAddress {
   metric: number | null;
 }
 
-export interface NodeRoutingArea {
+export type RoutingProtocol = "isis" | "ospf" | "static" | "bgp";
+
+/** A node's routing role: a router forwards between subnets and participates
+ *  in at least one routing instance; a host forwards nothing; a node that
+ *  forwards and participates in no instance forwards only between its
+ *  connected subnets. */
+export type NodeRole = "router" | "host" | "forwarding_only";
+
+/** One interface a node runs a routing instance on. */
+export interface NodeInstanceInterface {
+  name: string;
+  /** The interface's OSPF area; IS-IS and static interfaces carry none. */
+  area_id: string | null;
+}
+
+/** A node's participation in one routing instance (a routing.domains entry). */
+export interface NodeRoutingInstance {
   domain_id: string;
-  area_id: string;
+  protocol: RoutingProtocol;
+  /** IS-IS: the router's area addresses. OSPF: every area it has an
+   *  interface in. Static: none. */
+  areas: readonly string[];
+  interfaces: readonly NodeInstanceInterface[];
+  /** An area border router of the instance. */
+  area_border: boolean;
+  /** Redistributes routing-boundary exports into the instance. */
+  as_boundary: boolean;
 }
 
 export interface NodeState {
@@ -31,8 +55,9 @@ export interface NodeState {
   vel_z_km_s: number | null;
   plane: number | null;
   slot: number | null;
-  /** The node's area in each IS-IS or OSPF domain it participates in; empty for none. */
-  routing_areas: NodeRoutingArea[];
+  /** Every routing instance the node participates in, in declared order. */
+  routing_instances: readonly NodeRoutingInstance[];
+  role: NodeRole;
   isl_count: number;
   gnd_count: number;
   prefix: string | null;

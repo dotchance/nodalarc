@@ -19,12 +19,14 @@ from nodalarc.models.events import NodePosition, SessionEphemeris
 from nodalarc.models.link_rules import LinkLabel
 from nodalarc.models.resolved_session import (
     NodeKind,
+    NodeRole,
     ResolvedNodeInterfaces,
     ResolvedOriginatedPrefixes,
     ResolvedSurfacePosition,
     ResolvedTerminalBlock,
 )
 from nodalarc.models.segment_session import SessionMeta
+from nodalarc.models.vs_api import NodeRoutingInstance
 
 
 class BuilderLinkEndpoint(BaseModel):
@@ -89,6 +91,10 @@ class BuilderWorldNode(BaseModel):
     surface_position: ResolvedSurfacePosition | None = None
     epoch_position: NodePosition | None = None
     forwarding: Literal["routed", "host", "bridge", "control_only"] | None = None
+    # The node's routing role and the routing instances it participates in,
+    # as VS-API reports them for the deployed session.
+    role: NodeRole
+    routing_instances: tuple[NodeRoutingInstance, ...]
     terminal_inventory: tuple[ResolvedTerminalBlock, ...] = ()
     interfaces: ResolvedNodeInterfaces | None = None
     originated_prefixes: ResolvedOriginatedPrefixes | None = None

@@ -1349,3 +1349,98 @@ def test_inaccessible_ephemeris_kernel_is_a_typed_resolution_failure(
     assert "PermissionError" in str(raised.value)
     assert injected not in str(raised.value)
     assert injected in str(raised.value.__cause__.__cause__)
+
+
+def _ospf_session(area_assignment: dict[str, Any]) -> dict:
+    raw = _raw_session(protocol="ospf", constellation={"planes": {"count": 2, "sats_per_plane": 2}})
+    raw["routing"]["domains"][0]["area_assignment"] = area_assignment
+    return raw
+
+
+def test_a_multi_area_ospf_instance_without_an_area_border_router_is_refused() -> None:
+    # Areas are assigned per router, so no router has interfaces in two areas.
+    with pytest.raises(
+        SessionResolutionError,
+        match=r"OSPF instance 'test_domain' has no area border router joining area\(s\) "
+        r"\['0\.0\.0\.1', '0\.0\.0\.2'\] to the backbone area 0\.0\.0\.0",
+    ):
+        resolve_session(_ospf_session({"strategy": "per_plane", "gs_area_id": "0.0.0.0"}))
+
+
+def test_a_multi_area_ospf_instance_without_a_backbone_is_refused() -> None:
+    assignment = {
+        "strategy": "explicit",
+        "assignments": [
+            {"planes": [0, 1], "area_id": "0.0.0.1"},
+            {"ground_stations": "all", "area_id": "0.0.0.2"},
+        ],
+    }
+    with pytest.raises(
+        SessionResolutionError,
+        match=r"OSPF instance 'test_domain' has areas \['0\.0\.0\.1', '0\.0\.0\.2'\] and no "
+        r"backbone area 0\.0\.0\.0",
+    ):
+        resolve_session(_ospf_session(assignment))
+
+
+def _with_interface_areas(monkeypatch, *, satellites_join_backbone: bool) -> None:
+    """Areas the grammar cannot declare yet, supplied as resolved facts.
+
+    Ground routers sit wholly in the backbone. Satellites sit in area
+    0.0.0.1, with their access interfaces in the backbone when
+    ``satellites_join_backbone``.
+    """
+    from nodalarc.models.resolved_session import OspfInstanceAreas, ResolvedSession
+
+    resolved_areas = ResolvedSession.instance_areas_by_node
+
+    def future_areas(self):
+        areas = {}
+        for node_id, node_areas in resolved_areas(self).items():
+            node = self.node_by_id(node_id)
+            [ospf] = node_areas
+            if node.kind == "ground_station":
+                areas[node_id] = node_areas
+                continue
+            areas[node_id] = (
+                OspfInstanceAreas(
+                    ospf.domain_id,
+                    loopback_area="0.0.0.1",
+                    interface_areas={
+                        name: "0.0.0.0"
+                        if satellites_join_backbone and name in node.access_interfaces
+                        else "0.0.0.1"
+                        for name in ospf.interface_areas
+                    },
+                ),
+            )
+        return areas
+
+    monkeypatch.setattr(ResolvedSession, "instance_areas_by_node", future_areas)
+
+
+def test_area_border_routers_joining_a_contiguous_backbone_pass(monkeypatch) -> None:
+    from nodalarc.resolve_session import _refuse_ospf_instances_without_a_contiguous_backbone
+
+    resolved = resolve_session(_ospf_session({"strategy": "flat"}))
+    _with_interface_areas(monkeypatch, satellites_join_backbone=True)
+
+    _refuse_ospf_instances_without_a_contiguous_backbone(resolved)
+    borders = resolved.area_border_instances_by_node()
+    satellites = {node.node_id for node in resolved.nodes if node.kind == "satellite"}
+    assert set(borders) == satellites
+    assert set(borders.values()) == {("test_domain",)}
+
+
+def test_a_backbone_split_over_the_possible_links_is_refused(monkeypatch) -> None:
+    from nodalarc.resolve_session import _refuse_ospf_instances_without_a_contiguous_backbone
+
+    resolved = resolve_session(_ospf_session({"strategy": "flat"}))
+    _with_interface_areas(monkeypatch, satellites_join_backbone=False)
+
+    # The two ground routers hold the whole backbone and share no link.
+    with pytest.raises(
+        SessionResolutionError,
+        match=r"the backbone area 0\.0\.0\.0 of OSPF instance 'test_domain' splits into 2 parts",
+    ):
+        _refuse_ospf_instances_without_a_contiguous_backbone(resolved)

@@ -49,12 +49,8 @@ export function useWizard() {
     if (!data.rules) return;
     const defaults = data.rules;
     setState((current) => {
-      if (current.areaStrategy !== null && current.routingTimers !== null) return current;
-      return {
-        ...current,
-        areaStrategy: current.areaStrategy ?? defaults.default_area_strategy,
-        routingTimers: current.routingTimers ?? { ...defaults.routing_timer_defaults },
-      };
+      if (current.routingTimers !== null) return current;
+      return { ...current, routingTimers: { ...defaults.routing_timer_defaults } };
     });
   }, [data.rules]);
 
@@ -131,7 +127,16 @@ export function useWizard() {
         s.routingTimers && data.rules && facts && facts.bfd_timer_fields == null
           ? { ...s.routingTimers, [data.rules.bfd.enabled_field]: false }
           : s.routingTimers;
-      return { ...s, protocol, extensions: [], routingTimers, step: "extensions" as WizardStep };
+      // Each protocol offers its own area strategies; a new protocol starts at its default.
+      const areaStrategy = facts ? facts.default_area_strategy : null;
+      return {
+        ...s,
+        protocol,
+        extensions: [],
+        areaStrategy,
+        routingTimers,
+        step: "extensions" as WizardStep,
+      };
     });
     api.clearYaml();
     api.clearError();
@@ -212,7 +217,7 @@ export function useWizard() {
       orbitPropagator: null,
       protocol: null,
       extensions: [],
-      areaStrategy: data.rules?.default_area_strategy ?? null,
+      areaStrategy: null,
       routingTimers: data.rules ? { ...data.rules.routing_timer_defaults } : null,
     });
     api.clearYaml();

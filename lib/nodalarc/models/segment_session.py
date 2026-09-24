@@ -252,6 +252,11 @@ class RoutingDomain(BaseModel):
         return self
 
 
+# OSPF's backbone area. Every other area of an OSPF instance attaches to it
+# through an area border router, and it is contiguous.
+OSPF_BACKBONE_AREA = "0.0.0.0"
+
+
 def _validate_protocol_area_id(protocol: str, area_id: str) -> None:
     if protocol == "ospf":
         try:

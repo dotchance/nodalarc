@@ -6,9 +6,8 @@
  * track is extrapolated LINEARLY (40 steps, 30 s each) from the snapshot ground position
  * (geoToWorld) along the scene-unit velocity (velocityToScene), with every sample reprojected
  * onto the surface sphere at SURFACE_OFFSET = EARTH_RADIUS_RENDER*1.002 (avoids z-fighting).
- * Each track is one THREE.Line; color is getTrackColor — routing-area AREA_COLORS first, then
- * getPlaneColor, else the shared unknown tint — with a faint LineBasicMaterial
- * (opacity 0.15, depthWrite:false).
+ * Each track is one THREE.Line in its satellite's color (``colorOf``) with a faint
+ * LineBasicMaterial (opacity 0.15, depthWrite:false).
  *
  * The tracks are Earth-local curves (built from geoToWorld, which is the same body-local frame
  * <Constellation>/<GroundStation> write), so this mounts as a BODY CHILD inside <Body
@@ -24,25 +23,12 @@
 
 import { useEffect, useRef } from "react";
 import * as THREE from "three";
-import { AREA_COLORS, getPlaneColor, UNKNOWN_TINT } from "../../config";
 import { geoToWorld, velocityToScene } from "../geo";
 import { useBodyFrame } from "./BodyFrame";
 import type { NodeState } from "../../types";
-import { areaKey } from "../../networkIdentity";
 
 const STEPS = 40;
 const DT_PER_STEP = 30; // seconds per step → +/-10 minutes total
-
-function getTrackColor(node: NodeState): number {
-  const area = areaKey(node);
-  if (area && AREA_COLORS[area]) {
-    return AREA_COLORS[area]!;
-  }
-  if (node.plane != null) {
-    return getPlaneColor(node.plane);
-  }
-  return UNKNOWN_TINT;
-}
 
 /** Build the +/-10-minute surface-projected track points for one satellite. */
 function buildTrackPoints(
@@ -77,9 +63,11 @@ interface GroundTracksProps {
   nodes: NodeState[];
   /** Master toggle — OFF by default; when false, all tracks are torn down. */
   enabled: boolean;
+  /** A satellite's color in the current color mode. */
+  colorOf: (node: NodeState) => number;
 }
 
-export function GroundTracks({ nodes, enabled }: GroundTracksProps) {
+export function GroundTracks({ nodes, enabled, colorOf }: GroundTracksProps) {
   const { radiusRender, kmPerRenderUnit } = useBodyFrame();
   const groupRef = useRef<THREE.Group>(null);
   const tracksRef = useRef(new Map<string, THREE.Line>());
@@ -121,10 +109,11 @@ export function GroundTracks({ nodes, enabled }: GroundTracksProps) {
       if (existing) {
         existing.geometry.dispose();
         existing.geometry = new THREE.BufferGeometry().setFromPoints(points);
+        (existing.material as THREE.LineBasicMaterial).color.setHex(colorOf(sat));
       } else {
         const geometry = new THREE.BufferGeometry().setFromPoints(points);
         const material = new THREE.LineBasicMaterial({
-          color: getTrackColor(sat),
+          color: colorOf(sat),
           transparent: true,
           opacity: 0.15,
           depthWrite: false,
@@ -144,7 +133,7 @@ export function GroundTracks({ nodes, enabled }: GroundTracksProps) {
         tracks.delete(id);
       }
     }
-  }, [nodes, enabled, radiusRender, kmPerRenderUnit]);
+  }, [nodes, enabled, colorOf, radiusRender, kmPerRenderUnit]);
 
   return <group ref={groupRef} name="ground-tracks" />;
 }

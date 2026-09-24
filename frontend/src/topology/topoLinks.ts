@@ -11,7 +11,6 @@ import { withAlpha } from "../styles/tokens";
 
 const GROUND_STROKE = withAlpha(hexToCSS(LINK_GROUND_COLOR), 0.6);
 const ISL_STROKE = withAlpha(hexToCSS(LINK_ISL_COLOR), 0.5);
-const ISL_CROSS_AREA_STROKE = withAlpha(hexToCSS(LINK_ISL_COLOR), 0.35);
 const FLOW_STROKE = hexToCSS(LINK_FLOW_COLOR);
 const FAIL_RGB = [(LINK_FAIL_COLOR >> 16) & 0xff, (LINK_FAIL_COLOR >> 8) & 0xff, LINK_FAIL_COLOR & 0xff] as const;
 import type { LayoutLink, LayoutNode } from "./layout";
@@ -85,7 +84,7 @@ export function drawLinks(
     // Determine style before drawing
     let strokeStyle: string;
     let lineWidth: number;
-    let dash: number[] = [];
+    const dash: number[] = [];
 
     if (link.state === "failed") {
       const key = [link.nodeA, link.nodeB].sort().join(":");
@@ -100,10 +99,6 @@ export function drawLinks(
     } else if (link.isGround) {
       strokeStyle = GROUND_STROKE;
       lineWidth = 2;
-    } else if (link.isCrossArea) {
-      strokeStyle = ISL_CROSS_AREA_STROKE;
-      lineWidth = 1.5;
-      dash = [4, 3];
     } else {
       strokeStyle = ISL_STROKE;
       lineWidth = 1.5;

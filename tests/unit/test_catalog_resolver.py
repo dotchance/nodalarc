@@ -14,7 +14,11 @@ from nodalarc.catalog_paths import CatalogRoots
 from nodalarc.catalog_refs import CatalogRef
 from nodalarc.catalog_registry import validate_referenced_configuration_document
 from nodalarc.configuration_yaml import load_configuration_yaml
-from nodalarc.models.resolved_session import DomainArea, InterfaceRates
+from nodalarc.models.resolved_session import (
+    InterfaceRates,
+    IsisInstanceAreas,
+    OspfInstanceAreas,
+)
 from nodalarc.resolve_session import (
     SessionResolutionError,
     _derive_link_label,
@@ -359,14 +363,8 @@ def test_a_router_participates_in_every_domain_that_selects_it() -> None:
         "terrestrial",
     ]
     assert [d.domain_id for d in resolved.routing_domains_for(satellite.node_id)] == ["orbital"]
-    areas = resolved.routing_areas_by_node_id()
-    assert areas[router.node_id] == (
-        DomainArea("orbital", "49.0001"),
-        DomainArea("terrestrial", "0.0.0.0"),
-    )
-    assert areas[satellite.node_id] == (DomainArea("orbital", "49.0001"),)
-    # Each interface belongs to the domains its router shares with the other
-    # end; the site LAN has no other participant, so it joins both.
+    # Each interface belongs to the instances its router shares with the
+    # other end; the site LAN has no other participant, so it joins both.
     assert router.interfaces is not None
     lan = tuple(sorted(router.interfaces.ethernet))
     access = tuple(wan.name for wan in router.wan_interfaces)
@@ -376,6 +374,16 @@ def test_a_router_participates_in_every_domain_that_selects_it() -> None:
         "terrestrial": lan,
     }
     assert set(resolved.domain_interfaces(satellite.node_id)) == {"orbital"}
+    # IS-IS areas are the router's area addresses; OSPF areas belong to its
+    # interfaces, each in the router's area.
+    areas = resolved.instance_areas_by_node()
+    assert areas[router.node_id] == (
+        IsisInstanceAreas("orbital", ("49.0001",)),
+        OspfInstanceAreas(
+            "terrestrial", loopback_area="0.0.0.0", interface_areas=dict.fromkeys(lan, "0.0.0.0")
+        ),
+    )
+    assert areas[satellite.node_id] == (IsisInstanceAreas("orbital", ("49.0001",)),)
 
 
 def test_a_router_in_more_domains_of_a_protocol_than_its_adapter_renders_is_refused() -> None:
@@ -550,3 +558,84 @@ def test_each_wan_interface_carries_its_own_terminal_rates() -> None:
     }
     assert InterfaceRates(transmit_mbps=50.0, receive_mbps=600.0) in satellite_rates
     assert InterfaceRates(transmit_mbps=600.0, receive_mbps=50.0) in ground_rates
+
+
+def _simple_with_isis_areas(area_assignment: dict) -> dict:
+    raw = _load()
+    raw["routing"] = {
+        "domains": [
+            {
+                "id": "orbital",
+                "protocol": "isis",
+                "selectors": [{"any": [{"segment": "leo"}, {"segment": "ground"}]}],
+                "area_assignment": area_assignment,
+            }
+        ]
+    }
+    return raw
+
+
+def test_isis_routers_on_links_between_two_areas_are_area_border_routers() -> None:
+    resolved = resolve_session(
+        _simple_with_isis_areas(
+            {
+                "strategy": "explicit",
+                "assignments": [
+                    {"planes": [0], "area_id": "49.0001"},
+                    {"ground_stations": "all", "area_id": "49.0002"},
+                ],
+            }
+        ),
+        catalog=shipped_read_view(),
+    )
+
+    # Every access link joins a satellite in 49.0001 to a ground router in
+    # 49.0002. Denver's second router has no access link and shares its LAN
+    # with a router of its own area.
+    with_access_links = {
+        node_id
+        for candidate in resolved.link_candidates
+        if candidate.kind == "access"
+        for node_id in (candidate.node_a, candidate.node_b)
+    }
+    borders = resolved.area_border_instances_by_node()
+    assert set(borders) == with_access_links
+    assert set(borders.values()) == {("orbital",)}
+    assert "earth-us-co-denver-gw2" not in borders
+
+
+def test_one_isis_area_has_no_area_border_routers() -> None:
+    resolved = resolve_session(
+        _simple_with_isis_areas({"strategy": "flat"}), catalog=shipped_read_view()
+    )
+
+    assert resolved.area_border_instances_by_node() == {}
+
+
+def test_routers_receiving_boundary_exports_are_as_boundary_routers() -> None:
+    resolved = resolve_session(
+        _load("earth-leo-heo-geo-luna-reachability.yaml"), catalog=shipped_read_view()
+    )
+
+    # Each boundary link joins an Earth relay and a Luna relay, and the
+    # exports run both ways.
+    assert resolved.as_boundary_instances_by_node() == {
+        "geo-relay-sat-p00s03": ("earth_domain",),
+        "geo-relay-sat-p00s07": ("earth_domain",),
+        "luna-relay-sat-p00s00": ("luna_domain",),
+        "luna-relay-sat-p00s01": ("luna_domain",),
+    }
+
+
+def test_node_roles_follow_forwarding_and_participation() -> None:
+    resolved = resolve_session(_load("earth-luna-quic.yaml"), catalog=shipped_read_view())
+
+    roles = resolved.node_roles()
+    participants = {node_id for domain in resolved.routing_domains for node_id in domain.node_ids}
+    for node in resolved.nodes:
+        if node.forwarding == "host":
+            assert roles[node.node_id] == "host"
+        else:
+            assert node.node_id in participants
+            assert roles[node.node_id] == "router"
+    assert "host" in roles.values()

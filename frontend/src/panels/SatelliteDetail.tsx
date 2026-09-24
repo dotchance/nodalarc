@@ -4,7 +4,6 @@
 
 import { useEffect, useState } from "react";
 import { linkEventLabel } from "../explain/linkEvents";
-import { areaCSSColor } from "../globe/colors";
 import { Icon } from "../ui/icons/Icon";
 import { TaxonomyChip } from "../ui/Badge";
 import { REGIME_TINT, type Regime } from "../taxonomy/regime";
@@ -14,13 +13,8 @@ import { candidateStatus } from "../explain/derive";
 import { CandidateRow } from "../explain/components/CandidateRow";
 import { PairInspectorView } from "../explain/components/PairInspectorView";
 import { FamilyBadge } from "../explain/components/FamilyBadge";
-import {
-  areaKey,
-  areasLabel,
-  isGroundLinkState,
-  nodeAreaIds,
-  selectionTypeForNodeId,
-} from "../networkIdentity";
+import { isGroundLinkState, selectionTypeForNodeId } from "../networkIdentity";
+import { RoutingRows } from "./RoutingRows";
 
 interface SatelliteDetailProps {
   node: NodeState;
@@ -111,17 +105,6 @@ export function SatelliteDetail({ node, snapshot, anchorGsId,
   const satFault = (snapshot.actuation_notices ?? []).find(
     (n) => n.blocking_new_ground_link_up && n.affected_pairs.some((p) => p.includes(node.node_id)),
   );
-
-  // Determine role: Router vs Router (ABR)
-  const linkedAreas = new Set<string>();
-  for (const l of connectedLinks) {
-    const peerNode = snapshot.nodes.find(
-      (n) => n.node_id === (l.node_a === node.node_id ? l.node_b : l.node_a),
-    );
-    if (peerNode) for (const area of nodeAreaIds(peerNode)) linkedAreas.add(area);
-  }
-  for (const area of nodeAreaIds(node)) linkedAreas.add(area);
-  const role = linkedAreas.size > 1 ? "Router (ABR)" : "Router";
 
   const selectPeer = (peerId: string) => {
     const type = selectionTypeForNodeId(peerId, snapshot.nodes);
@@ -223,16 +206,7 @@ export function SatelliteDetail({ node, snapshot, anchorGsId,
           <span className="detail-value">{satFault.message}</span>
         </div>
       ) : null}
-      <div className="detail-row">
-        <span className="detail-label">Role</span>
-        <span className="detail-value">{role}</span>
-      </div>
-      <div className="detail-row">
-        <span className="detail-label">Routing Area</span>
-        <span className="detail-value" style={{ color: areaCSSColor(areaKey(node)) }}>
-          {areasLabel(node)}
-        </span>
-      </div>
+      <RoutingRows node={node} />
       <div className="detail-row">
         <span className="detail-label">Plane / Slot</span>
         <span className="detail-value">P{node.plane ?? "?"} / S{node.slot ?? "?"}</span>

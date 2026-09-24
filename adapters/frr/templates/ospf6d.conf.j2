@@ -15,7 +15,7 @@ exit
 
 {% if ipv6_loopback %}
 interface lo
- ipv6 ospf6 area {{ domain.area_id }}
+ ipv6 ospf6 area {{ domain.loopback_area }}
  ipv6 ospf6 passive
 exit
 {% endif %}
@@ -36,7 +36,7 @@ exit
 
 {% for segment in domain.segments if "ipv6" in segment.igp_families %}
 interface {{ segment.name }}
- ipv6 ospf6 area {{ domain.area_id }}
+ ipv6 ospf6 area {{ segment.ospf_area }}
  ipv6 ospf6 cost {{ segment.metric }}
 {% if segment.igp_active %}
  ipv6 ospf6 hello-interval {{ domain.ospf_hello_interval }}

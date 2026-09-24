@@ -58,7 +58,7 @@ from nodalarc.models.decision_explanation import (
 )
 from nodalarc.models.link_decisions import GroundLinkDecisionSnapshot
 from nodalarc.models.link_events import LatencyUpdate, LinkDown, LinkUp
-from nodalarc.models.resolved_session import InterfaceRates, ResolvedNode
+from nodalarc.models.resolved_session import InterfaceRates, NodeRole, ResolvedNode
 from nodalarc.models.scheduler_ops import ActualLinkSnapshot, ActuationState, parse_actuation_state
 from nodalarc.models.vs_api import (
     AlmanacState,
@@ -66,7 +66,7 @@ from nodalarc.models.vs_api import (
     LinkState,
     NetworkHealth,
     NodeAddress,
-    NodeRoutingArea,
+    NodeRoutingInstance,
     NodeState,
     RecentEvent,
 )
@@ -95,7 +95,7 @@ from nodalarc.resolve_session import SessionResolution
 from pydantic import ValidationError
 
 from vs_api.ops_log import is_operator_visible_ops_event, stamp_ops_event
-from vs_api.resolved_runtime_views import routing_label
+from vs_api.resolved_runtime_views import routing_instances_by_node_id, routing_label
 
 log = logging.getLogger(__name__)
 
@@ -154,19 +154,16 @@ class SessionContext:
             self._node_addresses_by_id,
             self._node_primary_prefix_by_id,
         ) = self._build_node_network_identity_map(resolution)
-        # The routing area of every IS-IS or OSPF router; other nodes have none.
-        self._routing_areas_by_node_id = {
-            node_id: tuple(
-                NodeRoutingArea(domain_id=area.domain_id, area_id=area.area_id) for area in areas
-            )
-            for node_id, areas in resolved.routing_areas_by_node_id().items()
-        }
+        # The routing instances every participant runs; other nodes have none.
+        self._routing_instances_by_node_id = routing_instances_by_node_id(resolved)
+        self._role_by_node_id = resolved.node_roles()
         self._resolved_static_nodes_by_id = self._build_resolved_static_node_states(
             resolved,
             addresses_by_id=self._node_addresses_by_id,
             primary_prefix_by_id=self._node_primary_prefix_by_id,
             min_elevation_by_id=self.gs_elevation_map,
-            routing_areas_by_node_id=self._routing_areas_by_node_id,
+            routing_instances_by_node_id=self._routing_instances_by_node_id,
+            role_by_node_id=self._role_by_node_id,
         )
         self._resolved_link_kind_by_rule_id = {
             rule.rule_id: rule.kind for rule in resolved.link_rules
@@ -275,6 +272,15 @@ class SessionContext:
         self._snapshot_received = False
         self._stopped = False
 
+    def _role_of(self, node_id: str) -> NodeRole:
+        """The resolved routing role of a node the ephemeris names."""
+        role = self._role_by_node_id.get(node_id)
+        if role is None:
+            raise ValueError(
+                f"session ephemeris names node {node_id!r}, which the resolved session does not"
+            )
+        return role
+
     def _init_state_only(self) -> None:
         """Initialize for tests that don't need a session config file.
         Sets identity fields to test defaults, then calls the shared
@@ -292,7 +298,8 @@ class SessionContext:
         self._resolved_static_nodes_by_id = {}
         self._resolved_link_kind_by_rule_id = {}
         self._interface_rates = {}
-        self._routing_areas_by_node_id = {}
+        self._routing_instances_by_node_id = {}
+        self._role_by_node_id = {}
         self.history_path = None
         self.history_error = None
         self._history_lock = threading.Lock()
@@ -1422,7 +1429,8 @@ class SessionContext:
                         vel_z_km_s=vel_ecef.z,
                         plane=node.plane,
                         slot=node.slot,
-                        routing_areas=self._routing_areas_by_node_id.get(node_id, ()),
+                        routing_instances=self._routing_instances_by_node_id.get(node_id, ()),
+                        role=self._role_of(node_id),
                         prefix=prefix,
                         addresses=addresses,
                         beam_falloff_exponent=self.beam_falloff_exponent,
@@ -1483,7 +1491,8 @@ class SessionContext:
                         vel_z_km_s=vel_ecef.z,
                         plane=node.plane,
                         slot=node.slot,
-                        routing_areas=self._routing_areas_by_node_id.get(node_id, ()),
+                        routing_instances=self._routing_instances_by_node_id.get(node_id, ()),
+                        role=self._role_of(node_id),
                         prefix=prefix,
                         addresses=addresses,
                         beam_falloff_exponent=self.beam_falloff_exponent,
@@ -1515,7 +1524,8 @@ class SessionContext:
                         vel_z_km_s=0.0,
                         plane=None,
                         slot=None,
-                        routing_areas=self._routing_areas_by_node_id.get(node_id, ()),
+                        routing_instances=self._routing_instances_by_node_id.get(node_id, ()),
+                        role=self._role_of(node_id),
                         prefix=prefix,
                         addresses=addresses,
                         min_elevation_deg=self.gs_elevation_map.get(node_id),
@@ -1840,7 +1850,8 @@ class SessionContext:
         addresses_by_id: dict[str, tuple[NodeAddress, ...]],
         primary_prefix_by_id: dict[str, str],
         min_elevation_by_id: dict[str, float],
-        routing_areas_by_node_id: dict[str, tuple[NodeRoutingArea, ...]],
+        routing_instances_by_node_id: dict[str, tuple[NodeRoutingInstance, ...]],
+        role_by_node_id: dict[str, NodeRole],
     ) -> dict[str, NodeState]:
         """Build VS-API state for resolved body-fixed nodes.
 
@@ -1856,7 +1867,8 @@ class SessionContext:
                 addresses=addresses_by_id.get(node.node_id, ()),
                 prefix=primary_prefix_by_id.get(node.node_id),
                 min_elevation_deg=min_elevation_by_id.get(node.node_id),
-                routing_areas=routing_areas_by_node_id.get(node.node_id, ()),
+                routing_instances=routing_instances_by_node_id.get(node.node_id, ()),
+                role=role_by_node_id[node.node_id],
             )
             for node in resolved.nodes
             if node.kind == "ground_station"
@@ -1869,7 +1881,8 @@ class SessionContext:
         addresses: tuple[NodeAddress, ...],
         prefix: str | None,
         min_elevation_deg: float | None,
-        routing_areas: tuple[NodeRoutingArea, ...],
+        routing_instances: tuple[NodeRoutingInstance, ...],
+        role: NodeRole,
     ) -> NodeState:
         if node.surface_position is None or node.reference_body is None:
             raise ValueError(f"resolved ground node {node.node_id!r} is missing fixed position")
@@ -1884,7 +1897,8 @@ class SessionContext:
             vel_z_km_s=0.0,
             plane=None,
             slot=None,
-            routing_areas=routing_areas,
+            routing_instances=routing_instances,
+            role=role,
             prefix=prefix,
             addresses=addresses,
             min_elevation_deg=min_elevation_deg,

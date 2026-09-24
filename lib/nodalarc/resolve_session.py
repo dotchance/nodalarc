@@ -36,6 +36,7 @@ from nodalarc.models.catalog import EnvValueFrom, Profile, ResolvedEnvEntry
 from nodalarc.models.identity import IdentityMode
 from nodalarc.models.link_rules import LinkRule, NodeSelector, TerminalSelector
 from nodalarc.models.resolved_session import (
+    OspfInstanceAreas,
     ResolvedBodyFacts,
     ResolvedEndpoint,
     ResolvedEphemeris,
@@ -58,8 +59,10 @@ from nodalarc.models.resolved_session import (
     ResolvedWanInterface,
     SidBlock,
     SourceContext,
+    router_node_ids,
 )
 from nodalarc.models.segment_session import (
+    OSPF_BACKBONE_AREA,
     ROUTING_CAPABILITIES,
     Dispatch,
     RoutingDomain,
@@ -241,6 +244,7 @@ def resolve_session_with_assets(
     _validate_access_ground_scheduling(resolved)
     _validate_allocator_wide_scheduling(resolved)
     _refuse_divergent_bfd_on_shared_interfaces(resolved)
+    _refuse_ospf_instances_without_a_contiguous_backbone(resolved)
     workload_profiles = {
         reference: Profile.model_validate(_load_expected(reference, catalog, "profile"))
         for reference in sorted({node.profile for node in resolved_nodes})
@@ -2616,12 +2620,11 @@ def _derive_host_attachments(
     from allocation and routing participation; nothing here is a protocol
     decision.
     """
-    participants = {node_id for domain in routing_domains for node_id in domain.node_ids}
+    routers = router_node_ids(tuple(item.node for item in runtime_nodes), routing_domains)
     router_segment_ports: list[tuple[str, Any, ResolvedInterfaceAddress]] = []
     for item in runtime_nodes:
         node = item.node
-        is_router = node.forwarding == "routed" and node.node_id in participants
-        if not is_router or node.interfaces is None:
+        if node.node_id not in routers or node.interfaces is None:
             continue
         for address in node.interfaces.ethernet.values():
             if address.ipv4:
@@ -2741,6 +2744,96 @@ def _refuse_divergent_bfd_on_shared_interfaces(resolved: ResolvedSession) -> Non
             "every protocol on an interface shares one BFD session with each neighbor, so "
             "domains enabling BFD on one interface must declare the same BFD timers"
         )
+
+
+def _refuse_ospf_instances_without_a_contiguous_backbone(resolved: ResolvedSession) -> None:
+    """Refuse an OSPF instance whose areas cannot attach to one backbone.
+
+    An OSPF instance with more than one area needs the backbone area
+    0.0.0.0, contiguous over the instance's possible adjacencies, and an
+    area border router joining every other area to it. An instance with one
+    area needs neither. Links that come and go with geometry after
+    resolution are the experiment's to show.
+    """
+    ospf_domains = [domain for domain in resolved.routing_domains if domain.protocol == "ospf"]
+    if not ospf_domains:
+        return
+    areas_by_node = {
+        (node_id, areas.domain_id): areas
+        for node_id, node_areas in resolved.instance_areas_by_node().items()
+        for areas in node_areas
+        if isinstance(areas, OspfInstanceAreas)
+    }
+    links_by_domain = resolved.instance_links()
+    problems: list[str] = []
+    for domain in ospf_domains:
+        routers = {
+            node_id: areas_by_node[(node_id, domain.domain_id)] for node_id in domain.node_ids
+        }
+        instance_areas = sorted({area for areas in routers.values() for area in areas.areas})
+        if len(instance_areas) <= 1:
+            continue
+        if OSPF_BACKBONE_AREA not in instance_areas:
+            problems.append(
+                f"OSPF instance {domain.domain_id!r} has areas {instance_areas} and no backbone "
+                f"area {OSPF_BACKBONE_AREA}"
+            )
+            continue
+        unattached = [
+            area
+            for area in instance_areas
+            if area != OSPF_BACKBONE_AREA
+            and not any(
+                OSPF_BACKBONE_AREA in areas.areas and area in areas.areas
+                for areas in routers.values()
+            )
+        ]
+        if unattached:
+            problems.append(
+                f"OSPF instance {domain.domain_id!r} has no area border router joining area(s) "
+                f"{unattached} to the backbone area {OSPF_BACKBONE_AREA}; a router joins two "
+                "areas only through interfaces in both"
+            )
+        backbone = {
+            node_id for node_id, areas in routers.items() if OSPF_BACKBONE_AREA in areas.areas
+        }
+        neighbors: dict[str, set[str]] = {node_id: set() for node_id in backbone}
+        for link in links_by_domain[domain.domain_id]:
+            a_in_backbone = any(
+                routers[link.node_a].interface_areas[name] == OSPF_BACKBONE_AREA
+                for name in link.interfaces_a
+            )
+            b_in_backbone = any(
+                routers[link.node_b].interface_areas[name] == OSPF_BACKBONE_AREA
+                for name in link.interfaces_b
+            )
+            if a_in_backbone and b_in_backbone:
+                neighbors[link.node_a].add(link.node_b)
+                neighbors[link.node_b].add(link.node_a)
+        parts: list[list[str]] = []
+        unvisited = set(backbone)
+        while unvisited:
+            start = min(unvisited)
+            unvisited.discard(start)
+            part, frontier = {start}, [start]
+            while frontier:
+                for neighbor in neighbors[frontier.pop()]:
+                    if neighbor in unvisited:
+                        unvisited.discard(neighbor)
+                        part.add(neighbor)
+                        frontier.append(neighbor)
+            parts.append(sorted(part))
+        if len(parts) > 1:
+            shown = "; ".join(
+                f"{len(part)} router(s), e.g. {', '.join(part[:3])}"
+                for part in sorted(parts, key=len, reverse=True)
+            )
+            problems.append(
+                f"the backbone area {OSPF_BACKBONE_AREA} of OSPF instance {domain.domain_id!r} "
+                f"splits into {len(parts)} parts over the possible links: {shown}"
+            )
+    if problems:
+        raise SessionResolutionError("; ".join(problems))
 
 
 def _terminal_selectors_by_rule(

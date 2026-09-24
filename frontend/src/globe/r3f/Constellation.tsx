@@ -17,7 +17,7 @@
 import { useEffect, useLayoutEffect, useMemo, useRef } from "react";
 import * as THREE from "three";
 import { useFrame, type ThreeEvent } from "@react-three/fiber";
-import { SAT_RADIUS, SAT_SEGMENTS, AREA_COLORS, getPlaneColor, UNKNOWN_TINT } from "../../config";
+import { SAT_RADIUS, SAT_SEGMENTS, getPlaneColor } from "../../config";
 import { tokens } from "../../styles/tokens";
 import { REGIME_TINT, type Regime } from "../../taxonomy/regime";
 import { geoToWorld } from "../geo";
@@ -31,7 +31,7 @@ import {
   type SessionEphemeris,
 } from "../../sim/ephemeris";
 import type { ColorMode, NodeState, Selection } from "../../types";
-import { areaKey } from "../../networkIdentity";
+import type { AreaColoring } from "../../routing/instances";
 import { FAMILY_TONE } from "../../explain/families";
 import type { SatRelation } from "../../explain/gsCandidateRelations";
 import { removeNode, setNodeLocalPosition } from "./positions";
@@ -44,10 +44,15 @@ const _tmpMatrix = new THREE.Matrix4();
 const _tmpColor = new THREE.Color();
 const _workerPos = { x: 0, y: 0, z: 0 };
 
-function satColor(node: NodeState, mode: ColorMode, regime: Regime | undefined): number {
+/** A satellite's color in the chosen color mode; ground tracks share it. */
+export function satColor(
+  node: NodeState,
+  mode: ColorMode,
+  regime: Regime | undefined,
+  areaColoring: AreaColoring,
+): number {
   if (mode === "regime") return REGIME_TINT[regime ?? "unknown"].hex;
-  const area = areaKey(node);
-  if (mode === "area" && area) return AREA_COLORS[area] ?? UNKNOWN_TINT;
+  if (mode === "area") return areaColoring.colorOf(node);
   if (mode === "plane" && node.plane != null) return getPlaneColor(node.plane);
   return tokens.colorNodeSatellite;
 }
@@ -66,6 +71,8 @@ interface ConstellationProps {
   relations: Map<string, SatRelation> | null;
   /** Authored-orbit regime per node id (taxonomy/regime.ts), derived in App. */
   regimeById: ReadonlyMap<string, Regime>;
+  /** Area colors of the chosen IS-IS or OSPF instance. */
+  areaColoring: AreaColoring;
 }
 
 export function Constellation({
@@ -78,6 +85,7 @@ export function Constellation({
   onHover,
   relations,
   regimeById,
+  areaColoring,
 }: ConstellationProps) {
   const meshRef = useRef<THREE.InstancedMesh>(null);
   const satIndex = useRef(new Map<string, number>());
@@ -145,9 +153,12 @@ export function Constellation({
       if (relations) {
         const r = relations.get(node.node_id);
         if (r) _tmpColor.setHex(FAMILY_TONE[r.family].hex);
-        else _tmpColor.setHex(satColor(node, colorMode, regimeById.get(node.node_id))).multiplyScalar(0.28);
+        else
+          _tmpColor
+            .setHex(satColor(node, colorMode, regimeById.get(node.node_id), areaColoring))
+            .multiplyScalar(0.28);
       } else {
-        _tmpColor.setHex(satColor(node, colorMode, regimeById.get(node.node_id)));
+        _tmpColor.setHex(satColor(node, colorMode, regimeById.get(node.node_id), areaColoring));
       }
       mesh.setColorAt(idx, _tmpColor);
     }
@@ -172,7 +183,7 @@ export function Constellation({
     // sphere and the raycast skips all instances — sat clicks go dead until
     // a reload. Null it so the next raycast recomputes from live matrices.
     mesh.boundingSphere = null;
-  }, [nodes, colorMode, relations, regimeById, bodyId, bodyFrame.radiusRender, bodyFrame.kmPerRenderUnit]);
+  }, [nodes, colorMode, relations, regimeById, areaColoring, bodyId, bodyFrame.radiusRender, bodyFrame.kmPerRenderUnit]);
 
   // Per-frame propagation from the latest ephemeris and sim clock.
   useFrame(() => {

@@ -9,8 +9,11 @@ materialized terminal inventory, disjoint SID blocks, and resolved link-rule
 node sets.
 """
 
-from dataclasses import dataclass
+import ipaddress
+from collections.abc import Mapping
+from dataclasses import dataclass, field
 from datetime import datetime
+from types import MappingProxyType
 from typing import Literal, NamedTuple
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -26,10 +29,13 @@ from nodalarc.models.link_rules import (
 )
 from nodalarc.models.segment_session import (
     LINK_STATE_PROTOCOLS,
+    OSPF_BACKBONE_AREA,
     Addressing,
     AreaAssignment,
     Dispatch,
+    ExportRule,
     Routing,
+    RoutingBoundary,
     RoutingCapability,
     RoutingProtocol,
     RoutingTimers,
@@ -51,11 +57,100 @@ class InterfaceRates(NamedTuple):
     receive_mbps: float
 
 
-class DomainArea(NamedTuple):
-    """One routing area a node sits in: a domain it participates in and its area there."""
+# A node's role in routing. A router forwards between subnets and
+# participates in at least one routing instance; a host forwards nothing; a
+# node that forwards and participates in no instance forwards only between
+# its connected subnets.
+NodeRole = Literal["router", "host", "forwarding_only"]
+
+
+@dataclass(frozen=True)
+class IsisInstanceAreas:
+    """A router's areas in one IS-IS instance: the area addresses of its NET.
+
+    IS-IS interfaces carry no area; two routers of one instance whose area
+    addresses share none form only a Level 2 adjacency.
+    """
 
     domain_id: str
-    area_id: str
+    area_addresses: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class OspfInstanceAreas:
+    """A router's areas in one OSPF instance: the area of each interface.
+
+    ``interface_areas`` maps each interface the router runs the instance on
+    to its area; the loopback's area is separate.
+    """
+
+    domain_id: str
+    loopback_area: str
+    interface_areas: Mapping[str, str] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "interface_areas", MappingProxyType(dict(self.interface_areas)))
+
+    @property
+    def areas(self) -> tuple[str, ...]:
+        """Every area the router has an interface in, in numeric order."""
+        return tuple(
+            sorted(
+                {self.loopback_area, *self.interface_areas.values()},
+                key=lambda area: int(ipaddress.IPv4Address(area)),
+            )
+        )
+
+    @property
+    def area_border(self) -> bool:
+        """Whether the router has interfaces in the backbone and another area."""
+        areas = self.areas
+        return OSPF_BACKBONE_AREA in areas and len(areas) > 1
+
+
+InstanceAreas = IsisInstanceAreas | OspfInstanceAreas
+
+
+class InstanceLink(NamedTuple):
+    """A possible adjacency of one routing instance: two participants and the
+    interfaces each can run the instance on toward the other.
+
+    A fixed link names one interface on each end; an access link names every
+    access interface of each end in the instance, since the link can form on
+    any of them; a segment names each member's segment interface.
+    """
+
+    node_a: str
+    interfaces_a: tuple[str, ...]
+    node_b: str
+    interfaces_b: tuple[str, ...]
+
+
+class BoundaryImport(NamedTuple):
+    """One router receiving a ``static_ip`` boundary export into an instance.
+
+    ``node_id`` participates in the export's ``to`` instance and installs the
+    exported prefixes over ``interface`` toward ``peer_id``, which
+    participates in its ``from`` instance.
+    """
+
+    boundary: RoutingBoundary
+    export: ExportRule
+    node_id: str
+    interface: str
+    peer_id: str
+
+
+def router_node_ids(
+    nodes: tuple[ResolvedNode, ...], routing_domains: tuple[ResolvedRoutingDomain, ...]
+) -> frozenset[str]:
+    """The routers: nodes that forward (``routed``) and participate in an instance."""
+    participants = {node_id for domain in routing_domains for node_id in domain.node_ids}
+    return frozenset(
+        node.node_id
+        for node in nodes
+        if node.forwarding == "routed" and node.node_id in participants
+    )
 
 
 TerminalMediumLiteral = Literal["rf", "optical"]
@@ -315,7 +410,7 @@ class ResolvedRoutingDomain(BaseModel):
             )
         assignment = self.area_assignment
         is_ospf = self.protocol == "ospf"
-        first_area = "0.0.0.0" if is_ospf else "49.0001"
+        first_area = OSPF_BACKBONE_AREA if is_ospf else "49.0001"
         if assignment is None or assignment.strategy == "flat":
             return (
                 assignment.gs_area_id
@@ -530,6 +625,16 @@ class ResolvedNode(BaseModel):
                 if getattr(self.originated_prefixes, family) is not None
             )
         return frozenset(carried)
+
+    @property
+    def access_interfaces(self) -> tuple[str, ...]:
+        """The WAN interfaces behind the node's access terminals, in WAN order."""
+        access_terminals = {
+            block.terminal_id
+            for block in self.terminal_inventory
+            if block.endpoint_role == "access"
+        }
+        return tuple(wan.name for wan in self.wan_interfaces if wan.terminal_id in access_terminals)
 
     @model_validator(mode="after")
     def _validate_terminals(self) -> ResolvedNode:
@@ -909,13 +1014,16 @@ class ResolvedSession(BaseModel):
                 return node
         return None
 
-    def routing_areas_by_node_id(self) -> dict[str, tuple[DomainArea, ...]]:
-        """The routing areas of every IS-IS or OSPF participant, in declared domain order.
+    def instance_areas_by_node(self) -> dict[str, tuple[InstanceAreas, ...]]:
+        """Every IS-IS and OSPF participant's areas, per instance in declared order.
 
-        A node has one area per area-based domain it participates in. A node
-        absent from the mapping runs no area-based routing protocol.
+        The session assigns areas per router (``area_assignment``), so each
+        OSPF interface, the loopback included, takes its router's area, and
+        each IS-IS router has one area address. A node absent from the
+        mapping participates in no IS-IS or OSPF instance.
         """
-        areas: dict[str, list[DomainArea]] = {}
+        interfaces_by_node = self.domain_interfaces_by_node()
+        areas: dict[str, list[InstanceAreas]] = {}
         for domain in self.routing_domains:
             if domain.protocol not in LINK_STATE_PROTOCOLS:
                 continue
@@ -925,10 +1033,175 @@ class ResolvedSession(BaseModel):
                     raise ValueError(
                         f"routing domain {domain.domain_id!r} names unknown node {node_id!r}"
                     )
-                areas.setdefault(node_id, []).append(
-                    DomainArea(domain.domain_id, domain.area_id_for(node))
-                )
+                area = domain.area_id_for(node)
+                instance_areas: InstanceAreas
+                if domain.protocol == "isis":
+                    instance_areas = IsisInstanceAreas(domain.domain_id, (area,))
+                else:
+                    instance_areas = OspfInstanceAreas(
+                        domain.domain_id,
+                        loopback_area=area,
+                        interface_areas=dict.fromkeys(
+                            interfaces_by_node[node_id][domain.domain_id], area
+                        ),
+                    )
+                areas.setdefault(node_id, []).append(instance_areas)
         return {node_id: tuple(node_areas) for node_id, node_areas in areas.items()}
+
+    def instance_links(self) -> dict[str, tuple[InstanceLink, ...]]:
+        """Each instance's possible adjacencies, keyed by domain id.
+
+        A fixed link, an access link or a shared Ethernet segment joins two
+        participants of an instance when each end has an interface in the
+        instance toward the other (``domain_interfaces_by_node``).
+        """
+        interfaces_by_node = self.domain_interfaces_by_node()
+        nodes = {node.node_id: node for node in self.nodes}
+        links: dict[str, list[InstanceLink]] = {
+            domain.domain_id: [] for domain in self.routing_domains
+        }
+
+        def in_instance(node_id: str, domain_id: str, names: tuple[str, ...]) -> tuple[str, ...]:
+            own = interfaces_by_node.get(node_id, {}).get(domain_id, ())
+            return tuple(name for name in names if name in own)
+
+        for candidate in self.link_candidates:
+            for domain_id in links:
+                if candidate.kind == "access":
+                    ends = (
+                        in_instance(
+                            candidate.node_a, domain_id, nodes[candidate.node_a].access_interfaces
+                        ),
+                        in_instance(
+                            candidate.node_b, domain_id, nodes[candidate.node_b].access_interfaces
+                        ),
+                    )
+                else:
+                    ends = (
+                        in_instance(candidate.node_a, domain_id, (candidate.fixed_interfaces[0],)),
+                        in_instance(candidate.node_b, domain_id, (candidate.fixed_interfaces[1],)),
+                    )
+                if ends[0] and ends[1]:
+                    links[domain_id].append(
+                        InstanceLink(candidate.node_a, ends[0], candidate.node_b, ends[1])
+                    )
+        for segment in self.ethernet_segments:
+            for domain_id in links:
+                members = [
+                    member
+                    for member in segment.members
+                    if in_instance(member.node_id, domain_id, (member.interface,))
+                ]
+                for index, first in enumerate(members):
+                    for second in members[index + 1 :]:
+                        links[domain_id].append(
+                            InstanceLink(
+                                first.node_id,
+                                (first.interface,),
+                                second.node_id,
+                                (second.interface,),
+                            )
+                        )
+        return {domain_id: tuple(items) for domain_id, items in links.items()}
+
+    def area_border_instances_by_node(self) -> dict[str, tuple[str, ...]]:
+        """The IS-IS and OSPF instances in which each router is an area border router.
+
+        An OSPF router is one when its interfaces sit in the backbone and
+        another area. An IS-IS router is one when a possible adjacency of the
+        instance joins it to a router whose area addresses share none with
+        its own. Instances follow declared order.
+        """
+        areas_by_node = self.instance_areas_by_node()
+        isis_areas = {
+            (node_id, areas.domain_id): set(areas.area_addresses)
+            for node_id, node_areas in areas_by_node.items()
+            for areas in node_areas
+            if isinstance(areas, IsisInstanceAreas)
+        }
+        border: set[tuple[str, str]] = {
+            (node_id, areas.domain_id)
+            for node_id, node_areas in areas_by_node.items()
+            for areas in node_areas
+            if isinstance(areas, OspfInstanceAreas) and areas.area_border
+        }
+        for domain_id, links in self.instance_links().items():
+            for link in links:
+                own = isis_areas.get((link.node_a, domain_id))
+                peer = isis_areas.get((link.node_b, domain_id))
+                if own is not None and peer is not None and not own & peer:
+                    border.update({(link.node_a, domain_id), (link.node_b, domain_id)})
+        return {
+            node_id: tuple(
+                domain.domain_id
+                for domain in self.routing_domains
+                if (node_id, domain.domain_id) in border
+            )
+            for node_id in sorted({node_id for node_id, _ in border})
+        }
+
+    def boundary_imports(self) -> tuple[BoundaryImport, ...]:
+        """Every router receiving a ``static_ip`` boundary export, per export.
+
+        The receiving end of ``from: X, to: Y`` over a boundary link is the
+        link's end that participates in Y while its peer participates in X.
+        """
+        if self.routing is None or not self.routing.boundaries:
+            return ()
+        participants = {domain.domain_id: set(domain.node_ids) for domain in self.routing_domains}
+        imports: list[BoundaryImport] = []
+        for boundary in self.routing.boundaries:
+            if boundary.adapter != "static_ip":
+                continue
+            for export in boundary.export:
+                for candidate in self.link_candidates:
+                    if candidate.rule_id != boundary.over:
+                        continue
+                    ends = (
+                        (candidate.node_a, candidate.fixed_interfaces[0], candidate.node_b),
+                        (candidate.node_b, candidate.fixed_interfaces[1], candidate.node_a),
+                    )
+                    for node_id, interface, peer_id in ends:
+                        if (
+                            node_id in participants[export.to]
+                            and peer_id in participants[export.from_]
+                        ):
+                            imports.append(
+                                BoundaryImport(boundary, export, node_id, interface, peer_id)
+                            )
+        return tuple(imports)
+
+    def as_boundary_instances_by_node(self) -> dict[str, tuple[str, ...]]:
+        """The IS-IS and OSPF instances each router redistributes boundary exports into.
+
+        Such a router is an autonomous system boundary router of the
+        instance. Instances follow declared order.
+        """
+        protocol_of = {domain.domain_id: domain.protocol for domain in self.routing_domains}
+        into: dict[str, set[str]] = {}
+        for item in self.boundary_imports():
+            if protocol_of[item.export.to] in LINK_STATE_PROTOCOLS:
+                into.setdefault(item.node_id, set()).add(item.export.to)
+        return {
+            node_id: tuple(
+                domain.domain_id for domain in self.routing_domains if domain.domain_id in domains
+            )
+            for node_id, domains in sorted(into.items())
+        }
+
+    def node_roles(self) -> dict[str, NodeRole]:
+        """Every node's role in routing (``NodeRole``)."""
+        routers = router_node_ids(self.nodes, self.routing_domains)
+        return {
+            node.node_id: (
+                "router"
+                if node.node_id in routers
+                else "host"
+                if node.forwarding == "host"
+                else "forwarding_only"
+            )
+            for node in self.nodes
+        }
 
     def routing_domains_for(self, node_id: str) -> tuple[ResolvedRoutingDomain, ...]:
         """The routing domains ``node_id`` participates in, in declared order.
@@ -993,16 +1266,10 @@ class ResolvedSession(BaseModel):
             own = participation.get(node.node_id)
             if own is None:
                 continue
-            access_terminals = {
-                block.terminal_id
-                for block in node.terminal_inventory
-                if block.endpoint_role == "access"
-            }
-            for wan in node.wan_interfaces:
-                if wan.terminal_id in access_terminals:
-                    assigned[node.node_id].setdefault(wan.name, set()).update(
-                        own & access_reach[node.node_id]
-                    )
+            for name in node.access_interfaces:
+                assigned[node.node_id].setdefault(name, set()).update(
+                    own & access_reach[node.node_id]
+                )
         for segment in self.ethernet_segments:
             for member in segment.members:
                 own = participation.get(member.node_id)

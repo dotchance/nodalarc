@@ -10,8 +10,13 @@ import { setupInteraction, type ViewTransform } from "./interaction";
 import { FAIL_HOLD_MS, FAIL_FADE_MS, LINK_FLOW_COLOR, hexToCSS } from "../config";
 import { tokens } from "../styles/tokens";
 import type { Regime } from "../taxonomy/regime";
-import type { StateSnapshot, Selection, LinkState, ColorMode } from "../types";
-import { areasLabel, nodeAreaIds } from "../networkIdentity";
+import type { StateSnapshot, Selection, LinkState, ColorMode, NodeState } from "../types";
+import {
+  nodeInstance,
+  roleLabel,
+  routingSummary,
+  type AreaColoring,
+} from "../routing/instances";
 
 /** Recently-removed link kept for fail-flash animation. */
 interface FailedLink {
@@ -26,12 +31,19 @@ interface TopologyViewProps {
   onSelect: (sel: Selection | null) => void;
   onFlyTo?: (nodeId: string) => void;
   colorMode?: ColorMode;
+  /** Area colors of the chosen IS-IS or OSPF instance. */
+  areaColoring: AreaColoring;
   showIslLinks?: boolean;
   showGroundLinks?: boolean;
 }
 
+/** The band of a node: its legend entry in the colored instance. */
+function bandOf(areaColoring: AreaColoring): (node: NodeState) => string | null {
+  return (node) => areaColoring.entryOf(node)?.label ?? null;
+}
+
 export function TopologyView({
-  regimeById, snapshot, selection, onSelect, onFlyTo, colorMode = "area", showIslLinks = true, showGroundLinks = true }: TopologyViewProps) {
+  regimeById, snapshot, selection, onSelect, onFlyTo, colorMode = "area", areaColoring, showIslLinks = true, showGroundLinks = true }: TopologyViewProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const transformRef = useRef<ViewTransform>({ offsetX: 0, offsetY: 0, scale: 1 });
   const animFrameRef = useRef<number>(0);
@@ -91,7 +103,7 @@ export function TopologyView({
       mergedLinks.push({ ...fl.link, state: "failed" });
     }
 
-    const layout = computeLayout(snapshot.nodes, mergedLinks);
+    const layout = computeLayout(snapshot.nodes, mergedLinks, bandOf(areaColoring));
 
     // Auto-center layout when canvas becomes visible or resizes significantly
     const cw = canvas.width;
@@ -123,7 +135,11 @@ export function TopologyView({
     dashOffsetRef.current = (dashOffsetRef.current + 0.5) % 18;
 
     // Draw area bounding boxes (behind everything)
-    drawAreaBounds(ctx, layout.areas);
+    drawAreaBounds(ctx, layout.areas, (band) => {
+      const entry = areaColoring.legend.find((item) => item.label === band);
+      if (entry === undefined) throw new Error(`topology band ${band} is not in the area legend`);
+      return entry.color;
+    });
 
     // Draw links first (below nodes)
     const flowPath = snapshot.traced_paths.length > 0
@@ -148,37 +164,38 @@ export function TopologyView({
       }
     }
 
-    // Determine isolated nodes (no active links) and ABR nodes (links in multiple areas)
+    // Isolated nodes have no active links; the ABR badge marks the colored
+    // instance's area border routers.
     const connectedNodes = new Set<string>();
-    const nodeAreas = new Map<string, Set<string>>();
     for (const l of layout.links) {
       connectedNodes.add(l.nodeA);
       connectedNodes.add(l.nodeB);
-      // Track areas each node has links to
-      const areaA = nodeMap.get(l.nodeA)?.area;
-      const areaB = nodeMap.get(l.nodeB)?.area;
-      if (areaA && areaB) {
-        if (!nodeAreas.has(l.nodeA)) nodeAreas.set(l.nodeA, new Set());
-        if (!nodeAreas.has(l.nodeB)) nodeAreas.set(l.nodeB, new Set());
-        nodeAreas.get(l.nodeA)!.add(areaA).add(areaB);
-        nodeAreas.get(l.nodeB)!.add(areaA).add(areaB);
-      }
     }
-    const abrNodes = new Set<string>();
-    for (const [id, areas] of nodeAreas) {
-      if (areas.size > 1) abrNodes.add(id);
-    }
+    const stateById = new Map(snapshot.nodes.map((n) => [n.node_id, n]));
+    const coloredDomain = areaColoring.instance?.domainId ?? null;
 
     for (const node of layout.nodes) {
+      const state = stateById.get(node.id)!;
       const isSelected = selection?.id === node.id;
       const isIsolated = !connectedNodes.has(node.id);
-      drawNode(ctx, node, isSelected, isIsolated, abrNodes.has(node.id), colorMode, regimeById.get(node.id));
+      const isABR =
+        coloredDomain !== null && nodeInstance(state, coloredDomain)?.area_border === true;
+      drawNode(
+        ctx,
+        node,
+        isSelected,
+        isIsolated,
+        isABR,
+        colorMode,
+        regimeById.get(node.id),
+        areaColoring.colorOf(state),
+      );
     }
 
     ctx.restore();
 
     animFrameRef.current = requestAnimationFrame(draw);
-  }, [snapshot, selection, showIslLinks, showGroundLinks]);
+  }, [snapshot, selection, showIslLinks, showGroundLinks, colorMode, regimeById, areaColoring]);
 
   useEffect(() => {
     animFrameRef.current = requestAnimationFrame(draw);
@@ -196,7 +213,7 @@ export function TopologyView({
       (t) => { transformRef.current = t; },
       (worldX, worldY) => {
         if (!snapshot) return;
-        const layout = computeLayout(snapshot.nodes, snapshot.links);
+        const layout = computeLayout(snapshot.nodes, snapshot.links, bandOf(areaColoring));
         const nodeMap = new Map(layout.nodes.map((n) => [n.id, n]));
 
         // Test nodes first, then links
@@ -225,7 +242,7 @@ export function TopologyView({
           setTooltipContent(null);
           return;
         }
-        const layout = computeLayout(snapshot.nodes, snapshot.links);
+        const layout = computeLayout(snapshot.nodes, snapshot.links, bandOf(areaColoring));
         const nodeMap = new Map(layout.nodes.map((n) => [n.id, n]));
 
         const hitNode = hitTestNode(worldX, worldY, layout.nodes);
@@ -238,19 +255,8 @@ export function TopologyView({
           });
           const nodeState = snapshot.nodes.find((n) => n.node_id === hitNode.id);
           if (nodeState && nodeState.node_type === "satellite") {
-            const connectedLinks = snapshot.links.filter(
-              (l) => l.node_a === hitNode.id || l.node_b === hitNode.id,
-            );
-            const linkedAreas = new Set<string>();
-            for (const area of nodeAreaIds(nodeState)) linkedAreas.add(area);
-            for (const l of connectedLinks) {
-              const peerId = l.node_a === hitNode.id ? l.node_b : l.node_a;
-              const peer = snapshot.nodes.find((n) => n.node_id === peerId);
-              if (peer) for (const area of nodeAreaIds(peer)) linkedAreas.add(area);
-            }
-            const abrTag = linkedAreas.size > 1 ? " [ABR]" : "";
             setTooltipContent(
-              `${hitNode.id}: ${nodeState.isl_count} ISLs, ${nodeState.gnd_count} GND, Area ${areasLabel(nodeState)}${abrTag}`,
+              `${hitNode.id}: ${roleLabel(nodeState.role)}, ${nodeState.isl_count} ISLs, ${nodeState.gnd_count} GND, ${routingSummary(nodeState)}`,
             );
           } else if (nodeState) {
             const prefix = nodeState.prefix ? `, ${nodeState.prefix}` : "";
@@ -290,7 +296,7 @@ export function TopologyView({
     );
 
     return cleanup;
-  }, [snapshot, onSelect]);
+  }, [snapshot, onSelect, onFlyTo, areaColoring]);
 
   return (
     <div style={{ position: "relative", width: "100%", height: "100%" }}>

@@ -19,7 +19,8 @@ function node(node_id: string): NodeState {
     vel_z_km_s: 0,
     plane: null,
     slot: null,
-    routing_areas: [] as NodeState["routing_areas"],
+    routing_instances: [] as NodeState["routing_instances"],
+    role: "router",
   } as NodeState;
 }
 

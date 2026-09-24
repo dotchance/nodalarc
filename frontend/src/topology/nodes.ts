@@ -2,7 +2,7 @@
 // Licensed under the Apache License, Version 2.0. See LICENSE file.
 /** Draw topology nodes on Canvas 2D. */
 
-import { AREA_COLORS, GS_COLOR, getPlaneColor, UNKNOWN_TINT, hexToCSS } from "../config";
+import { GS_COLOR, getPlaneColor, hexToCSS } from "../config";
 import { tokens } from "../styles/tokens";
 import { REGIME_TINT, type Regime } from "../taxonomy/regime";
 import type { LayoutNode, AreaBounds } from "./layout";
@@ -11,12 +11,17 @@ import type { ColorMode } from "../types";
 const SAT_RADIUS = 8;
 const GS_RADIUS = 10;
 
-function satColor(node: LayoutNode, colorMode: ColorMode, regime: Regime | undefined): string {
+function satColor(
+  node: LayoutNode,
+  colorMode: ColorMode,
+  regime: Regime | undefined,
+  areaColor: number,
+): string {
   if (colorMode === "regime") return REGIME_TINT[regime ?? "unknown"].css;
   if (colorMode === "plane" && node.plane != null) {
     return hexToCSS(getPlaneColor(node.plane));
   }
-  return hexToCSS(AREA_COLORS[node.area ?? ""] ?? UNKNOWN_TINT);
+  return hexToCSS(areaColor);
 }
 
 export function drawNode(
@@ -25,11 +30,13 @@ export function drawNode(
   selected: boolean,
   isolated: boolean,
   isABR: boolean,
-  colorMode: ColorMode = "area",
-  regime?: Regime,
+  colorMode: ColorMode,
+  regime: Regime | undefined,
+  areaColor: number,
 ): void {
   const radius = node.type === "ground_station" ? GS_RADIUS : SAT_RADIUS;
-  const color = node.type === "ground_station" ? hexToCSS(GS_COLOR) : satColor(node, colorMode, regime);
+  const color =
+    node.type === "ground_station" ? hexToCSS(GS_COLOR) : satColor(node, colorMode, regime, areaColor);
 
   ctx.globalAlpha = isolated ? 0.4 : 1.0;
 
@@ -79,15 +86,14 @@ function hexToRgb(hex: number): [number, number, number] {
 export function drawAreaBounds(
   ctx: CanvasRenderingContext2D,
   areas: AreaBounds[],
+  colorOfBand: (band: string) => number,
 ): void {
-  // Skip drawing when there's only one area or no areas
+  // Skip drawing when there's only one band or none
   if (areas.length <= 1) return;
 
   const radius = 6;
   for (const area of areas) {
-    // Skip null, unknown, or 0.0.0.0 area ids
-    if (!area.id || area.id === "unknown" || area.id === "0.0.0.0") continue;
-    const color = AREA_COLORS[area.id] ?? UNKNOWN_TINT;
+    const color = colorOfBand(area.id);
     const [r, g, b] = hexToRgb(color);
     const w = area.maxX - area.minX;
     const h = area.maxY - area.minY;
@@ -109,7 +115,7 @@ export function drawAreaBounds(
     ctx.fillStyle = `rgba(${r}, ${g}, ${b}, 0.5)`;
     ctx.font = `9px ${tokens.fontFamilyCli}`;
     ctx.textAlign = "left";
-    ctx.fillText(`Area ${area.id}`, area.minX, area.minY - 4);
+    ctx.fillText(area.id, area.minX, area.minY - 4);
   }
 }
 

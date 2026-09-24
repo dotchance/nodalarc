@@ -538,23 +538,81 @@
       "title": "NodeAddress",
       "type": "object"
     },
-    "NodeRoutingArea": {
-      "description": "A node's area in one IS-IS or OSPF domain it participates in.",
+    "NodeInstanceInterface": {
+      "description": "One interface a node runs a routing instance on.",
+      "properties": {
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "area_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Area Id"
+        }
+      },
+      "required": [
+        "name",
+        "area_id"
+      ],
+      "title": "NodeInstanceInterface",
+      "type": "object"
+    },
+    "NodeRoutingInstance": {
+      "description": "A node's participation in one routing instance (a ``routing.domains`` entry).",
       "properties": {
         "domain_id": {
           "title": "Domain Id",
           "type": "string"
         },
-        "area_id": {
-          "title": "Area Id",
+        "protocol": {
+          "enum": [
+            "isis",
+            "ospf",
+            "bgp",
+            "static"
+          ],
+          "title": "Protocol",
           "type": "string"
+        },
+        "areas": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Areas",
+          "type": "array"
+        },
+        "interfaces": {
+          "items": {
+            "$ref": "#/$defs/NodeInstanceInterface"
+          },
+          "title": "Interfaces",
+          "type": "array"
+        },
+        "area_border": {
+          "title": "Area Border",
+          "type": "boolean"
+        },
+        "as_boundary": {
+          "title": "As Boundary",
+          "type": "boolean"
         }
       },
       "required": [
         "domain_id",
-        "area_id"
+        "protocol",
+        "areas",
+        "interfaces",
+        "area_border",
+        "as_boundary"
       ],
-      "title": "NodeRoutingArea",
+      "title": "NodeRoutingInstance",
       "type": "object"
     },
     "NodeState": {
@@ -635,13 +693,21 @@
           ],
           "title": "Slot"
         },
-        "routing_areas": {
-          "default": [],
+        "routing_instances": {
           "items": {
-            "$ref": "#/$defs/NodeRoutingArea"
+            "$ref": "#/$defs/NodeRoutingInstance"
           },
-          "title": "Routing Areas",
+          "title": "Routing Instances",
           "type": "array"
+        },
+        "role": {
+          "enum": [
+            "router",
+            "host",
+            "forwarding_only"
+          ],
+          "title": "Role",
+          "type": "string"
         },
         "isl_count": {
           "default": 0,
@@ -770,6 +836,8 @@
         "vel_z_km_s",
         "plane",
         "slot",
+        "routing_instances",
+        "role",
         "reference_body",
         "frame_id"
       ],

@@ -311,7 +311,7 @@ def test_backend_does_not_repair_invalid_wizard_dead_interval(tmp_path: Path) ->
     snapshot = _snapshot(tmp_path)
     with pytest.raises(ValueError, match="hold_interval_s.*must be greater"):
         build_wizard_compile_request(
-            _request(protocol="ospf", routing_timers=timers),
+            _request(protocol="ospf", area_strategy="flat", routing_timers=timers),
             snapshot,
             identity_factory=lambda: "invalid-timers",
         )
@@ -348,9 +348,21 @@ def test_wizard_routing_inventory_and_presentation_are_backend_owned() -> None:
             field.label and field.description and field.guidance
             for field in protocol.bfd_timer_fields
         )
-    assert next(
-        protocol for protocol in facts.protocols if protocol.id == "ospf"
-    ).non_flat_area_warning
+    # A multi-area OSPF instance needs a router in two areas, which the
+    # per-router area assignment cannot declare; IS-IS areas meet at Level 2.
+    assert {protocol.id: protocol.area_strategies for protocol in facts.protocols} == {
+        "ospf": ("flat",),
+        "isis": ("flat", "stripe", "per_plane"),
+    }
+    assert all(protocol.default_area_strategy == "flat" for protocol in facts.protocols)
+
+
+@pytest.mark.parametrize("strategy", ["per_plane", "stripe"])
+def test_wizard_refuses_a_multi_area_ospf_strategy(strategy, tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match=f"{strategy!r} is not available for 'ospf'"):
+        build_wizard_compile_request(
+            _request(protocol="ospf", area_strategy=strategy), _snapshot(tmp_path)
+        )
 
 
 def test_wizard_offers_the_capabilities_and_bfd_bounds_the_adapters_render() -> None:

@@ -275,9 +275,9 @@ A payload is a carried compute environment: the runtime environment a node
 hosts on one of its Ethernet segments. It declares what it is (`forwarding`)
 and what it runs (`profile`), nothing else. A payload has no Ethernet ports,
 no terminal mounts, and no payload mounts, so payload composition cannot
-recurse. A payload with `forwarding: routed` whose profile's adapter renders
-routing configuration participates in routing domains through the ordinary
-router-population rule.
+recurse. A payload whose profile's adapter renders routing configuration
+participates in the routing instances that select it, by the same rule as
+every other node.
 
 ## Profile
 
@@ -1076,42 +1076,60 @@ a node-model default is an authored statement, never a fallback. The resolved
 session records, for each node, the effective profile reference and the level
 that supplied it.
 
-A routing domain is one instance of a routing protocol. Its selectors resolve
-against the session's nodes; the selected nodes are inside the domain. Its
-participants are the selected nodes whose effective profile's `adapter`
-renders routing-protocol configuration: they run the domain's protocol. A
-selected node that runs no routing workload is inside the domain without
-participating. Which adapters render which protocols and capabilities is
-declared by the adapter modules and is runtime support. Each participant's own
-adapter must render the domain's protocol, its declared capabilities and, when
-BFD is enabled, its BFD timers; resolution refuses a participant whose adapter
-does not, naming the node, the adapter, the domain and the unrendered
-requirement.
+Each entry under `routing.domains` is an instance of one routing protocol.
+Its selectors resolve against the session's nodes; the selected nodes are
+inside the instance. Its participants are the selected nodes whose effective
+profile's `adapter` renders routing-protocol configuration: they run the
+instance's protocol. A selected node that runs no routing workload is inside
+the instance without participating. Which adapters render which protocols and
+capabilities is declared by the adapter modules and is runtime support. Each
+participant's own adapter must render the instance's protocol, its declared
+capabilities and, when BFD is enabled, its BFD timers; resolution refuses a
+participant whose adapter does not, naming the node, the adapter, the instance
+and the unrendered requirement.
 
 A router forwards packets between multiple subnets and participates in the
-IGPs or EGPs, or both. A router can be part of multiple routing domains. A
-host is reached through a router serving its network, which originates the
-host's network into its domains. A host's gateway is always a router.
+IGPs or EGPs, or both. A router can participate in several instances. A host
+is reached through a router serving its network, which originates the host's
+network into its instances. A host's gateway is always a router.
 
-A router takes part in a domain through its interfaces. Its loopback belongs
-to every domain it participates in. A fixed link belongs to the domains its
-two ends share. A link that a `static_ip` boundary crosses belongs to no
-domain. An access interface belongs to the domains its router shares with the
-nodes it can reach over access links. An Ethernet segment interface belongs
-to the domains its router shares with the segment's other participants. When
-it shares none, the segment interface belongs to every domain the router
-participates in. Every routing protocol on an interface shares one BFD session
-with each neighbor, so the domains that enable BFD on one interface of a router
-must declare the same BFD timers.
+A router takes part in an instance through its interfaces. Its loopback
+belongs to every instance it participates in. A fixed link belongs to the
+instances its two ends share. A link that a `static_ip` boundary crosses
+belongs to no instance. An access interface belongs to the instances its
+router shares with the nodes it can reach over access links. An Ethernet
+segment interface belongs to the instances its router shares with the
+segment's other participants. When it shares none, the segment interface
+belongs to every instance the router participates in. Every routing protocol
+on an interface shares one BFD session with each neighbor, so the instances
+that enable BFD on one interface of a router must declare the same BFD
+timers.
 
-Each adapter declares how many domains of each protocol it renders on one
-router. Resolution refuses a router in more domains of a protocol than its
-adapter renders, naming the nodes, the domains and the adapter.
+IS-IS and OSPF areas are different things. An IS-IS router has one or more
+area addresses in each IS-IS instance. Two routers of an IS-IS instance whose
+area addresses share none form only a Level 2 adjacency, and each is an area
+border router of the instance. An OSPF area belongs to an interface. Area
+`0.0.0.0` is the backbone of an OSPF instance. Every other area of the
+instance attaches to the backbone through an area border router, a router
+with interfaces in the backbone and in that area. An area number is unique
+only inside its instance, so two instances may number their areas alike.
+
+`area_assignment` assigns areas per router: each IS-IS router takes one area
+address, and every OSPF interface of a router, the loopback included, takes
+its router's area. Resolution refuses an OSPF instance with more than one area
+unless the backbone is contiguous over the instance's possible links and
+every other area has an area border router joining it to the backbone. With
+areas assigned per router, no router joins two OSPF areas, so a multi-area
+OSPF instance is refused.
+
+Each adapter declares how many instances of each protocol it renders on one
+router. Resolution refuses a router in more instances of a protocol than its
+adapter renders, naming the nodes, the instances and the adapter.
 
 When `routing` is present, every node running a routing workload participates
-in a domain, and every domain has at least one participant. With `routing`
-omitted, the default domain's participants are the nodes whose adapter
-renders IS-IS.
+in an instance, and every instance has at least one participant. With
+`routing` omitted, the default instance's participants are the nodes whose
+adapter renders IS-IS.
 
 These rules govern what the platform renders and delivers. They state
 nothing about protocol behavior: what the running images do with their
@@ -1359,6 +1377,9 @@ For plane or stripe index `i`, starting at zero, the derived area is
 index by `planes_per_stripe`. Derived OSPF area indexes cannot exceed `255`,
 and derived IS-IS indexes cannot exceed `9999` under the current four-digit
 format. `per_plane` and `stripe` require at least one selected satellite.
+Areas are assigned per router, so an OSPF assignment that yields more than
+one area is refused (see "Workload profile assignment"); IS-IS routers in
+different areas meet at Level 2.
 Every satellite selected by a non-flat strategy requires a resolved plane, so
 orbit-placed fixed nodes without plane facts cannot use those strategies. An
 `explicit` assignment may select only ground nodes; when it selects
@@ -1437,19 +1458,20 @@ forbids non-null `holddown_ms` and `time_to_learn_ms`. `BfdConfig` defaults are
 objects. The hold interval must exceed the hello interval. A non-null `timers`
 field is valid only for `isis` and `ospf`.
 
-Routing-domain ids are unique. When `routing` is present, every node running a
-routing workload participates in a domain, and every domain has at least one
-participant; "Workload profile assignment" defines participation and routers.
-A boundary names an existing enabled non-access link rule and exports between
-two different, existing domains on opposite sides of that rule. The nodes of
-each endpoint of the rule all participate in the same one of the two domains.
-An enabled non-access rule that can join two routers sharing no domain
-requires a boundary.
+Instance ids (the `id` of each `routing.domains` entry) are unique. When
+`routing` is present, every node running a routing workload participates in
+an instance, and every instance has at least one participant; "Workload
+profile assignment" defines participation and routers. A boundary names an
+existing enabled non-access link rule and exports between two different,
+existing instances on opposite sides of that rule. The nodes of each endpoint
+of the rule all participate in the same one of the two instances. An enabled
+non-access rule that can join two routers sharing no instance requires a
+boundary.
 
 An export's literal prefix sequence supplies the declared set by address
-family. `aggregate_of: originated` instead derives the `from` domain's authored
-originated prefixes. `export_node_loopbacks: true` adds every routed node
-loopback in that domain. An omitted or null `install_via` is `peer_loopback`;
+family. `aggregate_of: originated` instead derives the `from` instance's
+authored originated prefixes. `export_node_loopbacks: true` adds every routed
+node loopback in that instance. An omitted or null `install_via` is `peer_loopback`;
 the receiving boundary node uses the opposite endpoint's loopback for each
 available address family. A literal prefix family without that peer loopback is
 an error; an aggregate simply has no installable route in that family. A
@@ -1585,24 +1607,26 @@ context-free EBNF alone:
   gives a node a family. A routed node's kernel forwards exactly the
   families it carries, a host's kernel forwards neither family, and a
   node's routing configuration routes exactly the families it carries. A
-  routing domain refuses a member that carries a family its adapter does not
-  route.
+  routing instance refuses a participant that carries a family its adapter
+  does not route.
 - Every resolved node has exactly one effective workload profile, taken from
   the most specific of its own node entry, its segment, and its node model. A
   node with no profile statement at any level fails resolution. The resolved
   session records the effective reference and the supplying level.
-- A routing domain's participants are its selected nodes whose adapter renders
-  the domain protocol and declared capabilities; a selected node running no
-  routing workload is inside the domain without participating. Every node
-  running a routing workload participates in a domain when `routing` is
-  present. These checks validate platform rendering only; they assert nothing
-  about protocol behavior.
+- A routing instance's participants are its selected nodes whose adapter
+  renders the instance's protocol and declared capabilities; a selected node
+  running no routing workload is inside the instance without participating.
+  Every node running a routing workload participates in an instance when
+  `routing` is present. These checks validate platform rendering only; they
+  assert nothing about protocol behavior.
 - A router forwards packets between multiple subnets and participates in the
-  IGPs or EGPs, or both. A router can be part of multiple routing domains.
-- Each interface of a router belongs to the domains derived in "Workload
-  profile assignment". A router in more domains of a protocol than its
-  adapter renders is refused with a typed reason. Domains that enable BFD on
+  IGPs or EGPs, or both. A router can participate in several instances.
+- Each interface of a router belongs to the instances derived in "Workload
+  profile assignment". A router in more instances of a protocol than its
+  adapter renders is refused with a typed reason. Instances that enable BFD on
   one interface of a router declare the same BFD timers.
+- An OSPF instance with more than one area has a contiguous backbone over its
+  possible links and an area border router joining every other area to it.
 - Every `value_from` entry of every effective profile resolves against the
   session's nodes: exactly one node carries the tag, that node declares the
   named interface, and the interface carries the requested address family.
@@ -1628,19 +1652,19 @@ construct. The production Earth-Luna profile currently supports:
 - loopback address pools using `by_node_order` allocation;
 - the `routed` and `host` forwarding classes; `bridge` and `control_only` are
   refused with a typed reason;
-- IS-IS, OSPF, and static FRR routing domains. The FRR adapter renders one
-  IS-IS domain, one OSPF domain, and any number of static domains on one
-  router;
-- IPv4 and IPv6 on IS-IS, OSPF, and static domains. IS-IS routes IPv6 in its
+- IS-IS, OSPF, and static FRR routing instances. The FRR adapter renders one
+  IS-IS instance, one OSPF instance, and any number of static instances on
+  one router;
+- IPv4 and IPv6 on IS-IS, OSPF, and static instances. IS-IS routes IPv6 in its
   IPv6 unicast topology, so IPv6 follows only adjacencies whose two ends
   carry IPv6. OSPF participants that carry IPv6 run OSPFv3 beside OSPFv2,
   with the same router id, areas, costs, timers, and BFD;
-- MPLS, segment routing, and traffic engineering on IS-IS and OSPF domains,
-  for IPv4;
-- BFD on IS-IS and OSPF domains, with a detect multiplier of 1 to 255 and
+- MPLS, segment routing, and traffic engineering on IS-IS and OSPF
+  instances, for IPv4;
+- BFD on IS-IS and OSPF instances, with a detect multiplier of 1 to 255 and
   receive and transmit intervals of 10 to 4294967 ms, on every interface
   where the IGP runs actively: point-to-point links and site LANs with
-  another participant of the domain;
+  another participant of the instance;
 - `static_ip` routing boundaries;
 - serialized ground handovers with `handover_concurrency: one_at_a_time`, at
   most one reserved MBB overlap, and one-tick BBM acquisition;
@@ -1664,11 +1688,11 @@ runtime execution:
   `bbm_acquire_timeout_ticks` values other than 1;
 - point-to-point and terrestrial-prefix pools;
 - `by_attach_index`, `by_plane_slot`, and `by_ground_index` allocation;
-- BGP routing domains;
-- routing capabilities on BGP or static domains;
-- BFD timers outside the ranges the member's adapter renders;
-- a routing-domain member whose adapter does not render the domain's
-  protocol, capabilities or BFD timers;
+- BGP routing instances;
+- routing capabilities on BGP or static instances;
+- BFD timers outside the ranges the participant's adapter renders;
+- a routing-instance participant whose adapter does not render the
+  instance's protocol, capabilities or BFD timers;
 - `bgp` and `dtn_bundle` routing boundaries;
 - `spice_kernel_stack` and `operator_supplied_spk` ephemeris providers;
 - ephemeris kernel frames other than `gcrs`;

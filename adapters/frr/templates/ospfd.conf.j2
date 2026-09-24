@@ -1,8 +1,8 @@
 {# Timer and BFD values are resolver-owned per-domain facts supplied by the
    producer (routing.domains[].timers); the template carries no fallbacks.
    OSPFv2 routes IPv4; IPv6 routers also run OSPFv3 (the ospf6d fragment).
-   The router's OSPF domain runs over the interfaces the session assigns
-   to it. #}
+   The router's OSPF instance runs over the interfaces the session assigns
+   to it, each in its resolved area. #}
 {% for domain in domains if domain.protocol == "ospf" %}
 router ospf
 {% if "ipv4" in domain.redistribute_static %}
@@ -30,7 +30,7 @@ router ospf
 exit
 
 interface lo
- ip ospf area {{ domain.area_id }}
+ ip ospf area {{ domain.loopback_area }}
  ip ospf passive
 exit
 
@@ -50,7 +50,7 @@ exit
 
 {% for segment in domain.segments if "ipv4" in segment.igp_families %}
 interface {{ segment.name }}
- ip ospf area {{ domain.area_id }}
+ ip ospf area {{ segment.ospf_area }}
  ip ospf cost {{ segment.metric }}
 {% if segment.igp_active %}
  ip ospf hello-interval {{ domain.ospf_hello_interval }}

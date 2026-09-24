@@ -3,10 +3,14 @@ from pathlib import Path
 import yaml
 from nodalarc.catalog_closure import FilesystemCatalogReadView
 from nodalarc.catalog_paths import CatalogRoots
-from nodalarc.models.resolved_session import DomainArea, SourceContext
-from nodalarc.models.vs_api import NodeRoutingArea
+from nodalarc.models.resolved_session import IsisInstanceAreas, SourceContext
+from nodalarc.models.vs_api import NodeInstanceInterface, NodeRoutingInstance
 from nodalarc.resolve_session import resolve_session_with_assets
-from vs_api.resolved_runtime_views import routing_label, tracer_node_registry
+from vs_api.resolved_runtime_views import (
+    routing_instances_by_node_id,
+    routing_label,
+    tracer_node_registry,
+)
 from vs_api.session_context import SessionContext
 
 
@@ -92,16 +96,28 @@ def test_a_session_without_authored_routing_reports_the_domain_it_runs():
     assert routing_label(resolved) == "default_domain:isis"
     assert context.routing_stack == "default_domain:isis"
     [domain] = resolved.routing_domains
-    areas = resolved.routing_areas_by_node_id()
+    areas = resolved.instance_areas_by_node()
     assert set(areas) == set(domain.node_ids)
-    assert set(areas.values()) == {(DomainArea("default_domain", "49.0001"),)}
+    assert set(areas.values()) == {(IsisInstanceAreas("default_domain", ("49.0001",)),)}
     ground = next(n for n in resolved.nodes if n.kind == "ground_station")
-    assert context.nodes[ground.node_id].routing_areas == (
-        NodeRoutingArea(domain_id="default_domain", area_id="49.0001"),
+    state = context.nodes[ground.node_id]
+    assert state.role == "router"
+    assert state.routing_instances == (
+        NodeRoutingInstance(
+            domain_id="default_domain",
+            protocol="isis",
+            areas=("49.0001",),
+            interfaces=tuple(
+                NodeInstanceInterface(name=name, area_id=None)
+                for name in resolved.domain_interfaces(ground.node_id)["default_domain"]
+            ),
+            area_border=False,
+            as_boundary=False,
+        ),
     )
 
 
-def test_a_router_in_two_domains_reports_its_area_in_each():
+def test_a_router_in_two_instances_reports_each_instance_with_its_own_areas():
     path = Path("catalog/nodalarc/sessions/earth-leo-simple.yaml")
     raw = yaml.safe_load(path.read_text(encoding="utf-8"))
     raw["routing"] = {
@@ -126,8 +142,35 @@ def test_a_router_in_two_domains_reports_its_area_in_each():
         history_path=None,
     )
     ground = next(n for n in resolution.resolved.nodes if n.kind == "ground_station")
+    lan = tuple(sorted(ground.interfaces.ethernet))
 
-    assert context.nodes[ground.node_id].routing_areas == (
-        NodeRoutingArea(domain_id="orbital", area_id="49.0001"),
-        NodeRoutingArea(domain_id="terrestrial", area_id="0.0.0.0"),
+    [isis, ospf] = context.nodes[ground.node_id].routing_instances
+    assert (isis.domain_id, isis.protocol, isis.areas) == ("orbital", "isis", ("49.0001",))
+    assert all(interface.area_id is None for interface in isis.interfaces)
+    assert (ospf.domain_id, ospf.protocol, ospf.areas) == ("terrestrial", "ospf", ("0.0.0.0",))
+    assert ospf.interfaces == tuple(
+        NodeInstanceInterface(name=name, area_id="0.0.0.0") for name in lan
     )
+    assert not (isis.area_border or ospf.area_border or isis.as_boundary or ospf.as_boundary)
+
+
+def test_the_luna_boundary_relays_are_reported_as_as_boundary_routers():
+    path = Path("catalog/nodalarc/sessions/earth-leo-heo-geo-luna-reachability.yaml")
+    resolution = resolve_session_with_assets(
+        yaml.safe_load(path.read_text(encoding="utf-8")),
+        catalog=FilesystemCatalogReadView(CatalogRoots.from_catalog_root("catalog/nodalarc")),
+        source_context=SourceContext(origin="test.vs-api-asbr"),
+    )
+    instances = {
+        node_id: {instance.domain_id: instance for instance in items}
+        for node_id, items in routing_instances_by_node_id(resolution.resolved).items()
+    }
+
+    assert instances["luna-relay-sat-p00s00"]["luna_domain"].as_boundary
+    assert instances["geo-relay-sat-p00s03"]["earth_domain"].as_boundary
+    # One flat area per instance: no area border routers.
+    assert not any(
+        instance.area_border for items in instances.values() for instance in items.values()
+    )
+    assert instances["luna-relay-sat-p00s00"]["luna_domain"].areas == ("49.0001",)
+    assert instances["geo-relay-sat-p00s03"]["earth_domain"].areas == ("49.0001",)

@@ -45,6 +45,8 @@ import "./styles/log-window.css";
 import "./styles/cli-drawer.css";
 import "./styles/popover.css";
 import "./styles/panels.css";
+import { AreaLegend } from "./routing/AreaLegend";
+import { buildAreaColoring } from "./routing/instances";
 import "./styles/toolbar.css";
 import "./styles/scene.css";
 import "./styles/topology.css";
@@ -102,7 +104,7 @@ function AppInner() {
   const {
     showCatalog, hasEverDeployed, setHasEverDeployed, setShowCatalog,
     openCatalog, closeCatalog, activeSessionName, sessionStatus,
-    viewMode, setViewMode, colorMode, setColorMode,
+    viewMode, setViewMode, colorMode, setColorMode, areaInstanceId, setAreaInstanceId,
     showGroundLinks, setShowGroundLinks, showIslLinks, setShowIslLinks,
     showSatPaths, setShowSatPaths, showTrails, setShowTrails,
     showGroundTracks, setShowGroundTracks,
@@ -302,6 +304,11 @@ function AppInner() {
 
   // Authored-orbit regime per node (static per ephemeris epoch).
   const regimeById = useMemo(() => buildRegimeIndex(ephemeris), [ephemeris]);
+  // Area coloring reads every node, so filters never change which color an area gets.
+  const areaColoring = useMemo(
+    () => buildAreaColoring(snapshot?.nodes ?? [], areaInstanceId),
+    [snapshot?.nodes, areaInstanceId],
+  );
 
   const renderedSnapshot = useMemo(
     () => filterSnapshotForRender(snapshot, visibleSegments, visiblePlanes),
@@ -421,6 +428,7 @@ function AppInner() {
             showGroundTracks={showGroundTracks}
             showTrails={showTrails}
             regimeById={regimeById}
+            areaColoring={areaColoring}
             selection={selection}
             onSelect={select}
             actionsRef={globeActionsRef}
@@ -439,6 +447,7 @@ function AppInner() {
           onSelect={select}
           onFlyTo={handleFlyToNode}
           colorMode={colorMode}
+          areaColoring={areaColoring}
           showIslLinks={showIslLinks}
           showGroundLinks={showGroundLinks}
         />
@@ -462,6 +471,8 @@ function AppInner() {
           <BuilderView
             active={viewMode === "builder"}
             colorMode={colorMode}
+            areaInstanceId={areaInstanceId}
+            onSelectAreaInstance={setAreaInstanceId}
             globeMode={globeMode}
             referenceFrame={referenceFrame}
             showSatPaths={showSatPaths}
@@ -473,6 +484,9 @@ function AppInner() {
           />
           </VisualizationErrorBoundary>
         </div>
+      )}
+      {colorMode === "area" && (viewMode === "globe" || viewMode === "topology" || viewMode === "split") && (
+        <AreaLegend coloring={areaColoring} onSelectInstance={setAreaInstanceId} />
       )}
       <Toolbar
         viewMode={viewMode}

@@ -1457,6 +1457,8 @@ def test_connect_command_uses_backend_resolved_terminal_facts(
                 local_node_id="node",
                 segment_id=segment_id,
                 kind="satellite",
+                role="forwarding_only",
+                routing_instances=(),
                 terminal_inventory=(
                     ResolvedTerminalBlock(
                         terminal_id=f"{segment_id}-crosslink",

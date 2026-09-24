@@ -12,7 +12,9 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from nodalarc.body_frames import SupportedSurfaceBody
 from nodalarc.model_validation import AddressFamily
+from nodalarc.models.resolved_session import NodeRole
 from nodalarc.models.scheduler_ops import ActuationState
+from nodalarc.models.segment_session import LINK_STATE_PROTOCOLS, RoutingProtocol
 
 
 class NodeAddress(BaseModel):
@@ -27,13 +29,48 @@ class NodeAddress(BaseModel):
     metric: int | None = None
 
 
-class NodeRoutingArea(BaseModel):
-    """A node's area in one IS-IS or OSPF domain it participates in."""
+class NodeInstanceInterface(BaseModel):
+    """One interface a node runs a routing instance on."""
+
+    model_config = ConfigDict(frozen=True)
+
+    name: str
+    # The interface's OSPF area. IS-IS and static interfaces carry no area.
+    area_id: str | None
+
+
+class NodeRoutingInstance(BaseModel):
+    """A node's participation in one routing instance (a ``routing.domains`` entry)."""
 
     model_config = ConfigDict(frozen=True)
 
     domain_id: str
-    area_id: str
+    protocol: RoutingProtocol
+    # IS-IS: the router's area addresses. OSPF: every area it has an
+    # interface in, the loopback's included. Static: none.
+    areas: tuple[str, ...]
+    interfaces: tuple[NodeInstanceInterface, ...]
+    # An area border router of the instance.
+    area_border: bool
+    # Redistributes routing-boundary exports into the instance.
+    as_boundary: bool
+
+    @model_validator(mode="after")
+    def _areas_follow_the_protocol(self) -> NodeRoutingInstance:
+        is_ospf = self.protocol == "ospf"
+        if any((interface.area_id is not None) != is_ospf for interface in self.interfaces):
+            raise ValueError(
+                f"{self.protocol} instance {self.domain_id!r} interfaces carry areas exactly "
+                "when the protocol is OSPF"
+            )
+        if self.protocol not in LINK_STATE_PROTOCOLS and (
+            self.areas or self.area_border or self.as_boundary
+        ):
+            raise ValueError(
+                f"{self.protocol} instance {self.domain_id!r} has no areas, area border "
+                "routers or redistribution"
+            )
+        return self
 
 
 class NodeState(BaseModel):
@@ -51,9 +88,10 @@ class NodeState(BaseModel):
     vel_z_km_s: float | None
     plane: int | None  # None for ground stations
     slot: int | None
-    # The node's area in each IS-IS or OSPF domain it participates in, in
-    # declared domain order; empty for a node in none.
-    routing_areas: tuple[NodeRoutingArea, ...] = ()
+    # Every routing instance the node participates in, in declared order;
+    # empty for a node in none.
+    routing_instances: tuple[NodeRoutingInstance, ...]
+    role: NodeRole
     isl_count: int = 0
     gnd_count: int = 0
     prefix: str | None = None  # Ground station advertised prefix

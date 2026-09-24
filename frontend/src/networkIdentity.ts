@@ -60,22 +60,3 @@ export function selectionTypeForNodeId(
   const node = nodes.find((candidate) => candidate.node_id === nodeId);
   return node ? selectionTypeForNode(node) : null;
 }
-
-/** The node's area in each IS-IS or OSPF domain it participates in. */
-export function nodeAreaIds(node: Pick<NodeState, "routing_areas">): string[] {
-  return node.routing_areas.map((area) => area.area_id);
-}
-
-/** One key for the node's areas: null in none, the area in one, all of them
- *  joined in several. A node in several areas is keyed as itself, never as
- *  one of them. */
-export function areaKey(node: Pick<NodeState, "routing_areas">): string | null {
-  const ids = nodeAreaIds(node);
-  return ids.length === 0 ? null : ids.join(" + ");
-}
-
-/** The node's areas as text: "none", one area, or every area listed. */
-export function areasLabel(node: Pick<NodeState, "routing_areas">): string {
-  const ids = nodeAreaIds(node);
-  return ids.length === 0 ? "none" : ids.join(", ");
-}

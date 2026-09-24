@@ -1279,6 +1279,43 @@ class TestWiringManifest:
                 f"{node_id} missing unprivileged ICMP ping_group_range"
             )
 
+    def test_a_routed_node_running_no_routing_workload_is_wired_without_routing(self, tmp_path):
+        """The probe pattern: a routed node model running a workload that
+        renders no routing forwards and stands outside every routing domain,
+        so it is wired with no routing kernel settings."""
+        session = build_catalog_session_fixture(
+            name="test-session",
+            constellation={"planes": {"count": 1, "sats_per_plane": 2}},
+            ground_stations={
+                "stations": [
+                    {"name": "alpha", "lat_deg": 34.0, "lon_deg": -118.0, "alt_m": 20},
+                    {"name": "beta", "lat_deg": 50.0, "lon_deg": 8.0, "alt_m": 100},
+                ]
+            },
+            protocol="isis",
+            extensions=["mpls"],
+            time={"step_seconds": 1},
+            base_path=tmp_path,
+        )
+        probe_site = session.site_refs[0]
+        site = session.read_catalog(probe_site)
+        site["site"]["nodes"][0]["profile"] = "nodalarc:profiles/linux-host.yaml"
+        session.write_catalog(probe_site, site)
+        spec = {
+            "sessionYaml": yaml.safe_dump(dict(session), sort_keys=False),
+            "_test_catalog_roots": session.roots,
+        }
+
+        manifest = self._build_and_extract(tmp_path, spec)
+
+        probe = manifest["nodes"]["test-session-alpha-router"]
+        router = manifest["nodes"]["test-session-beta-router"]
+        assert probe["mpls_enable"] is False
+        assert not [key for key in probe["sysctls"] if key.startswith("net.mpls.")]
+        assert probe["sysctls"]["net.ipv4.ip_forward"] == "1"
+        assert router["mpls_enable"] is True
+        WiringManifest.model_validate(manifest)
+
     def test_sysctls_state_forwarding_per_node_and_family(self, tmp_path):
         """Forwarding is explicit for both families on every node: routers
         forward the families the session gives them, hosts forward nothing.

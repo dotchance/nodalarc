@@ -38,7 +38,7 @@ function node(node_id: string, segment_id: string, plane: number | null): NodeSt
     vel_z_km_s: plane === null ? null : 0,
     plane,
     slot: plane === null ? null : 0,
-    routing_area: null,
+    routing_areas: [],
     isl_count: 0,
     gnd_count: 0,
     prefix: null,

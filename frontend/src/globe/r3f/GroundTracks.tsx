@@ -28,13 +28,15 @@ import { AREA_COLORS, getPlaneColor, UNKNOWN_TINT } from "../../config";
 import { geoToWorld, velocityToScene } from "../geo";
 import { useBodyFrame } from "./BodyFrame";
 import type { NodeState } from "../../types";
+import { areaKey } from "../../networkIdentity";
 
 const STEPS = 40;
 const DT_PER_STEP = 30; // seconds per step → +/-10 minutes total
 
 function getTrackColor(node: NodeState): number {
-  if (node.routing_area && AREA_COLORS[node.routing_area]) {
-    return AREA_COLORS[node.routing_area]!;
+  const area = areaKey(node);
+  if (area && AREA_COLORS[area]) {
+    return AREA_COLORS[area]!;
   }
   if (node.plane != null) {
     return getPlaneColor(node.plane);

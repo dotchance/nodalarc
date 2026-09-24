@@ -3,79 +3,86 @@
    must never be encoded into identity. #}
 
 {# Timer and BFD values are resolver-owned per-domain facts supplied by the
-   producer (routing.domains[].timers); the template carries no fallbacks. #}
+   producer (routing.domains[].timers); the template carries no fallbacks.
+   Each IS-IS domain the router participates in is one instance, named by
+   its domain, over the interfaces the session assigns to it. #}
 
-{# An IPv6 node routes IPv6 in the IPv6 unicast topology (multi-topology),
+{# An IPv6 router routes IPv6 in the IPv6 unicast topology (multi-topology),
    so IPv6 follows only adjacencies whose both ends route IPv6. Segment
    routing and traffic engineering apply to IPv4. #}
-router isis NODAL
- net {{ area_id }}.{{ system_id }}.00
+{% for domain in domains if domain.protocol == "isis" %}
+router isis {{ domain.domain_id }}
+ net {{ domain.area_id }}.{{ system_id }}.00
  is-type level-1-2
  metric-style wide
 {% if "ipv6" in address_families %}
  topology ipv6-unicast
 {% endif %}
-{% if te_enabled %}
+{% if domain.te_enabled %}
  mpls-te on
  mpls-te router-address {{ ipv4_loopback }}
 {% endif %}
-{% if sr_enabled %}
+{% if domain.sr_enabled %}
  segment-routing on
  segment-routing global-block {{ srgb_start }} {{ srgb_end }} local-block {{ srlb_start }} {{ srlb_end }}
- segment-routing prefix {{ ipv4_loopback }}/32 index {{ node_sid_index }}
+ segment-routing prefix {{ ipv4_loopback }}/32 index {{ domain.node_sid_index }}
 {% endif %}
-{% for family in redistribute_static %}
+{% for family in domain.redistribute_static %}
  redistribute {{ family }} static level-2
 {% endfor %}
  lsp-gen-interval 1
- spf-delay-ietf init-delay {{ spf_init_delay }} short-delay {{ spf_short_delay }} long-delay {{ spf_long_delay }} holddown {{ spf_holddown }} time-to-learn {{ spf_time_to_learn }}
+ spf-delay-ietf init-delay {{ domain.spf_init_delay }} short-delay {{ domain.spf_short_delay }} long-delay {{ domain.spf_long_delay }} holddown {{ domain.spf_holddown }} time-to-learn {{ domain.spf_time_to_learn }}
  max-lsp-lifetime 1200
  lsp-refresh-interval 150
-{% for family in default_route_families %}
- default-information originate {{ family }} level-2 always metric {{ default_route_metric }}
+{% for family in domain.default_route_families %}
+ default-information originate {{ family }} level-2 always metric {{ domain.default_route_metric }}
 {% endfor %}
 exit
 
 interface lo
- ip router isis NODAL
+ ip router isis {{ domain.domain_id }}
 {% if ipv6_loopback %}
- ipv6 router isis NODAL
+ ipv6 router isis {{ domain.domain_id }}
 {% endif %}
  isis passive
 exit
 
-{% for iface in wan_interfaces if not iface.static_only %}
+{% for iface in domain.interfaces %}
 interface {{ iface.name }}
- ip router isis NODAL
+ ip router isis {{ domain.domain_id }}
 {% if "ipv6" in address_families %}
- ipv6 router isis NODAL
+ ipv6 router isis {{ domain.domain_id }}
 {% endif %}
  isis network point-to-point
  isis metric {{ iface.metric }}
- isis hello-interval {{ isis_hello_interval }}
- isis hello-multiplier {{ isis_hello_multiplier }}
+ isis hello-interval {{ domain.isis_hello_interval }}
+ isis hello-multiplier {{ domain.isis_hello_multiplier }}
 {% if iface.bfd %}
  isis bfd
- isis bfd profile NODAL
+ isis bfd profile {{ domain.bfd_profile }}
 {% endif %}
 exit
 {% endfor %}
 
-{% for segment in segment_interfaces if segment.igp_families %}
+{% for segment in domain.segments if segment.igp_families %}
 interface {{ segment.name }}
 {% if "ipv4" in segment.igp_families %}
- ip router isis NODAL
+ ip router isis {{ domain.domain_id }}
 {% endif %}
 {% if "ipv6" in segment.igp_families %}
- ipv6 router isis NODAL
+ ipv6 router isis {{ domain.domain_id }}
 {% endif %}
-{% if not segment.igp_active %}
+{% if segment.igp_active %}
+ isis hello-interval {{ domain.isis_hello_interval }}
+ isis hello-multiplier {{ domain.isis_hello_multiplier }}
+{% else %}
  isis passive
 {% endif %}
  isis metric {{ segment.metric }}
 {% if segment.bfd %}
  isis bfd
- isis bfd profile NODAL
+ isis bfd profile {{ domain.bfd_profile }}
 {% endif %}
 exit
+{% endfor %}
 {% endfor %}

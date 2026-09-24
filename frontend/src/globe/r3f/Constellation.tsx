@@ -31,6 +31,7 @@ import {
   type SessionEphemeris,
 } from "../../sim/ephemeris";
 import type { ColorMode, NodeState, Selection } from "../../types";
+import { areaKey } from "../../networkIdentity";
 import { FAMILY_TONE } from "../../explain/families";
 import type { SatRelation } from "../../explain/gsCandidateRelations";
 import { removeNode, setNodeLocalPosition } from "./positions";
@@ -45,7 +46,8 @@ const _workerPos = { x: 0, y: 0, z: 0 };
 
 function satColor(node: NodeState, mode: ColorMode, regime: Regime | undefined): number {
   if (mode === "regime") return REGIME_TINT[regime ?? "unknown"].hex;
-  if (mode === "area" && node.routing_area) return AREA_COLORS[node.routing_area] ?? UNKNOWN_TINT;
+  const area = areaKey(node);
+  if (mode === "area" && area) return AREA_COLORS[area] ?? UNKNOWN_TINT;
   if (mode === "plane" && node.plane != null) return getPlaneColor(node.plane);
   return tokens.colorNodeSatellite;
 }

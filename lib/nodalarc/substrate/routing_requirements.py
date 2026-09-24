@@ -35,8 +35,13 @@ class RoutingKernelRequirements:
     segment_routing: bool
 
 
-def routing_kernel_requirements(domain: ResolvedRoutingDomain) -> RoutingKernelRequirements:
-    """Kernel requirements for every member of ``domain``.
+def routing_kernel_requirements(
+    domains: tuple[ResolvedRoutingDomain, ...],
+) -> RoutingKernelRequirements:
+    """Kernel requirements of a node that participates in ``domains``.
+
+    The node needs what any of its domains needs; a node that participates
+    in none needs nothing.
 
     SR-MPLS needs the label table and pipe-mode TTL: the MPLS TTL starts at
     255 whatever the IP TTL, so tracepath and traceroute work through MPLS
@@ -44,7 +49,7 @@ def routing_kernel_requirements(domain: ResolvedRoutingDomain) -> RoutingKernelR
     at the first MPLS transit hop). An ``mpls`` data plane without segment
     routing needs the label table only.
     """
-    capabilities = set(domain.capabilities)
+    capabilities = {capability for domain in domains for capability in domain.capabilities}
     segment_routing = "segment_routing" in capabilities
     sysctls: dict[str, str] = {}
     if segment_routing:

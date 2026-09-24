@@ -15,8 +15,8 @@ from nodalarc.models.resolved_session import ResolvedSession, SourceContext
 from nodalarc.resolve_session import load_session_resolution_from_file
 from nodalarc.workloads.adapter import SessionContext
 
-from adapters.frr import FRR_DAEMONS, FrrAdapter, _daemons_file
-from adapters.frr.stack import resolve_domain_stack
+from adapters.frr.adapter import FRR_DAEMONS, FrrAdapter, _daemons_file
+from adapters.frr.stack import resolve_router_stack
 from adapters.frr.template_vars import build_template_vars_from_resolved
 from tests.catalog_session_fixtures import (
     build_catalog_session_fixture,
@@ -82,20 +82,31 @@ def _enabled_daemons(daemons_file: str) -> set[str]:
     return {line.split("=")[0] for line in daemons_file.splitlines() if line.endswith("=yes")}
 
 
+# The fixture sessions' one routing domain, and the domain the resolver
+# declares for a shipped session without routing.
+_FIXTURE_DOMAIN = "test_domain"
+_DEFAULT_DOMAIN = "default_domain"
+
+
 def _vars_for(resolved: ResolvedSession, node_id: str) -> dict[str, Any]:
     node = resolved.node_by_id(node_id)
     assert node is not None
-    domain = resolved.routing_domain_for(node_id)
-    stack = resolve_domain_stack(domain)
     return build_template_vars_from_resolved(
         resolved,
         node,
-        domain=domain,
-        stack=stack,
-        node_sid_index=resolved.sid_index_by_node_id().get(node_id)
-        if stack.segment_routing
-        else None,
+        domains=resolved.routing_domains_for(node_id),
+        sid_by_domain=resolved.sid_index_by_domain(),
     )
+
+
+def _domain_vars(resolved: ResolvedSession, node_id: str) -> dict[str, Any]:
+    """The template facts of the one domain ``node_id`` participates in."""
+    [domain] = _vars_for(resolved, node_id)["domains"]
+    return domain
+
+
+def _static_links(resolved: ResolvedSession, node_id: str) -> list[dict[str, Any]]:
+    return _vars_for(resolved, node_id)["static_links"]
 
 
 def _stanzas(conf: str) -> list[tuple[str, list[str]]]:
@@ -136,7 +147,7 @@ def test_isis_satellite_uses_resolved_loopback_unnumbered_wan_and_sid() -> None:
     assert f"ip address {vars_for_node['ipv4_loopback']}/32" in conf
     assert "interface isl0" in conf
     assert "interface gnd0" in conf
-    assert "router isis NODAL" in conf
+    assert f"router isis {_FIXTURE_DOMAIN}" in conf
     assert "isis network point-to-point" in conf
     assert "segment-routing on" in conf
     sid = int(re.search(r"index\s+(\d+)", conf).group(1))
@@ -163,7 +174,7 @@ def test_default_route_is_originated_inside_the_one_router_block() -> None:
     resolved = resolve_session(raw, source_context=SourceContext(origin="test.frr"))
 
     stanzas = _stanzas(_frr_conf(resolved, _first_ground(resolved)))
-    routers = [body for header, body in stanzas if header == "router isis NODAL"]
+    routers = [body for header, body in stanzas if header == f"router isis {_FIXTURE_DOMAIN}"]
 
     assert "0.0.0.0/0" not in _frr_conf(resolved, _first_ground(resolved))
     assert len(routers) == 1
@@ -193,12 +204,10 @@ def test_ospf_cross_area_link_uses_backbone_area_from_resolved_area_assignment()
     }
     raw["routing"]["domains"][0]["area_assignment"] = {"strategy": "per_plane"}
     resolved = resolve_session(raw, source_context=SourceContext(origin="test.frr"))
-    vars_for_node = _vars_for(resolved, "space-sat-p00s00")
+    domain_vars = _domain_vars(resolved, "space-sat-p00s00")
 
-    isl = next(
-        entry for entry in vars_for_node["wan_interfaces"] if entry["name"].startswith("isl")
-    )
-    assert vars_for_node["area_id"] == "0.0.0.1"
+    isl = next(entry for entry in domain_vars["interfaces"] if entry["name"].startswith("isl"))
+    assert domain_vars["area_id"] == "0.0.0.1"
     assert isl["ospf_area"] == "0.0.0.0"
     stanzas = _stanzas(_frr_conf(resolved, "space-sat-p00s00"))
     isl_body = [
@@ -223,24 +232,26 @@ def test_explicit_area_assignment_applies_ground_station_area() -> None:
 
     resolved = resolve_session(raw)
     target = next(node for node in resolved.nodes if node.local_node_id == target_local_id)
-    vars_for_node = _vars_for(resolved, target.node_id)
 
-    assert vars_for_node["area_id"] == "49.1234"
+    assert _domain_vars(resolved, target.node_id)["area_id"] == "49.1234"
     assert " net 49.1234." in _frr_conf(resolved, target.node_id)
 
 
 def test_resolved_template_vars_fail_loud_when_sr_sid_is_missing() -> None:
     resolved = _resolved(protocol="isis", extensions=["sr"])
     node_id = _first_satellite(resolved)
-    domain = resolved.routing_domain_for(node_id)
+    sid_by_domain = resolved.sid_index_by_domain()
+    without_node = {
+        domain_id: {member: sid for member, sid in sids.items() if member != node_id}
+        for domain_id, sids in sid_by_domain.items()
+    }
 
-    with pytest.raises(ValueError, match="SID index"):
+    with pytest.raises(ValueError, match=f"no resolved SID index for {node_id!r}"):
         build_template_vars_from_resolved(
             resolved,
             resolved.node_by_id(node_id),
-            domain=domain,
-            stack=resolve_domain_stack(domain),
-            node_sid_index=None,
+            domains=resolved.routing_domains_for(node_id),
+            sid_by_domain=without_node,
         )
 
 
@@ -263,7 +274,9 @@ def test_adapter_delivers_exactly_the_integrated_configuration_files(protocol, e
     resolved = _resolved(protocol=protocol, extensions=extensions)
     for node_id in (_first_satellite(resolved), _first_ground(resolved)):
         files = _files(resolved, node_id)
-        stack = resolve_domain_stack(resolved.routing_domain_for(node_id))
+        node = resolved.node_by_id(node_id)
+        assert node is not None
+        stack = resolve_router_stack(resolved.routing_domains_for(node_id), node.address_families)
 
         assert set(files) == {"frr.conf", "daemons", "_config_version"}
         assert (
@@ -275,11 +288,8 @@ def test_adapter_delivers_exactly_the_integrated_configuration_files(protocol, e
         assert separators == [f"! === {fragment} ===" for fragment in stack.fragments]
 
 
-@pytest.mark.parametrize(
-    ("protocol", "log_file"),
-    [("isis", "/var/log/frr/isisd.log"), ("ospf", "/var/log/frr/ospfd.log"), ("static", None)],
-)
-def test_hostname_and_logging_are_stated_once(protocol, log_file) -> None:
+@pytest.mark.parametrize("protocol", ["isis", "ospf", "static"])
+def test_hostname_and_logging_are_stated_once(protocol) -> None:
     resolved = _resolved(protocol=protocol, extensions=["mpls"] if protocol != "static" else [])
     node_id = _first_satellite(resolved)
     lines = _frr_conf(resolved, node_id).splitlines()
@@ -287,8 +297,9 @@ def test_hostname_and_logging_are_stated_once(protocol, log_file) -> None:
     assert lines.count(f"hostname {node_id}") == 1
     assert sum(line.startswith("hostname ") for line in lines) == 1
     assert lines.count("log syslog informational") == 1
+    # Every daemon logs to the one file the measurement adapters read.
     log_files = [line for line in lines if line.startswith("log file ")]
-    assert log_files == ([f"log file {log_file} informational"] if log_file else [])
+    assert log_files == ["log file /var/log/frr/frr.log informational"]
 
 
 def test_each_isis_interface_is_enabled_once() -> None:
@@ -299,7 +310,7 @@ def test_each_isis_interface_is_enabled_once() -> None:
             for header, body in _stanzas(_frr_conf(resolved, node_id))
             if header.startswith("interface ")
             for line in body
-            if line == " ip router isis NODAL"
+            if line == f" ip router isis {_FIXTURE_DOMAIN}"
         )
 
         assert enabled
@@ -359,7 +370,7 @@ def test_bfd_renders_the_authored_timers_through_one_profile(protocol) -> None:
     enable = " isis bfd" if protocol == "isis" else " ip ospf bfd"
 
     assert bfd == [
-        " profile NODAL",
+        " profile space_igp",
         "  detect-multiplier 5",
         "  receive-interval 150",
         "  transmit-interval 200",
@@ -373,7 +384,7 @@ def test_bfd_renders_the_authored_timers_through_one_profile(protocol) -> None:
             for line in lines
         ]
         assert enable in body
-        assert f"{enable} profile NODAL" in body
+        assert f"{enable} profile space_igp" in body
     assert "bfdd" in _enabled_daemons(files["daemons"])
 
 
@@ -395,7 +406,7 @@ def test_daemons_file_refuses_an_empty_or_unknown_selection() -> None:
 def test_wan_interface_metrics_follow_own_transmit_rate_and_access_links() -> None:
     resolved = _resolved(protocol="isis")
     node_id = _first_satellite(resolved)
-    vars_for_node = _vars_for(resolved, node_id)
+    domain_vars = _domain_vars(resolved, node_id)
     rates = resolved.interface_terminal_rates()
     fixed = {
         name
@@ -408,7 +419,7 @@ def test_wan_interface_metrics_follow_own_transmit_rate_and_access_links() -> No
     }
 
     assert fixed
-    for entry in vars_for_node["wan_interfaces"]:
+    for entry in domain_vars["interfaces"]:
         if entry["name"] in fixed:
             # The fixture's ISL terminal transmits 2000 Mb/s: 100000 / 2000.
             assert rates[(node_id, entry["name"])].transmit_mbps == 2000.0
@@ -482,10 +493,14 @@ def test_every_shipped_session_renders_valid_igp_metrics() -> None:
             if maximum is None:
                 continue
             for node_id in domain.node_ids:
-                for entry in _vars_for(resolved, node_id)["wan_interfaces"]:
-                    if "metric" in entry:
-                        assert 1 <= entry["metric"] <= maximum, (path.name, node_id, entry)
-                        checked += 1
+                [facts] = [
+                    facts
+                    for facts in _vars_for(resolved, node_id)["domains"]
+                    if facts["domain_id"] == domain.domain_id
+                ]
+                for entry in facts["interfaces"]:
+                    assert 1 <= entry["metric"] <= maximum, (path.name, node_id, entry)
+                    checked += 1
     assert checked
 
 
@@ -521,12 +536,12 @@ def test_each_end_of_an_asymmetric_fixed_link_carries_its_own_metric() -> None:
 
     metric_a = next(
         e["metric"]
-        for e in _vars_for(asymmetric, candidate.node_a)["wan_interfaces"]
+        for e in _domain_vars(asymmetric, candidate.node_a)["interfaces"]
         if e["name"] == interface_a
     )
     metric_b = next(
         e["metric"]
-        for e in _vars_for(asymmetric, candidate.node_b)["wan_interfaces"]
+        for e in _domain_vars(asymmetric, candidate.node_b)["interfaces"]
         if e["name"] == interface_b
     )
 
@@ -631,8 +646,8 @@ def test_two_protocol_session_renders_each_domain_with_its_own_stack() -> None:
     assert "ospfd" not in _enabled_daemons(sat_files["daemons"])
     assert "ospfd" in _enabled_daemons(ground_files["daemons"])
     assert "isisd" not in _enabled_daemons(ground_files["daemons"])
-    assert "router isis NODAL" in sat_files["frr.conf"]
-    assert " ip router isis NODAL" in sat_files["frr.conf"]
+    assert "router isis space_igp" in sat_files["frr.conf"]
+    assert " ip router isis space_igp" in sat_files["frr.conf"]
     assert "router ospf" in ground_files["frr.conf"]
     assert " ip ospf area" in ground_files["frr.conf"]
 
@@ -688,11 +703,7 @@ def test_boundary_exports_materialize_on_flagship_border_nodes() -> None:
         and node.interfaces is not None
         and node.interfaces.lo0.ipv4 is not None
     }
-    peer_seeds = {
-        f"{entry['peer_loopback_ipv4']}/32"
-        for entry in vars_for_node["wan_interfaces"]
-        if entry["static_only"]
-    }
+    peer_seeds = {f"{entry['peer_loopback_ipv4']}/32" for entry in vars_for_node["static_links"]}
     assert peer_seeds
     assert earth_loopbacks - peer_seeds <= route_prefixes
 
@@ -721,7 +732,7 @@ def test_non_border_nodes_render_no_boundary_routes_or_redistribution() -> None:
     node_id = _first_satellite(resolved)
     vars_for_node = _vars_for(resolved, node_id)
     assert vars_for_node["boundary_static_routes"] == []
-    assert vars_for_node["redistribute_static"] == ()
+    assert _domain_vars(resolved, node_id)["redistribute_static"] == ()
     assert "redistribute" not in _frr_conf(resolved, node_id)
 
 
@@ -763,7 +774,7 @@ def _stanza_lines(conf: str, header: str) -> list[str]:
 @pytest.mark.parametrize(
     ("protocol", "igp_line", "passive_line", "enable"),
     [
-        ("isis", " ip router isis NODAL", " isis passive", " isis bfd"),
+        ("isis", " ip router isis leo_domain", " isis passive", " isis bfd"),
         ("ospf", " ip ospf area 0.0.0.0", " ip ospf passive", " ip ospf bfd"),
     ],
 )
@@ -784,7 +795,7 @@ def test_bfd_covers_every_active_igp_interface_and_no_passive_one(
     assert igp_line in active_lan
     assert passive_line not in active_lan
     assert enable in active_lan
-    assert f"{enable} profile NODAL" in active_lan
+    assert f"{enable} profile leo_domain" in active_lan
     # Passive site LAN and loopbacks: no BFD.
     passive_lan = _stanza_lines(passive_conf, "interface terr0")
     assert igp_line in passive_lan
@@ -799,10 +810,10 @@ def test_bfd_covers_every_active_igp_interface_and_no_passive_one(
         for entry in wan:
             body = _stanza_lines(conf, f"interface {entry['name']}")
             assert enable in body
-            assert f"{enable} profile NODAL" in body
+            assert f"{enable} profile leo_domain" in body
     # One profile carries the authored timers.
     assert _stanza_lines(active_conf, "bfd") == [
-        " profile NODAL",
+        " profile leo_domain",
         "  detect-multiplier 4",
         "  receive-interval 120",
         "  transmit-interval 180",
@@ -820,7 +831,7 @@ def test_isis_traffic_engineering_enables_mpls_te_on_the_router(extensions) -> N
     resolved = _resolved(protocol="isis", extensions=extensions)
     for node_id in (_first_satellite(resolved), _first_ground(resolved)):
         loopback = _vars_for(resolved, node_id)["ipv4_loopback"]
-        router = _router_block(_frr_conf(resolved, node_id), "router isis NODAL")
+        router = _router_block(_frr_conf(resolved, node_id), f"router isis {_FIXTURE_DOMAIN}")
 
         assert " mpls-te on" in router
         assert f" mpls-te router-address {loopback}" in router
@@ -835,7 +846,7 @@ def test_isis_without_traffic_engineering_renders_no_mpls_te() -> None:
 @pytest.mark.parametrize("extensions", [["sr"], ["sr", "te"], ["mpls", "sr"]])
 def test_ospf_segment_routing_advertises_resolver_prefix_sids(extensions) -> None:
     resolved = _resolved(protocol="ospf", extensions=extensions)
-    sid_by_node = resolved.sid_index_by_node_id()
+    sid_by_node = resolved.sid_index_by_domain()[_FIXTURE_DOMAIN]
     for node_id in (_first_satellite(resolved), _first_ground(resolved)):
         loopback = _vars_for(resolved, node_id)["ipv4_loopback"]
         files = _files(resolved, node_id)
@@ -1025,19 +1036,19 @@ def test_a_router_on_a_declared_ipv6_lan_routes_ipv6_in_its_own_topology() -> No
 
     conf = _frr_conf(resolved, router_id)
 
-    assert " topology ipv6-unicast" in _router_block(conf, "router isis NODAL")
+    assert " topology ipv6-unicast" in _router_block(conf, f"router isis {_DEFAULT_DOMAIN}")
     for wan in router.wan_interfaces:
         lines = _stanza_lines(conf, f"interface {wan.name}")
-        assert " ip router isis NODAL" in lines
-        assert " ipv6 router isis NODAL" in lines
+        assert f" ip router isis {_DEFAULT_DOMAIN}" in lines
+        assert f" ipv6 router isis {_DEFAULT_DOMAIN}" in lines
         # No IPv6 loopback is declared, so the WAN borrows none.
         assert not [line for line in lines if line.startswith(" ipv6 address")]
     lan = _stanza_lines(conf, "interface terr0")
     assert f" ipv6 address {terr0.ipv6}" in lan
-    assert " ip router isis NODAL" in lan
-    assert " ipv6 router isis NODAL" in lan
+    assert f" ip router isis {_DEFAULT_DOMAIN}" in lan
+    assert f" ipv6 router isis {_DEFAULT_DOMAIN}" in lan
     # The loopback holds no IPv6 address, so it joins IPv6 routing nowhere.
-    assert " ipv6 router isis NODAL" not in _stanza_lines(conf, "interface lo")
+    assert f" ipv6 router isis {_DEFAULT_DOMAIN}" not in _stanza_lines(conf, "interface lo")
 
 
 def test_default_origination_renders_per_declared_family() -> None:
@@ -1045,7 +1056,9 @@ def test_default_origination_renders_per_declared_family() -> None:
 
     # The shipped sites originate an IPv4 default only.
     simple = _simple_session()
-    plain = _router_block(_frr_conf(simple, _denver_router(simple)), "router isis NODAL")
+    plain = _router_block(
+        _frr_conf(simple, _denver_router(simple)), f"router isis {_DEFAULT_DOMAIN}"
+    )
     assert " default-information originate ipv4 level-2 always metric 100" in plain
     assert not [line for line in plain if "originate ipv6" in line]
 
@@ -1059,7 +1072,9 @@ def test_default_origination_renders_per_declared_family() -> None:
     }
     resolved = resolve_session(raw, source_context=SourceContext(origin="test.frr.ipv6"))
 
-    router = _router_block(_frr_conf(resolved, _denver_router(resolved)), "router isis NODAL")
+    router = _router_block(
+        _frr_conf(resolved, _denver_router(resolved)), f"router isis {_DEFAULT_DOMAIN}"
+    )
 
     assert " default-information originate ipv4 level-2 always metric 100" in router
     assert " default-information originate ipv6 level-2 always metric 100" in router
@@ -1079,7 +1094,7 @@ def test_ospf_runs_ospfv3_beside_ospfv2_on_ipv6_routers_only() -> None:
     files = _files(resolved, router_id)
     assert {"ospfd", "ospf6d", "bfdd"} <= _enabled_daemons(files["daemons"])
     conf = files["frr.conf"]
-    area = _vars_for(resolved, router_id)["area_id"]
+    area = _domain_vars(resolved, router_id)["area_id"]
     ospf6 = _router_block(conf, "router ospf6")
     assert f" ospf6 router-id {_vars_for(resolved, router_id)['ipv4_loopback']}" in ospf6
     for wan in router.wan_interfaces:
@@ -1087,14 +1102,14 @@ def test_ospf_runs_ospfv3_beside_ospfv2_on_ipv6_routers_only() -> None:
         assert " ipv6 ospf6 network point-to-point" in lines
         assert " ipv6 ospf6 area 0.0.0.0" in lines
         assert " ipv6 ospf6 cost 10" in lines
-        assert " ipv6 ospf6 bfd profile NODAL" in lines
+        assert " ipv6 ospf6 bfd profile leo_domain" in lines
         assert [line for line in lines if line.startswith(" ipv6 ospf6 hello-interval")]
         assert [line for line in lines if line.startswith(" ipv6 ospf6 dead-interval")]
     # Denver wires two routers to one LAN, so the LAN runs OSPFv3 actively.
     lan = _stanza_lines(conf, "interface terr0")
     assert f" ipv6 ospf6 area {area}" in lan
     assert " ipv6 ospf6 passive" not in lan
-    assert " ipv6 ospf6 bfd profile NODAL" in lan
+    assert " ipv6 ospf6 bfd profile leo_domain" in lan
     assert f" ip ospf area {area}" in lan
 
 
@@ -1135,28 +1150,24 @@ def test_ipv6_boundary_exports_install_over_an_ipv6_seed_and_redistribute() -> N
     resolved = _reachability_with_ipv6_loopbacks()
     border = _luna_border(resolved)
     vars_for_node = _vars_for(resolved, border)
-    seeds = [
-        entry["peer_loopback_ipv6"]
-        for entry in vars_for_node["wan_interfaces"]
-        if entry["static_only"]
-    ]
+    seeds = [entry["peer_loopback_ipv6"] for entry in vars_for_node["static_links"]]
     assert seeds and all(seeds)
     ipv6_routes = [r for r in vars_for_node["boundary_static_routes"] if r["family"] == "ipv6"]
     assert ipv6_routes
     assert {route["via"] for route in ipv6_routes} <= set(seeds)
-    assert vars_for_node["redistribute_static"] == ("ipv4", "ipv6")
+    assert _domain_vars(resolved, border)["redistribute_static"] == ("ipv4", "ipv6")
 
     conf = _frr_conf(resolved, border)
     for seed in seeds:
         assert f"ipv6 route {seed}/128 " in conf
     assert f"ipv6 route {ipv6_routes[0]['prefix']} {ipv6_routes[0]['via']}" in conf
-    router = _router_block(conf, "router isis NODAL")
+    router = _router_block(conf, "router isis luna_domain")
     assert " redistribute ipv4 static level-2" in router
     assert " redistribute ipv6 static level-2" in router
     # The unnumbered boundary link borrows the IPv6 loopback, so the peer's
     # seed next hop is on-link.
     loopback = vars_for_node["ipv6_loopback"]
-    static_link = next(e["name"] for e in vars_for_node["wan_interfaces"] if e["static_only"])
+    static_link = vars_for_node["static_links"][0]["name"]
     assert f" ipv6 address {loopback}/128" in _stanza_lines(conf, f"interface {static_link}")
 
 
@@ -1171,7 +1182,244 @@ def test_no_ipv6_static_route_renders_where_no_ipv6_loopback_is_declared() -> No
             continue
         vars_for_node = _vars_for(resolved, node.node_id)
         assert not [r for r in vars_for_node["boundary_static_routes"] if r["family"] == "ipv6"]
-        assert "ipv6" not in vars_for_node["redistribute_static"]
-        assert all(
-            entry.get("peer_loopback_ipv6") is None for entry in vars_for_node["wan_interfaces"]
+        for domain_vars in vars_for_node["domains"]:
+            assert "ipv6" not in domain_vars["redistribute_static"]
+        assert all(entry["peer_loopback_ipv6"] is None for entry in vars_for_node["static_links"])
+
+
+def test_ldp_never_runs_on_a_static_boundary_link() -> None:
+    from nodalarc.configuration_yaml import load_configuration_yaml
+
+    raw = load_configuration_yaml(
+        Path("catalog/nodalarc/sessions/earth-leo-heo-geo-luna-reachability.yaml").read_text(
+            encoding="utf-8"
         )
+    )
+    earth = next(domain for domain in raw["routing"]["domains"] if domain["id"] == "earth_domain")
+    earth["capabilities"] = {"mpls": {}}
+    resolved = resolve_session(raw, source_context=SourceContext(origin="test.frr.ldp"))
+    boundary = resolved.routing.boundaries[0]
+    earth_domain = next(d for d in resolved.routing_domains if d.domain_id == "earth_domain")
+    border = next(
+        node_id
+        for candidate in resolved.link_candidates
+        if candidate.rule_id == boundary.over
+        for node_id in (candidate.node_a, candidate.node_b)
+        if node_id in earth_domain.node_ids
+    )
+    vars_for_node = _vars_for(resolved, border)
+    static_links = {entry["name"] for entry in vars_for_node["static_links"]}
+    igp_links = {
+        entry["name"] for domain in vars_for_node["domains"] for entry in domain["interfaces"]
+    }
+    assert static_links and igp_links
+
+    ldp = {line.strip() for line in _stanza_lines(_frr_conf(resolved, border), "mpls ldp")}
+
+    assert {f"interface {name}" for name in igp_links} <= ldp
+    assert not {f"interface {name}" for name in static_links} & ldp
+
+
+@pytest.mark.parametrize("protocol", ["isis", "ospf"])
+def test_an_active_site_lan_runs_the_domain_timers_and_every_lan_carries_its_cost(protocol) -> None:
+    resolved = _simple_session_with_bfd(protocol)
+    active = _denver_router(resolved)
+    passive = next(
+        node.node_id
+        for node in resolved.nodes
+        if node.kind == "ground_station" and not node.node_id.startswith("earth-us-co-denver")
+    )
+    timers = _domain_vars(resolved, active)
+
+    active_lan = _stanza_lines(_frr_conf(resolved, active), "interface terr0")
+    passive_lan = _stanza_lines(_frr_conf(resolved, passive), "interface terr0")
+
+    if protocol == "isis":
+        assert f" isis hello-interval {timers['isis_hello_interval']}" in active_lan
+        assert f" isis hello-multiplier {timers['isis_hello_multiplier']}" in active_lan
+        assert " isis metric 10" in active_lan
+        assert " isis passive" in passive_lan
+        assert " isis metric 10" in passive_lan
+        assert not [line for line in passive_lan if "hello" in line]
+    else:
+        for version in ("ip ospf", "ipv6 ospf6"):
+            assert f" {version} hello-interval {timers['ospf_hello_interval']}" in active_lan
+            assert f" {version} dead-interval {timers['ospf_dead_interval']}" in active_lan
+            assert f" {version} cost 10" in active_lan
+            assert f" {version} passive" in passive_lan
+            assert f" {version} cost 10" in passive_lan
+        assert not [line for line in passive_lan if "interval" in line]
+
+
+def test_an_ospf_link_to_another_area_of_the_domain_runs_in_the_backbone() -> None:
+    resolved = _resolved(
+        protocol="ospf",
+        planes=2,
+        slots=1,
+        routing={
+            "domains": [
+                {
+                    "id": "leo_domain",
+                    "protocol": "ospf",
+                    "selectors": [{"any": [{"segment": "space"}, {"segment": "ground"}]}],
+                    "area_assignment": {"strategy": "per_plane", "gs_area_id": "0.0.0.0"},
+                }
+            ]
+        },
+    )
+    node_id = _first_satellite(resolved)
+    [domain] = resolved.routing_domains
+    node = resolved.node_by_id(node_id)
+    assert node is not None
+    area = domain.area_id_for(node)
+    assert area != "0.0.0.0"
+    areas = {
+        entry["name"]: entry["ospf_area"] for entry in _domain_vars(resolved, node_id)["interfaces"]
+    }
+    for candidate in resolved.link_candidates:
+        if candidate.kind == "access" or node_id not in (candidate.node_a, candidate.node_b):
+            continue
+        side = 0 if candidate.node_a == node_id else 1
+        peer = resolved.node_by_id(candidate.node_b if side == 0 else candidate.node_a)
+        assert peer is not None
+        expected = area if domain.area_id_for(peer) == area else "0.0.0.0"
+        assert areas[candidate.fixed_interfaces[side]] == expected
+    assert "0.0.0.0" in areas.values()
+
+
+def test_a_fixed_link_to_a_node_outside_the_domain_carries_no_igp() -> None:
+    resolved = _resolved(protocol="ospf", planes=1, slots=4)
+    node_id = _first_satellite(resolved)
+    [domain] = resolved.routing_domains
+    peer_id, interface = next(
+        (candidate.node_b, candidate.fixed_interfaces[0])
+        for candidate in resolved.link_candidates
+        if candidate.kind != "access" and candidate.node_a == node_id
+    )
+    before = {entry["name"] for entry in _domain_vars(resolved, node_id)["interfaces"]}
+    # The same peer, no longer a participant of the domain.
+    outside = resolved.model_copy(
+        update={
+            "routing_domains": (
+                domain.model_copy(
+                    update={"node_ids": tuple(n for n in domain.node_ids if n != peer_id)}
+                ),
+            )
+        }
+    )
+    after = {entry["name"] for entry in _domain_vars(outside, node_id)["interfaces"]}
+
+    assert interface in before
+    assert before - after == {interface}
+    assert not [
+        line
+        for line in _stanza_lines(_frr_conf(outside, node_id), f"interface {interface}")
+        if "ospf" in line
+    ]
+
+
+def _two_protocol_simple_raw(*, terrestrial_detect_multiplier: int = 4) -> dict[str, Any]:
+    """earth-leo-simple with IS-IS over the satellites and sites, OSPF over the sites.
+
+    Every site router participates in both domains. Denver wires two routers
+    to one LAN. Both domains enable BFD with a detect multiplier of 4 unless
+    the terrestrial one is given another.
+    """
+    from nodalarc.configuration_yaml import load_configuration_yaml
+
+    raw = load_configuration_yaml(
+        Path("catalog/nodalarc/sessions/earth-leo-simple.yaml").read_text(encoding="utf-8")
+    )
+    raw["routing"] = {
+        "domains": [
+            {
+                "id": "orbital",
+                "protocol": "isis",
+                "selectors": [{"any": [{"segment": "leo"}, {"segment": "ground"}]}],
+                "timers": {"bfd": {"enabled": True, "detect_multiplier": 4}},
+            },
+            {
+                "id": "terrestrial",
+                "protocol": "ospf",
+                "selectors": [{"segment": "ground"}],
+                "timers": {
+                    "bfd": {"enabled": True, "detect_multiplier": terrestrial_detect_multiplier}
+                },
+            },
+        ]
+    }
+    return raw
+
+
+def _two_protocol_simple_session() -> ResolvedSession:
+    return resolve_session(
+        _two_protocol_simple_raw(), source_context=SourceContext(origin="test.frr.two-domains")
+    )
+
+
+def test_a_router_in_two_domains_runs_each_domain_on_its_own_interfaces() -> None:
+    resolved = _two_protocol_simple_session()
+    router_id = _denver_router(resolved)
+    router = resolved.node_by_id(router_id)
+    assert router is not None
+    access = {wan.name for wan in router.wan_interfaces}
+    assert access
+    assert resolved.domain_interfaces(router_id) == {
+        "orbital": tuple(sorted(access | {"terr0"})),
+        "terrestrial": ("terr0",),
+    }
+
+    files = _files(resolved, router_id)
+    conf = files["frr.conf"]
+
+    assert {"isisd", "ospfd", "ospf6d", "bfdd"} <= _enabled_daemons(files["daemons"])
+    assert _router_block(conf, "router isis orbital")
+    assert _router_block(conf, "router ospf")
+    # The loopback belongs to both domains.
+    lo = _stanza_lines(conf, "interface lo")
+    assert " ip router isis orbital" in lo
+    assert " ip ospf area 0.0.0.0" in lo
+    # Access links run IS-IS only, with the orbital domain's BFD profile.
+    for name in access:
+        lines = _stanza_lines(conf, f"interface {name}")
+        assert " ip router isis orbital" in lines
+        assert " isis bfd profile orbital" in lines
+        assert not [line for line in lines if "ospf" in line]
+    # Both Denver routers share the LAN in both domains, so both run on it.
+    lan = _stanza_lines(conf, "interface terr0")
+    assert " ip router isis orbital" in lan
+    assert " ip ospf area 0.0.0.0" in lan
+    assert " ipv6 ospf6 area 0.0.0.0" in lan
+    assert " isis bfd profile orbital" in lan
+    assert " ip ospf bfd profile terrestrial" in lan
+    # One BFD profile per domain, each with its domain's timers.
+    profiles = _stanza_lines(conf, "bfd")
+    assert profiles.count(" profile orbital") == 1
+    assert profiles.count(" profile terrestrial") == 1
+    assert profiles[profiles.index(" profile orbital") + 1] == "  detect-multiplier 4"
+    assert profiles[profiles.index(" profile terrestrial") + 1] == "  detect-multiplier 4"
+
+
+def test_domains_sharing_an_interface_must_declare_the_same_bfd_timers() -> None:
+    from nodalarc.resolve_session import SessionResolutionError
+
+    raw = _two_protocol_simple_raw(terrestrial_detect_multiplier=5)
+
+    with pytest.raises(
+        SessionResolutionError,
+        match=r"different BFD timers on shared interfaces: earth-.* terr0 "
+        r"\(orbital, terrestrial\)",
+    ):
+        resolve_session(raw, source_context=SourceContext(origin="test.frr.bfd-conflict"))
+
+
+def test_a_satellite_outside_the_second_domain_runs_only_its_own() -> None:
+    resolved = _two_protocol_simple_session()
+    satellite = _first_satellite(resolved)
+
+    files = _files(resolved, satellite)
+
+    assert [domain.domain_id for domain in resolved.routing_domains_for(satellite)] == ["orbital"]
+    assert "ospfd" not in _enabled_daemons(files["daemons"])
+    assert "ospf" not in files["frr.conf"]
+    assert "profile terrestrial" not in files["frr.conf"]

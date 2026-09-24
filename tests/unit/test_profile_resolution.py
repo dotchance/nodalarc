@@ -308,7 +308,9 @@ def _narrow_adapter_session(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, dom
             "frr": FRR_SUPPORT,
             "narrow": AdapterSupport(
                 routing={
-                    "isis": RoutingProtocolSupport(address_families=frozenset({"ipv4", "ipv6"}))
+                    "isis": RoutingProtocolSupport(
+                        address_families=frozenset({"ipv4", "ipv6"}), domains_per_router=1
+                    )
                 }
             ),
         },
@@ -410,3 +412,82 @@ def test_bfd_timers_outside_the_frr_range_are_refused(tmp_path: Path) -> None:
         "bfd.rx_interval_ms=5",
     ]
     assert all("workload adapter 'frr'" in f.message for f in refused.value.features)
+
+
+def _host_endpoint_fixture():
+    from tests.catalog_session_fixtures import build_catalog_session_fixture
+
+    return build_catalog_session_fixture(
+        name="forwarding-agreement",
+        constellation={"planes": {"count": 1, "sats_per_plane": 2}},
+        ground_stations={"stations": [{}], "host_endpoints": True},
+    )
+
+
+def test_a_host_may_participate_in_routing_without_being_a_router() -> None:
+    # A host running a routing workload speaks the protocol but does not
+    # forward, so it participates and is never a gateway.
+    fixture = _host_endpoint_fixture()
+    [payload_path] = sorted((fixture.roots.user_root / "payloads").glob("*.yaml"))
+    payload = yaml.safe_load(payload_path.read_text(encoding="utf-8"))
+    payload["payload"]["profile"] = FRR_PROFILE
+    _write_yaml(payload_path, payload)
+
+    resolution = resolve_session(fixture, catalog=FilesystemCatalogReadView(fixture.roots))
+
+    [host] = [node for node in resolution.nodes if node.forwarding == "host"]
+    assert resolution.routing_domains_for(host.node_id)
+    assert host.host_attachment is not None
+    gateway = resolution.node_by_id(host.host_attachment.gateway_node_id)
+    assert gateway is not None and gateway.forwarding == "routed"
+
+
+def test_a_host_gateway_is_always_a_router() -> None:
+    # The site's only routed node runs no routing workload, so it forwards
+    # but is not a router, and the host on its LAN has no gateway.
+    fixture = _host_endpoint_fixture()
+    for ref in fixture.site_refs:
+        site = fixture.read_catalog(ref)
+        for node in site["site"]["nodes"]:
+            node["profile"] = "nodalarc:profiles/linux-host.yaml"
+        fixture.write_catalog(ref, site)
+
+    with pytest.raises(SessionResolutionError, match="has no router on its segment"):
+        resolve_session(fixture, catalog=FilesystemCatalogReadView(fixture.roots))
+
+
+@pytest.mark.parametrize("forwarding", ["bridge", "control_only"])
+def test_an_unexecuted_forwarding_class_is_refused_with_a_typed_reason(forwarding) -> None:
+    from nodalarc.runtime_support import FeatureCategory
+
+    fixture = _host_endpoint_fixture()
+    node_document = fixture.read_catalog(fixture.space_node_ref)
+    node_document["node"]["forwarding"] = forwarding
+    fixture.write_catalog(fixture.space_node_ref, node_document)
+
+    with pytest.raises(UnsupportedFeatureError) as refused:
+        resolve_session(fixture, catalog=FilesystemCatalogReadView(fixture.roots))
+
+    assert {(feature.category, feature.value) for feature in refused.value.features} == {
+        (FeatureCategory.FORWARDING_CLASS, forwarding)
+    }
+
+
+def test_a_routed_node_without_a_routing_workload_participates_in_no_domain(tmp_path: Path) -> None:
+    from nodalarc.workloads.adapter import SessionContext
+
+    from adapters.frr.adapter import FrrAdapter
+
+    def override_site(site):
+        site["nodes"][0]["profile"] = "nodalarc:profiles/linux-host.yaml"
+
+    session, roots = _session_with_user_ground(tmp_path, site_mutation=override_site)
+    resolution = resolve_session(session, catalog=FilesystemCatalogReadView(roots))
+    [probe] = [
+        node for node in resolution.nodes if node.profile == "nodalarc:profiles/linux-host.yaml"
+    ]
+
+    assert probe.forwarding == "routed"
+    assert resolution.routing_domains_for(probe.node_id) == ()
+    with pytest.raises(ValueError, match="participates in no routing domain"):
+        FrrAdapter().render_node(probe, SessionContext(resolution))

@@ -538,6 +538,25 @@
       "title": "NodeAddress",
       "type": "object"
     },
+    "NodeRoutingArea": {
+      "description": "A node's area in one IS-IS or OSPF domain it participates in.",
+      "properties": {
+        "domain_id": {
+          "title": "Domain Id",
+          "type": "string"
+        },
+        "area_id": {
+          "title": "Area Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "domain_id",
+        "area_id"
+      ],
+      "title": "NodeRoutingArea",
+      "type": "object"
+    },
     "NodeState": {
       "description": "State of a single node in the constellation.",
       "properties": {
@@ -616,17 +635,13 @@
           ],
           "title": "Slot"
         },
-        "routing_area": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Routing Area"
+        "routing_areas": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/NodeRoutingArea"
+          },
+          "title": "Routing Areas",
+          "type": "array"
         },
         "isl_count": {
           "default": 0,

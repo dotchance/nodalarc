@@ -6,7 +6,7 @@
  */
 
 import type { NodeState, LinkState } from "../types";
-import { isGroundLinkState, nodeDisplayLabel } from "../networkIdentity";
+import { areaKey, isGroundLinkState, nodeDisplayLabel } from "../networkIdentity";
 
 export interface LayoutNode {
   id: string;
@@ -57,7 +57,7 @@ export function computeLayout(
   const sats = nodes.filter((n) => n.node_type === "satellite");
   const gss = nodes.filter((n) => n.node_type === "ground_station");
 
-  const allAreasNull = sats.every((s) => s.routing_area == null);
+  const allAreasNull = sats.every((s) => areaKey(s) == null);
 
   const layoutNodes: LayoutNode[] = [];
   const areaBoundsMap = new Map<string, { minX: number; minY: number; maxX: number; maxY: number }>();
@@ -97,7 +97,7 @@ export function computeLayout(
           x: bandX,
           y: MARGIN + i * NODE_SPACING_Y,
           type: "satellite",
-          area: sat.routing_area,
+          area: areaKey(sat),
           plane: sat.plane,
           slot: sat.slot,
         });
@@ -108,7 +108,7 @@ export function computeLayout(
   } else {
     const areaMap = new Map<string, Map<number, NodeState[]>>();
     for (const sat of sats) {
-      const area = sat.routing_area ?? "unknown";
+      const area = areaKey(sat) ?? "unknown";
       if (!areaMap.has(area)) areaMap.set(area, new Map());
       const planeMap = areaMap.get(area)!;
       const plane = sat.plane ?? 0;
@@ -136,7 +136,7 @@ export function computeLayout(
             x,
             y,
             type: "satellite",
-            area: sat.routing_area,
+            area: areaKey(sat),
             plane: sat.plane,
             slot: sat.slot,
           });
@@ -173,7 +173,7 @@ export function computeLayout(
       x: gsStartX + i * GS_SPACING,
       y: gsY,
       type: "ground_station",
-      area: gs.routing_area,
+      area: areaKey(gs),
       plane: null,
       slot: null,
     });
@@ -197,7 +197,7 @@ export function computeLayout(
   // Build layout links
   const nodeAreaMap = new Map<string, string | null>();
   for (const n of nodes) {
-    nodeAreaMap.set(n.node_id, n.routing_area);
+    nodeAreaMap.set(n.node_id, areaKey(n));
   }
 
   const layoutLinks: LayoutLink[] = links.map((l) => ({

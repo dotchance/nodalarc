@@ -14,7 +14,13 @@ import { candidateStatus } from "../explain/derive";
 import { CandidateRow } from "../explain/components/CandidateRow";
 import { PairInspectorView } from "../explain/components/PairInspectorView";
 import { FamilyBadge } from "../explain/components/FamilyBadge";
-import { isGroundLinkState, selectionTypeForNodeId } from "../networkIdentity";
+import {
+  areaKey,
+  areasLabel,
+  isGroundLinkState,
+  nodeAreaIds,
+  selectionTypeForNodeId,
+} from "../networkIdentity";
 
 interface SatelliteDetailProps {
   node: NodeState;
@@ -112,9 +118,9 @@ export function SatelliteDetail({ node, snapshot, anchorGsId,
     const peerNode = snapshot.nodes.find(
       (n) => n.node_id === (l.node_a === node.node_id ? l.node_b : l.node_a),
     );
-    if (peerNode?.routing_area) linkedAreas.add(peerNode.routing_area);
+    if (peerNode) for (const area of nodeAreaIds(peerNode)) linkedAreas.add(area);
   }
-  if (node.routing_area) linkedAreas.add(node.routing_area);
+  for (const area of nodeAreaIds(node)) linkedAreas.add(area);
   const role = linkedAreas.size > 1 ? "Router (ABR)" : "Router";
 
   const selectPeer = (peerId: string) => {
@@ -223,8 +229,8 @@ export function SatelliteDetail({ node, snapshot, anchorGsId,
       </div>
       <div className="detail-row">
         <span className="detail-label">Routing Area</span>
-        <span className="detail-value" style={{ color: areaCSSColor(node.routing_area) }}>
-          {node.routing_area ?? "none"}
+        <span className="detail-value" style={{ color: areaCSSColor(areaKey(node)) }}>
+          {areasLabel(node)}
         </span>
       </div>
       <div className="detail-row">

@@ -96,7 +96,7 @@ def _check_link_rules_have_candidates(resolved: ResolvedSession) -> list[Validat
 
 
 def _check_routing_domain_connectivity(resolved: ResolvedSession) -> list[ValidationResult]:
-    """IGP/static domains should not contain routed members with no candidate edge.
+    """IGP/static domains should not contain participants with no candidate edge.
 
     This is intentionally per-domain. The retired validator used one global
     routing protocol; catalog sessions can run multiple domains.
@@ -104,16 +104,9 @@ def _check_routing_domain_connectivity(resolved: ResolvedSession) -> list[Valida
     candidate_neighbors = _candidate_neighbors_by_node(resolved.link_candidates)
     site_lan_neighbors = _site_lan_neighbors_by_node(resolved)
     results: list[ValidationResult] = []
-    nodes_by_id = {node.node_id: node for node in resolved.nodes}
     for domain in resolved.routing_domains:
-        if len(domain.node_ids) <= 1:
-            continue
-        domain_members = {
-            node_id
-            for node_id in domain.node_ids
-            if (node := nodes_by_id.get(node_id)) is not None
-            and node.forwarding in {"routed", "host"}
-        }
+        # A domain's participants; resolution checked each one.
+        domain_members = set(domain.node_ids)
         if len(domain_members) <= 1:
             continue
         # Per-node degree is not connectivity: a domain can split into
@@ -247,7 +240,7 @@ def _site_lan_neighbors_by_node(resolved: ResolvedSession) -> dict[str, set[str]
 def _check_segment_routing_indices(resolved: ResolvedSession) -> list[ValidationResult]:
     """Report SID allocation problems from the resolved session helper."""
     try:
-        resolved.sid_index_by_node_id()
+        resolved.sid_index_by_domain()
     except ValueError as exc:
         return [
             ValidationResult(

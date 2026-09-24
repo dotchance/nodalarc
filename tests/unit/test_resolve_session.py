@@ -494,9 +494,64 @@ def test_routing_boundary_rejects_endpoint_domain_mixing(
 
     with pytest.raises(
         SessionResolutionError,
-        match=rf"endpoint {mixed_endpoint} spans routing domains.*resolve wholly to one domain",
+        match=rf"endpoint {mixed_endpoint} spans routing domains.*resolve wholly to one of the boundary's",
     ):
         resolve_session(raw)
+
+
+def _per_plane_domains(*, shared_space_domain: bool) -> dict[str, Any]:
+    """Two satellites per plane in two planes, one IS-IS domain per plane.
+
+    The ISL rule joins satellite 0 of plane 0 to satellite 1 of its own plane
+    and to satellite 0 of plane 1.
+    """
+    raw = _raw_session(constellation={"planes": {"count": 2, "sats_per_plane": 2}})
+    raw["link_rules"][1]["topology"] = {
+        "mode": "explicit_pairs",
+        "pairs": [
+            {"a": "sat-p00s00", "b": "sat-p00s01"},
+            {"a": "sat-p00s00", "b": "sat-p01s00"},
+        ],
+    }
+    domains: list[dict[str, Any]] = [
+        {"id": "plane-0", "protocol": "isis", "selectors": [{"plane": 0}]},
+        {"id": "plane-1", "protocol": "isis", "selectors": [{"plane": 1}]},
+        {"id": "ground-domain", "protocol": "static", "selectors": [{"segment": "ground"}]},
+    ]
+    if shared_space_domain:
+        domains.append({"id": "space-all", "protocol": "ospf", "selectors": [{"segment": "space"}]})
+    raw["routing"] = {"domains": domains}
+    return raw
+
+
+def test_a_link_between_routers_sharing_no_domain_needs_a_boundary() -> None:
+    with pytest.raises(
+        SessionResolutionError,
+        match=r"link rule 'space-isl' joins routing domains \['plane-0', 'plane-1'\] "
+        "without a routing boundary",
+    ):
+        resolve_session(_per_plane_domains(shared_space_domain=False))
+
+
+def test_a_link_runs_each_domain_its_two_routers_share() -> None:
+    resolved = resolve_session(_per_plane_domains(shared_space_domain=True))
+
+    node_id = "space-sat-p00s00"
+    interface_to = {
+        (candidate.node_b if candidate.node_a == node_id else candidate.node_a): (
+            candidate.fixed_interfaces[0 if candidate.node_a == node_id else 1]
+        )
+        for candidate in resolved.link_candidates
+        if candidate.kind != "access" and node_id in (candidate.node_a, candidate.node_b)
+    }
+    same_plane = interface_to["space-sat-p00s01"]
+    other_plane = interface_to["space-sat-p01s00"]
+    assignment = resolved.domain_interfaces(node_id)
+
+    assert list(assignment) == ["plane-0", "space-all"]
+    assert same_plane in assignment["plane-0"]
+    assert other_plane not in assignment["plane-0"]
+    assert {same_plane, other_plane} <= set(assignment["space-all"])
 
 
 def test_ground_override_must_target_a_site_in_the_selected_site_set() -> None:
@@ -1139,8 +1194,8 @@ def test_runtime_node_id_length_fails_before_kubernetes() -> None:
 
 
 def test_omitted_routing_requires_at_least_one_router() -> None:
-    # Router-ness derives from the workload profile, never the wiring class:
-    # a session whose profiles render no routing has zero routers.
+    # Participation derives from the workload profile: a session whose
+    # profiles render no routing has no participant.
     raw = _raw_session()
     assert raw.space_node_ref is not None
     assert raw.ground_node_ref is not None
@@ -1152,7 +1207,7 @@ def test_omitted_routing_requires_at_least_one_router() -> None:
 
     with pytest.raises(
         SessionResolutionError,
-        match="declares no routing and resolves zero routers",
+        match="declares no routing and no node runs a routing workload",
     ):
         resolve_session(raw)
 

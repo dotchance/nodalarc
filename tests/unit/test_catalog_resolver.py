@@ -14,7 +14,7 @@ from nodalarc.catalog_paths import CatalogRoots
 from nodalarc.catalog_refs import CatalogRef
 from nodalarc.catalog_registry import validate_referenced_configuration_document
 from nodalarc.configuration_yaml import load_configuration_yaml
-from nodalarc.models.resolved_session import InterfaceRates
+from nodalarc.models.resolved_session import DomainArea, InterfaceRates
 from nodalarc.resolve_session import (
     SessionResolutionError,
     _derive_link_label,
@@ -175,7 +175,11 @@ def test_every_shipped_catalog_session_resolves_to_runtime_truth() -> None:
         assert {domain.domain_id for domain in sr_domains} == {
             block.domain_id for block in resolved.sid_blocks
         }
-        assert all(0 < sid <= 8000 for sid in resolved.sid_index_by_node_id().values())
+        assert all(
+            0 < sid <= 8000
+            for indices in resolved.sid_index_by_domain().values()
+            for sid in indices.values()
+        )
         assert all(
             node.interfaces is not None and node.interfaces.lo0 is not None
             for node in resolved.nodes
@@ -323,11 +327,60 @@ def test_explicit_routing_domains_must_cover_every_node() -> None:
         ]
     }
 
-    with pytest.raises(SessionResolutionError, match="routing domains must cover every router"):
+    with pytest.raises(
+        SessionResolutionError, match="every routing workload must participate in a routing domain"
+    ):
         resolve_session(raw, catalog=shipped_read_view())
 
 
-def test_explicit_routing_domains_must_be_disjoint() -> None:
+def test_a_router_participates_in_every_domain_that_selects_it() -> None:
+    raw = _load()
+    raw["routing"] = {
+        "domains": [
+            {
+                "id": "orbital",
+                "protocol": "isis",
+                "selectors": [{"any": [{"segment": "leo"}, {"segment": "ground"}]}],
+            },
+            {
+                "id": "terrestrial",
+                "protocol": "ospf",
+                "selectors": [{"segment": "ground"}],
+            },
+        ]
+    }
+
+    resolved = resolve_session(raw, catalog=shipped_read_view())
+
+    router = next(node for node in resolved.nodes if node.kind == "ground_station")
+    satellite = next(node for node in resolved.nodes if node.kind == "satellite")
+    assert [d.domain_id for d in resolved.routing_domains_for(router.node_id)] == [
+        "orbital",
+        "terrestrial",
+    ]
+    assert [d.domain_id for d in resolved.routing_domains_for(satellite.node_id)] == ["orbital"]
+    areas = resolved.routing_areas_by_node_id()
+    assert areas[router.node_id] == (
+        DomainArea("orbital", "49.0001"),
+        DomainArea("terrestrial", "0.0.0.0"),
+    )
+    assert areas[satellite.node_id] == (DomainArea("orbital", "49.0001"),)
+    # Each interface belongs to the domains its router shares with the other
+    # end; the site LAN has no other participant, so it joins both.
+    assert router.interfaces is not None
+    lan = tuple(sorted(router.interfaces.ethernet))
+    access = tuple(wan.name for wan in router.wan_interfaces)
+    assert lan and access
+    assert resolved.domain_interfaces(router.node_id) == {
+        "orbital": tuple(sorted(access + lan)),
+        "terrestrial": lan,
+    }
+    assert set(resolved.domain_interfaces(satellite.node_id)) == {"orbital"}
+
+
+def test_a_router_in_more_domains_of_a_protocol_than_its_adapter_renders_is_refused() -> None:
+    from nodalarc.runtime_support import FeatureCategory, UnsupportedFeatureError
+
     raw = _load()
     raw["routing"] = {
         "domains": [
@@ -344,8 +397,14 @@ def test_explicit_routing_domains_must_be_disjoint() -> None:
         ]
     }
 
-    with pytest.raises(SessionResolutionError, match="routing domains must be disjoint"):
+    with pytest.raises(UnsupportedFeatureError) as refused:
         resolve_session(raw, catalog=shipped_read_view())
+
+    [feature] = refused.value.features
+    assert feature.category == FeatureCategory.ROUTER_DOMAINS
+    assert feature.value == "isis:all_domain,leo_domain"
+    assert "participate in isis domains ['all_domain', 'leo_domain']" in feature.message
+    assert "workload adapter 'frr' renders 1 isis domain(s) per router" in feature.message
 
 
 def test_placed_ground_nodes_get_deterministic_allocated_loopbacks(tmp_path: Path) -> None:

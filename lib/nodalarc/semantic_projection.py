@@ -150,8 +150,9 @@ def _addressing_projection(resolved: ResolvedSession) -> dict[str, Any]:
         for block in resolved.sid_blocks
     ]
     sid_indices = [
-        {"node_id": node_id, "sid_index": sid_index}
-        for node_id, sid_index in sorted(resolved.sid_index_by_node_id().items())
+        {"domain_id": domain_id, "node_id": node_id, "sid_index": sid_index}
+        for domain_id, indices in sorted(resolved.sid_index_by_domain().items())
+        for node_id, sid_index in sorted(indices.items())
     ]
     return {
         "nodes": sorted(nodes, key=lambda item: item["node_id"]),

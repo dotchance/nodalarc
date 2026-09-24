@@ -1,47 +1,53 @@
-{# OSPFv3 on an IPv6 node of an OSPF domain, beside OSPFv2: the same router
+{# OSPFv3 on an IPv6 router of an OSPF domain, beside OSPFv2: the same router
    id, areas, costs, timers and BFD profile, for IPv6. Timer and BFD values
    are resolver-owned per-domain facts; the template carries no fallbacks. #}
+{% for domain in domains if domain.protocol == "ospf" %}
 router ospf6
  ospf6 router-id {{ ipv4_loopback }}
-{% if "ipv6" in redistribute_static %}
+{% if "ipv6" in domain.redistribute_static %}
  redistribute static
 {% endif %}
- timers throttle spf {{ ospf_spf_delay }} {{ ospf_spf_initial_hold }} {{ ospf_spf_max_hold }}
-{% if "ipv6" in default_route_families %}
- default-information originate always metric {{ default_route_metric }}
+ timers throttle spf {{ domain.ospf_spf_delay }} {{ domain.ospf_spf_initial_hold }} {{ domain.ospf_spf_max_hold }}
+{% if "ipv6" in domain.default_route_families %}
+ default-information originate always metric {{ domain.default_route_metric }}
 {% endif %}
 exit
 
 {% if ipv6_loopback %}
 interface lo
- ipv6 ospf6 area {{ area_id }}
+ ipv6 ospf6 area {{ domain.area_id }}
  ipv6 ospf6 passive
 exit
 {% endif %}
 
-{% for iface in wan_interfaces if not iface.static_only %}
+{% for iface in domain.interfaces %}
 interface {{ iface.name }}
  ipv6 ospf6 area {{ iface.ospf_area }}
  ipv6 ospf6 network point-to-point
  ipv6 ospf6 cost {{ iface.metric }}
- ipv6 ospf6 hello-interval {{ ospf_hello_interval }}
- ipv6 ospf6 dead-interval {{ ospf_dead_interval }}
+ ipv6 ospf6 hello-interval {{ domain.ospf_hello_interval }}
+ ipv6 ospf6 dead-interval {{ domain.ospf_dead_interval }}
 {% if iface.bfd %}
  ipv6 ospf6 bfd
- ipv6 ospf6 bfd profile NODAL
+ ipv6 ospf6 bfd profile {{ domain.bfd_profile }}
 {% endif %}
 exit
 {% endfor %}
 
-{% for segment in segment_interfaces if "ipv6" in segment.igp_families %}
+{% for segment in domain.segments if "ipv6" in segment.igp_families %}
 interface {{ segment.name }}
- ipv6 ospf6 area {{ area_id }}
-{% if not segment.igp_active %}
+ ipv6 ospf6 area {{ domain.area_id }}
+ ipv6 ospf6 cost {{ segment.metric }}
+{% if segment.igp_active %}
+ ipv6 ospf6 hello-interval {{ domain.ospf_hello_interval }}
+ ipv6 ospf6 dead-interval {{ domain.ospf_dead_interval }}
+{% else %}
  ipv6 ospf6 passive
 {% endif %}
 {% if segment.bfd %}
  ipv6 ospf6 bfd
- ipv6 ospf6 bfd profile NODAL
+ ipv6 ospf6 bfd profile {{ domain.bfd_profile }}
 {% endif %}
 exit
+{% endfor %}
 {% endfor %}

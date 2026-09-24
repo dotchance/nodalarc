@@ -15,7 +15,7 @@ from nodalarc.resolve_session import SessionResolutionError, load_session_resolu
 from nodalarc.runtime_support import FeatureCategory, UnsupportedFeatureError
 from nodalarc.workloads.adapter import AdapterSupport, RoutingProtocolSupport, SessionContext
 
-from adapters.frr import FrrAdapter
+from adapters.frr.adapter import FrrAdapter
 from adapters.frr.support import FRR_SUPPORT
 from tests.catalog_session_fixtures import (
     CatalogSessionFixture,
@@ -175,7 +175,10 @@ def test_a_router_whose_adapter_cannot_route_its_ipv6_is_refused(
         routing={
             **FRR_SUPPORT.routing,
             "isis": RoutingProtocolSupport(
-                isis.capabilities, isis.bfd, address_families=frozenset({"ipv4"})
+                isis.capabilities,
+                isis.bfd,
+                address_families=frozenset({"ipv4"}),
+                domains_per_router=1,
             ),
         }
     )

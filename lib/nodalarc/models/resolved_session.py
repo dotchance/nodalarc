@@ -17,7 +17,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from nodalarc.body_frames import FrameBodyName, SupportedSurfaceBody
 from nodalarc.model_validation import ADDRESS_FAMILIES, AddressFamily, NonEmptyReference
-from nodalarc.models.catalog import MountRole
+from nodalarc.models.catalog import ForwardingClass, MountRole
 from nodalarc.models.identity import IdentityMode
 from nodalarc.models.link_rules import (
     LinkLabel,
@@ -25,10 +25,13 @@ from nodalarc.models.link_rules import (
     LinkTopology,
 )
 from nodalarc.models.segment_session import (
+    LINK_STATE_PROTOCOLS,
     Addressing,
     AreaAssignment,
     Dispatch,
     Routing,
+    RoutingCapability,
+    RoutingProtocol,
     RoutingTimers,
     SessionMeta,
     Simulation,
@@ -46,6 +49,13 @@ class InterfaceRates(NamedTuple):
 
     transmit_mbps: float
     receive_mbps: float
+
+
+class DomainArea(NamedTuple):
+    """One routing area a node sits in: a domain it participates in and its area there."""
+
+    domain_id: str
+    area_id: str
 
 
 TerminalMediumLiteral = Literal["rf", "optical"]
@@ -262,19 +272,20 @@ class ResolvedWanInterface(BaseModel):
     borrows: Literal["lo0"] = "lo0"
 
 
-# Routing protocols whose domains are divided into areas.
-ROUTING_AREA_PROTOCOLS = frozenset({"isis", "ospf"})
-
-
 class ResolvedRoutingDomain(BaseModel):
-    """One routing domain after selector resolution."""
+    """One routing domain after selector resolution.
+
+    ``node_ids`` are its participants: the selected nodes that run its
+    protocol. A selected node that runs no routing is inside the domain
+    without participating.
+    """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     domain_id: NonEmptyReference
-    protocol: Literal["isis", "ospf", "bgp", "static"]
+    protocol: RoutingProtocol
     node_ids: tuple[NonEmptyReference, ...] = Field(min_length=1)
-    capabilities: tuple[NonEmptyReference, ...] = ()
+    capabilities: tuple[RoutingCapability, ...] = ()
     area_assignment: AreaAssignment | None = None
     # Effective timer values — defaults applied at resolution, so every
     # consumer reads one populated truth and templates carry no fallbacks.
@@ -294,7 +305,7 @@ class ResolvedRoutingDomain(BaseModel):
         the assignment's ground-station area when it names one, else the
         protocol's first area. Only IS-IS and OSPF domains have areas.
         """
-        if self.protocol not in ROUTING_AREA_PROTOCOLS:
+        if self.protocol not in LINK_STATE_PROTOCOLS:
             raise ValueError(
                 f"routing domain {self.domain_id!r} runs {self.protocol}, which has no areas"
             )
@@ -476,7 +487,10 @@ class ResolvedNode(BaseModel):
     orbit: ResolvedOrbitFacts | None = None
     surface_position: ResolvedSurfacePosition | None = None
     originated_prefixes: ResolvedOriginatedPrefixes | None = None
-    forwarding: Literal["routed", "host", "bridge", "control_only"] | None = None
+    # How the node's kernel forwards. A router forwards between subnets and
+    # participates in routing: ``routed`` here and a participant of at least
+    # one routing domain (``ResolvedSession.routing_domains_for``).
+    forwarding: ForwardingClass
     # The effective workload profile and the level that supplied it: the
     # placed node entry, the segment, or the node definition. Resolution
     # refuses a node with no statement at any level; there is no default
@@ -895,14 +909,15 @@ class ResolvedSession(BaseModel):
                 return node
         return None
 
-    def routing_area_by_node_id(self) -> dict[str, str]:
-        """The routing area of every router in an IS-IS or OSPF domain.
+    def routing_areas_by_node_id(self) -> dict[str, tuple[DomainArea, ...]]:
+        """The routing areas of every IS-IS or OSPF participant, in declared domain order.
 
-        A node absent from the mapping runs no area-based routing protocol.
+        A node has one area per area-based domain it participates in. A node
+        absent from the mapping runs no area-based routing protocol.
         """
-        areas: dict[str, str] = {}
+        areas: dict[str, list[DomainArea]] = {}
         for domain in self.routing_domains:
-            if domain.protocol not in ROUTING_AREA_PROTOCOLS:
+            if domain.protocol not in LINK_STATE_PROTOCOLS:
                 continue
             for node_id in domain.node_ids:
                 node = self.node_by_id(node_id)
@@ -910,25 +925,108 @@ class ResolvedSession(BaseModel):
                     raise ValueError(
                         f"routing domain {domain.domain_id!r} names unknown node {node_id!r}"
                     )
-                if node_id in areas:
-                    raise ValueError(f"node {node_id!r} belongs to more than one routing domain")
-                areas[node_id] = domain.area_id_for(node)
-        return areas
+                areas.setdefault(node_id, []).append(
+                    DomainArea(domain.domain_id, domain.area_id_for(node))
+                )
+        return {node_id: tuple(node_areas) for node_id, node_areas in areas.items()}
 
-    def routing_domain_for(self, node_id: str) -> ResolvedRoutingDomain:
-        """The one routing domain that contains ``node_id``.
+    def routing_domains_for(self, node_id: str) -> tuple[ResolvedRoutingDomain, ...]:
+        """The routing domains ``node_id`` participates in, in declared order.
 
-        A node in no domain, or in several, is a loud failure: every consumer
-        that asks is rendering or wiring a router, and a router belongs to
-        exactly one domain.
+        A participant runs the domain's protocol. A domain may select nodes
+        that do not participate, and a router participates in every domain
+        one of its interfaces belongs to.
         """
-        domains = [domain for domain in self.routing_domains if node_id in domain.node_ids]
-        if len(domains) != 1:
-            raise ValueError(
-                f"node {node_id!r} must belong to exactly one routing domain; "
-                f"got {[domain.domain_id for domain in domains]}"
+        return tuple(domain for domain in self.routing_domains if node_id in domain.node_ids)
+
+    def domain_interfaces(self, node_id: str) -> dict[str, tuple[str, ...]]:
+        """The interfaces of ``node_id`` in each routing domain it participates in.
+
+        ``domain_interfaces_by_node`` states the assignment. A node that
+        participates in no domain has none.
+        """
+        if self.node_by_id(node_id) is None:
+            raise ValueError(f"no resolved node {node_id!r}")
+        return self.domain_interfaces_by_node().get(node_id, {})
+
+    def domain_interfaces_by_node(self) -> dict[str, dict[str, tuple[str, ...]]]:
+        """Each participant's interfaces in each routing domain it participates in.
+
+        A router takes part in a domain through its interfaces, and its
+        loopback belongs to every domain it participates in. A fixed link
+        belongs to the domains the node shares with the peer on it; a link a
+        ``static_ip`` boundary crosses belongs to none. An access interface
+        belongs to the domains the node shares with the nodes it can reach
+        over access links. An Ethernet segment interface belongs to the
+        domains the node shares with the segment's other participants, or,
+        when it shares none, to every domain the node participates in. Inner
+        keys follow declared domain order; the loopback is not listed.
+        """
+        participation: dict[str, set[str]] = {}
+        for domain in self.routing_domains:
+            for member in domain.node_ids:
+                participation.setdefault(member, set()).add(domain.domain_id)
+        static_rules = {
+            boundary.over
+            for boundary in (self.routing.boundaries or () if self.routing is not None else ())
+            if boundary.adapter == "static_ip"
+        }
+        assigned: dict[str, dict[str, set[str]]] = {node_id: {} for node_id in participation}
+        access_reach: dict[str, set[str]] = {node_id: set() for node_id in participation}
+        for candidate in self.link_candidates:
+            ends = (
+                (candidate.node_a, candidate.node_b, 0),
+                (candidate.node_b, candidate.node_a, 1),
             )
-        return domains[0]
+            for node_id, peer_id, side in ends:
+                own = participation.get(node_id)
+                if own is None:
+                    continue
+                peer_domains = participation.get(peer_id, set())
+                if candidate.kind == "access":
+                    access_reach[node_id] |= peer_domains
+                elif candidate.rule_id not in static_rules:
+                    assigned[node_id].setdefault(candidate.fixed_interfaces[side], set()).update(
+                        own & peer_domains
+                    )
+        for node in self.nodes:
+            own = participation.get(node.node_id)
+            if own is None:
+                continue
+            access_terminals = {
+                block.terminal_id
+                for block in node.terminal_inventory
+                if block.endpoint_role == "access"
+            }
+            for wan in node.wan_interfaces:
+                if wan.terminal_id in access_terminals:
+                    assigned[node.node_id].setdefault(wan.name, set()).update(
+                        own & access_reach[node.node_id]
+                    )
+        for segment in self.ethernet_segments:
+            for member in segment.members:
+                own = participation.get(member.node_id)
+                if own is None:
+                    continue
+                peers = {
+                    domain_id
+                    for other in segment.members
+                    if other.node_id != member.node_id
+                    for domain_id in participation.get(other.node_id, set())
+                }
+                assigned[member.node_id][member.interface] = (own & peers) or set(own)
+        return {
+            node_id: {
+                domain.domain_id: tuple(
+                    sorted(
+                        name for name, domains in interfaces.items() if domain.domain_id in domains
+                    )
+                )
+                for domain in self.routing_domains
+                if domain.domain_id in participation[node_id]
+            }
+            for node_id, interfaces in assigned.items()
+        }
 
     def node_index_by_node_id(self) -> dict[str, int]:
         """Resolution-order index for every node — the session's only
@@ -1089,9 +1187,12 @@ class ResolvedSession(BaseModel):
             for index, node in enumerate(n for n in self.nodes if n.kind == "ground_station")
         }
 
-    def sid_index_by_node_id(self) -> dict[str, int]:
-        """Return deterministic prefix-SID indices for every resolved node."""
-        result: dict[str, int] = {}
+    def sid_index_by_domain(self) -> dict[str, dict[str, int]]:
+        """Deterministic prefix-SID indices of each segment-routing domain's participants.
+
+        A router in several segment-routing domains has one index in each.
+        """
+        result: dict[str, dict[str, int]] = {}
         for block in sorted(self.sid_blocks, key=lambda item: item.domain_id):
             ordered_nodes = tuple(sorted(block.node_ids))
             expected_count = block.sid_end - block.sid_start + 1
@@ -1100,8 +1201,9 @@ class ResolvedSession(BaseModel):
                     f"SID block for routing domain {block.domain_id!r} has {expected_count} index(es) "
                     f"for {len(ordered_nodes)} node(s)"
                 )
-            for offset, node_id in enumerate(ordered_nodes):
-                result[node_id] = block.sid_start + offset
+            result[block.domain_id] = {
+                node_id: block.sid_start + offset for offset, node_id in enumerate(ordered_nodes)
+            }
         return result
 
     def link_interface_map(self) -> dict[tuple[str, str], tuple[str, str]]:

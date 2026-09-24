@@ -53,6 +53,7 @@ it.each(["snapshot", "frame"] as const)(
       frame_id: "earth",
       plane: 0,
       slot: 0,
+      routing_areas: [] as NodeState["routing_areas"],
     } as NodeState;
     const ephemeris = catalogEarthEphemeris();
     ephemeris.nodes = {

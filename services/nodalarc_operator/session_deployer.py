@@ -357,11 +357,6 @@ def _pod_inventory(resolved: ResolvedSession) -> dict[str, dict]:
     """
     inventory: dict[str, dict] = {}
     for node in resolved.nodes:
-        if node.forwarding not in (None, "routed", "host"):
-            raise ValueError(
-                f"node {node.node_id!r} has forwarding class {node.forwarding!r}, "
-                "which the deployer does not support"
-            )
         facts: dict = {
             "node_type": "satellite" if node.kind == "satellite" else "ground_station",
         }
@@ -901,7 +896,7 @@ def write_wiring_manifest(
             }
             continue
         requirements = routing_kernel_requirements(
-            resolved_session.routing_domain_for(node.node_id)
+            resolved_session.routing_domains_for(node.node_id)
         )
         node_sysctls = {
             **base_sysctls,

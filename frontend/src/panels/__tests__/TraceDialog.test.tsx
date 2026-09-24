@@ -19,7 +19,7 @@ function node(node_id: string): NodeState {
     vel_z_km_s: 0,
     plane: null,
     slot: null,
-    routing_area: null,
+    routing_areas: [] as NodeState["routing_areas"],
   } as NodeState;
 }
 

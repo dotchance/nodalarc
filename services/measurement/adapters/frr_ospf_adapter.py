@@ -78,7 +78,7 @@ class FrrOspfAdapter(BaseFrrAdapter):
 
     protocol_name = "OSPF"
     neighbor_command = "show ip ospf neighbor"
-    log_file_path = "/var/log/frr/ospfd.log"
+    log_file_path = "/var/log/frr/frr.log"
     log_patterns = [
         (_SPF_START_RE, "spf_start"),
         (_SPF_END_RE, "spf_end"),

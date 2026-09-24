@@ -19,7 +19,7 @@ function node(nodeId: string, nodeType: string): NodeState {
     vel_z_km_s: null,
     plane: null,
     slot: null,
-    routing_area: null,
+    routing_areas: [],
     isl_count: 0,
     gnd_count: 0,
     prefix: null,

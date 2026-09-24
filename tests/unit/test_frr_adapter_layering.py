@@ -9,9 +9,6 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 
-# The measurement service is deferred; it reads FRR's stack for its adapter
-# names and nothing more.
-_FRR_STACK_READERS = {"services/measurement/mi_main.py"}
 # Session resolution reads adapter declarations through the registry; the
 # Operator's workload preparation renders through it.
 _REGISTRY_READERS = {
@@ -44,7 +41,7 @@ def test_frr_rendering_inputs_left_shared_code() -> None:
     assert not (ROOT / "configs" / "templates").exists()
 
 
-def test_only_the_named_readers_import_adapter_packages() -> None:
+def test_platform_code_reaches_adapters_only_through_the_registry() -> None:
     frr_readers: set[str] = set()
     registry_readers: set[str] = set()
     for path in _platform_modules():
@@ -57,7 +54,7 @@ def test_only_the_named_readers_import_adapter_packages() -> None:
         if "adapters.registry" in modules:
             registry_readers.add(relative)
 
-    assert frr_readers == _FRR_STACK_READERS
+    assert frr_readers == set()
     assert registry_readers == _REGISTRY_READERS
 
 
@@ -65,7 +62,7 @@ def test_routing_domain_lookup_has_one_owner() -> None:
     lookups = [
         str(path.relative_to(ROOT))
         for path in [*_platform_modules(), *sorted((ROOT / "adapters").rglob("*.py"))]
-        if "node_id in domain.node_ids]" in path.read_text(encoding="utf-8")
+        if "if node_id in domain.node_ids)" in path.read_text(encoding="utf-8")
     ]
 
     assert lookups == ["lib/nodalarc/models/resolved_session.py"]

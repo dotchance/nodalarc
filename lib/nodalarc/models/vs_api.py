@@ -27,6 +27,15 @@ class NodeAddress(BaseModel):
     metric: int | None = None
 
 
+class NodeRoutingArea(BaseModel):
+    """A node's area in one IS-IS or OSPF domain it participates in."""
+
+    model_config = ConfigDict(frozen=True)
+
+    domain_id: str
+    area_id: str
+
+
 class NodeState(BaseModel):
     """State of a single node in the constellation."""
 
@@ -42,9 +51,9 @@ class NodeState(BaseModel):
     vel_z_km_s: float | None
     plane: int | None  # None for ground stations
     slot: int | None
-    # The resolved routing area of an IS-IS or OSPF router; None for a node
-    # that runs no area-based routing protocol.
-    routing_area: str | None = None
+    # The node's area in each IS-IS or OSPF domain it participates in, in
+    # declared domain order; empty for a node in none.
+    routing_areas: tuple[NodeRoutingArea, ...] = ()
     isl_count: int = 0
     gnd_count: int = 0
     prefix: str | None = None  # Ground station advertised prefix

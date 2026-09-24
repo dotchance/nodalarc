@@ -103,6 +103,7 @@ from nodalarc.models.link_rules import (
     VisibleCandidatesTopology,
 )
 from nodalarc.models.segment_session import (
+    LINK_STATE_PROTOCOLS,
     AggregateOf,
     AreaAssignment,
     CandidateLimits,
@@ -1387,7 +1388,7 @@ def _routing_domain_projection(domain: RoutingDomain) -> BuilderVisualRoutingDom
         return None
     if domain.capabilities is not None:
         return None
-    if domain.protocol in {"isis", "ospf"}:
+    if domain.protocol in LINK_STATE_PROTOCOLS:
         if domain.area_assignment != AreaAssignment(strategy="flat"):
             return None
     elif domain.area_assignment is not None:
@@ -1905,7 +1906,7 @@ def _assemble_authoring_workspace(
             "protocol": cast(JsonValue, domain.protocol),
             "selectors": selectors if len(selectors) <= 1 else [{"any": selectors}],
         }
-        if domain.protocol in {"isis", "ospf"}:
+        if domain.protocol in LINK_STATE_PROTOCOLS:
             domain_document["area_assignment"] = {"strategy": "flat"}
         if domain.hello_interval_s is not None or domain.hold_interval_s is not None:
             if domain.hello_interval_s is None or domain.hold_interval_s is None:

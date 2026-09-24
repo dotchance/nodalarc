@@ -413,10 +413,11 @@ separate assignments when the desired IPv4 and IPv6 prefix lengths differ.
 
 ## Routing
 
-Routing is an optional set of disjoint domains. Each explicit domain selects
-its nodes and declares its own protocol. The current runtime supports `isis`,
-`ospf`, and `static`. BGP is structurally defined but currently rejected by the
-runtime-support gate.
+Routing is an optional set of domains. Each explicit domain selects its nodes
+and declares its own protocol; the selected nodes that run a routing workload
+participate in it. The current runtime supports `isis`, `ospf`, and `static`.
+BGP is structurally defined but currently rejected by the runtime-support
+gate.
 
 ```yaml
 routing:
@@ -466,13 +467,30 @@ routing:
       install_via: peer_loopback
 ```
 
-A routing domain is a declaration about routers. When an explicit `routing`
-block is present, every router belongs to exactly one domain, and a domain's
-membership is the routers among its selected nodes whose adapter renders its
-protocol. A host runs no routing protocol and receives no routing
-configuration; it is reached through the router serving its network. A fixed
-link crossing domain boundaries must have a declared boundary over that link
-rule. The current runtime supports the `static_ip`
+A routing domain is one instance of a routing protocol. When an explicit
+`routing` block is present, every node running a routing workload
+participates in a domain, and a domain's participants are its selected nodes
+whose adapter renders its protocol. A router forwards packets between multiple
+subnets and participates in the IGPs or EGPs, or both. A router can be part of
+multiple routing domains. A host is reached through a router serving its
+network, which is its gateway.
+
+A router runs each domain on its own interfaces. Its loopback belongs to every
+domain it participates in. A fixed link belongs to the domains its two ends
+share. An access interface belongs to the domains its router shares with the
+nodes it can reach over access links. A site LAN interface belongs to the
+domains its router shares with the LAN's other participants, or to all of the
+router's domains when it shares none. The FRR adapter renders one IS-IS
+domain, one OSPF domain, and any number of static domains on one router. A
+session that places a router in two IS-IS domains or two OSPF domains is
+refused with a typed reason.
+
+BFD runs one session per neighbor on an interface, shared by every routing
+protocol on it. Domains that enable BFD on a shared interface must declare the
+same BFD timers; resolution refuses a session where they differ.
+
+A fixed link rule that can join two routers sharing no domain must have a
+declared boundary over it. The current runtime supports the `static_ip`
 boundary adapter; `bgp` and `dtn_bundle` adapters are support-gated.
 
 IS-IS and OSPF domains may declare MPLS, segment routing, and traffic

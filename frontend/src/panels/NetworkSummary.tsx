@@ -3,7 +3,7 @@
 /** Network summary — shown when nothing is selected. */
 
 import type { StateSnapshot } from "../types";
-import { isGroundLinkState } from "../networkIdentity";
+import { areaKey, isGroundLinkState, nodeAreaIds } from "../networkIdentity";
 
 interface NetworkSummaryProps {
   snapshot: StateSnapshot;
@@ -28,13 +28,15 @@ export function NetworkSummary({ snapshot }: NetworkSummaryProps) {
   const areaNodes = new Map<string, number>();
   const areaLinks = new Map<string, number>();
   for (const sat of sats) {
-    const area = sat.routing_area ?? "unknown";
+    const area = areaKey(sat) ?? "unknown";
     areaNodes.set(area, (areaNodes.get(area) ?? 0) + 1);
   }
   for (const link of activeLinks) {
     const nodeA = snapshot.nodes.find((n) => n.node_id === link.node_a);
-    if (nodeA?.routing_area) {
-      areaLinks.set(nodeA.routing_area, (areaLinks.get(nodeA.routing_area) ?? 0) + 1);
+    if (nodeA) {
+      for (const area of nodeAreaIds(nodeA)) {
+        areaLinks.set(area, (areaLinks.get(area) ?? 0) + 1);
+      }
     }
   }
 

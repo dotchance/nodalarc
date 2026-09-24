@@ -38,14 +38,28 @@ def test_kernel_requirements_follow_the_domain_data_plane(
     protocol, capabilities, sysctls, segment_routing
 ) -> None:
     requirements = routing_kernel_requirements(
-        ResolvedRoutingDomain(
-            domain_id="d1", protocol=protocol, node_ids=("n1",), capabilities=capabilities
+        (
+            ResolvedRoutingDomain(
+                domain_id="d1", protocol=protocol, node_ids=("n1",), capabilities=capabilities
+            ),
         )
     )
 
     assert requirements.sysctls == sysctls
     assert requirements.mpls_enable is bool(sysctls)
     assert requirements.segment_routing is segment_routing
+
+
+def test_a_node_needs_what_any_of_its_domains_needs() -> None:
+    plain = ResolvedRoutingDomain(domain_id="igp", protocol="isis", node_ids=("n1",))
+    labelled = ResolvedRoutingDomain(
+        domain_id="core", protocol="ospf", node_ids=("n1",), capabilities=("mpls",)
+    )
+
+    assert routing_kernel_requirements((plain, labelled)).sysctls == _LDP_SYSCTLS
+    assert routing_kernel_requirements((plain, labelled)).mpls_enable is True
+    none = routing_kernel_requirements(())
+    assert (none.sysctls, none.mpls_enable, none.segment_routing) == ({}, False, False)
 
 
 def _shipped(name: str):

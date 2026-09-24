@@ -21,7 +21,7 @@ function node(node_id: string, node_type: NodeState["node_type"]): NodeState {
     vel_z_km_s: null,
     plane: null,
     slot: null,
-    routing_area: null,
+    routing_areas: [],
     isl_count: 0,
     gnd_count: 0,
     prefix: null,

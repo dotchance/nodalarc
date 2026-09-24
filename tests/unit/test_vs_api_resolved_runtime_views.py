@@ -3,7 +3,8 @@ from pathlib import Path
 import yaml
 from nodalarc.catalog_closure import FilesystemCatalogReadView
 from nodalarc.catalog_paths import CatalogRoots
-from nodalarc.models.resolved_session import SourceContext
+from nodalarc.models.resolved_session import DomainArea, SourceContext
+from nodalarc.models.vs_api import NodeRoutingArea
 from nodalarc.resolve_session import resolve_session_with_assets
 from vs_api.resolved_runtime_views import routing_label, tracer_node_registry
 from vs_api.session_context import SessionContext
@@ -91,8 +92,42 @@ def test_a_session_without_authored_routing_reports_the_domain_it_runs():
     assert routing_label(resolved) == "default_domain:isis"
     assert context.routing_stack == "default_domain:isis"
     [domain] = resolved.routing_domains
-    areas = resolved.routing_area_by_node_id()
+    areas = resolved.routing_areas_by_node_id()
     assert set(areas) == set(domain.node_ids)
-    assert set(areas.values()) == {"49.0001"}
+    assert set(areas.values()) == {(DomainArea("default_domain", "49.0001"),)}
     ground = next(n for n in resolved.nodes if n.kind == "ground_station")
-    assert context.nodes[ground.node_id].routing_area == "49.0001"
+    assert context.nodes[ground.node_id].routing_areas == (
+        NodeRoutingArea(domain_id="default_domain", area_id="49.0001"),
+    )
+
+
+def test_a_router_in_two_domains_reports_its_area_in_each():
+    path = Path("catalog/nodalarc/sessions/earth-leo-simple.yaml")
+    raw = yaml.safe_load(path.read_text(encoding="utf-8"))
+    raw["routing"] = {
+        "domains": [
+            {
+                "id": "orbital",
+                "protocol": "isis",
+                "selectors": [{"any": [{"segment": "leo"}, {"segment": "ground"}]}],
+            },
+            {"id": "terrestrial", "protocol": "ospf", "selectors": [{"segment": "ground"}]},
+        ]
+    }
+    resolution = resolve_session_with_assets(
+        raw,
+        catalog=FilesystemCatalogReadView(CatalogRoots.from_catalog_root("catalog/nodalarc")),
+        source_context=SourceContext(origin="test.vs-api-two-domains"),
+    )
+    context = SessionContext(
+        "run-test-resolved-0002",
+        resolution=resolution,
+        source_id="user:sessions/two-domains.yaml",
+        history_path=None,
+    )
+    ground = next(n for n in resolution.resolved.nodes if n.kind == "ground_station")
+
+    assert context.nodes[ground.node_id].routing_areas == (
+        NodeRoutingArea(domain_id="orbital", area_id="49.0001"),
+        NodeRoutingArea(domain_id="terrestrial", area_id="0.0.0.0"),
+    )

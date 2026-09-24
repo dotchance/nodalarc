@@ -48,6 +48,8 @@ class FeatureCategory(StrEnum):
     CLOCK_MODEL = "clock_model"
     PROPAGATOR = "propagator"
     WORKLOAD_ADAPTER = "workload_adapter"
+    FORWARDING_CLASS = "forwarding_class"
+    ROUTER_DOMAINS = "router_domains"
 
 
 # Informational notes shown with unsupported features.
@@ -85,6 +87,8 @@ FEATURE_SUPPORT_NOTES: dict[tuple[FeatureCategory, str], str] = {
     (FeatureCategory.PAYLOAD, "space_payload_execution"): ("supported by the Earth-Luna runtime"),
     (FeatureCategory.CLOCK_MODEL, "session"): "supported clock model",
     (FeatureCategory.CLOCK_MODEL, "affine"): "future runtime capability",
+    (FeatureCategory.FORWARDING_CLASS, "bridge"): "future runtime capability",
+    (FeatureCategory.FORWARDING_CLASS, "control_only"): "future runtime capability",
     (FeatureCategory.GROUND_SCHEDULING, "handover_concurrency:all_at_once"): (
         "future runtime capability - the current allocator serializes ground handovers"
     ),
@@ -160,10 +164,11 @@ def registered_routing_support(protocol: str) -> RoutingProtocolSupport | None:
 
     The capabilities and address families are every capability and family
     some adapter renders for the protocol; the BFD bounds span the ranges of
-    the adapters that render BFD for it. Authoring surfaces offer these
-    choices, so an adapter that a session does not use never narrows them.
-    Resolution decides for each domain member against its own adapter. None
-    when no registered adapter renders the protocol.
+    the adapters that render BFD for it, and the domains per router are the
+    most any adapter renders. Authoring surfaces offer these choices, so an
+    adapter that a session does not use never narrows them. Resolution
+    decides for each domain member against its own adapter. None when no
+    registered adapter renders the protocol.
     """
     declared = [
         support.routing[protocol]
@@ -174,9 +179,15 @@ def registered_routing_support(protocol: str) -> RoutingProtocolSupport | None:
         return None
     capabilities = frozenset().union(*(item.capabilities for item in declared))
     address_families = frozenset().union(*(item.address_families for item in declared))
+    bounded = [item.domains_per_router for item in declared if item.domains_per_router is not None]
+    domains_per_router = max(bounded) if len(bounded) == len(declared) else None
     bfd_declared = [item.bfd for item in declared if item.bfd is not None]
     if not bfd_declared:
-        return RoutingProtocolSupport(capabilities=capabilities, address_families=address_families)
+        return RoutingProtocolSupport(
+            capabilities=capabilities,
+            address_families=address_families,
+            domains_per_router=domains_per_router,
+        )
     bounds = {
         name: (
             min(getattr(item, name)[0] for item in bfd_declared),
@@ -188,6 +199,7 @@ def registered_routing_support(protocol: str) -> RoutingProtocolSupport | None:
         capabilities=capabilities,
         bfd=BfdSupport(**bounds),
         address_families=address_families,
+        domains_per_router=domains_per_router,
     )
 
 
@@ -276,6 +288,44 @@ def check_routing_members(
     ]
 
 
+def check_router_domains(
+    *,
+    adapter: str,
+    routers: Mapping[str, tuple[tuple[str, str], ...]],
+) -> list[UnsupportedFeature]:
+    """Check how many domains of each protocol a router's adapter renders.
+
+    ``routers`` maps each router that runs ``adapter`` to the
+    ``(domain_id, protocol)`` pairs it participates in. Routers that exceed
+    the adapter's declared domains per router with the same domains share
+    one refusal.
+    """
+    support = registered_adapter_support().get(adapter)
+    if support is None:
+        raise ValueError(f"workload adapter {adapter!r} is not registered")
+    excess: dict[tuple[str, tuple[str, ...]], list[str]] = {}
+    for node_id, memberships in routers.items():
+        by_protocol: dict[str, list[str]] = {}
+        for domain_id, protocol in memberships:
+            by_protocol.setdefault(protocol, []).append(domain_id)
+        for protocol, domain_ids in by_protocol.items():
+            limit = support.routing[protocol].domains_per_router
+            if limit is not None and len(domain_ids) > limit:
+                excess.setdefault((protocol, tuple(domain_ids)), []).append(node_id)
+    return [
+        UnsupportedFeature(
+            category=FeatureCategory.ROUTER_DOMAINS,
+            value=f"{protocol}:{','.join(domain_ids)}",
+            message=(
+                f"{_named_members(tuple(node_ids))} participate in {protocol} domains "
+                f"{list(domain_ids)}; workload adapter {adapter!r} renders "
+                f"{support.routing[protocol].domains_per_router} {protocol} domain(s) per router"
+            ),
+        )
+        for (protocol, domain_ids), node_ids in sorted(excess.items())
+    ]
+
+
 class RuntimeSupport(BaseModel):
     """The set of grammar features the current backend actually implements."""
 
@@ -300,6 +350,7 @@ class RuntimeSupport(BaseModel):
     supported_clock_models: frozenset[str]
     supported_propagators: frozenset[str]
     supported_workload_adapters: frozenset[str]
+    supported_forwarding_classes: frozenset[str]
     supports_payloads: bool
     # Surface bodies whose presence requires an ephemeris manifest.
     ephemeris_required_bodies: frozenset[str]
@@ -334,6 +385,7 @@ class RuntimeSupport(BaseModel):
             supported_clock_models=frozenset({"session"}),
             supported_propagators=frozenset({"two_body", "j2_mean_elements", "sgp4_tle"}),
             supported_workload_adapters=frozenset(registered_adapter_support()),
+            supported_forwarding_classes=frozenset({"routed", "host"}),
             supports_payloads=True,
             ephemeris_required_bodies=frozenset({"luna", "mars"}),
         )
@@ -363,6 +415,7 @@ class RuntimeSupport(BaseModel):
             supported_clock_models=frozenset({"session"}),
             supported_propagators=frozenset({"two_body", "j2_mean_elements", "sgp4_tle"}),
             supported_workload_adapters=frozenset(registered_adapter_support()),
+            supported_forwarding_classes=frozenset({"routed", "host"}),
             supports_payloads=True,
             ephemeris_required_bodies=frozenset({"luna"}),
         )
@@ -386,6 +439,11 @@ class RuntimeSupport(BaseModel):
         if adapter in self.supported_workload_adapters:
             return None
         return self._unsupported(FeatureCategory.WORKLOAD_ADAPTER, adapter, "workload adapter")
+
+    def check_forwarding_class(self, forwarding: str) -> UnsupportedFeature | None:
+        if forwarding in self.supported_forwarding_classes:
+            return None
+        return self._unsupported(FeatureCategory.FORWARDING_CLASS, forwarding, "forwarding class")
 
     def check_propagator(self, propagator: str) -> UnsupportedFeature | None:
         if propagator in self.supported_propagators:

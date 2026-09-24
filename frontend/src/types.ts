@@ -15,6 +15,11 @@ export interface NodeAddress {
   metric: number | null;
 }
 
+export interface NodeRoutingArea {
+  domain_id: string;
+  area_id: string;
+}
+
 export interface NodeState {
   node_id: string;
   node_type: string; // "satellite" | "ground_station"
@@ -26,8 +31,8 @@ export interface NodeState {
   vel_z_km_s: number | null;
   plane: number | null;
   slot: number | null;
-  /** Resolved routing area of an IS-IS or OSPF router; null for other nodes. */
-  routing_area: string | null;
+  /** The node's area in each IS-IS or OSPF domain it participates in; empty for none. */
+  routing_areas: NodeRoutingArea[];
   isl_count: number;
   gnd_count: number;
   prefix: string | null;

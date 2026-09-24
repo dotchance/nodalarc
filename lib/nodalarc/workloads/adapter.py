@@ -23,6 +23,11 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
 from nodalarc.model_validation import ADDRESS_FAMILIES, AddressFamily
+from nodalarc.models.segment_session import (
+    ROUTING_CAPABILITIES,
+    ROUTING_PROTOCOLS,
+    RoutingCapability,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
@@ -101,14 +106,27 @@ class RoutingProtocolSupport:
     ``capabilities`` are the domain capability names the adapter renders for
     the protocol. ``bfd`` is None when the adapter renders no BFD for it.
     ``address_families`` are the IP address families the adapter routes
-    with the protocol; every declaration names them.
+    with the protocol; every declaration names them. ``domains_per_router``
+    is the most domains of the protocol the adapter renders on one router,
+    or None when it renders any number.
     """
 
-    capabilities: frozenset[str] = frozenset()
+    capabilities: frozenset[RoutingCapability] = frozenset()
     bfd: BfdSupport | None = None
     address_families: frozenset[AddressFamily] = field(kw_only=True)
+    domains_per_router: int | None = field(kw_only=True)
 
     def __post_init__(self) -> None:
+        if self.domains_per_router is not None and self.domains_per_router < 1:
+            raise ValueError(
+                "routing support must render at least one domain per router; "
+                f"got {self.domains_per_router}"
+            )
+        unknown_capabilities = sorted(set(self.capabilities) - set(ROUTING_CAPABILITIES))
+        if unknown_capabilities:
+            raise ValueError(
+                f"routing support declares capabilities outside the grammar {unknown_capabilities}"
+            )
         families = frozenset(self.address_families)
         if not families:
             raise ValueError("routing support must declare the address families it routes")
@@ -134,8 +152,10 @@ class AdapterSupport:
     def __post_init__(self) -> None:
         routing = MappingProxyType(dict(self.routing))
         for protocol, support in routing.items():
-            if not isinstance(protocol, str) or not protocol:
-                raise ValueError("adapter routing protocols must be non-empty strings")
+            if protocol not in ROUTING_PROTOCOLS:
+                raise ValueError(
+                    f"adapter declares routing protocol {protocol!r} outside the grammar"
+                )
             if not isinstance(support, RoutingProtocolSupport):
                 raise TypeError(f"adapter routing support for {protocol!r} has the wrong type")
         object.__setattr__(self, "routing", routing)

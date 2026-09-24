@@ -86,6 +86,7 @@ from nodalarc.models.builder_visual_api import (
     BuilderVisualNode,
     BuilderVisualSpaceBoresight,
 )
+from nodalarc.models.segment_session import LINK_STATE_PROTOCOLS
 from nodalarc.runtime_support import RuntimeSupport
 from pydantic import BaseModel, ValidationError
 
@@ -637,7 +638,7 @@ class BuilderCatalogAuthoringService:
                         runtime_supported=(issue := runtime.check_routing_protocol(identifier))
                         is None,
                         support_note=issue.support_note if issue is not None else None,
-                        timer_fields=identifier in {"isis", "ospf"},
+                        timer_fields=identifier in LINK_STATE_PROTOCOLS,
                     )
                     for identifier, label in ROUTING_PROTOCOL_LABELS
                 ),

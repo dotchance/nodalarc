@@ -1,9 +1,11 @@
-{# The domain's authored BFD timers, applied to every IGP interface through
-   one profile. #}
+{# One BFD profile per BFD-enabled routing domain, carrying that domain's
+   authored timers; each domain's IGP interfaces reference their own. #}
 bfd
- profile NODAL
-  detect-multiplier {{ bfd_detect_multiplier }}
-  receive-interval {{ bfd_rx_interval }}
-  transmit-interval {{ bfd_tx_interval }}
+{% for profile in bfd_profiles %}
+ profile {{ profile.name }}
+  detect-multiplier {{ profile.detect_multiplier }}
+  receive-interval {{ profile.rx_interval }}
+  transmit-interval {{ profile.tx_interval }}
  exit
+{% endfor %}
 exit

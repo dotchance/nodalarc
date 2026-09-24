@@ -17,7 +17,7 @@ function node(node_id: string, segment_id: string, tags: string[]): NodeState {
     vel_z_km_s: 0,
     plane: node_id.includes("gs-") ? null : 0,
     slot: node_id.includes("gs-") ? null : 0,
-    routing_area: null,
+    routing_areas: [],
     isl_count: 0,
     gnd_count: 0,
     prefix: null,

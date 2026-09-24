@@ -12,7 +12,7 @@ import { candidateStatus } from "../explain/derive";
 import { CandidateRow } from "../explain/components/CandidateRow";
 import { GroundStationCard } from "../explain/components/GroundStationCard";
 import { PairInspectorView } from "../explain/components/PairInspectorView";
-import { selectionTypeForNodeId } from "../networkIdentity";
+import { areaKey, areasLabel, selectionTypeForNodeId } from "../networkIdentity";
 import { Icon } from "../ui/icons/Icon";
 import { TaxonomyChip } from "../ui/Badge";
 import { REGIME_TINT } from "../taxonomy/regime";
@@ -210,8 +210,8 @@ export function GroundStationDetail({ node, snapshot, onSelect }: GroundStationD
       ) : null}
       <div className="detail-row">
         <span className="detail-label">Routing Area</span>
-        <span className="detail-value" style={{ color: areaCSSColor(node.routing_area) }}>
-          {node.routing_area ?? "none"}
+        <span className="detail-value" style={{ color: areaCSSColor(areaKey(node)) }}>
+          {areasLabel(node)}
         </span>
       </div>
       {node.prefix && (

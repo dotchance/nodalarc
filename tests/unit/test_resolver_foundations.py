@@ -8,6 +8,7 @@ import pytest
 from nodalarc.models.identity import IdentityMode
 from nodalarc.models.link_rules import VisibleCandidatesTopology
 from nodalarc.models.resolved_session import (
+    DomainArea,
     ResolvedBodyFacts,
     ResolvedEndpoint,
     ResolvedInterfaceAddress,
@@ -267,6 +268,7 @@ def test_closed_terminal_role_vocabulary_rejects_old_ground_role() -> None:
 def test_satellite_requires_orbit_facts() -> None:
     with pytest.raises(ValidationError, match="requires orbit facts"):
         ResolvedNode(
+            forwarding="routed",
             profile="nodalarc:profiles/frr-router.yaml",
             profile_level="node_definition",
             node_id="sat",
@@ -282,6 +284,7 @@ def test_satellite_requires_orbit_facts() -> None:
 
 def test_ground_station_requires_surface_position_but_scheduling_is_candidate_scoped() -> None:
     node = ResolvedNode(
+        forwarding="routed",
         profile="nodalarc:profiles/frr-router.yaml",
         profile_level="node_definition",
         node_id="gs",
@@ -305,6 +308,7 @@ def test_ground_station_requires_surface_position_but_scheduling_is_candidate_sc
     assert node.ground_scheduling is None
     with pytest.raises(ValidationError, match="surface_position"):
         ResolvedNode(
+            forwarding="routed",
             profile="nodalarc:profiles/frr-router.yaml",
             profile_level="node_definition",
             node_id="gs",
@@ -340,6 +344,7 @@ def test_terminal_owner_mismatch_rejected() -> None:
     block = _terminal("other-node")
     with pytest.raises(ValidationError, match="owner_node_id"):
         ResolvedNode(
+            forwarding="routed",
             profile="nodalarc:profiles/frr-router.yaml",
             profile_level="node_definition",
             node_id="n",
@@ -358,6 +363,7 @@ def test_duplicate_terminal_id_within_node_rejected() -> None:
     block = _terminal("n", terminal_id="dup")
     with pytest.raises(ValidationError, match="duplicate terminal_id"):
         ResolvedNode(
+            forwarding="routed",
             profile="nodalarc:profiles/frr-router.yaml",
             profile_level="node_definition",
             node_id="n",
@@ -583,7 +589,27 @@ def test_sid_indices_are_allocated_from_resolved_domain_blocks() -> None:
         routing_domains=(_domain("sat-a", "sat-b"),),
         sid_blocks=(_sid("sat-a", "sat-b", start=42),),
     )
-    assert rs.sid_index_by_node_id() == {"sat-a": 42, "sat-b": 43}
+    assert rs.sid_index_by_domain() == {"earth_domain": {"sat-a": 42, "sat-b": 43}}
+
+
+def test_a_router_holds_one_sid_index_in_each_segment_routing_domain() -> None:
+    nodes = (_satellite("sat-a"), _satellite("sat-b"))
+    rs = _resolved_session(
+        nodes=nodes,
+        routing_domains=(
+            _domain("sat-a", "sat-b"),
+            _domain("sat-b", domain_id="relay_domain"),
+        ),
+        sid_blocks=(
+            _sid("sat-a", "sat-b", start=42),
+            _sid("sat-b", domain_id="relay_domain", start=100),
+        ),
+    )
+
+    assert rs.sid_index_by_domain() == {
+        "earth_domain": {"sat-a": 42, "sat-b": 43},
+        "relay_domain": {"sat-b": 100},
+    }
 
 
 def test_sid_block_size_must_match_domain_node_count() -> None:
@@ -597,7 +623,7 @@ def test_sid_block_size_must_match_domain_node_count() -> None:
         ),
     )
     with pytest.raises(ValueError, match="has 3 index"):
-        rs.sid_index_by_node_id()
+        rs.sid_index_by_domain()
 
 
 def test_overlapping_sid_blocks_rejected() -> None:
@@ -746,7 +772,10 @@ def test_routing_areas_are_resolved_for_area_protocol_routers_only() -> None:
     )
     rs = _resolved_session(nodes=(plane0, plane1, gs), routing_domains=(ospf, static))
 
-    assert rs.routing_area_by_node_id() == {plane0.node_id: "0.0.0.1", plane1.node_id: "0.0.0.2"}
+    assert rs.routing_areas_by_node_id() == {
+        plane0.node_id: (DomainArea("leo_domain", "0.0.0.1"),),
+        plane1.node_id: (DomainArea("leo_domain", "0.0.0.2"),),
+    }
     with pytest.raises(ValueError, match="runs static, which has no areas"):
         static.area_id_for(gs)
     with pytest.raises(ValueError, match="is not a member of routing domain 'leo_domain'"):

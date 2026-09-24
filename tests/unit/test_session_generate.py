@@ -337,20 +337,9 @@ def test_generator_refuses_a_routing_choice_no_adapter_renders(protocol, extensi
     assert [feature.value for feature in refused.value.features] == [value]
 
 
-def test_generator_normalizes_extension_aliases_into_domain_capabilities() -> None:
-    raw, resolved, _warnings = _generated_session(
-        constellation=LEO_RING,
-        protocol="isis",
-        extensions=["segment-routing", "traffic-engineering"],
-        orbit_propagator="j2_mean_elements",
-    )
-
-    [domain] = resolved.routing_domains
-    assert set(domain.capabilities) == {"segment_routing", "traffic_engineering"}
-    assert raw["session"]["name"].endswith("-isis-sr-te")
-
-
-@pytest.mark.parametrize("extensions", [["warp"], ["sr", "segment-routing"]])
+@pytest.mark.parametrize(
+    "extensions", [["warp"], ["segment-routing"], ["traffic-engineering"], ["sr", "sr"]]
+)
 def test_generator_refuses_unknown_or_duplicate_extensions(extensions) -> None:
     with pytest.raises(ValueError, match="unknown routing extension|must not contain duplicates"):
         assemble_session_document(

@@ -9,7 +9,7 @@ import { Icon } from "../ui/icons/Icon";
 import { TaxonomyChip } from "../ui/Badge";
 import { REGIME_TINT, type Regime } from "../taxonomy/regime";
 import type { StateSnapshot, Selection } from "../types";
-import { isGroundLinkState } from "../networkIdentity";
+import { areaKey, areasLabel, isGroundLinkState, nodeAreaIds } from "../networkIdentity";
 
 interface NodePopoverProps {
   snapshot: StateSnapshot | null;
@@ -35,9 +35,9 @@ export function NodePopover({ snapshot, selection, regime, onClose, onOpenCli }:
       const peer = snapshot!.nodes.find(
         (n) => n.node_id === (l.node_a === node.node_id ? l.node_b : l.node_a),
       );
-      if (peer?.routing_area) linkedAreas.add(peer.routing_area);
+      if (peer) for (const area of nodeAreaIds(peer)) linkedAreas.add(area);
     }
-    if (node.routing_area) linkedAreas.add(node.routing_area);
+    for (const area of nodeAreaIds(node)) linkedAreas.add(area);
     role = node.node_type === "ground_station"
       ? "Ground station"
       : linkedAreas.size > 1 ? "Router (ABR)" : "Router";
@@ -45,7 +45,7 @@ export function NodePopover({ snapshot, selection, regime, onClose, onOpenCli }:
 
   // Same area palette the scene materials use — popover and globe must agree.
   const areaColor = hexToCSS(
-    node?.routing_area ? (AREA_COLORS[node.routing_area] ?? UNKNOWN_TINT) : UNKNOWN_TINT,
+    node && areaKey(node) ? (AREA_COLORS[areaKey(node)!] ?? UNKNOWN_TINT) : UNKNOWN_TINT,
   );
 
   return (
@@ -64,7 +64,7 @@ export function NodePopover({ snapshot, selection, regime, onClose, onOpenCli }:
         <>
           <KeyValueRow label="Type" mono={false}>{role}</KeyValueRow>
           <KeyValueRow label="Routing area">
-            <span style={{ color: areaColor }}>{node.routing_area ?? "none"}</span>
+            <span style={{ color: areaColor }}>{areasLabel(node)}</span>
           </KeyValueRow>
           <KeyValueRow label="Neighbors">{islCount} ISL, {gndCount} GND</KeyValueRow>
           <Button icon="terminal" className="node-popover-cli" onClick={onOpenCli}>

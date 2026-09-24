@@ -1,6 +1,14 @@
 # Copyright 2024-2026 .chance (dotchance)
 # Licensed under the Apache License, Version 2.0. See LICENSE file.
-"""FRR template inputs for one routed node of a resolved session."""
+"""FRR template inputs for one router of a resolved session.
+
+Router-wide facts (identity, loopbacks, interface addresses, static routes,
+BFD profiles, LDP interfaces) sit at the top level. Everything a routing
+domain decides (its protocol instance, area, timers, capabilities,
+interfaces, origination and redistribution) sits in one entry per domain
+the router participates in; the resolved session assigns each interface to
+its domains.
+"""
 
 from __future__ import annotations
 
@@ -8,16 +16,18 @@ import ipaddress
 from typing import TYPE_CHECKING, Any
 
 from nodalarc.model_validation import ADDRESS_FAMILIES
-from nodalarc.models.resolved_session import ROUTING_AREA_PROTOCOLS
+from nodalarc.models.segment_session import LINK_STATE_PROTOCOLS
+
+from adapters.frr.stack import LOG_FILE, SRGB, SRLB
 
 if TYPE_CHECKING:
+    from collections.abc import Mapping
+
     from nodalarc.models.resolved_session import (
         ResolvedNode,
         ResolvedRoutingDomain,
         ResolvedSession,
     )
-
-    from adapters.frr.stack import ResolvedStack
 
 # Reference bandwidth for fixed-link IGP metrics: the metric of a fixed link
 # is this value over the transmit rate of the interface's own terminal,
@@ -44,74 +54,206 @@ def build_template_vars_from_resolved(
     resolved: ResolvedSession,
     node: ResolvedNode,
     *,
-    domain: ResolvedRoutingDomain,
-    stack: ResolvedStack,
-    node_sid_index: int | None,
+    domains: tuple[ResolvedRoutingDomain, ...],
+    sid_by_domain: Mapping[str, Mapping[str, int]],
 ) -> dict[str, Any]:
-    """Build one node's FRR template inputs from the resolved runtime view."""
+    """Build one router's FRR template inputs from the resolved runtime view."""
     if node.interfaces is None:
         raise ValueError(f"resolved node {node.node_id!r} has no interface addresses")
-    result: dict[str, Any] = dict(stack.template_variables)
-    if result.get("sr_enabled"):
-        if node_sid_index is None:
-            raise ValueError(
-                f"segment routing is enabled but no resolved SID index was provided for "
-                f"{node.node_id}"
+    interfaces_by_domain = resolved.domain_interfaces(node.node_id)
+    links = _wan_links(resolved, node)
+    segments = _segment_facts(node)
+    te_interfaces = {
+        name
+        for domain in domains
+        if "traffic_engineering" in domain.capabilities
+        for name in interfaces_by_domain[domain.domain_id]
+    }
+    routes_by_domain = {
+        domain.domain_id: _boundary_static_routes(resolved, node, domain) for domain in domains
+    }
+    all_routes: list[dict[str, str]] = []
+    for routes in routes_by_domain.values():
+        for route in routes:
+            if route not in all_routes:
+                all_routes.append(route)
+    carries_ipv6 = "ipv6" in node.address_families
+    result: dict[str, Any] = {
+        "hostname": node.node_id,
+        "log_file": LOG_FILE,
+        "system_id": _isis_system_id(resolved, node),
+        # The families the session gives the node, in grammar order. A family
+        # the node does not carry is neither addressed, enabled nor routed.
+        "address_families": tuple(
+            family for family in ADDRESS_FAMILIES if family in node.address_families
+        ),
+        "ipv4_loopback": _ip_from_interface(node.interfaces.lo0.ipv4, field="lo0.ipv4"),
+        # An IPv6 loopback exists only where the session declares one.
+        "ipv6_loopback": (
+            _ip_from_interface(node.interfaces.lo0.ipv6, field="lo0.ipv6")
+            if node.interfaces.lo0.ipv6 is not None
+            else None
+        ),
+        "srgb_start": SRGB[0],
+        "srgb_end": SRGB[1],
+        "srlb_start": SRLB[0],
+        "srlb_end": SRLB[1],
+        "wan_interfaces": [
+            {
+                "name": name,
+                "te": _te_link_params(node, name) if name in te_interfaces else None,
+            }
+            for name in links
+        ],
+        "static_links": [
+            {
+                "name": name,
+                "peer_loopback_ipv4": _ip_from_interface(
+                    link["peer"].interfaces.lo0.ipv4, field=f"{link['peer'].node_id}.lo0.ipv4"
+                ),
+                # Both ends carry IPv6 and the peer holds an IPv6 loopback.
+                "peer_loopback_ipv6": (
+                    _lo0_address(link["peer"], "ipv6") if carries_ipv6 else None
+                ),
+            }
+            for name, link in links.items()
+            if link["static_only"]
+        ],
+        "segment_interfaces": [
+            {"name": name, "addresses": segment["addresses"]} for name, segment in segments.items()
+        ],
+        "boundary_static_routes": all_routes,
+        "bfd_profiles": [
+            {
+                "name": domain.domain_id,
+                "detect_multiplier": domain.timers.bfd.detect_multiplier,
+                "rx_interval": domain.timers.bfd.rx_interval_ms,
+                "tx_interval": domain.timers.bfd.tx_interval_ms,
+            }
+            for domain in domains
+            if domain.timers.bfd.enabled
+        ],
+        "ldp_interfaces": sorted(
+            {
+                name
+                for domain in domains
+                if "mpls" in domain.capabilities and "segment_routing" not in domain.capabilities
+                for name in interfaces_by_domain[domain.domain_id]
+                if name in links
+            }
+        ),
+        "domains": [
+            _domain_facts(
+                resolved,
+                node,
+                domain,
+                interfaces=interfaces_by_domain[domain.domain_id],
+                links=links,
+                segments=segments,
+                routes=routes_by_domain[domain.domain_id],
+                sid_by_domain=sid_by_domain,
             )
-        result["node_sid_index"] = node_sid_index
-
-    result.update(_timer_template_facts(domain))
-    result["segment_interfaces"] = _segment_template_facts(resolved, node, domain)
-    result["default_route_families"] = _default_route_families(node)
-    result["default_route_metric"] = _DEFAULT_ROUTE_METRIC
-    if domain.protocol in ROUTING_AREA_PROTOCOLS:
-        result["area_id"] = domain.area_id_for(node)
-    result.update(
-        {
-            "hostname": node.node_id,
-            "system_id": _isis_system_id(resolved, node),
-            # The families the session gives the node, in grammar order. A
-            # family the node does not carry is neither addressed, enabled
-            # nor routed.
-            "address_families": tuple(
-                family for family in ADDRESS_FAMILIES if family in node.address_families
-            ),
-            "ipv4_loopback": _ip_from_interface(node.interfaces.lo0.ipv4, field="lo0.ipv4"),
-            # An IPv6 loopback exists only where the session declares one.
-            "ipv6_loopback": (
-                _ip_from_interface(node.interfaces.lo0.ipv6, field="lo0.ipv6")
-                if node.interfaces.lo0.ipv6 is not None
-                else None
-            ),
-            "wan_interfaces": _wan_interfaces(
-                resolved, node, domain, te_enabled=stack.template_variables["te_enabled"]
-            ),
-        }
-    )
-    boundary_routes = _boundary_static_routes(resolved, node, domain)
-    result["boundary_static_routes"] = boundary_routes
-    # Border nodes must redistribute boundary statics into their IGP, per
-    # family, or the rest of the domain never learns the exported
-    # reachability.
-    result["redistribute_static"] = (
-        tuple(
-            family
-            for family in ADDRESS_FAMILIES
-            if any(route["family"] == family for route in boundary_routes)
-        )
-        if domain.protocol in _MAXIMUM_IGP_METRIC
-        else ()
-    )
+            for domain in domains
+        ],
+    }
     return result
 
 
-def _access_interface_names(node: ResolvedNode) -> list[str]:
-    """The node's access (ground-link) WAN interfaces."""
-    if node.kind == "satellite":
-        return [iface.name for iface in node.wan_interfaces if iface.name.startswith("gnd")]
-    if node.kind == "ground_station":
-        return [iface.name for iface in node.wan_interfaces]
-    raise ValueError(f"unsupported resolved node kind for FRR rendering: {node.kind!r}")
+def _domain_facts(
+    resolved: ResolvedSession,
+    node: ResolvedNode,
+    domain: ResolvedRoutingDomain,
+    *,
+    interfaces: tuple[str, ...],
+    links: dict[str, dict[str, Any]],
+    segments: dict[str, dict[str, Any]],
+    routes: list[dict[str, str]],
+    sid_by_domain: Mapping[str, Mapping[str, int]],
+) -> dict[str, Any]:
+    """One domain's part of the router: its instance and its interfaces.
+
+    A fixed link in the domain runs the IGP at a metric from its own
+    terminal's transmit rate; an access link at the access metric. In OSPF a
+    fixed link whose peer sits in another area of the domain, and every
+    access link, run in the backbone. A segment joins the IGP in each family
+    whose prefix the router originates, actively where another participant
+    of the domain shares the segment and passively otherwise. The router
+    originates its prefixes and default routes into every domain it
+    participates in, and redistributes into a domain the boundary routes
+    exported to it.
+    """
+    is_igp = domain.protocol in _MAXIMUM_IGP_METRIC
+    is_ospf = domain.protocol == "ospf"
+    area = domain.area_id_for(node) if domain.protocol in LINK_STATE_PROTOCOLS else None
+    bfd_enabled = domain.timers.bfd.enabled
+    sr_enabled = "segment_routing" in domain.capabilities
+    node_sid_index = None
+    if sr_enabled:
+        domain_sids = sid_by_domain.get(domain.domain_id)
+        node_sid_index = None if domain_sids is None else domain_sids.get(node.node_id)
+        if node_sid_index is None:
+            raise ValueError(
+                f"segment routing domain {domain.domain_id!r} has no resolved SID index "
+                f"for {node.node_id!r}"
+            )
+    facts: dict[str, Any] = {
+        "domain_id": domain.domain_id,
+        "protocol": domain.protocol,
+        "area_id": area,
+        "bfd_profile": domain.domain_id if bfd_enabled else None,
+        "sr_enabled": sr_enabled,
+        "te_enabled": "traffic_engineering" in domain.capabilities,
+        "node_sid_index": node_sid_index,
+        "default_route_families": _default_route_families(node),
+        "default_route_metric": _DEFAULT_ROUTE_METRIC,
+        "redistribute_static": (
+            tuple(
+                family
+                for family in ADDRESS_FAMILIES
+                if any(route["family"] == family for route in routes)
+            )
+            if is_igp
+            else ()
+        ),
+        **_timer_template_facts(domain),
+    }
+    wan: list[dict[str, Any]] = []
+    for name in interfaces:
+        link = links.get(name)
+        if link is None:
+            continue
+        entry: dict[str, Any] = {"name": name, "bfd": bfd_enabled}
+        if is_igp:
+            entry["metric"] = (
+                _ACCESS_LINK_METRIC if link["access"] else _igp_metric(node, name, domain.protocol)
+            )
+        if is_ospf:
+            cross_area = link["access"] or area != domain.area_id_for(link["peer"])
+            entry["ospf_area"] = "0.0.0.0" if cross_area else area
+        wan.append(entry)
+    facts["interfaces"] = wan
+    facts["segments"] = [
+        {
+            "name": name,
+            "metric": _SEGMENT_METRIC,
+            "igp_families": segments[name]["igp_families"],
+            "igp_active": _segment_has_participant(resolved, node, domain, name),
+            "bfd": bfd_enabled
+            and bool(segments[name]["igp_families"])
+            and _segment_has_participant(resolved, node, domain, name),
+        }
+        for name in interfaces
+        if name in segments
+    ]
+    return facts
+
+
+def _access_interfaces(node: ResolvedNode) -> list[str]:
+    """The node's access-link WAN interfaces: those behind access terminals."""
+    access_terminals = {
+        block.terminal_id for block in node.terminal_inventory if block.endpoint_role == "access"
+    }
+    return [wan.name for wan in node.wan_interfaces if wan.terminal_id in access_terminals]
 
 
 def _transmit_mbps(node: ResolvedNode, interface: str, *, purpose: str) -> float:
@@ -164,118 +306,62 @@ def _te_link_params(node: ResolvedNode, interface: str) -> dict[str, str]:
     }
 
 
-def _wan_interfaces(
-    resolved: ResolvedSession,
-    node: ResolvedNode,
-    domain: ResolvedRoutingDomain,
-    *,
-    te_enabled: bool,
-) -> list[dict[str, Any]]:
+def _wan_links(resolved: ResolvedSession, node: ResolvedNode) -> dict[str, dict[str, Any]]:
     """Every WAN interface the node's FRR configuration names, once each.
 
     Fixed links come from the node's non-access link candidates, in candidate
-    order; access links follow. ``static_only`` marks a fixed link that a
-    ``static_ip`` routing boundary crosses: it carries static routes and no
-    IGP. ``bfd`` marks every IGP link of a BFD-enabled domain; ``te`` carries
-    the MPLS-TE link parameters of every IGP link of a TE domain. ``ospf_area``
-    is present for OSPF domains: a fixed link whose peer sits in another
-    domain or area, and every access link, run in the backbone. A fixed
-    link's ``peer_loopback_ipv6`` is present when both ends carry IPv6 and
-    the peer holds an IPv6 loopback.
+    order, each with its peer; ``static_only`` marks a fixed link a
+    ``static_ip`` routing boundary crosses. Access links follow, with no
+    fixed peer.
     """
-    carries_ipv6 = "ipv6" in node.address_families
     static_rules = _static_boundary_rule_ids(resolved)
-    is_ospf = domain.protocol == "ospf"
-    node_area = domain.area_id_for(node) if is_ospf else None
-    bfd_enabled = domain.timers.bfd.enabled
-    interfaces: list[dict[str, Any]] = []
+    links: dict[str, dict[str, Any]] = {}
     for candidate in resolved.link_candidates:
-        if candidate.kind == "access":
+        if candidate.kind == "access" or node.node_id not in (candidate.node_a, candidate.node_b):
             continue
-        interface_a, interface_b = candidate.fixed_interfaces
-        if candidate.node_a == node.node_id:
-            name, peer_id = interface_a, candidate.node_b
-        elif candidate.node_b == node.node_id:
-            name, peer_id = interface_b, candidate.node_a
-        else:
-            continue
+        side = 0 if candidate.node_a == node.node_id else 1
+        name = candidate.fixed_interfaces[side]
+        peer_id = candidate.node_b if side == 0 else candidate.node_a
         peer = resolved.node_by_id(peer_id)
         if peer is None or peer.interfaces is None:
             raise ValueError(
                 f"link candidate {candidate.rule_id!r} references unresolved peer {peer_id!r}"
             )
-        static_only = candidate.rule_id in static_rules
-        entry: dict[str, Any] = {
-            "name": name,
-            "static_only": static_only,
-            # A static_ip boundary link carries no IGP, so no IGP BFD or TE.
-            "bfd": bfd_enabled and not static_only,
-            "te": _te_link_params(node, name) if te_enabled and not static_only else None,
-            "peer_loopback_ipv4": _ip_from_interface(
-                peer.interfaces.lo0.ipv4,
-                field=f"{peer.node_id}.lo0.ipv4",
-            ),
-            "peer_loopback_ipv6": (
-                _ip_from_interface(peer.interfaces.lo0.ipv6, field=f"{peer.node_id}.lo0.ipv6")
-                if carries_ipv6 and peer.interfaces.lo0.ipv6 is not None
-                else None
-            ),
+        if name in links:
+            raise ValueError(f"node {node.node_id!r} names WAN interface {name!r} twice")
+        links[name] = {
+            "peer": peer,
+            "static_only": candidate.rule_id in static_rules,
+            "access": False,
         }
-        if domain.protocol in _MAXIMUM_IGP_METRIC:
-            entry["metric"] = _igp_metric(node, name, domain.protocol)
-        # The peer is a router in exactly one domain whatever the protocol;
-        # OSPF also reads its area.
-        peer_domain = resolved.routing_domain_for(peer_id)
-        if is_ospf:
-            cross_area = domain.domain_id != peer_domain.domain_id or node_area != (
-                peer_domain.area_id_for(peer)
+    for name in _access_interfaces(node):
+        if name in links:
+            raise ValueError(
+                f"node {node.node_id!r} names WAN interface {name!r} as both a fixed "
+                "link and an access link"
             )
-            entry["ospf_area"] = "0.0.0.0" if cross_area else node_area
-        interfaces.append(entry)
-    for name in _access_interface_names(node):
-        entry = {
-            "name": name,
-            "static_only": False,
-            "bfd": bfd_enabled,
-            "te": _te_link_params(node, name) if te_enabled else None,
-            "metric": _ACCESS_LINK_METRIC,
-        }
-        if is_ospf:
-            entry["ospf_area"] = "0.0.0.0"
-        interfaces.append(entry)
-    names = [entry["name"] for entry in interfaces]
-    duplicates = sorted({name for name in names if names.count(name) > 1})
-    if duplicates:
-        raise ValueError(
-            f"node {node.node_id!r} names WAN interface(s) {duplicates} as both a fixed "
-            "link and an access link"
-        )
-    return interfaces
+        links[name] = {"peer": None, "static_only": False, "access": True}
+    return links
 
 
-def _segment_peer_count(
+def _segment_has_participant(
     resolved: ResolvedSession,
     node: ResolvedNode,
     domain: ResolvedRoutingDomain,
     interface: str,
-) -> int:
-    """Routed peers sharing this interface's segment within the same domain."""
+) -> bool:
+    """Whether another participant of ``domain`` shares this interface's segment."""
     for segment in resolved.ethernet_segments:
-        member_ids = {member.node_id for member in segment.members}
         if not any(
             member.node_id == node.node_id and member.interface == interface
             for member in segment.members
         ):
             continue
-        return sum(
-            1
-            for peer in resolved.nodes
-            if peer.node_id != node.node_id
-            and peer.node_id in member_ids
-            and peer.forwarding == "routed"
-            and peer.node_id in domain.node_ids
+        return any(
+            member.node_id != node.node_id and member.node_id in domain.node_ids
+            for member in segment.members
         )
-    return 0
+    return False
 
 
 def _timer_template_facts(domain: ResolvedRoutingDomain) -> dict[str, Any]:
@@ -376,7 +462,7 @@ def _boundary_export_prefixes(
     if export.export_node_loopbacks:
         for node_id in from_domain.node_ids:
             node = resolved.node_by_id(node_id)
-            if node is None or node.forwarding != "routed":
+            if node is None:
                 continue
             for family, host_len in (("ipv4", 32), ("ipv6", 128)):
                 address = _lo0_address(node, family)
@@ -465,22 +551,15 @@ def _boundary_static_routes(
     return routes
 
 
-def _segment_template_facts(
-    resolved: ResolvedSession,
-    node: ResolvedNode,
-    domain: ResolvedRoutingDomain,
-) -> list[dict[str, Any]]:
-    """Per-segment interface facts for any node carrying Ethernet segments.
+def _segment_facts(node: ResolvedNode) -> dict[str, dict[str, Any]]:
+    """The router's Ethernet segment interfaces: addresses and IGP families.
 
     A segment joins the IGP in each family whose allocated prefix the node
-    originates (``igp_families``); it runs active only where the wired
-    segment has a routed same-domain peer (broadcast adjacency on a real L2
-    segment) and stays passive otherwise, the honest stub posture. BFD runs
-    on every active IGP segment of a BFD-enabled domain and never on a
-    passive one.
+    originates. An originated prefix that no segment of the node carries is
+    refused: FRR renders connected segment prefixes and default routes.
     """
     if node.interfaces is None or not node.interfaces.ethernet:
-        return []
+        return {}
     originated: dict[str, set[str]] = {family: set() for family in ADDRESS_FAMILIES}
     if node.originated_prefixes is not None:
         for family in ADDRESS_FAMILIES:
@@ -488,8 +567,7 @@ def _segment_template_facts(
                 network = ipaddress.ip_network(prefix, strict=False)
                 if network.prefixlen != 0:
                     originated[family].add(str(network))
-
-    interfaces: list[dict[str, Any]] = []
+    facts: dict[str, dict[str, Any]] = {}
     covered: set[tuple[str, str]] = set()
     for name, segment in sorted(node.interfaces.ethernet.items()):
         addresses: list[dict[str, str]] = []
@@ -503,17 +581,7 @@ def _segment_template_facts(
             if network in originated[family]:
                 igp_families.append(family)
                 covered.add((family, network))
-        igp_active = _segment_peer_count(resolved, node, domain, name) >= 1
-        interfaces.append(
-            {
-                "name": name,
-                "addresses": addresses,
-                "metric": _SEGMENT_METRIC,
-                "igp_families": tuple(igp_families),
-                "igp_active": igp_active,
-                "bfd": domain.timers.bfd.enabled and bool(igp_families) and igp_active,
-            }
-        )
+        facts[name] = {"addresses": addresses, "igp_families": tuple(igp_families)}
     uncovered = sorted(
         network
         for family, networks in originated.items()
@@ -525,7 +593,7 @@ def _segment_template_facts(
             f"node {node.node_id!r} originates non-connected prefix(es) {uncovered}; "
             "FRR rendering supports connected segment prefixes and default routes"
         )
-    return interfaces
+    return facts
 
 
 def _default_route_families(node: ResolvedNode) -> tuple[str, ...]:

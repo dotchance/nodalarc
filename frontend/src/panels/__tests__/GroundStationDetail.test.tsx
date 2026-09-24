@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { GroundStationDetail } from "../GroundStationDetail";
 import type { NodeState, StateSnapshot } from "../../types";
 
-function station(routingArea: string | null): NodeState {
+function station(areas: NodeState["routing_areas"]): NodeState {
   return {
     node_id: "earth-de-frankfurt-gw1",
     node_type: "ground_station",
@@ -17,7 +17,7 @@ function station(routingArea: string | null): NodeState {
     vel_z_km_s: null,
     plane: null,
     slot: null,
-    routing_area: routingArea,
+    routing_areas: areas,
     isl_count: 0,
     gnd_count: 0,
     prefix: null,
@@ -48,7 +48,7 @@ describe("GroundStationDetail", () => {
   });
 
   it("shows the routing area VS-API resolved for the station", () => {
-    const node = station("49.0001");
+    const node = station([{ domain_id: "earth_domain", area_id: "49.0001" }]);
     render(<GroundStationDetail node={node} snapshot={snapshot(node)} onSelect={vi.fn()} />);
 
     expect(routingAreaValue()).toBe("49.0001");
@@ -57,9 +57,19 @@ describe("GroundStationDetail", () => {
   });
 
   it("says none for a station that runs no area protocol", () => {
-    const node = station(null);
+    const node = station([]);
     render(<GroundStationDetail node={node} snapshot={snapshot(node)} onSelect={vi.fn()} />);
 
     expect(routingAreaValue()).toBe("none");
+  });
+
+  it("lists every area of a station in several routing domains", () => {
+    const node = station([
+      { domain_id: "earth_domain", area_id: "49.0001" },
+      { domain_id: "site_domain", area_id: "0.0.0.0" },
+    ]);
+    render(<GroundStationDetail node={node} snapshot={snapshot(node)} onSelect={vi.fn()} />);
+
+    expect(routingAreaValue()).toBe("49.0001, 0.0.0.0");
   });
 });

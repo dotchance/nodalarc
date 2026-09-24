@@ -1,9 +1,9 @@
 {# Static routes to a static_ip boundary peer's loopbacks over the
    point-to-point boundary link, in each family both ends carry. #}
-{% for iface in wan_interfaces if iface.static_only %}
-ip route {{ iface.peer_loopback_ipv4 }}/32 {{ iface.name }}
-{% if iface.peer_loopback_ipv6 %}
-ipv6 route {{ iface.peer_loopback_ipv6 }}/128 {{ iface.name }}
+{% for link in static_links %}
+ip route {{ link.peer_loopback_ipv4 }}/32 {{ link.name }}
+{% if link.peer_loopback_ipv6 %}
+ipv6 route {{ link.peer_loopback_ipv6 }}/128 {{ link.name }}
 {% endif %}
 {% endfor %}
 

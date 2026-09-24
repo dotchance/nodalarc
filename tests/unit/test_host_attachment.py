@@ -83,7 +83,9 @@ def test_explicit_domains_are_defined_over_routed_nodes() -> None:
 
 
 def test_domain_matching_only_hosts_is_refused() -> None:
-    with pytest.raises(SessionResolutionError, match="contains zero routers"):
+    with pytest.raises(
+        SessionResolutionError, match="selects no node that runs a routing workload"
+    ):
         _resolved_with_hosts(
             name="host-attachment-hosts-only",
             routing={

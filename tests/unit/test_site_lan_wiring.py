@@ -429,21 +429,17 @@ class TestRenderAndReadiness:
     def test_multi_node_site_runs_terr0_active_single_node_stays_passive(self) -> None:
         from nodalarc.models.resolved_session import SourceContext
 
-        from adapters.frr.stack import resolve_domain_stack
         from adapters.frr.template_vars import build_template_vars_from_resolved
 
         def terr0_facts(resolved, node):
-            domain = resolved.routing_domain_for(node.node_id)
             vars_for_node = build_template_vars_from_resolved(
                 resolved,
                 node,
-                domain=domain,
-                stack=resolve_domain_stack(domain),
-                node_sid_index=None,
+                domains=resolved.routing_domains_for(node.node_id),
+                sid_by_domain=resolved.sid_index_by_domain(),
             )
-            return next(
-                seg for seg in vars_for_node["segment_interfaces"] if seg["name"] == "terr0"
-            )
+            [domain] = vars_for_node["domains"]
+            return next(seg for seg in domain["segments"] if seg["name"] == "terr0")
 
         resolved = resolve_session(
             _two_node_site_session(),

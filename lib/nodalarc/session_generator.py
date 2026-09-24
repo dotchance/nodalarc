@@ -20,6 +20,7 @@ from nodalarc.models.builder_api import (
     WizardConstellationGeometry,
     WizardConstellationPreset,
     WizardConstellationPresetResponse,
+    WizardExtension,
     WizardOrbitModelMetadata,
     WizardWalkerPatternMetadata,
 )
@@ -28,7 +29,11 @@ from nodalarc.models.builder_visual_api import (
     derive_walker_layout,
 )
 from nodalarc.models.resolved_session import ResolvedNode, ResolvedSession, SourceContext
-from nodalarc.models.segment_session import RoutingTimers
+from nodalarc.models.segment_session import (
+    LINK_STATE_PROTOCOLS,
+    RoutingCapability,
+    RoutingTimers,
+)
 from nodalarc.resolve_session import resolve_session
 from nodalarc.runtime_support import RuntimeSupport, UnsupportedFeatureError
 
@@ -320,45 +325,27 @@ def constellation_source_mode(
     return wrapper
 
 
-# The Wizard's routing-extension vocabulary. Aliases normalize to the short
-# form; anything else is rejected, never silently ignored.
-_EXTENSION_ALIASES: dict[str, str] = {
-    "te": "te",
-    "traffic-engineering": "te",
-    "sr": "sr",
-    "segment-routing": "sr",
-    "mpls": "mpls",
-}
-# The routing-domain capability each extension declares, in the order the
-# generated session lists them.
-EXTENSION_CAPABILITIES: dict[str, str] = {
+# The routing-domain capability each Wizard extension declares, in the order
+# the generated session lists them.
+EXTENSION_CAPABILITIES: dict[WizardExtension, RoutingCapability] = {
     "mpls": "mpls",
     "sr": "segment_routing",
     "te": "traffic_engineering",
 }
 
 
-def normalize_extensions(extensions: list[str] | tuple[str, ...]) -> tuple[str, ...]:
-    """Canonicalize routing-extension aliases to {te, sr, mpls}.
-
-    Raises ValueError on unknown or duplicate extensions.
-    """
-    normalized: list[str] = []
-    for ext in extensions:
-        canon = _EXTENSION_ALIASES.get(ext)
-        if canon is None:
-            raise ValueError(
-                f"unknown routing extension {ext!r}; valid: "
-                "te/traffic-engineering, sr/segment-routing, mpls"
-            )
-        normalized.append(canon)
-    if len(set(normalized)) != len(normalized):
+def _unique_extensions(extensions: tuple[WizardExtension, ...]) -> tuple[WizardExtension, ...]:
+    """The Wizard's extensions, refused when one is unknown or repeated."""
+    unknown = sorted(set(extensions) - set(EXTENSION_CAPABILITIES))
+    if unknown:
+        raise ValueError(f"unknown routing extension(s) {unknown}; valid: sr, te, mpls")
+    if len(set(extensions)) != len(extensions):
         raise ValueError("routing extensions must not contain duplicates")
-    return tuple(normalized)
+    return extensions
 
 
 def _check_routing_choice(
-    protocol: str, extensions: tuple[str, ...], runtime_support: RuntimeSupport
+    protocol: str, extensions: tuple[WizardExtension, ...], runtime_support: RuntimeSupport
 ) -> None:
     """Refuse a protocol or extension no registered adapter renders."""
     unsupported = []
@@ -373,7 +360,7 @@ def _check_routing_choice(
         raise UnsupportedFeatureError(unsupported)
 
 
-def _routing_capabilities(extensions: tuple[str, ...]) -> dict[str, Any] | None:
+def _routing_capabilities(extensions: tuple[WizardExtension, ...]) -> dict[str, Any] | None:
     capabilities: dict[str, Any] = {
         capability: {"data_plane": "mpls"} if capability == "segment_routing" else {}
         for extension, capability in EXTENSION_CAPABILITIES.items()
@@ -594,7 +581,7 @@ def _common_access_mount(
 def assemble_session_document(
     constellation: str,
     protocol: str,
-    extensions: list[str],
+    extensions: list[WizardExtension],
     *,
     orbit_propagator: str,
     area_strategy: str = "flat",
@@ -608,9 +595,9 @@ def assemble_session_document(
     """Assemble one ref-composed session document from catalog choices."""
     warnings: list[str] = []
     protocol = validate_catalog_name(protocol, label="protocol")
-    normalized_extensions = normalize_extensions(tuple(extensions))
+    wizard_extensions = _unique_extensions(tuple(extensions))
     runtime_support = RuntimeSupport.earth_luna()
-    _check_routing_choice(protocol, normalized_extensions, runtime_support)
+    _check_routing_choice(protocol, wizard_extensions, runtime_support)
     if unsupported := runtime_support.check_propagator(orbit_propagator):
         raise UnsupportedFeatureError([unsupported])
 
@@ -638,11 +625,11 @@ def assemble_session_document(
     ground_value = str(ground_ref)
     isl_topology = generated_isl_topology(constellation_value, catalog)
 
-    ext_suffix = "-".join(normalized_extensions) if normalized_extensions else "plain"
+    ext_suffix = "-".join(wizard_extensions) if wizard_extensions else "plain"
     resolved_session_name = validate_catalog_name(
         session_name or f"{constellation_ref.relative_path.stem}-{protocol}-{ext_suffix}".lower()
     )
-    capabilities = _routing_capabilities(normalized_extensions)
+    capabilities = _routing_capabilities(wizard_extensions)
 
     ground_scheduling = {
         "selection_policy": _selection_policy(
@@ -765,7 +752,7 @@ def assemble_session_document(
                         "selectors": [{"any": [{"segment": space_id}, {"segment": "ground"}]}],
                         **(
                             {"area_assignment": _area_assignment(area_strategy)}
-                            if protocol in {"isis", "ospf"}
+                            if protocol in LINK_STATE_PROTOCOLS
                             else {}
                         ),
                         **({"capabilities": capabilities} if capabilities else {}),

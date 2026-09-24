@@ -16,11 +16,12 @@ from nodalarc.runtime_support import (
     FeatureCategory,
     RuntimeSupport,
     adapter_renders_routing,
+    check_router_domains,
     check_routing_members,
 )
 from nodalarc.workloads.adapter import AdapterSupport, BfdSupport, RoutingProtocolSupport
 
-from adapters.registry import _ADAPTERS, registered_adapter_support
+from adapters.registry import _ADAPTERS, adapter_named, registered_adapter_support
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -35,8 +36,11 @@ _STUB_SUPPORT = {
                     tx_interval_ms=(50, 1000),
                 ),
                 address_families=frozenset({"ipv4"}),
+                domains_per_router=1,
             ),
-            "static": RoutingProtocolSupport(address_families=frozenset({"ipv4", "ipv6"})),
+            "static": RoutingProtocolSupport(
+                address_families=frozenset({"ipv4", "ipv6"}), domains_per_router=None
+            ),
         }
     ),
     "host-only": AdapterSupport(),
@@ -54,8 +58,19 @@ def stub_declarations(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_every_registered_adapter_declares_its_support() -> None:
     declarations = registered_adapter_support()
 
-    assert set(declarations) == {adapter.name for adapter in _ADAPTERS}
+    assert set(declarations) == {name for name, _support, _loader in _ADAPTERS}
     assert all(isinstance(support, AdapterSupport) for support in declarations.values())
+
+
+def test_each_renderer_carries_its_registered_declaration() -> None:
+    for name, support in registered_adapter_support().items():
+        renderer = adapter_named(name)
+
+        assert renderer is not None
+        assert renderer.name == name
+        assert renderer.support is support
+        # One renderer per adapter for the process.
+        assert adapter_named(name) is renderer
 
 
 def test_runtime_support_sets_are_the_union_of_registered_declarations() -> None:
@@ -108,6 +123,9 @@ def test_declarations_load_without_the_rendering_dependency() -> None:
         "from nodalarc.resolve_session import resolve_session\n"
         "from nodalarc.runtime_support import RuntimeSupport\n"
         "assert RuntimeSupport.earth_luna().supported_workload_adapters\n"
+        "rendering = [m for m in sys.modules if m in "
+        "('adapters.frr.adapter', 'adapters.frr.stack', 'adapters.frr.template_vars')]\n"
+        "assert not rendering, rendering\n"
     )
     result = subprocess.run(
         [sys.executable, "-c", probe],
@@ -204,9 +222,11 @@ def test_member_check_accepts_every_family_the_adapter_routes(stub_declarations)
 
 def test_routing_support_declares_known_address_families() -> None:
     with pytest.raises(ValueError, match="declare the address families"):
-        RoutingProtocolSupport(address_families=frozenset())
+        RoutingProtocolSupport(address_families=frozenset(), domains_per_router=1)
     with pytest.raises(ValueError, match="unknown address families"):
-        RoutingProtocolSupport(address_families=frozenset({"ipv4", "appletalk"}))
+        RoutingProtocolSupport(
+            address_families=frozenset({"ipv4", "appletalk"}), domains_per_router=1
+        )
 
 
 def test_registered_support_combines_every_adapter_rendering_the_protocol(
@@ -227,19 +247,32 @@ def test_registered_support_combines_every_adapter_rendering_the_protocol(
             "a": AdapterSupport(
                 routing={
                     "isis": RoutingProtocolSupport(
-                        frozenset({"mpls", "segment_routing"}), wide, address_families=_IPV4
+                        frozenset({"mpls", "segment_routing"}),
+                        wide,
+                        address_families=_IPV4,
+                        domains_per_router=1,
                     ),
-                    "ospf": RoutingProtocolSupport(frozenset({"mpls"}), address_families=_IPV4),
-                    "static": RoutingProtocolSupport(address_families=_IPV4),
+                    "ospf": RoutingProtocolSupport(
+                        frozenset({"mpls"}), address_families=_IPV4, domains_per_router=1
+                    ),
+                    "static": RoutingProtocolSupport(
+                        address_families=_IPV4, domains_per_router=None
+                    ),
                 }
             ),
             "b": AdapterSupport(
                 routing={
                     "isis": RoutingProtocolSupport(
-                        frozenset({"traffic_engineering"}), narrow, address_families=_DUAL
+                        frozenset({"traffic_engineering"}),
+                        narrow,
+                        address_families=_DUAL,
+                        domains_per_router=3,
                     ),
                     "ospf": RoutingProtocolSupport(
-                        frozenset({"mpls"}), narrow, address_families=_IPV4
+                        frozenset({"mpls"}),
+                        narrow,
+                        address_families=_IPV4,
+                        domains_per_router=None,
                     ),
                 }
             ),
@@ -248,19 +281,26 @@ def test_registered_support_combines_every_adapter_rendering_the_protocol(
     )
 
     # Every capability and family some adapter renders; BFD bounds spanning
-    # both ranges.
+    # both ranges; the most domains per router any adapter renders.
     assert registered_routing_support("isis") == RoutingProtocolSupport(
         frozenset({"mpls", "segment_routing", "traffic_engineering"}),
         BfdSupport(
             detect_multiplier=(1, 255), rx_interval_ms=(10, 5000), tx_interval_ms=(10, 9000)
         ),
         address_families=_DUAL,
+        domains_per_router=3,
     )
-    # One adapter renders OSPF BFD, so its range is offered.
+    # One adapter renders OSPF BFD, so its range is offered; one renders any
+    # number of OSPF domains per router.
     assert registered_routing_support("ospf") == RoutingProtocolSupport(
-        frozenset({"mpls"}), narrow, address_families=_IPV4
+        frozenset({"mpls"}),
+        narrow,
+        address_families=_IPV4,
+        domains_per_router=None,
     )
-    assert registered_routing_support("static") == RoutingProtocolSupport(address_families=_IPV4)
+    assert registered_routing_support("static") == RoutingProtocolSupport(
+        address_families=_IPV4, domains_per_router=None
+    )
     assert registered_routing_support("bgp") is None
 
 
@@ -277,10 +317,59 @@ def test_an_unused_adapter_never_narrows_registered_support(
         lambda: {
             "frr": FRR_SUPPORT,
             "narrow": AdapterSupport(
-                routing={"isis": RoutingProtocolSupport(frozenset(), address_families=_IPV4)}
+                routing={
+                    "isis": RoutingProtocolSupport(
+                        frozenset(), address_families=_IPV4, domains_per_router=1
+                    )
+                }
             ),
         },
     )
 
     assert registered_routing_support("isis") == FRR_SUPPORT.routing["isis"]
     assert registered_routing_support("ospf") == FRR_SUPPORT.routing["ospf"]
+
+
+def test_the_capability_vocabulary_is_the_grammar_capabilities() -> None:
+    from nodalarc.models.segment_session import ROUTING_CAPABILITIES, RoutingCapabilities
+
+    assert set(ROUTING_CAPABILITIES) == set(RoutingCapabilities.model_fields)
+
+
+def test_declarations_outside_the_grammar_are_refused() -> None:
+    with pytest.raises(ValueError, match="routing protocol 'rip' outside the grammar"):
+        AdapterSupport(
+            routing={"rip": RoutingProtocolSupport(address_families=_IPV4, domains_per_router=1)}
+        )
+    with pytest.raises(ValueError, match="capabilities outside the grammar"):
+        RoutingProtocolSupport(frozenset({"warp"}), address_families=_IPV4, domains_per_router=1)
+
+
+def test_routing_support_renders_at_least_one_domain_per_router() -> None:
+    with pytest.raises(ValueError, match="at least one domain per router; got 0"):
+        RoutingProtocolSupport(address_families=_IPV4, domains_per_router=0)
+
+
+def test_router_domain_check_refuses_domains_beyond_the_declaration(stub_declarations) -> None:
+    routers = {
+        f"gs-{index}": (("core", "isis"), ("edge", "isis"), ("lab", "static"), ("lab2", "static"))
+        for index in range(7)
+    }
+    routers["sat-a"] = (("core", "isis"),)
+
+    [feature] = check_router_domains(adapter="stub", routers=routers)
+
+    # One refusal for the routers sharing the excess domains; static domains
+    # combine freely and a router in one IS-IS domain is within the limit.
+    assert feature.category == FeatureCategory.ROUTER_DOMAINS
+    assert feature.value == "isis:core,edge"
+    assert feature.message == (
+        "7 nodes (gs-0, gs-1, gs-2, gs-3, gs-4 and 2 more) participate in isis domains "
+        "['core', 'edge']; workload adapter 'stub' renders 1 isis domain(s) per router"
+    )
+
+
+def test_router_domain_check_accepts_different_protocols(stub_declarations) -> None:
+    routers = {"gs-a": (("core", "isis"), ("lab", "static"))}
+
+    assert check_router_domains(adapter="stub", routers=routers) == []

@@ -40,7 +40,6 @@ from nodalarc.models.metrics import (
     TraceResponse,
 )
 from nodalarc.models.resolved_session import ResolvedSession
-from nodalarc.models.routing_stack import RoutingStackConfig
 from nodalarc.nats_channels import (
     NATS_CONNECT_OPTIONS,
     SUBJECT_MI_CONVERGENCE_GATE,
@@ -51,15 +50,14 @@ from nodalarc.nats_channels import (
     probe_result_subject,
 )
 from nodalarc.platform_config import get_platform_config
-from nodalarc.resolve_session import load_session_resolution_from_file
+from nodalarc.resolve_session import SessionResolution, load_session_resolution_from_file
 from nodalarc.session_identity import (
     read_runtime_session_run_id_file,
     require_resolved_session_run_id,
 )
 from nodalarc.workload_target import NODE_ID_LABEL
 
-from adapters.frr.stack import ResolvedStack, resolve_domain_stack
-from measurement.adapters import create_adapter
+from measurement.adapters import ProtocolAdapter, create_adapter
 from measurement.convergence_gate import ConvergenceGate
 
 log = logging.getLogger(__name__)
@@ -127,7 +125,7 @@ class MIService:
     def __init__(
         self,
         resolved: ResolvedSession,
-        stack_config: RoutingStackConfig,
+        adapter: ProtocolAdapter,
         db_path: str,
         namespace: str | None = None,
     ) -> None:
@@ -137,7 +135,6 @@ class MIService:
             raise TypeError("MIService requires a ResolvedSession")
         self._resolved = resolved
         self._session_id = require_resolved_session_run_id(resolved)
-        self._stack_config = stack_config
         self._db_path = db_path
         self._namespace = namespace
 
@@ -151,10 +148,7 @@ class MIService:
         create_tables(self._db_conn)
         self._db_lock = threading.Lock()
 
-        # Protocol adapter
-        if not stack_config.mi_adapter:
-            raise ValueError(f"routing stack {stack_config.name!r} does not provide an MI adapter")
-        self._adapter = create_adapter(stack_config.mi_adapter)
+        self._adapter = adapter
 
         # Flow manager (lazy init — needs pods to be running)
         self._flow_manager = None
@@ -417,49 +411,39 @@ def main() -> None:
         origin="mi",
         run_id=read_runtime_session_run_id_file(Path(args.session_run_id_file)),
     )
-    stack_config = _mi_stack_config_from_resolved(resolution.resolved)
+    engine, protocol = _measurement_target(resolution)
 
     service = MIService(
         resolved=resolution.resolved,
-        stack_config=stack_config,
+        adapter=create_adapter(engine, protocol),
         db_path=args.db,
     )
     service.run()
 
 
-def _mi_stack_config_from_resolved(resolved: ResolvedSession) -> RoutingStackConfig:
-    """Resolve the single MI adapter supported by the current MI service.
+def _measurement_target(resolution: SessionResolution) -> tuple[str, str]:
+    """The routing engine and protocol this measurement service observes.
 
-    MI currently has one adapter instance. Multiple resolved routing domains are
-    acceptable only when they resolve to the same MI adapter implementation.
+    Each router names its engine through its profile's adapter. The service
+    runs one measurement adapter, so every router of every routing domain must
+    share one engine and one protocol.
     """
-    stacks_by_adapter: dict[str, ResolvedStack] = {}
-    for domain in resolved.routing_domains:
-        stack = resolve_domain_stack(domain)
-        if stack.mi_adapter is None:
-            raise ValueError(
-                f"routing domain {domain.domain_id!r} resolves to stack without an MI adapter"
-            )
-        stacks_by_adapter.setdefault(stack.mi_adapter, stack)
-    if not stacks_by_adapter:
-        raise ValueError("MI requires at least one resolved routing domain with an adapter")
-    if len(stacks_by_adapter) != 1:
+    resolved = resolution.resolved
+    nodes = {node.node_id: node for node in resolved.nodes}
+    targets = {
+        (resolution.workload_profiles[nodes[node_id].profile].adapter, domain.protocol)
+        for domain in resolved.routing_domains
+        for node_id in domain.node_ids
+    }
+    if len(targets) != 1:
         raise ValueError(
-            "MI currently supports one protocol adapter per service instance; "
-            f"resolved adapters: {sorted(stacks_by_adapter)}"
+            "MI currently supports one protocol adapter per service instance; the session's "
+            f"routers run {sorted(targets, key=str)}"
         )
-
-    adapter, stack = next(iter(stacks_by_adapter.items()))
-    return RoutingStackConfig(
-        name=f"mi-{adapter}",
-        image=stack.image,
-        daemons=stack.daemons or None,
-        config_templates=[],
-        template_variables=stack.template_variables,
-        mi_adapter=stack.mi_adapter,
-        segment_routing=stack.segment_routing,
-        max_compression=stack.max_compression,
-    )
+    [(engine, protocol)] = targets
+    if engine is None:
+        raise ValueError(f"the session's {protocol} routers name no routing engine")
+    return engine, protocol
 
 
 if __name__ == "__main__":

@@ -1076,23 +1076,42 @@ a node-model default is an authored statement, never a fallback. The resolved
 session records, for each node, the effective profile reference and the level
 that supplied it.
 
-A routing domain is a declaration about routers: one set of nodes sharing a
-single instance of a routing protocol. A node is a router exactly when its
-effective profile's `adapter` renders routing-protocol configuration; which
-adapters render which protocols and capabilities is declared by the adapter
-modules and is runtime support. Domain membership derives from that router
-population: the domain's selectors resolve against the session's nodes, and
-its members are the routers among them. Each member's own adapter must render
-the domain's protocol, its declared capabilities and, when BFD is enabled, its
-BFD timers; resolution refuses a member whose adapter does not, naming the
-node, the adapter, the domain and the unrendered requirement. A node running
-no routing workload is never a membership candidate, whatever its wiring
-class; a host is reached through the router serving its network, which
-originates the host's network into its own domain.
+A routing domain is one instance of a routing protocol. Its selectors resolve
+against the session's nodes; the selected nodes are inside the domain. Its
+participants are the selected nodes whose effective profile's `adapter`
+renders routing-protocol configuration: they run the domain's protocol. A
+selected node that runs no routing workload is inside the domain without
+participating. Which adapters render which protocols and capabilities is
+declared by the adapter modules and is runtime support. Each participant's own
+adapter must render the domain's protocol, its declared capabilities and, when
+BFD is enabled, its BFD timers; resolution refuses a participant whose adapter
+does not, naming the node, the adapter, the domain and the unrendered
+requirement.
 
-When `routing` is present, every router belongs to exactly one domain, and
-every domain contains at least one member. With `routing` omitted, the
-default domain forms over the routers whose adapter renders IS-IS.
+A router forwards packets between multiple subnets and participates in the
+IGPs or EGPs, or both. A router can be part of multiple routing domains. A
+host is reached through a router serving its network, which originates the
+host's network into its domains. A host's gateway is always a router.
+
+A router takes part in a domain through its interfaces. Its loopback belongs
+to every domain it participates in. A fixed link belongs to the domains its
+two ends share. A link that a `static_ip` boundary crosses belongs to no
+domain. An access interface belongs to the domains its router shares with the
+nodes it can reach over access links. An Ethernet segment interface belongs
+to the domains its router shares with the segment's other participants. When
+it shares none, the segment interface belongs to every domain the router
+participates in. Every routing protocol on an interface shares one BFD session
+with each neighbor, so the domains that enable BFD on one interface of a router
+must declare the same BFD timers.
+
+Each adapter declares how many domains of each protocol it renders on one
+router. Resolution refuses a router in more domains of a protocol than its
+adapter renders, naming the nodes, the domains and the adapter.
+
+When `routing` is present, every node running a routing workload participates
+in a domain, and every domain has at least one participant. With `routing`
+omitted, the default domain's participants are the nodes whose adapter
+renders IS-IS.
 
 These rules govern what the platform renders and delivers. They state
 nothing about protocol behavior: what the running images do with their
@@ -1418,12 +1437,13 @@ forbids non-null `holddown_ms` and `time_to_learn_ms`. `BfdConfig` defaults are
 objects. The hold interval must exceed the hello interval. A non-null `timers`
 field is valid only for `isis` and `ospf`.
 
-Routing-domain ids are unique. When `routing` is present, every router
-belongs to exactly one domain, and every domain contains at least one member;
-"Workload profile assignment" defines the router population domain membership
-derives from. A boundary names an existing enabled non-access
-link rule and exports between two different, existing domains on opposite
-sides of that rule. Every enabled non-access rule spanning multiple domains
+Routing-domain ids are unique. When `routing` is present, every node running a
+routing workload participates in a domain, and every domain has at least one
+participant; "Workload profile assignment" defines participation and routers.
+A boundary names an existing enabled non-access link rule and exports between
+two different, existing domains on opposite sides of that rule. The nodes of
+each endpoint of the rule all participate in the same one of the two domains.
+An enabled non-access rule that can join two routers sharing no domain
 requires a boundary.
 
 An export's literal prefix sequence supplies the declared set by address
@@ -1571,12 +1591,18 @@ context-free EBNF alone:
   the most specific of its own node entry, its segment, and its node model. A
   node with no profile statement at any level fails resolution. The resolved
   session records the effective reference and the supplying level.
-- Routing-domain membership derives from the router population: the routers
-  among a domain's selected nodes whose adapter renders the domain protocol
-  and declared capabilities. Every router belongs to exactly one domain when
-  `routing` is present; nodes running no routing workload are never
-  membership candidates. These checks validate platform rendering only; they
-  assert nothing about protocol behavior.
+- A routing domain's participants are its selected nodes whose adapter renders
+  the domain protocol and declared capabilities; a selected node running no
+  routing workload is inside the domain without participating. Every node
+  running a routing workload participates in a domain when `routing` is
+  present. These checks validate platform rendering only; they assert nothing
+  about protocol behavior.
+- A router forwards packets between multiple subnets and participates in the
+  IGPs or EGPs, or both. A router can be part of multiple routing domains.
+- Each interface of a router belongs to the domains derived in "Workload
+  profile assignment". A router in more domains of a protocol than its
+  adapter renders is refused with a typed reason. Domains that enable BFD on
+  one interface of a router declare the same BFD timers.
 - Every `value_from` entry of every effective profile resolves against the
   session's nodes: exactly one node carries the tag, that node declares the
   named interface, and the interface carries the requested address family.
@@ -1600,17 +1626,21 @@ construct. The production Earth-Luna profile currently supports:
 - `visible_candidates`, `nearest_n`, and `explicit_pairs` topology modes;
 - the `max_links_per_node` link constraint;
 - loopback address pools using `by_node_order` allocation;
-- IS-IS, OSPF, and static FRR routing domains;
+- the `routed` and `host` forwarding classes; `bridge` and `control_only` are
+  refused with a typed reason;
+- IS-IS, OSPF, and static FRR routing domains. The FRR adapter renders one
+  IS-IS domain, one OSPF domain, and any number of static domains on one
+  router;
 - IPv4 and IPv6 on IS-IS, OSPF, and static domains. IS-IS routes IPv6 in its
   IPv6 unicast topology, so IPv6 follows only adjacencies whose two ends
-  carry IPv6. OSPF members that carry IPv6 run OSPFv3 beside OSPFv2, with the
-  same router id, areas, costs, timers, and BFD;
+  carry IPv6. OSPF participants that carry IPv6 run OSPFv3 beside OSPFv2,
+  with the same router id, areas, costs, timers, and BFD;
 - MPLS, segment routing, and traffic engineering on IS-IS and OSPF domains,
   for IPv4;
 - BFD on IS-IS and OSPF domains, with a detect multiplier of 1 to 255 and
   receive and transmit intervals of 10 to 4294967 ms, on every interface
-  where the IGP runs actively: point-to-point links and site LANs with a
-  routed peer in the domain;
+  where the IGP runs actively: point-to-point links and site LANs with
+  another participant of the domain;
 - `static_ip` routing boundaries;
 - serialized ground handovers with `handover_concurrency: one_at_a_time`, at
   most one reserved MBB overlap, and one-tick BBM acquisition;

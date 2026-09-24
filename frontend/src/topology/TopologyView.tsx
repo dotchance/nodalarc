@@ -11,6 +11,7 @@ import { FAIL_HOLD_MS, FAIL_FADE_MS, LINK_FLOW_COLOR, hexToCSS } from "../config
 import { tokens } from "../styles/tokens";
 import type { Regime } from "../taxonomy/regime";
 import type { StateSnapshot, Selection, LinkState, ColorMode } from "../types";
+import { areasLabel, nodeAreaIds } from "../networkIdentity";
 
 /** Recently-removed link kept for fail-flash animation. */
 interface FailedLink {
@@ -241,15 +242,15 @@ export function TopologyView({
               (l) => l.node_a === hitNode.id || l.node_b === hitNode.id,
             );
             const linkedAreas = new Set<string>();
-            if (nodeState.routing_area) linkedAreas.add(nodeState.routing_area);
+            for (const area of nodeAreaIds(nodeState)) linkedAreas.add(area);
             for (const l of connectedLinks) {
               const peerId = l.node_a === hitNode.id ? l.node_b : l.node_a;
               const peer = snapshot.nodes.find((n) => n.node_id === peerId);
-              if (peer?.routing_area) linkedAreas.add(peer.routing_area);
+              if (peer) for (const area of nodeAreaIds(peer)) linkedAreas.add(area);
             }
             const abrTag = linkedAreas.size > 1 ? " [ABR]" : "";
             setTooltipContent(
-              `${hitNode.id}: ${nodeState.isl_count} ISLs, ${nodeState.gnd_count} GND, Area ${nodeState.routing_area ?? "?"}${abrTag}`,
+              `${hitNode.id}: ${nodeState.isl_count} ISLs, ${nodeState.gnd_count} GND, Area ${areasLabel(nodeState)}${abrTag}`,
             );
           } else if (nodeState) {
             const prefix = nodeState.prefix ? `, ${nodeState.prefix}` : "";

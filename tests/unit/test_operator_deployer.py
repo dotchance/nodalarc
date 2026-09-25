@@ -1899,9 +1899,7 @@ class TestPodSpec:
             patch.dict(
                 "os.environ",
                 {
-                    "FRR_IMAGE": "test/frr:1",
                     "WIRING_GATE_IMAGE": "test/base:1",
-                    "PROBE_IMAGE": "test/probe:1",
                     "IMAGE_PULL_POLICY": "Never",
                 },
             ),
@@ -2057,9 +2055,7 @@ class TestPodSpec:
             patch.dict(
                 "os.environ",
                 {
-                    "FRR_IMAGE": "test/frr:1",
                     "WIRING_GATE_IMAGE": "test/base:1",
-                    "PROBE_IMAGE": "test/probe:1",
                     "IMAGE_PULL_POLICY": "Never",
                 },
             ),
@@ -2112,9 +2108,7 @@ class TestPodSpec:
             patch.dict(
                 "os.environ",
                 {
-                    "FRR_IMAGE": "test/frr:1",
                     "WIRING_GATE_IMAGE": "test/base:1",
-                    "PROBE_IMAGE": "test/probe:1",
                     "IMAGE_PULL_POLICY": "Never",
                 },
             ),
@@ -2162,9 +2156,7 @@ class TestPodSpec:
             patch.dict(
                 "os.environ",
                 {
-                    "FRR_IMAGE": "test/frr:1",
                     "WIRING_GATE_IMAGE": "test/base:1",
-                    "PROBE_IMAGE": "test/probe:1",
                     "IMAGE_PULL_POLICY": "Never",
                 },
             ),

@@ -8,8 +8,6 @@ workloadDevImageOverrides: ""
 
 images:
   base: nodalarc/base:dev
-  frr: nodalarc/frr:dev
-  probe: nodalarc/probe:dev
   ome: nodalarc/ome:dev
   vf: nodalarc/vf:dev
   scheduler: nodalarc/scheduler:dev

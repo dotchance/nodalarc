@@ -45,8 +45,6 @@ spec:
               value: {{ required "runtimeRelease is required" .Values.runtimeRelease | quote }}
             - name: NODALARC_NATS_URL
               value: {{ include "nodalarc.nats-url" (dict "Values" .Values "user" "service" "hostNetwork" false) | quote }}
-            - name: FRR_IMAGE
-              value: {{ required "images.frr is required" .Values.images.frr | quote }}
             - name: WIRING_GATE_IMAGE
               value: {{ required "images.base is required" .Values.images.base | quote }}
 {{- if .Values.workloadDevImageOverrides }}
@@ -55,8 +53,6 @@ spec:
             - name: WORKLOAD_DEV_IMAGE_OVERRIDES
               value: {{ .Values.workloadDevImageOverrides | quote }}
 {{- end }}
-            - name: PROBE_IMAGE
-              value: {{ required "images.probe is required" .Values.images.probe | quote }}
             - name: IMAGE_PULL_POLICY
               value: {{ .Values.imagePullPolicy | quote }}
           ports:

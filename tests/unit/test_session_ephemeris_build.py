@@ -91,16 +91,17 @@ def _load_test_ctx():
     return ctx, sats, gs_file
 
 
-# Element validity epoch, also declared by the shipped catalog session below.
+# Element validity epoch of the constructed satellites.
 EPOCH = 1780876800.0  # 2026-06-08T00:00:00 UTC
 
 
 class TestBuildSessionEphemeris:
     def test_epoch_matches_the_owned_anchor(self):
         """The shipped session's element epoch and node population reach the wire."""
-        session, _resolved, gs_file, sats, addressing, neighbors, candidates = (
+        session, resolved, gs_file, sats, addressing, neighbors, candidates = (
             load_runtime_ome_test_inputs(origin="test.session_ephemeris")
         )
+        start = datetime.fromisoformat(resolved.time.start_time.replace("Z", "+00:00")).timestamp()
         ctx = build_step_context(
             satellites=sats,
             addressing=addressing,
@@ -113,8 +114,8 @@ class TestBuildSessionEphemeris:
             body_frames=session.body_frames,
         )
         for sat in sats:
-            assert sat.elements_epoch_unix == EPOCH
-        eph = build_session_ephemeris(ctx, EPOCH, epoch_id=0)
+            assert sat.elements_epoch_unix == start
+        eph = build_session_ephemeris(ctx, start, epoch_id=0)
         assert set(eph.nodes) == {sat.node_id for sat in sats} | set(ctx.gs_positions)
 
     def test_wire_elements_are_advanced_to_a_later_epoch(self):

@@ -53,24 +53,6 @@ MBB_BAD_OPS_CODES = {
     "OPERATOR_REPAIR_FAILED",
 }
 
-INTERMITTENT_CONNECTIVITY_WINDOWS = {
-    "earth-leo-polar": {
-        "disconnected_offset_seconds": 120,
-        "settle_seconds": 30,
-    }
-}
-
-# The two seam experiments carry no gateway-connectivity requirement: their
-# subject is the physical ISL transitions at the seam, covered by the
-# declared-parameter reference (tests/seam_reference.py), the offline
-# integration coverage (tests/integration/test_ome_to_pipeline.py) and the
-# recorded live seam qualification. The matrix deploys them, checks readiness,
-# routing and the state feed, and records the gateway probe as an observation.
-PHYSICAL_EXPERIMENT_SESSIONS = {
-    "earth-leo-polar-seam": "range-driven seam losses and recoveries with co-rotating controls",
-    "earth-leo-polar-seam-tracking": "tracking-limit losses and recoveries while range and line of sight permit",
-}
-
 
 def _run_provenance_from_environment() -> dict[str, str]:
     fields = {
@@ -3330,129 +3312,6 @@ def _wait_for_playback_not_seeking(token: str, epoch_id: int, *, wait_s: int = 1
     }
 
 
-def _connectivity_expectation(session_id: str) -> dict:
-    if session_id in PHYSICAL_EXPERIMENT_SESSIONS:
-        return {"mode": "physical_experiment"}
-    window = INTERMITTENT_CONNECTIVITY_WINDOWS.get(session_id)
-    if window is None:
-        return {"mode": "continuous"}
-    return {"mode": "intermittent", **window}
-
-
-def check_physical_experiment_probe(token: str, perm: dict) -> dict:
-    """The seam experiments declare no gateway-connectivity requirement: the
-    gateway-to-gateway probe is run once, briefly, and recorded as an
-    observation. Their physical expectations are covered by the declared-
-    parameter reference, the offline integration coverage and the recorded
-    live seam qualification, not by this probe."""
-    probe = check_ping(token, perm, ground_wait_s=15)
-    summary = probe.get("result", "?")
-    if probe.get("failure_kind"):
-        summary = f"{summary} ({probe['failure_kind']})"
-    return {
-        "result": "PASS",
-        "mode": "physical_experiment",
-        "requirement": "none: gateway-to-gateway connectivity is not a requirement of this experiment",
-        "experiment": PHYSICAL_EXPERIMENT_SESSIONS.get(perm.get("id"), ""),
-        "coverage": {
-            "reference": "tests/seam_reference.py",
-            "integration": "tests/integration/test_ome_to_pipeline.py::TestPolarVisibilityTransitions",
-            "live": "the recorded seam qualification",
-        },
-        "gateway_probe_observation": probe,
-        "observed_outcome": f"gateway probe {summary}, recorded only",
-    }
-
-
-def _seek_playback_and_pause(token: str, target_sim_time: str) -> dict:
-    seek = request_json(
-        "POST",
-        "/api/v1/playback",
-        token=token,
-        json={"action": "seek", "target_sim_time": target_sim_time},
-        retries=3,
-    )
-    if seek.get("state") != "seeking" or "epoch_id" not in seek:
-        return {
-            "result": "FAIL",
-            "reason": "seek was not accepted into seeking state",
-            "seek": seek,
-        }
-    resumed = _wait_for_playback_not_seeking(token, int(seek["epoch_id"]), wait_s=120)
-    if resumed.get("result") != "PASS":
-        return {"result": "FAIL", "reason": resumed.get("reason"), "seek": seek, "resume": resumed}
-    paused = request_json(
-        "POST",
-        "/api/v1/playback",
-        token=token,
-        json={"action": "pause"},
-        retries=3,
-    )
-    if paused.get("state") != "paused" or not paused.get("paused"):
-        return {
-            "result": "FAIL",
-            "reason": "playback did not enter paused state after seek",
-            "seek": seek,
-            "resume": resumed,
-            "pause": paused,
-        }
-    return {"result": "PASS", "seek": seek, "resume": resumed, "pause": paused}
-
-
-def check_intermittent_connectivity(token: str, perm: dict) -> dict:
-    expectation = perm.get("connectivity_expectation") or {}
-    start_time = perm.get("session_start_time")
-    evidence: dict = {"result": "FAIL", "mode": "intermittent_ground_to_ground"}
-    if not start_time:
-        return {**evidence, "reason": "intermittent connectivity check requires session start time"}
-
-    start = _parse_api_datetime(str(start_time))
-    disconnected_target = start + timedelta(seconds=int(expectation["disconnected_offset_seconds"]))
-    settle_seconds = int(expectation.get("settle_seconds", 30))
-
-    try:
-        disconnected_control = _seek_playback_and_pause(token, disconnected_target.isoformat())
-        evidence["disconnected_control"] = disconnected_control
-        if disconnected_control.get("result") != "PASS":
-            evidence["reason"] = "could not establish deterministic disconnected window"
-            return evidence
-        time.sleep(settle_seconds)
-        disconnected_probe = check_ping(token, perm, ground_wait_s=15)
-        evidence["disconnected_probe"] = disconnected_probe
-        if disconnected_probe.get("result") != "FAIL":
-            evidence["reason"] = "intermittent observation window produced a routed path"
-            return evidence
-        if disconnected_probe.get("failure_kind") != "connectivity":
-            evidence["reason"] = (
-                "disconnected window probe did not complete an observation: "
-                f"{disconnected_probe.get('reason')}"
-            )
-            return evidence
-        if disconnected_probe.get("active_link_count", 0) <= 0:
-            evidence["reason"] = "disconnected window had no active physical links to observe"
-            return evidence
-        evidence["observed_outcome"] = "unreachable"
-        evidence["result"] = "PASS"
-        return evidence
-    finally:
-        evidence["resume_response"] = request_json(
-            "POST",
-            "/api/v1/playback",
-            token=token,
-            json={"action": "resume"},
-            retries=3,
-        )
-
-
-def check_declared_connectivity(token: str, perm: dict) -> dict:
-    expectation = perm.get("connectivity_expectation") or {"mode": "continuous"}
-    if expectation.get("mode") == "intermittent":
-        return check_intermittent_connectivity(token, perm)
-    if expectation.get("mode") == "physical_experiment":
-        return check_physical_experiment_probe(token, perm)
-    return check_ping(token, perm)
-
-
 SEEK_INTO_OVERLAP_OFFSET_S = 10
 
 
@@ -3893,10 +3752,10 @@ def run_permutation(perm: dict) -> dict:
         ws_result = check_websocket(token, step_seconds=perm.get("step_seconds", 1))
         evidence["websocket"] = ws_result
 
-        # Check declared connectivity. Ground sessions must prove a GS-originated path;
+        # Check connectivity. Ground sessions must prove a GS-originated path;
         # satellite-only sessions may fall back to an ISL loopback path.
-        print("  Checking declared connectivity...")
-        ping_result = check_declared_connectivity(token, perm)
+        print("  Checking connectivity...")
+        ping_result = check_ping(token, perm)
         evidence["ping"] = ping_result
         transit = ""
         if "transit_proven" in ping_result:
@@ -3906,20 +3765,10 @@ def run_permutation(perm: dict) -> dict:
                 f" sep={ping_result.get('separation', '?')}"
                 f" egress={ping_result.get('egress_dev', '?')}"
             )
-        observed_outcome = ping_result.get("observed_outcome")
-        if observed_outcome:
-            active_links = (ping_result.get("disconnected_probe") or {}).get(
-                "active_link_count", "?"
-            )
-            print(
-                f"  Connectivity: {ping_result.get('result', '?')} "
-                f"(runtime reported {observed_outcome}; active_links={active_links})"
-            )
-        else:
-            print(
-                f"  Ping: {ping_result.get('result', '?')}"
-                f" ({ping_result.get('src', '?')} -> {ping_result.get('dst', '?')}){transit}"
-            )
+        print(
+            f"  Ping: {ping_result.get('result', '?')}"
+            f" ({ping_result.get('src', '?')} -> {ping_result.get('dst', '?')}){transit}"
+        )
 
         # Determine pass/fail
         ping_ok = ping_result.get("result") == "PASS" or (
@@ -3937,7 +3786,7 @@ def run_permutation(perm: dict) -> dict:
             f"  {evidence['result']}: {pod_result['running']} pods, "
             f"{routing_result.get('neighbor_count', '?')} neighbors, "
             f"sim_time={'advancing' if ws_result['advancing'] else 'STATIC'}, "
-            f"connectivity={observed_outcome or ping_result.get('result', '?')}"
+            f"connectivity={ping_result.get('result', '?')}"
         )
 
     except Exception as exc:
@@ -4029,7 +3878,6 @@ def catalog_permutations(session_id: str | None = None) -> list[dict]:
                 "ground_topology": ground_topology,
                 "mbb_stations": mbb_stations,
                 "session_start_time": str(resolved.time.start_time),
-                "connectivity_expectation": _connectivity_expectation(path.stem),
                 "step_seconds": int(resolved.time.step_seconds),
                 "session_yaml": text,
                 "xfail": False,

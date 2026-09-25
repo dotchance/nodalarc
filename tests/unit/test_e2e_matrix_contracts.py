@@ -2,9 +2,9 @@
 # Licensed under the Apache License, Version 2.0. See LICENSE file.
 """Contracts for the e2e matrix acceptance helpers.
 
-These tests exercise the cluster-run script in the normal unit suite: continuous
-sessions require routed proof, intermittent sessions preserve valid unreachable
-outcomes, and the MBB lane records packet loss as routing behavior.
+These tests exercise the cluster-run script in the normal unit suite: every
+session requires routed proof, and the MBB lane records packet loss as routing
+behavior.
 """
 
 from __future__ import annotations
@@ -235,100 +235,6 @@ def test_check_ping_allows_skip_only_for_satellite_only_topology(monkeypatch) ->
 
     assert result["result"] == "SKIP"
     assert result["active_link_count"] == 0
-
-
-def test_connectivity_expectation_marks_polar_intermittent_and_the_seam_experiments_physical():
-    polar = e2e_matrix._connectivity_expectation("earth-leo-polar")  # noqa: SLF001
-    ordinary = e2e_matrix._connectivity_expectation("earth-leo-simple")  # noqa: SLF001
-    seam = e2e_matrix._connectivity_expectation("earth-leo-polar-seam")  # noqa: SLF001
-    tracking = e2e_matrix._connectivity_expectation("earth-leo-polar-seam-tracking")  # noqa: SLF001
-
-    assert polar == {
-        "mode": "intermittent",
-        "disconnected_offset_seconds": 120,
-        "settle_seconds": 30,
-    }
-    assert ordinary == {"mode": "continuous"}
-    assert seam == {"mode": "physical_experiment"}
-    assert tracking == {"mode": "physical_experiment"}
-    assert set(e2e_matrix.PHYSICAL_EXPERIMENT_SESSIONS) == {
-        "earth-leo-polar-seam",
-        "earth-leo-polar-seam-tracking",
-    }
-
-
-def test_physical_experiment_probe_is_recorded_and_never_required(monkeypatch) -> None:
-    """The seam experiments' gateway probe is an observation: its outcome, unreachable
-    included, is kept in full and the connectivity component passes on the absence
-    of a requirement, with the coverage that owns the physics named."""
-    calls: list[int | None] = []
-
-    def fake_ping(_token, _perm, *, ground_wait_s=None):
-        calls.append(ground_wait_s)
-        return {
-            "result": "FAIL",
-            "failure_kind": "connectivity",
-            "reason": "no route (kernel answered Network unreachable)",
-            "active_link_count": 5,
-        }
-
-    monkeypatch.setattr(e2e_matrix, "check_ping", fake_ping)
-    perm = {
-        "id": "earth-leo-polar-seam-tracking",
-        "connectivity_expectation": {"mode": "physical_experiment"},
-    }
-    result = e2e_matrix.check_declared_connectivity("t", perm)
-    assert result["result"] == "PASS" and result["mode"] == "physical_experiment"
-    assert result["gateway_probe_observation"]["failure_kind"] == "connectivity"
-    assert result["requirement"].startswith("none")
-    assert "tracking-limit" in result["experiment"]
-    assert result["coverage"]["reference"] == "tests/seam_reference.py"
-    assert "test_ome_to_pipeline.py" in result["coverage"]["integration"]
-    assert result["observed_outcome"] == "gateway probe FAIL (connectivity), recorded only"
-    assert calls == [15]
-
-
-def test_intermittent_connectivity_accepts_proven_runtime_unreachability(monkeypatch) -> None:
-    controls: list[str] = []
-    waits: list[int | None] = []
-
-    def fake_seek(_token: str, target_sim_time: str) -> dict:
-        controls.append(target_sim_time)
-        return {"result": "PASS"}
-
-    def fake_ping(_token: str, _perm: dict, *, ground_wait_s: int | None = None) -> dict:
-        waits.append(ground_wait_s)
-        return {
-            "result": "FAIL",
-            "failure_kind": "connectivity",
-            "reason": "kernel answered Network is unreachable",
-            "active_link_count": 34,
-        }
-
-    monkeypatch.setattr(e2e_matrix, "_seek_playback_and_pause", fake_seek)
-    monkeypatch.setattr(e2e_matrix, "check_ping", fake_ping)
-    monkeypatch.setattr(e2e_matrix.time, "sleep", lambda _seconds: None)
-    monkeypatch.setattr(
-        e2e_matrix,
-        "request_json",
-        lambda *args, **kwargs: {"state": "playing", "paused": False},
-    )
-
-    result = e2e_matrix.check_intermittent_connectivity(
-        "token",
-        {
-            "session_start_time": "2026-06-08T00:00:00Z",
-            "connectivity_expectation": e2e_matrix._connectivity_expectation(  # noqa: SLF001
-                "earth-leo-polar"
-            ),
-        },
-    )
-
-    assert result["result"] == "PASS"
-    assert result["disconnected_probe"]["result"] == "FAIL"
-    assert result["observed_outcome"] == "unreachable"
-    assert controls == ["2026-06-08T00:02:00+00:00"]
-    assert waits == [15]
 
 
 def test_ground_probe_reaches_candidate_after_first_bounded_sweep(monkeypatch) -> None:
@@ -699,36 +605,6 @@ def test_sweep_verdict_never_turns_failed_or_absent_probes_into_disconnection() 
     nothing = verdict([], "no transit-capable probe pair")
     assert nothing["failure_kind"] == "probe"
     assert nothing["reason"].startswith("no probe executed")
-
-
-def test_intermittent_connectivity_refuses_a_probe_that_did_not_complete(monkeypatch) -> None:
-    monkeypatch.setattr(e2e_matrix, "_seek_playback_and_pause", lambda _t, _s: {"result": "PASS"})
-    monkeypatch.setattr(
-        e2e_matrix,
-        "check_ping",
-        lambda _t, _p, *, ground_wait_s=None: {
-            "result": "FAIL",
-            "failure_kind": "probe",
-            "reason": "probe failed: no published router loopback for gs-x",
-            "active_link_count": 35,
-        },
-    )
-    monkeypatch.setattr(e2e_matrix.time, "sleep", lambda _seconds: None)
-    monkeypatch.setattr(
-        e2e_matrix, "request_json", lambda *a, **k: {"state": "playing", "paused": False}
-    )
-
-    result = e2e_matrix.check_intermittent_connectivity(
-        "token",
-        {
-            "session_start_time": "2026-06-08T00:00:00Z",
-            "connectivity_expectation": e2e_matrix._connectivity_expectation("earth-leo-polar"),  # noqa: SLF001
-        },
-    )
-
-    assert result["result"] == "FAIL"
-    assert "did not complete an observation" in result["reason"]
-    assert "observed_outcome" not in result
 
 
 def test_harness_targets_no_container_by_literal_name_or_derived_pod_name() -> None:

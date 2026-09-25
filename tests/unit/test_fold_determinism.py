@@ -69,6 +69,7 @@ class TestFoldDeterminism:
         isl_state: dict = {}
         gs_state: dict = {}
         associations: dict = {}
+        pending: dict = {}
         step_events_all = []
         for step in range(n_steps + 1):
             result = compute_step(
@@ -80,8 +81,10 @@ class TestFoldDeterminism:
                 isl_state,
                 gs_state,
                 associations,
+                pending,
             )
             associations = result.associations
+            pending = result.pending_teardowns
             step_events_all.extend(result.events)
 
         assert len(step_events_all) == len(window_events), (
@@ -187,6 +190,7 @@ class TestFoldDeterminism:
         seed_isl: dict = {}
         seed_gs: dict = {}
         seed_assoc: frozenset = {}
+        seed_pending: dict = {}
         for step in range(11):
             result = compute_step(
                 ctx,
@@ -197,8 +201,10 @@ class TestFoldDeterminism:
                 seed_isl,
                 seed_gs,
                 seed_assoc,
+                seed_pending,
             )
             seed_assoc = result.associations
+            seed_pending = result.pending_teardowns
 
         # Now run from the seeded state: batch vs tick-by-tick
         seed_epoch = epoch_unix + 11 * step_seconds
@@ -217,6 +223,7 @@ class TestFoldDeterminism:
             initial_isl_state=dict(seed_isl),
             initial_gs_state=dict(seed_gs),
             initial_associations=seed_assoc,
+            initial_pending_teardowns=seed_pending,
             ground_link_model=session.ground_link_model,
             body_frames=session.body_frames,
         )
@@ -225,6 +232,7 @@ class TestFoldDeterminism:
         tick_isl = dict(seed_isl)
         tick_gs = dict(seed_gs)
         tick_assoc = seed_assoc
+        tick_pending = seed_pending
         tick_events = []
         for step in range(n_steps + 1):
             result = compute_step(
@@ -236,8 +244,10 @@ class TestFoldDeterminism:
                 tick_isl,
                 tick_gs,
                 tick_assoc,
+                tick_pending,
             )
             tick_assoc = result.associations
+            tick_pending = result.pending_teardowns
             tick_events.extend(result.events)
 
         assert len(tick_events) == len(window_events), (
@@ -248,8 +258,9 @@ class TestFoldDeterminism:
             assert te.data.model_dump_json() == we.data.model_dump_json(), (
                 f"Event {i} ({te.event_type}): data mismatch at index {i}"
             )
-        # Final association state must also match
+        # Final association and teardown state must also match
         assert tick_assoc == window.associations, "Final associations must match"
+        assert tick_pending == window.pending_teardowns, "Final pending teardowns must match"
 
     def test_cross_window_state_handoff(self):
         """NON-NEGOTIABLE GATE: fold state survives a window boundary.
@@ -281,6 +292,7 @@ class TestFoldDeterminism:
         a_isl: dict = {}
         a_gs: dict = {}
         a_assoc: frozenset = {}
+        a_pending: dict = {}
         a_events = []
         for step in range(61):
             result = compute_step(
@@ -292,14 +304,17 @@ class TestFoldDeterminism:
                 a_isl,
                 a_gs,
                 a_assoc,
+                a_pending,
             )
             a_assoc = result.associations
+            a_pending = result.pending_teardowns
             a_events.extend(result.events)
 
         # --- Path B: two halves with explicit state handoff ---
         b_isl: dict = {}
         b_gs: dict = {}
         b_assoc: frozenset = {}
+        b_pending: dict = {}
         b_events = []
 
         # First half: steps 0..boundary
@@ -313,8 +328,10 @@ class TestFoldDeterminism:
                 b_isl,
                 b_gs,
                 b_assoc,
+                b_pending,
             )
             b_assoc = result.associations
+            b_pending = result.pending_teardowns
             b_events.extend(result.events)
 
         # Snapshot the boundary state (simulates what _LookAheadThread returns)
@@ -332,8 +349,10 @@ class TestFoldDeterminism:
                 b_isl,
                 b_gs,
                 b_assoc,
+                b_pending,
             )
             b_assoc = result.associations
+            b_pending = result.pending_teardowns
             b_events.extend(result.events)
 
         # (a) Event count must match

@@ -133,7 +133,7 @@ simulation:
     max_pairs_per_tick: 2000
 
 time:
-  start_time: '2026-06-08T00:00:00Z'
+  start_time: '2026-06-08T13:42:00Z'
   step_seconds: 1
   compression: 1
 ```

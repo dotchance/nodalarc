@@ -1,0 +1,7 @@
+site_set:
+  id: earth-tidbinbilla-dtn-lab-sites
+  display_name: Earth DTN lab sites, Tidbinbilla
+  sites:
+  - nodalarc:sites/earth/au/earth-au-tidbinbilla-dtn-lab.yaml
+  notes: One Earth site pairing a LEO gateway with a uD3TN endpoint host, at the Canberra Deep Space
+    Communication Complex.

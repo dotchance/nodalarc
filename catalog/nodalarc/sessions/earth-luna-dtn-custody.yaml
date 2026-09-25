@@ -89,7 +89,7 @@ segments:
       bbm_acquire_timeout_ticks: 1
 - id: dtn_earth_ground
   placement:
-    from_site_set: nodalarc:site-sets/earth/earth-dtn-lab-sites.yaml
+    from_site_set: nodalarc:site-sets/earth/earth-tidbinbilla-dtn-lab-sites.yaml
   apply:
     scheduling:
       selection_policy:

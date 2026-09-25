@@ -50,6 +50,8 @@ class FeatureCategory(StrEnum):
     WORKLOAD_ADAPTER = "workload_adapter"
     FORWARDING_CLASS = "forwarding_class"
     ROUTER_DOMAINS = "router_domains"
+    ROUTING_LINK_RATE = "routing_link_rate"
+    ROUTING_SID_CAPACITY = "routing_sid_capacity"
 
 
 # Informational notes shown with unsupported features.
@@ -164,11 +166,12 @@ def registered_routing_support(protocol: str) -> RoutingProtocolSupport | None:
 
     The capabilities and address families are every capability and family
     some adapter renders for the protocol; the BFD bounds span the ranges of
-    the adapters that render BFD for it, and the domains per router are the
-    most any adapter renders. Authoring surfaces offer these choices, so an
-    adapter that a session does not use never narrows them. Resolution
-    decides for each domain member against its own adapter. None when no
-    registered adapter renders the protocol.
+    the adapters that render BFD for it, the domains per router are the most
+    any adapter renders, the link rate floor is the lowest any adapter
+    declares, and the prefix-SID capacity the largest. Authoring surfaces
+    offer these choices, so an adapter that a session does not use never
+    narrows them. Resolution decides for each domain member against its own
+    adapter. None when no registered adapter renders the protocol.
     """
     declared = [
         support.routing[protocol]
@@ -181,12 +184,20 @@ def registered_routing_support(protocol: str) -> RoutingProtocolSupport | None:
     address_families = frozenset().union(*(item.address_families for item in declared))
     bounded = [item.domains_per_router for item in declared if item.domains_per_router is not None]
     domains_per_router = max(bounded) if len(bounded) == len(declared) else None
+    floors = [item.link_rate_floor_mbps for item in declared]
+    link_rate_floor_mbps = None if None in floors else min(floors)
+    capacities = [
+        item.sid_index_capacity for item in declared if item.sid_index_capacity is not None
+    ]
+    sid_index_capacity = max(capacities) if capacities else None
     bfd_declared = [item.bfd for item in declared if item.bfd is not None]
     if not bfd_declared:
         return RoutingProtocolSupport(
             capabilities=capabilities,
             address_families=address_families,
             domains_per_router=domains_per_router,
+            link_rate_floor_mbps=link_rate_floor_mbps,
+            sid_index_capacity=sid_index_capacity,
         )
     bounds = {
         name: (
@@ -203,6 +214,8 @@ def registered_routing_support(protocol: str) -> RoutingProtocolSupport | None:
         ),
         address_families=address_families,
         domains_per_router=domains_per_router,
+        link_rate_floor_mbps=link_rate_floor_mbps,
+        sid_index_capacity=sid_index_capacity,
     )
 
 
@@ -338,6 +351,94 @@ def check_router_domains(
             ),
         )
         for (protocol, domain_ids), node_ids in sorted(excess.items())
+    ]
+
+
+def _protocol_support(adapter: str, protocol: str) -> RoutingProtocolSupport:
+    support = registered_adapter_support().get(adapter)
+    if support is None:
+        raise ValueError(f"workload adapter {adapter!r} is not registered")
+    protocol_support = support.routing.get(protocol)
+    if protocol_support is None:
+        raise ValueError(f"workload adapter {adapter!r} renders no {protocol!r} routing")
+    return protocol_support
+
+
+def _named_links(links: list[tuple[str, str, float]]) -> str:
+    ordered = sorted(links)
+    shown = ", ".join(
+        f"{node_id} {interface} at {rate:g} Mb/s"
+        for node_id, interface, rate in ordered[:_NAMED_MEMBER_LIMIT]
+    )
+    if len(ordered) <= _NAMED_MEMBER_LIMIT:
+        return shown
+    return f"{shown} and {len(ordered) - _NAMED_MEMBER_LIMIT} more"
+
+
+def check_link_rates(
+    *,
+    domain_id: str,
+    protocol: str,
+    adapter: str,
+    links: Mapping[tuple[str, str], float],
+) -> list[UnsupportedFeature]:
+    """Check the fixed links a domain's members run ``protocol`` over against
+    their adapter's link rate floor.
+
+    ``links`` maps each ``(node_id, interface)`` of a member that runs
+    ``adapter`` to the transmit rate of that interface's terminal, in Mb/s.
+    A link at or below the floor has no metric in the adapter, and the
+    refusal names the links.
+    """
+    floor = _protocol_support(adapter, protocol).link_rate_floor_mbps
+    if floor is None:
+        return []
+    slow = [
+        (node_id, interface, rate) for (node_id, interface), rate in links.items() if rate <= floor
+    ]
+    if not slow:
+        return []
+    return [
+        UnsupportedFeature(
+            category=FeatureCategory.ROUTING_LINK_RATE,
+            value=f"{protocol}:{floor:g}",
+            message=(
+                f"routing domain {domain_id!r} runs {protocol} over fixed links at or below "
+                f"{floor:g} Mb/s ({_named_links(slow)}); workload adapter {adapter!r} has no "
+                f"{protocol} metric for them"
+            ),
+        )
+    ]
+
+
+def check_sid_indices(
+    *,
+    domain_id: str,
+    protocol: str,
+    adapter: str,
+    indices: Mapping[str, int],
+) -> list[UnsupportedFeature]:
+    """Check a segment-routing domain's prefix-SID indices against the
+    capacity of the members' adapter.
+
+    ``indices`` maps each member that runs ``adapter`` to its index.
+    """
+    capacity = _protocol_support(adapter, protocol).sid_index_capacity
+    if capacity is None:
+        raise ValueError(f"workload adapter {adapter!r} renders no {protocol!r} segment routing")
+    beyond = tuple(node_id for node_id, index in indices.items() if index > capacity)
+    if not beyond:
+        return []
+    return [
+        UnsupportedFeature(
+            category=FeatureCategory.ROUTING_SID_CAPACITY,
+            value=f"{protocol}:{capacity}",
+            message=(
+                f"routing domain {domain_id!r} gives {_named_members(beyond)} prefix-SID "
+                f"indices up to {max(indices[node_id] for node_id in beyond)}; workload adapter "
+                f"{adapter!r} renders indices up to {capacity}"
+            ),
+        )
     ]
 
 

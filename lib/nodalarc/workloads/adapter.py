@@ -18,6 +18,7 @@ from substrate truth. The author says who; the platform says where.
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Protocol, runtime_checkable
@@ -111,19 +112,44 @@ class RoutingProtocolSupport:
     ``address_families`` are the IP address families the adapter routes
     with the protocol; every declaration names them. ``domains_per_router``
     is the most domains of the protocol the adapter renders on one router,
-    or None when it renders any number.
+    or None when it renders any number. ``link_rate_floor_mbps`` is the
+    transmit rate at or below which the adapter has no metric for a fixed
+    link the protocol runs over, or None when it renders every rate; every
+    declaration names it. ``sid_index_capacity`` is the largest prefix-SID
+    index the adapter renders, declared exactly when it renders segment
+    routing.
     """
 
     capabilities: frozenset[RoutingCapability] = frozenset()
     bfd: BfdSupport | None = None
     address_families: frozenset[AddressFamily] = field(kw_only=True)
     domains_per_router: int | None = field(kw_only=True)
+    link_rate_floor_mbps: float | None = field(kw_only=True)
+    sid_index_capacity: int | None = field(default=None, kw_only=True)
 
     def __post_init__(self) -> None:
         if self.domains_per_router is not None and self.domains_per_router < 1:
             raise ValueError(
                 "routing support must render at least one domain per router; "
                 f"got {self.domains_per_router}"
+            )
+        if self.link_rate_floor_mbps is not None and not (
+            math.isfinite(self.link_rate_floor_mbps) and self.link_rate_floor_mbps >= 0
+        ):
+            raise ValueError(
+                "routing support must declare a finite, non-negative link rate floor; "
+                f"got {self.link_rate_floor_mbps}"
+            )
+        renders_segment_routing = "segment_routing" in self.capabilities
+        if renders_segment_routing != (self.sid_index_capacity is not None):
+            raise ValueError(
+                "routing support declares a prefix-SID index capacity exactly when it "
+                "renders segment routing"
+            )
+        if self.sid_index_capacity is not None and self.sid_index_capacity < 1:
+            raise ValueError(
+                "routing support must render at least one prefix-SID index; "
+                f"got {self.sid_index_capacity}"
             )
         unknown_capabilities = sorted(set(self.capabilities) - set(ROUTING_CAPABILITIES))
         if unknown_capabilities:
@@ -183,6 +209,14 @@ class SessionContext:
         return found
 
 
+class AdapterRenderRefusal(Exception):
+    """An adapter cannot render a resolved node.
+
+    ``render_node`` raises it with the reason, and the session fails with
+    that reason.
+    """
+
+
 @runtime_checkable
 class WorkloadAdapter(Protocol):
     """Translate one resolved node into its image's native configuration.
@@ -191,7 +225,8 @@ class WorkloadAdapter(Protocol):
     field carries. The explicit registry keys on it. ``support`` declares the
     session features the adapter renders; runtime support reads it to gate
     sessions and to derive router populations. ``render_node`` is pure:
-    resolved facts in, native config out, no I/O and no Kubernetes calls.
+    resolved facts in, native config out, no I/O and no Kubernetes calls. It
+    raises ``AdapterRenderRefusal`` when it cannot render the node.
     """
 
     name: str

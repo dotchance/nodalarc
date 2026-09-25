@@ -17,7 +17,9 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from adapters.frr.support import FRR_SUPPORT
+from nodalarc.workloads.adapter import AdapterRenderRefusal
+
+from adapters.frr.support import FRR_SRGB, FRR_SUPPORT
 
 if TYPE_CHECKING:
     from nodalarc.model_validation import AddressFamily
@@ -25,9 +27,7 @@ if TYPE_CHECKING:
 
 # The IGP daemon FRR runs for each link-state protocol it renders.
 _IGP_DAEMONS = {"isis": "isisd", "ospf": "ospfd"}
-# Segment Routing Global and Local Blocks a router advertises; the SRGB is
-# router-wide, shared by every segment-routing domain it participates in.
-SRGB = (16000, 23999)
+# The Segment Routing Local Block a router advertises.
 SRLB = (40000, 49999)
 # Every FRR daemon logs to one file in the integrated configuration.
 LOG_FILE = "/var/log/frr/frr.log"
@@ -54,18 +54,18 @@ def domain_supported(domain: ResolvedRoutingDomain) -> None:
     """
     protocol_support = FRR_SUPPORT.routing.get(domain.protocol)
     if protocol_support is None:
-        raise ValueError(
+        raise AdapterRenderRefusal(
             f"routing domain {domain.domain_id!r} uses protocol {domain.protocol!r}, "
             "which the FRR adapter does not render"
         )
     unrendered = sorted(set(domain.capabilities) - protocol_support.capabilities)
     if unrendered:
-        raise ValueError(
+        raise AdapterRenderRefusal(
             f"routing domain {domain.domain_id!r} declares capabilities {unrendered} "
             f"that the FRR adapter does not render for {domain.protocol!r}"
         )
     if domain.timers.bfd.enabled and protocol_support.bfd is None:
-        raise ValueError(
+        raise AdapterRenderRefusal(
             f"routing domain {domain.domain_id!r} enables BFD, which the FRR adapter does "
             f"not render for {domain.protocol!r}"
         )
@@ -77,7 +77,7 @@ def resolve_router_stack(
 ) -> RouterStack:
     """Select the daemons and fragments for a router in ``domains``."""
     if not domains:
-        raise ValueError("an FRR router participates in at least one routing domain")
+        raise AdapterRenderRefusal("an FRR router participates in at least one routing domain")
     for domain in domains:
         domain_supported(domain)
     protocols = {domain.protocol for domain in domains}
@@ -85,7 +85,7 @@ def resolve_router_stack(
         limit = FRR_SUPPORT.routing[protocol].domains_per_router
         shared = [domain.domain_id for domain in domains if domain.protocol == protocol]
         if limit is not None and len(shared) > limit:
-            raise ValueError(
+            raise AdapterRenderRefusal(
                 f"an FRR router renders {limit} {protocol} domain(s); this router "
                 f"participates in {shared}"
             )
@@ -131,13 +131,13 @@ def validate_sid_indices(
     The resolver owns SID allocation. FRR owns only the SRGB size. No caller
     derives SID indices from plane/slot, node kind, or ground-station order.
     """
-    srgb_size = SRGB[1] - SRGB[0] + 1
+    srgb_size = FRR_SRGB[1] - FRR_SRGB[0] + 1
     for domain in domains:
         if "segment_routing" not in domain.capabilities:
             continue
         indices = sid_by_domain.get(domain.domain_id)
         if not indices:
-            raise ValueError(
+            raise AdapterRenderRefusal(
                 f"segment routing domain {domain.domain_id!r} requires resolved SID indices"
             )
         invalid = {node_id: sid for node_id, sid in indices.items() if sid <= 0 or sid > srgb_size}
@@ -145,4 +145,6 @@ def validate_sid_indices(
             examples = ", ".join(
                 f"{node_id}={sid}" for node_id, sid in sorted(invalid.items())[:10]
             )
-            raise ValueError(f"resolved SID index exceeds SRGB size {srgb_size}: {examples}")
+            raise AdapterRenderRefusal(
+                f"resolved SID index exceeds SRGB size {srgb_size}: {examples}"
+            )

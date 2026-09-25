@@ -9,6 +9,7 @@ import itertools
 import pytest
 from nodalarc.models.resolved_session import ResolvedRoutingDomain
 from nodalarc.models.segment_session import BfdConfig, RoutingTimers
+from nodalarc.workloads.adapter import AdapterRenderRefusal
 
 from adapters.frr.stack import resolve_router_stack, validate_sid_indices
 from adapters.frr.support import FRR_SUPPORT
@@ -157,7 +158,9 @@ def test_frr_renders_one_domain_of_each_igp_per_router() -> None:
 @pytest.mark.parametrize("protocol", ["isis", "ospf"])
 def test_a_second_domain_of_one_igp_fails_loudly(protocol) -> None:
     domains = (_domain(protocol, domain_id="a"), _domain(protocol, domain_id="b"))
-    with pytest.raises(ValueError, match=rf"renders 1 {protocol} domain\(s\).*\['a', 'b'\]"):
+    with pytest.raises(
+        AdapterRenderRefusal, match=rf"renders 1 {protocol} domain\(s\).*\['a', 'b'\]"
+    ):
         resolve_router_stack(domains, _IPV4)
 
 
@@ -178,12 +181,12 @@ def test_static_domains_combine_freely() -> None:
     ],
 )
 def test_domains_outside_the_frr_declaration_fail_loudly(domain, message) -> None:
-    with pytest.raises(ValueError, match=message):
+    with pytest.raises(AdapterRenderRefusal, match=message):
         resolve_router_stack((domain,), _IPV4)
 
 
 def test_a_router_in_no_domain_fails_loudly() -> None:
-    with pytest.raises(ValueError, match="at least one routing domain"):
+    with pytest.raises(AdapterRenderRefusal, match="at least one routing domain"):
         resolve_router_stack((), _IPV4)
 
 
@@ -200,12 +203,12 @@ class TestSidValidation:
 
     def test_segment_routing_requires_resolved_sid_indices(self) -> None:
         domains = (_domain("isis", ("segment_routing",)),)
-        with pytest.raises(ValueError, match="requires resolved SID"):
+        with pytest.raises(AdapterRenderRefusal, match="requires resolved SID"):
             validate_sid_indices(domains, {})
 
     def test_sid_indices_must_fit_srgb(self) -> None:
         domains = (_domain("isis", ("segment_routing",)),)
-        with pytest.raises(ValueError, match="exceeds SRGB"):
+        with pytest.raises(AdapterRenderRefusal, match="exceeds SRGB"):
             validate_sid_indices(domains, {"d1": {"space-sat-p00s00": 8001}})
 
     def test_each_segment_routing_domain_needs_its_own_indices(self) -> None:
@@ -213,7 +216,7 @@ class TestSidValidation:
             _domain("isis", ("segment_routing",), domain_id="core"),
             _domain("ospf", ("segment_routing",), domain_id="edge"),
         )
-        with pytest.raises(ValueError, match="'edge' requires resolved SID"):
+        with pytest.raises(AdapterRenderRefusal, match="'edge' requires resolved SID"):
             validate_sid_indices(domains, {"core": {"node-a": 1}})
 
     def test_non_sr_domain_ignores_sid_indices(self) -> None:

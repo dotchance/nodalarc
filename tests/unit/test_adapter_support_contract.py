@@ -5,6 +5,8 @@
 from __future__ import annotations
 
 import ast
+import dataclasses
+import math
 import subprocess
 import sys
 from pathlib import Path
@@ -16,8 +18,10 @@ from nodalarc.runtime_support import (
     FeatureCategory,
     RuntimeSupport,
     adapter_renders_routing,
+    check_link_rates,
     check_router_domains,
     check_routing_members,
+    check_sid_indices,
 )
 from nodalarc.workloads.adapter import AdapterSupport, BfdSupport, RoutingProtocolSupport
 
@@ -37,9 +41,12 @@ _STUB_SUPPORT = {
                 ),
                 address_families=frozenset({"ipv4"}),
                 domains_per_router=1,
+                link_rate_floor_mbps=None,
             ),
             "static": RoutingProtocolSupport(
-                address_families=frozenset({"ipv4", "ipv6"}), domains_per_router=None
+                address_families=frozenset({"ipv4", "ipv6"}),
+                domains_per_router=None,
+                link_rate_floor_mbps=None,
             ),
         }
     ),
@@ -222,10 +229,14 @@ def test_member_check_accepts_every_family_the_adapter_routes(stub_declarations)
 
 def test_routing_support_declares_known_address_families() -> None:
     with pytest.raises(ValueError, match="declare the address families"):
-        RoutingProtocolSupport(address_families=frozenset(), domains_per_router=1)
+        RoutingProtocolSupport(
+            address_families=frozenset(), domains_per_router=1, link_rate_floor_mbps=None
+        )
     with pytest.raises(ValueError, match="unknown address families"):
         RoutingProtocolSupport(
-            address_families=frozenset({"ipv4", "appletalk"}), domains_per_router=1
+            address_families=frozenset({"ipv4", "appletalk"}),
+            domains_per_router=1,
+            link_rate_floor_mbps=None,
         )
 
 
@@ -251,12 +262,19 @@ def test_registered_support_combines_every_adapter_rendering_the_protocol(
                         wide,
                         address_families=_IPV4,
                         domains_per_router=1,
+                        link_rate_floor_mbps=0.5,
+                        sid_index_capacity=8000,
                     ),
                     "ospf": RoutingProtocolSupport(
-                        frozenset({"mpls"}), address_families=_IPV4, domains_per_router=1
+                        frozenset({"mpls"}),
+                        address_families=_IPV4,
+                        domains_per_router=1,
+                        link_rate_floor_mbps=1.0,
                     ),
                     "static": RoutingProtocolSupport(
-                        address_families=_IPV4, domains_per_router=None
+                        address_families=_IPV4,
+                        domains_per_router=None,
+                        link_rate_floor_mbps=None,
                     ),
                 }
             ),
@@ -267,12 +285,14 @@ def test_registered_support_combines_every_adapter_rendering_the_protocol(
                         narrow,
                         address_families=_DUAL,
                         domains_per_router=3,
+                        link_rate_floor_mbps=2.0,
                     ),
                     "ospf": RoutingProtocolSupport(
                         frozenset({"mpls"}),
                         narrow,
                         address_families=_IPV4,
                         domains_per_router=None,
+                        link_rate_floor_mbps=None,
                     ),
                 }
             ),
@@ -281,7 +301,8 @@ def test_registered_support_combines_every_adapter_rendering_the_protocol(
     )
 
     # Every capability and family some adapter renders; BFD bounds spanning
-    # both ranges; the most domains per router any adapter renders.
+    # both ranges; the most domains per router any adapter renders; the lowest
+    # link rate floor and the largest prefix-SID capacity.
     assert registered_routing_support("isis") == RoutingProtocolSupport(
         frozenset({"mpls", "segment_routing", "traffic_engineering"}),
         BfdSupport(
@@ -289,17 +310,22 @@ def test_registered_support_combines_every_adapter_rendering_the_protocol(
         ),
         address_families=_DUAL,
         domains_per_router=3,
+        link_rate_floor_mbps=0.5,
+        sid_index_capacity=8000,
     )
     # One adapter renders OSPF BFD, so its range is offered; one renders any
-    # number of OSPF domains per router.
+    # number of OSPF domains per router, and one renders every link rate.
     assert registered_routing_support("ospf") == RoutingProtocolSupport(
         frozenset({"mpls"}),
         narrow,
         address_families=_IPV4,
         domains_per_router=None,
+        link_rate_floor_mbps=None,
     )
     assert registered_routing_support("static") == RoutingProtocolSupport(
-        address_families=_IPV4, domains_per_router=None
+        address_families=_IPV4,
+        domains_per_router=None,
+        link_rate_floor_mbps=None,
     )
     assert registered_routing_support("bgp") is None
 
@@ -319,7 +345,10 @@ def test_an_unused_adapter_never_narrows_registered_support(
             "narrow": AdapterSupport(
                 routing={
                     "isis": RoutingProtocolSupport(
-                        frozenset(), address_families=_IPV4, domains_per_router=1
+                        frozenset(),
+                        address_families=_IPV4,
+                        domains_per_router=1,
+                        link_rate_floor_mbps=10.0,
                     )
                 }
             ),
@@ -339,15 +368,26 @@ def test_the_capability_vocabulary_is_the_grammar_capabilities() -> None:
 def test_declarations_outside_the_grammar_are_refused() -> None:
     with pytest.raises(ValueError, match="routing protocol 'rip' outside the grammar"):
         AdapterSupport(
-            routing={"rip": RoutingProtocolSupport(address_families=_IPV4, domains_per_router=1)}
+            routing={
+                "rip": RoutingProtocolSupport(
+                    address_families=_IPV4, domains_per_router=1, link_rate_floor_mbps=None
+                )
+            }
         )
     with pytest.raises(ValueError, match="capabilities outside the grammar"):
-        RoutingProtocolSupport(frozenset({"warp"}), address_families=_IPV4, domains_per_router=1)
+        RoutingProtocolSupport(
+            frozenset({"warp"}),
+            address_families=_IPV4,
+            domains_per_router=1,
+            link_rate_floor_mbps=None,
+        )
 
 
 def test_routing_support_renders_at_least_one_domain_per_router() -> None:
     with pytest.raises(ValueError, match="at least one domain per router; got 0"):
-        RoutingProtocolSupport(address_families=_IPV4, domains_per_router=0)
+        RoutingProtocolSupport(
+            address_families=_IPV4, domains_per_router=0, link_rate_floor_mbps=None
+        )
 
 
 def test_router_domain_check_refuses_domains_beyond_the_declaration(stub_declarations) -> None:
@@ -373,3 +413,179 @@ def test_router_domain_check_accepts_different_protocols(stub_declarations) -> N
     routers = {"gs-a": (("core", "isis"), ("lab", "static"))}
 
     assert check_router_domains(adapter="stub", routers=routers) == []
+
+
+_LIMITED_SUPPORT = {
+    "limited": AdapterSupport(
+        routing={
+            "isis": RoutingProtocolSupport(
+                frozenset({"segment_routing"}),
+                address_families=_IPV4,
+                domains_per_router=1,
+                link_rate_floor_mbps=1.5,
+                sid_index_capacity=100,
+            ),
+            "static": RoutingProtocolSupport(
+                address_families=_IPV4, domains_per_router=None, link_rate_floor_mbps=None
+            ),
+        }
+    )
+}
+
+
+@pytest.fixture
+def limited_declarations(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(runtime_support, "registered_adapter_support", lambda: _LIMITED_SUPPORT)
+
+
+def test_link_rate_check_refuses_links_at_or_below_the_floor(limited_declarations) -> None:
+    links = {("sat-a", "isl0"): 1.5, ("sat-a", "isl1"): 1.5001, ("sat-b", "isl0"): 0.064}
+
+    [feature] = check_link_rates(domain_id="core", protocol="isis", adapter="limited", links=links)
+
+    assert feature.category == FeatureCategory.ROUTING_LINK_RATE
+    assert feature.value == "isis:1.5"
+    assert feature.message == (
+        "routing domain 'core' runs isis over fixed links at or below 1.5 Mb/s "
+        "(sat-a isl0 at 1.5 Mb/s, sat-b isl0 at 0.064 Mb/s); workload adapter 'limited' "
+        "has no isis metric for them"
+    )
+
+
+def test_link_rate_check_names_a_bounded_sample_of_many_links(limited_declarations) -> None:
+    links = {(f"sat-{index}", "isl0"): 1.0 for index in range(7)}
+
+    [feature] = check_link_rates(domain_id="core", protocol="isis", adapter="limited", links=links)
+
+    assert "(sat-0 isl0 at 1 Mb/s, " in feature.message
+    assert "sat-4 isl0 at 1 Mb/s and 2 more)" in feature.message
+
+
+def test_link_rate_check_accepts_rates_above_the_floor_and_protocols_without_one(
+    limited_declarations,
+) -> None:
+    assert (
+        check_link_rates(
+            domain_id="core", protocol="isis", adapter="limited", links={("sat-a", "isl0"): 1.6}
+        )
+        == []
+    )
+    assert (
+        check_link_rates(
+            domain_id="lab", protocol="static", adapter="limited", links={("gs-a", "isl0"): 0.001}
+        )
+        == []
+    )
+
+
+def test_sid_index_check_refuses_indices_beyond_the_capacity(limited_declarations) -> None:
+    [feature] = check_sid_indices(
+        domain_id="core", protocol="isis", adapter="limited", indices={"a": 100, "b": 101, "c": 250}
+    )
+
+    assert feature.category == FeatureCategory.ROUTING_SID_CAPACITY
+    assert feature.value == "isis:100"
+    assert feature.message == (
+        "routing domain 'core' gives node(s) b, c prefix-SID indices up to 250; "
+        "workload adapter 'limited' renders indices up to 100"
+    )
+    assert (
+        check_sid_indices(
+            domain_id="core", protocol="isis", adapter="limited", indices={"a": 1, "b": 100}
+        )
+        == []
+    )
+
+
+def test_routing_support_declares_a_sid_capacity_exactly_with_segment_routing() -> None:
+    with pytest.raises(ValueError, match="exactly when it renders segment routing"):
+        RoutingProtocolSupport(
+            frozenset({"segment_routing"}),
+            address_families=_IPV4,
+            domains_per_router=1,
+            link_rate_floor_mbps=None,
+        )
+    with pytest.raises(ValueError, match="exactly when it renders segment routing"):
+        RoutingProtocolSupport(
+            frozenset({"mpls"}),
+            address_families=_IPV4,
+            domains_per_router=1,
+            link_rate_floor_mbps=None,
+            sid_index_capacity=10,
+        )
+    with pytest.raises(ValueError, match="at least one prefix-SID index; got 0"):
+        RoutingProtocolSupport(
+            frozenset({"segment_routing"}),
+            address_families=_IPV4,
+            domains_per_router=1,
+            link_rate_floor_mbps=None,
+            sid_index_capacity=0,
+        )
+
+
+@pytest.mark.parametrize("floor", [-1.0, math.inf, math.nan])
+def test_routing_support_declares_a_finite_non_negative_link_rate_floor(floor: float) -> None:
+    with pytest.raises(ValueError, match="finite, non-negative link rate floor"):
+        RoutingProtocolSupport(
+            address_families=_IPV4, domains_per_router=1, link_rate_floor_mbps=floor
+        )
+
+
+def _frr_with_isis(monkeypatch: pytest.MonkeyPatch, **changes) -> None:
+    from adapters.frr.support import FRR_SUPPORT
+
+    narrowed = AdapterSupport(
+        routing={
+            **FRR_SUPPORT.routing,
+            "isis": dataclasses.replace(FRR_SUPPORT.routing["isis"], **changes),
+        }
+    )
+    monkeypatch.setattr(runtime_support, "registered_adapter_support", lambda: {"frr": narrowed})
+
+
+def test_a_session_over_links_at_or_below_its_adapter_floor_is_refused_at_resolution(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from nodalarc.resolve_session import load_session_resolution_from_file
+    from nodalarc.runtime_support import UnsupportedFeatureError
+
+    from tests.catalog_session_fixtures import shipped_read_view
+
+    # The polar shell's optical ISLs transmit 2000 Mb/s; a floor above that
+    # leaves no link the adapter could give a metric.
+    _frr_with_isis(monkeypatch, link_rate_floor_mbps=5000.0)
+
+    with pytest.raises(UnsupportedFeatureError) as refused:
+        load_session_resolution_from_file(
+            ROOT / "catalog/nodalarc/sessions/earth-leo-polar.yaml", catalog=shipped_read_view()
+        )
+
+    [feature] = refused.value.features
+    assert feature.category == FeatureCategory.ROUTING_LINK_RATE
+    assert feature.value == "isis:5000"
+    assert "runs isis over fixed links at or below 5000 Mb/s (" in feature.message
+    assert "isl0 at 2000 Mb/s" in feature.message
+    assert feature.message.endswith("workload adapter 'frr' has no isis metric for them")
+
+
+def test_a_segment_routing_domain_beyond_its_adapter_sid_capacity_is_refused_at_resolution(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from nodalarc.resolve_session import load_session_resolution_from_file
+    from nodalarc.runtime_support import UnsupportedFeatureError
+
+    from tests.catalog_session_fixtures import shipped_read_view
+
+    _frr_with_isis(monkeypatch, sid_index_capacity=10)
+
+    with pytest.raises(UnsupportedFeatureError) as refused:
+        load_session_resolution_from_file(
+            ROOT / "catalog/nodalarc/sessions/earth-leo-heo-geo-luna-reachability.yaml",
+            catalog=shipped_read_view(),
+        )
+
+    [feature] = refused.value.features
+    assert feature.category == FeatureCategory.ROUTING_SID_CAPACITY
+    assert feature.value == "isis:10"
+    assert "routing domain 'earth_domain' gives " in feature.message
+    assert feature.message.endswith("workload adapter 'frr' renders indices up to 10")

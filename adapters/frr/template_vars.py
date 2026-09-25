@@ -17,8 +17,10 @@ from typing import TYPE_CHECKING, Any
 
 from nodalarc.model_validation import ADDRESS_FAMILIES
 from nodalarc.models.resolved_session import IsisInstanceAreas, OspfInstanceAreas
+from nodalarc.workloads.adapter import AdapterRenderRefusal
 
-from adapters.frr.stack import LOG_FILE, SRGB, SRLB
+from adapters.frr.stack import LOG_FILE, SRLB
+from adapters.frr.support import FRR_MAXIMUM_IGP_METRIC, FRR_REFERENCE_BANDWIDTH_MBPS, FRR_SRGB
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
@@ -30,16 +32,7 @@ if TYPE_CHECKING:
         ResolvedSession,
     )
 
-# Reference bandwidth for fixed-link IGP metrics: the metric of a fixed link
-# is this value over the transmit rate of the interface's own terminal,
-# truncated to an integer and never below 1, so every terminal at or above
-# 100 Gb/s costs 1. Each end of a link sends at its own rate, so the two ends
-# of an asymmetric link carry different metrics.
-_REFERENCE_BANDWIDTH_MBPS = 100_000
 _MINIMUM_IGP_METRIC = 1
-# The largest interface metric each IGP accepts: the OSPF cost, and the IS-IS
-# wide metric below 2^24 - 1, which removes a link from SPF (RFC 5305).
-_MAXIMUM_IGP_METRIC = {"isis": 16_777_214, "ospf": 65_535}
 # IGP metric of an access (ground) link.
 _ACCESS_LINK_METRIC = 10
 # IGP metric of an Ethernet segment interface.
@@ -60,7 +53,7 @@ def build_template_vars_from_resolved(
 ) -> dict[str, Any]:
     """Build one router's FRR template inputs from the resolved runtime view."""
     if node.interfaces is None:
-        raise ValueError(f"resolved node {node.node_id!r} has no interface addresses")
+        raise AdapterRenderRefusal(f"resolved node {node.node_id!r} has no interface addresses")
     interfaces_by_domain = resolved.domain_interfaces(node.node_id)
     areas_by_domain = {
         areas.domain_id: areas for areas in resolved.instance_areas_by_node().get(node.node_id, ())
@@ -98,8 +91,8 @@ def build_template_vars_from_resolved(
             if node.interfaces.lo0.ipv6 is not None
             else None
         ),
-        "srgb_start": SRGB[0],
-        "srgb_end": SRGB[1],
+        "srgb_start": FRR_SRGB[0],
+        "srgb_end": FRR_SRGB[1],
         "srlb_start": SRLB[0],
         "srlb_end": SRLB[1],
         "wan_interfaces": [
@@ -188,11 +181,11 @@ def _domain_facts(
     routes into every instance it participates in, and redistributes into
     an instance the boundary routes exported to it.
     """
-    is_igp = domain.protocol in _MAXIMUM_IGP_METRIC
+    is_igp = domain.protocol in FRR_MAXIMUM_IGP_METRIC
     isis_areas = areas if isinstance(areas, IsisInstanceAreas) else None
     ospf_areas = areas if isinstance(areas, OspfInstanceAreas) else None
     if is_igp and areas is None:
-        raise ValueError(
+        raise AdapterRenderRefusal(
             f"router {node.node_id!r} has no resolved areas in {domain.protocol} instance "
             f"{domain.domain_id!r}"
         )
@@ -203,7 +196,7 @@ def _domain_facts(
         domain_sids = sid_by_domain.get(domain.domain_id)
         node_sid_index = None if domain_sids is None else domain_sids.get(node.node_id)
         if node_sid_index is None:
-            raise ValueError(
+            raise AdapterRenderRefusal(
                 f"segment routing domain {domain.domain_id!r} has no resolved SID index "
                 f"for {node.node_id!r}"
             )
@@ -271,10 +264,10 @@ def _igp_metric(node: ResolvedNode, interface: str, protocol: str) -> int:
     A metric above what the protocol accepts is refused rather than clipped.
     """
     transmit = node.wan_terminal(interface).transmit_mbps
-    metric = max(_MINIMUM_IGP_METRIC, int(_REFERENCE_BANDWIDTH_MBPS / transmit))
-    maximum = _MAXIMUM_IGP_METRIC[protocol]
+    metric = max(_MINIMUM_IGP_METRIC, int(FRR_REFERENCE_BANDWIDTH_MBPS / transmit))
+    maximum = FRR_MAXIMUM_IGP_METRIC[protocol]
     if metric > maximum:
-        raise ValueError(
+        raise AdapterRenderRefusal(
             f"node {node.node_id!r} interface {interface!r} transmits {transmit} Mb/s, "
             f"so its {protocol} metric {metric} exceeds the protocol maximum {maximum}"
         )
@@ -316,11 +309,11 @@ def _wan_links(resolved: ResolvedSession, node: ResolvedNode) -> dict[str, dict[
         peer_id = candidate.node_b if side == 0 else candidate.node_a
         peer = resolved.node_by_id(peer_id)
         if peer is None or peer.interfaces is None:
-            raise ValueError(
+            raise AdapterRenderRefusal(
                 f"link candidate {candidate.rule_id!r} references unresolved peer {peer_id!r}"
             )
         if name in links:
-            raise ValueError(f"node {node.node_id!r} names WAN interface {name!r} twice")
+            raise AdapterRenderRefusal(f"node {node.node_id!r} names WAN interface {name!r} twice")
         links[name] = {
             "peer": peer,
             "static_only": candidate.rule_id in static_rules,
@@ -329,7 +322,7 @@ def _wan_links(resolved: ResolvedSession, node: ResolvedNode) -> dict[str, dict[
         }
     for name in node.access_interfaces:
         if name in links:
-            raise ValueError(
+            raise AdapterRenderRefusal(
                 f"node {node.node_id!r} names WAN interface {name!r} as both a fixed "
                 "link and an access link"
             )
@@ -495,12 +488,12 @@ def _boundary_static_routes(
         from_domain = domains_by_id[export.from_]
         peer = resolved.node_by_id(peer_id)
         if peer is None:
-            raise ValueError(f"boundary candidate references unresolved peer {peer_id!r}")
+            raise AdapterRenderRefusal(f"boundary candidate references unresolved peer {peer_id!r}")
         exports = _boundary_export_prefixes(export, from_domain, resolved)
         for family in ADDRESS_FAMILIES:
             if family not in node.address_families:
                 if isinstance(export.prefixes, tuple) and exports[family]:
-                    raise ValueError(
+                    raise AdapterRenderRefusal(
                         f"boundary over {boundary.over!r} exports {family} prefixes "
                         f"to {node.node_id!r}, which carries no {family}"
                     )
@@ -513,7 +506,7 @@ def _boundary_static_routes(
                     # Literal prefixes of an uninstallable family are
                     # an authoring error — fail loud.
                     if isinstance(export.prefixes, tuple) and exports[family]:
-                        raise ValueError(
+                        raise AdapterRenderRefusal(
                             f"boundary over {boundary.over!r} exports {family} "
                             f"prefixes but peer {peer_id!r} has no {family} "
                             "loopback for install_via: peer_loopback"
@@ -571,7 +564,7 @@ def _segment_facts(node: ResolvedNode) -> dict[str, dict[str, Any]]:
         if (family, network) not in covered
     )
     if uncovered:
-        raise ValueError(
+        raise AdapterRenderRefusal(
             f"node {node.node_id!r} originates non-connected prefix(es) {uncovered}; "
             "FRR rendering supports connected segment prefixes and default routes"
         )
@@ -594,5 +587,5 @@ def _default_route_families(node: ResolvedNode) -> tuple[str, ...]:
 
 def _ip_from_interface(value: str | None, *, field: str) -> str:
     if value is None:
-        raise ValueError(f"required interface address is missing: {field}")
+        raise AdapterRenderRefusal(f"required interface address is missing: {field}")
     return str(ipaddress.ip_interface(value).ip)

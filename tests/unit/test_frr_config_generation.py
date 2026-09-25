@@ -17,10 +17,11 @@ from nodalarc.models.resolved_session import (
     SourceContext,
 )
 from nodalarc.resolve_session import load_session_resolution_from_file
-from nodalarc.workloads.adapter import SessionContext
+from nodalarc.workloads.adapter import AdapterRenderRefusal, SessionContext
 
 from adapters.frr.adapter import FRR_DAEMONS, FrrAdapter, _daemons_file
 from adapters.frr.stack import resolve_router_stack
+from adapters.frr.support import FRR_MAXIMUM_IGP_METRIC
 from adapters.frr.template_vars import build_template_vars_from_resolved
 from tests.catalog_session_fixtures import (
     build_catalog_session_fixture,
@@ -305,7 +306,7 @@ def test_resolved_template_vars_fail_loud_when_sr_sid_is_missing() -> None:
         for domain_id, sids in sid_by_domain.items()
     }
 
-    with pytest.raises(ValueError, match=f"no resolved SID index for {node_id!r}"):
+    with pytest.raises(AdapterRenderRefusal, match=f"no resolved SID index for {node_id!r}"):
         build_template_vars_from_resolved(
             resolved,
             resolved.node_by_id(node_id),
@@ -453,9 +454,9 @@ def test_bfd_disabled_runs_no_bfd_daemon_and_renders_no_bfd() -> None:
 
 
 def test_daemons_file_refuses_an_empty_or_unknown_selection() -> None:
-    with pytest.raises(ValueError, match="at least one daemon"):
+    with pytest.raises(AdapterRenderRefusal, match="at least one daemon"):
         _daemons_file(())
-    with pytest.raises(ValueError, match="unknown daemon"):
+    with pytest.raises(AdapterRenderRefusal, match="unknown daemon"):
         _daemons_file(("zebra", "notad"))
 
 
@@ -514,8 +515,28 @@ def test_a_metric_above_the_protocol_maximum_is_refused() -> None:
     node = _node_with_isl_transmit(1.0)
 
     assert template_vars._igp_metric(node, "isl0", "isis") == 100_000
-    with pytest.raises(ValueError, match="ospf metric 100000 exceeds the protocol maximum 65535"):
+    with pytest.raises(
+        AdapterRenderRefusal, match="ospf metric 100000 exceeds the protocol maximum 65535"
+    ):
         template_vars._igp_metric(node, "isl0", "ospf")
+
+
+@pytest.mark.parametrize("protocol", ["isis", "ospf"])
+def test_the_declared_link_rate_floor_is_where_the_metric_passes_the_protocol_maximum(
+    protocol: str,
+) -> None:
+    import math
+
+    from adapters.frr import template_vars
+    from adapters.frr.support import FRR_SUPPORT
+
+    floor = FRR_SUPPORT.routing[protocol].link_rate_floor_mbps
+    maximum = FRR_MAXIMUM_IGP_METRIC[protocol]
+
+    with pytest.raises(AdapterRenderRefusal, match=f"exceeds the protocol maximum {maximum}"):
+        template_vars._igp_metric(_node_with_isl_transmit(floor), "isl0", protocol)
+    above = math.nextafter(floor, math.inf)
+    assert template_vars._igp_metric(_node_with_isl_transmit(above), "isl0", protocol) == maximum
 
 
 def _node_with_isl_transmit(transmit_mbps: float):
@@ -536,8 +557,6 @@ def test_every_shipped_session_renders_valid_igp_metrics() -> None:
     from nodalarc.catalog_closure import FilesystemCatalogReadView
     from nodalarc.catalog_paths import CatalogRoots
 
-    from adapters.frr import template_vars
-
     catalog = FilesystemCatalogReadView(CatalogRoots.from_catalog_root("catalog/nodalarc"))
     sessions = sorted(Path("catalog/nodalarc/sessions").glob("*.yaml"))
     assert sessions
@@ -545,7 +564,7 @@ def test_every_shipped_session_renders_valid_igp_metrics() -> None:
     for path in sessions:
         resolved = load_session_resolution_from_file(path, catalog=catalog).resolved
         for domain in resolved.routing_domains:
-            maximum = template_vars._MAXIMUM_IGP_METRIC.get(domain.protocol)
+            maximum = FRR_MAXIMUM_IGP_METRIC.get(domain.protocol)
             if maximum is None:
                 continue
             for node_id in domain.node_ids:

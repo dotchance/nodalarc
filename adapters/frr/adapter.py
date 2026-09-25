@@ -20,7 +20,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from nodalarc.workloads.adapter import AdapterNodeConfig, SessionContext
+from nodalarc.workloads.adapter import AdapterNodeConfig, AdapterRenderRefusal, SessionContext
 
 from adapters.frr.stack import resolve_router_stack, validate_sid_indices
 from adapters.frr.support import FRR_ADAPTER_NAME, FRR_SUPPORT
@@ -63,10 +63,10 @@ FRR_DAEMONS: tuple[str, ...] = (
 def _daemons_file(selected: tuple[str, ...]) -> str:
     """The FRR daemons file enabling exactly the selected daemons."""
     if not selected:
-        raise ValueError("an FRR stack must select at least one daemon")
+        raise AdapterRenderRefusal("an FRR stack must select at least one daemon")
     unknown = sorted(set(selected) - set(FRR_DAEMONS))
     if unknown:
-        raise ValueError(f"FRR stack selected unknown daemon(s) {unknown}")
+        raise AdapterRenderRefusal(f"FRR stack selected unknown daemon(s) {unknown}")
     enabled = set(selected)
     return "".join(f"{daemon}={'yes' if daemon in enabled else 'no'}\n" for daemon in FRR_DAEMONS)
 
@@ -102,7 +102,7 @@ class FrrAdapter:
         node_id = resolved_node.node_id
         domains = resolved.routing_domains_for(node_id)
         if not domains:
-            raise ValueError(
+            raise AdapterRenderRefusal(
                 f"node {node_id!r} participates in no routing domain; the FRR adapter renders "
                 "routing participation"
             )

@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 import ipaddress
 from pathlib import Path
 
@@ -13,7 +14,7 @@ from nodalarc.configuration_yaml import load_configuration_yaml
 from nodalarc.models.resolved_session import ResolvedSession
 from nodalarc.resolve_session import SessionResolutionError, load_session_resolution_from_file
 from nodalarc.runtime_support import FeatureCategory, UnsupportedFeatureError
-from nodalarc.workloads.adapter import AdapterSupport, RoutingProtocolSupport, SessionContext
+from nodalarc.workloads.adapter import AdapterSupport, SessionContext
 
 from adapters.frr.adapter import FrrAdapter
 from adapters.frr.support import FRR_SUPPORT
@@ -174,12 +175,7 @@ def test_a_router_whose_adapter_cannot_route_its_ipv6_is_refused(
     ipv4_only = AdapterSupport(
         routing={
             **FRR_SUPPORT.routing,
-            "isis": RoutingProtocolSupport(
-                isis.capabilities,
-                isis.bfd,
-                address_families=frozenset({"ipv4"}),
-                domains_per_router=1,
-            ),
+            "isis": dataclasses.replace(isis, address_families=frozenset({"ipv4"})),
         }
     )
     monkeypatch.setattr(runtime_support, "registered_adapter_support", lambda: {"frr": ipv4_only})

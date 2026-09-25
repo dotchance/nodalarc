@@ -13,6 +13,7 @@ from nodalarc.catalog_closure import CatalogDocumentNotFound, FilesystemCatalogR
 from nodalarc.catalog_paths import CatalogRoots
 from nodalarc.resolve_session import SessionResolutionError, resolve_session
 from nodalarc.runtime_support import UnsupportedFeatureError
+from nodalarc.workloads.adapter import AdapterRenderRefusal
 
 from tests.catalog_session_fixtures import shipped_read_view
 
@@ -309,7 +310,9 @@ def _narrow_adapter_session(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, dom
             "narrow": AdapterSupport(
                 routing={
                     "isis": RoutingProtocolSupport(
-                        address_families=frozenset({"ipv4", "ipv6"}), domains_per_router=1
+                        address_families=frozenset({"ipv4", "ipv6"}),
+                        domains_per_router=1,
+                        link_rate_floor_mbps=None,
                     )
                 }
             ),
@@ -491,5 +494,5 @@ def test_a_routed_node_without_a_routing_workload_participates_in_no_domain(tmp_
     assert probe.forwarding == "routed"
     assert resolution.routing_domains_for(probe.node_id) == ()
     assert resolution.node_roles()[probe.node_id] == "forwarding_only"
-    with pytest.raises(ValueError, match="participates in no routing domain"):
+    with pytest.raises(AdapterRenderRefusal, match="participates in no routing domain"):
         FrrAdapter().render_node(probe, SessionContext(resolution))

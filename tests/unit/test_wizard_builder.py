@@ -414,11 +414,13 @@ def test_an_unused_registered_adapter_does_not_narrow_the_wizard(
                         narrow_bfd,
                         address_families=frozenset({"ipv4", "ipv6"}),
                         domains_per_router=1,
+                        link_rate_floor_mbps=None,
                     ),
                     "ospf": RoutingProtocolSupport(
                         frozenset(),
                         address_families=frozenset({"ipv4", "ipv6"}),
                         domains_per_router=1,
+                        link_rate_floor_mbps=None,
                     ),
                 }
             ),
@@ -458,11 +460,13 @@ def test_wizard_offers_only_what_some_registered_adapter_renders(monkeypatch) ->
                         ),
                         address_families=frozenset({"ipv4", "ipv6"}),
                         domains_per_router=1,
+                        link_rate_floor_mbps=None,
                     ),
                     "ospf": RoutingProtocolSupport(
                         frozenset({"mpls"}),
                         address_families=frozenset({"ipv4", "ipv6"}),
                         domains_per_router=1,
+                        link_rate_floor_mbps=None,
                     ),
                 }
             )
@@ -496,12 +500,14 @@ def test_wizard_refuses_an_extension_no_adapter_renders(monkeypatch, tmp_path: P
                         FRR_ISIS_BFD_SUPPORT,
                         address_families=frozenset({"ipv4", "ipv6"}),
                         domains_per_router=1,
+                        link_rate_floor_mbps=None,
                     ),
                     "ospf": RoutingProtocolSupport(
                         frozenset({"mpls"}),
                         FRR_OSPF_BFD_SUPPORT,
                         address_families=frozenset({"ipv4", "ipv6"}),
                         domains_per_router=1,
+                        link_rate_floor_mbps=None,
                     ),
                 }
             )
@@ -524,11 +530,13 @@ def test_wizard_refuses_bfd_for_a_protocol_that_renders_none(monkeypatch, tmp_pa
                         frozenset({"mpls", "traffic_engineering"}),
                         address_families=frozenset({"ipv4", "ipv6"}),
                         domains_per_router=1,
+                        link_rate_floor_mbps=None,
                     ),
                     "ospf": RoutingProtocolSupport(
                         frozenset({"mpls"}),
                         address_families=frozenset({"ipv4", "ipv6"}),
                         domains_per_router=1,
+                        link_rate_floor_mbps=None,
                     ),
                 }
             )

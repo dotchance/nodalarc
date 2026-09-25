@@ -80,8 +80,10 @@ from nodalarc.runtime_support import (
     UnsupportedFeatureError,
     adapter_renders_routing,
     bfd_spans_mixed_family_peers,
+    check_link_rates,
     check_router_domains,
     check_routing_members,
+    check_sid_indices,
 )
 from nodalarc.tle import tle_mean_elements
 
@@ -252,6 +254,7 @@ def resolve_session_with_assets(
     }
     _check_profile_env(workload_profiles, resolved_nodes)
     _refuse_bfd_where_peers_mix_families(resolved, workload_profiles)
+    _refuse_routing_beyond_adapter_limits(resolved, workload_profiles)
     return SessionResolution(
         resolved=resolved,
         catalog_session=cfg,
@@ -2758,6 +2761,68 @@ def _refuse_divergent_bfd_on_shared_interfaces(resolved: ResolvedSession) -> Non
             "every protocol on an interface shares one BFD session with each neighbor, so "
             "domains enabling BFD on one interface must declare the same BFD timers"
         )
+
+
+def _refuse_routing_beyond_adapter_limits(
+    resolved: ResolvedSession, workload_profiles: Mapping[str, Profile]
+) -> None:
+    """Refuse fixed links and prefix-SID indices outside what each router's
+    adapter declares it renders.
+
+    Each domain member's fixed links in the domain are checked against its
+    own adapter's link rate floor for the domain's protocol, at the transmit
+    rate of the member's terminal on the link, and a segment-routing
+    domain's indices against the member's adapter's capacity.
+    """
+    nodes = {node.node_id: node for node in resolved.nodes}
+    fixed_interfaces: dict[str, set[str]] = {}
+    for candidate in resolved.link_candidates:
+        if candidate.kind == "access":
+            continue
+        for node_id, interface in zip(
+            (candidate.node_a, candidate.node_b), candidate.fixed_interfaces, strict=True
+        ):
+            fixed_interfaces.setdefault(node_id, set()).add(interface)
+    interfaces_by_node = resolved.domain_interfaces_by_node()
+    sid_indices = resolved.sid_index_by_domain()
+    unsupported: list[UnsupportedFeature] = []
+    for domain in resolved.routing_domains:
+        links: dict[str, dict[tuple[str, str], float]] = {}
+        indices: dict[str, dict[str, int]] = {}
+        for node_id in domain.node_ids:
+            node = nodes[node_id]
+            adapter = workload_profiles[node.profile].adapter
+            if adapter is None:
+                raise SessionResolutionError(
+                    f"routing domain {domain.domain_id!r} participant {node_id!r} runs no adapter"
+                )
+            for interface in interfaces_by_node.get(node_id, {}).get(domain.domain_id, ()):
+                if interface in fixed_interfaces.get(node_id, ()):
+                    links.setdefault(adapter, {})[(node_id, interface)] = node.wan_terminal(
+                        interface
+                    ).transmit_mbps
+            if "segment_routing" in domain.capabilities:
+                indices.setdefault(adapter, {})[node_id] = sid_indices[domain.domain_id][node_id]
+        for adapter, adapter_links in sorted(links.items()):
+            unsupported.extend(
+                check_link_rates(
+                    domain_id=domain.domain_id,
+                    protocol=domain.protocol,
+                    adapter=adapter,
+                    links=adapter_links,
+                )
+            )
+        for adapter, adapter_indices in sorted(indices.items()):
+            unsupported.extend(
+                check_sid_indices(
+                    domain_id=domain.domain_id,
+                    protocol=domain.protocol,
+                    adapter=adapter,
+                    indices=adapter_indices,
+                )
+            )
+    if unsupported:
+        raise UnsupportedFeatureError(unsupported)
 
 
 def _refuse_bfd_where_peers_mix_families(

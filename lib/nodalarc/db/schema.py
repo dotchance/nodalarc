@@ -1,10 +1,11 @@
 # Copyright 2024-2026 .chance (dotchance)
 # Licensed under the Apache License, Version 2.0. See LICENSE file.
-"""SQLite schema for the session history database.
+"""SQLite schema for a session history database.
 
-VS-API owns one database file for every session's history; each row carries
-the run id of the session it belongs to. WAL mode serves concurrent reads.
-Column names match Pydantic model field names.
+VS-API keeps one history file per recorded session run; each row carries
+the run id of that session. WAL mode serves concurrent reads. Column names
+match Pydantic model field names. Every stored time is ISO 8601 text in UTC
+(``queries.history_time``), so times compare correctly as text.
 
 PRAGMA user_version records SCHEMA_VERSION. A database at another version was
 written by another release; it is refused, never migrated.
@@ -12,7 +13,7 @@ written by another release; it is refused, never migrated.
 
 import sqlite3
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 
 class HistorySchemaError(RuntimeError):

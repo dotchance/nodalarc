@@ -9,7 +9,7 @@ import sqlite3
 from datetime import UTC, datetime, timedelta
 
 import pytest
-from nodalarc.db.queries import get_metadata, insert_snapshot
+from nodalarc.db.queries import get_metadata, insert_active_links, insert_snapshot
 from nodalarc.db.retention import (
     RETAINED_FROM_KEY,
     HistoryBudgetError,
@@ -27,7 +27,7 @@ def _recording(path, *, snapshots: int, size: int = 10_000, step_s: int = 10) ->
     try:
         create_tables(conn)
         for index in range(snapshots):
-            at = (START + timedelta(seconds=step_s * index)).isoformat()
+            at = START + timedelta(seconds=step_s * index)
             insert_snapshot(
                 conn, session_id=SESSION, sim_time=at, wall_time=at, snapshot_json="x" * size
             )
@@ -82,20 +82,16 @@ def test_the_recording_being_written_drops_its_oldest_rows_and_says_where_it_sta
     _recording(active, snapshots=100)
     conn = sqlite3.connect(active)
     try:
-        # Link rows use isoformat's "+00:00"; snapshots from the state model use "Z".
-        # The cutoff treats both as the same instants.
         for index in range(100):
             at = START + timedelta(seconds=10 * index)
-            conn.execute(
-                "INSERT INTO link_events (session_id, sim_time, wall_time, event_type, node_a,"
-                " node_b) VALUES (?, ?, ?, 'LinkUp', 'sat-a', 'sat-b')",
-                (SESSION, at.isoformat(), at.isoformat()),
+            insert_active_links(
+                conn,
+                [("sat-a", "sat-b")],
+                session_id=SESSION,
+                sim_time=at,
+                wall_time=at,
+                reason="recording_start",
             )
-            conn.execute(
-                "UPDATE snapshots SET wall_time = ? WHERE sim_time = ?",
-                (at.isoformat().replace("+00:00", "Z"), at.isoformat()),
-            )
-        conn.commit()
         budget = used_bytes(conn) // 2
 
         enforce_history_budget(conn, history_path=active, session_id=SESSION, max_bytes=budget)

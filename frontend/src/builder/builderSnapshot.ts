@@ -180,5 +180,6 @@ export function builderSnapshotFromWorld(world: BuilderWorld): StateSnapshot {
     playback_speed: 1,
     client_arrival_ms: performance.now(),
     stale: false,
+    history_recording: null,
   };
 }

@@ -15,15 +15,23 @@ from nodalarc.db.queries import (
     insert_convergence_result,
     insert_link_down,
     insert_link_up,
+    insert_ome_lifecycle_event,
+    insert_operator_intervention_event,
     insert_probe_result,
     set_metadata,
 )
 from nodalarc.db.schema import create_tables
+from nodalarc.models.events import OpsEvent
 from nodalarc.models.link_events import LinkDown, LinkUp
 from nodalarc.models.metrics import ConvergenceResult, ProbeResult
+from nodalarc.models.ome_lifecycle import MbbTeardownLifecycleDetails
+from nodalarc.models.scheduler_ops import ActuationFailureClass, ActuationOpsDetails
 
 from tools.na_report import (
+    METADATA_KEYS,
     report_convergence,
+    report_interventions,
+    report_lifecycle,
     report_link_events,
     report_probe_results,
     report_summary,
@@ -180,6 +188,63 @@ def session_db(tmp_path: Path) -> str:
         session_id="run-test",
     )
 
+    # One operator intervention and one OME lifecycle event.
+    repair = ActuationOpsDetails(
+        session_id="run-test",
+        wiring_generation="sha256:" + "a" * 64,
+        scheduler_instance_id="sched-1",
+        hostname="sched-host",
+        gs_id="gs-den",
+        operation="OperatorRepair",
+        failure_class=ActuationFailureClass.NONE,
+        intervention_id="repair-1",
+        reason="operator requested repair",
+    )
+    insert_operator_intervention_event(
+        conn,
+        OpsEvent(
+            timestamp=now,
+            session_id="run-test",
+            source="scheduler",
+            hostname="sched-host",
+            level="warning",
+            code="OPERATOR_REPAIR_REQUESTED",
+            message="operator repair",
+            details=repair.model_dump(mode="json"),
+        ),
+        repair,
+        session_id="run-test",
+    )
+    teardown = MbbTeardownLifecycleDetails(
+        session_id="run-test",
+        epoch_id=1,
+        snapshot_seq=9,
+        allocator_step=12,
+        master_sim_time=now,
+        gs_id="gs-den",
+        teardown_id="gs-den:sat-old->gs-den:sat-new",
+        old_pair=["gs-den", "sat-old"],
+        successor_pair=["gs-den", "sat-new"],
+        terminal_outcome="teardown_completed",
+        message="MBB teardown completed",
+        authority_before={},
+    )
+    insert_ome_lifecycle_event(
+        conn,
+        OpsEvent(
+            timestamp=now,
+            session_id="run-test",
+            source="ome",
+            hostname="ome-0",
+            level="info",
+            code="MBB_TEARDOWN_TERMINAL",
+            message="MBB teardown completed",
+            details=teardown.model_dump(mode="json"),
+        ),
+        teardown,
+        session_id="run-test",
+    )
+
     conn.close()
     return db_path
 
@@ -201,6 +266,8 @@ TABLE_NAMES = {
     "adapter_events",
     "session_metadata",
     "snapshots",
+    "ome_lifecycle_events",
+    "operator_interventions",
 }
 
 
@@ -216,7 +283,7 @@ def _parse_metadata(output: str) -> dict[str, str]:
     metadata = {}
     for line in output.splitlines():
         parts = line.split(maxsplit=1)
-        if len(parts) == 2 and parts[0] in {"session_name", "source_id", "routing_stack"}:
+        if len(parts) == 2 and parts[0] in METADATA_KEYS:
             metadata[parts[0]] = parts[1]
     return metadata
 
@@ -305,13 +372,16 @@ class TestReportSummary:
             "session_name": "isis-test-run",
             "source_id": "catalog:earth-leo-simple",
             "routing_stack": "frr-isis",
+            "operator_intervened": "true",
         }
         counts = _parse_table_counts(output)
         assert counts["link_events"] == 3
         assert counts["convergence_events"] == 2
         assert counts["probe_results"] == 3
         assert counts["adapter_events"] == 0
-        assert counts["session_metadata"] == 3
+        assert counts["session_metadata"] == 4
+        assert counts["ome_lifecycle_events"] == 1
+        assert counts["operator_interventions"] == 1
 
     def test_empty_db(self, empty_db: str):
         output = _run_db_report(empty_db, report_summary)
@@ -409,6 +479,26 @@ class TestReportProbeResults:
 
         assert _parse_probe_flows(output) == {}
         assert "(no probe results)" in output
+
+
+class TestReportInterventionsAndLifecycle:
+    def test_reports_each_recorded_intervention(self, session_db: str):
+        output = _run_db_report(session_db, report_interventions)
+
+        (row,) = [line for line in output.splitlines() if "repair-1" in line]
+        assert row.split()[1:4] == ["repair-1", "gs-den", "OPERATOR_REPAIR_REQUESTED"]
+        assert row.endswith("operator requested repair")
+
+    def test_reports_each_recorded_lifecycle_event(self, session_db: str):
+        output = _run_db_report(session_db, report_lifecycle)
+
+        (row,) = [line for line in output.splitlines() if "gs-den" in line]
+        assert '["gs-den", "sat-old"] -> ["gs-den", "sat-new"]' in row
+        assert row.endswith("teardown_completed")
+
+    def test_empty_db(self, empty_db: str):
+        assert "(no operator interventions)" in _run_db_report(empty_db, report_interventions)
+        assert "(no OME lifecycle events)" in _run_db_report(empty_db, report_lifecycle)
 
 
 class TestRunReport:

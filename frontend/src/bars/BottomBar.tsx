@@ -1,6 +1,6 @@
 // Copyright 2024-2026 .chance (dotchance)
 // Licensed under the Apache License, Version 2.0. See LICENSE file.
-/** Bottom bar — link/node counts, convergence, WS status, build provenance.
+/** Bottom bar — link/node counts, convergence, history recording, WS status, build provenance.
  *  The build hash line is part of the deploy drift-gate workflow — keep it. */
 
 import { WS_URL } from "../config";
@@ -24,6 +24,7 @@ export function BottomBar({ snapshot, connected, historicalMode, logPanelOpen, o
   const unreachableFlows = snapshot?.network_health.unreachable_flows ?? 0;
   const lastConvergenceMs = snapshot?.network_health.last_convergence_ms;
   const convergingSinceMs = snapshot?.network_health.converging_since_ms;
+  const recording = snapshot?.history_recording ?? null;
 
   const convClass =
     convergence === "converged"
@@ -50,6 +51,14 @@ export function BottomBar({ snapshot, connected, historicalMode, logPanelOpen, o
         {convergence === "converging" && convergingSinceMs != null ? ` (${formatDuration(convergingSinceMs)})` : ""}
         {convergence === "degraded" && unreachableFlows > 0 ? ` (${unreachableFlows} flows)` : ""}
       </span>
+      {recording !== null && (
+        <span
+          className={`bottombar-stat ${recording.state === "recording" ? "bottombar-ok" : "bottombar-fail"}`}
+          title={recording.error ?? "This session run is recording its history"}
+        >
+          {recording.state === "recording" ? "Recording history" : "History recording stopped"}
+        </span>
+      )}
       <div className="bottombar-spring" />
       <span title={WS_URL} className="bottombar-ws">
         <StatusDot tone={wsTone} />

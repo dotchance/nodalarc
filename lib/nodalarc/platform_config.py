@@ -64,6 +64,8 @@ class PlatformConfig(BaseModel):
     # Bytes every history recording together may occupy; past it the oldest
     # recorded data goes first
     vs_api_history_max_bytes: int = Field(gt=0)
+    # History writes that may wait for the writer; one more stops the recording
+    vs_api_history_queue_max_writes: int = Field(gt=0)
 
     # Session pods one Kubernetes node is taken to hold, for the readiness
     # capacity warning

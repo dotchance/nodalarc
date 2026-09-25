@@ -329,6 +329,15 @@ class AlmanacState(BaseModel):
     nodalpath_active: bool = False
 
 
+class HistoryRecordingState(BaseModel):
+    """A recorded session run's history recording: running, or stopped and why."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    state: Literal["recording", "stopped"]
+    error: str | None
+
+
 class StateSnapshot(BaseModel):
     """Complete constellation state sent via WebSocket at ~1Hz.
 
@@ -371,6 +380,8 @@ class StateSnapshot(BaseModel):
     actuation_notices: list[ActuationNotice] = Field(default_factory=list)
     ome_lifecycle_notices: list[dict[str, Any]] = Field(default_factory=list)
     actuation_health: ActuationHealth | None = None
+    # This run's history recording; None when the run was deployed without one.
+    history_recording: HistoryRecordingState | None
 
 
 class LinkHistoryEvent(BaseModel):

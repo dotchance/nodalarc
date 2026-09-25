@@ -175,9 +175,11 @@ message LatencyEntry {
   string gs_id = 6;
   string sat_id = 7;
   // fields 8-9 reserved — PID looked up by Node Agent internally
-  // Transmit rate of the terminal behind this interface. The netem queue
-  // limit follows rate times delay, so every delay change carries it.
-  double transmit_mbps = 10;
+  // field 10 reserved — a bare transmit rate, replaced by the terminal's rates
+  reserved 10;
+  // The rates of the terminal behind this interface. The netem queue limit
+  // follows its transmit rate times delay, so every delay change carries them.
+  TerminalRates rates = 11;
 }
 
 message SetLatencyRequest {

@@ -115,6 +115,7 @@ def test_catalog_deploy_uses_guarded_shipped_revision_and_exact_yaml(monkeypatch
     result = e2e_matrix.deploy_catalog_session(
         "token",
         {"id": "earth-leo-simple", "session_yaml": session_yaml},
+        record_history=False,
     )
 
     assert result["status"] == "accepted"
@@ -127,6 +128,13 @@ def test_catalog_deploy_uses_guarded_shipped_revision_and_exact_yaml(monkeypatch
         "expected_dependency_digest": "c" * 64,
         "record_history": False,
     }
+
+    e2e_matrix.deploy_catalog_session(
+        "token",
+        {"id": "earth-leo-simple", "session_yaml": session_yaml},
+        record_history=True,
+    )
+    assert calls[-1][2]["json"]["record_history"] is True
 
 
 def test_wait_for_transition_is_bound_to_operation_terminal_state(monkeypatch) -> None:
@@ -918,7 +926,7 @@ def test_shipped_deploy_checks_the_transition_identity_and_the_document_digest(m
     monkeypatch.setattr(
         e2e_matrix,
         "deploy_catalog_session",
-        lambda token, perm: {"status": "accepted", "operation_id": "op-1"},
+        lambda token, perm, *, record_history: {"status": "accepted", "operation_id": "op-1"},
     )
     monkeypatch.setattr(
         e2e_matrix,
@@ -928,7 +936,7 @@ def test_shipped_deploy_checks_the_transition_identity_and_the_document_digest(m
             {"state": "succeeded", "facts": facts},
         )[1],
     )
-    passed = e2e_matrix.deploy_shipped_and_wait("t", perm)
+    passed = e2e_matrix.deploy_shipped_and_wait("t", perm, record_history=False)
     assert passed["result"] == "PASS"
     assert passed["observed_runtime"]["document_digest"] == "sha256:" + "d" * 64
     assert waited == ["op-1"]
@@ -939,7 +947,7 @@ def test_shipped_deploy_checks_the_transition_identity_and_the_document_digest(m
         "wait_for_transition",
         lambda token, operation_id, timeout=600: {"state": "succeeded", "facts": other_build},
     )
-    mismatched = e2e_matrix.deploy_shipped_and_wait("t", perm)
+    mismatched = e2e_matrix.deploy_shipped_and_wait("t", perm, record_history=False)
     assert mismatched["result"] == "FAIL" and "runtime identity differs" in mismatched["reason"]
 
     other_document = {**facts, "document_digest": "sha256:" + "e" * 64}
@@ -948,7 +956,7 @@ def test_shipped_deploy_checks_the_transition_identity_and_the_document_digest(m
         "wait_for_transition",
         lambda token, operation_id, timeout=600: {"state": "succeeded", "facts": other_document},
     )
-    rewritten = e2e_matrix.deploy_shipped_and_wait("t", perm)
+    rewritten = e2e_matrix.deploy_shipped_and_wait("t", perm, record_history=False)
     assert rewritten["result"] == "FAIL" and "document digest" in rewritten["reason"]
 
     monkeypatch.setattr(
@@ -959,12 +967,14 @@ def test_shipped_deploy_checks_the_transition_identity_and_the_document_digest(m
             "failure": {"message": "wiring"},
         },
     )
-    assert e2e_matrix.deploy_shipped_and_wait("t", perm)["result"] == "FAIL"
+    assert e2e_matrix.deploy_shipped_and_wait("t", perm, record_history=False)["result"] == "FAIL"
 
     monkeypatch.setattr(
-        e2e_matrix, "deploy_catalog_session", lambda token, perm: {"error": "switch in progress"}
+        e2e_matrix,
+        "deploy_catalog_session",
+        lambda token, perm, *, record_history: {"error": "switch in progress"},
     )
-    refused = e2e_matrix.deploy_shipped_and_wait("t", perm)
+    refused = e2e_matrix.deploy_shipped_and_wait("t", perm, record_history=False)
     assert refused["result"] == "FAIL" and refused["reason"].startswith("Deploy refused")
 
 
@@ -974,12 +984,16 @@ def test_every_acceptance_lane_deploys_the_shipped_walker_through_the_catalog_co
         "run_dirty_repair_acceptance",
         "run_seek_during_mbb_acceptance",
         "run_mbb_observation",
+        "run_history_acceptance",
         "run_permutation",
     ):
         body = source.split(f"def {name}(")[1].split("\ndef ")[0]
         assert "deploy_shipped_and_wait(" in body, name
         if name != "run_permutation":
             assert "acceptance_permutation(" in body, name
+        # The lanes that read recorded history deploy with recording; the others without.
+        reads_history = name in {"run_mbb_observation", "run_history_acceptance"}
+        assert f"record_history={reads_history}" in body, name
     assert e2e_matrix.MBB_ACCEPTANCE_SESSION_ID == "earth-leo-walker"
     for gone in (
         "deploy_yaml_and_wait",

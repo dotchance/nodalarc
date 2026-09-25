@@ -171,6 +171,12 @@ export interface RecentEvent {
   summary: string;
 }
 
+/** A recorded session run's history recording: running, or stopped and why. */
+export interface HistoryRecordingState {
+  state: "recording" | "stopped";
+  error: string | null;
+}
+
 /** One recorded link event of a session deployed with history recording. */
 export interface LinkHistoryEvent {
   id: number;
@@ -293,6 +299,8 @@ export interface StateSnapshot {
   stale: boolean;
   actuation_notices?: ActuationNotice[];
   actuation_health?: ActuationHealth | null;
+  /** This run's history recording; null when it was deployed without one. */
+  history_recording: HistoryRecordingState | null;
   ops_events?: OpsEvent[];
   /** Identifies VS-API's ops seq space; a change means the server
    *  restarted and the scrollback must replace, not merge. */

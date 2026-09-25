@@ -35,9 +35,6 @@ from .session_deployment import (
 log = logging.getLogger(__name__)
 
 
-# Maximum number of old session directories to keep
-
-
 class _CustomObjectsSwitchApi(Protocol):
     def delete_namespaced_custom_object(self, **kwargs: Any) -> Any: ...
 

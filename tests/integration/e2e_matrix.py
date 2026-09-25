@@ -17,7 +17,7 @@ import sys
 import time
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from urllib.parse import urlencode
+from urllib.parse import quote, urlencode
 
 import requests
 from nodalarc.catalog_closure import FilesystemCatalogReadView
@@ -564,7 +564,7 @@ def _link_as_sat_sat(
     return None
 
 
-def deploy_catalog_session(token: str, perm: dict) -> dict:
+def deploy_catalog_session(token: str, perm: dict, *, record_history: bool) -> dict:
     """Deploy the exact shipped catalog revision represented by one permutation."""
     session_ref = f"nodalarc:sessions/{perm['id']}.yaml"
     summaries = request_json("GET", "/api/v1/sessions", token=token)
@@ -608,13 +608,15 @@ def deploy_catalog_session(token: str, perm: dict) -> dict:
             "expected_source_revision": summary["source_revision"],
             "expected_document_digest": summary["document_digest"],
             "expected_dependency_digest": summary["dependency_digest"],
-            "record_history": False,
+            "record_history": record_history,
         },
         retries=3,
     )
 
 
-def deploy_shipped_and_wait(token: str, perm: dict, *, timeout: int = 600) -> dict:
+def deploy_shipped_and_wait(
+    token: str, perm: dict, *, record_history: bool, timeout: int = 600
+) -> dict:
     """Deploy one shipped permutation through the catalog contract and wait for
     its admitted transition: the guarded switch answers with an operation id,
     the transition's terminal state decides, the transition's runtime facts must
@@ -622,7 +624,7 @@ def deploy_shipped_and_wait(token: str, perm: dict, *, timeout: int = 600) -> di
     checkout's file. Returns PASS with the responses and the observed runtime,
     or FAIL with a reason. Every acceptance lane and every matrix permutation
     deploys through this one path."""
-    deploy_response = deploy_catalog_session(token, perm)
+    deploy_response = deploy_catalog_session(token, perm, record_history=record_history)
     operation_id = deploy_response.get("operation_id")
     if deploy_response.get("status") != "accepted" or not operation_id:
         return {
@@ -3069,7 +3071,7 @@ def run_dirty_repair_acceptance(provenance: dict[str, str] | None = None) -> dic
         acceptance_progress("dirty-repair: acquiring token")
         token = get_token()
         acceptance_progress("dirty-repair: deploying the shipped session")
-        deployed = deploy_shipped_and_wait(token, perm)
+        deployed = deploy_shipped_and_wait(token, perm, record_history=False)
         evidence["deploy_response"] = deployed.get("deploy_response")
         evidence["transition"] = deployed.get("transition")
         evidence["observed_runtime"] = deployed.get("observed_runtime")
@@ -3550,7 +3552,7 @@ def run_seek_during_mbb_acceptance(provenance: dict[str, str] | None = None) -> 
         acceptance_progress("seek-mbb: acquiring token")
         token = get_token()
         acceptance_progress("seek-mbb: deploying the shipped session")
-        deployed = deploy_shipped_and_wait(token, perm)
+        deployed = deploy_shipped_and_wait(token, perm, record_history=False)
         evidence["deploy_response"] = deployed.get("deploy_response")
         evidence["transition"] = deployed.get("transition")
         evidence["observed_runtime"] = deployed.get("observed_runtime")
@@ -3665,6 +3667,95 @@ def run_seek_during_mbb_acceptance(provenance: dict[str, str] | None = None) -> 
     return evidence
 
 
+def run_history_acceptance(provenance: dict[str, str] | None = None) -> dict:
+    """A session deployed with history recording: the snapshot reports the
+    recording running, link-history pages hold at most 200 events and page
+    through to their total, the state at a recorded sim time comes back from
+    the snapshots, and the metrics routes refuse data no component records."""
+    perm = acceptance_permutation(provenance or _run_provenance_from_environment())
+    evidence: dict = {
+        "id": "HISTORY",
+        "label": "recorded-session-history",
+        "session_ref": perm["session_ref"],
+        "document_sha256": perm["document_sha256"],
+        "started_at": datetime.now(UTC).isoformat(),
+    }
+    try:
+        token = get_token()
+        acceptance_progress("history: deploying the shipped session with recording")
+        deployed = deploy_shipped_and_wait(token, perm, record_history=True)
+        evidence["deploy_response"] = deployed.get("deploy_response")
+        evidence["transition"] = deployed.get("transition")
+        evidence["observed_runtime"] = deployed.get("observed_runtime")
+        if deployed["result"] != "PASS":
+            evidence["result"] = "FAIL"
+            evidence["error"] = deployed["reason"]
+            return evidence
+        ready_result = wait_for_ready(token, timeout=600)
+        evidence["ready_result"] = ready_result
+        if ready_result.get("phase") != "Ready":
+            evidence["result"] = "FAIL"
+            evidence["error"] = f"Did not reach Ready: {ready_result}"
+            return evidence
+
+        acceptance_progress("history: recording for 60 s")
+        time.sleep(60)
+        token = get_token()
+        state = request_json("GET", "/api/v1/state", token=token)
+        checks: dict[str, dict] = {}
+        recording = state.get("history_recording")
+        checks["recording"] = {
+            "observed": recording,
+            "pass": recording == {"state": "recording", "error": None},
+        }
+
+        # Page a fixed window, up to the current sim time, so the total holds still.
+        end = state["sim_time"]
+        pages: list[tuple[int, int]] = []
+        ids: list[int] = []
+        params: dict[str, str] = {"end": end}
+        while True:
+            page = request_json("GET", f"/api/v1/links?{urlencode(params)}", token=token)
+            pages.append((page["returned"], page["total"]))
+            ids.extend(event["id"] for event in page["events"])
+            if page["next_cursor"] is None:
+                break
+            params = {"end": end, "cursor": page["next_cursor"]}
+        total = pages[0][1]
+        checks["link_pages"] = {
+            "pages": pages,
+            "rows": len(ids),
+            "unique": len(set(ids)),
+            "pass": total > 0
+            and all(returned <= 200 and page_total == total for returned, page_total in pages)
+            and len(ids) == len(set(ids)) == total,
+        }
+
+        at = request_json("GET", f"/api/v1/state/{quote(end, safe='')}", token=token)
+        checks["state_at_sim_time"] = {
+            "asked": end,
+            "returned_sim_time": at.get("sim_time"),
+            "pass": at.get("session_id") == state.get("session_id") and "sim_time" in at,
+        }
+
+        for path in ("/api/v1/metrics/convergence", "/api/v1/metrics/flows/flow-1"):
+            response = requests.get(f"{BASE_URL}{path}", headers=headers(token), timeout=10)
+            body = response.json()
+            checks[path] = {
+                "status": response.status_code,
+                "body": body,
+                "pass": response.status_code == 501 and body.get("code") == "history.not_collected",
+            }
+
+        evidence["checks"] = checks
+        evidence["result"] = "PASS" if all(check["pass"] for check in checks.values()) else "FAIL"
+    except Exception as exc:
+        evidence["result"] = "FAIL"
+        evidence["error"] = str(exc)
+    evidence["finished_at"] = datetime.now(UTC).isoformat()
+    return evidence
+
+
 def run_mbb_observation(provenance: dict[str, str] | None = None) -> dict:
     """The MBB routing and packet observation on the shipped walker: a
     diagnostic lane, separate from acceptance. It records the handover the
@@ -3680,8 +3771,9 @@ def run_mbb_observation(provenance: dict[str, str] | None = None) -> dict:
     }
     try:
         token = get_token()
-        acceptance_progress("mbb: deploying the shipped session")
-        deployed = deploy_shipped_and_wait(token, perm)
+        acceptance_progress("mbb: deploying the shipped session with history recording")
+        # The observation reads the Scheduler's LinkUp and LinkDown records from history.
+        deployed = deploy_shipped_and_wait(token, perm, record_history=True)
         evidence["deploy_response"] = deployed.get("deploy_response")
         evidence["transition"] = deployed.get("transition")
         evidence["observed_runtime"] = deployed.get("observed_runtime")
@@ -3761,7 +3853,7 @@ def run_permutation(perm: dict) -> dict:
 
         # Deploy
         print("  Deploying guarded shipped catalog revision...")
-        deployed = deploy_shipped_and_wait(token, perm)
+        deployed = deploy_shipped_and_wait(token, perm, record_history=False)
         evidence["deploy_response"] = deployed.get("deploy_response")
         evidence["transition_result"] = deployed.get("transition")
         evidence["observed_runtime"] = deployed.get("observed_runtime")
@@ -4039,6 +4131,21 @@ def main():
             results.append(evidence)
             evidence_file = evidence_dir / "dirty-repair.json"
             evidence_file.write_text(json.dumps(evidence, indent=2))
+            if evidence["result"] == "PASS":
+                passed += 1
+            else:
+                failed += 1
+
+        if os.environ.get("NODALARC_RUN_HISTORY") == "1":
+            print(f"\n{'=' * 60}")
+            print("Acceptance: recorded-session-history")
+            print(f"{'=' * 60}")
+            evidence = run_history_acceptance(provenance)
+            evidence["provenance"] = provenance
+            results.append(evidence)
+            evidence_file = evidence_dir / "recorded-session-history.json"
+            evidence_file.write_text(json.dumps(evidence, indent=2))
+            print(f"  History: {evidence['result']}")
             if evidence["result"] == "PASS":
                 passed += 1
             else:

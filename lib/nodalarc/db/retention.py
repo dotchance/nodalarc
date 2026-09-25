@@ -48,7 +48,8 @@ def enforce_history_budget(
 ) -> None:
     """Keep every recording in ``history_path``'s directory within ``max_bytes`` together.
 
-    ``conn`` is open on ``history_path``, the recording being written.
+    ``conn`` is open on ``history_path``, the recording being written; its rows
+    count by the pages they occupy.
     """
     others = sorted(
         (path for path in history_path.parent.glob("*.db") if path != history_path),

@@ -53,6 +53,7 @@ def _init_platform_config():
         vs_api_session_switch_max_requests_per_minute=5,
         vs_api_introspect_max_response_bytes=65536,
         vs_api_history_max_bytes=262144000,
+        vs_api_history_queue_max_writes=10000,
         session_pods_per_node=200,
         trace_interval_seconds=3.0,
         trace_unreached_retrace_seconds=1.0,

@@ -1024,11 +1024,19 @@ def test_ground_latency_update_preserves_per_side_entries(pair, locality):
     )
 
     assert result.succeeded_pairs == {pair}
-    # Each entry carries its own terminal's transmit rate: 600 for the
-    # station, 50 for the satellite.
+    # Each entry carries its own terminal's rates: the station sends 600 and
+    # takes in 50, the satellite the reverse.
     observed = {
         agent: sorted(
-            (e.node_id, e.interface_name, e.latency_ms, e.transmit_mbps, e.gs_id, e.sat_id)
+            (
+                e.node_id,
+                e.interface_name,
+                e.latency_ms,
+                e.rates.transmit_mbps,
+                e.rates.receive_mbps,
+                e.gs_id,
+                e.sat_id,
+            )
             for req in stub.requests
             for e in req.entries
         )
@@ -1037,14 +1045,14 @@ def test_ground_latency_update_preserves_per_side_entries(pair, locality):
     if locality == node_agent_pb2.LOCALITY_LOCAL:
         assert observed == {
             "agent-sat-a": [
-                (GS, "term0", 9.0, 600.0, GS, SAT),
-                (SAT, "gnd0", 9.0, 50.0, GS, SAT),
+                (GS, "term0", 9.0, 600.0, 50.0, GS, SAT),
+                (SAT, "gnd0", 9.0, 50.0, 600.0, GS, SAT),
             ]
         }
     else:
         assert observed == {
-            "agent-sat-a": [(SAT, "gnd0", 9.0, 50.0, GS, SAT)],
-            "agent-gs-den": [(GS, "term0", 9.0, 600.0, GS, SAT)],
+            "agent-sat-a": [(SAT, "gnd0", 9.0, 50.0, 600.0, GS, SAT)],
+            "agent-gs-den": [(GS, "term0", 9.0, 600.0, 50.0, GS, SAT)],
         }
 
 

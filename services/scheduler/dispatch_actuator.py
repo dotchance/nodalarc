@@ -37,7 +37,6 @@ from scheduler.latency_compensator import LatencyCompensation
 from scheduler.node_agent_batches import (
     build_link_down_batch_plan,
     build_link_up_batch_plan,
-    interface_terminal_rates,
     required_ground_endpoints,
     terminal_rates_message,
 )
@@ -748,9 +747,7 @@ async def send_authoritative_latency_updates(
                         node_id=endpoint_id,
                         interface_name=endpoint_iface,
                         latency_ms=netem_ms,
-                        transmit_mbps=interface_terminal_rates(
-                            interface_rates, endpoint_id, endpoint_iface
-                        ).transmit_mbps,
+                        rates=terminal_rates_message(interface_rates, endpoint_id, endpoint_iface),
                         link_type=node_agent_pb2.LINK_TYPE_GROUND,
                         gs_id=gs_id,
                         sat_id=sat_id,
@@ -765,9 +762,7 @@ async def send_authoritative_latency_updates(
                         node_id=nid,
                         interface_name=ifname,
                         latency_ms=netem_ms,
-                        transmit_mbps=interface_terminal_rates(
-                            interface_rates, nid, ifname
-                        ).transmit_mbps,
+                        rates=terminal_rates_message(interface_rates, nid, ifname),
                         link_type=node_agent_pb2.LINK_TYPE_ISL,
                     ),
                 )

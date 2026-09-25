@@ -954,6 +954,7 @@ class TestStateSnapshot:
             wall_time=NOW,
             schema_version=1,
             session_id="run-test-0001",
+            history_recording=None,
             nodes=[
                 NodeState(
                     node_id="sat-P00S00",

@@ -143,6 +143,7 @@ from vs_api.catalog_upload_store import (
     KubernetesCatalogUploadStore,
 )
 from vs_api.continuous_tracer import ContinuousTracer
+from vs_api.history_recorder import HistoryRecorder, HistoryUnavailableError
 from vs_api.introspect import VTYSH_COMMANDS, IntrospectRequest, IntrospectResult, run_vtysh
 from vs_api.ops_log import (
     OPS_LOG_TOKEN,
@@ -868,6 +869,7 @@ def _build_snapshot(*, ops_after: int = 0) -> dict | None:
             actuation_notices=list(ctx.actuation_notices_by_key.values()),
             ome_lifecycle_notices=list(ctx.ome_lifecycle_notices_by_key.values()),
             actuation_health=ctx.build_actuation_health(),
+            history_recording=ctx.history_recording_state(),
         )
         result = json.loads(snapshot.model_dump_json())
         # System + session OpsEvents merged for the log panel — shipped
@@ -2043,11 +2045,11 @@ async def _history_snapshot_recorder() -> None:
         await asyncio.sleep(0.1)
         tick += 1
         ctx = _active_context
-        if tick % 100 == 0 and ctx is not None and ctx.history_path is not None:
+        if tick % 100 == 0 and ctx is not None and ctx.history is not None:
             snapshot = _build_snapshot()
             if snapshot is None:
                 continue
-            await asyncio.to_thread(ctx.record_snapshot, snapshot)
+            ctx.record_snapshot(snapshot)
 
 
 @app.websocket("/ws/v1/state")
@@ -2340,28 +2342,38 @@ def get_state() -> dict:
     return snapshot
 
 
-def _history_session() -> tuple[SessionContext | None, Response | None]:
-    """The active session whose history is readable, or the refusal that says why not."""
+def _history_session() -> tuple[SessionContext, HistoryRecorder]:
+    """The active session and its readable recording; every other case is refused."""
     ctx = _require_active_context()
-    if ctx.history_path is None:
-        return None, refusal_response(
+    if ctx.history is None:
+        raise HistoryUnavailableError(
             409, "history.not_recorded", "History recording is off for this session"
         )
-    if ctx.history_error is not None:
-        return None, refusal_response(
+    if ctx.history.error is not None:
+        raise HistoryUnavailableError(
             503,
             "history.failed",
             "History recording failed for this session and stopped; see the VS-API log",
         )
-    return ctx, None
+    return ctx, ctx.history
 
 
-def _read_history(ctx: SessionContext, read: Callable[[sqlite3.Connection], Any]) -> Any:
-    conn = sqlite3.connect(f"file:{ctx.history_path}?mode=ro", uri=True)
+def _read_history(history: HistoryRecorder, read: Callable[[sqlite3.Connection], Any]) -> Any:
+    conn = sqlite3.connect(f"file:{history.path}?mode=ro", uri=True)
     try:
         return read(conn)
     finally:
         conn.close()
+
+
+def _zoned_time_refusal(**times: datetime | None) -> JSONResponse | None:
+    """History times name their zone; a time without one is ambiguous and refused."""
+    for name, value in times.items():
+        if value is not None and value.tzinfo is None:
+            return refusal_response(
+                400, "history.time_without_zone", f"{name} must name its UTC offset or Z"
+            )
+    return None
 
 
 @app.get(
@@ -2369,13 +2381,14 @@ def _read_history(ctx: SessionContext, read: Callable[[sqlite3.Connection], Any]
     responses=_REFUSAL_RESPONSES,
     dependencies=[Depends(_require_api_key)],
 )
-def get_historical_state(sim_time: str) -> Any:
+def get_historical_state(sim_time: datetime) -> Any:
     """The recorded session's state nearest a sim_time, from its history snapshots."""
-    ctx, refusal = _history_session()
-    if refusal is not None:
+    ctx, history = _history_session()
+    if (refusal := _zoned_time_refusal(sim_time=sim_time)) is not None:
         return refusal
     result = _read_history(
-        ctx, lambda conn: query_nearest_snapshot(conn, session_id=ctx.session_id, sim_time=sim_time)
+        history,
+        lambda conn: query_nearest_snapshot(conn, session_id=ctx.session_id, sim_time=sim_time),
     )
     if result is None:
         return refusal_response(
@@ -2390,8 +2403,8 @@ def get_historical_state(sim_time: str) -> Any:
     dependencies=[Depends(_require_api_key)],
 )
 def get_link_events(
-    start: str = Query(None),
-    end: str = Query(None),
+    start: datetime = Query(None),
+    end: datetime = Query(None),
     node: str = Query(None),
     peer: str = Query(None, description="The node at the other end of the link; needs node"),
     order: Literal["oldest_first", "newest_first"] = Query("oldest_first"),
@@ -2400,8 +2413,8 @@ def get_link_events(
 ) -> Any:
     """One page of the recorded session's link events, optionally for one node's
     links or one link. Further pages follow ``next_cursor`` with the same filters."""
-    ctx, refusal = _history_session()
-    if refusal is not None:
+    ctx, history = _history_session()
+    if (refusal := _zoned_time_refusal(start=start, end=end)) is not None:
         return refusal
     if peer is not None and node is None:
         return refusal_response(
@@ -2432,7 +2445,7 @@ def get_link_events(
         retained_from = get_metadata(conn, session_id=ctx.session_id, key=RETAINED_FROM_KEY)
         return rows, total, retained_from
 
-    rows, total, retained_from = _read_history(ctx, read)
+    rows, total, retained_from = _read_history(history, read)
     page = rows[:limit]
     return LinkHistoryPage(
         events=[LinkHistoryEvent.model_validate(row) for row in page],

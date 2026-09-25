@@ -26,6 +26,7 @@ def test_vs_api_state_snapshot_schema():
         wall_time=datetime.now(UTC),
         schema_version=1,
         session_id="run-test-0001",
+        history_recording=None,
         nodes=[
             NodeState(
                 node_id="sat-P00S00",
@@ -38,7 +39,8 @@ def test_vs_api_state_snapshot_schema():
                 vel_z_km_s=None,
                 plane=0,
                 slot=0,
-                routing_area="49.0001",
+                routing_instances=(),
+                role="router",
                 isl_count=2,
                 gnd_count=0,
                 reference_body="earth",

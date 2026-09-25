@@ -223,6 +223,37 @@
       "title": "ActuationState",
       "type": "string"
     },
+    "HistoryRecordingState": {
+      "additionalProperties": false,
+      "description": "A recorded session run's history recording: running, or stopped and why.",
+      "properties": {
+        "state": {
+          "enum": [
+            "recording",
+            "stopped"
+          ],
+          "title": "State",
+          "type": "string"
+        },
+        "error": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Error"
+        }
+      },
+      "required": [
+        "state",
+        "error"
+      ],
+      "title": "HistoryRecordingState",
+      "type": "object"
+    },
     "LinkState": {
       "additionalProperties": false,
       "description": "State of a single link between two nodes.",
@@ -1207,6 +1238,16 @@
         }
       ],
       "default": null
+    },
+    "history_recording": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/HistoryRecordingState"
+        },
+        {
+          "type": "null"
+        }
+      ]
     }
   },
   "required": [
@@ -1218,7 +1259,8 @@
     "links",
     "traced_paths",
     "recent_events",
-    "network_health"
+    "network_health",
+    "history_recording"
   ],
   "title": "StateSnapshot",
   "type": "object"

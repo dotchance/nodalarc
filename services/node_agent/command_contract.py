@@ -127,6 +127,22 @@ def _validate_common_interface(iface, *, operation: str) -> None:
             )
 
 
+def _validate_rates_field(entry, field: str, *, operation: str) -> None:
+    """One ``TerminalRates`` field is present with finite, positive rates."""
+    if not entry.HasField(field):
+        raise CommandContractError(
+            node_agent_pb2.NODE_AGENT_INVALID_FIELD,
+            f"{operation} entry requires {field}",
+        )
+    rates = getattr(entry, field)
+    for rate in (rates.transmit_mbps, rates.receive_mbps):
+        if not (math.isfinite(rate) and rate > 0):
+            raise CommandContractError(
+                node_agent_pb2.NODE_AGENT_INVALID_FIELD,
+                f"{operation} {field} transmit_mbps and receive_mbps must be finite and > 0",
+            )
+
+
 def _validate_terminal_rates(entry, *, operation: str) -> None:
     """Each wired terminal carries its own positive transmit and receive rates.
 
@@ -140,18 +156,7 @@ def _validate_terminal_rates(entry, *, operation: str) -> None:
     )
     fields = ("rates", "peer_rates") if local_ground else ("rates",)
     for field in fields:
-        if not entry.HasField(field):
-            raise CommandContractError(
-                node_agent_pb2.NODE_AGENT_INVALID_FIELD,
-                f"{operation} entry requires {field}",
-            )
-        rates = getattr(entry, field)
-        for rate in (rates.transmit_mbps, rates.receive_mbps):
-            if not (math.isfinite(rate) and rate > 0):
-                raise CommandContractError(
-                    node_agent_pb2.NODE_AGENT_INVALID_FIELD,
-                    f"{operation} {field} transmit_mbps and receive_mbps must be finite and > 0",
-                )
+        _validate_rates_field(entry, field, operation=operation)
     if not local_ground and entry.HasField("peer_rates"):
         raise CommandContractError(
             node_agent_pb2.NODE_AGENT_INVALID_FIELD,
@@ -188,11 +193,7 @@ def validate_set_latency_request(request, *, fence: RuntimeFence) -> None:
                 node_agent_pb2.NODE_AGENT_INVALID_FIELD,
                 "latency_ms must be >= 0",
             )
-        if not (math.isfinite(entry.transmit_mbps) and entry.transmit_mbps > 0):
-            raise CommandContractError(
-                node_agent_pb2.NODE_AGENT_INVALID_FIELD,
-                f"{KIND_SET_LATENCY} transmit_mbps must be finite and > 0",
-            )
+        _validate_rates_field(entry, "rates", operation=KIND_SET_LATENCY)
         if entry.link_type == node_agent_pb2.LINK_TYPE_GROUND:
             _require_nonempty(entry.gs_id, "gs_id")
             _require_nonempty(entry.sat_id, "sat_id")

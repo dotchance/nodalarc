@@ -52,6 +52,7 @@ function snapshot(): StateSnapshot {
     playback_paused: false,
     playback_speed: 1,
     stale: false,
+    history_recording: null,
   };
 }
 

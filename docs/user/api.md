@@ -218,6 +218,19 @@ recordings, then the oldest rows of the current one. A recording that lost
 rows reports when its oldest kept data was recorded as `retained_from` on
 each link-event page.
 
+Every state snapshot carries `history_recording`: null for a run deployed
+without recording, `{"state": "recording", "error": null}` while it records, and
+`{"state": "stopped", "error": ...}` once a write failed. The bottom bar shows
+the same state. Recording never delays live state: writes wait in a queue of
+at most `vs_api_history_queue_max_writes`, and a write that finds the queue
+full stops the recording with that reason. When VS-API restarts during a
+recording, the links active when it resumes are recorded with reason
+`recording_resumed`; transitions during the restart were not recorded.
+
+Time parameters (`start`, `end`, and the `sim_time` of
+`/api/v1/state/{sim_time}`) must name their UTC offset or `Z`; a time without
+one is refused with `400 history.time_without_zone`.
+
 ## State Snapshot Schema
 
 The state snapshot contains:

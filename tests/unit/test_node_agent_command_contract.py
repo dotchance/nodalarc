@@ -168,22 +168,31 @@ def test_expected_up_inventory_requires_rates_and_expected_down_carries_none() -
         )
 
 
-@pytest.mark.parametrize("bad", [0.0, -1.0, math.nan, math.inf])
-def test_set_latency_requires_the_interface_transmit_rate(bad: float) -> None:
-    def _request(transmit_mbps: float) -> node_agent_pb2.SetLatencyRequest:
-        return node_agent_pb2.SetLatencyRequest(
-            envelope=_envelope("SetLatency"),
-            entries=[
-                node_agent_pb2.LatencyEntry(
-                    node_id="leo-sat-0-0",
-                    interface_name="isl0",
-                    latency_ms=4.0,
-                    transmit_mbps=transmit_mbps,
-                    link_type=node_agent_pb2.LINK_TYPE_ISL,
-                )
-            ],
-        )
+def _set_latency_request(rates: node_agent_pb2.TerminalRates | None):
+    entry = node_agent_pb2.LatencyEntry(
+        node_id="leo-sat-0-0",
+        interface_name="isl0",
+        latency_ms=4.0,
+        link_type=node_agent_pb2.LINK_TYPE_ISL,
+    )
+    if rates is not None:
+        entry.rates.CopyFrom(rates)
+    return node_agent_pb2.SetLatencyRequest(envelope=_envelope("SetLatency"), entries=[entry])
 
-    validate_set_latency_request(_request(2000.0), fence=_FENCE)
-    with pytest.raises(CommandContractError, match="transmit_mbps must be finite and > 0"):
-        validate_set_latency_request(_request(bad), fence=_FENCE)
+
+@pytest.mark.parametrize("bad", [0.0, -1.0, math.nan, math.inf])
+def test_set_latency_requires_the_interface_terminal_rates(bad: float) -> None:
+    validate_set_latency_request(_set_latency_request(_rates(2000.0, 2000.0)), fence=_FENCE)
+    with pytest.raises(
+        CommandContractError, match="rates transmit_mbps and receive_mbps must be finite and > 0"
+    ):
+        validate_set_latency_request(_set_latency_request(_rates(bad, 2000.0)), fence=_FENCE)
+    with pytest.raises(
+        CommandContractError, match="rates transmit_mbps and receive_mbps must be finite and > 0"
+    ):
+        validate_set_latency_request(_set_latency_request(_rates(2000.0, bad)), fence=_FENCE)
+
+
+def test_set_latency_refuses_an_entry_without_rates() -> None:
+    with pytest.raises(CommandContractError, match="SetLatency entry requires rates"):
+        validate_set_latency_request(_set_latency_request(None), fence=_FENCE)

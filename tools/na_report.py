@@ -3,11 +3,16 @@
 Generates reports from one recorded session's history database. Distinct from
 na-compare, which compares two or more sessions.
 
+VS-API keeps one history file per recorded session run, at
+<session_data_root>/history/<run-id>.db (/var/nodalarc/sessions/history/ by default).
+
 Usage:
-  python -m tools.na_report --db /path/to/nodalarc.db --report summary
-  python -m tools.na_report --db /path/to/nodalarc.db --report convergence
-  python -m tools.na_report --db /path/to/nodalarc.db --report link-events
-  python -m tools.na_report --db /path/to/nodalarc.db --report probe-results
+  python -m tools.na_report --db /var/nodalarc/sessions/history/<run-id>.db --report summary
+  python -m tools.na_report --db <history file> --report convergence
+  python -m tools.na_report --db <history file> --report link-events
+  python -m tools.na_report --db <history file> --report probe-results
+  python -m tools.na_report --db <history file> --report interventions
+  python -m tools.na_report --db <history file> --report lifecycle
 """
 
 from __future__ import annotations
@@ -24,6 +29,8 @@ from nodalarc.db.queries import (
     get_metadata,
     query_convergence_events,
     query_link_events,
+    query_ome_lifecycle_events,
+    query_operator_interventions,
     query_probe_results,
     recorded_session_id,
 )
@@ -31,7 +38,14 @@ from nodalarc.db.schema import require_schema_version
 
 log = logging.getLogger(__name__)
 
-REPORT_TYPES = ["summary", "convergence", "link-events", "probe-results"]
+REPORT_TYPES = [
+    "summary",
+    "convergence",
+    "link-events",
+    "probe-results",
+    "interventions",
+    "lifecycle",
+]
 
 TABLES = [
     "link_events",
@@ -40,14 +54,20 @@ TABLES = [
     "adapter_events",
     "session_metadata",
     "snapshots",
+    "ome_lifecycle_events",
+    "operator_interventions",
 ]
 
-# What VS-API records for a session when it opens the session's history file.
+# What VS-API records about a session in its history file: what it opened with,
+# where kept history starts once the size budget dropped older rows, and
+# whether an operator intervened.
 METADATA_KEYS = [
     "session_name",
     "routing_stack",
     "source_id",
     "start_time",
+    "retained_from",
+    "operator_intervened",
 ]
 
 
@@ -259,6 +279,40 @@ def report_probe_results(conn: sqlite3.Connection, session_id: str) -> str:
     return "\n".join(lines)
 
 
+def report_interventions(conn: sqlite3.Connection, session_id: str) -> str:
+    """Every recorded operator intervention event, in the order it was recorded."""
+    lines = ["=" * 60, "SESSION REPORT — OPERATOR INTERVENTIONS", "=" * 60, ""]
+    rows = query_operator_interventions(conn, session_id=session_id)
+    if not rows:
+        lines.append("  (no operator interventions)")
+        return "\n".join(lines)
+    lines.append(f"{'Event time':<34} {'Intervention':<16} {'Station':<24} {'Status':<28} Reason")
+    lines.append("-" * 120)
+    for row in rows:
+        lines.append(
+            f"{row['event_time']:<34} {row['intervention_id']:<16} {row['gs_id']:<24} "
+            f"{row['status']:<28} {row['reason'] or ''}"
+        )
+    return "\n".join(lines)
+
+
+def report_lifecycle(conn: sqlite3.Connection, session_id: str) -> str:
+    """Every recorded OME terminal-lifecycle event, in the order it was recorded."""
+    lines = ["=" * 60, "SESSION REPORT — OME LIFECYCLE EVENTS", "=" * 60, ""]
+    rows = query_ome_lifecycle_events(conn, session_id=session_id)
+    if not rows:
+        lines.append("  (no OME lifecycle events)")
+        return "\n".join(lines)
+    lines.append(f"{'Sim time':<34} {'Station':<24} {'Old pair -> successor':<48} Outcome")
+    lines.append("-" * 130)
+    for row in rows:
+        pairs = f"{row['old_pair']} -> {row['successor_pair']}"
+        lines.append(
+            f"{row['sim_time']:<34} {row['gs_id']:<24} {pairs:<48} {row['terminal_outcome']}"
+        )
+    return "\n".join(lines)
+
+
 def run_report(db_path: str, report_type: str) -> str:
     """Run a report on a single session database."""
     if not Path(db_path).exists():
@@ -277,6 +331,10 @@ def run_report(db_path: str, report_type: str) -> str:
                 return report_link_events(conn, session_id)
             case "probe-results":
                 return report_probe_results(conn, session_id)
+            case "interventions":
+                return report_interventions(conn, session_id)
+            case "lifecycle":
+                return report_lifecycle(conn, session_id)
             case _:
                 log.error(f"Unknown report type: {report_type}")
                 sys.exit(1)
@@ -294,7 +352,7 @@ def main() -> None:
         "--db",
         required=True,
         metavar="PATH",
-        help="Path to session SQLite database",
+        help="Path to one recorded session run's history file",
     )
     parser.add_argument(
         "--report",

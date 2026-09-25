@@ -829,7 +829,7 @@ def test_handle_set_latency_proves_kernel_qdisc_state():
                     node_id="sat-a",
                     interface_name="isl0",
                     latency_ms=7.0,
-                    transmit_mbps=1000.0,
+                    rates=node_agent_pb2.TerminalRates(transmit_mbps=1000.0, receive_mbps=1000.0),
                     link_type=node_agent_pb2.LINK_TYPE_ISL,
                 )
             ],

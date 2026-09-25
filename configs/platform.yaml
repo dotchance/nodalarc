@@ -96,6 +96,10 @@ platform:
   # session data volume (250 MiB). Past it the oldest recorded data goes
   # first: earlier runs' recordings, then the oldest rows of the current one.
   vs_api_history_max_bytes: 262144000
+  # History writes that may wait for the recording's writer. A write that
+  # finds this many waiting stops the recording with that reason, so a
+  # recording that cannot keep up says so and never delays live state.
+  vs_api_history_queue_max_writes: 10000
 
   # ── Session Pod Capacity ────────────────────────────────────────────
   # Session pods one Kubernetes node is taken to hold. Readiness warns when a

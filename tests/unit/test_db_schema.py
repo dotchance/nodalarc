@@ -2,7 +2,7 @@
 
 import sqlite3
 import threading
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta, timezone
 
 import pytest
 from nodalarc.db.queries import (
@@ -19,6 +19,7 @@ from nodalarc.db.queries import (
     query_convergence_events,
     query_link_events,
     query_ome_lifecycle_events,
+    query_operator_interventions,
     query_probe_results,
     recorded_session_id,
     set_metadata,
@@ -29,8 +30,11 @@ from nodalarc.db.schema import (
     create_tables,
     require_schema_version,
 )
+from nodalarc.models.events import OpsEvent
 from nodalarc.models.link_events import LatencyUpdate, LinkDown, LinkUp
 from nodalarc.models.metrics import AdapterEvent, ConvergenceResult, ProbeResult
+from nodalarc.models.ome_lifecycle import MbbTeardownLifecycleDetails
+from nodalarc.models.scheduler_ops import ActuationFailureClass, ActuationOpsDetails
 
 T0 = datetime(2025, 1, 1, 0, 0, 0, tzinfo=UTC)
 T1 = datetime(2025, 1, 1, 0, 1, 0, tzinfo=UTC)
@@ -176,11 +180,23 @@ class TestLinkEventQueries:
         for t in [T0, T1, T2]:
             insert_link_up(db, _link_up(sim_time=t), session_id="run-test")
         # T1 is between T0 and T2
-        results = query_link_events(
-            db, start_time=T1.isoformat(), end_time=T1.isoformat(), session_id="run-test"
-        )
+        results = query_link_events(db, start_time=T1, end_time=T1, session_id="run-test")
         assert len(results) == 1
         assert results[0]["sim_time"] == T1.isoformat()
+
+    def test_time_filters_compare_instants_whatever_zone_names_them(self, db):
+        for t in [T0, T1, T2]:
+            insert_link_up(db, _link_up(sim_time=t), session_id="run-test")
+        # T1 named in another zone: the same instant, stored and compared in UTC.
+        t1_elsewhere = T1.astimezone(timezone(timedelta(hours=-7)))
+        results = query_link_events(
+            db, start_time=t1_elsewhere, end_time=t1_elsewhere, session_id="run-test"
+        )
+        assert [row["sim_time"] for row in results] == [T1.isoformat()]
+
+    def test_a_time_without_a_zone_is_refused(self, db):
+        with pytest.raises(ValueError, match="needs its zone"):
+            query_link_events(db, start_time=datetime(2025, 1, 1), session_id="run-test")
 
     def test_query_link_events_by_node(self, db):
         insert_link_up(db, _link_up(), session_id="run-test")
@@ -395,44 +411,50 @@ class TestConcurrentAccess:
         conn_write.close()
 
 
+def _lifecycle_event(
+    *, timestamp: datetime, allocator_step: int, outcome: str, source: str = "ome"
+) -> tuple[OpsEvent, MbbTeardownLifecycleDetails]:
+    details = MbbTeardownLifecycleDetails(
+        session_id="session-a",
+        epoch_id=7,
+        snapshot_seq=42,
+        allocator_step=allocator_step,
+        master_sim_time=T1,
+        gs_id="gs-den",
+        teardown_id="gs-den:sat-old->gs-den:sat-new",
+        old_pair=["gs-den", "sat-old"],
+        successor_pair=["gs-den", "sat-new"],
+        terminal_outcome=outcome,
+        source_allocation_event_category=outcome,
+        message="MBB teardown completed",
+        authority_before={},
+        authority_after={},
+    )
+    event = OpsEvent(
+        timestamp=timestamp,
+        session_id="session-a",
+        source=source,
+        hostname="ome-0",
+        level="info",
+        code="MBB_TEARDOWN_TERMINAL",
+        message="MBB teardown completed",
+        details=details.model_dump(mode="json"),
+    )
+    return event, details
+
+
 class TestOmeLifecyclePersistence:
     def test_lifecycle_terminal_ops_event_is_append_only_session_record(self, db):
-        event = {
-            "timestamp": WALL.isoformat(),
-            "session_id": "session-a",
-            "source": "ome",
-            "hostname": "ome-0",
-            "level": "info",
-            "code": "MBB_TEARDOWN_TERMINAL",
-            "message": "MBB teardown completed",
-            "details": {
-                "session_id": "session-a",
-                "epoch_id": 7,
-                "snapshot_seq": 42,
-                "allocator_step": 123,
-                "master_sim_time": T1.isoformat(),
-                "gs_id": "gs-den",
-                "teardown_id": "gs-den:sat-old->gs-den:sat-new",
-                "old_pair": ["gs-den", "sat-old"],
-                "successor_pair": ["gs-den", "sat-new"],
-                "terminal_outcome": "teardown_completed",
-                "source_allocation_event_category": "teardown_completed",
-                "authority_before": {},
-                "authority_after": {},
-            },
-        }
-        second = {
-            **event,
-            "timestamp": T2.isoformat(),
-            "details": {
-                **event["details"],
-                "allocator_step": 124,
-                "terminal_outcome": "successor_aborted",
-            },
-        }
-
-        first_id = insert_ome_lifecycle_event(db, event, session_id="session-a")
-        second_id = insert_ome_lifecycle_event(db, second, session_id="session-a")
+        first_id = insert_ome_lifecycle_event(
+            db,
+            *_lifecycle_event(timestamp=WALL, allocator_step=123, outcome="teardown_completed"),
+            session_id="session-a",
+        )
+        second_id = insert_ome_lifecycle_event(
+            db,
+            *_lifecycle_event(timestamp=T2, allocator_step=124, outcome="successor_aborted"),
+            session_id="session-a",
+        )
 
         rows = query_ome_lifecycle_events(db, session_id="session-a")
         assert first_id != second_id
@@ -443,88 +465,92 @@ class TestOmeLifecyclePersistence:
         assert rows[0]["epoch_id"] == 7
         assert rows[0]["snapshot_seq"] == 42
         assert rows[0]["old_pair"] == '["gs-den", "sat-old"]'
+        assert rows[0]["sim_time"] == T1.isoformat()
 
     def test_non_ome_ops_event_is_refused(self, db):
         with pytest.raises(ValueError, match="must be an OME MBB_TEARDOWN_TERMINAL event"):
             insert_ome_lifecycle_event(
                 db,
-                {
-                    "timestamp": WALL.isoformat(),
-                    "session_id": "session-a",
-                    "source": "scheduler",
-                    "code": "MBB_TEARDOWN_TERMINAL",
-                    "details": {"terminal_outcome": "teardown_completed"},
-                },
+                *_lifecycle_event(
+                    timestamp=WALL,
+                    allocator_step=1,
+                    outcome="teardown_completed",
+                    source="scheduler",
+                ),
                 session_id="session-a",
             )
         assert query_ome_lifecycle_events(db, session_id="session-a") == []
 
-    def test_lifecycle_event_missing_a_field_is_refused(self, db):
-        event = {
-            "timestamp": WALL.isoformat(),
-            "session_id": "session-a",
-            "source": "ome",
-            "code": "MBB_TEARDOWN_TERMINAL",
-            "details": {"epoch_id": 7, "terminal_outcome": "teardown_completed"},
-        }
-        with pytest.raises(ValueError, match="missing required field 'allocator_step'"):
-            insert_ome_lifecycle_event(db, event, session_id="session-a")
-        assert query_ome_lifecycle_events(db, session_id="session-a") == []
+
+def _intervention_event(
+    *, session_id: str, code: str, timestamp: datetime, reason: str | None
+) -> tuple[OpsEvent, ActuationOpsDetails]:
+    details = ActuationOpsDetails(
+        session_id=session_id,
+        wiring_generation="sha256:" + "a" * 64,
+        scheduler_instance_id="sched-1",
+        hostname="sched-host",
+        gs_id="gs-den",
+        operation="OperatorRepair",
+        failure_class=ActuationFailureClass.NONE,
+        intervention_id="repair-1",
+        reason=reason,
+    )
+    event = OpsEvent(
+        timestamp=timestamp,
+        session_id=session_id,
+        source="scheduler",
+        hostname="sched-host",
+        level="warning",
+        code=code,
+        message="operator repair",
+        details=details.model_dump(mode="json"),
+    )
+    return event, details
 
 
 class TestOperatorInterventionPersistence:
     def test_intervention_events_are_append_only_and_mark_session_intervened(self, db):
-        base_event = {
-            "timestamp": T0.isoformat(),
-            "session_id": "session-a",
-            "hostname": "sched-host",
-            "code": "OPERATOR_REPAIR_REQUESTED",
-            "details": {
-                "intervention_id": "repair-1",
-                "wiring_generation": "sha256:" + "a" * 64,
-                "scheduler_instance_id": "sched-1",
-                "gs_id": "gs-den",
-                "reason": "operator requested repair",
-            },
-        }
-        second_event = {
-            **base_event,
-            "timestamp": T1.isoformat(),
-            "code": "OPERATOR_REPAIR_SUCCEEDED",
-            "details": {
-                **base_event["details"],
-                "reason": "operator repair matched current authority",
-            },
-        }
+        first_id = insert_operator_intervention_event(
+            db,
+            *_intervention_event(
+                session_id="session-a",
+                code="OPERATOR_REPAIR_REQUESTED",
+                timestamp=T0,
+                reason="operator requested repair",
+            ),
+            session_id="session-a",
+        )
+        second_id = insert_operator_intervention_event(
+            db,
+            *_intervention_event(
+                session_id="session-a",
+                code="OPERATOR_REPAIR_SUCCEEDED",
+                timestamp=T1,
+                reason="operator repair matched current authority",
+            ),
+            session_id="session-a",
+        )
 
-        first_id = insert_operator_intervention_event(db, base_event, session_id="session-a")
-        second_id = insert_operator_intervention_event(db, second_event, session_id="session-a")
-
-        rows = db.execute(
-            "SELECT event_code FROM operator_interventions WHERE intervention_id = ? ORDER BY id",
-            ("repair-1",),
-        ).fetchall()
+        rows = query_operator_interventions(db, session_id="session-a")
         intervened = get_metadata(db, key="operator_intervened", session_id="session-a")
         assert first_id != second_id
-        assert [row[0] for row in rows] == [
-            "OPERATOR_REPAIR_REQUESTED",
-            "OPERATOR_REPAIR_SUCCEEDED",
+        assert [(row["event_code"], row["event_time"]) for row in rows] == [
+            ("OPERATOR_REPAIR_REQUESTED", T0.isoformat()),
+            ("OPERATOR_REPAIR_SUCCEEDED", T1.isoformat()),
         ]
         assert intervened == "true"
 
     def test_intervention_event_from_another_session_is_refused(self, db):
-        event = {
-            "timestamp": T0.isoformat(),
-            "session_id": "session-b",
-            "hostname": "sched-host",
-            "code": "OPERATOR_REPAIR_REQUESTED",
-            "details": {
-                "intervention_id": "repair-1",
-                "wiring_generation": "sha256:" + "a" * 64,
-                "scheduler_instance_id": "sched-1",
-                "gs_id": "gs-den",
-            },
-        }
         with pytest.raises(ValueError, match="belongs to session 'session-b', not 'session-a'"):
-            insert_operator_intervention_event(db, event, session_id="session-a")
+            insert_operator_intervention_event(
+                db,
+                *_intervention_event(
+                    session_id="session-b",
+                    code="OPERATOR_REPAIR_REQUESTED",
+                    timestamp=T0,
+                    reason=None,
+                ),
+                session_id="session-a",
+            )
         assert db.execute("SELECT COUNT(*) FROM operator_interventions").fetchone()[0] == 0

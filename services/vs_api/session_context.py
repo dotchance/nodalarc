@@ -49,7 +49,6 @@ from nodalarc.db.queries import (
     insert_snapshot,
     set_metadata,
 )
-from nodalarc.db.retention import enforce_history_budget
 from nodalarc.db.schema import create_tables
 from nodalarc.explain import compose_gs_decision_timeline_sample
 from nodalarc.models.decision_explanation import (
@@ -57,12 +56,20 @@ from nodalarc.models.decision_explanation import (
     GsDecisionTimelineFacts,
     PendingActuation,
 )
+from nodalarc.models.events import OpsEvent
 from nodalarc.models.link_decisions import GroundLinkDecisionSnapshot
 from nodalarc.models.link_events import LatencyUpdate, LinkDown, LinkUp
+from nodalarc.models.ome_lifecycle import MbbTeardownLifecycleDetails
 from nodalarc.models.resolved_session import InterfaceRates, NodeKind, NodeRole, ResolvedNode
-from nodalarc.models.scheduler_ops import ActualLinkSnapshot, ActuationState, parse_actuation_state
+from nodalarc.models.scheduler_ops import (
+    ActualLinkSnapshot,
+    ActuationOpsDetails,
+    ActuationState,
+    parse_actuation_state,
+)
 from nodalarc.models.vs_api import (
     AlmanacState,
+    HistoryRecordingState,
     LinkDecisionTrace,
     LinkState,
     NetworkHealth,
@@ -95,6 +102,7 @@ from nodalarc.platform_config import get_platform_config
 from nodalarc.resolve_session import SessionResolution
 from pydantic import ValidationError
 
+from vs_api.history_recorder import HistoryRecorder
 from vs_api.ops_log import is_operator_visible_ops_event, stamp_ops_event
 from vs_api.resolved_runtime_views import routing_instances_by_node_id, routing_label
 
@@ -185,13 +193,19 @@ class SessionContext:
         self.actuation_expected_latency_ms: float = platform.vs_api_actuation_expected_latency_ms
         self.actuation_fault_after_ms: float = platform.vs_api_actuation_fault_after_ms
 
-        # This session's history file, or None when the session is not
-        # recorded. A recorded session that fails to write stops recording and
-        # keeps the failure in history_error, which every history read reports.
-        self.history_path = history_path
-        self.history_error: str | None = None
-        self._history_lock = threading.Lock()
-        self._history_max_bytes: int = platform.vs_api_history_max_bytes
+        # This session run's history recording, or None when the run is not
+        # recorded. A recording that fails stops and says why in its error,
+        # which every history read reports.
+        self.history: HistoryRecorder | None = (
+            HistoryRecorder(
+                history_path,
+                session_id=self.session_id,
+                max_bytes=platform.vs_api_history_max_bytes,
+                max_pending_writes=platform.vs_api_history_queue_max_writes,
+            )
+            if history_path is not None
+            else None
+        )
 
         self._init_runtime_state()
         self._seed_resolved_static_nodes()
@@ -279,6 +293,9 @@ class SessionContext:
         # None until those subscriptions exist.
         self._history_baseline_after_seq: int | None = None
         self._history_baseline_recorded = False
+        # True once the history file is found to hold this run already: VS-API
+        # restarted during the recording, so its links open a resumed block.
+        self._history_resumed = False
         self._subscriptions: list = []
         self._subscriber_task: asyncio.Task | None = None
         self._ready = asyncio.Event()
@@ -324,10 +341,7 @@ class SessionContext:
         self._routing_instances_by_node_id = {}
         self._role_by_node_id = {}
         self._kind_by_node_id = {}
-        self.history_path = None
-        self.history_error = None
-        self._history_lock = threading.Lock()
-        self._history_max_bytes = get_platform_config().vs_api_history_max_bytes
+        self.history = None
         self.beam_falloff_exponent = 2.0
         self.actuation_expected_latency_ms = 250.0
         self.actuation_fault_after_ms = 1200.0
@@ -360,8 +374,7 @@ class SessionContext:
         """
         if self._stopped:
             raise RuntimeError("Cannot start a stopped SessionContext")
-        if self.history_path is not None:
-            await asyncio.to_thread(self._record_history, "session metadata", self._open_history)
+        self._record_history("session metadata", self._open_history)
 
         self._subscriber_task = asyncio.create_task(
             self._subscriber_loop(nc, mode),
@@ -394,6 +407,10 @@ class SessionContext:
                     "SessionContext stop timed out after 15s — %d subscriptions may be orphaned",
                     len(self._subscriptions),
                 )
+        # The recording ends after its last handler: the queued writes are applied
+        # and the file is closed.
+        if self.history is not None:
+            await asyncio.to_thread(self.history.close)
         # Clear state after subscriptions are gone
         with self.state_lock:
             self.nodes.clear()
@@ -503,8 +520,8 @@ class SessionContext:
                     cb=self._on_latency_update,
                 )
             )
-            if self.history_path is not None:
-                await self._start_history_baseline(js)
+            if self.history is not None:
+                await self._start_history_baseline(js, self.history)
             self._subscriptions.append(
                 await js.subscribe(
                     ome_clock_subject(sid),
@@ -601,15 +618,12 @@ class SessionContext:
             self._subscriptions.clear()
             log.info("SessionContext subscriptions cleaned: session_id=%s", sid)
 
-    async def _start_history_baseline(self, js) -> None:
+    async def _start_history_baseline(self, js, history: HistoryRecorder) -> None:
         """Find where this recording starts. A failure stops recording, never live state."""
         try:
             self._history_baseline_after_seq = await self._last_link_transition_seq(js)
         except Exception as exc:
-            # The lock can be held by a write in a worker thread; wait for it there.
-            await asyncio.to_thread(
-                self._stop_history_locked, "failed to find where recording starts", exc
-            )
+            history.stop("failed to find where recording starts", exc)
 
     async def _last_link_transition_seq(self, js) -> int:
         """Link-stream sequence of the newest LinkUp or LinkDown for this session.
@@ -631,10 +645,10 @@ class SessionContext:
             newest = max(newest, last.seq)
         return newest
 
-    async def _record_history_baseline(
+    def _record_history_baseline(
         self, msg, snap: ActualLinkSnapshot, pairs: frozenset[tuple[str, str]]
     ) -> None:
-        """Record the kernel-actual links once, when this session's recording starts.
+        """Record the kernel-actual links once, when this session's recording starts or resumes.
 
         LinkUp and LinkDown rows exist only from subscription on. The Scheduler
         publishes its kernel-actual set after the transitions that change it, so
@@ -644,7 +658,7 @@ class SessionContext:
         LinkDown followed it.
         """
         after_seq = self._history_baseline_after_seq
-        if self.history_path is None or self._history_baseline_recorded or after_seq is None:
+        if self.history is None or self._history_baseline_recorded or after_seq is None:
             return
         if msg.metadata.sequence.stream <= after_seq:
             return
@@ -663,9 +677,12 @@ class SessionContext:
                 session_id=self.session_id,
                 sim_time=snap.sim_time,
                 wall_time=snap.emitted_at,
+                # The writer thread opened the file before this write: a file that
+                # already held this run means VS-API restarted during the recording.
+                reason="recording_resumed" if self._history_resumed else "recording_start",
             )
 
-        await asyncio.to_thread(self._record_history, "links active at recording start", write)
+        self._record_history("links active where recording starts", write)
 
     # ------------------------------------------------------------------
     # NATS message handlers
@@ -931,6 +948,7 @@ class SessionContext:
         """Create or reopen this session's history file; record what it holds once."""
         create_tables(conn)
         if get_metadata(conn, session_id=self.session_id, key="session_name") is not None:
+            self._history_resumed = True
             return
         for key, value in (
             ("session_name", self.constellation_name),
@@ -940,52 +958,17 @@ class SessionContext:
         ):
             set_metadata(conn, session_id=self.session_id, key=key, value=value)
 
+    def history_recording_state(self) -> HistoryRecordingState | None:
+        """This run's recording as the snapshot reports it; None when the run is not recorded."""
+        if self.history is None:
+            return None
+        error = self.history.error
+        return HistoryRecordingState(state="recording" if error is None else "stopped", error=error)
+
     def _record_history(self, what: str, write: Callable[[sqlite3.Connection], object]) -> None:
-        """Run one write against this session's history file.
-
-        A session that is not recorded writes nothing. Every write is followed
-        by the history size budget, which drops the oldest recorded data when
-        all recordings together pass it. The first failed write stops
-        recording for the session: it is logged as an error and kept in
-        history_error, which every history read reports in place of data.
-        """
-        if self.history_path is None:
-            return
-        with self._history_lock:
-            if self.history_error is not None:
-                return
-            try:
-                self.history_path.parent.mkdir(parents=True, exist_ok=True)
-                conn = sqlite3.connect(self.history_path)
-                try:
-                    write(conn)
-                    enforce_history_budget(
-                        conn,
-                        history_path=self.history_path,
-                        session_id=self.session_id,
-                        max_bytes=self._history_max_bytes,
-                    )
-                finally:
-                    conn.close()
-            except Exception as exc:
-                self._stop_history(f"failed to record {what}", exc)
-
-    def _stop_history_locked(self, failure: str, exc: Exception) -> None:
-        """Stop recording this session after a failure outside a history write."""
-        with self._history_lock:
-            self._stop_history(failure, exc)
-
-    def _stop_history(self, failure: str, exc: Exception) -> None:
-        """Stop recording this session after a failure; caller holds the history lock."""
-        self.history_error = failure
-        log.error(
-            "History recording stopped for session %s: %s in %s: %s",
-            self.session_id,
-            failure,
-            self.history_path,
-            exc,
-            exc_info=exc,
-        )
+        """Queue one write to this session's history; a session not recorded writes nothing."""
+        if self.history is not None:
+            self.history.submit(what, write)
 
     def record_snapshot(self, snapshot: dict) -> None:
         """Record one full state snapshot in this session's history."""
@@ -994,8 +977,8 @@ class SessionContext:
             lambda conn: insert_snapshot(
                 conn,
                 session_id=self.session_id,
-                sim_time=snapshot["sim_time"],
-                wall_time=snapshot["wall_time"],
+                sim_time=datetime.fromisoformat(snapshot["sim_time"]),
+                wall_time=datetime.fromisoformat(snapshot["wall_time"]),
                 snapshot_json=json.dumps(snapshot),
             ),
         )
@@ -1045,10 +1028,8 @@ class SessionContext:
             self.link_decision_traces[key] = trace
         self._notify_link_change(node_a, node_b, up=True)
         self._add_recent_event(data, "link_up")
-        await asyncio.to_thread(
-            self._record_history,
-            "LinkUp",
-            lambda conn: insert_link_up(conn, event, session_id=self.session_id),
+        self._record_history(
+            "LinkUp", lambda conn: insert_link_up(conn, event, session_id=self.session_id)
         )
 
     async def _on_link_down(self, msg) -> None:
@@ -1062,10 +1043,8 @@ class SessionContext:
             self.link_decision_traces.pop(key, None)
         self._notify_link_change(node_a, node_b, up=False)
         self._add_recent_event(data, "link_down")
-        await asyncio.to_thread(
-            self._record_history,
-            "LinkDown",
-            lambda conn: insert_link_down(conn, event, session_id=self.session_id),
+        self._record_history(
+            "LinkDown", lambda conn: insert_link_down(conn, event, session_id=self.session_id)
         )
 
     async def _on_latency_update(self, msg) -> None:
@@ -1085,8 +1064,7 @@ class SessionContext:
                     update={"latency_ms": latency_ms, "range_km": range_km}
                 )
                 self.link_decision_traces[key] = trace
-        await asyncio.to_thread(
-            self._record_history,
+        self._record_history(
             "LatencyUpdate",
             lambda conn: insert_latency_update(conn, event, session_id=self.session_id),
         )
@@ -1128,9 +1106,8 @@ class SessionContext:
                 self.session_ops_events.append(stamp_ops_event(data))
             self._update_actuation_notice(data)
             self._update_ome_lifecycle_notice(data)
-        # sqlite writers — never on the loop.
-        await asyncio.to_thread(self._persist_operator_intervention, data)
-        await asyncio.to_thread(self._persist_ome_lifecycle_event, data)
+        self._persist_operator_intervention(data)
+        self._persist_ome_lifecycle_event(data)
 
     async def _on_actuation_state(self, msg) -> None:
         """Retained per-GS actuation state (LAST_PER_SUBJECT recovery).
@@ -1194,7 +1171,7 @@ class SessionContext:
                 "emitted_at": snap.emitted_at,
                 "received_at": received_at,
             }
-        await self._record_history_baseline(msg, snap, pairs)
+        self._record_history_baseline(msg, snap, pairs)
 
     def actual_kernel_pairs(self) -> frozenset[tuple[str, str]]:
         """Scheduler-verified kernel-actual pairs for the current session owner.
@@ -1315,21 +1292,33 @@ class SessionContext:
         """Record an ops event that belongs to an operator intervention."""
         if not (event.get("details") or {}).get("intervention_id"):
             return
-        self._record_history(
-            "operator intervention event",
-            lambda conn: insert_operator_intervention_event(
-                conn, event, session_id=self.session_id
-            ),
-        )
+
+        def write(conn: sqlite3.Connection) -> None:
+            ops = OpsEvent.model_validate(event)
+            insert_operator_intervention_event(
+                conn,
+                ops,
+                ActuationOpsDetails.model_validate(ops.details),
+                session_id=self.session_id,
+            )
+
+        self._record_history("operator intervention event", write)
 
     def _persist_ome_lifecycle_event(self, event: dict) -> None:
         """Record an OME terminal-lifecycle ops event."""
         if event.get("source") != "ome" or event.get("code") != "MBB_TEARDOWN_TERMINAL":
             return
-        self._record_history(
-            "OME lifecycle event",
-            lambda conn: insert_ome_lifecycle_event(conn, event, session_id=self.session_id),
-        )
+
+        def write(conn: sqlite3.Connection) -> None:
+            ops = OpsEvent.model_validate(event)
+            insert_ome_lifecycle_event(
+                conn,
+                ops,
+                MbbTeardownLifecycleDetails.model_validate(ops.details),
+                session_id=self.session_id,
+            )
+
+        self._record_history("OME lifecycle event", write)
 
     def build_actuation_health(self) -> dict:
         by_instance: dict[str, dict] = {}

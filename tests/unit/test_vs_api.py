@@ -765,6 +765,7 @@ class TestSnapshotModel:
             wall_time=datetime.now(UTC),
             schema_version=1,
             session_id="run-test-0001",
+            history_recording=None,
             nodes=[
                 NodeState(
                     node_id="sat-P00S00",
@@ -837,6 +838,7 @@ class TestSnapshotModel:
             wall_time=datetime.now(UTC),
             schema_version=1,
             session_id="run-test-0001",
+            history_recording=None,
             nodes=[],
             links=[],
             traced_paths=[],
@@ -913,16 +915,15 @@ class TestSnapshotStorage:
     def test_insert_and_query_snapshot(self):
         conn = sqlite3.connect(":memory:")
         create_tables(conn)
+        at = datetime(2025, 1, 1, tzinfo=UTC)
         insert_snapshot(
             conn,
-            sim_time="2025-01-01T00:00:00+00:00",
-            wall_time="2025-01-01T00:00:00+00:00",
+            sim_time=at,
+            wall_time=at,
             snapshot_json='{"nodes":[],"links":[]}',
             session_id="run-test",
         )
-        result = query_nearest_snapshot(
-            conn, sim_time="2025-01-01T00:00:00+00:00", session_id="run-test"
-        )
+        result = query_nearest_snapshot(conn, sim_time=at, session_id="run-test")
         assert result is not None
         data = json.loads(result["snapshot_json"])
         assert data["nodes"] == []
@@ -931,31 +932,27 @@ class TestSnapshotStorage:
     def test_nearest_snapshot_selection(self):
         conn = sqlite3.connect(":memory:")
         create_tables(conn)
-        for t in [
-            "2025-01-01T00:00:00+00:00",
-            "2025-01-01T00:05:00+00:00",
-            "2025-01-01T00:10:00+00:00",
-        ]:
+        for minute in (0, 5, 10):
+            at = datetime(2025, 1, 1, 0, minute, tzinfo=UTC)
             insert_snapshot(
                 conn,
-                sim_time=t,
-                wall_time=t,
-                snapshot_json=f'{{"sim_time":"{t}"}}',
+                sim_time=at,
+                wall_time=at,
+                snapshot_json=json.dumps({"sim_time": at.isoformat()}),
                 session_id="run-test",
             )
-        result = query_nearest_snapshot(
-            conn, sim_time="2025-01-01T00:04:00+00:00", session_id="run-test"
-        )
+        # The Z form and the +00:00 form name the same instants.
+        asked = datetime.fromisoformat("2025-01-01T00:04:00Z")
+        result = query_nearest_snapshot(conn, sim_time=asked, session_id="run-test")
         assert result is not None
-        data = json.loads(result["snapshot_json"])
-        assert "00:05:00" in data["sim_time"] or "00:00:00" in data["sim_time"]
+        assert json.loads(result["snapshot_json"])["sim_time"] == "2025-01-01T00:05:00+00:00"
         conn.close()
 
     def test_no_snapshots_returns_none(self):
         conn = sqlite3.connect(":memory:")
         create_tables(conn)
         result = query_nearest_snapshot(
-            conn, sim_time="2025-01-01T00:00:00+00:00", session_id="run-test"
+            conn, sim_time=datetime(2025, 1, 1, tzinfo=UTC), session_id="run-test"
         )
         assert result is None
         conn.close()
@@ -2801,13 +2798,32 @@ class TestOmeLifecycleNotices:
         assert ctx.ome_lifecycle_notices_by_key == {}
 
 
-def _recorded_context(history_path) -> SessionContext:
+def _recorded_context(history_path, *, max_bytes: int = 262_144_000) -> SessionContext:
+    from vs_api.history_recorder import HistoryRecorder
+
     ctx = SessionContext.__new__(SessionContext)
     ctx._init_state_only()
     ctx.session_id = "run-history-0001"
     ctx._interface_rates = _ISL_RATES
-    ctx.history_path = history_path
+    ctx.history = (
+        HistoryRecorder(
+            history_path,
+            session_id=ctx.session_id,
+            max_bytes=max_bytes,
+            max_pending_writes=10_000,
+        )
+        if history_path is not None
+        else None
+    )
     return ctx
+
+
+def _recording_error(ctx: SessionContext) -> str | None:
+    """The recording's error once every queued write is applied; None for a run not recorded."""
+    if ctx.history is None:
+        return None
+    ctx.history.flush()
+    return ctx.history.error
 
 
 def _message(payload: dict):
@@ -3165,7 +3181,7 @@ class TestSessionHistory:
         asyncio.run(ctx._on_link_up(_message(_make_link_up_event())))
         asyncio.run(ctx._on_link_down(_message(_make_link_down_event())))
 
-        assert ctx.history_error is None
+        assert _recording_error(ctx) is None
         conn = sqlite3.connect(path)
         try:
             assert recorded_session_id(conn) == "run-history-0001"
@@ -3182,7 +3198,7 @@ class TestSessionHistory:
         ctx = _recorded_context(None)
         asyncio.run(ctx._on_link_up(_message(_make_link_up_event())))
 
-        assert ctx.history_error is None
+        assert _recording_error(ctx) is None
         assert list(tmp_path.iterdir()) == []
 
     def test_history_reads_refuse_when_the_session_is_not_recorded(self, monkeypatch):
@@ -3209,7 +3225,7 @@ class TestSessionHistory:
         ctx = _recorded_context(blocker / "run-history-0001.db")
 
         asyncio.run(ctx._on_link_up(_message(_make_link_up_event())))
-        assert ctx.history_error == "failed to record LinkUp"
+        assert _recording_error(ctx) == "failed to record LinkUp"
 
         monkeypatch.setattr(m, "_API_KEY", "")
         monkeypatch.setattr(m, "_active_context", ctx)
@@ -3233,6 +3249,7 @@ class TestSessionHistory:
         asyncio.run(
             ctx._on_link_up(_message(_make_link_up_event(node_a="sat-P00S05", node_b="sat-P00S06")))
         )
+        assert _recording_error(ctx) is None
 
         monkeypatch.setattr(m, "_API_KEY", "")
         monkeypatch.setattr(m, "_active_context", ctx)
@@ -3299,6 +3316,7 @@ class TestSessionHistory:
         # Published before the newest unrecorded transition: it can still list a
         # link whose LinkDown followed it, so it opens nothing.
         self._deliver_actual_links(ctx, stream_seq=39, pairs=[("sat-a", "sat-b")])
+        ctx.history.flush()
         assert self._link_rows(path) == []
 
         self._deliver_actual_links(
@@ -3308,7 +3326,7 @@ class TestSessionHistory:
         self._deliver_actual_links(ctx, stream_seq=45, pairs=[("sat-e", "sat-f")])
 
         sim_time = self._BASELINE_SIM_TIME.isoformat()
-        assert ctx.history_error is None
+        assert _recording_error(ctx) is None
         assert self._link_rows(path) == [
             ("LinkActive", "recording_start", "gs-x", "sat-a", sim_time),
             ("LinkActive", "recording_start", "sat-c", "sat-d", sim_time),
@@ -3321,6 +3339,7 @@ class TestSessionHistory:
 
         self._deliver_actual_links(ctx, stream_seq=41, pairs=[("sat-c", "sat-d")])
 
+        ctx.history.flush()
         assert self._link_rows(path) == []
 
     def test_unrecorded_session_writes_no_baseline(self, tmp_path):
@@ -3337,7 +3356,7 @@ class TestSessionHistory:
 
         self._deliver_actual_links(ctx, stream_seq=1, pairs=[("sat-c", "sat-d")], sim_time=None)
 
-        assert ctx.history_error == "failed to record links active at recording start"
+        assert _recording_error(ctx) == "failed to record links active where recording starts"
 
     def test_the_fence_is_the_newest_link_up_or_link_down_on_the_stream(self):
         import asyncio
@@ -3401,10 +3420,11 @@ class TestSessionHistory:
                     session_id=ctx.session_id,
                     sim_time=at,
                     wall_time=at,
+                    reason="recording_start",
                 )
 
         ctx._record_history("link rows", write)
-        assert ctx.history_error is None
+        assert _recording_error(ctx) is None
         return ctx
 
     def test_link_history_pages_hold_at_most_200_and_follow_the_cursor(self, tmp_path, monkeypatch):
@@ -3484,16 +3504,19 @@ class TestSessionHistory:
         import vs_api.main as m
         from nodalarc.db.retention import used_bytes
 
-        ctx = _recorded_context(tmp_path / "history" / "run-history-0001.db")
-        ctx._history_max_bytes = 400_000
+        # A 64 KiB write-ahead log leaves the rows 400 000 bytes of the budget.
+        monkeypatch.setattr("vs_api.history_recorder._WAL_SIZE_LIMIT_BYTES", 65_536)
+        ctx = _recorded_context(
+            tmp_path / "history" / "run-history-0001.db", max_bytes=400_000 + 65_536
+        )
         ctx._record_history("session metadata", ctx._open_history)
         start = datetime(2026, 9, 24, 12, 0, tzinfo=UTC)
         for step in range(60):
             at = (start + timedelta(seconds=10 * step)).isoformat()
             ctx.record_snapshot({"sim_time": at, "wall_time": at, "payload": "x" * 20_000})
 
-        assert ctx.history_error is None
-        conn = sqlite3.connect(ctx.history_path)
+        assert _recording_error(ctx) is None
+        conn = sqlite3.connect(ctx.history.path)
         try:
             assert used_bytes(conn) <= 400_000
             kept = [row[0] for row in conn.execute("SELECT sim_time FROM snapshots ORDER BY id")]
@@ -3562,4 +3585,152 @@ class TestSessionHistory:
 
         assert asyncio.run(run())
         assert actual_links_subscribe_subject(ctx.session_id) in subscribed
-        assert ctx.history_error == "failed to find where recording starts"
+        assert _recording_error(ctx) == "failed to find where recording starts"
+
+    def test_a_recording_resumed_after_a_restart_opens_its_links_as_resumed(self, tmp_path):
+        path = tmp_path / "run-history-0001.db"
+        first = _recorded_context(path)
+        first._record_history("session metadata", first._open_history)
+        first.history.close()
+
+        # VS-API restarted: a new context opens the same run's file.
+        resumed = _recorded_context(path)
+        resumed._record_history("session metadata", resumed._open_history)
+        resumed._history_baseline_after_seq = 0
+        self._deliver_actual_links(resumed, stream_seq=1, pairs=[("sat-a", "sat-b")])
+
+        assert _recording_error(resumed) is None
+        assert self._link_rows(path) == [
+            (
+                "LinkActive",
+                "recording_resumed",
+                "sat-a",
+                "sat-b",
+                self._BASELINE_SIM_TIME.isoformat(),
+            )
+        ]
+
+    def test_live_handlers_do_not_wait_for_the_disk(self, tmp_path):
+        import asyncio
+        import threading
+
+        ctx = _recorded_context(tmp_path / "run-history-0001.db")
+        ctx._record_history("session metadata", ctx._open_history)
+        writing, release = threading.Event(), threading.Event()
+        finished: list[str] = []
+
+        def slow_write(conn) -> None:
+            writing.set()
+            release.wait(timeout=10)
+            finished.append("slow write")
+
+        ctx._record_history("a slow write", slow_write)
+        assert writing.wait(timeout=10)
+
+        # The writer is held on the slow write; the live handler completes before it.
+        asyncio.run(ctx._on_link_up(_message(_make_link_up_event())))
+        assert _link_key("sat-P00S00", "sat-P00S01") in ctx.links
+        assert finished == []
+
+        release.set()
+        assert _recording_error(ctx) is None
+        assert [row[0] for row in self._link_rows(ctx.history.path)] == ["LinkUp"]
+
+    def test_a_recording_that_cannot_keep_up_stops_and_says_why(self, tmp_path):
+        import threading
+
+        from vs_api.history_recorder import HistoryRecorder
+
+        recorder = HistoryRecorder(
+            tmp_path / "run-history-0001.db",
+            session_id="run-history-0001",
+            max_bytes=262_144_000,
+            max_pending_writes=1,
+        )
+        writing, release = threading.Event(), threading.Event()
+        applied: list[str] = []
+
+        def blocking(conn) -> None:
+            writing.set()
+            release.wait(timeout=10)
+            applied.append("first")
+
+        recorder.submit("first", blocking)
+        assert writing.wait(timeout=10)
+        recorder.submit("second", lambda conn: applied.append("second"))
+        recorder.submit("third", lambda conn: applied.append("third"))
+
+        assert recorder.error == "failed to record third: 1 writes were already waiting"
+        release.set()
+        recorder.flush()
+        assert applied == ["first"]
+        recorder.close()
+
+    def test_the_snapshot_reports_the_recording_state(self, tmp_path):
+        from nodalarc.models.vs_api import HistoryRecordingState
+
+        assert _recorded_context(None).history_recording_state() is None
+
+        ctx = _recorded_context(tmp_path / "run-history-0001.db")
+        assert ctx.history_recording_state() == HistoryRecordingState(state="recording", error=None)
+
+        ctx.history.stop("failed to record LinkUp", None)
+        assert ctx.history_recording_state() == HistoryRecordingState(
+            state="stopped", error="failed to record LinkUp"
+        )
+
+    @pytest.mark.parametrize(
+        "path",
+        ["/api/v1/links?start=2026-09-24T12:00:00", "/api/v1/state/2026-09-24T12:00:00"],
+    )
+    def test_history_times_must_name_their_zone(self, tmp_path, monkeypatch, path):
+        import vs_api.main as m
+
+        ctx = _recorded_context(tmp_path / "run-history-0001.db")
+        ctx._record_history("session metadata", ctx._open_history)
+        assert _recording_error(ctx) is None
+        monkeypatch.setattr(m, "_API_KEY", "")
+        monkeypatch.setattr(m, "_active_context", ctx)
+
+        response = TestClient(m.app).get(path)
+
+        assert response.status_code == 400
+        assert response.json()["code"] == "history.time_without_zone"
+
+    def test_an_intervention_event_the_model_refuses_stops_the_recording(self, tmp_path):
+        ctx = _recorded_context(tmp_path / "run-history-0001.db")
+        ctx._record_history("session metadata", ctx._open_history)
+
+        ctx._persist_operator_intervention(
+            {
+                "timestamp": "2026-09-24T12:00:00+00:00",
+                "session_id": "run-history-0001",
+                "source": "scheduler",
+                "hostname": "sched-host",
+                "level": "warning",
+                "code": "OPERATOR_REPAIR_REQUESTED",
+                "message": "operator repair",
+                "details": {"intervention_id": "repair-1"},
+            }
+        )
+
+        assert _recording_error(ctx) == "failed to record operator intervention event"
+
+    def test_the_recorder_cuts_its_write_ahead_log_back_after_checkpoints(
+        self, tmp_path, monkeypatch
+    ):
+        from datetime import timedelta
+
+        monkeypatch.setattr("vs_api.history_recorder._WAL_SIZE_LIMIT_BYTES", 65_536)
+        ctx = _recorded_context(tmp_path / "run-history-0001.db")
+        ctx._record_history("session metadata", ctx._open_history)
+        start = datetime(2026, 9, 24, 12, 0, tzinfo=UTC)
+        # About 6 MB of writes: SQLite checkpoints every 1000 pages (4 MiB).
+        for step in range(600):
+            at = (start + timedelta(seconds=step)).isoformat()
+            ctx.record_snapshot({"sim_time": at, "wall_time": at, "payload": "x" * 10_000})
+
+        assert _recording_error(ctx) is None
+        wal = ctx.history.path.with_name(ctx.history.path.name + "-wal")
+        # Without the limit the log keeps its 4 MiB high-water size after a checkpoint.
+        assert wal.stat().st_size < 4 * 1024 * 1024

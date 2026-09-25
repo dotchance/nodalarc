@@ -7,7 +7,7 @@ when a link near the traced path changes, until it is stopped or reaches its
 time limit. The latest result is what the UI shows. When a link on the shown
 path goes down, that path no longer exists: the cycle in flight is closed and
 the next measurement is shown as its hops arrive. After the time limit the
-last finished cycle stays, marked stopped.
+last finished cycle whose path still stands stays, marked stopped.
 """
 
 from __future__ import annotations
@@ -48,7 +48,8 @@ class ContinuousTracer:
         self._task: asyncio.Task | None = None
         # What the UI shows: a finished cycle, or a measurement still arriving.
         self._latest: TracedPath | None = None
-        # The latest cycle that finished; what stays at the time limit.
+        # The latest cycle that finished and whose path still stands; what stays
+        # at the time limit.
         self._last_finished: TracedPath | None = None
         self._src: TraceEndpoint | None = None
         self._dst: TraceEndpoint | None = None
@@ -108,6 +109,8 @@ class ContinuousTracer:
             with self._show_lock:
                 self._cycle_closed.set()
                 self._latest = self._path_tracer.measuring(src, dst, flow_id=TRACE_FLOW_ID)
+                # The broken path is never shown again, at the time limit included.
+                self._last_finished = None
         self._retrace_event.set()
 
     @property
@@ -223,14 +226,14 @@ class ContinuousTracer:
         return result
 
     def _last_complete(self) -> TracedPath:
-        """The latest finished cycle, or a failed result when no cycle finished."""
+        """The latest finished cycle whose path still stands, or a failed result."""
         if self._last_finished is not None:
             return self._last_finished
         src, dst = self._require_endpoints()
         return self._path_tracer.failed(
             src,
             dst,
-            "the trace reached its time limit before a cycle finished",
+            "the trace reached its time limit before it measured a current path",
             flow_id=TRACE_FLOW_ID,
         )
 

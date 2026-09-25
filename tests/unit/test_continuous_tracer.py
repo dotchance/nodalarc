@@ -336,3 +336,38 @@ def test_only_a_link_down_between_consecutive_shown_hops_replaces_the_shown_path
     asyncio.run(run())
 
     assert shown == [VIA_SAT_A, VIA_SAT_A]
+
+
+def test_a_path_broken_by_a_link_down_is_not_shown_again_at_the_time_limit() -> None:
+    tracer = _live(max_seconds=1.0)
+    forward = [
+        lambda: _Stream(_output(" 1  10.0.0.1  5.0 ms", " 2  10.2.1.1  9.0 ms")),
+        _OpenStream,
+    ]
+    forward_cycles = [0]
+
+    def streams(_exec, pod_name, _namespace, **_kwargs):
+        if pod_name == "gs-beta":
+            return _Stream(_output(" 1  10.0.0.1  4.0 ms", " 2  10.2.0.1  8.0 ms"))
+        forward_cycles[0] += 1
+        return (forward.pop(0) if len(forward) > 1 else forward[0])()
+
+    async def run() -> None:
+        with patch("kubernetes.stream.stream", side_effect=streams):
+            await tracer.start("gs-alpha", "gs-beta")
+            # The first cycle finished via sat-a; every later forward trace never ends.
+            await _until(lambda: forward_cycles[0] >= 2)
+            assert tracer.traced_path.hops == VIA_SAT_A
+            tracer.notify_link_change("sat-a", "gs-alpha", up=False)
+            # The time limit lands while the re-measure is still running.
+            await asyncio.wait_for(tracer._task, timeout=10)
+
+    asyncio.run(run())
+
+    result = tracer.traced_path
+    assert (result.tracing, result.stop_reason) == (False, "time_limit")
+    assert result.hops != VIA_SAT_A
+    assert (result.state, result.error) == (
+        "failed",
+        "the trace reached its time limit before it measured a current path",
+    )

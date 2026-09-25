@@ -12,6 +12,7 @@ from nodalarc.substrate.measurement_contract import (
     SubstrateMeasurement,
     SubstrateStatusDocument,
 )
+from scheduler.pod_locator import PodLocationError, PodLocationMap
 from scheduler.substrate_latency import (
     resolve_substrate_rtt_ms,
     validate_required_substrate_measurements,
@@ -22,16 +23,9 @@ WIRING_GENERATION = "sha256:" + "a" * 64
 NOW = datetime(2026, 1, 1, tzinfo=UTC)
 
 
-class _Locator:
-    def __init__(self) -> None:
-        self.nodes: dict[str, str | None] = {}
-        self.ips: dict[str, str | None] = {}
-
-    def k3s_node(self, node_id: str) -> str | None:
-        return self.nodes.get(node_id)
-
-    def node_ip(self, k3s_node: str) -> str | None:
-        return self.ips.get(k3s_node)
+def _locator() -> PodLocationMap:
+    """A real PodLocationMap; each test places the nodes it needs."""
+    return PodLocationMap()
 
 
 def _measurement(
@@ -71,8 +65,8 @@ def _required_pair() -> RequiredSubstratePair:
 
 
 def test_local_links_have_zero_substrate_rtt() -> None:
-    loc = _Locator()
-    loc.nodes.update({"sat-a": "node-1", "sat-b": "node-1"})
+    loc = _locator()
+    loc._node_of.update({"sat-a": "node-1", "sat-b": "node-1"})
 
     assert (
         resolve_substrate_rtt_ms(
@@ -89,10 +83,10 @@ def test_local_links_have_zero_substrate_rtt() -> None:
 
 
 def test_cross_node_uses_directional_substrate_measurement() -> None:
-    loc = _Locator()
-    loc.nodes.update({"sat-a": "node-a", "sat-b": "node-b"})
-    loc.ips["node-a"] = "10.0.0.1"
-    loc.ips["node-b"] = "10.0.0.2"
+    loc = _locator()
+    loc._node_of.update({"sat-a": "node-a", "sat-b": "node-b"})
+    loc._node_ips["node-a"] = "10.0.0.1"
+    loc._node_ips["node-b"] = "10.0.0.2"
 
     assert (
         resolve_substrate_rtt_ms(
@@ -109,10 +103,10 @@ def test_cross_node_uses_directional_substrate_measurement() -> None:
 
 
 def test_cross_node_does_not_accept_reverse_direction_as_proof() -> None:
-    loc = _Locator()
-    loc.nodes.update({"sat-a": "node-a", "sat-b": "node-b"})
-    loc.ips["node-a"] = "10.0.0.1"
-    loc.ips["node-b"] = "10.0.0.2"
+    loc = _locator()
+    loc._node_of.update({"sat-a": "node-a", "sat-b": "node-b"})
+    loc._node_ips["node-a"] = "10.0.0.1"
+    loc._node_ips["node-b"] = "10.0.0.2"
 
     with pytest.raises(ValueError, match="No substrate RTT measurement"):
         resolve_substrate_rtt_ms(
@@ -127,10 +121,10 @@ def test_cross_node_does_not_accept_reverse_direction_as_proof() -> None:
 
 
 def test_cross_node_missing_measurement_fails_loudly() -> None:
-    loc = _Locator()
-    loc.nodes.update({"sat-a": "node-a", "sat-b": "node-b"})
-    loc.ips["node-a"] = "10.0.0.1"
-    loc.ips["node-b"] = "10.0.0.2"
+    loc = _locator()
+    loc._node_of.update({"sat-a": "node-a", "sat-b": "node-b"})
+    loc._node_ips["node-a"] = "10.0.0.1"
+    loc._node_ips["node-b"] = "10.0.0.2"
 
     with pytest.raises(ValueError, match="No substrate RTT measurement"):
         resolve_substrate_rtt_ms(
@@ -145,10 +139,10 @@ def test_cross_node_missing_measurement_fails_loudly() -> None:
 
 
 def test_missing_placement_is_not_treated_as_local() -> None:
-    loc = _Locator()
-    loc.nodes["sat-a"] = "node-a"
+    loc = _locator()
+    loc._node_of["sat-a"] = "node-a"
 
-    with pytest.raises(ValueError, match="Missing Kubernetes node placement"):
+    with pytest.raises(PodLocationError, match="no pod location for node sat-b"):
         resolve_substrate_rtt_ms(
             locator=loc,
             measurements_by_direction={},
@@ -161,10 +155,10 @@ def test_missing_placement_is_not_treated_as_local() -> None:
 
 
 def test_stale_measurement_blocks_dispatch() -> None:
-    loc = _Locator()
-    loc.nodes.update({"sat-a": "node-a", "sat-b": "node-b"})
-    loc.ips["node-a"] = "10.0.0.1"
-    loc.ips["node-b"] = "10.0.0.2"
+    loc = _locator()
+    loc._node_of.update({"sat-a": "node-a", "sat-b": "node-b"})
+    loc._node_ips["node-a"] = "10.0.0.1"
+    loc._node_ips["node-b"] = "10.0.0.2"
 
     with pytest.raises(ValueError, match="stale"):
         resolve_substrate_rtt_ms(
@@ -181,10 +175,10 @@ def test_stale_measurement_blocks_dispatch() -> None:
 
 
 def test_generation_mismatched_measurement_blocks_dispatch() -> None:
-    loc = _Locator()
-    loc.nodes.update({"sat-a": "node-a", "sat-b": "node-b"})
-    loc.ips["node-a"] = "10.0.0.1"
-    loc.ips["node-b"] = "10.0.0.2"
+    loc = _locator()
+    loc._node_of.update({"sat-a": "node-a", "sat-b": "node-b"})
+    loc._node_ips["node-a"] = "10.0.0.1"
+    loc._node_ips["node-b"] = "10.0.0.2"
 
     with pytest.raises(ValueError, match="identity mismatch"):
         resolve_substrate_rtt_ms(

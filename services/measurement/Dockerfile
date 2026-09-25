@@ -45,6 +45,9 @@ ENV PYTHONPATH=/app/lib:/app/services:/app
 
 # Copy shared library
 COPY lib/ lib/
+# Workload adapter support declarations: session resolution reads them
+# through the adapter registry. /app is already on PYTHONPATH.
+COPY adapters/ adapters/
 COPY catalog/ catalog/
 
 # Copy measurement service

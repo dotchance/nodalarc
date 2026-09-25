@@ -14,23 +14,36 @@ import { useState, useEffect, useCallback, useRef } from "react";
 import { REST_URL, authHeaders } from "../config";
 import type { SessionInfo } from "../types";
 import type { CatalogSessionSwitchRequest } from "../builder/generated/builderApi";
+import { apiErrorFromException, apiErrorMessage } from "../ui/apiError";
+
+/** How a switch request ended: accepted by VS-API, or refused with its reason. */
+export type SessionSwitchResult = { ok: true } | { ok: false; message: string };
 
 export function useSessionSwitcher(sessionTransitioning: boolean) {
   const [sessions, setSessions] = useState<SessionInfo[]>([]);
+  // Why the session list did not load; null once it loaded.
+  const [sessionsError, setSessionsError] = useState<string | null>(null);
   const [switching, setSwitching] = useState(false);
   // The websocket lifecycle must confirm the switch before its end clears it.
   const sawTransitionRef = useRef(false);
 
-  const fetchSessions = useCallback(() => {
-    fetch(`${REST_URL}/api/v1/sessions`, { headers: authHeaders() })
-      .then((r) => r.json())
-      .then((data: SessionInfo[]) => setSessions(data))
-      .catch(() => {});
+  const fetchSessions = useCallback(async () => {
+    try {
+      const response = await fetch(`${REST_URL}/api/v1/sessions`, { headers: authHeaders() });
+      if (!response.ok) {
+        setSessionsError(await apiErrorMessage(response));
+        return;
+      }
+      setSessions((await response.json()) as SessionInfo[]);
+      setSessionsError(null);
+    } catch (err) {
+      setSessionsError(apiErrorFromException(err));
+    }
   }, []);
 
   // Fetch session list on mount
   useEffect(() => {
-    fetchSessions();
+    void fetchSessions();
   }, [fetchSessions]);
 
   const prevTransitioningRef = useRef(false);
@@ -46,20 +59,22 @@ export function useSessionSwitcher(sessionTransitioning: boolean) {
     // ANY switch end changes which session is active — refresh the list for
     // backend-initiated switches too (deploys, uploads, other operators).
     if (prevTransitioningRef.current && !sessionTransitioning) {
-      fetchSessions();
+      void fetchSessions();
     }
     prevTransitioningRef.current = sessionTransitioning;
   }, [switching, sessionTransitioning, fetchSessions]);
 
   const switchSession = useCallback(
-    async (session: SessionInfo) => {
-      if (switching) return;
+    async (session: SessionInfo, recordHistory: boolean): Promise<SessionSwitchResult> => {
+      if (switching) return { ok: false, message: "A session switch is already in progress" };
       if (
         !session.deploy_allowed
         || !session.source_revision
         || !session.document_digest
         || !session.dependency_digest
-      ) return;
+      ) {
+        return { ok: false, message: `${session.source_id.session_ref} cannot be deployed` };
+      }
       sawTransitionRef.current = false;
       setSwitching(true);
       try {
@@ -68,6 +83,7 @@ export function useSessionSwitcher(sessionTransitioning: boolean) {
           expected_source_revision: session.source_revision,
           expected_document_digest: session.document_digest,
           expected_dependency_digest: session.dependency_digest,
+          record_history: recordHistory,
         };
         const resp = await fetch(`${REST_URL}/api/v1/sessions/switch`, {
           method: "POST",
@@ -76,13 +92,16 @@ export function useSessionSwitcher(sessionTransitioning: boolean) {
         });
         if (!resp.ok) {
           setSwitching(false);
+          return { ok: false, message: await apiErrorMessage(resp) };
         }
-      } catch {
+        return { ok: true };
+      } catch (err) {
         setSwitching(false);
+        return { ok: false, message: apiErrorFromException(err) };
       }
     },
     [switching],
   );
 
-  return { sessions, switching, switchSession };
+  return { sessions, sessionsError, switching, switchSession };
 }

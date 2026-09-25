@@ -11,7 +11,6 @@ session examples live under `catalog/nodalarc/sessions/`.
 | Directory | Purpose |
 |-----------|---------|
 | `ephemerides/` | Local ephemeris kernels used by multi-body sessions. |
-| `templates/frr/` | Jinja2 templates for generated FRR daemon configuration files. |
 | `platform.yaml` | Platform-level settings such as the namespace, service ports and system tuning, loaded by `PlatformConfig`. The NATS URL is not here: every process reads it from the `NODALARC_NATS_URL` environment variable the chart renders. |
 
 The old constellation, satellite-type, ground-station, preset, scenario, and

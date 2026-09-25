@@ -31,10 +31,12 @@ from nodalarc.ephemeris_runtime import (
     validate_ephemeris_manifest,
 )
 from nodalarc.link_rule_candidates import generate_declared_link_candidates
+from nodalarc.model_validation import ADDRESS_FAMILIES, AddressFamily
 from nodalarc.models.catalog import EnvValueFrom, Profile, ResolvedEnvEntry
 from nodalarc.models.identity import IdentityMode
 from nodalarc.models.link_rules import LinkRule, NodeSelector, TerminalSelector
 from nodalarc.models.resolved_session import (
+    OspfInstanceAreas,
     ResolvedBodyFacts,
     ResolvedEndpoint,
     ResolvedEphemeris,
@@ -57,8 +59,11 @@ from nodalarc.models.resolved_session import (
     ResolvedWanInterface,
     SidBlock,
     SourceContext,
+    router_node_ids,
 )
 from nodalarc.models.segment_session import (
+    OSPF_BACKBONE_AREA,
+    ROUTING_CAPABILITIES,
     Dispatch,
     RoutingDomain,
     RoutingTimers,
@@ -73,14 +78,20 @@ from nodalarc.runtime_support import (
     RuntimeSupport,
     UnsupportedFeature,
     UnsupportedFeatureError,
-    adapter_renders,
     adapter_renders_routing,
+    bfd_spans_mixed_family_peers,
+    check_link_rates,
+    check_router_domains,
+    check_routing_members,
+    check_sid_indices,
 )
 from nodalarc.tle import tle_mean_elements
 
 _NORMALIZE_RE = re.compile(r"[^a-z0-9-]+")
-_DEFAULT_GENERATED_SPACE_LOOPBACK_IPV4_POOL = ipaddress.ip_network("100.64.0.0/10")
-_DEFAULT_GENERATED_SPACE_LOOPBACK_IPV6_POOL = ipaddress.ip_network("fd00:6e0::/64")
+# The resolver-owned IPv4 loopback pool for routers without an explicit
+# IPv4 loopback assignment. There is no IPv6 counterpart: an IPv6 loopback
+# exists only where the session declares one.
+_DEFAULT_LOOPBACK_IPV4_POOL = ipaddress.ip_network("100.64.0.0/10")
 
 
 class SessionResolutionError(ValueError):
@@ -172,18 +183,18 @@ def resolve_session_with_assets(
     _check_runtime_support(cfg, support, catalog)
 
     expanded_nodes, segments = _expand_segments(cfg, catalog)
+    _check_node_workloads(tuple(expanded_nodes), support)
     allocated_nodes, ethernet_segments = _allocate_segment_addressing(list(expanded_nodes))
     runtime_nodes = _apply_addressing(cfg, tuple(allocated_nodes))
-    runtime_nodes = _derive_host_attachments(runtime_nodes)
+    routing_domains = tuple(_resolve_routing_domains(cfg, runtime_nodes))
+    runtime_nodes = _derive_host_attachments(runtime_nodes, routing_domains)
     resolved_nodes = tuple(item.node for item in runtime_nodes)
     _check_ground_scheduling_support(resolved_nodes, support)
     body_facts = _collect_body_facts(runtime_nodes)
     _check_body_support(resolved_nodes, body_facts, support)
     _check_propagator_support(resolved_nodes, support)
-    _check_workload_adapter_support(runtime_nodes, support)
     ephemeris = _resolve_ephemeris(cfg, catalog, resolved_nodes)
     link_rules = tuple(_resolve_link_rule(rule, runtime_nodes) for rule in cfg.link_rules or ())
-    routing_domains = tuple(_resolve_routing_domains(cfg, runtime_nodes))
     _validate_routing_boundaries(cfg, routing_domains, link_rules)
     sid_blocks = tuple(_allocate_sid_blocks(routing_domains))
     dispatch = _resolve_dispatch(cfg)
@@ -235,11 +246,15 @@ def resolve_session_with_assets(
     )
     _validate_access_ground_scheduling(resolved)
     _validate_allocator_wide_scheduling(resolved)
+    _refuse_divergent_bfd_on_shared_interfaces(resolved)
+    _refuse_ospf_instances_without_a_contiguous_backbone(resolved)
     workload_profiles = {
         reference: Profile.model_validate(_load_expected(reference, catalog, "profile"))
         for reference in sorted({node.profile for node in resolved_nodes})
     }
     _check_profile_env(workload_profiles, resolved_nodes)
+    _refuse_bfd_where_peers_mix_families(resolved, workload_profiles)
+    _refuse_routing_beyond_adapter_limits(resolved, workload_profiles)
     return SessionResolution(
         resolved=resolved,
         catalog_session=cfg,
@@ -318,7 +333,7 @@ def _check_runtime_support(
         if feature := support.check_routing_protocol(domain.protocol):
             unsupported.append(feature)
         if domain.capabilities is not None:
-            for capability in ("mpls", "segment_routing", "traffic_engineering"):
+            for capability in ROUTING_CAPABILITIES:
                 if getattr(domain.capabilities, capability) is not None and (
                     feature := support.check_routing_capability(domain.protocol, capability)
                 ):
@@ -1522,9 +1537,8 @@ def _terminal_blocks_for_node(
                     access=mount["role"] == "access",
                 ),
                 tracking_rate_deg_s=float(limits["max_tracking_rate_deg_s"]),
-                # Slowest direction governs the usable link rate (codebase
-                # convention) — the optimistic max overstated asymmetric pairs.
-                bandwidth_mbps=float(min(bandwidth["transmit"], bandwidth["receive"])),
+                transmit_mbps=float(bandwidth["transmit"]),
+                receive_mbps=float(bandwidth["receive"]),
                 boresight=boresight,
                 source_ref=str(mount["terminal"]),
             )
@@ -1807,10 +1821,42 @@ def _wan_interfaces_for_site_node(
     return interfaces
 
 
-_SEGMENT_SUBNET_IPV4_POOL = ipaddress.ip_network("172.16.0.0/12")
-_SEGMENT_SUBNET_IPV6_POOL = ipaddress.ip_network("fd00:da7a::/32")
-_SEGMENT_IPV4_PREFIX = 24
-_SEGMENT_IPV6_PREFIX = 64
+_SEGMENT_SUBNET_POOL: dict[AddressFamily, ipaddress.IPv4Network | ipaddress.IPv6Network] = {
+    "ipv4": ipaddress.ip_network("172.16.0.0/12"),
+    "ipv6": ipaddress.ip_network("fd00:da7a::/32"),
+}
+_SEGMENT_PREFIX: dict[AddressFamily, int] = {"ipv4": 24, "ipv6": 64}
+_DEFAULT_ROUTE: dict[AddressFamily, str] = {"ipv4": "0.0.0.0/0", "ipv6": "::/0"}
+
+# A segment's allocation key: (site id or carrier runtime id, segment id).
+_SegmentKey = tuple[str, str]
+
+
+def _origination_entries(
+    item: _RuntimeNode, family: AddressFamily
+) -> tuple[_SegmentKey | None, ...]:
+    """One node's origination targets in one family, in authored order.
+
+    A segment name becomes the allocation key of the segment the node joins
+    under that name; ``default`` becomes None, the default route. A name
+    the node does not join refuses.
+    """
+    targets = item.origination_targets
+    names = getattr(targets, family) if targets is not None else None
+    joined = {segment: (site_id, segment) for _, site_id, segment in item.ethernet_bindings}
+    entries: list[_SegmentKey | None] = []
+    for name in names or ():
+        if name == "default":
+            entries.append(None)
+            continue
+        key = joined.get(name)
+        if key is None:
+            raise SessionResolutionError(
+                f"node {item.node.node_id!r} originates segment {name!r}, but is not "
+                "bound or attached to it"
+            )
+        entries.append(key)
+    return tuple(entries)
 
 
 def _allocate_segment_addressing(
@@ -1821,143 +1867,113 @@ def _allocate_segment_addressing(
     Deterministic by stable ids: segments order by (site, segment id) and
     receive consecutive subnets from the resolver-owned pools; within a
     segment, routed environments order before hosts, each class sorted by
-    node id, and receive consecutive host addresses. Loopbacks for
-    ground-placed environments come from the same resolver-owned loopback
-    pools the generated space nodes use. Symbolic origination resolves
-    against the allocated subnets; a target naming a segment the node is
-    not attached to refuses.
+    node id, and receive consecutive host addresses. Every segment is
+    IPv4. A segment is IPv6 exactly when a member originates it into IPv6:
+    only then does it receive an IPv6 subnet and each member an IPv6
+    address. Ground-placed environments receive an IPv4 loopback from the
+    resolver-owned loopback pool; an IPv6 loopback exists only where an
+    addressing assignment declares one. Symbolic origination resolves
+    against the allocated subnets for every node that declares it.
     """
-
     segment_keys = sorted(
         {(site_id, segment) for item in nodes for _, site_id, segment in item.ethernet_bindings}
     )
-    if not segment_keys:
-        return nodes, ()
-
-    ipv4_subnets = _SEGMENT_SUBNET_IPV4_POOL.subnets(new_prefix=_SEGMENT_IPV4_PREFIX)
-    ipv6_subnets = _SEGMENT_SUBNET_IPV6_POOL.subnets(new_prefix=_SEGMENT_IPV6_PREFIX)
-    subnet_by_key: dict[tuple[str, str], tuple[Any, Any]] = {}
-    for key in segment_keys:
-        try:
-            subnet_by_key[key] = (next(ipv4_subnets), next(ipv6_subnets))
-        except StopIteration:  # pragma: no cover - 4096 /24s deep
-            raise SessionResolutionError(
-                f"segment subnet pool exhausted allocating {key[0]}/{key[1]}"
-            ) from None
+    ipv6_keys = {
+        key for item in nodes for key in _origination_entries(item, "ipv6") if key is not None
+    }
+    subnet_by_key: dict[_SegmentKey, dict[AddressFamily, Any]] = {key: {} for key in segment_keys}
+    for family in ADDRESS_FAMILIES:
+        subnets = _SEGMENT_SUBNET_POOL[family].subnets(new_prefix=_SEGMENT_PREFIX[family])
+        for key in segment_keys:
+            if family == "ipv6" and key not in ipv6_keys:
+                continue
+            try:
+                subnet_by_key[key][family] = next(subnets)
+            except StopIteration:  # pragma: no cover - 4096 /24s deep
+                raise SessionResolutionError(
+                    f"segment {family} subnet pool exhausted allocating {key[0]}/{key[1]}"
+                ) from None
 
     def _segment_order(item: _RuntimeNode) -> tuple[int, str]:
         return (0 if item.node.forwarding == "routed" else 1, item.node.node_id)
 
-    members_by_key: dict[tuple[str, str], list[_RuntimeNode]] = {}
+    members_by_key: dict[_SegmentKey, list[_RuntimeNode]] = {}
     for item in nodes:
         for _, site_id, segment in item.ethernet_bindings:
             members_by_key.setdefault((site_id, segment), []).append(item)
 
-    address_by_node_segment: dict[tuple[str, tuple[str, str]], tuple[str, str]] = {}
+    address_by_node_segment: dict[tuple[str, _SegmentKey], ResolvedInterfaceAddress] = {}
     for key, members in members_by_key.items():
-        ipv4_net, ipv6_net = subnet_by_key[key]
-        ipv4_hosts = ipv4_net.hosts()
-        ipv6_hosts = ipv6_net.hosts()
+        hosts = {family: subnet.hosts() for family, subnet in subnet_by_key[key].items()}
         for item in sorted(members, key=_segment_order):
             try:
-                ipv4_host = next(ipv4_hosts)
-                ipv6_host = next(ipv6_hosts)
+                allocated = {
+                    family: f"{next(family_hosts)}/{_SEGMENT_PREFIX[family]}"
+                    for family, family_hosts in hosts.items()
+                }
             except StopIteration:
                 raise SessionResolutionError(
                     f"segment {key[0]}/{key[1]} has more members than its allocated subnet holds"
                 ) from None
-            address_by_node_segment[(item.node.node_id, key)] = (
-                f"{ipv4_host}/{_SEGMENT_IPV4_PREFIX}",
-                f"{ipv6_host}/{_SEGMENT_IPV6_PREFIX}",
+            address_by_node_segment[(item.node.node_id, key)] = ResolvedInterfaceAddress(
+                **allocated
             )
 
-    existing_ipv4, existing_ipv6 = _existing_loopback_addresses(nodes)
-    lo_ipv4 = _available_host_addresses(_DEFAULT_GENERATED_SPACE_LOOPBACK_IPV4_POOL, existing_ipv4)
-    lo_ipv6 = _available_host_addresses(_DEFAULT_GENERATED_SPACE_LOOPBACK_IPV6_POOL, existing_ipv6)
+    existing_ipv4, _ = _existing_loopback_addresses(nodes)
+    lo_ipv4 = _available_host_addresses(_DEFAULT_LOOPBACK_IPV4_POOL, existing_ipv4)
 
     next_nodes: list[_RuntimeNode] = []
     for item in sorted(nodes, key=lambda entry: entry.node.node_id):
-        if not item.ethernet_bindings:
-            next_nodes.append(item)
-            continue
-        ethernet: dict[str, ResolvedInterfaceAddress] = {}
-        bound_segments: dict[str, tuple[str, str]] = {}
-        for interface, site_id, segment in item.ethernet_bindings:
-            key = (site_id, segment)
-            ipv4_address, ipv6_address = address_by_node_segment[(item.node.node_id, key)]
-            ethernet[interface] = ResolvedInterfaceAddress(ipv4=ipv4_address, ipv6=ipv6_address)
-            bound_segments[segment] = key
-        interfaces = ResolvedNodeInterfaces(
-            lo0=ResolvedInterfaceAddress(ipv4=f"{next(lo_ipv4)}/32", ipv6=f"{next(lo_ipv6)}/128"),
-            ethernet=ethernet,
-        )
-        originated = _resolve_origination(
-            item.node.node_id,
-            item.origination_targets,
-            bound_segments,
-            subnet_by_key,
-        )
-        next_nodes.append(
-            replace(
-                item,
-                node=item.node.model_copy(
-                    update={"interfaces": interfaces, "originated_prefixes": originated}
-                ),
+        update: dict[str, Any] = {}
+        if item.ethernet_bindings:
+            update["interfaces"] = ResolvedNodeInterfaces(
+                lo0=ResolvedInterfaceAddress(ipv4=f"{next(lo_ipv4)}/32"),
+                ethernet={
+                    interface: address_by_node_segment[(item.node.node_id, (site_id, segment))]
+                    for interface, site_id, segment in item.ethernet_bindings
+                },
             )
+        originated = _resolve_origination(item, subnet_by_key)
+        if originated is not None:
+            update["originated_prefixes"] = originated
+        next_nodes.append(
+            replace(item, node=item.node.model_copy(update=update)) if update else item
         )
     order = {item.node.node_id: index for index, item in enumerate(nodes)}
     next_nodes.sort(key=lambda entry: order[entry.node.node_id])
 
-    segment_records: list[ResolvedEthernetSegment] = []
-    for key in segment_keys:
-        ipv4_net, ipv6_net = subnet_by_key[key]
-        segment_records.append(
-            ResolvedEthernetSegment(
-                scope_id=key[0],
-                segment_id=key[1],
-                ipv4_subnet=str(ipv4_net),
-                ipv6_subnet=str(ipv6_net),
-                members=tuple(
-                    ResolvedSegmentMember(node_id=item.node.node_id, interface=interface)
-                    for item in sorted(members_by_key[key], key=_segment_order)
-                    for interface, site_id, segment in item.ethernet_bindings
-                    if (site_id, segment) == key
-                ),
-            )
+    segment_records = tuple(
+        ResolvedEthernetSegment(
+            scope_id=key[0],
+            segment_id=key[1],
+            ipv4_subnet=str(subnet_by_key[key]["ipv4"]),
+            ipv6_subnet=(str(subnet_by_key[key]["ipv6"]) if "ipv6" in subnet_by_key[key] else None),
+            members=tuple(
+                ResolvedSegmentMember(node_id=item.node.node_id, interface=interface)
+                for item in sorted(members_by_key[key], key=_segment_order)
+                for interface, site_id, segment in item.ethernet_bindings
+                if (site_id, segment) == key
+            ),
         )
-    return next_nodes, tuple(segment_records)
+        for key in segment_keys
+    )
+    return next_nodes, segment_records
 
 
 def _resolve_origination(
-    node_id: str,
-    targets: Any,
-    bound_segments: dict[str, tuple[str, str]],
-    subnet_by_key: dict[tuple[str, str], tuple[Any, Any]],
+    item: _RuntimeNode,
+    subnet_by_key: dict[_SegmentKey, dict[AddressFamily, Any]],
 ) -> ResolvedOriginatedPrefixes | None:
-    if targets is None:
-        return None
-    resolved: dict[str, list[str]] = {}
-    defaults = {"ipv4": "0.0.0.0/0", "ipv6": "::/0"}
-    for family_index, family in enumerate(("ipv4", "ipv6")):
-        entries = getattr(targets, family, None)
-        if not entries:
-            continue
+    """One node's origination as literal prefixes, repeats collapsed."""
+    resolved: dict[AddressFamily, list[str]] = {}
+    for family in ADDRESS_FAMILIES:
         prefixes: list[str] = []
-        for entry in entries:
-            if entry == "default":
-                prefixes.append(defaults[family])
-                continue
-            key = bound_segments.get(entry)
-            if key is None:
-                raise SessionResolutionError(
-                    f"node {node_id!r} originates segment {entry!r}, but is not "
-                    "bound or attached to it"
-                )
-            prefixes.append(str(subnet_by_key[key][family_index]))
-        seen: set[str] = set()
-        resolved[family] = [
-            prefix for prefix in prefixes if not (prefix in seen or seen.add(prefix))
-        ]
+        for key in _origination_entries(item, family):
+            prefix = _DEFAULT_ROUTE[family] if key is None else str(subnet_by_key[key][family])
+            if prefix not in prefixes:
+                prefixes.append(prefix)
+        if prefixes:
+            resolved[family] = prefixes
     if not resolved:
         return None
     return ResolvedOriginatedPrefixes.model_validate(resolved)
@@ -1988,21 +2004,8 @@ def _apply_addressing(
                 ]
             )
             by_id = {item.node.node_id: item for item in selected}
-
-            def _needs(item: _RuntimeNode, family: str) -> bool:
-                del item, family
-                return True
-
-            ipv4_ids = (
-                [nid for nid, item in by_id.items() if _needs(item, "ipv4")]
-                if assignment.ipv4_pool is not None
-                else []
-            )
-            ipv6_ids = (
-                [nid for nid, item in by_id.items() if _needs(item, "ipv6")]
-                if assignment.ipv6_pool is not None
-                else []
-            )
+            ipv4_ids = list(by_id) if assignment.ipv4_pool is not None else []
+            ipv6_ids = list(by_id) if assignment.ipv6_pool is not None else []
             ipv4_by_id = dict(
                 zip(
                     ipv4_ids,
@@ -2053,9 +2056,6 @@ def _apply_addressing(
                         loopback,
                         ipv4_pool=assignment.ipv4_pool,
                         ipv6_pool=assignment.ipv6_pool,
-                        prefix_length=assignment.prefix_length,
-                        assignment_id=assignment.id,
-                        node_id=item.node.node_id,
                     )
                     next_nodes.append(
                         replace(
@@ -2093,40 +2093,40 @@ def _apply_addressing(
 
 
 def _apply_default_generated_space_loopbacks(nodes: list[_RuntimeNode]) -> list[_RuntimeNode]:
-    """Assign resolver-owned loopbacks to generated routed space nodes.
+    """Assign resolver-owned IPv4 loopbacks to generated routed space nodes.
 
-    Placed ground routers get their loopback from the site placement. Generated
-    constellation nodes do not have a site placement, but FRR still needs one
-    stable loopback for unnumbered WAN interfaces and routing protocols. The
-    resolver owns that runtime-only allocation and keeps it deterministic by
-    walking the resolved node order. It does not mask missing placement data for
-    non-space nodes.
+    Placed ground routers get their loopback from the site placement.
+    Generated constellation nodes have no site placement, but a router
+    needs one stable IPv4 loopback for its unnumbered WAN interfaces and
+    its routing identity. A routed satellite that no assignment gives an
+    IPv4 loopback receives one here, deterministically in resolved node
+    order, beside any IPv6 loopback an assignment declared. No IPv6
+    loopback is ever assigned here. Missing placement data for non-space
+    nodes is not masked.
     """
 
-    existing_ipv4, existing_ipv6 = _existing_loopback_addresses(nodes)
-    ipv4_iter = _available_host_addresses(
-        _DEFAULT_GENERATED_SPACE_LOOPBACK_IPV4_POOL, existing_ipv4
-    )
-    ipv6_iter = _available_host_addresses(
-        _DEFAULT_GENERATED_SPACE_LOOPBACK_IPV6_POOL, existing_ipv6
-    )
+    existing_ipv4, _ = _existing_loopback_addresses(nodes)
+    ipv4_iter = _available_host_addresses(_DEFAULT_LOOPBACK_IPV4_POOL, existing_ipv4)
 
     next_nodes: list[_RuntimeNode] = []
     for item in nodes:
         node = item.node
-        if node.forwarding != "routed" or node.kind != "satellite" or node.interfaces is not None:
+        interfaces = node.interfaces
+        if (
+            node.forwarding != "routed"
+            or node.kind != "satellite"
+            or (interfaces is not None and interfaces.lo0.ipv4 is not None)
+        ):
             next_nodes.append(item)
             continue
-        loopback = ResolvedInterfaceAddress(
-            ipv4=f"{next(ipv4_iter)}/32",
-            ipv6=f"{next(ipv6_iter)}/128",
-        )
-        next_nodes.append(
-            replace(
-                item,
-                node=node.model_copy(update={"interfaces": ResolvedNodeInterfaces(lo0=loopback)}),
+        ipv4 = f"{next(ipv4_iter)}/32"
+        if interfaces is None:
+            interfaces = ResolvedNodeInterfaces(lo0=ResolvedInterfaceAddress(ipv4=ipv4))
+        else:
+            interfaces = interfaces.model_copy(
+                update={"lo0": interfaces.lo0.model_copy(update={"ipv4": ipv4})}
             )
-        )
+        next_nodes.append(replace(item, node=node.model_copy(update={"interfaces": interfaces})))
     return next_nodes
 
 
@@ -2153,7 +2153,7 @@ def _available_host_addresses(
     for address in network.hosts():
         if address not in reserved:
             yield address
-    raise SessionResolutionError(f"generated space loopback pool {network} is exhausted")
+    raise SessionResolutionError(f"resolver loopback pool {network} is exhausted")
 
 
 def _merge_loopback_assignment(
@@ -2162,17 +2162,13 @@ def _merge_loopback_assignment(
     *,
     ipv4_pool: str | None,
     ipv6_pool: str | None,
-    prefix_length: int | None,
-    assignment_id: str,
-    node_id: str,
 ) -> ResolvedInterfaceAddress:
     """An explicit assignment owns the families it pools.
 
     Every loopback in the session is resolver-allocated; a family the
-    assignment pools replaces the resolver default, and a family it does
-    not pool keeps the default.
+    assignment pools replaces what the node holds, and a family it does
+    not pool keeps it.
     """
-    del prefix_length, assignment_id, node_id
     return ResolvedInterfaceAddress(
         ipv4=allocated.ipv4 if ipv4_pool is not None else current.ipv4,
         ipv6=allocated.ipv6 if ipv6_pool is not None else current.ipv6,
@@ -2237,7 +2233,7 @@ def _merge_originated_prefixes(*sources):
     for source in reversed(sources):
         if not source:
             continue
-        for family in ("ipv4", "ipv6"):
+        for family in ADDRESS_FAMILIES:
             if source.get(family):
                 data.setdefault(family, []).extend(source[family])
     if not data:
@@ -2351,47 +2347,93 @@ def _resolve_link_rule(rule: LinkRule, runtime_nodes: tuple[_RuntimeNode, ...]) 
     )
 
 
-def _check_workload_adapter_support(
+def _check_node_workloads(
     runtime_nodes: tuple[_RuntimeNode, ...],
     support: RuntimeSupport,
 ) -> None:
+    """Refuse a node the runtime cannot execute as declared.
+
+    Its workload adapter must be registered and its forwarding class one the
+    runtime executes.
+    """
+    unsupported: list[UnsupportedFeature] = []
     for item in runtime_nodes:
         adapter = item.profile_adapter
-        if adapter is None:
-            continue
-        if feature := support.check_workload_adapter(adapter):
-            raise UnsupportedFeatureError([feature])
+        if adapter is not None and (feature := support.check_workload_adapter(adapter)):
+            unsupported.append(feature)
+        if feature := support.check_forwarding_class(item.node.forwarding):
+            unsupported.append(feature)
+    if unsupported:
+        raise UnsupportedFeatureError(unsupported)
+
+
+def _routing_adapters(runtime_nodes: tuple[_RuntimeNode, ...]) -> dict[str, str]:
+    """Each node whose profile's adapter renders routing, with that adapter."""
+    return {
+        item.node.node_id: adapter
+        for item in runtime_nodes
+        if (adapter := item.profile_adapter) is not None and adapter_renders_routing(adapter)
+    }
+
+
+def _check_domain_members(
+    domain: ResolvedRoutingDomain,
+    routers: list[_RuntimeNode],
+    adapters: dict[str, str],
+) -> None:
+    """Refuse a domain whose selected routers' adapters cannot render it.
+
+    Each router is checked against its own adapter's declaration, with the
+    address families the session gives it; a union across adapters cannot
+    establish one node's support.
+    """
+    by_adapter: dict[str, dict[str, frozenset[AddressFamily]]] = {}
+    for item in routers:
+        by_adapter.setdefault(adapters[item.node.node_id], {})[item.node.node_id] = (
+            item.node.address_families
+        )
+    unsupported = [
+        feature
+        for adapter, members in sorted(by_adapter.items())
+        for feature in check_routing_members(
+            domain_id=domain.domain_id,
+            protocol=domain.protocol,
+            capabilities=domain.capabilities,
+            bfd=domain.timers.bfd,
+            adapter=adapter,
+            members=members,
+        )
+    ]
+    if unsupported:
+        raise UnsupportedFeatureError(unsupported)
 
 
 def _resolve_routing_domains(
     cfg: SegmentSessionConfig,
     runtime_nodes: tuple[_RuntimeNode, ...],
 ) -> list[ResolvedRoutingDomain]:
-    # A routing domain is a declaration about routers. A node is a router
-    # exactly when its profile's adapter renders routing configuration;
-    # membership derives from that router population.
+    # A routing domain's participants are the nodes it selects whose profile's
+    # adapter renders routing: they run the domain's protocol, and each one's
+    # adapter must render the domain. A selected node that runs no routing is
+    # inside the domain without participating. Participation alone does not
+    # make a router; a router also forwards between subnets.
+    adapters = _routing_adapters(runtime_nodes)
     if cfg.routing is None:
-        routers = tuple(
-            sorted(
-                item.node.node_id
-                for item in runtime_nodes
-                if adapter_renders(item.profile_adapter, "isis")
-            )
-        )
-        if not routers:
+        participants = [item for item in runtime_nodes if item.node.node_id in adapters]
+        if not participants:
             raise SessionResolutionError(
-                "session declares no routing and resolves zero routers rendering IS-IS"
+                "session declares no routing and no node runs a routing workload"
             )
-        return [
-            ResolvedRoutingDomain(
-                domain_id="default_domain",
-                protocol="isis",
-                timers=_effective_routing_timers("isis", None),
-                node_ids=routers,
-                capabilities=(),
-                area_assignment=None,
-            )
-        ]
+        default_domain = ResolvedRoutingDomain(
+            domain_id="default_domain",
+            protocol="isis",
+            timers=_effective_routing_timers("isis", None),
+            node_ids=tuple(sorted(item.node.node_id for item in participants)),
+            capabilities=(),
+            area_assignment=None,
+        )
+        _check_domain_members(default_domain, participants, adapters)
+        return [default_domain]
     domains: list[ResolvedRoutingDomain] = []
     for domain in cfg.routing.domains:
         selected_ids: set[str] = set()
@@ -2401,40 +2443,60 @@ def _resolve_routing_domains(
             )
         if not selected_ids:
             raise SessionResolutionError(f"routing domain {domain.id!r} matched zero nodes")
-        capabilities: list[str] = []
-        if domain.capabilities is not None:
-            if domain.capabilities.mpls is not None:
-                capabilities.append("mpls")
-            if domain.capabilities.segment_routing is not None:
-                capabilities.append("segment_routing")
-            if domain.capabilities.traffic_engineering is not None:
-                capabilities.append("traffic_engineering")
-        # Membership is the routers among the selected nodes whose adapter
-        # renders this domain's protocol and declared capabilities.
-        selected_ids = {
-            item.node.node_id
+        capabilities = [
+            capability
+            for capability in ROUTING_CAPABILITIES
+            if domain.capabilities is not None
+            and getattr(domain.capabilities, capability) is not None
+        ]
+        participants = [
+            item
             for item in runtime_nodes
-            if item.node.node_id in selected_ids
-            and adapter_renders(item.profile_adapter, domain.protocol, tuple(capabilities))
-        }
-        if not selected_ids:
-            raise SessionResolutionError(f"routing domain {domain.id!r} contains zero routers")
-        selected_nodes = tuple(
-            item.node for item in runtime_nodes if item.node.node_id in selected_ids
-        )
-        _validate_area_assignment(domain, selected_nodes)
-        domains.append(
-            ResolvedRoutingDomain(
-                domain_id=domain.id,
-                protocol=domain.protocol,
-                timers=_effective_routing_timers(domain.protocol, domain.timers),
-                node_ids=tuple(sorted(selected_ids)),
-                capabilities=tuple(capabilities),
-                area_assignment=domain.area_assignment,
+            if item.node.node_id in selected_ids and item.node.node_id in adapters
+        ]
+        if not participants:
+            raise SessionResolutionError(
+                f"routing domain {domain.id!r} selects no node that runs a routing workload"
             )
+        _validate_area_assignment(domain, tuple(item.node for item in participants))
+        resolved_domain = ResolvedRoutingDomain(
+            domain_id=domain.id,
+            protocol=domain.protocol,
+            timers=_effective_routing_timers(domain.protocol, domain.timers),
+            node_ids=tuple(sorted(item.node.node_id for item in participants)),
+            capabilities=tuple(capabilities),
+            area_assignment=domain.area_assignment,
         )
+        _check_domain_members(resolved_domain, participants, adapters)
+        domains.append(resolved_domain)
     _validate_routing_domain_partition(domains, runtime_nodes)
+    _check_router_domains(domains, runtime_nodes, adapters)
     return domains
+
+
+def _check_router_domains(
+    domains: list[ResolvedRoutingDomain],
+    runtime_nodes: tuple[_RuntimeNode, ...],
+    adapters: dict[str, str],
+) -> None:
+    """Refuse a router in more domains of a protocol than its adapter renders."""
+    memberships: dict[str, list[tuple[str, str]]] = {}
+    for domain in domains:
+        for node_id in domain.node_ids:
+            memberships.setdefault(node_id, []).append((domain.domain_id, domain.protocol))
+    by_adapter: dict[str, dict[str, tuple[tuple[str, str], ...]]] = {}
+    for item in runtime_nodes:
+        if item.node.node_id in memberships:
+            by_adapter.setdefault(adapters[item.node.node_id], {})[item.node.node_id] = tuple(
+                memberships[item.node.node_id]
+            )
+    unsupported = [
+        feature
+        for adapter, routers in sorted(by_adapter.items())
+        for feature in check_router_domains(adapter=adapter, routers=routers)
+    ]
+    if unsupported:
+        raise UnsupportedFeatureError(unsupported)
 
 
 def _validate_area_assignment(
@@ -2464,8 +2526,12 @@ def _validate_area_assignment(
         if assignment.strategy == "per_plane":
             highest_area_index = max(selected_planes) + 1
         else:
-            assert assignment.planes_per_stripe is not None
-            highest_area_index = max(selected_planes) // assignment.planes_per_stripe + 1
+            planes_per_stripe = assignment.planes_per_stripe
+            if planes_per_stripe is None:
+                raise SessionResolutionError(
+                    f"stripe area assignment in domain {domain.id!r} declares no planes_per_stripe"
+                )
+            highest_area_index = max(selected_planes) // planes_per_stripe + 1
         maximum = 255 if domain.protocol == "ospf" else 9999
         if highest_area_index > maximum:
             raise SessionResolutionError(
@@ -2557,31 +2623,32 @@ def _effective_routing_timers(
 
 def _derive_host_attachments(
     runtime_nodes: tuple[_RuntimeNode, ...],
+    routing_domains: tuple[ResolvedRoutingDomain, ...],
 ) -> tuple[_RuntimeNode, ...]:
     """Derive substrate attachment facts for host-forwarding nodes.
 
     A host node attaches to the segment its allocated Ethernet address
-    names; its gateway is the routed node holding an address on that same
-    subnet. With more than one routed node on the segment the lowest node
-    id is the gateway, deterministically. Host attachment is substrate
-    configuration derived from allocation; nothing here is a protocol
+    names; its gateway is a router holding an address on that same subnet:
+    a node that forwards between subnets (``routed``) and participates in a
+    routing domain. With more than one router on the segment the lowest node
+    id is the gateway, deterministically. On an IPv6 segment the host's
+    IPv6 address and the same gateway's IPv6 address on the segment join
+    the attachment. Host attachment is substrate configuration derived
+    from allocation and routing participation; nothing here is a protocol
     decision.
     """
-    routed_segment_ports: list[tuple[str, Any]] = []
+    routers = router_node_ids(tuple(item.node for item in runtime_nodes), routing_domains)
+    router_segment_ports: list[tuple[str, Any, ResolvedInterfaceAddress]] = []
     for item in runtime_nodes:
         node = item.node
-        if node.forwarding != "routed" or node.interfaces is None:
+        if node.node_id not in routers or node.interfaces is None:
             continue
         for address in node.interfaces.ethernet.values():
             if address.ipv4:
-                routed_segment_ports.append((node.node_id, ipaddress.ip_interface(address.ipv4)))
-    routed_segment_ports.sort(key=lambda entry: entry[0])
-
-    # A session with zero routed nodes refuses at routing-domain
-    # resolution with the documented message; deriving attachments first
-    # would bury that fundamental refusal under a gateway complaint.
-    if not any(item.node.forwarding == "routed" for item in runtime_nodes):
-        return runtime_nodes
+                router_segment_ports.append(
+                    (node.node_id, ipaddress.ip_interface(address.ipv4), address)
+                )
+    router_segment_ports.sort(key=lambda entry: entry[0])
 
     next_nodes: list[_RuntimeNode] = []
     for item in runtime_nodes:
@@ -2608,24 +2675,33 @@ def _derive_host_attachments(
         host_port = ipaddress.ip_interface(host_address.ipv4)
         gateway = next(
             (
-                (gateway_id, gateway_port)
-                for gateway_id, gateway_port in routed_segment_ports
+                (gateway_id, gateway_port, gateway_address)
+                for gateway_id, gateway_port, gateway_address in router_segment_ports
                 if gateway_port.network == host_port.network
             ),
             None,
         )
         if gateway is None:
             raise SessionResolutionError(
-                f"host node {node.node_id!r} has no routed gateway on its "
-                f"segment {host_port.network}"
+                f"host node {node.node_id!r} has no router on its segment {host_port.network}"
             )
-        gateway_id, gateway_port = gateway
+        gateway_id, gateway_port, gateway_address = gateway
+        gateway_ipv6 = None
+        if host_address.ipv6 is not None:
+            if gateway_address.ipv6 is None:
+                raise SessionResolutionError(
+                    f"host node {node.node_id!r} is IPv6 on segment {host_port.network}, "
+                    f"but its gateway {gateway_id!r} holds no IPv6 address there"
+                )
+            gateway_ipv6 = str(ipaddress.ip_interface(gateway_address.ipv6).ip)
         attached = node.model_copy(
             update={
                 "host_attachment": ResolvedHostAttachment(
                     interface=interface_name,
                     ipv4=str(host_port),
                     gateway_ipv4=str(gateway_port.ip),
+                    ipv6=host_address.ipv6,
+                    gateway_ipv6=gateway_ipv6,
                     gateway_node_id=gateway_id,
                 )
             }
@@ -2638,49 +2714,258 @@ def _validate_routing_domain_partition(
     domains: list[ResolvedRoutingDomain],
     runtime_nodes: tuple[_RuntimeNode, ...],
 ) -> None:
-    # Coverage is owed to the routers: the nodes whose profile's adapter
-    # renders routing configuration.
-    domain_ids_by_node: dict[str, list[str]] = {
-        item.node.node_id: []
+    """Every node running a routing workload participates in a routing domain.
+
+    A node whose profile's adapter renders routing and that no domain selects
+    would run a routing stack with nothing to render. A router may
+    participate in any number of domains.
+    """
+    participants = {node_id for domain in domains for node_id in domain.node_ids}
+    missing = sorted(
+        item.node.node_id
         for item in runtime_nodes
-        if adapter_renders_routing(item.profile_adapter)
-    }
-    for domain in domains:
-        for node_id in domain.node_ids:
-            if node_id in domain_ids_by_node:
-                domain_ids_by_node[node_id].append(domain.domain_id)
-    missing = [node_id for node_id, domain_ids in domain_ids_by_node.items() if not domain_ids]
+        if adapter_renders_routing(item.profile_adapter) and item.node.node_id not in participants
+    )
     if missing:
         raise SessionResolutionError(
-            f"routing domains must cover every router; "
-            f"{len(missing)} node{'s are' if len(missing) != 1 else ' is'} in no domain "
-            f"(e.g. {', '.join(sorted(missing)[:3])})"
+            f"every routing workload must participate in a routing domain; "
+            f"{len(missing)} node{'s run' if len(missing) != 1 else ' runs'} routing in no domain "
+            f"(e.g. {', '.join(missing[:3])})"
         )
-    overlaps = {
-        node_id: domain_ids
-        for node_id, domain_ids in domain_ids_by_node.items()
-        if len(domain_ids) > 1
-    }
-    if overlaps:
-        # Summarize, and address the wall: name the overlapping domains and a
-        # few example nodes — enumerating every member of a large session was
-        # a wall of prose no one could act on. The subject is the last
-        # declared overlapping domain: the one most recently added is the one
-        # whose membership to fix.
-        domain_names = sorted({d for ids in overlaps.values() for d in ids})
-        examples = ", ".join(sorted(overlaps)[:3])
-        declared_order = [d.domain_id for d in domains]
-        subject = next(
-            (d for d in reversed(declared_order) if d in domain_names),
-            domain_names[-1],
-        )
+
+
+def _refuse_divergent_bfd_on_shared_interfaces(resolved: ResolvedSession) -> None:
+    """Refuse an interface whose domains declare different BFD timers.
+
+    Single-hop BFD selects a session by source address, destination address
+    and interface (RFC 5881), so every routing protocol on an interface
+    shares one BFD session with each neighbor. The domains that enable BFD on
+    one interface of a router must declare the same BFD timers.
+    """
+    domains_by_id = {domain.domain_id: domain for domain in resolved.routing_domains}
+    conflicts: list[str] = []
+    for node_id, interfaces_by_domain in resolved.domain_interfaces_by_node().items():
+        bfd_domains: dict[str, list[str]] = {}
+        for domain_id, interfaces in interfaces_by_domain.items():
+            if domains_by_id[domain_id].timers.bfd.enabled:
+                for interface in interfaces:
+                    bfd_domains.setdefault(interface, []).append(domain_id)
+        for interface, domain_ids in sorted(bfd_domains.items()):
+            if len({domains_by_id[domain_id].timers.bfd for domain_id in domain_ids}) > 1:
+                conflicts.append(f"{node_id} {interface} ({', '.join(domain_ids)})")
+    if conflicts:
+        shown = "; ".join(conflicts[:5])
+        more = f" and {len(conflicts) - 5} more" if len(conflicts) > 5 else ""
         raise SessionResolutionError(
-            f"routing domains must be disjoint: {', '.join(domain_names)} share "
-            f"{len(overlaps)} node{'s' if len(overlaps) != 1 else ''} "
-            f"(e.g. {examples})",
-            subject_kind="routing_domain",
-            subject_id=subject,
+            f"routing domains declare different BFD timers on shared interfaces: {shown}{more}; "
+            "every protocol on an interface shares one BFD session with each neighbor, so "
+            "domains enabling BFD on one interface must declare the same BFD timers"
         )
+
+
+def _refuse_routing_beyond_adapter_limits(
+    resolved: ResolvedSession, workload_profiles: Mapping[str, Profile]
+) -> None:
+    """Refuse fixed links and prefix-SID indices outside what each router's
+    adapter declares it renders.
+
+    Each domain member's fixed links in the domain are checked against its
+    own adapter's link rate floor for the domain's protocol, at the transmit
+    rate of the member's terminal on the link, and a segment-routing
+    domain's indices against the member's adapter's capacity.
+    """
+    nodes = {node.node_id: node for node in resolved.nodes}
+    fixed_interfaces: dict[str, set[str]] = {}
+    for candidate in resolved.link_candidates:
+        if candidate.kind == "access":
+            continue
+        for node_id, interface in zip(
+            (candidate.node_a, candidate.node_b), candidate.fixed_interfaces, strict=True
+        ):
+            fixed_interfaces.setdefault(node_id, set()).add(interface)
+    interfaces_by_node = resolved.domain_interfaces_by_node()
+    sid_indices = resolved.sid_index_by_domain()
+    unsupported: list[UnsupportedFeature] = []
+    for domain in resolved.routing_domains:
+        links: dict[str, dict[tuple[str, str], float]] = {}
+        indices: dict[str, dict[str, int]] = {}
+        for node_id in domain.node_ids:
+            node = nodes[node_id]
+            adapter = workload_profiles[node.profile].adapter
+            if adapter is None:
+                raise SessionResolutionError(
+                    f"routing domain {domain.domain_id!r} participant {node_id!r} runs no adapter"
+                )
+            for interface in interfaces_by_node.get(node_id, {}).get(domain.domain_id, ()):
+                if interface in fixed_interfaces.get(node_id, ()):
+                    links.setdefault(adapter, {})[(node_id, interface)] = node.wan_terminal(
+                        interface
+                    ).transmit_mbps
+            if "segment_routing" in domain.capabilities:
+                indices.setdefault(adapter, {})[node_id] = sid_indices[domain.domain_id][node_id]
+        for adapter, adapter_links in sorted(links.items()):
+            unsupported.extend(
+                check_link_rates(
+                    domain_id=domain.domain_id,
+                    protocol=domain.protocol,
+                    adapter=adapter,
+                    links=adapter_links,
+                )
+            )
+        for adapter, adapter_indices in sorted(indices.items()):
+            unsupported.extend(
+                check_sid_indices(
+                    domain_id=domain.domain_id,
+                    protocol=domain.protocol,
+                    adapter=adapter,
+                    indices=adapter_indices,
+                )
+            )
+    if unsupported:
+        raise UnsupportedFeatureError(unsupported)
+
+
+def _refuse_bfd_where_peers_mix_families(
+    resolved: ResolvedSession, workload_profiles: Mapping[str, Profile]
+) -> None:
+    """Refuse BFD on a router interface that reaches both IPv6 and IPv4-only
+    peers, where the router's adapter declares its BFD cannot run there.
+
+    A router carrying IPv6 routes it on an interface that reaches an IPv6 peer,
+    and some engines start BFD on such an interface only toward peers that
+    carry IPv6. The interface would then keep an adjacency to its IPv4-only
+    peers with no BFD session behind it.
+    """
+    nodes = {node.node_id: node for node in resolved.nodes}
+    domains = {domain.domain_id: domain for domain in resolved.routing_domains}
+    peers = resolved.wan_interface_peers()
+    mixed: dict[tuple[str, str, str], list[str]] = {}
+    for node_id, interfaces_by_domain in resolved.domain_interfaces_by_node().items():
+        node = nodes[node_id]
+        adapter = workload_profiles[node.profile].adapter
+        if "ipv6" not in node.address_families or adapter is None:
+            continue
+        for domain_id, interfaces in interfaces_by_domain.items():
+            domain = domains[domain_id]
+            if not domain.timers.bfd.enabled or bfd_spans_mixed_family_peers(
+                adapter, domain.protocol
+            ):
+                continue
+            for interface in interfaces:
+                reach = {
+                    "ipv6" in nodes[peer].address_families
+                    for peer in peers.get((node_id, interface), ())
+                }
+                if len(reach) > 1:
+                    mixed.setdefault((domain_id, domain.protocol, adapter), []).append(
+                        f"{node_id} {interface}"
+                    )
+    if mixed:
+        raise UnsupportedFeatureError(
+            [
+                UnsupportedFeature(
+                    category=FeatureCategory.ROUTING_TIMER,
+                    value=f"{protocol}:bfd",
+                    message=(
+                        f"routing domain {domain_id!r} enables BFD on interfaces that reach "
+                        f"both IPv6 and IPv4-only peers ({', '.join(sorted(where)[:5])}"
+                        f"{' and more' if len(where) > 5 else ''}); adapter {adapter!r} "
+                        f"starts {protocol} BFD there only toward peers that carry IPv6"
+                    ),
+                )
+                for (domain_id, protocol, adapter), where in sorted(mixed.items())
+            ]
+        )
+
+
+def _refuse_ospf_instances_without_a_contiguous_backbone(resolved: ResolvedSession) -> None:
+    """Refuse an OSPF instance whose areas cannot attach to one backbone.
+
+    An OSPF instance with more than one area needs the backbone area
+    0.0.0.0, contiguous over the instance's possible adjacencies, and an
+    area border router joining every other area to it. An instance with one
+    area needs neither. Links that come and go with geometry after
+    resolution are the experiment's to show.
+    """
+    ospf_domains = [domain for domain in resolved.routing_domains if domain.protocol == "ospf"]
+    if not ospf_domains:
+        return
+    areas_by_node = {
+        (node_id, areas.domain_id): areas
+        for node_id, node_areas in resolved.instance_areas_by_node().items()
+        for areas in node_areas
+        if isinstance(areas, OspfInstanceAreas)
+    }
+    links_by_domain = resolved.instance_links()
+    problems: list[str] = []
+    for domain in ospf_domains:
+        routers = {
+            node_id: areas_by_node[(node_id, domain.domain_id)] for node_id in domain.node_ids
+        }
+        instance_areas = sorted({area for areas in routers.values() for area in areas.areas})
+        if len(instance_areas) <= 1:
+            continue
+        if OSPF_BACKBONE_AREA not in instance_areas:
+            problems.append(
+                f"OSPF instance {domain.domain_id!r} has areas {instance_areas} and no backbone "
+                f"area {OSPF_BACKBONE_AREA}"
+            )
+            continue
+        unattached = [
+            area
+            for area in instance_areas
+            if area != OSPF_BACKBONE_AREA
+            and not any(
+                OSPF_BACKBONE_AREA in areas.areas and area in areas.areas
+                for areas in routers.values()
+            )
+        ]
+        if unattached:
+            problems.append(
+                f"OSPF instance {domain.domain_id!r} has no area border router joining area(s) "
+                f"{unattached} to the backbone area {OSPF_BACKBONE_AREA}; a router joins two "
+                "areas only through interfaces in both"
+            )
+        backbone = {
+            node_id for node_id, areas in routers.items() if OSPF_BACKBONE_AREA in areas.areas
+        }
+        neighbors: dict[str, set[str]] = {node_id: set() for node_id in backbone}
+        for link in links_by_domain[domain.domain_id]:
+            a_in_backbone = any(
+                routers[link.node_a].interface_areas[name] == OSPF_BACKBONE_AREA
+                for name in link.interfaces_a
+            )
+            b_in_backbone = any(
+                routers[link.node_b].interface_areas[name] == OSPF_BACKBONE_AREA
+                for name in link.interfaces_b
+            )
+            if a_in_backbone and b_in_backbone:
+                neighbors[link.node_a].add(link.node_b)
+                neighbors[link.node_b].add(link.node_a)
+        parts: list[list[str]] = []
+        unvisited = set(backbone)
+        while unvisited:
+            start = min(unvisited)
+            unvisited.discard(start)
+            part, frontier = {start}, [start]
+            while frontier:
+                for neighbor in neighbors[frontier.pop()]:
+                    if neighbor in unvisited:
+                        unvisited.discard(neighbor)
+                        part.add(neighbor)
+                        frontier.append(neighbor)
+            parts.append(sorted(part))
+        if len(parts) > 1:
+            shown = "; ".join(
+                f"{len(part)} router(s), e.g. {', '.join(part[:3])}"
+                for part in sorted(parts, key=len, reverse=True)
+            )
+            problems.append(
+                f"the backbone area {OSPF_BACKBONE_AREA} of OSPF instance {domain.domain_id!r} "
+                f"splits into {len(parts)} parts over the possible links: {shown}"
+            )
+    if problems:
+        raise SessionResolutionError("; ".join(problems))
 
 
 def _terminal_selectors_by_rule(
@@ -2779,14 +3064,12 @@ def _refuse_uncollapsible_access_physics(resolved: ResolvedSession) -> None:
                     tuple(_ground_terminal(entry) for entry in entries),
                     profile_id=f"{node.node_id}.terminals",
                     endpoint="ground",
-                    require_constraints=True,
                 )
             elif node.kind == "satellite":
                 terminal_physics_profiles(
                     tuple(_satellite_ground_terminal(entry) for entry in entries),
                     profile_id=f"{node.node_id}.ground_terminals",
                     endpoint="satellite",
-                    require_constraints=True,
                 )
         except ValueError as error:
             unsupported.append(
@@ -2853,7 +3136,7 @@ def _refuse_selected_multi_user_terminals(
         for endpoint, selector in zip(rule.endpoints, selectors[rule.rule_id], strict=True):
             for node_id in endpoint.node_ids:
                 for block in node_by_id[node_id].terminal_inventory:
-                    if block.tracking_capacity is None or block.tracking_capacity <= 1:
+                    if block.tracking_capacity <= 1:
                         continue
                     if not _terminal_matches(block, selector):
                         continue
@@ -2996,18 +3279,6 @@ def _resolve_link_candidates(
         role_a, role_b = _candidate_side_roles(
             candidate, node_a, node_b, rules_by_id[candidate.rule_id]
         )
-        terminal_id_a, terminal_id_b = _candidate_side_terminal_ids(
-            candidate, node_a, node_b, rules_by_id[candidate.rule_id]
-        )
-        bandwidth = _candidate_bandwidth_mbps(
-            left,
-            right,
-            role_left=role_a,
-            role_right=role_b,
-            medium=candidate.terminal_medium,
-            terminal_id_left=terminal_id_a,
-            terminal_id_right=terminal_id_b,
-        )
         candidates.append(
             ResolvedLinkCandidate(
                 rule_id=candidate.rule_id,
@@ -3018,7 +3289,6 @@ def _resolve_link_candidates(
                 node_b=node_b,
                 interface_a=iface_a,
                 interface_b=iface_b,
-                bandwidth_mbps=bandwidth,
                 topology_mode=candidate.topology_mode,
                 priority=candidate.priority,
                 endpoint_segments=candidate.endpoint_segments,
@@ -3146,87 +3416,6 @@ def _candidate_side_roles(
         )
 
     return _role_for(node_a), _role_for(node_b)
-
-
-def _candidate_side_terminal_ids(
-    candidate: Any,
-    node_a: str,
-    node_b: str,
-    rule: ResolvedLinkRule,
-) -> tuple[str | None, str | None]:
-    """Map endpoint-ordered exact mount IDs onto candidate pair order."""
-
-    def _terminal_id_for(node_id: str) -> str | None:
-        for endpoint, terminal_id in zip(
-            rule.endpoints, candidate.endpoint_terminal_ids, strict=True
-        ):
-            if node_id in endpoint.node_ids:
-                return terminal_id
-        raise SessionResolutionError(
-            f"candidate node {node_id!r} belongs to neither endpoint of rule {rule.rule_id!r}"
-        )
-
-    return _terminal_id_for(node_a), _terminal_id_for(node_b)
-
-
-def _candidate_bandwidth_mbps(
-    left: ResolvedNode,
-    right: ResolvedNode,
-    *,
-    role_left: str,
-    role_right: str,
-    medium: str | None,
-    terminal_id_left: str | None,
-    terminal_id_right: str | None,
-) -> float:
-    left_bandwidth = _matching_terminal_bandwidth_mbps(
-        left,
-        role=role_left,
-        medium=medium,
-        terminal_id=terminal_id_left,
-    )
-    right_bandwidth = _matching_terminal_bandwidth_mbps(
-        right,
-        role=role_right,
-        medium=medium,
-        terminal_id=terminal_id_right,
-    )
-    return min(left_bandwidth, right_bandwidth)
-
-
-def _matching_terminal_bandwidth_mbps(
-    node: ResolvedNode,
-    *,
-    role: str,
-    medium: str | None,
-    terminal_id: str | None,
-) -> float:
-    matches = [
-        block
-        for block in node.terminal_inventory
-        if block.endpoint_role == role
-        and (medium is None or block.medium == medium)
-        and (terminal_id is None or block.terminal_id == terminal_id)
-    ]
-    if not matches:
-        raise SessionResolutionError(
-            f"node {node.node_id!r} has no terminal block for role={role!r} "
-            f"medium={medium!r} mount={terminal_id!r}"
-        )
-    if any(block.bandwidth_mbps is None for block in matches):
-        raise SessionResolutionError(
-            f"node {node.node_id!r} matching terminal mount is missing bandwidth"
-        )
-    bandwidths = {
-        float(block.bandwidth_mbps) for block in matches if block.bandwidth_mbps is not None
-    }
-    if len(bandwidths) != 1:
-        mounts = [block.terminal_id for block in matches]
-        raise SessionResolutionError(
-            f"node {node.node_id!r} terminal selector matches mounts {mounts} with "
-            f"heterogeneous bandwidths {sorted(bandwidths)}; select one exact mount"
-        )
-    return next(iter(bandwidths))
 
 
 def _validate_fixed_interface_capacity(
@@ -3615,18 +3804,24 @@ def _validate_routing_boundaries(
     """Boundary declarations must be materializable, and domain separation
     must be real.
 
-    1. Every boundary's ``over`` names an existing, enabled, non-access rule
-       whose endpoints land exactly in each export's from/to domains.
-    2. Every non-access rule whose endpoints land in two different routing
-       domains must be covered by a boundary — otherwise both ends would
-       render live IGP interfaces and two declared-separate domains silently
-       run as one.
+    1. Every boundary's ``over`` names an existing, enabled, non-access rule;
+       its exports join exactly two domains, and each endpoint's nodes all
+       participate in the same one of the two, opposite to the other
+       endpoint's. Endpoint nodes may also participate in other domains.
+    2. A non-access rule that can connect two routers sharing no routing
+       domain must be covered by a boundary. A link between such routers
+       belongs to no domain, so without a boundary the session declares no
+       way for routes to cross it. Two routers sharing a domain run that
+       domain over the link.
     """
     domains_by_id = {domain.domain_id: domain for domain in domains}
     rules_by_id = {rule.rule_id: rule for rule in link_rules}
-    domain_of_node = {
-        node_id: domain.domain_id for domain in domains for node_id in domain.node_ids
-    }
+    domains_of_node: dict[str, frozenset[str]] = {}
+    for domain in domains:
+        for node_id in domain.node_ids:
+            domains_of_node[node_id] = domains_of_node.get(node_id, frozenset()) | {
+                domain.domain_id
+            }
     boundary_rule_ids: set[str] = set()
 
     for boundary in cfg.routing.boundaries or () if cfg.routing is not None else ():
@@ -3644,26 +3839,6 @@ def _validate_routing_boundaries(
                 f"routing boundary over {boundary.over!r} names an access rule; "
                 "boundaries run over fixed inter-domain links"
             )
-        endpoint_domains = tuple(
-            {domain_of_node[node_id] for node_id in endpoint.node_ids}
-            for endpoint in rule.endpoints
-        )
-        for endpoint_index, resolved_domains in enumerate(endpoint_domains):
-            if len(resolved_domains) != 1:
-                raise SessionResolutionError(
-                    f"routing boundary over {boundary.over!r} endpoint {endpoint_index} "
-                    f"spans routing domains {sorted(resolved_domains)}; each boundary "
-                    "endpoint must resolve wholly to one domain"
-                )
-        left_domain = next(iter(endpoint_domains[0]))
-        right_domain = next(iter(endpoint_domains[1]))
-        if left_domain == right_domain:
-            raise SessionResolutionError(
-                f"routing boundary over {boundary.over!r} has both endpoints in routing "
-                f"domain {left_domain!r}; boundary endpoints must be in opposite domains"
-            )
-        boundary_rule_ids.add(rule.rule_id)
-        rule_domains = {left_domain, right_domain}
         for export in boundary.export:
             for domain_id in (export.from_, export.to):
                 if domain_id not in domains_by_id:
@@ -3674,28 +3849,58 @@ def _validate_routing_boundaries(
                 raise SessionResolutionError(
                     f"routing boundary export from/to must differ; got {export.from_!r}"
                 )
-            if rule_domains != {export.from_, export.to}:
+        pair = {domain_id for export in boundary.export for domain_id in (export.from_, export.to)}
+        if len(pair) != 2:
+            raise SessionResolutionError(
+                f"routing boundary over {boundary.over!r} exports between domains "
+                f"{sorted(pair)}; a boundary joins exactly two domains"
+            )
+        sides: list[str] = []
+        for endpoint_index, endpoint in enumerate(rule.endpoints):
+            reached = {
+                domain_id
+                for node_id in endpoint.node_ids
+                for domain_id in domains_of_node.get(node_id, frozenset()) & pair
+            }
+            wholly = all(
+                domains_of_node.get(node_id, frozenset()) & pair == reached
+                for node_id in endpoint.node_ids
+            )
+            if len(reached) != 1 or not wholly:
                 raise SessionResolutionError(
-                    f"routing boundary over {boundary.over!r} spans domains "
-                    f"{sorted(rule_domains)} but export declares "
-                    f"{sorted((export.from_, export.to))}"
+                    f"routing boundary over {boundary.over!r} endpoint {endpoint_index} "
+                    f"spans routing domains {sorted(reached)}; each boundary endpoint must "
+                    f"resolve wholly to one of the boundary's domains {sorted(pair)}"
                 )
+            sides.append(next(iter(reached)))
+        if sides[0] == sides[1]:
+            raise SessionResolutionError(
+                f"routing boundary over {boundary.over!r} has both endpoints in routing "
+                f"domain {sides[0]!r}; boundary endpoints must be in opposite domains"
+            )
+        boundary_rule_ids.add(rule.rule_id)
 
     for rule in link_rules:
-        if rule.kind == "access" or not rule.enabled:
+        if rule.kind == "access" or not rule.enabled or rule.rule_id in boundary_rule_ids:
             continue
-        rule_domains = {
-            domain_of_node[node_id]
+        # The distinct domain sets on each side; routers outside every domain
+        # take no part.
+        left, right = (
+            {
+                domains_of_node[node_id]
+                for node_id in endpoint.node_ids
+                if node_id in domains_of_node
+            }
             for endpoint in rule.endpoints
-            for node_id in endpoint.node_ids
-            if node_id in domain_of_node
-        }
-        if len(rule_domains) > 1 and rule.rule_id not in boundary_rule_ids:
-            raise SessionResolutionError(
-                f"link rule {rule.rule_id!r} joins routing domains {sorted(rule_domains)} "
-                "without a routing boundary; declare a boundary over it or keep the "
-                "rule inside one domain"
-            )
+        )
+        for left_domains in sorted(left, key=sorted):
+            for right_domains in sorted(right, key=sorted):
+                if not left_domains & right_domains:
+                    raise SessionResolutionError(
+                        f"link rule {rule.rule_id!r} joins routing domains "
+                        f"{sorted(left_domains | right_domains)} without a routing boundary; "
+                        "declare a boundary over it or keep the rule inside shared domains"
+                    )
 
 
 def _allocate_sid_blocks(domains: tuple[ResolvedRoutingDomain, ...]) -> list[SidBlock]:

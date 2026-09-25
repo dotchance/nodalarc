@@ -7,7 +7,7 @@ import { cleanup, render } from "@testing-library/react";
 import { Tooltip, type HoverInfo } from "../r3f/Tooltip";
 import type { NodeState } from "../../types";
 
-function node(nodeId: string, nodeType: string): NodeState {
+function node(nodeId: string, nodeType: NodeState["node_type"]): NodeState {
   return {
     node_id: nodeId,
     node_type: nodeType,
@@ -19,8 +19,8 @@ function node(nodeId: string, nodeType: string): NodeState {
     vel_z_km_s: null,
     plane: null,
     slot: null,
-    routing_area: null,
-    neighbor_count: 0,
+    routing_instances: [],
+    role: "router",
     isl_count: 0,
     gnd_count: 0,
     prefix: null,

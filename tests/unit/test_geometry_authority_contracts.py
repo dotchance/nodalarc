@@ -31,6 +31,7 @@ from scheduler.dispatcher import Dispatcher
 from scheduler.pod_locator import PodLocationMap
 
 from tests.physics_fixtures import EARTH_TEST_BODY_FRAME, earth_geodetic_to_ecef
+from tests.terminal_rate_fixtures import ANY_INTERFACE_RATES
 
 SIM = datetime(2026, 1, 1, tzinfo=UTC)
 RANGE_TOL_KM = 1e-6
@@ -81,7 +82,7 @@ def _dispatcher() -> Dispatcher:
     pool = MagicMock()
     return Dispatcher(
         interface_map={pair: ("isl0", "isl1")},
-        bandwidth_map={pair: 1234.0},
+        interface_rates=ANY_INTERFACE_RATES,
         pod_locator=loc,
         agent_pool=pool,
         session_id="test-session",
@@ -140,7 +141,6 @@ class TestOmeSnapshotGeometry:
         snapshot = build_link_state_snapshot(
             _snapshot_source(isl_state={pair: (True, True)}, propagated_states=propagated_states),
             interface_map={pair: ("isl0", "isl1")},
-            bandwidth_map={pair: 1000.0},
             sim_time=SIM,
             seq=1,
             interval_s=1.0,
@@ -173,27 +173,6 @@ class TestOmeSnapshotGeometry:
                     },
                 ),
                 interface_map={pair: ("isl0", "isl1")},
-                bandwidth_map={pair: 1000.0},
-                sim_time=SIM,
-                seq=1,
-                interval_s=1.0,
-                epoch_id=0,
-            )
-
-    def test_active_snapshot_link_missing_bandwidth_fails_loudly(self):
-        pair = ("sat-a", "sat-b")
-
-        with pytest.raises(ValueError, match="missing config-derived bandwidth"):
-            build_link_state_snapshot(
-                _snapshot_source(
-                    isl_state={pair: (True, True)},
-                    propagated_states={
-                        "sat-a": _propagated_state("sat-a", 0.0, 0.0, 550.0),
-                        "sat-b": _propagated_state("sat-b", 0.0, 5.0, 550.0),
-                    },
-                ),
-                interface_map={pair: ("isl0", "isl1")},
-                bandwidth_map={},
                 sim_time=SIM,
                 seq=1,
                 interval_s=1.0,
@@ -237,7 +216,6 @@ class TestSchedulerAuthorityPreservation:
             routing=RoutingState.UNKNOWN,
             range_km=4321.123456789,
             latency_ms=14.413123456789,
-            bandwidth_mbps=1234.0,
             link_type="isl",
             sim_time=SIM,
         )
@@ -283,7 +261,6 @@ class TestWireParityAfterModelConstruct:
                 propagated_states=propagated_states,
             ),
             interface_map={isl_pair: ("isl0", "isl1")},
-            bandwidth_map={isl_pair: 1000.0, gnd_pair: 500.0},
             sim_time=SIM,
             seq=7,
             interval_s=1.0,

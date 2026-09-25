@@ -69,8 +69,10 @@ export const SATELLITE_TYPE_HELP: Record<string, string> = {
     "within 60\u00b0 of boresight. 360\u00b0 = omnidirectional (no constraint).",
 
   bandwidth_mbps:
-    "Per-terminal link bandwidth. Affects FRR routing metric calculations " +
-    "(reference_bandwidth / bandwidth = isis metric or ospf cost).",
+    "Per-terminal transmit and receive rates. Each link end is shaped at its own " +
+    "terminal's transmit rate on egress and receive rate on ingress. A fixed link's " +
+    "IGP metric is 100 Gb/s over its own terminal's transmit rate, never below 1, so " +
+    "every terminal at or above 100 Gb/s costs 1.",
 
   ground_terminal_count:
     "Number of ground terminals per satellite. Most LEO satellites have 1. More terminals " +

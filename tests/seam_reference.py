@@ -3,9 +3,10 @@
 Circular orbits from a constellation's declared altitude, inclination, RAAN
 spacing, slot count and Walker-star phase offset, propagated in the inertial
 frame with the first-order secular J2 rates that the declared
-``j2_mean_elements`` propagator applies. Independent of OME's propagator and
-decision functions: it derives expected transition times and rates for the
-seam experiments and never decides feasibility for the runtime.
+``j2_mean_elements`` propagator applies to a circular orbit: the node and the
+mean anomaly drift, the argument of perigee does not. Independent of OME's
+propagator and decision functions: it derives expected transition times and
+rates for the seam experiments and never decides feasibility for the runtime.
 
 Frame and units: positions in km and velocities in km/s in an Earth-centered
 inertial frame; the line-of-sight rate is the angular speed of the
@@ -45,17 +46,24 @@ class DeclaredShell:
         return self.semi_major_axis_km, math.radians(self.inclination_deg), raan, u0
 
 
-def state(
+def elements(
     shell: DeclaredShell, plane: int, slot: int, t_s: float
-) -> tuple[tuple[float, float, float], tuple[float, float, float]]:
-    """Inertial position (km) and velocity (km/s) of one satellite at t seconds after epoch."""
+) -> tuple[float, float, float, float, float]:
+    """(a, inclination, RAAN, argument of latitude, argument-of-latitude rate) of one
+    satellite at t seconds after epoch, in km, radians and radians per second."""
     a, inc, raan0, u0 = shell.initial_elements(plane, slot)
     n = math.sqrt(MU_EARTH_KM3_S2 / a**3)
     k = 0.75 * n * EARTH_J2 * (EARTH_RADIUS_KM / a) ** 2
     raan_rate = -2.0 * k * math.cos(inc)
-    u_rate = n + k * (5.0 * math.cos(inc) ** 2 - 1.0) + k * (3.0 * math.cos(inc) ** 2 - 1.0)
-    raan = raan0 + raan_rate * t_s
-    u = u0 + u_rate * t_s
+    u_rate = n + k * (3.0 * math.cos(inc) ** 2 - 1.0)
+    return a, inc, raan0 + raan_rate * t_s, u0 + u_rate * t_s, u_rate
+
+
+def state(
+    shell: DeclaredShell, plane: int, slot: int, t_s: float
+) -> tuple[tuple[float, float, float], tuple[float, float, float]]:
+    """Inertial position (km) and velocity (km/s) of one satellite at t seconds after epoch."""
+    a, inc, raan, u, u_rate = elements(shell, plane, slot, t_s)
     cu, su, ci, si, co, so = (
         math.cos(u),
         math.sin(u),
@@ -116,6 +124,7 @@ def expected_transitions(
     a,
     b,
     *,
+    start_s: float,
     duration_s: float,
     sample_s: float,
     max_range_km: float,
@@ -124,15 +133,19 @@ def expected_transitions(
 ) -> list[tuple[float, str]]:
     """Verdict changes at `resolution_s`, each reported at the first `sample_s` sample at or after it.
 
-    The first entry is the verdict at t=0. A transition the runtime samples at
-    `sample_s` lands on that sample or the next one, so callers allow one sample.
+    The window opens `start_s` seconds after the epoch and times are reported
+    from the window's opening. The first entry is the verdict at the opening.
+    A transition the runtime samples at `sample_s` lands on that sample or the
+    next one, so callers allow one sample.
     """
     out: list[tuple[float, str]] = []
     previous = None
     t = 0.0
     while t <= duration_s + 1e-9:
         v = verdict(
-            *encounter(shell, a, b, t), max_range_km=max_range_km, max_rate_deg_s=max_rate_deg_s
+            *encounter(shell, a, b, start_s + t),
+            max_range_km=max_range_km,
+            max_rate_deg_s=max_rate_deg_s,
         )
         if v != previous:
             out.append((math.ceil(t / sample_s - 1e-9) * sample_s, v))

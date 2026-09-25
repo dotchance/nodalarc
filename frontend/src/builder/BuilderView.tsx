@@ -27,6 +27,7 @@ import { VisualizationErrorBoundary } from "../globe/VisualizationErrorBoundary"
 import { buildRegimeIndex } from "../taxonomy/regime";
 import { Button, IconButton } from "../ui/Button";
 import { FloatingWindow } from "../ui/FloatingWindow";
+import { RecordHistoryToggle } from "../ui/RecordHistoryToggle";
 import type { GlobeActions } from "../globe/actions";
 import type {
   ColorMode,
@@ -43,6 +44,8 @@ import {
   transitionIsTerminal,
   useBuilderTransitionOperation,
 } from "./BuilderTransitionStatus";
+import { AreaLegend } from "../routing/AreaLegend";
+import { buildAreaColoring } from "../routing/instances";
 import { builderSnapshotFromWorld, distinctGroundStationSites } from "./builderSnapshot";
 import { CandidateLines } from "./CandidateLines";
 import { computeCandidates } from "./candidates";
@@ -144,6 +147,9 @@ interface BuilderViewProps {
   /** Shared display state — the toolbar operates on the builder scene exactly
    *  as it does on the live scene (same Scene component, same toggles). */
   colorMode: ColorMode;
+  /** The IS-IS or OSPF instance area coloring shows; null shows the first. */
+  areaInstanceId: string | null;
+  onSelectAreaInstance: (domainId: string) => void;
   globeMode: GlobeMode;
   referenceFrame: ReferenceFrame;
   showSatPaths: boolean;
@@ -467,6 +473,8 @@ function SaveSessionDialog({
 export function BuilderView({
   active,
   colorMode,
+  areaInstanceId,
+  onSelectAreaInstance,
   globeMode,
   referenceFrame,
   showSatPaths,
@@ -652,6 +660,8 @@ export function BuilderView({
   });
   const [structuredRecoveryRevision, setStructuredRecoveryRevision] = useState(0);
   const [saveState, setSaveState] = useState<SaveState>({ kind: "idle" });
+  // Whether the next deploy records the session run's history.
+  const [recordHistory, setRecordHistory] = useState(false);
   const adoptAppliedYaml = useCallback(
     (result: BuilderVisualDraftApplyYamlResult) => {
       if (!result.applied) return result;
@@ -2128,6 +2138,10 @@ export function BuilderView({
     }
   }, [world]);
   const regimeById = useMemo(() => buildRegimeIndex(world?.ephemeris ?? null), [world]);
+  const areaColoring = useMemo(
+    () => buildAreaColoring(snapshot?.nodes ?? [], areaInstanceId),
+    [snapshot, areaInstanceId],
+  );
 
   // Rule-scoped preview candidates at the epoch: the server decides the
   // geometry (through the runtime's own visibility composites) and ships the
@@ -2232,6 +2246,11 @@ export function BuilderView({
               openEditor({ kind: "save-session" });
             }}
           />
+          <RecordHistoryToggle
+            className="builder-toolbar-toggle"
+            checked={recordHistory}
+            onChange={setRecordHistory}
+          />
           <IconButton
             className="builder-toolbar-btn"
             icon="rocket"
@@ -2265,6 +2284,7 @@ export function BuilderView({
                   expected_session_revision: sessionRevision,
                   expected_document_digest: deployVerdict.digests.document,
                   expected_dependency_digest: deployVerdict.digests.dependency,
+                  record_history: recordHistory,
                 });
                 setSaveState({
                   kind: "deploy-accepted",
@@ -2874,6 +2894,7 @@ export function BuilderView({
       </div>
       <div className="builder-canvas" data-testid="builder-canvas">
         {active && world && snapshot ? (
+          <>
           <VisualizationErrorBoundary onError={() => {}}>
             <Scene
               snapshot={snapshot}
@@ -2888,6 +2909,7 @@ export function BuilderView({
               showSatPaths={showSatPaths}
               showGroundTracks={showGroundTracks}
               regimeById={regimeById}
+              areaColoring={areaColoring}
               showTrails={showTrails}
               selection={selection}
               onSelect={(next) => {
@@ -2900,6 +2922,10 @@ export function BuilderView({
               beamFootprints={beamFootprints}
             />
           </VisualizationErrorBoundary>
+          {colorMode === "area" && (
+            <AreaLegend coloring={areaColoring} onSelectInstance={onSelectAreaInstance} />
+          )}
+          </>
         ) : snapshotError ? (
           <div className="builder-zone-empty">{snapshotError}</div>
         ) : workspace ? (

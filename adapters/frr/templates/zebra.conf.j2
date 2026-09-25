@@ -1,0 +1,42 @@
+{# Kernel forwarding is substrate state the wiring manifest sets per node
+   and family; this configuration carries only addresses and interface
+   parameters. #}
+interface lo
+ ip address {{ ipv4_loopback }}/32
+{% if ipv6_loopback %}
+ ipv6 address {{ ipv6_loopback }}/128
+{% endif %}
+exit
+
+{# WAN interfaces are unnumbered: each borrows the loopback address of every
+   family the node holds a loopback in. #}
+{% for iface in wan_interfaces %}
+interface {{ iface.name }}
+ ip address {{ ipv4_loopback }}/32
+{% if ipv6_loopback %}
+ ipv6 address {{ ipv6_loopback }}/128
+{% endif %}
+{% if iface.te %}
+ link-params
+  enable
+  max-bw {{ iface.te.max_bw }}
+  max-rsv-bw {{ iface.te.reservable_bw }}
+{% for priority in range(8) %}
+  unrsv-bw {{ priority }} {{ iface.te.reservable_bw }}
+{% endfor %}
+ exit-link-params
+{% endif %}
+exit
+{% endfor %}
+
+{% for segment in segment_interfaces %}
+interface {{ segment.name }}
+{% for assigned in segment.addresses %}
+{% if assigned.family == "ipv6" %}
+ ipv6 address {{ assigned.address }}
+{% else %}
+ ip address {{ assigned.address }}
+{% endif %}
+{% endfor %}
+exit
+{% endfor %}

@@ -27,6 +27,8 @@ from nodalarc.proto import node_agent_pb2
 from scheduler.dispatcher import ActiveLinkInfo, Dispatcher, DispatchIntent
 from scheduler.pod_locator import PodLocationMap
 
+from tests.terminal_rate_fixtures import ANY_INTERFACE_RATES
+
 SIM = datetime(2026, 1, 1, tzinfo=UTC)
 OME_RANGE_KM = 1000.0
 
@@ -36,7 +38,6 @@ def _isl_info() -> ActiveLinkInfo:
         "isl0",
         "isl1",
         3.0,
-        1000.0,
         link_type="isl",
         range_km=OME_RANGE_KM,
         authority_sim_time=SIM,
@@ -49,7 +50,6 @@ def _ground_info() -> ActiveLinkInfo:
         "term0",
         "gnd0",
         3.0,
-        1000.0,
         link_type="ground",
         range_km=OME_RANGE_KM,
         authority_sim_time=SIM,
@@ -63,7 +63,6 @@ def _make_dispatcher(mbb=False):
         ("gs-ashburn", "sat-P00S01"): ("term0", "gnd0"),
         ("sat-P00S00", "sat-P00S01"): ("isl0", "isl1"),
     }
-    bandwidth_map = dict.fromkeys(interface_map, 1000.0)
 
     loc = PodLocationMap()
     for pair in interface_map:
@@ -115,7 +114,7 @@ def _make_dispatcher(mbb=False):
 
     d = Dispatcher(
         interface_map=interface_map,
-        bandwidth_map=bandwidth_map,
+        interface_rates=ANY_INTERFACE_RATES,
         pod_locator=loc,
         agent_pool=pool,
         session_id="test-session",
@@ -609,7 +608,6 @@ class TestTeardownPairsClearedOnSnapshot:
                     routing=RoutingState.UNKNOWN,
                     range_km=OME_RANGE_KM,
                     latency_ms=3.0,
-                    bandwidth_mbps=1000.0,
                     link_type="isl",
                     sim_time=SIM,
                 ),

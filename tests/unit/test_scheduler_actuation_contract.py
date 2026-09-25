@@ -32,6 +32,7 @@ from scheduler.actuation import (
 )
 from scheduler.dispatcher import ActiveLinkInfo
 
+from tests.terminal_rate_fixtures import ANY_INTERFACE_RATES
 from tests.unit.test_scheduler_authority_invariant import _make_dispatcher_with_two_terminal_gs
 
 SIM_TIME = datetime(2026, 5, 27, 12, 0, 0, tzinfo=UTC)
@@ -42,7 +43,6 @@ def _info(interface_a: str = "term0", interface_b: str = "gnd0") -> ActiveLinkIn
         interface_a=interface_a,
         interface_b=interface_b,
         latency_ms=1.0,
-        bandwidth_mbps=100.0,
         link_type="ground",
         range_km=100.0,
         authority_sim_time=SIM_TIME,
@@ -1309,10 +1309,7 @@ def test_inventory_entries_assert_commanded_netem_not_live_recomputation() -> No
     """Kernel proofs must use the netem value that was COMMANDED at dispatch.
     Recomputing compensation at proof time reads live substrate RTT, and that
     measurement drift was reported as kernel divergence - false dirty."""
-    from scheduler.dispatch_actuator import (
-        NETEM_NOT_ASSERTED,
-        _ground_inventory_entries_for_pair,
-    )
+    from scheduler.dispatch_actuator import _ground_inventory_entries_for_pair
 
     class _Locator:
         def link_locality(self, a, b):
@@ -1325,11 +1322,11 @@ def test_inventory_entries_assert_commanded_netem_not_live_recomputation() -> No
         "term0",
         "gnd0",
         12.0,
-        1000.0,
         link_type="ground",
         netem_one_way_ms=3.25,
     )
     entries, _acks = _ground_inventory_entries_for_pair(
+        interface_rates=ANY_INTERFACE_RATES,
         pair=("gs-multi", "sat-old"),
         info=info,
         expected_admin_up=True,
@@ -1339,41 +1336,18 @@ def test_inventory_entries_assert_commanded_netem_not_live_recomputation() -> No
     entry = entries["agent-a"][0]
     assert entry.latency_ms == 3.25
 
-    bare = ActiveLinkInfo("term0", "gnd0", 12.0, 1000.0, link_type="ground")
-    entries, _acks = _ground_inventory_entries_for_pair(
-        pair=("gs-multi", "sat-old"),
-        info=bare,
-        expected_admin_up=True,
-        locator=_Locator(),
-        gs_capacities={"gs-multi": 2},
-    )
-    assert entries["agent-a"][0].latency_ms == NETEM_NOT_ASSERTED
-
-
-def test_verify_overlays_commanded_netem_from_kernel_actual_bookkeeping() -> None:
-    """Desired infos come from the latest OME snapshot and carry no dispatch
-    provenance; the proof must inherit the commanded netem from the actual
-    link the scheduler dispatched."""
-    d = _make_dispatcher_with_two_terminal_gs()
-    pair = ("gs-multi", "sat-old")
-    actual = _info()
-    actual.netem_one_way_ms = 7.5
-    d._actual_links[pair] = actual
-
-    desired = _info()
-    assert desired.netem_one_way_ms is None
-    patched = d._info_with_commanded_netem(pair, desired)
-    assert patched.netem_one_way_ms == 7.5
-    assert patched.latency_ms == desired.latency_ms
-
-    # A pair with its own commanded value keeps it.
-    own = _info()
-    own.netem_one_way_ms = 2.0
-    assert d._info_with_commanded_netem(pair, own).netem_one_way_ms == 2.0
-
-    # No actual bookkeeping -> unchanged (proof sends the do-not-assert sentinel).
-    other = ("gs-multi", "sat-new")
-    assert d._info_with_commanded_netem(other, desired).netem_one_way_ms is None
+    # Only commanded links are proven up; one with no commanded delay is a
+    # Scheduler bookkeeping fault, refused before any command is built.
+    bare = ActiveLinkInfo("term0", "gnd0", 12.0, link_type="ground")
+    with pytest.raises(ValueError, match="no commanded delay"):
+        _ground_inventory_entries_for_pair(
+            interface_rates=ANY_INTERFACE_RATES,
+            pair=("gs-multi", "sat-old"),
+            info=bare,
+            expected_admin_up=True,
+            locator=_Locator(),
+            gs_capacities={"gs-multi": 2},
+        )
 
 
 def test_audit_through_real_inventory_path_keeps_clean_on_transport_failure() -> None:
@@ -1384,7 +1358,9 @@ def test_audit_through_real_inventory_path_keeps_clean_on_transport_failure() ->
     unreachable tests bypass - the merge precedence hole lived here."""
     d = _make_dispatcher_with_two_terminal_gs()
     pair = ("gs-multi", "sat-old")
-    d._actual_links[pair] = _info()
+    commanded = _info()
+    commanded.netem_one_way_ms = 3.0
+    d._actual_links[pair] = commanded
     d._js.publish = AsyncMock()
 
     failing_stub = MagicMock()
@@ -1639,16 +1615,16 @@ def _actuation_state_event(*, instance: str, gs_id: str, code: str, after: str) 
     }
 
 
-def test_ops_health_payloads_validate_against_the_vs_api_contract(monkeypatch) -> None:
-    """Both payloads the health route returns are instances of the one published
-    contract, ``nodalarc.models.vs_api.ActuationHealth``; the Scheduler side
-    defines no health shape of its own."""
+def test_ops_health_refuses_without_a_session_and_validates_with_one(monkeypatch) -> None:
+    """The health route refuses without a session and otherwise returns the one
+    published contract, ``nodalarc.models.vs_api.ActuationHealth``; the
+    Scheduler side defines no health shape of its own."""
     from vs_api import main as vs_api_main
-    from vs_api.session_context import SessionContext
+    from vs_api.session_context import SessionContext, SessionInactiveError
 
     monkeypatch.setattr(vs_api_main, "_active_context", None)
-    without_session = ActuationHealth.model_validate(vs_api_main.get_ops_health())
-    assert without_session == ActuationHealth(session_id="", wiring_generation="")
+    with pytest.raises(SessionInactiveError):
+        vs_api_main.get_ops_health()
 
     ctx = SessionContext.__new__(SessionContext)
     ctx._init_state_only()

@@ -11,6 +11,7 @@ from datetime import UTC, datetime
 
 import pytest
 from nodalarc.models.link_events import LinkDecisionProvenance
+from nodalarc.models.resolved_session import InterfaceRates
 from nodalarc.models.scheduler_ops import ActuationFailureClass
 from nodalarc.proto import node_agent_pb2
 from scheduler.desired_state import ActiveLinkInfo
@@ -25,6 +26,8 @@ from scheduler.dispatch_actuator import (
     send_batch_up,
 )
 from scheduler.latency_compensator import LatencyCompensation
+
+from tests.terminal_rate_fixtures import ANY_INTERFACE_RATES
 
 PAIR = ("sat-a", "sat-b")
 SIM_TIME = datetime(2026, 1, 1, tzinfo=UTC)
@@ -120,7 +123,6 @@ def _desired() -> dict[tuple[str, str], ActiveLinkInfo]:
             interface_a="isl0",
             interface_b="isl1",
             latency_ms=10.0,
-            bandwidth_mbps=1000.0,
             link_type="isl",
             range_km=2997.92458,
             authority_sim_time=SIM_TIME,
@@ -138,7 +140,6 @@ def _many_desired(pair_count: int) -> dict[tuple[str, str], ActiveLinkInfo]:
             interface_a="isl0",
             interface_b="isl1",
             latency_ms=10.0,
-            bandwidth_mbps=1000.0,
             link_type="isl",
             range_km=2997.92458,
             authority_sim_time=SIM_TIME,
@@ -183,6 +184,7 @@ def test_send_batch_up_publishes_link_up_only_after_all_interface_acks():
 
     result = asyncio.run(
         send_batch_up(
+            interface_rates=ANY_INTERFACE_RATES,
             pairs={PAIR},
             desired=_desired(),
             locator=_Locator(),
@@ -219,6 +221,7 @@ def test_send_batch_up_requires_every_interface_ack_for_pair_success():
 
     result = asyncio.run(
         send_batch_up(
+            interface_rates=ANY_INTERFACE_RATES,
             pairs={PAIR},
             desired=_desired(),
             locator=_Locator(),
@@ -253,6 +256,7 @@ def test_send_batch_up_logs_successful_wall_clock_actuation_latency_at_debug(cap
     with caplog.at_level(logging.DEBUG, logger="scheduler.dispatch_actuator"):
         result = asyncio.run(
             send_batch_up(
+                interface_rates=ANY_INTERFACE_RATES,
                 pairs={PAIR},
                 desired=_desired(),
                 locator=_Locator(),
@@ -291,6 +295,7 @@ def test_failed_actuation_logs_latency_at_warning(caplog):
     with caplog.at_level(logging.INFO, logger="scheduler.dispatch_actuator"):
         result = asyncio.run(
             send_batch_up(
+                interface_rates=ANY_INTERFACE_RATES,
                 pairs={PAIR},
                 desired=_desired(),
                 locator=_Locator(),
@@ -322,6 +327,7 @@ def test_no_actuation_latency_log_without_a_dispatch(caplog):
     with caplog.at_level(logging.INFO, logger="scheduler.dispatch_actuator"):
         result = asyncio.run(
             send_batch_up(
+                interface_rates=ANY_INTERFACE_RATES,
                 pairs=set(),
                 desired={},
                 locator=_Locator(),
@@ -351,6 +357,7 @@ def test_send_batch_up_chunks_large_single_agent_batches():
 
     result = asyncio.run(
         send_batch_up(
+            interface_rates=ANY_INTERFACE_RATES,
             pairs=set(desired),
             desired=desired,
             locator=_SingleAgentLocator(),
@@ -385,7 +392,6 @@ def test_ground_latency_update_updates_both_local_shaped_interfaces():
             interface_a="term0",
             interface_b="gnd0",
             latency_ms=10.0,
-            bandwidth_mbps=1000.0,
             link_type="ground",
             range_km=2997.92458,
             authority_sim_time=SIM_TIME,
@@ -398,6 +404,7 @@ def test_ground_latency_update_updates_both_local_shaped_interfaces():
 
     result = asyncio.run(
         send_authoritative_latency_updates(
+            interface_rates=ANY_INTERFACE_RATES,
             pairs={pair},
             desired=desired,
             locator=_Locator(),
@@ -739,6 +746,7 @@ def test_agents_are_sent_concurrently_while_each_agents_chunks_stay_in_order():
         pool = _HandshakePool()
         desired = {("n1", "n2"): _desired()[next(iter(_desired()))]}
         return await send_batch_up(
+            interface_rates=ANY_INTERFACE_RATES,
             pairs=set(desired),
             desired=desired,
             locator=_Locator(),
@@ -776,6 +784,12 @@ class _CrossLocator(_Locator):
 
 GS, SAT = "gs-den", "sat-a"
 CAPACITIES = {GS: 1}
+# Asymmetric terminals: the station sends fast and receives slowly, the
+# satellite the reverse. Each end carries its own terminal's rates.
+RATES = {
+    (GS, "term0"): InterfaceRates(transmit_mbps=600.0, receive_mbps=50.0),
+    (SAT, "gnd0"): InterfaceRates(transmit_mbps=50.0, receive_mbps=600.0),
+}
 NODE_IPS = {"k3s-gs-den": "10.0.0.1", "k3s-sat-a": "10.0.0.2"}
 
 
@@ -786,7 +800,6 @@ def _ground_info(pair: tuple[str, str]) -> ActiveLinkInfo:
         interface_a="term0" if station_first else "gnd0",
         interface_b="gnd0" if station_first else "term0",
         latency_ms=10.0,
-        bandwidth_mbps=1000.0,
         link_type="ground",
         range_km=2997.92458,
         authority_sim_time=SIM_TIME,
@@ -811,7 +824,6 @@ _UP_FIELDS = (
     "remote_node_ip",
     "vni",
     "latency_ms",
-    "bandwidth_mbps",
 )
 _DOWN_FIELDS = (
     "node_id",
@@ -825,7 +837,22 @@ _DOWN_FIELDS = (
     "remote_node_ip",
     "vni",
 )
-_INVENTORY_FIELDS = _DOWN_FIELDS + ("latency_ms", "bandwidth_mbps", "expected_admin_up")
+_INVENTORY_FIELDS = _DOWN_FIELDS + ("latency_ms", "expected_admin_up")
+
+
+def _rates(msg, field):
+    if not msg.HasField(field):
+        return None
+    rates = getattr(msg, field)
+    return (rates.transmit_mbps, rates.receive_mbps)
+
+
+def _up_fields(msg, names):
+    return {
+        **_fields(msg, names),
+        "rates": _rates(msg, "rates"),
+        "peer_rates": _rates(msg, "peer_rates"),
+    }
 
 
 def _expected_ground_messages(*, locality: int, cross_vni: int, up: bool):
@@ -838,13 +865,17 @@ def _expected_ground_messages(*, locality: int, cross_vni: int, up: bool):
         "sat_id": SAT,
         "locality": locality,
     }
-    extra = {"latency_ms": 9.0, "bandwidth_mbps": 1000.0} if up else {}
+    extra = {"latency_ms": 9.0} if up else {}
+    station, satellite = (600.0, 50.0), (50.0, 600.0)
     if locality == node_agent_pb2.LOCALITY_LOCAL:
+        # One entry wires both ends: its own terminal and its peer's.
+        rates = {"rates": station, "peer_rates": satellite} if up else {}
         return {
             "agent-sat-a": [
                 {
                     **common,
                     **extra,
+                    **rates,
                     "node_id": GS,
                     "interface_name": "term0",
                     "peer_node_id": SAT,
@@ -859,6 +890,7 @@ def _expected_ground_messages(*, locality: int, cross_vni: int, up: bool):
             {
                 **common,
                 **extra,
+                **({"rates": satellite, "peer_rates": None} if up else {}),
                 "node_id": SAT,
                 "interface_name": "gnd0",
                 "peer_node_id": GS,
@@ -871,6 +903,7 @@ def _expected_ground_messages(*, locality: int, cross_vni: int, up: bool):
             {
                 **common,
                 **extra,
+                **({"rates": station, "peer_rates": None} if up else {}),
                 "node_id": GS,
                 "interface_name": "term0",
                 "peer_node_id": SAT,
@@ -897,6 +930,7 @@ def test_ground_batch_plans_preserve_endpoints_interfaces_and_fields(pair, local
     info = _ground_info(pair)
 
     up = build_link_up_batch_plan(
+        interface_rates=RATES,
         pairs={pair},
         desired={pair: info},
         locator=locator,
@@ -904,7 +938,7 @@ def test_ground_batch_plans_preserve_endpoints_interfaces_and_fields(pair, local
         compensation_for_pair=_compensation,
     )
     assert {
-        agent: [_fields(m, _UP_FIELDS) for m in msgs] for agent, msgs in up.agent_ifaces.items()
+        agent: [_up_fields(m, _UP_FIELDS) for m in msgs] for agent, msgs in up.agent_ifaces.items()
     } == (_expected_ground_messages(locality=locality, cross_vni=cross_vni, up=True))
     down = build_link_down_batch_plan(
         pairs={pair}, actual_links={pair: info}, locator=locator, gs_capacities=CAPACITIES
@@ -938,7 +972,12 @@ def test_ground_inventory_entries_preserve_endpoints_interfaces_and_fields(pair,
     info.netem_one_way_ms = 9.0
 
     entries, acks = _ground_inventory_entries_for_pair(
-        pair=pair, info=info, expected_admin_up=True, locator=locator, gs_capacities=CAPACITIES
+        interface_rates=RATES,
+        pair=pair,
+        info=info,
+        expected_admin_up=True,
+        locator=locator,
+        gs_capacities=CAPACITIES,
     )
 
     expected = _expected_ground_messages(
@@ -948,7 +987,7 @@ def test_ground_inventory_entries_preserve_endpoints_interfaces_and_fields(pair,
         agent: [{**m, "expected_admin_up": True} for m in msgs] for agent, msgs in expected.items()
     }
     assert {
-        agent: [_fields(e, _INVENTORY_FIELDS) for e in es] for agent, es in entries.items()
+        agent: [_up_fields(e, _INVENTORY_FIELDS) for e in es] for agent, es in entries.items()
     } == expected
     assert acks == {
         (agent, m["node_id"], m["interface_name"]) for agent, msgs in expected.items() for m in msgs
@@ -967,6 +1006,7 @@ def test_ground_latency_update_preserves_per_side_entries(pair, locality):
 
     result = asyncio.run(
         send_authoritative_latency_updates(
+            interface_rates=RATES,
             pairs={pair},
             desired={pair: _ground_info(pair)},
             locator=locator,
@@ -984,9 +1024,19 @@ def test_ground_latency_update_preserves_per_side_entries(pair, locality):
     )
 
     assert result.succeeded_pairs == {pair}
+    # Each entry carries its own terminal's rates: the station sends 600 and
+    # takes in 50, the satellite the reverse.
     observed = {
         agent: sorted(
-            (e.node_id, e.interface_name, e.latency_ms, e.gs_id, e.sat_id)
+            (
+                e.node_id,
+                e.interface_name,
+                e.latency_ms,
+                e.rates.transmit_mbps,
+                e.rates.receive_mbps,
+                e.gs_id,
+                e.sat_id,
+            )
             for req in stub.requests
             for e in req.entries
         )
@@ -994,12 +1044,15 @@ def test_ground_latency_update_preserves_per_side_entries(pair, locality):
     }
     if locality == node_agent_pb2.LOCALITY_LOCAL:
         assert observed == {
-            "agent-sat-a": [(GS, "term0", 9.0, GS, SAT), (SAT, "gnd0", 9.0, GS, SAT)]
+            "agent-sat-a": [
+                (GS, "term0", 9.0, 600.0, 50.0, GS, SAT),
+                (SAT, "gnd0", 9.0, 50.0, 600.0, GS, SAT),
+            ]
         }
     else:
         assert observed == {
-            "agent-sat-a": [(SAT, "gnd0", 9.0, GS, SAT)],
-            "agent-gs-den": [(GS, "term0", 9.0, GS, SAT)],
+            "agent-sat-a": [(SAT, "gnd0", 9.0, 50.0, 600.0, GS, SAT)],
+            "agent-gs-den": [(GS, "term0", 9.0, 600.0, 50.0, GS, SAT)],
         }
 
 
@@ -1053,6 +1106,7 @@ def test_a_ground_link_without_a_station_is_refused_by_every_builder():
     info = _ground_info((GS, SAT))
     with pytest.raises(RuntimeError, match="has no ground station endpoint"):
         build_link_up_batch_plan(
+            interface_rates=ANY_INTERFACE_RATES,
             pairs={pair},
             desired={pair: info},
             locator=_Locator(),
@@ -1065,6 +1119,7 @@ def test_a_ground_link_without_a_station_is_refused_by_every_builder():
         )
     with pytest.raises(RuntimeError, match="has no ground station endpoint"):
         _ground_inventory_entries_for_pair(
+            interface_rates=ANY_INTERFACE_RATES,
             pair=pair,
             info=info,
             expected_admin_up=True,
@@ -1074,6 +1129,7 @@ def test_a_ground_link_without_a_station_is_refused_by_every_builder():
     with pytest.raises(RuntimeError, match="has no ground station endpoint"):
         asyncio.run(
             send_authoritative_latency_updates(
+                interface_rates=ANY_INTERFACE_RATES,
                 pairs={pair},
                 desired={pair: info},
                 locator=_Locator(),

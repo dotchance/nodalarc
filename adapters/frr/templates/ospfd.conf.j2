@@ -1,0 +1,67 @@
+{# Timer and BFD values are resolver-owned per-domain facts supplied by the
+   producer (routing.domains[].timers); the template carries no fallbacks.
+   OSPFv2 routes IPv4; IPv6 routers also run OSPFv3 (the ospf6d fragment).
+   The router's OSPF instance runs over the interfaces the session assigns
+   to it, each in its resolved area. #}
+{% for domain in domains if domain.protocol == "ospf" %}
+router ospf
+{% if "ipv4" in domain.redistribute_static %}
+ redistribute static
+{% endif %}
+ ospf router-id {{ ipv4_loopback }}
+{# Traffic engineering and segment routing both flood opaque LSAs, which
+   ospfd originates only with the opaque capability enabled. #}
+{% if domain.te_enabled or domain.sr_enabled %}
+ capability opaque
+{% endif %}
+{% if domain.te_enabled %}
+ mpls-te on
+ mpls-te router-address {{ ipv4_loopback }}
+{% endif %}
+{% if domain.sr_enabled %}
+ segment-routing on
+ segment-routing global-block {{ srgb_start }} {{ srgb_end }} local-block {{ srlb_start }} {{ srlb_end }}
+ segment-routing prefix {{ ipv4_loopback }}/32 index {{ domain.node_sid_index }}
+{% endif %}
+ timers throttle spf {{ domain.ospf_spf_delay }} {{ domain.ospf_spf_initial_hold }} {{ domain.ospf_spf_max_hold }}
+{% if "ipv4" in domain.default_route_families %}
+ default-information originate always metric {{ domain.default_route_metric }}
+{% endif %}
+exit
+
+interface lo
+ ip ospf area {{ domain.loopback_area }}
+ ip ospf passive
+exit
+
+{% for iface in domain.interfaces %}
+interface {{ iface.name }}
+ ip ospf area {{ iface.ospf_area }}
+ ip ospf network point-to-point
+ ip ospf cost {{ iface.metric }}
+ ip ospf hello-interval {{ domain.ospf_hello_interval }}
+ ip ospf dead-interval {{ domain.ospf_dead_interval }}
+{% if iface.bfd %}
+ ip ospf bfd
+ ip ospf bfd profile {{ domain.bfd_profile }}
+{% endif %}
+exit
+{% endfor %}
+
+{% for segment in domain.segments if "ipv4" in segment.igp_families %}
+interface {{ segment.name }}
+ ip ospf area {{ segment.ospf_area }}
+ ip ospf cost {{ segment.metric }}
+{% if segment.igp_active %}
+ ip ospf hello-interval {{ domain.ospf_hello_interval }}
+ ip ospf dead-interval {{ domain.ospf_dead_interval }}
+{% else %}
+ ip ospf passive
+{% endif %}
+{% if segment.bfd %}
+ ip ospf bfd
+ ip ospf bfd profile {{ domain.bfd_profile }}
+{% endif %}
+exit
+{% endfor %}
+{% endfor %}

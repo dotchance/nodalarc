@@ -78,7 +78,7 @@ def test_collector_records_and_publishes_adapter_events(session_db, monkeypatch)
     assert adapter.poll_calls == ["sat-P00S00"]
     assert adapter.get_events_calls == ["sat-P00S00"]
 
-    results = query_adapter_events(conn, node_id="sat-P00S00")
+    results = query_adapter_events(conn, node_id="sat-P00S00", session_id="run-test")
     assert len(results) == 1
     assert results[0]["event_type"] == "adjacency_up"
     assert results[0]["event_data"] == event.event_data

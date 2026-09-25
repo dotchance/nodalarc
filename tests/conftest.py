@@ -37,10 +37,7 @@ def _init_platform_config():
     cfg = PlatformConfig(
         kubernetes_namespace="nodalarc",
         ome_link_state_snapshot_interval_s=5.0,
-        default_service_host="127.0.0.1",
         vs_api_http_port=8080,
-        nodalpath_console_http_port=3100,
-        nodalpath_fwd_grpc_port=50051,
         probe_daemon_http_api_port=9100,
         probe_daemon_udp_data_port=19100,
         session_data_root="/var/nodalarc/sessions",
@@ -55,9 +52,12 @@ def _init_platform_config():
         vs_api_playback_max_requests_per_minute=30,
         vs_api_session_switch_max_requests_per_minute=5,
         vs_api_introspect_max_response_bytes=65536,
+        vs_api_history_max_bytes=262144000,
+        vs_api_history_queue_max_writes=10000,
+        session_pods_per_node=200,
         trace_interval_seconds=3.0,
-        trace_interval_fast_seconds=1.0,
-        trace_fast_window_seconds=30.0,
+        trace_unreached_retrace_seconds=1.0,
+        trace_max_seconds=180.0,
         # Unit tests must not silently bind to a developer's live local NATS.
     )
     init_platform_config(cfg)

@@ -27,7 +27,7 @@ TOKEN=$(curl -s http://localhost:8080/api/v1/auth/token | python3 -c "import jso
 curl -s -H "Authorization: Bearer $TOKEN" http://localhost:8080/api/v1/state | python3 -m json.tool
 ```
 
-Returns a JSON snapshot with all nodes (positions, link counts), all links (latency, bandwidth, type), recent events, and network health status.
+Returns a JSON snapshot with all nodes (positions, link counts), all links (latency, each direction's transmit rate, type), recent events, and network health status.
 
 ### Count satellites, ground nodes, and links
 
@@ -53,23 +53,107 @@ for link in s['links']:
 "
 ```
 
-### Trace the forwarding path between two nodes
+### Trace the path between two nodes
+
+NodalArc traces a path by running traceroute inside the two nodes' own
+containers, one run from each end toward the other. The result is the path
+real packets took through the forwarding plane at that moment.
 
 ```bash
 curl -s -X POST -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
   http://localhost:8080/api/v1/trace \
-  -d '{"src_node": "earth-us-hawthorne-gw1", "dst_node": "earth-de-frankfurt-gw1"}'
+  -d '{"src_node": "earth-it-fucino-gw1", "dst_node": "earth-us-ca-goldstone-gw1"}'
 ```
 
-Returns the hop-by-hop path and total latency:
+The request returns when both traceroutes finish. A destination that does not
+answer costs up to 20 hops at 4 seconds each. The response, from an
+`earth-geo-tdrs` session:
 
 ```json
 {
-  "hops": ["earth-us-hawthorne-gw1", "leo-sat-p02s03", "leo-sat-p02s04", "leo-sat-p03s04", "earth-de-frankfurt-gw1"],
-  "success": true,
-  "total_latency_ms": 42.3
+  "flow_id": "__trace__",
+  "src_node": "earth-it-fucino-gw1",
+  "dst_node": "earth-us-ca-goldstone-gw1",
+  "hops": [
+    "earth-it-fucino-gw1",
+    "geo-tdrs-049w",
+    "geo-tdrs-085w",
+    "geo-tdrs-111w",
+    "geo-tdrs-171w",
+    "earth-us-ca-goldstone-gw1"
+  ],
+  "hop_rtts": [
+    null,
+    260.158,
+    434.503,
+    561.195,
+    842.272,
+    1103.524
+  ],
+  "state": "reached",
+  "rtt_ms": 1103.524,
+  "error": null,
+  "reverse_hops": [
+    "earth-us-ca-goldstone-gw1",
+    "geo-tdrs-171w",
+    "geo-tdrs-111w",
+    "geo-tdrs-085w",
+    "geo-tdrs-049w",
+    "earth-it-fucino-gw1"
+  ],
+  "reverse_hop_rtts": [
+    null,
+    261.621,
+    543.337,
+    669.568,
+    843.685,
+    1104.216
+  ],
+  "reverse_state": "reached",
+  "reverse_rtt_ms": 1104.216,
+  "reverse_error": null,
+  "asymmetry_detected": false,
+  "tracing": false,
+  "traced_at": "2026-09-23T20:41:57.253131+00:00",
+  "sim_time": "2026-06-08T00:00:00+00:00"
 }
 ```
+
+Each direction lists what answered at every hop, starting with the node the
+trace runs from:
+
+- A node id means the answering address belongs to that node.
+- An address means no node in the session owns it.
+- `*` means nothing answered at that hop.
+
+`hop_rtts` gives the round trip to each hop. The source has none.
+
+`state` says how each direction ended:
+
+- `reached`: the destination answered. `rtt_ms` is its round trip.
+- `not_reached`: the trace ended without an answer from the destination.
+- `failed`: the trace could not run. `error` gives the reason.
+
+`asymmetry_detected` is `null` unless both directions reached their destination
+and every hop between the ends answered from a node's address.
+
+### Trace a path continuously
+
+The Trace Path panel in the browser uses the live trace. It repeats the trace
+every few seconds, and again whenever a link on the path changes, until you
+stop it:
+
+```bash
+curl -s -X POST -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  http://localhost:8080/api/v1/trace/start \
+  -d '{"src_node": "earth-it-fucino-gw1", "dst_node": "earth-us-ca-goldstone-gw1"}'
+curl -s -H "Authorization: Bearer $TOKEN" http://localhost:8080/api/v1/trace/status
+curl -s -X POST -H "Authorization: Bearer $TOKEN" http://localhost:8080/api/v1/trace/stop
+```
+
+`/api/v1/trace/status` returns the trace's endpoints and its latest result in
+the same form as above. The latest result also appears in every state snapshot
+under `traced_paths`.
 
 ### Stream live state over WebSocket
 
@@ -98,20 +182,61 @@ computation, then continuous state updates.
 | Method | Path | Description |
 |--------|------|-------------|
 | GET | `/api/v1/state` | Current full state snapshot |
-| GET | `/api/v1/state/{sim_time}` | Historical snapshot nearest to given time |
-| POST | `/api/v1/trace` | Forwarding path trace between two nodes |
-| GET | `/api/v1/links` | Link events with optional time range filter |
+| GET | `/api/v1/state/{sim_time}` | Recorded snapshot nearest to given time (recorded sessions only) |
+| POST | `/api/v1/trace` | Trace the path between two nodes once, in both directions |
+| POST | `/api/v1/trace/start` | Start the live trace between two nodes |
+| GET | `/api/v1/trace/status` | The live trace's endpoints and latest result |
+| POST | `/api/v1/trace/stop` | Stop the live trace |
+| GET | `/api/v1/links` | One page of recorded link events, at most 200, with optional `start`, `end`, `node`, `peer` and `order` filters (recorded sessions only) |
 | POST | `/api/v1/playback` | Playback control: pause, resume, set_speed, seek |
 | GET | `/api/v1/health` | Health check (no auth required) |
 | GET | `/api/v1/auth/token` | Get auth token (no auth required) |
 | WS | `/ws/v1/state` | Real-time state stream (~1 Hz) |
 
+## Session History
+
+History recording is chosen each time a session is deployed: the
+"Record session history" checkbox in the Sessions launcher or the Session
+Builder, or `"record_history": true` in the body of a deploy request
+(`POST /api/v1/sessions/switch`, `POST /api/v1/session/deploy-from-yaml`,
+`POST /api/v1/builder/session/deploy`). A recorded session run keeps one
+history file with its state snapshots (about every ten seconds), link events,
+operator interventions and OME lifecycle events. The history endpoints answer
+for the active session: `409 history.not_recorded` when it was deployed
+without recording, and `503 history.failed` when a write failed and recording
+stopped.
+
+`GET /api/v1/links` returns one page: `events`, `returned` of `total` matching
+events, and `next_cursor`. `limit` sets the page size, at most 200. The next
+page is requested with `cursor` set to `next_cursor` and the same filters;
+`next_cursor` is null on the last page. `order` is `oldest_first` (default) or
+`newest_first`; `peer` narrows `node` to the one link between the two nodes.
+
+All recordings together stay within the platform's `vs_api_history_max_bytes`
+(250 MiB). Past it the oldest recorded data goes first: earlier runs'
+recordings, then the oldest rows of the current one. A recording that lost
+rows reports when its oldest kept data was recorded as `retained_from` on
+each link-event page.
+
+Every state snapshot carries `history_recording`: null for a run deployed
+without recording, `{"state": "recording", "error": null}` while it records, and
+`{"state": "stopped", "error": ...}` once a write failed. The bottom bar shows
+the same state. Recording never delays live state: writes wait in a queue of
+at most `vs_api_history_queue_max_writes`, and a write that finds the queue
+full stops the recording with that reason. When VS-API restarts during a
+recording, the links active when it resumes are recorded with reason
+`recording_resumed`; transitions during the restart were not recorded.
+
+Time parameters (`start`, `end`, and the `sim_time` of
+`/api/v1/state/{sim_time}`) must name their UTC offset or `Z`; a time without
+one is refused with `400 history.time_without_zone`.
+
 ## State Snapshot Schema
 
 The state snapshot contains:
 
-- **nodes** - array of all satellites, relay nodes, and ground nodes with position, link counts, segment metadata, and body/frame metadata
-- **links** - array of all active links with latency, bandwidth, type, and rule-derived relationship where available
+- **nodes** - array of all satellites and ground nodes with position, link counts, segment metadata, and body/frame metadata
+- **links** - array of all active links with latency, each end's terminal rates (`transmit_mbps_a` and `receive_mbps_a` for node_a, `transmit_mbps_b` and `receive_mbps_b` for node_b), type, and rule-derived relationship where available. A direction carries no more than its sender transmits or its receiver takes in.
 - **recent_events** - last 50 link state changes and handoffs
 - **network_health** - convergence status
 - **sim_time** / **wall_time** - current simulation and wall-clock time

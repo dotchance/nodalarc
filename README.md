@@ -193,7 +193,7 @@ That is the point. Real stacks, same sky.
 
 ### Real Kernel Networking
 
-The Node Agent builds veth pairs and VXLAN tunnels, then shapes them with `tc netem` and `tc tbf`. Latency comes from range. Bandwidth comes from the terminal model. The lab has a substrate, and the substrate is measured.
+The Node Agent builds veth pairs and VXLAN tunnels, then shapes them with `tc netem` and `tc htb`. Latency comes from range. Each interface transmits at its own terminal's transmit rate and receives at its receive rate. The lab has a substrate, and the substrate is measured.
 
 ### Session Primitives
 
@@ -247,7 +247,7 @@ lib/            Shared Python library
 images/         Container images built and loaded with the platform
 catalog/        Shipped catalog: bodies, terminals, orbits, nodes, sites, profiles, payloads, sessions
 deploy/         Helm chart and deployment tooling
-configs/        Runtime templates and platform configuration
+configs/        Platform configuration and ephemerides
 tests/          Unit and integration tests
 docs/           User, operations, and developer documentation
 scripts/        Lifecycle, host bootstrap, and operational scripts

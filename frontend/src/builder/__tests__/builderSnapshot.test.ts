@@ -74,6 +74,15 @@ const EPHEMERIS: SessionEphemeris = {
   body_frames: { earth: EARTH_FRAME },
 };
 
+const ORBITAL: BuilderWorldNode["routing_instances"][number] = {
+  domain_id: "orbital",
+  protocol: "isis",
+  areas: ["49.0001"],
+  interfaces: [],
+  area_border: false,
+  as_boundary: false,
+};
+
 const WORLD: BuilderWorld = {
   session: { name: "test-session", display_name: null, description: null },
   epoch_unix: EPOCH_UNIX,
@@ -95,6 +104,8 @@ const WORLD: BuilderWorld = {
       surface_position: null,
       epoch_position: null,
       forwarding: "routed",
+      role: "router",
+      routing_instances: [ORBITAL],
       terminal_inventory: [],
       interfaces: null,
       originated_prefixes: null,
@@ -111,6 +122,8 @@ const WORLD: BuilderWorld = {
       surface_position: { body: "earth", lat_deg: 39.7392, lon_deg: -104.9903, alt_m: 1609 },
       epoch_position: null,
       forwarding: "routed",
+      role: "router",
+      routing_instances: [ORBITAL],
       terminal_inventory: [],
       interfaces: null,
       originated_prefixes: null,
@@ -129,6 +142,8 @@ const WORLD: BuilderWorld = {
       surface_position: { body: "earth", lat_deg: 39.7392, lon_deg: -104.9903, alt_m: 1609 },
       epoch_position: null,
       forwarding: "routed",
+      role: "forwarding_only",
+      routing_instances: [],
       terminal_inventory: [],
       interfaces: null,
       originated_prefixes: null,
@@ -137,6 +152,16 @@ const WORLD: BuilderWorld = {
 };
 
 describe("builderSnapshotFromWorld", () => {
+  it("carries every node's resolved role and routing instances", () => {
+    const snapshot = builderSnapshotFromWorld(WORLD);
+
+    expect(snapshot.nodes.map((node) => [node.node_id, node.role, node.routing_instances])).toEqual([
+      ["leo-sat-p00s00", "router", [ORBITAL]],
+      ["ground-gw1", "router", [ORBITAL]],
+      ["ground-gw2", "forwarding_only", []],
+    ]);
+  });
+
   it("derives one NodeState per world node, including ephemeris-absent grounds", () => {
     const snapshot = builderSnapshotFromWorld(WORLD);
     expect(snapshot.nodes.map((n) => n.node_id).sort()).toEqual([
@@ -242,7 +267,6 @@ describe("distinctGroundStationSites (site count)", () => {
       node("ground_station", "earth-denver"), // one site (shared namespace)
       node("ground_station", "earth-ames"), // a second site
       node("satellite", "leo-plane-0"), // satellites do not count
-      node("relay", "relay-a"), // relays do not count
     ];
     expect(distinctGroundStationSites(nodes)).toBe(2);
   });

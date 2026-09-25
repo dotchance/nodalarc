@@ -8,9 +8,6 @@ workloadDevImageOverrides: ""
 
 images:
   base: nodalarc/base:dev
-  frr: nodalarc/frr:dev
-  probe: nodalarc/probe:dev
-  nodalpathFwd: nodalarc/nodalpath-fwd:dev
   ome: nodalarc/ome:dev
   vf: nodalarc/vf:dev
   scheduler: nodalarc/scheduler:dev
@@ -122,9 +119,6 @@ nats:
   # Storage — local-path for single-node, switch to Longhorn/Rook for multi-node
   storageClass: "local-path"
   storageSize: "4Gi"
-
-# Node where session pods are created (auto-detected if empty, or set to your node name).
-sessionNodeName: ""
 
 # Node for platform pods (auto-detected if empty, or set to your node name).
 controlPlaneNode: ""

@@ -48,7 +48,6 @@ def _make_link_up(node_a="sat-P00S00", node_b="sat-P00S01"):
         interface_a="isl0",
         interface_b="isl0",
         latency_ms=10.0,
-        bandwidth_mbps=1000,
         range_km=2997.92458,
         reason="vis_gained",
     )

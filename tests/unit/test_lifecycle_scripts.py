@@ -88,8 +88,10 @@ def test_image_inventory_generates_runtime_helm_args_without_cluster() -> None:
     )
     assert result.returncode == 0, result.stderr
     output = result.stdout
-    assert "--set-string=images.frr=registry.local:5000/nodalarc/frr:abc123" in output
-    assert "--set-string=images.probe=registry.local:5000/nodalarc/probe:abc123" in output
+    assert "--set-string=images.ome=registry.local:5000/nodalarc/ome:abc123" in output
+    # Session images have no chart value: the Operator reads no FRR or probe image.
+    assert "images.frr" not in output
+    assert "images.probe" not in output
     assert "--set-string=images.natsBox=natsio/nats-box:0.19.3" in output
     assert "--set-string=imagePullPolicy=Always" in output
 
@@ -229,6 +231,9 @@ def test_session_readiness_requires_reviewed_transition_and_live_pod_counts() ->
     assert '"$api_base/api/v1/session-transitions/$operation_id"' in script
     assert '"expected_document_digest"' in script
     assert '"expected_dependency_digest"' in script
+    # make session deploys without history recording; recording is chosen per
+    # deploy in the product (deploy dialogs and the deploy API).
+    assert '"record_history": False' in script
     assert "kubectl apply" not in script
     assert "kubectl delete constellationspec current-session" not in script
     assert '{.metadata.generation}{"|"}{.status.phase}{"|"}{.status.observedGeneration}' in script

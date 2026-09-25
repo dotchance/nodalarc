@@ -2,9 +2,9 @@
 # Licensed under the Apache License, Version 2.0. See LICENSE file.
 """Contracts for the e2e matrix acceptance helpers.
 
-These tests exercise the cluster-run script in the normal unit suite: continuous
-sessions require routed proof, intermittent sessions preserve valid unreachable
-outcomes, and the MBB lane records packet loss as routing behavior.
+These tests exercise the cluster-run script in the normal unit suite: every
+session requires routed proof, and the MBB lane records packet loss as routing
+behavior.
 """
 
 from __future__ import annotations
@@ -115,6 +115,7 @@ def test_catalog_deploy_uses_guarded_shipped_revision_and_exact_yaml(monkeypatch
     result = e2e_matrix.deploy_catalog_session(
         "token",
         {"id": "earth-leo-simple", "session_yaml": session_yaml},
+        record_history=False,
     )
 
     assert result["status"] == "accepted"
@@ -125,7 +126,15 @@ def test_catalog_deploy_uses_guarded_shipped_revision_and_exact_yaml(monkeypatch
         "expected_source_revision": "a" * 64,
         "expected_document_digest": "b" * 64,
         "expected_dependency_digest": "c" * 64,
+        "record_history": False,
     }
+
+    e2e_matrix.deploy_catalog_session(
+        "token",
+        {"id": "earth-leo-simple", "session_yaml": session_yaml},
+        record_history=True,
+    )
+    assert calls[-1][2]["json"]["record_history"] is True
 
 
 def test_wait_for_transition_is_bound_to_operation_terminal_state(monkeypatch) -> None:
@@ -226,100 +235,6 @@ def test_check_ping_allows_skip_only_for_satellite_only_topology(monkeypatch) ->
 
     assert result["result"] == "SKIP"
     assert result["active_link_count"] == 0
-
-
-def test_connectivity_expectation_marks_polar_intermittent_and_the_seam_experiments_physical():
-    polar = e2e_matrix._connectivity_expectation("earth-leo-polar")  # noqa: SLF001
-    ordinary = e2e_matrix._connectivity_expectation("earth-leo-simple")  # noqa: SLF001
-    seam = e2e_matrix._connectivity_expectation("earth-leo-polar-seam")  # noqa: SLF001
-    tracking = e2e_matrix._connectivity_expectation("earth-leo-polar-seam-tracking")  # noqa: SLF001
-
-    assert polar == {
-        "mode": "intermittent",
-        "disconnected_offset_seconds": 120,
-        "settle_seconds": 30,
-    }
-    assert ordinary == {"mode": "continuous"}
-    assert seam == {"mode": "physical_experiment"}
-    assert tracking == {"mode": "physical_experiment"}
-    assert set(e2e_matrix.PHYSICAL_EXPERIMENT_SESSIONS) == {
-        "earth-leo-polar-seam",
-        "earth-leo-polar-seam-tracking",
-    }
-
-
-def test_physical_experiment_probe_is_recorded_and_never_required(monkeypatch) -> None:
-    """The seam experiments' gateway probe is an observation: its outcome, unreachable
-    included, is kept in full and the connectivity component passes on the absence
-    of a requirement, with the coverage that owns the physics named."""
-    calls: list[int | None] = []
-
-    def fake_ping(_token, _perm, *, ground_wait_s=None):
-        calls.append(ground_wait_s)
-        return {
-            "result": "FAIL",
-            "failure_kind": "connectivity",
-            "reason": "no route (kernel answered Network unreachable)",
-            "active_link_count": 5,
-        }
-
-    monkeypatch.setattr(e2e_matrix, "check_ping", fake_ping)
-    perm = {
-        "id": "earth-leo-polar-seam-tracking",
-        "connectivity_expectation": {"mode": "physical_experiment"},
-    }
-    result = e2e_matrix.check_declared_connectivity("t", perm)
-    assert result["result"] == "PASS" and result["mode"] == "physical_experiment"
-    assert result["gateway_probe_observation"]["failure_kind"] == "connectivity"
-    assert result["requirement"].startswith("none")
-    assert "tracking-limit" in result["experiment"]
-    assert result["coverage"]["reference"] == "tests/seam_reference.py"
-    assert "test_ome_to_pipeline.py" in result["coverage"]["integration"]
-    assert result["observed_outcome"] == "gateway probe FAIL (connectivity), recorded only"
-    assert calls == [15]
-
-
-def test_intermittent_connectivity_accepts_proven_runtime_unreachability(monkeypatch) -> None:
-    controls: list[str] = []
-    waits: list[int | None] = []
-
-    def fake_seek(_token: str, target_sim_time: str) -> dict:
-        controls.append(target_sim_time)
-        return {"result": "PASS"}
-
-    def fake_ping(_token: str, _perm: dict, *, ground_wait_s: int | None = None) -> dict:
-        waits.append(ground_wait_s)
-        return {
-            "result": "FAIL",
-            "failure_kind": "connectivity",
-            "reason": "kernel answered Network is unreachable",
-            "active_link_count": 34,
-        }
-
-    monkeypatch.setattr(e2e_matrix, "_seek_playback_and_pause", fake_seek)
-    monkeypatch.setattr(e2e_matrix, "check_ping", fake_ping)
-    monkeypatch.setattr(e2e_matrix.time, "sleep", lambda _seconds: None)
-    monkeypatch.setattr(
-        e2e_matrix,
-        "request_json",
-        lambda *args, **kwargs: {"state": "playing", "paused": False},
-    )
-
-    result = e2e_matrix.check_intermittent_connectivity(
-        "token",
-        {
-            "session_start_time": "2026-06-08T00:00:00Z",
-            "connectivity_expectation": e2e_matrix._connectivity_expectation(  # noqa: SLF001
-                "earth-leo-polar"
-            ),
-        },
-    )
-
-    assert result["result"] == "PASS"
-    assert result["disconnected_probe"]["result"] == "FAIL"
-    assert result["observed_outcome"] == "unreachable"
-    assert controls == ["2026-06-08T00:02:00+00:00"]
-    assert waits == [15]
 
 
 def test_ground_probe_reaches_candidate_after_first_bounded_sweep(monkeypatch) -> None:
@@ -692,36 +607,6 @@ def test_sweep_verdict_never_turns_failed_or_absent_probes_into_disconnection() 
     assert nothing["reason"].startswith("no probe executed")
 
 
-def test_intermittent_connectivity_refuses_a_probe_that_did_not_complete(monkeypatch) -> None:
-    monkeypatch.setattr(e2e_matrix, "_seek_playback_and_pause", lambda _t, _s: {"result": "PASS"})
-    monkeypatch.setattr(
-        e2e_matrix,
-        "check_ping",
-        lambda _t, _p, *, ground_wait_s=None: {
-            "result": "FAIL",
-            "failure_kind": "probe",
-            "reason": "probe failed: no published router loopback for gs-x",
-            "active_link_count": 35,
-        },
-    )
-    monkeypatch.setattr(e2e_matrix.time, "sleep", lambda _seconds: None)
-    monkeypatch.setattr(
-        e2e_matrix, "request_json", lambda *a, **k: {"state": "playing", "paused": False}
-    )
-
-    result = e2e_matrix.check_intermittent_connectivity(
-        "token",
-        {
-            "session_start_time": "2026-06-08T00:00:00Z",
-            "connectivity_expectation": e2e_matrix._connectivity_expectation("earth-leo-polar"),  # noqa: SLF001
-        },
-    )
-
-    assert result["result"] == "FAIL"
-    assert "did not complete an observation" in result["reason"]
-    assert "observed_outcome" not in result
-
-
 def test_harness_targets_no_container_by_literal_name_or_derived_pod_name() -> None:
     source = (Path(e2e_matrix.__file__)).read_text()
     assert "-c frr" not in source
@@ -917,7 +802,7 @@ def test_shipped_deploy_checks_the_transition_identity_and_the_document_digest(m
     monkeypatch.setattr(
         e2e_matrix,
         "deploy_catalog_session",
-        lambda token, perm: {"status": "accepted", "operation_id": "op-1"},
+        lambda token, perm, *, record_history: {"status": "accepted", "operation_id": "op-1"},
     )
     monkeypatch.setattr(
         e2e_matrix,
@@ -927,7 +812,7 @@ def test_shipped_deploy_checks_the_transition_identity_and_the_document_digest(m
             {"state": "succeeded", "facts": facts},
         )[1],
     )
-    passed = e2e_matrix.deploy_shipped_and_wait("t", perm)
+    passed = e2e_matrix.deploy_shipped_and_wait("t", perm, record_history=False)
     assert passed["result"] == "PASS"
     assert passed["observed_runtime"]["document_digest"] == "sha256:" + "d" * 64
     assert waited == ["op-1"]
@@ -938,7 +823,7 @@ def test_shipped_deploy_checks_the_transition_identity_and_the_document_digest(m
         "wait_for_transition",
         lambda token, operation_id, timeout=600: {"state": "succeeded", "facts": other_build},
     )
-    mismatched = e2e_matrix.deploy_shipped_and_wait("t", perm)
+    mismatched = e2e_matrix.deploy_shipped_and_wait("t", perm, record_history=False)
     assert mismatched["result"] == "FAIL" and "runtime identity differs" in mismatched["reason"]
 
     other_document = {**facts, "document_digest": "sha256:" + "e" * 64}
@@ -947,7 +832,7 @@ def test_shipped_deploy_checks_the_transition_identity_and_the_document_digest(m
         "wait_for_transition",
         lambda token, operation_id, timeout=600: {"state": "succeeded", "facts": other_document},
     )
-    rewritten = e2e_matrix.deploy_shipped_and_wait("t", perm)
+    rewritten = e2e_matrix.deploy_shipped_and_wait("t", perm, record_history=False)
     assert rewritten["result"] == "FAIL" and "document digest" in rewritten["reason"]
 
     monkeypatch.setattr(
@@ -958,12 +843,14 @@ def test_shipped_deploy_checks_the_transition_identity_and_the_document_digest(m
             "failure": {"message": "wiring"},
         },
     )
-    assert e2e_matrix.deploy_shipped_and_wait("t", perm)["result"] == "FAIL"
+    assert e2e_matrix.deploy_shipped_and_wait("t", perm, record_history=False)["result"] == "FAIL"
 
     monkeypatch.setattr(
-        e2e_matrix, "deploy_catalog_session", lambda token, perm: {"error": "switch in progress"}
+        e2e_matrix,
+        "deploy_catalog_session",
+        lambda token, perm, *, record_history: {"error": "switch in progress"},
     )
-    refused = e2e_matrix.deploy_shipped_and_wait("t", perm)
+    refused = e2e_matrix.deploy_shipped_and_wait("t", perm, record_history=False)
     assert refused["result"] == "FAIL" and refused["reason"].startswith("Deploy refused")
 
 
@@ -973,12 +860,16 @@ def test_every_acceptance_lane_deploys_the_shipped_walker_through_the_catalog_co
         "run_dirty_repair_acceptance",
         "run_seek_during_mbb_acceptance",
         "run_mbb_observation",
+        "run_history_acceptance",
         "run_permutation",
     ):
         body = source.split(f"def {name}(")[1].split("\ndef ")[0]
         assert "deploy_shipped_and_wait(" in body, name
         if name != "run_permutation":
             assert "acceptance_permutation(" in body, name
+        # The lanes that read recorded history deploy with recording; the others without.
+        reads_history = name in {"run_mbb_observation", "run_history_acceptance"}
+        assert f"record_history={reads_history}" in body, name
     assert e2e_matrix.MBB_ACCEPTANCE_SESSION_ID == "earth-leo-walker"
     for gone in (
         "deploy_yaml_and_wait",
@@ -2015,7 +1906,13 @@ def _world(monkeypatch, *, enact_before_route_read: bool, api_delivers: bool, ep
                 "allocation_events": _OVERLAP_STARTED,
             }
         if "/api/v1/links" in path:
-            return [_INCUMBENT_DOWN_LATER]
+            return {
+                "events": [_INCUMBENT_DOWN_LATER],
+                "returned": 1,
+                "total": 1,
+                "next_cursor": None,
+                "retained_from": None,
+            }
         if "ops/health" in path:
             return _HEALTH
         links = _OVERLAP_LINKS if api_stale() else _OVERLAP_LINKS[1:]

@@ -32,26 +32,49 @@ import sqlite3
 import threading
 import time as _time
 from collections import Counter, deque
+from collections.abc import Callable
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Literal
 
 import nats
-from nodalarc.db.queries import insert_ome_lifecycle_event, insert_operator_intervention_event
+from nodalarc.db.queries import (
+    get_metadata,
+    insert_active_links,
+    insert_latency_update,
+    insert_link_down,
+    insert_link_up,
+    insert_ome_lifecycle_event,
+    insert_operator_intervention_event,
+    insert_snapshot,
+    set_metadata,
+)
+from nodalarc.db.schema import create_tables
 from nodalarc.explain import compose_gs_decision_timeline_sample
 from nodalarc.models.decision_explanation import (
     GsDecisionReasonCount,
     GsDecisionTimelineFacts,
     PendingActuation,
 )
+from nodalarc.models.events import OpsEvent
 from nodalarc.models.link_decisions import GroundLinkDecisionSnapshot
-from nodalarc.models.resolved_session import ResolvedNode
-from nodalarc.models.scheduler_ops import ActualLinkSnapshot, ActuationState, parse_actuation_state
+from nodalarc.models.link_events import LatencyUpdate, LinkDown, LinkUp
+from nodalarc.models.ome_lifecycle import MbbTeardownLifecycleDetails
+from nodalarc.models.resolved_session import InterfaceRates, NodeKind, NodeRole, ResolvedNode
+from nodalarc.models.scheduler_ops import (
+    ActualLinkSnapshot,
+    ActuationOpsDetails,
+    ActuationState,
+    parse_actuation_state,
+)
 from nodalarc.models.vs_api import (
     AlmanacState,
+    HistoryRecordingState,
     LinkDecisionTrace,
     LinkState,
     NetworkHealth,
     NodeAddress,
+    NodeRoutingInstance,
     NodeState,
     RecentEvent,
 )
@@ -79,8 +102,9 @@ from nodalarc.platform_config import get_platform_config
 from nodalarc.resolve_session import SessionResolution
 from pydantic import ValidationError
 
+from vs_api.history_recorder import HistoryRecorder
 from vs_api.ops_log import is_operator_visible_ops_event, stamp_ops_event
-from vs_api.resolved_runtime_views import routing_label
+from vs_api.resolved_runtime_views import routing_instances_by_node_id, routing_label
 
 log = logging.getLogger(__name__)
 
@@ -88,6 +112,23 @@ STALE_THRESHOLD_S: float = 15.0
 CONVERGENCE_DWELL_S: float = 15.0
 BULK_CHANGE_THRESHOLD: float = 0.10
 GROUND_DECISION_SAMPLE_LIMIT: int = 720
+
+
+class SessionInactiveError(RuntimeError):
+    """A request needs the active session and none is active.
+
+    ``detail`` is public lifecycle text fixed in source, never failure detail.
+    """
+
+    def __init__(self, detail: str = "") -> None:
+        super().__init__(f"No active session: {detail}" if detail else "No active session")
+
+
+class SessionClockPendingError(RuntimeError):
+    """The session's sim time is needed and its clock has not reported yet."""
+
+    def __init__(self) -> None:
+        super().__init__("The session clock has not reported its sim time yet")
 
 
 class SessionContext:
@@ -104,6 +145,7 @@ class SessionContext:
         *,
         resolution: SessionResolution,
         source_id: str,
+        history_path: Path | None,
     ) -> None:
         if not session_id:
             log.error("FATAL: SessionContext created with empty session_id")
@@ -128,21 +170,42 @@ class SessionContext:
             self._node_addresses_by_id,
             self._node_primary_prefix_by_id,
         ) = self._build_node_network_identity_map(resolution)
+        # The routing instances every participant runs; other nodes have none.
+        self._routing_instances_by_node_id = routing_instances_by_node_id(resolved)
+        self._role_by_node_id = resolved.node_roles()
+        self._kind_by_node_id = {node.node_id: node.kind for node in resolved.nodes}
         self._resolved_static_nodes_by_id = self._build_resolved_static_node_states(
             resolved,
             addresses_by_id=self._node_addresses_by_id,
             primary_prefix_by_id=self._node_primary_prefix_by_id,
             min_elevation_by_id=self.gs_elevation_map,
+            routing_instances_by_node_id=self._routing_instances_by_node_id,
+            role_by_node_id=self._role_by_node_id,
         )
         self._resolved_link_kind_by_rule_id = {
             rule.rule_id: rule.kind for rule in resolved.link_rules
         }
+        self._interface_rates = resolved.interface_terminal_rates()
         self.beam_falloff_exponent: float = platform.vs_api_visual_beam_falloff_exponent
 
         # Wall-clock actuation-latency contract (platform vs_api_actuation_*) — the
         # in_flight -> faulted bound the explanation composer carries.
         self.actuation_expected_latency_ms: float = platform.vs_api_actuation_expected_latency_ms
         self.actuation_fault_after_ms: float = platform.vs_api_actuation_fault_after_ms
+
+        # This session run's history recording, or None when the run is not
+        # recorded. A recording that fails stops and says why in its error,
+        # which every history read reports.
+        self.history: HistoryRecorder | None = (
+            HistoryRecorder(
+                history_path,
+                session_id=self.session_id,
+                max_bytes=platform.vs_api_history_max_bytes,
+                max_pending_writes=platform.vs_api_history_queue_max_writes,
+            )
+            if history_path is not None
+            else None
+        )
 
         self._init_runtime_state()
         self._seed_resolved_static_nodes()
@@ -152,7 +215,6 @@ class SessionContext:
         _init_state_only. Single source of truth — adding a field here
         covers both production and test paths.
         """
-        self.db_path: str = ""
         self.state_lock = threading.Lock()
         if not hasattr(self, "_node_addresses_by_id"):
             self._node_addresses_by_id = {}
@@ -180,7 +242,9 @@ class SessionContext:
             last_convergence_ms=None,
         )
         self.mi_active: bool = False
-        self.sim_time: str = datetime.now(UTC).isoformat()
+        # Unknown until the session clock reports it; no reader substitutes
+        # wall time for it.
+        self.sim_time: str | None = None
         self.playback_paused: bool = False
         self.playback_speed: float = 1.0
         self.playback_achieved: float | None = None
@@ -208,6 +272,8 @@ class SessionContext:
         self.almanac_lock = threading.Lock()
         self.almanac: AlmanacState = AlmanacState()
         self.continuous_tracer = None
+        # Serializes starting, stopping and tearing down the continuous trace.
+        self.trace_lock = asyncio.Lock()
         self.session_ops_events: deque = deque(maxlen=500)
         self.actuation_notices_by_key: dict[tuple[str, str], dict] = {}
         self.actuation_latest_by_gs: dict[tuple[str, str], dict] = {}
@@ -221,12 +287,39 @@ class SessionContext:
         # clock) give skew-free divergence age without cross-pod NTP drift.
         self.actual_links_by_instance: dict[str, dict] = {}
         self.ome_lifecycle_notices_by_key: dict[tuple[str, str], dict] = {}
+        # Recorded sessions open their link history with the kernel-actual links.
+        # _history_baseline_after_seq is the link-stream sequence of the newest
+        # LinkUp or LinkDown published before the link-event subscriptions existed;
+        # None until those subscriptions exist.
+        self._history_baseline_after_seq: int | None = None
+        self._history_baseline_recorded = False
+        # True once the history file is found to hold this run already: VS-API
+        # restarted during the recording, so its links open a resumed block.
+        self._history_resumed = False
         self._subscriptions: list = []
         self._subscriber_task: asyncio.Task | None = None
         self._ready = asyncio.Event()
         self._ephemeris_received = False
         self._snapshot_received = False
         self._stopped = False
+
+    def _kind_of(self, node_id: str) -> NodeKind:
+        """The resolved kind of a node the ephemeris names."""
+        kind = self._kind_by_node_id.get(node_id)
+        if kind is None:
+            raise ValueError(
+                f"session ephemeris names node {node_id!r}, which the resolved session does not"
+            )
+        return kind
+
+    def _role_of(self, node_id: str) -> NodeRole:
+        """The resolved routing role of a node the ephemeris names."""
+        role = self._role_by_node_id.get(node_id)
+        if role is None:
+            raise ValueError(
+                f"session ephemeris names node {node_id!r}, which the resolved session does not"
+            )
+        return role
 
     def _init_state_only(self) -> None:
         """Initialize for tests that don't need a session config file.
@@ -244,6 +337,11 @@ class SessionContext:
         self._node_primary_prefix_by_id = {}
         self._resolved_static_nodes_by_id = {}
         self._resolved_link_kind_by_rule_id = {}
+        self._interface_rates = {}
+        self._routing_instances_by_node_id = {}
+        self._role_by_node_id = {}
+        self._kind_by_node_id = {}
+        self.history = None
         self.beam_falloff_exponent = 2.0
         self.actuation_expected_latency_ms = 250.0
         self.actuation_fault_after_ms = 1200.0
@@ -276,6 +374,7 @@ class SessionContext:
         """
         if self._stopped:
             raise RuntimeError("Cannot start a stopped SessionContext")
+        self._record_history("session metadata", self._open_history)
 
         self._subscriber_task = asyncio.create_task(
             self._subscriber_loop(nc, mode),
@@ -294,7 +393,11 @@ class SessionContext:
         the task triggers it. Timeout of 15s prevents hanging if NATS
         is unreachable (9 subscriptions × ~2s each worst case).
         """
-        self._stopped = True
+        async with self.trace_lock:
+            self._stopped = True
+            if self.continuous_tracer is not None:
+                await self.continuous_tracer.stop()
+                self.continuous_tracer = None
         if self._subscriber_task and not self._subscriber_task.done():
             self._subscriber_task.cancel()
             try:
@@ -304,6 +407,10 @@ class SessionContext:
                     "SessionContext stop timed out after 15s — %d subscriptions may be orphaned",
                     len(self._subscriptions),
                 )
+        # The recording ends after its last handler: the queued writes are applied
+        # and the file is closed.
+        if self.history is not None:
+            await asyncio.to_thread(self.history.close)
         # Clear state after subscriptions are gone
         with self.state_lock:
             self.nodes.clear()
@@ -311,7 +418,6 @@ class SessionContext:
             self.recent_events.clear()
         with self.almanac_lock:
             self.almanac = AlmanacState()
-        self.continuous_tracer = None
         self.session_ops_events.clear()
         log.info(
             "SessionContext stopped: session_id=%s, %d subscriptions cleaned",
@@ -414,6 +520,8 @@ class SessionContext:
                     cb=self._on_latency_update,
                 )
             )
+            if self.history is not None:
+                await self._start_history_baseline(js, self.history)
             self._subscriptions.append(
                 await js.subscribe(
                     ome_clock_subject(sid),
@@ -509,6 +617,72 @@ class SessionContext:
                     log.warning("Failed to unsubscribe: %s", exc)
             self._subscriptions.clear()
             log.info("SessionContext subscriptions cleaned: session_id=%s", sid)
+
+    async def _start_history_baseline(self, js, history: HistoryRecorder) -> None:
+        """Find where this recording starts. A failure stops recording, never live state."""
+        try:
+            self._history_baseline_after_seq = await self._last_link_transition_seq(js)
+        except Exception as exc:
+            history.stop("failed to find where recording starts", exc)
+
+    async def _last_link_transition_seq(self, js) -> int:
+        """Link-stream sequence of the newest LinkUp or LinkDown for this session.
+
+        Called once the LinkUp and LinkDown subscriptions exist: every transition
+        at or below this sequence was published before recording began and has no
+        row. Zero when the session has published no transition yet.
+        """
+        from nats.js.errors import NotFoundError
+
+        newest = 0
+        for subject in (link_up_subject(self.session_id), link_down_subject(self.session_id)):
+            try:
+                last = await js.get_last_msg(STREAM_LINK_EVENTS, subject)
+            except NotFoundError:
+                # The subscription above proved the stream exists, so NotFound means
+                # this subject has no message: no transition of this kind yet.
+                continue
+            newest = max(newest, last.seq)
+        return newest
+
+    def _record_history_baseline(
+        self, msg, snap: ActualLinkSnapshot, pairs: frozenset[tuple[str, str]]
+    ) -> None:
+        """Record the kernel-actual links once, when this session's recording starts or resumes.
+
+        LinkUp and LinkDown rows exist only from subscription on. The Scheduler
+        publishes its kernel-actual set after the transitions that change it, so
+        the first set published after the newest unrecorded transition already
+        reflects every unrecorded transition. Every later transition arrives as its
+        own row. An earlier set is skipped: it can still list a link whose unrecorded
+        LinkDown followed it.
+        """
+        after_seq = self._history_baseline_after_seq
+        if self.history is None or self._history_baseline_recorded or after_seq is None:
+            return
+        if msg.metadata.sequence.stream <= after_seq:
+            return
+        self._history_baseline_recorded = True
+        if not pairs:
+            return
+
+        def write(conn: sqlite3.Connection) -> None:
+            if snap.sim_time is None:
+                raise ValueError(
+                    f"ActualLinkSnapshot from {snap.scheduler_instance_id} has no sim_time"
+                )
+            insert_active_links(
+                conn,
+                sorted(pairs),
+                session_id=self.session_id,
+                sim_time=snap.sim_time,
+                wall_time=snap.emitted_at,
+                # The writer thread opened the file before this write: a file that
+                # already held this run means VS-API restarted during the recording.
+                reason="recording_resumed" if self._history_resumed else "recording_start",
+            )
+
+        self._record_history("links active where recording starts", write)
 
     # ------------------------------------------------------------------
     # NATS message handlers
@@ -611,7 +785,6 @@ class SessionContext:
                     field
                     for field in (
                         "latency_ms",
-                        "bandwidth_mbps",
                         "range_km",
                         "interface_a",
                         "interface_b",
@@ -630,6 +803,9 @@ class SessionContext:
                     link_rule_id=link.link_rule_id,
                     endpoint_segments=link.endpoint_segments,
                 )
+                terminal_rates = self._link_terminal_rates(
+                    link.node_a, link.interface_a, link.node_b, link.interface_b
+                )
                 new_links[key] = LinkState(
                     node_a=link.node_a,
                     node_b=link.node_b,
@@ -637,7 +813,7 @@ class SessionContext:
                     link_type=public_link_type,
                     link_reason="",
                     latency_ms=link.latency_ms,
-                    bandwidth_mbps=link.bandwidth_mbps,
+                    **terminal_rates,
                     range_km=link.range_km,
                     traffic_load_pct=None,
                     interface_a=link.interface_a,
@@ -744,27 +920,84 @@ class SessionContext:
             reason_counts=reason_counts,
         )
 
+    def _link_terminal_rates(
+        self, node_a: str, interface_a: str, node_b: str, interface_b: str
+    ) -> dict[str, float]:
+        """Each end's own terminal transmit and receive rates, as link record fields."""
+        ends: list[InterfaceRates] = []
+        for node_id, interface in ((node_a, interface_a), (node_b, interface_b)):
+            rates = self._interface_rates.get((node_id, interface))
+            if rates is None:
+                log.error(
+                    "Active link end %s/%s has no resolved terminal rates", node_id, interface
+                )
+                raise ValueError(
+                    f"active link end {node_id}/{interface} has no terminal rates in the "
+                    "resolved session"
+                )
+            ends.append(rates)
+        end_a, end_b = ends
+        return {
+            "transmit_mbps_a": end_a.transmit_mbps,
+            "receive_mbps_a": end_a.receive_mbps,
+            "transmit_mbps_b": end_b.transmit_mbps,
+            "receive_mbps_b": end_b.receive_mbps,
+        }
+
+    def _open_history(self, conn: sqlite3.Connection) -> None:
+        """Create or reopen this session's history file; record what it holds once."""
+        create_tables(conn)
+        if get_metadata(conn, session_id=self.session_id, key="session_name") is not None:
+            self._history_resumed = True
+            return
+        for key, value in (
+            ("session_name", self.constellation_name),
+            ("routing_stack", self.routing_stack),
+            ("source_id", self.session_source_id),
+            ("start_time", datetime.now(UTC).isoformat()),
+        ):
+            set_metadata(conn, session_id=self.session_id, key=key, value=value)
+
+    def history_recording_state(self) -> HistoryRecordingState | None:
+        """This run's recording as the snapshot reports it; None when the run is not recorded."""
+        if self.history is None:
+            return None
+        error = self.history.error
+        return HistoryRecordingState(state="recording" if error is None else "stopped", error=error)
+
+    def _record_history(self, what: str, write: Callable[[sqlite3.Connection], object]) -> None:
+        """Queue one write to this session's history; a session not recorded writes nothing."""
+        if self.history is not None:
+            self.history.submit(what, write)
+
+    def record_snapshot(self, snapshot: dict) -> None:
+        """Record one full state snapshot in this session's history."""
+        self._record_history(
+            "state snapshot",
+            lambda conn: insert_snapshot(
+                conn,
+                session_id=self.session_id,
+                sim_time=datetime.fromisoformat(snapshot["sim_time"]),
+                wall_time=datetime.fromisoformat(snapshot["wall_time"]),
+                snapshot_json=json.dumps(snapshot),
+            ),
+        )
+
+    @staticmethod
+    def _parse_link_event[EventT: (LinkUp, LinkDown, LatencyUpdate)](
+        model: type[EventT], msg
+    ) -> EventT:
+        try:
+            return model.model_validate_json(msg.data)
+        except ValidationError:
+            log.error("Malformed %s: %s", model.__name__, msg.data)
+            raise
+
     async def _on_link_up(self, msg) -> None:
         self.last_link_event_wall_time = _time.monotonic()
-        data = json.loads(msg.data)
-        node_a = data.get("node_a")
-        node_b = data.get("node_b")
-        if not node_a or not node_b:
-            log.error("Malformed LinkUp — missing node_a=%r or node_b=%r", node_a, node_b)
-            raise ValueError(f"LinkUp missing required fields: node_a={node_a}, node_b={node_b}")
-        for field in (
-            "interface_a",
-            "interface_b",
-            "latency_ms",
-            "bandwidth_mbps",
-            "range_km",
-            "reason",
-            "link_type",
-            "provenance",
-        ):
-            if field not in data or data[field] is None:
-                log.error("Malformed LinkUp — missing %s: %s", field, data)
-                raise ValueError(f"LinkUp missing required field: {field}")
+        event = self._parse_link_event(LinkUp, msg)
+        data = event.model_dump(mode="json")
+        node_a, node_b = event.node_a, event.node_b
         key = _link_key(node_a, node_b)
         public_link_type = self._public_link_type(
             data["link_type"],
@@ -772,6 +1005,9 @@ class SessionContext:
             endpoint_segments=data.get("endpoint_segments"),
         )
         trace = self._trace_from_link_event(data, link_type=public_link_type)
+        terminal_rates = self._link_terminal_rates(
+            node_a, data["interface_a"], node_b, data["interface_b"]
+        )
         with self.state_lock:
             self.links[key] = LinkState(
                 node_a=node_a,
@@ -780,7 +1016,7 @@ class SessionContext:
                 link_type=public_link_type,
                 link_reason=data["reason"],
                 latency_ms=data["latency_ms"],
-                bandwidth_mbps=data["bandwidth_mbps"],
+                **terminal_rates,
                 range_km=data["range_km"],
                 traffic_load_pct=None,
                 interface_a=data["interface_a"],
@@ -790,39 +1026,32 @@ class SessionContext:
                 endpoint_segments=data.get("endpoint_segments"),
             )
             self.link_decision_traces[key] = trace
-        self._notify_topology_change(node_a, node_b)
+        self._notify_link_change(node_a, node_b, up=True)
         self._add_recent_event(data, "link_up")
+        self._record_history(
+            "LinkUp", lambda conn: insert_link_up(conn, event, session_id=self.session_id)
+        )
 
     async def _on_link_down(self, msg) -> None:
         self.last_link_event_wall_time = _time.monotonic()
-        data = json.loads(msg.data)
-        node_a = data.get("node_a")
-        node_b = data.get("node_b")
-        if not node_a or not node_b:
-            log.error("Malformed LinkDown — missing node_a=%r or node_b=%r", node_a, node_b)
-            raise ValueError(f"LinkDown missing required fields: node_a={node_a}, node_b={node_b}")
-        if data.get("link_type") is None:
-            log.error("Malformed LinkDown — missing link_type: %s", data)
-            raise ValueError("LinkDown missing required field: link_type")
+        event = self._parse_link_event(LinkDown, msg)
+        data = event.model_dump(mode="json")
+        node_a, node_b = event.node_a, event.node_b
         key = _link_key(node_a, node_b)
         with self.state_lock:
             self.links.pop(key, None)
             self.link_decision_traces.pop(key, None)
-        self._notify_topology_change(node_a, node_b)
+        self._notify_link_change(node_a, node_b, up=False)
         self._add_recent_event(data, "link_down")
+        self._record_history(
+            "LinkDown", lambda conn: insert_link_down(conn, event, session_id=self.session_id)
+        )
 
     async def _on_latency_update(self, msg) -> None:
-        data = json.loads(msg.data)
-        node_a = data.get("node_a")
-        node_b = data.get("node_b")
-        if not node_a or not node_b:
-            log.error("Malformed LatencyUpdate — missing node_a=%r or node_b=%r", node_a, node_b)
-            raise ValueError("LatencyUpdate missing required fields")
-        latency_ms = data.get("latency_ms")
-        range_km = data.get("range_km")
-        if latency_ms is None or range_km is None:
-            log.error("Malformed LatencyUpdate — missing latency_ms or range_km: %s", data)
-            raise ValueError("LatencyUpdate missing latency_ms or range_km")
+        event = self._parse_link_event(LatencyUpdate, msg)
+        data = event.model_dump(mode="json")
+        node_a, node_b = event.node_a, event.node_b
+        latency_ms, range_km = event.latency_ms, event.range_km
         if data.get("provenance") is None:
             log.error("Malformed LatencyUpdate — missing provenance: %s", data)
             raise ValueError("LatencyUpdate missing required field: provenance")
@@ -835,6 +1064,10 @@ class SessionContext:
                     update={"latency_ms": latency_ms, "range_km": range_km}
                 )
                 self.link_decision_traces[key] = trace
+        self._record_history(
+            "LatencyUpdate",
+            lambda conn: insert_latency_update(conn, event, session_id=self.session_id),
+        )
 
     async def _on_almanac(self, msg) -> None:
         data = json.loads(msg.data)
@@ -873,9 +1106,8 @@ class SessionContext:
                 self.session_ops_events.append(stamp_ops_event(data))
             self._update_actuation_notice(data)
             self._update_ome_lifecycle_notice(data)
-        # sqlite writers — never on the loop.
-        await asyncio.to_thread(self._persist_operator_intervention, data)
-        await asyncio.to_thread(self._persist_ome_lifecycle_event, data)
+        self._persist_operator_intervention(data)
+        self._persist_ome_lifecycle_event(data)
 
     async def _on_actuation_state(self, msg) -> None:
         """Retained per-GS actuation state (LAST_PER_SUBJECT recovery).
@@ -939,6 +1171,7 @@ class SessionContext:
                 "emitted_at": snap.emitted_at,
                 "received_at": received_at,
             }
+        self._record_history_baseline(msg, snap, pairs)
 
     def actual_kernel_pairs(self) -> frozenset[tuple[str, str]]:
         """Scheduler-verified kernel-actual pairs for the current session owner.
@@ -1056,31 +1289,36 @@ class SessionContext:
         self.ome_lifecycle_notices_by_key[(gs_id, teardown_id)] = notice
 
     def _persist_operator_intervention(self, event: dict) -> None:
-        details = event.get("details") or {}
-        if not details.get("intervention_id") or not self.db_path:
+        """Record an ops event that belongs to an operator intervention."""
+        if not (event.get("details") or {}).get("intervention_id"):
             return
-        try:
-            conn = sqlite3.connect(self.db_path)
-            try:
-                insert_operator_intervention_event(conn, event)
-            finally:
-                conn.close()
-        except Exception as exc:
-            log.error("Failed to persist operator intervention event: %s", exc)
+
+        def write(conn: sqlite3.Connection) -> None:
+            ops = OpsEvent.model_validate(event)
+            insert_operator_intervention_event(
+                conn,
+                ops,
+                ActuationOpsDetails.model_validate(ops.details),
+                session_id=self.session_id,
+            )
+
+        self._record_history("operator intervention event", write)
 
     def _persist_ome_lifecycle_event(self, event: dict) -> None:
+        """Record an OME terminal-lifecycle ops event."""
         if event.get("source") != "ome" or event.get("code") != "MBB_TEARDOWN_TERMINAL":
             return
-        if not self.db_path:
-            return
-        try:
-            conn = sqlite3.connect(self.db_path)
-            try:
-                insert_ome_lifecycle_event(conn, event)
-            finally:
-                conn.close()
-        except Exception as exc:
-            log.error("Failed to persist OME lifecycle event: %s", exc)
+
+        def write(conn: sqlite3.Connection) -> None:
+            ops = OpsEvent.model_validate(event)
+            insert_ome_lifecycle_event(
+                conn,
+                ops,
+                MbbTeardownLifecycleDetails.model_validate(ops.details),
+                session_id=self.session_id,
+            )
+
+        self._record_history("OME lifecycle event", write)
 
     def build_actuation_health(self) -> dict:
         by_instance: dict[str, dict] = {}
@@ -1224,7 +1462,7 @@ class SessionContext:
                     )
                     self.nodes[node_id] = NodeState(
                         node_id=node_id,
-                        node_type="satellite",
+                        node_type=self._kind_of(node_id),
                         lat_deg=geo.lat_deg,
                         lon_deg=geo.lon_deg,
                         alt_km=geo.alt_km,
@@ -1233,8 +1471,8 @@ class SessionContext:
                         vel_z_km_s=vel_ecef.z,
                         plane=node.plane,
                         slot=node.slot,
-                        routing_area=existing.routing_area if existing else None,
-                        neighbor_count=existing.neighbor_count if existing else 0,
+                        routing_instances=self._routing_instances_by_node_id.get(node_id, ()),
+                        role=self._role_of(node_id),
                         prefix=prefix,
                         addresses=addresses,
                         beam_falloff_exponent=self.beam_falloff_exponent,
@@ -1286,7 +1524,7 @@ class SessionContext:
                     )
                     self.nodes[node_id] = NodeState(
                         node_id=node_id,
-                        node_type="satellite",
+                        node_type=self._kind_of(node_id),
                         lat_deg=geo.lat_deg,
                         lon_deg=geo.lon_deg,
                         alt_km=geo.alt_km,
@@ -1295,8 +1533,8 @@ class SessionContext:
                         vel_z_km_s=vel_ecef.z,
                         plane=node.plane,
                         slot=node.slot,
-                        routing_area=existing.routing_area if existing else None,
-                        neighbor_count=existing.neighbor_count if existing else 0,
+                        routing_instances=self._routing_instances_by_node_id.get(node_id, ()),
+                        role=self._role_of(node_id),
                         prefix=prefix,
                         addresses=addresses,
                         beam_falloff_exponent=self.beam_falloff_exponent,
@@ -1319,7 +1557,7 @@ class SessionContext:
                     )
                     self.nodes[node_id] = NodeState(
                         node_id=node_id,
-                        node_type="ground_station",
+                        node_type=self._kind_of(node_id),
                         lat_deg=node.lat_deg,
                         lon_deg=node.lon_deg,
                         alt_km=node.alt_km,
@@ -1328,8 +1566,8 @@ class SessionContext:
                         vel_z_km_s=0.0,
                         plane=None,
                         slot=None,
-                        routing_area=existing.routing_area if existing else None,
-                        neighbor_count=existing.neighbor_count if existing else 0,
+                        routing_instances=self._routing_instances_by_node_id.get(node_id, ()),
+                        role=self._role_of(node_id),
                         prefix=prefix,
                         addresses=addresses,
                         min_elevation_deg=self.gs_elevation_map.get(node_id),
@@ -1365,9 +1603,40 @@ class SessionContext:
             if len(self.recent_events) > 50:
                 del self.recent_events[:-50]
 
-    def _notify_topology_change(self, node_a: str, node_b: str) -> None:
+    def _notify_link_change(self, node_a: str, node_b: str, *, up: bool) -> None:
         if self.continuous_tracer is not None:
-            self.continuous_tracer.notify_topology_change(node_a, node_b)
+            self.continuous_tracer.notify_link_change(node_a, node_b, up=up)
+
+    @property
+    def stopped(self) -> bool:
+        """Whether this context has begun tearing down."""
+        return self._stopped
+
+    def read_sim_time(self) -> str:
+        """This session's current sim time; refused until the session clock reports it."""
+        with self.state_lock:
+            sim_time = self.sim_time
+        if sim_time is None:
+            raise SessionClockPendingError
+        return sim_time
+
+    def record_path_change(
+        self, src: str, dst: str, old_hops: list[str], new_hops: list[str]
+    ) -> None:
+        """Add a PATH_CHANGE recent event for the traced pair."""
+
+        def shown(hops: list[str]) -> str:
+            text = " -> ".join(hops[:4])
+            return f"{text} ({len(hops)} hops)" if len(hops) > 4 else text
+
+        self._add_recent_event(
+            {
+                "sim_time": self.read_sim_time(),
+                "node_id": src,
+                "reason": f"Path {src} -> {dst}: {shown(old_hops)} => {shown(new_hops)}",
+            },
+            "PATH_CHANGE",
+        )
 
     def _public_link_type(
         self,
@@ -1631,6 +1900,8 @@ class SessionContext:
         addresses_by_id: dict[str, tuple[NodeAddress, ...]],
         primary_prefix_by_id: dict[str, str],
         min_elevation_by_id: dict[str, float],
+        routing_instances_by_node_id: dict[str, tuple[NodeRoutingInstance, ...]],
+        role_by_node_id: dict[str, NodeRole],
     ) -> dict[str, NodeState]:
         """Build VS-API state for resolved body-fixed nodes.
 
@@ -1646,6 +1917,8 @@ class SessionContext:
                 addresses=addresses_by_id.get(node.node_id, ()),
                 prefix=primary_prefix_by_id.get(node.node_id),
                 min_elevation_deg=min_elevation_by_id.get(node.node_id),
+                routing_instances=routing_instances_by_node_id.get(node.node_id, ()),
+                role=role_by_node_id[node.node_id],
             )
             for node in resolved.nodes
             if node.kind == "ground_station"
@@ -1658,12 +1931,14 @@ class SessionContext:
         addresses: tuple[NodeAddress, ...],
         prefix: str | None,
         min_elevation_deg: float | None,
+        routing_instances: tuple[NodeRoutingInstance, ...],
+        role: NodeRole,
     ) -> NodeState:
         if node.surface_position is None or node.reference_body is None:
             raise ValueError(f"resolved ground node {node.node_id!r} is missing fixed position")
         return NodeState(
             node_id=node.node_id,
-            node_type="ground_station",
+            node_type=node.kind,
             lat_deg=node.surface_position.lat_deg,
             lon_deg=node.surface_position.lon_deg,
             alt_km=node.surface_position.alt_m / 1000.0,
@@ -1672,8 +1947,8 @@ class SessionContext:
             vel_z_km_s=0.0,
             plane=None,
             slot=None,
-            routing_area=None,
-            neighbor_count=0,
+            routing_instances=routing_instances,
+            role=role,
             prefix=prefix,
             addresses=addresses,
             min_elevation_deg=min_elevation_deg,

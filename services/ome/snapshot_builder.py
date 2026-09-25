@@ -120,7 +120,6 @@ def build_link_state_snapshot(
     source: LinkSnapshotSource,
     *,
     interface_map: dict[tuple[str, str], tuple[str, str]],
-    bandwidth_map: Mapping[tuple[str, str], float],
     sim_time: datetime,
     seq: int,
     interval_s: float,
@@ -169,15 +168,6 @@ def build_link_state_snapshot(
         range_km = compute_range_km(pa, pb)
         return range_km, compute_latency_ms(range_km)
 
-    def _link_bandwidth(pair: tuple[str, str], link_type: str) -> float:
-        bandwidth = bandwidth_map.get(pair)
-        if bandwidth is None or bandwidth <= 0:
-            raise ValueError(
-                "Cannot build authoritative LinkStateSnapshot for active "
-                f"{link_type} link {pair}: missing config-derived bandwidth"
-            )
-        return bandwidth
-
     def _link_rule_metadata(pair: tuple[str, str]) -> LinkRuleMetadata | None:
         if rule_map is None:
             return None
@@ -196,7 +186,6 @@ def build_link_state_snapshot(
         range_latency = (
             _link_range_latency(pair[0], pair[1], "isl") if carrier == CarrierState.UP else None
         )
-        bandwidth_mbps = _link_bandwidth(pair, "isl") if carrier == CarrierState.UP else None
         rule_meta = _link_rule_metadata(pair)
         links.append(
             LinkState.model_construct(
@@ -209,7 +198,6 @@ def build_link_state_snapshot(
                 routing=RoutingState.UNKNOWN,
                 range_km=range_latency[0] if range_latency else None,
                 latency_ms=range_latency[1] if range_latency else None,
-                bandwidth_mbps=bandwidth_mbps,
                 link_type="isl",
                 link_rule_id=rule_meta.link_rule_id if rule_meta is not None else None,
                 topology_mode=rule_meta.topology_mode if rule_meta is not None else None,
@@ -267,13 +255,11 @@ def build_link_state_snapshot(
                     f"ground link {pair}: missing OME terminal association"
                 )
             gs_ti, sat_ti = assoc[pair]
-            bandwidth_mbps = _link_bandwidth(pair, "ground")
         else:
             if pair in assoc:
                 gs_ti, sat_ti = assoc[pair]
             else:
                 gs_ti = sat_ti = None
-            bandwidth_mbps = None
         if gs_ti is not None:
             gs_index = _ground_side(pair)
             term_iface, gnd_iface = f"term{gs_ti}", f"gnd{sat_ti}"
@@ -302,7 +288,6 @@ def build_link_state_snapshot(
                 routing=RoutingState.UNKNOWN,
                 range_km=range_latency[0] if range_latency else None,
                 latency_ms=range_latency[1] if range_latency else None,
-                bandwidth_mbps=bandwidth_mbps,
                 link_type="ground",
                 gs_terminal_index=gs_ti,
                 sat_terminal_index=sat_ti,
@@ -344,7 +329,6 @@ class DeferredLinkStateSnapshot:
 
     source: LinkSnapshotSource
     interface_map: dict[tuple[str, str], tuple[str, str]]
-    bandwidth_map: Mapping[tuple[str, str], float]
     rule_map: Mapping[tuple[str, str], LinkRuleMetadata] | None
     sim_time: datetime
     seq: int
@@ -358,7 +342,6 @@ class DeferredLinkStateSnapshot:
         return build_link_state_snapshot(
             self.source,
             interface_map=self.interface_map,
-            bandwidth_map=self.bandwidth_map,
             rule_map=self.rule_map,
             sim_time=self.sim_time,
             seq=self.seq,

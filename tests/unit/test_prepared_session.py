@@ -203,7 +203,7 @@ def test_prepares_deep_user_refs_exactly_and_resolves_once(
 
     monkeypatch.setattr(prepared_module, "resolve_session_with_assets", tracking_resolver)
 
-    prepared = _prepare(prepared_fixture, available_node_count=1)
+    prepared = _prepare(prepared_fixture, available_node_count=0)
 
     assert len(calls) == 1
     assert isinstance(prepared, PreparedSessionFiles)

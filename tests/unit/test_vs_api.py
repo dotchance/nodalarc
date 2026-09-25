@@ -23,7 +23,7 @@ from nodalarc.db.schema import create_tables
 from nodalarc.models.events import EphemerisNodeFixed, EphemerisNodeTLE, SessionEphemeris
 from nodalarc.models.link_events import LinkUp
 from nodalarc.models.metrics import ConvergenceResult
-from nodalarc.models.resolved_session import SourceContext
+from nodalarc.models.resolved_session import InterfaceRates, SourceContext
 from nodalarc.models.vs_api import (
     LinkDecisionTrace,
     LinkState,
@@ -256,10 +256,15 @@ def _constellation_cr(
         status["sessionName"] = session_name
     _prepared, upload = _runtime_fixture(root_yaml, session_run_id)
     return {
-        "metadata": {"generation": generation},
+        "metadata": {
+            "generation": generation,
+            "namespace": "nodalarc",
+            "annotations": {"nodalarc.io/source-id": "nodalarc:sessions/earth-leo-simple.yaml"},
+        },
         "spec": {
             "sessionYaml": root_yaml,
             "catalogUpload": upload.selection.model_dump(mode="json"),
+            "recordHistory": False,
         },
         "status": status,
     }
@@ -274,7 +279,6 @@ def _extract_ready_session(main, cr: dict):
             spec["sessionYaml"],
             str((cr.get("status") or {}).get("sessionRunId") or ""),
         ),
-        namespace="nodalarc",
     )
 
 
@@ -296,6 +300,14 @@ def _make_provenance(**overrides):
     return provenance
 
 
+# The resolved terminal rates of the ISL both link tests use. Each end is its
+# own terminal: sat-P00S00 sends 2000 and sat-P00S01 sends 100.
+_ISL_RATES = {
+    ("sat-P00S00", "isl0"): InterfaceRates(transmit_mbps=2000.0, receive_mbps=1500.0),
+    ("sat-P00S01", "isl1"): InterfaceRates(transmit_mbps=100.0, receive_mbps=2000.0),
+}
+
+
 def _make_link_up_event(node_a="sat-P00S00", node_b="sat-P00S01", **overrides):
     """Create a complete LinkUp event dict with all required fields."""
     event = {
@@ -304,10 +316,10 @@ def _make_link_up_event(node_a="sat-P00S00", node_b="sat-P00S01", **overrides):
         "interface_a": "isl0",
         "interface_b": "isl1",
         "latency_ms": 5.0,
-        "bandwidth_mbps": 1000.0,
         "range_km": 1500.0,
         "reason": "vis_gained",
         "sim_time": datetime.now(UTC).isoformat(),
+        "wall_time": datetime.now(UTC).isoformat(),
         "link_type": "isl",
         "provenance": _make_provenance(),
     }
@@ -324,6 +336,7 @@ def _make_link_down_event(node_a="sat-P00S00", node_b="sat-P00S01", **overrides)
         "interface_b": "isl1",
         "reason": "vis_lost",
         "sim_time": datetime.now(UTC).isoformat(),
+        "wall_time": datetime.now(UTC).isoformat(),
         "link_type": "isl",
     }
     event.update(overrides)
@@ -474,6 +487,21 @@ class TestConstellationCRReadiness:
         with pytest.raises(ValueError, match=field):
             _extract_ready_session(m, cr)
 
+    @pytest.mark.parametrize(
+        ("remove", "match"),
+        [
+            ("annotations", "nodalarc.io/source-id"),
+            ("namespace", "namespace"),
+        ],
+    )
+    def test_extract_ready_cr_session_requires_its_source_id_and_namespace(self, remove, match):
+        import vs_api.main as m
+
+        cr = _constellation_cr()
+        del cr["metadata"][remove]
+        with pytest.raises(ValueError, match=match):
+            _extract_ready_session(m, cr)
+
     def test_extract_ready_cr_session_fails_loudly_without_session_yaml(self):
         import vs_api.main as m
 
@@ -484,7 +512,6 @@ class TestConstellationCRReadiness:
                 cr,
                 require_ready=True,
                 core_v1=object(),
-                namespace="nodalarc",
             )
 
 
@@ -498,6 +525,7 @@ class TestSessionContextNetworkIdentity:
                 catalog=shipped_read_view(),
             ),
             source_id="nodalarc:sessions/earth-leo-heo-geo-luna-reachability.yaml",
+            history_path=None,
         )
 
         assert (
@@ -529,6 +557,7 @@ class TestSessionContextNetworkIdentity:
                 catalog=shipped_read_view(),
             ),
             source_id="test-session",
+            history_path=None,
         )
 
         resolution = resolve_session_with_assets(
@@ -567,6 +596,7 @@ class TestSessionContextNetworkIdentity:
                 catalog=shipped_read_view(),
             ),
             source_id="nodalarc:sessions/earth-leo-simple.yaml",
+            history_path=None,
         )
         inactive_id = "earth-us-co-denver-gw2"
         active_id = "earth-us-co-denver-gw1"
@@ -640,9 +670,8 @@ class TestStateSnapshot:
 
         assert response.status_code == 503
         assert response.json() == {
-            "error": "No active session",
-            "session_status": "switching",
-            "session_status_detail": "Session switch in progress",
+            "code": "session.inactive",
+            "message": "No active session: Session switch in progress",
         }
         assert "abc123" not in response.text
         assert "/var/run/secrets" not in response.text
@@ -660,7 +689,10 @@ class TestStateSnapshot:
                 link_type="intra_plane_isl",
                 link_reason=event["reason"],
                 latency_ms=event["latency_ms"],
-                bandwidth_mbps=event["bandwidth_mbps"],
+                transmit_mbps_a=1000.0,
+                receive_mbps_a=1000.0,
+                transmit_mbps_b=1000.0,
+                receive_mbps_b=1000.0,
                 range_km=event["range_km"],
                 traffic_load_pct=None,
                 interface_a=event["interface_a"],
@@ -682,7 +714,10 @@ class TestStateSnapshot:
                 link_type="intra_plane_isl",
                 link_reason="vis_gained",
                 latency_ms=5.0,
-                bandwidth_mbps=1000.0,
+                transmit_mbps_a=1000.0,
+                receive_mbps_a=1000.0,
+                transmit_mbps_b=1000.0,
+                receive_mbps_b=1000.0,
                 range_km=1500.0,
                 traffic_load_pct=None,
                 interface_a="isl0",
@@ -706,7 +741,10 @@ class TestStateSnapshot:
                 link_type="intra_plane_isl",
                 link_reason="vis_gained",
                 latency_ms=5.0,
-                bandwidth_mbps=1000.0,
+                transmit_mbps_a=1000.0,
+                receive_mbps_a=1000.0,
+                transmit_mbps_b=1000.0,
+                receive_mbps_b=1000.0,
                 range_km=1500.0,
                 traffic_load_pct=None,
                 interface_a="isl0",
@@ -727,6 +765,7 @@ class TestSnapshotModel:
             wall_time=datetime.now(UTC),
             schema_version=1,
             session_id="run-test-0001",
+            history_recording=None,
             nodes=[
                 NodeState(
                     node_id="sat-P00S00",
@@ -739,8 +778,8 @@ class TestSnapshotModel:
                     vel_z_km_s=None,
                     plane=0,
                     slot=0,
-                    routing_area=None,
-                    neighbor_count=2,
+                    routing_instances=(),
+                    role="router",
                     isl_count=2,
                     gnd_count=0,
                     prefix=None,
@@ -758,7 +797,10 @@ class TestSnapshotModel:
                     link_type="intra_plane_isl",
                     link_reason="vis_gained",
                     latency_ms=5.0,
-                    bandwidth_mbps=1000.0,
+                    transmit_mbps_a=1000.0,
+                    receive_mbps_a=1000.0,
+                    transmit_mbps_b=1000.0,
+                    receive_mbps_b=1000.0,
                     range_km=1500.0,
                     traffic_load_pct=None,
                     interface_a="isl0",
@@ -766,7 +808,6 @@ class TestSnapshotModel:
                 )
             ],
             traced_paths=[],
-            active_flows=[],
             recent_events=[],
             network_health=NetworkHealth(
                 status="converged",
@@ -797,10 +838,10 @@ class TestSnapshotModel:
             wall_time=datetime.now(UTC),
             schema_version=1,
             session_id="run-test-0001",
+            history_recording=None,
             nodes=[],
             links=[],
             traced_paths=[],
-            active_flows=[],
             recent_events=[],
             network_health=NetworkHealth(
                 status="converged",
@@ -835,14 +876,13 @@ class TestSQLiteQueries:
             interface_a="isl0",
             interface_b="isl1",
             latency_ms=5.0,
-            bandwidth_mbps=1000.0,
             range_km=1500.0,
             reason="vis_gained",
         )
-        insert_link_up(conn, event)
+        insert_link_up(conn, event, session_id="run-test")
         from nodalarc.db.queries import query_link_events
 
-        results = query_link_events(conn)
+        results = query_link_events(conn, session_id="run-test")
         assert len(results) >= 1
         conn.close()
 
@@ -861,10 +901,10 @@ class TestSQLiteQueries:
             wall_time_start=t,
             wall_time_end=t,
         )
-        insert_convergence_result(conn, result)
+        insert_convergence_result(conn, result, session_id="run-test")
         from nodalarc.db.queries import query_convergence_events
 
-        results = query_convergence_events(conn)
+        results = query_convergence_events(conn, session_id="run-test")
         assert len(results) >= 1
         conn.close()
 
@@ -875,13 +915,15 @@ class TestSnapshotStorage:
     def test_insert_and_query_snapshot(self):
         conn = sqlite3.connect(":memory:")
         create_tables(conn)
+        at = datetime(2025, 1, 1, tzinfo=UTC)
         insert_snapshot(
             conn,
-            sim_time="2025-01-01T00:00:00+00:00",
-            wall_time="2025-01-01T00:00:00+00:00",
+            sim_time=at,
+            wall_time=at,
             snapshot_json='{"nodes":[],"links":[]}',
+            session_id="run-test",
         )
-        result = query_nearest_snapshot(conn, "2025-01-01T00:00:00+00:00")
+        result = query_nearest_snapshot(conn, sim_time=at, session_id="run-test")
         assert result is not None
         data = json.loads(result["snapshot_json"])
         assert data["nodes"] == []
@@ -890,22 +932,28 @@ class TestSnapshotStorage:
     def test_nearest_snapshot_selection(self):
         conn = sqlite3.connect(":memory:")
         create_tables(conn)
-        for t in [
-            "2025-01-01T00:00:00+00:00",
-            "2025-01-01T00:05:00+00:00",
-            "2025-01-01T00:10:00+00:00",
-        ]:
-            insert_snapshot(conn, sim_time=t, wall_time=t, snapshot_json=f'{{"sim_time":"{t}"}}')
-        result = query_nearest_snapshot(conn, "2025-01-01T00:04:00+00:00")
+        for minute in (0, 5, 10):
+            at = datetime(2025, 1, 1, 0, minute, tzinfo=UTC)
+            insert_snapshot(
+                conn,
+                sim_time=at,
+                wall_time=at,
+                snapshot_json=json.dumps({"sim_time": at.isoformat()}),
+                session_id="run-test",
+            )
+        # The Z form and the +00:00 form name the same instants.
+        asked = datetime.fromisoformat("2025-01-01T00:04:00Z")
+        result = query_nearest_snapshot(conn, sim_time=asked, session_id="run-test")
         assert result is not None
-        data = json.loads(result["snapshot_json"])
-        assert "00:05:00" in data["sim_time"] or "00:00:00" in data["sim_time"]
+        assert json.loads(result["snapshot_json"])["sim_time"] == "2025-01-01T00:05:00+00:00"
         conn.close()
 
     def test_no_snapshots_returns_none(self):
         conn = sqlite3.connect(":memory:")
         create_tables(conn)
-        result = query_nearest_snapshot(conn, "2025-01-01T00:00:00+00:00")
+        result = query_nearest_snapshot(
+            conn, sim_time=datetime(2025, 1, 1, tzinfo=UTC), session_id="run-test"
+        )
         assert result is None
         conn.close()
 
@@ -1118,6 +1166,8 @@ class TestEphemerisPositionPropagation:
     def test_tle_ephemeris_updates_satellite_position(self):
         ctx = SessionContext.__new__(SessionContext)
         ctx._init_state_only()
+        ctx._role_by_node_id = {"sat-P00S00": "router"}
+        ctx._kind_by_node_id = {"sat-P00S00": "satellite"}
         ctx.cached_ephemeris_obj = SessionEphemeris(
             epoch_id=0,
             sim_time=datetime.fromtimestamp(ISS_TLE_EPOCH, UTC),
@@ -1143,9 +1193,19 @@ class TestEphemerisPositionPropagation:
         assert node.lon_deg == pytest.approx(152.9363, abs=1e-3)
         assert node.alt_km > 400.0
 
+    def test_an_ephemeris_node_the_resolved_session_lacks_is_refused(self):
+        ctx = SessionContext.__new__(SessionContext)
+        ctx._init_state_only()
+        ctx._role_by_node_id = {}
+
+        with pytest.raises(ValueError, match="names node 'sat-P00S00', which the resolved"):
+            ctx._role_of("sat-P00S00")
+
     def test_ephemeris_metadata_updates_node_state(self):
         ctx = SessionContext.__new__(SessionContext)
         ctx._init_state_only()
+        ctx._role_by_node_id = {"ground-gs-denver": "router"}
+        ctx._kind_by_node_id = {"ground-gs-denver": "ground_station"}
         ctx.cached_ephemeris_obj = SessionEphemeris(
             epoch_id=0,
             sim_time=datetime(2025, 1, 1, tzinfo=UTC),
@@ -1181,6 +1241,7 @@ class TestLinkDecisionTraceState:
     def test_link_up_records_decision_trace(self):
         ctx = SessionContext.__new__(SessionContext)
         ctx._init_state_only()
+        ctx._interface_rates = _ISL_RATES
 
         import asyncio
         from unittest.mock import MagicMock
@@ -1192,6 +1253,13 @@ class TestLinkDecisionTraceState:
         asyncio.run(ctx._on_link_up(msg))
 
         key = _link_key("sat-P00S00", "sat-P00S01")
+        link = ctx.links[key]
+        assert (
+            link.transmit_mbps_a,
+            link.receive_mbps_a,
+            link.transmit_mbps_b,
+            link.receive_mbps_b,
+        ) == (2000.0, 1500.0, 100.0, 2000.0)
         trace = ctx.link_decision_traces[key]
         assert isinstance(trace, LinkDecisionTrace)
         assert trace.geometry_authority == "ome"
@@ -1233,6 +1301,7 @@ class TestLinkDecisionTraceState:
     def test_snapshot_records_ome_authority_trace(self):
         ctx = SessionContext.__new__(SessionContext)
         ctx._init_state_only()
+        ctx._interface_rates = _ISL_RATES
 
         import asyncio
         from unittest.mock import MagicMock
@@ -1255,7 +1324,6 @@ class TestLinkDecisionTraceState:
                         "routing": "UNKNOWN",
                         "range_km": 900.0,
                         "latency_ms": 3.0,
-                        "bandwidth_mbps": 1000.0,
                         "link_type": "isl",
                         "sim_time": "2025-01-01T00:00:00+00:00",
                     }
@@ -1275,6 +1343,7 @@ class TestLinkDecisionTraceState:
     def test_latency_update_refreshes_decision_trace(self):
         ctx = SessionContext.__new__(SessionContext)
         ctx._init_state_only()
+        ctx._interface_rates = _ISL_RATES
 
         import asyncio
         from unittest.mock import MagicMock
@@ -1286,6 +1355,8 @@ class TestLinkDecisionTraceState:
         latency = MagicMock()
         latency.data = json.dumps(
             {
+                "sim_time": datetime.now(UTC).isoformat(),
+                "wall_time": datetime.now(UTC).isoformat(),
                 "node_a": "sat-P00S00",
                 "node_b": "sat-P00S01",
                 "latency_ms": 6.0,
@@ -1475,6 +1546,7 @@ class TestSubscriberResilience:
         """VS-API must not derive range from latency or discard interfaces."""
         ctx = SessionContext.__new__(SessionContext)
         ctx._init_state_only()
+        ctx._interface_rates = _ISL_RATES
 
         import asyncio
         from unittest.mock import MagicMock
@@ -1497,7 +1569,6 @@ class TestSubscriberResilience:
                         "routing": "UNKNOWN",
                         "range_km": 900.0,
                         "latency_ms": 3.0,
-                        "bandwidth_mbps": 1000.0,
                         "link_type": "isl",
                         "scheduling_state": "teardown",
                         "teardown_remaining_ticks": 7,
@@ -1514,10 +1585,58 @@ class TestSubscriberResilience:
         assert link.range_km == 900.0
         assert link.interface_a == "isl0"
         assert link.interface_b == "isl1"
+        # Each direction runs at its sending end's terminal transmit rate.
+        assert (
+            link.transmit_mbps_a,
+            link.receive_mbps_a,
+            link.transmit_mbps_b,
+            link.receive_mbps_b,
+        ) == (2000.0, 1500.0, 100.0, 2000.0)
         assert link.scheduling_state == "teardown"
         assert link.teardown_remaining_ticks == 7
         assert link.successor_pair == ("sat-P00S00", "sat-P00S02")
         assert ctx.last_snapshot_seq == 12
+
+    def test_snapshot_link_without_resolved_terminal_rates_is_refused(self):
+        """A link end the resolved session gives no terminal is refused loudly."""
+        ctx = SessionContext.__new__(SessionContext)
+        ctx._init_state_only()
+        ctx._interface_rates = {("sat-P00S00", "isl0"): _ISL_RATES[("sat-P00S00", "isl0")]}
+
+        import asyncio
+        from unittest.mock import MagicMock
+
+        msg = MagicMock()
+        msg.data = json.dumps(
+            {
+                "snapshot_seq": 12,
+                "sim_time": "2025-01-01T00:00:00+00:00",
+                "interval_s": 1.0,
+                "epoch_id": 0,
+                "links": [
+                    {
+                        "node_a": "sat-P00S00",
+                        "node_b": "sat-P00S01",
+                        "interface_a": "isl0",
+                        "interface_b": "isl1",
+                        "admin": "UP",
+                        "carrier": "UP",
+                        "routing": "UNKNOWN",
+                        "range_km": 900.0,
+                        "latency_ms": 3.0,
+                        "link_type": "isl",
+                        "scheduling_state": "teardown",
+                        "teardown_remaining_ticks": 7,
+                        "successor_pair": ["sat-P00S00", "sat-P00S02"],
+                        "sim_time": "2025-01-01T00:00:00+00:00",
+                    }
+                ],
+            }
+        ).encode()
+
+        with pytest.raises(ValueError, match="sat-P00S01/isl1 has no terminal rates"):
+            asyncio.run(ctx._on_link_state_snapshot(msg))
+        assert ctx.links == {}
 
     def test_malformed_snapshot_does_not_advance_sequence_or_replace_state(self):
         ctx = SessionContext.__new__(SessionContext)
@@ -1531,7 +1650,10 @@ class TestSubscriberResilience:
             link_type="intra_plane_isl",
             link_reason="vis_gained",
             latency_ms=5.0,
-            bandwidth_mbps=1000.0,
+            transmit_mbps_a=1000.0,
+            receive_mbps_a=1000.0,
+            transmit_mbps_b=1000.0,
+            receive_mbps_b=1000.0,
             range_km=1500.0,
             traffic_load_pct=None,
             interface_a="isl0",
@@ -1558,7 +1680,6 @@ class TestSubscriberResilience:
                         "carrier": "UP",
                         "routing": "UNKNOWN",
                         "latency_ms": 3.0,
-                        "bandwidth_mbps": 1000.0,
                         "link_type": "isl",
                         "sim_time": "2025-01-01T00:00:00+00:00",
                     }
@@ -1959,12 +2080,14 @@ class TestLinkDecisionsEndpoint:
         asyncio.run(ctx._on_ground_link_decision_snapshot(msg))
         return ctx
 
-    def test_returns_404_when_no_session(self, monkeypatch):
+    def test_refused_when_no_session(self, monkeypatch):
         import vs_api.main as m
 
+        monkeypatch.setattr(m, "_API_KEY", "")
         monkeypatch.setattr(m, "_active_context", None)
         r = TestClient(m.app).get("/api/v1/ground-link-decisions")
-        assert r.status_code == 404
+        assert r.status_code == 503
+        assert r.json() == {"code": "session.inactive", "message": "No active session"}
 
     def test_returns_404_when_no_snapshot_received(self, monkeypatch):
         import vs_api.main as m
@@ -2673,3 +2796,941 @@ class TestOmeLifecycleNotices:
             {"source": "scheduler", "code": "MBB_TEARDOWN_TERMINAL", "details": {}}
         )
         assert ctx.ome_lifecycle_notices_by_key == {}
+
+
+def _recorded_context(history_path, *, max_bytes: int = 262_144_000) -> SessionContext:
+    from vs_api.history_recorder import HistoryRecorder
+
+    ctx = SessionContext.__new__(SessionContext)
+    ctx._init_state_only()
+    ctx.session_id = "run-history-0001"
+    ctx._interface_rates = _ISL_RATES
+    ctx.history = (
+        HistoryRecorder(
+            history_path,
+            session_id=ctx.session_id,
+            max_bytes=max_bytes,
+            max_pending_writes=10_000,
+        )
+        if history_path is not None
+        else None
+    )
+    return ctx
+
+
+def _recording_error(ctx: SessionContext) -> str | None:
+    """The recording's error once every queued write is applied; None for a run not recorded."""
+    if ctx.history is None:
+        return None
+    ctx.history.flush()
+    return ctx.history.error
+
+
+def _message(payload: dict):
+    from unittest.mock import MagicMock
+
+    msg = MagicMock()
+    msg.data = json.dumps(payload).encode()
+    return msg
+
+
+@pytest.mark.parametrize(
+    ("method", "path", "body"),
+    [
+        ("GET", "/api/v1/ops/health", None),
+        ("POST", "/api/v1/ops/repair", {"gs_id": "gs", "reason": "r"}),
+        ("GET", "/api/v1/link-decision-traces", None),
+        ("GET", "/api/v1/decision-explanation?gs=gs", None),
+        ("GET", "/api/v1/decision-explanation/timeline?gs=gs", None),
+        ("GET", "/api/v1/ground-link-decisions", None),
+        ("POST", "/api/v1/trace/start", {"src_node": "a", "dst_node": "b"}),
+        ("POST", "/api/v1/trace", {"src_node": "a", "dst_node": "b"}),
+        ("POST", "/api/v1/trace/stop", None),
+        ("GET", "/api/v1/trace/status", None),
+        ("GET", "/api/v1/links", None),
+    ],
+)
+def test_every_session_route_refuses_the_same_way_without_a_session(
+    monkeypatch, method, path, body
+):
+    import vs_api.main as m
+
+    monkeypatch.setattr(m, "_API_KEY", "")
+    monkeypatch.setattr(m, "_active_context", None)
+
+    response = TestClient(m.app).request(method, path, json=body)
+
+    assert response.status_code == 503
+    assert response.json() == {"code": "session.inactive", "message": "No active session"}
+
+
+class TestContinuousTraceSession:
+    """The live trace belongs to its session context."""
+
+    def test_stopping_the_session_stops_its_trace(self):
+        import asyncio
+
+        stopped: list[bool] = []
+
+        class _Tracer:
+            async def stop(self) -> None:
+                stopped.append(True)
+
+        ctx = SessionContext.__new__(SessionContext)
+        ctx._init_state_only()
+        ctx.continuous_tracer = _Tracer()
+
+        asyncio.run(ctx.stop())
+
+        assert stopped == [True]
+        assert ctx.continuous_tracer is None
+
+    def test_a_path_change_is_a_recent_event_at_session_sim_time(self):
+        ctx = SessionContext.__new__(SessionContext)
+        ctx._init_state_only()
+        ctx.sim_time = "2026-06-08T00:10:00+00:00"
+
+        ctx.record_path_change("gs-a", "gs-b", ["gs-a", "sat-1", "gs-b"], ["gs-a", "sat-2", "gs-b"])
+
+        event = ctx.recent_events[-1]
+        assert (event.event_type, event.node_id) == ("PATH_CHANGE", "gs-a")
+        assert event.summary == "Path gs-a -> gs-b: gs-a -> sat-1 -> gs-b => gs-a -> sat-2 -> gs-b"
+        assert event.sim_time.isoformat() == "2026-06-08T00:10:00+00:00"
+
+    @staticmethod
+    def _session_with_untraceable_nodes(monkeypatch):
+        import vs_api.main as m
+        from vs_api.path_tracer import PathTracer
+
+        ctx = SessionContext.__new__(SessionContext)
+        ctx._init_state_only()
+        ctx.nodes = {"site-host": object(), "gs-b": object()}
+        ctx.sim_time = "2026-06-08T00:00:00+00:00"
+        monkeypatch.setattr(m, "_API_KEY", "")
+        monkeypatch.setattr(m, "_active_context", ctx)
+        monkeypatch.setattr(
+            m,
+            "_create_path_tracer",
+            lambda context: PathTracer(
+                node_registry={},
+                namespace="nodalarc",
+                core_v1=lambda: None,
+                read_sim_time=context.read_sim_time,
+            ),
+        )
+        return m, ctx
+
+    @pytest.mark.parametrize("path", ["/api/v1/trace/start", "/api/v1/trace"])
+    def test_both_trace_routes_refuse_a_node_they_cannot_trace(self, monkeypatch, path):
+        m, ctx = self._session_with_untraceable_nodes(monkeypatch)
+
+        response = TestClient(m.app).post(path, json={"src_node": "site-host", "dst_node": "gs-b"})
+
+        assert response.status_code == 400
+        assert response.json() == {
+            "code": "trace.untraceable_node",
+            "message": "site-host has no loopback address to trace",
+        }
+        assert ctx.continuous_tracer is None
+
+    @pytest.mark.parametrize("path", ["/api/v1/trace/start", "/api/v1/trace"])
+    def test_both_trace_routes_refuse_an_unknown_node(self, monkeypatch, path):
+        m, _ctx = self._session_with_untraceable_nodes(monkeypatch)
+
+        response = TestClient(m.app).post(path, json={"src_node": "site-host", "dst_node": "ghost"})
+
+        assert response.status_code == 404
+        assert response.json() == {"code": "trace.unknown_node", "message": "Unknown node: ghost"}
+
+    @pytest.mark.parametrize("path", ["/api/v1/trace/start", "/api/v1/trace"])
+    def test_both_trace_routes_refuse_a_request_without_both_nodes(self, monkeypatch, path):
+        m, _ctx = self._session_with_untraceable_nodes(monkeypatch)
+
+        response = TestClient(m.app).post(path, json={"src_node": "site-host"})
+
+        assert response.status_code == 400
+        assert response.json() == {
+            "code": "trace.invalid_request",
+            "message": "src_node and dst_node are required",
+        }
+
+    @pytest.mark.parametrize("path", ["/api/v1/trace/start", "/api/v1/trace"])
+    def test_both_trace_routes_wait_for_the_session_clock(self, monkeypatch, path):
+        m, ctx = self._session_with_untraceable_nodes(monkeypatch)
+        ctx.sim_time = None
+
+        response = TestClient(m.app).post(path, json={"src_node": "site-host", "dst_node": "gs-b"})
+
+        assert response.status_code == 503
+        assert response.json() == {
+            "code": "session.clock_pending",
+            "message": "The session clock has not reported its sim time yet",
+        }
+        assert ctx.continuous_tracer is None
+
+    def test_a_one_shot_trace_is_refused_while_another_runs(self, monkeypatch):
+        import asyncio
+
+        m, _ctx = self._session_with_untraceable_nodes(monkeypatch)
+        monkeypatch.setattr(m, "_one_shot_trace_lock", asyncio.Lock())
+
+        async def held() -> None:
+            await m._one_shot_trace_lock.acquire()
+
+        asyncio.run(held())
+        response = TestClient(m.app).post(
+            "/api/v1/trace", json={"src_node": "site-host", "dst_node": "gs-b"}
+        )
+
+        assert response.status_code == 409
+        assert response.json() == {
+            "code": "trace.busy",
+            "message": "A one-shot trace is already running; try again when it finishes",
+        }
+
+    def test_a_context_being_torn_down_takes_no_new_trace(self, monkeypatch):
+        m, ctx = self._session_with_untraceable_nodes(monkeypatch)
+        ctx._stopped = True
+
+        response = TestClient(m.app).post(
+            "/api/v1/trace/start", json={"src_node": "site-host", "dst_node": "gs-b"}
+        )
+
+        assert response.status_code == 503
+        assert response.json()["code"] == "session.inactive"
+        assert ctx.continuous_tracer is None
+
+    def test_a_one_shot_trace_returns_the_measured_path(self, monkeypatch):
+        import vs_api.main as m
+        from nodalarc.models.vs_api import TracedPath
+
+        measured = TracedPath(
+            flow_id=m.ONE_SHOT_TRACE_FLOW_ID,
+            src_node="gs-a",
+            dst_node="gs-b",
+            hops=["gs-a", "sat-1", "gs-b"],
+            hop_rtts=[None, 5.0, 9.0],
+            state="reached",
+            rtt_ms=9.0,
+            error=None,
+            reverse_hops=["gs-b", "sat-1", "gs-a"],
+            reverse_hop_rtts=[None, 4.0, 8.5],
+            reverse_state="reached",
+            reverse_rtt_ms=8.5,
+            reverse_error=None,
+            asymmetry_detected=False,
+            tracing=False,
+            traced_at="2026-09-23T00:00:00+00:00",
+            sim_time="2026-06-08T00:00:00+00:00",
+        )
+        calls: list = []
+
+        class _Tracer:
+            def trace_between(self, src, dst, *, flow_id):
+                calls.append((src, dst, flow_id))
+                return measured
+
+        ctx = SessionContext.__new__(SessionContext)
+        ctx._init_state_only()
+        ctx.nodes = {"gs-a": object(), "gs-b": object()}
+        ctx.sim_time = "2026-06-08T00:00:00+00:00"
+        monkeypatch.setattr(m, "_API_KEY", "")
+        monkeypatch.setattr(m, "_active_context", ctx)
+        monkeypatch.setattr(m, "_create_path_tracer", lambda context: _Tracer())
+
+        response = TestClient(m.app).post(
+            "/api/v1/trace", json={"src_node": "gs-a", "dst_node": "gs-b"}
+        )
+
+        assert response.status_code == 200
+        assert response.json() == measured.model_dump(mode="json")
+        assert calls == [("gs-a", "gs-b", "__trace__")]
+        assert ctx.continuous_tracer is None
+
+
+def test_tearing_down_a_context_stops_its_trace_and_marks_it_stopped():
+    import asyncio
+
+    ctx = SessionContext.__new__(SessionContext)
+    ctx._init_state_only()
+    stopped: list = []
+
+    class _Tracer:
+        async def stop(self) -> None:
+            stopped.append(True)
+
+    ctx.continuous_tracer = _Tracer()
+    asyncio.run(ctx.stop())
+
+    assert stopped == [True]
+    assert ctx.continuous_tracer is None
+    assert ctx.stopped
+
+
+def test_a_running_trace_has_no_stop_reason():
+    from nodalarc.models.vs_api import TracedPath
+
+    with pytest.raises(ValueError, match="a stop reason only once it stopped"):
+        TracedPath(
+            flow_id="__continuous_trace__",
+            src_node="gs-a",
+            dst_node="gs-b",
+            hops=["gs-a"],
+            hop_rtts=[None],
+            state="running",
+            rtt_ms=None,
+            error=None,
+            reverse_hops=["gs-b"],
+            reverse_hop_rtts=[None],
+            reverse_state="running",
+            reverse_rtt_ms=None,
+            reverse_error=None,
+            asymmetry_detected=None,
+            tracing=True,
+            traced_at="2026-09-24T00:00:00+00:00",
+            sim_time="2026-06-08T00:00:00+00:00",
+            stop_reason="time_limit",
+        )
+
+
+def test_no_snapshot_is_built_before_the_session_clock_reports(monkeypatch):
+    import vs_api.main as m
+
+    ctx = SessionContext.__new__(SessionContext)
+    ctx._init_state_only()
+    monkeypatch.setattr(m, "_active_context", ctx)
+
+    assert ctx.sim_time is None
+    assert m._build_snapshot() is None
+
+
+class TestRuntimeSessionBootstrap:
+    """A runtime session CR that cannot be read is retried or shown, never hidden."""
+
+    @staticmethod
+    def _manager():
+        from types import SimpleNamespace
+
+        return SimpleNamespace(_status="idle", status_detail="")
+
+    def test_a_transport_failure_is_retried_and_changes_no_status(self):
+        import kubernetes.client
+        import vs_api.main as m
+
+        manager = self._manager()
+
+        m._report_cr_bootstrap_failure(kubernetes.client.rest.ApiException(status=503), manager)
+
+        assert (manager._status, manager.status_detail) == ("idle", "")
+
+    def test_a_refused_cr_is_a_session_error_with_its_reason(self):
+        import vs_api.main as m
+
+        manager = self._manager()
+
+        m._report_cr_bootstrap_failure(
+            m.CRSessionRefusal("ConstellationSpec metadata has no namespace"), manager
+        )
+
+        assert (manager._status, manager.status_detail) == (
+            "error",
+            "ConstellationSpec metadata has no namespace",
+        )
+
+    def test_any_other_failure_is_a_session_error_naming_the_log(self):
+        import vs_api.main as m
+
+        manager = self._manager()
+
+        m._report_cr_bootstrap_failure(RuntimeError("secret internals"), manager)
+
+        assert (manager._status, manager.status_detail) == (
+            "error",
+            "The runtime session could not be activated; see the VS-API log",
+        )
+
+
+def test_the_session_node_count_fails_loudly_when_the_listing_fails(monkeypatch):
+    import kubernetes.client
+    import vs_api.main as m
+    from vs_api import k8s
+
+    class _Nodes:
+        def list_node(self, *, label_selector):
+            raise kubernetes.client.rest.ApiException(status=503)
+
+    monkeypatch.setattr(k8s, "core_v1", lambda: _Nodes())
+
+    with pytest.raises(kubernetes.client.rest.ApiException):
+        m._available_session_node_count()
+
+
+class TestSessionHistory:
+    """A session run deployed with recording keeps one history file; others keep none."""
+
+    def test_recorded_session_writes_metadata_and_typed_link_events_to_its_file(self, tmp_path):
+        import asyncio
+        import sqlite3
+
+        from nodalarc.db.queries import get_metadata, query_link_events, recorded_session_id
+
+        path = tmp_path / "history" / "run-history-0001.db"
+        ctx = _recorded_context(path)
+        ctx._record_history("session metadata", ctx._open_history)
+
+        asyncio.run(ctx._on_link_up(_message(_make_link_up_event())))
+        asyncio.run(ctx._on_link_down(_message(_make_link_down_event())))
+
+        assert _recording_error(ctx) is None
+        conn = sqlite3.connect(path)
+        try:
+            assert recorded_session_id(conn) == "run-history-0001"
+            assert get_metadata(conn, session_id="run-history-0001", key="session_name") == "test"
+            events = query_link_events(conn, session_id="run-history-0001")
+        finally:
+            conn.close()
+        assert [e["event_type"] for e in events] == ["LinkUp", "LinkDown"]
+        assert {e["session_id"] for e in events} == {"run-history-0001"}
+
+    def test_session_not_recorded_writes_nothing(self, tmp_path):
+        import asyncio
+
+        ctx = _recorded_context(None)
+        asyncio.run(ctx._on_link_up(_message(_make_link_up_event())))
+
+        assert _recording_error(ctx) is None
+        assert list(tmp_path.iterdir()) == []
+
+    def test_history_reads_refuse_when_the_session_is_not_recorded(self, monkeypatch):
+        import vs_api.main as m
+
+        monkeypatch.setattr(m, "_API_KEY", "")
+        monkeypatch.setattr(m, "_active_context", _recorded_context(None))
+
+        response = TestClient(m.app).get("/api/v1/links")
+
+        assert response.status_code == 409
+        assert response.json() == {
+            "code": "history.not_recorded",
+            "message": "History recording is off for this session",
+        }
+
+    def test_a_failed_write_stops_recording_and_every_read_reports_it(self, tmp_path, monkeypatch):
+        import asyncio
+
+        import vs_api.main as m
+
+        blocker = tmp_path / "history"
+        blocker.write_text("a file where the history directory belongs")
+        ctx = _recorded_context(blocker / "run-history-0001.db")
+
+        asyncio.run(ctx._on_link_up(_message(_make_link_up_event())))
+        assert _recording_error(ctx) == "failed to record LinkUp"
+
+        monkeypatch.setattr(m, "_API_KEY", "")
+        monkeypatch.setattr(m, "_active_context", ctx)
+        response = TestClient(m.app).get("/api/v1/links")
+        assert response.status_code == 503
+        assert response.json()["code"] == "history.failed"
+
+    def test_recorded_session_serves_its_link_history_by_node(self, tmp_path, monkeypatch):
+        import asyncio
+
+        import vs_api.main as m
+
+        ctx = _recorded_context(tmp_path / "run-history-0001.db")
+        ctx._interface_rates = {
+            **_ISL_RATES,
+            ("sat-P00S05", "isl0"): InterfaceRates(transmit_mbps=2000.0, receive_mbps=2000.0),
+            ("sat-P00S06", "isl1"): InterfaceRates(transmit_mbps=2000.0, receive_mbps=2000.0),
+        }
+        ctx._record_history("session metadata", ctx._open_history)
+        asyncio.run(ctx._on_link_up(_message(_make_link_up_event())))
+        asyncio.run(
+            ctx._on_link_up(_message(_make_link_up_event(node_a="sat-P00S05", node_b="sat-P00S06")))
+        )
+        assert _recording_error(ctx) is None
+
+        monkeypatch.setattr(m, "_API_KEY", "")
+        monkeypatch.setattr(m, "_active_context", ctx)
+        response = TestClient(m.app).get("/api/v1/links", params={"node": "sat-P00S00"})
+
+        assert response.status_code == 200
+        page = response.json()
+        assert [(e["node_a"], e["event_type"]) for e in page["events"]] == [
+            ("sat-P00S00", "LinkUp")
+        ]
+        assert (page["returned"], page["total"], page["next_cursor"], page["retained_from"]) == (
+            1,
+            1,
+            None,
+            None,
+        )
+
+    _BASELINE_SIM_TIME = datetime(2026, 9, 23, 12, 0, 5, tzinfo=UTC)
+
+    def _deliver_actual_links(self, ctx, *, stream_seq: int, pairs, sim_time=_BASELINE_SIM_TIME):
+        import asyncio
+        from unittest.mock import MagicMock
+
+        from nodalarc.models.scheduler_ops import ActualLinkSnapshot
+
+        msg = MagicMock()
+        msg.metadata.sequence.stream = stream_seq
+        msg.data = (
+            ActualLinkSnapshot(
+                session_id=ctx.session_id,
+                wiring_generation="gen-1",
+                scheduler_instance_id="sched-1",
+                hostname="sched-1-host",
+                sim_time=sim_time,
+                active_pairs=[list(p) for p in pairs],
+                emitted_at=datetime(2026, 9, 23, 12, 0, 6, tzinfo=UTC),
+            )
+            .model_dump_json()
+            .encode()
+        )
+        asyncio.run(ctx._on_actual_links(msg))
+
+    @staticmethod
+    def _link_rows(path) -> list[tuple]:
+        import sqlite3
+
+        from nodalarc.db.queries import query_link_events
+
+        conn = sqlite3.connect(path)
+        try:
+            events = query_link_events(conn, session_id="run-history-0001")
+        finally:
+            conn.close()
+        return [
+            (e["event_type"], e["reason"], e["node_a"], e["node_b"], e["sim_time"]) for e in events
+        ]
+
+    def test_recording_opens_with_the_kernel_actual_links_published_after_the_fence(self, tmp_path):
+        path = tmp_path / "run-history-0001.db"
+        ctx = _recorded_context(path)
+        ctx._record_history("session metadata", ctx._open_history)
+        ctx._history_baseline_after_seq = 40
+
+        # Published before the newest unrecorded transition: it can still list a
+        # link whose LinkDown followed it, so it opens nothing.
+        self._deliver_actual_links(ctx, stream_seq=39, pairs=[("sat-a", "sat-b")])
+        ctx.history.flush()
+        assert self._link_rows(path) == []
+
+        self._deliver_actual_links(
+            ctx, stream_seq=41, pairs=[("sat-c", "sat-d"), ("gs-x", "sat-a")]
+        )
+        # Later kernel-actual sets change nothing: transitions arrive as their own rows.
+        self._deliver_actual_links(ctx, stream_seq=45, pairs=[("sat-e", "sat-f")])
+
+        sim_time = self._BASELINE_SIM_TIME.isoformat()
+        assert _recording_error(ctx) is None
+        assert self._link_rows(path) == [
+            ("LinkActive", "recording_start", "gs-x", "sat-a", sim_time),
+            ("LinkActive", "recording_start", "sat-c", "sat-d", sim_time),
+        ]
+
+    def test_no_baseline_before_the_link_event_subscriptions_exist(self, tmp_path):
+        path = tmp_path / "run-history-0001.db"
+        ctx = _recorded_context(path)
+        ctx._record_history("session metadata", ctx._open_history)
+
+        self._deliver_actual_links(ctx, stream_seq=41, pairs=[("sat-c", "sat-d")])
+
+        ctx.history.flush()
+        assert self._link_rows(path) == []
+
+    def test_unrecorded_session_writes_no_baseline(self, tmp_path):
+        ctx = _recorded_context(None)
+        ctx._history_baseline_after_seq = 0
+
+        self._deliver_actual_links(ctx, stream_seq=41, pairs=[("sat-c", "sat-d")])
+
+        assert list(tmp_path.iterdir()) == []
+
+    def test_a_baseline_without_sim_time_stops_recording(self, tmp_path):
+        ctx = _recorded_context(tmp_path / "run-history-0001.db")
+        ctx._history_baseline_after_seq = 0
+
+        self._deliver_actual_links(ctx, stream_seq=1, pairs=[("sat-c", "sat-d")], sim_time=None)
+
+        assert _recording_error(ctx) == "failed to record links active where recording starts"
+
+    def test_the_fence_is_the_newest_link_up_or_link_down_on_the_stream(self):
+        import asyncio
+        from types import SimpleNamespace
+
+        from nats.js.errors import NotFoundError
+        from nodalarc.nats_channels import STREAM_LINK_EVENTS, link_down_subject, link_up_subject
+
+        ctx = _recorded_context(None)
+
+        class _Stream:
+            def __init__(self, last_seq_by_subject: dict[str, int]):
+                self.last_seq_by_subject = last_seq_by_subject
+
+            async def get_last_msg(self, stream_name: str, subject: str):
+                assert stream_name == STREAM_LINK_EVENTS
+                if subject not in self.last_seq_by_subject:
+                    raise NotFoundError()
+                return SimpleNamespace(seq=self.last_seq_by_subject[subject])
+
+        up, down = link_up_subject(ctx.session_id), link_down_subject(ctx.session_id)
+        fence = ctx._last_link_transition_seq
+        assert asyncio.run(fence(_Stream({up: 12, down: 30}))) == 30
+        assert asyncio.run(fence(_Stream({up: 12}))) == 12
+        assert asyncio.run(fence(_Stream({}))) == 0
+
+    @pytest.mark.parametrize("record_history", [True, False])
+    def test_the_cr_spec_decides_whether_a_run_is_recorded(self, monkeypatch, record_history):
+        import vs_api.main as m
+
+        cr = _constellation_cr()
+        cr["spec"]["recordHistory"] = record_history
+        identity = _extract_ready_session(m, cr)
+
+        assert identity.record_history is record_history
+        path = m._history_path(identity)
+        if record_history:
+            assert path == Path(m.get_platform_config().session_data_root) / "history" / (
+                f"{identity.session_id}.db"
+            )
+        else:
+            assert path is None
+
+    @staticmethod
+    def _recorded_link_rows(tmp_path) -> SessionContext:
+        """A recorded session holding 450 link rows: three links at 150 instants."""
+        from datetime import timedelta
+
+        from nodalarc.db.queries import insert_active_links
+
+        ctx = _recorded_context(tmp_path / "run-history-0001.db")
+        ctx._record_history("session metadata", ctx._open_history)
+        start = datetime(2026, 9, 24, 12, 0, tzinfo=UTC)
+
+        def write(conn):
+            for step in range(150):
+                at = start + timedelta(seconds=step)
+                insert_active_links(
+                    conn,
+                    [("sat-a", "sat-b"), ("sat-a", "sat-c"), ("sat-d", "sat-e")],
+                    session_id=ctx.session_id,
+                    sim_time=at,
+                    wall_time=at,
+                    reason="recording_start",
+                )
+
+        ctx._record_history("link rows", write)
+        assert _recording_error(ctx) is None
+        return ctx
+
+    def test_link_history_pages_hold_at_most_200_and_follow_the_cursor(self, tmp_path, monkeypatch):
+        import vs_api.main as m
+
+        monkeypatch.setattr(m, "_API_KEY", "")
+        monkeypatch.setattr(m, "_active_context", self._recorded_link_rows(tmp_path))
+        client = TestClient(m.app)
+
+        pages, params = [], {}
+        while True:
+            response = client.get("/api/v1/links", params=params)
+            assert response.status_code == 200
+            pages.append(response.json())
+            if pages[-1]["next_cursor"] is None:
+                break
+            params = {"cursor": pages[-1]["next_cursor"]}
+
+        assert [(page["returned"], page["total"]) for page in pages] == [
+            (200, 450),
+            (200, 450),
+            (50, 450),
+        ]
+        events = [event for page in pages for event in page["events"]]
+        positions = [(event["sim_time"], event["id"]) for event in events]
+        assert positions == sorted(positions)
+        assert len({event["id"] for event in events}) == 450
+
+    def test_one_links_newest_events_come_first_and_the_next_page_continues_older(
+        self, tmp_path, monkeypatch
+    ):
+        import vs_api.main as m
+
+        monkeypatch.setattr(m, "_API_KEY", "")
+        monkeypatch.setattr(m, "_active_context", self._recorded_link_rows(tmp_path))
+        client = TestClient(m.app)
+        params = {"node": "sat-b", "peer": "sat-a", "order": "newest_first", "limit": 20}
+
+        first = client.get("/api/v1/links", params=params).json()
+        second = client.get(
+            "/api/v1/links", params={**params, "cursor": first["next_cursor"]}
+        ).json()
+
+        assert (first["returned"], first["total"]) == (20, 150)
+        assert {(e["node_a"], e["node_b"]) for e in first["events"]} == {("sat-a", "sat-b")}
+        first_times = [event["sim_time"] for event in first["events"]]
+        assert first_times[0] == "2026-09-24T12:02:29+00:00"
+        assert first_times == sorted(first_times, reverse=True)
+        assert second["events"][0]["sim_time"] == "2026-09-24T12:02:09+00:00"
+
+    @pytest.mark.parametrize(
+        ("params", "status", "code"),
+        [
+            ({"limit": 201}, 422, None),
+            ({"limit": 0}, 422, None),
+            ({"peer": "sat-a"}, 400, "history.peer_without_node"),
+            ({"cursor": "not-a-cursor"}, 400, "history.invalid_cursor"),
+        ],
+    )
+    def test_link_history_refuses_what_it_cannot_page(
+        self, tmp_path, monkeypatch, params, status, code
+    ):
+        import vs_api.main as m
+
+        monkeypatch.setattr(m, "_API_KEY", "")
+        monkeypatch.setattr(m, "_active_context", self._recorded_link_rows(tmp_path))
+
+        response = TestClient(m.app).get("/api/v1/links", params=params)
+
+        assert response.status_code == status
+        if code is not None:
+            assert response.json()["code"] == code
+
+    def test_the_recorder_keeps_history_within_its_budget_oldest_first(self, tmp_path, monkeypatch):
+        from datetime import timedelta
+
+        import vs_api.main as m
+        from nodalarc.db.retention import used_bytes
+
+        # A 64 KiB write-ahead log leaves the rows 400 000 bytes of the budget.
+        monkeypatch.setattr("vs_api.history_recorder._WAL_SIZE_LIMIT_BYTES", 65_536)
+        ctx = _recorded_context(
+            tmp_path / "history" / "run-history-0001.db", max_bytes=400_000 + 65_536
+        )
+        ctx._record_history("session metadata", ctx._open_history)
+        start = datetime(2026, 9, 24, 12, 0, tzinfo=UTC)
+        for step in range(60):
+            at = (start + timedelta(seconds=10 * step)).isoformat()
+            ctx.record_snapshot({"sim_time": at, "wall_time": at, "payload": "x" * 20_000})
+
+        assert _recording_error(ctx) is None
+        conn = sqlite3.connect(ctx.history.path)
+        try:
+            assert used_bytes(conn) <= 400_000
+            kept = [row[0] for row in conn.execute("SELECT sim_time FROM snapshots ORDER BY id")]
+        finally:
+            conn.close()
+        assert kept[-1] == (start + timedelta(seconds=590)).isoformat()
+        assert kept[0] > start.isoformat()
+
+        monkeypatch.setattr(m, "_API_KEY", "")
+        monkeypatch.setattr(m, "_active_context", ctx)
+        assert TestClient(m.app).get("/api/v1/links").json()["retained_from"] is not None
+
+    @pytest.mark.parametrize(
+        ("path", "message"),
+        [
+            ("/api/v1/metrics/convergence", "VS-API does not record convergence events"),
+            ("/api/v1/metrics/flows/flow-1", "VS-API does not record probe results"),
+        ],
+    )
+    def test_metrics_routes_refuse_data_no_component_records(self, monkeypatch, path, message):
+        import vs_api.main as m
+
+        monkeypatch.setattr(m, "_API_KEY", "")
+
+        response = TestClient(m.app).get(path)
+
+        assert response.status_code == 501
+        assert response.json() == {"code": "history.not_collected", "message": message}
+
+    def test_a_failure_finding_where_recording_starts_stops_recording_not_live_state(
+        self, tmp_path
+    ):
+        import asyncio
+
+        from nats.errors import TimeoutError as NatsTimeoutError
+        from nodalarc.nats_channels import actual_links_subscribe_subject
+
+        ctx = _recorded_context(tmp_path / "run-history-0001.db")
+        subscribed: list[str] = []
+
+        class _Subscription:
+            async def unsubscribe(self) -> None:
+                return None
+
+        class _JetStream:
+            async def subscribe(self, subject, **_kwargs):
+                subscribed.append(subject)
+                return _Subscription()
+
+            async def get_last_msg(self, stream_name, subject):
+                raise NatsTimeoutError()
+
+        class _Nats:
+            def jetstream(self):
+                return _JetStream()
+
+        async def run() -> bool:
+            task = asyncio.create_task(ctx._subscriber_loop(_Nats(), "switch"))
+            last_subject = actual_links_subscribe_subject(ctx.session_id)
+            while last_subject not in subscribed and not task.done():
+                await asyncio.sleep(0.01)
+            alive = not task.done()
+            ctx._stopped = True
+            await asyncio.wait_for(task, timeout=3)
+            return alive
+
+        assert asyncio.run(run())
+        assert actual_links_subscribe_subject(ctx.session_id) in subscribed
+        assert _recording_error(ctx) == "failed to find where recording starts"
+
+    def test_a_recording_resumed_after_a_restart_opens_its_links_as_resumed(self, tmp_path):
+        path = tmp_path / "run-history-0001.db"
+        first = _recorded_context(path)
+        first._record_history("session metadata", first._open_history)
+        first.history.close()
+
+        # VS-API restarted: a new context opens the same run's file.
+        resumed = _recorded_context(path)
+        resumed._record_history("session metadata", resumed._open_history)
+        resumed._history_baseline_after_seq = 0
+        self._deliver_actual_links(resumed, stream_seq=1, pairs=[("sat-a", "sat-b")])
+
+        assert _recording_error(resumed) is None
+        assert self._link_rows(path) == [
+            (
+                "LinkActive",
+                "recording_resumed",
+                "sat-a",
+                "sat-b",
+                self._BASELINE_SIM_TIME.isoformat(),
+            )
+        ]
+
+    def test_live_handlers_do_not_wait_for_the_disk(self, tmp_path):
+        import asyncio
+        import threading
+
+        ctx = _recorded_context(tmp_path / "run-history-0001.db")
+        ctx._record_history("session metadata", ctx._open_history)
+        writing, release = threading.Event(), threading.Event()
+        finished: list[str] = []
+
+        def slow_write(conn) -> None:
+            writing.set()
+            release.wait(timeout=10)
+            finished.append("slow write")
+
+        ctx._record_history("a slow write", slow_write)
+        assert writing.wait(timeout=10)
+
+        # The writer is held on the slow write; the live handler completes before it.
+        asyncio.run(ctx._on_link_up(_message(_make_link_up_event())))
+        assert _link_key("sat-P00S00", "sat-P00S01") in ctx.links
+        assert finished == []
+
+        release.set()
+        assert _recording_error(ctx) is None
+        assert [row[0] for row in self._link_rows(ctx.history.path)] == ["LinkUp"]
+
+    def test_a_recording_that_cannot_keep_up_stops_and_says_why(self, tmp_path):
+        import threading
+
+        from vs_api.history_recorder import HistoryRecorder
+
+        recorder = HistoryRecorder(
+            tmp_path / "run-history-0001.db",
+            session_id="run-history-0001",
+            max_bytes=262_144_000,
+            max_pending_writes=1,
+        )
+        writing, release = threading.Event(), threading.Event()
+        applied: list[str] = []
+
+        def blocking(conn) -> None:
+            writing.set()
+            release.wait(timeout=10)
+            applied.append("first")
+
+        recorder.submit("first", blocking)
+        assert writing.wait(timeout=10)
+        recorder.submit("second", lambda conn: applied.append("second"))
+        recorder.submit("third", lambda conn: applied.append("third"))
+
+        assert recorder.error == "failed to record third: 1 writes were already waiting"
+        release.set()
+        recorder.flush()
+        assert applied == ["first"]
+        recorder.close()
+
+    def test_the_snapshot_reports_the_recording_state(self, tmp_path):
+        from nodalarc.models.vs_api import HistoryRecordingState
+
+        assert _recorded_context(None).history_recording_state() is None
+
+        ctx = _recorded_context(tmp_path / "run-history-0001.db")
+        assert ctx.history_recording_state() == HistoryRecordingState(state="recording", error=None)
+
+        ctx.history.stop("failed to record LinkUp", None)
+        assert ctx.history_recording_state() == HistoryRecordingState(
+            state="stopped", error="failed to record LinkUp"
+        )
+
+    @pytest.mark.parametrize(
+        "path",
+        ["/api/v1/links?start=2026-09-24T12:00:00", "/api/v1/state/2026-09-24T12:00:00"],
+    )
+    def test_history_times_must_name_their_zone(self, tmp_path, monkeypatch, path):
+        import vs_api.main as m
+
+        ctx = _recorded_context(tmp_path / "run-history-0001.db")
+        ctx._record_history("session metadata", ctx._open_history)
+        assert _recording_error(ctx) is None
+        monkeypatch.setattr(m, "_API_KEY", "")
+        monkeypatch.setattr(m, "_active_context", ctx)
+
+        response = TestClient(m.app).get(path)
+
+        assert response.status_code == 400
+        assert response.json()["code"] == "history.time_without_zone"
+
+    def test_an_intervention_event_the_model_refuses_stops_the_recording(self, tmp_path):
+        ctx = _recorded_context(tmp_path / "run-history-0001.db")
+        ctx._record_history("session metadata", ctx._open_history)
+
+        ctx._persist_operator_intervention(
+            {
+                "timestamp": "2026-09-24T12:00:00+00:00",
+                "session_id": "run-history-0001",
+                "source": "scheduler",
+                "hostname": "sched-host",
+                "level": "warning",
+                "code": "OPERATOR_REPAIR_REQUESTED",
+                "message": "operator repair",
+                "details": {"intervention_id": "repair-1"},
+            }
+        )
+
+        assert _recording_error(ctx) == "failed to record operator intervention event"
+
+    def test_the_recorder_cuts_its_write_ahead_log_back_after_checkpoints(
+        self, tmp_path, monkeypatch
+    ):
+        from datetime import timedelta
+
+        monkeypatch.setattr("vs_api.history_recorder._WAL_SIZE_LIMIT_BYTES", 65_536)
+        ctx = _recorded_context(tmp_path / "run-history-0001.db")
+        ctx._record_history("session metadata", ctx._open_history)
+        start = datetime(2026, 9, 24, 12, 0, tzinfo=UTC)
+        # About 6 MB of writes: SQLite checkpoints every 1000 pages (4 MiB).
+        for step in range(600):
+            at = (start + timedelta(seconds=step)).isoformat()
+            ctx.record_snapshot({"sim_time": at, "wall_time": at, "payload": "x" * 10_000})
+
+        assert _recording_error(ctx) is None
+        wal = ctx.history.path.with_name(ctx.history.path.name + "-wal")
+        # Without the limit the log keeps its 4 MiB high-water size after a checkpoint.
+        assert wal.stat().st_size < 4 * 1024 * 1024

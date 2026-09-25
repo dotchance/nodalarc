@@ -8,31 +8,78 @@ StateSnapshot is the complete payload sent over WebSocket at ~1Hz.
 from datetime import datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from nodalarc.body_frames import SupportedSurfaceBody
+from nodalarc.model_validation import AddressFamily
+from nodalarc.models.resolved_session import NodeKind, NodeRole
 from nodalarc.models.scheduler_ops import ActuationState
+from nodalarc.models.segment_session import LINK_STATE_PROTOCOLS, RoutingProtocol
 
 
 class NodeAddress(BaseModel):
     """Configured network identity/address associated with one node."""
 
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
     purpose: Literal["router_loopback", "site_interface", "site_prefix"]
-    family: Literal["ipv4", "ipv6"]
+    family: AddressFamily
     address: str
     interface: str | None = None
     metric: int | None = None
 
 
+class NodeInstanceInterface(BaseModel):
+    """One interface a node runs a routing instance on."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    name: str
+    # The interface's OSPF area. IS-IS and static interfaces carry no area.
+    area_id: str | None
+
+
+class NodeRoutingInstance(BaseModel):
+    """A node's participation in one routing instance (a ``routing.domains`` entry)."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    domain_id: str
+    protocol: RoutingProtocol
+    # IS-IS: the router's area addresses. OSPF: every area it has an
+    # interface in, the loopback's included. Static: none.
+    areas: tuple[str, ...]
+    interfaces: tuple[NodeInstanceInterface, ...]
+    # An area border router of the instance.
+    area_border: bool
+    # Redistributes routing-boundary exports into the instance.
+    as_boundary: bool
+
+    @model_validator(mode="after")
+    def _areas_follow_the_protocol(self) -> NodeRoutingInstance:
+        is_ospf = self.protocol == "ospf"
+        if any((interface.area_id is not None) != is_ospf for interface in self.interfaces):
+            raise ValueError(
+                f"{self.protocol} instance {self.domain_id!r} interfaces carry areas exactly "
+                "when the protocol is OSPF"
+            )
+        if self.protocol not in LINK_STATE_PROTOCOLS and (
+            self.areas or self.area_border or self.as_boundary
+        ):
+            raise ValueError(
+                f"{self.protocol} instance {self.domain_id!r} has no areas, area border "
+                "routers or redistribution"
+            )
+        return self
+
+
 class NodeState(BaseModel):
     """State of a single node in the constellation."""
 
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
     node_id: str
-    node_type: str  # "satellite" or "ground_station"
+    node_type: NodeKind
     lat_deg: float
     lon_deg: float
     alt_km: float
@@ -41,8 +88,10 @@ class NodeState(BaseModel):
     vel_z_km_s: float | None
     plane: int | None  # None for ground stations
     slot: int | None
-    routing_area: str | None = None
-    neighbor_count: int = 0
+    # Every routing instance the node participates in, in declared order;
+    # empty for a node in none.
+    routing_instances: tuple[NodeRoutingInstance, ...]
+    role: NodeRole
     isl_count: int = 0
     gnd_count: int = 0
     prefix: str | None = None  # Ground station advertised prefix
@@ -63,7 +112,7 @@ class NodeState(BaseModel):
 class LinkState(BaseModel):
     """State of a single link between two nodes."""
 
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
     node_a: str
     node_b: str
@@ -71,7 +120,14 @@ class LinkState(BaseModel):
     link_type: str | None  # intra_plane_isl, cross_plane_isl, ground_uplink, ground_downlink
     link_reason: str | None
     latency_ms: float
-    bandwidth_mbps: float
+    # Each end's own terminal rates: node_a's terminal sends at transmit_mbps_a
+    # and takes in at receive_mbps_a; node_b's at transmit_mbps_b and
+    # receive_mbps_b. A direction carries no more than its sender transmits or
+    # its receiver takes in.
+    transmit_mbps_a: float
+    receive_mbps_a: float
+    transmit_mbps_b: float
+    receive_mbps_b: float
     range_km: float
     traffic_load_pct: float | None  # None = no probe data (distinct from 0)
     interface_a: str = ""
@@ -87,7 +143,7 @@ class LinkState(BaseModel):
 class LinkDecisionTrace(BaseModel):
     """Why an active link exists and which authority produced its values."""
 
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
     node_a: str
     node_b: str
@@ -112,31 +168,80 @@ class LinkDecisionTrace(BaseModel):
     endpoint_segments: tuple[str, str] | None = None
 
 
-class TracedPath(BaseModel):
-    """Forwarding path trace for a traffic flow."""
+TraceState = Literal["running", "reached", "not_reached", "failed"]
+# Why a continuous trace stopped on its own: its time limit, or an internal
+# error in the trace loop.
+TraceStopReason = Literal["time_limit", "internal_error"]
 
-    model_config = ConfigDict(frozen=True)
+
+class TracedPath(BaseModel):
+    """The live measured path between two nodes: one traceroute per direction.
+
+    Each direction lists what answered at every hop, in hop order, after the
+    node the trace starts from: a node id when the resolver assigned the
+    answering address to that node, the address itself when no node owns it,
+    and ``*`` when nothing answered. ``state`` says how the trace ended. ``rtt_ms`` is the
+    destination's round trip and exists only when the destination answered;
+    ``error`` exists only when the trace could not run. ``asymmetry_detected``
+    exists only when both directions reached their destination and every hop
+    between the ends answered from a node's address. ``tracing`` is false once
+    the trace loop has stopped; the last result then stays until the trace is
+    stopped or restarted. ``stop_reason`` says why a continuous trace stopped
+    on its own; a one-shot trace and a running trace have none.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
     flow_id: str
     src_node: str
     dst_node: str
     hops: list[str]
-    reverse_hops: list[str] = []
-    hop_rtts: list[float | None] = []
-    reverse_hop_rtts: list[float | None] = []
-    rtt_ms: float = 0.0
-    reverse_rtt_ms: float = 0.0
-    asymmetry_detected: bool = False
-    method: str = "tracepath"
-    path_valid_until: str | None = None
-    path_valid_seconds: float | None = None
-    traced_at: str | None = None
+    hop_rtts: list[float | None]
+    state: TraceState
+    rtt_ms: float | None
+    error: str | None
+    reverse_hops: list[str]
+    reverse_hop_rtts: list[float | None]
+    reverse_state: TraceState
+    reverse_rtt_ms: float | None
+    reverse_error: str | None
+    asymmetry_detected: bool | None
+    tracing: bool
+    traced_at: str
+    sim_time: str
+    stop_reason: TraceStopReason | None = None
+
+    @model_validator(mode="after")
+    def _outcomes_match_their_states(self) -> TracedPath:
+        for label, hops, rtts, state, rtt_ms, error in (
+            ("forward", self.hops, self.hop_rtts, self.state, self.rtt_ms, self.error),
+            (
+                "reverse",
+                self.reverse_hops,
+                self.reverse_hop_rtts,
+                self.reverse_state,
+                self.reverse_rtt_ms,
+                self.reverse_error,
+            ),
+        ):
+            if len(hops) != len(rtts):
+                raise ValueError(f"{label} trace has {len(hops)} hops and {len(rtts)} round trips")
+            if (rtt_ms is not None) != (state == "reached"):
+                raise ValueError(f"{label} trace rtt_ms exists only when it reached")
+            if (error is not None) != (state == "failed"):
+                raise ValueError(f"{label} trace error exists only when it failed")
+        both_reached = self.state == "reached" and self.reverse_state == "reached"
+        if self.asymmetry_detected is not None and not both_reached:
+            raise ValueError("asymmetry is known only when both directions reached")
+        if self.stop_reason is not None and self.tracing:
+            raise ValueError("a trace has a stop reason only once it stopped")
+        return self
 
 
 class NetworkHealth(BaseModel):
     """Overall network health status."""
 
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
     status: str  # "converged", "converging", or "degraded"
     converging_since_ms: int | None
@@ -144,22 +249,10 @@ class NetworkHealth(BaseModel):
     last_convergence_ms: float | None
 
 
-class ActiveFlow(BaseModel):
-    """Active traffic flow configuration."""
-
-    model_config = ConfigDict(frozen=True)
-
-    flow_id: str
-    src_node: str
-    dst_node: str
-    protocol: str  # "udp" or "tcp"
-    probe_type: str  # "continuous" or "burst"
-
-
 class RecentEvent(BaseModel):
     """Recent event for the VF event log."""
 
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
     sim_time: datetime
     node_id: str
@@ -170,7 +263,7 @@ class RecentEvent(BaseModel):
 class ActuationNotice(BaseModel):
     """User-visible Scheduler actuation problem for one ground station."""
 
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
     gs_id: str
     actuation_state: ActuationState
@@ -189,7 +282,7 @@ class ActuationNotice(BaseModel):
 class ActuationHealthGroundStation(BaseModel):
     """Latest actuation state for one GS on one Scheduler instance."""
 
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
     gs_id: str
     actuation_state: ActuationState
@@ -203,7 +296,7 @@ class ActuationHealthGroundStation(BaseModel):
 class ActuationHealthInstance(BaseModel):
     """Aggregated actuation health for one Scheduler instance."""
 
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
     scheduler_instance_id: str
     hostname: str
@@ -214,7 +307,7 @@ class ActuationHealthInstance(BaseModel):
 class ActuationHealth(BaseModel):
     """Session-level Scheduler actuation health."""
 
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
     session_id: str
     wiring_generation: str
@@ -224,7 +317,7 @@ class ActuationHealth(BaseModel):
 class AlmanacState(BaseModel):
     """NodalPath almanac push tracking state."""
 
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
     last_topology_state_id: str | None = None
     last_push_sim_time: str | None = None
@@ -236,6 +329,15 @@ class AlmanacState(BaseModel):
     nodalpath_active: bool = False
 
 
+class HistoryRecordingState(BaseModel):
+    """A recorded session run's history recording: running, or stopped and why."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    state: Literal["recording", "stopped"]
+    error: str | None
+
+
 class StateSnapshot(BaseModel):
     """Complete constellation state sent via WebSocket at ~1Hz.
 
@@ -243,7 +345,7 @@ class StateSnapshot(BaseModel):
     if behind, never queue.
     """
 
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
     sim_time: datetime
     wall_time: datetime
@@ -259,7 +361,6 @@ class StateSnapshot(BaseModel):
     # (honest: nothing proven), never a masked connected.
     kernel_actual_pairs: list[list[str]] = Field(default_factory=list)
     traced_paths: list[TracedPath]
-    active_flows: list[ActiveFlow]
     recent_events: list[RecentEvent]
     network_health: NetworkHealth
     routing_stack: str | None = None
@@ -279,3 +380,49 @@ class StateSnapshot(BaseModel):
     actuation_notices: list[ActuationNotice] = Field(default_factory=list)
     ome_lifecycle_notices: list[dict[str, Any]] = Field(default_factory=list)
     actuation_health: ActuationHealth | None = None
+    # This run's history recording; None when the run was deployed without one.
+    history_recording: HistoryRecordingState | None
+
+
+class LinkHistoryEvent(BaseModel):
+    """One recorded link event: a transition, a latency change, or a link
+    active when the recording started (``LinkActive``, reason
+    ``recording_start``)."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    id: int
+    session_id: str
+    sim_time: str
+    wall_time: str
+    event_type: Literal["LinkUp", "LinkDown", "LatencyUpdate", "LinkActive"]
+    node_a: str
+    node_b: str
+    interface_a: str | None
+    interface_b: str | None
+    latency_ms: float | None
+    range_km: float | None
+    reason: str | None
+
+
+# The most link events one history page returns.
+LINK_HISTORY_PAGE_MAX = 200
+
+
+class LinkHistoryPage(BaseModel):
+    """One page of a recorded session's link events.
+
+    ``returned`` of ``total`` matching events are in ``events``. A further page
+    is requested with ``next_cursor`` and the same filters; it is None when no
+    event follows. ``retained_from`` is when the oldest kept data was recorded,
+    once the history size budget dropped older rows; None while the recording
+    is complete.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    events: list[LinkHistoryEvent]
+    returned: int
+    total: int
+    next_cursor: str | None
+    retained_from: str | None

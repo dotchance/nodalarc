@@ -251,10 +251,11 @@ channelization, or polarization; link-rule terminal selection must therefore
 name the intended compatible mounts explicitly whenever medium alone is
 ambiguous.
 
-The persisted bandwidth is directional, but the current runtime exposes one
-conservative shaped rate per link rather than independent directional rates.
-That rate is the minimum of transmit and receive values across both selected
-endpoint mounts.
+The bandwidth is directional, and each terminal is shaped on its own. An
+interface sends at its terminal's transmit rate and receives at its
+terminal's receive rate, whatever terminal the other end carries. A link
+direction runs at the sending end's transmit rate; when the receiving
+terminal receives slower, its receive shaping limits what arrives.
 
 ## Payload
 
@@ -274,9 +275,9 @@ A payload is a carried compute environment: the runtime environment a node
 hosts on one of its Ethernet segments. It declares what it is (`forwarding`)
 and what it runs (`profile`), nothing else. A payload has no Ethernet ports,
 no terminal mounts, and no payload mounts, so payload composition cannot
-recurse. A payload with `forwarding: routed` whose profile's adapter renders
-routing configuration participates in routing domains through the ordinary
-router-population rule.
+recurse. A payload whose profile's adapter renders routing configuration
+participates in the routing instances that select it, by the same rule as
+every other node.
 
 ## Profile
 
@@ -1075,21 +1076,60 @@ a node-model default is an authored statement, never a fallback. The resolved
 session records, for each node, the effective profile reference and the level
 that supplied it.
 
-A routing domain is a declaration about routers: one set of nodes sharing a
-single instance of a routing protocol. A node is a router exactly when its
-effective profile's `adapter` renders routing-protocol configuration; which
-adapters render which protocols and capabilities is declared by the adapter
-modules and is runtime support. Domain membership derives from that router
-population: the domain's selectors resolve against the session's nodes, and
-its members are the routers among them whose adapter renders the domain's
-protocol and declared capabilities. A node running no routing workload is
-never a membership candidate, whatever its wiring class; a host is reached
-through the router serving its network, which originates the host's network
-into its own domain.
+Each entry under `routing.domains` is an instance of one routing protocol.
+Its selectors resolve against the session's nodes; the selected nodes are
+inside the instance. Its participants are the selected nodes whose effective
+profile's `adapter` renders routing-protocol configuration: they run the
+instance's protocol. A selected node that runs no routing workload is inside
+the instance without participating. Which adapters render which protocols and
+capabilities is declared by the adapter modules and is runtime support. Each
+participant's own adapter must render the instance's protocol, its declared
+capabilities and, when BFD is enabled, its BFD timers; resolution refuses a
+participant whose adapter does not, naming the node, the adapter, the instance
+and the unrendered requirement.
 
-When `routing` is present, every router belongs to exactly one domain, and
-every domain contains at least one member. With `routing` omitted, the
-default domain forms over the routers whose adapter renders IS-IS.
+A router forwards packets between multiple subnets and participates in the
+IGPs or EGPs, or both. A router can participate in several instances. A host
+is reached through a router serving its network, which originates the host's
+network into its instances. A host's gateway is always a router.
+
+A router takes part in an instance through its interfaces. Its loopback
+belongs to every instance it participates in. A fixed link belongs to the
+instances its two ends share. A link that a `static_ip` boundary crosses
+belongs to no instance. An access interface belongs to the instances its
+router shares with the nodes it can reach over access links. An Ethernet
+segment interface belongs to the instances its router shares with the
+segment's other participants. When it shares none, the segment interface
+belongs to every instance the router participates in. Every routing protocol
+on an interface shares one BFD session with each neighbor, so the instances
+that enable BFD on one interface of a router must declare the same BFD
+timers.
+
+IS-IS and OSPF areas are different things. An IS-IS router has one or more
+area addresses in each IS-IS instance. Two routers of an IS-IS instance whose
+area addresses share none form only a Level 2 adjacency, and each is an area
+border router of the instance. An OSPF area belongs to an interface. Area
+`0.0.0.0` is the backbone of an OSPF instance. Every other area of the
+instance attaches to the backbone through an area border router, a router
+with interfaces in the backbone and in that area. An area number is unique
+only inside its instance, so two instances may number their areas alike.
+
+`area_assignment` assigns areas per router: each IS-IS router takes one area
+address, and every OSPF interface of a router, the loopback included, takes
+its router's area. Resolution refuses an OSPF instance with more than one area
+unless the backbone is contiguous over the instance's possible links and
+every other area has an area border router joining it to the backbone. With
+areas assigned per router, no router joins two OSPF areas, so a multi-area
+OSPF instance is refused.
+
+Each adapter declares how many instances of each protocol it renders on one
+router. Resolution refuses a router in more instances of a protocol than its
+adapter renders, naming the nodes, the instances and the adapter.
+
+When `routing` is present, every node running a routing workload participates
+in an instance, and every instance has at least one participant. With
+`routing` omitted, the default instance runs IS-IS and its participants are
+every node running a routing workload; each one's adapter must render IS-IS.
 
 These rules govern what the platform renders and delivers. They state
 nothing about protocol behavior: what the running images do with their
@@ -1266,11 +1306,17 @@ free addresses. An omitted or null `allocation` is interpreted as
 
 No catalog object authors addresses. Ethernet segment subnets (site segments
 and node-carried buses alike), member addresses on those segments, and
-loopbacks are resolver-allocated, deterministically. Nodes without an
-explicit loopback assignment receive deterministic resolver-owned IPv4 and
-IPv6 loopbacks. Across the fully resolved session, a loopback host address
-belongs to exactly one node per address family; duplicate allocated `lo0`
-addresses are invalid.
+loopbacks are resolver-allocated, deterministically. A router without an
+explicit IPv4 loopback assignment receives a deterministic resolver-owned
+IPv4 loopback. An IPv6 loopback exists only where an assignment with an
+`ipv6_pool` selects the node. Across the fully resolved session, a loopback
+host address belongs to exactly one node per address family; duplicate
+allocated `lo0` addresses are invalid.
+
+Every Ethernet segment is IPv4. A segment is also IPv6 exactly when a member
+names it in `originated_prefixes.ipv6`. Every member of an IPv6 segment then
+receives an IPv6 address on it. A host on an IPv6 segment receives an IPv6
+default route through the same gateway as its IPv4 default route.
 
 ## Routing
 
@@ -1331,6 +1377,9 @@ For plane or stripe index `i`, starting at zero, the derived area is
 index by `planes_per_stripe`. Derived OSPF area indexes cannot exceed `255`,
 and derived IS-IS indexes cannot exceed `9999` under the current four-digit
 format. `per_plane` and `stripe` require at least one selected satellite.
+Areas are assigned per router, so an OSPF assignment that yields more than
+one area is refused (see "Workload profile assignment"); IS-IS routers in
+different areas meet at Level 2.
 Every satellite selected by a non-flat strategy requires a resolved plane, so
 orbit-placed fixed nodes without plane facts cannot use those strategies. An
 `explicit` assignment may select only ground nodes; when it selects
@@ -1409,18 +1458,20 @@ forbids non-null `holddown_ms` and `time_to_learn_ms`. `BfdConfig` defaults are
 objects. The hold interval must exceed the hello interval. A non-null `timers`
 field is valid only for `isis` and `ospf`.
 
-Routing-domain ids are unique. When `routing` is present, every router
-belongs to exactly one domain, and every domain contains at least one member;
-"Workload profile assignment" defines the router population domain membership
-derives from. A boundary names an existing enabled non-access
-link rule and exports between two different, existing domains on opposite
-sides of that rule. Every enabled non-access rule spanning multiple domains
-requires a boundary.
+Instance ids (the `id` of each `routing.domains` entry) are unique. When
+`routing` is present, every node running a routing workload participates in
+an instance, and every instance has at least one participant; "Workload
+profile assignment" defines participation and routers. A boundary names an
+existing enabled non-access link rule and exports between two different,
+existing instances on opposite sides of that rule. The nodes of each endpoint
+of the rule all participate in the same one of the two instances. An enabled
+non-access rule that can join two routers sharing no instance requires a
+boundary.
 
 An export's literal prefix sequence supplies the declared set by address
-family. `aggregate_of: originated` instead derives the `from` domain's authored
-originated prefixes. `export_node_loopbacks: true` adds every routed node
-loopback in that domain. An omitted or null `install_via` is `peer_loopback`;
+family. `aggregate_of: originated` instead derives the `from` instance's
+authored originated prefixes. `export_node_loopbacks: true` adds every routed
+node loopback in that instance. An omitted or null `install_via` is `peer_loopback`;
 the receiving boundary node uses the opposite endpoint's loopback for each
 available address family. A literal prefix family without that peer loopback is
 an error; an aggregate simply has no installable route in that family. A
@@ -1429,9 +1480,9 @@ value. Materialization omits a route to the receiving node's own loopback and
 the peer-loopback seed route.
 
 When `routing` is omitted, the resolver creates `default_domain`, running
-IS-IS over the routers whose adapter renders IS-IS, and requires at least one
-such node. A session with no `routing` block whose routers cannot render
-IS-IS is invalid; declare routing explicitly.
+IS-IS over every node that runs a routing workload, and requires at least one
+such node. A session with no `routing` block in which any such node's adapter
+cannot render IS-IS is refused; declare routing explicitly.
 
 ## Simulation, time, ephemeris, and dispatch
 
@@ -1549,17 +1600,33 @@ context-free EBNF alone:
   route. No literal prefix appears in configuration. A segment id entry must
   name a segment the originating node is bound or attached to. Origination
   never allocates or infers address ownership, and a segment is never
-  advertised merely because it exists.
+  advertised merely because it exists. An `ipv6` entry naming a segment is
+  the declaration that makes the segment IPv6.
+- A node carries an address family when it holds a loopback or segment
+  address in that family or originates prefixes in it. No other statement
+  gives a node a family. A routed node's kernel forwards exactly the
+  families it carries, a host's kernel forwards neither family, and a
+  node's routing configuration routes exactly the families it carries. A
+  routing instance refuses a participant that carries a family its adapter
+  does not route.
 - Every resolved node has exactly one effective workload profile, taken from
   the most specific of its own node entry, its segment, and its node model. A
   node with no profile statement at any level fails resolution. The resolved
   session records the effective reference and the supplying level.
-- Routing-domain membership derives from the router population: the routers
-  among a domain's selected nodes whose adapter renders the domain protocol
-  and declared capabilities. Every router belongs to exactly one domain when
-  `routing` is present; nodes running no routing workload are never
-  membership candidates. These checks validate platform rendering only; they
+- A routing instance's participants are its selected nodes whose adapter
+  renders the instance's protocol and declared capabilities; a selected node
+  running no routing workload is inside the instance without participating.
+  Every node running a routing workload participates in an instance when
+  `routing` is present. These checks validate platform rendering only; they
   assert nothing about protocol behavior.
+- A router forwards packets between multiple subnets and participates in the
+  IGPs or EGPs, or both. A router can participate in several instances.
+- Each interface of a router belongs to the instances derived in "Workload
+  profile assignment". A router in more instances of a protocol than its
+  adapter renders is refused with a typed reason. Instances that enable BFD on
+  one interface of a router declare the same BFD timers.
+- An OSPF instance with more than one area has a contiguous backbone over its
+  possible links and an area border router joining every other area to it.
 - Every `value_from` entry of every effective profile resolves against the
   session's nodes: exactly one node carries the tag, that node declares the
   named interface, and the interface carries the requested address family.
@@ -1583,8 +1650,23 @@ construct. The production Earth-Luna profile currently supports:
 - `visible_candidates`, `nearest_n`, and `explicit_pairs` topology modes;
 - the `max_links_per_node` link constraint;
 - loopback address pools using `by_node_order` allocation;
-- IS-IS, OSPF, and static FRR routing domains;
-- MPLS, segment routing, and traffic engineering on IS-IS and OSPF domains;
+- the `routed` and `host` forwarding classes; `bridge` and `control_only` are
+  refused with a typed reason;
+- IS-IS, OSPF, and static FRR routing instances. The FRR adapter renders one
+  IS-IS instance, one OSPF instance, and any number of static instances on
+  one router;
+- IPv4 and IPv6 on IS-IS, OSPF, and static instances. IS-IS routes IPv6 in its
+  IPv6 unicast topology, on an interface only where a possible neighbor
+  carries IPv6, so IPv6 follows only adjacencies whose two ends carry IPv6. OSPF participants that carry IPv6 run OSPFv3 beside OSPFv2,
+  with the same router id, areas, costs, timers, and BFD;
+- MPLS, segment routing, and traffic engineering on IS-IS and OSPF
+  instances, for IPv4;
+- BFD on IS-IS and OSPF instances, within the detect multiplier and interval
+  ranges the FRR adapter declares, on every interface where the IGP runs
+  actively: point-to-point links and site LANs with another participant of
+  the instance. IS-IS BFD is refused on an interface of an IPv6 router that
+  reaches both IPv6 and IPv4-only neighbors, since FRR's isisd starts BFD
+  there only toward neighbors that carry IPv6;
 - `static_ip` routing boundaries;
 - serialized ground handovers with `handover_concurrency: one_at_a_time`, at
   most one reserved MBB overlap, and one-tick BBM acquisition;
@@ -1608,8 +1690,11 @@ runtime execution:
   `bbm_acquire_timeout_ticks` values other than 1;
 - point-to-point and terrestrial-prefix pools;
 - `by_attach_index`, `by_plane_slot`, and `by_ground_index` allocation;
-- BGP routing domains;
-- routing capabilities on BGP or static domains;
+- BGP routing instances;
+- routing capabilities on BGP or static instances;
+- BFD timers outside the ranges the participant's adapter renders;
+- a routing-instance participant whose adapter does not render the
+  instance's protocol, capabilities or BFD timers;
 - `bgp` and `dtn_bundle` routing boundaries;
 - `spice_kernel_stack` and `operator_supplied_spk` ephemeris providers;
 - ephemeris kernel frames other than `gcrs`;

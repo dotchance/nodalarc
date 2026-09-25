@@ -141,6 +141,7 @@ describe("typed Builder API client", () => {
       expected_session_revision: "revision-1",
       expected_document_digest: "sha256:document",
       expected_dependency_digest: "sha256:dependency",
+      record_history: true,
     };
 
     await deployBuilderSession(request);

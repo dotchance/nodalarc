@@ -70,7 +70,8 @@ def _terminal_projection(node: ResolvedNode) -> list[dict[str, Any]]:
                 "min_elevation_deg": terminal.min_elevation_deg,
                 "field_of_regard_deg": terminal.field_of_regard_deg,
                 "tracking_rate_deg_s": terminal.tracking_rate_deg_s,
-                "bandwidth_mbps": terminal.bandwidth_mbps,
+                "transmit_mbps": terminal.transmit_mbps,
+                "receive_mbps": terminal.receive_mbps,
                 "boresight": _model_json(terminal.boresight),
             }
         )
@@ -149,8 +150,9 @@ def _addressing_projection(resolved: ResolvedSession) -> dict[str, Any]:
         for block in resolved.sid_blocks
     ]
     sid_indices = [
-        {"node_id": node_id, "sid_index": sid_index}
-        for node_id, sid_index in sorted(resolved.sid_index_by_node_id().items())
+        {"domain_id": domain_id, "node_id": node_id, "sid_index": sid_index}
+        for domain_id, indices in sorted(resolved.sid_index_by_domain().items())
+        for node_id, sid_index in sorted(indices.items())
     ]
     return {
         "nodes": sorted(nodes, key=lambda item: item["node_id"]),
@@ -276,7 +278,6 @@ def _link_candidate_projection(candidate: ResolvedLinkCandidate) -> dict[str, An
             "kind": candidate.kind,
             "terminal_medium": candidate.terminal_medium,
             "endpoints": endpoints,
-            "bandwidth_mbps": candidate.bandwidth_mbps,
             "topology_mode": candidate.topology_mode,
             "priority": candidate.priority,
         }

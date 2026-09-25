@@ -17,6 +17,7 @@ from collections.abc import Iterable
 from nodalarc.models.events import ValidationReport, ValidationResult
 from nodalarc.models.ground_policy import VALID_SELECTION_POLICY_NAMES
 from nodalarc.models.resolved_session import ResolvedSession
+from nodalarc.platform_config import get_platform_config
 
 # Kept as the public constant for callers that surface scheduling-policy help.
 VALID_SCHEDULING_POLICIES = VALID_SELECTION_POLICY_NAMES
@@ -25,7 +26,7 @@ VALID_SCHEDULING_POLICIES = VALID_SELECTION_POLICY_NAMES
 def validate_session_readiness(
     resolved: ResolvedSession,
     *,
-    available_node_count: int = 1,
+    available_node_count: int,
 ) -> list[ValidationResult]:
     """Validate a resolved catalog session before deployment.
 
@@ -96,7 +97,7 @@ def _check_link_rules_have_candidates(resolved: ResolvedSession) -> list[Validat
 
 
 def _check_routing_domain_connectivity(resolved: ResolvedSession) -> list[ValidationResult]:
-    """IGP/static domains should not contain routed members with no candidate edge.
+    """IGP/static domains should not contain participants with no candidate edge.
 
     This is intentionally per-domain. The retired validator used one global
     routing protocol; catalog sessions can run multiple domains.
@@ -104,16 +105,9 @@ def _check_routing_domain_connectivity(resolved: ResolvedSession) -> list[Valida
     candidate_neighbors = _candidate_neighbors_by_node(resolved.link_candidates)
     site_lan_neighbors = _site_lan_neighbors_by_node(resolved)
     results: list[ValidationResult] = []
-    nodes_by_id = {node.node_id: node for node in resolved.nodes}
     for domain in resolved.routing_domains:
-        if len(domain.node_ids) <= 1:
-            continue
-        domain_members = {
-            node_id
-            for node_id in domain.node_ids
-            if (node := nodes_by_id.get(node_id)) is not None
-            and node.forwarding in {"routed", "host"}
-        }
+        # A domain's participants; resolution checked each one.
+        domain_members = set(domain.node_ids)
         if len(domain_members) <= 1:
             continue
         # Per-node degree is not connectivity: a domain can split into
@@ -247,7 +241,7 @@ def _site_lan_neighbors_by_node(resolved: ResolvedSession) -> dict[str, set[str]
 def _check_segment_routing_indices(resolved: ResolvedSession) -> list[ValidationResult]:
     """Report SID allocation problems from the resolved session helper."""
     try:
-        resolved.sid_index_by_node_id()
+        resolved.sid_index_by_domain()
     except ValueError as exc:
         return [
             ValidationResult(
@@ -414,22 +408,25 @@ def _check_available_node_count(
     resolved: ResolvedSession,
     available_node_count: int,
 ) -> list[ValidationResult]:
-    """Warn when routed pods outnumber available Kubernetes nodes."""
-    routed_nodes = [node for node in resolved.nodes if node.forwarding == "routed"]
-    if available_node_count <= 0 or len(routed_nodes) <= available_node_count:
+    """Warn when the session's pods exceed what the available nodes hold.
+
+    Every resolved node runs one session pod.
+    """
+    pods_per_node = get_platform_config().session_pods_per_node
+    pod_count = len(resolved.nodes)
+    capacity = available_node_count * pods_per_node
+    if pod_count <= capacity:
         return []
     return [
         ValidationResult(
             level="warning",
             code="W004",
             message=(
-                f"Session has {len(routed_nodes)} routed nodes but only "
-                f"{available_node_count} Kubernetes node(s) available."
+                f"Session needs {pod_count} session pods; the {available_node_count} "
+                f"available Kubernetes node(s) hold about {capacity} "
+                f"({pods_per_node} per node)."
             ),
-            remediation=(
-                "Use a placement policy appropriate for the cluster size or add "
-                "Kubernetes worker nodes."
-            ),
+            remediation="Add Kubernetes nodes labelled for session pods.",
             field_path="segments",
         )
     ]

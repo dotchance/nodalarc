@@ -11,7 +11,6 @@ from nodalarc.models.scenario import (
     InjectLinkUpStep,
     InjectSatelliteLossStep,
     MeasureStep,
-    ReconfigStep,
     RestoreSatelliteStep,
     ScenarioConfig,
     ScenarioStep,
@@ -91,17 +90,11 @@ class TestActionTypeValidation:
         assert isinstance(step, MeasureStep)
         assert step.duration_s == 15.0
 
-    def test_reconfig_step(self):
-        step = step_adapter.validate_python(
-            {
-                "action": "reconfig",
-                "target": "plane:3",
-                "set_values": {"metric_type": "wide"},
-            }
-        )
-        assert isinstance(step, ReconfigStep)
-        assert step.target == "plane:3"
-        assert step.set_values["metric_type"] == "wide"
+    def test_retired_reconfig_action_is_rejected(self):
+        # Node configuration is delivered at session start by each node's
+        # workload adapter; a scenario cannot push configuration.
+        with pytest.raises(ValidationError):
+            step_adapter.validate_python({"action": "reconfig", "target": "all"})
 
 
 class TestInvalidActionRejected:
@@ -145,10 +138,6 @@ class TestMissingRequiredFields:
         with pytest.raises(ValidationError):
             step_adapter.validate_python({"action": "measure"})
 
-    def test_reconfig_missing_target(self):
-        with pytest.raises(ValidationError):
-            step_adapter.validate_python({"action": "reconfig"})
-
 
 class TestScenarioConfigRoundTrip:
     def test_round_trip_serialization(self):
@@ -177,17 +166,12 @@ class TestScenarioConfigRoundTrip:
                     action="restore_satellite",
                     node="space-sat-p02s03",
                 ),
-                ReconfigStep(
-                    action="reconfig",
-                    target="all",
-                    set_values={"metric_type": "wide"},
-                ),
             ],
         )
         json_str = config.model_dump_json()
         restored = ScenarioConfig.model_validate_json(json_str)
         assert restored.name == config.name
-        assert len(restored.steps) == 8
+        assert len(restored.steps) == 7
         assert isinstance(restored.steps[0], WaitStep)
         assert isinstance(restored.steps[1], InjectLinkDownStep)
         assert isinstance(restored.steps[2], WaitConvergeStep)
@@ -195,7 +179,6 @@ class TestScenarioConfigRoundTrip:
         assert isinstance(restored.steps[4], InjectLinkUpStep)
         assert isinstance(restored.steps[5], InjectSatelliteLossStep)
         assert isinstance(restored.steps[6], RestoreSatelliteStep)
-        assert isinstance(restored.steps[7], ReconfigStep)
 
 
 class TestDiscriminatedUnionDispatch:
@@ -209,7 +192,6 @@ class TestDiscriminatedUnionDispatch:
             ({"action": "restore_satellite", "node": "x"}, RestoreSatelliteStep),
             ({"action": "wait_converge"}, WaitConvergeStep),
             ({"action": "measure", "duration_s": 5.0}, MeasureStep),
-            ({"action": "reconfig", "target": "all"}, ReconfigStep),
         ]
         for data, expected_type in cases:
             step = step_adapter.validate_python(data)

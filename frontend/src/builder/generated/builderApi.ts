@@ -275,13 +275,12 @@ export interface WizardAvailableStationResponse {
   readonly stations: ReadonlyArray<WizardAvailableStation>;
 }
 
-/** Backend-owned presentation and field facts for Wizard BFD controls. */
+/** Backend-owned presentation facts for the Wizard BFD controls. The timer controls and their bounds belong to each protocol, because the bounds are what the runtime renders for that protocol. */
 export interface WizardBfdMetadata {
   readonly heading: string;
   readonly enabled_field: "bfd";
   readonly enable_label: string;
   readonly enable_description: string;
-  readonly timer_fields: ReadonlyArray<WizardRoutingTimerFieldMetadata>;
 }
 
 /** Presentation facts for one backend-supported Wizard extension. */
@@ -299,6 +298,7 @@ export interface WizardRoutingTimerFieldMetadata {
   readonly description: string;
   readonly guidance: string;
   readonly minimum: number;
+  readonly maximum?: number | null;
 }
 
 /** One selectable routing protocol and its backend-owned Wizard behavior. */
@@ -310,15 +310,15 @@ export interface WizardProtocolMetadata {
   readonly extension_constraints: Readonly<Record<string, ReadonlyArray<WizardExtension>>>;
   readonly timer_label: string;
   readonly timer_fields: ReadonlyArray<WizardRoutingTimerFieldMetadata>;
-  readonly non_flat_area_warning?: string | null;
+  readonly bfd_timer_fields?: ReadonlyArray<WizardRoutingTimerFieldMetadata> | null;
+  readonly area_strategies: ReadonlyArray<WizardAreaStrategy>;
+  readonly default_area_strategy: WizardAreaStrategy;
 }
 
 /** Closed backend-owned Wizard protocol and area-strategy rules. */
 export interface WizardExtensionRulesResponse {
   readonly protocols: ReadonlyArray<WizardProtocolMetadata>;
   readonly extensions: ReadonlyArray<WizardExtensionMetadata>;
-  readonly area_strategies: ReadonlyArray<WizardAreaStrategy>;
-  readonly default_area_strategy: WizardAreaStrategy;
   readonly bfd: WizardBfdMetadata;
   readonly routing_timer_defaults: WizardRoutingTimerIntent;
 }
@@ -391,6 +391,7 @@ export interface BuilderSessionDeployRequest {
   readonly expected_session_revision: string;
   readonly expected_document_digest: Sha256Digest;
   readonly expected_dependency_digest: Sha256Digest;
+  readonly record_history: boolean;
 }
 
 /** Opaque accepted operation bound to the exact requested catalog source. */
@@ -942,6 +943,7 @@ export interface CatalogSessionSwitchRequest {
   readonly expected_source_revision: Sha256Digest;
   readonly expected_document_digest: Sha256Digest;
   readonly expected_dependency_digest: Sha256Digest;
+  readonly record_history: boolean;
 }
 
 /** Accepted catalog deployment operation. */
@@ -954,6 +956,7 @@ export interface CatalogSessionSwitchAccepted {
 /** One standard persisted session document to save into the user catalog. */
 export interface CatalogSessionYamlUploadRequest {
   readonly yaml: string;
+  readonly record_history: boolean;
 }
 
 /** One whitelisted vtysh command addressed to one runtime node. */
@@ -1709,13 +1712,15 @@ export interface BuilderWorldNode {
   readonly local_node_id: string;
   readonly segment_id: string;
   readonly namespace: string | null;
-  readonly kind: "satellite" | "ground_station" | "relay";
+  readonly kind: "satellite" | "ground_station";
   readonly plane: number | null;
   readonly slot: number | null;
   readonly tags: ReadonlyArray<string>;
   readonly surface_position: ResolvedSurfacePosition | null;
   readonly epoch_position: NodePosition | null;
   readonly forwarding: "routed" | "host" | "bridge" | "control_only" | null;
+  readonly role: "router" | "host" | "forwarding_only";
+  readonly routing_instances: ReadonlyArray<NodeRoutingInstance>;
   readonly terminal_inventory: ReadonlyArray<ResolvedTerminalBlock>;
   readonly interfaces: ResolvedNodeInterfaces | null;
   readonly originated_prefixes: ResolvedOriginatedPrefixes | null;
@@ -1798,6 +1803,12 @@ export interface EphemerisNodeTLE {
   readonly frame_id: string;
 }
 
+/** One interface a node runs a routing instance on. */
+export interface NodeInstanceInterface {
+  readonly name: string;
+  readonly area_id: string | null;
+}
+
 /** Position and velocity of a single node. Position is geodetic (WGS84). Velocity is ECEF (Earth-Centered Earth-Fixed) in km/s — includes Earth rotation subtraction, so it represents motion relative to the rotating Earth. Ground stations have zero velocity. The frontend's worldVelocity() function in astronomy.ts expects ECEF velocity and applies the view-frame rotation to produce world-frame velocity. */
 export interface NodePosition {
   readonly lat_deg: number;
@@ -1806,6 +1817,16 @@ export interface NodePosition {
   readonly vel_x_km_s: number;
   readonly vel_y_km_s: number;
   readonly vel_z_km_s: number;
+}
+
+/** A node's participation in one routing instance (a ``routing.domains`` entry). */
+export interface NodeRoutingInstance {
+  readonly domain_id: string;
+  readonly protocol: "isis" | "ospf" | "bgp" | "static";
+  readonly areas: ReadonlyArray<string>;
+  readonly interfaces: ReadonlyArray<NodeInstanceInterface>;
+  readonly area_border: boolean;
+  readonly as_boundary: boolean;
 }
 
 /** A numbered interface address set. */
@@ -1834,7 +1855,7 @@ export interface ResolvedSurfacePosition {
   readonly alt_m: number;
 }
 
-/** Materialized terminal truth for one terminal block on one node. Built from the resolved satellite_type (satellites) or station/ground-set terminal config (ground stations). Consumers read this; they do not reload the source file. ``tracking_capacity`` is a ground-station-terminal concept (simultaneous links per terminal) and is ``None`` for satellite terminals. Optional fields are ``None`` only when the source legitimately omits them; the resolver fails (never invents a default) when a value is required for a supported runtime feature. */
+/** Materialized terminal truth for one terminal block on one node. Built from the resolved satellite_type (satellites) or station/ground-set terminal config (ground stations). Consumers read this; they do not reload the source file. The catalog requires every physical fact a block carries (capacity, range, elevation limit, field of regard, tracking rate and both rates), so every block carries them. ``boresight`` exists exactly on access terminals. */
 export interface ResolvedTerminalBlock {
   readonly terminal_id: string;
   readonly owner_node_id: string;
@@ -1843,12 +1864,13 @@ export interface ResolvedTerminalBlock {
   readonly source_terminal_id: string | null;
   readonly link_role: string | null;
   readonly count: number;
-  readonly tracking_capacity: number | null;
-  readonly max_range_km: number | null;
-  readonly min_elevation_deg: number | null;
-  readonly field_of_regard_deg: number | null;
-  readonly tracking_rate_deg_s: number | null;
-  readonly bandwidth_mbps: number | null;
+  readonly tracking_capacity: number;
+  readonly max_range_km: number;
+  readonly min_elevation_deg: number;
+  readonly field_of_regard_deg: number;
+  readonly tracking_rate_deg_s: number;
+  readonly transmit_mbps: number;
+  readonly receive_mbps: number;
   readonly boresight: TerminalBoresight | SatGroundTerminalBoresight | null;
   readonly source_ref: string;
 }

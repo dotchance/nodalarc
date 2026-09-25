@@ -185,7 +185,7 @@ if ! kubectl get namespace "$NAMESPACE" >/dev/null 2>&1; then
 fi
 
 echo "Platform:"
-PLATFORM=$(kubectl get pods -n "$NAMESPACE" --no-headers -o wide 2>/dev/null | grep -E "nodalarc-|nodalpath-|ome-" || true)
+PLATFORM=$(kubectl get pods -n "$NAMESPACE" --no-headers -o wide 2>/dev/null | grep -E "nodalarc-|ome-" || true)
 PLATFORM_HEALTHY=false
 if [ -z "$PLATFORM" ]; then
     echo "  NOT RUNNING"

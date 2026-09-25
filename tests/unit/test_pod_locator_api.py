@@ -11,11 +11,10 @@ import pytest
 from scheduler.pod_locator import PodLocationMap
 
 
-def test_pod_location_loaders_do_not_expose_legacy_agent_port() -> None:
-    for method_name in ("load_from_pid_map_file", "load_from_k8s_api"):
-        params = inspect.signature(getattr(PodLocationMap, method_name)).parameters
-        assert "agent_port" not in params
-        assert "_agent_port" not in params
+def test_pod_location_loader_does_not_expose_legacy_agent_port() -> None:
+    params = inspect.signature(PodLocationMap.load_from_k8s_api).parameters
+    assert "agent_port" not in params
+    assert "_agent_port" not in params
 
 
 def _pod(node_id: str, session_id: str, k3s_node: str):
@@ -114,6 +113,59 @@ def test_k8s_loader_does_not_treat_pending_pod_as_located(
     loc = PodLocationMap()
     with pytest.raises(RuntimeError, match="Missing active session pod"):
         loc.load_from_k8s_api(
+            namespace="nodalarc",
+            expected_node_ids={"earth-leo-sat-p00s00"},
+            session_id="run-current",
+        )
+
+
+def test_an_unknown_node_or_node_ip_is_refused() -> None:
+    from scheduler.pod_locator import PodLocationError
+
+    loc = PodLocationMap()
+    loc._node_of["sat-a"] = "node01"
+    loc._agent_addrs["node01"] = "node01"
+    loc._node_ips["node01"] = "192.168.10.201"
+
+    assert (loc.k3s_node("sat-a"), loc.agent_addr("sat-a"), loc.node_ip("node01")) == (
+        "node01",
+        "node01",
+        "192.168.10.201",
+    )
+    with pytest.raises(PodLocationError, match="no pod location for node sat-ghost"):
+        loc.k3s_node("sat-ghost")
+    with pytest.raises(PodLocationError, match="no pod location for node sat-ghost"):
+        loc.agent_addr("sat-ghost")
+    with pytest.raises(PodLocationError, match="no pod location for node sat-ghost"):
+        loc.link_locality("sat-a", "sat-ghost")
+    with pytest.raises(PodLocationError, match="no InternalIP for Kubernetes node node09"):
+        loc.node_ip("node09")
+
+
+def test_a_hosting_node_without_an_internal_ip_is_refused_at_load(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from scheduler.pod_locator import PodLocationError
+
+    class _Api:
+        def list_namespaced_pod(self, namespace, *, label_selector):
+            return SimpleNamespace(items=[_pod("earth-leo-sat-p00s00", "run-current", "node01")])
+
+        def list_node(self):
+            return SimpleNamespace(
+                items=[
+                    SimpleNamespace(
+                        metadata=SimpleNamespace(name="node01"),
+                        status=SimpleNamespace(addresses=[]),
+                    )
+                ]
+            )
+
+    monkeypatch.setattr(kubernetes.config, "load_incluster_config", lambda: None)
+    monkeypatch.setattr(kubernetes.client, "CoreV1Api", lambda: _Api())
+
+    with pytest.raises(PodLocationError, match="have no InternalIP: node01"):
+        PodLocationMap().load_from_k8s_api(
             namespace="nodalarc",
             expected_node_ids={"earth-leo-sat-p00s00"},
             session_id="run-current",

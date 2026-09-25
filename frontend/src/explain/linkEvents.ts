@@ -92,6 +92,19 @@ export const LINK_EVENT_REGISTRY: Record<string, LinkEventReasonRecord> = {
     label: "Satellite lost",
     sentence: "The satellite was lost — link down.",
   }),
+  // --- Recorded history ---
+  recording_start: rec({
+    code: "recording_start",
+    family: "connected",
+    label: "Active when recording began",
+    sentence: "The link was up in the kernel when history recording began; earlier transitions were not recorded.",
+  }),
+  recording_resumed: rec({
+    code: "recording_resumed",
+    family: "connected",
+    label: "Active when recording resumed",
+    sentence: "The link was up in the kernel when recording resumed after VS-API restarted; transitions between the last recorded event and this one were not recorded.",
+  }),
 };
 
 /** The authoritative link-event reason codes (mirrors backend link_events.LINK_EVENT_REASONS). */

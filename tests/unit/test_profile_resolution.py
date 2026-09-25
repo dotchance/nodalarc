@@ -13,6 +13,7 @@ from nodalarc.catalog_closure import CatalogDocumentNotFound, FilesystemCatalogR
 from nodalarc.catalog_paths import CatalogRoots
 from nodalarc.resolve_session import SessionResolutionError, resolve_session
 from nodalarc.runtime_support import UnsupportedFeatureError
+from nodalarc.workloads.adapter import AdapterRenderRefusal
 
 from tests.catalog_session_fixtures import shipped_read_view
 
@@ -292,3 +293,206 @@ def test_shipped_quic_session_records_node_level_endpoint_profiles() -> None:
     routers = [node for node in resolution.nodes if node.profile == FRR_PROFILE]
     assert routers
     assert all(node.profile_level == "node_definition" for node in routers)
+
+
+def _narrow_adapter_session(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, domain: dict):
+    """One site node runs a routing adapter that renders plain IS-IS only."""
+    import nodalarc.runtime_support as runtime_support
+    from nodalarc.workloads.adapter import AdapterSupport, RoutingProtocolSupport
+
+    from adapters.frr.support import FRR_SUPPORT
+
+    monkeypatch.setattr(
+        runtime_support,
+        "registered_adapter_support",
+        lambda: {
+            "frr": FRR_SUPPORT,
+            "narrow": AdapterSupport(
+                routing={
+                    "isis": RoutingProtocolSupport(
+                        address_families=frozenset({"ipv4", "ipv6"}),
+                        domains_per_router=1,
+                        link_rate_floor_mbps=None,
+                    )
+                }
+            ),
+        },
+    )
+
+    def use_narrow_adapter(site):
+        site["nodes"][0]["profile"] = "user:profiles/narrow-router.yaml"
+
+    def add_domain(session, _ground_segment):
+        session["routing"] = {"domains": [domain]}
+
+    session, roots = _session_with_user_ground(
+        tmp_path, site_mutation=use_narrow_adapter, segment_mutation=add_domain
+    )
+    narrow = _user_profile_document("narrow-router")
+    narrow["profile"]["adapter"] = "narrow"
+    _write_yaml(tmp_path / "user" / "profiles" / "narrow-router.yaml", narrow)
+    return session, roots
+
+
+def _domain(**fields) -> dict[str, Any]:
+    return {
+        "id": "earth_domain",
+        "protocol": "isis",
+        "selectors": [{"any": [{"segment": "leo"}, {"segment": "ground"}]}],
+        **fields,
+    }
+
+
+def test_member_whose_adapter_lacks_a_capability_is_refused_by_name(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    session, roots = _narrow_adapter_session(
+        tmp_path, monkeypatch, _domain(capabilities={"mpls": {}})
+    )
+
+    with pytest.raises(UnsupportedFeatureError) as refused:
+        resolve_session(session, catalog=FilesystemCatalogReadView(roots))
+
+    [feature] = refused.value.features
+    assert feature.category == "routing_capability"
+    assert feature.value == "isis:mpls"
+    assert "routing domain 'earth_domain'" in feature.message
+    assert "workload adapter 'narrow'" in feature.message
+    assert "profile-test-site-" in feature.message
+
+
+def test_member_whose_adapter_lacks_the_protocol_is_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    session, roots = _narrow_adapter_session(tmp_path, monkeypatch, _domain(protocol="ospf"))
+
+    with pytest.raises(UnsupportedFeatureError) as refused:
+        resolve_session(session, catalog=FilesystemCatalogReadView(roots))
+
+    [feature] = refused.value.features
+    assert feature.category == "routing_protocol"
+    assert feature.value == "ospf"
+    assert "workload adapter 'narrow'" in feature.message
+
+
+def test_members_rendering_the_domain_join_it_whatever_their_adapter(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    session, roots = _narrow_adapter_session(tmp_path, monkeypatch, _domain())
+
+    resolution = resolve_session(session, catalog=FilesystemCatalogReadView(roots))
+
+    narrow = [node for node in resolution.nodes if node.profile.endswith("narrow-router.yaml")]
+    [domain] = resolution.routing_domains
+    assert len(narrow) == 1
+    assert narrow[0].node_id in domain.node_ids
+
+
+def test_bfd_timers_outside_the_frr_range_are_refused(tmp_path: Path) -> None:
+    def add_domain(session, _ground_segment):
+        session["routing"] = {
+            "domains": [
+                _domain(
+                    timers={
+                        "bfd": {
+                            "enabled": True,
+                            "detect_multiplier": 300,
+                            "rx_interval_ms": 5,
+                            "tx_interval_ms": 300,
+                        }
+                    }
+                )
+            ]
+        }
+
+    session, roots = _session_with_user_ground(tmp_path, segment_mutation=add_domain)
+
+    with pytest.raises(UnsupportedFeatureError) as refused:
+        resolve_session(session, catalog=FilesystemCatalogReadView(roots))
+
+    assert [feature.value for feature in refused.value.features] == [
+        "bfd.detect_multiplier=300",
+        "bfd.rx_interval_ms=5",
+    ]
+    assert all("workload adapter 'frr'" in f.message for f in refused.value.features)
+
+
+def _host_endpoint_fixture():
+    from tests.catalog_session_fixtures import build_catalog_session_fixture
+
+    return build_catalog_session_fixture(
+        name="forwarding-agreement",
+        constellation={"planes": {"count": 1, "sats_per_plane": 2}},
+        ground_stations={"stations": [{}], "host_endpoints": True},
+    )
+
+
+def test_a_host_may_participate_in_routing_without_being_a_router() -> None:
+    # A host running a routing workload speaks the protocol but does not
+    # forward, so it participates and is never a gateway.
+    fixture = _host_endpoint_fixture()
+    [payload_path] = sorted((fixture.roots.user_root / "payloads").glob("*.yaml"))
+    payload = yaml.safe_load(payload_path.read_text(encoding="utf-8"))
+    payload["payload"]["profile"] = FRR_PROFILE
+    _write_yaml(payload_path, payload)
+
+    resolution = resolve_session(fixture, catalog=FilesystemCatalogReadView(fixture.roots))
+
+    [host] = [node for node in resolution.nodes if node.forwarding == "host"]
+    assert resolution.routing_domains_for(host.node_id)
+    assert resolution.node_roles()[host.node_id] == "host"
+    assert host.host_attachment is not None
+    gateway = resolution.node_by_id(host.host_attachment.gateway_node_id)
+    assert gateway is not None and gateway.forwarding == "routed"
+
+
+def test_a_host_gateway_is_always_a_router() -> None:
+    # The site's only routed node runs no routing workload, so it forwards
+    # but is not a router, and the host on its LAN has no gateway.
+    fixture = _host_endpoint_fixture()
+    for ref in fixture.site_refs:
+        site = fixture.read_catalog(ref)
+        for node in site["site"]["nodes"]:
+            node["profile"] = "nodalarc:profiles/linux-host.yaml"
+        fixture.write_catalog(ref, site)
+
+    with pytest.raises(SessionResolutionError, match="has no router on its segment"):
+        resolve_session(fixture, catalog=FilesystemCatalogReadView(fixture.roots))
+
+
+@pytest.mark.parametrize("forwarding", ["bridge", "control_only"])
+def test_an_unexecuted_forwarding_class_is_refused_with_a_typed_reason(forwarding) -> None:
+    from nodalarc.runtime_support import FeatureCategory
+
+    fixture = _host_endpoint_fixture()
+    node_document = fixture.read_catalog(fixture.space_node_ref)
+    node_document["node"]["forwarding"] = forwarding
+    fixture.write_catalog(fixture.space_node_ref, node_document)
+
+    with pytest.raises(UnsupportedFeatureError) as refused:
+        resolve_session(fixture, catalog=FilesystemCatalogReadView(fixture.roots))
+
+    assert {(feature.category, feature.value) for feature in refused.value.features} == {
+        (FeatureCategory.FORWARDING_CLASS, forwarding)
+    }
+
+
+def test_a_routed_node_without_a_routing_workload_participates_in_no_domain(tmp_path: Path) -> None:
+    from nodalarc.workloads.adapter import SessionContext
+
+    from adapters.frr.adapter import FrrAdapter
+
+    def override_site(site):
+        site["nodes"][0]["profile"] = "nodalarc:profiles/linux-host.yaml"
+
+    session, roots = _session_with_user_ground(tmp_path, site_mutation=override_site)
+    resolution = resolve_session(session, catalog=FilesystemCatalogReadView(roots))
+    [probe] = [
+        node for node in resolution.nodes if node.profile == "nodalarc:profiles/linux-host.yaml"
+    ]
+
+    assert probe.forwarding == "routed"
+    assert resolution.routing_domains_for(probe.node_id) == ()
+    assert resolution.node_roles()[probe.node_id] == "forwarding_only"
+    with pytest.raises(AdapterRenderRefusal, match="participates in no routing domain"):
+        FrrAdapter().render_node(probe, SessionContext(resolution))

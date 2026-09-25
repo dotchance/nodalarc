@@ -49,7 +49,7 @@ def _router_profile() -> dict:
         ],
         "resources": _resources(),
         "readiness": {
-            "argv": ["/bin/sh", "-c", "test -f /etc/frr/.config_version"],
+            "argv": ["/bin/sh", "-c", "vtysh -c 'show version'"],
             "timeout_seconds": 5,
             "period_seconds": 5,
         },

@@ -315,10 +315,6 @@ class SessionPodView:
             )
         return placement
 
-    def pod_ips(self) -> dict[str, str]:
-        """Logical node -> pod IP, from current pods holding one."""
-        return {pod.node_id: pod.pod_ip for pod in self.current if pod.pod_ip}
-
     def describe_foreign(self, limit: int = 10) -> str:
         shown = ", ".join(f"{pod.name} (owner: {pod.owners})" for pod in self.foreign[:limit])
         more = len(self.foreign) - limit

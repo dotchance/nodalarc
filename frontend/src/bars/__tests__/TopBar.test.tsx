@@ -16,7 +16,6 @@ function snapshotWithActuationNotice(): StateSnapshot {
     nodes: [],
     links: [],
     traced_paths: [],
-    active_flows: [],
     recent_events: [],
     network_health: {
       status: "converged",
@@ -31,6 +30,7 @@ function snapshotWithActuationNotice(): StateSnapshot {
     playback_paused: false,
     playback_speed: 1,
     stale: false,
+    history_recording: null,
     actuation_notices: [
       {
         gs_id: "gs-buenos-aires",

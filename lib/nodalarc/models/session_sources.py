@@ -48,6 +48,8 @@ class CatalogSessionSwitchRequest(_SessionSourceModel):
     expected_source_revision: Sha256Digest
     expected_document_digest: Sha256Digest
     expected_dependency_digest: Sha256Digest
+    # Keep a history database for this session run.
+    record_history: bool
 
 
 class CatalogSessionSwitchAccepted(_SessionSourceModel):
@@ -62,3 +64,5 @@ class CatalogSessionYamlUploadRequest(_SessionSourceModel):
     """One standard persisted session document to save into the user catalog."""
 
     yaml: str = Field(min_length=1)
+    # Keep a history database for the session run this upload deploys.
+    record_history: bool

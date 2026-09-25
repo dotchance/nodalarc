@@ -7,7 +7,7 @@ from __future__ import annotations
 import ipaddress
 import re
 from datetime import datetime
-from typing import Annotated, Literal
+from typing import Annotated, Literal, get_args
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -29,6 +29,13 @@ from nodalarc.models.link_rules import LinkRule, NodeSelector
 from nodalarc.models.segments import Segment
 
 RoutingProtocol = Literal["isis", "ospf", "bgp", "static"]
+ROUTING_PROTOCOLS: tuple[RoutingProtocol, ...] = get_args(RoutingProtocol)
+# The link-state interior gateway protocols: the ones divided into areas and
+# run with IGP hello, hold and SPF timers.
+LINK_STATE_PROTOCOLS: frozenset[RoutingProtocol] = frozenset({"isis", "ospf"})
+# A routing domain's capability names: the fields of RoutingCapabilities.
+RoutingCapability = Literal["mpls", "segment_routing", "traffic_engineering"]
+ROUTING_CAPABILITIES: tuple[RoutingCapability, ...] = get_args(RoutingCapability)
 RoutingBoundaryAdapter = Literal["static_ip", "bgp", "dtn_bundle"]
 
 
@@ -214,7 +221,7 @@ class RoutingDomain(BaseModel):
 
     @model_validator(mode="after")
     def _protocol_specific_fields(self) -> RoutingDomain:
-        if self.area_assignment is not None and self.protocol not in {"isis", "ospf"}:
+        if self.area_assignment is not None and self.protocol not in LINK_STATE_PROTOCOLS:
             raise ValueError(
                 f"routing domain {self.id!r} declares area_assignment on protocol "
                 f"{self.protocol!r}; routing areas apply to isis/ospf domains only"
@@ -226,7 +233,7 @@ class RoutingDomain(BaseModel):
             ]
             for area_id in area_ids:
                 _validate_protocol_area_id(self.protocol, area_id)
-        if self.timers is not None and self.protocol not in {"isis", "ospf"}:
+        if self.timers is not None and self.protocol not in LINK_STATE_PROTOCOLS:
             raise ValueError(
                 f"routing domain {self.id!r} declares timers on protocol "
                 f"{self.protocol!r}; IGP timers apply to isis/ospf domains only"
@@ -243,6 +250,11 @@ class RoutingDomain(BaseModel):
                     f"for OSPF: {', '.join(unsupported)}"
                 )
         return self
+
+
+# OSPF's backbone area. Every other area of an OSPF instance attaches to it
+# through an area border router, and it is contiguous.
+OSPF_BACKBONE_AREA = "0.0.0.0"
 
 
 def _validate_protocol_area_id(protocol: str, area_id: str) -> None:
@@ -263,7 +275,7 @@ def _validate_protocol_area_id(protocol: str, area_id: str) -> None:
 
 
 class AggregateOf(BaseModel):
-    """Resolver-derived prefix set (grammar C046): the from-domain's
+    """Resolver-derived prefix set: the from-domain's
     originated prefixes, per address family the boundary can install."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")

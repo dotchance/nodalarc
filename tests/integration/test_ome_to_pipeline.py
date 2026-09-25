@@ -19,6 +19,7 @@ from nodalarc.models.events import (
 )
 
 from tests.seam_reference import DeclaredShell, encounter, expected_transitions
+from tests.seam_reference import elements as reference_elements
 
 pytestmark = pytest.mark.integration
 
@@ -152,29 +153,34 @@ class TestPolarVisibilityTransitions:
     OME emits is compared against it: simulation time anchored to the
     session's declared start (never to the output under test), visibility,
     the physical reason, the reported range, and the allocation state. The
-    checkers are functions over the loaded events so the negative cases can
-    prove what each assertion rejects.
+    reference propagates from the orbit's declared epoch, so each event is
+    evaluated at its offset from that epoch. The checkers are functions over
+    the loaded events so the negative cases can prove what each assertion
+    rejects.
     """
 
     SAMPLE_S = 10.0
     ORBIT_S = 6030.0
-    # OME propagates J2 mean elements; the reference applies first-order
-    # secular J2 rates to circular elements. Over an orbit the two differ by
-    # up to 55 km in range (a 3.7 s timing offset at a 15 km/s closing speed
-    # near the seam crossing); every event of the retained timelines sits
-    # within 46 km. A reported range beyond this bound is a disagreement to
+    # The reference and OME apply the same secular J2 rates to circular
+    # elements; every event of both timelines reports the reference range to
+    # within a metre. A reported range beyond this bound is a disagreement to
     # investigate, not a tolerance to widen.
-    RANGE_TOLERANCE_KM = 100.0
+    RANGE_TOLERANCE_KM = 1.0
     CLOSE_PASS_KM = 400.0
 
     @staticmethod
-    def _shell(constellation_name: str) -> DeclaredShell:
+    def _orbit(constellation_name: str) -> tuple[dict, dict]:
         catalog = PROJECT_ROOT / "catalog" / "nodalarc"
         constellation = load_configuration_yaml(
             (catalog / "constellations" / "earth" / "leo" / constellation_name).read_text()
         )["constellation"]
         orbit_ref = constellation["orbit"].split(":", 1)[1]
         orbit = load_configuration_yaml((catalog / orbit_ref).read_text())["orbit"]
+        return constellation, orbit
+
+    @classmethod
+    def _shell(cls, constellation_name: str) -> DeclaredShell:
+        constellation, orbit = cls._orbit(constellation_name)
         return DeclaredShell(
             altitude_km=float(orbit["shape"]["altitude_km"]),
             inclination_deg=float(orbit["orientation"]["inclination_deg"]),
@@ -191,6 +197,13 @@ class TestPolarVisibilityTransitions:
             ).read_text()
         )["terminal"]
         return float(terminal["max_range_km"]), float(terminal["limits"]["max_tracking_rate_deg_s"])
+
+    @classmethod
+    def _epoch_offset_s(cls, constellation_name: str, start: datetime) -> float:
+        """Seconds from the orbit's declared epoch to the declared session start."""
+        _, orbit = cls._orbit(constellation_name)
+        epoch = datetime.fromisoformat(str(orbit["epoch"]).replace("Z", "+00:00"))
+        return (start - epoch).total_seconds()
 
     @staticmethod
     def _declared_start(session_name: str) -> datetime:
@@ -231,13 +244,14 @@ class TestPolarVisibilityTransitions:
     def _plane_slot(node_id: str) -> tuple[int, int]:
         return int(node_id[-5:-3]), int(node_id[-2:])
 
-    def _expected_events(self, shell, a, b, *, max_range_km, max_rate_deg_s):
+    def _expected_events(self, shell, a, b, *, offset_s, max_range_km, max_rate_deg_s):
         """Visible/invisible changes with their physical reason, as the timeline emits them:
         the verdict sequence collapsed to visibility changes, no event for an invisible start."""
         verdicts = expected_transitions(
             shell,
             a,
             b,
+            start_s=offset_s,
             duration_s=self.ORBIT_S,
             sample_s=self.SAMPLE_S,
             max_range_km=max_range_km,
@@ -257,7 +271,9 @@ class TestPolarVisibilityTransitions:
                 visible = now_visible
         return expected
 
-    def _assert_pair_follows_reference(self, shell, pair, observed, expected, *, max_range_km):
+    def _assert_pair_follows_reference(
+        self, shell, pair, observed, expected, *, offset_s, max_range_km
+    ):
         """Time, visibility and reason against the reference sequence; the reported range
         against the reference geometry at the event's own time; the allocation state of an
         uncontended pair: feasible means scheduled and active, infeasible means unscheduled."""
@@ -268,7 +284,7 @@ class TestPolarVisibilityTransitions:
             assert event["visible"] == vis_exp, label
             assert event["reason"] == reason_exp, label
             assert abs(event["t"] - t_exp) <= self.SAMPLE_S, label
-            reference_range, _, _ = encounter(shell, a, b, event["t"])
+            reference_range, _, _ = encounter(shell, a, b, offset_s + event["t"])
             assert abs(event["range_km"] - reference_range) <= self.RANGE_TOLERANCE_KM, (
                 pair,
                 event["t"],
@@ -288,6 +304,7 @@ class TestPolarVisibilityTransitions:
     def check_range_experiment(self, events, start):
         max_range_km, max_rate_deg_s = self._terminal_limits()
         shell = self._shell("earth-leo-polar-36.yaml")
+        offset_s = self._epoch_offset_s("earth-leo-polar-36.yaml", start)
         by_pair = self._isl_events_by_pair(events, start)
 
         seam = {pair for pair in by_pair if {pair[0][-6:-3], pair[1][-6:-3]} == {"p00", "p05"}}
@@ -299,7 +316,12 @@ class TestPolarVisibilityTransitions:
             (only,) = by_pair[pair]
             assert only["t"] == 0.0, (pair, only)
             self._assert_pair_follows_reference(
-                shell, pair, by_pair[pair], [(0.0, True, "ok")], max_range_km=max_range_km
+                shell,
+                pair,
+                by_pair[pair],
+                [(0.0, True, "ok")],
+                offset_s=offset_s,
+                max_range_km=max_range_km,
             )
         for pair in sorted(seam):
             slot = self._plane_slot(pair[0])[1]
@@ -307,11 +329,12 @@ class TestPolarVisibilityTransitions:
                 shell,
                 (5, slot),
                 (0, slot),
+                offset_s=offset_s,
                 max_range_km=max_range_km,
                 max_rate_deg_s=max_rate_deg_s,
             )
             self._assert_pair_follows_reference(
-                shell, pair, by_pair[pair], expected, max_range_km=max_range_km
+                shell, pair, by_pair[pair], expected, offset_s=offset_s, max_range_km=max_range_km
             )
         seam_events = [e for pair in seam for e in by_pair[pair]]
         assert sum(1 for e in seam_events if not e["visible"]) == 12
@@ -321,6 +344,7 @@ class TestPolarVisibilityTransitions:
     def check_tracking_experiment(self, events, start):
         max_range_km, max_rate_deg_s = self._terminal_limits()
         shell = self._shell("earth-leo-polar-36-seam-crossing.yaml")
+        offset_s = self._epoch_offset_s("earth-leo-polar-36-seam-crossing.yaml", start)
         by_pair = self._isl_events_by_pair(events, start)
 
         assert len(by_pair) == 6
@@ -329,14 +353,19 @@ class TestPolarVisibilityTransitions:
             assert (slot_of["p05"] + 2) % 6 == slot_of["p00"], pair
             a, b = (5, slot_of["p05"]), (0, slot_of["p00"])
             expected = self._expected_events(
-                shell, a, b, max_range_km=max_range_km, max_rate_deg_s=max_rate_deg_s
+                shell,
+                a,
+                b,
+                offset_s=offset_s,
+                max_range_km=max_range_km,
+                max_rate_deg_s=max_rate_deg_s,
             )
             self._assert_pair_follows_reference(
-                shell, pair, by_pair[pair], expected, max_range_km=max_range_km
+                shell, pair, by_pair[pair], expected, offset_s=offset_s, max_range_km=max_range_km
             )
             for event in by_pair[pair]:
                 if event["reason"] == "tracking_exceeded":
-                    reference_range, rate, clear = encounter(shell, a, b, event["t"])
+                    reference_range, rate, clear = encounter(shell, a, b, offset_s + event["t"])
                     assert clear and rate > max_rate_deg_s, (pair, event, rate)
                     assert event["range_km"] < self.CLOSE_PASS_KM, (pair, event)
                     assert reference_range < self.CLOSE_PASS_KM, (pair, event, reference_range)
@@ -472,23 +501,32 @@ class TestPolarVisibilityTransitions:
             )
 
     def test_tracking_experiment_resolves_its_declared_facts(self):
-        """Resolution carries the declared phasing, orbit and terminal limits into OME's inputs."""
+        """Resolution carries the declared phasing, orbit and terminal limits into OME's inputs,
+        the phasing advanced from the orbit's epoch to the session start."""
         import math
 
         from ome.main import _load_session_config
 
+        session = "earth-leo-polar-seam-tracking.yaml"
+        constellation = "earth-leo-polar-36-seam-crossing.yaml"
         cfg = _load_session_config(
-            PROJECT_ROOT / "catalog/nodalarc/sessions/earth-leo-polar-seam-tracking.yaml",
+            PROJECT_ROOT / "catalog/nodalarc/sessions" / session,
             run_id="test-seam-facts",
         )
         elements = {sat.node_id: sat.elements for sat in cfg.satellites}
         limits = {sat.node_id: sat.isl_terminals[0] for sat in cfg.satellites}
         max_range_km, max_rate_deg_s = self._terminal_limits()
+        shell = self._shell(constellation)
+        offset_s = self._epoch_offset_s(constellation, self._declared_start(session))
 
-        assert math.isclose(math.degrees(elements["leo-sat-p05s00"].raan_rad), 158.0)
-        assert math.isclose(math.degrees(elements["leo-sat-p05s00"].mean_anomaly_rad), 75.0)
-        assert math.isclose(math.degrees(elements["leo-sat-p00s02"].raan_rad), 0.0)
-        assert math.isclose(math.degrees(elements["leo-sat-p00s02"].mean_anomaly_rad), 120.0)
+        def same_angle(actual_rad: float, expected_rad: float) -> bool:
+            return abs(math.remainder(actual_rad - expected_rad, math.tau)) < 1e-9
+
+        for node, (plane, slot) in (("leo-sat-p05s00", (5, 0)), ("leo-sat-p00s02", (0, 2))):
+            a, _, raan, u, _ = reference_elements(shell, plane, slot, offset_s)
+            assert same_angle(elements[node].raan_rad, raan), node
+            assert same_angle(elements[node].mean_anomaly_rad, u), node
+            assert math.isclose(elements[node].semi_major_axis_km, a)
         assert math.isclose(elements["leo-sat-p05s00"].semi_major_axis_km, 7158.137)
         for node in ("leo-sat-p05s00", "leo-sat-p00s02"):
             assert limits[node].max_range_km == max_range_km

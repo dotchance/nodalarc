@@ -5,10 +5,14 @@
 from __future__ import annotations
 
 import pytest
+from nodalarc.models.resolved_session import InterfaceRates
 from nodalarc.proto import node_agent_pb2
 from scheduler.desired_state import ActiveLinkInfo
 from scheduler.latency_compensator import LatencyCompensation
 from scheduler.node_agent_batches import build_link_down_batch_plan, build_link_up_batch_plan
+from scheduler.pod_locator import PodLocationError, PodLocationMap
+
+from tests.terminal_rate_fixtures import ANY_INTERFACE_RATES
 
 
 class _Locator:
@@ -16,7 +20,7 @@ class _Locator:
         self._locality = locality
         self._node_ips = node_ips or {}
 
-    def link_locality(self, node_a: str, node_b: str) -> int | None:
+    def link_locality(self, node_a: str, node_b: str) -> int:
         return self._locality
 
     def agent_addr(self, node_id: str) -> str:
@@ -25,8 +29,10 @@ class _Locator:
     def k3s_node(self, node_id: str) -> str:
         return f"k3s-{node_id}"
 
-    def node_ip(self, k3s_node: str) -> str | None:
-        return self._node_ips.get(k3s_node)
+    def node_ip(self, k3s_node: str) -> str:
+        if k3s_node not in self._node_ips:
+            raise PodLocationError(f"no InternalIP for Kubernetes node {k3s_node}")
+        return self._node_ips[k3s_node]
 
 
 def _compensation(_node_a: str, _node_b: str, orbital_ms: float) -> LatencyCompensation:
@@ -46,7 +52,6 @@ def test_cross_node_isl_link_up_plan_builds_two_remote_interfaces():
             interface_a="isl0",
             interface_b="isl1",
             latency_ms=10.0,
-            bandwidth_mbps=1000.0,
             link_type="isl",
             range_km=2997.9,
         )
@@ -59,7 +64,14 @@ def test_cross_node_isl_link_up_plan_builds_two_remote_interfaces():
         },
     )
 
+    # Each ISL end is its own terminal: sat-b transmits slower than sat-a receives.
+    interface_rates = {
+        ("sat-a", "isl0"): InterfaceRates(transmit_mbps=2000.0, receive_mbps=1500.0),
+        ("sat-b", "isl1"): InterfaceRates(transmit_mbps=100.0, receive_mbps=2000.0),
+    }
+
     plan = build_link_up_batch_plan(
+        interface_rates=interface_rates,
         pairs={pair},
         desired=desired,
         locator=locator,
@@ -72,6 +84,10 @@ def test_cross_node_isl_link_up_plan_builds_two_remote_interfaces():
     assert {iface.node_id for iface in ifaces} == {"sat-a", "sat-b"}
     assert {iface.remote_node_ip for iface in ifaces} == {"10.0.0.1", "10.0.0.2"}
     assert {iface.latency_ms for iface in ifaces} == {9.0}
+    assert {
+        (iface.node_id, iface.rates.transmit_mbps, iface.rates.receive_mbps) for iface in ifaces
+    } == {("sat-a", 2000.0, 1500.0), ("sat-b", 100.0, 2000.0)}
+    assert not any(iface.HasField("peer_rates") for iface in ifaces)
     assert plan.pair_agent_ifaces[pair] == {
         ("agent-sat-a", "sat-a", "isl0"),
         ("agent-sat-b", "sat-b", "isl1"),
@@ -85,19 +101,23 @@ def test_cross_node_link_up_missing_remote_ip_fails_loudly():
             interface_a="isl0",
             interface_b="isl1",
             latency_ms=10.0,
-            bandwidth_mbps=1000.0,
             link_type="isl",
             range_km=2997.9,
         )
     }
 
-    with pytest.raises(RuntimeError, match="missing IP"):
+    # The real locator: sat-b's hosting node has no InternalIP.
+    locator = PodLocationMap()
+    locator._node_of.update({"sat-a": "k3s-sat-a", "sat-b": "k3s-sat-b"})
+    locator._agent_addrs.update({"k3s-sat-a": "agent-a", "k3s-sat-b": "agent-b"})
+    locator._node_ips["k3s-sat-a"] = "10.0.0.1"
+
+    with pytest.raises(PodLocationError, match="no InternalIP for Kubernetes node k3s-sat-b"):
         build_link_up_batch_plan(
+            interface_rates=ANY_INTERFACE_RATES,
             pairs={pair},
             desired=desired,
-            locator=_Locator(
-                node_agent_pb2.LOCALITY_CROSS_NODE, node_ips={"k3s-sat-a": "10.0.0.1"}
-            ),
+            locator=locator,
             gs_capacities={},
             compensation_for_pair=_compensation,
         )
@@ -110,7 +130,6 @@ def test_local_ground_link_down_plan_preserves_single_agent_bridge_operation():
             interface_a="term0",
             interface_b="gnd0",
             latency_ms=5.0,
-            bandwidth_mbps=1000.0,
             link_type="ground",
             range_km=1500.0,
         )
@@ -130,3 +149,31 @@ def test_local_ground_link_down_plan_preserves_single_agent_bridge_operation():
     assert iface.peer_node_id == "sat-a"
     assert iface.peer_interface_name == "gnd0"
     assert iface.link_type == node_agent_pb2.LINK_TYPE_GROUND
+
+
+def test_link_up_without_terminal_rates_for_an_interface_fails_loudly():
+    pair = ("sat-a", "sat-b")
+    desired = {
+        pair: ActiveLinkInfo(
+            interface_a="isl0",
+            interface_b="isl1",
+            latency_ms=10.0,
+            link_type="isl",
+            range_km=2997.9,
+        )
+    }
+
+    with pytest.raises(RuntimeError, match="no terminal rates for sat-b/isl1"):
+        build_link_up_batch_plan(
+            interface_rates={
+                ("sat-a", "isl0"): InterfaceRates(transmit_mbps=2000.0, receive_mbps=2000.0)
+            },
+            pairs={pair},
+            desired=desired,
+            locator=_Locator(
+                node_agent_pb2.LOCALITY_CROSS_NODE,
+                node_ips={"k3s-sat-a": "10.0.0.1", "k3s-sat-b": "10.0.0.2"},
+            ),
+            gs_capacities={},
+            compensation_for_pair=_compensation,
+        )

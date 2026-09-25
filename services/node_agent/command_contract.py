@@ -8,6 +8,7 @@ fence between untrusted request bytes and kernel mutation.
 
 from __future__ import annotations
 
+import math
 from collections.abc import Iterable
 from dataclasses import dataclass
 
@@ -126,6 +127,43 @@ def _validate_common_interface(iface, *, operation: str) -> None:
             )
 
 
+def _validate_rates_field(entry, field: str, *, operation: str) -> None:
+    """One ``TerminalRates`` field is present with finite, positive rates."""
+    if not entry.HasField(field):
+        raise CommandContractError(
+            node_agent_pb2.NODE_AGENT_INVALID_FIELD,
+            f"{operation} entry requires {field}",
+        )
+    rates = getattr(entry, field)
+    for rate in (rates.transmit_mbps, rates.receive_mbps):
+        if not (math.isfinite(rate) and rate > 0):
+            raise CommandContractError(
+                node_agent_pb2.NODE_AGENT_INVALID_FIELD,
+                f"{operation} {field} transmit_mbps and receive_mbps must be finite and > 0",
+            )
+
+
+def _validate_terminal_rates(entry, *, operation: str) -> None:
+    """Each wired terminal carries its own positive transmit and receive rates.
+
+    ``rates`` belongs to (node_id, interface_name). A LOCAL ground entry wires
+    both ends in one operation and so also carries the peer terminal's
+    ``peer_rates``; every other entry wires one end and carries none.
+    """
+    local_ground = (
+        entry.link_type == node_agent_pb2.LINK_TYPE_GROUND
+        and entry.locality == node_agent_pb2.LOCALITY_LOCAL
+    )
+    fields = ("rates", "peer_rates") if local_ground else ("rates",)
+    for field in fields:
+        _validate_rates_field(entry, field, operation=operation)
+    if not local_ground and entry.HasField("peer_rates"):
+        raise CommandContractError(
+            node_agent_pb2.NODE_AGENT_INVALID_FIELD,
+            f"{operation} peer_rates apply only to LOCAL ground entries",
+        )
+
+
 def validate_batch_link_up_request(request, *, fence: RuntimeFence) -> None:
     validate_envelope(request, expected_kind=KIND_BATCH_LINK_UP, fence=fence)
     for iface in request.interfaces:
@@ -135,11 +173,7 @@ def validate_batch_link_up_request(request, *, fence: RuntimeFence) -> None:
                 node_agent_pb2.NODE_AGENT_INVALID_FIELD,
                 "latency_ms must be >= 0",
             )
-        if iface.bandwidth_mbps <= 0:
-            raise CommandContractError(
-                node_agent_pb2.NODE_AGENT_INVALID_FIELD,
-                "bandwidth_mbps must be > 0",
-            )
+        _validate_terminal_rates(iface, operation=KIND_BATCH_LINK_UP)
 
 
 def validate_batch_link_down_request(request, *, fence: RuntimeFence) -> None:
@@ -159,6 +193,7 @@ def validate_set_latency_request(request, *, fence: RuntimeFence) -> None:
                 node_agent_pb2.NODE_AGENT_INVALID_FIELD,
                 "latency_ms must be >= 0",
             )
+        _validate_rates_field(entry, "rates", operation=KIND_SET_LATENCY)
         if entry.link_type == node_agent_pb2.LINK_TYPE_GROUND:
             _require_nonempty(entry.gs_id, "gs_id")
             _require_nonempty(entry.sat_id, "sat_id")
@@ -192,11 +227,7 @@ def validate_kernel_inventory_request(request, *, fence: RuntimeFence) -> None:
                     node_agent_pb2.NODE_AGENT_INVALID_FIELD,
                     "latency_ms must be >= 0 for expected-up verification",
                 )
-            if entry.bandwidth_mbps <= 0:
-                raise CommandContractError(
-                    node_agent_pb2.NODE_AGENT_INVALID_FIELD,
-                    "bandwidth_mbps must be > 0 for expected-up verification",
-                )
+            _validate_terminal_rates(entry, operation=KIND_KERNEL_INVENTORY)
         if entry.locality == node_agent_pb2.LOCALITY_CROSS_NODE:
             if entry.vni <= 0:
                 raise CommandContractError(

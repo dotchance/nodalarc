@@ -8,6 +8,7 @@ import pytest
 from nodalarc.models.identity import IdentityMode
 from nodalarc.models.link_rules import VisibleCandidatesTopology
 from nodalarc.models.resolved_session import (
+    OspfInstanceAreas,
     ResolvedBodyFacts,
     ResolvedEndpoint,
     ResolvedInterfaceAddress,
@@ -20,10 +21,11 @@ from nodalarc.models.resolved_session import (
     ResolvedSession,
     ResolvedSurfacePosition,
     ResolvedTerminalBlock,
+    ResolvedWanInterface,
     SidBlock,
     SourceContext,
 )
-from nodalarc.models.segment_session import SessionMeta, TimeConfig
+from nodalarc.models.segment_session import AreaAssignment, SessionMeta, TimeConfig
 from nodalarc.models.segments import GroundScheduling
 from nodalarc.models.terminal_physics import TerminalBoresight
 from nodalarc.runtime_support import (
@@ -123,7 +125,11 @@ def _terminal(
         count=count,
         tracking_capacity=1,
         max_range_km=5000.0,
-        bandwidth_mbps=10000.0,
+        min_elevation_deg=0.0,
+        field_of_regard_deg=180.0 if role == "access" else 360.0,
+        tracking_rate_deg_s=3.0,
+        transmit_mbps=10000.0,
+        receive_mbps=10000.0,
         boresight=boresight,
         source_ref=f"test:{terminal_id}",
     )
@@ -266,6 +272,7 @@ def test_closed_terminal_role_vocabulary_rejects_old_ground_role() -> None:
 def test_satellite_requires_orbit_facts() -> None:
     with pytest.raises(ValidationError, match="requires orbit facts"):
         ResolvedNode(
+            forwarding="routed",
             profile="nodalarc:profiles/frr-router.yaml",
             profile_level="node_definition",
             node_id="sat",
@@ -281,6 +288,7 @@ def test_satellite_requires_orbit_facts() -> None:
 
 def test_ground_station_requires_surface_position_but_scheduling_is_candidate_scoped() -> None:
     node = ResolvedNode(
+        forwarding="routed",
         profile="nodalarc:profiles/frr-router.yaml",
         profile_level="node_definition",
         node_id="gs",
@@ -304,6 +312,7 @@ def test_ground_station_requires_surface_position_but_scheduling_is_candidate_sc
     assert node.ground_scheduling is None
     with pytest.raises(ValidationError, match="surface_position"):
         ResolvedNode(
+            forwarding="routed",
             profile="nodalarc:profiles/frr-router.yaml",
             profile_level="node_definition",
             node_id="gs",
@@ -335,10 +344,36 @@ def test_duplicate_node_id_rejected() -> None:
         )
 
 
+def test_a_wan_interface_naming_a_terminal_outside_the_inventory_is_refused() -> None:
+    def node(terminal_id: str) -> ResolvedNode:
+        return ResolvedNode(
+            forwarding="routed",
+            profile="nodalarc:profiles/frr-router.yaml",
+            profile_level="node_definition",
+            node_id="n",
+            local_node_id="n",
+            segment_id="leo",
+            namespace="leo",
+            kind="satellite",
+            frame_id="earth",
+            central_body="earth",
+            terminal_inventory=(_terminal("n"),),
+            wan_interfaces=(
+                ResolvedWanInterface(name="isl0", owner_node_id="n", terminal_id=terminal_id),
+            ),
+            orbit=_orbit(),
+        )
+
+    assert node("isl_optical").wan_terminal("isl0").terminal_id == "isl_optical"
+    with pytest.raises(ValidationError, match="not in its terminal inventory"):
+        node("isl_rf")
+
+
 def test_terminal_owner_mismatch_rejected() -> None:
     block = _terminal("other-node")
     with pytest.raises(ValidationError, match="owner_node_id"):
         ResolvedNode(
+            forwarding="routed",
             profile="nodalarc:profiles/frr-router.yaml",
             profile_level="node_definition",
             node_id="n",
@@ -357,6 +392,7 @@ def test_duplicate_terminal_id_within_node_rejected() -> None:
     block = _terminal("n", terminal_id="dup")
     with pytest.raises(ValidationError, match="duplicate terminal_id"):
         ResolvedNode(
+            forwarding="routed",
             profile="nodalarc:profiles/frr-router.yaml",
             profile_level="node_definition",
             node_id="n",
@@ -451,7 +487,6 @@ def test_link_candidate_maps_and_ground_candidates() -> None:
         terminal_medium="rf",
         node_a=gs.node_id,
         node_b=sat.node_id,
-        bandwidth_mbps=1000,
         topology_mode="visible_candidates",
         priority=0,
         endpoint_segments=("ground", "leo"),
@@ -464,7 +499,6 @@ def test_link_candidate_maps_and_ground_candidates() -> None:
     )
 
     assert rs.link_interface_map() == {}
-    assert rs.link_bandwidth_map()[(gs.node_id, sat.node_id)] == 1000
     assert rs.ground_candidate_satellites_by_gs() == {gs.node_id: (sat.node_id,)}
 
 
@@ -490,7 +524,6 @@ def test_link_interface_map_contains_only_fixed_candidates() -> None:
         node_b=right.node_id,
         interface_a="isl0",
         interface_b="isl0",
-        bandwidth_mbps=1000,
         topology_mode="visible_candidates",
         priority=0,
         endpoint_segments=("leo", "leo"),
@@ -515,7 +548,6 @@ def test_access_candidate_rejects_fabricated_fixed_interfaces() -> None:
             node_b="sat",
             interface_a="term0",
             interface_b="gnd0",
-            bandwidth_mbps=1,
             topology_mode="visible_candidates",
             priority=0,
             endpoint_segments=("ground", "leo"),
@@ -532,7 +564,6 @@ def test_fixed_candidate_requires_both_interfaces() -> None:
             node_a="sat-a",
             node_b="sat-b",
             interface_a="isl0",
-            bandwidth_mbps=1,
             topology_mode="visible_candidates",
             priority=0,
             endpoint_segments=("leo", "leo"),
@@ -550,7 +581,6 @@ def test_link_candidate_rejects_self_pair() -> None:
             node_b="sat",
             interface_a="isl0",
             interface_b="isl1",
-            bandwidth_mbps=1,
             topology_mode="visible_candidates",
             priority=0,
             endpoint_segments=("leo", "leo"),
@@ -588,7 +618,27 @@ def test_sid_indices_are_allocated_from_resolved_domain_blocks() -> None:
         routing_domains=(_domain("sat-a", "sat-b"),),
         sid_blocks=(_sid("sat-a", "sat-b", start=42),),
     )
-    assert rs.sid_index_by_node_id() == {"sat-a": 42, "sat-b": 43}
+    assert rs.sid_index_by_domain() == {"earth_domain": {"sat-a": 42, "sat-b": 43}}
+
+
+def test_a_router_holds_one_sid_index_in_each_segment_routing_domain() -> None:
+    nodes = (_satellite("sat-a"), _satellite("sat-b"))
+    rs = _resolved_session(
+        nodes=nodes,
+        routing_domains=(
+            _domain("sat-a", "sat-b"),
+            _domain("sat-b", domain_id="relay_domain"),
+        ),
+        sid_blocks=(
+            _sid("sat-a", "sat-b", start=42),
+            _sid("sat-b", domain_id="relay_domain", start=100),
+        ),
+    )
+
+    assert rs.sid_index_by_domain() == {
+        "earth_domain": {"sat-a": 42, "sat-b": 43},
+        "relay_domain": {"sat-b": 100},
+    }
 
 
 def test_sid_block_size_must_match_domain_node_count() -> None:
@@ -602,7 +652,7 @@ def test_sid_block_size_must_match_domain_node_count() -> None:
         ),
     )
     with pytest.raises(ValueError, match="has 3 index"):
-        rs.sid_index_by_node_id()
+        rs.sid_index_by_domain()
 
 
 def test_overlapping_sid_blocks_rejected() -> None:
@@ -695,3 +745,43 @@ def test_unsupported_feature_error_message() -> None:
     assert "space_node_set" in str(err)
     assert "mars" in str(err)
     assert len(err.features) == 2
+
+
+def test_resolved_terminal_requires_its_tracking_capacity() -> None:
+    with pytest.raises(ValidationError, match="tracking_capacity"):
+        ResolvedTerminalBlock(
+            terminal_id="t",
+            owner_node_id="n",
+            endpoint_role="access",
+            medium="rf",
+            count=1,
+            source_ref="test:t",
+        )
+
+
+def test_routing_areas_are_resolved_for_area_protocol_routers_only() -> None:
+    """Per-plane OSPF areas come from the resolved instance; a static instance has none."""
+    plane0 = _satellite("leo-sat-p00s00")
+    plane1 = _satellite("leo-sat-p01s00").model_copy(update={"plane": 1})
+    gs = _ground()
+    ospf = ResolvedRoutingDomain(
+        domain_id="leo_domain",
+        protocol="ospf",
+        node_ids=(plane0.node_id, plane1.node_id),
+        area_assignment=AreaAssignment(strategy="per_plane", gs_area_id="0.0.0.0"),
+    )
+    static = ResolvedRoutingDomain(
+        domain_id="ground_domain", protocol="static", node_ids=(gs.node_id,)
+    )
+    rs = _resolved_session(nodes=(plane0, plane1, gs), routing_domains=(ospf, static))
+
+    # The session assigns areas per router: the loopback and every interface
+    # of the instance take the router's area.
+    assert rs.instance_areas_by_node() == {
+        plane0.node_id: (OspfInstanceAreas("leo_domain", loopback_area="0.0.0.1"),),
+        plane1.node_id: (OspfInstanceAreas("leo_domain", loopback_area="0.0.0.2"),),
+    }
+    with pytest.raises(ValueError, match="runs static, which has no areas"):
+        static.area_id_for(gs)
+    with pytest.raises(ValueError, match="is not a member of routing domain 'leo_domain'"):
+        ospf.area_id_for(gs)

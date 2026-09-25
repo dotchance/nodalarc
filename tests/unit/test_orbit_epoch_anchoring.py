@@ -290,7 +290,8 @@ class TestConstructionAuthority:
         )
 
     def test_matching_epochs_keep_the_authored_object(self):
-        inputs = self._inputs()
+        # The ring orbit's declared epoch.
+        inputs = self._inputs(start_time="2026-06-08T00:00:00Z")
         for sat in inputs.satellites:
             assert sat.elements is sat.authored_elements
 

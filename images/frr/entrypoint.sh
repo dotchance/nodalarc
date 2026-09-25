@@ -2,9 +2,10 @@
 set -e
 
 # Wait for ConfigMap volume mount to be populated by kubelet.
-# The Operator creates a per-node ConfigMap (frr-config-<node-id>) mounted
-# at /etc/frr-config/. kubelet populates the volume when the pod is
-# scheduled — no exec or sentinel file needed.
+# The Operator mounts the node's workload artifact ConfigMap at
+# /etc/frr-config/: the FRR adapter's frr.conf and daemons.
+# kubelet populates the volume when the pod is scheduled — no exec or
+# sentinel file needed.
 CONFIG_SRC="/etc/frr-config/frr.conf"
 TIMEOUT=120
 WAITED=0
@@ -20,57 +21,17 @@ while [ ! -f "$CONFIG_SRC" ]; do
 done
 echo "ConfigMap mounted after ${WAITED}s"
 
+# The adapter's daemons file is the only daemon selection. /etc/frr is an
+# emptyDir, so without it watchfrr would start no daemons.
+if [ ! -f /etc/frr-config/daemons ]; then
+    echo "ERROR: /etc/frr-config/daemons is missing; the FRR adapter selects the daemons, exiting"
+    exit 1
+fi
+
 # Copy ConfigMap contents to writable /etc/frr/ (tmpfs emptyDir).
 # ConfigMap mounts are read-only; FRR needs to write to /etc/frr/.
 cp /etc/frr-config/* /etc/frr/
-# Write config version sentinel for readiness probe.
-# _config_version is a file in the ConfigMap containing a hash of frr.conf.
-# The readiness probe diffs /etc/frr/.config_version against the ConfigMap
-# mount to verify this container has loaded the intended config version.
-if [ -f /etc/frr-config/_config_version ]; then
-    cp /etc/frr-config/_config_version /etc/frr/.config_version
-fi
 echo "Copied config from /etc/frr-config/ to /etc/frr/"
-
-# Background config watcher — detects ConfigMap updates and reloads FRR.
-# K8s kubelet syncs ConfigMap volume mounts on a polling interval (~60s).
-# When frr.conf changes (new session config, routing parameter update),
-# the watcher copies the new files and tells FRR to reload gracefully.
-# This is the NOS-agnostic contract: the container owns its own config
-# lifecycle. The Operator just mounts the ConfigMap.
-_watch_config() {
-    local last_hash
-    last_hash=$(md5sum /etc/frr-config/frr.conf 2>/dev/null | awk '{print $1}')
-    while true; do
-        sleep 10
-        local current_hash
-        current_hash=$(md5sum /etc/frr-config/frr.conf 2>/dev/null | awk '{print $1}')
-        if [ -n "$current_hash" ] && [ "$current_hash" != "$last_hash" ]; then
-            echo "ConfigMap change detected, reloading FRR config"
-            cp /etc/frr-config/* /etc/frr/
-            chown -R frr:frr /etc/frr
-            # Declarative reload — frr-reload.py diffs the running config
-            # against the intended file and applies additions AND removals.
-            # (vtysh -f only sources commands additively: config removed in
-            # the new version would silently survive in the daemons.)
-            if python3 /usr/lib/frr/frr-reload.py --reload /etc/frr/frr.conf; then
-                # The sentinel is a claim that the running NOS has converged
-                # to this config version. It moves only on reload success;
-                # on failure the readiness probe must report the pod stale.
-                if [ -f /etc/frr-config/_config_version ]; then
-                    cp /etc/frr-config/_config_version /etc/frr/.config_version
-                fi
-                echo "FRR config reloaded"
-                last_hash="$current_hash"
-            else
-                # last_hash intentionally not advanced: the watcher keeps
-                # reconciling toward the intended config on every poll.
-                echo "ERROR: FRR declarative reload failed; running config is stale and readiness will report it"
-            fi
-        fi
-    done
-}
-_watch_config &
 
 # Create vtysh.conf if it doesn't exist — suppresses the
 # "Can't open configuration file /etc/frr/vtysh.conf" warning
@@ -139,12 +100,6 @@ if ip link show eth0 >/dev/null 2>&1; then
     ip link set eth0 name cni0
     echo "Renamed eth0 → cni0"
 fi
-
-# Ensure BFD daemon is enabled. The Dockerfile COPYs daemons with bfdd=yes,
-# but stale image caches may serve the base image's bfdd=no. This sed is
-# idempotent and guarantees bfdd runs regardless of which image layer wins.
-# The daemon is idle (zero overhead) when no protocol config requests BFD.
-sed -i 's/^bfdd=no/bfdd=yes/' /etc/frr/daemons
 
 # Hand off to FRR's stock docker-start (watchfrr reads /etc/frr/daemons)
 exec /usr/lib/frr/docker-start

@@ -220,7 +220,7 @@ class TestBatchLinkUp:
                     link_type=node_agent_pb2.LINK_TYPE_ISL,
                     locality=node_agent_pb2.LOCALITY_LOCAL,
                     latency_ms=3.0,
-                    bandwidth_mbps=1000.0,
+                    rates=node_agent_pb2.TerminalRates(transmit_mbps=1000.0, receive_mbps=1000.0),
                     peer_node_id="sat-P00S01",
                     peer_interface_name="isl1",
                 ),
@@ -252,10 +252,15 @@ class TestBatchLinkUp:
         )
         monkeypatch.setattr(
             namespace_ops,
-            "apply_link_shaping",
-            lambda pid, ifname, latency, bandwidth: calls.append(
-                ("shape", pid, ifname, latency, bandwidth)
+            "apply_transmit_shaping",
+            lambda pid, ifname, latency, transmit: calls.append(
+                ("transmit", pid, ifname, latency, transmit)
             ),
+        )
+        monkeypatch.setattr(
+            namespace_ops,
+            "apply_receive_shaping",
+            lambda host_ifname, receive: calls.append(("receive", host_ifname, receive)),
         )
         monkeypatch.setattr(
             substrate_monitor,
@@ -280,7 +285,12 @@ class TestBatchLinkUp:
         monkeypatch.setattr(
             kernel_verifier,
             "verify_qdisc",
-            lambda pid, ifname, *, delay_ms, rate_mbps=None: kernel_verifier.Proof.ok("qdisc"),
+            lambda pid, ifname, *, delay_ms, transmit_mbps=None: kernel_verifier.Proof.ok("qdisc"),
+        )
+        monkeypatch.setattr(
+            kernel_verifier,
+            "verify_receive_shaping",
+            lambda host_ifname, *, receive_mbps: kernel_verifier.Proof.ok("receive"),
         )
 
         req = node_agent_pb2.BatchLinkUpRequest(
@@ -292,7 +302,8 @@ class TestBatchLinkUp:
                     link_type=node_agent_pb2.LINK_TYPE_GROUND,
                     locality=node_agent_pb2.LOCALITY_CROSS_NODE,
                     latency_ms=4.5,
-                    bandwidth_mbps=100.0,
+                    # The satellite's ground terminal sends slowly and receives fast.
+                    rates=node_agent_pb2.TerminalRates(transmit_mbps=50.0, receive_mbps=600.0),
                     gs_id="gs-den",
                     sat_id="sat-P00S00",
                     peer_node_id="gs-den",
@@ -308,7 +319,10 @@ class TestBatchLinkUp:
         assert resp.success is True
         assert resp.interface_results[0].verified is True
         assert ("substrate_check", "10.0.0.2") in calls
-        assert ("shape", 1234, "gnd0", 4.5, 100.0) in calls
+        from node_agent import ground_bridge
+
+        assert ("transmit", 1234, "gnd0", 4.5, 50.0) in calls
+        assert ("receive", ground_bridge._sat_host_veth("sat-P00S00", "gnd0"), 600.0) in calls
         assert ("peer_ref", "10.0.0.2", 1001, "gnd0") in calls
 
     def test_cross_node_isl_requires_substrate_evidence_before_mutation(self, monkeypatch):
@@ -346,7 +360,7 @@ class TestBatchLinkUp:
                     link_type=node_agent_pb2.LINK_TYPE_ISL,
                     locality=node_agent_pb2.LOCALITY_CROSS_NODE,
                     latency_ms=4.5,
-                    bandwidth_mbps=100.0,
+                    rates=node_agent_pb2.TerminalRates(transmit_mbps=100.0, receive_mbps=100.0),
                     peer_node_id="sat-P00S01",
                     peer_interface_name="isl1",
                     remote_node_ip="10.0.0.2",
@@ -395,7 +409,7 @@ class TestKernelStateRefusalReply:
                     link_type=node_agent_pb2.LINK_TYPE_ISL,
                     locality=node_agent_pb2.LOCALITY_CROSS_NODE,
                     latency_ms=4.5,
-                    bandwidth_mbps=100.0,
+                    rates=node_agent_pb2.TerminalRates(transmit_mbps=100.0, receive_mbps=100.0),
                     peer_node_id="sat-P00S01",
                     peer_interface_name="isl1",
                     remote_node_ip="10.0.0.2",
@@ -431,7 +445,7 @@ class TestKernelInventory:
     def _cross_node_entry(
         self, *, expected_admin_up: bool = True, remote_node_ip: str = "10.0.0.2"
     ):
-        return node_agent_pb2.KernelInventoryEntry(
+        entry = node_agent_pb2.KernelInventoryEntry(
             node_id="sat-P00S00",
             interface_name="gnd0",
             link_type=node_agent_pb2.LINK_TYPE_GROUND,
@@ -443,12 +457,14 @@ class TestKernelInventory:
             remote_node_ip=remote_node_ip,
             vni=1001,
             latency_ms=4.5 if expected_admin_up else 0.0,
-            bandwidth_mbps=100.0 if expected_admin_up else 0.0,
             expected_admin_up=expected_admin_up,
         )
+        if expected_admin_up:
+            entry.rates.transmit_mbps, entry.rates.receive_mbps = 50.0, 600.0
+        return entry
 
     def _local_entry(self, *, expected_admin_up: bool = True):
-        return node_agent_pb2.KernelInventoryEntry(
+        entry = node_agent_pb2.KernelInventoryEntry(
             node_id="gs-den",
             interface_name="term0",
             link_type=node_agent_pb2.LINK_TYPE_GROUND,
@@ -458,9 +474,13 @@ class TestKernelInventory:
             peer_node_id="sat-P00S00",
             peer_interface_name="gnd0",
             latency_ms=4.5 if expected_admin_up else 0.0,
-            bandwidth_mbps=100.0 if expected_admin_up else 0.0,
             expected_admin_up=expected_admin_up,
         )
+        if expected_admin_up:
+            # The station terminal and the satellite terminal are asymmetric.
+            entry.rates.transmit_mbps, entry.rates.receive_mbps = 600.0, 50.0
+            entry.peer_rates.transmit_mbps, entry.peer_rates.receive_mbps = 50.0, 600.0
+        return entry
 
     def test_request_rejects_isl_entries(self, monkeypatch):
         monkeypatch.setattr(ops_events, "publish", lambda **_kwargs: None)
@@ -502,12 +522,16 @@ class TestKernelInventory:
         assert resp.dirty_kernel is False
 
     def test_kernel_inventory_handler_is_read_only(self, monkeypatch):
-        from node_agent import ground_bridge, kernel_actuator, kernel_verifier, vxlan
+        from node_agent import ground_bridge, kernel_actuator, kernel_verifier, namespace_ops, vxlan
 
         def _mutation_forbidden(*_args, **_kwargs):
             raise AssertionError("KernelInventory must not mutate kernel state")
 
         for module, names in (
+            (
+                namespace_ops,
+                ("apply_transmit_shaping", "apply_receive_shaping", "update_delay"),
+            ),
             (
                 ground_bridge,
                 (
@@ -548,10 +572,22 @@ class TestKernelInventory:
             "verify_host_interface_state",
             lambda ifname, *, admin_up: kernel_verifier.Proof.ok(f"host {ifname} {admin_up}"),
         )
+        proven: list[tuple] = []
         monkeypatch.setattr(
             kernel_verifier,
             "verify_qdisc",
-            lambda pid, ifname, *, delay_ms, rate_mbps=None: kernel_verifier.Proof.ok("qdisc"),
+            lambda pid, ifname, *, delay_ms, transmit_mbps=None: (
+                proven.append(("transmit", pid, ifname, transmit_mbps))
+                or kernel_verifier.Proof.ok("qdisc")
+            ),
+        )
+        monkeypatch.setattr(
+            kernel_verifier,
+            "verify_receive_shaping",
+            lambda host_ifname, *, receive_mbps: (
+                proven.append(("receive", host_ifname, receive_mbps))
+                or kernel_verifier.Proof.ok("receive")
+            ),
         )
         monkeypatch.setattr(
             kernel_verifier,
@@ -565,9 +601,21 @@ class TestKernelInventory:
             fence=FENCE,
         )
 
+        from node_agent import ground_bridge
+
         assert resp.success is True
         assert resp.dirty_kernel is False
         assert resp.entry_results[0].verified is True
+        # Each end is proven against its own terminal.
+        assert sorted(proven, key=repr) == sorted(
+            [
+                ("transmit", 2222, "term0", 600.0),
+                ("transmit", 1234, "gnd0", 50.0),
+                ("receive", ground_bridge._gs_host_veth("gs-den", "term0"), 50.0),
+                ("receive", ground_bridge._sat_host_veth("sat-P00S00", "gnd0"), 600.0),
+            ],
+            key=repr,
+        )
 
     def test_cross_node_expected_up_verifies_exact_vxlan_endpoint(self, monkeypatch):
         from node_agent import handlers, kernel_verifier
@@ -583,7 +631,12 @@ class TestKernelInventory:
         monkeypatch.setattr(
             kernel_verifier,
             "verify_qdisc",
-            lambda pid, ifname, *, delay_ms, rate_mbps=None: kernel_verifier.Proof.ok("qdisc"),
+            lambda pid, ifname, *, delay_ms, transmit_mbps=None: kernel_verifier.Proof.ok("qdisc"),
+        )
+        monkeypatch.setattr(
+            kernel_verifier,
+            "verify_receive_shaping",
+            lambda host_ifname, *, receive_mbps: kernel_verifier.Proof.ok("receive"),
         )
 
         def _verify_vxlan(vni: int, *, local_ip: str, remote_ip: str):
@@ -652,7 +705,12 @@ class TestKernelInventory:
         monkeypatch.setattr(
             kernel_verifier,
             "verify_qdisc",
-            lambda pid, ifname, *, delay_ms, rate_mbps=None: kernel_verifier.Proof.ok("qdisc"),
+            lambda pid, ifname, *, delay_ms, transmit_mbps=None: kernel_verifier.Proof.ok("qdisc"),
+        )
+        monkeypatch.setattr(
+            kernel_verifier,
+            "verify_receive_shaping",
+            lambda host_ifname, *, receive_mbps: kernel_verifier.Proof.ok("receive"),
         )
         monkeypatch.setattr(
             kernel_verifier,
@@ -693,6 +751,7 @@ class TestSetLatency:
                     node_id="sat-P00S00",
                     interface_name="isl0",
                     latency_ms=5.0,
+                    rates=node_agent_pb2.TerminalRates(transmit_mbps=2000.0, receive_mbps=2000.0),
                     link_type=node_agent_pb2.LINK_TYPE_ISL,
                 ),
             ],
@@ -712,6 +771,7 @@ class TestSetLatency:
                     node_id="sat-P00S00",
                     interface_name="isl0",
                     latency_ms=5.0,
+                    rates=node_agent_pb2.TerminalRates(transmit_mbps=2000.0, receive_mbps=2000.0),
                     link_type=node_agent_pb2.LINK_TYPE_ISL,
                 ),
             ],
@@ -725,6 +785,48 @@ class TestSetLatency:
         assert published[0]["details"]["command_type"] == "SetLatency"
 
 
+def test_set_latency_sizes_the_netem_limit_from_the_commanded_transmit_rate(monkeypatch):
+    """SetLatency changes delay and queue limit together and proves both with the rate."""
+    import node_agent.handlers as handlers_mod
+
+    changed = []
+    proven = []
+    monkeypatch.setattr("node_agent.handlers.verify_handle", lambda handle: True)
+    monkeypatch.setattr(
+        handlers_mod.kernel_actuator,
+        "update_terminal_delay",
+        lambda pid, ifname, delay_ms, transmit_mbps: changed.append(
+            (pid, ifname, delay_ms, transmit_mbps)
+        ),
+    )
+
+    def _verify(pid, ifname, *, delay_ms, transmit_mbps):
+        proven.append((pid, ifname, delay_ms, transmit_mbps))
+        return handlers_mod.kernel_verifier.Proof.ok("qdisc verified")
+
+    monkeypatch.setattr(handlers_mod.kernel_verifier, "verify_qdisc", _verify)
+    req = node_agent_pb2.SetLatencyRequest(
+        envelope=_env("SetLatency", "test-limit"),
+        entries=[
+            node_agent_pb2.LatencyEntry(
+                node_id="sat-P00S00",
+                interface_name="gnd0",
+                latency_ms=120.0,
+                rates=node_agent_pb2.TerminalRates(transmit_mbps=50.0, receive_mbps=50.0),
+                link_type=node_agent_pb2.LINK_TYPE_GROUND,
+                gs_id="gs-den",
+                sat_id="sat-P00S00",
+            ),
+        ],
+    )
+
+    resp = handle_set_latency(req, handles=_handles({"sat-P00S00": 1234}), fence=FENCE)
+
+    assert resp.success is True
+    assert changed == [(1234, "gnd0", 120.0, 50.0)]
+    assert proven == [(1234, "gnd0", 120.0, 50.0)]
+
+
 def test_stale_namespace_handle_fails_closed(monkeypatch):
     """A handle whose namespace died since wiring must refuse the mutation."""
     monkeypatch.setattr("node_agent.handlers.verify_handle", lambda handle: False)
@@ -735,6 +837,7 @@ def test_stale_namespace_handle_fails_closed(monkeypatch):
                 node_id="sat-P00S00",
                 interface_name="isl0",
                 latency_ms=5.0,
+                rates=node_agent_pb2.TerminalRates(transmit_mbps=2000.0, receive_mbps=2000.0),
                 link_type=node_agent_pb2.LINK_TYPE_ISL,
             ),
         ],

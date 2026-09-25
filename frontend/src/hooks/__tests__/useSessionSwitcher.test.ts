@@ -40,7 +40,7 @@ describe("useSessionSwitcher", () => {
   it("switchSession sends deploy request", async () => {
     const { result } = renderHook(() => useSessionSwitcher(false));
     const selected = session("session-01");
-    await act(async () => { await result.current.switchSession(selected); });
+    await act(async () => { await result.current.switchSession(selected, true); });
     const switchCall = fetchMock.mock.calls.find(
       (c: unknown[]) => String(c[0]).includes("/sessions/switch"),
     );
@@ -51,13 +51,14 @@ describe("useSessionSwitcher", () => {
       expected_source_revision: digest,
       expected_document_digest: digest,
       expected_dependency_digest: digest,
+      record_history: true,
     });
   });
 
   it("no double switch while already switching", async () => {
     const { result } = renderHook(() => useSessionSwitcher(false));
-    await act(async () => { await result.current.switchSession(session("session-01")); });
-    await act(async () => { await result.current.switchSession(session("session-02")); });
+    await act(async () => { await result.current.switchSession(session("session-01"), false); });
+    await act(async () => { await result.current.switchSession(session("session-02"), false); });
     const switchCalls = fetchMock.mock.calls.filter(
       (c: unknown[]) => String(c[0]).includes("/sessions/switch"),
     );
@@ -70,8 +71,51 @@ describe("useSessionSwitcher", () => {
       .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve([]) })
       .mockRejectedValueOnce(new Error("network error"));
     const { result } = renderHook(() => useSessionSwitcher(false));
-    await act(async () => { await result.current.switchSession(session("session-03")); });
+    let outcome: unknown;
+    await act(async () => {
+      outcome = await result.current.switchSession(session("session-03"), false);
+    });
     expect(result.current.switching).toBe(false);
+    expect(outcome).toEqual({ ok: false, message: "network error" });
+  });
+
+  it("returns VS-API's reason when it refuses a switch", async () => {
+    fetchMock.mockReset();
+    fetchMock
+      .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve([]) })
+      .mockResolvedValueOnce({
+        ok: false,
+        status: 409,
+        json: () => Promise.resolve({ code: "prepared_session.stale", message: "stale digest" }),
+      });
+    const { result } = renderHook(() => useSessionSwitcher(false));
+    let outcome: unknown;
+    await act(async () => {
+      outcome = await result.current.switchSession(session("session-04"), false);
+    });
+    expect(outcome).toEqual({ ok: false, message: "stale digest" });
+    expect(result.current.switching).toBe(false);
+  });
+
+  it("returns ok when VS-API accepts a switch", async () => {
+    const { result } = renderHook(() => useSessionSwitcher(false));
+    let outcome: unknown;
+    await act(async () => {
+      outcome = await result.current.switchSession(session("session-05"), false);
+    });
+    expect(outcome).toEqual({ ok: true });
+  });
+
+  it("says why the session list did not load", async () => {
+    fetchMock.mockReset();
+    fetchMock.mockResolvedValueOnce({
+      ok: false,
+      status: 503,
+      json: () => Promise.resolve({ code: "catalog_read.failed", message: "catalog unreadable" }),
+    });
+    const { result } = renderHook(() => useSessionSwitcher(false));
+    await vi.waitFor(() => expect(result.current.sessionsError).toBe("catalog unreadable"));
+    expect(result.current.sessions).toEqual([]);
   });
 
   it("clears once the websocket transition completes", async () => {
@@ -79,7 +123,7 @@ describe("useSessionSwitcher", () => {
       ({ transitioning }) => useSessionSwitcher(transitioning),
       { initialProps: { transitioning: false } },
     );
-    await act(async () => { await result.current.switchSession(session("session-04")); });
+    await act(async () => { await result.current.switchSession(session("session-04"), false); });
     expect(result.current.switching).toBe(true);
 
     // The websocket lifecycle takes over, then ends — the regression this
@@ -96,7 +140,7 @@ describe("useSessionSwitcher", () => {
       ({ transitioning }) => useSessionSwitcher(transitioning),
       { initialProps: { transitioning: false } },
     );
-    await act(async () => { await result.current.switchSession(session("session-05")); });
+    await act(async () => { await result.current.switchSession(session("session-05"), false); });
     // No transition seen yet — a rerender without one must not clear.
     rerender({ transitioning: false });
     expect(result.current.switching).toBe(true);

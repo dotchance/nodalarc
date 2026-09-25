@@ -1,7 +1,8 @@
 """na-compare — cross-session analysis tool.
 
-PRD Section 9: query and compare SQLite databases from different sessions,
-putting two routing stack runs side by side and seeing where they diverged.
+Queries and compares the history databases of recorded sessions, putting two
+routing stack runs side by side to show where they diverged. Each database
+records one session.
 
 Usage:
   python -m tools.na_compare --sessions session1/nodalarc.db session2/nodalarc.db --report summary
@@ -19,41 +20,46 @@ import sys
 from pathlib import Path
 
 from nodal.logging import configure as _configure_logging
+from nodalarc.db.queries import recorded_session_id
+from nodalarc.db.schema import require_schema_version
 
 log = logging.getLogger(__name__)
 
 REPORT_TYPES = ["summary", "convergence", "link-events", "probe-results"]
 
 
-def _attach_databases(paths: list[str]) -> sqlite3.Connection:
-    """Open an in-memory connection and attach each session DB."""
+def _attach_databases(paths: list[str]) -> tuple[sqlite3.Connection, dict[str, str]]:
+    """Attach each history database; return the connection and each alias's session.
+
+    Every database must be at this release's schema version and record
+    exactly one session.
+    """
     conn = sqlite3.connect(":memory:")
     conn.row_factory = sqlite3.Row
+    sessions: dict[str, str] = {}
     for i, path in enumerate(paths):
         alias = f"s{i + 1}"
         conn.execute(f"ATTACH DATABASE ? AS {alias}", (path,))
-    return conn
+        require_schema_version(conn, alias)
+        sessions[alias] = recorded_session_id(conn, alias)
+    return conn, sessions
 
 
-def _get_metadata(conn: sqlite3.Connection, alias: str) -> dict[str, str]:
-    """Read session_metadata from an attached database."""
-    try:
-        rows = conn.execute(f"SELECT key, value FROM {alias}.session_metadata").fetchall()
-        return {row["key"]: row["value"] for row in rows}
-    except sqlite3.OperationalError:
-        return {}
+def _get_metadata(conn: sqlite3.Connection, alias: str, session_id: str) -> dict[str, str]:
+    rows = conn.execute(
+        f"SELECT key, value FROM {alias}.session_metadata WHERE session_id = ?", (session_id,)
+    ).fetchall()
+    return {row["key"]: row["value"] for row in rows}
 
 
-def _count_table(conn: sqlite3.Connection, alias: str, table: str) -> int:
-    """Count rows in a table, returning 0 if the table doesn't exist."""
-    try:
-        row = conn.execute(f"SELECT COUNT(*) AS cnt FROM {alias}.{table}").fetchone()
-        return row["cnt"]
-    except sqlite3.OperationalError:
-        return 0
+def _count_table(conn: sqlite3.Connection, alias: str, session_id: str, table: str) -> int:
+    row = conn.execute(
+        f"SELECT COUNT(*) AS cnt FROM {alias}.{table} WHERE session_id = ?", (session_id,)
+    ).fetchone()
+    return row["cnt"]
 
 
-def report_summary(conn: sqlite3.Connection, aliases: list[str]) -> str:
+def report_summary(conn: sqlite3.Connection, sessions: dict[str, str]) -> str:
     """Session metadata and event counts side by side."""
     lines = []
     lines.append("=" * 72)
@@ -61,8 +67,12 @@ def report_summary(conn: sqlite3.Connection, aliases: list[str]) -> str:
     lines.append("=" * 72)
     lines.append("")
 
+    aliases = list(sessions)
+    lines.append("".join(f"{a}: {sessions[a]}  " for a in aliases).rstrip())
+    lines.append("")
+
     # Metadata
-    all_meta = {a: _get_metadata(conn, a) for a in aliases}
+    all_meta = {a: _get_metadata(conn, a, sessions[a]) for a in aliases}
     all_keys = sorted({k for m in all_meta.values() for k in m})
 
     if all_keys:
@@ -85,14 +95,14 @@ def report_summary(conn: sqlite3.Connection, aliases: list[str]) -> str:
     for table in tables:
         row = f"{table:<30}"
         for a in aliases:
-            cnt = _count_table(conn, a, table)
+            cnt = _count_table(conn, a, sessions[a], table)
             row += f"  {cnt:<18}"
         lines.append(row)
 
     return "\n".join(lines)
 
 
-def report_convergence(conn: sqlite3.Connection, aliases: list[str]) -> str:
+def report_convergence(conn: sqlite3.Connection, sessions: dict[str, str]) -> str:
     """Compare convergence events across sessions."""
     lines = []
     lines.append("=" * 72)
@@ -100,18 +110,16 @@ def report_convergence(conn: sqlite3.Connection, aliases: list[str]) -> str:
     lines.append("=" * 72)
     lines.append("")
 
+    aliases = list(sessions)
     for a in aliases:
         lines.append(f"--- {a} ---")
-        try:
-            rows = conn.execute(
-                f"""SELECT event_id, sim_time_start, converged, duration_ms,
-                           packets_lost, packets_sent
-                    FROM {a}.convergence_events ORDER BY sim_time_start"""
-            ).fetchall()
-        except sqlite3.OperationalError:
-            lines.append("  (no convergence_events table)")
-            lines.append("")
-            continue
+        rows = conn.execute(
+            f"""SELECT event_id, sim_time_start, converged, duration_ms,
+                       packets_lost, packets_sent
+                FROM {a}.convergence_events WHERE session_id = ?
+                ORDER BY sim_time_start""",
+            (sessions[a],),
+        ).fetchall()
 
         if not rows:
             lines.append("  (no events)")
@@ -133,18 +141,17 @@ def report_convergence(conn: sqlite3.Connection, aliases: list[str]) -> str:
     # Side-by-side comparison if exactly 2 sessions share event_ids
     if len(aliases) == 2:
         a1, a2 = aliases
-        try:
-            rows = conn.execute(
-                f"""SELECT s1.event_id,
-                           s1.duration_ms AS s1_ms, s2.duration_ms AS s2_ms,
-                           s1.packets_lost AS s1_lost, s2.packets_lost AS s2_lost,
-                           s1.converged AS s1_conv, s2.converged AS s2_conv
-                    FROM {a1}.convergence_events s1
-                    JOIN {a2}.convergence_events s2 ON s1.event_id = s2.event_id
-                    ORDER BY s1.event_id"""
-            ).fetchall()
-        except sqlite3.OperationalError:
-            rows = []
+        rows = conn.execute(
+            f"""SELECT s1.event_id,
+                       s1.duration_ms AS s1_ms, s2.duration_ms AS s2_ms,
+                       s1.packets_lost AS s1_lost, s2.packets_lost AS s2_lost,
+                       s1.converged AS s1_conv, s2.converged AS s2_conv
+                FROM {a1}.convergence_events s1
+                JOIN {a2}.convergence_events s2 ON s1.event_id = s2.event_id
+                WHERE s1.session_id = ? AND s2.session_id = ?
+                ORDER BY s1.event_id""",
+            (sessions[a1], sessions[a2]),
+        ).fetchall()
 
         if rows:
             lines.append("--- Side-by-side (matched event_id) ---")
@@ -167,7 +174,7 @@ def report_convergence(conn: sqlite3.Connection, aliases: list[str]) -> str:
     return "\n".join(lines)
 
 
-def report_link_events(conn: sqlite3.Connection, aliases: list[str]) -> str:
+def report_link_events(conn: sqlite3.Connection, sessions: dict[str, str]) -> str:
     """Compare link event timelines across sessions."""
     lines = []
     lines.append("=" * 72)
@@ -175,17 +182,14 @@ def report_link_events(conn: sqlite3.Connection, aliases: list[str]) -> str:
     lines.append("=" * 72)
     lines.append("")
 
+    aliases = list(sessions)
     for a in aliases:
         lines.append(f"--- {a} ---")
-        try:
-            rows = conn.execute(
-                f"""SELECT sim_time, event_type, node_a, node_b, latency_ms, reason
-                    FROM {a}.link_events ORDER BY sim_time"""
-            ).fetchall()
-        except sqlite3.OperationalError:
-            lines.append("  (no link_events table)")
-            lines.append("")
-            continue
+        rows = conn.execute(
+            f"""SELECT sim_time, event_type, node_a, node_b, latency_ms, reason
+                FROM {a}.link_events WHERE session_id = ? ORDER BY sim_time""",
+            (sessions[a],),
+        ).fetchall()
 
         if not rows:
             lines.append("  (no events)")
@@ -210,23 +214,21 @@ def report_link_events(conn: sqlite3.Connection, aliases: list[str]) -> str:
     header = f"  {'event_type':<20}" + "".join(f"  {a:<10}" for a in aliases)
     lines.append(header)
     lines.append("  " + "-" * (len(header) - 2))
-    for etype in ["LinkUp", "LinkDown", "LatencyUpdate"]:
+    for etype in ["LinkActive", "LinkUp", "LinkDown", "LatencyUpdate"]:
         row = f"  {etype:<20}"
         for a in aliases:
-            try:
-                cnt = conn.execute(
-                    f"SELECT COUNT(*) AS cnt FROM {a}.link_events WHERE event_type = ?",
-                    (etype,),
-                ).fetchone()["cnt"]
-            except sqlite3.OperationalError:
-                cnt = 0
+            cnt = conn.execute(
+                f"SELECT COUNT(*) AS cnt FROM {a}.link_events"
+                " WHERE session_id = ? AND event_type = ?",
+                (sessions[a], etype),
+            ).fetchone()["cnt"]
             row += f"  {cnt:<10}"
         lines.append(row)
 
     return "\n".join(lines)
 
 
-def report_probe_results(conn: sqlite3.Connection, aliases: list[str]) -> str:
+def report_probe_results(conn: sqlite3.Connection, sessions: dict[str, str]) -> str:
     """Compare probe results across sessions."""
     lines = []
     lines.append("=" * 72)
@@ -234,26 +236,23 @@ def report_probe_results(conn: sqlite3.Connection, aliases: list[str]) -> str:
     lines.append("=" * 72)
     lines.append("")
 
+    aliases = list(sessions)
     for a in aliases:
         lines.append(f"--- {a} ---")
-        try:
-            rows = conn.execute(
-                f"""SELECT flow_id,
-                           COUNT(*) AS samples,
-                           SUM(packets_sent) AS total_sent,
-                           SUM(packets_received) AS total_recv,
-                           AVG(latency_avg_ms) AS avg_lat,
-                           MIN(latency_min_ms) AS min_lat,
-                           MAX(latency_max_ms) AS max_lat,
-                           AVG(jitter_ms) AS avg_jitter
-                    FROM {a}.probe_results
-                    GROUP BY flow_id
-                    ORDER BY flow_id"""
-            ).fetchall()
-        except sqlite3.OperationalError:
-            lines.append("  (no probe_results table)")
-            lines.append("")
-            continue
+        rows = conn.execute(
+            f"""SELECT flow_id,
+                       COUNT(*) AS samples,
+                       SUM(packets_sent) AS total_sent,
+                       SUM(packets_received) AS total_recv,
+                       AVG(latency_avg_ms) AS avg_lat,
+                       MIN(latency_min_ms) AS min_lat,
+                       MAX(latency_max_ms) AS max_lat,
+                       AVG(jitter_ms) AS avg_jitter
+                FROM {a}.probe_results WHERE session_id = ?
+                GROUP BY flow_id
+                ORDER BY flow_id""",
+            (sessions[a],),
+        ).fetchall()
 
         if not rows:
             lines.append("  (no probe data)")
@@ -287,18 +286,17 @@ def run_compare(session_paths: list[str], report_type: str) -> str:
             log.error(f"Database not found: {path}")
             sys.exit(1)
 
-    conn = _attach_databases(session_paths)
-    aliases = [f"s{i + 1}" for i in range(len(session_paths))]
+    conn, sessions = _attach_databases(session_paths)
 
     match report_type:
         case "summary":
-            return report_summary(conn, aliases)
+            return report_summary(conn, sessions)
         case "convergence":
-            return report_convergence(conn, aliases)
+            return report_convergence(conn, sessions)
         case "link-events":
-            return report_link_events(conn, aliases)
+            return report_link_events(conn, sessions)
         case "probe-results":
-            return report_probe_results(conn, aliases)
+            return report_probe_results(conn, sessions)
         case _:
             log.error(f"Unknown report type: {report_type}")
             sys.exit(1)

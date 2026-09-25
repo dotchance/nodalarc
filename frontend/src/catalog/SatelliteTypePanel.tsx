@@ -32,8 +32,8 @@ export function SatelliteTypePanel({
   if (satelliteTypes.length === 0) {
     return (
       <div className="wizard-error">
-        Satellite primitives did not load. The wizard cannot compose a session
-        without the node catalog from VS-API.
+        VS-API returned no satellite node models. The Wizard cannot compose a session
+        without them.
       </div>
     );
   }

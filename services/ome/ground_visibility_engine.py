@@ -70,23 +70,6 @@ class GroundPassLookahead:
             raise ValueError("GroundPassLookahead requires active_bodies from StepContext")
 
 
-def _require_complete_profile(
-    profile: TerminalPhysicsProfile,
-    *,
-    node_id: str,
-    label: str,
-) -> TerminalPhysicsProfile:
-    if (
-        profile.max_range_km is None
-        or profile.field_of_regard_deg is None
-        or profile.max_tracking_rate_deg_s is None
-        or profile.boresight is None
-        or profile.profile_id is None
-    ):
-        raise ValueError(f"terminal_physics ground visibility has incomplete {label} for {node_id}")
-    return profile
-
-
 def _physical_profile(
     profiles: Mapping[str, TerminalPhysicsProfile] | None,
     node_id: str,
@@ -98,7 +81,7 @@ def _physical_profile(
         return None
     if profiles is None or node_id not in profiles:
         raise ValueError(f"terminal_physics ground visibility is missing {label} for {node_id}")
-    return _require_complete_profile(profiles[node_id], node_id=node_id, label=label)
+    return profiles[node_id]
 
 
 def _profile_options(value: TerminalPhysicsProfileSet) -> tuple[TerminalPhysicsProfile, ...]:
@@ -132,11 +115,7 @@ def _sat_physical_profile(
             f"Satellite ground terminal profiles for {sat_id} do not contain exactly one "
             f"profile for reference_body={reference_body!r}; available target bodies: {available}"
         )
-    return _require_complete_profile(
-        matches[0],
-        node_id=sat_id,
-        label="satellite ground terminal profile",
-    )
+    return matches[0]
 
 
 @dataclass

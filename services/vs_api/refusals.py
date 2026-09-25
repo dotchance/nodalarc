@@ -42,7 +42,10 @@ from nodalarc.runtime_support import UnsupportedFeatureError
 from nodalarc.workload_target import WorkloadTargetError
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
+from vs_api.history_recorder import HistoryUnavailableError
 from vs_api.introspect import IntrospectExecError
+from vs_api.path_tracer import UntraceableNodeError
+from vs_api.session_context import SessionClockPendingError, SessionInactiveError
 from vs_api.session_deployment import (
     SessionDeploymentPreparationError,
     SessionDeploymentPreparationErrorCode,
@@ -172,6 +175,14 @@ def refusal_from_exception(exc: BaseException) -> RefusalOutcome | None:
         return _outcome(503, "workload_target.unavailable", str(exc))
     if isinstance(exc, IntrospectExecError):
         return _outcome(502, "introspect.exec_failed", str(exc))
+    if isinstance(exc, SessionInactiveError):
+        return _outcome(503, "session.inactive", str(exc))
+    if isinstance(exc, SessionClockPendingError):
+        return _outcome(503, "session.clock_pending", str(exc))
+    if isinstance(exc, UntraceableNodeError):
+        return _outcome(400, "trace.untraceable_node", str(exc))
+    if isinstance(exc, HistoryUnavailableError):
+        return _outcome(exc.status_code, exc.code, exc.message)
     return None
 
 
@@ -196,6 +207,10 @@ REFUSAL_FAMILIES: tuple[type[BaseException], ...] = (
     CatalogRepositoryError,
     WorkloadTargetError,
     IntrospectExecError,
+    SessionInactiveError,
+    SessionClockPendingError,
+    UntraceableNodeError,
+    HistoryUnavailableError,
 )
 
 

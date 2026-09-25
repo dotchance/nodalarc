@@ -4,12 +4,12 @@
 
 from __future__ import annotations
 
-import re
 import socket
 import struct
 from dataclasses import dataclass, field
 from typing import Any
 
+from nodalarc.platform_config import get_platform_config
 from nodalarc.runtime_naming import vxlan_host_ifnames
 from nodalarc.vxlan import VXLAN_DST_PORT
 from pyroute2.netlink.rtnl import TC_H_INGRESS
@@ -17,12 +17,22 @@ from pyroute2.netlink.rtnl import TC_H_INGRESS
 from node_agent.kernel_constants import (
     IFF_UP,
     MPLS_INPUT_ENABLED,
+    NETEM_HANDLE,
     NETEM_TICK_TOLERANCE,
-    TBF_RATE32_MAX_BPS,
+    SHAPER_CLASS_HANDLE,
+    SHAPER_DEFAULT_CLASS,
+    SHAPER_ROOT_HANDLE,
     mpls_input_sysctl,
 )
-from node_agent.namespace_runner import run_in_host_namespace, run_in_pod_namespace
-from node_agent.tc_units import delay_ms_to_netem_us, netem_us_to_ticks
+from node_agent.namespace_ops import _in_namespace, in_host_namespace
+from node_agent.tc_units import (
+    HtbClass,
+    delay_ms_to_netem_us,
+    htb_burst_ticks,
+    htb_class,
+    netem_limit_packets,
+    netem_us_to_ticks,
+)
 
 
 @dataclass(frozen=True)
@@ -60,7 +70,7 @@ def verify_pod_interface_exists(pid: int, ifname: str) -> Proof:
     def _op(ipr):
         return _link_rows(ipr, ifname)
 
-    rows = run_in_pod_namespace(pid, _op)
+    rows = _in_namespace(pid, _op)
     if not rows:
         return Proof.fail(f"pod interface {ifname} missing", f"pid={pid}")
     return Proof.ok(f"pod interface {ifname} exists", f"pid={pid}", rows[0]["raw"])
@@ -81,7 +91,7 @@ def verify_mpls_input(pid: int, ifname: str) -> Proof:
             return handle.read().strip()
 
     try:
-        observed = run_in_pod_namespace(pid, _read)
+        observed = _in_namespace(pid, _read)
     except OSError as exc:
         return Proof.fail(
             f"mpls input unreadable on {ifname}",
@@ -109,7 +119,7 @@ def verify_host_interface_state(ifname: str, *, admin_up: bool | None = None) ->
     def _op(ipr):
         return _link_rows(ipr, ifname)
 
-    rows = run_in_host_namespace(_op)
+    rows = in_host_namespace(_op)
     if not rows:
         return Proof.fail(f"host interface {ifname} missing")
     flags = rows[0]["flags"]
@@ -130,7 +140,7 @@ def verify_host_interface_absent(ifname: str) -> Proof:
     def _op(ipr):
         return _link_rows(ipr, ifname)
 
-    rows = run_in_host_namespace(_op)
+    rows = in_host_namespace(_op)
     if rows:
         return Proof.fail(f"host interface {ifname} still exists", rows[0]["raw"])
     return Proof.ok(f"host interface {ifname} absent")
@@ -145,6 +155,8 @@ def _qdisc_rows(ipr, ifname: str) -> list[dict[str, Any]]:
         rows.append(
             {
                 "kind": qdisc.get_attr("TCA_KIND"),
+                "handle": qdisc["handle"],
+                "parent": qdisc["parent"],
                 "options": qdisc.get_attr("TCA_OPTIONS"),
                 "raw": repr(qdisc),
             }
@@ -152,114 +164,216 @@ def _qdisc_rows(ipr, ifname: str) -> list[dict[str, Any]]:
     return rows
 
 
-def _walk_values(obj: Any):
-    if isinstance(obj, dict):
-        for key, value in obj.items():
-            yield str(key), value
-            yield from _walk_values(value)
-    elif isinstance(obj, tuple) and len(obj) == 2 and isinstance(obj[0], str):
-        yield obj[0], obj[1]
-        yield from _walk_values(obj[1])
-    elif isinstance(obj, list | tuple):
-        for item in obj:
-            yield from _walk_values(item)
-
-
-def _extract_delay_ticks(rows: list[dict[str, Any]]) -> int | None:
+def _shaper_netem(rows: list[dict[str, Any]]) -> dict[str, Any] | None:
+    """The netem qdisc the mutator installs: handle 10: under HTB class 1:1."""
     for row in rows:
-        if row["kind"] != "netem":
-            continue
-        for key, value in _walk_values(row["options"]):
-            if "delay" in key.lower() and isinstance(value, int):
-                return value
-        raw = row["raw"]
-        # Last-resort pyroute2 representation fallback. The canonical path is
-        # parsed TCA_OPTIONS above; this keeps proof usable across pyroute2
-        # minor versions that stringify netem options differently.
-
-        m = re.search(r"delay['\"]?:\s*(\d+)", raw)
-        if m:
-            return int(m.group(1))
+        if (
+            row["kind"] == "netem"
+            and row["handle"] == NETEM_HANDLE
+            and row["parent"] == SHAPER_CLASS_HANDLE
+        ):
+            return row
     return None
 
 
-def _extract_rate_bps(rows: list[dict[str, Any]]) -> int | None:
-    for row in rows:
-        if row["kind"] != "tbf":
-            continue
-        for key, value in _walk_values(row["options"]):
-            if key.lower() == "rate" and isinstance(value, int):
-                return value
+def _netem_delay_ticks(netem: dict[str, Any]) -> int | None:
+    """The delay field of netem's TCA_OPTIONS, in tc scheduler ticks.
 
-        m = re.search(r"rate['\"]?:\s*(\d+)", row["raw"])
-        if m:
-            return int(m.group(1))
+    None means the kernel reported no readable delay; the caller fails the proof.
+    """
+    options = netem["options"]
+    if options is None or "delay" not in options:
+        return None
+    delay = options["delay"]
+    return delay if isinstance(delay, int) else None
+
+
+def _shaper_root_default_class(root: dict[str, Any]) -> int | None:
+    """The default class of the HTB shaper root, from its TCA_HTB_INIT options."""
+    options = root["options"]
+    if options is None:
+        return None
+    init = options.get_attr("TCA_HTB_INIT")
+    if init is None or "defcls" not in init:
+        return None
+    return init["defcls"]
+
+
+def _netem_limit(netem: dict[str, Any]) -> int | None:
+    """The limit field of netem's TCA_OPTIONS, in packets."""
+    options = netem["options"]
+    if options is None or "limit" not in options:
+        return None
+    limit = options["limit"]
+    return limit if isinstance(limit, int) else None
+
+
+def _shaper_class(ipr, ifname: str) -> tuple[HtbClass | None, list[str]]:
+    """HTB class 1:1 on an interface as the kernel reports it, with its raw evidence.
+
+    Rates are bytes per second; HTB reports rates of 2**32 bytes per second and
+    above in TCA_HTB_RATE64 and TCA_HTB_CEIL64. Bursts are the scheduler ticks
+    HTB carries them in.
+    """
+    idxs = ipr.link_lookup(ifname=ifname)
+    if not idxs:
+        raise FileNotFoundError(f"Interface {ifname} not found")
+    evidence: list[str] = []
+    observed: HtbClass | None = None
+    for tclass in ipr.get_classes(index=idxs[0]):
+        evidence.append(repr(tclass))
+        if tclass["handle"] != SHAPER_CLASS_HANDLE or tclass.get_attr("TCA_KIND") != "htb":
+            continue
+        options = tclass.get_attr("TCA_OPTIONS")
+        parms = options.get_attr("TCA_HTB_PARMS")
+        rate64 = options.get_attr("TCA_HTB_RATE64")
+        ceil64 = options.get_attr("TCA_HTB_CEIL64")
+        observed = HtbClass(
+            rate=int(rate64) if rate64 else int(parms["rate"]),
+            ceil=int(ceil64) if ceil64 else int(parms["ceil"]),
+            burst=int(parms["buffer"]),
+            cburst=int(parms["cbuffer"]),
+            quantum=int(parms["quantum"]),
+        )
+    return observed, evidence
+
+
+def _prove_rate(
+    rows: list[dict[str, Any]],
+    observed: HtbClass | None,
+    class_evidence: list[str],
+    *,
+    where: str,
+    rate_mbps: float,
+    evidence: list[str],
+) -> Proof | None:
+    """A failed proof when HTB class 1:1 is not the class commanded for
+    ``rate_mbps`` (rate, ceiling, bursts and quantum); else None."""
+    roots = [row for row in rows if row["kind"] == "htb" and row["handle"] == SHAPER_ROOT_HANDLE]
+    if not roots:
+        return Proof.fail(f"missing htb shaper root on {where}", *evidence)
+    default_class = _shaper_root_default_class(roots[0])
+    if default_class != SHAPER_DEFAULT_CLASS:
+        return Proof.fail(
+            f"htb shaper root on {where} does not send traffic to its rate class",
+            f"expected_default_class={SHAPER_DEFAULT_CLASS}",
+            f"actual_default_class={default_class}",
+            *evidence,
+        )
+    if observed is None:
+        return Proof.fail(f"missing htb rate class on {where}", *evidence, *class_evidence)
+    commanded = htb_class(rate_mbps, get_platform_config().veth_interface_mtu_bytes)
+    expected = HtbClass(
+        rate=commanded.rate,
+        ceil=commanded.ceil,
+        burst=htb_burst_ticks(commanded.rate, commanded.burst),
+        cburst=htb_burst_ticks(commanded.ceil, commanded.cburst),
+        quantum=commanded.quantum,
+    )
+    for name in HtbClass._fields:
+        if getattr(observed, name) != getattr(expected, name):
+            return Proof.fail(
+                f"htb {name} mismatch on {where}",
+                f"expected_{name}={getattr(expected, name)}",
+                f"actual_{name}={getattr(observed, name)}",
+                *evidence,
+                *class_evidence,
+            )
     return None
 
 
-def verify_qdisc(
-    pid: int, ifname: str, *, delay_ms: float, rate_mbps: float | None = None
-) -> Proof:
+def verify_qdisc(pid: int, ifname: str, *, delay_ms: float, transmit_mbps: float) -> Proof:
+    """Prove a pod interface's egress: transmit rate, netem delay and netem queue limit."""
+
     def _op(ipr):
-        return _qdisc_rows(ipr, ifname)
+        rows = _qdisc_rows(ipr, ifname)
+        observed, class_evidence = _shaper_class(ipr, ifname)
+        return rows, observed, class_evidence
 
     try:
-        rows = run_in_pod_namespace(pid, _op)
+        rows, observed, class_evidence = _in_namespace(pid, _op)
     except Exception as exc:
         return Proof.fail(f"qdisc proof failed for {ifname}", f"pid={pid}", str(exc))
 
-    kinds = {row["kind"] for row in rows}
     evidence = [f"pid={pid}", f"ifname={ifname}", *(row["raw"] for row in rows)]
-    if "tbf" not in kinds:
-        return Proof.fail(f"missing tbf qdisc on {ifname}", *evidence)
-    if "netem" not in kinds:
+    if not any(row["kind"] == "htb" and row["handle"] == SHAPER_ROOT_HANDLE for row in rows):
+        return Proof.fail(f"missing htb shaper on {ifname}", *evidence)
+    netem = _shaper_netem(rows)
+    if netem is None:
         return Proof.fail(f"missing netem qdisc on {ifname}", *evidence)
 
-    if delay_ms >= 0:
-        # Netem delay is configured in integer microseconds, but the kernel
-        # reports it in tc scheduler ticks. Use the same normalization as the
-        # mutator, then mirror pyroute2's encoder so proof compares the exact
-        # kernel value.
-        expected_delay_us = delay_ms_to_netem_us(delay_ms)
-        expected_delay_ticks = netem_us_to_ticks(expected_delay_us)
-        actual_delay_ticks = _extract_delay_ticks(rows)
-        if actual_delay_ticks is None:
-            return Proof.fail(f"cannot parse netem delay for {ifname}", *evidence)
-        if abs(actual_delay_ticks - expected_delay_ticks) > NETEM_TICK_TOLERANCE:
-            return Proof.fail(
-                f"netem delay mismatch on {ifname}",
-                f"expected_us={expected_delay_us}",
-                f"expected_ticks={expected_delay_ticks}",
-                f"actual_ticks={actual_delay_ticks}",
-                *evidence,
-            )
-    # delay_ms < 0 is the explicit do-not-assert sentinel: the prover has no
-    # commanded netem value for this link (e.g. a Scheduler instance that has
-    # not dispatched it). Shaping presence and rate are still proven; comparing
-    # the delay against an invented expectation would report normal
-    # latency-update cadence as kernel divergence.
+    # Netem delay is configured in integer microseconds, but the kernel
+    # reports it in tc scheduler ticks. Use the same normalization as the
+    # mutator, then mirror pyroute2's encoder so proof compares the exact
+    # kernel value.
+    expected_delay_us = delay_ms_to_netem_us(delay_ms)
+    expected_delay_ticks = netem_us_to_ticks(expected_delay_us)
+    actual_delay_ticks = _netem_delay_ticks(netem)
+    if actual_delay_ticks is None:
+        return Proof.fail(f"cannot read netem delay for {ifname}", *evidence)
+    if abs(actual_delay_ticks - expected_delay_ticks) > NETEM_TICK_TOLERANCE:
+        return Proof.fail(
+            f"netem delay mismatch on {ifname}",
+            f"expected_us={expected_delay_us}",
+            f"expected_ticks={expected_delay_ticks}",
+            f"actual_ticks={actual_delay_ticks}",
+            *evidence,
+        )
+    expected_limit = netem_limit_packets(transmit_mbps, delay_ms)
+    actual_limit = _netem_limit(netem)
+    if actual_limit != expected_limit:
+        return Proof.fail(
+            f"netem limit mismatch on {ifname}",
+            f"expected_packets={expected_limit}",
+            f"actual_packets={actual_limit}",
+            *evidence,
+        )
 
-    if rate_mbps is not None:
-        expected_rate = int(rate_mbps * 1_000_000)
-        if expected_rate > TBF_RATE32_MAX_BPS:
-            expected_rate = TBF_RATE32_MAX_BPS
-        actual_rate = _extract_rate_bps(rows)
-        if actual_rate is None:
-            return Proof.fail(f"cannot parse tbf rate for {ifname}", *evidence)
-        if actual_rate != expected_rate:
-            return Proof.fail(
-                f"tbf rate mismatch on {ifname}",
-                f"expected_bps={expected_rate}",
-                f"actual_bps={actual_rate}",
-                *evidence,
-            )
+    failed = _prove_rate(
+        rows,
+        observed,
+        class_evidence,
+        where=ifname,
+        rate_mbps=transmit_mbps,
+        evidence=evidence,
+    )
+    if failed is not None:
+        return failed
 
-    if delay_ms < 0:
-        return Proof.ok(f"qdisc verified on {ifname}; netem delay not asserted", *evidence)
     return Proof.ok(
         f"qdisc verified on {ifname}",
         f"delay_us={expected_delay_us}",
         f"delay_ticks={actual_delay_ticks}",
+        *evidence,
+    )
+
+
+def verify_receive_shaping(host_ifname: str, *, receive_mbps: float) -> Proof:
+    """Prove a pod interface's ingress rate on the host-side veth that feeds it."""
+
+    def _op(ipr):
+        rows = _qdisc_rows(ipr, host_ifname)
+        observed, class_evidence = _shaper_class(ipr, host_ifname)
+        return rows, observed, class_evidence
+
+    try:
+        rows, observed, class_evidence = in_host_namespace(_op)
+    except Exception as exc:
+        return Proof.fail(f"receive shaping proof failed for {host_ifname}", str(exc))
+    evidence = [f"host_ifname={host_ifname}", *(row["raw"] for row in rows)]
+    failed = _prove_rate(
+        rows,
+        observed,
+        class_evidence,
+        where=f"host/{host_ifname}",
+        rate_mbps=receive_mbps,
+        evidence=evidence,
+    )
+    if failed is not None:
+        return failed
+    return Proof.ok(
+        f"receive shaping verified on host/{host_ifname}",
+        f"receive_mbps={receive_mbps}",
         *evidence,
     )
 
@@ -328,7 +442,7 @@ def pod_veth_end(pid: int, ifname: str) -> PodVethEnd | None:
             mtu=link.get_attr("IFLA_MTU"),
         )
 
-    return run_in_pod_namespace(pid, _read)
+    return _in_namespace(pid, _read)
 
 
 def prove_vxlan_device(ipr, vxlan_if: str, *, vni: int, local_ip: str, remote_ip: str) -> Proof:
@@ -698,7 +812,7 @@ def prove_mirred_redirect(ipr, src_ifname: str, dst_ifname: str) -> Proof:
 
 def verify_vxlan(vni: int, *, local_ip: str, remote_ip: str) -> Proof:
     names = vxlan_host_ifnames(vni)
-    return run_in_host_namespace(
+    return in_host_namespace(
         lambda ipr: prove_vxlan_device(
             ipr, names.tunnel, vni=vni, local_ip=local_ip, remote_ip=remote_ip
         )
@@ -719,4 +833,4 @@ def verify_vxlan_absent(vni: int) -> Proof:
 
 
 def verify_mirred(src_ifname: str, dst_ifname: str) -> Proof:
-    return run_in_host_namespace(lambda ipr: prove_mirred_redirect(ipr, src_ifname, dst_ifname))
+    return in_host_namespace(lambda ipr: prove_mirred_redirect(ipr, src_ifname, dst_ifname))

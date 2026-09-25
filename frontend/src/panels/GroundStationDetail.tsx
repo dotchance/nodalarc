@@ -3,7 +3,6 @@
 /** Ground station detail panel — role, area, terminals, uplinks, flows. */
 
 import { useEffect, useState } from "react";
-import { REST_URL } from "../config";
 import type { NodeState, StateSnapshot, Selection } from "../types";
 import { useDecisionExplanation } from "../explain/useDecisionExplanation";
 import { scopeLocalName } from "./SatelliteDetail";
@@ -14,6 +13,7 @@ import { CandidateRow } from "../explain/components/CandidateRow";
 import { GroundStationCard } from "../explain/components/GroundStationCard";
 import { PairInspectorView } from "../explain/components/PairInspectorView";
 import { selectionTypeForNodeId } from "../networkIdentity";
+import { RoutingRows } from "./RoutingRows";
 import { Icon } from "../ui/icons/Icon";
 import { TaxonomyChip } from "../ui/Badge";
 import { REGIME_TINT } from "../taxonomy/regime";
@@ -30,7 +30,6 @@ const _ordered = (a: string, b: string): string => [a, b].sort().join("|");
 const _withoutPrefixLen = (address: string): string => address.split("/")[0] ?? address;
 
 export function GroundStationDetail({ node, snapshot, onSelect }: GroundStationDetailProps) {
-  const [tracingFlow, setTracingFlow] = useState<string | null>(null);
   const [inspectedSat, setInspectedSat] = useState<string | null>(null);
   const [decisions, setDecisions] = useState<GroundDecisionsSnapshot | null>(null);
   const [candidateError, setCandidateError] = useState<string | null>(null);
@@ -100,10 +99,6 @@ export function GroundStationDetail({ node, snapshot, onSelect }: GroundStationD
     )
     .sort((a, b) => a.nodeId.localeCompare(b.nodeId));
 
-  const flows = snapshot.active_flows.filter(
-    (f) => f.src_node === node.node_id || f.dst_node === node.node_id,
-  );
-
   // Count ground link terminals (active links = terminals in use)
   const terminalCount = connectedLinks.length;
 
@@ -111,20 +106,6 @@ export function GroundStationDetail({ node, snapshot, onSelect }: GroundStationD
     const type = selectionTypeForNodeId(peerId, snapshot.nodes);
     if (type === null) return;
     onSelect({ type, id: peerId });
-  };
-
-  const traceFlow = async (srcNode: string, dstNode: string) => {
-    setTracingFlow(`${srcNode}:${dstNode}`);
-    try {
-      await fetch(`${REST_URL}/api/v1/trace`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ src_node: srcNode, dst_node: dstNode }),
-      });
-    } catch {
-      // trace errors are non-fatal
-    }
-    setTracingFlow(null);
   };
 
   if (inspectedSat) {
@@ -223,15 +204,7 @@ export function GroundStationDetail({ node, snapshot, onSelect }: GroundStationD
           <span className="detail-value">Unavailable: {candidateError}</span>
         </div>
       ) : null}
-      <div className="detail-row">
-        <span className="detail-label">Role</span>
-        <span className="detail-value">Gateway</span>
-      </div>
-
-      <div className="detail-row">
-        <span className="detail-label">Area</span>
-        <span className="detail-value">ground</span>
-      </div>
+      <RoutingRows node={node} />
       {node.prefix && (
         <div className="detail-row">
           <span className="detail-label">Prefix</span>
@@ -313,34 +286,6 @@ export function GroundStationDetail({ node, snapshot, onSelect }: GroundStationD
           </div>
         );
       })}
-
-      {flows.length > 0 && (
-        <>
-          <h3>Flows</h3>
-          {flows.map((f) => {
-            // Find traced path for this flow
-            const trace = snapshot.traced_paths.find((t) => t.flow_id === f.flow_id);
-            const isTracing = tracingFlow === `${f.src_node}:${f.dst_node}`;
-            return (
-              <div className="detail-row" key={f.flow_id}>
-                <span className="detail-label">{f.flow_id}</span>
-                <span className="detail-value">
-                  {f.src_node} → {f.dst_node}
-                  {trace ? ` (${trace.hops.length} hops${trace.rtt_ms != null ? `, ${trace.rtt_ms.toFixed(1)}ms` : ""})` : ""}
-                  <button
-                    className="trace-btn"
-                    onClick={() => traceFlow(f.src_node, f.dst_node)}
-                    disabled={isTracing}
-                    title="Trace this flow path"
-                  >
-                    {isTracing ? "..." : "Trace"}
-                  </button>
-                </span>
-              </div>
-            );
-          })}
-        </>
-      )}
 
       <h3>Position</h3>
       <div className="detail-row">

@@ -15,6 +15,12 @@ from typing import Any, Literal
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+# The largest MTU any emulated interface may have. Hosts run a 9100-byte
+# MTU so that a 9000-byte emulated packet crosses hosts whole inside VXLAN.
+MAX_EMULATED_MTU_BYTES = 9000
+# IPv6 requires every link to carry 1280 bytes (RFC 8200).
+IPV6_MINIMUM_MTU_BYTES = 1280
+
 
 class PlatformConfig(BaseModel):
     """Frozen Pydantic model for platform configuration.
@@ -34,16 +40,16 @@ class PlatformConfig(BaseModel):
 
     # HTTP/WebSocket service ports
     vs_api_http_port: int
-    nodalpath_console_http_port: int
 
     # Container-internal service ports
-    nodalpath_fwd_grpc_port: int
     probe_daemon_http_api_port: int
     probe_daemon_udp_data_port: int
 
     session_data_root: str
 
-    veth_interface_mtu_bytes: int
+    # The MTU of every emulated interface, whether its link stays on one
+    # host or crosses hosts; the hosts carry the VXLAN overhead.
+    veth_interface_mtu_bytes: int = Field(ge=IPV6_MINIMUM_MTU_BYTES, le=MAX_EMULATED_MTU_BYTES)
 
     vs_api_visual_beam_falloff_exponent: float = Field(gt=0)
     vs_api_actuation_expected_latency_ms: float = Field(gt=0)
@@ -55,21 +61,21 @@ class PlatformConfig(BaseModel):
     vs_api_playback_max_requests_per_minute: int
     vs_api_session_switch_max_requests_per_minute: int
     vs_api_introspect_max_response_bytes: int
+    # Bytes every history recording together may occupy; past it the oldest
+    # recorded data goes first
+    vs_api_history_max_bytes: int = Field(gt=0)
+    # History writes that may wait for the writer; one more stops the recording
+    vs_api_history_queue_max_writes: int = Field(gt=0)
 
-    # Continuous trace intervals
-    trace_interval_seconds: float
-    trace_interval_fast_seconds: float
-    trace_fast_window_seconds: float
+    # Session pods one Kubernetes node is taken to hold, for the readiness
+    # capacity warning
+    session_pods_per_node: int = Field(gt=0)
 
-    # Service host resolution — for inter-service HTTP calls (not NATS).
-    # Keys: service names (vs-api, nodalpath, etc.). Values: hostnames.
-    # Falls back to default_service_host if service not in dict.
-    default_service_host: str
-    service_hosts: dict[str, str] = {}
-
-    def service_host(self, service: str) -> str:
-        """Resolve hostname for a named service, falling back to default."""
-        return self.service_hosts.get(service, self.default_service_host)
+    # Continuous trace interval, the retrace interval while a direction does
+    # not reach its destination, and how long a continuous trace runs
+    trace_interval_seconds: float = Field(gt=0)
+    trace_unreached_retrace_seconds: float = Field(gt=0)
+    trace_max_seconds: float = Field(gt=0)
 
     @model_validator(mode="after")
     def _validate_actuation_bounds(self) -> PlatformConfig:
@@ -93,7 +99,7 @@ def _deterministic_node(node_id: str, available_nodes: list[str]) -> str:
 
 def compute_pod_placement(
     placement: Any,
-    node_vars: dict[str, dict],
+    pod_inventory: dict[str, dict],
     available_nodes: list[str],
 ) -> dict[str, str]:
     """Compute Kubernetes node placement from the platform-owned policy."""
@@ -112,25 +118,25 @@ def compute_pod_placement(
 
     if policy == "allOnOne":
         target = available_nodes[0]
-        return dict.fromkeys(node_vars, target)
+        return dict.fromkeys(pod_inventory, target)
 
     if policy == "planePerNode":
         result: dict[str, str] = {}
-        for node_id, variables in node_vars.items():
-            if variables.get("node_type") == "ground_station":
+        for node_id, facts in pod_inventory.items():
+            if facts.get("node_type") == "ground_station":
                 result[node_id] = _deterministic_node(node_id, available_nodes)
             else:
-                plane = variables.get("plane", 0)
+                plane = facts.get("plane", 0)
                 result[node_id] = available_nodes[plane % len(available_nodes)]
         return result
 
     if policy == "planeGroupPerNode":
         result = {}
-        for node_id, variables in node_vars.items():
-            if variables.get("node_type") == "ground_station":
+        for node_id, facts in pod_inventory.items():
+            if facts.get("node_type") == "ground_station":
                 result[node_id] = _deterministic_node(node_id, available_nodes)
             else:
-                plane = variables.get("plane", 0)
+                plane = facts.get("plane", 0)
                 group = plane // planes_per_group
                 result[node_id] = available_nodes[group % len(available_nodes)]
         return result

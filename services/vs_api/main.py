@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import base64
 import contextlib
 import json
 import logging
@@ -29,7 +30,6 @@ from pathlib import Path
 from typing import Any, Literal
 
 import asyncssh
-import httpx
 import nats
 from fastapi import Depends, FastAPI, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
@@ -60,19 +60,19 @@ from nodalarc.cr_runtime_config import (
     CR_NAME,
     CR_PLURAL,
     CR_VERSION,
+    SOURCE_ID_ANNOTATION,
     ConstellationSpecSpec,
     ConstellationSpecStatus,
     cr_status_observes_current_generation,
     load_cr_runtime_config,
 )
 from nodalarc.db.queries import (
-    insert_snapshot,
-    query_convergence_events,
+    count_link_events,
+    get_metadata,
     query_link_events,
     query_nearest_snapshot,
-    query_probe_results,
 )
-from nodalarc.db.schema import create_tables
+from nodalarc.db.retention import RETAINED_FROM_KEY
 from nodalarc.kubernetes_runtime_config import (
     KubernetesRuntimeConfigError,
     KubernetesRuntimeConfigErrorCode,
@@ -101,10 +101,9 @@ from nodalarc.models.session_sources import (
     CatalogSessionYamlUploadRequest,
 )
 from nodalarc.models.vs_api import (
-    LinkState,
-    NetworkHealth,
-    NodeState,
-    RecentEvent,
+    LINK_HISTORY_PAGE_MAX,
+    LinkHistoryEvent,
+    LinkHistoryPage,
     StateSnapshot,
     TracedPath,
 )
@@ -126,9 +125,12 @@ from nodalarc.resolve_session import (
     SessionResolution,
 )
 from nodalarc.runtime_config import ResolvedRuntimeConfig, RuntimeConfigError
+from nodalarc.session_nodes import available_session_nodes
+from pydantic import TypeAdapter
 from urllib3.exceptions import HTTPError as TransportHTTPError
 from yaml import YAMLError
 
+from vs_api import k8s
 from vs_api.catalog_context import CatalogContext, get_catalog_context
 from vs_api.catalog_session_service import CatalogSessionService
 from vs_api.catalog_upload_lifecycle import (
@@ -141,6 +143,7 @@ from vs_api.catalog_upload_store import (
     KubernetesCatalogUploadStore,
 )
 from vs_api.continuous_tracer import ContinuousTracer
+from vs_api.history_recorder import HistoryRecorder, HistoryUnavailableError
 from vs_api.introspect import VTYSH_COMMANDS, IntrospectRequest, IntrospectResult, run_vtysh
 from vs_api.ops_log import (
     OPS_LOG_TOKEN,
@@ -148,14 +151,16 @@ from vs_api.ops_log import (
     operator_visible_ops_events,
     stamp_ops_event,
 )
+from vs_api.path_tracer import PathTracer
 from vs_api.refusals import (
+    REFUSAL_FAMILIES,
     install_refusal_handlers,
     internal_error_refusal,
     refusal_from_exception,
     refusal_response,
 )
 from vs_api.resolved_runtime_views import tracer_node_registry
-from vs_api.session_context import SessionContext, _link_key
+from vs_api.session_context import SessionContext, SessionInactiveError
 from vs_api.session_manager import SessionManager
 from vs_api.terminal import TerminalManager
 from vs_api.transition_operations import (
@@ -787,15 +792,19 @@ def _carry_unsent_increments(pending: dict | None, snapshot: dict) -> dict:
 def _build_snapshot(*, ops_after: int = 0) -> dict | None:
     """Build a StateSnapshot dict from the active SessionContext.
 
-    Returns None if no active context (mid-transition or no session).
-    Takes a local reference to _active_context to prevent mixed-state
-    reads if the context is swapped mid-tick.
+    Returns None if no active context (mid-transition or no session), or
+    before the session clock has reported its sim time. Takes a local
+    reference to _active_context to prevent mixed-state reads if the context
+    is swapped mid-tick.
     """
     ctx = _active_context
     if ctx is None:
         return None
 
     with ctx.state_lock:
+        if ctx.sim_time is None:
+            return None
+        sim_time = datetime.fromisoformat(ctx.sim_time)
         now = datetime.now(UTC)
         links = list(ctx.links.values())
 
@@ -823,15 +832,13 @@ def _build_snapshot(*, ops_after: int = 0) -> dict | None:
         health = ctx.network_health
 
         _traced: list[TracedPath] = []
-        if ctx.continuous_tracer is not None and ctx.continuous_tracer.active:
+        if ctx.continuous_tracer is not None:
             tp = ctx.continuous_tracer.traced_path
             if tp is not None:
                 _traced.append(tp)
 
         snapshot = StateSnapshot(
-            sim_time=datetime.fromisoformat(ctx.sim_time)
-            if isinstance(ctx.sim_time, str)
-            else ctx.sim_time,
+            sim_time=sim_time,
             # Engine-stamped wall clock. During play this is the same
             # instant as sim_time (stamped together on each ClockTick);
             # during pause it advances via heartbeats while sim freezes —
@@ -848,7 +855,6 @@ def _build_snapshot(*, ops_after: int = 0) -> dict | None:
             links=links,
             kernel_actual_pairs=[[a, b] for (a, b) in sorted(ctx.actual_kernel_pairs())],
             traced_paths=_traced,
-            active_flows=[],
             recent_events=recent,
             network_health=health,
             routing_stack=ctx.routing_stack,
@@ -863,6 +869,7 @@ def _build_snapshot(*, ops_after: int = 0) -> dict | None:
             actuation_notices=list(ctx.actuation_notices_by_key.values()),
             ome_lifecycle_notices=list(ctx.ome_lifecycle_notices_by_key.values()),
             actuation_health=ctx.build_actuation_health(),
+            history_recording=ctx.history_recording_state(),
         )
         result = json.loads(snapshot.model_dump_json())
         # System + session OpsEvents merged for the log panel — shipped
@@ -896,6 +903,8 @@ class CRSessionIdentity:
     runtime_config: ResolvedRuntimeConfig
     source_id: str
     generation: int
+    # The deploy request's choice to keep this session run's history database.
+    record_history: bool
 
 
 def _as_positive_int(value: Any) -> int | None:
@@ -904,6 +913,35 @@ def _as_positive_int(value: Any) -> int | None:
     except TypeError, ValueError:
         return None
     return parsed if parsed > 0 else None
+
+
+class CRSessionRefusal(ValueError):
+    """The ConstellationSpec's content cannot become the active session.
+
+    The message names the CR field at fault and nothing else.
+    """
+
+
+def _report_cr_bootstrap_failure(exc: Exception, session_manager: SessionManager | None) -> None:
+    """Report one failed read of the runtime session CR during bootstrap.
+
+    A transport failure is retried by the next poll. Any other failure means
+    the CR exists and cannot become the active session: it stays a visible
+    session error, with the refusal's own message when it is a typed refusal,
+    until the CR changes.
+    """
+    if _poll_failure_is_transport(exc):
+        log.warning("Reading the runtime session CR failed on transport; retrying: %s", exc)
+        return
+    log.error("The runtime session CR cannot be activated: %s", exc, exc_info=exc)
+    if session_manager is None:
+        return
+    session_manager._status = "error"
+    session_manager.status_detail = (
+        str(exc)
+        if isinstance(exc, (*REFUSAL_FAMILIES, CRSessionRefusal))
+        else "The runtime session could not be activated; see the VS-API log"
+    )
 
 
 def _load_cr_runtime_session(
@@ -915,9 +953,7 @@ def _load_cr_runtime_session(
 ) -> ResolvedRuntimeConfig:
     ConstellationSpecSpec.from_cr(spec)
     if core_v1 is None:
-        import kubernetes.client
-
-        core_v1 = kubernetes.client.CoreV1Api()
+        core_v1 = k8s.core_v1()
     return load_cr_runtime_config(
         spec,
         core_v1=core_v1,
@@ -947,7 +983,7 @@ def _cr_ready_identity(cr: dict[str, Any]) -> tuple[int, str] | None:
     if status.ready_pod_count() is None:
         return None
     if not status.session_run_id:
-        raise ValueError("Ready ConstellationSpec is missing status.sessionRunId")
+        raise CRSessionRefusal("Ready ConstellationSpec is missing status.sessionRunId")
     return generation, sanitize_session_id(status.session_run_id)
 
 
@@ -961,7 +997,6 @@ def _extract_cr_session(
     *,
     require_ready: bool,
     core_v1: Any | None = None,
-    namespace: str | None = None,
 ) -> CRSessionIdentity | None:
     """Return the CR session only when status carries current runtime identity.
 
@@ -986,9 +1021,12 @@ def _extract_cr_session(
             return None
         session_run_id = sanitize_session_id(status.session_run_id)
 
-    session_yaml = ConstellationSpecSpec.from_cr(spec).session_yaml
+    cr_spec = ConstellationSpecSpec.from_cr(spec)
+    session_yaml = cr_spec.session_yaml
 
-    runtime_namespace = str(metadata.get("namespace") or namespace or "nodalarc")
+    runtime_namespace = metadata.get("namespace")
+    if not isinstance(runtime_namespace, str) or not runtime_namespace:
+        raise CRSessionRefusal("ConstellationSpec metadata has no namespace")
     runtime_config = _load_cr_runtime_session(
         spec,
         namespace=runtime_namespace,
@@ -1006,23 +1044,23 @@ def _extract_cr_session(
         build=_runtime_build_identity(),
     )
     if mismatches:
-        raise ValueError(
+        raise CRSessionRefusal(
             "ConstellationSpec status does not match verified runtime configuration: "
             + ", ".join(f"status.{key}" for key in mismatches)
         )
     status_name = status.session_name or ""
     if require_ready and not status_name:
-        raise ValueError("Ready ConstellationSpec is missing status.sessionName")
+        raise CRSessionRefusal("Ready ConstellationSpec is missing status.sessionName")
     if status_name and status_name != session.session.name:
-        raise ValueError(
+        raise CRSessionRefusal(
             "ConstellationSpec status.sessionName does not match spec.session.name "
             f"({status_name!r} != {session.session.name!r})"
         )
-    annotations = metadata.get("annotations") or {}
-    source_id = str(
-        annotations.get("nodalarc.io/source-id")
-        or f"constellationspec:{runtime_namespace}/{CR_NAME}"
-    )
+    source_id = (metadata.get("annotations") or {}).get(SOURCE_ID_ANNOTATION)
+    if not isinstance(source_id, str) or not source_id:
+        raise CRSessionRefusal(
+            f"ConstellationSpec is missing the {SOURCE_ID_ANNOTATION} annotation"
+        )
     return CRSessionIdentity(
         session_id=session_run_id,
         session_name=session.session.name,
@@ -1032,7 +1070,20 @@ def _extract_cr_session(
         runtime_config=runtime_config,
         source_id=source_id,
         generation=generation,
+        record_history=cr_spec.record_history,
     )
+
+
+def _history_path(identity: CRSessionIdentity) -> Path | None:
+    """The history file of a recorded session run; None for a session not recorded.
+
+    VS-API owns every history file: one per recorded run, named by its run id,
+    under the platform's session data root.
+    """
+    if not identity.record_history:
+        return None
+    root = Path(get_platform_config().session_data_root)
+    return root / "history" / f"{identity.session_id}.db"
 
 
 def _extract_current_cr_session(cr: dict[str, Any]) -> CRSessionIdentity | None:
@@ -1087,14 +1138,10 @@ async def _reconcile_interrupted_transition(cr: dict[str, Any] | None) -> None:
         detail = reconciliation.detail
         if state is TransitionOperationState.SUCCEEDED:
             try:
-                runtime_namespace = str(
-                    (cr or {}).get("metadata", {}).get("namespace") or "nodalarc"
-                )
                 verified = await asyncio.to_thread(
                     _extract_cr_session,
                     cr,
                     require_ready=True,
-                    namespace=runtime_namespace,
                 )
                 if verified is None:
                     raise ValueError("Ready runtime identity is not generation-consistent")
@@ -1200,6 +1247,7 @@ async def _activate_session_context_from_cr(
         ready.session_id,
         resolution=ready.resolution,
         source_id=ready.source_id,
+        history_path=_history_path(ready),
     )
     await new_ctx.start(_nats_connection, mode="recovery")
 
@@ -1331,7 +1379,6 @@ async def _monitor_cr_session(api: Any, core_v1_api: Any, namespace: str) -> Non
                 cr,
                 require_ready=True,
                 core_v1=core_v1_api,
-                namespace=namespace,
             )
             if ready is None:
                 continue
@@ -1516,18 +1563,8 @@ async def _nats_subscriber() -> None:
     # Bootstrap from the live ConstellationSpec. Its root YAML and catalogUpload
     # selection identify the ordinary files that every runtime consumer verifies
     # and resolves through the shared configuration path.
-    import kubernetes.client as _k8s
-    import kubernetes.config as _k8s_config
-
-    def _load_k8s_config() -> None:
-        try:
-            _k8s_config.load_incluster_config()
-        except _k8s_config.ConfigException:
-            _k8s_config.load_kube_config()
-
-    await asyncio.to_thread(_load_k8s_config)
-    _cr_api = _k8s.CustomObjectsApi()
-    _cr_core_api = _k8s.CoreV1Api()
+    _cr_api = await asyncio.to_thread(k8s.custom_objects)
+    _cr_core_api = await asyncio.to_thread(k8s.core_v1)
     _cr_ns = get_platform_config().kubernetes_namespace
 
     _cr_session: CRSessionIdentity | None = None
@@ -1572,6 +1609,7 @@ async def _nats_subscriber() -> None:
             _cr_session = await asyncio.to_thread(_candidate_from_cr, _cr)
         except Exception as exc:
             if getattr(exc, "status", None) == 404:
+                # No ConstellationSpec yet: the session has not been deployed.
                 await _reconcile_interrupted_transition(None)
                 with contextlib.suppress(Exception):
                     await _reconcile_catalog_upload_lifecycle(
@@ -1579,7 +1617,8 @@ async def _nats_subscriber() -> None:
                         core_v1_api=_cr_core_api,
                         namespace=_cr_ns,
                     )
-            log.debug("Waiting for runtime session identity from CR: %s", exc)
+            else:
+                _report_cr_bootstrap_failure(exc, _session_manager)
         if _cr_session is None:
             log.info("No active Ready or wiring runtime session CR — waiting for session to deploy")
             await asyncio.sleep(5)
@@ -1619,6 +1658,7 @@ async def _nats_subscriber() -> None:
             session_id,
             resolution=_cr_session.resolution,
             source_id=_cr_session.source_id,
+            history_path=_history_path(_cr_session),
         )
         await ctx.start(nc, mode="recovery")
         _active_context = ctx
@@ -1694,12 +1734,25 @@ async def lifespan(app: FastAPI):
 
     sub_task.add_done_callback(_on_subscriber_done)
 
-    broadcast_task = asyncio.create_task(_ws_broadcaster())
+    recorder_task = asyncio.create_task(
+        _history_snapshot_recorder(), name="history-snapshot-recorder"
+    )
+
+    def _on_recorder_done(task: asyncio.Task) -> None:
+        if not task.cancelled() and task.exception() is not None:
+            log.error(
+                "History snapshot recorder DIED; no further snapshots are recorded until "
+                "restart: %s",
+                task.exception(),
+                exc_info=task.exception(),
+            )
+
+    recorder_task.add_done_callback(_on_recorder_done)
 
     yield
 
     sub_task.cancel()
-    broadcast_task.cancel()
+    recorder_task.cancel()
     watchdog_task.cancel()
     frame_builder_task.cancel()
 
@@ -1890,9 +1943,7 @@ def get_auth_token() -> dict:
 @app.get("/api/v1/ops/health", dependencies=[Depends(_require_api_key)])
 def get_ops_health() -> dict:
     """Return latest Scheduler actuation health derived from typed OpsEvents."""
-    ctx = _active_context
-    if ctx is None:
-        return {"session_id": "", "wiring_generation": "", "scheduler_instances": []}
+    ctx = _require_active_context()
     with ctx.state_lock:
         return ctx.build_actuation_health()
 
@@ -1900,10 +1951,8 @@ def get_ops_health() -> dict:
 @app.post("/api/v1/ops/repair", dependencies=[Depends(_require_api_key)])
 async def request_operator_repair(body: dict) -> dict:
     """Explicit operator-triggered GS repair routed to the reporting Scheduler."""
-    ctx = _active_context
+    ctx = _require_active_context()
     nc = _nats_connection
-    if ctx is None:
-        return JSONResponse(status_code=503, content={"error": "No active session"})
     if nc is None:
         return JSONResponse(status_code=503, content={"error": "NATS not connected"})
     gs_id = body.get("gs_id", "")
@@ -1968,87 +2017,12 @@ async def get_ops_events(
     return events[-limit:]
 
 
-def _restore_state_from_db(db_path: str) -> bool:
-    """Load the most recent snapshot from SQLite into the active context.
-
-    Returns True if state was restored, False otherwise.
-    """
+def _require_active_context(detail: str = "") -> SessionContext:
+    """The active session context; a request without one is refused."""
     ctx = _active_context
     if ctx is None:
-        return False
-    if not db_path or not Path(db_path).exists():
-        return False
-
-    try:
-        conn = sqlite3.connect(db_path)
-        row = conn.execute(
-            "SELECT snapshot_json FROM snapshots ORDER BY rowid DESC LIMIT 1"
-        ).fetchone()
-        conn.close()
-
-        if not row:
-            log.info("No snapshots in DB to restore from")
-            return False
-
-        snapshot = json.loads(row[0])
-
-        with ctx.state_lock:
-            for node in snapshot.get("nodes", []):
-                node_id = node.get("node_id")
-                if not node_id:
-                    log.error("Corrupt DB snapshot — node missing node_id: %s", node)
-                    raise ValueError("DB snapshot node missing node_id")
-                ctx.nodes[node_id] = NodeState(**node)
-
-            for link in snapshot.get("links", []):
-                na = link.get("node_a")
-                nb = link.get("node_b")
-                if not na or not nb:
-                    log.error("Corrupt DB snapshot — link missing node_a/node_b: %s", link)
-                    raise ValueError("DB snapshot link missing node_a or node_b")
-                key = _link_key(na, nb)
-                ctx.links[key] = LinkState(**link)
-
-            ctx.recent_events.clear()
-            for e in snapshot.get("recent_events", []):
-                sim_time_raw = e.get("sim_time")
-                if sim_time_raw is None:
-                    log.error("Corrupt DB snapshot — event missing sim_time: %s", e)
-                    raise ValueError("DB snapshot event missing sim_time")
-                sim_time_dt = (
-                    datetime.fromisoformat(sim_time_raw)
-                    if isinstance(sim_time_raw, str)
-                    else sim_time_raw
-                )
-                ctx.recent_events.append(
-                    RecentEvent(
-                        sim_time=sim_time_dt,
-                        node_id=e["node_id"],
-                        event_type=e["event_type"],
-                        summary=e["summary"],
-                    )
-                )
-
-            if "network_health" in snapshot:
-                nh = snapshot["network_health"]
-                ctx.network_health = NetworkHealth(
-                    status=nh["status"],
-                    converging_since_ms=nh.get("converging_since_ms"),
-                    unreachable_flows=nh["unreachable_flows"],
-                    last_convergence_ms=nh.get("last_convergence_ms"),
-                )
-
-            if "sim_time" in snapshot:
-                ctx.sim_time = snapshot["sim_time"]
-
-        node_count = len(snapshot.get("nodes", []))
-        link_count = len(snapshot.get("links", []))
-        log.info(f"Restored state from DB: {node_count} nodes, {link_count} links")
-        return True
-
-    except Exception as exc:
-        log.warning(f"Failed to restore state from DB: {exc}")
-        return False
+        raise SessionInactiveError(detail)
+    return ctx
 
 
 def _public_no_active_session_detail(status: str) -> str:
@@ -2064,32 +2038,18 @@ def _public_no_active_session_detail(status: str) -> str:
     return ""
 
 
-async def _ws_broadcaster() -> None:
-    """Record StateSnapshot to SQLite every ~10 seconds for historical playback."""
+async def _history_snapshot_recorder() -> None:
+    """Record a full state snapshot about every ten seconds for a recorded session."""
     tick = 0
     while True:
         await asyncio.sleep(0.1)
         tick += 1
         ctx = _active_context
-        if tick % 100 == 0 and ctx and ctx.db_path:
-            try:
-                snapshot = _build_snapshot()
-                if snapshot is None:
-                    continue
-
-                def _store(snap=snapshot, db_path=ctx.db_path):
-                    conn = sqlite3.connect(db_path)
-                    insert_snapshot(
-                        conn,
-                        sim_time=snap["sim_time"],
-                        wall_time=snap["wall_time"],
-                        snapshot_json=json.dumps(snap),
-                    )
-                    conn.close()
-
-                await asyncio.to_thread(_store)
-            except Exception as exc:
-                log.warning(f"Failed to store snapshot: {exc}")
+        if tick % 100 == 0 and ctx is not None and ctx.history is not None:
+            snapshot = _build_snapshot()
+            if snapshot is None:
+                continue
+            ctx.record_snapshot(snapshot)
 
 
 @app.websocket("/ws/v1/state")
@@ -2373,140 +2333,144 @@ async def get_node_config(node_id: str) -> Response:
 
 
 @app.get("/api/v1/state", response_model=None, dependencies=[Depends(_require_api_key)])
-def get_state() -> dict | JSONResponse:
+def get_state() -> dict:
     """Current state snapshot."""
     snapshot = _build_snapshot()
     if snapshot is None:
         session_status = _session_manager.status if _session_manager else "idle"
-        return JSONResponse(
-            status_code=503,
-            content={
-                "error": "No active session",
-                "session_status": session_status,
-                "session_status_detail": _public_no_active_session_detail(session_status),
-            },
-        )
+        raise SessionInactiveError(_public_no_active_session_detail(session_status))
     return snapshot
 
 
-_NODALPATH_TIMEOUT = 1.0
+def _history_session() -> tuple[SessionContext, HistoryRecorder]:
+    """The active session and its readable recording; every other case is refused."""
+    ctx = _require_active_context()
+    if ctx.history is None:
+        raise HistoryUnavailableError(
+            409, "history.not_recorded", "History recording is off for this session"
+        )
+    if ctx.history.error is not None:
+        raise HistoryUnavailableError(
+            503,
+            "history.failed",
+            "History recording failed for this session and stopped; see the VS-API log",
+        )
+    return ctx, ctx.history
 
 
-def _nodalpath_base_url() -> str:
-    from nodalarc.platform_config import get_platform_config
-
-    cfg = get_platform_config()
-    host = cfg.service_host("nodalpath")
-    port = cfg.nodalpath_console_http_port
-    return f"http://{host}:{port}"
-
-
-async def _fetch_nodalpath_status() -> dict | None:
-    """Fetch the NodalPath console status snapshot.
-
-    Returns the parsed JSON dict on success, or None if NodalPath is not reachable.
-    Intentionally silent on connection errors — callers handle the None case.
-    """
+def _read_history(history: HistoryRecorder, read: Callable[[sqlite3.Connection], Any]) -> Any:
+    conn = sqlite3.connect(f"file:{history.path}?mode=ro", uri=True)
     try:
-        async with httpx.AsyncClient(timeout=_NODALPATH_TIMEOUT) as client:
-            r = await client.get(f"{_nodalpath_base_url()}/api/status")
-            r.raise_for_status()
-            return r.json()
-    except httpx.ConnectError, httpx.TimeoutException, httpx.HTTPStatusError:
-        return None
+        return read(conn)
+    finally:
+        conn.close()
 
 
-@app.get("/api/v1/almanac/status", dependencies=[Depends(_require_api_key)])
-async def get_almanac_status() -> dict:
-    """Current NodalPath almanac push status (proxied from NodalPath console)."""
-    raw = await _fetch_nodalpath_status()
-    if raw is None:
-        return {"available": False}
-
-    return {
-        "available": True,
-        "session_path": raw.get("session_path"),
-        "transport": raw.get("transport"),
-        "dry_run": raw.get("dry_run", False),
-        "start_wall_time": raw.get("start_wall_time"),
-        "nodes_in_registry": raw.get("nodes_in_registry", 0),
-        "transition_count": raw.get("transition_count", 0),
-        "deviation_count": raw.get("deviation_count", 0),
-        "recomputation_count": raw.get("recomputation_count", 0),
-        "last_topology_state_id": raw.get("last_topology_state_id"),
-        "last_sim_time": raw.get("last_sim_time"),
-        "recent_pushes": raw["push_history"][:5],
-        "recent_deviations": raw["deviation_history"][:5],
-    }
-
-
-async def _fetch_nodalpath_path(params: dict) -> dict:
-    """Fetch path from NodalPath console. Returns unavailable dict on failure."""
-    _unavailable = {
-        "reachable": False,
-        "unreachable_reason": "NodalPath not available",
-        "src": params.get("src", ""),
-        "dst": params.get("dst", ""),
-        "hops": [],
-        "total_latency_ms": 0.0,
-        "method": "derived",
-        "sim_time": params.get("sim_time", ""),
-        "topology_state_id": "",
-    }
-    try:
-        async with httpx.AsyncClient(timeout=3.0) as client:
-            r = await client.get(
-                f"{_nodalpath_base_url()}/api/v1/path",
-                params=params,
+def _zoned_time_refusal(**times: datetime | None) -> JSONResponse | None:
+    """History times name their zone; a time without one is ambiguous and refused."""
+    for name, value in times.items():
+        if value is not None and value.tzinfo is None:
+            return refusal_response(
+                400, "history.time_without_zone", f"{name} must name its UTC offset or Z"
             )
-            if r.status_code == 200:
-                return r.json()
-            return _unavailable
-    except Exception:
-        return _unavailable
+    return None
 
 
-@app.get("/api/v1/path", dependencies=[Depends(_require_api_key)])
-async def get_path(src: str, dst: str, sim_time: str | None = None) -> JSONResponse:
-    """Unified path endpoint — proxies to NodalPath for derived paths."""
-    params = {"src": src, "dst": dst}
-    if sim_time is not None:
-        params["sim_time"] = sim_time
-
-    result = await _fetch_nodalpath_path(params)
-    return JSONResponse(result)
-
-
-@app.get("/api/v1/state/{sim_time}", dependencies=[Depends(_require_api_key)])
-def get_historical_state(sim_time: str) -> dict:
-    """Historical state at a specific sim_time (nearest snapshot from SQLite)."""
-    ctx = _active_context
-    if not ctx or not ctx.db_path:
-        return {"error": "No database configured"}
-    conn = sqlite3.connect(ctx.db_path)
-    try:
-        result = query_nearest_snapshot(conn, sim_time)
-        if result is None:
-            return JSONResponse(status_code=404, content={"error": "No snapshots available"})
-        return json.loads(result["snapshot_json"])
-    finally:
-        conn.close()
+@app.get(
+    "/api/v1/state/{sim_time}",
+    responses=_REFUSAL_RESPONSES,
+    dependencies=[Depends(_require_api_key)],
+)
+def get_historical_state(sim_time: datetime) -> Any:
+    """The recorded session's state nearest a sim_time, from its history snapshots."""
+    ctx, history = _history_session()
+    if (refusal := _zoned_time_refusal(sim_time=sim_time)) is not None:
+        return refusal
+    result = _read_history(
+        history,
+        lambda conn: query_nearest_snapshot(conn, session_id=ctx.session_id, sim_time=sim_time),
+    )
+    if result is None:
+        return refusal_response(
+            404, "history.no_snapshot", "No state snapshot is recorded for this session yet"
+        )
+    return json.loads(result["snapshot_json"])
 
 
-@app.get("/api/v1/links", dependencies=[Depends(_require_api_key)])
+@app.get(
+    "/api/v1/links",
+    responses=_REFUSAL_RESPONSES,
+    dependencies=[Depends(_require_api_key)],
+)
 def get_link_events(
-    start: str = Query(None),
-    end: str = Query(None),
-) -> list[dict]:
-    """Query link events from SQLite."""
-    ctx = _active_context
-    if not ctx or not ctx.db_path:
-        return []
-    conn = sqlite3.connect(ctx.db_path)
+    start: datetime = Query(None),
+    end: datetime = Query(None),
+    node: str = Query(None),
+    peer: str = Query(None, description="The node at the other end of the link; needs node"),
+    order: Literal["oldest_first", "newest_first"] = Query("oldest_first"),
+    limit: int = Query(LINK_HISTORY_PAGE_MAX, ge=1, le=LINK_HISTORY_PAGE_MAX),
+    cursor: str = Query(None, description="next_cursor of the previous page"),
+) -> Any:
+    """One page of the recorded session's link events, optionally for one node's
+    links or one link. Further pages follow ``next_cursor`` with the same filters."""
+    ctx, history = _history_session()
+    if (refusal := _zoned_time_refusal(start=start, end=end)) is not None:
+        return refusal
+    if peer is not None and node is None:
+        return refusal_response(
+            400, "history.peer_without_node", "A peer filter needs the node at the link's other end"
+        )
+    after = None
+    if cursor is not None:
+        after = _decode_link_history_cursor(cursor)
+        if after is None:
+            return refusal_response(
+                400, "history.invalid_cursor", "The cursor is not one this API returned"
+            )
+    filters = {"start_time": start, "end_time": end, "node": node, "peer": peer}
+
+    def read(conn: sqlite3.Connection) -> tuple[list[dict], int, str | None]:
+        # One read transaction: the page, its total and retained_from describe the
+        # same state of the file. One row past the page tells whether another follows.
+        conn.execute("BEGIN")
+        rows = query_link_events(
+            conn,
+            session_id=ctx.session_id,
+            newest_first=order == "newest_first",
+            after=after,
+            limit=limit + 1,
+            **filters,
+        )
+        total = count_link_events(conn, session_id=ctx.session_id, **filters)
+        retained_from = get_metadata(conn, session_id=ctx.session_id, key=RETAINED_FROM_KEY)
+        return rows, total, retained_from
+
+    rows, total, retained_from = _read_history(history, read)
+    page = rows[:limit]
+    return LinkHistoryPage(
+        events=[LinkHistoryEvent.model_validate(row) for row in page],
+        returned=len(page),
+        total=total,
+        next_cursor=_link_history_cursor(page[-1]) if len(rows) > limit else None,
+        retained_from=retained_from,
+    )
+
+
+_LINK_HISTORY_CURSOR = TypeAdapter(tuple[str, int])
+
+
+def _link_history_cursor(row: dict) -> str:
+    """The opaque cursor after one link event: its (sim_time, id) position."""
+    return base64.urlsafe_b64encode(
+        _LINK_HISTORY_CURSOR.dump_json((row["sim_time"], row["id"]))
+    ).decode()
+
+
+def _decode_link_history_cursor(cursor: str) -> tuple[str, int] | None:
     try:
-        return query_link_events(conn, start_time=start, end_time=end)
-    finally:
-        conn.close()
+        return _LINK_HISTORY_CURSOR.validate_json(base64.urlsafe_b64decode(cursor.encode()))
+    except ValueError:
+        return None
 
 
 @app.get(
@@ -2519,9 +2483,7 @@ def get_link_decision_traces(
     node_b: str = Query(None),
 ) -> list[dict] | dict | JSONResponse:
     """Return active-link decision traces retained by the current session."""
-    ctx = _active_context
-    if ctx is None:
-        return []
+    ctx = _require_active_context()
     if (node_a is None) != (node_b is None):
         return JSONResponse(
             status_code=400,
@@ -2566,9 +2528,7 @@ def get_decision_explanation(
     """
     from nodalarc.explain import compose_gs_explanation
 
-    ctx = _active_context
-    if ctx is None:
-        return JSONResponse(status_code=404, content={"error": "No active session"})
+    ctx = _require_active_context()
     with ctx.state_lock:
         snapshot = ctx.latest_ground_link_decision_snapshot
         active_pairs = ctx.actual_kernel_pairs()
@@ -2621,9 +2581,7 @@ def get_decision_explanation_timeline(
     the UI can roll up recent no-link causes without polling the full GS×sat
     matrix.
     """
-    ctx = _active_context
-    if ctx is None:
-        return JSONResponse(status_code=404, content={"error": "No active session"})
+    ctx = _require_active_context()
     timeline = ctx.ground_decision_timeline(gs, limit=limit)
     if timeline is None:
         return JSONResponse(
@@ -2675,9 +2633,7 @@ def get_ground_link_decisions(
     ``404`` if no snapshot has been received yet; ``404`` for a
     specific pair the OME's ground decision set does not cover.
     """
-    ctx = _active_context
-    if ctx is None:
-        return JSONResponse(status_code=404, content={"error": "No active session"})
+    ctx = _require_active_context()
     if (node_a is None) != (node_b is None):
         return JSONResponse(
             status_code=400,
@@ -2736,495 +2692,151 @@ def get_ground_link_decisions(
     return json.loads(snapshot.model_dump_json())
 
 
-@app.get("/api/v1/metrics/convergence", dependencies=[Depends(_require_api_key)])
-def get_convergence_events(
-    start: str = Query(None),
-    end: str = Query(None),
-) -> list[dict]:
-    """Query convergence events from SQLite."""
-    ctx = _active_context
-    if not ctx or not ctx.db_path:
-        return []
-    conn = sqlite3.connect(ctx.db_path)
-    try:
-        return query_convergence_events(conn)
-    finally:
-        conn.close()
-
-
-@app.get("/api/v1/metrics/flows/{flow_id}", dependencies=[Depends(_require_api_key)])
-def get_flow_metrics(
-    flow_id: str,
-    start: str = Query(None),
-    end: str = Query(None),
-) -> list[dict]:
-    """Query probe results for a flow from SQLite."""
-    ctx = _active_context
-    if not ctx or not ctx.db_path:
-        return []
-    conn = sqlite3.connect(ctx.db_path)
-    try:
-        return query_probe_results(conn, flow_id=flow_id, start_time=start, end_time=end)
-    finally:
-        conn.close()
-
-
-def _live_trace_grpc(src: str, dst: str, nodes: list, links: list) -> dict | None:
-    """Walk real forwarding tables on live containers via gRPC.
-
-    Queries each node's nodalpath-fwd sidecar to read the installed
-    MPLS forwarding state, then follows the label chain hop-by-hop
-    from src to dst.  Returns None if gRPC is unavailable.
-    """
-
-    import grpc
-    from nodalarc.platform_config import get_platform_config
-
-    cfg = get_platform_config()
-    grpc_port = cfg.nodalpath_fwd_grpc_port
-
-    # Build node_id -> pod_ip map via K8s API
-    prefix_by_node: dict[str, str] = {}
-    for n in nodes:
-        if n.get("prefix"):
-            prefix_by_node[n["node_id"]] = n["prefix"]
-
-    def get_pod_ip(node_id: str) -> str | None:
-        try:
-            import kubernetes.client
-            import kubernetes.config
-
-            try:
-                kubernetes.config.load_incluster_config()
-            except kubernetes.config.ConfigException:
-                kubernetes.config.load_kube_config()
-            v1 = kubernetes.client.CoreV1Api()
-            pod = v1.read_namespaced_pod(node_id.lower(), cfg.kubernetes_namespace)
-            return pod.status.pod_ip if pod.status else None
-        except Exception:
-            return None
-
-    def query_fwd_table(pod_ip: str) -> tuple[list, list] | None:
-        """Query a node's live forwarding table via gRPC. Returns (lsr, ler) or None."""
-        try:
-            from nodalpath.proto import Action, Empty
-            from nodalpath.proto.forwarding_pb2_grpc import ForwardingServiceStub
-
-            channel = grpc.insecure_channel(f"{pod_ip}:{grpc_port}")
-            grpc.channel_ready_future(channel).result(timeout=3)
-            stub = ForwardingServiceStub(channel)
-            fwd = stub.GetForwardingTable(Empty(), timeout=3)
-
-            action_map = {Action.SWAP: "SWAP", Action.POP: "POP", Action.PUSH: "PUSH"}
-            lsr = []
-            for e in fwd.lsr_entries:
-                lsr.append(
-                    {
-                        "in_label": e.in_label,
-                        "action": action_map.get(e.action, str(e.action)),
-                        "out_label": e.out_label,
-                        "out_interface": e.out_interface,
-                    }
-                )
-            ler = []
-            for e in fwd.ler_entries:
-                ler.append(
-                    {
-                        "dst_prefix": e.dst_prefix,
-                        "push_label": e.push_label,
-                        "out_interface": e.out_interface,
-                    }
-                )
-            channel.close()
-            return lsr, ler
-        except Exception:
-            return None
-
-    sid_to_node: dict[int, str] = {}
-    runtime_context = _active_context
-    if runtime_context is not None and runtime_context.session_resolution is not None:
-        prefix_by_node.update(runtime_context._node_primary_prefix_by_id)
-        for node_id, node in tracer_node_registry(runtime_context.session_resolution).items():
-            if node.sid is not None:
-                sid_to_node[node.sid] = node_id
-
-    # Find destination prefix
-    dst_prefix = prefix_by_node.get(dst)
-    if not dst_prefix:
-        return None
-
-    # Step 1: Get source forwarding table
-    src_ip = get_pod_ip(src)
-    if not src_ip:
-        return None
-    src_fwd = query_fwd_table(src_ip)
-    if not src_fwd:
-        return None
-    _src_lsr, src_ler = src_fwd
-
-    # Find ingress rule for dst_prefix
-    ingress = None
-    for rule in src_ler:
-        if rule["dst_prefix"] == dst_prefix:
-            ingress = rule
-            break
-    if not ingress:
-        return None
-
-    # Build hop list
-    hop_details = []
-    hop_ids = [src]
-
-    # Source node — PUSH
-    hop_details.append(
-        {
-            "node_id": src,
-            "action": "PUSH",
-            "in_label": None,
-            "out_label": ingress["push_label"],
-            "out_interface": ingress["out_interface"],
-            "latency_to_next_ms": None,
-        }
-    )
-
-    current_label = ingress["push_label"]
-    current_node = sid_to_node.get(current_label)
-    visited = {src}
-    MAX_HOPS = 20
-
-    for _ in range(MAX_HOPS):
-        if not current_node or current_node in visited:
-            break
-        visited.add(current_node)
-        hop_ids.append(current_node)
-
-        if current_node == dst:
-            hop_details.append(
-                {
-                    "node_id": current_node,
-                    "action": None,
-                    "in_label": current_label,
-                    "out_label": None,
-                    "out_interface": None,
-                    "latency_to_next_ms": None,
-                }
-            )
-            break
-
-        # Query this node's live forwarding table
-        node_ip = get_pod_ip(current_node)
-        if not node_ip:
-            break
-        fwd_result = query_fwd_table(node_ip)
-        if not fwd_result:
-            break
-        node_lsr, node_ler = fwd_result
-
-        # Find LSR binding for current_label
-        binding = None
-        for b in node_lsr:
-            if b["in_label"] == current_label:
-                binding = b
-                break
-
-        if not binding:
-            # Maybe it's an LER ingress (dst is directly connected)
-            # Check if there's a rule for dst_prefix
-            for rule in node_ler:
-                if rule["dst_prefix"] == dst_prefix:
-                    hop_details.append(
-                        {
-                            "node_id": current_node,
-                            "action": "PUSH",
-                            "in_label": current_label,
-                            "out_label": rule["push_label"],
-                            "out_interface": rule["out_interface"],
-                            "latency_to_next_ms": None,
-                        }
-                    )
-                    next_node = sid_to_node.get(rule["push_label"])
-                    current_label = rule["push_label"]
-                    current_node = next_node
-                    continue
-            break
-
-        hop_details.append(
-            {
-                "node_id": current_node,
-                "action": binding["action"],
-                "in_label": binding["in_label"],
-                "out_label": binding["out_label"] if binding["action"] == "SWAP" else None,
-                "out_interface": binding["out_interface"],
-                "latency_to_next_ms": None,
-            }
-        )
-
-        if binding["action"] == "POP":
-            # Next node is the destination (PHP)
-            hop_ids.append(dst)
-            hop_details.append(
-                {
-                    "node_id": dst,
-                    "action": None,
-                    "in_label": None,
-                    "out_label": None,
-                    "out_interface": None,
-                    "latency_to_next_ms": None,
-                }
-            )
-            break
-        elif binding["action"] == "SWAP":
-            current_label = binding["out_label"]
-            current_node = sid_to_node.get(current_label)
-        else:
-            break
-
-    if len(hop_ids) < 2:
-        return None
-
-    # Add latencies from the link state
-    link_latency: dict[str, float] = {}
-    for l in links:
-        key_fwd = f"{l['node_a']}:{l['node_b']}"
-        key_rev = f"{l['node_b']}:{l['node_a']}"
-        lat = l.get("latency_ms", 0)
-        link_latency[key_fwd] = lat
-        link_latency[key_rev] = lat
-
-    total_latency = 0.0
-    for i, hd in enumerate(hop_details):
-        if i < len(hop_ids) - 1:
-            key = f"{hop_ids[i]}:{hop_ids[i + 1]}"
-            lat = link_latency.get(key, 0)
-            hd["latency_to_next_ms"] = lat
-            total_latency += lat
-
-    return {
-        "hops": hop_ids,
-        "hop_details": hop_details,
-        "success": True,
-        "method": "live",
-        "total_latency_ms": total_latency,
-    }
-
-
-@app.post("/api/v1/trace", dependencies=[Depends(_require_api_key)])
-def trace_path(body: dict) -> dict:
-    """Trace forwarding path by querying live container MPLS tables.
-
-    Walks the real forwarding tables installed on each node's
-    nodalpath-fwd gRPC sidecar, hop by hop from source to destination.
-    Falls back to NodalPath CSPF if live trace is unavailable.
-    """
-    src = body.get("src_node", "")
-    dst = body.get("dst_node", "")
-    if not src or not dst:
-        return {"hops": [], "error": "src_node and dst_node required"}
-
-    _rctx = _active_context
-    _rs = _rctx.routing_stack if _rctx else None
-    if not _rs or not _rs.startswith("nodalpath"):
-        raise HTTPException(
-            status_code=400,
-            detail=f"Trace not available for routing stack '{_rs}'. "
-            "Trace requires a NodalPath session (MPLS forwarding tables).",
-        )
-
-    # Get current snapshot for node/link info
-    try:
-        snap = _build_snapshot()
-        nodes_list = [
-            n.model_dump() if hasattr(n, "model_dump") else n for n in snap.get("nodes", [])
-        ]
-        links_list = [
-            l.model_dump() if hasattr(l, "model_dump") else l for l in snap.get("links", [])
-        ]
-    except Exception:
-        nodes_list = []
-        links_list = []
-
-    # Try live gRPC trace first (real forwarding tables)
-    try:
-        result = _live_trace_grpc(src, dst, nodes_list, links_list)
-        if result:
-            return result
-    except Exception as exc:
-        log.debug(f"Live gRPC trace failed: {exc}")
-
-    # Fall back to NodalPath CSPF
-    try:
-        np_resp = httpx.get(
-            f"{_nodalpath_base_url()}/api/v1/path",
-            params={"src": src, "dst": dst},
-            timeout=5.0,
-        )
-        if np_resp.status_code == 200:
-            data = np_resp.json()
-            if data.get("reachable") and data.get("hops"):
-                hop_ids = [h["node_id"] for h in data["hops"]]
-                return {
-                    "hops": hop_ids,
-                    "hop_details": data["hops"],
-                    "success": True,
-                    "method": "cspf",
-                    "total_latency_ms": data.get("total_latency_ms", 0),
-                }
-            if data.get("reachable") is False:
-                reason = data.get("unreachable_reason", "no path found")
-                return {"hops": [], "success": False, "method": "cspf", "note": reason}
-    except Exception as exc:
-        log.debug(f"NodalPath CSPF trace failed: {exc}")
-
-    return {"hops": [], "error": "Trace unavailable"}
-
-
-# --- Continuous trace endpoints ---
-
-
-def _get_sim_time_str() -> str:
-    """Return current sim_time as string for the continuous tracer."""
-    ctx = _active_context
-    if ctx is None:
-        return datetime.now(UTC).isoformat()
-    with ctx.state_lock:
-        return ctx.sim_time
-
-
-def _on_path_change(src: str, dst: str, old_hops: list[str], new_hops: list[str]) -> None:
-    """Callback when the traced path changes — add a RecentEvent."""
-    ctx = _active_context
-    if ctx is None:
-        return
-    sim_time = _get_sim_time_str()
-    old_str = " -> ".join(old_hops[:4])
-    new_str = " -> ".join(new_hops[:4])
-    if len(old_hops) > 4:
-        old_str += f" ({len(old_hops)} hops)"
-    if len(new_hops) > 4:
-        new_str += f" ({len(new_hops)} hops)"
-    ctx._add_recent_event(
-        {
-            "sim_time": sim_time,
-            "node_id": src,
-            "reason": f"Path {src} -> {dst}: {old_str} => {new_str}",
-        },
-        "PATH_CHANGE",
+@app.get(
+    "/api/v1/metrics/convergence",
+    responses=_REFUSAL_RESPONSES,
+    dependencies=[Depends(_require_api_key)],
+)
+def get_convergence_events() -> JSONResponse:
+    """Refused: VS-API records no convergence events, so a history would be empty."""
+    return refusal_response(
+        501, "history.not_collected", "VS-API does not record convergence events"
     )
 
 
-@app.post("/api/v1/trace/start", dependencies=[Depends(_require_api_key)])
-async def start_continuous_trace(body: dict) -> dict:
-    """Start continuous path tracing between two nodes."""
-    ctx = _active_context
-    if ctx is None:
-        return JSONResponse(status_code=409, content={"error": "No active session"})
+@app.get(
+    "/api/v1/metrics/flows/{flow_id}",
+    responses=_REFUSAL_RESPONSES,
+    dependencies=[Depends(_require_api_key)],
+)
+def get_flow_metrics() -> JSONResponse:
+    """Refused: VS-API records no probe results, so a history would be empty."""
+    return refusal_response(501, "history.not_collected", "VS-API does not record probe results")
 
+
+# --- Path trace endpoints ---
+
+ONE_SHOT_TRACE_FLOW_ID = "__trace__"
+
+
+# One one-shot trace runs at a time: each holds traceroute execs and threads
+# for up to the trace deadline.
+_one_shot_trace_lock = asyncio.Lock()
+
+
+def _trace_request_endpoints(ctx: SessionContext, body: dict) -> tuple[str, str] | JSONResponse:
+    """The request's source and destination nodes, or the refusal that says why not."""
     src = body.get("src_node", "")
     dst = body.get("dst_node", "")
     if not src or not dst:
-        return JSONResponse(status_code=400, content={"error": "src_node and dst_node required"})
-
+        return refusal_response(400, "trace.invalid_request", "src_node and dst_node are required")
     with ctx.state_lock:
-        if src not in ctx.nodes:
-            return JSONResponse(status_code=400, content={"error": f"Unknown node: {src}"})
-        if dst not in ctx.nodes:
-            return JSONResponse(status_code=400, content={"error": f"Unknown node: {dst}"})
+        for node_id in (src, dst):
+            if node_id not in ctx.nodes:
+                return refusal_response(404, "trace.unknown_node", f"Unknown node: {node_id}")
+    # A trace records the session's sim time; refuse until the clock reports.
+    ctx.read_sim_time()
+    return src, dst
 
-    if ctx.continuous_tracer is not None:
-        await ctx.continuous_tracer.stop()
-        ctx.continuous_tracer = None
 
-    # Load trace context
-    try:
-        tracer = await asyncio.to_thread(_create_continuous_tracer)
-    except Exception as exc:
-        log.warning("Failed to create continuous tracer: %s", exc, exc_info=True)
-        return JSONResponse(status_code=500, content={"error": "Tracer initialization failed"})
+@app.post("/api/v1/trace", responses=_REFUSAL_RESPONSES, dependencies=[Depends(_require_api_key)])
+async def trace_between(body: dict) -> Any:
+    """Trace the path between two nodes once, in both directions.
 
-    ctx.continuous_tracer = tracer
-    await tracer.start(src, dst)
+    The request returns when both traceroutes finish, within the trace
+    deadline. One one-shot trace runs at a time; another request is refused
+    while it runs.
+    """
+    ctx = _require_active_context()
+    endpoints = _trace_request_endpoints(ctx, body)
+    if isinstance(endpoints, JSONResponse):
+        return endpoints
+    src, dst = endpoints
+    if _one_shot_trace_lock.locked():
+        return refusal_response(
+            409, "trace.busy", "A one-shot trace is already running; try again when it finishes"
+        )
+    async with _one_shot_trace_lock:
+        result = await asyncio.to_thread(
+            _create_path_tracer(ctx).trace_between, src, dst, flow_id=ONE_SHOT_TRACE_FLOW_ID
+        )
+    return result.model_dump(mode="json")
+
+
+@app.post(
+    "/api/v1/trace/start", responses=_REFUSAL_RESPONSES, dependencies=[Depends(_require_api_key)]
+)
+async def start_continuous_trace(body: dict) -> Any:
+    """Start continuous path tracing between two nodes, replacing a running trace.
+
+    The trace stops on its own after the platform's trace time limit.
+    """
+    ctx = _require_active_context()
+    endpoints = _trace_request_endpoints(ctx, body)
+    if isinstance(endpoints, JSONResponse):
+        return endpoints
+    src, dst = endpoints
+    async with ctx.trace_lock:
+        # A context that began tearing down takes no new trace.
+        if ctx.stopped or ctx is not _active_context:
+            raise SessionInactiveError("Session switch in progress")
+        if ctx.continuous_tracer is not None:
+            await ctx.continuous_tracer.stop()
+            ctx.continuous_tracer = None
+        tracer = _create_continuous_tracer(ctx)
+        await tracer.start(src, dst)
+        ctx.continuous_tracer = tracer
     return {"ok": True, "src": src, "dst": dst}
 
 
-@app.post("/api/v1/trace/stop", dependencies=[Depends(_require_api_key)])
+@app.post(
+    "/api/v1/trace/stop", responses=_REFUSAL_RESPONSES, dependencies=[Depends(_require_api_key)]
+)
 async def stop_continuous_trace() -> dict:
-    """Stop continuous path tracing."""
-    ctx = _active_context
-    if ctx is not None and ctx.continuous_tracer is not None:
-        await ctx.continuous_tracer.stop()
-        ctx.continuous_tracer = None
+    """Stop continuous path tracing and forget its result."""
+    ctx = _require_active_context()
+    async with ctx.trace_lock:
+        if ctx.continuous_tracer is not None:
+            await ctx.continuous_tracer.stop()
+            ctx.continuous_tracer = None
     return {"ok": True}
 
 
-@app.get("/api/v1/trace/status", dependencies=[Depends(_require_api_key)])
+@app.get(
+    "/api/v1/trace/status", responses=_REFUSAL_RESPONSES, dependencies=[Depends(_require_api_key)]
+)
 def get_trace_status() -> dict:
-    """Return current continuous trace status."""
-    ctx = _active_context
-    if ctx is None or ctx.continuous_tracer is None or not ctx.continuous_tracer.active:
+    """The running trace's endpoints and latest result, or that none runs."""
+    tracer = _require_active_context().continuous_tracer
+    if tracer is None:
         return {"active": False, "src": None, "dst": None, "result": None}
-
-    result = ctx.continuous_tracer.latest_result
+    result = tracer.traced_path
     return {
-        "active": True,
-        "src": ctx.continuous_tracer.src,
-        "dst": ctx.continuous_tracer.dst,
-        "result": result.model_dump(mode="json") if result else None,
+        "active": tracer.active,
+        "src": tracer.src,
+        "dst": tracer.dst,
+        "result": result.model_dump(mode="json") if result is not None else None,
     }
 
 
-def _create_continuous_tracer() -> ContinuousTracer:
-    """Create a ContinuousTracer from the current session context."""
-    cfg = get_platform_config()
+def _create_path_tracer(ctx: SessionContext) -> PathTracer:
+    """A path tracer over the session's resolved nodes, reading that session's sim time."""
+    return PathTracer(
+        node_registry=tracer_node_registry(ctx.session_resolution),
+        namespace=get_platform_config().kubernetes_namespace,
+        core_v1=k8s.core_v1,
+        read_sim_time=ctx.read_sim_time,
+    )
 
-    node_registry: dict = {}
-    interface_map: dict = {}
-    pid_map: dict = {}
-    timeline_path: str | None = None
-    trace_mode = "ip"
 
-    runtime_context = _active_context
-    if runtime_context is not None and runtime_context.session_resolution is not None:
-        node_registry = tracer_node_registry(runtime_context.session_resolution)
-        interface_map = runtime_context.session_resolution.resolved.link_interface_map()
-        log.info(
-            "Loaded resolved trace view: %d nodes, %d interfaces",
-            len(node_registry),
-            len(interface_map),
-        )
-
-        if _session_manager and _session_manager._current_data_dir:
-            pid_path = Path(_session_manager._current_data_dir) / "pid_map.json"
-            if pid_path.exists():
-                try:
-                    pid_map = json.loads(pid_path.read_text())
-                except Exception as exc:
-                    log.warning("Failed to read pid_map.json: %s", exc)
-
-            # Read timeline path from session-state.json
-            state_path = Path(_session_manager._current_data_dir) / "session-state.json"
-            if state_path.exists():
-                try:
-                    state_data = json.loads(state_path.read_text())
-                    timeline_path = state_data.get("timeline")
-                except Exception as exc:
-                    log.warning("Failed to read session-state.json: %s", exc)
-
-        routing_stack = runtime_context.routing_stack
-        if routing_stack:
-            if "isis-sr" in routing_stack or "static-sr" in routing_stack:
-                trace_mode = "sr-uniform"
-            elif routing_stack.startswith("nodalpath"):
-                trace_mode = "cspf"
-
+def _create_continuous_tracer(ctx: SessionContext) -> ContinuousTracer:
+    """A live tracer bound to the session, recording its path changes there."""
     return ContinuousTracer(
-        node_registry=node_registry,
-        interface_map=interface_map,
-        pid_map=pid_map,
-        trace_mode=trace_mode,
-        config=cfg,
-        timeline_path=timeline_path,
-        get_sim_time=_get_sim_time_str,
-        on_path_change=_on_path_change,
+        path_tracer=_create_path_tracer(ctx),
+        interval_s=get_platform_config().trace_interval_seconds,
+        unreached_retrace_s=get_platform_config().trace_unreached_retrace_seconds,
+        max_seconds=get_platform_config().trace_max_seconds,
+        on_path_change=ctx.record_path_change,
     )
 
 
@@ -3301,18 +2913,8 @@ def download_session_yaml(
 
 
 def _available_session_node_count() -> int:
-    """Best-effort count of cluster nodes that run session pods. It only feeds
-    the readiness validator's node-count WARNING, never a deploy refusal, so a
-    failed query falls back high rather than blocking a switch."""
-    try:
-        import kubernetes.client
-
-        nodes = kubernetes.client.CoreV1Api().list_node(
-            label_selector="nodalarc.io/node-agent=true"
-        )
-        return max(1, len(nodes.items))
-    except Exception:
-        return 1_000_000
+    """The number of nodes that accept session pods; a failed listing raises."""
+    return len(available_session_nodes(k8s.core_v1()))
 
 
 def _prepared_transition_reservation(deployment: Any) -> TransitionOperationReservation:
@@ -3455,6 +3057,7 @@ async def _deploy_builder_catalog_session(request: Any, catalog_context: Any) ->
             expected_document_digest=str(request.expected_document_digest),
             expected_closure_digest=str(request.expected_dependency_digest),
             available_node_count=available_node_count,
+            record_history=request.record_history,
         )
     except SessionDeploymentPreparationError as exc:
         refuse_translated(exc, expected=exc.evidence.expected, observed=exc.evidence.observed)
@@ -3537,6 +3140,7 @@ async def switch_session(
         expected_session_revision=str(body.expected_source_revision),
         expected_document_digest=str(body.expected_document_digest),
         expected_closure_digest=str(body.expected_dependency_digest),
+        record_history=body.record_history,
     )
     operation_id = await _admit_transition(
         lambda: _run_catalog_switch(deployment, catalog_context),
@@ -3798,6 +3402,7 @@ async def deploy_from_yaml(
         expected_document_digest=closure.document_digest,
         expected_closure_digest=closure.closure_digest,
         available_node_count=available_node_count,
+        record_history=body.record_history,
     )
 
     operation_id = await _admit_transition(
@@ -3861,18 +3466,8 @@ async def _run_prepared_switch_locked(
     if _session_manager is None:
         raise RuntimeError("Session manager is not initialized")
 
-    import kubernetes.client
-    import kubernetes.config
-
-    def _load_k8s_config() -> None:
-        try:
-            kubernetes.config.load_incluster_config()
-        except kubernetes.config.ConfigException:
-            kubernetes.config.load_kube_config()
-
-    await asyncio.to_thread(_load_k8s_config)
-    custom_objects_api = kubernetes.client.CustomObjectsApi()
-    core_v1_api = kubernetes.client.CoreV1Api()
+    custom_objects_api = await asyncio.to_thread(k8s.custom_objects)
+    core_v1_api = await asyncio.to_thread(k8s.core_v1)
     namespace = get_platform_config().kubernetes_namespace
     upload_store = KubernetesCatalogUploadStore(core_v1_api, namespace)
     old_context = _active_context
@@ -3971,7 +3566,6 @@ async def _run_prepared_switch_locked(
             ready_cr,
             require_ready=True,
             core_v1=core_v1_api,
-            namespace=namespace,
         )
         if ready is None:
             raise RuntimeError("Operator returned Ready without current runtime identity")
@@ -4047,18 +3641,8 @@ async def _poll_cr_until_ready() -> None:
     """
     global _active_context, _active_cr_generation
     log.info("_poll_cr_until_ready: starting background CR polling task")
-    import kubernetes.client
-    import kubernetes.config
-
-    def _load_k8s_config() -> None:
-        try:
-            kubernetes.config.load_incluster_config()
-        except kubernetes.config.ConfigException:
-            kubernetes.config.load_kube_config()
-
-    await asyncio.to_thread(_load_k8s_config)
-    api = kubernetes.client.CustomObjectsApi()
-    core_v1_api = kubernetes.client.CoreV1Api()
+    api = await asyncio.to_thread(k8s.custom_objects)
+    core_v1_api = await asyncio.to_thread(k8s.core_v1)
     ns = get_platform_config().kubernetes_namespace
     upload_reconciled = False
 
@@ -4184,7 +3768,6 @@ def main() -> None:
 
     parser = argparse.ArgumentParser(description="VS-API server")
     parser.add_argument("--session", default=None, help="Path to session YAML (optional)")
-    parser.add_argument("--db", default=None, help="Path to SQLite database (optional)")
     parser.add_argument("--port", type=int, default=None, help="HTTP port")
     parser.add_argument(
         "--platform-config", default="configs/platform.yaml", help="Path to platform config YAML"
@@ -4195,47 +3778,20 @@ def main() -> None:
 
     init_platform_config(Path(args.platform_config))
 
-    # NodalPath is distributed separately. Initialize it when present so
-    # NodalPath-specific trace routes can use live SID lookups; absence of that
-    # package must not prevent ordinary NodalArc sessions from starting.
-    try:
-        from nodalpath.platform import init_nodalpath_config
-
-        init_nodalpath_config(Path("configs/nodalpath.yaml"))
-        log.info("Initialized NodalPath config")
-    except ModuleNotFoundError as exc:
-        log.info("NodalPath package unavailable; NodalPath-specific routes disabled: %s", exc)
-    except Exception as exc:
-        log.warning(
-            "NodalPath config initialization failed; NodalPath-specific routes disabled: %s", exc
-        )
-
     if args.port is None:
         args.port = get_platform_config().vs_api_http_port
 
     global _session_manager, _pending_cr_poll
 
-    _session_manager = SessionManager(initial_db_path=args.db)
+    _session_manager = SessionManager()
 
     log.info("VS-API starting [build=%s]", os.environ.get("NODAL_BUILD", "dev"))
-
-    if args.db:
-        conn = sqlite3.connect(args.db)
-        create_tables(conn)
-        conn.close()
 
     # The live ConstellationSpec is the sole runtime bootstrap authority. Do
     # not parse --session with default catalog roots: uploaded user: closures
     # are selected by spec.catalogUpload and verified by _extract_cr_session.
     try:
-        import kubernetes.client as _k8s_client
-        import kubernetes.config as _k8s_config
-
-        try:
-            _k8s_config.load_incluster_config()
-        except _k8s_config.ConfigException:
-            _k8s_config.load_kube_config()
-        cr = _k8s_client.CustomObjectsApi().get_namespaced_custom_object(
+        cr = k8s.custom_objects().get_namespaced_custom_object(
             group=CR_GROUP,
             version=CR_VERSION,
             namespace=get_platform_config().kubernetes_namespace,

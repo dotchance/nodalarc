@@ -26,6 +26,11 @@ vi.mock("../useWizardData", () => ({
           extension_constraints: constraints,
           timer_label: "IS-IS Timers",
           timer_fields: [],
+          bfd_timer_fields: [
+            { id: "bfd_detect_multiplier", label: "Multiplier", unit: null, description: "Multiplier", guidance: "Three", minimum: 1, maximum: 255 },
+            { id: "bfd_rx_interval", label: "RX", unit: "ms", description: "Receive", guidance: "300", minimum: 10, maximum: 4294967 },
+            { id: "bfd_tx_interval", label: "TX", unit: "ms", description: "Transmit", guidance: "300", minimum: 10, maximum: 4294967 },
+          ],
           non_flat_area_warning: null,
         },
         {
@@ -36,6 +41,7 @@ vi.mock("../useWizardData", () => ({
           extension_constraints: constraints,
           timer_label: "OSPF Timers",
           timer_fields: [],
+          bfd_timer_fields: null,
           non_flat_area_warning: "warning",
         },
       ],
@@ -51,11 +57,6 @@ vi.mock("../useWizardData", () => ({
         enabled_field: "bfd",
         enable_label: "Enable BFD",
         enable_description: "Detect failures",
-        timer_fields: [
-          { id: "bfd_detect_multiplier", label: "Multiplier", unit: null, description: "Multiplier", guidance: "Three", minimum: 1 },
-          { id: "bfd_rx_interval", label: "RX", unit: "ms", description: "Receive", guidance: "300", minimum: 1 },
-          { id: "bfd_tx_interval", label: "TX", unit: "ms", description: "Transmit", guidance: "300", minimum: 1 },
-        ],
       },
       routing_timer_defaults: {
         bfd: false,
@@ -128,5 +129,32 @@ describe("useWizard extension authority", () => {
 
     act(() => result.current.toggleExtension("sr"));
     expect(result.current.state.extensions).toEqual([]);
+  });
+});
+
+describe("useWizard BFD reconciliation", () => {
+  it("clears BFD when the selected protocol renders none", () => {
+    const { result } = renderHook(() => useWizard());
+
+    act(() => result.current.selectProtocol("isis"));
+    act(() => result.current.updateTimers({ bfd: true }));
+    expect(result.current.state.routingTimers?.bfd).toBe(true);
+
+    act(() => result.current.selectProtocol("ospf"));
+    expect(result.current.state.routingTimers?.bfd).toBe(false);
+    expect(result.current.state.routingTimers?.bfd_detect_multiplier).toBe(3);
+
+    act(() => result.current.selectProtocol("isis"));
+    expect(result.current.state.routingTimers?.bfd).toBe(false);
+  });
+
+  it("keeps BFD when the selected protocol renders it", () => {
+    const { result } = renderHook(() => useWizard());
+
+    act(() => result.current.selectProtocol("isis"));
+    act(() => result.current.updateTimers({ bfd: true }));
+    act(() => result.current.selectProtocol("isis"));
+
+    expect(result.current.state.routingTimers?.bfd).toBe(true);
   });
 });

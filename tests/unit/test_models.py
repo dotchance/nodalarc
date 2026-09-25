@@ -30,9 +30,10 @@ from nodalarc.models.metrics import (
     TraceResponse,
 )
 from nodalarc.models.vs_api import (
-    ActiveFlow,
     LinkState,
     NetworkHealth,
+    NodeInstanceInterface,
+    NodeRoutingInstance,
     NodeState,
     RecentEvent,
     StateSnapshot,
@@ -519,7 +520,6 @@ class TestLinkUp:
             interface_a="isl0",
             interface_b="isl1",
             latency_ms=5.0,
-            bandwidth_mbps=1000.0,
             range_km=1500.0,
             reason="vis_gained",
             provenance=provenance,
@@ -537,7 +537,6 @@ class TestLinkUp:
             interface_a="isl0",
             interface_b="isl1",
             latency_ms=5.0,
-            bandwidth_mbps=1000.0,
             range_km=1500.0,
             reason="vis_gained",
         )
@@ -554,7 +553,6 @@ class TestLinkUp:
                 interface_a="isl0",
                 interface_b="isl1",
                 latency_ms=5.0,
-                bandwidth_mbps=1000.0,
                 range_km=1500.0,
                 reason="vis_gained",
             )
@@ -628,7 +626,6 @@ class TestConvergenceRequest:
             interface_a="isl0",
             interface_b="isl1",
             latency_ms=5.0,
-            bandwidth_mbps=1000.0,
             range_km=1500.0,
             reason="vis_gained",
         )
@@ -772,8 +769,17 @@ class TestNodeState:
             vel_z_km_s=3.0,
             plane=3,
             slot=7,
-            routing_area="49.0001",
-            neighbor_count=4,
+            routing_instances=(
+                NodeRoutingInstance(
+                    domain_id="leo_domain",
+                    protocol="isis",
+                    areas=("49.0001",),
+                    interfaces=(NodeInstanceInterface(name="isl0", area_id=None),),
+                    area_border=False,
+                    as_boundary=False,
+                ),
+            ),
+            role="router",
             isl_count=3,
             gnd_count=1,
             segment_id="leo",
@@ -801,8 +807,8 @@ class TestNodeState:
             vel_z_km_s=None,
             plane=None,
             slot=None,
-            routing_area="49.0000",
-            neighbor_count=1,
+            routing_instances=(),
+            role="host",
             isl_count=0,
             gnd_count=1,
             segment_id="ground",
@@ -828,7 +834,10 @@ class TestLinkState:
             link_type="intra_plane_isl",
             link_reason=None,
             latency_ms=3.2,
-            bandwidth_mbps=1000.0,
+            transmit_mbps_a=1000.0,
+            receive_mbps_a=1000.0,
+            transmit_mbps_b=1000.0,
+            receive_mbps_b=1000.0,
             range_km=960.0,
             traffic_load_pct=None,
         )
@@ -843,7 +852,10 @@ class TestLinkState:
             link_type=None,
             link_reason=None,
             latency_ms=5.0,
-            bandwidth_mbps=100.0,
+            transmit_mbps_a=100.0,
+            receive_mbps_a=100.0,
+            transmit_mbps_b=100.0,
+            receive_mbps_b=100.0,
             range_km=500.0,
             traffic_load_pct=None,
         )
@@ -854,7 +866,10 @@ class TestLinkState:
             link_type=None,
             link_reason=None,
             latency_ms=5.0,
-            bandwidth_mbps=100.0,
+            transmit_mbps_a=100.0,
+            receive_mbps_a=100.0,
+            transmit_mbps_b=100.0,
+            receive_mbps_b=100.0,
             range_km=500.0,
             traffic_load_pct=0.0,
         )
@@ -863,14 +878,51 @@ class TestLinkState:
 
 
 class TestTracedPath:
+    @staticmethod
+    def _reached(**overrides) -> dict:
+        fields = {
+            "flow_id": "ashburn-to-frankfurt",
+            "src_node": "gs-ashburn",
+            "dst_node": "gs-frankfurt",
+            "hops": ["gs-ashburn", "sat-P02S05", "gs-frankfurt"],
+            "hop_rtts": [None, 5.0, 12.0],
+            "state": "reached",
+            "rtt_ms": 12.0,
+            "error": None,
+            "reverse_hops": ["gs-frankfurt", "sat-P02S05", "gs-ashburn"],
+            "reverse_hop_rtts": [None, 6.0, 12.5],
+            "reverse_state": "reached",
+            "reverse_rtt_ms": 12.5,
+            "reverse_error": None,
+            "asymmetry_detected": False,
+            "tracing": True,
+            "traced_at": "2026-09-23T00:00:00+00:00",
+            "sim_time": "2026-06-08T00:00:00+00:00",
+        }
+        return {**fields, **overrides}
+
     def test_round_trip(self):
-        tp = TracedPath(
-            flow_id="ashburn-to-frankfurt",
-            src_node="gs-ashburn",
-            dst_node="gs-frankfurt",
-            hops=["gs-ashburn", "sat-P02S05", "sat-P02S06", "sat-P03S06", "gs-frankfurt"],
-        )
-        _round_trip(tp)
+        _round_trip(TracedPath(**self._reached()))
+
+    @pytest.mark.parametrize(
+        ("overrides", "match"),
+        [
+            ({"state": "not_reached"}, "rtt_ms exists only when it reached"),
+            ({"rtt_ms": None}, "rtt_ms exists only when it reached"),
+            (
+                {"reverse_state": "failed", "reverse_rtt_ms": None},
+                "error exists only when it failed",
+            ),
+            ({"hop_rtts": [None, 5.0]}, "3 hops and 2 round trips"),
+            (
+                {"reverse_state": "not_reached", "reverse_rtt_ms": None},
+                "asymmetry is known only when both directions reached",
+            ),
+        ],
+    )
+    def test_outcomes_must_agree_with_their_states(self, overrides, match):
+        with pytest.raises(ValidationError, match=match):
+            TracedPath(**self._reached(**overrides))
 
 
 class TestNetworkHealth:
@@ -882,18 +934,6 @@ class TestNetworkHealth:
             last_convergence_ms=1500.0,
         )
         _round_trip(nh)
-
-
-class TestActiveFlow:
-    def test_round_trip(self):
-        af = ActiveFlow(
-            flow_id="ashburn-to-frankfurt",
-            src_node="gs-ashburn",
-            dst_node="gs-frankfurt",
-            protocol="udp",
-            probe_type="continuous",
-        )
-        _round_trip(af)
 
 
 class TestRecentEvent:
@@ -914,6 +954,7 @@ class TestStateSnapshot:
             wall_time=NOW,
             schema_version=1,
             session_id="run-test-0001",
+            history_recording=None,
             nodes=[
                 NodeState(
                     node_id="sat-P00S00",
@@ -926,8 +967,8 @@ class TestStateSnapshot:
                     vel_z_km_s=0.0,
                     plane=0,
                     slot=0,
-                    routing_area="49.0001",
-                    neighbor_count=2,
+                    routing_instances=(),
+                    role="forwarding_only",
                     isl_count=2,
                     gnd_count=0,
                     reference_body="earth",
@@ -942,13 +983,15 @@ class TestStateSnapshot:
                     link_type="intra_plane_isl",
                     link_reason=None,
                     latency_ms=3.0,
-                    bandwidth_mbps=1000.0,
+                    transmit_mbps_a=1000.0,
+                    receive_mbps_a=1000.0,
+                    transmit_mbps_b=1000.0,
+                    receive_mbps_b=1000.0,
                     range_km=900.0,
                     traffic_load_pct=None,
                 ),
             ],
             traced_paths=[],
-            active_flows=[],
             recent_events=[],
             network_health=NetworkHealth(
                 status="converged",

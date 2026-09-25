@@ -4,6 +4,7 @@
  *  Visual tokens (colors, sizes) sourced from tokens.ts.
  *  Re-exported here for backwards compatibility with existing consumers. */
 
+import { apiErrorFromException, apiErrorMessage } from "./ui/apiError";
 import { tokens } from "./styles/tokens";
 
 export const EARTH_RADIUS = tokens.earthRadius;
@@ -89,19 +90,22 @@ export function setApiKey(key: string): void {
   }
 }
 
-/** Fetch API key from VS-API token endpoint and store it. */
+/** Fetch the API key from VS-API's token endpoint and store it. A failure
+ *  rejects with VS-API's reason; the stored key never stands in for it. */
 export async function fetchApiKey(): Promise<string> {
+  let resp: Response;
   try {
-    const resp = await fetch(`${REST_URL}/api/v1/auth/token`);
-    if (resp.ok) {
-      const data = await resp.json();
-      if (data.token) {
-        setApiKey(data.token);
-        return data.token;
-      }
-    }
-  } catch { /* VS-API not reachable yet */ }
-  return getApiKey();
+    resp = await fetch(`${REST_URL}/api/v1/auth/token`);
+  } catch (err) {
+    throw new Error(apiErrorFromException(err));
+  }
+  if (!resp.ok) throw new Error(await apiErrorMessage(resp));
+  const data = (await resp.json()) as { token?: unknown };
+  if (typeof data.token !== "string" || data.token === "") {
+    throw new Error("VS-API answered the token request without a token");
+  }
+  setApiKey(data.token);
+  return data.token;
 }
 
 /** Build WebSocket URL with auth token as query parameter. */
@@ -153,30 +157,20 @@ export const LINK_ISL_COLOR = tokens.colorLinkIsl;
 export const LINK_GROUND_COLOR = tokens.colorLinkGround;
 export const LINK_FAIL_COLOR = tokens.colorLinkFail;
 export const LINK_INACTIVE_COLOR = tokens.colorLinkInactive;
-export const LINK_FLOW_COLOR = tokens.colorLinkFlow;
-export const LINK_FLOW_SECONDARY_COLOR = tokens.colorLinkFlowSecondary;
+export const TRACE_FORWARD_COLOR = tokens.colorTraceForward;
+export const TRACE_REVERSE_COLOR = tokens.colorTraceReverse;
+export const TRACE_BRIDGED_COLOR = tokens.colorTraceBridged;
 
 /** Link widths (px) */
 export const LINK_ISL_WIDTH = tokens.linkWidthIsl;
 export const LINK_GROUND_WIDTH = tokens.linkWidthGround;
-export const LINK_FLOW_WIDTH = tokens.linkWidthFlow;
-
-/** Area colors — routing area → color mapping */
-export const AREA_COLORS: Record<string, number> = {
-  "49.0001": tokens.areaRed,
-  "49.0002": tokens.areaGreen,
-  "49.0003": tokens.areaBlue,
-  "49.0004": tokens.areaAmber,
-  "0.0.0.0": tokens.areaRed,
-  "0.0.0.1": tokens.areaGreen,
-  "0.0.0.2": tokens.areaBlue,
-  "0.0.0.3": tokens.areaAmber,
-};
+export const TRACE_WIDTH = tokens.traceWidth;
+export const TRACE_BRIDGED_WIDTH = tokens.traceWidthBridged;
 
 /** Plane colors */
 export const PLANE_COLORS: readonly number[] = tokens.planeColors;
 
-/** Unmapped area/plane fallback tint — one source for scene + panels. */
+/** Tint for an unmapped plane — one source for scene + panels. */
 export const UNKNOWN_TINT = tokens.colorNodeUnknown;
 
 /** Three.js hex number → CSS color string. */

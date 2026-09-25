@@ -31,7 +31,7 @@ def parse_isis_neighbors(output: str) -> dict[str, dict[str, str]]:
     """Parse `show isis neighbor` output into {system_id: {state, interface}}.
 
     Example output:
-      Area NODAL:
+      Area earth_domain:
         System Id           Interface   L  State        Holdtime SNPA
         0000.0001.0001      isl0        1  Up           29       P2P
         0000.0001.0001      isl0        2  Up           28       P2P
@@ -79,7 +79,7 @@ class FrrIsisAdapter(BaseFrrAdapter):
 
     protocol_name = "IS-IS"
     neighbor_command = "show isis neighbor"
-    log_file_path = "/var/log/frr/isisd.log"
+    log_file_path = "/var/log/frr/frr.log"
     log_patterns = [
         (_SPF_START_RE, "spf_start"),
         (_SPF_END_RE, "spf_end"),

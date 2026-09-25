@@ -40,23 +40,13 @@ export function filterSnapshotForRender(
   const kernelActualPairs = snapshot.kernel_actual_pairs?.filter(
     ([a, b]) => visibleNodeIds.has(a) && visibleNodeIds.has(b),
   );
-  const tracedPaths = snapshot.traced_paths.filter((path) => {
-    const reverse = path.reverse_hops ?? [];
-    return (
-      path.hops.every((nodeId) => visibleNodeIds.has(nodeId)) &&
-      reverse.every((nodeId) => visibleNodeIds.has(nodeId))
-    );
-  });
-  const activeFlows = snapshot.active_flows.filter(
-    (flow) => visibleNodeIds.has(flow.src_node) && visibleNodeIds.has(flow.dst_node),
-  );
 
   return {
     ...snapshot,
     nodes,
     links,
     kernel_actual_pairs: kernelActualPairs,
-    traced_paths: tracedPaths,
-    active_flows: activeFlows,
+    // Traces are drawn whole whatever the filters show: a hop on a hidden node is
+    // bridged like any other hop the view cannot place.
   };
 }

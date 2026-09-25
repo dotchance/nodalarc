@@ -373,7 +373,7 @@ def compile_builder_draft(
     request: BuilderCompileRequest,
     snapshot: CatalogReadSnapshot,
     *,
-    available_node_count: int = 1,
+    available_node_count: int,
     runtime_support: RuntimeSupport | None = None,
     preview_factory: PreviewFactory | None = None,
 ) -> BuilderCompileResult:

@@ -14,6 +14,11 @@ from nodalarc.catalog_paths import CatalogRoots
 from nodalarc.catalog_refs import CatalogRef
 from nodalarc.catalog_registry import validate_referenced_configuration_document
 from nodalarc.configuration_yaml import load_configuration_yaml
+from nodalarc.models.resolved_session import (
+    InterfaceRates,
+    IsisInstanceAreas,
+    OspfInstanceAreas,
+)
 from nodalarc.resolve_session import (
     SessionResolutionError,
     _derive_link_label,
@@ -174,7 +179,11 @@ def test_every_shipped_catalog_session_resolves_to_runtime_truth() -> None:
         assert {domain.domain_id for domain in sr_domains} == {
             block.domain_id for block in resolved.sid_blocks
         }
-        assert all(0 < sid <= 8000 for sid in resolved.sid_index_by_node_id().values())
+        assert all(
+            0 < sid <= 8000
+            for indices in resolved.sid_index_by_domain().values()
+            for sid in indices.values()
+        )
         assert all(
             node.interfaces is not None and node.interfaces.lo0 is not None
             for node in resolved.nodes
@@ -204,7 +213,6 @@ def test_catalog_resolver_materializes_runtime_domains_and_link_candidates() -> 
     ]
     assert fixed_candidates
     assert all(candidate.interface_a and candidate.interface_b for candidate in fixed_candidates)
-    assert all(candidate.bandwidth_mbps > 0 for candidate in resolved.link_candidates)
 
     access_candidates = [
         candidate for candidate in resolved.link_candidates if candidate.kind == "access"
@@ -286,11 +294,8 @@ def test_generated_space_nodes_get_deterministic_runtime_loopbacks() -> None:
         "100.64.0.7/32",
         "100.64.0.8/32",
     ]
-    assert [node.interfaces.lo0.ipv6 for node in satellites[:3] if node.interfaces] == [
-        "fd00:6e0::6/128",
-        "fd00:6e0::7/128",
-        "fd00:6e0::8/128",
-    ]
+    # The session declares no IPv6 loopback, so no node holds one.
+    assert all(node.interfaces.lo0.ipv6 is None for node in satellites if node.interfaces)
 
 
 def test_session_without_routing_gets_one_default_runtime_domain() -> None:
@@ -326,11 +331,64 @@ def test_explicit_routing_domains_must_cover_every_node() -> None:
         ]
     }
 
-    with pytest.raises(SessionResolutionError, match="routing domains must cover every router"):
+    with pytest.raises(
+        SessionResolutionError, match="every routing workload must participate in a routing domain"
+    ):
         resolve_session(raw, catalog=shipped_read_view())
 
 
-def test_explicit_routing_domains_must_be_disjoint() -> None:
+def test_a_router_participates_in_every_domain_that_selects_it() -> None:
+    raw = _load()
+    raw["routing"] = {
+        "domains": [
+            {
+                "id": "orbital",
+                "protocol": "isis",
+                "selectors": [{"any": [{"segment": "leo"}, {"segment": "ground"}]}],
+            },
+            {
+                "id": "terrestrial",
+                "protocol": "ospf",
+                "selectors": [{"segment": "ground"}],
+            },
+        ]
+    }
+
+    resolved = resolve_session(raw, catalog=shipped_read_view())
+
+    router = next(node for node in resolved.nodes if node.kind == "ground_station")
+    satellite = next(node for node in resolved.nodes if node.kind == "satellite")
+    assert [d.domain_id for d in resolved.routing_domains_for(router.node_id)] == [
+        "orbital",
+        "terrestrial",
+    ]
+    assert [d.domain_id for d in resolved.routing_domains_for(satellite.node_id)] == ["orbital"]
+    # Each interface belongs to the instances its router shares with the
+    # other end; the site LAN has no other participant, so it joins both.
+    assert router.interfaces is not None
+    lan = tuple(sorted(router.interfaces.ethernet))
+    access = tuple(wan.name for wan in router.wan_interfaces)
+    assert lan and access
+    assert resolved.domain_interfaces(router.node_id) == {
+        "orbital": tuple(sorted(access + lan)),
+        "terrestrial": lan,
+    }
+    assert set(resolved.domain_interfaces(satellite.node_id)) == {"orbital"}
+    # IS-IS areas are the router's area addresses; OSPF areas belong to its
+    # interfaces, each in the router's area.
+    areas = resolved.instance_areas_by_node()
+    assert areas[router.node_id] == (
+        IsisInstanceAreas("orbital", ("49.0001",)),
+        OspfInstanceAreas(
+            "terrestrial", loopback_area="0.0.0.0", interface_areas=dict.fromkeys(lan, "0.0.0.0")
+        ),
+    )
+    assert areas[satellite.node_id] == (IsisInstanceAreas("orbital", ("49.0001",)),)
+
+
+def test_a_router_in_more_domains_of_a_protocol_than_its_adapter_renders_is_refused() -> None:
+    from nodalarc.runtime_support import FeatureCategory, UnsupportedFeatureError
+
     raw = _load()
     raw["routing"] = {
         "domains": [
@@ -347,8 +405,14 @@ def test_explicit_routing_domains_must_be_disjoint() -> None:
         ]
     }
 
-    with pytest.raises(SessionResolutionError, match="routing domains must be disjoint"):
+    with pytest.raises(UnsupportedFeatureError) as refused:
         resolve_session(raw, catalog=shipped_read_view())
+
+    [feature] = refused.value.features
+    assert feature.category == FeatureCategory.ROUTER_DOMAINS
+    assert feature.value == "isis:all_domain,leo_domain"
+    assert "participate in isis domains ['all_domain', 'leo_domain']" in feature.message
+    assert "workload adapter 'frr' renders 1 isis domain(s) per router" in feature.message
 
 
 def test_placed_ground_nodes_get_deterministic_allocated_loopbacks(tmp_path: Path) -> None:
@@ -390,7 +454,8 @@ def test_placed_ground_nodes_get_deterministic_allocated_loopbacks(tmp_path: Pat
     for node in ground:
         assert node.interfaces is not None
         assert node.interfaces.lo0.ipv4 is not None
-        assert node.interfaces.lo0.ipv6 is not None
+        # No addressing assignment declares an IPv6 loopback.
+        assert node.interfaces.lo0.ipv6 is None
 
     again = resolve_session(raw, catalog=FilesystemCatalogReadView(roots))
     assert {
@@ -467,3 +532,110 @@ def test_catalog_source_change_changes_resolved_session() -> None:
 
     assert baseline.model_dump(mode="python") != updated.model_dump(mode="python")
     assert all("changed" in node.tags for node in updated.nodes if node.segment_id == "leo_a")
+
+
+def test_each_wan_interface_carries_its_own_terminal_rates() -> None:
+    """Shaping authority is per terminal and per direction.
+
+    The shipped TDRS session pairs 50/600 Mbit/s relay terminals with ground
+    terminals that transmit 600 and receive 50. Each interface keeps its own
+    terminal's rates; neither end inherits the other's or a pair minimum.
+    """
+    resolved = resolve_session(_load("earth-geo-tdrs.yaml"), catalog=shipped_read_view())
+    rates = resolved.interface_terminal_rates()
+
+    wan_interfaces = {
+        (node.node_id, wan.name) for node in resolved.nodes for wan in node.wan_interfaces
+    }
+    assert set(rates) == wan_interfaces
+
+    kinds = {node.node_id: node.kind for node in resolved.nodes}
+    satellite_rates = {
+        value for (node_id, _), value in rates.items() if kinds[node_id] == "satellite"
+    }
+    ground_rates = {
+        value for (node_id, _), value in rates.items() if kinds[node_id] == "ground_station"
+    }
+    assert InterfaceRates(transmit_mbps=50.0, receive_mbps=600.0) in satellite_rates
+    assert InterfaceRates(transmit_mbps=600.0, receive_mbps=50.0) in ground_rates
+
+
+def _simple_with_isis_areas(area_assignment: dict) -> dict:
+    raw = _load()
+    raw["routing"] = {
+        "domains": [
+            {
+                "id": "orbital",
+                "protocol": "isis",
+                "selectors": [{"any": [{"segment": "leo"}, {"segment": "ground"}]}],
+                "area_assignment": area_assignment,
+            }
+        ]
+    }
+    return raw
+
+
+def test_isis_routers_on_links_between_two_areas_are_area_border_routers() -> None:
+    resolved = resolve_session(
+        _simple_with_isis_areas(
+            {
+                "strategy": "explicit",
+                "assignments": [
+                    {"planes": [0], "area_id": "49.0001"},
+                    {"ground_stations": "all", "area_id": "49.0002"},
+                ],
+            }
+        ),
+        catalog=shipped_read_view(),
+    )
+
+    # Every access link joins a satellite in 49.0001 to a ground router in
+    # 49.0002. Denver's second router has no access link and shares its LAN
+    # with a router of its own area.
+    with_access_links = {
+        node_id
+        for candidate in resolved.link_candidates
+        if candidate.kind == "access"
+        for node_id in (candidate.node_a, candidate.node_b)
+    }
+    borders = resolved.area_border_instances_by_node()
+    assert set(borders) == with_access_links
+    assert set(borders.values()) == {("orbital",)}
+    assert "earth-us-co-denver-gw2" not in borders
+
+
+def test_one_isis_area_has_no_area_border_routers() -> None:
+    resolved = resolve_session(
+        _simple_with_isis_areas({"strategy": "flat"}), catalog=shipped_read_view()
+    )
+
+    assert resolved.area_border_instances_by_node() == {}
+
+
+def test_routers_receiving_boundary_exports_are_as_boundary_routers() -> None:
+    resolved = resolve_session(
+        _load("earth-leo-heo-geo-luna-reachability.yaml"), catalog=shipped_read_view()
+    )
+
+    # Each boundary link joins an Earth relay and a Luna relay, and the
+    # exports run both ways.
+    assert resolved.as_boundary_instances_by_node() == {
+        "geo-relay-sat-p00s03": ("earth_domain",),
+        "geo-relay-sat-p00s07": ("earth_domain",),
+        "luna-relay-sat-p00s00": ("luna_domain",),
+        "luna-relay-sat-p00s01": ("luna_domain",),
+    }
+
+
+def test_node_roles_follow_forwarding_and_participation() -> None:
+    resolved = resolve_session(_load("earth-luna-quic.yaml"), catalog=shipped_read_view())
+
+    roles = resolved.node_roles()
+    participants = {node_id for domain in resolved.routing_domains for node_id in domain.node_ids}
+    for node in resolved.nodes:
+        if node.forwarding == "host":
+            assert roles[node.node_id] == "host"
+        else:
+            assert node.node_id in participants
+            assert roles[node.node_id] == "router"
+    assert "host" in roles.values()

@@ -15,9 +15,38 @@ export interface NodeAddress {
   metric: number | null;
 }
 
+export type RoutingProtocol = "isis" | "ospf" | "static" | "bgp";
+
+/** A node's routing role: a router forwards between subnets and participates
+ *  in at least one routing instance; a host forwards nothing; a node that
+ *  forwards and participates in no instance forwards only between its
+ *  connected subnets. */
+export type NodeRole = "router" | "host" | "forwarding_only";
+
+/** One interface a node runs a routing instance on. */
+export interface NodeInstanceInterface {
+  name: string;
+  /** The interface's OSPF area; IS-IS and static interfaces carry none. */
+  area_id: string | null;
+}
+
+/** A node's participation in one routing instance (a routing.domains entry). */
+export interface NodeRoutingInstance {
+  domain_id: string;
+  protocol: RoutingProtocol;
+  /** IS-IS: the router's area addresses. OSPF: every area it has an
+   *  interface in. Static: none. */
+  areas: readonly string[];
+  interfaces: readonly NodeInstanceInterface[];
+  /** An area border router of the instance. */
+  area_border: boolean;
+  /** Redistributes routing-boundary exports into the instance. */
+  as_boundary: boolean;
+}
+
 export interface NodeState {
   node_id: string;
-  node_type: string; // "satellite" | "ground_station"
+  node_type: "satellite" | "ground_station";
   lat_deg: number;
   lon_deg: number;
   alt_km: number;
@@ -26,8 +55,9 @@ export interface NodeState {
   vel_z_km_s: number | null;
   plane: number | null;
   slot: number | null;
-  routing_area: string | null;
-  neighbor_count: number;
+  /** Every routing instance the node participates in, in declared order. */
+  routing_instances: readonly NodeRoutingInstance[];
+  role: NodeRole;
   isl_count: number;
   gnd_count: number;
   prefix: string | null;
@@ -54,7 +84,11 @@ export interface LinkState {
   link_type: string | null;
   link_reason: string | null;
   latency_ms: number;
-  bandwidth_mbps: number;
+  // Each direction runs at its sending end's terminal transmit rate.
+  transmit_mbps_a: number;
+  receive_mbps_a: number;
+  transmit_mbps_b: number;
+  receive_mbps_b: number;
   range_km: number;
   traffic_load_pct: number | null;
   interface_a: string;
@@ -91,21 +125,36 @@ export interface LinkDecisionTrace {
   endpoint_segments?: [string, string] | null;
 }
 
+export type TraceState = "running" | "reached" | "not_reached" | "failed";
+
+/** The live measured path between two nodes, one traceroute per direction.
+ *  Each hop is the node that owns the answering address, an address no node
+ *  owns, or "*" when nothing answered. rtt_ms exists only when the destination answered; error exists
+ *  only when the trace could not run. */
+/** Why a continuous trace stopped on its own. */
+export type TraceStopReason = "time_limit" | "internal_error";
+
 export interface TracedPath {
   flow_id: string;
   src_node: string;
   dst_node: string;
   hops: string[];
-  reverse_hops?: string[];
-  hop_rtts?: (number | null)[];
-  reverse_hop_rtts?: (number | null)[];
-  rtt_ms?: number;
-  reverse_rtt_ms?: number;
-  asymmetry_detected?: boolean;
-  method?: string;
-  path_valid_until?: string;
-  path_valid_seconds?: number;
-  traced_at?: string;
+  hop_rtts: (number | null)[];
+  state: TraceState;
+  rtt_ms: number | null;
+  error: string | null;
+  reverse_hops: string[];
+  reverse_hop_rtts: (number | null)[];
+  reverse_state: TraceState;
+  reverse_rtt_ms: number | null;
+  reverse_error: string | null;
+  asymmetry_detected: boolean | null;
+  /** False once the trace loop has stopped; the last result stays shown. */
+  tracing: boolean;
+  /** Why a continuous trace stopped on its own; absent while it runs. */
+  stop_reason: TraceStopReason | null;
+  traced_at: string;
+  sim_time: string;
 }
 
 export interface NetworkHealth {
@@ -115,19 +164,44 @@ export interface NetworkHealth {
   last_convergence_ms: number | null;
 }
 
-export interface ActiveFlow {
-  flow_id: string;
-  src_node: string;
-  dst_node: string;
-  protocol: string;
-  probe_type: string;
-}
-
 export interface RecentEvent {
   sim_time: string;
   node_id: string;
   event_type: string;
   summary: string;
+}
+
+/** A recorded session run's history recording: running, or stopped and why. */
+export interface HistoryRecordingState {
+  state: "recording" | "stopped";
+  error: string | null;
+}
+
+/** One recorded link event of a session deployed with history recording. */
+export interface LinkHistoryEvent {
+  id: number;
+  session_id: string;
+  sim_time: string;
+  wall_time: string;
+  event_type: "LinkUp" | "LinkDown" | "LatencyUpdate" | "LinkActive";
+  node_a: string;
+  node_b: string;
+  interface_a: string | null;
+  interface_b: string | null;
+  latency_ms: number | null;
+  range_km: number | null;
+  reason: string | null;
+}
+
+/** One page of recorded link events: `returned` of `total`, and the cursor of
+ *  the next page (null on the last). `retained_from` is set once the history
+ *  size budget dropped older rows. */
+export interface LinkHistoryPage {
+  events: LinkHistoryEvent[];
+  returned: number;
+  total: number;
+  next_cursor: string | null;
+  retained_from: string | null;
 }
 
 export interface OpsEvent {
@@ -207,7 +281,6 @@ export interface StateSnapshot {
    *  dimmed — so a beam never reads connected while the card says in_flight/faulted. */
   kernel_actual_pairs?: [string, string][];
   traced_paths: TracedPath[];
-  active_flows: ActiveFlow[];
   recent_events: RecentEvent[];
   network_health: NetworkHealth;
   routing_stack: string | null;
@@ -226,6 +299,8 @@ export interface StateSnapshot {
   stale: boolean;
   actuation_notices?: ActuationNotice[];
   actuation_health?: ActuationHealth | null;
+  /** This run's history recording; null when it was deployed without one. */
+  history_recording: HistoryRecordingState | null;
   ops_events?: OpsEvent[];
   /** Identifies VS-API's ops seq space; a change means the server
    *  restarted and the scrollback must replace, not merge. */

@@ -6,6 +6,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
 from nodalarc.models.resolved_session import ResolvedRoutingDomain
 from nodalarc.models.segments import GroundScheduling
 from nodalarc.session_validator import build_validation_report, validate_session_readiness
@@ -116,7 +117,7 @@ def test_old_session_shape_is_not_accepted() -> None:
     old_shape = {"session": {"name": "old"}, "constellation": "configs/constellations/demo.yaml"}
 
     try:
-        validate_session_readiness(old_shape)  # type: ignore[arg-type]
+        validate_session_readiness(old_shape, available_node_count=1)  # type: ignore[arg-type]
     except TypeError as exc:
         assert "ResolvedSession" in str(exc)
     else:
@@ -261,16 +262,44 @@ def test_complete_sgp4_tle_session_has_no_ome_readiness_error() -> None:
     assert "E020" not in _codes(results)
 
 
-def test_available_node_count_warning_is_non_blocking() -> None:
+@pytest.fixture
+def pods_per_node():
+    """Set the platform's session pods per node for one test."""
+    from nodalarc.platform_config import get_platform_config, init_platform_config
+
+    base = get_platform_config()
+
+    def _set(count: int) -> None:
+        init_platform_config(base.model_copy(update={"session_pods_per_node": count}))
+
+    yield _set
+    init_platform_config(base)
+
+
+def test_pods_beyond_the_nodes_capacity_warn_without_blocking(pods_per_node) -> None:
     resolved = _resolved(constellation={"planes": {"count": 3, "sats_per_plane": 3}})
+    pods = len(resolved.nodes)
+    pods_per_node(pods - 1)
 
     results = validate_session_readiness(resolved, available_node_count=1)
     report = build_validation_report(resolved, results)
 
-    assert "W004" in _codes(results)
+    (warning,) = [result for result in results if result.code == "W004"]
+    assert warning.message == (
+        f"Session needs {pods} session pods; the 1 available Kubernetes node(s) "
+        f"hold about {pods - 1} ({pods - 1} per node)."
+    )
     assert report.status == "valid"
     assert report.dispatchable is True
-    assert report.warnings
+
+
+def test_pods_within_the_nodes_capacity_do_not_warn(pods_per_node) -> None:
+    resolved = _resolved(constellation={"planes": {"count": 3, "sats_per_plane": 3}})
+    pods_per_node(len(resolved.nodes))
+
+    results = validate_session_readiness(resolved, available_node_count=1)
+
+    assert "W004" not in _codes(results)
 
 
 def test_validation_report_blocks_on_errors() -> None:

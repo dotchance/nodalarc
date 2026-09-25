@@ -111,7 +111,7 @@ export function useWizardApi() {
   );
 
   const deploy = useCallback(
-    async (): Promise<boolean> => {
+    async (recordHistory: boolean): Promise<boolean> => {
       if (!compiled) {
         setError("Generate and review the Wizard session before deployment");
         return false;
@@ -135,6 +135,7 @@ export function useWizardApi() {
           expected_session_revision: exactSaved.session.revision,
           expected_document_digest: exactSaved.digests.document,
           expected_dependency_digest: exactSaved.digests.dependency,
+          record_history: recordHistory,
         });
         return true;
       } catch (e) {
@@ -179,14 +180,15 @@ export function useWizardApi() {
     }
   }, [compiled, saved]);
 
-  const deployUploadedYaml = useCallback(async (yaml: string): Promise<boolean> => {
+  const deployUploadedYaml = useCallback(
+    async (yaml: string, recordHistory: boolean): Promise<boolean> => {
     setDeploying(true);
     setError(null);
     try {
       const resp = await fetch(`${REST_URL}/api/v1/session/deploy-from-yaml`, {
         method: "POST",
         headers: authHeaders({ "Content-Type": "application/json" }),
-        body: JSON.stringify({ yaml }),
+        body: JSON.stringify({ yaml, record_history: recordHistory }),
       });
       if (!resp.ok) {
         setError(await apiErrorMessage(resp));
@@ -199,7 +201,9 @@ export function useWizardApi() {
     } finally {
       setDeploying(false);
     }
-  }, []);
+  },
+  [],
+  );
 
   const previewCoverage = useCallback(
     async (state: WizardRuntimeState) => {

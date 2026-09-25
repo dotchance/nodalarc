@@ -337,7 +337,6 @@ class TestLinkStateSnapshotEpochId:
             carrier=CarrierState.UP,
             routing=RoutingState.UNKNOWN,
             latency_ms=3.0,
-            bandwidth_mbps=1000.0,
             link_type="isl",
             sim_time=datetime(2025, 1, 1, tzinfo=UTC),
         )

@@ -17,7 +17,7 @@ type TerminalBlock = BuilderWorldNode["terminal_inventory"][number];
 function block(
   role: TerminalBlock["endpoint_role"],
   medium: "rf" | "optical",
-  elev: number | null,
+  elev: number,
 ): TerminalBlock {
   return {
     terminal_id: `${role}_0`,
@@ -27,12 +27,13 @@ function block(
     source_terminal_id: null,
     link_role: null,
     count: 1,
-    tracking_capacity: null,
-    max_range_km: null,
+    tracking_capacity: 1,
+    max_range_km: 5000,
     min_elevation_deg: elev,
-    field_of_regard_deg: null,
-    tracking_rate_deg_s: null,
-    bandwidth_mbps: null,
+    field_of_regard_deg: role === "access" ? 180 : 360,
+    tracking_rate_deg_s: 3,
+    transmit_mbps: 1000,
+    receive_mbps: 1000,
     boresight: null,
     source_ref: "x",
   };
@@ -56,19 +57,20 @@ function node(
     surface_position: null,
     epoch_position: null,
     forwarding: null,
+    role: "forwarding_only",
+    routing_instances: [],
     terminal_inventory: blocks,
     interfaces: null,
     originated_prefixes: null,
   };
 }
 
-/** A ground↔space world: the ground station has an rf access terminal (with an
- *  optional declared elevation floor); the satellite has rf access + optical
- *  isl. groundFloor null ⇒ no terminal declares a floor (the mask is seeded). */
+/** A ground↔space world: the ground station has an rf access terminal with a
+ *  declared elevation floor; the satellite has rf access + optical isl. */
 export function tinyWorld(
   groundId: string,
   spaceId: string,
-  groundFloor: number | null = 25,
+  groundFloor = 25,
 ): BuilderWorld {
   return {
     session: { name: "t", display_name: null, description: null },
@@ -82,7 +84,7 @@ export function tinyWorld(
     },
     nodes: [
       node("g1", groundId, "ground_station", [block("access", "rf", groundFloor)]),
-      node("s1", spaceId, "satellite", [block("access", "rf", null), block("isl", "optical", null)]),
+      node("s1", spaceId, "satellite", [block("access", "rf", 0), block("isl", "optical", 0)]),
     ],
     link_rules: [],
     segments: [],

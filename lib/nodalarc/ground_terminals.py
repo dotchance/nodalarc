@@ -15,7 +15,7 @@ from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from typing import Literal, Protocol
 
-from nodalarc.body_frames import SUPPORTED_BODY_NAMES, SupportedSurfaceBody
+from nodalarc.body_frames import SupportedSurfaceBody
 from nodalarc.models.terminal_physics import (
     SatGroundTerminalBoresight,
     TerminalBoresight,
@@ -35,10 +35,10 @@ class GroundTerminalCapacityLike(GroundTerminalTypeLike, Protocol):
 class TerminalPhysicsLike(GroundTerminalTypeLike, Protocol):
     count: int
     interface_indices: tuple[int, ...]
-    max_range_km: float | None
-    field_of_regard_deg: float | None
-    max_tracking_rate_deg_s: float | None
-    boresight: TerminalBoresight | SatGroundTerminalBoresight | None
+    max_range_km: float
+    field_of_regard_deg: float
+    max_tracking_rate_deg_s: float
+    boresight: TerminalBoresight | SatGroundTerminalBoresight
 
 
 @dataclass(frozen=True, slots=True)
@@ -51,11 +51,11 @@ class TerminalPhysicsProfile:
     with FoR from another.
     """
 
-    profile_id: str | None
-    max_range_km: float | None
-    field_of_regard_deg: float | None
-    max_tracking_rate_deg_s: float | None
-    boresight: TerminalBoresight | SatGroundTerminalBoresight | None
+    profile_id: str
+    max_range_km: float
+    field_of_regard_deg: float
+    max_tracking_rate_deg_s: float
+    boresight: TerminalBoresight | SatGroundTerminalBoresight
     target_body: SupportedSurfaceBody | None = None
 
     def __post_init__(self) -> None:
@@ -139,17 +139,12 @@ def satellite_terminal_index_pools_by_target_body(
     terminals: Sequence[TerminalPhysicsLike],
     *,
     total_count: int,
-    ground_link_model: Literal["geometry_only", "terminal_physics"],
 ) -> dict[str, tuple[int, ...]]:
     """Return allocatable satellite ground-terminal indices per target body.
 
-    Each block carries resolver-owned global ``gndN`` indices. In
-    terminal_physics mode, each block must declare a satellite boresight
-    target_body; the allocator may only assign indices from the pool matching
-    the ground station's reference body. In geometry_only mode, terminal
-    boresight constraints are intentionally absent, so each declared index is
-    eligible for every supported surface body while still consuming one global
-    physical terminal.
+    Each block carries resolver-owned global ``gndN`` indices and a satellite
+    boresight naming its target body; the allocator may only assign indices
+    from the pool matching the ground station's reference body.
     """
 
     if total_count < 0:
@@ -178,19 +173,11 @@ def satellite_terminal_index_pools_by_target_body(
         next_index += count
 
         boresight = term.boresight
-        if isinstance(boresight, SatGroundTerminalBoresight):
-            targets = (boresight.target_body,)
-        elif ground_link_model == "geometry_only":
-            targets = SUPPORTED_BODY_NAMES
-        else:
+        if not isinstance(boresight, SatGroundTerminalBoresight):
             raise ValueError(
-                f"satellite ground terminal block {block_idx} is missing "
-                "boresight.target_body; terminal_physics allocation cannot assign "
-                "body-specific terminal indices"
+                f"satellite ground terminal block {block_idx} carries a ground boresight"
             )
-
-        for target_body in targets:
-            pools.setdefault(str(target_body), []).extend(indices)
+        pools.setdefault(str(boresight.target_body), []).extend(indices)
 
     if next_index != total_count:
         raise ValueError(
@@ -216,72 +203,18 @@ def station_ground_terminal_type(
     return ground_terminal_type(terminals)
 
 
-def terminal_physics_missing_fields(term: TerminalPhysicsLike) -> tuple[str, ...]:
-    """Return terminal_physics fields missing from a terminal definition."""
-    missing: list[str] = []
-    if term.max_range_km is None:
-        missing.append("max_range_km")
-    if term.field_of_regard_deg is None:
-        missing.append("field_of_regard_deg")
-    if term.max_tracking_rate_deg_s is None:
-        missing.append("max_tracking_rate_deg_s")
-    if term.boresight is None:
-        missing.append("boresight")
-    return tuple(missing)
-
-
-def terminal_collection_missing_physics(
-    terminals: Sequence[TerminalPhysicsLike],
-    *,
-    label: str,
-) -> tuple[str, ...]:
-    """Return human-readable missing-physics errors for a terminal collection."""
-    errors: list[str] = []
-    if not terminals:
-        return (f"{label}: no terminal definitions",)
-    for idx, term in enumerate(terminals):
-        missing = terminal_physics_missing_fields(term)
-        if missing:
-            errors.append(f"{label}[{idx}] missing {', '.join(missing)}")
-    return tuple(errors)
-
-
 def terminal_physics_profile(
     terminals: Sequence[TerminalPhysicsLike],
     *,
     profile_id: str,
     endpoint: Literal["ground", "satellite"],
-    require_constraints: bool,
 ) -> TerminalPhysicsProfile:
     """Collapse a terminal collection into the one profile OME can apply today."""
     if not terminals:
         raise ValueError(f"{profile_id} has no terminal definitions")
 
-    missing_errors = terminal_collection_missing_physics(terminals, label=profile_id)
-    if require_constraints and missing_errors:
-        raise ValueError(
-            "terminal_physics ground visibility requires terminal physics fields: "
-            + "; ".join(missing_errors)
-        )
-    if missing_errors:
-        return TerminalPhysicsProfile(
-            profile_id=None,
-            max_range_km=None,
-            field_of_regard_deg=None,
-            max_tracking_rate_deg_s=None,
-            boresight=None,
-            target_body=None,
-        )
-
     signatures: set[tuple[float, float, float, str]] = set()
     for term in terminals:
-        if (
-            term.max_range_km is None
-            or term.field_of_regard_deg is None
-            or term.max_tracking_rate_deg_s is None
-            or term.boresight is None
-        ):
-            raise ValueError(f"{profile_id} has incomplete terminal physics")
         boresight = _validated_boresight(term.boresight, endpoint=endpoint, profile_id=profile_id)
         signatures.add(
             (
@@ -299,13 +232,6 @@ def terminal_physics_profile(
         )
 
     term = terminals[0]
-    if (
-        term.max_range_km is None
-        or term.field_of_regard_deg is None
-        or term.max_tracking_rate_deg_s is None
-        or term.boresight is None
-    ):
-        raise ValueError(f"{profile_id} has incomplete terminal physics")
     boresight = _validated_boresight(term.boresight, endpoint=endpoint, profile_id=profile_id)
     target_body = (
         boresight.target_body if isinstance(boresight, SatGroundTerminalBoresight) else None
@@ -325,7 +251,6 @@ def terminal_physics_profiles(
     *,
     profile_id: str,
     endpoint: Literal["ground", "satellite"],
-    require_constraints: bool,
 ) -> tuple[TerminalPhysicsProfile, ...]:
     """Return one visibility profile per target-body-compatible terminal block.
 
@@ -338,34 +263,9 @@ def terminal_physics_profiles(
     if not terminals:
         raise ValueError(f"{profile_id} has no terminal definitions")
 
-    missing_errors = terminal_collection_missing_physics(terminals, label=profile_id)
-    if require_constraints and missing_errors:
-        raise ValueError(
-            "terminal_physics ground visibility requires terminal physics fields: "
-            + "; ".join(missing_errors)
-        )
-    if missing_errors:
-        return (
-            TerminalPhysicsProfile(
-                profile_id=None,
-                max_range_km=None,
-                field_of_regard_deg=None,
-                max_tracking_rate_deg_s=None,
-                boresight=None,
-                target_body=None,
-            ),
-        )
-
     profiles_by_target: dict[str | None, TerminalPhysicsProfile] = {}
     signatures_by_target: dict[str | None, tuple[float, float, float, str]] = {}
     for idx, term in enumerate(terminals):
-        if (
-            term.max_range_km is None
-            or term.field_of_regard_deg is None
-            or term.max_tracking_rate_deg_s is None
-            or term.boresight is None
-        ):
-            raise ValueError(f"{profile_id} has incomplete terminal physics")
         boresight = _validated_boresight(term.boresight, endpoint=endpoint, profile_id=profile_id)
         target_body = (
             boresight.target_body if isinstance(boresight, SatGroundTerminalBoresight) else None

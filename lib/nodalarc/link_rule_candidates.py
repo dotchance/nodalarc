@@ -33,10 +33,9 @@ class DeclaredLinkCandidate:
     pair: tuple[str, str]
     rule_id: str
     kind: str
-    # Endpoint-ordered, parallel to endpoint_segments/endpoint_terminal_ids.
+    # Endpoint-ordered, parallel to endpoint_segments.
     terminal_roles: tuple[str, str]
     terminal_medium: str | None
-    endpoint_terminal_ids: tuple[str | None, str | None]
     topology_mode: str
     priority: int
     endpoint_segments: tuple[str, str]
@@ -211,10 +210,6 @@ def generate_declared_link_candidates(
                         rule.endpoints[1].terminal_role,
                     ),
                     terminal_medium=candidate_medium,
-                    endpoint_terminal_ids=(
-                        rule.endpoints[0].terminal_id,
-                        rule.endpoints[1].terminal_id,
-                    ),
                     topology_mode=rule.topology.mode,
                     priority=priority,
                     endpoint_segments=(

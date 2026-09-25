@@ -10,6 +10,7 @@
 import { Icon } from "../../ui/icons/Icon";
 import { REGIME_TINT, type Regime } from "../../taxonomy/regime";
 import type { NodeState } from "../../types";
+import { roleLabel, routingSummary } from "../../routing/instances";
 
 export interface HoverInfo {
   node: NodeState;
@@ -28,7 +29,7 @@ export function Tooltip({ hover, regime }: { hover: HoverInfo | null; regime?: R
     ? hover.caption
     : isGround
       ? `${n.lat_deg.toFixed(1)}°, ${n.lon_deg.toFixed(1)}°`
-      : `${n.isl_count} ISLs, ${n.gnd_count} GND, Area ${n.routing_area ?? "none"}`;
+      : `${roleLabel(n.role)}, ${n.isl_count} ISLs, ${n.gnd_count} GND, ${routingSummary(n)}`;
   const tint = regime && regime !== "unknown" ? REGIME_TINT[regime] : null;
   return (
     <div className="scene-tooltip" style={{ left: hover.x + 12, top: hover.y - 8 }}>

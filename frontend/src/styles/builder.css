@@ -55,6 +55,16 @@
 /* Icon-only session verbs that read as real buttons: bordered, panel
    surface, comfortable tap target. Hover title carries the name — the
    glyph is the control, the tooltip is the label. */
+.builder-toolbar-toggle {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  font-size: var(--font-size-sm);
+  color: var(--text-secondary);
+  white-space: nowrap;
+  cursor: pointer;
+}
+
 .builder-toolbar-btn.ui-iconbtn {
   width: 32px;
   height: 32px;

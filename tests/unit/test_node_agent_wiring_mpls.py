@@ -42,8 +42,6 @@ def _manifest(
         "sysctls": dict(sysctls),
         "gnd_interfaces": [],
         "mpls_enable": mpls,
-        "segment_routing": False,
-        "mtu": 1500,
         "remove_default_route": False,
         "plane": 0,
     }
@@ -73,8 +71,6 @@ def _manifest(
             "isl_interfaces": [],
             "gnd_interfaces": [{"name": "gnd0"}],
             "mpls_enable": mpls,
-            "segment_routing": False,
-            "mtu": 1500,
             "remove_default_route": False,
         },
     }
@@ -96,6 +92,7 @@ def _manifest(
                     "node_id": "gs-x",
                     "interface": "terr0",
                     "addresses": ["172.16.1.1/24"],
+                    "gateways": [],
                     "k3s_node": LOCAL_NODE,
                     "host_ip": "192.0.2.2",
                 },
@@ -103,6 +100,7 @@ def _manifest(
                     "node_id": "gs-y",
                     "interface": "terr0",
                     "addresses": ["172.16.1.2/24"],
+                    "gateways": [],
                     "k3s_node": LOCAL_NODE,
                     "host_ip": "192.0.2.2",
                 },

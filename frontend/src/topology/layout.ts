@@ -2,7 +2,8 @@
 // Licensed under the Apache License, Version 2.0. See LICENSE file.
 /** Deterministic grid layout for topology view.
  *  Transposed: planes as columns (X), slots as rows (Y).
- *  Routing areas as vertical bands. GS column to the right.
+ *  Bands group satellites by their legend entry in the colored instance
+ *  (an area, or area border routers). GS row below.
  */
 
 import type { NodeState, LinkState } from "../types";
@@ -14,7 +15,8 @@ export interface LayoutNode {
   x: number;
   y: number;
   type: string;
-  area: string | null;
+  /** The band the node sits in; null outside the colored instance. */
+  band: string | null;
   plane: number | null;
   slot: number | null;
 }
@@ -24,7 +26,6 @@ export interface LayoutLink {
   nodeB: string;
   state: string;
   isGround: boolean;
-  isCrossArea: boolean;
 }
 
 export interface AreaBounds {
@@ -53,11 +54,12 @@ const MARGIN = 40;
 export function computeLayout(
   nodes: NodeState[],
   links: LinkState[],
+  bandOf: (node: NodeState) => string | null,
 ): TopologyLayout {
   const sats = nodes.filter((n) => n.node_type === "satellite");
   const gss = nodes.filter((n) => n.node_type === "ground_station");
 
-  const allAreasNull = sats.every((s) => s.routing_area == null);
+  const allAreasNull = sats.every((s) => bandOf(s) == null);
 
   const layoutNodes: LayoutNode[] = [];
   const areaBoundsMap = new Map<string, { minX: number; minY: number; maxX: number; maxY: number }>();
@@ -97,7 +99,7 @@ export function computeLayout(
           x: bandX,
           y: MARGIN + i * NODE_SPACING_Y,
           type: "satellite",
-          area: sat.routing_area,
+          band: bandOf(sat),
           plane: sat.plane,
           slot: sat.slot,
         });
@@ -108,7 +110,7 @@ export function computeLayout(
   } else {
     const areaMap = new Map<string, Map<number, NodeState[]>>();
     for (const sat of sats) {
-      const area = sat.routing_area ?? "unknown";
+      const area = bandOf(sat) ?? "";
       if (!areaMap.has(area)) areaMap.set(area, new Map());
       const planeMap = areaMap.get(area)!;
       const plane = sat.plane ?? 0;
@@ -136,7 +138,7 @@ export function computeLayout(
             x,
             y,
             type: "satellite",
-            area: sat.routing_area,
+            band: bandOf(sat),
             plane: sat.plane,
             slot: sat.slot,
           });
@@ -173,7 +175,7 @@ export function computeLayout(
       x: gsStartX + i * GS_SPACING,
       y: gsY,
       type: "ground_station",
-      area: gs.routing_area,
+      band: bandOf(gs),
       plane: null,
       slot: null,
     });
@@ -183,9 +185,8 @@ export function computeLayout(
   const AREA_PAD_Y = 16;
   const AREA_PAD_LEFT = 12;
   const AREA_PAD_RIGHT = 32;
-  const filteredAreaEntries = [...areaBoundsMap.entries()].filter(([id]) =>
-    id !== "unknown" && id !== "0.0.0.0" && id !== "",
-  );
+  // Satellites outside the colored instance share the unnamed band, which has no box.
+  const filteredAreaEntries = [...areaBoundsMap.entries()].filter(([id]) => id !== "");
   const areaBounds: AreaBounds[] = (areaBoundsMap.size <= 1 ? [] : filteredAreaEntries).map(([id, b]) => ({
     id,
     minX: b.minX - AREA_PAD_LEFT,
@@ -194,18 +195,11 @@ export function computeLayout(
     maxY: b.maxY + AREA_PAD_Y,
   }));
 
-  // Build layout links
-  const nodeAreaMap = new Map<string, string | null>();
-  for (const n of nodes) {
-    nodeAreaMap.set(n.node_id, n.routing_area);
-  }
-
   const layoutLinks: LayoutLink[] = links.map((l) => ({
     nodeA: l.node_a,
     nodeB: l.node_b,
     state: l.state,
     isGround: isGroundLinkState(l),
-    isCrossArea: nodeAreaMap.get(l.node_a) !== nodeAreaMap.get(l.node_b),
   }));
 
   const maxX = bandX + MARGIN;

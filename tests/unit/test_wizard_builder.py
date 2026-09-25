@@ -311,7 +311,7 @@ def test_backend_does_not_repair_invalid_wizard_dead_interval(tmp_path: Path) ->
     snapshot = _snapshot(tmp_path)
     with pytest.raises(ValueError, match="hold_interval_s.*must be greater"):
         build_wizard_compile_request(
-            _request(protocol="ospf", routing_timers=timers),
+            _request(protocol="ospf", area_strategy="flat", routing_timers=timers),
             snapshot,
             identity_factory=lambda: "invalid-timers",
         )
@@ -337,17 +337,216 @@ def test_wizard_routing_inventory_and_presentation_are_backend_owned() -> None:
     assert all(extension.label and extension.description for extension in facts.extensions)
     assert facts.bfd.heading == "BFD (Bidirectional Forwarding Detection)"
     assert facts.bfd.enable_label == "Enable BFD"
-    assert tuple(field.id for field in facts.bfd.timer_fields) == (
-        "bfd_detect_multiplier",
-        "bfd_rx_interval",
-        "bfd_tx_interval",
+    for protocol in facts.protocols:
+        assert protocol.bfd_timer_fields is not None
+        assert tuple(field.id for field in protocol.bfd_timer_fields) == (
+            "bfd_detect_multiplier",
+            "bfd_rx_interval",
+            "bfd_tx_interval",
+        )
+        assert all(
+            field.label and field.description and field.guidance
+            for field in protocol.bfd_timer_fields
+        )
+    # A multi-area OSPF instance needs a router in two areas, which the
+    # per-router area assignment cannot declare; IS-IS areas meet at Level 2.
+    assert {protocol.id: protocol.area_strategies for protocol in facts.protocols} == {
+        "ospf": ("flat",),
+        "isis": ("flat", "stripe", "per_plane"),
+    }
+    assert all(protocol.default_area_strategy == "flat" for protocol in facts.protocols)
+
+
+@pytest.mark.parametrize("strategy", ["per_plane", "stripe"])
+def test_wizard_refuses_a_multi_area_ospf_strategy(strategy, tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match=f"{strategy!r} is not available for 'ospf'"):
+        build_wizard_compile_request(
+            _request(protocol="ospf", area_strategy=strategy), _snapshot(tmp_path)
+        )
+
+
+def test_wizard_offers_the_capabilities_and_bfd_bounds_the_adapters_render() -> None:
+    from nodalarc.runtime_support import registered_routing_support
+
+    facts = wizard_extension_rules_response()
+    capability = {"te": "traffic_engineering", "mpls": "mpls", "sr": "segment_routing"}
+    for protocol in facts.protocols:
+        support = registered_routing_support(protocol.id)
+        assert support is not None and support.bfd is not None
+        assert {capability[extension] for extension in protocol.extensions} == (
+            support.capabilities
+        )
+        bounds = {field.id: (field.minimum, field.maximum) for field in protocol.bfd_timer_fields}
+        assert bounds == {
+            "bfd_detect_multiplier": support.bfd.detect_multiplier,
+            "bfd_rx_interval": support.bfd.rx_interval_ms,
+            "bfd_tx_interval": support.bfd.tx_interval_ms,
+        }
+    offered = {protocol.id: protocol.extensions for protocol in facts.protocols}
+    assert offered == {"ospf": ("sr", "te", "mpls"), "isis": ("sr", "te", "mpls")}
+
+
+def _register(monkeypatch, declarations) -> None:
+    import nodalarc.runtime_support as runtime_support
+
+    monkeypatch.setattr(runtime_support, "registered_adapter_support", lambda: declarations)
+
+
+def test_an_unused_registered_adapter_does_not_narrow_the_wizard(
+    monkeypatch, tmp_path: Path
+) -> None:
+    from nodalarc.workloads.adapter import AdapterSupport, BfdSupport, RoutingProtocolSupport
+
+    from adapters.frr.support import FRR_SUPPORT
+
+    narrow_bfd = BfdSupport(
+        detect_multiplier=(3, 5), rx_interval_ms=(100, 900), tx_interval_ms=(100, 900)
     )
-    assert all(
-        field.label and field.description and field.guidance for field in facts.bfd.timer_fields
+    _register(
+        monkeypatch,
+        {
+            "frr": FRR_SUPPORT,
+            # Registered, but no shipped profile selects it.
+            "narrow": AdapterSupport(
+                routing={
+                    "isis": RoutingProtocolSupport(
+                        frozenset({"mpls"}),
+                        narrow_bfd,
+                        address_families=frozenset({"ipv4", "ipv6"}),
+                        domains_per_router=1,
+                        link_rate_floor_mbps=None,
+                    ),
+                    "ospf": RoutingProtocolSupport(
+                        frozenset(),
+                        address_families=frozenset({"ipv4", "ipv6"}),
+                        domains_per_router=1,
+                        link_rate_floor_mbps=None,
+                    ),
+                }
+            ),
+        },
     )
-    assert next(
-        protocol for protocol in facts.protocols if protocol.id == "ospf"
-    ).non_flat_area_warning
+
+    facts = {protocol.id: protocol for protocol in wizard_extension_rules_response().protocols}
+
+    assert facts["isis"].extensions == ("sr", "te", "mpls")
+    assert facts["ospf"].extensions == ("sr", "te", "mpls")
+    assert [(f.minimum, f.maximum) for f in facts["isis"].bfd_timer_fields] == [
+        (1, 255),
+        (10, 4294967),
+        (10, 4294967),
+    ]
+    # The session's FRR nodes run a choice the unused adapter cannot render.
+    timers = {**ROUTING_TIMERS, "bfd": True, "bfd_rx_interval": 50}
+    build_wizard_compile_request(
+        _request(extensions=["sr", "te"], routing_timers=timers), _snapshot(tmp_path)
+    )
+
+
+def test_wizard_offers_only_what_some_registered_adapter_renders(monkeypatch) -> None:
+    from nodalarc.workloads.adapter import AdapterSupport, BfdSupport, RoutingProtocolSupport
+
+    _register(
+        monkeypatch,
+        {
+            "engine": AdapterSupport(
+                routing={
+                    "isis": RoutingProtocolSupport(
+                        frozenset(),
+                        BfdSupport(
+                            detect_multiplier=(2, 9),
+                            rx_interval_ms=(50, 900),
+                            tx_interval_ms=(60, 800),
+                        ),
+                        address_families=frozenset({"ipv4", "ipv6"}),
+                        domains_per_router=1,
+                        link_rate_floor_mbps=None,
+                    ),
+                    "ospf": RoutingProtocolSupport(
+                        frozenset({"mpls"}),
+                        address_families=frozenset({"ipv4", "ipv6"}),
+                        domains_per_router=1,
+                        link_rate_floor_mbps=None,
+                    ),
+                }
+            )
+        },
+    )
+
+    facts = {protocol.id: protocol for protocol in wizard_extension_rules_response().protocols}
+
+    assert facts["isis"].extensions == ()
+    assert [(f.minimum, f.maximum) for f in facts["isis"].bfd_timer_fields] == [
+        (2, 9),
+        (50, 900),
+        (60, 800),
+    ]
+    assert facts["ospf"].extensions == ("mpls",)
+    assert facts["ospf"].bfd_timer_fields is None
+
+
+def test_wizard_refuses_an_extension_no_adapter_renders(monkeypatch, tmp_path: Path) -> None:
+    from nodalarc.workloads.adapter import AdapterSupport, RoutingProtocolSupport
+
+    from adapters.frr.support import FRR_ISIS_BFD_SUPPORT, FRR_OSPF_BFD_SUPPORT
+
+    _register(
+        monkeypatch,
+        {
+            "frr": AdapterSupport(
+                routing={
+                    "isis": RoutingProtocolSupport(
+                        frozenset({"mpls"}),
+                        FRR_ISIS_BFD_SUPPORT,
+                        address_families=frozenset({"ipv4", "ipv6"}),
+                        domains_per_router=1,
+                        link_rate_floor_mbps=None,
+                    ),
+                    "ospf": RoutingProtocolSupport(
+                        frozenset({"mpls"}),
+                        FRR_OSPF_BFD_SUPPORT,
+                        address_families=frozenset({"ipv4", "ipv6"}),
+                        domains_per_router=1,
+                        link_rate_floor_mbps=None,
+                    ),
+                }
+            )
+        },
+    )
+
+    with pytest.raises(ValueError, match=r"does not support extensions: \['te'\]"):
+        build_wizard_compile_request(_request(extensions=["te", "mpls"]), _snapshot(tmp_path))
+
+
+def test_wizard_refuses_bfd_for_a_protocol_that_renders_none(monkeypatch, tmp_path: Path) -> None:
+    from nodalarc.workloads.adapter import AdapterSupport, RoutingProtocolSupport
+
+    _register(
+        monkeypatch,
+        {
+            "frr": AdapterSupport(
+                routing={
+                    "isis": RoutingProtocolSupport(
+                        frozenset({"mpls", "traffic_engineering"}),
+                        address_families=frozenset({"ipv4", "ipv6"}),
+                        domains_per_router=1,
+                        link_rate_floor_mbps=None,
+                    ),
+                    "ospf": RoutingProtocolSupport(
+                        frozenset({"mpls"}),
+                        address_families=frozenset({"ipv4", "ipv6"}),
+                        domains_per_router=1,
+                        link_rate_floor_mbps=None,
+                    ),
+                }
+            )
+        },
+    )
+
+    with pytest.raises(ValueError, match="offers no BFD; BFD must be off"):
+        build_wizard_compile_request(
+            _request(routing_timers={**ROUTING_TIMERS, "bfd": True}), _snapshot(tmp_path)
+        )
 
 
 def test_custom_coverage_preview_materializes_ref_composed_user_sources(tmp_path: Path) -> None:

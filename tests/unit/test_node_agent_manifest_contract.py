@@ -32,8 +32,6 @@ def _manifest():
                 "isl_interfaces": [],
                 "gnd_interfaces": [],
                 "mpls_enable": True,
-                "segment_routing": False,
-                "mtu": 9000,
                 "remove_default_route": True,
             },
             "gs-den": {
@@ -45,8 +43,6 @@ def _manifest():
                 "isl_interfaces": [],
                 "gnd_interfaces": [{"name": "term0"}],
                 "mpls_enable": True,
-                "segment_routing": False,
-                "mtu": 9000,
                 "remove_default_route": True,
             },
         },

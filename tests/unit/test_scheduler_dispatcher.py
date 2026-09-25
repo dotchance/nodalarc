@@ -25,7 +25,9 @@ from nodalarc.models.scheduler_ops import ActuationFailureClass, SchedulerOpsCod
 from nodalarc.proto import node_agent_pb2
 from nodalarc.substrate.measurement_contract import SubstrateMeasurement
 from scheduler.dispatcher import ActiveLinkInfo, Dispatcher
-from scheduler.pod_locator import PodLocationMap
+from scheduler.pod_locator import PodLocationError, PodLocationMap
+
+from tests.terminal_rate_fixtures import ANY_INTERFACE_RATES
 
 WIRING_GENERATION = "sha256:" + "a" * 64
 
@@ -101,7 +103,6 @@ def _make_link(
         routing=RoutingState.UNKNOWN,
         range_km=900.0 if carrier == CarrierState.UP else None,
         latency_ms=3.0 if carrier == CarrierState.UP else None,
-        bandwidth_mbps=1000.0 if carrier == CarrierState.UP else None,
         link_type=link_type,
         sim_time=datetime(2026, 1, 1, tzinfo=UTC),
     )
@@ -113,7 +114,6 @@ def _make_dispatcher(interface_map=None, stub_success=True):
             ("gs-ashburn", "sat-P00S00"): ("term0", "gnd0"),
             ("sat-P00S00", "sat-P00S01"): ("isl0", "isl1"),
         }
-    bandwidth_map = dict.fromkeys(interface_map, 1000.0)
 
     loc = PodLocationMap()
     for pair in interface_map:
@@ -183,7 +183,7 @@ def _make_dispatcher(interface_map=None, stub_success=True):
 
     d = Dispatcher(
         interface_map=interface_map,
-        bandwidth_map=bandwidth_map,
+        interface_rates=ANY_INTERFACE_RATES,
         pod_locator=loc,
         agent_pool=pool,
         session_id="test-session",
@@ -261,7 +261,7 @@ class TestDispatcherActiveLinks:
 
     def test_visibility_lost_removes_from_active_links(self):
         d, _ = _make_dispatcher()
-        info = ActiveLinkInfo("isl0", "isl1", 3.0, 1000.0, link_type="isl")
+        info = ActiveLinkInfo("isl0", "isl1", 3.0, link_type="isl")
         d._desired_links[("sat-P00S00", "sat-P00S01")] = info
         d._active_links[("sat-P00S00", "sat-P00S01")] = info
 
@@ -281,7 +281,7 @@ class TestDispatcherActiveLinks:
 
     def test_gs_deallocation_removes_from_active_links(self):
         d, _ = _make_dispatcher()
-        info = ActiveLinkInfo("term0", "gnd0", 3.0, 1000.0, link_type="ground")
+        info = ActiveLinkInfo("term0", "gnd0", 3.0, link_type="ground")
         d._desired_links[("gs-ashburn", "sat-P00S00")] = info
         d._active_links[("gs-ashburn", "sat-P00S00")] = info
 
@@ -303,7 +303,7 @@ class TestDispatcherActiveLinks:
 
     def test_isl_deallocation_removes_unscheduled_pair(self):
         d, _ = _make_dispatcher()
-        info = ActiveLinkInfo("isl0", "isl1", 3.0, 1000.0, link_type="isl")
+        info = ActiveLinkInfo("isl0", "isl1", 3.0, link_type="isl")
         d._desired_links[("sat-P00S00", "sat-P00S01")] = info
         d._active_links[("sat-P00S00", "sat-P00S01")] = info
 
@@ -330,7 +330,7 @@ class TestDispatcherLinkStateSnapshot:
     def test_snapshot_produces_desired_without_stale_links(self):
         d, _ = _make_dispatcher()
         d._active_links[("sat-P99S99", "sat-P99S98")] = ActiveLinkInfo(
-            "isl0", "isl1", 3.0, 1000.0, link_type="isl"
+            "isl0", "isl1", 3.0, link_type="isl"
         )
 
         snapshot = LinkStateSnapshot(
@@ -359,7 +359,6 @@ class TestDispatcherLinkStateSnapshot:
                     carrier=CarrierState.UP,
                     routing=RoutingState.UNKNOWN,
                     latency_ms=3.0,
-                    bandwidth_mbps=1000.0,
                     link_type="isl",
                     sim_time=datetime(2026, 1, 1, tzinfo=UTC),
                 ),
@@ -373,7 +372,7 @@ class TestDispatcherLinkStateSnapshot:
     def test_snapshot_gs_exclusion(self):
         d, _ = _make_dispatcher()
         d._active_links[("gs-ashburn", "sat-P00S00")] = ActiveLinkInfo(
-            "term0", "gnd0", 3.0, 1000.0, link_type="ground"
+            "term0", "gnd0", 3.0, link_type="ground"
         )
 
         snapshot = LinkStateSnapshot(
@@ -390,7 +389,7 @@ class TestDispatcherLinkStateSnapshot:
         d, _ = _make_dispatcher()
         d._last_snapshot_seq = 10
         d._active_links[("sat-P00S00", "sat-P00S01")] = ActiveLinkInfo(
-            "isl0", "isl1", 3.0, 1000.0, link_type="isl"
+            "isl0", "isl1", 3.0, link_type="isl"
         )
 
         snapshot = LinkStateSnapshot(
@@ -446,7 +445,7 @@ class TestDispatcherLiveDispatch:
     def test_link_down_publishes_after_node_agent_ack(self):
         d, pool = _make_dispatcher()
         d._active_links[("sat-P00S00", "sat-P00S01")] = ActiveLinkInfo(
-            "isl0", "isl1", 3.0, 1000.0, link_type="isl"
+            "isl0", "isl1", 3.0, link_type="isl"
         )
         # Physical visibility loss for an ISL pair.
         vis = _make_vis(
@@ -498,7 +497,6 @@ class TestDispatcherLiveDispatch:
                 "isl0",
                 "isl1",
                 3.0,
-                1000.0,
                 link_type="isl",
                 range_km=900.0,
                 authority_sim_time=sim_time,
@@ -545,7 +543,6 @@ class TestDispatcherLiveDispatch:
                 "isl0",
                 "isl1",
                 3.0,
-                1000.0,
                 link_type="isl",
                 range_km=900.0,
                 authority_sim_time=sim_time,
@@ -574,7 +571,6 @@ class TestDispatcherLiveDispatch:
                 "isl0",
                 "isl1",
                 3.0,
-                1000.0,
                 link_type="isl",
                 range_km=900.0,
                 authority_sim_time=sim_time,
@@ -649,7 +645,7 @@ class TestDispatcherLiveDispatch:
         d, _ = _make_dispatcher()
         d._loc._node_of.pop("sat-P00S01")
 
-        with pytest.raises(ValueError, match="Missing Kubernetes node placement"):
+        with pytest.raises(PodLocationError, match="no pod location for node sat-P00S01"):
             d._netem_delay_ms("sat-P00S00", "sat-P00S01", 10.0)
 
     def test_cross_node_missing_remote_ip_fails_loudly(self):
@@ -664,7 +660,6 @@ class TestDispatcherLiveDispatch:
                 "isl0",
                 "isl1",
                 10.0,
-                1000.0,
                 link_type="isl",
                 range_km=3000.0,
                 authority_sim_time=datetime(2026, 1, 1, tzinfo=UTC),
@@ -672,7 +667,7 @@ class TestDispatcherLiveDispatch:
             )
         }
 
-        with pytest.raises(ValueError, match="Missing Kubernetes node IP"):
+        with pytest.raises(PodLocationError, match="no InternalIP for Kubernetes node node-a"):
             asyncio.run(
                 d._send_batch_up({pair}, desired, "sim", datetime(2026, 1, 1, tzinfo=UTC), d._nc)
             )
@@ -686,7 +681,6 @@ class TestDispatcherLiveDispatch:
                 "isl0",
                 "isl1",
                 3.0,
-                1000.0,
                 link_type="isl",
                 range_km=900.0,
                 authority_sim_time=sim_time - timedelta(seconds=2),
@@ -708,7 +702,6 @@ class TestDispatcherLiveDispatch:
                 "isl0",
                 "isl1",
                 3.1,
-                1000.0,
                 link_type="isl",
                 range_km=930.0,
                 authority_sim_time=sim_time - timedelta(seconds=2),

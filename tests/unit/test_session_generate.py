@@ -311,3 +311,41 @@ def test_generator_rejects_propagator_that_does_not_match_catalog_orbits() -> No
             orbit_propagator="two_body",
             ground_stations="nodalarc:site-sets/earth/leo/earth-leo-starlink-pop-sites.yaml",
         )
+
+
+@pytest.mark.parametrize(
+    ("protocol", "extensions", "value"),
+    [
+        ("static", ["sr"], "static:segment_routing"),
+        ("static", ["mpls"], "static:mpls"),
+        ("bgp", [], "bgp"),
+        ("nodalpath", [], "nodalpath"),
+    ],
+)
+def test_generator_refuses_a_routing_choice_no_adapter_renders(protocol, extensions, value) -> None:
+    from nodalarc.runtime_support import UnsupportedFeatureError
+
+    with pytest.raises(UnsupportedFeatureError) as refused:
+        assemble_session_document(
+            catalog=SHIPPED_CATALOG,
+            constellation=LEO_RING,
+            protocol=protocol,
+            extensions=extensions,
+            orbit_propagator="j2_mean_elements",
+        )
+
+    assert [feature.value for feature in refused.value.features] == [value]
+
+
+@pytest.mark.parametrize(
+    "extensions", [["warp"], ["segment-routing"], ["traffic-engineering"], ["sr", "sr"]]
+)
+def test_generator_refuses_unknown_or_duplicate_extensions(extensions) -> None:
+    with pytest.raises(ValueError, match="unknown routing extension|must not contain duplicates"):
+        assemble_session_document(
+            catalog=SHIPPED_CATALOG,
+            constellation=LEO_RING,
+            protocol="isis",
+            extensions=extensions,
+            orbit_propagator="j2_mean_elements",
+        )

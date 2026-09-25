@@ -70,6 +70,7 @@ def test_preparation_rechecks_saved_revision_and_exact_digests(tmp_path: Path) -
         expected_document_digest=saved.digests.document,
         expected_closure_digest=saved.digests.dependency,
         available_node_count=1_000_000,
+        record_history=False,
     )
 
     assert deployment.prepared.root_yaml == saved.session.canonical_yaml.encode()
@@ -114,6 +115,7 @@ def test_stale_review_fails_before_upload(
         "expected_document_digest": saved.digests.document,
         "expected_closure_digest": saved.digests.dependency,
         "available_node_count": 1_000_000,
+        "record_history": False,
     }
     arguments[field] = value
 
@@ -137,6 +139,7 @@ def test_cr_body_requires_persisted_upload(tmp_path: Path) -> None:
         expected_document_digest=saved.digests.document,
         expected_closure_digest=saved.digests.dependency,
         available_node_count=1_000_000,
+        record_history=False,
     )
 
     with pytest.raises(ValueError, match="persisted"):
@@ -155,6 +158,7 @@ def test_final_staleness_check_ignores_unrelated_writes_but_blocks_root_change(
         expected_document_digest=saved.digests.document,
         expected_closure_digest=saved.digests.dependency,
         available_node_count=1_000_000,
+        record_history=False,
     )
 
     body = canonicalize_persisted_configuration(
@@ -207,6 +211,7 @@ def test_persisted_upload_builds_exact_cr_and_cleanup_deletes_unselected_group(
         expected_document_digest=saved.digests.document,
         expected_closure_digest=saved.digests.dependency,
         available_node_count=1_000_000,
+        record_history=False,
     )
 
     class Store:
@@ -233,9 +238,10 @@ def test_persisted_upload_builds_exact_cr_and_cleanup_deletes_unselected_group(
     persisted = persist_catalog_session_upload(prepared, store)  # type: ignore[arg-type]
     body = constellation_spec_body(persisted, namespace="nodalarc")
 
-    # The CR spec is exactly the session and its upload; workload facts are
-    # session truth, never CR fields.
-    assert set(body["spec"]) == {"sessionYaml", "catalogUpload"}
+    # The CR spec is exactly the session, its upload and the deploy request's
+    # history-recording choice; workload facts are session truth, never CR fields.
+    assert set(body["spec"]) == {"sessionYaml", "catalogUpload", "recordHistory"}
+    assert body["spec"]["recordHistory"] is False
 
     assert body["spec"]["sessionYaml"].encode() == saved.session.canonical_yaml.encode()
     assert body["spec"]["catalogUpload"] == persisted.receipt.selection.model_dump(mode="json")

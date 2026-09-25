@@ -27,6 +27,10 @@ NonEmptyReference = Annotated[str, Field(min_length=1, pattern=r"^\S+$")]
 Identifier = Annotated[str, Field(pattern=r"^[a-z0-9][a-z0-9_-]*$")]
 RuntimeNodeId = Annotated[str, Field(pattern=r"^[a-z0-9][a-z0-9-]*$")]
 TerminalMedium = Literal["rf", "optical"]
+# The IP address families the grammar declares per node: loopback pools,
+# originated prefixes and the segment addressing they imply.
+AddressFamily = Literal["ipv4", "ipv6"]
+ADDRESS_FAMILIES: tuple[AddressFamily, ...] = ("ipv4", "ipv6")
 
 
 def _configuration_integer(value: Any) -> Any:

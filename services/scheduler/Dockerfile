@@ -33,14 +33,17 @@ COPY build/runtime-constraints.txt /tmp/nodalarc-runtime-constraints.txt
 
 RUN pip install --no-cache-dir \
     --constraint /tmp/nodalarc-runtime-constraints.txt \
-    "pydantic>=2.0" nats-py pyyaml numpy "grpcio>=1.74" "protobuf>=6.31.1" \
-    kubernetes jinja2 sgp4 skyfield "httpx>=0.28.1"
+    "pydantic>=2.0" nats-py pyyaml numpy "protobuf>=6.31.1" \
+    kubernetes jinja2 sgp4 skyfield
 
 # Add lib/ and services/ to Python path
 ENV PYTHONPATH=/app/lib:/app/services:/app
 
 # Copy shared library (includes proto/, canonical configuration models, and geometry helpers)
 COPY lib/ lib/
+# Workload adapter support declarations: session resolution reads them
+# through the adapter registry. /app is already on PYTHONPATH.
+COPY adapters/ adapters/
 
 # Copy scheduler service
 COPY services/scheduler/ services/scheduler/

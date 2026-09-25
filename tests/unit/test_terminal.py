@@ -26,7 +26,7 @@ def test_load_ssh_key_reuses_current_secret_revision(monkeypatch):
     client.read_namespaced_secret.return_value = _secret("private-one", "101")
     import_private_key = Mock(return_value=key)
 
-    monkeypatch.setattr(terminal_mod, "_get_k8s_client", lambda: client)
+    monkeypatch.setattr(terminal_mod.k8s, "core_v1", lambda: client)
     monkeypatch.setattr(terminal_mod.asyncssh, "import_private_key", import_private_key)
 
     assert terminal_mod._load_ssh_key("nodalarc") is key
@@ -47,7 +47,7 @@ def test_load_ssh_key_reloads_when_secret_revision_changes(monkeypatch):
     ]
     import_private_key = Mock(side_effect=[key_one, key_two])
 
-    monkeypatch.setattr(terminal_mod, "_get_k8s_client", lambda: client)
+    monkeypatch.setattr(terminal_mod.k8s, "core_v1", lambda: client)
     monkeypatch.setattr(terminal_mod.asyncssh, "import_private_key", import_private_key)
 
     assert terminal_mod._load_ssh_key("nodalarc") is key_one

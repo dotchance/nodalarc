@@ -26,6 +26,8 @@ import kubernetes.client
 from nodalarc.workload_target import NODE_ID_LABEL, TERMINAL_ACCESS_ANNOTATION
 from starlette.websockets import WebSocket
 
+from vs_api import k8s
+
 log = logging.getLogger(__name__)
 
 # Cached SSH private key object (loaded lazily from K8s Secret, kept in memory only).
@@ -47,7 +49,7 @@ def _load_ssh_key(namespace: str) -> asyncssh.SSHKey:
     """
     global _ssh_key, _ssh_key_cache_key
 
-    v1 = _get_k8s_client()
+    v1 = k8s.core_v1()
 
     try:
         secret = v1.read_namespaced_secret("nodalarc-terminal-keys", namespace)
@@ -87,18 +89,6 @@ import re
 
 # Node ID must match the pattern: sat-P00S00 or gs-name (alphanumeric + hyphens)
 _NODE_ID_PATTERN = re.compile(r"^[a-zA-Z][a-zA-Z0-9\-]{0,62}$")
-
-# Cached K8s API client (initialized once, reused for all pod lookups)
-_k8s_v1: kubernetes.client.CoreV1Api | None = None
-
-
-def _get_k8s_client() -> kubernetes.client.CoreV1Api:
-    """Get or create the cached K8s API client."""
-    global _k8s_v1
-    if _k8s_v1 is None:
-        kubernetes.config.load_incluster_config()
-        _k8s_v1 = kubernetes.client.CoreV1Api()
-    return _k8s_v1
 
 
 def parse_terminal_contract(annotation: str | None) -> dict | None:
@@ -142,7 +132,7 @@ def _resolve_pod_terminal_sync(node_id: str, namespace: str) -> tuple[str, str, 
         log.warning("Invalid node_id rejected: %r", node_id)
         return None
     try:
-        v1 = _get_k8s_client()
+        v1 = k8s.core_v1()
         pods = v1.list_namespaced_pod(
             namespace,
             label_selector=f"{NODE_ID_LABEL}={node_id}",
@@ -191,7 +181,7 @@ class ExecTerminalSession:
         from kubernetes.stream import stream as k8s_stream
 
         def _connect():
-            v1 = _get_k8s_client()
+            v1 = k8s.core_v1()
             return k8s_stream(
                 v1.connect_get_namespaced_pod_exec,
                 self._pod_name,

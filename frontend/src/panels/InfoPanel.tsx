@@ -9,7 +9,7 @@ import { GroundStationDetail } from "./GroundStationDetail";
 import { LinkDetail } from "./LinkDetail";
 import { TraceDialog } from "./TraceDialog";
 import type { Regime } from "../taxonomy/regime";
-import type { StateSnapshot, Selection, TracedPath } from "../types";
+import type { StateSnapshot, Selection } from "../types";
 
 interface InfoPanelProps {
   snapshot: StateSnapshot | null;
@@ -18,7 +18,6 @@ interface InfoPanelProps {
   anchorGsId?: string | null;
   regimeById: ReadonlyMap<string, Regime>;
   onSelect: (sel: Selection | null) => void;
-  onTraceResult?: (path: TracedPath | null) => void;
 }
 
 export function InfoPanel({
@@ -27,7 +26,6 @@ export function InfoPanel({
   anchorGsId,
   regimeById,
   onSelect,
-  onTraceResult,
 }: InfoPanelProps) {
   if (!snapshot) {
     return (
@@ -83,7 +81,6 @@ export function InfoPanel({
         <TraceDialog
           nodes={snapshot.nodes}
           selectedNodeId={selection?.type !== "link" ? selection?.id ?? null : null}
-          onTraceResult={onTraceResult}
           snapshot={snapshot}
         />
       </div>

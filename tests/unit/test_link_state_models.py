@@ -27,7 +27,6 @@ def _make_link(**overrides) -> LinkState:
         "carrier": CarrierState.UP,
         "routing": RoutingState.ADJACENT,
         "latency_ms": 3.5,
-        "bandwidth_mbps": 1000.0,
         "link_type": "isl",
         "sim_time": datetime(2026, 1, 1, tzinfo=UTC),
     }
@@ -48,7 +47,6 @@ class TestLinkState:
             carrier=CarrierState.DOWN,
             routing=RoutingState.DOWN,
             latency_ms=None,
-            bandwidth_mbps=None,
         )
         assert link.admin == AdminState.DOWN
         assert link.latency_ms is None
@@ -63,7 +61,6 @@ class TestLinkState:
             carrier=CarrierState.LOWERLAYERDOWN,
             routing=RoutingState.DOWN,
             latency_ms=None,
-            bandwidth_mbps=None,
         )
         assert link.link_type == "ground"
         assert link.carrier == CarrierState.LOWERLAYERDOWN

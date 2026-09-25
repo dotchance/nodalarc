@@ -170,14 +170,14 @@ from nodalarc.platform_config import compute_pod_placement, init_platform_config
 pods = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
 available_nodes = [node for node in sys.argv[2].split(",") if node]
 config = init_platform_config(Path(sys.argv[3]))
-node_vars = {}
+pod_inventory = {}
 for pod in pods.get("items", []):
     labels = pod.get("metadata", {}).get("labels", {})
     node_id = labels.get("nodalarc.io/node-id")
     if not node_id:
         continue
     if "nodalarc.io/gs-name" in labels:
-        node_vars[node_id] = {
+        pod_inventory[node_id] = {
             "node_type": "ground_station",
             "gs_name": labels["nodalarc.io/gs-name"],
         }
@@ -185,18 +185,18 @@ for pod in pods.get("items", []):
         values = {"node_type": "satellite"}
         if "nodalarc.io/plane" in labels:
             values["plane"] = int(labels["nodalarc.io/plane"])
-        node_vars[node_id] = values
+        pod_inventory[node_id] = values
 
-if len(node_vars) != int(sys.argv[4]):
+if len(pod_inventory) != int(sys.argv[4]):
     raise SystemExit(
-        f"live session pod inventory has {len(node_vars)} nodes; expected {sys.argv[4]}"
+        f"live session pod inventory has {len(pod_inventory)} nodes; expected {sys.argv[4]}"
     )
 placement = compute_pod_placement(
     {
         "policy": config.default_session_pod_placement_policy,
         "planes_per_group": config.default_session_pod_planes_per_group,
     },
-    node_vars,
+    pod_inventory,
     available_nodes,
 )
 print(len(set(placement.values())))
@@ -363,6 +363,7 @@ payload = {
     "expected_source_revision": sys.argv[2],
     "expected_document_digest": sys.argv[3],
     "expected_dependency_digest": sys.argv[4],
+    "record_history": False,
 }
 print(json.dumps(payload, separators=(",", ":")))
 ' "$session_ref" "$source_revision" "$document_digest" "$dependency_digest"

@@ -18,6 +18,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from nodalarc.models.link_events import LatencyUpdate, LinkDown, LinkUp
+from nodalarc.models.resolved_session import InterfaceRates
 from nodalarc.models.scheduler_ops import ActuationFailureClass
 from nodalarc.proto import node_agent_pb2
 from nodalarc.vxlan import compute_vni
@@ -37,6 +38,7 @@ from scheduler.node_agent_batches import (
     build_link_down_batch_plan,
     build_link_up_batch_plan,
     required_ground_endpoints,
+    terminal_rates_message,
 )
 
 log = logging.getLogger(__name__)
@@ -85,11 +87,6 @@ def _log_actuation_latency(
 LinkPair = tuple[str, str]
 LatencyCompensationFn = Callable[[str, str, float], LatencyCompensation]
 
-# Kernel-proof sentinel: "shaping must exist, but no specific netem delay is
-# asserted" - used when this scheduler instance has not commanded a netem
-# value for the pair. The agent verifier skips the delay comparison for
-# negative expectations rather than failing against an invented number.
-NETEM_NOT_ASSERTED = -1.0
 AuthorityFreshnessValidator = Callable[..., None]
 LinkProvenanceBuilder = Callable[..., object]
 
@@ -335,34 +332,31 @@ def _ground_inventory_entries_for_pair(
     expected_admin_up: bool,
     locator: Any,
     gs_capacities: Mapping[str, int],
+    interface_rates: Mapping[tuple[str, str], InterfaceRates],
 ) -> tuple[dict[str, list[node_agent_pb2.KernelInventoryEntry]], set[InterfaceAck]]:
     if info.link_type != "ground":
         raise ValueError(f"KernelInventory is ground-only; got {pair} type={info.link_type!r}")
     node_a, node_b = pair
     gs_id, sat_id, gs_iface, sat_iface = required_ground_endpoints(pair, info, gs_capacities)
     locality = locator.link_locality(node_a, node_b)
-    if locality is None:
-        raise RuntimeError(
-            f"Cannot verify KernelInventory for {node_a}<->{node_b}: pod placement is unknown"
-        )
     vni = (
         compute_vni(gs_id, sat_id, gs_iface, sat_iface)
         if locality == node_agent_pb2.LOCALITY_CROSS_NODE
         else 0
     )
     latency_ms = 0.0
-    bandwidth_mbps = 0.0
     if expected_admin_up:
         # Prove the kernel against what was COMMANDED, never against a live
         # recomputation: compensation reads measured substrate RTT, which
         # drifts between dispatch and proof, and that drift is not kernel
-        # divergence. When no commanded value is known for this scheduler
-        # instance (pair never dispatched here), send the explicit
-        # do-not-assert sentinel instead of inventing an expectation.
-        latency_ms = (
-            info.netem_one_way_ms if info.netem_one_way_ms is not None else NETEM_NOT_ASSERTED
-        )
-        bandwidth_mbps = info.bandwidth_mbps
+        # divergence. A link is only proven up after this Scheduler commanded
+        # it, and dispatch records the commanded delay on its info.
+        if info.netem_one_way_ms is None:
+            raise ValueError(
+                f"ground link {pair} is proven up with no commanded delay; "
+                "only commanded links are proven"
+            )
+        latency_ms = info.netem_one_way_ms
 
     entries_by_agent: dict[str, list[node_agent_pb2.KernelInventoryEntry]] = {}
     ack_keys: set[InterfaceAck] = set()
@@ -370,14 +364,7 @@ def _ground_inventory_entries_for_pair(
     def _remote_ip(peer_node: str) -> str:
         if locality != node_agent_pb2.LOCALITY_CROSS_NODE:
             return ""
-        peer_k3s = locator.k3s_node(peer_node)
-        remote_ip = locator.node_ip(peer_k3s)
-        if not remote_ip:
-            raise RuntimeError(
-                f"CROSS_NODE KernelInventory {gs_id}<->{sat_id}: "
-                f"missing IP for Kubernetes node {peer_k3s}"
-            )
-        return remote_ip
+        return locator.node_ip(locator.k3s_node(peer_node))
 
     def _add(agent: str, node_id: str, iface: str, peer_node: str, peer_iface: str) -> None:
         entry = node_agent_pb2.KernelInventoryEntry(
@@ -392,9 +379,16 @@ def _ground_inventory_entries_for_pair(
             vni=vni,
             remote_node_ip=_remote_ip(peer_node),
             latency_ms=latency_ms,
-            bandwidth_mbps=bandwidth_mbps,
             expected_admin_up=expected_admin_up,
         )
+        if expected_admin_up:
+            # Each end is proven against its own terminal; a LOCAL entry
+            # proves both ends on the one agent that owns them.
+            entry.rates.CopyFrom(terminal_rates_message(interface_rates, node_id, iface))
+            if locality == node_agent_pb2.LOCALITY_LOCAL:
+                entry.peer_rates.CopyFrom(
+                    terminal_rates_message(interface_rates, peer_node, peer_iface)
+                )
         entries_by_agent.setdefault(agent, []).append(entry)
         ack_keys.add((agent, node_id, iface))
 
@@ -441,6 +435,7 @@ async def verify_ground_kernel_inventory(
     sim_iso: str,
     sim_time: datetime,
     gs_capacities: Mapping[str, int],
+    interface_rates: Mapping[tuple[str, str], InterfaceRates],
     session_id: str,
     wiring_generation: str,
 ) -> ActuationResult:
@@ -463,6 +458,7 @@ async def verify_ground_kernel_inventory(
                 expected_admin_up=expected_admin_up,
                 locator=locator,
                 gs_capacities=gs_capacities,
+                interface_rates=interface_rates,
             )
             pair_agent_ifaces.setdefault(pair, set()).update(ack_keys)
             for agent, entries in agent_entries.items():
@@ -521,9 +517,6 @@ async def send_batch_down(
         locator=locator,
         gs_capacities=gs_capacities,
     )
-    for node_a, node_b in plan.skipped_unscheduled:
-        log.warning("Skipping DOWN %s-%s: pod(s) not yet scheduled", node_a, node_b)
-
     agent_results: list[AgentCommandResult] = []
     agent_addrs = list(plan.agent_ifaces.keys())
     dispatch_started = time.monotonic()
@@ -602,6 +595,7 @@ async def send_batch_up(
     latency_compensation: LatencyCompensationFn,
     validate_authority_freshness: AuthorityFreshnessValidator,
     link_provenance: LinkProvenanceBuilder,
+    interface_rates: Mapping[tuple[str, str], InterfaceRates],
     session_id: str,
     wiring_generation: str,
 ) -> ActuationResult:
@@ -619,6 +613,7 @@ async def send_batch_up(
         locator=locator,
         gs_capacities=gs_capacities,
         compensation_for_pair=latency_compensation,
+        interface_rates=interface_rates,
     )
 
     agent_results: list[AgentCommandResult] = []
@@ -677,7 +672,6 @@ async def send_batch_up(
             interface_a=info.interface_a,
             interface_b=info.interface_b,
             latency_ms=info.latency_ms,
-            bandwidth_mbps=info.bandwidth_mbps,
             range_km=info.range_km,
             reason="vis_gained",
             link_type=info.link_type,
@@ -700,10 +694,15 @@ async def send_authoritative_latency_updates(
     latency_compensation: LatencyCompensationFn,
     validate_authority_freshness: AuthorityFreshnessValidator,
     link_provenance: LinkProvenanceBuilder,
+    interface_rates: Mapping[tuple[str, str], InterfaceRates],
     session_id: str,
     wiring_generation: str,
 ) -> ActuationResult:
-    """Apply OME-authoritative latency changes for already-active links."""
+    """Apply OME-authoritative latency changes for already-active links.
+
+    Each entry carries its interface's own transmit rate: the Node Agent sizes
+    the netem queue limit from rate and delay.
+    """
     agent_entries: dict[str, list[node_agent_pb2.LatencyEntry]] = {}
     pair_compensation: dict[LinkPair, LatencyCompensation] = {}
     pair_agent_ifaces: dict[LinkPair, set[InterfaceAck]] = {}
@@ -735,10 +734,6 @@ async def send_authoritative_latency_updates(
                 pair, info, gs_capacities
             )
             locality = locator.link_locality(node_a, node_b)
-            if locality is None:
-                raise RuntimeError(
-                    f"Cannot update ground latency for {node_a}<->{node_b}: pod placement unknown"
-                )
             endpoint_agents = [(sat_id, sat_iface, locator.agent_addr(sat_id))]
             if locality == node_agent_pb2.LOCALITY_LOCAL:
                 endpoint_agents.append((gs_id, gs_iface, locator.agent_addr(sat_id)))
@@ -752,6 +747,7 @@ async def send_authoritative_latency_updates(
                         node_id=endpoint_id,
                         interface_name=endpoint_iface,
                         latency_ms=netem_ms,
+                        rates=terminal_rates_message(interface_rates, endpoint_id, endpoint_iface),
                         link_type=node_agent_pb2.LINK_TYPE_GROUND,
                         gs_id=gs_id,
                         sat_id=sat_id,
@@ -766,6 +762,7 @@ async def send_authoritative_latency_updates(
                         node_id=nid,
                         interface_name=ifname,
                         latency_ms=netem_ms,
+                        rates=terminal_rates_message(interface_rates, nid, ifname),
                         link_type=node_agent_pb2.LINK_TYPE_ISL,
                     ),
                 )

@@ -15,12 +15,8 @@ def set_pod_interface_down(pid: int, ifname: str) -> None:
     namespace_ops.set_interface_down(pid, ifname)
 
 
-def apply_terminal_shaping(pid: int, ifname: str, delay_ms: float, rate_mbps: float) -> None:
-    namespace_ops.apply_link_shaping(pid, ifname, delay_ms, rate_mbps)
-
-
-def update_terminal_delay(pid: int, ifname: str, delay_ms: float) -> None:
-    namespace_ops.update_delay(pid, ifname, delay_ms)
+def update_terminal_delay(pid: int, ifname: str, delay_ms: float, transmit_mbps: float) -> None:
+    namespace_ops.update_delay(pid, ifname, delay_ms, transmit_mbps)
 
 
 def create_cross_node_vxlan(

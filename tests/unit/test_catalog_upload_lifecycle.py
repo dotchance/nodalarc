@@ -24,6 +24,7 @@ def _cr(upload_id: str) -> dict:
         "spec": {
             "sessionYaml": "session:\n  name: test\n",
             "catalogUpload": _selection(upload_id).model_dump(mode="json"),
+            "recordHistory": False,
         }
     }
 

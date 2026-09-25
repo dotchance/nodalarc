@@ -40,8 +40,8 @@ nats_box_image() {
 # this table; nothing else names a service.
 IMAGE_TABLE=(
     "base|base|-|build,session|required|built"
-    "frr|frr|-|build,session|required|built"
-    "probe|probe|-|build,session|required|built"
+    "frr|-|-|build,session|required|built"
+    "probe|-|-|build,session|required|built"
     "ome|ome|deployment/ome|build,platform|required|built"
     "scheduler|scheduler|deployment/nodalarc-scheduler|build,platform|required|built"
     "node-agent|nodeAgent|daemonset/nodalarc-node-agent|build,platform|required|built"

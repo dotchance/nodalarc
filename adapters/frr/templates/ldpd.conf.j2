@@ -1,0 +1,11 @@
+{# LDP runs on the interfaces of the router's MPLS domains that use LDP
+   labels; a static_ip boundary link belongs to no domain and carries none. #}
+mpls ldp
+ router-id {{ ipv4_loopback }}
+ address-family ipv4
+  discovery transport-address {{ ipv4_loopback }}
+{% for name in ldp_interfaces %}
+  interface {{ name }}
+{% endfor %}
+ exit-address-family
+exit

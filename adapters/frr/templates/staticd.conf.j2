@@ -1,0 +1,19 @@
+{# Static routes to a static_ip boundary peer's loopbacks over the
+   point-to-point boundary link, in each family both ends carry. #}
+{% for link in static_links %}
+ip route {{ link.peer_loopback_ipv4 }}/32 {{ link.name }}
+{% if link.peer_loopback_ipv6 %}
+ipv6 route {{ link.peer_loopback_ipv6 }}/128 {{ link.name }}
+{% endif %}
+{% endfor %}
+
+{# Routing-boundary exports (adapter: static_ip): materialized intent from
+   routing.boundaries[].export; next hop recurses over the peer-loopback
+   route above. #}
+{% for route in boundary_static_routes %}
+{% if route.family == "ipv6" %}
+ipv6 route {{ route.prefix }} {{ route.via }}
+{% else %}
+ip route {{ route.prefix }} {{ route.via }}
+{% endif %}
+{% endfor %}

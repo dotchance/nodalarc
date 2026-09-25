@@ -24,7 +24,6 @@ function makeSnapshot(overrides?: Record<string, unknown>) {
     nodes: [],
     links: [],
     traced_paths: [],
-    active_flows: [],
     recent_events: [],
     network_health: { status: "converged", converging_since_ms: null,
                       unreachable_flows: 0, last_convergence_ms: null },

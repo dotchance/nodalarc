@@ -17,6 +17,8 @@ from nodalarc.proto import node_agent_pb2
 from scheduler.dispatch_planner import interface_colliding_downs
 from scheduler.dispatcher import ActiveLinkInfo, Dispatcher
 
+from tests.terminal_rate_fixtures import ANY_INTERFACE_RATES
+
 OME_RANGE_KM = 1000.0
 
 
@@ -31,7 +33,6 @@ def _ground_info(
         gs_iface,
         sat_iface,
         3.0,
-        1000.0,
         link_type="ground",
         range_km=OME_RANGE_KM,
         authority_sim_time=authority_sim_time,
@@ -103,7 +104,7 @@ def _make_dispatcher(
     gs_modes = {gs: ("mbb" if mbb and cap > 1 else "bbm") for gs, cap in gs_caps.items()}
     d = Dispatcher(
         interface_map=imap,
-        bandwidth_map=bmap,
+        interface_rates=ANY_INTERFACE_RATES,
         pod_locator=loc,
         agent_pool=pool,
         session_id="test-session",

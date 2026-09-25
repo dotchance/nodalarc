@@ -49,12 +49,8 @@ export function useWizard() {
     if (!data.rules) return;
     const defaults = data.rules;
     setState((current) => {
-      if (current.areaStrategy !== null && current.routingTimers !== null) return current;
-      return {
-        ...current,
-        areaStrategy: current.areaStrategy ?? defaults.default_area_strategy,
-        routingTimers: current.routingTimers ?? { ...defaults.routing_timer_defaults },
-      };
+      if (current.routingTimers !== null) return current;
+      return { ...current, routingTimers: { ...defaults.routing_timer_defaults } };
     });
   }, [data.rules]);
 
@@ -124,11 +120,27 @@ export function useWizard() {
 
   const selectProtocol = useCallback((protocol: Protocol) => {
     setState((s) => {
-      return { ...s, protocol, extensions: [], step: "extensions" as WizardStep };
+      const facts = data.rules?.protocols.find((item) => item.id === protocol);
+      // A protocol without rendered BFD shows no BFD controls, so the
+      // submitted intent must not keep BFD enabled from another protocol.
+      const routingTimers =
+        s.routingTimers && data.rules && facts && facts.bfd_timer_fields == null
+          ? { ...s.routingTimers, [data.rules.bfd.enabled_field]: false }
+          : s.routingTimers;
+      // Each protocol offers its own area strategies; a new protocol starts at its default.
+      const areaStrategy = facts ? facts.default_area_strategy : null;
+      return {
+        ...s,
+        protocol,
+        extensions: [],
+        areaStrategy,
+        routingTimers,
+        step: "extensions" as WizardStep,
+      };
     });
     api.clearYaml();
     api.clearError();
-  }, [api]);
+  }, [api, data.rules]);
 
   const toggleExtension = useCallback((ext: WizardExtension) => {
     setState((s) => {
@@ -205,7 +217,7 @@ export function useWizard() {
       orbitPropagator: null,
       protocol: null,
       extensions: [],
-      areaStrategy: data.rules?.default_area_strategy ?? null,
+      areaStrategy: null,
       routingTimers: data.rules ? { ...data.rules.routing_timer_defaults } : null,
     });
     api.clearYaml();
@@ -214,6 +226,7 @@ export function useWizard() {
 
   return {
     // Data
+    authoring: data.authoring,
     presets: data.presets,
     customConstellationCapability: data.customConstellationCapability,
     customConstellationSeed: data.customConstellationSeed,

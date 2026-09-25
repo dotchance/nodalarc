@@ -35,14 +35,18 @@ NATS Streams --subscribe---> VS-API --WebSocket/REST---> Clients
 | Method | Path | Description |
 |--------|------|-------------|
 | GET | `/api/v1/state` | Current full state snapshot |
-| GET | `/api/v1/state/{sim_time}` | Historical snapshot (nearest stored) |
-| POST | `/api/v1/trace` | Forwarding path trace between two nodes |
-| GET | `/api/v1/links` | Link events with time range filter |
+| GET | `/api/v1/state/{sim_time}` | Recorded snapshot nearest to a sim time (recorded sessions only) |
+| GET | `/api/v1/links` | One page of recorded link events, at most 200 (`limit`); `start`, `end`, `node`, `peer`, `order` filters; `next_cursor` requests the next page (recorded sessions only) |
+| POST | `/api/v1/trace` | Trace the path between two nodes once, in both directions; returns a `TracedPath` |
+| POST | `/api/v1/trace/start` | Start the live trace between two nodes; its result rides every state snapshot |
+| GET | `/api/v1/trace/status` | The live trace's endpoints and latest `TracedPath` |
+| POST | `/api/v1/trace/stop` | Stop the live trace |
 | GET | `/api/v1/health` | Health check (no auth) |
 | GET | `/api/v1/auth/token` | Get auth token (no auth) |
-| GET | `/api/v1/metrics/convergence` | Convergence events |
-| GET | `/api/v1/metrics/flows/{flow_id}` | Probe results for a flow |
-| POST | `/api/v1/sessions/deploy` | Deploy a new session (wizard backend) |
+| GET | `/api/v1/metrics/convergence` | Refused with `501 history.not_collected`: VS-API records no convergence events |
+| GET | `/api/v1/metrics/flows/{flow_id}` | Refused with `501 history.not_collected`: VS-API records no probe results |
+| POST | `/api/v1/sessions/switch` | Deploy a catalog session revision; `record_history` chooses history recording |
+| POST | `/api/v1/session/deploy-from-yaml` | Save uploaded session YAML to the user catalog and deploy it; takes `record_history` |
 | GET | `/api/v1/sessions/coverage-preview` | Coverage preview for wizard |
 
 ## WebSocket

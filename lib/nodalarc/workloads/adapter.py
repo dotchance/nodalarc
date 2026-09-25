@@ -18,9 +18,17 @@ from substrate truth. The author says who; the platform says where.
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Protocol, runtime_checkable
+
+from nodalarc.model_validation import ADDRESS_FAMILIES, AddressFamily
+from nodalarc.models.segment_session import (
+    ROUTING_CAPABILITIES,
+    ROUTING_PROTOCOLS,
+    RoutingCapability,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
@@ -67,6 +75,121 @@ class AdapterNodeConfig:
             object.__setattr__(self, "args", args)
 
 
+def _check_bounds(name: str, bounds: tuple[int, int]) -> None:
+    low, high = bounds
+    if not 1 <= low <= high:
+        raise ValueError(f"{name} bounds must satisfy 1 <= low <= high; got {bounds}")
+
+
+@dataclass(frozen=True, slots=True)
+class BfdSupport:
+    """The BFD timer values an adapter renders, as inclusive bounds.
+
+    Field names match the session grammar's ``timers.bfd`` fields, so the
+    common support check compares each authored value with the bound of the
+    same name. ``mixed_family_peers`` is true when the adapter's BFD runs on an
+    interface whose possible peers mix IPv6 and IPv4-only nodes; an adapter
+    that does not say so is refused there.
+    """
+
+    detect_multiplier: tuple[int, int]
+    rx_interval_ms: tuple[int, int]
+    tx_interval_ms: tuple[int, int]
+    mixed_family_peers: bool = False
+
+    def __post_init__(self) -> None:
+        _check_bounds("detect_multiplier", self.detect_multiplier)
+        _check_bounds("rx_interval_ms", self.rx_interval_ms)
+        _check_bounds("tx_interval_ms", self.tx_interval_ms)
+
+
+@dataclass(frozen=True, slots=True)
+class RoutingProtocolSupport:
+    """What an adapter renders for one routing-domain protocol.
+
+    ``capabilities`` are the domain capability names the adapter renders for
+    the protocol. ``bfd`` is None when the adapter renders no BFD for it.
+    ``address_families`` are the IP address families the adapter routes
+    with the protocol; every declaration names them. ``domains_per_router``
+    is the most domains of the protocol the adapter renders on one router,
+    or None when it renders any number. ``link_rate_floor_mbps`` is the
+    transmit rate at or below which the adapter has no metric for a fixed
+    link the protocol runs over, or None when it renders every rate; every
+    declaration names it. ``sid_index_capacity`` is the largest prefix-SID
+    index the adapter renders, declared exactly when it renders segment
+    routing.
+    """
+
+    capabilities: frozenset[RoutingCapability] = frozenset()
+    bfd: BfdSupport | None = None
+    address_families: frozenset[AddressFamily] = field(kw_only=True)
+    domains_per_router: int | None = field(kw_only=True)
+    link_rate_floor_mbps: float | None = field(kw_only=True)
+    sid_index_capacity: int | None = field(default=None, kw_only=True)
+
+    def __post_init__(self) -> None:
+        if self.domains_per_router is not None and self.domains_per_router < 1:
+            raise ValueError(
+                "routing support must render at least one domain per router; "
+                f"got {self.domains_per_router}"
+            )
+        if self.link_rate_floor_mbps is not None and not (
+            math.isfinite(self.link_rate_floor_mbps) and self.link_rate_floor_mbps >= 0
+        ):
+            raise ValueError(
+                "routing support must declare a finite, non-negative link rate floor; "
+                f"got {self.link_rate_floor_mbps}"
+            )
+        renders_segment_routing = "segment_routing" in self.capabilities
+        if renders_segment_routing != (self.sid_index_capacity is not None):
+            raise ValueError(
+                "routing support declares a prefix-SID index capacity exactly when it "
+                "renders segment routing"
+            )
+        if self.sid_index_capacity is not None and self.sid_index_capacity < 1:
+            raise ValueError(
+                "routing support must render at least one prefix-SID index; "
+                f"got {self.sid_index_capacity}"
+            )
+        unknown_capabilities = sorted(set(self.capabilities) - set(ROUTING_CAPABILITIES))
+        if unknown_capabilities:
+            raise ValueError(
+                f"routing support declares capabilities outside the grammar {unknown_capabilities}"
+            )
+        families = frozenset(self.address_families)
+        if not families:
+            raise ValueError("routing support must declare the address families it routes")
+        unknown = sorted(families - frozenset(ADDRESS_FAMILIES))
+        if unknown:
+            raise ValueError(f"routing support declares unknown address families {unknown}")
+        object.__setattr__(self, "address_families", families)
+
+
+@dataclass(frozen=True, slots=True)
+class AdapterSupport:
+    """An adapter's declaration of the session features it renders.
+
+    ``routing`` maps each routing-domain protocol the adapter renders to what
+    it renders for that protocol; an empty mapping declares a non-routing
+    adapter. The declaration is plain data: reading it loads no template and
+    imports no rendering dependency, so every service that resolves sessions
+    can read it.
+    """
+
+    routing: Mapping[str, RoutingProtocolSupport] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        routing = MappingProxyType(dict(self.routing))
+        for protocol, support in routing.items():
+            if protocol not in ROUTING_PROTOCOLS:
+                raise ValueError(
+                    f"adapter declares routing protocol {protocol!r} outside the grammar"
+                )
+            if not isinstance(support, RoutingProtocolSupport):
+                raise TypeError(f"adapter routing support for {protocol!r} has the wrong type")
+        object.__setattr__(self, "routing", routing)
+
+
 @dataclass(frozen=True, slots=True)
 class SessionContext:
     """Read access to the whole resolved session for one adapter invocation.
@@ -86,17 +209,28 @@ class SessionContext:
         return found
 
 
+class AdapterRenderRefusal(Exception):
+    """An adapter cannot render a resolved node.
+
+    ``render_node`` raises it with the reason, and the session fails with
+    that reason.
+    """
+
+
 @runtime_checkable
 class WorkloadAdapter(Protocol):
     """Translate one resolved node into its image's native configuration.
 
     ``name`` is the adapter's identity: the value a profile's ``adapter:``
-    field carries, matching the runtime-support renderability declaration.
-    The explicit registry keys on it. ``render_node`` is pure: resolved facts
-    in, native config out, no I/O and no Kubernetes calls.
+    field carries. The explicit registry keys on it. ``support`` declares the
+    session features the adapter renders; runtime support reads it to gate
+    sessions and to derive router populations. ``render_node`` is pure:
+    resolved facts in, native config out, no I/O and no Kubernetes calls. It
+    raises ``AdapterRenderRefusal`` when it cannot render the node.
     """
 
     name: str
+    support: AdapterSupport
 
     def render_node(
         self,

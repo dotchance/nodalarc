@@ -47,7 +47,7 @@ import json
 import logging
 import os
 import socket
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from contextlib import suppress
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
@@ -58,6 +58,7 @@ from nodalarc.models.events import OpsEvent, PlaybackState, SessionEphemeris, Vi
 from nodalarc.models.link_decisions import GroundLinkDecisionSnapshot
 from nodalarc.models.link_events import LinkDecisionProvenance
 from nodalarc.models.link_state import LinkStateSnapshot
+from nodalarc.models.resolved_session import InterfaceRates
 from nodalarc.models.scheduler_ops import (
     ActualLinkSnapshot,
     ActuationFailureClass,
@@ -196,7 +197,7 @@ class Dispatcher:
     def __init__(
         self,
         interface_map: dict[tuple[str, str], tuple[str, str]],
-        bandwidth_map: dict[tuple[str, str], float],
+        interface_rates: Mapping[tuple[str, str], InterfaceRates],
         pod_locator: PodLocationMap,
         agent_pool: AgentPool,
         session_id: str,
@@ -224,7 +225,9 @@ class Dispatcher:
         # fatal failure fatal.
         self._read_lifecycle_identity = read_lifecycle_identity
         self._interface_map = interface_map
-        self._bandwidth_map = bandwidth_map
+        # Each WAN interface's own terminal rates; link shaping applies them
+        # per interface, independent of the terminal at the other end.
+        self._interface_rates = interface_rates
         self._loc = pod_locator
         self._pool = agent_pool
         if max_latency_age_s <= 0:
@@ -1498,13 +1501,6 @@ class Dispatcher:
         expected_down: dict[tuple[str, str], ActiveLinkInfo],
         sim_time: datetime,
     ) -> ActuationResult:
-        # Overlay the commanded netem from kernel-actual bookkeeping: desired
-        # infos come from the latest OME snapshot and carry no dispatch
-        # provenance, but the kernel can only be expected to hold what was
-        # last COMMANDED for the pair.
-        expected_up = {
-            pair: self._info_with_commanded_netem(pair, info) for pair, info in expected_up.items()
-        }
         result = await verify_ground_kernel_inventory(
             gs_id=gs_id,
             expected_up=expected_up,
@@ -1514,6 +1510,7 @@ class Dispatcher:
             sim_iso=sim_time.isoformat(),
             sim_time=sim_time,
             gs_capacities=self._gs_capacities,
+            interface_rates=self._interface_rates,
             session_id=self._session_id,
             wiring_generation=self._wiring_generation,
         )
@@ -1569,27 +1566,6 @@ class Dispatcher:
                         reason=summary,
                     ),
                 )
-
-    def _info_with_commanded_netem(
-        self, pair: tuple[str, str], info: ActiveLinkInfo
-    ) -> ActiveLinkInfo:
-        if info.netem_one_way_ms is not None:
-            return info
-        actual = self._actual_links.get(pair)
-        if actual is None or actual.netem_one_way_ms is None:
-            return info
-        return ActiveLinkInfo(
-            info.interface_a,
-            info.interface_b,
-            info.latency_ms,
-            info.bandwidth_mbps,
-            link_type=info.link_type,
-            range_km=info.range_km,
-            authority_sim_time=info.authority_sim_time,
-            authority_source=info.authority_source,
-            authority_sequence=info.authority_sequence,
-            netem_one_way_ms=actual.netem_one_way_ms,
-        )
 
     async def _mark_gs_clean(
         self,
@@ -2309,7 +2285,6 @@ class Dispatcher:
                     _pair, info = desired_link_from_visibility(
                         vis,
                         interface_map=self._interface_map,
-                        bandwidth_map=self._bandwidth_map,
                         ground_station_ids=ground_station_ids,
                     )
                     self._desired_links[pair] = info
@@ -2387,7 +2362,6 @@ class Dispatcher:
             built = desired_link_from_snapshot_link(
                 link,
                 interface_map=self._interface_map,
-                bandwidth_map=self._bandwidth_map,
                 ground_station_ids=ground_station_ids,
                 snapshot_sim_time=snapshot.sim_time,
                 snapshot_seq=snapshot.snapshot_seq,
@@ -3168,10 +3142,6 @@ class Dispatcher:
                 f"authority_sequence={info.authority_sequence})"
             )
 
-    def _link_locality(self, node_a: str, node_b: str) -> int | None:
-        """Determine locality for a link pair. None if either pod unscheduled."""
-        return self._loc.link_locality(node_a, node_b)
-
     async def _reconcile_links(
         self,
         desired: dict[tuple[str, str], ActiveLinkInfo],
@@ -3359,6 +3329,7 @@ class Dispatcher:
             latency_compensation=self._latency_compensation,
             validate_authority_freshness=self._validate_authority_freshness,
             link_provenance=self._link_provenance,
+            interface_rates=self._interface_rates,
             session_id=self._session_id,
             wiring_generation=self._wiring_generation,
         )
@@ -3579,6 +3550,7 @@ class Dispatcher:
             latency_compensation=self._latency_compensation,
             validate_authority_freshness=self._validate_authority_freshness,
             link_provenance=self._link_provenance,
+            interface_rates=self._interface_rates,
             session_id=self._session_id,
             wiring_generation=self._wiring_generation,
         )

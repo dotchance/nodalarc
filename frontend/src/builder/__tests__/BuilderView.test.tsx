@@ -41,6 +41,8 @@ const PROPS = {
   showGroundTracks: false,
   showTrails: false,
   actionsRef: { current: null },
+  areaInstanceId: null,
+  onSelectAreaInstance: () => {},
 } as const;
 
 function jsonResponse(body: unknown, ok = true, status = 200) {
@@ -1836,6 +1838,8 @@ describe("BuilderView resolve and world synchronization", () => {
           tags: [],
           surface_position: { lat_deg: 0, lon_deg: 0, alt_m: 0 },
           forwarding: "routed",
+          role: "forwarding_only",
+          routing_instances: [],
           terminal_inventory: [],
           interfaces: [],
           originated_prefixes: [],

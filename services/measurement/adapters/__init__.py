@@ -29,19 +29,27 @@ class ProtocolAdapter(Protocol):
         """Drain buffered events since last call (non-blocking)."""
         ...
 
+    def poll(self, node_id: str) -> None:
+        """Poll a node's protocol state now, buffering the events it finds."""
+        ...
+
     def trace_path(self, node_id: str, dst_ip: str) -> list[str]:
         """Trace forwarding path from node to destination IP."""
         ...
 
 
-def create_adapter(adapter_name: str) -> ProtocolAdapter:
-    """Create adapter by name from stack.yaml mi_adapter field."""
-    if adapter_name == "frr_isis_adapter":
+def create_adapter(engine: str, protocol: str) -> ProtocolAdapter:
+    """The measurement adapter that observes ``protocol`` on routing ``engine``.
+
+    ``engine`` is the workload adapter the session's routers run (a profile's
+    ``adapter:``); each measurement adapter reads that engine's own output.
+    """
+    if (engine, protocol) == ("frr", "isis"):
         from measurement.adapters.frr_isis_adapter import FrrIsisAdapter
 
         return FrrIsisAdapter()
-    if adapter_name == "frr_ospf_adapter":
+    if (engine, protocol) == ("frr", "ospf"):
         from measurement.adapters.frr_ospf_adapter import FrrOspfAdapter
 
         return FrrOspfAdapter()
-    raise ValueError(f"Unknown MI adapter: {adapter_name}")
+    raise ValueError(f"no measurement adapter observes {protocol!r} on engine {engine!r}")

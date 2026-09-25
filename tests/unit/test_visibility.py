@@ -328,7 +328,7 @@ class TestIslVisibility:
         two orders of magnitude inside the limit at every sample, so the
         tracking rate is the one binding constraint, exceeded then recovered."""
         shell = DeclaredShell(780.0, 86.4, 31.6, 6, 15.0)
-        expected = [(2870, "ok", 1.26), (2890, "tracking_exceeded", 3.60), (2910, "ok", 1.55)]
+        expected = [(2870, "ok", 1.41), (2890, "tracking_exceeded", 3.64), (2910, "ok", 1.38)]
         for t_s, reason, reference_rate in expected:
             pos_a, vel_a = state(shell, 5, 0, t_s)
             pos_b, vel_b = state(shell, 0, 2, t_s)

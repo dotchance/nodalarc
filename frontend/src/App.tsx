@@ -32,7 +32,6 @@ import { BuilderView } from "./builder/BuilderView";
 import { WS_URL, fetchApiKey } from "./config";
 import { setLabelsEnabled, getLabelsEnabled } from "./globe/labels";
 import { setGsLabelsEnabled, getGsLabelsEnabled } from "./globe/groundStations";
-import type { TracedPath } from "./types";
 import type { GlobeActions } from "./globe/actions";
 
 import "./styles/fonts.css";
@@ -46,6 +45,8 @@ import "./styles/log-window.css";
 import "./styles/cli-drawer.css";
 import "./styles/popover.css";
 import "./styles/panels.css";
+import { AreaLegend } from "./routing/AreaLegend";
+import { buildAreaColoring } from "./routing/instances";
 import "./styles/toolbar.css";
 import "./styles/scene.css";
 import "./styles/topology.css";
@@ -64,14 +65,33 @@ function subtractMsIso(iso: string, deltaMs: number): string {
 }
 
 export function App() {
-  const [ready, setReady] = useState(false);
-  useEffect(() => { fetchApiKey().finally(() => setReady(true)); }, []);
-  if (!ready) return null;
+  const [token, setToken] = useState<
+    { state: "pending" } | { state: "ready" } | { state: "failed"; message: string }
+  >({ state: "pending" });
+  useEffect(() => {
+    fetchApiKey().then(
+      () => setToken({ state: "ready" }),
+      (err: unknown) =>
+        setToken({ state: "failed", message: err instanceof Error ? err.message : String(err) }),
+    );
+  }, []);
+  if (token.state === "pending") return null;
+  if (token.state === "failed") {
+    return (
+      <div className="connection-startup-error">
+        <div className="startup-error-box">
+          <h2>Cannot get a VS-API token</h2>
+          <p>{token.message}</p>
+          <button onClick={() => window.location.reload()}>Retry</button>
+        </div>
+      </div>
+    );
+  }
   return <AppInner />;
 }
 
 function AppInner() {
-  const { snapshot, ephemeris, playbackState, connected, hasEverConnected, kicked, sessionTransitioning, sessionError, switchDetail, historicalMode, setHistoricalMode, fetchHistorical, historicalError, sendMessage } =
+  const { snapshot, ephemeris, playbackState, connected, hasEverConnected, kicked, sessionTransitioning, sessionError, switchDetail, tokenError, historicalMode, setHistoricalMode, fetchHistorical, historicalError, sendMessage } =
     useSnapshot();
   const { selection, select, clearSelection, anchorGsId } = useSelection();
   const preselectedAppliedRef = useRef(false);
@@ -90,7 +110,8 @@ function AppInner() {
     preselectedAppliedRef.current = true;
   }, [snapshot, select]);
 
-  const { sessions, switching, switchSession } = useSessionSwitcher(sessionTransitioning);
+  const { sessions, sessionsError, switching, switchSession } =
+    useSessionSwitcher(sessionTransitioning);
   const playback = usePlayback(snapshot?.playback_paused, snapshot?.playback_speed);
 
   const appState = useAppState({
@@ -103,7 +124,7 @@ function AppInner() {
   const {
     showCatalog, hasEverDeployed, setHasEverDeployed, setShowCatalog,
     openCatalog, closeCatalog, activeSessionName, sessionStatus,
-    viewMode, setViewMode, colorMode, setColorMode,
+    viewMode, setViewMode, colorMode, setColorMode, areaInstanceId, setAreaInstanceId,
     showGroundLinks, setShowGroundLinks, showIslLinks, setShowIslLinks,
     showSatPaths, setShowSatPaths, showTrails, setShowTrails,
     showGroundTracks, setShowGroundTracks,
@@ -126,7 +147,6 @@ function AppInner() {
   }, []);
   const canSplit = windowWidth >= 1280;
 
-  const [userTrace, setUserTrace] = useState<TracedPath | null>(null);
   const [visiblePlanes, setVisiblePlanes] = useState<Set<number> | null>(null);
   const [visibleSegments, setVisibleSegments] = useState<Set<string> | null>(null);
   const globeActionsRef = useRef<GlobeActions | null>(null);
@@ -302,21 +322,17 @@ function AppInner() {
     if (viewMode === "builder") setBuilderEntered(true);
   }, [viewMode]);
 
-  const augmentedSnapshot = useMemo(() => {
-    if (!snapshot) return snapshot;
-    const hasContinuous = snapshot.traced_paths.some(p => p.flow_id === "__continuous_trace__");
-    if (hasContinuous) return snapshot;
-    if (!userTrace) return snapshot;
-    const serverPaths = snapshot.traced_paths.filter(p => p.flow_id !== "__user_trace__");
-    return { ...snapshot, traced_paths: [...serverPaths, userTrace] };
-  }, [snapshot, userTrace]);
-
   // Authored-orbit regime per node (static per ephemeris epoch).
   const regimeById = useMemo(() => buildRegimeIndex(ephemeris), [ephemeris]);
+  // Area coloring reads every node, so filters never change which color an area gets.
+  const areaColoring = useMemo(
+    () => buildAreaColoring(snapshot?.nodes ?? [], areaInstanceId),
+    [snapshot?.nodes, areaInstanceId],
+  );
 
   const renderedSnapshot = useMemo(
-    () => filterSnapshotForRender(augmentedSnapshot, visibleSegments, visiblePlanes),
-    [augmentedSnapshot, visibleSegments, visiblePlanes],
+    () => filterSnapshotForRender(snapshot, visibleSegments, visiblePlanes),
+    [snapshot, visibleSegments, visiblePlanes],
   );
 
   // --- Build zone content ---
@@ -365,7 +381,10 @@ function AppInner() {
       {viewMode !== "builder" && (
       <div className="banner-stack">
         {!kicked && !connected && hasEverConnected && (
-          <div className="connection-banner">Connection lost. Reconnecting...</div>
+          <div className="connection-banner">
+            Connection lost. Reconnecting...
+            {tokenError !== null && ` VS-API token: ${tokenError}`}
+          </div>
         )}
         {connected && !switching && sessionStatus !== "wiring" && (!snapshot || snapshot.nodes.length === 0) && (
           <div className="connection-banner">Initializing constellation...</div>
@@ -432,6 +451,7 @@ function AppInner() {
             showGroundTracks={showGroundTracks}
             showTrails={showTrails}
             regimeById={regimeById}
+            areaColoring={areaColoring}
             selection={selection}
             onSelect={select}
             actionsRef={globeActionsRef}
@@ -450,13 +470,14 @@ function AppInner() {
           onSelect={select}
           onFlyTo={handleFlyToNode}
           colorMode={colorMode}
+          areaColoring={areaColoring}
           showIslLinks={showIslLinks}
           showGroundLinks={showGroundLinks}
         />
       </div>
       {viewMode === "dashboard" && (
         <div className="full-pane" style={{ background: "var(--bg-main)", overflow: "auto" }}>
-          <Dashboard snapshot={augmentedSnapshot} />
+          <Dashboard snapshot={snapshot} />
         </div>
       )}
       {builderEntered && (
@@ -473,6 +494,8 @@ function AppInner() {
           <BuilderView
             active={viewMode === "builder"}
             colorMode={colorMode}
+            areaInstanceId={areaInstanceId}
+            onSelectAreaInstance={setAreaInstanceId}
             globeMode={globeMode}
             referenceFrame={referenceFrame}
             showSatPaths={showSatPaths}
@@ -484,6 +507,9 @@ function AppInner() {
           />
           </VisualizationErrorBoundary>
         </div>
+      )}
+      {colorMode === "area" && (viewMode === "globe" || viewMode === "topology" || viewMode === "split") && (
+        <AreaLegend coloring={areaColoring} onSelectInstance={setAreaInstanceId} />
       )}
       <Toolbar
         viewMode={viewMode}
@@ -539,7 +565,7 @@ function AppInner() {
         <div className="filter-panel-overlay" onClick={() => setFilterOpen(false)}>
           <div className="filter-panel-drawer" onClick={(e) => e.stopPropagation()}>
             <FilterPanel
-              snapshot={augmentedSnapshot}
+              snapshot={snapshot}
               showIslLinks={showIslLinks}
               showGroundLinks={showGroundLinks}
               showSatPaths={showSatPaths}
@@ -568,12 +594,11 @@ function AppInner() {
 
   const rightPanelContent = (
     <InfoPanel
-      snapshot={augmentedSnapshot}
+      snapshot={snapshot}
       selection={selection}
       anchorGsId={anchorGsId}
       regimeById={regimeById}
       onSelect={select}
-      onTraceResult={setUserTrace}
     />
   );
 
@@ -588,6 +613,7 @@ function AppInner() {
       deploying={switching}
       systemNotice={visualizationError ?? undefined}
       sessions={sessions}
+      sessionsError={sessionsError}
       onLaunchSession={switchSession}
       onOpenBuilder={() => { setShowCatalog(false); setViewMode("builder"); }}
     />

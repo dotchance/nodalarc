@@ -11,7 +11,6 @@ from __future__ import annotations
 import logging
 
 import kubernetes.client
-import kubernetes.config
 import kubernetes.stream
 from nodalarc.platform_config import get_platform_config
 from nodalarc.workload_target import (
@@ -19,6 +18,8 @@ from nodalarc.workload_target import (
     validate_node_id,
 )
 from pydantic import BaseModel, ConfigDict, Field
+
+from vs_api import k8s
 
 log = logging.getLogger(__name__)
 
@@ -82,12 +83,7 @@ def run_vtysh(node_id: str, command: str) -> IntrospectResult:
     cfg = get_platform_config()
     namespace = cfg.kubernetes_namespace
 
-    try:
-        kubernetes.config.load_incluster_config()
-    except kubernetes.config.ConfigException:
-        kubernetes.config.load_kube_config()
-
-    v1 = kubernetes.client.CoreV1Api()
+    v1 = k8s.core_v1()
 
     target = read_workload_target(v1, namespace, node_id)
 

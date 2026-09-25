@@ -108,7 +108,7 @@ images/                 Base container images (FRR, probe)
 deploy/helm/            Helm chart (templates, values)
 catalog/nodalarc/       Reusable config primitives (bodies, terminals, orbits, nodes, sites, constellations)
 catalog/nodalarc/sessions/      Assembled, deployable sessions
-configs/                Platform config, ephemerides, and FRR templates
+configs/                Platform config and ephemerides
 scripts/                Lifecycle and operational scripts
 tools/                  Python report, scenario, compare, and reconfig CLIs
 tests/unit/             Unit tests
@@ -127,7 +127,7 @@ tests/integration/      Integration tests
 | `services/ome/main.py` | OME entry point, pacing thread, publisher thread |
 | `frontend/src/App.tsx` | Frontend entry point |
 | `frontend/src/globe/r3f/Links.tsx` | ISL/ground link rendering (batched LineSegments2) |
-| `configs/templates/frr/` | Jinja2 templates for FRR config generation |
+| `adapters/frr/` | The FRR workload adapter: support declaration, daemon selection, templates |
 | `deploy/helm/values.yaml` | Helm chart default values |
 
 ## Branch Discipline

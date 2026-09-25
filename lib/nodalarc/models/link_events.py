@@ -6,17 +6,15 @@ Published via NATS JetStream.
 """
 
 from datetime import datetime
-from typing import Literal
+from typing import Literal, get_args
 
 from pydantic import BaseModel, ConfigDict
 
-# The authoritative vocabulary of LinkUp/LinkDown `reason` codes (the link-lifecycle vocabulary,
-# distinct from the ground-decision funnel reasons in link_decisions.py). Kept as a constant — not
-# a Literal on the wire field — so a live Scheduler emitting a not-yet-listed code degrades to the
-# raw code in the UI rather than crashing validation; the frontend mirrors this set in
-# explain/linkEvents.ts (LINK_EVENT_REASONS) and the cross-language contract test asserts they match
-# so the two vocabularies cannot silently drift.
-LINK_EVENT_REASONS: frozenset[str] = frozenset(
+# The `reason` codes of LinkUp/LinkDown transitions on the wire (the link-lifecycle vocabulary,
+# distinct from the ground-decision funnel reasons in link_decisions.py). Kept as a constant, not
+# a Literal on the wire field, so a live Scheduler emitting a not-yet-listed code degrades to the
+# raw code in the UI rather than crashing validation.
+LINK_TRANSITION_REASONS: frozenset[str] = frozenset(
     {
         # up
         "vis_gained",
@@ -32,6 +30,16 @@ LINK_EVENT_REASONS: frozenset[str] = frozenset(
         "satellite_loss",
     }
 )
+
+# The `reason` of the LinkActive rows a recorded history writes, never sent on the wire: the links
+# the kernel had up when recording began, or when it resumed after VS-API restarted.
+HistoryLinkReason = Literal["recording_start", "recording_resumed"]
+HISTORY_LINK_REASONS: frozenset[str] = frozenset(get_args(HistoryLinkReason))
+
+# Every reason a link event can show. The frontend mirrors this set in explain/linkEvents.ts
+# (LINK_EVENT_REASONS) and the cross-language contract test asserts they match, so the two
+# vocabularies cannot silently drift.
+LINK_EVENT_REASONS: frozenset[str] = LINK_TRANSITION_REASONS | HISTORY_LINK_REASONS
 
 
 class LinkDecisionProvenance(BaseModel):
@@ -75,7 +83,6 @@ class LinkUp(BaseModel):
     interface_a: str
     interface_b: str
     latency_ms: float
-    bandwidth_mbps: float
     range_km: float
     reason: str  # vis_gained, gs_above_horizon, scenario_inject_up, scenario_reconciliation
     link_type: Literal["isl", "ground"]

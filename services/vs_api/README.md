@@ -11,8 +11,9 @@ can run local Keplerian propagation.
 - `GET /api/v1/state` - current snapshot (REST)
 - `POST /api/v1/session/deploy-from-yaml` - deploy a session (uploads the catalog closure, writes the ConstellationSpec CRD)
 - `GET /api/v1/sessions` - list available sessions
-- `POST /api/v1/trace` - request forwarding path trace
 - `POST /api/v1/playback` - pause, resume, set_speed, seek
+- `POST /api/v1/trace` - trace the path between two nodes once
+- `POST /api/v1/trace/start`, `GET /api/v1/trace/status`, `POST /api/v1/trace/stop` - live path trace
 - `GET /api/v1/auth/token` - authentication token
 
 ## Port: 8080

@@ -40,7 +40,6 @@ def _four_node_runtime():
         type="optical",
         count=2,
         max_range_km=5000.0,
-        bandwidth_mbps=1000.0,
         max_tracking_rate_deg_s=3.0,
         field_of_regard_deg=360.0,
     )
@@ -48,7 +47,6 @@ def _four_node_runtime():
         type="optical",
         count=1,
         interface_indices=(0,),
-        bandwidth_mbps=1000.0,
         max_range_km=2000.0,
         field_of_regard_deg=120.0,
         max_tracking_rate_deg_s=1.5,
@@ -122,7 +120,6 @@ def four_node_timeline():
                 type="optical",
                 count=1,
                 interface_indices=(0,),
-                bandwidth_mbps=1000.0,
                 tracking_capacity=1,
                 max_range_km=2000.0,
                 field_of_regard_deg=120.0,

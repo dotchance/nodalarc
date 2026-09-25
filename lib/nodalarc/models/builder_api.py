@@ -492,26 +492,26 @@ class WizardRoutingTimerFieldMetadata(_BuilderApplicationModel):
     description: str = Field(min_length=1, max_length=1024)
     guidance: str = Field(min_length=1, max_length=1024)
     minimum: int = Field(ge=0)
+    maximum: int | None = Field(default=None, ge=0)
+
+    @model_validator(mode="after")
+    def _bounds_are_ordered(self) -> WizardRoutingTimerFieldMetadata:
+        if self.maximum is not None and self.maximum < self.minimum:
+            raise ValueError(f"Wizard timer field {self.id!r} maximum is below its minimum")
+        return self
 
 
 class WizardBfdMetadata(_BuilderApplicationModel):
-    """Backend-owned presentation and field facts for Wizard BFD controls."""
+    """Backend-owned presentation facts for the Wizard BFD controls.
+
+    The timer controls and their bounds belong to each protocol, because the
+    bounds are what the runtime renders for that protocol.
+    """
 
     heading: str = Field(min_length=1, max_length=160)
     enabled_field: WizardRoutingBooleanField
     enable_label: str = Field(min_length=1, max_length=160)
     enable_description: str = Field(min_length=1, max_length=1024)
-    timer_fields: tuple[WizardRoutingTimerFieldMetadata, ...] = Field(min_length=1)
-
-    @model_validator(mode="after")
-    def _fields_are_complete_and_unique(self) -> WizardBfdMetadata:
-        timer_ids = [field.id for field in self.timer_fields]
-        if len(set(timer_ids)) != len(timer_ids):
-            raise ValueError("Wizard BFD timer fields must be unique")
-        expected = {"bfd_detect_multiplier", "bfd_rx_interval", "bfd_tx_interval"}
-        if set(timer_ids) != expected:
-            raise ValueError("Wizard BFD metadata must describe every BFD timer field")
-        return self
 
 
 class WizardProtocolMetadata(_BuilderApplicationModel):
@@ -524,12 +524,21 @@ class WizardProtocolMetadata(_BuilderApplicationModel):
     extension_constraints: dict[WizardExtension, tuple[WizardExtension, ...]]
     timer_label: str = Field(min_length=1, max_length=160)
     timer_fields: tuple[WizardRoutingTimerFieldMetadata, ...] = Field(min_length=1)
-    non_flat_area_warning: str | None = Field(default=None, min_length=1, max_length=2048)
+    # BFD timer controls with the bounds the runtime renders for this
+    # protocol; None when the runtime renders no BFD for it.
+    bfd_timer_fields: tuple[WizardRoutingTimerFieldMetadata, ...] | None = None
+    # The area strategies a session of this protocol resolves with.
+    area_strategies: tuple[WizardAreaStrategy, ...] = Field(min_length=1)
+    default_area_strategy: WizardAreaStrategy
 
     @model_validator(mode="after")
     def _facts_are_consistent(self) -> WizardProtocolMetadata:
         if len(set(self.extensions)) != len(self.extensions):
             raise ValueError("Wizard protocol extensions must be unique")
+        if len(set(self.area_strategies)) != len(self.area_strategies):
+            raise ValueError("Wizard area strategies must be unique")
+        if self.default_area_strategy not in self.area_strategies:
+            raise ValueError("default Wizard area strategy must be available")
         available = set(self.extensions)
         for extension, dependencies in self.extension_constraints.items():
             if extension not in available or any(item not in available for item in dependencies):
@@ -541,6 +550,15 @@ class WizardProtocolMetadata(_BuilderApplicationModel):
             raise ValueError("Wizard protocol timer fields must be unique")
         if any(field.startswith("bfd_") for field in timer_ids):
             raise ValueError("Wizard protocol timer fields must not redefine BFD controls")
+        if self.bfd_timer_fields is not None:
+            bfd_ids = [field.id for field in self.bfd_timer_fields]
+            if len(set(bfd_ids)) != len(bfd_ids):
+                raise ValueError("Wizard BFD timer fields must be unique")
+            expected = {"bfd_detect_multiplier", "bfd_rx_interval", "bfd_tx_interval"}
+            if set(bfd_ids) != expected:
+                raise ValueError("Wizard BFD timer fields must describe every BFD timer")
+            if any(field.maximum is None for field in self.bfd_timer_fields):
+                raise ValueError("Wizard BFD timer fields must carry the rendered maximum")
         return self
 
 
@@ -570,17 +588,11 @@ class WizardExtensionRulesResponse(_BuilderApplicationModel):
 
     protocols: tuple[WizardProtocolMetadata, ...] = Field(min_length=1)
     extensions: tuple[WizardExtensionMetadata, ...] = Field(min_length=1)
-    area_strategies: tuple[WizardAreaStrategy, ...]
-    default_area_strategy: WizardAreaStrategy
     bfd: WizardBfdMetadata
     routing_timer_defaults: WizardRoutingTimerIntent
 
     @model_validator(mode="after")
     def _defaults_are_available(self) -> WizardExtensionRulesResponse:
-        if len(set(self.area_strategies)) != len(self.area_strategies):
-            raise ValueError("Wizard area strategies must be unique")
-        if self.default_area_strategy not in self.area_strategies:
-            raise ValueError("default Wizard area strategy must be available")
         protocol_ids = [protocol.id for protocol in self.protocols]
         if len(set(protocol_ids)) != len(protocol_ids):
             raise ValueError("Wizard routing protocols must be unique")
@@ -755,6 +767,8 @@ class BuilderSessionDeployRequest(_BuilderApplicationModel):
     expected_session_revision: OpaqueRevision
     expected_document_digest: Sha256Digest
     expected_dependency_digest: Sha256Digest
+    # Keep a history database for this session run.
+    record_history: bool
 
 
 class BuilderSessionDeployAccepted(_BuilderApplicationModel):

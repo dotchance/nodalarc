@@ -27,30 +27,32 @@ def two_session_dbs(tmp_path):
     db1_path = str(tmp_path / "session1.db")
     db2_path = str(tmp_path / "session2.db")
 
-    for db_path, session_name, routing_stack in [
-        (db1_path, "isis-run", "frr-isis-sr"),
-        (db2_path, "ospf-run", "frr-ospf-te"),
+    for db_path, session_id, session_name, routing_stack in [
+        (db1_path, "run-isis", "isis-run", "frr-isis-sr"),
+        (db2_path, "run-ospf", "ospf-run", "frr-ospf-te"),
     ]:
         conn = sqlite3.connect(db_path)
         create_tables(conn)
 
         # Session metadata
         conn.execute(
-            "INSERT INTO session_metadata (key, value) VALUES (?, ?)",
-            ("session_name", session_name),
+            "INSERT INTO session_metadata (session_id, key, value) VALUES (?, ?, ?)",
+            (session_id, "session_name", session_name),
         )
         conn.execute(
-            "INSERT INTO session_metadata (key, value) VALUES (?, ?)",
-            ("routing_stack", routing_stack),
+            "INSERT INTO session_metadata (session_id, key, value) VALUES (?, ?, ?)",
+            (session_id, "routing_stack", routing_stack),
         )
 
         # Link events
         for i, etype in enumerate(["LinkUp", "LinkDown", "LinkUp"]):
             conn.execute(
                 """INSERT INTO link_events
-                   (sim_time, wall_time, event_type, node_a, node_b, latency_ms, reason)
-                   VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                   (session_id, sim_time, wall_time, event_type, node_a, node_b, latency_ms,
+                    reason)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
+                    session_id,
                     f"2026-01-01T00:00:{i:02d}",
                     f"2026-01-01T00:00:{i:02d}",
                     etype,
@@ -66,10 +68,12 @@ def two_session_dbs(tmp_path):
         lost = 3 if session_name == "isis-run" else 5
         conn.execute(
             """INSERT INTO convergence_events
-               (event_id, sim_time_start, sim_time_end, wall_time_start, wall_time_end,
-                converged, duration_ms, packets_lost, packets_sent, triggering_link_event_id)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+               (session_id, event_id, sim_time_start, sim_time_end, wall_time_start,
+                wall_time_end, converged, duration_ms, packets_lost, packets_sent,
+                triggering_link_event_id)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
+                session_id,
                 "conv-001",
                 "2026-01-01T00:00:01",
                 "2026-01-01T00:00:03",
@@ -86,11 +90,12 @@ def two_session_dbs(tmp_path):
         # Probe results
         conn.execute(
             """INSERT INTO probe_results
-               (sim_time, wall_time, flow_id, src_node, dst_node,
+               (session_id, sim_time, wall_time, flow_id, src_node, dst_node,
                 packets_sent, packets_received, latency_min_ms, latency_max_ms,
                 latency_avg_ms, jitter_ms)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
+                session_id,
                 "2026-01-01T00:00:05",
                 "2026-01-01T00:00:05",
                 "test-flow",
@@ -114,7 +119,7 @@ def two_session_dbs(tmp_path):
 class TestAttachDatabases:
     def test_attach_two_databases(self, two_session_dbs):
         db1, db2 = two_session_dbs
-        conn = _attach_databases([db1, db2])
+        conn, sessions = _attach_databases([db1, db2])
         # Verify we can query both
         row = conn.execute("SELECT COUNT(*) AS cnt FROM s1.link_events").fetchone()
         assert row["cnt"] == 3
@@ -126,8 +131,8 @@ class TestAttachDatabases:
 class TestGetMetadata:
     def test_reads_metadata(self, two_session_dbs):
         db1, db2 = two_session_dbs
-        conn = _attach_databases([db1, db2])
-        meta = _get_metadata(conn, "s1")
+        conn, sessions = _attach_databases([db1, db2])
+        meta = _get_metadata(conn, "s1", sessions["s1"])
         assert meta["session_name"] == "isis-run"
         assert meta["routing_stack"] == "frr-isis-sr"
         conn.close()
@@ -136,17 +141,26 @@ class TestGetMetadata:
 class TestCountTable:
     def test_counts_rows(self, two_session_dbs):
         db1, db2 = two_session_dbs
-        conn = _attach_databases([db1, db2])
-        assert _count_table(conn, "s1", "link_events") == 3
-        assert _count_table(conn, "s1", "convergence_events") == 1
-        assert _count_table(conn, "s1", "probe_results") == 1
+        conn, sessions = _attach_databases([db1, db2])
+        assert _count_table(conn, "s1", sessions["s1"], "link_events") == 3
+        assert _count_table(conn, "s1", sessions["s1"], "convergence_events") == 1
+        assert _count_table(conn, "s1", sessions["s1"], "probe_results") == 1
         conn.close()
 
-    def test_nonexistent_table_returns_zero(self, two_session_dbs):
+    def test_attached_files_name_their_sessions(self, two_session_dbs):
         db1, db2 = two_session_dbs
-        conn = _attach_databases([db1, db2])
-        assert _count_table(conn, "s1", "nonexistent_table") == 0
+        conn, sessions = _attach_databases([db1, db2])
+        assert sessions == {"s1": "run-isis", "s2": "run-ospf"}
         conn.close()
+
+    def test_a_file_that_records_no_session_is_refused(self, two_session_dbs, tmp_path):
+        db1, _ = two_session_dbs
+        unrecorded = str(tmp_path / "unrecorded.db")
+        conn = sqlite3.connect(unrecorded)
+        create_tables(conn)
+        conn.close()
+        with pytest.raises(ValueError, match="records 0 sessions"):
+            _attach_databases([db1, unrecorded])
 
 
 def _parse_summary_table_counts(output: str) -> dict[str, tuple[int, int]]:
@@ -247,8 +261,8 @@ def _parse_probe_flows_by_alias(output: str) -> dict[str, dict[str, dict[str, fl
 class TestReportSummary:
     def test_reports_metadata_side_by_side(self, two_session_dbs):
         db1, db2 = two_session_dbs
-        conn = _attach_databases([db1, db2])
-        output = report_summary(conn, ["s1", "s2"])
+        conn, sessions = _attach_databases([db1, db2])
+        output = report_summary(conn, sessions)
         conn.close()
 
         assert _parse_summary_metadata(output) == {
@@ -258,8 +272,8 @@ class TestReportSummary:
 
     def test_reports_exact_table_counts_side_by_side(self, two_session_dbs):
         db1, db2 = two_session_dbs
-        conn = _attach_databases([db1, db2])
-        output = report_summary(conn, ["s1", "s2"])
+        conn, sessions = _attach_databases([db1, db2])
+        output = report_summary(conn, sessions)
         conn.close()
 
         assert _parse_summary_table_counts(output) == {
@@ -274,8 +288,8 @@ class TestReportSummary:
 class TestReportConvergence:
     def test_reports_per_session_convergence_rows(self, two_session_dbs):
         db1, db2 = two_session_dbs
-        conn = _attach_databases([db1, db2])
-        output = report_convergence(conn, ["s1", "s2"])
+        conn, sessions = _attach_databases([db1, db2])
+        output = report_convergence(conn, sessions)
         conn.close()
 
         assert _parse_convergence_rows(output) == {
@@ -299,8 +313,8 @@ class TestReportConvergence:
 
     def test_reports_matched_event_deltas(self, two_session_dbs):
         db1, db2 = two_session_dbs
-        conn = _attach_databases([db1, db2])
-        output = report_convergence(conn, ["s1", "s2"])
+        conn, sessions = _attach_databases([db1, db2])
+        output = report_convergence(conn, sessions)
         conn.close()
 
         assert _parse_convergence_deltas(output) == {
@@ -317,8 +331,8 @@ class TestReportConvergence:
 class TestReportLinkEvents:
     def test_reports_event_count_by_type_per_session(self, two_session_dbs):
         db1, db2 = two_session_dbs
-        conn = _attach_databases([db1, db2])
-        output = report_link_events(conn, ["s1", "s2"])
+        conn, sessions = _attach_databases([db1, db2])
+        output = report_link_events(conn, sessions)
         conn.close()
 
         assert _parse_link_event_counts(output) == {
@@ -331,8 +345,8 @@ class TestReportLinkEvents:
 class TestReportProbeResults:
     def test_reports_probe_delivery_and_latency_by_session(self, two_session_dbs):
         db1, db2 = two_session_dbs
-        conn = _attach_databases([db1, db2])
-        output = report_probe_results(conn, ["s1", "s2"])
+        conn, sessions = _attach_databases([db1, db2])
+        output = report_probe_results(conn, sessions)
         conn.close()
 
         expected = {
@@ -374,16 +388,25 @@ class TestRunCompare:
             run_compare(["/nonexistent/db1.db", "/nonexistent/db2.db"], "summary")
 
 
+def _recorded_session_without_events(db_path: str) -> None:
+    conn = sqlite3.connect(db_path)
+    create_tables(conn)
+    conn.execute(
+        "INSERT INTO session_metadata (session_id, key, value) VALUES (?, ?, ?)",
+        (f"run-{db_path.rsplit('/', 1)[-1]}", "session_name", "empty"),
+    )
+    conn.commit()
+    conn.close()
+
+
 class TestEmptyDatabases:
-    """Verify reports handle empty databases gracefully."""
+    """Reports on recorded sessions that recorded no events."""
 
     def test_summary_on_empty_dbs(self, tmp_path):
         db1 = str(tmp_path / "empty1.db")
         db2 = str(tmp_path / "empty2.db")
         for db_path in [db1, db2]:
-            conn = sqlite3.connect(db_path)
-            create_tables(conn)
-            conn.close()
+            _recorded_session_without_events(db_path)
 
         output = run_compare([db1, db2], "summary")
         assert _parse_summary_table_counts(output)["link_events"] == (0, 0)
@@ -392,9 +415,7 @@ class TestEmptyDatabases:
         db1 = str(tmp_path / "empty1.db")
         db2 = str(tmp_path / "empty2.db")
         for db_path in [db1, db2]:
-            conn = sqlite3.connect(db_path)
-            create_tables(conn)
-            conn.close()
+            _recorded_session_without_events(db_path)
 
         output = run_compare([db1, db2], "convergence")
         assert _parse_convergence_rows(output) == {"s1": {}, "s2": {}}

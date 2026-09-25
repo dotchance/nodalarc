@@ -1,13 +1,18 @@
 """na-report — single-session report tool.
 
-PRD Section 9: generate reports from a single session's SQLite database.
-Distinct from na-compare which compares two or more sessions.
+Generates reports from one recorded session's history database. Distinct from
+na-compare, which compares two or more sessions.
+
+VS-API keeps one history file per recorded session run, at
+<session_data_root>/history/<run-id>.db (/var/nodalarc/sessions/history/ by default).
 
 Usage:
-  python -m tools.na_report --db /path/to/nodalarc.db --report summary
-  python -m tools.na_report --db /path/to/nodalarc.db --report convergence
-  python -m tools.na_report --db /path/to/nodalarc.db --report link-events
-  python -m tools.na_report --db /path/to/nodalarc.db --report probe-results
+  python -m tools.na_report --db /var/nodalarc/sessions/history/<run-id>.db --report summary
+  python -m tools.na_report --db <history file> --report convergence
+  python -m tools.na_report --db <history file> --report link-events
+  python -m tools.na_report --db <history file> --report probe-results
+  python -m tools.na_report --db <history file> --report interventions
+  python -m tools.na_report --db <history file> --report lifecycle
 """
 
 from __future__ import annotations
@@ -24,12 +29,23 @@ from nodalarc.db.queries import (
     get_metadata,
     query_convergence_events,
     query_link_events,
+    query_ome_lifecycle_events,
+    query_operator_interventions,
     query_probe_results,
+    recorded_session_id,
 )
+from nodalarc.db.schema import require_schema_version
 
 log = logging.getLogger(__name__)
 
-REPORT_TYPES = ["summary", "convergence", "link-events", "probe-results"]
+REPORT_TYPES = [
+    "summary",
+    "convergence",
+    "link-events",
+    "probe-results",
+    "interventions",
+    "lifecycle",
+]
 
 TABLES = [
     "link_events",
@@ -37,46 +53,47 @@ TABLES = [
     "probe_results",
     "adapter_events",
     "session_metadata",
-    "config_changes",
     "snapshots",
+    "ome_lifecycle_events",
+    "operator_interventions",
 ]
 
+# What VS-API records about a session in its history file: what it opened with,
+# where kept history starts once the size budget dropped older rows, and
+# whether an operator intervened.
 METADATA_KEYS = [
     "session_name",
-    "constellation",
     "routing_stack",
-    "time_mode",
+    "source_id",
     "start_time",
-    "end_time",
+    "retained_from",
+    "operator_intervened",
 ]
 
 
 def _open_db(path: str) -> sqlite3.Connection:
-    """Open SQLite in read-only mode."""
-    return sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+    """Open a history database read-only, refusing another schema version."""
+    conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+    require_schema_version(conn)
+    return conn
 
 
-def _count_table(conn: sqlite3.Connection, table: str) -> int:
-    """Count rows in a table, returning 0 if it doesn't exist."""
-    try:
-        row = conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()
-        return row[0]
-    except sqlite3.OperationalError:
-        return 0
+def _count_table(conn: sqlite3.Connection, session_id: str, table: str) -> int:
+    row = conn.execute(f"SELECT COUNT(*) FROM {table} WHERE session_id = ?", (session_id,))
+    return row.fetchone()[0]
 
 
 def _time_range(
-    conn: sqlite3.Connection, table: str, col: str = "sim_time"
+    conn: sqlite3.Connection, session_id: str, table: str, col: str = "sim_time"
 ) -> tuple[str | None, str | None]:
-    """Get min/max of a time column, or (None, None) if empty."""
-    try:
-        row = conn.execute(f"SELECT MIN({col}), MAX({col}) FROM {table}").fetchone()
-        return row[0], row[1]
-    except sqlite3.OperationalError:
-        return None, None
+    """Min and max of a time column, (None, None) for a session with no rows."""
+    row = conn.execute(
+        f"SELECT MIN({col}), MAX({col}) FROM {table} WHERE session_id = ?", (session_id,)
+    ).fetchone()
+    return row[0], row[1]
 
 
-def report_summary(conn: sqlite3.Connection) -> str:
+def report_summary(conn: sqlite3.Connection, session_id: str) -> str:
     """Session metadata, row counts, and time range."""
     lines = []
     lines.append("=" * 60)
@@ -85,11 +102,13 @@ def report_summary(conn: sqlite3.Connection) -> str:
     lines.append("")
 
     # Metadata
+    lines.append(f"Session: {session_id}")
+    lines.append("")
     lines.append("Metadata:")
     lines.append("-" * 40)
     has_meta = False
     for key in METADATA_KEYS:
-        val = get_metadata(conn, key)
+        val = get_metadata(conn, session_id=session_id, key=key)
         if val is not None:
             lines.append(f"  {key:<24} {val}")
             has_meta = True
@@ -101,19 +120,19 @@ def report_summary(conn: sqlite3.Connection) -> str:
     lines.append("Table row counts:")
     lines.append("-" * 40)
     for table in TABLES:
-        cnt = _count_table(conn, table)
+        cnt = _count_table(conn, session_id, table)
         lines.append(f"  {table:<24} {cnt:>8}")
     lines.append("")
 
     # Time range from link_events
-    t_min, t_max = _time_range(conn, "link_events")
+    t_min, t_max = _time_range(conn, session_id, "link_events")
     if t_min is not None:
         lines.append(f"Event time range: {t_min} — {t_max}")
 
     return "\n".join(lines)
 
 
-def report_convergence(conn: sqlite3.Connection) -> str:
+def report_convergence(conn: sqlite3.Connection, session_id: str) -> str:
     """All convergence events with statistics."""
     lines = []
     lines.append("=" * 60)
@@ -121,7 +140,7 @@ def report_convergence(conn: sqlite3.Connection) -> str:
     lines.append("=" * 60)
     lines.append("")
 
-    events = query_convergence_events(conn)
+    events = query_convergence_events(conn, session_id=session_id)
 
     if not events:
         lines.append("(no convergence events)")
@@ -161,7 +180,7 @@ def report_convergence(conn: sqlite3.Connection) -> str:
     return "\n".join(lines)
 
 
-def report_link_events(conn: sqlite3.Connection) -> str:
+def report_link_events(conn: sqlite3.Connection, session_id: str) -> str:
     """Link event timeline with type counts and per-node churn."""
     lines = []
     lines.append("=" * 60)
@@ -169,7 +188,7 @@ def report_link_events(conn: sqlite3.Connection) -> str:
     lines.append("=" * 60)
     lines.append("")
 
-    events = query_link_events(conn)
+    events = query_link_events(conn, session_id=session_id)
 
     if not events:
         lines.append("(no link events)")
@@ -199,7 +218,7 @@ def report_link_events(conn: sqlite3.Connection) -> str:
 
     lines.append("Event counts by type:")
     lines.append("-" * 40)
-    for etype in ["LinkUp", "LinkDown", "LatencyUpdate"]:
+    for etype in ["LinkActive", "LinkUp", "LinkDown", "LatencyUpdate"]:
         cnt = type_counts.get(etype, 0)
         lines.append(f"  {etype:<20} {cnt:>8}")
     lines.append("")
@@ -214,7 +233,7 @@ def report_link_events(conn: sqlite3.Connection) -> str:
     return "\n".join(lines)
 
 
-def report_probe_results(conn: sqlite3.Connection) -> str:
+def report_probe_results(conn: sqlite3.Connection, session_id: str) -> str:
     """Per-flow probe statistics."""
     lines = []
     lines.append("=" * 60)
@@ -222,7 +241,7 @@ def report_probe_results(conn: sqlite3.Connection) -> str:
     lines.append("=" * 60)
     lines.append("")
 
-    all_results = query_probe_results(conn)
+    all_results = query_probe_results(conn, session_id=session_id)
 
     if not all_results:
         lines.append("(no probe results)")
@@ -260,6 +279,40 @@ def report_probe_results(conn: sqlite3.Connection) -> str:
     return "\n".join(lines)
 
 
+def report_interventions(conn: sqlite3.Connection, session_id: str) -> str:
+    """Every recorded operator intervention event, in the order it was recorded."""
+    lines = ["=" * 60, "SESSION REPORT — OPERATOR INTERVENTIONS", "=" * 60, ""]
+    rows = query_operator_interventions(conn, session_id=session_id)
+    if not rows:
+        lines.append("  (no operator interventions)")
+        return "\n".join(lines)
+    lines.append(f"{'Event time':<34} {'Intervention':<16} {'Station':<24} {'Status':<28} Reason")
+    lines.append("-" * 120)
+    for row in rows:
+        lines.append(
+            f"{row['event_time']:<34} {row['intervention_id']:<16} {row['gs_id']:<24} "
+            f"{row['status']:<28} {row['reason'] or ''}"
+        )
+    return "\n".join(lines)
+
+
+def report_lifecycle(conn: sqlite3.Connection, session_id: str) -> str:
+    """Every recorded OME terminal-lifecycle event, in the order it was recorded."""
+    lines = ["=" * 60, "SESSION REPORT — OME LIFECYCLE EVENTS", "=" * 60, ""]
+    rows = query_ome_lifecycle_events(conn, session_id=session_id)
+    if not rows:
+        lines.append("  (no OME lifecycle events)")
+        return "\n".join(lines)
+    lines.append(f"{'Sim time':<34} {'Station':<24} {'Old pair -> successor':<48} Outcome")
+    lines.append("-" * 130)
+    for row in rows:
+        pairs = f"{row['old_pair']} -> {row['successor_pair']}"
+        lines.append(
+            f"{row['sim_time']:<34} {row['gs_id']:<24} {pairs:<48} {row['terminal_outcome']}"
+        )
+    return "\n".join(lines)
+
+
 def run_report(db_path: str, report_type: str) -> str:
     """Run a report on a single session database."""
     if not Path(db_path).exists():
@@ -268,15 +321,20 @@ def run_report(db_path: str, report_type: str) -> str:
 
     conn = _open_db(db_path)
     try:
+        session_id = recorded_session_id(conn)
         match report_type:
             case "summary":
-                return report_summary(conn)
+                return report_summary(conn, session_id)
             case "convergence":
-                return report_convergence(conn)
+                return report_convergence(conn, session_id)
             case "link-events":
-                return report_link_events(conn)
+                return report_link_events(conn, session_id)
             case "probe-results":
-                return report_probe_results(conn)
+                return report_probe_results(conn, session_id)
+            case "interventions":
+                return report_interventions(conn, session_id)
+            case "lifecycle":
+                return report_lifecycle(conn, session_id)
             case _:
                 log.error(f"Unknown report type: {report_type}")
                 sys.exit(1)
@@ -294,7 +352,7 @@ def main() -> None:
         "--db",
         required=True,
         metavar="PATH",
-        help="Path to session SQLite database",
+        help="Path to one recorded session run's history file",
     )
     parser.add_argument(
         "--report",

@@ -103,6 +103,7 @@ from nodalarc.models.link_rules import (
     VisibleCandidatesTopology,
 )
 from nodalarc.models.segment_session import (
+    LINK_STATE_PROTOCOLS,
     AggregateOf,
     AreaAssignment,
     CandidateLimits,
@@ -347,24 +348,24 @@ def _site_summary(site: Site) -> str | None:
     return normalized or None
 
 
-def _capabilities_by_segment(world: BuilderWorld | None) -> dict[str, _SegmentCapability]:
+def _capabilities_by_segment(world: BuilderWorld) -> dict[str, _SegmentCapability]:
     capabilities: dict[str, _SegmentCapability] = {}
-    if world is None:
-        return capabilities
     for node in world.nodes:
         capability = capabilities.setdefault(node.segment_id, _SegmentCapability(pairs=set()))
         for block in node.terminal_inventory:
             capability.pairs.add((block.endpoint_role, block.medium))
-            if block.endpoint_role == "access" and block.min_elevation_deg is not None:
-                capability.access_min_elevation_deg = max(
-                    capability.access_min_elevation_deg or 0,
-                    block.min_elevation_deg,
+            if block.endpoint_role == "access":
+                floor = capability.access_min_elevation_deg
+                capability.access_min_elevation_deg = (
+                    block.min_elevation_deg
+                    if floor is None
+                    else max(floor, block.min_elevation_deg)
                 )
     return capabilities
 
 
 def _derive_link_physics(
-    world: BuilderWorld | None,
+    world: BuilderWorld,
     first: _PlacedSegment,
     second: _PlacedSegment,
 ) -> _DerivedLinkPhysics:
@@ -1387,7 +1388,7 @@ def _routing_domain_projection(domain: RoutingDomain) -> BuilderVisualRoutingDom
         return None
     if domain.capabilities is not None:
         return None
-    if domain.protocol in {"isis", "ospf"}:
+    if domain.protocol in LINK_STATE_PROTOCOLS:
         if domain.area_assignment != AreaAssignment(strategy="flat"):
             return None
     elif domain.area_assignment is not None:
@@ -1905,7 +1906,7 @@ def _assemble_authoring_workspace(
             "protocol": cast(JsonValue, domain.protocol),
             "selectors": selectors if len(selectors) <= 1 else [{"any": selectors}],
         }
-        if domain.protocol in {"isis", "ospf"}:
+        if domain.protocol in LINK_STATE_PROTOCOLS:
             domain_document["area_assignment"] = {"strategy": "flat"}
         if domain.hello_interval_s is not None or domain.hold_interval_s is not None:
             if domain.hello_interval_s is None or domain.hold_interval_s is None:
@@ -3389,13 +3390,23 @@ class BuilderVisualDraftService:
         *,
         available_node_count: int,
         preview_factory: PreviewFactory | None,
-    ) -> BuilderWorld | None:
+    ) -> BuilderWorld:
+        """The draft's resolved world; a draft that does not resolve is refused
+        with its compile issues, since its terminals are then unknown."""
         compiled = self.compile(
             BuilderVisualDraftCompileRequest(draft=draft),
             available_node_count=available_node_count,
             preview_factory=preview_factory,
         )
-        return compiled.compile_result.resolved_preview
+        preview = compiled.compile_result.resolved_preview
+        if preview is None:
+            issues = "; ".join(issue.message for issue in compiled.compile_result.issues)
+            raise self._command_error(
+                draft,
+                f"The draft does not resolve, so its terminals are unknown: {issues}",
+                code="catalog_authoring.invalid_graph",
+            )
+        return preview
 
     def apply_command(
         self,

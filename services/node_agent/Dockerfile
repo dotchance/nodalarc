@@ -58,6 +58,9 @@ ENV PYTHONPATH=/app/lib:/app/services:/app
 
 # Copy shared library (includes proto/)
 COPY lib/ lib/
+# Workload adapter support declarations: session resolution reads them
+# through the adapter registry. /app is already on PYTHONPATH.
+COPY adapters/ adapters/
 
 # Copy node_agent service
 COPY services/node_agent/ services/node_agent/

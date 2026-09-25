@@ -17,8 +17,8 @@ function node(node_id: string, segment_id: string, tags: string[]): NodeState {
     vel_z_km_s: 0,
     plane: node_id.includes("gs-") ? null : 0,
     slot: node_id.includes("gs-") ? null : 0,
-    routing_area: null,
-    neighbor_count: 0,
+    routing_instances: [],
+    role: "router",
     isl_count: 0,
     gnd_count: 0,
     prefix: null,
@@ -46,7 +46,6 @@ function snapshot(): StateSnapshot {
     links: [],
     kernel_actual_pairs: [],
     traced_paths: [],
-    active_flows: [],
     recent_events: [],
     network_health: {
       status: "converged",
@@ -61,6 +60,7 @@ function snapshot(): StateSnapshot {
     playback_paused: false,
     playback_speed: 1,
     stale: false,
+    history_recording: null,
   };
 }
 

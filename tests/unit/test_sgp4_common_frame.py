@@ -397,7 +397,6 @@ class TestCrossBodyAuthority:
         snapshot = build_link_state_snapshot(
             source,
             interface_map={pair: ("isl0", "isl0")},
-            bandwidth_map={pair: 1000.0},
             sim_time=datetime.fromtimestamp(probe_unix, UTC),
             seq=1,
             interval_s=5.0,

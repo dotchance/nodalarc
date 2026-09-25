@@ -1,0 +1,90 @@
+{# system_id is a resolver-owned globally-unique identity fact supplied by
+   the producer and consumed verbatim. plane/slot restart per segment and
+   must never be encoded into identity. #}
+
+{# Timer and BFD values are resolver-owned per-domain facts supplied by the
+   producer (routing.domains[].timers); the template carries no fallbacks.
+   Each IS-IS domain the router participates in is one instance, named by
+   its domain, over the interfaces the session assigns to it. #}
+
+{# An IPv6 router routes IPv6 in the IPv6 unicast topology (multi-topology),
+   so IPv6 follows only adjacencies whose both ends route IPv6. Segment
+   routing and traffic engineering apply to IPv4. #}
+{% for domain in domains if domain.protocol == "isis" %}
+router isis {{ domain.domain_id }}
+{% for area in domain.area_addresses %}
+ net {{ area }}.{{ system_id }}.00
+{% endfor %}
+ is-type level-1-2
+ metric-style wide
+{% if "ipv6" in address_families %}
+ topology ipv6-unicast
+{% endif %}
+{% if domain.te_enabled %}
+ mpls-te on
+ mpls-te router-address {{ ipv4_loopback }}
+{% endif %}
+{% if domain.sr_enabled %}
+ segment-routing on
+ segment-routing global-block {{ srgb_start }} {{ srgb_end }} local-block {{ srlb_start }} {{ srlb_end }}
+ segment-routing prefix {{ ipv4_loopback }}/32 index {{ domain.node_sid_index }}
+{% endif %}
+{% for family in domain.redistribute_static %}
+ redistribute {{ family }} static level-2
+{% endfor %}
+ lsp-gen-interval 1
+ spf-delay-ietf init-delay {{ domain.spf_init_delay }} short-delay {{ domain.spf_short_delay }} long-delay {{ domain.spf_long_delay }} holddown {{ domain.spf_holddown }} time-to-learn {{ domain.spf_time_to_learn }}
+ max-lsp-lifetime 1200
+ lsp-refresh-interval 150
+{% for family in domain.default_route_families %}
+ default-information originate {{ family }} level-2 always metric {{ domain.default_route_metric }}
+{% endfor %}
+exit
+
+interface lo
+ ip router isis {{ domain.domain_id }}
+{% if ipv6_loopback %}
+ ipv6 router isis {{ domain.domain_id }}
+{% endif %}
+ isis passive
+exit
+
+{% for iface in domain.interfaces %}
+interface {{ iface.name }}
+ ip router isis {{ domain.domain_id }}
+{% if iface.ipv6 %}
+ ipv6 router isis {{ domain.domain_id }}
+{% endif %}
+ isis network point-to-point
+ isis metric {{ iface.metric }}
+ isis hello-interval {{ domain.isis_hello_interval }}
+ isis hello-multiplier {{ domain.isis_hello_multiplier }}
+{% if iface.bfd %}
+ isis bfd
+ isis bfd profile {{ domain.bfd_profile }}
+{% endif %}
+exit
+{% endfor %}
+
+{% for segment in domain.segments if segment.igp_families %}
+interface {{ segment.name }}
+{% if "ipv4" in segment.igp_families %}
+ ip router isis {{ domain.domain_id }}
+{% endif %}
+{% if "ipv6" in segment.igp_families %}
+ ipv6 router isis {{ domain.domain_id }}
+{% endif %}
+{% if segment.igp_active %}
+ isis hello-interval {{ domain.isis_hello_interval }}
+ isis hello-multiplier {{ domain.isis_hello_multiplier }}
+{% else %}
+ isis passive
+{% endif %}
+ isis metric {{ segment.metric }}
+{% if segment.bfd %}
+ isis bfd
+ isis bfd profile {{ domain.bfd_profile }}
+{% endif %}
+exit
+{% endfor %}
+{% endfor %}

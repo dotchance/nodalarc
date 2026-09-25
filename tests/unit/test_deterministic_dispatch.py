@@ -22,6 +22,8 @@ from nodalarc.models.ground_policy import (
 from ome.ground_allocator import allocate_ground_links
 from ome.visibility import GroundVisibility
 
+from tests.terminal_rate_fixtures import ANY_INTERFACE_RATES
+
 
 def _policy_kwargs(gs_id: str) -> dict:
     return {
@@ -116,14 +118,13 @@ class TestAuthorityFreshnessOnStableLinks:
 
         pair = ("sat-P00S00", "sat-P00S01")
         iface_map = {pair: ("isl0", "isl1")}
-        bw_map = {pair: 1000.0}
         loc = PodLocationMap()
         pool = MagicMock()
         pool.set_nc = MagicMock()
 
         d = Dispatcher(
             interface_map=iface_map,
-            bandwidth_map=bw_map,
+            interface_rates=ANY_INTERFACE_RATES,
             pod_locator=loc,
             agent_pool=pool,
             session_id="test",
@@ -151,7 +152,6 @@ class TestAuthorityFreshnessOnStableLinks:
             interface_a="isl0",
             interface_b="isl1",
             latency_ms=5.0,
-            bandwidth_mbps=1000.0,
             link_type="isl",
             range_km=1500.0,
             authority_sim_time=initial_sim,
@@ -165,7 +165,6 @@ class TestAuthorityFreshnessOnStableLinks:
                 interface_a="isl0",
                 interface_b="isl1",
                 latency_ms=5.0,
-                bandwidth_mbps=1000.0,
                 link_type="isl",
                 range_km=1500.0,
                 authority_sim_time=tick_sim,
@@ -194,7 +193,6 @@ class TestAuthorityFreshnessOnStableLinks:
             interface_a="isl0",
             interface_b="isl1",
             latency_ms=5.0,
-            bandwidth_mbps=1000.0,
             link_type="isl",
             range_km=1500.0,
             authority_sim_time=newer_sim,
@@ -208,7 +206,6 @@ class TestAuthorityFreshnessOnStableLinks:
                 interface_a="isl0",
                 interface_b="isl1",
                 latency_ms=5.0,
-                bandwidth_mbps=1000.0,
                 link_type="isl",
                 range_km=1500.0,
                 authority_sim_time=older_sim,
@@ -312,7 +309,6 @@ class TestActuatorEventPublicationOrder:
                 interface_a=iface_a,
                 interface_b=iface_b,
                 latency_ms=5.0,
-                bandwidth_mbps=1000.0,
                 link_type="isl",
                 range_km=1500.0,
             )
@@ -375,7 +371,6 @@ class TestActuatorEventPublicationOrder:
                 interface_a=iface_a,
                 interface_b=iface_b,
                 latency_ms=5.0,
-                bandwidth_mbps=1000.0,
                 link_type="isl",
                 range_km=1500.0,
                 authority_sim_time=sim_time,
@@ -417,6 +412,7 @@ class TestActuatorEventPublicationOrder:
 
         asyncio.run(
             send_batch_up(
+                interface_rates=ANY_INTERFACE_RATES,
                 pairs=pairs,
                 desired=desired,
                 locator=self._locator(),

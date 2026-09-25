@@ -9,8 +9,9 @@
 #   session-config   — directory mount (auto-updates), bootstrap for dev path only;
 #                      the wizard path reads catalog sessions from catalog/nodalarc/
 #   session-db       — PVC-backed session data: the user catalog, builder-saved
-#                      sessions, and the session-history SQLite. User work
-#                      product; survives pod restarts and redeploys.
+#                      sessions, and one history SQLite file per session run
+#                      deployed with history recording. User work product;
+#                      survives pod restarts and redeploys.
 #
 # Baseline catalog primitives and deployable session examples are baked into
 # the image under catalog/nodalarc/; user-authored objects live on the
@@ -50,8 +51,6 @@ spec:
           args:
             - "--session"
             - "/etc/nodalarc/session-config/session.yaml"
-            - "--db"
-            - "/var/nodalarc/sessions/session.db"
             - "--port"
             - "8080"
             - "--platform-config"

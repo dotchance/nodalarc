@@ -2,7 +2,30 @@
 // Licensed under the Apache License, Version 2.0. See LICENSE file.
 import { describe, expect, it } from "vitest";
 import { filterSnapshotForRender } from "../renderSnapshot";
-import type { LinkState, NodeState, StateSnapshot } from "../../types";
+import type { LinkState, NodeState, StateSnapshot, TracedPath } from "../../types";
+
+function traced(flowId: string, hops: string[], reverseHops: string[]): TracedPath {
+  return {
+    flow_id: flowId,
+    src_node: hops[0]!,
+    dst_node: hops[hops.length - 1]!,
+    hops,
+    hop_rtts: hops.map(() => null),
+    state: "not_reached",
+    rtt_ms: null,
+    error: null,
+    reverse_hops: reverseHops,
+    reverse_hop_rtts: reverseHops.map(() => null),
+    reverse_state: "not_reached",
+    reverse_rtt_ms: null,
+    reverse_error: null,
+    asymmetry_detected: null,
+    tracing: true,
+    traced_at: "2026-09-23T00:00:00Z",
+    sim_time: "2026-09-23T00:00:00Z",
+    stop_reason: null,
+  };
+}
 
 function node(node_id: string, segment_id: string, plane: number | null): NodeState {
   return {
@@ -16,8 +39,8 @@ function node(node_id: string, segment_id: string, plane: number | null): NodeSt
     vel_z_km_s: plane === null ? null : 0,
     plane,
     slot: plane === null ? null : 0,
-    routing_area: null,
-    neighbor_count: 0,
+    routing_instances: [],
+    role: "router",
     isl_count: 0,
     gnd_count: 0,
     prefix: null,
@@ -38,7 +61,10 @@ function link(node_a: string, node_b: string): LinkState {
     link_type: "inter_constellation",
     link_reason: null,
     latency_ms: 1,
-    bandwidth_mbps: 1000,
+    transmit_mbps_a: 1000,
+    receive_mbps_a: 1000,
+    transmit_mbps_b: 1000,
+    receive_mbps_b: 1000,
     range_km: 100,
     traffic_load_pct: null,
     interface_a: "isl0",
@@ -66,31 +92,13 @@ function snapshot(): StateSnapshot {
       ["ground-gs-denver", "leo-sat-p00s00"],
     ],
     traced_paths: [
-      { flow_id: "kept", src_node: "ground-gs-denver", dst_node: "leo-sat-p00s00", hops: ["ground-gs-denver", "leo-sat-p00s00"] },
-      { flow_id: "hidden", src_node: "leo-sat-p00s00", dst_node: "meo-sat-p00s00", hops: ["leo-sat-p00s00", "meo-sat-p00s00"] },
-      {
-        flow_id: "hidden-reverse",
-        src_node: "ground-gs-denver",
-        dst_node: "leo-sat-p00s00",
-        hops: ["ground-gs-denver", "leo-sat-p00s00"],
-        reverse_hops: ["leo-sat-p00s00", "meo-sat-p00s00"],
-      },
-    ],
-    active_flows: [
-      {
-        flow_id: "kept",
-        src_node: "ground-gs-denver",
-        dst_node: "leo-sat-p00s00",
-        protocol: "udp",
-        probe_type: "continuous",
-      },
-      {
-        flow_id: "hidden",
-        src_node: "leo-sat-p00s00",
-        dst_node: "meo-sat-p00s00",
-        protocol: "udp",
-        probe_type: "continuous",
-      },
+      traced("kept", ["ground-gs-denver", "leo-sat-p00s00"], []),
+      traced("hidden", ["leo-sat-p00s00", "meo-sat-p00s00"], []),
+      traced(
+        "hidden-reverse",
+        ["ground-gs-denver", "leo-sat-p00s00"],
+        ["leo-sat-p00s00", "meo-sat-p00s00"],
+      ),
     ],
     recent_events: [],
     network_health: {
@@ -106,11 +114,12 @@ function snapshot(): StateSnapshot {
     playback_paused: false,
     playback_speed: 1,
     stale: false,
+    history_recording: null,
   };
 }
 
 describe("filterSnapshotForRender", () => {
-  it("filters nodes, links, kernel pairs, and traced paths by visible segment", () => {
+  it("filters nodes, links and kernel pairs by visible segment and keeps every trace", () => {
     const filtered = filterSnapshotForRender(snapshot(), new Set(["leo", "ground"]), null);
 
     expect(filtered?.nodes.map((n) => n.node_id)).toEqual([
@@ -123,8 +132,12 @@ describe("filterSnapshotForRender", () => {
     expect(filtered?.kernel_actual_pairs).toEqual([
       ["ground-gs-denver", "leo-sat-p00s00"],
     ]);
-    expect(filtered?.traced_paths.map((path) => path.flow_id)).toEqual(["kept"]);
-    expect(filtered?.active_flows.map((flow) => flow.flow_id)).toEqual(["kept"]);
+    // A trace is drawn whole; hops on hidden nodes are bridged where it is drawn.
+    expect(filtered?.traced_paths.map((path) => path.flow_id)).toEqual([
+      "kept",
+      "hidden",
+      "hidden-reverse",
+    ]);
   });
 
   it("filters satellite planes without hiding ground stations", () => {

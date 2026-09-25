@@ -55,6 +55,7 @@ from nodalarc.substrate.wiring_status import (
 )
 from nodalarc_operator.session_deployer import (
     _create_terminal_ssh_keys,
+    _pod_inventory,
     _required_substrate_pairs,
     check_wiring_complete,
     compute_platform_hash,
@@ -67,7 +68,7 @@ from nodalarc_operator.session_deployer import (
 )
 from nodalarc_operator.session_pods import SessionPodIdentity
 
-from tests.catalog_session_fixtures import build_catalog_session_fixture
+from tests.catalog_session_fixtures import build_catalog_session_fixture, resolve_catalog_session
 
 PROJECT_ROOT = Path(__file__).parent.parent.parent
 
@@ -135,8 +136,8 @@ def _spec_catalog(spec: dict) -> FilesystemCatalogReadView:
     return FilesystemCatalogReadView(roots)
 
 
-def _make_node_vars(planes=4, sats_per_plane=3, gs_count=2):
-    """Build minimal node_vars dict for placement tests.
+def _make_pod_inventory(planes=4, sats_per_plane=3, gs_count=2):
+    """Build a minimal pod inventory for placement tests.
     Pure dict construction - no file I/O, no K8s, no constellation expansion."""
     nv = {}
     for p in range(planes):
@@ -208,8 +209,6 @@ def _make_wiring_manifest(node_ids=("sat-P00S00", "sat-P00S01")):
             "isl_interfaces": [],
             "gnd_interfaces": [],
             "mpls_enable": False,
-            "segment_routing": False,
-            "mtu": 1500,
             "remove_default_route": False,
             "plane": 0,
             "slot": index,
@@ -258,20 +257,20 @@ class TestPodPlacement:
     """Tests compute_pod_placement() - assigns pods to K8s nodes."""
 
     def test_all_on_one_single_node(self):
-        nv = _make_node_vars(planes=2, sats_per_plane=3, gs_count=2)
+        nv = _make_pod_inventory(planes=2, sats_per_plane=3, gs_count=2)
         placement = {"policy": "allOnOne"}
         result = compute_pod_placement(placement, nv, ["node01"])
         assert all(v == "node01" for v in result.values())
         assert len(result) == len(nv)
 
     def test_all_on_one_ignores_extra_nodes(self):
-        nv = _make_node_vars(planes=2, sats_per_plane=3, gs_count=2)
+        nv = _make_pod_inventory(planes=2, sats_per_plane=3, gs_count=2)
         placement = {"policy": "allOnOne"}
         result = compute_pod_placement(placement, nv, ["node01", "node02", "node03", "node04"])
         assert all(v == "node01" for v in result.values())
 
     def test_plane_per_node_same_plane_same_node(self):
-        nv = _make_node_vars(planes=4, sats_per_plane=3, gs_count=0)
+        nv = _make_pod_inventory(planes=4, sats_per_plane=3, gs_count=0)
         placement = {"policy": "planePerNode"}
         nodes = ["node01", "node02", "node03", "node04"]
         result = compute_pod_placement(placement, nv, nodes)
@@ -282,7 +281,7 @@ class TestPodPlacement:
         assert plane0_nodes != plane1_nodes
 
     def test_plane_per_node_wraps_modulo(self):
-        nv = _make_node_vars(planes=6, sats_per_plane=2, gs_count=0)
+        nv = _make_pod_inventory(planes=6, sats_per_plane=2, gs_count=0)
         placement = {"policy": "planePerNode"}
         nodes = ["node01", "node02", "node03", "node04"]
         result = compute_pod_placement(placement, nv, nodes)
@@ -291,7 +290,7 @@ class TestPodPlacement:
         assert plane0_node == plane4_node
 
     def test_plane_per_node_gs_uses_hrw(self):
-        nv = _make_node_vars(planes=2, sats_per_plane=2, gs_count=7)
+        nv = _make_pod_inventory(planes=2, sats_per_plane=2, gs_count=7)
         placement = {"policy": "planePerNode"}
         nodes = ["node01", "node02", "node03", "node04"]
         result = compute_pod_placement(placement, nv, nodes)
@@ -299,7 +298,7 @@ class TestPodPlacement:
         assert len(gs_nodes) > 1
 
     def test_plane_group_per_node_groups(self):
-        nv = _make_node_vars(planes=4, sats_per_plane=2, gs_count=0)
+        nv = _make_pod_inventory(planes=4, sats_per_plane=2, gs_count=0)
         placement = {"policy": "planeGroupPerNode", "planes_per_group": 2}
         nodes = ["node01", "node02", "node03", "node04"]
         result = compute_pod_placement(placement, nv, nodes)
@@ -311,12 +310,12 @@ class TestPodPlacement:
         with pytest.raises(ValueError, match="planes_per_group"):
             compute_pod_placement(
                 {"policy": "planeGroupPerNode"},
-                _make_node_vars(planes=1, sats_per_plane=1, gs_count=0),
+                _make_pod_inventory(planes=1, sats_per_plane=1, gs_count=0),
                 ["node01"],
             )
 
     def test_no_nodes_raises(self):
-        nv = _make_node_vars(planes=1, sats_per_plane=1, gs_count=0)
+        nv = _make_pod_inventory(planes=1, sats_per_plane=1, gs_count=0)
         placement = {"policy": "allOnOne"}
         with pytest.raises(ValueError, match="No available"):
             compute_pod_placement(placement, nv, [])
@@ -325,7 +324,7 @@ class TestPodPlacement:
         with pytest.raises(ValueError, match="Unknown placement policy"):
             compute_pod_placement(
                 {"policy": "bogus"},
-                _make_node_vars(planes=1, sats_per_plane=1, gs_count=0),
+                _make_pod_inventory(planes=1, sats_per_plane=1, gs_count=0),
                 ["node01"],
             )
 
@@ -351,8 +350,18 @@ class TestPodPlacement:
         with patch("nodalarc_operator.session_deployer._get_v1", return_value=mock_v1):
             result = discover_available_nodes()
 
-        assert "node02" in result
-        assert "node03" not in result
+        assert result == ["node02"]
+        mock_v1.list_node.assert_called_once_with(label_selector="nodalarc.io/node-agent=true")
+
+    def test_a_failed_node_listing_raises(self):
+        mock_v1 = create_autospec(kubernetes.client.CoreV1Api, instance=True)
+        mock_v1.list_node.side_effect = kubernetes.client.rest.ApiException(status=503)
+
+        with (
+            patch("nodalarc_operator.session_deployer._get_v1", return_value=mock_v1),
+            pytest.raises(kubernetes.client.rest.ApiException),
+        ):
+            discover_available_nodes()
 
 
 # ---------------------------------------------------------------------------
@@ -853,7 +862,7 @@ def _pod_identity(context: dict, owner_ref: dict) -> SessionPodIdentity:
         owner_ref=owner_ref,
         session_run_id=context["session_run_id"],
         selection_identity=context["prepared_workloads"].identity,
-        node_ids=context["node_vars"],
+        node_ids=context["pod_inventory"],
     )
 
 
@@ -915,6 +924,39 @@ def _existing_session_pod(
 # ---------------------------------------------------------------------------
 # Class 5: TestWiringManifest
 # ---------------------------------------------------------------------------
+
+
+class TestPodInventory:
+    """The Operator's pod inventory comes from resolved nodes alone."""
+
+    def test_inventory_carries_kind_grid_position_and_site_for_every_node(self, tmp_path):
+        resolved = resolve_catalog_session(
+            build_catalog_session_fixture(
+                name="inventory-session",
+                constellation={"planes": {"count": 2, "sats_per_plane": 2}},
+                ground_stations={"stations": ["a", "b"]},
+                base_path=tmp_path,
+            )
+        )
+
+        inventory = _pod_inventory(resolved)
+
+        assert set(inventory) == {node.node_id for node in resolved.nodes}
+        for node in resolved.nodes:
+            expected = {"node_type": "satellite" if node.kind == "satellite" else "ground_station"}
+            if node.kind == "ground_station":
+                expected["gs_name"] = node.local_node_id
+            if node.plane is not None and node.slot is not None:
+                expected.update({"plane": node.plane, "slot": node.slot})
+            assert inventory[node.node_id] == expected
+
+    def test_operator_deployer_imports_no_adapter_internals(self):
+        source = (
+            PROJECT_ROOT / "services" / "nodalarc_operator" / "session_deployer.py"
+        ).read_text(encoding="utf-8")
+
+        assert "adapters.frr" not in source
+        assert "template_vars" not in source
 
 
 class TestWiringManifest:
@@ -1030,9 +1072,7 @@ class TestWiringManifest:
             assert "sysctls" in node, f"{node_id} missing sysctls"
             assert isinstance(node["sysctls"], dict), f"{node_id} sysctls not dict"
             assert "mpls_enable" in node, f"{node_id} missing mpls_enable"
-            assert "segment_routing" in node, f"{node_id} missing segment_routing"
             assert "remove_default_route" in node, f"{node_id} missing remove_default_route"
-            assert "mtu" in node, f"{node_id} missing mtu"
 
     def test_manifest_carries_a_cluster_pod_cidr_for_the_management_path(self, tmp_path):
         """The Node Agent replaces the CNI default with a management route to
@@ -1129,13 +1169,14 @@ class TestWiringManifest:
         for node_id, node in hosts.items():
             member = members_by_id[node_id]
             assert member["addresses"]
-            assert member["gateway"] in router_ips
+            assert member["gateways"]
+            assert set(member["gateways"]) <= router_ips
             assert node["isl_interfaces"] == []
             assert node["gnd_interfaces"] == []
             assert node_id not in manifest["ground_bridges"]
             assert node_id in member_ids
         for node_id in routers:
-            assert members_by_id[node_id].get("gateway") is None
+            assert members_by_id[node_id]["gateways"] == []
         WiringManifest.model_validate(manifest)
 
     def test_manifest_disables_mpls_for_plain_igp(self, tmp_path):
@@ -1150,6 +1191,31 @@ class TestWiringManifest:
 
         assert manifest["nodes"]
         assert all(node["mpls_enable"] is True for node in manifest["nodes"].values())
+
+    @pytest.mark.parametrize(
+        ("extensions", "mpls_sysctls"),
+        [
+            (
+                ["sr"],
+                {"net.mpls.platform_labels": "100000", "net.mpls.ip_ttl_propagate": "0"},
+            ),
+            (["mpls"], {"net.mpls.platform_labels": "100000"}),
+        ],
+    )
+    def test_manifest_applies_the_domain_kernel_requirements(
+        self, tmp_path, extensions, mpls_sysctls
+    ):
+        spec = _make_catalog_spec(tmp_path, protocol="isis", extensions=extensions)
+        manifest = self._build_and_extract(tmp_path, spec=spec)
+
+        assert manifest["nodes"]
+        for node in manifest["nodes"].values():
+            mpls = {
+                key: value for key, value in node["sysctls"].items() if key.startswith("net.mpls.")
+            }
+            assert mpls == mpls_sysctls
+            assert node["mpls_enable"] is True
+            assert node["sysctls"]["net.ipv4.conf.all.rp_filter"] == "0"
 
     def test_manifest_requires_runtime_session_id(self, tmp_path):
         spec = _make_catalog_spec(tmp_path)
@@ -1208,6 +1274,65 @@ class TestWiringManifest:
             assert sysctls.get("net.ipv4.ping_group_range") == "0 2147483647", (
                 f"{node_id} missing unprivileged ICMP ping_group_range"
             )
+
+    def test_a_routed_node_running_no_routing_workload_is_wired_without_routing(self, tmp_path):
+        """The probe pattern: a routed node model running a workload that
+        renders no routing forwards and stands outside every routing domain,
+        so it is wired with no routing kernel settings."""
+        session = build_catalog_session_fixture(
+            name="test-session",
+            constellation={"planes": {"count": 1, "sats_per_plane": 2}},
+            ground_stations={
+                "stations": [
+                    {"name": "alpha", "lat_deg": 34.0, "lon_deg": -118.0, "alt_m": 20},
+                    {"name": "beta", "lat_deg": 50.0, "lon_deg": 8.0, "alt_m": 100},
+                ]
+            },
+            protocol="isis",
+            extensions=["mpls"],
+            time={"step_seconds": 1},
+            base_path=tmp_path,
+        )
+        probe_site = session.site_refs[0]
+        site = session.read_catalog(probe_site)
+        site["site"]["nodes"][0]["profile"] = "nodalarc:profiles/linux-host.yaml"
+        session.write_catalog(probe_site, site)
+        spec = {
+            "sessionYaml": yaml.safe_dump(dict(session), sort_keys=False),
+            "_test_catalog_roots": session.roots,
+        }
+
+        manifest = self._build_and_extract(tmp_path, spec)
+
+        probe = manifest["nodes"]["test-session-alpha-router"]
+        router = manifest["nodes"]["test-session-beta-router"]
+        assert probe["mpls_enable"] is False
+        assert not [key for key in probe["sysctls"] if key.startswith("net.mpls.")]
+        assert probe["sysctls"]["net.ipv4.ip_forward"] == "1"
+        assert router["mpls_enable"] is True
+        WiringManifest.model_validate(manifest)
+
+    def test_sysctls_state_forwarding_per_node_and_family(self, tmp_path):
+        """Forwarding is explicit for both families on every node: routers
+        forward the families the session gives them, hosts forward nothing.
+        The fixture declares IPv6 loopbacks for the space segment and IPv6
+        site LANs, so every node here carries IPv6."""
+        manifest = self._build_and_extract(
+            tmp_path,
+            ground_stations={
+                "stations": [{"name": "alpha", "lat_deg": 34.0, "lon_deg": -118.0, "alt_m": 20}],
+                "host_endpoints": True,
+            },
+        )
+        kinds = {node["node_type"] for node in manifest["nodes"].values()}
+        assert kinds == {"satellite", "ground_station", "host"}
+        for node_id, node in manifest["nodes"].items():
+            sysctls = node["sysctls"]
+            forwards = "0" if node["node_type"] == "host" else "1"
+            assert sysctls["net.ipv4.ip_forward"] == forwards, node_id
+            assert sysctls["net.ipv6.conf.all.forwarding"] == forwards, node_id
+            assert sysctls["net.ipv6.conf.all.dad_transmits"] == "0", node_id
+            assert sysctls["net.ipv6.conf.default.dad_transmits"] == "0", node_id
 
     def test_ground_bridges_match_gs_nodes(self, tmp_path):
         manifest = self._build_and_extract(tmp_path)
@@ -1288,6 +1413,7 @@ class TestRequiredSubstratePairs:
             "gs-den": {"node_type": "ground_station"},
         }
         pairs = _required_substrate_pairs(
+            site_lans={},
             nodes=nodes,
             isl_pairs={("sat-a", "sat-b")},
             pod_placement={"sat-a": "node01", "sat-b": "node01", "gs-den": "node01"},
@@ -1302,6 +1428,7 @@ class TestRequiredSubstratePairs:
             "sat-b": {"node_type": "satellite"},
         }
         pairs = _required_substrate_pairs(
+            site_lans={},
             nodes=nodes,
             isl_pairs={("sat-a", "sat-b")},
             pod_placement={"sat-a": "node01", "sat-b": "node02"},
@@ -1321,6 +1448,7 @@ class TestRequiredSubstratePairs:
             "gs-den": {"node_type": "ground_station"},
         }
         pairs = _required_substrate_pairs(
+            site_lans={},
             nodes=nodes,
             isl_pairs={("sat-a", "sat-b")},
             pod_placement={"sat-a": "node01", "sat-b": "node02", "gs-den": "node02"},
@@ -1332,6 +1460,37 @@ class TestRequiredSubstratePairs:
         assert by_key["node01->node02"]["reasons"] == ["ground", "isl"]
         assert by_key["node02->node01"]["reasons"] == ["ground", "isl"]
 
+    def test_cross_host_site_lan_members_emit_both_directions(self):
+        nodes = {
+            "gs-a": {"node_type": "ground_station"},
+            "gs-b": {"node_type": "ground_station"},
+            "host-c": {"node_type": "host"},
+        }
+        site_lans = {
+            "site-lan0": {
+                "members": [
+                    {"node_id": "gs-a"},
+                    {"node_id": "gs-b"},
+                    {"node_id": "host-c"},
+                ]
+            }
+        }
+        pairs = _required_substrate_pairs(
+            site_lans=site_lans,
+            nodes=nodes,
+            isl_pairs=set(),
+            pod_placement={"gs-a": "node01", "gs-b": "node02", "host-c": "node01"},
+            node_ips={"node01": "10.0.0.1", "node02": "10.0.0.2"},
+            ground_candidate_satellites_by_gs={},
+        )
+
+        # gs-a and host-c share node01, so only the node01/node02 path is required.
+        assert {pair["directional_key"] for pair in pairs} == {
+            "node01->node02",
+            "node02->node01",
+        }
+        assert all(pair["reasons"] == ["site_lan"] for pair in pairs)
+
     def test_resolved_candidate_map_scopes_active_ground_universe(self):
         nodes = {
             "sat-a": {"node_type": "satellite"},
@@ -1340,6 +1499,7 @@ class TestRequiredSubstratePairs:
             "gs-meo-unused": {"node_type": "ground_station"},
         }
         pairs = _required_substrate_pairs(
+            site_lans={},
             nodes=nodes,
             isl_pairs=set(),
             pod_placement={
@@ -1361,6 +1521,7 @@ class TestRequiredSubstratePairs:
     def test_resolved_candidate_map_rejects_unknown_ground_node(self):
         with pytest.raises(ValueError, match="unknown ground station"):
             _required_substrate_pairs(
+                site_lans={},
                 nodes={"sat-a": {"node_type": "satellite"}},
                 isl_pairs=set(),
                 pod_placement={"sat-a": "node01", "gs-missing": "node02"},
@@ -1371,6 +1532,7 @@ class TestRequiredSubstratePairs:
     def test_resolved_candidate_map_rejects_unknown_satellite_node(self):
         with pytest.raises(ValueError, match="unknown substrate candidate satellite"):
             _required_substrate_pairs(
+                site_lans={},
                 nodes={"gs-den": {"node_type": "ground_station"}},
                 isl_pairs=set(),
                 pod_placement={"gs-den": "node01", "sat-missing": "node02"},
@@ -1628,15 +1790,7 @@ class TestConfigRendering:
                 f"{cm_name} missing 'router isis'"
             )
 
-    def test_config_version_hash_present(self, tmp_path):
-        configs, _ = self._render_configs(tmp_path)
-        assert configs
-        for cm_name, data in configs.items():
-            assert any(len(text) == 16 for text in data.values()), (
-                f"{cm_name} missing a 16-character _config_version artifact"
-            )
-
-    def test_config_version_changes_with_content(self, tmp_path):
+    def test_configmap_names_change_with_content(self, tmp_path):
         """Different routing configs produce different content-addressed names."""
         configs_ospf, _ = self._render_configs(tmp_path, protocol="ospf")
         configs_isis, _ = self._render_configs(tmp_path, protocol="isis")
@@ -1745,10 +1899,7 @@ class TestPodSpec:
             patch.dict(
                 "os.environ",
                 {
-                    "FRR_IMAGE": "test/frr:1",
                     "WIRING_GATE_IMAGE": "test/base:1",
-                    "PROBE_IMAGE": "test/probe:1",
-                    "NODALPATH_FWD_IMAGE": "test/nodalpath-fwd:1",
                     "IMAGE_PULL_POLICY": "Never",
                 },
             ),
@@ -1904,10 +2055,7 @@ class TestPodSpec:
             patch.dict(
                 "os.environ",
                 {
-                    "FRR_IMAGE": "test/frr:1",
                     "WIRING_GATE_IMAGE": "test/base:1",
-                    "PROBE_IMAGE": "test/probe:1",
-                    "NODALPATH_FWD_IMAGE": "test/nodalpath-fwd:1",
                     "IMAGE_PULL_POLICY": "Never",
                 },
             ),
@@ -1960,10 +2108,7 @@ class TestPodSpec:
             patch.dict(
                 "os.environ",
                 {
-                    "FRR_IMAGE": "test/frr:1",
                     "WIRING_GATE_IMAGE": "test/base:1",
-                    "PROBE_IMAGE": "test/probe:1",
-                    "NODALPATH_FWD_IMAGE": "test/nodalpath-fwd:1",
                     "IMAGE_PULL_POLICY": "Never",
                 },
             ),
@@ -2011,10 +2156,7 @@ class TestPodSpec:
             patch.dict(
                 "os.environ",
                 {
-                    "FRR_IMAGE": "test/frr:1",
                     "WIRING_GATE_IMAGE": "test/base:1",
-                    "PROBE_IMAGE": "test/probe:1",
-                    "NODALPATH_FWD_IMAGE": "test/nodalpath-fwd:1",
                     "IMAGE_PULL_POLICY": "Never",
                 },
             ),
@@ -2040,7 +2182,7 @@ class TestPodCreationProgress:
 
     def _context(self):
         return {
-            "node_vars": {"sat-a": {"node_type": "satellite"}},
+            "pod_inventory": {"sat-a": {"node_type": "satellite"}},
             "pod_placement": {"sat-a": "node01"},
             "session_id": "run-test-0001",
             "session_run_id": "run-test-0001",

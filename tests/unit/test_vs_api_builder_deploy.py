@@ -224,6 +224,7 @@ def test_typed_route_prepares_direct_and_transitive_user_refs_for_switch(
             "expected_session_revision": saved["session"]["revision"],
             "expected_document_digest": saved["digests"]["document"],
             "expected_dependency_digest": saved["digests"]["dependency"],
+            "record_history": False,
         },
     )
 
@@ -265,6 +266,7 @@ def test_typed_route_prepares_direct_and_transitive_user_refs_for_switch(
             "expected_session_revision": saved["session"]["revision"],
             "expected_document_digest": saved["digests"]["document"],
             "expected_dependency_digest": saved["digests"]["dependency"],
+            "record_history": False,
         },
     )
     assert stale.status_code == 409
@@ -421,6 +423,7 @@ def test_wizard_custom_geometry_sites_and_propagator_yaml_export_reimports_and_r
             "expected_session_revision": saved["session"]["revision"],
             "expected_document_digest": saved["digests"]["document"],
             "expected_dependency_digest": saved["digests"]["dependency"],
+            "record_history": False,
         },
     )
     assert deploy.status_code == 202, deploy.text

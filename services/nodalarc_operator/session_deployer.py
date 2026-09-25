@@ -23,10 +23,7 @@ import kubernetes
 from nodalarc.catalog_upload import CatalogUploadSelection
 from nodalarc.content_identity import canonical_json_bytes
 from nodalarc.cr_runtime_config import ConstellationSpecSpec, load_cr_runtime_config
-from nodalarc.models.resolved_session import (
-    ResolvedRoutingDomain,
-    ResolvedSession,
-)
+from nodalarc.models.resolved_session import ResolvedSession
 from nodalarc.nats_channels import sanitize_session_id, session_purge_filters
 from nodalarc.platform_config import (
     compute_pod_placement,
@@ -44,11 +41,14 @@ from nodalarc.runtime_service_config import (
     SESSION_RUN_ID_FILENAME,
 )
 from nodalarc.session_identity import require_resolved_session_run_id
+from nodalarc.session_nodes import available_session_nodes
 from nodalarc.session_validator import validate_session_readiness
-from nodalarc.stack_resolver import ResolvedStack, resolve_domain_stack, validate_sid_indices
 from nodalarc.substrate.manifest_contract import WIRING_MANIFEST_CONFIGMAP
+from nodalarc.substrate.routing_requirements import (
+    address_family_sysctls,
+    routing_kernel_requirements,
+)
 from nodalarc.substrate.wiring_status import WIRING_STATUS_CONFIGMAP
-from nodalarc.template_vars import build_template_vars_from_resolved
 
 from nodalarc_operator.session_pods import (
     PodClass,
@@ -237,20 +237,8 @@ def _cluster_pod_cidr(v1: kubernetes.client.CoreV1Api) -> str | None:
 
 
 def discover_available_nodes() -> list[str]:
-    """Discover K3s nodes available for session pods.
-
-    Returns node names that have the nodalarc.io/node-agent=true label
-    and do not have the nodalarc.io/not-ready taint.
-    """
-    v1 = _get_v1()
-    nodes = v1.list_node(label_selector="nodalarc.io/node-agent=true")
-    available = []
-    for node in nodes.items:
-        taints = node.spec.taints or []
-        blocked = any(t.key == "nodalarc.io/not-ready" and t.effect == "NoSchedule" for t in taints)
-        if not blocked:
-            available.append(node.metadata.name)
-    return sorted(available)
+    """The Kubernetes nodes that accept session pods."""
+    return available_session_nodes(_get_v1())
 
 
 def _node_internal_ips(
@@ -279,9 +267,12 @@ def _required_substrate_pairs(
     isl_pairs: set[tuple[str, str]],
     pod_placement: dict[str, str],
     node_ips: dict[str, str],
+    site_lans: Mapping[str, dict[str, Any]],
     ground_candidate_satellites_by_gs: Mapping[str, tuple[str, ...]] | None = None,
 ) -> list[dict[str, Any]]:
-    """Collapse possible cross-node links into required directional node pairs."""
+    """Collapse every cross-node path the session can use into required
+    directional node pairs: possible ISLs, possible ground links, and the
+    members of each site LAN."""
     from nodalarc.substrate.measurement_contract import RequiredSubstratePair
 
     reasons_by_direction: dict[tuple[str, str], set[str]] = {}
@@ -296,6 +287,12 @@ def _required_substrate_pairs(
 
     for node_a, node_b in isl_pairs:
         _add_reason(node_a, node_b, "isl")
+
+    for spec in site_lans.values():
+        member_ids = sorted({member["node_id"] for member in spec["members"]})
+        for index, node_a in enumerate(member_ids):
+            for node_b in member_ids[index + 1 :]:
+                _add_reason(node_a, node_b, "site_lan")
 
     all_ground_ids = {
         node_id for node_id, spec in nodes.items() if spec["node_type"] == "ground_station"
@@ -352,86 +349,23 @@ def _platform_placement_policy() -> Any:
     }
 
 
-def _stack_by_domain(resolved: ResolvedSession) -> dict[str, ResolvedStack]:
-    stacks: dict[str, ResolvedStack] = {}
-    sid_by_node = resolved.sid_index_by_node_id()
-    for domain in resolved.routing_domains:
-        stack = resolve_domain_stack(domain)
-        if stack.segment_routing:
-            validate_sid_indices(
-                stack,
-                {
-                    node_id: sid_by_node[node_id]
-                    for node_id in domain.node_ids
-                    if node_id in sid_by_node
-                },
-            )
-        stacks[domain.domain_id] = stack
-    return stacks
+def _pod_inventory(resolved: ResolvedSession) -> dict[str, dict]:
+    """Every resolved node's pod-inventory facts: kind, grid position, site.
 
-
-def _routing_domain_for_node(resolved: ResolvedSession, node_id: str) -> ResolvedRoutingDomain:
-    domains = [domain for domain in resolved.routing_domains if node_id in domain.node_ids]
-    if len(domains) != 1:
-        raise ValueError(
-            f"node {node_id!r} must resolve to exactly one routing domain for deployment; "
-            f"got {[domain.domain_id for domain in domains]}"
-        )
-    return domains[0]
-
-
-def _host_node_vars(node) -> dict:
-    """Pod-inventory facts for a host-forwarding node.
-
-    Hosts run no routing protocol and receive no FRR rendering; the pod
-    fan-out still needs identity, kind, and placement facts.
+    Placement and pod creation read these; they are the same for every
+    workload a node runs.
     """
-    vars_for_node: dict = {
-        "node_id": node.node_id,
-        "hostname": node.node_id,
-        "node_type": "satellite" if node.kind == "satellite" else "ground_station",
-    }
-    if node.kind == "ground_station":
-        vars_for_node["gs_name"] = node.local_node_id
-    if node.plane is not None and node.slot is not None:
-        vars_for_node.update({"plane": node.plane, "slot": node.slot})
-    return vars_for_node
-
-
-def _node_vars_from_resolved(
-    resolved: ResolvedSession, stacks: Mapping[str, ResolvedStack]
-) -> tuple[dict[str, dict], dict[str, ResolvedStack]]:
-    """Per-node pod facts for every node; FRR vars and stacks for routed only.
-
-    ``node_vars`` covers EVERY resolved node — it is the pod inventory.
-    ``node_stacks`` covers routed nodes only: hosts run no routing stack,
-    get no rendered configuration, and compose purely from their selected
-    profile.
-    """
-    sid_by_node = resolved.sid_index_by_node_id()
-    node_vars: dict[str, dict] = {}
-    node_stacks: dict[str, ResolvedStack] = {}
+    inventory: dict[str, dict] = {}
     for node in resolved.nodes:
-        if node.forwarding == "host":
-            node_vars[node.node_id] = _host_node_vars(node)
-            continue
-        if node.forwarding not in (None, "routed"):
-            raise ValueError(
-                f"node {node.node_id!r} has forwarding class {node.forwarding!r}, "
-                "which the deployer does not support"
-            )
-        domain = _routing_domain_for_node(resolved, node.node_id)
-        stack = stacks[domain.domain_id]
-        node_sid_index = sid_by_node.get(node.node_id) if stack.segment_routing else None
-        vars_for_node = build_template_vars_from_resolved(
-            resolved,
-            node.node_id,
-            stack_variables=stack.template_variables,
-            node_sid_index=node_sid_index,
-        )
-        node_vars[node.node_id] = vars_for_node
-        node_stacks[node.node_id] = stack
-    return node_vars, node_stacks
+        facts: dict = {
+            "node_type": "satellite" if node.kind == "satellite" else "ground_station",
+        }
+        if node.kind == "ground_station":
+            facts["gs_name"] = node.local_node_id
+        if node.plane is not None and node.slot is not None:
+            facts.update({"plane": node.plane, "slot": node.slot})
+        inventory[node.node_id] = facts
+    return inventory
 
 
 def _fixed_link_interfaces_by_node(resolved: ResolvedSession) -> dict[str, list[dict[str, str]]]:
@@ -489,9 +423,10 @@ def ensure_session_configmaps(
 ) -> dict:
     """Create/update all ConfigMaps and SSH keys for a session.
 
-    Runs steps 1-10 of the deploy pipeline: parse session, load constellation,
-    resolve stack, validate, render FRR configs, create ConfigMaps, generate
-    SSH keypair, compute pod placement.
+    Runs the deploy pipeline up to pod creation: resolve the session,
+    validate readiness, prepare workloads (adapter-rendered configuration
+    included), create ConfigMaps, generate the SSH keypair, compute pod
+    placement.
 
     Idempotent — ConfigMaps use create-or-update, SSH key uses create-or-replace.
     Safe to call repeatedly; only writes what's missing or changed.
@@ -505,7 +440,7 @@ def ensure_session_configmaps(
 
     Returns:
         Context dict with keys: session_id, session_run_id, resolved_session,
-        node_vars, node_stacks, pod_placement, available_nodes. Passed to
+        pod_inventory, pod_placement, available_nodes. Passed to
         ensure_session_pods().
     """
 
@@ -563,11 +498,7 @@ def ensure_session_configmaps(
     if satellite_count <= 0:
         raise ValueError("No satellites in resolved session")
 
-    # --- Step 3: Resolve routing stacks per domain ---
-    _progress("Resolving routing stacks from resolved routing domains")
-    stacks_by_domain = _stack_by_domain(resolved_session)
-
-    # --- Step 3b: Pre-deployment readiness validation ---
+    # --- Step 3: Pre-deployment readiness validation ---
     # A session that resolves but is unsuitable for deployment (zero-candidate
     # link rules, disconnected routing members, SR index gaps, MBB capacity
     # shortfalls) must fail here, before any ConfigMap or pod exists.
@@ -585,10 +516,8 @@ def ensure_session_configmaps(
         error_msg = "; ".join(f"[{r.code}] {r.message}" for r in val_errors)
         raise kopf.PermanentError(f"Session validation failed: {error_msg}")
 
-    # --- Step 4: Build template vars per node ---
-    total_nodes = len(resolved_session.nodes)
-    _progress(f"Building template variables for {total_nodes} nodes")
-    node_vars, node_stacks = _node_vars_from_resolved(resolved_session, stacks_by_domain)
+    # --- Step 4: Pod inventory per node ---
+    pod_inventory = _pod_inventory(resolved_session)
 
     # --- Step 5: Workload preparation (write-free) ---
     # Admit, render, and compose EVERY node's effective profile before the
@@ -632,7 +561,7 @@ def ensure_session_configmaps(
     # --- Step 8: Compute pod placement ---
     placement = _platform_placement_policy()
     _progress(f"Computing pod placement ({placement['policy']} policy)")
-    pod_placement = compute_pod_placement(placement, node_vars, available_nodes)
+    pod_placement = compute_pod_placement(placement, pod_inventory, available_nodes)
     node_counts: dict[str, int] = {}
     for target in pod_placement.values():
         node_counts[target] = node_counts.get(target, 0) + 1
@@ -650,8 +579,7 @@ def ensure_session_configmaps(
         "operator_session": operator_session,
         "deployment_context": deployment_context,
         "resolved_session": resolved_session,
-        "node_vars": node_vars,
-        "node_stacks": node_stacks,
+        "pod_inventory": pod_inventory,
         "pod_placement": pod_placement,
         "available_nodes": available_nodes,
         "prepared_workloads": prepared_workloads,
@@ -691,33 +619,34 @@ def ensure_session_pods(
         if progress_fn:
             progress_fn(msg)
 
-    node_vars = context["node_vars"]
+    pod_inventory = context["pod_inventory"]
     pod_placement = context["pod_placement"]
     session_id = context["session_id"]
     prepared_workloads = context["prepared_workloads"]
     if (
         pod_identity.selection_identity != prepared_workloads.identity
         or pod_identity.run_label != session_id
-        or pod_identity.expected_node_ids != {canonical_node_id(node_id) for node_id in node_vars}
+        or pod_identity.expected_node_ids
+        != {canonical_node_id(node_id) for node_id in pod_inventory}
     ):
         raise ValueError("session pod identity does not describe the prepared deployment context")
 
     v1 = _get_v1()
-    total_pods = len(node_vars)
+    total_pods = len(pod_inventory)
     _progress(f"Creating {total_pods} session pods")
 
     from concurrent.futures import ThreadPoolExecutor, as_completed
 
     pod_specs: list[dict] = []
-    for node_id, vars in node_vars.items():
+    for node_id, facts in pod_inventory.items():
         pod_specs.append(
             {
                 "pod_name": node_id.lower(),
                 "node_id": node_id,
-                "node_type": vars["node_type"],
-                "plane": vars.get("plane"),
-                "slot": vars.get("slot"),
-                "gs_name": vars.get("gs_name"),
+                "node_type": facts["node_type"],
+                "plane": facts.get("plane"),
+                "slot": facts.get("slot"),
+                "gs_name": facts.get("gs_name"),
                 "target_node": pod_placement.get(node_id),
             }
         )
@@ -844,10 +773,14 @@ def _site_lans_for_manifest(
                     f"Kubernetes node {k3s_node!r} (hosting {member.node_id!r}) has "
                     "no InternalIP; segment wiring cannot be derived"
                 )
-            gateway = None
+            gateways: list[str] = []
             attachment = node.host_attachment
             if attachment is not None and attachment.interface == member.interface:
-                gateway = attachment.gateway_ipv4
+                gateways = [
+                    gateway
+                    for gateway in (attachment.gateway_ipv4, attachment.gateway_ipv6)
+                    if gateway is not None
+                ]
             members.append(
                 {
                     "node_id": member.node_id,
@@ -857,7 +790,7 @@ def _site_lans_for_manifest(
                         for address in (address_set.ipv4, address_set.ipv6)
                         if address is not None
                     ],
-                    **({"gateway": gateway} if gateway is not None else {}),
+                    "gateways": gateways,
                     "k3s_node": k3s_node,
                     "host_ip": host_ip,
                 }
@@ -926,23 +859,11 @@ def write_wiring_manifest(
     except kubernetes.client.rest.ApiException as e:
         if e.status != 404:
             raise
-    stacks_by_domain = _stack_by_domain(resolved_session)
-    node_stack_by_id = {
-        node.node_id: stacks_by_domain[
-            _routing_domain_for_node(resolved_session, node.node_id).domain_id
-        ]
-        for node in resolved_session.nodes
-        if node.forwarding != "host"
-    }
-
-    # Platform-level sysctls (protocol-agnostic) merged with stack-provided sysctls.
-    # The deployer never interprets stack fields to derive sysctls.
+    # Platform-level sysctls merged with each node's address-family settings
+    # and, for a routed node, the kernel requirements of its routing domain.
     base_sysctls = {
-        "net.ipv6.conf.all.forwarding": "1",
         "net.ipv4.conf.all.rp_filter": "0",
         "net.ipv4.conf.default.rp_filter": "0",
-        "net.ipv6.conf.all.dad_transmits": "0",
-        "net.ipv6.conf.default.dad_transmits": "0",
         # Unprivileged ICMP echo for every gid: workload containers run with
         # all capabilities dropped and NoNewPrivs, where a file-capability
         # ping cannot even exec. Datagram ICMP sockets need no capability.
@@ -966,18 +887,21 @@ def write_wiring_manifest(
                 )
             nodes[node.node_id] = {
                 "node_type": "host",
-                "sysctls": dict(base_sysctls),
+                "sysctls": {**base_sysctls, **address_family_sysctls(node)},
                 "isl_interfaces": [],
                 "gnd_interfaces": [],
                 "mpls_enable": False,
-                "segment_routing": False,
-                "mtu": 9000,
                 "remove_default_route": True,
             }
             continue
-        stack = node_stack_by_id[node.node_id]
-        node_sysctls = {**base_sysctls, **stack.sysctls}
-        mpls_enable = any(name.startswith("net.mpls.") for name in stack.sysctls)
+        requirements = routing_kernel_requirements(
+            resolved_session.routing_domains_for(node.node_id)
+        )
+        node_sysctls = {
+            **base_sysctls,
+            **address_family_sysctls(node),
+            **requirements.sysctls,
+        }
         if node.kind == "satellite":
             # plane/slot are optional grid coordinates — individually
             # placed satellites (GEO longitude slots, state vectors) have
@@ -997,9 +921,7 @@ def write_wiring_manifest(
                     for iface in node.wan_interfaces
                     if iface.name.startswith("gnd")
                 ],
-                "mpls_enable": mpls_enable,
-                "segment_routing": stack.segment_routing,
-                "mtu": 9000,
+                "mpls_enable": requirements.mpls_enable,
                 "remove_default_route": True,
             }
             continue
@@ -1011,9 +933,7 @@ def write_wiring_manifest(
                 "sysctls": dict(node_sysctls),
                 "isl_interfaces": [],
                 "gnd_interfaces": [{"name": iface.name} for iface in node.wan_interfaces],
-                "mpls_enable": mpls_enable,
-                "segment_routing": stack.segment_routing,
-                "mtu": 9000,
+                "mpls_enable": requirements.mpls_enable,
                 "remove_default_route": True,
             }
             ground_bridges[node.node_id] = {}
@@ -1044,6 +964,7 @@ def write_wiring_manifest(
         pod_placement=pod_placement,
         node_ips=node_ips,
         ground_candidate_satellites_by_gs=resolved_session.ground_candidate_satellites_by_gs(),
+        site_lans=site_lans,
     )
     try:
         manifest_session_id = sanitize_session_id(session_run_id)
@@ -1103,41 +1024,6 @@ def write_wiring_manifest(
     return len(isl_pairs)
 
 
-def set_nodalpath_mode(namespace: str, protocol: str) -> None:
-    """Patch the NodalPath Deployment to use --mode live for NodalPath sessions,
-    --mode console for all others. Called before restarting the NodalPath pod.
-    """
-    mode = "live" if protocol == "nodalpath" else "console"
-    apps_v1 = _get_apps_v1()
-    try:
-        deployments = apps_v1.list_namespaced_deployment(
-            namespace, label_selector="app=nodalarc-nodalpath"
-        )
-        if not deployments.items:
-            log.debug("NodalPath deployment not found — skipping mode patch")
-            return
-        deployment = deployments.items[0]
-        deploy_name = deployment.metadata.name
-    except kubernetes.client.rest.ApiException:
-        log.debug("NodalPath deployment not found — skipping mode patch")
-        return
-
-    for container in deployment.spec.template.spec.containers:
-        if container.name == "nodalpath":
-            args = list(container.args or [])
-            for i, arg in enumerate(args):
-                if arg == "--mode" and i + 1 < len(args):
-                    if args[i + 1] != mode:
-                        args[i + 1] = mode
-                        container.args = args
-                        apps_v1.patch_namespaced_deployment(deploy_name, namespace, deployment)
-                        log.info("NodalPath mode set to %s", mode)
-                    else:
-                        log.debug("NodalPath mode already %s", mode)
-                    return
-    log.warning("NodalPath container --mode arg not found in deployment spec")
-
-
 def restart_platform_pods(namespace: str, config_hash: str = "") -> None:
     """Trigger rolling restart of session-scoped platform pods.
 
@@ -1168,7 +1054,6 @@ def restart_platform_pods(namespace: str, config_hash: str = "") -> None:
     for label in [
         "app=nodalarc-ome",
         "app=nodalarc-scheduler",
-        "app=nodalarc-nodalpath",
     ]:
         deployments = apps_v1.list_namespaced_deployment(namespace, label_selector=label)
         for deploy in deployments.items:
@@ -1330,17 +1215,10 @@ def teardown_session(namespace: str, session_ids: Sequence[str]) -> None:
         "nodalarc-session",
         "nodalarc-constellation",
         "nodalarc-ground-stations",
-        "nodalarc-pod-ips",
         WIRING_MANIFEST_CONFIGMAP,
         WIRING_STATUS_CONFIGMAP,
     ]:
         _delete_configmap_or_absent(v1, cm_name, namespace)
-
-    # Delete per-node FRR config ConfigMaps
-    cms = v1.list_namespaced_config_map(namespace, label_selector="nodalarc.io/config-type=frr")
-    for cm in cms.items:
-        _delete_configmap_or_absent(v1, cm.metadata.name, namespace)
-    log.debug("Cleaned up %d FRR config ConfigMaps", len(cms.items))
 
 
 def _delete_configmap_or_absent(v1: kubernetes.client.CoreV1Api, name: str, namespace: str) -> None:
@@ -1528,7 +1406,7 @@ def compute_platform_hash(
 ) -> str:
     """Hash resolved runtime truth for service restart detection.
 
-    OME, Scheduler, and NodalPath currently load session truth at startup. Any
+    OME and Scheduler load session truth at startup. Any
     user-authored YAML field or referenced catalog asset that can affect runtime
     computation must therefore change this hash and trigger a platform-pod
     restart. Hashing the raw segment YAML is insufficient because a session can
@@ -1588,20 +1466,6 @@ def compute_runtime_hash(
         payload["deployment_context"] = deployment_context.model_dump(mode="json")
     canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(canonical.encode()).hexdigest()
-
-
-def write_pod_ips_configmap(namespace: str, pod_ips: Mapping[str, str]) -> None:
-    """Write nodalarc-pod-ips ConfigMap from the current session pods' addresses.
-
-    ``pod_ips`` comes from the reconciliation's session-pod observation. Stores
-    the map as a single 'pod-ips.json' key so it can be volume-mounted directly
-    as a JSON file by the NodalPath Deployment.
-    """
-    v1 = _get_v1()
-    ip_map = dict(sorted(pod_ips.items()))
-    data = {"pod-ips.json": json.dumps(ip_map)}
-    _create_or_update_configmap(v1, "nodalarc-pod-ips", namespace, data, owner_ref=None)
-    log.info("Wrote nodalarc-pod-ips with %d entries", len(ip_map))
 
 
 # ---------------------------------------------------------------------------
@@ -1726,8 +1590,6 @@ def _create_or_update_configmap(
 ) -> None:
     """Create or update a ConfigMap."""
     labels = {"nodalarc.io/managed-by": "operator"}
-    if name.startswith("frr-config-"):
-        labels["nodalarc.io/config-type"] = "frr"
 
     body = kubernetes.client.V1ConfigMap(
         metadata=kubernetes.client.V1ObjectMeta(

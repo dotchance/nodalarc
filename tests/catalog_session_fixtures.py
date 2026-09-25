@@ -605,9 +605,9 @@ def _catalog_routing(
     effective_protocol = str(routing["protocol"]) if routing and "protocol" in routing else protocol
     capabilities: dict[str, Any] = {}
     normalized = set(extensions)
-    if "sr" in normalized or "segment-routing" in normalized:
+    if "sr" in normalized:
         capabilities["segment_routing"] = {"data_plane": "mpls"}
-    if "te" in normalized or "traffic-engineering" in normalized:
+    if "te" in normalized:
         capabilities["traffic_engineering"] = {
             "data_planes": ["mpls"] if "mpls" in normalized else []
         }

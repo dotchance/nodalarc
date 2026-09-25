@@ -15,7 +15,6 @@ def _station_terminal(**updates):
     data = {
         "type": "rf",
         "count": 1,
-        "bandwidth_mbps": 1000.0,
         "tracking_capacity": 1,
         "max_range_km": 2000.0,
         "field_of_regard_deg": 120.0,
@@ -30,7 +29,6 @@ def _satellite_terminal(**updates):
     data = {
         "type": "rf",
         "count": 1,
-        "bandwidth_mbps": 1000.0,
         "max_range_km": 2000.0,
         "field_of_regard_deg": 120.0,
         "max_tracking_rate_deg_s": 1.5,

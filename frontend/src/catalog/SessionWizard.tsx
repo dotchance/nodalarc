@@ -15,9 +15,11 @@ import { useState, useCallback, useRef } from "react";
 import { useWizard } from "../hooks/useWizard";
 import type { WizardStep } from "./wizardTypes";
 import type { SessionInfo } from "../types";
+import type { SessionSwitchResult } from "../hooks/useSessionSwitcher";
 import type { CatalogSessionSourceId } from "../builder/generated/builderApi";
 import { REST_URL, authHeaders } from "../config";
 import { apiErrorMessage, apiErrorFromException } from "../ui/apiError";
+import { RecordHistoryToggle } from "../ui/RecordHistoryToggle";
 import { downloadBlob } from "../ui/downloadBlob";
 import { Badge } from "../ui/Badge";
 import { Button, IconButton } from "../ui/Button";
@@ -33,7 +35,10 @@ interface SessionWizardProps {
   systemNotice?: string;
   /** Scoped user and shipped catalog sessions, deployable as-is via session switch. */
   sessions: SessionInfo[];
-  onLaunchSession: (session: SessionInfo) => void;
+  /** Why the session list did not load from VS-API; null once it loaded. */
+  sessionsError: string | null;
+  /** Ask VS-API to switch to a session; resolves with its answer. */
+  onLaunchSession: (session: SessionInfo, recordHistory: boolean) => Promise<SessionSwitchResult>;
   /** Feature-gated session-builder entry: navigates to the builder view.
    *  Day-0 authoring needs no deployed session, so this bypasses the
    *  hasEverDeployed close gate — it goes somewhere, not to nothing. */
@@ -52,9 +57,12 @@ export function SessionWizard({
   deploying,
   systemNotice,
   sessions,
+  sessionsError,
   onLaunchSession,
   onOpenBuilder,
 }: SessionWizardProps) {
+  // Why the last launch was refused; the launcher stays open to show it.
+  const [launchError, setLaunchError] = useState<string | null>(null);
   const wizard = useWizard();
   const [view, setView] = useState<"launch" | "build">(sessions.length > 0 ? "launch" : "build");
   // Any listed session's stored YAML is downloadable, including the running one.
@@ -97,16 +105,19 @@ export function SessionWizard({
     || wizard.state.step === "ground-stations"
     || wizard.state.step === "constellation";
 
+  // Every deploy from this launcher records the session run's history when set.
+  const [recordHistory, setRecordHistory] = useState(false);
+
   const handleDeploy = useCallback(async () => {
     if (!wizard.generatedYaml) {
       await wizard.generate();
       return;
     }
-    const ok = await wizard.deploy();
+    const ok = await wizard.deploy(recordHistory);
     if (ok) {
       onDeployStarted();
     }
-  }, [wizard, onDeployStarted]);
+  }, [wizard, onDeployStarted, recordHistory]);
 
   const handleUpload = useCallback(
     async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -115,14 +126,14 @@ export function SessionWizard({
       setUploadError(null);
       try {
         const text = await file.text();
-        const ok = await wizard.deployUploadedYaml(text);
+        const ok = await wizard.deployUploadedYaml(text, recordHistory);
         if (ok) onDeployStarted();
       } catch (err) {
         setUploadError(err instanceof Error ? err.message : "Upload failed");
       }
       if (fileInputRef.current) fileInputRef.current.value = "";
     },
-    [wizard, onDeployStarted],
+    [wizard, onDeployStarted, recordHistory],
   );
 
   const handleDownload = useCallback(async () => {
@@ -138,6 +149,11 @@ export function SessionWizard({
       <div className="launcher-shell">
         <header className="launcher-head">
           <h1>Sessions</h1>
+          <RecordHistoryToggle
+            className="launcher-record-history"
+            checked={recordHistory}
+            onChange={setRecordHistory}
+          />
           {onClose && <IconButton icon="x" label="Close (Esc)" onClick={onClose} />}
         </header>
         {systemNotice && <div className="wizard-warning">{systemNotice}</div>}
@@ -169,6 +185,16 @@ export function SessionWizard({
                 Sessions in your current catalog scope, separated by ownership and deployed as
                 authored. Use the Wizard or Session Builder to create your own sessions.
               </p>
+              {sessionsError && (
+                <div className="wizard-error" role="alert">
+                  Sessions did not load from VS-API: {sessionsError}
+                </div>
+              )}
+              {launchError && (
+                <div className="wizard-error" role="alert">
+                  {launchError}
+                </div>
+              )}
               <div className="launcher-sessions">
                 {sessionGroups.map((group) => group.sessions.length > 0 && (
                   <section
@@ -190,10 +216,15 @@ export function SessionWizard({
                         <div key={s.source_id.session_ref} className="launcher-row-shell">
                           <button
                             className="launcher-row"
-                            onClick={() => {
+                            onClick={async () => {
                               if (s.active || deploying || !s.deploy_allowed) return;
-                              onLaunchSession(s);
-                              onDeployStarted();
+                              setLaunchError(null);
+                              const result = await onLaunchSession(s, recordHistory);
+                              if (result.ok) {
+                                onDeployStarted();
+                              } else {
+                                setLaunchError(result.message);
+                              }
                             }}
                             disabled={s.active || deploying || !s.deploy_allowed}
                             title={
@@ -253,7 +284,22 @@ export function SessionWizard({
             </section>
           )}
 
-          {view === "build" && (
+          {view === "build" && wizard.authoring.state !== "ready" && (
+            <section className="launcher-content" aria-label="Build a session">
+              {wizard.authoring.state === "loading" ? (
+                <div className="wizard-loading">
+                  <p>Loading Wizard authoring facts from VS-API…</p>
+                </div>
+              ) : (
+                <div className="wizard-error">
+                  Wizard authoring facts did not load from VS-API:{" "}
+                  {wizard.authoring.failures.join("; ")}
+                </div>
+              )}
+            </section>
+          )}
+
+          {view === "build" && wizard.authoring.state === "ready" && (
             <section className="launcher-content" aria-label="Build a session">
               <div className="wizard-steps">
                 <button

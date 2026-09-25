@@ -201,7 +201,7 @@ fi
 nodal_node="$(kubectl get nodes -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || true)"
 if [ -n "$nodal_node" ]; then
     echo "[$ACTION] Auto-detected node: $nodal_node"
-    helm_args+=("--set-string=controlPlaneNode=$nodal_node" "--set-string=sessionNodeName=$nodal_node")
+    helm_args+=("--set-string=controlPlaneNode=$nodal_node")
     nats_host="$(
         kubectl get node "$nodal_node" \
             -o jsonpath='{.status.addresses[?(@.type=="InternalIP")].address}' 2>/dev/null || true

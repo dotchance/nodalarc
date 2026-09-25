@@ -56,9 +56,7 @@ from nodalarc_operator.session_deployer import (
     ensure_session_pods,
     prepare_session_workloads,
     restart_platform_pods,
-    set_nodalpath_mode,
     teardown_session,
-    write_pod_ips_configmap,
     write_wiring_manifest,
 )
 from nodalarc_operator.session_pods import (
@@ -923,7 +921,6 @@ async def _reconcile_session(
                 deployment_context,
             )
             if not manifest_current:
-                await loop.run_in_executor(None, write_pod_ips_configmap, namespace, view.pod_ips())
                 await loop.run_in_executor(
                     None,
                     write_wiring_manifest,
@@ -936,7 +933,6 @@ async def _reconcile_session(
                     view.placement(),
                 )
 
-                await loop.run_in_executor(None, set_nodalpath_mode, namespace, "console")
             # OME/Scheduler restart deliberately does NOT happen here: the
             # platform services are restarted only after wiring completes
             # and every session workload container is Running, so they never
@@ -1218,7 +1214,6 @@ async def on_delete(name, namespace, spec=None, meta=None, status=None, **_):
     else:
         log.info("No owned session resources; sweeping session ConfigMaps only")
     await loop.run_in_executor(None, teardown_session, namespace, run_ids)
-    await loop.run_in_executor(None, set_nodalpath_mode, namespace, "console")
     log.info("Session teardown complete")
 
 

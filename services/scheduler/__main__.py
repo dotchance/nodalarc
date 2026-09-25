@@ -2,7 +2,7 @@
 # Licensed under the Apache License, Version 2.0. See LICENSE file.
 """Scheduler entry point.
 
-Loads session config, builds interface/bandwidth maps, discovers pod
+Loads session config, builds the interface map and terminal rates, discovers pod
 locations, initializes agent pool, and runs the async dispatch loop.
 """
 
@@ -338,7 +338,6 @@ def _build_argument_parser() -> argparse.ArgumentParser:
         default=DEFAULT_INSTALLED_SHIPPED_CATALOG_ROOT,
         help="Installed read-only nodalarc catalog root",
     )
-    parser.add_argument("--pid-map", help="Path to pid_map.json from na-deploy")
     parser.add_argument(
         "--platform-config",
         default="configs/platform.yaml",
@@ -351,7 +350,7 @@ def main() -> None:
     _configure_logging("nodal.arc.scheduler", nats_level=logging.INFO)
     args = _build_argument_parser().parse_args()
 
-    from nodalarc.platform_config import init_platform_config
+    from nodalarc.platform_config import get_platform_config, init_platform_config
 
     init_platform_config(Path(args.platform_config))
 
@@ -375,17 +374,18 @@ def main() -> None:
     resolved = runtime_config.config.resolution.resolved
     runtime_health.mark_loaded(runtime_config)
     interface_map = resolved.link_interface_map()
-    bandwidth_map = resolved.link_bandwidth_map()
+    interface_rates = resolved.interface_terminal_rates()
     log.debug("Interface map: %d link pairs", len(interface_map))
     session_id = require_resolved_session_run_id(resolved)
     expected_nodes = set(resolved.node_ids())
 
     # Pod location map — canonical node IDs from K8s labels
     loc = PodLocationMap()
-    if args.pid_map:
-        loc.load_from_pid_map_file(args.pid_map)
-    else:
-        loc.load_from_k8s_api(expected_node_ids=expected_nodes, session_id=session_id)
+    loc.load_from_k8s_api(
+        namespace=get_platform_config().kubernetes_namespace,
+        expected_node_ids=expected_nodes,
+        session_id=session_id,
+    )
     log.debug("Pod locations:\n%s", loc.summary())
 
     # --- Wiring gate: wait for Node Agent to complete wiring ---
@@ -394,7 +394,6 @@ def main() -> None:
     # Same check the Operator uses (handlers.py:188-189).
     # K8s config already loaded by loc.load_from_k8s_api() above.
     import kubernetes.client
-    from nodalarc.platform_config import get_platform_config
 
     k8s_v1 = kubernetes.client.CoreV1Api()
     ns = get_platform_config().kubernetes_namespace
@@ -449,7 +448,7 @@ def main() -> None:
 
     dispatcher = Dispatcher(
         interface_map=interface_map,
-        bandwidth_map=bandwidth_map,
+        interface_rates=interface_rates,
         pod_locator=loc,
         agent_pool=pool,
         max_latency_age_s=max_latency_age_s,

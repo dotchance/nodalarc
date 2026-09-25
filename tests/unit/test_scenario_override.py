@@ -13,11 +13,13 @@ from unittest.mock import MagicMock
 
 from scheduler.dispatcher import ActiveLinkInfo, Dispatcher
 
+from tests.terminal_rate_fixtures import ANY_INTERFACE_RATES
+
 
 def _make_dispatcher(**overrides) -> Dispatcher:
     defaults = {
         "interface_map": {},
-        "bandwidth_map": {},
+        "interface_rates": ANY_INTERFACE_RATES,
         "pod_locator": MagicMock(),
         "agent_pool": MagicMock(),
         "session_id": "test-session",
@@ -38,7 +40,7 @@ class TestOverridePairs:
     def test_add_pair_suppresses_from_effective_desired(self):
         d = _make_dispatcher()
         pair = ("sat-P00S00", "sat-P00S01")
-        d._desired_links[pair] = ActiveLinkInfo("isl0", "isl1", 3.0, 1000.0, link_type="isl")
+        d._desired_links[pair] = ActiveLinkInfo("isl0", "isl1", 3.0, link_type="isl")
 
         d._override_pairs[pair] = "scenario_inject_down"
         intent = d._build_dispatch_intent(sim_time=SIM_TIME, source="scenario")
@@ -48,7 +50,7 @@ class TestOverridePairs:
     def test_remove_pair_restores_to_effective_desired(self):
         d = _make_dispatcher()
         pair = ("sat-P00S00", "sat-P00S01")
-        d._desired_links[pair] = ActiveLinkInfo("isl0", "isl1", 3.0, 1000.0, link_type="isl")
+        d._desired_links[pair] = ActiveLinkInfo("isl0", "isl1", 3.0, link_type="isl")
 
         d._override_pairs[pair] = "scenario_inject_down"
         d._override_pairs.pop(pair)
@@ -60,7 +62,7 @@ class TestOverridePairs:
         d = _make_dispatcher()
         pairs = [("sat-P00S00", "sat-P00S01"), ("sat-P00S02", "sat-P00S03")]
         for p in pairs:
-            d._desired_links[p] = ActiveLinkInfo("isl0", "isl1", 3.0, 1000.0, link_type="isl")
+            d._desired_links[p] = ActiveLinkInfo("isl0", "isl1", 3.0, link_type="isl")
             d._override_pairs[p] = "scenario_inject_down"
 
         d._override_pairs.clear()
@@ -72,7 +74,7 @@ class TestOverridePairs:
     def test_desired_links_not_modified_by_override(self):
         d = _make_dispatcher()
         pair = ("sat-P00S00", "sat-P00S01")
-        d._desired_links[pair] = ActiveLinkInfo("isl0", "isl1", 3.0, 1000.0, link_type="isl")
+        d._desired_links[pair] = ActiveLinkInfo("isl0", "isl1", 3.0, link_type="isl")
 
         d._override_pairs[pair] = "scenario_inject_down"
         d._build_dispatch_intent(sim_time=SIM_TIME, source="scenario")
@@ -84,13 +86,13 @@ class TestOverrideNodes:
     def test_node_override_suppresses_all_pairs_involving_node(self):
         d = _make_dispatcher()
         d._desired_links[("sat-P00S00", "sat-P00S01")] = ActiveLinkInfo(
-            "isl0", "isl1", 3.0, 1000.0, link_type="isl"
+            "isl0", "isl1", 3.0, link_type="isl"
         )
         d._desired_links[("sat-P00S00", "sat-P01S00")] = ActiveLinkInfo(
-            "isl1", "isl0", 3.0, 1000.0, link_type="isl"
+            "isl1", "isl0", 3.0, link_type="isl"
         )
         d._desired_links[("sat-P00S01", "sat-P01S00")] = ActiveLinkInfo(
-            "isl2", "isl2", 3.0, 1000.0, link_type="isl"
+            "isl2", "isl2", 3.0, link_type="isl"
         )
 
         d._override_nodes["sat-P00S00"] = "satellite_loss"
@@ -103,7 +105,7 @@ class TestOverrideNodes:
     def test_node_override_suppresses_even_without_pair_override(self):
         d = _make_dispatcher()
         pair = ("sat-P00S00", "sat-P00S01")
-        d._desired_links[pair] = ActiveLinkInfo("isl0", "isl1", 3.0, 1000.0, link_type="isl")
+        d._desired_links[pair] = ActiveLinkInfo("isl0", "isl1", 3.0, link_type="isl")
 
         d._override_nodes["sat-P00S00"] = "satellite_loss"
         intent = d._build_dispatch_intent(sim_time=SIM_TIME, source="scenario")
@@ -114,7 +116,7 @@ class TestOverrideNodes:
     def test_restore_node_unsuppresses(self):
         d = _make_dispatcher()
         d._desired_links[("sat-P00S00", "sat-P00S01")] = ActiveLinkInfo(
-            "isl0", "isl1", 3.0, 1000.0, link_type="isl"
+            "isl0", "isl1", 3.0, link_type="isl"
         )
         d._override_nodes["sat-P00S00"] = "satellite_loss"
         d._override_nodes.pop("sat-P00S00")
@@ -127,7 +129,7 @@ class TestReasonCapture:
     def test_pair_override_captured_in_down_reasons(self):
         d = _make_dispatcher()
         pair = ("sat-P00S00", "sat-P00S01")
-        d._desired_links[pair] = ActiveLinkInfo("isl0", "isl1", 3.0, 1000.0, link_type="isl")
+        d._desired_links[pair] = ActiveLinkInfo("isl0", "isl1", 3.0, link_type="isl")
 
         d._override_pairs[pair] = "scenario_inject_down"
         intent = d._build_dispatch_intent(sim_time=SIM_TIME, source="scenario")
@@ -138,7 +140,7 @@ class TestReasonCapture:
     def test_node_override_captured_in_down_reasons(self):
         d = _make_dispatcher()
         pair = ("sat-P00S00", "sat-P00S01")
-        d._desired_links[pair] = ActiveLinkInfo("isl0", "isl1", 3.0, 1000.0, link_type="isl")
+        d._desired_links[pair] = ActiveLinkInfo("isl0", "isl1", 3.0, link_type="isl")
 
         d._override_nodes["sat-P00S00"] = "satellite_loss"
         intent = d._build_dispatch_intent(sim_time=SIM_TIME, source="scenario")
@@ -149,7 +151,7 @@ class TestReasonCapture:
     def test_no_override_reason_for_ome_removed_pairs(self):
         d = _make_dispatcher()
         pair = ("sat-P00S00", "sat-P00S01")
-        d._actual_links[pair] = ActiveLinkInfo("isl0", "isl1", 3.0, 1000.0, link_type="isl")
+        d._actual_links[pair] = ActiveLinkInfo("isl0", "isl1", 3.0, link_type="isl")
 
         intent = d._build_dispatch_intent(sim_time=SIM_TIME, source="ome_event")
 
@@ -160,7 +162,7 @@ class TestReasonCapture:
         """Override reason captured for pairs in desired but not yet in actual."""
         d = _make_dispatcher()
         pair = ("sat-P00S00", "sat-P00S01")
-        d._desired_links[pair] = ActiveLinkInfo("isl0", "isl1", 3.0, 1000.0, link_type="isl")
+        d._desired_links[pair] = ActiveLinkInfo("isl0", "isl1", 3.0, link_type="isl")
 
         d._override_pairs[pair] = "scenario_inject_down"
         intent = d._build_dispatch_intent(sim_time=SIM_TIME, source="scenario")
@@ -172,7 +174,7 @@ class TestPairNormalization:
     def test_canonical_ordering(self):
         d = _make_dispatcher()
         d._desired_links[("sat-P00S00", "sat-P00S01")] = ActiveLinkInfo(
-            "isl0", "isl1", 3.0, 1000.0, link_type="isl"
+            "isl0", "isl1", 3.0, link_type="isl"
         )
 
         d._override_pairs[("sat-P00S00", "sat-P00S01")] = "scenario_inject_down"

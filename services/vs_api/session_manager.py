@@ -5,13 +5,9 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
-import os
-import signal
 import threading
 from collections.abc import Awaitable, Callable, Mapping
-from pathlib import Path
 from typing import Any, Protocol
 
 from nodalarc.catalog_upload import CatalogUploadSelection
@@ -23,7 +19,6 @@ from nodalarc.cr_runtime_config import (
     ConstellationSpecStatus,
     cr_status_observes_current_generation,
 )
-from nodalarc.platform_config import get_platform_config
 from nodalarc.workload_target import NODE_ID_LABEL
 from pydantic import ValidationError
 
@@ -38,10 +33,6 @@ from .session_deployment import (
 )
 
 log = logging.getLogger(__name__)
-
-
-# Maximum number of old session directories to keep
-_MAX_KEPT_SESSIONS = 5
 
 
 class _CustomObjectsSwitchApi(Protocol):
@@ -100,32 +91,14 @@ def _selected_catalog_upload_matches(
     return observed == intended
 
 
-def _pid_alive(pid: int) -> bool:
-    """Check if a process with the given PID is still running."""
-    if pid <= 0:
-        return False
-    try:
-        os.kill(pid, 0)  # Signal 0 = just check, don't actually signal
-        return True
-    except ProcessLookupError:
-        return False
-    except PermissionError:
-        # Process exists but we don't have permission to signal it
-        return True
-
-
 class SessionManager:
     """Coordinates prepared catalog-session switches and runtime recovery."""
 
-    def __init__(self, initial_db_path: str | None = None) -> None:
-        self._current_data_dir: Path | None = None
+    def __init__(self) -> None:
         self._current_source_id: str | None = None
         self._status: str = "idle"
         self._status_detail: str = ""
         self._detail_lock = threading.Lock()
-
-        if initial_db_path:
-            self._current_data_dir = Path(initial_db_path).parent
 
     @property
     def status(self) -> str:
@@ -148,144 +121,6 @@ class SessionManager:
     def set_active(self, source_id: str) -> None:
         """Mark one catalog session reference as the active source."""
         self._current_source_id = source_id
-
-    def _collect_data_dirs(self) -> list[Path]:
-        """Session data lives under the platform-owned root — a platform fact,
-        not something derived by resolving every available session."""
-        return [Path(get_platform_config().session_data_root)]
-
-    def recover_session(self) -> dict | None:
-        """Scan data directories for the newest session-state.json with live PIDs.
-
-        Returns the session state dict if a live session is found, None otherwise.
-        The dict includes: session_id, data_dir, session_config, db_path,
-        mi_pid, orchestrator_pid, vsapi_pid.
-        """
-        data_dirs = self._collect_data_dirs()
-        if not data_dirs:
-            return None
-
-        # Collect all session-state.json files across all data dirs
-        candidates: list[tuple[Path, float]] = []
-        for base in data_dirs:
-            if not base.is_dir():
-                continue
-            for subdir in base.iterdir():
-                if not subdir.is_dir():
-                    continue
-                state_file = subdir / "session-state.json"
-                if state_file.exists():
-                    candidates.append((state_file, state_file.stat().st_mtime))
-
-        # Sort newest first
-        candidates.sort(key=lambda x: x[1], reverse=True)
-
-        for state_file, _mtime in candidates:
-            try:
-                state = json.loads(state_file.read_text())
-            except Exception:
-                continue
-
-            mi_pid = state.get("mi_pid", 0)
-            orch_pid = state.get("orchestrator_pid", 0)
-
-            # A session is "live" if either MI or orchestrator is running
-            if _pid_alive(mi_pid) or _pid_alive(orch_pid):
-                log.info(
-                    f"Recovered live session: {state.get('session_id')} "
-                    f"(mi={mi_pid} alive={_pid_alive(mi_pid)}, "
-                    f"orch={orch_pid} alive={_pid_alive(orch_pid)})"
-                )
-                # Update internal state
-                self._current_data_dir = state_file.parent
-                self._status = "ready"
-                self.status_detail = ""
-                return state
-
-        log.info("No live session found during recovery scan")
-        return None
-
-    def kill_all_session_processes(self) -> int:
-        """Find and kill ALL session processes across all data directories.
-
-        Returns the number of processes killed. Used during teardown to ensure
-        no orphan MI/orchestrator processes survive.
-        """
-        killed = 0
-        data_dirs = self._collect_data_dirs()
-
-        for base in data_dirs:
-            if not base.is_dir():
-                continue
-            for subdir in base.iterdir():
-                if not subdir.is_dir():
-                    continue
-                state_file = subdir / "session-state.json"
-                if not state_file.exists():
-                    continue
-                try:
-                    state = json.loads(state_file.read_text())
-                except Exception:
-                    continue
-
-                for key in ("ome_pid", "mi_pid", "orchestrator_pid"):
-                    pid = state.get(key, 0)
-                    if pid and _pid_alive(pid):
-                        try:
-                            os.kill(pid, signal.SIGTERM)
-                            log.info(f"Killed orphan {key}={pid} from {subdir.name}")
-                            killed += 1
-                        except ProcessLookupError, PermissionError:
-                            pass
-        return killed
-
-    def cleanup_old_sessions(self, keep: int = _MAX_KEPT_SESSIONS) -> int:
-        """Remove old session directories, keeping the newest `keep` per data_dir.
-
-        Only state-marked directories with dead recorded processes are eligible.
-        Unknown sibling directories are never inferred to be session artifacts.
-        """
-        import shutil
-
-        removed = 0
-        data_dirs = self._collect_data_dirs()
-
-        for base in data_dirs:
-            if not base.is_dir():
-                continue
-
-            # Unknown sibling directories may belong to catalog or operational
-            # storage. Only directories carrying our state marker are owned by
-            # this cleanup path.
-            complete = []
-            for d in base.iterdir():
-                if not d.is_dir():
-                    continue
-                if (d / "session-state.json").exists():
-                    complete.append(d)
-
-            # Sort complete dirs by mtime (newest first), keep newest `keep`
-            complete.sort(key=lambda d: d.stat().st_mtime, reverse=True)
-            for subdir in complete[keep:]:
-                state_file = subdir / "session-state.json"
-                try:
-                    state = json.loads(state_file.read_text())
-                    mi_pid = state.get("mi_pid", 0)
-                    orch_pid = state.get("orchestrator_pid", 0)
-                    if _pid_alive(mi_pid) or _pid_alive(orch_pid):
-                        log.info(f"Skipping cleanup of {subdir.name} — processes still live")
-                        continue
-                except Exception:
-                    pass
-
-                try:
-                    shutil.rmtree(subdir)
-                    log.info(f"Cleaned up old session directory: {subdir.name}")
-                    removed += 1
-                except Exception as exc:
-                    log.warning(f"Failed to remove {subdir}: {exc}")
-
-        return removed
 
     async def _switch_constellation_spec(
         self,

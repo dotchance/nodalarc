@@ -15,7 +15,6 @@ import asyncio
 import contextlib
 import json
 import logging
-import subprocess
 import sys
 import time
 from pathlib import Path
@@ -29,7 +28,6 @@ from nodalarc.models.scenario import (
     InjectLinkUpStep,
     InjectSatelliteLossStep,
     MeasureStep,
-    ReconfigStep,
     RestoreSatelliteStep,
     ScenarioConfig,
     WaitConvergeStep,
@@ -181,25 +179,6 @@ async def _measure(nc: nats.NATS, step: MeasureStep) -> None:
     log.info("Measurement window complete")
 
 
-def _reconfig(step: ReconfigStep, session_path: str) -> None:
-    log.info("reconfig: target=%s", step.target)
-    cmd = [
-        sys.executable,
-        "-m",
-        "tools.na_reconfig",
-        "--live",
-        "--target",
-        step.target,
-    ]
-    for k, v in step.set_values.items():
-        cmd.extend(["--set", f"{k}={v}"])
-    result = subprocess.run(cmd, capture_output=True, text=True)
-    if result.returncode != 0:
-        log.error("na-reconfig failed: %s", result.stderr)
-    else:
-        log.info("reconfig complete")
-
-
 async def run_scenario_async(scenario_path: str, session_path: str) -> None:
     """Load and execute a scenario YAML file."""
     raw = yaml.safe_load(Path(scenario_path).read_text())
@@ -233,8 +212,6 @@ async def run_scenario_async(scenario_path: str, session_path: str) -> None:
                     await _wait_converge(nc, step)
                 case MeasureStep():
                     await _measure(nc, step)
-                case ReconfigStep():
-                    _reconfig(step, session_path)
 
         log.info("Scenario complete — sending clear_overrides to Scheduler")
         await _send_scheduler_cmd(nc, subject, {"action": "clear_overrides"})

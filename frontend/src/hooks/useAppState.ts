@@ -55,6 +55,8 @@ export function useAppState(inputs: AppStateInputs) {
   const [viewMode, setViewMode] = useState<ViewMode>("globe");
   // Regime taxonomy is the default visual identity; area/plane are analysis modes.
   const [colorMode, setColorMode] = useState<ColorMode>("regime");
+  // The IS-IS or OSPF instance area coloring shows; null shows the first.
+  const [areaInstanceId, setAreaInstanceId] = useState<string | null>(null);
   const [showGroundLinks, setShowGroundLinks] = useState(true);
   const [showIslLinks, setShowIslLinks] = useState(true);
   const [showSatPaths, setShowSatPaths] = useState(false);
@@ -144,6 +146,8 @@ export function useAppState(inputs: AppStateInputs) {
     setViewMode,
     colorMode,
     setColorMode,
+    areaInstanceId,
+    setAreaInstanceId,
     showGroundLinks,
     setShowGroundLinks,
     showIslLinks,

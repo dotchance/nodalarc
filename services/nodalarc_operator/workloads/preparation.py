@@ -20,7 +20,7 @@ from dataclasses import dataclass
 from nodalarc.content_identity import canonical_json_bytes, sha256_digest
 from nodalarc.models.catalog import LiteralEnvEntry
 from nodalarc.resolve_session import SessionResolutionError, resolve_env_value
-from nodalarc.workloads.adapter import SessionContext
+from nodalarc.workloads.adapter import AdapterRenderRefusal, SessionContext
 from nodalarc.workloads.admission import admit_profile
 from nodalarc.workloads.plan import WorkloadPlan
 
@@ -192,7 +192,19 @@ def prepare_session_workloads(
         adapter = adapter_named(profile.adapter)
         rendered: dict[str, bytes] = {}
         if adapter is not None:
-            config = adapter.render_node(node, context)
+            try:
+                config = adapter.render_node(node, context)
+            except AdapterRenderRefusal as exc:
+                raise WorkloadPreparationError(
+                    f"adapter {profile.adapter!r} cannot render {node.node_id!r}: {exc}"
+                ) from exc
+            except Exception as exc:
+                # render_node is pure, so an exception it raises recurs on
+                # every attempt: the session fails with it.
+                raise WorkloadPreparationError(
+                    f"adapter {profile.adapter!r} failed to render {node.node_id!r}: "
+                    f"{type(exc).__name__}: {exc}"
+                ) from exc
             if config.env or config.args is not None:
                 raise WorkloadPreparationError(
                     f"adapter {profile.adapter!r} produced env/args for "

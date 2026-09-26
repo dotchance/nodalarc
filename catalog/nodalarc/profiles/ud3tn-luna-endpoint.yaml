@@ -20,14 +20,15 @@ profile:
   - /bin/bash
   - -c
   - >-
-    set -u;
+    trap 'exit 143' TERM;
+    { set -u;
     S=/run/ud3tn/aap2.socket;
     until [ -S "$S" ]; do echo "waiting for aap2 socket"; sleep 2; done;
     until aap2-config --socket "$S" --schedule 1 315360000 1000000
     --reaches dtn://earth.dtn/ dtn://relay.dtn/ "mtcp:${DTN_RELAY}:4224";
     do echo "contact configuration failed; retrying"; sleep 5; done;
     echo "configured contact: dtn://relay.dtn/ at mtcp:${DTN_RELAY}:4224";
-    exec aap2-receive --socket "$S" --agentid bundlesink --newline -v
+    exec aap2-receive --socket "$S" --agentid bundlesink --newline -v; } & wait $!
   root_filesystem: read_only
   volumes:
   - name: run

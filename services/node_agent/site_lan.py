@@ -40,6 +40,7 @@ import subprocess
 from dataclasses import dataclass
 
 from nodalarc.runtime_naming import (
+    MANAGED_HOST_DEVICE_GROUP,
     site_lan_bridge_name,
     site_lan_member_host_ifname,
     site_lan_member_pod_ifname,
@@ -336,7 +337,7 @@ def _ensure_link(ipr, ifname: str, *, kind: str, mtu: int, **kwargs) -> int:
     if stale:
         log.debug("Cleaning stale %s before site LAN create", ifname)
         ipr.link("del", index=stale[0])
-    ipr.link("add", ifname=ifname, kind=kind, **kwargs)
+    ipr.link("add", ifname=ifname, kind=kind, group=MANAGED_HOST_DEVICE_GROUP, **kwargs)
     idx = ipr.link_lookup(ifname=ifname)[0]
     ipr.link("set", index=idx, mtu=mtu)
     return idx
@@ -348,7 +349,13 @@ def _ensure_veth(ipr, host_ifname: str, pod_ifname: str, *, mtu: int) -> None:
         if stale:
             log.debug("Cleaning stale %s before site LAN create", stale_name)
             ipr.link("del", index=stale[0])
-    ipr.link("add", ifname=host_ifname, kind="veth", peer={"ifname": pod_ifname})
+    ipr.link(
+        "add",
+        ifname=host_ifname,
+        kind="veth",
+        group=MANAGED_HOST_DEVICE_GROUP,
+        peer={"ifname": pod_ifname},
+    )
     for name in (host_ifname, pod_ifname):
         idx = ipr.link_lookup(ifname=name)
         if idx:

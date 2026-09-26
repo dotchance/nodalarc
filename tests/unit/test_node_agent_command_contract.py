@@ -5,6 +5,7 @@ from nodalarc.proto import node_agent_pb2
 from node_agent.command_contract import (
     CommandContractError,
     RuntimeFence,
+    WriterEpochFloor,
     validate_batch_link_up_request,
     validate_kernel_inventory_request,
     validate_set_latency_request,
@@ -33,7 +34,9 @@ def test_worst_error_code_returns_ok_when_all_entries_ok() -> None:
     )
 
 
-_FENCE = RuntimeFence(session_id="session-a", wiring_generation="gen-1")
+_FENCE = RuntimeFence(
+    session_id="session-a", wiring_generation="gen-1", writer_floor=WriterEpochFloor()
+)
 
 
 def _envelope(kind: str) -> node_agent_pb2.CommandEnvelope:
@@ -42,6 +45,7 @@ def _envelope(kind: str) -> node_agent_pb2.CommandEnvelope:
         session_id=_FENCE.session_id,
         wiring_generation=_FENCE.wiring_generation,
         operation_kind=kind,
+        writer_epoch=1,
     )
 
 
@@ -196,3 +200,68 @@ def test_set_latency_requires_the_interface_terminal_rates(bad: float) -> None:
 def test_set_latency_refuses_an_entry_without_rates() -> None:
     with pytest.raises(CommandContractError, match="SetLatency entry requires rates"):
         validate_set_latency_request(_set_latency_request(None), fence=_FENCE)
+
+
+# ---------------------------------------------------------------------------
+# One Scheduler writes a session: the writer epoch floor
+# ---------------------------------------------------------------------------
+
+
+def _latency_request(epoch: int, *, fence=None):
+    fence = fence or _FENCE
+    return node_agent_pb2.SetLatencyRequest(
+        envelope=node_agent_pb2.CommandEnvelope(
+            operation_id="op-1",
+            session_id=fence.session_id,
+            wiring_generation=fence.wiring_generation,
+            operation_kind="SetLatency",
+            writer_epoch=epoch,
+        )
+    )
+
+
+def _fence() -> RuntimeFence:
+    return RuntimeFence(
+        session_id="session-a", wiring_generation="gen-1", writer_floor=WriterEpochFloor()
+    )
+
+
+def test_a_command_without_a_writer_epoch_is_refused() -> None:
+    with pytest.raises(CommandContractError, match="writer_epoch") as exc:
+        validate_set_latency_request(_latency_request(0, fence=_fence()), fence=_fence())
+    assert exc.value.code == node_agent_pb2.NODE_AGENT_INVALID_ENVELOPE
+
+
+def test_a_lower_writer_epoch_is_refused_after_a_higher_one() -> None:
+    fence = _fence()
+    validate_set_latency_request(_latency_request(4, fence=fence), fence=fence)
+    validate_set_latency_request(_latency_request(4, fence=fence), fence=fence)
+    with pytest.raises(CommandContractError, match="stale writer epoch 3") as exc:
+        validate_set_latency_request(_latency_request(3, fence=fence), fence=fence)
+    assert exc.value.code == node_agent_pb2.NODE_AGENT_STALE_WRITER
+    # A newer writer is accepted and fences out the one before it.
+    validate_set_latency_request(_latency_request(5, fence=fence), fence=fence)
+    with pytest.raises(CommandContractError, match="stale writer epoch 4"):
+        validate_set_latency_request(_latency_request(4, fence=fence), fence=fence)
+
+
+def test_the_floor_outlives_a_rewire_of_the_same_session() -> None:
+    """Each wiring pass builds a new fence; the floor is the process's."""
+    floor = WriterEpochFloor()
+    first = RuntimeFence(session_id="session-a", wiring_generation="gen-1", writer_floor=floor)
+    validate_set_latency_request(_latency_request(6, fence=first), fence=first)
+    rewired = RuntimeFence(session_id="session-a", wiring_generation="gen-1", writer_floor=floor)
+    with pytest.raises(CommandContractError, match="stale writer epoch 2"):
+        validate_set_latency_request(_latency_request(2, fence=rewired), fence=rewired)
+
+
+def test_a_new_session_starts_a_new_floor() -> None:
+    floor = WriterEpochFloor()
+    old = RuntimeFence(session_id="session-a", wiring_generation="gen-1", writer_floor=floor)
+    validate_set_latency_request(_latency_request(9, fence=old), fence=old)
+    new = RuntimeFence(session_id="session-b", wiring_generation="gen-1", writer_floor=floor)
+    validate_set_latency_request(_latency_request(1, fence=new), fence=new)
+    # The old session's writer is refused by the session fence, never by the floor.
+    with pytest.raises(CommandContractError) as exc:
+        validate_set_latency_request(_latency_request(9, fence=old), fence=new)
+    assert exc.value.code == node_agent_pb2.NODE_AGENT_STALE_SESSION

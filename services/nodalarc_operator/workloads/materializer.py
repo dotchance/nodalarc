@@ -22,7 +22,11 @@ from nodalarc.substrate.manifest_contract import (
     POD_OWNER_UID_LABEL,
     POD_SESSION_RUN_LABEL,
 )
-from nodalarc.substrate.wiring_status import READY_PHASE_JQ_CLAUSE, WIRING_STATUS_CONFIGMAP
+from nodalarc.substrate.wiring_status import (
+    READY_PHASE_JQ_CLAUSE,
+    WIRING_STATUS_FILE,
+    WIRING_STATUS_VOLUME,
+)
 from nodalarc.workload_target import (
     NODE_ID_LABEL,
     PRIMARY_CONTAINER_ANNOTATION,
@@ -35,31 +39,67 @@ ROLE_LABEL = "nodalarc.io/role"
 # Platform-owned pod annotation carrying the built-in-or-explicit workload
 # selection identity. The reconciler compares it against the CR's current
 # selection; a differing pod is deleted and recreated, never re-stamped.
+# One configuration for every client model this Operator builds. A model
+# constructed without one builds its own Configuration, which reconfigures the
+# client's loggers each time; a session pod takes dozens of models.
+MODEL_CONFIGURATION = kubernetes.client.Configuration()
+
 WORKLOAD_SELECTION_ANNOTATION = "nodalarc.io/workload-selection"
 
 TERMINAL_SSH_CONTRACT = '{"surface":"ssh"}'
 
+# The gate runs its loop as a child of a PID 1 that exits on SIGTERM: the kernel
+# does not deliver a signal to a PID namespace's init process unless it has a
+# handler, and a pod deleted during wiring would otherwise wait out its whole
+# termination grace period. The loop's own exit status is the gate's.
 _WIRING_GATE_SCRIPT = (
+    "trap 'exit 143' TERM\n"
+    "{\n"
     'my_netns="$(readlink /proc/self/ns/net)"\n'
     'my_netns="${my_netns#net:[}"\n'
     'my_netns="${my_netns%]}"\n'
-    'status_file="/wiring-status/status.json"\n'
+    f'status_file="/{WIRING_STATUS_VOLUME}/{WIRING_STATUS_FILE}"\n'
     'echo "waiting for platform wiring of ${NODE_ID} '
     '(pod ${POD_UID}, run ${SESSION_RUN_ID}, netns ${my_netns})"\n'
+    'last=""\n'
     "while true; do\n"
-    '  if [ -f "${status_file}" ] && jq -e --arg uid "${POD_UID}" '
+    # The Node Agent replaces the file (write, then rename) when it writes
+    # the proof. Reading it is a shell builtin; jq runs only when the
+    # content changed.
+    '  current=""\n'
+    '  [ -f "${status_file}" ] && read -r -d "" current < "${status_file}"\n'
+    '  if [ -n "${current}" ] && [ "${current}" != "${last}" ]; then\n'
+    '    last="${current}"\n'
+    '    if jq -e --arg uid "${POD_UID}" '
     '--arg run "${SESSION_RUN_ID}" --arg ns "${my_netns}" '
     '\'.status == "ready" and .dirty_kernel == false '
     "and .pod_uid == $uid and .session_run_id == $run "
     "and .netns_id == $ns "
     f"and {READY_PHASE_JQ_CLAUSE}' "
     '"${status_file}" > /dev/null 2>&1; then\n'
-    '    echo "wiring ready for ${NODE_ID}"\n'
-    "    exit 0\n"
+    '      echo "wiring ready for ${NODE_ID}"\n'
+    "      exit 0\n"
+    "    fi\n"
     "  fi\n"
-    "  sleep 2\n"
+    "  sleep 0.2\n"
     "done\n"
+    "} & wait $!\n"
 )
+
+
+def image_pull_policy_for(image: str, configured: str) -> str:
+    """The pull policy for one container image under the platform's configured policy.
+
+    A reference that carries a digest names immutable content: a node that
+    holds it has exactly that image, so ``Always`` becomes ``IfNotPresent``
+    and the kubelet does not ask the registry again. A session start creates
+    hundreds of containers at once, and their pulls of present images queue
+    behind one another (measured about 50 ms each, 8.9 s for 180 on one
+    node). A tag reference, and every other configured policy, is kept.
+    """
+    if configured == "Always" and "@sha256:" in image:
+        return "IfNotPresent"
+    return configured
 
 
 def _require_env(name: str) -> str:
@@ -83,74 +123,95 @@ class WorkloadComposition:
 
 def _wiring_gate_container() -> kubernetes.client.V1Container:
     # Platform wiring gate: authored containers start only after the Node
-    # Agent has wired THIS pod incarnation. The gate observes the existing
-    # wiring proof (only this node's key of the nodalarc-wiring-status
-    # ConfigMap, projected as an optional volume) and exits when the proof
-    # reports ready with a clean kernel AND names this exact incarnation
-    # and run: pod UID (downward API), session run label, and the inode of
+    # Agent has wired THIS pod incarnation. The gate observes the wiring proof
+    # the Node Agent wrote for this pod (the same proof as the pod's
+    # annotation, written into the pod's wiring-status volume) and exits when
+    # the proof reports ready with a clean kernel AND names this exact
+    # incarnation and run: pod UID (downward API), session run label, and the inode of
     # the network namespace the gate itself runs in. A row written for a
     # replaced pod, a recreated sandbox, or a previous run can never
     # release the workload. The gate never times out: wiring that does not
     # complete must surface as a pod stuck in Init, not as a workload
     # started on an unwired network.
     return kubernetes.client.V1Container(
+        local_vars_configuration=MODEL_CONFIGURATION,
         name="wiring-gate",
         image=_require_env("WIRING_GATE_IMAGE"),
-        image_pull_policy=_require_env("IMAGE_PULL_POLICY"),
+        image_pull_policy=image_pull_policy_for(
+            _require_env("WIRING_GATE_IMAGE"), _require_env("IMAGE_PULL_POLICY")
+        ),
         command=["bash", "-c", _WIRING_GATE_SCRIPT],
         env=[
             kubernetes.client.V1EnvVar(
+                local_vars_configuration=MODEL_CONFIGURATION,
                 name="NODE_ID",
                 value_from=kubernetes.client.V1EnvVarSource(
+                    local_vars_configuration=MODEL_CONFIGURATION,
                     field_ref=kubernetes.client.V1ObjectFieldSelector(
-                        field_path=f"metadata.labels['{NODE_ID_LABEL}']"
-                    )
+                        local_vars_configuration=MODEL_CONFIGURATION,
+                        field_path=f"metadata.labels['{NODE_ID_LABEL}']",
+                    ),
                 ),
             ),
             kubernetes.client.V1EnvVar(
+                local_vars_configuration=MODEL_CONFIGURATION,
                 name="POD_UID",
                 value_from=kubernetes.client.V1EnvVarSource(
-                    field_ref=kubernetes.client.V1ObjectFieldSelector(field_path="metadata.uid")
+                    local_vars_configuration=MODEL_CONFIGURATION,
+                    field_ref=kubernetes.client.V1ObjectFieldSelector(
+                        local_vars_configuration=MODEL_CONFIGURATION, field_path="metadata.uid"
+                    ),
                 ),
             ),
             kubernetes.client.V1EnvVar(
+                local_vars_configuration=MODEL_CONFIGURATION,
                 name="SESSION_RUN_ID",
                 value_from=kubernetes.client.V1EnvVarSource(
+                    local_vars_configuration=MODEL_CONFIGURATION,
                     field_ref=kubernetes.client.V1ObjectFieldSelector(
-                        field_path=f"metadata.labels['{POD_SESSION_RUN_LABEL}']"
-                    )
+                        local_vars_configuration=MODEL_CONFIGURATION,
+                        field_path=f"metadata.labels['{POD_SESSION_RUN_LABEL}']",
+                    ),
                 ),
             ),
         ],
         security_context=kubernetes.client.V1SecurityContext(
-            capabilities=kubernetes.client.V1Capabilities(drop=["ALL"]),
+            local_vars_configuration=MODEL_CONFIGURATION,
+            capabilities=kubernetes.client.V1Capabilities(
+                local_vars_configuration=MODEL_CONFIGURATION, drop=["ALL"]
+            ),
             read_only_root_filesystem=True,
             allow_privilege_escalation=False,
         ),
         resources=kubernetes.client.V1ResourceRequirements(
+            local_vars_configuration=MODEL_CONFIGURATION,
             requests={"memory": "16Mi", "cpu": "10m"},
             limits={"memory": "32Mi", "cpu": "100m"},
         ),
         volume_mounts=[
             kubernetes.client.V1VolumeMount(
-                name="wiring-status", mount_path="/wiring-status", read_only=True
+                local_vars_configuration=MODEL_CONFIGURATION,
+                name=WIRING_STATUS_VOLUME,
+                mount_path=f"/{WIRING_STATUS_VOLUME}",
+                read_only=True,
             ),
         ],
     )
 
 
-def _wiring_status_volume(node_id: str) -> kubernetes.client.V1Volume:
+def _wiring_status_volume() -> kubernetes.client.V1Volume:
+    """The directory the Node Agent writes this pod's wiring proof into.
+
+    A disk-backed emptyDir: the kubelet creates it on the host before the
+    pod sandbox, and the Node Agent writes the proof file there from the
+    host side the moment it writes the proof annotation. The pod is
+    creatable before any proof exists, when the directory is empty.
+    """
     return kubernetes.client.V1Volume(
-        name="wiring-status",
-        config_map=kubernetes.client.V1ConfigMapVolumeSource(
-            name=WIRING_STATUS_CONFIGMAP,
-            # Project only this node's proof, never the whole multi-node
-            # status document. The proof appears only after the Node Agent
-            # wires; the pod must be creatable before it exists.
-            items=[
-                kubernetes.client.V1KeyToPath(key=node_id, path="status.json"),
-            ],
-            optional=True,
+        local_vars_configuration=MODEL_CONFIGURATION,
+        name=WIRING_STATUS_VOLUME,
+        empty_dir=kubernetes.client.V1EmptyDirVolumeSource(
+            local_vars_configuration=MODEL_CONFIGURATION, size_limit="1Mi"
         ),
     )
 
@@ -200,8 +261,10 @@ def build_session_pod(
     )
     if reserved_containers:
         raise ValueError("composition may not use the reserved container name 'wiring-gate'")
-    if any(volume.name == "wiring-status" for volume in composition.volumes):
-        raise ValueError("composition may not use the reserved volume name 'wiring-status'")
+    if any(volume.name == WIRING_STATUS_VOLUME for volume in composition.volumes):
+        raise ValueError(
+            f"composition may not use the reserved volume name {WIRING_STATUS_VOLUME!r}"
+        )
     declared = [container.name for container in composition.containers]
     if composition.primary_container not in declared:
         raise ValueError(
@@ -210,7 +273,9 @@ def build_session_pod(
         )
 
     return kubernetes.client.V1Pod(
+        local_vars_configuration=MODEL_CONFIGURATION,
         metadata=kubernetes.client.V1ObjectMeta(
+            local_vars_configuration=MODEL_CONFIGURATION,
             name=pod_name,
             namespace=namespace,
             labels=labels,
@@ -226,19 +291,25 @@ def build_session_pod(
             owner_references=[owner_ref],
         ),
         spec=kubernetes.client.V1PodSpec(
+            local_vars_configuration=MODEL_CONFIGURATION,
             node_name=target_node,
             init_containers=[_wiring_gate_container(), *composition.init_containers],
             containers=list(composition.containers),
-            volumes=[*composition.volumes, _wiring_status_volume(node_id)],
+            volumes=[*composition.volumes, _wiring_status_volume()],
             restart_policy="Never",
             automount_service_account_token=False,
             # Fast DNS timeout: pod IPs have no PTR records in CoreDNS.
             # Without this, every reverse DNS lookup (traceroute hops, sshd
             # client lookup, any gethostbyaddr) waits 10+ seconds.
             dns_config=kubernetes.client.V1PodDNSConfig(
+                local_vars_configuration=MODEL_CONFIGURATION,
                 options=[
-                    kubernetes.client.V1PodDNSConfigOption(name="timeout", value="1"),
-                    kubernetes.client.V1PodDNSConfigOption(name="attempts", value="1"),
+                    kubernetes.client.V1PodDNSConfigOption(
+                        local_vars_configuration=MODEL_CONFIGURATION, name="timeout", value="1"
+                    ),
+                    kubernetes.client.V1PodDNSConfigOption(
+                        local_vars_configuration=MODEL_CONFIGURATION, name="attempts", value="1"
+                    ),
                 ],
             ),
         ),

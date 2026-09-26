@@ -57,14 +57,38 @@ if [ "$checked" -eq 0 ]; then
     exit 1
 fi
 
-# Session pods (FRR et al) change rarely by design; show the deployed FRR
-# tag for visibility without gating on it.
-frr_tree="$(bash "$ROOT_DIR/scripts/na-images.sh" image-for frr 2>/dev/null || echo "?")"
+# Session pods change only on make session; the FRR row is shown without
+# gating on it. Session pods name the FRR image the way make session gave it:
+# the tree's tag and the registry's digest (the tag alone in single-node mode).
+short_ref() {
+    local ref="${1##*/}" digest=""
+    ref="${ref#*:}"
+    case "$ref" in
+        *@sha256:*) digest="${ref##*@sha256:}"; ref="${ref%%@*}@${digest:0:12}" ;;
+    esac
+    printf '%s' "$ref"
+}
+frr_tag_ref="$(bash "$ROOT_DIR/scripts/na-images.sh" image-for frr 2>/dev/null || echo "?")"
+frr_repo="${frr_tag_ref%:*}"
+frr_tree="$(bash "$ROOT_DIR/scripts/na-images.sh" session-image-for frr 2>/dev/null || true)"
 frr_running="$(kubectl get pods -n "$NAMESPACE" -l nodalarc.io/session=true \
-    -o jsonpath='{.items[0].spec.containers[0].image}' 2>/dev/null || echo "no session")"
-frr_marker="info"
-[ "$frr_running" != "no session" ] && [ "$frr_running" != "$frr_tree" ] && frr_marker="STALE (sessions redeploy on make session)"
-rows+="frr (session pods)|${frr_tree##*:}|${frr_running##*:}|$frr_marker"$'\n'
+    -o jsonpath='{.items[*].spec.containers[*].image}' 2>/dev/null \
+    | tr ' ' '\n' | awk -v repo="$frr_repo" 'index($0, repo ":") == 1 || index($0, repo "@") == 1' \
+    | sort -u || true)"
+if [ -z "$frr_running" ]; then
+    frr_shown="no FRR session pods"
+    frr_marker="info"
+else
+    frr_shown="$(printf '%s\n' "$frr_running" | while IFS= read -r ref; do short_ref "$ref"; echo; done | paste -sd ' ')"
+    if [ -z "$frr_tree" ]; then
+        frr_marker="UNKNOWN (the registry did not name the tree's FRR image)"
+    elif [ "$frr_running" = "$frr_tree" ]; then
+        frr_marker="ok"
+    else
+        frr_marker="STALE (sessions redeploy on make session)"
+    fi
+fi
+rows+="frr (session pods)|$(short_ref "${frr_tree:-?}")|$frr_shown|$frr_marker"$'\n'
 
 if [ "$CHECK_MODE" = "--check" ]; then
     if [ "$drifted" -ne 0 ]; then

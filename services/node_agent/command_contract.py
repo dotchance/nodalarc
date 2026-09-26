@@ -9,6 +9,7 @@ fence between untrusted request bytes and kernel mutation.
 from __future__ import annotations
 
 import math
+import threading
 from collections.abc import Iterable
 from dataclasses import dataclass
 
@@ -20,17 +21,51 @@ KIND_SET_LATENCY = "SetLatency"
 KIND_KERNEL_INVENTORY = "KernelInventory"
 
 
-@dataclass(frozen=True)
-class RuntimeFence:
-    session_id: str
-    wiring_generation: str
-
-
 class CommandContractError(ValueError):
     def __init__(self, code: int, message: str) -> None:
         super().__init__(message)
         self.code = code
         self.message = message
+
+
+class WriterEpochFloor:
+    """The highest Scheduler writer epoch this Node Agent accepted for its session.
+
+    One instance lives as long as the Node Agent process and is shared by
+    every fence it builds, so a rewire of the same session keeps the floor.
+    It holds the floor of one session and wiring generation: a command for
+    any other pair is refused by the session and generation checks before it
+    reaches the floor, and a new pair starts a new floor. A restarted Node
+    Agent rebuilds the floor from the first commands it accepts.
+    """
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._key: tuple[str, str] | None = None
+        self._floor = 0
+
+    def admit(self, session_id: str, wiring_generation: str, writer_epoch: int) -> None:
+        """Accept ``writer_epoch`` and raise the floor to it, or refuse a stale writer."""
+        with self._lock:
+            key = (session_id, wiring_generation)
+            if key != self._key:
+                self._key = key
+                self._floor = 0
+            if writer_epoch < self._floor:
+                raise CommandContractError(
+                    node_agent_pb2.NODE_AGENT_STALE_WRITER,
+                    f"stale writer epoch {writer_epoch}; a Scheduler with writer epoch "
+                    f"{self._floor} already commands session {session_id!r} "
+                    f"generation {wiring_generation!r}",
+                )
+            self._floor = writer_epoch
+
+
+@dataclass(frozen=True)
+class RuntimeFence:
+    session_id: str
+    wiring_generation: str
+    writer_floor: WriterEpochFloor
 
 
 def validate_envelope(request, *, expected_kind: str, fence: RuntimeFence) -> None:
@@ -53,7 +88,13 @@ def validate_envelope(request, *, expected_kind: str, fence: RuntimeFence) -> No
     env = request.envelope
     missing = [
         field
-        for field in ("operation_id", "session_id", "wiring_generation", "operation_kind")
+        for field in (
+            "operation_id",
+            "session_id",
+            "wiring_generation",
+            "operation_kind",
+            "writer_epoch",
+        )
         if not getattr(env, field)
     ]
     if missing:
@@ -77,6 +118,7 @@ def validate_envelope(request, *, expected_kind: str, fence: RuntimeFence) -> No
             "stale wiring_generation "
             f"{env.wiring_generation!r}; current generation is {fence.wiring_generation!r}",
         )
+    fence.writer_floor.admit(env.session_id, env.wiring_generation, env.writer_epoch)
 
 
 def _require_nonempty(value: str, field: str) -> None:
@@ -243,12 +285,14 @@ def envelope(
     session_id: str,
     wiring_generation: str,
     operation_kind: str,
+    writer_epoch: int,
 ) -> node_agent_pb2.CommandEnvelope:
     return node_agent_pb2.CommandEnvelope(
         operation_id=operation_id,
         session_id=session_id,
         wiring_generation=wiring_generation,
         operation_kind=operation_kind,
+        writer_epoch=writer_epoch,
     )
 
 

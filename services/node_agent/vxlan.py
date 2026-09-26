@@ -37,11 +37,15 @@ import os
 from collections.abc import Mapping
 from dataclasses import dataclass
 
-from nodalarc.runtime_naming import VxlanHostNames, vxlan_host_ifnames
+from nodalarc.runtime_naming import (
+    MANAGED_HOST_DEVICE_GROUP,
+    VxlanHostNames,
+    vxlan_host_ifnames,
+)
 from nodalarc.vxlan import VXLAN_DST_PORT
 
 from node_agent import kernel_verifier
-from node_agent.ground_bridge import _tc_mirred_remove, install_redirect_pair
+from node_agent.ground_bridge import _tc_mirred_redirect, _tc_mirred_remove, install_redirect_pair
 from node_agent.namespace_ops import _get_host_ns_fd, _in_namespace, _libc, _ns_lock
 
 log = logging.getLogger(__name__)
@@ -89,7 +93,7 @@ def _inventory(
         found = ipr.link_lookup(ifname=name)
         if not found:
             continue
-        kind = kernel_verifier.ingress_qdisc_kind(ipr, found[0])
+        kind = kernel_verifier.ingress_qdisc_kind(found[0])
         if kind is not None:
             ingress[name] = kind
     return _LinkInventory(
@@ -223,7 +227,7 @@ def create_vxlan_link(
                     )
                     return False
 
-                # 1. Create VXLAN interface
+                # 1. Create the VXLAN interface at its MTU.
                 ipr.link(
                     "add",
                     ifname=names.tunnel,
@@ -233,46 +237,36 @@ def create_vxlan_link(
                     vxlan_group=remote_ip,
                     vxlan_port=VXLAN_DST_PORT,
                     vxlan_learning=False,
+                    mtu=mtu,
+                    group=MANAGED_HOST_DEVICE_GROUP,
                 )
 
-                # 2. Create veth pair
+                # 2. Create the veth pair in one request: the host end under its
+                # name, the peer under the pod interface name inside the pod
+                # namespace, both ends at the MTU.
                 ipr.link(
                     "add",
                     ifname=names.host_veth,
                     kind="veth",
-                    peer={"ifname": names.pod_veth},
+                    mtu=mtu,
+                    group=MANAGED_HOST_DEVICE_GROUP,
+                    peer={"ifname": ifname, "net_ns_fd": pod_ns_fd, "mtu": mtu},
                 )
 
-                # 3. Set MTU on all interfaces
-                for name in names:
-                    links = ipr.link_lookup(ifname=name)
-                    if links:
-                        ipr.link("set", index=links[0], mtu=mtu)
-
-                # 4. Bring VXLAN and veth host-end UP (required for tc mirred)
+                # 3. Bring VXLAN and veth host-end UP (required for tc mirred)
                 for name in (names.tunnel, names.host_veth):
-                    links = ipr.link_lookup(ifname=name)
-                    if links:
-                        ipr.link("set", index=links[0], state="up")
+                    ipr.link("set", index=ipr.link_lookup(ifname=name)[0], state="up")
 
-                # 5. Move veth pod-end into target pod namespace via fd
-                links = ipr.link_lookup(ifname=names.pod_veth)
-                if not links:
-                    raise RuntimeError(f"veth pod-end {names.pod_veth} not found")
-                ipr.link("set", index=links[0], net_ns_fd=pod_ns_fd)
-
-            # 6. Install bidirectional tc mirred redirect (in host namespace)
-            install_redirect_pair(names.tunnel, names.host_veth)
+            # 4. Install bidirectional tc mirred redirect (in host namespace).
+            # Both devices were created just above and carry no qdisc.
+            _tc_mirred_redirect(names.tunnel, names.host_veth)
+            _tc_mirred_redirect(names.host_veth, names.tunnel)
     finally:
         os.close(pod_ns_fd)
 
-    # 7. Inside pod namespace: rename veth pod-end and bring UP
+    # 5. Inside pod namespace: bring the pod end UP
     def _configure_in_pod(ns_ipr):
-        links = ns_ipr.link_lookup(ifname=names.pod_veth)
-        if links:
-            idx = links[0]
-            ns_ipr.link("set", index=idx, ifname=ifname)
-            ns_ipr.link("set", index=idx, state="up")
+        ns_ipr.link("set", index=ns_ipr.link_lookup(ifname=ifname)[0], state="up")
 
     _in_namespace(pid, _configure_in_pod)
 
@@ -406,6 +400,7 @@ def attach_cross_node_ground(
                     vxlan_group=remote_ip,
                     vxlan_port=VXLAN_DST_PORT,
                     vxlan_learning=False,
+                    group=MANAGED_HOST_DEVICE_GROUP,
                 )
 
                 # Bring VXLAN and local host interface UP

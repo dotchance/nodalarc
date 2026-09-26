@@ -30,6 +30,7 @@ from nodalarc.substrate.manifest_contract import (
     POD_SESSION_RUN_LABEL,
     WIRING_MANIFEST_CONFIGMAP,
 )
+from nodalarc.substrate.wiring_status import WIRING_STATUS_ANNOTATION
 from nodalarc.workload_target import NODE_ID_LABEL
 
 from nodalarc_operator.workloads.materializer import WORKLOAD_SELECTION_ANNOTATION
@@ -219,6 +220,9 @@ class ObservedPod:
     pod_ip: str
     workloads_running: bool
     owners: str
+    # The Node Agent's wiring proof for this pod incarnation, as written; None
+    # until the Node Agent writes one. Validated where it is judged.
+    wiring_proof: str | None = None
 
     @property
     def provisioned(self) -> bool:
@@ -239,6 +243,9 @@ def _observed(pod: Any, pod_class: PodClass) -> ObservedPod:
         pod_ip=str(getattr(status, "pod_ip", "") or ""),
         workloads_running=_pod_workloads_running(pod),
         owners=_describe_owners(pod),
+        wiring_proof=(
+            dict(getattr(metadata, "annotations", None) or {}).get(WIRING_STATUS_ANNOTATION) or None
+        ),
     )
 
 

@@ -29,6 +29,8 @@ profile:
   - /bin/bash
   - -c
   - |-
+    trap 'exit 143' TERM
+    {
     set -u
     S=/run/ud3tn/aap2.socket
     until [ -S "$S" ]; do echo "waiting for aap2 socket"; sleep 2; done
@@ -62,6 +64,7 @@ profile:
       manage dtn://luna.dtn/ "$DTN_LUNA" luna
       sleep 10
     done
+    } & wait $!
   root_filesystem: read_only
   volumes:
   - name: run

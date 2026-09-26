@@ -425,12 +425,13 @@ def _two_node_site_session() -> dict:
 class TestRenderAndReadiness:
     def test_multi_node_site_runs_terr0_active_single_node_stays_passive(self) -> None:
         from nodalarc.models.resolved_session import SourceContext
+        from nodalarc.workloads.adapter import SessionContext
 
         from adapters.frr.template_vars import build_template_vars_from_resolved
 
         def terr0_facts(resolved, node):
             vars_for_node = build_template_vars_from_resolved(
-                resolved,
+                SessionContext(resolved=resolved),
                 node,
                 domains=resolved.routing_domains_for(node.node_id),
                 sid_by_domain=resolved.sid_index_by_domain(),

@@ -81,19 +81,54 @@ def test_mode_resolver_refuses_a_registry_prefix_even_with_a_host(tmp_path: Path
     assert "REGISTRY_PREFIX is not a setting" in result.stderr
 
 
-def test_image_inventory_generates_runtime_helm_args_without_cluster() -> None:
+_BASE_DIGEST = "sha256:" + "b" * 64
+
+
+def _registry_stub(path: Path) -> None:
+    """A registry that answers a manifest HEAD for the base image at tag abc123."""
+    _stub(
+        path,
+        "curl",
+        'case "$*" in\n'
+        '  *"/v2/nodalarc/base/manifests/abc123"*) '
+        f'printf "HTTP/1.1 200 OK\\r\\nDocker-Content-Digest: {_BASE_DIGEST}\\r\\n\\r\\n" ;;\n'
+        "  *) exit 22 ;;\n"
+        "esac",
+    )
+
+
+def test_image_inventory_generates_runtime_helm_args_without_cluster(tmp_path: Path) -> None:
+    _registry_stub(tmp_path)
     result = _run(
         ["bash", "scripts/na-images.sh", "helm-image-args"],
         env={"NA_IMAGES_NO_CLUSTER": "1", "REGISTRY_HOST": "registry.local:5000"},
+        path_dir=tmp_path,
     )
     assert result.returncode == 0, result.stderr
     output = result.stdout
     assert "--set-string=images.ome=registry.local:5000/nodalarc/ome:abc123" in output
+    # A session image is named by the registry's content digest.
+    assert (
+        f"--set-string=images.base=registry.local:5000/nodalarc/base:abc123@{_BASE_DIGEST}"
+        in output
+    )
     # Session images have no chart value: the Operator reads no FRR or probe image.
     assert "images.frr" not in output
     assert "images.probe" not in output
     assert "--set-string=images.natsBox=natsio/nats-box:0.19.3" in output
     assert "--set-string=imagePullPolicy=Always" in output
+
+
+def test_a_session_image_the_registry_cannot_name_by_digest_fails(tmp_path: Path) -> None:
+    _stub(tmp_path, "curl", "exit 22")
+    for command in ("helm-image-args", "workload-dev-overrides-values"):
+        result = _run(
+            ["bash", "scripts/na-images.sh", command],
+            env={"NA_IMAGES_NO_CLUSTER": "1", "REGISTRY_HOST": "registry.local:5000"},
+            path_dir=tmp_path,
+        )
+        assert result.returncode != 0, command
+        assert "reported no content digest" in result.stderr
 
 
 def test_registry_catalog_failure_is_not_treated_as_empty(tmp_path: Path) -> None:
@@ -226,7 +261,12 @@ def test_session_readiness_requires_reviewed_transition_and_live_pod_counts() ->
     assert "init_platform_config(Path(sys.argv[3]))" in script
     assert ".runtime_session" not in script
     assert "CatalogClosureCollector.collect" in script
-    assert '"$api_base/api/v1/sessions"' in script
+    # The switch carries this checkout's identities; VS-API compares them with
+    # its installed catalog and refuses a difference. No listing or download
+    # precedes the switch.
+    assert 'source_revision="$document_digest"' in script
+    assert '"$api_base/api/v1/sessions"' not in script
+    assert "/api/v1/sessions/yaml" not in script
     assert '"$api_base/api/v1/sessions/switch"' in script
     assert '"$api_base/api/v1/session-transitions/$operation_id"' in script
     assert '"expected_document_digest"' in script
@@ -543,6 +583,62 @@ def test_drift_gate_fails_when_the_inventory_does_not_answer(tmp_path: Path) -> 
     )
     assert result.returncode != 0
     assert "inventory did not answer" in result.stderr
+
+
+_FRR_DIGEST = "sha256:" + "c" * 64
+_FRR_SESSION_REF = f"registry.local:5000/nodalarc/frr:abc123@{_FRR_DIGEST}"
+
+
+def _frr_row(tmp_path: Path, *, session_images: str, registry_has_frr: bool = True) -> str:
+    """The FRR row of the drift table for session pods running ``session_images``."""
+    registry = (
+        f'  *"/v2/nodalarc/frr/manifests/abc123"*) '
+        f'printf "HTTP/1.1 200 OK\\r\\nDocker-Content-Digest: {_FRR_DIGEST}\\r\\n\\r\\n" ;;\n'
+        if registry_has_frr
+        else ""
+    )
+    _stub(tmp_path, "curl", f'case "$*" in\n{registry}  *) exit 22 ;;\nesac')
+    _stub(
+        tmp_path,
+        "kubectl",
+        f'case "$*" in\n  *"nodalarc.io/session=true"*) printf "%s" "{session_images}" ;;\n'
+        "  *) exit 0 ;;\nesac",
+    )
+    result = _run(
+        ["bash", "scripts/na-drift.sh"],
+        env={"NA_IMAGES_NO_CLUSTER": "1", "REGISTRY_HOST": "registry.local:5000"},
+        path_dir=tmp_path,
+    )
+    assert result.returncode == 0, result.stderr
+    return next(
+        line for line in result.stdout.splitlines() if line.startswith("frr (session pods)")
+    )
+
+
+def test_session_pods_running_the_trees_frr_image_are_current(tmp_path: Path) -> None:
+    base = f"registry.local:5000/nodalarc/base:abc123@{_BASE_DIGEST}"
+    row = _frr_row(tmp_path, session_images=f"{_FRR_SESSION_REF} {base} {_FRR_SESSION_REF}")
+    assert row.split()[-1] == "ok", row
+    assert f"abc123@{'c' * 12}" in row
+
+
+def test_session_pods_running_another_frr_image_are_stale(tmp_path: Path) -> None:
+    older = "registry.local:5000/nodalarc/frr:old999@sha256:" + "d" * 64
+    row = _frr_row(tmp_path, session_images=f"{_FRR_SESSION_REF} {older}")
+    assert "STALE" in row, row
+    assert f"old999@{'d' * 12}" in row
+
+
+def test_the_frr_row_says_unknown_when_the_registry_cannot_name_the_trees_image(
+    tmp_path: Path,
+) -> None:
+    row = _frr_row(tmp_path, session_images=_FRR_SESSION_REF, registry_has_frr=False)
+    assert "UNKNOWN" in row, row
+
+
+def test_the_frr_row_without_session_pods(tmp_path: Path) -> None:
+    row = _frr_row(tmp_path, session_images="")
+    assert "no FRR session pods" in row, row
 
 
 def test_platform_converged_fails_when_the_inventory_does_not_answer(tmp_path: Path) -> None:

@@ -207,6 +207,7 @@ class RuntimeConfigHealth:
         self._config_directory = Path(config_directory)
         self._pod_uid = pod_uid
         self._proof_path: Path | None = None
+        self._superseded: str | None = None
         self._lock = threading.Lock()
 
     def mark_loaded(self, runtime_config: MaterializedRuntimeConfig) -> None:
@@ -217,10 +218,21 @@ class RuntimeConfigHealth:
         with self._lock:
             self._proof_path = proof_path
 
+    def mark_superseded(self, reason: str) -> None:
+        """This process no longer serves its session; it is never ready again."""
+        if not reason:
+            raise ValueError("a superseded runtime needs a reason")
+        with self._lock:
+            self._superseded = reason
+
     def liveness(self) -> RuntimeConfigReadiness:
         return RuntimeConfigReadiness(True, "process alive")
 
     def readiness(self) -> RuntimeConfigReadiness:
+        with self._lock:
+            superseded = self._superseded
+        if superseded is not None:
+            return RuntimeConfigReadiness(False, f"superseded: {superseded}")
         session_path = self._config_directory / SESSION_YAML_FILENAME
         if not session_path.is_file():
             return RuntimeConfigReadiness(True, "waiting for session")

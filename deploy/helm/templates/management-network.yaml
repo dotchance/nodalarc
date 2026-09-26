@@ -22,6 +22,15 @@ rules:
   - apiGroups: ["nodalarc.io"]
     resources: ["constellationspecs"]
     verbs: ["get", "list", "watch"]
+  # The Scheduler holds the session writer lease. Its transition count is the
+  # writer epoch every Node Agent command carries.
+  - apiGroups: ["coordination.k8s.io"]
+    resources: ["leases"]
+    verbs: ["create"]
+  - apiGroups: ["coordination.k8s.io"]
+    resources: ["leases"]
+    resourceNames: ["nodalarc-scheduler-writer"]
+    verbs: ["get", "update"]
   # Note: nodes is cluster-scoped — see ClusterRole below
 ---
 apiVersion: rbac.authorization.k8s.io/v1

@@ -20,12 +20,13 @@ profile:
   - /bin/bash
   - -c
   - >-
-    while true; do
+    trap 'exit 143' TERM;
+    { while true; do
     echo "== attempt $(date -u +%H:%M:%SZ)";
     /usr/local/bin/picoquicdemo -D -n server "$QUIC_SERVER" 4433 /1000000;
     echo "== picoquicdemo exit=$?";
     sleep 15;
-    done
+    done; } & wait $!
   root_filesystem: read_only
   volumes:
   - name: tmp

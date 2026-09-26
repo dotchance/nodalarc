@@ -1216,26 +1216,20 @@ def _run_pacing(
             _nc = await _nats.connect(_nats_url(), **_OPTS)
             try:
                 _js = _nc.jetstream()
-                from nats.js.api import DeliverPolicy
+                from nats.js.errors import NotFoundError
                 from nodalarc.scheduling_checkpoint import (
                     decode_retained_replay_anchor,
                     decode_retained_scheduling_checkpoint,
                 )
 
                 async def _last_retained(subject: str) -> bytes | None:
-                    sub = await _js.subscribe(
-                        subject,
-                        stream=_STREAM,
-                        ordered_consumer=True,
-                        deliver_policy=DeliverPolicy.LAST_PER_SUBJECT,
-                    )
+                    # One request to the stream: the retained message, or a
+                    # definite "none retained". No wait for a delivery that
+                    # may never come.
                     try:
-                        msg = await sub.next_msg(timeout=2.0)
-                        return msg.data
-                    except TimeoutError:
+                        return (await _js.get_last_msg(_STREAM, subject)).data
+                    except NotFoundError:
                         return None
-                    finally:
-                        await sub.unsubscribe()
 
                 ckpt_bytes = await _last_retained(subj_checkpoint)
                 if ckpt_bytes is None:
@@ -1788,6 +1782,18 @@ def _build_argument_parser() -> argparse.ArgumentParser:
     return parser
 
 
+class _StoppedBeforePacing(BaseException):
+    """A stop signal arrived before the pacing loop took over signal handling."""
+
+    def __init__(self, signum: int) -> None:
+        super().__init__(signum)
+        self.signum = signum
+
+
+def _raise_stopped_before_pacing(signum: int, _frame: object) -> None:
+    raise _StoppedBeforePacing(signum)
+
+
 def main() -> None:
     """CLI entry point."""
     _configure_logging("nodal.arc.ome", nats_level=logging.INFO)
@@ -1812,29 +1818,39 @@ def main() -> None:
     import signal
     import threading
 
-    # Health server must start BEFORE the session config wait.
-    # K8s liveness probe hits :8081 immediately — if the health server
-    # doesn't start until after config loads, the probe fails and K8s
-    # kills the pod before it ever gets the config.
-    session_config_dir = args.session_config_dir or Path(args.session).parent
-    pod_uid = os.environ["POD_UID"]
-    release = os.environ["NODALARC_RELEASE"]
-    build = os.environ["NODAL_BUILD"]
-    runtime_health = RuntimeConfigHealth(session_config_dir, pod_uid=pod_uid)
-    _start_health_server(runtime_health)
+    # Kubernetes stops a pod with SIGTERM, and the kernel does not deliver a
+    # signal to a PID namespace's init process unless it installed a handler.
+    # Until pacing starts, a stop request ends the process at once, including
+    # while it waits for its session configuration.
+    signal.signal(signal.SIGTERM, _raise_stopped_before_pacing)
+    signal.signal(signal.SIGINT, _raise_stopped_before_pacing)
+    try:
+        # Health server must start BEFORE the session config wait.
+        # K8s liveness probe hits :8081 immediately — if the health server
+        # doesn't start until after config loads, the probe fails and K8s
+        # kills the pod before it ever gets the config.
+        session_config_dir = args.session_config_dir or Path(args.session).parent
+        pod_uid = os.environ["POD_UID"]
+        release = os.environ["NODALARC_RELEASE"]
+        build = os.environ["NODAL_BUILD"]
+        runtime_health = RuntimeConfigHealth(session_config_dir, pod_uid=pod_uid)
+        _start_health_server(runtime_health)
 
-    runtime_config = load_mounted_runtime_config(
-        config_directory=session_config_dir,
-        installed_shipped_root=args.installed_shipped_root,
-        origin="ome",
-        namespace=os.environ.get("POD_NAMESPACE"),
-        pod_uid=pod_uid,
-        release=release,
-        build=build,
-        log=logging.getLogger(__name__),
-    )
-    pre_cfg = _session_bundle_from_resolution(runtime_config.config.resolution)
-    runtime_health.mark_loaded(runtime_config)
+        runtime_config = load_mounted_runtime_config(
+            config_directory=session_config_dir,
+            installed_shipped_root=args.installed_shipped_root,
+            origin="ome",
+            namespace=os.environ.get("POD_NAMESPACE"),
+            pod_uid=pod_uid,
+            release=release,
+            build=build,
+            log=logging.getLogger(__name__),
+        )
+        pre_cfg = _session_bundle_from_resolution(runtime_config.config.resolution)
+        runtime_health.mark_loaded(runtime_config)
+    except _StoppedBeforePacing as stop:
+        logging.info("Shutdown signal received (%d) before pacing started", stop.signum)
+        return
     session_id = pre_cfg.session_id
     from nodal.logging import set_session
 

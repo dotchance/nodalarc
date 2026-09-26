@@ -55,6 +55,9 @@ class AgentCommandResult:
     dirty_kernel: bool
     unknown_outcome: bool
     fence_failure: bool
+    # The Node Agent refused this Scheduler's writer epoch: a newer Scheduler
+    # commands the session. Always also a fence failure.
+    writer_fenced: bool
     details: dict[str, Any]
 
 
@@ -94,6 +97,10 @@ class ActuationResult:
         return any(result.fence_failure for result in self.agent_results)
 
     @property
+    def writer_fenced(self) -> bool:
+        return any(result.writer_fenced for result in self.agent_results)
+
+    @property
     def has_failures(self) -> bool:
         return bool(self.failed_pairs) or any(
             result.failure_class != ActuationFailureClass.NONE for result in self.agent_results
@@ -127,6 +134,7 @@ FENCE_CODES = {
     node_agent_pb2.NODE_AGENT_STALE_SESSION,
     node_agent_pb2.NODE_AGENT_STALE_GENERATION,
     node_agent_pb2.NODE_AGENT_INVALID_ENVELOPE,
+    node_agent_pb2.NODE_AGENT_STALE_WRITER,
 }
 
 
@@ -159,6 +167,10 @@ def classify_agent_response(
     aggregate_code = getattr(result, "error_code", node_agent_pb2.NODE_AGENT_ERROR_UNSPECIFIED)
     entry_codes = {entry.error_code for entry in entries}
     fence_failure = aggregate_code in FENCE_CODES or bool(entry_codes & FENCE_CODES)
+    writer_fenced = (
+        aggregate_code == node_agent_pb2.NODE_AGENT_STALE_WRITER
+        or node_agent_pb2.NODE_AGENT_STALE_WRITER in entry_codes
+    )
     dirty_kernel = bool(getattr(result, "dirty_kernel", False)) or any(
         getattr(entry, "dirty_kernel", False) for entry in entries
     )
@@ -199,6 +211,7 @@ def classify_agent_response(
         "dirty_kernel": dirty_kernel,
         "unknown_outcome": unknown,
         "fence_failure": fence_failure,
+        "writer_fenced": writer_fenced,
         "requested": [list(item) for item in sorted(requested_set)],
         "returned": [list(item) for item in sorted(returned_set)],
         "interface_results": [
@@ -225,6 +238,7 @@ def classify_agent_response(
         dirty_kernel=dirty_kernel,
         unknown_outcome=unknown,
         fence_failure=fence_failure,
+        writer_fenced=writer_fenced,
         details=details,
     )
 
@@ -257,6 +271,7 @@ def classify_agent_exception(
         "dirty_kernel": True,
         "unknown_outcome": True,
         "fence_failure": False,
+        "writer_fenced": False,
         "requested": [list(item) for item in sorted(requested_set)],
         "returned": [],
         "interface_results": [],
@@ -270,6 +285,7 @@ def classify_agent_exception(
         dirty_kernel=True,
         unknown_outcome=True,
         fence_failure=False,
+        writer_fenced=False,
         details=details,
     )
 

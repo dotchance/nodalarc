@@ -20,6 +20,7 @@ from collections.abc import Iterator
 from dataclasses import dataclass
 
 from nodalarc.runtime_naming import (
+    MANAGED_HOST_DEVICE_GROUP,
     gs_bridge_port_name,
     isl_host_name,
     satellite_ground_host_name,
@@ -78,7 +79,7 @@ def install_redirect_pair(a: str, b: str) -> None:
             indexes[name] = found[0]
         occupied: dict[str, str] = {}
         for name in (a, b):
-            kind = kernel_verifier.ingress_qdisc_kind(ipr, indexes[name])
+            kind = kernel_verifier.ingress_qdisc_kind(indexes[name])
             if kind is not None:
                 occupied[name] = kind
         proofs: tuple[kernel_verifier.Proof, ...] = ()
@@ -423,30 +424,7 @@ def create_ground_bridge(
             log.debug("%s already exists in GS ns(%s)", ifname, gs_pid)
             return PodVeth(gs_port, ifname, created=False)
 
-        rand = os.urandom(3).hex()
-        tmp_host = f"_na_h{rand}"[:15]
-        tmp_ns = f"_na_n{rand}"[:15]
-
-        for tmp in [tmp_host, tmp_ns]:
-            stale = ipr.link_lookup(ifname=tmp)
-            if stale:
-                ipr.link("del", index=stale[0])
-
-        ipr.link("add", ifname=tmp_host, peer={"ifname": tmp_ns}, kind="veth")
-
-        host_idx = ipr.link_lookup(ifname=tmp_host)[0]
-        ipr.link("set", index=host_idx, ifname=gs_port, mtu=mtu)
-
-        ns_idx = ipr.link_lookup(ifname=tmp_ns)[0]
-        ipr.link("set", index=ns_idx, net_ns_pid=gs_pid)
-
-        _tmp_ns = tmp_ns
-
-        def _rename_iface(ns_ipr: IPRoute) -> None:
-            idx = ns_ipr.link_lookup(ifname=_tmp_ns)[0]
-            ns_ipr.link("set", index=idx, ifname=_target_ifname, mtu=mtu)
-
-        _in_namespace(gs_pid, _rename_iface)
+        _create_veth_into_pod(ipr, gs_port, ifname, gs_pid, mtu)
 
         log.debug("Created GS port %s → %s in ns(%s)", gs_port, ifname, gs_pid)
     finally:
@@ -487,30 +465,7 @@ def create_satellite_ground_veth(
             log.debug("%s already exists in sat ns(%s)", ifname, sat_pid)
             return PodVeth(host_name, ifname, created=False)
 
-        rand = os.urandom(3).hex()
-        tmp_host = f"_na_h{rand}"[:15]
-        tmp_ns = f"_na_n{rand}"[:15]
-
-        for tmp in [tmp_host, tmp_ns]:
-            stale = ipr.link_lookup(ifname=tmp)
-            if stale:
-                ipr.link("del", index=stale[0])
-
-        ipr.link("add", ifname=tmp_host, peer={"ifname": tmp_ns}, kind="veth")
-
-        host_idx = ipr.link_lookup(ifname=tmp_host)[0]
-        ipr.link("set", index=host_idx, ifname=host_name, mtu=mtu)
-
-        ns_idx = ipr.link_lookup(ifname=tmp_ns)[0]
-        ipr.link("set", index=ns_idx, net_ns_pid=sat_pid)
-
-        _tmp_ns = tmp_ns
-
-        def _rename_iface(ns_ipr: IPRoute) -> None:
-            idx = ns_ipr.link_lookup(ifname=_tmp_ns)[0]
-            ns_ipr.link("set", index=idx, ifname=_target_ifname, mtu=mtu)
-
-        _in_namespace(sat_pid, _rename_iface)
+        _create_veth_into_pod(ipr, host_name, ifname, sat_pid, mtu)
     finally:
         ipr.close()
 
@@ -528,10 +483,25 @@ def _pod_netns_fd(pid: int) -> Iterator[int]:
         os.close(fd)
 
 
-def _temporary_veth_names() -> tuple[str, str]:
-    """Fresh temporary names for one veth pair minted in the host namespace."""
-    rand = os.urandom(3).hex()
-    return f"_na_h{rand}"[:15], f"_na_n{rand}"[:15]
+def _create_veth_into_pod(
+    ipr: IPRoute, host_name: str, pod_ifname: str, pid: int, mtu: int
+) -> None:
+    """Create a veth pair whose peer lands, named and sized, in a pod namespace.
+
+    One RTM_NEWLINK: the host end gets ``host_name``, the peer gets
+    ``pod_ifname`` inside the network namespace of ``pid``, and both ends get
+    ``mtu``. The host end joins the managed device group. Both ends start
+    admin DOWN. A name already taken on either side
+    fails the request (EEXIST) and creates nothing.
+    """
+    ipr.link(
+        "add",
+        ifname=host_name,
+        kind="veth",
+        mtu=mtu,
+        group=MANAGED_HOST_DEVICE_GROUP,
+        peer={"ifname": pod_ifname, "net_ns_pid": pid, "mtu": mtu},
+    )
 
 
 def create_mediated_isl(
@@ -637,38 +607,22 @@ def create_mediated_isl(
                 created[host_name] = False
                 continue
 
-            # Create the veth pair under temporary names in the host namespace.
-            # A device already under a temporary name is somebody's state: refuse,
-            # never delete it. Teardown and Case C cleanup remove it by prefix.
-            tmp_host, tmp_ns = _temporary_veth_names()
-            occupied = tuple(tmp for tmp in (tmp_host, tmp_ns) if ipr.link_lookup(ifname=tmp))
-            if occupied:
-                raise kernel_verifier.KernelStateConflict(
-                    subject, occupied, ("temporary name occupied",)
-                )
-
-            ipr.link("add", ifname=tmp_host, peer={"ifname": tmp_ns}, kind="veth")
-
-            # Host end: rename, set MTU, leave admin DOWN
-            host_index = ipr.link_lookup(ifname=tmp_host)[0]
-            ipr.link("set", index=host_index, ifname=host_name, mtu=mtu)
-
-            # Move pod end into target namespace
-            ns_idx = ipr.link_lookup(ifname=tmp_ns)[0]
-            ipr.link("set", index=ns_idx, net_ns_pid=pid)
+            # Both ends absent (the policy above refused every partial state):
+            # one request creates the pair with its final names, the MTU on
+            # both ends, and the pod end already inside the pod namespace. The
+            # host end stays admin DOWN.
+            _create_veth_into_pod(ipr, host_name, ifname, pid, mtu)
 
             # ONE JUMP: all pod-side work in a single _in_namespace call.
             # Default args bind loop variables at definition time (B023 fix).
             def _setup_pod_side(
                 ns_ipr: IPRoute,
-                _tmp=tmp_ns,
                 _if=ifname,
-                _m=mtu,
                 _p=pid,
                 _nid=node_id,
             ) -> None:
-                idx = ns_ipr.link_lookup(ifname=_tmp)[0]
-                ns_ipr.link("set", index=idx, ifname=_if, mtu=_m, state="up")
+                idx = ns_ipr.link_lookup(ifname=_if)[0]
+                ns_ipr.link("set", index=idx, state="up")
                 configure_interface(_p, _if, _nid, ipr=ns_ipr)
 
             _in_namespace(pid, _setup_pod_side)
@@ -677,7 +631,12 @@ def create_mediated_isl(
             ipr.close()
 
     # Install bidirectional tc mirred between host-side endpoints (host ns, no setns)
-    install_redirect_pair(host_a, host_b)
+    if created[host_a] and created[host_b]:
+        # Devices this call created carry no qdisc: nothing to prove or reuse.
+        _tc_mirred_redirect(host_a, host_b)
+        _tc_mirred_redirect(host_b, host_a)
+    else:
+        install_redirect_pair(host_a, host_b)
 
     log.debug(
         "Created mediated ISL: ns(%s)/%s [%s] ↔ [%s] ns(%s)/%s (mirred installed)",

@@ -49,6 +49,7 @@ def _make_dispatcher(read_lifecycle_identity=None) -> Dispatcher:
         agent_pool=MagicMock(),
         session_id=OWN_SESSION,
         wiring_generation=OWN_GENERATION,
+        writer_epoch=1,
         max_latency_age_s=1.0,
         gs_terminal_capacities={},
         gs_handover_modes={},
@@ -61,7 +62,12 @@ def _make_dispatcher(read_lifecycle_identity=None) -> Dispatcher:
     return dispatcher
 
 
-def _fatal_result(failure_class: ActuationFailureClass, operation: str = "SetLatency"):
+def _fatal_result(
+    failure_class: ActuationFailureClass,
+    operation: str = "SetLatency",
+    *,
+    writer_fenced: bool = False,
+):
     """An ISL actuation failure of the given class (FENCE or ISL_FAILURE)."""
     pair = ("sat-a", "sat-b")
     agent = AgentCommandResult(
@@ -73,7 +79,12 @@ def _fatal_result(failure_class: ActuationFailureClass, operation: str = "SetLat
         dirty_kernel=False,
         unknown_outcome=False,
         fence_failure=failure_class == ActuationFailureClass.FENCE,
-        details={"error_code": "NODE_AGENT_STALE_GENERATION"},
+        writer_fenced=writer_fenced,
+        details={
+            "error_code": "NODE_AGENT_STALE_WRITER"
+            if writer_fenced
+            else "NODE_AGENT_STALE_GENERATION"
+        },
     )
     pair_result = PairActuationResult(
         pair=pair,
@@ -182,3 +193,47 @@ def test_no_reader_stays_fatal():
 
     with pytest.raises(RuntimeError, match="Fatal actuation failure"):
         _handle(dispatcher, _fatal_result(ActuationFailureClass.FENCE))
+
+
+def test_a_refused_writer_epoch_is_supersession_without_an_authority_read():
+    """A Node Agent refused this instance's writer epoch: a newer Scheduler holds
+    the session. The refusal is the proof; this instance stops cleanly even
+    though the lifecycle authority still names its session and generation."""
+    reader = MagicMock(return_value=CURRENT_AUTHORITY)
+    dispatcher = _make_dispatcher(reader)
+
+    with pytest.raises(DispatcherSuperseded, match="refused writer epoch 1"):
+        _handle(dispatcher, _fatal_result(ActuationFailureClass.FENCE, writer_fenced=True))
+
+    _assert_clean_supersession(dispatcher)
+    reader.assert_not_called()
+
+
+def test_supersede_ends_run_with_dispatcher_superseded():
+    """Lease loss supersedes the dispatcher from outside the dispatch path."""
+    dispatcher = _make_dispatcher(lambda: CURRENT_AUTHORITY)
+    dispatcher.supersede("Writer lease now names another Scheduler")
+
+    assert dispatcher._running is False
+    assert dispatcher._stop_requested.is_set()
+    assert dispatcher._superseded_reason == "Writer lease now names another Scheduler"
+
+
+def test_a_stopping_dispatcher_audits_nothing():
+    """After stop the session's pods may be going away: no clean-state audit or
+    recovery verification runs, so none can report their removal as a fault."""
+    dispatcher = _make_dispatcher(lambda: CURRENT_AUTHORITY)
+    dispatcher._gs_capacities = {"gs-a": 1}
+    dispatcher.stop()
+
+    audited = []
+
+    async def _never(**kwargs):
+        audited.append(kwargs)
+
+    dispatcher._verify_gs_against_current_authority = _never
+    outcomes = asyncio.run(dispatcher._audit_clean_ground_kernel_state(sim_time=SIM_TIME))
+    asyncio.run(dispatcher._run_due_kernel_verifications(sim_time=SIM_TIME))
+
+    assert outcomes == {}
+    assert audited == []

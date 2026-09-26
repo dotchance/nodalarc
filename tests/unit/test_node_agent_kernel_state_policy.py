@@ -5,6 +5,7 @@ from __future__ import annotations
 import contextlib
 
 import pytest
+from nodalarc.runtime_naming import MANAGED_HOST_DEVICE_GROUP
 from node_agent import ground_bridge, kernel_verifier
 from node_agent.kernel_verifier import KernelStateConflict, Proof, reuse_or_refuse
 
@@ -92,7 +93,7 @@ def _pair(monkeypatch, *, occupied: dict[int, str], proven: bool):
     created: list[tuple[str, str]] = []
     monkeypatch.setattr(ground_bridge, "IPRoute", _Ipr)
     monkeypatch.setattr(
-        kernel_verifier, "ingress_qdisc_kind", lambda ipr, ifindex: occupied.get(ifindex)
+        kernel_verifier, "ingress_qdisc_kind", lambda ifindex: occupied.get(ifindex)
     )
     monkeypatch.setattr(
         kernel_verifier,
@@ -216,15 +217,13 @@ def _mediated(
     monkeypatch.setattr(
         ground_bridge, "_pod_netns_fd", lambda pid: contextlib.nullcontext(99), raising=False
     )
-    monkeypatch.setattr(
-        ground_bridge,
-        "_temporary_veth_names",
-        lambda: ("_na_hfixed", "_na_nfixed"),
-        raising=False,
-    )
     monkeypatch.setattr(ground_bridge, "_in_namespace", lambda pid, fn: pod_setups.append(pid))
     monkeypatch.setattr(
         ground_bridge, "install_redirect_pair", lambda a, b: redirects.append((a, b))
+    )
+    # Redirects between two devices the call created skip the occupancy proof.
+    monkeypatch.setattr(
+        ground_bridge, "_tc_mirred_redirect", lambda a, b: redirects.append(("new", a, b))
     )
     return ipr, pod_setups, redirects
 
@@ -247,7 +246,7 @@ def test_create_mediated_isl_creates_both_endpoints_when_absent(monkeypatch) -> 
     assert _create() == ground_bridge.MediatedIsl(HOST_A, HOST_B, True, True)
     assert [op for op, _ in ipr.calls if op == "add"] == ["add", "add"]
     assert pod_setups == [11, 22]
-    assert redirects == [(HOST_A, HOST_B)]
+    assert redirects == [("new", HOST_A, HOST_B), ("new", HOST_B, HOST_A)]
 
 
 def test_create_mediated_isl_reuses_a_proven_endpoint_without_touching_its_pod_side(
@@ -308,14 +307,28 @@ def test_create_mediated_isl_refuses_a_partial_endpoint_and_names_what_exists(mo
     assert ipr.calls == [] and pod_setups == [] and redirects == []
 
 
-def test_create_mediated_isl_refuses_an_occupied_temporary_name_and_deletes_nothing(
-    monkeypatch,
-) -> None:
-    ipr, pod_setups, redirects = _mediated(monkeypatch, present={"_na_hfixed": 9}, pod_ends={})
+def test_create_mediated_isl_creates_each_endpoint_in_one_request(monkeypatch) -> None:
+    """Final names, MTU on both ends and the pod namespace ride one RTM_NEWLINK;
+    nothing is renamed or moved afterwards."""
+    ipr, _pod_setups, _redirects = _mediated(monkeypatch, present={}, pod_ends={})
 
-    with pytest.raises(KernelStateConflict) as raised:
-        _create()
+    _create()
 
-    assert raised.value.failures == ("temporary name occupied",)
-    assert raised.value.present == ("_na_hfixed",)
-    assert ipr.calls == [] and pod_setups == [] and redirects == []
+    adds = [kwargs for op, kwargs in ipr.calls if op == "add"]
+    assert adds == [
+        {
+            "ifname": HOST_A,
+            "kind": "veth",
+            "mtu": 1500,
+            "group": MANAGED_HOST_DEVICE_GROUP,
+            "peer": {"ifname": "isl0", "net_ns_pid": 11, "mtu": 1500},
+        },
+        {
+            "ifname": HOST_B,
+            "kind": "veth",
+            "mtu": 1500,
+            "group": MANAGED_HOST_DEVICE_GROUP,
+            "peer": {"ifname": "isl1", "net_ns_pid": 22, "mtu": 1500},
+        },
+    ]
+    assert [op for op, _ in ipr.calls] == ["add", "add"]

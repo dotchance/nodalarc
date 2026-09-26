@@ -8,6 +8,8 @@ import pytest
 import yaml
 from vs_api.session_manager import SessionManager
 
+from tests.kube_watch_fixtures import replayed_snapshots
+
 CATALOG_SESSION = Path("catalog/nodalarc/sessions/earth-leo-heo-geo-luna-reachability.yaml")
 
 
@@ -92,6 +94,16 @@ class _SwitchApi:
         self.created_body = kwargs["body"]
         return {}
 
+    def list_namespaced_custom_object(self, **_kwargs):
+        from kubernetes.client.rest import ApiException
+
+        try:
+            return {"items": [self.get_namespaced_custom_object()]}
+        except ApiException as error:
+            if error.status == 404:
+                return {"items": []}
+            raise
+
 
 class _SwitchCoreV1:
     def __init__(self, pod_counts: list[int] | None = None) -> None:
@@ -101,7 +113,13 @@ class _SwitchCoreV1:
     def list_namespaced_pod(self, *_args, **_kwargs):
         idx = min(self.calls, len(self.pod_counts) - 1)
         self.calls += 1
-        return SimpleNamespace(items=[object() for _ in range(self.pod_counts[idx])])
+        return SimpleNamespace(
+            items=[
+                SimpleNamespace(metadata=SimpleNamespace(name=f"pod-{n}"))
+                for n in range(self.pod_counts[idx])
+            ],
+            metadata=SimpleNamespace(resource_version=str(self.calls)),
+        )
 
 
 async def _no_sleep(_seconds: float) -> None:
@@ -119,6 +137,7 @@ def _run_in_executor_inline(loop, _executor, operation, *args):
 
 def _patch_switch_waits(monkeypatch) -> None:
     monkeypatch.setattr("vs_api.session_manager.asyncio.sleep", _no_sleep)
+    monkeypatch.setattr("vs_api.session_manager.watch_snapshots", replayed_snapshots)
     monkeypatch.setattr(asyncio.BaseEventLoop, "run_in_executor", _run_in_executor_inline)
 
 

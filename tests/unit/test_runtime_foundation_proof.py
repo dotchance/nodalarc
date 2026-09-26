@@ -100,6 +100,7 @@ def _dispatcher(*, now=None) -> Dispatcher:
         agent_pool=pool,
         session_id="foundation-proof",
         wiring_generation="sha256:" + "6" * 64,
+        writer_epoch=1,
         max_latency_age_s=1.0,
         gs_terminal_capacities={"gs-multi": 2},
         gs_handover_modes={"gs-multi": "mbb"},
@@ -221,6 +222,7 @@ def _success(pair: tuple[str, str], *, operation: str) -> ActuationResult:
         dirty_kernel=False,
         unknown_outcome=False,
         fence_failure=False,
+        writer_fenced=False,
         details={"operation": operation, "pair": list(pair)},
     )
     return ActuationResult(
@@ -521,6 +523,11 @@ class _NoCheckpointJs:
     async def subscribe(self, *args, **kwargs):
         return _NoCheckpointSub()
 
+    async def get_last_msg(self, stream, subject):
+        from nats.js.errors import NotFoundError
+
+        raise NotFoundError
+
 
 class _NoCheckpointNc:
     def jetstream(self):
@@ -582,6 +589,7 @@ def _success_many(
         dirty_kernel=False,
         unknown_outcome=False,
         fence_failure=False,
+        writer_fenced=False,
         details={"operation": operation, "pair_count": len(pair_results)},
     )
     return ActuationResult(
@@ -709,6 +717,7 @@ def _dispatcher_for_captured_records(
         agent_pool=MagicMock(),
         session_id=session_id,
         wiring_generation="sha256:" + "6" * 64,
+        writer_epoch=1,
         max_latency_age_s=5.0,
         gs_terminal_capacities=dict.fromkeys(gs_ids, 100),
         gs_handover_modes=dict.fromkeys(gs_ids, "mbb"),

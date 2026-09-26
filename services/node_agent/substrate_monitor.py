@@ -22,6 +22,7 @@ import re
 import subprocess
 import threading
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
@@ -509,9 +510,13 @@ def configure_required_measurements(
         measurement_fn = measure_fn
 
     with _measure_lock:
+        ordered = sorted(pairs, key=lambda required: required.directional_key)
+        # Each target is measured on its own path; the measurements run
+        # together, so the whole set takes as long as the slowest target.
+        with ThreadPoolExecutor(max_workers=max(1, len(ordered))) as pool:
+            results = list(pool.map(measurement_fn, ordered))
         measurements = {
-            pair.target_node: measurement_fn(pair)
-            for pair in sorted(pairs, key=lambda required: required.directional_key)
+            pair.target_node: result for pair, result in zip(ordered, results, strict=True)
         }
         document = SubstrateStatusDocument(
             session_id=manifest.session_id,

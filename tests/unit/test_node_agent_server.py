@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import pytest
 from nodalarc.proto import node_agent_pb2
-from node_agent.command_contract import RuntimeFence
+from node_agent.command_contract import RuntimeFence, WriterEpochFloor
 from node_agent.server import DispatchGate, dispatch
 
 pytestmark = pytest.mark.usefixtures("_node_agent_ops_spool_path")
@@ -14,7 +14,9 @@ pytestmark = pytest.mark.usefixtures("_node_agent_ops_spool_path")
 
 SESSION_ID = "test-session"
 WIRING_GENERATION = "sha256:" + "a" * 64
-FENCE = RuntimeFence(session_id=SESSION_ID, wiring_generation=WIRING_GENERATION)
+FENCE = RuntimeFence(
+    session_id=SESSION_ID, wiring_generation=WIRING_GENERATION, writer_floor=WriterEpochFloor()
+)
 
 
 def _frame(kind: bytes, payload) -> bytes:
@@ -27,6 +29,7 @@ def _env(kind: str, generation: str = WIRING_GENERATION) -> node_agent_pb2.Comma
         session_id=SESSION_ID,
         wiring_generation=generation,
         operation_kind=kind,
+        writer_epoch=1,
     )
 
 
@@ -36,6 +39,7 @@ def _handles(pids):
     return {
         node_id: NamespaceHandle(
             node_id=node_id,
+            pod_name=node_id,
             pod_uid=f"pod-{node_id}",
             sandbox_id=f"sb-{node_id}",
             sandbox_attempt=0,

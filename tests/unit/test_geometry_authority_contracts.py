@@ -87,6 +87,7 @@ def _dispatcher() -> Dispatcher:
         agent_pool=pool,
         session_id="test-session",
         wiring_generation="sha256:" + "a" * 64,
+        writer_epoch=1,
         max_latency_age_s=1.0,
         gs_terminal_capacities={},
         gs_handover_modes={},

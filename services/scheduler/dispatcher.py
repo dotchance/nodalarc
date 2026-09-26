@@ -163,6 +163,13 @@ class DispatchIntent:
     rebaseline_counts: bool = False
 
 
+# How long an orderly stop waits for the reconcile in progress to finish before
+# cancelling it. Every Node Agent command is proved per entry, so a cancelled
+# reconcile leaves no unproved state behind; the bound keeps a stop well inside
+# the pod's termination grace period.
+_WORKER_DRAIN_TIMEOUT_S = 10.0
+
+
 class DispatcherSuperseded(Exception):
     """The wiring authority moved to a different session/generation.
 
@@ -202,6 +209,7 @@ class Dispatcher:
         agent_pool: AgentPool,
         session_id: str,
         wiring_generation: str,
+        writer_epoch: int,
         max_latency_age_s: float,
         required_substrate_pairs: list[RequiredSubstratePair] | None = None,
         substrate_measurements: dict[str, SubstrateMeasurement] | None = None,
@@ -273,6 +281,14 @@ class Dispatcher:
         if not wiring_generation:
             raise ValueError("wiring_generation is required")
         self._wiring_generation = wiring_generation
+        # The transition count of the session writer lease this instance
+        # holds; every Node Agent command carries it.
+        if writer_epoch < 1:
+            raise ValueError(f"writer_epoch must be at least 1, got {writer_epoch}")
+        self._writer_epoch = writer_epoch
+        # Set when another Scheduler took over the session; run() then raises
+        # DispatcherSuperseded once it has shut down.
+        self._superseded_reason: str | None = None
         self._hostname = socket.gethostname()
         self._scheduler_instance_id = (
             f"{self._hostname}-{os.getpid()}-{int(self._now().timestamp() * 1000)}"
@@ -354,6 +370,8 @@ class Dispatcher:
         self._last_latencies: dict[tuple[str, str], float] = {}
         self._current_sim_time: datetime | None = None
         self._running = False
+        # Set by stop(); run() waits on it instead of polling _running.
+        self._stop_requested = asyncio.Event()
         self._last_snapshot_seq: int = 0
         self._last_snapshot_sim_time: datetime | None = None
         self._required_substrate_pairs = list(required_substrate_pairs or [])
@@ -780,21 +798,21 @@ class Dispatcher:
 
         # --- Read retained SchedulingCheckpoint for recovery context ---
         try:
-            from nats.js.api import DeliverPolicy as _DP
+            from nats.js.errors import NotFoundError
             from nodalarc.nats_channels import (
                 STREAM_SESSION_EVENTS,
             )
+            from nodalarc.scheduling_checkpoint import decode_retained_scheduling_checkpoint
 
-            ckpt_sub = await js.subscribe(
-                self._subj_checkpoint,
-                stream=STREAM_SESSION_EVENTS,
-                ordered_consumer=True,
-                deliver_policy=_DP.LAST_PER_SUBJECT,
-            )
+            # One request to the stream: the retained checkpoint, or a definite
+            # "none retained" (NotFoundError). No wait for a delivery.
             try:
-                from nodalarc.scheduling_checkpoint import decode_retained_scheduling_checkpoint
-
-                ckpt_msg = await asyncio.wait_for(ckpt_sub.next_msg(), timeout=2.0)
+                ckpt_msg = await js.get_last_msg(STREAM_SESSION_EVENTS, self._subj_checkpoint)
+            except NotFoundError:
+                ckpt_msg = None
+            if ckpt_msg is None:
+                log.info("No SchedulingCheckpoint retained (fresh session)")
+            else:
                 ckpt = decode_retained_scheduling_checkpoint(ckpt_msg.data)
                 if ckpt is None:
                     log.info(
@@ -814,10 +832,6 @@ class Dispatcher:
                         len(ckpt.associations),
                         len(ckpt.pending_teardowns),
                     )
-            except TimeoutError as exc:
-                log.info("No SchedulingCheckpoint retained (fresh session): %s", type(exc).__name__)
-            finally:
-                await ckpt_sub.unsubscribe()
         except Exception as exc:
             raise RuntimeError(
                 "SchedulingCheckpoint recovery failed; refusing to start from unknown state"
@@ -1032,8 +1046,7 @@ class Dispatcher:
 
         # Wait for shutdown — callbacks handle all message processing
         try:
-            while self._running:
-                await asyncio.sleep(1)
+            await self._stop_requested.wait()
         except asyncio.CancelledError:
             log.info("Dispatcher cancelled")
         finally:
@@ -1043,7 +1056,14 @@ class Dispatcher:
             with contextlib.suppress(asyncio.CancelledError):
                 await substrate_refresh_task
             await self._dispatch_queue.put(None)  # sentinel
-            await worker_task
+            try:
+                # The sentinel lands after the reconcile in progress, if any.
+                await asyncio.wait_for(worker_task, timeout=_WORKER_DRAIN_TIMEOUT_S)
+            except TimeoutError:
+                log.warning(
+                    "Dispatch worker still inside a reconcile %.0f s after stop; cancelled it",
+                    _WORKER_DRAIN_TIMEOUT_S,
+                )
             for sub in subs:
                 try:
                     await sub.unsubscribe()
@@ -1062,6 +1082,8 @@ class Dispatcher:
             if owns_nc:
                 await nc.close()
             log.info("Dispatcher stopped")
+        if self._superseded_reason is not None:
+            raise DispatcherSuperseded(self._superseded_reason)
 
     # ------------------------------------------------------------------
     # C-A subset invariant: _desired_links ⊆ OME's stated truth.
@@ -1442,7 +1464,7 @@ class Dispatcher:
         details: ActuationOpsDetails | None = None,
     ) -> None:
         self._dispatch_blocked_reason = reason
-        self._running = False
+        self.stop()
         try:
             await self._publish_scheduler_ops(
                 code=code, message=reason, level="critical", details=details
@@ -1513,6 +1535,7 @@ class Dispatcher:
             interface_rates=self._interface_rates,
             session_id=self._session_id,
             wiring_generation=self._wiring_generation,
+            writer_epoch=self._writer_epoch,
         )
         return result
 
@@ -1745,7 +1768,33 @@ class Dispatcher:
             "Shutting down cleanly."
         )
         self._dispatch_blocked_reason = reason
-        self._running = False
+        self.stop()
+        with suppress(Exception):
+            await self._publish_scheduler_ops(
+                code=SchedulerOpsCode.SCHEDULER_SUPERSEDED,
+                message=reason,
+                level="info",
+            )
+        with suppress(Exception):
+            self._dispatch_queue.put_nowait(None)
+        raise DispatcherSuperseded(reason)
+
+    async def _stop_as_fenced_writer(self, *, operation: str) -> None:
+        """A Node Agent refused this instance's writer epoch: stop for good.
+
+        The refusal proves that a Scheduler holding a higher epoch has
+        commanded the session, so no authority read is needed. This is a
+        supersession, not a fault.
+        """
+        reason = (
+            f"Superseded during {operation}: a Node Agent refused writer epoch "
+            f"{self._writer_epoch} for session={self._session_id} "
+            f"generation={self._wiring_generation}; a newer Scheduler commands the session. "
+            "Shutting down cleanly."
+        )
+        self._superseded_reason = reason
+        self._dispatch_blocked_reason = reason
+        self.stop()
         with suppress(Exception):
             await self._publish_scheduler_ops(
                 code=SchedulerOpsCode.SCHEDULER_SUPERSEDED,
@@ -1790,6 +1839,8 @@ class Dispatcher:
                 or pair_result.link_type != "ground"
             )
         }
+        if result.writer_fenced:
+            await self._stop_as_fenced_writer(operation=result.operation)
         if result.fence_failure or fatal_pairs:
             # A fatal actuation failure has two distinct causes that demand
             # opposite responses: the world authoritatively moved past this
@@ -2093,6 +2144,8 @@ class Dispatcher:
         selected = sorted(gs_ids) if gs_ids is not None else sorted(self._gs_capacities)
         outcomes: dict[str, bool] = {}
         for gs_id in selected:
+            if self._stop_requested.is_set():
+                break
             state_before = self._ground_state(gs_id)
             if state_before.state != ActuationState.CLEAN:
                 continue
@@ -2191,6 +2244,8 @@ class Dispatcher:
         self, *, sim_time: datetime, include_clean_audit: bool = True
     ) -> None:
         for gs_id, state in list(self._gs_actuation.items()):
+            if self._stop_requested.is_set():
+                return
             next_time = state.recovery.next_verify_after
             if state.state == ActuationState.CLEAN or next_time is None:
                 continue
@@ -2421,7 +2476,20 @@ class Dispatcher:
             )
 
     def stop(self) -> None:
+        """End the dispatch loop: run() wakes at once and shuts down in order."""
         self._running = False
+        self._stop_requested.set()
+
+    def supersede(self, reason: str) -> None:
+        """Stop for good because another Scheduler now commands the session.
+
+        run() shuts down in order and then raises DispatcherSuperseded with
+        ``reason``.
+        """
+        log.info("%s", reason)
+        self._superseded_reason = reason
+        self._dispatch_blocked_reason = reason
+        self.stop()
 
     # ------------------------------------------------------------------
     # Dispatch Worker: background task, I/O at own pace
@@ -2443,7 +2511,10 @@ class Dispatcher:
         while self._running:
             intent = await self._dispatch_queue.get()
 
-            if intent is None:
+            # A stopping dispatcher starts no new reconcile: the session's pods
+            # may already be going away, and a reconcile or audit against them
+            # would report their removal as kernel faults.
+            if intent is None or self._stop_requested.is_set():
                 break
 
             # Correctness boundary for seek: no old-epoch event/snapshot/scenario
@@ -2503,7 +2574,7 @@ class Dispatcher:
                 raise
             except Exception as exc:
                 self._dispatch_blocked_reason = str(exc)
-                self._running = False
+                self.stop()
                 log.critical(
                     "Dispatch worker stopped for session=%s generation=%s: %s",
                     self._session_id,
@@ -3332,6 +3403,7 @@ class Dispatcher:
             interface_rates=self._interface_rates,
             session_id=self._session_id,
             wiring_generation=self._wiring_generation,
+            writer_epoch=self._writer_epoch,
         )
         for pair in result.succeeded_pairs:
             info = desired[pair]
@@ -3526,6 +3598,7 @@ class Dispatcher:
             gs_capacities=self._gs_capacities,
             session_id=self._session_id,
             wiring_generation=self._wiring_generation,
+            writer_epoch=self._writer_epoch,
         )
 
     async def _send_batch_up(
@@ -3553,6 +3626,7 @@ class Dispatcher:
             interface_rates=self._interface_rates,
             session_id=self._session_id,
             wiring_generation=self._wiring_generation,
+            writer_epoch=self._writer_epoch,
         )
 
     # ------------------------------------------------------------------
@@ -3650,6 +3724,6 @@ class Dispatcher:
                     deps["snapshot"],
                     self._playback_playing_received,
                 )
-                self._running = False
+                self.stop()
         except asyncio.CancelledError:
             pass  # Normal — watchdog cancelled on successful resume

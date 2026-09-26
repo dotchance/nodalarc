@@ -129,6 +129,7 @@ class TestAuthorityFreshnessOnStableLinks:
             agent_pool=pool,
             session_id="test",
             wiring_generation="sha256:" + "a" * 64,
+            writer_epoch=1,
             gs_terminal_capacities={},
             gs_handover_modes={},
             sat_ground_terminal_capacities={},
@@ -346,6 +347,7 @@ class TestActuatorEventPublicationOrder:
                 gs_capacities={},
                 session_id="test-session",
                 wiring_generation="test-generation",
+                writer_epoch=1,
             )
         )
 
@@ -427,6 +429,7 @@ class TestActuatorEventPublicationOrder:
                 link_provenance=_noop_provenance,
                 session_id="test-session",
                 wiring_generation="test-generation",
+                writer_epoch=1,
             )
         )
 

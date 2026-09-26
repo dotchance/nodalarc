@@ -56,6 +56,8 @@ spec:
               value: unix:///run/k3s/containerd/containerd.sock
             - name: NODE_AGENT_OPS_SPOOL
               value: /var/lib/nodalarc/node-agent/ops-events.jsonl
+            - name: KUBELET_PODS_DIR
+              value: /var/lib/kubelet/pods
           resources:
             limits:
               memory: {{ .Values.nodeAgent.memoryLimit | default "256Mi" }}
@@ -64,22 +66,33 @@ spec:
             - name: platform-config
               mountPath: /etc/nodalarc/platform.yaml
               subPath: platform.yaml
-            - name: containerd-sock
-              mountPath: /run/k3s/containerd/containerd.sock
+            # The runtime's directory, not its socket file: a runtime restart
+            # replaces the socket, and a bind mount of the file keeps the
+            # deleted one, cutting the Node Agent off from CRI until its pod
+            # is replaced.
+            - name: containerd-run
+              mountPath: /run/k3s/containerd
               readOnly: true
             - name: node-agent-spool
               mountPath: /var/lib/nodalarc/node-agent
             - name: host-modules
               mountPath: /lib/modules
               readOnly: true
+            # The Node Agent writes each session pod's wiring proof into the
+            # pod's wiring-status emptyDir here. Host-to-container propagation
+            # lets the kubelet's unmounts of other pods' volumes reach this
+            # mount namespace, so it never holds a copy of them.
+            - name: kubelet-pods
+              mountPath: /var/lib/kubelet/pods
+              mountPropagation: HostToContainer
       volumes:
         - name: platform-config
           configMap:
             name: nodalarc-platform-config
-        - name: containerd-sock
+        - name: containerd-run
           hostPath:
-            path: /run/k3s/containerd/containerd.sock
-            type: Socket
+            path: /run/k3s/containerd
+            type: Directory
         - name: node-agent-spool
           hostPath:
             path: /var/lib/nodalarc/node-agent
@@ -87,4 +100,8 @@ spec:
         - name: host-modules
           hostPath:
             path: /lib/modules
+            type: Directory
+        - name: kubelet-pods
+          hostPath:
+            path: /var/lib/kubelet/pods
             type: Directory

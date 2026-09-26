@@ -10,9 +10,13 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import contextlib
 import logging
 import os
+import signal
+import socket
 import time as _time
+import uuid
 from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
@@ -37,15 +41,14 @@ from nodalarc.session_identity import (
     require_resolved_session_run_id,
 )
 from nodalarc.substrate.manifest_contract import (
+    POD_OWNER_UID_LABEL,
+    POD_SESSION_RUN_LABEL,
     WIRING_MANIFEST_CONFIGMAP,
     WiringManifest,
     decode_wiring_manifest,
 )
-from nodalarc.substrate.wiring_status import (
-    WIRING_STATUS_CONFIGMAP,
-    failed_status_summary,
-    parse_status_configmap,
-)
+from nodalarc.substrate.wiring_status import failed_status_summary, pod_wiring_statuses
+from nodalarc.workload_target import NODE_ID_LABEL
 
 from scheduler.agent_pool import AgentPool
 from scheduler.dispatcher import Dispatcher, DispatcherSuperseded
@@ -53,6 +56,13 @@ from scheduler.pod_locator import PodLocationMap
 from scheduler.substrate_latency import (
     load_substrate_status_documents,
     validate_required_substrate_measurements,
+)
+from scheduler.writer_lease import (
+    LEASE_NAME,
+    RENEW_DEADLINE_S,
+    RENEW_INTERVAL_S,
+    STANDBY_RETRY_S,
+    WriterLease,
 )
 
 log = logging.getLogger(__name__)
@@ -131,6 +141,18 @@ def _scheduler_capacity_maps(
     return gs_terminal_capacities, gs_handover_modes, sat_ground_terminal_capacities
 
 
+def _session_wiring_proofs(k8s_v1: Any, namespace: str, manifest: WiringManifest) -> dict:
+    """The wiring proof each of this run's session pods carries, by node id."""
+    pods = k8s_v1.list_namespaced_pod(
+        namespace,
+        label_selector=(
+            f"{POD_SESSION_RUN_LABEL}={manifest.session_run_id},"
+            f"{POD_OWNER_UID_LABEL}={manifest.owner_uid}"
+        ),
+    )
+    return pod_wiring_statuses(pods.items, node_id_label=NODE_ID_LABEL)
+
+
 def wait_for_wiring_gate(
     *,
     k8s_v1: Any,
@@ -153,8 +175,7 @@ def wait_for_wiring_gate(
     deadline = monotonic() + timeout_s
     while monotonic() < deadline:
         try:
-            cm = k8s_v1.read_namespaced_config_map(WIRING_STATUS_CONFIGMAP, namespace)
-            _status_session, _status_generation, statuses = parse_status_configmap(cm.data)
+            statuses = _session_wiring_proofs(k8s_v1, namespace, manifest)
             ready = {node_id for node_id, status in statuses.items() if status.ready_for(manifest)}
             if expected_nodes.issubset(ready):
                 log.info("Wiring gate passed: %d/%d nodes ready", len(ready), expected_count)
@@ -180,8 +201,7 @@ def wait_for_wiring_gate(
         sleep(poll_s)
 
     try:
-        cm = k8s_v1.read_namespaced_config_map(WIRING_STATUS_CONFIGMAP, namespace)
-        _status_session, _status_generation, statuses = parse_status_configmap(cm.data)
+        statuses = _session_wiring_proofs(k8s_v1, namespace, manifest)
         wired = {node_id for node_id, status in statuses.items() if status.ready_for(manifest)}
     except Exception as exc:
         log.warning("Failed to read wiring status after timeout: %s", exc)
@@ -346,8 +366,120 @@ def _build_argument_parser() -> argparse.ArgumentParser:
     return parser
 
 
+class _Terminated(BaseException):
+    """SIGTERM arrived while no event loop owned signal handling.
+
+    A BaseException, so the startup gate loops (which retry on Exception)
+    cannot absorb it.
+    """
+
+
+def _raise_terminated(signum: int, _frame: object) -> None:
+    raise _Terminated(signum)
+
+
+async def _acquire_writer_lease(lease: WriterLease) -> int:
+    """Wait until this Scheduler holds the session writer lease; return its epoch."""
+    loop = asyncio.get_running_loop()
+    standby_logged = False
+    while True:
+        epoch = await loop.run_in_executor(None, lease.try_acquire)
+        if epoch is not None:
+            log.info(
+                "Holding session writer lease %s as %s: writer epoch %d",
+                LEASE_NAME,
+                lease.holder,
+                epoch,
+            )
+            return epoch
+        if not standby_logged:
+            log.info(
+                "Session writer lease %s is held by another Scheduler of this session; "
+                "waiting as a standby",
+                LEASE_NAME,
+            )
+            standby_logged = True
+        await asyncio.sleep(STANDBY_RETRY_S)
+
+
+async def _keep_writer_lease(lease: WriterLease, dispatcher: Dispatcher) -> None:
+    """Renew the lease while the dispatcher runs; supersede it once the lease is lost.
+
+    A renewal the API server does not answer leaves the hold unproven. Past
+    the renew deadline another Scheduler may take the lease, so this one
+    stops commanding before that can happen.
+    """
+    import kubernetes.client
+    import urllib3
+
+    loop = asyncio.get_running_loop()
+    renewed_at = _time.monotonic()
+    while True:
+        await asyncio.sleep(RENEW_INTERVAL_S)
+        try:
+            held = await loop.run_in_executor(None, lease.renew)
+        except (kubernetes.client.rest.ApiException, urllib3.exceptions.HTTPError, OSError) as exc:
+            if _time.monotonic() - renewed_at < RENEW_DEADLINE_S:
+                log.warning("Writer lease renewal failed: %s", exc)
+                continue
+            dispatcher.supersede(
+                f"Writer lease {LEASE_NAME} not renewed for {RENEW_DEADLINE_S:.0f} s ({exc}); "
+                "another Scheduler may hold it. Shutting down cleanly."
+            )
+            return
+        if not held:
+            dispatcher.supersede(
+                f"Writer lease {LEASE_NAME} now names another Scheduler; this instance "
+                f"({lease.holder}, writer epoch {lease.epoch}) no longer commands the session. "
+                "Shutting down cleanly."
+            )
+            return
+        renewed_at = _time.monotonic()
+
+
+def _release_writer_lease(lease: WriterLease) -> None:
+    """Hand the lease on at once. A failed release costs a successor one lease duration."""
+    import kubernetes.client
+    import urllib3
+
+    try:
+        lease.release()
+    except (kubernetes.client.rest.ApiException, urllib3.exceptions.HTTPError, OSError) as exc:
+        log.warning("Writer lease release failed (%s); it expires on its own", exc)
+
+
+async def _serve(lease: WriterLease, build_dispatcher: Callable[[int], Dispatcher]) -> None:
+    """Take the writer lease, then run the dispatcher with SIGTERM routed to its orderly stop."""
+    loop = asyncio.get_running_loop()
+    epoch = await _acquire_writer_lease(lease)
+    try:
+        dispatcher = build_dispatcher(epoch)
+        loop.add_signal_handler(signal.SIGTERM, dispatcher.stop)
+        keeper = asyncio.create_task(_keep_writer_lease(lease, dispatcher))
+        try:
+            await dispatcher.run()
+        finally:
+            keeper.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await keeper
+    finally:
+        await loop.run_in_executor(None, _release_writer_lease, lease)
+
+
 def main() -> None:
     _configure_logging("nodal.arc.scheduler", nats_level=logging.INFO)
+    # Kubernetes stops a pod with SIGTERM, and the kernel does not deliver a
+    # signal to a PID namespace's init process unless it installed a handler.
+    # Without this the Scheduler ignored SIGTERM and its pod lived out the full
+    # termination grace period.
+    signal.signal(signal.SIGTERM, _raise_terminated)
+    try:
+        _run_scheduler()
+    except _Terminated:
+        log.info("Scheduler stopped by SIGTERM")
+
+
+def _run_scheduler() -> None:
     args = _build_argument_parser().parse_args()
 
     from nodalarc.platform_config import get_platform_config, init_platform_config
@@ -390,8 +522,7 @@ def main() -> None:
 
     # --- Wiring gate: wait for Node Agent to complete wiring ---
     # The Scheduler must NOT dispatch OME events until wiring is done.
-    # Signal: nodalarc-wiring-status ConfigMap has one entry per wired node.
-    # Same check the Operator uses (handlers.py:188-189).
+    # Signal: every session pod carries ready wiring proof for this manifest.
     # K8s config already loaded by loc.load_from_k8s_api() above.
     import kubernetes.client
 
@@ -446,37 +577,53 @@ def main() -> None:
         mbb_dispatch,
     )
 
-    dispatcher = Dispatcher(
-        interface_map=interface_map,
-        interface_rates=interface_rates,
-        pod_locator=loc,
-        agent_pool=pool,
-        max_latency_age_s=max_latency_age_s,
-        compression_factor=compression_factor,
-        gs_terminal_capacities=gs_terminal_capacities,
-        gs_handover_modes=gs_handover_modes,
-        sat_ground_terminal_capacities=sat_ground_terminal_capacities,
-        mbb_dispatch=mbb_dispatch,
-        # Substrate compensation policy: half the measured RTT is the one-way
-        # bound. The dispatcher rejects any other policy; this is the single
-        # declared value, not a fallback.
-        rtt_to_one_way_policy="half-rtt",
-        clean_kernel_audit_interval_s=get_platform_config().scheduler_clean_kernel_audit_interval_s,
+    writer_lease = WriterLease(
+        kubernetes.client.CoordinationV1Api(),
+        ns,
         session_id=session_id,
-        wiring_generation=wiring_manifest.wiring_generation,
-        required_substrate_pairs=wiring_manifest.required_substrate_pairs,
-        substrate_measurements=substrate_measurements,
-        read_lifecycle_identity=_make_lifecycle_identity_reader(k8s_v1, ns),
+        instance=f"{socket.gethostname()}/{uuid.uuid4().hex[:12]}",
     )
 
+    def _build_dispatcher(writer_epoch: int) -> Dispatcher:
+        return Dispatcher(
+            interface_map=interface_map,
+            interface_rates=interface_rates,
+            pod_locator=loc,
+            agent_pool=pool,
+            max_latency_age_s=max_latency_age_s,
+            compression_factor=compression_factor,
+            gs_terminal_capacities=gs_terminal_capacities,
+            gs_handover_modes=gs_handover_modes,
+            sat_ground_terminal_capacities=sat_ground_terminal_capacities,
+            mbb_dispatch=mbb_dispatch,
+            # Substrate compensation policy: half the measured RTT is the one-way
+            # bound. The dispatcher rejects any other policy; this is the single
+            # declared value, not a fallback.
+            rtt_to_one_way_policy="half-rtt",
+            clean_kernel_audit_interval_s=get_platform_config().scheduler_clean_kernel_audit_interval_s,
+            session_id=session_id,
+            wiring_generation=wiring_manifest.wiring_generation,
+            required_substrate_pairs=wiring_manifest.required_substrate_pairs,
+            substrate_measurements=substrate_measurements,
+            read_lifecycle_identity=_make_lifecycle_identity_reader(k8s_v1, ns),
+            writer_epoch=writer_epoch,
+        )
+
     try:
-        asyncio.run(dispatcher.run())
+        asyncio.run(_serve(writer_lease, _build_dispatcher))
     except DispatcherSuperseded as exc:
-        # Routine end of a session switch: the wiring authority moved to a
-        # new session/generation and this instance ended itself. Exit 0 —
-        # the Operator's rollout owns replacement; a non-zero exit here
-        # manufactures crash-loop noise for an expected transition.
+        # The wiring authority moved to another session or generation. This
+        # process served one session and never serves another: it stays up,
+        # reports not ready, and dispatches nothing until the Operator
+        # replaces the pod. Exiting would let the kubelet restart the
+        # container in place, where it would load whatever session is
+        # mounted next.
         log.info("%s", exc)
+        runtime_health.mark_superseded(str(exc))
+        # Closing the event loop restored the default SIGTERM disposition.
+        signal.signal(signal.SIGTERM, _raise_terminated)
+        while True:
+            signal.pause()
     except KeyboardInterrupt:
         log.info("Scheduler interrupted")
     finally:

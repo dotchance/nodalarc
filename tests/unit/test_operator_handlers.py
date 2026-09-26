@@ -193,7 +193,14 @@ class _ReconcilerHarness:
         self._p("ensure_cm", "nodalarc_operator.handlers.ensure_session_configmaps")
         self._p("ensure_pods", "nodalarc_operator.handlers.ensure_session_pods")
         self._p("write_wiring", "nodalarc_operator.handlers.write_wiring_manifest")
-        self._p("restart", "nodalarc_operator.handlers.restart_platform_pods")
+        self._p("roll_services", "nodalarc_operator.handlers.roll_session_services")
+        self._p(
+            "services_on_other_run",
+            "nodalarc_operator.handlers.session_services_on_other_run",
+            return_value=[],
+        )
+        self._p("retire_services", "nodalarc_operator.handlers.retire_session_services")
+        self._p("ensure_runtime_config", "nodalarc_operator.handlers.ensure_runtime_session_config")
         return self
 
     def __enter__(self):
@@ -238,6 +245,13 @@ def _run(coro):
             return await coro
 
     asyncio.run(_without_thread_scheduling())
+
+
+async def _drive(spec, name, namespace, meta, status):
+    """One pass of a fresh session driver over a CR with this spec, metadata and status."""
+    body = {"spec": spec, "metadata": meta, "status": status}
+    driver = handlers_mod._SessionDriver(uid=meta["uid"], namespace=namespace)
+    return await handlers_mod._drive_once(driver, name, namespace, body)
 
 
 def _last_status(h):
@@ -410,7 +424,8 @@ class TestReconcileStateMachine:
             _run(_reconcile(h, phase="Creating"))
             h.mock("ensure_cm").assert_called_once()
             h.mock("ensure_pods").assert_called_once()
-            h.mock("restart").assert_not_called()
+            h.mock("roll_services").assert_not_called()
+            h.mock("ensure_runtime_config").assert_not_called()
 
     def test_more_pods_triggers_scale_down(self):
         with _ReconcilerHarness(expected_count=2) as h:
@@ -505,12 +520,12 @@ class TestReconcileStateMachine:
         with _ReconcilerHarness(expected_count=7) as h:
             h.mock("manifest_current").return_value = False
             _run(_reconcile(h, phase="Creating"))
-            h.mock("ensure_cm").assert_called_once()
-            assert h.mock("ensure_cm").call_args.args[5].startswith("run-")
             h.mock("write_wiring").assert_called_once()
-            # Platform services are NOT restarted at publication: they roll
-            # only after wiring completes and all workloads run.
-            h.mock("restart").assert_not_called()
+            # The session services get neither their runtime session
+            # ConfigMap nor a rollout at publication: both wait until wiring
+            # completes and all workloads run.
+            h.mock("ensure_runtime_config").assert_not_called()
+            h.mock("roll_services").assert_not_called()
             status = _last_status(h)
             assert status["platformHash"] == "abc123"
             assert status["runtimeHash"]
@@ -542,7 +557,8 @@ class TestReconcileStateMachine:
             h.mock("platform_ready").assert_not_called()
             # Platform services must not start consuming a session whose
             # workloads have not begun.
-            h.mock("restart").assert_not_called()
+            h.mock("ensure_runtime_config").assert_not_called()
+            h.mock("roll_services").assert_not_called()
             status = _last_status(h)
             assert status["phase"] == "Wiring"
             assert status["readyPods"] == 5
@@ -551,35 +567,43 @@ class TestReconcileStateMachine:
     def test_platform_services_roll_only_after_workloads_run(self):
         with _ReconcilerHarness(expected_count=7) as h:
             _run(_reconcile(h, phase="Wiring"))
-            h.mock("restart").assert_called_once()
-            assert h.mock("restart").call_args.args[0] == "nodalarc"
+            h.mock("roll_services").assert_called_once()
+            namespace, runtime_hash, run_id = h.mock("roll_services").call_args.args
+            assert namespace == "nodalarc"
+            assert runtime_hash
+            assert run_id.startswith("run-")
             status = _last_status(h)
             assert status["phase"] == "Ready"
+            assert status["runtimeHash"] == runtime_hash
+            assert status["sessionRunId"] == run_id
 
     def test_stale_wiring_manifest_is_rewritten(self):
         with _ReconcilerHarness(expected_count=7) as h:
             h.mock("manifest_current").return_value = False
             _run(_reconcile(h, phase="Wiring"))
-            h.mock("ensure_cm").assert_called_once()
-            assert h.mock("ensure_cm").call_args.args[5].startswith("run-")
             h.mock("write_wiring").assert_called_once()
-            h.mock("restart").assert_not_called()
+            h.mock("roll_services").assert_not_called()
             status = _last_status(h)
             assert status["phase"] == "Wiring"
             assert status["observedGeneration"] == 1
             assert status["runtimeHash"]
 
-    def test_stale_runtime_mount_is_refreshed_without_rewiring(self):
+    def test_stale_runtime_session_config_is_rewritten_at_start_without_rewiring(self):
         with _ReconcilerHarness(expected_count=7) as h:
             h.mock("runtime_config_current").return_value = False
             _run(_reconcile(h, phase="Ready"))
 
-            h.mock("ensure_cm").assert_called_once()
+            h.mock("ensure_runtime_config").assert_called_once()
             h.mock("write_wiring").assert_not_called()
-            h.mock("restart").assert_not_called()
-            status = _last_status(h)
-            assert status["phase"] == "Wiring"
-            assert "Runtime configuration refreshed" in status["message"]
+            h.mock("ensure_cm").assert_not_called()
+            h.mock("roll_services").assert_called_once()
+
+    def test_services_of_another_run_are_retired_before_the_run_proceeds(self):
+        with _ReconcilerHarness(expected_count=7) as h:
+            h.mock("services_on_other_run").return_value = ["ome", "nodalarc-scheduler"]
+            _run(_reconcile(h, phase="Creating"))
+            h.mock("retire_services").assert_called_once_with("nodalarc")
+            assert h.mock("services_on_other_run").call_args.args[1].startswith("run-")
 
     def test_wiring_complete_sets_ready(self):
         with _ReconcilerHarness(expected_count=7) as h:
@@ -623,7 +647,7 @@ class TestReconcileStateMachine:
                 "nodalarc_operator.handlers._reconcile_session", new_callable=AsyncMock
             ) as mock_reconcile:
                 _run(
-                    handlers_mod.on_update(
+                    _drive(
                         _SPEC,
                         "current-session",
                         "nodalarc",
@@ -640,7 +664,7 @@ class TestReconcileStateMachine:
                 "nodalarc_operator.handlers._reconcile_session", new_callable=AsyncMock
             ) as mock_reconcile:
                 _run(
-                    handlers_mod.on_update(
+                    _drive(
                         _SPEC,
                         "current-session",
                         "nodalarc",
@@ -649,13 +673,13 @@ class TestReconcileStateMachine:
                     )
                 )
             h.mock_custom.patch_namespaced_custom_object_status.assert_not_called()
-            h.mock("restart").assert_not_called()
+            h.mock("roll_services").assert_not_called()
             mock_reconcile.assert_awaited_once()
 
     def test_on_update_invalid_session_identity_reaches_error_status(self):
         with _ReconcilerHarness(expected_count=7) as h:
             _run(
-                handlers_mod.on_update(
+                _drive(
                     _INVALID_SPEC,
                     "current-session",
                     "nodalarc",
@@ -671,7 +695,7 @@ class TestReconcileStateMachine:
     def test_on_update_spec_without_a_selection_reaches_error_status(self):
         with _ReconcilerHarness(expected_count=7) as h:
             _run(
-                handlers_mod.on_update(
+                _drive(
                     {"sessionYaml": _SESSION_YAML},
                     "current-session",
                     "nodalarc",
@@ -698,7 +722,7 @@ class TestReconcileStateMachine:
                 "nodalarc_operator.handlers._reconcile_session", new_callable=AsyncMock
             ) as mock_reconcile:
                 _run(
-                    handlers_mod.on_update(
+                    _drive(
                         _SPEC,
                         "current-session",
                         "nodalarc",
@@ -714,7 +738,7 @@ class TestReconcileStateMachine:
                 "nodalarc_operator.handlers._reconcile_session", new_callable=AsyncMock
             ) as mock_reconcile:
                 _run(
-                    handlers_mod.on_update(
+                    _drive(
                         _SPEC,
                         "current-session",
                         "nodalarc",
@@ -770,7 +794,12 @@ class TestReconcileStateMachine:
             )
             _run(_reconcile(h, phase="Wiring"))
 
-            h.mock("check_wiring").assert_called_once_with("nodalarc", 7)
+            h.mock("check_wiring").assert_called_once()
+            namespace, view = h.mock("check_wiring").call_args.args
+            assert namespace == "nodalarc"
+            # Wiring is judged from the same observation that classified the pods.
+            assert view.identity.expected_count == 7
+            assert len(view.current) == 7
             h.mock_custom.patch_namespaced_custom_object_status.assert_not_called()
             assert "wiring status check error" in caplog.text
 
@@ -809,7 +838,7 @@ class TestReconcileStateMachine:
             ) as mock_reconcile,
         ):
             _run(
-                handlers_mod.wiring_check(
+                _drive(
                     _SPEC,
                     "current-session",
                     "nodalarc",
@@ -819,15 +848,15 @@ class TestReconcileStateMachine:
             )
             mock_reconcile.assert_awaited_once()
 
-    def test_runtime_refresh_failure_sets_error_phase(self):
+    def test_wiring_manifest_publication_failure_sets_error_phase(self):
         with _ReconcilerHarness(expected_count=7) as h:
             h.mock("manifest_current").return_value = False
-            h.mock("ensure_cm").side_effect = RuntimeError("ConfigMap refresh failed")
+            h.mock("write_wiring").side_effect = RuntimeError("manifest write failed")
             _run(_reconcile(h, phase="Wiring"))
-            h.mock("write_wiring").assert_not_called()
+            h.mock("roll_services").assert_not_called()
             status = _last_status(h)
             assert status["phase"] == "Error"
-            assert "ConfigMap refresh failed" in status["message"]
+            assert "Wiring manifest publication failed: manifest write failed" in status["message"]
 
     def test_ready_timer_reenters_reconciliation_when_a_pod_is_missing(self):
         """A missing/replaced/non-running pod must take Ready back through
@@ -840,7 +869,7 @@ class TestReconcileStateMachine:
         ):
             h.pods = [h.pod(f"p{i}", running=1 if i < 6 else 0) for i in range(7)]
             _run(
-                handlers_mod.wiring_check(
+                _drive(
                     _SPEC,
                     "current-session",
                     "nodalarc",
@@ -872,7 +901,7 @@ class TestReconcileStateMachine:
             }[degrade]
             h.pods = [*extra, *(h.pod(f"p{i}") for i in range(1, 7))]
             _run(
-                handlers_mod.wiring_check(
+                _drive(
                     _SPEC,
                     "current-session",
                     "nodalarc",
@@ -903,7 +932,7 @@ class TestReconcileStateMachine:
                 status=503, reason="Service Unavailable"
             )
             _run(
-                handlers_mod.wiring_check(
+                _drive(
                     _SPEC,
                     "current-session",
                     "nodalarc",
@@ -923,7 +952,7 @@ class TestReconcileStateMachine:
         ):
             h.mock("check_wiring").side_effect = kubernetes.client.rest.ApiException(status=503)
             _run(
-                handlers_mod.wiring_check(
+                _drive(
                     _SPEC,
                     "current-session",
                     "nodalarc",
@@ -944,7 +973,7 @@ class TestReconcileStateMachine:
         ):
             h.mock("check_wiring").return_value = (False, 3, "rewiring in progress")
             _run(
-                handlers_mod.wiring_check(
+                _drive(
                     _SPEC,
                     "current-session",
                     "nodalarc",
@@ -960,7 +989,7 @@ class TestReconcileStateMachine:
             spec = _SPEC
             meta = {"name": "current-session", "uid": "test-uid", "generation": 1}
             _run(
-                handlers_mod.wiring_check(
+                _drive(
                     spec,
                     "current-session",
                     "nodalarc",
@@ -1009,7 +1038,7 @@ class TestReconcileStateMachine:
                 ).to_patch(),
             }
             _run(
-                handlers_mod.wiring_check(
+                _drive(
                     spec,
                     "current-session",
                     "nodalarc",
@@ -1056,7 +1085,7 @@ class TestReconcileStateMachine:
             }
 
             _run(
-                handlers_mod.wiring_check(
+                _drive(
                     spec,
                     "current-session",
                     "nodalarc",
@@ -1107,7 +1136,7 @@ class TestReconcileStateMachine:
             status[field] = "stale"
 
             _run(
-                handlers_mod.wiring_check(
+                _drive(
                     spec,
                     "current-session",
                     "nodalarc",
@@ -1264,14 +1293,14 @@ def test_on_delete_propagates_a_failed_configmap_delete() -> None:
     stays; cleanup is never reported complete over a ConfigMap that remains."""
 
     def _delete(name: str, namespace: str) -> None:
-        if name == "nodalarc-constellation":
+        if name == WIRING_MANIFEST_CONFIGMAP:
             raise kubernetes.client.rest.ApiException(status=500)
 
     with _ReconcilerHarness(expected_count=7) as harness:
         with pytest.raises(kubernetes.client.rest.ApiException):
             _run_on_delete_with_real_teardown(harness, delete_side_effect=_delete)
         harness.mock_v1.delete_namespaced_config_map.assert_any_call(
-            "nodalarc-constellation", "nodalarc"
+            WIRING_MANIFEST_CONFIGMAP, "nodalarc"
         )
 
 
@@ -1367,3 +1396,216 @@ class TestWiringManifestCurrency:
         with caplog.at_level("WARNING", logger="nodalarc_operator.handlers"):
             assert self._current(self._data(payload)) is False
         assert f"wiring manifest payload refused at {stage}" in caplog.text
+
+
+def test_on_delete_retires_services_and_deletes_pods_before_the_purge() -> None:
+    """No OME or Scheduler instance may outlive the purge: the services are
+    retired and confirmed gone, and the session pods deleted, before the run
+    ids are purged."""
+    calls: list[tuple] = []
+    with _ReconcilerHarness(expected_count=7) as harness:
+        harness.pods = [_session_pod("run-a")]
+        harness.mock_v1.read_namespaced_config_map.side_effect = (
+            kubernetes.client.rest.ApiException(status=404)
+        )
+        with (
+            patch(
+                "nodalarc_operator.handlers.retire_session_services",
+                side_effect=lambda ns: calls.append(("retire", ns)),
+            ),
+            patch(
+                "nodalarc_operator.handlers.delete_session_pods",
+                side_effect=lambda ns, uid: calls.append(("delete_pods", ns, uid)),
+            ),
+            patch(
+                "nodalarc_operator.handlers.wait_for_session_services_retired",
+                side_effect=lambda ns, timeout: calls.append(("wait_retired", ns)),
+            ),
+            patch(
+                "nodalarc_operator.handlers.teardown_session",
+                side_effect=lambda ns, run_ids: calls.append(("teardown", ns, run_ids)),
+            ),
+        ):
+            _run(
+                handlers_mod.on_delete(
+                    "current-session",
+                    "nodalarc",
+                    spec=_SPEC,
+                    meta={"name": "current-session", "uid": _OWNER_UID, "generation": 2},
+                    status={},
+                )
+            )
+    # The services have exited before any session pod is deleted: a Scheduler
+    # still stopping must find the pods it could still touch intact.
+    assert calls == [
+        ("retire", "nodalarc"),
+        ("wait_retired", "nodalarc"),
+        ("delete_pods", "nodalarc", _OWNER_UID),
+        ("teardown", "nodalarc", ("run-a",)),
+    ]
+
+
+# ---------------------------------------------------------------------------
+# The session driver
+# ---------------------------------------------------------------------------
+
+
+def test_driver_holds_one_runtime_per_generation() -> None:
+    """Resolution, verification and preparation run once per CR generation."""
+    with _ReconcilerHarness(expected_count=7) as h:
+        driver = handlers_mod._SessionDriver(uid="test-uid", namespace="nodalarc")
+        meta = {"name": "current-session", "uid": "test-uid", "generation": 1}
+        body = {"spec": _SPEC, "metadata": meta, "status": {"phase": "Wiring"}}
+        for _ in range(3):
+            _run(handlers_mod._drive_once(driver, "current-session", "nodalarc", body))
+        assert h.mock("prepare_workloads").call_count == 1
+        assert h.mock("resolve_active").call_count == 1
+
+        body["metadata"] = {**meta, "generation": 2}
+        _run(handlers_mod._drive_once(driver, "current-session", "nodalarc", body))
+        assert h.mock("prepare_workloads").call_count == 2
+        assert driver.runtime is not None and driver.runtime.generation == 2
+
+
+def test_a_transient_failure_asks_for_a_requeue_and_progress_waits_for_events() -> None:
+    with _ReconcilerHarness(expected_count=7) as h:
+        h.mock("check_wiring").side_effect = kubernetes.client.rest.ApiException(status=500)
+        result = []
+
+        async def _pass():
+            result.append(
+                await handlers_mod._reconcile_session(
+                    _SPEC,
+                    "current-session",
+                    "nodalarc",
+                    {"name": "current-session", "uid": "test-uid", "generation": 1},
+                    {"phase": "Wiring"},
+                )
+            )
+
+        _run(_pass())
+        assert result == [True]
+
+        h.mock("check_wiring").side_effect = None
+        h.mock("check_wiring").return_value = (False, 3, None)
+        _run(_pass())
+        # Waiting for wiring proof is event-driven: pod annotations wake the driver.
+        assert result[-1] is False
+
+
+def test_requeue_backs_off_and_a_trigger_ends_the_backoff() -> None:
+    async def _scenario():
+        driver = handlers_mod._SessionDriver(uid="test-uid", namespace="nodalarc")
+        loop = asyncio.get_running_loop()
+        started = loop.time()
+        await driver.next_pass(requeue=True)
+        first = loop.time() - started
+        started = loop.time()
+        loop.call_later(0.1, driver.wakeup.set)
+        await driver.next_pass(requeue=True)
+        woken = loop.time() - started
+        return first, woken
+
+    first, woken = asyncio.run(_scenario())
+    assert 0.9 <= first < 1.5
+    assert woken < 0.5
+
+
+def _driver_run(cr_reads):
+    """Run the session driver daemon for CR object test-uid against scripted CR reads.
+
+    Returns the CRs the driver's passes saw and whether a driver is still
+    registered afterwards.
+    """
+    custom = create_autospec(kubernetes.client.CustomObjectsApi, instance=True)
+    custom.get_namespaced_custom_object.side_effect = cr_reads
+    passes = []
+
+    async def _pass(driver, name, namespace, cr):
+        passes.append(cr)
+        return False
+
+    async def _scenario():
+        task = asyncio.ensure_future(
+            handlers_mod.session_driver(
+                name="current-session", namespace="nodalarc", uid="test-uid"
+            )
+        )
+        for _ in range(len(cr_reads)):
+            await asyncio.sleep(0)
+            handlers_mod._wake("test-uid")
+            await asyncio.sleep(0)
+        await asyncio.wait_for(task, 1.0)
+
+    with (
+        patch.object(handlers_mod, "_get_custom_api", return_value=custom),
+        patch.object(handlers_mod, "_drive_once", side_effect=_pass),
+    ):
+        _run(_scenario())
+    return passes, "test-uid" in handlers_mod._drivers
+
+
+def _cr(uid="test-uid", **metadata):
+    return {"spec": _SPEC, "metadata": {"name": "current-session", "uid": uid, **metadata}}
+
+
+def test_driver_ends_when_its_cr_is_gone() -> None:
+    passes, registered = _driver_run(
+        [_cr(), kubernetes.client.rest.ApiException(status=404, reason="Not Found")]
+    )
+    assert passes == [_cr()]
+    assert not registered
+
+
+def test_driver_never_acts_on_a_later_cr_that_reuses_the_name() -> None:
+    """A driver kopf restarts after its CR was deleted and recreated ends at its
+    first read: the name now holds another object."""
+    passes, registered = _driver_run([_cr(uid="later-uid")])
+    assert passes == []
+    assert not registered
+
+
+def test_driver_ends_when_its_cr_is_being_deleted() -> None:
+    passes, registered = _driver_run([_cr(deletionTimestamp="2026-09-26T03:40:06Z")])
+    assert passes == []
+    assert not registered
+
+
+def test_a_status_write_to_a_deleted_cr_ends_the_driver() -> None:
+    custom = create_autospec(kubernetes.client.CustomObjectsApi, instance=True)
+    custom.patch_namespaced_custom_object_status.side_effect = kubernetes.client.rest.ApiException(
+        status=404, reason="Not Found"
+    )
+    with (
+        patch.object(handlers_mod, "_get_custom_api", return_value=custom),
+        pytest.raises(handlers_mod._SessionGone),
+    ):
+        handlers_mod._update_status(
+            "current-session",
+            "nodalarc",
+            handlers_mod.ConstellationSpecStatus.from_cr({"phase": "Pending"}),
+        )
+
+
+def test_session_pods_and_services_wake_the_driver_and_nothing_else_does() -> None:
+    assert handlers_mod._moves_a_session({"nodalarc.io/node-id": "sat-a"})
+    assert handlers_mod._moves_a_session({"app": "nodalarc-ome"})
+    assert handlers_mod._moves_a_session({"app": "nodalarc-scheduler"})
+    assert not handlers_mod._moves_a_session({"app": "nodalarc-vs-api"})
+    assert not handlers_mod._moves_a_session({})
+
+
+def test_stop_closes_the_logging_connection_even_after_the_server_is_gone(monkeypatch) -> None:
+    """A platform teardown stops NATS with the Operator: closing a connection the
+    server already dropped completes the cleanup instead of failing it (kopf
+    would retry a failed cleanup a minute later, past the grace period)."""
+    from unittest.mock import AsyncMock
+
+    lost = AsyncMock()
+    lost.close.side_effect = ConnectionResetError("Connection lost")
+    monkeypatch.setattr(handlers_mod, "_logging_nc", lost)
+    asyncio.run(handlers_mod.on_cleanup())
+    lost.close.assert_awaited_once()
+
+    monkeypatch.setattr(handlers_mod, "_logging_nc", None)
+    asyncio.run(handlers_mod.on_cleanup())

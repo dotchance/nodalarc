@@ -10,13 +10,12 @@ profile:
   registry: node01:5000
   image: nodalarc-picoquic/picoquic@sha256:0ce1ef8b27da95fa286d6c1e0db76668323093c7046a44358499d335c7b2041a
   command:
-  - /usr/local/bin/picoquicdemo
-  - -p
-  - '4433'
+  - /bin/bash
   - -c
-  - /etc/picoquic/cert.pem
-  - -k
-  - /etc/picoquic/key.pem
+  - >-
+    trap 'exit 143' TERM;
+    /usr/local/bin/picoquicdemo -p 4433 -c /etc/picoquic/cert.pem -k /etc/picoquic/key.pem
+    & wait $!
   root_filesystem: read_only
   volumes:
   - name: tmp

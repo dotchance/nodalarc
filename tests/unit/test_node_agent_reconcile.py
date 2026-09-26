@@ -22,17 +22,30 @@ class _Link(dict):
         return dict(self["attrs"]).get(name, default)
 
 
-def _link(name: str, index: int) -> _Link:
-    return _Link(index=index, attrs=[("IFLA_IFNAME", name)])
+def _link(name: str, index: int, *, grouped: bool = False) -> _Link:
+    attrs = [("IFLA_IFNAME", name)]
+    if grouped:
+        attrs.append(("IFLA_GROUP", reconcile.MANAGED_HOST_DEVICE_GROUP))
+    return _Link(index=index, attrs=attrs)
 
 
 class _FakeIpr:
     """Host links by name; deletes succeed, fail or find the device gone as scripted."""
 
-    def __init__(self, links: dict[str, int], *, outcomes: dict[str, BaseException] | None = None):
+    def __init__(
+        self,
+        links: dict[str, int],
+        *,
+        outcomes: dict[str, BaseException] | None = None,
+        grouped: frozenset[str] = frozenset(),
+        privileged: bool = True,
+    ):
         self.links = dict(links)
         self.outcomes = dict(outcomes or {})
+        self.grouped = set(grouped)
+        self.privileged = privileged
         self.deleted: list[str] = []
+        self.group_deletes = 0
 
     def __enter__(self):
         return self
@@ -41,10 +54,25 @@ class _FakeIpr:
         return False
 
     def get_links(self):
-        return [_link(name, index) for name, index in self.links.items()]
+        return [
+            _link(name, index, grouped=name in self.grouped) for name, index in self.links.items()
+        ]
 
-    def link(self, op, *, index):
+    def link(self, op, *, index=None, group=None):
         assert op == "del"
+        if not self.privileged:
+            # The kernel refuses RTM_DELLINK without CAP_NET_ADMIN, match or not.
+            raise NetlinkError(errno.EPERM, "Operation not permitted")
+        if group is not None:
+            assert group == reconcile.MANAGED_HOST_DEVICE_GROUP
+            self.group_deletes += 1
+            members = [name for name in self.links if name in self.grouped]
+            if not members:
+                raise NetlinkError(errno.ENODEV)
+            for name in members:
+                self.links.pop(name)
+                self.deleted.append(name)
+            return
         name = next(n for n, i in self.links.items() if i == index)
         outcome = self.outcomes.get(name)
         if outcome is not None:
@@ -206,3 +234,30 @@ def test_module_entry_point_runs_as_a_subprocess_with_the_repository_paths() -> 
     assert result.returncode == 2
     assert reconcile.USAGE in result.stderr
     assert result.stdout == ""
+
+
+def test_grouped_devices_go_in_one_request_and_ungrouped_ones_by_name(monkeypatch) -> None:
+    """The managed group is deleted in one request; a recognized device outside
+    the group is still deleted by itself, and every removed name is reported."""
+    ipr = _FakeIpr({**UNMANAGED, **MANAGED}, grouped=frozenset({"vx00abcd", "vh00abcd"}))
+    _install(monkeypatch, ipr)
+
+    report = reconcile.clean_and_verify_host_state()
+
+    assert report.clean
+    assert ipr.group_deletes == 1
+    assert sorted(report.removed) == sorted(MANAGED)
+    assert set(ipr.links) == set(UNMANAGED)
+
+
+def test_a_host_with_nothing_to_remove_sends_no_delete(monkeypatch) -> None:
+    """An unprivileged caller proves a host clean when nothing NodalArc owns is
+    on it: no delete request goes out, so none can be refused."""
+    ipr = _FakeIpr(dict(UNMANAGED), privileged=False)
+    _install(monkeypatch, ipr)
+
+    report = reconcile.clean_and_verify_host_state()
+
+    assert report.clean
+    assert report.removed == () and report.failed == ()
+    assert ipr.group_deletes == 0 and ipr.deleted == []

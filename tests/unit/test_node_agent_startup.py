@@ -10,7 +10,7 @@ from node_agent.__main__ import (
     _require_host_ip_for_vxlan_capable_startup,
     _require_ready_fence,
 )
-from node_agent.command_contract import RuntimeFence
+from node_agent.command_contract import RuntimeFence, WriterEpochFloor
 from node_agent.mpls import ensure_mpls_kernel_support, module_is_builtin, probe_encapsulation
 
 pytestmark = pytest.mark.usefixtures("_node_agent_ops_spool_path")
@@ -274,7 +274,9 @@ def test_ready_fence_missing_identity_fails_before_subscription(
     monkeypatch.setattr(ops_events, "publish", lambda **kwargs: published.append(kwargs))
 
     with pytest.raises(RuntimeError, match="wiring identity unavailable"):
-        _require_ready_fence(RuntimeFence(session_id="", wiring_generation=""))
+        _require_ready_fence(
+            RuntimeFence(session_id="", wiring_generation="", writer_floor=WriterEpochFloor())
+        )
 
     assert published[0]["code"] == "STARTUP_WIRING_IDENTITY_MISSING"
 
@@ -301,6 +303,40 @@ def test_agent_shutdown_joins_wiring_before_closing_nats(shutdown):
             encode_wiring_manifest_payload,
         )
         from node_agent import __main__ as agent, substrate_monitor
+
+        from node_agent import manifest_watch as _manifest_watch
+
+        class _ObservingWatch:
+            # Serves each observation from the stubbed ConfigMap read.
+
+            def __init__(self, v1, namespace, name):
+                self._v1, self._namespace, self._name = v1, namespace, name
+                self._version = 0
+
+            def start(self):
+                pass
+
+            def stop(self):
+                pass
+
+            def current(self, timeout=None):
+                try:
+                    config_map = self._v1.read_namespaced_config_map(self._name, self._namespace)
+                except kubernetes.client.rest.ApiException as exc:
+                    if exc.status != 404:
+                        raise
+                    config_map = None
+                self._version += 1
+                return _manifest_watch.ManifestState(version=self._version, config_map=config_map)
+
+            def wait_for_change(self, since, timeout):
+                import time
+                time.sleep(0.05)
+
+            def changed_since(self, version):
+                return False
+
+        _manifest_watch.ManifestWatch = _ObservingWatch
 
         shutdown = sys.argv[1]
         sys.argv = ["node-agent"]
@@ -350,7 +386,7 @@ def test_agent_shutdown_joins_wiring_before_closing_nats(shutdown):
                     loop.call_soon_threadsafe(task.cancel)
                     raise kubernetes.client.rest.ApiException(status=404)
                 return SimpleNamespace(
-                    metadata=SimpleNamespace(resource_version="1"),
+                    metadata=SimpleNamespace(resource_version="1", uid="cm-uid"),
                     data={WIRING_MANIFEST_PAYLOAD_KEY: encode_wiring_manifest_payload({})},
                 )
             v1.read_namespaced_config_map.side_effect = read
@@ -423,6 +459,40 @@ def test_an_undecodable_manifest_is_logged_and_retried_until_one_decodes():
         )
         from node_agent import __main__ as agent, substrate_monitor
 
+        from node_agent import manifest_watch as _manifest_watch
+
+        class _ObservingWatch:
+            # Serves each observation from the stubbed ConfigMap read.
+
+            def __init__(self, v1, namespace, name):
+                self._v1, self._namespace, self._name = v1, namespace, name
+                self._version = 0
+
+            def start(self):
+                pass
+
+            def stop(self):
+                pass
+
+            def current(self, timeout=None):
+                try:
+                    config_map = self._v1.read_namespaced_config_map(self._name, self._namespace)
+                except kubernetes.client.rest.ApiException as exc:
+                    if exc.status != 404:
+                        raise
+                    config_map = None
+                self._version += 1
+                return _manifest_watch.ManifestState(version=self._version, config_map=config_map)
+
+            def wait_for_change(self, since, timeout):
+                import time
+                time.sleep(0.05)
+
+            def changed_since(self, version):
+                return False
+
+        _manifest_watch.ManifestWatch = _ObservingWatch
+
         sys.argv = ["node-agent"]
         warnings = []
 
@@ -445,7 +515,7 @@ def test_an_undecodable_manifest_is_logged_and_retried_until_one_decodes():
             reads.append(name)
             payload = payloads[min(len(reads), len(payloads)) - 1]
             return SimpleNamespace(
-                metadata=SimpleNamespace(resource_version=str(len(reads))),
+                metadata=SimpleNamespace(resource_version=str(len(reads)), uid="cm-uid"),
                 data={WIRING_MANIFEST_PAYLOAD_KEY: payload},
             )
 

@@ -25,6 +25,7 @@ from node_agent.kernel_constants import (
     mpls_input_sysctl,
 )
 from node_agent.namespace_ops import _in_namespace, in_host_namespace
+from node_agent.tc_dump import interface_qdiscs
 from node_agent.tc_units import (
     HtbClass,
     delay_ms_to_netem_us,
@@ -151,7 +152,7 @@ def _qdisc_rows(ipr, ifname: str) -> list[dict[str, Any]]:
     if not idxs:
         raise FileNotFoundError(f"Interface {ifname} not found")
     rows = []
-    for qdisc in ipr.get_qdiscs(index=idxs[0]):
+    for qdisc in interface_qdiscs(idxs[0]):
         rows.append(
             {
                 "kind": qdisc.get_attr("TCA_KIND"),
@@ -632,12 +633,13 @@ def reuse_or_refuse(
     return True
 
 
-def ingress_qdisc_kind(ipr, ifindex: int) -> str | None:
+def ingress_qdisc_kind(ifindex: int) -> str | None:
     """The kind of the qdisc holding an interface's ingress side, None when there is none.
 
-    Both the classic ``ingress`` qdisc and ``clsact`` report the ingress parent.
+    Both the classic ``ingress`` qdisc and ``clsact`` report the ingress parent. The
+    interface is looked up in the calling thread's network namespace.
     """
-    for qdisc in ipr.get_qdiscs(index=ifindex):
+    for qdisc in interface_qdiscs(ifindex):
         if qdisc["parent"] == TC_H_INGRESS:
             return str(qdisc.get_attr("TCA_KIND"))
     return None
@@ -779,7 +781,7 @@ def prove_mirred_redirect(ipr, src_ifname: str, dst_ifname: str) -> Proof:
         return Proof.fail(f"mirred proof failed {src_ifname}->{dst_ifname}", "missing-dst")
     dst_index = dst[0]
     try:
-        qdisc_kind = ingress_qdisc_kind(ipr, src[0])
+        qdisc_kind = ingress_qdisc_kind(src[0])
         filters = list(ipr.get_filters(index=src[0], parent=TC_H_INGRESS))
     except Exception as exc:
         return Proof.fail(f"mirred proof failed {src_ifname}->{dst_ifname}", f"tc-read-error:{exc}")

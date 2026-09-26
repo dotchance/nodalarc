@@ -109,6 +109,12 @@ def _in_pod(ipr: _ShaperIpr, pid_expected: int = 1234):
     return _run
 
 
+def _serve_pod(monkeypatch, ipr, pid_expected: int = 1234) -> None:
+    """The fake answers the namespace entry and the per-interface qdisc query."""
+    monkeypatch.setattr(kernel_verifier, "_in_namespace", _in_pod(ipr, pid_expected))
+    monkeypatch.setattr(kernel_verifier, "interface_qdiscs", lambda index: ipr.get_qdiscs(index))
+
+
 def test_verify_qdisc_compares_netem_delay_in_tc_scheduler_ticks(monkeypatch):
     expected_ticks = int(tc_common.time2tick(6000))
     ipr = _ShaperIpr(
@@ -116,7 +122,7 @@ def test_verify_qdisc_compares_netem_delay_in_tc_scheduler_ticks(monkeypatch):
         delay_ticks=expected_ticks,
         limit=netem_limit_packets(1000.0, 6.0),
     )
-    monkeypatch.setattr(kernel_verifier, "_in_namespace", _in_pod(ipr))
+    _serve_pod(monkeypatch, ipr)
 
     proof = kernel_verifier.verify_qdisc(1234, "isl0", delay_ms=6.0, transmit_mbps=1000.0)
 
@@ -132,7 +138,7 @@ def test_verify_qdisc_uses_shared_fractional_delay_normalization(monkeypatch):
         delay_ticks=netem_us_to_ticks(expected_us),
         limit=netem_limit_packets(1000.0, delay_ms),
     )
-    monkeypatch.setattr(kernel_verifier, "_in_namespace", _in_pod(ipr))
+    _serve_pod(monkeypatch, ipr)
 
     proof = kernel_verifier.verify_qdisc(1234, "term0", delay_ms=delay_ms, transmit_mbps=1000.0)
 
@@ -142,7 +148,7 @@ def test_verify_qdisc_uses_shared_fractional_delay_normalization(monkeypatch):
 
 def test_verify_qdisc_rejects_unconverted_microsecond_delay(monkeypatch):
     ipr = _ShaperIpr(rate_bytes=125_000_000, delay_ticks=6000)
-    monkeypatch.setattr(kernel_verifier, "_in_namespace", _in_pod(ipr))
+    _serve_pod(monkeypatch, ipr)
 
     proof = kernel_verifier.verify_qdisc(1234, "isl0", delay_ms=6.0, transmit_mbps=1000.0)
 
@@ -158,11 +164,11 @@ def test_verify_qdisc_proves_the_transmit_rate_in_bytes_per_second(monkeypatch):
     ticks = netem_us_to_ticks(delay_ms_to_netem_us(6.0))
     limit = netem_limit_packets(1000.0, 6.0)
     correct = _ShaperIpr(rate_bytes=125_000_000, delay_ticks=ticks, limit=limit)
-    monkeypatch.setattr(kernel_verifier, "_in_namespace", _in_pod(correct))
+    _serve_pod(monkeypatch, correct)
     assert kernel_verifier.verify_qdisc(1234, "isl0", delay_ms=6.0, transmit_mbps=1000.0).verified
 
     eightfold = _ShaperIpr(rate_bytes=1_000_000_000, delay_ticks=ticks, limit=limit)
-    monkeypatch.setattr(kernel_verifier, "_in_namespace", _in_pod(eightfold))
+    _serve_pod(monkeypatch, eightfold)
     proof = kernel_verifier.verify_qdisc(1234, "isl0", delay_ms=6.0, transmit_mbps=1000.0)
     assert proof.verified is False
     assert proof.summary == "htb rate mismatch on isl0"
@@ -177,7 +183,7 @@ def test_verify_qdisc_proves_every_commanded_class_field(monkeypatch):
     for field, value in (("buffer", 1), ("cbuffer", 1), ("quantum", 1500), ("ceil", 1)):
         ipr = _ShaperIpr(rate_bytes=125_000_000, delay_ticks=ticks, limit=limit)
         ipr.classes[0]._attrs["TCA_OPTIONS"] = _htb_class_options(125_000_000, **{field: value})
-        monkeypatch.setattr(kernel_verifier, "_in_namespace", _in_pod(ipr))
+        _serve_pod(monkeypatch, ipr)
         proof = kernel_verifier.verify_qdisc(1234, "isl0", delay_ms=6.0, transmit_mbps=1000.0)
         name = {"buffer": "burst", "cbuffer": "cburst"}.get(field, field)
         assert proof.verified is False
@@ -191,7 +197,7 @@ def test_verify_qdisc_proves_the_netem_limit_follows_rate_and_delay(monkeypatch)
     assert netem_limit_packets(1000.0, 6.0) == 1500
 
     default_limit = _ShaperIpr(rate_bytes=125_000_000, delay_ticks=ticks, limit=1000)
-    monkeypatch.setattr(kernel_verifier, "_in_namespace", _in_pod(default_limit))
+    _serve_pod(monkeypatch, default_limit)
     proof = kernel_verifier.verify_qdisc(1234, "isl0", delay_ms=6.0, transmit_mbps=1000.0)
 
     assert proof.verified is False
@@ -208,7 +214,7 @@ def test_verify_qdisc_reads_rates_above_the_32_bit_field(monkeypatch):
         delay_ticks=ticks,
         limit=netem_limit_packets(200_000.0, 1.0),
     )
-    monkeypatch.setattr(kernel_verifier, "_in_namespace", _in_pod(ipr))
+    _serve_pod(monkeypatch, ipr)
 
     proof = kernel_verifier.verify_qdisc(1234, "isl0", delay_ms=1.0, transmit_mbps=200_000.0)
 
@@ -218,7 +224,7 @@ def test_verify_qdisc_reads_rates_above_the_32_bit_field(monkeypatch):
 def test_verify_qdisc_refuses_the_former_tbf_shaper(monkeypatch):
     ticks = netem_us_to_ticks(delay_ms_to_netem_us(6.0))
     ipr = _ShaperIpr(rate_bytes=None, delay_ticks=ticks, root_kind="tbf")
-    monkeypatch.setattr(kernel_verifier, "_in_namespace", _in_pod(ipr))
+    _serve_pod(monkeypatch, ipr)
 
     proof = kernel_verifier.verify_qdisc(1234, "isl0", delay_ms=6.0, transmit_mbps=1000.0)
 
@@ -235,7 +241,7 @@ def test_verify_qdisc_reads_delay_only_from_netem_options(monkeypatch):
     ipr = _ShaperIpr(rate_bytes=125_000_000, delay_ticks=netem_us_to_ticks(6000))
     netem = ipr.qdiscs[1]
     netem._attrs["TCA_OPTIONS"] = {}
-    monkeypatch.setattr(kernel_verifier, "_in_namespace", _in_pod(ipr))
+    _serve_pod(monkeypatch, ipr)
     monkeypatch.setattr(_Nlmsg, "__repr__", lambda self: "{'delay': 93750}")
 
     proof = kernel_verifier.verify_qdisc(1234, "isl0", delay_ms=6.0, transmit_mbps=1000.0)
@@ -251,7 +257,7 @@ def test_verify_qdisc_requires_netem_beneath_the_rate_class(monkeypatch):
         {"handle": 0x00100000, "parent": 0xFFFFFFFF},
         {"TCA_KIND": "netem", "TCA_OPTIONS": {"delay": netem_us_to_ticks(6000)}},
     )
-    monkeypatch.setattr(kernel_verifier, "_in_namespace", _in_pod(ipr))
+    _serve_pod(monkeypatch, ipr)
 
     proof = kernel_verifier.verify_qdisc(1234, "isl0", delay_ms=6.0, transmit_mbps=1000.0)
 
@@ -263,6 +269,7 @@ def test_rate_proof_requires_the_root_to_send_traffic_to_the_rate_class(monkeypa
     """An HTB root whose default class is not 1:1 leaves traffic unshaped."""
     ipr = _ShaperIpr(rate_bytes=75_000_000, delay_ticks=None, default_class=0x10)
     monkeypatch.setattr(kernel_verifier, "in_host_namespace", lambda fn: fn(ipr))
+    monkeypatch.setattr(kernel_verifier, "interface_qdiscs", lambda index: ipr.get_qdiscs(index))
 
     proof = kernel_verifier.verify_receive_shaping("vh0003e9", receive_mbps=600.0)
 
@@ -277,6 +284,7 @@ def test_verify_receive_shaping_proves_the_host_veth_rate(monkeypatch):
     """The host-side veth feeding a pod interface carries its terminal's receive rate."""
     ipr = _ShaperIpr(rate_bytes=75_000_000, delay_ticks=None)
     monkeypatch.setattr(kernel_verifier, "in_host_namespace", lambda fn: fn(ipr))
+    monkeypatch.setattr(kernel_verifier, "interface_qdiscs", lambda index: ipr.get_qdiscs(index))
 
     proof = kernel_verifier.verify_receive_shaping("vh0003e9", receive_mbps=600.0)
     assert proof.verified is True
@@ -288,6 +296,9 @@ def test_verify_receive_shaping_proves_the_host_veth_rate(monkeypatch):
 
     unshaped = _ShaperIpr(rate_bytes=None, delay_ticks=None, root_kind="noqueue")
     monkeypatch.setattr(kernel_verifier, "in_host_namespace", lambda fn: fn(unshaped))
+    monkeypatch.setattr(
+        kernel_verifier, "interface_qdiscs", lambda index: unshaped.get_qdiscs(index)
+    )
     missing = kernel_verifier.verify_receive_shaping("vh0003e9", receive_mbps=600.0)
     assert missing.verified is False
     assert missing.summary == "missing htb shaper root on host/vh0003e9"
@@ -472,11 +483,10 @@ class _MirredIpr:
 
 
 def _mirred_proof(monkeypatch, filters, *, qdisc: str | None = "ingress"):
-    monkeypatch.setattr(
-        kernel_verifier,
-        "in_host_namespace",
-        lambda fn: fn(_MirredIpr(filters, qdisc=qdisc)),
-    )
+    ipr = _MirredIpr(filters, qdisc=qdisc)
+    monkeypatch.setattr(kernel_verifier, "in_host_namespace", lambda fn: fn(ipr))
+    monkeypatch.setattr(kernel_verifier, "interface_qdiscs", lambda index: ipr.get_qdiscs(index))
+    monkeypatch.setattr(kernel_verifier, "interface_qdiscs", lambda index: ipr.get_qdiscs(index))
     return kernel_verifier.verify_mirred("src0", "dst0")
 
 
@@ -598,10 +608,13 @@ def test_verify_mirred_names_a_missing_qdisc_and_a_missing_rule(monkeypatch):
     assert _mirred_proof(monkeypatch, []).summary == "missing mirred redirect src0->dst0"
 
 
-def test_ingress_qdisc_kind_reads_the_ingress_parent_only():
-    assert kernel_verifier.ingress_qdisc_kind(_MirredIpr([], qdisc=None), 10) is None
-    assert kernel_verifier.ingress_qdisc_kind(_MirredIpr([], qdisc="ingress"), 10) == "ingress"
-    assert kernel_verifier.ingress_qdisc_kind(_MirredIpr([], qdisc="clsact"), 10) == "clsact"
+def test_ingress_qdisc_kind_reads_the_ingress_parent_only(monkeypatch):
+    for qdisc, kind in ((None, None), ("ingress", "ingress"), ("clsact", "clsact")):
+        ipr = _MirredIpr([], qdisc=qdisc)
+        monkeypatch.setattr(
+            kernel_verifier, "interface_qdiscs", lambda index, ipr=ipr: ipr.get_qdiscs(index)
+        )
+        assert kernel_verifier.ingress_qdisc_kind(10) == kind
 
 
 class _FakeLink(dict):

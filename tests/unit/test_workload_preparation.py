@@ -61,3 +61,38 @@ def test_any_other_render_failure_fails_preparation_with_its_type_and_message(
         _prepare_with(monkeypatch, failure)
 
     assert failed.value.__cause__ is failure
+
+
+def test_dev_image_overrides_warn_once_per_preparation(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Every substituted container is counted in one warning, never one each."""
+    import json
+    import logging
+
+    resolution = load_session_resolution_from_file(
+        ROOT / "catalog/nodalarc/sessions/earth-leo-simple.yaml", catalog=shipped_read_view()
+    )
+    frr = next(iter(resolution.workload_profiles.values()))
+    monkeypatch.setenv(
+        preparation.DEV_IMAGE_OVERRIDES_ENV,
+        json.dumps({f"{frr.registry}/{frr.image}": "registry.dev/frr:dev"}),
+    )
+    monkeypatch.setenv("IMAGE_PULL_POLICY", "Always")
+    monkeypatch.setenv("WIRING_GATE_IMAGE", "registry.dev/base:dev")
+    with caplog.at_level(logging.WARNING, logger=preparation.log.name):
+        prepared = prepare_session_workloads(
+            resolution, namespace="nodalarc", owner_ref={"uid": "test-uid"}
+        )
+    warnings = [r for r in caplog.records if "DEV IMAGE OVERRIDE" in r.getMessage()]
+    assert len(warnings) == 1
+    nodes = len(resolution.resolved.nodes)
+    assert f"replaced by registry.dev/frr:dev in {nodes} container(s)" in warnings[0].getMessage()
+    for workload in prepared.composed.values():
+        primary = next(
+            c
+            for c in workload.composition.containers
+            if c.name == workload.composition.primary_container
+        )
+        assert primary.image == "registry.dev/frr:dev"
+        assert primary.image_pull_policy == "Always"

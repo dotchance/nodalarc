@@ -127,10 +127,20 @@ Override-caused removals are forced BBM (escalated to GS-segment level for groun
 NATS request/reply (not JetStream). Each node has subject `nodalarc.agent.{hostname}`. Messages are protobuf-encoded (`lib/nodalarc/proto/node_agent.proto`).
 
 Every request carries `CommandEnvelope(operation_id, session_id,
-wiring_generation, operation_kind)`. Scheduler builds those fields from the
-validated wiring manifest identity read at startup. Node Agent responses must
-name every requested interface or latency entry, must have `verified=true` for
-successes, and must not report `dirty_kernel`.
+wiring_generation, operation_kind, writer_epoch)`. Scheduler builds the session
+and generation from the validated wiring manifest identity read at startup.
+Node Agent responses must name every requested interface or latency entry, must
+have `verified=true` for successes, and must not report `dirty_kernel`.
+
+The writer epoch comes from the session writer Lease (`nodalarc-scheduler-writer`,
+coordination.k8s.io). After its startup gates the Scheduler takes the Lease and
+uses the Lease's transition count as its epoch. It then renews the Lease every
+5 s. The Lease is taken at once when it is free, expired, or held by a
+Scheduler of another session. A second Scheduler of the same session waits as
+a standby until the holder releases the Lease or stops renewing it for 15 s. A
+Scheduler stops commanding for good when a Node Agent refuses its epoch, when
+the Lease names another holder, or when it could not renew for 10 s. It
+releases the Lease when it stops, so a successor starts without waiting.
 
 Request types:
 - `BatchLinkUp` - activate a set of links

@@ -113,6 +113,7 @@ def _handles(pids: dict[str, int]) -> dict:
         assert netns is not None, f"unshared process {pid} for {node_id} has no netns"
         wrapped[node_id] = NamespaceHandle(
             node_id=node_id,
+            pod_name=node_id,
             pod_uid=f"pod-{node_id}",
             sandbox_id=f"sb-{node_id}",
             sandbox_attempt=0,
@@ -154,13 +155,16 @@ def _env(kind: str, op_id: str, generation: str):
         session_id="root-test",
         wiring_generation=generation,
         operation_kind=kind,
+        writer_epoch=1,
     )
 
 
 def _fence(generation: str):
-    from node_agent.command_contract import RuntimeFence
+    from node_agent.command_contract import RuntimeFence, WriterEpochFloor
 
-    return RuntimeFence(session_id="root-test", wiring_generation=generation)
+    return RuntimeFence(
+        session_id="root-test", wiring_generation=generation, writer_floor=WriterEpochFloor()
+    )
 
 
 def _generation() -> str:

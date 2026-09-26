@@ -7,6 +7,13 @@ metadata:
     app: nodalarc-scheduler
 spec:
   replicas: 1
+  # A pod serves one session run. Recreate removes the old pod before the new
+  # one starts, so two instances never serve a session together.
+  strategy:
+    type: Recreate
+    # Clears the RollingUpdate parameters a Deployment created before this
+    # strategy carries; the API refuses them alongside Recreate.
+    rollingUpdate: null
   selector:
     matchLabels:
       app: nodalarc-scheduler
@@ -56,13 +63,16 @@ spec:
             - containerPort: 8081
               name: health
               protocol: TCP
+          # The Operator declares a session Ready only after this probe passes,
+          # so the probe runs every second; 15 consecutive failures keep the
+          # 15 s tolerance a 5 s period with the default threshold gave.
           readinessProbe:
             httpGet:
               path: /readyz
               port: health
-            initialDelaySeconds: 3
-            periodSeconds: 5
+            periodSeconds: 1
             timeoutSeconds: 5
+            failureThreshold: 15
           livenessProbe:
             httpGet:
               path: /livez

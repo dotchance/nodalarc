@@ -106,9 +106,18 @@ Node Agent I/O, and LinkUp/LinkDown publication for normal schedule progression 
 
 ## Node Agent Truth Contract
 
-Node Agent commands are fenced by `session_id` and `wiring_generation`.
-Malformed frames, stale generations, missing PIDs, missing `HOST_IP`, missing
-peer identity, and protobuf enum zero values fail before mutation.
+Node Agent commands are fenced by `session_id`, `wiring_generation` and the
+Scheduler's `writer_epoch`. Malformed frames, stale generations, missing PIDs,
+missing `HOST_IP`, missing peer identity, and protobuf enum zero values fail
+before mutation.
+
+One Scheduler commands a session's kernel state at a time, and the Node Agent
+enforces it. A Scheduler holds the `nodalarc-scheduler-writer` Lease before it
+sends any command, and every command carries the Lease's transition count as
+its writer epoch. A Node Agent refuses a command whose epoch is below the
+highest it accepted for the same session and wiring generation
+(`NODE_AGENT_STALE_WRITER`). A Scheduler that gets that refusal, loses the
+Lease, or cannot renew it within the renew deadline stops commanding for good.
 
 Node Agent success means the MVP kernel proof passed. Batch replies name every
 requested interface, SetLatency replies name every requested entry, and

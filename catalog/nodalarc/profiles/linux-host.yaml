@@ -11,7 +11,7 @@ profile:
   command:
   - /bin/bash
   - -c
-  - sleep infinity
+  - trap 'exit 143' TERM; sleep infinity & wait $!
   root_filesystem: read_only
   volumes:
   - name: tmp

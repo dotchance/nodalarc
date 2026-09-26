@@ -10,9 +10,10 @@ metadata:
   name: nodalarc-node-agent
   namespace: {{ .Values.namespace }}
 rules:
+  # patch: the Node Agent writes each wired pod's wiring proof onto that pod.
   - apiGroups: [""]
     resources: ["pods"]
-    verbs: ["get", "list", "watch"]
+    verbs: ["get", "list", "watch", "patch"]
   - apiGroups: [""]
     resources: ["configmaps"]
     verbs: ["get", "list", "watch", "create", "update", "patch"]

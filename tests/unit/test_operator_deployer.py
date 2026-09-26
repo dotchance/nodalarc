@@ -9,6 +9,7 @@ Uses create_autospec for K8s client mocks to catch signature drift.
 from __future__ import annotations
 
 import base64
+import dataclasses
 import hashlib
 import json
 import math
@@ -48,9 +49,8 @@ from nodalarc.substrate.measurement_contract import (
 )
 from nodalarc.substrate.wiring_status import (
     READY_PHASE_JQ_CLAUSE,
-    WIRING_STATUS_CONFIGMAP,
+    encode_status,
     failed_status,
-    status_configmap_data,
     wiring_row,
 )
 from nodalarc_operator.session_deployer import (
@@ -61,12 +61,18 @@ from nodalarc_operator.session_deployer import (
     compute_platform_hash,
     compute_runtime_hash,
     discover_available_nodes,
+    ensure_runtime_session_config,
     ensure_session_configmaps,
     ensure_session_pods,
     teardown_session,
     write_wiring_manifest,
 )
-from nodalarc_operator.session_pods import SessionPodIdentity
+from nodalarc_operator.session_pods import (
+    ObservedPod,
+    PodClass,
+    SessionPodIdentity,
+    SessionPodView,
+)
 
 from tests.catalog_session_fixtures import build_catalog_session_fixture, resolve_catalog_session
 
@@ -419,12 +425,51 @@ class TestDeterministicNode:
 # ---------------------------------------------------------------------------
 
 
-class TestWiringCompletion:
-    """Tests check_wiring_complete() against typed wiring status data."""
+def _proof_view(manifest, statuses, *, extra_pods=()) -> SessionPodView:
+    """A pod view whose current pods carry the given wiring proofs."""
+    identity = SessionPodIdentity.for_session(
+        owner_ref={"name": "current-session", "uid": "test-uid"},
+        session_run_id="run-test-0001",
+        selection_identity="profiles@sha256:" + "a" * 64,
+        node_ids=list(manifest.nodes),
+    )
+    pods = [
+        ObservedPod(
+            name=node_id.lower(),
+            uid=statuses[node_id].pod_uid if node_id in statuses else f"pod-{node_id}",
+            node_id=node_id.lower(),
+            pod_class=PodClass.CURRENT,
+            k8s_node="node01",
+            pod_ip="10.42.0.5",
+            workloads_running=False,
+            owners="current-session/test-uid",
+            wiring_proof=encode_status(statuses[node_id]) if node_id in statuses else None,
+        )
+        for node_id in manifest.nodes
+    ]
+    return SessionPodView(identity=identity, pods=(*pods, *extra_pods))
 
-    def test_metadata_keys_are_not_counted_as_wired_nodes(self):
-        manifest = _make_wiring_manifest()
-        statuses = {
+
+class TestWiringCompletion:
+    """Tests check_wiring_complete() against the wiring proofs the pods carry."""
+
+    @staticmethod
+    def _complete(manifest, view):
+        mock_v1 = create_autospec(kubernetes.client.CoreV1Api, instance=True)
+
+        def read_cm(name, namespace):
+            assert namespace == "nodalarc"
+            if name == WIRING_MANIFEST_CONFIGMAP:
+                return _manifest_configmap(manifest)
+            raise AssertionError(f"unexpected ConfigMap read: {name}")
+
+        mock_v1.read_namespaced_config_map.side_effect = read_cm
+        with patch("nodalarc_operator.session_deployer._get_v1", return_value=mock_v1):
+            return check_wiring_complete("nodalarc", view)
+
+    @staticmethod
+    def _ready_rows(manifest):
+        return {
             node_id: wiring_row(
                 node_id,
                 manifest,
@@ -435,80 +480,47 @@ class TestWiringCompletion:
             )
             for node_id in manifest.nodes
         }
-        status_data = status_configmap_data(statuses, manifest)
-        status_data["_progress"] = "Finalized 2/2 pods. Wiring complete."
 
-        mock_v1 = create_autospec(kubernetes.client.CoreV1Api, instance=True)
-
-        def read_cm(name, namespace):
-            assert namespace == "nodalarc"
-            if name == WIRING_MANIFEST_CONFIGMAP:
-                return _manifest_configmap(manifest)
-            if name == "nodalarc-wiring-status":
-                return _status_configmap(status_data)
-            raise AssertionError(f"unexpected ConfigMap read: {name}")
-
-        mock_v1.read_namespaced_config_map.side_effect = read_cm
-
-        with patch("nodalarc_operator.session_deployer._get_v1", return_value=mock_v1):
-            complete, wired_count, progress = check_wiring_complete("nodalarc", 2)
-
+    def test_every_pod_with_ready_proof_completes_wiring(self):
+        manifest = _make_wiring_manifest()
+        complete, wired_count, progress = self._complete(
+            manifest, _proof_view(manifest, self._ready_rows(manifest))
+        )
         assert complete is True
         assert wired_count == 2
         assert progress is None
 
-    def test_unknown_status_node_fails_loudly(self):
+    def test_a_pod_without_proof_holds_completion(self):
         manifest = _make_wiring_manifest()
-        statuses = {
-            node_id: wiring_row(
-                node_id,
-                manifest,
-                pod_uid=f"pod-{node_id}",
-                sandbox_id=f"sb-{node_id}",
-                netns_id="4026532100",
-                state="ready",
-            )
-            for node_id in manifest.nodes
-        }
-        statuses["sat-P99S99"] = wiring_row(
-            "sat-P99S99",
-            manifest,
-            pod_uid="pod-x",
-            sandbox_id="sb-x",
-            netns_id="4026532100",
-            state="ready",
+        rows = self._ready_rows(manifest)
+        rows.pop(next(iter(manifest.nodes)))
+        complete, wired_count, _progress = self._complete(manifest, _proof_view(manifest, rows))
+        assert complete is False
+        assert wired_count == 1
+
+    def test_proof_of_another_wiring_generation_is_not_counted(self):
+        manifest = _make_wiring_manifest()
+        stale = manifest.model_copy(update={"wiring_generation": "sha256:" + "0" * 64})
+        rows = self._ready_rows(stale)
+        complete, wired_count, _progress = self._complete(manifest, _proof_view(manifest, rows))
+        assert complete is False
+        assert wired_count == 0
+
+    def test_proof_naming_another_pod_incarnation_fails_loudly(self):
+        manifest = _make_wiring_manifest()
+        rows = self._ready_rows(manifest)
+        view = _proof_view(manifest, rows)
+        first = view.pods[0]
+        replaced = SessionPodView(
+            identity=view.identity,
+            pods=(dataclasses.replace(first, uid="pod-replaced"), *view.pods[1:]),
         )
-        status_data = status_configmap_data(statuses, manifest)
-
-        mock_v1 = create_autospec(kubernetes.client.CoreV1Api, instance=True)
-
-        def read_cm(name, namespace):
-            assert namespace == "nodalarc"
-            if name == WIRING_MANIFEST_CONFIGMAP:
-                return _manifest_configmap(manifest)
-            if name == "nodalarc-wiring-status":
-                return _status_configmap(status_data)
-            raise AssertionError(f"unexpected ConfigMap read: {name}")
-
-        mock_v1.read_namespaced_config_map.side_effect = read_cm
-
-        with patch("nodalarc_operator.session_deployer._get_v1", return_value=mock_v1):
-            with pytest.raises(ValueError, match="unknown node entries"):
-                check_wiring_complete("nodalarc", 2)
+        with pytest.raises(ValueError, match="carries proof for pod uid"):
+            self._complete(manifest, replaced)
 
     def test_dirty_kernel_status_names_first_failure(self):
         manifest = _make_wiring_manifest()
-        statuses = {
-            node_id: wiring_row(
-                node_id,
-                manifest,
-                pod_uid=f"pod-{node_id}",
-                sandbox_id=f"sb-{node_id}",
-                netns_id="4026532100",
-                state="ready",
-            )
-            for node_id in manifest.nodes
-        }
+        statuses = self._ready_rows(manifest)
         statuses["sat-P00S00"] = failed_status(
             "sat-P00S00",
             manifest,
@@ -519,23 +531,8 @@ class TestWiringCompletion:
             error_message="sysctl net.mpls.platform_labels=100000 failed",
             dirty_kernel=True,
         )
-        status_data = status_configmap_data(statuses, manifest)
-
-        mock_v1 = create_autospec(kubernetes.client.CoreV1Api, instance=True)
-
-        def read_cm(name, namespace):
-            assert namespace == "nodalarc"
-            if name == WIRING_MANIFEST_CONFIGMAP:
-                return _manifest_configmap(manifest)
-            if name == "nodalarc-wiring-status":
-                return _status_configmap(status_data)
-            raise AssertionError(f"unexpected ConfigMap read: {name}")
-
-        mock_v1.read_namespaced_config_map.side_effect = read_cm
-
-        with patch("nodalarc_operator.session_deployer._get_v1", return_value=mock_v1):
-            with pytest.raises(ValueError, match="first failure: sat-P00S00 sysctls"):
-                check_wiring_complete("nodalarc", 2)
+        with pytest.raises(ValueError, match="first failure: sat-P00S00 sysctls"):
+            self._complete(manifest, _proof_view(manifest, statuses))
 
     @staticmethod
     def _completion_with_manifest_data(data):
@@ -544,7 +541,7 @@ class TestWiringCompletion:
         manifest_cm.data = data
         mock_v1.read_namespaced_config_map.return_value = manifest_cm
         with patch("nodalarc_operator.session_deployer._get_v1", return_value=mock_v1):
-            return check_wiring_complete("nodalarc", 2)
+            return check_wiring_complete("nodalarc", _proof_view(_make_wiring_manifest(), {}))
 
     def test_missing_manifest_payload_keeps_its_refusal(self):
         with pytest.raises(ValueError, match="^topology wiring manifest payload is missing$"):
@@ -721,6 +718,35 @@ class TestRuntimeIdentityCleanup:
         assert order[:2] == [("purge", "run-a"), ("purge", "run-b")]
         assert all(kind == "delete" for kind, _ in order[2:])
         assert ("delete", "nodalarc-session") in order
+
+    def test_teardown_deletes_the_fixed_name_terminal_secret(self):
+        """Left to garbage collection, the fixed-name keypair outlives the CR and
+        the next session's pod creation waits for it to disappear."""
+        mock_v1 = create_autospec(kubernetes.client.CoreV1Api, instance=True)
+        with (
+            patch("nodalarc_operator.session_deployer._get_v1", return_value=mock_v1),
+            patch("nodalarc_operator.session_deployer.purge_session_runtime_state"),
+        ):
+            teardown_session("nodalarc", ("run-a",))
+        mock_v1.delete_namespaced_secret.assert_called_once_with(
+            "nodalarc-terminal-keys", "nodalarc"
+        )
+
+    def test_teardown_tolerates_an_absent_terminal_secret_and_propagates_other_failures(self):
+        mock_v1 = create_autospec(kubernetes.client.CoreV1Api, instance=True)
+        mock_v1.delete_namespaced_secret.side_effect = kubernetes.client.rest.ApiException(
+            status=404
+        )
+        with (
+            patch("nodalarc_operator.session_deployer._get_v1", return_value=mock_v1),
+            patch("nodalarc_operator.session_deployer.purge_session_runtime_state"),
+        ):
+            teardown_session("nodalarc", ())
+            mock_v1.delete_namespaced_secret.side_effect = kubernetes.client.rest.ApiException(
+                status=500
+            )
+            with pytest.raises(kubernetes.client.rest.ApiException):
+                teardown_session("nodalarc", ())
 
 
 # ---------------------------------------------------------------------------
@@ -967,10 +993,6 @@ class TestWiringManifest:
             spec = _make_catalog_spec(tmp_path, **kwargs)
         if mock_v1 is None:
             mock_v1 = create_autospec(kubernetes.client.CoreV1Api, instance=True)
-            # wiring-status delete returns 404 (normal for fresh deploy)
-            mock_v1.delete_namespaced_config_map.side_effect = kubernetes.client.rest.ApiException(
-                status=404
-            )
         owner_ref = {
             "apiVersion": "nodalarc.io/v1alpha1",
             "kind": "ConstellationSpec",
@@ -1044,9 +1066,8 @@ class TestWiringManifest:
 
         assert json.loads(stored[name].data["status.json"]) == document.model_dump(mode="json")
         mock_v1.replace_namespaced_config_map.assert_called_once()
-        mock_v1.delete_namespaced_config_map.assert_called_once_with(
-            WIRING_STATUS_CONFIGMAP, "nodalarc"
-        )
+        # Wiring proof lives on the pods; a new manifest deletes no ConfigMap.
+        mock_v1.delete_namespaced_config_map.assert_not_called()
 
     def test_manifest_node_agent_schema(self, tmp_path):
         manifest = self._build_and_extract(tmp_path)
@@ -1658,11 +1679,23 @@ class TestConfigRendering:
                 deployment_context=_test_deployment_context(spec),
             )
 
-        session_cms = [
-            (call[1].get("body") or call[0][1]).data
-            for call in mock_v1.create_namespaced_config_map.call_args_list
-            if (call[1].get("body") or call[0][1]).metadata.name == "nodalarc-session"
-        ]
+            def _session_cms():
+                return [
+                    (call[1].get("body") or call[0][1]).data
+                    for call in mock_v1.create_namespaced_config_map.call_args_list
+                    if (call[1].get("body") or call[0][1]).metadata.name == "nodalarc-session"
+                ]
+
+            # Pod creation never writes the services' start authorization.
+            assert _session_cms() == []
+            ensure_runtime_session_config(
+                "nodalarc",
+                owner_ref,
+                context["operator_session"],
+                context["deployment_context"],
+            )
+
+        session_cms = _session_cms()
         assert len(session_cms) == 1
         assert set(session_cms[0]) == {
             "session.yaml",
@@ -1967,16 +2000,19 @@ class TestPodSpec:
             assert READY_PHASE_JQ_CLAUSE in script
             assert "readlink /proc/self/ns/net" in script
 
-    def test_wiring_status_volume_projects_only_this_nodes_proof(self, tmp_path):
+    def test_wiring_status_volume_is_a_disk_backed_empty_dir(self, tmp_path):
+        """The Node Agent writes the proof into this directory from the host;
+        no kubelet projection sits between the proof and the gate."""
         pods = self._create_pods(tmp_path)
         for pod in pods:
             volume = next(v for v in pod.spec.volumes if v.name == "wiring-status")
-            assert volume.config_map.name == "nodalarc-wiring-status"
-            assert volume.config_map.optional is True
-            items = volume.config_map.items
-            assert items is not None and len(items) == 1
-            assert items[0].key == pod.metadata.labels["nodalarc.io/node-id"]
-            assert items[0].path == "status.json"
+            assert volume.config_map is None and volume.downward_api is None
+            assert volume.empty_dir is not None
+            # A memory medium would be a tmpfs mount on the host, which the
+            # Node Agent could reach only through mount propagation.
+            assert volume.empty_dir.medium is None
+            gate = next(c for c in pod.spec.init_containers if c.name == "wiring-gate")
+            assert 'status_file="/wiring-status/status.json"' in gate.command[-1]
 
     def test_labels(self, tmp_path):
         pods = self._create_pods(tmp_path)

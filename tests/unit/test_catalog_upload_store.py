@@ -459,7 +459,10 @@ def test_put_cleanup_failures_stay_names_behind_the_create_failure(upload: Catal
         KubernetesCatalogUploadStore(api, NAMESPACE).put(upload)
 
     assert raised.value.code is CatalogUploadStoreErrorCode.CREATE_FAILED
-    assert raised.value.evidence.created_names == (first,)
+    # Every file is created together; each one that exists is reported and
+    # cleaned up, and the one that could not be deleted stays named.
+    assert first in raised.value.evidence.created_names
+    assert second not in raised.value.evidence.created_names
     assert raised.value.evidence.cleanup_failures == (first,)
     create_failure = raised.value.__cause__
     assert isinstance(create_failure, CatalogUploadStoreError)

@@ -82,8 +82,13 @@ When a ConstellationSpec CR is created:
 7. **Create session pods** - with ownerReference to CR (enables GC cascade)
 8. **Wait for pods Running** - poll until all pods reach Running state
 9. **Write wiring manifest** - `nodalarc-topology-wiring` ConfigMap
-10. **Wait for wiring complete** - Node Agent signals via `nodalarc-wiring-status`
-11. **Advance phase to Ready**
+10. **Wait for wiring complete** - the Node Agent writes each pod's wiring
+    proof onto that pod as the `nodalarc.io/wiring-status` annotation, and
+    writes the same proof into the pod's `wiring-status` emptyDir, where the
+    pod's `wiring-gate` init container reads it
+11. **Start the session services** - write the `nodalarc-session` ConfigMap and
+    roll OME and the Scheduler onto it, once every pod is wired and running
+12. **Advance phase to Ready**
 
 ## Pod Placement
 

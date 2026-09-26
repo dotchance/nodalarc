@@ -15,6 +15,7 @@ import logging
 import os
 import signal
 import socket
+import sys
 import time as _time
 import uuid
 from collections.abc import Callable
@@ -63,6 +64,8 @@ from scheduler.writer_lease import (
     RENEW_INTERVAL_S,
     STANDBY_RETRY_S,
     WriterLease,
+    WriterLeaseConflict,
+    WriterLeaseLost,
 )
 
 log = logging.getLogger(__name__)
@@ -402,12 +405,13 @@ async def _acquire_writer_lease(lease: WriterLease) -> int:
         await asyncio.sleep(STANDBY_RETRY_S)
 
 
-async def _keep_writer_lease(lease: WriterLease, dispatcher: Dispatcher) -> None:
-    """Renew the lease while the dispatcher runs; supersede it once the lease is lost.
+async def _keep_writer_lease(lease: WriterLease, dispatcher: Dispatcher) -> str | None:
+    """Renew the lease while the dispatcher runs; stop it once the hold is gone.
 
-    A renewal the API server does not answer leaves the hold unproven. Past
-    the renew deadline another Scheduler may take the lease, so this one
-    stops commanding before that can happen.
+    Returns why the hold became unproven when the API server stopped
+    answering renewals: past the renew deadline another Scheduler may take
+    the lease, so this one stops commanding first. Returns None after
+    superseding the dispatcher because the lease names another holder.
     """
     import kubernetes.client
     import urllib3
@@ -418,22 +422,28 @@ async def _keep_writer_lease(lease: WriterLease, dispatcher: Dispatcher) -> None
         await asyncio.sleep(RENEW_INTERVAL_S)
         try:
             held = await loop.run_in_executor(None, lease.renew)
-        except (kubernetes.client.rest.ApiException, urllib3.exceptions.HTTPError, OSError) as exc:
+        except (
+            kubernetes.client.rest.ApiException,
+            urllib3.exceptions.HTTPError,
+            OSError,
+            WriterLeaseConflict,
+        ) as exc:
             if _time.monotonic() - renewed_at < RENEW_DEADLINE_S:
                 log.warning("Writer lease renewal failed: %s", exc)
                 continue
-            dispatcher.supersede(
+            dispatcher.stop()
+            return (
                 f"Writer lease {LEASE_NAME} not renewed for {RENEW_DEADLINE_S:.0f} s ({exc}); "
-                "another Scheduler may hold it. Shutting down cleanly."
+                f"this instance ({lease.holder}, writer epoch {lease.epoch}) stopped commanding "
+                "and exits for a restart."
             )
-            return
         if not held:
             dispatcher.supersede(
                 f"Writer lease {LEASE_NAME} now names another Scheduler; this instance "
                 f"({lease.holder}, writer epoch {lease.epoch}) no longer commands the session. "
                 "Shutting down cleanly."
             )
-            return
+            return None
         renewed_at = _time.monotonic()
 
 
@@ -444,26 +454,45 @@ def _release_writer_lease(lease: WriterLease) -> None:
 
     try:
         lease.release()
-    except (kubernetes.client.rest.ApiException, urllib3.exceptions.HTTPError, OSError) as exc:
+    except (
+        kubernetes.client.rest.ApiException,
+        urllib3.exceptions.HTTPError,
+        OSError,
+        WriterLeaseConflict,
+    ) as exc:
         log.warning("Writer lease release failed (%s); it expires on its own", exc)
 
 
-async def _serve(lease: WriterLease, build_dispatcher: Callable[[int], Dispatcher]) -> None:
-    """Take the writer lease, then run the dispatcher with SIGTERM routed to its orderly stop."""
+async def _serve(
+    lease: WriterLease,
+    build_dispatcher: Callable[[int], Dispatcher],
+    *,
+    commanding: Callable[[], None],
+) -> None:
+    """Take the writer lease, then run the dispatcher with SIGTERM routed to its orderly stop.
+
+    ``commanding`` is called once the lease is held, before the first command.
+    Raises WriterLeaseLost when the hold became unproven while the dispatcher ran.
+    """
     loop = asyncio.get_running_loop()
     epoch = await _acquire_writer_lease(lease)
+    lost: str | None = None
     try:
         dispatcher = build_dispatcher(epoch)
+        commanding()
         loop.add_signal_handler(signal.SIGTERM, dispatcher.stop)
         keeper = asyncio.create_task(_keep_writer_lease(lease, dispatcher))
         try:
             await dispatcher.run()
         finally:
-            keeper.cancel()
+            if not keeper.done():
+                keeper.cancel()
             with contextlib.suppress(asyncio.CancelledError):
-                await keeper
+                lost = await keeper
     finally:
         await loop.run_in_executor(None, _release_writer_lease, lease)
+    if lost is not None:
+        raise WriterLeaseLost(lost)
 
 
 def main() -> None:
@@ -504,7 +533,9 @@ def _run_scheduler() -> None:
         log=log,
     )
     resolved = runtime_config.config.resolution.resolved
-    runtime_health.mark_loaded(runtime_config)
+    # A loaded Scheduler is not ready until it holds the writer lease: a
+    # standby dispatches nothing.
+    runtime_health.mark_loaded(runtime_config, waiting_for=f"the session writer lease {LEASE_NAME}")
     interface_map = resolved.link_interface_map()
     interface_rates = resolved.interface_terminal_rates()
     log.debug("Interface map: %d link pairs", len(interface_map))
@@ -610,7 +641,13 @@ def _run_scheduler() -> None:
         )
 
     try:
-        asyncio.run(_serve(writer_lease, _build_dispatcher))
+        asyncio.run(_serve(writer_lease, _build_dispatcher, commanding=runtime_health.mark_serving))
+    except WriterLeaseLost as exc:
+        # The hold is unproven, not taken: the session has not moved on. The
+        # kubelet restarts this container, and the new process takes the lease
+        # at a higher epoch once no other holder renews it.
+        log.error("%s", exc)
+        sys.exit(1)
     except DispatcherSuperseded as exc:
         # The wiring authority moved to another session or generation. This
         # process served one session and never serves another: it stays up,

@@ -12,6 +12,12 @@ and decodes only the messages whose ``tcm_ifindex`` is the interface's.
 
 The socket is opened in the calling thread's network namespace, which is the
 namespace the caller's own IPRoute works in.
+
+This read speaks netlink directly because pyroute2 cannot make it at the
+needed cost: its own handling of each message is 5.6 ms per query at 500
+devices, whatever it decodes, and link-up runs several such queries per
+link. The read runs in the calling thread, starts no process and waits on no
+child. Every kernel write still goes through pyroute2.
 """
 
 from __future__ import annotations
@@ -28,6 +34,7 @@ _RTM_NEWQDISC = 36
 _RTM_GETQDISC = 38
 _NLM_F_REQUEST = 0x1
 _NLM_F_DUMP = 0x300
+_NLM_F_DUMP_INTR = 0x10
 _NLMSG_ERROR = 2
 _NLMSG_DONE = 3
 _NLMSG_HEADER = struct.Struct("=LHHLL")
@@ -68,14 +75,20 @@ def _dump_messages(sock: socket.socket, sequence: int) -> Iterator[tuple[int, by
 
 
 def _messages(data: bytes, sequence: int) -> Iterator[tuple[int, bytes]]:
-    """(type, message) for each netlink message in one datagram; errors raise."""
+    """(type, message) for each netlink message in one datagram; errors raise.
+
+    A message the kernel marked NLM_F_DUMP_INTR means a qdisc changed while the
+    dump ran: such a dump proves nothing, and it raises.
+    """
     offset = 0
     while offset + _NLMSG_HEADER.size <= len(data):
-        length, kind, _flags, seq, _pid = _NLMSG_HEADER.unpack_from(data, offset)
+        length, kind, flags, seq, _pid = _NLMSG_HEADER.unpack_from(data, offset)
         if length < _NLMSG_HEADER.size or offset + length > len(data):
             raise OSError(errno.EBADMSG, f"truncated netlink message at offset {offset}")
         if seq != sequence:
             raise OSError(errno.EBADMSG, f"netlink reply for sequence {seq}, expected {sequence}")
+        if flags & _NLM_F_DUMP_INTR:
+            raise OSError(errno.EAGAIN, "qdisc dump interrupted by a concurrent change")
         if kind == _NLMSG_ERROR:
             (code,) = struct.unpack_from("=i", data, offset + _NLMSG_HEADER.size)
             if code:

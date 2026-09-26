@@ -119,6 +119,9 @@ def _handle(dispatcher: Dispatcher, result: ActuationResult) -> None:
 def _assert_clean_supersession(dispatcher: Dispatcher) -> None:
     assert dispatcher._running is False
     assert "Superseded" in dispatcher._dispatch_blocked_reason
+    # run() raises DispatcherSuperseded with this reason even when the raise
+    # above happened in a task nobody awaits.
+    assert dispatcher._superseded_reason == dispatcher._dispatch_blocked_reason
     (call,) = dispatcher._publish_scheduler_ops.await_args_list
     assert call.kwargs["code"] == SchedulerOpsCode.SCHEDULER_SUPERSEDED
     assert call.kwargs["level"] == "info"

@@ -3,8 +3,9 @@
 # K3s node configuration NodalArc requires on every node that runs session pods.
 #
 # Writes a K3s configuration drop-in and restarts K3s when the drop-in changed,
-# then proves the running kubelet carries the settings. Run as root on each
-# node; scripts/bootstrap-host.sh calls it after installing K3s.
+# then proves from the K3s journal that the running components carry the
+# settings. Works on servers and agents. Run as root on each node;
+# scripts/bootstrap-host.sh calls it after installing K3s.
 #
 # Idempotent: an unchanged drop-in neither rewrites the file nor restarts K3s.
 
@@ -99,35 +100,40 @@ if [ "$changed" -eq 1 ]; then
     systemctl restart "$unit"
 fi
 
-# Prove the running kubelet carries the setting. The kubelet serves its
-# effective configuration at /configz through the API server's node proxy.
-node_name="$(hostname)"
-for _ in $(seq 1 90); do
-    if qps="$(k3s kubectl get --raw "/api/v1/nodes/$node_name/proxy/configz" 2>/dev/null \
-        | sed -n 's/.*"registryPullQPS":\([0-9]*\).*/\1/p')" && [ -n "$qps" ]; then
-        break
-    fi
-    sleep 2
-done
-if [ -z "${qps:-}" ]; then
-    echo "ERROR: could not read the kubelet configuration of node $node_name" >&2
-    exit 1
-fi
-if [ "$qps" != "0" ]; then
-    echo "ERROR: kubelet on $node_name runs registryPullQPS=$qps; expected 0" >&2
-    exit 1
-fi
-echo "  kubelet on $node_name: registryPullQPS=0"
+# Prove the running components carry the settings. K3s logs the full command
+# line of each component it starts, on servers and agents alike; only lines
+# since its main process last started describe the running components.
+started="$(systemctl show -p ExecMainStartTimestamp --value "$unit")"
 
-# Prove the running API server carries its setting: K3s logs the API server's
-# full command line each time it starts it.
+# The command line K3s logged when it last started component $1; waits for
+# a component K3s starts after its main process reports ready.
+started_command_line() {
+    local line=""
+    for _ in $(seq 1 90); do
+        line="$(journalctl -u "$unit" --since "$started" --no-pager 2>/dev/null \
+            | grep "Running $1 " | tail -1 || true)"
+        if [ -n "$line" ]; then
+            printf '%s\n' "$line"
+            return 0
+        fi
+        sleep 2
+    done
+    echo "ERROR: K3s logged no start of $1 since $started" >&2
+    return 1
+}
+
+kubelet_line="$(started_command_line kubelet)"
+if ! grep -q -- '--registry-qps=0' <<<"$kubelet_line"; then
+    echo "ERROR: the kubelet on this node does not run with --registry-qps=0" >&2
+    exit 1
+fi
+echo "  kubelet: registry-qps=0"
+
 if [ "$unit" = "k3s" ]; then
-    # The main process start: K3s logs the command line before it reports ready.
-    started="$(systemctl show -p ExecMainStartTimestamp --value "$unit")"
-    if ! journalctl -u "$unit" --since "$started" --no-pager 2>/dev/null \
-        | grep 'Running kube-apiserver' | tail -1 | grep -q -- '--delete-collection-workers=16'; then
-        echo "ERROR: the API server on $node_name does not run with --delete-collection-workers=16" >&2
+    apiserver_line="$(started_command_line kube-apiserver)"
+    if ! grep -q -- '--delete-collection-workers=16' <<<"$apiserver_line"; then
+        echo "ERROR: the API server on this node does not run with --delete-collection-workers=16" >&2
         exit 1
     fi
-    echo "  kube-apiserver on $node_name: delete-collection-workers=16"
+    echo "  kube-apiserver: delete-collection-workers=16"
 fi

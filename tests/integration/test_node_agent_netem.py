@@ -163,7 +163,9 @@ def _fence(generation: str):
     from node_agent.command_contract import RuntimeFence, WriterEpochFloor
 
     return RuntimeFence(
-        session_id="root-test", wiring_generation=generation, writer_floor=WriterEpochFloor()
+        session_id="root-test",
+        wiring_generation=generation,
+        writer_floor=WriterEpochFloor(lambda: None),
     )
 
 

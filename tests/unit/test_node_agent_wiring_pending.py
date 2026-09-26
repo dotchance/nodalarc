@@ -552,7 +552,9 @@ def test_rewiring_refusal_decodes_as_the_operation_sent(msg_type, response_cls) 
     gate = DispatchGate()
     assert gate.drain(timeout_seconds=0.5) is True
     fence = RuntimeFence(
-        session_id="s", wiring_generation="sha256:" + "a" * 64, writer_floor=WriterEpochFloor()
+        session_id="s",
+        wiring_generation="sha256:" + "a" * 64,
+        writer_floor=WriterEpochFloor(lambda: None),
     )
 
     raw = dispatch(msg_type + b"\x00", {}, fence, gate)
@@ -594,3 +596,33 @@ def test_terminal_handle_swap_completes_when_idle(new_handles) -> None:
     assert na_main.replace_handles_when_idle(gate, shared, new_handles) is True
     assert shared == new_handles
     gate.resume.assert_called_once()
+
+
+@pytest.mark.parametrize("kernel_state", [set(), {"isl0"}], ids=["no-kernel-state", "diverged"])
+def test_every_rewire_cleans_the_host_exactly_once(
+    monkeypatch: pytest.MonkeyPatch, kernel_state: set[str]
+) -> None:
+    """The one host clean runs before wiring, whether or not the name inventory
+    found kernel state; wiring itself cleans only pod namespaces and the firewall."""
+    from unittest.mock import MagicMock
+
+    from node_agent import __main__ as na_main
+    from node_agent import reconcile, site_lan, wiring
+
+    manifest = _manifest({"sat-a": LOCAL_NODE})
+    handle = _handle("sat-a")
+    gate = MagicMock()
+    gate.drain.return_value = True
+    clean = MagicMock(return_value=_clean_report())
+    monkeypatch.setattr(na_main, "write_wiring_status", lambda *a, **k: None)
+    monkeypatch.setattr(na_main, "get_actual_nodalarc_interfaces", lambda: kernel_state)
+    monkeypatch.setattr(na_main, "clean_and_verify_host_state", clean)
+    # Wiring's own cleaner must not run the host cleaner again.
+    monkeypatch.setattr(reconcile, "clean_and_verify_host_state", clean)
+    monkeypatch.setattr(site_lan, "remove_site_lan_transit", MagicMock())
+    monkeypatch.setattr(na_main, "execute_wiring", lambda *a, **k: {})
+
+    na_main.perform_rewire(manifest, "testns", {"sat-a": handle}, {"sat-a"}, {}, gate)
+    wiring._cleanup_stale_interfaces({}, {})
+
+    clean.assert_called_once()

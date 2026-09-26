@@ -59,12 +59,15 @@ from node_agent.wiring import (
     expected_local_nodes,
     write_wiring_status,
 )
+from node_agent.writer_lease_view import WriterLeaseView
 
 log = logging.getLogger(__name__)
 
 # How long the wiring watcher waits for a manifest change before it re-verifies
 # the namespace handles of the manifest it serves.
 _STEADY_STATE_CHECK_S = 5.0
+# How long the first LIST of the Scheduler writer Lease may take at startup.
+_WRITER_LEASE_FIRST_LIST_S = 60.0
 
 
 def _running_in_k8s() -> bool:
@@ -110,6 +113,25 @@ def _require_kubelet_pods_dir() -> None:
             session_id="",
         )
         raise
+
+
+def _require_writer_lease_observed(view: WriterLeaseView) -> None:
+    if view.wait_listed(0):
+        return
+    ops_events.publish(
+        level="critical",
+        code="STARTUP_WRITER_LEASE_UNOBSERVED",
+        message=(
+            f"Node Agent could not list the Scheduler writer Lease within "
+            f"{_WRITER_LEASE_FIRST_LIST_S:.0f} s; refusing NATS command subscription"
+        ),
+        session_id="",
+        details={},
+    )
+    raise RuntimeError(
+        "Scheduler writer Lease unobserved; the writer epoch floor is unknown, "
+        "refusing NATS command subscription"
+    )
 
 
 def _require_ready_fence(fence: RuntimeFence) -> None:
@@ -209,8 +231,12 @@ async def main() -> None:
     shared_handles: dict[str, NamespaceHandle] = {}
     dispatch_gate = DispatchGate()
     # The Scheduler writer epoch floor lives as long as this process; every
-    # fence built below shares it.
-    writer_floor = WriterEpochFloor()
+    # fence built below shares it. It reads the writer Lease, which the wiring
+    # watcher observes before the first wiring, so before any command is served.
+    from nodalarc.platform_config import get_platform_config
+
+    writer_lease_view = WriterLeaseView(get_platform_config().kubernetes_namespace)
+    writer_floor = WriterEpochFloor(writer_lease_view.current)
     current_fence = RuntimeFence(session_id="", wiring_generation="", writer_floor=writer_floor)
     first_wiring_done = asyncio.Event()
     stop = threading.Event()
@@ -241,6 +267,13 @@ async def main() -> None:
         v1 = kubernetes.client.CoreV1Api()
         manifest_watch = ManifestWatch(v1, ns, WIRING_MANIFEST_CONFIGMAP)
         manifest_watch.start()
+        writer_lease_view.start(kubernetes.client.CoordinationV1Api())
+        if not writer_lease_view.wait_listed(_WRITER_LEASE_FIRST_LIST_S):
+            # No command may be admitted without the writer epoch floor: wake
+            # main, which refuses to subscribe (_require_writer_lease_observed).
+            manifest_watch.stop()
+            loop.call_soon_threadsafe(first_wiring_done.set)
+            return
         last_resource_version = ""
         # The observation the loop last acted on; waits resume from it.
         seen_version = 0
@@ -439,6 +472,7 @@ async def main() -> None:
         log.debug("Waiting for wiring to complete before accepting NATS requests...")
         await first_wiring_done.wait()
         log.debug("Wiring ready — %d namespace handles", len(shared_handles))
+        _require_writer_lease_observed(writer_lease_view)
         _require_ready_fence(current_fence)
 
         # NATS subscribes only after the handles and runtime fence are ready.
@@ -566,23 +600,26 @@ def perform_rewire(
                 "Kernel state diverged (%d interfaces) — cleaning and re-wiring",
                 len(actual),
             )
-            report = clean_and_verify_host_state()
-            if not report.clean:
-                # Wiring from scratch over residue, a failed delete or an
-                # unverified host is refused; the failure path below keeps
-                # dispatch closed and the watcher retries the manifest.
-                log.error(
-                    "Host cleanup did not verify clean; not wiring over residue: %s",
-                    report.model_dump_json(),
-                )
-                raise RuntimeError(
-                    "host cleanup did not verify clean; not wiring over residue: "
-                    f"failed={list(report.failed)} remaining={list(report.remaining)} "
-                    f"verification_completed={report.verification_completed} "
-                    f"enumeration_error={report.enumeration_error!r} "
-                    f"verification_error={report.verification_error!r}"
-                )
-            log.info("Cleaned %d stale kernel interfaces", len(report.removed))
+        # The one host clean of this rewire, in both cases: the cleaner also
+        # removes members of the managed device group whose names the inventory
+        # above does not recognize.
+        report = clean_and_verify_host_state()
+        if not report.clean:
+            # Wiring from scratch over residue, a failed delete or an
+            # unverified host is refused; the failure path below keeps
+            # dispatch closed and the watcher retries the manifest.
+            log.error(
+                "Host cleanup did not verify clean; not wiring over residue: %s",
+                report.model_dump_json(),
+            )
+            raise RuntimeError(
+                "host cleanup did not verify clean; not wiring over residue: "
+                f"failed={list(report.failed)} remaining={list(report.remaining)} "
+                f"verification_completed={report.verification_completed} "
+                f"enumeration_error={report.enumeration_error!r} "
+                f"verification_error={report.verification_error!r}"
+            )
+        log.info("Cleaned %d stale kernel interfaces", len(report.removed))
 
         statuses = execute_wiring(
             manifest_model, namespace=namespace, handles=handles, progress_fn=progress_fn

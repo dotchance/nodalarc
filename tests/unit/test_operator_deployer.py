@@ -2270,3 +2270,67 @@ class TestPodCreationProgress:
         calls_at_return = progress.call_count
         assert threading.active_count() == threads_before
         assert progress.call_count == calls_at_return
+
+
+# ---------------------------------------------------------------------------
+# Retired session services: waited for until every bound pod is gone
+# ---------------------------------------------------------------------------
+
+
+def _service_pod(name: str, *, bound: bool = True) -> kubernetes.client.V1Pod:
+    annotations = {"nodalarc.io/config-hash": "abc"} if bound else {}
+    return kubernetes.client.V1Pod(
+        metadata=kubernetes.client.V1ObjectMeta(
+            name=name, uid=f"uid-{name}", annotations=annotations
+        )
+    )
+
+
+def _retirement(listed, events, *, timeout_s: float):
+    """Run the retirement wait over one LIST of ``listed`` pods and a WATCH of ``events``."""
+    from nodalarc_operator.session_deployer import wait_for_session_services_retired
+
+    v1 = MagicMock()
+    v1.list_namespaced_pod.return_value = kubernetes.client.V1PodList(
+        items=list(listed), metadata=kubernetes.client.V1ListMeta(resource_version="5")
+    )
+    requests: list[dict] = []
+
+    class _Watch:
+        def stream(self, _function, **kwargs):
+            requests.append(kwargs)
+            yield from events
+
+        def stop(self) -> None:
+            pass
+
+    with (
+        patch("nodalarc_operator.session_deployer._get_v1", return_value=v1),
+        patch("kubernetes.watch.Watch", _Watch),
+    ):
+        wait_for_session_services_retired("nodalarc", timeout_s)
+    return v1, requests
+
+
+def test_retirement_returns_once_every_bound_service_pod_is_gone() -> None:
+    ome, scheduler = _service_pod("ome-1"), _service_pod("scheduler-1")
+    v1, requests = _retirement(
+        [ome, scheduler, _service_pod("ome-idle", bound=False)],
+        [{"type": "DELETED", "object": ome}, {"type": "DELETED", "object": scheduler}],
+        timeout_s=30,
+    )
+    assert v1.list_namespaced_pod.call_args.kwargs["label_selector"] == (
+        "app in (nodalarc-ome,nodalarc-scheduler)"
+    )
+    # The WATCH read ends in the client even if the connection is lost.
+    assert requests[0]["_request_timeout"][1] > requests[0]["timeout_seconds"]
+
+
+def test_retirement_names_the_pods_still_serving_after_the_timeout() -> None:
+    with pytest.raises(RuntimeError, match="still running .* ome-1"):
+        _retirement([_service_pod("ome-1")], [], timeout_s=0.01)
+
+
+def test_retirement_looks_before_it_reports_even_when_its_time_is_already_up() -> None:
+    with pytest.raises(RuntimeError, match="still running .* ome-1"):
+        _retirement([_service_pod("ome-1")], [], timeout_s=0)

@@ -117,9 +117,11 @@ chown frr:frr /var/log/frr
 # own start applies frr.conf as soon as the daemons are launched; applied
 # before zebra and staticd had connected to mgmtd, the interface addresses
 # were never installed on 2 to 14 routers per session start, and a later
-# apply installed them. The readiness probe accepts the container only after
-# the marker below exists. The marker lives on a volume that outlives a
-# container restart, so a restarted container removes it first.
+# apply installed them. A boot configuration that cannot be applied ends the
+# container: the session sees a router that is not running, and the kubelet
+# restarts it. The readiness probe accepts the container only after the marker
+# below exists. The marker lives on a volume that outlives a container
+# restart, so a restarted container removes it first.
 BOOT_WAIT_S=120
 # The daemons whose configuration FRR 10.3.1's mgmtd takes and passes on.
 MGMTD_BACKENDS="zebra ripd ripngd staticd"
@@ -149,23 +151,27 @@ boot_configuration_waits_for() {
     done
 }
 
+# Runs in the background; $$ is the entrypoint's process, which becomes FRR's
+# docker-start. Ending it ends the container.
 apply_boot_configuration() {
     local deadline waiting
     deadline=$(( $(date +%s) + BOOT_WAIT_S ))
     while waiting="$(boot_configuration_waits_for /etc/frr/daemons)"; [ -n "$waiting" ]; do
         if [ "$(date +%s)" -ge "$deadline" ]; then
-            echo "ERROR: frr.conf not applied; after ${BOOT_WAIT_S}s still waiting for:$waiting" >&2
+            echo "ERROR: frr.conf not applied; after ${BOOT_WAIT_S}s still waiting for:$waiting; ending the container" >&2
+            kill -TERM "$$"
             return 1
         fi
         sleep 0.2
     done
-    cp /etc/frr-config/frr.conf /etc/frr/frr.conf
-    chown frr:frr /etc/frr/frr.conf
-    if ! vtysh -b; then
-        echo "ERROR: frr.conf did not apply cleanly; the router is not ready" >&2
+    if ! cp /etc/frr-config/frr.conf /etc/frr/frr.conf \
+        || ! chown frr:frr /etc/frr/frr.conf \
+        || ! vtysh -b \
+        || ! touch /var/run/frr/nodalarc-boot-config-applied; then
+        echo "ERROR: frr.conf did not apply cleanly; ending the container" >&2
+        kill -TERM "$$"
         return 1
     fi
-    touch /var/run/frr/nodalarc-boot-config-applied
     echo "frr.conf applied with every selected daemon up and connected to mgmtd"
 }
 apply_boot_configuration &

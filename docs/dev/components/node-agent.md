@@ -42,7 +42,7 @@ Every command includes a `CommandEnvelope`:
 
 The envelope and all required fields are validated before any kernel mutation. Stale sessions, stale generations, malformed frames, missing PIDs, missing peer identity, missing `HOST_IP`, and unspecified enum zero values fail closed. There is no compatibility shim for old unfenced commands.
 
-The Node Agent keeps the highest writer epoch it accepted for the current session and wiring generation, for as long as the process runs. A command with a lower epoch comes from a Scheduler that another Scheduler replaced, and it is refused with `NODE_AGENT_STALE_WRITER` before any kernel mutation. A restarted Node Agent starts the floor again from the first command it accepts.
+The Node Agent watches the Scheduler writer Lease (`nodalarc-scheduler-writer`) and lists it before it serves any command; a Lease it cannot list within 60 s stops it from subscribing (`STARTUP_WRITER_LEASE_UNOBSERVED`). The lowest writer epoch it accepts is the Lease's transition count, or the highest epoch it accepted while the same Lease object exists, whichever is higher. A command with a lower epoch comes from a Scheduler that no longer holds the Lease, and it is refused with `NODE_AGENT_STALE_WRITER` before any kernel mutation. A restarted Node Agent reads the Lease again, so it refuses such a command from its first one.
 
 ## Namespace Operations
 

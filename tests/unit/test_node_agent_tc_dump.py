@@ -14,7 +14,9 @@ from pyroute2.netlink.rtnl.tcmsg import tcmsg
 SEQUENCE = 1
 
 
-def _qdisc(index: int, handle: int, parent: int, kind: str, *, sequence: int = SEQUENCE) -> bytes:
+def _qdisc(
+    index: int, handle: int, parent: int, kind: str, *, sequence: int = SEQUENCE, flags: int = 2
+) -> bytes:
     msg = tcmsg()
     msg["family"] = 0
     msg["index"] = index
@@ -22,7 +24,7 @@ def _qdisc(index: int, handle: int, parent: int, kind: str, *, sequence: int = S
     msg["parent"] = parent
     msg["attrs"] = [("TCA_KIND", kind)]
     msg["header"]["type"] = 36  # RTM_NEWQDISC
-    msg["header"]["flags"] = 2  # NLM_F_MULTI
+    msg["header"]["flags"] = flags  # NLM_F_MULTI by default
     msg["header"]["sequence_number"] = sequence
     msg.encode()
     return bytes(msg.data)
@@ -78,3 +80,10 @@ def test_a_truncated_message_raises() -> None:
 def test_a_reply_to_another_request_raises() -> None:
     with pytest.raises(OSError, match="sequence"):
         _query([_qdisc(7, 0x10000, 0xFFFFFFFF, "htb", sequence=9)], 7)
+
+
+def test_an_interrupted_dump_raises() -> None:
+    """A qdisc changed while the dump ran: the dump proves nothing."""
+    interrupted = _qdisc(7, 0x10000, 0xFFFFFFFF, "htb", flags=2 | 0x10)  # NLM_F_DUMP_INTR
+    with pytest.raises(OSError, match="interrupted"):
+        _query([_qdisc(3, 0, 0xFFFFFFFF, "noqueue") + interrupted + _done()], 7)

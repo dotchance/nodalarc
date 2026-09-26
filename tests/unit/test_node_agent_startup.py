@@ -275,10 +275,28 @@ def test_ready_fence_missing_identity_fails_before_subscription(
 
     with pytest.raises(RuntimeError, match="wiring identity unavailable"):
         _require_ready_fence(
-            RuntimeFence(session_id="", wiring_generation="", writer_floor=WriterEpochFloor())
+            RuntimeFence(
+                session_id="", wiring_generation="", writer_floor=WriterEpochFloor(lambda: None)
+            )
         )
 
     assert published[0]["code"] == "STARTUP_WIRING_IDENTITY_MISSING"
+
+
+def test_an_unobserved_writer_lease_fails_before_subscription(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Without the writer Lease the epoch floor is unknown: no command is served."""
+    from node_agent.__main__ import _require_writer_lease_observed
+    from node_agent.writer_lease_view import WriterLeaseView
+
+    published: list[dict] = []
+    monkeypatch.setattr(ops_events, "publish", lambda **kwargs: published.append(kwargs))
+
+    with pytest.raises(RuntimeError, match="writer Lease unobserved"):
+        _require_writer_lease_observed(WriterLeaseView("nodalarc"))
+
+    assert published[0]["code"] == "STARTUP_WRITER_LEASE_UNOBSERVED"
 
 
 @pytest.mark.parametrize("shutdown", ["monitor_failure", "sigterm", "subscribe_failure", "cancel"])
@@ -337,6 +355,26 @@ def test_agent_shutdown_joins_wiring_before_closing_nats(shutdown):
                 return False
 
         _manifest_watch.ManifestWatch = _ObservingWatch
+
+        class _ObservedWriterLease:
+            # The Scheduler writer Lease, listed at once and absent.
+
+            def __init__(self, namespace):
+                pass
+
+            def start(self, coordination_v1):
+                pass
+
+            def stop(self):
+                pass
+
+            def wait_listed(self, timeout):
+                return True
+
+            def current(self):
+                return None
+
+        agent.WriterLeaseView = _ObservedWriterLease
 
         shutdown = sys.argv[1]
         sys.argv = ["node-agent"]
@@ -492,6 +530,26 @@ def test_an_undecodable_manifest_is_logged_and_retried_until_one_decodes():
                 return False
 
         _manifest_watch.ManifestWatch = _ObservingWatch
+
+        class _ObservedWriterLease:
+            # The Scheduler writer Lease, listed at once and absent.
+
+            def __init__(self, namespace):
+                pass
+
+            def start(self, coordination_v1):
+                pass
+
+            def stop(self):
+                pass
+
+            def wait_listed(self, timeout):
+                return True
+
+            def current(self):
+                return None
+
+        agent.WriterLeaseView = _ObservedWriterLease
 
         sys.argv = ["node-agent"]
         warnings = []

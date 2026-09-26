@@ -12,7 +12,13 @@ import kubernetes
 import pytest
 from scheduler import __main__ as scheduler_main
 from scheduler.dispatcher import DispatcherSuperseded
-from scheduler.writer_lease import LEASE_DURATION_S, LEASE_NAME, WriterLease
+from scheduler.writer_lease import (
+    LEASE_DURATION_S,
+    LEASE_NAME,
+    WriterLease,
+    WriterLeaseConflict,
+    WriterLeaseLost,
+)
 
 NAMESPACE = "nodalarc"
 
@@ -184,7 +190,9 @@ def test_losing_the_lease_supersedes_the_dispatcher(fast_renewal) -> None:
         return built[-1]
 
     async def _scenario():
-        serving = asyncio.ensure_future(scheduler_main._serve(lease, _build))
+        serving = asyncio.ensure_future(
+            scheduler_main._serve(lease, _build, commanding=lambda: None)
+        )
         await asyncio.sleep(0.05)
         # Another session's Scheduler takes the lease.
         _lease(api, clock, session="run-b", instance="pod-9/t9").try_acquire()
@@ -210,13 +218,18 @@ def test_an_unrenewable_lease_supersedes_after_the_renew_deadline(fast_renewal) 
         raise kubernetes.client.rest.ApiException(status=503, reason="Unavailable")
 
     async def _scenario():
-        serving = asyncio.ensure_future(scheduler_main._serve(lease, _build))
+        serving = asyncio.ensure_future(
+            scheduler_main._serve(lease, _build, commanding=lambda: None)
+        )
         await asyncio.sleep(0.03)
         api.read_namespaced_lease = _unreachable
         await serving
 
-    with pytest.raises(DispatcherSuperseded, match="not renewed"):
+    # The hold is unproven, not taken by a successor: the process exits for a restart.
+    with pytest.raises(WriterLeaseLost, match="not renewed"):
         asyncio.run(_scenario())
+    assert built[0].stopped.is_set()
+    assert built[0].superseded is None
 
 
 def test_a_stopped_scheduler_releases_the_lease(fast_renewal) -> None:
@@ -229,7 +242,9 @@ def test_a_stopped_scheduler_releases_the_lease(fast_renewal) -> None:
         return built[-1]
 
     async def _scenario():
-        serving = asyncio.ensure_future(scheduler_main._serve(lease, _build))
+        serving = asyncio.ensure_future(
+            scheduler_main._serve(lease, _build, commanding=lambda: None)
+        )
         await asyncio.sleep(0.03)
         built[0].stop()
         await serving
@@ -246,7 +261,7 @@ def test_a_superseded_scheduler_releases_the_lease_it_still_holds(fast_renewal) 
         return _Dispatcher(epoch, raises=DispatcherSuperseded("manifest moved on"))
 
     with pytest.raises(DispatcherSuperseded):
-        asyncio.run(scheduler_main._serve(lease, _build))
+        asyncio.run(scheduler_main._serve(lease, _build, commanding=lambda: None))
     assert api.holder is None
 
 
@@ -256,15 +271,20 @@ def test_a_standby_starts_commanding_once_the_holder_releases(fast_renewal) -> N
     active.try_acquire()
     standby = _lease(api, clock, instance="pod-2/t2")
     built: list[_Dispatcher] = []
+    commanding: list[int] = []
 
     def _build(epoch: int) -> _Dispatcher:
         built.append(_Dispatcher(epoch))
         return built[-1]
 
     async def _scenario():
-        serving = asyncio.ensure_future(scheduler_main._serve(standby, _build))
+        serving = asyncio.ensure_future(
+            scheduler_main._serve(standby, _build, commanding=lambda: commanding.append(1))
+        )
         await asyncio.sleep(0.05)
+        # A standby is not ready: it commands nothing.
         assert built == []
+        assert commanding == []
         active.release()
         for _ in range(100):
             if built:
@@ -275,3 +295,69 @@ def test_a_standby_starts_commanding_once_the_holder_releases(fast_renewal) -> N
 
     asyncio.run(_scenario())
     assert built[0].epoch == 2
+    assert commanding == [1]
+
+
+# ---------------------------------------------------------------------------
+# Writes are compare-and-swap: a lost write reads the Lease again
+# ---------------------------------------------------------------------------
+
+
+def _conflicting(api: _LeaseApi, times: int) -> None:
+    """The next ``times`` writes lose the compare-and-swap to a write that keeps the holder."""
+    replace = api.replace_namespaced_lease
+
+    def _replace(name, namespace, body):
+        nonlocal times
+        if times > 0:
+            times -= 1
+            # Another writer's update landed first.
+            api.version += 1
+            api.lease.metadata.resource_version = str(api.version)
+            raise kubernetes.client.rest.ApiException(status=409, reason="Conflict")
+        return replace(name, namespace, body)
+
+    api.replace_namespaced_lease = _replace
+
+
+def test_a_renewal_that_lost_a_write_retries_and_extends_the_hold() -> None:
+    api, clock = _LeaseApi(), _Clock()
+    lease = _lease(api, clock)
+    lease.try_acquire()
+    clock.advance(5)
+    _conflicting(api, times=1)
+    assert lease.renew() is True
+    assert api.lease.spec.renew_time == clock.now
+
+
+def test_a_renewal_that_loses_every_write_raises_and_extends_nothing() -> None:
+    api, clock = _LeaseApi(), _Clock()
+    lease = _lease(api, clock)
+    lease.try_acquire()
+    acquired_at = api.lease.spec.renew_time
+    clock.advance(5)
+    _conflicting(api, times=3)
+    with pytest.raises(WriterLeaseConflict):
+        lease.renew()
+    assert api.lease.spec.renew_time == acquired_at
+
+
+def test_a_release_that_lost_a_write_retries() -> None:
+    api, clock = _LeaseApi(), _Clock()
+    lease = _lease(api, clock)
+    lease.try_acquire()
+    _conflicting(api, times=1)
+    lease.release()
+    assert api.holder is None
+
+
+def test_the_chart_grants_access_to_the_lease_the_code_names() -> None:
+    """The Scheduler's and the Node Agent's Roles name the Lease by the one constant."""
+    from pathlib import Path
+
+    from nodalarc.substrate.manifest_contract import SCHEDULER_WRITER_LEASE
+
+    templates = Path(__file__).resolve().parents[2] / "deploy" / "helm" / "templates"
+    for template in ("management-network.yaml", "node-agent-rbac.yaml"):
+        text = (templates / template).read_text()
+        assert f'resourceNames: ["{SCHEDULER_WRITER_LEASE}"]' in text, template

@@ -60,7 +60,9 @@ def _handles(pids: dict[str, int]) -> dict:
 
 
 FENCE = RuntimeFence(
-    session_id="demo", wiring_generation="sha256:" + "a" * 64, writer_floor=WriterEpochFloor()
+    session_id="demo",
+    wiring_generation="sha256:" + "a" * 64,
+    writer_floor=WriterEpochFloor(lambda: None),
 )
 
 

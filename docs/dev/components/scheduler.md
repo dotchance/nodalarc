@@ -137,10 +137,14 @@ coordination.k8s.io). After its startup gates the Scheduler takes the Lease and
 uses the Lease's transition count as its epoch. It then renews the Lease every
 5 s. The Lease is taken at once when it is free, expired, or held by a
 Scheduler of another session. A second Scheduler of the same session waits as
-a standby until the holder releases the Lease or stops renewing it for 15 s. A
-Scheduler stops commanding for good when a Node Agent refuses its epoch, when
-the Lease names another holder, or when it could not renew for 10 s. It
-releases the Lease when it stops, so a successor starts without waiting.
+a standby until the holder releases the Lease or stops renewing it for 15 s; a
+standby reports not ready. A Scheduler stops commanding for good when a Node
+Agent refuses its epoch or when the Lease names another holder. A Scheduler
+that could not renew for 10 s stops commanding and exits non-zero; the kubelet
+restarts it, and the new process takes the Lease at a higher epoch. Every
+Lease write is a compare-and-swap; a write that loses it reads the Lease again.
+A Scheduler releases the Lease when it stops, so a successor starts without
+waiting.
 
 Request types:
 - `BatchLinkUp` - activate a set of links

@@ -195,7 +195,11 @@ def test_load_binds_proof_and_health_tracks_the_same_selection(
     assert loaded.config.proof.pod_uid == "pod-runtime-service-0001"
 
     health = RuntimeConfigHealth(directory, pod_uid="pod-runtime-service-0001")
-    health.mark_loaded(loaded)
+    health.mark_loaded(loaded, waiting_for="the session writer lease")
+    waiting = health.readiness()
+    assert waiting.ready is False
+    assert waiting.detail == "loaded, waiting for the session writer lease"
+    health.mark_serving()
     readiness = health.readiness()
     assert readiness.ready is True
     assert readiness.proof == loaded.config.proof
@@ -237,6 +241,12 @@ def test_context_selection_mismatch_refuses_before_kubernetes_fetch(
 
     assert client.lists == []
     assert not any(runtime_parent.iterdir())
+
+
+def test_a_runtime_serves_only_after_its_config_loaded(tmp_path: Path) -> None:
+    health = RuntimeConfigHealth(tmp_path / "empty", pod_uid="pod-runtime-service-0001")
+    with pytest.raises(RuntimeError, match="only after its config is loaded"):
+        health.mark_serving()
 
 
 def test_health_waits_without_a_mounted_session(tmp_path: Path) -> None:

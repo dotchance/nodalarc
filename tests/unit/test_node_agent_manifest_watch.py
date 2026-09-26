@@ -13,7 +13,11 @@ from node_agent.manifest_watch import ManifestWatch
 
 
 def _cm(resource_version: str, uid: str = "cm-1") -> SimpleNamespace:
-    return SimpleNamespace(metadata=SimpleNamespace(resource_version=resource_version, uid=uid))
+    return SimpleNamespace(
+        metadata=SimpleNamespace(
+            name="nodalarc-topology-wiring", resource_version=resource_version, uid=uid
+        )
+    )
 
 
 class _Api:
@@ -35,7 +39,8 @@ class _Api:
 class _Watch:
     api: _Api
 
-    def stream(self, _function, _namespace, **kwargs):
+    def stream(self, _function, **kwargs):
+        assert kwargs["namespace"] == "nodalarc"
         assert kwargs["resource_version"] == "10"
         assert kwargs["field_selector"] == "metadata.name=nodalarc-topology-wiring"
         yield from self.api.events
@@ -61,7 +66,11 @@ def test_the_listed_manifest_is_observed_first() -> None:
         state = watch.current(timeout=2)
         assert state is not None and state.present
         assert state.resource_version == "7"
-        assert api.lists[0] == {"field_selector": "metadata.name=nodalarc-topology-wiring"}
+        assert api.lists[0] == {
+            "field_selector": "metadata.name=nodalarc-topology-wiring",
+            # A LIST that never answers ends in the client.
+            "_request_timeout": (10.0, 30.0),
+        }
     finally:
         watch.stop()
         block.set()

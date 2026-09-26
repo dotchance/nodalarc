@@ -191,22 +191,17 @@ def _cleanup_stale_interfaces(
     nodes: dict,
     progress_fn: Callable[[str], None] | None = None,
 ) -> None:
-    """Clean stale interfaces from host and pod namespaces, or fail naming what remains.
+    """Clean stale interfaces from pod namespaces and the host firewall, or fail naming what remains.
+
+    The host's interfaces are cleaned by the caller before wiring starts
+    (perform_rewire runs the one host cleaner on every rewire).
 
     Must run synchronously BEFORE the ThreadPoolExecutor starts.
     Prevents EEXIST race conditions when 32 threads create interfaces
     concurrently on a Node Agent that restarted with stale kernel state.
     """
-    from node_agent.reconcile import clean_and_verify_host_state
-
     if progress_fn:
         progress_fn(f"Cleaning stale interfaces for {len(pid_map)} pods")
-    # Host namespace: the one host cleaner, judged by its report.
-    report = clean_and_verify_host_state()
-    if not report.clean:
-        raise RuntimeError(f"host cleanup did not verify clean: {report.model_dump_json()}")
-    if report.removed:
-        log.info("Cleaned %d stale host interfaces", len(report.removed))
 
     # Host firewall: drop the pinned site-LAN transit rules alongside the
     # interfaces they served; the terrestrial phase re-pins them when this

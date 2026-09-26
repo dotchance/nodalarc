@@ -24,10 +24,10 @@ from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 
 import kubernetes.client
+from nodalarc.substrate.manifest_contract import SCHEDULER_WRITER_LEASE as LEASE_NAME
 
 log = logging.getLogger(__name__)
 
-LEASE_NAME = "nodalarc-scheduler-writer"
 # A holder that has not renewed for this long has lost the Lease.
 LEASE_DURATION_S = 15
 # The holder renews this often.
@@ -37,6 +37,21 @@ RENEW_INTERVAL_S = 5.0
 RENEW_DEADLINE_S = 10.0
 # A standby looks at the Lease this often.
 STANDBY_RETRY_S = 2.0
+# Writes that lose the compare-and-swap in a row before a renewal or release
+# counts as failed.
+_WRITE_ATTEMPTS = 3
+
+
+class WriterLeaseConflict(RuntimeError):
+    """Every write in a row lost the Lease's compare-and-swap."""
+
+
+class WriterLeaseLost(Exception):
+    """This Scheduler can no longer prove it holds the Lease, and no successor was seen.
+
+    The process exits and the kubelet restarts it: the new process takes the
+    Lease at a higher epoch, once no other holder renews it.
+    """
 
 
 class WriterLease:
@@ -91,36 +106,52 @@ class WriterLease:
         return epoch
 
     def renew(self) -> bool:
-        """Extend the hold; False once the Lease names another holder."""
-        lease = self._api.read_namespaced_lease(LEASE_NAME, self._namespace)
-        if lease.spec.holder_identity != self.holder:
-            return False
-        lease.spec.renew_time = self._now()
-        try:
-            self._api.replace_namespaced_lease(LEASE_NAME, self._namespace, lease)
-        except kubernetes.client.rest.ApiException as exc:
-            if exc.status != 409:
-                raise
-            # Someone wrote the Lease between the read and the write.
-            current = self._api.read_namespaced_lease(LEASE_NAME, self._namespace)
-            return current.spec.holder_identity == self.holder
-        return True
+        """Extend the hold; False once the Lease names another holder.
+
+        A write that loses the compare-and-swap reads the Lease again and
+        retries. Raises WriterLeaseConflict when every attempt lost, so the
+        caller counts the renewal as failed: renewTime was not extended.
+        """
+        for _attempt in range(_WRITE_ATTEMPTS):
+            lease = self._api.read_namespaced_lease(LEASE_NAME, self._namespace)
+            if lease.spec.holder_identity != self.holder:
+                return False
+            lease.spec.renew_time = self._now()
+            try:
+                self._api.replace_namespaced_lease(LEASE_NAME, self._namespace, lease)
+            except kubernetes.client.rest.ApiException as exc:
+                if exc.status != 409:
+                    raise
+                continue
+            return True
+        raise WriterLeaseConflict(
+            f"Lease {LEASE_NAME} renewal lost {_WRITE_ATTEMPTS} writes in a row"
+        )
 
     def release(self) -> None:
-        """Give the Lease up so a successor takes it without waiting for expiry."""
+        """Give the Lease up so a successor takes it without waiting for expiry.
+
+        Raises WriterLeaseConflict when every write lost the compare-and-swap;
+        the Lease then expires on its own.
+        """
         if self.epoch is None:
             return
-        lease = self._api.read_namespaced_lease(LEASE_NAME, self._namespace)
-        if lease.spec.holder_identity != self.holder:
+        for _attempt in range(_WRITE_ATTEMPTS):
+            lease = self._api.read_namespaced_lease(LEASE_NAME, self._namespace)
+            if lease.spec.holder_identity != self.holder:
+                return
+            lease.spec.holder_identity = None
+            lease.spec.renew_time = self._now()
+            try:
+                self._api.replace_namespaced_lease(LEASE_NAME, self._namespace, lease)
+            except kubernetes.client.rest.ApiException as exc:
+                if exc.status != 409:
+                    raise
+                continue
             return
-        lease.spec.holder_identity = None
-        lease.spec.renew_time = self._now()
-        try:
-            self._api.replace_namespaced_lease(LEASE_NAME, self._namespace, lease)
-        except kubernetes.client.rest.ApiException as exc:
-            if exc.status != 409:
-                raise
-            # Another Scheduler took the Lease first: nothing is left to release.
+        raise WriterLeaseConflict(
+            f"Lease {LEASE_NAME} release lost {_WRITE_ATTEMPTS} writes in a row"
+        )
 
     def _create(self) -> int | None:
         lease = kubernetes.client.V1Lease(

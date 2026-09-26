@@ -10,10 +10,12 @@ from __future__ import annotations
 
 import math
 import threading
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 
 from nodalarc.proto import node_agent_pb2
+
+from node_agent.writer_lease_view import LeaseEpoch
 
 KIND_BATCH_LINK_DOWN = "BatchLinkDown"
 KIND_BATCH_LINK_UP = "BatchLinkUp"
@@ -29,36 +31,39 @@ class CommandContractError(ValueError):
 
 
 class WriterEpochFloor:
-    """The highest Scheduler writer epoch this Node Agent accepted for its session.
+    """The lowest Scheduler writer epoch this Node Agent accepts.
 
-    One instance lives as long as the Node Agent process and is shared by
-    every fence it builds, so a rewire of the same session keeps the floor.
-    It holds the floor of one session and wiring generation: a command for
-    any other pair is refused by the session and generation checks before it
-    reaches the floor, and a new pair starts a new floor. A restarted Node
-    Agent rebuilds the floor from the first commands it accepts.
+    The floor is the transition count of the Scheduler writer Lease as last
+    observed, which rises each time the Lease changes holder, and never falls
+    below the highest epoch this Node Agent accepted while the same Lease
+    object exists. A command below the floor comes from a Scheduler that no
+    longer holds the Lease. The Lease is observed before this Node Agent
+    serves any command, so a restarted Node Agent refuses a stale Scheduler
+    from its first command. A recreated Lease (a new object) starts again.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, lease_epoch: Callable[[], LeaseEpoch | None]) -> None:
+        self._lease_epoch = lease_epoch
         self._lock = threading.Lock()
-        self._key: tuple[str, str] | None = None
-        self._floor = 0
+        self._lease_uid: str | None = None
+        self._accepted = 0
 
     def admit(self, session_id: str, wiring_generation: str, writer_epoch: int) -> None:
         """Accept ``writer_epoch`` and raise the floor to it, or refuse a stale writer."""
+        lease = self._lease_epoch()
         with self._lock:
-            key = (session_id, wiring_generation)
-            if key != self._key:
-                self._key = key
-                self._floor = 0
-            if writer_epoch < self._floor:
+            lease_uid = lease.uid if lease is not None else None
+            if lease_uid != self._lease_uid:
+                self._lease_uid = lease_uid
+                self._accepted = 0
+            floor = max(self._accepted, lease.transitions if lease is not None else 0)
+            if writer_epoch < floor:
                 raise CommandContractError(
                     node_agent_pb2.NODE_AGENT_STALE_WRITER,
-                    f"stale writer epoch {writer_epoch}; a Scheduler with writer epoch "
-                    f"{self._floor} already commands session {session_id!r} "
-                    f"generation {wiring_generation!r}",
+                    f"stale writer epoch {writer_epoch} for session {session_id!r} "
+                    f"generation {wiring_generation!r}; the writer Lease is at epoch {floor}",
                 )
-            self._floor = writer_epoch
+            self._accepted = max(self._accepted, writer_epoch)
 
 
 @dataclass(frozen=True)

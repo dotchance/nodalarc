@@ -1767,6 +1767,9 @@ class Dispatcher:
             f"this instance is session={own[0]} generation={own[1]}. "
             "Shutting down cleanly."
         )
+        # run() raises with this reason even when the caller is a task whose
+        # exception nobody reads (the operator-repair path).
+        self._superseded_reason = reason
         self._dispatch_blocked_reason = reason
         self.stop()
         with suppress(Exception):

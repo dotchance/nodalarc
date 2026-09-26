@@ -5,7 +5,7 @@
 - **Python 3.14+** for all backend services
 - **TypeScript** (strict) for the frontend
 - **Pydantic v2** for all structured data crossing component boundaries
-- **pyroute2** for all kernel netlink operations - never shell out to `ip`, `tc`, `bridge`
+- **Netlink from Python** in the calling process: never shell out to `ip`, `tc`, `bridge`, and never fork. pyroute2 makes every kernel write. A read pyroute2 cannot make at the needed cost may speak netlink on a socket in the calling thread (`services/node_agent/tc_dump.py`).
 - **f-strings** for formatting (except logging, which uses lazy format: `log.info("msg %s", val)`)
 - **uv** for Python dependency management
 - **Vitest** for frontend tests
@@ -138,7 +138,7 @@ state_policy = DeliverPolicy.LAST_PER_SUBJECT
 - Don't add feature flags or backwards-compatibility shims
 - Don't add error handling for scenarios that can't happen
 - Don't add abstraction layers (EventBus, MessageRouter, etc.)
-- Don't shell out to system commands - use pyroute2 for netlink, native Python for everything else
+- Don't shell out to system commands or fork: a caller that waits on a child process blocks. Use Python in the calling process (pyroute2 for netlink writes)
 - Don't use `asyncio.sleep()` in the OME pacing thread (causes satellite jitter)
 - Don't use `pyroute2.NetNS()` - it forks. Use `setns()` via `namespace_ops.py`
 - Don't put NATS subject literals in service code - import from `nats_channels.py`

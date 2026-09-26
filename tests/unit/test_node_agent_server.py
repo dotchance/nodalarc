@@ -15,7 +15,9 @@ pytestmark = pytest.mark.usefixtures("_node_agent_ops_spool_path")
 SESSION_ID = "test-session"
 WIRING_GENERATION = "sha256:" + "a" * 64
 FENCE = RuntimeFence(
-    session_id=SESSION_ID, wiring_generation=WIRING_GENERATION, writer_floor=WriterEpochFloor()
+    session_id=SESSION_ID,
+    wiring_generation=WIRING_GENERATION,
+    writer_floor=WriterEpochFloor(lambda: None),
 )
 
 

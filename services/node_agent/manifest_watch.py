@@ -3,11 +3,10 @@
 """The wiring manifest as the API server last reported it, kept current by a watch.
 
 The Node Agent's wiring watcher reads the manifest from here instead of
-polling it. One LIST establishes the state, then a WATCH from that list's
-resourceVersion delivers every later change the moment the API server
-commits it. A watch that ends (server timeout, dropped connection, expired
-resourceVersion) is followed by a new LIST; there is no other source of
-manifest state.
+polling it, through ``nodalarc.kube_watch.list_then_watch``: one LIST, then
+a WATCH that delivers every later change the moment the API server commits
+it. A WATCH that ends, expires or loses its connection is followed by a new
+LIST; there is no other source of manifest state.
 """
 
 from __future__ import annotations
@@ -16,6 +15,8 @@ import logging
 import threading
 from dataclasses import dataclass
 from typing import Any
+
+from nodalarc.kube_watch import list_then_watch
 
 log = logging.getLogger(__name__)
 
@@ -104,38 +105,18 @@ class ManifestWatch:
 
     def _run(self) -> None:
         import kubernetes.client
-        import kubernetes.watch
 
-        field_selector = f"metadata.name={self._name}"
         while not self._stop.is_set():
             try:
-                listing = self._v1.list_namespaced_config_map(
-                    self._namespace, field_selector=field_selector
-                )
-                items = list(listing.items or [])
-                self._publish(items[0] if items else None)
-                watch = kubernetes.watch.Watch()
-                try:
-                    for event in watch.stream(
-                        self._v1.list_namespaced_config_map,
-                        self._namespace,
-                        field_selector=field_selector,
-                        resource_version=listing.metadata.resource_version,
-                        timeout_seconds=_WATCH_REQUEST_SECONDS,
-                    ):
-                        if self._stop.is_set():
-                            break
-                        kind = event["type"]
-                        if kind == "DELETED":
-                            self._publish(None)
-                        elif kind in ("ADDED", "MODIFIED"):
-                            self._publish(event["object"])
-                finally:
-                    watch.stop()
+                for objects in list_then_watch(
+                    self._v1.list_namespaced_config_map,
+                    request_seconds=lambda: _WATCH_REQUEST_SECONDS,
+                    stopped=self._stop.is_set,
+                    namespace=self._namespace,
+                    field_selector=f"metadata.name={self._name}",
+                ):
+                    self._publish(objects.get(self._name))
             except kubernetes.client.rest.ApiException as exc:
-                if exc.status == 410:
-                    # The watch fell behind the API server's history: list again.
-                    continue
                 log.warning("Wiring manifest watch refused (HTTP %s); listing again", exc.status)
                 self._stop.wait(_RELIST_AFTER_ERROR_S)
             except Exception as exc:

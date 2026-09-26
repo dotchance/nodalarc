@@ -111,13 +111,18 @@ Scheduler's `writer_epoch`. Malformed frames, stale generations, missing PIDs,
 missing `HOST_IP`, missing peer identity, and protobuf enum zero values fail
 before mutation.
 
-One Scheduler commands a session's kernel state at a time, and the Node Agent
-enforces it. A Scheduler holds the `nodalarc-scheduler-writer` Lease before it
-sends any command, and every command carries the Lease's transition count as
-its writer epoch. A Node Agent refuses a command whose epoch is below the
-highest it accepted for the same session and wiring generation
-(`NODE_AGENT_STALE_WRITER`). A Scheduler that gets that refusal, loses the
-Lease, or cannot renew it within the renew deadline stops commanding for good.
+One Scheduler commands a session's kernel state at a time. A Scheduler holds
+the `nodalarc-scheduler-writer` Lease before it sends any command, and every
+command carries the Lease's transition count as its writer epoch. Each Node
+Agent watches the Lease and lists it before it serves any command. It refuses a
+command whose epoch is below the Lease's transition count as it last observed
+it, or below the highest epoch it accepted while the same Lease object exists
+(`NODE_AGENT_STALE_WRITER`). The refusal takes effect once the Node Agent's
+watch delivers the Lease change, and it survives a Node Agent restart. A
+Scheduler that gets that refusal, or finds the Lease naming another holder,
+stops commanding for good. A Scheduler that cannot renew the Lease within the
+renew deadline stops commanding and exits, and its restart takes the Lease at
+a higher epoch.
 
 Node Agent success means the MVP kernel proof passed. Batch replies name every
 requested interface, SetLatency replies name every requested entry, and

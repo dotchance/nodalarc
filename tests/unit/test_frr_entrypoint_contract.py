@@ -147,7 +147,40 @@ def test_frr_starts_without_the_boot_configuration_and_readiness_waits_for_it() 
     assert removal < handoff
     # The marker is written only after frr.conf applied cleanly.
     apply = _function("apply_boot_configuration")
-    assert apply.index("if ! vtysh -b; then") < apply.index(f"touch {BOOT_MARK}")
+    assert apply.index("! vtysh -b") < apply.index(f"! touch {BOOT_MARK}")
     # The router is ready only once the marker exists.
     readiness = yaml.safe_load(PROFILE.read_text())["profile"]["readiness"]["argv"]
     assert readiness[-1].startswith(f"test -f {BOOT_MARK} && ")
+
+
+def _boot_outcome(*, waits_for: str, vtysh_b_status: int) -> subprocess.CompletedProcess[str]:
+    """Run the entrypoint's own boot helper the way the entrypoint does: in the
+    background, while the entrypoint's process becomes a long-running program."""
+    script = f"""
+set -e
+BOOT_WAIT_S=0
+cp() {{ :; }}
+chown() {{ :; }}
+touch() {{ :; }}
+vtysh() {{ return {vtysh_b_status}; }}
+boot_configuration_waits_for() {{ printf '%s' '{waits_for}'; }}
+{_function("apply_boot_configuration")}
+apply_boot_configuration &
+# Test stand-in for the entrypoint's last line, exec /usr/lib/frr/docker-start:
+# a long-running process the helper's TERM must end at once.
+exec sleep 30
+"""
+    return subprocess.run(["bash", "-c", script], capture_output=True, text=True, timeout=20)
+
+
+def test_a_boot_configuration_that_does_not_apply_ends_the_container() -> None:
+    outcome = _boot_outcome(waits_for="", vtysh_b_status=1)
+    # The process the entrypoint became ended on TERM, well before its 30 s.
+    assert outcome.returncode == -15
+    assert "ERROR: frr.conf did not apply cleanly; ending the container" in outcome.stderr
+
+
+def test_daemons_that_never_come_up_end_the_container() -> None:
+    outcome = _boot_outcome(waits_for=" zebra(no mgmtd backend)", vtysh_b_status=0)
+    assert outcome.returncode == -15
+    assert "still waiting for: zebra(no mgmtd backend); ending the container" in outcome.stderr

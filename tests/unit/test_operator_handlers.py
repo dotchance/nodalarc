@@ -100,9 +100,11 @@ class _ReconcilerHarness:
         }
         return _pod(node_id, **fields)
 
-    def _list_pods(self, namespace, label_selector=None):
+    def _list_pods(self, namespace, label_selector=None, **_request):
         items = self.pod_lists.pop(0) if self.pod_lists else self.pods
-        return kubernetes.client.V1PodList(items=list(items))
+        return kubernetes.client.V1PodList(
+            items=list(items), metadata=kubernetes.client.V1ListMeta(resource_version="1")
+        )
 
     def deleted(self) -> list[tuple[str, str]]:
         """(pod name, UID precondition) for every delete request."""
@@ -1167,6 +1169,7 @@ def _session_pod(
     return SimpleNamespace(
         metadata=SimpleNamespace(
             name=f"pod-{run_id or 'unlabelled'}",
+            uid=f"uid-pod-{run_id or 'unlabelled'}",
             labels=labels,
             owner_references=_owner_references(owner_uid),
             deletion_timestamp="2026-09-13T00:00:00Z" if terminating else None,
@@ -1207,6 +1210,7 @@ def _run_on_delete(
             handlers_mod.on_delete(
                 "current-session",
                 "nodalarc",
+                uid=_OWNER_UID,
                 spec=_SPEC,
                 meta={"name": "current-session", "uid": _OWNER_UID, "generation": 2},
                 status={"phase": "not-a-phase"},
@@ -1280,6 +1284,7 @@ def _run_on_delete_with_real_teardown(
             handlers_mod.on_delete(
                 "current-session",
                 "nodalarc",
+                uid=_OWNER_UID,
                 spec=_SPEC,
                 meta={"name": "current-session", "uid": _OWNER_UID, "generation": 2},
                 status=None,
@@ -1430,6 +1435,7 @@ def test_on_delete_retires_services_and_deletes_pods_before_the_purge() -> None:
                 handlers_mod.on_delete(
                     "current-session",
                     "nodalarc",
+                    uid=_OWNER_UID,
                     spec=_SPEC,
                     meta={"name": "current-session", "uid": _OWNER_UID, "generation": 2},
                     status={},
@@ -1609,3 +1615,184 @@ def test_stop_closes_the_logging_connection_even_after_the_server_is_gone(monkey
 
     monkeypatch.setattr(handlers_mod, "_logging_nc", None)
     asyncio.run(handlers_mod.on_cleanup())
+
+
+def test_a_failed_pass_is_retried_by_the_same_driver() -> None:
+    """A pass that fails (here, an API server error) is reported and run again by
+    the driver that ran it: the driver stays registered and keeps its state."""
+    custom = create_autospec(kubernetes.client.CustomObjectsApi, instance=True)
+    custom.get_namespaced_custom_object.side_effect = [
+        _cr(),
+        _cr(),
+        kubernetes.client.rest.ApiException(status=404, reason="Not Found"),
+    ]
+    passes: list[str] = []
+    drivers: list[object] = []
+
+    async def _pass(driver, name, namespace, cr):
+        drivers.append(driver)
+        if not passes:
+            passes.append("failed")
+            raise kubernetes.client.rest.ApiException(status=500, reason="Internal Server Error")
+        passes.append("ran")
+        return False
+
+    async def _scenario():
+        task = asyncio.ensure_future(
+            handlers_mod.session_driver(
+                name="current-session", namespace="nodalarc", uid="test-uid"
+            )
+        )
+        for _ in range(200):
+            if task.done():
+                break
+            handlers_mod._wake("test-uid")
+            await asyncio.sleep(0.005)
+        await asyncio.wait_for(task, 1.0)
+
+    with (
+        patch.object(handlers_mod, "_get_custom_api", return_value=custom),
+        patch.object(handlers_mod, "_drive_once", side_effect=_pass),
+    ):
+        _run(_scenario())
+    assert passes == ["failed", "ran"]
+    assert drivers[0] is drivers[1]
+
+
+def test_on_delete_waits_for_the_driver_pass_in_flight() -> None:
+    """A pass already running when the CR is deleted finishes before teardown
+    retires anything: it cannot bind the services to this run again or create
+    pods after they were deleted."""
+    calls: list[str] = []
+
+    async def _scenario():
+        finish = asyncio.Event()
+
+        async def _pass():
+            await finish.wait()
+            calls.append("pass finished")
+            return False
+
+        in_flight = asyncio.create_task(_pass())
+        handlers_mod._passes[_OWNER_UID] = in_flight
+        try:
+            deleting = asyncio.create_task(
+                handlers_mod.on_delete(
+                    "current-session",
+                    "nodalarc",
+                    uid=_OWNER_UID,
+                    spec=_SPEC,
+                    meta={"name": "current-session", "uid": _OWNER_UID, "generation": 2},
+                    status={},
+                )
+            )
+            await asyncio.sleep(0.02)
+            assert calls == []
+            finish.set()
+            await deleting
+        finally:
+            handlers_mod._passes.pop(_OWNER_UID, None)
+
+    with _ReconcilerHarness(expected_count=7) as harness:
+        harness.pods = []
+        harness.mock_v1.read_namespaced_config_map.side_effect = (
+            kubernetes.client.rest.ApiException(status=404)
+        )
+        with (
+            patch(
+                "nodalarc_operator.handlers.retire_session_services",
+                side_effect=lambda ns: calls.append("retire"),
+            ),
+            patch(
+                "nodalarc_operator.handlers.wait_for_session_services_retired",
+                side_effect=lambda ns, timeout: calls.append("wait retired"),
+            ),
+            patch(
+                "nodalarc_operator.handlers.delete_session_pods",
+                side_effect=lambda ns, uid: calls.append("delete pods"),
+            ),
+            patch("nodalarc_operator.handlers.teardown_session"),
+        ):
+            _run(_scenario())
+    assert calls == ["pass finished", "retire", "wait retired", "delete pods"]
+
+
+# ---------------------------------------------------------------------------
+# A Ready session's inputs are resolved and verified again on every audit
+# ---------------------------------------------------------------------------
+
+
+def _held_runtime(runtime_hash: str = "a" * 64) -> SimpleNamespace:
+    return SimpleNamespace(
+        uid="test-uid",
+        session_run_id="run-a",
+        identity_fields={"sessionName": "s", "sessionRunId": "run-a"},
+        verification=SimpleNamespace(runtime_hash=runtime_hash),
+        serves=lambda meta: True,
+    )
+
+
+def _ready_inputs(verified_hash=None, *, raises=None):
+    """_ready_inputs against a held runtime of hash a…, with resolution patched."""
+
+    def _verify(*_args):
+        if raises is not None:
+            raise raises
+        return SimpleNamespace(runtime_hash=verified_hash)
+
+    custom = create_autospec(kubernetes.client.CustomObjectsApi, instance=True)
+    meta = {"name": "current-session", "uid": "test-uid", "generation": 3}
+    with (
+        patch.object(handlers_mod, "_resolve_active_session", return_value=object()),
+        patch.object(handlers_mod, "_verify_runtime", side_effect=_verify),
+        patch.object(handlers_mod, "_get_custom_api", return_value=custom),
+    ):
+        outcome = asyncio.run(
+            handlers_mod._ready_inputs(_SPEC, "current-session", "nodalarc", meta, _held_runtime())
+        )
+    return outcome, custom
+
+
+def test_ready_inputs_that_still_verify_to_the_held_runtime_are_current() -> None:
+    outcome, custom = _ready_inputs("a" * 64)
+    assert outcome is handlers_mod._ReadyInputs.CURRENT
+    custom.patch_namespaced_custom_object_status.assert_not_called()
+
+
+def test_ready_inputs_that_verify_to_another_runtime_have_changed() -> None:
+    outcome, _custom = _ready_inputs("b" * 64)
+    assert outcome is handlers_mod._ReadyInputs.CHANGED
+
+
+def test_ready_inputs_that_no_longer_resolve_put_the_session_in_error() -> None:
+    outcome, custom = _ready_inputs(raises=ValueError("catalog upload catalog-x is absent"))
+    assert outcome is handlers_mod._ReadyInputs.INVALID
+    body = custom.patch_namespaced_custom_object_status.call_args.kwargs["body"]
+    assert body["status"]["phase"] == "Error"
+    assert "catalog upload catalog-x is absent" in body["status"]["message"]
+
+
+def test_ready_inputs_the_api_server_did_not_answer_are_read_again() -> None:
+    outcome, custom = _ready_inputs(
+        raises=kubernetes.client.rest.ApiException(status=503, reason="Unavailable")
+    )
+    assert outcome is handlers_mod._ReadyInputs.UNREADABLE
+    custom.patch_namespaced_custom_object_status.assert_not_called()
+
+
+def test_changed_ready_inputs_drop_the_held_runtime_and_reconcile_again() -> None:
+    driver = handlers_mod._SessionDriver(uid="test-uid", namespace="nodalarc")
+    driver.runtime = _held_runtime()
+    body = {
+        "spec": _SPEC,
+        "metadata": {"name": "current-session", "uid": "test-uid", "generation": 3},
+        "status": {"phase": "Ready", "observedGeneration": 3},
+    }
+    with (
+        patch.object(handlers_mod, "_ready_inputs", return_value=handlers_mod._ReadyInputs.CHANGED),
+        patch.object(handlers_mod, "_audit_ready") as audit,
+    ):
+        requeue = asyncio.run(handlers_mod._drive_once(driver, "current-session", "nodalarc", body))
+    assert requeue is True
+    assert driver.runtime is None
+    audit.assert_not_called()

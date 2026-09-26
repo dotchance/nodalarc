@@ -22,6 +22,7 @@ import kubernetes
 from nodalarc.catalog_upload import CatalogUploadSelection
 from nodalarc.content_identity import canonical_json_bytes
 from nodalarc.cr_runtime_config import ConstellationSpecSpec, load_cr_runtime_config
+from nodalarc.kube_watch import list_then_watch, object_uid
 from nodalarc.models.resolved_session import ResolvedSession
 from nodalarc.nats_channels import sanitize_session_id, session_purge_filters
 from nodalarc.platform_config import (
@@ -1029,8 +1030,8 @@ def write_wiring_manifest(
 
 # The session-scoped platform services. Each loads one session at start and
 # serves only that session; a new session needs new pods.
-SESSION_SERVICE_LABELS: tuple[str, ...] = ("app=nodalarc-ome", "app=nodalarc-scheduler")
-SESSION_SERVICE_SELECTOR = "app in (nodalarc-ome,nodalarc-scheduler)"
+SESSION_SERVICE_APPS: tuple[str, ...] = ("nodalarc-ome", "nodalarc-scheduler")
+SESSION_SERVICE_SELECTOR = f"app in ({','.join(SESSION_SERVICE_APPS)})"
 # The runtime a session-service pod template (and so each of its pods) is
 # bound to: the runtime hash the Operator verifies, and the session run it
 # belongs to. Absent: the pods are idle and serve no session.
@@ -1058,22 +1059,23 @@ def roll_session_services(
     binding = {RUNTIME_HASH_ANNOTATION: runtime_hash, SESSION_RUN_ANNOTATION: session_run_id}
     body = {"spec": {"template": {"metadata": {"annotations": binding}}}}
     failures: list[str] = []
-    for label in SESSION_SERVICE_LABELS:
-        deployments = apps_v1.list_namespaced_deployment(namespace, label_selector=label)
-        for deploy in deployments.items:
-            annotations = dict(getattr(deploy.spec.template.metadata, "annotations", None) or {})
-            if all(annotations.get(key) == value for key, value in binding.items()):
-                continue
-            try:
-                apps_v1.patch_namespaced_deployment(deploy.metadata.name, namespace, body)
-            except kubernetes.client.rest.ApiException as exc:
-                failures.append(f"{deploy.metadata.name}: {exc}")
-                continue
-            log.info(
-                "Session service %s rolled to %s",
-                deploy.metadata.name,
-                f"run {session_run_id} runtime {runtime_hash[:12]}" if runtime_hash else "idle",
-            )
+    deployments = apps_v1.list_namespaced_deployment(
+        namespace, label_selector=SESSION_SERVICE_SELECTOR
+    )
+    for deploy in deployments.items:
+        annotations = dict(getattr(deploy.spec.template.metadata, "annotations", None) or {})
+        if all(annotations.get(key) == value for key, value in binding.items()):
+            continue
+        try:
+            apps_v1.patch_namespaced_deployment(deploy.metadata.name, namespace, body)
+        except kubernetes.client.rest.ApiException as exc:
+            failures.append(f"{deploy.metadata.name}: {exc}")
+            continue
+        log.info(
+            "Session service %s rolled to %s",
+            deploy.metadata.name,
+            f"run {session_run_id} runtime {runtime_hash[:12]}" if runtime_hash else "idle",
+        )
     if failures:
         raise RuntimeError("Failed to roll session service deployment(s): " + "; ".join(failures))
 
@@ -1082,14 +1084,14 @@ def session_services_on_other_run(namespace: str, session_run_id: str) -> list[s
     """Session-service Deployments whose template serves another session run."""
     apps_v1 = _get_apps_v1()
     stale: list[str] = []
-    for label in SESSION_SERVICE_LABELS:
-        for deploy in apps_v1.list_namespaced_deployment(namespace, label_selector=label).items:
-            annotations = dict(getattr(deploy.spec.template.metadata, "annotations", None) or {})
-            bound = annotations.get(SESSION_RUN_ANNOTATION) or annotations.get(
-                RUNTIME_HASH_ANNOTATION
-            )
-            if bound and annotations.get(SESSION_RUN_ANNOTATION) != session_run_id:
-                stale.append(deploy.metadata.name)
+    deployments = apps_v1.list_namespaced_deployment(
+        namespace, label_selector=SESSION_SERVICE_SELECTOR
+    )
+    for deploy in deployments.items:
+        annotations = dict(getattr(deploy.spec.template.metadata, "annotations", None) or {})
+        bound = annotations.get(SESSION_RUN_ANNOTATION) or annotations.get(RUNTIME_HASH_ANNOTATION)
+        if bound and annotations.get(SESSION_RUN_ANNOTATION) != session_run_id:
+            stale.append(deploy.metadata.name)
     return stale
 
 
@@ -1112,52 +1114,25 @@ def wait_for_session_services_retired(namespace: str, timeout_s: float) -> None:
     """Block until no OME or Scheduler pod bound to a session exists.
 
     Terminating pods still count: a process that has not exited can still
-    publish or dispatch. One LIST, then a WATCH from its resourceVersion.
+    publish or dispatch.
     """
     import time
 
-    import kubernetes.watch
-
-    v1 = _get_v1()
     deadline = time.monotonic() + timeout_s
-    while True:
-        listing = v1.list_namespaced_pod(namespace, label_selector=SESSION_SERVICE_SELECTOR)
+    serving: dict[str, str] = {}
+    for pods in list_then_watch(
+        _get_v1().list_namespaced_pod,
+        request_seconds=lambda: deadline - time.monotonic(),
+        stopped=lambda: time.monotonic() >= deadline,
+        key=object_uid,
+        namespace=namespace,
+        label_selector=SESSION_SERVICE_SELECTOR,
+    ):
         serving = {
-            pod.metadata.uid: pod.metadata.name
-            for pod in listing.items
-            if _pod_serves_a_session(pod)
+            uid: pod.metadata.name for uid, pod in pods.items() if _pod_serves_a_session(pod)
         }
         if not serving:
             return
-        remaining = deadline - time.monotonic()
-        if remaining <= 0:
-            break
-        watch = kubernetes.watch.Watch()
-        try:
-            for event in watch.stream(
-                v1.list_namespaced_pod,
-                namespace,
-                label_selector=SESSION_SERVICE_SELECTOR,
-                resource_version=listing.metadata.resource_version,
-                timeout_seconds=max(1, int(remaining)),
-            ):
-                pod = event["object"]
-                uid = pod.metadata.uid
-                if event["type"] == "DELETED" or not _pod_serves_a_session(pod):
-                    serving.pop(uid, None)
-                else:
-                    serving[uid] = pod.metadata.name
-                if not serving:
-                    return
-        except kubernetes.client.rest.ApiException as exc:
-            if exc.status != 410:
-                raise
-            # The watch fell behind the API server's history: list again.
-            continue
-        finally:
-            watch.stop()
-        if time.monotonic() >= deadline:
-            break
     raise RuntimeError(
         f"session services still running {timeout_s:.0f} s after retirement: "
         + ", ".join(sorted(serving.values()))

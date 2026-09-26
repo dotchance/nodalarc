@@ -19,12 +19,12 @@ from nodalarc.cr_runtime_config import (
     ConstellationSpecStatus,
     cr_status_observes_current_generation,
 )
+from nodalarc.kube_watch import watch_snapshots
 from nodalarc.workload_target import NODE_ID_LABEL
 from pydantic import ValidationError
 
 from .catalog_context import CatalogContext
 from .catalog_upload_store import CatalogUploadResourceEvidence, KubernetesCatalogUploadStore
-from .kube_watch import watch_snapshots
 from .session_deployment import (
     PreparedCatalogSessionDeployment,
     assert_catalog_session_deployment_current,
@@ -273,6 +273,9 @@ class SessionManager:
         )
         if constellation_spec_observed is not None:
             await constellation_spec_observed(selected_cr)
+        applied_uid = str((selected_cr.get("metadata") or {}).get("uid") or "")
+        if not applied_uid:
+            raise RuntimeError(f"Deploy failed: ConstellationSpec {CR_NAME} carries no uid")
 
         await progress("Waiting for session to deploy")
         last_message = ""
@@ -284,7 +287,15 @@ class SessionManager:
             ):
                 cr = crs.get(CR_NAME)
                 if cr is None:
-                    continue
+                    raise RuntimeError(
+                        f"Deploy failed: ConstellationSpec {CR_NAME} was deleted "
+                        "while the session deployed"
+                    )
+                if (cr.get("metadata") or {}).get("uid") != applied_uid:
+                    raise RuntimeError(
+                        f"Deploy failed: ConstellationSpec {CR_NAME} was replaced by another "
+                        "object while the session deployed"
+                    )
                 observed = ConstellationSpecStatus.from_cr(cr.get("status"))
                 phase = observed.phase or ""
                 message = observed.message or ""

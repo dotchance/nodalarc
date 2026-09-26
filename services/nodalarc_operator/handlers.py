@@ -17,6 +17,8 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import enum
+import functools
 import logging
 import os
 from collections.abc import Mapping
@@ -25,6 +27,7 @@ from typing import Any
 
 import kopf
 import kubernetes
+import urllib3
 from nodalarc.cr_runtime_config import (
     CR_API_VERSION,
     CR_GROUP,
@@ -35,6 +38,10 @@ from nodalarc.cr_runtime_config import (
     ConstellationSpecSpec,
     ConstellationSpecStatus,
     load_cr_runtime_config,
+)
+from nodalarc.kubernetes_runtime_config import (
+    KubernetesRuntimeConfigError,
+    KubernetesRuntimeConfigErrorCode,
 )
 from nodalarc.nats_channels import sanitize_session_id
 from nodalarc.runtime_config import ResolvedRuntimeConfig, RuntimeDeploymentContext
@@ -48,6 +55,7 @@ from nodalarc.workload_target import NODE_ID_LABEL
 
 from nodalarc_operator import session_deployer as _deployer
 from nodalarc_operator.session_deployer import (
+    SESSION_SERVICE_APPS,
     RetryableSessionDependency,
     build_runtime_session_config_data,
     check_platform_runtime_ready,
@@ -1325,7 +1333,7 @@ async def on_update(uid, **_):
 
 
 @kopf.on.delete(CR_PLURAL, group=CR_GROUP)
-async def on_delete(name, namespace, spec=None, meta=None, status=None, **_):
+async def on_delete(name, namespace, uid, spec=None, meta=None, status=None, **_):
     """Handle ConstellationSpec CR deletion: tear down what this CR deployed.
 
     The deployed identity is proven from the resources this CR owns (session
@@ -1336,6 +1344,14 @@ async def on_delete(name, namespace, spec=None, meta=None, status=None, **_):
     deployed and only the ConfigMap sweep runs.
     """
     log.info("ConstellationSpec '%s' deleted, tearing down session", name)
+    # kopf runs this handler while it stops the session's driver, and a pass
+    # already running keeps writing from executor threads: it could bind the
+    # services to this run again or create pods after they were deleted. Any
+    # pass that starts from here on reads the CR as deleted and ends.
+    in_flight = _passes.get(uid)
+    if in_flight is not None and not in_flight.done():
+        log.info("Waiting for the session driver's current pass before teardown")
+        await asyncio.wait({in_flight})
     loop = asyncio.get_running_loop()
     owner_ref = _build_owner_ref(name, dict(meta or {}))
     run_ids = await loop.run_in_executor(
@@ -1382,8 +1398,6 @@ _REQUEUE_MAX_S = 10.0
 # The Ready audit re-checks a Ready session this often (pod, wiring-proof
 # and service changes wake it at once).
 _READY_AUDIT_INTERVAL_S = 10.0
-# The OME and Scheduler Deployments and pods whose changes move a session on.
-_SESSION_SERVICE_APPS = frozenset({"nodalarc-ome", "nodalarc-scheduler"})
 
 
 class _SessionDriver:
@@ -1418,6 +1432,8 @@ class _SessionDriver:
 
 # Running drivers by the UID of the CR object each serves.
 _drivers: dict[str, _SessionDriver] = {}
+# The pass each driver runs now, by CR UID; on_delete waits for it.
+_passes: dict[str, asyncio.Task] = {}
 
 
 def _wake(uid: str) -> None:
@@ -1448,8 +1464,36 @@ async def _drive_once(driver: _SessionDriver, name: str, namespace: str, body) -
         if runtime is None:
             return False
     if phase == "Ready":
+        inputs = await _ready_inputs(spec, name, namespace, meta, runtime)
+        if inputs is _ReadyInputs.CHANGED:
+            # The next pass computes the runtime from the changed inputs and
+            # rolls the services onto it.
+            driver.runtime = None
+            return True
+        if inputs is _ReadyInputs.UNREADABLE:
+            return True
+        if inputs is _ReadyInputs.INVALID:
+            return False
         return await _audit_ready(spec, name, namespace, meta, status, runtime)
     return await _reconcile_session(spec, name, namespace, meta, status, runtime=runtime)
+
+
+async def _driver_pass(driver: _SessionDriver, name: str, namespace: str) -> bool:
+    cr = await asyncio.get_running_loop().run_in_executor(
+        None, _read_session_cr, name, namespace, driver.uid
+    )
+    return await _drive_once(driver, name, namespace, cr)
+
+
+def _pass_finished(uid: str, task: asyncio.Task) -> None:
+    """Record the end of a pass and report its failure; a pass may outlive its driver."""
+    if _passes.get(uid) is task:
+        del _passes[uid]
+    if task.cancelled():
+        return
+    exc = task.exception()
+    if exc is not None and not isinstance(exc, _SessionGone):
+        log.error("Session driver pass for %s failed; the driver retries it", uid, exc_info=exc)
 
 
 @kopf.daemon(CR_PLURAL, group=CR_GROUP, cancellation_timeout=5.0)
@@ -1464,7 +1508,6 @@ async def session_driver(name, namespace, uid, **_):
     """
     if name != CR_NAME:
         return
-    loop = asyncio.get_running_loop()
     driver = _SessionDriver(uid=uid, namespace=namespace)
     _drivers[uid] = driver
     driver.wakeup.set()
@@ -1472,8 +1515,19 @@ async def session_driver(name, namespace, uid, **_):
     try:
         while True:
             await driver.next_pass(requeue)
-            cr = await loop.run_in_executor(None, _read_session_cr, name, namespace, uid)
-            requeue = await _drive_once(driver, name, namespace, cr)
+            task = asyncio.create_task(_driver_pass(driver, name, namespace))
+            _passes[uid] = task
+            task.add_done_callback(functools.partial(_pass_finished, uid))
+            try:
+                # Shielded: when kopf cancels this daemon the pass still
+                # finishes, and on_delete waits for it.
+                requeue = await asyncio.shield(task)
+            except _SessionGone:
+                raise
+            except Exception:
+                # Reported by _pass_finished; the next pass starts from a
+                # fresh read of the CR after the requeue backoff.
+                requeue = True
     except _SessionGone as exc:
         log.info("Session driver for %s/%s (%s) ended: %s", namespace, name, uid, exc)
     finally:
@@ -1482,7 +1536,8 @@ async def session_driver(name, namespace, uid, **_):
 
 
 def _moves_a_session(labels, **_) -> bool:
-    return NODE_ID_LABEL in labels or labels.get("app") in _SESSION_SERVICE_APPS
+    """A session pod, or an OME or Scheduler Deployment or pod: its changes move a session on."""
+    return NODE_ID_LABEL in labels or labels.get("app") in SESSION_SERVICE_APPS
 
 
 @kopf.on.event("", "v1", "pods", when=_moves_a_session)
@@ -1502,6 +1557,68 @@ async def ready_audit(uid, status, **_):
     """Re-check a Ready session periodically; every other phase is event-driven."""
     if ConstellationSpecStatus.from_cr(status).phase == "Ready":
         _wake(uid)
+
+
+class _ReadyInputs(enum.Enum):
+    CURRENT = "current"
+    CHANGED = "changed"
+    UNREADABLE = "unreadable"
+    INVALID = "invalid"
+
+
+async def _ready_inputs(spec, name, namespace, meta, runtime: _SessionRuntime) -> _ReadyInputs:
+    """Resolve and verify a Ready session's inputs again against the held runtime.
+
+    The runtime hash covers every input that shapes the running session, the
+    catalog assets included. A different hash means the inputs changed under
+    the same CR generation. Inputs that no longer resolve or verify put the
+    session in Error. A read the API server did not answer is retried.
+    """
+    try:
+        active_session = await asyncio.to_thread(
+            _resolve_active_session, spec, namespace, runtime.session_run_id
+        )
+        current = await asyncio.to_thread(
+            _verify_runtime, spec, meta, namespace, runtime.session_run_id, active_session
+        )
+    except (kubernetes.client.rest.ApiException, urllib3.exceptions.HTTPError, OSError) as exc:
+        log.warning("Ready session inputs could not be read (%s); retrying", exc)
+        return _ReadyInputs.UNREADABLE
+    except KubernetesRuntimeConfigError as exc:
+        if exc.code is KubernetesRuntimeConfigErrorCode.CONFIG_MAP_FETCH_FAILED:
+            log.warning("Ready session inputs could not be read (%s); retrying", exc)
+            return _ReadyInputs.UNREADABLE
+        _publish_ready_verification_failure(name, namespace, meta, runtime, exc)
+        return _ReadyInputs.INVALID
+    except Exception as exc:
+        _publish_ready_verification_failure(name, namespace, meta, runtime, exc)
+        return _ReadyInputs.INVALID
+    if current.runtime_hash != runtime.verification.runtime_hash:
+        log.warning(
+            "Ready session inputs changed (runtime %s, now %s); reconciling",
+            runtime.verification.runtime_hash[:12],
+            current.runtime_hash[:12],
+        )
+        return _ReadyInputs.CHANGED
+    return _ReadyInputs.CURRENT
+
+
+def _publish_ready_verification_failure(
+    name: str, namespace: str, meta: dict, runtime: _SessionRuntime, exc: Exception
+) -> None:
+    log.error("Ready session verification failed: %s", exc, exc_info=True)
+    _update_status(
+        name,
+        namespace,
+        _with_observed_generation(
+            meta,
+            {
+                "phase": "Error",
+                "message": f"Runtime configuration verification failed: {str(exc)[:500]}",
+                **runtime.identity_fields,
+            },
+        ),
+    )
 
 
 async def _audit_ready(spec, name, namespace, meta, status, runtime: _SessionRuntime) -> bool:

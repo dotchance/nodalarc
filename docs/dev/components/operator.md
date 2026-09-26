@@ -90,6 +90,13 @@ When a ConstellationSpec CR is created:
     roll OME and the Scheduler onto it, once every pod is wired and running
 12. **Advance phase to Ready**
 
+While a session is Ready, the Operator resolves and verifies its inputs again
+every 10 s and on every change to a session pod, OME or the Scheduler. An input
+that changed takes the session back through reconciliation; an input that no
+longer resolves puts it in Error. A reconcile pass that fails is logged and
+runs again after 1 to 10 s. When the ConstellationSpec is deleted, teardown
+waits for the pass in progress to finish before it retires the services.
+
 ## Pod Placement
 
 Pod placement assigns each resolved session node to a Kubernetes node:

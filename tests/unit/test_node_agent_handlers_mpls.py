@@ -35,7 +35,9 @@ pytestmark = pytest.mark.usefixtures("_node_agent_ops_spool_path")
 
 
 FENCE = RuntimeFence(
-    session_id="demo", wiring_generation="sha256:" + "a" * 64, writer_floor=WriterEpochFloor()
+    session_id="demo",
+    wiring_generation="sha256:" + "a" * 64,
+    writer_floor=WriterEpochFloor(lambda: None),
 )
 SAT = "sat-P00S00"
 GS = "gs-den"

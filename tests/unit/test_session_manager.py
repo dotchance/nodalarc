@@ -247,3 +247,54 @@ class TestSwitchFailLoud:
 
         assert mgr.status_detail == "ready"
         assert mgr.active_source_id == source_id
+
+
+class _ReplacedDuringDeploy(_SwitchApi):
+    """After the create is read back, the listed CR is gone or another object."""
+
+    def __init__(self, *, listed: list[dict]) -> None:
+        super().__init__(
+            old_cr_gets_before_404=0,
+            post_create_statuses=[
+                {
+                    "metadata": {"generation": 1},
+                    "status": {"phase": "Wiring", "observedGeneration": 1},
+                }
+            ],
+        )
+        self.listed = listed
+
+    def list_namespaced_custom_object(self, **_kwargs):
+        if not self.created:
+            return super().list_namespaced_custom_object()
+        return {"items": list(self.listed)}
+
+
+@pytest.mark.parametrize(
+    ("listed", "cause"),
+    [
+        pytest.param([], "was deleted while the session deployed", id="deleted"),
+        pytest.param(
+            [{"metadata": {"name": "current-session", "uid": "uid-another-object"}}],
+            "was replaced by another object while the session deployed",
+            id="replaced",
+        ),
+    ],
+)
+def test_a_deploy_whose_constellation_spec_goes_away_fails_with_that_cause(
+    tmp_sessions, monkeypatch, listed, cause
+):
+    api = _ReplacedDuringDeploy(listed=listed)
+    _patch_switch_waits(monkeypatch)
+    mgr = SessionManager()
+    with pytest.raises(RuntimeError, match=cause):
+        asyncio.run(
+            mgr._switch_constellation_spec(
+                source_id="nodalarc:sessions/test-session.yaml",
+                cr_body=_switch_body(),
+                custom_objects_api=api,
+                core_v1_api=_SwitchCoreV1([0]),
+                namespace="nodalarc",
+                progress=lambda detail: _switch_progress(mgr, detail),
+            )
+        )

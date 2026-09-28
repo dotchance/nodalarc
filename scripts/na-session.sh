@@ -44,10 +44,9 @@ print(f"nodalarc:{relative.as_posix()}")
 fi
 echo "[session] Catalog session: $session_ref"
 
-server_yaml_file="$(mktemp)"
 response_file="$(mktemp)"
 pods_json_file="$(mktemp)"
-trap 'rm -f "$server_yaml_file" "$response_file" "$pods_json_file"' EXIT
+trap 'rm -f "$response_file" "$pods_json_file"' EXIT
 
 echo "[session] Computing placement policy..."
 if ! placement_policy="$(PYTHONPATH=lib uv run python -c 'import sys; from pathlib import Path; from nodalarc.platform_config import init_platform_config; cfg = init_platform_config(Path(sys.argv[1])); print(cfg.default_session_pod_placement_policy)' "$PLATFORM_CONFIG")"; then
@@ -199,28 +198,24 @@ placement = compute_pod_placement(
     pod_inventory,
     available_nodes,
 )
-print(len(set(placement.values())))
+# The live placement, from the same pod listing.
+counts = {}
+for pod in pods.get("items", []):
+    host = pod.get("spec", {}).get("nodeName") or "<unscheduled>"
+    counts[host] = counts.get(host, 0) + 1
+distribution = ", ".join(f"{host}={count}" for host, count in sorted(counts.items()))
+print(f"{len(set(placement.values()))}|{len(counts)}|{distribution}")
 ' "$pods_json_file" "$ready_node_csv" "$PLATFORM_CONFIG" "$expected_pods"
     )"; then
         echo "[session] ERROR: failed to compute expected placement from live pod identities" >&2
         exit 1
     fi
+    IFS='|' read -r expected_placement_nodes actual_placement_nodes distribution \
+        <<< "$expected_placement_nodes"
     if ! [[ "$expected_placement_nodes" =~ ^[0-9]+$ ]] || [ "$expected_placement_nodes" -le 0 ]; then
         echo "[session] ERROR: expected placement node count was invalid: $expected_placement_nodes" >&2
         exit 1
     fi
-
-    actual_placement_nodes="$(
-        kubectl get pods -n "$NAMESPACE" -l nodalarc.io/node-id -o wide --no-headers 2>/dev/null \
-            | awk '{seen[$7] = 1} END {print length(seen)+0}'
-    )"
-    distribution="$(
-        kubectl get pods -n "$NAMESPACE" -l nodalarc.io/node-id -o wide --no-headers 2>/dev/null \
-            | awk '{counts[$7]++} END {for (node in counts) print node "=" counts[node]}' \
-            | sort \
-            | tr '\n' ',' \
-            | sed 's/,$//; s/,/, /g'
-    )"
 
     if [ "$actual_placement_nodes" != "$expected_placement_nodes" ]; then
         echo "[session] ERROR: placement policy $policy expected session pods on $expected_placement_nodes node(s), but live pods are on $actual_placement_nodes: ${distribution:-unknown}" >&2
@@ -254,63 +249,11 @@ fi
 
 discover_vs_api "$NAMESPACE" 120
 
-echo "[session] Reviewing the installed catalog closure..."
-if ! http_status="$(
-    curl -sS \
-        -o "$response_file" \
-        -w '%{http_code}' \
-        -H "Authorization: Bearer $api_token" \
-        "$api_base/api/v1/sessions"
-)"; then
-    echo "[session] ERROR: failed to list catalog sessions through VS-API" >&2
-    exit 1
-fi
-if [ "$http_status" != "200" ]; then
-    echo "[session] ERROR: VS-API session listing returned HTTP $http_status" >&2
-    exit 1
-fi
-if ! session_fields="$(
-    python3 -c '
-import json
-import sys
-
-sessions = json.load(sys.stdin)
-requested = sys.argv[1]
-matches = [
-    item
-    for item in sessions
-    if item.get("source_id", {}).get("session_ref") == requested
-]
-if len(matches) != 1:
-    raise SystemExit(f"expected one catalog session {requested}, found {len(matches)}")
-item = matches[0]
-blockers = "; ".join(
-    blocker.get("message", "catalog session is blocked")
-    for blocker in item.get("blockers", [])
-).replace("|", "/")
-print("|".join((
-    str(bool(item.get("deploy_allowed"))).lower(),
-    item.get("source_revision") or "",
-    item.get("document_digest") or "",
-    item.get("dependency_digest") or "",
-    blockers,
-)))
-' "$session_ref" < "$response_file"
-)"; then
-    echo "[session] ERROR: installed VS-API catalog does not contain $session_ref" >&2
-    exit 1
-fi
-IFS='|' read -r deploy_allowed source_revision document_digest dependency_digest blockers \
-    <<< "$session_fields"
-if [ "$deploy_allowed" != "true" ]; then
-    echo "[session] ERROR: $session_ref is not deployable: ${blockers:-validation failed}" >&2
-    exit 1
-fi
-if [ -z "$source_revision" ] || [ -z "$document_digest" ] || [ -z "$dependency_digest" ]; then
-    echo "[session] ERROR: VS-API did not return reviewed catalog identities for $session_ref" >&2
-    exit 1
-fi
-
+# The switch request carries the identities of the selected session as this
+# checkout holds it: the root document's digest (which is also its catalog
+# revision) and its closure digest. VS-API prepares the session from its
+# installed catalog and refuses the switch, with a typed reason, when either
+# identity differs or the session is not deployable.
 if ! local_digests="$(
     PYTHONPATH=lib uv run python -c '
 from pathlib import Path
@@ -328,30 +271,8 @@ print(f"{closure.document_digest}|{closure.closure_digest}")
     echo "[session] ERROR: failed to validate the local catalog closure for $session_ref" >&2
     exit 1
 fi
-IFS='|' read -r local_document_digest local_dependency_digest <<< "$local_digests"
-if [ "$local_document_digest" != "$document_digest" ] \
-    || [ "$local_dependency_digest" != "$dependency_digest" ]; then
-    echo "[session] ERROR: installed VS-API catalog content differs from this checkout" >&2
-    echo "[session] Deploy the current VS-API image before switching $session_ref." >&2
-    exit 1
-fi
-
-if ! http_status="$(
-    curl -sS \
-        -o "$server_yaml_file" \
-        -w '%{http_code}' \
-        -G \
-        -H "Authorization: Bearer $api_token" \
-        --data-urlencode "session_ref=$session_ref" \
-        "$api_base/api/v1/sessions/yaml"
-)"; then
-    echo "[session] ERROR: failed to download reviewed session YAML from VS-API" >&2
-    exit 1
-fi
-if [ "$http_status" != "200" ] || ! cmp -s "$DEFAULT_SESSION" "$server_yaml_file"; then
-    echo "[session] ERROR: VS-API did not return the exact selected root YAML" >&2
-    exit 1
-fi
+IFS='|' read -r document_digest dependency_digest <<< "$local_digests"
+source_revision="$document_digest"
 
 switch_payload="$(
     python3 -c '
@@ -417,9 +338,9 @@ print(operation_id)
 fi
 
 echo "[session] Waiting for transition $operation_id (timeout 360s)..."
-elapsed=0
+transition_started=$SECONDS
 target_generation=""
-while [ "$elapsed" -lt 360 ]; do
+while [ $((SECONDS - transition_started)) -lt 360 ]; do
     if ! http_status="$(
         curl -sS \
             -o "$response_file" \
@@ -472,9 +393,9 @@ print("|".join((
             exit 1
             ;;
     esac
-    sleep 2
-    elapsed=$((elapsed + 2))
-    printf '\r[session]   Transition: %s (%ss/360s)' "${transition_state:-unknown}" "$elapsed"
+    sleep 0.5
+    printf '\r[session]   Transition: %s (%ss/360s)' "${transition_state:-unknown}" \
+        "$((SECONDS - transition_started))"
 done
 if [ -z "$target_generation" ]; then
     echo ""
@@ -503,9 +424,13 @@ if [ "$current_generation" != "$target_generation" ] \
     exit 1
 fi
 
-pods="$(kubectl get pods -n "$NAMESPACE" -l nodalarc.io/node-id --no-headers 2>/dev/null | wc -l | tr -d ' ')"
-running="$(kubectl get pods -n "$NAMESPACE" -l nodalarc.io/node-id --no-headers 2>/dev/null | grep -c Running || true)"
-not_running="$(kubectl get pods -n "$NAMESPACE" -l nodalarc.io/node-id --no-headers 2>/dev/null | grep -v Running | grep -v Completed || true)"
+if ! pod_rows="$(kubectl get pods -n "$NAMESPACE" -l nodalarc.io/node-id --no-headers)"; then
+    echo "[session] ERROR: could not list the session pods" >&2
+    exit 1
+fi
+pods="$(printf '%s\n' "$pod_rows" | grep -c . || true)"
+running="$(printf '%s\n' "$pod_rows" | grep -c Running || true)"
+not_running="$(printf '%s\n' "$pod_rows" | grep -v Running | grep -v Completed | grep . || true)"
 if [ "$pods" != "$expected_pods" ] || [ "$running" != "$expected_pods" ]; then
     echo "[session] ERROR: live pod count is stale: $running/$pods running, expected $expected_pods" >&2
     exit 1

@@ -8,6 +8,8 @@ import pytest
 import yaml
 from vs_api.session_manager import SessionManager
 
+from tests.kube_watch_fixtures import replayed_snapshots
+
 CATALOG_SESSION = Path("catalog/nodalarc/sessions/earth-leo-heo-geo-luna-reachability.yaml")
 
 
@@ -92,6 +94,16 @@ class _SwitchApi:
         self.created_body = kwargs["body"]
         return {}
 
+    def list_namespaced_custom_object(self, **_kwargs):
+        from kubernetes.client.rest import ApiException
+
+        try:
+            return {"items": [self.get_namespaced_custom_object()]}
+        except ApiException as error:
+            if error.status == 404:
+                return {"items": []}
+            raise
+
 
 class _SwitchCoreV1:
     def __init__(self, pod_counts: list[int] | None = None) -> None:
@@ -101,7 +113,13 @@ class _SwitchCoreV1:
     def list_namespaced_pod(self, *_args, **_kwargs):
         idx = min(self.calls, len(self.pod_counts) - 1)
         self.calls += 1
-        return SimpleNamespace(items=[object() for _ in range(self.pod_counts[idx])])
+        return SimpleNamespace(
+            items=[
+                SimpleNamespace(metadata=SimpleNamespace(name=f"pod-{n}"))
+                for n in range(self.pod_counts[idx])
+            ],
+            metadata=SimpleNamespace(resource_version=str(self.calls)),
+        )
 
 
 async def _no_sleep(_seconds: float) -> None:
@@ -119,6 +137,7 @@ def _run_in_executor_inline(loop, _executor, operation, *args):
 
 def _patch_switch_waits(monkeypatch) -> None:
     monkeypatch.setattr("vs_api.session_manager.asyncio.sleep", _no_sleep)
+    monkeypatch.setattr("vs_api.session_manager.watch_snapshots", replayed_snapshots)
     monkeypatch.setattr(asyncio.BaseEventLoop, "run_in_executor", _run_in_executor_inline)
 
 
@@ -228,3 +247,54 @@ class TestSwitchFailLoud:
 
         assert mgr.status_detail == "ready"
         assert mgr.active_source_id == source_id
+
+
+class _ReplacedDuringDeploy(_SwitchApi):
+    """After the create is read back, the listed CR is gone or another object."""
+
+    def __init__(self, *, listed: list[dict]) -> None:
+        super().__init__(
+            old_cr_gets_before_404=0,
+            post_create_statuses=[
+                {
+                    "metadata": {"generation": 1},
+                    "status": {"phase": "Wiring", "observedGeneration": 1},
+                }
+            ],
+        )
+        self.listed = listed
+
+    def list_namespaced_custom_object(self, **_kwargs):
+        if not self.created:
+            return super().list_namespaced_custom_object()
+        return {"items": list(self.listed)}
+
+
+@pytest.mark.parametrize(
+    ("listed", "cause"),
+    [
+        pytest.param([], "was deleted while the session deployed", id="deleted"),
+        pytest.param(
+            [{"metadata": {"name": "current-session", "uid": "uid-another-object"}}],
+            "was replaced by another object while the session deployed",
+            id="replaced",
+        ),
+    ],
+)
+def test_a_deploy_whose_constellation_spec_goes_away_fails_with_that_cause(
+    tmp_sessions, monkeypatch, listed, cause
+):
+    api = _ReplacedDuringDeploy(listed=listed)
+    _patch_switch_waits(monkeypatch)
+    mgr = SessionManager()
+    with pytest.raises(RuntimeError, match=cause):
+        asyncio.run(
+            mgr._switch_constellation_spec(
+                source_id="nodalarc:sessions/test-session.yaml",
+                cr_body=_switch_body(),
+                custom_objects_api=api,
+                core_v1_api=_SwitchCoreV1([0]),
+                namespace="nodalarc",
+                progress=lambda detail: _switch_progress(mgr, detail),
+            )
+        )

@@ -32,6 +32,7 @@ import logging
 import os
 import subprocess
 from collections.abc import Mapping
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 
 from nodalarc.substrate.manifest_contract import (
@@ -61,6 +62,7 @@ class NamespaceHandle:
     """
 
     node_id: str
+    pod_name: str
     pod_uid: str
     sandbox_id: str
     sandbox_attempt: int
@@ -80,6 +82,10 @@ def netns_identity(pid: int) -> str | None:
 def verify_handle(handle: NamespaceHandle) -> bool:
     """Whether the handle still names the exact namespace it was created for."""
     return netns_identity(handle.pid) == handle.netns_id
+
+
+# Concurrent CRI sandbox inspections during handle discovery.
+_INSPECT_WORKERS = 16
 
 
 def _crictl_command() -> list[str]:
@@ -135,6 +141,7 @@ def _ready_sandboxes_by_pod_uid() -> dict[str, tuple[str, int]] | None:
 
 def _validated_sandbox_handle(
     node_id: str,
+    pod_name: str,
     pod_uid: str,
     sandbox_id: str,
     attempt: int,
@@ -223,6 +230,7 @@ def _validated_sandbox_handle(
         return None
     return NamespaceHandle(
         node_id=node_id,
+        pod_name=pod_name,
         pod_uid=pod_uid,
         sandbox_id=sandbox_id,
         sandbox_attempt=attempt,
@@ -291,7 +299,7 @@ def discover_local_pod_handles(
     if sandboxes is None:
         return {}
 
-    candidates: dict[str, tuple[str, str | None]] = {}
+    candidates: dict[str, tuple[str, str, str | None]] = {}
     duplicates: set[str] = set()
     for pod in pods.items:
         node_id = pod.metadata.labels.get(NODE_ID_LABEL)
@@ -304,7 +312,7 @@ def discover_local_pod_handles(
             duplicates.add(node_id)
             continue
         pod_ip = pod.status.pod_ip if pod.status else None
-        candidates[node_id] = (pod.metadata.uid, pod_ip)
+        candidates[node_id] = (pod.metadata.name, pod.metadata.uid, pod_ip)
     for node_id in duplicates:
         log.error(
             "Node ID %s is carried by more than one current-run pod on this node — rejected",
@@ -312,17 +320,28 @@ def discover_local_pod_handles(
         )
         del candidates[node_id]
 
-    result: dict[str, NamespaceHandle] = {}
-    for node_id, (pod_uid, pod_ip) in candidates.items():
+    ready: list[tuple[str, str, str, tuple[str, int], str | None]] = []
+    for node_id, (pod_name, pod_uid, pod_ip) in candidates.items():
         sandbox = sandboxes.get(pod_uid)
         if sandbox is None:
             log.info("No ready sandbox yet for %s (pod UID %s)", node_id, pod_uid)
             continue
-        handle = _validated_sandbox_handle(
-            node_id, pod_uid, *sandbox, pod_ip, mpls_enable=requirements[node_id]
+        ready.append((node_id, pod_name, pod_uid, sandbox, pod_ip))
+
+    def _validate(entry) -> NamespaceHandle | None:
+        node_id, pod_name, pod_uid, sandbox, pod_ip = entry
+        return _validated_sandbox_handle(
+            node_id, pod_name, pod_uid, *sandbox, pod_ip, mpls_enable=requirements[node_id]
         )
+
+    # Each sandbox is inspected by its own CRI call; the calls run together.
+    with ThreadPoolExecutor(max_workers=_INSPECT_WORKERS) as pool:
+        validated = list(pool.map(_validate, ready))
+    result: dict[str, NamespaceHandle] = {}
+    for handle in validated:
         if handle is None:
             continue
+        node_id = handle.node_id
         result[node_id] = handle
         log.info(
             "Discovered %s -> sandbox %s attempt %d PID %d netns %s",

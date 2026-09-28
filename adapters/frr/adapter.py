@@ -110,7 +110,7 @@ class FrrAdapter:
         sid_by_domain = resolved.sid_index_by_domain()
         validate_sid_indices(domains, sid_by_domain)
         template_vars = build_template_vars_from_resolved(
-            resolved, resolved_node, domains=domains, sid_by_domain=sid_by_domain
+            session_context, resolved_node, domains=domains, sid_by_domain=sid_by_domain
         )
         frr_conf = self._frr_conf(stack.fragments, template_vars)
         return AdapterNodeConfig(

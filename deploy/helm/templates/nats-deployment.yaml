@@ -51,12 +51,15 @@ spec:
               port: 8222
             initialDelaySeconds: 5
             periodSeconds: 10
+          # Every platform pod waits for NATS through this Service, so the
+          # probe runs every second from container start; 15 failures keep the
+          # 15 s tolerance of the previous 5 s period.
           readinessProbe:
             httpGet:
               path: /healthz
               port: 8222
-            initialDelaySeconds: 2
-            periodSeconds: 5
+            periodSeconds: 1
+            failureThreshold: 15
           volumeMounts:
             - name: config
               mountPath: /etc/nats

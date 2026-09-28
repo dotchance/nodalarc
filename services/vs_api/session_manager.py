@@ -19,6 +19,7 @@ from nodalarc.cr_runtime_config import (
     ConstellationSpecStatus,
     cr_status_observes_current_generation,
 )
+from nodalarc.kube_watch import watch_snapshots
 from nodalarc.workload_target import NODE_ID_LABEL
 from pydantic import ValidationError
 
@@ -40,6 +41,8 @@ class _CustomObjectsSwitchApi(Protocol):
 
     def get_namespaced_custom_object(self, **kwargs: Any) -> dict[str, Any]: ...
 
+    def list_namespaced_custom_object(self, **kwargs: Any) -> dict[str, Any]: ...
+
     def create_namespaced_custom_object(self, **kwargs: Any) -> Any: ...
 
 
@@ -52,6 +55,23 @@ _TransitionStartedCallback = Callable[[], Awaitable[None]]
 _UploadResourceObservedCallback = Callable[[CatalogUploadResourceEvidence], None]
 _ConstellationSpecObservedCallback = Callable[[Mapping[str, Any]], Awaitable[None]]
 _DeploymentFreshnessCheck = Callable[[PreparedCatalogSessionDeployment], None]
+
+
+# How long a switch waits for the old session's CR and pods to disappear, and for
+# the new session to become Ready.
+_OLD_SESSION_TIMEOUT_S = 120.0
+_DEPLOY_TIMEOUT_S = 300.0
+
+
+def _cr_scope(namespace: str) -> dict[str, str]:
+    """The list arguments that select exactly the one ConstellationSpec."""
+    return {
+        "group": CR_GROUP,
+        "version": CR_VERSION,
+        "namespace": namespace,
+        "plural": CR_PLURAL,
+        "field_selector": f"metadata.name={CR_NAME}",
+    }
 
 
 def _api_status(exc: BaseException) -> int | None:
@@ -161,51 +181,37 @@ class SessionManager:
         if deleted_existing_cr:
             log.info("Deleted existing ConstellationSpec CR %s/%s", namespace, CR_NAME)
             await progress("Waiting for old session to finalize")
-            old_cr_deleted = False
-            for _ in range(60):
-                try:
-                    await loop.run_in_executor(
-                        None,
-                        lambda: custom_objects_api.get_namespaced_custom_object(
-                            group=CR_GROUP,
-                            version=CR_VERSION,
-                            namespace=namespace,
-                            plural=CR_PLURAL,
-                            name=CR_NAME,
-                        ),
-                    )
-                    await asyncio.sleep(2)
-                except Exception as exc:
-                    if _api_status(exc) == 404:
-                        old_cr_deleted = True
+            try:
+                async for crs in watch_snapshots(
+                    custom_objects_api.list_namespaced_custom_object,
+                    timeout_s=_OLD_SESSION_TIMEOUT_S,
+                    **_cr_scope(namespace),
+                ):
+                    if CR_NAME not in crs:
                         break
-                    raise
-            if not old_cr_deleted:
+            except TimeoutError as exc:
                 raise TimeoutError(
                     "Old ConstellationSpec did not finalize within 120 seconds; "
                     "refusing to deploy a new session over stale control-plane state"
-                )
+                ) from exc
 
             await progress("Waiting for old session pods to terminate")
             remaining = 0
-            for _ in range(60):
-                pods = await loop.run_in_executor(
-                    None,
-                    lambda: core_v1_api.list_namespaced_pod(
-                        namespace,
-                        label_selector=NODE_ID_LABEL,
-                    ),
-                )
-                remaining = len(pods.items)
-                if remaining == 0:
-                    break
-                await progress(f"Waiting for {remaining} old pods to terminate")
-                await asyncio.sleep(2)
-            if remaining != 0:
+            try:
+                async for pods in watch_snapshots(
+                    core_v1_api.list_namespaced_pod,
+                    timeout_s=_OLD_SESSION_TIMEOUT_S,
+                    namespace=namespace,
+                    label_selector=NODE_ID_LABEL,
+                ):
+                    remaining = len(pods)
+                    if remaining == 0:
+                        break
+            except TimeoutError as exc:
                 raise TimeoutError(
                     f"{remaining} old session pod(s) still exist after 120 seconds; "
                     "refusing to deploy a new session over stale data-plane state"
-                )
+                ) from exc
 
         await progress("Deploying new constellation")
 
@@ -267,39 +273,51 @@ class SessionManager:
         )
         if constellation_spec_observed is not None:
             await constellation_spec_observed(selected_cr)
+        applied_uid = str((selected_cr.get("metadata") or {}).get("uid") or "")
+        if not applied_uid:
+            raise RuntimeError(f"Deploy failed: ConstellationSpec {CR_NAME} carries no uid")
 
         await progress("Waiting for session to deploy")
-        for _ in range(300):
-            cr = await loop.run_in_executor(
-                None,
-                lambda: custom_objects_api.get_namespaced_custom_object(
-                    group=CR_GROUP,
-                    version=CR_VERSION,
-                    namespace=namespace,
-                    plural=CR_PLURAL,
-                    name=CR_NAME,
-                ),
-            )
-            observed = ConstellationSpecStatus.from_cr(cr.get("status"))
-            phase = observed.phase or ""
-            message = observed.message or ""
-            if not cr_status_observes_current_generation(cr):
-                await progress("Waiting for operator to observe new session spec")
-                await asyncio.sleep(1)
-                continue
-            if message:
-                await progress(message)
-            if phase == "Ready":
-                if constellation_spec_observed is not None:
-                    await constellation_spec_observed(cr)
-                self._current_source_id = source_id
-                return cr
-            if phase == "Error":
-                if constellation_spec_observed is not None:
-                    await constellation_spec_observed(cr)
-                raise RuntimeError(f"Deploy failed: {message}")
-            await asyncio.sleep(1)
-
+        last_message = ""
+        try:
+            async for crs in watch_snapshots(
+                custom_objects_api.list_namespaced_custom_object,
+                timeout_s=_DEPLOY_TIMEOUT_S,
+                **_cr_scope(namespace),
+            ):
+                cr = crs.get(CR_NAME)
+                if cr is None:
+                    raise RuntimeError(
+                        f"Deploy failed: ConstellationSpec {CR_NAME} was deleted "
+                        "while the session deployed"
+                    )
+                if (cr.get("metadata") or {}).get("uid") != applied_uid:
+                    raise RuntimeError(
+                        f"Deploy failed: ConstellationSpec {CR_NAME} was replaced by another "
+                        "object while the session deployed"
+                    )
+                observed = ConstellationSpecStatus.from_cr(cr.get("status"))
+                phase = observed.phase or ""
+                message = observed.message or ""
+                if not cr_status_observes_current_generation(cr):
+                    if last_message != "observing":
+                        last_message = "observing"
+                        await progress("Waiting for operator to observe new session spec")
+                    continue
+                if message and message != last_message:
+                    last_message = message
+                    await progress(message)
+                if phase == "Ready":
+                    if constellation_spec_observed is not None:
+                        await constellation_spec_observed(cr)
+                    self._current_source_id = source_id
+                    return cr
+                if phase == "Error":
+                    if constellation_spec_observed is not None:
+                        await constellation_spec_observed(cr)
+                    raise RuntimeError(f"Deploy failed: {message}")
+        except TimeoutError as exc:
+            raise TimeoutError("Deploy timed out waiting for session Ready (5 minutes)") from exc
         raise TimeoutError("Deploy timed out waiting for session Ready (5 minutes)")
 
     async def _switch_prepared_session(

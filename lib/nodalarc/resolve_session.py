@@ -18,10 +18,10 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal
 
-from pydantic import ValidationError
+from pydantic import BaseModel, ValidationError
 
 from nodalarc.body_frames import BodyFrame, body_runtime_support_for
-from nodalarc.catalog_closure import CatalogReadView, load_catalog_object
+from nodalarc.catalog_closure import CatalogReadDocument, CatalogReadView, load_catalog_object
 from nodalarc.catalog_refs import CatalogRef
 from nodalarc.configuration_yaml import load_configuration_yaml
 from nodalarc.ephemeris_runtime import (
@@ -149,6 +149,31 @@ class _RuntimeNode:
     origination_targets: Any = None
 
 
+class _ResolutionCatalog:
+    """The catalog one resolution reads, each object read, parsed and validated once.
+
+    A resolution loads the same objects again for every node it expands, and
+    the closure it reads does not change while it runs. Every caller still gets
+    its own mapping (``_load_ref_or_object`` dumps the model per call), so no
+    caller's change reaches another. Nothing outlives the resolution.
+    """
+
+    def __init__(self, view: CatalogReadView) -> None:
+        self._view = view
+        self._objects: dict[CatalogRef, tuple[str | None, BaseModel]] = {}
+
+    def read(self, ref: CatalogRef) -> CatalogReadDocument:
+        return self._view.read(ref)
+
+    def load(self, ref: CatalogRef) -> tuple[str | None, BaseModel]:
+        """The validated object behind ``ref``; a failed load is not remembered."""
+        loaded = self._objects.get(ref)
+        if loaded is None:
+            loaded = load_catalog_object(ref, self._view)
+            self._objects[ref] = loaded
+        return loaded
+
+
 def resolve_session(
     raw_session: dict[str, Any],
     *,
@@ -176,13 +201,14 @@ def resolve_session_with_assets(
 
     context = source_context or SourceContext(origin="resolve_session")
     cfg = SegmentSessionConfig.model_validate(raw_session)
+    resolution_catalog = _ResolutionCatalog(catalog)
     # The runtime-support gate is mandatory. Production always runs the
     # Earth-Luna profile; callers may only widen/narrow it explicitly. A None
     # here must never mean "skip the typed UnsupportedFeature layer".
     support = runtime_support or RuntimeSupport.earth_luna()
-    _check_runtime_support(cfg, support, catalog)
+    _check_runtime_support(cfg, support, resolution_catalog)
 
-    expanded_nodes, segments = _expand_segments(cfg, catalog)
+    expanded_nodes, segments = _expand_segments(cfg, resolution_catalog)
     _check_node_workloads(tuple(expanded_nodes), support)
     allocated_nodes, ethernet_segments = _allocate_segment_addressing(list(expanded_nodes))
     runtime_nodes = _apply_addressing(cfg, tuple(allocated_nodes))
@@ -193,7 +219,7 @@ def resolve_session_with_assets(
     body_facts = _collect_body_facts(runtime_nodes)
     _check_body_support(resolved_nodes, body_facts, support)
     _check_propagator_support(resolved_nodes, support)
-    ephemeris = _resolve_ephemeris(cfg, catalog, resolved_nodes)
+    ephemeris = _resolve_ephemeris(cfg, resolution_catalog, resolved_nodes)
     link_rules = tuple(_resolve_link_rule(rule, runtime_nodes) for rule in cfg.link_rules or ())
     _validate_routing_boundaries(cfg, routing_domains, link_rules)
     sid_blocks = tuple(_allocate_sid_blocks(routing_domains))
@@ -249,7 +275,7 @@ def resolve_session_with_assets(
     _refuse_divergent_bfd_on_shared_interfaces(resolved)
     _refuse_ospf_instances_without_a_contiguous_backbone(resolved)
     workload_profiles = {
-        reference: Profile.model_validate(_load_expected(reference, catalog, "profile"))
+        reference: Profile.model_validate(_load_expected(reference, resolution_catalog, "profile"))
         for reference in sorted({node.profile for node in resolved_nodes})
     }
     _check_profile_env(workload_profiles, resolved_nodes)
@@ -287,7 +313,7 @@ def load_session_resolution_from_file(
 
 
 def _check_runtime_support(
-    cfg: SegmentSessionConfig, support: RuntimeSupport, catalog: CatalogReadView
+    cfg: SegmentSessionConfig, support: RuntimeSupport, catalog: _ResolutionCatalog
 ) -> None:
     unsupported = []
     explicit_node_clocks: list[dict[str, Any]] = []
@@ -474,7 +500,7 @@ def _collect_body_facts(runtime_nodes: tuple[_RuntimeNode, ...]) -> tuple[Resolv
 
 def _resolve_ephemeris(
     cfg: SegmentSessionConfig,
-    catalog: CatalogReadView,
+    catalog: _ResolutionCatalog,
     nodes: tuple[ResolvedNode, ...],
 ) -> ResolvedEphemeris | None:
     active_bodies = _active_bodies(nodes)
@@ -535,7 +561,7 @@ def _resolve_ephemeris(
     return resolved_ephemeris
 
 
-def _ephemeris_target_body_id(target: Any, catalog: CatalogReadView) -> str:
+def _ephemeris_target_body_id(target: Any, catalog: _ResolutionCatalog) -> str:
     body = _load_expected(target, catalog, "body")
     return str(body["id"])
 
@@ -605,7 +631,7 @@ def _segment_record(
 
 
 def _expand_segments(
-    cfg: SegmentSessionConfig, catalog: CatalogReadView
+    cfg: SegmentSessionConfig, catalog: _ResolutionCatalog
 ) -> tuple[tuple[_RuntimeNode, ...], tuple[ResolvedSegment, ...]]:
     """Expand every segment into runtime nodes and record each segment once."""
     ordered: list[_RuntimeNode | _SiteMarker] = []
@@ -663,7 +689,7 @@ def _expand_segments(
 
 
 def _expand_space_segment(
-    segment: SpaceSegment, catalog: CatalogReadView
+    segment: SpaceSegment, catalog: _ResolutionCatalog
 ) -> tuple[list[_RuntimeNode], ResolvedSegment]:
     source_ref = str(segment.source)
     wrapper, source = _load_ref_or_object(source_ref, catalog)
@@ -691,7 +717,7 @@ def _expand_space_segment(
 def _expand_constellation_segment(
     segment: SpaceSegment,
     constellation: dict[str, Any],
-    catalog: CatalogReadView,
+    catalog: _ResolutionCatalog,
 ) -> list[_RuntimeNode]:
     node = _load_expected(constellation["node"], catalog, "node")
     orbit = _load_expected(constellation["orbit"], catalog, "orbit")
@@ -772,7 +798,7 @@ def _node_origination_targets(source_node: dict[str, Any]):
 def _space_node_from_entry(
     segment: SpaceSegment,
     entry: dict[str, Any],
-    catalog: CatalogReadView,
+    catalog: _ResolutionCatalog,
     *,
     source_slot: int,
 ) -> list[_RuntimeNode]:
@@ -1068,7 +1094,7 @@ def _effective_site_policy(
 
 
 def _expand_site_placement(
-    placement: _SitePlacement, catalog: CatalogReadView
+    placement: _SitePlacement, catalog: _ResolutionCatalog
 ) -> list[_RuntimeNode]:
     site = placement.site
     site_id = site["id"]
@@ -1278,7 +1304,7 @@ def _expand_ground_payload_members(
     node_tags: set[str],
     segment_profile: str | None,
     base_clock: Any,
-    catalog: CatalogReadView,
+    catalog: _ResolutionCatalog,
 ) -> list[_RuntimeNode]:
     """Expand a site-installed node's populated payload mounts into runtime
     members: real environments attached to the segment the mount's port
@@ -1360,7 +1386,7 @@ def _resolved_space_node(
     body: dict[str, Any] | None,
     orbit: ResolvedOrbitFacts,
     tags: tuple[str, ...],
-    catalog: CatalogReadView,
+    catalog: _ResolutionCatalog,
     plane: int | None,
     slot: int | None,
     profile: str,
@@ -1489,7 +1515,7 @@ def _terminal_blocks_for_node(
     runtime_id: str,
     source_node: dict[str, Any],
     installs: dict[str, Any] | None,
-    catalog: CatalogReadView,
+    catalog: _ResolutionCatalog,
     *,
     owner_kind: str,
     body_id: str,
@@ -1626,7 +1652,7 @@ def _expand_space_payload_members(
     carrier: _RuntimeNode,
     source_node: dict[str, Any],
     segment_profile: str | None,
-    catalog: CatalogReadView,
+    catalog: _ResolutionCatalog,
 ) -> list[_RuntimeNode]:
     """Expand a space carrier's payload mounts into runtime members.
 
@@ -1763,7 +1789,7 @@ def _terminal_blocks_for_site_node(
     runtime_id: str,
     source_node: dict[str, Any],
     site_node: dict[str, Any],
-    catalog: CatalogReadView,
+    catalog: _ResolutionCatalog,
     *,
     body_id: str,
 ) -> list[ResolvedTerminalBlock]:
@@ -3950,7 +3976,7 @@ def _normalize_token(value: str) -> str:
     return token
 
 
-def _load_ref_or_object(value: str, catalog: CatalogReadView) -> tuple[str, dict[str, Any]]:
+def _load_ref_or_object(value: str, catalog: _ResolutionCatalog) -> tuple[str, dict[str, Any]]:
     """Load one wrapped catalog object through the read view as a plain mapping.
 
     ``CatalogReadError`` propagates unchanged: the view could not supply the
@@ -3960,7 +3986,7 @@ def _load_ref_or_object(value: str, catalog: CatalogReadView) -> tuple[str, dict
         raise SessionResolutionError(f"expected catalog reference, got {type(value)!r}")
     ref = value if isinstance(value, CatalogRef) else CatalogRef(value)
     try:
-        wrapper, model = load_catalog_object(ref, catalog)
+        wrapper, model = catalog.load(ref)
     except (ValidationError, ValueError, TypeError) as exc:
         raise SessionResolutionError(f"invalid catalog object: {exc}") from exc
     if wrapper is None:
@@ -4029,7 +4055,7 @@ def _effective_profile(
     placed: Any,
     segment_profile: Any,
     definition: Any,
-    catalog: CatalogReadView,
+    catalog: _ResolutionCatalog,
 ) -> tuple[str, str, str | None]:
     """The most specific authored profile statement wins; absence is a refusal."""
 
@@ -4049,7 +4075,7 @@ def _effective_profile(
     return reference, level, profile_body.get("adapter")
 
 
-def _load_expected(ref: str, catalog: CatalogReadView, expected_wrapper: str) -> dict[str, Any]:
+def _load_expected(ref: str, catalog: _ResolutionCatalog, expected_wrapper: str) -> dict[str, Any]:
     wrapper, body = _load_ref_or_object(ref, catalog)
     if wrapper != expected_wrapper:
         raise SessionResolutionError(

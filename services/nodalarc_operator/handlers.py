@@ -16,6 +16,9 @@ machine (old pods cleared → pods created → routing ready → wired → Ready
 from __future__ import annotations
 
 import asyncio
+import contextlib
+import enum
+import functools
 import logging
 import os
 from collections.abc import Mapping
@@ -24,6 +27,7 @@ from typing import Any
 
 import kopf
 import kubernetes
+import urllib3
 from nodalarc.cr_runtime_config import (
     CR_API_VERSION,
     CR_GROUP,
@@ -35,6 +39,10 @@ from nodalarc.cr_runtime_config import (
     ConstellationSpecStatus,
     load_cr_runtime_config,
 )
+from nodalarc.kubernetes_runtime_config import (
+    KubernetesRuntimeConfigError,
+    KubernetesRuntimeConfigErrorCode,
+)
 from nodalarc.nats_channels import sanitize_session_id
 from nodalarc.runtime_config import ResolvedRuntimeConfig, RuntimeDeploymentContext
 from nodalarc.session_identity import derive_session_run_id
@@ -43,20 +51,27 @@ from nodalarc.substrate.manifest_contract import (
     WiringManifestPayloadError,
     decode_wiring_manifest_payload,
 )
+from nodalarc.workload_target import NODE_ID_LABEL
 
 from nodalarc_operator import session_deployer as _deployer
 from nodalarc_operator.session_deployer import (
+    SESSION_SERVICE_APPS,
     RetryableSessionDependency,
     build_runtime_session_config_data,
     check_platform_runtime_ready,
     check_wiring_complete,
     compute_platform_hash,
     compute_runtime_hash,
+    delete_session_pods,
+    ensure_runtime_session_config,
     ensure_session_configmaps,
     ensure_session_pods,
     prepare_session_workloads,
-    restart_platform_pods,
+    retire_session_services,
+    roll_session_services,
+    session_services_on_other_run,
     teardown_session,
+    wait_for_session_services_retired,
     write_wiring_manifest,
 )
 from nodalarc_operator.session_pods import (
@@ -73,10 +88,20 @@ from nodalarc_operator.workloads.preparation import PreparedWorkloads, WorkloadP
 
 log = logging.getLogger(__name__)
 
+# How long session teardown waits for the retired OME and Scheduler to exit.
+# Both stop on SIGTERM within seconds; a service still running after this is
+# a fault the teardown reports instead of purging around it.
+_SESSION_SERVICE_RETIRE_TIMEOUT_S = 60.0
+
+
+# The NATS connection the logging library publishes through; closed at shutdown.
+_logging_nc = None
+
 
 @kopf.on.startup()
 async def on_startup(**_):
     """Connect the logging library to NATS for OpsEvent publishing and debug control."""
+    global _logging_nc
     import nats
     from nodal.logging import connect as _connect_logging
     from nodalarc.nats_channels import NATS_CONNECT_OPTIONS, nats_url
@@ -84,9 +109,30 @@ async def on_startup(**_):
     try:
         nc = await nats.connect(nats_url(), **NATS_CONNECT_OPTIONS)
         await _connect_logging(nc)
+        _logging_nc = nc
         log.info("Operator NATS logging connected")
     except Exception as exc:
         log.error("Operator NATS logging connection failed: %s", exc)
+
+
+@kopf.on.cleanup()
+async def on_cleanup(**_):
+    """Close the logging connection, flushing what it holds, so the Operator stops at once.
+
+    An open connection keeps its reader, flusher and ping tasks alive, and kopf
+    waits for every task on its loop before the process exits.
+    """
+    if _logging_nc is None:
+        return
+    try:
+        await _logging_nc.close()
+    except ConnectionError as exc:
+        # The server went first (a platform teardown stops NATS together with
+        # the Operator). The client cancelled its reader, flusher and ping
+        # tasks before the flush that failed, so nothing is left running; a
+        # raise here would have kopf retry the cleanup a minute later and the
+        # Operator would outlive its termination grace period.
+        log.info("Operator NATS logging connection was already lost at stop: %s", exc)
 
 
 # Module-level K8s clients — initialized once on first use, reused for all calls.
@@ -103,19 +149,55 @@ def _get_custom_api() -> kubernetes.client.CustomObjectsApi:
     return _custom_api
 
 
+class _SessionGone(Exception):
+    """The ConstellationSpec a session driver serves no longer exists as it knew it."""
+
+
 def _update_status(name: str, namespace: str, status: ConstellationSpecStatus) -> None:
-    """Patch the ConstellationSpec status subresource with the fields one status sets."""
-    # loop-blocking-ok: small status PATCH at reconcile-event cadence; the
-    # operator loop serves no feed consumers, so API-server tail latency
-    # degrades only reconcile responsiveness, never a user-facing stream.
-    _get_custom_api().patch_namespaced_custom_object_status(
-        group=CR_GROUP,
-        version=CR_VERSION,
-        namespace=namespace,
-        plural=CR_PLURAL,
-        name=name,
-        body={"status": status.to_patch()},
-    )
+    """Patch the ConstellationSpec status subresource with the fields one status sets.
+
+    Raises ``_SessionGone`` when the CR no longer exists.
+    """
+    try:
+        # loop-blocking-ok: small status PATCH at reconcile-event cadence; the
+        # operator loop serves no feed consumers, so API-server tail latency
+        # degrades only reconcile responsiveness, never a user-facing stream.
+        _get_custom_api().patch_namespaced_custom_object_status(
+            group=CR_GROUP,
+            version=CR_VERSION,
+            namespace=namespace,
+            plural=CR_PLURAL,
+            name=name,
+            body={"status": status.to_patch()},
+        )
+    except kubernetes.client.rest.ApiException as exc:
+        if exc.status == 404:
+            raise _SessionGone(f"ConstellationSpec {namespace}/{name} no longer exists") from exc
+        raise
+
+
+def _read_session_cr(name: str, namespace: str, uid: str) -> dict:
+    """The ConstellationSpec as the API server holds it now, if it is still ``uid``.
+
+    Raises ``_SessionGone`` when the CR is absent, is being deleted, or is a
+    later object that reuses the name.
+    """
+    try:
+        cr = _get_custom_api().get_namespaced_custom_object(
+            group=CR_GROUP, version=CR_VERSION, namespace=namespace, plural=CR_PLURAL, name=name
+        )
+    except kubernetes.client.rest.ApiException as exc:
+        if exc.status == 404:
+            raise _SessionGone(f"ConstellationSpec {namespace}/{name} no longer exists") from exc
+        raise
+    meta = cr.get("metadata") or {}
+    if meta.get("uid") != uid:
+        raise _SessionGone(
+            f"ConstellationSpec {namespace}/{name} is now object {meta.get('uid')}, not {uid}"
+        )
+    if meta.get("deletionTimestamp"):
+        raise _SessionGone(f"ConstellationSpec {namespace}/{name} ({uid}) is being deleted")
+    return cr
 
 
 def _with_observed_generation(meta: dict, status: Mapping[str, Any]) -> ConstellationSpecStatus:
@@ -475,32 +557,51 @@ def _wiring_manifest_matches_spec(
     return True
 
 
-async def _reconcile_session(
-    spec,
-    name,
-    namespace,
-    meta,
-    status,
+@dataclass(frozen=True, slots=True)
+class _SessionRuntime:
+    """Everything fixed for one ConstellationSpec generation.
+
+    Identity, the resolved and verified session, the prepared workloads and
+    the desired pod identity are functions of the CR's spec and the installed
+    catalog. They are computed once per generation and held by the session's
+    driver; a pass and the Ready audit compare observed state against them.
+    An Operator restart computes them again.
+    """
+
+    uid: str
+    generation: int
+    session_run_id: str
+    identity_fields: dict
+    active_session: ResolvedRuntimeConfig
+    verification: _RuntimeVerification
+    prepared_workloads: PreparedWorkloads
+    pod_identity: SessionPodIdentity
+
+    @property
+    def status_fields(self) -> dict:
+        return {**self.identity_fields, **self.verification.proof_fields}
+
+    def serves(self, meta: Mapping[str, Any]) -> bool:
+        return self.uid == str(meta.get("uid") or "") and self.generation == int(
+            meta.get("generation", 0) or 0
+        )
+
+
+async def _session_runtime(
+    spec_dict: dict,
+    name: str,
+    namespace: str,
+    meta: dict,
     active_session: ResolvedRuntimeConfig | None = None,
-):
-    """Converge cluster state toward desired session state.
+) -> _SessionRuntime | None:
+    """Compute one generation's runtime, or publish why it cannot exist.
 
-    True desired-state reconciler: computes expected pod count from the CRD
-    spec (not from cached status.podCount). Can create missing pods when
-    the cluster has diverged from the spec.
-
-    Called by on_create (after initial deploy), on_resume, on_update, and
-    the wiring_check timer. Idempotent — safe to call at any point in
-    the lifecycle.
-
-    Checks 5 conditions in order. For each condition that isn't met,
-    performs the convergence action and returns (one step per invocation).
-    The kopf timer re-enters periodically to drive progress.
+    Returns None after recording the refusal in the CR status (or, for a
+    workload preparation failure, after converging the CR's workloads to
+    zero first).
     """
     loop = asyncio.get_running_loop()
-    phase = ConstellationSpecStatus.from_cr(status).phase or ""
     owner_ref = _build_owner_ref(name, meta)
-    spec_dict = dict(spec)
 
     try:
         session_name, session_run_id = await loop.run_in_executor(
@@ -524,7 +625,7 @@ async def _reconcile_session(
                 },
             ),
         )
-        return
+        return None
 
     try:
         if active_session is None:
@@ -540,9 +641,6 @@ async def _reconcile_session(
         verification = await asyncio.to_thread(
             _verify_runtime, spec_dict, meta, namespace, session_run_id, active_session
         )
-        platform_hash = verification.platform_hash
-        deployment_context = verification.deployment_context
-        runtime_hash = verification.runtime_hash
         status_fields = {**identity_fields, **verification.proof_fields}
     except Exception as exc:
         error_msg = str(exc)
@@ -559,7 +657,7 @@ async def _reconcile_session(
                 },
             ),
         )
-        return
+        return None
 
     # The COMPLETE write-free preparation — render, load, digest-verify,
     # resolve, compile, compose — runs BEFORE any pod is deleted or reused
@@ -578,7 +676,7 @@ async def _reconcile_session(
         await _converge_selection_failure(
             loop, name, namespace, meta, owner_ref, status_fields, error_msg
         )
-        return
+        return None
 
     # Desired session-pod identity: the resolved node set, this run and the
     # prepared workload selection. An empty or colliding node set is refused.
@@ -601,7 +699,82 @@ async def _reconcile_session(
                 },
             ),
         )
-        return
+        return None
+    return _SessionRuntime(
+        uid=str(meta.get("uid") or ""),
+        generation=int(meta.get("generation", 0) or 0),
+        session_run_id=session_run_id,
+        identity_fields=identity_fields,
+        active_session=active_session,
+        verification=verification,
+        prepared_workloads=prepared_workloads,
+        pod_identity=pod_identity,
+    )
+
+
+async def _reconcile_session(
+    spec,
+    name,
+    namespace,
+    meta,
+    status,
+    active_session: ResolvedRuntimeConfig | None = None,
+    runtime: _SessionRuntime | None = None,
+) -> bool:
+    """Converge cluster state toward desired session state.
+
+    True desired-state reconciler: computes expected pod count from the CRD
+    spec (not from cached status.podCount). Can create missing pods when
+    the cluster has diverged from the spec.
+
+    Called by on_create (after initial deploy), on_resume, on_update, and
+    the wiring_check timer. Idempotent — safe to call at any point in
+    the lifecycle.
+
+    Checks 5 conditions in order. For each condition that isn't met,
+    performs the convergence action and returns (one step per invocation).
+    The session's driver runs the next pass when a watched object changes.
+    Returns True when the pass stopped on a failure no watched object will
+    report (a transient API error, a proof read over HTTP): the driver then
+    runs another pass after a backoff.
+    """
+    loop = asyncio.get_running_loop()
+    phase = ConstellationSpecStatus.from_cr(status).phase or ""
+    owner_ref = _build_owner_ref(name, meta)
+    spec_dict = dict(spec)
+
+    if runtime is None:
+        runtime = await _session_runtime(spec_dict, name, namespace, meta, active_session)
+        if runtime is None:
+            return False
+    session_run_id = runtime.session_run_id
+    active_session = runtime.active_session
+    verification = runtime.verification
+    platform_hash = verification.platform_hash
+    deployment_context = verification.deployment_context
+    runtime_hash = verification.runtime_hash
+    status_fields = runtime.status_fields
+    prepared_workloads = runtime.prepared_workloads
+    pod_identity = runtime.pod_identity
+
+    # OME and the Scheduler serve exactly one session run. Services still bound
+    # to another run (a replaced generation, a session deleted while the
+    # Operator was down) are retired before this run proceeds; they never
+    # keep publishing or dispatching into a session that is no longer live.
+    try:
+        stale_services = await loop.run_in_executor(
+            None, session_services_on_other_run, namespace, session_run_id
+        )
+        if stale_services:
+            log.info(
+                "Reconcile: session services %s serve another run; retiring them",
+                ", ".join(stale_services),
+            )
+            await loop.run_in_executor(None, retire_session_services, namespace)
+    except kubernetes.client.rest.ApiException as exc:
+        log.warning("Reconcile: session service check failed: %s", exc)
+        return True
+
     expected_count = pod_identity.expected_count
 
     # One observation of the session pods drives every decision in this pass.
@@ -624,7 +797,7 @@ async def _reconcile_session(
                 },
             ),
         )
-        return
+        return False
 
     # --- Condition 1: no session pod of another owner ---
     # A foreign session pod is never counted, adopted or deleted.
@@ -650,7 +823,7 @@ async def _reconcile_session(
                 },
             ),
         )
-        return
+        return False
 
     # --- Condition 2: no owned pod of another run, owner or workload, or of an
     # unexpected node ---
@@ -682,7 +855,7 @@ async def _reconcile_session(
                 },
             ),
         )
-        return
+        return False
 
     # --- Condition 3: owned pods already deleting have gone ---
     if view.terminating:
@@ -699,7 +872,7 @@ async def _reconcile_session(
                 },
             ),
         )
-        return
+        return False
 
     # --- Condition 4: every expected node has a current pod ---
     ready = view.running_count
@@ -764,7 +937,7 @@ async def _reconcile_session(
                     },
                 ),
             )
-            return
+            return True
         except WorkloadPreparationError as exc:
             error_msg = str(exc)
             log.error(
@@ -775,7 +948,7 @@ async def _reconcile_session(
             await _converge_selection_failure(
                 loop, name, namespace, meta, owner_ref, status_fields, error_msg
             )
-            return
+            return False
         except kubernetes.client.rest.ApiException as exc:
             # Transient Kubernetes failure — remain Creating; the timer
             # re-enters and the ensure pipeline is idempotent.
@@ -793,7 +966,7 @@ async def _reconcile_session(
                     },
                 ),
             )
-            return
+            return True
         except Exception as exc:
             log.error("Reconcile: ensure pipeline failed: %s", exc, exc_info=True)
             _update_status(
@@ -808,7 +981,7 @@ async def _reconcile_session(
                     },
                 ),
             )
-            return
+            return False
 
         _update_status(
             name,
@@ -850,7 +1023,7 @@ async def _reconcile_session(
             provisioned,
             expected_count,
         )
-        return
+        return False
 
     # All pod networks provisioned — proceed through remaining conditions.
     #
@@ -867,13 +1040,6 @@ async def _reconcile_session(
     # after wiring completes, before the session is declared Ready.
 
     # --- Condition 4: Wiring manifest written + wiring complete ---
-    runtime_config_current = await loop.run_in_executor(
-        None,
-        _runtime_session_config_matches,
-        namespace,
-        active_session,
-        deployment_context,
-    )
     manifest_current = await loop.run_in_executor(
         None,
         _wiring_manifest_matches_spec,
@@ -882,12 +1048,8 @@ async def _reconcile_session(
         session_run_id,
         platform_hash,
     )
-    if not manifest_current or not runtime_config_current:
-        refresh_message = (
-            "Writing pod IP addresses and wiring manifest"
-            if not manifest_current
-            else "Refreshing mounted runtime deployment identity"
-        )
+    if not manifest_current:
+        refresh_message = "Writing pod IP addresses and wiring manifest"
         _update_status(
             name,
             namespace,
@@ -903,40 +1065,23 @@ async def _reconcile_session(
             ),
         )
         try:
-            # Refresh runtime ConfigMaps before publishing a new manifest. When a
-            # CR generation changes but the pod count stays the same, this is the
-            # only path that can update /etc/nodalarc/session.yaml with the new
-            # operator-managed session.run_id. The manifest and the platform pods
-            # must agree on the same runtime identity.
             await loop.run_in_executor(
                 None,
-                ensure_session_configmaps,
+                write_wiring_manifest,
                 spec_dict,
-                name,
                 namespace,
                 owner_ref,
-                None,
                 session_run_id,
                 active_session,
-                deployment_context,
+                platform_hash,
+                view.placement(),
             )
-            if not manifest_current:
-                await loop.run_in_executor(
-                    None,
-                    write_wiring_manifest,
-                    spec_dict,
-                    namespace,
-                    owner_ref,
-                    session_run_id,
-                    active_session,
-                    platform_hash,
-                    view.placement(),
-                )
 
-            # OME/Scheduler restart deliberately does NOT happen here: the
-            # platform services are restarted only after wiring completes
-            # and every session workload container is Running, so they never
-            # start consuming a session whose workloads have not begun.
+            # OME and the Scheduler do NOT start here: their runtime session
+            # ConfigMap is written, and they are rolled onto it, only after
+            # wiring completes and every session workload container is
+            # Running, so they never consume a session whose workloads have
+            # not begun.
         except RetryableSessionDependency as exc:
             log.info("Reconcile: waiting on runtime dependency during refresh: %s", exc)
             _update_status(
@@ -953,9 +1098,9 @@ async def _reconcile_session(
                     },
                 ),
             )
-            return
+            return True
         except Exception as exc:
-            log.error("Reconcile: runtime refresh failed: %s", exc, exc_info=True)
+            log.error("Reconcile: wiring manifest publication failed: %s", exc, exc_info=True)
             _update_status(
                 name,
                 namespace,
@@ -965,12 +1110,12 @@ async def _reconcile_session(
                         "phase": "Error",
                         "readyPods": ready,
                         "podCount": expected_count,
-                        "message": f"Runtime refresh failed: {str(exc)[:500]}",
+                        "message": f"Wiring manifest publication failed: {str(exc)[:500]}",
                         **status_fields,
                     },
                 ),
             )
-            return
+            return False
 
         _update_status(
             name,
@@ -986,24 +1131,22 @@ async def _reconcile_session(
                     "message": (
                         f"All {expected_count} pod networks provisioned. "
                         "Node Agent wiring data plane."
-                        if not manifest_current
-                        else "Runtime configuration refreshed; waiting for verified services."
                     ),
                     **status_fields,
                 },
             ),
         )
-        log.info("Reconcile: runtime inputs refreshed, advanced to Wiring")
-        return
+        log.info("Reconcile: wiring manifest written, advanced to Wiring")
+        return False
 
     # Manifest exists — check wiring completion
     try:
         complete, wired_count, progress_msg = await loop.run_in_executor(
-            None, check_wiring_complete, namespace, expected_count
+            None, check_wiring_complete, namespace, view
         )
     except kubernetes.client.rest.ApiException as e:
         log.warning("Reconcile: wiring status check error: %s", e)
-        return
+        return True
     except ValueError as e:
         log.error("Reconcile: wiring status invalid: %s", e)
         _update_status(
@@ -1021,7 +1164,7 @@ async def _reconcile_session(
                 },
             ),
         )
-        return
+        return False
 
     if not complete:
         if wired_count == 0 and progress_msg is None:
@@ -1046,7 +1189,7 @@ async def _reconcile_session(
             ),
         )
         log.debug("Reconcile: wiring in progress (%d/%d)", wired_count, expected_count)
-        return
+        return False
 
     # Wiring is complete — every session container must be Running before
     # the session may be declared Ready. Under the earlier provisioned-gate
@@ -1068,17 +1211,35 @@ async def _reconcile_session(
             ),
         )
         log.debug("Reconcile: wired, %d/%d pods running", ready, expected_count)
-        return
+        return False
 
-    # Wired and all workloads Running — now (and only now) roll the
-    # session-scoped platform services onto the new runtime inputs. The
-    # config-hash annotation makes this a no-op on every later pass with
-    # the same runtime hash.
+    # Wired and all workloads Running — now (and only now) start the
+    # session services: write the runtime session ConfigMap they load and
+    # roll OME and the Scheduler onto it. Both steps are no-ops on every later
+    # pass with the same runtime.
     try:
-        await loop.run_in_executor(None, restart_platform_pods, namespace, runtime_hash)
+        runtime_config_current = await loop.run_in_executor(
+            None,
+            _runtime_session_config_matches,
+            namespace,
+            active_session,
+            deployment_context,
+        )
+        if not runtime_config_current:
+            await loop.run_in_executor(
+                None,
+                ensure_runtime_session_config,
+                namespace,
+                owner_ref,
+                active_session,
+                deployment_context,
+            )
+        await loop.run_in_executor(
+            None, roll_session_services, namespace, runtime_hash, session_run_id
+        )
     except kubernetes.client.rest.ApiException as exc:
-        log.warning("Reconcile: platform restart error: %s", exc)
-        return
+        log.warning("Reconcile: session service start error: %s", exc)
+        return True
 
     try:
         platform_ready, platform_detail = await loop.run_in_executor(
@@ -1091,7 +1252,7 @@ async def _reconcile_session(
         )
     except kubernetes.client.rest.ApiException as exc:
         log.warning("Reconcile: platform readiness check error: %s", exc)
-        return
+        return True
     if not platform_ready:
         _update_status(
             name,
@@ -1110,7 +1271,7 @@ async def _reconcile_session(
                 },
             ),
         )
-        return
+        return True
 
     # --- Condition 5: Ready ---
     if phase != "Ready":
@@ -1136,16 +1297,15 @@ async def _reconcile_session(
             },
         ),
     )
+    return False
 
 
 @kopf.on.create(CR_PLURAL, group=CR_GROUP)
 async def on_create(spec, name, namespace, meta, **_):
     """Handle ConstellationSpec CR creation.
 
-    Non-blocking: validates the CRD, sets initial status, and calls the
-    reconciler once. The kopf timer re-enters every 10 seconds to drive
-    progress through ConfigMap creation, pod creation, readiness, wiring,
-    and Ready. No blocking waits — the Operator stays responsive.
+    Validates the CR name and wakes the session's driver, which runs the
+    reconcile passes from ConfigMap creation through Ready.
     """
     log.info("ConstellationSpec '%s' created in %s", name, namespace)
 
@@ -1162,34 +1322,18 @@ async def on_create(spec, name, namespace, meta, **_):
         )
         raise kopf.PermanentError(f"Invalid CR name: {name}")
 
-    _update_status(name, namespace, _with_observed_generation(meta, {"phase": "Pending"}))
-
-    # The reconciler handles everything. First invocation kicks off
-    # the state machine; the timer drives subsequent ticks.
-    await _reconcile_session(spec, name, namespace, meta, {"phase": "Pending"})
+    # The session's driver runs every reconcile pass; creation only wakes it.
+    _wake(meta["uid"])
 
 
 @kopf.on.update(CR_PLURAL, group=CR_GROUP)
-async def on_update(spec, name, namespace, meta, status, **_):
-    """Handle CRD spec changes — session switch or config update.
-
-    Uses semantic hashing to determine what changed:
-    - Platform-impacting fields (constellation, routing, time, GS):
-      restart platform pods via forced rolling update, then reconcile.
-    - Non-impacting fields (metadata, placement): reconcile without
-      restarting platform pods.
-    """
-    observed = ConstellationSpecStatus.from_cr(status)
-    phase = observed.phase or ""
-    if phase == "Error" and observed.observes_generation(meta.get("generation")):
-        log.debug("on_update: session in Error state, skipping")
-        return
-
-    await _reconcile_session(spec, name, namespace, meta, status)
+async def on_update(uid, **_):
+    """Handle CRD spec changes: the session's driver reconciles the new generation."""
+    _wake(uid)
 
 
 @kopf.on.delete(CR_PLURAL, group=CR_GROUP)
-async def on_delete(name, namespace, spec=None, meta=None, status=None, **_):
+async def on_delete(name, namespace, uid, spec=None, meta=None, status=None, **_):
     """Handle ConstellationSpec CR deletion: tear down what this CR deployed.
 
     The deployed identity is proven from the resources this CR owns (session
@@ -1200,6 +1344,14 @@ async def on_delete(name, namespace, spec=None, meta=None, status=None, **_):
     deployed and only the ConfigMap sweep runs.
     """
     log.info("ConstellationSpec '%s' deleted, tearing down session", name)
+    # kopf runs this handler while it stops the session's driver, and a pass
+    # already running keeps writing from executor threads: it could bind the
+    # services to this run again or create pods after they were deleted. Any
+    # pass that starts from here on reads the CR as deleted and ends.
+    in_flight = _passes.get(uid)
+    if in_flight is not None and not in_flight.done():
+        log.info("Waiting for the session driver's current pass before teardown")
+        await asyncio.wait({in_flight})
     loop = asyncio.get_running_loop()
     owner_ref = _build_owner_ref(name, dict(meta or {}))
     run_ids = await loop.run_in_executor(
@@ -1213,179 +1365,331 @@ async def on_delete(name, namespace, spec=None, meta=None, status=None, **_):
         log.info("Owned session resources name run ids %s; purging each", ", ".join(run_ids))
     else:
         log.info("No owned session resources; sweeping session ConfigMaps only")
+    # Stop the session services and wait until they have exited, then delete
+    # the session pods together. A Scheduler still stopping could otherwise
+    # reconcile or audit pods that are going away and report their removal as
+    # kernel faults. Each pod stops on its own SIGTERM; nothing here waits for
+    # them. The NATS purge comes after the services exited, so no retired
+    # instance can republish a purged run.
+    await loop.run_in_executor(None, retire_session_services, namespace)
+    await loop.run_in_executor(
+        None, wait_for_session_services_retired, namespace, _SESSION_SERVICE_RETIRE_TIMEOUT_S
+    )
+    await loop.run_in_executor(None, delete_session_pods, namespace, owner_ref["uid"])
     await loop.run_in_executor(None, teardown_session, namespace, run_ids)
     log.info("Session teardown complete")
 
 
 @kopf.on.resume(CR_PLURAL, group=CR_GROUP)
-async def on_resume(spec, name, namespace, meta, status, **_):
-    """Handle Operator restart — reconcile existing session state."""
+async def on_resume(name, uid, status, **_):
+    """Handle Operator restart — the session's driver reconciles existing state."""
+    observed = ConstellationSpecStatus.from_cr(status)
+    log.info("Resuming ConstellationSpec '%s', current phase: %s", name, observed.phase or "")
+    _wake(uid)
+
+
+# ---------------------------------------------------------------------------
+# The session driver: one reconcile pass at a time, run when something changes
+# ---------------------------------------------------------------------------
+
+# Backoff for a pass that stopped on a failure no watched object will report.
+_REQUEUE_FIRST_S = 1.0
+_REQUEUE_MAX_S = 10.0
+# The Ready audit re-checks a Ready session this often (pod, wiring-proof
+# and service changes wake it at once).
+_READY_AUDIT_INTERVAL_S = 10.0
+
+
+class _SessionDriver:
+    """Runs one ConstellationSpec object's reconcile passes, one at a time.
+
+    Every trigger (the CR itself, a session pod, an OME or Scheduler pod or
+    Deployment, the Ready audit) only sets ``wakeup``; the driver coalesces
+    triggers into the next pass. It serves exactly one CR object (``uid``):
+    a later CR that reuses the name gets its own driver. It holds the runtime
+    of the generation it reconciles.
+    """
+
+    def __init__(self, *, uid: str, namespace: str) -> None:
+        self.uid = uid
+        self.namespace = namespace
+        self.wakeup = asyncio.Event()
+        self.runtime: _SessionRuntime | None = None
+        self._requeues = 0
+
+    async def next_pass(self, requeue: bool) -> None:
+        if requeue:
+            delay = min(_REQUEUE_MAX_S, _REQUEUE_FIRST_S * (2**self._requeues))
+            self._requeues += 1
+            # A trigger ends the backoff early; otherwise the pass runs when it expires.
+            with contextlib.suppress(TimeoutError):
+                await asyncio.wait_for(self.wakeup.wait(), delay)
+        else:
+            self._requeues = 0
+            await self.wakeup.wait()
+        self.wakeup.clear()
+
+
+# Running drivers by the UID of the CR object each serves.
+_drivers: dict[str, _SessionDriver] = {}
+# The pass each driver runs now, by CR UID; on_delete waits for it.
+_passes: dict[str, asyncio.Task] = {}
+
+
+def _wake(uid: str) -> None:
+    driver = _drivers.get(uid)
+    if driver is not None:
+        driver.wakeup.set()
+
+
+def _wake_namespace(namespace: str) -> None:
+    for driver in list(_drivers.values()):
+        if driver.namespace == namespace:
+            driver.wakeup.set()
+
+
+async def _drive_once(driver: _SessionDriver, name: str, namespace: str, body) -> bool:
+    """One pass over the CR as the driver sees it now; True asks for a requeue."""
+    spec = dict(body.get("spec") or {})
+    meta = dict(body.get("metadata") or {})
+    status = dict(body.get("status") or {})
     observed = ConstellationSpecStatus.from_cr(status)
     phase = observed.phase or ""
-    log.info("Resuming ConstellationSpec '%s', current phase: %s", name, phase)
-
     if phase == "Error" and observed.observes_generation(meta.get("generation")):
-        log.info("Operator resume: session in Error state: %s", observed.message or "")
-        return
-
-    await _reconcile_session(spec, name, namespace, meta, status)
-
-
-@kopf.timer(CR_PLURAL, group=CR_GROUP, interval=10.0, idle=10)
-async def wiring_check(spec, name, namespace, meta, status, **_):
-    """Periodically advance session state via the reconciler.
-
-    Active during Pending, Creating and Wiring phases. Drives progress for:
-    - Pending: old runtime objects still terminating
-    - Creating: pods still starting after operator resume
-    - Wiring: Node Agent wiring data plane → Ready
-    - Ready: repair missing runtime identity fields after operator/CRD upgrades
-    """
-    phase = ConstellationSpecStatus.from_cr(status).phase or ""
+        return False
+    runtime = driver.runtime
+    if runtime is None or not runtime.serves(meta):
+        runtime = await _session_runtime(spec, name, namespace, meta)
+        driver.runtime = runtime
+        if runtime is None:
+            return False
     if phase == "Ready":
-        try:
-            identity_fields = await asyncio.to_thread(_status_identity_fields, dict(spec), meta)
-        except Exception:
-            await _reconcile_session(spec, name, namespace, meta, status)
-            return
-        session_run_id = identity_fields["sessionRunId"]
-        try:
-            active_session = await asyncio.to_thread(
-                _resolve_active_session,
-                dict(spec),
-                namespace,
-                session_run_id,
-            )
-            verification = await asyncio.to_thread(
-                _verify_runtime, dict(spec), meta, namespace, session_run_id, active_session
-            )
-        except Exception as exc:
-            log.error("Ready session verification failed: %s", exc, exc_info=True)
-            _update_status(
-                name,
-                namespace,
-                _with_observed_generation(
-                    meta,
-                    {
-                        "phase": "Error",
-                        "message": f"Runtime configuration verification failed: {str(exc)[:500]}",
-                        **identity_fields,
-                    },
-                ),
-            )
-            return
-        # Ready is a claim about the session, not only the platform: a
-        # missing, replaced, foreign or non-running pod, or wiring proof that
-        # is no longer current, must take the session back through normal
-        # reconciliation instead of remaining advertised as Ready. Pod
-        # membership is judged by the same identity and classification the
-        # reconciler uses.
-        owner_ref = _build_owner_ref(name, meta)
-        try:
-            prepared_workloads = await asyncio.to_thread(
-                prepare_session_workloads,
-                active_session.resolution,
-                namespace=namespace,
-                owner_ref=owner_ref,
-            )
-            pod_identity = _session_pod_identity(
-                owner_ref, session_run_id, prepared_workloads, active_session
-            )
-        except (WorkloadPreparationError, SessionPodStateError) as exc:
-            log.warning("Ready session no longer prepares (%s) — reconciling", exc)
-            await _reconcile_session(spec, name, namespace, meta, status, active_session)
-            return
-        expected_count = pod_identity.expected_count
-        try:
-            view = await asyncio.to_thread(
-                _with_core_v1, observe_session_pods, namespace, pod_identity
-            )
-        except kubernetes.client.rest.ApiException as exc:
-            log.warning("Ready session pod membership check failed: %s", exc)
-            return
-        except SessionPodStateError as exc:
-            log.warning("Ready session pod state refused (%s) — reconciling", exc)
-            await _reconcile_session(spec, name, namespace, meta, status, active_session)
-            return
-        pods_current = view.complete and view.running_count == expected_count
-        if not pods_current:
-            # Known-invalid membership is acted on before any further read:
-            # a failed wiring-proof query must not leave Ready standing.
-            log.warning(
-                "Ready session pods not current (foreign=%d, replace=%d, terminating=%d, "
-                "missing=%d, running=%d/%d) — reconciling",
-                len(view.foreign),
-                len(view.deletable),
-                len(view.terminating),
-                len(view.missing_node_ids),
-                view.running_count,
-                expected_count,
-            )
-            await _reconcile_session(spec, name, namespace, meta, status, active_session)
-            return
-        wiring_ok = False
-        try:
-            wiring_ok, _wired, _progress = await asyncio.to_thread(
-                check_wiring_complete, namespace, expected_count
-            )
-        except kubernetes.client.rest.ApiException as exc:
-            log.warning("Ready session wiring proof check failed: %s", exc)
-            return
-        except ValueError as exc:
-            log.warning("Ready session wiring proof invalid: %s", exc)
-        if not wiring_ok:
-            log.warning("Ready session wiring proof not current — reconciling")
-            await _reconcile_session(
-                spec,
-                name,
-                namespace,
-                meta,
-                status,
-                active_session,
-            )
-            return
+        inputs = await _ready_inputs(spec, name, namespace, meta, runtime)
+        if inputs is _ReadyInputs.CHANGED:
+            # The next pass computes the runtime from the changed inputs and
+            # rolls the services onto it.
+            driver.runtime = None
+            return True
+        if inputs is _ReadyInputs.UNREADABLE:
+            return True
+        if inputs is _ReadyInputs.INVALID:
+            return False
+        return await _audit_ready(spec, name, namespace, meta, status, runtime)
+    return await _reconcile_session(spec, name, namespace, meta, status, runtime=runtime)
 
-        try:
-            platform_ready, _ = await asyncio.to_thread(
-                check_platform_runtime_ready,
-                namespace,
-                verification.runtime_hash,
-                active_session.proof,
-                verification.deployment_context,
-            )
-        except kubernetes.client.rest.ApiException as exc:
-            log.warning("Ready session platform proof check failed: %s", exc)
-            return
-        if not platform_ready:
-            await _reconcile_session(
-                spec,
-                name,
-                namespace,
-                meta,
-                status,
-                active_session,
-            )
-            return
-        intended = ConstellationSpecStatus.from_cr(
-            {
-                **identity_fields,
-                **verification.proof_fields,
-                "platformHash": verification.platform_hash,
-                "runtimeHash": verification.runtime_hash,
-            }
+
+async def _driver_pass(driver: _SessionDriver, name: str, namespace: str) -> bool:
+    cr = await asyncio.get_running_loop().run_in_executor(
+        None, _read_session_cr, name, namespace, driver.uid
+    )
+    return await _drive_once(driver, name, namespace, cr)
+
+
+def _pass_finished(uid: str, task: asyncio.Task) -> None:
+    """Record the end of a pass and report its failure; a pass may outlive its driver."""
+    if _passes.get(uid) is task:
+        del _passes[uid]
+    if task.cancelled():
+        return
+    exc = task.exception()
+    if exc is not None and not isinstance(exc, _SessionGone):
+        log.error("Session driver pass for %s failed; the driver retries it", uid, exc_info=exc)
+
+
+@kopf.daemon(CR_PLURAL, group=CR_GROUP, cancellation_timeout=5.0)
+async def session_driver(name, namespace, uid, **_):
+    """Run this ConstellationSpec object's reconcile passes for as long as it exists.
+
+    Every pass reads the CR afresh and runs only while the API server still
+    holds this object, not being deleted. Once it does not, the driver
+    returns, and kopf does not restart a daemon that returned. A daemon kopf
+    restarted after a failure therefore ends at its first pass when its CR is
+    gone, and can never act on a later CR that reuses the name.
+    """
+    if name != CR_NAME:
+        return
+    driver = _SessionDriver(uid=uid, namespace=namespace)
+    _drivers[uid] = driver
+    driver.wakeup.set()
+    requeue = False
+    try:
+        while True:
+            await driver.next_pass(requeue)
+            task = asyncio.create_task(_driver_pass(driver, name, namespace))
+            _passes[uid] = task
+            task.add_done_callback(functools.partial(_pass_finished, uid))
+            try:
+                # Shielded: when kopf cancels this daemon the pass still
+                # finishes, and on_delete waits for it.
+                requeue = await asyncio.shield(task)
+            except _SessionGone:
+                raise
+            except Exception:
+                # Reported by _pass_finished; the next pass starts from a
+                # fresh read of the CR after the requeue backoff.
+                requeue = True
+    except _SessionGone as exc:
+        log.info("Session driver for %s/%s (%s) ended: %s", namespace, name, uid, exc)
+    finally:
+        if _drivers.get(uid) is driver:
+            del _drivers[uid]
+
+
+def _moves_a_session(labels, **_) -> bool:
+    """A session pod, or an OME or Scheduler Deployment or pod: its changes move a session on."""
+    return NODE_ID_LABEL in labels or labels.get("app") in SESSION_SERVICE_APPS
+
+
+@kopf.on.event("", "v1", "pods", when=_moves_a_session)
+async def session_pod_changed(namespace, **_):
+    """A session pod, or an OME or Scheduler pod, changed: reconcile now."""
+    _wake_namespace(namespace)
+
+
+@kopf.on.event("apps", "v1", "deployments", when=_moves_a_session)
+async def session_service_changed(namespace, **_):
+    """The OME or Scheduler Deployment changed: reconcile now."""
+    _wake_namespace(namespace)
+
+
+@kopf.timer(CR_PLURAL, group=CR_GROUP, interval=_READY_AUDIT_INTERVAL_S, idle=10)
+async def ready_audit(uid, status, **_):
+    """Re-check a Ready session periodically; every other phase is event-driven."""
+    if ConstellationSpecStatus.from_cr(status).phase == "Ready":
+        _wake(uid)
+
+
+class _ReadyInputs(enum.Enum):
+    CURRENT = "current"
+    CHANGED = "changed"
+    UNREADABLE = "unreadable"
+    INVALID = "invalid"
+
+
+async def _ready_inputs(spec, name, namespace, meta, runtime: _SessionRuntime) -> _ReadyInputs:
+    """Resolve and verify a Ready session's inputs again against the held runtime.
+
+    The runtime hash covers every input that shapes the running session, the
+    catalog assets included. A different hash means the inputs changed under
+    the same CR generation. Inputs that no longer resolve or verify put the
+    session in Error. A read the API server did not answer is retried.
+    """
+    try:
+        active_session = await asyncio.to_thread(
+            _resolve_active_session, spec, namespace, runtime.session_run_id
         )
-        if not ConstellationSpecStatus.from_cr(status).carries(intended):
-            await _reconcile_session(
-                spec,
-                name,
-                namespace,
-                meta,
-                status,
-                active_session,
-            )
-        return
+        current = await asyncio.to_thread(
+            _verify_runtime, spec, meta, namespace, runtime.session_run_id, active_session
+        )
+    except (kubernetes.client.rest.ApiException, urllib3.exceptions.HTTPError, OSError) as exc:
+        log.warning("Ready session inputs could not be read (%s); retrying", exc)
+        return _ReadyInputs.UNREADABLE
+    except KubernetesRuntimeConfigError as exc:
+        if exc.code is KubernetesRuntimeConfigErrorCode.CONFIG_MAP_FETCH_FAILED:
+            log.warning("Ready session inputs could not be read (%s); retrying", exc)
+            return _ReadyInputs.UNREADABLE
+        _publish_ready_verification_failure(name, namespace, meta, runtime, exc)
+        return _ReadyInputs.INVALID
+    except Exception as exc:
+        _publish_ready_verification_failure(name, namespace, meta, runtime, exc)
+        return _ReadyInputs.INVALID
+    if current.runtime_hash != runtime.verification.runtime_hash:
+        log.warning(
+            "Ready session inputs changed (runtime %s, now %s); reconciling",
+            runtime.verification.runtime_hash[:12],
+            current.runtime_hash[:12],
+        )
+        return _ReadyInputs.CHANGED
+    return _ReadyInputs.CURRENT
 
-    if phase not in ("Pending", "Creating", "Wiring"):
-        return
 
-    await _reconcile_session(spec, name, namespace, meta, status)
+def _publish_ready_verification_failure(
+    name: str, namespace: str, meta: dict, runtime: _SessionRuntime, exc: Exception
+) -> None:
+    log.error("Ready session verification failed: %s", exc, exc_info=True)
+    _update_status(
+        name,
+        namespace,
+        _with_observed_generation(
+            meta,
+            {
+                "phase": "Error",
+                "message": f"Runtime configuration verification failed: {str(exc)[:500]}",
+                **runtime.identity_fields,
+            },
+        ),
+    )
+
+
+async def _audit_ready(spec, name, namespace, meta, status, runtime: _SessionRuntime) -> bool:
+    """Verify a Ready session still is one; anything else goes back through reconcile.
+
+    Ready is a claim about the session, not only the platform: a missing,
+    replaced, foreign or non-running pod, or wiring proof that is no longer
+    current, must take the session back through normal reconciliation instead
+    of remaining advertised as Ready. Pod membership is judged by the same
+    identity and classification the reconciler uses, held for the generation.
+    """
+    verification = runtime.verification
+    pod_identity = runtime.pod_identity
+    expected_count = pod_identity.expected_count
+    try:
+        view = await asyncio.to_thread(_with_core_v1, observe_session_pods, namespace, pod_identity)
+    except kubernetes.client.rest.ApiException as exc:
+        log.warning("Ready session pod membership check failed: %s", exc)
+        return True
+    except SessionPodStateError as exc:
+        log.warning("Ready session pod state refused (%s) — reconciling", exc)
+        return await _reconcile_session(spec, name, namespace, meta, status, runtime=runtime)
+    pods_current = view.complete and view.running_count == expected_count
+    if not pods_current:
+        # Known-invalid membership is acted on before any further read:
+        # a failed wiring-proof query must not leave Ready standing.
+        log.warning(
+            "Ready session pods not current (foreign=%d, replace=%d, terminating=%d, "
+            "missing=%d, running=%d/%d) — reconciling",
+            len(view.foreign),
+            len(view.deletable),
+            len(view.terminating),
+            len(view.missing_node_ids),
+            view.running_count,
+            expected_count,
+        )
+        return await _reconcile_session(spec, name, namespace, meta, status, runtime=runtime)
+    wiring_ok = False
+    try:
+        wiring_ok, _wired, _progress = await asyncio.to_thread(
+            check_wiring_complete, namespace, view
+        )
+    except kubernetes.client.rest.ApiException as exc:
+        log.warning("Ready session wiring proof check failed: %s", exc)
+        return True
+    except ValueError as exc:
+        log.warning("Ready session wiring proof invalid: %s", exc)
+    if not wiring_ok:
+        log.warning("Ready session wiring proof not current — reconciling")
+        return await _reconcile_session(spec, name, namespace, meta, status, runtime=runtime)
+
+    try:
+        platform_ready, _ = await asyncio.to_thread(
+            check_platform_runtime_ready,
+            namespace,
+            verification.runtime_hash,
+            runtime.active_session.proof,
+            verification.deployment_context,
+        )
+    except kubernetes.client.rest.ApiException as exc:
+        log.warning("Ready session platform proof check failed: %s", exc)
+        return True
+    if not platform_ready:
+        return await _reconcile_session(spec, name, namespace, meta, status, runtime=runtime)
+    intended = ConstellationSpecStatus.from_cr(
+        {
+            **runtime.status_fields,
+            "platformHash": verification.platform_hash,
+            "runtimeHash": verification.runtime_hash,
+        }
+    )
+    if not ConstellationSpecStatus.from_cr(status).carries(intended):
+        return await _reconcile_session(spec, name, namespace, meta, status, runtime=runtime)
+    return False

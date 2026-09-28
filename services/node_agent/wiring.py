@@ -12,7 +12,7 @@ giving it access to all pod network namespaces on this node.
 
 from __future__ import annotations
 
-import contextlib
+import errno
 import logging
 from collections.abc import Callable
 from typing import Any
@@ -20,18 +20,18 @@ from typing import Any
 import kubernetes.client
 import kubernetes.config
 from nodalarc.platform_config import get_platform_config
-from nodalarc.runtime_naming import is_managed_host_ifname
 from nodalarc.substrate.manifest_contract import WiringManifest
 from nodalarc.substrate.wiring_status import (
-    WIRING_STATUS_CONFIGMAP,
+    WIRING_STATUS_ANNOTATION,
     NodeWiringStatus,
+    encode_status,
     failed_status,
-    status_configmap_data,
     wiring_row,
 )
 from nodalarc.vxlan import host_path_mtu_for
 from pydantic import ValidationError
 from pyroute2 import IPRoute
+from pyroute2.netlink.exceptions import NetlinkError
 
 from node_agent.ground_bridge import (
     create_ground_bridge,
@@ -45,6 +45,7 @@ from node_agent.namespace_ops import (
     configure_interface,
 )
 from node_agent.pid_discovery import NamespaceHandle, discover_local_pod_handles
+from node_agent.proof_delivery import deliver_proof_file, kubelet_pods_dir
 from node_agent.substrate_monitor import prove_host_path_mtu
 
 _IPTABLES_RULES = (
@@ -190,30 +191,17 @@ def _cleanup_stale_interfaces(
     nodes: dict,
     progress_fn: Callable[[str], None] | None = None,
 ) -> None:
-    """Clean stale interfaces from host and pod namespaces.
+    """Clean stale interfaces from pod namespaces and the host firewall, or fail naming what remains.
+
+    The host's interfaces are cleaned by the caller before wiring starts
+    (perform_rewire runs the one host cleaner on every rewire).
 
     Must run synchronously BEFORE the ThreadPoolExecutor starts.
     Prevents EEXIST race conditions when 32 threads create interfaces
     concurrently on a Node Agent that restarted with stale kernel state.
     """
-    # Host namespace: remove all NodalArc-managed interfaces
     if progress_fn:
         progress_fn(f"Cleaning stale interfaces for {len(pid_map)} pods")
-    ipr = IPRoute()
-    try:
-        host_cleaned = 0
-        for link in ipr.get_links():
-            ifname = link.get_attr("IFLA_IFNAME")
-            if ifname and is_managed_host_ifname(ifname):
-                try:
-                    ipr.link("del", index=link["index"])
-                    host_cleaned += 1
-                except Exception:
-                    pass
-    finally:
-        ipr.close()
-    if host_cleaned:
-        log.info("Cleaned %d stale host interfaces", host_cleaned)
 
     # Host firewall: drop the pinned site-LAN transit rules alongside the
     # interfaces they served; the terrestrial phase re-pins them when this
@@ -223,11 +211,11 @@ def _cleanup_stale_interfaces(
     remove_site_lan_transit()
 
     # Pod namespaces: remove stale isl* and gnd0 interfaces
-    pod_cleaned = 0
-    import contextlib
+    failures: list[str] = []
 
-    def _clean_stale_pod_ifaces(ns_ipr: IPRoute) -> int:
+    def _clean_stale_pod_ifaces(ns_ipr: IPRoute) -> tuple[int, list[str]]:
         cleaned = 0
+        failed: list[str] = []
         for link in ns_ipr.get_links():
             ifname = link.get_attr("IFLA_IFNAME")
             if ifname and (
@@ -239,16 +227,23 @@ def _cleanup_stale_interfaces(
                 # terr0) — stranded only if wiring crashed mid-move.
                 or ifname.startswith("sp")
             ):
-                with contextlib.suppress(Exception):
+                try:
                     ns_ipr.link("del", index=link["index"])
                     cleaned += 1
-        return cleaned
+                except NetlinkError as exc:
+                    if exc.code != errno.ENODEV:  # already gone is absence
+                        failed.append(f"{ifname}: {exc}")
+        return cleaned, failed
 
-    for _node_id, pid in pid_map.items():
+    pod_cleaned = 0
+    for node_id, pid in pid_map.items():
         if pid == 0:
             continue
-        with contextlib.suppress(Exception):
-            pod_cleaned += _in_namespace(pid, _clean_stale_pod_ifaces)
+        cleaned, failed = _in_namespace(pid, _clean_stale_pod_ifaces)
+        pod_cleaned += cleaned
+        failures.extend(f"{node_id}/{item}" for item in failed)
+    if failures:
+        raise RuntimeError("stale pod interfaces could not be removed: " + "; ".join(failures[:10]))
     if pod_cleaned:
         log.info(
             "Cleaned %d stale pod interfaces across %d pods",
@@ -272,6 +267,7 @@ def discover_expected_handles(
     namespace: str,
     expected_local: set[str],
     *,
+    superseded: Callable[[], bool],
     max_attempts: int = 30,
 ) -> dict[str, NamespaceHandle] | None:
     """Return one complete validated handle set for the expected-local pods.
@@ -290,6 +286,11 @@ def discover_expected_handles(
     requirements = {node_id: manifest.nodes[node_id].mpls_enable for node_id in expected_local}
     handles: dict[str, NamespaceHandle] = {}
     for attempt in range(1, max_attempts + 1):
+        if superseded():
+            # The manifest this discovery serves changed or was removed: its
+            # pods are no longer the ones to wire.
+            log.info("Handle discovery abandoned: the wiring manifest changed")
+            return None
         try:
             handles = discover_local_pod_handles(
                 namespace,
@@ -330,12 +331,22 @@ def _host_path_refusal(manifest: WiringManifest, local_node: str) -> str | None:
     The required size is the emulated MTU plus the VXLAN encapsulation for
     the target's address family.
     """
+    from concurrent.futures import ThreadPoolExecutor
+
     inner_mtu = get_platform_config().veth_interface_mtu_bytes
+    pairs = [pair for pair in manifest.required_substrate_pairs if pair.source_node == local_node]
     failures: list[str] = []
-    for pair in manifest.required_substrate_pairs:
-        if pair.source_node != local_node:
-            continue
-        proof = prove_host_path_mtu(pair, host_path_mtu_for(inner_mtu, pair.target_ip))
+    # Each target's path is proven independently and at the same time.
+    with ThreadPoolExecutor(max_workers=max(1, len(pairs))) as pool:
+        proofs = list(
+            pool.map(
+                lambda pair: prove_host_path_mtu(
+                    pair, host_path_mtu_for(inner_mtu, pair.target_ip)
+                ),
+                pairs,
+            )
+        )
+    for proof in proofs:
         if proof.carried:
             log.info("Host path proven: %s", proof.diagnostic())
         else:
@@ -426,38 +437,10 @@ def execute_wiring(
         node_failures.setdefault(node_id, (phase, message))
         log.warning("%s failed for %s: %s", phase, node_id, message)
 
-    # K8s client — ONE instance, reused for all ConfigMap writes.
-    # No per-call load_incluster_config() or client instantiation.
-    kubernetes.config.load_incluster_config()
-    v1 = kubernetes.client.CoreV1Api()
-
     def _write_progress(phase_msg: str) -> None:
-        """Publish wiring progress via NATS (fast) and K8s ConfigMap (fallback)."""
-        # NATS fast path (<1ms to VS-API)
+        """Publish wiring progress over NATS; the VS-API relays it to browsers."""
         if progress_fn is not None:
-            with contextlib.suppress(Exception):
-                progress_fn(phase_msg)
-        # K8s PATCH fallback (for Operator CR status updates)
-        try:
-            v1.patch_namespaced_config_map(
-                WIRING_STATUS_CONFIGMAP,
-                namespace,
-                {"data": {"_progress": phase_msg}},
-            )
-        except kubernetes.client.rest.ApiException as e:
-            if e.status == 404:
-                body = kubernetes.client.V1ConfigMap(
-                    metadata=kubernetes.client.V1ObjectMeta(
-                        name=WIRING_STATUS_CONFIGMAP,
-                        namespace=namespace,
-                        labels={"nodalarc.io/managed-by": "node-agent"},
-                    ),
-                    data={"_progress": phase_msg},
-                )
-                with contextlib.suppress(Exception):
-                    v1.create_namespaced_config_map(namespace, body)
-        except Exception:
-            pass  # Non-fatal
+            progress_fn(phase_msg)
 
     # Clean stale interfaces from host and pod namespaces.
     # Must run BEFORE the ThreadPoolExecutor starts creating interfaces.
@@ -873,41 +856,66 @@ def execute_wiring(
     return statuses
 
 
+# Concurrent pod PATCHes per status write; the host's pods are written together.
+_STATUS_WRITE_WORKERS = 16
+
+
 def write_wiring_status(
     statuses: dict[str, NodeWiringStatus],
-    manifest: WiringManifest,
+    handles: dict[str, NamespaceHandle],
     namespace: str,
 ) -> None:
-    """Write per-node wiring status to nodalarc-wiring-status ConfigMap.
+    """Write each node's wiring proof onto the pod it proves, then deliver it to the pod.
 
-    Uses JSON Merge Patch (application/merge-patch+json) so multiple
-    Node Agents on different K3s nodes can each write their local pods
-    without overwriting each other. Each agent sends only its delta
-    (the nodes it wired), and K8s merges into the existing data.
+    The proof lives on the pod as an annotation, which the Operator and the
+    Scheduler read. Every PATCH carries the pod UID the proof names, so a
+    proof can never land on a replaced pod of the same name: the API server
+    refuses a PATCH whose UID differs. After its PATCH, the same proof is
+    written into the pod's wiring-status volume, where the pod's release gate
+    reads it. All writes must succeed; any failure raises with every failed
+    pod named.
     """
+    from concurrent.futures import ThreadPoolExecutor
+
     kubernetes.config.load_incluster_config()
     v1 = kubernetes.client.CoreV1Api()
+    pods_dir = kubelet_pods_dir()
 
-    try:
-        v1.patch_namespaced_config_map(
-            WIRING_STATUS_CONFIGMAP,
-            namespace,
-            {"data": status_configmap_data(statuses, manifest)},
+    def _write(node_id: str) -> str | None:
+        status = statuses[node_id]
+        handle = handles.get(node_id)
+        if handle is None:
+            return f"{node_id}: no namespace handle names its pod"
+        if handle.pod_uid != status.pod_uid:
+            return f"{node_id}: proof names pod {status.pod_uid}, handle names {handle.pod_uid}"
+        encoded = encode_status(status)
+        body = {
+            "metadata": {
+                "uid": status.pod_uid,
+                "annotations": {WIRING_STATUS_ANNOTATION: encoded},
+            }
+        }
+        try:
+            v1.patch_namespaced_pod(handle.pod_name, namespace, body)
+        except kubernetes.client.rest.ApiException as exc:
+            return f"{node_id}: pod {handle.pod_name} uid={status.pod_uid}: HTTP {exc.status} {exc.reason}"
+        try:
+            deliver_proof_file(pods_dir, status.pod_uid, encoded)
+        except OSError as exc:
+            return f"{node_id}: pod {handle.pod_name} uid={status.pod_uid}: proof file: {exc}"
+        return None
+
+    with ThreadPoolExecutor(max_workers=_STATUS_WRITE_WORKERS) as pool:
+        failures = [failure for failure in pool.map(_write, sorted(statuses)) if failure]
+    if failures:
+        raise RuntimeError(
+            f"wiring proof write failed for {len(failures)} pod(s): " + "; ".join(failures[:10])
         )
-    except kubernetes.client.rest.ApiException as e:
-        if e.status == 404:
-            # ConfigMap doesn't exist — create it
-            body = kubernetes.client.V1ConfigMap(
-                metadata=kubernetes.client.V1ObjectMeta(
-                    name=WIRING_STATUS_CONFIGMAP,
-                    namespace=namespace,
-                    labels={"nodalarc.io/managed-by": "node-agent"},
-                ),
-                data=status_configmap_data(statuses, manifest),
-            )
-            v1.create_namespaced_config_map(namespace, body)
-        else:
-            raise
-    ready_count = sum(1 for status in statuses.values() if status.status == "ready")
-    failed_count = sum(1 for status in statuses.values() if status.status != "ready")
-    log.info("Wrote wiring status: %d ready, %d failed", ready_count, failed_count)
+    counts: dict[str, int] = {}
+    for status in statuses.values():
+        counts[status.status] = counts.get(status.status, 0) + 1
+    log.info(
+        "Wrote wiring proof to %d pods: %s",
+        len(statuses),
+        ", ".join(f"{count} {state}" for state, count in sorted(counts.items())),
+    )

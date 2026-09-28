@@ -94,6 +94,7 @@ def test_netem_limit_holds_the_packets_in_flight_plus_the_buffer(
 def test_transmit_shaping_installs_htb_rate_with_netem_beneath_it(monkeypatch) -> None:
     # The device's default qdisc (handle 0) is replaced by adding the root.
     ipr = _RecordingIpr(_root("noqueue", handle=0))
+    monkeypatch.setattr(namespace_ops, "interface_qdiscs", ipr.get_qdiscs)
     monkeypatch.setattr(namespace_ops, "_in_namespace", lambda pid, fn: fn(ipr))
 
     namespace_ops.apply_transmit_shaping(1234, "gnd0", delay_ms=120.5, transmit_mbps=50.0)
@@ -120,6 +121,7 @@ def test_transmit_shaping_installs_htb_rate_with_netem_beneath_it(monkeypatch) -
 
 def test_receive_shaping_rate_limits_the_host_veth_egress(monkeypatch) -> None:
     ipr = _RecordingIpr()
+    monkeypatch.setattr(namespace_ops, "interface_qdiscs", ipr.get_qdiscs)
     monkeypatch.setattr(namespace_ops, "in_host_namespace", lambda fn: fn(ipr))
     monkeypatch.setattr(
         namespace_ops,
@@ -139,6 +141,7 @@ def test_receive_shaping_rate_limits_the_host_veth_egress(monkeypatch) -> None:
 def test_repeat_shaping_keeps_the_shaper_root_and_changes_the_class(monkeypatch) -> None:
     """The kernel cannot change an HTB root in place; a repeat LinkUp must not try."""
     ipr = _RecordingIpr(_root("htb"))
+    monkeypatch.setattr(namespace_ops, "interface_qdiscs", ipr.get_qdiscs)
     monkeypatch.setattr(namespace_ops, "_in_namespace", lambda pid, fn: fn(ipr))
 
     namespace_ops.apply_transmit_shaping(1234, "isl0", delay_ms=4.0, transmit_mbps=2000.0)
@@ -154,6 +157,7 @@ def test_repeat_shaping_keeps_the_shaper_root_and_changes_the_class(monkeypatch)
 )
 def test_shaper_replaces_any_other_root(monkeypatch, root) -> None:
     ipr = _RecordingIpr(root)
+    monkeypatch.setattr(namespace_ops, "interface_qdiscs", ipr.get_qdiscs)
     monkeypatch.setattr(namespace_ops, "_in_namespace", lambda pid, fn: fn(ipr))
 
     namespace_ops.apply_transmit_shaping(1234, "isl0", delay_ms=4.0, transmit_mbps=2000.0)
@@ -165,6 +169,7 @@ def test_shaper_replaces_any_other_root(monkeypatch, root) -> None:
 
 def test_delay_updates_change_only_the_netem_beneath_the_shaper(monkeypatch) -> None:
     ipr = _RecordingIpr(_root("htb"))
+    monkeypatch.setattr(namespace_ops, "interface_qdiscs", ipr.get_qdiscs)
     monkeypatch.setattr(namespace_ops, "_in_namespace", lambda pid, fn: fn(ipr))
 
     namespace_ops.update_delay(1234, "isl0", delay_ms=7.25, transmit_mbps=2000.0)

@@ -33,7 +33,7 @@ from nodalarc.models.segment_session import (
 if TYPE_CHECKING:
     from collections.abc import Mapping
 
-    from nodalarc.models.resolved_session import ResolvedNode, ResolvedSession
+    from nodalarc.models.resolved_session import InstanceAreas, ResolvedNode, ResolvedSession
 
 
 @dataclass(frozen=True, slots=True)
@@ -197,16 +197,42 @@ class SessionContext:
     Technology-blind: it carries the resolved runtime view and nothing an
     adapter could not read from it. Peer resolution (a client's server, a DTN
     contact) reads other nodes' resolved addresses from here.
+
+    One context serves every node of one preparation. The whole-session maps
+    a per-node render reads are derived here once, so rendering every node of
+    a session stays linear in its size; each is exactly the resolved
+    session's own derivation.
     """
 
     resolved: ResolvedSession
+    nodes_by_id: Mapping[str, ResolvedNode] = field(init=False)
+    domain_interfaces_by_node: Mapping[str, Mapping[str, tuple[str, ...]]] = field(init=False)
+    instance_areas_by_node: Mapping[str, tuple[InstanceAreas, ...]] = field(init=False)
+    wan_interface_peers: Mapping[tuple[str, str], frozenset[str]] = field(init=False)
+
+    def __post_init__(self) -> None:
+        resolved = self.resolved
+        derived = {
+            "nodes_by_id": {node.node_id: node for node in resolved.nodes},
+            "domain_interfaces_by_node": resolved.domain_interfaces_by_node(),
+            "instance_areas_by_node": resolved.instance_areas_by_node(),
+            "wan_interface_peers": resolved.wan_interface_peers(),
+        }
+        for name, value in derived.items():
+            object.__setattr__(self, name, MappingProxyType(value))
 
     def node(self, node_id: str) -> ResolvedNode:
         """The resolved node for ``node_id``, or a loud failure if absent."""
-        found = self.resolved.node_by_id(node_id)
+        found = self.nodes_by_id.get(node_id)
         if found is None:
             raise ValueError(f"session context has no resolved node {node_id!r}")
         return found
+
+    def domain_interfaces(self, node_id: str) -> Mapping[str, tuple[str, ...]]:
+        """``ResolvedSession.domain_interfaces`` from the context's one derivation."""
+        if node_id not in self.nodes_by_id:
+            raise ValueError(f"no resolved node {node_id!r}")
+        return self.domain_interfaces_by_node.get(node_id, {})
 
 
 class AdapterRenderRefusal(Exception):

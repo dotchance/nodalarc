@@ -74,7 +74,7 @@ profile:
     argv:
     - /bin/sh
     - -c
-    - vtysh -c 'show version' > /dev/null 2>&1
+    - test -f /var/run/frr/nodalarc-boot-config-applied && vtysh -c 'show version' > /dev/null 2>&1
     timeout_seconds: 5
     period_seconds: 5
   terminal:
@@ -86,8 +86,8 @@ profile:
     command:
     - /bin/bash
     - -c
-    - while true; do echo "== interfaces $(date -u +%H:%M:%S)"; ip -o link show;
-      ip -o -4 addr show; sleep 30; done
+    - trap 'exit 143' TERM; { while true; do echo "== interfaces $(date -u +%H:%M:%S)";
+      ip -o link show; ip -o -4 addr show; sleep 30; done; } & wait $!
     resources:
       requests:
         cpu_m: 10

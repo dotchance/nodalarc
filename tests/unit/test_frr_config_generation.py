@@ -97,7 +97,7 @@ def _vars_for(resolved: ResolvedSession, node_id: str) -> dict[str, Any]:
     node = resolved.node_by_id(node_id)
     assert node is not None
     return build_template_vars_from_resolved(
-        resolved,
+        SessionContext(resolved=resolved),
         node,
         domains=resolved.routing_domains_for(node_id),
         sid_by_domain=resolved.sid_index_by_domain(),
@@ -308,7 +308,7 @@ def test_resolved_template_vars_fail_loud_when_sr_sid_is_missing() -> None:
 
     with pytest.raises(AdapterRenderRefusal, match=f"no resolved SID index for {node_id!r}"):
         build_template_vars_from_resolved(
-            resolved,
+            SessionContext(resolved=resolved),
             resolved.node_by_id(node_id),
             domains=resolved.routing_domains_for(node_id),
             sid_by_domain=without_node,

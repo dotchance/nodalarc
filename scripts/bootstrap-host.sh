@@ -123,6 +123,9 @@ else
         --disable traefik
 fi
 
+echo "[4/9] Configuring K3s for NodalArc..."
+bash "$(dirname "$0")/configure-k3s-node.sh"
+
 # Make kubeconfig accessible without sudo
 KUBECONFIG_SRC="/etc/rancher/k3s/k3s.yaml"
 KUBECONFIG_DST="${HOME}/.kube/config"

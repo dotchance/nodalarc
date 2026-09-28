@@ -26,7 +26,7 @@ rules:
   # Session pod and configuration management is namespace-local.
   - apiGroups: [""]
     resources: ["pods"]
-    verbs: ["create", "delete", "get", "list", "patch", "watch"]
+    verbs: ["create", "delete", "deletecollection", "get", "list", "patch", "watch"]
   # Runtime readiness proof — read-only proxy to OME/Scheduler /readyz.
   - apiGroups: [""]
     resources: ["pods/proxy"]
@@ -38,10 +38,11 @@ rules:
   - apiGroups: [""]
     resources: ["secrets"]
     verbs: ["create", "update", "delete", "get", "list"]
-  # Deployment patching (restart_platform_pods rolls OME and Scheduler).
+  # Deployment patching (roll_session_services binds OME and the Scheduler to
+  # a session run or to none); watch wakes the session driver on their changes.
   - apiGroups: ["apps"]
     resources: ["deployments"]
-    verbs: ["get", "list", "patch"]
+    verbs: ["get", "list", "patch", "watch"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding

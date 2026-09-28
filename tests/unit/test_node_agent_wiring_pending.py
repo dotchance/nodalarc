@@ -14,9 +14,11 @@ from unittest.mock import patch
 import pytest
 from nodalarc.substrate.manifest_contract import REQUIRED_WIRING_PHASES, WiringManifest
 from nodalarc.substrate.wiring_status import (
-    status_configmap_data,
+    WIRING_STATUS_ANNOTATION,
+    encode_status,
     wiring_row,
 )
+from nodalarc.workload_target import NODE_ID_LABEL
 from node_agent.pid_discovery import NamespaceHandle
 from node_agent.reconcile import HostCleanupReport, wiring_status_is_current
 from node_agent.wiring import (
@@ -70,6 +72,7 @@ def _clean_report(*, removed: tuple[str, ...] = ()) -> HostCleanupReport:
 def _handle(node_id: str, netns_id: str = "4026532100") -> NamespaceHandle:
     return NamespaceHandle(
         node_id=node_id,
+        pod_name=node_id,
         pod_uid=f"pod-{node_id}",
         sandbox_id=f"sb-{node_id}",
         sandbox_attempt=0,
@@ -95,7 +98,9 @@ def test_incomplete_discovery_returns_none_and_touches_nothing(
         patch("node_agent.reconcile.clean_and_verify_host_state") as clean,
         patch("node_agent.namespace_ops._in_namespace") as in_ns,
     ):
-        result = discover_expected_handles(manifest, "testns", {"sat-a", "sat-b"})
+        result = discover_expected_handles(
+            manifest, "testns", {"sat-a", "sat-b"}, superseded=lambda: False
+        )
     assert result is None
     clean.assert_not_called()
     in_ns.assert_not_called()
@@ -110,7 +115,7 @@ def test_discovery_exception_is_pending_not_divergence(
         "node_agent.wiring.discover_local_pod_handles",
         side_effect=RuntimeError("transient API failure"),
     ):
-        result = discover_expected_handles(manifest, "testns", {"sat-a"})
+        result = discover_expected_handles(manifest, "testns", {"sat-a"}, superseded=lambda: False)
     assert result is None
 
 
@@ -122,7 +127,7 @@ def test_complete_discovery_returns_exactly_the_expected_set(
         "node_agent.wiring.discover_local_pod_handles",
         return_value={"sat-a": _handle("sat-a"), "stray": _handle("stray")},
     ):
-        result = discover_expected_handles(manifest, "testns", {"sat-a"})
+        result = discover_expected_handles(manifest, "testns", {"sat-a"}, superseded=lambda: False)
     assert result is not None
     assert set(result) == {"sat-a"}
 
@@ -137,8 +142,8 @@ def test_discovery_receives_the_manifest_requirement_for_every_expected_node(
         "node_agent.wiring.discover_local_pod_handles",
         return_value={"sat-a": _handle("sat-a"), "sat-b": _handle("sat-b")},
     ) as discover:
-        discover_expected_handles(manifest, "testns", {"sat-a", "sat-b"})
-        discover_expected_handles(manifest, "testns", {"sat-a", "sat-b"})
+        discover_expected_handles(manifest, "testns", {"sat-a", "sat-b"}, superseded=lambda: False)
+        discover_expected_handles(manifest, "testns", {"sat-a", "sat-b"}, superseded=lambda: False)
     assert [call.kwargs["requirements"] for call in discover.call_args_list] == [
         {"sat-a": True, "sat-b": False},
         {"sat-a": True, "sat-b": False},
@@ -162,11 +167,34 @@ def test_execute_wiring_never_discovers(monkeypatch: pytest.MonkeyPatch) -> None
     discover.assert_not_called()
 
 
-def _status_cm(manifest: WiringManifest, rows: dict) -> SimpleNamespace:
-    return SimpleNamespace(data=status_configmap_data(rows, manifest))
+def _pods_carrying(rows: dict) -> SimpleNamespace:
+    """A CoreV1 stand-in whose pod listing carries each row on its pod."""
+    pods = [
+        SimpleNamespace(
+            metadata=SimpleNamespace(
+                name=node_id,
+                uid=row.pod_uid,
+                labels={NODE_ID_LABEL: node_id},
+                annotations={WIRING_STATUS_ANNOTATION: encode_status(row)},
+            )
+        )
+        for node_id, row in rows.items()
+    ]
+    return SimpleNamespace(list_namespaced_pod=lambda *_a, **_k: SimpleNamespace(items=pods))
 
 
-def test_case_b_binds_rows_to_live_incarnations() -> None:
+def _delivered(monkeypatch: pytest.MonkeyPatch, tmp_path, rows: dict) -> None:
+    """Each row's proof delivered into its pod's wiring-status volume."""
+    from nodalarc.substrate.wiring_status import wiring_status_host_path
+    from node_agent.proof_delivery import deliver_proof_file
+
+    monkeypatch.setenv("KUBELET_PODS_DIR", str(tmp_path))
+    for row in rows.values():
+        (tmp_path / wiring_status_host_path(".", row.pod_uid)).mkdir(parents=True, exist_ok=True)
+        deliver_proof_file(str(tmp_path), row.pod_uid, encode_status(row))
+
+
+def test_case_b_binds_rows_to_live_incarnations(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
     manifest = _manifest({"sat-a": LOCAL_NODE})
     wired = {"sat-a": _handle("sat-a")}
     rows = {
@@ -180,7 +208,8 @@ def test_case_b_binds_rows_to_live_incarnations() -> None:
         )
         for node_id, handle in wired.items()
     }
-    v1 = SimpleNamespace(read_namespaced_config_map=lambda *_a, **_k: _status_cm(manifest, rows))
+    _delivered(monkeypatch, tmp_path, rows)
+    v1 = _pods_carrying(rows)
     assert wiring_status_is_current(v1, "testns", manifest, wired) is True
 
     replaced_netns = {"sat-a": _handle("sat-a", netns_id="4026539999")}
@@ -189,6 +218,7 @@ def test_case_b_binds_rows_to_live_incarnations() -> None:
     replaced_sandbox = {
         "sat-a": NamespaceHandle(
             node_id="sat-a",
+            pod_name="sat-a",
             pod_uid="pod-sat-a",
             sandbox_id="sb-replacement",
             sandbox_attempt=1,
@@ -198,6 +228,40 @@ def test_case_b_binds_rows_to_live_incarnations() -> None:
         )
     }
     assert wiring_status_is_current(v1, "testns", manifest, replaced_sandbox) is False
+
+
+def test_a_proof_its_gate_never_received_is_not_current(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    """A ready annotation without the same proof in the pod's volume (the Node
+    Agent stopped between the two writes) forces a rewire, which delivers it."""
+    manifest = _manifest({"sat-a": LOCAL_NODE})
+    handle = _handle("sat-a")
+    row = wiring_row(
+        "sat-a",
+        manifest,
+        pod_uid=handle.pod_uid,
+        sandbox_id=handle.sandbox_id,
+        netns_id=handle.netns_id,
+        state="ready",
+    )
+    monkeypatch.setenv("KUBELET_PODS_DIR", str(tmp_path))
+    v1 = _pods_carrying({"sat-a": row})
+    assert wiring_status_is_current(v1, "testns", manifest, {"sat-a": handle}) is False
+
+    stale = wiring_row(
+        "sat-a",
+        manifest,
+        pod_uid=handle.pod_uid,
+        sandbox_id=handle.sandbox_id,
+        netns_id=handle.netns_id,
+        state="wiring",
+    )
+    _delivered(monkeypatch, tmp_path, {"sat-a": stale})
+    assert wiring_status_is_current(v1, "testns", manifest, {"sat-a": handle}) is False
+
+    _delivered(monkeypatch, tmp_path, {"sat-a": row})
+    assert wiring_status_is_current(v1, "testns", manifest, {"sat-a": handle}) is True
 
 
 def test_rewiring_rows_invalidate_readiness() -> None:
@@ -214,9 +278,7 @@ def test_rewiring_rows_invalidate_readiness() -> None:
     )
     assert row.status == "wiring"
     assert row.ready_for(manifest) is False
-    v1 = SimpleNamespace(
-        read_namespaced_config_map=lambda *_a, **_k: _status_cm(manifest, {"sat-a": row})
-    )
+    v1 = _pods_carrying({"sat-a": row})
     assert wiring_status_is_current(v1, "testns", manifest, {"sat-a": handle}) is False
 
 
@@ -244,7 +306,7 @@ def test_rewire_transition_order_is_drain_invalidate_withdraw_rebuild_install_pu
 
     writes: list[str] = []
 
-    def _fake_write(statuses, _manifest, namespace):
+    def _fake_write(statuses, _handles, namespace):
         kinds = {row.status for row in statuses.values()}
         writes.append("non-ready" if kinds == {"wiring"} else "ready")
         order.append(f"write:{writes[-1]}")
@@ -484,12 +546,16 @@ def test_rewiring_refusal_decodes_as_the_operation_sent(msg_type, response_cls) 
     refusal must round-trip as that exact type with the stale-generation
     code, never as a generic frame that decodes to code 0."""
     from nodalarc.proto import node_agent_pb2
-    from node_agent.command_contract import RuntimeFence
+    from node_agent.command_contract import RuntimeFence, WriterEpochFloor
     from node_agent.server import DispatchGate, dispatch
 
     gate = DispatchGate()
     assert gate.drain(timeout_seconds=0.5) is True
-    fence = RuntimeFence(session_id="s", wiring_generation="sha256:" + "a" * 64)
+    fence = RuntimeFence(
+        session_id="s",
+        wiring_generation="sha256:" + "a" * 64,
+        writer_floor=WriterEpochFloor(lambda: None),
+    )
 
     raw = dispatch(msg_type + b"\x00", {}, fence, gate)
     response = response_cls()
@@ -530,3 +596,33 @@ def test_terminal_handle_swap_completes_when_idle(new_handles) -> None:
     assert na_main.replace_handles_when_idle(gate, shared, new_handles) is True
     assert shared == new_handles
     gate.resume.assert_called_once()
+
+
+@pytest.mark.parametrize("kernel_state", [set(), {"isl0"}], ids=["no-kernel-state", "diverged"])
+def test_every_rewire_cleans_the_host_exactly_once(
+    monkeypatch: pytest.MonkeyPatch, kernel_state: set[str]
+) -> None:
+    """The one host clean runs before wiring, whether or not the name inventory
+    found kernel state; wiring itself cleans only pod namespaces and the firewall."""
+    from unittest.mock import MagicMock
+
+    from node_agent import __main__ as na_main
+    from node_agent import reconcile, site_lan, wiring
+
+    manifest = _manifest({"sat-a": LOCAL_NODE})
+    handle = _handle("sat-a")
+    gate = MagicMock()
+    gate.drain.return_value = True
+    clean = MagicMock(return_value=_clean_report())
+    monkeypatch.setattr(na_main, "write_wiring_status", lambda *a, **k: None)
+    monkeypatch.setattr(na_main, "get_actual_nodalarc_interfaces", lambda: kernel_state)
+    monkeypatch.setattr(na_main, "clean_and_verify_host_state", clean)
+    # Wiring's own cleaner must not run the host cleaner again.
+    monkeypatch.setattr(reconcile, "clean_and_verify_host_state", clean)
+    monkeypatch.setattr(site_lan, "remove_site_lan_transit", MagicMock())
+    monkeypatch.setattr(na_main, "execute_wiring", lambda *a, **k: {})
+
+    na_main.perform_rewire(manifest, "testns", {"sat-a": handle}, {"sat-a"}, {}, gate)
+    wiring._cleanup_stale_interfaces({}, {})
+
+    clean.assert_called_once()

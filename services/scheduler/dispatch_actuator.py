@@ -118,13 +118,14 @@ async def _send_chunked_command(
     operation_id_base: str,
     session_id: str,
     wiring_generation: str,
+    writer_epoch: int,
     build_request: Callable[[node_agent_pb2.CommandEnvelope, list], Any],
     send: Callable[[Any, Any], Awaitable[Any]],
 ) -> AgentCommandResult:
     """Send one operation to one agent, chunk by chunk in order, and merge.
 
-    Each chunk is fenced by the same session and wiring generation and named
-    by `_chunked_operation_id`. Only the send and the reply's classification
+    Each chunk is fenced by the same session, wiring generation and writer
+    epoch and named by `_chunked_operation_id`. Only the send and the reply's classification
     sit inside the failure boundary: a stub lookup or request construction
     error propagates, and so does cancellation. A chunk classified as failed
     does not stop the chunks after it; every chunk's evidence reaches the
@@ -139,6 +140,7 @@ async def _send_chunked_command(
                 operation_id=_chunked_operation_id(operation_id_base, chunk_index, len(chunks)),
                 session_id=session_id,
                 wiring_generation=wiring_generation,
+                writer_epoch=writer_epoch,
                 operation_kind=operation,
             ),
             chunk,
@@ -170,6 +172,7 @@ async def _send_batch_down_to_agent(
     sim_iso: str,
     session_id: str,
     wiring_generation: str,
+    writer_epoch: int,
 ) -> AgentCommandResult:
     return await _send_chunked_command(
         addr=addr,
@@ -179,6 +182,7 @@ async def _send_batch_down_to_agent(
         operation_id_base=f"{sim_iso}-down-{addr}",
         session_id=session_id,
         wiring_generation=wiring_generation,
+        writer_epoch=writer_epoch,
         build_request=lambda envelope, chunk: node_agent_pb2.BatchLinkDownRequest(
             envelope=envelope, target_sim_time=sim_iso, interfaces=chunk
         ),
@@ -194,6 +198,7 @@ async def _send_batch_up_to_agent(
     sim_iso: str,
     session_id: str,
     wiring_generation: str,
+    writer_epoch: int,
 ) -> AgentCommandResult:
     return await _send_chunked_command(
         addr=addr,
@@ -203,6 +208,7 @@ async def _send_batch_up_to_agent(
         operation_id_base=f"{sim_iso}-up-{addr}",
         session_id=session_id,
         wiring_generation=wiring_generation,
+        writer_epoch=writer_epoch,
         build_request=lambda envelope, chunk: node_agent_pb2.BatchLinkUpRequest(
             envelope=envelope, target_sim_time=sim_iso, interfaces=chunk
         ),
@@ -218,6 +224,7 @@ async def _send_latency_to_agent(
     sim_time: datetime,
     session_id: str,
     wiring_generation: str,
+    writer_epoch: int,
 ) -> AgentCommandResult:
     return await _send_chunked_command(
         addr=agent_addr,
@@ -227,6 +234,7 @@ async def _send_latency_to_agent(
         operation_id_base=f"{sim_time.isoformat()}-latency-{agent_addr}",
         session_id=session_id,
         wiring_generation=wiring_generation,
+        writer_epoch=writer_epoch,
         build_request=lambda envelope, chunk: node_agent_pb2.SetLatencyRequest(
             envelope=envelope, entries=chunk
         ),
@@ -247,6 +255,7 @@ def _merge_agent_results(
             dirty_kernel=False,
             unknown_outcome=False,
             fence_failure=False,
+            writer_fenced=False,
             details={"agent_addr": addr, "operation": operation, "chunks": []},
         )
 
@@ -299,6 +308,7 @@ def _merge_agent_results(
         dirty_kernel=any(result.dirty_kernel for result in results),
         unknown_outcome=any(result.unknown_outcome for result in results),
         fence_failure=any(result.fence_failure for result in results),
+        writer_fenced=any(result.writer_fenced for result in results),
         details={
             "agent_addr": addr,
             "operation": operation,
@@ -317,6 +327,7 @@ def _merge_agent_results(
             "dirty_kernel": any(result.dirty_kernel for result in results),
             "unknown_outcome": any(result.unknown_outcome for result in results),
             "fence_failure": any(result.fence_failure for result in results),
+            "writer_fenced": any(result.writer_fenced for result in results),
             "requested": _concat("requested"),
             "returned": _concat("returned"),
             "interface_results": _concat("interface_results"),
@@ -408,6 +419,7 @@ async def _send_kernel_inventory_to_agent(
     sim_iso: str,
     session_id: str,
     wiring_generation: str,
+    writer_epoch: int,
     gs_id: str,
 ) -> AgentCommandResult:
     return await _send_chunked_command(
@@ -418,6 +430,7 @@ async def _send_kernel_inventory_to_agent(
         operation_id_base=f"{sim_iso}-kernel-inventory-{gs_id}-{addr}",
         session_id=session_id,
         wiring_generation=wiring_generation,
+        writer_epoch=writer_epoch,
         build_request=lambda envelope, chunk: node_agent_pb2.KernelInventoryRequest(
             envelope=envelope, target_sim_time=sim_iso, gs_id=gs_id, entries=chunk
         ),
@@ -438,6 +451,7 @@ async def verify_ground_kernel_inventory(
     interface_rates: Mapping[tuple[str, str], InterfaceRates],
     session_id: str,
     wiring_generation: str,
+    writer_epoch: int,
 ) -> ActuationResult:
     """Read-only GS-facing kernel proof for the Scheduler actuation lifecycle."""
     del sim_time  # carried by the public signature for call-site symmetry and future audit fields
@@ -476,6 +490,7 @@ async def verify_ground_kernel_inventory(
                         sim_iso=sim_iso,
                         session_id=session_id,
                         wiring_generation=wiring_generation,
+                        writer_epoch=writer_epoch,
                         gs_id=gs_id,
                     )
                     for agent_addr in entries_by_agent
@@ -508,6 +523,7 @@ async def send_batch_down(
     gs_capacities: Mapping[str, int],
     session_id: str,
     wiring_generation: str,
+    writer_epoch: int,
 ) -> ActuationResult:
     """Send BatchLinkDown to Node Agents and publish LinkDown proof events."""
     sorted_pairs = sorted(pairs)
@@ -531,6 +547,7 @@ async def send_batch_down(
                         sim_iso=sim_iso,
                         session_id=session_id,
                         wiring_generation=wiring_generation,
+                        writer_epoch=writer_epoch,
                     )
                     for addr in agent_addrs
                 ]
@@ -598,6 +615,7 @@ async def send_batch_up(
     interface_rates: Mapping[tuple[str, str], InterfaceRates],
     session_id: str,
     wiring_generation: str,
+    writer_epoch: int,
 ) -> ActuationResult:
     """Send BatchLinkUp to Node Agents and publish LinkUp proof events."""
     sorted_pairs = sorted(pairs)
@@ -630,6 +648,7 @@ async def send_batch_up(
                         sim_iso=sim_iso,
                         session_id=session_id,
                         wiring_generation=wiring_generation,
+                        writer_epoch=writer_epoch,
                     )
                     for addr in agent_addrs
                 ]
@@ -697,6 +716,7 @@ async def send_authoritative_latency_updates(
     interface_rates: Mapping[tuple[str, str], InterfaceRates],
     session_id: str,
     wiring_generation: str,
+    writer_epoch: int,
 ) -> ActuationResult:
     """Apply OME-authoritative latency changes for already-active links.
 
@@ -780,6 +800,7 @@ async def send_authoritative_latency_updates(
                         sim_time=sim_time,
                         session_id=session_id,
                         wiring_generation=wiring_generation,
+                        writer_epoch=writer_epoch,
                     )
                     for agent_addr in agent_entries
                 ]

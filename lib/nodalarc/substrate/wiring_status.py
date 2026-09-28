@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Iterable, Mapping
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, field_validator
 
@@ -15,9 +15,30 @@ from nodalarc.substrate.manifest_contract import REQUIRED_WIRING_PHASES, WiringM
 PhaseState = Literal["pending_pid", "wiring", "ready", "failed", "dirty_kernel"]
 RowState = Literal["ready", "wiring"]
 
-# The ConfigMap the Node Agent writes the wiring rows into and every reader
-# addresses; one name for the resource whose data shape this module owns.
-WIRING_STATUS_CONFIGMAP = "nodalarc-wiring-status"
+# The pod annotation that carries a session pod's wiring proof. The Node Agent
+# that wired the pod writes it; the Operator and the Scheduler read it from the
+# pod.
+WIRING_STATUS_ANNOTATION = "nodalarc.io/wiring-status"
+
+# The pod's own release gate reads the same proof from a file the Node Agent
+# writes into the pod's ``wiring-status`` emptyDir volume, straight after the
+# annotation. The kubelet has no part in that delivery. A downwardAPI
+# projection of the annotation was measured to lag its update by 65 to 86 s
+# for about one pod in two hundred: the kubelet refreshed the file only on its
+# periodic pod sync.
+WIRING_STATUS_VOLUME = "wiring-status"
+WIRING_STATUS_FILE = "status.json"
+
+
+def wiring_status_host_path(kubelet_pods_dir: str, pod_uid: str) -> str:
+    """Where a pod's wiring-status emptyDir lives on its host.
+
+    The kubelet creates the directory while setting up the pod's volumes,
+    before it creates the pod sandbox, so it exists whenever the pod's
+    network namespace does.
+    """
+    return f"{kubelet_pods_dir}/{pod_uid}/volumes/kubernetes.io~empty-dir/{WIRING_STATUS_VOLUME}"
+
 
 # The phase clause of the workload release gate, rendered from the same closed
 # vocabulary ``ready_for`` applies and shaped like ``WiringPhaseResult``: the
@@ -210,17 +231,6 @@ def decode_status(value: str) -> NodeWiringStatus:
     return NodeWiringStatus.model_validate(json.loads(value))
 
 
-def status_configmap_data(
-    statuses: dict[str, NodeWiringStatus], manifest: WiringManifest
-) -> dict[str, str]:
-    data = {
-        "_session_id": manifest.session_id,
-        "_wiring_generation": manifest.wiring_generation,
-    }
-    data.update({node_id: encode_status(status) for node_id, status in statuses.items()})
-    return data
-
-
 def failed_status_summary(
     statuses: Mapping[str, NodeWiringStatus],
     *,
@@ -253,16 +263,37 @@ def failed_status_summary(
     return f"wiring failed for nodes: {displayed}{detail}"
 
 
-def parse_status_configmap(
-    data: dict[str, str] | None,
-) -> tuple[str, str, dict[str, NodeWiringStatus]]:
-    if not data:
-        return "", "", {}
-    session_id = data.get("_session_id", "")
-    generation = data.get("_wiring_generation", "")
+def pod_wiring_status(pod: Any) -> NodeWiringStatus | None:
+    """The wiring proof one pod carries, or None when none has been written.
+
+    A malformed proof raises: an unreadable proof is never read as absent.
+    """
+    metadata = getattr(pod, "metadata", None)
+    annotations = dict(getattr(metadata, "annotations", None) or {})
+    value = annotations.get(WIRING_STATUS_ANNOTATION)
+    if not value:
+        return None
+    return decode_status(value)
+
+
+def pod_wiring_statuses(pods: Iterable[Any], *, node_id_label: str) -> dict[str, NodeWiringStatus]:
+    """Every wiring proof the given pods carry, keyed by the pod's node-id label.
+
+    A proof naming another node than the pod that carries it, or two pods
+    claiming one node, is refused.
+    """
     statuses: dict[str, NodeWiringStatus] = {}
-    for key, value in data.items():
-        if key.startswith("_"):
+    for pod in pods:
+        status = pod_wiring_status(pod)
+        if status is None:
             continue
-        statuses[key] = decode_status(value)
-    return session_id, generation, statuses
+        labels = dict(getattr(getattr(pod, "metadata", None), "labels", None) or {})
+        node_id = str(labels.get(node_id_label) or "")
+        if status.node_id != node_id:
+            raise ValueError(
+                f"pod labelled {node_id!r} carries a wiring proof for {status.node_id!r}"
+            )
+        if node_id in statuses:
+            raise ValueError(f"more than one pod carries a wiring proof for {node_id!r}")
+        statuses[node_id] = status
+    return statuses

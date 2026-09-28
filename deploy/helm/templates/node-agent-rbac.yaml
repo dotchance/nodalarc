@@ -10,12 +10,20 @@ metadata:
   name: nodalarc-node-agent
   namespace: {{ .Values.namespace }}
 rules:
+  # patch: the Node Agent writes each wired pod's wiring proof onto that pod.
   - apiGroups: [""]
     resources: ["pods"]
-    verbs: ["get", "list", "watch"]
+    verbs: ["get", "list", "watch", "patch"]
   - apiGroups: [""]
     resources: ["configmaps"]
     verbs: ["get", "list", "watch", "create", "update", "patch"]
+  # The Scheduler writer Lease, read only: its transition count is the lowest
+  # writer epoch the Node Agent accepts. The Node Agent lists and watches it by
+  # name (a metadata.name field selector), which resourceNames authorizes.
+  - apiGroups: ["coordination.k8s.io"]
+    resources: ["leases"]
+    resourceNames: ["nodalarc-scheduler-writer"]
+    verbs: ["get", "list", "watch"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding

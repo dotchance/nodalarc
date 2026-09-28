@@ -145,6 +145,46 @@ list_platform_resources() {
     done
 }
 
+registry_digest_ref() {
+    # The registry's content name for a built image: REF@sha256:DIGEST. A
+    # registry that does not report the digest fails the command; the tag
+    # alone is never substituted.
+    local image="$1" without_host repo tag accept digest
+    without_host="${image#"$REGISTRY_HOST_RESOLVED"/}"
+    if [ -z "$REGISTRY_HOST_RESOLVED" ] || [ "$without_host" = "$image" ]; then
+        echo "na-images: $image is not in registry '${REGISTRY_HOST_RESOLVED}'" >&2
+        exit 1
+    fi
+    repo="${without_host%:*}"
+    tag="${without_host##*:}"
+    accept="application/vnd.oci.image.index.v1+json, application/vnd.oci.image.manifest.v1+json, application/vnd.docker.distribution.manifest.list.v2+json, application/vnd.docker.distribution.manifest.v2+json"
+    digest="$(
+        curl -sfI --max-time 10 -H "Accept: $accept" \
+            "http://$REGISTRY_HOST_RESOLVED/v2/$repo/manifests/$tag" \
+            | tr -d '\r' \
+            | awk -F': ' 'tolower($1) == "docker-content-digest" {print $2}'
+    )" || true
+    if ! [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+        echo "na-images: registry $REGISTRY_HOST_RESOLVED reported no content digest for $image" >&2
+        exit 1
+    fi
+    printf '%s@%s\n' "$image" "$digest"
+}
+
+session_image_ref() {
+    # Session pods name their images by digest, so a node that holds the
+    # image starts the container without asking the registry again. In
+    # single-node mode the images are loaded into containerd directly and
+    # there is no registry to ask.
+    local ref
+    ref="$(image_for "$1")"
+    if [ "$MODE_RESOLVED" = "single-node" ]; then
+        printf '%s\n' "$ref"
+    else
+        registry_digest_ref "$ref"
+    fi
+}
+
 workload_dev_overrides() {
     # Map the shipped workload profiles' placeholder image references to the
     # tree's real images. Development only: the value reaches the Operator
@@ -153,13 +193,19 @@ workload_dev_overrides() {
     # parsing, where braces and commas are list syntax. It travels as a
     # generated values file (workload-dev-overrides-values).
     local zeros="0000000000000000000000000000000000000000000000000000000000000000"
+    local frr base
+    # Command substitutions run without errexit: every failure is checked.
+    frr="$(session_image_ref frr)" || exit 1
+    base="$(session_image_ref base)" || exit 1
     printf '{"registry.example/nodalarc/frr@sha256:%s":"%s","registry.example/nodalarc/base@sha256:%s":"%s"}' \
-        "$zeros" "$(image_for frr)" "$zeros" "$(image_for base)"
+        "$zeros" "$frr" "$zeros" "$base"
 }
 
 workload_dev_overrides_values() {
     # YAML values fragment carrying the JSON verbatim as one string scalar.
-    printf "workloadDevImageOverrides: '%s'\n" "$(workload_dev_overrides)"
+    local overrides
+    overrides="$(workload_dev_overrides)" || exit 1
+    printf "workloadDevImageOverrides: '%s'\n" "$overrides"
 }
 
 helm_image_args() {
@@ -172,10 +218,15 @@ helm_image_args() {
 
     printf '%s\n' "--set-string=buildTag=$TAG"
     printf '%s\n' "--set-string=imagePullPolicy=$pull_policy"
+    local memberships ref
     for entry in "${IMAGE_TABLE[@]}"; do
-        IFS='|' read -r name key _ _ _ _ <<< "$entry"
+        IFS='|' read -r name key _ memberships _ _ <<< "$entry"
         [ "$key" != "-" ] || continue
-        printf '%s\n' "--set-string=images.$key=$(image_for "$name")"
+        case ",$memberships," in
+            *,session,*) ref="$(session_image_ref "$name")" || exit 1 ;;
+            *) ref="$(image_for "$name")" || exit 1 ;;
+        esac
+        printf '%s\n' "--set-string=images.$key=$ref"
     done
 }
 
@@ -193,6 +244,7 @@ Commands:
   list-optional-images
   image-for NAME
   image-for-tag NAME TAG
+  session-image-for NAME
   helm-key-for NAME
   resource-for NAME
   list-platform-resources
@@ -235,6 +287,13 @@ case "$command" in
             exit 2
         fi
         image_for_tag "$2" "$3"
+        ;;
+    session-image-for)
+        if [ -z "${2:-}" ]; then
+            echo "na-images: session-image-for requires a logical image name" >&2
+            exit 2
+        fi
+        session_image_ref "$2"
         ;;
     helm-key-for)
         if [ -z "${2:-}" ]; then

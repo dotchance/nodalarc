@@ -1,12 +1,12 @@
 # Copyright 2024-2026 .chance (dotchance)
 # Licensed under the Apache License, Version 2.0. See LICENSE file.
-"""Kernel-vs-ConfigMap reconciliation for Node Agent wiring.
+"""Kernel-vs-manifest reconciliation for Node Agent wiring.
 
-The Node Agent is stateless across restarts. On every startup and ConfigMap
-change, it diffs desired (ConfigMap) vs actual (kernel) and acts accordingly:
-  Case A — No kernel state, no current wiring-status: wire from scratch
-  Case B — Wiring-status present and current: no-op
-  Case C — Kernel state exists but wiring-status absent/stale: clean, re-wire
+The Node Agent is stateless across restarts. On every startup and manifest
+change, it diffs desired (the wiring manifest) vs actual (kernel) and acts:
+  Case A — No kernel state, no current wiring proof: wire from scratch
+  Case B — Every local pod carries current wiring proof: no-op
+  Case C — Kernel state exists but proof is absent or stale: clean, re-wire
 """
 
 from __future__ import annotations
@@ -17,12 +17,19 @@ import socket
 import sys
 from collections.abc import Sequence
 
-from nodalarc.runtime_naming import is_managed_host_ifname
-from nodalarc.substrate.manifest_contract import WiringManifest
-from nodalarc.substrate.wiring_status import WIRING_STATUS_CONFIGMAP, parse_status_configmap
+from nodalarc.runtime_naming import MANAGED_HOST_DEVICE_GROUP, is_managed_host_ifname
+from nodalarc.substrate.manifest_contract import (
+    POD_OWNER_UID_LABEL,
+    POD_SESSION_RUN_LABEL,
+    WiringManifest,
+)
+from nodalarc.substrate.wiring_status import WIRING_STATUS_ANNOTATION, pod_wiring_statuses
+from nodalarc.workload_target import NODE_ID_LABEL
 from pydantic import BaseModel, ConfigDict
 from pyroute2 import IPRoute
 from pyroute2.netlink.exceptions import NetlinkError
+
+from node_agent.proof_delivery import delivered_proof, kubelet_pods_dir
 
 log = logging.getLogger(__name__)
 
@@ -85,11 +92,31 @@ def clean_and_verify_host_state() -> HostCleanupReport:
     failed: list[tuple[str, str]] = []
     try:
         with IPRoute() as ipr:
+            links = ipr.get_links()
+            before = {
+                link.get_attr("IFLA_IFNAME", "")
+                for link in links
+                if is_managed_host_ifname(link.get_attr("IFLA_IFNAME", ""))
+                or link.get_attr("IFLA_GROUP") == MANAGED_HOST_DEVICE_GROUP
+            }
+            # Every device NodalArc creates joins the managed group: one request
+            # deletes them all, and the kernel unregisters them as one batch.
+            # The request is sent only when the group has members, so a host
+            # with nothing to remove needs no privilege to prove itself clean.
+            if any(link.get_attr("IFLA_GROUP") == MANAGED_HOST_DEVICE_GROUP for link in links):
+                try:
+                    ipr.link("del", group=MANAGED_HOST_DEVICE_GROUP)
+                except NetlinkError as exc:
+                    if exc.code != errno.ENODEV:  # ENODEV: the group emptied meanwhile
+                        failed.append((f"group {MANAGED_HOST_DEVICE_GROUP:#x}", _error_text(exc)))
+            # Any recognized device still present (created before devices were
+            # grouped, or by a failed group delete) is deleted by itself.
             targets = [
                 (link.get_attr("IFLA_IFNAME", ""), int(link["index"]))
                 for link in ipr.get_links()
                 if is_managed_host_ifname(link.get_attr("IFLA_IFNAME", ""))
             ]
+            removed.extend(sorted(before - {name for name, _index in targets}))
             for name, index in targets:
                 try:
                     ipr.link("del", index=index)
@@ -150,27 +177,31 @@ def wiring_status_is_current(
     manifest: WiringManifest,
     local_handles,
 ) -> bool:
-    """Check if nodalarc-wiring-status reflects the current manifest.
+    """Check whether this host's pods carry current wiring proof (Case B).
 
-    Returns True (Case B) if wiring-status exists, matches session and
-    generation, every manifest node has all required wiring steps ready, and
-    every local row names the exact live pod incarnation in
-    ``local_handles`` ({node_id: NamespaceHandle}). A row written for a
-    replaced pod or a recreated sandbox fails the binding and forces a
-    rewire.
+    True only when every pod in ``local_handles`` ({node_id: NamespaceHandle})
+    carries a proof that is ready for the manifest and names the exact live
+    pod incarnation, and its wiring-status volume holds the same proof. A
+    proof written for a replaced pod or a recreated sandbox fails the binding
+    and forces a rewire, as does a proof its pod's gate never received. The
+    host owns only its own pods' kernel state, so only those proofs decide.
     """
     try:
-        cm = v1.read_namespaced_config_map(WIRING_STATUS_CONFIGMAP, namespace)
-        if not cm.data:
+        pods_dir = kubelet_pods_dir()
+        pods = v1.list_namespaced_pod(
+            namespace,
+            label_selector=(
+                f"{POD_SESSION_RUN_LABEL}={manifest.session_run_id},"
+                f"{POD_OWNER_UID_LABEL}={manifest.owner_uid}"
+            ),
+        ).items
+        by_uid = {pod.metadata.uid: pod for pod in pods}
+        local_pods = [
+            by_uid[handle.pod_uid] for handle in local_handles.values() if handle.pod_uid in by_uid
+        ]
+        if len(local_pods) != len(local_handles):
             return False
-        session_id, generation, statuses = parse_status_configmap(cm.data)
-        if session_id != manifest.session_id:
-            return False
-        if generation != manifest.wiring_generation:
-            return False
-        expected_nodes = set(manifest.nodes.keys())
-        if not expected_nodes.issubset(statuses.keys()):
-            return False
+        statuses = pod_wiring_statuses(local_pods, node_id_label=NODE_ID_LABEL)
         for node_id, handle in local_handles.items():
             row = statuses.get(node_id)
             if row is None:
@@ -181,8 +212,8 @@ def wiring_status_is_current(
                 or row.netns_id != handle.netns_id
             ):
                 log.warning(
-                    "Wiring row for %s names another pod incarnation "
-                    "(row pod=%s sandbox=%s netns=%s, live pod=%s sandbox=%s netns=%s) "
+                    "Wiring proof for %s names another pod incarnation "
+                    "(proof pod=%s sandbox=%s netns=%s, live pod=%s sandbox=%s netns=%s) "
                     "— rewire required",
                     node_id,
                     row.pod_uid,
@@ -193,9 +224,19 @@ def wiring_status_is_current(
                     handle.netns_id,
                 )
                 return False
-        return all(statuses[node_id].ready_for(manifest) for node_id in expected_nodes)
+            if not row.ready_for(manifest):
+                return False
+            annotation = by_uid[handle.pod_uid].metadata.annotations[WIRING_STATUS_ANNOTATION]
+            if delivered_proof(pods_dir, handle.pod_uid) != annotation:
+                log.warning(
+                    "Wiring proof for %s was not delivered to pod %s — rewire required",
+                    node_id,
+                    handle.pod_uid,
+                )
+                return False
+        return True
     except Exception as exc:
-        log.warning("wiring-status validation failed: %s", exc)
+        log.warning("wiring proof validation failed: %s", exc)
         return False
 
 

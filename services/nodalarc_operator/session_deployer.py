@@ -15,7 +15,6 @@ import logging
 import os
 from collections.abc import Mapping, Sequence
 from dataclasses import fields, is_dataclass
-from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -23,6 +22,7 @@ import kubernetes
 from nodalarc.catalog_upload import CatalogUploadSelection
 from nodalarc.content_identity import canonical_json_bytes
 from nodalarc.cr_runtime_config import ConstellationSpecSpec, load_cr_runtime_config
+from nodalarc.kube_watch import list_then_watch, object_uid
 from nodalarc.models.resolved_session import ResolvedSession
 from nodalarc.nats_channels import sanitize_session_id, session_purge_filters
 from nodalarc.platform_config import (
@@ -43,16 +43,16 @@ from nodalarc.runtime_service_config import (
 from nodalarc.session_identity import require_resolved_session_run_id
 from nodalarc.session_nodes import available_session_nodes
 from nodalarc.session_validator import validate_session_readiness
-from nodalarc.substrate.manifest_contract import WIRING_MANIFEST_CONFIGMAP
+from nodalarc.substrate.manifest_contract import POD_OWNER_UID_LABEL, WIRING_MANIFEST_CONFIGMAP
 from nodalarc.substrate.routing_requirements import (
     address_family_sysctls,
     routing_kernel_requirements,
 )
-from nodalarc.substrate.wiring_status import WIRING_STATUS_CONFIGMAP
 
 from nodalarc_operator.session_pods import (
     PodClass,
     SessionPodIdentity,
+    SessionPodView,
     canonical_node_id,
     delete_conflicting_pod,
 )
@@ -65,6 +65,12 @@ from nodalarc_operator.workloads.preparation import (
 )
 
 log = logging.getLogger(__name__)
+
+
+# Concurrent API writes when the Operator creates a session's objects.
+_API_WRITE_WORKERS = 16
+# Pod-creation progress reaches the CR status once per this many pods.
+_PROGRESS_EVERY_PODS = 25
 
 
 class RetryableSessionDependency(RuntimeError):
@@ -535,26 +541,28 @@ def ensure_session_configmaps(
     # --- Step 6: immutable workload artifact ConfigMaps ---
     # Rendered configuration travels as plan artifacts inside these objects.
     _progress(f"Creating {len(prepared_workloads.composed)} workload artifact ConfigMaps")
-    artifact_count = 0
-    for composed in prepared_workloads.composed.values():
-        if composed.artifact_config_map is not None:
-            _ensure_immutable_configmap(v1, namespace, composed.artifact_config_map)
-            artifact_count += 1
-    log.info("Ensured %d workload artifact ConfigMaps", artifact_count)
+    from concurrent.futures import ThreadPoolExecutor
 
-    # --- Step 7: Create session-level ConfigMaps ---
-    _progress("Creating session-level ConfigMaps")
-    _create_session_configmaps(
-        v1,
-        resolved_session,
-        operator_session.root_yaml.decode("utf-8"),
-        operator_session.selection,
-        deployment_context,
-        namespace,
-        owner_ref,
-    )
+    artifacts = [
+        composed.artifact_config_map
+        for composed in prepared_workloads.composed.values()
+        if composed.artifact_config_map is not None
+    ]
+    # Each object is independent; the first failure propagates when its
+    # result is read, after the pool has finished every request.
+    with ThreadPoolExecutor(max_workers=_API_WRITE_WORKERS) as pool:
+        for future in [
+            pool.submit(_ensure_immutable_configmap, v1, namespace, config_map)
+            for config_map in artifacts
+        ]:
+            future.result()
+    log.info("Ensured %d workload artifact ConfigMaps", len(artifacts))
 
-    # --- Step 7b: Ensure SSH keypair for terminal access ---
+    # The runtime session ConfigMap that OME and the Scheduler load is NOT
+    # written here: it is their start authorization, written only once the
+    # session is wired and every workload runs (start_session_services).
+
+    # --- Step 7: Ensure SSH keypair for terminal access ---
     _progress("Ensuring SSH keypair for terminal access")
     _create_terminal_ssh_keys(v1, namespace, owner_ref)
 
@@ -673,7 +681,7 @@ def ensure_session_pods(
     heartbeat = threading.Thread(target=_heartbeat, daemon=True)
     heartbeat.start()
     try:
-        with ThreadPoolExecutor(max_workers=16) as pool:
+        with ThreadPoolExecutor(max_workers=_API_WRITE_WORKERS) as pool:
             futures = {}
             for ps in pod_specs:
                 fut = pool.submit(
@@ -698,7 +706,9 @@ def ensure_session_pods(
                 try:
                     fut.result()
                     created_pods += 1
-                    _progress(f"Creating session pods: {created_pods}/{total_pods}")
+                    # One status write per batch of pods, and one for the last.
+                    if created_pods % _PROGRESS_EVERY_PODS == 0 or created_pods == total_pods:
+                        _progress(f"Creating session pods: {created_pods}/{total_pods}")
                 except kubernetes.client.rest.ApiException as exc:
                     api_failures.append(exc)
                     errors.append(f"{node_id}: {exc}")
@@ -850,15 +860,9 @@ def write_wiring_manifest(
 
     v1 = _get_v1()
 
-    # Delete stale wiring-status before writing new manifest.
-    # Without this, the Node Agent sees old wiring-status as "current" and
-    # hits Case B (no-op) instead of Case A (wire from scratch).
-    try:
-        v1.delete_namespaced_config_map(WIRING_STATUS_CONFIGMAP, namespace)
-        log.debug("Deleted stale nodalarc-wiring-status")
-    except kubernetes.client.rest.ApiException as e:
-        if e.status != 404:
-            raise
+    # A new manifest needs no proof cleanup: each pod's wiring proof names its
+    # session and wiring generation, and no proof of another generation is
+    # ever read as current.
     # Platform-level sysctls merged with each node's address-family settings
     # and, for a routed node, the kernel requirements of its routing domain.
     base_sysctls = {
@@ -1024,57 +1028,148 @@ def write_wiring_manifest(
     return len(isl_pairs)
 
 
-def restart_platform_pods(namespace: str, config_hash: str = "") -> None:
-    """Trigger rolling restart of session-scoped platform pods.
+# The session-scoped platform services. Each loads one session at start and
+# serves only that session; a new session needs new pods.
+SESSION_SERVICE_APPS: tuple[str, ...] = ("nodalarc-ome", "nodalarc-scheduler")
+SESSION_SERVICE_SELECTOR = f"app in ({','.join(SESSION_SERVICE_APPS)})"
+# The runtime a session-service pod template (and so each of its pods) is
+# bound to: the runtime hash the Operator verifies, and the session run it
+# belongs to. Absent: the pods are idle and serve no session.
+RUNTIME_HASH_ANNOTATION = "nodalarc.io/config-hash"
+SESSION_RUN_ANNOTATION = "nodalarc.io/session-run-id"
+RUNTIME_SESSION_CONFIGMAP = "nodalarc-session"
 
-    Patches each Deployment's pod template with a config-hash annotation,
-    which triggers a rolling update. Only session-scoped services are
-    restarted — those that initialize session state at startup and don't
-    yet have a hot-reload path for new session parameters.
 
-    VS-API is NOT restarted. It is platform infrastructure that
-    orchestrates session switches from the browser wizard. Restarting it
-    mid-switch kills the orchestrator, drops the WebSocket connections to
-    every connected browser, and leaves the frontend with no completion
-    signal. VS-API already has a hot-reload path: _run_switch() tears
-    down the old SessionContext and creates a new one with fresh NATS
-    subscriptions. No pod restart needed.
+def roll_session_services(
+    namespace: str, runtime_hash: str | None, session_run_id: str | None
+) -> None:
+    """Replace the OME and Scheduler pods with pods bound to one runtime.
 
-    Architecture direction: eventually ALL platform services adopt the
-    hot-reload pattern (receive new config via NATS, reinitialize internal
-    state, continue serving) and this function becomes unnecessary. The
-    methods, procedures, and logic are the code — session parameters are
-    just variables. See PRD §3.3 "Platform Service Lifecycle."
+    ``None`` for both binds them to no session: the replacement pods start
+    idle and wait for a runtime session ConfigMap. Patching the pod-template
+    annotations makes the Deployment replace its pods; both Deployments use
+    the Recreate strategy, so an old and a new instance never run together.
+    Patching the values a template already carries changes nothing.
     """
+    if (runtime_hash is None) != (session_run_id is None):
+        raise ValueError(
+            "a session-service binding names both a runtime hash and a run id, or neither"
+        )
     apps_v1 = _get_apps_v1()
-
-    annotation_value = config_hash or datetime.now(UTC).isoformat()
-
+    binding = {RUNTIME_HASH_ANNOTATION: runtime_hash, SESSION_RUN_ANNOTATION: session_run_id}
+    body = {"spec": {"template": {"metadata": {"annotations": binding}}}}
     failures: list[str] = []
-    for label in [
-        "app=nodalarc-ome",
-        "app=nodalarc-scheduler",
-    ]:
-        deployments = apps_v1.list_namespaced_deployment(namespace, label_selector=label)
-        for deploy in deployments.items:
-            body = {
-                "spec": {
-                    "template": {
-                        "metadata": {
-                            "annotations": {
-                                "nodalarc.io/config-hash": annotation_value,
-                            }
-                        }
-                    }
-                }
-            }
-            try:
-                apps_v1.patch_namespaced_deployment(deploy.metadata.name, namespace, body)
-                log.info("Rolling restart triggered for %s", deploy.metadata.name)
-            except kubernetes.client.rest.ApiException as exc:
-                failures.append(f"{deploy.metadata.name}: {exc}")
+    deployments = apps_v1.list_namespaced_deployment(
+        namespace, label_selector=SESSION_SERVICE_SELECTOR
+    )
+    for deploy in deployments.items:
+        annotations = dict(getattr(deploy.spec.template.metadata, "annotations", None) or {})
+        if all(annotations.get(key) == value for key, value in binding.items()):
+            continue
+        try:
+            apps_v1.patch_namespaced_deployment(deploy.metadata.name, namespace, body)
+        except kubernetes.client.rest.ApiException as exc:
+            failures.append(f"{deploy.metadata.name}: {exc}")
+            continue
+        log.info(
+            "Session service %s rolled to %s",
+            deploy.metadata.name,
+            f"run {session_run_id} runtime {runtime_hash[:12]}" if runtime_hash else "idle",
+        )
     if failures:
-        raise RuntimeError("Failed to restart platform deployment(s): " + "; ".join(failures))
+        raise RuntimeError("Failed to roll session service deployment(s): " + "; ".join(failures))
+
+
+def session_services_on_other_run(namespace: str, session_run_id: str) -> list[str]:
+    """Session-service Deployments whose template serves another session run."""
+    apps_v1 = _get_apps_v1()
+    stale: list[str] = []
+    deployments = apps_v1.list_namespaced_deployment(
+        namespace, label_selector=SESSION_SERVICE_SELECTOR
+    )
+    for deploy in deployments.items:
+        annotations = dict(getattr(deploy.spec.template.metadata, "annotations", None) or {})
+        bound = annotations.get(SESSION_RUN_ANNOTATION) or annotations.get(RUNTIME_HASH_ANNOTATION)
+        if bound and annotations.get(SESSION_RUN_ANNOTATION) != session_run_id:
+            stale.append(deploy.metadata.name)
+    return stale
+
+
+def retire_session_services(namespace: str) -> None:
+    """Take OME and the Scheduler off their session.
+
+    The runtime session ConfigMap goes first, so the idle replacement pods
+    cannot mount it; then both Deployments roll to idle pods.
+    """
+    _delete_configmap_or_absent(_get_v1(), RUNTIME_SESSION_CONFIGMAP, namespace)
+    roll_session_services(namespace, None, None)
+
+
+def _pod_serves_a_session(pod: Any) -> bool:
+    annotations = dict(getattr(getattr(pod, "metadata", None), "annotations", None) or {})
+    return bool(annotations.get(RUNTIME_HASH_ANNOTATION))
+
+
+def wait_for_session_services_retired(namespace: str, timeout_s: float) -> None:
+    """Block until no OME or Scheduler pod bound to a session exists.
+
+    Terminating pods still count: a process that has not exited can still
+    publish or dispatch.
+    """
+    import time
+
+    deadline = time.monotonic() + timeout_s
+    serving: dict[str, str] = {}
+    for pods in list_then_watch(
+        _get_v1().list_namespaced_pod,
+        request_seconds=lambda: deadline - time.monotonic(),
+        stopped=lambda: time.monotonic() >= deadline,
+        key=object_uid,
+        namespace=namespace,
+        label_selector=SESSION_SERVICE_SELECTOR,
+    ):
+        serving = {
+            uid: pod.metadata.name for uid, pod in pods.items() if _pod_serves_a_session(pod)
+        }
+        if not serving:
+            return
+    raise RuntimeError(
+        f"session services still running {timeout_s:.0f} s after retirement: "
+        + ", ".join(sorted(serving.values()))
+    )
+
+
+def ensure_runtime_session_config(
+    namespace: str,
+    owner_ref: dict,
+    active_session: ResolvedRuntimeConfig,
+    deployment_context: RuntimeDeploymentContext,
+) -> None:
+    """Write the runtime session ConfigMap OME and the Scheduler start from."""
+    _create_session_configmaps(
+        _get_v1(),
+        active_session.resolution.resolved,
+        active_session.root_yaml.decode("utf-8"),
+        active_session.selection,
+        deployment_context,
+        namespace,
+        owner_ref,
+    )
+
+
+def delete_session_pods(namespace: str, owner_uid: str) -> None:
+    """Delete every session pod one ConstellationSpec owns, in one request.
+
+    The owner-UID label scopes the collection to this CR's pods; the API
+    server deletes them together, where owner-reference garbage collection
+    removed them at its own rate limit.
+    """
+    if not owner_uid:
+        raise ValueError("deleting session pods requires the owner UID")
+    _get_v1().delete_collection_namespaced_pod(
+        namespace,
+        label_selector=f"{POD_OWNER_UID_LABEL}={owner_uid}",
+    )
 
 
 def _pod_runtime_proof(
@@ -1130,7 +1225,7 @@ def check_platform_runtime_ready(
         spec = deployment.spec
         status = deployment.status
         annotations = dict(getattr(spec.template.metadata, "annotations", None) or {})
-        if annotations.get("nodalarc.io/config-hash") != runtime_hash:
+        if annotations.get(RUNTIME_HASH_ANNOTATION) != runtime_hash:
             return False, f"Waiting for {service} runtime template update"
         generation = int(getattr(metadata, "generation", 0) or 0)
         observed_generation = int(getattr(status, "observed_generation", 0) or 0)
@@ -1159,7 +1254,7 @@ def check_platform_runtime_ready(
             pod_annotations = dict(getattr(pod_metadata, "annotations", None) or {})
             if getattr(pod_metadata, "deletion_timestamp", None) is not None:
                 return False, f"Waiting for retired {service} runtime pod deletion"
-            if pod_annotations.get("nodalarc.io/config-hash") != runtime_hash:
+            if pod_annotations.get(RUNTIME_HASH_ANNOTATION) != runtime_hash:
                 return False, f"Waiting for retired {service} runtime pod replacement"
             current_pods.append(pod)
         if len(current_pods) != desired:
@@ -1194,12 +1289,13 @@ def check_platform_runtime_ready(
 
 
 def teardown_session(namespace: str, session_ids: Sequence[str]) -> None:
-    """Purge every deployed run id, then clean up the session ConfigMaps.
+    """Purge every deployed run id, then delete the session's records.
 
-    Pods are garbage-collected through their owner references. ``session_ids``
-    are the run ids the caller proved from the owned resources
-    (``owned_session_run_ids``); an empty sequence means nothing was deployed
-    and only the ConfigMap sweep runs.
+    The caller has already retired the session services, so no OME or
+    Scheduler instance can publish under these run ids after the purge.
+    ``session_ids`` are the run ids the caller proved from the owned
+    resources (``owned_session_run_ids``); an empty sequence means nothing
+    was deployed and only the record sweep runs.
     """
     v1 = _get_v1()
     log.info("Teardown run ids: %s", ", ".join(session_ids) or "(none)")
@@ -1210,15 +1306,23 @@ def teardown_session(namespace: str, session_ids: Sequence[str]) -> None:
     for session_id in session_ids:
         purge_session_runtime_state(namespace, session_id)
 
-    # Delete session-level ConfigMaps
     for cm_name in [
-        "nodalarc-session",
-        "nodalarc-constellation",
-        "nodalarc-ground-stations",
+        RUNTIME_SESSION_CONFIGMAP,
         WIRING_MANIFEST_CONFIGMAP,
-        WIRING_STATUS_CONFIGMAP,
     ]:
         _delete_configmap_or_absent(v1, cm_name, namespace)
+    # The terminal keypair has a fixed name. Left to garbage collection, it
+    # outlives the CR and the next session waits for it to disappear.
+    try:
+        v1.delete_namespaced_secret(TERMINAL_SSH_KEY_RESOURCE_NAME, namespace)
+    except kubernetes.client.rest.ApiException as exc:
+        if exc.status != 404:
+            log.error(
+                "Failed to delete Secret %s during teardown: %s",
+                TERMINAL_SSH_KEY_RESOURCE_NAME,
+                exc,
+            )
+            raise
 
 
 def _delete_configmap_or_absent(v1: kubernetes.client.CoreV1Api, name: str, namespace: str) -> None:
@@ -1287,21 +1391,19 @@ def purge_session_runtime_state(namespace: str, session_id: str) -> None:
         raise
 
 
-def check_wiring_complete(namespace: str, expected_count: int) -> tuple[bool, int, str | None]:
-    """Check whether Node Agent wiring is complete.
+def check_wiring_complete(namespace: str, view: SessionPodView) -> tuple[bool, int, str | None]:
+    """Check whether Node Agent wiring is complete for the observed session pods.
 
-    Reads the topology manifest and the nodalarc-wiring-status ConfigMap,
-    then counts only typed node status entries that are ready for the active
-    session and wiring generation. Metadata keys such as _session_id and
-    _wiring_generation are not node status entries.
+    Reads the wiring manifest, then judges the wiring proof each current pod
+    in ``view`` carries: a proof counts only when it is ready for the active
+    session and wiring generation and names that exact pod.
 
     Returns (complete, wired_count, progress_msg) where:
-      - complete: True if wired_count == expected_count
-      - wired_count: number of current-generation ready node entries
+      - complete: True if every manifest node's pod carries ready proof
+      - wired_count: number of current-generation ready proofs
       - progress_msg: a global progress message, or None
 
-    Returns (False, 0, None) if the ConfigMap does not exist (404).
-    Raises on malformed, dirty, failed, or impossible status.
+    Raises on a malformed, dirty, failed, or impossible proof.
 
     Pure query — no side effects.
     """
@@ -1309,7 +1411,7 @@ def check_wiring_complete(namespace: str, expected_count: int) -> tuple[bool, in
         WiringManifestPayloadError,
         decode_wiring_manifest,
     )
-    from nodalarc.substrate.wiring_status import failed_status_summary, parse_status_configmap
+    from nodalarc.substrate.wiring_status import decode_status, failed_status_summary
 
     v1 = _get_v1()
     manifest_cm = v1.read_namespaced_config_map(WIRING_MANIFEST_CONFIGMAP, namespace)
@@ -1322,56 +1424,47 @@ def check_wiring_complete(namespace: str, expected_count: int) -> tuple[bool, in
     except ValueError as exc:
         raise ValueError(f"topology wiring manifest payload is invalid: {exc}") from exc
 
+    expected_count = view.identity.expected_count
     if len(manifest.nodes) != expected_count:
         raise ValueError(
             f"topology wiring manifest has {len(manifest.nodes)} nodes, expected {expected_count}"
         )
 
-    try:
-        cm = v1.read_namespaced_config_map(WIRING_STATUS_CONFIGMAP, namespace)
-        data = dict(cm.data) if cm.data else {}
-        status_session_id, status_generation, statuses = parse_status_configmap(data)
-    except kubernetes.client.rest.ApiException as e:
-        if e.status == 404:
-            return False, 0, None
-        raise
-
+    statuses = {}
+    for pod in view.current:
+        if pod.wiring_proof is None:
+            continue
+        status = decode_status(pod.wiring_proof)
+        if canonical_node_id(status.node_id) != pod.node_id:
+            raise ValueError(
+                f"pod {pod.name!r} for node {pod.node_id!r} carries proof for {status.node_id!r}"
+            )
+        if status.pod_uid != pod.uid:
+            raise ValueError(
+                f"pod {pod.name!r} uid={pod.uid} carries proof for pod uid {status.pod_uid}"
+            )
+        statuses[status.node_id] = status
     if not statuses:
         return False, 0, None
 
-    if status_session_id != manifest.session_id or status_generation != manifest.wiring_generation:
-        return (
-            False,
-            0,
-            "Wiring status belongs to an old session or generation; waiting for current Node Agent status",
-        )
-
-    manifest_node_ids = set(manifest.nodes)
-    status_node_ids = set(statuses)
-    unknown = status_node_ids - manifest_node_ids
+    unknown = set(statuses) - set(manifest.nodes)
     if unknown:
-        raise ValueError(
-            "wiring status contains unknown node entries: " + ", ".join(sorted(unknown)[:10])
-        )
+        raise ValueError("wiring proof names unknown nodes: " + ", ".join(sorted(unknown)[:10]))
 
-    failed = [
-        node_id
+    current = {
+        node_id: status
         for node_id, status in statuses.items()
-        if status.status in {"failed", "dirty_kernel"} or status.dirty_kernel
-    ]
+        if status.session_id == manifest.session_id
+        and status.wiring_generation == manifest.wiring_generation
+    }
+    failed = failed_status_summary(current, node_ids=manifest.nodes)
     if failed:
-        raise ValueError(failed_status_summary(statuses, node_ids=manifest_node_ids))
-
-    mismatched = [node_id for node_id, status in statuses.items() if status.node_id != node_id]
-    if mismatched:
-        raise ValueError(
-            "wiring status node_id/key mismatch for: " + ", ".join(sorted(mismatched)[:10])
-        )
+        raise ValueError(failed)
 
     ready_count = sum(
         1
         for node_id in manifest.nodes
-        if (status := statuses.get(node_id)) is not None and status.ready_for(manifest)
+        if (status := current.get(node_id)) is not None and status.ready_for(manifest)
     )
     return ready_count == expected_count, ready_count, None
 
@@ -1627,7 +1720,7 @@ def _create_session_configmaps(
     )
     _create_or_update_configmap(
         v1,
-        "nodalarc-session",
+        RUNTIME_SESSION_CONFIGMAP,
         namespace,
         data,
         owner_ref,

@@ -30,8 +30,13 @@ fi
 
 # Copy ConfigMap contents to writable /etc/frr/ (tmpfs emptyDir).
 # ConfigMap mounts are read-only; FRR needs to write to /etc/frr/.
-cp /etc/frr-config/* /etc/frr/
-echo "Copied config from /etc/frr-config/ to /etc/frr/"
+# Everything but the integrated configuration is in place before FRR starts;
+# frr.conf follows once mgmtd serves every daemon that takes its configuration
+# (see apply_boot_configuration below).
+for source in /etc/frr-config/*; do
+    [ "$(basename "$source")" = "frr.conf" ] || cp "$source" /etc/frr/
+done
+echo "Copied config from /etc/frr-config/ to /etc/frr/ (frr.conf at boot)"
 
 # Create vtysh.conf if it doesn't exist — suppresses the
 # "Can't open configuration file /etc/frr/vtysh.conf" warning
@@ -100,6 +105,76 @@ if ip link show eth0 >/dev/null 2>&1; then
     ip link set eth0 name cni0
     echo "Renamed eth0 → cni0"
 fi
+
+# The pod mounts an empty volume over /var/log, which hides the image's
+# /var/log/frr. The rendered configuration logs to /var/log/frr/frr.log; without
+# the directory every daemon's configuration load reports a failed line.
+mkdir -p /var/log/frr
+chown frr:frr /var/log/frr
+
+# The boot configuration is applied once every selected daemon is up and mgmtd
+# serves every selected daemon that takes its configuration through it. FRR's
+# own start applies frr.conf as soon as the daemons are launched; applied
+# before zebra and staticd had connected to mgmtd, the interface addresses
+# were never installed on 2 to 14 routers per session start, and a later
+# apply installed them. A boot configuration that cannot be applied ends the
+# container: the session sees a router that is not running, and the kubelet
+# restarts it. The readiness probe accepts the container only after the marker
+# below exists. The marker lives on a volume that outlives a container
+# restart, so a restarted container removes it first.
+BOOT_WAIT_S=120
+# The daemons whose configuration FRR 10.3.1's mgmtd takes and passes on.
+MGMTD_BACKENDS="zebra ripd ripngd staticd"
+rm -f /var/run/frr/nodalarc-boot-config-applied
+
+# Prints what the boot configuration still waits for; prints nothing once
+# every daemon the daemons file ($1) selects is up and every selected mgmtd
+# backend is connected.
+boot_configuration_waits_for() {
+    local selected="" daemon state watchfrr backends
+    while IFS='=' read -r daemon state; do
+        if [ "$state" = "yes" ]; then
+            selected="$selected $daemon"
+        fi
+    done < "$1"
+    watchfrr="$(vtysh -c 'show watchfrr' 2>/dev/null || true)"
+    backends="$(vtysh -c 'show mgmt backend-adapter all' 2>/dev/null || true)"
+    for daemon in $selected; do
+        printf '%s\n' "$watchfrr" | grep -Eq "^[[:space:]]+$daemon[[:space:]]+Up\$" \
+            || printf ' %s(down)' "$daemon"
+        case " $MGMTD_BACKENDS " in
+            *" $daemon "*)
+                printf '%s\n' "$backends" | grep -Eq "Client:[[:space:]]+$daemon\$" \
+                    || printf ' %s(no mgmtd backend)' "$daemon"
+                ;;
+        esac
+    done
+}
+
+# Runs in the background; $$ is the entrypoint's process, which becomes FRR's
+# docker-start. Ending it ends the container.
+apply_boot_configuration() {
+    local deadline waiting
+    deadline=$(( $(date +%s) + BOOT_WAIT_S ))
+    while waiting="$(boot_configuration_waits_for /etc/frr/daemons)"; [ -n "$waiting" ]; do
+        if [ "$(date +%s)" -ge "$deadline" ]; then
+            echo "ERROR: frr.conf not applied; after ${BOOT_WAIT_S}s still waiting for:$waiting; ending the container" >&2
+            kill -TERM "$$"
+            return 1
+        fi
+        sleep 0.2
+    done
+    if ! cp /etc/frr-config/frr.conf /etc/frr/frr.conf \
+        || ! chown frr:frr /etc/frr/frr.conf \
+        || ! vtysh -b \
+        || ! touch /var/run/frr/nodalarc-boot-config-applied; then
+        echo "ERROR: frr.conf did not apply cleanly; ending the container" >&2
+        kill -TERM "$$"
+        return 1
+    fi
+    echo "frr.conf applied with every selected daemon up and connected to mgmtd"
+}
+apply_boot_configuration &
 
 # Hand off to FRR's stock docker-start (watchfrr reads /etc/frr/daemons)
 exec /usr/lib/frr/docker-start

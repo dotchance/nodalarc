@@ -67,6 +67,11 @@ class _NoCheckpointJs:
     async def subscribe(self, *args, **kwargs):
         return _NoCheckpointSub()
 
+    async def get_last_msg(self, stream, subject):
+        from nats.js.errors import NotFoundError
+
+        raise NotFoundError
+
 
 class _NoCheckpointNc:
     def jetstream(self):

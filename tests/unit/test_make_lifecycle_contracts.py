@@ -620,7 +620,10 @@ def test_stream_initializer_reports_a_creation_failure_instead_of_readiness() ->
     script = ome.split("- |\n", 1)[1].split("      containers:\n", 1)[0]
     shell_lines = [line.strip() for line in script.splitlines() if not line.startswith("{{")]
 
-    assert shell_lines[0] == "set -e"
+    # PID 1 handles SIGTERM; the work runs as its child under errexit, and the
+    # child's exit status is the container's.
+    assert shell_lines[:3] == ["trap 'exit 143' TERM", "{", "set -e"]
+    assert [line for line in shell_lines if line][-2:] == ["} &", "wait $!"]
     assert "|| true" not in script
     assert "--defaults 2>/dev/null" not in script
     assert script.count("2>/dev/null") == 1, "only the connection wait quiets its probe"
@@ -756,8 +759,7 @@ def test_make_session_uses_the_reviewed_vs_api_catalog_switch_path() -> None:
     script = script_path.read_text()
 
     subprocess.run(["bash", "-n", str(script_path)], check=True)
-    assert "/api/v1/sessions" in script
-    assert "/api/v1/sessions/yaml" in script
+    assert "/api/v1/sessions/yaml" not in script
     assert "/api/v1/sessions/switch" in script
     assert "/api/v1/session-transitions/" in script
     assert "CatalogClosureCollector.collect" in script

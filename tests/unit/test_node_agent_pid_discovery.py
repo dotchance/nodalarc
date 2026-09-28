@@ -30,7 +30,7 @@ def _pod(node_id: str | None, uid: str) -> SimpleNamespace:
     if node_id is not None:
         labels["nodalarc.io/node-id"] = node_id
     return SimpleNamespace(
-        metadata=SimpleNamespace(labels=labels, uid=uid),
+        metadata=SimpleNamespace(labels=labels, uid=uid, name=node_id or f"pod-{uid}"),
         status=SimpleNamespace(container_statuses=None, pod_ip=POD_IP),
     )
 
@@ -309,6 +309,7 @@ def test_handle_carries_the_manifest_requirement_and_unexpected_pods_get_none(
 def test_verify_handle_detects_namespace_replacement() -> None:
     live = NamespaceHandle(
         node_id="sat-0-0",
+        pod_name="sat-0-0",
         pod_uid="uid-1",
         sandbox_id="sb-1",
         sandbox_attempt=0,
@@ -319,6 +320,7 @@ def test_verify_handle_detects_namespace_replacement() -> None:
     assert verify_handle(live)
     replaced = NamespaceHandle(
         node_id="sat-0-0",
+        pod_name="sat-0-0",
         pod_uid="uid-1",
         sandbox_id="sb-1",
         sandbox_attempt=0,

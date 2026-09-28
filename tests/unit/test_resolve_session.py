@@ -1444,3 +1444,25 @@ def test_a_backbone_split_over_the_possible_links_is_refused(monkeypatch) -> Non
         match=r"the backbone area 0\.0\.0\.0 of OSPF instance 'test_domain' splits into 2 parts",
     ):
         _refuse_ospf_instances_without_a_contiguous_backbone(resolved)
+
+
+def test_a_resolution_reads_each_catalog_object_once(monkeypatch) -> None:
+    """Expansion asks for the same objects once per node; each is read, parsed
+    and validated once per resolution, and the result is unchanged."""
+    from nodalarc.configuration_yaml import load_configuration_yaml
+
+    loads: list[str] = []
+    real_load = resolver_module.load_catalog_object
+
+    def _counting_load(ref, view):
+        loads.append(str(ref))
+        return real_load(ref, view)
+
+    monkeypatch.setattr(resolver_module, "load_catalog_object", _counting_load)
+    raw = load_configuration_yaml(
+        (SHIPPED_ROOT / "sessions" / "earth-leo-walker.yaml").read_text(encoding="utf-8")
+    )
+    resolved = resolver_module.resolve_session(raw, catalog=shipped_read_view())
+
+    assert len(resolved.nodes) == 181
+    assert loads and len(loads) == len(set(loads))

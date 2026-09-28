@@ -29,6 +29,7 @@ from node_agent.kernel_constants import (
     SHAPER_DEFAULT_CLASS,
     SHAPER_ROOT_HANDLE,
 )
+from node_agent.tc_dump import interface_qdiscs
 from node_agent.tc_units import (
     delay_ms_to_netem_us,
     htb_class,
@@ -189,7 +190,7 @@ def _install_shaper_root(ipr: IPRoute, idx: int) -> None:
     shaper, or an HTB root with another default class) is deleted first; the
     device's default qdisc (handle 0) is replaced by the add itself.
     """
-    root = next((q for q in ipr.get_qdiscs(index=idx) if q["parent"] == TC_H_ROOT), None)
+    root = next((q for q in interface_qdiscs(idx) if q["parent"] == TC_H_ROOT), None)
     if root is not None and _is_shaper_root(root):
         return
     if root is not None and root["handle"] != 0:

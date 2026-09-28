@@ -7,6 +7,13 @@ metadata:
     app: nodalarc-ome
 spec:
   replicas: 1
+  # A pod serves one session run. Recreate removes the old pod before the new
+  # one starts, so two instances never serve a session together.
+  strategy:
+    type: Recreate
+    # Clears the RollingUpdate parameters a Deployment created before this
+    # strategy carries; the API refuses them alongside Recreate.
+    rollingUpdate: null
   selector:
     matchLabels:
       app: nodalarc-ome
@@ -27,8 +34,15 @@ spec:
           image: {{ required "images.natsBox is required" .Values.images.natsBox | quote }}
           imagePullPolicy: {{ .Values.imagePullPolicy }}
           command: ["sh", "-c"]
+          # The shell is the container's PID 1, which the kernel does not signal
+          # unless it handles the signal: the work runs as its child, and SIGTERM
+          # ends the container at once. A new pod's first connections can be
+          # refused until the network policy admits its address, so the check
+          # repeats often.
           args:
             - |
+              trap 'exit 143' TERM
+              {
               set -e
               echo "Waiting for NATS..."
 {{- $messaging := fromYaml (include "nodalarc.nats-messaging" .) }}
@@ -47,7 +61,7 @@ spec:
 {{- end }}
               NATS_URL={{ include "nodalarc.nats-url" (dict "Values" .Values "user" "admin" "hostNetwork" false) | quote }}
               until nats server check connection -s "$NATS_URL" 2>/dev/null; do
-                sleep 1
+                sleep 0.25
               done
               echo "NATS ready. Creating streams..."
 {{- range $messaging.streams }}
@@ -62,6 +76,8 @@ spec:
                 --defaults
 {{- end }}
               echo "Streams ready."
+              } &
+              wait $!
       containers:
         - name: ome
           image: {{ required "images.ome is required" .Values.images.ome | quote }}
@@ -94,16 +110,19 @@ spec:
             - containerPort: 8081
               name: health
               protocol: TCP
+          # The Operator declares a session Ready only after this probe passes,
+          # so the probe runs every second. The health responder shares the GIL
+          # with the physics loop; checkpoint-recovery replay can stall it past
+          # the k8s default 1s timeout even though the process is healthy and
+          # working, and 15 consecutive failures keep the 15 s tolerance a
+          # 5 s period with the default threshold gave.
           readinessProbe:
             httpGet:
               path: /readyz
               port: 8081
-            initialDelaySeconds: 3
-            periodSeconds: 5
-            # The health responder shares the GIL with the physics loop;
-            # checkpoint-recovery replay can stall it past the k8s default
-            # 1s timeout even though the process is healthy and working.
+            periodSeconds: 1
             timeoutSeconds: 5
+            failureThreshold: 15
           livenessProbe:
             httpGet:
               path: /livez

@@ -80,6 +80,13 @@ def isl_host_name(node_id: str, index: int) -> str:
     return _ifname("i", node_id, index)
 
 
+# The link group (IFLA_GROUP) every host-side device NodalArc creates carries.
+# Host cleanup deletes the whole group in one request, which the kernel
+# unregisters as one batch; name recognition below stays the proof that
+# nothing managed remains.
+MANAGED_HOST_DEVICE_GROUP = 0x4E415243
+
+
 def is_managed_host_ifname(name: str) -> bool:
     """Return True for host-side interfaces owned by NodalArc.
 

@@ -27,6 +27,7 @@ from vs_api.session_deployment import (
 from vs_api.session_manager import SessionManager
 
 from tests.builder_world_fixtures import builder_world_preview
+from tests.kube_watch_fixtures import replayed_snapshots
 
 ROOT = Path(__file__).resolve().parents[2]
 SHIPPED_ROOT = ROOT / "catalog" / "nodalarc"
@@ -75,6 +76,10 @@ class _CustomObjectsApi:
             },
         }
 
+    def list_namespaced_custom_object(self, **kwargs: Any) -> dict[str, Any]:
+        items = [] if self.created_body is None else [self.get_namespaced_custom_object(**kwargs)]
+        return {"items": items, "metadata": {"resourceVersion": "1"}}
+
     def create_namespaced_custom_object(self, **kwargs: Any) -> dict[str, Any]:
         if self.fail_create:
             raise RuntimeError("create failed")
@@ -90,7 +95,7 @@ class _CoreV1Api:
 
     def list_namespaced_pod(self, *_args: Any, **_kwargs: Any) -> SimpleNamespace:
         self.pod_list_calls += 1
-        return SimpleNamespace(items=[])
+        return SimpleNamespace(items=[], metadata=SimpleNamespace(resource_version="1"))
 
 
 class _UploadStore:
@@ -198,7 +203,10 @@ def _switch(
     upload_resource_observed=None,
     constellation_spec_observed=None,
 ):
-    with patch.object(asyncio.BaseEventLoop, "run_in_executor", _run_in_executor_inline):
+    with (
+        patch.object(asyncio.BaseEventLoop, "run_in_executor", _run_in_executor_inline),
+        patch("vs_api.session_manager.watch_snapshots", replayed_snapshots),
+    ):
         return asyncio.run(
             manager.switch_catalog(
                 deployment,

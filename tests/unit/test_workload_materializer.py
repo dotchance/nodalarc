@@ -146,3 +146,146 @@ def test_release_gate_phase_clause_is_the_shared_rule() -> None:
 
     assert READY_PHASE_JQ_CLAUSE in script
     assert "length > 0" not in script
+
+
+# ---------------------------------------------------------------------------
+# The release gate script, executed
+# ---------------------------------------------------------------------------
+
+
+def _run_gate(tmp_path, *, pod_uid="uid-1", run="run-1", status_file=None):
+    """Start the gate with its status file redirected into tmp_path."""
+    import os
+    import subprocess
+
+    from nodalarc_operator.workloads.materializer import _WIRING_GATE_SCRIPT
+
+    status_file = status_file or tmp_path / "status.json"
+    script = _WIRING_GATE_SCRIPT.replace("/wiring-status/status.json", str(status_file))
+    process = subprocess.Popen(
+        ["bash", "-c", script],
+        env={**os.environ, "NODE_ID": "sat-a", "POD_UID": pod_uid, "SESSION_RUN_ID": run},
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        # Its own process group, so cleanup reaches the backgrounded loop too.
+        # In a container the loop ends with the PID namespace; here it would not.
+        start_new_session=True,
+    )
+    return process, status_file
+
+
+def _kill_gate(process) -> None:
+    import contextlib
+    import os
+    import signal
+
+    with contextlib.suppress(ProcessLookupError):
+        os.killpg(process.pid, signal.SIGKILL)
+    process.wait(timeout=5)
+
+
+def _gate_row(*, pod_uid, run, netns):
+    from nodalarc.substrate.manifest_contract import REQUIRED_WIRING_PHASES
+
+    return {
+        "node_id": "sat-a",
+        "session_id": run,
+        "session_run_id": run,
+        "wiring_generation": "sha256:" + "a" * 64,
+        "pod_uid": pod_uid,
+        "sandbox_id": "sb",
+        "netns_id": netns,
+        "status": "ready",
+        "phases": [{"phase": phase, "status": "ready"} for phase in REQUIRED_WIRING_PHASES],
+        "dirty_kernel": False,
+    }
+
+
+def _own_netns() -> str:
+    import os
+
+    return os.readlink("/proc/self/ns/net").removeprefix("net:[").removesuffix("]")
+
+
+def test_gate_releases_within_a_second_of_matching_proof(tmp_path) -> None:
+    import json
+    import time
+
+    process, status_file = _run_gate(tmp_path)
+    try:
+        # Proof for another pod incarnation never releases the gate.
+        status_file.write_text(
+            json.dumps(_gate_row(pod_uid="uid-other", run="run-1", netns=_own_netns()))
+        )
+        time.sleep(0.6)
+        assert process.poll() is None
+        started = time.monotonic()
+        status_file.write_text(
+            json.dumps(_gate_row(pod_uid="uid-1", run="run-1", netns=_own_netns()))
+        )
+        assert process.wait(timeout=5) == 0
+        assert time.monotonic() - started < 1.0
+    finally:
+        _kill_gate(process)
+    assert "wiring ready for sat-a" in process.stdout.read()
+
+
+def test_gate_releases_on_the_proof_the_node_agent_delivers(monkeypatch, tmp_path) -> None:
+    """The Node Agent's delivery path and the gate's reading path are one file."""
+    import json
+    import time
+
+    from nodalarc.substrate.wiring_status import WIRING_STATUS_FILE, wiring_status_host_path
+    from node_agent.proof_delivery import deliver_proof_file
+
+    volume = tmp_path / wiring_status_host_path(".", "uid-1")
+    volume.mkdir(parents=True)
+    process, _ = _run_gate(tmp_path, status_file=volume / WIRING_STATUS_FILE)
+    try:
+        time.sleep(0.3)
+        assert process.poll() is None
+        started = time.monotonic()
+        deliver_proof_file(
+            str(tmp_path),
+            "uid-1",
+            json.dumps(_gate_row(pod_uid="uid-1", run="run-1", netns=_own_netns())),
+        )
+        assert process.wait(timeout=5) == 0
+        assert time.monotonic() - started < 1.0
+    finally:
+        _kill_gate(process)
+
+
+def test_gate_exits_on_sigterm_without_reading_as_ready(tmp_path) -> None:
+    import signal
+    import time
+
+    process, _status_file = _run_gate(tmp_path)
+    try:
+        time.sleep(0.3)
+        started = time.monotonic()
+        process.send_signal(signal.SIGTERM)
+        assert process.wait(timeout=5) == 143
+        assert time.monotonic() - started < 1.0
+    finally:
+        _kill_gate(process)
+
+
+@pytest.mark.parametrize(
+    ("image", "configured", "expected"),
+    [
+        # A digest names immutable content: a node that holds it need not ask again.
+        ("reg:5000/nodalarc/frr:abc@sha256:" + "a" * 64, "Always", "IfNotPresent"),
+        ("registry.example/nodalarc/frr@sha256:" + "a" * 64, "Always", "IfNotPresent"),
+        # A tag can move: the configured policy stands.
+        ("reg:5000/nodalarc/frr:abc", "Always", "Always"),
+        # Every other configured policy is kept as it is.
+        ("reg:5000/nodalarc/frr:abc@sha256:" + "a" * 64, "Never", "Never"),
+        ("reg:5000/nodalarc/frr:abc", "IfNotPresent", "IfNotPresent"),
+    ],
+)
+def test_pull_policy_follows_the_reference_form(image, configured, expected) -> None:
+    from nodalarc_operator.workloads.materializer import image_pull_policy_for
+
+    assert image_pull_policy_for(image, configured) == expected

@@ -14,7 +14,7 @@ import logging
 import pytest
 from nodalarc.proto import node_agent_pb2
 from node_agent import ops_events
-from node_agent.command_contract import RuntimeFence
+from node_agent.command_contract import RuntimeFence, WriterEpochFloor
 from node_agent.handlers import (
     EntryOutcome,
     _publish_command_event,
@@ -48,6 +48,7 @@ def _handles(pids: dict[str, int]) -> dict:
     for node_id, pid in pids.items():
         wrapped[node_id] = NamespaceHandle(
             node_id=node_id,
+            pod_name=node_id,
             pod_uid=f"pod-{node_id}",
             sandbox_id=f"sb-{node_id}",
             sandbox_attempt=0,
@@ -58,7 +59,11 @@ def _handles(pids: dict[str, int]) -> dict:
     return wrapped
 
 
-FENCE = RuntimeFence(session_id="demo", wiring_generation="sha256:" + "a" * 64)
+FENCE = RuntimeFence(
+    session_id="demo",
+    wiring_generation="sha256:" + "a" * 64,
+    writer_floor=WriterEpochFloor(lambda: None),
+)
 
 
 def _env(kind: str, op: str) -> node_agent_pb2.CommandEnvelope:
@@ -67,6 +72,7 @@ def _env(kind: str, op: str) -> node_agent_pb2.CommandEnvelope:
         session_id=FENCE.session_id,
         wiring_generation=FENCE.wiring_generation,
         operation_kind=kind,
+        writer_epoch=1,
     )
 
 

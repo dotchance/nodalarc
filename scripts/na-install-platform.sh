@@ -161,7 +161,13 @@ bash "$ROOT_DIR/scripts/na-image-preflight.sh"
 HELM_CHART="$(render_chart_if_needed "$HELM_CHART")"
 apply_constellationspec_crd "$HELM_CHART"
 
-mapfile -t image_args < <(bash "$ROOT_DIR/scripts/na-images.sh" helm-image-args)
+# A process substitution's exit status is never checked: the arguments are
+# captured first, so a failed image lookup stops the install.
+if ! image_args_text="$(bash "$ROOT_DIR/scripts/na-images.sh" helm-image-args)"; then
+    echo "[install] ERROR: could not compute the image references" >&2
+    exit 1
+fi
+mapfile -t image_args <<< "$image_args_text"
 
 # Development workload image overrides map the two exact built-in
 # placeholder references to this tree's images, matching the Make-owned

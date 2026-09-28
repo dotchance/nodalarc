@@ -31,6 +31,7 @@ if TYPE_CHECKING:
         ResolvedRoutingDomain,
         ResolvedSession,
     )
+    from nodalarc.workloads.adapter import SessionContext
 
 _MINIMUM_IGP_METRIC = 1
 # IGP metric of an access (ground) link.
@@ -45,20 +46,25 @@ _TE_RESERVABLE_FRACTION = 0.98
 
 
 def build_template_vars_from_resolved(
-    resolved: ResolvedSession,
+    context: SessionContext,
     node: ResolvedNode,
     *,
     domains: tuple[ResolvedRoutingDomain, ...],
     sid_by_domain: Mapping[str, Mapping[str, int]],
 ) -> dict[str, Any]:
-    """Build one router's FRR template inputs from the resolved runtime view."""
+    """Build one router's FRR template inputs from the resolved runtime view.
+
+    Whole-session maps come from ``context``, derived once for every node of
+    the preparation.
+    """
+    resolved = context.resolved
     if node.interfaces is None:
         raise AdapterRenderRefusal(f"resolved node {node.node_id!r} has no interface addresses")
-    interfaces_by_domain = resolved.domain_interfaces(node.node_id)
+    interfaces_by_domain = context.domain_interfaces(node.node_id)
     areas_by_domain = {
-        areas.domain_id: areas for areas in resolved.instance_areas_by_node().get(node.node_id, ())
+        areas.domain_id: areas for areas in context.instance_areas_by_node.get(node.node_id, ())
     }
-    links = _wan_links(resolved, node)
+    links = _wan_links(context, node)
     segments = _segment_facts(node)
     te_interfaces = {
         name
@@ -288,7 +294,7 @@ def _te_link_params(node: ResolvedNode, interface: str) -> dict[str, str]:
     }
 
 
-def _wan_links(resolved: ResolvedSession, node: ResolvedNode) -> dict[str, dict[str, Any]]:
+def _wan_links(context: SessionContext, node: ResolvedNode) -> dict[str, dict[str, Any]]:
     """Every WAN interface the node's FRR configuration names, once each.
 
     Fixed links come from the node's non-access link candidates, in candidate
@@ -297,9 +303,12 @@ def _wan_links(resolved: ResolvedSession, node: ResolvedNode) -> dict[str, dict[
     fixed peer. ``reaches_ipv6`` marks an interface some possible peer of
     which carries IPv6.
     """
+    resolved = context.resolved
     static_rules = _static_boundary_rule_ids(resolved)
-    carries_ipv6 = {other.node_id for other in resolved.nodes if "ipv6" in other.address_families}
-    peers = resolved.wan_interface_peers()
+    carries_ipv6 = {
+        other.node_id for other in context.nodes_by_id.values() if "ipv6" in other.address_families
+    }
+    peers = context.wan_interface_peers
     links: dict[str, dict[str, Any]] = {}
     for candidate in resolved.link_candidates:
         if candidate.kind == "access" or node.node_id not in (candidate.node_a, candidate.node_b):
@@ -307,7 +316,7 @@ def _wan_links(resolved: ResolvedSession, node: ResolvedNode) -> dict[str, dict[
         side = 0 if candidate.node_a == node.node_id else 1
         name = candidate.fixed_interfaces[side]
         peer_id = candidate.node_b if side == 0 else candidate.node_a
-        peer = resolved.node_by_id(peer_id)
+        peer = context.nodes_by_id.get(peer_id)
         if peer is None or peer.interfaces is None:
             raise AdapterRenderRefusal(
                 f"link candidate {candidate.rule_id!r} references unresolved peer {peer_id!r}"

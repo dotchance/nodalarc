@@ -10,8 +10,14 @@
   image: {{ required "images.natsBox is required" .Values.images.natsBox | quote }}
   imagePullPolicy: {{ .Values.imagePullPolicy }}
   command: ["sh", "-c"]
+  # The shell is the container's PID 1, which the kernel does not signal
+  # unless it handles the signal: the wait runs as its child, and SIGTERM
+  # ends the container at once. A new pod's first connections can be refused
+  # until the network policy admits its address, so the check repeats often.
   args:
     - |
+      trap 'exit 143' TERM
+      {
       echo "Waiting for NATS streams..."
       NATS_URL={{ include "nodalarc.nats-url" (dict "Values" .Values "user" "admin" "hostNetwork" $hostNetwork) | quote }}
       STREAMS="{{ range $messaging.streams }}{{ .name }} {{ end }}"
@@ -21,7 +27,9 @@
           echo "FATAL: NATS streams not found after 30s. Aborting."
           exit 1
         fi
-        sleep 2
+        sleep 0.25
       done
       echo "NATS streams ready."
+      } &
+      wait $!
 {{- end }}

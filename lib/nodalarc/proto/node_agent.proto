@@ -14,6 +14,11 @@ message CommandEnvelope {
   string session_id = 2;
   string wiring_generation = 3;
   string operation_kind = 4;
+  // The sending Scheduler's writer epoch: the transition count of the
+  // session writer lease it holds. A Node Agent refuses a command whose
+  // epoch is below the highest it has accepted for the same session and
+  // wiring generation. Zero is not an epoch.
+  uint64 writer_epoch = 5;
 }
 
 enum NodeAgentErrorCode {
@@ -36,6 +41,7 @@ enum NodeAgentErrorCode {
   NODE_AGENT_UNAUTHORIZED = 16;
   NODE_AGENT_DEPENDENCY_MISSING = 17;
   NODE_AGENT_MANIFEST_INVALID = 18;
+  NODE_AGENT_STALE_WRITER = 19;
 }
 
 enum LinkType {

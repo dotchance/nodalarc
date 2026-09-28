@@ -78,13 +78,20 @@ sudo modprobe mpls_router mpls_iptunnel
 
 Check the typed wiring gate and Node Agent evidence:
 ```bash
-sudo KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl get configmap nodalarc-wiring-status -n nodalarc -o yaml
+sudo KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl get pods -n nodalarc -l nodalarc.io/node-id \
+  -o custom-columns='POD:.metadata.name,PROOF:.metadata.annotations.nodalarc\.io/wiring-status'
 sudo KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl exec -n nodalarc -l app=nodalarc-node-agent -- \
   tail -100 /var/lib/nodalarc/node-agent/ops-events.jsonl
 ```
 
 Any failed phase or `dirty_kernel=true` is authoritative. Fix the reported
 kernel or manifest problem before expecting the Scheduler gate to open.
+
+A pod held in `Init` whose annotation already reports ready did not receive
+the proof file. Its `wiring-gate` log names the pod UID, run and network
+namespace it waits for. The file is
+`/var/lib/kubelet/pods/<pod uid>/volumes/kubernetes.io~empty-dir/wiring-status/status.json`
+on the pod's host, and it must hold the same text as the annotation.
 
 ## No Routing Adjacencies
 

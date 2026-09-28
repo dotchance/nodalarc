@@ -66,6 +66,7 @@ def _agent_result(
         in {ActuationFailureClass.GROUND_KERNEL_DIRTY, ActuationFailureClass.GROUND_UNKNOWN},
         unknown_outcome=failure == ActuationFailureClass.GROUND_UNKNOWN,
         fence_failure=failure == ActuationFailureClass.FENCE,
+        writer_fenced=False,
         details={"agent_addr": "agent-a", "failure_class": failure.value},
     )
 
@@ -240,6 +241,7 @@ def test_build_actuation_result_promotes_any_isl_failure_to_halt_class() -> None
         dirty_kernel=False,
         unknown_outcome=False,
         fence_failure=False,
+        writer_fenced=False,
         details={},
     )
 

@@ -21,7 +21,7 @@ from node_agent import (
     substrate_monitor,
     vxlan,
 )
-from node_agent.command_contract import RuntimeFence
+from node_agent.command_contract import RuntimeFence, WriterEpochFloor
 from node_agent.handlers import (
     handle_batch_link_down,
     handle_batch_link_up,
@@ -34,7 +34,11 @@ from node_agent.pid_discovery import NamespaceHandle
 pytestmark = pytest.mark.usefixtures("_node_agent_ops_spool_path")
 
 
-FENCE = RuntimeFence(session_id="demo", wiring_generation="sha256:" + "a" * 64)
+FENCE = RuntimeFence(
+    session_id="demo",
+    wiring_generation="sha256:" + "a" * 64,
+    writer_floor=WriterEpochFloor(lambda: None),
+)
 SAT = "sat-P00S00"
 GS = "gs-den"
 
@@ -50,6 +54,7 @@ def _env(kind: str, op: str) -> node_agent_pb2.CommandEnvelope:
         session_id=FENCE.session_id,
         wiring_generation=FENCE.wiring_generation,
         operation_kind=kind,
+        writer_epoch=1,
     )
 
 
@@ -57,6 +62,7 @@ def _handles(pids: dict[str, int], *, mpls: frozenset[str] = frozenset()) -> dic
     return {
         node_id: NamespaceHandle(
             node_id=node_id,
+            pod_name=node_id,
             pod_uid=f"pod-{node_id}",
             sandbox_id=f"sb-{node_id}",
             sandbox_attempt=0,

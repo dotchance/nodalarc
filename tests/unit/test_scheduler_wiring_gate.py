@@ -21,7 +21,12 @@ from nodalarc.substrate.measurement_contract import (
     SubstrateStatusDocument,
     status_document_configmap_data,
 )
-from nodalarc.substrate.wiring_status import NodeWiringStatus, WiringPhaseResult
+from nodalarc.substrate.wiring_status import (
+    WIRING_STATUS_ANNOTATION,
+    NodeWiringStatus,
+    WiringPhaseResult,
+)
+from nodalarc.workload_target import NODE_ID_LABEL
 from scheduler.__main__ import (
     wait_for_substrate_gate,
     wait_for_wiring_gate,
@@ -64,20 +69,29 @@ def _ready_node(node_id: str) -> str:
 
 
 class _K8s:
+    """Session pods of one run, each carrying its wiring proof as an annotation."""
+
     def __init__(
         self, wired: set[str] | None = None, statuses: dict[str, str] | None = None
     ) -> None:
-        self.data = {
-            "_session_id": SESSION_ID,
-            "_wiring_generation": WIRING_GENERATION,
-        }
-        self.data.update({node: _ready_node(node) for node in wired or set()})
-        self.data.update(statuses or {})
+        self.proofs = {node: _ready_node(node) for node in wired or set()}
+        self.proofs.update(statuses or {})
         self.reads: list[tuple[str, str]] = []
 
-    def read_namespaced_config_map(self, name: str, namespace: str):
-        self.reads.append((name, namespace))
-        return SimpleNamespace(data=self.data)
+    def list_namespaced_pod(self, namespace: str, *, label_selector: str):
+        self.reads.append((namespace, label_selector))
+        return SimpleNamespace(
+            items=[
+                SimpleNamespace(
+                    metadata=SimpleNamespace(
+                        name=node,
+                        labels={NODE_ID_LABEL: node},
+                        annotations={WIRING_STATUS_ANNOTATION: proof},
+                    )
+                )
+                for node, proof in self.proofs.items()
+            ]
+        )
 
 
 class _Clock:
@@ -203,7 +217,10 @@ def test_wiring_gate_passes_when_all_expected_nodes_are_wired() -> None:
     )
 
     assert result is None
-    assert k8s.reads == [("nodalarc-wiring-status", "nodalarc")]
+    # One listing of exactly this run's pods, fenced by run and owner.
+    assert k8s.reads == [
+        ("nodalarc", "nodalarc.io/session-run-id=run-gate-0001,nodalarc.io/owner-uid=owner-uid-1")
+    ]
 
 
 def test_wiring_gate_fails_closed_on_timeout() -> None:

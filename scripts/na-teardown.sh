@@ -197,27 +197,16 @@ if kubectl get constellationspec -n "$NAMESPACE" --no-headers 2>/dev/null | grep
         --ignore-not-found --timeout=30s 2>/dev/null || true
 fi
 
-# Step 2: Wait for session pods to terminate. Force-delete stuck pods
-# (ImagePullBackOff, CrashLoopBackOff, Unknown) after timeout.
-echo "[2/8] Waiting for session pods to terminate..."
-TIMEOUT=60
-ELAPSED=0
-while true; do
-    SESSION_PODS=$(kubectl get pods -n "$NAMESPACE" \
-        -l nodalarc.io/node-id \
-        --no-headers 2>/dev/null | grep -v Terminating || true)
-    if [ -z "$SESSION_PODS" ]; then
-        break
-    fi
-    sleep 5; ELAPSED=$((ELAPSED+5))
-    if [ "$ELAPSED" -ge "$TIMEOUT" ]; then
-        echo "  Session pods still present after ${TIMEOUT}s — force deleting..."
-        kubectl delete pods -n "$NAMESPACE" -l nodalarc.io/node-id \
-            --force --grace-period=0 2>/dev/null || true
-        sleep 5
-        break
-    fi
-done
+# Step 2: Delete every session pod in one server-side request. Each pod stops
+# on its own SIGTERM; the namespace deletion in step 6 waits for all of them.
+echo "[2/8] Deleting session pods..."
+if ! kubectl delete --raw "/api/v1/namespaces/$NAMESPACE/pods?labelSelector=nodalarc.io%2Fnode-id" \
+        >/dev/null 2>"$TEARDOWN_TMP/session-pods-delete.err"; then
+    echo "  ERROR: the session pod deletion request failed:" >&2
+    sed 's/^/    /' "$TEARDOWN_TMP/session-pods-delete.err" >&2
+    echo "Teardown incomplete. Fix the above before deploying." >&2
+    exit 1
+fi
 
 # Step 3: Clean host-side kernel state on EVERY host that carries the Node
 # Agent placement label, through the Node Agent's own cleaner, and judge each
@@ -244,6 +233,7 @@ if ! AGENT_PODS="$(kubectl get pods -n "$NAMESPACE" -l app=nodalarc-node-agent \
     echo "  ERROR: could not list the Node Agent pods" >&2
     AGENT_PODS=""
 fi
+CLEANED_HOSTS=""
 for HOST in $REQUIRED_HOSTS; do
     # A node name is a DNS name; anything else never reaches a file name or an exec.
     case "$HOST" in
@@ -260,12 +250,22 @@ for HOST in $REQUIRED_HOSTS; do
         continue
     fi
     echo "  Cleaning $HOST via $POD_NAME..."
-    EXEC_ERR="$TEARDOWN_TMP/cleaner-$HOST.err"
-    RC=0
-    OUT="$(kubectl exec "$POD_NAME" -n "$NAMESPACE" -c node-agent -- \
-        python -m node_agent.reconcile --clean 2>"$EXEC_ERR")" || RC=$?
-    if ! judge_cleanup_report "$HOST" "$RC" <<< "$OUT"; then
-        sed 's/^/    /' "$EXEC_ERR" >&2
+    # Every host's cleaner runs at the same time; each is judged below by its
+    # own report and exit status.
+    (
+        rc=0
+        kubectl exec "$POD_NAME" -n "$NAMESPACE" -c node-agent -- \
+            python -m node_agent.reconcile --clean \
+            >"$TEARDOWN_TMP/cleaner-$HOST.out" 2>"$TEARDOWN_TMP/cleaner-$HOST.err" || rc=$?
+        echo "$rc" >"$TEARDOWN_TMP/cleaner-$HOST.rc"
+    ) &
+    CLEANED_HOSTS="$CLEANED_HOSTS $HOST"
+done
+wait
+for HOST in $CLEANED_HOSTS; do
+    RC="$(cat "$TEARDOWN_TMP/cleaner-$HOST.rc" 2>/dev/null || echo "no-status")"
+    if ! judge_cleanup_report "$HOST" "$RC" <"$TEARDOWN_TMP/cleaner-$HOST.out"; then
+        sed 's/^/    /' "$TEARDOWN_TMP/cleaner-$HOST.err" >&2
         UNVERIFIED_HOSTS="$UNVERIFIED_HOSTS $HOST"
     fi
 done
@@ -291,21 +291,32 @@ helm uninstall "$HELM_RELEASE_NAME" -n "$NAMESPACE" \
     --ignore-not-found --timeout=120s 2>/dev/null || true
 
 # Step 5: Wait for DaemonSet pod to actually terminate
-echo "[5/8] Waiting for Node Agent DaemonSet pod to terminate..."
-kubectl wait pod -n "$NAMESPACE" \
-    -l app=nodalarc-node-agent \
-    --for=delete --timeout=60s 2>/dev/null || true
+# The namespace controller re-examines a namespace that still holds
+# terminating pods only after their remaining grace period, so the namespace
+# is deleted once its pods are gone. A pod still present after the wait is
+# named here; step 6 then reports whatever keeps the namespace.
+echo "[5/8] Waiting for every pod in $NAMESPACE to terminate..."
+if ! kubectl wait pod --all -n "$NAMESPACE" --for=delete --timeout=90s >/dev/null 2>&1; then
+    remaining_pods="$(kubectl get pods -n "$NAMESPACE" --no-headers -o name 2>/dev/null || true)"
+    if [ -n "$remaining_pods" ]; then
+        echo "  Pods still present after 90s:"
+        echo "$remaining_pods" | sed 's/^/    /'
+    fi
+fi
 
-# Step 6: Delete namespace — strip finalizers if stuck
+# Step 6: Delete the namespace and wait until it is gone. A namespace that does
+# not finish is reported with what it still holds; its finalizers are never
+# stripped (that leaves objects behind that reappear in the next namespace).
 echo "[6/8] Deleting namespace..."
-kubectl delete namespace "$NAMESPACE" --timeout=30s 2>/dev/null || true
-# If still stuck (Terminating), force-remove finalizers
-if kubectl get namespace "$NAMESPACE" 2>/dev/null | grep -q Terminating; then
-    echo "  Namespace stuck in Terminating — removing finalizers..."
-    kubectl get namespace "$NAMESPACE" -o json 2>/dev/null | \
-        python3 -c "import sys,json; ns=json.load(sys.stdin); ns['spec']['finalizers']=[]; print(json.dumps(ns))" | \
-        kubectl replace --raw "/api/v1/namespaces/$NAMESPACE/finalize" -f - 2>/dev/null || true
-    sleep 3
+kubectl delete namespace "$NAMESPACE" --wait=false >/dev/null 2>&1 || true
+if ! kubectl wait --for=delete "namespace/$NAMESPACE" --timeout=180s >/dev/null 2>&1; then
+    echo "ERROR: namespace $NAMESPACE was not removed within 180s. It still holds:" >&2
+    kubectl get namespace "$NAMESPACE" -o jsonpath='{range .status.conditions[*]}    {.type}: {.message}{"\n"}{end}' >&2 2>/dev/null || true
+    kubectl api-resources --verbs=list --namespaced -o name 2>/dev/null \
+        | xargs -r -n1 kubectl get -n "$NAMESPACE" --ignore-not-found --no-headers -o name 2>/dev/null \
+        | sed 's/^/    /' >&2 || true
+    echo "Teardown incomplete. Fix the above before deploying." >&2
+    exit 1
 fi
 
 # Step 7: Delete cluster-scoped resources

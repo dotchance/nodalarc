@@ -134,6 +134,7 @@ def _handles(*, mpls: bool = True, site_lan: bool = False) -> dict[str, Namespac
     return {
         node_id: NamespaceHandle(
             node_id=node_id,
+            pod_name=node_id,
             pod_uid=f"pod-{node_id}",
             sandbox_id=f"sb-{node_id}",
             sandbox_attempt=0,

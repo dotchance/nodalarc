@@ -45,7 +45,8 @@ from nodalarc.substrate.manifest_contract import (
 from nodalarc.substrate.wiring_status import wiring_row
 
 from node_agent import ops_events
-from node_agent.command_contract import RuntimeFence
+from node_agent.command_contract import RuntimeFence, WriterEpochFloor
+from node_agent.proof_delivery import kubelet_pods_dir
 from node_agent.reconcile import (
     clean_and_verify_host_state,
     get_actual_nodalarc_interfaces,
@@ -58,8 +59,15 @@ from node_agent.wiring import (
     expected_local_nodes,
     write_wiring_status,
 )
+from node_agent.writer_lease_view import WriterLeaseView
 
 log = logging.getLogger(__name__)
+
+# How long the wiring watcher waits for a manifest change before it re-verifies
+# the namespace handles of the manifest it serves.
+_STEADY_STATE_CHECK_S = 5.0
+# How long the first LIST of the Scheduler writer Lease may take at startup.
+_WRITER_LEASE_FIRST_LIST_S = 60.0
 
 
 def _running_in_k8s() -> bool:
@@ -89,6 +97,41 @@ def _require_host_ip_for_vxlan_capable_startup() -> None:
             session_id="",
         )
         raise RuntimeError(f"HOST_IP env var is not a valid IP address: {host_ip!r}") from exc
+
+
+def _require_kubelet_pods_dir() -> None:
+    """Validate the kubelet pods directory proof delivery writes into, before any work."""
+    if not _running_in_k8s():
+        return
+    try:
+        kubelet_pods_dir()
+    except RuntimeError as exc:
+        ops_events.spool_failure(
+            code="STARTUP_KUBELET_PODS_DIR_INVALID",
+            message=str(exc),
+            details={"node_name": os.environ.get("NODE_NAME", "")},
+            session_id="",
+        )
+        raise
+
+
+def _require_writer_lease_observed(view: WriterLeaseView) -> None:
+    if view.wait_listed(0):
+        return
+    ops_events.publish(
+        level="critical",
+        code="STARTUP_WRITER_LEASE_UNOBSERVED",
+        message=(
+            f"Node Agent could not list the Scheduler writer Lease within "
+            f"{_WRITER_LEASE_FIRST_LIST_S:.0f} s; refusing NATS command subscription"
+        ),
+        session_id="",
+        details={},
+    )
+    raise RuntimeError(
+        "Scheduler writer Lease unobserved; the writer epoch floor is unknown, "
+        "refusing NATS command subscription"
+    )
 
 
 def _require_ready_fence(fence: RuntimeFence) -> None:
@@ -139,6 +182,7 @@ async def main() -> None:
         raise
 
     _require_host_ip_for_vxlan_capable_startup()
+    _require_kubelet_pods_dir()
 
     log.info(
         "Node Agent starting [build=%s, node=%s]",
@@ -186,7 +230,14 @@ async def main() -> None:
 
     shared_handles: dict[str, NamespaceHandle] = {}
     dispatch_gate = DispatchGate()
-    current_fence = RuntimeFence(session_id="", wiring_generation="")
+    # The Scheduler writer epoch floor lives as long as this process; every
+    # fence built below shares it. It reads the writer Lease, which the wiring
+    # watcher observes before the first wiring, so before any command is served.
+    from nodalarc.platform_config import get_platform_config
+
+    writer_lease_view = WriterLeaseView(get_platform_config().kubernetes_namespace)
+    writer_floor = WriterEpochFloor(writer_lease_view.current)
+    current_fence = RuntimeFence(session_id="", wiring_generation="", writer_floor=writer_floor)
     first_wiring_done = asyncio.Event()
     stop = threading.Event()
 
@@ -198,6 +249,7 @@ async def main() -> None:
         nonlocal current_fence
 
         from node_agent import substrate_monitor as _substrate_monitor
+        from node_agent.manifest_watch import ManifestWatch
 
         try:
             import kubernetes.client
@@ -213,167 +265,203 @@ async def main() -> None:
 
         ns = get_platform_config().kubernetes_namespace
         v1 = kubernetes.client.CoreV1Api()
+        manifest_watch = ManifestWatch(v1, ns, WIRING_MANIFEST_CONFIGMAP)
+        manifest_watch.start()
+        writer_lease_view.start(kubernetes.client.CoordinationV1Api())
+        if not writer_lease_view.wait_listed(_WRITER_LEASE_FIRST_LIST_S):
+            # No command may be admitted without the writer epoch floor: wake
+            # main, which refuses to subscribe (_require_writer_lease_observed).
+            manifest_watch.stop()
+            loop.call_soon_threadsafe(first_wiring_done.set)
+            return
         last_resource_version = ""
+        # The observation the loop last acted on; waits resume from it.
+        seen_version = 0
 
-        while not stop.is_set():
-            try:
-                cm = v1.read_namespaced_config_map(WIRING_MANIFEST_CONFIGMAP, ns)
-                rv = cm.metadata.resource_version or ""
+        def _wait(version: int) -> None:
+            # Wake on the next manifest change, or after the steady-state
+            # interval so the namespace handles are re-verified.
+            manifest_watch.wait_for_change(version, _STEADY_STATE_CHECK_S)
 
-                if rv == last_resource_version:
-                    # Steady state: verify the shared handles still name the
-                    # namespaces they were created for. A sandbox recreation
-                    # invalidates a handle even though the pod persists; the
-                    # kernel wiring died with the old namespace, so force a
-                    # rewire of the current manifest.
-                    stale = [
-                        node_id
-                        for node_id, handle in shared_handles.items()
-                        if not _verify_handle(handle)
-                    ]
-                    if stale:
-                        log.warning(
-                            "Namespace handles invalidated for %s — rewiring current manifest",
-                            ", ".join(sorted(stale)),
-                        )
-                        last_resource_version = ""
+        try:
+            while not stop.is_set():
+                state = manifest_watch.current(timeout=_STEADY_STATE_CHECK_S)
+                if state is None:
+                    continue
+                seen_version = state.version
+                try:
+                    if not state.present:
+                        if last_resource_version:
+                            log.info("Wiring manifest removed — cleaning kernel state")
+                            report = clean_and_verify_host_state()
+                            if report.clean:
+                                log.info(
+                                    "Host cleanup verified clean: removed=%s", list(report.removed)
+                                )
+                                last_resource_version = ""
+                            else:
+                                # Not handled: the next pass of this path tries again.
+                                log.error(
+                                    "Host cleanup did not verify clean; retrying on the next pass: %s",
+                                    report.model_dump_json(),
+                                )
+                        _wait(seen_version)
                         continue
-                    stop.wait(5)
-                    continue
 
-                # New manifest detected. Handles are NOT withdrawn here:
-                # the transition is owned solely by perform_rewire (or the
-                # no-local/Case B terminal states below), and the fence flip
-                # below already rejects any request from the previous
-                # generation.
-                # The manifest model refuses an empty session_id or
-                # wiring_generation; both scope NATS subjects and fence commands.
-                manifest_model = decode_wiring_manifest(cm.data)
-                nodes = manifest_model.nodes
-                manifest_session_id = manifest_model.session_id
-                wiring_generation = manifest_model.wiring_generation
-                from nodalarc.nats_channels import sanitize_session_id
+                    cm = state.config_map
+                    rv = state.resource_version
 
-                monitor_session_id = sanitize_session_id(manifest_session_id)
-                _substrate_monitor.set_identity(monitor_session_id, wiring_generation)
-                current_fence = RuntimeFence(
-                    session_id=monitor_session_id,
-                    wiring_generation=wiring_generation,
-                )
-                log.info(
-                    "Node Agent session_id=%s generation=%s (from wiring manifest)",
-                    monitor_session_id,
-                    wiring_generation,
-                )
-
-                if not nodes:
-                    last_resource_version = rv
-                    stop.wait(5)
-                    continue
-
-                _substrate_monitor.configure_required_measurements(
-                    v1=v1,
-                    namespace=ns,
-                    hostname=hostname,
-                    manifest=manifest_model,
-                )
-
-                # Case B: wiring-status exists and covers all manifest nodes.
-                # Host firewall state drifts independently of interface state
-                # (a Docker (re)start re-imposes FORWARD DROP), so verification
-                # also re-pins site-LAN transit rules; a pin failure means the
-                # host may police LAN transit, which is NOT a verified state —
-                # fall through to the rewire path so the failure lands in
-                # wiring status instead of a clean no-op.
-                transit_verified = True
-                if manifest_model.site_lans:
-                    from node_agent.site_lan import ensure_site_lan_transit
-
-                    try:
-                        ensure_site_lan_transit()
-                    except Exception:
-                        log.exception(
-                            "Site LAN transit rules could not be pinned during "
-                            "verification — treating wiring as diverged"
-                        )
-                        transit_verified = False
-                # One validated handle set drives everything below. The
-                # expected-local set comes from the manifest, and discovery
-                # must COMPLETE before any conclusion is drawn or any kernel
-                # state is touched: an incomplete result (including any
-                # transient Kubernetes or CRI failure) leaves the existing
-                # data plane untouched and retries.
-                expected_local = expected_local_nodes(manifest_model)
-                if not expected_local:
-                    log.info("Manifest places no pods on this node — nothing to wire")
-                    if not replace_handles_when_idle(dispatch_gate, shared_handles, {}):
-                        stop.wait(5)
-                        continue
-                    loop.call_soon_threadsafe(first_wiring_done.set)
-                    last_resource_version = rv
-                    stop.wait(5)
-                    continue
-
-                handles = discover_expected_handles(manifest_model, ns, expected_local)
-                if handles is None:
-                    log.warning(
-                        "Wiring pending: incomplete handle discovery — existing "
-                        "kernel state left untouched; retrying the current manifest"
-                    )
-                    stop.wait(5)
-                    continue
-
-                # Case B: every local row names the exact live incarnation
-                # and every manifest node is ready — a true no-op.
-                if transit_verified and wiring_status_is_current(v1, ns, manifest_model, handles):
-                    log.info(
-                        "Wiring verified — status matches manifest (%d nodes), no-op",
-                        len(nodes),
-                    )
-                    if not replace_handles_when_idle(dispatch_gate, shared_handles, handles):
-                        stop.wait(5)
-                        continue
-                    loop.call_soon_threadsafe(first_wiring_done.set)
-                    last_resource_version = rv
-                    stop.wait(5)
-                    continue
-
-                rewired = perform_rewire(
-                    manifest_model,
-                    ns,
-                    handles,
-                    expected_local,
-                    shared_handles,
-                    dispatch_gate,
-                    progress_fn=_publish_progress,
-                )
-                if rewired is None:
-                    # Drain timed out: nothing was mutated and dispatch was
-                    # restored. Retry the same manifest.
-                    stop.wait(5)
-                    continue
-                loop.call_soon_threadsafe(first_wiring_done.set)
-                last_resource_version = rv
-
-            except Exception as exc:
-                if hasattr(exc, "status") and exc.status == 404:
-                    if last_resource_version:
-                        log.info("Wiring manifest removed — cleaning kernel state")
-                        report = clean_and_verify_host_state()
-                        if report.clean:
-                            log.info(
-                                "Host cleanup verified clean: removed=%s", list(report.removed)
+                    if rv == last_resource_version:
+                        # Steady state: verify the shared handles still name the
+                        # namespaces they were created for. A sandbox recreation
+                        # invalidates a handle even though the pod persists; the
+                        # kernel wiring died with the old namespace, so force a
+                        # rewire of the current manifest.
+                        stale = [
+                            node_id
+                            for node_id, handle in shared_handles.items()
+                            if not _verify_handle(handle)
+                        ]
+                        if stale:
+                            log.warning(
+                                "Namespace handles invalidated for %s — rewiring current manifest",
+                                ", ".join(sorted(stale)),
                             )
                             last_resource_version = ""
-                        else:
-                            # Not handled: the next pass of this path tries again.
-                            log.error(
-                                "Host cleanup did not verify clean; retrying on the next pass: %s",
-                                report.model_dump_json(),
+                            continue
+                        _wait(seen_version)
+                        continue
+
+                    # New manifest detected. Handles are NOT withdrawn here:
+                    # the transition is owned solely by perform_rewire (or the
+                    # no-local/Case B terminal states below), and the fence flip
+                    # below already rejects any request from the previous
+                    # generation.
+                    # The manifest model refuses an empty session_id or
+                    # wiring_generation; both scope NATS subjects and fence commands.
+                    manifest_model = decode_wiring_manifest(cm.data)
+                    nodes = manifest_model.nodes
+                    manifest_session_id = manifest_model.session_id
+                    wiring_generation = manifest_model.wiring_generation
+                    from nodalarc.nats_channels import sanitize_session_id
+
+                    monitor_session_id = sanitize_session_id(manifest_session_id)
+                    _substrate_monitor.set_identity(monitor_session_id, wiring_generation)
+                    current_fence = RuntimeFence(
+                        session_id=monitor_session_id,
+                        wiring_generation=wiring_generation,
+                        writer_floor=writer_floor,
+                    )
+                    log.info(
+                        "Node Agent session_id=%s generation=%s (from wiring manifest)",
+                        monitor_session_id,
+                        wiring_generation,
+                    )
+
+                    if not nodes:
+                        last_resource_version = rv
+                        _wait(seen_version)
+                        continue
+
+                    _substrate_monitor.configure_required_measurements(
+                        v1=v1,
+                        namespace=ns,
+                        hostname=hostname,
+                        manifest=manifest_model,
+                    )
+
+                    # Case B: every local pod carries current proof. Host firewall
+                    # state drifts independently of interface state (a Docker
+                    # (re)start re-imposes FORWARD DROP), so verification also
+                    # re-pins site-LAN transit rules; a pin failure means the
+                    # host may police LAN transit, which is NOT a verified state —
+                    # fall through to the rewire path so the failure lands in
+                    # the wiring proof instead of a clean no-op.
+                    transit_verified = True
+                    if manifest_model.site_lans:
+                        from node_agent.site_lan import ensure_site_lan_transit
+
+                        try:
+                            ensure_site_lan_transit()
+                        except Exception:
+                            log.exception(
+                                "Site LAN transit rules could not be pinned during "
+                                "verification — treating wiring as diverged"
                             )
-                else:
+                            transit_verified = False
+                    # One validated handle set drives everything below. The
+                    # expected-local set comes from the manifest, and discovery
+                    # must COMPLETE before any conclusion is drawn or any kernel
+                    # state is touched: an incomplete result (including any
+                    # transient Kubernetes or CRI failure, or a manifest that
+                    # changed underneath it) leaves the existing data plane
+                    # untouched and returns to the manifest.
+                    expected_local = expected_local_nodes(manifest_model)
+                    if not expected_local:
+                        log.info("Manifest places no pods on this node — nothing to wire")
+                        if not replace_handles_when_idle(dispatch_gate, shared_handles, {}):
+                            _wait(seen_version)
+                            continue
+                        loop.call_soon_threadsafe(first_wiring_done.set)
+                        last_resource_version = rv
+                        _wait(seen_version)
+                        continue
+
+                    handles = discover_expected_handles(
+                        manifest_model,
+                        ns,
+                        expected_local,
+                        superseded=lambda version=seen_version: manifest_watch.changed_since(
+                            version
+                        ),
+                    )
+                    if handles is None:
+                        log.warning(
+                            "Wiring pending: incomplete handle discovery — existing "
+                            "kernel state left untouched; returning to the current manifest"
+                        )
+                        continue
+
+                    # Case B: every local row names the exact live incarnation
+                    # and every manifest node is ready — a true no-op.
+                    if transit_verified and wiring_status_is_current(
+                        v1, ns, manifest_model, handles
+                    ):
+                        log.info(
+                            "Wiring verified — every local pod carries current proof "
+                            "(%d local nodes), no-op",
+                            len(handles),
+                        )
+                        if not replace_handles_when_idle(dispatch_gate, shared_handles, handles):
+                            _wait(seen_version)
+                            continue
+                        loop.call_soon_threadsafe(first_wiring_done.set)
+                        last_resource_version = rv
+                        _wait(seen_version)
+                        continue
+
+                    rewired = perform_rewire(
+                        manifest_model,
+                        ns,
+                        handles,
+                        expected_local,
+                        shared_handles,
+                        dispatch_gate,
+                        progress_fn=_publish_progress,
+                    )
+                    if rewired is None:
+                        # Drain timed out: nothing was mutated and dispatch was
+                        # restored. Retry the same manifest.
+                        _wait(seen_version)
+                        continue
+                    loop.call_soon_threadsafe(first_wiring_done.set)
+                    last_resource_version = rv
+
+                except Exception as exc:
                     log.warning("Wiring watcher error: %s", exc)
-            stop.wait(5)
+                    _wait(seen_version)
+        finally:
+            manifest_watch.stop()
 
     # Start wiring watcher in thread pool.
     wiring_task = loop.run_in_executor(None, _wiring_watcher)
@@ -384,6 +472,7 @@ async def main() -> None:
         log.debug("Waiting for wiring to complete before accepting NATS requests...")
         await first_wiring_done.wait()
         log.debug("Wiring ready — %d namespace handles", len(shared_handles))
+        _require_writer_lease_observed(writer_lease_view)
         _require_ready_fence(current_fence)
 
         # NATS subscribes only after the handles and runtime fence are ready.
@@ -498,7 +587,7 @@ def perform_rewire(
                 )
                 for node_id in expected_local
             },
-            manifest_model,
+            handles,
             namespace=namespace,
         )
         shared_handles.clear()
@@ -511,23 +600,26 @@ def perform_rewire(
                 "Kernel state diverged (%d interfaces) — cleaning and re-wiring",
                 len(actual),
             )
-            report = clean_and_verify_host_state()
-            if not report.clean:
-                # Wiring from scratch over residue, a failed delete or an
-                # unverified host is refused; the failure path below keeps
-                # dispatch closed and the watcher retries the manifest.
-                log.error(
-                    "Host cleanup did not verify clean; not wiring over residue: %s",
-                    report.model_dump_json(),
-                )
-                raise RuntimeError(
-                    "host cleanup did not verify clean; not wiring over residue: "
-                    f"failed={list(report.failed)} remaining={list(report.remaining)} "
-                    f"verification_completed={report.verification_completed} "
-                    f"enumeration_error={report.enumeration_error!r} "
-                    f"verification_error={report.verification_error!r}"
-                )
-            log.info("Cleaned %d stale kernel interfaces", len(report.removed))
+        # The one host clean of this rewire, in both cases: the cleaner also
+        # removes members of the managed device group whose names the inventory
+        # above does not recognize.
+        report = clean_and_verify_host_state()
+        if not report.clean:
+            # Wiring from scratch over residue, a failed delete or an
+            # unverified host is refused; the failure path below keeps
+            # dispatch closed and the watcher retries the manifest.
+            log.error(
+                "Host cleanup did not verify clean; not wiring over residue: %s",
+                report.model_dump_json(),
+            )
+            raise RuntimeError(
+                "host cleanup did not verify clean; not wiring over residue: "
+                f"failed={list(report.failed)} remaining={list(report.remaining)} "
+                f"verification_completed={report.verification_completed} "
+                f"enumeration_error={report.enumeration_error!r} "
+                f"verification_error={report.verification_error!r}"
+            )
+        log.info("Cleaned %d stale kernel interfaces", len(report.removed))
 
         statuses = execute_wiring(
             manifest_model, namespace=namespace, handles=handles, progress_fn=progress_fn
@@ -538,14 +630,14 @@ def perform_rewire(
         log.info("Wiring complete: %d ready, %d failed", ready_count, failed_count)
 
         if failed_count:
-            write_wiring_status(statuses, manifest_model, namespace=namespace)
+            write_wiring_status(statuses, handles, namespace=namespace)
             raise RuntimeError(
                 f"wiring failed for {failed_count} local node(s); not accepting requests"
             )
 
         shared_handles.update(handles)
         try:
-            write_wiring_status(statuses, manifest_model, namespace=namespace)
+            write_wiring_status(statuses, handles, namespace=namespace)
         except Exception:
             shared_handles.clear()
             raise

@@ -19,7 +19,7 @@ from nodalarc.models.catalog import Profile, ProfileSidecar
 from nodalarc.workload_target import NODE_ID_LABEL
 from nodalarc.workloads.plan import WorkloadPlan
 
-from nodalarc_operator.workloads.materializer import WorkloadComposition
+from nodalarc_operator.workloads.materializer import MODEL_CONFIGURATION, WorkloadComposition
 
 # Platform-owned volume names inside the composition. Profile volumes may
 # not use them; the materializer separately reserves wiring-gate/status.
@@ -80,7 +80,9 @@ def _artifact_config_map(
         f"{content_id[len('sha256:') : len('sha256:') + 12]}"
     )
     return kubernetes.client.V1ConfigMap(
+        local_vars_configuration=MODEL_CONFIGURATION,
         metadata=kubernetes.client.V1ObjectMeta(
+            local_vars_configuration=MODEL_CONFIGURATION,
             name=name,
             namespace=namespace,
             labels={
@@ -105,7 +107,9 @@ def _security_context(
     ever narrow it through admitted declarations."""
 
     return kubernetes.client.V1SecurityContext(
+        local_vars_configuration=MODEL_CONFIGURATION,
         capabilities=kubernetes.client.V1Capabilities(
+            local_vars_configuration=MODEL_CONFIGURATION,
             drop=["ALL"],
             add=list(capabilities) or None,
         ),
@@ -116,6 +120,7 @@ def _security_context(
 
 def _resources(resources) -> kubernetes.client.V1ResourceRequirements:
     return kubernetes.client.V1ResourceRequirements(
+        local_vars_configuration=MODEL_CONFIGURATION,
         requests={
             "cpu": f"{resources.requests.cpu_m}m",
             "memory": f"{resources.requests.memory_mi}Mi",
@@ -133,7 +138,10 @@ def _pull_reference(registry: str, image: str) -> str:
 
 def _env_list(values) -> list[kubernetes.client.V1EnvVar] | None:
     return [
-        kubernetes.client.V1EnvVar(name=name, value=value) for name, value in sorted(values.items())
+        kubernetes.client.V1EnvVar(
+            local_vars_configuration=MODEL_CONFIGURATION, name=name, value=value
+        )
+        for name, value in sorted(values.items())
     ] or None
 
 
@@ -143,13 +151,17 @@ def _primary_container(
 ) -> kubernetes.client.V1Container:
     mounts = [
         kubernetes.client.V1VolumeMount(
-            name=mount.volume, mount_path=mount.path, read_only=mount.read_only
+            local_vars_configuration=MODEL_CONFIGURATION,
+            name=mount.volume,
+            mount_path=mount.path,
+            read_only=mount.read_only,
         )
         for mount in profile.mounts
     ]
     if profile.config_mount is not None and plan.rendered_files:
         mounts.append(
             kubernetes.client.V1VolumeMount(
+                local_vars_configuration=MODEL_CONFIGURATION,
                 name=PLAN_ARTIFACT_VOLUME,
                 mount_path=profile.config_mount,
                 read_only=True,
@@ -158,6 +170,7 @@ def _primary_container(
     if profile.terminal is not None and profile.terminal.surface == "ssh":
         mounts.append(
             kubernetes.client.V1VolumeMount(
+                local_vars_configuration=MODEL_CONFIGURATION,
                 name=TERMINAL_KEYS_VOLUME,
                 mount_path=profile.terminal.authorized_keys_path,
                 read_only=True,
@@ -166,11 +179,15 @@ def _primary_container(
     probe = None
     if profile.readiness is not None:
         probe = kubernetes.client.V1Probe(
-            _exec=kubernetes.client.V1ExecAction(command=list(profile.readiness.argv)),
+            local_vars_configuration=MODEL_CONFIGURATION,
+            _exec=kubernetes.client.V1ExecAction(
+                local_vars_configuration=MODEL_CONFIGURATION, command=list(profile.readiness.argv)
+            ),
             period_seconds=profile.readiness.period_seconds,
             timeout_seconds=profile.readiness.timeout_seconds,
         )
     return kubernetes.client.V1Container(
+        local_vars_configuration=MODEL_CONFIGURATION,
         name=profile.id,
         image=_pull_reference(profile.registry, profile.image),
         command=list(profile.command) if profile.command is not None else None,
@@ -190,11 +207,15 @@ def _sidecar_container(
 ) -> kubernetes.client.V1Container:
     mounts = [
         kubernetes.client.V1VolumeMount(
-            name=mount.volume, mount_path=mount.path, read_only=mount.read_only
+            local_vars_configuration=MODEL_CONFIGURATION,
+            name=mount.volume,
+            mount_path=mount.path,
+            read_only=mount.read_only,
         )
         for mount in sidecar.mounts
     ]
     return kubernetes.client.V1Container(
+        local_vars_configuration=MODEL_CONFIGURATION,
         name=sidecar.name,
         image=_pull_reference(sidecar.registry or profile.registry, sidecar.image),
         command=list(sidecar.command) if sidecar.command is not None else None,
@@ -225,8 +246,10 @@ def compose_workload(
 
     volumes = [
         kubernetes.client.V1Volume(
+            local_vars_configuration=MODEL_CONFIGURATION,
             name=volume.name,
             empty_dir=kubernetes.client.V1EmptyDirVolumeSource(
+                local_vars_configuration=MODEL_CONFIGURATION,
                 medium="Memory" if volume.medium == "memory" else None,
                 size_limit=f"{volume.size_mi}Mi",
             ),
@@ -236,11 +259,17 @@ def compose_workload(
     if artifact_cm is not None:
         volumes.append(
             kubernetes.client.V1Volume(
+                local_vars_configuration=MODEL_CONFIGURATION,
                 name=PLAN_ARTIFACT_VOLUME,
                 config_map=kubernetes.client.V1ConfigMapVolumeSource(
+                    local_vars_configuration=MODEL_CONFIGURATION,
                     name=artifact_cm.metadata.name,
                     items=[
-                        kubernetes.client.V1KeyToPath(key=_artifact_key(name), path=name)
+                        kubernetes.client.V1KeyToPath(
+                            local_vars_configuration=MODEL_CONFIGURATION,
+                            key=_artifact_key(name),
+                            path=name,
+                        )
                         for name in sorted(plan.rendered_files)
                     ],
                 ),
@@ -254,12 +283,16 @@ def compose_workload(
             # where the profile's SSH daemon reads it.
             volumes.append(
                 kubernetes.client.V1Volume(
+                    local_vars_configuration=MODEL_CONFIGURATION,
                     name=TERMINAL_KEYS_VOLUME,
                     secret=kubernetes.client.V1SecretVolumeSource(
+                        local_vars_configuration=MODEL_CONFIGURATION,
                         secret_name=TERMINAL_KEYS_SECRET,
                         items=[
                             kubernetes.client.V1KeyToPath(
-                                key="id_ed25519.pub", path="authorized_keys"
+                                local_vars_configuration=MODEL_CONFIGURATION,
+                                key="id_ed25519.pub",
+                                path="authorized_keys",
                             )
                         ],
                     ),

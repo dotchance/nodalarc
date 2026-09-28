@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Collection, Mapping, Sequence
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
@@ -160,6 +161,10 @@ def _creation_timestamp(value: Any) -> datetime | None:
     return None
 
 
+# Concurrent ConfigMap creates for one upload.
+_CREATE_WORKERS = 8
+
+
 class KubernetesCatalogUploadStore:
     """Create-only storage and label-based lifecycle for exact YAML files."""
 
@@ -198,13 +203,16 @@ class KubernetesCatalogUploadStore:
 
         created: list[CatalogUploadResourceEvidence] = []
         try:
+            bodies = []
             for order, entry in enumerate(upload.catalog_files):
                 try:
-                    body = encode_catalog_upload_config_map(
-                        namespace=self._namespace,
-                        upload_id=upload.upload_id,
-                        order=order,
-                        entry=entry,
+                    bodies.append(
+                        encode_catalog_upload_config_map(
+                            namespace=self._namespace,
+                            upload_id=upload.upload_id,
+                            order=order,
+                            entry=entry,
+                        )
                     )
                 except KubernetesRuntimeConfigError as exc:
                     raise _error(
@@ -213,37 +221,56 @@ class KubernetesCatalogUploadStore:
                         upload_id=upload.upload_id,
                         cause=exc,
                     ) from exc
-                name = body["metadata"]["name"]
-                try:
-                    observed = self._client.create_namespaced_config_map(
+            # Each create is one etcd write; they run together. Every create
+            # finishes before any result is judged, so a failure never leaves
+            # a create in flight that cleanup would miss.
+            with ThreadPoolExecutor(max_workers=_CREATE_WORKERS) as pool:
+                creates = [
+                    pool.submit(
+                        self._client.create_namespaced_config_map,
                         namespace=self._namespace,
                         body=body,
                     )
+                    for body in bodies
+                ]
+            failure: CatalogUploadStoreError | None = None
+            failure_cause: BaseException | None = None
+            for entry, body, create in zip(upload.catalog_files, bodies, creates, strict=True):
+                name = body["metadata"]["name"]
+                try:
                     # Register what the server persisted before any content
                     # rule runs: readback judges the content, cleanup needs
                     # the identity either way.
-                    identity = config_map_metadata_identity(observed)
+                    identity = config_map_metadata_identity(create.result())
                 except Exception as exc:
-                    raise _error(
-                        CatalogUploadStoreErrorCode.CREATE_FAILED,
-                        f"Could not create catalog YAML ConfigMap {name}: {exc}",
-                        upload_id=upload.upload_id,
-                        resource_name=name,
-                        cause=exc,
-                        created_names=(resource.name for resource in created),
-                    ) from exc
+                    if failure is None:
+                        failure = _error(
+                            CatalogUploadStoreErrorCode.CREATE_FAILED,
+                            f"Could not create catalog YAML ConfigMap {name}: {exc}",
+                            upload_id=upload.upload_id,
+                            resource_name=name,
+                            cause=exc,
+                        )
+                        failure_cause = exc
+                    continue
                 if identity.name != name or identity.namespace != self._namespace:
-                    raise _error(
+                    failure = failure or _error(
                         CatalogUploadStoreErrorCode.CREATE_FAILED,
                         f"Created ConfigMap identity does not match {self._namespace}/{name}",
                         upload_id=upload.upload_id,
                         resource_name=name,
-                        created_names=(resource.name for resource in created),
                     )
-                evidence = CatalogUploadResourceEvidence(name=name, ref=entry.ref, uid=identity.uid)
-                created.append(evidence)
-                if resource_observer is not None:
+                    continue
+                created.append(
+                    CatalogUploadResourceEvidence(name=name, ref=entry.ref, uid=identity.uid)
+                )
+            # Every resource that exists is registered before the observer
+            # runs, so a failing observer leaves none of them out of cleanup.
+            if resource_observer is not None:
+                for evidence in created:
                     resource_observer(evidence)
+            if failure is not None:
+                raise failure from failure_cause
 
             verified, observed_resources = self.read(upload.selection, root_yaml=upload.root_yaml)
             if verified.catalog_files != upload.catalog_files:

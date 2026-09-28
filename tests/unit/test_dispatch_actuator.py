@@ -33,6 +33,7 @@ PAIR = ("sat-a", "sat-b")
 SIM_TIME = datetime(2026, 1, 1, tzinfo=UTC)
 SESSION_ID = "test-session"
 WIRING_GENERATION = "sha256:" + "a" * 64
+WRITER_EPOCH = 7
 
 
 class _Locator:
@@ -199,6 +200,7 @@ def test_send_batch_up_publishes_link_up_only_after_all_interface_acks():
             link_provenance=_provenance,
             session_id=SESSION_ID,
             wiring_generation=WIRING_GENERATION,
+            writer_epoch=WRITER_EPOCH,
         )
     )
 
@@ -212,6 +214,7 @@ def test_send_batch_up_publishes_link_up_only_after_all_interface_acks():
     req = pool.stubs["agent-sat-a"].requests[0]
     assert req.envelope.session_id == SESSION_ID
     assert req.envelope.wiring_generation == WIRING_GENERATION
+    assert req.envelope.writer_epoch == WRITER_EPOCH
     assert req.envelope.operation_kind == "BatchLinkUp"
 
 
@@ -236,6 +239,7 @@ def test_send_batch_up_requires_every_interface_ack_for_pair_success():
             link_provenance=_provenance,
             session_id=SESSION_ID,
             wiring_generation=WIRING_GENERATION,
+            writer_epoch=WRITER_EPOCH,
         )
     )
 
@@ -271,6 +275,7 @@ def test_send_batch_up_logs_successful_wall_clock_actuation_latency_at_debug(cap
                 link_provenance=_provenance,
                 session_id=SESSION_ID,
                 wiring_generation=WIRING_GENERATION,
+                writer_epoch=WRITER_EPOCH,
             )
         )
 
@@ -310,6 +315,7 @@ def test_failed_actuation_logs_latency_at_warning(caplog):
                 link_provenance=_provenance,
                 session_id=SESSION_ID,
                 wiring_generation=WIRING_GENERATION,
+                writer_epoch=WRITER_EPOCH,
             )
         )
 
@@ -342,6 +348,7 @@ def test_no_actuation_latency_log_without_a_dispatch(caplog):
                 link_provenance=_provenance,
                 session_id=SESSION_ID,
                 wiring_generation=WIRING_GENERATION,
+                writer_epoch=WRITER_EPOCH,
             )
         )
 
@@ -372,6 +379,7 @@ def test_send_batch_up_chunks_large_single_agent_batches():
             link_provenance=_provenance,
             session_id=SESSION_ID,
             wiring_generation=WIRING_GENERATION,
+            writer_epoch=WRITER_EPOCH,
         )
     )
 
@@ -418,6 +426,7 @@ def test_ground_latency_update_updates_both_local_shaped_interfaces():
             link_provenance=_provenance,
             session_id=SESSION_ID,
             wiring_generation=WIRING_GENERATION,
+            writer_epoch=WRITER_EPOCH,
         )
     )
 
@@ -427,6 +436,7 @@ def test_ground_latency_update_updates_both_local_shaped_interfaces():
     req = stub.requests[0]
     assert req.envelope.session_id == SESSION_ID
     assert req.envelope.wiring_generation == WIRING_GENERATION
+    assert req.envelope.writer_epoch == WRITER_EPOCH
     assert req.envelope.operation_kind == "SetLatency"
     assert {(entry.node_id, entry.interface_name) for entry in req.entries} == {
         ("gs-den", "term0"),
@@ -498,7 +508,12 @@ def _items(kind, count: int):
 
 def _senders(pool, count: int):
     sim_iso = SIM_TIME.isoformat()
-    common = {"pool": pool, "session_id": SESSION_ID, "wiring_generation": WIRING_GENERATION}
+    common = {
+        "pool": pool,
+        "session_id": SESSION_ID,
+        "wiring_generation": WIRING_GENERATION,
+        "writer_epoch": WRITER_EPOCH,
+    }
     return {
         "BatchLinkDown": (
             lambda: _send_batch_down_to_agent(
@@ -564,6 +579,7 @@ def test_every_sender_preserves_its_request_shape_across_chunks():
         assert {req.envelope.operation_kind for req in stub.requests} == {operation}
         assert {req.envelope.session_id for req in stub.requests} == {SESSION_ID}
         assert {req.envelope.wiring_generation for req in stub.requests} == {WIRING_GENERATION}
+        assert {req.envelope.writer_epoch for req in stub.requests} == {WRITER_EPOCH}
         assert [len(getattr(req, item_field)) for req in stub.requests] == [
             MAX_NODE_AGENT_INTERFACES_PER_COMMAND,
             1,
@@ -635,6 +651,7 @@ def test_sender_continues_after_a_failed_chunk_and_merges_every_chunks_evidence(
             sim_iso=SIM_TIME.isoformat(),
             session_id=SESSION_ID,
             wiring_generation=WIRING_GENERATION,
+            writer_epoch=WRITER_EPOCH,
         )
     )
     assert len(stub.requests) == 2, (
@@ -677,6 +694,7 @@ def test_cancellation_and_construction_errors_propagate_unclassified():
                 sim_iso=SIM_TIME.isoformat(),
                 session_id=SESSION_ID,
                 wiring_generation=WIRING_GENERATION,
+                writer_epoch=WRITER_EPOCH,
             )
         )
 
@@ -695,6 +713,7 @@ def test_cancellation_and_construction_errors_propagate_unclassified():
                 operation_id_base="base",
                 session_id=SESSION_ID,
                 wiring_generation=WIRING_GENERATION,
+                writer_epoch=WRITER_EPOCH,
                 build_request=_broken_request,
                 send=lambda s, req: s.async_batch_link_up(req),
             )
@@ -714,6 +733,7 @@ def test_cancellation_and_construction_errors_propagate_unclassified():
                 sim_iso=SIM_TIME.isoformat(),
                 session_id=SESSION_ID,
                 wiring_generation=WIRING_GENERATION,
+                writer_epoch=WRITER_EPOCH,
             )
         )
 
@@ -761,6 +781,7 @@ def test_agents_are_sent_concurrently_while_each_agents_chunks_stay_in_order():
             link_provenance=_provenance,
             session_id=SESSION_ID,
             wiring_generation=WIRING_GENERATION,
+            writer_epoch=WRITER_EPOCH,
         ), stubs
 
     result, stubs = asyncio.run(_run())
@@ -1020,6 +1041,7 @@ def test_ground_latency_update_preserves_per_side_entries(pair, locality):
             link_provenance=_provenance,
             session_id=SESSION_ID,
             wiring_generation=WIRING_GENERATION,
+            writer_epoch=WRITER_EPOCH,
         )
     )
 
@@ -1143,5 +1165,6 @@ def test_a_ground_link_without_a_station_is_refused_by_every_builder():
                 link_provenance=_provenance,
                 session_id=SESSION_ID,
                 wiring_generation=WIRING_GENERATION,
+                writer_epoch=WRITER_EPOCH,
             )
         )

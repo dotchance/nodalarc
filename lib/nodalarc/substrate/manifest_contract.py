@@ -46,6 +46,9 @@ def derive_wiring_generation(data: dict[str, Any]) -> str:
 # carries the encoded manifest.
 WIRING_MANIFEST_CONFIGMAP = "nodalarc-topology-wiring"
 WIRING_MANIFEST_PAYLOAD_KEY = "manifest.json.gz.b64"
+# The Lease the commanding Scheduler holds. Its transition count is the writer
+# epoch every Node Agent command carries; a Node Agent refuses a lower one.
+SCHEDULER_WRITER_LEASE = "nodalarc-scheduler-writer"
 
 
 class WiringManifestPayloadError(ValueError):

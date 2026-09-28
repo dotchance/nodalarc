@@ -18,8 +18,12 @@ The Node Agent is the only component that touches the Linux kernel's network sta
    - Create generated terminal interfaces such as `islX`, `gndX`, and `terr0`
    - Set sysctls (forwarding, rp_filter, MPLS input)
    - Remove default K8s route
-4. Write typed `nodalarc-wiring-status` with session ID, wiring generation,
-   per-phase results, and dirty-kernel state
+4. Write each pod's typed wiring proof onto that pod (annotation
+   `nodalarc.io/wiring-status`) with session ID, wiring generation,
+   per-phase results, and dirty-kernel state. The same proof is then written
+   as `status.json` into the pod's `wiring-status` emptyDir, through the
+   host's kubelet pods directory (`KUBELET_PODS_DIR`). The pod's wiring gate
+   reads that file. The Operator and the Scheduler read the annotation.
 5. Subscribe to NATS for Scheduler requests
 
 **Critical:** Step 5 must happen AFTER the current manifest is validated and the matching wiring status is ready. The Scheduler must not dispatch to a Node Agent that has not completed wiring for the same `session_id` and `wiring_generation`.
@@ -34,8 +38,11 @@ Every command includes a `CommandEnvelope`:
 - `session_id`
 - `wiring_generation`
 - `operation_kind`
+- `writer_epoch`
 
 The envelope and all required fields are validated before any kernel mutation. Stale sessions, stale generations, malformed frames, missing PIDs, missing peer identity, missing `HOST_IP`, and unspecified enum zero values fail closed. There is no compatibility shim for old unfenced commands.
+
+The Node Agent watches the Scheduler writer Lease (`nodalarc-scheduler-writer`) and lists it before it serves any command; a Lease it cannot list within 60 s stops it from subscribing (`STARTUP_WRITER_LEASE_UNOBSERVED`). The lowest writer epoch it accepts is the Lease's transition count, or the highest epoch it accepted while the same Lease object exists, whichever is higher. A command with a lower epoch comes from a Scheduler that no longer holds the Lease, and it is refused with `NODE_AGENT_STALE_WRITER` before any kernel mutation. A restarted Node Agent reads the Lease again, so it refuses such a command from its first one.
 
 ## Namespace Operations
 

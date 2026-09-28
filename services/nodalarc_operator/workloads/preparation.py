@@ -26,6 +26,7 @@ from nodalarc.workloads.plan import WorkloadPlan
 
 from adapters.registry import adapter_named
 from nodalarc_operator.workloads.compose import ComposedWorkload, compose_workload
+from nodalarc_operator.workloads.materializer import image_pull_policy_for
 
 log = logging.getLogger("nodalarc.operator.workloads")
 
@@ -82,28 +83,26 @@ def _dev_override_pull_policy() -> str:
 
 def _apply_dev_image_overrides(
     composed: ComposedWorkload, overrides: dict[str, str], pull_policy: str
-) -> None:
+) -> dict[tuple[str, str], int]:
     """Explicit, visibly non-reproducible development substitution.
 
     Applied to composed Kubernetes containers only — admission and the
     profile identity are untouched, so production digest policy is never
-    weakened globally.
+    weakened globally. Returns how many containers each (image, replacement)
+    pair substituted, for the preparation's one summary warning.
     """
+    applied: dict[tuple[str, str], int] = {}
     for container in (
         *composed.composition.init_containers,
         *composed.composition.containers,
     ):
         replacement = overrides.get(container.image)
         if replacement:
-            log.warning(
-                "DEV IMAGE OVERRIDE: container %r image %s replaced by %s — "
-                "this deployment is not reproducible",
-                container.name,
-                container.image,
-                replacement,
-            )
+            key = (container.image, replacement)
+            applied[key] = applied.get(key, 0) + 1
             container.image = replacement
-            container.image_pull_policy = pull_policy
+            container.image_pull_policy = image_pull_policy_for(replacement, pull_policy)
+    return applied
 
 
 def _resolved_env(entries, nodes) -> dict[str, str]:
@@ -182,6 +181,7 @@ def prepare_session_workloads(
     pull_policy = _dev_override_pull_policy() if overrides else ""
     composed: dict[str, ComposedWorkload] = {}
     identity_payload: dict[str, dict] = {}
+    substituted: dict[tuple[str, str], int] = {}
     for node in resolved.nodes:
         profile = admitted.get(node.profile)
         if profile is None:
@@ -222,7 +222,8 @@ def prepare_session_workloads(
         )
         workload = compose_workload(plan, profile, namespace=namespace, owner_ref=owner_ref)
         if overrides:
-            _apply_dev_image_overrides(workload, overrides, pull_policy)
+            for key, count in _apply_dev_image_overrides(workload, overrides, pull_policy).items():
+                substituted[key] = substituted.get(key, 0) + count
         composed[node.node_id] = workload
         identity_payload[node.node_id] = {
             "profile": node.profile,
@@ -237,6 +238,14 @@ def prepare_session_workloads(
         }
 
     identity = f"profiles@{sha256_digest(canonical_json_bytes(identity_payload))}"
+    if substituted:
+        log.warning(
+            "DEV IMAGE OVERRIDE: this deployment is not reproducible; %s",
+            "; ".join(
+                f"{image} replaced by {replacement} in {count} container(s)"
+                for (image, replacement), count in sorted(substituted.items())
+            ),
+        )
     log.info(
         "Session workloads prepared: profiles=%d nodes=%d identity=%s",
         len(admitted),

@@ -9,10 +9,13 @@ fence between untrusted request bytes and kernel mutation.
 from __future__ import annotations
 
 import math
-from collections.abc import Iterable
+import threading
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 
 from nodalarc.proto import node_agent_pb2
+
+from node_agent.writer_lease_view import LeaseEpoch
 
 KIND_BATCH_LINK_DOWN = "BatchLinkDown"
 KIND_BATCH_LINK_UP = "BatchLinkUp"
@@ -20,17 +23,54 @@ KIND_SET_LATENCY = "SetLatency"
 KIND_KERNEL_INVENTORY = "KernelInventory"
 
 
-@dataclass(frozen=True)
-class RuntimeFence:
-    session_id: str
-    wiring_generation: str
-
-
 class CommandContractError(ValueError):
     def __init__(self, code: int, message: str) -> None:
         super().__init__(message)
         self.code = code
         self.message = message
+
+
+class WriterEpochFloor:
+    """The lowest Scheduler writer epoch this Node Agent accepts.
+
+    The floor is the transition count of the Scheduler writer Lease as last
+    observed, which rises each time the Lease changes holder, and never falls
+    below the highest epoch this Node Agent accepted while the same Lease
+    object exists. A command below the floor comes from a Scheduler that no
+    longer holds the Lease. The Lease is observed before this Node Agent
+    serves any command, so a restarted Node Agent refuses a stale Scheduler
+    from its first command. A recreated Lease (a new object) starts again.
+    """
+
+    def __init__(self, lease_epoch: Callable[[], LeaseEpoch | None]) -> None:
+        self._lease_epoch = lease_epoch
+        self._lock = threading.Lock()
+        self._lease_uid: str | None = None
+        self._accepted = 0
+
+    def admit(self, session_id: str, wiring_generation: str, writer_epoch: int) -> None:
+        """Accept ``writer_epoch`` and raise the floor to it, or refuse a stale writer."""
+        lease = self._lease_epoch()
+        with self._lock:
+            lease_uid = lease.uid if lease is not None else None
+            if lease_uid != self._lease_uid:
+                self._lease_uid = lease_uid
+                self._accepted = 0
+            floor = max(self._accepted, lease.transitions if lease is not None else 0)
+            if writer_epoch < floor:
+                raise CommandContractError(
+                    node_agent_pb2.NODE_AGENT_STALE_WRITER,
+                    f"stale writer epoch {writer_epoch} for session {session_id!r} "
+                    f"generation {wiring_generation!r}; the writer Lease is at epoch {floor}",
+                )
+            self._accepted = max(self._accepted, writer_epoch)
+
+
+@dataclass(frozen=True)
+class RuntimeFence:
+    session_id: str
+    wiring_generation: str
+    writer_floor: WriterEpochFloor
 
 
 def validate_envelope(request, *, expected_kind: str, fence: RuntimeFence) -> None:
@@ -53,7 +93,13 @@ def validate_envelope(request, *, expected_kind: str, fence: RuntimeFence) -> No
     env = request.envelope
     missing = [
         field
-        for field in ("operation_id", "session_id", "wiring_generation", "operation_kind")
+        for field in (
+            "operation_id",
+            "session_id",
+            "wiring_generation",
+            "operation_kind",
+            "writer_epoch",
+        )
         if not getattr(env, field)
     ]
     if missing:
@@ -77,6 +123,7 @@ def validate_envelope(request, *, expected_kind: str, fence: RuntimeFence) -> No
             "stale wiring_generation "
             f"{env.wiring_generation!r}; current generation is {fence.wiring_generation!r}",
         )
+    fence.writer_floor.admit(env.session_id, env.wiring_generation, env.writer_epoch)
 
 
 def _require_nonempty(value: str, field: str) -> None:
@@ -243,12 +290,14 @@ def envelope(
     session_id: str,
     wiring_generation: str,
     operation_kind: str,
+    writer_epoch: int,
 ) -> node_agent_pb2.CommandEnvelope:
     return node_agent_pb2.CommandEnvelope(
         operation_id=operation_id,
         session_id=session_id,
         wiring_generation=wiring_generation,
         operation_kind=operation_kind,
+        writer_epoch=writer_epoch,
     )
 
 

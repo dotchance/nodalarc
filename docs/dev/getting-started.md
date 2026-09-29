@@ -16,9 +16,9 @@
 git clone https://github.com/dotchance/nodalarc.git
 cd nodalarc
 
-# Bootstrap the build machine (Docker, kubectl, Helm, Node.js, uv)
+# Bootstrap this development machine (Docker, kubectl, Helm, Node.js, uv)
 # Skip if you already have these
-sudo scripts/bootstrap-host.sh
+sudo scripts/bootstrap-dev-machine.sh
 
 # Build each K3s server, as root on that server; the first one prints the
 # join command for the others. Skip if you already have a cluster.

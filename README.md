@@ -58,12 +58,12 @@ The command line is for installation and operations. Once NodalArc is running, u
 
 ### Install And Run
 
-NodalArc is installed with its Helm chart and images; users never build or change code. Until the first release publishes the chart and the images, the install runs from a source checkout on a separate build machine, where `scripts/bootstrap-host.sh` installs the build toolchain (Docker, kubectl, Helm, Node.js, uv):
+NodalArc is installed with its Helm chart and images; users never build or change code. Until the first release publishes the chart and the images, the install runs from a source checkout on a developer's machine, where `scripts/bootstrap-dev-machine.sh` installs the build toolchain (Docker, kubectl, Helm, Node.js, uv):
 
 ```bash
 git clone https://github.com/dotchance/nodalarc.git
 cd nodalarc
-sudo scripts/bootstrap-host.sh
+sudo scripts/bootstrap-dev-machine.sh
 make all
 ```
 

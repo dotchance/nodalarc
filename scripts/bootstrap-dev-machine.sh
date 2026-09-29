@@ -1,9 +1,10 @@
 #!/bin/bash
 # Copyright 2024-2026 .chance (dotchance)
-# One-time bootstrap of a NodalArc build machine: the machine that runs make,
-# builds the images and drives the cluster.
+# One-time bootstrap of a NodalArc development machine: the machine a
+# developer runs make on to build the images and drive the cluster. Users do
+# not run it; they receive the chart and the images and never build code.
 #
-# Installs Docker, K3s's kubectl, Helm, Node.js and uv. It touches no kernel
+# Installs Docker, kubectl, Helm, Node.js and uv. It touches no kernel
 # setting and no cluster: a K3s server is built by scripts/build-k3s-node.sh,
 # run on that server, and the Node Agent loads what a session needs.
 #
@@ -13,7 +14,7 @@
 
 set -euo pipefail
 
-echo "=== NodalArc Build Machine Bootstrap ==="
+echo "=== NodalArc Development Machine Bootstrap ==="
 echo "Copyright 2024-2026 .chance (dotchance)"
 echo "Official source: https://github.com/dotchance/nodalarc"
 

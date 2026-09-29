@@ -49,7 +49,7 @@ It lists the changes it will make and asks once: the inotify limits NodalArc nee
 
 If you already have Kubernetes, skip this step: the Node Agent's readiness probe reports what a node lacks once NodalArc is installed.
 
-Until the first release publishes the chart and the images, NodalArc is installed from a source checkout on a separate build machine; that machine's setup is in the [Developer Guide](../dev/getting-started.md).
+Until the first release publishes the chart and the images, NodalArc is installed from a source checkout on a developer's machine; that machine's setup is in the [Developer Guide](../dev/getting-started.md).
 
 ## Step 2: Build and Deploy
 

@@ -293,7 +293,7 @@ def test_cli_surfaces_project_attribution() -> None:
     surfaces = {
         "Makefile": _makefile(),
         "scripts/na-status.sh": (ROOT / "scripts/na-status.sh").read_text(),
-        "scripts/bootstrap-host.sh": (ROOT / "scripts/bootstrap-host.sh").read_text(),
+        "scripts/bootstrap-dev-machine.sh": (ROOT / "scripts/bootstrap-dev-machine.sh").read_text(),
         "scripts/na-teardown.sh": (ROOT / "scripts/na-teardown.sh").read_text(),
         "scripts/na-nuke.sh": (ROOT / "scripts/na-nuke.sh").read_text(),
     }

@@ -89,7 +89,7 @@ help: ## Show this help
 	@echo "Official source: https://github.com/dotchance/nodalarc"
 	@echo ""
 	@echo "Quick start from a clean checkout/K3s state:"
-	@echo "  sudo scripts/bootstrap-host.sh"
+	@echo "  sudo scripts/bootstrap-dev-machine.sh"
 	@echo "  make all"
 	@echo ""
 	@echo "Validated square-one lifecycle:"
@@ -124,7 +124,7 @@ help: ## Show this help
 # Primary lifecycle entry point
 # ---------------------------------------------------------------------------
 #
-# This is the normal clean-state path after bootstrap-host has prepared the
+# This is the normal clean-state path after bootstrap-dev-machine has prepared the
 # machine. It intentionally includes load before install so Helm never starts
 # pods whose images have not been placed where K3s can pull them.
 
@@ -155,10 +155,10 @@ deps: check-deps ## Install Python + Node.js dependencies (idempotent)
 
 check-deps:
 	@command -v uv >/dev/null 2>&1    || { echo "ERROR: uv not found. Run: curl -LsSf https://astral.sh/uv/install.sh | sh"; exit 1; }
-	@command -v docker >/dev/null 2>&1 || { echo "ERROR: docker not found. Run: sudo scripts/bootstrap-host.sh"; exit 1; }
-	@command -v kubectl >/dev/null 2>&1 || { echo "ERROR: kubectl not found. Run: sudo scripts/bootstrap-host.sh"; exit 1; }
-	@command -v helm >/dev/null 2>&1   || { echo "ERROR: helm not found. Run: sudo scripts/bootstrap-host.sh"; exit 1; }
-	@command -v node >/dev/null 2>&1   || { echo "ERROR: node not found. Run: sudo scripts/bootstrap-host.sh"; exit 1; }
+	@command -v docker >/dev/null 2>&1 || { echo "ERROR: docker not found. Run: sudo scripts/bootstrap-dev-machine.sh"; exit 1; }
+	@command -v kubectl >/dev/null 2>&1 || { echo "ERROR: kubectl not found. Run: sudo scripts/bootstrap-dev-machine.sh"; exit 1; }
+	@command -v helm >/dev/null 2>&1   || { echo "ERROR: helm not found. Run: sudo scripts/bootstrap-dev-machine.sh"; exit 1; }
+	@command -v node >/dev/null 2>&1   || { echo "ERROR: node not found. Run: sudo scripts/bootstrap-dev-machine.sh"; exit 1; }
 
 # ---------------------------------------------------------------------------
 # Registry diagnostics

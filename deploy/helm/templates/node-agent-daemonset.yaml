@@ -52,12 +52,23 @@ spec:
               valueFrom:
                 fieldRef:
                   fieldPath: status.hostIP
-            - name: CONTAINER_RUNTIME_ENDPOINT
-              value: unix:///run/k3s/containerd/containerd.sock
             - name: NODE_AGENT_OPS_SPOOL
               value: /var/lib/nodalarc/node-agent/ops-events.jsonl
-            - name: KUBELET_PODS_DIR
-              value: /var/lib/kubelet/pods
+          # Ready only while this server passes node qualification. Every
+          # probe runs the checks, so readiness follows the server's current
+          # state; a failed probe's message lists each check.
+          readinessProbe:
+            exec:
+              command:
+                - sh
+                - -c
+                - >-
+                  exec python -m node_agent.qualification
+                  --host-ip "$HOST_IP"
+                  --link-mtu {{ required "network.linkMtu is required" .Values.network.linkMtu | int }}
+                  --vxlan-port {{ required "network.vxlanPort is required" .Values.network.vxlanPort | int }}
+            periodSeconds: 10
+            timeoutSeconds: 5
           resources:
             limits:
               memory: {{ .Values.nodeAgent.memoryLimit | default "256Mi" }}
@@ -66,33 +77,21 @@ spec:
             - name: platform-config
               mountPath: /etc/nodalarc/platform.yaml
               subPath: platform.yaml
-            # The runtime's directory, not its socket file: a runtime restart
-            # replaces the socket, and a bind mount of the file keeps the
-            # deleted one, cutting the Node Agent off from CRI until its pod
-            # is replaced.
-            - name: containerd-run
-              mountPath: /run/k3s/containerd
-              readOnly: true
             - name: node-agent-spool
               mountPath: /var/lib/nodalarc/node-agent
             - name: host-modules
               mountPath: /lib/modules
               readOnly: true
-            # The Node Agent writes each session pod's wiring proof into the
-            # pod's wiring-status emptyDir here. Host-to-container propagation
-            # lets the kubelet's unmounts of other pods' volumes reach this
-            # mount namespace, so it never holds a copy of them.
-            - name: kubelet-pods
-              mountPath: /var/lib/kubelet/pods
-              mountPropagation: HostToContainer
+            # The site-LAN namespace is pinned here by a bind mount the Node
+            # Agent makes; Bidirectional propagation puts the mount on the
+            # server, so the namespace outlives the Node Agent's container.
+            - name: host-netns
+              mountPath: /run/netns
+              mountPropagation: Bidirectional
       volumes:
         - name: platform-config
           configMap:
             name: nodalarc-platform-config
-        - name: containerd-run
-          hostPath:
-            path: /run/k3s/containerd
-            type: Directory
         - name: node-agent-spool
           hostPath:
             path: /var/lib/nodalarc/node-agent
@@ -101,7 +100,7 @@ spec:
           hostPath:
             path: /lib/modules
             type: Directory
-        - name: kubelet-pods
+        - name: host-netns
           hostPath:
-            path: /var/lib/kubelet/pods
-            type: Directory
+            path: /run/netns
+            type: DirectoryOrCreate

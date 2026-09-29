@@ -6,7 +6,7 @@ For constellations larger than ~200 satellites, or when you need to test multi-n
 
 - 2+ Kubernetes nodes with the `nodalarc.io/node-agent=true` label
 - A container registry accessible from all nodes
-- UDP 4789 (VXLAN) open between nodes
+- UDP 14789 (NodalArc's VXLAN; chart value `network.vxlanPort`) open between nodes
 - Recommended: low-latency network between nodes (GbE or better)
 
 ## Container Registry Setup
@@ -93,7 +93,7 @@ Node A                                    Node B
 +-----------------+                      +-----------------+
 | space-sat-p00s03 pod  |                      | space-sat-p01s03 pod  |
 |   isl2 <------- veth -- vxlan -------- veth -------> isl3 |
-+-----------------+      UDP 4789        +-----------------+
++-----------------+      UDP 14789       +-----------------+
 ```
 
 The VXLAN tunnel encapsulates Ethernet frames in UDP, carrying them across the physical network between nodes. From the perspective of the FRR routing daemon inside each pod, `isl2`/`isl3` look like normal network interfaces - FRR doesn't know or care that the physical path goes through a VXLAN tunnel.
@@ -149,9 +149,9 @@ sudo KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl exec space-sat-p00s05 -n nodal
 
 | Traffic | Protocol | Port | Between |
 |---------|----------|------|---------|
-| VXLAN tunnels | UDP | 4789 | All compute nodes |
+| VXLAN tunnels | UDP | 14789 (`network.vxlanPort`) | All compute nodes |
 | NATS | TCP | 4222 | All pods -> NATS service |
 | K8s API | TCP | 6443 | All nodes -> control plane |
 | Registry | TCP | 5000 (typical) | All nodes -> registry |
 
-Ensure your network firewall allows UDP 4789 between all nodes that will run session pods.
+Ensure your network firewall allows UDP 14789 between all nodes that will run session pods. The port is the chart value `network.vxlanPort`; choose one outside the hosts' ephemeral port range (32768 to 60999 by default) and the cluster's NodePort range (30000 to 32767 by default).

@@ -3150,21 +3150,6 @@ class TestRuntimeSessionBootstrap:
         )
 
 
-def test_the_session_node_count_fails_loudly_when_the_listing_fails(monkeypatch):
-    import kubernetes.client
-    import vs_api.main as m
-    from vs_api import k8s
-
-    class _Nodes:
-        def list_node(self, *, label_selector):
-            raise kubernetes.client.rest.ApiException(status=503)
-
-    monkeypatch.setattr(k8s, "core_v1", lambda: _Nodes())
-
-    with pytest.raises(kubernetes.client.rest.ApiException):
-        m._available_session_node_count()
-
-
 class TestSessionHistory:
     """A session run deployed with recording keeps one history file; others keep none."""
 

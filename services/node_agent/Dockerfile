@@ -1,8 +1,10 @@
 # Node Agent container — executes privileged netlink operations on each
-# K3s node, receives commands from Scheduler via NATS request/reply.
+# node, receives commands from Scheduler via NATS request/reply.
 #
-# Requires hostPID: true and privileged: true in the DaemonSet spec.
-# Needs iproute2 for tc commands and crictl for container PID discovery.
+# Requires hostPID: true and privileged: true in the DaemonSet spec. Every
+# kernel read and write happens in the agent's own Python process (netlink,
+# /proc, init_module); the image carries no network, firewall, module or
+# container runtime tools.
 #
 # Build context must be the repo root:
 #   docker build -f services/node_agent/Dockerfile -t nodalarc/node-agent:latest .
@@ -25,23 +27,6 @@ LABEL org.opencontainers.image.title="NodalArc Node Agent" \
 ENV NODALARC_VERSION=${PROJECT_VERSION} \
     NODALARC_BUILD_REVISION=${VCS_REF} \
     NODALARC_BUILD_DATE=${BUILD_DATE}
-
-# Install iproute2 (tc command for ground link mirred redirect)
-# Install iptables (cni0 egress lockdown for session pod security)
-# Install iputils-ping (substrate latency measurement to VXLAN peers)
-# Install kmod so the privileged Node Agent can load MPLS kernel modules
-# Install util-linux for nsenter used by namespace wiring helpers
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    iproute2 iptables iputils-ping kmod util-linux \
-    && rm -rf /var/lib/apt/lists/*
-
-# Install crictl for container PID discovery
-ARG CRICTL_VERSION=v1.35.0
-RUN apt-get update && apt-get install -y --no-install-recommends curl \
-    && curl -fsSL "https://github.com/kubernetes-sigs/cri-tools/releases/download/${CRICTL_VERSION}/crictl-${CRICTL_VERSION}-linux-amd64.tar.gz" \
-       | tar -xz -C /usr/local/bin \
-    && apt-get purge -y curl && apt-get autoremove -y \
-    && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 

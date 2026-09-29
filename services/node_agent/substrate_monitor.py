@@ -15,11 +15,8 @@ measurement and are not dispatch authority.
 from __future__ import annotations
 
 import asyncio
-import ipaddress
 import logging
 import os
-import re
-import subprocess
 import threading
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
@@ -37,6 +34,8 @@ from nodalarc.substrate.measurement_contract import (
     substrate_status_configmap_name,
     substrate_status_labels,
 )
+
+from node_agent import icmp_echo
 
 log = logging.getLogger(__name__)
 
@@ -226,30 +225,24 @@ def measure_one_detail(
 ) -> MeasurementResult:
     """Measure RTT to a single peer. Blocking, with structured evidence.
 
-    Uses ICMP ping with 100ms interval. 10 samples ≈ 1 second.
-    Computes median to reject outliers.
+    Sends ICMP echoes 100 ms apart from this process. 10 samples take about
+    one second. The median rejects outliers.
     """
     measured_at = datetime.now(UTC)
     stale_after = measured_at + timedelta(seconds=stale_after_s)
     timestamp = measured_at.isoformat()
     stale_after_iso = stale_after.isoformat()
     try:
-        out = subprocess.run(
-            ["ping", "-c", str(count), "-i", "0.1", "-W", "1", remote_ip],
-            capture_output=True,
-            text=True,
-            timeout=15,
+        result = icmp_echo.echo(
+            remote_ip,
+            packet_bytes=_RTT_PROBE_PACKET_BYTES,
+            count=count,
+            interval_s=0.1,
+            timeout_s=1.0,
         )
-        rtts = []
-        for line in out.stdout.splitlines():
-            if "time=" in line:
-                try:
-                    t = float(line.split("time=")[1].split()[0])
-                    rtts.append(t)
-                except IndexError, ValueError:
-                    pass
+        rtts = list(result.rtts_ms)
         if not rtts:
-            log.warning("No RTT samples from ping to %s", remote_ip)
+            log.warning("No RTT samples to %s: %s", remote_ip, result.summary())
             return MeasurementResult(
                 remote_ip=remote_ip,
                 timestamp=timestamp,
@@ -260,7 +253,7 @@ def measure_one_detail(
                 median_rtt_ms=None,
                 min_rtt_ms=None,
                 max_rtt_ms=None,
-                error_message="no RTT samples",
+                error_message=f"no RTT samples: {result.summary()}",
             )
         rtts.sort()
         median = rtts[len(rtts) // 2]
@@ -335,8 +328,8 @@ def measure_required_pair(
 
 # What an ICMP echo carries beyond its payload: the IP header of its family
 # and the 8-byte echo header.
-_ICMP_ECHO_OVERHEAD_BYTES = {4: 20 + 8, 6: 40 + 8}
-_RECEIVED_RE = re.compile(r"(\d+) (?:packets )?received")
+# The RTT probe's packet: ping's default 56-byte payload over IPv4.
+_RTT_PROBE_PACKET_BYTES = 84
 
 
 @dataclass(frozen=True, slots=True)
@@ -365,29 +358,14 @@ def prove_host_path_mtu(
     The host path carries the size when an echo returns: the request crossed
     whole with fragmentation forbidden and the reply came back at the same
     size. A local refusal (this host's own interface MTU is smaller), no
-    reply, or a probe that cannot run is a failed proof, with ping's own
-    words as the evidence.
+    reply, or a probe that cannot run is a failed proof, with the probe's
+    own account as the evidence.
     """
-    version = ipaddress.ip_address(pair.target_ip).version
-    payload = packet_bytes - _ICMP_ECHO_OVERHEAD_BYTES[version]
-    command = [
-        "ping",
-        f"-{version}",
-        "-M",
-        "do",
-        "-s",
-        str(payload),
-        "-c",
-        str(count),
-        "-i",
-        "0.2",
-        "-W",
-        "1",
-        pair.target_ip,
-    ]
     try:
-        completed = subprocess.run(command, capture_output=True, text=True, timeout=15, check=False)
-    except (OSError, subprocess.SubprocessError) as exc:
+        result = icmp_echo.echo(
+            pair.target_ip, packet_bytes=packet_bytes, count=count, interval_s=0.2, timeout_s=1.0
+        )
+    except OSError as exc:
         return HostPathProof(
             target_node=pair.target_node,
             target_ip=pair.target_ip,
@@ -395,20 +373,12 @@ def prove_host_path_mtu(
             carried=False,
             evidence=f"probe could not run: {exc}",
         )
-    output = f"{completed.stdout}\n{completed.stderr}"
-    received = _RECEIVED_RE.search(output)
-    carried = completed.returncode == 0 and received is not None and int(received.group(1)) > 0
-    evidence = "; ".join(
-        line.strip()
-        for line in output.splitlines()
-        if "received" in line or "error" in line.lower() or "too long" in line
-    )
     return HostPathProof(
         target_node=pair.target_node,
         target_ip=pair.target_ip,
         packet_bytes=packet_bytes,
-        carried=carried,
-        evidence=evidence or f"ping exited {completed.returncode} with no summary",
+        carried=result.received > 0,
+        evidence=result.summary(),
     )
 
 

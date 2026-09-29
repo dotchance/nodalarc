@@ -10,7 +10,8 @@ Every session pod, whatever workload it runs, gets the platform controls:
 |---------|---------------|---------|
 | Read-only root filesystem | Profile `root_filesystem` (default `read_only`) | Prevents filesystem modification |
 | No service account token | `automountServiceAccountToken: false` | Cannot access K8s API from inside pod |
-| CNI egress blocked | iptables OUTPUT DROP on cni0 | Cannot reach K8s API or other services |
+| cni0 closed except inbound SSH | Frame filters on cni0 in both directions, a connection-tracking rule, IPv6 off on cni0 | No routing protocol or application traffic can use the pod network |
+| cni0 in its own VRF | `nodalarc-mgmt`, route table 20033 | Pod network routes never appear in the emulation's routing table |
 | cni0 renamed from eth0 | Node Agent wiring, before the workload starts | User namespace reserved for user interfaces |
 | Capabilities are profile-declared | Workload profile grammar, closed vocabulary | A host profile can and usually does run with none |
 
@@ -35,7 +36,7 @@ The shipped FRR router profile adds the router-terminal posture on top:
 ### What Users Cannot Do
 
 - Escape a router terminal to the underlying OS (vtysh is the login shell, `terminal shell` disabled)
-- Reach the Kubernetes API or other platform services from any node (iptables blocks cni0 egress)
+- Reach the Kubernetes API, other platform services or other session pods over cni0 (nothing leaves cni0 except replies to inbound SSH)
 - Modify the filesystem outside the profile's declared writable mounts
 - Access other pods' network namespaces
 - Use the service account token (not mounted)
@@ -44,7 +45,7 @@ The shipped FRR router profile adds the router-terminal posture on top:
 
 The FRR router profile retains `CAP_SYS_ADMIN`. This is required by FRR's `ospfd` and `mgmtd` daemons for network namespace operations. Host profiles declare no capabilities at all. It does not compromise the security boundary because:
 - The root filesystem is read-only
-- cni0 egress is blocked by iptables
+- nothing leaves cni0 except replies to inbound SSH
 - No service account token is available
 - vtysh cannot execute shell commands
 
@@ -52,11 +53,12 @@ The FRR router profile retains `CAP_SYS_ADMIN`. This is required by FRR's `ospfd
 
 ### cni0 (Infrastructure Interface)
 
-Every session pod has a `cni0` interface (renamed from eth0 by the Node Agent during wiring, before the workload starts). This is the Kubernetes CNI interface that connects to the cluster network. It is visible in `show interface brief` but:
+Every session pod has a `cni0` interface (renamed from eth0 by the Node Agent during wiring, before the workload starts). This is the Kubernetes CNI interface that connects to the cluster network. The emulated world has no such network, so nothing in the pod may use it. It is visible in `show interface brief`, and:
 
-- iptables `OUTPUT DROP` on cni0 blocks all egress
-- Exception: `ESTABLISHED,RELATED` allows return traffic for SSH sessions initiated from outside
-- Users cannot use cni0 to reach the K8s API, NATS, or any platform service
+- Inbound, only SSH (TCP port 22) and ARP requests from the pod network gateway pass. Outbound, only replies to those SSH connections and ARP replies pass. Every other frame is dropped in both directions: other IPv4, IPv6, IS-IS and any other non-IP frame. The filters sit below the routing software, so a router configuration that runs a protocol on cni0 cannot put a frame on it.
+- Outbound IPv4 leaves only for connections already established, so nothing inside the pod can open a connection over cni0.
+- IPv6 is disabled on cni0.
+- cni0 is in its own VRF, `nodalarc-mgmt` (route table 20033). Its routes never appear in the main routing table the emulation uses; FRR's `show vrf` lists it, and `show ip route vrf default` shows the emulation's routes.
 - The name `cni0` signals "infrastructure, not yours" - `mgmt0` is reserved for user-created management interfaces
 
 ### Data Plane Interfaces

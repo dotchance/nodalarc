@@ -78,7 +78,13 @@ def test_assembly_contract_with_sentinel_composition() -> None:
     assert volume_names[-1] == "wiring-status"
 
     # Node placement, restart policy, token policy, DNS policy.
-    assert pod.spec.node_name == "node02"
+    assert pod.spec.node_name is None
+    terms = pod.spec.affinity.node_affinity.required_during_scheduling_ignored_during_execution
+    assert [
+        (field.key, field.operator, field.values)
+        for term in terms.node_selector_terms
+        for field in term.match_fields
+    ] == [("metadata.name", "In", ["node02"])]
     assert pod.spec.restart_policy == "Never"
     assert pod.spec.automount_service_account_token is False
     dns = {option.name: option.value for option in pod.spec.dns_config.options}

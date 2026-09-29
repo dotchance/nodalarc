@@ -9,7 +9,6 @@ Called by kopf handlers in handlers.py.
 from __future__ import annotations
 
 import hashlib
-import ipaddress
 import json
 import logging
 import os
@@ -208,43 +207,9 @@ def _ensure_immutable_configmap(
         )
 
 
-def _cluster_pod_cidr(v1: kubernetes.client.CoreV1Api) -> str | None:
-    """The minimal IPv4 CIDR covering every node's pod CIDR.
-
-    The Node Agent installs a management route to this block via the CNI
-    gateway so a session pod on any node can answer the browser terminal and
-    control-plane traffic while the routing engine owns the default route.
-    Returns None when no node advertises a pod CIDR (nothing to install).
-    """
-    import ipaddress
-
-    networks: list[ipaddress.IPv4Network] = []
-    for node in v1.list_node().items:
-        cidr = getattr(node.spec, "pod_cidr", None)
-        if not cidr:
-            continue
-        try:
-            network = ipaddress.ip_network(cidr, strict=False)
-        except ValueError:
-            continue
-        if isinstance(network, ipaddress.IPv4Network):
-            networks.append(network)
-    if not networks:
-        return None
-    low = min(int(n.network_address) for n in networks)
-    high = max(int(n.broadcast_address) for n in networks)
-    prefix = 32
-    while prefix >= 0:
-        mask = ((1 << 32) - 1) ^ ((1 << (32 - prefix)) - 1) if prefix else 0
-        if (low & mask) == (high & mask):
-            return str(ipaddress.ip_network((low & mask, prefix)))
-        prefix -= 1
-    return "0.0.0.0/0"
-
-
 def discover_available_nodes() -> list[str]:
     """The Kubernetes nodes that accept session pods."""
-    return available_session_nodes(_get_v1())
+    return available_session_nodes(_get_v1(), get_platform_config().kubernetes_namespace)
 
 
 def _node_internal_ips(
@@ -997,7 +962,6 @@ def write_wiring_manifest(
         "required_substrate_pairs": required_substrate_pairs,
         "site_lans": site_lans,
         "isl_link_count": len(isl_pairs),
-        "cluster_pod_cidr": _cluster_pod_cidr(v1),
     }
     manifest["wiring_generation"] = derive_wiring_generation(manifest)
 

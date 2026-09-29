@@ -74,6 +74,9 @@ purge_local() {
 
 purge_remote() {
     echo "[purge-containerd] Purging remote K3s containerd through Node Agent pods..."
+    # The Node Agent pod is privileged in the host PID namespace, so the
+    # host's own k3s runs through the host root; the Node Agent image
+    # carries no runtime client.
     local pods required remote_script
     pods="$(kubectl get pods -n "$NAMESPACE" -l app=nodalarc-node-agent \
         --no-headers -o custom-columns=NAME:.metadata.name,NODE:.spec.nodeName 2>/dev/null || true)"
@@ -96,8 +99,8 @@ purge_remote() {
     fi
 
     remote_script='
-runtime="${CONTAINER_RUNTIME_ENDPOINT:-unix:///run/k3s/containerd/containerd.sock}"
-table="$(crictl --runtime-endpoint "$runtime" images 2>/dev/null)" || {
+host_crictl() { chroot /proc/1/root /bin/sh -c "PATH=/usr/local/bin:/usr/bin:/bin k3s crictl \"\$@\"" crictl "$@"; }
+table="$(host_crictl images 2>/dev/null)" || {
     echo "list-failed" >&2
     exit 2
 }
@@ -109,7 +112,7 @@ fi
 failed=0
 removed=0
 for image in $images; do
-    if crictl --runtime-endpoint "$runtime" rmi "$image" >/dev/null 2>&1; then
+    if host_crictl rmi "$image" >/dev/null 2>&1; then
         removed=$((removed + 1))
     else
         echo "failed:$image" >&2

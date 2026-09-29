@@ -19,19 +19,7 @@ from nodalarc.vxlan import VNI_MAX, VNI_MIN
 K8S_LABEL_VALUE_MAX = 63
 LINUX_IFNAME_MAX = 15
 _RUNTIME_NODE_ID_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$")
-_CURRENT_HOST_IFNAME_RE = re.compile(r"^[isg][0-9a-z]{2}-[0-9a-f]{10}$")
-# VXLAN-carried link devices: tunnel vx, veth host end vh, veth pod end vp,
-# each followed by the VNI as six hex digits over the full 24-bit space.
-_VXLAN_HOST_IFNAME_RE = re.compile(r"^v[xhp][0-9a-f]{6}$")
-# The retired shape folded the VNI into five decimal digits, so two VNIs
-# could share names; cleanup must still recognize devices left under it.
-_RETIRED_VXLAN_HOST_IFNAME_RE = re.compile(r"^v[xhp][0-9]{5}$")
 _ALPHABET = "0123456789abcdefghijklmnopqrstuvwxyz"
-_RETIRED_HOST_IFNAME_PREFIXES = ("_isl_", "_gnd_", "_gbr-", "_na_")
-# Site-LAN host interfaces: bridge sl<vni>, vxlan port sv<vni>, member veth
-# ends sm<vni><idx>/sp<vni><idx>. VNI is zero-padded to 8 digits, member
-# index to 2 — every name fits LINUX_IFNAME_MAX with room to spare.
-_SITE_LAN_HOST_IFNAME_RE = re.compile(r"^s[lvmp][0-9]{8}(?:[0-9]{2})?$")
 
 
 def validate_runtime_node_id(node_id: str) -> None:
@@ -81,32 +69,9 @@ def isl_host_name(node_id: str, index: int) -> str:
 
 
 # The link group (IFLA_GROUP) every host-side device NodalArc creates carries.
-# Host cleanup deletes the whole group in one request, which the kernel
-# unregisters as one batch; name recognition below stays the proof that
-# nothing managed remains.
+# It is the only mark of ownership: host cleanup deletes the group's members
+# and nothing else, whatever other devices are named.
 MANAGED_HOST_DEVICE_GROUP = 0x4E415243
-
-
-def is_managed_host_ifname(name: str) -> bool:
-    """Return True for host-side interfaces owned by NodalArc.
-
-    Cleanup code must recognize both the current resolver-owned bounded names
-    and retired names from older deployments, because a reused node can contain
-    either after a restart or session switch.
-    """
-    if _CURRENT_HOST_IFNAME_RE.fullmatch(name):
-        return True
-    if _VXLAN_HOST_IFNAME_RE.fullmatch(name) or _RETIRED_VXLAN_HOST_IFNAME_RE.fullmatch(name):
-        return True
-    if _SITE_LAN_HOST_IFNAME_RE.fullmatch(name):
-        return True
-    if name.startswith("br-gnd-"):
-        return True
-    if any(name.startswith(prefix) for prefix in _RETIRED_HOST_IFNAME_PREFIXES):
-        return True
-    # Retired ground bridge port shape, e.g. _g0...; keep this here so cleanup
-    # callers do not re-encode old naming knowledge.
-    return name.startswith("_g") and len(name) > 2 and name[2:3].isdigit()
 
 
 class VxlanHostNames(NamedTuple):
@@ -125,9 +90,14 @@ def vxlan_host_ifnames(vni: int) -> VxlanHostNames:
     return VxlanHostNames(tunnel=f"vx{tag}", host_veth=f"vh{tag}", pod_veth=f"vp{tag}")
 
 
+# Every site-LAN bridge name starts with this prefix; the host firewall rule
+# for site-LAN transit matches it.
+SITE_LAN_BRIDGE_PREFIX = "sl"
+
+
 def site_lan_bridge_name(vni: int) -> str:
     """Host bridge carrying one site's LAN segment on this host."""
-    return f"sl{vni:08d}"
+    return f"{SITE_LAN_BRIDGE_PREFIX}{vni:08d}"
 
 
 def site_lan_vxlan_name(vni: int) -> str:

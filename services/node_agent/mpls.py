@@ -3,35 +3,42 @@
 """MPLS kernel capability for Node Agent wiring.
 
 Linux defines MPLS routing (``mpls_router``) and IP-over-MPLS encapsulation
-(``mpls_iptunnel``) separately, so each capability is probed on its own
-after the modules are asked for. A failed ``modprobe`` decides nothing by
-itself: the capability may be built in or already loaded. The verdict is the
-kernel's current state, read on every MPLS wiring attempt; nothing is
-cached across attempts.
+(``mpls_iptunnel``) separately, so each capability is probed on its own.
+The Node Agent asks for the modules only when the installation allows it
+(``node_agent_loads_kernel_modules``); otherwise the host's own
+configuration loads them. The Node Agent loads a module in its own process:
+it reads the module and its dependencies from the host's module tree,
+decompresses each file with the standard library and hands the image to
+``init_module(2)``. A failed load decides nothing by itself: the capability
+may be built in or already loaded. The verdict is the kernel's current state,
+read on every MPLS wiring attempt; nothing is cached across attempts.
 """
 
 from __future__ import annotations
 
+import ctypes
+import errno
+import gzip
 import logging
+import lzma
 import os
-import subprocess
+from collections.abc import Callable
+from compression import zstd
 from dataclasses import dataclass
 from pathlib import Path
+
+from nodalarc.platform_config import get_platform_config
 
 from node_agent import kernel_verifier, ops_events
 from node_agent.kernel_constants import MPLS_INPUT_ENABLED, mpls_input_sysctl
 from node_agent.kernel_verifier import KernelStateConflict, Proof
-from node_agent.namespace_ops import _write_sysctl_in_netns
+from node_agent.namespace_ops import _libc, _write_sysctl_in_netns
 
 log = logging.getLogger(__name__)
 
 MODULE_ROUTING = "mpls_router"
 MODULE_ENCAPSULATION = "mpls_iptunnel"
 MPLS_KERNEL_MODULES = (MODULE_ROUTING, MODULE_ENCAPSULATION)
-
-
-def running_in_k8s() -> bool:
-    return bool(os.environ.get("KUBERNETES_SERVICE_HOST") or os.environ.get("NODE_NAME"))
 
 
 class MplsInputError(RuntimeError):
@@ -81,23 +88,25 @@ def configure_mpls_input(pid: int, ifname: str, *, created: bool, subject: str) 
 
 @dataclass(frozen=True)
 class ModuleLoad:
-    """One ``modprobe`` request: whether it ran and what it answered."""
+    """One module load request: whether it ran and the error it met, if any."""
 
     name: str
     attempted: bool
-    returncode: int | None
-    stderr: str
+    error: str = ""
 
     @property
     def failed(self) -> bool:
-        return self.attempted and self.returncode != 0
+        return self.attempted and bool(self.error)
 
     def describe(self) -> str:
         if not self.attempted:
-            return f"{self.name}: modprobe not attempted outside Kubernetes"
-        if self.returncode == 0:
-            return f"{self.name}: modprobe ok"
-        return f"{self.name}: modprobe rc={self.returncode} stderr={self.stderr.strip()!r}"
+            return (
+                f"{self.name}: not loaded by the Node Agent (nodeAgent.loadKernelModules is off; "
+                "the host's own configuration loads it)"
+            )
+        if not self.error:
+            return f"{self.name}: load ok"
+        return f"{self.name}: load failed: {self.error}"
 
 
 @dataclass(frozen=True)
@@ -180,11 +189,70 @@ def probe_encapsulation(
     return CapabilityProbe("mpls encapsulation", MODULE_ENCAPSULATION, loaded or builtin, detail)
 
 
-def _load_module(name: str) -> ModuleLoad:
-    if not running_in_k8s():
-        return ModuleLoad(name, attempted=False, returncode=None, stderr="")
-    result = subprocess.run(["modprobe", name], text=True, capture_output=True, check=False)
-    return ModuleLoad(name, attempted=True, returncode=result.returncode, stderr=result.stderr)
+# init_module(2) by machine: the kernel takes the module image from memory.
+_INIT_MODULE_SYSCALL = {"x86_64": 175, "aarch64": 105}
+_DECOMPRESS: dict[str, Callable[[bytes], bytes]] = {
+    ".zst": zstd.decompress,
+    ".xz": lzma.decompress,
+    ".gz": gzip.decompress,
+}
+
+
+def _module_name(path: str) -> str:
+    """The kernel's name for a module file: its stem, with dashes as underscores."""
+    stem = Path(path).name
+    for suffix in _DECOMPRESS:
+        stem = stem.removesuffix(suffix)
+    return stem.removesuffix(".ko").replace("-", "_")
+
+
+def module_load_order(name: str, modules_dir: Path) -> list[Path]:
+    """The files that load ``name``: its dependencies first, then the module.
+
+    ``modules.dep`` lists a module's dependencies with each one depending
+    only on those after it, so they load from the end of the list.
+    """
+    dep_file = modules_dir / "modules.dep"
+    for line in dep_file.read_text().splitlines():
+        path, sep, deps = line.partition(":")
+        if sep and _module_name(path) == name:
+            return [modules_dir / dep for dep in reversed(deps.split())] + [modules_dir / path]
+    raise LookupError(f"{name} is not listed in {dep_file}")
+
+
+def _init_module(image: bytes) -> None:
+    machine = os.uname().machine
+    number = _INIT_MODULE_SYSCALL.get(machine)
+    if number is None:
+        raise OSError(errno.ENOSYS, f"no init_module system call number known for {machine}")
+    buffer = ctypes.create_string_buffer(image, len(image))
+    if _libc.syscall(ctypes.c_long(number), buffer, ctypes.c_ulong(len(image)), b"") != 0:
+        code = ctypes.get_errno()
+        raise OSError(code, os.strerror(code))
+
+
+def _load_file(path: Path, sys_root: Path) -> None:
+    """Load one module file unless the kernel already has that module."""
+    if (sys_root / "module" / _module_name(path.name)).is_dir():
+        return
+    data = path.read_bytes()
+    decompress = _DECOMPRESS.get(path.suffix)
+    try:
+        _init_module(decompress(data) if decompress else data)
+    except OSError as exc:
+        if exc.errno != errno.EEXIST:  # EEXIST: loaded meanwhile
+            raise
+
+
+def _load_module(name: str, *, sys_root: Path, modules_dir: Path) -> ModuleLoad:
+    if not get_platform_config().node_agent_loads_kernel_modules:
+        return ModuleLoad(name, attempted=False)
+    try:
+        for path in module_load_order(name, modules_dir):
+            _load_file(path, sys_root)
+    except (OSError, LookupError, zstd.ZstdError, lzma.LZMAError, gzip.BadGzipFile) as exc:
+        return ModuleLoad(name, attempted=True, error=f"{type(exc).__name__}: {exc}")
+    return ModuleLoad(name, attempted=True)
 
 
 def ensure_mpls_kernel_support(
@@ -194,18 +262,22 @@ def ensure_mpls_kernel_support(
     modules_root: Path = Path("/lib/modules"),
     release: str | None = None,
 ) -> MplsSupport:
-    """Ask the kernel for MPLS support, then read what it has.
+    """Ask the kernel for MPLS support when allowed to, then read what it has.
 
-    Called once per host on every wiring attempt that needs MPLS. ``modprobe``
-    is idempotent, so an already-loaded module costs a lookup and no
-    reinsertion. Each capability is judged by its own probe; a failed
-    ``modprobe`` whose capability is present is reported as a diagnostic and
-    nothing more, and a failed ``modprobe`` whose capability is absent is
-    published as the existing kernel-module event. The caller refuses the
-    MPLS nodes when ``available`` is False and carries ``diagnostic()`` with
-    the refusal.
+    Called once per host on every wiring attempt that needs MPLS. The modules
+    are asked for only when the installation lets the Node Agent load kernel
+    modules; a module the kernel already has is not loaded again. Each
+    capability is judged by its own probe; a failed load whose capability is
+    present is reported as a diagnostic and nothing more, and a failed load
+    whose capability is absent is published as the existing kernel-module
+    event. The caller refuses the MPLS nodes when ``available`` is False and
+    carries ``diagnostic()`` with the refusal.
     """
-    modules = tuple(_load_module(name) for name in MPLS_KERNEL_MODULES)
+    modules_dir = modules_root / (release or os.uname().release)
+    modules = tuple(
+        _load_module(name, sys_root=sys_root, modules_dir=modules_dir)
+        for name in MPLS_KERNEL_MODULES
+    )
     routing = probe_routing(proc_root=proc_root)
     encapsulation = probe_encapsulation(
         sys_root=sys_root, modules_root=modules_root, release=release
@@ -233,10 +305,9 @@ def ensure_mpls_kernel_support(
             session_id="",
             details={
                 "module": module.name,
-                "stderr": module.stderr.strip(),
-                "returncode": module.returncode,
+                "error": module.error,
                 "capability": capability.describe(),
             },
         )
-        log.warning("%s stderr=%s", message, module.stderr.strip())
+        log.warning("%s error=%s", message, module.error)
     return MplsSupport(routing=routing, encapsulation=encapsulation, modules=modules)

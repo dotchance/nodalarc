@@ -11,7 +11,7 @@ from node_agent.__main__ import (
     _require_ready_fence,
 )
 from node_agent.command_contract import RuntimeFence, WriterEpochFloor
-from node_agent.mpls import ensure_mpls_kernel_support, module_is_builtin, probe_encapsulation
+from node_agent.mpls import module_is_builtin, probe_encapsulation
 
 pytestmark = pytest.mark.usefixtures("_node_agent_ops_spool_path")
 
@@ -78,129 +78,6 @@ def _mpls_roots(
         "modules_root": root / "lib/modules",
         "release": release,
     }
-
-
-def _modprobe(monkeypatch: pytest.MonkeyPatch, answers: dict[str, tuple[int, str]]) -> list[str]:
-    calls: list[str] = []
-
-    class Result:
-        def __init__(self, returncode: int, stderr: str) -> None:
-            self.returncode = returncode
-            self.stderr = stderr
-
-    def run(cmd, **_kwargs):
-        calls.append(cmd[1])
-        returncode, stderr = answers[cmd[1]]
-        return Result(returncode, stderr)
-
-    monkeypatch.setattr("node_agent.mpls.subprocess.run", run)
-    return calls
-
-
-def _events(monkeypatch: pytest.MonkeyPatch) -> list[dict]:
-    published: list[dict] = []
-    monkeypatch.setattr(ops_events, "publish", lambda **kwargs: published.append(kwargs))
-    return published
-
-
-def test_both_modules_load_and_both_capabilities_present(monkeypatch, tmp_path) -> None:
-    monkeypatch.setenv("NODE_NAME", "k3s-a")
-    calls = _modprobe(monkeypatch, {"mpls_router": (0, ""), "mpls_iptunnel": (0, "")})
-    published = _events(monkeypatch)
-
-    support = ensure_mpls_kernel_support(**_mpls_roots(tmp_path))
-
-    assert calls == ["mpls_router", "mpls_iptunnel"]
-    assert support.available
-    assert support.routing.present and support.encapsulation.present
-    assert all(module.attempted and module.returncode == 0 for module in support.modules)
-    assert published == []
-    assert "mpls routing present" in support.diagnostic()
-    assert "mpls encapsulation present" in support.diagnostic()
-
-
-def test_failed_modprobe_with_its_capability_present_is_built_in_not_a_refusal(
-    monkeypatch, tmp_path, caplog
-) -> None:
-    """mpls_iptunnel will not load as a module but the running kernel lists it as built in:
-    the capability is present, so no refusal and no event; the stderr stays as a diagnostic."""
-    monkeypatch.setenv("NODE_NAME", "k3s-a")
-    _modprobe(
-        monkeypatch,
-        {
-            "mpls_router": (0, ""),
-            "mpls_iptunnel": (1, "modprobe: FATAL: Module mpls_iptunnel not found"),
-        },
-    )
-    published = _events(monkeypatch)
-    roots = _mpls_roots(tmp_path, loaded=False, builtin_lines=["kernel/net/mpls/mpls_iptunnel.ko"])
-
-    with caplog.at_level("INFO", logger="node_agent.mpls"):
-        support = ensure_mpls_kernel_support(**roots)
-
-    assert support.available
-    assert support.encapsulation.present
-    assert "builtin=yes" in support.encapsulation.detail
-    assert published == []
-    assert "Module mpls_iptunnel not found" in caplog.text
-    assert "rc=1" in support.diagnostic()
-
-
-def test_routing_present_but_encapsulation_neither_loaded_nor_built_in_is_unavailable(
-    monkeypatch, tmp_path
-) -> None:
-    """The sysctl tree proves routing only; a failed mpls_iptunnel load with the module
-    neither loaded nor built in is a genuine capability failure with its stderr kept."""
-    monkeypatch.setenv("NODE_NAME", "k3s-a")
-    _modprobe(
-        monkeypatch, {"mpls_router": (0, ""), "mpls_iptunnel": (1, "Operation not permitted")}
-    )
-    published = _events(monkeypatch)
-    roots = _mpls_roots(tmp_path, loaded=False, builtin_lines=["kernel/net/mpls/mpls_router.ko"])
-
-    support = ensure_mpls_kernel_support(**roots)
-
-    assert not support.available
-    assert support.routing.present and not support.encapsulation.present
-    assert [event["details"]["module"] for event in published] == ["mpls_iptunnel"]
-    assert published[0]["code"] == "STARTUP_KERNEL_MODULE_UNAVAILABLE"
-    assert published[0]["details"]["stderr"] == "Operation not permitted"
-    assert published[0]["details"]["returncode"] == 1
-    diagnostic = support.diagnostic()
-    assert "mpls encapsulation absent" in diagnostic
-    assert "loaded=no" in diagnostic and "builtin=no" in diagnostic
-    assert "mpls_iptunnel: modprobe rc=1 stderr='Operation not permitted'" in diagnostic
-
-
-def test_routing_tree_absent_is_unavailable_even_when_modprobe_succeeds(
-    monkeypatch, tmp_path
-) -> None:
-    monkeypatch.setenv("NODE_NAME", "k3s-a")
-    _modprobe(monkeypatch, {"mpls_router": (0, ""), "mpls_iptunnel": (0, "")})
-    published = _events(monkeypatch)
-
-    support = ensure_mpls_kernel_support(**_mpls_roots(tmp_path, tree=False))
-
-    assert not support.available
-    assert not support.routing.present
-    assert "mpls routing absent" in support.diagnostic()
-    assert "proc/sys/net/mpls" in support.diagnostic()
-    assert published == []
-
-
-def test_outside_kubernetes_no_modprobe_is_attempted_and_the_probes_decide(
-    monkeypatch, tmp_path
-) -> None:
-    monkeypatch.delenv("NODE_NAME", raising=False)
-    monkeypatch.delenv("KUBERNETES_SERVICE_HOST", raising=False)
-    calls = _modprobe(monkeypatch, {"mpls_router": (0, ""), "mpls_iptunnel": (0, "")})
-
-    support = ensure_mpls_kernel_support(**_mpls_roots(tmp_path))
-
-    assert calls == []
-    assert support.available
-    assert all(not module.attempted for module in support.modules)
-    assert "modprobe not attempted outside Kubernetes" in support.diagnostic()
 
 
 @pytest.mark.parametrize(

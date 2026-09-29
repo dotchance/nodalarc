@@ -216,6 +216,37 @@ def _wiring_status_volume() -> kubernetes.client.V1Volume:
     )
 
 
+def _placed_on(node: str) -> kubernetes.client.V1Affinity:
+    """Required node affinity to one node, by name.
+
+    The Operator chooses each pod's node; the cluster's scheduler binds it
+    there and still applies resource fit, taints and priority, so a pod that
+    does not fit waits Pending with the scheduler's reason.
+    """
+    return kubernetes.client.V1Affinity(
+        local_vars_configuration=MODEL_CONFIGURATION,
+        node_affinity=kubernetes.client.V1NodeAffinity(
+            local_vars_configuration=MODEL_CONFIGURATION,
+            required_during_scheduling_ignored_during_execution=kubernetes.client.V1NodeSelector(
+                local_vars_configuration=MODEL_CONFIGURATION,
+                node_selector_terms=[
+                    kubernetes.client.V1NodeSelectorTerm(
+                        local_vars_configuration=MODEL_CONFIGURATION,
+                        match_fields=[
+                            kubernetes.client.V1NodeSelectorRequirement(
+                                local_vars_configuration=MODEL_CONFIGURATION,
+                                key="metadata.name",
+                                operator="In",
+                                values=[node],
+                            )
+                        ],
+                    )
+                ],
+            ),
+        ),
+    )
+
+
 def build_session_pod(
     *,
     pod_name: str,
@@ -292,7 +323,7 @@ def build_session_pod(
         ),
         spec=kubernetes.client.V1PodSpec(
             local_vars_configuration=MODEL_CONFIGURATION,
-            node_name=target_node,
+            affinity=_placed_on(target_node) if target_node is not None else None,
             init_containers=[_wiring_gate_container(), *composition.init_containers],
             containers=list(composition.containers),
             volumes=[*composition.volumes, _wiring_status_volume()],

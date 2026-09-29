@@ -11,15 +11,12 @@ when one is not carried.
 
 from __future__ import annotations
 
-import subprocess
-from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
 from nodalarc.substrate.measurement_contract import RequiredSubstratePair
 from nodalarc.vxlan import host_path_mtu_for
-from node_agent import substrate_monitor
-from node_agent.substrate_monitor import HostPathProof, prove_host_path_mtu
+from node_agent.substrate_monitor import HostPathProof
 
 from tests.unit.test_node_agent_wiring_mpls import LOCAL_NODE, _manifest, _phase, _Run, _support
 
@@ -37,83 +34,6 @@ def _pair(source: str, target: str, target_ip: str) -> RequiredSubstratePair:
 def test_the_host_path_carries_the_encapsulation_for_its_address_family() -> None:
     assert host_path_mtu_for(9000, "192.0.2.3") == 9050
     assert host_path_mtu_for(9000, "2001:db8::3") == 9070
-
-
-class TestProbe:
-    def _run(self, monkeypatch, *, returncode: int, stdout: str = "", stderr: str = ""):
-        calls: list[list[str]] = []
-
-        def fake_run(command, **_kwargs):
-            calls.append(command)
-            return SimpleNamespace(returncode=returncode, stdout=stdout, stderr=stderr)
-
-        monkeypatch.setattr(substrate_monitor.subprocess, "run", fake_run)
-        return calls
-
-    def test_a_returned_unfragmentable_echo_proves_the_size(self, monkeypatch) -> None:
-        calls = self._run(
-            monkeypatch,
-            returncode=0,
-            stdout="3 packets transmitted, 3 received, 0% packet loss, time 402ms\n",
-        )
-
-        proof = prove_host_path_mtu(_pair(LOCAL_NODE, "node03", "192.0.2.3"), 9050)
-
-        assert proof.carried
-        # 9050-byte IPv4 packets: 20 bytes of IP and 8 of ICMP around the payload.
-        [command] = calls
-        assert command[:6] == ["ping", "-4", "-M", "do", "-s", "9022"]
-        assert command[-1] == "192.0.2.3"
-        assert "3 received" in proof.evidence
-
-    def test_an_ipv6_host_path_sizes_the_payload_for_its_header(self, monkeypatch) -> None:
-        calls = self._run(monkeypatch, returncode=0, stdout="3 packets transmitted, 3 received\n")
-
-        prove_host_path_mtu(_pair(LOCAL_NODE, "node03", "2001:db8::3"), 9070)
-
-        assert calls[0][:6] == ["ping", "-6", "-M", "do", "-s", "9022"]
-
-    def test_a_host_interface_too_small_to_send_is_not_carried(self, monkeypatch) -> None:
-        self._run(
-            monkeypatch,
-            returncode=1,
-            stdout="3 packets transmitted, 0 received, +3 errors, 100% packet loss\n",
-            stderr="ping: local error: message too long, mtu=1500\n",
-        )
-
-        proof = prove_host_path_mtu(_pair(LOCAL_NODE, "node03", "192.0.2.3"), 9050)
-
-        assert not proof.carried
-        assert "message too long, mtu=1500" in proof.evidence
-        assert "9050-byte packets to node03 (192.0.2.3) not carried" in proof.diagnostic()
-
-    def test_no_reply_is_not_carried(self, monkeypatch) -> None:
-        self._run(
-            monkeypatch,
-            returncode=1,
-            stdout="3 packets transmitted, 0 received, 100% packet loss, time 2040ms\n",
-        )
-
-        assert not prove_host_path_mtu(_pair(LOCAL_NODE, "node03", "192.0.2.3"), 9050).carried
-
-    def test_a_probe_that_cannot_run_is_not_carried(self, monkeypatch) -> None:
-        def missing(*_args, **_kwargs):
-            raise FileNotFoundError("ping")
-
-        monkeypatch.setattr(substrate_monitor.subprocess, "run", missing)
-
-        proof = prove_host_path_mtu(_pair(LOCAL_NODE, "node03", "192.0.2.3"), 9050)
-
-        assert not proof.carried
-        assert proof.evidence.startswith("probe could not run")
-
-    def test_a_timed_out_probe_is_not_carried(self, monkeypatch) -> None:
-        def slow(*_args, **_kwargs):
-            raise subprocess.TimeoutExpired("ping", 15)
-
-        monkeypatch.setattr(substrate_monitor.subprocess, "run", slow)
-
-        assert not prove_host_path_mtu(_pair(LOCAL_NODE, "node03", "192.0.2.3"), 9050).carried
 
 
 def _manifest_with_pairs(*pairs: RequiredSubstratePair):

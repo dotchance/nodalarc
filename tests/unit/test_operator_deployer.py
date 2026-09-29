@@ -60,7 +60,6 @@ from nodalarc_operator.session_deployer import (
     check_wiring_complete,
     compute_platform_hash,
     compute_runtime_hash,
-    discover_available_nodes,
     ensure_runtime_session_config,
     ensure_session_configmaps,
     ensure_session_pods,
@@ -333,41 +332,6 @@ class TestPodPlacement:
                 _make_pod_inventory(planes=1, sats_per_plane=1, gs_count=0),
                 ["node01"],
             )
-
-    def test_tainted_node_excluded(self):
-        """discover_available_nodes filters out tainted nodes."""
-        mock_v1 = create_autospec(kubernetes.client.CoreV1Api, instance=True)
-
-        good_node = MagicMock()
-        good_node.metadata.name = "node02"
-        good_node.spec.taints = []
-
-        tainted_node = MagicMock()
-        tainted_node.metadata.name = "node03"
-        taint = MagicMock()
-        taint.key = "nodalarc.io/not-ready"
-        taint.effect = "NoSchedule"
-        tainted_node.spec.taints = [taint]
-
-        node_list = MagicMock()
-        node_list.items = [good_node, tainted_node]
-        mock_v1.list_node.return_value = node_list
-
-        with patch("nodalarc_operator.session_deployer._get_v1", return_value=mock_v1):
-            result = discover_available_nodes()
-
-        assert result == ["node02"]
-        mock_v1.list_node.assert_called_once_with(label_selector="nodalarc.io/node-agent=true")
-
-    def test_a_failed_node_listing_raises(self):
-        mock_v1 = create_autospec(kubernetes.client.CoreV1Api, instance=True)
-        mock_v1.list_node.side_effect = kubernetes.client.rest.ApiException(status=503)
-
-        with (
-            patch("nodalarc_operator.session_deployer._get_v1", return_value=mock_v1),
-            pytest.raises(kubernetes.client.rest.ApiException),
-        ):
-            discover_available_nodes()
 
 
 # ---------------------------------------------------------------------------
@@ -1094,27 +1058,6 @@ class TestWiringManifest:
             assert isinstance(node["sysctls"], dict), f"{node_id} sysctls not dict"
             assert "mpls_enable" in node, f"{node_id} missing mpls_enable"
             assert "remove_default_route" in node, f"{node_id} missing remove_default_route"
-
-    def test_manifest_carries_a_cluster_pod_cidr_for_the_management_path(self, tmp_path):
-        """The Node Agent replaces the CNI default with a management route to
-        the cluster pod CIDR so a session pod can answer the browser terminal
-        and control-plane traffic from another node. If the manifest ever
-        omits that CIDR, cross-node terminal access silently breaks — this
-        pins the data into the contract.
-        """
-        import ipaddress
-
-        manifest = self._build_and_extract(tmp_path)
-        cidr = manifest.get("cluster_pod_cidr")
-        assert cidr, "wiring manifest must carry cluster_pod_cidr"
-        covering = ipaddress.ip_network(cidr)
-        # It must cover every node's pod CIDR — the reachability the terminal
-        # depends on cross-node.
-        for node_cidr in ("10.42.0.0/22", "10.42.12.0/22", "10.42.16.0/22"):
-            node_net = ipaddress.ip_network(node_cidr)
-            assert node_net.subnet_of(covering), f"{node_cidr} not covered by {cidr}"
-        # And the whole manifest still validates through the Node Agent contract.
-        WiringManifest.model_validate(manifest)
 
     def test_manifest_declares_site_lans_for_every_addressed_terr0(self, tmp_path):
         manifest = self._build_and_extract(tmp_path)

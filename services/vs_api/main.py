@@ -2914,7 +2914,7 @@ def download_session_yaml(
 
 def _available_session_node_count() -> int:
     """The number of nodes that accept session pods; a failed listing raises."""
-    return len(available_session_nodes(k8s.core_v1()))
+    return len(available_session_nodes(k8s.core_v1(), get_platform_config().kubernetes_namespace))
 
 
 def _prepared_transition_reservation(deployment: Any) -> TransitionOperationReservation:

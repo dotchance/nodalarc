@@ -14,7 +14,7 @@ from __future__ import annotations
 from copy import deepcopy
 
 import pytest
-from nodalarc.runtime_naming import LINUX_IFNAME_MAX, is_managed_host_ifname
+from nodalarc.runtime_naming import LINUX_IFNAME_MAX
 from nodalarc.session_validator import validate_session_readiness
 from nodalarc.substrate.manifest_contract import WiringManifest
 from nodalarc.vxlan import compute_site_vni
@@ -111,72 +111,8 @@ class _MgmtFakeRoute(dict):
         return self._attrs.get(key)
 
 
-class _MgmtFakeIPRoute:
-    def __init__(self, routes, cni_index=7):
-        self._routes = routes
-        self._cni_index = cni_index
-        self.calls = []
-
-    def link_lookup(self, ifname):
-        return [self._cni_index] if ifname == "cni0" else []
-
-    def get_routes(self, family):
-        return list(self._routes)
-
-    def route(self, action, **kwargs):
-        self.calls.append((action, kwargs))
-
-
 # A pod's cni0 route set: the CNI default (dst_len 0) plus the kernel
 # scope-link subnet route from which the bridge gateway (.1) is derived.
-def _pod_cni_routes(cni_index=7):
-    return [
-        _MgmtFakeRoute(0, 0, {"RTA_GATEWAY": "10.42.12.1", "RTA_OIF": cni_index}),
-        _MgmtFakeRoute(22, 253, {"RTA_DST": "10.42.12.0", "RTA_OIF": cni_index}),
-        # The pod's own /32 (host scope) and the broadcast /32 (link scope):
-        # both must be ignored when deriving the bridge gateway.
-        _MgmtFakeRoute(32, 254, {"RTA_DST": "10.42.12.123", "RTA_OIF": cni_index}),
-        _MgmtFakeRoute(32, 253, {"RTA_DST": "10.42.15.255", "RTA_OIF": cni_index}),
-    ]
-
-
-class TestManagementRoute:
-    """Cross-node terminal path: the CNI default is dropped and a scoped
-    management route to the cluster pod CIDR is installed via the bridge
-    gateway derived from the pod's own cni0 subnet."""
-
-    def _run(self, monkeypatch, cluster_cidr, routes=None):
-        from node_agent import wiring
-
-        ipr = _MgmtFakeIPRoute(_pod_cni_routes() if routes is None else routes)
-        monkeypatch.setattr(wiring, "_in_namespace", lambda pid, fn: fn(ipr))
-        err = wiring.remove_default_route(123, "sat-x", cluster_cidr)
-        assert err is None
-        return ipr.calls
-
-    def test_default_replaced_with_scoped_management_route(self, monkeypatch):
-        calls = self._run(monkeypatch, "10.42.0.0/19")
-        dsts = [(a, k.get("dst")) for a, k in calls]
-        assert ("del", "0.0.0.0/0") in dsts
-        assert ("replace", "10.42.0.0/19") in dsts
-        replace = next(k for a, k in calls if a == "replace")
-        # Gateway derived from the pod's cni0 subnet (10.42.12.0/22 -> .1).
-        assert replace["gateway"] == "10.42.12.1"
-        assert replace["oif"] == 7
-
-    def test_management_route_installs_even_when_default_already_gone(self, monkeypatch):
-        """A re-wire runs after the routing engine took the default: there is
-        no CNI default to capture, but the gateway is still derivable from the
-        cni0 subnet, so the management route is (re)installed."""
-        routes = [_MgmtFakeRoute(22, 253, {"RTA_DST": "10.42.12.0", "RTA_OIF": 7})]
-        calls = self._run(monkeypatch, "10.42.0.0/19", routes=routes)
-        assert not any(a == "del" for a, _ in calls)
-        assert ("replace", "10.42.0.0/19") in [(a, k.get("dst")) for a, k in calls]
-
-    def test_no_management_route_without_cluster_cidr(self, monkeypatch):
-        calls = self._run(monkeypatch, None)
-        assert any(a == "del" for a, _ in calls)
-        assert not any(a == "replace" for a, _ in calls)
 
 
 class TestManifestContract:
@@ -328,7 +264,6 @@ class TestPlanner:
             plan.local_members[0].pod_ifname,
         ):
             assert len(name) <= LINUX_IFNAME_MAX
-            assert is_managed_host_ifname(name)
 
     def test_single_host_site_has_no_vxlan_port(self) -> None:
         spec, nodes = self._spec_and_nodes()
@@ -708,80 +643,3 @@ class TestActuationIdempotency:
         )
         with pytest.raises(Exception, match="Permission denied"):
             site_lan._configure_member_pod(port)
-
-
-class _FakeFirewall:
-    """Records host-firewall invocations and scripts their return codes."""
-
-    def __init__(self, existing_rules: bool = False, insert_rc: int = 0) -> None:
-        self.existing_rules = existing_rules
-        self.insert_rc = insert_rc
-        self.calls: list[list[str]] = []
-        self.deleted: int = 0
-
-    def __call__(self, cmd, capture_output=False, text=False):
-        import subprocess
-
-        self.calls.append(list(cmd))
-        assert cmd[0] == "nsenter" and cmd[1] == "--net=/proc/1/ns/net", (
-            "host firewall state must be mutated in the host netns, not the agent container's"
-        )
-        action = cmd[3]
-        if action == "-C":
-            rc = 0 if self.existing_rules else 1
-        elif action == "-I":
-            rc = self.insert_rc
-        elif action == "-D":
-            self.deleted += 1
-            self.existing_rules = False
-            rc = 0
-        else:  # pragma: no cover - unexpected verb is a test failure
-            raise AssertionError(f"unexpected firewall verb {action}")
-        return subprocess.CompletedProcess(cmd, rc, stdout="", stderr="boom")
-
-
-class TestSiteLanTransitRules:
-    """The host-firewall class: br_netfilter feeds bridged site-LAN frames to
-    the host FORWARD chain (where e.g. Docker's DROP policy eats them, while
-    ARP sails past — the false-healthy LAN). The agent owns its substrate's
-    transit: ACCEPT rules pinned for the reserved port namespaces, fail-loud
-    when they cannot be installed."""
-
-    def test_rules_pinned_for_both_families_and_both_port_namespaces(self, monkeypatch) -> None:
-        from node_agent import site_lan
-
-        fake = _FakeFirewall(existing_rules=False)
-        monkeypatch.setattr(site_lan.subprocess, "run", fake)
-        site_lan.ensure_site_lan_transit()
-
-        inserts = [c for c in fake.calls if c[3] == "-I"]
-        assert {c[2] for c in inserts} == {"iptables", "ip6tables"}
-        assert all(c[4] == "FORWARD" and c[5] == "1" for c in inserts)
-        assert {c[c.index("--physdev-in") + 1] for c in inserts} == {"sm+", "sv+"}
-        assert all("--physdev-is-bridged" in c for c in inserts), (
-            "rules must only exempt bridged transit, never routed host traffic"
-        )
-
-    def test_present_rules_are_not_duplicated(self, monkeypatch) -> None:
-        from node_agent import site_lan
-
-        fake = _FakeFirewall(existing_rules=True)
-        monkeypatch.setattr(site_lan.subprocess, "run", fake)
-        site_lan.ensure_site_lan_transit()
-        assert not [c for c in fake.calls if c[3] == "-I"]
-
-    def test_install_failure_is_loud(self, monkeypatch) -> None:
-        from node_agent import site_lan
-
-        fake = _FakeFirewall(existing_rules=False, insert_rc=2)
-        monkeypatch.setattr(site_lan.subprocess, "run", fake)
-        with pytest.raises(RuntimeError, match="site LAN transit rule"):
-            site_lan.ensure_site_lan_transit()
-
-    def test_remove_deletes_until_absent_and_never_raises(self, monkeypatch) -> None:
-        from node_agent import site_lan
-
-        fake = _FakeFirewall(existing_rules=True)
-        monkeypatch.setattr(site_lan.subprocess, "run", fake)
-        site_lan.remove_site_lan_transit()
-        assert fake.deleted > 0

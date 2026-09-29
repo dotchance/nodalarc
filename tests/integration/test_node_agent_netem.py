@@ -116,7 +116,6 @@ def _handles(pids: dict[str, int]) -> dict:
             pod_name=node_id,
             pod_uid=f"pod-{node_id}",
             sandbox_id=f"sb-{node_id}",
-            sandbox_attempt=0,
             pid=pid,
             netns_id=netns,
             mpls_enable=False,

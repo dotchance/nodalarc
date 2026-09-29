@@ -48,8 +48,19 @@ class PlatformConfig(BaseModel):
     session_data_root: str
 
     # The MTU of every emulated interface, whether its link stays on one
-    # host or crosses hosts; the hosts carry the VXLAN overhead.
+    # host or crosses hosts; the hosts carry the VXLAN overhead. Set at
+    # install (chart value network.linkMtu).
     veth_interface_mtu_bytes: int = Field(ge=IPV6_MINIMUM_MTU_BYTES, le=MAX_EMULATED_MTU_BYTES)
+    # The UDP port of every VXLAN device NodalArc creates between hosts. Set
+    # at install (chart value network.vxlanPort).
+    vxlan_udp_port: int = Field(ge=1024, le=65535)
+    # Whether the Node Agent may load kernel modules a session needs (MPLS)
+    # on its host. Set at install (chart value nodeAgent.loadKernelModules).
+    node_agent_loads_kernel_modules: bool
+    # The kubelet's root directory on every host (its --root-dir), where the
+    # kubelet keeps each pod's volumes. Set at install (chart value
+    # nodeAgent.kubeletRootDir).
+    kubelet_root_dir: str = Field(pattern=r"^/")
 
     vs_api_visual_beam_falloff_exponent: float = Field(gt=0)
     vs_api_actuation_expected_latency_ms: float = Field(gt=0)
@@ -184,6 +195,25 @@ def reset_platform_config() -> None:
 
 
 CHART_NAMESPACE_VALUE = '"{{ .Values.namespace }}"'
+# The settings an installer chooses: each one's value in the chart copy is
+# replaced by its chart value, and Helm refuses an install that leaves one out.
+CHART_TEMPLATED_SETTINGS = {
+    "kubernetes_namespace": CHART_NAMESPACE_VALUE,
+    "veth_interface_mtu_bytes": (
+        '{{ required "network.linkMtu is required" .Values.network.linkMtu | int }}'
+    ),
+    "vxlan_udp_port": (
+        '{{ required "network.vxlanPort is required" .Values.network.vxlanPort | int }}'
+    ),
+    "node_agent_loads_kernel_modules": (
+        '{{ required "nodeAgent.loadKernelModules is required" '
+        ".Values.nodeAgent.loadKernelModules }}"
+    ),
+    "kubelet_root_dir": (
+        '{{ required "nodeAgent.kubeletRootDir is required" '
+        ".Values.nodeAgent.kubeletRootDir | quote }}"
+    ),
+}
 _TEMPLATED_FORMS = (None, '"', "'")
 
 
@@ -200,12 +230,12 @@ def _single_entry(node: yaml.MappingNode, key: str) -> tuple[yaml.ScalarNode, ya
 
 def render_chart_copy(source_text: str) -> str:
     """The chart's copy of the platform file: the shipped text, validated, with
-    the value of ``platform.kubernetes_namespace`` templated to the release
-    namespace.
+    the value of each installer-chosen setting (``CHART_TEMPLATED_SETTINGS``)
+    templated to its chart value.
 
-    Validity is the model's, applied to the file as it is. The field is
+    Validity is the model's, applied to the file as it is. Each field is
     located as a YAML node, so its key may be quoted or spaced freely and a
-    trailing comment survives. The value must be a plain or quoted scalar on
+    trailing comment survives. A value must be a plain or quoted scalar on
     one line; a block scalar, anchor, alias or tag is refused before any
     output, since replacing part of such a value would not yield the same
     document with one value changed.
@@ -226,22 +256,31 @@ def render_chart_copy(source_text: str) -> str:
     _, platform_node = _single_entry(root, "platform")
     if not isinstance(platform_node, yaml.MappingNode):
         raise ValueError("'platform' must be a mapping")
-    key_node, value_node = _single_entry(platform_node, "kubernetes_namespace")
-    unsupported = ValueError(
-        "platform.kubernetes_namespace must be a plain or quoted scalar on one line; "
-        "block scalars, anchors, aliases and tags are not templated"
-    )
-    if not isinstance(value_node, yaml.ScalarNode) or value_node.style not in _TEMPLATED_FORMS:
-        raise unsupported
-    start, end = value_node.start_mark.index, value_node.end_mark.index
-    if value_node.start_mark.line != value_node.end_mark.line or start <= key_node.end_mark.index:
-        raise unsupported
-    lead = source_text[start]
-    if (value_node.style is None and lead in "&!*") or (
-        value_node.style is not None and lead != value_node.style
-    ):
-        raise unsupported
-    return source_text[:start] + CHART_NAMESPACE_VALUE + source_text[end:]
+    spans: list[tuple[int, int, str]] = []
+    for field, template in CHART_TEMPLATED_SETTINGS.items():
+        key_node, value_node = _single_entry(platform_node, field)
+        unsupported = ValueError(
+            f"platform.{field} must be a plain or quoted scalar on one line; "
+            "block scalars, anchors, aliases and tags are not templated"
+        )
+        if not isinstance(value_node, yaml.ScalarNode) or value_node.style not in _TEMPLATED_FORMS:
+            raise unsupported
+        start, end = value_node.start_mark.index, value_node.end_mark.index
+        if (
+            value_node.start_mark.line != value_node.end_mark.line
+            or start <= key_node.end_mark.index
+        ):
+            raise unsupported
+        lead = source_text[start]
+        if (value_node.style is None and lead in "&!*") or (
+            value_node.style is not None and lead != value_node.style
+        ):
+            raise unsupported
+        spans.append((start, end, template))
+    rendered = source_text
+    for start, end, template in sorted(spans, reverse=True):
+        rendered = rendered[:start] + template + rendered[end:]
+    return rendered
 
 
 def _main(argv: list[str] | None = None) -> int:
@@ -255,7 +294,7 @@ def _main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--render-chart-copy",
         metavar="PATH",
-        help="validate PATH and write it to stdout with kubernetes_namespace templated",
+        help="validate PATH and write it to stdout with the installer settings templated",
     )
     args = parser.parse_args(argv)
     if not args.render_chart_copy:

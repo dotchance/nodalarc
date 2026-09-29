@@ -17,7 +17,7 @@ import socket
 import sys
 from collections.abc import Sequence
 
-from nodalarc.runtime_naming import MANAGED_HOST_DEVICE_GROUP, is_managed_host_ifname
+from nodalarc.runtime_naming import MANAGED_HOST_DEVICE_GROUP
 from nodalarc.substrate.manifest_contract import (
     POD_OWNER_UID_LABEL,
     POD_SESSION_RUN_LABEL,
@@ -29,19 +29,34 @@ from pydantic import BaseModel, ConfigDict
 from pyroute2 import IPRoute
 from pyroute2.netlink.exceptions import NetlinkError
 
+from node_agent.emulated_lan import (
+    EMULATED_LAN_NAMESPACE,
+    emulated_lan_namespace_present,
+    remove_emulated_lan_namespace,
+)
 from node_agent.proof_delivery import delivered_proof, kubelet_pods_dir
 
 log = logging.getLogger(__name__)
 
 
+def _managed_devices(ipr: IPRoute) -> dict[str, int]:
+    """Host devices in NodalArc's device group, by name, with their indexes.
+
+    The group is the only mark of ownership: every host device NodalArc
+    creates joins it, and a device outside it is never NodalArc's, whatever
+    its name.
+    """
+    return {
+        link.get_attr("IFLA_IFNAME", ""): int(link["index"])
+        for link in ipr.get_links()
+        if link.get_attr("IFLA_GROUP") == MANAGED_HOST_DEVICE_GROUP
+    }
+
+
 def get_actual_nodalarc_interfaces() -> set[str]:
-    """Enumerate nodalarc host-side interfaces from kernel via pyroute2."""
+    """The names of the host devices in NodalArc's device group."""
     with IPRoute() as ipr:
-        return {
-            link.get_attr("IFLA_IFNAME", "")
-            for link in ipr.get_links()
-            if is_managed_host_ifname(link.get_attr("IFLA_IFNAME", ""))
-        }
+        return set(_managed_devices(ipr))
 
 
 class HostCleanupReport(BaseModel):
@@ -51,7 +66,7 @@ class HostCleanupReport(BaseModel):
     whether wiring may start, and the teardown judges each host by it. A
     device already gone when its delete runs is absence, never a failure.
     Every other error is recorded with its text, and the final enumeration
-    lists every recognized name still present.
+    lists every device still in NodalArc's device group.
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
@@ -80,44 +95,35 @@ def _error_text(exc: BaseException) -> str:
 
 
 def clean_and_verify_host_state() -> HostCleanupReport:
-    """Delete every recognized host-side device, then verify none remains.
+    """Delete every device in NodalArc's device group and the site-LAN namespace, then verify.
 
-    Deletion failures do not stop the pass: every recognized device is
-    attempted, each failure is retained with its error, and the report
-    carries whatever the final enumeration still finds. The report is
-    returned, never raised, so a caller always sees the whole picture.
+    Deletion failures do not stop the pass: every member is attempted, each
+    failure is retained with its error, and the report carries whatever the
+    final enumeration still finds. The report is returned, never raised, so a
+    caller always sees the whole picture. Devices outside the group are never
+    touched. Removing the emulated_lan namespace destroys every site-LAN
+    bridge and port in it.
     """
     host = socket.gethostname()
     removed: list[str] = []
     failed: list[tuple[str, str]] = []
     try:
         with IPRoute() as ipr:
-            links = ipr.get_links()
-            before = {
-                link.get_attr("IFLA_IFNAME", "")
-                for link in links
-                if is_managed_host_ifname(link.get_attr("IFLA_IFNAME", ""))
-                or link.get_attr("IFLA_GROUP") == MANAGED_HOST_DEVICE_GROUP
-            }
-            # Every device NodalArc creates joins the managed group: one request
-            # deletes them all, and the kernel unregisters them as one batch.
-            # The request is sent only when the group has members, so a host
-            # with nothing to remove needs no privilege to prove itself clean.
-            if any(link.get_attr("IFLA_GROUP") == MANAGED_HOST_DEVICE_GROUP for link in links):
+            before = _managed_devices(ipr)
+            # One request deletes the whole group, and the kernel unregisters
+            # its members as one batch. The request is sent only when the
+            # group has members, so a host with nothing to remove needs no
+            # privilege to prove itself clean.
+            if before:
                 try:
                     ipr.link("del", group=MANAGED_HOST_DEVICE_GROUP)
                 except NetlinkError as exc:
                     if exc.code != errno.ENODEV:  # ENODEV: the group emptied meanwhile
                         failed.append((f"group {MANAGED_HOST_DEVICE_GROUP:#x}", _error_text(exc)))
-            # Any recognized device still present (created before devices were
-            # grouped, or by a failed group delete) is deleted by itself.
-            targets = [
-                (link.get_attr("IFLA_IFNAME", ""), int(link["index"]))
-                for link in ipr.get_links()
-                if is_managed_host_ifname(link.get_attr("IFLA_IFNAME", ""))
-            ]
-            removed.extend(sorted(before - {name for name, _index in targets}))
-            for name, index in targets:
+            # A member the group request left behind is deleted by itself.
+            left = _managed_devices(ipr) if before else {}
+            removed.extend(sorted(set(before) - set(left)))
+            for name, index in left.items():
                 try:
                     ipr.link("del", index=index)
                     removed.append(name)
@@ -127,6 +133,12 @@ def clean_and_verify_host_state() -> HostCleanupReport:
                     failed.append((name, _error_text(exc)))
                 except Exception as exc:
                     failed.append((name, _error_text(exc)))
+        lan = f"netns {EMULATED_LAN_NAMESPACE}"
+        try:
+            if remove_emulated_lan_namespace():
+                removed.append(lan)
+        except Exception as exc:
+            failed.append((lan, _error_text(exc)))
     except Exception as exc:
         return HostCleanupReport(
             host=host,
@@ -138,6 +150,8 @@ def clean_and_verify_host_state() -> HostCleanupReport:
         )
     try:
         remaining = tuple(sorted(get_actual_nodalarc_interfaces()))
+        if emulated_lan_namespace_present():
+            remaining += (f"netns {EMULATED_LAN_NAMESPACE}",)
     except Exception as exc:
         return HostCleanupReport(
             host=host,

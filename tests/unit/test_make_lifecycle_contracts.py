@@ -577,25 +577,25 @@ def test_node_agent_can_load_host_mpls_kernel_modules() -> None:
     node_agent = (ROOT / "deploy/helm/templates/node-agent-daemonset.yaml").read_text()
     dockerfile = (ROOT / "services/node_agent/Dockerfile").read_text()
 
-    assert "kmod" in dockerfile
-    assert "util-linux" in dockerfile
+    assert "kmod" not in dockerfile  # modules load in-process (init_module)
     assert "name: host-modules" in node_agent
     assert "mountPath: /lib/modules" in node_agent
     assert "path: /lib/modules" in node_agent
 
 
-def test_remote_containerd_purge_uses_node_agent_runtime_socket_contract() -> None:
+def test_remote_containerd_purge_runs_the_hosts_k3s_through_the_node_agent() -> None:
+    """The development purge uses the host's own k3s; the product Node Agent
+    carries no runtime client and mounts no runtime socket."""
     script = (ROOT / "scripts/na-purge-containerd.sh").read_text()
     node_agent = (ROOT / "deploy/helm/templates/node-agent-daemonset.yaml").read_text()
     dockerfile = (ROOT / "services/node_agent/Dockerfile").read_text()
 
-    assert "CONTAINER_RUNTIME_ENDPOINT" in node_agent
-    assert "/run/k3s/containerd/containerd.sock" in node_agent
-    assert 'crictl --runtime-endpoint "$runtime" images' in script
-    assert 'crictl --runtime-endpoint "$runtime" rmi' in script
-    assert "k3s crictl" not in script
+    assert "chroot /proc/1/root" in script and "k3s crictl" in script
+    assert "host_crictl images" in script and 'host_crictl rmi "$image"' in script
     assert "nsenter --target 1" not in script
-    assert "crictl-${CRICTL_VERSION}" in dockerfile
+    assert "CONTAINER_RUNTIME_ENDPOINT" not in node_agent
+    assert "containerd" not in node_agent
+    assert "crictl" not in dockerfile
 
 
 def test_required_nats_streams_are_persistent() -> None:

@@ -25,15 +25,17 @@ If you don't already have Kubernetes, the bootstrap script installs K3s.
 - Port 3000: Visualization frontend (VF)
 - Port 8080: VS-API (REST/WebSocket)
 - Ports 22 (per pod IP): SSH terminal access (internal cluster network)
-- Inter-node: UDP 4789 (VXLAN) for multi-node deployments
-- Host MTU: 9100 bytes on the interface that carries cluster traffic, and a
-  switch between the hosts that carries jumbo frames. Every emulated
-  interface carries 9000-byte packets. Between hosts those packets travel
-  inside VXLAN, which adds 50 bytes over IPv4 and 70 over IPv6, so the hosts
-  carry the overhead and no emulated link loses MTU to its placement. When a
-  session deploys, the Node Agent sends unfragmentable 9000-byte packets,
-  wrapped to their VXLAN size, to every other host the session uses, and
-  refuses to wire the session when the host network does not carry them.
+- Inter-node: UDP 14789 (NodalArc's VXLAN, chart value `network.vxlanPort`) for multi-node deployments
+- Host MTU: the emulated link MTU plus 50 bytes (70 over IPv6 node
+  addresses) on the interface that carries cluster traffic and across the
+  network between the hosts. The emulated link MTU is the chart value
+  `network.linkMtu`, 8800 by default, so hosts carry 8850-byte packets; the
+  development cluster's 9100-byte host MTU covers it. Every emulated
+  interface has that MTU wherever its pods run: between hosts the packets
+  travel inside VXLAN, and the hosts carry the overhead. When a session
+  deploys, the Node Agent sends unfragmentable packets of the full wrapped
+  size to every other host the session uses, and refuses to wire the session
+  when the host network does not carry them.
 
 ## Step 1: Bootstrap (Fresh Machine)
 

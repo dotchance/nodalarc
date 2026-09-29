@@ -178,7 +178,7 @@ discover_vs_api() {
         api_node="$(kubectl get pod -n "$ns" -l app=nodalarc-vs-api --request-timeout=10s -o jsonpath='{.items[0].spec.nodeName}' 2>/dev/null || true)"
         api_ip=""
         if [ -n "$api_node" ]; then
-            api_ip="$(kubectl get node "$api_node" --request-timeout=10s -o jsonpath='{.status.addresses[?(@.type=="InternalIP")].address}' 2>/dev/null || true)"
+            api_ip="$(kubectl get node "$api_node" --request-timeout=10s -o jsonpath='{.status.addresses[?(@.type=="InternalIP")].address}' 2>/dev/null | awk '{print $1}' || true)"
         fi
         if [ -n "$api_ip" ]; then
             token_json="$(curl -fsS --max-time 5 "http://$api_ip:8080/api/v1/auth/token" 2>/dev/null || true)"

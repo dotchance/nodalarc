@@ -37,12 +37,12 @@ import os
 from collections.abc import Mapping
 from dataclasses import dataclass
 
+from nodalarc.platform_config import get_platform_config
 from nodalarc.runtime_naming import (
     MANAGED_HOST_DEVICE_GROUP,
     VxlanHostNames,
     vxlan_host_ifnames,
 )
-from nodalarc.vxlan import VXLAN_DST_PORT
 
 from node_agent import kernel_verifier
 from node_agent.ground_bridge import _tc_mirred_redirect, _tc_mirred_remove, install_redirect_pair
@@ -143,8 +143,6 @@ def create_vxlan_link(
     from pyroute2 import IPRoute
 
     if mtu is None:
-        from nodalarc.platform_config import get_platform_config
-
         mtu = get_platform_config().veth_interface_mtu_bytes
 
     names: VxlanHostNames = vxlan_host_ifnames(vni)
@@ -235,7 +233,7 @@ def create_vxlan_link(
                     vxlan_id=vni,
                     vxlan_local=local_ip,
                     vxlan_group=remote_ip,
-                    vxlan_port=VXLAN_DST_PORT,
+                    vxlan_port=get_platform_config().vxlan_udp_port,
                     vxlan_learning=False,
                     mtu=mtu,
                     group=MANAGED_HOST_DEVICE_GROUP,
@@ -347,6 +345,8 @@ def attach_cross_node_ground(
     from pyroute2 import IPRoute
 
     names = vxlan_host_ifnames(vni)
+    # The tunnel carries the emulated interface's full MTU, like the veths it joins.
+    mtu = get_platform_config().veth_interface_mtu_bytes
 
     with _ns_lock:
         _enter_host_namespace()
@@ -367,6 +367,7 @@ def attach_cross_node_ground(
                     kernel_verifier.prove_vxlan_device(
                         ipr, names.tunnel, vni=vni, local_ip=local_ip, remote_ip=remote_ip
                     ),
+                    kernel_verifier.prove_link_mtu(ipr, names.tunnel, mtu=mtu),
                     kernel_verifier.prove_mirred_redirect(ipr, names.tunnel, local_host_ifname),
                     kernel_verifier.prove_mirred_redirect(ipr, local_host_ifname, names.tunnel),
                     # Host-side admin UP on the tunnel and the local host interface,
@@ -398,8 +399,9 @@ def attach_cross_node_ground(
                     vxlan_id=vni,
                     vxlan_local=local_ip,
                     vxlan_group=remote_ip,
-                    vxlan_port=VXLAN_DST_PORT,
+                    vxlan_port=get_platform_config().vxlan_udp_port,
                     vxlan_learning=False,
+                    mtu=mtu,
                     group=MANAGED_HOST_DEVICE_GROUP,
                 )
 

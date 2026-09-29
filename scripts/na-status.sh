@@ -241,12 +241,12 @@ echo "Services:"
 VF_NODE=$(kubectl get pod -n "$NAMESPACE" -l app=nodalarc-vf -o jsonpath="{.items[0].spec.nodeName}" 2>/dev/null || true)
 VF_IP=""
 if [ -n "$VF_NODE" ]; then
-    VF_IP=$(kubectl get node "$VF_NODE" -o jsonpath='{.status.addresses[?(@.type=="InternalIP")].address}' 2>/dev/null || true)
+    VF_IP=$(kubectl get node "$VF_NODE" -o jsonpath='{.status.addresses[?(@.type=="InternalIP")].address}' 2>/dev/null | awk '{print $1}' || true)
 fi
 API_NODE=$(kubectl get pod -n "$NAMESPACE" -l app=nodalarc-vs-api -o jsonpath="{.items[0].spec.nodeName}" 2>/dev/null || true)
 API_IP=""
 if [ -n "$API_NODE" ]; then
-    API_IP=$(kubectl get node "$API_NODE" -o jsonpath='{.status.addresses[?(@.type=="InternalIP")].address}' 2>/dev/null || true)
+    API_IP=$(kubectl get node "$API_NODE" -o jsonpath='{.status.addresses[?(@.type=="InternalIP")].address}' 2>/dev/null | awk '{print $1}' || true)
 fi
 if [ -n "$VF_IP" ]; then
     echo "  Visualization:  http://$VF_IP:3000  (on $VF_NODE)"

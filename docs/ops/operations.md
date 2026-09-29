@@ -27,19 +27,18 @@ When you need to fully stop the platform:
 make teardown
 ```
 
-This runs `scripts/na-teardown.sh` - a 9-step sequence that handles every failure mode:
+This runs `scripts/na-teardown.sh`, an eight-step sequence:
 
-1. Strip finalizers from session resources, delete ConstellationSpec CRs
-2. Wait for session pods to terminate (force-deletes after 60s timeout)
-3. Clean kernel state on all nodes via Node Agent (VXLAN tunnels, veth pairs, bridges)
-4. Helm uninstall (removes all platform pods, services, ConfigMaps)
-5. Wait for Node Agent pods to terminate
-6. Delete namespace (forces through stuck finalizers if needed)
-7. Delete cluster-scoped resources (CRD, ClusterRoles, ClusterRoleBindings)
-8. Final local kernel state cleanup
-9. Verify clean state
+1. Strip the finalizers from the ConstellationSpec resources and delete them (the Operator may not be running)
+2. Delete every session pod in one request
+3. Run the Node Agent's host cleaner on every labelled host and on this workstation, and judge each host by the cleaner's report; the teardown refuses to go further while any host is unverified, so the next run keeps its means of retrying
+4. Helm uninstall (removes the platform pods, services and ConfigMaps)
+5. Wait for every pod in the namespace to terminate
+6. Delete the namespace and wait for it to go; a namespace that does not finish is reported with what it still holds, and its finalizers are never stripped
+7. Delete the cluster-scoped resources (CRD, ClusterRoles, ClusterRoleBindings)
+8. Verify that no pod, namespace or CRD remains
 
-The script handles stuck pods, stuck finalizers, stuck namespaces, partially deployed sessions, and crashed operators. If it prints "Teardown complete" the system is clean.
+No pod is force-deleted. If the script prints "Teardown complete" the cluster and every verified host are clean; if it exits non-zero, it names what remains.
 
 **Never use `kubectl delete namespace nodalarc` directly.** It will hang on finalizers and leave kernel state behind.
 
@@ -215,11 +214,10 @@ ssh -i nodalarc-ssh-key -o StrictHostKeyChecking=no operator@$POD_IP
 
 ## Backup and Recovery
 
-NodalArc stores no persistent user data. All state is ephemeral:
+User data lives in one place: the VS-API volume (PVC `nodalarc-session-data`), which holds the user catalog, builder-saved sessions and the history recorded for session runs. Back up that volume. Everything else is disposable:
 
 - Session state lives in memory (OME, Scheduler) and is recomputed on restart
-- NATS JetStream stores recent messages in a PVC but recovery doesn't depend on it
-- VS-API SQLite snapshots are disposable (rebuilt from NATS streams)
+- NATS JetStream stores recent messages in a PVC, and recovery does not depend on it
 - Workload configs are rendered by the profile's adapter from the resolved session at deploy time
 
-To "back up" a NodalArc installation, you only need the source code and your `config.mk` file. Everything else is generated.
+`make teardown` deletes the namespace and with it both volumes; copy the VS-API volume first if the user data matters.

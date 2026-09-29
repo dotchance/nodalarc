@@ -2,13 +2,13 @@
 # builder-saved sessions, and the session-history SQLite. This is user work
 # product: it must survive pod restarts and redeploys. An emptyDir here
 # silently wiped a user's saved terminals and sessions on every VS-API roll.
-# StorageClass is configurable via values.yaml — local-path for single-node,
-# Longhorn/Rook for multi-node.
+# With vsApi.storageClass empty the cluster's default StorageClass provisions
+# the volume; a cluster without a default (RKE2, kubeadm) names one in values.
 #
 # resource-policy: keep: Helm leaves this claim in place on `helm uninstall` and
 # when a chart no longer templates it (for example after deploying an older
 # chart), so a chart change or a plain uninstall never deletes the claim and
-# local-path never reclaims the data as a side effect. The full teardown
+# the provisioner never reclaims the data as a side effect. The full teardown
 # (`make teardown`) is the deliberate, explicit operation that removes the
 # namespace, and the claim and its data go with it.
 apiVersion: v1
@@ -23,7 +23,9 @@ metadata:
 spec:
   accessModes:
     - ReadWriteOnce
-  storageClassName: {{ .Values.vsApi.storageClass | default "local-path" }}
+{{- with .Values.vsApi.storageClass }}
+  storageClassName: {{ . | quote }}
+{{- end }}
   resources:
     requests:
       storage: {{ .Values.vsApi.storageSize | default "2Gi" }}

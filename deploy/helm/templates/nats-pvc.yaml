@@ -1,6 +1,7 @@
 # PersistentVolumeClaim for NATS JetStream file storage.
-# Streams survive NATS pod restarts. StorageClass is configurable
-# via values.yaml — local-path for single-node, Longhorn/Rook for multi-node.
+# Streams survive NATS pod restarts. With nats.storageClass empty the
+# cluster's default StorageClass provisions the volume; a cluster without a
+# default (RKE2, kubeadm) names one in values.
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
@@ -11,7 +12,9 @@ metadata:
 spec:
   accessModes:
     - ReadWriteOnce
-  storageClassName: {{ .Values.nats.storageClass | default "local-path" }}
+{{- with .Values.nats.storageClass }}
+  storageClassName: {{ . | quote }}
+{{- end }}
   resources:
     requests:
       storage: {{ .Values.nats.storageSize | default "2Gi" }}

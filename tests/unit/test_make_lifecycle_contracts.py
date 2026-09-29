@@ -546,6 +546,25 @@ def test_vs_api_has_separate_upload_and_lifecycle_rbac() -> None:
     assert "name: nodalarc-vs-api" in template
 
 
+def test_chart_defaults_assume_no_distribution() -> None:
+    """A plain helm install must work on a cluster that is not K3s: images are
+    pulled, the PVCs take the cluster's default StorageClass unless one is
+    named, and the Operator runs on the pod network like every other platform
+    workload."""
+    values = (ROOT / "deploy/helm/values.yaml").read_text()
+    nats_pvc = (ROOT / "deploy/helm/templates/nats-pvc.yaml").read_text()
+    vs_api_pvc = (ROOT / "deploy/helm/templates/vs-api-pvc.yaml").read_text()
+    operator = (ROOT / "deploy/helm/templates/operator-deployment.yaml").read_text()
+
+    assert "imagePullPolicy: IfNotPresent" in values
+    assert "local-path" not in values
+    assert 'storageClass: ""' in values
+    assert "{{- with .Values.nats.storageClass }}" in nats_pvc
+    assert "{{- with .Values.vsApi.storageClass }}" in vs_api_pvc
+    assert "local-path" not in nats_pvc and "local-path" not in vs_api_pvc
+    assert "hostNetwork" not in operator
+
+
 def test_every_workload_dials_the_nats_service() -> None:
     """One NATS URL helper, one host (the Service), no hostPort, no ingress policy:
     host-network workloads reach the ClusterIP through kube-proxy on every server."""

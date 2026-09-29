@@ -24,8 +24,6 @@ spec:
         checksum/platform-config: {{ tpl (.Files.Get "files/platform.yaml") . | sha256sum | quote }}
     spec:
       serviceAccountName: nodalarc-operator
-      hostNetwork: true
-      dnsPolicy: ClusterFirstWithHostNet
 {{- if .Values.controlPlaneNode }}
       nodeSelector:
         kubernetes.io/hostname: {{ .Values.controlPlaneNode }}

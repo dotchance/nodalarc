@@ -16,7 +16,11 @@ images:
   operator: nodalarc/operator:dev
 
 buildTag: "dev"
-imagePullPolicy: Never  # Single-node: images loaded directly into containerd
+# Pull policy for every image. Published images are pulled once per server.
+# The development lifecycle scripts pass their own value: Never on a
+# single-server cluster whose images are imported into containerd, Always
+# when a registry serves content-tagged development images.
+imagePullPolicy: IfNotPresent
 
 # Resource strategy: requests are minimum guaranteed, limits are burst ceiling.
 # Requests must fit on the node; limits can exceed node capacity (burstable QoS).
@@ -70,7 +74,9 @@ vsApi:
   memoryLimit: 2Gi
   cpuLimit: "8"
   # Session data (user catalog, builder-saved sessions, session history).
-  storageClass: local-path
+  # Empty: the cluster's default StorageClass. A cluster without a default
+  # (RKE2, kubeadm) names one here.
+  storageClass: ""
   storageSize: 2Gi
 
 # NATS JetStream messaging server
@@ -122,8 +128,9 @@ nats:
       service:
         username: nodalarc-service
         password: nodalarc-service-dev
-  # Storage — local-path for single-node, switch to Longhorn/Rook for multi-node
-  storageClass: "local-path"
+  # JetStream storage. Empty: the cluster's default StorageClass. A cluster
+  # without a default (RKE2, kubeadm) names one here.
+  storageClass: ""
   storageSize: "4Gi"
 
 # Node for platform pods (auto-detected if empty, or set to your node name).

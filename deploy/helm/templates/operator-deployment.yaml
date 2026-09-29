@@ -44,7 +44,7 @@ spec:
             - name: NODALARC_RELEASE
               value: {{ required "runtimeRelease is required" .Values.runtimeRelease | quote }}
             - name: NODALARC_NATS_URL
-              value: {{ include "nodalarc.nats-url" (dict "Values" .Values "user" "service" "hostNetwork" false) | quote }}
+              value: {{ include "nodalarc.nats-url" (dict "Values" .Values "user" "service") | quote }}
             - name: WIRING_GATE_IMAGE
               value: {{ required "images.base is required" .Values.images.base | quote }}
 {{- if .Values.workloadDevImageOverrides }}

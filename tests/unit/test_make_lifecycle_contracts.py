@@ -546,31 +546,26 @@ def test_vs_api_has_separate_upload_and_lifecycle_rbac() -> None:
     assert "name: nodalarc-vs-api" in template
 
 
-def test_nats_networkpolicy_allows_host_network_node_cidrs() -> None:
-    template = (ROOT / "deploy/helm/templates/nats-networkpolicy.yaml").read_text()
-    values = (ROOT / "deploy/helm/values.yaml").read_text()
-
-    assert "hostNetworkCIDRs" in values
-    assert ".Values.nats.networkPolicy.hostNetworkCIDRs" in template
-    assert "ipBlock:" in template
-
-
-def test_host_network_node_agents_use_host_reachable_nats_endpoint() -> None:
-    """The DaemonSet asks for the host-network address in both places it connects from:
-    its own URL and its wait container; the one URL helper honours that flag."""
+def test_every_workload_dials_the_nats_service() -> None:
+    """One NATS URL helper, one host (the Service), no hostPort, no ingress policy:
+    host-network workloads reach the ClusterIP through kube-proxy on every server."""
     values = (ROOT / "deploy/helm/values.yaml").read_text()
     nats = (ROOT / "deploy/helm/templates/nats-deployment.yaml").read_text()
     node_agent = (ROOT / "deploy/helm/templates/node-agent-daemonset.yaml").read_text()
     nats_init = (ROOT / "deploy/helm/templates/_nats-init.yaml").read_text()
     helpers = (ROOT / "deploy/helm/templates/_nats.yaml").read_text()
+    templates = ROOT / "deploy/helm/templates"
 
-    assert "hostNetworkHost" in values
-    assert "hostPort: {{ .Values.nats.clientPort }}" in nats
-    assert node_agent.count('"hostNetwork" true') == 2
-    assert '"Files" .Files "hostNetwork" true' in node_agent
-    assert '"user" "nodeAgent" "hostNetwork" true' in node_agent
-    assert '"hostNetwork" $hostNetwork' in nats_init
-    assert "if and .hostNetwork .Values.nats.hostNetworkHost" in helpers
+    assert not (templates / "nats-networkpolicy.yaml").exists()
+    assert "networkPolicy" not in values
+    assert "hostNetworkHost" not in values
+    assert "hostPort" not in nats
+    assert "hostNetwork" not in helpers
+    assert "hostNetwork" not in nats_init
+    assert 'include "nodalarc.nats-wait-init" .' in node_agent
+    assert '"user" "nodeAgent")' in node_agent
+    for template in templates.glob("*.yaml"):
+        assert '"hostNetwork"' not in template.read_text(), template.name
 
 
 def test_node_agent_can_load_host_mpls_kernel_modules() -> None:

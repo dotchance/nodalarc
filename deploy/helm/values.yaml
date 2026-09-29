@@ -77,10 +77,6 @@ vsApi:
 nats:
   replicas: 1
   clientPort: 4222
-  # Host-network Node Agent pods cannot rely on ClusterIP reachability from
-  # every node. scripts/na-install-platform.sh sets this to the control-plane
-  # node InternalIP and enables a matching NATS hostPort.
-  hostNetworkHost: ""
   # Retention per deployed stream, keyed by the stream name the registry
   # declares (lib/nodalarc/nats_channels.py). The stream names and subject
   # patterns themselves are rendered into the chart at assembly time; a
@@ -126,12 +122,6 @@ nats:
       service:
         username: nodalarc-service
         password: nodalarc-service-dev
-  networkPolicy:
-    enabled: true
-    # Node Agent pods run with hostNetwork; NetworkPolicy engines see their
-    # NATS traffic as node-IP traffic. scripts/na-install-platform.sh populates
-    # this with exact /32 or /128 node IP CIDRs at install/upgrade time.
-    hostNetworkCIDRs: []
   # Storage — local-path for single-node, switch to Longhorn/Rook for multi-node
   storageClass: "local-path"
   storageSize: "4Gi"

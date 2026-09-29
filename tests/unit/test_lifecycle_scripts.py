@@ -302,6 +302,26 @@ def test_load_next_step_is_state_aware() -> None:
     assert "make install will refuse the existing namespace" in script
 
 
+def test_cluster_builder_carries_the_node_agents_minimums() -> None:
+    """The builder is a standalone download, so it carries NodalArc's minimums
+    as numbers; they must equal the ones the Node Agent's qualification checks,
+    and it must write them raise-only, into a K3s drop-in and never into
+    config.yaml."""
+    from node_agent.qualification import MIN_INOTIFY_INSTANCES, MIN_INOTIFY_WATCHES
+
+    script = (ROOT / "scripts/build-k3s-node.sh").read_text()
+    assert f"MIN_INOTIFY_INSTANCES={MIN_INOTIFY_INSTANCES}\n" in script
+    assert f"MIN_INOTIFY_WATCHES={MIN_INOTIFY_WATCHES}\n" in script
+    assert "MAX_PODS=1000" in script
+    assert 'registry-qps=0' in script
+    assert '-lt "$MIN_INOTIFY_INSTANCES"' in script and '-lt "$MIN_INOTIFY_WATCHES"' in script
+    assert '-lt "$needed_mtu"' in script
+    assert "config.yaml.d/60-nodalarc.yaml" in script
+    assert "/etc/rancher/k3s/config.yaml\"" not in script.replace("config.yaml.d", "")
+    assert "get.k3s.io" in script
+    assert "modprobe" not in script and "sysctl -w" not in script
+
+
 def test_install_passes_no_nats_address_to_helm() -> None:
     """Every workload dials the NATS Service; the install script computes no
     server address for NATS and no policy allow-list."""

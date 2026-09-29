@@ -18,7 +18,7 @@ Each satellite pod uses approximately 18 MB RAM and 2-5 millicores CPU at steady
 - Root access (sudo)
 - A Kubernetes cluster (any conformant distribution: K3s, K8s, EKS, GKE, etc.)
 
-If you don't already have Kubernetes, the bootstrap script installs K3s.
+If you don't already have Kubernetes, the cluster builder (Step 1) builds K3s on your machines.
 
 ### Network
 
@@ -37,26 +37,19 @@ If you don't already have Kubernetes, the bootstrap script installs K3s.
   size to every other host the session uses, and refuses to wire the session
   when the host network does not carry them.
 
-## Step 1: Bootstrap (Fresh Machine)
+## Step 1: Machines
 
-If you already have Kubernetes, skip to Step 2.
+For machines without Kubernetes, the cluster builder builds a K3s server on each one. Run it as root on the first machine; it prints the command that joins every further machine:
 
 ```bash
-sudo scripts/bootstrap-host.sh
+sudo scripts/build-k3s-node.sh
 ```
 
-This installs:
+It lists the changes it will make and asks once: the inotify limits NodalArc needs (raised only when a limit is below the minimum), the MTU of the interface that carries the node's traffic (raised only when it is below the emulated link MTU plus the VXLAN overhead, persistent through netplan), a K3s drop-in with the pods a server may hold (1000), no kubelet image pull limit and a /22 pod range per server, and K3s from its official installer. Your own K3s settings belong in `/etc/rancher/k3s/config.yaml`, which the builder never touches. It writes no kernel setting: the Node Agent loads the MPLS kernel modules when a session needs them, and forwarding and MPLS settings are written inside each session pod. It is idempotent.
 
-| Component | Purpose |
-|-----------|---------|
-| Docker | Builds container images |
-| K3s | Lightweight Kubernetes (skipped if K8s/kubectl already present) |
-| kubectl + Helm | Cluster management and chart deployment |
-| Node.js 22 | Builds the visualization frontend |
-| uv | Python package manager |
-| Host MTU | 9100 bytes on the cluster interface, persistent in `/etc/netplan/60-nodalarc-mtu.yaml` |
+If you already have Kubernetes, skip this step: the Node Agent's readiness probe reports what a node lacks once NodalArc is installed.
 
-The script is idempotent - safe to run multiple times. It does NOT modify an existing Kubernetes installation, and it writes no kernel setting: the Node Agent loads the MPLS kernel modules when a session needs them, and forwarding and MPLS settings are written inside each session pod.
+Until the first release publishes the chart and the images, NodalArc is installed from a source checkout on a separate build machine; that machine's setup is in the [Developer Guide](../dev/getting-started.md).
 
 ## Step 2: Build and Deploy
 

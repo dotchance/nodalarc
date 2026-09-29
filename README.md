@@ -47,17 +47,18 @@ The command line is for installation and operations. Once NodalArc is running, u
 
 ### Requirements
 
-- Kubernetes or K3s cluster with Linux worker nodes
-- Privileged node access for kernel networking operations
-- Container image build and load/pull path for the cluster
-- Host kernel support for network namespaces, veth, VXLAN, `tc`, forwarding, and MPLS where needed
-- `kubectl`, Helm, Docker, Node.js 22, and `uv`
+- A Kubernetes cluster whose nodes admit privileged pods, or machines to build one on
+- Host kernel support for network namespaces, veth, VXLAN, `tc` and, for MPLS sessions, the MPLS modules; the Node Agent reports what a node lacks
 - 8 GB RAM minimum for the demo constellation
 - 32 GB RAM recommended for larger constellations
 
-The bootstrap script is intended for fresh Linux hosts and is tested on Ubuntu/Debian-family systems. If you already have Kubernetes, you can skip bootstrap and install into the cluster.
+### Machines Without Kubernetes
+
+`scripts/build-k3s-node.sh`, run as root on each machine, builds a K3s server for NodalArc and prints the command that joins the next machine. It lists the changes it will make and asks once. Skip it if you already have a cluster. Tested on Ubuntu/Debian-family systems.
 
 ### Install And Run
+
+NodalArc is installed with its Helm chart and images; users never build or change code. Until the first release publishes the chart and the images, the install runs from a source checkout on a separate build machine, where `scripts/bootstrap-host.sh` installs the build toolchain (Docker, kubectl, Helm, Node.js, uv):
 
 ```bash
 git clone https://github.com/dotchance/nodalarc.git
@@ -66,7 +67,7 @@ sudo scripts/bootstrap-host.sh
 make all
 ```
 
-`make all` builds the frontend, builds the service images, loads them into the cluster, installs the Helm chart, deploys the default session, and prints status.
+`make all` builds the frontend, builds the service images, loads them into the cluster, installs the Helm chart, deploys the default session, and prints status. The [Operations Guide](docs/ops/) has the cluster and chart details; the [Developer Guide](docs/dev/) has the build and test workflow.
 
 When the platform is ready, open:
 

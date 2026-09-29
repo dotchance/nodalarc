@@ -1,20 +1,19 @@
 #!/bin/bash
 # Copyright 2024-2026 .chance (dotchance)
-# One-time host bootstrap for NodalArc.
+# One-time bootstrap of a NodalArc build machine: the machine that runs make,
+# builds the images and drives the cluster.
 #
-# Installs K3s, Docker, uv, Node.js and Helm, and sets the host network MTU.
-# It writes no kernel setting: the Node Agent loads the MPLS modules when a
-# session needs them, forwarding and MPLS settings are written per session
-# pod, and K3s sets host forwarding itself.
+# Installs Docker, K3s's kubectl, Helm, Node.js and uv. It touches no kernel
+# setting and no cluster: a K3s server is built by scripts/build-k3s-node.sh,
+# run on that server, and the Node Agent loads what a session needs.
 #
-# Idempotent — safe to run multiple times.
-# Requires root (or sudo).
+# Idempotent: safe to run more than once. Requires root (or sudo).
 #
 # After this script completes: cd nodal && make all
 
 set -euo pipefail
 
-echo "=== NodalArc Host Bootstrap ==="
+echo "=== NodalArc Build Machine Bootstrap ==="
 echo "Copyright 2024-2026 .chance (dotchance)"
 echo "Official source: https://github.com/dotchance/nodalarc"
 
@@ -36,109 +35,23 @@ fi
 # System packages
 # ---------------------------------------------------------------------------
 
-echo "[1/8] Installing system packages..."
+echo "[1/6] Installing system packages..."
 apt-get update -qq
 apt-get install -y -qq --no-install-recommends \
     curl ca-certificates gnupg lsb-release jq git \
     iproute2 iptables
 
 # ---------------------------------------------------------------------------
-# Host network MTU
-# ---------------------------------------------------------------------------
-# Emulated interfaces carry packets up to 9000 bytes whether their pods share a
-# host or not. Between hosts those packets travel inside VXLAN, which adds 50
-# bytes over IPv4 and 70 over IPv6, so the interface that carries cluster
-# traffic runs a 9100-byte MTU and the switch between hosts must carry jumbo
-# frames. It is set before K3s starts so the pod network derives its MTU from
-# it. The Node Agent proves the path between hosts before it wires a session.
-
-HOST_MTU=9100
-echo "[2/8] Setting the cluster interface MTU to ${HOST_MTU}..."
-# K3s takes its node address from the interface of the default route.
-CLUSTER_INTERFACE="$(ip -o route get 1.1.1.1 | sed -n 's/.* dev \([^ ]*\) .*/\1/p')"
-if [ -z "$CLUSTER_INTERFACE" ]; then
-    echo "ERROR: no default route; cannot identify the interface that carries cluster traffic."
-    exit 1
-fi
-MAX_MTU="$(ip -d link show dev "$CLUSTER_INTERFACE" | sed -n 's/.* maxmtu \([0-9]*\).*/\1/p')"
-if [ -z "$MAX_MTU" ] || [ "$MAX_MTU" -lt "$HOST_MTU" ]; then
-    echo "ERROR: $CLUSTER_INTERFACE supports an MTU of at most ${MAX_MTU:-unknown}; NodalArc requires ${HOST_MTU}."
-    exit 1
-fi
-if ! command -v netplan >/dev/null 2>&1 || [ ! -d /etc/netplan ]; then
-    echo "ERROR: this host does not use netplan. Set a persistent ${HOST_MTU}-byte MTU on"
-    echo "       $CLUSTER_INTERFACE with the host's network configuration, then rerun."
-    exit 1
-fi
-cat > /etc/netplan/60-nodalarc-mtu.yaml <<NETPLAN
-network:
-  version: 2
-  ethernets:
-    ${CLUSTER_INTERFACE}:
-      mtu: ${HOST_MTU}
-NETPLAN
-chmod 600 /etc/netplan/60-nodalarc-mtu.yaml
-netplan generate
-if [ "$(netplan get "ethernets.${CLUSTER_INTERFACE}.mtu")" != "$HOST_MTU" ]; then
-    echo "ERROR: netplan does not carry an MTU of ${HOST_MTU} for $CLUSTER_INTERFACE after the drop-in."
-    exit 1
-fi
-# The network configuration applies the MTU itself, so it holds when the link
-# renegotiates. Some NICs reset their link to change MTU; the interface is
-# checked once the reset settles.
-netplan apply
-for _ in $(seq 1 30); do
-    [ "$(cat "/sys/class/net/${CLUSTER_INTERFACE}/mtu")" = "$HOST_MTU" ] \
-        && [ "$(cat "/sys/class/net/${CLUSTER_INTERFACE}/operstate")" = "up" ] && break
-    sleep 1
-done
-if [ "$(cat "/sys/class/net/${CLUSTER_INTERFACE}/mtu")" != "$HOST_MTU" ] \
-    || [ "$(cat "/sys/class/net/${CLUSTER_INTERFACE}/operstate")" != "up" ]; then
-    echo "ERROR: $CLUSTER_INTERFACE is not up at an MTU of ${HOST_MTU} after applying the configuration."
-    exit 1
-fi
-echo "  $CLUSTER_INTERFACE: MTU ${HOST_MTU}, persistent in /etc/netplan/60-nodalarc-mtu.yaml"
-
-# ---------------------------------------------------------------------------
 # Docker
 # ---------------------------------------------------------------------------
 
 if command -v docker &>/dev/null; then
-    echo "[3/8] Docker already installed: $(docker --version)"
+    echo "[2/6] Docker already installed: $(docker --version)"
 else
-    echo "[3/8] Installing Docker..."
+    echo "[2/6] Installing Docker..."
     curl -fsSL https://get.docker.com | sh
     usermod -aG docker "${SUDO_USER:-$USER}" 2>/dev/null || true
     echo "  NOTE: Log out and back in for docker group to take effect."
-fi
-
-# ---------------------------------------------------------------------------
-# K3s
-# ---------------------------------------------------------------------------
-
-if command -v k3s &>/dev/null; then
-    echo "[4/8] K3s already installed: $(k3s --version | head -1)"
-else
-    echo "[4/8] Installing K3s..."
-    curl -sfL https://get.k3s.io | sh -s - \
-        --write-kubeconfig-mode 644 \
-        --disable traefik
-fi
-
-echo "[4/8] Configuring K3s for NodalArc..."
-bash "$(dirname "$0")/configure-k3s-node.sh"
-
-# Make kubeconfig accessible without sudo
-KUBECONFIG_SRC="/etc/rancher/k3s/k3s.yaml"
-KUBECONFIG_DST="${HOME}/.kube/config"
-if [ -f "$KUBECONFIG_SRC" ]; then
-    mkdir -p "$(dirname "$KUBECONFIG_DST")"
-    cp "$KUBECONFIG_SRC" "$KUBECONFIG_DST"
-    if [ -n "${SUDO_USER:-}" ]; then
-        chown "${SUDO_USER}:${SUDO_USER}" "$KUBECONFIG_DST"
-    fi
-    chmod 600 "$KUBECONFIG_DST"
-    echo "  Kubeconfig copied to $KUBECONFIG_DST"
 fi
 
 # ---------------------------------------------------------------------------
@@ -146,18 +59,18 @@ fi
 # ---------------------------------------------------------------------------
 
 if command -v kubectl &>/dev/null; then
-    echo "[5/8] kubectl already installed: $(kubectl version --client --short 2>/dev/null || kubectl version --client)"
+    echo "[3/6] kubectl already installed: $(kubectl version --client --short 2>/dev/null || kubectl version --client)"
 else
-    echo "[5/8] Installing kubectl..."
+    echo "[3/6] Installing kubectl..."
     curl -fsSL "https://dl.k8s.io/release/$(curl -fsSL https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl" \
         -o /usr/local/bin/kubectl
     chmod +x /usr/local/bin/kubectl
 fi
 
 if command -v helm &>/dev/null; then
-    echo "[6/8] Helm already installed: $(helm version --short)"
+    echo "[4/6] Helm already installed: $(helm version --short)"
 else
-    echo "[6/8] Installing Helm..."
+    echo "[4/6] Installing Helm..."
     curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
 fi
 
@@ -166,9 +79,9 @@ fi
 # ---------------------------------------------------------------------------
 
 if command -v node &>/dev/null && [ "$(node --version | cut -d. -f1 | tr -d v)" -ge 22 ]; then
-    echo "[7/8] Node.js already installed: $(node --version)"
+    echo "[5/6] Node.js already installed: $(node --version)"
 else
-    echo "[7/8] Installing Node.js 22..."
+    echo "[5/6] Installing Node.js 22..."
     curl -fsSL https://deb.nodesource.com/setup_22.x | bash -
     apt-get install -y -qq nodejs
 fi
@@ -178,9 +91,9 @@ fi
 # ---------------------------------------------------------------------------
 
 if command -v uv &>/dev/null; then
-    echo "[8/8] uv already installed: $(uv --version)"
+    echo "[6/6] uv already installed: $(uv --version)"
 else
-    echo "[8/8] Installing uv..."
+    echo "[6/6] Installing uv..."
     curl -LsSf https://astral.sh/uv/install.sh | sh
     # Make available to current session
     export PATH="$HOME/.local/bin:$PATH"
@@ -188,6 +101,10 @@ fi
 
 echo ""
 echo "=== Bootstrap complete ==="
+echo ""
+echo "The cluster: build each K3s server with scripts/build-k3s-node.sh, run"
+echo "as root on that server, and put its kubeconfig where make reads it"
+echo "(KUBECONFIG in config.mk, /etc/rancher/k3s/k3s.yaml by default)."
 echo ""
 echo "Next steps:"
 echo "  cd nodal"

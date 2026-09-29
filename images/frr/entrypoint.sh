@@ -111,14 +111,6 @@ fi
 /usr/sbin/sshd -D -e &
 echo "SSH daemon started in the default and management VRFs (OpenSSH, key-only auth, root disabled, UseDNS no)"
 
-# Rename eth0 → cni0 BEFORE FRR starts so zebra learns the correct name.
-# cni0 is the K8s CNI infrastructure interface — not user-configurable.
-# The name reserves mgmt0 for users to create their own management VRF.
-if ip link show eth0 >/dev/null 2>&1; then
-    ip link set eth0 name cni0
-    echo "Renamed eth0 → cni0"
-fi
-
 # The pod mounts an empty volume over /var/log, which hides the image's
 # /var/log/frr. The rendered configuration logs to /var/log/frr/frr.log; without
 # the directory every daemon's configuration load reports a failed line.

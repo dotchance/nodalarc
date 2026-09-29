@@ -89,7 +89,7 @@ This is set as a pod-level sysctl by the Operator in `session_deployer.py`. The 
 
 ## Recommendations for Production Deployments
 
-- **Network policy:** Add Kubernetes NetworkPolicy to restrict pod-to-pod traffic to only the data plane interfaces. Block direct pod-to-pod communication via the CNI network.
+- **NATS authentication:** On a shared cluster, set `nats.auth.enabled: true` with your own passwords in the chart values. With the default (off), any pod in the cluster that can reach the NATS Service can publish and subscribe; session pods cannot, because nothing leaves cni0.
 - **RBAC:** Limit who can `kubectl exec` into session pods. The browser terminal goes through VS-API (which handles authentication); direct kubectl access should be restricted to operators.
 - **Image scanning:** Run vulnerability scans on the images your sessions pin. The shipped profiles use the official FRRouting image (Alpine-based and minimal) and upstream vendor images referenced by digest.
 - **HTTPS:** Deploy an ingress controller with TLS termination for the VF and VS-API. Required for SharedArrayBuffer (Web Worker) support and recommended for any non-localhost deployment.

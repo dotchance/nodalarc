@@ -5,15 +5,16 @@
 Every check reads the server from the calling process: the kernel's module
 tables, /proc, and netlink. ``python -m node_agent.qualification`` prints
 each check and exits 0 only when every hard requirement holds. It changes
-nothing. It runs in two places:
+nothing. The Node Agent DaemonSet's readiness probe runs it in the Node
+Agent container on every probe: each probe reports what the server has at
+that moment, so a server becomes ready as soon as its checks pass and
+unready when one fails. The DaemonSet shows desired against ready Node
+Agents, the probe's failure message names the failed checks, and the
+Operator places session pods only on servers whose Node Agent is ready. To
+see every check, passed and failed, run it by hand in a Node Agent pod::
 
-- An installer can run it on a server before NodalArc is installed.
-- The Node Agent DaemonSet's readiness probe runs it in the Node Agent
-  container on every probe. Each probe reports what the server has at that
-  moment, so a server becomes ready as soon as its checks pass and unready
-  when one fails. The DaemonSet shows desired against ready Node Agents, the
-  probe's failure message names the failed checks, and the Operator places
-  session pods only on servers whose Node Agent is ready.
+    kubectl exec <node agent pod> -c node-agent -- python -m node_agent.qualification \
+        --host-ip <node address> --link-mtu 8800 --vxlan-port 14789
 
 Checks between hosts (the path MTU) depend on both ends and are not part of
 a node's qualification: each session proves its own host paths before it is
@@ -34,7 +35,8 @@ from nodalarc.runtime_naming import MANAGED_HOST_DEVICE_GROUP
 from nodalarc.vxlan import host_path_mtu_for
 from pyroute2 import IPRoute
 
-# Kernel modules every session needs (links, shaping, the pod firewall).
+# Kernel modules every session needs: links, shaping, and the cni0 filters
+# (sch_ingress provides the clsact qdisc the filters hang on).
 REQUIRED_KERNEL_MODULES = (
     "vxlan",
     "veth",
@@ -45,8 +47,6 @@ REQUIRED_KERNEL_MODULES = (
     "sch_ingress",
     "cls_u32",
     "act_mirred",
-    "nf_tables",
-    "nf_conntrack",
 )
 FEATURE_KERNEL_MODULES = {"MPLS": ("mpls_router", "mpls_iptunnel")}
 MIN_INOTIFY_INSTANCES = 8192

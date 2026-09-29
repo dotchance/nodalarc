@@ -429,8 +429,10 @@ def ensure_session_configmaps(
         import kopf
 
         raise kopf.PermanentError(
-            "No K8s nodes with label nodalarc.io/node-agent=true found. "
-            "Label at least one node: kubectl label node <name> nodalarc.io/node-agent=true"
+            "No server has a ready Node Agent, so no server can run session pods. "
+            "Check the DaemonSet (kubectl get daemonset nodalarc-node-agent) and the Events "
+            "of its pods (kubectl describe pods -l app=nodalarc-node-agent): a failed "
+            "readiness probe names the requirement the server lacks."
         )
 
     # --- Step 1: Resolve segment session YAML from the CRD spec ---

@@ -54,24 +54,9 @@ This installs:
 | kubectl + Helm | Cluster management and chart deployment |
 | Node.js 22 | Builds the visualization frontend |
 | uv | Python package manager |
-| Kernel modules | `mpls_router`, `mpls_iptunnel` for MPLS forwarding |
 | Host MTU | 9100 bytes on the cluster interface, persistent in `/etc/netplan/60-nodalarc-mtu.yaml` |
-| Sysctls | IPv4/IPv6 forwarding, MPLS platform labels |
 
-The script is idempotent - safe to run multiple times. It does NOT modify an existing Kubernetes installation.
-
-### What the Sysctls Do
-
-Written to `/etc/sysctl.d/99-nodalarc.conf`:
-
-```
-net.ipv4.ip_forward = 1
-net.ipv6.conf.all.forwarding = 1
-net.mpls.platform_labels = 1048575
-net.mpls.conf.lo.input = 1
-```
-
-These enable packet forwarding and MPLS label processing in the kernel. Required for the emulated network to forward traffic between pods.
+The script is idempotent - safe to run multiple times. It does NOT modify an existing Kubernetes installation, and it writes no kernel setting: the Node Agent loads the MPLS kernel modules when a session needs them, and forwarding and MPLS settings are written inside each session pod.
 
 ## Step 2: Build and Deploy
 

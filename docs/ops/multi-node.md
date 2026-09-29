@@ -4,7 +4,7 @@ For constellations larger than ~200 satellites, or when you need to test multi-n
 
 ## Requirements
 
-- 2+ Kubernetes nodes with the `nodalarc.io/node-agent=true` label
+- 2+ Kubernetes nodes that pass node qualification (the Node Agent's readiness probe reports what a node lacks)
 - A container registry accessible from all nodes
 - UDP 14789 (NodalArc's VXLAN; chart value `network.vxlanPort`) open between nodes
 - Recommended: low-latency network between nodes (GbE or better)
@@ -46,17 +46,21 @@ make nuke && make all
 
 For an already-running platform, use `make build && make load && make upgrade` rather than `make all`.
 
-## Node Labeling
+## Choosing the Nodes
 
-The Node Agent runs on every node with the label `nodalarc.io/node-agent=true`. Label your compute nodes:
+By default the Node Agent runs on every node the scheduler admits, and session pods go only to nodes whose Node Agent is ready. Nothing needs a label. To keep NodalArc to a dedicated pool, set the chart values:
 
-```bash
-kubectl label node node02 nodalarc.io/node-agent=true
-kubectl label node node03 nodalarc.io/node-agent=true
-kubectl label node node04 nodalarc.io/node-agent=true
+```yaml
+placement:
+  nodeSelector:
+    nodepool: nodalarc
+  tolerations:
+    - key: nodalarc
+      operator: Exists
+      effect: NoSchedule
 ```
 
-Don't label your control-plane-only nodes unless you want session pods running there.
+`nodeSelector` limits the Node Agent, and with it session pods, to the nodes that carry the label. `tolerations` are needed only when the pool is tainted; the Node Agent and every session pod carry the same list. Control-plane nodes that carry the usual `node-role.kubernetes.io/control-plane` taint get no Node Agent unless the list tolerates it.
 
 ## Placement Policies
 

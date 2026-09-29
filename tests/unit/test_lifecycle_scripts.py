@@ -1017,13 +1017,11 @@ case "$1" in
       constellationspec) exit 0 ;;
       pods)
         if printf '%s\\n' "$@" | grep -q "app=nodalarc-node-agent"; then
+          printf '%s\\n' "$*" >> "$STATE_DIR/kubectl.calls"
+          if [ "${INVENTORY_OK:-1}" != "1" ]; then echo "pods unavailable" >&2; exit 1; fi
           printf '%s\\n' "$AGENT_ROWS"; exit 0
         fi
         exit 0 ;;
-      nodes)
-        printf '%s\\n' "$*" >> "$STATE_DIR/kubectl.calls"
-        if [ "${INVENTORY_OK:-1}" != "1" ]; then echo "inventory unavailable" >&2; exit 1; fi
-        printf '%s\\n' "$NODE_ROWS"; exit 0 ;;
       crd) exit 1 ;;
     esac
     exit 0 ;;
@@ -1062,7 +1060,6 @@ def _report(host: str, **overrides) -> str:
 def _teardown_run(
     tmp_path: Path,
     *,
-    nodes: list[str],
     agents: dict[str, str],
     reports: dict[str, tuple[str, int]],
     local: tuple[str, int] | None = None,
@@ -1071,8 +1068,8 @@ def _teardown_run(
 ) -> tuple[subprocess.CompletedProcess[str], Path]:
     """Run scripts/na-teardown.sh with stubbed kubectl, helm, uv and ip.
 
-    ``nodes`` are the hosts carrying the placement label; ``agents`` maps a host
-    to its Node Agent pod; ``reports`` maps a pod to the cleaner's stdout and
+    ``agents`` maps a server to its Node Agent pod (the DaemonSet's pods are the
+    inventory); ``reports`` maps a pod to the cleaner's stdout and
     exit code; ``local`` is the workstation cleaner's stdout and exit code;
     ``namespace`` is what the lookup answers: ``present``, ``absent`` (a
     successful lookup printing nothing under --ignore-not-found), ``error``
@@ -1097,7 +1094,6 @@ def _teardown_run(
             "STATE_DIR": str(state),
             "NS_LOOKUP": namespace,
             "INVENTORY_OK": "1" if inventory_ok else "0",
-            "NODE_ROWS": "\n".join(nodes),
             "AGENT_ROWS": "\n".join(f"{host} {pod}" for host, pod in agents.items()),
             "KUBECONFIG": str(tmp_path / "kubeconfig"),
         },
@@ -1106,7 +1102,6 @@ def _teardown_run(
     return result, state / "helm.calls"
 
 
-_THREE_HOSTS = ["node01", "node02", "node03"]
 _THREE_AGENTS = {"node01": "na-1", "node02": "na-2", "node03": "na-3"}
 _THREE_CLEAN = {
     "na-1": (_report("node01", removed=["vx00abcd"]), 0),
@@ -1115,13 +1110,13 @@ _THREE_CLEAN = {
 }
 
 
-def test_teardown_verifies_every_labelled_host_then_uninstalls(tmp_path: Path) -> None:
+def test_teardown_verifies_every_server_with_an_agent_then_uninstalls(tmp_path: Path) -> None:
     result, helm_calls = _teardown_run(
-        tmp_path, nodes=_THREE_HOSTS, agents=_THREE_AGENTS, reports=_THREE_CLEAN
+        tmp_path, agents=_THREE_AGENTS, reports=_THREE_CLEAN
     )
 
     assert result.returncode == 0, result.stderr
-    for host in _THREE_HOSTS:
+    for host in _THREE_AGENTS:
         assert f"{host}: verified clean host={host}" in result.stdout
     assert "node01: verified clean host=node01 removed=1" in result.stdout
     assert "local:" in result.stdout and "verified clean host=nodal-dev" in result.stdout
@@ -1129,24 +1124,14 @@ def test_teardown_verifies_every_labelled_host_then_uninstalls(tmp_path: Path) -
     assert "Teardown complete. Cluster is clean." in result.stdout
 
 
-def test_teardown_refuses_before_uninstall_when_a_labelled_host_has_no_agent(
-    tmp_path: Path,
-) -> None:
-    """Two Ready hosts report clean; the third host carries the label but is
-    NotReady and has no agent pod: its state is unverified, so the teardown
-    refuses before uninstalling the agents."""
-    result, helm_calls = _teardown_run(
-        tmp_path,
-        nodes=_THREE_HOSTS,
-        agents={"node01": "na-1", "node02": "na-2"},
-        reports={"na-1": _THREE_CLEAN["na-1"], "na-2": _THREE_CLEAN["na-2"]},
-    )
+def test_teardown_refuses_when_no_node_agent_pod_exists(tmp_path: Path) -> None:
+    """With the namespace present and no Node Agent pod, no server's state can
+    be verified, so the teardown refuses before uninstalling anything."""
+    result, helm_calls = _teardown_run(tmp_path, agents={}, reports={})
 
     assert result.returncode == 1
-    assert "node01: verified clean" in result.stdout
-    assert "node02: verified clean" in result.stdout
-    assert "node03: no Node Agent pod on this host" in result.stderr
-    assert "host cleanup unverified on: node03" in result.stderr
+    assert "no Node Agent pod exists; remote host cleanup cannot be verified" in result.stderr
+    assert "host cleanup unverified on:<no node agent pod>" in result.stderr
     assert "Refusing to uninstall the Node Agents" in result.stderr
     assert not helm_calls.exists()
 
@@ -1185,7 +1170,6 @@ def test_teardown_refuses_an_invalid_unclean_or_failed_host_report(
 ) -> None:
     result, helm_calls = _teardown_run(
         tmp_path,
-        nodes=_THREE_HOSTS,
         agents=_THREE_AGENTS,
         reports={**_THREE_CLEAN, "na-2": (report, rc)},
     )
@@ -1199,22 +1183,20 @@ def test_teardown_refuses_an_invalid_unclean_or_failed_host_report(
 def test_teardown_refuses_when_the_host_inventory_cannot_be_read(tmp_path: Path) -> None:
     result, helm_calls = _teardown_run(
         tmp_path,
-        nodes=_THREE_HOSTS,
         agents=_THREE_AGENTS,
         reports=_THREE_CLEAN,
         inventory_ok=False,
     )
 
     assert result.returncode == 1
-    assert "could not read the Node Agent host inventory" in result.stderr
-    assert "host cleanup unverified on:<host inventory unreadable>" in result.stderr
+    assert "could not list the Node Agent pods; remote host cleanup cannot be verified" in result.stderr
+    assert "host cleanup unverified on:<node agent pods unreadable>" in result.stderr
     assert not helm_calls.exists()
 
 
 def test_teardown_refuses_when_the_local_cleaner_does_not_verify(tmp_path: Path) -> None:
     result, helm_calls = _teardown_run(
         tmp_path,
-        nodes=_THREE_HOSTS,
         agents=_THREE_AGENTS,
         reports=_THREE_CLEAN,
         local=(_report("nodal-dev", remaining=["_na_hdeadbe"]), 1),
@@ -1231,7 +1213,6 @@ def test_teardown_refuses_when_the_local_cleaner_does_not_verify(tmp_path: Path)
 def test_teardown_without_a_namespace_claims_no_remote_verification(tmp_path: Path) -> None:
     result, helm_calls = _teardown_run(
         tmp_path,
-        nodes=_THREE_HOSTS,
         agents={},
         reports={},
         namespace="absent",
@@ -1260,7 +1241,6 @@ def test_teardown_stops_before_any_mutation_when_the_namespace_lookup_fails(
     cleaner does not run."""
     result, helm_calls = _teardown_run(
         tmp_path,
-        nodes=_THREE_HOSTS,
         agents=_THREE_AGENTS,
         reports=_THREE_CLEAN,
         namespace=answer,
@@ -1282,8 +1262,7 @@ def test_teardown_refuses_an_unexpected_node_name_before_using_it(tmp_path: Path
     scratch file name or an exec; the host counts as unverified."""
     result, helm_calls = _teardown_run(
         tmp_path,
-        nodes=["node01", "node02", "../etc"],
-        agents=_THREE_AGENTS,
+        agents={"node01": "na-1", "node02": "na-2", "../etc": "na-3"},
         reports=_THREE_CLEAN,
     )
 

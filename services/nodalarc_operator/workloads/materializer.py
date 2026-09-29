@@ -14,10 +14,13 @@ inspects them.
 
 from __future__ import annotations
 
+import json
 import os
 from dataclasses import dataclass, field
+from typing import Literal
 
 import kubernetes.client
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 from nodalarc.substrate.manifest_contract import (
     POD_OWNER_UID_LABEL,
     POD_SESSION_RUN_LABEL,
@@ -107,6 +110,52 @@ def _require_env(name: str) -> str:
     if not value:
         raise RuntimeError(f"Required environment variable {name} is not set")
     return value
+
+
+class PodToleration(BaseModel):
+    """One Kubernetes toleration, as the chart value placement.tolerations lists it."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid", populate_by_name=True)
+
+    key: str | None = None
+    operator: Literal["Exists", "Equal"] = "Equal"
+    value: str | None = None
+    effect: Literal["NoSchedule", "PreferNoSchedule", "NoExecute"] | None = None
+    toleration_seconds: int | None = Field(default=None, alias="tolerationSeconds")
+
+    @model_validator(mode="after")
+    def _exists_takes_no_value(self) -> PodToleration:
+        if self.operator == "Exists" and self.value is not None:
+            raise ValueError("a toleration with operator Exists takes no value")
+        return self
+
+    def to_kubernetes(self) -> kubernetes.client.V1Toleration:
+        return kubernetes.client.V1Toleration(
+            local_vars_configuration=MODEL_CONFIGURATION,
+            key=self.key,
+            operator=self.operator,
+            value=self.value,
+            effect=self.effect,
+            toleration_seconds=self.toleration_seconds,
+        )
+
+
+def session_pod_tolerations() -> list[kubernetes.client.V1Toleration]:
+    """The tolerations every session pod carries.
+
+    The chart hands its placement.tolerations value to the Operator as a JSON
+    list in SESSION_POD_TOLERATIONS, the list the Node Agent DaemonSet uses,
+    so a tainted dedicated pool admits the Node Agent and the session pods
+    alike. An absent or malformed value fails the deploy.
+    """
+    raw = _require_env("SESSION_POD_TOLERATIONS")
+    try:
+        entries = json.loads(raw)
+    except ValueError as exc:
+        raise RuntimeError(f"SESSION_POD_TOLERATIONS is not JSON: {exc}") from exc
+    if not isinstance(entries, list):
+        raise RuntimeError("SESSION_POD_TOLERATIONS must be a JSON list of tolerations")
+    return [PodToleration.model_validate(entry).to_kubernetes() for entry in entries]
 
 
 @dataclass(frozen=True)
@@ -257,6 +306,7 @@ def build_session_pod(
     owner_ref: dict,
     composition: WorkloadComposition,
     selection_identity: str,
+    tolerations: list[kubernetes.client.V1Toleration],
     terminal_access: str | None = None,
     target_node: str | None = None,
     extra_labels: dict[str, str] | None = None,
@@ -324,6 +374,7 @@ def build_session_pod(
         spec=kubernetes.client.V1PodSpec(
             local_vars_configuration=MODEL_CONFIGURATION,
             affinity=_placed_on(target_node) if target_node is not None else None,
+            tolerations=list(tolerations) or None,
             init_containers=[_wiring_gate_container(), *composition.init_containers],
             containers=list(composition.containers),
             volumes=[*composition.volumes, _wiring_status_volume()],

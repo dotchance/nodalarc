@@ -194,7 +194,7 @@ def reset_platform_config() -> None:
     _config = None
 
 
-CHART_NAMESPACE_VALUE = '"{{ .Values.namespace }}"'
+CHART_NAMESPACE_VALUE = '"{{ .Release.Namespace }}"'
 # The settings an installer chooses: each one's value in the chart copy is
 # replaced by its chart value, and Helm refuses an install that leaves one out.
 CHART_TEMPLATED_SETTINGS = {

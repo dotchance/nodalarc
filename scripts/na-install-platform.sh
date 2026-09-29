@@ -127,8 +127,8 @@ wait_platform_ready() {
     done
     echo ""
     if [ "${DS_DESIRED:-0}" = "0" ]; then
-        echo "[$ACTION] ERROR: Node Agent DaemonSet has 0 desired pods." >&2
-        echo "[$ACTION] Fix: kubectl label nodes --all nodalarc.io/node-agent=true" >&2
+        echo "[$ACTION] ERROR: no server admits the Node Agent DaemonSet (0 desired pods)." >&2
+        echo "[$ACTION] Check the chart values placement.nodeSelector and placement.tolerations against the servers: kubectl describe daemonset nodalarc-node-agent -n $NAMESPACE" >&2
     else
         echo "[$ACTION] ERROR: Platform pods not ready after ${timeout}s." >&2
         printf '%s' "$PLATFORM_PROBLEMS" >&2
@@ -181,7 +181,6 @@ bash "$ROOT_DIR/scripts/na-images.sh" workload-dev-overrides-values > "$workload
 image_args+=("--values=$workload_values_file")
 
 helm_args=(
-    "--set-string=namespace=$NAMESPACE"
     "--set-string=runtimeRelease=$PROJECT_VERSION"
     "${image_args[@]}"
 )

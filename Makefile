@@ -285,11 +285,11 @@ load: ## Import images into K3s (single-node) or push to registry (multi-node)
 # transition below.
 
 # install waits for EVERY platform Deployment to reach Available AND the
-# Node Agent DaemonSet to finish rolling out. Any failure (timeout,
-# missing node label, readiness probe failing) surfaces as exit-nonzero
-# — no silent "Platform ready" lie. The desired=0 check catches the
-# common footgun where no nodes carry the nodalarc.io/node-agent=true
-# label and the DaemonSet silently schedules zero pods.
+# Node Agent DaemonSet to finish rolling out. Any failure (timeout, a
+# placement value that admits no server, readiness probe failing) surfaces as exit-nonzero,
+# never a silent "Platform ready". The desired=0 check catches a
+# placement.nodeSelector or placement.tolerations value that admits the
+# DaemonSet on no server, so it silently schedules zero pods.
 install: ## Helm install the platform chart; refuses existing platform state
 	@ACTION=install MODE='$(MODE)' REGISTRY_HOST='$(REGISTRY_HOST)' TAG='$(TAG)' PROJECT_VERSION='$(PROJECT_VERSION)' SUDO_CTR='$(SUDO_CTR)' KUBECONFIG='$(KUBECONFIG)' NAMESPACE='$(NAMESPACE)' bash scripts/na-install-platform.sh
 

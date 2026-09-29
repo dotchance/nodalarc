@@ -1805,6 +1805,7 @@ class TestOnePathWorkloads:
                 {
                     "WIRING_GATE_IMAGE": "test/base:1",
                     "IMAGE_PULL_POLICY": "Never",
+                    "SESSION_POD_TOLERATIONS": "[]",
                 },
                 clear=False,
             ),
@@ -1877,6 +1878,7 @@ class TestPodSpec:
                 {
                     "WIRING_GATE_IMAGE": "test/base:1",
                     "IMAGE_PULL_POLICY": "Never",
+                    "SESSION_POD_TOLERATIONS": "[]",
                 },
             ),
         ):
@@ -2036,6 +2038,7 @@ class TestPodSpec:
                 {
                     "WIRING_GATE_IMAGE": "test/base:1",
                     "IMAGE_PULL_POLICY": "Never",
+                    "SESSION_POD_TOLERATIONS": "[]",
                 },
             ),
         ):
@@ -2089,6 +2092,7 @@ class TestPodSpec:
                 {
                     "WIRING_GATE_IMAGE": "test/base:1",
                     "IMAGE_PULL_POLICY": "Never",
+                    "SESSION_POD_TOLERATIONS": "[]",
                 },
             ),
         ):
@@ -2137,6 +2141,7 @@ class TestPodSpec:
                 {
                     "WIRING_GATE_IMAGE": "test/base:1",
                     "IMAGE_PULL_POLICY": "Never",
+                    "SESSION_POD_TOLERATIONS": "[]",
                 },
             ),
         ):

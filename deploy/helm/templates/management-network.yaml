@@ -1,16 +1,16 @@
-{{- $orchestratorClusterName := printf "nodalarc-orchestrator-cluster-%s-%s" .Release.Name .Values.namespace }}
+{{- $orchestratorClusterName := printf "nodalarc-orchestrator-cluster-%s-%s" .Release.Name .Release.Namespace }}
 {{- $orchestratorClusterBindingName := printf "%s-binding" $orchestratorClusterName }}
 apiVersion: v1
 kind: ServiceAccount
 metadata:
   name: nodalarc-orchestrator
-  namespace: {{ .Values.namespace }}
+  namespace: {{ .Release.Namespace }}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
   name: nodalarc-orchestrator
-  namespace: {{ .Values.namespace }}
+  namespace: {{ .Release.Namespace }}
 rules:
   - apiGroups: [""]
     resources: ["pods"]
@@ -37,7 +37,7 @@ apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
   name: nodalarc-orchestrator
-  namespace: {{ .Values.namespace }}
+  namespace: {{ .Release.Namespace }}
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: Role
@@ -45,19 +45,19 @@ roleRef:
 subjects:
   - kind: ServiceAccount
     name: nodalarc-orchestrator
-    namespace: {{ .Values.namespace }}
+    namespace: {{ .Release.Namespace }}
 ---
 apiVersion: v1
 kind: ServiceAccount
 metadata:
   name: nodalarc-vs-api
-  namespace: {{ .Values.namespace }}
+  namespace: {{ .Release.Namespace }}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
   name: nodalarc-vs-api
-  namespace: {{ .Values.namespace }}
+  namespace: {{ .Release.Namespace }}
 rules:
   - apiGroups: [""]
     resources: ["pods"]
@@ -83,7 +83,7 @@ apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
   name: nodalarc-vs-api
-  namespace: {{ .Values.namespace }}
+  namespace: {{ .Release.Namespace }}
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: Role
@@ -91,7 +91,7 @@ roleRef:
 subjects:
   - kind: ServiceAccount
     name: nodalarc-vs-api
-    namespace: {{ .Values.namespace }}
+    namespace: {{ .Release.Namespace }}
 ---
 # ClusterRole for cluster-scoped resources (nodes)
 apiVersion: rbac.authorization.k8s.io/v1
@@ -122,7 +122,7 @@ roleRef:
 subjects:
   - kind: ServiceAccount
     name: nodalarc-orchestrator
-    namespace: {{ .Values.namespace }}
+    namespace: {{ .Release.Namespace }}
   - kind: ServiceAccount
     name: nodalarc-vs-api
-    namespace: {{ .Values.namespace }}
+    namespace: {{ .Release.Namespace }}

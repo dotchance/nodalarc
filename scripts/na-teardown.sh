@@ -208,31 +208,28 @@ if ! kubectl delete --raw "/api/v1/namespaces/$NAMESPACE/pods?labelSelector=noda
     exit 1
 fi
 
-# Step 3: Clean host-side kernel state on EVERY host that carries the Node
-# Agent placement label, through the Node Agent's own cleaner, and judge each
-# host by its report. The required host set comes from the label, never from
-# whichever agent pods happen to exist, and readiness is not a filter: a
-# NotReady node can still hold session devices. This runs BEFORE Helm
-# uninstall deletes the DaemonSet pods; if any host is unverified the
+# Step 3: Clean host-side kernel state on EVERY server that runs a Node
+# Agent, through the Node Agent's own cleaner, and judge each server by its
+# report. The DaemonSet's pods are the inventory: NodalArc created devices
+# only where a Node Agent ran, and readiness is not a filter, since a
+# NotReady server keeps its pod (DaemonSet pods tolerate the not-ready and
+# unreachable taints) and can still hold session devices. This runs BEFORE
+# Helm uninstall deletes the DaemonSet pods; if any server is unverified the
 # teardown refuses below, so the next run keeps its means of retrying. The
 # cleaner is the one implementation: it deletes the members of NodalArc's
 # device group, and its report is the only judgement.
-echo "[3/8] Cleaning host-side kernel state via the Node Agent cleaner on every labelled host..."
+echo "[3/8] Cleaning host-side kernel state via the Node Agent cleaner on every server that runs one..."
 UNVERIFIED_HOSTS=""
-if ! REQUIRED_HOSTS="$(kubectl get nodes -l nodalarc.io/node-agent=true \
-        -o custom-columns=NAME:.metadata.name --no-headers 2>/dev/null)"; then
-    echo "  ERROR: could not read the Node Agent host inventory (nodes labelled nodalarc.io/node-agent=true)" >&2
-    UNVERIFIED_HOSTS="<host inventory unreadable>"
-    REQUIRED_HOSTS=""
-elif [ -z "$REQUIRED_HOSTS" ]; then
-    echo "  ERROR: no node carries the nodalarc.io/node-agent=true label; remote host cleanup cannot be verified" >&2
-    UNVERIFIED_HOSTS="<no labelled host>"
-fi
 if ! AGENT_PODS="$(kubectl get pods -n "$NAMESPACE" -l app=nodalarc-node-agent \
         -o custom-columns=NODE:.spec.nodeName,NAME:.metadata.name --no-headers 2>/dev/null)"; then
-    echo "  ERROR: could not list the Node Agent pods" >&2
+    echo "  ERROR: could not list the Node Agent pods; remote host cleanup cannot be verified" >&2
+    UNVERIFIED_HOSTS="<node agent pods unreadable>"
     AGENT_PODS=""
+elif [ -z "$AGENT_PODS" ]; then
+    echo "  ERROR: no Node Agent pod exists; remote host cleanup cannot be verified" >&2
+    UNVERIFIED_HOSTS="<no node agent pod>"
 fi
+REQUIRED_HOSTS="$(printf '%s\n' "$AGENT_PODS" | awk 'NF && $1 != "<none>" {print $1}' | sort -u)"
 CLEANED_HOSTS=""
 for HOST in $REQUIRED_HOSTS; do
     # A node name is a DNS name; anything else never reaches a file name or an exec.

@@ -107,7 +107,11 @@ class TestPlatformConfig:
         values = yaml.safe_load(
             (ROOT / "deploy" / "helm" / "values.yaml").read_text(encoding="utf-8")
         )
-        assert platform["kubernetes_namespace"] == values["namespace"]
+        # The namespace is the Helm release's, so it has no chart value; the
+        # shipped literal equals the lifecycle scripts' default release namespace.
+        installer = (ROOT / "scripts" / "na-install-platform.sh").read_text(encoding="utf-8")
+        assert 'NAMESPACE="${NAMESPACE:-' + platform["kubernetes_namespace"] + '}"' in installer
+        assert "namespace" not in values
         assert platform["veth_interface_mtu_bytes"] == values["network"]["linkMtu"]
         assert platform["vxlan_udp_port"] == values["network"]["vxlanPort"]
         assert (

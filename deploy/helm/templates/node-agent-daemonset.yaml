@@ -2,7 +2,7 @@ apiVersion: apps/v1
 kind: DaemonSet
 metadata:
   name: nodalarc-node-agent
-  namespace: {{ .Values.namespace }}
+  namespace: {{ .Release.Namespace }}
   labels:
     app: nodalarc-node-agent
 spec:
@@ -21,13 +21,17 @@ spec:
       hostPID: true
       dnsPolicy: ClusterFirstWithHostNet
       serviceAccountName: nodalarc-node-agent
+{{- with .Values.placement.nodeSelector }}
       nodeSelector:
-        nodalarc.io/node-agent: "true"
+        {{- toYaml . | nindent 8 }}
+{{- end }}
       securityContext:
         seccompProfile:
           type: Unconfined
+{{- with .Values.placement.tolerations }}
       tolerations:
-        - operator: Exists
+        {{- toYaml . | nindent 8 }}
+{{- end }}
       initContainers:
         {{- include "nodalarc.nats-wait-init" . | nindent 8 }}
       containers:

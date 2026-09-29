@@ -1,16 +1,16 @@
-{{- $operatorDiscoveryName := printf "nodalarc-operator-discovery-%s-%s" .Release.Name .Values.namespace }}
+{{- $operatorDiscoveryName := printf "nodalarc-operator-discovery-%s-%s" .Release.Name .Release.Namespace }}
 {{- $operatorDiscoveryBindingName := printf "%s-binding" $operatorDiscoveryName }}
 apiVersion: v1
 kind: ServiceAccount
 metadata:
   name: nodalarc-operator
-  namespace: {{ .Values.namespace }}
+  namespace: {{ .Release.Namespace }}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
   name: nodalarc-operator
-  namespace: {{ .Values.namespace }}
+  namespace: {{ .Release.Namespace }}
 rules:
   # ConstellationSpec reconciliation is restricted to this release namespace.
   - apiGroups: ["nodalarc.io"]
@@ -48,7 +48,7 @@ apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
   name: nodalarc-operator
-  namespace: {{ .Values.namespace }}
+  namespace: {{ .Release.Namespace }}
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: Role
@@ -56,7 +56,7 @@ roleRef:
 subjects:
   - kind: ServiceAccount
     name: nodalarc-operator
-    namespace: {{ .Values.namespace }}
+    namespace: {{ .Release.Namespace }}
 ---
 # Cluster-scoped, read-only discovery needed by kopf and placement. The release
 # and namespace are part of the name because Helm release names are only unique
@@ -95,4 +95,4 @@ roleRef:
 subjects:
   - kind: ServiceAccount
     name: nodalarc-operator
-    namespace: {{ .Values.namespace }}
+    namespace: {{ .Release.Namespace }}

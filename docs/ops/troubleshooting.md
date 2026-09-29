@@ -20,7 +20,7 @@ Look for events like `Insufficient memory` or `node(s) didn't match Pod's node a
 **Fix:**
 - Check node resources: `kubectl top nodes`
 - Reduce constellation size
-- Add more nodes and label them: `kubectl label node <name> nodalarc.io/node-agent=true`
+- Add more nodes, or widen `placement.nodeSelector` in the chart values; a node is used once its Node Agent is ready
 - Switch to `allOnOne` placement if using `planePerNode` with insufficient nodes
 
 ### Pods Stuck in ImagePullBackOff
@@ -166,7 +166,7 @@ sudo KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl get namespace nodalarc -o json
 
 **Symptom:** VXLAN tunnels or veth pairs from a previous session interfere with a new deployment.
 
-**Check:** `make teardown` runs the Node Agent's cleaner on every host that carries the `nodalarc.io/node-agent=true` label, judges each host by the cleaner's report and refuses to uninstall while any host is unverified. Its output names the host and the devices that remain. For a read-only look at one host:
+**Check:** `make teardown` runs the Node Agent's cleaner on every host that runs a Node Agent pod, judges each host by the cleaner's report and refuses to uninstall while any host is unverified. Its output names the host and the devices that remain. For a read-only look at one host:
 ```bash
 ssh node02 "ip -o link show"
 ```

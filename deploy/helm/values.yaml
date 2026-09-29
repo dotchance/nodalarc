@@ -1,5 +1,4 @@
 # Default values for Nodal Arc deployment
-namespace: nodalarc
 
 # JSON map of profile image references to replacement references, applied to
 # composed workload containers with loud logging. Development only; empty in
@@ -59,6 +58,15 @@ nodeAgent:
   # The kubelet's root directory on the hosts (its --root-dir). k0s uses
   # /var/lib/k0s/kubelet; MicroK8s uses /var/snap/microk8s/common/var/lib/kubelet.
   kubeletRootDir: /var/lib/kubelet
+
+# Where NodalArc runs. With both empty the Node Agent runs on every server
+# the scheduler admits, and a server that fails node qualification simply
+# stays unready. A dedicated pool is selected with nodeSelector; a tainted
+# pool needs the matching tolerations, which the Node Agent and every
+# session pod carry alike.
+placement:
+  nodeSelector: {}
+  tolerations: []
 
 # Emulated network settings, chosen at install.
 network:

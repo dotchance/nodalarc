@@ -57,6 +57,7 @@ from nodalarc_operator.session_pods import (
 )
 from nodalarc_operator.workloads.materializer import (
     build_session_pod,
+    session_pod_tolerations,
 )
 from nodalarc_operator.workloads.preparation import (
     WorkloadPreparationError,
@@ -1787,6 +1788,7 @@ def _create_workload_pod(
         owner_ref=owner_ref,
         composition=composed.composition,
         selection_identity=pod_identity.selection_identity,
+        tolerations=session_pod_tolerations(),
         terminal_access=composed.terminal_access,
         target_node=target_node,
         extra_labels=extra_labels,

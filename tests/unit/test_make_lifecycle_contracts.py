@@ -417,16 +417,17 @@ def test_helm_namespace_is_one_runtime_authority() -> None:
     operator_template = (ROOT / "deploy/helm/templates/operator-deployment.yaml").read_text()
     operator_dockerfile = (ROOT / "services/nodalarc_operator/Dockerfile").read_text()
 
-    assert '"--set-string=namespace=$NAMESPACE"' in installer
+    assert "--set-string=namespace=" not in installer
+    assert '--namespace "$NAMESPACE"' in installer
     assert '"--set-string=runtimeRelease=$PROJECT_VERSION"' in installer
     assert (
         "python -m nodalarc.platform_config --render-chart-copy configs/platform.yaml" in assembler
     )
     model_module = (ROOT / "lib/nodalarc/platform_config.py").read_text()
-    assert "CHART_NAMESPACE_VALUE = '\"{{ .Values.namespace }}\"'" in model_module
+    assert "CHART_NAMESPACE_VALUE = '\"{{ .Release.Namespace }}\"'" in model_module
     assert not (ROOT / "deploy/helm/files/platform.yaml").exists()
     assert 'tpl (.Files.Get "files/platform.yaml") .' in platform_configmap
-    assert "- {{ .Values.namespace | quote }}" in operator_template
+    assert "- {{ .Release.Namespace | quote }}" in operator_template
     assert 'ENTRYPOINT ["kopf", "run", "-m", "nodalarc_operator"]' in operator_dockerfile
 
 
@@ -444,7 +445,7 @@ def test_operator_mutation_rbac_is_namespace_bound_and_discovery_is_read_only() 
     role = role_match.group("body")
     cluster_role = cluster_role_match.group("body")
 
-    assert "namespace: {{ .Values.namespace }}" in role
+    assert "namespace: {{ .Release.Namespace }}" in role
     for resource in (
         "constellationspecs",
         "constellationspecs/status",
@@ -474,7 +475,7 @@ def test_operator_mutation_rbac_is_namespace_bound_and_discovery_is_read_only() 
 def test_operator_cluster_discovery_names_are_release_and_namespace_qualified() -> None:
     template = (ROOT / "deploy/helm/templates/operator-rbac.yaml").read_text()
 
-    assert 'printf "nodalarc-operator-discovery-%s-%s" .Release.Name .Values.namespace' in template
+    assert 'printf "nodalarc-operator-discovery-%s-%s" .Release.Name .Release.Namespace' in template
     assert "name: {{ $operatorDiscoveryName | quote }}" in template
     assert "name: {{ $operatorDiscoveryBindingName | quote }}" in template
     assert "kind: ClusterRole\nmetadata:\n  name: nodalarc-operator\n" not in template
@@ -497,7 +498,7 @@ def test_orchestrator_cluster_discovery_names_are_release_and_namespace_qualifie
     template = (ROOT / "deploy/helm/templates/management-network.yaml").read_text()
 
     assert (
-        'printf "nodalarc-orchestrator-cluster-%s-%s" .Release.Name .Values.namespace' in template
+        'printf "nodalarc-orchestrator-cluster-%s-%s" .Release.Name .Release.Namespace' in template
     )
     assert "name: {{ $orchestratorClusterName | quote }}" in template
     assert "name: {{ $orchestratorClusterBindingName | quote }}" in template
@@ -544,6 +545,29 @@ def test_vs_api_has_separate_upload_and_lifecycle_rbac() -> None:
     assert verbs == {"create", "list", "delete"}
     assert "serviceAccountName: nodalarc-vs-api" in deployment
     assert "name: nodalarc-vs-api" in template
+
+
+def test_placement_values_replace_the_node_label() -> None:
+    """Where NodalArc runs is one pair of chart values: the DaemonSet takes the
+    selector and tolerations from them (no fixed label, no tolerate-everything
+    entry), the Operator receives the same tolerations for session pods, and the
+    lifecycle scripts find servers through the DaemonSet's pods."""
+    values = (ROOT / "deploy/helm/values.yaml").read_text()
+    node_agent = (ROOT / "deploy/helm/templates/node-agent-daemonset.yaml").read_text()
+    operator = (ROOT / "deploy/helm/templates/operator-deployment.yaml").read_text()
+    teardown = (ROOT / "scripts/na-teardown.sh").read_text()
+    session = (ROOT / "scripts/na-session.sh").read_text()
+    installer = (ROOT / "scripts/na-install-platform.sh").read_text()
+
+    assert "placement:\n  nodeSelector: {}\n  tolerations: []" in values
+    assert "{{- with .Values.placement.nodeSelector }}" in node_agent
+    assert "{{- with .Values.placement.tolerations }}" in node_agent
+    assert "nodalarc.io/node-agent" not in node_agent
+    assert "operator: Exists" not in node_agent
+    assert 'required "placement.tolerations is required" .Values.placement.tolerations | toJson' in operator
+    for script in (teardown, session, installer):
+        assert "nodalarc.io/node-agent" not in script
+    assert "-l app=nodalarc-node-agent" in teardown and "-l app=nodalarc-node-agent" in session
 
 
 def test_chart_defaults_assume_no_distribution() -> None:

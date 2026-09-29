@@ -53,6 +53,7 @@ def _build(composition: WorkloadComposition, **overrides) -> kubernetes.client.V
         "composition": composition,
         "selection_identity": "builtin-frr-default",
         "target_node": "node02",
+        "tolerations": [],
     }
     kwargs.update(overrides)
     return build_session_pod(**kwargs)

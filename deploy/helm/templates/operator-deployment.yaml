@@ -2,16 +2,14 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: nodalarc-operator
-  namespace: {{ .Values.namespace }}
+  namespace: {{ .Release.Namespace }}
   labels:
     app: nodalarc-operator
 spec:
   replicas: 1
   strategy:
-    # The Operator runs on the host network and binds its health port on the
-    # control-plane node. A rolling surge can leave the replacement pod Pending
-    # forever because the old pod still owns that host port. Recreate preserves
-    # the single-authority operator contract and makes upgrades deterministic.
+    # One Operator instance at a time: the old pod is gone before the new one
+    # starts, so two instances never reconcile the same ConstellationSpec.
     type: Recreate
   selector:
     matchLabels:
@@ -34,7 +32,7 @@ spec:
           imagePullPolicy: {{ .Values.imagePullPolicy }}
           args:
             - "--namespace"
-            - {{ .Values.namespace | quote }}
+            - {{ .Release.Namespace | quote }}
             - "--liveness=http://0.0.0.0:8090/healthz"
           env:
             - name: NODAL_BUILD
@@ -53,6 +51,10 @@ spec:
 {{- end }}
             - name: IMAGE_PULL_POLICY
               value: {{ .Values.imagePullPolicy | quote }}
+            # The tolerations every session pod carries: the same list the
+            # Node Agent DaemonSet uses, so a tainted dedicated pool admits both.
+            - name: SESSION_POD_TOLERATIONS
+              value: {{ required "placement.tolerations is required" .Values.placement.tolerations | toJson | quote }}
           ports:
             - containerPort: 8090
               name: health

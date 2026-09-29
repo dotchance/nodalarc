@@ -142,14 +142,27 @@ verify_session_placement() {
     local expected_pods="$2"
     local ready_node_csv expected_placement_nodes actual_placement_nodes distribution
 
+    # The servers a session may use are those whose Node Agent is ready, the
+    # definition the Operator and VS-API read (lib/nodalarc/session_nodes.py).
     ready_node_csv="$(
-        kubectl get nodes -l nodalarc.io/node-agent=true --no-headers 2>/dev/null \
-            | awk '$2 == "Ready" {print $1}' \
-            | sort \
-            | paste -sd, -
+        kubectl get pods -n "$NAMESPACE" -l app=nodalarc-node-agent -o json 2>/dev/null \
+            | python3 -c '
+import json, sys
+pods = json.load(sys.stdin)["items"]
+ready = {
+    pod["spec"]["nodeName"]
+    for pod in pods
+    if pod["spec"].get("nodeName")
+    and any(
+        c["type"] == "Ready" and c["status"] == "True"
+        for c in (pod.get("status") or {}).get("conditions") or []
+    )
+}
+print(",".join(sorted(ready)))
+'
     )"
     if [ -z "$ready_node_csv" ]; then
-        echo "[session] ERROR: no Ready nodes with label nodalarc.io/node-agent=true; cannot verify placement" >&2
+        echo "[session] ERROR: no server has a ready Node Agent; cannot verify placement" >&2
         exit 1
     fi
 

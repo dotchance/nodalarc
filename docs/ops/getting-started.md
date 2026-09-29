@@ -49,6 +49,15 @@ It lists the changes it will make and asks once: the inotify limits NodalArc nee
 
 If you already have Kubernetes, skip this step: the Node Agent's readiness probe reports what a node lacks once NodalArc is installed.
 
+On a cluster that enforces Pod Security admission (RKE2 with its CIS profile, many shared clusters), the Node Agent's privileged, host-PID pods are rejected unless NodalArc's namespace allows them. Create the namespace with the label before installing, and install into it without `--create-namespace`:
+
+```bash
+kubectl create namespace nodalarc
+kubectl label namespace nodalarc pod-security.kubernetes.io/enforce=privileged
+```
+
+K3s enforces nothing by default, so on K3s the label changes nothing.
+
 Until the first release publishes the chart and the images, NodalArc is installed from a source checkout on a developer's machine; that machine's setup is in the [Developer Guide](../dev/getting-started.md).
 
 ## Step 2: Build and Deploy

@@ -764,7 +764,7 @@ def execute_wiring(
         f"Terrestrial interfaces created. Finalizing {total_nodes} pods (routes + security)..."
     )
 
-    # Per-pod finalization: default route removal + cni0 lockdown.
+    # Per-pod finalization: cni0 into the management VRF, then the cni0 lockdown.
     finalized = 0
     with ThreadPoolExecutor(max_workers=8) as pool:
         fin_futures = {}
@@ -777,12 +777,12 @@ def execute_wiring(
         for fut in as_completed(fin_futures):
             nid = fin_futures[fut]
             try:
-                route_err, security_err = fut.result()
-                if route_err:
-                    _record_failure(nid, "pod_route_finalization", route_err)
+                move_err, security_err = fut.result()
+                if move_err:
+                    _record_failure(nid, "pod_route_finalization", move_err)
                 if security_err:
                     _record_failure(nid, "pod_security", security_err)
-                if not route_err and not security_err:
+                if not move_err and not security_err:
                     finalized += 1
                 if finalized % 10 == 0 or finalized == total_to_finalize:
                     _write_progress(

@@ -471,24 +471,6 @@ async def main() -> None:
         finally:
             manifest_watch.stop()
 
-    # Node qualification: repeated checks of this host, whose verdict the
-    # DaemonSet's readiness probe reads (node_agent.qualification).
-    if _running_in_k8s():
-        from node_agent.qualification import qualify_forever
-
-        platform = get_platform_config()
-        threading.Thread(
-            target=qualify_forever,
-            kwargs={
-                "host_ip": os.environ["HOST_IP"].strip(),
-                "link_mtu": platform.veth_interface_mtu_bytes,
-                "vxlan_port": platform.vxlan_udp_port,
-                "stop": stop,
-            },
-            name="node-qualification",
-            daemon=True,
-        ).start()
-
     # Start wiring watcher in thread pool.
     wiring_task = loop.run_in_executor(None, _wiring_watcher)
     sub = None

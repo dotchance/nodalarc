@@ -54,19 +54,19 @@ spec:
                   fieldPath: status.hostIP
             - name: NODE_AGENT_OPS_SPOOL
               value: /var/lib/nodalarc/node-agent/ops-events.jsonl
-          # Ready only while this host passes node qualification; a failed
-          # probe's message names each failed check
-          # (python -m node_agent.qualification runs the same checks).
+          # Ready only while this server passes node qualification. Every
+          # probe runs the checks, so readiness follows the server's current
+          # state; a failed probe's message lists each check.
           readinessProbe:
             exec:
               command:
                 - sh
                 - -c
                 - >-
-                  test -f /tmp/nodalarc-qualification
-                  || { echo "node qualification has not run yet"; exit 1; };
-                  if test -s /tmp/nodalarc-qualification;
-                  then cat /tmp/nodalarc-qualification; exit 1; fi
+                  exec python -m node_agent.qualification
+                  --host-ip "$HOST_IP"
+                  --link-mtu {{ required "network.linkMtu is required" .Values.network.linkMtu | int }}
+                  --vxlan-port {{ required "network.vxlanPort is required" .Values.network.vxlanPort | int }}
             periodSeconds: 10
             timeoutSeconds: 5
           resources:

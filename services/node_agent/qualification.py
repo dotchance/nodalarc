@@ -1,18 +1,19 @@
 # Copyright 2024-2026 .chance (dotchance)
 # Licensed under the Apache License, Version 2.0. See LICENSE file.
-"""Node qualification: whether this host can run NodalArc session pods.
+"""Node qualification: whether this server can run NodalArc session pods.
 
-Every check reads the host from the Node Agent's own process: the kernel's
-module tables, /proc, and netlink. The same checks run in two ways:
+Every check reads the server from the calling process: the kernel's module
+tables, /proc, and netlink. ``python -m node_agent.qualification`` prints
+each check and exits 0 only when every hard requirement holds. It changes
+nothing. It runs in two places:
 
-- ``python -m node_agent.qualification`` prints each check and exits 0 only
-  when every hard requirement holds. It changes nothing, so an installer can
-  run it on a node before NodalArc is installed (the node check).
-- The running Node Agent repeats them and publishes the verdict to its
-  readiness probe (``READINESS_FILE``), so the DaemonSet shows desired
-  against ready nodes, the probe's failure message names the failed checks,
-  and the Operator places session pods only on nodes whose Node Agent is
-  ready.
+- An installer can run it on a server before NodalArc is installed.
+- The Node Agent DaemonSet's readiness probe runs it in the Node Agent
+  container on every probe. Each probe reports what the server has at that
+  moment, so a server becomes ready as soon as its checks pass and unready
+  when one fails. The DaemonSet shows desired against ready Node Agents, the
+  probe's failure message names the failed checks, and the Operator places
+  session pods only on servers whose Node Agent is ready.
 
 Checks between hosts (the path MTU) depend on both ends and are not part of
 a node's qualification: each session proves its own host paths before it is
@@ -24,18 +25,14 @@ from __future__ import annotations
 import argparse
 import ipaddress
 import json
-import logging
 import os
 import sys
-import threading
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
 from nodalarc.runtime_naming import MANAGED_HOST_DEVICE_GROUP
 from nodalarc.vxlan import host_path_mtu_for
 from pyroute2 import IPRoute
-
-log = logging.getLogger(__name__)
 
 # Kernel modules every session needs (links, shaping, the pod firewall).
 REQUIRED_KERNEL_MODULES = (
@@ -54,8 +51,6 @@ REQUIRED_KERNEL_MODULES = (
 FEATURE_KERNEL_MODULES = {"MPLS": ("mpls_router", "mpls_iptunnel")}
 MIN_INOTIFY_INSTANCES = 8192
 MIN_INOTIFY_WATCHES = 65536
-READINESS_FILE = Path("/tmp/nodalarc-qualification")
-RECHECK_INTERVAL_S = 30.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -201,36 +196,6 @@ def run_checks(
 
 def qualified(checks: list[Check]) -> bool:
     return all(check.passed for check in checks if check.hard)
-
-
-def publish(checks: list[Check], path: Path = READINESS_FILE) -> None:
-    """Write the verdict the readiness probe reads: the failed checks, or nothing."""
-    failed = [check.line() for check in checks if check.hard and not check.passed]
-    staging = path.with_suffix(".staging")
-    staging.write_text("\n".join(failed) + ("\n" if failed else ""))
-    os.replace(staging, path)
-
-
-def qualify_forever(*, host_ip: str, link_mtu: int, vxlan_port: int, stop: threading.Event) -> None:
-    """Re-run the checks every ``RECHECK_INTERVAL_S`` and publish each verdict.
-
-    A change of verdict is logged with every failed check named.
-    """
-    previous: list[str] | None = None
-    while not stop.is_set():
-        try:
-            checks = run_checks(host_ip=host_ip, link_mtu=link_mtu, vxlan_port=vxlan_port)
-        except Exception as exc:
-            checks = [Check("qualification", False, f"could not run: {exc}", "a readable host")]
-        publish(checks)
-        failed = [check.line() for check in checks if check.hard and not check.passed]
-        if failed != previous:
-            if failed:
-                log.error("Node qualification failed: %s", "; ".join(failed))
-            else:
-                log.info("Node qualified: %s", "; ".join(check.line() for check in checks))
-            previous = failed
-        stop.wait(RECHECK_INTERVAL_S)
 
 
 def _main(argv: list[str] | None = None) -> int:

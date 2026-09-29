@@ -10,8 +10,8 @@ Every session pod, whatever workload it runs, gets the platform controls:
 |---------|---------------|---------|
 | Read-only root filesystem | Profile `root_filesystem` (default `read_only`) | Prevents filesystem modification |
 | No service account token | `automountServiceAccountToken: false` | Cannot access K8s API from inside pod |
-| cni0 closed except inbound SSH | Frame filters on cni0 in both directions, a connection-tracking rule, IPv6 off on cni0 | No routing protocol or application traffic can use the pod network |
-| cni0 in its own VRF | `nodalarc-mgmt`, route table 20033 | Pod network routes never appear in the emulation's routing table |
+| cni0 closed except inbound SSH | Stateless frame filters on cni0 in both directions | No routing protocol or application traffic can use the pod network |
+| cni0 in its own VRF | `nodalarc-mgmt`, route table 20033; the terminal's sshd listens inside it | Pod network routes never appear in the emulation's routing table |
 | cni0 renamed from eth0 | Node Agent wiring, before the workload starts | User namespace reserved for user interfaces |
 | Capabilities are profile-declared | Workload profile grammar, closed vocabulary | A host profile can and usually does run with none |
 
@@ -55,19 +55,20 @@ The FRR router profile retains `CAP_SYS_ADMIN`. This is required by FRR's `ospfd
 
 Every session pod has a `cni0` interface (renamed from eth0 by the Node Agent during wiring, before the workload starts). This is the Kubernetes CNI interface that connects to the cluster network. The emulated world has no such network, so nothing in the pod may use it. It is visible in `show interface brief`, and:
 
-- Inbound, only SSH (TCP port 22) and ARP requests from the pod network gateway pass. Outbound, only replies to those SSH connections and ARP replies pass. Every other frame is dropped in both directions: other IPv4, IPv6, IS-IS and any other non-IP frame. The filters sit below the routing software, so a router configuration that runs a protocol on cni0 cannot put a frame on it.
-- Outbound IPv4 leaves only for connections already established, so nothing inside the pod can open a connection over cni0.
-- IPv6 is disabled on cni0.
+- Inbound, only SSH (TCP port 22, over IPv4 or IPv6) and neighbor resolution (ARP, IPv6 neighbor solicitations and advertisements) pass. Outbound, only TCP from port 22 and neighbor resolution pass, and a segment from port 22 that would open a connection (SYN without ACK) is dropped, so nothing inside the pod can open a connection over cni0. Every other frame is dropped in both directions: other IPv4 and IPv6, IS-IS and any other non-IP frame. The filters sit below the routing software, so a router configuration that runs a protocol on cni0 cannot put a frame on it.
+- The filters are stateless and act on cni0 alone. The pod runs no connection tracking, so the emulated router forwards every packet, fragments included, exactly as it arrives.
 - cni0 is in its own VRF, `nodalarc-mgmt` (route table 20033). Its routes never appear in the main routing table the emulation uses; FRR's `show vrf` lists it, and `show ip route vrf default` shows the emulation's routes.
+- On a router, sshd listens in two VRFs: inside `nodalarc-mgmt`, where terminal connections arrive on cni0, and in the default VRF, so the router answers SSH on its addresses over the emulated network. The pod keeps the kernel's `tcp_l3mdev_accept` and `udp_l3mdev_accept` at 0, so each listener accepts only connections arriving in its own VRF, and a service in the default VRF never accepts a connection arriving through another VRF, including the VRFs a user creates on the router.
 - The name `cni0` signals "infrastructure, not yours" - `mgmt0` is reserved for user-created management interfaces
 
 ### Data Plane Interfaces
 
 Only the emulated interfaces carry user-plane traffic: WAN interfaces such
-as `islX` and `gndX`, Ethernet segment ports such as `terr0` or `bus0`, and
+as `islX` and `gndX`, emulated LAN ports such as `terr0` or `bus0`, and
 `lo`. These are wired by the Node Agent and carry real routed traffic
 between pods. Traffic on these interfaces is genuine emulated
-satellite networking.
+satellite networking. NodalArc filters nothing on them; only the link
+emulation (delay, rate and loss) acts on their traffic.
 
 ## SSH Key Lifecycle
 

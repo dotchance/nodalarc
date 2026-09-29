@@ -66,9 +66,20 @@ if [ ! -f /etc/ssh/ssh_host_ed25519_key ]; then
     echo "SSH host key generated"
 fi
 
-# Write sshd_config to tmpfs
+# Write sshd_config to tmpfs. sshd listens in two places, over IPv4 and IPv6:
+# - the default VRF, for SSH to the router's addresses over the emulated
+#   network, as on a real router;
+# - the management VRF (rdomain), for terminal connections, which arrive on
+#   cni0: the Node Agent moved cni0 into that VRF before this container started.
+# The pod keeps tcp_l3mdev_accept at 0, so each listener accepts only
+# connections arriving in its own VRF, and nothing in the default VRF accepts
+# connections that arrive through the VRFs the user creates on the router.
 cat > /etc/ssh/sshd_config << 'SSHD_CONFIG'
 Port 22
+ListenAddress 0.0.0.0
+ListenAddress ::
+ListenAddress 0.0.0.0 rdomain nodalarc-mgmt
+ListenAddress :: rdomain nodalarc-mgmt
 HostKey /etc/ssh/ssh_host_ed25519_key
 AuthorizedKeysFile .ssh/authorized_keys
 PasswordAuthentication no
@@ -94,9 +105,11 @@ else
     echo "WARNING: No SSH authorized keys found at /etc/ssh-keys/ — terminal access disabled"
 fi
 
-# Start sshd in background
-/usr/sbin/sshd -e 2>/dev/null &
-echo "SSH daemon started (OpenSSH, key-only auth, root disabled, UseDNS no)"
+# Start sshd in background. -D keeps it from daemonizing, which would point
+# its stderr at /dev/null before it listens; its log (including a failure to
+# listen in the management VRF) goes to the container log.
+/usr/sbin/sshd -D -e &
+echo "SSH daemon started in the default and management VRFs (OpenSSH, key-only auth, root disabled, UseDNS no)"
 
 # Rename eth0 → cni0 BEFORE FRR starts so zebra learns the correct name.
 # cni0 is the K8s CNI infrastructure interface — not user-configurable.

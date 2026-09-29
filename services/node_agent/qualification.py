@@ -42,6 +42,7 @@ REQUIRED_KERNEL_MODULES = (
     "vxlan",
     "veth",
     "bridge",
+    "vrf",
     "sch_htb",
     "sch_netem",
     "sch_ingress",
@@ -177,22 +178,6 @@ def _inotify_checks(proc_root: Path) -> list[Check]:
     return checks
 
 
-def _iptables_backend_check(proc_root: Path) -> Check:
-    legacy = []
-    for listing in ("ip_tables_names", "ip6_tables_names"):
-        try:
-            if "filter" in (proc_root / "net" / listing).read_text().split():
-                legacy.append(listing)
-        except FileNotFoundError:
-            continue
-    return Check(
-        "iptables backend",
-        not legacy,
-        f"legacy filter table ({', '.join(legacy)})" if legacy else "nf_tables",
-        "nf_tables",
-    )
-
-
 def run_checks(
     *,
     host_ip: str,
@@ -208,7 +193,6 @@ def run_checks(
         checks = [
             _node_interface_check(ipr, host_ip, link_mtu),
             *_kernel_checks(sys_root=sys_root, modules_dir=modules_dir),
-            _iptables_backend_check(proc_root),
             _vxlan_port_check(ipr, vxlan_port),
         ]
     checks.extend(_inotify_checks(proc_root))

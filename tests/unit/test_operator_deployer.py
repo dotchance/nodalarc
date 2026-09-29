@@ -334,8 +334,6 @@ class TestPodPlacement:
             )
 
 
-
-
 # ---------------------------------------------------------------------------
 # Class 2: TestDeterministicNode
 # ---------------------------------------------------------------------------
@@ -1060,27 +1058,6 @@ class TestWiringManifest:
             assert isinstance(node["sysctls"], dict), f"{node_id} sysctls not dict"
             assert "mpls_enable" in node, f"{node_id} missing mpls_enable"
             assert "remove_default_route" in node, f"{node_id} missing remove_default_route"
-
-    def test_manifest_carries_a_cluster_pod_cidr_for_the_management_path(self, tmp_path):
-        """The Node Agent replaces the CNI default with a management route to
-        the cluster pod CIDR so a session pod can answer the browser terminal
-        and control-plane traffic from another node. If the manifest ever
-        omits that CIDR, cross-node terminal access silently breaks — this
-        pins the data into the contract.
-        """
-        import ipaddress
-
-        manifest = self._build_and_extract(tmp_path)
-        cidr = manifest.get("cluster_pod_cidr")
-        assert cidr, "wiring manifest must carry cluster_pod_cidr"
-        covering = ipaddress.ip_network(cidr)
-        # It must cover every node's pod CIDR — the reachability the terminal
-        # depends on cross-node.
-        for node_cidr in ("10.42.0.0/22", "10.42.12.0/22", "10.42.16.0/22"):
-            node_net = ipaddress.ip_network(node_cidr)
-            assert node_net.subnet_of(covering), f"{node_cidr} not covered by {cidr}"
-        # And the whole manifest still validates through the Node Agent contract.
-        WiringManifest.model_validate(manifest)
 
     def test_manifest_declares_site_lans_for_every_addressed_terr0(self, tmp_path):
         manifest = self._build_and_extract(tmp_path)

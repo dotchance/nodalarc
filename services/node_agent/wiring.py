@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import errno
 import logging
+import socket
 from collections.abc import Callable
 from typing import Any
 
@@ -33,7 +34,7 @@ from pydantic import ValidationError
 from pyroute2 import IPRoute
 from pyroute2.netlink.exceptions import NetlinkError
 
-from node_agent import nft_rules
+from node_agent import cni0_lockdown
 from node_agent.ground_bridge import (
     create_ground_bridge,
     create_mediated_isl,
@@ -49,124 +50,120 @@ from node_agent.pid_discovery import NamespaceHandle, discover_local_pod_handles
 from node_agent.proof_delivery import deliver_proof_file, kubelet_pods_dir
 from node_agent.substrate_monitor import prove_host_path_mtu
 
+# The management VRF every session pod's Kubernetes interface (cni0) belongs
+# to, and its route table. The name leaves mgmt0 and any VRF name a user's
+# router configuration chooses free.
+MANAGEMENT_VRF = "nodalarc-mgmt"
+MANAGEMENT_VRF_TABLE = 20033
 
-def rename_cni_interface(pid: int, node_id: str) -> str | None:
-    """Rename the CNI interface eth0 -> cni0, platform-owned and pre-workload.
 
-    The rename must land before any workload starts so every routing engine
-    learns the interface under its final name (zebra caches interface
-    identity from startup). Idempotent: an already-renamed namespace is a
-    no-op. Returns error string or None.
+def move_cni_interface_to_management_vrf(pid: int, node_id: str) -> str | None:
+    """Rename the pod's Kubernetes interface to cni0 and move it, with its routes, into a VRF.
+
+    The emulated world has no Kubernetes pod network, so no route toward it
+    may sit in the table the emulation routes with. The interface is renamed
+    eth0 -> cni0 before any workload starts (zebra caches interface identity
+    from startup) and joins its own VRF (``nodalarc-mgmt``). The routes the
+    CNI installed through its gateway (its default routes, IPv4 and IPv6,
+    whichever the pod network has, whatever gateway the CNI uses) are read
+    while the interface is still up, because taking it down for the rename
+    drops them, and are put back in the VRF's table. The main table then
+    holds only what the emulation installs or learns. Inbound management (the
+    browser terminal through VS-API) still works: sockets in the default VRF
+    accept connections arriving on the VRF (``tcp_l3mdev_accept``), and their
+    replies leave through the VRF's table. Idempotent; a run that finds cni0
+    in the VRF without its gateway routes fails, since they cannot be
+    recovered. Returns an error string, or None.
     """
-    try:
 
-        def _rename(ipr: IPRoute) -> None:
-            eth = ipr.link_lookup(ifname="eth0")
-            if not eth:
-                if ipr.link_lookup(ifname="cni0"):
-                    return
-                raise RuntimeError("neither eth0 nor cni0 exists in the pod namespace")
-            index = eth[0]
+    def _gateway_routes(ipr: IPRoute, index: int, table: int) -> list:
+        return [
+            (family, route.get_attr("RTA_DST"), route["dst_len"], route.get_attr("RTA_GATEWAY"))
+            for family in (socket.AF_INET, socket.AF_INET6)
+            for route in ipr.get_routes(family=family, table=table)
+            if route.get_attr("RTA_OIF") == index and route.get_attr("RTA_GATEWAY")
+        ]
+
+    def _move(ipr: IPRoute) -> None:
+        eth = ipr.link_lookup(ifname="eth0")
+        cni = ipr.link_lookup(ifname="cni0")
+        if not eth and not cni:
+            raise RuntimeError("neither eth0 nor cni0 exists in the pod namespace")
+        index = (eth or cni)[0]
+        vrf_links = ipr.link_lookup(ifname=MANAGEMENT_VRF)
+        if not vrf_links:
+            ipr.link("add", ifname=MANAGEMENT_VRF, kind="vrf", vrf_table=MANAGEMENT_VRF_TABLE)
+            vrf_links = ipr.link_lookup(ifname=MANAGEMENT_VRF)
+        vrf_index = vrf_links[0]
+        ipr.link("set", index=vrf_index, state="up")
+
+        enslaved = ipr.get_links(index)[0].get_attr("IFLA_MASTER") == vrf_index
+        if enslaved:
+            routes = _gateway_routes(ipr, index, MANAGEMENT_VRF_TABLE)
+            if not routes:
+                raise RuntimeError(
+                    "cni0 is in the management VRF without its CNI gateway routes; "
+                    "they cannot be recovered in this pod"
+                )
+        else:
+            # Read before the interface goes down: down drops them.
+            routes = _gateway_routes(ipr, index, 254)
+            if not routes:
+                raise RuntimeError("the pod network interface has no CNI gateway route")
             ipr.link("set", index=index, state="down")
-            ipr.link("set", index=index, ifname="cni0")
+            if eth:
+                ipr.link("set", index=index, ifname="cni0")
+            # Joining while down: the kernel cycles an interface that joins a
+            # VRF while up, which would drop the routes put back below.
+            ipr.link("set", index=index, master=vrf_index)
             ipr.link("set", index=index, state="up")
-
-        _in_namespace(pid, _rename)
-        return None
-    except Exception as exc:
-        return f"{node_id}: {exc}"
-
-
-def remove_default_route(pid: int, node_id: str, cluster_pod_cidr: str | None = None) -> str | None:
-    """Replace the pod's CNI default route with a scoped management route.
-
-    The constellation is the data plane: the CNI default must not compete
-    with the routing engine's default. But the management path (the browser
-    terminal reaching this pod cross-node via VS-API, and any control-plane
-    traffic to another node's pods) rides cni0, and a pod can only answer a
-    peer it has a route to. So this drops the CNI default and installs a
-    route to the cluster pod CIDR via the cni0 bridge gateway: the routing
-    engine owns 0.0.0.0/0 while cni0 keeps a path to every pod in the
-    cluster. A host-attachment default over terr0 is deliberate substrate
-    state on a different interface and is untouched.
-    """
-    import ipaddress
-
-    try:
-
-        def _replace_default(ipr: IPRoute) -> None:
-            cni_links = ipr.link_lookup(ifname="cni0")
-            if not cni_links:
-                return
-            cni_index = cni_links[0]
-
-            # The bridge gateway is deterministic and always present: it is
-            # the first host address of the pod's own cni0 subnet (the CNI
-            # bridge IP). Deriving it here — rather than capturing it from the
-            # CNI default route — means the management route installs whether
-            # that default is still present (fresh wire) or already gone (a
-            # re-wire after the routing engine took the default). The default
-            # is still deleted below when it exists on cni0.
-            # The bridge gateway is the first host address of the pod's
-            # connected cni0 subnet — the scope-link route whose prefix is a
-            # real subnet (dst_len < 32), never a /32 host or broadcast route
-            # (those also carry link scope and would derive a bogus gateway).
-            gateway = None
-            for route in ipr.get_routes(family=2):
-                if route.get_attr("RTA_OIF") != cni_index:
-                    continue
-                dst = route.get_attr("RTA_DST")
-                dst_len = route["dst_len"]
-                if dst is None and dst_len == 0:
-                    ipr.route(
-                        "del",
-                        dst="0.0.0.0/0",
-                        gateway=route.get_attr("RTA_GATEWAY"),
-                        oif=cni_index,
-                    )
-                elif dst is not None and dst_len < 32 and route["scope"] == 253:
-                    subnet = ipaddress.ip_network(f"{dst}/{dst_len}", strict=False)
-                    gateway = str(subnet.network_address + 1)
-
-            if cluster_pod_cidr and gateway:
-                # Idempotent: 'replace' tolerates a route left by a prior pass.
+            for family, dst, dst_len, gateway in routes:
+                default = "0.0.0.0/0" if family == socket.AF_INET else "::/0"
                 ipr.route(
                     "replace",
-                    dst=cluster_pod_cidr,
+                    family=family,
+                    dst=f"{dst}/{dst_len}" if dst else default,
                     gateway=gateway,
-                    oif=cni_index,
+                    oif=index,
+                    table=MANAGEMENT_VRF_TABLE,
                 )
+        in_vrf = _gateway_routes(ipr, index, MANAGEMENT_VRF_TABLE)
+        if set(in_vrf) != set(routes):
+            raise RuntimeError(f"cni0 gateway routes did not read back in the VRF: {in_vrf}")
+        for key in ("net.ipv4.tcp_l3mdev_accept", "net.ipv4.udp_l3mdev_accept"):
+            err = _write_sysctl_in_netns(pid, key, "1", already_in_ns=True)
+            if err:
+                raise RuntimeError(f"{key}: {err}")
+        leftover = [
+            route.get_attr("RTA_DST") or "default"
+            for family in (socket.AF_INET, socket.AF_INET6)
+            for route in ipr.get_routes(family=family, table=254)
+            if route.get_attr("RTA_OIF") == index
+        ]
+        if leftover:
+            raise RuntimeError(f"cni0 routes still in the main table: {leftover}")
 
-        _in_namespace(pid, _replace_default)
+    try:
+        _in_namespace(pid, _move)
         return None
     except Exception as exc:
         return f"{node_id}: {exc}"
 
 
 def lock_down_cni0(pid: int, node_id: str) -> str | None:
-    """Apply the cni0 egress lockdown in the pod (``nft_rules``). Returns error string or None."""
+    """Apply the cni0 lockdown in the pod (``cni0_lockdown``). Returns error string or None."""
     try:
-        _in_namespace(pid, lambda _ipr: nft_rules.lock_down_cni0_here())
+        _in_namespace(pid, cni0_lockdown.lock_down_cni0_here)
         return None
     except Exception as exc:
         return f"{node_id}: {exc}"
 
 
-def finalize_pod_network(
-    pid: int, node_id: str, cluster_pod_cidr: str | None = None
-) -> tuple[str | None, str | None]:
-    """Rename the CNI interface, scope the default route, lock down cni0."""
-    rename_err = rename_cni_interface(pid, node_id)
-    route_err = remove_default_route(pid, node_id, cluster_pod_cidr)
+def finalize_pod_network(pid: int, node_id: str) -> tuple[str | None, str | None]:
+    """Rename the CNI interface, move it into the management VRF, lock down cni0."""
+    move_err = move_cni_interface_to_management_vrf(pid, node_id)
     lockdown_err = lock_down_cni0(pid, node_id)
-    security_errors = [err for err in (rename_err, lockdown_err) if err]
-    return route_err, "; ".join(security_errors) if security_errors else None
-
-
-def finalize_pod(pid: int, node_id: str) -> str | None:
-    """Remove default route and lock down cni0. Returns combined error or None."""
-    errors = [err for err in finalize_pod_network(pid, node_id) if err]
-    return "; ".join(errors) if errors else None
+    return move_err, lockdown_err
 
 
 log = logging.getLogger(__name__)
@@ -177,7 +174,7 @@ def _cleanup_stale_interfaces(
     nodes: dict,
     progress_fn: Callable[[str], None] | None = None,
 ) -> None:
-    """Clean stale interfaces from pod namespaces and the host firewall, or fail naming what remains.
+    """Clean stale interfaces from pod namespaces, or fail naming what remains.
 
     The host's interfaces are cleaned by the caller before wiring starts
     (perform_rewire runs the one host cleaner on every rewire).
@@ -188,13 +185,6 @@ def _cleanup_stale_interfaces(
     """
     if progress_fn:
         progress_fn(f"Cleaning stale interfaces for {len(pid_map)} pods")
-
-    # Host firewall: drop the pinned site-LAN transit rules alongside the
-    # interfaces they served; the terrestrial phase re-pins them when this
-    # generation wires site LANs.
-    from node_agent.site_lan import remove_site_lan_transit
-
-    remove_site_lan_transit()
 
     # Pod namespaces: remove stale isl* and gnd0 interfaces
     failures: list[str] = []
@@ -380,7 +370,6 @@ def execute_wiring(
         for node_id, node in manifest_model.nodes.items()
     }
     ground_bridges = manifest_model.ground_bridges
-    cluster_pod_cidr = manifest_model.cluster_pod_cidr
 
     if not handles:
         log.info("No handles to wire on this node")
@@ -705,22 +694,21 @@ def execute_wiring(
             site_plans.append(plan)
 
     if site_plans:
-        # Bridged transit on the site LANs must not be subject to host
-        # firewall policy (br_netfilter + e.g. Docker's FORWARD DROP).
-        # Failure poisons every local member: a LAN the host may police is
-        # not wired, it only looks wired.
-        from node_agent.site_lan import ensure_site_lan_transit
+        # Emulated LAN bridges live in the emulated_lan namespace, outside the
+        # server's firewall (node_agent.emulated_lan). Failure poisons every
+        # local member: a site LAN without its namespace is not wired.
+        from node_agent.emulated_lan import ensure_emulated_lan_namespace
 
         try:
-            ensure_site_lan_transit()
+            ensure_emulated_lan_namespace()
         except Exception as exc:
-            log.exception("Site LAN transit rule installation failed")
+            log.exception("Emulated LAN namespace could not be created")
             for plan in site_plans:
                 for port in plan.local_members:
                     _record_failure(
                         port.node_id,
                         "terrestrial_interfaces",
-                        f"site LAN transit rules failed: {exc}",
+                        f"emulated LAN namespace failed: {exc}",
                     )
             site_plans = []
 
@@ -784,7 +772,7 @@ def execute_wiring(
             pid = pid_map.get(node_id, 0)
             if pid == 0:
                 continue
-            fin_futures[pool.submit(finalize_pod_network, pid, node_id, cluster_pod_cidr)] = node_id
+            fin_futures[pool.submit(finalize_pod_network, pid, node_id)] = node_id
         total_to_finalize = len(fin_futures)
         for fut in as_completed(fin_futures):
             nid = fin_futures[fut]
@@ -798,11 +786,11 @@ def execute_wiring(
                     finalized += 1
                 if finalized % 10 == 0 or finalized == total_to_finalize:
                     _write_progress(
-                        f"Finalizing pods: {finalized}/{total_to_finalize} (default route removal)"
+                        f"Finalizing pods: {finalized}/{total_to_finalize} (management VRF)"
                     )
             except Exception as exc:
                 _record_failure(nid, "pod_security", str(exc))
-    log.info("Finalized %d pods (default route + cni0 lockdown)", finalized)
+    log.info("Finalized %d pods (cni0 management VRF + lockdown)", finalized)
     _write_progress(f"Finalized {finalized}/{total_nodes} pods. Wiring complete.")
 
     # Mark only nodes with all required wiring phases successful as ready.

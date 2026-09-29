@@ -46,6 +46,7 @@ from nodalarc.substrate.wiring_status import wiring_row
 
 from node_agent import ops_events
 from node_agent.command_contract import RuntimeFence, WriterEpochFloor
+from node_agent.emulated_lan import emulated_lan_namespace_present
 from node_agent.proof_delivery import kubelet_pods_dir
 from node_agent.reconcile import (
     clean_and_verify_host_state,
@@ -275,6 +276,9 @@ async def main() -> None:
             loop.call_soon_threadsafe(first_wiring_done.set)
             return
         last_resource_version = ""
+        # Whether the manifest last wired put members of an emulated LAN on
+        # this server, so its emulated_lan namespace must exist.
+        expect_emulated_lan = False
         # The observation the loop last acted on; waits resume from it.
         seen_version = 0
 
@@ -329,6 +333,15 @@ async def main() -> None:
                             )
                             last_resource_version = ""
                             continue
+                        # The emulated LANs on this server died with their
+                        # namespace (removed by hand, or by anything else):
+                        # rebuild them from the current manifest.
+                        if expect_emulated_lan and not emulated_lan_namespace_present():
+                            log.error(
+                                "The emulated_lan namespace is gone — rewiring current manifest"
+                            )
+                            last_resource_version = ""
+                            continue
                         _wait(seen_version)
                         continue
 
@@ -360,6 +373,7 @@ async def main() -> None:
 
                     if not nodes:
                         last_resource_version = rv
+                        expect_emulated_lan = False
                         _wait(seen_version)
                         continue
 
@@ -370,25 +384,6 @@ async def main() -> None:
                         manifest=manifest_model,
                     )
 
-                    # Case B: every local pod carries current proof. Host firewall
-                    # state drifts independently of interface state (a Docker
-                    # (re)start re-imposes FORWARD DROP), so verification also
-                    # re-pins site-LAN transit rules; a pin failure means the
-                    # host may police LAN transit, which is NOT a verified state —
-                    # fall through to the rewire path so the failure lands in
-                    # the wiring proof instead of a clean no-op.
-                    transit_verified = True
-                    if manifest_model.site_lans:
-                        from node_agent.site_lan import ensure_site_lan_transit
-
-                        try:
-                            ensure_site_lan_transit()
-                        except Exception:
-                            log.exception(
-                                "Site LAN transit rules could not be pinned during "
-                                "verification — treating wiring as diverged"
-                            )
-                            transit_verified = False
                     # One validated handle set drives everything below. The
                     # expected-local set comes from the manifest, and discovery
                     # must COMPLETE before any conclusion is drawn or any kernel
@@ -404,6 +399,7 @@ async def main() -> None:
                             continue
                         loop.call_soon_threadsafe(first_wiring_done.set)
                         last_resource_version = rv
+                        expect_emulated_lan = False
                         _wait(seen_version)
                         continue
 
@@ -423,10 +419,20 @@ async def main() -> None:
                         continue
 
                     # Case B: every local row names the exact live incarnation
-                    # and every manifest node is ready — a true no-op.
-                    if transit_verified and wiring_status_is_current(
-                        v1, ns, manifest_model, handles
-                    ):
+                    # and every manifest node is ready — a true no-op. A session
+                    # with emulated LANs also needs its emulated_lan namespace:
+                    # current proof with the namespace gone (removed by hand, a
+                    # server reboot) is not a verified state, so the rewire path
+                    # rebuilds it.
+                    local_emulated_lan = _has_local_emulated_lan(manifest_model, expected_local)
+                    proven = wiring_status_is_current(v1, ns, manifest_model, handles)
+                    if proven and local_emulated_lan and not emulated_lan_namespace_present():
+                        log.error(
+                            "Every local pod carries current proof but the emulated_lan "
+                            "namespace is missing — rewiring"
+                        )
+                        proven = False
+                    if proven:
                         log.info(
                             "Wiring verified — every local pod carries current proof "
                             "(%d local nodes), no-op",
@@ -437,6 +443,7 @@ async def main() -> None:
                             continue
                         loop.call_soon_threadsafe(first_wiring_done.set)
                         last_resource_version = rv
+                        expect_emulated_lan = local_emulated_lan
                         _wait(seen_version)
                         continue
 
@@ -456,6 +463,7 @@ async def main() -> None:
                         continue
                     loop.call_soon_threadsafe(first_wiring_done.set)
                     last_resource_version = rv
+                    expect_emulated_lan = local_emulated_lan
 
                 except Exception as exc:
                     log.warning("Wiring watcher error: %s", exc)
@@ -685,6 +693,15 @@ def replace_handles_when_idle(dispatch_gate, shared_handles: dict, new_handles: 
     shared_handles.update(new_handles)
     dispatch_gate.resume()
     return True
+
+
+def _has_local_emulated_lan(manifest, expected_local: set[str]) -> bool:
+    """Whether the manifest puts a member of any emulated LAN on this server."""
+    return any(
+        member.node_id in expected_local
+        for spec in manifest.site_lans.values()
+        for member in spec.members
+    )
 
 
 def _verify_handle(handle) -> bool:

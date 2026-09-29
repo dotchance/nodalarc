@@ -82,6 +82,12 @@ spec:
             - name: host-modules
               mountPath: /lib/modules
               readOnly: true
+            # The site-LAN namespace is pinned here by a bind mount the Node
+            # Agent makes; Bidirectional propagation puts the mount on the
+            # server, so the namespace outlives the Node Agent's container.
+            - name: host-netns
+              mountPath: /run/netns
+              mountPropagation: Bidirectional
       volumes:
         - name: platform-config
           configMap:
@@ -94,3 +100,7 @@ spec:
           hostPath:
             path: /lib/modules
             type: Directory
+        - name: host-netns
+          hostPath:
+            path: /run/netns
+            type: DirectoryOrCreate

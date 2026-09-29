@@ -1,37 +1,41 @@
 # Copyright 2024-2026 .chance (dotchance)
 # Licensed under the Apache License, Version 2.0. See LICENSE file.
-"""Site LAN wiring: per-host bridge, member veths, VXLAN head-end replication.
+"""Emulated LAN wiring: per-server bridge, member veths, VXLAN head-end replication.
 
-An Ethernet segment (a site LAN or a carried bus) is static, always-up
-infrastructure created
-during session wiring — never Scheduler-dispatched, never a visibility link.
-Every member pod's segment interface is a veth port on the segment bridge;
-hosts that share
-a site are joined by a VXLAN port with head-end replication so IGP multicast
-(hellos, DIS election) crosses hosts. Single-member sites get a one-port
+An emulated LAN (an emulated site LAN or a satellite bus) is static,
+always-up infrastructure created during session wiring, never
+Scheduler-dispatched and never a visibility link. Each member's interface
+is one end of a veth pair whose other end is a port on the emulated LAN
+bridge. Servers that carry members of the same emulated LAN are joined by a
+VXLAN port with head-end replication, so IGP multicast (hellos, DIS
+election) crosses servers. An emulated LAN with one member gets a one-port
 bridge: one shared path, no mode split, and the bridge is also the future
 attachment point for a real physical uplink interface.
 
-Kernel layout per host, per site:
+Kernel layout per server, per emulated LAN:
 
-    Host namespace:
-      sl<vni>            Linux bridge (this host's segment of the site LAN)
-        ├─ sm<vni><i>    veth host-end per LOCAL member pod (bridge port)
-        └─ sv<vni>       VXLAN port (only when members span hosts), learning
-                         on, all-zeros FDB entry per peer host (head-end
-                         replication for BUM traffic)
+    emulated_lan namespace (node_agent.emulated_lan):
+      sl<vni>            emulated LAN bridge (this server's part of the emulated LAN)
+        ├─ sm<vni><i>    veth end per LOCAL member pod (bridge port)
+        └─ sv<vni>       VXLAN port (only when members span servers), created
+                         in the server's own namespace so its UDP socket is
+                         there, then moved in; learning on, all-zeros FDB
+                         entry per peer server (head-end replication for BUM
+                         traffic)
     Pod namespace (member i):
       <interface>        veth pod-end, carries the member's allocated addresses
 
-MTU is the platform MTU regardless of placement: an L2 segment whose MTU
-depended on which hosts the scheduler picked would let placement leak into
-protocol-visible behavior. The host network carries the VXLAN overhead; the
-Node Agent proves it before wiring (wiring.py, host_path_mtu).
+The bridges are never in the server namespace; node_agent.emulated_lan
+explains why.
+
+MTU is the platform MTU regardless of placement: an emulated LAN whose MTU
+depended on which servers the scheduler picked would let placement leak into
+protocol-visible behavior. The network between servers carries the VXLAN
+overhead; the Node Agent proves it before wiring (wiring.py, host_path_mtu).
 """
 
 from __future__ import annotations
 
-import ctypes
 import ipaddress
 import logging
 import os
@@ -47,14 +51,8 @@ from nodalarc.runtime_naming import (
     site_lan_vxlan_name,
 )
 
-from node_agent import nft_rules
-from node_agent.namespace_ops import (
-    _get_host_ns_fd,
-    _in_namespace,
-    _libc,
-    _ns_lock,
-    in_host_namespace,
-)
+from node_agent.emulated_lan import in_emulated_lan_namespace, open_emulated_lan_namespace
+from node_agent.namespace_ops import _in_namespace, in_host_namespace
 
 log = logging.getLogger(__name__)
 
@@ -65,27 +63,6 @@ _AF = {4: socket.AF_INET, 6: socket.AF_INET6}
 # cluster pod network: a host reaches it only through its default route, so
 # the lookup proves which gateway that route uses.
 _DEFAULT_ROUTE_PROBE = {4: "8.8.8.8", 6: "2001:4860:4860::8888"}
-
-
-def ensure_site_lan_transit() -> None:
-    """Pin the host FORWARD rule that lets site-LAN transit through (``nft_rules``).
-
-    br_netfilter (standard on Kubernetes hosts) runs bridged frames through
-    the host's FORWARD chain, so a host policy such as Docker's FORWARD DROP
-    would silently discard site-LAN transit: ARP resolves across the LAN
-    while every IP frame dies. The rule is idempotent and raises when it
-    cannot be pinned: a site LAN whose transit the host may police is a
-    wiring failure, not a degraded success.
-    """
-    pinned = in_host_namespace(lambda _ipr: nft_rules.ensure_site_lan_transit_here())
-    log.info("Site LAN transit rule pinned in host FORWARD chain (IPv%s)", pinned)
-
-
-def remove_site_lan_transit() -> None:
-    """Delete the pinned transit rules (cleanup path); a rule already gone is absence."""
-    removed = in_host_namespace(lambda _ipr: nft_rules.remove_site_lan_transit_here())
-    if removed:
-        log.info("Removed %d site LAN transit rule(s) from the host FORWARD chain", removed)
 
 
 @dataclass(frozen=True)
@@ -203,29 +180,21 @@ def plan_site_lan(
 def wire_site_lan(plan: SiteLanPlan) -> None:
     """Execute one site LAN plan: bridge, member ports, VXLAN replication.
 
-    Stale managed interfaces were removed before wiring (site LAN names are
-    managed host ifnames), so creation starts from a clean host namespace.
+    The caller made sure the emulated_lan namespace exists; the host cleaner
+    removed any earlier one with everything in it, so creation starts clean.
     """
-    from pyroute2 import IPRoute
-
     pod_ns_fds: dict[str, int] = {}
+    lan_fd = open_emulated_lan_namespace()
     try:
         for port in plan.local_members:
             pod_ns_fds[port.node_id] = os.open(f"/proc/{port.pid}/ns/net", os.O_RDONLY)
-
-        with _ns_lock:
-            host_fd = _get_host_ns_fd()
-            ret = _libc.setns(host_fd, _CLONE_NEWNET)
-            if ret != 0:
-                errno = ctypes.get_errno()
-                raise OSError(errno, f"setns to host failed: {os.strerror(errno)}")
-
-            ipr = IPRoute()
-            try:
-                _wire_host_side(ipr, plan, pod_ns_fds)
-            finally:
-                ipr.close()
+        if plan.vxlan_ifname is not None:
+            # The VXLAN device keeps its UDP socket in the namespace that made
+            # it, so it is made in the server's own and then moved in.
+            in_host_namespace(lambda ipr: _create_vxlan_port(ipr, plan, lan_fd))
+        in_emulated_lan_namespace(lambda ipr: _wire_lan_side(ipr, plan, pod_ns_fds))
     finally:
+        os.close(lan_fd)
         for fd in pod_ns_fds.values():
             os.close(fd)
 
@@ -243,7 +212,21 @@ def wire_site_lan(plan: SiteLanPlan) -> None:
     )
 
 
-def _wire_host_side(ipr, plan: SiteLanPlan, pod_ns_fds: dict[str, int]) -> None:
+def _create_vxlan_port(ipr, plan: SiteLanPlan, lan_fd: int) -> None:
+    index = _ensure_link(
+        ipr,
+        plan.vxlan_ifname,
+        kind="vxlan",
+        mtu=plan.mtu,
+        vxlan_id=plan.vni,
+        vxlan_local=plan.vxlan_local_ip,
+        vxlan_port=get_platform_config().vxlan_udp_port,
+        vxlan_learning=True,
+    )
+    ipr.link("set", index=index, net_ns_fd=lan_fd)
+
+
+def _wire_lan_side(ipr, plan: SiteLanPlan, pod_ns_fds: dict[str, int]) -> None:
     bridge_idx = _ensure_link(ipr, plan.bridge, kind="bridge", mtu=plan.mtu)
 
     for port in plan.local_members:
@@ -257,21 +240,17 @@ def _wire_host_side(ipr, plan: SiteLanPlan, pod_ns_fds: dict[str, int]) -> None:
         ipr.link("set", index=pod_idx[0], net_ns_fd=pod_ns_fds[port.node_id])
 
     if plan.vxlan_ifname is not None:
-        vxlan_idx = _ensure_link(
-            ipr,
-            plan.vxlan_ifname,
-            kind="vxlan",
-            mtu=plan.mtu,
-            vxlan_id=plan.vni,
-            vxlan_local=plan.vxlan_local_ip,
-            vxlan_port=get_platform_config().vxlan_udp_port,
-            vxlan_learning=True,
-        )
+        found = ipr.link_lookup(ifname=plan.vxlan_ifname)
+        if not found:
+            raise RuntimeError(
+                f"VXLAN port {plan.vxlan_ifname} did not arrive in the LAN namespace"
+            )
+        vxlan_idx = found[0]
         ipr.link("set", index=vxlan_idx, master=bridge_idx)
         ipr.link("set", index=vxlan_idx, state="up")
         for peer_ip in plan.peer_host_ips:
             # Head-end replication: flood BUM frames (IGP hellos included)
-            # to every peer host carrying members of this site.
+            # to every peer server carrying members of this site.
             ipr.fdb(
                 "append",
                 ifindex=vxlan_idx,

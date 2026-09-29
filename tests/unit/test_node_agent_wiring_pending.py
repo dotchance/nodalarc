@@ -182,8 +182,6 @@ def _pods_carrying(rows: dict) -> SimpleNamespace:
     return SimpleNamespace(list_namespaced_pod=lambda *_a, **_k: SimpleNamespace(items=pods))
 
 
-
-
 def test_rewiring_rows_invalidate_readiness() -> None:
     """The pre-destruction rows must fail every readiness consumer."""
     manifest = _manifest({"sat-a": LOCAL_NODE})
@@ -527,7 +525,7 @@ def test_every_rewire_cleans_the_host_exactly_once(
     from unittest.mock import MagicMock
 
     from node_agent import __main__ as na_main
-    from node_agent import reconcile, site_lan, wiring
+    from node_agent import reconcile, wiring
 
     manifest = _manifest({"sat-a": LOCAL_NODE})
     handle = _handle("sat-a")
@@ -539,7 +537,6 @@ def test_every_rewire_cleans_the_host_exactly_once(
     monkeypatch.setattr(na_main, "clean_and_verify_host_state", clean)
     # Wiring's own cleaner must not run the host cleaner again.
     monkeypatch.setattr(reconcile, "clean_and_verify_host_state", clean)
-    monkeypatch.setattr(site_lan, "remove_site_lan_transit", MagicMock())
     monkeypatch.setattr(na_main, "execute_wiring", lambda *a, **k: {})
 
     na_main.perform_rewire(manifest, "testns", {"sat-a": handle}, {"sat-a"}, {}, gate)

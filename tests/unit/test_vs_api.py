@@ -3150,8 +3150,6 @@ class TestRuntimeSessionBootstrap:
         )
 
 
-
-
 class TestSessionHistory:
     """A session run deployed with recording keeps one history file; others keep none."""
 

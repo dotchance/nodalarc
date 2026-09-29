@@ -29,6 +29,11 @@ from pydantic import BaseModel, ConfigDict
 from pyroute2 import IPRoute
 from pyroute2.netlink.exceptions import NetlinkError
 
+from node_agent.emulated_lan import (
+    EMULATED_LAN_NAMESPACE,
+    emulated_lan_namespace_present,
+    remove_emulated_lan_namespace,
+)
 from node_agent.proof_delivery import delivered_proof, kubelet_pods_dir
 
 log = logging.getLogger(__name__)
@@ -90,13 +95,14 @@ def _error_text(exc: BaseException) -> str:
 
 
 def clean_and_verify_host_state() -> HostCleanupReport:
-    """Delete every device in NodalArc's device group, then verify none remains.
+    """Delete every device in NodalArc's device group and the site-LAN namespace, then verify.
 
     Deletion failures do not stop the pass: every member is attempted, each
     failure is retained with its error, and the report carries whatever the
     final enumeration still finds. The report is returned, never raised, so a
     caller always sees the whole picture. Devices outside the group are never
-    touched.
+    touched. Removing the emulated_lan namespace destroys every site-LAN
+    bridge and port in it.
     """
     host = socket.gethostname()
     removed: list[str] = []
@@ -127,6 +133,12 @@ def clean_and_verify_host_state() -> HostCleanupReport:
                     failed.append((name, _error_text(exc)))
                 except Exception as exc:
                     failed.append((name, _error_text(exc)))
+        lan = f"netns {EMULATED_LAN_NAMESPACE}"
+        try:
+            if remove_emulated_lan_namespace():
+                removed.append(lan)
+        except Exception as exc:
+            failed.append((lan, _error_text(exc)))
     except Exception as exc:
         return HostCleanupReport(
             host=host,
@@ -138,6 +150,8 @@ def clean_and_verify_host_state() -> HostCleanupReport:
         )
     try:
         remaining = tuple(sorted(get_actual_nodalarc_interfaces()))
+        if emulated_lan_namespace_present():
+            remaining += (f"netns {EMULATED_LAN_NAMESPACE}",)
     except Exception as exc:
         return HostCleanupReport(
             host=host,

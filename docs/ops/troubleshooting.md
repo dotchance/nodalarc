@@ -170,7 +170,7 @@ sudo KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl get namespace nodalarc -o json
 ```bash
 ssh node02 "ip -o link show"
 ```
-Every host device NodalArc creates is in its device group, 0x4E415243 (1312903747): `ip -o link show group 1312903747` lists them.
+Every host device NodalArc creates is in its device group, 0x4E415243 (1312903747): `ip -o link show group 1312903747` lists them. Emulated LAN bridges (site LANs), their ports and their VXLAN ports are in the `emulated_lan` network namespace instead: `sudo ip netns exec emulated_lan ip -o link` lists them.
 
 **Fix:** Rerun `make teardown` once the cause it reported is addressed. Do not delete devices by hand: the cleaner is the one implementation that deletes the device group's members and verifies their absence, and the teardown's report is the record. If the namespace is already gone, `make teardown` can verify only the workstation and says so; `make install` restores the Node Agents, and the next `make teardown` verifies every host.
 

@@ -249,8 +249,8 @@ class _Run:
             patch("node_agent.wiring.ensure_mpls_kernel_support", check),
             patch("node_agent.site_lan.wire_site_lan", site_wire),
             patch(
-                "node_agent.site_lan.ensure_site_lan_transit",
-                lambda: calls.append(("ensure_site_lan_transit",)),
+                "node_agent.emulated_lan.ensure_emulated_lan_namespace",
+                lambda: calls.append(("ensure_emulated_lan_namespace",)),
             ),
             # execute_wiring loads the in-cluster config once for its progress
             # writes; outside a cluster those writes are replaced by a stub client.

@@ -69,11 +69,14 @@ def move_cni_interface_to_management_vrf(pid: int, node_id: str) -> str | None:
     while the interface is still up, because taking it down for the rename
     drops them, and are put back in the VRF's table. The main table then
     holds only what the emulation installs or learns. Inbound management (the
-    browser terminal through VS-API) still works: sockets in the default VRF
-    accept connections arriving on the VRF (``tcp_l3mdev_accept``), and their
-    replies leave through the VRF's table. Idempotent; a run that finds cni0
-    in the VRF without its gateway routes fails, since they cannot be
-    recovered. Returns an error string, or None.
+    browser terminal through VS-API) arrives on cni0 in the VRF and reaches
+    sshd, which listens inside the VRF (``ListenAddress ... rdomain`` in the
+    FRR image's sshd_config); its replies leave through the VRF's table. The pod keeps the kernel's
+    ``tcp_l3mdev_accept`` and ``udp_l3mdev_accept`` of 0, so a service in the
+    default VRF never accepts a connection that arrives through another VRF,
+    including the VRFs a user creates on the emulated router. Idempotent; a
+    run that finds cni0 in the VRF without its gateway routes fails, since
+    they cannot be recovered. Returns an error string, or None.
     """
 
     def _gateway_routes(ipr: IPRoute, index: int, table: int) -> list:
@@ -130,10 +133,6 @@ def move_cni_interface_to_management_vrf(pid: int, node_id: str) -> str | None:
         in_vrf = _gateway_routes(ipr, index, MANAGEMENT_VRF_TABLE)
         if set(in_vrf) != set(routes):
             raise RuntimeError(f"cni0 gateway routes did not read back in the VRF: {in_vrf}")
-        for key in ("net.ipv4.tcp_l3mdev_accept", "net.ipv4.udp_l3mdev_accept"):
-            err = _write_sysctl_in_netns(pid, key, "1", already_in_ns=True)
-            if err:
-                raise RuntimeError(f"{key}: {err}")
         leftover = [
             route.get_attr("RTA_DST") or "default"
             for family in (socket.AF_INET, socket.AF_INET6)

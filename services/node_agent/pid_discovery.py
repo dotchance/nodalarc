@@ -1,20 +1,28 @@
 # Copyright 2024-2026 .chance (dotchance)
 # Licensed under the Apache License, Version 2.0. See LICENSE file.
-"""Validated pod network-namespace discovery for pods on the local K3s node.
+"""Validated pod network-namespace discovery for pods on the local node.
 
 The DaemonSet variant filters by spec.nodeName so each agent only discovers
-pods on its own node. Discovery resolves the CRI pod sandbox, never a
+pods on its own node. Discovery resolves the pod sandbox process, never a
 workload container: the sandbox holds the pod network namespace from the
 moment the pod is provisioned, so wiring can begin before any authored
 container has started and never depends on container ordering or state.
 
+Discovery reads the host's process table directly. Every process of a pod
+carries the pod UID in its cgroup path, and the last component of that path
+names its container. The pod's status names the ID of every container it
+runs; the one container of the pod that the status does not name is its
+sandbox. No container runtime client is involved, so discovery works with
+any runtime that runs a sandbox process (containerd, and CRI-O with an infra
+container).
+
 Discovery is fenced to the active deployment run: only pods carrying the
 manifest's session-run and owner-uid labels count, so a stale pod from a
 previous deployment can never satisfy discovery. Every returned handle is
-validated end to end — sandbox identity matches the pod UID, the sandbox is
-ready, its PID is alive, and the network-namespace inode was read from that
-PID. Anything ambiguous or unverifiable is omitted; callers treat missing
-entries as pending and retry. Discovery output never defines expectation:
+validated end to end: the sandbox process carries the pod UID, it is the
+only container the pod status does not name, its PID is alive, and the
+network-namespace inode was read from that PID. Anything ambiguous or
+unverifiable is omitted; callers treat missing entries as pending and retry. Discovery output never defines expectation:
 the expected-local set always comes from the wiring manifest.
 
 IMPORTANT — node ID contract:
@@ -27,12 +35,10 @@ IMPORTANT — node ID contract:
 
 from __future__ import annotations
 
-import json
 import logging
 import os
-import subprocess
+import re
 from collections.abc import Mapping
-from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 
 from nodalarc.substrate.manifest_contract import (
@@ -43,7 +49,15 @@ from nodalarc.workload_target import NODE_ID_LABEL
 
 log = logging.getLogger(__name__)
 
-_SANDBOX_READY = "SANDBOX_READY"
+# A pod's cgroup directory carries its UID, with underscores for dashes under
+# the systemd cgroup driver ("kubepods-besteffort-pod<uid>.slice") and as is
+# under cgroupfs ("pod<uid>").
+_POD_UID_RE = re.compile(
+    r"pod([0-9a-f]{8}[-_][0-9a-f]{4}[-_][0-9a-f]{4}[-_][0-9a-f]{4}[-_][0-9a-f]{12})"
+)
+# A container's cgroup directory: the 64-hex container ID, with the runtime's
+# prefix and ".scope" under the systemd driver, bare under cgroupfs.
+_CONTAINER_DIR_RE = re.compile(r"(?:cri-containerd-|crio-|docker-)?([0-9a-f]{64})(?:\.scope)?")
 
 
 @dataclass(frozen=True, slots=True)
@@ -65,7 +79,6 @@ class NamespaceHandle:
     pod_name: str
     pod_uid: str
     sandbox_id: str
-    sandbox_attempt: int
     pid: int
     netns_id: str
     mpls_enable: bool
@@ -84,146 +97,129 @@ def verify_handle(handle: NamespaceHandle) -> bool:
     return netns_identity(handle.pid) == handle.netns_id
 
 
-# Concurrent CRI sandbox inspections during handle discovery.
-_INSPECT_WORKERS = 16
+@dataclass(frozen=True, slots=True)
+class PodProcesses:
+    """The processes of one pod on this host, by container ID, read from /proc."""
+
+    by_container: dict[str, list[int]]
+    unrecognized: list[str]
 
 
-def _crictl_command() -> list[str]:
-    """Base crictl invocation honoring the K3s runtime endpoint."""
-    command = ["crictl"]
-    runtime_ep = os.environ.get("CONTAINER_RUNTIME_ENDPOINT")
-    if runtime_ep:
-        command.extend(["--runtime-endpoint", runtime_ep])
-    return command
+def pod_processes(pod_uids: set[str], *, proc_root: str = "/proc") -> dict[str, PodProcesses]:
+    """Read every process's cgroup and group the processes of ``pod_uids`` by container.
 
-
-def _ready_sandboxes_by_pod_uid() -> dict[str, tuple[str, int]] | None:
-    """Map pod UID -> (sandbox ID, attempt) for ready sandboxes on this node.
-
-    Among several ready sandboxes for one pod UID the highest attempt wins
-    deterministically; equal ready attempts are ambiguous and reject the
-    pod UID outright. Returns None when the listing itself failed, so the
-    caller can distinguish "CRI unavailable" from "no sandboxes".
+    A process of a wanted pod whose cgroup path names no container ID in a
+    known form is recorded with its path, so the caller can refuse the pod
+    with the path named. Processes that exit while the table is read are
+    skipped.
     """
-    try:
-        proc = subprocess.run(
-            [*_crictl_command(), "pods", "-o", "json"],
-            capture_output=True,
-            text=True,
-            check=True,
-        )
-        listing = json.loads(proc.stdout)
-    except (subprocess.CalledProcessError, json.JSONDecodeError) as exc:
-        log.error("Failed to list CRI pod sandboxes: %s", exc)
-        return None
-    by_uid: dict[str, tuple[str, int]] = {}
-    ambiguous: set[str] = set()
-    for item in listing.get("items") or []:
-        if item.get("state") != _SANDBOX_READY:
+    found = {uid: PodProcesses(by_container={}, unrecognized=[]) for uid in pod_uids}
+    for entry in os.scandir(proc_root):
+        if not entry.name.isdigit():
             continue
-        sandbox_id = item.get("id")
-        metadata = item.get("metadata") or {}
-        pod_uid = metadata.get("uid")
-        attempt = metadata.get("attempt", 0)
-        if not sandbox_id or not pod_uid or not isinstance(attempt, int):
+        try:
+            with open(f"{proc_root}/{entry.name}/cgroup", encoding="utf-8") as handle:
+                lines = handle.read().splitlines()
+        except OSError:
             continue
-        current = by_uid.get(pod_uid)
-        if current is None or attempt > current[1]:
-            by_uid[pod_uid] = (sandbox_id, attempt)
-            ambiguous.discard(pod_uid)
-        elif attempt == current[1] and sandbox_id != current[0]:
-            ambiguous.add(pod_uid)
-    for pod_uid in ambiguous:
-        log.error("Pod UID %s has two ready sandboxes at the same attempt — rejected", pod_uid)
-        del by_uid[pod_uid]
-    return by_uid
+        for line in lines:
+            path = line.split(":", 2)[-1]
+            match = _POD_UID_RE.search(path)
+            if match is None:
+                continue
+            uid = match.group(1).replace("_", "-")
+            if uid not in found:
+                break
+            container = _CONTAINER_DIR_RE.fullmatch(path.rsplit("/", 1)[-1])
+            if container is None:
+                found[uid].unrecognized.append(path)
+            else:
+                found[uid].by_container.setdefault(container.group(1), []).append(int(entry.name))
+            break
+    return found
+
+
+def _status_container_ids(pod) -> set[str]:
+    """The IDs of every container the pod's status names, without the runtime scheme."""
+    status = pod.status
+    ids = set()
+    for statuses in (
+        status.init_container_statuses,
+        status.container_statuses,
+        status.ephemeral_container_statuses,
+    ):
+        for container in statuses or ():
+            if container.container_id:
+                ids.add(container.container_id.split("://", 1)[-1])
+    return ids
 
 
 def _validated_sandbox_handle(
     node_id: str,
-    pod_name: str,
-    pod_uid: str,
-    sandbox_id: str,
-    attempt: int,
-    pod_ip: str | None,
+    pod,
+    processes: PodProcesses,
     *,
     mpls_enable: bool,
 ) -> NamespaceHandle | None:
-    """Inspect one sandbox and return a fully validated handle, or None.
+    """Find the pod's sandbox process and return a fully validated handle, or None.
 
-    Every identity fact inspectp offers is checked before the PID is
-    trusted for privileged namespace mutation: the echoed sandbox ID and
-    attempt, the pod UID, readiness, the sandbox IP against the Kubernetes
-    pod IP, and — non-negotiable — that the discovered namespace is not the
-    host network namespace. A bad PID must never let the Node Agent rename
-    the host's interfaces, delete its default route, or alter its firewall.
+    The sandbox is the one container of the pod that its status does not
+    name. More than one such container means the status has not yet caught
+    up with a container that started; none means this runtime runs the pod
+    without a sandbox process, which NodalArc cannot wire. Non-negotiable:
+    the discovered namespace is not the host network namespace. A bad PID
+    must never let the Node Agent rename the host's interfaces, delete its
+    default route, or alter its firewall.
     """
-    try:
-        proc = subprocess.run(
-            [*_crictl_command(), "inspectp", sandbox_id],
-            capture_output=True,
-            text=True,
-            check=True,
-        )
-        info = json.loads(proc.stdout)
-    except (subprocess.CalledProcessError, json.JSONDecodeError) as exc:
-        log.warning("Failed to inspect sandbox %s for %s: %s", sandbox_id, node_id, exc)
-        return None
-    status = info.get("status") or {}
-    observed_id = status.get("id")
-    if observed_id != sandbox_id:
-        log.warning(
-            "Sandbox inspection for %s echoed a different sandbox: asked %s, got %r",
+    pod_name, pod_uid = pod.metadata.name, pod.metadata.uid
+    if processes.unrecognized:
+        log.error(
+            "Pod %s (%s) has processes in cgroups whose container is not recognized: %s",
+            pod_name,
             node_id,
-            sandbox_id,
-            observed_id,
+            processes.unrecognized[:3],
         )
         return None
-    metadata = status.get("metadata") or {}
-    if metadata.get("uid") != pod_uid:
-        log.warning(
-            "Sandbox %s identity mismatch for %s: expected pod UID %s, observed %r",
-            sandbox_id,
+    unnamed = sorted(set(processes.by_container) - _status_container_ids(pod))
+    if not unnamed:
+        if processes.by_container:
+            log.error(
+                "Pod %s (%s) has no sandbox process: every container is named in its status "
+                "(a runtime that runs pods without an infra container cannot be wired)",
+                pod_name,
+                node_id,
+            )
+        else:
+            log.info("No processes yet for %s (pod UID %s)", node_id, pod_uid)
+        return None
+    if len(unnamed) > 1:
+        log.info(
+            "Pod %s (%s) has %d containers its status does not name yet; waiting",
+            pod_name,
             node_id,
-            pod_uid,
-            metadata.get("uid"),
+            len(unnamed),
         )
         return None
-    if metadata.get("attempt") != attempt:
+    sandbox_id = unnamed[0]
+    pids = processes.by_container[sandbox_id]
+    if len(pids) != 1:
         log.warning(
-            "Sandbox %s attempt changed for %s: expected %d, observed %r",
-            sandbox_id,
+            "Sandbox %s of %s has %d processes; its one process is expected",
+            sandbox_id[:13],
             node_id,
-            attempt,
-            metadata.get("attempt"),
+            len(pids),
         )
         return None
-    if status.get("state") != _SANDBOX_READY:
-        log.warning("Sandbox %s for %s is no longer ready", sandbox_id, node_id)
-        return None
-    sandbox_ip = ((status.get("network") or {}).get("ip")) or None
-    if pod_ip and sandbox_ip and sandbox_ip != pod_ip:
-        log.warning(
-            "Sandbox %s IP %s does not match pod IP %s for %s",
-            sandbox_id,
-            sandbox_ip,
-            pod_ip,
-            node_id,
-        )
-        return None
-    pid = (info.get("info") or {}).get("pid")
-    if not isinstance(pid, int) or isinstance(pid, bool) or pid <= 0:
-        log.warning("Sandbox %s for %s reports no live PID: %r", sandbox_id, node_id, pid)
-        return None
+    pid = pids[0]
     netns = netns_identity(pid)
     if netns is None:
-        log.warning("Sandbox %s PID %d for %s has no readable netns", sandbox_id, pid, node_id)
+        log.warning("Sandbox %s PID %d for %s has no readable netns", sandbox_id[:13], pid, node_id)
         return None
     host_netns = netns_identity(1)
     if host_netns is not None and netns == host_netns:
         log.error(
             "Sandbox %s PID %d for %s resolves to the HOST network namespace — rejected",
-            sandbox_id,
+            sandbox_id[:13],
             pid,
             node_id,
         )
@@ -233,7 +229,6 @@ def _validated_sandbox_handle(
         pod_name=pod_name,
         pod_uid=pod_uid,
         sandbox_id=sandbox_id,
-        sandbox_attempt=attempt,
         pid=pid,
         netns_id=netns,
         mpls_enable=mpls_enable,
@@ -295,11 +290,7 @@ def discover_local_pod_handles(
         field_selector=field_selector,
     )
 
-    sandboxes = _ready_sandboxes_by_pod_uid()
-    if sandboxes is None:
-        return {}
-
-    candidates: dict[str, tuple[str, str, str | None]] = {}
+    candidates: dict[str, object] = {}
     duplicates: set[str] = set()
     for pod in pods.items:
         node_id = pod.metadata.labels.get(NODE_ID_LABEL)
@@ -311,8 +302,7 @@ def discover_local_pod_handles(
         if node_id in candidates:
             duplicates.add(node_id)
             continue
-        pod_ip = pod.status.pod_ip if pod.status else None
-        candidates[node_id] = (pod.metadata.name, pod.metadata.uid, pod_ip)
+        candidates[node_id] = pod
     for node_id in duplicates:
         log.error(
             "Node ID %s is carried by more than one current-run pod on this node — rejected",
@@ -320,34 +310,19 @@ def discover_local_pod_handles(
         )
         del candidates[node_id]
 
-    ready: list[tuple[str, str, str, tuple[str, int], str | None]] = []
-    for node_id, (pod_name, pod_uid, pod_ip) in candidates.items():
-        sandbox = sandboxes.get(pod_uid)
-        if sandbox is None:
-            log.info("No ready sandbox yet for %s (pod UID %s)", node_id, pod_uid)
-            continue
-        ready.append((node_id, pod_name, pod_uid, sandbox, pod_ip))
-
-    def _validate(entry) -> NamespaceHandle | None:
-        node_id, pod_name, pod_uid, sandbox, pod_ip = entry
-        return _validated_sandbox_handle(
-            node_id, pod_name, pod_uid, *sandbox, pod_ip, mpls_enable=requirements[node_id]
-        )
-
-    # Each sandbox is inspected by its own CRI call; the calls run together.
-    with ThreadPoolExecutor(max_workers=_INSPECT_WORKERS) as pool:
-        validated = list(pool.map(_validate, ready))
+    processes = pod_processes({pod.metadata.uid for pod in candidates.values()})
     result: dict[str, NamespaceHandle] = {}
-    for handle in validated:
+    for node_id, pod in candidates.items():
+        handle = _validated_sandbox_handle(
+            node_id, pod, processes[pod.metadata.uid], mpls_enable=requirements[node_id]
+        )
         if handle is None:
             continue
-        node_id = handle.node_id
         result[node_id] = handle
         log.info(
-            "Discovered %s -> sandbox %s attempt %d PID %d netns %s",
+            "Discovered %s -> sandbox %s PID %d netns %s",
             node_id,
             handle.sandbox_id[:13],
-            handle.sandbox_attempt,
             handle.pid,
             handle.netns_id,
         )

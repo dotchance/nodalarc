@@ -65,7 +65,6 @@ def _handles(pids: dict[str, int], *, mpls: frozenset[str] = frozenset()) -> dic
             pod_name=node_id,
             pod_uid=f"pod-{node_id}",
             sandbox_id=f"sb-{node_id}",
-            sandbox_attempt=0,
             pid=pid,
             netns_id=f"40265321{pid % 100:02d}",
             mpls_enable=node_id in mpls,

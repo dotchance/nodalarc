@@ -14,7 +14,7 @@ from __future__ import annotations
 from copy import deepcopy
 
 import pytest
-from nodalarc.runtime_naming import LINUX_IFNAME_MAX, is_managed_host_ifname
+from nodalarc.runtime_naming import LINUX_IFNAME_MAX
 from nodalarc.session_validator import validate_session_readiness
 from nodalarc.substrate.manifest_contract import WiringManifest
 from nodalarc.vxlan import compute_site_vni
@@ -328,7 +328,6 @@ class TestPlanner:
             plan.local_members[0].pod_ifname,
         ):
             assert len(name) <= LINUX_IFNAME_MAX
-            assert is_managed_host_ifname(name)
 
     def test_single_host_site_has_no_vxlan_port(self) -> None:
         spec, nodes = self._spec_and_nodes()
@@ -708,80 +707,3 @@ class TestActuationIdempotency:
         )
         with pytest.raises(Exception, match="Permission denied"):
             site_lan._configure_member_pod(port)
-
-
-class _FakeFirewall:
-    """Records host-firewall invocations and scripts their return codes."""
-
-    def __init__(self, existing_rules: bool = False, insert_rc: int = 0) -> None:
-        self.existing_rules = existing_rules
-        self.insert_rc = insert_rc
-        self.calls: list[list[str]] = []
-        self.deleted: int = 0
-
-    def __call__(self, cmd, capture_output=False, text=False):
-        import subprocess
-
-        self.calls.append(list(cmd))
-        assert cmd[0] == "nsenter" and cmd[1] == "--net=/proc/1/ns/net", (
-            "host firewall state must be mutated in the host netns, not the agent container's"
-        )
-        action = cmd[3]
-        if action == "-C":
-            rc = 0 if self.existing_rules else 1
-        elif action == "-I":
-            rc = self.insert_rc
-        elif action == "-D":
-            self.deleted += 1
-            self.existing_rules = False
-            rc = 0
-        else:  # pragma: no cover - unexpected verb is a test failure
-            raise AssertionError(f"unexpected firewall verb {action}")
-        return subprocess.CompletedProcess(cmd, rc, stdout="", stderr="boom")
-
-
-class TestSiteLanTransitRules:
-    """The host-firewall class: br_netfilter feeds bridged site-LAN frames to
-    the host FORWARD chain (where e.g. Docker's DROP policy eats them, while
-    ARP sails past — the false-healthy LAN). The agent owns its substrate's
-    transit: ACCEPT rules pinned for the reserved port namespaces, fail-loud
-    when they cannot be installed."""
-
-    def test_rules_pinned_for_both_families_and_both_port_namespaces(self, monkeypatch) -> None:
-        from node_agent import site_lan
-
-        fake = _FakeFirewall(existing_rules=False)
-        monkeypatch.setattr(site_lan.subprocess, "run", fake)
-        site_lan.ensure_site_lan_transit()
-
-        inserts = [c for c in fake.calls if c[3] == "-I"]
-        assert {c[2] for c in inserts} == {"iptables", "ip6tables"}
-        assert all(c[4] == "FORWARD" and c[5] == "1" for c in inserts)
-        assert {c[c.index("--physdev-in") + 1] for c in inserts} == {"sm+", "sv+"}
-        assert all("--physdev-is-bridged" in c for c in inserts), (
-            "rules must only exempt bridged transit, never routed host traffic"
-        )
-
-    def test_present_rules_are_not_duplicated(self, monkeypatch) -> None:
-        from node_agent import site_lan
-
-        fake = _FakeFirewall(existing_rules=True)
-        monkeypatch.setattr(site_lan.subprocess, "run", fake)
-        site_lan.ensure_site_lan_transit()
-        assert not [c for c in fake.calls if c[3] == "-I"]
-
-    def test_install_failure_is_loud(self, monkeypatch) -> None:
-        from node_agent import site_lan
-
-        fake = _FakeFirewall(existing_rules=False, insert_rc=2)
-        monkeypatch.setattr(site_lan.subprocess, "run", fake)
-        with pytest.raises(RuntimeError, match="site LAN transit rule"):
-            site_lan.ensure_site_lan_transit()
-
-    def test_remove_deletes_until_absent_and_never_raises(self, monkeypatch) -> None:
-        from node_agent import site_lan
-
-        fake = _FakeFirewall(existing_rules=True)
-        monkeypatch.setattr(site_lan.subprocess, "run", fake)
-        site_lan.remove_site_lan_transit()
-        assert fake.deleted > 0

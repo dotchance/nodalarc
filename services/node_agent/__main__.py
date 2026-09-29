@@ -463,6 +463,24 @@ async def main() -> None:
         finally:
             manifest_watch.stop()
 
+    # Node qualification: repeated checks of this host, whose verdict the
+    # DaemonSet's readiness probe reads (node_agent.qualification).
+    if _running_in_k8s():
+        from node_agent.qualification import qualify_forever
+
+        platform = get_platform_config()
+        threading.Thread(
+            target=qualify_forever,
+            kwargs={
+                "host_ip": os.environ["HOST_IP"].strip(),
+                "link_mtu": platform.veth_interface_mtu_bytes,
+                "vxlan_port": platform.vxlan_udp_port,
+                "stop": stop,
+            },
+            name="node-qualification",
+            daemon=True,
+        ).start()
+
     # Start wiring watcher in thread pool.
     wiring_task = loop.run_in_executor(None, _wiring_watcher)
     sub = None
@@ -600,9 +618,8 @@ def perform_rewire(
                 "Kernel state diverged (%d interfaces) — cleaning and re-wiring",
                 len(actual),
             )
-        # The one host clean of this rewire, in both cases: the cleaner also
-        # removes members of the managed device group whose names the inventory
-        # above does not recognize.
+        # The one host clean of this rewire, in both cases; it sends no delete
+        # when the device group is empty.
         report = clean_and_verify_host_state()
         if not report.clean:
             # Wiring from scratch over residue, a failed delete or an

@@ -5,7 +5,6 @@
 import pytest
 from nodalarc.runtime_naming import (
     gs_bridge_port_name,
-    is_managed_host_ifname,
     isl_host_name,
     satellite_ground_host_name,
     validate_runtime_node_id,
@@ -26,21 +25,6 @@ def test_host_interface_names_are_bounded_and_terminal_distinct():
     }
     assert len(names) == 6
     assert all(len(name) <= 15 for name in names)
-    assert all(is_managed_host_ifname(name) for name in names)
-
-
-def test_cleanup_matcher_keeps_retired_names_for_reused_nodes():
-    for name in (
-        "_isl_sat-a_sat-b",
-        "_gnd_sat-gs",
-        "_gbr-gs",
-        "br-gnd-denver",
-        "_na_tmp",
-        "_g0abc",
-    ):
-        assert is_managed_host_ifname(name)
-    for name in ("eth0", "cni0", "lo", "term0", "gnd0", "isl0"):
-        assert not is_managed_host_ifname(name)
 
 
 def test_runtime_node_id_rejects_kubernetes_unsafe_values():
@@ -58,7 +42,6 @@ def test_vxlan_host_names_are_distinct_over_the_whole_vni_space():
     assert low == ("vx000001", "vh000001", "vp000001")
     assert len({*low, *folded, *top}) == 9
     assert all(len(name) <= 15 for name in (*low, *folded, *top))
-    assert all(is_managed_host_ifname(name) for name in (*low, *folded, *top))
     assert low.tunnel == "vx000001" and low.host_veth == "vh000001" and low.pod_veth == "vp000001"
 
 
@@ -66,10 +49,3 @@ def test_vxlan_host_names_are_distinct_over_the_whole_vni_space():
 def test_vxlan_host_names_refuse_values_outside_the_vni_space(vni):
     with pytest.raises((ValueError, TypeError)):
         vxlan_host_ifnames(vni)
-
-
-def test_cleanup_matcher_recognizes_retired_five_digit_vxlan_names_too():
-    for name in ("vx00001", "vh00001", "vp00001", "vx99999"):
-        assert is_managed_host_ifname(name)
-    for name in ("vx12345g", "vq000001", "vx0000001", "vx1234", "vxlan0"):
-        assert not is_managed_host_ifname(name)

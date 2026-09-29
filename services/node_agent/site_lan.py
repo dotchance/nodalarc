@@ -36,9 +36,9 @@ import ipaddress
 import logging
 import os
 import socket
-import subprocess
 from dataclasses import dataclass
 
+from nodalarc.platform_config import get_platform_config
 from nodalarc.runtime_naming import (
     MANAGED_HOST_DEVICE_GROUP,
     site_lan_bridge_name,
@@ -46,9 +46,15 @@ from nodalarc.runtime_naming import (
     site_lan_member_pod_ifname,
     site_lan_vxlan_name,
 )
-from nodalarc.vxlan import VXLAN_DST_PORT
 
-from node_agent.namespace_ops import _get_host_ns_fd, _in_namespace, _libc, _ns_lock
+from node_agent import nft_rules
+from node_agent.namespace_ops import (
+    _get_host_ns_fd,
+    _in_namespace,
+    _libc,
+    _ns_lock,
+    in_host_namespace,
+)
 
 log = logging.getLogger(__name__)
 
@@ -60,80 +66,26 @@ _AF = {4: socket.AF_INET, 6: socket.AF_INET6}
 # the lookup proves which gateway that route uses.
 _DEFAULT_ROUTE_PROBE = {4: "8.8.8.8", 6: "2001:4860:4860::8888"}
 
-# br_netfilter (bridge-nf-call-iptables=1, standard on Kubernetes hosts) runs
-# bridged frames through the host's iptables FORWARD chain, so a host-level
-# policy such as Docker's FORWARD DROP silently discards site-LAN transit.
-# ARP is exempt from br_netfilter, which produces the trap signature: ARP
-# resolves across the LAN while every IP frame dies. The site LAN is emulated
-# L2 substrate between session pods; host firewall policy governs host and
-# cluster traffic, not this transit. The per-bridge nf_call_iptables flag
-# cannot opt out (the kernel ORs it with the global sysctl), so the agent
-# pins ACCEPT rules for frames entering its reserved bridge-port name
-# namespaces (site_lan_member_host_ifname "sm…", site_lan_vxlan_name "sv…").
-_SITE_LAN_TRANSIT_COMMENT = "nodalarc-site-lan-transit"
-_SITE_LAN_TRANSIT_RULES: tuple[tuple[str, ...], ...] = tuple(
-    (
-        "-m",
-        "physdev",
-        "--physdev-is-bridged",
-        "--physdev-in",
-        wildcard,
-        "-m",
-        "comment",
-        "--comment",
-        _SITE_LAN_TRANSIT_COMMENT,
-        "-j",
-        "ACCEPT",
-    )
-    for wildcard in ("sm+", "sv+")
-)
-_FIREWALL_BINARIES = ("iptables", "ip6tables")
-
-
-def _host_firewall(binary: str, args: tuple[str, ...]) -> subprocess.CompletedProcess:
-    # The agent container has its own netns; firewall state is the host's.
-    return subprocess.run(
-        ["nsenter", "--net=/proc/1/ns/net", binary, *args],
-        capture_output=True,
-        text=True,
-    )
-
 
 def ensure_site_lan_transit() -> None:
-    """Pin host-firewall ACCEPT rules for site-LAN bridged transit.
+    """Pin the host FORWARD rule that lets site-LAN transit through (``nft_rules``).
 
-    Idempotent: each rule is checked before insertion. Raises when a rule
-    cannot be installed — a site LAN whose transit the host may police is a
+    br_netfilter (standard on Kubernetes hosts) runs bridged frames through
+    the host's FORWARD chain, so a host policy such as Docker's FORWARD DROP
+    would silently discard site-LAN transit: ARP resolves across the LAN
+    while every IP frame dies. The rule is idempotent and raises when it
+    cannot be pinned: a site LAN whose transit the host may police is a
     wiring failure, not a degraded success.
     """
-    for binary in _FIREWALL_BINARIES:
-        for rule in _SITE_LAN_TRANSIT_RULES:
-            check = _host_firewall(binary, ("-C", "FORWARD", *rule))
-            if check.returncode == 0:
-                continue
-            insert = _host_firewall(binary, ("-I", "FORWARD", "1", *rule))
-            if insert.returncode != 0:
-                raise RuntimeError(
-                    f"failed to pin site LAN transit rule via {binary}: "
-                    f"{insert.stderr.strip() or insert.stdout.strip()}"
-                )
-    log.info("Site LAN transit rules pinned in host FORWARD chain")
+    pinned = in_host_namespace(lambda _ipr: nft_rules.ensure_site_lan_transit_here())
+    log.info("Site LAN transit rule pinned in host FORWARD chain (IPv%s)", pinned)
 
 
 def remove_site_lan_transit() -> None:
-    """Remove the pinned transit rules (cleanup path). Best-effort by design:
-    cleanup must not fail because a rule is already gone."""
-    for binary in _FIREWALL_BINARIES:
-        for rule in _SITE_LAN_TRANSIT_RULES:
-            while _host_firewall(binary, ("-C", "FORWARD", *rule)).returncode == 0:
-                delete = _host_firewall(binary, ("-D", "FORWARD", *rule))
-                if delete.returncode != 0:
-                    log.warning(
-                        "Could not remove site LAN transit rule via %s: %s",
-                        binary,
-                        delete.stderr.strip(),
-                    )
-                    break
+    """Delete the pinned transit rules (cleanup path); a rule already gone is absence."""
+    removed = in_host_namespace(lambda _ipr: nft_rules.remove_site_lan_transit_here())
+    if removed:
+        log.info("Removed %d site LAN transit rule(s) from the host FORWARD chain", removed)
 
 
 @dataclass(frozen=True)
@@ -312,7 +264,7 @@ def _wire_host_side(ipr, plan: SiteLanPlan, pod_ns_fds: dict[str, int]) -> None:
             mtu=plan.mtu,
             vxlan_id=plan.vni,
             vxlan_local=plan.vxlan_local_ip,
-            vxlan_port=VXLAN_DST_PORT,
+            vxlan_port=get_platform_config().vxlan_udp_port,
             vxlan_learning=True,
         )
         ipr.link("set", index=vxlan_idx, master=bridge_idx)

@@ -13,8 +13,6 @@ import ipaddress
 # The 24-bit VXLAN identifier space; 0 and 16777215 are reserved.
 VNI_MIN = 1
 VNI_MAX = 16777214
-# Default destination port for VXLAN (IANA standard).
-VXLAN_DST_PORT = 4789
 # Bytes VXLAN wraps around an inner IP packet besides the outer IP header:
 # the inner Ethernet header (14), UDP (8) and VXLAN (8).
 _VXLAN_ENCAPSULATION_BYTES = 14 + 8 + 8

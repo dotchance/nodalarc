@@ -55,10 +55,31 @@ platform:
 
   # ── Network Infrastructure ──────────────────────────────────────────
 
-  # MTU in bytes for veth pair interfaces connecting satellite and
-  # ground station pods. 9000 enables jumbo frames for reduced
-  # per-packet overhead on high-bandwidth ISL links.
-  veth_interface_mtu_bytes: 9000
+  # MTU in bytes of every emulated interface, on one host or across hosts.
+  # Hosts must carry this plus the VXLAN overhead between each other: 50
+  # bytes over IPv4 node addresses, 70 over IPv6. 8800 fits AWS and GCP
+  # (same region) and on-premises jumbo networks. Chart value
+  # network.linkMtu replaces it at install.
+  veth_interface_mtu_bytes: 8800
+
+  # UDP port of NodalArc's VXLAN tunnels between hosts. It must be free on
+  # every host and open between them, outside the host's ephemeral port
+  # range and the cluster's NodePort range. Chart value network.vxlanPort
+  # replaces it at install.
+  vxlan_udp_port: 14789
+
+  # Whether the Node Agent loads the kernel modules a session needs (MPLS)
+  # on its host when the session is wired. Off: the host's own configuration
+  # must load them, and a session that needs one the host lacks is refused.
+  # Chart value nodeAgent.loadKernelModules replaces it at install.
+  node_agent_loads_kernel_modules: true
+
+  # The kubelet's root directory on every host (its --root-dir), where it
+  # keeps each pod's volumes. The Node Agent writes each session pod's wiring
+  # proof into the pod's volume through it. /var/lib/kubelet on K3s, RKE2,
+  # kubeadm and the managed clouds. Chart value nodeAgent.kubeletRootDir
+  # replaces it at install.
+  kubelet_root_dir: /var/lib/kubelet
 
   # ── VS-API Operational Limits ───────────────────────────────────────
 

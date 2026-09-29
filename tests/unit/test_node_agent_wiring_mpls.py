@@ -137,7 +137,6 @@ def _handles(*, mpls: bool = True, site_lan: bool = False) -> dict[str, Namespac
             pod_name=node_id,
             pod_uid=f"pod-{node_id}",
             sandbox_id=f"sb-{node_id}",
-            sandbox_attempt=0,
             pid=4000 + index,
             netns_id=f"40265321{index:02d}",
             mpls_enable=mpls and node_id not in ("sat-c", "gs-y"),
@@ -157,13 +156,8 @@ def _support(*, available: bool) -> MplsSupport:
         routing=CapabilityProbe("mpls routing", "/proc/sys/net/mpls", True),
         encapsulation=encapsulation,
         modules=(
-            ModuleLoad("mpls_router", True, 0, ""),
-            ModuleLoad(
-                "mpls_iptunnel",
-                True,
-                1,
-                "modprobe: ERROR: could not insert 'mpls_iptunnel': Operation not permitted\n",
-            ),
+            ModuleLoad("mpls_router", True),
+            ModuleLoad("mpls_iptunnel", True, "PermissionError: [Errno 1] Operation not permitted"),
         ),
     )
 
@@ -304,7 +298,7 @@ def test_unavailable_support_refuses_every_mpls_node_and_writes_no_mpls_sysctl(m
         message = mpls_phase.error_message
         assert message.startswith("MPLS kernel support unavailable: "), message
         assert "mpls encapsulation absent" in message
-        assert "mpls_iptunnel: modprobe rc=1" in message
+        assert "mpls_iptunnel: load failed: PermissionError" in message
         assert "Operation not permitted" in message
     assert statuses["sat-c"].status == "ready"
 

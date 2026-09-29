@@ -244,7 +244,7 @@ def _cluster_pod_cidr(v1: kubernetes.client.CoreV1Api) -> str | None:
 
 def discover_available_nodes() -> list[str]:
     """The Kubernetes nodes that accept session pods."""
-    return available_session_nodes(_get_v1())
+    return available_session_nodes(_get_v1(), get_platform_config().kubernetes_namespace)
 
 
 def _node_internal_ips(

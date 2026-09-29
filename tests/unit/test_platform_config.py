@@ -26,6 +26,9 @@ def _valid_config_dict() -> dict:
         "probe_daemon_udp_data_port": 19100,
         "session_data_root": "/var/nodalarc/sessions",
         "veth_interface_mtu_bytes": 9000,
+        "vxlan_udp_port": 14789,
+        "node_agent_loads_kernel_modules": False,
+        "kubelet_root_dir": "/var/lib/kubelet",
         "vs_api_visual_beam_falloff_exponent": 2.0,
         "vs_api_actuation_expected_latency_ms": 250.0,
         "vs_api_actuation_fault_after_ms": 1200.0,
@@ -43,6 +46,18 @@ def _valid_config_dict() -> dict:
         "trace_unreached_retrace_seconds": 1.0,
         "trace_max_seconds": 180.0,
     }
+
+
+def _with_shipped_values(rendered: str, shipped: str) -> str:
+    """The chart copy with every templated setting put back to the shipped literal."""
+    from nodalarc.platform_config import CHART_TEMPLATED_SETTINGS
+
+    platform = yaml.safe_load(shipped)["platform"]
+    for field, template in CHART_TEMPLATED_SETTINGS.items():
+        literal = platform[field]
+        text = str(literal).lower() if isinstance(literal, bool) else str(literal)
+        rendered = rendered.replace(f"{field}: {template}", f"{field}: {text}")
+    return rendered
 
 
 class TestPlatformConfig:
@@ -77,13 +92,36 @@ class TestPlatformConfig:
         with pytest.raises(ValidationError):
             PlatformConfig(**{**_valid_config_dict(), "ome_full_state_snapshot_interval_s": 10})
 
+    def test_chart_copy_templates_every_installer_setting(self):
+        """Each installer-chosen setting becomes its chart value in the chart copy,
+        and the file's literal equals the chart's default, so the platform file
+        and a default install describe the same system."""
+        from nodalarc.platform_config import CHART_TEMPLATED_SETTINGS, render_chart_copy
+
+        shipped = (ROOT / "configs" / "platform.yaml").read_text(encoding="utf-8")
+        rendered = render_chart_copy(shipped)
+        for field, template in CHART_TEMPLATED_SETTINGS.items():
+            assert rendered.count(f"{field}: {template}") == 1, field
+
+        platform = yaml.safe_load(shipped)["platform"]
+        values = yaml.safe_load(
+            (ROOT / "deploy" / "helm" / "values.yaml").read_text(encoding="utf-8")
+        )
+        assert platform["kubernetes_namespace"] == values["namespace"]
+        assert platform["veth_interface_mtu_bytes"] == values["network"]["linkMtu"]
+        assert platform["vxlan_udp_port"] == values["network"]["vxlanPort"]
+        assert (
+            platform["node_agent_loads_kernel_modules"] == values["nodeAgent"]["loadKernelModules"]
+        )
+        assert platform["kubelet_root_dir"] == values["nodeAgent"]["kubeletRootDir"]
+
     def test_chart_copy_templates_the_namespace_field_by_meaning(self):
         from nodalarc.platform_config import CHART_NAMESPACE_VALUE, render_chart_copy
 
         shipped = (ROOT / "configs" / "platform.yaml").read_text(encoding="utf-8")
         rendered = render_chart_copy(shipped)
         assert rendered.count(f"kubernetes_namespace: {CHART_NAMESPACE_VALUE}") == 1
-        assert rendered.replace(CHART_NAMESPACE_VALUE, "nodalarc") == shipped
+        assert _with_shipped_values(rendered, shipped) == shipped
         forms = {
             'kubernetes_namespace: "nodalarc"': f"kubernetes_namespace: {CHART_NAMESPACE_VALUE}",
             "kubernetes_namespace:   'nodalarc'  # the release namespace": (
@@ -96,7 +134,9 @@ class TestPlatformConfig:
         for source_form, expected in forms.items():
             out = render_chart_copy(shipped.replace("kubernetes_namespace: nodalarc", source_form))
             assert expected in out, source_form
-            resolved = yaml.safe_load(out.replace(CHART_NAMESPACE_VALUE, '"rendered-ns"'))
+            resolved = yaml.safe_load(
+                _with_shipped_values(out.replace(CHART_NAMESPACE_VALUE, '"rendered-ns"'), shipped)
+            )
             assert resolved["platform"]["kubernetes_namespace"] == "rendered-ns", source_form
         reindented = shipped.replace("\n  ", "\n    ")
         assert f"    kubernetes_namespace: {CHART_NAMESPACE_VALUE}" in render_chart_copy(reindented)
@@ -142,9 +182,11 @@ class TestPlatformConfig:
         with pytest.raises(ValueError, match="not templated"):
             render_chart_copy(aliased)
 
-    def test_assembled_chart_copy_is_the_shipped_file_with_the_namespace_templated(self, tmp_path):
+    def test_assembled_chart_copy_is_the_shipped_file_with_the_settings_templated(self, tmp_path):
         import os
         import subprocess
+
+        from nodalarc.platform_config import render_chart_copy
 
         out = tmp_path / "chart"
         subprocess.run(
@@ -157,7 +199,8 @@ class TestPlatformConfig:
         )
         rendered = (out / "files" / "platform.yaml").read_text(encoding="utf-8")
         shipped = (ROOT / "configs" / "platform.yaml").read_text(encoding="utf-8")
-        assert rendered.replace('"{{ .Values.namespace }}"', "nodalarc") == shipped
+        assert rendered == render_chart_copy(shipped)
+        assert _with_shipped_values(rendered, shipped) == shipped
 
 
 class TestSingleton:

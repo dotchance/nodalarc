@@ -44,7 +44,6 @@ def _handles(pids):
             pod_name=node_id,
             pod_uid=f"pod-{node_id}",
             sandbox_id=f"sb-{node_id}",
-            sandbox_attempt=0,
             pid=pid,
             netns_id=netns_identity(pid) or "0",
             mpls_enable=False,

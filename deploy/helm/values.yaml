@@ -48,6 +48,22 @@ scheduler:
 nodeAgent:
   memoryLimit: 4Gi
   cpuLimit: "8"
+  # Whether the Node Agent loads the kernel modules a session needs (MPLS) on
+  # its host when the session is wired. Set false where the platform team
+  # forbids module loads; the host's own configuration must then load them.
+  loadKernelModules: true
+  # The kubelet's root directory on the hosts (its --root-dir). k0s uses
+  # /var/lib/k0s/kubelet; MicroK8s uses /var/snap/microk8s/common/var/lib/kubelet.
+  kubeletRootDir: /var/lib/kubelet
+
+# Emulated network settings, chosen at install.
+network:
+  # MTU of every emulated interface. Hosts must carry this plus 50 bytes
+  # (70 over IPv6 node addresses) between each other.
+  linkMtu: 8800
+  # UDP port of NodalArc's VXLAN tunnels between hosts: free on every host,
+  # open between them, outside the ephemeral and NodePort ranges.
+  vxlanPort: 14789
 
 # VS-API: FastAPI server for visualization state
 vsApi:

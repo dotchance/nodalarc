@@ -208,8 +208,8 @@ exit 1
     remote_script = trace_file.read_text()
     assert "print $3" not in remote_script
     assert 'print $1 ":" $2' in remote_script
-    assert 'crictl --runtime-endpoint "$runtime" rmi "$image"' in remote_script
-    assert "k3s crictl" not in remote_script
+    assert 'host_crictl rmi "$image"' in remote_script
+    assert "chroot /proc/1/root" in remote_script and "k3s crictl" in remote_script
 
 
 def test_registry_preflight_accepts_oci_indexes(tmp_path: Path) -> None:

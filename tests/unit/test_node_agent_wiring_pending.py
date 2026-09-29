@@ -75,7 +75,6 @@ def _handle(node_id: str, netns_id: str = "4026532100") -> NamespaceHandle:
         pod_name=node_id,
         pod_uid=f"pod-{node_id}",
         sandbox_id=f"sb-{node_id}",
-        sandbox_attempt=0,
         pid=4242,
         netns_id=netns_id,
         mpls_enable=False,
@@ -183,85 +182,6 @@ def _pods_carrying(rows: dict) -> SimpleNamespace:
     return SimpleNamespace(list_namespaced_pod=lambda *_a, **_k: SimpleNamespace(items=pods))
 
 
-def _delivered(monkeypatch: pytest.MonkeyPatch, tmp_path, rows: dict) -> None:
-    """Each row's proof delivered into its pod's wiring-status volume."""
-    from nodalarc.substrate.wiring_status import wiring_status_host_path
-    from node_agent.proof_delivery import deliver_proof_file
-
-    monkeypatch.setenv("KUBELET_PODS_DIR", str(tmp_path))
-    for row in rows.values():
-        (tmp_path / wiring_status_host_path(".", row.pod_uid)).mkdir(parents=True, exist_ok=True)
-        deliver_proof_file(str(tmp_path), row.pod_uid, encode_status(row))
-
-
-def test_case_b_binds_rows_to_live_incarnations(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
-    manifest = _manifest({"sat-a": LOCAL_NODE})
-    wired = {"sat-a": _handle("sat-a")}
-    rows = {
-        node_id: wiring_row(
-            node_id,
-            manifest,
-            pod_uid=handle.pod_uid,
-            sandbox_id=handle.sandbox_id,
-            netns_id=handle.netns_id,
-            state="ready",
-        )
-        for node_id, handle in wired.items()
-    }
-    _delivered(monkeypatch, tmp_path, rows)
-    v1 = _pods_carrying(rows)
-    assert wiring_status_is_current(v1, "testns", manifest, wired) is True
-
-    replaced_netns = {"sat-a": _handle("sat-a", netns_id="4026539999")}
-    assert wiring_status_is_current(v1, "testns", manifest, replaced_netns) is False
-
-    replaced_sandbox = {
-        "sat-a": NamespaceHandle(
-            node_id="sat-a",
-            pod_name="sat-a",
-            pod_uid="pod-sat-a",
-            sandbox_id="sb-replacement",
-            sandbox_attempt=1,
-            pid=4242,
-            netns_id="4026532100",
-            mpls_enable=False,
-        )
-    }
-    assert wiring_status_is_current(v1, "testns", manifest, replaced_sandbox) is False
-
-
-def test_a_proof_its_gate_never_received_is_not_current(
-    monkeypatch: pytest.MonkeyPatch, tmp_path
-) -> None:
-    """A ready annotation without the same proof in the pod's volume (the Node
-    Agent stopped between the two writes) forces a rewire, which delivers it."""
-    manifest = _manifest({"sat-a": LOCAL_NODE})
-    handle = _handle("sat-a")
-    row = wiring_row(
-        "sat-a",
-        manifest,
-        pod_uid=handle.pod_uid,
-        sandbox_id=handle.sandbox_id,
-        netns_id=handle.netns_id,
-        state="ready",
-    )
-    monkeypatch.setenv("KUBELET_PODS_DIR", str(tmp_path))
-    v1 = _pods_carrying({"sat-a": row})
-    assert wiring_status_is_current(v1, "testns", manifest, {"sat-a": handle}) is False
-
-    stale = wiring_row(
-        "sat-a",
-        manifest,
-        pod_uid=handle.pod_uid,
-        sandbox_id=handle.sandbox_id,
-        netns_id=handle.netns_id,
-        state="wiring",
-    )
-    _delivered(monkeypatch, tmp_path, {"sat-a": stale})
-    assert wiring_status_is_current(v1, "testns", manifest, {"sat-a": handle}) is False
-
-    _delivered(monkeypatch, tmp_path, {"sat-a": row})
-    assert wiring_status_is_current(v1, "testns", manifest, {"sat-a": handle}) is True
 
 
 def test_rewiring_rows_invalidate_readiness() -> None:

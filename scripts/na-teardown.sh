@@ -215,8 +215,8 @@ fi
 # NotReady node can still hold session devices. This runs BEFORE Helm
 # uninstall deletes the DaemonSet pods; if any host is unverified the
 # teardown refuses below, so the next run keeps its means of retrying. The
-# cleaner is the one implementation: it recognizes every managed name
-# through runtime_naming, and its report is the only judgement.
+# cleaner is the one implementation: it deletes the members of NodalArc's
+# device group, and its report is the only judgement.
 echo "[3/8] Cleaning host-side kernel state via the Node Agent cleaner on every labelled host..."
 UNVERIFIED_HOSTS=""
 if ! REQUIRED_HOSTS="$(kubectl get nodes -l nodalarc.io/node-agent=true \

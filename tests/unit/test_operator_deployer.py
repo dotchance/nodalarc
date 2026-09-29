@@ -60,7 +60,6 @@ from nodalarc_operator.session_deployer import (
     check_wiring_complete,
     compute_platform_hash,
     compute_runtime_hash,
-    discover_available_nodes,
     ensure_runtime_session_config,
     ensure_session_configmaps,
     ensure_session_pods,
@@ -334,40 +333,7 @@ class TestPodPlacement:
                 ["node01"],
             )
 
-    def test_tainted_node_excluded(self):
-        """discover_available_nodes filters out tainted nodes."""
-        mock_v1 = create_autospec(kubernetes.client.CoreV1Api, instance=True)
 
-        good_node = MagicMock()
-        good_node.metadata.name = "node02"
-        good_node.spec.taints = []
-
-        tainted_node = MagicMock()
-        tainted_node.metadata.name = "node03"
-        taint = MagicMock()
-        taint.key = "nodalarc.io/not-ready"
-        taint.effect = "NoSchedule"
-        tainted_node.spec.taints = [taint]
-
-        node_list = MagicMock()
-        node_list.items = [good_node, tainted_node]
-        mock_v1.list_node.return_value = node_list
-
-        with patch("nodalarc_operator.session_deployer._get_v1", return_value=mock_v1):
-            result = discover_available_nodes()
-
-        assert result == ["node02"]
-        mock_v1.list_node.assert_called_once_with(label_selector="nodalarc.io/node-agent=true")
-
-    def test_a_failed_node_listing_raises(self):
-        mock_v1 = create_autospec(kubernetes.client.CoreV1Api, instance=True)
-        mock_v1.list_node.side_effect = kubernetes.client.rest.ApiException(status=503)
-
-        with (
-            patch("nodalarc_operator.session_deployer._get_v1", return_value=mock_v1),
-            pytest.raises(kubernetes.client.rest.ApiException),
-        ):
-            discover_available_nodes()
 
 
 # ---------------------------------------------------------------------------

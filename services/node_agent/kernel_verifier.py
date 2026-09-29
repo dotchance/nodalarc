@@ -11,7 +11,6 @@ from typing import Any
 
 from nodalarc.platform_config import get_platform_config
 from nodalarc.runtime_naming import vxlan_host_ifnames
-from nodalarc.vxlan import VXLAN_DST_PORT
 from pyroute2.netlink.rtnl import TC_H_INGRESS
 
 from node_agent.kernel_constants import (
@@ -459,7 +458,7 @@ def prove_vxlan_device(ipr, vxlan_if: str, *, vni: int, local_ip: str, remote_ip
         "IFLA_VXLAN_ID": vni,
         "IFLA_VXLAN_LOCAL": local_ip,
         "IFLA_VXLAN_GROUP": remote_ip,
-        "IFLA_VXLAN_PORT": VXLAN_DST_PORT,
+        "IFLA_VXLAN_PORT": get_platform_config().vxlan_udp_port,
     }
     for key, expected in checks.items():
         actual = attrs.get(key)

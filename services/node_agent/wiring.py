@@ -33,6 +33,7 @@ from pydantic import ValidationError
 from pyroute2 import IPRoute
 from pyroute2.netlink.exceptions import NetlinkError
 
+from node_agent import nft_rules
 from node_agent.ground_bridge import (
     create_ground_bridge,
     create_mediated_isl,
@@ -47,13 +48,6 @@ from node_agent.namespace_ops import (
 from node_agent.pid_discovery import NamespaceHandle, discover_local_pod_handles
 from node_agent.proof_delivery import deliver_proof_file, kubelet_pods_dir
 from node_agent.substrate_monitor import prove_host_path_mtu
-
-_IPTABLES_RULES = (
-    "*filter\n"
-    "-A OUTPUT -o cni0 -m state --state ESTABLISHED,RELATED -j ACCEPT\n"
-    "-A OUTPUT -o cni0 -j DROP\n"
-    "COMMIT\n"
-)
 
 
 def rename_cni_interface(pid: int, node_id: str) -> str | None:
@@ -150,17 +144,9 @@ def remove_default_route(pid: int, node_id: str, cluster_pod_cidr: str | None = 
 
 
 def lock_down_cni0(pid: int, node_id: str) -> str | None:
-    """Apply cni0 egress lockdown rules. Returns error string or None."""
-    import subprocess
-
+    """Apply the cni0 egress lockdown in the pod (``nft_rules``). Returns error string or None."""
     try:
-        subprocess.run(
-            ["nsenter", f"--net=/proc/{pid}/ns/net", "iptables-restore", "--noflush"],
-            input=_IPTABLES_RULES,
-            text=True,
-            check=True,
-            capture_output=True,
-        )
+        _in_namespace(pid, lambda _ipr: nft_rules.lock_down_cni0_here())
         return None
     except Exception as exc:
         return f"{node_id}: {exc}"

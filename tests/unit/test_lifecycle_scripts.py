@@ -302,13 +302,13 @@ def test_load_next_step_is_state_aware() -> None:
     assert "make install will refuse the existing namespace" in script
 
 
-def test_install_passes_node_agent_host_network_cidrs_to_helm() -> None:
+def test_install_passes_no_nats_address_to_helm() -> None:
+    """Every workload dials the NATS Service; the install script computes no
+    server address for NATS and no policy allow-list."""
     script = (ROOT / "scripts/na-install-platform.sh").read_text()
-    assert "nodalarc.io/node-agent=true" in script
-    assert "nats.networkPolicy.hostNetworkCIDRs[$idx]" in script
-    assert "nats.hostNetworkHost=$nats_host" in script
-    assert "/32" in script
-    assert "/128" in script
+    assert "hostNetworkHost" not in script
+    assert "hostNetworkCIDRs" not in script
+    assert "controlPlaneNode=$nodal_node" in script
 
 
 def _lib_call(body: str, *, path_dir: Path, env: dict[str, str] | None = None):

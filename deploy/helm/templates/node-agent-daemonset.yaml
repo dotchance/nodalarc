@@ -29,7 +29,7 @@ spec:
       tolerations:
         - operator: Exists
       initContainers:
-        {{- include "nodalarc.nats-wait-init" (dict "Values" .Values "Files" .Files "hostNetwork" true) | nindent 8 }}
+        {{- include "nodalarc.nats-wait-init" . | nindent 8 }}
       containers:
         - name: node-agent
           image: {{ required "images.nodeAgent is required" .Values.images.nodeAgent | quote }}
@@ -43,7 +43,7 @@ spec:
             - name: NODAL_BUILD
               value: {{ .Values.buildTag | quote }}
             - name: NODALARC_NATS_URL
-              value: {{ include "nodalarc.nats-url" (dict "Values" .Values "user" "nodeAgent" "hostNetwork" true) | quote }}
+              value: {{ include "nodalarc.nats-url" (dict "Values" .Values "user" "nodeAgent") | quote }}
             - name: NODE_NAME
               valueFrom:
                 fieldRef:

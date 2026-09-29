@@ -6,10 +6,10 @@
      malformed or incomplete inventory fails the render.
 
      nodalarc.nats-url: the one NATS URL for a workload, from its values user
-     key (credentials only under auth), the host (the host-network address
-     for host-network workloads when configured, the service otherwise) and
-     the client port. Callers pass (dict "Values" .Values "user" KEY
-     "hostNetwork" BOOL). */}}
+     key (credentials only under auth), the NATS Service name and the client
+     port. Every workload dials the Service, host-network workloads included:
+     kube-proxy answers a ClusterIP connection made from a server's own
+     network namespace. Callers pass (dict "Values" .Values "user" KEY). */}}
 {{- define "nodalarc.nats-messaging" -}}
 {{- $raw := .Files.Get "files/nats-messaging.yaml" -}}
 {{- if not $raw }}{{ fail "files/nats-messaging.yaml is missing or empty: assemble the chart through scripts/na-render-helm-chart.sh" }}{{ end -}}
@@ -41,7 +41,6 @@
 
 {{- define "nodalarc.nats-url" -}}
 {{- $host := "nodalarc-nats" -}}
-{{- if and .hostNetwork .Values.nats.hostNetworkHost }}{{ $host = .Values.nats.hostNetworkHost }}{{ end -}}
 {{- if .Values.nats.auth.enabled -}}
 {{- $account := index .Values.nats.auth.users .user | required (printf "nats.auth.users.%s is required" .user) -}}
 nats://{{ $account.username }}:{{ $account.password }}@{{ $host }}:{{ .Values.nats.clientPort }}

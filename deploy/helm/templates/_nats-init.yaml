@@ -1,10 +1,8 @@
 {{/* Init container that waits for every deployed NATS JetStream stream to exist.
      Used by every consumer pod (Scheduler, VS-API, Node Agent). Ensures the
      streams are created by the OME init container before any consumer starts
-     subscribing. Callers pass the root context, or a dict carrying Values,
-     Files and hostNetwork. */}}
+     subscribing. Callers pass the root context. */}}
 {{- define "nodalarc.nats-wait-init" }}
-{{- $hostNetwork := .hostNetwork | default false }}
 {{- $messaging := fromYaml (include "nodalarc.nats-messaging" .) }}
 - name: wait-nats-streams
   image: {{ required "images.natsBox is required" .Values.images.natsBox | quote }}
@@ -13,13 +11,13 @@
   # The shell is the container's PID 1, which the kernel does not signal
   # unless it handles the signal: the wait runs as its child, and SIGTERM
   # ends the container at once. A new pod's first connections can be refused
-  # until the network policy admits its address, so the check repeats often.
+  # while NATS is still starting, so the check repeats often.
   args:
     - |
       trap 'exit 143' TERM
       {
       echo "Waiting for NATS streams..."
-      NATS_URL={{ include "nodalarc.nats-url" (dict "Values" .Values "user" "admin" "hostNetwork" $hostNetwork) | quote }}
+      NATS_URL={{ include "nodalarc.nats-url" (dict "Values" .Values "user" "admin") | quote }}
       STREAMS="{{ range $messaging.streams }}{{ .name }} {{ end }}"
       DEADLINE=$(($(date +%s) + 30))
       until ok=1; for s in $STREAMS; do nats stream info "$s" --server="$NATS_URL" >/dev/null 2>&1 || ok=0; done; [ "$ok" = 1 ]; do

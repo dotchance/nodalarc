@@ -186,41 +186,13 @@ helm_args=(
     "${image_args[@]}"
 )
 
-# Every InternalIP of every Node Agent node, one per line: a dual-stack node
-# has one per address family, and the policy admits each.
-mapfile -t node_agent_ips < <(
-    kubectl get nodes -l nodalarc.io/node-agent=true \
-        -o jsonpath='{range .items[*]}{range .status.addresses[?(@.type=="InternalIP")]}{.address}{"\n"}{end}{end}' \
-        2>/dev/null | sed '/^[[:space:]]*$/d'
-)
-if [ "${#node_agent_ips[@]}" -gt 0 ]; then
-    echo "[$ACTION] Allowing NATS ingress from ${#node_agent_ips[@]} Node Agent host-network node IP(s)."
-    for idx in "${!node_agent_ips[@]}"; do
-        ip="${node_agent_ips[$idx]}"
-        if [[ "$ip" == *:* ]]; then
-            cidr="${ip}/128"
-        else
-            cidr="${ip}/32"
-        fi
-        helm_args+=("--set-string=nats.networkPolicy.hostNetworkCIDRs[$idx]=$cidr")
-    done
-fi
-
+# The platform pods are pinned to one server so the VF and VS-API hostPorts
+# have a fixed address on the development cluster. Every workload, the
+# host-network ones included, reaches NATS through its Service.
 nodal_node="$(kubectl get nodes -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || true)"
 if [ -n "$nodal_node" ]; then
     echo "[$ACTION] Auto-detected node: $nodal_node"
     helm_args+=("--set-string=controlPlaneNode=$nodal_node")
-    # The node's first InternalIP: the address Kubernetes gives host-network
-    # pods as their host IP, in the family the Node Agents use.
-    nats_host="$(
-        kubectl get node "$nodal_node" \
-            -o jsonpath='{.status.addresses[?(@.type=="InternalIP")].address}' 2>/dev/null \
-            | awk '{print $1}' || true
-    )"
-    if [ -n "$nats_host" ]; then
-        echo "[$ACTION] Exposing NATS host-network endpoint at ${nats_host}:4222."
-        helm_args+=("--set-string=nats.hostNetworkHost=$nats_host")
-    fi
 fi
 
 if [ "$ACTION" = "install" ]; then

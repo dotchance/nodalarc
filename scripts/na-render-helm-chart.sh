@@ -70,7 +70,7 @@ if [[ ! -s "$messaging" ]]; then
 fi
 
 # The chart's identity: a digest of the content the release will carry
-# (templates, files, CRDs, default values), recorded in Chart.yaml so a
+# (templates, files, default values), recorded in Chart.yaml so a
 # later single-service deploy can prove the release runs this chart.
 if grep -q '^annotations:' "$output_dir/Chart.yaml"; then
     echo "[helm-chart] ERROR: Chart.yaml.in must not declare annotations; the assembler records them" >&2

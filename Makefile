@@ -66,7 +66,6 @@ IMAGE_REF_TAG = $$(MODE='$(MODE)' REGISTRY_HOST='$(REGISTRY_HOST)' TAG='$(TAG)' 
 .PHONY: help all deps build load install reinstall upgrade session lint lint-policy typecheck format-diff generate-contracts check-contracts dead-code \
         test test-integration test-runtime-matrix test-builder-e2e \
         test-root ensure-frontend-deps \
-        check-crd-server \
         teardown force-teardown reset-platform restart clean clean-deps clean-images \
         clean-registry purge-containerd nuke status check-registry test-backend test-frontend \
         build-frontends build-images ensure-base-images build-base-images \
@@ -190,13 +189,6 @@ check-registry: ## Report resolved REGISTRY_HOST and verify the registry is reac
 			exit 1; \
 		fi; \
 	fi
-
-# ---------------------------------------------------------------------------
-# Contract validation
-# ---------------------------------------------------------------------------
-
-check-crd-server: ## Validate the ConstellationSpec CRD through the active API server
-	@kubectl apply --dry-run=server -f 'deploy/helm/crds/constellationspec.yaml' >/dev/null
 
 # ---------------------------------------------------------------------------
 # Build artifacts

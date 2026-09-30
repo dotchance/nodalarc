@@ -51,56 +51,6 @@ render_chart_if_needed() {
     printf '%s\n' "$chart"
 }
 
-apply_constellationspec_crd() {
-    local chart="$1"
-    local chart_dir="$chart"
-    local crd_path upload_type upload_id_type closure_digest_type file_count_type
-    local runtime_release_type runtime_build_type
-
-    if [[ "$chart_dir" != /* ]]; then
-        chart_dir="$ROOT_DIR/$chart_dir"
-    fi
-    crd_path="$chart_dir/crds/constellationspec.yaml"
-    if [ ! -f "$crd_path" ]; then
-        echo "[$ACTION] ERROR: ConstellationSpec CRD not found at $crd_path" >&2
-        exit 2
-    fi
-
-    echo "[$ACTION] Applying ConstellationSpec CRD before runtime images..."
-    kubectl apply -f "$crd_path"
-    kubectl wait --for=condition=Established \
-        crd/constellationspecs.nodalarc.io --timeout=60s
-    upload_type="$(
-        kubectl get crd constellationspecs.nodalarc.io \
-            -o jsonpath='{.spec.versions[?(@.name=="v1alpha1")].schema.openAPIV3Schema.properties.spec.properties.catalogUpload.type}'
-    )"
-    upload_id_type="$(
-        kubectl get crd constellationspecs.nodalarc.io \
-            -o jsonpath='{.spec.versions[?(@.name=="v1alpha1")].schema.openAPIV3Schema.properties.spec.properties.catalogUpload.properties.upload_id.type}'
-    )"
-    closure_digest_type="$(
-        kubectl get crd constellationspecs.nodalarc.io \
-            -o jsonpath='{.spec.versions[?(@.name=="v1alpha1")].schema.openAPIV3Schema.properties.spec.properties.catalogUpload.properties.closure_digest.type}'
-    )"
-    file_count_type="$(
-        kubectl get crd constellationspecs.nodalarc.io \
-            -o jsonpath='{.spec.versions[?(@.name=="v1alpha1")].schema.openAPIV3Schema.properties.spec.properties.catalogUpload.properties.file_count.type}'
-    )"
-    runtime_release_type="$(
-        kubectl get crd constellationspecs.nodalarc.io \
-            -o jsonpath='{.spec.versions[?(@.name=="v1alpha1")].schema.openAPIV3Schema.properties.status.properties.runtimeRelease.type}'
-    )"
-    runtime_build_type="$(
-        kubectl get crd constellationspecs.nodalarc.io \
-            -o jsonpath='{.spec.versions[?(@.name=="v1alpha1")].schema.openAPIV3Schema.properties.status.properties.runtimeBuild.type}'
-    )"
-    if [ "$upload_type" != "object" ] || [ "$upload_id_type" != "string" ] \
-        || [ "$closure_digest_type" != "string" ] || [ "$file_count_type" != "integer" ] \
-        || [ "$runtime_release_type" != "string" ] || [ "$runtime_build_type" != "string" ]; then
-        echo "[$ACTION] ERROR: served ConstellationSpec schema lacks the exact runtime upload/proof contract" >&2
-        exit 1
-    fi
-}
 
 wait_platform_ready() {
     local timeout="${1:-180}"
@@ -159,7 +109,6 @@ fi
 
 bash "$ROOT_DIR/scripts/na-image-preflight.sh"
 HELM_CHART="$(render_chart_if_needed "$HELM_CHART")"
-apply_constellationspec_crd "$HELM_CHART"
 
 # A process substitution's exit status is never checked: the arguments are
 # captured first, so a failed image lookup stops the install.

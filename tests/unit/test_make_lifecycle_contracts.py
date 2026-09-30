@@ -70,7 +70,6 @@ DRY_RUN_TARGETS = (
     "format-diff",
     "generate-contracts",
     "check-contracts",
-    "check-crd-server",
     "dead-code",
     "test",
     "test-backend",
@@ -682,7 +681,7 @@ def test_platform_install_renders_versioned_helm_chart() -> None:
 
 
 def test_constellationspec_status_schema_preserves_runtime_identity_fields() -> None:
-    crd = yaml.safe_load((ROOT / "deploy/helm/crds/constellationspec.yaml").read_text())
+    crd = yaml.safe_load((ROOT / "deploy/helm/templates/constellationspec-crd.yaml").read_text())
     status_props = crd["spec"]["versions"][0]["schema"]["openAPIV3Schema"]["properties"]["status"][
         "properties"
     ]
@@ -746,7 +745,7 @@ def test_runtime_services_mount_one_atomic_session_configmap_directory() -> None
 
 
 def test_constellationspec_catalog_upload_schema_is_required_and_exact() -> None:
-    crd = yaml.safe_load((ROOT / "deploy/helm/crds/constellationspec.yaml").read_text())
+    crd = yaml.safe_load((ROOT / "deploy/helm/templates/constellationspec-crd.yaml").read_text())
     spec_schema = crd["spec"]["versions"][0]["schema"]["openAPIV3Schema"]["properties"]["spec"]
     upload = spec_schema["properties"]["catalogUpload"]
 
@@ -764,7 +763,7 @@ def test_constellationspec_catalog_upload_schema_is_required_and_exact() -> None
 
 
 def test_constellationspec_structural_schema_never_mixes_object_schema_forms() -> None:
-    crd = yaml.safe_load((ROOT / "deploy/helm/crds/constellationspec.yaml").read_text())
+    crd = yaml.safe_load((ROOT / "deploy/helm/templates/constellationspec-crd.yaml").read_text())
     schema = crd["spec"]["versions"][0]["schema"]["openAPIV3Schema"]
     conflicts: list[str] = []
 
@@ -783,13 +782,6 @@ def test_constellationspec_structural_schema_never_mixes_object_schema_forms() -
     assert conflicts == []
 
 
-def test_make_exposes_server_side_constellationspec_crd_validation() -> None:
-    target = _target_body("check-crd-server")
-
-    assert "kubectl apply --dry-run=server" in target
-    assert "deploy/helm/crds/constellationspec.yaml" in target
-
-
 def test_make_session_uses_the_reviewed_vs_api_catalog_switch_path() -> None:
     import subprocess
 
@@ -806,31 +798,28 @@ def test_make_session_uses_the_reviewed_vs_api_catalog_switch_path() -> None:
     assert "sessionYaml: |" not in script
 
 
-def test_platform_upgrade_applies_and_verifies_crd_before_helm() -> None:
+def test_the_crd_is_a_release_resource_the_chart_keeps_on_uninstall() -> None:
+    """The release owns the CRD, so helm upgrade carries a changed schema; the
+    install script applies nothing outside the release, and helm uninstall
+    leaves the CRD (teardown removes it after the session)."""
     script = (ROOT / "scripts/na-install-platform.sh").read_text()
+    crd = yaml.safe_load((ROOT / "deploy/helm/templates/constellationspec-crd.yaml").read_text())
 
-    apply_call = 'apply_constellationspec_crd "$HELM_CHART"'
-    assert 'kubectl apply -f "$crd_path"' in script
-    assert "--for=condition=Established" in script
-    assert "spec.properties.catalogUpload.type" in script
-    assert "catalogUpload.properties.upload_id.type" in script
-    assert "catalogUpload.properties.closure_digest.type" in script
-    assert "catalogUpload.properties.file_count.type" in script
-    assert "status.properties.runtimeRelease.type" in script
-    assert "status.properties.runtimeBuild.type" in script
-    assert script.index(apply_call) < script.index('helm install "$HELM_RELEASE_NAME"')
-    assert script.index(apply_call) < script.index('helm upgrade "$HELM_RELEASE_NAME"')
+    assert not (ROOT / "deploy/helm/crds").exists()
+    assert crd["kind"] == "CustomResourceDefinition"
+    assert crd["metadata"]["annotations"]["helm.sh/resource-policy"] == "keep"
+    assert "kubectl apply" not in script
+    assert "constellationspec" not in script
 
 
 def test_platform_upgrade_has_no_legacy_session_migration_preflight() -> None:
     script = (ROOT / "scripts/na-install-platform.sh").read_text()
 
     image_preflight = 'bash "$ROOT_DIR/scripts/na-image-preflight.sh"'
-    crd_apply = 'apply_constellationspec_crd "$HELM_CHART"'
     assert "upgrade_preflight_cli" not in script
     assert "preflight_active_sessions_for_upgrade" not in script
     assert "switch or migrate" not in script
-    assert script.index(image_preflight) < script.index(crd_apply)
+    assert script.index(image_preflight) < script.index('helm install "$HELM_RELEASE_NAME"')
 
 
 def test_platform_wait_requires_complete_deployment_and_daemonset_rollouts() -> None:

@@ -1,7 +1,14 @@
+# The ConstellationSpec CRD is a release resource, so helm upgrade carries a
+# changed schema; a CRD under crds/ is installed once and never upgraded.
+# The keep policy leaves the CRD in place on helm uninstall, so a session's
+# resources are not deleted with the Operator gone; make teardown removes it
+# after the session.
 apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
   name: constellationspecs.nodalarc.io
+  annotations:
+    helm.sh/resource-policy: keep
   labels:
     nodalarc.io/managed-by: helm
 spec:

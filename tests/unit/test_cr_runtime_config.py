@@ -24,7 +24,11 @@ from pydantic import ValidationError
 
 DIGEST = "sha256:" + "c" * 64
 CRD_PATH = (
-    Path(__file__).resolve().parents[2] / "deploy" / "helm" / "crds" / "constellationspec.yaml"
+    Path(__file__).resolve().parents[2]
+    / "deploy"
+    / "helm"
+    / "templates"
+    / "constellationspec-crd.yaml"
 )
 
 

@@ -5,7 +5,7 @@
 
 digest CHART_DIR
     Print the content digest of the chart: every file under templates/,
-    files/ and crds/, plus values.yaml, by path and bytes. Chart.yaml is
+    and files/, plus values.yaml, by path and bytes. Chart.yaml is
     outside the digest; its version is build identity, not chart content.
     The assembler records this digest in Chart.yaml annotations, so the
     Helm release carries it in its chart metadata. Helm rewrites a stored
@@ -30,7 +30,7 @@ import sys
 from pathlib import Path
 
 DIGEST_ANNOTATION = "nodalarc.io/chart-digest"
-CONTENT_DIRS = ("templates", "files", "crds")
+CONTENT_DIRS = ("templates", "files")
 REFUSED = 3
 
 

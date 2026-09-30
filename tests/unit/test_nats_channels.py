@@ -189,26 +189,6 @@ def test_chart_templates_author_no_subject_patterns():
         assert "nodalarc-nats:4222" not in text, path.name
 
 
-def test_every_acl_pattern_is_a_registry_root_or_nats_infrastructure():
-    roots = (
-        nc.ROOT_OME,
-        nc.ROOT_LINKS,
-        nc.ROOT_SESSION,
-        nc.ROOT_SCHEDULER,
-        nc.ROOT_OPS,
-        nc.ROOT_DEBUG,
-        nc.ROOT_MI,
-        nc.ROOT_NODALPATH,
-        nc.ROOT_AGENT,
-        nc.ROOT_OME_CONTROL,
-    )
-    for user in nc.NATS_USERS:
-        for pattern in user.publish + user.subscribe:
-            assert pattern in ("$JS.API.>", "_INBOX.>", "nodalarc.>") or any(
-                pattern.startswith(f"{root}.") for root in roots
-            ), (user.key, pattern)
-
-
 def test_nats_url_comes_from_the_environment_only(monkeypatch):
     monkeypatch.setenv("NODALARC_NATS_URL", " nats://user:pw@nats.example:4333 ")
     assert nc.nats_url() == "nats://user:pw@nats.example:4333"
@@ -232,18 +212,15 @@ def test_platform_config_carries_no_nats_url():
     assert "nats_url" not in PlatformConfig.model_fields
 
 
-def test_messaging_inventory_is_the_stream_and_user_tables():
+def test_messaging_inventory_is_the_stream_table():
     import yaml
 
     rendered = yaml.safe_load(nc.render_messaging_inventory())
 
     assert rendered == nc.messaging_inventory()
+    assert list(rendered) == ["streams"]
     assert [s["name"] for s in rendered["streams"]] == [s.name for s in nc.STREAMS]
     assert [s["subjects"] for s in rendered["streams"]] == [s.subjects for s in nc.STREAMS]
-    assert [u["key"] for u in rendered["users"]] == [u.key for u in nc.NATS_USERS]
-    for user, row in zip(nc.NATS_USERS, rendered["users"], strict=True):
-        assert tuple(row["publish"]) == user.publish
-        assert tuple(row["subscribe"]) == user.subscribe
 
 
 def test_renderer_command_writes_the_inventory_to_stdout():
@@ -317,21 +294,13 @@ def test_producer_validation_accepts_the_registry_tables():
     ("changes", "label"),
     [
         ({"streams": []}, "no streams"),
-        ({"users": []}, "no users"),
         ({"streams": True}, "streams not a list"),
         ({"streams.0.subjects": True}, "subjects not a string"),
         ({"streams.0.subjects": ["nodalarc.ome.>"]}, "subjects a list"),
         ({"streams.0.subjects": "nodalarc.ome.visibility"}, "subjects not a root wildcard"),
         ({"streams.0.name": "ome"}, "stream name not NODALARC_*"),
-        ({"users.0.key": "no such"}, "user key not a values key"),
-        ({"users.0.publish": "nodalarc.>"}, "publish not a list"),
-        ({"users.0.publish": [1]}, "pattern not a string"),
-        ({"users.0.publish": ["nodalarc..ops"]}, "empty token"),
-        ({"users.0.publish": ["nodalarc.>.ops"]}, "misplaced wildcard"),
         ({"streams.0.name": "NODALARC_OME\n"}, "stream name with a trailing newline"),
         ({"streams.0.subjects": "nodalarc.ome.>\n"}, "subjects with a trailing newline"),
-        ({"users.0.key": "admin\n"}, "user key with a trailing newline"),
-        ({"users.0.publish": ["nodalarc.>\n"]}, "pattern with a trailing newline"),
     ],
 )
 def test_producer_validation_refuses_what_the_chart_would_refuse(changes, label):
@@ -373,15 +342,10 @@ def _regex_match_literals(template_text: str) -> list[str]:
 def test_chart_regexes_equal_the_producer_regexes():
     """The chart's render-time refusals and the producer's validation apply one rule set,
     written once in Go template text and once in Python on either side of the chart
-    boundary. This guard pins that deliberate duplication: four sites, four patterns."""
+    boundary. This guard pins that deliberate duplication: two sites, two patterns."""
     literals = _regex_match_literals((_ROOT / "deploy/helm/templates/_nats.yaml").read_text())
 
-    assert literals == [
-        nc._STREAM_NAME_RE.pattern,
-        nc._ROOT_WILDCARD_RE.pattern,
-        nc._USER_KEY_RE.pattern,
-        nc._SUBJECT_PATTERN_RE.pattern,
-    ]
+    assert literals == [nc._STREAM_NAME_RE.pattern, nc._ROOT_WILDCARD_RE.pattern]
 
 
 def _values():
@@ -409,6 +373,3 @@ def test_checked_in_retention_passes_the_initializer_field_rules():
             assert isinstance(value, int) and not isinstance(value, bool), (name, field, value)
 
 
-def test_values_auth_users_equal_the_inventory_users():
-    """The shipped credentials correspond exactly to the registry's user table."""
-    assert set(_values()["nats"]["auth"]["users"]) == {user.key for user in nc.NATS_USERS}

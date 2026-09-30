@@ -17,7 +17,7 @@
       trap 'exit 143' TERM
       {
       echo "Waiting for NATS streams..."
-      NATS_URL={{ include "nodalarc.nats-url" (dict "Values" .Values "user" "admin") | quote }}
+      NATS_URL={{ include "nodalarc.nats-url" . | quote }}
       STREAMS="{{ range $messaging.streams }}{{ .name }} {{ end }}"
       DEADLINE=$(($(date +%s) + 30))
       until ok=1; for s in $STREAMS; do nats stream info "$s" --server="$NATS_URL" >/dev/null 2>&1 || ok=0; done; [ "$ok" = 1 ]; do

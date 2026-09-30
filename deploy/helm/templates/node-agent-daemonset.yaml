@@ -47,7 +47,7 @@ spec:
             - name: NODAL_BUILD
               value: {{ .Values.buildTag | quote }}
             - name: NODALARC_NATS_URL
-              value: {{ include "nodalarc.nats-url" (dict "Values" .Values "user" "nodeAgent") | quote }}
+              value: {{ include "nodalarc.nats-url" . | quote }}
             - name: NODE_NAME
               valueFrom:
                 fieldRef:

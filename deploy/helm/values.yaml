@@ -121,21 +121,6 @@ nats:
   memoryRequest: 256Mi
   cpuLimit: "8"
   cpuRequest: 250m
-  auth:
-    enabled: false
-    users:
-      admin:
-        username: nodalarc-admin
-        password: nodalarc-admin-dev
-      scheduler:
-        username: nodalarc-scheduler
-        password: nodalarc-scheduler-dev
-      nodeAgent:
-        username: nodalarc-node-agent
-        password: nodalarc-node-agent-dev
-      service:
-        username: nodalarc-service
-        password: nodalarc-service-dev
   # JetStream storage. Empty: the cluster's default StorageClass. A cluster
   # without a default (RKE2, kubeadm) names one here.
   storageClass: ""

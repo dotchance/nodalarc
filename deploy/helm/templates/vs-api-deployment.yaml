@@ -65,7 +65,7 @@ spec:
             - name: NODALARC_RELEASE
               value: {{ required "runtimeRelease is required" .Values.runtimeRelease | quote }}
             - name: NODALARC_NATS_URL
-              value: {{ include "nodalarc.nats-url" (dict "Values" .Values "user" "service") | quote }}
+              value: {{ include "nodalarc.nats-url" . | quote }}
             - name: NODAL_API_KEY
               valueFrom:
                 configMapKeyRef:

@@ -1,50 +1,29 @@
 {{/* NATS helpers shared by every workload template.
 
-     nodalarc.nats-messaging: the deployed-stream and authorization inventory
+     nodalarc.nats-messaging: the deployed-stream inventory
      the chart assembly rendered into files/nats-messaging.yaml from
      lib/nodalarc/nats_channels.py. Fails closed: a missing, empty,
      malformed or incomplete inventory fails the render.
 
-     nodalarc.nats-url: the one NATS URL for a workload, from its values user
-     key (credentials only under auth), the NATS Service name and the client
-     port. Every workload dials the Service, host-network workloads included:
+     nodalarc.nats-url: the one NATS URL every workload dials, from the NATS
+     Service name and the client port. Host-network workloads dial it too:
      kube-proxy answers a ClusterIP connection made from a server's own
-     network namespace. Callers pass (dict "Values" .Values "user" KEY). */}}
+     network namespace. Callers pass the root context. */}}
 {{- define "nodalarc.nats-messaging" -}}
 {{- $raw := .Files.Get "files/nats-messaging.yaml" -}}
 {{- if not $raw }}{{ fail "files/nats-messaging.yaml is missing or empty: assemble the chart through scripts/na-render-helm-chart.sh" }}{{ end -}}
 {{- $messaging := fromYaml $raw -}}
 {{- if hasKey $messaging "Error" }}{{ fail (printf "files/nats-messaging.yaml is malformed: %s" (get $messaging "Error")) }}{{ end -}}
 {{- if not $messaging.streams }}{{ fail "files/nats-messaging.yaml declares no streams" }}{{ end -}}
-{{- if not $messaging.users }}{{ fail "files/nats-messaging.yaml declares no users" }}{{ end -}}
 {{- if not (kindIs "slice" $messaging.streams) }}{{ fail "files/nats-messaging.yaml: streams must be a list" }}{{ end -}}
-{{- if not (kindIs "slice" $messaging.users) }}{{ fail "files/nats-messaging.yaml: users must be a list" }}{{ end -}}
 {{- range $messaging.streams -}}
 {{- if not (kindIs "map" .) }}{{ fail "files/nats-messaging.yaml: every stream must be a mapping" }}{{ end -}}
 {{- if or (not (kindIs "string" .name)) (not (regexMatch "^NODALARC_[A-Z]+$" (.name | toString))) }}{{ fail (printf "files/nats-messaging.yaml: stream name %v is not a NODALARC_* name" .name) }}{{ end -}}
 {{- if or (not (kindIs "string" .subjects)) (not (regexMatch "^nodalarc\\.[a-z_]+\\.>$" (.subjects | toString))) }}{{ fail (printf "files/nats-messaging.yaml: stream %s subject pattern %v is not a root wildcard" .name .subjects) }}{{ end -}}
 {{- end -}}
-{{- range $messaging.users -}}
-{{- if not (kindIs "map" .) }}{{ fail "files/nats-messaging.yaml: every user must be a mapping" }}{{ end -}}
-{{- if or (not (kindIs "string" .key)) (not (regexMatch "^[a-zA-Z]+$" (.key | toString))) }}{{ fail (printf "files/nats-messaging.yaml: user key %v is not a letters-only key" .key) }}{{ end -}}
-{{- $user := . -}}
-{{- range $list := list "publish" "subscribe" -}}
-{{- $patterns := index $user $list -}}
-{{- if not (kindIs "slice" $patterns) }}{{ fail (printf "files/nats-messaging.yaml: user %s %s must be a list" $user.key $list) }}{{ end -}}
-{{- range $patterns -}}
-{{- if or (not (kindIs "string" .)) (not (regexMatch "^(\\$?[A-Za-z0-9_-]+|\\*)(\\.(\\$?[A-Za-z0-9_-]+|\\*))*(\\.>)?$" (. | toString))) }}{{ fail (printf "files/nats-messaging.yaml: user %s %s entry %v is not a subject pattern" $user.key $list .) }}{{ end -}}
-{{- end -}}
-{{- end -}}
-{{- end -}}
 {{- $raw -}}
 {{- end -}}
 
 {{- define "nodalarc.nats-url" -}}
-{{- $host := "nodalarc-nats" -}}
-{{- if .Values.nats.auth.enabled -}}
-{{- $account := index .Values.nats.auth.users .user | required (printf "nats.auth.users.%s is required" .user) -}}
-nats://{{ $account.username }}:{{ $account.password }}@{{ $host }}:{{ .Values.nats.clientPort }}
-{{- else -}}
-nats://{{ $host }}:{{ .Values.nats.clientPort }}
-{{- end -}}
+nats://nodalarc-nats:{{ .Values.nats.clientPort }}
 {{- end -}}

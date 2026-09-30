@@ -49,7 +49,7 @@ spec:
                 fieldRef:
                   fieldPath: metadata.namespace
             - name: NODALARC_NATS_URL
-              value: {{ include "nodalarc.nats-url" (dict "Values" .Values "user" "scheduler") | quote }}
+              value: {{ include "nodalarc.nats-url" . | quote }}
           args:
             - "--session"
             - "/etc/nodalarc/session-config/session.yaml"

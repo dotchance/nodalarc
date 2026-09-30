@@ -9,8 +9,7 @@ Every subject starts with one of the declared roots, and every builder
 computes from its root at call time. Session-scoped subjects come from the
 function builders (e.g. ``ome_visibility_subject(session_id)``); the few
 session-independent request/reply subjects are constants. The stream table
-and the user table are the deployed-stream and authorization inventories
-the chart renders from.
+is the deployed-stream inventory the chart renders from.
 """
 
 from __future__ import annotations
@@ -89,72 +88,6 @@ STREAMS: tuple[StreamSpec, ...] = (
     StreamSpec(STREAM_SESSION_EVENTS, f"{ROOT_SESSION}.>"),
     StreamSpec(STREAM_OPS_EVENTS, f"{ROOT_OPS}.>"),
     StreamSpec(STREAM_DEBUG_EVENTS, f"{ROOT_DEBUG}.>"),
-)
-
-
-class NatsUser(NamedTuple):
-    """One NATS account the chart provisions: its values key and the patterns it may use."""
-
-    key: str
-    publish: tuple[str, ...]
-    subscribe: tuple[str, ...]
-
-
-_JETSTREAM_API = "$JS.API.>"
-_INBOX = "_INBOX.>"
-_EVERYTHING = "nodalarc.>"
-
-# The authorization policy the chart renders when NATS auth is enabled,
-# reproduced as it stands today, gaps included: the node-agent user is not
-# granted the debug root it publishes to nor the debug-control subject it
-# subscribes to (an auth finding, deferred; nats.auth is a support decision).
-NATS_USERS: tuple[NatsUser, ...] = (
-    NatsUser("admin", (_JETSTREAM_API, _INBOX, _EVERYTHING), (_JETSTREAM_API, _INBOX, _EVERYTHING)),
-    NatsUser(
-        "scheduler",
-        (_JETSTREAM_API, _INBOX, f"{ROOT_AGENT}.*", f"{ROOT_LINKS}.>", f"{ROOT_OPS}.>"),
-        (
-            _JETSTREAM_API,
-            _INBOX,
-            f"{ROOT_OME}.>",
-            f"{ROOT_SESSION}.>",
-            f"{ROOT_LINKS}.>",
-            f"{ROOT_SCHEDULER}.>",
-        ),
-    ),
-    NatsUser(
-        "nodeAgent",
-        (_INBOX, f"{ROOT_AGENT}.progress.*", f"{ROOT_LINKS}.*.substrate", f"{ROOT_OPS}.>"),
-        (f"{ROOT_AGENT}.*",),
-    ),
-    NatsUser(
-        "service",
-        (
-            _JETSTREAM_API,
-            _INBOX,
-            f"{ROOT_OME}.>",
-            f"{ROOT_OME_CONTROL}.>",
-            f"{ROOT_SCHEDULER}.>",
-            f"{ROOT_SESSION}.>",
-            f"{ROOT_MI}.>",
-            f"{ROOT_NODALPATH}.>",
-            f"{ROOT_DEBUG}.>",
-            f"{ROOT_OPS}.>",
-        ),
-        (
-            _JETSTREAM_API,
-            _INBOX,
-            f"{ROOT_OME}.>",
-            f"{ROOT_SESSION}.>",
-            f"{ROOT_LINKS}.>",
-            f"{ROOT_MI}.>",
-            f"{ROOT_NODALPATH}.>",
-            f"{ROOT_DEBUG}.>",
-            f"{ROOT_OPS}.>",
-            f"{ROOT_AGENT}.progress.*",
-            f"{ROOT_OME_CONTROL}.>",
-        ),
-    ),
 )
 
 
@@ -467,21 +400,12 @@ def nats_url() -> str:
 
 
 def messaging_inventory() -> dict[str, list[dict[str, object]]]:
-    """The deployed-stream and authorization inventories, as plain data for the chart."""
-    return {
-        "streams": [{"name": s.name, "subjects": s.subjects} for s in STREAMS],
-        "users": [
-            {"key": u.key, "publish": list(u.publish), "subscribe": list(u.subscribe)}
-            for u in NATS_USERS
-        ],
-    }
+    """The deployed-stream inventory, as plain data for the chart."""
+    return {"streams": [{"name": s.name, "subjects": s.subjects} for s in STREAMS]}
 
 
 _STREAM_NAME_RE = re.compile(r"^NODALARC_[A-Z]+$")
 _ROOT_WILDCARD_RE = re.compile(r"^nodalarc\.[a-z_]+\.>$")
-_USER_KEY_RE = re.compile(r"^[a-zA-Z]+$")
-# A subject pattern: dot-separated non-empty tokens, `*` only as a whole token, `>` only last.
-_SUBJECT_PATTERN_RE = re.compile(r"^(\$?[A-Za-z0-9_-]+|\*)(\.(\$?[A-Za-z0-9_-]+|\*))*(\.>)?$")
 
 
 class MessagingInventoryError(ValueError):
@@ -496,11 +420,8 @@ def validate_messaging_inventory(inventory: dict[str, list[dict[str, object]]]) 
     for that refusal.
     """
     streams = inventory.get("streams")
-    users = inventory.get("users")
     if not isinstance(streams, list) or not streams:
         raise MessagingInventoryError("streams must be a non-empty list")
-    if not isinstance(users, list) or not users:
-        raise MessagingInventoryError("users must be a non-empty list")
     for stream in streams:
         if not isinstance(stream, dict):
             raise MessagingInventoryError("every stream must be a mapping")
@@ -511,21 +432,7 @@ def validate_messaging_inventory(inventory: dict[str, list[dict[str, object]]]) 
             raise MessagingInventoryError(
                 f"stream {name} subject pattern {subjects!r} is not a root wildcard"
             )
-    for user in users:
-        if not isinstance(user, dict):
-            raise MessagingInventoryError("every user must be a mapping")
-        key = user.get("key")
-        if not isinstance(key, str) or not _USER_KEY_RE.fullmatch(key):
-            raise MessagingInventoryError(f"user key {key!r} is not a values key")
-        for field in ("publish", "subscribe"):
-            patterns = user.get(field)
-            if not isinstance(patterns, list):
-                raise MessagingInventoryError(f"user {key} {field} must be a list")
-            for pattern in patterns:
-                if not isinstance(pattern, str) or not _SUBJECT_PATTERN_RE.fullmatch(pattern):
-                    raise MessagingInventoryError(
-                        f"user {key} {field} entry {pattern!r} is not a subject pattern"
-                    )
+
 
 
 def render_messaging_inventory() -> str:
@@ -548,7 +455,7 @@ def _main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--render-messaging",
         action="store_true",
-        help="write the streams and users inventory as YAML to stdout",
+        help="write the stream inventory as YAML to stdout",
     )
     args = parser.parse_args(argv)
     if not args.render_messaging:

@@ -606,7 +606,7 @@ def test_every_workload_dials_the_nats_service() -> None:
     assert "hostNetwork" not in helpers
     assert "hostNetwork" not in nats_init
     assert 'include "nodalarc.nats-wait-init" .' in node_agent
-    assert '"user" "nodeAgent")' in node_agent
+    assert 'include "nodalarc.nats-url" .' in node_agent
     for template in templates.glob("*.yaml"):
         assert '"hostNetwork"' not in template.read_text(), template.name
 

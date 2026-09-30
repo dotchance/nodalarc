@@ -59,7 +59,7 @@ spec:
 {{- end }}
 {{- if or (not (kindIs "string" $entry.maxAge)) (not (regexMatch "^([0-9]+(ns|us|ms|s|m|h))+$" ($entry.maxAge | toString))) }}{{ fail (printf "nats.streamRetention.%s.maxAge must be a duration such as 3h12m, got %v" $name $entry.maxAge) }}{{ end }}
 {{- end }}
-              NATS_URL={{ include "nodalarc.nats-url" (dict "Values" .Values "user" "admin") | quote }}
+              NATS_URL={{ include "nodalarc.nats-url" . | quote }}
               until nats server check connection -s "$NATS_URL" 2>/dev/null; do
                 sleep 0.25
               done
@@ -96,7 +96,7 @@ spec:
                 fieldRef:
                   fieldPath: metadata.namespace
             - name: NODALARC_NATS_URL
-              value: {{ include "nodalarc.nats-url" (dict "Values" .Values "user" "service") | quote }}
+              value: {{ include "nodalarc.nats-url" . | quote }}
           args:
             - "--continuous"
             - "--platform-config"

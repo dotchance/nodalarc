@@ -1,0 +1,19 @@
+# The build context of every image built from the repository root. Nothing
+# reaches an image unless it is admitted here: everything is excluded, then
+# the directories and files the Dockerfiles copy are let back in.
+*
+!lib
+!adapters
+!catalog
+!configs
+!services
+!build/runtime-constraints.txt
+!docs/ops/configuration-grammar.md
+
+# Inside the admitted directories, files that describe or build the code and
+# are not needed to run it.
+**/__pycache__
+**/*.pyc
+**/README.md
+**/Dockerfile
+**/*.proto

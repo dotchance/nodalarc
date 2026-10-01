@@ -1,0 +1,47 @@
+name: Build
+
+# Builds every NodalArc image from a clean checkout and refuses an image that
+# carries files it does not need to run. It publishes nothing.
+on:
+  push:
+    tags:
+      - "nodalarc-*"
+    branches:
+      - "image-build/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  images:
+    name: Images
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          # The version comes from the nearest release tag.
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Build images
+        run: make build
+
+      - name: List built images
+        run: docker images --format '{{.Repository}}:{{.Tag}}  {{.Size}}' | grep '^nodalarc/' | sort
+
+      - name: Refuse files an image does not need to run
+        run: bash scripts/na-image-contents.sh

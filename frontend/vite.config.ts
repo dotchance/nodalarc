@@ -34,7 +34,7 @@ export default defineConfig(({ command }) => {
     },
     build: {
       outDir: "dist",
-      sourcemap: true,
+      sourcemap: false,
     },
     test: {
       environment: "jsdom",

@@ -318,7 +318,11 @@ def test_cluster_builder_carries_the_node_agents_minimums() -> None:
     assert '-lt "$needed_mtu"' in script
     assert "config.yaml.d/60-nodalarc.yaml" in script
     assert '/etc/rancher/k3s/config.yaml"' not in script.replace("config.yaml.d", "")
-    assert "get.k3s.io" in script
+    (installer_url,) = [
+        line for line in script.splitlines() if line.startswith("K3S_INSTALLER_URL=")
+    ]
+    assert installer_url == 'K3S_INSTALLER_URL="https://get.k3s.io"'
+    assert script.count('curl -sfL "$K3S_INSTALLER_URL"') == 2
     assert "modprobe" not in script and "sysctl -w" not in script
 
 

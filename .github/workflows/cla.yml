@@ -107,7 +107,9 @@ jobs:
           required_users = sorted(
               user
               for user in commit_users
-              if not any(fnmatch.fnmatchcase(user, pattern) for pattern in allowlist)
+              if not any(
+                  user == pattern or fnmatch.fnmatchcase(user, pattern) for pattern in allowlist
+              )
           )
 
           comments = list(request_pages(f"/issues/{pr_number}/comments"))

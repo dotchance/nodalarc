@@ -313,11 +313,11 @@ def test_cluster_builder_carries_the_node_agents_minimums() -> None:
     assert f"MIN_INOTIFY_INSTANCES={MIN_INOTIFY_INSTANCES}\n" in script
     assert f"MIN_INOTIFY_WATCHES={MIN_INOTIFY_WATCHES}\n" in script
     assert "MAX_PODS=1000" in script
-    assert 'registry-qps=0' in script
+    assert "registry-qps=0" in script
     assert '-lt "$MIN_INOTIFY_INSTANCES"' in script and '-lt "$MIN_INOTIFY_WATCHES"' in script
     assert '-lt "$needed_mtu"' in script
     assert "config.yaml.d/60-nodalarc.yaml" in script
-    assert "/etc/rancher/k3s/config.yaml\"" not in script.replace("config.yaml.d", "")
+    assert '/etc/rancher/k3s/config.yaml"' not in script.replace("config.yaml.d", "")
     assert "get.k3s.io" in script
     assert "modprobe" not in script and "sysctl -w" not in script
 
@@ -1131,9 +1131,7 @@ _THREE_CLEAN = {
 
 
 def test_teardown_verifies_every_server_with_an_agent_then_uninstalls(tmp_path: Path) -> None:
-    result, helm_calls = _teardown_run(
-        tmp_path, agents=_THREE_AGENTS, reports=_THREE_CLEAN
-    )
+    result, helm_calls = _teardown_run(tmp_path, agents=_THREE_AGENTS, reports=_THREE_CLEAN)
 
     assert result.returncode == 0, result.stderr
     for host in _THREE_AGENTS:
@@ -1209,7 +1207,10 @@ def test_teardown_refuses_when_the_host_inventory_cannot_be_read(tmp_path: Path)
     )
 
     assert result.returncode == 1
-    assert "could not list the Node Agent pods; remote host cleanup cannot be verified" in result.stderr
+    assert (
+        "could not list the Node Agent pods; remote host cleanup cannot be verified"
+        in result.stderr
+    )
     assert "host cleanup unverified on:<node agent pods unreadable>" in result.stderr
     assert not helm_calls.exists()
 

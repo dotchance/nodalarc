@@ -371,5 +371,3 @@ def test_checked_in_retention_passes_the_initializer_field_rules():
         for field in integer_fields:
             value = entry[field]
             assert isinstance(value, int) and not isinstance(value, bool), (name, field, value)
-
-

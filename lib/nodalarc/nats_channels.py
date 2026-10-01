@@ -434,7 +434,6 @@ def validate_messaging_inventory(inventory: dict[str, list[dict[str, object]]]) 
             )
 
 
-
 def render_messaging_inventory() -> str:
     """The chart's ``files/nats-messaging.yaml``; ``scripts/na-render-helm-chart.sh`` writes it."""
     import yaml

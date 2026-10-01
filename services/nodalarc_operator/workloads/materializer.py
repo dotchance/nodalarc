@@ -20,7 +20,6 @@ from dataclasses import dataclass, field
 from typing import Literal
 
 import kubernetes.client
-from pydantic import BaseModel, ConfigDict, Field, model_validator
 from nodalarc.substrate.manifest_contract import (
     POD_OWNER_UID_LABEL,
     POD_SESSION_RUN_LABEL,
@@ -35,6 +34,7 @@ from nodalarc.workload_target import (
     PRIMARY_CONTAINER_ANNOTATION,
     TERMINAL_ACCESS_ANNOTATION,
 )
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 SESSION_LABEL = "nodalarc.io/session"
 ROLE_LABEL = "nodalarc.io/role"

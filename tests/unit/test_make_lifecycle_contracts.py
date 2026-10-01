@@ -563,7 +563,10 @@ def test_placement_values_replace_the_node_label() -> None:
     assert "{{- with .Values.placement.tolerations }}" in node_agent
     assert "nodalarc.io/node-agent" not in node_agent
     assert "operator: Exists" not in node_agent
-    assert 'required "placement.tolerations is required" .Values.placement.tolerations | toJson' in operator
+    assert (
+        'required "placement.tolerations is required" .Values.placement.tolerations | toJson'
+        in operator
+    )
     for script in (teardown, session, installer):
         assert "nodalarc.io/node-agent" not in script
     assert "-l app=nodalarc-node-agent" in teardown and "-l app=nodalarc-node-agent" in session

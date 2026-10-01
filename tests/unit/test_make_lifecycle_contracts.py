@@ -355,6 +355,34 @@ def test_dockerfiles_have_oci_attribution_labels() -> None:
             assert expected in text, f"{rel} missing {expected}"
 
 
+def test_every_built_image_gets_an_sbom_of_every_layer() -> None:
+    """Each image build target hands its image to scripts/na-image-sbom.sh, which
+    scans every layer with a scanner pinned by digest and adds the SPDX document
+    as a last layer. No Dockerfile names the scanner."""
+    script = (ROOT / "scripts/na-image-sbom.sh").read_text()
+    assert re.search(
+        r"^SYFT_IMAGE='ghcr\.io/anchore/syft:v[0-9.]+@sha256:[0-9a-f]{64}'$", script, re.M
+    )
+    assert "--scope all-layers" in script
+    assert "SBOM_PATH='/nodalarc/sbom.spdx.json'" in script
+    for name in (
+        "base",
+        "frr",
+        "probe",
+        "ome",
+        "scheduler",
+        "node-agent",
+        "vs-api",
+        "operator",
+        "measurement",
+        "vf",
+    ):
+        body = _target_body(f"build-{name}")
+        assert f'scripts/na-image-sbom.sh {name} "$(call IMAGE_REF,{name})"' in body, name
+    for rel in DOCKERFILES:
+        assert "syft" not in (ROOT / rel).read_text().lower(), rel
+
+
 def test_runtime_images_include_exact_catalog_loader_files() -> None:
     dockerfiles = {
         name: (ROOT / f"services/{name}/Dockerfile").read_text()

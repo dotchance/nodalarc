@@ -44,6 +44,10 @@ ENV NODALARC_VERSION=${PROJECT_VERSION} \
 RUN rm /etc/nginx/conf.d/default.conf
 COPY nginx.conf /etc/nginx/conf.d/nodalarc.conf
 COPY --from=build /app/dist /usr/share/nginx/html
+# The lockfile of the bundle above. The bundle is compiled, so no package
+# record survives in it; the lockfile is the record of what the bundle was
+# built from, and the image's SBOM lists the lockfile's runtime packages.
+COPY --from=build /app/package-lock.json /nodalarc/frontend/package-lock.json
 COPY docker-entrypoint.sh /docker-entrypoint.sh
 RUN chmod +x /docker-entrypoint.sh
 EXPOSE 80

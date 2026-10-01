@@ -230,33 +230,43 @@ build-base-images: build-base build-frr build-probe ## Build infrastructure imag
 
 build-base:
 	docker build $(DOCKER_BUILD_METADATA_ARGS) -t "$(call IMAGE_REF,base)" -t "$(call IMAGE_REF_TAG,base,latest)" images/base/
+	@bash scripts/na-image-sbom.sh base "$(call IMAGE_REF,base)" "$(call IMAGE_REF_TAG,base,latest)"
 
 build-frr: ## Build FRR image (official FRR base + our entrypoint)
 	docker build $(DOCKER_BUILD_METADATA_ARGS) -t "$(call IMAGE_REF,frr)" -t "$(call IMAGE_REF_TAG,frr,latest)" -t "$(call IMAGE_REF_TAG,frr,10)" images/frr/
+	@bash scripts/na-image-sbom.sh frr "$(call IMAGE_REF,frr)" "$(call IMAGE_REF_TAG,frr,latest)" "$(call IMAGE_REF_TAG,frr,10)"
 
 build-probe: _runtime-constraints
 	docker build $(DOCKER_BUILD_METADATA_ARGS) -t "$(call IMAGE_REF,probe)" -t "$(call IMAGE_REF_TAG,probe,latest)" -f images/probe/Dockerfile .
+	@bash scripts/na-image-sbom.sh probe "$(call IMAGE_REF,probe)" "$(call IMAGE_REF_TAG,probe,latest)"
 
 build-ome: _runtime-constraints ## Build OME image
 	docker build $(DOCKER_BUILD_METADATA_ARGS) -f services/ome/Dockerfile -t "$(call IMAGE_REF,ome)" -t "$(call IMAGE_REF_TAG,ome,latest)" .
+	@bash scripts/na-image-sbom.sh ome "$(call IMAGE_REF,ome)" "$(call IMAGE_REF_TAG,ome,latest)"
 
 build-scheduler: _runtime-constraints ## Build Scheduler image
 	docker build $(DOCKER_BUILD_METADATA_ARGS) -f services/scheduler/Dockerfile -t "$(call IMAGE_REF,scheduler)" -t "$(call IMAGE_REF_TAG,scheduler,latest)" .
+	@bash scripts/na-image-sbom.sh scheduler "$(call IMAGE_REF,scheduler)" "$(call IMAGE_REF_TAG,scheduler,latest)"
 
 build-node-agent: _runtime-constraints ## Build Node Agent image
 	docker build $(DOCKER_BUILD_METADATA_ARGS) -f services/node_agent/Dockerfile -t "$(call IMAGE_REF,node-agent)" -t "$(call IMAGE_REF_TAG,node-agent,latest)" .
+	@bash scripts/na-image-sbom.sh node-agent "$(call IMAGE_REF,node-agent)" "$(call IMAGE_REF_TAG,node-agent,latest)"
 
 build-vs-api: _runtime-constraints ## Build VS-API image
 	docker build $(DOCKER_BUILD_METADATA_ARGS) -f services/vs_api/Dockerfile -t "$(call IMAGE_REF,vs-api)" -t "$(call IMAGE_REF_TAG,vs-api,latest)" .
+	@bash scripts/na-image-sbom.sh vs-api "$(call IMAGE_REF,vs-api)" "$(call IMAGE_REF_TAG,vs-api,latest)"
 
 build-operator: _runtime-constraints ## Build Operator image
 	docker build $(DOCKER_BUILD_METADATA_ARGS) -f services/nodalarc_operator/Dockerfile -t "$(call IMAGE_REF,operator)" -t "$(call IMAGE_REF_TAG,operator,latest)" .
+	@bash scripts/na-image-sbom.sh operator "$(call IMAGE_REF,operator)" "$(call IMAGE_REF_TAG,operator,latest)"
 
 build-measurement: _runtime-constraints ## Build MI (Measurement) image
 	docker build $(DOCKER_BUILD_METADATA_ARGS) -f services/measurement/Dockerfile -t "$(call IMAGE_REF,measurement)" -t "$(call IMAGE_REF_TAG,measurement,latest)" .
+	@bash scripts/na-image-sbom.sh measurement "$(call IMAGE_REF,measurement)" "$(call IMAGE_REF_TAG,measurement,latest)"
 
 build-vf: ## Build VF (visualization) image (compiles the frontend in its build stage)
 	docker build $(DOCKER_BUILD_METADATA_ARGS) --build-arg BUILD_HASH=$(GIT_SHA) -t "$(call IMAGE_REF,vf)" -t "$(call IMAGE_REF_TAG,vf,latest)" frontend/
+	@bash scripts/na-image-sbom.sh vf "$(call IMAGE_REF,vf)" "$(call IMAGE_REF_TAG,vf,latest)"
 
 # ---------------------------------------------------------------------------
 # Image transport

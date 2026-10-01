@@ -1,13 +1,10 @@
 name: Build
 
 # Builds every NodalArc image from a clean checkout and refuses an image that
-# carries files it does not need to run. It publishes nothing.
+# carries files it does not need to run. It publishes nothing, and it runs
+# only when someone starts it: from the Actions page (Build, Run workflow) or
+# with `gh workflow run build.yml --ref <branch or tag>`.
 on:
-  push:
-    tags:
-      - "nodalarc-*"
-    branches:
-      - "image-build/**"
   workflow_dispatch:
 
 permissions:

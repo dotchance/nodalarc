@@ -1,0 +1,1340 @@
+{
+  "draft": {
+    "applied_revision": 0,
+    "applied_session": {
+      "link_rules": [
+        {
+          "enabled": true,
+          "endpoints": [
+            {
+              "min_elevation_deg": 5.0,
+              "select": {
+                "all": [
+                  {
+                    "segment": "ground"
+                  },
+                  {
+                    "tag": "geo"
+                  }
+                ]
+              },
+              "terminal": {
+                "all": [
+                  {
+                    "role": "access"
+                  },
+                  {
+                    "medium": "rf"
+                  },
+                  {
+                    "mount": "access_ka"
+                  }
+                ]
+              }
+            },
+            {
+              "select": {
+                "segment": "geo"
+              },
+              "terminal": {
+                "all": [
+                  {
+                    "role": "access"
+                  },
+                  {
+                    "medium": "rf"
+                  },
+                  {
+                    "mount": "access_ka"
+                  }
+                ]
+              }
+            }
+          ],
+          "id": "geo_access",
+          "topology": {
+            "mode": "visible_candidates"
+          }
+        },
+        {
+          "enabled": true,
+          "endpoints": [
+            {
+              "select": {
+                "segment": "geo"
+              },
+              "terminal": {
+                "all": [
+                  {
+                    "role": "isl"
+                  },
+                  {
+                    "medium": "optical"
+                  }
+                ]
+              }
+            },
+            {
+              "select": {
+                "segment": "geo"
+              },
+              "terminal": {
+                "all": [
+                  {
+                    "role": "isl"
+                  },
+                  {
+                    "medium": "optical"
+                  }
+                ]
+              }
+            }
+          ],
+          "id": "geo_isl",
+          "topology": {
+            "mode": "nearest_n",
+            "n": 2
+          }
+        }
+      ],
+      "segments": [
+        {
+          "id": "geo",
+          "source": "nodalarc:space-node-sets/earth/geo/earth-geo-inmarsat-4.yaml"
+        },
+        {
+          "apply": {
+            "scheduling": {
+              "bbm_acquire_timeout_ticks": 1,
+              "cross_tenant_displacement": "off",
+              "handover_concurrency": "one_at_a_time",
+              "handover_mode": "bbm",
+              "handover_policy": {
+                "hard_release": {}
+              },
+              "mbb_overlap_ticks": 0,
+              "mbb_preemption": "off",
+              "mbb_reserve": 0,
+              "ranking_order": [
+                "service_priority",
+                "selection_score",
+                "satellite_ground_terminal_capacity",
+                "lex_pair"
+              ],
+              "selection_policy": {
+                "longest_remaining_pass": {
+                  "lookahead_horizon_ticks": 720
+                }
+              },
+              "successor_abort_policy": "hard_release"
+            }
+          },
+          "id": "ground",
+          "placement": {
+            "from_site_set": "nodalarc:site-sets/earth/geo/earth-geo-gateway-sites.yaml"
+          }
+        }
+      ],
+      "session": {
+        "description": "Explicit GEO INMARSAT slot set with GEO gateway sites.",
+        "display_name": "Earth GEO Inmarsat slots",
+        "name": "earth-geo-inmarsat"
+      },
+      "simulation": {
+        "acknowledge_geometry_only": false,
+        "candidate_limits": {
+          "max_pairs_per_rule": 500,
+          "max_pairs_per_tick": 2000
+        },
+        "ground_link_model": "terminal_physics"
+      },
+      "time": {
+        "compression": 1.0,
+        "start_time": "2026-06-08T00:00:00Z",
+        "step_seconds": 10.0
+      }
+    },
+    "applied_workspace": {
+      "boundaries": [],
+      "compression": 1.0,
+      "description": "Explicit GEO INMARSAT slot set with GEO gateway sites.",
+      "display_name": "Earth GEO Inmarsat slots",
+      "ground": [],
+      "ground_refs": [
+        {
+          "label": "GEO gateway sites",
+          "scheduling": {
+            "bbm_acquire_timeout_ticks": 1,
+            "cross_tenant_displacement": "off",
+            "handover_concurrency": "one_at_a_time",
+            "handover_mode": "bbm",
+            "handover_policy": {
+              "hard_release": {}
+            },
+            "mbb_overlap_ticks": 0,
+            "mbb_preemption": "off",
+            "mbb_reserve": 0,
+            "ranking_order": [
+              "service_priority",
+              "selection_score",
+              "satellite_ground_terminal_capacity",
+              "lex_pair"
+            ],
+            "selection_policy": {
+              "longest_remaining_pass": {
+                "lookahead_horizon_ticks": 720
+              }
+            },
+            "successor_abort_policy": "hard_release"
+          },
+          "segment_id": "ground",
+          "site_set_ref": "nodalarc:site-sets/earth/geo/earth-geo-gateway-sites.yaml"
+        }
+      ],
+      "links": [
+        {
+          "a": {
+            "medium": "optical",
+            "min_elevation_deg": null,
+            "role": "isl",
+            "segment_id": "geo",
+            "tag": null
+          },
+          "b": {
+            "medium": "optical",
+            "min_elevation_deg": null,
+            "role": "isl",
+            "segment_id": "geo",
+            "tag": null
+          },
+          "enabled": true,
+          "label": "geo_isl",
+          "max_range_km": null,
+          "rule_id": "geo_isl",
+          "topology_mode": "nearest_n",
+          "topology_n": 2
+        }
+      ],
+      "max_pairs_per_rule": 500,
+      "max_pairs_per_tick": 2000,
+      "projection_revision": 0,
+      "routing_domains": [],
+      "session_name": "earth-geo-inmarsat",
+      "space": [],
+      "space_refs": [
+        {
+          "label": "earth-geo-inmarsat-4",
+          "segment_id": "geo",
+          "source_ref": "nodalarc:space-node-sets/earth/geo/earth-geo-inmarsat-4.yaml"
+        }
+      ],
+      "start_time": "2026-06-08T00:00:00Z",
+      "step_seconds": 10.0
+    },
+    "authoring_workspace": {
+      "boundaries": [],
+      "compression": 1.0,
+      "description": "Explicit GEO INMARSAT slot set with GEO gateway sites.",
+      "display_name": "Earth GEO Inmarsat slots",
+      "ground": [],
+      "ground_refs": [
+        {
+          "label": "GEO gateway sites",
+          "scheduling": {
+            "bbm_acquire_timeout_ticks": 1,
+            "cross_tenant_displacement": "off",
+            "handover_concurrency": "one_at_a_time",
+            "handover_mode": "bbm",
+            "handover_policy": {
+              "hard_release": {}
+            },
+            "mbb_overlap_ticks": 0,
+            "mbb_preemption": "off",
+            "mbb_reserve": 0,
+            "ranking_order": [
+              "service_priority",
+              "selection_score",
+              "satellite_ground_terminal_capacity",
+              "lex_pair"
+            ],
+            "selection_policy": {
+              "longest_remaining_pass": {
+                "lookahead_horizon_ticks": 720
+              }
+            },
+            "successor_abort_policy": "hard_release"
+          },
+          "segment_id": "ground",
+          "site_set_ref": "nodalarc:site-sets/earth/geo/earth-geo-gateway-sites.yaml"
+        }
+      ],
+      "links": [
+        {
+          "a": {
+            "medium": "optical",
+            "min_elevation_deg": null,
+            "role": "isl",
+            "segment_id": "geo",
+            "tag": null
+          },
+          "b": {
+            "medium": "optical",
+            "min_elevation_deg": null,
+            "role": "isl",
+            "segment_id": "geo",
+            "tag": null
+          },
+          "enabled": true,
+          "label": "geo_isl",
+          "max_range_km": null,
+          "rule_id": "geo_isl",
+          "topology_mode": "nearest_n",
+          "topology_n": 2
+        }
+      ],
+      "max_pairs_per_rule": 500,
+      "max_pairs_per_tick": 2000,
+      "projection_revision": 0,
+      "routing_domains": [],
+      "session_name": "earth-geo-inmarsat",
+      "space": [],
+      "space_refs": [
+        {
+          "label": "earth-geo-inmarsat-4",
+          "segment_id": "geo",
+          "source_ref": "nodalarc:space-node-sets/earth/geo/earth-geo-inmarsat-4.yaml"
+        }
+      ],
+      "start_time": "2026-06-08T00:00:00Z",
+      "step_seconds": 10.0
+    },
+    "catalog_documents": [],
+    "contract_version": 2,
+    "draft_revision": 0,
+    "expected_session_revision": null,
+    "projection_status": "applied",
+    "reserved_authoring_ids": [
+      "geo",
+      "ground",
+      "geo_isl"
+    ],
+    "session_name_is_placeholder": false,
+    "session_yaml": "session:\n  name: earth-geo-inmarsat\n  display_name: Earth GEO Inmarsat slots\n  description: Explicit GEO INMARSAT slot set with GEO gateway sites.\nsegments:\n- id: geo\n  source: nodalarc:space-node-sets/earth/geo/earth-geo-inmarsat-4.yaml\n- id: ground\n  placement:\n    from_site_set: nodalarc:site-sets/earth/geo/earth-geo-gateway-sites.yaml\n  apply:\n    scheduling:\n      selection_policy:\n        longest_remaining_pass:\n          lookahead_horizon_ticks: 720\n      handover_policy:\n        hard_release: {}\n      handover_mode: bbm\n      mbb_overlap_ticks: 0\n      mbb_reserve: 0\n      handover_concurrency: one_at_a_time\n      ranking_order:\n      - service_priority\n      - selection_score\n      - satellite_ground_terminal_capacity\n      - lex_pair\n      mbb_preemption: 'off'\n      successor_abort_policy: hard_release\n      cross_tenant_displacement: 'off'\n      bbm_acquire_timeout_ticks: 1\nlink_rules:\n- id: geo_access\n  topology:\n    mode: visible_candidates\n  endpoints:\n  - select:\n      all:\n      - segment: ground\n      - tag: geo\n    terminal:\n      all:\n      - role: access\n      - medium: rf\n      - mount: access_ka\n    min_elevation_deg: 5\n  - select:\n      segment: geo\n    terminal:\n      all:\n      - role: access\n      - medium: rf\n      - mount: access_ka\n- id: geo_isl\n  topology:\n    mode: nearest_n\n    n: 2\n  endpoints:\n  - select:\n      segment: geo\n    terminal:\n      all:\n      - role: isl\n      - medium: optical\n  - select:\n      segment: geo\n    terminal:\n      all:\n      - role: isl\n      - medium: optical\nsimulation:\n  candidate_limits:\n    max_pairs_per_rule: 500\n    max_pairs_per_tick: 2000\n# Deliberate 10 s tick: GEO-only session, near-stationary geometry \u2014\n# finer steps add cost without adding fidelity. The system default is 1.\ntime:\n  start_time: '2026-06-08T00:00:00Z'\n  step_seconds: 10\n  compression: 1\n",
+    "source_ref": "nodalarc:sessions/earth-geo-inmarsat.yaml",
+    "target_ref": "user:sessions/earth-geo-inmarsat.yaml"
+  },
+  "issues": [],
+  "source_ref": "nodalarc:sessions/earth-geo-inmarsat.yaml",
+  "world": {
+    "link_rules": [
+      {
+        "enabled": true,
+        "endpoints": [
+          {
+            "min_elevation_deg": 5.0,
+            "node_ids": [
+              "earth-it-fucino-gw1",
+              "earth-us-ca-goldstone-gw1",
+              "earth-jp-yamaguchi-gw1"
+            ],
+            "segment_id": "ground",
+            "terminal_medium": "rf",
+            "terminal_role": "access"
+          },
+          {
+            "min_elevation_deg": null,
+            "node_ids": [
+              "geo-inmarsat-098w",
+              "geo-inmarsat-054w",
+              "geo-inmarsat-025e",
+              "geo-inmarsat-143e"
+            ],
+            "segment_id": "geo",
+            "terminal_medium": "rf",
+            "terminal_role": "access"
+          }
+        ],
+        "explicit_pairs": [],
+        "kind": "access",
+        "max_range_km": null,
+        "rule_id": "geo_access",
+        "topology_mode": "visible_candidates",
+        "topology_n": null
+      },
+      {
+        "enabled": true,
+        "endpoints": [
+          {
+            "min_elevation_deg": null,
+            "node_ids": [
+              "geo-inmarsat-098w",
+              "geo-inmarsat-054w",
+              "geo-inmarsat-025e",
+              "geo-inmarsat-143e"
+            ],
+            "segment_id": "geo",
+            "terminal_medium": "optical",
+            "terminal_role": "isl"
+          },
+          {
+            "min_elevation_deg": null,
+            "node_ids": [
+              "geo-inmarsat-098w",
+              "geo-inmarsat-054w",
+              "geo-inmarsat-025e",
+              "geo-inmarsat-143e"
+            ],
+            "segment_id": "geo",
+            "terminal_medium": "optical",
+            "terminal_role": "isl"
+          }
+        ],
+        "explicit_pairs": [],
+        "kind": "isl",
+        "max_range_km": null,
+        "rule_id": "geo_isl",
+        "topology_mode": "nearest_n",
+        "topology_n": 2
+      }
+    ],
+    "nodes": [
+      {
+        "epoch_position": {
+          "alt_km": 35786.0,
+          "lat_deg": -0.0,
+          "lon_deg": 5.606856679543821,
+          "vel_x_km_s": -3.469139648881736e-07,
+          "vel_y_km_s": 3.5337478365704555e-06,
+          "vel_z_km_s": 0.0
+        },
+        "forwarding": "routed",
+        "interfaces": {
+          "ethernet": {},
+          "lo0": {
+            "ipv4": "100.64.0.5/32",
+            "ipv6": null
+          }
+        },
+        "kind": "satellite",
+        "local_node_id": "inmarsat-098w",
+        "namespace": "geo",
+        "node_id": "geo-inmarsat-098w",
+        "originated_prefixes": null,
+        "plane": null,
+        "role": "router",
+        "routing_instances": [
+          {
+            "area_border": false,
+            "areas": [
+              "49.0001"
+            ],
+            "as_boundary": false,
+            "domain_id": "default_domain",
+            "interfaces": [
+              {
+                "area_id": null,
+                "name": "gnd0"
+              },
+              {
+                "area_id": null,
+                "name": "isl0"
+              },
+              {
+                "area_id": null,
+                "name": "isl1"
+              }
+            ],
+            "protocol": "isis"
+          }
+        ],
+        "segment_id": "geo",
+        "slot": null,
+        "surface_position": null,
+        "tags": [],
+        "terminal_inventory": [
+          {
+            "boresight": {
+              "mode": "nadir",
+              "target_body": "earth"
+            },
+            "count": 1,
+            "endpoint_role": "access",
+            "field_of_regard_deg": 180.0,
+            "link_role": null,
+            "max_range_km": 42000.0,
+            "medium": "rf",
+            "min_elevation_deg": -90.0,
+            "owner_node_id": "geo-inmarsat-098w",
+            "receive_mbps": 750.0,
+            "source_ref": "nodalarc:terminals/rf/rf-ka-geo-access.yaml",
+            "source_terminal_id": "rf-ka-geo-access",
+            "terminal_id": "access_ka",
+            "tracking_capacity": 1,
+            "tracking_rate_deg_s": 0.1,
+            "transmit_mbps": 750.0
+          },
+          {
+            "boresight": null,
+            "count": 2,
+            "endpoint_role": "isl",
+            "field_of_regard_deg": 340.0,
+            "link_role": null,
+            "max_range_km": 80000.0,
+            "medium": "optical",
+            "min_elevation_deg": -80.0,
+            "owner_node_id": "geo-inmarsat-098w",
+            "receive_mbps": 2500.0,
+            "source_ref": "nodalarc:terminals/optical/optical-high-orbit-isl.yaml",
+            "source_terminal_id": "optical-high-orbit-isl",
+            "terminal_id": "isl_optical",
+            "tracking_capacity": 1,
+            "tracking_rate_deg_s": 0.5,
+            "transmit_mbps": 2500.0
+          },
+          {
+            "boresight": null,
+            "count": 4,
+            "endpoint_role": "crosslink",
+            "field_of_regard_deg": 360.0,
+            "link_role": null,
+            "max_range_km": 450000.0,
+            "medium": "optical",
+            "min_elevation_deg": -90.0,
+            "owner_node_id": "geo-inmarsat-098w",
+            "receive_mbps": 1000.0,
+            "source_ref": "nodalarc:terminals/optical/optical-cislunar-crosslink.yaml",
+            "source_terminal_id": "optical-cislunar-crosslink",
+            "terminal_id": "relay_optical",
+            "tracking_capacity": 1,
+            "tracking_rate_deg_s": 0.25,
+            "transmit_mbps": 1000.0
+          }
+        ]
+      },
+      {
+        "epoch_position": {
+          "alt_km": 35785.99999999999,
+          "lat_deg": 0.0,
+          "lon_deg": 49.60685667954383,
+          "vel_x_km_s": -2.7042965360379867e-06,
+          "vel_y_km_s": 2.300978773961404e-06,
+          "vel_z_km_s": 0.0
+        },
+        "forwarding": "routed",
+        "interfaces": {
+          "ethernet": {},
+          "lo0": {
+            "ipv4": "100.64.0.6/32",
+            "ipv6": null
+          }
+        },
+        "kind": "satellite",
+        "local_node_id": "inmarsat-054w",
+        "namespace": "geo",
+        "node_id": "geo-inmarsat-054w",
+        "originated_prefixes": null,
+        "plane": null,
+        "role": "router",
+        "routing_instances": [
+          {
+            "area_border": false,
+            "areas": [
+              "49.0001"
+            ],
+            "as_boundary": false,
+            "domain_id": "default_domain",
+            "interfaces": [
+              {
+                "area_id": null,
+                "name": "gnd0"
+              },
+              {
+                "area_id": null,
+                "name": "isl0"
+              },
+              {
+                "area_id": null,
+                "name": "isl1"
+              }
+            ],
+            "protocol": "isis"
+          }
+        ],
+        "segment_id": "geo",
+        "slot": null,
+        "surface_position": null,
+        "tags": [],
+        "terminal_inventory": [
+          {
+            "boresight": {
+              "mode": "nadir",
+              "target_body": "earth"
+            },
+            "count": 1,
+            "endpoint_role": "access",
+            "field_of_regard_deg": 180.0,
+            "link_role": null,
+            "max_range_km": 42000.0,
+            "medium": "rf",
+            "min_elevation_deg": -90.0,
+            "owner_node_id": "geo-inmarsat-054w",
+            "receive_mbps": 750.0,
+            "source_ref": "nodalarc:terminals/rf/rf-ka-geo-access.yaml",
+            "source_terminal_id": "rf-ka-geo-access",
+            "terminal_id": "access_ka",
+            "tracking_capacity": 1,
+            "tracking_rate_deg_s": 0.1,
+            "transmit_mbps": 750.0
+          },
+          {
+            "boresight": null,
+            "count": 2,
+            "endpoint_role": "isl",
+            "field_of_regard_deg": 340.0,
+            "link_role": null,
+            "max_range_km": 80000.0,
+            "medium": "optical",
+            "min_elevation_deg": -80.0,
+            "owner_node_id": "geo-inmarsat-054w",
+            "receive_mbps": 2500.0,
+            "source_ref": "nodalarc:terminals/optical/optical-high-orbit-isl.yaml",
+            "source_terminal_id": "optical-high-orbit-isl",
+            "terminal_id": "isl_optical",
+            "tracking_capacity": 1,
+            "tracking_rate_deg_s": 0.5,
+            "transmit_mbps": 2500.0
+          },
+          {
+            "boresight": null,
+            "count": 4,
+            "endpoint_role": "crosslink",
+            "field_of_regard_deg": 360.0,
+            "link_role": null,
+            "max_range_km": 450000.0,
+            "medium": "optical",
+            "min_elevation_deg": -90.0,
+            "owner_node_id": "geo-inmarsat-054w",
+            "receive_mbps": 1000.0,
+            "source_ref": "nodalarc:terminals/optical/optical-cislunar-crosslink.yaml",
+            "source_terminal_id": "optical-cislunar-crosslink",
+            "terminal_id": "relay_optical",
+            "tracking_capacity": 1,
+            "tracking_rate_deg_s": 0.25,
+            "transmit_mbps": 1000.0
+          }
+        ]
+      },
+      {
+        "epoch_position": {
+          "alt_km": 35786.0,
+          "lat_deg": 0.0,
+          "lon_deg": 128.60685667954385,
+          "vel_x_km_s": -2.7747074184958365e-06,
+          "vel_y_km_s": -2.215563543961352e-06,
+          "vel_z_km_s": 0.0
+        },
+        "forwarding": "routed",
+        "interfaces": {
+          "ethernet": {},
+          "lo0": {
+            "ipv4": "100.64.0.7/32",
+            "ipv6": null
+          }
+        },
+        "kind": "satellite",
+        "local_node_id": "inmarsat-025e",
+        "namespace": "geo",
+        "node_id": "geo-inmarsat-025e",
+        "originated_prefixes": null,
+        "plane": null,
+        "role": "router",
+        "routing_instances": [
+          {
+            "area_border": false,
+            "areas": [
+              "49.0001"
+            ],
+            "as_boundary": false,
+            "domain_id": "default_domain",
+            "interfaces": [
+              {
+                "area_id": null,
+                "name": "gnd0"
+              },
+              {
+                "area_id": null,
+                "name": "isl0"
+              },
+              {
+                "area_id": null,
+                "name": "isl1"
+              }
+            ],
+            "protocol": "isis"
+          }
+        ],
+        "segment_id": "geo",
+        "slot": null,
+        "surface_position": null,
+        "tags": [],
+        "terminal_inventory": [
+          {
+            "boresight": {
+              "mode": "nadir",
+              "target_body": "earth"
+            },
+            "count": 1,
+            "endpoint_role": "access",
+            "field_of_regard_deg": 180.0,
+            "link_role": null,
+            "max_range_km": 42000.0,
+            "medium": "rf",
+            "min_elevation_deg": -90.0,
+            "owner_node_id": "geo-inmarsat-025e",
+            "receive_mbps": 750.0,
+            "source_ref": "nodalarc:terminals/rf/rf-ka-geo-access.yaml",
+            "source_terminal_id": "rf-ka-geo-access",
+            "terminal_id": "access_ka",
+            "tracking_capacity": 1,
+            "tracking_rate_deg_s": 0.1,
+            "transmit_mbps": 750.0
+          },
+          {
+            "boresight": null,
+            "count": 2,
+            "endpoint_role": "isl",
+            "field_of_regard_deg": 340.0,
+            "link_role": null,
+            "max_range_km": 80000.0,
+            "medium": "optical",
+            "min_elevation_deg": -80.0,
+            "owner_node_id": "geo-inmarsat-025e",
+            "receive_mbps": 2500.0,
+            "source_ref": "nodalarc:terminals/optical/optical-high-orbit-isl.yaml",
+            "source_terminal_id": "optical-high-orbit-isl",
+            "terminal_id": "isl_optical",
+            "tracking_capacity": 1,
+            "tracking_rate_deg_s": 0.5,
+            "transmit_mbps": 2500.0
+          },
+          {
+            "boresight": null,
+            "count": 4,
+            "endpoint_role": "crosslink",
+            "field_of_regard_deg": 360.0,
+            "link_role": null,
+            "max_range_km": 450000.0,
+            "medium": "optical",
+            "min_elevation_deg": -90.0,
+            "owner_node_id": "geo-inmarsat-025e",
+            "receive_mbps": 1000.0,
+            "source_ref": "nodalarc:terminals/optical/optical-cislunar-crosslink.yaml",
+            "source_terminal_id": "optical-cislunar-crosslink",
+            "terminal_id": "relay_optical",
+            "tracking_capacity": 1,
+            "tracking_rate_deg_s": 0.25,
+            "transmit_mbps": 1000.0
+          }
+        ]
+      },
+      {
+        "epoch_position": {
+          "alt_km": 35785.99999999999,
+          "lat_deg": 0.0,
+          "lon_deg": -112.89314332045616,
+          "vel_x_km_s": 3.2710511086442295e-06,
+          "vel_y_km_s": -1.3812848078664786e-06,
+          "vel_z_km_s": -0.0
+        },
+        "forwarding": "routed",
+        "interfaces": {
+          "ethernet": {},
+          "lo0": {
+            "ipv4": "100.64.0.8/32",
+            "ipv6": null
+          }
+        },
+        "kind": "satellite",
+        "local_node_id": "inmarsat-143e",
+        "namespace": "geo",
+        "node_id": "geo-inmarsat-143e",
+        "originated_prefixes": null,
+        "plane": null,
+        "role": "router",
+        "routing_instances": [
+          {
+            "area_border": false,
+            "areas": [
+              "49.0001"
+            ],
+            "as_boundary": false,
+            "domain_id": "default_domain",
+            "interfaces": [
+              {
+                "area_id": null,
+                "name": "gnd0"
+              },
+              {
+                "area_id": null,
+                "name": "isl0"
+              },
+              {
+                "area_id": null,
+                "name": "isl1"
+              }
+            ],
+            "protocol": "isis"
+          }
+        ],
+        "segment_id": "geo",
+        "slot": null,
+        "surface_position": null,
+        "tags": [],
+        "terminal_inventory": [
+          {
+            "boresight": {
+              "mode": "nadir",
+              "target_body": "earth"
+            },
+            "count": 1,
+            "endpoint_role": "access",
+            "field_of_regard_deg": 180.0,
+            "link_role": null,
+            "max_range_km": 42000.0,
+            "medium": "rf",
+            "min_elevation_deg": -90.0,
+            "owner_node_id": "geo-inmarsat-143e",
+            "receive_mbps": 750.0,
+            "source_ref": "nodalarc:terminals/rf/rf-ka-geo-access.yaml",
+            "source_terminal_id": "rf-ka-geo-access",
+            "terminal_id": "access_ka",
+            "tracking_capacity": 1,
+            "tracking_rate_deg_s": 0.1,
+            "transmit_mbps": 750.0
+          },
+          {
+            "boresight": null,
+            "count": 2,
+            "endpoint_role": "isl",
+            "field_of_regard_deg": 340.0,
+            "link_role": null,
+            "max_range_km": 80000.0,
+            "medium": "optical",
+            "min_elevation_deg": -80.0,
+            "owner_node_id": "geo-inmarsat-143e",
+            "receive_mbps": 2500.0,
+            "source_ref": "nodalarc:terminals/optical/optical-high-orbit-isl.yaml",
+            "source_terminal_id": "optical-high-orbit-isl",
+            "terminal_id": "isl_optical",
+            "tracking_capacity": 1,
+            "tracking_rate_deg_s": 0.5,
+            "transmit_mbps": 2500.0
+          },
+          {
+            "boresight": null,
+            "count": 4,
+            "endpoint_role": "crosslink",
+            "field_of_regard_deg": 360.0,
+            "link_role": null,
+            "max_range_km": 450000.0,
+            "medium": "optical",
+            "min_elevation_deg": -90.0,
+            "owner_node_id": "geo-inmarsat-143e",
+            "receive_mbps": 1000.0,
+            "source_ref": "nodalarc:terminals/optical/optical-cislunar-crosslink.yaml",
+            "source_terminal_id": "optical-cislunar-crosslink",
+            "terminal_id": "relay_optical",
+            "tracking_capacity": 1,
+            "tracking_rate_deg_s": 0.25,
+            "transmit_mbps": 1000.0
+          }
+        ]
+      },
+      {
+        "epoch_position": null,
+        "forwarding": "routed",
+        "interfaces": {
+          "ethernet": {
+            "terr0": {
+              "ipv4": "172.16.0.1/24",
+              "ipv6": "fd00:da7a::1/64"
+            }
+          },
+          "lo0": {
+            "ipv4": "100.64.0.1/32",
+            "ipv6": null
+          }
+        },
+        "kind": "ground_station",
+        "local_node_id": "earth-it-fucino-gw1",
+        "namespace": "earth-it-fucino",
+        "node_id": "earth-it-fucino-gw1",
+        "originated_prefixes": {
+          "ipv4": [
+            "172.16.0.0/24"
+          ],
+          "ipv6": [
+            "fd00:da7a::/64"
+          ]
+        },
+        "plane": null,
+        "role": "router",
+        "routing_instances": [
+          {
+            "area_border": false,
+            "areas": [
+              "49.0001"
+            ],
+            "as_boundary": false,
+            "domain_id": "default_domain",
+            "interfaces": [
+              {
+                "area_id": null,
+                "name": "term0"
+              },
+              {
+                "area_id": null,
+                "name": "term1"
+              },
+              {
+                "area_id": null,
+                "name": "term2"
+              },
+              {
+                "area_id": null,
+                "name": "term3"
+              },
+              {
+                "area_id": null,
+                "name": "terr0"
+              }
+            ],
+            "protocol": "isis"
+          }
+        ],
+        "segment_id": "ground",
+        "slot": null,
+        "surface_position": {
+          "alt_m": 650.0,
+          "body": "earth",
+          "lat_deg": 41.978,
+          "lon_deg": 13.603
+        },
+        "tags": [
+          "geo"
+        ],
+        "terminal_inventory": [
+          {
+            "boresight": {
+              "configured_az_deg": null,
+              "configured_el_deg": null,
+              "max_az_deg": null,
+              "max_el_deg": null,
+              "min_az_deg": null,
+              "min_el_deg": null,
+              "mode": "local_vertical"
+            },
+            "count": 2,
+            "endpoint_role": "access",
+            "field_of_regard_deg": 170.0,
+            "link_role": null,
+            "max_range_km": 42000.0,
+            "medium": "rf",
+            "min_elevation_deg": 5.0,
+            "owner_node_id": "earth-it-fucino-gw1",
+            "receive_mbps": 750.0,
+            "source_ref": "nodalarc:terminals/rf/rf-ka-geo-access.yaml",
+            "source_terminal_id": "rf-ka-geo-access",
+            "terminal_id": "access_ka",
+            "tracking_capacity": 1,
+            "tracking_rate_deg_s": 0.1,
+            "transmit_mbps": 750.0
+          },
+          {
+            "boresight": {
+              "configured_az_deg": null,
+              "configured_el_deg": null,
+              "max_az_deg": null,
+              "max_el_deg": null,
+              "min_az_deg": null,
+              "min_el_deg": null,
+              "mode": "local_vertical"
+            },
+            "count": 2,
+            "endpoint_role": "access",
+            "field_of_regard_deg": 180.0,
+            "link_role": null,
+            "max_range_km": 45000.0,
+            "medium": "rf",
+            "min_elevation_deg": 0.0,
+            "owner_node_id": "earth-it-fucino-gw1",
+            "receive_mbps": 50.0,
+            "source_ref": "nodalarc:terminals/rf/rf-ka-tdrs-ground-sa.yaml",
+            "source_terminal_id": "rf-ka-tdrs-ground-sa",
+            "terminal_id": "tdrs_ka_sa",
+            "tracking_capacity": 1,
+            "tracking_rate_deg_s": 0.1,
+            "transmit_mbps": 600.0
+          }
+        ]
+      },
+      {
+        "epoch_position": null,
+        "forwarding": "routed",
+        "interfaces": {
+          "ethernet": {
+            "terr0": {
+              "ipv4": "172.16.2.1/24",
+              "ipv6": "fd00:da7a:0:2::1/64"
+            }
+          },
+          "lo0": {
+            "ipv4": "100.64.0.4/32",
+            "ipv6": null
+          }
+        },
+        "kind": "ground_station",
+        "local_node_id": "earth-us-ca-goldstone-gw1",
+        "namespace": "earth-us-ca-goldstone",
+        "node_id": "earth-us-ca-goldstone-gw1",
+        "originated_prefixes": {
+          "ipv4": [
+            "172.16.2.0/24"
+          ],
+          "ipv6": [
+            "fd00:da7a:0:2::/64"
+          ]
+        },
+        "plane": null,
+        "role": "router",
+        "routing_instances": [
+          {
+            "area_border": false,
+            "areas": [
+              "49.0001"
+            ],
+            "as_boundary": false,
+            "domain_id": "default_domain",
+            "interfaces": [
+              {
+                "area_id": null,
+                "name": "term0"
+              },
+              {
+                "area_id": null,
+                "name": "term1"
+              },
+              {
+                "area_id": null,
+                "name": "term2"
+              },
+              {
+                "area_id": null,
+                "name": "term3"
+              },
+              {
+                "area_id": null,
+                "name": "terr0"
+              }
+            ],
+            "protocol": "isis"
+          }
+        ],
+        "segment_id": "ground",
+        "slot": null,
+        "surface_position": {
+          "alt_m": 1000.0,
+          "body": "earth",
+          "lat_deg": 35.4267,
+          "lon_deg": -116.89
+        },
+        "tags": [
+          "geo"
+        ],
+        "terminal_inventory": [
+          {
+            "boresight": {
+              "configured_az_deg": null,
+              "configured_el_deg": null,
+              "max_az_deg": null,
+              "max_el_deg": null,
+              "min_az_deg": null,
+              "min_el_deg": null,
+              "mode": "local_vertical"
+            },
+            "count": 2,
+            "endpoint_role": "access",
+            "field_of_regard_deg": 170.0,
+            "link_role": null,
+            "max_range_km": 42000.0,
+            "medium": "rf",
+            "min_elevation_deg": 5.0,
+            "owner_node_id": "earth-us-ca-goldstone-gw1",
+            "receive_mbps": 750.0,
+            "source_ref": "nodalarc:terminals/rf/rf-ka-geo-access.yaml",
+            "source_terminal_id": "rf-ka-geo-access",
+            "terminal_id": "access_ka",
+            "tracking_capacity": 1,
+            "tracking_rate_deg_s": 0.1,
+            "transmit_mbps": 750.0
+          },
+          {
+            "boresight": {
+              "configured_az_deg": null,
+              "configured_el_deg": null,
+              "max_az_deg": null,
+              "max_el_deg": null,
+              "min_az_deg": null,
+              "min_el_deg": null,
+              "mode": "local_vertical"
+            },
+            "count": 2,
+            "endpoint_role": "access",
+            "field_of_regard_deg": 180.0,
+            "link_role": null,
+            "max_range_km": 45000.0,
+            "medium": "rf",
+            "min_elevation_deg": 0.0,
+            "owner_node_id": "earth-us-ca-goldstone-gw1",
+            "receive_mbps": 50.0,
+            "source_ref": "nodalarc:terminals/rf/rf-ka-tdrs-ground-sa.yaml",
+            "source_terminal_id": "rf-ka-tdrs-ground-sa",
+            "terminal_id": "tdrs_ka_sa",
+            "tracking_capacity": 1,
+            "tracking_rate_deg_s": 0.1,
+            "transmit_mbps": 600.0
+          }
+        ]
+      },
+      {
+        "epoch_position": null,
+        "forwarding": "routed",
+        "interfaces": {
+          "ethernet": {
+            "terr0": {
+              "ipv4": "172.16.1.1/24",
+              "ipv6": "fd00:da7a:0:1::1/64"
+            }
+          },
+          "lo0": {
+            "ipv4": "100.64.0.2/32",
+            "ipv6": null
+          }
+        },
+        "kind": "ground_station",
+        "local_node_id": "earth-jp-yamaguchi-gw1",
+        "namespace": "earth-jp-yamaguchi",
+        "node_id": "earth-jp-yamaguchi-gw1",
+        "originated_prefixes": {
+          "ipv4": [
+            "172.16.1.0/24"
+          ],
+          "ipv6": [
+            "fd00:da7a:0:1::/64"
+          ]
+        },
+        "plane": null,
+        "role": "router",
+        "routing_instances": [
+          {
+            "area_border": false,
+            "areas": [
+              "49.0001"
+            ],
+            "as_boundary": false,
+            "domain_id": "default_domain",
+            "interfaces": [
+              {
+                "area_id": null,
+                "name": "term0"
+              },
+              {
+                "area_id": null,
+                "name": "term1"
+              },
+              {
+                "area_id": null,
+                "name": "term2"
+              },
+              {
+                "area_id": null,
+                "name": "term3"
+              },
+              {
+                "area_id": null,
+                "name": "terr0"
+              }
+            ],
+            "protocol": "isis"
+          }
+        ],
+        "segment_id": "ground",
+        "slot": null,
+        "surface_position": {
+          "alt_m": 40.0,
+          "body": "earth",
+          "lat_deg": 34.21717,
+          "lon_deg": 131.55687
+        },
+        "tags": [
+          "geo"
+        ],
+        "terminal_inventory": [
+          {
+            "boresight": {
+              "configured_az_deg": null,
+              "configured_el_deg": null,
+              "max_az_deg": null,
+              "max_el_deg": null,
+              "min_az_deg": null,
+              "min_el_deg": null,
+              "mode": "local_vertical"
+            },
+            "count": 2,
+            "endpoint_role": "access",
+            "field_of_regard_deg": 170.0,
+            "link_role": null,
+            "max_range_km": 42000.0,
+            "medium": "rf",
+            "min_elevation_deg": 5.0,
+            "owner_node_id": "earth-jp-yamaguchi-gw1",
+            "receive_mbps": 750.0,
+            "source_ref": "nodalarc:terminals/rf/rf-ka-geo-access.yaml",
+            "source_terminal_id": "rf-ka-geo-access",
+            "terminal_id": "access_ka",
+            "tracking_capacity": 1,
+            "tracking_rate_deg_s": 0.1,
+            "transmit_mbps": 750.0
+          },
+          {
+            "boresight": {
+              "configured_az_deg": null,
+              "configured_el_deg": null,
+              "max_az_deg": null,
+              "max_el_deg": null,
+              "min_az_deg": null,
+              "min_el_deg": null,
+              "mode": "local_vertical"
+            },
+            "count": 2,
+            "endpoint_role": "access",
+            "field_of_regard_deg": 180.0,
+            "link_role": null,
+            "max_range_km": 45000.0,
+            "medium": "rf",
+            "min_elevation_deg": 0.0,
+            "owner_node_id": "earth-jp-yamaguchi-gw1",
+            "receive_mbps": 50.0,
+            "source_ref": "nodalarc:terminals/rf/rf-ka-tdrs-ground-sa.yaml",
+            "source_terminal_id": "rf-ka-tdrs-ground-sa",
+            "terminal_id": "tdrs_ka_sa",
+            "tracking_capacity": 1,
+            "tracking_rate_deg_s": 0.1,
+            "transmit_mbps": 600.0
+          }
+        ]
+      },
+      {
+        "epoch_position": null,
+        "forwarding": "routed",
+        "interfaces": {
+          "ethernet": {
+            "terr0": {
+              "ipv4": "172.16.1.2/24",
+              "ipv6": "fd00:da7a:0:1::2/64"
+            }
+          },
+          "lo0": {
+            "ipv4": "100.64.0.3/32",
+            "ipv6": null
+          }
+        },
+        "kind": "ground_station",
+        "local_node_id": "earth-jp-yamaguchi-gw2",
+        "namespace": "earth-jp-yamaguchi",
+        "node_id": "earth-jp-yamaguchi-gw2",
+        "originated_prefixes": {
+          "ipv4": [
+            "172.16.1.0/24"
+          ],
+          "ipv6": [
+            "fd00:da7a:0:1::/64"
+          ]
+        },
+        "plane": null,
+        "role": "router",
+        "routing_instances": [
+          {
+            "area_border": false,
+            "areas": [
+              "49.0001"
+            ],
+            "as_boundary": false,
+            "domain_id": "default_domain",
+            "interfaces": [
+              {
+                "area_id": null,
+                "name": "terr0"
+              }
+            ],
+            "protocol": "isis"
+          }
+        ],
+        "segment_id": "ground",
+        "slot": null,
+        "surface_position": {
+          "alt_m": 40.0,
+          "body": "earth",
+          "lat_deg": 34.21717,
+          "lon_deg": 131.55687
+        },
+        "tags": [
+          "meo"
+        ],
+        "terminal_inventory": [
+          {
+            "boresight": {
+              "configured_az_deg": null,
+              "configured_el_deg": null,
+              "max_az_deg": null,
+              "max_el_deg": null,
+              "min_az_deg": null,
+              "min_el_deg": null,
+              "mode": "local_vertical"
+            },
+            "count": 2,
+            "endpoint_role": "access",
+            "field_of_regard_deg": 160.0,
+            "link_role": null,
+            "max_range_km": 28000.0,
+            "medium": "rf",
+            "min_elevation_deg": 10.0,
+            "owner_node_id": "earth-jp-yamaguchi-gw2",
+            "receive_mbps": 500.0,
+            "source_ref": "nodalarc:terminals/rf/rf-ka-meo-access.yaml",
+            "source_terminal_id": "rf-ka-meo-access",
+            "terminal_id": "access_ka",
+            "tracking_capacity": 1,
+            "tracking_rate_deg_s": 0.5,
+            "transmit_mbps": 500.0
+          }
+        ]
+      }
+    ],
+    "segments": [
+      {
+        "display_name": "earth-geo-inmarsat-4",
+        "segment_id": "geo"
+      },
+      {
+        "display_name": "GEO gateway sites",
+        "segment_id": "ground"
+      }
+    ],
+    "session": {
+      "description": "Explicit GEO INMARSAT slot set with GEO gateway sites.",
+      "display_name": "Earth GEO Inmarsat slots",
+      "name": "earth-geo-inmarsat"
+    }
+  }
+}

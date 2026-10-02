@@ -54,6 +54,24 @@ npm test
 
 The frontend test suite covers React components and rendering logic. It must pass before any commit touching frontend code.
 
+### Contracts the page is held to
+
+Two generated files tie the frontend tests to the backend's wire models:
+
+- `scripts/gen_state_wire_vocabularies.py` writes `frontend/src/generated/stateWireVocabularies.json`:
+  for every string field of every state-feed model, the values it admits, or `null` when the
+  backend leaves it open. `frontend/src/__tests__/stateWireContract.test.ts` walks the page's
+  source with the TypeScript checker and refuses any comparison of a wire field against a value
+  the backend does not declare, and any `types.ts` field that does not mirror a closed vocabulary.
+- `scripts/gen_builder_shipped_drafts.py` writes `frontend/src/builder/__tests__/fixtures/shipped/`:
+  for each shipped session, the visual draft VS-API answers when the Builder opens it and the
+  world the backend resolves for it. `shippedSessionAnatomy.test.tsx` renders the Builder's
+  anatomy guide from the draft and checks each row against the world.
+
+`tests/unit/observation/test_state_feed_contract.py` and
+`tests/unit/authoring/test_builder_shipped_drafts_fixture.py` fail when either generated file is
+stale; rerun the script named in the failure.
+
 ## Integration Tests
 
 ```bash

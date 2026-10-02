@@ -1,0 +1,181 @@
+{
+  "ActuationHealth": {
+    "session_id": null,
+    "wiring_generation": null
+  },
+  "ActuationHealthGroundStation": {
+    "actuation_state": [
+      "actuation_blocked",
+      "clean",
+      "kernel_dirty",
+      "unknown"
+    ],
+    "gs_id": null,
+    "reason_code": null,
+    "since": null
+  },
+  "ActuationHealthInstance": {
+    "hostname": null,
+    "scheduler_instance_id": null,
+    "status": null
+  },
+  "ActuationNotice": {
+    "actuation_state": [
+      "actuation_blocked",
+      "clean",
+      "kernel_dirty",
+      "unknown"
+    ],
+    "gs_id": null,
+    "message": null,
+    "reason_code": null,
+    "since": null
+  },
+  "AlmanacState": {
+    "last_push_sim_time": null,
+    "last_topology_state_id": null
+  },
+  "HistoryRecordingState": {
+    "error": null,
+    "state": [
+      "recording",
+      "stopped"
+    ]
+  },
+  "LinkDecisionTrace": {
+    "authority_source": null,
+    "geometry_authority": [
+      "ome"
+    ],
+    "interface_a": null,
+    "interface_b": null,
+    "link_rule_id": null,
+    "link_type": null,
+    "node_a": null,
+    "node_b": null,
+    "reason": null,
+    "rtt_to_one_way_policy": null,
+    "state": null,
+    "topology_mode": null
+  },
+  "LinkHistoryEvent": {
+    "event_type": [
+      "LatencyUpdate",
+      "LinkActive",
+      "LinkDown",
+      "LinkUp"
+    ],
+    "interface_a": null,
+    "interface_b": null,
+    "node_a": null,
+    "node_b": null,
+    "reason": null,
+    "session_id": null,
+    "sim_time": null,
+    "wall_time": null
+  },
+  "LinkHistoryPage": {
+    "next_cursor": null,
+    "retained_from": null
+  },
+  "LinkState": {
+    "interface_a": null,
+    "interface_b": null,
+    "link_reason": null,
+    "link_rule_id": null,
+    "link_type": null,
+    "node_a": null,
+    "node_b": null,
+    "scheduling_state": null,
+    "state": null,
+    "topology_mode": null
+  },
+  "NetworkHealth": {
+    "status": null
+  },
+  "NodeAddress": {
+    "address": null,
+    "family": [
+      "ipv4",
+      "ipv6"
+    ],
+    "interface": null,
+    "purpose": [
+      "router_loopback",
+      "site_interface",
+      "site_prefix"
+    ]
+  },
+  "NodeInstanceInterface": {
+    "area_id": null,
+    "name": null
+  },
+  "NodeRoutingInstance": {
+    "domain_id": null,
+    "protocol": [
+      "bgp",
+      "isis",
+      "ospf",
+      "static"
+    ]
+  },
+  "NodeState": {
+    "frame_id": null,
+    "local_node_id": null,
+    "namespace": null,
+    "node_id": null,
+    "node_type": [
+      "ground_station",
+      "satellite"
+    ],
+    "prefix": null,
+    "reference_body": [
+      "earth",
+      "luna"
+    ],
+    "role": [
+      "forwarding_only",
+      "host",
+      "router"
+    ],
+    "segment_id": null,
+    "tenant_id": null
+  },
+  "RecentEvent": {
+    "event_type": null,
+    "node_id": null,
+    "summary": null
+  },
+  "StateSnapshot": {
+    "constellation_name": null,
+    "routing_stack": null,
+    "session_id": null,
+    "session_status": null,
+    "session_status_detail": null
+  },
+  "TracedPath": {
+    "dst_node": null,
+    "error": null,
+    "flow_id": null,
+    "reverse_error": null,
+    "reverse_state": [
+      "failed",
+      "not_reached",
+      "reached",
+      "running"
+    ],
+    "sim_time": null,
+    "src_node": null,
+    "state": [
+      "failed",
+      "not_reached",
+      "reached",
+      "running"
+    ],
+    "stop_reason": [
+      "internal_error",
+      "time_limit"
+    ],
+    "traced_at": null
+  }
+}

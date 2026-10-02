@@ -1,0 +1,4547 @@
+{
+  "draft": {
+    "applied_revision": 0,
+    "applied_session": {
+      "link_rules": [
+        {
+          "enabled": true,
+          "endpoints": [
+            {
+              "min_elevation_deg": 25.0,
+              "select": {
+                "all": [
+                  {
+                    "segment": "ground"
+                  },
+                  {
+                    "tag": "leo"
+                  }
+                ]
+              },
+              "terminal": {
+                "all": [
+                  {
+                    "role": "access"
+                  },
+                  {
+                    "medium": "rf"
+                  }
+                ]
+              }
+            },
+            {
+              "select": {
+                "segment": "leo"
+              },
+              "terminal": {
+                "all": [
+                  {
+                    "role": "access"
+                  },
+                  {
+                    "medium": "rf"
+                  }
+                ]
+              }
+            }
+          ],
+          "id": "leo_access",
+          "topology": {
+            "mode": "visible_candidates"
+          }
+        },
+        {
+          "enabled": true,
+          "endpoints": [
+            {
+              "select": {
+                "segment": "leo"
+              },
+              "terminal": {
+                "all": [
+                  {
+                    "role": "isl"
+                  },
+                  {
+                    "medium": "optical"
+                  }
+                ]
+              }
+            },
+            {
+              "select": {
+                "segment": "leo"
+              },
+              "terminal": {
+                "all": [
+                  {
+                    "role": "isl"
+                  },
+                  {
+                    "medium": "optical"
+                  }
+                ]
+              }
+            }
+          ],
+          "id": "leo_isl",
+          "topology": {
+            "mode": "nearest_n",
+            "n": 2
+          }
+        }
+      ],
+      "segments": [
+        {
+          "id": "leo",
+          "source": "nodalarc:constellations/earth/leo/earth-leo-ring-36.yaml"
+        },
+        {
+          "apply": {
+            "scheduling": {
+              "bbm_acquire_timeout_ticks": 1,
+              "cross_tenant_displacement": "off",
+              "handover_concurrency": "one_at_a_time",
+              "handover_mode": "mbb",
+              "handover_policy": {
+                "hysteresis": {
+                  "discount_factor": 1.1,
+                  "mask_fade_range_deg": 3.0
+                }
+              },
+              "mbb_overlap_ticks": 30,
+              "mbb_preemption": "off",
+              "mbb_reserve": 1,
+              "ranking_order": [
+                "service_priority",
+                "selection_score",
+                "satellite_ground_terminal_capacity",
+                "lex_pair"
+              ],
+              "selection_policy": {
+                "highest_elevation": {}
+              },
+              "successor_abort_policy": "hard_release"
+            }
+          },
+          "id": "ground",
+          "placement": {
+            "from_site_set": "nodalarc:site-sets/earth/leo/earth-leo-starlink-pop-sites.yaml"
+          }
+        }
+      ],
+      "session": {
+        "description": "Single 36-satellite LEO ring with MBB-capable Starlink-style gateway sites.",
+        "display_name": "Earth LEO simple",
+        "name": "earth-leo-simple"
+      },
+      "simulation": {
+        "acknowledge_geometry_only": false,
+        "candidate_limits": {
+          "max_pairs_per_rule": 500,
+          "max_pairs_per_tick": 2000
+        },
+        "ground_link_model": "terminal_physics"
+      },
+      "time": {
+        "compression": 1.0,
+        "start_time": "2026-06-08T13:42:00Z",
+        "step_seconds": 1.0
+      }
+    },
+    "applied_workspace": {
+      "boundaries": [],
+      "compression": 1.0,
+      "description": "Single 36-satellite LEO ring with MBB-capable Starlink-style gateway sites.",
+      "display_name": "Earth LEO simple",
+      "ground": [],
+      "ground_refs": [
+        {
+          "label": "Starlink PoP gateway sites",
+          "scheduling": {
+            "bbm_acquire_timeout_ticks": 1,
+            "cross_tenant_displacement": "off",
+            "handover_concurrency": "one_at_a_time",
+            "handover_mode": "mbb",
+            "handover_policy": {
+              "hysteresis": {
+                "discount_factor": 1.1,
+                "mask_fade_range_deg": 3.0
+              }
+            },
+            "mbb_overlap_ticks": 30,
+            "mbb_preemption": "off",
+            "mbb_reserve": 1,
+            "ranking_order": [
+              "service_priority",
+              "selection_score",
+              "satellite_ground_terminal_capacity",
+              "lex_pair"
+            ],
+            "selection_policy": {
+              "highest_elevation": {}
+            },
+            "successor_abort_policy": "hard_release"
+          },
+          "segment_id": "ground",
+          "site_set_ref": "nodalarc:site-sets/earth/leo/earth-leo-starlink-pop-sites.yaml"
+        }
+      ],
+      "links": [
+        {
+          "a": {
+            "medium": "rf",
+            "min_elevation_deg": 25.0,
+            "role": "access",
+            "segment_id": "ground",
+            "tag": "leo"
+          },
+          "b": {
+            "medium": "rf",
+            "min_elevation_deg": null,
+            "role": "access",
+            "segment_id": "leo",
+            "tag": null
+          },
+          "enabled": true,
+          "label": "leo_access",
+          "max_range_km": null,
+          "rule_id": "leo_access",
+          "topology_mode": "visible_candidates",
+          "topology_n": null
+        },
+        {
+          "a": {
+            "medium": "optical",
+            "min_elevation_deg": null,
+            "role": "isl",
+            "segment_id": "leo",
+            "tag": null
+          },
+          "b": {
+            "medium": "optical",
+            "min_elevation_deg": null,
+            "role": "isl",
+            "segment_id": "leo",
+            "tag": null
+          },
+          "enabled": true,
+          "label": "leo_isl",
+          "max_range_km": null,
+          "rule_id": "leo_isl",
+          "topology_mode": "nearest_n",
+          "topology_n": 2
+        }
+      ],
+      "max_pairs_per_rule": 500,
+      "max_pairs_per_tick": 2000,
+      "projection_revision": 0,
+      "routing_domains": [],
+      "session_name": "earth-leo-simple",
+      "space": [],
+      "space_refs": [
+        {
+          "label": "Earth LEO simple 36-satellite ring",
+          "segment_id": "leo",
+          "source_ref": "nodalarc:constellations/earth/leo/earth-leo-ring-36.yaml"
+        }
+      ],
+      "start_time": "2026-06-08T13:42:00Z",
+      "step_seconds": 1.0
+    },
+    "authoring_workspace": {
+      "boundaries": [],
+      "compression": 1.0,
+      "description": "Single 36-satellite LEO ring with MBB-capable Starlink-style gateway sites.",
+      "display_name": "Earth LEO simple",
+      "ground": [],
+      "ground_refs": [
+        {
+          "label": "Starlink PoP gateway sites",
+          "scheduling": {
+            "bbm_acquire_timeout_ticks": 1,
+            "cross_tenant_displacement": "off",
+            "handover_concurrency": "one_at_a_time",
+            "handover_mode": "mbb",
+            "handover_policy": {
+              "hysteresis": {
+                "discount_factor": 1.1,
+                "mask_fade_range_deg": 3.0
+              }
+            },
+            "mbb_overlap_ticks": 30,
+            "mbb_preemption": "off",
+            "mbb_reserve": 1,
+            "ranking_order": [
+              "service_priority",
+              "selection_score",
+              "satellite_ground_terminal_capacity",
+              "lex_pair"
+            ],
+            "selection_policy": {
+              "highest_elevation": {}
+            },
+            "successor_abort_policy": "hard_release"
+          },
+          "segment_id": "ground",
+          "site_set_ref": "nodalarc:site-sets/earth/leo/earth-leo-starlink-pop-sites.yaml"
+        }
+      ],
+      "links": [
+        {
+          "a": {
+            "medium": "rf",
+            "min_elevation_deg": 25.0,
+            "role": "access",
+            "segment_id": "ground",
+            "tag": "leo"
+          },
+          "b": {
+            "medium": "rf",
+            "min_elevation_deg": null,
+            "role": "access",
+            "segment_id": "leo",
+            "tag": null
+          },
+          "enabled": true,
+          "label": "leo_access",
+          "max_range_km": null,
+          "rule_id": "leo_access",
+          "topology_mode": "visible_candidates",
+          "topology_n": null
+        },
+        {
+          "a": {
+            "medium": "optical",
+            "min_elevation_deg": null,
+            "role": "isl",
+            "segment_id": "leo",
+            "tag": null
+          },
+          "b": {
+            "medium": "optical",
+            "min_elevation_deg": null,
+            "role": "isl",
+            "segment_id": "leo",
+            "tag": null
+          },
+          "enabled": true,
+          "label": "leo_isl",
+          "max_range_km": null,
+          "rule_id": "leo_isl",
+          "topology_mode": "nearest_n",
+          "topology_n": 2
+        }
+      ],
+      "max_pairs_per_rule": 500,
+      "max_pairs_per_tick": 2000,
+      "projection_revision": 0,
+      "routing_domains": [],
+      "session_name": "earth-leo-simple",
+      "space": [],
+      "space_refs": [
+        {
+          "label": "Earth LEO simple 36-satellite ring",
+          "segment_id": "leo",
+          "source_ref": "nodalarc:constellations/earth/leo/earth-leo-ring-36.yaml"
+        }
+      ],
+      "start_time": "2026-06-08T13:42:00Z",
+      "step_seconds": 1.0
+    },
+    "catalog_documents": [],
+    "contract_version": 2,
+    "draft_revision": 0,
+    "expected_session_revision": null,
+    "projection_status": "applied",
+    "reserved_authoring_ids": [
+      "leo",
+      "ground",
+      "leo_access",
+      "leo_isl"
+    ],
+    "session_name_is_placeholder": false,
+    "session_yaml": "session:\n  name: earth-leo-simple\n  display_name: Earth LEO simple\n  description: Single 36-satellite LEO ring with MBB-capable Starlink-style gateway sites.\nsegments:\n- id: leo\n  source: nodalarc:constellations/earth/leo/earth-leo-ring-36.yaml\n- id: ground\n  placement:\n    from_site_set: nodalarc:site-sets/earth/leo/earth-leo-starlink-pop-sites.yaml\n  apply:\n    scheduling:\n      selection_policy:\n        highest_elevation: {}\n      handover_policy:\n        hysteresis:\n          discount_factor: 1.1\n          mask_fade_range_deg: 3.0\n      handover_mode: mbb\n      mbb_overlap_ticks: 30\n      mbb_reserve: 1\n      handover_concurrency: one_at_a_time\n      ranking_order:\n      - service_priority\n      - selection_score\n      - satellite_ground_terminal_capacity\n      - lex_pair\n      mbb_preemption: 'off'\n      successor_abort_policy: hard_release\n      cross_tenant_displacement: 'off'\n      bbm_acquire_timeout_ticks: 1\nlink_rules:\n- id: leo_access\n  topology:\n    mode: visible_candidates\n  endpoints:\n  - select:\n      all:\n      - segment: ground\n      - tag: leo\n    terminal:\n      all:\n      - role: access\n      - medium: rf\n    min_elevation_deg: 25\n  - select:\n      segment: leo\n    terminal:\n      all:\n      - role: access\n      - medium: rf\n- id: leo_isl\n  topology:\n    mode: nearest_n\n    n: 2\n  endpoints:\n  - select:\n      segment: leo\n    terminal:\n      all:\n      - role: isl\n      - medium: optical\n  - select:\n      segment: leo\n    terminal:\n      all:\n      - role: isl\n      - medium: optical\nsimulation:\n  candidate_limits:\n    max_pairs_per_rule: 500\n    max_pairs_per_tick: 2000\ntime:\n  start_time: '2026-06-08T13:42:00Z'\n  step_seconds: 1\n  compression: 1\n",
+    "source_ref": "nodalarc:sessions/earth-leo-simple.yaml",
+    "target_ref": "user:sessions/earth-leo-simple.yaml"
+  },
+  "issues": [],
+  "source_ref": "nodalarc:sessions/earth-leo-simple.yaml",
+  "world": {
+    "link_rules": [
+      {
+        "enabled": true,
+        "endpoints": [
+          {
+            "min_elevation_deg": 25.0,
+            "node_ids": [
+              "earth-us-hawthorne-gw1",
+              "earth-us-co-denver-gw1",
+              "earth-us-va-ashburn-gw1",
+              "earth-de-frankfurt-gw1"
+            ],
+            "segment_id": "ground",
+            "terminal_medium": "rf",
+            "terminal_role": "access"
+          },
+          {
+            "min_elevation_deg": null,
+            "node_ids": [
+              "leo-sat-p00s00",
+              "leo-sat-p00s01",
+              "leo-sat-p00s02",
+              "leo-sat-p00s03",
+              "leo-sat-p00s04",
+              "leo-sat-p00s05",
+              "leo-sat-p00s06",
+              "leo-sat-p00s07",
+              "leo-sat-p00s08",
+              "leo-sat-p00s09",
+              "leo-sat-p00s10",
+              "leo-sat-p00s11",
+              "leo-sat-p00s12",
+              "leo-sat-p00s13",
+              "leo-sat-p00s14",
+              "leo-sat-p00s15",
+              "leo-sat-p00s16",
+              "leo-sat-p00s17",
+              "leo-sat-p00s18",
+              "leo-sat-p00s19",
+              "leo-sat-p00s20",
+              "leo-sat-p00s21",
+              "leo-sat-p00s22",
+              "leo-sat-p00s23",
+              "leo-sat-p00s24",
+              "leo-sat-p00s25",
+              "leo-sat-p00s26",
+              "leo-sat-p00s27",
+              "leo-sat-p00s28",
+              "leo-sat-p00s29",
+              "leo-sat-p00s30",
+              "leo-sat-p00s31",
+              "leo-sat-p00s32",
+              "leo-sat-p00s33",
+              "leo-sat-p00s34",
+              "leo-sat-p00s35"
+            ],
+            "segment_id": "leo",
+            "terminal_medium": "rf",
+            "terminal_role": "access"
+          }
+        ],
+        "explicit_pairs": [],
+        "kind": "access",
+        "max_range_km": null,
+        "rule_id": "leo_access",
+        "topology_mode": "visible_candidates",
+        "topology_n": null
+      },
+      {
+        "enabled": true,
+        "endpoints": [
+          {
+            "min_elevation_deg": null,
+            "node_ids": [
+              "leo-sat-p00s00",
+              "leo-sat-p00s01",
+              "leo-sat-p00s02",
+              "leo-sat-p00s03",
+              "leo-sat-p00s04",
+              "leo-sat-p00s05",
+              "leo-sat-p00s06",
+              "leo-sat-p00s07",
+              "leo-sat-p00s08",
+              "leo-sat-p00s09",
+              "leo-sat-p00s10",
+              "leo-sat-p00s11",
+              "leo-sat-p00s12",
+              "leo-sat-p00s13",
+              "leo-sat-p00s14",
+              "leo-sat-p00s15",
+              "leo-sat-p00s16",
+              "leo-sat-p00s17",
+              "leo-sat-p00s18",
+              "leo-sat-p00s19",
+              "leo-sat-p00s20",
+              "leo-sat-p00s21",
+              "leo-sat-p00s22",
+              "leo-sat-p00s23",
+              "leo-sat-p00s24",
+              "leo-sat-p00s25",
+              "leo-sat-p00s26",
+              "leo-sat-p00s27",
+              "leo-sat-p00s28",
+              "leo-sat-p00s29",
+              "leo-sat-p00s30",
+              "leo-sat-p00s31",
+              "leo-sat-p00s32",
+              "leo-sat-p00s33",
+              "leo-sat-p00s34",
+              "leo-sat-p00s35"
+            ],
+            "segment_id": "leo",
+            "terminal_medium": "optical",
+            "terminal_role": "isl"
+          },
+          {
+            "min_elevation_deg": null,
+            "node_ids": [
+              "leo-sat-p00s00",
+              "leo-sat-p00s01",
+              "leo-sat-p00s02",
+              "leo-sat-p00s03",
+              "leo-sat-p00s04",
+              "leo-sat-p00s05",
+              "leo-sat-p00s06",
+              "leo-sat-p00s07",
+              "leo-sat-p00s08",
+              "leo-sat-p00s09",
+              "leo-sat-p00s10",
+              "leo-sat-p00s11",
+              "leo-sat-p00s12",
+              "leo-sat-p00s13",
+              "leo-sat-p00s14",
+              "leo-sat-p00s15",
+              "leo-sat-p00s16",
+              "leo-sat-p00s17",
+              "leo-sat-p00s18",
+              "leo-sat-p00s19",
+              "leo-sat-p00s20",
+              "leo-sat-p00s21",
+              "leo-sat-p00s22",
+              "leo-sat-p00s23",
+              "leo-sat-p00s24",
+              "leo-sat-p00s25",
+              "leo-sat-p00s26",
+              "leo-sat-p00s27",
+              "leo-sat-p00s28",
+              "leo-sat-p00s29",
+              "leo-sat-p00s30",
+              "leo-sat-p00s31",
+              "leo-sat-p00s32",
+              "leo-sat-p00s33",
+              "leo-sat-p00s34",
+              "leo-sat-p00s35"
+            ],
+            "segment_id": "leo",
+            "terminal_medium": "optical",
+            "terminal_role": "isl"
+          }
+        ],
+        "explicit_pairs": [],
+        "kind": "isl",
+        "max_range_km": null,
+        "rule_id": "leo_isl",
+        "topology_mode": "nearest_n",
+        "topology_n": 2
+      }
+    ],
+    "nodes": [
+      {
+        "epoch_position": {
+          "alt_km": 554.2733082277455,
+          "lat_deg": -26.642796798971165,
+          "lon_deg": 97.05091107239029,
+          "vel_x_km_s": -4.300716119150296,
+          "vel_y_km_s": -3.0561802859068976,
+          "vel_z_km_s": -5.024296256519915
+        },
+        "forwarding": "routed",
+        "interfaces": {
+          "ethernet": {},
+          "lo0": {
+            "ipv4": "100.64.0.6/32",
+            "ipv6": null
+          }
+        },
+        "kind": "satellite",
+        "local_node_id": "sat-p00s00",
+        "namespace": "leo",
+        "node_id": "leo-sat-p00s00",
+        "originated_prefixes": null,
+        "plane": 0,
+        "role": "router",
+        "routing_instances": [
+          {
+            "area_border": false,
+            "areas": [
+              "49.0001"
+            ],
+            "as_boundary": false,
+            "domain_id": "default_domain",
+            "interfaces": [
+              {
+                "area_id": null,
+                "name": "gnd0"
+              },
+              {
+                "area_id": null,
+                "name": "isl0"
+              },
+              {
+                "area_id": null,
+                "name": "isl1"
+              }
+            ],
+            "protocol": "isis"
+          }
+        ],
+        "segment_id": "leo",
+        "slot": 0,
+        "surface_position": null,
+        "tags": [
+          "all"
+        ],
+        "terminal_inventory": [
+          {
+            "boresight": {
+              "mode": "nadir",
+              "target_body": "earth"
+            },
+            "count": 1,
+            "endpoint_role": "access",
+            "field_of_regard_deg": 120.0,
+            "link_role": null,
+            "max_range_km": 1250.0,
+            "medium": "rf",
+            "min_elevation_deg": -60.0,
+            "owner_node_id": "leo-sat-p00s00",
+            "receive_mbps": 5000.0,
+            "source_ref": "nodalarc:terminals/rf/rf-ka-starlink-space-gateway.yaml",
+            "source_terminal_id": "rf-ka-starlink-space-gateway",
+            "terminal_id": "access_ka",
+            "tracking_capacity": 1,
+            "tracking_rate_deg_s": 3.0,
+            "transmit_mbps": 5000.0
+          },
+          {
+            "boresight": null,
+            "count": 4,
+            "endpoint_role": "isl",
+            "field_of_regard_deg": 120.0,
+            "link_role": null,
+            "max_range_km": 5400.0,
+            "medium": "optical",
+            "min_elevation_deg": -60.0,
+            "owner_node_id": "leo-sat-p00s00",
+            "receive_mbps": 200000.0,
+            "source_ref": "nodalarc:terminals/optical/optical-starlink-space-isl.yaml",
+            "source_terminal_id": "optical-starlink-space-isl",
+            "terminal_id": "isl_optical",
+            "tracking_capacity": 1,
+            "tracking_rate_deg_s": 3.0,
+            "transmit_mbps": 200000.0
+          }
+        ]
+      },
+      {
+        "epoch_position": {
+          "alt_km": 556.5946395914743,
+          "lat_deg": -33.83655345338046,
+          "lon_deg": 105.11711445143548,
+          "vel_x_km_s": -4.127121143955345,
+          "vel_y_km_s": -4.1239679759843515,
+          "vel_z_km_s": -4.360203311124673
+        },
+        "forwarding": "routed",
+        "interfaces": {
+          "ethernet": {},
+          "lo0": {
+            "ipv4": "100.64.0.7/32",
+            "ipv6": null
+          }
+        },
+        "kind": "satellite",
+        "local_node_id": "sat-p00s01",
+        "namespace": "leo",
+        "node_id": "leo-sat-p00s01",
+        "originated_prefixes": null,
+        "plane": 0,
+        "role": "router",
+        "routing_instances": [
+          {
+            "area_border": false,
+            "areas": [
+              "49.0001"
+            ],
+            "as_boundary": false,
+            "domain_id": "default_domain",
+            "interfaces": [
+              {
+                "area_id": null,
+                "name": "gnd0"
+              },
+              {
+                "area_id": null,
+                "name": "isl0"
+              },
+              {
+                "area_id": null,
+                "name": "isl1"
+              }
+            ],
+            "protocol": "isis"
+          }
+        ],
+        "segment_id": "leo",
+        "slot": 1,
+        "surface_position": null,
+        "tags": [
+          "all"
+        ],
+        "terminal_inventory": [
+          {
+            "boresight": {
+              "mode": "nadir",
+              "target_body": "earth"
+            },
+            "count": 1,
+            "endpoint_role": "access",
+            "field_of_regard_deg": 120.0,
+            "link_role": null,
+            "max_range_km": 1250.0,
+            "medium": "rf",
+            "min_elevation_deg": -60.0,
+            "owner_node_id": "leo-sat-p00s01",
+            "receive_mbps": 5000.0,
+            "source_ref": "nodalarc:terminals/rf/rf-ka-starlink-space-gateway.yaml",
+            "source_terminal_id": "rf-ka-starlink-space-gateway",
+            "terminal_id": "access_ka",
+            "tracking_capacity": 1,
+            "tracking_rate_deg_s": 3.0,
+            "transmit_mbps": 5000.0
+          },
+          {
+            "boresight": null,
+            "count": 4,
+            "endpoint_role": "isl",
+            "field_of_regard_deg": 120.0,
+            "link_role": null,
+            "max_range_km": 5400.0,
+            "medium": "optical",
+            "min_elevation_deg": -60.0,
+            "owner_node_id": "leo-sat-p00s01",
+            "receive_mbps": 200000.0,
+            "source_ref": "nodalarc:terminals/optical/optical-starlink-space-isl.yaml",
+            "source_terminal_id": "optical-starlink-space-isl",
+            "terminal_id": "isl_optical",
+            "tracking_capacity": 1,
+            "tracking_rate_deg_s": 3.0,
+            "transmit_mbps": 200000.0
+          }
+        ]
+      },
+      {
+        "epoch_position": {
+          "alt_km": 558.9433655886678,
+          "lat_deg": -40.40349070840493,
+          "lon_deg": 114.58398494638203,
+          "vel_x_km_s": -3.8281256812253885,
+          "vel_y_km_s": -5.06645098593997,
+          "vel_z_km_s": -3.563627794490271
+        },
+        "forwarding": "routed",
+        "interfaces": {
+          "ethernet": {},
+          "lo0": {
+            "ipv4": "100.64.0.8/32",
+            "ipv6": null
+          }
+        },
+        "kind": "satellite",
+        "local_node_id": "sat-p00s02",
+        "namespace": "leo",
+        "node_id": "leo-sat-p00s02",
+        "originated_prefixes": null,
+        "plane": 0,
+        "role": "router",
+        "routing_instances": [
+          {
+            "area_border": false,
+            "areas": [
+              "49.0001"
+            ],
+            "as_boundary": false,
+            "domain_id": "default_domain",
+            "interfaces": [
+              {
+                "area_id": null,
+                "name": "gnd0"
+              },
+              {
+                "area_id": null,
+                "name": "isl0"
+              },
+              {
+                "area_id": null,
+                "name": "isl1"
+              }
+            ],
+            "protocol": "isis"
+          }
+        ],
+        "segment_id": "leo",
+        "slot": 2,
+        "surface_position": null,
+        "tags": [
+          "all"
+        ],
+        "terminal_inventory": [
+          {
+            "boresight": {
+              "mode": "nadir",
+              "target_body": "earth"
+            },
+            "count": 1,
+            "endpoint_role": "access",
+            "field_of_regard_deg": 120.0,
+            "link_role": null,
+            "max_range_km": 1250.0,
+            "medium": "rf",
+            "min_elevation_deg": -60.0,
+            "owner_node_id": "leo-sat-p00s02",
+            "receive_mbps": 5000.0,
+            "source_ref": "nodalarc:terminals/rf/rf-ka-starlink-space-gateway.yaml",
+            "source_terminal_id": "rf-ka-starlink-space-gateway",
+            "terminal_id": "access_ka",
+            "tracking_capacity": 1,
+            "tracking_rate_deg_s": 3.0,
+            "transmit_mbps": 5000.0
+          },
+          {
+            "boresight": null,
+            "count": 4,
+            "endpoint_role": "isl",
+            "field_of_regard_deg": 120.0,
+            "link_role": null,
+            "max_range_km": 5400.0,
+            "medium": "optical",
+            "min_elevation_deg": -60.0,
+            "owner_node_id": "leo-sat-p00s02",
+            "receive_mbps": 200000.0,
+            "source_ref": "nodalarc:terminals/optical/optical-starlink-space-isl.yaml",
+            "source_terminal_id": "optical-starlink-space-isl",
+            "terminal_id": "isl_optical",
+            "tracking_capacity": 1,
+            "tracking_rate_deg_s": 3.0,
+            "transmit_mbps": 200000.0
+          }
+        ]
+      },
+      {
+        "epoch_position": {
+          "alt_km": 561.0365199110802,
+          "lat_deg": -46.03428639748446,
+          "lon_deg": 125.91878442638931,
+          "vel_x_km_s": -3.412814556796445,
+          "vel_y_km_s": -5.85499244643574,
+          "vel_z_km_s": -2.6587732506029216
+        },
+        "forwarding": "routed",
+        "interfaces": {
+          "ethernet": {},
+          "lo0": {
+            "ipv4": "100.64.0.9/32",
+            "ipv6": null
+          }
+        },
+        "kind": "satellite",
+        "local_node_id": "sat-p00s03",
+        "namespace": "leo",
+        "node_id": "leo-sat-p00s03",
+        "originated_prefixes": null,
+        "plane": 0,
+        "role": "router",
+        "routing_instances": [
+          {
+            "area_border": false,
+            "areas": [
+              "49.0001"
+            ],
+            "as_boundary": false,
+            "domain_id": "default_domain",
+            "interfaces": [
+              {
+                "area_id": null,
+                "name": "gnd0"
+              },
+              {
+                "area_id": null,
+                "name": "isl0"
+              },
+              {
+                "area_id": null,
+                "name": "isl1"
+              }
+            ],
+            "protocol": "isis"
+          }
+        ],
+        "segment_id": "leo",
+        "slot": 3,
+        "surface_position": null,
+        "tags": [
+          "all"
+        ],
+        "terminal_inventory": [
+          {
+            "boresight": {
+              "mode": "nadir",
+              "target_body": "earth"
+            },
+            "count": 1,
+            "endpoint_role": "access",
+            "field_of_regard_deg": 120.0,
+            "link_role": null,
+            "max_range_km": 1250.0,
+            "medium": "rf",
+            "min_elevation_deg": -60.0,
+            "owner_node_id": "leo-sat-p00s03",
+            "receive_mbps": 5000.0,
+            "source_ref": "nodalarc:terminals/rf/rf-ka-starlink-space-gateway.yaml",
+            "source_terminal_id": "rf-ka-starlink-space-gateway",
+            "terminal_id": "access_ka",
+            "tracking_capacity": 1,
+            "tracking_rate_deg_s": 3.0,
+            "transmit_mbps": 5000.0
+          },
+          {
+            "boresight": null,
+            "count": 4,
+            "endpoint_role": "isl",
+            "field_of_regard_deg": 120.0,
+            "link_role": null,
+            "max_range_km": 5400.0,
+            "medium": "optical",
+            "min_elevation_deg": -60.0,
+            "owner_node_id": "leo-sat-p00s03",
+            "receive_mbps": 200000.0,
+            "source_ref": "nodalarc:terminals/optical/optical-starlink-space-isl.yaml",
+            "source_terminal_id": "optical-starlink-space-isl",
+            "terminal_id": "isl_optical",
+            "tracking_capacity": 1,
+            "tracking_rate_deg_s": 3.0,
+            "transmit_mbps": 200000.0
+          }
+        ]
+      },
+      {
+        "epoch_position": {
+          "alt_km": 562.6226036534035,
+          "lat_deg": -50.310309911132855,
+          "lon_deg": 139.45777564235814,
+          "vel_x_km_s": -2.893806789026755,
+          "vel_y_km_s": -6.465632924215665,
+          "vel_z_km_s": -1.6731332269002228
+        },
+        "forwarding": "routed",
+        "interfaces": {
+          "ethernet": {},
+          "lo0": {
+            "ipv4": "100.64.0.10/32",
+            "ipv6": null
+          }
+        },
+        "kind": "satellite",
+        "local_node_id": "sat-p00s04",
+        "namespace": "leo",
+        "node_id": "leo-sat-p00s04",
+        "originated_prefixes": null,
+        "plane": 0,
+        "role": "router",
+        "routing_instances": [
+          {
+            "area_border": false,
+            "areas": [
+              "49.0001"
+            ],
+            "as_boundary": false,
+            "domain_id": "default_domain",
+            "interfaces": [
+              {
+                "area_id": null,
+                "name": "gnd0"
+              },
+              {
+                "area_id": null,
+                "name": "isl0"
+              },
+              {
+                "area_id": null,
+                "name": "isl1"
+              }
+            ],
+            "protocol": "isis"
+          }
+        ],
+        "segment_id": "leo",
+        "slot": 4,
+        "surface_position": null,
+        "tags": [
+          "all"
+        ],
+        "terminal_inventory": [
+          {
+            "boresight": {
+              "mode": "nadir",
+              "target_body": "earth"
+            },
+            "count": 1,
+            "endpoint_role": "access",
+            "field_of_regard_deg": 120.0,
+            "link_role": null,
+            "max_range_km": 1250.0,
+            "medium": "rf",
+            "min_elevation_deg": -60.0,
+            "owner_node_id": "leo-sat-p00s04",
+            "receive_mbps": 5000.0,
+            "source_ref": "nodalarc:terminals/rf/rf-ka-starlink-space-gateway.yaml",
+            "source_terminal_id": "rf-ka-starlink-space-gateway",
+            "terminal_id": "access_ka",
+            "tracking_capacity": 1,
+            "tracking_rate_deg_s": 3.0,
+            "transmit_mbps": 5000.0
+          },
+          {
+            "boresight": null,
+            "count": 4,
+            "endpoint_role": "isl",
+            "field_of_regard_deg": 120.0,
+            "link_role": null,
+            "max_range_km": 5400.0,
+            "medium": "optical",
+            "min_elevation_deg": -60.0,
+            "owner_node_id": "leo-sat-p00s04",
+            "receive_mbps": 200000.0,
+            "source_ref": "nodalarc:terminals/optical/optical-starlink-space-isl.yaml",
+            "source_terminal_id": "optical-starlink-space-isl",
+            "terminal_id": "isl_optical",
+            "tracking_capacity": 1,
+            "tracking_rate_deg_s": 3.0,
+            "transmit_mbps": 200000.0
+          }
+        ]
+      },
+      {
+        "epoch_position": {
+          "alt_km": 563.5114672762647,
+          "lat_deg": -52.751487356616494,
+          "lon_deg": 155.02217899018595,
+          "vel_x_km_s": -2.2868721663093563,
+          "vel_y_km_s": -6.879818417361443,
+          "vel_z_km_s": -0.6366558967443846
+        },
+        "forwarding": "routed",
+        "interfaces": {
+          "ethernet": {},
+          "lo0": {
+            "ipv4": "100.64.0.11/32",
+            "ipv6": null
+          }
+        },
+        "kind": "satellite",
+        "local_node_id": "sat-p00s05",
+        "namespace": "leo",
+        "node_id": "leo-sat-p00s05",
+        "originated_prefixes": null,
+        "plane": 0,
+        "role": "router",
+        "routing_instances": [
+          {
+            "area_border": false,
+            "areas": [
+              "49.0001"
+            ],
+            "as_boundary": false,
+            "domain_id": "default_domain",
+            "interfaces": [
+              {
+                "area_id": null,
+                "name": "gnd0"
+              },
+              {
+                "area_id": null,
+                "name": "isl0"
+              },
+              {
+                "area_id": null,
+                "name": "isl1"
+              }
+            ],
+            "protocol": "isis"
+          }
+        ],
+        "segment_id": "leo",
+        "slot": 5,
+        "surface_position": null,
+        "tags": [
+          "all"
+        ],
+        "terminal_inventory": [
+          {
+            "boresight": {
+              "mode": "nadir",
+              "target_body": "earth"
+            },
+            "count": 1,
+            "endpoint_role": "access",
+            "field_of_regard_deg": 120.0,
+            "link_role": null,
+            "max_range_km": 1250.0,
+            "medium": "rf",
+            "min_elevation_deg": -60.0,
+            "owner_node_id": "leo-sat-p00s05",
+            "receive_mbps": 5000.0,
+            "source_ref": "nodalarc:terminals/rf/rf-ka-starlink-space-gateway.yaml",
+            "source_terminal_id": "rf-ka-starlink-space-gateway",
+            "terminal_id": "access_ka",
+            "tracking_capacity": 1,
+            "tracking_rate_deg_s": 3.0,
+            "transmit_mbps": 5000.0
+          },
+          {
+            "boresight": null,
+            "count": 4,
+            "endpoint_role": "isl",
+            "field_of_regard_deg": 120.0,
+            "link_role": null,
+            "max_range_km": 5400.0,
+            "medium": "optical",
+            "min_elevation_deg": -60.0,
+            "owner_node_id": "leo-sat-p00s05",
+            "receive_mbps": 200000.0,
+            "source_ref": "nodalarc:terminals/optical/optical-starlink-space-isl.yaml",
+            "source_terminal_id": "optical-starlink-space-isl",
+            "terminal_id": "isl_optical",
+            "tracking_capacity": 1,
+            "tracking_rate_deg_s": 3.0,
+            "transmit_mbps": 200000.0
+          }
+        ]
+      },
+      {
+        "epoch_position": {
+          "alt_km": 563.5967074046685,
+          "lat_deg": -52.988262506531576,
+          "lon_deg": 171.55580179772974,
+          "vel_x_km_s": -1.6104520900318258,
+          "vel_y_km_s": -7.084964109251782,
+          "vel_z_km_s": 0.41916590067056125
+        },
+        "forwarding": "routed",
+        "interfaces": {
+          "ethernet": {},
+          "lo0": {
+            "ipv4": "100.64.0.12/32",
+            "ipv6": null
+          }
+        },
+        "kind": "satellite",
+        "local_node_id": "sat-p00s06",
+        "namespace": "leo",
+        "node_id": "leo-sat-p00s06",
+        "originated_prefixes": null,
+        "plane": 0,
+        "role": "router",
+        "routing_instances": [
+          {
+            "area_border": false,
+            "areas": [
+              "49.0001"
+            ],
+            "as_boundary": false,
+            "domain_id": "default_domain",
+            "interfaces": [
+              {
+                "area_id": null,
+                "name": "gnd0"
+              },
+              {
+                "area_id": null,
+                "name": "isl0"
+              },
+              {
+                "area_id": null,
+                "name": "isl1"
+              }
+            ],
+            "protocol": "isis"
+          }
+        ],
+        "segment_id": "leo",
+        "slot": 6,
+        "surface_position": null,
+        "tags": [
+          "all"
+        ],
+        "terminal_inventory": [
+          {
+            "boresight": {
+              "mode": "nadir",
+              "target_body": "earth"
+            },
+            "count": 1,
+            "endpoint_role": "access",
+            "field_of_regard_deg": 120.0,
+            "link_role": null,
+            "max_range_km": 1250.0,
+            "medium": "rf",
+            "min_elevation_deg": -60.0,
+            "owner_node_id": "leo-sat-p00s06",
+            "receive_mbps": 5000.0,
+            "source_ref": "nodalarc:terminals/rf/rf-ka-starlink-space-gateway.yaml",
+            "source_terminal_id": "rf-ka-starlink-space-gateway",
+            "terminal_id": "access_ka",
+            "tracking_capacity": 1,
+            "tracking_rate_deg_s": 3.0,
+            "transmit_mbps": 5000.0
+          },
+          {
+            "boresight": null,
+            "count": 4,
+            "endpoint_role": "isl",
+            "field_of_regard_deg": 120.0,
+            "link_role": null,
+            "max_range_km": 5400.0,
+            "medium": "optical",
+            "min_elevation_deg": -60.0,
+            "owner_node_id": "leo-sat-p00s06",
+            "receive_mbps": 200000.0,
+            "source_ref": "nodalarc:terminals/optical/optical-starlink-space-isl.yaml",
+            "source_terminal_id": "optical-starlink-space-isl",
+            "terminal_id": "isl_optical",
+            "tracking_capacity": 1,
+            "tracking_rate_deg_s": 3.0,
+            "transmit_mbps": 200000.0
+          }
+        ]
+      },
+      {
+        "epoch_position": {
+          "alt_km": 562.8681261767297,
+          "lat_deg": -50.980100600707445,
+          "lon_deg": -172.56337739949788,
+          "vel_x_km_s": -0.8850992419267288,
+          "vel_y_km_s": -7.074836751847336,
+          "vel_z_km_s": 1.4622515543018546
+        },
+        "forwarding": "routed",
+        "interfaces": {
+          "ethernet": {},
+          "lo0": {
+            "ipv4": "100.64.0.13/32",
+            "ipv6": null
+          }
+        },
+        "kind": "satellite",
+        "local_node_id": "sat-p00s07",
+        "namespace": "leo",
+        "node_id": "leo-sat-p00s07",
+        "originated_prefixes": null,
+        "plane": 0,
+        "role": "router",
+        "routing_instances": [
+          {
+            "area_border": false,
+            "areas": [
+              "49.0001"
+            ],
+            "as_boundary": false,
+            "domain_id": "default_domain",
+            "interfaces": [
+              {
+                "area_id": null,
+                "name": "gnd0"
+              },
+              {
+                "area_id": null,
+                "name": "isl0"
+              },
+              {
+                "area_id": null,
+                "name": "isl1"
+              }
+            ],
+            "protocol": "isis"
+          }
+        ],
+        "segment_id": "leo",
+        "slot": 7,
+        "surface_position": null,
+        "tags": [
+          "all"
+        ],
+        "terminal_inventory": [
+          {
+            "boresight": {
+              "mode": "nadir",
+              "target_body": "earth"
+            },
+            "count": 1,
+            "endpoint_role": "access",
+            "field_of_regard_deg": 120.0,
+            "link_role": null,
+            "max_range_km": 1250.0,
+            "medium": "rf",
+            "min_elevation_deg": -60.0,
+            "owner_node_id": "leo-sat-p00s07",
+            "receive_mbps": 5000.0,
+            "source_ref": "nodalarc:terminals/rf/rf-ka-starlink-space-gateway.yaml",
+            "source_terminal_id": "rf-ka-starlink-space-gateway",
+            "terminal_id": "access_ka",
+            "tracking_capacity": 1,
+            "tracking_rate_deg_s": 3.0,
+            "transmit_mbps": 5000.0
+          },
+          {
+            "boresight": null,
+            "count": 4,
+            "endpoint_role": "isl",
+            "field_of_regard_deg": 120.0,
+            "link_role": null,
+            "max_range_km": 5400.0,
+            "medium": "optical",
+            "min_elevation_deg": -60.0,
+            "owner_node_id": "leo-sat-p00s07",
+            "receive_mbps": 200000.0,
+            "source_ref": "nodalarc:terminals/optical/optical-starlink-space-isl.yaml",
+            "source_terminal_id": "optical-starlink-space-isl",
+            "terminal_id": "isl_optical",
+            "tracking_capacity": 1,
+            "tracking_rate_deg_s": 3.0,
+            "transmit_mbps": 200000.0
+          }
+        ]
+      },
+      {
+        "epoch_position": {
+          "alt_km": 561.4129226055884,
+          "lat_deg": -47.043859154559456,
+          "lon_deg": -158.56575290416572,
+          "vel_x_km_s": -0.13285310123754543,
+          "vel_y_km_s": -6.84974405977815,
+          "vel_z_km_s": 2.460907434390634
+        },
+        "forwarding": "routed",
+        "interfaces": {
+          "ethernet": {},
+          "lo0": {
+            "ipv4": "100.64.0.14/32",
+            "ipv6": null
+          }
+        },
+        "kind": "satellite",
+        "local_node_id": "sat-p00s08",
+        "namespace": "leo",
+        "node_id": "leo-sat-p00s08",
+        "originated_prefixes": null,
+        "plane": 0,
+        "role": "router",
+        "routing_instances": [
+          {
+            "area_border": false,
+            "areas": [
+              "49.0001"
+            ],
+            "as_boundary": false,
+            "domain_id": "default_domain",
+            "interfaces": [
+              {
+                "area_id": null,
+                "name": "gnd0"
+              },
+              {
+                "area_id": null,
+                "name": "isl0"
+              },
+              {
+                "area_id": null,
+                "name": "isl1"
+              }
+            ],
+            "protocol": "isis"
+          }
+        ],
+        "segment_id": "leo",
+        "slot": 8,
+        "surface_position": null,
+        "tags": [
+          "all"
+        ],
+        "terminal_inventory": [
+          {
+            "boresight": {
+              "mode": "nadir",
+              "target_body": "earth"
+            },
+            "count": 1,
+            "endpoint_role": "access",
+            "field_of_regard_deg": 120.0,
+            "link_role": null,
+            "max_range_km": 1250.0,
+            "medium": "rf",
+            "min_elevation_deg": -60.0,
+            "owner_node_id": "leo-sat-p00s08",
+            "receive_mbps": 5000.0,
+            "source_ref": "nodalarc:terminals/rf/rf-ka-starlink-space-gateway.yaml",
+            "source_terminal_id": "rf-ka-starlink-space-gateway",
+            "terminal_id": "access_ka",
+            "tracking_capacity": 1,
+            "tracking_rate_deg_s": 3.0,
+            "transmit_mbps": 5000.0
+          },
+          {
+            "boresight": null,
+            "count": 4,
+            "endpoint_role": "isl",
+            "field_of_regard_deg": 120.0,
+            "link_role": null,
+            "max_range_km": 5400.0,
+            "medium": "optical",
+            "min_elevation_deg": -60.0,
+            "owner_node_id": "leo-sat-p00s08",
+            "receive_mbps": 200000.0,
+            "source_ref": "nodalarc:terminals/optical/optical-starlink-space-isl.yaml",
+            "source_terminal_id": "optical-starlink-space-isl",
+            "terminal_id": "isl_optical",
+            "tracking_capacity": 1,
+            "tracking_rate_deg_s": 3.0,
+            "transmit_mbps": 200000.0
+          }
+        ]
+      },
+      {
+        "epoch_position": {
+          "alt_km": 559.4054899943176,
+          "lat_deg": -41.6550977733476,
+          "lon_deg": -146.79338421192392,
+          "vel_x_km_s": 0.6234297137058591,
+          "vel_y_km_s": -6.416525360590329,
+          "vel_z_km_s": 3.3847898873647404
+        },
+        "forwarding": "routed",
+        "interfaces": {
+          "ethernet": {},
+          "lo0": {
+            "ipv4": "100.64.0.15/32",
+            "ipv6": null
+          }
+        },
+        "kind": "satellite",
+        "local_node_id": "sat-p00s09",
+        "namespace": "leo",
+        "node_id": "leo-sat-p00s09",
+        "originated_prefixes": null,
+        "plane": 0,
+        "role": "router",
+        "routing_instances": [
+          {
+            "area_border": false,
+            "areas": [
+              "49.0001"
+            ],
+            "as_boundary": false,
+            "domain_id": "default_domain",
+            "interfaces": [
+              {
+                "area_id": null,
+                "name": "gnd0"
+              },
+              {
+                "area_id": null,
+                "name": "isl0"
+              },
+              {
+                "area_id": null,
+                "name": "isl1"
+              }
+            ],
+            "protocol": "isis"
+          }
+        ],
+        "segment_id": "leo",
+        "slot": 9,
+        "surface_position": null,
+        "tags": [
+          "all"
+        ],
+        "terminal_inventory": [
+          {
+            "boresight": {
+              "mode": "nadir",
+              "target_body": "earth"
+            },
+            "count": 1,
+            "endpoint_role": "access",
+            "field_of_regard_deg": 120.0,
+            "link_role": null,
+            "max_range_km": 1250.0,
+            "medium": "rf",
+            "min_elevation_deg": -60.0,
+            "owner_node_id": "leo-sat-p00s09",
+            "receive_mbps": 5000.0,
+            "source_ref": "nodalarc:terminals/rf/rf-ka-starlink-space-gateway.yaml",
+            "source_terminal_id": "rf-ka-starlink-space-gateway",
+            "terminal_id": "access_ka",
+            "tracking_capacity": 1,
+            "tracking_rate_deg_s": 3.0,
+            "transmit_mbps": 5000.0
+          },
+          {
+            "boresight": null,
+            "count": 4,
+            "endpoint_role": "isl",
+            "field_of_regard_deg": 120.0,
+            "link_role": null,
+            "max_range_km": 5400.0,
+            "medium": "optical",
+            "min_elevation_deg": -60.0,
+            "owner_node_id": "leo-sat-p00s09",
+            "receive_mbps": 200000.0,
+            "source_ref": "nodalarc:terminals/optical/optical-starlink-space-isl.yaml",
+            "source_terminal_id": "optical-starlink-space-isl",
+            "terminal_id": "isl_optical",
+            "tracking_capacity": 1,
+            "tracking_rate_deg_s": 3.0,
+            "transmit_mbps": 200000.0
+          }
+        ]
+      },
+      {
+        "epoch_position": {
+          "alt_km": 557.0869052593443,
+          "lat_deg": -35.25257018933341,
+          "lon_deg": -136.97860282085296,
+          "vel_x_km_s": 1.3607699322689362,
+          "vel_y_km_s": -5.788343785239492,
+          "vel_z_km_s": 4.20582721239756
+        },
+        "forwarding": "routed",
+        "interfaces": {
+          "ethernet": {},
+          "lo0": {
+            "ipv4": "100.64.0.16/32",
+            "ipv6": null
+          }
+        },
+        "kind": "satellite",
+        "local_node_id": "sat-p00s10",
+        "namespace": "leo",
+        "node_id": "leo-sat-p00s10",
+        "originated_prefixes": null,
+        "plane": 0,
+        "role": "router",
+        "routing_instances": [
+          {
+            "area_border": false,
+            "areas": [
+              "49.0001"
+            ],
+            "as_boundary": false,
+            "domain_id": "default_domain",
+            "interfaces": [
+              {
+                "area_id": null,
+                "name": "gnd0"
+              },
+              {
+                "area_id": null,
+                "name": "isl0"
+              },
+              {
+                "area_id": null,
+                "name": "isl1"
+              }
+            ],
+            "protocol": "isis"
+          }
+        ],
+        "segment_id": "leo",
+        "slot": 10,
+        "surface_position": null,
+        "tags": [
+          "all"
+        ],
+        "terminal_inventory": [
+          {
+            "boresight": {
+              "mode": "nadir",
+              "target_body": "earth"
+            },
+            "count": 1,
+            "endpoint_role": "access",
+            "field_of_regard_deg": 120.0,
+            "link_role": null,
+            "max_range_km": 1250.0,
+            "medium": "rf",
+            "min_elevation_deg": -60.0,
+            "owner_node_id": "leo-sat-p00s10",
+            "receive_mbps": 5000.0,
+            "source_ref": "nodalarc:terminals/rf/rf-ka-starlink-space-gateway.yaml",
+            "source_terminal_id": "rf-ka-starlink-space-gateway",
+            "terminal_id": "access_ka",
+            "tracking_capacity": 1,
+            "tracking_rate_deg_s": 3.0,
+            "transmit_mbps": 5000.0
+          },
+          {
+            "boresight": null,
+            "count": 4,
+            "endpoint_role": "isl",
+            "field_of_regard_deg": 120.0,
+            "link_role": null,
+            "max_range_km": 5400.0,
+            "medium": "optical",
+            "min_elevation_deg": -60.0,
+            "owner_node_id": "leo-sat-p00s10",
+            "receive_mbps": 200000.0,
+            "source_ref": "nodalarc:terminals/optical/optical-starlink-space-isl.yaml",
+            "source_terminal_id": "optical-starlink-space-isl",
+            "terminal_id": "isl_optical",
+            "tracking_capacity": 1,
+            "tracking_rate_deg_s": 3.0,
+            "transmit_mbps": 200000.0
+          }
+        ]
+      },
+      {
+        "epoch_position": {
+          "alt_km": 554.736341993681,
+          "lat_deg": -28.167868720541584,
+          "lon_deg": -128.6605073744294,
+          "vel_x_km_s": 2.056763845022863,
+          "vel_y_km_s": -4.984286313017409,
+          "vel_z_km_s": 4.899072605832972
+        },
+        "forwarding": "routed",
+        "interfaces": {
+          "ethernet": {},
+          "lo0": {
+            "ipv4": "100.64.0.17/32",
+            "ipv6": null
+          }
+        },
+        "kind": "satellite",
+        "local_node_id": "sat-p00s11",
+        "namespace": "leo",
+        "node_id": "leo-sat-p00s11",
+        "originated_prefixes": null,
+        "plane": 0,
+        "role": "router",
+        "routing_instances": [
+          {
+            "area_border": false,
+            "areas": [
+              "49.0001"
+            ],
+            "as_boundary": false,
+            "domain_id": "default_domain",
+            "interfaces": [
+              {
+                "area_id": null,
+                "name": "gnd0"
+              },
+              {
+                "area_id": null,
+                "name": "isl0"
+              },
+              {
+                "area_id": null,
+                "name": "isl1"
+              }
+            ],
+            "protocol": "isis"
+          }
+        ],
+        "segment_id": "leo",
+        "slot": 11,
+        "surface_position": null,
+        "tags": [
+          "all"
+        ],
+        "terminal_inventory": [
+          {
+            "boresight": {
+              "mode": "nadir",
+              "target_body": "earth"
+            },
+            "count": 1,
+            "endpoint_role": "access",
+            "field_of_regard_deg": 120.0,
+            "link_role": null,
+            "max_range_km": 1250.0,
+            "medium": "rf",
+            "min_elevation_deg": -60.0,
+            "owner_node_id": "leo-sat-p00s11",
+            "receive_mbps": 5000.0,
+            "source_ref": "nodalarc:terminals/rf/rf-ka-starlink-space-gateway.yaml",
+            "source_terminal_id": "rf-ka-starlink-space-gateway",
+            "terminal_id": "access_ka",
+            "tracking_capacity": 1,
+            "tracking_rate_deg_s": 3.0,
+            "transmit_mbps": 5000.0
+          },
+          {
+            "boresight": null,
+            "count": 4,
+            "endpoint_role": "isl",
+            "field_of_regard_deg": 120.0,
+            "link_role": null,
+            "max_range_km": 5400.0,
+            "medium": "optical",
+            "min_elevation_deg": -60.0,
+            "owner_node_id": "leo-sat-p00s11",
+            "receive_mbps": 200000.0,
+            "source_ref": "nodalarc:terminals/optical/optical-starlink-space-isl.yaml",
+            "source_terminal_id": "optical-starlink-space-isl",
+            "terminal_id": "isl_optical",
+            "tracking_capacity": 1,
+            "tracking_rate_deg_s": 3.0,
+            "transmit_mbps": 200000.0
+          }
+        ]
+      },
+      {
+        "epoch_position": {
+          "alt_km": 552.6376261630057,
+          "lat_deg": -20.634740391042996,
+          "lon_deg": -121.39890903160583,
+          "vel_x_km_s": 2.6902640291184667,
+          "vel_y_km_s": -4.028783823344901,
+          "vel_z_km_s": 5.443462157190478
+        },
+        "forwarding": "routed",
+        "interfaces": {
+          "ethernet": {},
+          "lo0": {
+            "ipv4": "100.64.0.18/32",
+            "ipv6": null
+          }
+        },
+        "kind": "satellite",
+        "local_node_id": "sat-p00s12",
+        "namespace": "leo",
+        "node_id": "leo-sat-p00s12",
+        "originated_prefixes": null,
+        "plane": 0,
+        "role": "router",
+        "routing_instances": [
+          {
+            "area_border": false,
+            "areas": [
+              "49.0001"
+            ],
+            "as_boundary": false,
+            "domain_id": "default_domain",
+            "interfaces": [
+              {
+                "area_id": null,
+                "name": "gnd0"
+              },
+              {
+                "area_id": null,
+                "name": "isl0"
+              },
+              {
+                "area_id": null,
+                "name": "isl1"
+              }
+            ],
+            "protocol": "isis"
+          }
+        ],
+        "segment_id": "leo",
+        "slot": 12,
+        "surface_position": null,
+        "tags": [
+          "all"
+        ],
+        "terminal_inventory": [
+          {
+            "boresight": {
+              "mode": "nadir",
+              "target_body": "earth"
+            },
+            "count": 1,
+            "endpoint_role": "access",
+            "field_of_regard_deg": 120.0,
+            "link_role": null,
+            "max_range_km": 1250.0,
+            "medium": "rf",
+            "min_elevation_deg": -60.0,
+            "owner_node_id": "leo-sat-p00s12",
+            "receive_mbps": 5000.0,
+            "source_ref": "nodalarc:terminals/rf/rf-ka-starlink-space-gateway.yaml",
+            "source_terminal_id": "rf-ka-starlink-space-gateway",
+            "terminal_id": "access_ka",
+            "tracking_capacity": 1,
+            "tracking_rate_deg_s": 3.0,
+            "transmit_mbps": 5000.0
+          },
+          {
+            "boresight": null,
+            "count": 4,
+            "endpoint_role": "isl",
+            "field_of_regard_deg": 120.0,
+            "link_role": null,
+            "max_range_km": 5400.0,
+            "medium": "optical",
+            "min_elevation_deg": -60.0,
+            "owner_node_id": "leo-sat-p00s12",
+            "receive_mbps": 200000.0,
+            "source_ref": "nodalarc:terminals/optical/optical-starlink-space-isl.yaml",
+            "source_terminal_id": "optical-starlink-space-isl",
+            "terminal_id": "isl_optical",
+            "tracking_capacity": 1,
+            "tracking_rate_deg_s": 3.0,
+            "transmit_mbps": 200000.0
+          }
+        ]
+      },
+      {
+        "epoch_position": {
+          "alt_km": 551.0448589272519,
+          "lat_deg": -12.818846724773545,
+          "lon_deg": -114.82987045774394,
+          "vel_x_km_s": 3.2420219020286143,
+          "vel_y_km_s": -2.9508687758629986,
+          "vel_z_km_s": 5.82245486542653
+        },
+        "forwarding": "routed",
+        "interfaces": {
+          "ethernet": {},
+          "lo0": {
+            "ipv4": "100.64.0.19/32",
+            "ipv6": null
+          }
+        },
+        "kind": "satellite",
+        "local_node_id": "sat-p00s13",
+        "namespace": "leo",
+        "node_id": "leo-sat-p00s13",
+        "originated_prefixes": null,
+        "plane": 0,
+        "role": "router",
+        "routing_instances": [
+          {
+            "area_border": false,
+            "areas": [
+              "49.0001"
+            ],
+            "as_boundary": false,
+            "domain_id": "default_domain",
+            "interfaces": [
+              {
+                "area_id": null,
+                "name": "gnd0"
+              },
+              {
+                "area_id": null,
+                "name": "isl0"
+              },
+              {
+                "area_id": null,
+                "name": "isl1"
+              }
+            ],
+            "protocol": "isis"
+          }
+        ],
+        "segment_id": "leo",
+        "slot": 13,
+        "surface_position": null,
+        "tags": [
+          "all"
+        ],
+        "terminal_inventory": [
+          {
+            "boresight": {
+              "mode": "nadir",
+              "target_body": "earth"
+            },
+            "count": 1,
+            "endpoint_role": "access",
+            "field_of_regard_deg": 120.0,
+            "link_role": null,
+            "max_range_km": 1250.0,
+            "medium": "rf",
+            "min_elevation_deg": -60.0,
+            "owner_node_id": "leo-sat-p00s13",
+            "receive_mbps": 5000.0,
+            "source_ref": "nodalarc:terminals/rf/rf-ka-starlink-space-gateway.yaml",
+            "source_terminal_id": "rf-ka-starlink-space-gateway",
+            "terminal_id": "access_ka",
+            "tracking_capacity": 1,
+            "tracking_rate_deg_s": 3.0,
+            "transmit_mbps": 5000.0
+          },
+          {
+            "boresight": null,
+            "count": 4,
+            "endpoint_role": "isl",
+            "field_of_regard_deg": 120.0,
+            "link_role": null,
+            "max_range_km": 5400.0,
+            "medium": "optical",
+            "min_elevation_deg": -60.0,
+            "owner_node_id": "leo-sat-p00s13",
+            "receive_mbps": 200000.0,
+            "source_ref": "nodalarc:terminals/optical/optical-starlink-space-isl.yaml",
+            "source_terminal_id": "optical-starlink-space-isl",
+            "terminal_id": "isl_optical",
+            "tracking_capacity": 1,
+            "tracking_rate_deg_s": 3.0,
+            "transmit_mbps": 200000.0
+          }
+        ]
+      },
+      {
+        "epoch_position": {
+          "alt_km": 550.1513171147317,
+          "lat_deg": -4.844223615350071,
+          "lon_deg": -108.65736756494702,
+          "vel_x_km_s": 3.695272579987842,
+          "vel_y_km_s": -1.7832930738381931,
+          "vel_z_km_s": 6.024535228880909
+        },
+        "forwarding": "routed",
+        "interfaces": {
+          "ethernet": {},
+          "lo0": {
+            "ipv4": "100.64.0.20/32",
+            "ipv6": null
+          }
+        },
+        "kind": "satellite",
+        "local_node_id": "sat-p00s14",
+        "namespace": "leo",
+        "node_id": "leo-sat-p00s14",
+        "originated_prefixes": null,
+        "plane": 0,
+        "role": "router",
+        "routing_instances": [
+          {
+            "area_border": false,
+            "areas": [
+              "49.0001"
+            ],
+            "as_boundary": false,
+            "domain_id": "default_domain",
+            "interfaces": [
+              {
+                "area_id": null,
+                "name": "gnd0"
+              },
+              {
+                "area_id": null,
+                "name": "isl0"
+              },
+              {
+                "area_id": null,
+                "name": "isl1"
+              }
+            ],
+            "protocol": "isis"
+          }
+        ],
+        "segment_id": "leo",
+        "slot": 14,
+        "surface_position": null,
+        "tags": [
+          "all"
+        ],
+        "terminal_inventory": [
+          {
+            "boresight": {
+              "mode": "nadir",
+              "target_body": "earth"
+            },
+            "count": 1,
+            "endpoint_role": "access",
+            "field_of_regard_deg": 120.0,
+            "link_role": null,
+            "max_range_km": 1250.0,
+            "medium": "rf",
+            "min_elevation_deg": -60.0,
+            "owner_node_id": "leo-sat-p00s14",
+            "receive_mbps": 5000.0,
+            "source_ref": "nodalarc:terminals/rf/rf-ka-starlink-space-gateway.yaml",
+            "source_terminal_id": "rf-ka-starlink-space-gateway",
+            "terminal_id": "access_ka",
+            "tracking_capacity": 1,
+            "tracking_rate_deg_s": 3.0,
+            "transmit_mbps": 5000.0
+          },
+          {
+            "boresight": null,
+            "count": 4,
+            "endpoint_role": "isl",
+            "field_of_regard_deg": 120.0,
+            "link_role": null,
+            "max_range_km": 5400.0,
+            "medium": "optical",
+            "min_elevation_deg": -60.0,
+            "owner_node_id": "leo-sat-p00s14",
+            "receive_mbps": 200000.0,
+            "source_ref": "nodalarc:terminals/optical/optical-starlink-space-isl.yaml",
+            "source_terminal_id": "optical-starlink-space-isl",
+            "terminal_id": "isl_optical",
+            "tracking_capacity": 1,
+            "tracking_rate_deg_s": 3.0,
+            "transmit_mbps": 200000.0
+          }
+        ]
+      },
+      {
+        "epoch_position": {
+          "alt_km": 550.0655931170813,
+          "lat_deg": 3.1872978738388325,
+          "lon_deg": -102.62820751243375,
+          "vel_x_km_s": 4.036244270502306,
+          "vel_y_km_s": -0.5615329141546008,
+          "vel_z_km_s": 6.043563137967669
+        },
+        "forwarding": "routed",
+        "interfaces": {
+          "ethernet": {},
+          "lo0": {
+            "ipv4": "100.64.0.21/32",
+            "ipv6": null
+          }
+        },
+        "kind": "satellite",
+        "local_node_id": "sat-p00s15",
+        "namespace": "leo",
+        "node_id": "leo-sat-p00s15",
+        "originated_prefixes": null,
+        "plane": 0,
+        "role": "router",
+        "routing_instances": [
+          {
+            "area_border": false,
+            "areas": [
+              "49.0001"
+            ],
+            "as_boundary": false,
+            "domain_id": "default_domain",
+            "interfaces": [
+              {
+                "area_id": null,
+                "name": "gnd0"
+              },
+              {
+                "area_id": null,
+                "name": "isl0"
+              },
+              {
+                "area_id": null,
+                "name": "isl1"
+              }
+            ],
+            "protocol": "isis"
+          }
+        ],
+        "segment_id": "leo",
+        "slot": 15,
+        "surface_position": null,
+        "tags": [
+          "all"
+        ],
+        "terminal_inventory": [
+          {
+            "boresight": {
+              "mode": "nadir",
+              "target_body": "earth"
+            },
+            "count": 1,
+            "endpoint_role": "access",
+            "field_of_regard_deg": 120.0,
+            "link_role": null,
+            "max_range_km": 1250.0,
+            "medium": "rf",
+            "min_elevation_deg": -60.0,
+            "owner_node_id": "leo-sat-p00s15",
+            "receive_mbps": 5000.0,
+            "source_ref": "nodalarc:terminals/rf/rf-ka-starlink-space-gateway.yaml",
+            "source_terminal_id": "rf-ka-starlink-space-gateway",
+            "terminal_id": "access_ka",
+            "tracking_capacity": 1,
+            "tracking_rate_deg_s": 3.0,
+            "transmit_mbps": 5000.0
+          },
+          {
+            "boresight": null,
+            "count": 4,
+            "endpoint_role": "isl",
+            "field_of_regard_deg": 120.0,
+            "link_role": null,
+            "max_range_km": 5400.0,
+            "medium": "optical",
+            "min_elevation_deg": -60.0,
+            "owner_node_id": "leo-sat-p00s15",
+            "receive_mbps": 200000.0,
+            "source_ref": "nodalarc:terminals/optical/optical-starlink-space-isl.yaml",
+            "source_terminal_id": "optical-starlink-space-isl",
+            "terminal_id": "isl_optical",
+            "tracking_capacity": 1,
+            "tracking_rate_deg_s": 3.0,
+            "transmit_mbps": 200000.0
+          }
+        ]
+      },
+      {
+        "epoch_position": {
+          "alt_km": 550.7981112096941,
+          "lat_deg": 11.181566481888396,
+          "lon_deg": -96.5051295677059,
+          "vel_x_km_s": 4.254576721295695,
+          "vel_y_km_s": 0.6772891389761628,
+          "vel_z_km_s": 5.878960439297791
+        },
+        "forwarding": "routed",
+        "interfaces": {
+          "ethernet": {},
+          "lo0": {
+            "ipv4": "100.64.0.22/32",
+            "ipv6": null
+          }
+        },
+        "kind": "satellite",
+        "local_node_id": "sat-p00s16",
+        "namespace": "leo",
+        "node_id": "leo-sat-p00s16",
+        "originated_prefixes": null,
+        "plane": 0,
+        "role": "router",
+        "routing_instances": [
+          {
+            "area_border": false,
+            "areas": [
+              "49.0001"
+            ],
+            "as_boundary": false,
+            "domain_id": "default_domain",
+            "interfaces": [
+              {
+                "area_id": null,
+                "name": "gnd0"
+              },
+              {
+                "area_id": null,
+                "name": "isl0"
+              },
+              {
+                "area_id": null,
+                "name": "isl1"
+              }
+            ],
+            "protocol": "isis"
+          }
+        ],
+        "segment_id": "leo",
+        "slot": 16,
+        "surface_position": null,
+        "tags": [
+          "all"
+        ],
+        "terminal_inventory": [
+          {
+            "boresight": {
+              "mode": "nadir",
+              "target_body": "earth"
+            },
+            "count": 1,
+            "endpoint_role": "access",
+            "field_of_regard_deg": 120.0,
+            "link_role": null,
+            "max_range_km": 1250.0,
+            "medium": "rf",
+            "min_elevation_deg": -60.0,
+            "owner_node_id": "leo-sat-p00s16",
+            "receive_mbps": 5000.0,
+            "source_ref": "nodalarc:terminals/rf/rf-ka-starlink-space-gateway.yaml",
+            "source_terminal_id": "rf-ka-starlink-space-gateway",
+            "terminal_id": "access_ka",
+            "tracking_capacity": 1,
+            "tracking_rate_deg_s": 3.0,
+            "transmit_mbps": 5000.0
+          },
+          {
+            "boresight": null,
+            "count": 4,
+            "endpoint_role": "isl",
+            "field_of_regard_deg": 120.0,
+            "link_role": null,
+            "max_range_km": 5400.0,
+            "medium": "optical",
+            "min_elevation_deg": -60.0,
+            "owner_node_id": "leo-sat-p00s16",
+            "receive_mbps": 200000.0,
+            "source_ref": "nodalarc:terminals/optical/optical-starlink-space-isl.yaml",
+            "source_terminal_id": "optical-starlink-space-isl",
+            "terminal_id": "isl_optical",
+            "tracking_capacity": 1,
+            "tracking_rate_deg_s": 3.0,
+            "transmit_mbps": 200000.0
+          }
+        ]
+      },
+      {
+        "epoch_position": {
+          "alt_km": 552.259830238967,
+          "lat_deg": 19.039421152489314,
+          "lon_deg": -90.0404130258875,
+          "vel_x_km_s": 4.343636011332222,
+          "vel_y_km_s": 1.8955321043440254,
+          "vel_z_km_s": 5.535728502577366
+        },
+        "forwarding": "routed",
+        "interfaces": {
+          "ethernet": {},
+          "lo0": {
+            "ipv4": "100.64.0.23/32",
+            "ipv6": null
+          }
+        },
+        "kind": "satellite",
+        "local_node_id": "sat-p00s17",
+        "namespace": "leo",
+        "node_id": "leo-sat-p00s17",
+        "originated_prefixes": null,
+        "plane": 0,
+        "role": "router",
+        "routing_instances": [
+          {
+            "area_border": false,
+            "areas": [
+              "49.0001"
+            ],
+            "as_boundary": false,
+            "domain_id": "default_domain",
+            "interfaces": [
+              {
+                "area_id": null,
+                "name": "gnd0"
+              },
+              {
+                "area_id": null,
+                "name": "isl0"
+              },
+              {
+                "area_id": null,
+                "name": "isl1"
+              }
+            ],
+            "protocol": "isis"
+          }
+        ],
+        "segment_id": "leo",
+        "slot": 17,
+        "surface_position": null,
+        "tags": [
+          "all"
+        ],
+        "terminal_inventory": [
+          {
+            "boresight": {
+              "mode": "nadir",
+              "target_body": "earth"
+            },
+            "count": 1,
+            "endpoint_role": "access",
+            "field_of_regard_deg": 120.0,
+            "link_role": null,
+            "max_range_km": 1250.0,
+            "medium": "rf",
+            "min_elevation_deg": -60.0,
+            "owner_node_id": "leo-sat-p00s17",
+            "receive_mbps": 5000.0,
+            "source_ref": "nodalarc:terminals/rf/rf-ka-starlink-space-gateway.yaml",
+            "source_terminal_id": "rf-ka-starlink-space-gateway",
+            "terminal_id": "access_ka",
+            "tracking_capacity": 1,
+            "tracking_rate_deg_s": 3.0,
+            "transmit_mbps": 5000.0
+          },
+          {
+            "boresight": null,
+            "count": 4,
+            "endpoint_role": "isl",
+            "field_of_regard_deg": 120.0,
+            "link_role": null,
+            "max_range_km": 5400.0,
+            "medium": "optical",
+            "min_elevation_deg": -60.0,
+            "owner_node_id": "leo-sat-p00s17",
+            "receive_mbps": 200000.0,
+            "source_ref": "nodalarc:terminals/optical/optical-starlink-space-isl.yaml",
+            "source_terminal_id": "optical-starlink-space-isl",
+            "terminal_id": "isl_optical",
+            "tracking_capacity": 1,
+            "tracking_rate_deg_s": 3.0,
+            "transmit_mbps": 200000.0
+          }
+        ]
+      },
+      {
+        "epoch_position": {
+          "alt_km": 554.2733082277473,
+          "lat_deg": 26.64279679897132,
+          "lon_deg": -82.94908892760957,
+          "vel_x_km_s": 4.300716119150293,
+          "vel_y_km_s": 3.0561802859069207,
+          "vel_z_km_s": 5.024296256519903
+        },
+        "forwarding": "routed",
+        "interfaces": {
+          "ethernet": {},
+          "lo0": {
+            "ipv4": "100.64.0.24/32",
+            "ipv6": null
+          }
+        },
+        "kind": "satellite",
+        "local_node_id": "sat-p00s18",
+        "namespace": "leo",
+        "node_id": "leo-sat-p00s18",
+        "originated_prefixes": null,
+        "plane": 0,
+        "role": "router",
+        "routing_instances": [
+          {
+            "area_border": false,
+            "areas": [
+              "49.0001"
+            ],
+            "as_boundary": false,
+            "domain_id": "default_domain",
+            "interfaces": [
+              {
+                "area_id": null,
+                "name": "gnd0"
+              },
+              {
+                "area_id": null,
+                "name": "isl0"
+              },
+              {
+                "area_id": null,
+                "name": "isl1"
+              }
+            ],
+            "protocol": "isis"
+          }
+        ],
+        "segment_id": "leo",
+        "slot": 18,
+        "surface_position": null,
+        "tags": [
+          "all"
+        ],
+        "terminal_inventory": [
+          {
+            "boresight": {
+              "mode": "nadir",
+              "target_body": "earth"
+            },
+            "count": 1,
+            "endpoint_role": "access",
+            "field_of_regard_deg": 120.0,
+            "link_role": null,
+            "max_range_km": 1250.0,
+            "medium": "rf",
+            "min_elevation_deg": -60.0,
+            "owner_node_id": "leo-sat-p00s18",
+            "receive_mbps": 5000.0,
+            "source_ref": "nodalarc:terminals/rf/rf-ka-starlink-space-gateway.yaml",
+            "source_terminal_id": "rf-ka-starlink-space-gateway",
+            "terminal_id": "access_ka",
+            "tracking_capacity": 1,
+            "tracking_rate_deg_s": 3.0,
+            "transmit_mbps": 5000.0
+          },
+          {
+            "boresight": null,
+            "count": 4,
+            "endpoint_role": "isl",
+            "field_of_regard_deg": 120.0,
+            "link_role": null,
+            "max_range_km": 5400.0,
+            "medium": "optical",
+            "min_elevation_deg": -60.0,
+            "owner_node_id": "leo-sat-p00s18",
+            "receive_mbps": 200000.0,
+            "source_ref": "nodalarc:terminals/optical/optical-starlink-space-isl.yaml",
+            "source_terminal_id": "optical-starlink-space-isl",
+            "terminal_id": "isl_optical",
+            "tracking_capacity": 1,
+            "tracking_rate_deg_s": 3.0,
+            "transmit_mbps": 200000.0
+          }
+        ]
+      },
+      {
+        "epoch_position": {
+          "alt_km": 556.5946395914743,
+          "lat_deg": 33.836553453380326,
+          "lon_deg": -74.88288554856469,
+          "vel_x_km_s": 4.12712114395535,
+          "vel_y_km_s": 4.123967975984333,
+          "vel_z_km_s": 4.360203311124686
+        },
+        "forwarding": "routed",
+        "interfaces": {
+          "ethernet": {},
+          "lo0": {
+            "ipv4": "100.64.0.25/32",
+            "ipv6": null
+          }
+        },
+        "kind": "satellite",
+        "local_node_id": "sat-p00s19",
+        "namespace": "leo",
+        "node_id": "leo-sat-p00s19",
+        "originated_prefixes": null,
+        "plane": 0,
+        "role": "router",
+        "routing_instances": [
+          {
+            "area_border": false,
+            "areas": [
+              "49.0001"
+            ],
+            "as_boundary": false,
+            "domain_id": "default_domain",
+            "interfaces": [
+              {
+                "area_id": null,
+                "name": "gnd0"
+              },
+              {
+                "area_id": null,
+                "name": "isl0"
+              },
+              {
+                "area_id": null,
+                "name": "isl1"
+              }
+            ],
+            "protocol": "isis"
+          }
+        ],
+        "segment_id": "leo",
+        "slot": 19,
+        "surface_position": null,
+        "tags": [
+          "all"
+        ],
+        "terminal_inventory": [
+          {
+            "boresight": {
+              "mode": "nadir",
+              "target_body": "earth"
+            },
+            "count": 1,
+            "endpoint_role": "access",
+            "field_of_regard_deg": 120.0,
+            "link_role": null,
+            "max_range_km": 1250.0,
+            "medium": "rf",
+            "min_elevation_deg": -60.0,
+            "owner_node_id": "leo-sat-p00s19",
+            "receive_mbps": 5000.0,
+            "source_ref": "nodalarc:terminals/rf/rf-ka-starlink-space-gateway.yaml",
+            "source_terminal_id": "rf-ka-starlink-space-gateway",
+            "terminal_id": "access_ka",
+            "tracking_capacity": 1,
+            "tracking_rate_deg_s": 3.0,
+            "transmit_mbps": 5000.0
+          },
+          {
+            "boresight": null,
+            "count": 4,
+            "endpoint_role": "isl",
+            "field_of_regard_deg": 120.0,
+            "link_role": null,
+            "max_range_km": 5400.0,
+            "medium": "optical",
+            "min_elevation_deg": -60.0,
+            "owner_node_id": "leo-sat-p00s19",
+            "receive_mbps": 200000.0,
+            "source_ref": "nodalarc:terminals/optical/optical-starlink-space-isl.yaml",
+            "source_terminal_id": "optical-starlink-space-isl",
+            "terminal_id": "isl_optical",
+            "tracking_capacity": 1,
+            "tracking_rate_deg_s": 3.0,
+            "transmit_mbps": 200000.0
+          }
+        ]
+      },
+      {
+        "epoch_position": {
+          "alt_km": 558.943365588666,
+          "lat_deg": 40.40349070840506,
+          "lon_deg": -65.41601505361774,
+          "vel_x_km_s": 3.828125681225379,
+          "vel_y_km_s": 5.066450985939989,
+          "vel_z_km_s": 3.563627794490252
+        },
+        "forwarding": "routed",
+        "interfaces": {
+          "ethernet": {},
+          "lo0": {
+            "ipv4": "100.64.0.26/32",
+            "ipv6": null
+          }
+        },
+        "kind": "satellite",
+        "local_node_id": "sat-p00s20",
+        "namespace": "leo",
+        "node_id": "leo-sat-p00s20",
+        "originated_prefixes": null,
+        "plane": 0,
+        "role": "router",
+        "routing_instances": [
+          {
+            "area_border": false,
+            "areas": [
+              "49.0001"
+            ],
+            "as_boundary": false,
+            "domain_id": "default_domain",
+            "interfaces": [
+              {
+                "area_id": null,
+                "name": "gnd0"
+              },
+              {
+                "area_id": null,
+                "name": "isl0"
+              },
+              {
+                "area_id": null,
+                "name": "isl1"
+              }
+            ],
+            "protocol": "isis"
+          }
+        ],
+        "segment_id": "leo",
+        "slot": 20,
+        "surface_position": null,
+        "tags": [
+          "all"
+        ],
+        "terminal_inventory": [
+          {
+            "boresight": {
+              "mode": "nadir",
+              "target_body": "earth"
+            },
+            "count": 1,
+            "endpoint_role": "access",
+            "field_of_regard_deg": 120.0,
+            "link_role": null,
+            "max_range_km": 1250.0,
+            "medium": "rf",
+            "min_elevation_deg": -60.0,
+            "owner_node_id": "leo-sat-p00s20",
+            "receive_mbps": 5000.0,
+            "source_ref": "nodalarc:terminals/rf/rf-ka-starlink-space-gateway.yaml",
+            "source_terminal_id": "rf-ka-starlink-space-gateway",
+            "terminal_id": "access_ka",
+            "tracking_capacity": 1,
+            "tracking_rate_deg_s": 3.0,
+            "transmit_mbps": 5000.0
+          },
+          {
+            "boresight": null,
+            "count": 4,
+            "endpoint_role": "isl",
+            "field_of_regard_deg": 120.0,
+            "link_role": null,
+            "max_range_km": 5400.0,
+            "medium": "optical",
+            "min_elevation_deg": -60.0,
+            "owner_node_id": "leo-sat-p00s20",
+            "receive_mbps": 200000.0,
+            "source_ref": "nodalarc:terminals/optical/optical-starlink-space-isl.yaml",
+            "source_terminal_id": "optical-starlink-space-isl",
+            "terminal_id": "isl_optical",
+            "tracking_capacity": 1,
+            "tracking_rate_deg_s": 3.0,
+            "transmit_mbps": 200000.0
+          }
+        ]
+      },
+      {
+        "epoch_position": {
+          "alt_km": 561.0365199110802,
+          "lat_deg": 46.03428639748436,
+          "lon_deg": -54.08121557361093,
+          "vel_x_km_s": 3.4128145567964543,
+          "vel_y_km_s": 5.854992446435726,
+          "vel_z_km_s": 2.6587732506029402
+        },
+        "forwarding": "routed",
+        "interfaces": {
+          "ethernet": {},
+          "lo0": {
+            "ipv4": "100.64.0.27/32",
+            "ipv6": null
+          }
+        },
+        "kind": "satellite",
+        "local_node_id": "sat-p00s21",
+        "namespace": "leo",
+        "node_id": "leo-sat-p00s21",
+        "originated_prefixes": null,
+        "plane": 0,
+        "role": "router",
+        "routing_instances": [
+          {
+            "area_border": false,
+            "areas": [
+              "49.0001"
+            ],
+            "as_boundary": false,
+            "domain_id": "default_domain",
+            "interfaces": [
+              {
+                "area_id": null,
+                "name": "gnd0"
+              },
+              {
+                "area_id": null,
+                "name": "isl0"
+              },
+              {
+                "area_id": null,
+                "name": "isl1"
+              }
+            ],
+            "protocol": "isis"
+          }
+        ],
+        "segment_id": "leo",
+        "slot": 21,
+        "surface_position": null,
+        "tags": [
+          "all"
+        ],
+        "terminal_inventory": [
+          {
+            "boresight": {
+              "mode": "nadir",
+              "target_body": "earth"
+            },
+            "count": 1,
+            "endpoint_role": "access",
+            "field_of_regard_deg": 120.0,
+            "link_role": null,
+            "max_range_km": 1250.0,
+            "medium": "rf",
+            "min_elevation_deg": -60.0,
+            "owner_node_id": "leo-sat-p00s21",
+            "receive_mbps": 5000.0,
+            "source_ref": "nodalarc:terminals/rf/rf-ka-starlink-space-gateway.yaml",
+            "source_terminal_id": "rf-ka-starlink-space-gateway",
+            "terminal_id": "access_ka",
+            "tracking_capacity": 1,
+            "tracking_rate_deg_s": 3.0,
+            "transmit_mbps": 5000.0
+          },
+          {
+            "boresight": null,
+            "count": 4,
+            "endpoint_role": "isl",
+            "field_of_regard_deg": 120.0,
+            "link_role": null,
+            "max_range_km": 5400.0,
+            "medium": "optical",
+            "min_elevation_deg": -60.0,
+            "owner_node_id": "leo-sat-p00s21",
+            "receive_mbps": 200000.0,
+            "source_ref": "nodalarc:terminals/optical/optical-starlink-space-isl.yaml",
+            "source_terminal_id": "optical-starlink-space-isl",
+            "terminal_id": "isl_optical",
+            "tracking_capacity": 1,
+            "tracking_rate_deg_s": 3.0,
+            "transmit_mbps": 200000.0
+          }
+        ]
+      },
+      {
+        "epoch_position": {
+          "alt_km": 562.6226036534044,
+          "lat_deg": 50.310309911132926,
+          "lon_deg": -40.542224357641565,
+          "vel_x_km_s": 2.893806789026744,
+          "vel_y_km_s": 6.465632924215678,
+          "vel_z_km_s": 1.6731332269002015
+        },
+        "forwarding": "routed",
+        "interfaces": {
+          "ethernet": {},
+          "lo0": {
+            "ipv4": "100.64.0.28/32",
+            "ipv6": null
+          }
+        },
+        "kind": "satellite",
+        "local_node_id": "sat-p00s22",
+        "namespace": "leo",
+        "node_id": "leo-sat-p00s22",
+        "originated_prefixes": null,
+        "plane": 0,
+        "role": "router",
+        "routing_instances": [
+          {
+            "area_border": false,
+            "areas": [
+              "49.0001"
+            ],
+            "as_boundary": false,
+            "domain_id": "default_domain",
+            "interfaces": [
+              {
+                "area_id": null,
+                "name": "gnd0"
+              },
+              {
+                "area_id": null,
+                "name": "isl0"
+              },
+              {
+                "area_id": null,
+                "name": "isl1"
+              }
+            ],
+            "protocol": "isis"
+          }
+        ],
+        "segment_id": "leo",
+        "slot": 22,
+        "surface_position": null,
+        "tags": [
+          "all"
+        ],
+        "terminal_inventory": [
+          {
+            "boresight": {
+              "mode": "nadir",
+              "target_body": "earth"
+            },
+            "count": 1,
+            "endpoint_role": "access",
+            "field_of_regard_deg": 120.0,
+            "link_role": null,
+            "max_range_km": 1250.0,
+            "medium": "rf",
+            "min_elevation_deg": -60.0,
+            "owner_node_id": "leo-sat-p00s22",
+            "receive_mbps": 5000.0,
+            "source_ref": "nodalarc:terminals/rf/rf-ka-starlink-space-gateway.yaml",
+            "source_terminal_id": "rf-ka-starlink-space-gateway",
+            "terminal_id": "access_ka",
+            "tracking_capacity": 1,
+            "tracking_rate_deg_s": 3.0,
+            "transmit_mbps": 5000.0
+          },
+          {
+            "boresight": null,
+            "count": 4,
+            "endpoint_role": "isl",
+            "field_of_regard_deg": 120.0,
+            "link_role": null,
+            "max_range_km": 5400.0,
+            "medium": "optical",
+            "min_elevation_deg": -60.0,
+            "owner_node_id": "leo-sat-p00s22",
+            "receive_mbps": 200000.0,
+            "source_ref": "nodalarc:terminals/optical/optical-starlink-space-isl.yaml",
+            "source_terminal_id": "optical-starlink-space-isl",
+            "terminal_id": "isl_optical",
+            "tracking_capacity": 1,
+            "tracking_rate_deg_s": 3.0,
+            "transmit_mbps": 200000.0
+          }
+        ]
+      },
+      {
+        "epoch_position": {
+          "alt_km": 563.5114672762638,
+          "lat_deg": 52.75148735661647,
+          "lon_deg": -24.977821009814377,
+          "vel_x_km_s": 2.2868721663093687,
+          "vel_y_km_s": 6.879818417361438,
+          "vel_z_km_s": 0.6366558967444053
+        },
+        "forwarding": "routed",
+        "interfaces": {
+          "ethernet": {},
+          "lo0": {
+            "ipv4": "100.64.0.29/32",
+            "ipv6": null
+          }
+        },
+        "kind": "satellite",
+        "local_node_id": "sat-p00s23",
+        "namespace": "leo",
+        "node_id": "leo-sat-p00s23",
+        "originated_prefixes": null,
+        "plane": 0,
+        "role": "router",
+        "routing_instances": [
+          {
+            "area_border": false,
+            "areas": [
+              "49.0001"
+            ],
+            "as_boundary": false,
+            "domain_id": "default_domain",
+            "interfaces": [
+              {
+                "area_id": null,
+                "name": "gnd0"
+              },
+              {
+                "area_id": null,
+                "name": "isl0"
+              },
+              {
+                "area_id": null,
+                "name": "isl1"
+              }
+            ],
+            "protocol": "isis"
+          }
+        ],
+        "segment_id": "leo",
+        "slot": 23,
+        "surface_position": null,
+        "tags": [
+          "all"
+        ],
+        "terminal_inventory": [
+          {
+            "boresight": {
+              "mode": "nadir",
+              "target_body": "earth"
+            },
+            "count": 1,
+            "endpoint_role": "access",
+            "field_of_regard_deg": 120.0,
+            "link_role": null,
+            "max_range_km": 1250.0,
+            "medium": "rf",
+            "min_elevation_deg": -60.0,
+            "owner_node_id": "leo-sat-p00s23",
+            "receive_mbps": 5000.0,
+            "source_ref": "nodalarc:terminals/rf/rf-ka-starlink-space-gateway.yaml",
+            "source_terminal_id": "rf-ka-starlink-space-gateway",
+            "terminal_id": "access_ka",
+            "tracking_capacity": 1,
+            "tracking_rate_deg_s": 3.0,
+            "transmit_mbps": 5000.0
+          },
+          {
+            "boresight": null,
+            "count": 4,
+            "endpoint_role": "isl",
+            "field_of_regard_deg": 120.0,
+            "link_role": null,
+            "max_range_km": 5400.0,
+            "medium": "optical",
+            "min_elevation_deg": -60.0,
+            "owner_node_id": "leo-sat-p00s23",
+            "receive_mbps": 200000.0,
+            "source_ref": "nodalarc:terminals/optical/optical-starlink-space-isl.yaml",
+            "source_terminal_id": "optical-starlink-space-isl",
+            "terminal_id": "isl_optical",
+            "tracking_capacity": 1,
+            "tracking_rate_deg_s": 3.0,
+            "transmit_mbps": 200000.0
+          }
+        ]
+      },
+      {
+        "epoch_position": {
+          "alt_km": 563.5967074046694,
+          "lat_deg": 52.98826250653157,
+          "lon_deg": -8.444198202269911,
+          "vel_x_km_s": 1.6104520900318107,
+          "vel_y_km_s": 7.084964109251784,
+          "vel_z_km_s": -0.4191659006705835
+        },
+        "forwarding": "routed",
+        "interfaces": {
+          "ethernet": {},
+          "lo0": {
+            "ipv4": "100.64.0.30/32",
+            "ipv6": null
+          }
+        },
+        "kind": "satellite",
+        "local_node_id": "sat-p00s24",
+        "namespace": "leo",
+        "node_id": "leo-sat-p00s24",
+        "originated_prefixes": null,
+        "plane": 0,
+        "role": "router",
+        "routing_instances": [
+          {
+            "area_border": false,
+            "areas": [
+              "49.0001"
+            ],
+            "as_boundary": false,
+            "domain_id": "default_domain",
+            "interfaces": [
+              {
+                "area_id": null,
+                "name": "gnd0"
+              },
+              {
+                "area_id": null,
+                "name": "isl0"
+              },
+              {
+                "area_id": null,
+                "name": "isl1"
+              }
+            ],
+            "protocol": "isis"
+          }
+        ],
+        "segment_id": "leo",
+        "slot": 24,
+        "surface_position": null,
+        "tags": [
+          "all"
+        ],
+        "terminal_inventory": [
+          {
+            "boresight": {
+              "mode": "nadir",
+              "target_body": "earth"
+            },
+            "count": 1,
+            "endpoint_role": "access",
+            "field_of_regard_deg": 120.0,
+            "link_role": null,
+            "max_range_km": 1250.0,
+            "medium": "rf",
+            "min_elevation_deg": -60.0,
+            "owner_node_id": "leo-sat-p00s24",
+            "receive_mbps": 5000.0,
+            "source_ref": "nodalarc:terminals/rf/rf-ka-starlink-space-gateway.yaml",
+            "source_terminal_id": "rf-ka-starlink-space-gateway",
+            "terminal_id": "access_ka",
+            "tracking_capacity": 1,
+            "tracking_rate_deg_s": 3.0,
+            "transmit_mbps": 5000.0
+          },
+          {
+            "boresight": null,
+            "count": 4,
+            "endpoint_role": "isl",
+            "field_of_regard_deg": 120.0,
+            "link_role": null,
+            "max_range_km": 5400.0,
+            "medium": "optical",
+            "min_elevation_deg": -60.0,
+            "owner_node_id": "leo-sat-p00s24",
+            "receive_mbps": 200000.0,
+            "source_ref": "nodalarc:terminals/optical/optical-starlink-space-isl.yaml",
+            "source_terminal_id": "optical-starlink-space-isl",
+            "terminal_id": "isl_optical",
+            "tracking_capacity": 1,
+            "tracking_rate_deg_s": 3.0,
+            "transmit_mbps": 200000.0
+          }
+        ]
+      },
+      {
+        "epoch_position": {
+          "alt_km": 562.8681261767306,
+          "lat_deg": 50.98010060070751,
+          "lon_deg": 7.4366226005018214,
+          "vel_x_km_s": 0.8850992419267438,
+          "vel_y_km_s": 7.0748367518473385,
+          "vel_z_km_s": -1.4622515543018342
+        },
+        "forwarding": "routed",
+        "interfaces": {
+          "ethernet": {},
+          "lo0": {
+            "ipv4": "100.64.0.31/32",
+            "ipv6": null
+          }
+        },
+        "kind": "satellite",
+        "local_node_id": "sat-p00s25",
+        "namespace": "leo",
+        "node_id": "leo-sat-p00s25",
+        "originated_prefixes": null,
+        "plane": 0,
+        "role": "router",
+        "routing_instances": [
+          {
+            "area_border": false,
+            "areas": [
+              "49.0001"
+            ],
+            "as_boundary": false,
+            "domain_id": "default_domain",
+            "interfaces": [
+              {
+                "area_id": null,
+                "name": "gnd0"
+              },
+              {
+                "area_id": null,
+                "name": "isl0"
+              },
+              {
+                "area_id": null,
+                "name": "isl1"
+              }
+            ],
+            "protocol": "isis"
+          }
+        ],
+        "segment_id": "leo",
+        "slot": 25,
+        "surface_position": null,
+        "tags": [
+          "all"
+        ],
+        "terminal_inventory": [
+          {
+            "boresight": {
+              "mode": "nadir",
+              "target_body": "earth"
+            },
+            "count": 1,
+            "endpoint_role": "access",
+            "field_of_regard_deg": 120.0,
+            "link_role": null,
+            "max_range_km": 1250.0,
+            "medium": "rf",
+            "min_elevation_deg": -60.0,
+            "owner_node_id": "leo-sat-p00s25",
+            "receive_mbps": 5000.0,
+            "source_ref": "nodalarc:terminals/rf/rf-ka-starlink-space-gateway.yaml",
+            "source_terminal_id": "rf-ka-starlink-space-gateway",
+            "terminal_id": "access_ka",
+            "tracking_capacity": 1,
+            "tracking_rate_deg_s": 3.0,
+            "transmit_mbps": 5000.0
+          },
+          {
+            "boresight": null,
+            "count": 4,
+            "endpoint_role": "isl",
+            "field_of_regard_deg": 120.0,
+            "link_role": null,
+            "max_range_km": 5400.0,
+            "medium": "optical",
+            "min_elevation_deg": -60.0,
+            "owner_node_id": "leo-sat-p00s25",
+            "receive_mbps": 200000.0,
+            "source_ref": "nodalarc:terminals/optical/optical-starlink-space-isl.yaml",
+            "source_terminal_id": "optical-starlink-space-isl",
+            "terminal_id": "isl_optical",
+            "tracking_capacity": 1,
+            "tracking_rate_deg_s": 3.0,
+            "transmit_mbps": 200000.0
+          }
+        ]
+      },
+      {
+        "epoch_position": {
+          "alt_km": 561.4129226055884,
+          "lat_deg": 47.04385915455936,
+          "lon_deg": 21.434247095834564,
+          "vel_x_km_s": 0.132853101237529,
+          "vel_y_km_s": 6.849744059778142,
+          "vel_z_km_s": -2.4609074343906543
+        },
+        "forwarding": "routed",
+        "interfaces": {
+          "ethernet": {},
+          "lo0": {
+            "ipv4": "100.64.0.32/32",
+            "ipv6": null
+          }
+        },
+        "kind": "satellite",
+        "local_node_id": "sat-p00s26",
+        "namespace": "leo",
+        "node_id": "leo-sat-p00s26",
+        "originated_prefixes": null,
+        "plane": 0,
+        "role": "router",
+        "routing_instances": [
+          {
+            "area_border": false,
+            "areas": [
+              "49.0001"
+            ],
+            "as_boundary": false,
+            "domain_id": "default_domain",
+            "interfaces": [
+              {
+                "area_id": null,
+                "name": "gnd0"
+              },
+              {
+                "area_id": null,
+                "name": "isl0"
+              },
+              {
+                "area_id": null,
+                "name": "isl1"
+              }
+            ],
+            "protocol": "isis"
+          }
+        ],
+        "segment_id": "leo",
+        "slot": 26,
+        "surface_position": null,
+        "tags": [
+          "all"
+        ],
+        "terminal_inventory": [
+          {
+            "boresight": {
+              "mode": "nadir",
+              "target_body": "earth"
+            },
+            "count": 1,
+            "endpoint_role": "access",
+            "field_of_regard_deg": 120.0,
+            "link_role": null,
+            "max_range_km": 1250.0,
+            "medium": "rf",
+            "min_elevation_deg": -60.0,
+            "owner_node_id": "leo-sat-p00s26",
+            "receive_mbps": 5000.0,
+            "source_ref": "nodalarc:terminals/rf/rf-ka-starlink-space-gateway.yaml",
+            "source_terminal_id": "rf-ka-starlink-space-gateway",
+            "terminal_id": "access_ka",
+            "tracking_capacity": 1,
+            "tracking_rate_deg_s": 3.0,
+            "transmit_mbps": 5000.0
+          },
+          {
+            "boresight": null,
+            "count": 4,
+            "endpoint_role": "isl",
+            "field_of_regard_deg": 120.0,
+            "link_role": null,
+            "max_range_km": 5400.0,
+            "medium": "optical",
+            "min_elevation_deg": -60.0,
+            "owner_node_id": "leo-sat-p00s26",
+            "receive_mbps": 200000.0,
+            "source_ref": "nodalarc:terminals/optical/optical-starlink-space-isl.yaml",
+            "source_terminal_id": "optical-starlink-space-isl",
+            "terminal_id": "isl_optical",
+            "tracking_capacity": 1,
+            "tracking_rate_deg_s": 3.0,
+            "transmit_mbps": 200000.0
+          }
+        ]
+      },
+      {
+        "epoch_position": {
+          "alt_km": 559.4054899943176,
+          "lat_deg": 41.65509777334772,
+          "lon_deg": 33.206615788075865,
+          "vel_x_km_s": -0.6234297137058438,
+          "vel_y_km_s": 6.416525360590339,
+          "vel_z_km_s": -3.3847898873647226
+        },
+        "forwarding": "routed",
+        "interfaces": {
+          "ethernet": {},
+          "lo0": {
+            "ipv4": "100.64.0.33/32",
+            "ipv6": null
+          }
+        },
+        "kind": "satellite",
+        "local_node_id": "sat-p00s27",
+        "namespace": "leo",
+        "node_id": "leo-sat-p00s27",
+        "originated_prefixes": null,
+        "plane": 0,
+        "role": "router",
+        "routing_instances": [
+          {
+            "area_border": false,
+            "areas": [
+              "49.0001"
+            ],
+            "as_boundary": false,
+            "domain_id": "default_domain",
+            "interfaces": [
+              {
+                "area_id": null,
+                "name": "gnd0"
+              },
+              {
+                "area_id": null,
+                "name": "isl0"
+              },
+              {
+                "area_id": null,
+                "name": "isl1"
+              }
+            ],
+            "protocol": "isis"
+          }
+        ],
+        "segment_id": "leo",
+        "slot": 27,
+        "surface_position": null,
+        "tags": [
+          "all"
+        ],
+        "terminal_inventory": [
+          {
+            "boresight": {
+              "mode": "nadir",
+              "target_body": "earth"
+            },
+            "count": 1,
+            "endpoint_role": "access",
+            "field_of_regard_deg": 120.0,
+            "link_role": null,
+            "max_range_km": 1250.0,
+            "medium": "rf",
+            "min_elevation_deg": -60.0,
+            "owner_node_id": "leo-sat-p00s27",
+            "receive_mbps": 5000.0,
+            "source_ref": "nodalarc:terminals/rf/rf-ka-starlink-space-gateway.yaml",
+            "source_terminal_id": "rf-ka-starlink-space-gateway",
+            "terminal_id": "access_ka",
+            "tracking_capacity": 1,
+            "tracking_rate_deg_s": 3.0,
+            "transmit_mbps": 5000.0
+          },
+          {
+            "boresight": null,
+            "count": 4,
+            "endpoint_role": "isl",
+            "field_of_regard_deg": 120.0,
+            "link_role": null,
+            "max_range_km": 5400.0,
+            "medium": "optical",
+            "min_elevation_deg": -60.0,
+            "owner_node_id": "leo-sat-p00s27",
+            "receive_mbps": 200000.0,
+            "source_ref": "nodalarc:terminals/optical/optical-starlink-space-isl.yaml",
+            "source_terminal_id": "optical-starlink-space-isl",
+            "terminal_id": "isl_optical",
+            "tracking_capacity": 1,
+            "tracking_rate_deg_s": 3.0,
+            "transmit_mbps": 200000.0
+          }
+        ]
+      },
+      {
+        "epoch_position": {
+          "alt_km": 557.0869052593453,
+          "lat_deg": 35.25257018933326,
+          "lon_deg": 43.02139717914724,
+          "vel_x_km_s": -1.3607699322689526,
+          "vel_y_km_s": 5.788343785239478,
+          "vel_z_km_s": -4.205827212397577
+        },
+        "forwarding": "routed",
+        "interfaces": {
+          "ethernet": {},
+          "lo0": {
+            "ipv4": "100.64.0.34/32",
+            "ipv6": null
+          }
+        },
+        "kind": "satellite",
+        "local_node_id": "sat-p00s28",
+        "namespace": "leo",
+        "node_id": "leo-sat-p00s28",
+        "originated_prefixes": null,
+        "plane": 0,
+        "role": "router",
+        "routing_instances": [
+          {
+            "area_border": false,
+            "areas": [
+              "49.0001"
+            ],
+            "as_boundary": false,
+            "domain_id": "default_domain",
+            "interfaces": [
+              {
+                "area_id": null,
+                "name": "gnd0"
+              },
+              {
+                "area_id": null,
+                "name": "isl0"
+              },
+              {
+                "area_id": null,
+                "name": "isl1"
+              }
+            ],
+            "protocol": "isis"
+          }
+        ],
+        "segment_id": "leo",
+        "slot": 28,
+        "surface_position": null,
+        "tags": [
+          "all"
+        ],
+        "terminal_inventory": [
+          {
+            "boresight": {
+              "mode": "nadir",
+              "target_body": "earth"
+            },
+            "count": 1,
+            "endpoint_role": "access",
+            "field_of_regard_deg": 120.0,
+            "link_role": null,
+            "max_range_km": 1250.0,
+            "medium": "rf",
+            "min_elevation_deg": -60.0,
+            "owner_node_id": "leo-sat-p00s28",
+            "receive_mbps": 5000.0,
+            "source_ref": "nodalarc:terminals/rf/rf-ka-starlink-space-gateway.yaml",
+            "source_terminal_id": "rf-ka-starlink-space-gateway",
+            "terminal_id": "access_ka",
+            "tracking_capacity": 1,
+            "tracking_rate_deg_s": 3.0,
+            "transmit_mbps": 5000.0
+          },
+          {
+            "boresight": null,
+            "count": 4,
+            "endpoint_role": "isl",
+            "field_of_regard_deg": 120.0,
+            "link_role": null,
+            "max_range_km": 5400.0,
+            "medium": "optical",
+            "min_elevation_deg": -60.0,
+            "owner_node_id": "leo-sat-p00s28",
+            "receive_mbps": 200000.0,
+            "source_ref": "nodalarc:terminals/optical/optical-starlink-space-isl.yaml",
+            "source_terminal_id": "optical-starlink-space-isl",
+            "terminal_id": "isl_optical",
+            "tracking_capacity": 1,
+            "tracking_rate_deg_s": 3.0,
+            "transmit_mbps": 200000.0
+          }
+        ]
+      },
+      {
+        "epoch_position": {
+          "alt_km": 554.736341993681,
+          "lat_deg": 28.167868720541733,
+          "lon_deg": 51.33949262557048,
+          "vel_x_km_s": -2.056763845022851,
+          "vel_y_km_s": 4.984286313017427,
+          "vel_z_km_s": -4.899072605832959
+        },
+        "forwarding": "routed",
+        "interfaces": {
+          "ethernet": {},
+          "lo0": {
+            "ipv4": "100.64.0.35/32",
+            "ipv6": null
+          }
+        },
+        "kind": "satellite",
+        "local_node_id": "sat-p00s29",
+        "namespace": "leo",
+        "node_id": "leo-sat-p00s29",
+        "originated_prefixes": null,
+        "plane": 0,
+        "role": "router",
+        "routing_instances": [
+          {
+            "area_border": false,
+            "areas": [
+              "49.0001"
+            ],
+            "as_boundary": false,
+            "domain_id": "default_domain",
+            "interfaces": [
+              {
+                "area_id": null,
+                "name": "gnd0"
+              },
+              {
+                "area_id": null,
+                "name": "isl0"
+              },
+              {
+                "area_id": null,
+                "name": "isl1"
+              }
+            ],
+            "protocol": "isis"
+          }
+        ],
+        "segment_id": "leo",
+        "slot": 29,
+        "surface_position": null,
+        "tags": [
+          "all"
+        ],
+        "terminal_inventory": [
+          {
+            "boresight": {
+              "mode": "nadir",
+              "target_body": "earth"
+            },
+            "count": 1,
+            "endpoint_role": "access",
+            "field_of_regard_deg": 120.0,
+            "link_role": null,
+            "max_range_km": 1250.0,
+            "medium": "rf",
+            "min_elevation_deg": -60.0,
+            "owner_node_id": "leo-sat-p00s29",
+            "receive_mbps": 5000.0,
+            "source_ref": "nodalarc:terminals/rf/rf-ka-starlink-space-gateway.yaml",
+            "source_terminal_id": "rf-ka-starlink-space-gateway",
+            "terminal_id": "access_ka",
+            "tracking_capacity": 1,
+            "tracking_rate_deg_s": 3.0,
+            "transmit_mbps": 5000.0
+          },
+          {
+            "boresight": null,
+            "count": 4,
+            "endpoint_role": "isl",
+            "field_of_regard_deg": 120.0,
+            "link_role": null,
+            "max_range_km": 5400.0,
+            "medium": "optical",
+            "min_elevation_deg": -60.0,
+            "owner_node_id": "leo-sat-p00s29",
+            "receive_mbps": 200000.0,
+            "source_ref": "nodalarc:terminals/optical/optical-starlink-space-isl.yaml",
+            "source_terminal_id": "optical-starlink-space-isl",
+            "terminal_id": "isl_optical",
+            "tracking_capacity": 1,
+            "tracking_rate_deg_s": 3.0,
+            "transmit_mbps": 200000.0
+          }
+        ]
+      },
+      {
+        "epoch_position": {
+          "alt_km": 552.6376261630039,
+          "lat_deg": 20.63474039104284,
+          "lon_deg": 58.60109096839432,
+          "vel_x_km_s": -2.6902640291184787,
+          "vel_y_km_s": 4.02878382334488,
+          "vel_z_km_s": -5.443462157190487
+        },
+        "forwarding": "routed",
+        "interfaces": {
+          "ethernet": {},
+          "lo0": {
+            "ipv4": "100.64.0.36/32",
+            "ipv6": null
+          }
+        },
+        "kind": "satellite",
+        "local_node_id": "sat-p00s30",
+        "namespace": "leo",
+        "node_id": "leo-sat-p00s30",
+        "originated_prefixes": null,
+        "plane": 0,
+        "role": "router",
+        "routing_instances": [
+          {
+            "area_border": false,
+            "areas": [
+              "49.0001"
+            ],
+            "as_boundary": false,
+            "domain_id": "default_domain",
+            "interfaces": [
+              {
+                "area_id": null,
+                "name": "gnd0"
+              },
+              {
+                "area_id": null,
+                "name": "isl0"
+              },
+              {
+                "area_id": null,
+                "name": "isl1"
+              }
+            ],
+            "protocol": "isis"
+          }
+        ],
+        "segment_id": "leo",
+        "slot": 30,
+        "surface_position": null,
+        "tags": [
+          "all"
+        ],
+        "terminal_inventory": [
+          {
+            "boresight": {
+              "mode": "nadir",
+              "target_body": "earth"
+            },
+            "count": 1,
+            "endpoint_role": "access",
+            "field_of_regard_deg": 120.0,
+            "link_role": null,
+            "max_range_km": 1250.0,
+            "medium": "rf",
+            "min_elevation_deg": -60.0,
+            "owner_node_id": "leo-sat-p00s30",
+            "receive_mbps": 5000.0,
+            "source_ref": "nodalarc:terminals/rf/rf-ka-starlink-space-gateway.yaml",
+            "source_terminal_id": "rf-ka-starlink-space-gateway",
+            "terminal_id": "access_ka",
+            "tracking_capacity": 1,
+            "tracking_rate_deg_s": 3.0,
+            "transmit_mbps": 5000.0
+          },
+          {
+            "boresight": null,
+            "count": 4,
+            "endpoint_role": "isl",
+            "field_of_regard_deg": 120.0,
+            "link_role": null,
+            "max_range_km": 5400.0,
+            "medium": "optical",
+            "min_elevation_deg": -60.0,
+            "owner_node_id": "leo-sat-p00s30",
+            "receive_mbps": 200000.0,
+            "source_ref": "nodalarc:terminals/optical/optical-starlink-space-isl.yaml",
+            "source_terminal_id": "optical-starlink-space-isl",
+            "terminal_id": "isl_optical",
+            "tracking_capacity": 1,
+            "tracking_rate_deg_s": 3.0,
+            "transmit_mbps": 200000.0
+          }
+        ]
+      },
+      {
+        "epoch_position": {
+          "alt_km": 551.0448589272519,
+          "lat_deg": 12.818846724773705,
+          "lon_deg": 65.17012954225595,
+          "vel_x_km_s": -3.242021902028604,
+          "vel_y_km_s": 2.9508687758630208,
+          "vel_z_km_s": -5.822454865426524
+        },
+        "forwarding": "routed",
+        "interfaces": {
+          "ethernet": {},
+          "lo0": {
+            "ipv4": "100.64.0.37/32",
+            "ipv6": null
+          }
+        },
+        "kind": "satellite",
+        "local_node_id": "sat-p00s31",
+        "namespace": "leo",
+        "node_id": "leo-sat-p00s31",
+        "originated_prefixes": null,
+        "plane": 0,
+        "role": "router",
+        "routing_instances": [
+          {
+            "area_border": false,
+            "areas": [
+              "49.0001"
+            ],
+            "as_boundary": false,
+            "domain_id": "default_domain",
+            "interfaces": [
+              {
+                "area_id": null,
+                "name": "gnd0"
+              },
+              {
+                "area_id": null,
+                "name": "isl0"
+              },
+              {
+                "area_id": null,
+                "name": "isl1"
+              }
+            ],
+            "protocol": "isis"
+          }
+        ],
+        "segment_id": "leo",
+        "slot": 31,
+        "surface_position": null,
+        "tags": [
+          "all"
+        ],
+        "terminal_inventory": [
+          {
+            "boresight": {
+              "mode": "nadir",
+              "target_body": "earth"
+            },
+            "count": 1,
+            "endpoint_role": "access",
+            "field_of_regard_deg": 120.0,
+            "link_role": null,
+            "max_range_km": 1250.0,
+            "medium": "rf",
+            "min_elevation_deg": -60.0,
+            "owner_node_id": "leo-sat-p00s31",
+            "receive_mbps": 5000.0,
+            "source_ref": "nodalarc:terminals/rf/rf-ka-starlink-space-gateway.yaml",
+            "source_terminal_id": "rf-ka-starlink-space-gateway",
+            "terminal_id": "access_ka",
+            "tracking_capacity": 1,
+            "tracking_rate_deg_s": 3.0,
+            "transmit_mbps": 5000.0
+          },
+          {
+            "boresight": null,
+            "count": 4,
+            "endpoint_role": "isl",
+            "field_of_regard_deg": 120.0,
+            "link_role": null,
+            "max_range_km": 5400.0,
+            "medium": "optical",
+            "min_elevation_deg": -60.0,
+            "owner_node_id": "leo-sat-p00s31",
+            "receive_mbps": 200000.0,
+            "source_ref": "nodalarc:terminals/optical/optical-starlink-space-isl.yaml",
+            "source_terminal_id": "optical-starlink-space-isl",
+            "terminal_id": "isl_optical",
+            "tracking_capacity": 1,
+            "tracking_rate_deg_s": 3.0,
+            "transmit_mbps": 200000.0
+          }
+        ]
+      },
+      {
+        "epoch_position": {
+          "alt_km": 550.1513171147326,
+          "lat_deg": 4.8442236153499,
+          "lon_deg": 71.34263243505312,
+          "vel_x_km_s": -3.6952725799878503,
+          "vel_y_km_s": 1.783293073838168,
+          "vel_z_km_s": -6.024535228880913
+        },
+        "forwarding": "routed",
+        "interfaces": {
+          "ethernet": {},
+          "lo0": {
+            "ipv4": "100.64.0.38/32",
+            "ipv6": null
+          }
+        },
+        "kind": "satellite",
+        "local_node_id": "sat-p00s32",
+        "namespace": "leo",
+        "node_id": "leo-sat-p00s32",
+        "originated_prefixes": null,
+        "plane": 0,
+        "role": "router",
+        "routing_instances": [
+          {
+            "area_border": false,
+            "areas": [
+              "49.0001"
+            ],
+            "as_boundary": false,
+            "domain_id": "default_domain",
+            "interfaces": [
+              {
+                "area_id": null,
+                "name": "gnd0"
+              },
+              {
+                "area_id": null,
+                "name": "isl0"
+              },
+              {
+                "area_id": null,
+                "name": "isl1"
+              }
+            ],
+            "protocol": "isis"
+          }
+        ],
+        "segment_id": "leo",
+        "slot": 32,
+        "surface_position": null,
+        "tags": [
+          "all"
+        ],
+        "terminal_inventory": [
+          {
+            "boresight": {
+              "mode": "nadir",
+              "target_body": "earth"
+            },
+            "count": 1,
+            "endpoint_role": "access",
+            "field_of_regard_deg": 120.0,
+            "link_role": null,
+            "max_range_km": 1250.0,
+            "medium": "rf",
+            "min_elevation_deg": -60.0,
+            "owner_node_id": "leo-sat-p00s32",
+            "receive_mbps": 5000.0,
+            "source_ref": "nodalarc:terminals/rf/rf-ka-starlink-space-gateway.yaml",
+            "source_terminal_id": "rf-ka-starlink-space-gateway",
+            "terminal_id": "access_ka",
+            "tracking_capacity": 1,
+            "tracking_rate_deg_s": 3.0,
+            "transmit_mbps": 5000.0
+          },
+          {
+            "boresight": null,
+            "count": 4,
+            "endpoint_role": "isl",
+            "field_of_regard_deg": 120.0,
+            "link_role": null,
+            "max_range_km": 5400.0,
+            "medium": "optical",
+            "min_elevation_deg": -60.0,
+            "owner_node_id": "leo-sat-p00s32",
+            "receive_mbps": 200000.0,
+            "source_ref": "nodalarc:terminals/optical/optical-starlink-space-isl.yaml",
+            "source_terminal_id": "optical-starlink-space-isl",
+            "terminal_id": "isl_optical",
+            "tracking_capacity": 1,
+            "tracking_rate_deg_s": 3.0,
+            "transmit_mbps": 200000.0
+          }
+        ]
+      },
+      {
+        "epoch_position": {
+          "alt_km": 550.0655931170813,
+          "lat_deg": -3.187297873838663,
+          "lon_deg": 77.37179248756613,
+          "vel_x_km_s": -4.0362442705023005,
+          "vel_y_km_s": 0.561532914154627,
+          "vel_z_km_s": -6.043563137967671
+        },
+        "forwarding": "routed",
+        "interfaces": {
+          "ethernet": {},
+          "lo0": {
+            "ipv4": "100.64.0.39/32",
+            "ipv6": null
+          }
+        },
+        "kind": "satellite",
+        "local_node_id": "sat-p00s33",
+        "namespace": "leo",
+        "node_id": "leo-sat-p00s33",
+        "originated_prefixes": null,
+        "plane": 0,
+        "role": "router",
+        "routing_instances": [
+          {
+            "area_border": false,
+            "areas": [
+              "49.0001"
+            ],
+            "as_boundary": false,
+            "domain_id": "default_domain",
+            "interfaces": [
+              {
+                "area_id": null,
+                "name": "gnd0"
+              },
+              {
+                "area_id": null,
+                "name": "isl0"
+              },
+              {
+                "area_id": null,
+                "name": "isl1"
+              }
+            ],
+            "protocol": "isis"
+          }
+        ],
+        "segment_id": "leo",
+        "slot": 33,
+        "surface_position": null,
+        "tags": [
+          "all"
+        ],
+        "terminal_inventory": [
+          {
+            "boresight": {
+              "mode": "nadir",
+              "target_body": "earth"
+            },
+            "count": 1,
+            "endpoint_role": "access",
+            "field_of_regard_deg": 120.0,
+            "link_role": null,
+            "max_range_km": 1250.0,
+            "medium": "rf",
+            "min_elevation_deg": -60.0,
+            "owner_node_id": "leo-sat-p00s33",
+            "receive_mbps": 5000.0,
+            "source_ref": "nodalarc:terminals/rf/rf-ka-starlink-space-gateway.yaml",
+            "source_terminal_id": "rf-ka-starlink-space-gateway",
+            "terminal_id": "access_ka",
+            "tracking_capacity": 1,
+            "tracking_rate_deg_s": 3.0,
+            "transmit_mbps": 5000.0
+          },
+          {
+            "boresight": null,
+            "count": 4,
+            "endpoint_role": "isl",
+            "field_of_regard_deg": 120.0,
+            "link_role": null,
+            "max_range_km": 5400.0,
+            "medium": "optical",
+            "min_elevation_deg": -60.0,
+            "owner_node_id": "leo-sat-p00s33",
+            "receive_mbps": 200000.0,
+            "source_ref": "nodalarc:terminals/optical/optical-starlink-space-isl.yaml",
+            "source_terminal_id": "optical-starlink-space-isl",
+            "terminal_id": "isl_optical",
+            "tracking_capacity": 1,
+            "tracking_rate_deg_s": 3.0,
+            "transmit_mbps": 200000.0
+          }
+        ]
+      },
+      {
+        "epoch_position": {
+          "alt_km": 550.798111209695,
+          "lat_deg": -11.18156648188855,
+          "lon_deg": 83.49487043229423,
+          "vel_x_km_s": -4.254576721295699,
+          "vel_y_km_s": -0.6772891389761867,
+          "vel_z_km_s": -5.878960439297788
+        },
+        "forwarding": "routed",
+        "interfaces": {
+          "ethernet": {},
+          "lo0": {
+            "ipv4": "100.64.0.40/32",
+            "ipv6": null
+          }
+        },
+        "kind": "satellite",
+        "local_node_id": "sat-p00s34",
+        "namespace": "leo",
+        "node_id": "leo-sat-p00s34",
+        "originated_prefixes": null,
+        "plane": 0,
+        "role": "router",
+        "routing_instances": [
+          {
+            "area_border": false,
+            "areas": [
+              "49.0001"
+            ],
+            "as_boundary": false,
+            "domain_id": "default_domain",
+            "interfaces": [
+              {
+                "area_id": null,
+                "name": "gnd0"
+              },
+              {
+                "area_id": null,
+                "name": "isl0"
+              },
+              {
+                "area_id": null,
+                "name": "isl1"
+              }
+            ],
+            "protocol": "isis"
+          }
+        ],
+        "segment_id": "leo",
+        "slot": 34,
+        "surface_position": null,
+        "tags": [
+          "all"
+        ],
+        "terminal_inventory": [
+          {
+            "boresight": {
+              "mode": "nadir",
+              "target_body": "earth"
+            },
+            "count": 1,
+            "endpoint_role": "access",
+            "field_of_regard_deg": 120.0,
+            "link_role": null,
+            "max_range_km": 1250.0,
+            "medium": "rf",
+            "min_elevation_deg": -60.0,
+            "owner_node_id": "leo-sat-p00s34",
+            "receive_mbps": 5000.0,
+            "source_ref": "nodalarc:terminals/rf/rf-ka-starlink-space-gateway.yaml",
+            "source_terminal_id": "rf-ka-starlink-space-gateway",
+            "terminal_id": "access_ka",
+            "tracking_capacity": 1,
+            "tracking_rate_deg_s": 3.0,
+            "transmit_mbps": 5000.0
+          },
+          {
+            "boresight": null,
+            "count": 4,
+            "endpoint_role": "isl",
+            "field_of_regard_deg": 120.0,
+            "link_role": null,
+            "max_range_km": 5400.0,
+            "medium": "optical",
+            "min_elevation_deg": -60.0,
+            "owner_node_id": "leo-sat-p00s34",
+            "receive_mbps": 200000.0,
+            "source_ref": "nodalarc:terminals/optical/optical-starlink-space-isl.yaml",
+            "source_terminal_id": "optical-starlink-space-isl",
+            "terminal_id": "isl_optical",
+            "tracking_capacity": 1,
+            "tracking_rate_deg_s": 3.0,
+            "transmit_mbps": 200000.0
+          }
+        ]
+      },
+      {
+        "epoch_position": {
+          "alt_km": 552.259830238967,
+          "lat_deg": -19.039421152489155,
+          "lon_deg": 89.95958697411237,
+          "vel_x_km_s": -4.343636011332222,
+          "vel_y_km_s": -1.8955321043440012,
+          "vel_z_km_s": -5.535728502577374
+        },
+        "forwarding": "routed",
+        "interfaces": {
+          "ethernet": {},
+          "lo0": {
+            "ipv4": "100.64.0.41/32",
+            "ipv6": null
+          }
+        },
+        "kind": "satellite",
+        "local_node_id": "sat-p00s35",
+        "namespace": "leo",
+        "node_id": "leo-sat-p00s35",
+        "originated_prefixes": null,
+        "plane": 0,
+        "role": "router",
+        "routing_instances": [
+          {
+            "area_border": false,
+            "areas": [
+              "49.0001"
+            ],
+            "as_boundary": false,
+            "domain_id": "default_domain",
+            "interfaces": [
+              {
+                "area_id": null,
+                "name": "gnd0"
+              },
+              {
+                "area_id": null,
+                "name": "isl0"
+              },
+              {
+                "area_id": null,
+                "name": "isl1"
+              }
+            ],
+            "protocol": "isis"
+          }
+        ],
+        "segment_id": "leo",
+        "slot": 35,
+        "surface_position": null,
+        "tags": [
+          "all"
+        ],
+        "terminal_inventory": [
+          {
+            "boresight": {
+              "mode": "nadir",
+              "target_body": "earth"
+            },
+            "count": 1,
+            "endpoint_role": "access",
+            "field_of_regard_deg": 120.0,
+            "link_role": null,
+            "max_range_km": 1250.0,
+            "medium": "rf",
+            "min_elevation_deg": -60.0,
+            "owner_node_id": "leo-sat-p00s35",
+            "receive_mbps": 5000.0,
+            "source_ref": "nodalarc:terminals/rf/rf-ka-starlink-space-gateway.yaml",
+            "source_terminal_id": "rf-ka-starlink-space-gateway",
+            "terminal_id": "access_ka",
+            "tracking_capacity": 1,
+            "tracking_rate_deg_s": 3.0,
+            "transmit_mbps": 5000.0
+          },
+          {
+            "boresight": null,
+            "count": 4,
+            "endpoint_role": "isl",
+            "field_of_regard_deg": 120.0,
+            "link_role": null,
+            "max_range_km": 5400.0,
+            "medium": "optical",
+            "min_elevation_deg": -60.0,
+            "owner_node_id": "leo-sat-p00s35",
+            "receive_mbps": 200000.0,
+            "source_ref": "nodalarc:terminals/optical/optical-starlink-space-isl.yaml",
+            "source_terminal_id": "optical-starlink-space-isl",
+            "terminal_id": "isl_optical",
+            "tracking_capacity": 1,
+            "tracking_rate_deg_s": 3.0,
+            "transmit_mbps": 200000.0
+          }
+        ]
+      },
+      {
+        "epoch_position": null,
+        "forwarding": "routed",
+        "interfaces": {
+          "ethernet": {
+            "terr0": {
+              "ipv4": "172.16.2.1/24",
+              "ipv6": "fd00:da7a:0:2::1/64"
+            }
+          },
+          "lo0": {
+            "ipv4": "100.64.0.4/32",
+            "ipv6": null
+          }
+        },
+        "kind": "ground_station",
+        "local_node_id": "earth-us-hawthorne-gw1",
+        "namespace": "earth-us-hawthorne",
+        "node_id": "earth-us-hawthorne-gw1",
+        "originated_prefixes": {
+          "ipv4": [
+            "172.16.2.0/24"
+          ],
+          "ipv6": [
+            "fd00:da7a:0:2::/64"
+          ]
+        },
+        "plane": null,
+        "role": "router",
+        "routing_instances": [
+          {
+            "area_border": false,
+            "areas": [
+              "49.0001"
+            ],
+            "as_boundary": false,
+            "domain_id": "default_domain",
+            "interfaces": [
+              {
+                "area_id": null,
+                "name": "term0"
+              },
+              {
+                "area_id": null,
+                "name": "term1"
+              },
+              {
+                "area_id": null,
+                "name": "term2"
+              },
+              {
+                "area_id": null,
+                "name": "term3"
+              },
+              {
+                "area_id": null,
+                "name": "term4"
+              },
+              {
+                "area_id": null,
+                "name": "term5"
+              },
+              {
+                "area_id": null,
+                "name": "term6"
+              },
+              {
+                "area_id": null,
+                "name": "term7"
+              },
+              {
+                "area_id": null,
+                "name": "terr0"
+              }
+            ],
+            "protocol": "isis"
+          }
+        ],
+        "segment_id": "ground",
+        "slot": null,
+        "surface_position": {
+          "alt_m": 20.0,
+          "body": "earth",
+          "lat_deg": 33.9175,
+          "lon_deg": -118.328111
+        },
+        "tags": [
+          "leo"
+        ],
+        "terminal_inventory": [
+          {
+            "boresight": {
+              "configured_az_deg": null,
+              "configured_el_deg": null,
+              "max_az_deg": null,
+              "max_el_deg": null,
+              "min_az_deg": null,
+              "min_el_deg": null,
+              "mode": "local_vertical"
+            },
+            "count": 8,
+            "endpoint_role": "access",
+            "field_of_regard_deg": 120.0,
+            "link_role": null,
+            "max_range_km": 1250.0,
+            "medium": "rf",
+            "min_elevation_deg": 30.0,
+            "owner_node_id": "earth-us-hawthorne-gw1",
+            "receive_mbps": 5000.0,
+            "source_ref": "nodalarc:terminals/rf/rf-ka-starlink-ground-gateway.yaml",
+            "source_terminal_id": "rf-ka-starlink-ground-gateway",
+            "terminal_id": "access_ka",
+            "tracking_capacity": 1,
+            "tracking_rate_deg_s": 1.5,
+            "transmit_mbps": 5000.0
+          }
+        ]
+      },
+      {
+        "epoch_position": null,
+        "forwarding": "routed",
+        "interfaces": {
+          "ethernet": {
+            "terr0": {
+              "ipv4": "172.16.1.1/24",
+              "ipv6": "fd00:da7a:0:1::1/64"
+            }
+          },
+          "lo0": {
+            "ipv4": "100.64.0.2/32",
+            "ipv6": null
+          }
+        },
+        "kind": "ground_station",
+        "local_node_id": "earth-us-co-denver-gw1",
+        "namespace": "earth-us-co-denver",
+        "node_id": "earth-us-co-denver-gw1",
+        "originated_prefixes": {
+          "ipv4": [
+            "172.16.1.0/24",
+            "0.0.0.0/0"
+          ],
+          "ipv6": [
+            "fd00:da7a:0:1::/64"
+          ]
+        },
+        "plane": null,
+        "role": "router",
+        "routing_instances": [
+          {
+            "area_border": false,
+            "areas": [
+              "49.0001"
+            ],
+            "as_boundary": false,
+            "domain_id": "default_domain",
+            "interfaces": [
+              {
+                "area_id": null,
+                "name": "term0"
+              },
+              {
+                "area_id": null,
+                "name": "term1"
+              },
+              {
+                "area_id": null,
+                "name": "term2"
+              },
+              {
+                "area_id": null,
+                "name": "term3"
+              },
+              {
+                "area_id": null,
+                "name": "terr0"
+              }
+            ],
+            "protocol": "isis"
+          }
+        ],
+        "segment_id": "ground",
+        "slot": null,
+        "surface_position": {
+          "alt_m": 1609.0,
+          "body": "earth",
+          "lat_deg": 39.7392,
+          "lon_deg": -104.9903
+        },
+        "tags": [
+          "leo"
+        ],
+        "terminal_inventory": [
+          {
+            "boresight": {
+              "configured_az_deg": null,
+              "configured_el_deg": null,
+              "max_az_deg": null,
+              "max_el_deg": null,
+              "min_az_deg": null,
+              "min_el_deg": null,
+              "mode": "local_vertical"
+            },
+            "count": 4,
+            "endpoint_role": "access",
+            "field_of_regard_deg": 130.0,
+            "link_role": null,
+            "max_range_km": 2500.0,
+            "medium": "rf",
+            "min_elevation_deg": 25.0,
+            "owner_node_id": "earth-us-co-denver-gw1",
+            "receive_mbps": 1000.0,
+            "source_ref": "nodalarc:terminals/rf/rf-ka-leo-access.yaml",
+            "source_terminal_id": "rf-ka-leo-access",
+            "terminal_id": "access_ka",
+            "tracking_capacity": 1,
+            "tracking_rate_deg_s": 2.5,
+            "transmit_mbps": 1000.0
+          }
+        ]
+      },
+      {
+        "epoch_position": null,
+        "forwarding": "routed",
+        "interfaces": {
+          "ethernet": {
+            "terr0": {
+              "ipv4": "172.16.1.2/24",
+              "ipv6": "fd00:da7a:0:1::2/64"
+            }
+          },
+          "lo0": {
+            "ipv4": "100.64.0.3/32",
+            "ipv6": null
+          }
+        },
+        "kind": "ground_station",
+        "local_node_id": "earth-us-co-denver-gw2",
+        "namespace": "earth-us-co-denver",
+        "node_id": "earth-us-co-denver-gw2",
+        "originated_prefixes": {
+          "ipv4": [
+            "172.16.1.0/24",
+            "0.0.0.0/0"
+          ],
+          "ipv6": [
+            "fd00:da7a:0:1::/64"
+          ]
+        },
+        "plane": null,
+        "role": "router",
+        "routing_instances": [
+          {
+            "area_border": false,
+            "areas": [
+              "49.0001"
+            ],
+            "as_boundary": false,
+            "domain_id": "default_domain",
+            "interfaces": [
+              {
+                "area_id": null,
+                "name": "terr0"
+              }
+            ],
+            "protocol": "isis"
+          }
+        ],
+        "segment_id": "ground",
+        "slot": null,
+        "surface_position": {
+          "alt_m": 1609.0,
+          "body": "earth",
+          "lat_deg": 39.7392,
+          "lon_deg": -104.9903
+        },
+        "tags": [
+          "meo"
+        ],
+        "terminal_inventory": [
+          {
+            "boresight": {
+              "configured_az_deg": null,
+              "configured_el_deg": null,
+              "max_az_deg": null,
+              "max_el_deg": null,
+              "min_az_deg": null,
+              "min_el_deg": null,
+              "mode": "local_vertical"
+            },
+            "count": 2,
+            "endpoint_role": "access",
+            "field_of_regard_deg": 160.0,
+            "link_role": null,
+            "max_range_km": 28000.0,
+            "medium": "rf",
+            "min_elevation_deg": 10.0,
+            "owner_node_id": "earth-us-co-denver-gw2",
+            "receive_mbps": 500.0,
+            "source_ref": "nodalarc:terminals/rf/rf-ka-meo-access.yaml",
+            "source_terminal_id": "rf-ka-meo-access",
+            "terminal_id": "access_ka",
+            "tracking_capacity": 1,
+            "tracking_rate_deg_s": 0.5,
+            "transmit_mbps": 500.0
+          }
+        ]
+      },
+      {
+        "epoch_position": null,
+        "forwarding": "routed",
+        "interfaces": {
+          "ethernet": {
+            "terr0": {
+              "ipv4": "172.16.3.1/24",
+              "ipv6": "fd00:da7a:0:3::1/64"
+            }
+          },
+          "lo0": {
+            "ipv4": "100.64.0.5/32",
+            "ipv6": null
+          }
+        },
+        "kind": "ground_station",
+        "local_node_id": "earth-us-va-ashburn-gw1",
+        "namespace": "earth-us-va-ashburn",
+        "node_id": "earth-us-va-ashburn-gw1",
+        "originated_prefixes": {
+          "ipv4": [
+            "172.16.3.0/24",
+            "0.0.0.0/0"
+          ],
+          "ipv6": [
+            "fd00:da7a:0:3::/64"
+          ]
+        },
+        "plane": null,
+        "role": "router",
+        "routing_instances": [
+          {
+            "area_border": false,
+            "areas": [
+              "49.0001"
+            ],
+            "as_boundary": false,
+            "domain_id": "default_domain",
+            "interfaces": [
+              {
+                "area_id": null,
+                "name": "term0"
+              },
+              {
+                "area_id": null,
+                "name": "term1"
+              },
+              {
+                "area_id": null,
+                "name": "terr0"
+              }
+            ],
+            "protocol": "isis"
+          }
+        ],
+        "segment_id": "ground",
+        "slot": null,
+        "surface_position": {
+          "alt_m": 100.0,
+          "body": "earth",
+          "lat_deg": 39.04,
+          "lon_deg": -77.49
+        },
+        "tags": [
+          "leo"
+        ],
+        "terminal_inventory": [
+          {
+            "boresight": {
+              "configured_az_deg": null,
+              "configured_el_deg": null,
+              "max_az_deg": null,
+              "max_el_deg": null,
+              "min_az_deg": null,
+              "min_el_deg": null,
+              "mode": "local_vertical"
+            },
+            "count": 2,
+            "endpoint_role": "access",
+            "field_of_regard_deg": 120.0,
+            "link_role": null,
+            "max_range_km": 1250.0,
+            "medium": "rf",
+            "min_elevation_deg": 30.0,
+            "owner_node_id": "earth-us-va-ashburn-gw1",
+            "receive_mbps": 1000.0,
+            "source_ref": "nodalarc:terminals/rf/rf-ka-starlink-ground-gateway.yaml",
+            "source_terminal_id": "rf-ka-starlink-ground-gateway",
+            "terminal_id": "access_ka",
+            "tracking_capacity": 1,
+            "tracking_rate_deg_s": 1.5,
+            "transmit_mbps": 1000.0
+          }
+        ]
+      },
+      {
+        "epoch_position": null,
+        "forwarding": "routed",
+        "interfaces": {
+          "ethernet": {
+            "terr0": {
+              "ipv4": "172.16.0.1/24",
+              "ipv6": "fd00:da7a::1/64"
+            }
+          },
+          "lo0": {
+            "ipv4": "100.64.0.1/32",
+            "ipv6": null
+          }
+        },
+        "kind": "ground_station",
+        "local_node_id": "earth-de-frankfurt-gw1",
+        "namespace": "earth-de-frankfurt",
+        "node_id": "earth-de-frankfurt-gw1",
+        "originated_prefixes": {
+          "ipv4": [
+            "172.16.0.0/24",
+            "0.0.0.0/0"
+          ],
+          "ipv6": [
+            "fd00:da7a::/64"
+          ]
+        },
+        "plane": null,
+        "role": "router",
+        "routing_instances": [
+          {
+            "area_border": false,
+            "areas": [
+              "49.0001"
+            ],
+            "as_boundary": false,
+            "domain_id": "default_domain",
+            "interfaces": [
+              {
+                "area_id": null,
+                "name": "term0"
+              },
+              {
+                "area_id": null,
+                "name": "term1"
+              },
+              {
+                "area_id": null,
+                "name": "terr0"
+              }
+            ],
+            "protocol": "isis"
+          }
+        ],
+        "segment_id": "ground",
+        "slot": null,
+        "surface_position": {
+          "alt_m": 110.0,
+          "body": "earth",
+          "lat_deg": 50.11,
+          "lon_deg": 8.68
+        },
+        "tags": [
+          "leo"
+        ],
+        "terminal_inventory": [
+          {
+            "boresight": {
+              "configured_az_deg": null,
+              "configured_el_deg": null,
+              "max_az_deg": null,
+              "max_el_deg": null,
+              "min_az_deg": null,
+              "min_el_deg": null,
+              "mode": "local_vertical"
+            },
+            "count": 2,
+            "endpoint_role": "access",
+            "field_of_regard_deg": 130.0,
+            "link_role": null,
+            "max_range_km": 2500.0,
+            "medium": "rf",
+            "min_elevation_deg": 25.0,
+            "owner_node_id": "earth-de-frankfurt-gw1",
+            "receive_mbps": 1000.0,
+            "source_ref": "nodalarc:terminals/rf/rf-ka-leo-access.yaml",
+            "source_terminal_id": "rf-ka-leo-access",
+            "terminal_id": "access_ka",
+            "tracking_capacity": 1,
+            "tracking_rate_deg_s": 1.5,
+            "transmit_mbps": 1000.0
+          }
+        ]
+      }
+    ],
+    "segments": [
+      {
+        "display_name": "Earth LEO simple 36-satellite ring",
+        "segment_id": "leo"
+      },
+      {
+        "display_name": "Starlink PoP gateway sites",
+        "segment_id": "ground"
+      }
+    ],
+    "session": {
+      "description": "Single 36-satellite LEO ring with MBB-capable Starlink-style gateway sites.",
+      "display_name": "Earth LEO simple",
+      "name": "earth-leo-simple"
+    }
+  }
+}

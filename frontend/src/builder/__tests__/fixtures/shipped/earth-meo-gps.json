@@ -1,0 +1,3942 @@
+{
+  "draft": {
+    "applied_revision": 0,
+    "applied_session": {
+      "link_rules": [
+        {
+          "enabled": true,
+          "endpoints": [
+            {
+              "min_elevation_deg": 10.0,
+              "select": {
+                "all": [
+                  {
+                    "segment": "ground"
+                  },
+                  {
+                    "tag": "meo"
+                  }
+                ]
+              },
+              "terminal": {
+                "all": [
+                  {
+                    "role": "access"
+                  },
+                  {
+                    "medium": "rf"
+                  }
+                ]
+              }
+            },
+            {
+              "select": {
+                "segment": "meo"
+              },
+              "terminal": {
+                "all": [
+                  {
+                    "role": "access"
+                  },
+                  {
+                    "medium": "rf"
+                  }
+                ]
+              }
+            }
+          ],
+          "id": "meo_access",
+          "topology": {
+            "mode": "visible_candidates"
+          }
+        },
+        {
+          "enabled": true,
+          "endpoints": [
+            {
+              "select": {
+                "segment": "meo"
+              },
+              "terminal": {
+                "all": [
+                  {
+                    "role": "isl"
+                  },
+                  {
+                    "medium": "optical"
+                  }
+                ]
+              }
+            },
+            {
+              "select": {
+                "segment": "meo"
+              },
+              "terminal": {
+                "all": [
+                  {
+                    "role": "isl"
+                  },
+                  {
+                    "medium": "optical"
+                  }
+                ]
+              }
+            }
+          ],
+          "id": "meo_isl",
+          "topology": {
+            "mode": "nearest_n",
+            "n": 2
+          }
+        }
+      ],
+      "segments": [
+        {
+          "id": "meo",
+          "source": "nodalarc:constellations/earth/meo/earth-meo-gps-24.yaml"
+        },
+        {
+          "apply": {
+            "scheduling": {
+              "bbm_acquire_timeout_ticks": 1,
+              "cross_tenant_displacement": "off",
+              "handover_concurrency": "one_at_a_time",
+              "handover_mode": "bbm",
+              "handover_policy": {
+                "hard_release": {}
+              },
+              "mbb_overlap_ticks": 0,
+              "mbb_preemption": "off",
+              "mbb_reserve": 0,
+              "ranking_order": [
+                "service_priority",
+                "selection_score",
+                "satellite_ground_terminal_capacity",
+                "lex_pair"
+              ],
+              "selection_policy": {
+                "longest_remaining_pass": {
+                  "lookahead_horizon_ticks": 7200
+                }
+              },
+              "successor_abort_policy": "hard_release"
+            }
+          },
+          "id": "ground",
+          "placement": {
+            "from_site_set": "nodalarc:site-sets/earth/meo/earth-meo-gateway-sites.yaml"
+          }
+        }
+      ],
+      "session": {
+        "description": "GPS-altitude 24-node MEO shell with MEO gateway sites.",
+        "display_name": "Earth GPS-altitude MEO",
+        "name": "earth-meo-gps"
+      },
+      "simulation": {
+        "acknowledge_geometry_only": false,
+        "candidate_limits": {
+          "max_pairs_per_rule": 500,
+          "max_pairs_per_tick": 2000
+        },
+        "ground_link_model": "terminal_physics"
+      },
+      "time": {
+        "compression": 1.0,
+        "start_time": "2026-06-08T00:00:00Z",
+        "step_seconds": 1.0
+      }
+    },
+    "applied_workspace": {
+      "boundaries": [],
+      "compression": 1.0,
+      "description": "GPS-altitude 24-node MEO shell with MEO gateway sites.",
+      "display_name": "Earth GPS-altitude MEO",
+      "ground": [],
+      "ground_refs": [
+        {
+          "label": "MEO gateway sites",
+          "scheduling": {
+            "bbm_acquire_timeout_ticks": 1,
+            "cross_tenant_displacement": "off",
+            "handover_concurrency": "one_at_a_time",
+            "handover_mode": "bbm",
+            "handover_policy": {
+              "hard_release": {}
+            },
+            "mbb_overlap_ticks": 0,
+            "mbb_preemption": "off",
+            "mbb_reserve": 0,
+            "ranking_order": [
+              "service_priority",
+              "selection_score",
+              "satellite_ground_terminal_capacity",
+              "lex_pair"
+            ],
+            "selection_policy": {
+              "longest_remaining_pass": {
+                "lookahead_horizon_ticks": 7200
+              }
+            },
+            "successor_abort_policy": "hard_release"
+          },
+          "segment_id": "ground",
+          "site_set_ref": "nodalarc:site-sets/earth/meo/earth-meo-gateway-sites.yaml"
+        }
+      ],
+      "links": [
+        {
+          "a": {
+            "medium": "rf",
+            "min_elevation_deg": 10.0,
+            "role": "access",
+            "segment_id": "ground",
+            "tag": "meo"
+          },
+          "b": {
+            "medium": "rf",
+            "min_elevation_deg": null,
+            "role": "access",
+            "segment_id": "meo",
+            "tag": null
+          },
+          "enabled": true,
+          "label": "meo_access",
+          "max_range_km": null,
+          "rule_id": "meo_access",
+          "topology_mode": "visible_candidates",
+          "topology_n": null
+        },
+        {
+          "a": {
+            "medium": "optical",
+            "min_elevation_deg": null,
+            "role": "isl",
+            "segment_id": "meo",
+            "tag": null
+          },
+          "b": {
+            "medium": "optical",
+            "min_elevation_deg": null,
+            "role": "isl",
+            "segment_id": "meo",
+            "tag": null
+          },
+          "enabled": true,
+          "label": "meo_isl",
+          "max_range_km": null,
+          "rule_id": "meo_isl",
+          "topology_mode": "nearest_n",
+          "topology_n": 2
+        }
+      ],
+      "max_pairs_per_rule": 500,
+      "max_pairs_per_tick": 2000,
+      "projection_revision": 0,
+      "routing_domains": [],
+      "session_name": "earth-meo-gps",
+      "space": [],
+      "space_refs": [
+        {
+          "label": "Earth GPS-altitude MEO 24-satellite shell",
+          "segment_id": "meo",
+          "source_ref": "nodalarc:constellations/earth/meo/earth-meo-gps-24.yaml"
+        }
+      ],
+      "start_time": "2026-06-08T00:00:00Z",
+      "step_seconds": 1.0
+    },
+    "authoring_workspace": {
+      "boundaries": [],
+      "compression": 1.0,
+      "description": "GPS-altitude 24-node MEO shell with MEO gateway sites.",
+      "display_name": "Earth GPS-altitude MEO",
+      "ground": [],
+      "ground_refs": [
+        {
+          "label": "MEO gateway sites",
+          "scheduling": {
+            "bbm_acquire_timeout_ticks": 1,
+            "cross_tenant_displacement": "off",
+            "handover_concurrency": "one_at_a_time",
+            "handover_mode": "bbm",
+            "handover_policy": {
+              "hard_release": {}
+            },
+            "mbb_overlap_ticks": 0,
+            "mbb_preemption": "off",
+            "mbb_reserve": 0,
+            "ranking_order": [
+              "service_priority",
+              "selection_score",
+              "satellite_ground_terminal_capacity",
+              "lex_pair"
+            ],
+            "selection_policy": {
+              "longest_remaining_pass": {
+                "lookahead_horizon_ticks": 7200
+              }
+            },
+            "successor_abort_policy": "hard_release"
+          },
+          "segment_id": "ground",
+          "site_set_ref": "nodalarc:site-sets/earth/meo/earth-meo-gateway-sites.yaml"
+        }
+      ],
+      "links": [
+        {
+          "a": {
+            "medium": "rf",
+            "min_elevation_deg": 10.0,
+            "role": "access",
+            "segment_id": "ground",
+            "tag": "meo"
+          },
+          "b": {
+            "medium": "rf",
+            "min_elevation_deg": null,
+            "role": "access",
+            "segment_id": "meo",
+            "tag": null
+          },
+          "enabled": true,
+          "label": "meo_access",
+          "max_range_km": null,
+          "rule_id": "meo_access",
+          "topology_mode": "visible_candidates",
+          "topology_n": null
+        },
+        {
+          "a": {
+            "medium": "optical",
+            "min_elevation_deg": null,
+            "role": "isl",
+            "segment_id": "meo",
+            "tag": null
+          },
+          "b": {
+            "medium": "optical",
+            "min_elevation_deg": null,
+            "role": "isl",
+            "segment_id": "meo",
+            "tag": null
+          },
+          "enabled": true,
+          "label": "meo_isl",
+          "max_range_km": null,
+          "rule_id": "meo_isl",
+          "topology_mode": "nearest_n",
+          "topology_n": 2
+        }
+      ],
+      "max_pairs_per_rule": 500,
+      "max_pairs_per_tick": 2000,
+      "projection_revision": 0,
+      "routing_domains": [],
+      "session_name": "earth-meo-gps",
+      "space": [],
+      "space_refs": [
+        {
+          "label": "Earth GPS-altitude MEO 24-satellite shell",
+          "segment_id": "meo",
+          "source_ref": "nodalarc:constellations/earth/meo/earth-meo-gps-24.yaml"
+        }
+      ],
+      "start_time": "2026-06-08T00:00:00Z",
+      "step_seconds": 1.0
+    },
+    "catalog_documents": [],
+    "contract_version": 2,
+    "draft_revision": 0,
+    "expected_session_revision": null,
+    "projection_status": "applied",
+    "reserved_authoring_ids": [
+      "meo",
+      "ground",
+      "meo_access",
+      "meo_isl"
+    ],
+    "session_name_is_placeholder": false,
+    "session_yaml": "session:\n  name: earth-meo-gps\n  display_name: Earth GPS-altitude MEO\n  description: GPS-altitude 24-node MEO shell with MEO gateway sites.\nsegments:\n- id: meo\n  source: nodalarc:constellations/earth/meo/earth-meo-gps-24.yaml\n- id: ground\n  placement:\n    from_site_set: nodalarc:site-sets/earth/meo/earth-meo-gateway-sites.yaml\n  apply:\n    scheduling:\n      selection_policy:\n        longest_remaining_pass:\n          lookahead_horizon_ticks: 7200\n      handover_policy:\n        hard_release: {}\n      handover_mode: bbm\n      mbb_overlap_ticks: 0\n      mbb_reserve: 0\n      handover_concurrency: one_at_a_time\n      ranking_order:\n      - service_priority\n      - selection_score\n      - satellite_ground_terminal_capacity\n      - lex_pair\n      mbb_preemption: 'off'\n      successor_abort_policy: hard_release\n      cross_tenant_displacement: 'off'\n      bbm_acquire_timeout_ticks: 1\nlink_rules:\n- id: meo_access\n  topology:\n    mode: visible_candidates\n  endpoints:\n  - select:\n      all:\n      - segment: ground\n      - tag: meo\n    terminal:\n      all:\n      - role: access\n      - medium: rf\n    min_elevation_deg: 10\n  - select:\n      segment: meo\n    terminal:\n      all:\n      - role: access\n      - medium: rf\n- id: meo_isl\n  topology:\n    mode: nearest_n\n    n: 2\n  endpoints:\n  - select:\n      segment: meo\n    terminal:\n      all:\n      - role: isl\n      - medium: optical\n  - select:\n      segment: meo\n    terminal:\n      all:\n      - role: isl\n      - medium: optical\nsimulation:\n  candidate_limits:\n    max_pairs_per_rule: 500\n    max_pairs_per_tick: 2000\ntime:\n  start_time: '2026-06-08T00:00:00Z'\n  step_seconds: 1\n  compression: 1\n",
+    "source_ref": "nodalarc:sessions/earth-meo-gps.yaml",
+    "target_ref": "user:sessions/earth-meo-gps.yaml"
+  },
+  "issues": [],
+  "source_ref": "nodalarc:sessions/earth-meo-gps.yaml",
+  "world": {
+    "link_rules": [
+      {
+        "enabled": true,
+        "endpoints": [
+          {
+            "min_elevation_deg": 10.0,
+            "node_ids": [
+              "earth-us-co-denver-gw2",
+              "earth-gb-goonhilly-gw1",
+              "earth-au-perth-gw2",
+              "earth-jp-yamaguchi-gw2"
+            ],
+            "segment_id": "ground",
+            "terminal_medium": "rf",
+            "terminal_role": "access"
+          },
+          {
+            "min_elevation_deg": null,
+            "node_ids": [
+              "meo-sat-p00s00",
+              "meo-sat-p00s01",
+              "meo-sat-p00s02",
+              "meo-sat-p00s03",
+              "meo-sat-p01s00",
+              "meo-sat-p01s01",
+              "meo-sat-p01s02",
+              "meo-sat-p01s03",
+              "meo-sat-p02s00",
+              "meo-sat-p02s01",
+              "meo-sat-p02s02",
+              "meo-sat-p02s03",
+              "meo-sat-p03s00",
+              "meo-sat-p03s01",
+              "meo-sat-p03s02",
+              "meo-sat-p03s03",
+              "meo-sat-p04s00",
+              "meo-sat-p04s01",
+              "meo-sat-p04s02",
+              "meo-sat-p04s03",
+              "meo-sat-p05s00",
+              "meo-sat-p05s01",
+              "meo-sat-p05s02",
+              "meo-sat-p05s03"
+            ],
+            "segment_id": "meo",
+            "terminal_medium": "rf",
+            "terminal_role": "access"
+          }
+        ],
+        "explicit_pairs": [],
+        "kind": "access",
+        "max_range_km": null,
+        "rule_id": "meo_access",
+        "topology_mode": "visible_candidates",
+        "topology_n": null
+      },
+      {
+        "enabled": true,
+        "endpoints": [
+          {
+            "min_elevation_deg": null,
+            "node_ids": [
+              "meo-sat-p00s00",
+              "meo-sat-p00s01",
+              "meo-sat-p00s02",
+              "meo-sat-p00s03",
+              "meo-sat-p01s00",
+              "meo-sat-p01s01",
+              "meo-sat-p01s02",
+              "meo-sat-p01s03",
+              "meo-sat-p02s00",
+              "meo-sat-p02s01",
+              "meo-sat-p02s02",
+              "meo-sat-p02s03",
+              "meo-sat-p03s00",
+              "meo-sat-p03s01",
+              "meo-sat-p03s02",
+              "meo-sat-p03s03",
+              "meo-sat-p04s00",
+              "meo-sat-p04s01",
+              "meo-sat-p04s02",
+              "meo-sat-p04s03",
+              "meo-sat-p05s00",
+              "meo-sat-p05s01",
+              "meo-sat-p05s02",
+              "meo-sat-p05s03"
+            ],
+            "segment_id": "meo",
+            "terminal_medium": "optical",
+            "terminal_role": "isl"
+          },
+          {
+            "min_elevation_deg": null,
+            "node_ids": [
+              "meo-sat-p00s00",
+              "meo-sat-p00s01",
+              "meo-sat-p00s02",
+              "meo-sat-p00s03",
+              "meo-sat-p01s00",
+              "meo-sat-p01s01",
+              "meo-sat-p01s02",
+              "meo-sat-p01s03",
+              "meo-sat-p02s00",
+              "meo-sat-p02s01",
+              "meo-sat-p02s02",
+              "meo-sat-p02s03",
+              "meo-sat-p03s00",
+              "meo-sat-p03s01",
+              "meo-sat-p03s02",
+              "meo-sat-p03s03",
+              "meo-sat-p04s00",
+              "meo-sat-p04s01",
+              "meo-sat-p04s02",
+              "meo-sat-p04s03",
+              "meo-sat-p05s00",
+              "meo-sat-p05s01",
+              "meo-sat-p05s02",
+              "meo-sat-p05s03"
+            ],
+            "segment_id": "meo",
+            "terminal_medium": "optical",
+            "terminal_role": "isl"
+          }
+        ],
+        "explicit_pairs": [],
+        "kind": "isl",
+        "max_range_km": null,
+        "rule_id": "meo_isl",
+        "topology_mode": "nearest_n",
+        "topology_n": 2
+      }
+    ],
+    "nodes": [
+      {
+        "epoch_position": {
+          "alt_km": 20200.0,
+          "lat_deg": 0.0,
+          "lon_deg": 103.60685667954384,
+          "vel_x_km_s": -0.27499364394782155,
+          "vel_y_km_s": -0.06656280011324323,
+          "vel_z_km_s": 3.1722753372449
+        },
+        "forwarding": "routed",
+        "interfaces": {
+          "ethernet": {},
+          "lo0": {
+            "ipv4": "100.64.0.8/32",
+            "ipv6": null
+          }
+        },
+        "kind": "satellite",
+        "local_node_id": "sat-p00s00",
+        "namespace": "meo",
+        "node_id": "meo-sat-p00s00",
+        "originated_prefixes": null,
+        "plane": 0,
+        "role": "router",
+        "routing_instances": [
+          {
+            "area_border": false,
+            "areas": [
+              "49.0001"
+            ],
+            "as_boundary": false,
+            "domain_id": "default_domain",
+            "interfaces": [
+              {
+                "area_id": null,
+                "name": "gnd0"
+              },
+              {
+                "area_id": null,
+                "name": "isl0"
+              },
+              {
+                "area_id": null,
+                "name": "isl1"
+              }
+            ],
+            "protocol": "isis"
+          }
+        ],
+        "segment_id": "meo",
+        "slot": 0,
+        "surface_position": null,
+        "tags": [
+          "all"
+        ],
+        "terminal_inventory": [
+          {
+            "boresight": {
+              "mode": "nadir",
+              "target_body": "earth"
+            },
+            "count": 1,
+            "endpoint_role": "access",
+            "field_of_regard_deg": 180.0,
+            "link_role": null,
+            "max_range_km": 30000.0,
+            "medium": "rf",
+            "min_elevation_deg": -80.0,
+            "owner_node_id": "meo-sat-p00s00",
+            "receive_mbps": 500.0,
+            "source_ref": "nodalarc:terminals/rf/rf-ka-meo-access.yaml",
+            "source_terminal_id": "rf-ka-meo-access",
+            "terminal_id": "access_ka",
+            "tracking_capacity": 1,
+            "tracking_rate_deg_s": 0.5,
+            "transmit_mbps": 500.0
+          },
+          {
+            "boresight": null,
+            "count": 2,
+            "endpoint_role": "isl",
+            "field_of_regard_deg": 340.0,
+            "link_role": null,
+            "max_range_km": 80000.0,
+            "medium": "optical",
+            "min_elevation_deg": -80.0,
+            "owner_node_id": "meo-sat-p00s00",
+            "receive_mbps": 2500.0,
+            "source_ref": "nodalarc:terminals/optical/optical-high-orbit-isl.yaml",
+            "source_terminal_id": "optical-high-orbit-isl",
+            "terminal_id": "isl_optical",
+            "tracking_capacity": 1,
+            "tracking_rate_deg_s": 0.5,
+            "transmit_mbps": 2500.0
+          },
+          {
+            "boresight": null,
+            "count": 2,
+            "endpoint_role": "crosslink",
+            "field_of_regard_deg": 360.0,
+            "link_role": null,
+            "max_range_km": 450000.0,
+            "medium": "optical",
+            "min_elevation_deg": -90.0,
+            "owner_node_id": "meo-sat-p00s00",
+            "receive_mbps": 1000.0,
+            "source_ref": "nodalarc:terminals/optical/optical-cislunar-crosslink.yaml",
+            "source_terminal_id": "optical-cislunar-crosslink",
+            "terminal_id": "relay_optical",
+            "tracking_capacity": 1,
+            "tracking_rate_deg_s": 0.25,
+            "transmit_mbps": 1000.0
+          }
+        ]
+      },
+      {
+        "epoch_position": {
+          "alt_km": 20214.3492197824,
+          "lat_deg": 55.043321512421834,
+          "lon_deg": -166.39314332045618,
+          "vel_x_km_s": 0.6495157168183248,
+          "vel_y_km_s": -2.6833710941453615,
+          "vel_z_km_s": 1.9424584188855286e-16
+        },
+        "forwarding": "routed",
+        "interfaces": {
+          "ethernet": {},
+          "lo0": {
+            "ipv4": "100.64.0.9/32",
+            "ipv6": null
+          }
+        },
+        "kind": "satellite",
+        "local_node_id": "sat-p00s01",
+        "namespace": "meo",
+        "node_id": "meo-sat-p00s01",
+        "originated_prefixes": null,
+        "plane": 0,
+        "role": "router",
+        "routing_instances": [
+          {
+            "area_border": false,
+            "areas": [
+              "49.0001"
+            ],
+            "as_boundary": false,
+            "domain_id": "default_domain",
+            "interfaces": [
+              {
+                "area_id": null,
+                "name": "gnd0"
+              },
+              {
+                "area_id": null,
+                "name": "isl0"
+              },
+              {
+                "area_id": null,
+                "name": "isl1"
+              }
+            ],
+            "protocol": "isis"
+          }
+        ],
+        "segment_id": "meo",
+        "slot": 1,
+        "surface_position": null,
+        "tags": [
+          "all"
+        ],
+        "terminal_inventory": [
+          {
+            "boresight": {
+              "mode": "nadir",
+              "target_body": "earth"
+            },
+            "count": 1,
+            "endpoint_role": "access",
+            "field_of_regard_deg": 180.0,
+            "link_role": null,
+            "max_range_km": 30000.0,
+            "medium": "rf",
+            "min_elevation_deg": -80.0,
+            "owner_node_id": "meo-sat-p00s01",
+            "receive_mbps": 500.0,
+            "source_ref": "nodalarc:terminals/rf/rf-ka-meo-access.yaml",
+            "source_terminal_id": "rf-ka-meo-access",
+            "terminal_id": "access_ka",
+            "tracking_capacity": 1,
+            "tracking_rate_deg_s": 0.5,
+            "transmit_mbps": 500.0
+          },
+          {
+            "boresight": null,
+            "count": 2,
+            "endpoint_role": "isl",
+            "field_of_regard_deg": 340.0,
+            "link_role": null,
+            "max_range_km": 80000.0,
+            "medium": "optical",
+            "min_elevation_deg": -80.0,
+            "owner_node_id": "meo-sat-p00s01",
+            "receive_mbps": 2500.0,
+            "source_ref": "nodalarc:terminals/optical/optical-high-orbit-isl.yaml",
+            "source_terminal_id": "optical-high-orbit-isl",
+            "terminal_id": "isl_optical",
+            "tracking_capacity": 1,
+            "tracking_rate_deg_s": 0.5,
+            "transmit_mbps": 2500.0
+          },
+          {
+            "boresight": null,
+            "count": 2,
+            "endpoint_role": "crosslink",
+            "field_of_regard_deg": 360.0,
+            "link_role": null,
+            "max_range_km": 450000.0,
+            "medium": "optical",
+            "min_elevation_deg": -90.0,
+            "owner_node_id": "meo-sat-p00s01",
+            "receive_mbps": 1000.0,
+            "source_ref": "nodalarc:terminals/optical/optical-cislunar-crosslink.yaml",
+            "source_terminal_id": "optical-cislunar-crosslink",
+            "terminal_id": "relay_optical",
+            "tracking_capacity": 1,
+            "tracking_rate_deg_s": 0.25,
+            "transmit_mbps": 1000.0
+          }
+        ]
+      },
+      {
+        "epoch_position": {
+          "alt_km": 20199.999999999996,
+          "lat_deg": 5.75700050044901e-15,
+          "lon_deg": -76.39314332045616,
+          "vel_x_km_s": 0.27499364394782155,
+          "vel_y_km_s": 0.06656280011324295,
+          "vel_z_km_s": -3.1722753372449
+        },
+        "forwarding": "routed",
+        "interfaces": {
+          "ethernet": {},
+          "lo0": {
+            "ipv4": "100.64.0.10/32",
+            "ipv6": null
+          }
+        },
+        "kind": "satellite",
+        "local_node_id": "sat-p00s02",
+        "namespace": "meo",
+        "node_id": "meo-sat-p00s02",
+        "originated_prefixes": null,
+        "plane": 0,
+        "role": "router",
+        "routing_instances": [
+          {
+            "area_border": false,
+            "areas": [
+              "49.0001"
+            ],
+            "as_boundary": false,
+            "domain_id": "default_domain",
+            "interfaces": [
+              {
+                "area_id": null,
+                "name": "gnd0"
+              },
+              {
+                "area_id": null,
+                "name": "isl0"
+              },
+              {
+                "area_id": null,
+                "name": "isl1"
+              }
+            ],
+            "protocol": "isis"
+          }
+        ],
+        "segment_id": "meo",
+        "slot": 2,
+        "surface_position": null,
+        "tags": [
+          "all"
+        ],
+        "terminal_inventory": [
+          {
+            "boresight": {
+              "mode": "nadir",
+              "target_body": "earth"
+            },
+            "count": 1,
+            "endpoint_role": "access",
+            "field_of_regard_deg": 180.0,
+            "link_role": null,
+            "max_range_km": 30000.0,
+            "medium": "rf",
+            "min_elevation_deg": -80.0,
+            "owner_node_id": "meo-sat-p00s02",
+            "receive_mbps": 500.0,
+            "source_ref": "nodalarc:terminals/rf/rf-ka-meo-access.yaml",
+            "source_terminal_id": "rf-ka-meo-access",
+            "terminal_id": "access_ka",
+            "tracking_capacity": 1,
+            "tracking_rate_deg_s": 0.5,
+            "transmit_mbps": 500.0
+          },
+          {
+            "boresight": null,
+            "count": 2,
+            "endpoint_role": "isl",
+            "field_of_regard_deg": 340.0,
+            "link_role": null,
+            "max_range_km": 80000.0,
+            "medium": "optical",
+            "min_elevation_deg": -80.0,
+            "owner_node_id": "meo-sat-p00s02",
+            "receive_mbps": 2500.0,
+            "source_ref": "nodalarc:terminals/optical/optical-high-orbit-isl.yaml",
+            "source_terminal_id": "optical-high-orbit-isl",
+            "terminal_id": "isl_optical",
+            "tracking_capacity": 1,
+            "tracking_rate_deg_s": 0.5,
+            "transmit_mbps": 2500.0
+          },
+          {
+            "boresight": null,
+            "count": 2,
+            "endpoint_role": "crosslink",
+            "field_of_regard_deg": 360.0,
+            "link_role": null,
+            "max_range_km": 450000.0,
+            "medium": "optical",
+            "min_elevation_deg": -90.0,
+            "owner_node_id": "meo-sat-p00s02",
+            "receive_mbps": 1000.0,
+            "source_ref": "nodalarc:terminals/optical/optical-cislunar-crosslink.yaml",
+            "source_terminal_id": "optical-cislunar-crosslink",
+            "terminal_id": "relay_optical",
+            "tracking_capacity": 1,
+            "tracking_rate_deg_s": 0.25,
+            "transmit_mbps": 1000.0
+          }
+        ]
+      },
+      {
+        "epoch_position": {
+          "alt_km": 20214.3492197824,
+          "lat_deg": -55.04332151242183,
+          "lon_deg": 13.606856679543826,
+          "vel_x_km_s": -0.6495157168183245,
+          "vel_y_km_s": 2.683371094145361,
+          "vel_z_km_s": -5.827375256656585e-16
+        },
+        "forwarding": "routed",
+        "interfaces": {
+          "ethernet": {},
+          "lo0": {
+            "ipv4": "100.64.0.11/32",
+            "ipv6": null
+          }
+        },
+        "kind": "satellite",
+        "local_node_id": "sat-p00s03",
+        "namespace": "meo",
+        "node_id": "meo-sat-p00s03",
+        "originated_prefixes": null,
+        "plane": 0,
+        "role": "router",
+        "routing_instances": [
+          {
+            "area_border": false,
+            "areas": [
+              "49.0001"
+            ],
+            "as_boundary": false,
+            "domain_id": "default_domain",
+            "interfaces": [
+              {
+                "area_id": null,
+                "name": "gnd0"
+              },
+              {
+                "area_id": null,
+                "name": "isl0"
+              },
+              {
+                "area_id": null,
+                "name": "isl1"
+              }
+            ],
+            "protocol": "isis"
+          }
+        ],
+        "segment_id": "meo",
+        "slot": 3,
+        "surface_position": null,
+        "tags": [
+          "all"
+        ],
+        "terminal_inventory": [
+          {
+            "boresight": {
+              "mode": "nadir",
+              "target_body": "earth"
+            },
+            "count": 1,
+            "endpoint_role": "access",
+            "field_of_regard_deg": 180.0,
+            "link_role": null,
+            "max_range_km": 30000.0,
+            "medium": "rf",
+            "min_elevation_deg": -80.0,
+            "owner_node_id": "meo-sat-p00s03",
+            "receive_mbps": 500.0,
+            "source_ref": "nodalarc:terminals/rf/rf-ka-meo-access.yaml",
+            "source_terminal_id": "rf-ka-meo-access",
+            "terminal_id": "access_ka",
+            "tracking_capacity": 1,
+            "tracking_rate_deg_s": 0.5,
+            "transmit_mbps": 500.0
+          },
+          {
+            "boresight": null,
+            "count": 2,
+            "endpoint_role": "isl",
+            "field_of_regard_deg": 340.0,
+            "link_role": null,
+            "max_range_km": 80000.0,
+            "medium": "optical",
+            "min_elevation_deg": -80.0,
+            "owner_node_id": "meo-sat-p00s03",
+            "receive_mbps": 2500.0,
+            "source_ref": "nodalarc:terminals/optical/optical-high-orbit-isl.yaml",
+            "source_terminal_id": "optical-high-orbit-isl",
+            "terminal_id": "isl_optical",
+            "tracking_capacity": 1,
+            "tracking_rate_deg_s": 0.5,
+            "transmit_mbps": 2500.0
+          },
+          {
+            "boresight": null,
+            "count": 2,
+            "endpoint_role": "crosslink",
+            "field_of_regard_deg": 360.0,
+            "link_role": null,
+            "max_range_km": 450000.0,
+            "medium": "optical",
+            "min_elevation_deg": -90.0,
+            "owner_node_id": "meo-sat-p00s03",
+            "receive_mbps": 1000.0,
+            "source_ref": "nodalarc:terminals/optical/optical-cislunar-crosslink.yaml",
+            "source_terminal_id": "optical-cislunar-crosslink",
+            "terminal_id": "relay_optical",
+            "tracking_capacity": 1,
+            "tracking_rate_deg_s": 0.25,
+            "transmit_mbps": 1000.0
+          }
+        ]
+      },
+      {
+        "epoch_position": {
+          "alt_km": 20200.961173325624,
+          "lat_deg": 12.259397698999488,
+          "lon_deg": 172.344241867459,
+          "vel_x_km_s": 0.6083838313767682,
+          "vel_y_km_s": -0.46385283743583616,
+          "vel_z_km_s": 3.064182676344713
+        },
+        "forwarding": "routed",
+        "interfaces": {
+          "ethernet": {},
+          "lo0": {
+            "ipv4": "100.64.0.12/32",
+            "ipv6": null
+          }
+        },
+        "kind": "satellite",
+        "local_node_id": "sat-p01s00",
+        "namespace": "meo",
+        "node_id": "meo-sat-p01s00",
+        "originated_prefixes": null,
+        "plane": 1,
+        "role": "router",
+        "routing_instances": [
+          {
+            "area_border": false,
+            "areas": [
+              "49.0001"
+            ],
+            "as_boundary": false,
+            "domain_id": "default_domain",
+            "interfaces": [
+              {
+                "area_id": null,
+                "name": "gnd0"
+              },
+              {
+                "area_id": null,
+                "name": "isl0"
+              },
+              {
+                "area_id": null,
+                "name": "isl1"
+              }
+            ],
+            "protocol": "isis"
+          }
+        ],
+        "segment_id": "meo",
+        "slot": 0,
+        "surface_position": null,
+        "tags": [
+          "all"
+        ],
+        "terminal_inventory": [
+          {
+            "boresight": {
+              "mode": "nadir",
+              "target_body": "earth"
+            },
+            "count": 1,
+            "endpoint_role": "access",
+            "field_of_regard_deg": 180.0,
+            "link_role": null,
+            "max_range_km": 30000.0,
+            "medium": "rf",
+            "min_elevation_deg": -80.0,
+            "owner_node_id": "meo-sat-p01s00",
+            "receive_mbps": 500.0,
+            "source_ref": "nodalarc:terminals/rf/rf-ka-meo-access.yaml",
+            "source_terminal_id": "rf-ka-meo-access",
+            "terminal_id": "access_ka",
+            "tracking_capacity": 1,
+            "tracking_rate_deg_s": 0.5,
+            "transmit_mbps": 500.0
+          },
+          {
+            "boresight": null,
+            "count": 2,
+            "endpoint_role": "isl",
+            "field_of_regard_deg": 340.0,
+            "link_role": null,
+            "max_range_km": 80000.0,
+            "medium": "optical",
+            "min_elevation_deg": -80.0,
+            "owner_node_id": "meo-sat-p01s00",
+            "receive_mbps": 2500.0,
+            "source_ref": "nodalarc:terminals/optical/optical-high-orbit-isl.yaml",
+            "source_terminal_id": "optical-high-orbit-isl",
+            "terminal_id": "isl_optical",
+            "tracking_capacity": 1,
+            "tracking_rate_deg_s": 0.5,
+            "transmit_mbps": 2500.0
+          },
+          {
+            "boresight": null,
+            "count": 2,
+            "endpoint_role": "crosslink",
+            "field_of_regard_deg": 360.0,
+            "link_role": null,
+            "max_range_km": 450000.0,
+            "medium": "optical",
+            "min_elevation_deg": -90.0,
+            "owner_node_id": "meo-sat-p01s00",
+            "receive_mbps": 1000.0,
+            "source_ref": "nodalarc:terminals/optical/optical-cislunar-crosslink.yaml",
+            "source_terminal_id": "optical-cislunar-crosslink",
+            "terminal_id": "relay_optical",
+            "tracking_capacity": 1,
+            "tracking_rate_deg_s": 0.25,
+            "transmit_mbps": 1000.0
+          }
+        ]
+      },
+      {
+        "epoch_position": {
+          "alt_km": 20213.387962177963,
+          "lat_deg": 52.34616588374224,
+          "lon_deg": -81.35327075668022,
+          "vel_x_km_s": 2.579042824641922,
+          "vel_y_km_s": -0.6823862348000396,
+          "vel_z_km_s": -0.8210452735880024
+        },
+        "forwarding": "routed",
+        "interfaces": {
+          "ethernet": {},
+          "lo0": {
+            "ipv4": "100.64.0.13/32",
+            "ipv6": null
+          }
+        },
+        "kind": "satellite",
+        "local_node_id": "sat-p01s01",
+        "namespace": "meo",
+        "node_id": "meo-sat-p01s01",
+        "originated_prefixes": null,
+        "plane": 1,
+        "role": "router",
+        "routing_instances": [
+          {
+            "area_border": false,
+            "areas": [
+              "49.0001"
+            ],
+            "as_boundary": false,
+            "domain_id": "default_domain",
+            "interfaces": [
+              {
+                "area_id": null,
+                "name": "gnd0"
+              },
+              {
+                "area_id": null,
+                "name": "isl0"
+              },
+              {
+                "area_id": null,
+                "name": "isl1"
+              }
+            ],
+            "protocol": "isis"
+          }
+        ],
+        "segment_id": "meo",
+        "slot": 1,
+        "surface_position": null,
+        "tags": [
+          "all"
+        ],
+        "terminal_inventory": [
+          {
+            "boresight": {
+              "mode": "nadir",
+              "target_body": "earth"
+            },
+            "count": 1,
+            "endpoint_role": "access",
+            "field_of_regard_deg": 180.0,
+            "link_role": null,
+            "max_range_km": 30000.0,
+            "medium": "rf",
+            "min_elevation_deg": -80.0,
+            "owner_node_id": "meo-sat-p01s01",
+            "receive_mbps": 500.0,
+            "source_ref": "nodalarc:terminals/rf/rf-ka-meo-access.yaml",
+            "source_terminal_id": "rf-ka-meo-access",
+            "terminal_id": "access_ka",
+            "tracking_capacity": 1,
+            "tracking_rate_deg_s": 0.5,
+            "transmit_mbps": 500.0
+          },
+          {
+            "boresight": null,
+            "count": 2,
+            "endpoint_role": "isl",
+            "field_of_regard_deg": 340.0,
+            "link_role": null,
+            "max_range_km": 80000.0,
+            "medium": "optical",
+            "min_elevation_deg": -80.0,
+            "owner_node_id": "meo-sat-p01s01",
+            "receive_mbps": 2500.0,
+            "source_ref": "nodalarc:terminals/optical/optical-high-orbit-isl.yaml",
+            "source_terminal_id": "optical-high-orbit-isl",
+            "terminal_id": "isl_optical",
+            "tracking_capacity": 1,
+            "tracking_rate_deg_s": 0.5,
+            "transmit_mbps": 2500.0
+          },
+          {
+            "boresight": null,
+            "count": 2,
+            "endpoint_role": "crosslink",
+            "field_of_regard_deg": 360.0,
+            "link_role": null,
+            "max_range_km": 450000.0,
+            "medium": "optical",
+            "min_elevation_deg": -90.0,
+            "owner_node_id": "meo-sat-p01s01",
+            "receive_mbps": 1000.0,
+            "source_ref": "nodalarc:terminals/optical/optical-cislunar-crosslink.yaml",
+            "source_terminal_id": "optical-cislunar-crosslink",
+            "terminal_id": "relay_optical",
+            "tracking_capacity": 1,
+            "tracking_rate_deg_s": 0.25,
+            "transmit_mbps": 1000.0
+          }
+        ]
+      },
+      {
+        "epoch_position": {
+          "alt_km": 20200.961173325624,
+          "lat_deg": -12.25939769899949,
+          "lon_deg": -7.655758132541002,
+          "vel_x_km_s": -0.6083838313767684,
+          "vel_y_km_s": 0.4638528374358357,
+          "vel_z_km_s": -3.064182676344713
+        },
+        "forwarding": "routed",
+        "interfaces": {
+          "ethernet": {},
+          "lo0": {
+            "ipv4": "100.64.0.14/32",
+            "ipv6": null
+          }
+        },
+        "kind": "satellite",
+        "local_node_id": "sat-p01s02",
+        "namespace": "meo",
+        "node_id": "meo-sat-p01s02",
+        "originated_prefixes": null,
+        "plane": 1,
+        "role": "router",
+        "routing_instances": [
+          {
+            "area_border": false,
+            "areas": [
+              "49.0001"
+            ],
+            "as_boundary": false,
+            "domain_id": "default_domain",
+            "interfaces": [
+              {
+                "area_id": null,
+                "name": "gnd0"
+              },
+              {
+                "area_id": null,
+                "name": "isl0"
+              },
+              {
+                "area_id": null,
+                "name": "isl1"
+              }
+            ],
+            "protocol": "isis"
+          }
+        ],
+        "segment_id": "meo",
+        "slot": 2,
+        "surface_position": null,
+        "tags": [
+          "all"
+        ],
+        "terminal_inventory": [
+          {
+            "boresight": {
+              "mode": "nadir",
+              "target_body": "earth"
+            },
+            "count": 1,
+            "endpoint_role": "access",
+            "field_of_regard_deg": 180.0,
+            "link_role": null,
+            "max_range_km": 30000.0,
+            "medium": "rf",
+            "min_elevation_deg": -80.0,
+            "owner_node_id": "meo-sat-p01s02",
+            "receive_mbps": 500.0,
+            "source_ref": "nodalarc:terminals/rf/rf-ka-meo-access.yaml",
+            "source_terminal_id": "rf-ka-meo-access",
+            "terminal_id": "access_ka",
+            "tracking_capacity": 1,
+            "tracking_rate_deg_s": 0.5,
+            "transmit_mbps": 500.0
+          },
+          {
+            "boresight": null,
+            "count": 2,
+            "endpoint_role": "isl",
+            "field_of_regard_deg": 340.0,
+            "link_role": null,
+            "max_range_km": 80000.0,
+            "medium": "optical",
+            "min_elevation_deg": -80.0,
+            "owner_node_id": "meo-sat-p01s02",
+            "receive_mbps": 2500.0,
+            "source_ref": "nodalarc:terminals/optical/optical-high-orbit-isl.yaml",
+            "source_terminal_id": "optical-high-orbit-isl",
+            "terminal_id": "isl_optical",
+            "tracking_capacity": 1,
+            "tracking_rate_deg_s": 0.5,
+            "transmit_mbps": 2500.0
+          },
+          {
+            "boresight": null,
+            "count": 2,
+            "endpoint_role": "crosslink",
+            "field_of_regard_deg": 360.0,
+            "link_role": null,
+            "max_range_km": 450000.0,
+            "medium": "optical",
+            "min_elevation_deg": -90.0,
+            "owner_node_id": "meo-sat-p01s02",
+            "receive_mbps": 1000.0,
+            "source_ref": "nodalarc:terminals/optical/optical-cislunar-crosslink.yaml",
+            "source_terminal_id": "optical-cislunar-crosslink",
+            "terminal_id": "relay_optical",
+            "tracking_capacity": 1,
+            "tracking_rate_deg_s": 0.25,
+            "transmit_mbps": 1000.0
+          }
+        ]
+      },
+      {
+        "epoch_position": {
+          "alt_km": 20213.38796217796,
+          "lat_deg": -52.34616588374225,
+          "lon_deg": 98.64672924331975,
+          "vel_x_km_s": -2.579042824641923,
+          "vel_y_km_s": 0.6823862348000399,
+          "vel_z_km_s": 0.8210452735880005
+        },
+        "forwarding": "routed",
+        "interfaces": {
+          "ethernet": {},
+          "lo0": {
+            "ipv4": "100.64.0.15/32",
+            "ipv6": null
+          }
+        },
+        "kind": "satellite",
+        "local_node_id": "sat-p01s03",
+        "namespace": "meo",
+        "node_id": "meo-sat-p01s03",
+        "originated_prefixes": null,
+        "plane": 1,
+        "role": "router",
+        "routing_instances": [
+          {
+            "area_border": false,
+            "areas": [
+              "49.0001"
+            ],
+            "as_boundary": false,
+            "domain_id": "default_domain",
+            "interfaces": [
+              {
+                "area_id": null,
+                "name": "gnd0"
+              },
+              {
+                "area_id": null,
+                "name": "isl0"
+              },
+              {
+                "area_id": null,
+                "name": "isl1"
+              }
+            ],
+            "protocol": "isis"
+          }
+        ],
+        "segment_id": "meo",
+        "slot": 3,
+        "surface_position": null,
+        "tags": [
+          "all"
+        ],
+        "terminal_inventory": [
+          {
+            "boresight": {
+              "mode": "nadir",
+              "target_body": "earth"
+            },
+            "count": 1,
+            "endpoint_role": "access",
+            "field_of_regard_deg": 180.0,
+            "link_role": null,
+            "max_range_km": 30000.0,
+            "medium": "rf",
+            "min_elevation_deg": -80.0,
+            "owner_node_id": "meo-sat-p01s03",
+            "receive_mbps": 500.0,
+            "source_ref": "nodalarc:terminals/rf/rf-ka-meo-access.yaml",
+            "source_terminal_id": "rf-ka-meo-access",
+            "terminal_id": "access_ka",
+            "tracking_capacity": 1,
+            "tracking_rate_deg_s": 0.5,
+            "transmit_mbps": 500.0
+          },
+          {
+            "boresight": null,
+            "count": 2,
+            "endpoint_role": "isl",
+            "field_of_regard_deg": 340.0,
+            "link_role": null,
+            "max_range_km": 80000.0,
+            "medium": "optical",
+            "min_elevation_deg": -80.0,
+            "owner_node_id": "meo-sat-p01s03",
+            "receive_mbps": 2500.0,
+            "source_ref": "nodalarc:terminals/optical/optical-high-orbit-isl.yaml",
+            "source_terminal_id": "optical-high-orbit-isl",
+            "terminal_id": "isl_optical",
+            "tracking_capacity": 1,
+            "tracking_rate_deg_s": 0.5,
+            "transmit_mbps": 2500.0
+          },
+          {
+            "boresight": null,
+            "count": 2,
+            "endpoint_role": "crosslink",
+            "field_of_regard_deg": 360.0,
+            "link_role": null,
+            "max_range_km": 450000.0,
+            "medium": "optical",
+            "min_elevation_deg": -90.0,
+            "owner_node_id": "meo-sat-p01s03",
+            "receive_mbps": 1000.0,
+            "source_ref": "nodalarc:terminals/optical/optical-cislunar-crosslink.yaml",
+            "source_terminal_id": "optical-cislunar-crosslink",
+            "terminal_id": "relay_optical",
+            "tracking_capacity": 1,
+            "tracking_rate_deg_s": 0.25,
+            "transmit_mbps": 1000.0
+          }
+        ]
+      },
+      {
+        "epoch_position": {
+          "alt_km": 20203.58717853047,
+          "lat_deg": 24.21265306394132,
+          "lon_deg": -118.07062148778424,
+          "vel_x_km_s": 1.1685526793047476,
+          "vel_y_km_s": 0.7746686339589854,
+          "vel_z_km_s": 2.747271029852931
+        },
+        "forwarding": "routed",
+        "interfaces": {
+          "ethernet": {},
+          "lo0": {
+            "ipv4": "100.64.0.16/32",
+            "ipv6": null
+          }
+        },
+        "kind": "satellite",
+        "local_node_id": "sat-p02s00",
+        "namespace": "meo",
+        "node_id": "meo-sat-p02s00",
+        "originated_prefixes": null,
+        "plane": 2,
+        "role": "router",
+        "routing_instances": [
+          {
+            "area_border": false,
+            "areas": [
+              "49.0001"
+            ],
+            "as_boundary": false,
+            "domain_id": "default_domain",
+            "interfaces": [
+              {
+                "area_id": null,
+                "name": "gnd0"
+              },
+              {
+                "area_id": null,
+                "name": "isl0"
+              },
+              {
+                "area_id": null,
+                "name": "isl1"
+              }
+            ],
+            "protocol": "isis"
+          }
+        ],
+        "segment_id": "meo",
+        "slot": 0,
+        "surface_position": null,
+        "tags": [
+          "all"
+        ],
+        "terminal_inventory": [
+          {
+            "boresight": {
+              "mode": "nadir",
+              "target_body": "earth"
+            },
+            "count": 1,
+            "endpoint_role": "access",
+            "field_of_regard_deg": 180.0,
+            "link_role": null,
+            "max_range_km": 30000.0,
+            "medium": "rf",
+            "min_elevation_deg": -80.0,
+            "owner_node_id": "meo-sat-p02s00",
+            "receive_mbps": 500.0,
+            "source_ref": "nodalarc:terminals/rf/rf-ka-meo-access.yaml",
+            "source_terminal_id": "rf-ka-meo-access",
+            "terminal_id": "access_ka",
+            "tracking_capacity": 1,
+            "tracking_rate_deg_s": 0.5,
+            "transmit_mbps": 500.0
+          },
+          {
+            "boresight": null,
+            "count": 2,
+            "endpoint_role": "isl",
+            "field_of_regard_deg": 340.0,
+            "link_role": null,
+            "max_range_km": 80000.0,
+            "medium": "optical",
+            "min_elevation_deg": -80.0,
+            "owner_node_id": "meo-sat-p02s00",
+            "receive_mbps": 2500.0,
+            "source_ref": "nodalarc:terminals/optical/optical-high-orbit-isl.yaml",
+            "source_terminal_id": "optical-high-orbit-isl",
+            "terminal_id": "isl_optical",
+            "tracking_capacity": 1,
+            "tracking_rate_deg_s": 0.5,
+            "transmit_mbps": 2500.0
+          },
+          {
+            "boresight": null,
+            "count": 2,
+            "endpoint_role": "crosslink",
+            "field_of_regard_deg": 360.0,
+            "link_role": null,
+            "max_range_km": 450000.0,
+            "medium": "optical",
+            "min_elevation_deg": -90.0,
+            "owner_node_id": "meo-sat-p02s00",
+            "receive_mbps": 1000.0,
+            "source_ref": "nodalarc:terminals/optical/optical-cislunar-crosslink.yaml",
+            "source_terminal_id": "optical-cislunar-crosslink",
+            "terminal_id": "relay_optical",
+            "tracking_capacity": 1,
+            "tracking_rate_deg_s": 0.25,
+            "transmit_mbps": 1000.0
+          }
+        ]
+      },
+      {
+        "epoch_position": {
+          "alt_km": 20210.76178841524,
+          "lat_deg": 45.232745131257445,
+          "lon_deg": -1.2052739120154479,
+          "vel_x_km_s": 1.6337088162385542,
+          "vel_y_km_s": 1.7515055960098287,
+          "vel_z_km_s": -1.5861376686224493
+        },
+        "forwarding": "routed",
+        "interfaces": {
+          "ethernet": {},
+          "lo0": {
+            "ipv4": "100.64.0.17/32",
+            "ipv6": null
+          }
+        },
+        "kind": "satellite",
+        "local_node_id": "sat-p02s01",
+        "namespace": "meo",
+        "node_id": "meo-sat-p02s01",
+        "originated_prefixes": null,
+        "plane": 2,
+        "role": "router",
+        "routing_instances": [
+          {
+            "area_border": false,
+            "areas": [
+              "49.0001"
+            ],
+            "as_boundary": false,
+            "domain_id": "default_domain",
+            "interfaces": [
+              {
+                "area_id": null,
+                "name": "gnd0"
+              },
+              {
+                "area_id": null,
+                "name": "isl0"
+              },
+              {
+                "area_id": null,
+                "name": "isl1"
+              }
+            ],
+            "protocol": "isis"
+          }
+        ],
+        "segment_id": "meo",
+        "slot": 1,
+        "surface_position": null,
+        "tags": [
+          "all"
+        ],
+        "terminal_inventory": [
+          {
+            "boresight": {
+              "mode": "nadir",
+              "target_body": "earth"
+            },
+            "count": 1,
+            "endpoint_role": "access",
+            "field_of_regard_deg": 180.0,
+            "link_role": null,
+            "max_range_km": 30000.0,
+            "medium": "rf",
+            "min_elevation_deg": -80.0,
+            "owner_node_id": "meo-sat-p02s01",
+            "receive_mbps": 500.0,
+            "source_ref": "nodalarc:terminals/rf/rf-ka-meo-access.yaml",
+            "source_terminal_id": "rf-ka-meo-access",
+            "terminal_id": "access_ka",
+            "tracking_capacity": 1,
+            "tracking_rate_deg_s": 0.5,
+            "transmit_mbps": 500.0
+          },
+          {
+            "boresight": null,
+            "count": 2,
+            "endpoint_role": "isl",
+            "field_of_regard_deg": 340.0,
+            "link_role": null,
+            "max_range_km": 80000.0,
+            "medium": "optical",
+            "min_elevation_deg": -80.0,
+            "owner_node_id": "meo-sat-p02s01",
+            "receive_mbps": 2500.0,
+            "source_ref": "nodalarc:terminals/optical/optical-high-orbit-isl.yaml",
+            "source_terminal_id": "optical-high-orbit-isl",
+            "terminal_id": "isl_optical",
+            "tracking_capacity": 1,
+            "tracking_rate_deg_s": 0.5,
+            "transmit_mbps": 2500.0
+          },
+          {
+            "boresight": null,
+            "count": 2,
+            "endpoint_role": "crosslink",
+            "field_of_regard_deg": 360.0,
+            "link_role": null,
+            "max_range_km": 450000.0,
+            "medium": "optical",
+            "min_elevation_deg": -90.0,
+            "owner_node_id": "meo-sat-p02s01",
+            "receive_mbps": 1000.0,
+            "source_ref": "nodalarc:terminals/optical/optical-cislunar-crosslink.yaml",
+            "source_terminal_id": "optical-cislunar-crosslink",
+            "terminal_id": "relay_optical",
+            "tracking_capacity": 1,
+            "tracking_rate_deg_s": 0.25,
+            "transmit_mbps": 1000.0
+          }
+        ]
+      },
+      {
+        "epoch_position": {
+          "alt_km": 20203.58717853047,
+          "lat_deg": -24.212653063941328,
+          "lon_deg": 61.929378512215784,
+          "vel_x_km_s": -1.1685526793047483,
+          "vel_y_km_s": -0.774668633958986,
+          "vel_z_km_s": -2.747271029852931
+        },
+        "forwarding": "routed",
+        "interfaces": {
+          "ethernet": {},
+          "lo0": {
+            "ipv4": "100.64.0.18/32",
+            "ipv6": null
+          }
+        },
+        "kind": "satellite",
+        "local_node_id": "sat-p02s02",
+        "namespace": "meo",
+        "node_id": "meo-sat-p02s02",
+        "originated_prefixes": null,
+        "plane": 2,
+        "role": "router",
+        "routing_instances": [
+          {
+            "area_border": false,
+            "areas": [
+              "49.0001"
+            ],
+            "as_boundary": false,
+            "domain_id": "default_domain",
+            "interfaces": [
+              {
+                "area_id": null,
+                "name": "gnd0"
+              },
+              {
+                "area_id": null,
+                "name": "isl0"
+              },
+              {
+                "area_id": null,
+                "name": "isl1"
+              }
+            ],
+            "protocol": "isis"
+          }
+        ],
+        "segment_id": "meo",
+        "slot": 2,
+        "surface_position": null,
+        "tags": [
+          "all"
+        ],
+        "terminal_inventory": [
+          {
+            "boresight": {
+              "mode": "nadir",
+              "target_body": "earth"
+            },
+            "count": 1,
+            "endpoint_role": "access",
+            "field_of_regard_deg": 180.0,
+            "link_role": null,
+            "max_range_km": 30000.0,
+            "medium": "rf",
+            "min_elevation_deg": -80.0,
+            "owner_node_id": "meo-sat-p02s02",
+            "receive_mbps": 500.0,
+            "source_ref": "nodalarc:terminals/rf/rf-ka-meo-access.yaml",
+            "source_terminal_id": "rf-ka-meo-access",
+            "terminal_id": "access_ka",
+            "tracking_capacity": 1,
+            "tracking_rate_deg_s": 0.5,
+            "transmit_mbps": 500.0
+          },
+          {
+            "boresight": null,
+            "count": 2,
+            "endpoint_role": "isl",
+            "field_of_regard_deg": 340.0,
+            "link_role": null,
+            "max_range_km": 80000.0,
+            "medium": "optical",
+            "min_elevation_deg": -80.0,
+            "owner_node_id": "meo-sat-p02s02",
+            "receive_mbps": 2500.0,
+            "source_ref": "nodalarc:terminals/optical/optical-high-orbit-isl.yaml",
+            "source_terminal_id": "optical-high-orbit-isl",
+            "terminal_id": "isl_optical",
+            "tracking_capacity": 1,
+            "tracking_rate_deg_s": 0.5,
+            "transmit_mbps": 2500.0
+          },
+          {
+            "boresight": null,
+            "count": 2,
+            "endpoint_role": "crosslink",
+            "field_of_regard_deg": 360.0,
+            "link_role": null,
+            "max_range_km": 450000.0,
+            "medium": "optical",
+            "min_elevation_deg": -90.0,
+            "owner_node_id": "meo-sat-p02s02",
+            "receive_mbps": 1000.0,
+            "source_ref": "nodalarc:terminals/optical/optical-cislunar-crosslink.yaml",
+            "source_terminal_id": "optical-cislunar-crosslink",
+            "terminal_id": "relay_optical",
+            "tracking_capacity": 1,
+            "tracking_rate_deg_s": 0.25,
+            "transmit_mbps": 1000.0
+          }
+        ]
+      },
+      {
+        "epoch_position": {
+          "alt_km": 20210.76178841524,
+          "lat_deg": -45.23274513125743,
+          "lon_deg": 178.79472608798457,
+          "vel_x_km_s": -1.6337088162385542,
+          "vel_y_km_s": -1.7515055960098291,
+          "vel_z_km_s": 1.5861376686224504
+        },
+        "forwarding": "routed",
+        "interfaces": {
+          "ethernet": {},
+          "lo0": {
+            "ipv4": "100.64.0.19/32",
+            "ipv6": null
+          }
+        },
+        "kind": "satellite",
+        "local_node_id": "sat-p02s03",
+        "namespace": "meo",
+        "node_id": "meo-sat-p02s03",
+        "originated_prefixes": null,
+        "plane": 2,
+        "role": "router",
+        "routing_instances": [
+          {
+            "area_border": false,
+            "areas": [
+              "49.0001"
+            ],
+            "as_boundary": false,
+            "domain_id": "default_domain",
+            "interfaces": [
+              {
+                "area_id": null,
+                "name": "gnd0"
+              },
+              {
+                "area_id": null,
+                "name": "isl0"
+              },
+              {
+                "area_id": null,
+                "name": "isl1"
+              }
+            ],
+            "protocol": "isis"
+          }
+        ],
+        "segment_id": "meo",
+        "slot": 3,
+        "surface_position": null,
+        "tags": [
+          "all"
+        ],
+        "terminal_inventory": [
+          {
+            "boresight": {
+              "mode": "nadir",
+              "target_body": "earth"
+            },
+            "count": 1,
+            "endpoint_role": "access",
+            "field_of_regard_deg": 180.0,
+            "link_role": null,
+            "max_range_km": 30000.0,
+            "medium": "rf",
+            "min_elevation_deg": -80.0,
+            "owner_node_id": "meo-sat-p02s03",
+            "receive_mbps": 500.0,
+            "source_ref": "nodalarc:terminals/rf/rf-ka-meo-access.yaml",
+            "source_terminal_id": "rf-ka-meo-access",
+            "terminal_id": "access_ka",
+            "tracking_capacity": 1,
+            "tracking_rate_deg_s": 0.5,
+            "transmit_mbps": 500.0
+          },
+          {
+            "boresight": null,
+            "count": 2,
+            "endpoint_role": "isl",
+            "field_of_regard_deg": 340.0,
+            "link_role": null,
+            "max_range_km": 80000.0,
+            "medium": "optical",
+            "min_elevation_deg": -80.0,
+            "owner_node_id": "meo-sat-p02s03",
+            "receive_mbps": 2500.0,
+            "source_ref": "nodalarc:terminals/optical/optical-high-orbit-isl.yaml",
+            "source_terminal_id": "optical-high-orbit-isl",
+            "terminal_id": "isl_optical",
+            "tracking_capacity": 1,
+            "tracking_rate_deg_s": 0.5,
+            "transmit_mbps": 2500.0
+          },
+          {
+            "boresight": null,
+            "count": 2,
+            "endpoint_role": "crosslink",
+            "field_of_regard_deg": 360.0,
+            "link_role": null,
+            "max_range_km": 450000.0,
+            "medium": "optical",
+            "min_elevation_deg": -90.0,
+            "owner_node_id": "meo-sat-p02s03",
+            "receive_mbps": 1000.0,
+            "source_ref": "nodalarc:terminals/optical/optical-cislunar-crosslink.yaml",
+            "source_terminal_id": "optical-cislunar-crosslink",
+            "terminal_id": "relay_optical",
+            "tracking_capacity": 1,
+            "tracking_rate_deg_s": 0.25,
+            "transmit_mbps": 1000.0
+          }
+        ]
+      },
+      {
+        "epoch_position": {
+          "alt_km": 20207.174441333325,
+          "lat_deg": 35.439793553734916,
+          "lon_deg": -46.55557684214237,
+          "vel_x_km_s": -0.2648270974307746,
+          "vel_y_km_s": 1.9444969044449896,
+          "vel_z_km_s": 2.243137402756711
+        },
+        "forwarding": "routed",
+        "interfaces": {
+          "ethernet": {},
+          "lo0": {
+            "ipv4": "100.64.0.20/32",
+            "ipv6": null
+          }
+        },
+        "kind": "satellite",
+        "local_node_id": "sat-p03s00",
+        "namespace": "meo",
+        "node_id": "meo-sat-p03s00",
+        "originated_prefixes": null,
+        "plane": 3,
+        "role": "router",
+        "routing_instances": [
+          {
+            "area_border": false,
+            "areas": [
+              "49.0001"
+            ],
+            "as_boundary": false,
+            "domain_id": "default_domain",
+            "interfaces": [
+              {
+                "area_id": null,
+                "name": "gnd0"
+              },
+              {
+                "area_id": null,
+                "name": "isl0"
+              },
+              {
+                "area_id": null,
+                "name": "isl1"
+              }
+            ],
+            "protocol": "isis"
+          }
+        ],
+        "segment_id": "meo",
+        "slot": 0,
+        "surface_position": null,
+        "tags": [
+          "all"
+        ],
+        "terminal_inventory": [
+          {
+            "boresight": {
+              "mode": "nadir",
+              "target_body": "earth"
+            },
+            "count": 1,
+            "endpoint_role": "access",
+            "field_of_regard_deg": 180.0,
+            "link_role": null,
+            "max_range_km": 30000.0,
+            "medium": "rf",
+            "min_elevation_deg": -80.0,
+            "owner_node_id": "meo-sat-p03s00",
+            "receive_mbps": 500.0,
+            "source_ref": "nodalarc:terminals/rf/rf-ka-meo-access.yaml",
+            "source_terminal_id": "rf-ka-meo-access",
+            "terminal_id": "access_ka",
+            "tracking_capacity": 1,
+            "tracking_rate_deg_s": 0.5,
+            "transmit_mbps": 500.0
+          },
+          {
+            "boresight": null,
+            "count": 2,
+            "endpoint_role": "isl",
+            "field_of_regard_deg": 340.0,
+            "link_role": null,
+            "max_range_km": 80000.0,
+            "medium": "optical",
+            "min_elevation_deg": -80.0,
+            "owner_node_id": "meo-sat-p03s00",
+            "receive_mbps": 2500.0,
+            "source_ref": "nodalarc:terminals/optical/optical-high-orbit-isl.yaml",
+            "source_terminal_id": "optical-high-orbit-isl",
+            "terminal_id": "isl_optical",
+            "tracking_capacity": 1,
+            "tracking_rate_deg_s": 0.5,
+            "transmit_mbps": 2500.0
+          },
+          {
+            "boresight": null,
+            "count": 2,
+            "endpoint_role": "crosslink",
+            "field_of_regard_deg": 360.0,
+            "link_role": null,
+            "max_range_km": 450000.0,
+            "medium": "optical",
+            "min_elevation_deg": -90.0,
+            "owner_node_id": "meo-sat-p03s00",
+            "receive_mbps": 1000.0,
+            "source_ref": "nodalarc:terminals/optical/optical-cislunar-crosslink.yaml",
+            "source_terminal_id": "optical-cislunar-crosslink",
+            "terminal_id": "relay_optical",
+            "tracking_capacity": 1,
+            "tracking_rate_deg_s": 0.25,
+            "transmit_mbps": 1000.0
+          }
+        ]
+      },
+      {
+        "epoch_position": {
+          "alt_km": 20207.174441333325,
+          "lat_deg": 35.43979355373493,
+          "lon_deg": 73.76929020123004,
+          "vel_x_km_s": -0.6537268382681813,
+          "vel_y_km_s": 1.8503628897753122,
+          "vel_z_km_s": -2.2431374027567106
+        },
+        "forwarding": "routed",
+        "interfaces": {
+          "ethernet": {},
+          "lo0": {
+            "ipv4": "100.64.0.21/32",
+            "ipv6": null
+          }
+        },
+        "kind": "satellite",
+        "local_node_id": "sat-p03s01",
+        "namespace": "meo",
+        "node_id": "meo-sat-p03s01",
+        "originated_prefixes": null,
+        "plane": 3,
+        "role": "router",
+        "routing_instances": [
+          {
+            "area_border": false,
+            "areas": [
+              "49.0001"
+            ],
+            "as_boundary": false,
+            "domain_id": "default_domain",
+            "interfaces": [
+              {
+                "area_id": null,
+                "name": "gnd0"
+              },
+              {
+                "area_id": null,
+                "name": "isl0"
+              },
+              {
+                "area_id": null,
+                "name": "isl1"
+              }
+            ],
+            "protocol": "isis"
+          }
+        ],
+        "segment_id": "meo",
+        "slot": 1,
+        "surface_position": null,
+        "tags": [
+          "all"
+        ],
+        "terminal_inventory": [
+          {
+            "boresight": {
+              "mode": "nadir",
+              "target_body": "earth"
+            },
+            "count": 1,
+            "endpoint_role": "access",
+            "field_of_regard_deg": 180.0,
+            "link_role": null,
+            "max_range_km": 30000.0,
+            "medium": "rf",
+            "min_elevation_deg": -80.0,
+            "owner_node_id": "meo-sat-p03s01",
+            "receive_mbps": 500.0,
+            "source_ref": "nodalarc:terminals/rf/rf-ka-meo-access.yaml",
+            "source_terminal_id": "rf-ka-meo-access",
+            "terminal_id": "access_ka",
+            "tracking_capacity": 1,
+            "tracking_rate_deg_s": 0.5,
+            "transmit_mbps": 500.0
+          },
+          {
+            "boresight": null,
+            "count": 2,
+            "endpoint_role": "isl",
+            "field_of_regard_deg": 340.0,
+            "link_role": null,
+            "max_range_km": 80000.0,
+            "medium": "optical",
+            "min_elevation_deg": -80.0,
+            "owner_node_id": "meo-sat-p03s01",
+            "receive_mbps": 2500.0,
+            "source_ref": "nodalarc:terminals/optical/optical-high-orbit-isl.yaml",
+            "source_terminal_id": "optical-high-orbit-isl",
+            "terminal_id": "isl_optical",
+            "tracking_capacity": 1,
+            "tracking_rate_deg_s": 0.5,
+            "transmit_mbps": 2500.0
+          },
+          {
+            "boresight": null,
+            "count": 2,
+            "endpoint_role": "crosslink",
+            "field_of_regard_deg": 360.0,
+            "link_role": null,
+            "max_range_km": 450000.0,
+            "medium": "optical",
+            "min_elevation_deg": -90.0,
+            "owner_node_id": "meo-sat-p03s01",
+            "receive_mbps": 1000.0,
+            "source_ref": "nodalarc:terminals/optical/optical-cislunar-crosslink.yaml",
+            "source_terminal_id": "optical-cislunar-crosslink",
+            "terminal_id": "relay_optical",
+            "tracking_capacity": 1,
+            "tracking_rate_deg_s": 0.25,
+            "transmit_mbps": 1000.0
+          }
+        ]
+      },
+      {
+        "epoch_position": {
+          "alt_km": 20207.174441333325,
+          "lat_deg": -35.439793553734916,
+          "lon_deg": 133.44442315785764,
+          "vel_x_km_s": 0.2648270974307746,
+          "vel_y_km_s": -1.9444969044449896,
+          "vel_z_km_s": -2.243137402756711
+        },
+        "forwarding": "routed",
+        "interfaces": {
+          "ethernet": {},
+          "lo0": {
+            "ipv4": "100.64.0.22/32",
+            "ipv6": null
+          }
+        },
+        "kind": "satellite",
+        "local_node_id": "sat-p03s02",
+        "namespace": "meo",
+        "node_id": "meo-sat-p03s02",
+        "originated_prefixes": null,
+        "plane": 3,
+        "role": "router",
+        "routing_instances": [
+          {
+            "area_border": false,
+            "areas": [
+              "49.0001"
+            ],
+            "as_boundary": false,
+            "domain_id": "default_domain",
+            "interfaces": [
+              {
+                "area_id": null,
+                "name": "gnd0"
+              },
+              {
+                "area_id": null,
+                "name": "isl0"
+              },
+              {
+                "area_id": null,
+                "name": "isl1"
+              }
+            ],
+            "protocol": "isis"
+          }
+        ],
+        "segment_id": "meo",
+        "slot": 2,
+        "surface_position": null,
+        "tags": [
+          "all"
+        ],
+        "terminal_inventory": [
+          {
+            "boresight": {
+              "mode": "nadir",
+              "target_body": "earth"
+            },
+            "count": 1,
+            "endpoint_role": "access",
+            "field_of_regard_deg": 180.0,
+            "link_role": null,
+            "max_range_km": 30000.0,
+            "medium": "rf",
+            "min_elevation_deg": -80.0,
+            "owner_node_id": "meo-sat-p03s02",
+            "receive_mbps": 500.0,
+            "source_ref": "nodalarc:terminals/rf/rf-ka-meo-access.yaml",
+            "source_terminal_id": "rf-ka-meo-access",
+            "terminal_id": "access_ka",
+            "tracking_capacity": 1,
+            "tracking_rate_deg_s": 0.5,
+            "transmit_mbps": 500.0
+          },
+          {
+            "boresight": null,
+            "count": 2,
+            "endpoint_role": "isl",
+            "field_of_regard_deg": 340.0,
+            "link_role": null,
+            "max_range_km": 80000.0,
+            "medium": "optical",
+            "min_elevation_deg": -80.0,
+            "owner_node_id": "meo-sat-p03s02",
+            "receive_mbps": 2500.0,
+            "source_ref": "nodalarc:terminals/optical/optical-high-orbit-isl.yaml",
+            "source_terminal_id": "optical-high-orbit-isl",
+            "terminal_id": "isl_optical",
+            "tracking_capacity": 1,
+            "tracking_rate_deg_s": 0.5,
+            "transmit_mbps": 2500.0
+          },
+          {
+            "boresight": null,
+            "count": 2,
+            "endpoint_role": "crosslink",
+            "field_of_regard_deg": 360.0,
+            "link_role": null,
+            "max_range_km": 450000.0,
+            "medium": "optical",
+            "min_elevation_deg": -90.0,
+            "owner_node_id": "meo-sat-p03s02",
+            "receive_mbps": 1000.0,
+            "source_ref": "nodalarc:terminals/optical/optical-cislunar-crosslink.yaml",
+            "source_terminal_id": "optical-cislunar-crosslink",
+            "terminal_id": "relay_optical",
+            "tracking_capacity": 1,
+            "tracking_rate_deg_s": 0.25,
+            "transmit_mbps": 1000.0
+          }
+        ]
+      },
+      {
+        "epoch_position": {
+          "alt_km": 20207.174441333318,
+          "lat_deg": -35.43979355373493,
+          "lon_deg": -106.23070979876998,
+          "vel_x_km_s": 0.6537268382681818,
+          "vel_y_km_s": -1.8503628897753122,
+          "vel_z_km_s": 2.24313740275671
+        },
+        "forwarding": "routed",
+        "interfaces": {
+          "ethernet": {},
+          "lo0": {
+            "ipv4": "100.64.0.23/32",
+            "ipv6": null
+          }
+        },
+        "kind": "satellite",
+        "local_node_id": "sat-p03s03",
+        "namespace": "meo",
+        "node_id": "meo-sat-p03s03",
+        "originated_prefixes": null,
+        "plane": 3,
+        "role": "router",
+        "routing_instances": [
+          {
+            "area_border": false,
+            "areas": [
+              "49.0001"
+            ],
+            "as_boundary": false,
+            "domain_id": "default_domain",
+            "interfaces": [
+              {
+                "area_id": null,
+                "name": "gnd0"
+              },
+              {
+                "area_id": null,
+                "name": "isl0"
+              },
+              {
+                "area_id": null,
+                "name": "isl1"
+              }
+            ],
+            "protocol": "isis"
+          }
+        ],
+        "segment_id": "meo",
+        "slot": 3,
+        "surface_position": null,
+        "tags": [
+          "all"
+        ],
+        "terminal_inventory": [
+          {
+            "boresight": {
+              "mode": "nadir",
+              "target_body": "earth"
+            },
+            "count": 1,
+            "endpoint_role": "access",
+            "field_of_regard_deg": 180.0,
+            "link_role": null,
+            "max_range_km": 30000.0,
+            "medium": "rf",
+            "min_elevation_deg": -80.0,
+            "owner_node_id": "meo-sat-p03s03",
+            "receive_mbps": 500.0,
+            "source_ref": "nodalarc:terminals/rf/rf-ka-meo-access.yaml",
+            "source_terminal_id": "rf-ka-meo-access",
+            "terminal_id": "access_ka",
+            "tracking_capacity": 1,
+            "tracking_rate_deg_s": 0.5,
+            "transmit_mbps": 500.0
+          },
+          {
+            "boresight": null,
+            "count": 2,
+            "endpoint_role": "isl",
+            "field_of_regard_deg": 340.0,
+            "link_role": null,
+            "max_range_km": 80000.0,
+            "medium": "optical",
+            "min_elevation_deg": -80.0,
+            "owner_node_id": "meo-sat-p03s03",
+            "receive_mbps": 2500.0,
+            "source_ref": "nodalarc:terminals/optical/optical-high-orbit-isl.yaml",
+            "source_terminal_id": "optical-high-orbit-isl",
+            "terminal_id": "isl_optical",
+            "tracking_capacity": 1,
+            "tracking_rate_deg_s": 0.5,
+            "transmit_mbps": 2500.0
+          },
+          {
+            "boresight": null,
+            "count": 2,
+            "endpoint_role": "crosslink",
+            "field_of_regard_deg": 360.0,
+            "link_role": null,
+            "max_range_km": 450000.0,
+            "medium": "optical",
+            "min_elevation_deg": -90.0,
+            "owner_node_id": "meo-sat-p03s03",
+            "receive_mbps": 1000.0,
+            "source_ref": "nodalarc:terminals/optical/optical-cislunar-crosslink.yaml",
+            "source_terminal_id": "optical-cislunar-crosslink",
+            "terminal_id": "relay_optical",
+            "tracking_capacity": 1,
+            "tracking_rate_deg_s": 0.25,
+            "transmit_mbps": 1000.0
+          }
+        ]
+      },
+      {
+        "epoch_position": {
+          "alt_km": 20210.76178841524,
+          "lat_deg": 45.23274513125743,
+          "lon_deg": 28.41898727110307,
+          "vel_x_km_s": -2.2538510030055763,
+          "vel_y_km_s": 0.810513420838965,
+          "vel_z_km_s": 1.5861376686224504
+        },
+        "forwarding": "routed",
+        "interfaces": {
+          "ethernet": {},
+          "lo0": {
+            "ipv4": "100.64.0.24/32",
+            "ipv6": null
+          }
+        },
+        "kind": "satellite",
+        "local_node_id": "sat-p04s00",
+        "namespace": "meo",
+        "node_id": "meo-sat-p04s00",
+        "originated_prefixes": null,
+        "plane": 4,
+        "role": "router",
+        "routing_instances": [
+          {
+            "area_border": false,
+            "areas": [
+              "49.0001"
+            ],
+            "as_boundary": false,
+            "domain_id": "default_domain",
+            "interfaces": [
+              {
+                "area_id": null,
+                "name": "gnd0"
+              },
+              {
+                "area_id": null,
+                "name": "isl0"
+              },
+              {
+                "area_id": null,
+                "name": "isl1"
+              }
+            ],
+            "protocol": "isis"
+          }
+        ],
+        "segment_id": "meo",
+        "slot": 0,
+        "surface_position": null,
+        "tags": [
+          "all"
+        ],
+        "terminal_inventory": [
+          {
+            "boresight": {
+              "mode": "nadir",
+              "target_body": "earth"
+            },
+            "count": 1,
+            "endpoint_role": "access",
+            "field_of_regard_deg": 180.0,
+            "link_role": null,
+            "max_range_km": 30000.0,
+            "medium": "rf",
+            "min_elevation_deg": -80.0,
+            "owner_node_id": "meo-sat-p04s00",
+            "receive_mbps": 500.0,
+            "source_ref": "nodalarc:terminals/rf/rf-ka-meo-access.yaml",
+            "source_terminal_id": "rf-ka-meo-access",
+            "terminal_id": "access_ka",
+            "tracking_capacity": 1,
+            "tracking_rate_deg_s": 0.5,
+            "transmit_mbps": 500.0
+          },
+          {
+            "boresight": null,
+            "count": 2,
+            "endpoint_role": "isl",
+            "field_of_regard_deg": 340.0,
+            "link_role": null,
+            "max_range_km": 80000.0,
+            "medium": "optical",
+            "min_elevation_deg": -80.0,
+            "owner_node_id": "meo-sat-p04s00",
+            "receive_mbps": 2500.0,
+            "source_ref": "nodalarc:terminals/optical/optical-high-orbit-isl.yaml",
+            "source_terminal_id": "optical-high-orbit-isl",
+            "terminal_id": "isl_optical",
+            "tracking_capacity": 1,
+            "tracking_rate_deg_s": 0.5,
+            "transmit_mbps": 2500.0
+          },
+          {
+            "boresight": null,
+            "count": 2,
+            "endpoint_role": "crosslink",
+            "field_of_regard_deg": 360.0,
+            "link_role": null,
+            "max_range_km": 450000.0,
+            "medium": "optical",
+            "min_elevation_deg": -90.0,
+            "owner_node_id": "meo-sat-p04s00",
+            "receive_mbps": 1000.0,
+            "source_ref": "nodalarc:terminals/optical/optical-cislunar-crosslink.yaml",
+            "source_terminal_id": "optical-cislunar-crosslink",
+            "terminal_id": "relay_optical",
+            "tracking_capacity": 1,
+            "tracking_rate_deg_s": 0.25,
+            "transmit_mbps": 1000.0
+          }
+        ]
+      },
+      {
+        "epoch_position": {
+          "alt_km": 20203.587178530477,
+          "lat_deg": 24.212653063941318,
+          "lon_deg": 145.28433484687187,
+          "vel_x_km_s": -1.3934663375440453,
+          "vel_y_km_s": 0.15452644719196362,
+          "vel_z_km_s": -2.747271029852931
+        },
+        "forwarding": "routed",
+        "interfaces": {
+          "ethernet": {},
+          "lo0": {
+            "ipv4": "100.64.0.25/32",
+            "ipv6": null
+          }
+        },
+        "kind": "satellite",
+        "local_node_id": "sat-p04s01",
+        "namespace": "meo",
+        "node_id": "meo-sat-p04s01",
+        "originated_prefixes": null,
+        "plane": 4,
+        "role": "router",
+        "routing_instances": [
+          {
+            "area_border": false,
+            "areas": [
+              "49.0001"
+            ],
+            "as_boundary": false,
+            "domain_id": "default_domain",
+            "interfaces": [
+              {
+                "area_id": null,
+                "name": "gnd0"
+              },
+              {
+                "area_id": null,
+                "name": "isl0"
+              },
+              {
+                "area_id": null,
+                "name": "isl1"
+              }
+            ],
+            "protocol": "isis"
+          }
+        ],
+        "segment_id": "meo",
+        "slot": 1,
+        "surface_position": null,
+        "tags": [
+          "all"
+        ],
+        "terminal_inventory": [
+          {
+            "boresight": {
+              "mode": "nadir",
+              "target_body": "earth"
+            },
+            "count": 1,
+            "endpoint_role": "access",
+            "field_of_regard_deg": 180.0,
+            "link_role": null,
+            "max_range_km": 30000.0,
+            "medium": "rf",
+            "min_elevation_deg": -80.0,
+            "owner_node_id": "meo-sat-p04s01",
+            "receive_mbps": 500.0,
+            "source_ref": "nodalarc:terminals/rf/rf-ka-meo-access.yaml",
+            "source_terminal_id": "rf-ka-meo-access",
+            "terminal_id": "access_ka",
+            "tracking_capacity": 1,
+            "tracking_rate_deg_s": 0.5,
+            "transmit_mbps": 500.0
+          },
+          {
+            "boresight": null,
+            "count": 2,
+            "endpoint_role": "isl",
+            "field_of_regard_deg": 340.0,
+            "link_role": null,
+            "max_range_km": 80000.0,
+            "medium": "optical",
+            "min_elevation_deg": -80.0,
+            "owner_node_id": "meo-sat-p04s01",
+            "receive_mbps": 2500.0,
+            "source_ref": "nodalarc:terminals/optical/optical-high-orbit-isl.yaml",
+            "source_terminal_id": "optical-high-orbit-isl",
+            "terminal_id": "isl_optical",
+            "tracking_capacity": 1,
+            "tracking_rate_deg_s": 0.5,
+            "transmit_mbps": 2500.0
+          },
+          {
+            "boresight": null,
+            "count": 2,
+            "endpoint_role": "crosslink",
+            "field_of_regard_deg": 360.0,
+            "link_role": null,
+            "max_range_km": 450000.0,
+            "medium": "optical",
+            "min_elevation_deg": -90.0,
+            "owner_node_id": "meo-sat-p04s01",
+            "receive_mbps": 1000.0,
+            "source_ref": "nodalarc:terminals/optical/optical-cislunar-crosslink.yaml",
+            "source_terminal_id": "optical-cislunar-crosslink",
+            "terminal_id": "relay_optical",
+            "tracking_capacity": 1,
+            "tracking_rate_deg_s": 0.25,
+            "transmit_mbps": 1000.0
+          }
+        ]
+      },
+      {
+        "epoch_position": {
+          "alt_km": 20210.761788415235,
+          "lat_deg": -45.23274513125742,
+          "lon_deg": -151.58101272889695,
+          "vel_x_km_s": 2.253851003005576,
+          "vel_y_km_s": -0.8105134208389648,
+          "vel_z_km_s": -1.5861376686224513
+        },
+        "forwarding": "routed",
+        "interfaces": {
+          "ethernet": {},
+          "lo0": {
+            "ipv4": "100.64.0.26/32",
+            "ipv6": null
+          }
+        },
+        "kind": "satellite",
+        "local_node_id": "sat-p04s02",
+        "namespace": "meo",
+        "node_id": "meo-sat-p04s02",
+        "originated_prefixes": null,
+        "plane": 4,
+        "role": "router",
+        "routing_instances": [
+          {
+            "area_border": false,
+            "areas": [
+              "49.0001"
+            ],
+            "as_boundary": false,
+            "domain_id": "default_domain",
+            "interfaces": [
+              {
+                "area_id": null,
+                "name": "gnd0"
+              },
+              {
+                "area_id": null,
+                "name": "isl0"
+              },
+              {
+                "area_id": null,
+                "name": "isl1"
+              }
+            ],
+            "protocol": "isis"
+          }
+        ],
+        "segment_id": "meo",
+        "slot": 2,
+        "surface_position": null,
+        "tags": [
+          "all"
+        ],
+        "terminal_inventory": [
+          {
+            "boresight": {
+              "mode": "nadir",
+              "target_body": "earth"
+            },
+            "count": 1,
+            "endpoint_role": "access",
+            "field_of_regard_deg": 180.0,
+            "link_role": null,
+            "max_range_km": 30000.0,
+            "medium": "rf",
+            "min_elevation_deg": -80.0,
+            "owner_node_id": "meo-sat-p04s02",
+            "receive_mbps": 500.0,
+            "source_ref": "nodalarc:terminals/rf/rf-ka-meo-access.yaml",
+            "source_terminal_id": "rf-ka-meo-access",
+            "terminal_id": "access_ka",
+            "tracking_capacity": 1,
+            "tracking_rate_deg_s": 0.5,
+            "transmit_mbps": 500.0
+          },
+          {
+            "boresight": null,
+            "count": 2,
+            "endpoint_role": "isl",
+            "field_of_regard_deg": 340.0,
+            "link_role": null,
+            "max_range_km": 80000.0,
+            "medium": "optical",
+            "min_elevation_deg": -80.0,
+            "owner_node_id": "meo-sat-p04s02",
+            "receive_mbps": 2500.0,
+            "source_ref": "nodalarc:terminals/optical/optical-high-orbit-isl.yaml",
+            "source_terminal_id": "optical-high-orbit-isl",
+            "terminal_id": "isl_optical",
+            "tracking_capacity": 1,
+            "tracking_rate_deg_s": 0.5,
+            "transmit_mbps": 2500.0
+          },
+          {
+            "boresight": null,
+            "count": 2,
+            "endpoint_role": "crosslink",
+            "field_of_regard_deg": 360.0,
+            "link_role": null,
+            "max_range_km": 450000.0,
+            "medium": "optical",
+            "min_elevation_deg": -90.0,
+            "owner_node_id": "meo-sat-p04s02",
+            "receive_mbps": 1000.0,
+            "source_ref": "nodalarc:terminals/optical/optical-cislunar-crosslink.yaml",
+            "source_terminal_id": "optical-cislunar-crosslink",
+            "terminal_id": "relay_optical",
+            "tracking_capacity": 1,
+            "tracking_rate_deg_s": 0.25,
+            "transmit_mbps": 1000.0
+          }
+        ]
+      },
+      {
+        "epoch_position": {
+          "alt_km": 20203.58717853047,
+          "lat_deg": -24.212653063941346,
+          "lon_deg": -34.715665153128164,
+          "vel_x_km_s": 1.3934663375440468,
+          "vel_y_km_s": -0.15452644719196384,
+          "vel_z_km_s": 2.74727102985293
+        },
+        "forwarding": "routed",
+        "interfaces": {
+          "ethernet": {},
+          "lo0": {
+            "ipv4": "100.64.0.27/32",
+            "ipv6": null
+          }
+        },
+        "kind": "satellite",
+        "local_node_id": "sat-p04s03",
+        "namespace": "meo",
+        "node_id": "meo-sat-p04s03",
+        "originated_prefixes": null,
+        "plane": 4,
+        "role": "router",
+        "routing_instances": [
+          {
+            "area_border": false,
+            "areas": [
+              "49.0001"
+            ],
+            "as_boundary": false,
+            "domain_id": "default_domain",
+            "interfaces": [
+              {
+                "area_id": null,
+                "name": "gnd0"
+              },
+              {
+                "area_id": null,
+                "name": "isl0"
+              },
+              {
+                "area_id": null,
+                "name": "isl1"
+              }
+            ],
+            "protocol": "isis"
+          }
+        ],
+        "segment_id": "meo",
+        "slot": 3,
+        "surface_position": null,
+        "tags": [
+          "all"
+        ],
+        "terminal_inventory": [
+          {
+            "boresight": {
+              "mode": "nadir",
+              "target_body": "earth"
+            },
+            "count": 1,
+            "endpoint_role": "access",
+            "field_of_regard_deg": 180.0,
+            "link_role": null,
+            "max_range_km": 30000.0,
+            "medium": "rf",
+            "min_elevation_deg": -80.0,
+            "owner_node_id": "meo-sat-p04s03",
+            "receive_mbps": 500.0,
+            "source_ref": "nodalarc:terminals/rf/rf-ka-meo-access.yaml",
+            "source_terminal_id": "rf-ka-meo-access",
+            "terminal_id": "access_ka",
+            "tracking_capacity": 1,
+            "tracking_rate_deg_s": 0.5,
+            "transmit_mbps": 500.0
+          },
+          {
+            "boresight": null,
+            "count": 2,
+            "endpoint_role": "isl",
+            "field_of_regard_deg": 340.0,
+            "link_role": null,
+            "max_range_km": 80000.0,
+            "medium": "optical",
+            "min_elevation_deg": -80.0,
+            "owner_node_id": "meo-sat-p04s03",
+            "receive_mbps": 2500.0,
+            "source_ref": "nodalarc:terminals/optical/optical-high-orbit-isl.yaml",
+            "source_terminal_id": "optical-high-orbit-isl",
+            "terminal_id": "isl_optical",
+            "tracking_capacity": 1,
+            "tracking_rate_deg_s": 0.5,
+            "transmit_mbps": 2500.0
+          },
+          {
+            "boresight": null,
+            "count": 2,
+            "endpoint_role": "crosslink",
+            "field_of_regard_deg": 360.0,
+            "link_role": null,
+            "max_range_km": 450000.0,
+            "medium": "optical",
+            "min_elevation_deg": -90.0,
+            "owner_node_id": "meo-sat-p04s03",
+            "receive_mbps": 1000.0,
+            "source_ref": "nodalarc:terminals/optical/optical-cislunar-crosslink.yaml",
+            "source_terminal_id": "optical-cislunar-crosslink",
+            "terminal_id": "relay_optical",
+            "tracking_capacity": 1,
+            "tracking_rate_deg_s": 0.25,
+            "transmit_mbps": 1000.0
+          }
+        ]
+      },
+      {
+        "epoch_position": {
+          "alt_km": 20213.387962177963,
+          "lat_deg": 52.346165883742245,
+          "lon_deg": 108.56698411576791,
+          "vel_x_km_s": -1.9814981061566244,
+          "vel_y_km_s": -1.7862749284696546,
+          "vel_z_km_s": 0.8210452735880018
+        },
+        "forwarding": "routed",
+        "interfaces": {
+          "ethernet": {},
+          "lo0": {
+            "ipv4": "100.64.0.28/32",
+            "ipv6": null
+          }
+        },
+        "kind": "satellite",
+        "local_node_id": "sat-p05s00",
+        "namespace": "meo",
+        "node_id": "meo-sat-p05s00",
+        "originated_prefixes": null,
+        "plane": 5,
+        "role": "router",
+        "routing_instances": [
+          {
+            "area_border": false,
+            "areas": [
+              "49.0001"
+            ],
+            "as_boundary": false,
+            "domain_id": "default_domain",
+            "interfaces": [
+              {
+                "area_id": null,
+                "name": "gnd0"
+              },
+              {
+                "area_id": null,
+                "name": "isl0"
+              },
+              {
+                "area_id": null,
+                "name": "isl1"
+              }
+            ],
+            "protocol": "isis"
+          }
+        ],
+        "segment_id": "meo",
+        "slot": 0,
+        "surface_position": null,
+        "tags": [
+          "all"
+        ],
+        "terminal_inventory": [
+          {
+            "boresight": {
+              "mode": "nadir",
+              "target_body": "earth"
+            },
+            "count": 1,
+            "endpoint_role": "access",
+            "field_of_regard_deg": 180.0,
+            "link_role": null,
+            "max_range_km": 30000.0,
+            "medium": "rf",
+            "min_elevation_deg": -80.0,
+            "owner_node_id": "meo-sat-p05s00",
+            "receive_mbps": 500.0,
+            "source_ref": "nodalarc:terminals/rf/rf-ka-meo-access.yaml",
+            "source_terminal_id": "rf-ka-meo-access",
+            "terminal_id": "access_ka",
+            "tracking_capacity": 1,
+            "tracking_rate_deg_s": 0.5,
+            "transmit_mbps": 500.0
+          },
+          {
+            "boresight": null,
+            "count": 2,
+            "endpoint_role": "isl",
+            "field_of_regard_deg": 340.0,
+            "link_role": null,
+            "max_range_km": 80000.0,
+            "medium": "optical",
+            "min_elevation_deg": -80.0,
+            "owner_node_id": "meo-sat-p05s00",
+            "receive_mbps": 2500.0,
+            "source_ref": "nodalarc:terminals/optical/optical-high-orbit-isl.yaml",
+            "source_terminal_id": "optical-high-orbit-isl",
+            "terminal_id": "isl_optical",
+            "tracking_capacity": 1,
+            "tracking_rate_deg_s": 0.5,
+            "transmit_mbps": 2500.0
+          },
+          {
+            "boresight": null,
+            "count": 2,
+            "endpoint_role": "crosslink",
+            "field_of_regard_deg": 360.0,
+            "link_role": null,
+            "max_range_km": 450000.0,
+            "medium": "optical",
+            "min_elevation_deg": -90.0,
+            "owner_node_id": "meo-sat-p05s00",
+            "receive_mbps": 1000.0,
+            "source_ref": "nodalarc:terminals/optical/optical-cislunar-crosslink.yaml",
+            "source_terminal_id": "optical-cislunar-crosslink",
+            "terminal_id": "relay_optical",
+            "tracking_capacity": 1,
+            "tracking_rate_deg_s": 0.25,
+            "transmit_mbps": 1000.0
+          }
+        ]
+      },
+      {
+        "epoch_position": {
+          "alt_km": 20200.961173325624,
+          "lat_deg": 12.2593976989995,
+          "lon_deg": -145.13052850837133,
+          "vel_x_km_s": -0.3289150587364331,
+          "vel_y_km_s": -0.6907280399798186,
+          "vel_z_km_s": -3.0641826763447124
+        },
+        "forwarding": "routed",
+        "interfaces": {
+          "ethernet": {},
+          "lo0": {
+            "ipv4": "100.64.0.29/32",
+            "ipv6": null
+          }
+        },
+        "kind": "satellite",
+        "local_node_id": "sat-p05s01",
+        "namespace": "meo",
+        "node_id": "meo-sat-p05s01",
+        "originated_prefixes": null,
+        "plane": 5,
+        "role": "router",
+        "routing_instances": [
+          {
+            "area_border": false,
+            "areas": [
+              "49.0001"
+            ],
+            "as_boundary": false,
+            "domain_id": "default_domain",
+            "interfaces": [
+              {
+                "area_id": null,
+                "name": "gnd0"
+              },
+              {
+                "area_id": null,
+                "name": "isl0"
+              },
+              {
+                "area_id": null,
+                "name": "isl1"
+              }
+            ],
+            "protocol": "isis"
+          }
+        ],
+        "segment_id": "meo",
+        "slot": 1,
+        "surface_position": null,
+        "tags": [
+          "all"
+        ],
+        "terminal_inventory": [
+          {
+            "boresight": {
+              "mode": "nadir",
+              "target_body": "earth"
+            },
+            "count": 1,
+            "endpoint_role": "access",
+            "field_of_regard_deg": 180.0,
+            "link_role": null,
+            "max_range_km": 30000.0,
+            "medium": "rf",
+            "min_elevation_deg": -80.0,
+            "owner_node_id": "meo-sat-p05s01",
+            "receive_mbps": 500.0,
+            "source_ref": "nodalarc:terminals/rf/rf-ka-meo-access.yaml",
+            "source_terminal_id": "rf-ka-meo-access",
+            "terminal_id": "access_ka",
+            "tracking_capacity": 1,
+            "tracking_rate_deg_s": 0.5,
+            "transmit_mbps": 500.0
+          },
+          {
+            "boresight": null,
+            "count": 2,
+            "endpoint_role": "isl",
+            "field_of_regard_deg": 340.0,
+            "link_role": null,
+            "max_range_km": 80000.0,
+            "medium": "optical",
+            "min_elevation_deg": -80.0,
+            "owner_node_id": "meo-sat-p05s01",
+            "receive_mbps": 2500.0,
+            "source_ref": "nodalarc:terminals/optical/optical-high-orbit-isl.yaml",
+            "source_terminal_id": "optical-high-orbit-isl",
+            "terminal_id": "isl_optical",
+            "tracking_capacity": 1,
+            "tracking_rate_deg_s": 0.5,
+            "transmit_mbps": 2500.0
+          },
+          {
+            "boresight": null,
+            "count": 2,
+            "endpoint_role": "crosslink",
+            "field_of_regard_deg": 360.0,
+            "link_role": null,
+            "max_range_km": 450000.0,
+            "medium": "optical",
+            "min_elevation_deg": -90.0,
+            "owner_node_id": "meo-sat-p05s01",
+            "receive_mbps": 1000.0,
+            "source_ref": "nodalarc:terminals/optical/optical-cislunar-crosslink.yaml",
+            "source_terminal_id": "optical-cislunar-crosslink",
+            "terminal_id": "relay_optical",
+            "tracking_capacity": 1,
+            "tracking_rate_deg_s": 0.25,
+            "transmit_mbps": 1000.0
+          }
+        ]
+      },
+      {
+        "epoch_position": {
+          "alt_km": 20213.387962177963,
+          "lat_deg": -52.346165883742245,
+          "lon_deg": -71.43301588423209,
+          "vel_x_km_s": 1.9814981061566246,
+          "vel_y_km_s": 1.7862749284696544,
+          "vel_z_km_s": -0.8210452735880016
+        },
+        "forwarding": "routed",
+        "interfaces": {
+          "ethernet": {},
+          "lo0": {
+            "ipv4": "100.64.0.30/32",
+            "ipv6": null
+          }
+        },
+        "kind": "satellite",
+        "local_node_id": "sat-p05s02",
+        "namespace": "meo",
+        "node_id": "meo-sat-p05s02",
+        "originated_prefixes": null,
+        "plane": 5,
+        "role": "router",
+        "routing_instances": [
+          {
+            "area_border": false,
+            "areas": [
+              "49.0001"
+            ],
+            "as_boundary": false,
+            "domain_id": "default_domain",
+            "interfaces": [
+              {
+                "area_id": null,
+                "name": "gnd0"
+              },
+              {
+                "area_id": null,
+                "name": "isl0"
+              },
+              {
+                "area_id": null,
+                "name": "isl1"
+              }
+            ],
+            "protocol": "isis"
+          }
+        ],
+        "segment_id": "meo",
+        "slot": 2,
+        "surface_position": null,
+        "tags": [
+          "all"
+        ],
+        "terminal_inventory": [
+          {
+            "boresight": {
+              "mode": "nadir",
+              "target_body": "earth"
+            },
+            "count": 1,
+            "endpoint_role": "access",
+            "field_of_regard_deg": 180.0,
+            "link_role": null,
+            "max_range_km": 30000.0,
+            "medium": "rf",
+            "min_elevation_deg": -80.0,
+            "owner_node_id": "meo-sat-p05s02",
+            "receive_mbps": 500.0,
+            "source_ref": "nodalarc:terminals/rf/rf-ka-meo-access.yaml",
+            "source_terminal_id": "rf-ka-meo-access",
+            "terminal_id": "access_ka",
+            "tracking_capacity": 1,
+            "tracking_rate_deg_s": 0.5,
+            "transmit_mbps": 500.0
+          },
+          {
+            "boresight": null,
+            "count": 2,
+            "endpoint_role": "isl",
+            "field_of_regard_deg": 340.0,
+            "link_role": null,
+            "max_range_km": 80000.0,
+            "medium": "optical",
+            "min_elevation_deg": -80.0,
+            "owner_node_id": "meo-sat-p05s02",
+            "receive_mbps": 2500.0,
+            "source_ref": "nodalarc:terminals/optical/optical-high-orbit-isl.yaml",
+            "source_terminal_id": "optical-high-orbit-isl",
+            "terminal_id": "isl_optical",
+            "tracking_capacity": 1,
+            "tracking_rate_deg_s": 0.5,
+            "transmit_mbps": 2500.0
+          },
+          {
+            "boresight": null,
+            "count": 2,
+            "endpoint_role": "crosslink",
+            "field_of_regard_deg": 360.0,
+            "link_role": null,
+            "max_range_km": 450000.0,
+            "medium": "optical",
+            "min_elevation_deg": -90.0,
+            "owner_node_id": "meo-sat-p05s02",
+            "receive_mbps": 1000.0,
+            "source_ref": "nodalarc:terminals/optical/optical-cislunar-crosslink.yaml",
+            "source_terminal_id": "optical-cislunar-crosslink",
+            "terminal_id": "relay_optical",
+            "tracking_capacity": 1,
+            "tracking_rate_deg_s": 0.25,
+            "transmit_mbps": 1000.0
+          }
+        ]
+      },
+      {
+        "epoch_position": {
+          "alt_km": 20200.961173325624,
+          "lat_deg": -12.259397698999486,
+          "lon_deg": 34.86947149162869,
+          "vel_x_km_s": 0.32891505873643245,
+          "vel_y_km_s": 0.6907280399798177,
+          "vel_z_km_s": 3.064182676344713
+        },
+        "forwarding": "routed",
+        "interfaces": {
+          "ethernet": {},
+          "lo0": {
+            "ipv4": "100.64.0.31/32",
+            "ipv6": null
+          }
+        },
+        "kind": "satellite",
+        "local_node_id": "sat-p05s03",
+        "namespace": "meo",
+        "node_id": "meo-sat-p05s03",
+        "originated_prefixes": null,
+        "plane": 5,
+        "role": "router",
+        "routing_instances": [
+          {
+            "area_border": false,
+            "areas": [
+              "49.0001"
+            ],
+            "as_boundary": false,
+            "domain_id": "default_domain",
+            "interfaces": [
+              {
+                "area_id": null,
+                "name": "gnd0"
+              },
+              {
+                "area_id": null,
+                "name": "isl0"
+              },
+              {
+                "area_id": null,
+                "name": "isl1"
+              }
+            ],
+            "protocol": "isis"
+          }
+        ],
+        "segment_id": "meo",
+        "slot": 3,
+        "surface_position": null,
+        "tags": [
+          "all"
+        ],
+        "terminal_inventory": [
+          {
+            "boresight": {
+              "mode": "nadir",
+              "target_body": "earth"
+            },
+            "count": 1,
+            "endpoint_role": "access",
+            "field_of_regard_deg": 180.0,
+            "link_role": null,
+            "max_range_km": 30000.0,
+            "medium": "rf",
+            "min_elevation_deg": -80.0,
+            "owner_node_id": "meo-sat-p05s03",
+            "receive_mbps": 500.0,
+            "source_ref": "nodalarc:terminals/rf/rf-ka-meo-access.yaml",
+            "source_terminal_id": "rf-ka-meo-access",
+            "terminal_id": "access_ka",
+            "tracking_capacity": 1,
+            "tracking_rate_deg_s": 0.5,
+            "transmit_mbps": 500.0
+          },
+          {
+            "boresight": null,
+            "count": 2,
+            "endpoint_role": "isl",
+            "field_of_regard_deg": 340.0,
+            "link_role": null,
+            "max_range_km": 80000.0,
+            "medium": "optical",
+            "min_elevation_deg": -80.0,
+            "owner_node_id": "meo-sat-p05s03",
+            "receive_mbps": 2500.0,
+            "source_ref": "nodalarc:terminals/optical/optical-high-orbit-isl.yaml",
+            "source_terminal_id": "optical-high-orbit-isl",
+            "terminal_id": "isl_optical",
+            "tracking_capacity": 1,
+            "tracking_rate_deg_s": 0.5,
+            "transmit_mbps": 2500.0
+          },
+          {
+            "boresight": null,
+            "count": 2,
+            "endpoint_role": "crosslink",
+            "field_of_regard_deg": 360.0,
+            "link_role": null,
+            "max_range_km": 450000.0,
+            "medium": "optical",
+            "min_elevation_deg": -90.0,
+            "owner_node_id": "meo-sat-p05s03",
+            "receive_mbps": 1000.0,
+            "source_ref": "nodalarc:terminals/optical/optical-cislunar-crosslink.yaml",
+            "source_terminal_id": "optical-cislunar-crosslink",
+            "terminal_id": "relay_optical",
+            "tracking_capacity": 1,
+            "tracking_rate_deg_s": 0.25,
+            "transmit_mbps": 1000.0
+          }
+        ]
+      },
+      {
+        "epoch_position": null,
+        "forwarding": "routed",
+        "interfaces": {
+          "ethernet": {
+            "terr0": {
+              "ipv4": "172.16.3.1/24",
+              "ipv6": "fd00:da7a:0:3::1/64"
+            }
+          },
+          "lo0": {
+            "ipv4": "100.64.0.6/32",
+            "ipv6": null
+          }
+        },
+        "kind": "ground_station",
+        "local_node_id": "earth-us-co-denver-gw1",
+        "namespace": "earth-us-co-denver",
+        "node_id": "earth-us-co-denver-gw1",
+        "originated_prefixes": {
+          "ipv4": [
+            "172.16.3.0/24",
+            "0.0.0.0/0"
+          ],
+          "ipv6": [
+            "fd00:da7a:0:3::/64"
+          ]
+        },
+        "plane": null,
+        "role": "router",
+        "routing_instances": [
+          {
+            "area_border": false,
+            "areas": [
+              "49.0001"
+            ],
+            "as_boundary": false,
+            "domain_id": "default_domain",
+            "interfaces": [
+              {
+                "area_id": null,
+                "name": "terr0"
+              }
+            ],
+            "protocol": "isis"
+          }
+        ],
+        "segment_id": "ground",
+        "slot": null,
+        "surface_position": {
+          "alt_m": 1609.0,
+          "body": "earth",
+          "lat_deg": 39.7392,
+          "lon_deg": -104.9903
+        },
+        "tags": [
+          "leo"
+        ],
+        "terminal_inventory": [
+          {
+            "boresight": {
+              "configured_az_deg": null,
+              "configured_el_deg": null,
+              "max_az_deg": null,
+              "max_el_deg": null,
+              "min_az_deg": null,
+              "min_el_deg": null,
+              "mode": "local_vertical"
+            },
+            "count": 4,
+            "endpoint_role": "access",
+            "field_of_regard_deg": 130.0,
+            "link_role": null,
+            "max_range_km": 2500.0,
+            "medium": "rf",
+            "min_elevation_deg": 25.0,
+            "owner_node_id": "earth-us-co-denver-gw1",
+            "receive_mbps": 1000.0,
+            "source_ref": "nodalarc:terminals/rf/rf-ka-leo-access.yaml",
+            "source_terminal_id": "rf-ka-leo-access",
+            "terminal_id": "access_ka",
+            "tracking_capacity": 1,
+            "tracking_rate_deg_s": 2.5,
+            "transmit_mbps": 1000.0
+          }
+        ]
+      },
+      {
+        "epoch_position": null,
+        "forwarding": "routed",
+        "interfaces": {
+          "ethernet": {
+            "terr0": {
+              "ipv4": "172.16.3.2/24",
+              "ipv6": "fd00:da7a:0:3::2/64"
+            }
+          },
+          "lo0": {
+            "ipv4": "100.64.0.7/32",
+            "ipv6": null
+          }
+        },
+        "kind": "ground_station",
+        "local_node_id": "earth-us-co-denver-gw2",
+        "namespace": "earth-us-co-denver",
+        "node_id": "earth-us-co-denver-gw2",
+        "originated_prefixes": {
+          "ipv4": [
+            "172.16.3.0/24",
+            "0.0.0.0/0"
+          ],
+          "ipv6": [
+            "fd00:da7a:0:3::/64"
+          ]
+        },
+        "plane": null,
+        "role": "router",
+        "routing_instances": [
+          {
+            "area_border": false,
+            "areas": [
+              "49.0001"
+            ],
+            "as_boundary": false,
+            "domain_id": "default_domain",
+            "interfaces": [
+              {
+                "area_id": null,
+                "name": "term0"
+              },
+              {
+                "area_id": null,
+                "name": "term1"
+              },
+              {
+                "area_id": null,
+                "name": "terr0"
+              }
+            ],
+            "protocol": "isis"
+          }
+        ],
+        "segment_id": "ground",
+        "slot": null,
+        "surface_position": {
+          "alt_m": 1609.0,
+          "body": "earth",
+          "lat_deg": 39.7392,
+          "lon_deg": -104.9903
+        },
+        "tags": [
+          "meo"
+        ],
+        "terminal_inventory": [
+          {
+            "boresight": {
+              "configured_az_deg": null,
+              "configured_el_deg": null,
+              "max_az_deg": null,
+              "max_el_deg": null,
+              "min_az_deg": null,
+              "min_el_deg": null,
+              "mode": "local_vertical"
+            },
+            "count": 2,
+            "endpoint_role": "access",
+            "field_of_regard_deg": 160.0,
+            "link_role": null,
+            "max_range_km": 28000.0,
+            "medium": "rf",
+            "min_elevation_deg": 10.0,
+            "owner_node_id": "earth-us-co-denver-gw2",
+            "receive_mbps": 500.0,
+            "source_ref": "nodalarc:terminals/rf/rf-ka-meo-access.yaml",
+            "source_terminal_id": "rf-ka-meo-access",
+            "terminal_id": "access_ka",
+            "tracking_capacity": 1,
+            "tracking_rate_deg_s": 0.5,
+            "transmit_mbps": 500.0
+          }
+        ]
+      },
+      {
+        "epoch_position": null,
+        "forwarding": "routed",
+        "interfaces": {
+          "ethernet": {
+            "terr0": {
+              "ipv4": "172.16.1.1/24",
+              "ipv6": "fd00:da7a:0:1::1/64"
+            }
+          },
+          "lo0": {
+            "ipv4": "100.64.0.3/32",
+            "ipv6": null
+          }
+        },
+        "kind": "ground_station",
+        "local_node_id": "earth-gb-goonhilly-gw1",
+        "namespace": "earth-gb-goonhilly",
+        "node_id": "earth-gb-goonhilly-gw1",
+        "originated_prefixes": {
+          "ipv4": [
+            "172.16.1.0/24"
+          ],
+          "ipv6": [
+            "fd00:da7a:0:1::/64"
+          ]
+        },
+        "plane": null,
+        "role": "router",
+        "routing_instances": [
+          {
+            "area_border": false,
+            "areas": [
+              "49.0001"
+            ],
+            "as_boundary": false,
+            "domain_id": "default_domain",
+            "interfaces": [
+              {
+                "area_id": null,
+                "name": "term0"
+              },
+              {
+                "area_id": null,
+                "name": "term1"
+              },
+              {
+                "area_id": null,
+                "name": "terr0"
+              }
+            ],
+            "protocol": "isis"
+          }
+        ],
+        "segment_id": "ground",
+        "slot": null,
+        "surface_position": {
+          "alt_m": 80.0,
+          "body": "earth",
+          "lat_deg": 50.05,
+          "lon_deg": -5.18
+        },
+        "tags": [
+          "meo"
+        ],
+        "terminal_inventory": [
+          {
+            "boresight": {
+              "configured_az_deg": null,
+              "configured_el_deg": null,
+              "max_az_deg": null,
+              "max_el_deg": null,
+              "min_az_deg": null,
+              "min_el_deg": null,
+              "mode": "local_vertical"
+            },
+            "count": 2,
+            "endpoint_role": "access",
+            "field_of_regard_deg": 160.0,
+            "link_role": null,
+            "max_range_km": 28000.0,
+            "medium": "rf",
+            "min_elevation_deg": 10.0,
+            "owner_node_id": "earth-gb-goonhilly-gw1",
+            "receive_mbps": 500.0,
+            "source_ref": "nodalarc:terminals/rf/rf-ka-meo-access.yaml",
+            "source_terminal_id": "rf-ka-meo-access",
+            "terminal_id": "access_ka",
+            "tracking_capacity": 1,
+            "tracking_rate_deg_s": 0.5,
+            "transmit_mbps": 500.0
+          }
+        ]
+      },
+      {
+        "epoch_position": null,
+        "forwarding": "routed",
+        "interfaces": {
+          "ethernet": {
+            "terr0": {
+              "ipv4": "172.16.0.1/24",
+              "ipv6": "fd00:da7a::1/64"
+            }
+          },
+          "lo0": {
+            "ipv4": "100.64.0.1/32",
+            "ipv6": null
+          }
+        },
+        "kind": "ground_station",
+        "local_node_id": "earth-au-perth-gw1",
+        "namespace": "earth-au-perth",
+        "node_id": "earth-au-perth-gw1",
+        "originated_prefixes": {
+          "ipv4": [
+            "172.16.0.0/24",
+            "0.0.0.0/0"
+          ],
+          "ipv6": [
+            "fd00:da7a::/64"
+          ]
+        },
+        "plane": null,
+        "role": "router",
+        "routing_instances": [
+          {
+            "area_border": false,
+            "areas": [
+              "49.0001"
+            ],
+            "as_boundary": false,
+            "domain_id": "default_domain",
+            "interfaces": [
+              {
+                "area_id": null,
+                "name": "terr0"
+              }
+            ],
+            "protocol": "isis"
+          }
+        ],
+        "segment_id": "ground",
+        "slot": null,
+        "surface_position": {
+          "alt_m": 32.0,
+          "body": "earth",
+          "lat_deg": -31.9523,
+          "lon_deg": 115.8613
+        },
+        "tags": [
+          "leo"
+        ],
+        "terminal_inventory": [
+          {
+            "boresight": {
+              "configured_az_deg": null,
+              "configured_el_deg": null,
+              "max_az_deg": null,
+              "max_el_deg": null,
+              "min_az_deg": null,
+              "min_el_deg": null,
+              "mode": "local_vertical"
+            },
+            "count": 3,
+            "endpoint_role": "access",
+            "field_of_regard_deg": 130.0,
+            "link_role": null,
+            "max_range_km": 2200.0,
+            "medium": "rf",
+            "min_elevation_deg": 25.0,
+            "owner_node_id": "earth-au-perth-gw1",
+            "receive_mbps": 1000.0,
+            "source_ref": "nodalarc:terminals/rf/rf-ka-leo-access.yaml",
+            "source_terminal_id": "rf-ka-leo-access",
+            "terminal_id": "access_ka",
+            "tracking_capacity": 1,
+            "tracking_rate_deg_s": 2.5,
+            "transmit_mbps": 1000.0
+          }
+        ]
+      },
+      {
+        "epoch_position": null,
+        "forwarding": "routed",
+        "interfaces": {
+          "ethernet": {
+            "terr0": {
+              "ipv4": "172.16.0.2/24",
+              "ipv6": "fd00:da7a::2/64"
+            }
+          },
+          "lo0": {
+            "ipv4": "100.64.0.2/32",
+            "ipv6": null
+          }
+        },
+        "kind": "ground_station",
+        "local_node_id": "earth-au-perth-gw2",
+        "namespace": "earth-au-perth",
+        "node_id": "earth-au-perth-gw2",
+        "originated_prefixes": {
+          "ipv4": [
+            "172.16.0.0/24",
+            "0.0.0.0/0"
+          ],
+          "ipv6": [
+            "fd00:da7a::/64"
+          ]
+        },
+        "plane": null,
+        "role": "router",
+        "routing_instances": [
+          {
+            "area_border": false,
+            "areas": [
+              "49.0001"
+            ],
+            "as_boundary": false,
+            "domain_id": "default_domain",
+            "interfaces": [
+              {
+                "area_id": null,
+                "name": "term0"
+              },
+              {
+                "area_id": null,
+                "name": "term1"
+              },
+              {
+                "area_id": null,
+                "name": "terr0"
+              }
+            ],
+            "protocol": "isis"
+          }
+        ],
+        "segment_id": "ground",
+        "slot": null,
+        "surface_position": {
+          "alt_m": 32.0,
+          "body": "earth",
+          "lat_deg": -31.9523,
+          "lon_deg": 115.8613
+        },
+        "tags": [
+          "meo"
+        ],
+        "terminal_inventory": [
+          {
+            "boresight": {
+              "configured_az_deg": null,
+              "configured_el_deg": null,
+              "max_az_deg": null,
+              "max_el_deg": null,
+              "min_az_deg": null,
+              "min_el_deg": null,
+              "mode": "local_vertical"
+            },
+            "count": 2,
+            "endpoint_role": "access",
+            "field_of_regard_deg": 160.0,
+            "link_role": null,
+            "max_range_km": 28000.0,
+            "medium": "rf",
+            "min_elevation_deg": 10.0,
+            "owner_node_id": "earth-au-perth-gw2",
+            "receive_mbps": 500.0,
+            "source_ref": "nodalarc:terminals/rf/rf-ka-meo-access.yaml",
+            "source_terminal_id": "rf-ka-meo-access",
+            "terminal_id": "access_ka",
+            "tracking_capacity": 1,
+            "tracking_rate_deg_s": 0.5,
+            "transmit_mbps": 500.0
+          }
+        ]
+      },
+      {
+        "epoch_position": null,
+        "forwarding": "routed",
+        "interfaces": {
+          "ethernet": {
+            "terr0": {
+              "ipv4": "172.16.2.1/24",
+              "ipv6": "fd00:da7a:0:2::1/64"
+            }
+          },
+          "lo0": {
+            "ipv4": "100.64.0.4/32",
+            "ipv6": null
+          }
+        },
+        "kind": "ground_station",
+        "local_node_id": "earth-jp-yamaguchi-gw1",
+        "namespace": "earth-jp-yamaguchi",
+        "node_id": "earth-jp-yamaguchi-gw1",
+        "originated_prefixes": {
+          "ipv4": [
+            "172.16.2.0/24"
+          ],
+          "ipv6": [
+            "fd00:da7a:0:2::/64"
+          ]
+        },
+        "plane": null,
+        "role": "router",
+        "routing_instances": [
+          {
+            "area_border": false,
+            "areas": [
+              "49.0001"
+            ],
+            "as_boundary": false,
+            "domain_id": "default_domain",
+            "interfaces": [
+              {
+                "area_id": null,
+                "name": "terr0"
+              }
+            ],
+            "protocol": "isis"
+          }
+        ],
+        "segment_id": "ground",
+        "slot": null,
+        "surface_position": {
+          "alt_m": 40.0,
+          "body": "earth",
+          "lat_deg": 34.21717,
+          "lon_deg": 131.55687
+        },
+        "tags": [
+          "geo"
+        ],
+        "terminal_inventory": [
+          {
+            "boresight": {
+              "configured_az_deg": null,
+              "configured_el_deg": null,
+              "max_az_deg": null,
+              "max_el_deg": null,
+              "min_az_deg": null,
+              "min_el_deg": null,
+              "mode": "local_vertical"
+            },
+            "count": 2,
+            "endpoint_role": "access",
+            "field_of_regard_deg": 170.0,
+            "link_role": null,
+            "max_range_km": 42000.0,
+            "medium": "rf",
+            "min_elevation_deg": 5.0,
+            "owner_node_id": "earth-jp-yamaguchi-gw1",
+            "receive_mbps": 750.0,
+            "source_ref": "nodalarc:terminals/rf/rf-ka-geo-access.yaml",
+            "source_terminal_id": "rf-ka-geo-access",
+            "terminal_id": "access_ka",
+            "tracking_capacity": 1,
+            "tracking_rate_deg_s": 0.1,
+            "transmit_mbps": 750.0
+          },
+          {
+            "boresight": {
+              "configured_az_deg": null,
+              "configured_el_deg": null,
+              "max_az_deg": null,
+              "max_el_deg": null,
+              "min_az_deg": null,
+              "min_el_deg": null,
+              "mode": "local_vertical"
+            },
+            "count": 2,
+            "endpoint_role": "access",
+            "field_of_regard_deg": 180.0,
+            "link_role": null,
+            "max_range_km": 45000.0,
+            "medium": "rf",
+            "min_elevation_deg": 0.0,
+            "owner_node_id": "earth-jp-yamaguchi-gw1",
+            "receive_mbps": 50.0,
+            "source_ref": "nodalarc:terminals/rf/rf-ka-tdrs-ground-sa.yaml",
+            "source_terminal_id": "rf-ka-tdrs-ground-sa",
+            "terminal_id": "tdrs_ka_sa",
+            "tracking_capacity": 1,
+            "tracking_rate_deg_s": 0.1,
+            "transmit_mbps": 600.0
+          }
+        ]
+      },
+      {
+        "epoch_position": null,
+        "forwarding": "routed",
+        "interfaces": {
+          "ethernet": {
+            "terr0": {
+              "ipv4": "172.16.2.2/24",
+              "ipv6": "fd00:da7a:0:2::2/64"
+            }
+          },
+          "lo0": {
+            "ipv4": "100.64.0.5/32",
+            "ipv6": null
+          }
+        },
+        "kind": "ground_station",
+        "local_node_id": "earth-jp-yamaguchi-gw2",
+        "namespace": "earth-jp-yamaguchi",
+        "node_id": "earth-jp-yamaguchi-gw2",
+        "originated_prefixes": {
+          "ipv4": [
+            "172.16.2.0/24"
+          ],
+          "ipv6": [
+            "fd00:da7a:0:2::/64"
+          ]
+        },
+        "plane": null,
+        "role": "router",
+        "routing_instances": [
+          {
+            "area_border": false,
+            "areas": [
+              "49.0001"
+            ],
+            "as_boundary": false,
+            "domain_id": "default_domain",
+            "interfaces": [
+              {
+                "area_id": null,
+                "name": "term0"
+              },
+              {
+                "area_id": null,
+                "name": "term1"
+              },
+              {
+                "area_id": null,
+                "name": "terr0"
+              }
+            ],
+            "protocol": "isis"
+          }
+        ],
+        "segment_id": "ground",
+        "slot": null,
+        "surface_position": {
+          "alt_m": 40.0,
+          "body": "earth",
+          "lat_deg": 34.21717,
+          "lon_deg": 131.55687
+        },
+        "tags": [
+          "meo"
+        ],
+        "terminal_inventory": [
+          {
+            "boresight": {
+              "configured_az_deg": null,
+              "configured_el_deg": null,
+              "max_az_deg": null,
+              "max_el_deg": null,
+              "min_az_deg": null,
+              "min_el_deg": null,
+              "mode": "local_vertical"
+            },
+            "count": 2,
+            "endpoint_role": "access",
+            "field_of_regard_deg": 160.0,
+            "link_role": null,
+            "max_range_km": 28000.0,
+            "medium": "rf",
+            "min_elevation_deg": 10.0,
+            "owner_node_id": "earth-jp-yamaguchi-gw2",
+            "receive_mbps": 500.0,
+            "source_ref": "nodalarc:terminals/rf/rf-ka-meo-access.yaml",
+            "source_terminal_id": "rf-ka-meo-access",
+            "terminal_id": "access_ka",
+            "tracking_capacity": 1,
+            "tracking_rate_deg_s": 0.5,
+            "transmit_mbps": 500.0
+          }
+        ]
+      }
+    ],
+    "segments": [
+      {
+        "display_name": "Earth GPS-altitude MEO 24-satellite shell",
+        "segment_id": "meo"
+      },
+      {
+        "display_name": "MEO gateway sites",
+        "segment_id": "ground"
+      }
+    ],
+    "session": {
+      "description": "GPS-altitude 24-node MEO shell with MEO gateway sites.",
+      "display_name": "Earth GPS-altitude MEO",
+      "name": "earth-meo-gps"
+    }
+  }
+}

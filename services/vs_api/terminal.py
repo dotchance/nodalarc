@@ -18,13 +18,24 @@ The SSH private key is read from the nodalarc-terminal-keys K8s Secret.
 from __future__ import annotations
 
 import asyncio
+import codecs
 import contextlib
 import logging
+import select
+import threading
 
 import asyncssh
 import kubernetes.client
+from kubernetes.stream.ws_client import (
+    ABNF,
+    RESIZE_CHANNEL,
+    STDERR_CHANNEL,
+    STDIN_CHANNEL,
+    STDOUT_CHANNEL,
+)
 from nodalarc.workload_target import NODE_ID_LABEL, TERMINAL_ACCESS_ANNOTATION
 from starlette.websockets import WebSocket
+from websocket import WebSocketException
 
 from vs_api import k8s
 
@@ -168,7 +179,21 @@ class ExecTerminalSession:
     so the WebSocket endpoint treats both surfaces identically. The
     underlying kubernetes-client stream is synchronous; every operation
     runs in a thread executor.
+
+    Output is read one whole WebSocket frame at a time from the stream's
+    connection. The Kubernetes client's own ``update()`` polls the socket
+    first, and a frame that arrived in the same TLS record as the one before
+    it is already inside the TLS layer, where a poll does not see it: output
+    read that way waited for the next byte from the pod. The read here asks
+    the TLS layer first.
+
+    Reads and writes run in different executor threads. One lock serializes
+    every call that enters the TLS layer; the wait for new data is a poll of
+    the socket and holds no lock.
     """
+
+    # How long one read waits for data before it reports no output.
+    _READ_WAIT_S = 1.0
 
     def __init__(self, namespace: str, pod_name: str, container: str, command: list[str]):
         self._namespace = namespace
@@ -176,6 +201,10 @@ class ExecTerminalSession:
         self._container = container
         self._command = command
         self._stream = None
+        self._ended = False
+        self._tls_lock = threading.Lock()
+        # A character may be split across two frames.
+        self._decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
 
     async def connect(self) -> None:
         from kubernetes.stream import stream as k8s_stream
@@ -197,11 +226,17 @@ class ExecTerminalSession:
 
         self._stream = await asyncio.get_running_loop().run_in_executor(None, _connect)
 
+    def _write(self, stream, channel: int, data: str) -> None:
+        with self._tls_lock:
+            stream.write_channel(channel, data)
+
     async def send(self, data: str) -> None:
         stream = self._stream
         if stream is None:
             raise RuntimeError("exec terminal is not connected")
-        await asyncio.get_running_loop().run_in_executor(None, stream.write_stdin, data)
+        await asyncio.get_running_loop().run_in_executor(
+            None, self._write, stream, STDIN_CHANNEL, data
+        )
 
     async def resize(self, cols: int, rows: int) -> None:
         stream = self._stream
@@ -210,33 +245,60 @@ class ExecTerminalSession:
         import json as _json
 
         payload = _json.dumps({"Width": int(cols), "Height": int(rows)})
-        # Channel 4 is the Kubernetes exec resize channel.
-        await asyncio.get_running_loop().run_in_executor(None, stream.write_channel, 4, payload)
+        await asyncio.get_running_loop().run_in_executor(
+            None, self._write, stream, RESIZE_CHANNEL, payload
+        )
+
+    @property
+    def ended(self) -> bool:
+        """True once the exec stream closed: the shell exited or the connection broke."""
+        return self._ended
 
     async def read_output(self) -> str | None:
-        """One chunk of terminal output, mirroring TerminalSession."""
+        """One frame of terminal output; None when none arrived or the stream ended."""
         stream = self._stream
-        if stream is None:
+        if stream is None or self._ended:
             return None
+        return await asyncio.get_running_loop().run_in_executor(None, self._read_frame, stream)
 
-        def _read():
-            if not stream.is_open():
-                return None
-            stream.update(timeout=1)
-            out = ""
-            if stream.peek_stdout():
-                out += stream.read_stdout()
-            if stream.peek_stderr():
-                out += stream.read_stderr()
-            return out
+    def _read_frame(self, stream) -> str | None:
+        try:
+            tls_socket = stream.sock.sock
+            if tls_socket is None:
+                raise OSError("the exec connection is closed")
+            with self._tls_lock:
+                held = tls_socket.pending()
+            if not held:
+                poller = select.poll()
+                poller.register(tls_socket, select.POLLIN)
+                if not poller.poll(self._READ_WAIT_S * 1000):
+                    return None
+            with self._tls_lock:
+                op_code, frame = stream.sock.recv_data_frame(True)
+        except (WebSocketException, OSError, ValueError) as exc:
+            self._ended = True
+            if self._stream is not None:  # close() was not called: the stream broke
+                log.warning("Exec terminal stream to %s broke: %r", self._pod_name, exc)
+            return None
+        if op_code == ABNF.OPCODE_CLOSE:
+            self._ended = True
+            return None
+        data = frame.data
+        if op_code not in (ABNF.OPCODE_BINARY, ABNF.OPCODE_TEXT) or len(data) < 2:
+            return None
+        if data[0] not in (STDOUT_CHANNEL, STDERR_CHANNEL):
+            return None
+        return self._decoder.decode(data[1:]) or None
 
-        return await asyncio.get_running_loop().run_in_executor(None, _read)
+    def _close(self, stream) -> None:
+        with self._tls_lock:
+            stream.close()
 
     async def close(self) -> None:
         stream = self._stream
         self._stream = None
         if stream is not None:
-            await asyncio.get_running_loop().run_in_executor(None, stream.close)
+            await asyncio.get_running_loop().run_in_executor(None, self._close, stream)
 
 
 class TerminalSession:
@@ -288,6 +350,11 @@ class TerminalSession:
         """Resize the terminal (window resize from browser)."""
         if self._process:
             self._process.change_terminal_size(cols, rows)
+
+    @property
+    def ended(self) -> bool:
+        """True once the remote shell closed its output: the session is over."""
+        return self._process is not None and self._process.stdout.at_eof()
 
     async def read_output(self) -> str | None:
         """Read output from the SSH session. Returns None on EOF/timeout."""

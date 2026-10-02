@@ -158,31 +158,99 @@ def test_deploy_sanitizes_yaml_parser_errors(catalog_client):
     assert response.json()["message"] == "Invalid session YAML"
 
 
+def _upload(scoped_client, document: str):
+    return scoped_client.post(
+        "/api/v1/session/deploy-from-yaml", json={"yaml": document, "record_history": False}
+    )
+
+
+def _user_sessions(context) -> list[str]:
+    snapshot = context.repository.snapshot(context.scope)
+    return [str(document.ref) for document in snapshot.list(family="sessions", namespace="user")]
+
+
 def test_deploy_rejects_session_name_with_path_separator(catalog_client):
-    scoped_client, _context = catalog_client
-    response = scoped_client.post(
-        "/api/v1/session/deploy-from-yaml",
-        json={"yaml": _demo_session_with_name("../../outside"), "record_history": False},
-    )
+    scoped_client, context = catalog_client
+    response = _upload(scoped_client, _demo_session_with_name("../../outside"))
 
+    print(response.status_code, response.json())
     assert response.status_code == 422
-    assert "ref-composed published grammar" in response.json()["message"]
+    assert response.json() == {
+        "code": "catalog_closure.invalid_session_root",
+        "message": (
+            "Invalid persisted session root: session.name: "
+            "String should match pattern '^[a-z0-9][a-z0-9_-]*$'"
+        ),
+        "cause_type": "ValidationError",
+    }
+    assert _user_sessions(context) == []
 
 
-def test_single_file_upload_requires_referenced_user_content(catalog_client):
-    scoped_client, _context = catalog_client
-    raw = yaml.safe_load(
-        (
-            Path(__file__).resolve().parents[3] / "catalog/nodalarc/sessions/earth-leo-simple.yaml"
-        ).read_text(encoding="utf-8")
-    )
-    raw["session"]["name"] = "single-file-user-ref"
+def test_an_upload_with_an_unknown_field_is_refused_naming_the_field(catalog_client):
+    scoped_client, context = catalog_client
+    raw = yaml.safe_load(_demo_session_with_name("unknown-field"))
+    raw["not_a_field"] = 1
+
+    response = _upload(scoped_client, yaml.safe_dump(raw, sort_keys=False))
+
+    print(response.status_code, response.json())
+    assert response.status_code == 422
+    assert response.json() == {
+        "code": "catalog_closure.invalid_session_root",
+        "message": ("Invalid persisted session root: not_a_field: Extra inputs are not permitted"),
+        "cause_type": "ValidationError",
+    }
+    assert _user_sessions(context) == []
+
+
+def test_single_file_upload_requires_referenced_user_content(catalog_client, monkeypatch):
+    scoped_client, context = catalog_client
+    monkeypatch.setattr(main, "_available_session_node_count", lambda: 3)
+    raw = yaml.safe_load(_demo_session_with_name("single-file-user-ref"))
     raw["segments"][0]["source"] = "user:constellations/not-uploaded.yaml"
 
-    response = scoped_client.post(
-        "/api/v1/session/deploy-from-yaml",
-        json={"yaml": yaml.safe_dump(raw, sort_keys=False), "record_history": False},
-    )
+    response = _upload(scoped_client, yaml.safe_dump(raw, sort_keys=False))
 
+    print(response.status_code, response.json())
     assert response.status_code == 422
-    assert "user component YAML files" in response.json()["message"]
+    assert response.json()["code"] == "catalog_closure.dangling_reference"
+    assert "user:constellations/not-uploaded.yaml" in response.json()["message"]
+    assert _user_sessions(context) == []
+
+
+def test_an_upload_the_runtime_cannot_run_is_refused_and_not_saved(catalog_client, monkeypatch):
+    scoped_client, context = catalog_client
+    monkeypatch.setattr(main, "_available_session_node_count", lambda: 3)
+    raw = yaml.safe_load(_demo_session_with_name("bgp-upload"))
+    raw["routing"] = {
+        "domains": [
+            {"id": "all", "protocol": "bgp", "selectors": [{"segment": segment["id"]}]}
+            for segment in raw["segments"][:1]
+        ]
+    }
+
+    response = _upload(scoped_client, yaml.safe_dump(raw, sort_keys=False))
+
+    print(response.status_code, response.json())
+    assert response.status_code == 422
+    assert response.json()["code"] == "runtime_support.unsupported"
+    assert "bgp" in response.json()["message"]
+    assert _user_sessions(context) == []
+
+
+def test_an_upload_named_as_an_existing_user_session_is_refused(catalog_client, monkeypatch):
+    scoped_client, context = catalog_client
+    monkeypatch.setattr(main, "_available_session_node_count", lambda: 3)
+    existing = _demo_session_with_name("already-here")
+    transaction = context.repository.begin(context.scope)
+    transaction.write_bytes(
+        "user:sessions/already-here.yaml", existing.encode("utf-8"), expected_revision=None
+    )
+    transaction.commit()
+
+    response = _upload(scoped_client, existing)
+
+    print(response.status_code, response.json())
+    assert response.status_code == 409
+    assert response.json()["code"] == "catalog_repository.conflict"
+    assert "user:sessions/already-here.yaml" in response.json()["message"]

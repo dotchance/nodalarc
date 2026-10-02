@@ -362,6 +362,16 @@ def _parse_yaml(
         ) from exc
 
 
+def _refused_fields(error: BaseException) -> str:
+    """Each field a document was refused for and why; any other refusal in its own words."""
+    if not isinstance(error, ValidationError):
+        return str(error)
+    return "; ".join(
+        f"{'.'.join(str(part) for part in item['loc']) or 'document'}: {item['msg']}"
+        for item in error.errors(include_url=False)
+    )
+
+
 def _validate_document(
     family: str,
     data: Any,
@@ -382,12 +392,17 @@ def _validate_document(
         subject = "persisted session root" if root else f"catalog dependency {ref}"
         raise _error(
             code,
-            f"Invalid {subject}: {exc}",
+            f"Invalid {subject}: {_refused_fields(exc)}",
             ref=offending_ref or (str(ref) if ref is not None else None),
             family=family,
             dependency_chain=dependency_chain,
             cause=exc,
         ) from exc
+
+
+def validate_session_root(data: Any) -> BaseModel:
+    """Validate one parsed persisted session root, refusing as the collector refuses it."""
+    return _validate_document("sessions", data, ref=None, dependency_chain=())
 
 
 def catalog_document_references(value: Any) -> tuple[CatalogRef, ...]:

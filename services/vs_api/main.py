@@ -40,18 +40,13 @@ from nodal.logging import configure as _configure_logging
 from nodal.logging import connect as _connect_logging
 from nodal.logging import uvicorn_settings as _uvicorn_logging_settings
 from nodalarc.catalog_closure import (
-    CatalogClosureCollector,
     CatalogClosureError,
     load_catalog_object,
+    validate_session_root,
 )
 from nodalarc.catalog_refs import SessionRef
-from nodalarc.catalog_registry import (
-    catalog_family_spec,
-)
 from nodalarc.catalog_repository import (
-    CatalogConflictError,
     CatalogReadSnapshot,
-    CatalogValidationError,
 )
 from nodalarc.catalog_upload import DEFAULT_CATALOG_UPLOAD_LIMITS
 from nodalarc.configuration_yaml import load_configuration_yaml
@@ -2260,6 +2255,11 @@ async def ws_terminal(websocket: WebSocket, node_id: str) -> None:
                 while True:
                     output = await session.read_output()
                     if output is None:
+                        if session.ended:
+                            # The shell exited or its connection broke. The page
+                            # shows the terminal as disconnected.
+                            await websocket.close(code=1000, reason="Terminal session ended")
+                            return
                         await asyncio.sleep(0.05)
                         continue
                     await websocket.send_json({"type": "output", "data": output})
@@ -3337,29 +3337,39 @@ async def deploy_from_yaml(
     catalog_context: CatalogContext = Depends(get_catalog_context),
 ) -> CatalogSessionSwitchAccepted | Response:
     """Save standard session YAML in the user catalog and deploy that exact ref."""
+    from nodalarc.prepared_session import PreparedSessionSource, prepare_session_files
+
     from vs_api.builder_compiler import canonicalize_persisted_configuration
     from vs_api.session_deployment import prepare_catalog_session_deployment
 
-    yaml_str = body.yaml
     try:
-        raw = await asyncio.to_thread(load_configuration_yaml, yaml_str)
+        raw = await asyncio.to_thread(load_configuration_yaml, body.yaml)
     except (UnicodeError, YAMLError) as exc:
         log.info("Invalid session YAML rejected: %s", exc)
         return refusal_response(400, "session_yaml.invalid", "Invalid session YAML")
-    try:
-        persisted = catalog_family_spec("sessions").validate_document(raw)
-        session_ref = SessionRef(f"user:sessions/{persisted.session.name}.yaml")
-        canonical = canonicalize_persisted_configuration(session_ref, raw)
-    except (TypeError, ValueError) as exc:
-        log.info("Invalid persisted session rejected: %s", exc)
-        return refusal_response(
-            422,
-            "session_yaml.not_ref_composed",
-            "Single-file YAML upload must satisfy the ref-composed published grammar",
-        )
 
-    def persist_session():
+    def canonical_session():
+        persisted = validate_session_root(raw)
+        session_ref = SessionRef(f"user:sessions/{persisted.session.name}.yaml")
+        return session_ref, canonicalize_persisted_configuration(session_ref, raw)
+
+    def prepare_then_save():
+        """Prepare the uploaded session against the catalog, then save it.
+
+        Every refusal is raised before the write, so a refused upload leaves
+        the user catalog as it was.
+        """
         snapshot = catalog_context.repository.snapshot(catalog_context.scope)
+        prepared = prepare_session_files(
+            canonical.yaml_bytes,
+            snapshot,
+            source=PreparedSessionSource(
+                logical_id=session_ref,
+                origin="vs-api.session-yaml-upload",
+            ),
+            source_revision=canonical.document_digest,
+            available_node_count=available_node_count,
+        )
         transaction = catalog_context.repository.begin(
             catalog_context.scope,
             base_generation=snapshot.generation,
@@ -3374,33 +3384,18 @@ async def deploy_from_yaml(
         except Exception:
             transaction.abort()
             raise
-        saved = committed.get(session_ref)
-        closure = CatalogClosureCollector.collect(saved.content, committed)
-        return saved, closure
+        return committed.get(session_ref), prepared
 
-    try:
-        saved, closure = await asyncio.to_thread(persist_session)
-    except CatalogConflictError:
-        return refusal_response(
-            409, "catalog_repository.conflict", f"Catalog session already exists: {session_ref}"
-        )
-    except CatalogValidationError as exc:
-        log.info("Uploaded session catalog graph refused: %s", exc)
-        return refusal_response(
-            422,
-            "catalog_repository.invalid_document",
-            "Session references unresolved catalog content; "
-            "import all referenced user component YAML files through Session Builder",
-        )
-
+    session_ref, canonical = await asyncio.to_thread(canonical_session)
     available_node_count = await asyncio.to_thread(_available_session_node_count)
+    saved, prepared = await asyncio.to_thread(prepare_then_save)
     deployment = await asyncio.to_thread(
         prepare_catalog_session_deployment,
         catalog_context,
         session_ref=str(session_ref),
         expected_session_revision=str(saved.revision),
-        expected_document_digest=closure.document_digest,
-        expected_closure_digest=closure.closure_digest,
+        expected_document_digest=prepared.document_digest,
+        expected_closure_digest=prepared.closure_digest,
         available_node_count=available_node_count,
         record_history=body.record_history,
     )
@@ -3410,7 +3405,12 @@ async def deploy_from_yaml(
         reservation=_prepared_transition_reservation(deployment),
     )
     if operation_id is None:
-        return refusal_response(409, "session_switch.conflict", "Switch already in progress")
+        return refusal_response(
+            409,
+            "session_switch.conflict",
+            f"Switch already in progress; the session was saved as {session_ref} "
+            "and was not deployed",
+        )
     return CatalogSessionSwitchAccepted(
         operation_id=operation_id,
         source=CatalogSessionSourceId(session_ref=session_ref),

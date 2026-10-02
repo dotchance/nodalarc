@@ -507,19 +507,8 @@ test-integration: ## Run integration tests (requires running cluster)
 	uv run pytest tests/integration --tb=short -q
 
 test-runtime-matrix: ## Destructively qualify every shipped session against the live runtime
-	@VS_API_HOST="$${VS_API_HOST:-}"; \
-	if [ -z "$$VS_API_HOST" ]; then \
-		VS_API_HOST="$$(LIB_PREFIX=runtime-matrix bash -c '. scripts/na-lib.sh && discover_vs_api "$$1" 120 >&2 && printf "%s" "$${api_base#http://}"' _ '$(NAMESPACE)')" || exit 1; \
-	fi; \
-	case "$$VS_API_HOST" in *:*) ;; *) VS_API_HOST="$$VS_API_HOST:8080" ;; esac; \
-	echo "[runtime-matrix] VS-API: http://$$VS_API_HOST"; \
-	PYTHONUNBUFFERED=1 PYTHONPATH=lib VS_API_HOST="$$VS_API_HOST" \
-		NODALARC_EVIDENCE_SOURCE_GIT_SHA='$(GIT_SHA)' \
-		NODALARC_EVIDENCE_SOURCE_TAG='$(TAG)' \
-		NODALARC_EXPECTED_RUNTIME_RELEASE='$(PROJECT_VERSION)' \
-		NODALARC_EXPECTED_RUNTIME_BUILD='$(TAG)' \
-		NAMESPACE='$(NAMESPACE)' \
-		uv run python tests/integration/e2e_matrix.py
+	@echo "[runtime-matrix] WARNING: this replaces the active NodalArc session in $(NAMESPACE) once per shipped session."
+	@NAMESPACE='$(NAMESPACE)' PYTHONPATH=lib uv run pytest tests/integration/operator -m catalog --tb=short -q -rA
 
 test-builder-e2e: ## Destructively qualify Builder user: closure deployment on the live cluster
 	@echo "[builder-e2e] WARNING: this replaces the active NodalArc session in $(NAMESPACE)."

@@ -36,6 +36,8 @@ timeout = 30
 markers = [
     "integration: integration tests requiring K3s",
     "catalog: the operator tests over every shipped session; replaces the cluster session repeatedly",
+    "resilience: operator tests that break the running session on purpose and repair it",
+    "smoke: the few-minute operator checks that change nothing; run after an install or deploy",
 ]
 
 [tool.mypy]

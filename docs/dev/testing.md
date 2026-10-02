@@ -70,9 +70,10 @@ the reports of the applications a session runs.
 
 `truths.py` holds what must be true of any ready session: the clock runs at the speed shown, the links
 shown are the routers' neighbors, the latency shown is the delay packets get, the range shown is the
-distance between the positions shown, satellites move at the speed their orbits require, and the
-session's applications carry data no sooner than the shortest path shown allows. Each test file covers
-one thing a user does and ends by checking every truth:
+distance between the positions shown, satellites move at the speed their orbits require, the
+session's applications carry data no sooner than the shortest path shown allows, and no fault is
+reported while all of that holds. Each test file covers one thing a user does and ends by checking
+every truth:
 
 | File | What a user does |
 |------|------------------|
@@ -81,21 +82,27 @@ one thing a user does and ends by checking every truth:
 | `test_workloads.py` | Downloads a file over QUIC, sends a DTN bundle |
 | `test_sessions.py` | Selects, runs and switches sessions |
 | `test_time.py` | Pauses, changes speed, seeks |
-| `test_topology.py` | Lets the sky move so links come and go |
+| `test_topology.py` | Lets the sky move; watches a make-before-break handover; seeks during one |
 | `test_authoring.py` | Authors a session with the Wizard, a YAML file or a forked catalog object and runs it |
+| `test_history.py` | Records a session and reads its link history back |
+| `test_resilience.py` | Repairs a ground link that was cut under NodalArc |
 | `test_catalog.py` | Runs every shipped session |
 
-```bash
-# A few minutes; changes nothing on the cluster
-uv run pytest tests/integration/operator/test_truth.py tests/integration/operator/test_access.py \
-  tests/integration/operator/test_workloads.py -q
+Three runs are selected with a marker:
 
-# Every shipped session; replaces the running session many times
-uv run pytest tests/integration/operator -m catalog -q
+```bash
+# Smoke: under two minutes, changes nothing. Run it after an install or a deploy.
+uv run pytest tests/integration/operator -m smoke -q
+
+# Every shipped session; replaces the running session once per session (about 45 minutes).
+make test-runtime-matrix
+
+# Resilience: cuts a link of the running session on purpose, outside NodalArc's API, and repairs it.
+uv run pytest tests/integration/operator -m resilience -q
 ```
 
-`test_sessions.py`, `test_authoring.py` and `test_catalog.py` replace the session running on the cluster.
-Each ends on the session it found.
+`make test-integration` runs everything else. `test_sessions.py`, `test_authoring.py` and
+`test_history.py` replace the session running on the cluster. Each ends on the session it found.
 
 ## What to Test
 

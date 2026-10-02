@@ -323,3 +323,43 @@ def let_the_sky_move(
         operator.playback("set_speed", factor=1.0)
     snapshots = [message for _, message in heard if "links" in message]
     return changes, snapshots[0]["sim_time"], snapshots[-1]["sim_time"]
+
+
+def wait_for_handover_overlap(
+    operator: Operator, *, speed: float = 10.0, longest_wait: float = 300.0
+) -> tuple[str, Link, Link] | None:
+    """Run fast until a ground station is shown in a make-before-break overlap, then return to 1x.
+
+    The overlap as NodalArc shows it: the station's old link is active with teardown ticks left
+    and names its successor, and the successor link is active too. Returns the station, the old
+    link and the successor link, or None when no overlap began in the wait.
+    """
+    found: list[tuple[str, Link, Link]] = []
+
+    def overlap_shown(messages: list[tuple[float, dict[str, Any]]]) -> bool:
+        snapshot = messages[-1][1]
+        if "links" not in snapshot:
+            return False
+        nodes = {node["node_id"]: node for node in snapshot["nodes"]}
+        active = {link_key(link): link for link in snapshot["links"] if link["state"] == "active"}
+        for link in active.values():
+            # Enough of the overlap has to remain to ask the router at 1x.
+            if link["link_type"] != "ground" or (link["teardown_remaining_ticks"] or 0) < 15:
+                continue
+            a, b = link["successor_pair"] or (None, None)
+            successor = active.get((a, b)) or active.get((b, a))
+            if successor is None:
+                continue
+            ground = link["node_a"]
+            if nodes[ground]["node_type"] != "ground_station":
+                ground = link["node_b"]
+            found.append((ground, link, successor))
+            return True
+        return False
+
+    operator.playback("set_speed", factor=speed)
+    try:
+        operator.watch_state(longest_wait, until=overlap_shown)
+    finally:
+        operator.playback("set_speed", factor=1.0)
+    return found[0] if found else None

@@ -12,7 +12,7 @@ from . import truths
 from .harness.client import Operator
 from .harness.network import watch
 
-pytestmark = [pytest.mark.integration, pytest.mark.timeout(600)]
+pytestmark = [pytest.mark.integration, pytest.mark.smoke, pytest.mark.timeout(600)]
 
 
 def test_the_clock_runs_at_the_speed_shown(operator: Operator) -> None:

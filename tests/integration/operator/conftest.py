@@ -9,6 +9,14 @@ import pytest
 from .harness.client import Operator, vs_api_base_url
 from .harness.network import Clock, read_clock
 
+_PASSED = pytest.StashKey[bool]()
+
+
+@pytest.fixture
+def test_passed(request: pytest.FixtureRequest):
+    """Call it after the test: whether the test body passed."""
+    return lambda: request.node.stash.get(_PASSED, False)
+
 
 @pytest.fixture(scope="session")
 def operator() -> Operator:
@@ -26,9 +34,24 @@ def clock(operator: Operator) -> Iterator[Clock]:
 
 
 def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
-    """The catalog run replaces the cluster's session a dozen times; it runs only when asked for."""
-    if "catalog" in (config.getoption("-m") or ""):
-        return
-    for item in items:
-        if item.get_closest_marker("catalog"):
-            item.add_marker(pytest.mark.skip(reason="the catalog run is selected with -m catalog"))
+    """Two runs happen only when asked for with -m.
+
+    The catalog run replaces the cluster's session a dozen times. The resilience run damages the
+    running session on purpose.
+    """
+    selected = config.getoption("-m") or ""
+    for marker in ("catalog", "resilience"):
+        if marker in selected:
+            continue
+        for item in items:
+            if item.get_closest_marker(marker):
+                item.add_marker(pytest.mark.skip(reason=f"this run is selected with -m {marker}"))
+
+
+@pytest.hookimpl(wrapper=True, tryfirst=True)
+def pytest_runtest_makereport(item: pytest.Item, call: pytest.CallInfo) -> pytest.TestReport:
+    """Let a fixture see whether its test passed."""
+    report = yield
+    if report.when == "call":
+        item.stash[_PASSED] = report.passed
+    return report

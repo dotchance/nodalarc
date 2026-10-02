@@ -11,6 +11,9 @@ import math
 import re
 import time
 import uuid
+from typing import Any
+
+import yaml
 
 from .harness.client import Operator
 from .harness.network import (
@@ -24,6 +27,7 @@ from .harness.network import (
     read_clock,
     router_neighbors,
     sim_seconds,
+    wait_for_handover_overlap,
     watch,
 )
 from .harness.workloads import DtnEndpoint, QuicClient, find_workloads, run_in_shell
@@ -341,6 +345,25 @@ def dtn_bundles_arrive(operator: Operator, dtn_endpoints: list[DtnEndpoint]) -> 
     return disagreements
 
 
+def no_fault_is_reported(operator: Operator) -> list[str]:
+    """A session whose network does what is shown reports no fault.
+
+    This runs with the other truths. When they hold and NodalArc still shows a station faulted,
+    either the fault is real and a truth missed it, or NodalArc raises a false alarm.
+    """
+    state = operator.state()
+    faults = [
+        f"{entry['gs_id']} is shown as {entry['actuation_state']} ({entry['reason_code']})"
+        for scheduler in operator.get("/api/v1/ops/health")["scheduler_instances"]
+        for entry in scheduler["ground_stations"]
+        if entry["actuation_state"] != "clean"
+    ]
+    faults += [f"actuation notice: {notice}" for notice in state["actuation_notices"]]
+    if state["stale"]:
+        faults.append("the state shown is marked stale")
+    return faults
+
+
 def assert_session_is_truthful(operator: Operator) -> None:
     """Every truth, on the session as it is now. Reports all disagreements together.
 
@@ -357,6 +380,61 @@ def assert_session_is_truthful(operator: Operator) -> None:
     quic_clients, dtn_endpoints = find_workloads(operator, shown)
     disagreements += quic_clients_download_from_their_servers(operator, quic_clients)
     disagreements += dtn_bundles_arrive(operator, dtn_endpoints)
+    disagreements += no_fault_is_reported(operator)
     assert not disagreements, "NodalArc shows something the network does not do:\n" + "\n".join(
         disagreements
     )
+
+
+def _declares(document: Any, key: str, value: str) -> bool:
+    if isinstance(document, dict):
+        return document.get(key) == value or any(
+            _declares(item, key, value) for item in document.values()
+        )
+    if isinstance(document, list):
+        return any(_declares(item, key, value) for item in document)
+    return False
+
+
+def make_before_break_handover_holds_both_links(operator: Operator) -> list[str] | str:
+    """Make-before-break: the new link is up before the old one goes.
+
+    Runs the session fast until NodalArc shows a station in an overlap, then asks the station's
+    own router at 1x: during the overlap it holds a neighbor on the old interface and one on the
+    new interface at the same moment. Returns the disagreements, or the reason the check did
+    not run.
+    """
+    running = next(session for session in operator.sessions() if session.get("active"))
+    if not _declares(yaml.safe_load(operator.session_yaml(running)), "handover_mode", "mbb"):
+        return "the session declares no make-before-break station"
+    overlap = wait_for_handover_overlap(operator)
+    if overlap is None:
+        return "the session declares make-before-break and no overlap began in 50 sim minutes"
+    ground, old, successor = overlap
+    old_side = (link_interface(old, ground), peer_of(old, ground))
+    new_side = (link_interface(successor, ground), peer_of(successor, ground))
+    print(
+        f"handover: {ground} from {old_side} to {new_side}, "
+        f"{old['teardown_remaining_ticks']} ticks of overlap left when seen"
+    )
+    with operator.terminal(ground) as terminal:
+        while True:
+            state = operator.state()
+            still_overlapping = any(
+                link_key(link) == link_key(old) and link["teardown_remaining_ticks"]
+                for link in state["links"]
+            )
+            shown = ShownNetwork([state], {}, {})
+            neighbors = router_neighbors(terminal, shown.nodes[ground], shown.node_by_address())
+            print(f"handover: overlap shown: {still_overlapping}; router neighbors: {neighbors}")
+            if (
+                neighbors.get(old_side[0]) == old_side[1]
+                and neighbors.get(new_side[0]) == new_side[1]
+            ):
+                return []
+            if not still_overlapping:
+                return [
+                    f"{ground}: NodalArc showed a make-before-break overlap from {old_side} to "
+                    f"{new_side}; the router never held both neighbors at once"
+                ]
+            time.sleep(1.0)

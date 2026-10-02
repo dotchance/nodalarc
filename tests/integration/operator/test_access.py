@@ -23,6 +23,7 @@ from .harness.network import (
 pytestmark = [pytest.mark.integration, pytest.mark.timeout(900)]
 
 
+@pytest.mark.smoke
 def test_the_terminal_gives_the_router_cli(operator: Operator) -> None:
     ground, _, _ = watch(operator, 4.0).routed_ground_links()[0]
     with operator.terminal(ground) as terminal:

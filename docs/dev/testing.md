@@ -22,14 +22,11 @@ concept under `tests/unit`:
 | `platform` | Make targets, lifecycle scripts, project metadata |
 | `tools` | Report, compare and scenario tools |
 
-A unit test may replace a collaborator only when all of these hold:
-
-1. The collaborator is outside the process (the kernel, Kubernetes, NATS, SSH, another service), or the
-   test needs a failure that cannot be produced on demand.
-2. The stand-in answers with the collaborator's real types.
-3. The test asserts what the unit decided or produced. It never asserts a value the stand-in was told
-   to return.
-4. The behavior a user can reach is also covered by an integration test.
+A unit test gives a unit real inputs and checks what it computes or decides. It does not stand in
+for the kernel, Kubernetes, NATS or another service. What NodalArc does with those is tested on a
+cluster, where a wrong call fails. A unit test that needs a stand-in is the exception: its docstring
+says why the cluster cannot reach the behavior, and the test asserts an outcome, never the calls the
+stand-in received.
 
 ### Running specific tests
 
@@ -157,6 +154,6 @@ sudo KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl logs -l app=nodalarc-scheduler
 
 - A test states one thing NodalArc promises and shows evidence for it
 - Integration tests act through what a user has and take evidence from the emulated network
-- Unit tests meet the four conditions above before they replace a collaborator
+- Unit tests use real inputs; a stand-in is the exception and the test says why
 - Never present old test results as validation of new code
 - Never write a test that reports a pass when it could not run

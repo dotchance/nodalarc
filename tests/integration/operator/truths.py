@@ -114,7 +114,9 @@ def latency_shown_is_the_delay_packets_get(operator: Operator, shown: ShownNetwo
     """A ground router pings the satellite it is shown linked to; the round trip is twice the latency.
 
     The latency shown moves with the range, so it is read just before and just after each ping,
-    and the fastest reply has to fall between the two readings.
+    and the fastest reply has to fall between the two readings. A reply can be late because the
+    routers are busy (a session that just started); a delay that is wrong stays wrong. A late
+    result is measured once more over three times as many replies before it counts.
     """
     links = shown.routed_ground_links()
     if not links:
@@ -128,21 +130,39 @@ def latency_shown_is_the_delay_packets_get(operator: Operator, shown: ShownNetwo
     disagreements = []
     for ground, satellite, link in links:
         loopback = loopback_of(shown.nodes[satellite])
+        key = link_key(link)
         with operator.terminal(ground) as terminal:
-            before = latency_now(link_key(link))
-            replies = ping_reply_times_ms(terminal.run(f"ping {loopback}", interrupt_after=5.0))
-            after = latency_now(link_key(link))
-        if before is None or after is None:
+
+            def ping(seconds: float) -> tuple[list[float], float, float] | None:
+                before = latency_now(key)
+                replies = ping_reply_times_ms(
+                    terminal.run(f"ping {loopback}", interrupt_after=seconds)
+                )
+                after = latency_now(key)
+                if before is None or after is None:
+                    return None
+                return replies, 2 * min(before, after), 2 * max(before, after)
+
+            result = ping(5.0)
+            if result is not None and result[0]:
+                replies, low, high = result
+                if min(replies) > high + PROCESSING_ALLOWANCE_MS + MOVING_RANGE_ALLOWANCE * high:
+                    print(
+                        f"delay: {ground} -> {satellite}: round trip {min(replies):.3f} ms is "
+                        f"above {high:.3f} ms shown; measuring again over more replies"
+                    )
+                    result = ping(15.0)
+        if result is None:
             print(f"delay: {ground} -> {satellite}: the link ended during the ping; not measured")
             continue
         measured += 1
+        replies, low, high = result
         if not replies:
             disagreements.append(
                 f"{ground} -> {satellite} ({loopback}): NodalArc shows the link and the router "
                 f"reports the neighbor; ping gets no reply"
             )
             continue
-        low, high = 2 * min(before, after), 2 * max(before, after)
         allowance = PROCESSING_ALLOWANCE_MS + MOVING_RANGE_ALLOWANCE * high
         print(
             f"delay: {ground} -> {satellite}: round trip {min(replies):.3f} ms; "

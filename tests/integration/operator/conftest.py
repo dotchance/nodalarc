@@ -33,21 +33,6 @@ def clock(operator: Operator) -> Iterator[Clock]:
     operator.playback("set_speed", factor=1.0)
 
 
-def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
-    """Two runs happen only when asked for with -m.
-
-    The catalog run replaces the cluster's session a dozen times. The resilience run damages the
-    running session on purpose.
-    """
-    selected = config.getoption("-m") or ""
-    for marker in ("catalog", "resilience"):
-        if marker in selected:
-            continue
-        for item in items:
-            if item.get_closest_marker(marker):
-                item.add_marker(pytest.mark.skip(reason=f"this run is selected with -m {marker}"))
-
-
 @pytest.hookimpl(wrapper=True, tryfirst=True)
 def pytest_runtest_makereport(item: pytest.Item, call: pytest.CallInfo) -> pytest.TestReport:
     """Let a fixture see whether its test passed."""

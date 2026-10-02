@@ -89,7 +89,7 @@ does and ends by checking every truth:
 | `test_resilience.py` | Repairs a ground link that was cut under NodalArc |
 | `test_catalog.py` | Runs every shipped session |
 
-Three runs are selected with a marker:
+Four runs are selected with a marker:
 
 ```bash
 # Smoke: about three minutes, changes nothing. Run it after an install or a deploy.
@@ -100,7 +100,15 @@ make test-runtime-matrix
 
 # Resilience: cuts a link of the running session on purpose, outside NodalArc's API, and repairs it.
 uv run pytest tests/integration/operator -m resilience -q
+
+# Platform: tears the platform down, builds and installs this tree, starts a session, restarts the
+# platform, tears it down and installs it again (about ten minutes).
+uv run pytest tests/integration/platform -m platform -q
 ```
+
+The platform run in `tests/integration/platform` uses the make targets a platform operator uses.
+After each target it compares what make reported with the cluster (`kubectl get`), with the links
+and network namespaces each server holds (read over SSH), and with the truths above.
 
 `make test-integration` runs everything else. `test_sessions.py`, `test_authoring.py` and
 `test_history.py` replace the session running on the cluster. Each ends on the session it found.

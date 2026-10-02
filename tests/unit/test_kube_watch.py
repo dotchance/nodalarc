@@ -50,6 +50,21 @@ class _Api:
         )
 
 
+class _HeldWatchApi(_Api):
+    """A WATCH request that stays in flight until the test releases it."""
+
+    def __init__(self, listed: list[str]) -> None:
+        super().__init__(listed)
+        self.watch_requested = threading.Event()
+        self.release = threading.Event()
+
+    def list_namespaced_pod(self, namespace, **kwargs):
+        if kwargs.get("watch"):
+            self.watch_requested.set()
+            self.release.wait(5)
+        return super().list_namespaced_pod(namespace, **kwargs)
+
+
 def _watch_class(events, *, block: threading.Event):
     class _Watch:
         def stream(self, function, **kwargs):
@@ -112,12 +127,15 @@ def test_a_satisfied_consumer_ends_the_blocked_read_without_waiting() -> None:
     assert not api.response.closed_by_consumer
 
 
-def test_a_consumer_satisfied_before_the_watch_opens_still_ends_its_read() -> None:
-    """The listed state alone satisfies the consumer: the watch request made
-    after it is ended as soon as it returns."""
-    api = _Api([])
-    _collect(api, [], until=lambda pods: not pods)
+def test_a_consumer_satisfied_while_the_watch_request_is_in_flight_ends_its_read() -> None:
+    """The listed state alone satisfies the consumer, and it stops while the
+    WATCH request is in flight: the response is ended as soon as it returns."""
+    api = _HeldWatchApi([])
+    _collect(api, [], until=lambda pods: api.watch_requested.wait(2))
+    assert not api.response.read_ended.is_set()
+    api.release.set()
     assert api.response.read_ended.wait(2)
+    assert not api.response.closed_by_consumer
 
 
 def test_a_consumer_never_satisfied_times_out() -> None:

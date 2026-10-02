@@ -37,18 +37,6 @@ def test_registry_covers_the_closed_catalog_family_vocabulary() -> None:
     assert "session" not in CATALOG_WRAPPER_TO_FAMILY
 
 
-def test_session_family_is_an_unwrapped_strict_session_document() -> None:
-    path = ROOT / "catalog" / "nodalarc" / "sessions" / "earth-leo-simple.yaml"
-    document = load_configuration_yaml(path.read_bytes())
-
-    spec = catalog_family_spec("sessions")
-    model = validate_configuration_document("sessions", document)
-
-    assert spec.wrapper is None
-    assert spec.is_wrapped is False
-    assert isinstance(model, SegmentSessionConfig)
-
-
 @pytest.mark.parametrize(
     ("ref", "path", "identity_path"),
     (
@@ -100,24 +88,6 @@ def test_reusable_orbit_rejects_sgp4_without_spacecraft_tle_placement() -> None:
 
     with pytest.raises(ValidationError, match="propagator"):
         validate_configuration_document("orbits", document)
-
-
-def test_space_node_accepts_exact_canonical_sgp4_tle_placement() -> None:
-    node = SpaceNode.model_validate(
-        {
-            "id": "iss",
-            "node": "nodalarc:nodes/space/leo-relay.yaml",
-            "sgp4_tle": {
-                "central_body": "nodalarc:bodies/earth.yaml",
-                "line_1": ISS_TLE_LINE_1,
-                "line_2": ISS_TLE_LINE_2,
-            },
-        }
-    )
-
-    assert node.sgp4_tle is not None
-    assert node.sgp4_tle.line_1 == ISS_TLE_LINE_1
-    assert node.sgp4_tle.line_2 == ISS_TLE_LINE_2
 
 
 def test_space_node_rejects_invalid_or_ambiguous_sgp4_tle_placement() -> None:

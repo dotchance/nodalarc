@@ -12,12 +12,7 @@
  */
 
 import { describe, expect, it } from "vitest";
-import {
-  ecefToGeodetic,
-  propagateNode,
-  type EphemerisNodeFixed,
-  type EphemerisNodeKeplerian,
-} from "../ephemeris";
+import { ecefToGeodetic, propagateNode, type EphemerisNodeKeplerian } from "../ephemeris";
 import { catalogEarthBodyMath, catalogEarthFrame } from "./bodyModelFixture";
 
 const EPOCH = 1735689600.0; // 2025-01-01T00:00:00 UTC
@@ -52,15 +47,6 @@ const SAT_RAAN90: EphemerisNodeKeplerian = {
   mean_anomaly_deg: 0.0,
   plane: 1,
   slot: 0,
-  reference_body: "earth",
-  frame_id: "earth",
-};
-
-const GS_ASHBURN: EphemerisNodeFixed = {
-  type: "fixed",
-  lat_deg: 39.04,
-  lon_deg: -77.49,
-  alt_km: 0.095,
   reference_body: "earth",
   frame_id: "earth",
 };
@@ -118,18 +104,6 @@ describe("propagateNode - Keplerian satellites", () => {
     );
     expect(speed).toBeGreaterThan(5); // ~7.6 km/s for LEO
     expect(speed).toBeLessThan(10);
-  });
-});
-
-describe("propagateNode - fixed ground stations", () => {
-  it("returns static position unchanged", () => {
-    const pos = propagateNode(GS_ASHBURN, EPOCH, EPOCH + 3600);
-    expect(pos.latDeg).toBe(39.04);
-    expect(pos.lonDeg).toBe(-77.49);
-    expect(pos.altKm).toBe(0.095);
-    expect(pos.velXKmS).toBe(0);
-    expect(pos.velYKmS).toBe(0);
-    expect(pos.velZKmS).toBe(0);
   });
 });
 

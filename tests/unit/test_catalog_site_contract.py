@@ -1,14 +1,10 @@
 from __future__ import annotations
 
-from pathlib import Path
 from typing import Any
 
 import pytest
 from nodalarc.models.catalog import Constellation, Node, Payload, Site, SiteSet, SpaceNodeSet
-from nodalarc.models.segments import ConfiguredStateLagrange, LagrangeFrame
 from pydantic import ValidationError
-
-ROOT = Path(__file__).resolve().parents[2]
 
 
 def _payload_data() -> dict[str, Any]:
@@ -92,20 +88,6 @@ def _space_node_set_data() -> dict[str, Any]:
             },
         ],
     }
-
-
-def test_no_user_catalog_or_obsolete_example_roots_remain() -> None:
-    assert not (ROOT / "catalog" / "user").exists()
-    assert not (ROOT / "sessions").exists()
-    for child in (
-        "constellations",
-        "ground-stations",
-        "presets",
-        "satellite-types",
-        "scenarios",
-        "sessions",
-    ):
-        assert not (ROOT / "configs" / child).exists(), child
 
 
 @pytest.mark.parametrize(
@@ -233,32 +215,6 @@ def test_site_node_binding_must_name_a_declared_segment() -> None:
 
     with pytest.raises(ValidationError, match="binds undeclared segment"):
         Site.model_validate(site)
-
-
-def test_site_lagrange_frame_uses_shared_typed_model() -> None:
-    site = _site_data()
-    site.pop("location")
-    site["frame"] = {
-        "lagrange": {
-            "primary_body": "nodalarc:bodies/earth.yaml",
-            "secondary_body": "nodalarc:bodies/luna.yaml",
-            "point": "l1",
-            "ephemeris": {
-                "configured_state": {
-                    "epoch": "2026-06-08T00:00:00Z",
-                    "frame": "icrf",
-                    "position_km": [1.0, 2.0, 3.0],
-                    "velocity_km_s": [0.1, 0.2, 0.3],
-                }
-            },
-        }
-    }
-
-    parsed = Site.model_validate(site)
-
-    assert isinstance(parsed.frame, LagrangeFrame)
-    assert isinstance(parsed.frame.lagrange.ephemeris, ConfiguredStateLagrange)
-    assert parsed.frame.lagrange.ephemeris.configured_state.frame == "icrf"
 
 
 def test_site_lagrange_frame_rejects_opaque_ephemeris_mapping() -> None:

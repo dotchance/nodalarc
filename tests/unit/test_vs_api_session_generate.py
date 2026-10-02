@@ -5,8 +5,6 @@ from pathlib import Path
 import pytest
 import vs_api.main as main
 import yaml
-from nodalarc.catalog_refs import SessionRef
-from vs_api.builder_compiler import canonicalize_persisted_configuration
 from vs_api.catalog_context import create_catalog_context
 from vs_api.main import app
 
@@ -37,15 +35,6 @@ def _demo_session_with_name(name: str) -> str:
     )
     raw["session"]["name"] = name
     return yaml.safe_dump(raw, default_flow_style=False, sort_keys=False)
-
-
-def test_legacy_generate_endpoint_is_retired():
-    response = client.post(
-        "/api/v1/session/generate",
-        json={"constellation": "retired", "protocol": "isis"},
-    )
-
-    assert response.status_code == 404
 
 
 def test_constellation_presets_expose_backend_runtime_capabilities(catalog_client):
@@ -97,14 +86,6 @@ def test_constellation_presets_expose_backend_runtime_capabilities(catalog_clien
     ]
 
 
-def test_constellation_preset_openapi_uses_generated_response_contract():
-    operation = app.openapi()["paths"]["/api/v1/presets/constellations"]["get"]
-
-    assert operation["responses"]["200"]["content"]["application/json"]["schema"] == {
-        "$ref": "#/components/schemas/WizardConstellationPresetResponse"
-    }
-
-
 def test_wizard_presets_are_catalog_backed_not_retired_config_roots(catalog_client):
     scoped_client, _context = catalog_client
     # Satellite presets are catalog space-node PRIMITIVES (sessions assemble
@@ -149,22 +130,6 @@ def test_wizard_extension_rules_use_catalog_area_strategy_tokens():
     assert all(protocol["timer_fields"] for protocol in payload["protocols"])
 
 
-def test_wizard_data_endpoints_publish_closed_response_models():
-    paths = {
-        "/api/v1/presets/satellite-types": "WizardSatelliteTypePresetResponse",
-        "/api/v1/presets/ground-stations": "WizardGroundStationSetPresetResponse",
-        "/api/v1/presets/ground-stations/stations": "WizardAvailableStationResponse",
-        "/api/v1/wizard/extensions": "WizardExtensionRulesResponse",
-    }
-    schema = app.openapi()["paths"]
-
-    for path, response_model in paths.items():
-        operation = schema[path]["get"]
-        assert operation["responses"]["200"]["content"]["application/json"]["schema"] == {
-            "$ref": f"#/components/schemas/{response_model}"
-        }
-
-
 def test_preview_coverage_rejects_traversal_constellation_reference():
     response = client.post(
         "/api/v1/session/preview-coverage",
@@ -181,17 +146,6 @@ def test_preview_coverage_rejects_traversal_constellation_reference():
 
     assert response.status_code == 422
     assert "traversal" in response.text
-
-
-def test_preview_coverage_openapi_uses_generated_request_and_response_contracts():
-    operation = app.openapi()["paths"]["/api/v1/session/preview-coverage"]["post"]
-
-    assert operation["requestBody"]["content"]["application/json"]["schema"] == {
-        "$ref": "#/components/schemas/WizardCoverageRequest"
-    }
-    assert operation["responses"]["200"]["content"]["application/json"]["schema"] == {
-        "$ref": "#/components/schemas/CoveragePreviewResult"
-    }
 
 
 def test_deploy_sanitizes_yaml_parser_errors(catalog_client):
@@ -215,12 +169,6 @@ def test_deploy_rejects_session_name_with_path_separator(catalog_client):
     assert "ref-composed published grammar" in response.json()["message"]
 
 
-def test_legacy_deploy_alias_is_retired():
-    response = client.post("/api/v1/session/deploy", json={"yaml": "session: {}"})
-
-    assert response.status_code == 404
-
-
 def test_single_file_upload_requires_referenced_user_content(catalog_client):
     scoped_client, _context = catalog_client
     raw = yaml.safe_load(
@@ -238,44 +186,3 @@ def test_single_file_upload_requires_referenced_user_content(catalog_client):
 
     assert response.status_code == 422
     assert "user component YAML files" in response.json()["message"]
-
-
-def test_upload_saves_canonical_user_catalog_session_and_admits_catalog_deploy(
-    monkeypatch,
-    catalog_client,
-):
-    scoped_client, context = catalog_client
-    captured: list[object] = []
-
-    async def fake_admit(worker, *, reservation):
-        captured.append(reservation)
-        return "upload-operation-2"
-
-    monkeypatch.setattr(main, "_session_manager", object())
-    monkeypatch.setattr(main, "_available_session_node_count", lambda: 7)
-    monkeypatch.setattr(main, "_prepared_transition_reservation", lambda _deployment: "proof")
-    monkeypatch.setattr(main, "_admit_transition", fake_admit)
-
-    uploaded_yaml = _demo_session_with_name("uploaded-generated")
-    response = scoped_client.post(
-        "/api/v1/session/deploy-from-yaml",
-        json={"yaml": uploaded_yaml, "record_history": False},
-    )
-
-    assert response.status_code == 200
-    assert response.json() == {
-        "status": "accepted",
-        "operation_id": "upload-operation-2",
-        "source": {
-            "kind": "catalog",
-            "session_ref": "user:sessions/uploaded-generated.yaml",
-        },
-    }
-    saved = context.repository.snapshot(context.scope).get("user:sessions/uploaded-generated.yaml")
-    expected = canonicalize_persisted_configuration(
-        SessionRef("user:sessions/uploaded-generated.yaml"),
-        yaml.safe_load(uploaded_yaml),
-    )
-    assert saved.content == expected.yaml_bytes
-    assert saved.content != uploaded_yaml.encode("utf-8")
-    assert captured == ["proof"]

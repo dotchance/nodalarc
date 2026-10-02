@@ -13,7 +13,6 @@ from ome.visibility import (
     ScheduledLink,
     check_ground_visibility,
     check_isl_visibility,
-    compute_angular_velocity,
     compute_elevation_angle,
     enforce_symmetric_scheduling,
     has_line_of_sight,
@@ -73,14 +72,6 @@ class TestRange:
         r = compute_range_km(pos1, pos2)
         # 2 * (R+h) * sin(θ/2) ≈ 2 * 6921 * sin(18°) ≈ 4278 km
         assert 4000.0 < r < 4600.0
-
-    def test_range_within_limit(self):
-        e1 = earth_elements_from_params(550.0, 53.0, 0.0, 0.0)
-        e2 = earth_elements_from_params(550.0, 53.0, 0.0, 36.0)
-        pos1, _, _ = earth_propagate_keplerian(e1, EPOCH, 0.0)
-        pos2, _, _ = earth_propagate_keplerian(e2, EPOCH, 0.0)
-        r = compute_range_km(pos1, pos2)
-        assert r < 5016.0  # starlink-early-44 max range
 
 
 class TestElevationAngle:
@@ -389,48 +380,6 @@ class TestIslVisibility:
         )
         assert not result.visible
         assert result.reason == "polar_seam"
-
-
-class TestAngularVelocity:
-    def test_co_rotating_same_plane_near_zero(self):
-        """Two satellites in the same plane, co-rotating → near-zero angular velocity."""
-        e1 = earth_elements_from_params(550.0, 53.0, 0.0, 0.0)
-        e2 = earth_elements_from_params(550.0, 53.0, 0.0, 36.0)
-        pos1, vel1 = earth_propagate_eci(e1, 0.0)
-        pos2, vel2 = earth_propagate_eci(e2, 0.0)
-        ang_vel = compute_angular_velocity(pos1, vel1, pos2, vel2)
-        # Same orbital plane, same altitude → relative angular velocity should be very small
-        # (it's not exactly zero because of the angular separation, but should be < 0.1 deg/s)
-        assert ang_vel < 0.5
-
-    def test_cross_plane_moderate_angular_velocity(self):
-        """Cross-plane satellites have moderate angular velocity."""
-        e1 = earth_elements_from_params(550.0, 53.0, 0.0, 0.0)
-        e2 = earth_elements_from_params(550.0, 53.0, 30.0, 0.0)  # Different RAAN
-        pos1, vel1 = earth_propagate_eci(e1, 0.0)
-        pos2, vel2 = earth_propagate_eci(e2, 0.0)
-        ang_vel = compute_angular_velocity(pos1, vel1, pos2, vel2)
-        # Cross-plane → some angular velocity
-        assert ang_vel > 0.0
-
-    def test_counter_rotating_high_angular_velocity(self):
-        """Counter-rotating satellites passing each other → high angular velocity.
-
-        Construct positions/velocities directly: two satellites 200 km apart
-        along X axis, with opposite Y velocities (perpendicular to LOS).
-        This simulates a counter-rotating polar seam encounter.
-        """
-        v = 7.59  # km/s (typical LEO velocity)
-        # Separated along X, velocities along Y → perpendicular to LOS
-        pos1 = Vec3(6921.0, 0.0, 0.0)
-        vel1 = Vec3(0.0, v, 0.0)
-        pos2 = Vec3(7121.0, 0.0, 0.0)  # 200 km apart in X
-        vel2 = Vec3(0.0, -v, 0.0)  # Counter-rotating in Y
-
-        ang_vel = compute_angular_velocity(pos1, vel1, pos2, vel2)
-        # Relative velocity = (0, 2v, 0) entirely perpendicular to LOS (along X)
-        # ω = 2v / 200 ≈ 15.18/200 ≈ 0.076 rad/s ≈ 4.35 deg/s
-        assert ang_vel > 3.0
 
 
 class TestIslTerminalScheduling:

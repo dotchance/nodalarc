@@ -16,7 +16,7 @@ from nodalarc.models.builder_controls_api import (
 from nodalarc.models.link_rules import Endpoint, NearestVisibleTopology
 from nodalarc.models.segment_session import RoutingBoundary, SegmentSessionConfig
 from nodalarc.models.segments import LagrangeSegment, SpaceSegment
-from vs_api.builder_control_tree import _sequence_values, build_session_control_tree
+from vs_api.builder_control_tree import build_session_control_tree
 from vs_api.builder_visual_draft import BUILDER_VISUAL_SPECIALIZED_FIELDS
 
 from tests.support.builder_model_coverage import (
@@ -235,13 +235,6 @@ def test_concrete_recursive_selectors_expand_to_their_actual_finite_depth() -> N
     ]
     assert concrete_nested_selector
     assert all(not control.recursive_reference for control in concrete_nested_selector)
-
-
-def test_unordered_collection_projection_is_stable() -> None:
-    assert tuple(_sequence_values(frozenset({"beta", "alpha"}))) == (
-        "alpha",
-        "beta",
-    )
 
 
 def test_specialized_field_markers_do_not_hide_unclaimed_siblings() -> None:

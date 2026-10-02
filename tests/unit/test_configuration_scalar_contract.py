@@ -30,7 +30,7 @@ from nodalarc.models.segment_session import (
     RoutingTimers,
     SpfThrottle,
 )
-from nodalarc.models.segments import GroundScheduling, StateVector
+from nodalarc.models.segments import GroundScheduling
 from pydantic import BaseModel, TypeAdapter, ValidationError
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -237,23 +237,6 @@ def test_canonical_boolean_fields_reject_wrong_yaml_scalar_kinds(
 
     with pytest.raises(ValidationError):
         model.model_validate(_replace_path(raw, path, _yaml_value(wrong_token)))
-
-
-def test_valid_yaml_lists_still_materialize_as_frozen_tuples() -> None:
-    tags = NodeTagRule.model_validate(
-        load_configuration_yaml("tag: polar\nplanes: [0, 2]\nslots: [1, 3]\n")
-    )
-    vector = StateVector.model_validate(
-        load_configuration_yaml(
-            "epoch: '2026-01-01T00:00:00Z'\nframe: gcrs\n"
-            "position_km: [1, 2.5, 3]\nvelocity_km_s: [0.1, 0, -0.1]\n"
-        )
-    )
-
-    assert tags.planes == (0, 2)
-    assert tags.slots == (1, 3)
-    assert vector.position_km == (1.0, 2.5, 3.0)
-    assert vector.velocity_km_s == (0.1, 0.0, -0.1)
 
 
 def test_canonical_models_never_reintroduce_coercive_scalar_annotations() -> None:

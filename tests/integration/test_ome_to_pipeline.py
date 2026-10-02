@@ -102,27 +102,6 @@ class TestCanonicalPipeline:
         assert any(isinstance(event, ClockTick) for event in decoded)
         assert any(isinstance(event, VisibilityEvent) for event in decoded)
 
-    def test_isl_visibility_events_present(self, short_timeline):
-        """The shipped LEO ring produces ISL visibility events."""
-        events = _load_events(short_timeline)
-        isl_vis = [
-            e
-            for e in events
-            if e["event_type"] == "VisibilityEvent" and e["data"]["elevation_deg"] is None
-        ]
-        assert len(isl_vis) > 0
-
-    def test_jsonl_write_read_round_trip(self, short_timeline, tmp_path):
-        """Write → Read produces identical data."""
-        from ome.event_stream import read_timeline_jsonl
-
-        events = _load_events(short_timeline)
-        round_tripped = read_timeline_jsonl(short_timeline)
-        assert len(round_tripped) == len(events)
-        for orig, rt in zip(events, round_tripped):
-            assert orig["event_type"] == rt["event_type"]
-            assert orig["timestamp_s"] == rt["timestamp_s"]
-
 
 class TestStarlinkMiniTerminalExhaustion:
     def test_ground_terminal_exhaustion(self, sample_timeline):

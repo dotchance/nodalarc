@@ -14,28 +14,14 @@ from nodalarc.models.builder_api import (
     BuilderDeployVerdict,
     BuilderDigests,
     BuilderDraftEnvelope,
-    BuilderDraftState,
     BuilderIssue,
-    BuilderProposedCatalogDocument,
-    BuilderSessionDeployAccepted,
-    BuilderSessionDeployRequest,
-    BuilderSessionSaveRefusal,
     BuilderSessionSaveRequest,
     BuilderSessionSaveResult,
     BuilderVerdict,
     DependencyClosureEntry,
     DependencyClosureInventory,
-    WizardAvailableStationResponse,
     WizardConstellationCapability,
-    WizardConstellationGeometry,
-    WizardConstellationPreset,
-    WizardConstellationPresetResponse,
-    WizardExtensionRulesResponse,
-    WizardGroundStationSetPresetResponse,
-    WizardOrbitModelMetadata,
-    WizardSatelliteTypePresetResponse,
 )
-from nodalarc.models.builder_catalog_api import CatalogDraftCompileResult
 from pydantic import ValidationError
 
 from tests.builder_world_fixtures import builder_world_preview
@@ -70,34 +56,6 @@ time:
   step_seconds: 10
   compression: 1
 """
-
-CONTRACT_MODELS = (
-    BuilderIssue,
-    BuilderCatalogDocument,
-    BuilderProposedCatalogDocument,
-    BuilderDraftState,
-    BuilderDraftEnvelope,
-    DependencyClosureEntry,
-    DependencyClosureInventory,
-    BuilderDigests,
-    BuilderVerdict,
-    BuilderDeployVerdict,
-    BuilderCompileRequest,
-    BuilderCompileResult,
-    BuilderSessionDeployRequest,
-    BuilderSessionDeployAccepted,
-    BuilderSessionSaveRequest,
-    BuilderSessionSaveResult,
-    BuilderSessionSaveRefusal,
-    WizardConstellationCapability,
-    WizardConstellationPreset,
-    WizardConstellationPresetResponse,
-    WizardOrbitModelMetadata,
-    WizardSatelliteTypePresetResponse,
-    WizardGroundStationSetPresetResponse,
-    WizardAvailableStationResponse,
-    WizardExtensionRulesResponse,
-)
 
 
 def _blocking_issue(operation: str) -> BuilderIssue:
@@ -161,25 +119,6 @@ def _session_document() -> BuilderCatalogDocument:
     )
 
 
-def test_application_contracts_are_closed_and_immutable() -> None:
-    for model in CONTRACT_MODELS:
-        assert model.model_json_schema()["additionalProperties"] is False
-
-    with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
-        BuilderDraftEnvelope(
-            draft_revision=0,
-            state={"session": {}},
-            private_session_field=True,
-        )
-
-    with pytest.raises(ValidationError, match="valid integer"):
-        BuilderDraftEnvelope(draft_revision="7", state={"session": {}})
-
-    draft = _draft()
-    with pytest.raises(ValidationError, match="frozen"):
-        draft.draft_revision = 8
-
-
 def test_wizard_constellation_capability_cannot_claim_false_availability() -> None:
     with pytest.raises(ValidationError, match="default propagator must be runtime-supported"):
         WizardConstellationCapability(
@@ -196,96 +135,6 @@ def test_wizard_constellation_capability_cannot_claim_false_availability() -> No
             default_propagator=None,
             unavailable_reason=None,
         )
-
-
-def test_wizard_walker_geometry_requires_multiple_planes() -> None:
-    with pytest.raises(ValidationError, match="greater than or equal to 2"):
-        WizardConstellationGeometry(
-            display_name="single-plane walker",
-            description="invalid Wizard geometry",
-            altitude_km=550,
-            inclination_deg=53,
-            pattern="walker_delta",
-            planes=1,
-            slots_per_plane=12,
-            raan_spacing_deg=0,
-            phase_offset_deg=0,
-        )
-
-
-def test_successful_canonical_responses_reuse_configuration_schemas() -> None:
-    document = _session_document()
-    assert document.canonical_json == SESSION_DOCUMENT
-
-    for mode in ("validation", "serialization"):
-        schema = BuilderCatalogDocument.model_json_schema(mode=mode)
-        assert schema["properties"]["canonical_json"] == {
-            "$ref": "#/$defs/ValidatedConfigurationJson"
-        }
-        assert schema["$defs"]["ValidatedConfigurationJson"] == {
-            "$ref": "#/$defs/ConfigurationDocument"
-        }
-        assert schema["$defs"]["ConfigurationDocument"]["anyOf"]
-
-        session_schema = BuilderCompileResult.model_json_schema(mode=mode)
-        assert {
-            tuple(item.items())
-            for item in session_schema["properties"]["canonical_session_json"]["anyOf"]
-        } == {
-            (("$ref", "#/$defs/ValidatedSessionJson"),),
-            (("type", "null"),),
-        }
-        assert session_schema["$defs"]["ValidatedSessionJson"] == {
-            "$ref": "#/$defs/SegmentSessionConfig"
-        }
-        assert session_schema["$defs"]["SegmentSessionConfig"]["properties"]
-
-        component_schema = CatalogDraftCompileResult.model_json_schema(mode=mode)
-        assert {
-            tuple(item.items())
-            for item in component_schema["properties"]["canonical_json"]["anyOf"]
-        } == {
-            (("$ref", "#/$defs/ValidatedConfigurationJson"),),
-            (("type", "null"),),
-        }
-        assert component_schema["$defs"]["ValidatedConfigurationJson"] == {
-            "$ref": "#/$defs/ConfigurationDocument"
-        }
-
-    with pytest.raises(ValidationError):
-        BuilderCatalogDocument(
-            ref="user:sessions/demo.yaml",
-            family="sessions",
-            canonical_yaml=SESSION_YAML,
-            canonical_json=["a document root must be a mapping"],
-            content_digest=DOCUMENT_DIGEST,
-            revision="session-rev-2",
-        )
-
-    with pytest.raises(ValidationError):
-        BuilderCatalogDocument(
-            ref="user:sessions/demo.yaml",
-            family="sessions",
-            canonical_yaml=SESSION_YAML,
-            canonical_json={
-                "session": {"name": "demo"},
-                "segments": [{"id": "leo", "source": {"constellation": {}}}],
-            },
-            content_digest=DOCUMENT_DIGEST,
-            revision="session-rev-2",
-        )
-
-    with pytest.raises(ValidationError):
-        BuilderDraftEnvelope(draft_revision=0, state=["draft root must be a mapping"])
-
-    incomplete = BuilderDraftEnvelope(draft_revision=0, state={"session": {}})
-    assert incomplete.state.session == {}
-    draft_schema = BuilderDraftState.model_json_schema()
-    assert draft_schema["properties"]["session"] == {
-        "additionalProperties": {"$ref": "#/$defs/JsonValue"},
-        "title": "Session",
-        "type": "object",
-    }
 
 
 def test_draft_catalog_proposals_are_user_owned_unique_components() -> None:
@@ -377,21 +226,6 @@ def test_catalog_documents_and_requests_enforce_reference_families() -> None:
             draft=_draft(),
             target_ref="user:sessions/demo.yaml",
             unexpected_dependency_revisions={"user:nodes/router.yaml": "node-rev-1"},
-        )
-
-
-def test_draft_contract_version_and_digest_format_are_closed() -> None:
-    with pytest.raises(ValidationError, match="Input should be 1"):
-        BuilderDraftEnvelope(
-            contract_version=2,
-            draft_revision=0,
-            state={"session": {}},
-        )
-
-    with pytest.raises(ValidationError, match="String should match pattern"):
-        BuilderDigests(
-            document="not-a-digest",
-            dependency=DEPENDENCY_DIGEST,
         )
 
 

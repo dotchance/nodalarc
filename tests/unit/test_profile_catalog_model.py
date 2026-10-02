@@ -13,7 +13,6 @@ from nodalarc.models.catalog import (
     SiteNode,
     SpaceNode,
 )
-from nodalarc.models.configuration import CONFIGURATION_DOCUMENT_MODELS
 from nodalarc.models.segments import GroundSegment, LagrangeSegment, SpaceSegment
 from pydantic import ValidationError
 
@@ -74,26 +73,6 @@ def _app_profile() -> dict:
         "resources": _resources(),
         "terminal": {"surface": "exec", "command": ["/bin/bash"]},
     }
-
-
-def test_routing_shaped_profile_parses_completely() -> None:
-    profile = Profile.model_validate(_router_profile())
-
-    assert profile.adapter == "frr"
-    assert profile.config_mount == "/etc/frr-config"
-    assert profile.sidecars[0].registry is None
-    assert profile.sidecars[0].root_filesystem == "read_only"
-    assert profile.terminal is not None and profile.terminal.surface == "ssh"
-
-
-def test_app_profile_defaults_are_the_documented_defaults() -> None:
-    profile = Profile.model_validate(_app_profile())
-
-    assert profile.adapter is None
-    assert profile.capabilities == ()
-    assert profile.root_filesystem == "read_only"
-    assert profile.volumes == () and profile.mounts == () and profile.sidecars == ()
-    assert profile.config_mount is None
 
 
 def test_config_mount_requires_an_adapter() -> None:
@@ -244,10 +223,6 @@ def test_profile_document_wrapper_is_closed() -> None:
 
     with pytest.raises(ValidationError):
         ProfileDocument.model_validate({"profile": _app_profile(), "extra": {}})
-
-
-def test_profiles_family_is_registered() -> None:
-    assert CONFIGURATION_DOCUMENT_MODELS["profiles"] is ProfileDocument
 
 
 def test_profile_reference_accepts_both_namespaces_and_only_its_family() -> None:

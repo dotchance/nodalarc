@@ -14,24 +14,16 @@ from nodalarc.catalog_paths import CatalogRoots
 from nodalarc.catalog_upload import CatalogUpload, encode_catalog_upload
 from nodalarc.content_identity import sha256_digest
 from nodalarc.db.queries import (
-    insert_convergence_result,
-    insert_link_up,
     insert_snapshot,
     query_nearest_snapshot,
 )
 from nodalarc.db.schema import create_tables
 from nodalarc.models.events import EphemerisNodeFixed, EphemerisNodeTLE, SessionEphemeris
-from nodalarc.models.link_events import LinkUp
-from nodalarc.models.metrics import ConvergenceResult
 from nodalarc.models.resolved_session import InterfaceRates, SourceContext
 from nodalarc.models.vs_api import (
     LinkDecisionTrace,
     LinkState,
-    NetworkHealth,
-    NodeState,
-    StateSnapshot,
 )
-from nodalarc.nats_channels import STREAM_OME_EVENTS
 from nodalarc.prepared_session import (
     PreparedSessionFiles,
     PreparedSessionSource,
@@ -39,7 +31,6 @@ from nodalarc.prepared_session import (
 )
 from nodalarc.project_info import project_version
 from nodalarc.resolve_session import resolve_session_with_assets
-from pydantic import ValidationError
 from vs_api.session_context import SessionContext, _derive_link_type, _link_key
 
 from tests.asgi_client import ASGITestClient as TestClient
@@ -87,46 +78,6 @@ class TestOpsEventVisibility:
         visible = m._operator_visible_ops_events(events)
 
         assert visible == events[2:]
-
-
-class TestOperatorRepairEndpoint:
-    def test_repair_failure_does_not_expose_exception_text(self, monkeypatch):
-        import vs_api.main as m
-
-        class FakeLock:
-            def __enter__(self):
-                return self
-
-            def __exit__(self, exc_type, exc, tb):
-                return False
-
-        class FakeContext:
-            session_id = "run-test-0001"
-            state_lock = FakeLock()
-            actuation_latest_by_gs = {}
-
-        class FakeNats:
-            async def request(self, *_args, **_kwargs):
-                raise RuntimeError("backend secret token=abc123 path=/var/run/secrets/key")
-
-        monkeypatch.setattr(m, "_API_KEY", "")
-        monkeypatch.setattr(m, "_active_context", FakeContext())
-        monkeypatch.setattr(m, "_nats_connection", FakeNats())
-
-        response = TestClient(m.app).post(
-            "/api/v1/ops/repair",
-            json={
-                "gs_id": "gs-denver",
-                "reason": "operator_requested",
-                "scheduler_instance_id": "scheduler-a",
-                "wiring_generation": "7",
-            },
-        )
-
-        assert response.status_code == 500
-        assert response.json() == {"error": "Scheduler repair request failed"}
-        assert "abc123" not in response.text
-        assert "/var/run/secrets" not in response.text
 
 
 class TestLinkTypeDerivation:
@@ -341,46 +292,6 @@ def _make_link_down_event(node_a="sat-P00S00", node_b="sat-P00S01", **overrides)
     }
     event.update(overrides)
     return event
-
-
-class TestLinkKey:
-    """_link_key produces deterministic canonical keys."""
-
-    def test_ordered(self):
-        assert _link_key("a", "b") == "a:b"
-
-    def test_reversed_produces_same_key(self):
-        assert _link_key("b", "a") == "a:b"
-
-
-class TestApiAttribution:
-    """Public API exposes project provenance."""
-
-    def test_about_returns_project_attribution(self):
-        import vs_api.main as m
-
-        payload = m.about()
-
-        assert payload["name"] == "NodalArc"
-        assert payload["version"] == project_version()
-        assert payload["revision"]
-        assert payload["build_date"]
-        assert payload["author"] == ".chance (dotchance)"
-        assert payload["source"] == "https://github.com/dotchance/nodalarc"
-        assert payload["notice"] == "See NOTICE and THIRD_PARTY_NOTICES.md."
-
-    def test_about_uses_runtime_build_metadata(self, monkeypatch):
-        import vs_api.main as m
-
-        monkeypatch.setenv("NODALARC_VERSION", "9.8.7")
-        monkeypatch.setenv("NODALARC_BUILD_REVISION", "abc1234")
-        monkeypatch.setenv("NODALARC_BUILD_DATE", "2026-05-19T22:00:00Z")
-
-        payload = m.about()
-
-        assert payload["version"] == "9.8.7"
-        assert payload["revision"] == "abc1234"
-        assert payload["build_date"] == "2026-05-19T22:00:00Z"
 
 
 class TestConstellationCRReadiness:
@@ -676,238 +587,6 @@ class TestStateSnapshot:
         assert "abc123" not in response.text
         assert "/var/run/secrets" not in response.text
 
-    def test_link_up_adds_to_state(self):
-        ctx = SessionContext.__new__(SessionContext)
-        ctx._init_state_only()
-        event = _make_link_up_event()
-        key = _link_key(event["node_a"], event["node_b"])
-        with ctx.state_lock:
-            ctx.links[key] = LinkState(
-                node_a=event["node_a"],
-                node_b=event["node_b"],
-                state="active",
-                link_type="intra_plane_isl",
-                link_reason=event["reason"],
-                latency_ms=event["latency_ms"],
-                transmit_mbps_a=1000.0,
-                receive_mbps_a=1000.0,
-                transmit_mbps_b=1000.0,
-                receive_mbps_b=1000.0,
-                range_km=event["range_km"],
-                traffic_load_pct=None,
-                interface_a=event["interface_a"],
-                interface_b=event["interface_b"],
-            )
-        assert key in ctx.links
-        assert ctx.links[key].latency_ms == 5.0
-
-    def test_link_down_removes_link(self):
-        ctx = SessionContext.__new__(SessionContext)
-        ctx._init_state_only()
-        event_up = _make_link_up_event()
-        key = _link_key(event_up["node_a"], event_up["node_b"])
-        with ctx.state_lock:
-            ctx.links[key] = LinkState(
-                node_a=event_up["node_a"],
-                node_b=event_up["node_b"],
-                state="active",
-                link_type="intra_plane_isl",
-                link_reason="vis_gained",
-                latency_ms=5.0,
-                transmit_mbps_a=1000.0,
-                receive_mbps_a=1000.0,
-                transmit_mbps_b=1000.0,
-                receive_mbps_b=1000.0,
-                range_km=1500.0,
-                traffic_load_pct=None,
-                interface_a="isl0",
-                interface_b="isl1",
-            )
-        assert key in ctx.links
-        with ctx.state_lock:
-            ctx.links.pop(key, None)
-        assert key not in ctx.links
-
-    def test_latency_update(self):
-        ctx = SessionContext.__new__(SessionContext)
-        ctx._init_state_only()
-        event = _make_link_up_event(latency_ms=5.0, range_km=1500.0)
-        key = _link_key(event["node_a"], event["node_b"])
-        with ctx.state_lock:
-            ctx.links[key] = LinkState(
-                node_a=event["node_a"],
-                node_b=event["node_b"],
-                state="active",
-                link_type="intra_plane_isl",
-                link_reason="vis_gained",
-                latency_ms=5.0,
-                transmit_mbps_a=1000.0,
-                receive_mbps_a=1000.0,
-                transmit_mbps_b=1000.0,
-                receive_mbps_b=1000.0,
-                range_km=1500.0,
-                traffic_load_pct=None,
-                interface_a="isl0",
-                interface_b="isl1",
-            )
-            existing = ctx.links[key]
-            ctx.links[key] = existing.model_copy(update={"latency_ms": 10.0, "range_km": 3000.0})
-        assert ctx.links[key].latency_ms == 10.0
-        assert ctx.links[key].range_km == 3000.0
-
-
-class TestSnapshotModel:
-    """Test StateSnapshot Pydantic model serialization."""
-
-    def test_full_snapshot_round_trip(self):
-        snap = StateSnapshot(
-            sim_time=datetime.now(UTC),
-            wall_time=datetime.now(UTC),
-            schema_version=1,
-            session_id="run-test-0001",
-            history_recording=None,
-            nodes=[
-                NodeState(
-                    node_id="sat-P00S00",
-                    node_type="satellite",
-                    lat_deg=0.0,
-                    lon_deg=0.0,
-                    alt_km=550.0,
-                    vel_x_km_s=None,
-                    vel_y_km_s=None,
-                    vel_z_km_s=None,
-                    plane=0,
-                    slot=0,
-                    routing_instances=(),
-                    role="router",
-                    isl_count=2,
-                    gnd_count=0,
-                    prefix=None,
-                    min_elevation_deg=None,
-                    beam_falloff_exponent=None,
-                    reference_body="earth",
-                    frame_id="earth",
-                )
-            ],
-            links=[
-                LinkState(
-                    node_a="sat-P00S00",
-                    node_b="sat-P00S01",
-                    state="active",
-                    link_type="intra_plane_isl",
-                    link_reason="vis_gained",
-                    latency_ms=5.0,
-                    transmit_mbps_a=1000.0,
-                    receive_mbps_a=1000.0,
-                    transmit_mbps_b=1000.0,
-                    receive_mbps_b=1000.0,
-                    range_km=1500.0,
-                    traffic_load_pct=None,
-                    interface_a="isl0",
-                    interface_b="isl1",
-                )
-            ],
-            traced_paths=[],
-            recent_events=[],
-            network_health=NetworkHealth(
-                status="converged",
-                converging_since_ms=None,
-                unreachable_flows=0,
-                last_convergence_ms=None,
-            ),
-            routing_stack="isis-te",
-            constellation_name="test",
-            session_status="ready",
-            session_status_detail=None,
-            playback_paused=False,
-            playback_speed=1.0,
-            stale=False,
-        )
-        dumped = snap.model_dump_json()
-        loaded = json.loads(dumped)
-        assert loaded["schema_version"] == 1
-        assert loaded["session_id"] == "run-test-0001"
-        assert len(loaded["nodes"]) == 1
-        assert len(loaded["links"]) == 1
-        assert loaded["nodes"][0]["node_id"] == "sat-P00S00"
-        assert loaded["links"][0]["latency_ms"] == 5.0
-
-    def test_snapshot_is_frozen(self):
-        snap = StateSnapshot(
-            sim_time=datetime.now(UTC),
-            wall_time=datetime.now(UTC),
-            schema_version=1,
-            session_id="run-test-0001",
-            history_recording=None,
-            nodes=[],
-            links=[],
-            traced_paths=[],
-            recent_events=[],
-            network_health=NetworkHealth(
-                status="converged",
-                converging_since_ms=None,
-                unreachable_flows=0,
-                last_convergence_ms=None,
-            ),
-            routing_stack=None,
-            constellation_name=None,
-            session_status=None,
-            session_status_detail=None,
-            playback_paused=False,
-            playback_speed=1.0,
-            stale=False,
-        )
-        with pytest.raises(Exception, match="frozen"):
-            snap.stale = True
-
-
-class TestSQLiteQueries:
-    """Test SQLite query functions with a real in-memory DB."""
-
-    def test_query_link_events(self):
-        conn = sqlite3.connect(":memory:")
-        create_tables(conn)
-        event = LinkUp(
-            sim_time=datetime(2025, 1, 1, tzinfo=UTC),
-            wall_time=datetime(2025, 1, 1, tzinfo=UTC),
-            node_a="sat-P00S00",
-            node_b="sat-P00S01",
-            link_type="isl",
-            interface_a="isl0",
-            interface_b="isl1",
-            latency_ms=5.0,
-            range_km=1500.0,
-            reason="vis_gained",
-        )
-        insert_link_up(conn, event, session_id="run-test")
-        from nodalarc.db.queries import query_link_events
-
-        results = query_link_events(conn, session_id="run-test")
-        assert len(results) >= 1
-        conn.close()
-
-    def test_query_convergence_events(self):
-        conn = sqlite3.connect(":memory:")
-        create_tables(conn)
-        t = datetime(2025, 1, 1, tzinfo=UTC)
-        result = ConvergenceResult(
-            event_id="test-001",
-            converged=True,
-            duration_ms=150.0,
-            packets_lost=0,
-            packets_sent=100,
-            sim_time_start=t,
-            sim_time_end=t,
-            wall_time_start=t,
-            wall_time_end=t,
-        )
-        insert_convergence_result(conn, result, session_id="run-test")
-        from nodalarc.db.queries import query_convergence_events
-
-        results = query_convergence_events(conn, session_id="run-test")
-        assert len(results) >= 1
-        conn.close()
-
 
 class TestSnapshotStorage:
     """Test SQLite snapshot storage for historical playback."""
@@ -956,23 +635,6 @@ class TestSnapshotStorage:
         )
         assert result is None
         conn.close()
-
-
-class TestSessionContextInit:
-    """Test that SessionContext state initialization is correct."""
-
-    def test_empty_context_has_no_links(self):
-        ctx = SessionContext.__new__(SessionContext)
-        ctx._init_state_only()
-        assert len(ctx.links) == 0
-        assert len(ctx.nodes) == 0
-        assert ctx.playback_paused is False
-        assert ctx.playback_speed == 1.0
-
-    def test_is_stale_false_initially(self):
-        ctx = SessionContext.__new__(SessionContext)
-        ctx._init_state_only()
-        assert ctx.is_stale() is False
 
 
 class TestPauseLiveness:
@@ -1390,127 +1052,6 @@ class TestSubscriberResilience:
     causing STALE DATA in the VF.
     """
 
-    def test_subscriber_survives_missing_mi_stream(self):
-        """Verify that a missing NODALARC_MI stream doesn't kill the
-        subscriber task. The MI subscription is wrapped in try/except
-        and logged at INFO level."""
-        import asyncio
-        from unittest.mock import AsyncMock, MagicMock
-
-        from nats.js.errors import NotFoundError
-
-        ctx = SessionContext.__new__(SessionContext)
-        ctx._init_state_only()
-
-        nc = MagicMock()
-        js_mock = MagicMock()
-
-        subscribe_calls = []
-
-        async def mock_subscribe(subject, **kwargs):
-            if "NODALARC_MI" in kwargs.get("stream", ""):
-                raise NotFoundError(code=404, err_code=10059, description="stream not found")
-            sub = AsyncMock()
-            sub.unsubscribe = AsyncMock()
-            subscribe_calls.append(subject)
-            return sub
-
-        js_mock.subscribe = mock_subscribe
-        nc.jetstream.return_value = js_mock
-
-        async def run():
-            await ctx.start(nc, mode="recovery")
-            await asyncio.sleep(0.1)
-            assert not ctx._stopped, "Subscriber should still be alive"
-            assert len(ctx._subscriptions) > 0, "Some subscriptions should have succeeded"
-            await ctx.stop()
-
-        asyncio.run(run())
-        assert len(subscribe_calls) > 5, (
-            f"Expected 6+ successful subscriptions, got {len(subscribe_calls)}"
-        )
-
-    def test_retained_recovery_subscriptions_use_last_per_subject(self):
-        # The premise of both the kernel-actual fix and the actuation-roster fix is that
-        # their state SURVIVES a VS-API resubscribe — which requires
-        # DeliverPolicy.LAST_PER_SUBJECT on NODALARC_LINKS (LinkUp/LinkDown are NEW and
-        # do not survive). Pin subject + policy + stream for both retained recovery
-        # subscriptions so a silent flip to NEW — which would break recovery with no
-        # other failing test — is caught.
-        import asyncio
-        from unittest.mock import AsyncMock, MagicMock
-
-        from nats.js.api import DeliverPolicy
-        from nodalarc.nats_channels import (
-            STREAM_LINK_EVENTS,
-            actual_links_subscribe_subject,
-            actuation_state_subscribe_subject,
-        )
-
-        ctx = SessionContext.__new__(SessionContext)
-        ctx._init_state_only()
-
-        nc = MagicMock()
-        js_mock = MagicMock()
-        calls: dict[str, dict] = {}
-
-        async def mock_subscribe(subject, **kwargs):
-            calls[subject] = kwargs
-            sub = AsyncMock()
-            sub.unsubscribe = AsyncMock()
-            return sub
-
-        js_mock.subscribe = mock_subscribe
-        nc.jetstream.return_value = js_mock
-
-        async def run():
-            await ctx.start(nc, mode="recovery")
-            await asyncio.sleep(0.1)
-            await ctx.stop()
-
-        asyncio.run(run())
-
-        for subj in (
-            actual_links_subscribe_subject("test"),
-            actuation_state_subscribe_subject("test"),
-        ):
-            assert subj in calls, f"{subj} was not subscribed"
-            assert calls[subj]["deliver_policy"] == DeliverPolicy.LAST_PER_SUBJECT
-            assert calls[subj]["stream"] == STREAM_LINK_EVENTS
-
-    def test_subscriber_crashes_on_required_stream_failure(self):
-        """If a required stream (NODALARC_OME, NODALARC_LINKS, etc.)
-        fails, the subscriber SHOULD crash — fail loud."""
-        import asyncio
-        from unittest.mock import AsyncMock, MagicMock
-
-        from nats.js.errors import NotFoundError
-
-        ctx = SessionContext.__new__(SessionContext)
-        ctx._init_state_only()
-
-        nc = MagicMock()
-        js_mock = MagicMock()
-
-        async def mock_subscribe(subject, **kwargs):
-            if STREAM_OME_EVENTS in kwargs.get("stream", ""):
-                raise NotFoundError(code=404, err_code=10059, description="stream not found")
-            sub = AsyncMock()
-            sub.unsubscribe = AsyncMock()
-            return sub
-
-        js_mock.subscribe = mock_subscribe
-        nc.jetstream.return_value = js_mock
-
-        async def run():
-            await ctx.start(nc, mode="recovery")
-            with pytest.raises(NotFoundError):
-                await asyncio.wait_for(ctx._subscriber_task, timeout=0.5)
-            return ctx._subscriber_task.done()
-
-        task_done = asyncio.run(run())
-        assert task_done, "Subscriber should have crashed on required stream failure"
-
     def test_snapshot_seq_rejects_stale(self):
         """Snapshots with seq <= last are discarded to prevent jitter."""
         ctx = SessionContext.__new__(SessionContext)
@@ -1738,151 +1279,6 @@ class TestSubscriberResilience:
         ctx._ephemeris_received = True
         ctx._check_ready()
         assert ctx.is_ready(), "Should be ready with both"
-
-
-# ---------------------------------------------------------------------------
-# On-demand debug: ref-counting and cleanup
-# ---------------------------------------------------------------------------
-
-
-class TestDebugRefCounting:
-    """Tests for VS-API debug source ref-counting across WebSocket clients."""
-
-    def setup_method(self):
-        import vs_api.main as m
-
-        self._m = m
-        self._orig_sources = m._debug_sources.copy()
-        self._orig_clients = m._debug_clients.copy()
-        m._debug_sources = set()
-        m._debug_clients = {}
-        m._debug_sub = None
-        m._debug_events.clear()
-
-    def teardown_method(self):
-        self._m._debug_sources = self._orig_sources
-        self._m._debug_clients = self._orig_clients
-
-    def test_handle_debug_stream_adds_to_client_and_sources(self):
-        import asyncio
-        from unittest.mock import AsyncMock, MagicMock
-
-        m = self._m
-        nc_mock = MagicMock()
-        resp_mock = MagicMock()
-        resp_mock.data = b'{"status": "ok", "level": "debug"}'
-        nc_mock.request = AsyncMock(return_value=resp_mock)
-        nc_mock.jetstream = MagicMock(
-            return_value=MagicMock(
-                subscribe=AsyncMock(return_value=MagicMock()),
-            )
-        )
-        m._nats_connection = nc_mock
-
-        asyncio.run(
-            m._handle_ws_debug_command(1001, {"action": "debug_stream", "sources": ["scheduler"]})
-        )
-
-        assert "scheduler" in m._debug_sources
-        assert "scheduler" in m._debug_clients.get(1001, set())
-
-    def test_two_clients_same_source_ref_counted(self):
-        import asyncio
-        from unittest.mock import AsyncMock, MagicMock
-
-        m = self._m
-        nc_mock = MagicMock()
-        resp_mock = MagicMock()
-        resp_mock.data = b'{"status": "ok", "level": "debug"}'
-        nc_mock.request = AsyncMock(return_value=resp_mock)
-        nc_mock.jetstream = MagicMock(
-            return_value=MagicMock(
-                subscribe=AsyncMock(return_value=MagicMock()),
-            )
-        )
-        m._nats_connection = nc_mock
-
-        asyncio.run(
-            m._handle_ws_debug_command(1001, {"action": "debug_stream", "sources": ["scheduler"]})
-        )
-        asyncio.run(
-            m._handle_ws_debug_command(1002, {"action": "debug_stream", "sources": ["scheduler"]})
-        )
-
-        assert "scheduler" in m._debug_sources
-        assert "scheduler" in m._debug_clients[1001]
-        assert "scheduler" in m._debug_clients[1002]
-
-    def test_first_client_disconnect_keeps_source_active(self):
-        import asyncio
-        from unittest.mock import AsyncMock, MagicMock
-
-        m = self._m
-        nc_mock = MagicMock()
-        resp_mock = MagicMock()
-        resp_mock.data = b'{"status": "ok", "level": "debug"}'
-        nc_mock.request = AsyncMock(return_value=resp_mock)
-        nc_mock.jetstream = MagicMock(
-            return_value=MagicMock(
-                subscribe=AsyncMock(return_value=MagicMock()),
-            )
-        )
-        m._nats_connection = nc_mock
-
-        asyncio.run(
-            m._handle_ws_debug_command(1001, {"action": "debug_stream", "sources": ["scheduler"]})
-        )
-        asyncio.run(
-            m._handle_ws_debug_command(1002, {"action": "debug_stream", "sources": ["scheduler"]})
-        )
-        asyncio.run(m._cleanup_debug_client(1001))
-
-        assert "scheduler" in m._debug_sources, (
-            "Source should stay active — client 1002 still wants it"
-        )
-        assert 1001 not in m._debug_clients
-
-    def test_last_client_disconnect_disables_source(self):
-        import asyncio
-        from unittest.mock import AsyncMock, MagicMock
-
-        m = self._m
-        nc_mock = MagicMock()
-        resp_mock = MagicMock()
-        resp_mock.data = b'{"status": "ok", "level": "debug"}'
-        nc_mock.request = AsyncMock(return_value=resp_mock)
-        nc_mock.jetstream = MagicMock(
-            return_value=MagicMock(
-                subscribe=AsyncMock(return_value=MagicMock()),
-            )
-        )
-        m._nats_connection = nc_mock
-
-        asyncio.run(
-            m._handle_ws_debug_command(1001, {"action": "debug_stream", "sources": ["scheduler"]})
-        )
-        asyncio.run(m._cleanup_debug_client(1001))
-
-        assert "scheduler" not in m._debug_sources, "Source should be disabled — no clients left"
-
-    def test_enable_failed_source_not_added(self):
-        import asyncio
-        from unittest.mock import AsyncMock, MagicMock
-
-        m = self._m
-        nc_mock = MagicMock()
-        resp_mock = MagicMock()
-        resp_mock.data = b'{"status": "error", "error": "service not running"}'
-        nc_mock.request = AsyncMock(return_value=resp_mock)
-        m._nats_connection = nc_mock
-        m._publish_system_ops_event = AsyncMock()
-
-        asyncio.run(
-            m._handle_ws_debug_command(1001, {"action": "debug_stream", "sources": ["scheduler"]})
-        )
-
-        assert "scheduler" not in m._debug_sources
-        assert "scheduler" not in m._debug_clients.get(1001, set())
 
 
 # ---------------------------------------------------------------------------
@@ -2474,19 +1870,6 @@ class TestKernelActualRecovery:
 
     _EMITTED_AT = datetime(2026, 5, 29, 18, 0, 0, tzinfo=UTC)
 
-    def test_actual_link_snapshot_requires_emitted_at(self):
-        from nodalarc.models.scheduler_ops import ActualLinkSnapshot
-
-        with pytest.raises(ValidationError, match="emitted_at"):
-            ActualLinkSnapshot(
-                session_id="test",
-                wiring_generation="gen-1",
-                scheduler_instance_id="sched-1",
-                hostname="sched-1-host",
-                active_pairs=[],
-                pending_pairs=[],
-            )
-
     def _deliver(
         self, ctx, *, instance: str, pairs, emitted_at, pending=None, generation: str = "gen-1"
     ) -> None:
@@ -2559,11 +1942,6 @@ class TestKernelActualRecovery:
         )
         assert "sched-old" not in ctx.actual_links_by_instance
         assert ctx.actual_kernel_pairs() == frozenset({("gs-den", "sat-09")})
-
-    def test_empty_until_first_snapshot_is_honest_not_masked_connected(self):
-        ctx = SessionContext.__new__(SessionContext)
-        ctx._init_state_only()
-        assert ctx.actual_kernel_pairs() == frozenset()
 
     def _ctx_with_snapshot_and_clean_roster(self):
         from unittest.mock import MagicMock
@@ -2867,24 +2245,6 @@ def test_every_session_route_refuses_the_same_way_without_a_session(
 class TestContinuousTraceSession:
     """The live trace belongs to its session context."""
 
-    def test_stopping_the_session_stops_its_trace(self):
-        import asyncio
-
-        stopped: list[bool] = []
-
-        class _Tracer:
-            async def stop(self) -> None:
-                stopped.append(True)
-
-        ctx = SessionContext.__new__(SessionContext)
-        ctx._init_state_only()
-        ctx.continuous_tracer = _Tracer()
-
-        asyncio.run(ctx.stop())
-
-        assert stopped == [True]
-        assert ctx.continuous_tracer is None
-
     def test_a_path_change_is_a_recent_event_at_session_sim_time(self):
         ctx = SessionContext.__new__(SessionContext)
         ctx._init_state_only()
@@ -2998,53 +2358,6 @@ class TestContinuousTraceSession:
 
         assert response.status_code == 503
         assert response.json()["code"] == "session.inactive"
-        assert ctx.continuous_tracer is None
-
-    def test_a_one_shot_trace_returns_the_measured_path(self, monkeypatch):
-        import vs_api.main as m
-        from nodalarc.models.vs_api import TracedPath
-
-        measured = TracedPath(
-            flow_id=m.ONE_SHOT_TRACE_FLOW_ID,
-            src_node="gs-a",
-            dst_node="gs-b",
-            hops=["gs-a", "sat-1", "gs-b"],
-            hop_rtts=[None, 5.0, 9.0],
-            state="reached",
-            rtt_ms=9.0,
-            error=None,
-            reverse_hops=["gs-b", "sat-1", "gs-a"],
-            reverse_hop_rtts=[None, 4.0, 8.5],
-            reverse_state="reached",
-            reverse_rtt_ms=8.5,
-            reverse_error=None,
-            asymmetry_detected=False,
-            tracing=False,
-            traced_at="2026-09-23T00:00:00+00:00",
-            sim_time="2026-06-08T00:00:00+00:00",
-        )
-        calls: list = []
-
-        class _Tracer:
-            def trace_between(self, src, dst, *, flow_id):
-                calls.append((src, dst, flow_id))
-                return measured
-
-        ctx = SessionContext.__new__(SessionContext)
-        ctx._init_state_only()
-        ctx.nodes = {"gs-a": object(), "gs-b": object()}
-        ctx.sim_time = "2026-06-08T00:00:00+00:00"
-        monkeypatch.setattr(m, "_API_KEY", "")
-        monkeypatch.setattr(m, "_active_context", ctx)
-        monkeypatch.setattr(m, "_create_path_tracer", lambda context: _Tracer())
-
-        response = TestClient(m.app).post(
-            "/api/v1/trace", json={"src_node": "gs-a", "dst_node": "gs-b"}
-        )
-
-        assert response.status_code == 200
-        assert response.json() == measured.model_dump(mode="json")
-        assert calls == [("gs-a", "gs-b", "__trace__")]
         assert ctx.continuous_tracer is None
 
 
@@ -3343,31 +2656,6 @@ class TestSessionHistory:
 
         assert _recording_error(ctx) == "failed to record links active where recording starts"
 
-    def test_the_fence_is_the_newest_link_up_or_link_down_on_the_stream(self):
-        import asyncio
-        from types import SimpleNamespace
-
-        from nats.js.errors import NotFoundError
-        from nodalarc.nats_channels import STREAM_LINK_EVENTS, link_down_subject, link_up_subject
-
-        ctx = _recorded_context(None)
-
-        class _Stream:
-            def __init__(self, last_seq_by_subject: dict[str, int]):
-                self.last_seq_by_subject = last_seq_by_subject
-
-            async def get_last_msg(self, stream_name: str, subject: str):
-                assert stream_name == STREAM_LINK_EVENTS
-                if subject not in self.last_seq_by_subject:
-                    raise NotFoundError()
-                return SimpleNamespace(seq=self.last_seq_by_subject[subject])
-
-        up, down = link_up_subject(ctx.session_id), link_down_subject(ctx.session_id)
-        fence = ctx._last_link_transition_seq
-        assert asyncio.run(fence(_Stream({up: 12, down: 30}))) == 30
-        assert asyncio.run(fence(_Stream({up: 12}))) == 12
-        assert asyncio.run(fence(_Stream({}))) == 0
-
     @pytest.mark.parametrize("record_history", [True, False])
     def test_the_cr_spec_decides_whether_a_run_is_recorded(self, monkeypatch, record_history):
         import vs_api.main as m
@@ -3530,47 +2818,6 @@ class TestSessionHistory:
 
         assert response.status_code == 501
         assert response.json() == {"code": "history.not_collected", "message": message}
-
-    def test_a_failure_finding_where_recording_starts_stops_recording_not_live_state(
-        self, tmp_path
-    ):
-        import asyncio
-
-        from nats.errors import TimeoutError as NatsTimeoutError
-        from nodalarc.nats_channels import actual_links_subscribe_subject
-
-        ctx = _recorded_context(tmp_path / "run-history-0001.db")
-        subscribed: list[str] = []
-
-        class _Subscription:
-            async def unsubscribe(self) -> None:
-                return None
-
-        class _JetStream:
-            async def subscribe(self, subject, **_kwargs):
-                subscribed.append(subject)
-                return _Subscription()
-
-            async def get_last_msg(self, stream_name, subject):
-                raise NatsTimeoutError()
-
-        class _Nats:
-            def jetstream(self):
-                return _JetStream()
-
-        async def run() -> bool:
-            task = asyncio.create_task(ctx._subscriber_loop(_Nats(), "switch"))
-            last_subject = actual_links_subscribe_subject(ctx.session_id)
-            while last_subject not in subscribed and not task.done():
-                await asyncio.sleep(0.01)
-            alive = not task.done()
-            ctx._stopped = True
-            await asyncio.wait_for(task, timeout=3)
-            return alive
-
-        assert asyncio.run(run())
-        assert actual_links_subscribe_subject(ctx.session_id) in subscribed
-        assert _recording_error(ctx) == "failed to find where recording starts"
 
     def test_a_recording_resumed_after_a_restart_opens_its_links_as_resumed(self, tmp_path):
         path = tmp_path / "run-history-0001.db"

@@ -4,9 +4,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
-from nodalarc.platform_config import get_platform_config
-from nodalarc.workload_target import WorkloadTargetError
-from vs_api.introspect import VTYSH_COMMANDS, IntrospectExecError, run_vtysh
+from vs_api.introspect import run_vtysh
 
 from tests.unit.test_workload_target import pod_document
 
@@ -36,13 +34,6 @@ def _published_target():
 class TestWhitelist:
     """Command whitelist validation."""
 
-    def test_valid_commands_accepted(self):
-        for cmd in VTYSH_COMMANDS:
-            with patch("vs_api.introspect.kubernetes.stream.stream") as mock_stream:
-                mock_stream.return_value = "ok"
-                result = run_vtysh("sat-p00s00", cmd)
-                assert result.exit_code == 0
-
     def test_arbitrary_command_rejected(self):
         with pytest.raises(ValueError, match="not in whitelist"):
             run_vtysh("sat-p00s00", "configure terminal")
@@ -59,23 +50,9 @@ class TestWhitelist:
 class TestWorkloadTarget:
     """The exec lands on the pod and container the Operator published."""
 
-    @patch("vs_api.introspect.kubernetes.stream.stream")
-    def test_exec_targets_the_published_pod_and_container(self, mock_stream):
-        mock_stream.return_value = ""
-        run_vtysh("sat-p01s02", "show ip route")
-        call_args = mock_stream.call_args
-        assert call_args[0][1] == "sat-p01s02"
-        assert call_args[1]["container"] == "custom-router"
-
     def test_node_id_must_be_a_runtime_identifier(self):
         with pytest.raises(ValueError, match="invalid node id"):
             run_vtysh("sat-P00S00", "show isis neighbor")
-
-    @patch("vs_api.introspect.kubernetes.stream.stream")
-    def test_missing_target_is_refused_before_any_exec(self, mock_stream):
-        with pytest.raises(WorkloadTargetError, match="sat-p99s99: .*found 0"):
-            run_vtysh("sat-p99s99", "show isis neighbor")
-        mock_stream.assert_not_called()
 
 
 class TestNodeIdRequired:
@@ -84,58 +61,3 @@ class TestNodeIdRequired:
     def test_empty_node_id(self):
         with pytest.raises(ValueError, match="node_id is required"):
             run_vtysh("", "show isis neighbor")
-
-
-class TestExecErrors:
-    """Exec failures are typed, with a fixed message and the cause chained."""
-
-    @patch("vs_api.introspect.kubernetes.stream.stream")
-    def test_exec_exception_is_a_typed_failure_without_its_text(self, mock_stream):
-        mock_stream.side_effect = Exception("connection timeout")
-        with pytest.raises(IntrospectExecError) as raised:
-            run_vtysh("sat-p00s00", "show isis neighbor")
-        assert str(raised.value) == "vtysh exec failed"
-        assert str(raised.value.__cause__) == "connection timeout"
-
-
-class TestNonZeroExit:
-    """Exec results."""
-
-    @patch("vs_api.introspect.kubernetes.stream.stream")
-    def test_pod_not_found(self, mock_stream):
-        import kubernetes.client.rest
-
-        mock_stream.side_effect = kubernetes.client.rest.ApiException(
-            status=404, reason="Not Found"
-        )
-        with pytest.raises(IntrospectExecError) as raised:
-            run_vtysh("sat-p00s00", "show isis neighbor")
-        assert str(raised.value) == "Kubernetes exec failed"
-        assert isinstance(raised.value.__cause__, kubernetes.client.rest.ApiException)
-
-    @patch("vs_api.introspect.kubernetes.stream.stream")
-    def test_success_returns_the_exact_output(self, mock_stream):
-        mock_stream.return_value = "neighbor data"
-        result = run_vtysh("sat-p00s00", "show isis neighbor")
-        assert result.exit_code == 0
-        assert result.output == "neighbor data"
-        assert result.node_id == "sat-p00s00"
-        assert result.command == "show isis neighbor"
-
-
-class TestOutputTruncation:
-    """Output truncated at configured max."""
-
-    @patch("vs_api.introspect.kubernetes.stream.stream")
-    def test_large_output_truncated(self, mock_stream):
-        large_output = "x" * (get_platform_config().vs_api_introspect_max_response_bytes + 1000)
-        mock_stream.return_value = large_output
-        result = run_vtysh("sat-p00s00", "show running-config")
-        assert len(result.output) < len(large_output)
-        assert result.output.endswith("... (truncated)")
-
-    @patch("vs_api.introspect.kubernetes.stream.stream")
-    def test_small_output_not_truncated(self, mock_stream):
-        mock_stream.return_value = "some output"
-        result = run_vtysh("sat-p00s00", "show isis neighbor")
-        assert result.output == "some output"

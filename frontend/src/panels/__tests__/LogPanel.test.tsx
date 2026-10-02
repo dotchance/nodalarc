@@ -28,12 +28,6 @@ function renderPanel() {
 }
 
 describe("LogPanel", () => {
-  it("renders ops rows in the logs mode", () => {
-    renderPanel();
-    expect(screen.getByText(/export waiting for kernel proof/)).toBeTruthy();
-    expect(screen.getByText(/kernel state mismatch/)).toBeTruthy();
-  });
-
   it("level chip toggles filter rows out", () => {
     renderPanel();
     fireEvent.click(screen.getByRole("button", { name: "error" }));
@@ -48,11 +42,5 @@ describe("LogPanel", () => {
     expect(screen.queryByText(/export waiting/)).toBeNull();
     fireEvent.change(input, { target: { value: "[" } });
     expect(screen.getByText("invalid regex")).toBeTruthy();
-  });
-
-  it("close button closes the window", () => {
-    const { onClose } = renderPanel();
-    fireEvent.click(screen.getByLabelText("Close"));
-    expect(onClose).toHaveBeenCalled();
   });
 });

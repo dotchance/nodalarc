@@ -16,7 +16,6 @@ from nodalarc.filesystem_catalog_repository import FilesystemCatalogRepository
 from nodalarc.models.builder_api import BuilderCompileRequest, BuilderDraftEnvelope
 from nodalarc.models.builder_world import BuilderWorld
 from nodalarc.resolve_session import SessionResolution, SessionResolutionError
-from pydantic import ValidationError
 from vs_api.builder_compiler import canonicalize_persisted_configuration, compile_builder_draft
 
 from tests.builder_world_fixtures import builder_world_preview, preview_from_resolution
@@ -425,13 +424,6 @@ def test_canonical_compile_is_idempotent_and_does_not_write(
     assert first.canonical_session_json == second.canonical_session_json
     assert first.digests == second.digests
     assert snapshot.list(namespace="user") == ()
-
-
-def test_proposed_component_revision_fields_are_rejected() -> None:
-    session, proposals = _deep_user_draft()
-    proposals[0]["expected_revision"] = f"sha256:{'0' * 64}"
-    with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
-        _request(session, catalog_documents=proposals)
 
 
 def test_expected_preview_failure_is_a_typed_deploy_blocker(

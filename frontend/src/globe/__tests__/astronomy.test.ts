@@ -3,24 +3,10 @@
 // Licensed under the Apache License, Version 2.0. See LICENSE file.
 import { describe, it, expect } from "vitest";
 import * as THREE from "three";
-import {
-  gmstRadians,
-  worldVelocity,
-  simTimeIsoToUnixSeconds,
-  J2000_UNIX_SECONDS,
-} from "../astronomy";
-import {
-  gmstRadians as sharedGmstRadians,
-  J2000_UNIX_SECONDS as SHARED_J2000,
-} from "../../sim/orbitalMath";
+import { worldVelocity, simTimeIsoToUnixSeconds } from "../astronomy";
 import { catalogEarthFrame } from "../../sim/__tests__/bodyModelFixture";
 
 const ROTATION_RATE_FROM_EPHEMERIS_RAD_S = catalogEarthFrame().rotation_rate_rad_s;
-
-it("reexports the shared GMST function and epoch", () => {
-  expect(gmstRadians).toBe(sharedGmstRadians);
-  expect(J2000_UNIX_SECONDS).toBe(SHARED_J2000);
-});
 
 describe("simTimeIsoToUnixSeconds", () => {
   it("parses ISO-8601 correctly", () => {

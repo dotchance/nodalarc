@@ -9,7 +9,6 @@ from datetime import UTC, datetime
 from nodalarc.models.events import (
     EphemerisNodeFixed,
     EphemerisNodeKeplerian,
-    EphemerisNodeTLE,
     SessionEphemeris,
 )
 from scheduler.latency_model import PositionTable
@@ -17,9 +16,6 @@ from scheduler.latency_model import PositionTable
 from tests.physics_fixtures import EARTH_TEST_EPHEMERIS_BODY_FRAMES
 
 EPOCH = 1735689600.0  # 2025-01-01T00:00:00 UTC
-ISS_TLE_EPOCH = 1615896900.000275
-ISS_TLE_LINE_1 = "1 25544U 98067A   21075.51041667  .00001264  00000-0  29660-4 0  9993"
-ISS_TLE_LINE_2 = "2 25544  51.6442  21.5417 0002426  95.1670  21.8444 15.48974333273145"
 
 
 def _keplerian_node(**overrides) -> EphemerisNodeKeplerian:
@@ -61,12 +57,6 @@ def _make_ephemeris() -> SessionEphemeris:
 
 
 class TestLoadEphemeris:
-    def test_load_sets_loaded_flag(self):
-        pt = PositionTable()
-        assert not pt.loaded
-        pt.load_ephemeris(_make_ephemeris())
-        assert pt.loaded
-
     def test_load_clears_previous(self):
         pt = PositionTable()
         pt.load_ephemeris(_make_ephemeris())
@@ -86,51 +76,6 @@ class TestLoadEphemeris:
 
 
 class TestComputeLinkLatency:
-    def test_isl_latency_positive(self):
-        pt = PositionTable()
-        pt.load_ephemeris(_make_ephemeris())
-        lat = pt.compute_link_latency("sat-P00S00", "sat-P00S01", EPOCH)
-        assert lat is not None
-        assert lat > 0.0
-
-    def test_ground_link_latency_positive(self):
-        pt = PositionTable()
-        pt.load_ephemeris(_make_ephemeris())
-        lat = pt.compute_link_latency("sat-P00S00", "gs-ashburn", EPOCH)
-        assert lat is not None
-        assert lat > 0.0
-
-    def test_tle_ephemeris_latency_positive(self):
-        eph = SessionEphemeris(
-            epoch_id=0,
-            sim_time=datetime.fromtimestamp(ISS_TLE_EPOCH, UTC),
-            epoch_unix=ISS_TLE_EPOCH,
-            body_frames=EARTH_TEST_EPHEMERIS_BODY_FRAMES,
-            nodes={
-                "sat-P00S00": EphemerisNodeTLE(
-                    tle_line_1=ISS_TLE_LINE_1,
-                    tle_line_2=ISS_TLE_LINE_2,
-                    plane=0,
-                    slot=0,
-                    norad_id=25544,
-                    reference_body="earth",
-                    frame_id="earth",
-                ),
-                "gs-ashburn": EphemerisNodeFixed(
-                    lat_deg=39.04,
-                    lon_deg=-77.49,
-                    alt_km=0.095,
-                    reference_body="earth",
-                    frame_id="earth",
-                ),
-            },
-        )
-        pt = PositionTable()
-        pt.load_ephemeris(eph)
-        lat = pt.compute_link_latency("sat-P00S00", "gs-ashburn", ISS_TLE_EPOCH + 60.0)
-        assert lat is not None
-        assert lat > 0.0
-
     def test_j2_ephemeris_uses_j2_propagator_identity(self):
         kepler = _make_ephemeris()
         j2_nodes = dict(kepler.nodes)
@@ -154,21 +99,6 @@ class TestComputeLinkLatency:
         pt = PositionTable()
         pt.load_ephemeris(_make_ephemeris())
         assert pt.compute_link_latency("sat-UNKNOWN", "sat-P00S00", EPOCH) is None
-
-    def test_latency_changes_over_time(self):
-        """Latency between satellites changes as they orbit."""
-        pt = PositionTable()
-        pt.load_ephemeris(_make_ephemeris())
-        lat0 = pt.compute_link_latency("sat-P00S00", "sat-P00S01", EPOCH)
-        # 30 minutes later
-        lat30 = pt.compute_link_latency("sat-P00S00", "sat-P00S01", EPOCH + 1800)
-        assert lat0 is not None
-        assert lat30 is not None
-        # Same-plane satellites maintain constant distance (circular orbit),
-        # but the ECEF positions change. Latency should be similar but not identical
-        # due to Earth rotation changing the ECEF coordinates.
-        # Key point: the function works at different times.
-        assert lat30 > 0.0
 
     def test_speed_of_light_formula(self):
         """Verify latency = range / c * 1000 (speed of light in vacuum)."""

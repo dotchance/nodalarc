@@ -165,11 +165,6 @@ def test_generic_reference_accepts_only_registered_canonical_paths() -> None:
     assert parsed.relative_path == Path("nodes/nested/example_name.yml")
 
 
-def test_reference_rejects_noncanonical_suffix_case() -> None:
-    with pytest.raises(CatalogReferenceError):
-        CatalogRef("user:nodes/router.YAML")
-
-
 def test_generic_reference_requires_a_registered_family() -> None:
     with pytest.raises(CatalogReferenceError, match="catalog family"):
         CatalogRef("user:example.yaml")

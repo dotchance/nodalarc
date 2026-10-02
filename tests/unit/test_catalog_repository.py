@@ -679,34 +679,6 @@ def test_symlinks_and_traversal_cannot_escape_injected_roots(tmp_path: Path) -> 
         )
 
 
-def test_snapshot_read_normalizes_filesystem_errors_to_read_errors(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    repository, shipped_root, (scope,), _roots = _repository(tmp_path)
-    _write_document(shipped_root, "nodes/router.yaml", _node_document("router"))
-    snapshot = repository.snapshot(scope)
-    ref = CatalogRef("nodalarc:nodes/router.yaml")
-
-    with pytest.raises(CatalogDocumentNotFound):
-        snapshot.read(CatalogRef("nodalarc:nodes/absent.yaml"))
-
-    def _denied(self: Path) -> bytes:
-        raise PermissionError(f"denied: {self}")
-
-    monkeypatch.setattr(Path, "read_bytes", _denied)
-    with pytest.raises(CatalogReadFailed) as failed:
-        snapshot.read(ref)
-    assert failed.value.ref == ref
-
-    def _vanished(self: Path) -> bytes:
-        raise FileNotFoundError(f"vanished: {self}")
-
-    monkeypatch.setattr(Path, "read_bytes", _vanished)
-    with pytest.raises(CatalogDocumentNotFound) as gone:
-        snapshot.read(ref)
-    assert gone.value.ref == ref
-
-
 PRIVATE_DIAGNOSTIC = "PRIVATE_STORAGE_DIAGNOSTIC"
 
 

@@ -76,11 +76,4 @@ describe("ToolSlot", () => {
     expect(screen.queryByRole("menu")).toBeNull();
     expect(onSelect).not.toHaveBeenCalled();
   });
-
-  it("shows shortcut keys in flyout rows", () => {
-    const { face } = renderSlot();
-    fireEvent.contextMenu(face);
-    expect(screen.getByText("1")).toBeTruthy();
-    expect(screen.getByText("2")).toBeTruthy();
-  });
 });

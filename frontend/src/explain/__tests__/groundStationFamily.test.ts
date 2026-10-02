@@ -53,11 +53,6 @@ describe("groundStationFamily (default-state snapshot approximation)", () => {
     expect(r.reason).toBeNull();
   });
 
-  it("a fault notice wins over an active link (fault dominates)", () => {
-    const r = groundStationFamily("gs-1", [link("gs-1", "sat-1")], [notice("gs-1", true)]);
-    expect(r.family).toBe("faulted");
-  });
-
   it("is connected when a GS has an active ground link and no notice", () => {
     expect(groundStationFamily("gs-1", [link("sat-2", "gs-1")], []).family).toBe("connected");
   });

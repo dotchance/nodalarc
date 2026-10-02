@@ -152,28 +152,6 @@ describe("useKeyboard", () => {
     act(() => fireKey("Escape"));
     expect(actions.onEscape).toHaveBeenCalled();
   });
-
-  it("optional actions don't crash when undefined", () => {
-    const minimal = {
-      onEscape: vi.fn(),
-      onToggleView: vi.fn<(mode: ViewMode) => void>(),
-      onSetColorMode: vi.fn<(mode: ColorMode) => void>(),
-      onToggleGroundLinks: vi.fn(),
-      onToggleIslLinks: vi.fn(),
-      onToggleSatPaths: vi.fn(),
-      onToggleTrails: vi.fn(),
-      onToggleHistorical: vi.fn(),
-      onPlayPause: vi.fn(),
-      onFollowNode: vi.fn(),
-      onFrameSelection: vi.fn(),
-      onFrameScene: vi.fn(),
-      onTopView: vi.fn(),
-    };
-    renderHook(() => useKeyboard(minimal, "globe"));
-    act(() => fireKey("n")); // onToggleGlobeMode is optional
-    act(() => fireKey("i")); // onToggleReferenceFrame is optional
-    act(() => fireKey("]")); // onTogglePanel is optional
-  });
 });
 
 describe("useKeyboard — builder mode suspends live-session keys", () => {

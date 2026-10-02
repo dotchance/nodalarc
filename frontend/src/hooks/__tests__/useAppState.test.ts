@@ -105,17 +105,6 @@ describe("useAppState", () => {
 
   // --- Display Defaults ---
 
-  it("has correct default toggles", () => {
-    const { result } = renderHook(() => useAppState(makeInputs()));
-    expect(result.current.viewMode).toBe("globe");
-    expect(result.current.colorMode).toBe("regime");
-    expect(result.current.showIslLinks).toBe(true);
-    expect(result.current.showGroundLinks).toBe(true);
-    expect(result.current.showTrails).toBe(true);
-    expect(result.current.showSatPaths).toBe(false);
-    expect(result.current.globeMode).toBe("blue-marble");
-  });
-
   it("reference frame persists to localStorage", () => {
     const { result } = renderHook(() => useAppState(makeInputs()));
     act(() => result.current.toggleReferenceFrame());

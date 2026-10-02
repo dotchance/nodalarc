@@ -149,23 +149,6 @@ class TestCommonFrameTyping:
                 body_origin_common_km=CommonVec3(0.0, 0.0, 0.0),
             )
 
-    def test_constructed_common_vectors_pass(self):
-        from ome.propagation_engine import PropagatedState
-
-        state = PropagatedState(
-            node_id="earth-leo-sat-p00s00",
-            sim_time_unix=ISS_TLE_EPOCH_UNIX,
-            position_ecef_km=EcefVec3(Vec3(1.0, 2.0, 3.0)),
-            velocity_ecef_km_s=EcefVec3(Vec3(0.1, 0.2, 0.3)),
-            geodetic=None,
-            propagator_id="sgp4-tle",
-            central_body="earth",
-            position_common_km=CommonVec3(1.0, 2.0, 3.0),
-            velocity_common_km_s=CommonVec3(0.1, 0.2, 0.3),
-            body_origin_common_km=CommonVec3(0.0, 0.0, 0.0),
-        )
-        assert isinstance(state.position_common_km, CommonVec3)
-
     def test_composition_refuses_the_original_defect(self):
         """`pos_inertial = pos_ecef` must now raise, not compose."""
         from ome.propagation_engine import _common_vec

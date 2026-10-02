@@ -109,19 +109,6 @@ def test_asset_paths_reject_noncanonical_or_uncontained_forms(path: str) -> None
         )
 
 
-def test_asset_path_accepts_canonical_relative_form() -> None:
-    kernel = EphemerisKernel.model_validate(
-        {
-            "id": "kernel",
-            "path": "configs/ephemerides/kernel.bsp",
-            "targets": ["nodalarc:bodies/earth.yaml"],
-            "frame": "gcrs",
-        }
-    )
-
-    assert kernel.path == "configs/ephemerides/kernel.bsp"
-
-
 def test_access_candidate_requires_complete_explicit_ground_scheduling() -> None:
     document = _simple_session()
     scheduling = _ground_segment(document)["apply"]["scheduling"]

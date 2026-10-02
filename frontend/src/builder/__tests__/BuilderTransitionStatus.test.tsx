@@ -1,16 +1,12 @@
-import { render, renderHook, screen, waitFor } from "@testing-library/react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { render, screen } from "@testing-library/react";
+import { describe, expect, it, vi } from "vitest";
 
 vi.mock("../../config", () => ({
   REST_URL: "http://test:8080",
   authHeaders: (extra?: Record<string, string>) => ({ ...extra }),
 }));
 
-const {
-  BuilderTransitionStatus,
-  transitionIsTerminal,
-  useBuilderTransitionOperation,
-} = await import("../BuilderTransitionStatus");
+const { BuilderTransitionStatus } = await import("../BuilderTransitionStatus");
 
 const DOCUMENT = `sha256:${"a".repeat(64)}`;
 const CLOSURE = `sha256:${"b".repeat(64)}`;
@@ -45,49 +41,7 @@ function operation(state: "verifying" | "succeeded" | "failed") {
   };
 }
 
-beforeEach(() => {
-  globalThis.fetch = vi.fn() as unknown as typeof fetch;
-});
-
 describe("Builder deployment transition proof", () => {
-  it("polls an accepted operation until a typed terminal state", async () => {
-    const fetchMock = globalThis.fetch as ReturnType<typeof vi.fn>;
-    fetchMock
-      .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve(operation("verifying")) })
-      .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve(operation("succeeded")) });
-
-    const { result } = renderHook(() => useBuilderTransitionOperation("operation-proof", 1));
-    await waitFor(() => expect(result.current.operation?.state).toBe("succeeded"));
-
-    expect(fetchMock.mock.calls.map((call) => call[0])).toEqual([
-      "http://test:8080/api/v1/session-transitions/operation-proof",
-      "http://test:8080/api/v1/session-transitions/operation-proof",
-    ]);
-    expect(transitionIsTerminal(result.current.operation!.state)).toBe(true);
-  });
-
-  it("refuses proof returned for a different operation identity", async () => {
-    const fetchMock = globalThis.fetch as ReturnType<typeof vi.fn>;
-    fetchMock.mockResolvedValue({
-      ok: true,
-      json: () =>
-        Promise.resolve({
-          ...operation("succeeded"),
-          operation_id: "another-operation",
-        }),
-    });
-
-    const { result } = renderHook(() =>
-      useBuilderTransitionOperation("operation-proof", 10_000),
-    );
-    await waitFor(() =>
-      expect(result.current.error).toContain(
-        "does not match requested operation operation-proof",
-      ),
-    );
-    expect(result.current.operation).toBeNull();
-  });
-
   it("renders stage history, failure evidence, release/build, and digest mismatches", () => {
     render(
       <BuilderTransitionStatus

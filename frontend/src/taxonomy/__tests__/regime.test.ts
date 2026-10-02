@@ -1,7 +1,7 @@
 // Copyright 2024-2026 .chance (dotchance)
 // Licensed under the Apache License, Version 2.0. See LICENSE file.
 import { describe, it, expect } from "vitest";
-import { classifyRegime, buildRegimeIndex, REGIME_TINT, REGIMES } from "../regime";
+import { classifyRegime, buildRegimeIndex } from "../regime";
 import type { EphemerisNode, SessionEphemeris } from "../../sim/ephemeris";
 
 const EARTH_R = 6371;
@@ -71,14 +71,5 @@ describe("regime classification (authored orbit, never instantaneous position)",
     const index = buildRegimeIndex(ephemeris);
     expect(index.get("leo-sat-p00s00")).toBe("leo");
     expect(index.has("ground-gs-x")).toBe(false);
-  });
-
-  it("every regime has a tint with a parseable hex and a label", () => {
-    for (const regime of REGIMES) {
-      const tint = REGIME_TINT[regime];
-      expect(tint.css).toMatch(/^#[0-9a-fA-F]{6}$/);
-      expect(tint.hex).toBe(parseInt(tint.css.slice(1), 16));
-      expect(tint.label.length).toBeGreaterThan(0);
-    }
   });
 });

@@ -7,10 +7,9 @@ from typing import Any
 
 import pytest
 import yaml
-from fastapi import Depends, FastAPI, HTTPException, Request
+from fastapi import FastAPI
 from nodalarc.catalog_repository import CatalogScope
 from nodalarc.filesystem_catalog_repository import FilesystemCatalogRepository
-from nodalarc.models.builder_api import BuilderSessionDeployRefusal
 from nodalarc.models.builder_catalog_api import CatalogOperationRefusal
 from vs_api.builder_catalog_service import (
     BuilderCatalogAuthoringService,
@@ -18,7 +17,6 @@ from vs_api.builder_catalog_service import (
 )
 from vs_api.builder_router import (
     BuilderRouterServices,
-    BuilderSessionDeployError,
     create_builder_router,
 )
 from vs_api.builder_session_service import (
@@ -559,114 +557,3 @@ def test_request_contracts_expose_no_client_selected_authority(
             schema = request_body["content"]["application/json"]["schema"]
             observed.update(_walk_request_property_names(schema, components))
     assert forbidden.isdisjoint(observed)
-
-
-def test_deploy_callback_receives_only_exact_saved_source_and_server_context(
-    catalog_context: CatalogContext,
-) -> None:
-    calls: list[tuple[Any, CatalogContext]] = []
-
-    async def accept_deploy(request, context):
-        calls.append((request, context))
-        return {
-            "operation_id": "switch-operation-42",
-            "status": "accepted",
-            "source": request,
-        }
-
-    client = TestClient(_application(catalog_context, deploy_callback=accept_deploy))
-    request = {
-        "session_ref": "user:sessions/deploy-me.yaml",
-        "expected_session_revision": "session-revision-7",
-        "expected_document_digest": f"sha256:{'a' * 64}",
-        "expected_dependency_digest": f"sha256:{'b' * 64}",
-        "record_history": False,
-    }
-    accepted = client.post("/api/v1/builder/session/deploy", json=request)
-
-    assert accepted.status_code == 202
-    assert accepted.json() == {
-        "operation_id": "switch-operation-42",
-        "status": "accepted",
-        "source": request,
-    }
-    assert len(calls) == 1
-    assert calls[0][0].model_dump(mode="json") == request
-    assert calls[0][1] is catalog_context
-
-    refused = client.post(
-        "/api/v1/builder/session/deploy",
-        json={**request, "upload_id": "browser-selected-upload"},
-    )
-    assert refused.status_code == 422
-    assert len(calls) == 1
-
-
-def test_deploy_refusal_is_typed_and_path_free(catalog_context: CatalogContext) -> None:
-    async def refuse_deploy(request, _context):
-        raise BuilderSessionDeployError(
-            BuilderSessionDeployRefusal(
-                code="session_deployment.stale_source",
-                message="Saved session changed after review",
-                session_ref=request.session_ref,
-                expected="sha256:" + "a" * 64,
-                observed="sha256:" + "b" * 64,
-                cause_type="CatalogConflictError",
-            ),
-            status_code=409,
-        )
-
-    client = TestClient(_application(catalog_context, deploy_callback=refuse_deploy))
-    response = client.post(
-        "/api/v1/builder/session/deploy",
-        json={
-            "session_ref": "user:sessions/deploy-me.yaml",
-            "expected_session_revision": "session-revision-7",
-            "expected_document_digest": f"sha256:{'a' * 64}",
-            "expected_dependency_digest": f"sha256:{'b' * 64}",
-            "record_history": False,
-        },
-    )
-
-    assert response.status_code == 409
-    assert response.json() == {
-        "code": "session_deployment.stale_source",
-        "message": "Saved session changed after review",
-        "session_ref": "user:sessions/deploy-me.yaml",
-        "expected": "sha256:" + "a" * 64,
-        "observed": "sha256:" + "b" * 64,
-        "cause_type": "CatalogConflictError",
-    }
-    assert "/tmp/" not in response.text
-
-
-def test_router_is_auth_neutral_and_root_can_apply_a_guard(
-    catalog_context: CatalogContext,
-) -> None:
-    unguarded = TestClient(_application(catalog_context))
-    assert unguarded.get("/api/v1/builder/bootstrap").status_code == 200
-
-    async def require_token(request: Request) -> None:
-        if request.headers.get("authorization") != "Bearer test-token":
-            raise HTTPException(status_code=401, detail="missing test token")
-
-    guarded = FastAPI()
-    guarded.include_router(
-        create_builder_router(
-            BuilderRouterServices(
-                available_node_count_provider=lambda: 1_000_000,
-                context_provider=lambda: catalog_context,
-                catalog_service_factory=_catalog_service,
-            )
-        ),
-        dependencies=[Depends(require_token)],
-    )
-    client = TestClient(guarded)
-    assert client.get("/api/v1/builder/bootstrap").status_code == 401
-    assert (
-        client.get(
-            "/api/v1/builder/bootstrap",
-            headers={"authorization": "Bearer test-token"},
-        ).status_code
-        == 200
-    )

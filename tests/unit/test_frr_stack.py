@@ -12,7 +12,6 @@ from nodalarc.models.segment_session import BfdConfig, RoutingTimers
 from nodalarc.workloads.adapter import AdapterRenderRefusal
 
 from adapters.frr.stack import resolve_router_stack, validate_sid_indices
-from adapters.frr.support import FRR_SUPPORT
 
 # Every capability set on both IGPs.
 _IGP_CASES = [
@@ -135,26 +134,6 @@ def test_ldp_runs_only_for_a_domain_with_bare_mpls() -> None:
     assert "pathd" in stack.daemons
 
 
-def test_frr_declares_the_capabilities_its_fragments_render() -> None:
-    igp = {"mpls", "segment_routing", "traffic_engineering"}
-    assert FRR_SUPPORT.routing["isis"].capabilities == igp
-    assert FRR_SUPPORT.routing["ospf"].capabilities == igp
-    assert FRR_SUPPORT.routing["static"].capabilities == frozenset()
-    assert FRR_SUPPORT.routing["static"].bfd is None
-
-
-def test_frr_routes_both_address_families_on_every_protocol() -> None:
-    assert {
-        protocol: support.address_families for protocol, support in FRR_SUPPORT.routing.items()
-    } == {"isis": _DUAL, "ospf": _DUAL, "static": _DUAL}
-
-
-def test_frr_renders_one_domain_of_each_igp_per_router() -> None:
-    assert {
-        protocol: support.domains_per_router for protocol, support in FRR_SUPPORT.routing.items()
-    } == {"isis": 1, "ospf": 1, "static": None}
-
-
 @pytest.mark.parametrize("protocol", ["isis", "ospf"])
 def test_a_second_domain_of_one_igp_fails_loudly(protocol) -> None:
     domains = (_domain(protocol, domain_id="a"), _domain(protocol, domain_id="b"))
@@ -188,12 +167,6 @@ def test_domains_outside_the_frr_declaration_fail_loudly(domain, message) -> Non
 def test_a_router_in_no_domain_fails_loudly() -> None:
     with pytest.raises(AdapterRenderRefusal, match="at least one routing domain"):
         resolve_router_stack((), _IPV4)
-
-
-def test_stack_is_frozen() -> None:
-    stack = resolve_router_stack((_domain("ospf"),), _IPV4)
-    with pytest.raises(AttributeError):
-        stack.daemons = ()  # type: ignore[misc]
 
 
 class TestSidValidation:

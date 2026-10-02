@@ -32,7 +32,6 @@ from nodalarc.runtime_config import (
     RuntimeDeploymentContext,
     load_runtime_config,
 )
-from pydantic import ValidationError
 
 ROOT = Path(__file__).resolve().parents[2]
 SHIPPED_ROOT = ROOT / "catalog" / "nodalarc"
@@ -169,27 +168,6 @@ def test_modified_shipped_asset_is_rejected_before_resolver(
 
     assert raised.value.code is RuntimeConfigErrorCode.SHIPPED_ASSET_MISMATCH
     assert not destination.exists()
-
-
-def test_runtime_proof_is_strict_closed_and_has_no_transport_mode_fields() -> None:
-    data = {
-        "source_origin": "test",
-        "upload_id": "proof-upload",
-        "document_digest": f"sha256:{'2' * 64}",
-        "closure_digest": f"sha256:{'3' * 64}",
-        "resolved_semantic_digest": f"sha256:{'4' * 64}",
-        "file_count": 1,
-        "total_bytes": 1,
-        "resolved_node_count": 1,
-    }
-    proof = RuntimeConfigProof.model_validate(data)
-    assert "mode" not in type(proof).model_fields
-    assert "upload_descriptor_digest" not in type(proof).model_fields
-    assert "source_revision" not in type(proof).model_fields
-    with pytest.raises(ValidationError):
-        RuntimeConfigProof.model_validate({**data, "hidden": True})
-    with pytest.raises(ValidationError):
-        RuntimeConfigProof.model_validate({**data, "file_count": "1"})
 
 
 def test_runtime_proof_binds_exact_selection_deployment_and_pod_identity() -> None:

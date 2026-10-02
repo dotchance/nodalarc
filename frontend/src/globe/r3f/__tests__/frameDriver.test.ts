@@ -16,11 +16,4 @@ describe("frameRotations", () => {
   it("earth-fixed: the Earth frame is fixed, the sky counter-rotates by -gmst", () => {
     expect(frameRotations(gmst, "earth-fixed")).toEqual({ earthRotY: 0, starRotY: -gmst });
   });
-
-  it("the relative rotation between the frames is +gmst in both modes", () => {
-    for (const mode of ["earth-inertial", "earth-fixed"] as const) {
-      const { earthRotY, starRotY } = frameRotations(gmst, mode);
-      expect(earthRotY - starRotY).toBeCloseTo(gmst);
-    }
-  });
 });

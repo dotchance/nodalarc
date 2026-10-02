@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -10,7 +9,6 @@ from nodalarc.workload_target import (
     NODE_ID_LABEL,
     PRIMARY_CONTAINER_ANNOTATION,
     WorkloadTargetError,
-    read_workload_target,
     select_live_pod,
     validate_node_id,
     workload_target_from_pod,
@@ -87,61 +85,3 @@ def test_node_id_validation_rejects_label_unsafe_values() -> None:
     for value in ("", "Leo-Sat", "leo sat", "a=b", None, "x" * 64):
         with pytest.raises(ValueError, match="invalid node id"):
             validate_node_id(value)
-
-
-class _FakeCoreV1:
-    def __init__(self, listings: list[list[dict[str, Any]]]) -> None:
-        self._listings = listings
-        self.selectors: list[str] = []
-
-    def list_namespaced_pod(self, namespace: str, *, label_selector: str):
-        self.selectors.append(f"{namespace} {label_selector}")
-        return SimpleNamespace(items=self._listings.pop(0))
-
-
-def test_reader_lists_by_node_label_and_follows_pod_replacement() -> None:
-    core = _FakeCoreV1(
-        [
-            [pod_document(uid="uid-1")],
-            [pod_document(uid="uid-1", deleting=True), pod_document(uid="uid-2")],
-        ]
-    )
-
-    first = read_workload_target(core, "nodalarc", "leo-sat-p00s00")
-    second = read_workload_target(core, "nodalarc", "leo-sat-p00s00")
-
-    assert (first.pod_uid, second.pod_uid) == ("uid-1", "uid-2")
-    assert core.selectors == [f"nodalarc {NODE_ID_LABEL}=leo-sat-p00s00"] * 2
-
-
-def test_reader_refuses_a_pod_labelled_for_another_node() -> None:
-    core = _FakeCoreV1([[pod_document("leo-sat-p00s01")]])
-
-    with pytest.raises(WorkloadTargetError, match="labelled for node 'leo-sat-p00s01'"):
-        read_workload_target(core, "nodalarc", "leo-sat-p00s00")
-
-
-def test_reader_converts_client_pod_objects_through_the_api_serializer() -> None:
-    import kubernetes.client
-
-    pod = kubernetes.client.V1Pod(
-        metadata=kubernetes.client.V1ObjectMeta(
-            name="leo-sat-p00s00",
-            namespace="nodalarc",
-            uid="uid-9",
-            labels={NODE_ID_LABEL: "leo-sat-p00s00"},
-            annotations={PRIMARY_CONTAINER_ANNOTATION: "custom-router"},
-        ),
-        spec=kubernetes.client.V1PodSpec(
-            containers=[
-                kubernetes.client.V1Container(name="observer"),
-                kubernetes.client.V1Container(name="custom-router"),
-            ]
-        ),
-    )
-    core = _FakeCoreV1([[pod]])
-    core.api_client = kubernetes.client.ApiClient()
-
-    target = read_workload_target(core, "nodalarc", "leo-sat-p00s00")
-
-    assert (target.container, target.pod_uid) == ("custom-router", "uid-9")

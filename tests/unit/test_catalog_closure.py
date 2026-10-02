@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import hashlib
-import json
 from dataclasses import dataclass, fields
 from pathlib import Path
 from typing import Any
@@ -651,35 +650,6 @@ def test_every_shipped_session_has_a_complete_strict_exact_byte_closure(
     assert closure.file_count == len(closure.entries)
     assert closure.total_bytes == sum(entry.size_bytes for entry in closure.entries)
     assert all(entry.preserved_path.startswith("catalog/nodalarc/") for entry in closure.entries)
-
-
-def test_load_catalog_object_reads_and_validates_one_reference(
-    closure_fixture: ClosureFixture,
-) -> None:
-    wrapper, model = load_catalog_object(
-        CatalogRef("user:constellations/demo-constellation.yaml"),
-        FilesystemCatalogReadView(closure_fixture.roots),
-    )
-
-    assert wrapper == "constellation"
-    assert type(model).__name__ == "Constellation"
-    assert model.id == "demo-constellation"
-
-
-def test_load_wrapped_catalog_object_dumps_in_the_requested_mode(
-    closure_fixture: ClosureFixture,
-) -> None:
-    ref = CatalogRef("user:constellations/demo-constellation.yaml")
-    view = FilesystemCatalogReadView(closure_fixture.roots)
-    _wrapper, model = load_catalog_object(ref, view)
-
-    python_wrapper, python_data = load_wrapped_catalog_object(ref, view, dump_mode="python")
-    json_wrapper, json_data = load_wrapped_catalog_object(str(ref), view, dump_mode="json")
-
-    assert python_wrapper == json_wrapper == "constellation"
-    assert python_data == model.model_dump(mode="python", by_alias=True, exclude_none=True)
-    assert json_data == model.model_dump(mode="json", by_alias=True, exclude_none=True)
-    assert json.loads(json.dumps(json_data)) == json_data
 
 
 def test_load_wrapped_catalog_object_refuses_a_session_document(

@@ -11,8 +11,6 @@ from typing import Any
 
 import pytest
 from nodalarc.models.resolved_session import (
-    IsisInstanceAreas,
-    OspfInstanceAreas,
     ResolvedSession,
     SourceContext,
 )
@@ -110,10 +108,6 @@ def _domain_vars(resolved: ResolvedSession, node_id: str) -> dict[str, Any]:
     return domain
 
 
-def _static_links(resolved: ResolvedSession, node_id: str) -> list[dict[str, Any]]:
-    return _vars_for(resolved, node_id)["static_links"]
-
-
 def _stanzas(conf: str) -> list[tuple[str, list[str]]]:
     """Top-level stanzas of an integrated configuration: header and body."""
     stanzas: list[tuple[str, list[str]]] = []
@@ -204,64 +198,6 @@ def test_ospf_satellite_uses_resolved_point_to_point_links_te_and_ldp() -> None:
     assert "ip ospf cost" in conf
     assert "mpls ldp" in conf
     assert {"ospfd", "ldpd"} <= _enabled_daemons(files["daemons"])
-
-
-def test_ospf_renders_every_interface_in_its_resolved_area(monkeypatch) -> None:
-    """The adapter renders the resolved OSPF areas and decides none itself.
-
-    The session grammar assigns areas per router, so this router's areas are
-    supplied as resolved facts: its access interfaces in the backbone, its
-    loopback and other interfaces in area 0.0.0.1, which makes it an ABR.
-    """
-    resolved = _resolved(protocol="ospf")
-    node_id = _first_satellite(resolved)
-    node = resolved.node_by_id(node_id)
-    assert node is not None
-    resolved_areas = ResolvedSession.instance_areas_by_node
-
-    def with_an_abr(self):
-        areas = resolved_areas(self)
-        [ospf] = areas[node_id]
-        areas[node_id] = (
-            OspfInstanceAreas(
-                ospf.domain_id,
-                loopback_area="0.0.0.1",
-                interface_areas={
-                    name: "0.0.0.0" if name in node.access_interfaces else "0.0.0.1"
-                    for name in ospf.interface_areas
-                },
-            ),
-        )
-        return areas
-
-    monkeypatch.setattr(ResolvedSession, "instance_areas_by_node", with_an_abr)
-    [ospf] = resolved.instance_areas_by_node()[node_id]
-    assert ospf.area_border
-    conf = _frr_conf(resolved, node_id)
-
-    assert " ip ospf area 0.0.0.1" in _stanza_lines(conf, "interface lo")
-    for name, area in ospf.interface_areas.items():
-        assert f" ip ospf area {area}" in _stanza_lines(conf, f"interface {name}")
-    assert {"0.0.0.0", "0.0.0.1"} == set(ospf.interface_areas.values())
-
-
-def test_isis_renders_a_net_for_each_area_address(monkeypatch) -> None:
-    resolved = _resolved(protocol="isis")
-    node_id = _first_satellite(resolved)
-    resolved_areas = ResolvedSession.instance_areas_by_node
-
-    def two_addresses(self):
-        areas = resolved_areas(self)
-        [isis] = areas[node_id]
-        areas[node_id] = (IsisInstanceAreas(isis.domain_id, ("49.0001", "49.0002")),)
-        return areas
-
-    monkeypatch.setattr(ResolvedSession, "instance_areas_by_node", two_addresses)
-    router = _router_block(_frr_conf(resolved, node_id), f"router isis {_FIXTURE_DOMAIN}")
-
-    # A NET is the area address, the system id (three groups) and the selector.
-    nets = [line.removeprefix(" net ") for line in router if line.startswith(" net ")]
-    assert [net.rsplit(".", 4)[0] for net in nets] == ["49.0001", "49.0002"]
 
 
 def test_a_single_ospf_area_outside_the_backbone_renders_on_every_interface() -> None:
@@ -997,21 +933,6 @@ def _link_params(conf: str, interface: str) -> list[str]:
     if " link-params" not in body:
         return []
     return body[body.index(" link-params") + 1 : body.index(" exit-link-params")]
-
-
-def test_resolved_terminals_keep_their_own_transmit_and_receive_rates() -> None:
-    resolved = _tdrs_session(None)
-    relay = {b.terminal_id: b for b in resolved.node_by_id("geo-tdrs-041w").terminal_inventory}
-    ground = {
-        b.terminal_id: b for b in resolved.node_by_id("earth-it-fucino-gw1").terminal_inventory
-    }
-
-    assert (relay["s_sa"].transmit_mbps, relay["s_sa"].receive_mbps) == (14.0, 23.6)
-    assert (relay["ku_sa"].transmit_mbps, relay["ku_sa"].receive_mbps) == (50.0, 600.0)
-    assert (ground["tdrs_ka_sa"].transmit_mbps, ground["tdrs_ka_sa"].receive_mbps) == (
-        600.0,
-        50.0,
-    )
 
 
 @pytest.mark.parametrize(

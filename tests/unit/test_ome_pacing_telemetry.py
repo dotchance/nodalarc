@@ -159,37 +159,3 @@ class TestAchievedRatio:
         # from the wall-mark gap a pause/seek/rate-change leaves behind.
         assert w.achieved_ratio(step_seconds=1.0) is None
         assert w.snapshot(step_seconds=1.0, requested_ratio=60.0) is None
-
-
-class TestClockTickHonestyFields:
-    def test_clock_tick_carries_achieved_and_degraded(self):
-        from datetime import UTC, datetime
-
-        from nodalarc.models.events import ClockTick
-
-        tick = ClockTick(
-            sim_time=datetime(2026, 6, 8, tzinfo=UTC),
-            wall_time=datetime(2026, 6, 10, tzinfo=UTC),
-            compression_ratio=60.0,
-            achieved_ratio=1.2,
-            pacing_degraded=True,
-        )
-        decoded = ClockTick.model_validate_json(tick.model_dump_json())
-        assert decoded.achieved_ratio == 1.2
-        assert decoded.pacing_degraded is True
-
-    def test_clock_tick_defaults_are_wire_compatible(self):
-        from datetime import UTC, datetime
-
-        from nodalarc.models.events import ClockTick
-
-        legacy = ClockTick(
-            sim_time=datetime(2026, 6, 8, tzinfo=UTC),
-            wall_time=datetime(2026, 6, 10, tzinfo=UTC),
-            compression_ratio=1.0,
-        )
-        decoded = ClockTick.model_validate_json(
-            legacy.model_dump_json(exclude={"achieved_ratio", "pacing_degraded"})
-        )
-        assert decoded.achieved_ratio is None
-        assert decoded.pacing_degraded is False

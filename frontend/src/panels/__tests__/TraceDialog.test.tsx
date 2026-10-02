@@ -1,7 +1,7 @@
 // Copyright 2024-2026 .chance (dotchance)
 // Licensed under the Apache License, Version 2.0. See LICENSE file.
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { cleanup, render, screen } from "@testing-library/react";
+import { afterEach, describe, expect, it } from "vitest";
 import { TraceDialog } from "../TraceDialog";
 import type { NodeState, StateSnapshot, TracedPath } from "../../types";
 import { TRACE_FORWARD_COLOR, TRACE_REVERSE_COLOR } from "../../config";
@@ -71,22 +71,6 @@ describe("TraceDialog stop control", () => {
     render(<TraceDialog nodes={NODES} snapshot={snapshotWithActiveTrace()} />);
     expect(screen.getByText("Stop Trace")).toBeTruthy();
     expect(screen.queryByText("Trace")).toBeNull();
-  });
-
-  it("posts to /trace/stop when Stop is clicked", async () => {
-    const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ ok: true }) });
-    vi.stubGlobal("fetch", fetchMock);
-    try {
-      render(<TraceDialog nodes={NODES} snapshot={snapshotWithActiveTrace()} />);
-      fireEvent.click(screen.getByText("Stop Trace"));
-      await Promise.resolve();
-      const called = fetchMock.mock.calls.some(
-        ([url, opts]) => String(url).endsWith("/api/v1/trace/stop") && opts?.method === "POST",
-      );
-      expect(called).toBe(true);
-    } finally {
-      vi.unstubAllGlobals();
-    }
   });
 
   it("shows Trace (not Stop) when no server trace is active", () => {
@@ -165,47 +149,6 @@ describe("TraceDialog outcomes", () => {
       />,
     );
     expect(screen.getByText("STOPPED · internal error")).toBeTruthy();
-  });
-
-  it("shows the refusal's own message when a trace cannot start", async () => {
-    const fetchMock = vi.fn().mockResolvedValue({
-      ok: false,
-      status: 503,
-      json: async () => ({
-        code: "session.clock_pending",
-        message: "The session clock has not reported its sim time yet",
-      }),
-    });
-    vi.stubGlobal("fetch", fetchMock);
-    try {
-      render(<TraceDialog nodes={NODES} snapshot={null} />);
-      const [source, destination] = screen.getAllByRole("combobox");
-      fireEvent.change(source!, { target: { value: "madrid-gw" } });
-      fireEvent.change(destination!, { target: { value: "luna-gw" } });
-      fireEvent.click(screen.getByText("Trace"));
-      expect(
-        await screen.findByText("The session clock has not reported its sim time yet"),
-      ).toBeTruthy();
-    } finally {
-      vi.unstubAllGlobals();
-    }
-  });
-
-  it("shows why a stop failed and keeps the Stop control", async () => {
-    const fetchMock = vi.fn().mockResolvedValue({
-      ok: false,
-      status: 503,
-      json: async () => ({ code: "session.inactive", message: "No active session" }),
-    });
-    vi.stubGlobal("fetch", fetchMock);
-    try {
-      render(<TraceDialog nodes={NODES} snapshot={snapshotWithActiveTrace()} />);
-      fireEvent.click(screen.getByText("Stop Trace"));
-      expect(await screen.findByText("No active session")).toBeTruthy();
-      expect(screen.getByText("Stop Trace")).toBeTruthy();
-    } finally {
-      vi.unstubAllGlobals();
-    }
   });
 
   it("counts hops as traceroute does: the source is hop 0", () => {

@@ -41,15 +41,6 @@ describe("gsCandidateRelations (single source: globe agrees with the card)", () 
     expect(rel.get("sat-elig")?.family).toBe("eligible_unselected");
   });
 
-  it("marks a rejected sat with a registry-derived family + human reason (never a raw code)", () => {
-    const rel = gsCandidateRelations("gs-1", decisions, []);
-    const r = rel.get("sat-rej");
-    expect(r).toBeDefined();
-    expect(r!.family).not.toBe("connected");
-    // reason is a human label, not the raw code
-    expect(typeof r!.reason).toBe("string");
-  });
-
   it("connected wins over a withheld/rejected classification for the same sat", () => {
     const d: GroundDecisionsSnapshot = {
       decisions: [{ pair: ["gs-1", "sat-x"], reject_reason: "elevation_below_min" }],

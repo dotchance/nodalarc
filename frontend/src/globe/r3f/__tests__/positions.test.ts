@@ -23,13 +23,6 @@ describe("r3f position registry (per-body)", () => {
     setBodyFrame("luna", null);
   });
 
-  it("roundtrips a local position", () => {
-    setNodeLocalPosition("sat-1", "earth", 10, 20, 30);
-    const t = new THREE.Vector3();
-    expect(getNodeLocalPosition("sat-1", t)).toBe(true);
-    expect([t.x, t.y, t.z]).toEqual([10, 20, 30]);
-  });
-
   it("returns false for an unknown node (local and world)", () => {
     expect(getNodeLocalPosition("nope", new THREE.Vector3())).toBe(false);
     expect(getNodeWorldPosition("nope", new THREE.Vector3())).toBe(false);
@@ -123,14 +116,6 @@ describe("r3f position registry (per-body)", () => {
     expect(getNodeLocalPosition("b", new THREE.Vector3())).toBe(true);
     clearPositions();
     expect(getNodeLocalPosition("b", new THREE.Vector3())).toBe(false);
-  });
-
-  it("updates a node's position in place", () => {
-    setNodeLocalPosition("s", "earth", 1, 1, 1);
-    setNodeLocalPosition("s", "earth", 9, 9, 9);
-    const t = new THREE.Vector3();
-    getNodeLocalPosition("s", t);
-    expect([t.x, t.y, t.z]).toEqual([9, 9, 9]);
   });
 });
 

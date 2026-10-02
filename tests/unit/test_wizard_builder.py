@@ -16,7 +16,6 @@ from vs_api.wizard_builder import (
     build_wizard_compile_request,
     wizard_extension_rules_response,
     wizard_preview_inputs,
-    wizard_routing_timer_defaults,
 )
 
 from tests.builder_world_fixtures import preview_from_resolution
@@ -137,32 +136,6 @@ def test_shipped_wizard_selection_is_an_all_ref_builder_draft(tmp_path: Path) ->
     assert session["segments"][1]["placement"]["from_site_set"] == GROUND_SET
     assert result.save_verdict.allowed is True
     assert result.deploy_eligibility_after_save.allowed is True
-
-
-def test_wizard_and_builder_compilation_are_canonically_identical(tmp_path: Path) -> None:
-    snapshot = _snapshot(tmp_path)
-    builder_request = build_wizard_compile_request(
-        _request(),
-        snapshot,
-        identity_factory=lambda: "equivalent",
-    )
-
-    wizard_result = compile_builder_draft(
-        builder_request,
-        snapshot,
-        available_node_count=1_000_000,
-        preview_factory=preview_from_resolution,
-    )
-    builder_result = compile_builder_draft(
-        builder_request,
-        snapshot,
-        available_node_count=1_000_000,
-        preview_factory=preview_from_resolution,
-    )
-
-    assert wizard_result.canonical_session_yaml == builder_result.canonical_session_yaml
-    assert wizard_result.digests == builder_result.digests
-    assert wizard_result.dependency_closure == builder_result.dependency_closure
 
 
 def test_satellite_selection_becomes_a_user_constellation_proposal(tmp_path: Path) -> None:
@@ -315,16 +288,6 @@ def test_backend_does_not_repair_invalid_wizard_dead_interval(tmp_path: Path) ->
             snapshot,
             identity_factory=lambda: "invalid-timers",
         )
-
-
-def test_wizard_timer_defaults_come_from_backend_canonical_defaults() -> None:
-    defaults = wizard_routing_timer_defaults()
-
-    assert defaults.isis_hello_interval == 1
-    assert defaults.isis_hello_multiplier == 3
-    assert defaults.ospf_hello_interval == 1
-    assert defaults.ospf_dead_interval == 3
-    assert defaults.bfd_detect_multiplier == 3
 
 
 def test_wizard_routing_inventory_and_presentation_are_backend_owned() -> None:

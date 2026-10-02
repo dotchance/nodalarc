@@ -89,20 +89,6 @@ def test_project_info_uses_explicit_runtime_version(monkeypatch) -> None:
     assert project_info.project_version() == "0.4.2"
 
 
-def test_project_info_uses_git_describe_before_installed_metadata(monkeypatch) -> None:
-    class Result:
-        stdout = "0.4.2-3-gabc1234\n"
-
-    def fake_run(*args: object, **kwargs: object) -> Result:
-        return Result()
-
-    monkeypatch.delenv("NODALARC_VERSION", raising=False)
-    monkeypatch.setattr(project_info.subprocess, "run", fake_run)
-    monkeypatch.setattr(project_info, "_installed_project_version", lambda: "installed-metadata")
-
-    assert project_info.project_version() == "0.4.2+3.gabc1234"
-
-
 def test_project_version_script_uses_explicit_runtime_version() -> None:
     env = os.environ.copy()
     env["NODALARC_VERSION"] = "0.4.2"

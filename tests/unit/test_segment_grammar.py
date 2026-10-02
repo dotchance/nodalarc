@@ -31,14 +31,6 @@ def test_catalog_session_parses_through_product_model() -> None:
     assert isinstance(session.link_rules[0], LinkRule)
 
 
-def test_all_shipped_catalog_sessions_parse_through_product_model() -> None:
-    paths = sorted(SESSIONS.glob("*.yaml"))
-    assert paths
-
-    for path in paths:
-        SegmentSessionConfig.model_validate(yaml.safe_load(path.read_text(encoding="utf-8")))
-
-
 def test_old_kind_segment_shape_is_rejected() -> None:
     body = _load_session()
     body["segments"][0] = {

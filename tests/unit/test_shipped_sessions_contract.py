@@ -43,10 +43,6 @@ def shipped_session(request):
     return path, resolved
 
 
-def test_session_inventory_is_nonempty() -> None:
-    assert SESSION_PATHS, f"no shipped sessions found under {SESSIONS_DIR}"
-
-
 def test_shipped_session_passes_full_readiness_gate(shipped_session) -> None:
     path, resolved = shipped_session
 

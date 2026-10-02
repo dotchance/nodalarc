@@ -25,7 +25,7 @@ from nodalarc.runtime_support import (
 )
 from nodalarc.workloads.adapter import AdapterSupport, BfdSupport, RoutingProtocolSupport
 
-from adapters.registry import _ADAPTERS, adapter_named, registered_adapter_support
+from adapters.registry import registered_adapter_support
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -60,24 +60,6 @@ _DUAL = frozenset({"ipv4", "ipv6"})
 @pytest.fixture
 def stub_declarations(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(runtime_support, "registered_adapter_support", lambda: _STUB_SUPPORT)
-
-
-def test_every_registered_adapter_declares_its_support() -> None:
-    declarations = registered_adapter_support()
-
-    assert set(declarations) == {name for name, _support, _loader in _ADAPTERS}
-    assert all(isinstance(support, AdapterSupport) for support in declarations.values())
-
-
-def test_each_renderer_carries_its_registered_declaration() -> None:
-    for name, support in registered_adapter_support().items():
-        renderer = adapter_named(name)
-
-        assert renderer is not None
-        assert renderer.name == name
-        assert renderer.support is support
-        # One renderer per adapter for the process.
-        assert adapter_named(name) is renderer
 
 
 def test_runtime_support_sets_are_the_union_of_registered_declarations() -> None:

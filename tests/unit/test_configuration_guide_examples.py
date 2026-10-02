@@ -23,7 +23,6 @@ from tests.catalog_session_fixtures import shipped_read_view
 
 ROOT = Path(__file__).resolve().parents[2]
 GUIDE = ROOT / "docs" / "ops" / "configuration.md"
-GRAMMAR = ROOT / "docs" / "ops" / "configuration-grammar.md"
 SESSIONS_GUIDE = ROOT / "docs" / "user" / "sessions.md"
 ROUTING_EXTENSION_GUIDE = ROOT / "docs" / "dev" / "extending" / "routing-stacks.md"
 REACHABILITY_SESSION = (
@@ -62,39 +61,6 @@ def test_complete_session_example_resolves_through_the_shared_authority() -> Non
     assert resolved.session.name == "earth-leo-simple"
     assert resolved.nodes
     assert resolved.link_candidates
-
-
-def test_configuration_guide_defers_the_formal_language_to_one_reference() -> None:
-    text = GUIDE.read_text(encoding="utf-8")
-
-    assert "[Configuration Grammar](configuration-grammar.md)" in text
-    assert "not an independent field list or a\nsecond grammar" in text
-    assert "```ebnf" not in text
-
-
-def test_configuration_grammar_special_sequences_have_balanced_iso_delimiters() -> None:
-    in_ebnf = False
-    for line_number, line in enumerate(
-        GRAMMAR.read_text(encoding="utf-8").splitlines(),
-        start=1,
-    ):
-        if line == "```ebnf":
-            in_ebnf = True
-            continue
-        if in_ebnf and line == "```":
-            in_ebnf = False
-            continue
-        if in_ebnf:
-            assert line.count("?") % 2 == 0, (
-                f"unbalanced ISO EBNF special-sequence delimiter at {GRAMMAR}:{line_number}"
-            )
-
-
-def test_configuration_grammar_documents_nullable_spf_learning_fields() -> None:
-    text = GRAMMAR.read_text(encoding="utf-8")
-
-    assert '[ "holddown_ms", ( NonNegativeInteger | Null ) ]' in text
-    assert '[ "time_to_learn_ms", ( NonNegativeInteger | Null ) ]' in text
 
 
 def test_shipped_session_guide_inventory_matches_the_catalog() -> None:

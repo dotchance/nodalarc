@@ -15,9 +15,36 @@ from nodalarc.substrate.wiring_status import (
 )
 from pydantic import ValidationError
 
-from tests.unit.test_scheduler_wiring_gate import _manifest_dict
-
 FIRST, SECOND = REQUIRED_WIRING_PHASES[0], REQUIRED_WIRING_PHASES[1]
+SESSION_ID = "test-session"
+WIRING_GENERATION = "sha256:" + "a" * 64
+
+
+def _manifest_dict() -> dict:
+    return {
+        "session_id": SESSION_ID,
+        "session_run_id": "run-gate-0001",
+        "owner_uid": "owner-uid-1",
+        "wiring_generation": WIRING_GENERATION,
+        "required_phases": list(REQUIRED_WIRING_PHASES),
+        "nodes": {
+            "sat-a": {
+                "node_type": "satellite",
+                "host": "node02",
+                "sysctls": {"net.ipv4.ip_forward": "1"},
+                "isl_interfaces": [],
+                "gnd_interfaces": [],
+                "mpls_enable": True,
+                "remove_default_route": True,
+                "plane": 0,
+                "slot": 0,
+            }
+        },
+        "ground_bridges": {},
+        "site_lans": {},
+        "required_substrate_pairs": [],
+        "isl_link_count": 0,
+    }
 
 
 def _manifest() -> WiringManifest:

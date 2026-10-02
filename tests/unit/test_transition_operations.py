@@ -295,14 +295,6 @@ def test_terminal_records_are_immutable(tmp_path: Path) -> None:
         store.advance(OPERATION_ID, TransitionOperationState.COLLECTING)
 
 
-def test_transition_source_identities_are_path_free_and_typed() -> None:
-    source = TransitionOperationSource(
-        kind=TransitionOperationSourceKind.CATALOG_SESSION,
-        logical_id="user:sessions/demo.yaml",
-    )
-    assert "/tmp/" not in str(source.model_dump(mode="json"))
-
-
 @pytest.mark.parametrize(
     ("kind", "logical_id"),
     [

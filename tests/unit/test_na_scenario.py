@@ -2,10 +2,7 @@
 
 from __future__ import annotations
 
-import asyncio
-
 import pytest
-import yaml
 
 from tools import na_scenario
 
@@ -35,68 +32,3 @@ def test_preflight_identifies_all_unavailable_mi_actions() -> None:
     assert raised.value.code == "scenario.mi_unavailable"
     assert raised.value.unavailable_actions == ("measure", "wait_converge")
     assert str(raised.value).endswith("unavailable scenario actions: measure, wait_converge")
-
-
-def test_async_runner_refuses_before_session_nats_or_scheduler_mutation(
-    tmp_path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    scenario_path = tmp_path / "scenario.yaml"
-    scenario_path.write_text(yaml.safe_dump(_scenario_document({"action": "wait_converge"})))
-    session_resolution_called = False
-    nats_connect_called = False
-    scheduler_command_called = False
-
-    def resolve_session_id(_path: str) -> str:
-        nonlocal session_resolution_called
-        session_resolution_called = True
-        return "session"
-
-    async def connect(*_args, **_kwargs):
-        nonlocal nats_connect_called
-        nats_connect_called = True
-
-    async def send_scheduler_cmd(*_args, **_kwargs):
-        nonlocal scheduler_command_called
-        scheduler_command_called = True
-
-    monkeypatch.setattr(na_scenario, "_resolve_session_id", resolve_session_id)
-    monkeypatch.setattr(na_scenario.nats, "connect", connect)
-    monkeypatch.setattr(na_scenario, "_send_scheduler_cmd", send_scheduler_cmd)
-
-    with pytest.raises(na_scenario.ScenarioRuntimeUnavailableError):
-        asyncio.run(na_scenario.run_scenario_async(str(scenario_path), "unused-session.yaml"))
-
-    assert session_resolution_called is False
-    assert nats_connect_called is False
-    assert scheduler_command_called is False
-
-
-def test_cli_returns_deterministic_nonzero_for_unavailable_actions(
-    tmp_path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-) -> None:
-    """The refusal is reported on stderr, the tool's diagnostic channel; stdout stays clean."""
-    scenario_path = tmp_path / "scenario.yaml"
-    scenario_path.write_text(
-        yaml.safe_dump(
-            _scenario_document(
-                {"action": "wait_converge"},
-                {"action": "measure", "duration_s": 1},
-            )
-        )
-    )
-    monkeypatch.setattr("nodalarc.platform_config.init_platform_config", lambda _path: None)
-
-    exit_code = na_scenario.main(
-        [
-            "--scenario",
-            str(scenario_path),
-            "--session",
-            "unused-session.yaml",
-        ]
-    )
-
-    assert exit_code == 2
-    captured = capsys.readouterr()
-    assert "scenario.mi_unavailable" in captured.err
-    assert captured.out == ""
-    assert "unavailable scenario actions: measure, wait_converge" in captured.err

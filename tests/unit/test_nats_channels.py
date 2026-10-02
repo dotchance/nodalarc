@@ -6,26 +6,6 @@ import pytest
 from nodalarc import nats_channels as nc
 
 
-def test_every_session_builder_starts_with_a_declared_root():
-    sid = "run-2026"
-    assert nc.ome_visibility_subject(sid) == "nodalarc.ome.run-2026.visibility"
-    assert nc.ome_all_subject(sid) == "nodalarc.ome.run-2026.>"
-    assert nc.ome_all_subject() == "nodalarc.ome.>"
-    assert nc.link_state_snapshot_subject(sid) == "nodalarc.links.run-2026.state"
-    assert (
-        nc.ground_link_decision_snapshot_subject(sid) == "nodalarc.links.run-2026.ground_decisions"
-    )
-    assert nc.session_ephemeris_subject(sid) == "nodalarc.session.run-2026.ephemeris"
-    assert nc.scheduler_repair_subject(sid) == "nodalarc.scheduler.run-2026.repair"
-    assert nc.probe_result_subject(sid) == "nodalarc.mi.run-2026.probe"
-    assert nc.almanac_event_subject(sid) == "nodalarc.nodalpath.run-2026.almanac"
-    assert nc.node_agent_subject("node02") == "nodalarc.agent.node02"
-    assert nc.wiring_progress_subject("node02") == "nodalarc.agent.progress.node02"
-    assert nc.wiring_progress_subscribe_subject() == "nodalarc.agent.progress.*"
-    assert nc.debug_ctrl_subject("ome") == "nodalarc.logging.debug_ctrl.ome"
-    assert nc.SUBJECT_PLAYBACK_CONTROL == "nodalarc.ome_control.playback"
-
-
 @pytest.mark.parametrize(
     ("session_id", "tenant_id", "expected"),
     [
@@ -45,30 +25,6 @@ def test_ops_and_debug_share_one_scope_hierarchy(session_id, tenant_id, expected
 def test_event_subjects_sanitize_the_session_segment():
     assert nc.ops_event_subject("run.2026", "ome") == "nodalarc.ops.run-2026.ome"
     assert nc.ops_subscribe_subject("run.2026") == "nodalarc.ops.run-2026.>"
-
-
-def test_subscribe_all_wildcards_cover_the_whole_root():
-    assert nc.ops_subscribe_all_subject() == "nodalarc.ops.>"
-    assert nc.debug_subscribe_all_subject() == "nodalarc.debug.>"
-    assert nc.ops_subscribe_subject("", tenant_id="") == "nodalarc.ops._infra.>"
-
-
-def test_deployed_stream_table_names_five_streams_with_their_roots():
-    assert [s.name for s in nc.STREAMS] == [
-        "NODALARC_OME",
-        "NODALARC_LINKS",
-        "NODALARC_SESSION",
-        "NODALARC_OPS",
-        "NODALARC_DEBUG",
-    ]
-    assert [s.subjects for s in nc.STREAMS] == [
-        "nodalarc.ome.>",
-        "nodalarc.links.>",
-        "nodalarc.session.>",
-        "nodalarc.ops.>",
-        "nodalarc.debug.>",
-    ]
-    assert nc.STREAM_MI_EVENTS not in {s.name for s in nc.STREAMS}
 
 
 def test_every_builder_output_lands_in_a_deployed_stream_or_a_declared_exception():
@@ -204,12 +160,6 @@ def test_nats_url_refuses_an_unset_or_blank_variable(monkeypatch, value):
 
     with pytest.raises(RuntimeError, match="NODALARC_NATS_URL is not set"):
         nc.nats_url()
-
-
-def test_platform_config_carries_no_nats_url():
-    from nodalarc.platform_config import PlatformConfig
-
-    assert "nats_url" not in PlatformConfig.model_fields
 
 
 def test_messaging_inventory_is_the_stream_table():

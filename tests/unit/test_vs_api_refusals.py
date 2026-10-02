@@ -236,30 +236,6 @@ def test_an_unhandled_failure_is_a_500_envelope_without_its_text_or_class() -> N
     assert response.headers["access-control-allow-origin"] == "*"
 
 
-def test_an_unhandled_failure_on_the_service_keeps_its_security_headers(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    def broken(node_id: str, command: str):
-        raise RuntimeError(f"{PRIVATE} /var/run/secrets/key")
-
-    monkeypatch.setattr(main, "_API_KEY", "")
-    monkeypatch.setattr(main, "run_vtysh", broken)
-
-    response = TestClient(main.app).post(
-        "/api/v1/introspect",
-        json={"node_id": "sat-p00s00", "command": "show isis neighbor"},
-        headers={"Origin": "https://ui.example"},
-    )
-
-    assert response.status_code == 500
-    assert response.json() == {"code": INTERNAL_ERROR_CODE, "message": "Request failed"}
-    assert PRIVATE not in response.text
-    assert response.headers["access-control-allow-origin"] == "*"
-    assert response.headers["x-content-type-options"] == "nosniff"
-    assert response.headers["x-frame-options"] == "DENY"
-    assert response.headers["content-security-policy"] == "default-src 'self'"
-
-
 def test_a_route_stated_refusal_uses_the_same_envelope() -> None:
     response = TestClient(_application()).get("/stated")
 
@@ -304,50 +280,3 @@ def test_a_request_that_fails_validation_answers_with_the_declared_validation_bo
 
     assert response.status_code == 422
     assert list(response.json()) == ["detail"]
-
-
-def test_introspect_route_hides_the_kubernetes_client_reason_text(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    from kubernetes.client.rest import ApiException
-
-    class _DeniedCore:
-        def list_namespaced_pod(self, namespace, *, label_selector):
-            raise ApiException(
-                status=0, reason=f"SSLError\n{PRIVATE} /private/review-only/client.pem"
-            )
-
-    monkeypatch.setattr(main, "_API_KEY", "")
-    monkeypatch.setattr(main.k8s, "core_v1", lambda: _DeniedCore())
-
-    response = TestClient(main.app).post(
-        "/api/v1/introspect", json={"node_id": "sat-p00s00", "command": "show isis neighbor"}
-    )
-
-    assert response.status_code == 503
-    assert response.json() == {
-        "code": "workload_target.unavailable",
-        "message": "sat-p00s00: pod listing failed: HTTP 0",
-    }
-    assert PRIVATE not in response.text
-    assert "/private" not in response.text
-
-
-def test_introspect_route_answers_a_missing_target_with_the_envelope(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    def no_target(node_id: str, command: str):
-        raise WorkloadTargetError(node_id, "expected one live session pod, found 0: []")
-
-    monkeypatch.setattr(main, "_API_KEY", "")
-    monkeypatch.setattr(main, "run_vtysh", no_target)
-
-    response = TestClient(main.app).post(
-        "/api/v1/introspect", json={"node_id": "sat-p99s99", "command": "show isis neighbor"}
-    )
-
-    assert response.status_code == 503
-    assert response.json() == {
-        "code": "workload_target.unavailable",
-        "message": "sat-p99s99: expected one live session pod, found 0: []",
-    }

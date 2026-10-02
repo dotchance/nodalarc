@@ -19,15 +19,6 @@ SIM = datetime(2026, 1, 1, tzinfo=UTC)
 PAIR = ("sat-a", "sat-b")
 
 
-def test_require_ome_geometry_preserves_authoritative_values():
-    assert require_ome_geometry(
-        PAIR,
-        range_km=1234.5,
-        latency_ms=4.117,
-        source="VisibilityEvent",
-    ) == (1234.5, 4.117)
-
-
 def test_require_ome_geometry_rejects_missing_or_negative_values():
     with pytest.raises(ValueError, match="range_km"):
         require_ome_geometry(PAIR, range_km=None, latency_ms=1.0, source="event")

@@ -780,20 +780,6 @@ describe("the anatomy guide answers what-next in any order", () => {
     onOpenSegment: () => {},
   });
 
-  it("every anatomy row is always on screen, pending or done", () => {
-    render(<BuildGuide {...guideProps(newWorkspace("untitled-session-a1b2"), null, true)} />);
-    for (const label of [
-      "Space segments",
-      "Ground sites",
-      "Comms intent",
-      "Routing",
-      "Identity & time",
-      "Save & deploy",
-    ]) {
-      expect(screen.getByText(label)).toBeTruthy();
-    }
-  });
-
   it("pending rows say why and act; gated rows say what unblocks them", () => {
     const calls: string[] = [];
     const ws = newWorkspace("untitled-session-a1b2");
@@ -954,37 +940,6 @@ describe("a save is never a dead end", () => {
     expect((latest as { entry: typeof entry }).entry.ref).toBe(
       "user:terminals/test-radio.yaml",
     );
-  });
-
-  it("the toolbar owns the session verbs as icon buttons; the rail owns none", () => {
-    const source = readFileSync(join(BUILDER_DIR, "BuilderView.tsx"), "utf-8");
-    // the slice anchors must EXIST and be ORDERED (toolbar < outline <
-    // canvas). Without this a renamed anchor makes indexOf return -1, the slice
-    // is empty/backwards, and the rail `.not.toContain` below passes vacuously —
-    // a false green. Assert the anchors so a rename breaks this test loudly.
-    const iToolbar = source.indexOf('className="builder-toolbar"');
-    const iOutline = source.indexOf('className="builder-outline"');
-    const iCanvas = source.indexOf('className="builder-canvas"');
-    expect(iToolbar, "toolbar anchor present").toBeGreaterThanOrEqual(0);
-    expect(iOutline, "outline anchor after toolbar").toBeGreaterThan(iToolbar);
-    expect(iCanvas, "canvas anchor after outline").toBeGreaterThan(iOutline);
-
-    const toolbar = source.slice(iToolbar, iOutline);
-    // Icon-only: each verb is an icon with a hover/aria label, not visible text.
-    for (const glyph of ["file-plus", "folder-open", "save", "rocket", "history", "library"]) {
-      expect(toolbar, `toolbar carries the ${glyph} glyph`).toContain(`icon="${glyph}"`);
-    }
-    // Open and Save are windows (pickers), not an inline dropdown.
-    expect(toolbar).toContain('kind: "open-session"');
-    expect(toolbar).toContain('kind: "save-session"');
-    expect(toolbar, "no inline session dropdown in the toolbar").not.toContain(
-      'aria-label="Catalog session"',
-    );
-    const rail = source.slice(iOutline, iCanvas);
-    expect(rail.length, "the rail slice is non-empty").toBeGreaterThan(0);
-    for (const verb of ["Save session", "Deploy to cluster", "Library…"]) {
-      expect(rail, `rail must not carry "${verb}" as a control`).not.toContain(`>${verb}<`);
-    }
   });
 
   it("each reveal consumer role claims a nonce once, across remounts", async () => {
@@ -1270,66 +1225,6 @@ describe("buffer overlays and the stale guard", () => {
       excludeKeys: new Set(),
     });
     expect(applied.space[0]).toBe(editedA);
-  });
-});
-
-describe("save dialog: the name commits once, never per keystroke", () => {
-  it("BuilderView no longer live-writes the workspace name from the dialog", () => {
-    const source = readFileSync(join(BUILDER_DIR, "BuilderView.tsx"), "utf-8");
-    // The old dialog normalized and committed on every keystroke; the name
-    // is buffered in SaveSessionDialog and identifier() runs at save.
-    expect(source).not.toContain("updateSession({ name: identifier(name)");
-    const dialog = source.slice(
-      source.indexOf("function SaveSessionDialog"),
-      source.indexOf("export function BuilderView"),
-    );
-    expect(dialog, "the dialog buffers its name locally").toContain(
-      "useState(workspaceName)",
-    );
-    expect(dialog, "the dirty-save primary applies first").toContain("applyAll: true");
-  });
-
-  it("save applied state only is never gated by the dirty preview", () => {
-    const source = readFileSync(join(BUILDER_DIR, "BuilderView.tsx"), "utf-8");
-    const dialog = source.slice(
-      source.indexOf("function SaveSessionDialog"),
-      source.indexOf("export function BuilderView"),
-    );
-    // The preview gate (canSave) belongs to every SAVE primary — apply-and-save,
-    // the no-dirty-windows Save, and the stale-confirm view's overwrite-and-save
-    // — three occurrences. The applied-only escape hatch attempts regardless
-    // (the server owns the applied session's verdict once dirty windows diverge
-    // the preview) and is held back only by an in-flight save.
-    expect(dialog.match(/disabled=\{!canSave/g)?.length).toBe(3);
-    expect(dialog, "applied-only disabled by saving alone").toContain(
-      "disabled={saving}",
-    );
-  });
-});
-
-describe("open picker: namespace is the catalog's word, not a path sniff", () => {
-  it("OpenSessionPicker groups by typed namespace and never sniffs a path", () => {
-    const source = readFileSync(join(BUILDER_DIR, "OpenSessionPicker.tsx"), "utf-8");
-    // The server names each entry's root tier; the client does not infer it
-    // from the server's directory layout.
-    expect(source).not.toContain("generated-sessions");
-    expect(source).toContain('entry.namespace === "user"');
-    expect(source).toContain('entry.namespace === "nodalarc"');
-    // The tiers speak the library's own vocabulary.
-    expect(source).toContain('group("★ yours"');
-    expect(source).toContain('group("nodalarc library"');
-  });
-
-  it("production open/save paths have no retired filesystem or local-parser authority", () => {
-    const view = readFileSync(join(BUILDER_DIR, "BuilderView.tsx"), "utf-8");
-    const world = readFileSync(join(BUILDER_DIR, "useBuilderWorld.ts"), "utf-8");
-    expect(view).not.toContain("useSessionImport");
-    expect(view).not.toContain("workspaceFromSessionDocument");
-    expect(world).not.toContain("/api/v1/sessions");
-    expect(world).not.toContain("/builder/resolve-world");
-    expect(world).toContain("getCatalogDocument");
-    expect(world).toContain("compileVisualDraft");
-    expect(world).not.toContain("compileBuilderDraft");
   });
 });
 

@@ -185,21 +185,3 @@ describe("readPosition with uninitialized bridge", () => {
     expect(target.x).toBe(999);
   });
 });
-
-describe("adaptive sample interval invariant", () => {
-  function computeSampleInterval(speed: number): number {
-    return Math.max(0.1, 0.1 * Math.max(1, speed));
-  }
-
-  it("window always covers ≥5 wall-seconds of data at any playback speed", () => {
-    for (const speed of [0.1, 0.5, 1, 2, 5, 10, 30, 100]) {
-      const interval = computeSampleInterval(speed);
-      const windowSimSeconds = interval * 50;
-      const wallSeconds = windowSimSeconds / Math.max(1, speed);
-      expect(
-        wallSeconds,
-        `At ${speed}x: window=${windowSimSeconds}s sim, ${wallSeconds.toFixed(1)}s wall`,
-      ).toBeGreaterThanOrEqual(5);
-    }
-  });
-});

@@ -9,12 +9,6 @@ import yaml
 from nodalarc.catalog_upload import CatalogUploadSelection
 from nodalarc.cr_runtime_config import (
     CONSTELLATION_SPEC_PHASES,
-    CR_API_VERSION,
-    CR_GROUP,
-    CR_KIND,
-    CR_NAME,
-    CR_PLURAL,
-    CR_VERSION,
     ConstellationSpecSpec,
     ConstellationSpecStatus,
     cr_status_observes_current_generation,
@@ -94,17 +88,6 @@ def test_incomplete_or_widened_specs_are_refused(spec: dict, fragment: str) -> N
         ConstellationSpecSpec.from_cr(spec)
 
     assert fragment in str(raised.value)
-
-
-def test_coordinates_are_one_definition() -> None:
-    assert (CR_GROUP, CR_VERSION, CR_PLURAL, CR_NAME) == (
-        "nodalarc.io",
-        "v1alpha1",
-        "constellationspecs",
-        "current-session",
-    )
-    assert CR_API_VERSION == "nodalarc.io/v1alpha1"
-    assert CR_KIND == "ConstellationSpec"
 
 
 def _crd_status_schema() -> dict:

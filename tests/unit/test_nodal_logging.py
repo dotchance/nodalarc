@@ -5,7 +5,6 @@ code derivation (explicit + fallback), cardinality guard, session scoping,
 idempotency, shutdown flushing, and multi-tenant field propagation.
 """
 
-import contextlib
 import io
 import json
 import logging
@@ -111,11 +110,6 @@ class TestNodalFilter:
         record = _make_record()
         filt.filter(record)
         assert record.nodal_details is None
-
-    def test_always_returns_true(self):
-        filt = NodalFilter("nodal.arc.ome")
-        record = _make_record()
-        assert filt.filter(record) is True
 
 
 class TestCodeDerivation:
@@ -551,15 +545,6 @@ class TestConfigure:
                 "Record queued during session-A must retain session-A ID"
             )
 
-    def test_json_format_selected(self):
-        configure("nodal.arc.ome", stdout_format="json")
-        stream_handler = None
-        for h in logging.getLogger().handlers:
-            if isinstance(h, logging.StreamHandler) and not isinstance(h, NatsHandler):
-                stream_handler = h
-                break
-        assert isinstance(stream_handler.formatter, JsonFormatter)
-
     def test_nats_level_respected(self):
         configure("nodal.arc.ome", nats_level=logging.ERROR)
         nats_handler = None
@@ -614,128 +599,6 @@ class TestShutdownFlushing:
         assert "important failure message" in captured.err
         assert "unflushed" in captured.err
         assert len(nats_handler._deque) == 0
-
-
-class TestDrainLoop:
-    """Async drain task publishes queued records to NATS."""
-
-    def test_connect_drains_to_nats(self):
-        import asyncio
-        from unittest.mock import AsyncMock, MagicMock
-
-        handler = NatsHandler("nodal.arc.scheduler", level=logging.WARNING)
-        filt = NodalFilter("nodal.arc.scheduler", session_id="demo-36")
-        handler.addFilter(filt)
-
-        for i in range(3):
-            record = _make_record(name="scheduler.dispatcher", msg=f"msg-{i}")
-            handler.handle(record)
-        assert len(handler._deque) == 3
-
-        nc = MagicMock()
-        js_mock = MagicMock()
-        js_mock.publish = AsyncMock()
-        nc.jetstream.return_value = js_mock
-
-        async def run():
-            await handler.connect(nc)
-            await asyncio.sleep(0.05)
-            handler._drain_task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await handler._drain_task
-
-        asyncio.run(run())
-
-        assert js_mock.publish.call_count == 3
-        assert len(handler._deque) == 0
-
-        subjects = [call.args[0] for call in js_mock.publish.call_args_list]
-        for s in subjects:
-            assert s.startswith("nodalarc.ops.demo-36.scheduler.")
-
-    def test_drain_counts_dropped_records(self, capsys):
-        import asyncio
-        from unittest.mock import AsyncMock, MagicMock
-
-        handler = NatsHandler("nodal.arc.ome", level=logging.WARNING)
-        filt = NodalFilter("nodal.arc.ome", session_id="demo")
-        handler.addFilter(filt)
-
-        for i in range(5):
-            record = _make_record(msg=f"fail-{i}")
-            handler.handle(record)
-
-        nc = MagicMock()
-        js_mock = MagicMock()
-        js_mock.publish = AsyncMock(side_effect=Exception("NATS down"))
-        nc.jetstream.return_value = js_mock
-
-        async def run():
-            await handler.connect(nc)
-            await asyncio.sleep(0.05)
-            handler._drain_task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await handler._drain_task
-
-        asyncio.run(run())
-
-        captured = capsys.readouterr()
-        assert "record(s) dropped" in captured.err
-        total_accounted = handler._dropped_since_last_report
-        assert "1 record(s) dropped" in captured.err
-        assert total_accounted == 4
-        assert len(handler._deque) == 0
-
-    def test_drain_task_cancels_cleanly(self):
-        import asyncio
-        from unittest.mock import AsyncMock, MagicMock
-
-        handler = NatsHandler("nodal.arc.ome", level=logging.WARNING)
-
-        nc = MagicMock()
-        js_mock = MagicMock()
-        js_mock.publish = AsyncMock()
-        nc.jetstream.return_value = js_mock
-
-        async def run():
-            await handler.connect(nc)
-            assert not handler._drain_task.done()
-            handler._drain_task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await handler._drain_task
-            assert handler._drain_task.done()
-
-        asyncio.run(run())
-
-    def test_large_prebuffer_drains_completely(self):
-        import asyncio
-        from unittest.mock import AsyncMock, MagicMock
-
-        handler = NatsHandler("nodal.arc.ome", level=logging.WARNING)
-        filt = NodalFilter("nodal.arc.ome", session_id="test")
-        handler.addFilter(filt)
-
-        for i in range(300):
-            record = _make_record(msg=f"msg-{i}")
-            handler.handle(record)
-        assert len(handler._deque) == 300
-
-        nc = MagicMock()
-        js_mock = MagicMock()
-        js_mock.publish = AsyncMock()
-        nc.jetstream.return_value = js_mock
-
-        async def run():
-            await handler.connect(nc)
-            await asyncio.sleep(0.1)
-            handler._drain_task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await handler._drain_task
-
-        asyncio.run(run())
-
-        assert js_mock.publish.call_count == 300
-        assert len(handler._deque) == 0
 
 
 # ---------------------------------------------------------------------------

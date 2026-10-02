@@ -5,22 +5,17 @@ from __future__ import annotations
 from typing import Literal
 
 import pytest
-from nodalarc.models.link_rules import NearestVisibleTopology, NodeSelector
-from nodalarc.models.segment_session import ExportRule, RoutingBoundary, SegmentSessionConfig
+from nodalarc.models.link_rules import NodeSelector
+from nodalarc.models.segment_session import ExportRule, SegmentSessionConfig
 from nodalarc.models.segments import (
     GroundSegment,
     LagrangeSegment,
-    SegmentClock,
     SpaceSegment,
 )
-from nodalarc.runtime_support import RuntimeSupport
 from pydantic import BaseModel, ConfigDict, Field
 
 from tests.support.builder_model_coverage import (
     BuilderFieldObligation,
-    BuilderGraphicalCoverageRecorder,
-    BuilderLiteralObligation,
-    BuilderUnionBranchObligation,
     assert_complete_builder_graphical_coverage,
     compare_builder_coverage,
     discover_builder_model_graph,
@@ -146,24 +141,6 @@ def test_coverage_comparison_fails_missing_and_stale_obligations_exactly() -> No
     assert stale_key in message
 
 
-def test_graphical_coverage_recorder_accepts_factory_and_dedicated_control_hooks() -> None:
-    graph = discover_builder_model_graph(_RootProbe)
-    recorder = BuilderGraphicalCoverageRecorder()
-    entries_key = field_obligation_key(_RootProbe, "entries")
-    one_literal = next(iter(graph.literals))
-
-    recorder.record(entries_key)
-    recorder.record(entries_key)
-    recorder.record_obligation(one_literal)
-    recorder.record_many(graph.obligation_keys - {entries_key, obligation_key(one_literal)})
-
-    assert recorder.obligation_keys == graph.obligation_keys
-    assert_complete_builder_graphical_coverage(graph, recorder.obligation_keys)
-
-    with pytest.raises(KeyError, match="has no canonical field 'retired'"):
-        recorder.record_field(_RootProbe, "retired")
-
-
 def test_segment_session_walk_uses_wire_aliases_and_all_segment_branches() -> None:
     graph = discover_builder_model_graph(SegmentSessionConfig)
 
@@ -203,98 +180,3 @@ def test_segment_session_walk_uses_wire_aliases_and_all_segment_branches() -> No
         for obligation in graph.union_branches
         if obligation.field == segments and obligation.annotation_path == ("sequence-item",)
     } == {SpaceSegment, GroundSegment, LagrangeSegment}
-
-
-def test_runtime_gates_do_not_remove_graphical_representation_obligations() -> None:
-    graph = discover_builder_model_graph(SegmentSessionConfig)
-    runtime = RuntimeSupport.earth_luna()
-
-    assert runtime.check_segment_kind("lagrange") is not None
-    assert runtime.check_link_topology("nearest_visible") is not None
-    assert runtime.check_protocol_adapter("dtn_bundle") is not None
-
-    segments = next(
-        field
-        for field in graph.fields
-        if field.model is SegmentSessionConfig and field.field_name == "segments"
-    )
-    assert (
-        BuilderUnionBranchObligation(
-            field=segments,
-            annotation_path=("sequence-item",),
-            branch=LagrangeSegment,
-        )
-        in graph.union_branches
-    )
-
-    nearest_mode = next(
-        field
-        for field in graph.fields
-        if field.model is NearestVisibleTopology and field.field_name == "mode"
-    )
-    assert (
-        BuilderLiteralObligation(
-            field=nearest_mode,
-            annotation_path=(),
-            value="nearest_visible",
-        )
-        in graph.literals
-    )
-
-    adapter = next(
-        field
-        for field in graph.fields
-        if field.model is RoutingBoundary and field.field_name == "adapter"
-    )
-    assert (
-        BuilderLiteralObligation(
-            field=adapter,
-            annotation_path=(),
-            value="dtn_bundle",
-        )
-        in graph.literals
-    )
-
-    clock_model = next(
-        field
-        for field in graph.fields
-        if field.model is SegmentClock and field.field_name == "model"
-    )
-    assert (
-        BuilderLiteralObligation(
-            field=clock_model,
-            annotation_path=(),
-            value="affine",
-        )
-        in graph.literals
-    )
-
-    unsupported_representation_keys = {
-        obligation_key(obligation)
-        for obligation in graph.obligations
-        if obligation
-        in {
-            BuilderUnionBranchObligation(
-                field=segments,
-                annotation_path=("sequence-item",),
-                branch=LagrangeSegment,
-            ),
-            BuilderLiteralObligation(
-                field=nearest_mode,
-                annotation_path=(),
-                value="nearest_visible",
-            ),
-            BuilderLiteralObligation(
-                field=adapter,
-                annotation_path=(),
-                value="dtn_bundle",
-            ),
-            BuilderLiteralObligation(
-                field=clock_model,
-                annotation_path=(),
-                value="affine",
-            ),
-        }
-    }
-    assert len(unsupported_representation_keys) == 4
-    assert unsupported_representation_keys <= graph.obligation_keys

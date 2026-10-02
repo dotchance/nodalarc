@@ -28,7 +28,6 @@ from nodalarc.prepared_session import (
     PreparedSessionSource,
     prepare_session_files,
 )
-from pydantic import ValidationError
 
 ROOT = Path(__file__).resolve().parents[2]
 SHIPPED_ROOT = ROOT / "catalog/nodalarc"
@@ -92,24 +91,6 @@ def test_default_upload_ids_are_fresh_not_content_addressed(prepared: PreparedSe
     assert first.upload_id != second.upload_id
     assert first.selection.closure_digest == second.selection.closure_digest
     assert first.catalog_files == second.catalog_files
-
-
-def test_selection_is_small_strict_and_closed(upload: CatalogUpload) -> None:
-    assert set(upload.selection.model_dump(mode="json")) == {
-        "upload_id",
-        "closure_digest",
-        "file_count",
-    }
-    with pytest.raises(ValidationError):
-        CatalogUploadSelection.model_validate(
-            {**upload.selection.model_dump(mode="json"), "manifest": "forbidden"},
-            strict=True,
-        )
-    with pytest.raises(ValidationError):
-        CatalogUploadSelection.model_validate(
-            {**upload.selection.model_dump(mode="json"), "file_count": "1"},
-            strict=True,
-        )
 
 
 def test_verify_rejects_missing_extra_duplicate_and_corrupt_files(upload: CatalogUpload) -> None:

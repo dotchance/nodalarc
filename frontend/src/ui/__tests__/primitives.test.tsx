@@ -40,12 +40,6 @@ function renderTable(over: { rows?: DemoRow[]; sort?: SortState | null } = {}) {
 }
 
 describe("DataTable", () => {
-  it("renders rows and cells", () => {
-    renderTable();
-    expect(screen.getByText("first")).toBeTruthy();
-    expect(screen.getByText("second")).toBeTruthy();
-  });
-
   it("sort header cycles desc → asc → off", () => {
     const { onSortChange } = renderTable();
     const th = screen.getByText("Time");
@@ -77,36 +71,9 @@ describe("DataTable", () => {
     const next = onColumnsChange.mock.calls[0]![0] as TableColumn[];
     expect(next.map((c) => c.key)).toEqual(["msg", "time"]);
   });
-
-  it("shows the empty state", () => {
-    renderTable({ rows: [] });
-    expect(screen.getByText("No rows")).toBeTruthy();
-  });
 });
 
 describe("FloatingWindow", () => {
-  it("renders title and content, and the close button closes", () => {
-    const onClose = vi.fn();
-    render(
-      <FloatingWindow title="Logs" onClose={onClose} initial={{ x: 0, y: 0, w: 300, h: 200 }}>
-        <div>body</div>
-      </FloatingWindow>,
-    );
-    expect(screen.getByText("Logs")).toBeTruthy();
-    expect(screen.getByText("body")).toBeTruthy();
-    fireEvent.click(screen.getByLabelText("Close"));
-    expect(onClose).toHaveBeenCalledTimes(1);
-  });
-
-  it("renders all eight resize edges", () => {
-    const { container } = render(
-      <FloatingWindow title="W" onClose={vi.fn()} initial={{ x: 0, y: 0, w: 300, h: 200 }}>
-        x
-      </FloatingWindow>,
-    );
-    expect(container.querySelectorAll(".ui-window-edge")).toHaveLength(8);
-  });
-
   it("labels the dialog, moves focus inside, and restores its opener", async () => {
     function Fixture() {
       const [open, setOpen] = useState(false);

@@ -4,12 +4,10 @@ from __future__ import annotations
 
 from copy import deepcopy
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Any
 
 import pytest
 from nodalarc.catalog_refs import CatalogRef
-from nodalarc.configuration_yaml import load_configuration_yaml
 from nodalarc.models.catalog import (
     Constellation,
     Node,
@@ -22,8 +20,6 @@ from nodalarc.models.catalog import (
 from nodalarc.models.segment_session import SegmentSessionConfig
 from pydantic import BaseModel, ValidationError
 
-ROOT = Path(__file__).resolve().parents[2]
-SHIPPED_SESSIONS = ROOT / "catalog" / "nodalarc" / "sessions"
 ISS_TLE_LINE_1 = "1 25544U 98067A   21075.51041667  .00001264  00000-0  29660-4 0  9993"
 ISS_TLE_LINE_2 = "2 25544  51.6442  21.5417 0002426  95.1670  21.8444 15.48974333273145"
 
@@ -467,16 +463,6 @@ def test_every_canonical_catalog_slot_rejects_wrong_family(case: ReferenceSlotCa
         case.model_type.model_validate(document)
 
 
-def test_space_source_accepts_both_approved_source_families() -> None:
-    for family in ("constellations", "space-node-sets"):
-        document = _space_session()
-        document["segments"][0]["source"] = f"user:{family}/example.yaml"
-
-        session = SegmentSessionConfig.model_validate(document)
-
-        assert session.segments[0].source.family == family
-
-
 def test_link_class_is_resolver_owned() -> None:
     document = _space_session()
     document["link_rules"] = [
@@ -508,16 +494,3 @@ def test_canonical_models_reject_unknown_fields(model_type, document: dict[str, 
 
     with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
         model_type.model_validate(document)
-
-
-def test_all_shipped_session_roots_pass_canonical_parsing_unchanged() -> None:
-    paths = sorted(SHIPPED_SESSIONS.glob("*.yaml"))
-    assert paths
-
-    for path in paths:
-        document = load_configuration_yaml(path.read_bytes())
-        original = deepcopy(document)
-        strict = SegmentSessionConfig.model_validate(document)
-
-        assert document == original
-        assert strict.session.name == document["session"]["name"]

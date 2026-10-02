@@ -53,12 +53,6 @@ def _manifest():
     }
 
 
-def test_manifest_contract_accepts_strict_ground_bridge_specs() -> None:
-    manifest = WiringManifest.model_validate(_manifest())
-
-    assert set(manifest.ground_bridges) == {"gs-den"}
-
-
 def test_wiring_generation_canonicalizes_keys_and_ignores_existing_generation() -> None:
     data = _manifest()
     first = derive_wiring_generation(data)
@@ -183,15 +177,6 @@ def test_payload_escapes_non_ascii_while_the_generation_hash_does_not() -> None:
     }
     # The hash reads the characters themselves, so the escaped spelling differs.
     assert derive_wiring_generation(data) != derive_wiring_generation(ascii_material)
-
-
-def test_round_trip_through_the_codec() -> None:
-    data = _manifest()
-    decoded = decode_wiring_manifest(
-        {WIRING_MANIFEST_PAYLOAD_KEY: encode_wiring_manifest_payload(data)}
-    )
-
-    assert decoded == WiringManifest.model_validate(data)
 
 
 @pytest.mark.parametrize(

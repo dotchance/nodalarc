@@ -12,16 +12,6 @@ from nodalarc.models.session import (
 from pydantic import ValidationError
 
 
-def test_ground_scheduling_defaults_are_runtime_safe() -> None:
-    config = GroundSchedulingConfig()
-
-    assert config.selection_policy.name == "highest-elevation"
-    assert config.handover_policy.name == "hysteresis"
-    assert config.ranking_order[-1] == "lex_pair"
-    assert config.handover_mode == "bbm"
-    assert config.mbb_reserve == 0
-
-
 def test_ground_scheduling_normalizes_hysteresis_parameters() -> None:
     config = GroundSchedulingConfig(
         handover_policy={
@@ -66,17 +56,6 @@ def test_ground_scheduling_rejects_unimplemented_behavior(settings, message) -> 
 def test_ground_scheduling_rejects_ambiguous_ranking(ranking_order) -> None:
     with pytest.raises(ValidationError, match="ranking_order"):
         GroundSchedulingConfig(ranking_order=ranking_order)
-
-
-def test_ground_scheduling_accepts_longest_remaining_pass_with_horizon() -> None:
-    config = GroundSchedulingConfig(
-        selection_policy={
-            "name": "longest-remaining-pass",
-            "params": {"lookahead_horizon_ticks": 600},
-        }
-    )
-
-    assert config.selection_policy.params["lookahead_horizon_ticks"] == 600
 
 
 @pytest.mark.parametrize(

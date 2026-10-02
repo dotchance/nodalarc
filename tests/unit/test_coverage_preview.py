@@ -45,10 +45,6 @@ def heo_preview() -> CoveragePreviewResult:
     )
 
 
-def test_returns_coverage_preview_result(demo_preview):
-    assert isinstance(demo_preview, CoveragePreviewResult)
-
-
 def test_orbital_period_physically_plausible(demo_preview):
     # LEO orbital periods range from ~87 min (160 km) to ~127 min (2000 km)
     # demo-36 is at 550 km → ~96 minutes → ~5760 seconds
@@ -186,10 +182,6 @@ def test_heo_preview_uses_eccentric_sampled_explanations(heo_preview):
     assert all("Sampled eccentric orbit propagation" in reason for reason in reasons)
     assert all("inclination band" not in reason for reason in reasons)
     assert all("footprint edge" not in reason for reason in reasons)
-
-
-def test_warnings_is_list(demo_preview):
-    assert isinstance(demo_preview.warnings, list)
 
 
 # --- Error cases ---

@@ -69,23 +69,6 @@ def test_scheduler_dispatch_timing_and_protocol_label_are_catalog_resolved() -> 
     assert _routing_protocol_label(resolved) == "isis"
 
 
-def test_catalog_runtime_service_images_bake_static_catalog() -> None:
-    consumers = (
-        "services/measurement/Dockerfile",
-        "services/nodalarc_operator/Dockerfile",
-        "services/ome/Dockerfile",
-        "services/scheduler/Dockerfile",
-        "services/vs_api/Dockerfile",
-    )
-
-    for rel in consumers:
-        dockerfile = (ROOT / rel).read_text(encoding="utf-8")
-        assert "COPY catalog/ catalog/" in dockerfile, rel
-        assert "configs/satellite-types" not in dockerfile, rel
-        assert "configs/ground-stations" not in dockerfile, rel
-        assert "configs/constellations" not in dockerfile, rel
-
-
 def test_scheduler_dispatch_timing_requires_resolved_time_and_dispatch() -> None:
     resolved = _resolved()
 

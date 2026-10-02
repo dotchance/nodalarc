@@ -19,8 +19,6 @@ from nodalarc.resolve_session import SessionResolution, resolve_session_with_ass
 
 from tests.catalog_session_fixtures import build_catalog_session_fixture
 
-ROOT = Path(__file__).resolve().parents[2]
-
 
 def _resolution(*, protocol: str = "isis", run_id: str | None = "run-mi-0001") -> SessionResolution:
     fixture = build_catalog_session_fixture(
@@ -34,19 +32,6 @@ def _resolution(*, protocol: str = "isis", run_id: str | None = "run-mi-0001") -
         catalog=FilesystemCatalogReadView(fixture.roots),
         source_context=SourceContext(origin="test.mi", run_id=run_id),
     )
-
-
-def test_mi_sources_do_not_import_old_session_projection() -> None:
-    for relpath in (
-        "services/measurement/mi_main.py",
-        "services/measurement/flow_manager.py",
-    ):
-        source = (ROOT / relpath).read_text(encoding="utf-8")
-        assert "nodalarc.models.session" not in source
-        assert "nodalarc.models.ground_station" not in source
-        assert "AddressingScheme" not in source
-        assert ".runtime_session" not in source
-        assert ".primary_ground_set" not in source
 
 
 @pytest.mark.parametrize(
@@ -86,17 +71,6 @@ def test_mi_service_requires_resolved_runtime_identity(tmp_path: Path) -> None:
 
     with pytest.raises(ValueError, match="source_context.run_id"):
         MIService(resolved=resolved, adapter=SimpleNamespace(), db_path=str(tmp_path / "mi.db"))
-
-
-def test_mi_service_uses_resolved_runtime_identity(tmp_path: Path) -> None:
-    resolved = _resolution(run_id="run-mi-0002").resolved
-
-    service = MIService(
-        resolved=resolved, adapter=SimpleNamespace(), db_path=str(tmp_path / "mi.db")
-    )
-
-    assert service._session_id == "run-mi-0002"
-    service._db_conn.close()
 
 
 def test_a_trace_request_traces_to_the_destination_loopback(tmp_path: Path) -> None:

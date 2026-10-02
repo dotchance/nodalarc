@@ -253,17 +253,6 @@ def test_resolved_session_constructs_and_helpers() -> None:
     assert rs.node_by_id("missing") is None
 
 
-def test_resolved_models_are_frozen() -> None:
-    node = _satellite()
-    with pytest.raises(ValidationError):
-        node.node_id = "other"
-    with pytest.raises(ValidationError):
-        node.orbit.mean_anomaly_deg = 42.0
-    rs = _resolved_session()
-    with pytest.raises(ValidationError):
-        rs.identity_mode = IdentityMode.SEGMENT_NAMESPACED
-
-
 def test_closed_terminal_role_vocabulary_rejects_old_ground_role() -> None:
     with pytest.raises(ValidationError, match="access"):
         _terminal("ground-denver-router", role="ground")

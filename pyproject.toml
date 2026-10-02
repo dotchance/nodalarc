@@ -34,7 +34,6 @@ testpaths = ["tests"]
 pythonpath = ["lib", "services", "."]
 timeout = 30
 markers = [
-    "requires_root: tests that need root/namespace access",
     "integration: integration tests requiring K3s",
 ]
 

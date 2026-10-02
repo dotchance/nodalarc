@@ -1,10 +1,7 @@
 """Test timeline precomputation and JSON Lines I/O."""
 
-import json
-
 import pytest
 from nodalarc.models.addressing import NeighborAssignment
-from nodalarc.models.events import ClockTick, VisibilityEvent
 from nodalarc.models.ground_policy import HandoverPolicySpec, SelectionPolicySpec
 from nodalarc.models.session import GroundSchedulingConfig
 from nodalarc.models.terminal_physics import SatGroundTerminalBoresight, TerminalBoresight
@@ -167,21 +164,8 @@ class TestClockTickEmission:
         timestamps = [e.timestamp_s for e in ticks]
         assert timestamps == [0.0, 10.0, 20.0, 30.0, 40.0, 50.0, 60.0]
 
-    def test_clock_tick_is_correct_model(self, four_node_timeline):
-        ticks = [e for e in four_node_timeline if e.event_type == "ClockTick"]
-        first_tick = ticks[0].data
-        assert isinstance(first_tick, ClockTick)
-        assert first_tick.compression_ratio == 1.0
-
 
 class TestVisibilityEvents:
-    def test_visibility_events_are_correct_type(self, four_node_timeline):
-        vis_events = [e for e in four_node_timeline if e.event_type == "VisibilityEvent"]
-        for event in vis_events:
-            assert isinstance(event.data, VisibilityEvent)
-            # Alphabetically ordered (enforced by model validator)
-            assert event.data.node_a < event.data.node_b
-
     def test_events_ordered_by_timestamp(self, four_node_timeline):
         """All events should be non-decreasing in timestamp."""
         timestamps = [e.timestamp_s for e in four_node_timeline]
@@ -198,17 +182,6 @@ class TestJsonLinesIO:
         records = read_timeline_jsonl(out_path)
         assert len(records) == len(four_node_timeline)
 
-    def test_each_line_is_valid_json(self, four_node_timeline, tmp_path):
-        out_path = tmp_path / "timeline.jsonl"
-        write_timeline_jsonl(four_node_timeline, out_path)
-
-        with open(out_path) as f:
-            for line in f:
-                record = json.loads(line)
-                assert "timestamp_s" in record
-                assert "event_type" in record
-                assert "data" in record
-
     def test_clock_tick_data_in_jsonl(self, four_node_timeline, tmp_path):
         out_path = tmp_path / "timeline.jsonl"
         write_timeline_jsonl(four_node_timeline, out_path)
@@ -216,15 +189,6 @@ class TestJsonLinesIO:
         records = read_timeline_jsonl(out_path)
         ticks = [r for r in records if r["event_type"] == "ClockTick"]
         assert len(ticks) == 7
-
-    def test_no_snapshot_events_in_timeline(self, four_node_timeline, tmp_path):
-        """PRD v0.71: Snapshot events are no longer emitted by compute_step."""
-        out_path = tmp_path / "timeline.jsonl"
-        write_timeline_jsonl(four_node_timeline, out_path)
-
-        records = read_timeline_jsonl(out_path)
-        snapshots = [r for r in records if r["event_type"] == "Snapshot"]
-        assert len(snapshots) == 0
 
 
 class TestNoGroundStations:

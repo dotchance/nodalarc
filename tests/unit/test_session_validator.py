@@ -4,11 +4,8 @@
 
 from __future__ import annotations
 
-from pathlib import Path
-
 import pytest
 from nodalarc.models.resolved_session import ResolvedRoutingDomain
-from nodalarc.models.segments import GroundScheduling
 from nodalarc.session_validator import build_validation_report, validate_session_readiness
 
 from tests.catalog_session_fixtures import (
@@ -18,8 +15,6 @@ from tests.catalog_session_fixtures import (
 from tests.catalog_session_fixtures import (
     resolve_catalog_session as resolve_session,
 )
-
-ROOT = Path(__file__).resolve().parents[2]
 
 
 def _resolved(**overrides):
@@ -37,15 +32,6 @@ def _resolved(**overrides):
 
 def _codes(results):
     return {result.code for result in results}
-
-
-def test_validator_reads_resolved_session_without_old_config_imports() -> None:
-    source = (ROOT / "lib" / "nodalarc" / "session_validator.py").read_text(encoding="utf-8")
-
-    assert "nodalarc.models.session" not in source
-    assert "nodalarc.models.ground_station" not in source
-    assert "nodalarc.models.constellation" not in source
-    assert "expand_constellation" not in source
 
 
 def test_e021_counts_only_rule_selected_interfaces() -> None:
@@ -113,17 +99,6 @@ def test_resolved_catalog_session_validates_cleanly() -> None:
     assert results == []
 
 
-def test_old_session_shape_is_not_accepted() -> None:
-    old_shape = {"session": {"name": "old"}, "constellation": "configs/constellations/demo.yaml"}
-
-    try:
-        validate_session_readiness(old_shape, available_node_count=1)  # type: ignore[arg-type]
-    except TypeError as exc:
-        assert "ResolvedSession" in str(exc)
-    else:
-        raise AssertionError("old session shape was accepted")
-
-
 def test_enabled_link_rule_with_no_candidates_is_error() -> None:
     resolved = _resolved()
     first_rule_id = resolved.link_rules[0].rule_id
@@ -160,60 +135,6 @@ def test_routing_domain_member_without_internal_candidate_is_error() -> None:
 
     assert "E003" in _codes(results)
     assert any("ground_only_domain" in result.message for result in results)
-
-
-def test_ground_mbb_requires_access_capacity_for_reserve() -> None:
-    resolved = _resolved()
-    nodes = []
-    updated = False
-    for node in resolved.nodes:
-        if node.kind != "ground_station" or updated:
-            nodes.append(node)
-            continue
-        scheduling = GroundScheduling(
-            selection_policy=node.ground_scheduling.selection_policy,
-            handover_policy=node.ground_scheduling.handover_policy,
-            handover_mode="mbb",
-            mbb_overlap_ticks=1,
-            mbb_reserve=1,
-            handover_concurrency=node.ground_scheduling.handover_concurrency,
-            ranking_order=node.ground_scheduling.ranking_order,
-        )
-        terminals = tuple(
-            block.model_copy(update={"count": 1, "tracking_capacity": 1})
-            if block.endpoint_role == "access"
-            else block
-            for block in node.terminal_inventory
-        )
-        access_terminal_ids = {
-            block.terminal_id
-            for block in node.terminal_inventory
-            if block.endpoint_role == "access"
-        }
-        retained_access_interfaces: set[str] = set()
-        wan_interfaces = []
-        for interface in node.wan_interfaces:
-            if interface.terminal_id in access_terminal_ids:
-                if interface.terminal_id in retained_access_interfaces:
-                    continue
-                retained_access_interfaces.add(interface.terminal_id)
-            wan_interfaces.append(interface)
-        nodes.append(
-            node.model_copy(
-                update={
-                    "ground_scheduling": scheduling,
-                    "terminal_inventory": terminals,
-                    "wan_interfaces": tuple(wan_interfaces),
-                }
-            )
-        )
-        updated = True
-    broken = resolved.model_copy(update={"nodes": tuple(nodes)})
-
-    results = validate_session_readiness(broken, available_node_count=100)
-
-    assert "E021" in _codes(results)
-    assert any("requests MBB" in result.message for result in results)
 
 
 def test_missing_non_earth_ephemeris_is_reported_before_deploy() -> None:

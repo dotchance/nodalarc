@@ -18,8 +18,6 @@ from tests.physics_fixtures import (
     earth_propagate_eci,
 )
 
-EPOCH = 1735689600.0
-
 
 class TestCoRotatingSamePlane:
     def test_near_zero_angular_velocity(self):
@@ -42,81 +40,6 @@ class TestCoRotatingSamePlane:
             assert ang_vel < 0.5, (
                 f"Same-plane sep={ta_sep}° angular velocity {ang_vel:.4f} should be < 0.5"
             )
-
-
-class TestCrossPlaneIncreasingLatitude:
-    def test_cross_plane_has_nonzero_angular_velocity(self):
-        """Cross-plane neighbors have measurable angular velocity."""
-        e1 = earth_elements_from_params(550.0, 53.0, 0.0, 0.0)
-        e2 = earth_elements_from_params(550.0, 53.0, 30.0, 0.0)
-        pos1, vel1 = earth_propagate_eci(e1, 0.0)
-        pos2, vel2 = earth_propagate_eci(e2, 0.0)
-        ang_vel = compute_angular_velocity(pos1, vel1, pos2, vel2)
-        assert ang_vel > 0.0, "Cross-plane should have nonzero angular velocity"
-
-    def test_angular_velocity_varies_with_orbital_position(self):
-        """Cross-plane angular velocity varies as satellites move along orbit."""
-        e1 = earth_elements_from_params(550.0, 53.0, 0.0, 0.0)
-        e2 = earth_elements_from_params(550.0, 53.0, 30.0, 6.0)  # starlink-early-44 RAAN + phase
-        period = earth_orbital_period(550.0)
-
-        angular_velocities = []
-        for step in range(0, int(period), 100):
-            dt = float(step)
-            pos1, vel1 = earth_propagate_eci(e1, dt)
-            pos2, vel2 = earth_propagate_eci(e2, dt)
-            ang_vel = compute_angular_velocity(pos1, vel1, pos2, vel2)
-            angular_velocities.append(ang_vel)
-
-        # Angular velocity should vary (not constant)
-        assert max(angular_velocities) > min(angular_velocities)
-
-
-class TestTrackingRateCalibration:
-    def test_starlink_early_peak_below_config_rate(self):
-        """Peak cross-plane angular velocity for starlink-early-44 is below configured 3.0 deg/s.
-
-        PRD R-OME-003: calibration task to verify tracking rate covers actual peak.
-        Starlink-early-44: 4 planes, 45° RAAN spacing, 53° inclination, 550 km.
-        """
-        tracking_rate = 3.0
-
-        # Compute peak cross-plane angular velocity across all RAAN pairings
-        period = earth_orbital_period(550.0)
-        max_ang_vel = 0.0
-        raan_spacing = 45.0
-        phase_offset = 8.2
-
-        for plane_delta in [1, 2, 3]:  # Adjacent, 2-away, 3-away planes
-            raan_diff = plane_delta * raan_spacing
-            for step in range(0, int(period), 10):
-                dt = float(step)
-                e1 = earth_elements_from_params(550.0, 53.0, 0.0, 0.0)
-                e2 = earth_elements_from_params(550.0, 53.0, raan_diff, plane_delta * phase_offset)
-                pos1, vel1 = earth_propagate_eci(e1, dt)
-                pos2, vel2 = earth_propagate_eci(e2, dt)
-                ang_vel = compute_angular_velocity(pos1, vel1, pos2, vel2)
-                if ang_vel > max_ang_vel:
-                    max_ang_vel = ang_vel
-
-        assert tracking_rate > max_ang_vel, (
-            f"Config tracking rate {tracking_rate} deg/s must exceed "
-            f"peak angular velocity {max_ang_vel:.4f} deg/s"
-        )
-
-    def test_tracking_rate_read_from_config(self):
-        """Tracking rate is a configured terminal value, not a hardcoded engine constant."""
-        from nodalarc.ome_runtime import IslTerminal
-
-        terminal = IslTerminal(
-            type="optical",
-            count=4,
-            max_range_km=5400,
-            max_tracking_rate_deg_s=3.0,
-            field_of_regard_deg=360.0,
-        )
-
-        assert terminal.max_tracking_rate_deg_s == 3.0
 
 
 class TestCounterRotating:

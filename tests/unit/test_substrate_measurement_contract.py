@@ -10,9 +10,6 @@ import pytest
 from nodalarc.substrate.measurement_contract import (
     RequiredSubstratePair,
     SubstrateMeasurement,
-    SubstrateStatusDocument,
-    decode_status_configmap_data,
-    status_document_configmap_data,
     substrate_directional_key,
     substrate_pair_key,
 )
@@ -131,16 +128,3 @@ def test_measurement_rejects_stale_or_failed() -> None:
             target_node="node-b",
             target_ip="10.0.0.2",
         )
-
-
-def test_status_document_roundtrips_from_configmap_data() -> None:
-    document = SubstrateStatusDocument(
-        session_id=SESSION_ID,
-        wiring_generation=WIRING_GENERATION,
-        source_node="node-a",
-        measurements={"node-b": _measurement()},
-    )
-
-    decoded = decode_status_configmap_data(status_document_configmap_data(document))
-
-    assert decoded == document

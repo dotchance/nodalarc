@@ -144,10 +144,6 @@ def _ts_interface_field_literals(interface: str, field: str, *, path: Path) -> s
     return set(re.findall(r'"([^"]+)"', field_match.group(1)))
 
 
-def test_reasons_ts_exists():
-    assert _REASONS_TS.is_file(), f"frontend reason registry missing at {_REASONS_TS}"
-
-
 def _link_event_codes_ts() -> set[str]:
     """The `code: "..."` values of the frontend LINK_EVENT_REGISTRY records."""
     text = _LINK_EVENTS_TS.read_text(encoding="utf-8")

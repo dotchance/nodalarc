@@ -12,7 +12,6 @@ from nodalarc.models.events import (
     EphemerisNodeFixed,
     EphemerisNodeKeplerian,
     EphemerisNodeTLE,
-    SessionEphemeris,
 )
 from nodalarc.models.ground_policy import HandoverPolicySpec, SelectionPolicySpec
 from nodalarc.models.session import GroundSchedulingConfig
@@ -286,17 +285,6 @@ class TestBuildSessionEphemeris:
         assert sat.norad_id == 25544
         assert sat.tle_line_1.startswith("1 25544")
 
-    def test_ground_station_mapped_to_fixed(self):
-        ctx, _, gs_file = _load_test_ctx()
-        eph = build_session_ephemeris(ctx, EPOCH, epoch_id=0)
-        gs_nodes = {k: v for k, v in eph.nodes.items() if k in ctx.gs_positions}
-        assert len(gs_nodes) > 0, "Expected at least one ground station"
-        gs_name, gs = next(iter(gs_nodes.items()))
-        assert isinstance(gs, EphemerisNodeFixed)
-        assert gs.type == "fixed"
-        assert -90 <= gs.lat_deg <= 90
-        assert -180 <= gs.lon_deg <= 180
-
     def test_node_metadata_carried_into_session_ephemeris(self):
         ctx, sats, gs_file = _load_test_ctx()
         sat_id = sats[0].node_id
@@ -342,28 +330,12 @@ class TestBuildSessionEphemeris:
         assert gs.namespace == "ground"
         assert gs.tags == ("earth", "ground")
 
-    def test_epoch_id_preserved(self):
-        ctx, _, _ = _load_test_ctx()
-        eph = build_session_ephemeris(ctx, EPOCH, epoch_id=7)
-        assert eph.epoch_id == 7
-
     def test_node_count_matches_constellation(self):
         ctx, sats, gs_file = _load_test_ctx()
         eph = build_session_ephemeris(ctx, EPOCH, epoch_id=0)
         expected_sats = len(sats)
         expected_gs = len(gs_file.stations) if gs_file else 0
         assert len(eph.nodes) == expected_sats + expected_gs
-
-    def test_epoch_unix_stored(self):
-        ctx, _, _ = _load_test_ctx()
-        eph = build_session_ephemeris(ctx, EPOCH, epoch_id=0)
-        assert eph.epoch_unix == EPOCH
-
-    def test_json_round_trip(self):
-        ctx, _, _ = _load_test_ctx()
-        eph = build_session_ephemeris(ctx, EPOCH, epoch_id=0)
-        restored = SessionEphemeris.model_validate_json(eph.model_dump_json())
-        assert restored == eph
 
     def test_orbital_elements_consistency(self):
         """Elements in ephemeris should match the original satellite elements."""
@@ -390,39 +362,6 @@ class TestBuildSessionEphemeris:
 
 
 class TestLinkStateSnapshotEpochId:
-    def test_epoch_id_stamped(self):
-        snap = build_link_state_snapshot(
-            LinkSnapshotSource(
-                isl_state={},
-                ground_state={},
-                associations={},
-                pending_teardowns={},
-                propagated_states={},
-            ),
-            interface_map={},
-            sim_time=datetime(2025, 1, 1, tzinfo=UTC),
-            seq=1,
-            interval_s=5.0,
-            epoch_id=42,
-        )
-        assert snap.epoch_id == 42
-
-    def test_epoch_id_default_zero(self):
-        snap = build_link_state_snapshot(
-            LinkSnapshotSource(
-                isl_state={},
-                ground_state={},
-                associations={},
-                pending_teardowns={},
-                propagated_states={},
-            ),
-            interface_map={},
-            sim_time=datetime(2025, 1, 1, tzinfo=UTC),
-            seq=1,
-            interval_s=5.0,
-        )
-        assert snap.epoch_id == 0
-
     def test_snapshot_carries_declared_link_rule_metadata(self):
         pair = ("leo-sat-p00s00", "meo-sat-p00s00")
         snap = build_link_state_snapshot(

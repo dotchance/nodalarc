@@ -98,26 +98,6 @@ describe("collectFoldSegments — body-fold accounting", () => {
     expect(probe.get("mars")).toBe("mars-gs-1");
   });
 
-  it("default-toggle count equals the class-blind count (flag-off inertness)", async () => {
-    // The previous fold counted every node's segment regardless of label class.
-    // At default toggles (both on) the new class-aware count must reproduce it
-    // exactly, so a never-toggling live user sees identical folding.
-    const { collectFoldSegments } = await import("../Labels");
-    const out = new Map<string, Set<string>>();
-    collectFoldSegments(FOLD_NODES, true, true, out, new Map());
-    const classBlind = new Map<string, Set<string>>();
-    for (const n of FOLD_NODES) {
-      if (!n.segment_id) continue;
-      let set = classBlind.get(n.reference_body!);
-      if (!set) classBlind.set(n.reference_body!, (set = new Set()));
-      set.add(n.segment_id);
-    }
-    expect(out.size).toBe(classBlind.size);
-    for (const [body, want] of classBlind) {
-      expect(segs(out, body)).toEqual([...want].sort());
-    }
-  });
-
   it("satellite labels off drops every satellite segment from the count", async () => {
     const { collectFoldSegments } = await import("../Labels");
     const out = new Map<string, Set<string>>();

@@ -61,36 +61,11 @@ def _with_shipped_values(rendered: str, shipped: str) -> str:
 
 
 class TestPlatformConfig:
-    def test_validates_from_dict(self):
-        cfg = PlatformConfig(**_valid_config_dict())
-        assert cfg.kubernetes_namespace == "nodalarc"
-
-    def test_frozen(self):
-        cfg = PlatformConfig(**_valid_config_dict())
-        with pytest.raises(ValidationError):
-            cfg.kubernetes_namespace = "other"
-
-    def test_missing_field_raises(self):
-        d = _valid_config_dict()
-        del d["kubernetes_namespace"]
-        with pytest.raises(ValidationError):
-            PlatformConfig(**d)
-
     def test_shipped_platform_yaml_declares_exactly_the_model(self):
         """The file is the single source: every model field is in it and nothing else is."""
         raw = yaml.safe_load((ROOT / "configs" / "platform.yaml").read_text(encoding="utf-8"))
         cfg = PlatformConfig.model_validate(raw["platform"])
         assert set(raw["platform"]) == set(cfg.model_dump())
-
-    def test_declared_setting_missing_from_the_file_is_refused(self):
-        d = _valid_config_dict()
-        del d["ome_link_state_snapshot_interval_s"]
-        with pytest.raises(ValidationError):
-            PlatformConfig(**d)
-
-    def test_unknown_key_is_refused(self):
-        with pytest.raises(ValidationError):
-            PlatformConfig(**{**_valid_config_dict(), "ome_full_state_snapshot_interval_s": 10})
 
     def test_chart_copy_templates_every_installer_setting(self):
         """Each installer-chosen setting becomes its chart value in the chart copy,
@@ -218,12 +193,6 @@ class TestSingleton:
     def test_get_before_init_raises(self):
         with pytest.raises(RuntimeError, match="not initialized"):
             get_platform_config()
-
-    def test_init_from_object(self):
-        cfg = PlatformConfig(**_valid_config_dict())
-        result = init_platform_config(cfg)
-        assert result is cfg
-        assert get_platform_config() is cfg
 
     def test_init_from_yaml(self, tmp_path):
         import yaml

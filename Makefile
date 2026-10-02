@@ -17,7 +17,6 @@ MODE            ?= auto
 REGISTRY_HOST   ?= $(shell bash scripts/detect-registry.sh 2>/dev/null)
 DEFAULT_SESSION ?= catalog/nodalarc/sessions/earth-leo-simple.yaml
 NAMESPACE       ?= nodalarc
-TEST_ROOT_PYTHON ?= .venv/bin/python
 
 export KUBECONFIG
 
@@ -65,7 +64,7 @@ IMAGE_REF_TAG = $$(MODE='$(MODE)' REGISTRY_HOST='$(REGISTRY_HOST)' TAG='$(TAG)' 
 
 .PHONY: help all deps build load install reinstall upgrade session lint lint-policy typecheck format-diff generate-contracts check-contracts dead-code \
         test test-integration test-runtime-matrix test-builder-e2e \
-        test-root ensure-frontend-deps \
+        ensure-frontend-deps \
         teardown force-teardown reset-platform restart clean clean-deps clean-images \
         clean-registry purge-containerd nuke status check-registry test-backend test-frontend \
         build-frontends build-images ensure-base-images build-base-images \
@@ -110,7 +109,6 @@ help: ## Show this help
 	@echo "  install refuses existing platform state; use upgrade or reinstall instead."
 	@echo "  nuke removes NodalArc state, images, build artifacts, and dependencies; K3s remains."
 	@echo "  force-teardown skips deterministic host cleanup and may leave kernel/container state behind."
-	@echo "  sudo make test-root runs privileged Node Agent kernel proof tests on this host."
 	@echo ""
 	@echo "Settings:  copy config.mk.example to config.mk"
 	@echo "  MODE            = $(MODE)"
@@ -549,18 +547,6 @@ perf-test: ## Run OME performance budgets; artifacts land in perf-results/
 	@echo "[perf-test] (1x realtime / 60x compression at the 1 Hz tick) are in the table above —"
 	@echo "[perf-test] a scenario can be regression-clean and still fail a product target."
 	@echo "[perf-test] Artifacts + trend index: perf-results/"
-
-test-root: ## Run privileged Node Agent kernel proof tests (requires root/CAP_NET_ADMIN)
-	@if [ "$$(id -u)" != "0" ]; then \
-		echo "FATAL: test-root requires root/CAP_NET_ADMIN. Run: sudo make test-root"; \
-		exit 1; \
-	fi
-	@if [ ! -x "$(TEST_ROOT_PYTHON)" ]; then \
-		echo "FATAL: $(TEST_ROOT_PYTHON) not found or not executable. Run: uv sync"; \
-		exit 1; \
-	fi
-	@echo "[test-root] Running privileged Node Agent substrate proof tests"
-	$(TEST_ROOT_PYTHON) -m pytest -m requires_root tests/integration/test_node_agent_netem.py --tb=short -q
 
 # ---------------------------------------------------------------------------
 # Reset and teardown

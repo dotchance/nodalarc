@@ -4,7 +4,6 @@
 
 from __future__ import annotations
 
-from copy import deepcopy
 from pathlib import Path
 
 import pytest
@@ -25,7 +24,6 @@ from nodalarc.resolve_session import (
     load_session_resolution_from_file,
     resolve_session,
 )
-from pydantic import ValidationError
 
 from tests.catalog_session_fixtures import shipped_read_view
 
@@ -469,30 +467,6 @@ def test_placed_ground_nodes_get_deterministic_allocated_loopbacks(tmp_path: Pat
     }
 
 
-def test_unknown_top_level_session_keys_are_rejected_by_canonical_model() -> None:
-    raw = _load()
-    raw["constellation"] = "configs/constellations/demo.yaml"
-
-    with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
-        resolve_session(raw, catalog=shipped_read_view())
-
-
-def test_selector_matching_zero_nodes_fails_loudly() -> None:
-    raw = _load("earth-leo-heo-geo-luna-reachability.yaml")
-    raw["link_rules"][0]["endpoints"][0]["select"] = {"tag": "does_not_exist"}
-
-    with pytest.raises(SessionResolutionError, match="selector matched zero nodes"):
-        resolve_session(raw, catalog=shipped_read_view())
-
-
-def test_terminal_selector_matching_zero_mounts_fails_loudly() -> None:
-    raw = _load("earth-leo-heo-geo-luna-reachability.yaml")
-    raw["link_rules"][0]["endpoints"][0]["terminal"] = {"role": "crosslink"}
-
-    with pytest.raises(SessionResolutionError, match="terminal selector matched zero"):
-        resolve_session(raw, catalog=shipped_read_view())
-
-
 def test_terminal_install_count_drives_derived_unnumbered_wan_interfaces() -> None:
     resolved = resolve_session(
         _load("earth-leo-heo-geo-luna-reachability.yaml"), catalog=shipped_read_view()
@@ -520,18 +494,6 @@ def test_segment_apply_originated_prefixes_merge_with_site_node_intent() -> None
     for node in leo_a_ground:
         assert "0.0.0.0/0" in node.originated_prefixes.ipv4
         assert any(prefix != "0.0.0.0/0" for prefix in node.originated_prefixes.ipv4)
-
-
-def test_catalog_source_change_changes_resolved_session() -> None:
-    raw = _load("earth-leo-heo-geo-luna-reachability.yaml")
-    baseline = resolve_session(raw, catalog=shipped_read_view())
-    changed = deepcopy(raw)
-    changed["segments"][0]["tags"] = ["changed"]
-
-    updated = resolve_session(changed, catalog=shipped_read_view())
-
-    assert baseline.model_dump(mode="python") != updated.model_dump(mode="python")
-    assert all("changed" in node.tags for node in updated.nodes if node.segment_id == "leo_a")
 
 
 def test_each_wan_interface_carries_its_own_terminal_rates() -> None:

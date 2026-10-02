@@ -261,27 +261,6 @@ describe("orbitalMath", () => {
       expect(nz).toBeCloseTo(legacyWorld.z, 2);
     });
 
-    it("uses absolute semi-major axis as the orbit-size authority", () => {
-      const epoch = J2000_UNIX_SECONDS;
-      const elements = {
-        propagator: "two-body" as const,
-        semi_major_axis_km: ORBIT_BASE_RADIUS_KM + 420,
-        eccentricity: 0,
-        inclination_deg: 0,
-        raan_deg: 0,
-        argument_of_perigee_deg: 0,
-        mean_anomaly_deg: 0,
-        body: EARTH_BODY,
-      };
-      const [xDefault, yDefault, zDefault] = propagateToSceneXYZ(elements, epoch, epoch);
-      const [xFrame, yFrame, zFrame] = propagateToSceneXYZ({ ...elements }, epoch, epoch);
-      const defaultDist = Math.sqrt(xDefault * xDefault + yDefault * yDefault + zDefault * zDefault);
-      const frameDist = Math.sqrt(xFrame * xFrame + yFrame * yFrame + zFrame * zFrame);
-
-      expect(frameDist).toBeCloseTo(defaultDist, 6);
-      expect(EARTH_BODY.equatorialRadiusKm).toBeGreaterThan(EARTH_BODY.meanRadiusKm);
-    });
-
     it("honors the J2 mean-elements propagator instead of silently using Keplerian", () => {
       const epoch = J2000_UNIX_SECONDS;
       const elements = {

@@ -16,12 +16,10 @@ from nodalarc.propagator import (
     GeoPosition,
     OrbitalElements,
     Vec3,
-    elements_from_params,
     gmst,
     j2_circular_secular_rates,
     j2_mean_element_secular_rates,
     orbital_period_for_body,
-    propagate_keplerian,
 )
 
 from tests.physics_fixtures import (
@@ -41,12 +39,6 @@ from tests.physics_fixtures import (
 EPOCH = 1735689600.0
 EARTH_MU = EARTH_TEST_BODY_FRAME.gravitational_parameter_km3_s2
 EARTH_RADIUS_KM = EARTH_TEST_BODY_FRAME.mean_radius_km
-
-
-@pytest.fixture
-def iss_like_elements():
-    """ISS-like orbit: 408 km, 51.6° inclination."""
-    return earth_elements_from_params(408.0, 51.6, 0.0, 0.0)
 
 
 @pytest.fixture
@@ -74,14 +66,6 @@ def molniya_elements():
 
 def test_gmst_at_j2000():
     assert 4.8 < gmst(J2000_UNIX) < 5.0
-
-
-def test_ome_reexports_shared_propagator():
-    from ome import propagator as ome_propagator
-
-    assert ome_propagator.GeoPosition is GeoPosition
-    assert ome_propagator.propagate_keplerian is propagate_keplerian
-    assert ome_propagator.elements_from_params is elements_from_params
 
 
 class TestOrbitalPeriod:

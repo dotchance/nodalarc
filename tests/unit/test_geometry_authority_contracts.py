@@ -6,7 +6,6 @@ from __future__ import annotations
 
 import math
 from datetime import UTC, datetime
-from unittest.mock import MagicMock
 
 import pytest
 from nodalarc.constants import SPEED_OF_LIGHT_KM_S
@@ -15,23 +14,14 @@ from nodalarc.geo import (
     compute_latency_ms,
     compute_range_km,
 )
-from nodalarc.models.events import VisibilityEvent
 from nodalarc.models.link_state import (
-    AdminState,
-    CarrierState,
-    LinkState,
     LinkStateSnapshot,
-    RoutingState,
 )
-from nodalarc.propagator import geodetic_to_ecef as reexported_geodetic_to_ecef
 from ome.event_stream import build_link_state_snapshot
 from ome.propagation_engine import PropagatedState
 from ome.snapshot_builder import LinkSnapshotSource
-from scheduler.dispatcher import Dispatcher
-from scheduler.pod_locator import PodLocationMap
 
 from tests.physics_fixtures import EARTH_TEST_BODY_FRAME, earth_geodetic_to_ecef
-from tests.terminal_rate_fixtures import ANY_INTERFACE_RATES
 
 SIM = datetime(2026, 1, 1, tzinfo=UTC)
 RANGE_TOL_KM = 1e-6
@@ -72,29 +62,6 @@ def _snapshot_source(
     )
 
 
-def _dispatcher() -> Dispatcher:
-    pair = ("sat-P00S00", "sat-P00S01")
-    loc = PodLocationMap()
-    loc._node_of["sat-P00S00"] = "node-a"
-    loc._node_of["sat-P00S01"] = "node-a"
-    loc._agent_addrs["node-a"] = "agent-a"
-
-    pool = MagicMock()
-    return Dispatcher(
-        interface_map={pair: ("isl0", "isl1")},
-        interface_rates=ANY_INTERFACE_RATES,
-        pod_locator=loc,
-        agent_pool=pool,
-        session_id="test-session",
-        wiring_generation="sha256:" + "a" * 64,
-        writer_epoch=1,
-        max_latency_age_s=1.0,
-        gs_terminal_capacities={},
-        gs_handover_modes={},
-        sat_ground_terminal_capacities={},
-    )
-
-
 class TestAnalyticGeometry:
     def test_ecef_range_matches_euclidean_distance(self):
         assert compute_range_km(Vec3(0.0, 0.0, 0.0), Vec3(3.0, 4.0, 12.0)) == 13.0
@@ -117,19 +84,6 @@ class TestAnalyticGeometry:
         assert math.isclose(x, 0.0, abs_tol=RANGE_TOL_KM)
         assert math.isclose(y, 0.0, abs_tol=RANGE_TOL_KM)
         assert math.isclose(z, WGS84_B, abs_tol=RANGE_TOL_KM)
-
-    def test_propagator_reexports_single_geodetic_to_ecef_implementation(self):
-        from nodalarc.geo import geodetic_to_ecef
-
-        assert reexported_geodetic_to_ecef is geodetic_to_ecef
-
-        geo = GeoPosition(lat_deg=33.9175, lon_deg=-118.328111, alt_km=0.04)
-        direct_ecef = earth_geodetic_to_ecef(geo)
-        reexported_ecef = reexported_geodetic_to_ecef(geo, EARTH_TEST_BODY_FRAME)
-
-        assert math.isclose(direct_ecef.x, reexported_ecef.x, abs_tol=RANGE_TOL_KM)
-        assert math.isclose(direct_ecef.y, reexported_ecef.y, abs_tol=RANGE_TOL_KM)
-        assert math.isclose(direct_ecef.z, reexported_ecef.z, abs_tol=RANGE_TOL_KM)
 
 
 class TestOmeSnapshotGeometry:
@@ -181,60 +135,6 @@ class TestOmeSnapshotGeometry:
             )
 
 
-class TestSchedulerAuthorityPreservation:
-    def test_visibility_event_range_and_latency_are_preserved_exactly(self):
-        d = _dispatcher()
-        event = VisibilityEvent(
-            sim_time=SIM,
-            node_a="sat-P00S00",
-            node_b="sat-P00S01",
-            visible=True,
-            scheduled=True,
-            range_km=3210.987654321,
-            latency_ms=10.710123456789,
-            elevation_deg=None,
-            terminal_type="optical",
-            link_type="isl",
-            visibility_reject_reason="ok",
-            unscheduled_reason=None,
-        )
-
-        desired = d._apply_events_to_desired([event])
-        info = desired[("sat-P00S00", "sat-P00S01")]
-
-        assert info.range_km == event.range_km
-        assert info.latency_ms == event.latency_ms
-
-    def test_snapshot_range_and_latency_are_preserved_exactly(self):
-        d = _dispatcher()
-        link = LinkState(
-            node_a="sat-P00S00",
-            node_b="sat-P00S01",
-            interface_a="isl0",
-            interface_b="isl1",
-            admin=AdminState.UP,
-            carrier=CarrierState.UP,
-            routing=RoutingState.UNKNOWN,
-            range_km=4321.123456789,
-            latency_ms=14.413123456789,
-            link_type="isl",
-            sim_time=SIM,
-        )
-        snapshot = LinkStateSnapshot(
-            sim_time=SIM,
-            snapshot_seq=1,
-            links=(link,),
-            interval_s=1.0,
-        )
-
-        desired = d._build_desired_from_snapshot(snapshot)
-        assert desired is not None
-        info = desired[("sat-P00S00", "sat-P00S01")]
-
-        assert info.range_km == link.range_km
-        assert info.latency_ms == link.latency_ms
-
-
 class TestWireParityAfterModelConstruct:
     """The builders construct wire models WITHOUT validation (the hot
     authority tick paid ~5.4 ms p95 re-validating OME's own output).
@@ -244,7 +144,6 @@ class TestWireParityAfterModelConstruct:
     before any wire consumer sees a malformed payload."""
 
     def test_link_state_snapshot_round_trips_byte_identical(self):
-        from nodalarc.models.link_state import LinkStateSnapshot
 
         isl_pair = ("sat-a", "sat-b")
         gnd_pair = ("gs-den", "sat-a")

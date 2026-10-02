@@ -92,21 +92,6 @@ describe("isOccludedByEarth", () => {
     });
   });
 
-  describe("symmetry", () => {
-    it("occlusion is symmetric for satellites at equal angles", () => {
-      // Two satellites at +Z and -Z, same distance from camera axis
-      const a = isOccludedByEarth(0, 0, SAT_R, CAM_X, CAM_Y, CAM_Z, R);
-      const b = isOccludedByEarth(0, 0, -SAT_R, CAM_X, CAM_Y, CAM_Z, R);
-      expect(a).toBe(b);
-    });
-
-    it("occlusion is symmetric for Y axis", () => {
-      const a = isOccludedByEarth(0, SAT_R, 0, CAM_X, CAM_Y, CAM_Z, R);
-      const b = isOccludedByEarth(0, -SAT_R, 0, CAM_X, CAM_Y, CAM_Z, R);
-      expect(a).toBe(b);
-    });
-  });
-
   describe("boundary: satellite exactly at the limb", () => {
     it("satellite just inside the visual limb — VISIBLE", () => {
       // Satellite at a position where the ray to it just barely

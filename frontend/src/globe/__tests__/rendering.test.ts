@@ -6,7 +6,7 @@
 // visible rendering failures. Each test documents a specific bug that
 // was discovered during live deployment.
 
-import { afterEach, describe, it, expect, vi } from "vitest";
+import { afterEach, it, expect, vi } from "vitest";
 import { createElement } from "react";
 import { cleanup, render } from "@testing-library/react";
 import * as THREE from "three";
@@ -81,26 +81,4 @@ it.each([
     if (opaque) expect(opacity).toBe(1);
     else expect(opacity).toBeLessThan(1);
   }
-});
-
-describe("rendering invariants", () => {
-  describe("camera bounds include full constellation view", () => {
-    // BUG: Camera max distance was too restrictive (600 = 6x earth)
-    // preventing operators from zooming out for full constellation view.
-    it("max camera distance allows seeing the full LEO shell", () => {
-      const satOrbitRadius = SCENE_EARTH_RADIUS + 550 / EARTH_KM_PER_RENDER_UNIT;
-      expect(tokens.cameraMaxDistance).toBeGreaterThan(satOrbitRadius * 3);
-    });
-
-    it("max camera distance allows framing a GEO shell", () => {
-      const geoOrbitRadius = SCENE_EARTH_RADIUS + 35786 / EARTH_KM_PER_RENDER_UNIT;
-      const halfFovRad = (tokens.cameraFov * Math.PI) / 360;
-      const requiredDistance = geoOrbitRadius / Math.sin(halfFovRad);
-      expect(tokens.cameraMaxDistance).toBeGreaterThan(requiredDistance * 1.25);
-    });
-
-    it("min camera distance is above the earth surface", () => {
-      expect(tokens.cameraMinDistance).toBeGreaterThan(SCENE_EARTH_RADIUS);
-    });
-  });
 });

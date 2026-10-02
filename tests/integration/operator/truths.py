@@ -7,20 +7,28 @@ returns the disagreements it found. A scenario (a switch, a seek, a repair) ends
 
 from __future__ import annotations
 
+import math
+
 from .harness.client import Operator
 from .harness.network import (
     ShownNetwork,
     link_interface,
     link_key,
+    loopback_of,
     peer_of,
     ping_reply_times_ms,
+    position_km,
     read_clock,
     router_neighbors,
+    sim_seconds,
     watch,
 )
 
 # A reply is late by the time FRR and the kernel spend on it, and the delay NodalArc applies
 # follows the moving range in steps. The fastest of several replies is compared, with this margin.
+LIGHT_KM_PER_MS = 299.792458
+RANGE_ALLOWANCE_KM = 0.05
+SPEED_ALLOWANCE_KM_S = 0.05
 PROCESSING_ALLOWANCE_MS = 0.5
 MOVING_RANGE_ALLOWANCE = 0.03
 
@@ -56,9 +64,10 @@ def links_shown_are_the_routers_neighbors(operator: Operator, shown: ShownNetwor
     if not routers:
         return ["the session shows no steady ground link that both ends route over"]
     reported = {}
+    names = shown.node_by_address()
     for router in routers:
         with operator.terminal(router) as terminal:
-            reported[router] = router_neighbors(terminal, shown.nodes[router])
+            reported[router] = router_neighbors(terminal, shown.nodes[router], names)
 
     # Links that came or went while the routers were being read are left out of both sides.
     shown = shown.and_now(operator.state())
@@ -86,22 +95,28 @@ def links_shown_are_the_routers_neighbors(operator: Operator, shown: ShownNetwor
 
 
 def latency_shown_is_the_delay_packets_get(operator: Operator, shown: ShownNetwork) -> list[str]:
-    """A ground router pings the satellite it is shown linked to; the round trip is twice the latency."""
+    """A ground router pings the satellite it is shown linked to; the round trip is twice the latency.
+
+    The latency shown moves with the range, so it is read just before and just after each ping,
+    and the fastest reply has to fall between the two readings.
+    """
     links = shown.routed_ground_links()
     if not links:
         return ["the session shows no steady ground link that both ends route over"]
+
+    def latency_now(key: tuple[str, str]) -> float | None:
+        now = {link_key(link): link for link in operator.state()["links"]}.get(key)
+        return now["latency_ms"] if now is not None and now["state"] == "active" else None
+
     measured = 0
     disagreements = []
     for ground, satellite, link in links:
-        loopback = next(
-            address["address"].split("/")[0]
-            for address in shown.nodes[satellite]["addresses"]
-            if address["purpose"] == "router_loopback" and address["family"] == "ipv4"
-        )
+        loopback = loopback_of(shown.nodes[satellite])
         with operator.terminal(ground) as terminal:
+            before = latency_now(link_key(link))
             replies = ping_reply_times_ms(terminal.run(f"ping {loopback}", interrupt_after=5.0))
-        after = {link_key(now): now for now in operator.state()["links"]}.get(link_key(link))
-        if after is None or after["state"] != "active":
+            after = latency_now(link_key(link))
+        if before is None or after is None:
             print(f"delay: {ground} -> {satellite}: the link ended during the ping; not measured")
             continue
         measured += 1
@@ -111,29 +126,106 @@ def latency_shown_is_the_delay_packets_get(operator: Operator, shown: ShownNetwo
                 f"reports the neighbor; ping gets no reply"
             )
             continue
-        expected = link["latency_ms"] + after["latency_ms"]
+        low, high = 2 * min(before, after), 2 * max(before, after)
+        allowance = PROCESSING_ALLOWANCE_MS + MOVING_RANGE_ALLOWANCE * high
         print(
             f"delay: {ground} -> {satellite}: round trip {min(replies):.3f} ms; "
-            f"shown {expected / 2:.3f} ms one way ({expected:.3f} ms round trip)"
+            f"shown {low:.3f} to {high:.3f} ms round trip during the ping"
         )
-        if (
-            abs(min(replies) - expected)
-            > PROCESSING_ALLOWANCE_MS + MOVING_RANGE_ALLOWANCE * expected
-        ):
+        if not low - allowance <= min(replies) <= high + allowance:
             disagreements.append(
                 f"{ground} -> {satellite}: round trip {min(replies):.3f} ms; "
-                f"NodalArc shows {expected / 2:.3f} ms one way ({expected:.3f} ms round trip)"
+                f"NodalArc shows {low:.3f} to {high:.3f} ms round trip during the ping"
             )
     if not measured:
         disagreements.append("every ground link ended while it was being measured")
     return disagreements
 
 
+def latency_shown_is_the_light_time_between_the_positions_shown(shown: ShownNetwork) -> list[str]:
+    """Each link's latency is its range at light speed, and its range is the distance between its ends.
+
+    NodalArc refreshes a link's range every few sim seconds. The range is compared with the
+    positions in the snapshot where it was refreshed.
+    """
+    disagreements = []
+    compared = 0
+    for key in shown.steady_links():
+        previous = None
+        for snapshot in shown.snapshots:
+            link = next(link for link in snapshot["links"] if link_key(link) == key)
+            if abs(link["latency_ms"] - link["range_km"] / LIGHT_KM_PER_MS) > 1e-6:
+                disagreements.append(
+                    f"{key}: latency {link['latency_ms']} ms is not the light time of {link['range_km']} km"
+                )
+                break
+            refreshed = previous is not None and link["range_km"] != previous
+            previous = link["range_km"]
+            if not refreshed:
+                continue
+            nodes = {node["node_id"]: node for node in snapshot["nodes"]}
+            a, b = nodes[key[0]], nodes[key[1]]
+            if a["reference_body"] != b["reference_body"]:
+                break  # positions are shown per body; a link between bodies is not compared
+            apart = math.dist(position_km(a, shown.bodies), position_km(b, shown.bodies))
+            compared += 1
+            if abs(apart - link["range_km"]) > RANGE_ALLOWANCE_KM:
+                disagreements.append(
+                    f"{key} at {snapshot['sim_time']}: range shown {link['range_km']:.3f} km; "
+                    f"the positions shown are {apart:.3f} km apart"
+                )
+            break
+    print(f"geometry: {compared} links compared at the snapshot that refreshed their range")
+    return disagreements
+
+
+def satellites_move_at_the_speed_their_orbits_require(shown: ShownNetwork) -> list[str]:
+    """Between two snapshots a satellite covers the distance its orbit requires in that sim time.
+
+    The speed on an orbit of semi-major axis a at radius r is sqrt(GM (2/r - 1/a)). Positions are
+    shown in the rotating frame of the body, which adds or removes up to the body's surface speed
+    at that radius.
+    """
+    first, last = shown.snapshots[0], shown.snapshots[-1]
+    elapsed = sim_seconds(last) - sim_seconds(first)
+    if last["playback_paused"] or elapsed <= 0:
+        return []
+    before = {node["node_id"]: node for node in first["nodes"]}
+    disagreements = []
+    compared = 0
+    for node_id, node in shown.nodes.items():
+        orbit = shown.orbits.get(node_id, {})
+        if orbit.get("type") != "keplerian" or node_id not in before:
+            continue
+        body = shown.bodies[node["reference_body"]]
+        here = position_km(node, shown.bodies)
+        radius = math.hypot(*here)
+        orbital = math.sqrt(
+            body["gravitational_parameter_km3_s2"] * (2 / radius - 1 / orbit["semi_major_axis_km"])
+        )
+        frame = body["rotation_rate_rad_s"] * radius
+        speed = math.dist(here, position_km(before[node_id], shown.bodies)) / elapsed
+        compared += 1
+        if (
+            not max(0.0, orbital - frame) - SPEED_ALLOWANCE_KM_S
+            <= speed
+            <= orbital + frame + SPEED_ALLOWANCE_KM_S
+        ):
+            disagreements.append(
+                f"{node_id}: moved at {speed:.3f} km/s over {elapsed:.0f} sim seconds; "
+                f"its orbit requires {orbital:.3f} km/s (frame rotation up to {frame:.3f})"
+            )
+    print(f"motion: {compared} satellites compared over {elapsed:.0f} sim seconds")
+    return disagreements
+
+
 def assert_session_is_truthful(operator: Operator) -> None:
     """Every truth, on the session as it is now. Reports all disagreements together."""
-    shown = watch(operator)
+    shown = watch(operator, 14.0)
     disagreements = [
         *clock_runs_at_the_reported_speed(operator),
+        *satellites_move_at_the_speed_their_orbits_require(shown),
+        *latency_shown_is_the_light_time_between_the_positions_shown(shown),
         *links_shown_are_the_routers_neighbors(operator, shown),
         *latency_shown_is_the_delay_packets_get(operator, shown),
     ]

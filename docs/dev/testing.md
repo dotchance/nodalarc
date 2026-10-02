@@ -6,32 +6,43 @@
 make test
 ```
 
-This runs the full unit test suite via pytest. All tests must pass before any commit touching backend code.
+This runs the Python unit suite and the frontend suite. Both must pass before any commit.
 
-Unit tests use mocked NATS clients or a non-routable test URL. Tests that require a live NATS server belong in the integration suite.
+A unit test checks one unit of NodalArc on its own and needs no cluster. The tests are grouped by
+concept under `tests/unit`:
+
+| Directory | What it covers |
+|-----------|----------------|
+| `sky` | Orbits, visibility, link scheduling, latency |
+| `sessions` | Session grammar, catalog, resolver |
+| `authoring` | Session Builder and Wizard services |
+| `routing` | Router configuration and workload composition |
+| `runtime` | Operator, Scheduler and Node Agent logic |
+| `observation` | VS-API views, explanations, history, logging |
+| `platform` | Make targets, lifecycle scripts, project metadata |
+| `tools` | Report, compare and scenario tools |
+
+A unit test may replace a collaborator only when all of these hold:
+
+1. The collaborator is outside the process (the kernel, Kubernetes, NATS, SSH, another service), or the
+   test needs a failure that cannot be produced on demand.
+2. The stand-in answers with the collaborator's real types.
+3. The test asserts what the unit decided or produced. It never asserts a value the stand-in was told
+   to return.
+4. The behavior a user can reach is also covered by an integration test.
 
 ### Running specific tests
 
 ```bash
-# Run a specific test file
-uv run pytest tests/unit/test_scheduler_dispatcher.py -v
+# One directory
+uv run pytest tests/unit/sky -q
 
-# Run tests matching a pattern
-uv run pytest tests/unit/ -k "test_reconcile" -v
+# One file
+uv run pytest tests/unit/sessions/test_resolve_session.py -v
 
-# Run with full output (no truncation)
-uv run pytest tests/unit/test_ome_scheduler_contract.py -v --tb=long
+# Tests matching a pattern
+uv run pytest tests/unit -k "handover" -v
 ```
-
-### Critical test files
-
-| File | What It Tests |
-|------|--------------|
-| `tests/unit/test_ome_scheduler_contract.py` | OME->Scheduler event contract. Must always pass. |
-| `tests/unit/test_scheduler_dispatcher.py` | Reconcile logic, dispatch correctness |
-| `tests/unit/test_node_agent_handlers.py` | BatchLinkUp/Down kernel operations |
-| `tests/unit/test_coverage_preview.py` | Coverage preview pipeline |
-| `tests/unit/test_session_deployer.py` | Operator session creation logic |
 
 ### Do not use `-x`
 
@@ -52,7 +63,38 @@ The frontend test suite covers React components and rendering logic. It must pas
 make test-integration
 ```
 
-Requires a running session. Tests exercise real NATS communication, real pod operations, and real routing state.
+Every integration test runs against a NodalArc cluster. Set `VS_API_HOST` to the VS-API address, or
+let the tests find it the way the lifecycle scripts do.
+
+The tests in `tests/integration/operator` use NodalArc the way a user does: the REST API, the state
+feed, and the terminal as `operator`. They take their evidence from the emulated network: the routers'
+own neighbor tables and packets sent between nodes.
+
+`truths.py` holds what must be true of any ready session: the clock runs at the speed shown, the links
+shown are the routers' neighbors, the latency shown is the delay packets get, the range shown is the
+distance between the positions shown, and satellites move at the speed their orbits require. Each test
+file covers one thing a user does and ends by checking every truth:
+
+| File | What a user does |
+|------|------------------|
+| `test_truth.py` | Looks at the running session |
+| `test_access.py` | Opens a terminal, runs commands, traces a path |
+| `test_sessions.py` | Selects, runs and switches sessions |
+| `test_time.py` | Pauses, changes speed, seeks |
+| `test_topology.py` | Lets the sky move so links come and go |
+| `test_authoring.py` | Authors a session with the Wizard or a YAML file and runs it |
+| `test_catalog.py` | Runs every shipped session |
+
+```bash
+# About two minutes; changes nothing on the cluster
+uv run pytest tests/integration/operator/test_truth.py tests/integration/operator/test_access.py -q
+
+# Every shipped session; replaces the running session many times
+uv run pytest tests/integration/operator -m catalog -q
+```
+
+`test_sessions.py`, `test_authoring.py` and `test_catalog.py` replace the session running on the cluster.
+Each ends on the session it found.
 
 ## What to Test
 
@@ -109,8 +151,8 @@ sudo KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl logs -l app=nodalarc-scheduler
 
 ## Test Quality Rules
 
-- Tests must exercise real code paths, not just isolated helpers
+- A test states one thing NodalArc promises and shows evidence for it
+- Integration tests act through what a user has and take evidence from the emulated network
+- Unit tests meet the four conditions above before they replace a collaborator
 - Never present old test results as validation of new code
-- Never mock what you can run (prefer real NATS, real models, real serialization)
-- Tests that only verify internal state without observable behavior are low value
-- Integration tests must cover ground stations - adjacency check + ping from GS pod
+- Never write a test that reports a pass when it could not run

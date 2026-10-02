@@ -164,7 +164,12 @@ class Operator:
 
     def run_session(self, session: dict[str, Any], *, timeout: float = 900.0) -> dict[str, Any]:
         """Switch to `session` and wait until NodalArc says it is ready. Returns the state."""
-        operation_id = self.switch(session)
+        return self.wait_for_session(session, self.switch(session), timeout=timeout)
+
+    def wait_for_session(
+        self, session: dict[str, Any], operation_id: str, *, timeout: float = 900.0
+    ) -> dict[str, Any]:
+        """Follow an accepted switch to its end, then wait until the session is ready."""
         deadline = time.monotonic() + timeout
         while True:
             transition = self.get(f"/api/v1/session-transitions/{operation_id}")
@@ -189,10 +194,77 @@ class Operator:
             )
             time.sleep(2.0)
 
+    def session_yaml(self, session: dict[str, Any]) -> str:
+        """Download one catalog session (an entry of the session list) as the YAML it is stored as."""
+        response = self._http.get(
+            "/api/v1/sessions/yaml", params={"session_ref": session["source_id"]["session_ref"]}
+        )
+        if response.status_code >= 400:
+            raise Refused(response.status_code, response.text)
+        return response.text
+
+    # --- Authoring ------------------------------------------------------------------------
+
+    def save_session(self, compiled: dict[str, Any]) -> dict[str, Any]:
+        """Save a compiled draft to the user catalog, replacing an earlier save of the same name."""
+        request = {"draft": compiled["draft"], "target_ref": compiled["target_ref"]}
+        try:
+            existing = self.post("/api/v1/builder/catalog/get", {"ref": compiled["target_ref"]})
+        except Refused as refusal:
+            if refusal.status != 404:
+                raise
+        else:
+            request["expected_session_revision"] = existing["revision"]
+        return self.post("/api/v1/builder/session/save", request)
+
+    def run_saved_session(self, saved: dict[str, Any], *, timeout: float = 900.0) -> dict[str, Any]:
+        """Deploy a saved user session and wait until NodalArc says it is ready."""
+        accepted = self.post(
+            "/api/v1/builder/session/deploy",
+            {
+                "session_ref": saved["session"]["ref"],
+                "expected_session_revision": saved["session"]["revision"],
+                "expected_document_digest": saved["digests"]["document"],
+                "expected_dependency_digest": saved["digests"]["dependency"],
+                "record_history": False,
+            },
+        )
+        name = saved["session"]["canonical_json"]["session"]["name"]
+        return self.wait_for_session({"name": name}, accepted["operation_id"], timeout=timeout)
+
+    def delete_user_object(self, ref: str) -> None:
+        """Delete one object of the user catalog. A ref that is already gone is left alone."""
+        assert ref.startswith("user:"), f"only user catalog objects are deleted, not {ref}"
+        try:
+            document = self.post("/api/v1/builder/catalog/get", {"ref": ref})
+        except Refused as refusal:
+            if refusal.status == 404:
+                return
+            raise
+        impact = self.post("/api/v1/builder/catalog/dependents", {"ref": ref})
+        self.post(
+            "/api/v1/builder/catalog/delete",
+            {
+                "ref": ref,
+                "expected_revision": document["revision"],
+                "impact_acknowledgement": impact["acknowledgement"],
+            },
+        )
+
     # --- Time -----------------------------------------------------------------------------
 
     def playback(self, action: str, **fields: Any) -> dict[str, Any]:
         return self.post("/api/v1/playback", {"action": action, **fields})
+
+    # --- Systems --------------------------------------------------------------------------
+
+    def trace(self, src_node: str, dst_node: str) -> dict[str, Any]:
+        """Trace Path once between two nodes, both directions."""
+        return self.post("/api/v1/trace", {"src_node": src_node, "dst_node": dst_node})
+
+    def introspect(self, node_id: str, command: str) -> str:
+        """Run one of the commands the page offers on a node; returns what the router printed."""
+        return self.post("/api/v1/introspect", {"node_id": node_id, "command": command})["output"]
 
     # --- Live feeds -----------------------------------------------------------------------
 

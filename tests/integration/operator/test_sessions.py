@@ -66,6 +66,20 @@ def first(operator: Operator) -> Iterator[dict[str, Any]]:
         operator.run_session(session)
 
 
+def test_a_second_switch_during_a_switch_is_refused_and_the_first_completes(
+    operator: Operator, first: dict[str, Any]
+) -> None:
+    second = _another(operator, first)
+    operation_id = operator.switch(second)
+    with pytest.raises(Refused) as refusal:
+        operator.switch(first)
+    print(f"refusal: {refusal.value.status} {refusal.value.body}")
+    assert refusal.value.status == 409 and refusal.value.body.get("message")
+
+    state = operator.wait_for_session(second, operation_id)
+    assert state["constellation_name"] == second["name"]
+
+
 def test_switching_runs_the_chosen_session_and_switching_back_restores_the_first(
     operator: Operator, first: dict[str, Any]
 ) -> None:

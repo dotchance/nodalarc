@@ -27,3 +27,17 @@ def test_the_links_shown_are_the_routers_neighbors(operator: Operator) -> None:
 def test_the_latency_shown_is_the_delay_packets_get(operator: Operator) -> None:
     disagreements = truths.latency_shown_is_the_delay_packets_get(operator, watch(operator))
     assert not disagreements, "\n".join(disagreements)
+
+
+def test_the_latency_shown_is_the_light_time_between_the_positions_shown(
+    operator: Operator,
+) -> None:
+    disagreements = truths.latency_shown_is_the_light_time_between_the_positions_shown(
+        watch(operator, 14.0)
+    )
+    assert not disagreements, "\n".join(disagreements)
+
+
+def test_satellites_move_at_the_speed_their_orbits_require(operator: Operator) -> None:
+    disagreements = truths.satellites_move_at_the_speed_their_orbits_require(watch(operator, 14.0))
+    assert not disagreements, "\n".join(disagreements)

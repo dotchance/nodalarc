@@ -35,6 +35,7 @@ pythonpath = ["lib", "services", "."]
 timeout = 30
 markers = [
     "integration: integration tests requiring K3s",
+    "catalog: the operator tests over every shipped session; replaces the cluster session repeatedly",
 ]
 
 [tool.mypy]

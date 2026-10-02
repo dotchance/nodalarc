@@ -23,3 +23,12 @@ def clock(operator: Operator) -> Iterator[Clock]:
     yield before
     operator.playback("resume")
     operator.playback("set_speed", factor=1.0)
+
+
+def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
+    """The catalog run replaces the cluster's session a dozen times; it runs only when asked for."""
+    if "catalog" in (config.getoption("-m") or ""):
+        return
+    for item in items:
+        if item.get_closest_marker("catalog"):
+            item.add_marker(pytest.mark.skip(reason="the catalog run is selected with -m catalog"))

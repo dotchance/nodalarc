@@ -1,12 +1,13 @@
 """The network NodalArc shows, and the same network as its routers report it.
 
-Two extension points live here. A new routing protocol needs one entry in NEIGHBOR_READERS.
+A new routing protocol needs one entry in NEIGHBOR_READERS.
 Nothing else in the tests names a protocol.
 """
 
 from __future__ import annotations
 
 import json
+import math
 import re
 import time
 from collections.abc import Callable
@@ -54,14 +55,29 @@ def _isis_neighbors(printed: str) -> dict[str, str]:
     }
 
 
+def _ospf_neighbors(printed: str) -> dict[str, str]:
+    # FRR names the interface "term0:100.64.0.2" and the neighbor by its router ID.
+    return {
+        neighbor["ifaceName"].split(":")[0]: router_id
+        for router_id, adjacencies in json.loads(printed)["neighbors"].items()
+        for neighbor in adjacencies
+        if neighbor.get("converged") == "Full"
+    }
+
+
 # protocol -> (command an operator types, reader of what the router prints)
+# A reader returns interface -> neighbor, the neighbor as the router names it: a hostname, or
+# an address NodalArc shows for a node.
 NEIGHBOR_READERS: dict[str, tuple[str, Callable[[str], dict[str, str]]]] = {
     "isis": ("show isis neighbor json", _isis_neighbors),
+    "ospf": ("show ip ospf neighbor json", _ospf_neighbors),
 }
 
 
-def router_neighbors(terminal: Terminal, node: Node) -> dict[str, str]:
-    """Interface to neighbor name, as the router itself reports its established neighbors."""
+def router_neighbors(
+    terminal: Terminal, node: Node, node_by_address: dict[str, str]
+) -> dict[str, str]:
+    """Interface to neighbor node, as the router itself reports its established neighbors."""
     neighbors: dict[str, str] = {}
     for protocol in sorted({protocol for protocol, _ in routing_on(node).values()}):
         if protocol not in NEIGHBOR_READERS:
@@ -69,7 +85,12 @@ def router_neighbors(terminal: Terminal, node: Node) -> dict[str, str]:
                 f"{node['node_id']} runs {protocol}; the tests have no neighbor reader for it"
             )
         command, read = NEIGHBOR_READERS[protocol]
-        neighbors.update(read(terminal.run(command)))
+        neighbors.update(
+            {
+                interface: node_by_address.get(neighbor, neighbor)
+                for interface, neighbor in read(terminal.run(command)).items()
+            }
+        )
     return neighbors
 
 
@@ -77,11 +98,45 @@ def ping_reply_times_ms(printed: str) -> list[float]:
     return [float(value) for value in re.findall(r"time=([0-9.]+) ms", printed)]
 
 
+def traceroute_hops(printed: str) -> list[str | None]:
+    """The address that answered at each hop of `traceroute` output; None for a silent hop."""
+    hops: list[str | None] = []
+    for line in printed.splitlines():
+        hop = re.match(r"\s*\d+\s+(?:(\d+\.\d+\.\d+\.\d+)|\*)", line)
+        if hop:
+            hops.append(hop.group(1))
+    return hops
+
+
+def loopback_of(node: Node) -> str:
+    return next(
+        address["address"].split("/")[0]
+        for address in node["addresses"]
+        if address["purpose"] == "router_loopback" and address["family"] == "ipv4"
+    )
+
+
+def position_km(node: Node, bodies: dict[str, Any]) -> tuple[float, float, float]:
+    """The node's position in its body's fixed frame, from the latitude, longitude and altitude shown."""
+    body = bodies[node["reference_body"]]
+    equatorial, polar = body["equatorial_radius_km"], body["polar_radius_km"]
+    e2 = 1 - (polar * polar) / (equatorial * equatorial)
+    lat, lon = math.radians(node["lat_deg"]), math.radians(node["lon_deg"])
+    normal = equatorial / math.sqrt(1 - e2 * math.sin(lat) ** 2)
+    return (
+        (normal + node["alt_km"]) * math.cos(lat) * math.cos(lon),
+        (normal + node["alt_km"]) * math.cos(lat) * math.sin(lon),
+        (normal * (1 - e2) + node["alt_km"]) * math.sin(lat),
+    )
+
+
 @dataclass(frozen=True)
 class ShownNetwork:
     """What NodalArc showed over a stretch of the state feed."""
 
     snapshots: list[dict[str, Any]]
+    bodies: dict[str, Any]
+    orbits: dict[str, Any]
 
     @property
     def latest(self) -> dict[str, Any]:
@@ -90,6 +145,13 @@ class ShownNetwork:
     @property
     def nodes(self) -> dict[str, Node]:
         return {node["node_id"]: node for node in self.latest["nodes"]}
+
+    def node_by_address(self) -> dict[str, str]:
+        return {
+            address["address"].split("/")[0]: node["node_id"]
+            for node in self.latest["nodes"]
+            for address in node.get("addresses") or []
+        }
 
     def steady_links(self) -> dict[tuple[str, str], Link]:
         """Links shown active in every snapshot, as last shown. A link that came or went is out."""
@@ -131,7 +193,7 @@ class ShownNetwork:
         return found
 
     def and_now(self, state: dict[str, Any]) -> ShownNetwork:
-        return ShownNetwork([*self.snapshots, state])
+        return ShownNetwork([*self.snapshots, state], self.bodies, self.orbits)
 
 
 @dataclass(frozen=True)
@@ -183,8 +245,46 @@ def watch(operator: Operator, seconds: float = 10.0) -> ShownNetwork:
     assert state["session_status"] == "ready", (
         f"no session is ready (status {state['session_status']!r}: {state['session_status_detail']!r})"
     )
-    snapshots = [message for _, message in operator.watch_state(seconds) if "links" in message]
+    messages = [message for _, message in operator.watch_state(seconds)]
+    snapshots = [message for message in messages if "links" in message]
     assert len(snapshots) >= 3, (
         f"the state feed delivered {len(snapshots)} snapshots in {seconds} s"
     )
-    return ShownNetwork(snapshots)
+    ephemeris = [message for message in messages if message.get("msg_type") == "session_ephemeris"]
+    assert ephemeris, "the state feed sent no session ephemeris"
+    return ShownNetwork(snapshots, ephemeris[0]["body_frames"], ephemeris[0]["nodes"])
+
+
+def ground_links(snapshot: dict[str, Any]) -> set[tuple[str, str]]:
+    return {
+        link_key(link)
+        for link in snapshot["links"]
+        if link["link_type"] == "ground" and link["state"] == "active"
+    }
+
+
+def let_the_sky_move(
+    operator: Operator, *, speed: float = 30.0, changes_wanted: int = 6, longest_wait: float = 240.0
+) -> tuple[list[str], str, str]:
+    """Run the session fast until ground links have come and gone, then return to 1x.
+
+    Returns the changes seen and the sim times the run started and ended at.
+    """
+    changes: list[str] = []
+
+    def enough(messages: list[tuple[float, dict[str, Any]]]) -> bool:
+        snapshots = [message for _, message in messages if "links" in message]
+        if len(snapshots) < 2:
+            return False
+        before, now = ground_links(snapshots[-2]), ground_links(snapshots[-1])
+        changes.extend(f"up {a} <-> {b}" for a, b in sorted(now - before))
+        changes.extend(f"down {a} <-> {b}" for a, b in sorted(before - now))
+        return len(changes) >= changes_wanted
+
+    operator.playback("set_speed", factor=speed)
+    try:
+        heard = operator.watch_state(longest_wait, until=enough)
+    finally:
+        operator.playback("set_speed", factor=1.0)
+    snapshots = [message for _, message in heard if "links" in message]
+    return changes, snapshots[0]["sim_time"], snapshots[-1]["sim_time"]

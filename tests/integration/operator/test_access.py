@@ -2,11 +2,15 @@
 
 from __future__ import annotations
 
+import json
+import re
+import time
+
 import pytest
 from websockets.exceptions import ConnectionClosed, InvalidStatus
 from websockets.sync.client import connect
 
-from .harness.client import Operator, Refused
+from .harness.client import Operator, Refused, Terminal
 from .harness.network import (
     ShownNetwork,
     link_interface,
@@ -24,6 +28,60 @@ def test_the_terminal_gives_the_router_cli(operator: Operator) -> None:
     with operator.terminal(ground) as terminal:
         assert terminal.banner.rstrip().endswith(f"{ground}#")
         assert "FRRouting" in terminal.run("show version")
+
+
+def _one_of_each_kind(operator: Operator) -> dict[str, str]:
+    """One router and, when the session has one, one host: the two kinds of terminal."""
+    nodes = watch(operator, 4.0).nodes
+    kinds = {"router": next(name for name, node in nodes.items() if node["routing_instances"])}
+    hosts = sorted(name for name, node in nodes.items() if node["role"] == "host")
+    if hosts:
+        kinds["host"] = hosts[0]
+    return kinds
+
+
+def test_a_host_node_gives_its_own_shell_and_every_command_answers(operator: Operator) -> None:
+    host = _one_of_each_kind(operator).get("host")
+    if host is None:
+        pytest.skip("did not run: the session has no host node")
+    for attempt in range(20):
+        with operator.terminal(host) as terminal:
+            assert not terminal.is_routing_cli
+            assert f"attempt {attempt} answered" in terminal.run(
+                f"echo attempt {attempt} answered", timeout=8.0
+            )
+
+
+def test_a_terminal_closes_when_its_shell_ends(operator: Operator) -> None:
+    for kind, node_id in _one_of_each_kind(operator).items():
+        with connect(operator.socket_url(f"/ws/v1/terminal/{node_id}")) as socket:
+            with operator.terminal(node_id):
+                pass  # the node answers a terminal before this one says exit
+            socket.send(json.dumps({"type": "input", "data": "exit\n"}))
+            with pytest.raises(ConnectionClosed):
+                for _ in range(40):
+                    try:
+                        socket.recv(timeout=0.5)
+                    except TimeoutError:
+                        continue
+            print(f"{kind} {node_id}: the terminal closed after exit")
+
+
+def test_a_closed_terminal_leaves_nothing_running_in_the_workload(operator: Operator) -> None:
+    """A user closes the terminal without saying exit. Its shell must not stay in the workload."""
+    host = _one_of_each_kind(operator).get("host")
+    if host is None:
+        pytest.skip("did not run: the session has no host node")
+    with connect(operator.socket_url(f"/ws/v1/terminal/{host}")) as socket:
+        shell = Terminal(socket, host)
+        pid = re.search(r"^shell=(\d+)$", shell.run("echo shell=$$"), re.M).group(1)
+    time.sleep(5.0)
+    with operator.terminal(host) as terminal:
+        left = terminal.run(f"[ -d /proc/{pid} ] && echo still running: $(cat /proc/{pid}/comm)")
+        terminal.run(f"kill -HUP {pid} 2>/dev/null")
+    assert not left.strip(), (
+        f"{host}: five seconds after the terminal closed its shell still runs: {left.strip()}"
+    )
 
 
 @pytest.mark.parametrize("path", ["/ws/v1/state", "/ws/v1/terminal/any-node"])

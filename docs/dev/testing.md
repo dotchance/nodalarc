@@ -67,27 +67,31 @@ Every integration test runs against a NodalArc cluster. Set `VS_API_HOST` to the
 let the tests find it the way the lifecycle scripts do.
 
 The tests in `tests/integration/operator` use NodalArc the way a user does: the REST API, the state
-feed, and the terminal as `operator`. They take their evidence from the emulated network: the routers'
-own neighbor tables and packets sent between nodes.
+feed, and the terminal (a router's CLI as `operator`, a host node's own shell). They take their
+evidence from the emulated network: the routers' own neighbor tables, packets sent between nodes, and
+the reports of the applications a session runs.
 
 `truths.py` holds what must be true of any ready session: the clock runs at the speed shown, the links
 shown are the routers' neighbors, the latency shown is the delay packets get, the range shown is the
-distance between the positions shown, and satellites move at the speed their orbits require. Each test
-file covers one thing a user does and ends by checking every truth:
+distance between the positions shown, satellites move at the speed their orbits require, and the
+session's applications carry data no sooner than the shortest path shown allows. Each test file covers
+one thing a user does and ends by checking every truth:
 
 | File | What a user does |
 |------|------------------|
 | `test_truth.py` | Looks at the running session |
-| `test_access.py` | Opens a terminal, runs commands, traces a path |
+| `test_access.py` | Opens a terminal on a router or a host, runs commands, traces a path |
+| `test_workloads.py` | Downloads a file over QUIC, sends a DTN bundle |
 | `test_sessions.py` | Selects, runs and switches sessions |
 | `test_time.py` | Pauses, changes speed, seeks |
 | `test_topology.py` | Lets the sky move so links come and go |
-| `test_authoring.py` | Authors a session with the Wizard or a YAML file and runs it |
+| `test_authoring.py` | Authors a session with the Wizard, a YAML file or a forked catalog object and runs it |
 | `test_catalog.py` | Runs every shipped session |
 
 ```bash
-# About two minutes; changes nothing on the cluster
-uv run pytest tests/integration/operator/test_truth.py tests/integration/operator/test_access.py -q
+# A few minutes; changes nothing on the cluster
+uv run pytest tests/integration/operator/test_truth.py tests/integration/operator/test_access.py \
+  tests/integration/operator/test_workloads.py -q
 
 # Every shipped session; replaces the running session many times
 uv run pytest tests/integration/operator -m catalog -q

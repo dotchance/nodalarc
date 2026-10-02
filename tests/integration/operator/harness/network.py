@@ -6,6 +6,7 @@ Nothing else in the tests names a protocol.
 
 from __future__ import annotations
 
+import heapq
 import json
 import math
 import re
@@ -191,6 +192,40 @@ class ShownNetwork:
             if self.routed_peer(link, ground):
                 found.append((ground, satellite, link))
         return found
+
+    def least_latency_ms(self, source: str, destination: str) -> float | None:
+        """The least total latency from one node to another over the links shown active now.
+
+        Nodes of one site or one spacecraft are joined at no delay. None when the links shown
+        do not connect the two nodes.
+        """
+        nodes = self.nodes
+        reach: dict[str, dict[str, float]] = {node_id: {} for node_id in nodes}
+        for link in self.latest["links"]:
+            if link["state"] == "active":
+                a, b = link_key(link)
+                reach[a][b] = reach[b][a] = link["latency_ms"]
+        by_place: dict[str, list[str]] = {}
+        for node_id, node in nodes.items():
+            by_place.setdefault(node["namespace"], []).append(node_id)
+        for together in by_place.values():
+            for a in together:
+                for b in together:
+                    if a != b:
+                        reach[a][b] = 0.0
+        best = {source: 0.0}
+        queue = [(0.0, source)]
+        while queue:
+            so_far, here = heapq.heappop(queue)
+            if here == destination:
+                return so_far
+            if so_far > best[here]:
+                continue
+            for neighbor, latency in reach[here].items():
+                if so_far + latency < best.get(neighbor, math.inf):
+                    best[neighbor] = so_far + latency
+                    heapq.heappush(queue, (so_far + latency, neighbor))
+        return None
 
     def and_now(self, state: dict[str, Any]) -> ShownNetwork:
         return ShownNetwork([*self.snapshots, state], self.bodies, self.orbits)

@@ -8,6 +8,9 @@ returns the disagreements it found. A scenario (a switch, a seek, a repair) ends
 from __future__ import annotations
 
 import math
+import re
+import time
+import uuid
 
 from .harness.client import Operator
 from .harness.network import (
@@ -23,6 +26,7 @@ from .harness.network import (
     sim_seconds,
     watch,
 )
+from .harness.workloads import DtnEndpoint, QuicClient, find_workloads, run_in_shell
 
 # A reply is late by the time FRR and the kernel spend on it, and the delay NodalArc applies
 # follows the moving range in steps. The fastest of several replies is compared, with this margin.
@@ -219,8 +223,129 @@ def satellites_move_at_the_speed_their_orbits_require(shown: ShownNetwork) -> li
     return disagreements
 
 
+def quic_clients_download_from_their_servers(
+    operator: Operator, quic_clients: list[QuicClient]
+) -> list[str]:
+    """Each QUIC client downloads a file from the server the session gives it.
+
+    While NodalArc shows a path between the two, the download completes. The request goes out
+    and the file comes back, so it takes at least one round trip of the shortest path shown.
+    While NodalArc shows no path, no file arrives.
+    """
+    disagreements = []
+    for client in quic_clients:
+        servers = watch(operator, 4.0).node_by_address()
+        if client.server_address not in servers:
+            disagreements.append(
+                f"{client.node_id} is told its server is {client.server_address}; "
+                "NodalArc shows no node with that address"
+            )
+            continue
+        server = servers[client.server_address]
+        before = watch(operator, 4.0).least_latency_ms(client.node_id, server)
+        with operator.terminal(client.node_id) as terminal:
+            status, printed = run_in_shell(
+                terminal,
+                f"cd /tmp && picoquicdemo -D -n server {client.server_address} 4433 /1000000",
+                timeout=600.0,
+            )
+        after = watch(operator, 4.0).least_latency_ms(client.node_id, server)
+        received = re.search(r"Received (\d+) bytes in ([0-9.]+) seconds", printed)
+        downloaded = status == 0 and received and "Stream 0 ended after 1000000 bytes" in printed
+        print(
+            f"quic: {client.node_id} -> {server}: "
+            f"{received.group(0) if downloaded else 'no file arrived'}; "
+            f"least latency shown {before} ms before, {after} ms after"
+        )
+        if before is None and after is None:
+            if downloaded:
+                disagreements.append(
+                    f"{client.node_id} downloaded from {server}; NodalArc shows no path "
+                    "between them"
+                )
+        elif before is None or after is None:
+            print("quic: the path came or went during the download; not judged")
+        elif not downloaded:
+            disagreements.append(
+                f"NodalArc shows a path from {client.node_id} to {server}; the download did "
+                f"not complete: {printed[-600:]}"
+            )
+        elif float(received.group(2)) < (
+            least_s := 2 * min(before, after) / 1000 * (1 - MOVING_RANGE_ALLOWANCE)
+        ):
+            disagreements.append(
+                f"{client.node_id}: the download took {received.group(2)} s; the shortest path "
+                f"NodalArc shows needs {least_s:.3f} s for one round trip"
+            )
+    return disagreements
+
+
+def dtn_bundles_arrive(operator: Operator, dtn_endpoints: list[DtnEndpoint]) -> list[str]:
+    """A bundle sent from each DTN endpoint arrives at each other one.
+
+    While NodalArc shows a path, the bundle arrives, and no sooner than the shortest path shown
+    allows. With no path shown the endpoints hold the bundle; its arrival is not judged.
+    """
+    disagreements = []
+    for sender in dtn_endpoints:
+        for receiver in dtn_endpoints:
+            if sender is receiver:
+                continue
+            agent = f"optest{uuid.uuid4().hex[:8]}"
+            payload = f"bundle-{uuid.uuid4().hex}"
+            least = watch(operator, 4.0).least_latency_ms(sender.node_id, receiver.node_id)
+            with operator.terminal(receiver.node_id) as inbox:
+                inbox.start(
+                    f"aap2-receive --socket {receiver.socket} --agentid {agent} "
+                    "--count 1 --newline -v"
+                )
+                inbox.wait_for("Waiting for bundles", 20.0)
+                with operator.terminal(sender.node_id) as outbox:
+                    sent = time.monotonic()
+                    status, printed = run_in_shell(
+                        outbox,
+                        f"aap2-send --socket {sender.socket} {receiver.eid}{agent} {payload}",
+                    )
+                if status != 0:
+                    disagreements.append(f"{sender.node_id} could not send a bundle: {printed}")
+                    continue
+                try:
+                    inbox.wait_for(payload, 300.0 if least is not None else 60.0)
+                except AssertionError:
+                    if least is None:
+                        print(
+                            f"dtn: {sender.eid} -> {receiver.eid}: no path shown; the bundle "
+                            "is held; not judged"
+                        )
+                    else:
+                        disagreements.append(
+                            f"NodalArc shows a path from {sender.node_id} to "
+                            f"{receiver.node_id}; a bundle did not arrive in 300 s"
+                        )
+                    continue
+                took_ms = (time.monotonic() - sent) * 1000
+                arrived = inbox.finish(20.0)
+            print(
+                f"dtn: {sender.eid} -> {receiver.eid}: arrived after {took_ms:.0f} ms; "
+                f"least latency shown {least} ms"
+            )
+            if f"Received Bundle from '{sender.eid}" not in arrived:
+                disagreements.append(
+                    f"{receiver.node_id} received the payload from another sender: {arrived}"
+                )
+            elif least is not None and took_ms < least * (1 - MOVING_RANGE_ALLOWANCE):
+                disagreements.append(
+                    f"{sender.eid} -> {receiver.eid}: the bundle arrived after {took_ms:.0f} ms; "
+                    f"the shortest path NodalArc shows needs {least:.0f} ms"
+                )
+    return disagreements
+
+
 def assert_session_is_truthful(operator: Operator) -> None:
-    """Every truth, on the session as it is now. Reports all disagreements together."""
+    """Every truth, on the session as it is now. Reports all disagreements together.
+
+    The workloads the session runs are asked to carry data last.
+    """
     shown = watch(operator, 14.0)
     disagreements = [
         *clock_runs_at_the_reported_speed(operator),
@@ -229,6 +354,9 @@ def assert_session_is_truthful(operator: Operator) -> None:
         *links_shown_are_the_routers_neighbors(operator, shown),
         *latency_shown_is_the_delay_packets_get(operator, shown),
     ]
+    quic_clients, dtn_endpoints = find_workloads(operator, shown)
+    disagreements += quic_clients_download_from_their_servers(operator, quic_clients)
+    disagreements += dtn_bundles_arrive(operator, dtn_endpoints)
     assert not disagreements, "NodalArc shows something the network does not do:\n" + "\n".join(
         disagreements
     )

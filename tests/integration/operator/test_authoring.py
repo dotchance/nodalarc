@@ -12,6 +12,7 @@ import pytest
 import yaml
 
 from .harness.client import Operator, Refused
+from .harness.network import watch
 from .truths import assert_session_is_truthful
 
 pytestmark = [pytest.mark.integration, pytest.mark.timeout(2400)]
@@ -25,7 +26,7 @@ def created(operator: Operator) -> Iterator[list[str]]:
     yield refs
     if operator.state()["constellation_name"] != found["name"]:
         operator.run_session(found)
-    for ref in refs:
+    for ref in reversed(refs):  # a session before the objects it refers to
         operator.delete_user_object(ref)
 
 
@@ -182,3 +183,84 @@ def test_an_uploaded_session_nodalarc_cannot_run_is_refused_with_its_cause_and_n
     assert cause in str(refusal.value.body), (
         f"the refusal does not tell the user what is wrong ({cause}): {refusal.value.body}"
     )
+
+
+def _ground_link_ranges_km(operator: Operator) -> list[float]:
+    shown = watch(operator, 8.0)
+    return sorted(link["range_km"] for _, _, link in shown.routed_ground_links())
+
+
+def test_a_forked_terminal_with_a_shorter_range_limits_the_links_that_run(
+    operator: Operator, created: list[str]
+) -> None:
+    """A user forks a satellite's access terminal, shortens its range and runs a session on it.
+
+    The shipped session runs first as the reference. Both runs start at the session's start time,
+    so they see the same sky.
+    """
+    reference = min(
+        (
+            session
+            for session in operator.sessions()
+            if session["source"] == "nodalarc" and session["deploy_allowed"]
+        ),
+        key=lambda session: len(operator.session_yaml(session)),
+    )
+    document = yaml.safe_load(operator.session_yaml(reference))
+    segment = next(
+        segment
+        for segment in document["segments"]
+        if str(segment.get("source", "")).startswith("nodalarc:constellations/")
+    )
+    constellation_ref = segment["source"]
+    node_ref = operator.catalog_object(constellation_ref)["constellation"]["node"]
+    mounts = operator.catalog_object(node_ref)["node"]["terminals"]
+    mount = next(index for index, mount in enumerate(mounts) if mount["role"] == "access")
+    terminal_ref = mounts[mount]["terminal"]
+
+    operator.run_session(reference)
+    reference_ranges = _ground_link_ranges_km(operator)
+    assert len(reference_ranges) >= 4, f"{reference['name']} shows too few ground links to compare"
+    shorter = round(reference_ranges[len(reference_ranges) // 2])
+    assert reference_ranges[-1] > shorter
+    print(
+        f"{reference['name']}: ground links from {reference_ranges[0]:.0f} to "
+        f"{reference_ranges[-1]:.0f} km with {terminal_ref}; forking it at {shorter} km"
+    )
+
+    name = "operator-test-fork"
+    forks = {
+        terminal_ref: f"user:terminals/{name}.yaml",
+        node_ref: f"user:nodes/{name}.yaml",
+        constellation_ref: f"user:constellations/{name}.yaml",
+    }
+    session_ref = f"user:sessions/{name}.yaml"
+    for leftover in (session_ref, *reversed(forks.values())):
+        operator.delete_user_object(leftover)
+    created.extend(forks.values())
+    created.append(session_ref)
+    operator.fork_catalog_object(
+        terminal_ref, forks[terminal_ref], {"/terminal/max_range_km": shorter}
+    )
+    operator.fork_catalog_object(
+        node_ref, forks[node_ref], {f"/node/terminals/{mount}/terminal": forks[terminal_ref]}
+    )
+    operator.fork_catalog_object(
+        constellation_ref, forks[constellation_ref], {"/constellation/node": forks[node_ref]}
+    )
+    segment["source"] = forks[constellation_ref]
+    document["session"]["name"] = name
+
+    accepted = operator.post(
+        "/api/v1/session/deploy-from-yaml",
+        {"yaml": yaml.safe_dump(document), "record_history": False},
+    )
+    operator.wait_for_session({"name": name}, accepted["operation_id"])
+    forked_ranges = _ground_link_ranges_km(operator)
+    print(f"{name}: ground links from {forked_ranges[0]:.0f} to {forked_ranges[-1]:.0f} km")
+    assert forked_ranges, "the forked session shows no ground link"
+    assert forked_ranges[-1] <= shorter, (
+        f"the forked terminal reaches {shorter} km and a ground link of "
+        f"{forked_ranges[-1]:.0f} km is running"
+    )
+    assert_session_is_truthful(operator)

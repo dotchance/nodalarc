@@ -67,6 +67,7 @@ class _Cluster:
     def __init__(self, outputs: dict[str, _Stream], missing: frozenset[str] = frozenset()):
         self.outputs = outputs
         self.missing = missing
+        self.commands: list[list[str]] = []
 
     def list_namespaced_pod(self, namespace: str, *, label_selector: str):
         node_id = label_selector.removeprefix(f"{NODE_ID_LABEL}=")
@@ -77,7 +78,8 @@ class _Cluster:
     def connect_get_namespaced_pod_exec(self, *args, **kwargs):  # pragma: no cover
         raise AssertionError("exec goes through kubernetes.stream.stream")
 
-    def stream(self, _exec, pod_name: str, _namespace: str, **_kwargs):
+    def stream(self, _exec, pod_name: str, _namespace: str, **kwargs):
+        self.commands.append(kwargs["command"])
         return self.outputs[pod_name]
 
 
@@ -131,6 +133,24 @@ def test_both_directions_reached_report_the_destination_round_trip_and_symmetry(
     assert result.asymmetry_detected is False
     assert result.tracing is True
     assert result.sim_time == SIM_TIME
+
+
+def test_each_direction_runs_the_busybox_traceroute_applet() -> None:
+    """The image's `traceroute` command is the terminal's program; the parser
+    and the per-hop wait belong to BusyBox's."""
+    cluster = _Cluster(
+        {
+            "gs-alpha": _Stream(_output(" 1  10.2.1.1  5.0 ms")),
+            "gs-beta": _Stream(_output(" 1  10.2.0.1  5.0 ms")),
+        }
+    )
+
+    _trace_once(_tracer(cluster), cluster, "gs-alpha", "gs-beta")
+
+    assert sorted(cluster.commands) == [
+        ["busybox", "traceroute", "-I", "-n", "-w", "4", "-q", "1", "-m", "20", "10.2.0.1"],
+        ["busybox", "traceroute", "-I", "-n", "-w", "4", "-q", "1", "-m", "20", "10.2.1.1"],
+    ]
 
 
 def test_different_nodes_between_the_ends_are_asymmetry() -> None:

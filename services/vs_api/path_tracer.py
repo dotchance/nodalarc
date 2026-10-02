@@ -32,11 +32,13 @@ log = logging.getLogger(__name__)
 
 SILENT_HOP = "*"
 
-# BusyBox traceroute: ICMP, numeric, one probe per hop. The per-hop wait is an
-# integer number of seconds (BusyBox rejects a fractional -w) and must exceed
-# the cumulative round trip to the farthest hop, because traceroute stops early
-# only when the destination answers: an Earth-Luna path sits near 3.1 s, so four
-# seconds reaches the lunar hops. The hop limit fails a down path fast.
+# BusyBox traceroute, run as an applet of the busybox binary: the image's
+# `traceroute` command is a different program, kept for the router's terminal.
+# ICMP, numeric, one probe per hop. The per-hop wait is an integer number of
+# seconds (BusyBox rejects a fractional -w) and must exceed the cumulative
+# round trip to the farthest hop, because traceroute stops early only when the
+# destination answers: an Earth-Luna path sits near 3.1 s, so four seconds
+# reaches the lunar hops. The hop limit fails a down path fast.
 _TRACEROUTE_WAIT_S = 4
 _TRACEROUTE_MAX_HOPS = 20
 # Poll the exec stream at this interval so each printed hop is read within
@@ -260,6 +262,7 @@ class PathTracer:
                 self._namespace,
                 container=workload.container,
                 command=[
+                    "busybox",
                     "traceroute",
                     "-I",
                     "-n",

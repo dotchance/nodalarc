@@ -20,11 +20,13 @@ ENV NODALARC_VERSION=${PROJECT_VERSION} \
 # OpenSSH server for interactive terminal access (vtysh login shell).
 # Users SSH in and land directly in vtysh — same as a real router.
 # Key-only auth, no password login, root login disabled, UseDNS no.
-RUN apk add --no-cache openssh-server libcap && \
-    cp /bin/busybox /usr/local/bin/busybox-netraw && \
-    setcap cap_net_raw+ep /usr/local/bin/busybox-netraw && \
-    rm -f /usr/bin/traceroute && \
-    ln -s /usr/local/bin/busybox-netraw /usr/bin/traceroute && \
+#
+# The traceroute package replaces BusyBox's applet at /usr/bin/traceroute.
+# It needs no raw socket, so the operator user can run it from vtysh in a pod
+# that forbids privilege escalation. traceroute6 is the same binary under its
+# IPv6 name.
+RUN apk add --no-cache openssh-server traceroute && \
+    ln -sf traceroute /usr/bin/traceroute6 && \
     adduser -D -s /usr/bin/vtysh -G frrvty operator && \
     passwd -u operator && \
     mkdir -p /home/operator/.ssh /etc/ssh && \

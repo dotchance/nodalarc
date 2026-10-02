@@ -39,7 +39,7 @@ Pair = tuple[str, str]
 
 # Binding-reason codes the composer SYNTHESIZES for an actuation_proof binding (not raw
 # ActuationStates): a clean roster but OME-desired-and-not-kernel-up is a divergence, NOT
-# "clean". Bound to the frontend registry via tests/unit/test_explain_contract.py.
+# "clean". Bound to the frontend registry via tests/unit/observation/test_explain_contract.py.
 _ACTUATION_DIVERGED = "actuation_diverged"
 ACTUATION_EXPLANATION_REASONS: tuple[str, ...] = (_ACTUATION_DIVERGED,)
 

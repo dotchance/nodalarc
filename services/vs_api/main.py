@@ -1475,7 +1475,7 @@ async def _event_loop_watchdog() -> None:
     freeze for hours (trust-poll resolution, 2026-06-11): a detection
     threshold at the exact magnitude of the defect class is no detection
     at all. Companion to the static gate in
-    tests/unit/test_event_loop_contract.py.
+    tests/unit/runtime/test_event_loop_contract.py.
     """
     import time as _t
 

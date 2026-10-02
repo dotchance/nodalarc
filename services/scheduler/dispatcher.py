@@ -2450,34 +2450,6 @@ class Dispatcher:
         )
         return desired
 
-    # Backward compat: tests call _dispatch_batch directly
-    async def _dispatch_batch(
-        self,
-        vis_events: list[VisibilityEvent],
-        _snapshots: list,
-        to_pub,
-    ) -> None:
-        """Process a batch of VisibilityEvents — builds desired and reconciles.
-
-        This method is called directly by tests. In production, the decision
-        callbacks put desired on the queue and the dispatch worker reconciles.
-        Kept for backward compatibility with existing test contracts.
-        """
-        if not vis_events:
-            return
-
-        sim_time = vis_events[0].sim_time
-        self._current_sim_time = sim_time
-
-        self._apply_events_to_desired(vis_events)
-        await self._assert_authority_subset_fail_loud("dispatch-batch")
-        await self._publish_fold_diagnostics(sim_time)
-        intent = self._build_dispatch_intent(sim_time=sim_time, source="ome_event")
-        async with self._actuation_lock:
-            await self._reconcile_links(
-                intent.desired, to_pub, sim_time, intent.down_reasons, intent.forced_bbm_pairs
-            )
-
     def stop(self) -> None:
         """End the dispatch loop: run() wakes at once and shuts down in order."""
         self._running = False

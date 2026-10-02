@@ -1,0 +1,787 @@
+"""Unit tests for scheduler/dispatcher.py — the live production dispatcher.
+
+Uses mocked NATS connection and Node Agent stubs. Feeds VisibilityEvents
+through the production handlers, the dispatch queue and the dispatch worker.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import json
+from datetime import UTC, datetime, timedelta
+from unittest.mock import AsyncMock, MagicMock
+
+import pytest
+from nodalarc.models.events import VisibilityEvent
+from nodalarc.models.link_events import LinkUp
+from nodalarc.models.link_state import (
+    AdminState,
+    CarrierState,
+    LinkState,
+    LinkStateSnapshot,
+    RoutingState,
+)
+from nodalarc.models.scheduler_ops import ActuationFailureClass, SchedulerOpsCode
+from nodalarc.proto import node_agent_pb2
+from nodalarc.substrate.measurement_contract import SubstrateMeasurement
+from scheduler.dispatcher import ActiveLinkInfo, Dispatcher
+from scheduler.pod_locator import PodLocationError, PodLocationMap
+
+from tests.terminal_rate_fixtures import ANY_INTERFACE_RATES
+
+WIRING_GENERATION = "sha256:" + "a" * 64
+
+
+def _substrate_measurement(rtt_ms: float) -> SubstrateMeasurement:
+    now = datetime.now(UTC)
+    return SubstrateMeasurement(
+        session_id="test-session",
+        wiring_generation=WIRING_GENERATION,
+        source_node="node-a",
+        source_ip="10.0.0.1",
+        target_node="node-b",
+        target_ip="10.0.0.2",
+        measured_at=now,
+        stale_after=now + timedelta(seconds=60),
+        status="ok",
+        sample_count=10,
+        success_count=10,
+        median_rtt_ms=rtt_ms,
+        min_rtt_ms=rtt_ms,
+        max_rtt_ms=rtt_ms,
+    )
+
+
+def _make_vis(
+    node_a: str,
+    node_b: str,
+    visible: bool,
+    scheduled: bool,
+    *,
+    visibility_reject_reason: str,
+    link_type: str = "isl",
+    unscheduled_reason: str | None = None,
+) -> VisibilityEvent:
+    """Construct a VisibilityEvent for tests.
+
+    `visibility_reject_reason` is required. The caller must declare
+    the physical state under test — a visible pair passes 'ok'; a
+    non-visible pair passes the specific rejection reason it models.
+    No defaults that could hide an impossible state at construction.
+    """
+    return VisibilityEvent(
+        sim_time=datetime(2026, 1, 1, 0, 0, 0, tzinfo=UTC),
+        node_a=node_a,
+        node_b=node_b,
+        visible=visible,
+        scheduled=scheduled,
+        range_km=500.0,
+        latency_ms=1.6678204759907602,
+        elevation_deg=45.0,
+        terminal_type="optical",
+        link_type=link_type,
+        gs_terminal_index=0 if link_type == "ground" else None,
+        sat_terminal_index=0 if link_type == "ground" else None,
+        visibility_reject_reason=visibility_reject_reason,
+        unscheduled_reason=unscheduled_reason,
+    )
+
+
+def _make_link(
+    node_a: str,
+    node_b: str,
+    link_type: str = "isl",
+    carrier: CarrierState = CarrierState.UP,
+) -> LinkState:
+    return LinkState(
+        node_a=node_a,
+        node_b=node_b,
+        interface_a="isl0" if link_type == "isl" else "gnd0",
+        interface_b="isl1" if link_type == "isl" else "gnd0",
+        admin=AdminState.UP,
+        carrier=carrier,
+        routing=RoutingState.UNKNOWN,
+        range_km=900.0 if carrier == CarrierState.UP else None,
+        latency_ms=3.0 if carrier == CarrierState.UP else None,
+        link_type=link_type,
+        sim_time=datetime(2026, 1, 1, tzinfo=UTC),
+    )
+
+
+def _make_dispatcher(interface_map=None, stub_success=True):
+    if interface_map is None:
+        interface_map = {
+            ("gs-ashburn", "sat-P00S00"): ("term0", "gnd0"),
+            ("sat-P00S00", "sat-P00S01"): ("isl0", "isl1"),
+        }
+
+    loc = PodLocationMap()
+    for pair in interface_map:
+        for nid in pair:
+            loc._node_of[nid] = "nodal"
+    loc._agent_addrs["nodal"] = "127.0.0.1:50100"
+
+    pool = MagicMock()
+    mock_stub = MagicMock()
+
+    def up_resp(req):
+        return node_agent_pb2.BatchLinkUpResponse(
+            success=stub_success,
+            error_message="" if stub_success else "mock failure",
+            interfaces_upped=len(req.interfaces) if stub_success else 0,
+            apply_time_ms=0.0,
+            interface_results=[
+                node_agent_pb2.InterfaceResult(
+                    node_id=iface.node_id,
+                    interface_name=iface.interface_name,
+                    success=stub_success,
+                    verified=stub_success,
+                    error_message="" if stub_success else "mock failure",
+                )
+                for iface in req.interfaces
+            ],
+        )
+
+    def down_resp(req):
+        return node_agent_pb2.BatchLinkDownResponse(
+            success=stub_success,
+            error_message="" if stub_success else "mock failure",
+            interfaces_downed=len(req.interfaces) if stub_success else 0,
+            apply_time_ms=0.0,
+            interface_results=[
+                node_agent_pb2.InterfaceResult(
+                    node_id=iface.node_id,
+                    interface_name=iface.interface_name,
+                    success=stub_success,
+                    verified=stub_success,
+                    error_message="" if stub_success else "mock failure",
+                )
+                for iface in req.interfaces
+            ],
+        )
+
+    mock_stub.async_batch_link_up = AsyncMock(side_effect=up_resp)
+    mock_stub.async_batch_link_down = AsyncMock(side_effect=down_resp)
+
+    def latency_resp(req):
+        return node_agent_pb2.SetLatencyResponse(
+            success=True,
+            entries_updated=len(req.entries),
+            entry_results=[
+                node_agent_pb2.LatencyResult(
+                    node_id=entry.node_id,
+                    interface_name=entry.interface_name,
+                    success=True,
+                    verified=True,
+                )
+                for entry in req.entries
+            ],
+        )
+
+    mock_stub.async_set_latency = AsyncMock(side_effect=latency_resp)
+    pool.get_stub.return_value = mock_stub
+
+    d = Dispatcher(
+        interface_map=interface_map,
+        interface_rates=ANY_INTERFACE_RATES,
+        pod_locator=loc,
+        agent_pool=pool,
+        session_id="test-session",
+        wiring_generation=WIRING_GENERATION,
+        writer_epoch=1,
+        max_latency_age_s=1.0,
+        gs_terminal_capacities={"gs-ashburn": 1},
+        gs_handover_modes={"gs-ashburn": "bbm"},
+        sat_ground_terminal_capacities={"sat-P00S00": 1},
+    )
+    d._js = AsyncMock()
+    d._nc = MagicMock()
+    return d, pool
+
+
+async def _deliver(d, events, nc) -> None:
+    """Deliver OME events the way production does: the events, the next clock tick, the worker.
+
+    The clock tick flushes the events into one DispatchIntent on the queue. The dispatch worker
+    takes the intent and reconciles; it is stopped once the queue is empty.
+    """
+    for event in events:
+        await d._handle_visibility_event(event)
+    tick = events[0].sim_time + timedelta(seconds=1)
+    await d._handle_clock_tick_payload(
+        {"epoch_id": d._expected_epoch_id, "sim_time": tick.isoformat()}
+    )
+    d._running = True
+
+    async def stop_when_drained() -> None:
+        while not d._dispatch_queue.empty():
+            await asyncio.sleep(0.01)
+        await asyncio.sleep(0.05)
+        d._running = False
+        await d._dispatch_queue.put(None)
+
+    await asyncio.gather(d._dispatch_worker(nc), stop_when_drained())
+
+
+class MockNats:
+    """Mock NATS connection — records published messages."""
+
+    def __init__(self):
+        self.messages = []
+
+    async def publish(self, subject, data):
+        self.messages.append((subject, data))
+
+
+class TestDispatcherActiveLinks:
+    def test_visibility_event_adds_isl_to_active_links(self):
+        d, _ = _make_dispatcher()
+        vis = _make_vis(
+            "sat-P00S00",
+            "sat-P00S01",
+            visible=True,
+            scheduled=True,
+            visibility_reject_reason="ok",
+        )
+
+        asyncio.run(_deliver(d, [vis], MockNats()))
+
+        assert ("sat-P00S00", "sat-P00S01") in d._active_links
+
+    def test_visibility_event_missing_latency_fails_loudly(self):
+        d, _ = _make_dispatcher()
+        vis = VisibilityEvent(
+            sim_time=datetime(2026, 1, 1, 0, 0, 0, tzinfo=UTC),
+            node_a="sat-P00S00",
+            node_b="sat-P00S01",
+            visible=True,
+            scheduled=True,
+            range_km=500.0,
+            elevation_deg=45.0,
+            terminal_type="optical",
+            link_type="isl",
+            visibility_reject_reason="ok",
+            unscheduled_reason=None,
+        )
+
+        with pytest.raises(ValueError, match="missing OME-authoritative latency_ms"):
+            d._apply_events_to_desired([vis])
+
+        assert ("sat-P00S00", "sat-P00S01") not in d._desired_links
+
+    def test_visibility_event_adds_gs_to_active_links(self):
+        d, _ = _make_dispatcher()
+        vis = _make_vis(
+            "gs-ashburn",
+            "sat-P00S00",
+            visible=True,
+            scheduled=True,
+            link_type="ground",
+            visibility_reject_reason="ok",
+        )
+
+        asyncio.run(_deliver(d, [vis], MockNats()))
+
+        assert ("gs-ashburn", "sat-P00S00") in d._active_links
+
+    def test_visibility_lost_removes_from_active_links(self):
+        d, _ = _make_dispatcher()
+        info = ActiveLinkInfo("isl0", "isl1", 3.0, link_type="isl")
+        d._desired_links[("sat-P00S00", "sat-P00S01")] = info
+        d._active_links[("sat-P00S00", "sat-P00S01")] = info
+
+        # Physical visibility loss for an ISL pair: LOS blocked as the
+        # sats drift to opposite sides of the Earth.
+        vis = _make_vis(
+            "sat-P00S00",
+            "sat-P00S01",
+            visible=False,
+            scheduled=False,
+            visibility_reject_reason="los_blocked",
+        )
+
+        asyncio.run(_deliver(d, [vis], MockNats()))
+
+        assert ("sat-P00S00", "sat-P00S01") not in d._active_links
+
+    def test_gs_deallocation_removes_from_active_links(self):
+        d, _ = _make_dispatcher()
+        info = ActiveLinkInfo("term0", "gnd0", 3.0, link_type="ground")
+        d._desired_links[("gs-ashburn", "sat-P00S00")] = info
+        d._active_links[("gs-ashburn", "sat-P00S00")] = info
+
+        # GS pair still visible (reject_reason='ok') but allocator
+        # released the terminal in favor of a successor.
+        vis = _make_vis(
+            "gs-ashburn",
+            "sat-P00S00",
+            visible=True,
+            scheduled=False,
+            link_type="ground",
+            visibility_reject_reason="ok",
+            unscheduled_reason="replaced_by_successor",
+        )
+
+        asyncio.run(_deliver(d, [vis], MockNats()))
+
+        assert ("gs-ashburn", "sat-P00S00") not in d._active_links
+
+    def test_isl_deallocation_removes_unscheduled_pair(self):
+        d, _ = _make_dispatcher()
+        info = ActiveLinkInfo("isl0", "isl1", 3.0, link_type="isl")
+        d._desired_links[("sat-P00S00", "sat-P00S01")] = info
+        d._active_links[("sat-P00S00", "sat-P00S01")] = info
+
+        # ISL pair still visible but allocator did not schedule it.
+        # OME scheduled=false is authoritative: desired state
+        # must not keep forwarding-plane links the OME did not schedule.
+        vis = _make_vis(
+            "sat-P00S00",
+            "sat-P00S01",
+            visible=True,
+            scheduled=False,
+            visibility_reject_reason="ok",
+            unscheduled_reason="isl_terminal_capacity",
+        )
+
+        asyncio.run(_deliver(d, [vis], MockNats()))
+
+        assert ("sat-P00S00", "sat-P00S01") not in d._active_links
+
+
+class TestDispatcherLinkStateSnapshot:
+    """Test _build_desired_from_snapshot (R-OME-009 replace-not-merge)."""
+
+    def test_snapshot_produces_desired_without_stale_links(self):
+        d, _ = _make_dispatcher()
+        d._active_links[("sat-P99S99", "sat-P99S98")] = ActiveLinkInfo(
+            "isl0", "isl1", 3.0, link_type="isl"
+        )
+
+        snapshot = LinkStateSnapshot(
+            sim_time=datetime(2026, 1, 1, tzinfo=UTC),
+            snapshot_seq=1,
+            links=(_make_link("sat-P00S00", "sat-P00S01"),),
+            interval_s=5.0,
+        )
+        desired = d._build_desired_from_snapshot(snapshot)
+
+        assert ("sat-P99S99", "sat-P99S98") not in desired
+        assert ("sat-P00S00", "sat-P00S01") in desired
+
+    def test_snapshot_missing_range_fails_loudly(self):
+        d, _ = _make_dispatcher()
+        snapshot = LinkStateSnapshot(
+            sim_time=datetime(2026, 1, 1, tzinfo=UTC),
+            snapshot_seq=1,
+            links=(
+                LinkState(
+                    node_a="sat-P00S00",
+                    node_b="sat-P00S01",
+                    interface_a="isl0",
+                    interface_b="isl1",
+                    admin=AdminState.UP,
+                    carrier=CarrierState.UP,
+                    routing=RoutingState.UNKNOWN,
+                    latency_ms=3.0,
+                    link_type="isl",
+                    sim_time=datetime(2026, 1, 1, tzinfo=UTC),
+                ),
+            ),
+            interval_s=5.0,
+        )
+
+        with pytest.raises(ValueError, match="missing OME-authoritative range_km"):
+            d._build_desired_from_snapshot(snapshot)
+
+    def test_snapshot_gs_exclusion(self):
+        d, _ = _make_dispatcher()
+        d._active_links[("gs-ashburn", "sat-P00S00")] = ActiveLinkInfo(
+            "term0", "gnd0", 3.0, link_type="ground"
+        )
+
+        snapshot = LinkStateSnapshot(
+            sim_time=datetime(2026, 1, 1, tzinfo=UTC),
+            snapshot_seq=1,
+            links=(),
+            interval_s=5.0,
+        )
+        desired = d._build_desired_from_snapshot(snapshot)
+
+        assert ("gs-ashburn", "sat-P00S00") not in desired
+
+    def test_snapshot_seq_monotonicity(self):
+        d, _ = _make_dispatcher()
+        d._last_snapshot_seq = 10
+        d._active_links[("sat-P00S00", "sat-P00S01")] = ActiveLinkInfo(
+            "isl0", "isl1", 3.0, link_type="isl"
+        )
+
+        snapshot = LinkStateSnapshot(
+            sim_time=datetime(2026, 1, 1, tzinfo=UTC),
+            snapshot_seq=5,
+            links=(),
+            interval_s=5.0,
+        )
+        desired = d._build_desired_from_snapshot(snapshot)
+
+        assert desired is None
+        assert ("sat-P00S00", "sat-P00S01") in d._active_links
+
+
+class TestDispatcherLiveDispatch:
+    def test_link_up_publishes_after_node_agent_ack(self):
+        d, pool = _make_dispatcher()
+        vis = _make_vis(
+            "sat-P00S00",
+            "sat-P00S01",
+            visible=True,
+            scheduled=True,
+            visibility_reject_reason="ok",
+        )
+        pub = MockNats()
+
+        asyncio.run(_deliver(d, [vis], pub))
+
+        stub = pool.get_stub.return_value
+        assert stub.async_batch_link_up.called
+        assert ("sat-P00S00", "sat-P00S01") in d._active_links
+        assert d._js.publish.called
+        # The retained ActualLinkSnapshot is now published BEFORE the up await
+        # (publish-before-await for the divergence clock), so the LinkUp event is no longer
+        # the first publish — locate it by subject rather than assuming index 0.
+        up_calls = [
+            c for c in d._js.publish.call_args_list if "up" in c[0][0] and ".actual." not in c[0][0]
+        ]
+        assert up_calls, "expected a LinkUp publish"
+        payload = up_calls[0][0][1]
+        event = LinkUp.model_validate(json.loads(payload.decode()))
+        assert event.provenance is not None
+        assert event.provenance.geometry_authority == "ome"
+        assert event.provenance.range_km == vis.range_km
+        assert event.provenance.orbital_one_way_ms == vis.latency_ms
+        assert event.provenance.authority_source == "visibility_event"
+        assert event.provenance.authority_sim_time == vis.sim_time
+        assert event.provenance.authority_sequence is None
+        assert event.provenance.authority_age_ms == 0.0
+        assert event.provenance.substrate_rtt_ms == 0.0
+        assert event.provenance.netem_one_way_ms == vis.latency_ms
+
+    def test_link_down_publishes_after_node_agent_ack(self):
+        d, pool = _make_dispatcher()
+        d._active_links[("sat-P00S00", "sat-P00S01")] = ActiveLinkInfo(
+            "isl0", "isl1", 3.0, link_type="isl"
+        )
+        # Physical visibility loss for an ISL pair.
+        vis = _make_vis(
+            "sat-P00S00",
+            "sat-P00S01",
+            visible=False,
+            scheduled=False,
+            visibility_reject_reason="los_blocked",
+        )
+        pub = MockNats()
+
+        asyncio.run(_deliver(d, [vis], pub))
+
+        stub = pool.get_stub.return_value
+        assert stub.async_batch_link_down.called
+        assert ("sat-P00S00", "sat-P00S01") not in d._active_links
+        assert d._js.publish.called
+        published_subject = d._js.publish.call_args_list[0][0][0]
+        assert "down" in published_subject
+
+    def test_link_up_fails_loudly_if_node_agent_exception(self):
+        d, pool = _make_dispatcher()
+        stub = pool.get_stub.return_value
+        stub.async_batch_link_up = AsyncMock(side_effect=Exception("agent unreachable"))
+
+        vis = _make_vis(
+            "sat-P00S00",
+            "sat-P00S01",
+            visible=True,
+            scheduled=True,
+            visibility_reject_reason="ok",
+        )
+        pub = MockNats()
+
+        with pytest.raises(Exception, match="Fatal actuation failure"):
+            asyncio.run(_deliver(d, [vis], pub))
+        assert "agent unreachable" in str(d._dispatch_blocked_reason) or d._dispatch_blocked_reason
+
+        assert ("sat-P00S00", "sat-P00S01") not in d._active_links
+        link_up_msgs = [m for m in pub.messages if m[0] == "nodalarc.links.up"]
+        assert len(link_up_msgs) == 0
+
+    def test_partial_interface_ack_does_not_mark_pair_added(self):
+        d, pool = _make_dispatcher()
+        pair = ("sat-P00S00", "sat-P00S01")
+        sim_time = datetime(2026, 1, 1, tzinfo=UTC)
+        desired = {
+            pair: ActiveLinkInfo(
+                "isl0",
+                "isl1",
+                3.0,
+                link_type="isl",
+                range_km=900.0,
+                authority_sim_time=sim_time,
+                authority_source="test",
+            )
+        }
+
+        def partial_up(req):
+            return node_agent_pb2.BatchLinkUpResponse(
+                success=False,
+                error_message="one interface failed",
+                interfaces_upped=1,
+                apply_time_ms=0.0,
+                interface_results=[
+                    node_agent_pb2.InterfaceResult(
+                        node_id=req.interfaces[0].node_id,
+                        interface_name=req.interfaces[0].interface_name,
+                        success=True,
+                        verified=True,
+                    ),
+                    node_agent_pb2.InterfaceResult(
+                        node_id=req.interfaces[1].node_id,
+                        interface_name=req.interfaces[1].interface_name,
+                        success=False,
+                        error_message="failed",
+                    ),
+                ],
+            )
+
+        pool.get_stub.return_value.async_batch_link_up = AsyncMock(side_effect=partial_up)
+
+        result = asyncio.run(d._send_batch_up({pair}, desired, "sim", sim_time, d._nc))
+
+        assert result.succeeded_pairs == set()
+        assert result.failed_pairs == {pair}
+        assert not d._js.publish.called
+
+    def test_batch_up_requires_per_interface_ack_identity(self):
+        d, pool = _make_dispatcher()
+        pair = ("sat-P00S00", "sat-P00S01")
+        sim_time = datetime(2026, 1, 1, tzinfo=UTC)
+        desired = {
+            pair: ActiveLinkInfo(
+                "isl0",
+                "isl1",
+                3.0,
+                link_type="isl",
+                range_km=900.0,
+                authority_sim_time=sim_time,
+                authority_source="test",
+            )
+        }
+        pool.get_stub.return_value.async_batch_link_up = AsyncMock(
+            return_value=node_agent_pb2.BatchLinkUpResponse(
+                success=True,
+                interfaces_upped=2,
+                apply_time_ms=0.0,
+            )
+        )
+
+        result = asyncio.run(d._send_batch_up({pair}, desired, "sim", sim_time, d._nc))
+        assert result.succeeded_pairs == set()
+        assert result.failed_pairs == {pair}
+        assert result.unknown_outcome is True
+
+    def test_batch_up_stale_generation_response_blocks_dispatch(self):
+        d, pool = _make_dispatcher()
+        pair = ("sat-P00S00", "sat-P00S01")
+        sim_time = datetime(2026, 1, 1, tzinfo=UTC)
+        desired = {
+            pair: ActiveLinkInfo(
+                "isl0",
+                "isl1",
+                3.0,
+                link_type="isl",
+                range_km=900.0,
+                authority_sim_time=sim_time,
+                authority_source="test",
+            )
+        }
+
+        def stale_up(req):
+            return node_agent_pb2.BatchLinkUpResponse(
+                success=False,
+                error_code=node_agent_pb2.NODE_AGENT_STALE_GENERATION,
+                error_message="stale generation",
+                interface_results=[
+                    node_agent_pb2.InterfaceResult(
+                        node_id=iface.node_id,
+                        interface_name=iface.interface_name,
+                        success=False,
+                        error_code=node_agent_pb2.NODE_AGENT_STALE_GENERATION,
+                        error_message="stale generation",
+                    )
+                    for iface in req.interfaces
+                ],
+            )
+
+        pool.get_stub.return_value.async_batch_link_up = AsyncMock(side_effect=stale_up)
+
+        result = asyncio.run(d._send_batch_up({pair}, desired, "sim", sim_time, d._nc))
+        assert result.succeeded_pairs == set()
+        assert result.failed_pairs == {pair}
+        assert result.fence_failure is True
+
+        assert not d._js.publish.called
+
+    def test_cross_node_missing_substrate_measurement_fails_loudly(self):
+        d, _ = _make_dispatcher()
+        d._loc._node_of["sat-P00S00"] = "node-a"
+        d._loc._node_of["sat-P00S01"] = "node-b"
+        d._loc._agent_addrs["node-a"] = "agent-a"
+        d._loc._agent_addrs["node-b"] = "agent-b"
+        d._loc._node_ips["node-a"] = "10.0.0.1"
+        d._loc._node_ips["node-b"] = "10.0.0.2"
+
+        with pytest.raises(ValueError, match="No substrate RTT measurement"):
+            d._netem_delay_ms("sat-P00S00", "sat-P00S01", 10.0)
+
+    def test_cross_node_substrate_rtt_is_converted_to_one_way(self):
+        d, _ = _make_dispatcher()
+        d._loc._node_of["sat-P00S00"] = "node-a"
+        d._loc._node_of["sat-P00S01"] = "node-b"
+        d._loc._agent_addrs["node-a"] = "agent-a"
+        d._loc._agent_addrs["node-b"] = "agent-b"
+        d._loc._node_ips["node-a"] = "10.0.0.1"
+        d._loc._node_ips["node-b"] = "10.0.0.2"
+        d._substrate_by_direction["node-a->node-b"] = _substrate_measurement(4.0)
+
+        assert d._netem_delay_ms("sat-P00S00", "sat-P00S01", 10.0) == 8.0
+
+    def test_negative_substrate_compensation_is_unrepresentable(self):
+        d, _ = _make_dispatcher()
+        d._loc._node_of["sat-P00S00"] = "node-a"
+        d._loc._node_of["sat-P00S01"] = "node-b"
+        d._loc._agent_addrs["node-a"] = "agent-a"
+        d._loc._agent_addrs["node-b"] = "agent-b"
+        d._loc._node_ips["node-a"] = "10.0.0.1"
+        d._loc._node_ips["node-b"] = "10.0.0.2"
+        d._substrate_by_direction["node-a->node-b"] = _substrate_measurement(4.0)
+
+        with pytest.raises(ValueError, match="Unrepresentable latency"):
+            d._netem_delay_ms("sat-P00S00", "sat-P00S01", 1.0)
+
+    def test_missing_pod_placement_is_not_treated_as_local(self):
+        d, _ = _make_dispatcher()
+        d._loc._node_of.pop("sat-P00S01")
+
+        with pytest.raises(PodLocationError, match="no pod location for node sat-P00S01"):
+            d._netem_delay_ms("sat-P00S00", "sat-P00S01", 10.0)
+
+    def test_cross_node_missing_remote_ip_fails_loudly(self):
+        d, _ = _make_dispatcher()
+        pair = ("sat-P00S00", "sat-P00S01")
+        d._loc._node_of["sat-P00S00"] = "node-a"
+        d._loc._node_of["sat-P00S01"] = "node-b"
+        d._loc._agent_addrs["node-a"] = "agent-a"
+        d._loc._agent_addrs["node-b"] = "agent-b"
+        desired = {
+            pair: ActiveLinkInfo(
+                "isl0",
+                "isl1",
+                10.0,
+                link_type="isl",
+                range_km=3000.0,
+                authority_sim_time=datetime(2026, 1, 1, tzinfo=UTC),
+                authority_source="test",
+            )
+        }
+
+        with pytest.raises(PodLocationError, match="no InternalIP for Kubernetes node node-a"):
+            asyncio.run(
+                d._send_batch_up({pair}, desired, "sim", datetime(2026, 1, 1, tzinfo=UTC), d._nc)
+            )
+
+    def test_stale_ome_authority_fails_before_link_up(self):
+        d, pool = _make_dispatcher()
+        pair = ("sat-P00S00", "sat-P00S01")
+        sim_time = datetime(2026, 1, 1, tzinfo=UTC)
+        desired = {
+            pair: ActiveLinkInfo(
+                "isl0",
+                "isl1",
+                3.0,
+                link_type="isl",
+                range_km=900.0,
+                authority_sim_time=sim_time - timedelta(seconds=2),
+                authority_source="test",
+            )
+        }
+
+        with pytest.raises(ValueError, match="stale OME geometry"):
+            asyncio.run(d._send_batch_up({pair}, desired, "sim", sim_time, d._nc))
+
+        assert not pool.get_stub.return_value.async_batch_link_up.called
+
+    def test_stale_ome_authority_fails_before_latency_update(self):
+        d, pool = _make_dispatcher()
+        pair = ("sat-P00S00", "sat-P00S01")
+        sim_time = datetime(2026, 1, 1, tzinfo=UTC)
+        desired = {
+            pair: ActiveLinkInfo(
+                "isl0",
+                "isl1",
+                3.1,
+                link_type="isl",
+                range_km=930.0,
+                authority_sim_time=sim_time - timedelta(seconds=2),
+                authority_source="test",
+            )
+        }
+
+        with pytest.raises(ValueError, match="stale OME geometry"):
+            asyncio.run(d._send_authoritative_latency_updates({pair}, desired, sim_time))
+
+        assert not pool.get_stub.return_value.async_set_latency.called
+
+
+def _published_ops_events(publish: AsyncMock) -> list[dict]:
+    events = []
+    for call in publish.await_args_list:
+        subject, payload = call.args[0], call.args[1]
+        if ".ops." in subject:
+            events.append(json.loads(payload.decode()))
+    return events
+
+
+def test_scheduler_ops_details_are_the_typed_model_or_absent():
+    """An OpsEvent's details are the JSON dump of the ActuationOpsDetails the
+    producer built, or null when the producer passed none; there is no
+    third shape."""
+    d, _pool = _make_dispatcher()
+
+    asyncio.run(d._publish_scheduler_ops(code=SchedulerOpsCode.ACTUATION_HALTED, message="none"))
+    details = d._actuation_details(
+        gs_id="gs-ashburn",
+        operation="unit",
+        failure_class=ActuationFailureClass.GROUND_KERNEL_DIRTY,
+        affected_pairs={("gs-ashburn", "sat-P00S00")},
+        reason="unit reason",
+    )
+    asyncio.run(
+        d._publish_scheduler_ops(
+            code=SchedulerOpsCode.KERNEL_DIRTY, message="typed", details=details
+        )
+    )
+    with pytest.raises(RuntimeError, match="halted for the test"):
+        asyncio.run(
+            d._halt_dispatcher(
+                reason="halted for the test",
+                code=SchedulerOpsCode.ACTUATION_HALTED,
+                details=details,
+            )
+        )
+
+    events = _published_ops_events(d._js.publish)
+    assert [(e["code"], e["details"]) for e in events] == [
+        ("ACTUATION_HALTED", None),
+        ("KERNEL_DIRTY", details.model_dump(mode="json")),
+        ("ACTUATION_HALTED", details.model_dump(mode="json")),
+    ]
+    assert events[1]["details"]["affected_pairs"] == [["gs-ashburn", "sat-P00S00"]]
+    assert events[1]["details"]["reason"] == "unit reason"

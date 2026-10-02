@@ -98,9 +98,6 @@ mutate their owned state, build a `DispatchIntent`, and put it on the dispatch
 queue. The worker drains that queue, reconciles latest effective desired state
 against actual state, and then calls `_reconcile_links`.
 
-The legacy `_dispatch_batch` helper exists for tests only. Do not add new
-behavior there and do not treat it as a production path.
-
 This invariant keeps the actuator honest. `_actual_links`, capacity counters,
 Node Agent I/O, and LinkUp/LinkDown publication for normal schedule progression all stay behind one door. The one deliberate exception is explicit operator repair: it is operator-initiated, tagged with an intervention id, serialized by the same actuation lock, and must reconcile the GS to current OME authority rather than retry stale work.
 

@@ -4,8 +4,7 @@ Tests the dispatch worker, DispatchIntent, queue drain semantics,
 forced BBM escalation, suspend/resume override deferral, reason
 attribution, and _on_scenario_command callback.
 
-These tests exercise the production code path (dispatch worker + queue),
-NOT the _dispatch_batch test-compat method.
+These tests exercise the production code path (dispatch worker + queue).
 """
 
 from __future__ import annotations

@@ -24,7 +24,7 @@ The shipped FRR router profile adds the router-terminal posture on top:
 | Root login disabled | sshd_config: `PermitRootLogin no` | Users land as `operator` |
 | vtysh login shell | `/usr/bin/vtysh` as operator's shell | No bash/ash access via SSH |
 | Idle timeout | sshd_config: `ClientAliveInterval 600` | Stale sessions terminated |
-| `terminal shell` disabled | FRR official 10.3.1 image | Cannot escape vtysh to underlying OS |
+| `terminal shell` disabled | FRR official 10.7.1 image | Cannot escape vtysh to underlying OS |
 
 ### What Users Can Do
 

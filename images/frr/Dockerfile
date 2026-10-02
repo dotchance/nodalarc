@@ -1,4 +1,4 @@
-FROM quay.io/frrouting/frr:10.3.1@sha256:f90d26a9fd5c14fc5795a73b4254ac88bc3186c45bbeb220a225fb6182de812c
+FROM quay.io/frrouting/frr:10.7.1@sha256:e995beaa50fdc9edb35eadcfefa29b7f062cc06f2b812613789b68fa541554d2
 ARG PROJECT_VERSION=0+unknown
 ARG VCS_REF=unknown
 ARG BUILD_DATE=unknown
@@ -37,7 +37,7 @@ RUN apk add --no-cache openssh-server libcap && \
 # FRR's docker-start and frrcommon.sh are bash scripts — removing bash
 # breaks FRR's startup chain. The security boundary for interactive
 # terminal access is: SSH login shell = /usr/bin/vtysh (not bash),
-# vtysh "terminal shell" disabled (verified in official FRR 10.3.1),
+# vtysh "terminal shell" disabled (verified in official FRR 10.7.1),
 # read-only root filesystem (set by session_deployer.py).
 
 # Our entrypoint configures SSH, then hands off to FRR's stock

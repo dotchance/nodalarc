@@ -8,7 +8,7 @@ router ospf6
  redistribute static
 {% endif %}
  timers throttle spf {{ domain.ospf_spf_delay }} {{ domain.ospf_spf_initial_hold }} {{ domain.ospf_spf_max_hold }}
-{% if "ipv6" in domain.default_route_families %}
+{% if "ipv6" in default_route_families %}
  default-information originate always metric {{ domain.default_route_metric }}
 {% endif %}
 exit

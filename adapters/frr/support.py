@@ -16,7 +16,7 @@ from nodalarc.workloads.adapter import AdapterSupport, BfdSupport, RoutingProtoc
 # key the explicit registry uses.
 FRR_ADAPTER_NAME = "frr"
 
-# FRR 10.3 accepts a detect multiplier of 1..255 and receive and transmit
+# FRR 10.7 accepts a detect multiplier of 1..255 and receive and transmit
 # intervals of 10..4294967 milliseconds (bfdd's CLI ranges). isisd starts BFD
 # on a circuit that routes IPv6 only for an adjacency with an IPv6 link-local
 # address (isis_bfd.c, bfd_handle_adj_up), so IS-IS BFD never starts toward an

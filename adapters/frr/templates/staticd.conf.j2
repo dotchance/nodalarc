@@ -1,3 +1,15 @@
+{# A node that declares `default` in a family holds a default route of its
+   own in that family. Each IS-IS or OSPF instance the node runs advertises
+   it; a node that runs neither holds the route and advertises nothing. The
+   route points at Null0: a packet that matches nothing more specific is
+   dropped at the node that declares the default. #}
+{% if "ipv4" in default_route_families %}
+ip route 0.0.0.0/0 Null0
+{% endif %}
+{% if "ipv6" in default_route_families %}
+ipv6 route ::/0 Null0
+{% endif %}
+
 {# Static routes to a static_ip boundary peer's loopbacks over the
    point-to-point boundary link, in each family both ends carry. #}
 {% for link in static_links %}

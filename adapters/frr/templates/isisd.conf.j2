@@ -36,7 +36,7 @@ router isis {{ domain.domain_id }}
  spf-delay-ietf init-delay {{ domain.spf_init_delay }} short-delay {{ domain.spf_short_delay }} long-delay {{ domain.spf_long_delay }} holddown {{ domain.spf_holddown }} time-to-learn {{ domain.spf_time_to_learn }}
  max-lsp-lifetime 1200
  lsp-refresh-interval 150
-{% for family in domain.default_route_families %}
+{% for family in default_route_families %}
  default-information originate {{ family }} level-2 always metric {{ domain.default_route_metric }}
 {% endfor %}
 exit

@@ -126,6 +126,7 @@ def build_template_vars_from_resolved(
             {"name": name, "addresses": segment["addresses"]} for name, segment in segments.items()
         ],
         "boundary_static_routes": all_routes,
+        "default_route_families": _default_route_families(node),
         "bfd_profiles": [
             {
                 "name": domain.domain_id,
@@ -215,7 +216,6 @@ def _domain_facts(
         "sr_enabled": sr_enabled,
         "te_enabled": "traffic_engineering" in domain.capabilities,
         "node_sid_index": node_sid_index,
-        "default_route_families": _default_route_families(node),
         "default_route_metric": _DEFAULT_ROUTE_METRIC,
         "redistribute_static": (
             tuple(

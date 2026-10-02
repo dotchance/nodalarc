@@ -128,7 +128,7 @@ chown frr:frr /var/log/frr
 # below exists. The marker lives on a volume that outlives a container
 # restart, so a restarted container removes it first.
 BOOT_WAIT_S=120
-# The daemons whose configuration FRR 10.3.1's mgmtd takes and passes on.
+# The daemons whose configuration FRR 10.7.1's mgmtd takes and passes on.
 MGMTD_BACKENDS="zebra ripd ripngd staticd"
 rm -f /var/run/frr/nodalarc-boot-config-applied
 

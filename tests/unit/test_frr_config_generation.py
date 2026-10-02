@@ -178,12 +178,17 @@ def test_default_route_is_originated_inside_the_one_router_block() -> None:
     raw["segments"][1]["apply"]["originated_prefixes"] = {"ipv4": ["default"]}
     resolved = resolve_session(raw, source_context=SourceContext(origin="test.frr"))
 
-    stanzas = _stanzas(_frr_conf(resolved, _first_ground(resolved)))
+    conf = _frr_conf(resolved, _first_ground(resolved))
+    stanzas = _stanzas(conf)
     routers = [body for header, body in stanzas if header == f"router isis {_FIXTURE_DOMAIN}"]
 
-    assert "0.0.0.0/0" not in _frr_conf(resolved, _first_ground(resolved))
     assert len(routers) == 1
     assert " default-information originate ipv4 level-2 always metric 100" in routers[0]
+    # The originator holds the default it advertises: one static route to Null0,
+    # in the declared family only, and the prefix appears nowhere else.
+    assert conf.splitlines().count("ip route 0.0.0.0/0 Null0") == 1
+    assert conf.count("0.0.0.0/0") == 1
+    assert "::/0" not in conf
 
 
 def test_ospf_satellite_uses_resolved_point_to_point_links_te_and_ldp() -> None:
@@ -1109,6 +1114,9 @@ def test_default_origination_renders_per_declared_family() -> None:
     )
     assert " default-information originate ipv4 level-2 always metric 100" in plain
     assert not [line for line in plain if "originate ipv6" in line]
+    plain_conf = _frr_conf(simple, _denver_router(simple)).splitlines()
+    assert plain_conf.count("ip route 0.0.0.0/0 Null0") == 1
+    assert "ipv6 route ::/0 Null0" not in plain_conf
 
     raw = load_configuration_yaml(
         Path("catalog/nodalarc/sessions/earth-leo-simple.yaml").read_text(encoding="utf-8")
@@ -1126,6 +1134,34 @@ def test_default_origination_renders_per_declared_family() -> None:
 
     assert " default-information originate ipv4 level-2 always metric 100" in router
     assert " default-information originate ipv6 level-2 always metric 100" in router
+    both = _frr_conf(resolved, _denver_router(resolved)).splitlines()
+    assert both.count("ip route 0.0.0.0/0 Null0") == 1
+    assert both.count("ipv6 route ::/0 Null0") == 1
+
+
+def test_a_static_only_router_that_declares_default_holds_it_and_advertises_nothing() -> None:
+    """The static default belongs to the node, whatever its instances run. In a
+    static-only instance no protocol exists to advertise it."""
+    raw = _raw_session(protocol="static")
+    raw["segments"][1]["apply"]["originated_prefixes"] = {"ipv4": ["default"]}
+    resolved = resolve_session(raw, source_context=SourceContext(origin="test.frr"))
+    conf = _frr_conf(resolved, _first_ground(resolved))
+
+    assert conf.splitlines().count("ip route 0.0.0.0/0 Null0") == 1
+    assert "default-information" not in conf
+    assert not [line for line in conf.splitlines() if line.startswith("router ")]
+
+
+def test_a_router_that_declares_no_default_holds_no_default_route() -> None:
+    """Only a node that declares `default` holds the static default; a router
+    that merely learns the default gets none, so it forwards toward the
+    originator."""
+    simple = _simple_session()
+    conf = _frr_conf(simple, _first_satellite(simple))
+
+    assert "Null0" not in conf
+    assert "0.0.0.0/0" not in conf
+    assert "default-information" not in conf
 
 
 def test_ospf_runs_ospfv3_beside_ospfv2_on_ipv6_routers_only() -> None:

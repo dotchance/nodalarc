@@ -24,7 +24,7 @@ router ospf
  segment-routing prefix {{ ipv4_loopback }}/32 index {{ domain.node_sid_index }}
 {% endif %}
  timers throttle spf {{ domain.ospf_spf_delay }} {{ domain.ospf_spf_initial_hold }} {{ domain.ospf_spf_max_hold }}
-{% if "ipv4" in domain.default_route_families %}
+{% if "ipv4" in default_route_families %}
  default-information originate always metric {{ domain.default_route_metric }}
 {% endif %}
 exit

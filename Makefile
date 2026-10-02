@@ -510,15 +510,9 @@ test-runtime-matrix: ## Destructively qualify every shipped session against the 
 	@echo "[runtime-matrix] WARNING: this replaces the active NodalArc session in $(NAMESPACE) once per shipped session."
 	@NAMESPACE='$(NAMESPACE)' PYTHONPATH=lib uv run pytest tests/integration/operator -m catalog --tb=short -q -rA
 
-test-builder-e2e: ## Destructively qualify Builder user: closure deployment on the live cluster
+test-builder-e2e: ## Destructively qualify authored sessions (Wizard, Builder, YAML, forked objects) on the live cluster
 	@echo "[builder-e2e] WARNING: this replaces the active NodalArc session in $(NAMESPACE)."
-	@NODALARC_RUN_BUILDER_E2E=1 \
-		NODALARC_EVIDENCE_SOURCE_GIT_SHA='$(GIT_SHA)' \
-		NODALARC_EVIDENCE_SOURCE_TAG='$(TAG)' \
-		NODALARC_EXPECTED_RUNTIME_RELEASE='$(PROJECT_VERSION)' \
-		NODALARC_EXPECTED_RUNTIME_BUILD='$(TAG)' \
-		NAMESPACE='$(NAMESPACE)' \
-		uv run pytest tests/integration/test_builder_catalog_deployment.py --tb=short -q -s
+	@NAMESPACE='$(NAMESPACE)' PYTHONPATH=lib uv run pytest tests/integration/operator/test_authoring.py --tb=short -q -rA
 
 perf-test: ## Run OME performance budgets; artifacts land in perf-results/
 	@echo "[perf-test] Running the OME performance scenario matrix against checked-in budgets."

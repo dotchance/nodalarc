@@ -7,6 +7,7 @@ Nothing else in the tests names a protocol.
 from __future__ import annotations
 
 import heapq
+import ipaddress
 import json
 import math
 import re
@@ -193,11 +194,21 @@ class ShownNetwork:
                 found.append((ground, satellite, link))
         return found
 
+    def lans(self) -> dict[str, list[str]]:
+        """Each LAN NodalArc shows (the IPv4 subnet of site interfaces) and the nodes on it."""
+        members: dict[str, list[str]] = {}
+        for node_id, node in self.nodes.items():
+            for address in node["addresses"]:
+                if address["purpose"] == "site_interface" and address["family"] == "ipv4":
+                    lan = str(ipaddress.ip_interface(address["address"]).network)
+                    members.setdefault(lan, []).append(node_id)
+        return members
+
     def least_latency_ms(self, source: str, destination: str) -> float | None:
         """The least total latency from one node to another over the links shown active now.
 
-        Nodes of one site or one spacecraft are joined at no delay. None when the links shown
-        do not connect the two nodes.
+        Nodes on one LAN (a site, a spacecraft bus) are joined at no delay. None when the links
+        shown do not connect the two nodes.
         """
         nodes = self.nodes
         reach: dict[str, dict[str, float]] = {node_id: {} for node_id in nodes}
@@ -205,10 +216,7 @@ class ShownNetwork:
             if link["state"] == "active":
                 a, b = link_key(link)
                 reach[a][b] = reach[b][a] = link["latency_ms"]
-        by_place: dict[str, list[str]] = {}
-        for node_id, node in nodes.items():
-            by_place.setdefault(node["namespace"], []).append(node_id)
-        for together in by_place.values():
+        for together in self.lans().values():
             for a in together:
                 for b in together:
                     if a != b:

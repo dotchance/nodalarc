@@ -303,10 +303,14 @@ class Operator:
         `changes` maps a JSON pointer in the object to its new value. These are the calls the
         Builder library makes: open a draft on the fork target, edit it, save it.
         """
-        draft = self.post(
-            "/api/v1/builder/catalog/draft/open",
-            {"source_ref": source_ref, "target_ref": target_ref},
-        )
+        self._save_catalog_draft({"source_ref": source_ref, "target_ref": target_ref}, changes)
+
+    def edit_catalog_object(self, ref: str, changes: dict[str, Any]) -> None:
+        """Replace some fields of one object of the user catalog, as the Builder library does."""
+        self._save_catalog_draft({"source_ref": ref}, changes)
+
+    def _save_catalog_draft(self, opening: dict[str, str], changes: dict[str, Any]) -> None:
+        draft = self.post("/api/v1/builder/catalog/draft/open", opening)
         draft = self.post(
             "/api/v1/builder/catalog/draft/patch",
             {
@@ -318,7 +322,7 @@ class Operator:
                 ],
             },
         )
-        assert not draft["issues"], f"the fork of {source_ref} has issues: {draft['issues']}"
+        assert not draft["issues"], f"the draft of {opening} has issues: {draft['issues']}"
         self.post(
             "/api/v1/builder/catalog/draft/save",
             {"draft": draft, "expected_draft_revision": draft["draft_revision"]},

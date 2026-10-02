@@ -41,3 +41,13 @@ def test_the_latency_shown_is_the_light_time_between_the_positions_shown(
 def test_satellites_move_at_the_speed_their_orbits_require(operator: Operator) -> None:
     disagreements = truths.satellites_move_at_the_speed_their_orbits_require(watch(operator, 14.0))
     assert not disagreements, "\n".join(disagreements)
+
+
+def test_far_sites_answer_no_sooner_than_light(operator: Operator) -> None:
+    disagreements = truths.far_sites_answer_no_sooner_than_light(operator, watch(operator))
+    assert not disagreements, "\n".join(disagreements)
+
+
+def test_every_lan_address_shown_answers_its_router(operator: Operator) -> None:
+    disagreements = truths.lan_addresses_shown_answer(operator, watch(operator))
+    assert not disagreements, "\n".join(disagreements)

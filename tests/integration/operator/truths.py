@@ -26,11 +26,19 @@ from .harness.network import (
     position_km,
     read_clock,
     router_neighbors,
+    routing_on,
     sim_seconds,
     wait_for_handover_overlap,
     watch,
 )
-from .harness.workloads import DtnEndpoint, QuicClient, find_workloads, run_in_shell
+from .harness.workloads import (
+    DtnEndpoint,
+    QuicClient,
+    expect_a_bundle,
+    find_workloads,
+    run_in_shell,
+    send_a_bundle,
+)
 
 # A reply is late by the time FRR and the kernel spend on it, and the delay NodalArc applies
 # follows the moving range in steps. The fastest of several replies is compared, with this margin.
@@ -299,17 +307,9 @@ def dtn_bundles_arrive(operator: Operator, dtn_endpoints: list[DtnEndpoint]) -> 
             payload = f"bundle-{uuid.uuid4().hex}"
             least = watch(operator, 4.0).least_latency_ms(sender.node_id, receiver.node_id)
             with operator.terminal(receiver.node_id) as inbox:
-                inbox.start(
-                    f"aap2-receive --socket {receiver.socket} --agentid {agent} "
-                    "--count 1 --newline -v"
-                )
-                inbox.wait_for("Waiting for bundles", 20.0)
-                with operator.terminal(sender.node_id) as outbox:
-                    sent = time.monotonic()
-                    status, printed = run_in_shell(
-                        outbox,
-                        f"aap2-send --socket {sender.socket} {receiver.eid}{agent} {payload}",
-                    )
+                expect_a_bundle(inbox, receiver, agent)
+                sent = time.monotonic()
+                status, printed = send_a_bundle(operator, sender, receiver, agent, payload)
                 if status != 0:
                     disagreements.append(f"{sender.node_id} could not send a bundle: {printed}")
                     continue
@@ -345,6 +345,80 @@ def dtn_bundles_arrive(operator: Operator, dtn_endpoints: list[DtnEndpoint]) -> 
     return disagreements
 
 
+def far_sites_answer_no_sooner_than_light(operator: Operator, shown: ShownNetwork) -> list[str]:
+    """Between two ground routers of one routing domain, a packet takes at least the path shown.
+
+    One pair per routing domain: the first ground router pings a site address of the last one.
+    While NodalArc shows a path between them the ping is answered, and the round trip is at least
+    twice the least latency of any path shown.
+    """
+    by_domain: dict[tuple[str, str], list[str]] = {}
+    for ground, _, link in shown.routed_ground_links():
+        domain = routing_on(shown.nodes[ground])[link_interface(link, ground)]
+        if ground not in by_domain.setdefault(domain, []):
+            by_domain[domain].append(ground)
+    disagreements = []
+    for (_protocol, domain), grounds in sorted(by_domain.items()):
+        source, destination = grounds[0], grounds[-1]
+        targets = [
+            address["address"].split("/")[0]
+            for address in shown.nodes[destination]["addresses"]
+            if address["purpose"] == "site_interface" and address["family"] == "ipv4"
+        ]
+        if source == destination or not targets:
+            continue
+        before = watch(operator, 4.0).least_latency_ms(source, destination)
+        with operator.terminal(source) as terminal:
+            replies = ping_reply_times_ms(terminal.run(f"ping {targets[0]}", interrupt_after=5.0))
+        after = watch(operator, 4.0).least_latency_ms(source, destination)
+        print(
+            f"far: {domain}: {source} -> {destination} ({targets[0]}): "
+            f"round trips {[round(reply, 1) for reply in replies]} ms; "
+            f"least latency shown {before} ms before, {after} ms after"
+        )
+        if before is None or after is None:
+            continue  # no path shown at one end of the ping: a missing reply is not judged
+        if not replies:
+            disagreements.append(
+                f"{source} -> {destination}: NodalArc shows a path and ping gets no reply"
+            )
+            continue
+        least = 2 * min(before, after) * (1 - MOVING_RANGE_ALLOWANCE)
+        if min(replies) < least:
+            disagreements.append(
+                f"{source} -> {destination}: a reply came back in {min(replies):.3f} ms; the "
+                f"shortest path NodalArc shows needs {least:.3f} ms for the round trip"
+            )
+    return disagreements
+
+
+def lan_addresses_shown_answer(operator: Operator, shown: ShownNetwork) -> list[str]:
+    """Every address NodalArc shows on a LAN answers its router, in each address family."""
+    disagreements = []
+    for lan, members in sorted(shown.lans().items()):
+        routers = [name for name in members if shown.nodes[name]["routing_instances"]]
+        others = [name for name in members if name not in routers[:1]]
+        if not routers or not others:
+            continue
+        with operator.terminal(routers[0]) as terminal:
+            for name in others:
+                for address in shown.nodes[name]["addresses"]:
+                    if address["purpose"] != "site_interface":
+                        continue
+                    target = address["address"].split("/")[0]
+                    command = (
+                        f"ping ipv6 {target}" if address["family"] == "ipv6" else f"ping {target}"
+                    )
+                    replies = ping_reply_times_ms(terminal.run(command, interrupt_after=3.0))
+                    print(f"lan: {routers[0]} -> {name} {target}: {len(replies)} replies")
+                    if not replies:
+                        disagreements.append(
+                            f"{lan}: NodalArc shows {target} on {name}; it does not answer "
+                            f"{routers[0]}"
+                        )
+    return disagreements
+
+
 def no_fault_is_reported(operator: Operator) -> list[str]:
     """A session whose network does what is shown reports no fault.
 
@@ -376,6 +450,8 @@ def assert_session_is_truthful(operator: Operator) -> None:
         *latency_shown_is_the_light_time_between_the_positions_shown(shown),
         *links_shown_are_the_routers_neighbors(operator, shown),
         *latency_shown_is_the_delay_packets_get(operator, shown),
+        *far_sites_answer_no_sooner_than_light(operator, shown),
+        *lan_addresses_shown_answer(operator, shown),
     ]
     quic_clients, dtn_endpoints = find_workloads(operator, shown)
     disagreements += quic_clients_download_from_their_servers(operator, quic_clients)

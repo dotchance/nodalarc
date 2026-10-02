@@ -67,3 +67,19 @@ def find_workloads(
                 assert eid, f"{node_id}: the bundle daemon did not state its EID: {welcome!r}"
                 dtn_endpoints.append(DtnEndpoint(node_id, eid.group(1), socket.group(1)))
     return quic_clients, dtn_endpoints
+
+
+def expect_a_bundle(inbox: Terminal, receiver: DtnEndpoint, agent: str) -> None:
+    """In the receiver's shell, register `agent` with its bundle daemon and wait for one bundle."""
+    inbox.start(f"aap2-receive --socket {receiver.socket} --agentid {agent} --count 1 --newline -v")
+    inbox.wait_for("Waiting for bundles", 20.0)
+
+
+def send_a_bundle(
+    operator: Operator, sender: DtnEndpoint, receiver: DtnEndpoint, agent: str, payload: str
+) -> tuple[int, str]:
+    """From the sender's shell, send one bundle to `agent` at the receiver."""
+    with operator.terminal(sender.node_id) as outbox:
+        return run_in_shell(
+            outbox, f"aap2-send --socket {sender.socket} {receiver.eid}{agent} {payload}"
+        )

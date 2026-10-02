@@ -70,20 +70,21 @@ the reports of the applications a session runs.
 
 `truths.py` holds what must be true of any ready session: the clock runs at the speed shown, the links
 shown are the routers' neighbors, the latency shown is the delay packets get, the range shown is the
-distance between the positions shown, satellites move at the speed their orbits require, the
-session's applications carry data no sooner than the shortest path shown allows, and no fault is
-reported while all of that holds. Each test file covers one thing a user does and ends by checking
-every truth:
+distance between the positions shown, satellites move at the speed their orbits require, a packet
+between two far sites takes at least the shortest path shown, every LAN address shown answers its
+router in each address family, the session's applications carry data no sooner than the shortest path
+shown allows, and no fault is reported while all of that holds. Each test file covers one thing a user
+does and ends by checking every truth:
 
 | File | What a user does |
 |------|------------------|
 | `test_truth.py` | Looks at the running session |
 | `test_access.py` | Opens a terminal on a router or a host, runs commands, traces a path |
-| `test_workloads.py` | Downloads a file over QUIC, sends a DTN bundle |
+| `test_workloads.py` | Downloads a file over QUIC, sends a DTN bundle, sends one with no path and waits for it |
 | `test_sessions.py` | Selects, runs and switches sessions |
 | `test_time.py` | Pauses, changes speed, seeks |
 | `test_topology.py` | Lets the sky move; watches a make-before-break handover; seeks during one |
-| `test_authoring.py` | Authors a session with the Wizard, a YAML file or a forked catalog object and runs it |
+| `test_authoring.py` | Authors a session with the Wizard, the Builder, a YAML file or forked catalog objects and runs it |
 | `test_history.py` | Records a session and reads its link history back |
 | `test_resilience.py` | Repairs a ground link that was cut under NodalArc |
 | `test_catalog.py` | Runs every shipped session |
@@ -91,7 +92,7 @@ every truth:
 Three runs are selected with a marker:
 
 ```bash
-# Smoke: under two minutes, changes nothing. Run it after an install or a deploy.
+# Smoke: about three minutes, changes nothing. Run it after an install or a deploy.
 uv run pytest tests/integration/operator -m smoke -q
 
 # Every shipped session; replaces the running session once per session (about 45 minutes).

@@ -190,8 +190,97 @@ def _ground_link_ranges_km(operator: Operator) -> list[float]:
     return sorted(link["range_km"] for _, _, link in shown.routed_ground_links())
 
 
+_FAMILY_ORDER = ("terminals", "nodes", "constellations", "sessions")
+
+
+def _author_with_the_library_and_a_yaml_file(
+    operator: Operator, created: list[str], name: str, found: dict[str, Any], shorter: int
+) -> None:
+    """Fork the terminal, the node and the constellation one by one, then upload a session."""
+    forks = {
+        found["terminal_ref"]: f"user:terminals/{name}.yaml",
+        found["node_ref"]: f"user:nodes/{name}.yaml",
+        found["constellation_ref"]: f"user:constellations/{name}.yaml",
+    }
+    session_ref = f"user:sessions/{name}.yaml"
+    for leftover in (session_ref, *reversed(forks.values())):
+        operator.delete_user_object(leftover)
+    created.extend(forks.values())
+    created.append(session_ref)
+    operator.fork_catalog_object(
+        found["terminal_ref"], forks[found["terminal_ref"]], {"/terminal/max_range_km": shorter}
+    )
+    operator.fork_catalog_object(
+        found["node_ref"],
+        forks[found["node_ref"]],
+        {f"/node/terminals/{found['mount']}/terminal": forks[found["terminal_ref"]]},
+    )
+    operator.fork_catalog_object(
+        found["constellation_ref"],
+        forks[found["constellation_ref"]],
+        {"/constellation/node": forks[found["node_ref"]]},
+    )
+    document = found["document"]
+    found["segment"]["source"] = forks[found["constellation_ref"]]
+    document["session"]["name"] = name
+    accepted = operator.post(
+        "/api/v1/session/deploy-from-yaml",
+        {"yaml": yaml.safe_dump(document), "record_history": False},
+    )
+    operator.wait_for_session({"name": name}, accepted["operation_id"])
+
+
+def _author_in_the_builder(
+    operator: Operator, created: list[str], name: str, found: dict[str, Any], shorter: int
+) -> None:
+    """Open the shipped session in the Builder, customize the chain down to the terminal,
+    save, shorten the forked terminal's range, open the saved session again, save and deploy."""
+    session_ref = f"user:sessions/{name}.yaml"
+    leaf = f"user:terminals/{name}.yaml"
+    operator.delete_user_object(session_ref)
+    opened = operator.post(
+        "/api/v1/builder/draft/open",
+        {"source_ref": found["reference"]["source_id"]["session_ref"], "target_ref": session_ref},
+    )
+    assert opened["projection_status"] == "applied", (
+        f"the Builder did not open {found['reference']['name']}: {opened.get('issues')}"
+    )
+    customized = operator.post(
+        "/api/v1/builder/draft/customize-chain",
+        {
+            "draft": opened,
+            "expected_draft_revision": opened["draft_revision"],
+            "segment_id": found["segment"]["id"],
+            "leaf_ref": found["terminal_ref"],
+            "target_leaf_ref": leaf,
+        },
+    )
+    assert customized["applied"], f"the chain was not customized: {customized.get('issues')}"
+    forked = sorted(
+        (entry["target_ref"] for entry in customized["forked_chain"]),
+        key=lambda ref: _FAMILY_ORDER.index(ref.split(":", 1)[1].split("/", 1)[0]),
+    )
+    print(f"the Builder forked {forked}")
+    created.extend(forked)
+    created.append(session_ref)
+    compiled = operator.post("/api/v1/builder/draft/compile", {"draft": customized["draft"]})
+    operator.post("/api/v1/builder/session/save", compiled["save_request"])
+
+    operator.edit_catalog_object(leaf, {"/terminal/max_range_km": shorter})
+
+    reopened = operator.post("/api/v1/builder/draft/open", {"source_ref": session_ref})
+    recompiled = operator.post("/api/v1/builder/draft/compile", {"draft": reopened})
+    saved = operator.post("/api/v1/builder/session/save", recompiled["save_request"])
+    operator.run_saved_session(saved)
+
+
+@pytest.mark.parametrize(
+    "author",
+    [_author_with_the_library_and_a_yaml_file, _author_in_the_builder],
+    ids=["the catalog library and a YAML file", "the Builder"],
+)
 def test_a_forked_terminal_with_a_shorter_range_limits_the_links_that_run(
-    operator: Operator, created: list[str]
+    operator: Operator, created: list[str], author: Callable[..., None]
 ) -> None:
     """A user forks a satellite's access terminal, shortens its range and runs a session on it.
 
@@ -216,7 +305,15 @@ def test_a_forked_terminal_with_a_shorter_range_limits_the_links_that_run(
     node_ref = operator.catalog_object(constellation_ref)["constellation"]["node"]
     mounts = operator.catalog_object(node_ref)["node"]["terminals"]
     mount = next(index for index, mount in enumerate(mounts) if mount["role"] == "access")
-    terminal_ref = mounts[mount]["terminal"]
+    found = {
+        "reference": reference,
+        "document": document,
+        "segment": segment,
+        "constellation_ref": constellation_ref,
+        "node_ref": node_ref,
+        "mount": mount,
+        "terminal_ref": mounts[mount]["terminal"],
+    }
 
     operator.run_session(reference)
     reference_ranges = _ground_link_ranges_km(operator)
@@ -225,37 +322,13 @@ def test_a_forked_terminal_with_a_shorter_range_limits_the_links_that_run(
     assert reference_ranges[-1] > shorter
     print(
         f"{reference['name']}: ground links from {reference_ranges[0]:.0f} to "
-        f"{reference_ranges[-1]:.0f} km with {terminal_ref}; forking it at {shorter} km"
+        f"{reference_ranges[-1]:.0f} km with {found['terminal_ref']}; forking it at {shorter} km"
     )
 
     name = "operator-test-fork"
-    forks = {
-        terminal_ref: f"user:terminals/{name}.yaml",
-        node_ref: f"user:nodes/{name}.yaml",
-        constellation_ref: f"user:constellations/{name}.yaml",
-    }
-    session_ref = f"user:sessions/{name}.yaml"
-    for leftover in (session_ref, *reversed(forks.values())):
-        operator.delete_user_object(leftover)
-    created.extend(forks.values())
-    created.append(session_ref)
-    operator.fork_catalog_object(
-        terminal_ref, forks[terminal_ref], {"/terminal/max_range_km": shorter}
-    )
-    operator.fork_catalog_object(
-        node_ref, forks[node_ref], {f"/node/terminals/{mount}/terminal": forks[terminal_ref]}
-    )
-    operator.fork_catalog_object(
-        constellation_ref, forks[constellation_ref], {"/constellation/node": forks[node_ref]}
-    )
-    segment["source"] = forks[constellation_ref]
-    document["session"]["name"] = name
+    author(operator, created, name, found, shorter)
 
-    accepted = operator.post(
-        "/api/v1/session/deploy-from-yaml",
-        {"yaml": yaml.safe_dump(document), "record_history": False},
-    )
-    operator.wait_for_session({"name": name}, accepted["operation_id"])
+    assert operator.state()["constellation_name"] == name
     forked_ranges = _ground_link_ranges_km(operator)
     print(f"{name}: ground links from {forked_ranges[0]:.0f} to {forked_ranges[-1]:.0f} km")
     assert forked_ranges, "the forked session shows no ground link"

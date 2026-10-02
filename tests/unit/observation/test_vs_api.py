@@ -9,6 +9,7 @@ from pathlib import Path
 
 import pytest
 import yaml
+from nats.aio.msg import Msg
 from nodalarc.catalog_closure import FilesystemCatalogReadView
 from nodalarc.catalog_paths import CatalogRoots
 from nodalarc.catalog_upload import CatalogUpload, encode_catalog_upload
@@ -42,6 +43,13 @@ ISS_TLE_LINE_1 = "1 25544U 98067A   21075.51041667  .00001264  00000-0  29660-4 
 ISS_TLE_LINE_2 = "2 25544  51.6442  21.5417 0002426  95.1670  21.8444 15.48974333273145"
 CATALOG_SESSION = Path("catalog/nodalarc/sessions/earth-leo-heo-geo-luna-reachability.yaml")
 SHIPPED_ROOT = Path("catalog/nodalarc")
+
+
+class _Message:
+    """A NATS message as a handler receives it: the payload bytes, and nothing else unless set."""
+
+    data: bytes
+    metadata: Msg.Metadata
 
 
 class TestOpsEventVisibility:
@@ -669,10 +677,9 @@ class TestPauseLiveness:
 
     def test_on_heartbeat_updates_liveness_and_wall_stamp(self):
         import asyncio
-        from unittest.mock import MagicMock
 
         ctx = self._ctx()
-        msg = MagicMock()
+        msg = _Message()
         msg.data = json.dumps(
             {"wall_time": "2026-06-11T05:00:00+00:00", "status": "paused"}
         ).encode()
@@ -682,10 +689,9 @@ class TestPauseLiveness:
 
     def test_on_heartbeat_missing_wall_time_fails_loud(self):
         import asyncio
-        from unittest.mock import MagicMock
 
         ctx = self._ctx()
-        msg = MagicMock()
+        msg = _Message()
         msg.data = json.dumps({"status": "paused"}).encode()
         with pytest.raises(ValueError, match="wall_time"):
             asyncio.run(ctx._on_heartbeat(msg))
@@ -906,10 +912,9 @@ class TestLinkDecisionTraceState:
         ctx._interface_rates = _ISL_RATES
 
         import asyncio
-        from unittest.mock import MagicMock
 
         event = _make_link_up_event()
-        msg = MagicMock()
+        msg = _Message()
         msg.data = json.dumps(event).encode()
 
         asyncio.run(ctx._on_link_up(msg))
@@ -934,11 +939,10 @@ class TestLinkDecisionTraceState:
         ctx._init_state_only()
 
         import asyncio
-        from unittest.mock import MagicMock
 
         event = _make_link_up_event()
         event.pop("provenance")
-        msg = MagicMock()
+        msg = _Message()
         msg.data = json.dumps(event).encode()
 
         with pytest.raises(ValueError, match="provenance"):
@@ -949,12 +953,11 @@ class TestLinkDecisionTraceState:
         ctx._init_state_only()
 
         import asyncio
-        from unittest.mock import MagicMock
 
         event = _make_link_up_event(
             provenance=_make_provenance(range_km=1499.0),
         )
-        msg = MagicMock()
+        msg = _Message()
         msg.data = json.dumps(event).encode()
 
         with pytest.raises(ValueError, match="range_km disagrees"):
@@ -966,9 +969,8 @@ class TestLinkDecisionTraceState:
         ctx._interface_rates = _ISL_RATES
 
         import asyncio
-        from unittest.mock import MagicMock
 
-        msg = MagicMock()
+        msg = _Message()
         msg.data = json.dumps(
             {
                 "snapshot_seq": 12,
@@ -1008,13 +1010,12 @@ class TestLinkDecisionTraceState:
         ctx._interface_rates = _ISL_RATES
 
         import asyncio
-        from unittest.mock import MagicMock
 
-        up = MagicMock()
+        up = _Message()
         up.data = json.dumps(_make_link_up_event()).encode()
         asyncio.run(ctx._on_link_up(up))
 
-        latency = MagicMock()
+        latency = _Message()
         latency.data = json.dumps(
             {
                 "sim_time": datetime.now(UTC).isoformat(),
@@ -1059,9 +1060,8 @@ class TestSubscriberResilience:
         ctx.last_snapshot_seq = 100
 
         import asyncio
-        from unittest.mock import MagicMock
 
-        msg = MagicMock()
+        msg = _Message()
         msg.data = b'{"snapshot_seq": 50, "sim_time": "2025-01-01T00:00:00+00:00", "links": [], "interval_s": 5.0, "epoch_id": 0}'
 
         asyncio.run(ctx._on_link_state_snapshot(msg))
@@ -1075,9 +1075,8 @@ class TestSubscriberResilience:
         ctx.last_snapshot_seq = 10
 
         import asyncio
-        from unittest.mock import MagicMock
 
-        msg = MagicMock()
+        msg = _Message()
         msg.data = b'{"snapshot_seq": 11, "sim_time": "2025-01-01T00:00:00+00:00", "links": [], "interval_s": 5.0, "epoch_id": 0}'
 
         asyncio.run(ctx._on_link_state_snapshot(msg))
@@ -1090,9 +1089,8 @@ class TestSubscriberResilience:
         ctx._interface_rates = _ISL_RATES
 
         import asyncio
-        from unittest.mock import MagicMock
 
-        msg = MagicMock()
+        msg = _Message()
         msg.data = json.dumps(
             {
                 "snapshot_seq": 12,
@@ -1145,9 +1143,8 @@ class TestSubscriberResilience:
         ctx._interface_rates = {("sat-P00S00", "isl0"): _ISL_RATES[("sat-P00S00", "isl0")]}
 
         import asyncio
-        from unittest.mock import MagicMock
 
-        msg = MagicMock()
+        msg = _Message()
         msg.data = json.dumps(
             {
                 "snapshot_seq": 12,
@@ -1202,9 +1199,8 @@ class TestSubscriberResilience:
         )
 
         import asyncio
-        from unittest.mock import MagicMock
 
-        msg = MagicMock()
+        msg = _Message()
         msg.data = json.dumps(
             {
                 "snapshot_seq": 12,
@@ -1239,11 +1235,10 @@ class TestSubscriberResilience:
         ctx._init_state_only()
 
         import asyncio
-        from unittest.mock import MagicMock
 
         event = _make_link_up_event()
         event.pop("link_type")
-        msg = MagicMock()
+        msg = _Message()
         msg.data = json.dumps(event).encode()
 
         with pytest.raises(ValueError, match="link_type"):
@@ -1254,11 +1249,10 @@ class TestSubscriberResilience:
         ctx._init_state_only()
 
         import asyncio
-        from unittest.mock import MagicMock
 
         event = _make_link_down_event()
         event.pop("link_type")
-        msg = MagicMock()
+        msg = _Message()
         msg.data = json.dumps(event).encode()
 
         with pytest.raises(ValueError, match="link_type"):
@@ -1414,12 +1408,11 @@ class TestLinkDecisionSnapshotSubscription:
 
     def test_handler_stores_latest_snapshot(self):
         import asyncio
-        from unittest.mock import MagicMock
 
         ctx = SessionContext.__new__(SessionContext)
         ctx._init_state_only()
 
-        msg = MagicMock()
+        msg = _Message()
         msg.data = json.dumps(_decision_snapshot_payload()).encode()
 
         asyncio.run(ctx._on_ground_link_decision_snapshot(msg))
@@ -1440,19 +1433,18 @@ class TestLinkDecisionSnapshotSubscription:
         Direction 4 (multi-replica) requires deterministic ordering;
         out-of-order delivery is real on JetStream restart."""
         import asyncio
-        from unittest.mock import MagicMock
 
         ctx = SessionContext.__new__(SessionContext)
         ctx._init_state_only()
 
-        first = MagicMock()
+        first = _Message()
         first.data = json.dumps(_decision_snapshot_payload()).encode()
         asyncio.run(ctx._on_ground_link_decision_snapshot(first))
 
         older = _decision_snapshot_payload()
         older["snapshot_seq"] = 41
         older["unscheduled_pairs"] = []
-        old_msg = MagicMock()
+        old_msg = _Message()
         old_msg.data = json.dumps(older).encode()
         asyncio.run(ctx._on_ground_link_decision_snapshot(old_msg))
 
@@ -1470,13 +1462,12 @@ class TestLinkDecisionsEndpoint:
     matching unscheduled record) when called with both query params."""
 
     def _make_ctx_with_snapshot(self):
-        from unittest.mock import MagicMock
 
         ctx = SessionContext.__new__(SessionContext)
         ctx._init_state_only()
         import asyncio
 
-        msg = MagicMock()
+        msg = _Message()
         msg.data = json.dumps(_decision_snapshot_payload()).encode()
         asyncio.run(ctx._on_ground_link_decision_snapshot(msg))
         return ctx
@@ -1651,12 +1642,11 @@ class TestDecisionTimelineEndpoint:
 
     def _make_ctx_with_timeline(self):
         import asyncio
-        from unittest.mock import MagicMock
 
         ctx = SessionContext.__new__(SessionContext)
         ctx._init_state_only()
 
-        first = MagicMock()
+        first = _Message()
         first.data = json.dumps(_decision_snapshot_payload()).encode()
         asyncio.run(ctx._on_ground_link_decision_snapshot(first))
 
@@ -1673,7 +1663,7 @@ class TestDecisionTimelineEndpoint:
                 "capacity_constraint": "gs-den:terminals",
             }
         )
-        second = MagicMock()
+        second = _Message()
         second.data = json.dumps(second_payload).encode()
         asyncio.run(ctx._on_ground_link_decision_snapshot(second))
         return ctx
@@ -1717,7 +1707,6 @@ class TestDecisionTimelineEndpoint:
 
     def test_timeline_resets_on_epoch_change(self, monkeypatch):
         import asyncio
-        from unittest.mock import MagicMock
 
         import vs_api.main as m
 
@@ -1726,7 +1715,7 @@ class TestDecisionTimelineEndpoint:
         next_epoch["snapshot_seq"] = 44
         next_epoch["epoch_id"] = 1
         next_epoch["sim_time"] = "2026-01-01T00:00:10+00:00"
-        msg = MagicMock()
+        msg = _Message()
         msg.data = json.dumps(next_epoch).encode()
         asyncio.run(ctx._on_ground_link_decision_snapshot(msg))
         monkeypatch.setattr(m, "_active_context", ctx)
@@ -1844,11 +1833,10 @@ class TestActuationHealth:
         # subscribe even though the Scheduler's one-time startup clean roster predates
         # the VS-API ops (NEW) subscription. Recovery must not touch the event log.
         import asyncio
-        from unittest.mock import MagicMock
 
         ctx = SessionContext.__new__(SessionContext)
         ctx._init_state_only()
-        msg = MagicMock()
+        msg = _Message()
         msg.data = json.dumps(
             self._event(instance="sched-1", gs_id="gs-den", code="ACTUATION_CLEAN", after="clean")
         ).encode()
@@ -1879,11 +1867,10 @@ class TestKernelActualRecovery:
         self, ctx, *, instance: str, pairs, emitted_at, pending=None, generation: str = "gen-1"
     ) -> None:
         import asyncio
-        from unittest.mock import MagicMock
 
         from nodalarc.models.scheduler_ops import ActualLinkSnapshot, PendingActuationPair
 
-        msg = MagicMock()
+        msg = _Message()
         msg.data = (
             ActualLinkSnapshot(
                 session_id="test",
@@ -1949,13 +1936,12 @@ class TestKernelActualRecovery:
         assert ctx.actual_kernel_pairs() == frozenset({("gs-den", "sat-09")})
 
     def _ctx_with_snapshot_and_clean_roster(self):
-        from unittest.mock import MagicMock
 
         ctx = SessionContext.__new__(SessionContext)
         ctx._init_state_only()
         import asyncio
 
-        snap_msg = MagicMock()
+        snap_msg = _Message()
         snap_msg.data = json.dumps(_decision_snapshot_payload()).encode()
         asyncio.run(ctx._on_ground_link_decision_snapshot(snap_msg))
         # Clean actuation roster for gs-den: isolate the kernel-actual source so the
@@ -2210,9 +2196,8 @@ def _recording_error(ctx: SessionContext) -> str | None:
 
 
 def _message(payload: dict):
-    from unittest.mock import MagicMock
 
-    msg = MagicMock()
+    msg = _Message()
     msg.data = json.dumps(payload).encode()
     return msg
 
@@ -2574,12 +2559,18 @@ class TestSessionHistory:
 
     def _deliver_actual_links(self, ctx, *, stream_seq: int, pairs, sim_time=_BASELINE_SIM_TIME):
         import asyncio
-        from unittest.mock import MagicMock
 
         from nodalarc.models.scheduler_ops import ActualLinkSnapshot
 
-        msg = MagicMock()
-        msg.metadata.sequence.stream = stream_seq
+        msg = _Message()
+        msg.metadata = Msg.Metadata(
+            sequence=Msg.Metadata.SequencePair(consumer=stream_seq, stream=stream_seq),
+            num_pending=0,
+            num_delivered=1,
+            timestamp=datetime(2026, 9, 23, 12, 0, 6, tzinfo=UTC),
+            stream="NODALARC_LINKS",
+            consumer="vs-api",
+        )
         msg.data = (
             ActualLinkSnapshot(
                 session_id=ctx.session_id,

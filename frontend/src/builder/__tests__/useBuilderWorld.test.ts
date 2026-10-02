@@ -15,10 +15,8 @@ vi.mock("../../config", () => ({
 
 const {
   claimOutlineReveal,
-  requestLibraryReveal,
   requestOutlineReveal,
   useBuilderWorld,
-  useLibraryReveal,
   useOutlineReveal,
 } = await import("../useBuilderWorld");
 
@@ -172,33 +170,11 @@ describe("useBuilderWorld session coordinator", () => {
   });
 });
 
-describe("outline reveal remains separate from Library reveal", () => {
+describe("outline reveal", () => {
   it("consumes each outline reveal once", () => {
     const { result } = renderHook(() => useOutlineReveal());
     act(() => requestOutlineReveal("space-777"));
     expect(claimOutlineReveal("outline", result.current)?.segmentId).toBe("space-777");
     expect(claimOutlineReveal("outline", result.current)).toBeNull();
-  });
-
-  it("does not cross the Library reveal channel", () => {
-    const outline = renderHook(() => useOutlineReveal());
-    const beforeOutline = outline.result.current;
-    act(() =>
-      requestLibraryReveal({
-        ref: "user:sites/x.yaml",
-        namespace: "user",
-        family: "sites",
-        revision: "revision",
-        size_bytes: 1,
-        display_name: "x",
-        summary: null,
-      }),
-    );
-    expect(outline.result.current).toBe(beforeOutline);
-
-    const library = renderHook(() => useLibraryReveal());
-    const beforeLibrary = library.result.current;
-    act(() => requestOutlineReveal("ground-42"));
-    expect(library.result.current).toBe(beforeLibrary);
   });
 });

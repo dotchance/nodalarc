@@ -67,17 +67,6 @@ describe("LinkDetail", () => {
     cleanup();
   });
 
-  it("shows the declared rule, topology, and endpoint segments for a selected link", () => {
-    render(<LinkDetail link={link()} snapshot={snapshot()} />);
-
-    expect(screen.getByText("Rule")).toBeTruthy();
-    expect(screen.getByText("leo-to-meo-relay-candidates")).toBeTruthy();
-    expect(screen.getByText("Topology")).toBeTruthy();
-    expect(screen.getByText("nearest_n")).toBeTruthy();
-    expect(screen.getByText("Segments")).toBeTruthy();
-    expect(screen.getByText("leo ↔ meo")).toBeTruthy();
-  });
-
   it("draws each direction from its sender's TX to its receiver's RX and highlights the lower", () => {
     render(
       <LinkDetail

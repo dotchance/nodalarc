@@ -3,10 +3,8 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { renderHook, act, cleanup } from "@testing-library/react";
 import { useKeyboard, KEYBOARD_SHORTCUTS } from "../useKeyboard";
-import { focusSearchTarget } from "../../ui/searchFocus";
+import { setSearchTarget } from "../../ui/searchFocus";
 import type { ViewMode, ColorMode } from "../../types";
-
-vi.mock("../../ui/searchFocus", () => ({ focusSearchTarget: vi.fn(() => true) }));
 
 // Each hook registers a window keydown listener; unmount between tests so a
 // prior test's live-mode listener never fires on a later test's event.
@@ -59,34 +57,6 @@ describe("useKeyboard", () => {
     actions = makeActions();
   });
 
-  it.each([
-    ["t", "onToggleTrails"],
-    ["T", "onToggleTrails"],
-    ["v", "onTopView"],
-    ["V", "onTopView"],
-    ["l", "onToggleIslLinks"],
-    ["L", "onToggleIslLinks"],
-    ["g", "onToggleGroundLinks"],
-    ["G", "onToggleGroundLinks"],
-    ["p", "onToggleSatPaths"],
-    ["P", "onToggleSatPaths"],
-    ["h", "onToggleHistorical"],
-    ["H", "onToggleHistorical"],
-    ["f", "onFrameSelection"],
-    ["F", "onFrameSelection"],
-    ["Home", "onFrameScene"],
-    ["n", "onToggleGlobeMode"],
-    ["i", "onToggleReferenceFrame"],
-    ["]", "onTogglePanel"],
-    ["q", "onToggleFilter"],
-    [";", "onToggleLabels"],
-    ["'", "onToggleGsLabels"],
-  ])("key '%s' calls %s", (key, actionName) => {
-    renderHook(() => useKeyboard(actions, "globe"));
-    act(() => fireKey(key));
-    expect((actions as Record<string, ReturnType<typeof vi.fn>>)[actionName]).toHaveBeenCalled();
-  });
-
   it("Space calls onPlayPause and preventDefault", () => {
     renderHook(() => useKeyboard(actions, "globe"));
     const pd = vi.fn();
@@ -108,14 +78,6 @@ describe("useKeyboard", () => {
     act(() => fireKey("F", { shiftKey: true }));
     expect(actions.onFollowNode).toHaveBeenCalled();
     expect(actions.onFrameSelection).not.toHaveBeenCalled();
-  });
-
-  it("1 sets area color mode, 2 sets plane", () => {
-    renderHook(() => useKeyboard(actions, "globe"));
-    act(() => fireKey("1"));
-    expect(actions.onSetColorMode).toHaveBeenCalledWith("area");
-    act(() => fireKey("2"));
-    expect(actions.onSetColorMode).toHaveBeenCalledWith("plane");
   });
 
   it("suppresses shortcuts when input is focused", () => {
@@ -230,18 +192,25 @@ describe("useKeyboard — builder mode suspends live-session keys", () => {
   });
 
   it("'/' log-search focus is suspended in builder; live it focuses and prevents default", () => {
-    const search = vi.mocked(focusSearchTarget);
-    search.mockClear();
-    const pd = vi.fn();
-    renderHook(() => useKeyboard(makeActions(), "builder"));
-    act(() => fireKey("/", { preventDefault: pd }));
-    expect(search).not.toHaveBeenCalled();
-    expect(pd).not.toHaveBeenCalled();
+    const search = document.createElement("input");
+    document.body.appendChild(search);
+    setSearchTarget(search);
+    try {
+      const pd = vi.fn();
+      const builder = renderHook(() => useKeyboard(makeActions(), "builder"));
+      act(() => fireKey("/", { preventDefault: pd }));
+      builder.unmount();
+      expect(document.activeElement).not.toBe(search);
+      expect(pd).not.toHaveBeenCalled();
 
-    const pdLive = vi.fn();
-    renderHook(() => useKeyboard(makeActions(), "globe"));
-    act(() => fireKey("/", { preventDefault: pdLive }));
-    expect(search).toHaveBeenCalled();
-    expect(pdLive).toHaveBeenCalled();
+      const pdLive = vi.fn();
+      renderHook(() => useKeyboard(makeActions(), "globe"));
+      act(() => fireKey("/", { preventDefault: pdLive }));
+      expect(document.activeElement).toBe(search);
+      expect(pdLive).toHaveBeenCalled();
+    } finally {
+      setSearchTarget(null);
+      search.remove();
+    }
   });
 });

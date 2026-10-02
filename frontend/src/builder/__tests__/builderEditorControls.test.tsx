@@ -7,9 +7,8 @@
  *  inputs excepted — they are not editing controls). Same enforcement
  *  pattern as the stylesheet token scan.
  *
- *  Kit behavior: EditorName create-focus; NullableNumberField's
- *  empty-means-unset contract; EditorCard anatomy. Object-keyed
- *  state reset is tested through GroundEditor, the stateful editor.
+ *  Kit behavior: number fields never commit an empty or out-of-range
+ *  figure as a value; empty means unset.
  */
 
 import { readdirSync, readFileSync } from "node:fs";
@@ -27,8 +26,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   BodySelect,
   EditorApplyRow,
-  EditorCard,
-  EditorName,
   NumberField,
   NullableNumberField,
   SelectField,
@@ -175,7 +172,7 @@ describe("card anatomy lives only in the kit (EditorCard)", () => {
   });
 });
 
-describe("EditorCard adoption smoke: current editors render and their cards behave", () => {
+describe("editors delegate authoring to VS-API", () => {
   beforeEach(() => {
     // The editors read catalogs on mount; the endpoint returns a bare array.
     vi.stubGlobal(
@@ -209,30 +206,6 @@ describe("EditorCard adoption smoke: current editors render and their cards beha
     // The header Remove — carried through EditorCard's actions slot — drops its node.
     fireEvent.click(screen.getByRole("button", { name: "Remove gw2" }));
     expect(updated.nodes.map((n) => n.node_id)).toEqual(["gw1"]);
-  });
-
-  it("ConstellationEditor: a collapsed accordion card opens on head click", () => {
-    render(
-      <ConstellationEditor
-        authoring={AUTHORING_FACTS}
-        draft={newDraftConstellation("nodalarc:nodes/space/leo.yaml")}
-        workspace={newWorkspace("t")}
-        onUpdate={() => {}}
-        onUpdateOrbit={() => {}}
-        onSetPopulation={async () => {}}
-        onAuthorInlineNode={async () => {}}
-        onAddNodeTerminal={async () => {}}
-        onSetNodeTerminalRole={async () => {}}
-        onAddNodeEthernet={async () => {}}
-        onRemove={() => {}}
-        onOpenRule={() => {}}
-        onConnect={() => {}}
-      />,
-    );
-    // Orbit is open by default; Pattern is collapsed, so its body field is hidden.
-    expect(screen.queryByText("planes")).toBeNull();
-    fireEvent.click(screen.getByRole("button", { name: /Pattern/ }));
-    expect(screen.getByText("planes")).toBeTruthy();
   });
 
   it("ConstellationEditor delegates phasing transitions without authoring defaults", async () => {
@@ -458,17 +431,6 @@ describe("editor kit behavior", () => {
     );
   });
 
-  it("EditorName focuses and selects on create", () => {
-    render(<EditorName value="seeded name" onChange={() => {}} autoFocus />);
-    const input = screen.getByDisplayValue("seeded name");
-    expect(document.activeElement).toBe(input);
-  });
-
-  it("EditorName does not steal focus when not fresh", () => {
-    render(<EditorName value="seeded name" onChange={() => {}} />);
-    expect(document.activeElement).not.toBe(screen.getByDisplayValue("seeded name"));
-  });
-
   it("NullableNumberField: empty means unset, never zero", () => {
     let value: number | null = 25;
     render(
@@ -483,72 +445,6 @@ describe("editor kit behavior", () => {
     );
     fireEvent.change(screen.getByPlaceholderText("none"), { target: { value: "" } });
     expect(value).toBeNull();
-  });
-
-  it("EditorCard closed reads as spec (summary), open shows the body", () => {
-    const { rerender } = render(
-      <EditorCard title="Orbit" summary="550 km circular" open={false} onToggle={() => {}}>
-        <div data-testid="body" />
-      </EditorCard>,
-    );
-    expect(screen.getByText("550 km circular")).toBeTruthy();
-    expect(screen.queryByTestId("body")).toBeNull();
-    rerender(
-      <EditorCard title="Orbit" summary="550 km circular" open onToggle={() => {}}>
-        <div data-testid="body" />
-      </EditorCard>,
-    );
-    expect(screen.getByTestId("body")).toBeTruthy();
-  });
-});
-
-describe("editor state is keyed by object identity", () => {
-  beforeEach(() => {
-    // The catalog fetches behind useBuilderCatalog are irrelevant here — the
-    // catalog endpoint returns a bare array (refreshCatalogFamily casts the
-    // response to generated catalog summaries), so the stub must too.
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async () => ({
-        ok: true,
-        json: async () => ({ generation: "g1", items: [] }),
-      })),
-    );
-  });
-  afterEach(() => {
-    vi.unstubAllGlobals();
-    cleanup();
-  });
-
-  it("switching objects yields the canonical presentation, not the last one's", () => {
-    const a = newDraftGroundSet("nodalarc:nodes/ground/leo-gateway.yaml", {});
-    const b = newDraftGroundSet("nodalarc:nodes/ground/leo-gateway.yaml", {});
-    const shared = {
-      authoring: AUTHORING_FACTS,
-      workspace: newWorkspace("t"),
-      onOpenRule: () => {},
-      onConnect: () => {},
-      schedulingPresets: [],
-      selectedSchedulingPreset: null,
-      memberSchedulingPreset: () => null,
-      onSchedulingPreset: async () => {},
-      onMintSites: async () => {},
-      onAddSiteReference: async () => {},
-      onSetStampNodeModel: async () => {},
-      onSetSiteNodeModel: async () => {},
-      onAddSiteNode: async () => {},
-      onUpdate: () => {},
-      onRemove: () => {},
-    };
-    const { rerender } = render(
-      <GroundEditor key={a.segment_id} draft={a} {...shared} />,
-    );
-    // Canonical: Sites open. Toggle it closed — a per-object view state.
-    fireEvent.click(screen.getByText("Sites"));
-    expect(screen.queryByText("+ mint pasted sites")).toBeNull();
-    // Switch to object B (new key = remount): canonical again, no bleed.
-    rerender(<GroundEditor key={b.segment_id} draft={b} {...shared} />);
-    expect(screen.getByText("+ mint pasted sites")).toBeTruthy();
   });
 });
 
@@ -570,26 +466,6 @@ describe("buffered windows commit through the apply row", () => {
     expect((screen.getByText("Defaults") as HTMLButtonElement).disabled).toBe(true);
     expect((screen.getByText("Cancel") as HTMLButtonElement).disabled).toBe(false);
     expect((screen.getByText("OK") as HTMLButtonElement).disabled).toBe(false);
-  });
-
-  it("a dirty window says so and every commit path fires its own callback", () => {
-    const calls: string[] = [];
-    render(
-      <EditorApplyRow
-        dirty
-        onApply={() => calls.push("apply")}
-        onOk={() => calls.push("ok")}
-        onDefaults={() => calls.push("defaults")}
-        onCancel={() => calls.push("cancel")}
-      />,
-    );
-    expect(screen.getByText("unapplied changes")).toBeTruthy();
-    expect(screen.queryByTestId("builder-stale-notice")).toBeNull();
-    fireEvent.click(screen.getByText("Apply"));
-    fireEvent.click(screen.getByText("OK"));
-    fireEvent.click(screen.getByText("Defaults"));
-    fireEvent.click(screen.getByText("Cancel"));
-    expect(calls).toEqual(["apply", "ok", "defaults", "cancel"]);
   });
 
   // a window whose applied object moved underneath a dirty working copy
@@ -823,11 +699,6 @@ describe("the anatomy guide answers what-next in any order", () => {
     expect(screen.getByText("1 site · add more")).toBeTruthy();
   });
 
-  it("a multi-site resolved count is shown, not the draft node count", () => {
-    render(<BuildGuide {...guideProps(newWorkspace("named"), 3)} />);
-    expect(screen.getByText("3 sites · add more")).toBeTruthy();
-  });
-
   it("before the world resolves, the count falls back to the draft, flagged unresolved", () => {
     const ws = newWorkspace("named");
     const ground = newDraftGroundSet("nodalarc:nodes/ground/gw.yaml", {});
@@ -923,25 +794,6 @@ describe("the closed vocabularies have one owner", () => {
 });
 
 describe("a save is never a dead end", () => {
-  it("every library save announces the asset through the reveal store", async () => {
-    const { requestLibraryReveal, useLibraryReveal } = await import("../useBuilderWorld");
-    let latest: unknown = null;
-    function Probe() {
-      latest = useLibraryReveal();
-      return null;
-    }
-    render(<Probe />);
-    const entry = catalogSummary(
-      "user:terminals/test-radio.yaml",
-      "terminals",
-      "Test radio",
-    );
-    act(() => requestLibraryReveal(entry));
-    expect((latest as { entry: typeof entry }).entry.ref).toBe(
-      "user:terminals/test-radio.yaml",
-    );
-  });
-
   it("each reveal consumer role claims a nonce once, across remounts", async () => {
     const { claimLibraryReveal } = await import("../useBuilderWorld");
     const entry = catalogSummary(

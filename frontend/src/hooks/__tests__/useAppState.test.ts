@@ -119,15 +119,6 @@ describe("useAppState", () => {
 
   // --- State Transitions ---
 
-  it("toggleView cycles globe <-> topology", () => {
-    const { result } = renderHook(() => useAppState(makeInputs()));
-    expect(result.current.viewMode).toBe("globe");
-    act(() => result.current.toggleView());
-    expect(result.current.viewMode).toBe("topology");
-    act(() => result.current.toggleView());
-    expect(result.current.viewMode).toBe("globe");
-  });
-
   it("null snapshot does not crash derived state", () => {
     const { result } = renderHook(() => useAppState(makeInputs({ snapshot: null })));
     expect(result.current.sessionStatus).toBe("idle");

@@ -1,4 +1,645 @@
 {
+  "fields": {
+    "ActualLinkSnapshot": [
+      "active_pairs",
+      "emitted_at",
+      "epoch_id",
+      "hostname",
+      "pending_pairs",
+      "scheduler_instance_id",
+      "session_id",
+      "sim_time",
+      "snapshot_seq",
+      "wiring_generation"
+    ],
+    "ActuationFacts": [
+      "actuation_elapsed_ms",
+      "diverged",
+      "diverged_since",
+      "expected_latency_ms",
+      "fault_after_ms",
+      "kernel_up",
+      "ome_desired",
+      "state"
+    ],
+    "ActuationHealth": [
+      "scheduler_instances",
+      "session_id",
+      "wiring_generation"
+    ],
+    "ActuationHealthGroundStation": [
+      "actuation_state",
+      "blocking_new_ground_link_up",
+      "gs_id",
+      "last_event",
+      "reason_code",
+      "recovery_status",
+      "since"
+    ],
+    "ActuationHealthInstance": [
+      "ground_stations",
+      "hostname",
+      "scheduler_instance_id",
+      "status"
+    ],
+    "ActuationNotice": [
+      "actual_pairs_for_gs",
+      "actuation_state",
+      "affected_pairs",
+      "blocking_new_ground_link_up",
+      "desired_pairs_for_gs",
+      "gs_id",
+      "last_event",
+      "message",
+      "ome_visible_scheduled_pairs_for_gs",
+      "reason_code",
+      "recovery_status",
+      "since"
+    ],
+    "ActuationOpsDetails": [
+      "actual_pairs_for_gs",
+      "actuation_state_after",
+      "actuation_state_before",
+      "affected_pairs",
+      "desired_pairs_for_gs",
+      "epoch_id",
+      "failure_class",
+      "gs_id",
+      "hostname",
+      "intervention_id",
+      "node_agent_results",
+      "old_pair",
+      "ome_visible_scheduled_pairs_for_gs",
+      "operation",
+      "reason",
+      "recovery_status",
+      "remediation",
+      "scheduler_instance_id",
+      "session_id",
+      "sim_time",
+      "snapshot_seq",
+      "successor_pair",
+      "wiring_generation"
+    ],
+    "AlmanacState": [
+      "deviation_count",
+      "last_push_sim_time",
+      "last_push_wall_time",
+      "last_topology_state_id",
+      "nodalpath_active",
+      "nodes_failed",
+      "nodes_succeeded",
+      "recomputation_count"
+    ],
+    "CandidateFacts": [
+      "binding_gate",
+      "binding_reason_code",
+      "elevation_deg",
+      "pair",
+      "range_km",
+      "rejecting_endpoint",
+      "viable_withheld"
+    ],
+    "CatalogSessionSourceId": [
+      "kind",
+      "session_ref"
+    ],
+    "CatalogSessionSummary": [
+      "active",
+      "blockers",
+      "constellation",
+      "dependency_digest",
+      "deploy_allowed",
+      "document_digest",
+      "name",
+      "routing_stack",
+      "source",
+      "source_id",
+      "source_revision"
+    ],
+    "CatalogSessionSwitchAccepted": [
+      "operation_id",
+      "source",
+      "status"
+    ],
+    "CatalogSessionSwitchRequest": [
+      "expected_dependency_digest",
+      "expected_document_digest",
+      "expected_source_revision",
+      "record_history",
+      "source"
+    ],
+    "CatalogSessionYamlUploadRequest": [
+      "record_history",
+      "yaml"
+    ],
+    "DecisionExplanationFacts": [
+      "actuation",
+      "best_candidate",
+      "binding_gate",
+      "binding_reason_code",
+      "envelope",
+      "epoch_id",
+      "gs_id",
+      "ladder",
+      "node_focus",
+      "pair",
+      "reference_body",
+      "rejecting_endpoint",
+      "sim_time",
+      "snapshot_seq",
+      "tenant_id"
+    ],
+    "EffectiveEnvelopeFacts": [
+      "binding_endpoint",
+      "binding_source",
+      "configured_min_elevation_deg",
+      "dead_knobs",
+      "effective_min_elevation_deg",
+      "ground",
+      "max_range_km",
+      "reference_body",
+      "satellite"
+    ],
+    "EnvelopeEndpoint": [
+      "boresight_mode",
+      "field_of_regard_deg",
+      "max_range_km",
+      "max_tracking_rate_deg_s",
+      "node_role",
+      "terminal_profile"
+    ],
+    "GroundAllocationEvent": [
+      "category",
+      "challenger_pair",
+      "message",
+      "pair",
+      "policy_kind",
+      "policy_name",
+      "reference_body",
+      "successor_pair",
+      "tenant_id"
+    ],
+    "GroundLinkDecisionSnapshot": [
+      "allocation_events",
+      "decisions",
+      "epoch_id",
+      "policy_audit",
+      "sim_time",
+      "snapshot_seq",
+      "unscheduled_pairs"
+    ],
+    "GroundPolicyAudit": [
+      "bbm_acquire_timeout_ticks",
+      "cross_tenant_displacement",
+      "handover_mode",
+      "handover_modes",
+      "handover_policies",
+      "handover_policy_params",
+      "ignored_capacity_fields",
+      "mbb_overlap_ticks",
+      "mbb_overlap_ticks_by_gs",
+      "mbb_preemption",
+      "mbb_reserve",
+      "mbb_reserve_by_gs",
+      "ranking_order",
+      "selection_policies",
+      "selection_policy_params",
+      "successor_abort_policy"
+    ],
+    "GroundVisibilityDecisionWire": [
+      "applied_gs_boresight_mode",
+      "applied_gs_field_of_regard_deg",
+      "applied_gs_max_range_km",
+      "applied_gs_max_tracking_rate_deg_s",
+      "applied_gs_terminal_profile",
+      "applied_min_elevation_deg",
+      "applied_sat_boresight_mode",
+      "applied_sat_field_of_regard_deg",
+      "applied_sat_max_range_km",
+      "applied_sat_max_tracking_rate_deg_s",
+      "applied_sat_terminal_profile",
+      "azimuth_deg",
+      "elevation_deg",
+      "observer_frame",
+      "pair",
+      "range_km",
+      "reference_body",
+      "reject_reason",
+      "rejecting_endpoint",
+      "sat_off_nadir_deg",
+      "tenant_id",
+      "visible"
+    ],
+    "GsDecisionReasonCount": [
+      "count",
+      "reason_code",
+      "state"
+    ],
+    "GsDecisionTimelineFacts": [
+      "gs_id",
+      "reason_counts",
+      "sample_count",
+      "samples",
+      "window_ended_sim_time",
+      "window_started_sim_time"
+    ],
+    "GsDecisionTimelineSample": [
+      "binding_gate",
+      "elevation_deg",
+      "epoch_id",
+      "gs_id",
+      "pair",
+      "range_km",
+      "reason_code",
+      "rejecting_endpoint",
+      "sim_time",
+      "snapshot_seq",
+      "state"
+    ],
+    "HistoryRecordingState": [
+      "error",
+      "state"
+    ],
+    "IntrospectRequest": [
+      "command",
+      "node_id"
+    ],
+    "IntrospectResult": [
+      "command",
+      "exit_code",
+      "node_id",
+      "output"
+    ],
+    "LadderGate": [
+      "actual",
+      "gate",
+      "is_binding",
+      "producer",
+      "reason_code",
+      "rejecting_endpoint",
+      "state",
+      "threshold"
+    ],
+    "LatencyUpdate": [
+      "latency_ms",
+      "node_a",
+      "node_b",
+      "provenance",
+      "range_km",
+      "sim_time",
+      "wall_time"
+    ],
+    "LinkDecisionProvenance": [
+      "authority_age_ms",
+      "authority_sequence",
+      "authority_sim_time",
+      "authority_source",
+      "geometry_authority",
+      "netem_one_way_ms",
+      "orbital_one_way_ms",
+      "range_km",
+      "rtt_to_one_way_policy",
+      "substrate_one_way_ms",
+      "substrate_rtt_ms"
+    ],
+    "LinkDecisionTrace": [
+      "authority_age_ms",
+      "authority_sequence",
+      "authority_sim_time",
+      "authority_source",
+      "endpoint_segments",
+      "geometry_authority",
+      "interface_a",
+      "interface_b",
+      "link_rule_id",
+      "link_type",
+      "netem_one_way_ms",
+      "node_a",
+      "node_b",
+      "orbital_one_way_ms",
+      "range_km",
+      "reason",
+      "rtt_to_one_way_policy",
+      "state",
+      "substrate_one_way_ms",
+      "substrate_rtt_ms",
+      "topology_mode"
+    ],
+    "LinkDown": [
+      "interface_a",
+      "interface_b",
+      "link_type",
+      "node_a",
+      "node_b",
+      "reason",
+      "sim_time",
+      "wall_time"
+    ],
+    "LinkHistoryEvent": [
+      "event_type",
+      "id",
+      "interface_a",
+      "interface_b",
+      "latency_ms",
+      "node_a",
+      "node_b",
+      "range_km",
+      "reason",
+      "session_id",
+      "sim_time",
+      "wall_time"
+    ],
+    "LinkHistoryPage": [
+      "events",
+      "next_cursor",
+      "retained_from",
+      "returned",
+      "total"
+    ],
+    "LinkState": [
+      "endpoint_segments",
+      "interface_a",
+      "interface_b",
+      "latency_ms",
+      "link_reason",
+      "link_rule_id",
+      "link_type",
+      "node_a",
+      "node_b",
+      "range_km",
+      "receive_mbps_a",
+      "receive_mbps_b",
+      "scheduling_state",
+      "state",
+      "successor_pair",
+      "teardown_remaining_ticks",
+      "topology_mode",
+      "traffic_load_pct",
+      "transmit_mbps_a",
+      "transmit_mbps_b"
+    ],
+    "LinkUp": [
+      "interface_a",
+      "interface_b",
+      "latency_ms",
+      "link_type",
+      "node_a",
+      "node_b",
+      "provenance",
+      "range_km",
+      "reason",
+      "sim_time",
+      "wall_time"
+    ],
+    "NetworkHealth": [
+      "converging_since_ms",
+      "last_convergence_ms",
+      "status",
+      "unreachable_flows"
+    ],
+    "NodeAddress": [
+      "address",
+      "family",
+      "interface",
+      "metric",
+      "purpose"
+    ],
+    "NodeInstanceInterface": [
+      "area_id",
+      "name"
+    ],
+    "NodeRoutingInstance": [
+      "area_border",
+      "areas",
+      "as_boundary",
+      "domain_id",
+      "interfaces",
+      "protocol"
+    ],
+    "NodeState": [
+      "addresses",
+      "alt_km",
+      "beam_falloff_exponent",
+      "frame_id",
+      "gnd_count",
+      "isl_count",
+      "lat_deg",
+      "local_node_id",
+      "lon_deg",
+      "min_elevation_deg",
+      "namespace",
+      "node_id",
+      "node_type",
+      "plane",
+      "prefix",
+      "reference_body",
+      "role",
+      "routing_instances",
+      "segment_id",
+      "slot",
+      "tags",
+      "tenant_id",
+      "vel_x_km_s",
+      "vel_y_km_s",
+      "vel_z_km_s"
+    ],
+    "OperatorRepairCommand": [
+      "gs_id",
+      "intervention_id",
+      "reason",
+      "scheduler_instance_id",
+      "session_id",
+      "wiring_generation"
+    ],
+    "OperatorRepairResponse": [
+      "intervention_id",
+      "message",
+      "status"
+    ],
+    "PendingActuation": [
+      "actuation_elapsed_ms",
+      "pending_since"
+    ],
+    "PendingActuationPair": [
+      "epoch_id",
+      "operation",
+      "pair",
+      "pending_since",
+      "snapshot_seq"
+    ],
+    "RecentEvent": [
+      "event_type",
+      "node_id",
+      "sim_time",
+      "summary"
+    ],
+    "RecoveryStatus": [
+      "active_intervention_id",
+      "last_verify_result",
+      "next_verify_after",
+      "operator_action_required",
+      "verify_attempt_count",
+      "verify_exhausted"
+    ],
+    "SessionSourceId": [
+      "kind",
+      "session_ref"
+    ],
+    "StateSnapshot": [
+      "actuation_health",
+      "actuation_notices",
+      "constellation_name",
+      "history_recording",
+      "kernel_actual_pairs",
+      "links",
+      "network_health",
+      "nodes",
+      "ome_lifecycle_notices",
+      "pacing_degraded",
+      "playback_achieved",
+      "playback_paused",
+      "playback_speed",
+      "recent_events",
+      "routing_stack",
+      "schema_version",
+      "session_id",
+      "session_status",
+      "session_status_detail",
+      "sim_time",
+      "stale",
+      "traced_paths",
+      "wall_time"
+    ],
+    "StoredTransitionOperation": [
+      "created_at",
+      "events",
+      "facts",
+      "failure",
+      "operation_id",
+      "provenance",
+      "runtime",
+      "schema_name",
+      "source",
+      "state",
+      "updated_at",
+      "version"
+    ],
+    "TracedPath": [
+      "asymmetry_detected",
+      "dst_node",
+      "error",
+      "flow_id",
+      "hop_rtts",
+      "hops",
+      "reverse_error",
+      "reverse_hop_rtts",
+      "reverse_hops",
+      "reverse_rtt_ms",
+      "reverse_state",
+      "rtt_ms",
+      "sim_time",
+      "src_node",
+      "state",
+      "stop_reason",
+      "traced_at",
+      "tracing"
+    ],
+    "TransitionConstellationSpecObservation": [
+      "generation",
+      "name",
+      "namespace",
+      "status"
+    ],
+    "TransitionOperation": [
+      "created_at",
+      "events",
+      "facts",
+      "failure",
+      "operation_id",
+      "runtime",
+      "source",
+      "state",
+      "updated_at"
+    ],
+    "TransitionOperationEvent": [
+      "detail",
+      "occurred_at",
+      "state"
+    ],
+    "TransitionOperationFacts": [
+      "build",
+      "closure_digest",
+      "document_digest",
+      "file_count",
+      "release",
+      "resolved_semantic_digest",
+      "total_bytes"
+    ],
+    "TransitionOperationFailure": [
+      "cause_type",
+      "code",
+      "message"
+    ],
+    "TransitionOperationProvenance": [
+      "constellation_spec",
+      "repository_generation",
+      "runtime_plan",
+      "source_revision",
+      "upload_id",
+      "upload_resource_names"
+    ],
+    "TransitionOperationProvenancePatch": [
+      "constellation_spec",
+      "upload_resource_name"
+    ],
+    "TransitionOperationReservation": [
+      "facts",
+      "provenance",
+      "source"
+    ],
+    "TransitionOperationSource": [
+      "kind",
+      "logical_id"
+    ],
+    "TransitionReconciliation": [
+      "detail",
+      "disposition",
+      "failure",
+      "runtime"
+    ],
+    "TransitionRuntimePlan": [
+      "name",
+      "namespace"
+    ],
+    "TransitionRuntimeResult": [
+      "generation",
+      "session_id"
+    ],
+    "TransitionRuntimeStatusProof": [
+      "build",
+      "closure_digest",
+      "document_digest",
+      "observed_generation",
+      "phase",
+      "pod_count",
+      "ready_pods",
+      "release",
+      "resolved_semantic_digest",
+      "session_id",
+      "wired_pods"
+    ],
+    "UnscheduledPair": [
+      "capacity_constraint",
+      "incumbent_pair",
+      "pair",
+      "reference_body",
+      "tenant_id",
+      "unscheduled_reason"
+    ],
+    "_OperationModel": [],
+    "_SessionSourceModel": []
+  },
   "models": {
     "ActualLinkSnapshot": {
       "hostname": null,

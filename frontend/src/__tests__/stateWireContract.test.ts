@@ -8,11 +8,9 @@
  * vocabulary. A page that compares against a value the feed never sends, or branches on a field
  * nothing has closed, fails here by file and line.
  *
- * An object the page or a test builds as a wire type (a fixture, a stand-in snapshot) must hold
- * only values the backend declares for its closed fields, or the test proves something about a
- * feed that does not exist. The interfaces in types.ts that mirror the wire models must also
- * declare each closed field as the same union, so the compiler catches the next stale literal
- * before this test runs.
+ * The interfaces in types.ts that mirror the wire models must also carry the same field names
+ * and declare each closed field as the same union, so the compiler catches the next stale
+ * literal before this test runs.
  */
 import { readFileSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
@@ -24,6 +22,7 @@ import vocabularies from "../generated/stateWireVocabularies.json";
 type Vocabularies = Record<string, Record<string, string[] | null>>;
 const WIRE: Vocabularies = vocabularies.models;
 const MODULE_OF: Record<string, string> = vocabularies.modules;
+const FIELDS_OF: Record<string, string[]> = vocabularies.fields;
 
 const SRC = join(dirname(fileURLToPath(import.meta.url)), "..");
 const ROOT = join(SRC, "..");
@@ -32,12 +31,10 @@ function program(): ts.Program {
   const configPath = join(ROOT, "tsconfig.json");
   const config = ts.readConfigFile(configPath, ts.sys.readFile);
   const parsed = ts.parseJsonConfigFileContent(config.config, ts.sys, ROOT);
-  const sources = parsed.fileNames.filter((file) => !/[\\/]generated[\\/]/.test(file));
-  return ts.createProgram(sources, { ...parsed.options, noEmit: true });
-}
-
-function isTestFile(file: ts.SourceFile): boolean {
-  return /__tests__|\.test\.tsx?$/.test(file.fileName);
+  const production = parsed.fileNames.filter(
+    (file) => !/__tests__|\.test\.tsx?$|[\\/]generated[\\/]/.test(file),
+  );
+  return ts.createProgram(production, { ...parsed.options, noEmit: true });
 }
 
 interface Comparison {
@@ -136,51 +133,13 @@ function comparisons(checker: ts.TypeChecker, file: ts.SourceFile): Comparison[]
   return found;
 }
 
-interface BuiltValue {
-  wireType: string;
-  field: string;
-  literal: string;
-  where: string;
-}
-
-/** Every string a wire-typed object literal assigns to one of its own fields. */
-function builtValues(checker: ts.TypeChecker, file: ts.SourceFile): BuiltValue[] {
-  const found: BuiltValue[] = [];
-  const visit = (node: ts.Node) => {
-    if (ts.isObjectLiteralExpression(node)) {
-      let type = checker.getContextualType(node);
-      if (!type && (ts.isAsExpression(node.parent) || ts.isSatisfiesExpression(node.parent))) {
-        type = checker.getTypeAtLocation(node.parent);
-      }
-      const wireTypes = type ? wireTypeNames(type) : [];
-      for (const property of node.properties) {
-        if (!ts.isPropertyAssignment(property) || !ts.isIdentifier(property.name)) continue;
-        const literal = stringLiteral(property.initializer);
-        if (literal === null) continue;
-        const { line } = file.getLineAndCharacterOfPosition(property.getStart());
-        for (const wireType of wireTypes) {
-          found.push({
-            wireType,
-            field: property.name.text,
-            literal,
-            where: `${relative(ROOT, file.fileName)}:${line + 1}`,
-          });
-        }
-      }
-    }
-    ts.forEachChild(node, visit);
-  };
-  visit(file);
-  return found;
-}
-
 describe("the page and the state feed agree on every vocabulary", () => {
   const compiled = program();
   const checker = compiled.getTypeChecker();
   const sources = compiled
     .getSourceFiles()
     .filter((file) => !file.isDeclarationFile && file.fileName.startsWith(SRC));
-  const found = sources.filter((f) => !isTestFile(f)).flatMap((f) => comparisons(checker, f));
+  const found = sources.flatMap((file) => comparisons(checker, file));
 
   it("finds the page's comparisons against wire fields", () => {
     expect(found.length).toBeGreaterThan(0);
@@ -207,20 +166,30 @@ describe("the page and the state feed agree on every vocabulary", () => {
     expect(wrong, wrong.join("\n")).toEqual([]);
   });
 
-  it("builds wire objects only with values the backend declares", () => {
-    const built = sources.flatMap((f) => builtValues(checker, f));
-    expect(built.length, "no wire-typed object literal was found").toBeGreaterThan(0);
+  it("mirrors every wire model's fields by name in types.ts", () => {
+    const typesFile = compiled.getSourceFile(join(SRC, "types.ts"));
+    expect(typesFile).toBeDefined();
     const wrong: string[] = [];
-    for (const { wireType, field, literal, where } of built) {
-      const vocabulary = WIRE[wireType]![field];
-      if (vocabulary === null || vocabulary === undefined) continue; // open, or not a string
-      if (!vocabulary.includes(literal)) {
+    let mirrored = 0;
+    for (const statement of typesFile!.statements) {
+      if (!ts.isInterfaceDeclaration(statement) || !(statement.name.text in FIELDS_OF)) continue;
+      mirrored += 1;
+      const declared = statement.members
+        .filter(ts.isPropertySignature)
+        .map((member) => (ts.isIdentifier(member.name) ? member.name.text : member.name.getText()))
+        .sort();
+      const sent = FIELDS_OF[statement.name.text]!;
+      const missing = sent.filter((field) => !declared.includes(field));
+      const invented = declared.filter((field) => !sent.includes(field));
+      if (missing.length || invented.length) {
         wrong.push(
-          `${where}: ${wireType}.${field} built as "${literal}"; the backend sends one of ` +
-            vocabulary.join(", "),
+          `${statement.name.text}: ` +
+            (missing.length ? `the backend sends ${missing.join(", ")} and types.ts omits it; ` : "") +
+            (invented.length ? `types.ts declares ${invented.join(", ")}, which the backend never sends` : ""),
         );
       }
     }
+    expect(mirrored, "no types.ts interface mirrors a wire model").toBeGreaterThan(0);
     expect(wrong, wrong.join("\n")).toEqual([]);
   });
 

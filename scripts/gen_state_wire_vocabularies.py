@@ -82,8 +82,10 @@ _NOT_STRING = object()
 
 
 def wire_vocabularies() -> dict[str, dict[str, object]]:
-    """{"models": {Model: {field: vocabulary}}, "modules": {Model: module file}}."""
+    """{"models": {Model: {string field: vocabulary}}, "fields": {Model: [every field]},
+    "modules": {Model: module file}}."""
     listed: dict[str, dict[str, Vocabulary]] = {}
+    fields_of: dict[str, list[str]] = {}
     modules: dict[str, str] = {}
     for module in SERVED_MODULES:
         for name, model in inspect.getmembers(module, inspect.isclass):
@@ -98,8 +100,9 @@ def wire_vocabularies() -> dict[str, dict[str, object]]:
                     continue
                 fields[field_name] = vocabulary  # type: ignore[assignment]
             listed[name] = fields
+            fields_of[name] = sorted(model.model_fields)
             modules[name] = str(Path(inspect.getfile(model)).relative_to(ROOT))
-    return {"models": listed, "modules": modules}
+    return {"models": listed, "fields": fields_of, "modules": modules}
 
 
 def render() -> str:

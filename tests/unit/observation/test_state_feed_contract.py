@@ -61,3 +61,34 @@ def _has_generated_types(model: type) -> bool:
     return model.__module__.startswith(
         ("nodalarc.models.builder_", "nodalarc.models.catalog", "nodalarc.models.coverage")
     )
+
+
+def test_every_api_route_declares_the_model_it_answers_with() -> None:
+    """A route that answers a raw dict crosses the API boundary with no contract.
+
+    The page can read any key it likes from such an answer and nothing on either side says
+    what the keys hold. Every JSON route declares a response model.
+    """
+    import vs_api.main as m
+    from fastapi.responses import JSONResponse
+    from fastapi.routing import APIRoute
+    from pydantic import BaseModel
+
+    untyped = []
+    for route in m.app.routes:
+        if not isinstance(route, APIRoute) or not route.path.startswith("/api/"):
+            continue
+        # FastAPI wraps its default (JSON) response class in a placeholder; an explicit other
+        # class is a text answer, such as a session's YAML, and not a JSON contract.
+        answer_class = getattr(route.response_class, "value", route.response_class)
+        if not issubclass(answer_class, JSONResponse):
+            continue
+        model = route.response_model
+        declared = isinstance(model, type) and issubclass(model, BaseModel)
+        declared = declared or any(
+            isinstance(member, type) and issubclass(member, BaseModel)
+            for member in getattr(model, "__args__", ())
+        )
+        if not declared:
+            untyped.append(f"{' '.join(sorted(route.methods))} {route.path}")
+    assert not untyped, "routes that answer with no response model:\n" + "\n".join(untyped)

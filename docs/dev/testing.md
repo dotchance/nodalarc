@@ -59,8 +59,8 @@ The frontend test suite covers React components and rendering logic. It must pas
 Two generated files tie the frontend tests to the backend's wire models:
 
 - `scripts/gen_state_wire_vocabularies.py` writes `frontend/src/generated/stateWireVocabularies.json`:
-  for every string field of every state-feed model, the values it admits, or `null` when the
-  backend leaves it open. `frontend/src/__tests__/stateWireContract.test.ts` walks the page's
+  for every string field of every model VS-API serves to the page, the values it admits, or
+  `null` when the backend leaves it open. `frontend/src/__tests__/stateWireContract.test.ts` walks the page's
   source with the TypeScript checker and refuses any comparison of a wire field against a value
   the backend does not declare, and any `types.ts` field that does not mirror a closed vocabulary.
 - `scripts/gen_builder_shipped_drafts.py` writes `frontend/src/builder/__tests__/fixtures/shipped/`:
@@ -90,8 +90,8 @@ the reports of the applications a session runs.
 shown are the routers' neighbors, the latency shown is the delay packets get, the range shown is the
 distance between the positions shown, satellites move at the speed their orbits require, a packet
 between two far sites takes at least the shortest path shown, every LAN address shown answers its
-router in each address family, the session's applications carry data no sooner than the shortest path
-shown allows, and no fault is reported while all of that holds. Each test file covers one thing a user
+router in each address family, every node shown answers its own terminal, the session's applications
+carry data no sooner than the shortest path shown allows, and no fault is reported while all of that holds. Each test file covers one thing a user
 does and ends by checking every truth:
 
 | File | What a user does |
@@ -104,7 +104,7 @@ does and ends by checking every truth:
 | `test_topology.py` | Lets the sky move; watches a make-before-break handover; seeks during one |
 | `test_authoring.py` | Authors a session with the Wizard, the Builder, a YAML file or forked catalog objects and runs it |
 | `test_history.py` | Records a session and reads its link history back |
-| `test_resilience.py` | Repairs a ground link that was cut under NodalArc |
+| `test_resilience.py` | Repairs a ground link that was cut under NodalArc; ends a host's workload from its shell |
 | `test_catalog.py` | Runs every shipped session |
 
 Four runs are selected with a marker:

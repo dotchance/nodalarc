@@ -1,181 +1,728 @@
 {
-  "ActuationHealth": {
-    "session_id": null,
-    "wiring_generation": null
+  "models": {
+    "ActualLinkSnapshot": {
+      "hostname": null,
+      "scheduler_instance_id": null,
+      "session_id": null,
+      "wiring_generation": null
+    },
+    "ActuationFacts": {
+      "state": [
+        "actuation_blocked",
+        "clean",
+        "kernel_dirty",
+        "unknown"
+      ]
+    },
+    "ActuationHealth": {
+      "session_id": null,
+      "wiring_generation": null
+    },
+    "ActuationHealthGroundStation": {
+      "actuation_state": [
+        "actuation_blocked",
+        "clean",
+        "kernel_dirty",
+        "unknown"
+      ],
+      "gs_id": null,
+      "reason_code": null,
+      "since": null
+    },
+    "ActuationHealthInstance": {
+      "hostname": null,
+      "scheduler_instance_id": null,
+      "status": null
+    },
+    "ActuationNotice": {
+      "actuation_state": [
+        "actuation_blocked",
+        "clean",
+        "kernel_dirty",
+        "unknown"
+      ],
+      "gs_id": null,
+      "message": null,
+      "reason_code": null,
+      "since": null
+    },
+    "ActuationOpsDetails": {
+      "actuation_state_after": [
+        "actuation_blocked",
+        "clean",
+        "kernel_dirty",
+        "unknown"
+      ],
+      "actuation_state_before": [
+        "actuation_blocked",
+        "clean",
+        "kernel_dirty",
+        "unknown"
+      ],
+      "failure_class": [
+        "agent_unreachable",
+        "authority_invariant",
+        "fence",
+        "ground_clean_failure",
+        "ground_kernel_dirty",
+        "ground_unknown",
+        "isl_failure",
+        "none",
+        "ome_contract",
+        "ops_publish_failure"
+      ],
+      "gs_id": null,
+      "hostname": null,
+      "intervention_id": null,
+      "operation": null,
+      "reason": null,
+      "remediation": null,
+      "scheduler_instance_id": null,
+      "session_id": null,
+      "wiring_generation": null
+    },
+    "AlmanacState": {
+      "last_push_sim_time": null,
+      "last_topology_state_id": null
+    },
+    "CandidateFacts": {
+      "binding_gate": [
+        "actuation_proof",
+        "capacity",
+        "elevation_mask",
+        "field_of_regard",
+        "handover_policy",
+        "line_of_sight",
+        "range",
+        "selection_policy",
+        "tracking_rate"
+      ],
+      "binding_reason_code": null,
+      "rejecting_endpoint": [
+        "both",
+        "ground",
+        "none",
+        "satellite"
+      ]
+    },
+    "CatalogSessionSourceId": {
+      "kind": [
+        "catalog"
+      ]
+    },
+    "CatalogSessionSummary": {
+      "constellation": null,
+      "name": null,
+      "routing_stack": null,
+      "source": [
+        "nodalarc",
+        "user"
+      ]
+    },
+    "CatalogSessionSwitchAccepted": {
+      "operation_id": null,
+      "status": [
+        "accepted"
+      ]
+    },
+    "CatalogSessionSwitchRequest": {
+      "expected_dependency_digest": null,
+      "expected_document_digest": null,
+      "expected_source_revision": null
+    },
+    "CatalogSessionYamlUploadRequest": {
+      "yaml": null
+    },
+    "DecisionExplanationFacts": {
+      "binding_gate": [
+        "actuation_proof",
+        "capacity",
+        "elevation_mask",
+        "field_of_regard",
+        "handover_policy",
+        "line_of_sight",
+        "range",
+        "selection_policy",
+        "tracking_rate"
+      ],
+      "binding_reason_code": null,
+      "gs_id": null,
+      "node_focus": [
+        "gs",
+        "pair",
+        "sat"
+      ],
+      "reference_body": null,
+      "rejecting_endpoint": [
+        "both",
+        "ground",
+        "none",
+        "satellite"
+      ],
+      "tenant_id": null
+    },
+    "EffectiveEnvelopeFacts": {
+      "binding_endpoint": [
+        "both",
+        "ground",
+        "none",
+        "satellite"
+      ],
+      "binding_source": null,
+      "reference_body": null
+    },
+    "EnvelopeEndpoint": {
+      "boresight_mode": null,
+      "node_role": [
+        "ground",
+        "satellite"
+      ],
+      "terminal_profile": null
+    },
+    "GroundAllocationEvent": {
+      "category": [
+        "bbm_gap",
+        "failed_acquire",
+        "failed_successor",
+        "incumbent_lost",
+        "mbb_overlap_started",
+        "successor_aborted",
+        "teardown_completed",
+        "teardown_invalidated_by_epoch"
+      ],
+      "message": null,
+      "policy_kind": [
+        "cross_tenant_displacement",
+        "handover_mode",
+        "handover_policy",
+        "mbb_preemption",
+        "selection_policy",
+        "successor_abort_policy"
+      ],
+      "policy_name": [
+        "bbm",
+        "hard_release",
+        "highest-elevation",
+        "hysteresis",
+        "longest-remaining-pass",
+        "lowest-elevation",
+        "mbb",
+        "none",
+        "off",
+        "soft_retain"
+      ],
+      "reference_body": [
+        "earth",
+        "luna"
+      ],
+      "tenant_id": null
+    },
+    "GroundLinkDecisionSnapshot": {},
+    "GroundPolicyAudit": {
+      "cross_tenant_displacement": null,
+      "handover_mode": null,
+      "mbb_preemption": null,
+      "successor_abort_policy": null
+    },
+    "GroundVisibilityDecisionWire": {
+      "applied_gs_boresight_mode": [
+        "configured_topocentric",
+        "local_vertical",
+        "steerable_envelope"
+      ],
+      "applied_gs_terminal_profile": null,
+      "applied_sat_boresight_mode": [
+        "nadir"
+      ],
+      "applied_sat_terminal_profile": null,
+      "observer_frame": [
+        "body_local"
+      ],
+      "reference_body": [
+        "earth",
+        "luna"
+      ],
+      "reject_reason": [
+        "elevation_below_min",
+        "field_of_regard",
+        "los_blocked",
+        "ok",
+        "range_exceeded",
+        "tracking_exceeded"
+      ],
+      "rejecting_endpoint": [
+        "both",
+        "ground",
+        "none",
+        "satellite"
+      ],
+      "tenant_id": null
+    },
+    "GsDecisionReasonCount": {
+      "reason_code": null,
+      "state": [
+        "eligible_unselected",
+        "expected_no_link",
+        "scheduled"
+      ]
+    },
+    "GsDecisionTimelineFacts": {
+      "gs_id": null
+    },
+    "GsDecisionTimelineSample": {
+      "binding_gate": [
+        "actuation_proof",
+        "capacity",
+        "elevation_mask",
+        "field_of_regard",
+        "handover_policy",
+        "line_of_sight",
+        "range",
+        "selection_policy",
+        "tracking_rate"
+      ],
+      "gs_id": null,
+      "reason_code": null,
+      "rejecting_endpoint": [
+        "both",
+        "ground",
+        "none",
+        "satellite"
+      ],
+      "state": [
+        "eligible_unselected",
+        "expected_no_link",
+        "scheduled"
+      ]
+    },
+    "HistoryRecordingState": {
+      "error": null,
+      "state": [
+        "recording",
+        "stopped"
+      ]
+    },
+    "IntrospectRequest": {
+      "command": null,
+      "node_id": null
+    },
+    "IntrospectResult": {
+      "command": null,
+      "node_id": null,
+      "output": null
+    },
+    "LadderGate": {
+      "gate": [
+        "actuation_proof",
+        "capacity",
+        "elevation_mask",
+        "field_of_regard",
+        "handover_policy",
+        "line_of_sight",
+        "range",
+        "selection_policy",
+        "tracking_rate"
+      ],
+      "producer": [
+        "node_agent",
+        "ome_allocator",
+        "ome_visibility",
+        "scheduler"
+      ],
+      "reason_code": null,
+      "rejecting_endpoint": [
+        "both",
+        "ground",
+        "none",
+        "satellite"
+      ],
+      "state": [
+        "fail",
+        "not_applicable",
+        "not_evaluated",
+        "pass"
+      ]
+    },
+    "LatencyUpdate": {
+      "node_a": null,
+      "node_b": null
+    },
+    "LinkDecisionProvenance": {
+      "authority_source": null,
+      "geometry_authority": [
+        "ome"
+      ],
+      "rtt_to_one_way_policy": null
+    },
+    "LinkDecisionTrace": {
+      "authority_source": null,
+      "geometry_authority": [
+        "ome"
+      ],
+      "interface_a": null,
+      "interface_b": null,
+      "link_rule_id": null,
+      "link_type": null,
+      "node_a": null,
+      "node_b": null,
+      "reason": null,
+      "rtt_to_one_way_policy": null,
+      "state": null,
+      "topology_mode": null
+    },
+    "LinkDown": {
+      "interface_a": null,
+      "interface_b": null,
+      "link_type": [
+        "ground",
+        "isl"
+      ],
+      "node_a": null,
+      "node_b": null,
+      "reason": null
+    },
+    "LinkHistoryEvent": {
+      "event_type": [
+        "LatencyUpdate",
+        "LinkActive",
+        "LinkDown",
+        "LinkUp"
+      ],
+      "interface_a": null,
+      "interface_b": null,
+      "node_a": null,
+      "node_b": null,
+      "reason": null,
+      "session_id": null,
+      "sim_time": null,
+      "wall_time": null
+    },
+    "LinkHistoryPage": {
+      "next_cursor": null,
+      "retained_from": null
+    },
+    "LinkState": {
+      "interface_a": null,
+      "interface_b": null,
+      "link_reason": null,
+      "link_rule_id": null,
+      "link_type": null,
+      "node_a": null,
+      "node_b": null,
+      "scheduling_state": null,
+      "state": null,
+      "topology_mode": null
+    },
+    "LinkUp": {
+      "interface_a": null,
+      "interface_b": null,
+      "link_type": [
+        "ground",
+        "isl"
+      ],
+      "node_a": null,
+      "node_b": null,
+      "reason": null
+    },
+    "NetworkHealth": {
+      "status": null
+    },
+    "NodeAddress": {
+      "address": null,
+      "family": [
+        "ipv4",
+        "ipv6"
+      ],
+      "interface": null,
+      "purpose": [
+        "router_loopback",
+        "site_interface",
+        "site_prefix"
+      ]
+    },
+    "NodeInstanceInterface": {
+      "area_id": null,
+      "name": null
+    },
+    "NodeRoutingInstance": {
+      "domain_id": null,
+      "protocol": [
+        "bgp",
+        "isis",
+        "ospf",
+        "static"
+      ]
+    },
+    "NodeState": {
+      "frame_id": null,
+      "local_node_id": null,
+      "namespace": null,
+      "node_id": null,
+      "node_type": [
+        "ground_station",
+        "satellite"
+      ],
+      "prefix": null,
+      "reference_body": [
+        "earth",
+        "luna"
+      ],
+      "role": [
+        "forwarding_only",
+        "host",
+        "router"
+      ],
+      "segment_id": null,
+      "tenant_id": null
+    },
+    "OperatorRepairCommand": {
+      "gs_id": null,
+      "intervention_id": null,
+      "reason": null,
+      "scheduler_instance_id": null,
+      "session_id": null,
+      "wiring_generation": null
+    },
+    "OperatorRepairResponse": {
+      "intervention_id": null,
+      "message": null,
+      "status": [
+        "accepted",
+        "error",
+        "rejected"
+      ]
+    },
+    "PendingActuation": {},
+    "PendingActuationPair": {
+      "operation": null
+    },
+    "RecentEvent": {
+      "event_type": null,
+      "node_id": null,
+      "summary": null
+    },
+    "RecoveryStatus": {
+      "active_intervention_id": null,
+      "last_verify_result": null
+    },
+    "SessionSourceId": {
+      "kind": [
+        "catalog"
+      ]
+    },
+    "StateSnapshot": {
+      "constellation_name": null,
+      "routing_stack": null,
+      "session_id": null,
+      "session_status": null,
+      "session_status_detail": null
+    },
+    "StoredTransitionOperation": {
+      "operation_id": null,
+      "schema_name": [
+        "nodalarc.transition-operation.v2"
+      ],
+      "state": [
+        "cancelled",
+        "collecting",
+        "failed",
+        "reserved",
+        "succeeded",
+        "switching",
+        "uploading",
+        "verifying"
+      ]
+    },
+    "TracedPath": {
+      "dst_node": null,
+      "error": null,
+      "flow_id": null,
+      "reverse_error": null,
+      "reverse_state": [
+        "failed",
+        "not_reached",
+        "reached",
+        "running"
+      ],
+      "sim_time": null,
+      "src_node": null,
+      "state": [
+        "failed",
+        "not_reached",
+        "reached",
+        "running"
+      ],
+      "stop_reason": [
+        "internal_error",
+        "time_limit"
+      ],
+      "traced_at": null
+    },
+    "TransitionConstellationSpecObservation": {
+      "name": null,
+      "namespace": null
+    },
+    "TransitionOperation": {
+      "operation_id": null,
+      "state": [
+        "cancelled",
+        "collecting",
+        "failed",
+        "reserved",
+        "succeeded",
+        "switching",
+        "uploading",
+        "verifying"
+      ]
+    },
+    "TransitionOperationEvent": {
+      "detail": null,
+      "state": [
+        "cancelled",
+        "collecting",
+        "failed",
+        "reserved",
+        "succeeded",
+        "switching",
+        "uploading",
+        "verifying"
+      ]
+    },
+    "TransitionOperationFacts": {
+      "build": null,
+      "release": null
+    },
+    "TransitionOperationFailure": {
+      "cause_type": null,
+      "code": null,
+      "message": null
+    },
+    "TransitionOperationProvenance": {
+      "repository_generation": null,
+      "upload_id": null
+    },
+    "TransitionOperationProvenancePatch": {
+      "upload_resource_name": null
+    },
+    "TransitionOperationReservation": {},
+    "TransitionOperationSource": {
+      "kind": [
+        "catalog_session"
+      ],
+      "logical_id": null
+    },
+    "TransitionReconciliation": {
+      "detail": null,
+      "disposition": [
+        "cancelled",
+        "failed",
+        "still_switching",
+        "succeeded"
+      ]
+    },
+    "TransitionRuntimePlan": {
+      "name": null,
+      "namespace": null
+    },
+    "TransitionRuntimeResult": {
+      "session_id": null
+    },
+    "TransitionRuntimeStatusProof": {
+      "build": null,
+      "phase": null,
+      "release": null,
+      "session_id": null
+    },
+    "UnscheduledPair": {
+      "capacity_constraint": null,
+      "reference_body": [
+        "earth",
+        "luna"
+      ],
+      "tenant_id": null,
+      "unscheduled_reason": [
+        "bbm_no_spare",
+        "failed_acquire",
+        "failed_successor",
+        "gs_capacity",
+        "hysteresis_hold",
+        "incumbent_held",
+        "mbb_overlap_locked",
+        "replaced_by_successor",
+        "sat_capacity",
+        "successor_aborted"
+      ]
+    },
+    "_OperationModel": {},
+    "_SessionSourceModel": {}
   },
-  "ActuationHealthGroundStation": {
-    "actuation_state": [
-      "actuation_blocked",
-      "clean",
-      "kernel_dirty",
-      "unknown"
-    ],
-    "gs_id": null,
-    "reason_code": null,
-    "since": null
-  },
-  "ActuationHealthInstance": {
-    "hostname": null,
-    "scheduler_instance_id": null,
-    "status": null
-  },
-  "ActuationNotice": {
-    "actuation_state": [
-      "actuation_blocked",
-      "clean",
-      "kernel_dirty",
-      "unknown"
-    ],
-    "gs_id": null,
-    "message": null,
-    "reason_code": null,
-    "since": null
-  },
-  "AlmanacState": {
-    "last_push_sim_time": null,
-    "last_topology_state_id": null
-  },
-  "HistoryRecordingState": {
-    "error": null,
-    "state": [
-      "recording",
-      "stopped"
-    ]
-  },
-  "LinkDecisionTrace": {
-    "authority_source": null,
-    "geometry_authority": [
-      "ome"
-    ],
-    "interface_a": null,
-    "interface_b": null,
-    "link_rule_id": null,
-    "link_type": null,
-    "node_a": null,
-    "node_b": null,
-    "reason": null,
-    "rtt_to_one_way_policy": null,
-    "state": null,
-    "topology_mode": null
-  },
-  "LinkHistoryEvent": {
-    "event_type": [
-      "LatencyUpdate",
-      "LinkActive",
-      "LinkDown",
-      "LinkUp"
-    ],
-    "interface_a": null,
-    "interface_b": null,
-    "node_a": null,
-    "node_b": null,
-    "reason": null,
-    "session_id": null,
-    "sim_time": null,
-    "wall_time": null
-  },
-  "LinkHistoryPage": {
-    "next_cursor": null,
-    "retained_from": null
-  },
-  "LinkState": {
-    "interface_a": null,
-    "interface_b": null,
-    "link_reason": null,
-    "link_rule_id": null,
-    "link_type": null,
-    "node_a": null,
-    "node_b": null,
-    "scheduling_state": null,
-    "state": null,
-    "topology_mode": null
-  },
-  "NetworkHealth": {
-    "status": null
-  },
-  "NodeAddress": {
-    "address": null,
-    "family": [
-      "ipv4",
-      "ipv6"
-    ],
-    "interface": null,
-    "purpose": [
-      "router_loopback",
-      "site_interface",
-      "site_prefix"
-    ]
-  },
-  "NodeInstanceInterface": {
-    "area_id": null,
-    "name": null
-  },
-  "NodeRoutingInstance": {
-    "domain_id": null,
-    "protocol": [
-      "bgp",
-      "isis",
-      "ospf",
-      "static"
-    ]
-  },
-  "NodeState": {
-    "frame_id": null,
-    "local_node_id": null,
-    "namespace": null,
-    "node_id": null,
-    "node_type": [
-      "ground_station",
-      "satellite"
-    ],
-    "prefix": null,
-    "reference_body": [
-      "earth",
-      "luna"
-    ],
-    "role": [
-      "forwarding_only",
-      "host",
-      "router"
-    ],
-    "segment_id": null,
-    "tenant_id": null
-  },
-  "RecentEvent": {
-    "event_type": null,
-    "node_id": null,
-    "summary": null
-  },
-  "StateSnapshot": {
-    "constellation_name": null,
-    "routing_stack": null,
-    "session_id": null,
-    "session_status": null,
-    "session_status_detail": null
-  },
-  "TracedPath": {
-    "dst_node": null,
-    "error": null,
-    "flow_id": null,
-    "reverse_error": null,
-    "reverse_state": [
-      "failed",
-      "not_reached",
-      "reached",
-      "running"
-    ],
-    "sim_time": null,
-    "src_node": null,
-    "state": [
-      "failed",
-      "not_reached",
-      "reached",
-      "running"
-    ],
-    "stop_reason": [
-      "internal_error",
-      "time_limit"
-    ],
-    "traced_at": null
+  "modules": {
+    "ActualLinkSnapshot": "lib/nodalarc/models/scheduler_ops.py",
+    "ActuationFacts": "lib/nodalarc/models/decision_explanation.py",
+    "ActuationHealth": "lib/nodalarc/models/vs_api.py",
+    "ActuationHealthGroundStation": "lib/nodalarc/models/vs_api.py",
+    "ActuationHealthInstance": "lib/nodalarc/models/vs_api.py",
+    "ActuationNotice": "lib/nodalarc/models/vs_api.py",
+    "ActuationOpsDetails": "lib/nodalarc/models/scheduler_ops.py",
+    "AlmanacState": "lib/nodalarc/models/vs_api.py",
+    "CandidateFacts": "lib/nodalarc/models/decision_explanation.py",
+    "CatalogSessionSourceId": "lib/nodalarc/models/session_sources.py",
+    "CatalogSessionSummary": "lib/nodalarc/models/session_sources.py",
+    "CatalogSessionSwitchAccepted": "lib/nodalarc/models/session_sources.py",
+    "CatalogSessionSwitchRequest": "lib/nodalarc/models/session_sources.py",
+    "CatalogSessionYamlUploadRequest": "lib/nodalarc/models/session_sources.py",
+    "DecisionExplanationFacts": "lib/nodalarc/models/decision_explanation.py",
+    "EffectiveEnvelopeFacts": "lib/nodalarc/models/decision_explanation.py",
+    "EnvelopeEndpoint": "lib/nodalarc/models/decision_explanation.py",
+    "GroundAllocationEvent": "lib/nodalarc/models/link_decisions.py",
+    "GroundLinkDecisionSnapshot": "lib/nodalarc/models/link_decisions.py",
+    "GroundPolicyAudit": "lib/nodalarc/models/link_decisions.py",
+    "GroundVisibilityDecisionWire": "lib/nodalarc/models/link_decisions.py",
+    "GsDecisionReasonCount": "lib/nodalarc/models/decision_explanation.py",
+    "GsDecisionTimelineFacts": "lib/nodalarc/models/decision_explanation.py",
+    "GsDecisionTimelineSample": "lib/nodalarc/models/decision_explanation.py",
+    "HistoryRecordingState": "lib/nodalarc/models/vs_api.py",
+    "IntrospectRequest": "services/vs_api/introspect.py",
+    "IntrospectResult": "services/vs_api/introspect.py",
+    "LadderGate": "lib/nodalarc/models/decision_explanation.py",
+    "LatencyUpdate": "lib/nodalarc/models/link_events.py",
+    "LinkDecisionProvenance": "lib/nodalarc/models/link_events.py",
+    "LinkDecisionTrace": "lib/nodalarc/models/vs_api.py",
+    "LinkDown": "lib/nodalarc/models/link_events.py",
+    "LinkHistoryEvent": "lib/nodalarc/models/vs_api.py",
+    "LinkHistoryPage": "lib/nodalarc/models/vs_api.py",
+    "LinkState": "lib/nodalarc/models/vs_api.py",
+    "LinkUp": "lib/nodalarc/models/link_events.py",
+    "NetworkHealth": "lib/nodalarc/models/vs_api.py",
+    "NodeAddress": "lib/nodalarc/models/vs_api.py",
+    "NodeInstanceInterface": "lib/nodalarc/models/vs_api.py",
+    "NodeRoutingInstance": "lib/nodalarc/models/vs_api.py",
+    "NodeState": "lib/nodalarc/models/vs_api.py",
+    "OperatorRepairCommand": "lib/nodalarc/models/scheduler_ops.py",
+    "OperatorRepairResponse": "lib/nodalarc/models/scheduler_ops.py",
+    "PendingActuation": "lib/nodalarc/models/decision_explanation.py",
+    "PendingActuationPair": "lib/nodalarc/models/scheduler_ops.py",
+    "RecentEvent": "lib/nodalarc/models/vs_api.py",
+    "RecoveryStatus": "lib/nodalarc/models/scheduler_ops.py",
+    "SessionSourceId": "lib/nodalarc/models/session_sources.py",
+    "StateSnapshot": "lib/nodalarc/models/vs_api.py",
+    "StoredTransitionOperation": "services/vs_api/transition_operations.py",
+    "TracedPath": "lib/nodalarc/models/vs_api.py",
+    "TransitionConstellationSpecObservation": "services/vs_api/transition_operations.py",
+    "TransitionOperation": "services/vs_api/transition_operations.py",
+    "TransitionOperationEvent": "services/vs_api/transition_operations.py",
+    "TransitionOperationFacts": "services/vs_api/transition_operations.py",
+    "TransitionOperationFailure": "services/vs_api/transition_operations.py",
+    "TransitionOperationProvenance": "services/vs_api/transition_operations.py",
+    "TransitionOperationProvenancePatch": "services/vs_api/transition_operations.py",
+    "TransitionOperationReservation": "services/vs_api/transition_operations.py",
+    "TransitionOperationSource": "services/vs_api/transition_operations.py",
+    "TransitionReconciliation": "services/vs_api/transition_operations.py",
+    "TransitionRuntimePlan": "services/vs_api/transition_operations.py",
+    "TransitionRuntimeResult": "services/vs_api/transition_operations.py",
+    "TransitionRuntimeStatusProof": "services/vs_api/transition_operations.py",
+    "UnscheduledPair": "lib/nodalarc/models/link_decisions.py",
+    "_OperationModel": "services/vs_api/transition_operations.py",
+    "_SessionSourceModel": "lib/nodalarc/models/session_sources.py"
   }
 }

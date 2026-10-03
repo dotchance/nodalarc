@@ -34,7 +34,30 @@ def test_the_generated_vocabulary_file_is_what_the_wire_models_declare() -> None
 
 def test_every_state_feed_model_is_listed_with_its_string_fields() -> None:
     generator = _generator()
-    listed = json.loads(generator.OUTPUT.read_text())
+    listed = json.loads(generator.OUTPUT.read_text())["models"]
     assert {"StateSnapshot", "NodeState", "LinkState", "TracedPath"} <= set(listed)
     assert listed["NodeState"]["node_type"] == ["ground_station", "satellite"]
     assert listed["TracedPath"]["state"] == ["failed", "not_reached", "reached", "running"]
+
+
+def test_every_response_model_the_app_declares_is_a_served_module_model() -> None:
+    """A model served from a module the generator does not read escapes the contract."""
+    import vs_api.main as m
+    from pydantic import BaseModel
+
+    served = {module.__name__ for module in _generator().SERVED_MODULES}
+    outside = set()
+    for route in m.app.routes:
+        model = getattr(route, "response_model", None)
+        for candidate in (model, *getattr(model, "__args__", ())):
+            if isinstance(candidate, type) and issubclass(candidate, BaseModel):
+                if candidate.__module__ not in served and not _has_generated_types(candidate):
+                    outside.add(f"{candidate.__module__}.{candidate.__name__}")
+    assert not outside, f"served models the vocabulary file does not cover: {sorted(outside)}"
+
+
+def _has_generated_types(model: type) -> bool:
+    """The Builder, Wizard and catalog models reach the page as generated TypeScript unions."""
+    return model.__module__.startswith(
+        ("nodalarc.models.builder_", "nodalarc.models.catalog", "nodalarc.models.coverage")
+    )

@@ -439,6 +439,33 @@ def lan_addresses_shown_answer(operator: Operator, shown: ShownNetwork) -> list[
     return disagreements
 
 
+def every_node_shown_answers_its_own_terminal(operator: Operator, shown: ShownNetwork) -> list[str]:
+    """Each node NodalArc shows as part of a ready session answers on its own command line.
+
+    A router answers with its routing CLI; any other node with its shell. A node that is shown
+    and does not answer is one NodalArc counts as running while nothing runs there.
+    """
+    disagreements = []
+    for node_id in sorted(shown.nodes):
+        try:
+            with operator.terminal(node_id) as terminal:
+                if terminal.is_routing_cli:
+                    answer = terminal.run("show version")
+                    answered = "FRRouting" in answer
+                else:
+                    status, _ = run_in_shell(terminal, "true")
+                    answered = status == 0
+        except Exception as error:  # the socket was refused or closed before a prompt came
+            disagreements.append(f"{node_id} is shown and its terminal did not open: {error!r}")
+            continue
+        if not answered:
+            disagreements.append(f"{node_id} is shown and its command line did not answer")
+    print(
+        f"terminals: {len(shown.nodes) - len(disagreements)} of {len(shown.nodes)} nodes answered"
+    )
+    return disagreements
+
+
 def no_fault_is_reported(operator: Operator) -> list[str]:
     """A session whose network does what is shown reports no fault.
 
@@ -472,6 +499,7 @@ def assert_session_is_truthful(operator: Operator) -> None:
         *latency_shown_is_the_delay_packets_get(operator, shown),
         *far_sites_answer_no_sooner_than_light(operator, shown),
         *lan_addresses_shown_answer(operator, shown),
+        *every_node_shown_answers_its_own_terminal(operator, shown),
     ]
     quic_clients, dtn_endpoints = find_workloads(operator, shown)
     disagreements += quic_clients_download_from_their_servers(operator, quic_clients)

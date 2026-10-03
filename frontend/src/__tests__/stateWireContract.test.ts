@@ -19,7 +19,8 @@ import { describe, expect, it } from "vitest";
 import vocabularies from "../generated/stateWireVocabularies.json";
 
 type Vocabularies = Record<string, Record<string, string[] | null>>;
-const WIRE: Vocabularies = vocabularies;
+const WIRE: Vocabularies = vocabularies.models;
+const MODULE_OF: Record<string, string> = vocabularies.modules;
 
 const SRC = join(dirname(fileURLToPath(import.meta.url)), "..");
 const ROOT = join(SRC, "..");
@@ -151,7 +152,7 @@ describe("the page and the state feed agree on every vocabulary", () => {
       if (vocabulary === null) {
         wrong.push(
           `${where}: the page branches on ${wireType}.${field} ("${literal}"), ` +
-            "which the backend sends as an open string; close it in lib/nodalarc/models/vs_api.py",
+            `which the backend sends as an open string; close it in ${MODULE_OF[wireType]}`,
         );
       } else if (!vocabulary.includes(literal)) {
         wrong.push(
@@ -200,6 +201,6 @@ describe("the page and the state feed agree on every vocabulary", () => {
   it("reads a vocabulary file the backend wrote", () => {
     // The pytest contract test regenerates the file; this guards a hand edit.
     const text = readFileSync(join(SRC, "generated/stateWireVocabularies.json"), "utf-8");
-    expect(JSON.parse(text)).toEqual(WIRE);
+    expect(JSON.parse(text).models).toEqual(WIRE);
   });
 });

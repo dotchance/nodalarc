@@ -16,7 +16,8 @@ import pytest
 from .harness.client import Operator
 from .harness.faults import cut_ground_terminal
 from .harness.network import ShownNetwork, link_interface, link_key, router_neighbors, watch
-from .truths import assert_session_is_truthful
+from .harness.workloads import run_in_shell
+from .truths import assert_session_is_truthful, no_fault_is_reported
 
 pytestmark = [pytest.mark.integration, pytest.mark.resilience, pytest.mark.timeout(1800)]
 
@@ -36,6 +37,48 @@ def _wait_until(what: str, seconds: float, reached) -> None:
     while not reached():
         assert time.monotonic() < deadline, f"{what} did not happen within {seconds:.0f} s"
         time.sleep(2.0)
+
+
+@pytest.fixture
+def session_deployed_again(operator: Operator) -> Iterator[None]:
+    """A test that kills part of the session leaves it damaged whatever its verdict."""
+    running = next(session for session in operator.sessions() if session.get("active"))
+    yield
+    operator.run_session(running)
+
+
+def _answers(operator: Operator, node_id: str) -> bool:
+    try:
+        with operator.terminal(node_id) as terminal:
+            return run_in_shell(terminal, "true")[0] == 0
+    except Exception:  # the socket was refused or closed before a prompt came
+        return False
+
+
+def test_a_workload_a_user_ends_is_not_shown_as_part_of_a_ready_session(
+    operator: Operator, session_deployed_again: None
+) -> None:
+    """A user ends a host's workload from its own shell. NodalArc must stop showing the session
+    as ready, or name the node, within the time it takes to notice a pod that stopped."""
+    shown = watch(operator, 6.0)
+    hosts = sorted(node_id for node_id, node in shown.nodes.items() if node["role"] == "host")
+    if not hosts:
+        pytest.skip("the running session has no host workload")
+    host = hosts[0]
+    with operator.terminal(host) as terminal:
+        terminal.start("kill 1")
+        time.sleep(2.0)
+    _wait_until(f"{host} stops answering", 60.0, lambda: not _answers(operator, host))
+
+    def nodalarc_says_so() -> bool:
+        state = operator.state()
+        return (
+            state["session_status"] != "ready"
+            or host not in {node["node_id"] for node in state["nodes"]}
+            or any(host in fault for fault in no_fault_is_reported(operator))
+        )
+
+    _wait_until(f"NodalArc stops showing {host} as part of a ready session", 90.0, nodalarc_says_so)
 
 
 @pytest.fixture

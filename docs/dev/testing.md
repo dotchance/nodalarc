@@ -62,7 +62,8 @@ Two generated files tie the frontend tests to the backend's wire models:
   for every string field of every model VS-API serves to the page, the values it admits, or
   `null` when the backend leaves it open. `frontend/src/__tests__/stateWireContract.test.ts` walks the page's
   source with the TypeScript checker and refuses any comparison of a wire field against a value
-  the backend does not declare, and any `types.ts` field that does not mirror a closed vocabulary.
+  the backend does not declare, any wire-typed object (a fixture included) built with such a
+  value, and any `types.ts` field that does not mirror a closed vocabulary.
 - `scripts/gen_builder_shipped_drafts.py` writes `frontend/src/builder/__tests__/fixtures/shipped/`:
   for each shipped session, the visual draft VS-API answers when the Builder opens it and the
   world the backend resolves for it. `shippedSessionAnatomy.test.tsx` renders the Builder's

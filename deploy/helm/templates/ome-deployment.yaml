@@ -32,7 +32,7 @@ spec:
       initContainers:
         - name: ensure-nats-streams
           image: {{ required "images.natsBox is required" .Values.images.natsBox | quote }}
-          imagePullPolicy: {{ .Values.imagePullPolicy }}
+          imagePullPolicy: {{ include "nodalarc.image-pull-policy" (dict "image" .Values.images.natsBox "policy" .Values.imagePullPolicy) }}
           command: ["sh", "-c"]
           # The shell is the container's PID 1, which the kernel does not signal
           # unless it handles the signal: the work runs as its child, and SIGTERM
@@ -81,7 +81,7 @@ spec:
       containers:
         - name: ome
           image: {{ required "images.ome is required" .Values.images.ome | quote }}
-          imagePullPolicy: {{ .Values.imagePullPolicy }}
+          imagePullPolicy: {{ include "nodalarc.image-pull-policy" (dict "image" .Values.images.ome "policy" .Values.imagePullPolicy) }}
           env:
             - name: NODAL_BUILD
               value: {{ .Values.buildTag | quote }}

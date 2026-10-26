@@ -24,7 +24,7 @@ spec:
       containers:
         - name: vf
           image: {{ required "images.vf is required" .Values.images.vf | quote }}
-          imagePullPolicy: {{ .Values.imagePullPolicy }}
+          imagePullPolicy: {{ include "nodalarc.image-pull-policy" (dict "image" .Values.images.vf "policy" .Values.imagePullPolicy) }}
 {{- if or .Values.vf.vsApiUrl .Values.vf.wsUrl }}
 {{- if not (and .Values.vf.vsApiUrl .Values.vf.wsUrl) }}
 {{- fail "vf.vsApiUrl and vf.wsUrl must be set together: one URL rewritten without the other leaves the browser dialing the wrong origin for the missing half" }}

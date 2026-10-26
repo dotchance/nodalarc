@@ -26,7 +26,7 @@ spec:
       containers:
         - name: nats
           image: {{ required "images.nats is required" .Values.images.nats | quote }}
-          imagePullPolicy: {{ .Values.imagePullPolicy }}
+          imagePullPolicy: {{ include "nodalarc.image-pull-policy" (dict "image" .Values.images.nats "policy" .Values.imagePullPolicy) }}
           args:
             - "--config"
             - "/etc/nats/nats.conf"

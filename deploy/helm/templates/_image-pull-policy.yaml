@@ -1,0 +1,17 @@
+{{/* nodalarc.image-pull-policy: the pull policy for one container image
+     under the configured policy. A reference that carries a digest names
+     immutable content: a server that holds it has exactly that image, so
+     Always becomes IfNotPresent and the kubelet starts the container without
+     asking the registry. A server restarted without access to an upstream
+     registry therefore starts the pinned upstream images it already holds.
+     A tag reference, and every other configured policy, is kept. The
+     Operator applies the same rule to session pods (image_pull_policy_for
+     in services/nodalarc_operator/workloads/materializer.py). Callers pass
+     (dict "image" <reference> "policy" .Values.imagePullPolicy). */}}
+{{- define "nodalarc.image-pull-policy" -}}
+{{- if and (eq .policy "Always") (contains "@sha256:" .image) -}}
+IfNotPresent
+{{- else -}}
+{{ .policy }}
+{{- end -}}
+{{- end }}

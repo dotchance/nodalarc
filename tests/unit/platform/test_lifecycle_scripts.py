@@ -162,3 +162,46 @@ def test_assembled_chart_records_its_content_digest(tmp_path: Path) -> None:
         chart
     )
     assert metadata["version"] == "0+test"
+
+
+def test_platform_pods_start_pinned_images_without_asking_their_registry(tmp_path: Path) -> None:
+    """A development install sets Always so a registry's moving tags are pulled again.
+    A container whose image is pinned by digest must still start from the copy its
+    server holds: a server restarted without internet access starts NATS and the
+    nats-box init containers from that copy, as session pods already do."""
+    import yaml
+
+    image_args = _run(
+        ["bash", "scripts/na-images.sh", "helm-image-args"], env={"NA_IMAGES_NO_CLUSTER": "1"}
+    )
+    assert image_args.returncode == 0, image_args.stderr
+    rendered = subprocess.run(
+        [
+            "helm",
+            "template",
+            "nodalarc",
+            str(_assembled_chart(tmp_path)),
+            "--namespace=nodalarc",
+            *image_args.stdout.split(),
+            "--set-string=imagePullPolicy=Always",
+            "--set-string=runtimeRelease=0+test",
+        ],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    containers = [
+        container
+        for doc in yaml.safe_load_all(rendered.stdout)
+        if doc and doc["kind"] in ("Deployment", "DaemonSet")
+        for container in doc["spec"]["template"]["spec"].get("initContainers", [])
+        + doc["spec"]["template"]["spec"]["containers"]
+    ]
+    pinned = [c for c in containers if "@sha256:" in c["image"]]
+    tagged = [c for c in containers if "@sha256:" not in c["image"]]
+
+    assert "nats" in {c["name"] for c in pinned}
+    assert [c["name"] for c in pinned if c["imagePullPolicy"] != "IfNotPresent"] == []
+    assert tagged
+    assert [c["name"] for c in tagged if c["imagePullPolicy"] != "Always"] == []

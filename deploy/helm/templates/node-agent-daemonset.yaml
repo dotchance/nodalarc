@@ -37,7 +37,7 @@ spec:
       containers:
         - name: node-agent
           image: {{ required "images.nodeAgent is required" .Values.images.nodeAgent | quote }}
-          imagePullPolicy: {{ .Values.imagePullPolicy }}
+          imagePullPolicy: {{ include "nodalarc.image-pull-policy" (dict "image" .Values.images.nodeAgent "policy" .Values.imagePullPolicy) }}
           securityContext:
             privileged: true
           args:

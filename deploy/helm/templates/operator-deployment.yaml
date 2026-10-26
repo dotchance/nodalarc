@@ -29,7 +29,7 @@ spec:
       containers:
         - name: operator
           image: {{ required "images.operator is required" .Values.images.operator | quote }}
-          imagePullPolicy: {{ .Values.imagePullPolicy }}
+          imagePullPolicy: {{ include "nodalarc.image-pull-policy" (dict "image" .Values.images.operator "policy" .Values.imagePullPolicy) }}
           args:
             - "--namespace"
             - {{ .Release.Namespace | quote }}

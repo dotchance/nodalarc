@@ -6,7 +6,7 @@
 {{- $messaging := fromYaml (include "nodalarc.nats-messaging" .) }}
 - name: wait-nats-streams
   image: {{ required "images.natsBox is required" .Values.images.natsBox | quote }}
-  imagePullPolicy: {{ .Values.imagePullPolicy }}
+  imagePullPolicy: {{ include "nodalarc.image-pull-policy" (dict "image" .Values.images.natsBox "policy" .Values.imagePullPolicy) }}
   command: ["sh", "-c"]
   # The shell is the container's PID 1, which the kernel does not signal
   # unless it handles the signal: the wait runs as its child, and SIGTERM

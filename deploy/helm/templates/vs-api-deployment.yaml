@@ -47,7 +47,7 @@ spec:
       containers:
         - name: vs-api
           image: {{ required "images.vsApi is required" .Values.images.vsApi | quote }}
-          imagePullPolicy: {{ .Values.imagePullPolicy }}
+          imagePullPolicy: {{ include "nodalarc.image-pull-policy" (dict "image" .Values.images.vsApi "policy" .Values.imagePullPolicy) }}
           args:
             - "--session"
             - "/etc/nodalarc/session-config/session.yaml"

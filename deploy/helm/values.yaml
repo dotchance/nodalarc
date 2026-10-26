@@ -18,7 +18,9 @@ buildTag: "dev"
 # Pull policy for every image. Published images are pulled once per server.
 # The development lifecycle scripts pass their own value: Never on a
 # single-server cluster whose images are imported into containerd, Always
-# when a registry serves content-tagged development images.
+# when a registry serves content-tagged development images. A container whose
+# image is pinned by digest uses IfNotPresent in place of Always
+# (templates/_image-pull-policy.yaml).
 imagePullPolicy: IfNotPresent
 
 # Resource strategy: requests are minimum guaranteed, limits are burst ceiling.

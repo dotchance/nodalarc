@@ -3,14 +3,20 @@
 from __future__ import annotations
 
 import secrets
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Collection, Mapping
 from copy import deepcopy
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any, Literal, cast
 
 import yaml
-from nodalarc.catalog_closure import CatalogClosureCollector, catalog_document_references
+from nodalarc.catalog_closure import (
+    CatalogClosureCollector,
+    CatalogReadError,
+    CatalogReadView,
+    catalog_document_references,
+    load_catalog_object,
+)
 from nodalarc.catalog_refs import BodyRef, CatalogFamily, CatalogRef, SessionRef, SiteRef
 from nodalarc.catalog_registry import catalog_family_spec
 from nodalarc.catalog_repository import (
@@ -118,6 +124,7 @@ from nodalarc.models.segments import GroundPlacement, GroundSegment, SpaceSegmen
 from pydantic import BaseModel, JsonValue, ValidationError
 
 from .builder_compiler import (
+    OverlayCatalogReadView,
     PreviewFactory,
     canonicalize_persisted_configuration,
     compile_builder_draft,
@@ -198,7 +205,7 @@ class BuilderVisualDraftCommandError(ValueError):
             "catalog_authoring.invalid_graph",
             "catalog_authoring.stale_revision",
         ],
-        ref: SessionRef,
+        ref: CatalogRef,
         expected_revision: int | str | None = None,
         current_revision: int | str | None = None,
     ) -> None:
@@ -219,6 +226,70 @@ def _identifier(value: str) -> str:
     while "--" in normalized:
         normalized = normalized.replace("--", "-")
     return normalized.strip("-_")[:48]
+
+
+def _proposal_owner(session_ref: CatalogRef) -> str:
+    """The path segment a session draft's generated components are named under."""
+    owner = _identifier(session_ref.relative_path.stem)
+    if not owner:
+        raise ValueError(f"session target {session_ref} has no identifier to own components")
+    return owner
+
+
+def _component_family(ref: CatalogRef) -> str:
+    """The catalog family a component ref names; a ref without one is refused."""
+    family = ref.family
+    if family is None:
+        raise ValueError(f"{ref} names no catalog family")
+    return family
+
+
+def _owned_component_ref(family: str, owner: str, object_id: str) -> CatalogRef:
+    """The ref of a component a session draft owns: ``user:{family}/{owner}/{id}.yaml``."""
+    return CatalogRef(f"user:{family}/{owner}/{object_id}.yaml")
+
+
+def _mint_component_ref(
+    family: str,
+    owner: str,
+    stem: str,
+    *,
+    taken: Callable[[CatalogRef], bool],
+) -> CatalogRef:
+    """Mint a new owned component ref, suffixed when the plain name is taken."""
+    candidate = _owned_component_ref(family, owner, stem)
+    if not taken(candidate):
+        return candidate
+    for suffix in range(2, 1_000):
+        candidate = _owned_component_ref(family, owner, f"{stem}-{suffix}")
+        if not taken(candidate):
+            return candidate
+    raise ValueError(f"could not allocate a user ref for {family}/{owner}/{stem}")
+
+
+def _segment_component_id(session_name: str, segment_id: str) -> str:
+    """The id the assembler derives for a segment's generated constellation or site set."""
+    return f"{session_name}-{segment_id}"
+
+
+# The families whose generated ids the assembler derives through one shared
+# set (``_Assembly.unique_derived_id``): orbits, constellations and site sets.
+_DERIVED_ID_FAMILIES = frozenset({"orbits", "constellations", "site-sets"})
+
+
+def _ref_taken(
+    ref: CatalogRef,
+    snapshot: CatalogReadSnapshot,
+    proposals: Collection[CatalogRef],
+) -> bool:
+    """Whether ``ref`` already names a catalog object or one of the draft's proposals."""
+    if ref in proposals:
+        return True
+    try:
+        snapshot.get(ref)
+    except CatalogNotFoundError:
+        return False
+    return True
 
 
 def _assert_visual_draft_ownership(draft: BuilderVisualDraftEnvelope) -> None:
@@ -643,7 +714,7 @@ class _Assembly:
         self.issues: list[BuilderIssue] = []
         self.proposals: dict[CatalogRef, BuilderProposedCatalogDocument] = {}
         self.derived_ids: set[str] = set()
-        self.owner = _identifier(draft.target_ref.relative_path.stem) or "untitled-session"
+        self.owner = _proposal_owner(draft.target_ref)
         for proposal in draft.catalog_documents:
             self.proposals[proposal.ref] = proposal
 
@@ -686,7 +757,7 @@ class _Assembly:
         return fallback
 
     def component_ref(self, family: str, object_id: str) -> CatalogRef:
-        return CatalogRef(f"user:{family}/{self.owner}/{object_id}.yaml")
+        return _owned_component_ref(family, self.owner, object_id)
 
     def propose(self, ref: CatalogRef, document: JsonDocument, *, path: str) -> None:
         candidate = BuilderProposedCatalogDocument(
@@ -1655,7 +1726,7 @@ def _assemble_authoring_workspace(
             fallback=f"space-{index + 1}",
         )
         constellation_id = assembly.unique_derived_id(
-            f"{target_name}-{segment_id}",
+            _segment_component_id(target_name, segment_id),
             path=f"{path}.segment_id",
             fallback=f"constellation-{index + 1}",
         )
@@ -1763,7 +1834,7 @@ def _assemble_authoring_workspace(
             fallback=f"ground-{index + 1}",
         )
         site_set_id = assembly.unique_derived_id(
-            f"{target_name}-{segment_id}",
+            _segment_component_id(target_name, segment_id),
             path=f"{path}.segment_id",
             fallback=f"site-set-{index + 1}",
         )
@@ -2529,24 +2600,22 @@ def _rewrite_catalog_references(
 
 
 def _forked_document(
-    snapshot: CatalogReadSnapshot,
+    view: CatalogReadView,
     source_ref: CatalogRef,
     target_ref: CatalogRef,
     *,
     replacements: dict[CatalogRef, CatalogRef],
 ) -> JsonDocument:
-    model = _rewrite_catalog_references(
-        _validated_catalog_model(snapshot, source_ref),
-        replacements,
-    )
+    """Copy one catalog object to ``target_ref``, its references replaced."""
+    wrapper, source = load_catalog_object(source_ref, view)
+    if wrapper is None:
+        raise ValueError("a session document cannot be forked as a component")
+    model = _rewrite_catalog_references(source, replacements)
     model = model.model_copy(update={"id": target_ref.relative_path.stem})
     normalized = cast(
         JsonDocument,
         model.model_dump(mode="json", by_alias=True, exclude_none=True),
     )
-    wrapper = catalog_family_spec(cast(CatalogFamily, source_ref.family)).wrapper
-    if wrapper is None:
-        raise ValueError("customize-chain cannot fork session documents")
     return {wrapper: normalized}
 
 
@@ -3090,13 +3159,6 @@ class BuilderVisualDraftService:
                 expected_revision=request.expected_draft_revision,
                 current_revision=draft.draft_revision,
             )
-        if draft.authoring_workspace is None:
-            raise self._command_error(
-                draft,
-                "Session retargeting requires a valid graphical projection",
-                code="catalog_authoring.invalid_graph",
-            )
-
         snapshot = self._context.repository.snapshot(self._context.scope)
         try:
             current_target_revision = str(snapshot.get(request.target_ref).revision)
@@ -3110,68 +3172,124 @@ class BuilderVisualDraftService:
                 current_revision=current_target_revision,
             )
 
-        old_owner = _identifier(draft.target_ref.relative_path.stem) or "untitled-session"
-        generated_refs = _builder_generated_proposal_refs(
-            draft.catalog_documents,
-            owner=old_owner,
-        )
-        retained_proposals = tuple(
-            proposal for proposal in draft.catalog_documents if proposal.ref not in generated_refs
-        )
-        workspace = draft.authoring_workspace.model_copy(
-            update={
-                "session_name": request.target_ref.relative_path.stem,
-                "projection_revision": None,
-                "control_tree": None,
-            }
-        )
-        candidate = draft.model_copy(
-            update={
-                "target_ref": request.target_ref,
-                "expected_session_revision": None,
-                "catalog_documents": retained_proposals,
-                "session_name_is_placeholder": False,
-                "projection_status": "incomplete_authoring",
-                "authoring_workspace": workspace,
-                "applied_workspace": None,
-                "applied_revision": None,
-                "applied_session": None,
-            }
-        )
-        application = _apply_workspace_revision(candidate, workspace)
-        try:
-            applied_model = SegmentSessionConfig.model_validate(application.session)
-        except TypeError, ValueError:
-            return _compile_visual_application(
-                application.draft,
-                application.session,
-                application.proposals,
-                application.assembly_issues,
-                snapshot,
-                available_node_count=available_node_count,
-                preview_factory=preview_factory,
+        new_name = request.target_ref.relative_path.stem
+        if _identifier(new_name) != new_name:
+            raise self._command_error(
+                draft,
+                f"Session name {new_name!r} must be written as {_identifier(new_name)!r}",
+            )
+        if draft.applied_session is None or draft.projection_status != "applied":
+            raise self._command_error(
+                draft,
+                "Save under a new name copies the accepted session; apply or discard the "
+                "pending edits first",
+                code="catalog_authoring.invalid_graph",
             )
 
-        reachable_proposals, _catalog_facts = _reachable_projection_inputs(
-            applied_model,
-            application.proposals,
-            snapshot,
+        # The components the old name generated move under the new name, each
+        # named the way the assembler names it: a segment's constellation or
+        # site set after the session and the segment, every other component by
+        # its own id. Customized forks keep their refs.
+        session = SegmentSessionConfig.model_validate(draft.applied_session)
+        new_owner = _proposal_owner(request.target_ref)
+        named_for_segment = {
+            (
+                segment.source
+                if isinstance(segment, SpaceSegment)
+                else segment.placement.from_site_set
+            ): segment.id
+            for segment in session.segments
+            if isinstance(segment, SpaceSegment | GroundSegment)
+        }
+        generated_refs = _builder_generated_proposal_refs(
+            draft.catalog_documents,
+            owner=_proposal_owner(draft.target_ref),
         )
-        next_revision = application.draft.draft_revision
-        applied_workspace = _workspace_from_applied_session(
-            applied_model,
-            revision=next_revision,
-            proposals=reachable_proposals,
-            prior_workspace=workspace,
+        renames = {
+            ref: _owned_component_ref(
+                _component_family(ref),
+                new_owner,
+                _identifier(_segment_component_id(new_name, named_for_segment[ref]))
+                if ref in named_for_segment
+                else ref.relative_path.stem,
+            )
+            for ref in generated_refs
+        }
+        derived_ids = [
+            renamed.relative_path.stem
+            for ref, renamed in renames.items()
+            if _component_family(ref) in _DERIVED_ID_FAMILIES
+        ]
+        if len(set(derived_ids)) != len(derived_ids):
+            raise self._command_error(
+                draft,
+                f"Session name {new_name!r} gives two generated components the same id; "
+                "choose a shorter or different name",
+            )
+        retained = {proposal.ref for proposal in draft.catalog_documents} - generated_refs
+        for renamed in renames.values():
+            if _ref_taken(renamed, snapshot, retained):
+                raise BuilderVisualDraftCommandError(
+                    f"Session retarget component already exists: {renamed}",
+                    code="catalog_authoring.conflict",
+                    ref=renamed,
+                )
+        view = OverlayCatalogReadView(
+            snapshot,
+            {
+                proposal.ref: (index, proposal)
+                for index, proposal in enumerate(draft.catalog_documents)
+            },
+        )
+        try:
+            proposals = tuple(
+                BuilderProposedCatalogDocument(
+                    ref=renames[proposal.ref],
+                    origin=proposal.origin,
+                    document=_forked_document(
+                        view,
+                        proposal.ref,
+                        renames[proposal.ref],
+                        replacements=renames,
+                    ),
+                )
+                if proposal.ref in renames
+                else proposal
+                for proposal in draft.catalog_documents
+            )
+        except (CatalogReadError, TypeError, ValueError, yaml.YAMLError) as error:
+            raise self._command_error(
+                draft,
+                f"Save under a new name needs every generated component to be valid: {error}",
+                code="catalog_authoring.invalid_graph",
+            ) from error
+        session = _rewrite_catalog_references(session, renames)
+        applied_model = session.model_copy(
+            update={
+                "session": session.session.model_copy(
+                    update={"name": request.target_ref.relative_path.stem}
+                )
+            }
         )
         applied_session = cast(
             JsonDocument,
             applied_model.model_dump(mode="json", by_alias=True, exclude_none=True),
         )
+        next_revision = draft.draft_revision + 1
+        applied_workspace = _workspace_from_applied_session(
+            applied_model,
+            revision=next_revision,
+            proposals=proposals,
+            prior_workspace=draft.authoring_workspace,
+        )
         canonical = canonicalize_persisted_configuration(request.target_ref, applied_session)
-        retargeted = application.draft.model_copy(
+        retargeted = draft.model_copy(
             update={
-                "catalog_documents": reachable_proposals,
+                "target_ref": request.target_ref,
+                "expected_session_revision": None,
+                "session_name_is_placeholder": False,
+                "draft_revision": next_revision,
+                "catalog_documents": proposals,
                 "session_yaml": canonical.yaml_bytes.decode("utf-8"),
                 "authoring_workspace": applied_workspace,
                 "applied_workspace": applied_workspace,
@@ -3182,8 +3300,8 @@ class BuilderVisualDraftService:
         return _compile_visual_application(
             retargeted,
             applied_session,
-            reachable_proposals,
-            application.assembly_issues,
+            proposals,
+            (),
             snapshot,
             available_node_count=available_node_count,
             preview_factory=preview_factory,
@@ -4497,37 +4615,26 @@ class BuilderVisualDraftService:
                 "leaf_ref",
             )
         path = paths[0]
-        owner = _identifier(draft.target_ref.relative_path.stem) or "untitled-session"
+        owner = _proposal_owner(draft.target_ref)
         occupied = {proposal.ref for proposal in draft.catalog_documents}
 
         def exists(ref: CatalogRef) -> bool:
-            if ref in occupied:
-                return True
-            try:
-                snapshot.get(ref)
-            except CatalogNotFoundError:
-                return False
-            return True
-
-        def allocate(source_ref: CatalogRef, *, explicit: CatalogRef | None = None) -> CatalogRef:
-            if explicit is not None:
-                return explicit
-            stem = source_ref.relative_path.stem
-            family = source_ref.family
-            candidate = CatalogRef(f"user:{family}/{owner}/{stem}.yaml")
-            if not exists(candidate):
-                return candidate
-            for suffix in range(2, 1_000):
-                candidate = CatalogRef(f"user:{family}/{owner}/{stem}-{suffix}.yaml")
-                if not exists(candidate):
-                    return candidate
-            raise ValueError(f"could not allocate a user ref for {source_ref}")
+            return _ref_taken(ref, snapshot, occupied)
 
         targets: list[CatalogRef] = []
         try:
             for index, source_ref in enumerate(path):
                 explicit = request.target_leaf_ref if index == len(path) - 1 else None
-                target_ref = allocate(source_ref, explicit=explicit)
+                target_ref = (
+                    explicit
+                    if explicit is not None
+                    else _mint_component_ref(
+                        _component_family(source_ref),
+                        owner,
+                        source_ref.relative_path.stem,
+                        taken=exists,
+                    )
+                )
                 if exists(target_ref):
                     return refuse(
                         "builder.draft.customize_target_exists",
@@ -4561,7 +4668,7 @@ class BuilderVisualDraftService:
                         ),
                     )
                 )
-        except (CatalogNotFoundError, TypeError, ValueError, yaml.YAMLError) as error:
+        except (CatalogReadError, TypeError, ValueError, yaml.YAMLError) as error:
             return refuse(
                 "builder.draft.customize_fork_invalid",
                 f"The catalog chain could not be forked: {error}",

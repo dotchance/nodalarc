@@ -1707,6 +1707,273 @@ def test_visual_retarget_retains_reachable_customize_proposals_and_reowns_genera
             snapshot.get(ref)
 
 
+@pytest.mark.parametrize(
+    "session_path",
+    sorted((SHIPPED_ROOT / "sessions").glob("*.yaml")),
+    ids=lambda path: path.stem,
+)
+def test_save_under_a_new_name_keeps_the_whole_shipped_session(
+    context: CatalogContext,
+    service: BuilderVisualDraftService,
+    session_path: Path,
+) -> None:
+    # Saving an opened session under another name changes its name and nothing
+    # else: earth-leo-walker keeps leo_isl, a rule the graphical editors cannot hold.
+    opened = service.open(
+        BuilderVisualDraftOpenRequest(source_ref=f"nodalarc:sessions/{session_path.name}")
+    )
+    original = service.compile(
+        BuilderVisualDraftCompileRequest(draft=opened),
+        available_node_count=1_000_000,
+        preview_factory=_preview,
+    ).compile_result.canonical_session_json
+    assert original is not None
+    new_name = f"{session_path.stem}-copy"
+    retargeted = service.retarget(
+        BuilderVisualDraftRetargetRequest(
+            draft=opened,
+            expected_draft_revision=opened.draft_revision,
+            target_ref=f"user:sessions/{new_name}.yaml",
+        ),
+        available_node_count=1_000_000,
+        preview_factory=_preview,
+    )
+    saved = save_builder_session(
+        retargeted.save_request,
+        context,
+        available_node_count=1_000_000,
+        preview_factory=_preview,
+    )
+
+    assert saved.session.canonical_json == {
+        **original,
+        "session": {**original["session"], "name": new_name},
+    }
+
+
+def _generated_space_draft(
+    service: BuilderVisualDraftService,
+    session_name: str,
+) -> BuilderVisualDraftEnvelope:
+    created = service.create(BuilderVisualDraftCreateRequest(session_name=session_name))
+    return service.apply_command(
+        BuilderVisualDraftCommandRequest(
+            draft=created,
+            expected_draft_revision=created.draft_revision,
+            command={"operation": "add_generated_space", "phasing_mode": "walker_delta"},
+        ),
+        available_node_count=1_000_000,
+        preview_factory=_preview,
+    ).draft
+
+
+def _with_space_edit(
+    draft: BuilderVisualDraftEnvelope,
+    service: BuilderVisualDraftService,
+    **changes: Any,
+) -> BuilderVisualDraftEnvelope:
+    workspace = draft.authoring_workspace
+    assert workspace is not None
+    space = workspace.space[0]
+    return service.apply_workspace(
+        BuilderVisualDraftApplyWorkspaceRequest(
+            draft=draft,
+            expected_draft_revision=draft.draft_revision,
+            workspace=workspace.model_copy(update={"space": (space.model_copy(update=changes),)}),
+        ),
+        available_node_count=1_000_000,
+        preview_factory=_preview,
+    ).visual_draft
+
+
+def test_save_under_a_new_name_names_components_as_the_assembler_does(
+    service: BuilderVisualDraftService,
+) -> None:
+    # A generated constellation or site set is named after the session and its
+    # segment. After a save under a new name, the next graphical edit runs the
+    # assembler, which must generate exactly the refs the rename gave them.
+    authored = _generated_space_draft(service, "first-name")
+    for command in (
+        {"operation": "add_ground"},
+        {
+            "operation": "mint_ground_members",
+            "segment_id": "ground-1",
+            "sites": [{"name": "Denver", "lat_deg": 39.7, "lon_deg": -104.9}],
+        },
+    ):
+        authored = service.apply_command(
+            BuilderVisualDraftCommandRequest(
+                draft=authored,
+                expected_draft_revision=authored.draft_revision,
+                command=command,
+            ),
+            available_node_count=1_000_000,
+            preview_factory=_preview,
+        ).draft
+    retargeted = service.retarget(
+        BuilderVisualDraftRetargetRequest(
+            draft=authored,
+            expected_draft_revision=authored.draft_revision,
+            target_ref="user:sessions/second-name.yaml",
+        ),
+        available_node_count=1_000_000,
+        preview_factory=_preview,
+    ).visual_draft
+    renamed = {str(proposal.ref) for proposal in retargeted.catalog_documents}
+    assert {CatalogRef(ref).family for ref in renamed} >= {
+        "constellations",
+        "orbits",
+        "site-sets",
+        "sites",
+    }
+    assert all("/second-name/" in ref and "first-name" not in ref for ref in renamed)
+
+    edited = _with_space_edit(retargeted, service, display_name="Edited constellation")
+
+    assert edited.projection_status == "applied"
+    assert {str(proposal.ref) for proposal in edited.catalog_documents} == renamed
+
+
+def test_save_under_a_new_name_refuses_a_draft_with_pending_edits(
+    service: BuilderVisualDraftService,
+) -> None:
+    # A save under a new name copies the accepted session; a draft whose last
+    # graphical edit was refused must not be saved without that edit. The
+    # refused edit here leaves every component valid.
+    authored = _generated_space_draft(service, "pending-source")
+    workspace = authored.authoring_workspace
+    assert workspace is not None
+    pending = service.apply_workspace(
+        BuilderVisualDraftApplyWorkspaceRequest(
+            draft=authored,
+            expected_draft_revision=authored.draft_revision,
+            workspace=workspace.model_copy(update={"session_name": "another-name"}),
+        ),
+        available_node_count=1_000_000,
+        preview_factory=_preview,
+    ).visual_draft
+    assert pending.projection_status == "pending_authoring"
+    assert pending.applied_session is not None
+
+    with pytest.raises(BuilderVisualDraftCommandError) as refused:
+        service.retarget(
+            BuilderVisualDraftRetargetRequest(
+                draft=pending,
+                expected_draft_revision=pending.draft_revision,
+                target_ref="user:sessions/pending-copy.yaml",
+            ),
+            available_node_count=1_000_000,
+        )
+    assert refused.value.code == "catalog_authoring.invalid_graph"
+    assert "pending edits" in str(refused.value)
+
+
+def test_save_under_a_new_name_refuses_an_invalid_generated_component(
+    service: BuilderVisualDraftService,
+) -> None:
+    # The draft is accepted while its generated orbit is invalid (the compile
+    # reports the orbit); a save under a new name cannot copy that component
+    # and says so with a typed refusal.
+    authored = _generated_space_draft(service, "invalid-source")
+    workspace = authored.authoring_workspace
+    assert workspace is not None
+    invalid = _with_space_edit(
+        authored,
+        service,
+        orbit=workspace.space[0].orbit.model_copy(update={"altitude_km": -5000}),
+    )
+    assert invalid.projection_status == "applied"
+
+    with pytest.raises(BuilderVisualDraftCommandError) as refused:
+        service.retarget(
+            BuilderVisualDraftRetargetRequest(
+                draft=invalid,
+                expected_draft_revision=invalid.draft_revision,
+                target_ref="user:sessions/invalid-copy.yaml",
+            ),
+            available_node_count=1_000_000,
+        )
+    assert refused.value.code == "catalog_authoring.invalid_graph"
+    assert "altitude_km" in str(refused.value)
+
+
+@pytest.mark.parametrize(
+    ("target_name", "refusal"),
+    [
+        ("my--copy", "must be written as 'my-copy'"),
+        ("copy_", "must be written as 'copy'"),
+        ("a" * 49, "must be written as"),
+        ("a-session-name-that-is-forty-four-chars-long", "the same id"),
+    ],
+)
+def test_save_under_a_new_name_refuses_names_the_builder_cannot_keep(
+    service: BuilderVisualDraftService,
+    target_name: str,
+    refusal: str,
+) -> None:
+    # The graphical editor requires the session name to be its own canonical
+    # identifier, and it derives one id per generated orbit, constellation and
+    # site set; a name that breaks either rule is refused before anything is
+    # renamed.
+    authored = _generated_space_draft(service, "two-segments")
+    authored = service.apply_command(
+        BuilderVisualDraftCommandRequest(
+            draft=authored,
+            expected_draft_revision=authored.draft_revision,
+            command={"operation": "add_generated_space", "phasing_mode": "walker_delta"},
+        ),
+        available_node_count=1_000_000,
+        preview_factory=_preview,
+    ).draft
+
+    with pytest.raises(BuilderVisualDraftCommandError) as refused:
+        service.retarget(
+            BuilderVisualDraftRetargetRequest(
+                draft=authored,
+                expected_draft_revision=authored.draft_revision,
+                target_ref=f"user:sessions/{target_name}.yaml",
+            ),
+            available_node_count=1_000_000,
+        )
+    assert refused.value.code == "catalog_authoring.invalid_patch"
+    assert refusal in str(refused.value)
+
+
+def test_customizing_an_unsaved_root_again_is_an_in_band_refusal(
+    service: BuilderVisualDraftService,
+) -> None:
+    # After one customize the segment's root is an unsaved proposal; the page
+    # offers that root as the next leaf, and the fork cannot read it from the
+    # catalog. The refusal comes back as an issue on the result.
+    opened = service.open(
+        BuilderVisualDraftOpenRequest(source_ref="nodalarc:sessions/earth-leo-simple.yaml")
+    )
+    first = service.customize_chain(
+        BuilderVisualCustomizeChainRequest(
+            draft=opened,
+            expected_draft_revision=opened.draft_revision,
+            segment_id="leo",
+            leaf_ref="nodalarc:terminals/rf/rf-ka-starlink-space-gateway.yaml",
+        )
+    )
+    assert first.applied is True
+    assert first.draft.authoring_workspace is not None
+    root = first.draft.authoring_workspace.space_refs[0].source_ref
+    assert root is not None
+
+    again = service.customize_chain(
+        BuilderVisualCustomizeChainRequest(
+            draft=first.draft,
+            expected_draft_revision=first.draft.draft_revision,
+            segment_id="leo",
+            leaf_ref=root,
+        )
+    )
+
+    assert again.applied is False
+    assert [issue.code for issue in again.issues] == ["builder.draft.customize_fork_invalid"]
+
+
 def test_reopened_saved_components_stay_refs_through_customize_edit_and_retarget(
     context: CatalogContext,
     service: BuilderVisualDraftService,

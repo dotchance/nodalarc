@@ -66,6 +66,7 @@ import { BoundaryEditor, RoutingDomainEditor } from "./RoutingEditor";
 import { SessionEditor, timeRateSummary } from "./SessionEditor";
 import {
   canDeploy,
+  draftHoldsUnsavedWork,
   yamlBlocksGraphicalEditing,
   announceCatalogDraftSaved,
   claimLibraryReveal,
@@ -95,20 +96,6 @@ import {
 } from "./useEditorWindows";
 import { wallTarget } from "./wallTarget";
 import {
-  createStructuredRecovery,
-  clearCatalogDraftRecovery,
-  clearStructuredRecoveryScope,
-  getRecoveryTabBinding,
-  hasStructuredRecovery,
-  loadCatalogDraftRecovery,
-  restoreStructuredRecovery,
-  stashStructuredRecovery,
-  writeStructuredAutosave,
-  writeCatalogDraftRecovery,
-  type CatalogDraftEditorRecovery,
-  type RecoveryStorageScope,
-} from "./structuredDraftRecovery";
-import {
   BuilderApiError,
   createCatalogDraft,
   openCatalogDraft,
@@ -127,6 +114,7 @@ import {
   type Workspace,
 } from "./workspace";
 import type {
+  BuilderVisualDraftEnvelope,
   BuilderDeployVerdict,
   BuilderVisualAuthoringFacts,
   BuilderVisualDraftApplyYamlResult,
@@ -511,8 +499,6 @@ export function BuilderView({
     runVisualCommand,
     mutateControls,
     prepareRetarget,
-    compileCurrent,
-    adoptRecoveredStructuredDraft,
     captureCoordinator,
     captureIsCurrent,
     saveSession,
@@ -549,25 +535,6 @@ export function BuilderView({
   const nodeCatalog = useBuilderCatalog("nodes");
   const terminalCatalog = useBuilderCatalog("terminals");
   const builderBootstrap = useBuilderBootstrap();
-  const recoveryTabBinding = useMemo(() => getRecoveryTabBinding(), []);
-  const recoveryScope = useMemo<RecoveryStorageScope | null>(() => {
-    const binding = builderBootstrap.bootstrap?.authoring_context_binding;
-    return binding
-      ? { authoringContextBinding: binding, tabBinding: recoveryTabBinding }
-      : null;
-  }, [builderBootstrap.bootstrap?.authoring_context_binding, recoveryTabBinding]);
-  const priorRecoveryScope = useRef<RecoveryStorageScope | null>(null);
-  useEffect(() => {
-    const previous = priorRecoveryScope.current;
-    if (
-      previous &&
-      recoveryScope &&
-      previous.authoringContextBinding !== recoveryScope.authoringContextBinding
-    ) {
-      clearStructuredRecoveryScope(previous);
-    }
-    priorRecoveryScope.current = recoveryScope;
-  }, [recoveryScope]);
   const authoring: BuilderVisualAuthoringFacts | null =
     builderBootstrap.bootstrap?.authoring ?? null;
   const schedulingPresets = builderBootstrap.bootstrap?.scheduling_presets ?? [];
@@ -575,10 +542,14 @@ export function BuilderView({
     Record<string, BuilderVisualSchedulingPreset | null>
   >({});
 
+  // A gesture that would discard unsaved work waits here for the user's answer.
   const [pendingDisplace, setPendingDisplace] = useState<{
-    label: string;
-    proceed: () => void;
+    message: string;
+    answer: (discard: boolean) => void;
   } | null>(null);
+  /** Ask whether to discard unsaved work; resolves true on "Discard and continue". */
+  const askToDiscard = (message: string) =>
+    new Promise<boolean>((answer) => setPendingDisplace({ message, answer }));
   // Refresh the typed catalog when the hidden-but-mounted Builder regains
   // visibility. Catalog rows, not filesystem paths or operational session
   // guesses, are the session-open authority.
@@ -636,7 +607,7 @@ export function BuilderView({
     windows,
     openEditor,
     closeWindow,
-    closeAllWindows,
+    closeSessionWindows,
     isOpen,
     buffers,
     currentBufferMutationRevision,
@@ -649,7 +620,6 @@ export function BuilderView({
     staleList,
     loadCurrentValues,
     dropAppliedBuffers,
-    restoreRecoveryState,
   } = useEditorWindows({
     workspace,
     updateSession,
@@ -659,7 +629,6 @@ export function BuilderView({
     updateRoutingDomain,
     updateBoundary,
   });
-  const [structuredRecoveryRevision, setStructuredRecoveryRevision] = useState(0);
   const [saveState, setSaveState] = useState<SaveState>({ kind: "idle" });
   // Whether the next deploy records the session run's history.
   const [recordHistory, setRecordHistory] = useState(false);
@@ -680,104 +649,56 @@ export function BuilderView({
     async () => adoptAppliedYaml(await useCanonicalYaml()),
     [adoptAppliedYaml, useCanonicalYaml],
   );
-  const currentStructuredRecovery = () =>
-    recoveryScope &&
-    createStructuredRecovery({
-      authoringContextBinding: recoveryScope.authoringContextBinding,
+  // The draft as it was last opened, created or saved.
+  const [cleanDraft, setCleanDraft] = useState<{ targetRef: string; revision: number } | null>(
+    null,
+  );
+  const markClean = (draft: BuilderVisualDraftEnvelope) =>
+    setCleanDraft({ targetRef: draft.target_ref, revision: draft.draft_revision });
+  const unsavedSessionWork = draftHoldsUnsavedWork({
+    draft: visualDraft,
+    clean: cleanDraft,
+    twinMatchesDraft: sameWorkspace(
       workspace,
-      visualDraft,
-      yaml: {
-        text: yamlBuffer.text,
-        appliedText: yamlBuffer.appliedText,
-        generation: yamlBuffer.generation,
-        canonicalizationRequired: yamlBuffer.canonicalizationRequired,
-        canonicalizationAccepted: yamlBuffer.canonicalizationAccepted,
-        issues: yamlBuffer.issues,
-      },
-      windows,
-      buffers,
-    });
-  useEffect(() => {
-    const recovery = currentStructuredRecovery();
-    if (!recovery || !recoveryScope) return;
-    const timer = setTimeout(() => {
-      if (writeStructuredAutosave(recovery, recoveryScope)) {
-        setStructuredRecoveryRevision((revision) => revision + 1);
-      }
-    }, 800);
-    return () => clearTimeout(timer);
-    // The exact full envelope, applied workspace, and save-relevant buffers are
-    // the recovery identity; no flattened or fresh-draft reconstruction occurs.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [workspace, visualDraft, yamlBuffer, windows, buffers, recoveryScope]);
-  const hasStructuredAutosave = () => {
-    void structuredRecoveryRevision;
-    return recoveryScope ? hasStructuredRecovery("autosave", recoveryScope) : false;
-  };
-  const hasStructuredBackup = () => {
-    void structuredRecoveryRevision;
-    return recoveryScope ? hasStructuredRecovery("backup", recoveryScope) : false;
-  };
-  const stashCurrentStructuredRecovery = (options?: { force?: boolean }) => {
-    if (!recoveryScope) return "skipped" as const;
-    const outcome = stashStructuredRecovery(
-      currentStructuredRecovery(),
-      recoveryScope,
-      options,
-    );
-    if (outcome === "stashed") {
-      setStructuredRecoveryRevision((revision) => revision + 1);
-    }
-    return outcome;
-  };
-  const restoreCurrentStructuredRecovery = () => {
-    if (!recoveryScope) {
-      setRestoreError("Builder recovery is unavailable until backend context loads");
-      return;
-    }
-    const fromBackup = hasStructuredBackup();
-    const result = restoreStructuredRecovery(
-      fromBackup ? "backup" : "autosave",
-      recoveryScope,
-      { consume: fromBackup },
-    );
-    if (!result.ok) {
-      setRestoreError(result.reason);
-      return;
-    }
-    closeAllWindows();
-    openWorkspace(result.recovery.workspace);
-    restoreRecoveryState(result.recovery.editor);
-    setSelection(null);
-    setSaveState({ kind: "idle" });
-    setRestoreError(null);
-    adoptRecoveredStructuredDraft(result.recovery.visualDraft, {
-      ...result.recovery.yaml,
-      dirty: result.recovery.yaml.text !== result.recovery.yaml.appliedText,
-      applied: result.recovery.yaml.issues.length === 0,
-    });
-    if (
-      result.recovery.yaml.issues.length === 0 &&
-      result.recovery.yaml.text === result.recovery.yaml.appliedText
-    ) {
-      void compileCurrent();
-    }
-    setStructuredRecoveryRevision((revision) => revision + 1);
-  };
-  /** Run a displacing gesture only after preserving the exact current draft. */
+      (visualDraft?.authoring_workspace ?? visualDraft?.applied_workspace ?? null) as Workspace | null,
+    ),
+    dirtyWindowCount: dirtyWindows,
+    yamlDirty: yamlBuffer.dirty,
+  });
+  /** Run a gesture that replaces the open draft, asking first when the draft
+   *  holds unsaved work. */
   const displace = (proceed: () => void, label: string) => {
-    if (stashCurrentStructuredRecovery() === "refused") {
-      setPendingDisplace({ label, proceed });
+    if (!unsavedSessionWork || !visualDraft) {
+      proceed();
       return;
     }
-    proceed();
+    void askToDiscard(`${label} discards the unsaved changes to ${visualDraft.target_ref}.`).then(
+      (discard) => {
+        if (discard) proceed();
+      },
+    );
   };
+  const startNewSession = () =>
+    displace(() => {
+      clear();
+      setSelection(null);
+      closeSessionWindows();
+      setSaveState({ kind: "idle" });
+      void createDraft({}).then(
+        (draft) => {
+          markClean(draft);
+          openWorkspace(workspaceFromVisualDraft(draft));
+        },
+        (cause) => setDraftError(cause instanceof Error ? cause.message : String(cause)),
+      );
+    }, "starting a new session");
   const ensureThenCreate = (create: () => void, label: string) => {
     if (workspace) create();
     else
       displace(() => {
         void createDraft({})
           .then((draft) => {
+            markClean(draft);
             openWorkspace(workspaceFromVisualDraft(draft));
             create();
           })
@@ -799,9 +720,8 @@ export function BuilderView({
   // library revision is a dependency on purpose: a user-catalog mutation
   // changes its dependency closure, so both settled digests must recompile.
   const libraryRevision = useLibraryRevision();
-  // A Restore that finds no payload (missing/corrupt) surfaces here instead of
-  // silently doing nothing; the current workspace and its world stand.
-  const [restoreError, setRestoreError] = useState<string | null>(null);
+  // A New session the backend refuses surfaces here; the current workspace stands.
+  const [draftError, setDraftError] = useState<string | null>(null);
   const [openSessionError, setOpenSessionError] = useState<string | null>(null);
   const hasDrafts =
     !!workspace &&
@@ -1045,6 +965,7 @@ export function BuilderView({
       if (applyAll) {
         dropAppliedBuffers(appliedBuffers);
       }
+      markClean(saved.reopenedDraft);
       openWorkspace(workspaceFromVisualDraft(saved.reopenedDraft));
       setSaveState({
         kind: "saved",
@@ -1097,8 +1018,7 @@ export function BuilderView({
     dirtyWindowCount: dirtyWindows,
   });
   // Standalone component authoring (Your library) — independent of sessions.
-  const [catalogDraftRecovery, setCatalogDraftRecovery] =
-    useState<CatalogDraftEditorRecovery | null>(null);
+  const [catalogDraftDirty, setCatalogDraftDirty] = useState(false);
   const [catalogDraft, setCatalogDraft] = useState<CatalogComponentDraftEnvelope | null>(null);
   const [libraryError, setLibraryError] = useState<string | null>(null);
   const visualCommandInFlight = useRef(false);
@@ -1190,43 +1110,25 @@ export function BuilderView({
     return result;
   };
 
-  const reopenRecoveredCatalogDraft = useRef(false);
-  useEffect(() => {
-    if (!recoveryScope) {
-      setCatalogDraftRecovery(null);
-      setCatalogDraft(null);
-      return;
-    }
-    const recovered = loadCatalogDraftRecovery(recoveryScope);
-    const recovery = recovered.ok ? recovered.recovery : null;
-    setCatalogDraftRecovery(recovery);
-    setCatalogDraft(recovery?.draft ?? null);
-    reopenRecoveredCatalogDraft.current = recovery !== null;
-  }, [recoveryScope]);
-  useEffect(() => {
-    if (!active || !reopenRecoveredCatalogDraft.current || !catalogDraftRecovery) return;
-    reopenRecoveredCatalogDraft.current = false;
-    openEditor({ kind: "library" });
-  }, [active, catalogDraftRecovery, openEditor]);
-  const handleCatalogDraftRecovery = useCallback(
-    (recovery: CatalogDraftEditorRecovery | null) => {
-      setCatalogDraftRecovery(recovery);
-      if (recovery) {
-        if (!recoveryScope) return;
-        setCatalogDraft(recovery.draft);
-        writeCatalogDraftRecovery(recovery, recoveryScope);
-      } else if (recoveryScope) {
-        clearCatalogDraftRecovery(recoveryScope);
-      }
-    },
-    [recoveryScope],
-  );
   const discardCatalogDraft = useCallback(() => {
-    if (recoveryScope) clearCatalogDraftRecovery(recoveryScope);
-    setCatalogDraftRecovery(null);
+    setCatalogDraftDirty(false);
     setCatalogDraft(null);
     closeWindow("library");
-  }, [closeWindow, recoveryScope]);
+  }, [closeWindow]);
+  /** Discard the open component draft before a gesture replaces or closes it,
+   *  asking first when it holds unsaved edits. Resolves false when the user
+   *  keeps the draft. */
+  const discardCatalogDraftFor = async (label: string): Promise<boolean> => {
+    if (
+      catalogDraft &&
+      catalogDraftDirty &&
+      !(await askToDiscard(`${label} discards the unsaved changes to ${catalogDraft.target_ref}.`))
+    ) {
+      return false;
+    }
+    discardCatalogDraft();
+    return true;
+  };
 
   // The Library's per-entry gestures. USE places a catalog reference in an
   // editable session; CUSTOMIZE opens a full backend draft at an explicit
@@ -1317,15 +1219,16 @@ export function BuilderView({
     }
   };
 
-  const handleLibraryCustomize = async (entry: CatalogDocumentSummary, targetRef: string) => {
+  const handleLibraryCustomize = async (
+    entry: CatalogDocumentSummary,
+    targetRef: string,
+  ): Promise<boolean> => {
     setLibraryError(null);
-    if (catalogDraftRecovery) {
+    if (catalogDraft?.target_ref === targetRef) {
       openEditor({ kind: "library" });
-      if (catalogDraftRecovery.draft.target_ref === targetRef) return;
-      const message = `Finish or discard ${catalogDraftRecovery.draft.target_ref} before opening another component draft.`;
-      setLibraryError(message);
-      throw new Error(message);
+      return true;
     }
+    if (!(await discardCatalogDraftFor(`opening ${targetRef}`))) return false;
     try {
       const draft = await openCatalogDraft({
         source_ref: entry.ref,
@@ -1333,6 +1236,7 @@ export function BuilderView({
       });
       setCatalogDraft(draft);
       openEditor({ kind: "library" });
+      return true;
     } catch (e) {
       const message = e instanceof Error ? e.message : String(e);
       setLibraryError(
@@ -1354,16 +1258,14 @@ export function BuilderView({
     }
   };
 
-  const handleLibraryNew = async (family: string, objectId: string) => {
+  const handleLibraryNew = async (family: string, objectId: string): Promise<boolean> => {
     setLibraryError(null);
     const targetRef = `user:${family}/${objectId}.yaml`;
-    if (catalogDraftRecovery) {
+    if (catalogDraft?.target_ref === targetRef) {
       openEditor({ kind: "library" });
-      if (catalogDraftRecovery.draft.target_ref === targetRef) return;
-      const message = `Finish or discard ${catalogDraftRecovery.draft.target_ref} before opening another component draft.`;
-      setLibraryError(message);
-      throw new Error(message);
+      return true;
     }
+    if (!(await discardCatalogDraftFor(`creating ${targetRef}`))) return false;
     try {
       const draft = await createCatalogDraft({
         family: family as CatalogComponentFamily,
@@ -1371,6 +1273,7 @@ export function BuilderView({
       });
       setCatalogDraft(draft);
       openEditor({ kind: "library" });
+      return true;
     } catch (cause) {
       setLibraryError(cause instanceof Error ? cause.message : String(cause));
       throw cause;
@@ -1464,10 +1367,12 @@ export function BuilderView({
     ) : null;
 
   /** The body of one floating editor window. Null = the object no longer
-   *  exists (undo, removal); the window simply doesn't render. */
+   *  exists (undo, removal); the window simply doesn't render. `close`
+   *  replaces the plain close of the title-bar X and Escape for a window
+   *  whose closing can discard work. */
   function renderWindow(
     target: EditorTarget,
-  ): { title: string; content: React.ReactNode } | null {
+  ): { title: string; content: React.ReactNode; close?: () => void } | null {
     const standalone = [
       "inspect",
       "node-view",
@@ -1972,16 +1877,16 @@ export function BuilderView({
         // never parses persisted session grammar into its structured workspace.
         const openEntry = (entry: CatalogDocumentSummary, targetRef?: string) => {
           setOpenSessionError(null);
-          // Preserve the current draft before opening displaces it; a refused
-          // stash holds this gesture for the choice dialog.
+          // Opening replaces the current draft; unsaved work is confirmed first.
           displace(() => {
             void openSession(entry, targetRef as SessionRef | undefined).then((result) => {
               if (!result.ok) {
                 setOpenSessionError(result.reason);
                 return;
               }
+              markClean(result.draft);
               openWorkspace(workspaceFromVisualDraft(result.draft));
-              closeAllWindows();
+              closeSessionWindows();
               setSelection(null);
               setSaveState({ kind: "idle" });
             });
@@ -2075,6 +1980,7 @@ export function BuilderView({
               ? "Edit"
               : "New";
         const objectKind = metadata.wrapper?.replace(/_/g, " ") ?? catalogDraft.family;
+        const close = () => void discardCatalogDraftFor(`closing ${catalogDraft.target_ref}`);
         return {
           title: `${verb} ${objectKind}`,
           content: (
@@ -2082,23 +1988,16 @@ export function BuilderView({
               authoring={authoring!}
               key={catalogDraft.target_ref}
               initialDraft={catalogDraft}
-              initialRecovery={catalogDraftRecovery}
               onSaved={async (result) => {
                 setCatalogDraft(result.draft);
-                handleCatalogDraftRecovery(null);
                 await announceCatalogDraftSaved(result);
               }}
-              onRecoveryChange={handleCatalogDraftRecovery}
+              onDirtyChange={setCatalogDraftDirty}
               onDiscard={discardCatalogDraft}
-              onClose={(dirty) => {
-                if (!dirty) {
-                  setCatalogDraft(null);
-                  handleCatalogDraftRecovery(null);
-                }
-                closeWindow("library");
-              }}
+              onClose={close}
             />
           ),
+          close,
         };
       }
     }
@@ -2182,19 +2081,9 @@ export function BuilderView({
             className="builder-toolbar-btn"
             icon="file-plus"
             size={17}
-            label="New session — blank sheet (any current draft stays under Restore)"
+            label="New session — blank sheet"
             onClick={() => {
-              displace(() => {
-                clear();
-                setSelection(null);
-                closeAllWindows();
-                setSaveState({ kind: "idle" });
-                void createDraft({}).then(
-                  (draft) => openWorkspace(workspaceFromVisualDraft(draft)),
-                  (cause) =>
-                    setRestoreError(cause instanceof Error ? cause.message : String(cause)),
-                );
-              }, "starting a new session");
+              startNewSession();
             }}
           />
           <IconButton
@@ -2299,34 +2188,13 @@ export function BuilderView({
               }
             }}
           />
-          <IconButton
-            className="builder-toolbar-btn"
-            icon="history"
-            size={17}
-            disabled={!hasStructuredBackup() && !hasStructuredAutosave()}
-            label={
-              hasStructuredBackup()
-                ? "Restore — bring back the draft the last Open or New displaced"
-                : hasStructuredAutosave()
-                  ? "Restore the autosaved draft from this browser"
-                  : "Nothing to restore"
-            }
-            onClick={restoreCurrentStructuredRecovery}
-          />
         </span>
         <IconButton
           className="builder-toolbar-btn"
           icon="library"
           size={17}
-          label={
-            catalogDraftRecovery
-              ? `Library — resume unsaved ${catalogDraftRecovery.draft.target_ref}`
-              : "Library — every block you could build with, shipped and yours"
-          }
-          onClick={() => {
-            openEditor({ kind: "catalog" });
-            if (catalogDraftRecovery) openEditor({ kind: "library" });
-          }}
+          label="Library — every block you could build with, shipped and yours"
+          onClick={() => openEditor({ kind: "catalog" })}
         />
       </div>
       <div className="builder-outline" data-testid="builder-outline">
@@ -2956,24 +2824,14 @@ export function BuilderView({
             <Button
               variant="primary"
               onClick={() => {
-                displace(() => {
-                  clear();
-                  setSelection(null);
-                  closeAllWindows();
-                  setSaveState({ kind: "idle" });
-                  void createDraft({}).then(
-                    (draft) => openWorkspace(workspaceFromVisualDraft(draft)),
-                    (cause) =>
-                      setRestoreError(cause instanceof Error ? cause.message : String(cause)),
-                  );
-                }, "starting a new session");
+                startNewSession();
               }}
             >
               <Icon name="file-plus" size={13} /> New session
             </Button>
             <div className="builder-zone-empty">
               The toolbar above holds the session verbs — New, Open, Save, Deploy,
-              Restore, Library. Every step round-trips through the shared resolver;
+              Library. Every step round-trips through the shared resolver;
               the YAML pane shows the session document live.
             </div>
           </div>
@@ -2992,7 +2850,7 @@ export function BuilderView({
               key={win.key}
               raiseId={win.key}
               title={buf?.dirty ? `${body.title} •` : body.title}
-              onClose={() => closeWindow(win.key)}
+              onClose={body.close ?? (() => closeWindow(win.key))}
               initial={{ x: win.x, y: win.y, w: 380, h: 560 }}
               minWidth={320}
               minHeight={240}
@@ -3252,15 +3110,13 @@ export function BuilderView({
             save committed but unverified for {saveState.sessionRef} — reopen before retrying
           </span>
         )}
-        {restoreError && (
-          <span className="builder-status-item builder-status-item--error">
-            {restoreError}
-          </span>
+        {draftError && (
+          <span className="builder-status-item builder-status-item--error">{draftError}</span>
         )}
       </div>
       {pendingDisplace && (
         <div
-          data-testid="builder-backup-choice"
+          data-testid="builder-discard-choice"
           style={{
             position: "absolute",
             inset: 0,
@@ -3283,26 +3139,28 @@ export function BuilderView({
               gap: "12px",
             }}
           >
-            <div style={{ fontWeight: 600 }}>A backed-up draft would be replaced</div>
+            <div style={{ fontWeight: 600 }}>Discard unsaved changes?</div>
             <div style={{ fontSize: "13px", opacity: 0.85 }}>
-              {pendingDisplace.label} would overwrite the draft currently held under
-              Restore. Overwrite it, or cancel and keep both.
+              {pendingDisplace.message} The Builder keeps no copy of unsaved work.
             </div>
             <div style={{ display: "flex", gap: "8px", justifyContent: "flex-end" }}>
               <Button
                 variant="primary"
                 onClick={() => {
-                  const held = pendingDisplace;
                   setPendingDisplace(null);
-                  // The overwrite choice: force the stash so the current draft
-                  // replaces the backup, then run the held gesture.
-                  stashCurrentStructuredRecovery({ force: true });
-                  held.proceed();
+                  pendingDisplace.answer(true);
                 }}
               >
-                Overwrite the backup
+                Discard and continue
               </Button>
-              <Button onClick={() => setPendingDisplace(null)}>Cancel — keep both</Button>
+              <Button
+                onClick={() => {
+                  setPendingDisplace(null);
+                  pendingDisplace.answer(false);
+                }}
+              >
+                Cancel
+              </Button>
             </div>
           </div>
         </div>

@@ -222,7 +222,7 @@ export function useWorkspace() {
   // The mutation path updates workspaceRef synchronously so a live-workspace
   // read never lags the commit for either the
   // value and updater forms — then set React state. Undo history observes the
-  // state change; structured recovery is owned by structuredDraftRecovery.ts.
+  // state change.
   const workspaceRef = useRef<Workspace | null>(null);
   const commit = useCallback(
     (update: Workspace | null | ((prev: Workspace | null) => Workspace | null)) => {

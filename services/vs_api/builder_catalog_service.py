@@ -580,7 +580,6 @@ class BuilderCatalogAuthoringService:
         )
         runtime = RuntimeSupport.earth_luna()
         return BuilderCatalogBootstrap(
-            authoring_context_binding=self._context.scope_binding,
             public_grammar_href=self._public_grammar_href,
             capabilities=BuilderCatalogCapabilities(),
             families=families,

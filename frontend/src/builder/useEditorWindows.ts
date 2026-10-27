@@ -54,11 +54,6 @@ export interface EditorWindow {
   y: number;
 }
 
-export interface EditorWindowsRecoveryState {
-  windows: EditorWindow[];
-  buffers: BufferMap;
-}
-
 export function targetKey(target: EditorTarget): string {
   switch (target.kind) {
     case "session":
@@ -208,7 +203,10 @@ export function useEditorWindows({
     });
   };
   const closeWindow = (key: string) => closeWindows((w) => w.key === key);
-  const closeAllWindows = () => closeWindows(() => true);
+  /** Close every window a session gesture (New, Open) replaces. The
+   *  component draft window is independent of sessions and holds its own
+   *  unsaved work, so only its own gestures close it. */
+  const closeSessionWindows = () => closeWindows((w) => w.target.kind !== "library");
   const isOpen = (key: string) => windows.some((w) => w.key === key);
 
   // Buffered editing: an editor window works on a copy of its object; the
@@ -393,17 +391,11 @@ export function useEditorWindows({
       return kept;
     });
   };
-  const restoreRecoveryState = (state: EditorWindowsRecoveryState) => {
-    setWindows(structuredClone(state.windows));
-    markBufferMutation();
-    setBuffers(structuredClone(state.buffers));
-  };
-
   return {
     windows,
     openEditor,
     closeWindow,
-    closeAllWindows,
+    closeSessionWindows,
     isOpen,
     buffers,
     currentBufferMutationRevision,
@@ -416,6 +408,5 @@ export function useEditorWindows({
     staleList,
     loadCurrentValues,
     dropAppliedBuffers,
-    restoreRecoveryState,
   };
 }

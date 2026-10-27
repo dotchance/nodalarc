@@ -3,8 +3,10 @@
 import { applyTheme } from "./styles/tokens";
 import { createRoot } from "react-dom/client";
 import { App } from "./App";
+import { forgetRetiredBuilderDrafts } from "./builder/retiredDraftStorage";
 
 applyTheme();
+forgetRetiredBuilderDrafts([localStorage, sessionStorage]);
 
 const root = document.getElementById("root");
 if (root) {

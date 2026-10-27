@@ -240,7 +240,6 @@ class BuilderCatalogBootstrap(_CatalogApplicationModel):
     """Public documentation and catalog metadata needed to start Builder authoring."""
 
     contract_version: Literal[1] = 1
-    authoring_context_binding: str = Field(min_length=1)
     public_grammar_href: str = Field(min_length=1)
     capabilities: BuilderCatalogCapabilities
     families: tuple[CatalogFamilyMetadata, ...]

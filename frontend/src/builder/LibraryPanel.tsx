@@ -138,9 +138,11 @@ export function presentationForFamily(family: CatalogFamily): FamilyConfig {
 
 interface LibraryPanelProps {
   onUse: (entry: CatalogDocumentSummary) => void;
-  onCustomize: (entry: CatalogDocumentSummary, targetRef: string) => Promise<void>;
+  /** Resolves false when the user keeps the component draft already open. */
+  onCustomize: (entry: CatalogDocumentSummary, targetRef: string) => Promise<boolean>;
   onInspect: (entry: CatalogDocumentSummary) => void;
-  onNew: (family: string, objectId: string) => Promise<void>;
+  /** Resolves false when the user keeps the component draft already open. */
+  onNew: (family: string, objectId: string) => Promise<boolean>;
 }
 
 function objectId(entry: CatalogDocumentSummary): string {
@@ -374,9 +376,11 @@ export function LibraryPanel({ onUse, onCustomize, onInspect, onNew }: LibraryPa
                   forkDraft.entry,
                   `user:${forkDraft.entry.family}/${id}.yaml`,
                 ).then(
-                  () => {
+                  (opened) => {
                     setActionError(null);
-                    setForkDraft(null);
+                    setForkDraft((current) =>
+                      opened ? null : current && { ...current, saving: false },
+                    );
                   },
                   (error) => {
                     setActionError(error instanceof Error ? error.message : String(error));
@@ -413,9 +417,11 @@ export function LibraryPanel({ onUse, onCustomize, onInspect, onNew }: LibraryPa
                 if (!id) return;
                 setNewDraft((current) => current && { ...current, saving: true });
                 void onNew(config.family, id).then(
-                  () => {
+                  (opened) => {
                     setActionError(null);
-                    setNewDraft(null);
+                    setNewDraft((current) =>
+                      opened ? null : current && { ...current, saving: false },
+                    );
                   },
                   (error) => {
                     setActionError(error instanceof Error ? error.message : String(error));

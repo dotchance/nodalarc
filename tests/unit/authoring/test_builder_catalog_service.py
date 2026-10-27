@@ -178,7 +178,6 @@ def test_bootstrap_is_complete_scope_free_and_truthful(tmp_path: Path) -> None:
     )
     assert bootstrap.capabilities.user_catalog_write is True
     assert bootstrap.capabilities.deploy_yaml_closure is True
-    assert bootstrap.authoring_context_binding == fixture.context.scope_binding
     assert [(item.id, item.label) for item in bootstrap.scheduling_presets] == [
         ("leo-fast-handover", "LEO fast handover — make-before-break"),
         ("geo-longest-pass", "GEO longest pass — break-before-make"),

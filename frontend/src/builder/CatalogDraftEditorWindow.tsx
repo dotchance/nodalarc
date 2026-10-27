@@ -22,7 +22,6 @@ import {
   GraphicalControlTreeEditor,
   type BuilderControlMutation,
 } from "./GraphicalControlTreeEditor";
-import type { CatalogDraftEditorRecovery } from "./structuredDraftRecovery";
 import { useBuilderCatalog } from "./useBuilderWorld";
 import type {
   BuilderVisualAuthoringFacts,
@@ -166,40 +165,26 @@ export function CatalogDraftEditorWindow({
   onSaved,
   onClose,
   onDiscard,
-  initialRecovery,
-  onRecoveryChange,
+  onDirtyChange,
   authoring,
 }: {
   initialDraft: CatalogComponentDraftEnvelope;
   onSaved: (result: CatalogDraftSaveResult) => void | Promise<void>;
-  onClose: (dirty: boolean) => void;
+  onClose: () => void;
   onDiscard?: () => void;
-  initialRecovery?: CatalogDraftEditorRecovery | null;
-  onRecoveryChange?: (recovery: CatalogDraftEditorRecovery | null) => void;
+  /** Told whether the window holds edits not yet saved to the library. */
+  onDirtyChange?: (dirty: boolean) => void;
   authoring: BuilderVisualAuthoringFacts;
 }) {
-  const recovered = initialRecovery?.draft.target_ref === initialDraft.target_ref
-    ? initialRecovery
-    : null;
-  const [draft, setDraft] = useState(recovered?.draft ?? initialDraft);
-  const draftRef = useRef(recovered?.draft ?? initialDraft);
-  const [baselineDocument, setBaselineDocument] = useState(
-    recovered?.baselineDocument ?? initialDraft.document,
-  );
+  const [draft, setDraft] = useState(initialDraft);
+  const draftRef = useRef(initialDraft);
+  const [baselineDocument, setBaselineDocument] = useState(initialDraft.document);
   const [compileResult, setCompileResult] = useState<CatalogDraftCompileResult | null>(null);
-  const [yamlText, setYamlText] = useState(
-    recovered?.yamlText ?? initialDraft.projected_yaml,
-  );
-  const [appliedYamlText, setAppliedYamlText] = useState(
-    recovered?.appliedYamlText ?? initialDraft.projected_yaml,
-  );
+  const [yamlText, setYamlText] = useState(initialDraft.projected_yaml);
+  const [appliedYamlText, setAppliedYamlText] = useState(initialDraft.projected_yaml);
   const [yamlIssues, setYamlIssues] = useState<ReadonlyArray<CatalogDraftIssue>>([]);
-  const [canonicalizationRequired, setCanonicalizationRequired] = useState(
-    recovered?.canonicalizationRequired ?? false,
-  );
-  const [canonicalizationAccepted, setCanonicalizationAccepted] = useState(
-    recovered?.canonicalizationAccepted ?? false,
-  );
+  const [canonicalizationRequired, setCanonicalizationRequired] = useState(false);
+  const [canonicalizationAccepted, setCanonicalizationAccepted] = useState(false);
   const [yamlSync, setYamlSync] = useState<"idle" | "syncing" | "failed">("idle");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState<"idle" | "validating" | "saving">("idle");
@@ -224,29 +209,8 @@ export function CatalogDraftEditorWindow({
     : compileResult?.issues ?? draft.issues;
 
   useEffect(() => {
-    onRecoveryChange?.(
-      dirty
-        ? {
-            draft,
-            baselineDocument,
-            workingDocument: draft.document,
-            yamlText,
-            appliedYamlText,
-            canonicalizationRequired,
-            canonicalizationAccepted,
-          }
-        : null,
-    );
-  }, [
-    appliedYamlText,
-    baselineDocument,
-    canonicalizationAccepted,
-    canonicalizationRequired,
-    dirty,
-    draft,
-    onRecoveryChange,
-    yamlText,
-  ]);
+    onDirtyChange?.(dirty);
+  }, [dirty, onDirtyChange]);
 
   useEffect(() => {
     if (!draft.expected_target_revision) {
@@ -665,7 +629,7 @@ export function CatalogDraftEditorWindow({
         {dirty && onDiscard && (
           <Button disabled={busy !== "idle"} onClick={onDiscard}>Discard edits</Button>
         )}
-        <Button disabled={busy !== "idle"} onClick={() => onClose(dirty)}>Close</Button>
+        <Button disabled={busy !== "idle"} onClick={onClose}>Close</Button>
       </div>
     </div>
   );

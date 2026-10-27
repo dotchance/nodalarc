@@ -5,6 +5,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   BuilderVisualDraftAssemblyResult,
   BuilderVisualDraftEnvelope,
+  CatalogDocumentSummary,
 } from "../generated/builderApi";
 import { newWorkspace } from "./fixtures/workspaceFixtures";
 
@@ -18,6 +19,7 @@ const {
   requestOutlineReveal,
   useBuilderWorld,
   useOutlineReveal,
+  yamlBlocksGraphicalEditing,
 } = await import("../useBuilderWorld");
 
 function response(payload: unknown) {
@@ -78,7 +80,7 @@ function assembly(
     compile_result: {
       draft: assembledDraft,
       target_ref: visualDraft.target_ref,
-      canonical_session_yaml: `session:\n  name: coordinated\n# ${marker}\n`,
+      canonical_session_yaml: visualDraft.session_yaml,
       canonical_session_json: visualDraft.applied_session,
       dependency_closure: {
         entries: [],
@@ -112,6 +114,31 @@ function assembly(
   } as unknown as BuilderVisualDraftAssemblyResult;
 }
 
+/** Open `opened` the way the page does: open the stored session, then compile it. */
+async function openAsThePageDoes(
+  hook: { current: { openSession: (entry: CatalogDocumentSummary) => Promise<unknown> } },
+  fetchMock: ReturnType<typeof vi.fn>,
+  opened: BuilderVisualDraftEnvelope,
+): Promise<void> {
+  fetchMock.mockImplementation((url: string) => {
+    if (url.includes("/builder/catalog/list")) return Promise.resolve(sessionsResponse);
+    if (url.includes("/builder/draft/open")) return Promise.resolve(response(opened));
+    if (url.includes("/builder/draft/compile")) return Promise.resolve(response(assembly(opened)));
+    throw new Error(`unexpected request ${url}`);
+  });
+  await act(async () => {
+    await hook.current.openSession({
+      ref: opened.target_ref,
+      family: "sessions",
+      namespace: "user",
+      revision: "session-revision",
+      size_bytes: opened.session_yaml.length,
+      display_name: "coordinated",
+      summary: "",
+    });
+  });
+}
+
 describe("useBuilderWorld session coordinator", () => {
   let fetchMock: ReturnType<typeof vi.fn>;
 
@@ -128,7 +155,7 @@ describe("useBuilderWorld session coordinator", () => {
     const original = draft();
     const { result } = renderHook(() => useBuilderWorld());
     await act(async () => undefined);
-    act(() => result.current.adoptRecoveredStructuredDraft(original));
+    await openAsThePageDoes(result, fetchMock, original);
     const capture = result.current.captureCoordinator();
     act(() => result.current.editYamlBuffer("session:\n  name: changed\n"));
     await act(async () => {
@@ -145,7 +172,8 @@ describe("useBuilderWorld session coordinator", () => {
     const original = draft();
     const { result } = renderHook(() => useBuilderWorld());
     await act(async () => undefined);
-    act(() => result.current.adoptRecoveredStructuredDraft(original));
+    await openAsThePageDoes(result, fetchMock, original);
+    expect(yamlBlocksGraphicalEditing(true, result.current.yamlBuffer)).toBe(false);
     act(() => result.current.editYamlBuffer("session:\n  name: dirty\n"));
     await act(async () => {
       await expect(

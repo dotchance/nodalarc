@@ -1,4 +1,4 @@
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import type { ComponentProps } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type {
@@ -6,7 +6,6 @@ import type {
   CatalogComponentFamily,
   JsonValue,
 } from "../generated/builderApi";
-import type { CatalogDraftEditorRecovery } from "../structuredDraftRecovery";
 import { AUTHORING_FACTS } from "./fixtures/authoringFacts";
 
 // These tests read only what the editor draws from the draft it is given. No VS-API call
@@ -116,12 +115,6 @@ function draft(
   };
 }
 
-async function yamlTextarea(): Promise<HTMLTextAreaElement> {
-  const textarea = screen.getByLabelText("Component YAML") as HTMLTextAreaElement;
-  await waitFor(() => expect(textarea.value).toContain("id:"));
-  return textarea;
-}
-
 afterEach(cleanup);
 
 describe("CatalogDraftEditorWindow", () => {
@@ -152,6 +145,24 @@ describe("CatalogDraftEditorWindow", () => {
     expect(screen.queryByText("+ terminal mount")).toBeNull();
   });
 
+  it("tells its host when it holds edits not yet saved", () => {
+    // The host asks before another component or a close discards these edits.
+    const dirty: boolean[] = [];
+    render(
+      <CatalogDraftEditorWindow
+        initialDraft={draft("terminals")}
+        onSaved={() => {}}
+        onClose={() => {}}
+        onDirtyChange={(value) => dirty.push(value)}
+      />,
+    );
+    expect(dirty[dirty.length - 1]).toBe(false);
+    fireEvent.change(screen.getByLabelText("Component YAML"), {
+      target: { value: "terminal:\n  id: test-terminal\n  display_name: edited\n" },
+    });
+    expect(dirty[dirty.length - 1]).toBe(true);
+  });
+
   it("offers no gesture for a component with no derived shape", () => {
     render(
       <CatalogDraftEditorWindow
@@ -163,28 +174,5 @@ describe("CatalogDraftEditorWindow", () => {
     expect(screen.getByTestId("catalog-graphical-editor")).toBeTruthy();
     expect(screen.queryByText("+ terminal mount")).toBeNull();
     expect(screen.queryByText("+ add node")).toBeNull();
-  });
-
-  it("restores an unfinished YAML buffer without canonicalizing it away", async () => {
-    const initial = draft("payloads", { reference: "baseline" }, { revision: 4 });
-    const recovery: CatalogDraftEditorRecovery = {
-      draft: initial,
-      baselineDocument: initial.document,
-      workingDocument: initial.document,
-      yamlText: "payload:\n  id: test-payload\n  reference: [unfinished",
-      appliedYamlText: initial.projected_yaml,
-      canonicalizationRequired: false,
-      canonicalizationAccepted: false,
-    };
-    render(
-      <CatalogDraftEditorWindow
-        initialDraft={initial}
-        initialRecovery={recovery}
-        onSaved={() => {}}
-        onClose={() => {}}
-      />,
-    );
-
-    expect((await yamlTextarea()).value).toBe(recovery.yamlText);
   });
 });

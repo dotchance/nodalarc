@@ -121,6 +121,20 @@ describe("useEditorWindows — buffered editing", () => {
     expect(result.current.editor.buffers[key]).toBeUndefined();
   });
 
+  it("a session gesture closes every window except the component draft", () => {
+    const { result, segmentId } = withSegment();
+    const segment = targetKey({ kind: "segment", id: segmentId });
+    const library = targetKey({ kind: "library" });
+    const catalog = targetKey({ kind: "catalog" });
+    act(() => result.current.editor.openEditor({ kind: "segment", id: segmentId }));
+    act(() => result.current.editor.openEditor({ kind: "catalog" }));
+    act(() => result.current.editor.openEditor({ kind: "library" }));
+    act(() => result.current.editor.closeSessionWindows());
+    expect(result.current.editor.isOpen(segment)).toBe(false);
+    expect(result.current.editor.isOpen(catalog)).toBe(false);
+    expect(result.current.editor.isOpen(library)).toBe(true);
+  });
+
   it("exposes a synchronous mutation fence for asynchronous backend commands", () => {
     const { result, segmentId } = withSegment();
     const target: EditorTarget = { kind: "segment", id: segmentId };

@@ -494,7 +494,6 @@ _GENERIC_CONFIGURATION_SCHEMA_REFS = {
     "ValidatedConfigurationJson",
     "ValidatedSessionJson",
 }
-_GENERIC_RUNTIME_SCHEMA_REFS = {"BuilderControlTree"}
 
 
 def _literal(value: Any) -> str:
@@ -596,165 +595,6 @@ def _render_object_schema(
     return lines
 
 
-def _runtime_descriptor(
-    schema: dict[str, Any],
-    definitions: dict[str, Any],
-    resolving_refs: frozenset[str] = frozenset(),
-) -> dict[str, Any]:
-    """Describe one backend application DTO's JSON runtime contract."""
-
-    if not schema:
-        return {"kind": "json"}
-    reference = schema.get("$ref")
-    if reference is not None:
-        name = reference.rsplit("/", 1)[-1]
-        if name in _GENERIC_RUNTIME_SCHEMA_REFS:
-            return {"kind": "json"}
-        if name in resolving_refs:
-            return {"kind": "json"}
-        return _runtime_descriptor(
-            definitions[name],
-            definitions,
-            resolving_refs | {name},
-        )
-
-    if "const" in schema:
-        return {"kind": "literal", "value": schema["const"]}
-    if "enum" in schema:
-        return {"kind": "enum", "values": schema["enum"]}
-
-    alternatives = schema.get("anyOf") or schema.get("oneOf")
-    if alternatives is not None:
-        return {
-            "kind": "union",
-            "options": [
-                _runtime_descriptor(option, definitions, resolving_refs) for option in alternatives
-            ],
-            "exclusive": "oneOf" in schema,
-        }
-
-    intersections = schema.get("allOf")
-    if intersections is not None:
-        return {
-            "kind": "intersection",
-            "options": [
-                _runtime_descriptor(option, definitions, resolving_refs) for option in intersections
-            ],
-        }
-
-    schema_type = schema.get("type")
-    if isinstance(schema_type, list):
-        return {
-            "kind": "union",
-            "options": [
-                _runtime_descriptor({**schema, "type": option}, definitions, resolving_refs)
-                for option in schema_type
-            ],
-            "exclusive": False,
-        }
-    if schema_type == "null":
-        return {"kind": "null"}
-    if schema_type == "boolean":
-        return {"kind": "boolean"}
-    if schema_type == "string":
-        descriptor: dict[str, Any] = {"kind": "string"}
-        for source, target in (
-            ("pattern", "pattern"),
-            ("minLength", "min_length"),
-            ("maxLength", "max_length"),
-        ):
-            if source in schema:
-                descriptor[target] = schema[source]
-        return descriptor
-    if schema_type in {"integer", "number"}:
-        descriptor = {"kind": schema_type}
-        for source, target in (
-            ("minimum", "minimum"),
-            ("maximum", "maximum"),
-            ("exclusiveMinimum", "exclusive_minimum"),
-            ("exclusiveMaximum", "exclusive_maximum"),
-            ("multipleOf", "multiple_of"),
-        ):
-            if source in schema:
-                descriptor[target] = schema[source]
-        return descriptor
-    if schema_type == "array":
-        prefix_items = schema.get("prefixItems")
-        if prefix_items is not None:
-            descriptor = {
-                "kind": "tuple",
-                "items": [
-                    _runtime_descriptor(item, definitions, resolving_refs) for item in prefix_items
-                ],
-                "rest": (
-                    False
-                    if schema.get("items") is False
-                    else _runtime_descriptor(schema.get("items", {}), definitions, resolving_refs)
-                ),
-            }
-        else:
-            descriptor = {
-                "kind": "array",
-                "items": _runtime_descriptor(schema.get("items", {}), definitions, resolving_refs),
-            }
-        for source, target in (
-            ("minItems", "min_items"),
-            ("maxItems", "max_items"),
-            ("uniqueItems", "unique"),
-        ):
-            if source in schema:
-                descriptor[target] = schema[source]
-        return descriptor
-    if schema_type == "object":
-        additional = schema.get("additionalProperties")
-        patterns = schema.get("patternProperties", {})
-        return {
-            "kind": "object",
-            "fields": {
-                name: _runtime_descriptor(field_schema, definitions, resolving_refs)
-                for name, field_schema in schema.get("properties", {}).items()
-            },
-            "additional": (
-                False
-                if additional is False
-                else _runtime_descriptor(
-                    additional if isinstance(additional, dict) else {},
-                    definitions,
-                    resolving_refs,
-                )
-            ),
-            **(
-                {
-                    "patterns": [
-                        {
-                            "pattern": pattern,
-                            "values": _runtime_descriptor(
-                                value_schema, definitions, resolving_refs
-                            ),
-                        }
-                        for pattern, value_schema in patterns.items()
-                    ]
-                }
-                if patterns
-                else {}
-            ),
-        }
-    raise ValueError(f"unsupported runtime descriptor schema: {schema!r}")
-
-
-def _render_runtime_descriptor(
-    name: str,
-    model: type[BaseModel],
-) -> list[str]:
-    schema = model.model_json_schema()
-    descriptor = _runtime_descriptor(schema, schema.get("$defs", {}))
-    encoded = json.dumps(descriptor, ensure_ascii=False, indent=2, separators=(",", ": "))
-    return [
-        "/** Runtime validator descriptor generated from this backend application DTO. */",
-        f"export const {name} = {encoded} as const satisfies BuilderVisualRuntimeDescriptor;",
-    ]
-
-
 def render() -> str:
     lines = [
         "// GENERATED FILE — DO NOT EDIT BY HAND.",
@@ -782,20 +622,6 @@ def render() -> str:
         "/** Workload binding reference resolved against the package source. */",
         "/** Path-free deployable source selected by the browser. */",
         "export type SessionSourceId = CatalogSessionSourceId;",
-        "/** Runtime validation descriptor for generated backend application DTOs. */",
-        "export type BuilderVisualRuntimeDescriptor =",
-        '  | { readonly kind: "json" }',
-        '  | { readonly kind: "literal"; readonly value: JsonValue }',
-        '  | { readonly kind: "enum"; readonly values: ReadonlyArray<JsonValue> }',
-        '  | { readonly kind: "null" }',
-        '  | { readonly kind: "boolean" }',
-        '  | { readonly kind: "string"; readonly pattern?: string; readonly min_length?: number; readonly max_length?: number }',
-        '  | { readonly kind: "integer" | "number"; readonly minimum?: number; readonly maximum?: number; readonly exclusive_minimum?: number; readonly exclusive_maximum?: number; readonly multiple_of?: number }',
-        '  | { readonly kind: "array"; readonly items: BuilderVisualRuntimeDescriptor; readonly min_items?: number; readonly max_items?: number; readonly unique?: boolean }',
-        '  | { readonly kind: "tuple"; readonly items: ReadonlyArray<BuilderVisualRuntimeDescriptor>; readonly rest: false | BuilderVisualRuntimeDescriptor; readonly min_items?: number; readonly max_items?: number; readonly unique?: boolean }',
-        '  | { readonly kind: "object"; readonly fields: Readonly<Record<string, BuilderVisualRuntimeDescriptor>>; readonly additional: false | BuilderVisualRuntimeDescriptor; readonly patterns?: ReadonlyArray<{ readonly pattern: string; readonly values: BuilderVisualRuntimeDescriptor }> }',
-        '  | { readonly kind: "union"; readonly options: ReadonlyArray<BuilderVisualRuntimeDescriptor>; readonly exclusive: boolean }',
-        '  | { readonly kind: "intersection"; readonly options: ReadonlyArray<BuilderVisualRuntimeDescriptor> };',
         "",
     ]
     for name, values in LITERAL_ALIASES:
@@ -832,24 +658,6 @@ def render() -> str:
         )
         lines.append("")
         emitted_names.add(model.__name__)
-    for name, model in (
-        (
-            "BUILDER_VISUAL_DRAFT_ENVELOPE_RUNTIME_DESCRIPTOR",
-            BuilderVisualDraftEnvelope,
-        ),
-        (
-            "CATALOG_COMPONENT_DRAFT_ENVELOPE_RUNTIME_DESCRIPTOR",
-            CatalogComponentDraftEnvelope,
-        ),
-        ("BUILDER_VISUAL_WORKSPACE_RUNTIME_DESCRIPTOR", BuilderVisualWorkspace),
-        ("BUILDER_VISUAL_SPACE_DRAFT_RUNTIME_DESCRIPTOR", BuilderVisualSpaceDraft),
-        ("BUILDER_VISUAL_GROUND_DRAFT_RUNTIME_DESCRIPTOR", BuilderVisualGroundDraft),
-        ("BUILDER_VISUAL_LINK_RULE_RUNTIME_DESCRIPTOR", BuilderVisualLinkRule),
-        ("BUILDER_VISUAL_ROUTING_DOMAIN_RUNTIME_DESCRIPTOR", BuilderVisualRoutingDomain),
-        ("BUILDER_VISUAL_ROUTING_BOUNDARY_RUNTIME_DESCRIPTOR", BuilderVisualRoutingBoundary),
-    ):
-        lines.extend(_render_runtime_descriptor(name, model))
-        lines.append("")
     return "\n".join(lines).rstrip() + "\n"
 
 

@@ -55,21 +55,6 @@ import type {
   SessionRef,
 } from "./generated/builderApi";
 
-function _recoveredDraftSummary(draft: BuilderVisualDraftEnvelope): CatalogDocumentSummary {
-  const ref = draft.source_ref ?? draft.target_ref;
-  const displayName = ref.split("/").pop()?.replace(/\.ya?ml$/, "") ?? "YAML draft";
-  const serialized = draft.session_yaml;
-  return {
-    ref,
-    family: "sessions",
-    namespace: ref.startsWith("user:") ? "user" : "nodalarc",
-    revision: draft.expected_session_revision ?? "browser-draft",
-    size_bytes: new TextEncoder().encode(serialized).byteLength,
-    display_name: displayName,
-    summary: "restored browser draft",
-  };
-}
-
 // --- Catalog store: one state per family, shared by every consumer. ---
 // Pickers, the library panel, and editors must all see the same list; a save
 // or delete anywhere refreshes everyone. Private per-hook copies were a
@@ -334,6 +319,29 @@ export function yamlBlocksGraphicalEditing(
     (buffer.dirty ||
       !buffer.applied ||
       (buffer.canonicalizationRequired && !buffer.canonicalizationAccepted))
+  );
+}
+
+/** Whether the open session draft holds work the user has not saved: it moved
+ *  past the revision it was last opened, created or saved at, its workspace
+ *  holds edits the backend has not accepted yet, or it holds unapplied window
+ *  or YAML edits. The Builder keeps no copy of such work. */
+export function draftHoldsUnsavedWork(input: {
+  draft: Pick<BuilderVisualDraftEnvelope, "target_ref" | "draft_revision"> | null;
+  clean: { targetRef: string; revision: number } | null;
+  twinMatchesDraft: boolean;
+  dirtyWindowCount: number;
+  yamlDirty: boolean;
+}): boolean {
+  const { draft, clean } = input;
+  if (draft === null) return false;
+  return (
+    clean === null ||
+    clean.targetRef !== draft.target_ref ||
+    clean.revision !== draft.draft_revision ||
+    !input.twinMatchesDraft ||
+    input.dirtyWindowCount > 0 ||
+    input.yamlDirty
   );
 }
 
@@ -617,30 +625,6 @@ export function useBuilderWorld() {
     settledDigestsRef.current = { document: null, dependency: null };
   }, []);
 
-  const adoptRecoveredStructuredDraft = useCallback((
-    draft: BuilderVisualDraftEnvelope,
-    recoveredYaml?: SessionYamlBufferState,
-  ) => {
-    beginEpoch();
-    setOpenedSession(draft.source_ref ? _recoveredDraftSummary(draft) : null);
-    setVisualDraft(draft);
-    setYamlBuffer(
-      recoveredYaml ?? {
-        text: draft.session_yaml,
-        appliedText: draft.session_yaml,
-        generation: 0,
-        dirty: false,
-        applied:
-          draft.projection_status === "applied" ||
-          draft.projection_status === "incomplete_authoring",
-        canonicalizationRequired: false,
-        canonicalizationAccepted: false,
-        issues: [],
-      },
-    );
-    resetCompileFacts();
-  }, [beginEpoch, resetCompileFacts, setVisualDraft, setYamlBuffer]);
-
   const adoptCompileResult = useCallback((result: BuilderVisualDraftAssemblyResult) => {
     const compile = result.compile_result;
     const issues = compile.issues ?? [];
@@ -660,23 +644,6 @@ export function useBuilderWorld() {
     };
     setResolveError(firstError ? { error: firstError.message } : null);
   }, [setVisualDraft]);
-
-  const compileCurrent = useCallback(async (): Promise<BuilderVisualDraftAssemblyResult> =>
-    enqueueWriter("compile", async (epoch) => {
-      const draft = visualDraftRef.current;
-      if (!draft) throw new Error("there is no session draft to compile");
-      try {
-        const result = await compileVisualDraft({ draft });
-        assertEpoch(epoch);
-        adoptCompileResult(result);
-        return result;
-      } catch (cause) {
-        assertEpoch(epoch);
-        resetCompileFacts();
-        setResolveError({ error: cause instanceof Error ? cause.message : String(cause) });
-        throw cause;
-      }
-    }), [adoptCompileResult, assertEpoch, enqueueWriter, resetCompileFacts]);
 
   const createDraft = useCallback(
     async (request: BuilderVisualDraftCreateRequest): Promise<BuilderVisualDraftEnvelope> => {
@@ -1184,8 +1151,6 @@ export function useBuilderWorld() {
     runVisualCommand,
     mutateControls,
     prepareRetarget,
-    compileCurrent,
-    adoptRecoveredStructuredDraft,
     captureCoordinator,
     captureIsCurrent,
     saveSession,

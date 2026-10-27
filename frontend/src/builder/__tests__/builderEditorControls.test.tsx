@@ -47,7 +47,11 @@ import {
   newWorkspace,
 } from "./fixtures/workspaceFixtures";
 import type { CatalogDocumentSummary, JsonValue } from "../generated/builderApi";
-import { canDeploy, yamlBlocksGraphicalEditing } from "../useBuilderWorld";
+import {
+  canDeploy,
+  draftHoldsUnsavedWork,
+  yamlBlocksGraphicalEditing,
+} from "../useBuilderWorld";
 import {
   appliedObjectForKey,
   bufferAppliedChanged,
@@ -665,6 +669,27 @@ describe("the YAML buffer locks graphical editing only around an open draft's te
       }),
     ).toBe(true);
     expect(yamlBlocksGraphicalEditing(true, { ...buffer, applied: true })).toBe(false);
+  });
+});
+
+describe("a gesture that replaces the draft asks first only when work would be lost", () => {
+  const draft = { target_ref: "user:sessions/s.yaml", draft_revision: 3 };
+  const clean = { targetRef: "user:sessions/s.yaml", revision: 3 };
+  const quiet = { twinMatchesDraft: true, dirtyWindowCount: 0, yamlDirty: false };
+
+  it("a draft as it was opened, created or saved holds no unsaved work", () => {
+    expect(draftHoldsUnsavedWork({ draft, clean, ...quiet })).toBe(false);
+    expect(draftHoldsUnsavedWork({ draft: null, clean: null, ...quiet })).toBe(false);
+  });
+
+  it("an accepted edit, an edit not yet accepted, an open edit or unapplied YAML is unsaved work", () => {
+    expect(draftHoldsUnsavedWork({ draft: { ...draft, draft_revision: 4 }, clean, ...quiet })).toBe(
+      true,
+    );
+    expect(draftHoldsUnsavedWork({ draft, clean, ...quiet, twinMatchesDraft: false })).toBe(true);
+    expect(draftHoldsUnsavedWork({ draft, clean, ...quiet, dirtyWindowCount: 1 })).toBe(true);
+    expect(draftHoldsUnsavedWork({ draft, clean, ...quiet, yamlDirty: true })).toBe(true);
+    expect(draftHoldsUnsavedWork({ draft, clean: null, ...quiet })).toBe(true);
   });
 });
 

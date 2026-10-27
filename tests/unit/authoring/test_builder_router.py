@@ -9,7 +9,10 @@ import yaml
 from fastapi import FastAPI
 from nodalarc.catalog_repository import CatalogScope
 from nodalarc.filesystem_catalog_repository import FilesystemCatalogRepository
-from nodalarc.models.builder_catalog_api import CatalogOperationRefusal
+from nodalarc.models.builder_catalog_api import (
+    CatalogComponentDraftEnvelope,
+    CatalogOperationRefusal,
+)
 from vs_api.builder_catalog_service import (
     BuilderCatalogAuthoringService,
     CatalogAuthoringError,
@@ -29,6 +32,7 @@ from vs_api.catalog_context import CatalogContext
 
 from tests.asgi_client import ASGITestClient as TestClient
 from tests.builder_world_fixtures import preview_from_resolution
+from tests.support.builder_controls import scalar_at
 
 ROOT = Path(__file__).resolve().parents[3]
 SHIPPED_ROOT = ROOT / "catalog/nodalarc"
@@ -217,15 +221,19 @@ def test_router_executes_every_typed_authoring_operation(catalog_context: Catalo
     )
     assert opened_draft.status_code == 200, opened_draft.text
     opened = opened_draft.json()
+    notes = scalar_at(
+        CatalogComponentDraftEnvelope.model_validate(opened).control_tree.root,
+        "/terminal/notes",
+    )
     patched_draft = client.post(
-        "/api/v1/builder/catalog/draft/patch",
+        "/api/v1/builder/catalog/draft/controls/mutate",
         json={
             "draft": opened,
             "expected_draft_revision": opened["draft_revision"],
             "commands": [
                 {
-                    "operation": "replace",
-                    "pointer": "/terminal/notes",
+                    "operation": "set_scalar",
+                    "control_id": notes.control_id,
                     "value": "Patched by the backend",
                 }
             ],

@@ -604,12 +604,8 @@ class BuilderCatalogAuthoringService:
                     for identifier, label, description in MOUNT_ROLE_LABELS
                 ),
                 link_media=tuple(
-                    BuilderVisualLinkMediumMetadata(
-                        id=identifier,
-                        label=label,
-                        signal_seed=signal_seed,
-                    )
-                    for identifier, label, signal_seed in LINK_MEDIUM_LABELS
+                    BuilderVisualLinkMediumMetadata(id=identifier, label=label)
+                    for identifier, label in LINK_MEDIUM_LABELS
                 ),
                 forwarding_classes=tuple(
                     BuilderVisualForwardingClassMetadata(id=identifier, label=label)

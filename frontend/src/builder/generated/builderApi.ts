@@ -61,7 +61,6 @@ export type BuilderVisualTopologyMode = "visible_candidates" | "nearest_n";
 export type BuilderVisualDraftCommandOperation = "place_space_reference" | "place_ground_reference" | "add_generated_space" | "set_space_population" | "author_inline_space_node" | "add_or_increment_node_terminal" | "set_node_terminal_role" | "add_node_ethernet_port" | "add_ground" | "add_ground_site_reference" | "set_ground_stamp_node" | "set_ground_site_node" | "add_ground_site_node" | "mint_ground_members" | "add_routing_domain" | "add_boundary" | "connect_segments" | "rederive_link" | "set_scheduling_preset";
 export type BuilderVisualDraftAffectedKind = "space" | "ground" | "routing_domain" | "boundary" | "link" | "ground_member";
 export type CatalogComponentFamily = "bodies" | "terminals" | "payloads" | "orbits" | "nodes" | "sites" | "site-sets" | "constellations" | "space-node-sets";
-export type CatalogDraftPatchOperation = "add" | "replace" | "remove";
 export type CatalogDraftIssueStage = "structural" | "reference" | "runtime_support";
 export type TransitionOperationState = "reserved" | "collecting" | "uploading" | "verifying" | "switching" | "succeeded" | "failed" | "cancelled";
 export type TransitionOperationSourceKind = "catalog_session";
@@ -1056,7 +1055,6 @@ export interface BuilderVisualMountRoleMetadata {
 export interface BuilderVisualLinkMediumMetadata {
   readonly id: "rf" | "optical";
   readonly label: string;
-  readonly signal_seed: Readonly<Record<string, JsonValue>>;
 }
 
 /** Presentation facts for one canonical node forwarding class. */
@@ -1432,20 +1430,6 @@ export interface CatalogDraftNewRequest {
 export interface CatalogDraftOpenRequest {
   readonly source_ref: CatalogRef;
   readonly target_ref?: CatalogRef | null;
-}
-
-/** One bounded JSON-pointer mutation applied to a full backend draft document. */
-export interface CatalogDraftPatchCommand {
-  readonly operation: CatalogDraftPatchOperation;
-  readonly pointer: string;
-  readonly value?: JsonValue | null;
-}
-
-/** Apply an ordered, revision-fenced mutation set to one component draft. */
-export interface CatalogDraftPatchRequest {
-  readonly draft: CatalogComponentDraftEnvelope;
-  readonly expected_draft_revision: number;
-  readonly commands: ReadonlyArray<CatalogDraftPatchCommand>;
 }
 
 /** Apply canonical graphical commands under one component draft revision. */

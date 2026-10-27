@@ -14,8 +14,8 @@ export const AUTHORING_FACTS: BuilderVisualAuthoringFacts = {
     { id: "backbone", label: "backbone", description: "trunk between relay tiers" },
   ],
   link_media: [
-    { id: "rf", label: "RF", signal_seed: { band: "", frequency_hz: 0 } },
-    { id: "optical", label: "optical", signal_seed: { wavelength_nm: 0 } },
+    { id: "rf", label: "RF" },
+    { id: "optical", label: "optical" },
   ],
   forwarding_classes: [
     { id: "routed", label: "routed" },

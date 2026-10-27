@@ -19,13 +19,17 @@ from nodalarc.models.builder_catalog_api import (
     CatalogDraftAddSiteNodeRequest,
     CatalogDraftApplyYamlRequest,
     CatalogDraftCompileRequest,
+    CatalogDraftControlMutationRequest,
     CatalogDraftNewRequest,
     CatalogDraftOpenRequest,
-    CatalogDraftPatchCommand,
-    CatalogDraftPatchRequest,
     CatalogDraftSaveRequest,
     CatalogGetRequest,
     CatalogMutationResult,
+)
+from nodalarc.models.builder_controls_api import (
+    BuilderChoiceControl,
+    BuilderSelectChoiceCommand,
+    BuilderSetScalarCommand,
 )
 from pydantic import ValidationError
 from vs_api import builder_catalog_draft as draft_module
@@ -33,6 +37,8 @@ from vs_api.builder_catalog_draft import BuilderCatalogDraftService
 from vs_api.builder_catalog_service import BuilderCatalogAuthoringService, CatalogAuthoringError
 from vs_api.builder_router import BuilderRouterServices, create_builder_router
 from vs_api.catalog_context import CatalogContext
+
+from tests.support.builder_controls import control_at, scalar_at
 
 ROOT = Path(__file__).resolve().parents[3]
 SHIPPED_ROOT = ROOT / "catalog/nodalarc"
@@ -75,6 +81,31 @@ def _store(
 def _first_shipped_ref(family: str) -> CatalogRef:
     source = sorted((SHIPPED_ROOT / family).rglob("*.yaml"))[0]
     return CatalogRef(f"nodalarc:{source.relative_to(SHIPPED_ROOT).as_posix()}")
+
+
+def _set_scalar(
+    drafts: BuilderCatalogDraftService,
+    draft: CatalogComponentDraftEnvelope,
+    pointer: str,
+    value: str,
+    *,
+    expected_revision: int | None = None,
+) -> CatalogComponentDraftEnvelope:
+    """Edit one field the way the Library's field editor does."""
+    control = scalar_at(draft.control_tree.root, pointer)
+    return drafts.mutate_controls(
+        CatalogDraftControlMutationRequest(
+            draft=draft,
+            expected_draft_revision=(
+                draft.draft_revision if expected_revision is None else expected_revision
+            ),
+            commands=(
+                BuilderSetScalarCommand(
+                    operation="set_scalar", control_id=control.control_id, value=value
+                ),
+            ),
+        )
+    )
 
 
 def _payload_source(
@@ -236,7 +267,7 @@ def test_component_forks_cannot_replace_an_existing_user_target(
     assert authoring.get_catalog(CatalogGetRequest(ref=target_ref)).revision == target.revision
 
 
-def test_specialized_patch_changes_only_the_selected_field_on_an_advanced_site(
+def test_a_control_edit_changes_only_the_selected_field_on_an_advanced_site(
     tmp_path: Path,
 ) -> None:
     drafts, authoring, _ = _services(tmp_path)
@@ -246,19 +277,7 @@ def test_specialized_patch_changes_only_the_selected_field_on_an_advanced_site(
     expected = copy.deepcopy(source)
     expected["site"]["display_name"] = "Suva authoring copy"
 
-    patched = drafts.patch(
-        CatalogDraftPatchRequest(
-            draft=opened,
-            expected_draft_revision=0,
-            commands=(
-                CatalogDraftPatchCommand(
-                    operation="replace",
-                    pointer="/site/display_name",
-                    value="Suva authoring copy",
-                ),
-            ),
-        )
-    )
+    patched = _set_scalar(drafts, opened, "/site/display_name", "Suva authoring copy")
     saved = drafts.save(
         CatalogDraftSaveRequest(
             draft=patched,
@@ -419,61 +438,14 @@ def test_default_shipped_customization_never_overwrites_an_existing_user_object(
     assert raised.value.code == "catalog_authoring.conflict"
 
 
-@pytest.mark.parametrize(
-    "pointer",
-    [
-        "/terminal/id",
-        "/terminal/__proto__/polluted",
-        "/terminal/../notes",
-        "/terminal/constructor/prototype",
-        "/other/notes",
-    ],
-)
-def test_patch_rejects_identity_family_prototype_and_traversal_changes(
-    tmp_path: Path,
-    pointer: str,
-) -> None:
-    drafts, _, _ = _services(tmp_path)
-    opened = drafts.open(CatalogDraftOpenRequest(source_ref=_first_shipped_ref("terminals")))
-
-    with pytest.raises(CatalogAuthoringError) as raised:
-        drafts.patch(
-            CatalogDraftPatchRequest(
-                draft=opened,
-                expected_draft_revision=0,
-                commands=(
-                    CatalogDraftPatchCommand(
-                        operation="add" if pointer != "/terminal/id" else "replace",
-                        pointer=pointer,
-                        value="forbidden",
-                    ),
-                ),
-            )
-        )
-
-    assert raised.value.code == "catalog_authoring.invalid_patch"
-
-
-def test_patch_compile_and_save_reject_stale_draft_or_catalog_revisions(
+def test_control_edit_compile_and_save_reject_stale_draft_or_catalog_revisions(
     tmp_path: Path,
 ) -> None:
     drafts, authoring, context = _services(tmp_path)
     opened = drafts.open(CatalogDraftOpenRequest(source_ref=_first_shipped_ref("terminals")))
 
     with pytest.raises(CatalogAuthoringError) as stale_draft:
-        drafts.patch(
-            CatalogDraftPatchRequest(
-                draft=opened,
-                expected_draft_revision=1,
-                commands=(
-                    CatalogDraftPatchCommand(
-                        operation="add",
-                        pointer="/terminal/notes",
-                        value="stale",
-                    ),
-                ),
-            )
-        )
+        _set_scalar(drafts, opened, "/terminal/display_name", "stale", expected_revision=1)
     assert stale_draft.value.code == "catalog_authoring.stale_revision"
 
     _store(
@@ -560,15 +532,18 @@ def test_compile_separates_structural_saveability_from_runtime_support(
 ) -> None:
     drafts, _, _ = _services(tmp_path)
     opened = drafts.open(CatalogDraftOpenRequest(source_ref=_first_shipped_ref("orbits")))
-    patched = drafts.patch(
-        CatalogDraftPatchRequest(
+    propagator = control_at(opened.control_tree.root, "/orbit/propagator")
+    assert isinstance(propagator, BuilderChoiceControl)
+    crtbp = next(branch for branch in propagator.branches if branch.label == "Crtbp")
+    patched = drafts.mutate_controls(
+        CatalogDraftControlMutationRequest(
             draft=opened,
-            expected_draft_revision=0,
+            expected_draft_revision=opened.draft_revision,
             commands=(
-                CatalogDraftPatchCommand(
-                    operation="replace",
-                    pointer="/orbit/propagator",
-                    value="crtbp",
+                BuilderSelectChoiceCommand(
+                    operation="select_choice",
+                    control_id=propagator.control_id,
+                    branch_id=crtbp.branch_id,
                 ),
             ),
         )
@@ -593,18 +568,8 @@ def test_compile_blocks_dangling_component_reference_before_save(
     drafts, _, _ = _services(tmp_path)
     opened = drafts.open(CatalogDraftOpenRequest(source_ref=_first_shipped_ref("nodes")))
     assert opened.document["node"]["terminals"]
-    patched = drafts.patch(
-        CatalogDraftPatchRequest(
-            draft=opened,
-            expected_draft_revision=opened.draft_revision,
-            commands=(
-                CatalogDraftPatchCommand(
-                    operation="replace",
-                    pointer="/node/terminals/0/terminal",
-                    value="user:terminals/does-not-exist.yaml",
-                ),
-            ),
-        )
+    patched = _set_scalar(
+        drafts, opened, "/node/terminals/0/terminal", "user:terminals/does-not-exist.yaml"
     )
 
     compiled = drafts.compile(
@@ -618,28 +583,6 @@ def test_compile_blocks_dangling_component_reference_before_save(
     assert compiled.runtime_supported is False
     assert [issue.stage for issue in compiled.issues] == ["reference"]
     assert compiled.issues[0].code.endswith("dangling_reference")
-
-
-def test_patch_commands_round_trip_through_strict_json_transport_models(
-    tmp_path: Path,
-) -> None:
-    drafts, _, _ = _services(tmp_path)
-    opened = drafts.open(CatalogDraftOpenRequest(source_ref=_first_shipped_ref("terminals")))
-    request: dict[str, Any] = {
-        "draft": opened.model_dump(mode="json"),
-        "expected_draft_revision": 0,
-        "commands": [{"operation": "add", "pointer": "/terminal/notes", "value": None}],
-    }
-
-    validated = CatalogDraftPatchRequest.model_validate(request)
-    assert validated.commands[0].value is None
-
-    with pytest.raises(ValidationError, match="remove commands"):
-        CatalogDraftPatchCommand(
-            operation="remove",
-            pointer="/terminal/notes",
-            value=None,
-        )
 
 
 def test_yaml_buffer_is_parsed_identity_checked_and_revisioned_by_backend(
@@ -739,10 +682,6 @@ def test_openapi_exposes_typed_scope_free_component_draft_routes(
         ),
         "/api/v1/builder/catalog/draft/open": (
             "CatalogDraftOpenRequest",
-            "CatalogComponentDraftEnvelope",
-        ),
-        "/api/v1/builder/catalog/draft/patch": (
-            "CatalogDraftPatchRequest",
             "CatalogComponentDraftEnvelope",
         ),
         "/api/v1/builder/catalog/draft/controls/mutate": (

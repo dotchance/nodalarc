@@ -2083,7 +2083,6 @@ export function BuilderView({
               key={catalogDraft.target_ref}
               initialDraft={catalogDraft}
               initialRecovery={catalogDraftRecovery}
-              metadata={metadata}
               onSaved={async (result) => {
                 setCatalogDraft(result.draft);
                 handleCatalogDraftRecovery(null);

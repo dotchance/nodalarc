@@ -68,6 +68,23 @@ class _FieldContext:
     field_name: str
 
 
+def _numbers_by_value(value: object) -> object:
+    """``value`` with every JSON number written as its value.
+
+    A client's JSON writes the float 450000.0 as 450000; both name the same
+    document, so control ids derived from the document must not tell them apart.
+    """
+    if isinstance(value, bool) or value is None or isinstance(value, str):
+        return value
+    if isinstance(value, int | float):
+        return float(value)
+    if isinstance(value, Mapping):
+        return {key: _numbers_by_value(item) for key, item in value.items()}
+    if isinstance(value, list | tuple):
+        return [_numbers_by_value(item) for item in value]
+    return value
+
+
 class _ControlFactory:
     def __init__(
         self,
@@ -84,7 +101,7 @@ class _ControlFactory:
             else document
         )
         serialized = json.dumps(
-            canonical_json,
+            _numbers_by_value(canonical_json),
             ensure_ascii=True,
             separators=(",", ":"),
             sort_keys=True,
@@ -1096,7 +1113,27 @@ def _select_union_branch(branches: tuple[object, ...], value: object) -> int | N
         shaped = _select_model_branch_by_shape(branches, value)
         if shaped is not None:
             return shaped
+    if isinstance(value, list):
+        return _select_sequence_branch_by_shape(branches, value)
     return None
+
+
+def _select_sequence_branch_by_shape(
+    branches: tuple[object, ...],
+    value: list[object],
+) -> int | None:
+    """Retain the sequence branch a JSON list belongs to.
+
+    Strict validation refuses a JSON list for a tuple branch, so a list inside a
+    union selects the union's one sequence branch.
+    """
+
+    sequences = [
+        index
+        for index, branch in enumerate(branches)
+        if get_origin(_split_annotated(branch)[0]) in (tuple, list)
+    ]
+    return sequences[0] if len(sequences) == 1 else None
 
 
 def _select_model_branch_by_shape(

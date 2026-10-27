@@ -17,8 +17,11 @@ from pathlib import Path
 from typing import Any
 
 import httpx
+from nodalarc.models.builder_catalog_api import CatalogComponentDraftEnvelope
 from websockets.exceptions import ConnectionClosed
 from websockets.sync.client import ClientConnection, connect
+
+from tests.support.builder_controls import scalar_at
 
 PROJECT_ROOT = Path(__file__).resolve().parents[4]
 
@@ -301,31 +304,47 @@ class Operator:
         """Fork one catalog object into the user catalog with some fields replaced.
 
         `changes` maps a JSON pointer in the object to its new value. These are the calls the
-        Builder library makes: open a draft on the fork target, edit it, save it.
+        Builder library makes: open a draft on the fork target, edit each field in its field
+        editor, validate, save.
         """
         self._save_catalog_draft({"source_ref": source_ref, "target_ref": target_ref}, changes)
 
     def edit_catalog_object(self, ref: str, changes: dict[str, Any]) -> None:
-        """Replace some fields of one object of the user catalog, as the Builder library does."""
-        self._save_catalog_draft({"source_ref": ref}, changes)
+        """Replace some fields of one object of the user catalog, as the Builder library does:
+        open a draft on the object, edit each field in its field editor, validate, save."""
+        self._save_catalog_draft({"source_ref": ref, "target_ref": ref}, changes)
 
     def _save_catalog_draft(self, opening: dict[str, str], changes: dict[str, Any]) -> None:
         draft = self.post("/api/v1/builder/catalog/draft/open", opening)
+        tree = CatalogComponentDraftEnvelope.model_validate(draft).control_tree.root
         draft = self.post(
-            "/api/v1/builder/catalog/draft/patch",
+            "/api/v1/builder/catalog/draft/controls/mutate",
             {
                 "draft": draft,
                 "expected_draft_revision": draft["draft_revision"],
                 "commands": [
-                    {"operation": "replace", "pointer": pointer, "value": value}
+                    {
+                        "operation": "set_scalar",
+                        "control_id": scalar_at(tree, pointer).control_id,
+                        "value": value,
+                    }
                     for pointer, value in changes.items()
                 ],
             },
         )
-        assert not draft["issues"], f"the draft of {opening} has issues: {draft['issues']}"
+        compiled = self.post(
+            "/api/v1/builder/catalog/draft/compile",
+            {"draft": draft, "expected_draft_revision": draft["draft_revision"]},
+        )
+        assert compiled["save_allowed"], (
+            f"the draft of {opening} cannot be saved: {compiled['issues']}"
+        )
         self.post(
             "/api/v1/builder/catalog/draft/save",
-            {"draft": draft, "expected_draft_revision": draft["draft_revision"]},
+            {
+                "draft": compiled["draft"],
+                "expected_draft_revision": compiled["draft"]["draft_revision"],
+            },
         )
 
     def delete_user_object(self, ref: str) -> None:

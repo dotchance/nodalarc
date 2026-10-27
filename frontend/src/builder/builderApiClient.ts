@@ -38,7 +38,6 @@ import type {
   CatalogDraftControlMutationRequest,
   CatalogDraftNewRequest,
   CatalogDraftOpenRequest,
-  CatalogDraftPatchRequest,
   CatalogDraftSaveRequest,
   CatalogDraftSaveResult,
   CatalogGetRequest,
@@ -121,12 +120,6 @@ export function openCatalogDraft(
   input: CatalogDraftOpenRequest,
 ): Promise<CatalogComponentDraftEnvelope> {
   return request("/catalog/draft/open", input);
-}
-
-export function patchCatalogDraft(
-  input: CatalogDraftPatchRequest,
-): Promise<CatalogComponentDraftEnvelope> {
-  return request("/catalog/draft/patch", input);
 }
 
 export function mutateCatalogDraftControls(

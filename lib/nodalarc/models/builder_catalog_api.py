@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import PurePosixPath
 from typing import Literal, get_args
 
-from pydantic import BaseModel, ConfigDict, Field, JsonValue, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from nodalarc.catalog_refs import (
     BodyRef,
@@ -73,7 +73,6 @@ CatalogComponentFamily = Literal[
     "constellations",
     "space-node-sets",
 ]
-CatalogDraftPatchOperation = Literal["add", "replace", "remove"]
 CatalogDraftIssueStage = Literal["structural", "reference", "runtime_support"]
 CatalogDraftBlockedOperation = Literal["save", "deploy"]
 
@@ -135,7 +134,6 @@ class BuilderVisualLinkMediumMetadata(_CatalogApplicationModel):
 
     id: TerminalMedium
     label: str = Field(min_length=1, max_length=80)
-    signal_seed: JsonDocument
 
 
 class BuilderVisualForwardingClassMetadata(_CatalogApplicationModel):
@@ -664,36 +662,6 @@ class CatalogDraftOpenRequest(_CatalogApplicationModel):
             if target.family != source.family:
                 raise ValueError("component draft source and target families must match")
         return self
-
-
-class CatalogDraftPatchCommand(_CatalogApplicationModel):
-    """One bounded JSON-pointer mutation applied to a full backend draft document."""
-
-    operation: CatalogDraftPatchOperation
-    pointer: str = Field(min_length=2, max_length=2048)
-    value: JsonValue | None = None
-
-    @model_validator(mode="after")
-    def _value_presence_matches_operation(self) -> CatalogDraftPatchCommand:
-        supplied = "value" in self.model_fields_set
-        if self.operation == "remove" and supplied:
-            raise ValueError("remove commands must not include value")
-        if self.operation != "remove" and not supplied:
-            raise ValueError("add and replace commands require value")
-        return self
-
-
-class CatalogDraftPatchRequest(_CatalogApplicationModel):
-    """Apply an ordered, revision-fenced mutation set to one component draft."""
-
-    draft: CatalogComponentDraftEnvelope
-    expected_draft_revision: int = Field(ge=0)
-    commands: tuple[CatalogDraftPatchCommand, ...] = Field(min_length=1, max_length=64)
-
-    @field_validator("commands", mode="before")
-    @classmethod
-    def _accept_json_commands(cls, value: object) -> object:
-        return tuple(value) if isinstance(value, list) else value
 
 
 class CatalogDraftControlMutationRequest(_CatalogApplicationModel):

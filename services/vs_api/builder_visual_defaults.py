@@ -48,9 +48,9 @@ MOUNT_ROLE_LABELS: tuple[tuple[MountRole, str, str], ...] = (
     ("crosslink", "crosslink", "link between constellations"),
     ("backbone", "backbone", "trunk between relay tiers"),
 )
-LINK_MEDIUM_LABELS: tuple[tuple[TerminalMedium, str, JsonDocument], ...] = (
-    ("rf", "RF", {"band": "", "frequency_hz": 0}),
-    ("optical", "optical", {"wavelength_nm": 0}),
+LINK_MEDIUM_LABELS: tuple[tuple[TerminalMedium, str], ...] = (
+    ("rf", "RF"),
+    ("optical", "optical"),
 )
 FORWARDING_CLASS_LABELS: tuple[tuple[ForwardingClass, str], ...] = (
     ("routed", "routed"),

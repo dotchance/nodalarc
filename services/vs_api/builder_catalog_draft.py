@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import copy
-import re
 from dataclasses import dataclass
 from typing import Any, NoReturn, cast
 
@@ -41,24 +40,13 @@ from nodalarc.models.builder_catalog_api import (
     CatalogDraftIssue,
     CatalogDraftNewRequest,
     CatalogDraftOpenRequest,
-    CatalogDraftPatchCommand,
-    CatalogDraftPatchRequest,
     CatalogDraftSaveRequest,
     CatalogDraftSaveResult,
     CatalogOperationRefusal,
 )
 from nodalarc.models.catalog import (
-    BodyFixedFrame,
-    EthernetPort,
     Node,
-    Site,
-    SiteLocation,
-    SiteNode,
-    SiteSet,
     Terminal,
-    TerminalInstallation,
-    TerminalLimits,
-    TerminalMount,
 )
 from nodalarc.runtime_support import RuntimeSupport, UnsupportedFeature
 from pydantic import TypeAdapter, ValidationError
@@ -78,42 +66,9 @@ from .catalog_context import CatalogContext
 
 _MAX_POINTER_DEPTH = 32
 _FORBIDDEN_POINTER_TOKENS = frozenset({".", "..", "__proto__", "constructor", "prototype"})
-_ARRAY_INDEX = re.compile(r"^(?:0|[1-9][0-9]*)$")
 
 
 _JSON_DOCUMENT = TypeAdapter(JsonDocument)
-
-_SPECIALIZED_CATALOG_FIELDS = frozenset(
-    {
-        (Terminal, "display_name"),
-        (Terminal, "medium"),
-        (Terminal, "signal"),
-        (Terminal, "bandwidth_mbps"),
-        (Terminal, "tracking_capacity"),
-        (Terminal, "max_range_km"),
-        (Terminal, "reference"),
-        (TerminalLimits, "elevation_deg"),
-        (TerminalLimits, "max_tracking_rate_deg_s"),
-        (Node, "display_name"),
-        (Node, "forwarding"),
-        (Node, "reference"),
-        (TerminalMount, "role"),
-        (TerminalMount, "terminal"),
-        (TerminalMount, "count"),
-        (EthernetPort, "id"),
-        (Site, "display_name"),
-        (Site, "tags"),
-        (BodyFixedFrame, "body"),
-        (SiteLocation, "lat_deg"),
-        (SiteLocation, "lon_deg"),
-        (SiteLocation, "alt_m"),
-        (SiteNode, "node"),
-        (TerminalInstallation, "installed_count"),
-        (SiteSet, "display_name"),
-        (SiteSet, "sites"),
-        (SiteSet, "reference"),
-    }
-)
 
 
 def _wrapper(family: CatalogComponentFamily) -> str:
@@ -190,91 +145,6 @@ def _decode_pointer(value: str) -> tuple[str, ...]:
             )
         tokens.append(token)
     return tuple(tokens)
-
-
-def _array_index(token: str, *, length: int, allow_end: bool) -> int:
-    if not _ARRAY_INDEX.fullmatch(token):
-        _refuse(
-            "catalog_authoring.invalid_patch",
-            f"Array pointer token {token!r} is not a canonical non-negative index",
-        )
-    index = int(token)
-    maximum = length if allow_end else length - 1
-    if index > maximum:
-        _refuse(
-            "catalog_authoring.invalid_patch",
-            f"Array pointer index {index} is outside the current draft",
-        )
-    return index
-
-
-def _apply_command(document: JsonDocument, command: CatalogDraftPatchCommand) -> None:
-    tokens = _decode_pointer(command.pointer)
-    current: Any = document
-    for token in tokens[:-1]:
-        if isinstance(current, dict):
-            if token not in current:
-                _refuse(
-                    "catalog_authoring.invalid_patch",
-                    f"JSON pointer parent {command.pointer!r} does not exist",
-                )
-            current = current[token]
-        elif isinstance(current, list):
-            current = current[_array_index(token, length=len(current), allow_end=False)]
-        else:
-            _refuse(
-                "catalog_authoring.invalid_patch",
-                f"JSON pointer parent {command.pointer!r} is not a container",
-            )
-
-    final = tokens[-1]
-    if isinstance(current, dict):
-        exists = final in current
-        if command.operation == "add":
-            if exists:
-                _refuse(
-                    "catalog_authoring.invalid_patch",
-                    f"Add target {command.pointer!r} already exists",
-                )
-            current[final] = copy.deepcopy(command.value)
-        elif command.operation == "replace":
-            if not exists:
-                _refuse(
-                    "catalog_authoring.invalid_patch",
-                    f"Replace target {command.pointer!r} does not exist",
-                )
-            current[final] = copy.deepcopy(command.value)
-        else:
-            if not exists:
-                _refuse(
-                    "catalog_authoring.invalid_patch",
-                    f"Remove target {command.pointer!r} does not exist",
-                )
-            del current[final]
-        return
-
-    if not isinstance(current, list):
-        _refuse(
-            "catalog_authoring.invalid_patch",
-            f"JSON pointer target {command.pointer!r} is not inside a container",
-        )
-    if command.operation == "add":
-        if final == "-":
-            current.append(copy.deepcopy(command.value))
-            return
-        index = _array_index(final, length=len(current), allow_end=True)
-        current.insert(index, copy.deepcopy(command.value))
-        return
-    if final == "-":
-        _refuse(
-            "catalog_authoring.invalid_patch",
-            "The '-' array token is accepted only for add commands",
-        )
-    index = _array_index(final, length=len(current), allow_end=False)
-    if command.operation == "replace":
-        current[index] = copy.deepcopy(command.value)
-    else:
-        current.pop(index)
 
 
 def _runtime_features(
@@ -503,10 +373,7 @@ def _control_build(
         document,
         projection_revision=draft_revision,
         root_label=f"{spec.wrapper.replace('_', ' ').title()} component",
-        specialized_fields={
-            *(_SPECIALIZED_CATALOG_FIELDS),
-            (spec.model_type, "id"),
-        },
+        specialized_fields={(spec.model_type, "id")},
     )
 
 
@@ -756,32 +623,6 @@ class BuilderCatalogDraftService:
             source_ref=request.source_ref,
             expected_source_revision=str(source.revision),
             expected_target_revision=target_revision,
-            document=document,
-        )
-
-    def patch(self, request: CatalogDraftPatchRequest) -> CatalogComponentDraftEnvelope:
-        if not isinstance(request, CatalogDraftPatchRequest):
-            raise TypeError("request must be a CatalogDraftPatchRequest")
-        self._assert_draft_revision(request.draft, request.expected_draft_revision)
-        self._assert_catalog_revisions(request.draft, _snapshot(self._context))
-        wrapper = _wrapper(request.draft.family)
-        document = copy.deepcopy(request.draft.document)
-        for command in request.commands:
-            tokens = _decode_pointer(command.pointer)
-            if tokens[0] != wrapper or len(tokens) == 1 or tokens[1] == "id":
-                _refuse(
-                    "catalog_authoring.invalid_patch",
-                    "Component patches cannot change the family wrapper or object identity",
-                    ref=request.draft.target_ref,
-                )
-            _apply_command(document, command)
-        return _envelope(
-            draft_revision=request.draft.draft_revision + 1,
-            family=request.draft.family,
-            target_ref=request.draft.target_ref,
-            source_ref=request.draft.source_ref,
-            expected_source_revision=request.draft.expected_source_revision,
-            expected_target_revision=request.draft.expected_target_revision,
             document=document,
         )
 

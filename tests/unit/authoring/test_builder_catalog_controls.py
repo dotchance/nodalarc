@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import json
 from pathlib import Path
 from typing import get_args
 
@@ -10,6 +11,7 @@ from nodalarc.catalog_registry import CATALOG_FAMILY_REGISTRY
 from nodalarc.catalog_repository import CatalogScope
 from nodalarc.filesystem_catalog_repository import FilesystemCatalogRepository
 from nodalarc.models.builder_catalog_api import (
+    CatalogComponentDraftEnvelope,
     CatalogComponentFamily,
     CatalogDraftControlMutationRequest,
     CatalogDraftNewRequest,
@@ -19,7 +21,6 @@ from nodalarc.models.builder_controls_api import (
     BuilderChoiceControl,
     BuilderControl,
     BuilderInsertItemCommand,
-    BuilderMapControl,
     BuilderObjectControl,
     BuilderScalarControl,
     BuilderSelectChoiceCommand,
@@ -31,6 +32,7 @@ from vs_api.builder_catalog_service import CatalogAuthoringError
 from vs_api.builder_control_tree import build_model_control_tree
 from vs_api.catalog_context import CatalogContext
 
+from tests.support.builder_controls import as_browser_sends, control_at, walk_controls
 from tests.support.builder_model_coverage import (
     BuilderGraphicalCoverageRecorder,
     assert_complete_builder_graphical_coverage,
@@ -57,32 +59,6 @@ def _service(tmp_path: Path) -> BuilderCatalogDraftService:
 def _first_shipped_ref(family: str) -> CatalogRef:
     source = sorted((SHIPPED_ROOT / family).rglob("*.yaml"))[0]
     return CatalogRef(f"nodalarc:{source.relative_to(SHIPPED_ROOT).as_posix()}")
-
-
-def _walk_controls(control: BuilderControl):
-    yield control
-    if isinstance(control, BuilderObjectControl):
-        for field in control.fields:
-            yield from _walk_controls(field.control)
-    elif isinstance(control, BuilderChoiceControl):
-        for branch in control.branches:
-            if branch.control is not None:
-                yield from _walk_controls(branch.control)
-    elif isinstance(control, BuilderSequenceControl):
-        for item in control.items:
-            yield from _walk_controls(item.control)
-        if control.add_item_control is not None:
-            yield from _walk_controls(control.add_item_control)
-    elif isinstance(control, BuilderMapControl):
-        for entry in control.entries:
-            yield from _walk_controls(entry.key)
-            yield from _walk_controls(entry.value)
-        yield from _walk_controls(control.add_key_control)
-        yield from _walk_controls(control.add_value_control)
-
-
-def _control_at(root: BuilderControl, pointer: str) -> BuilderControl:
-    return next(control for control in _walk_controls(root) if control.json_pointer == pointer)
 
 
 def test_every_catalog_family_model_graph_has_exact_graphical_coverage() -> None:
@@ -116,7 +92,7 @@ def test_component_controls_mutate_one_field_and_preserve_all_siblings(
     service = _service(tmp_path)
     opened = service.open(CatalogDraftOpenRequest(source_ref=_first_shipped_ref("bodies")))
     original = copy.deepcopy(opened.document)
-    display_name = _control_at(opened.control_tree.root, "/body/display_name")
+    display_name = control_at(opened.control_tree.root, "/body/display_name")
     assert isinstance(display_name, BuilderScalarControl)
 
     updated = service.mutate_controls(
@@ -170,7 +146,7 @@ def test_component_controls_mutate_one_field_and_preserve_all_siblings(
                 commands=(
                     BuilderSetScalarCommand(
                         operation="set_scalar",
-                        control_id=_control_at(
+                        control_id=control_at(
                             updated.control_tree.root,
                             "/body/display_name",
                         ).control_id,
@@ -182,61 +158,92 @@ def test_component_controls_mutate_one_field_and_preserve_all_siblings(
     assert tampered.value.code == "catalog_authoring.invalid_graph"
 
 
-def test_specialized_markers_hide_only_fields_fully_owned_by_specialized_forms(
+def _json_pointers(value: object, pointer: str = "") -> list[str]:
+    pointers = [pointer]
+    if isinstance(value, dict):
+        for key, item in value.items():
+            escaped = str(key).replace("~", "~0").replace("/", "~1")
+            pointers.extend(_json_pointers(item, f"{pointer}/{escaped}"))
+    elif isinstance(value, list):
+        for index, item in enumerate(value):
+            pointers.extend(_json_pointers(item, f"{pointer}/{index}"))
+    return pointers
+
+
+@pytest.mark.parametrize("family", get_args(CatalogComponentFamily))
+def test_component_controls_render_every_field_of_every_shipped_component(
     tmp_path: Path,
+    family: str,
 ) -> None:
+    # The Library edits components through the control tree alone, over the
+    # component's JSON document. Every value in a shipped component, those in
+    # union-wrapped sequences (tags, selectors) included, has a control, and a
+    # union holding a value selects its branch. Only the id is reserved.
     service = _service(tmp_path)
-    terminal = service.open(CatalogDraftOpenRequest(source_ref=_first_shipped_ref("terminals")))
-    assert _control_at(terminal.control_tree.root, "/terminal/id").specialized is True
-    assert (
-        _control_at(
-            terminal.control_tree.root,
-            "/terminal/display_name",
-        ).specialized
-        is True
-    )
-    assert (
-        _control_at(
-            terminal.control_tree.root,
-            "/terminal/limits/elevation_deg",
-        ).specialized
-        is True
-    )
-    assert (
-        _control_at(
-            terminal.control_tree.root,
-            "/terminal/limits/azimuth_deg",
-        ).specialized
-        is False
-    )
-    assert _control_at(terminal.control_tree.root, "/terminal/notes").specialized is False
+    shipped = sorted((SHIPPED_ROOT / family).rglob("*.yaml"))
+    assert shipped, f"no shipped {family}"
+    for path in shipped:
+        ref = CatalogRef(f"nodalarc:{path.relative_to(SHIPPED_ROOT).as_posix()}")
+        opened = service.open(CatalogDraftOpenRequest(source_ref=ref))
+        controls = list(walk_controls(opened.control_tree.root))
+        by_pointer: dict[str, list[BuilderControl]] = {}
+        for control in controls:
+            by_pointer.setdefault(control.json_pointer, []).append(control)
+        missing = [
+            pointer for pointer in _json_pointers(opened.document)[1:] if pointer not in by_pointer
+        ]
+        assert not missing, f"{ref}: no control for {missing}"
+        unselected = [
+            control.json_pointer
+            for control in controls
+            if isinstance(control, BuilderChoiceControl)
+            and control.present
+            and not any(branch.selected for branch in control.branches)
+        ]
+        assert not unselected, f"{ref}: no branch selected at {unselected}"
+        specialized = {control.json_pointer for control in controls if control.specialized}
+        wrapper = next(iter(opened.document))
+        assert specialized <= {f"/{wrapper}/id"}, f"{ref}: specialized {sorted(specialized)}"
 
-    node = service.open(CatalogDraftOpenRequest(source_ref=_first_shipped_ref("nodes")))
-    assert (
-        _control_at(
-            node.control_tree.root,
-            "/node/terminals/0/role",
-        ).specialized
-        is True
-    )
-    assert (
-        _control_at(
-            node.control_tree.root,
-            "/node/terminals/0/id",
-        ).specialized
-        is False
-    )
-    assert (
-        _control_at(
-            node.control_tree.root,
-            "/node/ethernet/0/tags",
-        ).specialized
-        is False
-    )
 
-    site = service.open(CatalogDraftOpenRequest(source_ref=_first_shipped_ref("sites")))
-    assert _control_at(site.control_tree.root, "/site/location").specialized is False
-    assert _control_at(site.control_tree.root, "/site/location/lat_deg").specialized is True
+@pytest.mark.parametrize("family", get_args(CatalogComponentFamily))
+def test_a_field_edit_sent_as_the_browser_sends_it_is_accepted(
+    tmp_path: Path,
+    family: str,
+) -> None:
+    # The page sends the draft back through browser JSON, which writes 450000.0
+    # as 450000. The control ids name the document by value, so the backend's
+    # tree still matches and the edit is accepted.
+    service = _service(tmp_path)
+    for path in sorted((SHIPPED_ROOT / family).rglob("*.yaml")):
+        ref = CatalogRef(f"nodalarc:{path.relative_to(SHIPPED_ROOT).as_posix()}")
+        opened = service.open(CatalogDraftOpenRequest(source_ref=ref))
+        sent = CatalogComponentDraftEnvelope.model_validate_json(
+            json.dumps(as_browser_sends(opened.model_dump(mode="json")))
+        )
+        field = next(
+            control
+            for control in walk_controls(sent.control_tree.root)
+            if isinstance(control, BuilderScalarControl)
+            and control.present
+            and not control.specialized
+            and isinstance(control.value, str)
+        )
+        updated = service.mutate_controls(
+            CatalogDraftControlMutationRequest(
+                draft=sent,
+                expected_draft_revision=sent.draft_revision,
+                commands=(
+                    BuilderSetScalarCommand(
+                        operation="set_scalar",
+                        control_id=field.control_id,
+                        value=field.value,
+                    ),
+                ),
+            )
+        )
+        assert updated.draft_revision == sent.draft_revision + 1, ref
+        assert updated.document == opened.document, ref
 
 
 def test_component_controls_protect_identity_and_accept_incomplete_sequence_edits(
@@ -244,7 +251,7 @@ def test_component_controls_protect_identity_and_accept_incomplete_sequence_edit
 ) -> None:
     service = _service(tmp_path)
     body = service.open(CatalogDraftOpenRequest(source_ref=_first_shipped_ref("bodies")))
-    body_id = _control_at(body.control_tree.root, "/body/id")
+    body_id = control_at(body.control_tree.root, "/body/id")
     assert isinstance(body_id, BuilderScalarControl)
     with pytest.raises(CatalogAuthoringError) as identity:
         service.mutate_controls(
@@ -263,7 +270,7 @@ def test_component_controls_protect_identity_and_accept_incomplete_sequence_edit
     assert identity.value.code == "catalog_authoring.invalid_patch"
 
     node_draft = service.new(CatalogDraftNewRequest(family="nodes", object_id="visual-node"))
-    ports = _control_at(node_draft.control_tree.root, "/node/ethernet")
+    ports = control_at(node_draft.control_tree.root, "/node/ethernet")
     assert isinstance(ports, BuilderSequenceControl)
     inserted = service.mutate_controls(
         CatalogDraftControlMutationRequest(
@@ -282,7 +289,7 @@ def test_component_controls_protect_identity_and_accept_incomplete_sequence_edit
     assert inserted.issues
 
     site = service.new(CatalogDraftNewRequest(family="sites", object_id="visual-site"))
-    frame = _control_at(site.control_tree.root, "/site/frame")
+    frame = control_at(site.control_tree.root, "/site/frame")
     assert isinstance(frame, BuilderChoiceControl)
     body_fixed = next(
         branch
@@ -305,12 +312,12 @@ def test_component_controls_protect_identity_and_accept_incomplete_sequence_edit
         )
     )
     assert framed.document["site"]["frame"] == {"body_fixed": {"body": ""}}
-    selected_frame = _control_at(framed.control_tree.root, "/site/frame")
+    selected_frame = control_at(framed.control_tree.root, "/site/frame")
     assert isinstance(selected_frame, BuilderChoiceControl)
     assert next(branch for branch in selected_frame.branches if branch.selected).branch_id != ""
 
     node = service.open(CatalogDraftOpenRequest(source_ref=_first_shipped_ref("nodes")))
-    forwarding = _control_at(node.control_tree.root, "/node/forwarding")
+    forwarding = control_at(node.control_tree.root, "/node/forwarding")
     assert isinstance(forwarding, BuilderChoiceControl)
     branch = next(branch for branch in forwarding.branches if not branch.selected)
     changed = service.mutate_controls(
@@ -329,7 +336,7 @@ def test_component_controls_protect_identity_and_accept_incomplete_sequence_edit
     assert changed.document["node"]["forwarding"] == branch.literal_value
 
     orbit = service.new(CatalogDraftNewRequest(family="orbits", object_id="future-orbit"))
-    propagator = _control_at(orbit.control_tree.root, "/orbit/propagator")
+    propagator = control_at(orbit.control_tree.root, "/orbit/propagator")
     assert isinstance(propagator, BuilderChoiceControl)
     assert {branch.literal_value for branch in propagator.branches} == {
         "two_body",

@@ -4,7 +4,6 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type {
   CatalogComponentDraftEnvelope,
   CatalogComponentFamily,
-  CatalogFamilyMetadata,
   JsonValue,
 } from "../generated/builderApi";
 import type { CatalogDraftEditorRecovery } from "../structuredDraftRecovery";
@@ -19,7 +18,6 @@ vi.mock("../builderApiClient", () => ({
   addCatalogDraftNodeTerminal: unanswered,
   addCatalogDraftSiteNode: unanswered,
   applyCatalogDraftYaml: unanswered,
-  patchCatalogDraft: unanswered,
   compileCatalogDraft: unanswered,
   saveCatalogDraft: unanswered,
   getCatalogDependents: unanswered,
@@ -30,7 +28,7 @@ vi.mock("../useBuilderWorld", () => ({
   useBuilderCatalog: () => ({ entries: [], error: null, refresh: () => Promise.resolve() }),
 }));
 
-const { CatalogDraftEditorWindow: CatalogDraftEditorWindowBase, catalogDraftFieldCommands } = await import(
+const { CatalogDraftEditorWindow: CatalogDraftEditorWindowBase } = await import(
   "../CatalogDraftEditorWindow"
 );
 
@@ -51,16 +49,6 @@ const WRAPPERS: Readonly<Record<CatalogComponentFamily, string>> = {
   constellations: "constellation",
   "space-node-sets": "space_node_set",
 };
-
-function metadata(family: CatalogComponentFamily): CatalogFamilyMetadata {
-  return {
-    family,
-    wrapper: WRAPPERS[family],
-    direct_user_write: true,
-    component_fork: true,
-    session_draft_save: false,
-  };
-}
 
 function projectedYaml(document: Readonly<Record<string, JsonValue>>): string {
   const [wrapper, value] = Object.entries(document)[0] ?? ["component", {}];
@@ -137,147 +125,44 @@ async function yamlTextarea(): Promise<HTMLTextAreaElement> {
 afterEach(cleanup);
 
 describe("CatalogDraftEditorWindow", () => {
-  it("leaves missing catalog numbers empty and preserves nullable frequency conversion", () => {
-    const first = render(
+  it("offers only the gestures whose shape the backend derives, beside the field editor", () => {
+    // Every component field is edited in the backend's control tree; the window
+    // adds a node's terminal mounts and LAN ports and a site's installed nodes,
+    // which the backend shapes from the referenced object.
+    const { unmount } = render(
       <CatalogDraftEditorWindow
-        initialDraft={draft("terminals", {
-          medium: "rf",
-          signal: { band: "ka" },
-          bandwidth_mbps: {},
-          limits: { elevation_deg: {} },
-        })}
-        metadata={metadata("terminals")}
-        onSaved={vi.fn()}
-        onClose={vi.fn()}
-      />,
-    );
-
-    for (const label of [
-      "frequency",
-      "tx bandwidth",
-      "rx bandwidth",
-      "tracking capacity",
-      "max range",
-      "min elevation",
-      "max elevation",
-      "max tracking rate",
-    ]) {
-      expect(
-        (screen.getByLabelText(new RegExp(`^${label}`)) as HTMLInputElement).value,
-      ).toBe("");
-    }
-    first.unmount();
-
-    render(
-      <CatalogDraftEditorWindow
-        initialDraft={draft("sites", {
-          frame: { body_fixed: { body: "nodalarc:bodies/earth.yaml" } },
-          location: {},
-          lan: { ipv4: "" },
-          nodes: [],
-        })}
-        metadata={metadata("sites")}
-        onSaved={vi.fn()}
-        onClose={vi.fn()}
-      />,
-    );
-
-    for (const label of ["latitude", "longitude", "altitude"]) {
-      expect(
-        (screen.getByLabelText(new RegExp(`^${label}`)) as HTMLInputElement).value,
-      ).toBe("");
-    }
-  });
-
-  it("shows missing mount and installed-node identities without inventing ids", () => {
-    const first = render(
-      <CatalogDraftEditorWindow
-        initialDraft={draft("nodes", {
-          forwarding: "routed",
-          ethernet: [],
-          terminals: [
-            {
-              role: "access",
-              terminal: "nodalarc:terminals/rf/selected.yaml",
-            },
-          ],
-        })}
-        metadata={metadata("nodes")}
-        onSaved={vi.fn()}
-        onClose={vi.fn()}
-      />,
-    );
-
-    expect(screen.getByText("mount id incomplete")).toBeTruthy();
-    expect((screen.getByLabelText("count") as HTMLInputElement).value).toBe("");
-    expect(document.body.textContent).not.toContain("mount-1");
-    first.unmount();
-
-    render(
-      <CatalogDraftEditorWindow
-        initialDraft={draft("sites", {
-          frame: { body_fixed: { body: "nodalarc:bodies/earth.yaml" } },
-          location: {},
-          lan: { ipv4: "" },
-          nodes: [
-            {
-              model: "nodalarc:nodes/ground/selected.yaml",
-              terminals: { access: {} },
-              interfaces: { lo0: { ipv4: "" }, terr0: { ipv4: "" } },
-            },
-          ],
-        })}
-        metadata={metadata("sites")}
-        onSaved={vi.fn()}
-        onClose={vi.fn()}
-      />,
-    );
-
-    expect(screen.getByText("node id incomplete")).toBeTruthy();
-    expect((screen.getByLabelText("access") as HTMLInputElement).value).toBe("");
-    expect(document.body.textContent).not.toContain("node-1");
-  });
-
-  it("does not interpret inline objects as site-set members", () => {
-    render(
-      <CatalogDraftEditorWindow
-        initialDraft={draft("site-sets", {
-          sites: [{ site: { id: "legacy-inline", display_name: "Legacy inline site" } }],
-        })}
-        metadata={metadata("site-sets")}
-        onSaved={vi.fn()}
-        onClose={vi.fn()}
-      />,
-    );
-
-    expect(screen.getByText("invalid site reference 1")).toBeTruthy();
-    expect(screen.queryByText("Legacy inline site")).toBeNull();
-  });
-
-  it("does not overlay body-fixed fields onto a non-body-fixed site frame", () => {
-    render(
-      <CatalogDraftEditorWindow
-        initialDraft={draft("sites", {
-          frame: {
-            lagrange: {
-              primary: "nodalarc:bodies/earth.yaml",
-              secondary: "nodalarc:bodies/luna.yaml",
-              point: "L1",
-            },
-          },
-          lan: { ipv4: "10.0.0.0/24" },
-          nodes: [],
-        })}
-        metadata={metadata("sites")}
+        initialDraft={draft("nodes")}
         onSaved={() => {}}
         onClose={() => {}}
       />,
     );
+    expect(screen.getByText("+ terminal mount")).toBeTruthy();
+    expect(screen.getByText("+ LAN port")).toBeTruthy();
+    expect(screen.queryByText("+ add node")).toBeNull();
+    unmount();
 
-    expect(screen.queryByLabelText("Site body")).toBeNull();
-    expect(screen.getByText(
-      "This site uses a non-body-fixed frame. Its frame fields are edited below.",
-    )).toBeTruthy();
+    render(
+      <CatalogDraftEditorWindow
+        initialDraft={draft("sites")}
+        onSaved={() => {}}
+        onClose={() => {}}
+      />,
+    );
+    expect(screen.getByText("+ add node")).toBeTruthy();
+    expect(screen.queryByText("+ terminal mount")).toBeNull();
+  });
+
+  it("offers no gesture for a component with no derived shape", () => {
+    render(
+      <CatalogDraftEditorWindow
+        initialDraft={draft("terminals")}
+        onSaved={() => {}}
+        onClose={() => {}}
+      />,
+    );
+    expect(screen.getByTestId("catalog-graphical-editor")).toBeTruthy();
+    expect(screen.queryByText("+ terminal mount")).toBeNull();
+    expect(screen.queryByText("+ add node")).toBeNull();
   });
 
   it("restores an unfinished YAML buffer without canonicalizing it away", async () => {
@@ -295,22 +180,11 @@ describe("CatalogDraftEditorWindow", () => {
       <CatalogDraftEditorWindow
         initialDraft={initial}
         initialRecovery={recovery}
-        metadata={metadata("payloads")}
         onSaved={() => {}}
         onClose={() => {}}
       />,
     );
 
     expect((await yamlTextarea()).value).toBe(recovery.yamlText);
-  });
-
-  it("builds leaf JSON-pointer commands without replacing untouched siblings", () => {
-    expect(catalogDraftFieldCommands(
-      { terminal: { id: "x", limits: { elevation_deg: { min: 10, max: 90 }, vendor: true } } },
-      { terminal: { id: "x", limits: { elevation_deg: { min: 20, max: 90 }, vendor: true } } },
-      "terminal",
-    )).toEqual([
-      { operation: "replace", pointer: "/terminal/limits/elevation_deg/min", value: 20 },
-    ]);
   });
 });

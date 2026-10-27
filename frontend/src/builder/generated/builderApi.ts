@@ -89,9 +89,8 @@ export interface BuilderDraftState {
   readonly catalog_documents?: ReadonlyArray<BuilderProposedCatalogDocument>;
 }
 
-/** Versioned transient editor state accepted by compile/save APIs only. */
+/** One revision of transient editor state accepted by compile/save APIs only. */
 export interface BuilderDraftEnvelope {
-  readonly contract_version?: 1;
   readonly draft_revision: number;
   readonly state: BuilderDraftState;
 }
@@ -609,7 +608,6 @@ export interface BuilderVisualDraftCommandRequest {
 
 /** One applied command and the next revision of the complete draft. */
 export interface BuilderVisualDraftCommandResult {
-  readonly contract_version?: 1;
   readonly operation: BuilderVisualDraftCommandOperation;
   readonly base_draft_revision: number;
   readonly draft: BuilderVisualDraftEnvelope;
@@ -817,9 +815,8 @@ export interface BuilderVisualWorkspace {
   readonly control_tree?: BuilderControlTree | null;
 }
 
-/** Versioned stateless YAML buffer plus explicit authoring and applied facts. */
+/** One revision of a stateless YAML buffer plus explicit authoring and applied facts. */
 export interface BuilderVisualDraftEnvelope {
-  readonly contract_version?: 2;
   readonly draft_revision: number;
   readonly projection_status: BuilderVisualDraftProjectionStatus;
   readonly target_ref: SessionRef;
@@ -1107,7 +1104,6 @@ export interface BuilderVisualAuthoringFacts {
 
 /** Public documentation and catalog metadata needed to start Builder authoring. */
 export interface BuilderCatalogBootstrap {
-  readonly contract_version?: 1;
   readonly public_grammar_href: string;
   readonly capabilities: BuilderCatalogCapabilities;
   readonly families: ReadonlyArray<CatalogFamilyMetadata>;
@@ -1359,7 +1355,7 @@ export interface CatalogDocumentWriteRequest {
 
 /** Add one node terminal mount with backend-generated persisted fields. */
 export interface CatalogDraftAddNodeTerminalMountRequest {
-  readonly draft: CatalogComponentDraftEnvelope;
+  readonly draft: CatalogComponentDraftState;
   readonly expected_draft_revision: number;
   readonly terminal_ref: string;
   readonly role: WizardTerminalRole;
@@ -1367,13 +1363,13 @@ export interface CatalogDraftAddNodeTerminalMountRequest {
 
 /** Add one node Ethernet port with a backend-generated unique identifier. */
 export interface CatalogDraftAddNodeEthernetPortRequest {
-  readonly draft: CatalogComponentDraftEnvelope;
+  readonly draft: CatalogComponentDraftState;
   readonly expected_draft_revision: number;
 }
 
 /** Add one explicitly identified node using backend-derived persisted fields. */
 export interface CatalogDraftAddSiteNodeRequest {
-  readonly draft: CatalogComponentDraftEnvelope;
+  readonly draft: CatalogComponentDraftState;
   readonly expected_draft_revision: number;
   readonly node_id: string;
   readonly node_ref: string;
@@ -1390,9 +1386,8 @@ export interface CatalogDraftIssue {
   readonly blocks: ReadonlyArray<BuilderBlockedOperation>;
 }
 
-/** Versioned full-document component draft owned by backend authoring APIs. */
-export interface CatalogComponentDraftEnvelope {
-  readonly contract_version?: 1;
+/** One revision of a full-document component draft: the state every draft request carries. */
+export interface CatalogComponentDraftState {
   readonly draft_revision: number;
   readonly family: CatalogComponentFamily;
   readonly target_ref: CatalogRef;
@@ -1400,6 +1395,11 @@ export interface CatalogComponentDraftEnvelope {
   readonly expected_source_revision?: string | null;
   readonly expected_target_revision?: string | null;
   readonly document: Readonly<Record<string, JsonValue>>;
+}
+
+/** One component draft state with the backend's projection of it. */
+export interface CatalogComponentDraftEnvelope {
+  readonly state: CatalogComponentDraftState;
   readonly projected_yaml: string;
   readonly control_tree: BuilderControlTree;
   readonly issues: ReadonlyArray<CatalogDraftIssue>;
@@ -1419,14 +1419,14 @@ export interface CatalogDraftOpenRequest {
 
 /** Apply canonical graphical commands under one component draft revision. */
 export interface CatalogDraftControlMutationRequest {
-  readonly draft: CatalogComponentDraftEnvelope;
+  readonly draft: CatalogComponentDraftState;
   readonly expected_draft_revision: number;
   readonly commands: ReadonlyArray<BuilderSetScalarCommand | BuilderSetPresentCommand | BuilderSelectChoiceCommand | BuilderInsertItemCommand | BuilderRemoveItemCommand | BuilderMoveItemCommand | BuilderInsertMapEntryCommand | BuilderRemoveMapEntryCommand | BuilderRenameMapKeyCommand>;
 }
 
 /** Apply one exact YAML buffer under backend grammar authority. */
 export interface CatalogDraftApplyYamlRequest {
-  readonly draft: CatalogComponentDraftEnvelope;
+  readonly draft: CatalogComponentDraftState;
   readonly expected_draft_revision: number;
   readonly yaml_text: string;
 }
@@ -1442,7 +1442,7 @@ export interface CatalogDraftApplyYamlResult {
 
 /** Validate one exact draft without mutating catalog persistence. */
 export interface CatalogDraftCompileRequest {
-  readonly draft: CatalogComponentDraftEnvelope;
+  readonly draft: CatalogComponentDraftState;
   readonly expected_draft_revision: number;
 }
 
@@ -1459,7 +1459,7 @@ export interface CatalogDraftCompileResult {
 
 /** Persist one structurally valid component draft through scoped CAS storage. */
 export interface CatalogDraftSaveRequest {
-  readonly draft: CatalogComponentDraftEnvelope;
+  readonly draft: CatalogComponentDraftState;
   readonly expected_draft_revision: number;
 }
 

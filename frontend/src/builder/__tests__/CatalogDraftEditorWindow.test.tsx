@@ -101,14 +101,15 @@ function draft(
     },
   };
   return {
-    contract_version: 1,
-    draft_revision: options.revision ?? 0,
-    family,
-    target_ref: `user:${family}/${objectId}.yaml`,
-    source_ref: `nodalarc:${family}/source.yaml`,
-    expected_source_revision: "revision-source",
-    expected_target_revision: options.expectedTargetRevision ?? null,
-    document,
+    state: {
+      draft_revision: options.revision ?? 0,
+      family,
+      target_ref: `user:${family}/${objectId}.yaml`,
+      source_ref: `nodalarc:${family}/source.yaml`,
+      expected_source_revision: "revision-source",
+      expected_target_revision: options.expectedTargetRevision ?? null,
+      document,
+    },
     projected_yaml: projectedYaml(document),
     control_tree: emptyControlTree(options.revision ?? 0),
     issues: options.issues ?? [],

@@ -404,7 +404,6 @@ def test_export_import_is_exact_idempotent_and_collision_safe(tmp_path: Path) ->
     )
     assert exported.files[0].logical_path == "catalog/user/sessions/portable-session.yaml"
     assert all(file.logical_path.startswith("catalog/") for file in exported.files[1:])
-    assert "contract_version" not in exported.model_dump(mode="json")
     assert "digest" not in str(exported.model_dump(mode="json"))
     assert set(_import_request(exported, commit=False).model_dump(mode="json")) == {
         "yaml_files",

@@ -11,7 +11,6 @@ function envelope(): BuilderVisualDraftEnvelope {
   const authoring = structuredClone(applied);
   authoring.description = "authoring projection";
   return {
-    contract_version: 2,
     draft_revision: 4,
     projection_status: "applied",
     target_ref: "user:sessions/projection.yaml",

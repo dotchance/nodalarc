@@ -27,6 +27,7 @@ from nodalarc.marked_yaml import MarkedYamlError, YamlSourceMap, load_marked_yam
 from nodalarc.models.builder_api import JsonDocument
 from nodalarc.models.builder_catalog_api import (
     CatalogComponentDraftEnvelope,
+    CatalogComponentDraftState,
     CatalogComponentFamily,
     CatalogDocumentWriteRequest,
     CatalogDraftAddNodeEthernetPortRequest,
@@ -377,39 +378,41 @@ def _control_build(
     )
 
 
-def _envelope(
-    *,
-    draft_revision: int,
-    family: CatalogComponentFamily,
-    target_ref: CatalogRef,
-    source_ref: CatalogRef | None,
-    expected_source_revision: str | None,
-    expected_target_revision: str | None,
-    document: JsonDocument,
-) -> CatalogComponentDraftEnvelope:
-    canonical, issues = _analyze(family, target_ref, document)
+def _envelope(state: CatalogComponentDraftState) -> CatalogComponentDraftEnvelope:
+    canonical, issues = _analyze(state.family, state.target_ref, state.document)
     projected_yaml = (
         canonical.yaml_bytes.decode("utf-8")
         if canonical is not None
         else yaml.safe_dump(
-            document,
+            state.document,
             allow_unicode=True,
             default_flow_style=False,
             sort_keys=True,
         )
     )
-    control_build = _control_build(family, document, draft_revision)
+    control_build = _control_build(state.family, state.document, state.draft_revision)
     return CatalogComponentDraftEnvelope(
-        draft_revision=draft_revision,
-        family=family,
-        target_ref=target_ref,
-        source_ref=source_ref,
-        expected_source_revision=expected_source_revision,
-        expected_target_revision=expected_target_revision,
-        document=document,
+        state=state,
         projected_yaml=projected_yaml,
         control_tree=control_build.tree,
         issues=issues,
+    )
+
+
+def _next_state(
+    state: CatalogComponentDraftState,
+    document: JsonDocument,
+) -> CatalogComponentDraftState:
+    """The draft one revision after `state`, holding `document`."""
+
+    return CatalogComponentDraftState(
+        draft_revision=state.draft_revision + 1,
+        family=state.family,
+        target_ref=state.target_ref,
+        source_ref=state.source_ref,
+        expected_source_revision=state.expected_source_revision,
+        expected_target_revision=state.expected_target_revision,
+        document=document,
     )
 
 
@@ -487,7 +490,7 @@ class BuilderCatalogDraftService:
 
     def _assert_draft_revision(
         self,
-        draft: CatalogComponentDraftEnvelope,
+        draft: CatalogComponentDraftState,
         expected: int,
     ) -> None:
         if expected != draft.draft_revision:
@@ -501,7 +504,7 @@ class BuilderCatalogDraftService:
 
     def _assert_catalog_revisions(
         self,
-        draft: CatalogComponentDraftEnvelope,
+        draft: CatalogComponentDraftState,
         snapshot: CatalogReadSnapshot,
     ) -> None:
         self._assert_ownership_mode(draft)
@@ -526,7 +529,7 @@ class BuilderCatalogDraftService:
             )
 
     @staticmethod
-    def _assert_ownership_mode(draft: CatalogComponentDraftEnvelope) -> None:
+    def _assert_ownership_mode(draft: CatalogComponentDraftState) -> None:
         if draft.source_ref is None:
             if (
                 draft.expected_source_revision is not None
@@ -577,13 +580,12 @@ class BuilderCatalogDraftService:
             )
         wrapper = _wrapper(request.family)
         return _envelope(
-            draft_revision=0,
-            family=request.family,
-            target_ref=target_ref,
-            source_ref=None,
-            expected_source_revision=None,
-            expected_target_revision=None,
-            document={wrapper: {"id": request.object_id}},
+            CatalogComponentDraftState(
+                draft_revision=0,
+                family=request.family,
+                target_ref=target_ref,
+                document={wrapper: {"id": request.object_id}},
+            )
         )
 
     def open(self, request: CatalogDraftOpenRequest) -> CatalogComponentDraftEnvelope:
@@ -617,13 +619,15 @@ class BuilderCatalogDraftService:
         wrapper = _wrapper(family)
         document[wrapper]["id"] = target_ref.relative_path.stem
         return _envelope(
-            draft_revision=0,
-            family=family,
-            target_ref=target_ref,
-            source_ref=request.source_ref,
-            expected_source_revision=str(source.revision),
-            expected_target_revision=target_revision,
-            document=document,
+            CatalogComponentDraftState(
+                draft_revision=0,
+                family=family,
+                target_ref=target_ref,
+                source_ref=request.source_ref,
+                expected_source_revision=str(source.revision),
+                expected_target_revision=target_revision,
+                document=document,
+            )
         )
 
     def mutate_controls(
@@ -641,12 +645,6 @@ class BuilderCatalogDraftService:
             request.draft.document,
             request.draft.draft_revision,
         )
-        if request.draft.control_tree != control_build.tree:
-            _refuse(
-                "catalog_authoring.invalid_graph",
-                "Component graphical controls are not the backend projection for this draft",
-                ref=request.draft.target_ref,
-            )
 
         wrapper = _wrapper(request.draft.family)
         protected_pointers = {"", f"/{wrapper}", f"/{wrapper}/id"}
@@ -672,15 +670,7 @@ class BuilderCatalogDraftService:
                 ref=request.draft.target_ref,
                 cause=error,
             )
-        return _envelope(
-            draft_revision=request.draft.draft_revision + 1,
-            family=request.draft.family,
-            target_ref=request.draft.target_ref,
-            source_ref=request.draft.source_ref,
-            expected_source_revision=request.draft.expected_source_revision,
-            expected_target_revision=request.draft.expected_target_revision,
-            document=document,
-        )
+        return _envelope(_next_state(request.draft, document))
 
     def add_site_node(
         self,
@@ -769,15 +759,7 @@ class BuilderCatalogDraftService:
             }
         )
         site["nodes"] = nodes
-        return _envelope(
-            draft_revision=request.draft.draft_revision + 1,
-            family=request.draft.family,
-            target_ref=request.draft.target_ref,
-            source_ref=request.draft.source_ref,
-            expected_source_revision=request.draft.expected_source_revision,
-            expected_target_revision=request.draft.expected_target_revision,
-            document=document,
-        )
+        return _envelope(_next_state(request.draft, document))
 
     def add_node_terminal_mount(
         self,
@@ -845,15 +827,7 @@ class BuilderCatalogDraftService:
             }
         )
         node["terminals"] = mounts
-        return _envelope(
-            draft_revision=request.draft.draft_revision + 1,
-            family=request.draft.family,
-            target_ref=request.draft.target_ref,
-            source_ref=request.draft.source_ref,
-            expected_source_revision=request.draft.expected_source_revision,
-            expected_target_revision=request.draft.expected_target_revision,
-            document=document,
-        )
+        return _envelope(_next_state(request.draft, document))
 
     def add_node_ethernet_port(
         self,
@@ -894,15 +868,7 @@ class BuilderCatalogDraftService:
             port_id = f"terr{port_index}"
         ethernet.append({"id": port_id})
         node["ethernet"] = ethernet
-        return _envelope(
-            draft_revision=request.draft.draft_revision + 1,
-            family=request.draft.family,
-            target_ref=request.draft.target_ref,
-            source_ref=request.draft.source_ref,
-            expected_source_revision=request.draft.expected_source_revision,
-            expected_target_revision=request.draft.expected_target_revision,
-            document=document,
-        )
+        return _envelope(_next_state(request.draft, document))
 
     def apply_yaml(
         self,
@@ -921,21 +887,13 @@ class BuilderCatalogDraftService:
         )
         if document is None:
             return CatalogDraftApplyYamlResult(
-                draft=request.draft,
+                draft=_envelope(request.draft),
                 yaml_text=request.yaml_text,
                 applied=False,
                 canonicalization_required=False,
                 issues=refusal_issues,
             )
-        applied = _envelope(
-            draft_revision=request.draft.draft_revision + 1,
-            family=request.draft.family,
-            target_ref=request.draft.target_ref,
-            source_ref=request.draft.source_ref,
-            expected_source_revision=request.draft.expected_source_revision,
-            expected_target_revision=request.draft.expected_target_revision,
-            document=document,
-        )
+        applied = _envelope(_next_state(request.draft, document))
         if source_map is not None:
             applied = CatalogComponentDraftEnvelope(
                 **{
@@ -947,7 +905,7 @@ class BuilderCatalogDraftService:
             )
         if any(issue.stage == "structural" for issue in applied.issues):
             return CatalogDraftApplyYamlResult(
-                draft=request.draft,
+                draft=_envelope(request.draft),
                 yaml_text=request.yaml_text,
                 applied=False,
                 canonicalization_required=False,
@@ -978,15 +936,7 @@ class BuilderCatalogDraftService:
                 *issues,
                 *_reference_issues(snapshot, request.draft.target_ref, canonical),
             )
-        draft = _envelope(
-            draft_revision=request.draft.draft_revision,
-            family=request.draft.family,
-            target_ref=request.draft.target_ref,
-            source_ref=request.draft.source_ref,
-            expected_source_revision=request.draft.expected_source_revision,
-            expected_target_revision=request.draft.expected_target_revision,
-            document=copy.deepcopy(request.draft.document),
-        )
+        draft = _envelope(request.draft)
         if draft.issues != issues:
             draft = CatalogComponentDraftEnvelope(
                 **{
@@ -1042,13 +992,15 @@ class BuilderCatalogDraftService:
         )
         revision = result.document.revision
         saved_draft = _envelope(
-            draft_revision=request.draft.draft_revision,
-            family=request.draft.family,
-            target_ref=request.draft.target_ref,
-            source_ref=request.draft.target_ref,
-            expected_source_revision=revision,
-            expected_target_revision=revision,
-            document=result.document.canonical_json,
+            CatalogComponentDraftState(
+                draft_revision=request.draft.draft_revision,
+                family=request.draft.family,
+                target_ref=request.draft.target_ref,
+                source_ref=request.draft.target_ref,
+                expected_source_revision=revision,
+                expected_target_revision=revision,
+                document=result.document.canonical_json,
+            )
         )
         saved_compile = CatalogDraftCompileResult(
             draft=saved_draft,

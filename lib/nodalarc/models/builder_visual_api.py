@@ -346,9 +346,8 @@ class BuilderVisualWorkspace(_BuilderVisualModel):
 
 
 class BuilderVisualDraftEnvelope(_BuilderVisualModel):
-    """Versioned stateless YAML buffer plus explicit authoring and applied facts."""
+    """One revision of a stateless YAML buffer plus explicit authoring and applied facts."""
 
-    contract_version: Literal[2] = 2
     draft_revision: int = Field(ge=0)
     projection_status: BuilderVisualDraftProjectionStatus
     target_ref: SessionRef
@@ -787,7 +786,6 @@ class BuilderVisualDraftCommandRequest(_BuilderVisualModel):
 class BuilderVisualDraftCommandResult(_BuilderVisualModel):
     """One applied command and the next revision of the complete draft."""
 
-    contract_version: Literal[1] = 1
     operation: BuilderVisualDraftCommandOperation
     base_draft_revision: int = Field(ge=0)
     draft: BuilderVisualDraftEnvelope

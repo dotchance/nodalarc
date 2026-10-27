@@ -320,8 +320,8 @@ class Operator:
         draft = self.post(
             "/api/v1/builder/catalog/draft/controls/mutate",
             {
-                "draft": draft,
-                "expected_draft_revision": draft["draft_revision"],
+                "draft": draft["state"],
+                "expected_draft_revision": draft["state"]["draft_revision"],
                 "commands": [
                     {
                         "operation": "set_scalar",
@@ -334,7 +334,7 @@ class Operator:
         )
         compiled = self.post(
             "/api/v1/builder/catalog/draft/compile",
-            {"draft": draft, "expected_draft_revision": draft["draft_revision"]},
+            {"draft": draft["state"], "expected_draft_revision": draft["state"]["draft_revision"]},
         )
         assert compiled["save_allowed"], (
             f"the draft of {opening} cannot be saved: {compiled['issues']}"
@@ -342,8 +342,8 @@ class Operator:
         self.post(
             "/api/v1/builder/catalog/draft/save",
             {
-                "draft": compiled["draft"],
-                "expected_draft_revision": compiled["draft"]["draft_revision"],
+                "draft": compiled["draft"]["state"],
+                "expected_draft_revision": compiled["draft"]["state"]["draft_revision"],
             },
         )
 

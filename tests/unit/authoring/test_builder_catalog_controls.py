@@ -27,6 +27,7 @@ from nodalarc.models.builder_controls_api import (
     BuilderSequenceControl,
     BuilderSetScalarCommand,
 )
+from pydantic import ValidationError
 from vs_api.builder_catalog_draft import BuilderCatalogDraftService
 from vs_api.builder_catalog_service import CatalogAuthoringError
 from vs_api.builder_control_tree import build_model_control_tree
@@ -91,14 +92,14 @@ def test_component_controls_mutate_one_field_and_preserve_all_siblings(
 ) -> None:
     service = _service(tmp_path)
     opened = service.open(CatalogDraftOpenRequest(source_ref=_first_shipped_ref("bodies")))
-    original = copy.deepcopy(opened.document)
+    original = copy.deepcopy(opened.state.document)
     display_name = control_at(opened.control_tree.root, "/body/display_name")
     assert isinstance(display_name, BuilderScalarControl)
 
     updated = service.mutate_controls(
         CatalogDraftControlMutationRequest(
-            draft=opened,
-            expected_draft_revision=opened.draft_revision,
+            draft=opened.state,
+            expected_draft_revision=opened.state.draft_revision,
             commands=(
                 BuilderSetScalarCommand(
                     operation="set_scalar",
@@ -111,15 +112,15 @@ def test_component_controls_mutate_one_field_and_preserve_all_siblings(
 
     expected = copy.deepcopy(original)
     expected["body"]["display_name"] = "Graphically edited body"
-    assert updated.document == expected
-    assert updated.draft_revision == opened.draft_revision + 1
-    assert updated.control_tree.projection_revision == updated.draft_revision
+    assert updated.state.document == expected
+    assert updated.state.draft_revision == opened.state.draft_revision + 1
+    assert updated.control_tree.projection_revision == updated.state.draft_revision
 
     with pytest.raises(CatalogAuthoringError) as stale_control:
         service.mutate_controls(
             CatalogDraftControlMutationRequest(
-                draft=updated,
-                expected_draft_revision=updated.draft_revision,
+                draft=updated.state,
+                expected_draft_revision=updated.state.draft_revision,
                 commands=(
                     BuilderSetScalarCommand(
                         operation="set_scalar",
@@ -131,31 +132,22 @@ def test_component_controls_mutate_one_field_and_preserve_all_siblings(
         )
     assert stale_control.value.code == "catalog_authoring.invalid_patch"
 
-    tampered_tree = updated.control_tree.model_copy(
-        update={
-            "root": updated.control_tree.root.model_copy(
-                update={"label": "Client-authored control tree"}
-            )
-        }
-    )
-    with pytest.raises(CatalogAuthoringError) as tampered:
-        service.mutate_controls(
-            CatalogDraftControlMutationRequest(
-                draft=updated.model_copy(update={"control_tree": tampered_tree}),
-                expected_draft_revision=updated.draft_revision,
-                commands=(
-                    BuilderSetScalarCommand(
-                        operation="set_scalar",
-                        control_id=control_at(
-                            updated.control_tree.root,
-                            "/body/display_name",
-                        ).control_id,
-                        value="Tampered tree must fail",
-                    ),
-                ),
-            )
+    # A request carries the draft state only; the page cannot send the
+    # backend's projection (tree, YAML, issues) back as if it were state.
+    with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
+        CatalogDraftControlMutationRequest.model_validate(
+            {
+                "draft": updated.model_dump(mode="json"),
+                "expected_draft_revision": updated.state.draft_revision,
+                "commands": [
+                    {
+                        "operation": "set_scalar",
+                        "control_id": display_name.control_id,
+                        "value": "Projection sent as state",
+                    }
+                ],
+            }
         )
-    assert tampered.value.code == "catalog_authoring.invalid_graph"
 
 
 def _json_pointers(value: object, pointer: str = "") -> list[str]:
@@ -190,7 +182,9 @@ def test_component_controls_render_every_field_of_every_shipped_component(
         for control in controls:
             by_pointer.setdefault(control.json_pointer, []).append(control)
         missing = [
-            pointer for pointer in _json_pointers(opened.document)[1:] if pointer not in by_pointer
+            pointer
+            for pointer in _json_pointers(opened.state.document)[1:]
+            if pointer not in by_pointer
         ]
         assert not missing, f"{ref}: no control for {missing}"
         unselected = [
@@ -202,7 +196,7 @@ def test_component_controls_render_every_field_of_every_shipped_component(
         ]
         assert not unselected, f"{ref}: no branch selected at {unselected}"
         specialized = {control.json_pointer for control in controls if control.specialized}
-        wrapper = next(iter(opened.document))
+        wrapper = next(iter(opened.state.document))
         assert specialized <= {f"/{wrapper}/id"}, f"{ref}: specialized {sorted(specialized)}"
 
 
@@ -218,12 +212,13 @@ def test_a_field_edit_sent_as_the_browser_sends_it_is_accepted(
     for path in sorted((SHIPPED_ROOT / family).rglob("*.yaml")):
         ref = CatalogRef(f"nodalarc:{path.relative_to(SHIPPED_ROOT).as_posix()}")
         opened = service.open(CatalogDraftOpenRequest(source_ref=ref))
-        sent = CatalogComponentDraftEnvelope.model_validate_json(
+        received = CatalogComponentDraftEnvelope.model_validate_json(
             json.dumps(as_browser_sends(opened.model_dump(mode="json")))
         )
+        sent = received.state
         field = next(
             control
-            for control in walk_controls(sent.control_tree.root)
+            for control in walk_controls(received.control_tree.root)
             if isinstance(control, BuilderScalarControl)
             and control.present
             and not control.specialized
@@ -242,8 +237,8 @@ def test_a_field_edit_sent_as_the_browser_sends_it_is_accepted(
                 ),
             )
         )
-        assert updated.draft_revision == sent.draft_revision + 1, ref
-        assert updated.document == opened.document, ref
+        assert updated.state.draft_revision == sent.draft_revision + 1, ref
+        assert updated.state.document == opened.state.document, ref
 
 
 def test_component_controls_protect_identity_and_accept_incomplete_sequence_edits(
@@ -256,8 +251,8 @@ def test_component_controls_protect_identity_and_accept_incomplete_sequence_edit
     with pytest.raises(CatalogAuthoringError) as identity:
         service.mutate_controls(
             CatalogDraftControlMutationRequest(
-                draft=body,
-                expected_draft_revision=body.draft_revision,
+                draft=body.state,
+                expected_draft_revision=body.state.draft_revision,
                 commands=(
                     BuilderSetScalarCommand(
                         operation="set_scalar",
@@ -274,8 +269,8 @@ def test_component_controls_protect_identity_and_accept_incomplete_sequence_edit
     assert isinstance(ports, BuilderSequenceControl)
     inserted = service.mutate_controls(
         CatalogDraftControlMutationRequest(
-            draft=node_draft,
-            expected_draft_revision=node_draft.draft_revision,
+            draft=node_draft.state,
+            expected_draft_revision=node_draft.state.draft_revision,
             commands=(
                 BuilderInsertItemCommand(
                     operation="insert_item",
@@ -285,7 +280,7 @@ def test_component_controls_protect_identity_and_accept_incomplete_sequence_edit
             ),
         )
     )
-    assert inserted.document == {"node": {"id": "visual-node", "ethernet": [{}]}}
+    assert inserted.state.document == {"node": {"id": "visual-node", "ethernet": [{}]}}
     assert inserted.issues
 
     site = service.new(CatalogDraftNewRequest(family="sites", object_id="visual-site"))
@@ -300,8 +295,8 @@ def test_component_controls_protect_identity_and_accept_incomplete_sequence_edit
     )
     framed = service.mutate_controls(
         CatalogDraftControlMutationRequest(
-            draft=site,
-            expected_draft_revision=site.draft_revision,
+            draft=site.state,
+            expected_draft_revision=site.state.draft_revision,
             commands=(
                 BuilderSelectChoiceCommand(
                     operation="select_choice",
@@ -311,7 +306,7 @@ def test_component_controls_protect_identity_and_accept_incomplete_sequence_edit
             ),
         )
     )
-    assert framed.document["site"]["frame"] == {"body_fixed": {"body": ""}}
+    assert framed.state.document["site"]["frame"] == {"body_fixed": {"body": ""}}
     selected_frame = control_at(framed.control_tree.root, "/site/frame")
     assert isinstance(selected_frame, BuilderChoiceControl)
     assert next(branch for branch in selected_frame.branches if branch.selected).branch_id != ""
@@ -322,8 +317,8 @@ def test_component_controls_protect_identity_and_accept_incomplete_sequence_edit
     branch = next(branch for branch in forwarding.branches if not branch.selected)
     changed = service.mutate_controls(
         CatalogDraftControlMutationRequest(
-            draft=node,
-            expected_draft_revision=node.draft_revision,
+            draft=node.state,
+            expected_draft_revision=node.state.draft_revision,
             commands=(
                 BuilderSelectChoiceCommand(
                     operation="select_choice",
@@ -333,7 +328,7 @@ def test_component_controls_protect_identity_and_accept_incomplete_sequence_edit
             ),
         )
     )
-    assert changed.document["node"]["forwarding"] == branch.literal_value
+    assert changed.state.document["node"]["forwarding"] == branch.literal_value
 
     orbit = service.new(CatalogDraftNewRequest(family="orbits", object_id="future-orbit"))
     propagator = control_at(orbit.control_tree.root, "/orbit/propagator")

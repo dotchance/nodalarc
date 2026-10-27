@@ -239,7 +239,6 @@ class BuilderVisualAuthoringFacts(_CatalogApplicationModel):
 class BuilderCatalogBootstrap(_CatalogApplicationModel):
     """Public documentation and catalog metadata needed to start Builder authoring."""
 
-    contract_version: Literal[1] = 1
     public_grammar_href: str = Field(min_length=1)
     capabilities: BuilderCatalogCapabilities
     families: tuple[CatalogFamilyMetadata, ...]
@@ -577,10 +576,9 @@ class CatalogDraftIssue(_CatalogApplicationModel):
         return self
 
 
-class CatalogComponentDraftEnvelope(_CatalogApplicationModel):
-    """Versioned full-document component draft owned by backend authoring APIs."""
+class CatalogComponentDraftState(_CatalogApplicationModel):
+    """One revision of a full-document component draft: the state every draft request carries."""
 
-    contract_version: Literal[1] = 1
     draft_revision: int = Field(ge=0)
     family: CatalogComponentFamily
     target_ref: CatalogRef
@@ -588,17 +586,9 @@ class CatalogComponentDraftEnvelope(_CatalogApplicationModel):
     expected_source_revision: OpaqueRevision | None = None
     expected_target_revision: OpaqueRevision | None = None
     document: JsonDocument
-    projected_yaml: str = Field(min_length=1)
-    control_tree: BuilderControlTree
-    issues: tuple[CatalogDraftIssue, ...]
-
-    @field_validator("issues", mode="before")
-    @classmethod
-    def _accept_json_issues(cls, value: object) -> object:
-        return tuple(value) if isinstance(value, list) else value
 
     @model_validator(mode="after")
-    def _identity_and_family_are_fixed(self) -> CatalogComponentDraftEnvelope:
+    def _identity_and_family_are_fixed(self) -> CatalogComponentDraftState:
         target = parse_catalog_reference(self.target_ref)
         if target.namespace != "user":
             raise ValueError("component draft targets must use the user: namespace")
@@ -631,7 +621,25 @@ class CatalogComponentDraftEnvelope(_CatalogApplicationModel):
             raise ValueError("component draft document must retain its family wrapper")
         if self.document[wrapper].get("id") != self.target_ref.relative_path.stem:
             raise ValueError("component draft object id must match target_ref")
-        if self.control_tree.projection_revision != self.draft_revision:
+        return self
+
+
+class CatalogComponentDraftEnvelope(_CatalogApplicationModel):
+    """One component draft state with the backend's projection of it."""
+
+    state: CatalogComponentDraftState
+    projected_yaml: str = Field(min_length=1)
+    control_tree: BuilderControlTree
+    issues: tuple[CatalogDraftIssue, ...]
+
+    @field_validator("issues", mode="before")
+    @classmethod
+    def _accept_json_issues(cls, value: object) -> object:
+        return tuple(value) if isinstance(value, list) else value
+
+    @model_validator(mode="after")
+    def _controls_match_the_revision(self) -> CatalogComponentDraftEnvelope:
+        if self.control_tree.projection_revision != self.state.draft_revision:
             raise ValueError("component controls must match the draft revision")
         return self
 
@@ -666,7 +674,7 @@ class CatalogDraftOpenRequest(_CatalogApplicationModel):
 class CatalogDraftControlMutationRequest(_CatalogApplicationModel):
     """Apply canonical graphical commands under one component draft revision."""
 
-    draft: CatalogComponentDraftEnvelope
+    draft: CatalogComponentDraftState
     expected_draft_revision: int = Field(ge=0)
     commands: tuple[BuilderControlMutation, ...] = Field(min_length=1, max_length=64)
 
@@ -679,7 +687,7 @@ class CatalogDraftControlMutationRequest(_CatalogApplicationModel):
 class CatalogDraftAddSiteNodeRequest(_CatalogApplicationModel):
     """Add one explicitly identified node using backend-derived persisted fields."""
 
-    draft: CatalogComponentDraftEnvelope
+    draft: CatalogComponentDraftState
     expected_draft_revision: int = Field(ge=0)
     node_id: Identifier
     node_ref: NodeRef
@@ -694,7 +702,7 @@ class CatalogDraftAddSiteNodeRequest(_CatalogApplicationModel):
 class CatalogDraftAddNodeTerminalMountRequest(_CatalogApplicationModel):
     """Add one node terminal mount with backend-generated persisted fields."""
 
-    draft: CatalogComponentDraftEnvelope
+    draft: CatalogComponentDraftState
     expected_draft_revision: int = Field(ge=0)
     terminal_ref: TerminalRef
     role: MountRole
@@ -709,7 +717,7 @@ class CatalogDraftAddNodeTerminalMountRequest(_CatalogApplicationModel):
 class CatalogDraftAddNodeEthernetPortRequest(_CatalogApplicationModel):
     """Add one node Ethernet port with a backend-generated unique identifier."""
 
-    draft: CatalogComponentDraftEnvelope
+    draft: CatalogComponentDraftState
     expected_draft_revision: int = Field(ge=0)
 
     @model_validator(mode="after")
@@ -722,7 +730,7 @@ class CatalogDraftAddNodeEthernetPortRequest(_CatalogApplicationModel):
 class CatalogDraftApplyYamlRequest(_CatalogApplicationModel):
     """Apply one exact YAML buffer under backend grammar authority."""
 
-    draft: CatalogComponentDraftEnvelope
+    draft: CatalogComponentDraftState
     expected_draft_revision: int = Field(ge=0)
     yaml_text: str = Field(max_length=1_048_576)
 
@@ -757,7 +765,7 @@ class CatalogDraftApplyYamlResult(_CatalogApplicationModel):
 class CatalogDraftCompileRequest(_CatalogApplicationModel):
     """Validate one exact draft without mutating catalog persistence."""
 
-    draft: CatalogComponentDraftEnvelope
+    draft: CatalogComponentDraftState
     expected_draft_revision: int = Field(ge=0)
 
 
@@ -796,7 +804,7 @@ class CatalogDraftCompileResult(_CatalogApplicationModel):
             raise ValueError("compile findings must match the returned draft")
         if self.canonical_json is not None:
             try:
-                catalog_family_spec(self.draft.family).validate_document(self.canonical_json)
+                catalog_family_spec(self.draft.state.family).validate_document(self.canonical_json)
             except (TypeError, ValueError) as error:
                 raise ValueError(
                     "canonical document must match the component draft family"
@@ -807,7 +815,7 @@ class CatalogDraftCompileResult(_CatalogApplicationModel):
 class CatalogDraftSaveRequest(_CatalogApplicationModel):
     """Persist one structurally valid component draft through scoped CAS storage."""
 
-    draft: CatalogComponentDraftEnvelope
+    draft: CatalogComponentDraftState
     expected_draft_revision: int = Field(ge=0)
 
 
@@ -820,9 +828,9 @@ class CatalogDraftSaveResult(_CatalogApplicationModel):
 
     @model_validator(mode="after")
     def _saved_identity_matches(self) -> CatalogDraftSaveResult:
-        if self.draft.target_ref != self.result.document.ref:
+        if self.draft.state.target_ref != self.result.document.ref:
             raise ValueError("saved draft and canonical document refs must match")
-        if self.draft.expected_target_revision != self.result.document.revision:
+        if self.draft.state.expected_target_revision != self.result.document.revision:
             raise ValueError("saved draft must carry the committed target revision")
         if self.compile_result.canonical_yaml != self.result.document.canonical_yaml:
             raise ValueError("save and compile canonical YAML must match")

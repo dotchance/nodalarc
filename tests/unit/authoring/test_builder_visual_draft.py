@@ -227,7 +227,6 @@ def test_backend_creates_an_incomplete_authoring_visual_draft(
         )
     )
 
-    assert draft.contract_version == 2
     assert draft.projection_status == "incomplete_authoring"
     assert draft.target_ref == "user:sessions/my_visual_session.yaml"
     assert draft.authoring_workspace is not None

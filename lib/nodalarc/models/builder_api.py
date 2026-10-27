@@ -206,9 +206,8 @@ class BuilderDraftState(_BuilderApplicationModel):
 
 
 class BuilderDraftEnvelope(_BuilderApplicationModel):
-    """Versioned transient editor state accepted by compile/save APIs only."""
+    """One revision of transient editor state accepted by compile/save APIs only."""
 
-    contract_version: Literal[1] = 1
     draft_revision: int = Field(ge=0)
     state: BuilderDraftState
 

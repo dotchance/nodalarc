@@ -88,7 +88,6 @@ def _session_save_request(name: str) -> dict[str, Any]:
     session["session"]["name"] = name
     return {
         "draft": {
-            "contract_version": 1,
             "draft_revision": 3,
             "state": {"session": session, "catalog_documents": []},
         },
@@ -228,8 +227,8 @@ def test_router_executes_every_typed_authoring_operation(catalog_context: Catalo
     patched_draft = client.post(
         "/api/v1/builder/catalog/draft/controls/mutate",
         json={
-            "draft": opened,
-            "expected_draft_revision": opened["draft_revision"],
+            "draft": opened["state"],
+            "expected_draft_revision": opened["state"]["draft_revision"],
             "commands": [
                 {
                     "operation": "set_scalar",
@@ -244,8 +243,8 @@ def test_router_executes_every_typed_authoring_operation(catalog_context: Catalo
     compiled_draft = client.post(
         "/api/v1/builder/catalog/draft/compile",
         json={
-            "draft": patched,
-            "expected_draft_revision": patched["draft_revision"],
+            "draft": patched["state"],
+            "expected_draft_revision": patched["state"]["draft_revision"],
         },
     )
     assert compiled_draft.status_code == 200, compiled_draft.text
@@ -253,8 +252,8 @@ def test_router_executes_every_typed_authoring_operation(catalog_context: Catalo
     saved_draft = client.post(
         "/api/v1/builder/catalog/draft/save",
         json={
-            "draft": patched,
-            "expected_draft_revision": patched["draft_revision"],
+            "draft": patched["state"],
+            "expected_draft_revision": patched["state"]["draft_revision"],
         },
     )
     assert saved_draft.status_code == 200, saved_draft.text
@@ -391,7 +390,6 @@ def test_compile_maps_catalog_snapshot_outage_to_typed_503(
         "/api/v1/builder/compile",
         json={
             "draft": {
-                "contract_version": 1,
                 "draft_revision": 0,
                 "state": {"session": {}},
             },
@@ -466,7 +464,6 @@ def test_session_save_refusals_preserve_commit_truth(
         "/api/v1/builder/session/save",
         json={
             "draft": {
-                "contract_version": 1,
                 "draft_revision": 0,
                 "state": {"session": {}},
             },
@@ -497,7 +494,6 @@ def test_request_contracts_expose_no_client_selected_authority(
         "/api/v1/builder/compile",
         json={
             "draft": {
-                "contract_version": 1,
                 "draft_revision": 0,
                 "state": {"session": {}},
             },

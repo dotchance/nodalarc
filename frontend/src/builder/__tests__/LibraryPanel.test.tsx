@@ -17,7 +17,6 @@ vi.mock("../useBuilderWorld", () => ({
   exportCatalogObject: vi.fn(),
   useBuilderBootstrap: () => ({
     bootstrap: {
-      contract_version: 1,
       public_grammar_href: "/docs/ops/configuration-grammar.md",
       capabilities: { user_catalog_write: true, deploy_yaml_closure: true },
       families: [

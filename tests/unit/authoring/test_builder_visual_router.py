@@ -72,7 +72,6 @@ def test_visual_draft_routes_create_open_and_compile_backend_contracts(
     )
     assert created_response.status_code == 200
     created = created_response.json()
-    assert created["contract_version"] == 2
     assert created["projection_status"] == "incomplete_authoring"
     assert created["applied_revision"] is None
     assert created["applied_session"] is None

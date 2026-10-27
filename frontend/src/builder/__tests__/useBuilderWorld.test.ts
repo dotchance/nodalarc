@@ -40,7 +40,6 @@ function draft(revision = 4): BuilderVisualDraftEnvelope {
   const workspace = newWorkspace("coordinated");
   workspace.projection_revision = revision;
   return {
-    contract_version: 2,
     draft_revision: revision,
     projection_status: "applied",
     target_ref: "user:sessions/coordinated.yaml",
@@ -62,7 +61,6 @@ function assembly(
   marker = `revision-${visualDraft.draft_revision}`,
 ): BuilderVisualDraftAssemblyResult {
   const assembledDraft = {
-    contract_version: 1 as const,
     draft_revision: visualDraft.draft_revision,
     state: {
       session: visualDraft.applied_session ?? { session: { name: "coordinated" } },

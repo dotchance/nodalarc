@@ -12,6 +12,7 @@ from nodalarc.catalog_repository import CatalogScope
 from nodalarc.filesystem_catalog_repository import FilesystemCatalogRepository
 from nodalarc.models.builder_catalog_api import (
     CatalogComponentDraftEnvelope,
+    CatalogComponentDraftState,
     CatalogComponentFamily,
     CatalogDocumentWriteRequest,
     CatalogDraftAddNodeEthernetPortRequest,
@@ -95,9 +96,9 @@ def _set_scalar(
     control = scalar_at(draft.control_tree.root, pointer)
     return drafts.mutate_controls(
         CatalogDraftControlMutationRequest(
-            draft=draft,
+            draft=draft.state,
             expected_draft_revision=(
-                draft.draft_revision if expected_revision is None else expected_revision
+                draft.state.draft_revision if expected_revision is None else expected_revision
             ),
             commands=(
                 BuilderSetScalarCommand(
@@ -170,11 +171,11 @@ def test_new_drafts_cover_every_component_family_and_remain_truthfully_incomplet
         object_id = f"new-{family.replace('-', '_')}"
         draft = drafts.new(CatalogDraftNewRequest(family=family, object_id=object_id))
 
-        assert draft.target_ref == f"user:{family}/{object_id}.yaml"
-        assert draft.family == family
-        assert draft.source_ref is None
-        assert draft.expected_target_revision is None
-        assert draft.document == {CATALOG_FAMILY_REGISTRY[family].wrapper: {"id": object_id}}
+        assert draft.state.target_ref == f"user:{family}/{object_id}.yaml"
+        assert draft.state.family == family
+        assert draft.state.source_ref is None
+        assert draft.state.expected_target_revision is None
+        assert draft.state.document == {CATALOG_FAMILY_REGISTRY[family].wrapper: {"id": object_id}}
         assert draft.issues
         assert all(issue.stage == "structural" for issue in draft.issues)
         assert all(set(issue.blocks) == {"save", "deploy"} for issue in draft.issues)
@@ -202,14 +203,14 @@ def test_all_families_open_compile_and_save_without_losing_advanced_fields(
         opened = drafts.open(CatalogDraftOpenRequest(source_ref=source_ref, target_ref=target_ref))
         compiled = drafts.compile(
             CatalogDraftCompileRequest(
-                draft=opened,
-                expected_draft_revision=opened.draft_revision,
+                draft=opened.state,
+                expected_draft_revision=opened.state.draft_revision,
             )
         )
         saved = drafts.save(
             CatalogDraftSaveRequest(
-                draft=opened,
-                expected_draft_revision=opened.draft_revision,
+                draft=opened.state,
+                expected_draft_revision=opened.state.draft_revision,
             )
         )
 
@@ -217,7 +218,7 @@ def test_all_families_open_compile_and_save_without_losing_advanced_fields(
         assert compiled.canonical_json == expected
         assert saved.result.document.canonical_json == expected
         assert saved.result.document.canonical_yaml == compiled.canonical_yaml
-        assert saved.draft.expected_target_revision == saved.result.document.revision
+        assert saved.draft.state.expected_target_revision == saved.result.document.revision
         assert (
             authoring.get_catalog(CatalogGetRequest(ref=source_ref)).canonical_json
             == source.canonical_json
@@ -243,14 +244,14 @@ def test_component_forks_cannot_replace_an_existing_user_target(
 
     editable = drafts.open(CatalogDraftOpenRequest(source_ref=target_ref))
     forged_fields = {
-        **editable.model_dump(mode="json"),
+        **editable.state.model_dump(mode="json"),
         "source_ref": str(source_ref),
         "expected_source_revision": source.revision,
     }
     with pytest.raises(ValidationError, match="fork targets must not already exist"):
-        CatalogComponentDraftEnvelope.model_validate(forged_fields)
+        CatalogComponentDraftState.model_validate(forged_fields)
 
-    forged = editable.model_copy(
+    forged = editable.state.model_copy(
         update={
             "source_ref": source_ref,
             "expected_source_revision": source.revision,
@@ -280,8 +281,8 @@ def test_a_control_edit_changes_only_the_selected_field_on_an_advanced_site(
     patched = _set_scalar(drafts, opened, "/site/display_name", "Suva authoring copy")
     saved = drafts.save(
         CatalogDraftSaveRequest(
-            draft=patched,
-            expected_draft_revision=patched.draft_revision,
+            draft=patched.state,
+            expected_draft_revision=patched.state.draft_revision,
         )
     )
 
@@ -306,15 +307,15 @@ def test_site_node_command_uses_explicit_identity_and_backend_derived_shape(
 
     added = drafts.add_site_node(
         CatalogDraftAddSiteNodeRequest(
-            draft=opened,
-            expected_draft_revision=opened.draft_revision,
+            draft=opened.state,
+            expected_draft_revision=opened.state.draft_revision,
             node_id="edge-router",
             node_ref=node_ref,
         )
     )
 
-    assert added.draft_revision == opened.draft_revision + 1
-    installed = added.document["site"]["nodes"]
+    assert added.state.draft_revision == opened.state.draft_revision + 1
+    installed = added.state.document["site"]["nodes"]
     assert len(installed) == 1
     assert installed[0]["id"] == "edge-router"
     assert installed[0]["node"] == str(node_ref)
@@ -332,8 +333,8 @@ def test_site_node_command_uses_explicit_identity_and_backend_derived_shape(
     with pytest.raises(CatalogAuthoringError) as duplicate:
         drafts.add_site_node(
             CatalogDraftAddSiteNodeRequest(
-                draft=added,
-                expected_draft_revision=added.draft_revision,
+                draft=added.state,
+                expected_draft_revision=added.state.draft_revision,
                 node_id="edge-router",
                 node_ref=node_ref,
             )
@@ -343,8 +344,8 @@ def test_site_node_command_uses_explicit_identity_and_backend_derived_shape(
     terminal_draft = drafts.new(CatalogDraftNewRequest(family="terminals", object_id="not-a-site"))
     with pytest.raises(ValidationError, match="site-node commands require"):
         CatalogDraftAddSiteNodeRequest(
-            draft=terminal_draft,
-            expected_draft_revision=terminal_draft.draft_revision,
+            draft=terminal_draft.state,
+            expected_draft_revision=terminal_draft.state.draft_revision,
             node_id="edge-router",
             node_ref=node_ref,
         )
@@ -359,34 +360,34 @@ def test_node_commands_derive_unique_mount_and_ethernet_shapes(
 
     mounted = drafts.add_node_terminal_mount(
         CatalogDraftAddNodeTerminalMountRequest(
-            draft=opened,
-            expected_draft_revision=opened.draft_revision,
+            draft=opened.state,
+            expected_draft_revision=opened.state.draft_revision,
             terminal_ref=terminal_ref,
             role="access",
         )
     )
     mounted_again = drafts.add_node_terminal_mount(
         CatalogDraftAddNodeTerminalMountRequest(
-            draft=mounted,
-            expected_draft_revision=mounted.draft_revision,
+            draft=mounted.state,
+            expected_draft_revision=mounted.state.draft_revision,
             terminal_ref=terminal_ref,
             role="access",
         )
     )
     first_port = drafts.add_node_ethernet_port(
         CatalogDraftAddNodeEthernetPortRequest(
-            draft=mounted_again,
-            expected_draft_revision=mounted_again.draft_revision,
+            draft=mounted_again.state,
+            expected_draft_revision=mounted_again.state.draft_revision,
         )
     )
     second_port = drafts.add_node_ethernet_port(
         CatalogDraftAddNodeEthernetPortRequest(
-            draft=first_port,
-            expected_draft_revision=first_port.draft_revision,
+            draft=first_port.state,
+            expected_draft_revision=first_port.state.draft_revision,
         )
     )
 
-    assert second_port.document["node"]["terminals"] == [
+    assert second_port.state.document["node"]["terminals"] == [
         {
             "id": "access_0",
             "role": "access",
@@ -402,7 +403,7 @@ def test_node_commands_derive_unique_mount_and_ethernet_shapes(
             "boresight": {"mode": "nadir"},
         },
     ]
-    assert second_port.document["node"]["ethernet"] == [
+    assert second_port.state.document["node"]["ethernet"] == [
         {"id": "terr0"},
         {"id": "terr1"},
     ]
@@ -410,7 +411,7 @@ def test_node_commands_derive_unique_mount_and_ethernet_shapes(
     with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
         CatalogDraftAddNodeTerminalMountRequest.model_validate(
             {
-                "draft": opened.model_dump(mode="json"),
+                "draft": opened.state.model_dump(mode="json"),
                 "expected_draft_revision": 0,
                 "terminal_ref": str(terminal_ref),
                 "role": "access",
@@ -427,8 +428,8 @@ def test_default_shipped_customization_never_overwrites_an_existing_user_object(
     first = drafts.open(CatalogDraftOpenRequest(source_ref=source_ref))
     drafts.save(
         CatalogDraftSaveRequest(
-            draft=first,
-            expected_draft_revision=first.draft_revision,
+            draft=first.state,
+            expected_draft_revision=first.state.draft_revision,
         )
     )
 
@@ -452,14 +453,16 @@ def test_control_edit_compile_and_save_reject_stale_draft_or_catalog_revisions(
         context,
         authoring,
         CatalogDocumentWriteRequest(
-            ref=opened.target_ref,
-            document=opened.document,
+            ref=opened.state.target_ref,
+            document=opened.state.document,
             expected_revision=None,
         ),
     )
     for operation in (
-        lambda: drafts.compile(CatalogDraftCompileRequest(draft=opened, expected_draft_revision=0)),
-        lambda: drafts.save(CatalogDraftSaveRequest(draft=opened, expected_draft_revision=0)),
+        lambda: drafts.compile(
+            CatalogDraftCompileRequest(draft=opened.state, expected_draft_revision=0)
+        ),
+        lambda: drafts.save(CatalogDraftSaveRequest(draft=opened.state, expected_draft_revision=0)),
     ):
         with pytest.raises(CatalogAuthoringError) as stale_catalog:
             operation()
@@ -516,14 +519,14 @@ def test_draft_save_is_generation_fenced_to_its_compile_snapshot(
     with pytest.raises(CatalogAuthoringError) as stale:
         drafts.save(
             CatalogDraftSaveRequest(
-                draft=opened,
-                expected_draft_revision=opened.draft_revision,
+                draft=opened.state,
+                expected_draft_revision=opened.state.draft_revision,
             )
         )
 
     assert stale.value.code == "catalog_authoring.stale_revision"
     with pytest.raises(CatalogAuthoringError) as missing:
-        authoring.get_catalog(CatalogGetRequest(ref=opened.target_ref))
+        authoring.get_catalog(CatalogGetRequest(ref=opened.state.target_ref))
     assert missing.value.code == "catalog_authoring.not_found"
 
 
@@ -537,8 +540,8 @@ def test_compile_separates_structural_saveability_from_runtime_support(
     crtbp = next(branch for branch in propagator.branches if branch.label == "Crtbp")
     patched = drafts.mutate_controls(
         CatalogDraftControlMutationRequest(
-            draft=opened,
-            expected_draft_revision=opened.draft_revision,
+            draft=opened.state,
+            expected_draft_revision=opened.state.draft_revision,
             commands=(
                 BuilderSelectChoiceCommand(
                     operation="select_choice",
@@ -550,8 +553,8 @@ def test_compile_separates_structural_saveability_from_runtime_support(
     )
     compiled = drafts.compile(
         CatalogDraftCompileRequest(
-            draft=patched,
-            expected_draft_revision=patched.draft_revision,
+            draft=patched.state,
+            expected_draft_revision=patched.state.draft_revision,
         )
     )
 
@@ -567,15 +570,15 @@ def test_compile_blocks_dangling_component_reference_before_save(
 ) -> None:
     drafts, _, _ = _services(tmp_path)
     opened = drafts.open(CatalogDraftOpenRequest(source_ref=_first_shipped_ref("nodes")))
-    assert opened.document["node"]["terminals"]
+    assert opened.state.document["node"]["terminals"]
     patched = _set_scalar(
         drafts, opened, "/node/terminals/0/terminal", "user:terminals/does-not-exist.yaml"
     )
 
     compiled = drafts.compile(
         CatalogDraftCompileRequest(
-            draft=patched,
-            expected_draft_revision=patched.draft_revision,
+            draft=patched.state,
+            expected_draft_revision=patched.state.draft_revision,
         )
     )
 
@@ -596,8 +599,8 @@ def test_yaml_buffer_is_parsed_identity_checked_and_revisioned_by_backend(
     )
     result = drafts.apply_yaml(
         CatalogDraftApplyYamlRequest(
-            draft=opened,
-            expected_draft_revision=opened.draft_revision,
+            draft=opened.state,
+            expected_draft_revision=opened.state.draft_revision,
             yaml_text=yaml_text,
         )
     )
@@ -605,10 +608,10 @@ def test_yaml_buffer_is_parsed_identity_checked_and_revisioned_by_backend(
     assert result.applied is True
     assert result.yaml_text == yaml_text
     assert result.canonicalization_required is True
-    assert result.draft.draft_revision == opened.draft_revision + 1
-    assert result.draft.expected_source_revision == opened.expected_source_revision
-    assert result.draft.expected_target_revision == opened.expected_target_revision
-    assert result.draft.document["payload"]["display_name"] == "Backend parsed"
+    assert result.draft.state.draft_revision == opened.state.draft_revision + 1
+    assert result.draft.state.expected_source_revision == opened.state.expected_source_revision
+    assert result.draft.state.expected_target_revision == opened.state.expected_target_revision
+    assert result.draft.state.document["payload"]["display_name"] == "Backend parsed"
     assert result.draft.projected_yaml == opened.projected_yaml.replace(
         "Advanced payload source",
         "Backend parsed",
@@ -624,8 +627,8 @@ def test_yaml_buffer_is_parsed_identity_checked_and_revisioned_by_backend(
     ):
         refused = drafts.apply_yaml(
             CatalogDraftApplyYamlRequest(
-                draft=opened,
-                expected_draft_revision=opened.draft_revision,
+                draft=opened.state,
+                expected_draft_revision=opened.state.draft_revision,
                 yaml_text=raw,
             )
         )
@@ -637,8 +640,8 @@ def test_yaml_buffer_is_parsed_identity_checked_and_revisioned_by_backend(
 
     syntax = drafts.apply_yaml(
         CatalogDraftApplyYamlRequest(
-            draft=opened,
-            expected_draft_revision=opened.draft_revision,
+            draft=opened.state,
+            expected_draft_revision=opened.state.draft_revision,
             yaml_text="payload: [",
         )
     )
@@ -648,8 +651,8 @@ def test_yaml_buffer_is_parsed_identity_checked_and_revisioned_by_backend(
     unknown_yaml = opened.projected_yaml + "  unknown_field: true\n"
     invalid_model = drafts.apply_yaml(
         CatalogDraftApplyYamlRequest(
-            draft=opened,
-            expected_draft_revision=opened.draft_revision,
+            draft=opened.state,
+            expected_draft_revision=opened.state.draft_revision,
             yaml_text=unknown_yaml,
         )
     )

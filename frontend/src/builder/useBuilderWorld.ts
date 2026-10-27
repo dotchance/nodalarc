@@ -229,7 +229,7 @@ function _bumpLibraryRevision(): void {
 export async function announceCatalogDraftSaved(
   result: CatalogDraftSaveResult,
 ): Promise<void> {
-  const entries = await refreshCatalogFamily(result.draft.family);
+  const entries = await refreshCatalogFamily(result.draft.state.family);
   const saved = entries.find((entry) => entry.ref === result.result.document.ref);
   if (saved) requestLibraryReveal(saved);
   _bumpLibraryRevision();

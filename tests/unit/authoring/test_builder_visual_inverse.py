@@ -82,7 +82,6 @@ def test_open_projects_and_no_edit_compiles_every_shipped_session_canonically(
     source_ref = f"nodalarc:sessions/{session_path.name}"
     opened = service.open(BuilderVisualDraftOpenRequest(source_ref=source_ref))
 
-    assert opened.contract_version == 2
     assert opened.projection_status == "applied"
     assert opened.session_yaml == session_path.read_text(encoding="utf-8")
     assert opened.applied_revision == opened.draft_revision == 0

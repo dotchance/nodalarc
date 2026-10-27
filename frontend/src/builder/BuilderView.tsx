@@ -1122,7 +1122,7 @@ export function BuilderView({
     if (
       catalogDraft &&
       catalogDraftDirty &&
-      !(await askToDiscard(`${label} discards the unsaved changes to ${catalogDraft.target_ref}.`))
+      !(await askToDiscard(`${label} discards the unsaved changes to ${catalogDraft.state.target_ref}.`))
     ) {
       return false;
     }
@@ -1224,7 +1224,7 @@ export function BuilderView({
     targetRef: string,
   ): Promise<boolean> => {
     setLibraryError(null);
-    if (catalogDraft?.target_ref === targetRef) {
+    if (catalogDraft?.state.target_ref === targetRef) {
       openEditor({ kind: "library" });
       return true;
     }
@@ -1261,7 +1261,7 @@ export function BuilderView({
   const handleLibraryNew = async (family: string, objectId: string): Promise<boolean> => {
     setLibraryError(null);
     const targetRef = `user:${family}/${objectId}.yaml`;
-    if (catalogDraft?.target_ref === targetRef) {
+    if (catalogDraft?.state.target_ref === targetRef) {
       openEditor({ kind: "library" });
       return true;
     }
@@ -1965,7 +1965,7 @@ export function BuilderView({
       case "library": {
         if (!catalogDraft) return null;
         const metadata = builderBootstrap.bootstrap?.families.find(
-          (entry) => entry.family === catalogDraft.family,
+          (entry) => entry.family === catalogDraft.state.family,
         );
         if (!metadata) {
           return {
@@ -1974,19 +1974,19 @@ export function BuilderView({
           };
         }
         const verb =
-          catalogDraft.source_ref && catalogDraft.source_ref !== catalogDraft.target_ref
+          catalogDraft.state.source_ref && catalogDraft.state.source_ref !== catalogDraft.state.target_ref
             ? "Customize"
-            : catalogDraft.expected_target_revision
+            : catalogDraft.state.expected_target_revision
               ? "Edit"
               : "New";
-        const objectKind = metadata.wrapper?.replace(/_/g, " ") ?? catalogDraft.family;
-        const close = () => void discardCatalogDraftFor(`closing ${catalogDraft.target_ref}`);
+        const objectKind = metadata.wrapper?.replace(/_/g, " ") ?? catalogDraft.state.family;
+        const close = () => void discardCatalogDraftFor(`closing ${catalogDraft.state.target_ref}`);
         return {
           title: `${verb} ${objectKind}`,
           content: (
             <CatalogDraftEditorWindow
               authoring={authoring!}
-              key={catalogDraft.target_ref}
+              key={catalogDraft.state.target_ref}
               initialDraft={catalogDraft}
               onSaved={async (result) => {
                 setCatalogDraft(result.draft);

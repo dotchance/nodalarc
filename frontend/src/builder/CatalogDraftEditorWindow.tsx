@@ -178,7 +178,7 @@ export function CatalogDraftEditorWindow({
 }) {
   const [draft, setDraft] = useState(initialDraft);
   const draftRef = useRef(initialDraft);
-  const [baselineDocument, setBaselineDocument] = useState(initialDraft.document);
+  const [baselineDocument, setBaselineDocument] = useState(initialDraft.state.document);
   const [compileResult, setCompileResult] = useState<CatalogDraftCompileResult | null>(null);
   const [yamlText, setYamlText] = useState(initialDraft.projected_yaml);
   const [appliedYamlText, setAppliedYamlText] = useState(initialDraft.projected_yaml);
@@ -190,7 +190,7 @@ export function CatalogDraftEditorWindow({
   const [busy, setBusy] = useState<"idle" | "validating" | "saving">("idle");
   const [impact, setImpact] = useState<CatalogDependencyImpact | null>(null);
   const [impactState, setImpactState] = useState<"not-required" | "loading" | "loaded" | "failed">(
-    initialDraft.expected_target_revision ? "loading" : "not-required",
+    initialDraft.state.expected_target_revision ? "loading" : "not-required",
   );
   const [impactAttempt, setImpactAttempt] = useState(0);
   const yamlBufferGeneration = useRef(0);
@@ -200,7 +200,7 @@ export function CatalogDraftEditorWindow({
     promise: Promise<CatalogComponentDraftEnvelope | null>;
   } | null>(null);
   const yamlTextDirty = yamlText !== appliedYamlText;
-  const semanticDirty = !jsonEqual(baselineDocument, draft.document);
+  const semanticDirty = !jsonEqual(baselineDocument, draft.state.document);
   const dirty = semanticDirty || yamlTextDirty || canonicalizationRequired
     || canonicalizationAccepted;
   const graphicalEditingBlocked = yamlTextDirty || canonicalizationRequired;
@@ -213,14 +213,14 @@ export function CatalogDraftEditorWindow({
   }, [dirty, onDirtyChange]);
 
   useEffect(() => {
-    if (!draft.expected_target_revision) {
+    if (!draft.state.expected_target_revision) {
       setImpact(null);
       setImpactState("not-required");
       return;
     }
     setImpact(null);
     setImpactState("loading");
-    void getCatalogDependents({ ref: draft.target_ref }).then(
+    void getCatalogDependents({ ref: draft.state.target_ref }).then(
       (result) => {
         setImpact(result);
         setImpactState("loaded");
@@ -230,7 +230,7 @@ export function CatalogDraftEditorWindow({
         setError(cause instanceof Error ? cause.message : String(cause));
       },
     );
-  }, [draft.expected_target_revision, draft.target_ref, impactAttempt]);
+  }, [draft.state.expected_target_revision, draft.state.target_ref, impactAttempt]);
 
   const adoptGraphicalDraft = (updated: CatalogComponentDraftEnvelope) => {
     yamlBufferGeneration.current += 1;
@@ -256,8 +256,8 @@ export function CatalogDraftEditorWindow({
       try {
         const baseDraft = draftRef.current;
         const result = await applyCatalogDraftYaml({
-          draft: baseDraft,
-          expected_draft_revision: baseDraft.draft_revision,
+          draft: baseDraft.state,
+          expected_draft_revision: baseDraft.state.draft_revision,
           yaml_text: buffer,
         });
         if (yamlBufferGeneration.current !== generation) return null;
@@ -310,8 +310,8 @@ export function CatalogDraftEditorWindow({
     try {
       const base = draftRef.current;
       const updated = await addCatalogDraftSiteNode({
-        draft: base,
-        expected_draft_revision: base.draft_revision,
+        draft: base.state,
+        expected_draft_revision: base.state.draft_revision,
         node_id: nodeId,
         node_ref: nodeRef,
       });
@@ -334,8 +334,8 @@ export function CatalogDraftEditorWindow({
     try {
       const base = draftRef.current;
       const updated = await addCatalogDraftNodeTerminal({
-        draft: base,
-        expected_draft_revision: base.draft_revision,
+        draft: base.state,
+        expected_draft_revision: base.state.draft_revision,
         terminal_ref: terminalRef,
         role,
       });
@@ -355,8 +355,8 @@ export function CatalogDraftEditorWindow({
     try {
       const base = draftRef.current;
       const updated = await addCatalogDraftNodeEthernet({
-        draft: base,
-        expected_draft_revision: base.draft_revision,
+        draft: base.state,
+        expected_draft_revision: base.state.draft_revision,
       });
       adoptGraphicalDraft(updated);
       return true;
@@ -379,8 +379,8 @@ export function CatalogDraftEditorWindow({
     try {
       const baseDraft = draftRef.current;
       const updated = await mutateCatalogDraftControls({
-        draft: baseDraft,
-        expected_draft_revision: baseDraft.draft_revision,
+        draft: baseDraft.state,
+        expected_draft_revision: baseDraft.state.draft_revision,
         commands,
       });
       adoptGraphicalDraft(updated);
@@ -396,8 +396,8 @@ export function CatalogDraftEditorWindow({
       const patched = yamlTextDirty ? await applyYaml() : draftRef.current;
       if (!patched) return;
       const compiled = await compileCatalogDraft({
-        draft: patched,
-        expected_draft_revision: patched.draft_revision,
+        draft: patched.state,
+        expected_draft_revision: patched.state.draft_revision,
       });
       draftRef.current = compiled.draft;
       setDraft(compiled.draft);
@@ -411,7 +411,7 @@ export function CatalogDraftEditorWindow({
   };
 
   const save = async () => {
-    if (draft.expected_target_revision && impactState !== "loaded") {
+    if (draft.state.expected_target_revision && impactState !== "loaded") {
       setError("Dependency impact must load before this user component can be overwritten.");
       return;
     }
@@ -429,8 +429,8 @@ export function CatalogDraftEditorWindow({
         return;
       }
       const compiled = await compileCatalogDraft({
-        draft: patched,
-        expected_draft_revision: patched.draft_revision,
+        draft: patched.state,
+        expected_draft_revision: patched.state.draft_revision,
       });
       draftRef.current = compiled.draft;
       setDraft(compiled.draft);
@@ -438,13 +438,13 @@ export function CatalogDraftEditorWindow({
       setCompileResult(compiled);
       if (!compiled.save_allowed) return;
       const saved = await saveCatalogDraft({
-        draft: compiled.draft,
-        expected_draft_revision: compiled.draft.draft_revision,
+        draft: compiled.draft.state,
+        expected_draft_revision: compiled.draft.state.draft_revision,
       });
       yamlBufferGeneration.current += 1;
       draftRef.current = saved.draft;
       setDraft(saved.draft);
-      setBaselineDocument(saved.draft.document);
+      setBaselineDocument(saved.draft.state.document);
       setYamlText(saved.draft.projected_yaml);
       setAppliedYamlText(saved.draft.projected_yaml);
       setYamlIssues([]);
@@ -460,7 +460,7 @@ export function CatalogDraftEditorWindow({
   };
 
   const gesturesDisabled = busy !== "idle" || graphicalEditingBlocked;
-  const gestures = draft.family === "nodes"
+  const gestures = draft.state.family === "nodes"
     ? (
       <NodeGestures
         authoring={authoring}
@@ -469,16 +469,16 @@ export function CatalogDraftEditorWindow({
         addEthernetPort={addNodeEthernetPort}
       />
     )
-    : draft.family === "sites"
+    : draft.state.family === "sites"
       ? <SiteGestures disabled={gesturesDisabled} addNode={addSiteNode} />
       : null;
 
   return (
     <div className="builder-inspector-stack" data-testid="catalog-draft-editor">
       <div className="builder-site-derived">
-        {draft.source_ref && draft.source_ref !== draft.target_ref
-          ? `customizing ${draft.source_ref} as ${draft.target_ref}`
-          : `editing ${draft.target_ref}`}
+        {draft.state.source_ref && draft.state.source_ref !== draft.state.target_ref
+          ? `customizing ${draft.state.source_ref} as ${draft.state.target_ref}`
+          : `editing ${draft.state.target_ref}`}
       </div>
       <div className="catalog-draft-surfaces">
         <div className="builder-inspector-stack" data-testid="catalog-graphical-editor">
@@ -491,7 +491,7 @@ export function CatalogDraftEditorWindow({
           {gestures}
           {yamlTextDirty && (
             <div className="builder-warning" data-testid="catalog-yaml-stale-marker">
-              Showing applied revision {draft.draft_revision}; the YAML buffer has unapplied edits.
+              Showing applied revision {draft.state.draft_revision}; the YAML buffer has unapplied edits.
             </div>
           )}
           {canonicalizationRequired && (
@@ -594,7 +594,7 @@ export function CatalogDraftEditorWindow({
       {impactState === "loading" && (
         <div className="builder-site-derived">checking saved dependents before overwrite…</div>
       )}
-      {impactState === "failed" && draft.expected_target_revision && (
+      {impactState === "failed" && draft.state.expected_target_revision && (
         <Button
           onClick={() => {
             setError(null);

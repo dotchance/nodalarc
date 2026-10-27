@@ -214,8 +214,8 @@ export function claimOutlineReveal(
 
 // --- Library revision: bumps on every user-catalog mutation. -----------
 // The workspace does not change when a library object does, but the
-// dependency closure can change. Compile depends on this revision so the
-// deploy gate tracks library drift, including deletion.
+// dependency closure can change. The Builder's preview depends on this
+// revision, so open edits recompile against the changed closure.
 
 let _libraryRevision = 0;
 const _libraryRevisionListeners = new Set<() => void>();

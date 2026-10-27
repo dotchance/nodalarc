@@ -189,7 +189,7 @@ export function useEditorWindows({
     const closing = new Set(closingWindows.map((w) => w.key));
     if (closing.size === 0) return;
     setWindows((prev) => prev.filter((w) => !closing.has(w.key)));
-    markBufferMutation();
+    if ([...closing].some((key) => key in buffers)) markBufferMutation();
     setBuffers((prev) => {
       let changed = false;
       const next = { ...prev };

@@ -687,13 +687,26 @@ export function BuilderView({
   );
   const markClean = (draft: BuilderVisualDraftEnvelope) =>
     setCleanDraft({ targetRef: draft.target_ref, revision: draft.draft_revision });
+  // Whether the twin holds no edit the backend has not accepted.
+  const twinMatchesDraft = sameWorkspace(
+    workspace,
+    (visualDraft?.authoring_workspace ?? visualDraft?.applied_workspace ?? null) as Workspace | null,
+  );
+  /** One accepting gesture at a time: a command, a customization or a control
+   *  edit starts only when no change is being applied and the twin holds no
+   *  edit the backend has not accepted (it would be discarded otherwise). */
+  const refuseUnlessSettled = () => {
+    if (writer !== null) {
+      throw new Error("A change is still being applied; try again when it finishes.");
+    }
+    if (!twinMatchesDraft) {
+      throw new Error("An edit has not been accepted yet; wait for it, or undo it, first.");
+    }
+  };
   const unsavedSessionWork = draftHoldsUnsavedWork({
     draft: visualDraft,
     clean: cleanDraft,
-    twinMatchesDraft: sameWorkspace(
-      workspace,
-      (visualDraft?.authoring_workspace ?? visualDraft?.applied_workspace ?? null) as Workspace | null,
-    ),
+    twinMatchesDraft,
     dirtyWindowCount: dirtyWindows,
     yamlDirty: yamlBuffer.dirty,
   });
@@ -750,8 +763,8 @@ export function BuilderView({
   // as the next accepted revision, and the twin is re-seeded from the result
   // unless it moved again meanwhile. Open windows' unapplied edits are only
   // previewed: the backend compiles them over the draft and accepts nothing.
-  // The library revision is a dependency on purpose: a user-catalog mutation
-  // changes its dependency closure, so both settled digests must recompile.
+  // The library revision is a dependency so a preview recompiles when a
+  // user-catalog mutation changes the dependency closure under open edits.
   const libraryRevision = useLibraryRevision();
   // A New session the backend refuses surfaces here; the current workspace stands.
   const [draftError, setDraftError] = useState<string | null>(null);
@@ -836,11 +849,11 @@ export function BuilderView({
       const tag = target?.tagName;
       if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
       event.preventDefault();
-      undo();
+      if (writer === null) undo();
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [active, undo]);
+  }, [active, undo, writer]);
   // the object a create gesture just made — its editor focuses the
   // name once.
   const [freshId, setFreshId] = useState<string | null>(null);
@@ -1128,6 +1141,7 @@ export function BuilderView({
     if (visualCommandInFlight.current) {
       throw new Error("another visual command is still being applied");
     }
+    refuseUnlessSettled();
     visualCommandInFlight.current = true;
     try {
       const projected = visualDraft?.authoring_workspace ?? visualDraft?.applied_workspace;
@@ -1836,6 +1850,7 @@ export function BuilderView({
               rootRef={target.rootRef}
               dependencyRefs={dependencyRefs}
               onCustomize={async (leafRef, targetLeafRef) => {
+                refuseUnlessSettled();
                 const startedFrom = currentWorkspace();
                 const result = await customizeChain({
                   segment_id: target.segmentId,
@@ -2178,7 +2193,7 @@ export function BuilderView({
           onClick={() => openEditor({ kind: "catalog" })}
         />
       </div>
-      <div className="builder-outline" data-testid="builder-outline">
+      <div className="builder-outline" data-testid="builder-outline" inert={writer !== null}>
         <div className="builder-zone-title">World</div>
         {openedSession && visualDraft && (
           <div className="builder-warning" data-testid="opened-session-lossless">
@@ -2818,7 +2833,7 @@ export function BuilderView({
           </div>
         )}
       </div>
-      <div className="builder-windows" data-testid="builder-windows">
+      <div className="builder-windows" data-testid="builder-windows" inert={writer !== null}>
         {windows.map((win) => {
           const body = renderWindow(win.target);
           if (!body) return null;
@@ -2862,7 +2877,7 @@ export function BuilderView({
             <summary>Additional graphical fields</summary>
             <GraphicalControlTreeEditor
               tree={visualDraft.control_tree}
-              disabled={yamlBlocksGui || dirtyWindows > 0 || writer !== null}
+              disabled={yamlBlocksGui || dirtyWindows > 0 || writer !== null || !twinMatchesDraft}
               hideSpecialized
               onMutate={async (commands: ReadonlyArray<BuilderControlMutation>) => {
                 setLibraryError(null);

@@ -47,7 +47,7 @@ import {
   newWorkspace,
 } from "./fixtures/workspaceFixtures";
 import type { CatalogDocumentSummary, JsonValue } from "../generated/builderApi";
-import { canDeploy } from "../useBuilderWorld";
+import { canDeploy, yamlBlocksGraphicalEditing } from "../useBuilderWorld";
 import {
   appliedObjectForKey,
   bufferAppliedChanged,
@@ -634,6 +634,37 @@ describe("deferred-clamp number contract (local string draft)", () => {
     expect(value).toBe(25); // 5 < min 10 → unchanged
     fireEvent.change(box, { target: { value: "" } });
     expect(value).toBeNull(); // empty → null contract survives the draft rewrite
+  });
+});
+
+describe("the YAML buffer locks graphical editing only around an open draft's text", () => {
+  const buffer = {
+    text: "",
+    appliedText: "",
+    generation: 0,
+    dirty: false,
+    applied: false,
+    canonicalizationRequired: false,
+    canonicalizationAccepted: false,
+    issues: [],
+  };
+
+  it("leaves the Builder usable when no draft is open", () => {
+    // A Builder with nothing open must still let the user open or create a session.
+    expect(yamlBlocksGraphicalEditing(false, buffer)).toBe(false);
+  });
+
+  it("locks while the open draft's YAML is unapplied, dirty or uncanonicalized", () => {
+    expect(yamlBlocksGraphicalEditing(true, buffer)).toBe(true);
+    expect(yamlBlocksGraphicalEditing(true, { ...buffer, applied: true, dirty: true })).toBe(true);
+    expect(
+      yamlBlocksGraphicalEditing(true, {
+        ...buffer,
+        applied: true,
+        canonicalizationRequired: true,
+      }),
+    ).toBe(true);
+    expect(yamlBlocksGraphicalEditing(true, { ...buffer, applied: true })).toBe(false);
   });
 });
 

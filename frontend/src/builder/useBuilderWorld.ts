@@ -322,6 +322,21 @@ export function canDeploy(input: {
   return { ok: true, reason: null };
 }
 
+/** Whether the session YAML buffer holds text the graphical editors must not
+ *  edit around: unapplied or uncanonicalized text of the open draft. With no
+ *  draft open the buffer holds no text, and nothing is locked. */
+export function yamlBlocksGraphicalEditing(
+  hasDraft: boolean,
+  buffer: SessionYamlBufferState,
+): boolean {
+  return (
+    hasDraft &&
+    (buffer.dirty ||
+      !buffer.applied ||
+      (buffer.canonicalizationRequired && !buffer.canonicalizationAccepted))
+  );
+}
+
 /** One catalog family's primitives — shared state across all consumers. */
 export function useBuilderCatalog(family: string) {
   const store = _catalogStore(family);

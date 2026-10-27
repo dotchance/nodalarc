@@ -66,6 +66,7 @@ import { BoundaryEditor, RoutingDomainEditor } from "./RoutingEditor";
 import { SessionEditor, timeRateSummary } from "./SessionEditor";
 import {
   canDeploy,
+  yamlBlocksGraphicalEditing,
   announceCatalogDraftSaved,
   claimLibraryReveal,
   claimOutlineReveal,
@@ -809,10 +810,7 @@ export function BuilderView({
       workspace.ground.length +
       workspace.ground_refs.length >
       0;
-  const yamlBlocksGui =
-    yamlBuffer.dirty ||
-    !yamlBuffer.applied ||
-    (yamlBuffer.canonicalizationRequired && !yamlBuffer.canonicalizationAccepted);
+  const yamlBlocksGui = yamlBlocksGraphicalEditing(visualDraft !== null, yamlBuffer);
   useEffect(() => {
     if (saveState.kind === "saving" || !workspace || !visualDraft || yamlBlocksGui) return;
     const preview = previewWorkspace();

@@ -23,7 +23,7 @@ import { useKeyboard } from "./hooks/useKeyboard";
 import { useSessionSwitcher } from "./hooks/useSessionSwitcher";
 import { usePlayback } from "./hooks/usePlayback";
 import { useAppState } from "./hooks/useAppState";
-import { filterSnapshotForRender, nodeSegmentId } from "./filters/renderSnapshot";
+import { filterSnapshotForRender } from "./filters/renderSnapshot";
 import { buildRegimeIndex } from "./taxonomy/regime";
 import { selectionTypeForNode } from "./networkIdentity";
 import { SessionWizard } from "./catalog/SessionWizard";
@@ -178,7 +178,7 @@ function AppInner() {
       if (prev === null) {
         const allSegments = new Set<string>();
         if (snapshot) {
-          for (const node of snapshot.nodes) allSegments.add(nodeSegmentId(node));
+          for (const node of snapshot.nodes) allSegments.add(node.segment_id);
         }
         allSegments.delete(segmentId);
         return allSegments;
@@ -194,7 +194,7 @@ function AppInner() {
   const handleHideAllSegments = useCallback(() => setVisibleSegments(new Set()), []);
   const handleFlyToSegment = useCallback((segmentId: string) => {
     const nodeIds = (snapshot?.nodes ?? [])
-      .filter((node) => nodeSegmentId(node) === segmentId)
+      .filter((node) => node.segment_id === segmentId)
       .map((node) => node.node_id);
     globeActionsRef.current?.flyToSegment(nodeIds);
   }, [snapshot]);

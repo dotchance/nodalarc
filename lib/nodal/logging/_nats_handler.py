@@ -37,6 +37,8 @@ class NatsHandler(logging.Handler):
         self._source = service.rsplit(".", 1)[-1]
         self._service_package = service.rsplit(".", 1)[-1]
         self._nats_level = level
+        # The level the service configured; a debug "disable" returns here.
+        self._configured_level = level
         self._deque: collections.deque[tuple[str, bytes]] = collections.deque(maxlen=500)
         self._ops_formatter = OpsEventFormatter()
         self._loop: asyncio.AbstractEventLoop | None = None
@@ -63,6 +65,11 @@ class NatsHandler(logging.Handler):
             pkg_logger.setLevel(logging.DEBUG)
         else:
             pkg_logger.setLevel(logging.NOTSET)
+
+    def restore_configured_level(self) -> int:
+        """Return NATS publishing to the level the service configured."""
+        self.set_nats_level(self._configured_level)
+        return self._configured_level
 
     def emit(self, record: logging.LogRecord) -> None:
         try:

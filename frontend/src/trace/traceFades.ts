@@ -34,6 +34,11 @@ interface FadeEntry {
   present: boolean;
 }
 
+/** A trace is identified by the endpoints it runs between. */
+export function traceKey(path: Pick<TracedPath, "src_node" | "dst_node">): string {
+  return `${path.src_node}\u2192${path.dst_node}`;
+}
+
 export class TraceFades {
   private readonly entries = new Map<string, FadeEntry>();
 
@@ -41,7 +46,7 @@ export class TraceFades {
   observe(paths: readonly TracedPath[], now: number): void {
     for (const entry of this.entries.values()) entry.present = false;
     for (const path of paths) {
-      const entry = this.entries.get(path.flow_id);
+      const entry = this.entries.get(traceKey(path));
       // Live: no stop time. Seen stopping: now. Already stopping: kept.
       // First seen stopped: long gone.
       const stoppedAt = path.tracing
@@ -49,7 +54,7 @@ export class TraceFades {
         : entry === undefined
           ? -Infinity
           : (entry.stoppedAt ?? now);
-      this.entries.set(path.flow_id, { path, stoppedAt, present: true });
+      this.entries.set(traceKey(path), { path, stoppedAt, present: true });
     }
     for (const [flowId, entry] of this.entries) {
       if (entry.present) continue;

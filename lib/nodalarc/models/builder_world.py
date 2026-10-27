@@ -83,7 +83,8 @@ class BuilderWorldNode(BaseModel):
     node_id: str
     local_node_id: str
     segment_id: str
-    namespace: str | None = None
+    namespace: str
+    tenant_id: str
     kind: NodeKind
     plane: int | None = None
     slot: int | None = None

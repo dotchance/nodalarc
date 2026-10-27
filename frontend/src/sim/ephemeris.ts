@@ -16,6 +16,7 @@
  */
 
 import { gmstRadians } from "../globe/astronomy";
+import type { SurfaceBody } from "../types";
 import {
   J2000_UNIX_SECONDS,
   SCENE_EARTH_RADIUS,
@@ -39,12 +40,12 @@ export interface EphemerisNodeKeplerian {
   mean_anomaly_deg: number;
   plane: number;
   slot: number;
-  segment_id?: string | null;
-  local_node_id?: string | null;
-  namespace?: string | null;
-  tags?: readonly string[];
-  reference_body: string;
-  frame_id: string;
+  segment_id: string;
+  local_node_id: string;
+  namespace: string;
+  tags: readonly string[];
+  reference_body: SurfaceBody;
+  frame_id: SurfaceBody;
 }
 
 export interface EphemerisNodeTLE {
@@ -54,12 +55,12 @@ export interface EphemerisNodeTLE {
   plane: number;
   slot: number;
   norad_id?: number | null;
-  segment_id?: string | null;
-  local_node_id?: string | null;
-  namespace?: string | null;
-  tags?: readonly string[];
-  reference_body: string;
-  frame_id: string;
+  segment_id: string;
+  local_node_id: string;
+  namespace: string;
+  tags: readonly string[];
+  reference_body: SurfaceBody;
+  frame_id: SurfaceBody;
 }
 
 export interface EphemerisNodeFixed {
@@ -67,18 +68,18 @@ export interface EphemerisNodeFixed {
   lat_deg: number;
   lon_deg: number;
   alt_km: number;
-  segment_id?: string | null;
-  local_node_id?: string | null;
-  namespace?: string | null;
-  tags?: readonly string[];
-  reference_body: string;
-  frame_id: string;
+  segment_id: string;
+  local_node_id: string;
+  namespace: string;
+  tags: readonly string[];
+  reference_body: SurfaceBody;
+  frame_id: SurfaceBody;
 }
 
 export type EphemerisNode = EphemerisNodeKeplerian | EphemerisNodeTLE | EphemerisNodeFixed;
 
 export interface EphemerisBodyFrame {
-  body_id: string;
+  body_id: SurfaceBody;
   mean_radius_km: number;
   equatorial_radius_km: number;
   polar_radius_km: number;
@@ -102,7 +103,7 @@ export interface SessionEphemeris {
   sim_time: string; // ISO 8601
   epoch_unix: number;
   nodes: Readonly<Record<string, EphemerisNode>>;
-  body_frames: Readonly<Record<string, EphemerisBodyFrame>>;
+  body_frames: Readonly<Partial<Record<SurfaceBody, EphemerisBodyFrame>>>;
 }
 
 export interface PlaybackStateMsg {

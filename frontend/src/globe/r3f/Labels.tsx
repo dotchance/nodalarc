@@ -27,7 +27,6 @@ import { isOccludedBySphere, getLabelsEnabled } from "../labels";
 import { getGsLabelsEnabled } from "../groundStations";
 import { getNodeBodySphere, getNodeWorldPosition } from "./positions";
 import type { NodeState } from "../../types";
-import { nodeDisplayLabel } from "../../networkIdentity";
 
 // Satellite-label distance fade (globe/labels.ts FADE_IN_DIST / FADE_OUT_DIST).
 const SAT_FADE_IN_DIST = 200;
@@ -98,7 +97,6 @@ export function collectFoldSegments(
   for (const set of out.values()) set.clear();
   probe.clear();
   for (const node of nodes) {
-    if (!node.reference_body) continue;
     if (!probe.has(node.reference_body)) probe.set(node.reference_body, node.node_id);
     const classEnabled =
       node.node_type === "satellite"
@@ -106,7 +104,7 @@ export function collectFoldSegments(
         : node.node_type === "ground_station"
           ? gsEnabled
           : false;
-    if (!classEnabled || !node.segment_id) continue;
+    if (!classEnabled) continue;
     let segments = out.get(node.reference_body);
     if (!segments) {
       segments = new Set();
@@ -195,7 +193,7 @@ export function siteLabelRepresentatives(
   const bySite = new Map<string, string[]>();
   for (const node of nodes) {
     if (node.node_type !== "ground_station") continue;
-    const site = node.namespace ?? node.node_id;
+    const site = node.namespace;
     const members = bySite.get(site);
     if (members) members.push(node.node_id);
     else bySite.set(site, [node.node_id]);
@@ -446,7 +444,7 @@ export function Labels({
     for (const node of nodeList) {
       if (node.node_type === "satellite") {
         _seenSats.add(node.node_id);
-        const label = nodeDisplayLabel(node);
+        const label = node.local_node_id;
         const existing = satLabels.current.get(node.node_id);
         if (!existing) {
           const div = createSatLabel(label);
@@ -458,7 +456,7 @@ export function Labels({
       } else if (node.node_type === "ground_station") {
         if (!gsRepresentativesRef.current.has(node.node_id)) continue;
         _seenGs.add(node.node_id);
-        const label = nodeDisplayLabel(node);
+        const label = node.local_node_id;
         const existing = gsLabels.current.get(node.node_id);
         if (!existing) {
           const div = createGsLabel(label);

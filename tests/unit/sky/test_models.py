@@ -345,7 +345,7 @@ class TestTracedPath:
     @staticmethod
     def _reached(**overrides) -> dict:
         fields = {
-            "flow_id": "ashburn-to-frankfurt",
+            "continuous_trace": True,
             "src_node": "gs-ashburn",
             "dst_node": "gs-frankfurt",
             "hops": ["gs-ashburn", "sat-P02S05", "gs-frankfurt"],

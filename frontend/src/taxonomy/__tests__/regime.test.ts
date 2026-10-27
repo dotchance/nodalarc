@@ -2,7 +2,7 @@
 // Licensed under the Apache License, Version 2.0. See LICENSE file.
 import { describe, it, expect } from "vitest";
 import { classifyRegime, buildRegimeIndex } from "../regime";
-import type { EphemerisNode, SessionEphemeris } from "../../sim/ephemeris";
+import type { EphemerisBodyFrame, EphemerisNode, SessionEphemeris } from "../../sim/ephemeris";
 
 const EARTH_R = 6371;
 
@@ -49,8 +49,7 @@ describe("regime classification (authored orbit, never instantaneous position)",
     ).toBe("luna");
   });
 
-  it("never guesses: unknown body, missing radius, and super-GEO report unclassified", () => {
-    expect(classifyRegime(keplerian({ semi_major_axis_km: 5000, eccentricity: 0, reference_body: "mars" }), 3390)).toBe("unknown");
+  it("never guesses: missing radius and super-GEO report unclassified", () => {
     expect(classifyRegime(keplerian({ semi_major_axis_km: EARTH_R + 550, eccentricity: 0 }), undefined)).toBe("unknown");
     expect(classifyRegime(keplerian({ semi_major_axis_km: EARTH_R + 60000, eccentricity: 0 }), EARTH_R)).toBe("unknown");
   });
@@ -62,10 +61,21 @@ describe("regime classification (authored orbit, never instantaneous position)",
       epoch_unix: 0,
       nodes: {
         "leo-sat-p00s00": keplerian({ semi_major_axis_km: EARTH_R + 550, eccentricity: 0.001 }),
-        "ground-gs-x": { type: "fixed", lat_deg: 0, lon_deg: 0, alt_km: 0, reference_body: "earth", frame_id: "earth" },
+        "ground-gs-x": {
+          type: "fixed",
+          lat_deg: 0,
+          lon_deg: 0,
+          alt_km: 0,
+          segment_id: "ground",
+          local_node_id: "gs-x",
+          namespace: "ground",
+          tags: [],
+          reference_body: "earth",
+          frame_id: "earth",
+        },
       },
       body_frames: {
-        earth: { body_id: "earth", mean_radius_km: EARTH_R } as SessionEphemeris["body_frames"][string],
+        earth: { body_id: "earth", mean_radius_km: EARTH_R } as EphemerisBodyFrame,
       },
     };
     const index = buildRegimeIndex(ephemeris);

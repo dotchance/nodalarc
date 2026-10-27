@@ -1654,7 +1654,8 @@ export interface BuilderWorldNode {
   readonly node_id: string;
   readonly local_node_id: string;
   readonly segment_id: string;
-  readonly namespace: string | null;
+  readonly namespace: string;
+  readonly tenant_id: string;
   readonly kind: "satellite" | "ground_station";
   readonly plane: number | null;
   readonly slot: number | null;
@@ -1677,7 +1678,7 @@ export interface BuilderWorldSegment {
 
 /** Body origin in the session common frame at ``epoch_unix``. Positions and velocities are Earth-relative GCRS-like km vectors supplied by the backend ephemeris provider. The renderer may apply a visual scale or camera-relative transform, but these numbers remain the authoritative physical frame facts used to place bodies relative to one another. */
 export interface EphemerisBodyFrame {
-  readonly body_id: string;
+  readonly body_id: "earth" | "luna";
   readonly mean_radius_km: number;
   readonly equatorial_radius_km: number;
   readonly polar_radius_km: number;
@@ -1702,12 +1703,12 @@ export interface EphemerisNodeFixed {
   readonly lat_deg: number;
   readonly lon_deg: number;
   readonly alt_km: number;
-  readonly segment_id: string | null;
-  readonly local_node_id: string | null;
-  readonly namespace: string | null;
+  readonly segment_id: string;
+  readonly local_node_id: string;
+  readonly namespace: string;
   readonly tags: ReadonlyArray<string>;
-  readonly reference_body: string;
-  readonly frame_id: string;
+  readonly reference_body: "earth" | "luna";
+  readonly frame_id: "earth" | "luna";
 }
 
 /** Mean-element ephemeris for a satellite. Fields mirror ``nodalarc.orbital.OrbitalElements``. The ``propagator`` field is part of the contract because the same element fields can drive either the two-body Keplerian engine or the J2 mean-element engine. Consumers must not silently treat J2 sessions as Keplerian. */
@@ -1722,12 +1723,12 @@ export interface EphemerisNodeKeplerian {
   readonly mean_anomaly_deg: number;
   readonly plane: number;
   readonly slot: number;
-  readonly segment_id: string | null;
-  readonly local_node_id: string | null;
-  readonly namespace: string | null;
+  readonly segment_id: string;
+  readonly local_node_id: string;
+  readonly namespace: string;
   readonly tags: ReadonlyArray<string>;
-  readonly reference_body: string;
-  readonly frame_id: string;
+  readonly reference_body: "earth" | "luna";
+  readonly frame_id: "earth" | "luna";
 }
 
 /** TLE-backed satellite ephemeris for SGP4 propagation. */
@@ -1738,12 +1739,12 @@ export interface EphemerisNodeTLE {
   readonly plane: number;
   readonly slot: number;
   readonly norad_id: number | null;
-  readonly segment_id: string | null;
-  readonly local_node_id: string | null;
-  readonly namespace: string | null;
+  readonly segment_id: string;
+  readonly local_node_id: string;
+  readonly namespace: string;
   readonly tags: ReadonlyArray<string>;
-  readonly reference_body: string;
-  readonly frame_id: string;
+  readonly reference_body: "earth" | "luna";
+  readonly frame_id: "earth" | "luna";
 }
 
 /** One interface a node runs a routing instance on. */

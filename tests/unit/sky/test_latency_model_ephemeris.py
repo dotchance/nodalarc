@@ -29,6 +29,9 @@ def _keplerian_node(**overrides) -> EphemerisNodeKeplerian:
         "mean_anomaly_deg": 0.0,
         "plane": 0,
         "slot": 0,
+        "segment_id": "earth",
+        "local_node_id": "sat-P00S00",
+        "namespace": "earth",
         "reference_body": "earth",
         "frame_id": "earth",
     }
@@ -44,11 +47,16 @@ def _make_ephemeris() -> SessionEphemeris:
         body_frames=EARTH_TEST_EPHEMERIS_BODY_FRAMES,
         nodes={
             "sat-P00S00": _keplerian_node(),
-            "sat-P00S01": _keplerian_node(mean_anomaly_deg=32.7, slot=1),
+            "sat-P00S01": _keplerian_node(
+                mean_anomaly_deg=32.7, slot=1, local_node_id="sat-P00S01"
+            ),
             "gs-ashburn": EphemerisNodeFixed(
                 lat_deg=39.04,
                 lon_deg=-77.49,
                 alt_km=0.095,
+                segment_id="earth",
+                local_node_id="gs-ashburn",
+                namespace="earth",
                 reference_body="earth",
                 frame_id="earth",
             ),

@@ -229,8 +229,12 @@ describe("orbitalMath", () => {
         mean_anomaly_deg: 120,
         plane: 0,
         slot: 0,
-        reference_body: "earth",
-        frame_id: "earth",
+        segment_id: "earth",
+        local_node_id: "sat",
+        namespace: "earth",
+        tags: [],
+        reference_body: "earth" as const,
+        frame_id: "earth" as const,
       };
 
       const legacyPos = propagateNode(elements, epoch, simTime, EARTH_BODY);

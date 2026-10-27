@@ -33,7 +33,15 @@ import {
   type PlaybackStateMsg,
   type SessionEphemeris,
 } from "../../sim/ephemeris";
-import type { ColorMode, GlobeMode, NodeState, ReferenceFrame, Selection, StateSnapshot } from "../../types";
+import type {
+  ColorMode,
+  GlobeMode,
+  NodeState,
+  ReferenceFrame,
+  Selection,
+  StateSnapshot,
+  SurfaceBody,
+} from "../../types";
 import type { GlobeActions } from "../actions";
 import { isGroundNode } from "../../networkIdentity";
 import { Universe } from "./Universe";
@@ -171,13 +179,9 @@ export function Scene({
   const bodies = useMemo(() => {
     if (!ephemeris || kmPerRenderUnit === null) return [];
     const frames = ephemeris.body_frames;
-    const ids = new Set<string>(Object.keys(frames));
-    for (const node of nodes) {
-      if (!node.reference_body) {
-        throw new Error(`Node ${node.node_id} is missing reference_body`);
-      }
-      ids.add(node.reference_body);
-    }
+    const ids = new Set<SurfaceBody>();
+    for (const frame of Object.values(frames)) if (frame) ids.add(frame.body_id);
+    for (const node of nodes) ids.add(node.reference_body);
 
     return [...ids]
       .sort((a, b) => (a === "earth" ? -1 : b === "earth" ? 1 : a.localeCompare(b)))
@@ -196,10 +200,7 @@ export function Scene({
             kmPerRenderUnit,
           ),
         };
-      })
-      .filter((value): value is { id: string; radiusKm: number; position: [number, number, number] } =>
-        value !== null,
-      );
+      });
   }, [ephemeris, nodes, simTimeUnix, kmPerRenderUnit]);
   const controlsMaxDistance = useMemo(
     () =>

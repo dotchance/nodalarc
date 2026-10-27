@@ -346,7 +346,7 @@ class Dispatcher:
         #     view. The C-A repro asserts per-replica.
         #   - Tuple shape mirrors event_diff's GroundVisibilityState
         #     and LinkStateSnapshot's gs_state for direct comparison:
-        #     (visible: bool, scheduled: bool, sched_state: str).
+        #     (visible: bool, scheduled: bool, sched_state: SchedulingState).
         self._ome_view: dict[tuple[str, str], tuple[bool, bool, SchedulingState]] = {}
 
         # Actuator state: what IS active (confirmed by Node Agent).

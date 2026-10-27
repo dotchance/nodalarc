@@ -28,6 +28,11 @@ function node(nodeId: string, nodeType: NodeState["node_type"]): NodeState {
     beam_falloff_exponent: null,
     reference_body: "earth",
     frame_id: "earth",
+    tenant_id: "default",
+    segment_id: "earth",
+    local_node_id: nodeId,
+    namespace: "earth",
+    tags: [],
   };
 }
 

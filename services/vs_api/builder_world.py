@@ -622,6 +622,7 @@ def world_from_resolution(resolution: SessionResolution) -> BuilderWorld:
             local_node_id=node.local_node_id,
             segment_id=node.segment_id,
             namespace=node.namespace,
+            tenant_id=node.tenant_id,
             kind=node.kind,
             plane=node.plane,
             slot=node.slot,

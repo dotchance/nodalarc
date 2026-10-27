@@ -32,7 +32,7 @@ function node(node_id: string): NodeState {
 
 function reachedTrace(): TracedPath {
   return {
-    flow_id: "__continuous_trace__",
+    continuous_trace: true,
     src_node: "madrid-gw",
     dst_node: "luna-gw",
     hops: ["madrid-gw", "leo-1", "geo-1", "luna-gw"],

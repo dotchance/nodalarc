@@ -16,7 +16,7 @@ const EPOCH_ISO = "2026-06-08T00:00:00+00:00";
 const EPOCH_UNIX = Date.parse(EPOCH_ISO) / 1000;
 
 const EARTH_FRAME = {
-  body_id: "earth",
+  body_id: "earth" as const,
   mean_radius_km: 6371.0088,
   equatorial_radius_km: 6378.137,
   polar_radius_km: 6356.7523,
@@ -97,6 +97,7 @@ const WORLD: BuilderWorld = {
       local_node_id: "sat-p00s00",
       segment_id: "leo",
       namespace: "leo",
+      tenant_id: "default",
       kind: "satellite",
       plane: 0,
       slot: 0,
@@ -115,6 +116,7 @@ const WORLD: BuilderWorld = {
       local_node_id: "gw1",
       segment_id: "ground",
       namespace: "ground",
+      tenant_id: "default",
       kind: "ground_station",
       plane: null,
       slot: null,
@@ -135,6 +137,7 @@ const WORLD: BuilderWorld = {
       local_node_id: "gw2",
       segment_id: "ground",
       namespace: "ground",
+      tenant_id: "default",
       kind: "ground_station",
       plane: null,
       slot: null,

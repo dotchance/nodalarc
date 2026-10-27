@@ -520,9 +520,9 @@
     ],
     "TracedPath": [
       "asymmetry_detected",
+      "continuous_trace",
       "dst_node",
       "error",
-      "flow_id",
       "hop_rtts",
       "hops",
       "reverse_error",
@@ -1259,7 +1259,10 @@
       ]
     },
     "NodeState": {
-      "frame_id": null,
+      "frame_id": [
+        "earth",
+        "luna"
+      ],
       "local_node_id": null,
       "namespace": null,
       "node_id": null,
@@ -1350,7 +1353,6 @@
     "TracedPath": {
       "dst_node": null,
       "error": null,
-      "flow_id": null,
       "reverse_error": null,
       "reverse_state": [
         "failed",

@@ -29,6 +29,9 @@ function node(node_id: string, segment_id: string, tags: string[]): NodeState {
     tags,
     reference_body: "earth",
     frame_id: "earth",
+    tenant_id: "default",
+    local_node_id: node_id,
+    namespace: segment_id,
   };
 }
 

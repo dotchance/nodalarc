@@ -833,6 +833,7 @@ class TestEphemerisPositionPropagation:
         ctx._init_state_only()
         ctx._role_by_node_id = {"sat-P00S00": "router"}
         ctx._kind_by_node_id = {"sat-P00S00": "satellite"}
+        ctx._tenant_by_node_id = {"sat-P00S00": "default"}
         ctx.cached_ephemeris_obj = SessionEphemeris(
             epoch_id=0,
             sim_time=datetime.fromtimestamp(ISS_TLE_EPOCH, UTC),
@@ -845,6 +846,9 @@ class TestEphemerisPositionPropagation:
                     plane=0,
                     slot=0,
                     norad_id=25544,
+                    segment_id="leo",
+                    local_node_id="sat-P00S00",
+                    namespace="leo",
                     reference_body="earth",
                     frame_id="earth",
                 )
@@ -871,6 +875,7 @@ class TestEphemerisPositionPropagation:
         ctx._init_state_only()
         ctx._role_by_node_id = {"ground-gs-denver": "router"}
         ctx._kind_by_node_id = {"ground-gs-denver": "ground_station"}
+        ctx._tenant_by_node_id = {"ground-gs-denver": "default"}
         ctx.cached_ephemeris_obj = SessionEphemeris(
             epoch_id=0,
             sim_time=datetime(2025, 1, 1, tzinfo=UTC),
@@ -2372,7 +2377,7 @@ def test_a_running_trace_has_no_stop_reason():
 
     with pytest.raises(ValueError, match="a stop reason only once it stopped"):
         TracedPath(
-            flow_id="__continuous_trace__",
+            continuous_trace=True,
             src_node="gs-a",
             dst_node="gs-b",
             hops=["gs-a"],

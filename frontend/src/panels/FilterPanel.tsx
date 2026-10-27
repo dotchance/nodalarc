@@ -62,14 +62,14 @@ export function FilterPanel({
     if (!snapshot) return [];
     const bySegment = new Map<string, { id: string; count: number; tags: Set<string> }>();
     for (const node of snapshot.nodes) {
-      const id = node.segment_id ?? "unsegmented";
+      const id = node.segment_id;
       let segment = bySegment.get(id);
       if (!segment) {
         segment = { id, count: 0, tags: new Set<string>() };
         bySegment.set(id, segment);
       }
       segment.count += 1;
-      for (const tag of node.tags ?? []) segment.tags.add(tag);
+      for (const tag of node.tags) segment.tags.add(tag);
     }
     return [...bySegment.values()]
       .map((segment) => ({

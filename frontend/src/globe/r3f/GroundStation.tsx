@@ -82,8 +82,8 @@ export function nextSiteMember(
   selectedId: string | null,
 ): string {
   const clicked = nodes.find((n) => n.node_id === clickedId);
-  const site = clicked?.namespace;
-  if (!site) return clickedId;
+  if (!clicked) return clickedId;
+  const site = clicked.namespace;
   const members = nodes
     .filter((n) => n.node_type === "ground_station" && n.namespace === site)
     .map((n) => n.node_id)

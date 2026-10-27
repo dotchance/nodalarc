@@ -1455,6 +1455,8 @@ def test_connect_command_uses_backend_resolved_terminal_facts(
                 node_id=f"{segment_id}-node",
                 local_node_id="node",
                 segment_id=segment_id,
+                namespace=segment_id,
+                tenant_id="default",
                 kind="satellite",
                 role="forwarding_only",
                 routing_instances=(),

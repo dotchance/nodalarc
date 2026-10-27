@@ -9,6 +9,7 @@ import { REST_URL, authHeaders } from "../config";
 import { apiErrorFromException, apiErrorMessage } from "../ui/apiError";
 import type { LinkHistoryPage, LinkState, StateSnapshot } from "../types";
 import { instanceLabel, interfaceInstances } from "../routing/instances";
+import { traceKey } from "../trace/traceFades";
 
 interface LinkDetailProps {
   link: LinkState;
@@ -223,8 +224,8 @@ export function LinkDetail({ link, snapshot }: LinkDetailProps) {
         <>
           <h3>Flow Paths</h3>
           {flowsOnLink.map((tp) => (
-            <div className="detail-row" key={tp.flow_id}>
-              <span className="detail-label">{tp.flow_id}</span>
+            <div className="detail-row" key={traceKey(tp)}>
+              <span className="detail-label">{tp.src_node} \u2192 {tp.dst_node}</span>
               <span className="detail-value">{tp.hops.length} hops</span>
             </div>
           ))}

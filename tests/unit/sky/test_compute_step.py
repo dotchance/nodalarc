@@ -253,11 +253,7 @@ class TestComputeStepMatchesWindow:
             if visible
         } | {
             pair
-            for pair, (
-                visible,
-                _scheduled,
-                _state,
-            ) in first.link_snapshot_source.ground_state.items()
+            for pair, (visible, _scheduled) in first.link_snapshot_source.ground_state.items()
             if visible
         }
         assert previously_visible
@@ -271,7 +267,7 @@ class TestComputeStepMatchesWindow:
         source = stable.link_snapshot_source
         stable_visible = {
             pair for pair, (visible, _scheduled) in source.isl_state.items() if visible
-        } | {pair for pair, (visible, _scheduled, _state) in source.ground_state.items() if visible}
+        } | {pair for pair, (visible, _scheduled) in source.ground_state.items() if visible}
         assert previously_visible <= stable_visible
         assert source.propagated_states == stable.propagated_states
         assert source.associations == stable.associations

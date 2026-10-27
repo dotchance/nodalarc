@@ -279,6 +279,7 @@
           "slot": null,
           "surface_position": null,
           "tags": [],
+          "tenant_id": "default",
           "terminal_inventory": [
             {
               "boresight": {
@@ -392,6 +393,7 @@
           "slot": null,
           "surface_position": null,
           "tags": [],
+          "tenant_id": "default",
           "terminal_inventory": [
             {
               "boresight": {
@@ -505,6 +507,7 @@
           "slot": null,
           "surface_position": null,
           "tags": [],
+          "tenant_id": "default",
           "terminal_inventory": [
             {
               "boresight": {
@@ -618,6 +621,7 @@
           "slot": null,
           "surface_position": null,
           "tags": [],
+          "tenant_id": "default",
           "terminal_inventory": [
             {
               "boresight": {
@@ -751,6 +755,7 @@
           "tags": [
             "geo"
           ],
+          "tenant_id": "default",
           "terminal_inventory": [
             {
               "boresight": {
@@ -879,6 +884,7 @@
           "tags": [
             "geo"
           ],
+          "tenant_id": "default",
           "terminal_inventory": [
             {
               "boresight": {
@@ -1007,6 +1013,7 @@
           "tags": [
             "geo"
           ],
+          "tenant_id": "default",
           "terminal_inventory": [
             {
               "boresight": {
@@ -1119,6 +1126,7 @@
           "tags": [
             "meo"
           ],
+          "tenant_id": "default",
           "terminal_inventory": [
             {
               "boresight": {

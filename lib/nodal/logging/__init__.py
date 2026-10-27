@@ -180,9 +180,13 @@ async def connect(nc: Any) -> None:
                 _log.info("Debug logging enabled by operator")
                 await msg.respond(json.dumps({"status": "ok", "level": "debug"}).encode())
             elif action == "disable":
-                _nats_handler.set_nats_level(logging.INFO)
+                level = _nats_handler.restore_configured_level()
                 _log.info("Debug logging disabled")
-                await msg.respond(json.dumps({"status": "ok", "level": "info"}).encode())
+                await msg.respond(
+                    json.dumps(
+                        {"status": "ok", "level": logging.getLevelName(level).lower()}
+                    ).encode()
+                )
             else:
                 _log.error("Unknown debug_ctrl action: %s", action)
                 await msg.respond(

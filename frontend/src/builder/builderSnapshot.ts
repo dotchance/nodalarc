@@ -60,6 +60,7 @@ function _satelliteNodeState(
       segment_id: node.segment_id,
       local_node_id: node.local_node_id,
       namespace: node.namespace,
+      tenant_id: node.tenant_id,
       tags: [...node.tags],
     };
   }
@@ -99,6 +100,7 @@ function _satelliteNodeState(
     segment_id: node.segment_id,
     local_node_id: node.local_node_id,
     namespace: node.namespace,
+    tenant_id: node.tenant_id,
     tags: [...node.tags],
   };
 }
@@ -131,6 +133,7 @@ function _groundNodeState(node: BuilderWorldNode): NodeState {
     segment_id: node.segment_id,
     local_node_id: node.local_node_id,
     namespace: node.namespace,
+    tenant_id: node.tenant_id,
     tags: [...node.tags],
   };
 }

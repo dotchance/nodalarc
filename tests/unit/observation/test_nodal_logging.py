@@ -619,6 +619,7 @@ class TestSetNatsLevel:
         logging.getLogger("scheduler").setLevel(logging.NOTSET)
         logging.getLogger("ome").setLevel(logging.NOTSET)
         logging.getLogger("node_agent").setLevel(logging.NOTSET)
+        logging.getLogger("vs_api").setLevel(logging.NOTSET)
 
     def test_enable_sets_handler_and_package_logger_to_debug(self):
         handler = NatsHandler("nodal.arc.scheduler", level=logging.INFO)
@@ -632,6 +633,15 @@ class TestSetNatsLevel:
         handler.set_nats_level(logging.INFO)
         assert handler.level == logging.INFO
         assert logging.getLogger("scheduler").level == logging.NOTSET
+
+    def test_disable_returns_to_the_configured_level(self):
+        # VS-API configures WARNING; ending debug must not leave it at INFO,
+        # which would publish every INFO record (one audit row per request).
+        handler = NatsHandler("nodal.arc.vs_api", level=logging.WARNING)
+        handler.set_nats_level(logging.DEBUG)
+        assert handler.restore_configured_level() == logging.WARNING
+        assert handler.level == logging.WARNING
+        assert logging.getLogger("vs_api").level == logging.NOTSET
 
     def test_root_logger_never_changes(self):
         handler = NatsHandler("nodal.arc.scheduler", level=logging.INFO)

@@ -44,6 +44,11 @@ function node(node_id: string, node_type: "satellite" | "ground_station" = "sate
     beam_falloff_exponent: null,
     reference_body: "earth",
     frame_id: "earth",
+    tenant_id: "default",
+    segment_id: "earth",
+    local_node_id: node_id,
+    namespace: "earth",
+    tags: [],
   };
 }
 

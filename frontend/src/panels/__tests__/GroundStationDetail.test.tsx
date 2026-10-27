@@ -25,7 +25,12 @@ function station(role: NodeRole, instances: NodeRoutingInstance[]): NodeState {
     min_elevation_deg: 10,
     beam_falloff_exponent: null,
     reference_body: "earth",
-    frame_id: "earth_fixed",
+    frame_id: "earth",
+    tenant_id: "default",
+    segment_id: "earth",
+    local_node_id: "de-frankfurt-gw1",
+    namespace: "earth-de-frankfurt",
+    tags: [],
   };
 }
 

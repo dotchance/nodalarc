@@ -113,9 +113,11 @@ class PathTracer:
             )
         return TraceEndpoint(node=node, runs_from=gateway)
 
-    def trace_between(self, src: str, dst: str, *, flow_id: str) -> TracedPath:
+    def trace_between(self, src: str, dst: str, *, continuous_trace: bool) -> TracedPath:
         """Trace once between two node ids. Nothing retraces the result."""
-        return self.trace(self.endpoint(src), self.endpoint(dst), flow_id=flow_id, tracing=False)
+        return self.trace(
+            self.endpoint(src), self.endpoint(dst), continuous_trace=continuous_trace, tracing=False
+        )
 
     def names_nodes(self, hops: list[str]) -> bool:
         """Whether every hop answered from an address the session assigned to a node."""
@@ -126,7 +128,7 @@ class PathTracer:
         src: TraceEndpoint,
         dst: TraceEndpoint,
         *,
-        flow_id: str,
+        continuous_trace: bool,
         tracing: bool,
         on_progress: Callable[[TracedPath], None] | None = None,
         stopped: threading.Event | None = None,
@@ -146,7 +148,7 @@ class PathTracer:
                 dst,
                 forward,
                 reverse,
-                flow_id=flow_id,
+                continuous_trace=continuous_trace,
                 tracing=tracing,
                 traced_at=traced_at,
                 sim_time=sim_time,
@@ -178,21 +180,23 @@ class PathTracer:
             reverse = reverse_future.result()
         return assemble(forward, reverse)
 
-    def measuring(self, src: TraceEndpoint, dst: TraceEndpoint, *, flow_id: str) -> TracedPath:
+    def measuring(
+        self, src: TraceEndpoint, dst: TraceEndpoint, *, continuous_trace: bool
+    ) -> TracedPath:
         """A live result whose two directions have just started and measured no hop yet."""
         return self._assemble(
             src,
             dst,
             self._running(src),
             self._running(dst),
-            flow_id=flow_id,
+            continuous_trace=continuous_trace,
             tracing=True,
             traced_at=datetime.now(UTC).isoformat(),
             sim_time=self._read_sim_time(),
         )
 
     def failed(
-        self, src: TraceEndpoint, dst: TraceEndpoint, error: str, *, flow_id: str
+        self, src: TraceEndpoint, dst: TraceEndpoint, error: str, *, continuous_trace: bool
     ) -> TracedPath:
         """A result whose both directions failed with one reason; nothing retraces it."""
         return self._assemble(
@@ -200,7 +204,7 @@ class PathTracer:
             dst,
             self._failed(src, error),
             self._failed(dst, error),
-            flow_id=flow_id,
+            continuous_trace=continuous_trace,
             tracing=False,
             traced_at=datetime.now(UTC).isoformat(),
             sim_time=self._read_sim_time(),
@@ -376,13 +380,13 @@ class PathTracer:
         forward: _Direction,
         reverse: _Direction,
         *,
-        flow_id: str,
+        continuous_trace: bool,
         tracing: bool,
         traced_at: str,
         sim_time: str,
     ) -> TracedPath:
         return TracedPath(
-            flow_id=flow_id,
+            continuous_trace=continuous_trace,
             src_node=src.node.node_id,
             dst_node=dst.node.node_id,
             hops=list(forward.hops),

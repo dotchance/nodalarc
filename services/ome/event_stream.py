@@ -117,17 +117,14 @@ def build_session_ephemeris(
     nodes: dict[str, EphemerisNodeKeplerian | EphemerisNodeTLE | EphemerisNodeFixed] = {}
 
     def _meta(node_id: str) -> dict[str, object]:
-        raw = ctx.node_metadata.get(node_id, {})
-        return {
-            key: raw[key]
-            for key in (
-                "segment_id",
-                "local_node_id",
-                "namespace",
-                "tags",
-            )
-            if key in raw and raw[key] is not None
+        # Every node the ephemeris names carries its resolved identity.
+        raw = ctx.node_metadata[node_id]
+        meta: dict[str, object] = {
+            key: raw[key] for key in ("segment_id", "local_node_id", "namespace")
         }
+        if raw.get("tags") is not None:
+            meta["tags"] = raw["tags"]
+        return meta
 
     for sat in ctx.satellites:
         node_id = satellite_node_id(sat, ctx.addressing)
@@ -755,7 +752,7 @@ def _build_link_snapshot_source(
             continue
         isl_state[pair] = (visible, scheduled)
 
-    ground_state: dict[tuple[str, str], tuple[bool, bool, SchedulingState]] = {}
+    ground_state: dict[tuple[str, str], tuple[bool, bool]] = {}
     forwarding_pairs = (
         set(ground_allocation.scheduled_pairs)
         | set(ground_allocation.pending_teardowns)
@@ -780,8 +777,7 @@ def _build_link_snapshot_source(
                 "Cannot build authoritative LinkStateSnapshot source for scheduled "
                 f"ground pair {pair}: missing terminal association"
             )
-        sched_state = "teardown" if pair in ground_allocation.pending_teardowns else "active"
-        ground_state[pair] = (visible, scheduled, sched_state)
+        ground_state[pair] = (visible, scheduled)
 
     return LinkSnapshotSource(
         isl_state=isl_state,

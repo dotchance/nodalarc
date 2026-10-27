@@ -7,10 +7,11 @@ import type { TracedPath } from "../../types";
 
 const GONE = FAIL_HOLD_MS + FAIL_FADE_MS;
 
-function trace(flowId: string, tracing: boolean): TracedPath {
+// A trace is identified by its endpoints; `name` is its source node.
+function trace(name: string, tracing: boolean): TracedPath {
   return {
-    flow_id: flowId,
-    src_node: "gs-a",
+    continuous_trace: true,
+    src_node: name,
     dst_node: "gs-b",
     hops: ["gs-a", "sat-1", "gs-b"],
     hop_rtts: [null, null, null],
@@ -31,7 +32,7 @@ function trace(flowId: string, tracing: boolean): TracedPath {
 }
 
 function drawn(fades: TraceFades, now: number) {
-  return fades.drawn(now).map(({ path, opacity, animate }) => [path.flow_id, opacity, animate]);
+  return fades.drawn(now).map(({ path, opacity, animate }) => [path.src_node, opacity, animate]);
 }
 
 describe("stoppedTraceOpacity", () => {

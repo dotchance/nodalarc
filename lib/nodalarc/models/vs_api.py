@@ -103,11 +103,11 @@ class NodeState(BaseModel):
     # Which celestial body this node is anchored to. Required so render and API
     # consumers never infer Earth from an omitted field.
     reference_body: SupportedSurfaceBody
-    frame_id: str
-    tenant_id: str = "default"
-    segment_id: str | None = None
-    local_node_id: str | None = None
-    namespace: str | None = None
+    frame_id: SupportedSurfaceBody
+    tenant_id: str
+    segment_id: str
+    local_node_id: str
+    namespace: str
     tags: tuple[str, ...] = ()
 
 
@@ -203,7 +203,8 @@ class TracedPath(BaseModel):
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    flow_id: str
+    # True for the session's continuous trace, false for a one-shot trace.
+    continuous_trace: bool
     src_node: str
     dst_node: str
     hops: list[str]

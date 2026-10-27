@@ -33,7 +33,7 @@ import {
   TRACE_REVERSE_COLOR,
   TRACE_WIDTH,
 } from "../../config";
-import { TraceFades } from "../../trace/traceFades";
+import { TraceFades, traceKey } from "../../trace/traceFades";
 import { drawsReverse, traceSegments } from "../../trace/traceSegments";
 import { bodyWorldSpheres, getNodeWorldPosition } from "./positions";
 import { MAX_TRACE_LINE_POINTS, traceLinePoints, type BodySphere } from "./linkCurve";
@@ -268,14 +268,14 @@ export function FlowPaths({ tracedPaths, groundNodeIds }: FlowPathsProps) {
     const isGround = (nodeId: string) => groundNodeIdsRef.current.has(nodeId);
     const bodies = bodyWorldSpheres();
     fadesRef.current.drawn(performance.now()).forEach(({ path, opacity, animate }) => {
-      drawnIds.add(path.flow_id);
-      let entry = entries.get(path.flow_id);
+      drawnIds.add(traceKey(path));
+      let entry = entries.get(traceKey(path));
       if (!entry) {
         entry = {
           forward: makeDirection(group, path.hops, TRACE_FORWARD_COLOR, resolution()),
           reverse: null,
         };
-        entries.set(path.flow_id, entry);
+        entries.set(traceKey(path), entry);
       }
       entry.forward.hops = path.hops;
       if (drawsReverse(path)) {

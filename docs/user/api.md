@@ -71,7 +71,7 @@ answer costs up to 20 hops at 4 seconds each. The response, from an
 
 ```json
 {
-  "flow_id": "__trace__",
+  "continuous_trace": false,
   "src_node": "earth-it-fucino-gw1",
   "dst_node": "earth-us-ca-goldstone-gw1",
   "hops": [
@@ -152,8 +152,8 @@ curl -s -X POST -H "Authorization: Bearer $TOKEN" http://localhost:8080/api/v1/t
 ```
 
 `/api/v1/trace/status` returns the trace's endpoints and its latest result in
-the same form as above. The latest result also appears in every state snapshot
-under `traced_paths`.
+the same form as above, with `continuous_trace` set to `true`. The latest result
+also appears in every state snapshot under `traced_paths`.
 
 ### Stream live state over WebSocket
 

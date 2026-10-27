@@ -65,7 +65,7 @@ function node(
   id: string,
   node_type: string,
   reference_body: string,
-  segment_id: string | null,
+  segment_id: string,
 ): NodeState {
   return { node_id: id, node_type, reference_body, segment_id } as unknown as NodeState;
 }
@@ -126,19 +126,6 @@ describe("collectFoldSegments — body-fold accounting", () => {
       expect(out.get(body)?.size ?? 0).toBe(0);
       expect(probe.has(body)).toBe(true);
     }
-  });
-
-  it("a body whose members all lack a segment_id never folds", async () => {
-    const { collectFoldSegments } = await import("../Labels");
-    const out = new Map<string, Set<string>>();
-    const probe = new Map<string, string>();
-    const noSeg = [
-      node("pluto-sat", "satellite", "pluto", null),
-      node("pluto-gs", "ground_station", "pluto", null),
-    ];
-    collectFoldSegments(noSeg, true, true, out, probe);
-    expect(out.get("pluto")?.size ?? 0).toBe(0);
-    expect(probe.get("pluto")).toBe("pluto-sat"); // still projectable, just unfolded
   });
 
   it("counts distinct segments — the chip dedups members sharing a segment", async () => {

@@ -554,7 +554,7 @@ class ResolvedNode(BaseModel):
     node_id: NonEmptyReference
     local_node_id: NonEmptyReference
     segment_id: NonEmptyReference
-    namespace: NonEmptyReference | None
+    namespace: NonEmptyReference
     # Ground nodes: every placement group (ground segment) that placed this
     # node's site. A physical site exists once; placement groups are labels,
     # not namespaces, so one node may belong to several. segment_id holds the

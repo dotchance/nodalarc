@@ -32,6 +32,10 @@ const SAT_P00S00: EphemerisNodeKeplerian = {
   mean_anomaly_deg: 0.0,
   plane: 0,
   slot: 0,
+  segment_id: "earth",
+  local_node_id: "sat",
+  namespace: "earth",
+  tags: [],
   reference_body: "earth",
   frame_id: "earth",
 };
@@ -47,6 +51,10 @@ const SAT_RAAN90: EphemerisNodeKeplerian = {
   mean_anomaly_deg: 0.0,
   plane: 1,
   slot: 0,
+  segment_id: "earth",
+  local_node_id: "sat",
+  namespace: "earth",
+  tags: [],
   reference_body: "earth",
   frame_id: "earth",
 };
@@ -141,6 +149,10 @@ describe("propagateNode - eccentric (Molniya) Python parity", () => {
     mean_anomaly_deg: 0.0,
     plane: 0,
     slot: 0,
+    segment_id: "earth",
+    local_node_id: "sat",
+    namespace: "earth",
+    tags: [],
     reference_body: "earth",
     frame_id: "earth",
   };

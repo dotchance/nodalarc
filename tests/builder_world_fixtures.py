@@ -22,6 +22,7 @@ def builder_world_preview(session_name: str = "preview") -> BuilderWorld:
             sim_time=epoch,
             epoch_unix=epoch.timestamp(),
             nodes={},
+            body_frames={},
         ),
         nodes=(),
     )

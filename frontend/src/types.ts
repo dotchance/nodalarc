@@ -64,18 +64,21 @@ export interface NodeState {
   addresses?: NodeAddress[];
   min_elevation_deg: number | null;
   beam_falloff_exponent: number | null;
-  /** Celestial body this node is anchored to (earth | luna | mars). */
-  reference_body: string;
+  /** Celestial body this node is anchored to. */
+  reference_body: SurfaceBody;
   /** Placement frame id from the resolved session. */
-  frame_id: string;
-  /** Owning tenant (multi-tenant from day one). Optional; consumers default to "default". */
-  tenant_id?: string;
+  frame_id: SurfaceBody;
+  /** Owning tenant from the resolved session. */
+  tenant_id: string;
   /** Segment metadata from the resolved session. Used for grouping/filtering, not runtime identity. */
-  segment_id?: string | null;
-  local_node_id?: string | null;
-  namespace?: string | null;
-  tags?: string[];
+  segment_id: string;
+  local_node_id: string;
+  namespace: string;
+  tags: string[];
 }
+
+/** The bodies a node can stand on or orbit in the current runtime. */
+export type SurfaceBody = "earth" | "luna";
 
 /** The topology modes the session grammar declares. */
 export type TopologyMode = "visible_candidates" | "nearest_visible" | "nearest_n" | "explicit_pairs";
@@ -122,7 +125,7 @@ export interface LinkDecisionTrace {
   interface_a: string;
   interface_b: string;
   reason: string | null;
-  geometry_authority: string;
+  geometry_authority: "ome";
   authority_source: string;
   authority_sim_time: string;
   authority_sequence: number | null;
@@ -148,7 +151,8 @@ export type TraceState = "running" | "reached" | "not_reached" | "failed";
 export type TraceStopReason = "time_limit" | "internal_error";
 
 export interface TracedPath {
-  flow_id: string;
+  /** True for the session's continuous trace, false for a one-shot trace. */
+  continuous_trace: boolean;
   src_node: string;
   dst_node: string;
   hops: string[];

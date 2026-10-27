@@ -25,8 +25,6 @@ from vs_api.path_tracer import PathTracer, TraceEndpoint
 
 log = logging.getLogger(__name__)
 
-TRACE_FLOW_ID = "__continuous_trace__"
-
 
 class ContinuousTracer:
     """Traces one node pair in both directions until stopped or out of time."""
@@ -108,7 +106,7 @@ class ContinuousTracer:
         ):
             with self._show_lock:
                 self._cycle_closed.set()
-                self._latest = self._path_tracer.measuring(src, dst, flow_id=TRACE_FLOW_ID)
+                self._latest = self._path_tracer.measuring(src, dst, continuous_trace=True)
                 # The broken path is never shown again, at the time limit included.
                 self._last_finished = None
         self._retrace_event.set()
@@ -193,7 +191,7 @@ class ContinuousTracer:
                     dst,
                     "The trace stopped on an internal error "
                     f"({type(exc).__name__}); see the VS-API log",
-                    flow_id=TRACE_FLOW_ID,
+                    continuous_trace=True,
                 ),
             )
         finally:
@@ -234,7 +232,7 @@ class ContinuousTracer:
             src,
             dst,
             "the trace reached its time limit before it measured a current path",
-            flow_id=TRACE_FLOW_ID,
+            continuous_trace=True,
         )
 
     @staticmethod
@@ -255,7 +253,7 @@ class ContinuousTracer:
         return self._path_tracer.trace(
             src,
             dst,
-            flow_id=TRACE_FLOW_ID,
+            continuous_trace=True,
             tracing=True,
             on_progress=show if streaming else None,
             stopped=closed,

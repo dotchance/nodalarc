@@ -68,7 +68,7 @@ export function TraceDialog({ nodes, selectedNodeId, snapshot }: TraceDialogProp
   // lost when this dialog unmounts (navigating to another node and back). A
   // trace started earlier keeps rendering in the globe, so the Stop control
   // must appear whenever the server reports an active trace, from any view.
-  const tp = snapshot?.traced_paths.find(p => p.flow_id === "__continuous_trace__") ?? null;
+  const tp = snapshot?.traced_paths.find(p => p.continuous_trace) ?? null;
   // A result that stopped (at the time limit or on an error) stays shown and
   // the Trace control returns, with the same source and destination.
   const isTracing = tp != null ? tp.tracing : continuous;

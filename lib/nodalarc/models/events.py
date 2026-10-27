@@ -13,6 +13,7 @@ from typing import Annotated, Literal, get_args
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from nodalarc.body_frames import SupportedSurfaceBody
 from nodalarc.models.link_decisions import GroundUnscheduledReason, GroundVisibilityRejectReason
 from nodalarc.models.link_state import SchedulingState
 
@@ -334,12 +335,12 @@ class EphemerisNodeKeplerian(BaseModel):
     mean_anomaly_deg: float = Field(allow_inf_nan=False)
     plane: int
     slot: int
-    segment_id: str | None = None
-    local_node_id: str | None = None
-    namespace: str | None = None
+    segment_id: str
+    local_node_id: str
+    namespace: str
     tags: tuple[str, ...] = ()
-    reference_body: str
-    frame_id: str
+    reference_body: SupportedSurfaceBody
+    frame_id: SupportedSurfaceBody
 
 
 class EphemerisNodeTLE(BaseModel):
@@ -353,12 +354,12 @@ class EphemerisNodeTLE(BaseModel):
     plane: int
     slot: int
     norad_id: int | None = None
-    segment_id: str | None = None
-    local_node_id: str | None = None
-    namespace: str | None = None
+    segment_id: str
+    local_node_id: str
+    namespace: str
     tags: tuple[str, ...] = ()
-    reference_body: str
-    frame_id: str
+    reference_body: SupportedSurfaceBody
+    frame_id: SupportedSurfaceBody
 
     @model_validator(mode="after")
     def _validate_tle_pair(self):
@@ -377,12 +378,12 @@ class EphemerisNodeFixed(BaseModel):
     lat_deg: float
     lon_deg: float
     alt_km: float
-    segment_id: str | None = None
-    local_node_id: str | None = None
-    namespace: str | None = None
+    segment_id: str
+    local_node_id: str
+    namespace: str
     tags: tuple[str, ...] = ()
-    reference_body: str
-    frame_id: str
+    reference_body: SupportedSurfaceBody
+    frame_id: SupportedSurfaceBody
 
 
 EphemerisNode = Annotated[
@@ -402,7 +403,7 @@ class EphemerisBodyFrame(BaseModel):
 
     model_config = ConfigDict(frozen=True)
 
-    body_id: str
+    body_id: SupportedSurfaceBody
     mean_radius_km: float
     equatorial_radius_km: float
     polar_radius_km: float
@@ -438,7 +439,7 @@ class SessionEphemeris(BaseModel):
     sim_time: datetime
     epoch_unix: float  # Unix timestamp for propagation dt calculation
     nodes: dict[str, EphemerisNode]
-    body_frames: dict[str, EphemerisBodyFrame] = Field(default_factory=dict)
+    body_frames: dict[SupportedSurfaceBody, EphemerisBodyFrame]
 
     @model_validator(mode="after")
     def _validate_body_frames(self):

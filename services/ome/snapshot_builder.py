@@ -50,7 +50,7 @@ from ome.propagation_engine import PropagatedState
 from ome.types import GroundVisibilityDecisionMap, MbbTeardownState
 
 IslSnapshotState = Mapping[tuple[str, str], tuple[bool, bool]]
-GroundSnapshotState = Mapping[tuple[str, str], tuple[bool, bool, SchedulingState]]
+GroundSnapshotState = Mapping[tuple[str, str], tuple[bool, bool]]
 
 
 @dataclass(frozen=True)
@@ -200,6 +200,8 @@ def build_link_state_snapshot(
                 range_km=range_latency[0] if range_latency else None,
                 latency_ms=range_latency[1] if range_latency else None,
                 link_type="isl",
+                # An ISL has no make-before-break teardown.
+                scheduling_state="active",
                 link_rule_id=rule_meta.link_rule_id if rule_meta is not None else None,
                 topology_mode=rule_meta.topology_mode if rule_meta is not None else None,
                 endpoint_segments=rule_meta.endpoint_segments if rule_meta is not None else None,
@@ -234,10 +236,8 @@ def build_link_state_snapshot(
             "per-ground-station MBB overlap policy"
         )
 
-    for pair, state_tuple in source.ground_state.items():
-        visible = state_tuple[0]
-        scheduled = state_tuple[1]
-        sched_state = state_tuple[2]
+    for pair, (visible, scheduled) in source.ground_state.items():
+        sched_state: SchedulingState = "teardown" if pair in td_state else "active"
         if visible and scheduled:
             carrier = CarrierState.UP
         elif visible and not scheduled:

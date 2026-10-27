@@ -7,11 +7,7 @@
  * truth from VS-API.
  */
 
-import type { NodeState, StateSnapshot } from "../types";
-
-export function nodeSegmentId(node: NodeState): string {
-  return node.segment_id ?? "unsegmented";
-}
+import type { StateSnapshot } from "../types";
 
 export function filterSnapshotForRender(
   snapshot: StateSnapshot | null,
@@ -22,7 +18,7 @@ export function filterSnapshotForRender(
   if (visibleSegments === null && visiblePlanes === null) return snapshot;
 
   const nodes = snapshot.nodes.filter((node) => {
-    if (visibleSegments !== null && !visibleSegments.has(nodeSegmentId(node))) return false;
+    if (visibleSegments !== null && !visibleSegments.has(node.segment_id)) return false;
     if (
       visiblePlanes !== null &&
       node.node_type === "satellite" &&

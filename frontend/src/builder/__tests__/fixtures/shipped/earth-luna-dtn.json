@@ -1613,6 +1613,7 @@
           "tags": [
             "all"
           ],
+          "tenant_id": "default",
           "terminal_inventory": [
             {
               "boresight": {
@@ -1736,6 +1737,7 @@
           "tags": [
             "all"
           ],
+          "tenant_id": "default",
           "terminal_inventory": [
             {
               "boresight": {
@@ -1859,6 +1861,7 @@
           "tags": [
             "all"
           ],
+          "tenant_id": "default",
           "terminal_inventory": [
             {
               "boresight": {
@@ -1982,6 +1985,7 @@
           "tags": [
             "all"
           ],
+          "tenant_id": "default",
           "terminal_inventory": [
             {
               "boresight": {
@@ -2105,6 +2109,7 @@
           "tags": [
             "all"
           ],
+          "tenant_id": "default",
           "terminal_inventory": [
             {
               "boresight": {
@@ -2232,6 +2237,7 @@
           "tags": [
             "all"
           ],
+          "tenant_id": "default",
           "terminal_inventory": [
             {
               "boresight": {
@@ -2355,6 +2361,7 @@
           "tags": [
             "all"
           ],
+          "tenant_id": "default",
           "terminal_inventory": [
             {
               "boresight": {
@@ -2478,6 +2485,7 @@
           "tags": [
             "all"
           ],
+          "tenant_id": "default",
           "terminal_inventory": [
             {
               "boresight": {
@@ -2601,6 +2609,7 @@
           "tags": [
             "all"
           ],
+          "tenant_id": "default",
           "terminal_inventory": [
             {
               "boresight": {
@@ -2724,6 +2733,7 @@
           "tags": [
             "all"
           ],
+          "tenant_id": "default",
           "terminal_inventory": [
             {
               "boresight": {
@@ -2847,6 +2857,7 @@
           "tags": [
             "all"
           ],
+          "tenant_id": "default",
           "terminal_inventory": [
             {
               "boresight": {
@@ -2974,6 +2985,7 @@
           "tags": [
             "all"
           ],
+          "tenant_id": "default",
           "terminal_inventory": [
             {
               "boresight": {
@@ -3097,6 +3109,7 @@
           "tags": [
             "all"
           ],
+          "tenant_id": "default",
           "terminal_inventory": [
             {
               "boresight": {
@@ -3220,6 +3233,7 @@
           "tags": [
             "all"
           ],
+          "tenant_id": "default",
           "terminal_inventory": [
             {
               "boresight": {
@@ -3343,6 +3357,7 @@
           "tags": [
             "all"
           ],
+          "tenant_id": "default",
           "terminal_inventory": [
             {
               "boresight": {
@@ -3466,6 +3481,7 @@
           "tags": [
             "all"
           ],
+          "tenant_id": "default",
           "terminal_inventory": [
             {
               "boresight": {
@@ -3593,6 +3609,7 @@
           "tags": [
             "all"
           ],
+          "tenant_id": "default",
           "terminal_inventory": [
             {
               "boresight": {
@@ -3716,6 +3733,7 @@
           "tags": [
             "all"
           ],
+          "tenant_id": "default",
           "terminal_inventory": [
             {
               "boresight": {
@@ -3839,6 +3857,7 @@
           "tags": [
             "all"
           ],
+          "tenant_id": "default",
           "terminal_inventory": [
             {
               "boresight": {
@@ -3962,6 +3981,7 @@
           "tags": [
             "all"
           ],
+          "tenant_id": "default",
           "terminal_inventory": [
             {
               "boresight": {
@@ -4085,6 +4105,7 @@
           "tags": [
             "all"
           ],
+          "tenant_id": "default",
           "terminal_inventory": [
             {
               "boresight": {
@@ -4208,6 +4229,7 @@
           "tags": [
             "all"
           ],
+          "tenant_id": "default",
           "terminal_inventory": [
             {
               "boresight": {
@@ -4331,6 +4353,7 @@
           "tags": [
             "all"
           ],
+          "tenant_id": "default",
           "terminal_inventory": [
             {
               "boresight": {
@@ -4454,6 +4477,7 @@
           "tags": [
             "all"
           ],
+          "tenant_id": "default",
           "terminal_inventory": [
             {
               "boresight": {
@@ -4577,6 +4601,7 @@
           "tags": [
             "all"
           ],
+          "tenant_id": "default",
           "terminal_inventory": [
             {
               "boresight": {
@@ -4700,6 +4725,7 @@
           "tags": [
             "all"
           ],
+          "tenant_id": "default",
           "terminal_inventory": [
             {
               "boresight": {
@@ -4823,6 +4849,7 @@
           "tags": [
             "all"
           ],
+          "tenant_id": "default",
           "terminal_inventory": [
             {
               "boresight": {
@@ -4946,6 +4973,7 @@
           "tags": [
             "all"
           ],
+          "tenant_id": "default",
           "terminal_inventory": [
             {
               "boresight": {
@@ -5069,6 +5097,7 @@
           "tags": [
             "all"
           ],
+          "tenant_id": "default",
           "terminal_inventory": [
             {
               "boresight": {
@@ -5192,6 +5221,7 @@
           "tags": [
             "all"
           ],
+          "tenant_id": "default",
           "terminal_inventory": [
             {
               "boresight": {
@@ -5315,6 +5345,7 @@
           "tags": [
             "all"
           ],
+          "tenant_id": "default",
           "terminal_inventory": [
             {
               "boresight": {
@@ -5438,6 +5469,7 @@
           "tags": [
             "all"
           ],
+          "tenant_id": "default",
           "terminal_inventory": [
             {
               "boresight": {
@@ -5561,6 +5593,7 @@
           "tags": [
             "all"
           ],
+          "tenant_id": "default",
           "terminal_inventory": [
             {
               "boresight": {
@@ -5684,6 +5717,7 @@
           "tags": [
             "all"
           ],
+          "tenant_id": "default",
           "terminal_inventory": [
             {
               "boresight": {
@@ -5807,6 +5841,7 @@
           "tags": [
             "all"
           ],
+          "tenant_id": "default",
           "terminal_inventory": [
             {
               "boresight": {
@@ -5930,6 +5965,7 @@
           "tags": [
             "all"
           ],
+          "tenant_id": "default",
           "terminal_inventory": [
             {
               "boresight": {
@@ -6053,6 +6089,7 @@
           "tags": [
             "all"
           ],
+          "tenant_id": "default",
           "terminal_inventory": [
             {
               "boresight": {
@@ -6176,6 +6213,7 @@
           "tags": [
             "all"
           ],
+          "tenant_id": "default",
           "terminal_inventory": [
             {
               "boresight": {
@@ -6303,6 +6341,7 @@
           "tags": [
             "all"
           ],
+          "tenant_id": "default",
           "terminal_inventory": [
             {
               "boresight": {
@@ -6426,6 +6465,7 @@
           "tags": [
             "all"
           ],
+          "tenant_id": "default",
           "terminal_inventory": [
             {
               "boresight": {
@@ -6549,6 +6589,7 @@
           "tags": [
             "all"
           ],
+          "tenant_id": "default",
           "terminal_inventory": [
             {
               "boresight": {
@@ -6672,6 +6713,7 @@
           "tags": [
             "all"
           ],
+          "tenant_id": "default",
           "terminal_inventory": [
             {
               "boresight": {
@@ -6795,6 +6837,7 @@
           "tags": [
             "all"
           ],
+          "tenant_id": "default",
           "terminal_inventory": [
             {
               "boresight": {
@@ -6922,6 +6965,7 @@
           "tags": [
             "all"
           ],
+          "tenant_id": "default",
           "terminal_inventory": [
             {
               "boresight": {
@@ -7045,6 +7089,7 @@
           "tags": [
             "all"
           ],
+          "tenant_id": "default",
           "terminal_inventory": [
             {
               "boresight": {
@@ -7168,6 +7213,7 @@
           "tags": [
             "all"
           ],
+          "tenant_id": "default",
           "terminal_inventory": [
             {
               "boresight": {
@@ -7291,6 +7337,7 @@
           "tags": [
             "all"
           ],
+          "tenant_id": "default",
           "terminal_inventory": [
             {
               "boresight": {
@@ -7414,6 +7461,7 @@
           "tags": [
             "all"
           ],
+          "tenant_id": "default",
           "terminal_inventory": [
             {
               "boresight": {
@@ -7537,6 +7585,7 @@
           "tags": [
             "all"
           ],
+          "tenant_id": "default",
           "terminal_inventory": [
             {
               "boresight": {
@@ -7664,6 +7713,7 @@
           "tags": [
             "all"
           ],
+          "tenant_id": "default",
           "terminal_inventory": [
             {
               "boresight": {
@@ -7787,6 +7837,7 @@
           "tags": [
             "all"
           ],
+          "tenant_id": "default",
           "terminal_inventory": [
             {
               "boresight": {
@@ -7910,6 +7961,7 @@
           "tags": [
             "all"
           ],
+          "tenant_id": "default",
           "terminal_inventory": [
             {
               "boresight": {
@@ -8033,6 +8085,7 @@
           "tags": [
             "all"
           ],
+          "tenant_id": "default",
           "terminal_inventory": [
             {
               "boresight": {
@@ -8156,6 +8209,7 @@
           "tags": [
             "all"
           ],
+          "tenant_id": "default",
           "terminal_inventory": [
             {
               "boresight": {
@@ -8283,6 +8337,7 @@
           "tags": [
             "all"
           ],
+          "tenant_id": "default",
           "terminal_inventory": [
             {
               "boresight": {
@@ -8406,6 +8461,7 @@
           "tags": [
             "all"
           ],
+          "tenant_id": "default",
           "terminal_inventory": [
             {
               "boresight": {
@@ -8529,6 +8585,7 @@
           "tags": [
             "all"
           ],
+          "tenant_id": "default",
           "terminal_inventory": [
             {
               "boresight": {
@@ -8652,6 +8709,7 @@
           "tags": [
             "all"
           ],
+          "tenant_id": "default",
           "terminal_inventory": [
             {
               "boresight": {
@@ -8775,6 +8833,7 @@
           "tags": [
             "all"
           ],
+          "tenant_id": "default",
           "terminal_inventory": [
             {
               "boresight": {
@@ -8898,6 +8957,7 @@
           "tags": [
             "all"
           ],
+          "tenant_id": "default",
           "terminal_inventory": [
             {
               "boresight": {
@@ -9021,6 +9081,7 @@
           "tags": [
             "all"
           ],
+          "tenant_id": "default",
           "terminal_inventory": [
             {
               "boresight": {
@@ -9144,6 +9205,7 @@
           "tags": [
             "all"
           ],
+          "tenant_id": "default",
           "terminal_inventory": [
             {
               "boresight": {
@@ -9267,6 +9329,7 @@
           "tags": [
             "all"
           ],
+          "tenant_id": "default",
           "terminal_inventory": [
             {
               "boresight": {
@@ -9390,6 +9453,7 @@
           "tags": [
             "all"
           ],
+          "tenant_id": "default",
           "terminal_inventory": [
             {
               "boresight": {
@@ -9513,6 +9577,7 @@
           "tags": [
             "all"
           ],
+          "tenant_id": "default",
           "terminal_inventory": [
             {
               "boresight": {
@@ -9636,6 +9701,7 @@
           "tags": [
             "all"
           ],
+          "tenant_id": "default",
           "terminal_inventory": [
             {
               "boresight": {
@@ -9755,6 +9821,7 @@
           "tags": [
             "all"
           ],
+          "tenant_id": "default",
           "terminal_inventory": [
             {
               "boresight": {
@@ -9874,6 +9941,7 @@
           "tags": [
             "all"
           ],
+          "tenant_id": "default",
           "terminal_inventory": [
             {
               "boresight": {
@@ -9993,6 +10061,7 @@
           "tags": [
             "all"
           ],
+          "tenant_id": "default",
           "terminal_inventory": [
             {
               "boresight": {
@@ -10112,6 +10181,7 @@
           "tags": [
             "all"
           ],
+          "tenant_id": "default",
           "terminal_inventory": [
             {
               "boresight": {
@@ -10231,6 +10301,7 @@
           "tags": [
             "all"
           ],
+          "tenant_id": "default",
           "terminal_inventory": [
             {
               "boresight": {
@@ -10350,6 +10421,7 @@
           "tags": [
             "all"
           ],
+          "tenant_id": "default",
           "terminal_inventory": [
             {
               "boresight": {
@@ -10469,6 +10541,7 @@
           "tags": [
             "all"
           ],
+          "tenant_id": "default",
           "terminal_inventory": [
             {
               "boresight": {
@@ -10588,6 +10661,7 @@
           "tags": [
             "all"
           ],
+          "tenant_id": "default",
           "terminal_inventory": [
             {
               "boresight": {
@@ -10721,6 +10795,7 @@
           "slot": null,
           "surface_position": null,
           "tags": [],
+          "tenant_id": "default",
           "terminal_inventory": [
             {
               "boresight": {
@@ -10817,6 +10892,7 @@
           "tags": [
             "dtn_relay"
           ],
+          "tenant_id": "default",
           "terminal_inventory": []
         },
         {
@@ -10893,6 +10969,7 @@
           "tags": [
             "leo"
           ],
+          "tenant_id": "default",
           "terminal_inventory": [
             {
               "boresight": {
@@ -10957,6 +11034,7 @@
             "leo",
             "quic_client"
           ],
+          "tenant_id": "default",
           "terminal_inventory": []
         },
         {
@@ -11029,6 +11107,7 @@
           "tags": [
             "leo"
           ],
+          "tenant_id": "default",
           "terminal_inventory": [
             {
               "boresight": {
@@ -11123,6 +11202,7 @@
           "tags": [
             "geo"
           ],
+          "tenant_id": "default",
           "terminal_inventory": [
             {
               "boresight": {
@@ -11217,6 +11297,7 @@
           "tags": [
             "luna"
           ],
+          "tenant_id": "default",
           "terminal_inventory": [
             {
               "boresight": {
@@ -11281,6 +11362,7 @@
             "luna",
             "quic_server"
           ],
+          "tenant_id": "default",
           "terminal_inventory": []
         },
         {
@@ -11357,6 +11439,7 @@
           "tags": [
             "leo"
           ],
+          "tenant_id": "default",
           "terminal_inventory": [
             {
               "boresight": {
@@ -11421,6 +11504,7 @@
             "dtn_earth",
             "leo"
           ],
+          "tenant_id": "default",
           "terminal_inventory": []
         },
         {
@@ -11488,6 +11572,7 @@
           "tags": [
             "luna"
           ],
+          "tenant_id": "default",
           "terminal_inventory": [
             {
               "boresight": {
@@ -11552,6 +11637,7 @@
             "dtn_luna",
             "luna"
           ],
+          "tenant_id": "default",
           "terminal_inventory": []
         }
       ],

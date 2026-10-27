@@ -30,6 +30,11 @@ function node(node_id: string, node_type: NodeState["node_type"]): NodeState {
     beam_falloff_exponent: null,
     reference_body: "earth",
     frame_id: "earth",
+    tenant_id: "default",
+    segment_id: "earth",
+    local_node_id: node_id,
+    namespace: "earth",
+    tags: [],
   };
 }
 

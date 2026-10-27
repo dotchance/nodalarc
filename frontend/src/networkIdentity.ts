@@ -24,13 +24,6 @@ export function selectionTypeForNode(node: Pick<NodeState, "node_type">): "groun
   return isGroundNode(node) ? "ground_station" : "satellite";
 }
 
-export function nodeDisplayLabel(
-  node: Pick<NodeState, "node_id" | "local_node_id">,
-): string {
-  const local = node.local_node_id?.trim();
-  return local && local.length > 0 ? local : node.node_id;
-}
-
 export function isGroundLinkType(linkType: PublicLinkType): boolean {
   if (linkType === "ground") return true;
   if (NON_GROUND_LINK_TYPES.has(linkType)) return false;

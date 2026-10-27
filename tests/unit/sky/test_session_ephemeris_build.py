@@ -38,6 +38,14 @@ def _ground_scheduling() -> GroundSchedulingConfig:
     )
 
 
+def _identity(*node_ids: str) -> dict[str, dict[str, object]]:
+    """The resolved identity OME hands the ephemeris for every node it names."""
+    return {
+        node_id: {"segment_id": "earth", "local_node_id": node_id, "namespace": "earth"}
+        for node_id in node_ids
+    }
+
+
 def _load_test_ctx():
     """Two independently mutable satellites and one fixed node for ephemeris checks."""
     sats = [
@@ -85,6 +93,7 @@ def _load_test_ctx():
         propagator_id="j2-mean-elements",
         ground_scheduling=_ground_scheduling(),
         ground_candidate_satellites_by_gs={"gs-test": ()},
+        node_metadata=_identity(*(sat.node_id for sat in sats), "gs-test"),
         body_frames=EARTH_TEST_BODY_FRAMES,
     )
     return ctx, sats, gs_file
@@ -110,6 +119,7 @@ class TestBuildSessionEphemeris:
             ground_scheduling=session.scheduling.ground,
             ground_candidate_satellites_by_gs=candidates,
             ground_link_model=session.ground_link_model,
+            node_metadata=session.node_metadata,
             body_frames=session.body_frames,
         )
         for sat in sats:
@@ -151,6 +161,7 @@ class TestBuildSessionEphemeris:
         )
         probe_sats = [*sats[:3], eccentric]
         ctx.satellites.append(eccentric)
+        ctx.node_metadata.update(_identity(eccentric.node_id))
         try:
             shifted = EPOCH + 3600.0
             eph = build_session_ephemeris(ctx, shifted, epoch_id=1)
@@ -204,6 +215,7 @@ class TestBuildSessionEphemeris:
             ground_scheduling=_ground_scheduling(),
             ground_candidate_satellites_by_gs=ctx.ground_candidate_satellites_by_gs,
             ground_link_model=ctx.ground_link_model,
+            node_metadata=ctx.node_metadata,
             body_frames=ctx.body_frames,
         )
         eph = build_session_ephemeris(ctx, EPOCH, epoch_id=0)
@@ -226,6 +238,7 @@ class TestBuildSessionEphemeris:
             ground_scheduling=_ground_scheduling(),
             ground_candidate_satellites_by_gs=ctx.ground_candidate_satellites_by_gs,
             ground_link_model=ctx.ground_link_model,
+            node_metadata=ctx.node_metadata,
             body_frames=ctx.body_frames,
         )
 
@@ -275,6 +288,9 @@ class TestBuildSessionEphemeris:
             gs_file=None,
             neighbors=frozenset(),
             propagator_id="sgp4-tle",
+            node_metadata={
+                node_id: {"segment_id": "tle", "local_node_id": "sat-P00S00", "namespace": "tle"}
+            },
             body_frames=EARTH_TEST_BODY_FRAMES,
         )
 
@@ -300,6 +316,7 @@ class TestBuildSessionEphemeris:
             ground_link_model=ctx.ground_link_model,
             body_frames=ctx.body_frames,
             node_metadata={
+                **ctx.node_metadata,
                 sat_id: {
                     "segment_id": "leo",
                     "local_node_id": "sat-P00S00",

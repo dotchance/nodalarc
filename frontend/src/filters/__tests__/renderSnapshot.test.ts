@@ -4,9 +4,9 @@ import { describe, expect, it } from "vitest";
 import { filterSnapshotForRender } from "../renderSnapshot";
 import type { LinkState, NodeState, StateSnapshot, TracedPath } from "../../types";
 
-function traced(flowId: string, hops: string[], reverseHops: string[]): TracedPath {
+function traced(hops: string[], reverseHops: string[]): TracedPath {
   return {
-    flow_id: flowId,
+    continuous_trace: true,
     src_node: hops[0]!,
     dst_node: hops[hops.length - 1]!,
     hops,
@@ -50,6 +50,9 @@ function node(node_id: string, segment_id: string, plane: number | null): NodeSt
     tags: [segment_id],
     reference_body: "earth",
     frame_id: "earth",
+    tenant_id: "default",
+    local_node_id: node_id,
+    namespace: segment_id,
   };
 }
 
@@ -93,10 +96,9 @@ function snapshot(): StateSnapshot {
       ["ground-gs-denver", "leo-sat-p00s00"],
     ],
     traced_paths: [
-      traced("kept", ["ground-gs-denver", "leo-sat-p00s00"], []),
-      traced("hidden", ["leo-sat-p00s00", "meo-sat-p00s00"], []),
+      traced(["ground-gs-denver", "leo-sat-p00s00"], []),
+      traced(["leo-sat-p00s00", "meo-sat-p00s00"], []),
       traced(
-        "hidden-reverse",
         ["ground-gs-denver", "leo-sat-p00s00"],
         ["leo-sat-p00s00", "meo-sat-p00s00"],
       ),
@@ -128,11 +130,7 @@ describe("filterSnapshotForRender", () => {
       ["ground-gs-denver", "leo-sat-p00s00"],
     ]);
     // A trace is drawn whole; hops on hidden nodes are bridged where it is drawn.
-    expect(filtered?.traced_paths.map((path) => path.flow_id)).toEqual([
-      "kept",
-      "hidden",
-      "hidden-reverse",
-    ]);
+    expect(filtered?.traced_paths).toEqual(snapshot().traced_paths);
   });
 
   it("filters satellite planes without hiding ground stations", () => {

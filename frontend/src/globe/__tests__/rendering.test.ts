@@ -64,7 +64,12 @@ it.each([
   setNodeLocalPosition("sat", "earth", SCENE_EARTH_RADIUS + 550 / EARTH_KM_PER_RENDER_UNIT, 0, 0);
   render(
     createElement(Labels, {
-      nodes: [{ node_id: "sat", node_type: "satellite", reference_body: "earth" } as NodeState],
+      nodes: [{
+          node_id: "sat",
+          local_node_id: "sat",
+          node_type: "satellite",
+          reference_body: "earth",
+        } as NodeState],
       containerRef: { current: container },
       selectedNodeId: "sat",
     }),

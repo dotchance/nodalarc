@@ -33,8 +33,8 @@ const _ordered = (a: string, b: string): string => [a, b].sort().join("|");
  * id, with the namespace prefix removed where the local id carries it
  * (site-qualified ground locals). Never a fragment. */
 export function scopeLocalName(n: NodeState): string {
-  const local = n.local_node_id ?? n.node_id;
-  if (n.namespace && local.startsWith(`${n.namespace}-`)) {
+  const local = n.local_node_id;
+  if (local.startsWith(`${n.namespace}-`)) {
     return local.slice(n.namespace.length + 1);
   }
   return local;
@@ -148,7 +148,7 @@ export function SatelliteDetail({ node, snapshot, anchorGsId,
   // Members share their scope's namespace, exactly as site members do. A
   // vehicle differs from a site only in that the scope is itself a node.
   const scopeId = snapshot.nodes.some((n) => n.node_id === node.namespace)
-    ? (node.namespace as string)
+    ? node.namespace
     : node.node_id;
   const vehicleMembers = snapshot.nodes
     .filter(

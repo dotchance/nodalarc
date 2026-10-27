@@ -2712,8 +2712,6 @@ def get_flow_metrics() -> JSONResponse:
 
 # --- Path trace endpoints ---
 
-ONE_SHOT_TRACE_FLOW_ID = "__trace__"
-
 
 # One one-shot trace runs at a time: each holds traceroute execs and threads
 # for up to the trace deadline.
@@ -2754,7 +2752,7 @@ async def trace_between(body: dict) -> Any:
         )
     async with _one_shot_trace_lock:
         result = await asyncio.to_thread(
-            _create_path_tracer(ctx).trace_between, src, dst, flow_id=ONE_SHOT_TRACE_FLOW_ID
+            _create_path_tracer(ctx).trace_between, src, dst, continuous_trace=False
         )
     return result.model_dump(mode="json")
 

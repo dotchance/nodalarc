@@ -42,6 +42,7 @@ export function catalogBodyRadiusKm(bodyId: CatalogBodyId): number {
 export function catalogEarthFrame(): EphemerisBodyFrame {
   const earthBodyYaml = bodyYaml("earth");
   const bodyId = stringField(earthBodyYaml, "id");
+  if (bodyId !== "earth") throw new Error(`catalog earth body declares id ${bodyId}`);
   return {
     body_id: bodyId,
     mean_radius_km: numericField(earthBodyYaml, "mean_radius_km"),

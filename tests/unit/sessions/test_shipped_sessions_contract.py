@@ -57,23 +57,9 @@ def test_shipped_session_passes_full_readiness_gate(shipped_session) -> None:
     )
 
 
-@pytest.mark.parametrize("path", SESSION_PATHS, ids=lambda p: p.stem)
-def test_shipped_session_computes_real_steps(path: Path) -> None:
-    """Every shipped session must RUN, not merely resolve and render.
-
-    The sessions are worked examples of the primitives — the product is
-    the primitives, and an engine change that computes correctly for one
-    session while breaking another must fail in the suite run before
-    commit, not on a live deploy. (The geo sessions were undeployable
-    for weeks because only one session shape ever got exercised; the
-    render contract closed the deploy-time gap, this closes the runtime
-    one.) Thirty real ticks of the production compute loop per session:
-    propagation across every body in the session, visibility,
-    allocation, dwell where authored, event diffing — the full per-tick
-    pipeline, no mocks.
-    """
-    from nodalarc.models.session import resolve_session_epoch
-    from ome.event_stream import build_step_context, compute_step
+def _shipped_step_context(path: Path):
+    """A shipped session's OME config and the step context OME builds from it."""
+    from ome.event_stream import build_step_context
     from ome.main import _effective_ground_scheduling_for_runtime, _load_session_config
 
     cfg = _load_session_config(str(path), run_id="run-shipped-smoke-0001")
@@ -94,6 +80,64 @@ def test_shipped_session_computes_real_steps(path: Path) -> None:
         body_ephemeris=cfg.body_ephemeris,
         active_bodies=cfg.active_bodies,
     )
+    return cfg, ctx
+
+
+def _assert_tick_round_trips(cfg, ctx, result, step: int, step_seconds: float):
+    """OME builds its snapshot leaves without validation; validating the dump
+    of what a real tick builds, as OME's publisher builds it, must reproduce it
+    exactly. Returns the tick's link state snapshot."""
+    from nodalarc.models.link_decisions import GroundLinkDecisionSnapshot
+    from nodalarc.models.link_state import LinkStateSnapshot
+    from ome.snapshot_builder import DeferredLinkDecisionSnapshot, DeferredLinkStateSnapshot
+
+    link_snapshot = DeferredLinkStateSnapshot(
+        source=result.link_snapshot_source,
+        interface_map=cfg.interface_map,
+        rule_map=cfg.rule_map,
+        sim_time=result.sim_time,
+        seq=step,
+        interval_s=step_seconds,
+        fixed_positions=ctx.gs_positions,
+        epoch_id=0,
+        mbb_overlap_ticks_by_gs=ctx.gs_mbb_overlap_ticks,
+        current_step=result.step,
+    ).build()
+    wire = link_snapshot.model_dump_json()
+    assert LinkStateSnapshot.model_validate_json(wire).model_dump_json() == wire
+    decision_snapshot = DeferredLinkDecisionSnapshot(
+        decisions=result.ground_decisions,
+        unscheduled_pairs=result.ground_allocation.unscheduled_pairs,
+        policy_audit=result.ground_allocation.policy_audit,
+        allocation_events=result.ground_allocation.allocation_events,
+        sim_time=result.sim_time,
+        snapshot_seq=step,
+        epoch_id=0,
+    ).build()
+    wire = decision_snapshot.model_dump_json()
+    assert GroundLinkDecisionSnapshot.model_validate_json(wire).model_dump_json() == wire
+    return link_snapshot
+
+
+@pytest.mark.parametrize("path", SESSION_PATHS, ids=lambda p: p.stem)
+def test_shipped_session_computes_real_steps(path: Path) -> None:
+    """Every shipped session must RUN, not merely resolve and render.
+
+    The sessions are worked examples of the primitives — the product is
+    the primitives, and an engine change that computes correctly for one
+    session while breaking another must fail in the suite run before
+    commit, not on a live deploy. (The geo sessions were undeployable
+    for weeks because only one session shape ever got exercised; the
+    render contract closed the deploy-time gap, this closes the runtime
+    one.) Thirty real ticks of the production compute loop per session:
+    propagation across every body in the session, visibility,
+    allocation, dwell where authored, event diffing — the full per-tick
+    pipeline, no mocks.
+    """
+    from nodalarc.models.session import resolve_session_epoch
+    from ome.event_stream import compute_step
+
+    cfg, ctx = _shipped_step_context(path)
     epoch_unix = resolve_session_epoch(cfg.resolved.time)
     step_seconds = float(cfg.resolved.time.step_seconds)
 
@@ -119,12 +163,54 @@ def test_shipped_session_computes_real_steps(path: Path) -> None:
         associations = result.associations
         teardowns = result.pending_teardowns
         propagated_nodes.update(result.link_snapshot_source.propagated_states)
+        _assert_tick_round_trips(cfg, ctx, result, step, step_seconds)
 
     sat_count = len(cfg.satellites)
     assert len(propagated_nodes) == sat_count, (
         f"{path.name}: {sat_count} satellites resolved but only "
         f"{len(propagated_nodes)} ever propagated"
     )
+
+
+def test_a_make_before_break_teardown_tick_round_trips() -> None:
+    """The round trip above never meets a teardown in thirty ticks. earth-leo-simple
+    hands over make-before-break; run it to its first pending teardown and check
+    that tick's snapshot carries the teardown and survives the round trip."""
+    from nodalarc.models.session import resolve_session_epoch
+    from ome.event_stream import compute_step
+
+    cfg, ctx = _shipped_step_context(SESSIONS_DIR / "earth-leo-simple.yaml")
+    epoch_unix = resolve_session_epoch(cfg.resolved.time)
+    step_seconds = float(cfg.resolved.time.step_seconds)
+    isl_state: dict = {}
+    gs_state: dict = {}
+    dwell_state: dict = {}
+    associations: dict = {}
+    teardowns: dict = {}
+    for step in range(300):
+        result = compute_step(
+            ctx,
+            epoch_unix,
+            step,
+            step_seconds,
+            0.0,
+            isl_state,
+            gs_state,
+            associations,
+            teardowns,
+            dwell_state=dwell_state,
+        )
+        associations = result.associations
+        teardowns = result.pending_teardowns
+        if teardowns:
+            break
+    else:
+        pytest.fail("earth-leo-simple reached no make-before-break teardown in 300 ticks")
+    snapshot = _assert_tick_round_trips(cfg, ctx, result, step, step_seconds)
+    teardown_links = [link for link in snapshot.links if link.scheduling_state == "teardown"]
+    assert teardown_links
+    assert all(link.teardown_remaining_ticks is not None for link in teardown_links)
+    assert all(link.topology_mode is not None for link in snapshot.links)
 
 
 def test_shipped_session_renders_every_node_through_its_adapter(shipped_session) -> None:

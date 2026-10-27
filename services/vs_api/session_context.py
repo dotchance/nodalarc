@@ -172,6 +172,7 @@ class SessionContext:
         self._routing_instances_by_node_id = routing_instances_by_node_id(resolved)
         self._role_by_node_id = resolved.node_roles()
         self._kind_by_node_id = {node.node_id: node.kind for node in resolved.nodes}
+        self._tenant_by_node_id = {node.node_id: node.tenant_id for node in resolved.nodes}
         self._resolved_static_nodes_by_id = self._build_resolved_static_node_states(
             resolved,
             addresses_by_id=self._node_addresses_by_id,
@@ -300,6 +301,15 @@ class SessionContext:
             )
         return kind
 
+    def _tenant_of(self, node_id: str) -> str:
+        """The resolved tenant of a node the ephemeris names."""
+        tenant = self._tenant_by_node_id.get(node_id)
+        if tenant is None:
+            raise ValueError(
+                f"session ephemeris names node {node_id!r}, which the resolved session does not"
+            )
+        return tenant
+
     def _role_of(self, node_id: str) -> NodeRole:
         """The resolved routing role of a node the ephemeris names."""
         role = self._role_by_node_id.get(node_id)
@@ -329,6 +339,7 @@ class SessionContext:
         self._routing_instances_by_node_id = {}
         self._role_by_node_id = {}
         self._kind_by_node_id = {}
+        self._tenant_by_node_id = {}
         self.history = None
         self.beam_falloff_exponent = 2.0
         self.actuation_expected_latency_ms = 250.0
@@ -1464,7 +1475,7 @@ class SessionContext:
                         beam_falloff_exponent=self.beam_falloff_exponent,
                         reference_body=node.reference_body,
                         frame_id=node.frame_id,
-                        tenant_id=existing.tenant_id if existing else "default",
+                        tenant_id=self._tenant_of(node_id),
                         segment_id=node.segment_id,
                         local_node_id=node.local_node_id,
                         namespace=node.namespace,
@@ -1526,7 +1537,7 @@ class SessionContext:
                         beam_falloff_exponent=self.beam_falloff_exponent,
                         reference_body=node.reference_body,
                         frame_id=node.frame_id,
-                        tenant_id=existing.tenant_id if existing else "default",
+                        tenant_id=self._tenant_of(node_id),
                         segment_id=node.segment_id,
                         local_node_id=node.local_node_id,
                         namespace=node.namespace,
@@ -1559,7 +1570,7 @@ class SessionContext:
                         min_elevation_deg=self.gs_elevation_map.get(node_id),
                         reference_body=node.reference_body,
                         frame_id=node.frame_id,
-                        tenant_id=existing.tenant_id if existing else "default",
+                        tenant_id=self._tenant_of(node_id),
                         segment_id=node.segment_id,
                         local_node_id=node.local_node_id,
                         namespace=node.namespace,

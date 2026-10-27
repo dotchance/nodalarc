@@ -247,7 +247,6 @@ def test_link_classes_follow_resolved_body_relationships() -> None:
         for endpoint in inter_body.endpoints
         for node_id in endpoint.node_ids
     } == {"earth", "luna"}
-    assert not {rule.kind for rule in resolved.link_rules} & {"relay", "backbone"}
 
 
 def test_link_class_rejects_mixed_same_body_and_cross_body_pairs() -> None:

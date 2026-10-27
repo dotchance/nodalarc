@@ -1638,7 +1638,6 @@ class SessionContext:
                 if link_rule_id is not None
                 else None
             ),
-            link_rule_id=link_rule_id,
             endpoint_segments=endpoint_segments,
         )
 
@@ -1947,7 +1946,6 @@ def _derive_link_type(
     raw_type: Literal["isl", "ground"],
     *,
     resolved_kind: str | None = None,
-    link_rule_id: str | None = None,
     endpoint_segments: tuple[str, str] | list[str] | None = None,
 ) -> PublicLinkType:
     if raw_type == "ground":

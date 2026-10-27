@@ -34,7 +34,7 @@ from nodalarc.link_rule_candidates import generate_declared_link_candidates
 from nodalarc.model_validation import ADDRESS_FAMILIES, AddressFamily
 from nodalarc.models.catalog import EnvValueFrom, Profile, ResolvedEnvEntry
 from nodalarc.models.identity import IdentityMode
-from nodalarc.models.link_rules import LinkRule, NodeSelector, TerminalSelector
+from nodalarc.models.link_rules import LinkLabel, LinkRule, NodeSelector, TerminalSelector
 from nodalarc.models.resolved_session import (
     OspfInstanceAreas,
     ResolvedBodyFacts,
@@ -3749,7 +3749,7 @@ def _derive_link_label(
     rule_id: str,
     endpoints: list[ResolvedEndpoint],
     endpoint_nodes: list[tuple[ResolvedNode, ...]],
-) -> str:
+) -> LinkLabel:
     left, right = endpoints
     # An access-role endpoint makes the rule an access rule regardless of
     # segment arrangement — labeling it "isl" sends it down the wrong

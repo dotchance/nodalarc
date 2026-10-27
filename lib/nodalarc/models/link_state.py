@@ -23,6 +23,8 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict
 
+from nodalarc.models.link_rules import TopologyMode
+
 # Whether OME's ground allocator holds a link open only for its make-before-break
 # teardown ("teardown") or schedules it ("active").
 SchedulingState = Literal["active", "teardown"]
@@ -72,7 +74,7 @@ class LinkState(BaseModel):
     latency_ms: float | None  # None when carrier is not UP
     link_type: Literal["isl", "ground"]
     link_rule_id: str | None = None
-    topology_mode: str | None = None
+    topology_mode: TopologyMode | None = None
     endpoint_segments: tuple[str, str] | None = None
     gs_terminal_index: int | None = None
     sat_terminal_index: int | None = None

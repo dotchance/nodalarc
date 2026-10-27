@@ -19,8 +19,10 @@ from dataclasses import dataclass
 
 from nodalarc.models.link_rules import (
     ExplicitPairsTopology,
+    LinkLabel,
     NearestNTopology,
     NearestVisibleTopology,
+    TopologyMode,
     VisibleCandidatesTopology,
 )
 from nodalarc.models.resolved_session import ResolvedLinkRule, ResolvedNode, ResolvedSession
@@ -32,11 +34,11 @@ class DeclaredLinkCandidate:
 
     pair: tuple[str, str]
     rule_id: str
-    kind: str
+    kind: LinkLabel
     # Endpoint-ordered, parallel to endpoint_segments.
     terminal_roles: tuple[str, str]
     terminal_medium: str | None
-    topology_mode: str
+    topology_mode: TopologyMode
     priority: int
     endpoint_segments: tuple[str, str]
 

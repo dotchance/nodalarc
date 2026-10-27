@@ -7,19 +7,17 @@
  *  reason tokens remain unchanged; only their display text is defined here.
  */
 
-import type { BuilderRulePreview, BuilderWorld } from "./builderTypes";
+import type { BuilderPreviewPair, BuilderRulePreview, BuilderWorld } from "./builderTypes";
 
 export interface CandidatePair {
   rule_id: string;
-  kind: string;
+  kind: BuilderPreviewPair["kind"];
   a: string;
   b: string;
 }
 
 export interface RulePreview {
   rule_id: string;
-  kind: string;
-  mode: string;
   /** "enabled" here means the rule has COMPUTED geometry — the only rules that
    *  can read as "dark" (on, yet zero lines). A disabled or preview-pending rule
    *  is never dark; it shows its scope note. */
@@ -101,12 +99,13 @@ export function computeCandidates(world: BuilderWorld): CandidateComputation {
   const pairs: CandidatePair[] = [];
   const previews: RulePreview[] = [];
   for (const preview of world.rule_previews) {
-    const mode = modeByRule.get(preview.rule_id) ?? "";
+    const mode = modeByRule.get(preview.rule_id);
+    if (mode === undefined) {
+      throw new Error(`rule preview ${preview.rule_id} has no resolved link rule`);
+    }
     const fixed = mode === "explicit_pairs" || mode === "nearest_n";
     previews.push({
       rule_id: preview.rule_id,
-      kind: preview.kind,
-      mode,
       enabled: preview.preview_scope === "computed",
       candidates: preview.pairs_drawn,
       note: previewNote(preview, allocByRule.get(preview.rule_id) ?? 0, fixed),

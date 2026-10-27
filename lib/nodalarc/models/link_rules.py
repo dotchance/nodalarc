@@ -9,7 +9,7 @@ terminal limits, and current runtime state.
 
 from __future__ import annotations
 
-from typing import Annotated, Literal
+from typing import Annotated, Literal, get_args
 
 from pydantic import (
     AfterValidator,
@@ -31,7 +31,10 @@ from nodalarc.model_validation import (
 )
 from nodalarc.models.catalog import MountRole
 
-LinkLabel = Literal["access", "isl", "relay", "backbone", "inter_body"]
+# The class the resolver derives for a link rule (see _derive_link_label).
+LinkLabel = Literal["access", "isl", "inter_body"]
+# The topology modes the grammar declares; each topology class discriminates on one.
+TopologyMode = Literal["visible_candidates", "nearest_visible", "nearest_n", "explicit_pairs"]
 LinkRelation = Literal["intra_segment", "inter_segment", "inter_body"]
 LinkMedium = Literal["rf", "optical", "terrestrial", "mixed"]
 
@@ -163,6 +166,12 @@ LinkTopology = Annotated[
     VisibleCandidatesTopology | NearestVisibleTopology | NearestNTopology | ExplicitPairsTopology,
     Field(discriminator="mode"),
 ]
+
+if {
+    get_args(topology.model_fields["mode"].annotation)[0]
+    for topology in get_args(get_args(LinkTopology)[0])
+} != set(get_args(TopologyMode)):
+    raise RuntimeError("TopologyMode must list exactly the grammar's topology modes")
 
 
 class LinkRuleConstraints(BaseModel):

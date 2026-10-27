@@ -11,7 +11,12 @@ import { describe, expect, it } from "vitest";
 import { candidateBufferStale, candidateColors } from "../CandidateLines";
 import type { CandidatePair } from "../candidates";
 
-const pair = (kind: string, a: string, b: string): CandidatePair => ({ rule_id: "r", kind, a, b });
+const pair = (kind: CandidatePair["kind"], a: string, b: string): CandidatePair => ({
+  rule_id: "r",
+  kind,
+  a,
+  b,
+});
 
 describe("buffers rebuild on identity change or remount", () => {
   it("a new pairs identity is stale even at equal length", () => {

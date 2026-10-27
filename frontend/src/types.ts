@@ -77,6 +77,9 @@ export interface NodeState {
   tags?: string[];
 }
 
+/** The topology modes the session grammar declares. */
+export type TopologyMode = "visible_candidates" | "nearest_visible" | "nearest_n" | "explicit_pairs";
+
 /** Where VS-API's session manager stands. */
 export type SessionStatus = "idle" | "switching" | "wiring" | "ready" | "error";
 
@@ -104,7 +107,7 @@ export interface LinkState {
   interface_a: string;
   interface_b: string;
   link_rule_id?: string | null;
-  topology_mode?: string | null;
+  topology_mode?: TopologyMode | null;
   endpoint_segments?: [string, string] | null;
   scheduling_state: "active" | "teardown";
   teardown_remaining_ticks?: number | null;
@@ -131,7 +134,7 @@ export interface LinkDecisionTrace {
   netem_one_way_ms: number | null;
   rtt_to_one_way_policy: string | null;
   link_rule_id?: string | null;
-  topology_mode?: string | null;
+  topology_mode?: TopologyMode | null;
   endpoint_segments?: [string, string] | null;
 }
 

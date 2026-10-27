@@ -23,6 +23,7 @@ from nodalarc.models.builder_world import (
     BuilderWorld,
     BuilderWorldNode,
     BuilderWorldSegment,
+    PreviewScope,
 )
 from nodalarc.models.events import NodePosition, SessionEphemeris
 from nodalarc.models.resolved_session import ResolvedLinkRule, ResolvedNode, ResolvedSession
@@ -177,7 +178,7 @@ def _preview_body_of(node: ResolvedNode) -> str | None:
     return node.reference_body
 
 
-def _preview_scope(rule: ResolvedLinkRule, node_by_id: dict[str, ResolvedNode]) -> str:
+def _preview_scope(rule: ResolvedLinkRule, node_by_id: dict[str, ResolvedNode]) -> PreviewScope:
     """Whether a rule's geometry is computed, and if not, the preview status —
     decided from body/kind/enabled facts alone, no OME. A disabled rule ships no
     geometry; a rule with no satellite endpoint is static-terrestrial (the
@@ -341,7 +342,6 @@ def _ground_verdict(
     gs_node: ResolvedNode,
     sat_state: Any,
     ctx: Any,
-    gs_min_elev: dict[str, float],
 ) -> str:
     if sat_state is None:
         return "no_geometry"
@@ -353,9 +353,9 @@ def _ground_verdict(
     body_frame = ctx.body_frames.get(reference_body) if reference_body else None
     if body_frame is None:
         return "no_geometry"
-    # The effective cross-rule mask the runtime enforces at this GS — never the
+    # The effective cross-rule mask OME's engine enforces at this GS — never the
     # rule's own endpoint mask (geometry_only carries no boresight/FoR/range).
-    min_elev = gs_min_elev.get(gs_node.node_id, 25.0)
+    min_elev = ctx.gs_min_elevations[gs_node.node_id]
     gv = check_ground_visibility(
         gs_ecef,
         gs_geo,
@@ -374,7 +374,6 @@ def _pair_verdict(
     sat_states: dict[str, Any],
     ctx: Any,
     rule: ResolvedLinkRule,
-    gs_min_elev: dict[str, float],
 ) -> str:
     left = node_by_id.get(node_a)
     right = node_by_id.get(node_b)
@@ -387,7 +386,7 @@ def _pair_verdict(
     if a_sat != b_sat:
         gs_node = right if a_sat else left
         sat_id = node_a if a_sat else node_b
-        return _ground_verdict(gs_node, sat_states.get(sat_id), ctx, gs_min_elev)
+        return _ground_verdict(gs_node, sat_states.get(sat_id), ctx)
     # Ground-ground inside a computed rule: no visibility to compute.
     return "no_geometry"
 
@@ -397,7 +396,6 @@ def _computed_preview(
     node_by_id: dict[str, ResolvedNode],
     sat_states: dict[str, Any],
     ctx: Any,
-    gs_min_elev: dict[str, float],
     fixed: dict[str, list[Any]],
 ) -> BuilderRulePreview:
     mode = rule.topology.mode
@@ -449,7 +447,7 @@ def _computed_preview(
                 )
             if not forward:
                 display_a, display_b = nb, na
-        verdict = _pair_verdict(na, nb, candidate, node_by_id, sat_states, ctx, rule, gs_min_elev)
+        verdict = _pair_verdict(na, nb, candidate, node_by_id, sat_states, ctx, rule)
         if verdict == "ok":
             passing += 1
             if len(drawn) < _PREVIEW_DRAW_CAP:
@@ -467,7 +465,6 @@ def _computed_preview(
     capped = tested < pairs_total or passing > _PREVIEW_DRAW_CAP
     return BuilderRulePreview(
         rule_id=rule.rule_id,
-        kind=rule.kind,
         preview_scope="computed",
         pairs_total=pairs_total,
         pairs_tested=tested,
@@ -494,7 +491,6 @@ def _builder_rule_previews(
     def _scope_only(rule: ResolvedLinkRule) -> BuilderRulePreview:
         return BuilderRulePreview(
             rule_id=rule.rule_id,
-            kind=rule.kind,
             preview_scope=scopes[rule.rule_id],
             pairs_total=0,
             pairs_tested=0,
@@ -506,7 +502,6 @@ def _builder_rule_previews(
     if not any(scope == "computed" for scope in scopes.values()):
         return tuple(_scope_only(rule) for rule in resolved.link_rules)
 
-    gs_min_elev = resolved.effective_ground_min_elevation_by_gs()
     fixed: dict[str, list[Any]] = {}
     for candidate in resolved.link_candidates:
         fixed.setdefault(candidate.rule_id, []).append(candidate)
@@ -514,14 +509,11 @@ def _builder_rule_previews(
     previews: list[BuilderRulePreview] = []
     for rule in resolved.link_rules:
         if scopes[rule.rule_id] == "computed":
-            previews.append(
-                _computed_preview(rule, node_by_id, sat_states, ctx, gs_min_elev, fixed)
-            )
+            previews.append(_computed_preview(rule, node_by_id, sat_states, ctx, fixed))
         else:
             previews.append(
                 BuilderRulePreview(
                     rule_id=rule.rule_id,
-                    kind=rule.kind,
                     preview_scope=scopes[rule.rule_id],
                     pairs_total=0,
                     pairs_tested=0,
@@ -555,7 +547,6 @@ def _satellite_less_world_view(
     previews = tuple(
         BuilderRulePreview(
             rule_id=rule.rule_id,
-            kind=rule.kind,
             preview_scope=_preview_scope(rule, node_by_id),
             pairs_total=0,
             pairs_tested=0,

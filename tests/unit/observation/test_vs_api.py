@@ -97,7 +97,6 @@ class TestLinkTypeDerivation:
             _derive_link_type(
                 "isl",
                 resolved_kind="isl",
-                link_rule_id="leo-to-meo",
                 endpoint_segments=("leo", "meo"),
             )
             == "inter_constellation"
@@ -108,7 +107,6 @@ class TestLinkTypeDerivation:
             _derive_link_type(
                 "isl",
                 resolved_kind="inter_body",
-                link_rule_id="earth-luna-relay",
                 endpoint_segments=("earth-relay", "luna-relay"),
             )
             == "inter_body_relay"
@@ -118,7 +116,6 @@ class TestLinkTypeDerivation:
         assert (
             _derive_link_type(
                 "isl",
-                link_rule_id="unknown-rule",
                 endpoint_segments=("earth-relay", "luna-relay"),
             )
             == "isl"

@@ -433,6 +433,8 @@ typecheck: ## Type-check Builder, session-configuration, and OME frame authority
 		lib/nodalarc/catalog_repository.py \
 		lib/nodalarc/catalog_upload.py \
 		lib/nodalarc/explain.py \
+		lib/nodalarc/link_metadata.py \
+		lib/nodalarc/link_rule_candidates.py \
 		lib/nodalarc/filesystem_catalog_repository.py \
 		lib/nodalarc/prepared_session.py \
 		lib/nodalarc/prepared_tree.py \
@@ -445,6 +447,8 @@ typecheck: ## Type-check Builder, session-configuration, and OME frame authority
 		lib/nodalarc/models/decision_explanation.py \
 		lib/nodalarc/models/ground_policy.py \
 		lib/nodalarc/models/link_decisions.py \
+		lib/nodalarc/models/link_rules.py \
+		lib/nodalarc/models/resolved_session.py \
 		lib/nodalarc/models/session_sources.py \
 		services/vs_api/builder_catalog_draft.py \
 		services/vs_api/builder_catalog_service.py \

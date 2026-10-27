@@ -26,6 +26,7 @@ from nodalarc.models.link_rules import (
     LinkLabel,
     LinkRuleConstraints,
     LinkTopology,
+    TopologyMode,
 )
 from nodalarc.models.segment_session import (
     LINK_STATE_PROTOCOLS,
@@ -509,7 +510,7 @@ class ResolvedLinkCandidate(BaseModel):
     node_b: NonEmptyReference
     interface_a: NonEmptyReference | None = None
     interface_b: NonEmptyReference | None = None
-    topology_mode: NonEmptyReference
+    topology_mode: TopologyMode
     priority: int = Field(ge=0)
     endpoint_segments: tuple[NonEmptyReference, NonEmptyReference]
 

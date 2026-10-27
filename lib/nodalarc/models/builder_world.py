@@ -16,7 +16,7 @@ from pydantic import BaseModel, ConfigDict
 
 from nodalarc.models.catalog import MountRole
 from nodalarc.models.events import NodePosition, SessionEphemeris
-from nodalarc.models.link_rules import LinkLabel
+from nodalarc.models.link_rules import LinkLabel, TopologyMode
 from nodalarc.models.resolved_session import (
     NodeKind,
     NodeRole,
@@ -56,7 +56,7 @@ class BuilderLinkRule(BaseModel):
     kind: LinkLabel
     enabled: bool
     endpoints: tuple[BuilderLinkEndpoint, BuilderLinkEndpoint]
-    topology_mode: str
+    topology_mode: TopologyMode
     topology_n: int | None = None
     explicit_pairs: tuple[tuple[str, str], ...] = ()
     max_range_km: float | None = None
@@ -124,7 +124,7 @@ class BuilderRuleAllocation(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     rule_id: str
-    kind: str
+    kind: LinkLabel
     allocated_pairs: int
     per_node: tuple[BuilderNodeInterfaceFacts, ...] = ()
 
@@ -166,7 +166,7 @@ class BuilderPreviewPair(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     rule_id: str
-    kind: str
+    kind: LinkLabel
     node_a: str
     node_b: str
 
@@ -202,7 +202,6 @@ class BuilderRulePreview(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     rule_id: str
-    kind: str
     preview_scope: PreviewScope
     pairs_total: int
     pairs_tested: int

@@ -1598,10 +1598,10 @@ export interface BuilderLinkEndpoint {
 /** Display projection of one ``ResolvedLinkRule``. The resolved rule's topology is a discriminated union; the builder needs the flat facts (mode, n, explicit pairs, range cap) to preview candidate geometry. This is a projection for display — candidate truth at runtime stays with OME. */
 export interface BuilderLinkRule {
   readonly rule_id: string;
-  readonly kind: "access" | "isl" | "relay" | "backbone" | "inter_body";
+  readonly kind: "access" | "isl" | "inter_body";
   readonly enabled: boolean;
   readonly endpoints: readonly [BuilderLinkEndpoint, BuilderLinkEndpoint];
-  readonly topology_mode: string;
+  readonly topology_mode: "visible_candidates" | "nearest_visible" | "nearest_n" | "explicit_pairs";
   readonly topology_n: number | null;
   readonly explicit_pairs: ReadonlyArray<readonly [string, string]>;
   readonly max_range_km: number | null;
@@ -1618,7 +1618,7 @@ export interface BuilderNodeInterfaceFacts {
 /** One drawn preview pair: a runtime node pair whose frozen-epoch geometry passed every armed gate, oriented to the rule's endpoints server-side. canvas draws these directly and never re-derives pair identities. */
 export interface BuilderPreviewPair {
   readonly rule_id: string;
-  readonly kind: string;
+  readonly kind: "access" | "isl" | "inter_body";
   readonly node_a: string;
   readonly node_b: string;
 }
@@ -1632,7 +1632,7 @@ export interface BuilderPreviewReasonCount {
 /** The allocator's own outcome for one rule — the single capacity truth every display reports instead of re-deriving. For access rules nothing is consumed at resolve time (the runtime schedules access within terminal capacity): ``allocated_pairs`` counts the declared candidate universe and ``free`` always mirrors ``matching``. Displays must not present access facts as fixed allocation. */
 export interface BuilderRuleAllocation {
   readonly rule_id: string;
-  readonly kind: string;
+  readonly kind: "access" | "isl" | "inter_body";
   readonly allocated_pairs: number;
   readonly per_node: ReadonlyArray<BuilderNodeInterfaceFacts>;
 }
@@ -1640,7 +1640,6 @@ export interface BuilderRuleAllocation {
 /** The server's frozen-epoch visibility verdict for one link rule. NodalArc computes preview geometry through the same OME visibility composites the runtime uses; the builder renders these facts and never runs a second physics engine. ``preview_scope`` says whether geometry ran and, if not, why. Only ``computed`` carries reason counts and drawn pairs. The preview is bounded, not a simulation. ``pairs_total`` is the candidate universe size (a closed-form count, never a materialized pair set); ``pairs_tested`` is the deterministic subset geometry actually ran on (``min(pairs_total, budget)``, first pairs in authored/node-id order — never distance-ranked); ``pairs_drawn`` is how many tested pairs passed (the first such, capped to the draw cap). ``capped`` is true when the preview is partial on either axis (``pairs_tested < pairs_total`` or more passed than were drawn). Reason counts and drawn pairs describe the tested subset only. */
 export interface BuilderRulePreview {
   readonly rule_id: string;
-  readonly kind: string;
   readonly preview_scope: "computed" | "inter_body_pending" | "terrestrial_pending" | "disabled";
   readonly pairs_total: number;
   readonly pairs_tested: number;

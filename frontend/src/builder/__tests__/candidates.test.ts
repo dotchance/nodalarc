@@ -22,7 +22,6 @@ import type {
 function preview(over: Partial<BuilderRulePreview>): BuilderRulePreview {
   return {
     rule_id: "r",
-    kind: "access",
     preview_scope: "computed",
     pairs_total: 0,
     pairs_tested: 0,
@@ -34,7 +33,7 @@ function preview(over: Partial<BuilderRulePreview>): BuilderRulePreview {
   };
 }
 
-function rule(rule_id: string, topology_mode: string): BuilderLinkRule {
+function rule(rule_id: string, topology_mode: BuilderLinkRule["topology_mode"]): BuilderLinkRule {
   return {
     rule_id,
     kind: "access",
@@ -56,7 +55,8 @@ function alloc(rule_id: string, allocated_pairs: number): BuilderRuleAllocation 
 
 function world(
   previews: BuilderRulePreview[],
-  rules: BuilderLinkRule[] = [],
+  // The backend sends one resolved rule for every rule preview.
+  rules: BuilderLinkRule[] = previews.map((p) => rule(p.rule_id, "visible_candidates")),
   allocations: BuilderRuleAllocation[] = [],
 ): BuilderWorld {
   return {

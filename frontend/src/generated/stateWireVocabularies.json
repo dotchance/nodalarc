@@ -1156,7 +1156,12 @@
       "state": [
         "active"
       ],
-      "topology_mode": null
+      "topology_mode": [
+        "explicit_pairs",
+        "nearest_n",
+        "nearest_visible",
+        "visible_candidates"
+      ]
     },
     "LinkDown": {
       "interface_a": null,
@@ -1209,7 +1214,12 @@
       "state": [
         "active"
       ],
-      "topology_mode": null
+      "topology_mode": [
+        "explicit_pairs",
+        "nearest_n",
+        "nearest_visible",
+        "visible_candidates"
+      ]
     },
     "LinkUp": {
       "interface_a": null,

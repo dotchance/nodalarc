@@ -692,16 +692,21 @@ export function BuilderView({
     workspace,
     (visualDraft?.authoring_workspace ?? visualDraft?.applied_workspace ?? null) as Workspace | null,
   );
-  /** One accepting gesture at a time: a command, a customization or a control
-   *  edit starts only when no change is being applied and the twin holds no
-   *  edit the backend has not accepted (it would be discarded otherwise). */
+  /** One accepting gesture at a time: a command, a customization, a control
+   *  edit or a YAML apply starts only when no change is being applied and the
+   *  twin holds no edit the backend has not accepted (it would be discarded
+   *  otherwise). Null when one may start; otherwise why not. */
+  const unsettledReason = (): string | null => {
+    if (!visualDraft) return "No session draft is open.";
+    if (writer !== null) return "A change is still being applied; try again when it finishes.";
+    if (twinMatchesDraft) return null;
+    return workspace === refusedTwin.current
+      ? "The last edit was not accepted; change it or undo it first."
+      : "The last edit is still being applied; try again when it finishes.";
+  };
   const refuseUnlessSettled = () => {
-    if (writer !== null) {
-      throw new Error("A change is still being applied; try again when it finishes.");
-    }
-    if (!twinMatchesDraft) {
-      throw new Error("An edit has not been accepted yet; wait for it, or undo it, first.");
-    }
+    const reason = unsettledReason();
+    if (reason !== null) throw new Error(reason);
   };
   const unsavedSessionWork = draftHoldsUnsavedWork({
     draft: visualDraft,
@@ -829,13 +834,13 @@ export function BuilderView({
   ]);
 
   useEffect(() => {
-    if (!visualDraft || !yamlBuffer.dirty || dirtyWindows > 0) return;
+    if (!visualDraft || !yamlBuffer.dirty || dirtyWindows > 0 || !twinMatchesDraft) return;
     const generation = yamlBuffer.generation;
     const timer = setTimeout(() => {
       void applySessionYaml(generation).catch(() => undefined);
     }, 500);
     return () => clearTimeout(timer);
-  }, [applySessionYaml, dirtyWindows, visualDraft, yamlBuffer.dirty, yamlBuffer.generation]);
+  }, [applySessionYaml, dirtyWindows, visualDraft, yamlBuffer.dirty, yamlBuffer.generation, twinMatchesDraft]);
 
   // Ctrl/Cmd+Z undoes the last workspace mutation unless
   // the user is typing in a field (native input undo wins there). Gated on
@@ -1577,7 +1582,7 @@ export function BuilderView({
                   orbit: { ...d.orbit, ...patch },
                 }))
               }
-              onRemove={() => {
+              onRemove={writer !== null ? null : () => {
                 removeConstellation(draft.segment_id);
                 closeWindow(key);
               }}
@@ -1678,7 +1683,7 @@ export function BuilderView({
               }}
               draft={draft}
               onUpdate={(update) => patchBuffer(key, applied, update)}
-              onRemove={() => {
+              onRemove={writer !== null ? null : () => {
                 removeGroundDraft(draft.segment_id);
                 closeWindow(key);
               }}
@@ -1730,7 +1735,7 @@ export function BuilderView({
                   [side]: { ...r[side], ...patch },
                 }))
               }
-              onRemove={() => {
+              onRemove={writer !== null ? null : () => {
                 removeLinkRule(rule.rule_id);
                 closeWindow(key);
               }}
@@ -1765,7 +1770,7 @@ export function BuilderView({
               onUpdate={(patch) =>
                 patchBuffer(key, applied, (d) => ({ ...d, ...patch }))
               }
-              onRemove={() => {
+              onRemove={writer !== null ? null : () => {
                 removeRoutingDomain(domain.domain_id);
                 closeWindow(key);
               }}
@@ -1792,7 +1797,7 @@ export function BuilderView({
               onUpdate={(patch) =>
                 patchBuffer(key, applied, (b) => ({ ...b, ...patch }))
               }
-              onRemove={() => {
+              onRemove={writer !== null ? null : () => {
                 removeBoundary(boundary.boundary_id);
                 closeWindow(key);
               }}
@@ -2833,7 +2838,7 @@ export function BuilderView({
           </div>
         )}
       </div>
-      <div className="builder-windows" data-testid="builder-windows" inert={writer !== null}>
+      <div className="builder-windows" data-testid="builder-windows">
         {windows.map((win) => {
           const body = renderWindow(win.target);
           if (!body) return null;
@@ -2855,6 +2860,7 @@ export function BuilderView({
               {buffered && (
                 <EditorApplyRow
                   dirty={buf?.dirty ?? false}
+                  busy={writer !== null}
                   stale={staleKeys.has(win.key)}
                   onApply={() => applyBuffer(win.target)}
                   onOk={() => {
@@ -2875,9 +2881,12 @@ export function BuilderView({
         {visualDraft?.control_tree?.root && (
           <details className="builder-generic-controls" data-testid="session-generic-controls">
             <summary>Additional graphical fields</summary>
+            {unsettledReason() !== null && (
+              <div className="builder-zone-empty">{unsettledReason()}</div>
+            )}
             <GraphicalControlTreeEditor
               tree={visualDraft.control_tree}
-              disabled={yamlBlocksGui || dirtyWindows > 0 || writer !== null || !twinMatchesDraft}
+              disabled={yamlBlocksGui || dirtyWindows > 0 || unsettledReason() !== null}
               hideSpecialized
               onMutate={async (commands: ReadonlyArray<BuilderControlMutation>) => {
                 setLibraryError(null);
@@ -2914,7 +2923,9 @@ export function BuilderView({
             <PasteArea
               className="builder-yaml-editor"
               value={yamlBuffer.text}
-              disabled={dirtyWindows > 0 || (writer !== null && writer !== "yaml")}
+              disabled={
+                dirtyWindows > 0 || (writer !== null && writer !== "yaml") || !twinMatchesDraft
+              }
               onChange={editYamlBuffer}
               ariaLabel="Session YAML"
               rows={32}
@@ -2924,6 +2935,7 @@ export function BuilderView({
                 disabled={
                   dirtyWindows > 0 ||
                   writer !== null ||
+                  !twinMatchesDraft ||
                   (!yamlBuffer.dirty && yamlBuffer.issues.length === 0)
                 }
                 onClick={() => void applySessionYaml(yamlBuffer.generation)}
@@ -2933,7 +2945,7 @@ export function BuilderView({
               {yamlBuffer.canonicalizationRequired && (
                 <Button
                   variant="primary"
-                  disabled={writer !== null || dirtyWindows > 0}
+                  disabled={writer !== null || dirtyWindows > 0 || !twinMatchesDraft}
                   onClick={() => void useCanonicalSessionYaml()}
                 >
                   Use canonical YAML

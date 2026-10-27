@@ -459,6 +459,7 @@ describe("buffered windows commit through the apply row", () => {
     render(
       <EditorApplyRow
         dirty={false}
+        busy={false}
         onApply={() => {}}
         onOk={() => {}}
         onDefaults={() => {}}
@@ -480,6 +481,7 @@ describe("buffered windows commit through the apply row", () => {
     render(
       <EditorApplyRow
         dirty
+        busy={false}
         stale
         onApply={() => calls.push("apply")}
         onOk={() => calls.push("ok")}
@@ -494,6 +496,22 @@ describe("buffered windows commit through the apply row", () => {
     expect((screen.getByText("Apply") as HTMLButtonElement).disabled).toBe(false);
     fireEvent.click(screen.getByText("Load current values"));
     expect(calls).toEqual(["load"]);
+  });
+
+  it("while a change is being applied, Apply and OK wait and Cancel stays", () => {
+    render(
+      <EditorApplyRow
+        dirty
+        busy
+        onApply={() => {}}
+        onOk={() => {}}
+        onDefaults={() => {}}
+        onCancel={() => {}}
+      />,
+    );
+    expect((screen.getByText("Apply") as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getByText("OK") as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getByText("Cancel") as HTMLButtonElement).disabled).toBe(false);
   });
 });
 

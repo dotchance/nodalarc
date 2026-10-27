@@ -35,7 +35,8 @@ interface DomainEditorProps {
   workspace: Workspace;
   domain: DraftRoutingDomain;
   onUpdate: (patch: Partial<DraftRoutingDomain>) => void;
-  onRemove: () => void;
+  /** Null while a change is being applied: removing waits for it. */
+  onRemove: (() => void) | null;
   /** focus the name when a create gesture opened this editor. */
   autoFocusName?: boolean;
   authoring: BuilderVisualAuthoringFacts;
@@ -163,7 +164,7 @@ export function RoutingDomainEditor({
         </div>
       ))}
       <div className="builder-preset-row">
-        <Button variant="danger" onClick={onRemove}>
+        <Button variant="danger" onClick={onRemove ?? undefined} disabled={onRemove === null}>
           Remove domain
         </Button>
       </div>
@@ -175,7 +176,8 @@ interface BoundaryEditorProps {
   workspace: Workspace;
   boundary: DraftBoundary;
   onUpdate: (patch: Partial<DraftBoundary>) => void;
-  onRemove: () => void;
+  /** Null while a change is being applied: removing waits for it. */
+  onRemove: (() => void) | null;
   authoring: BuilderVisualAuthoringFacts;
 }
 
@@ -255,7 +257,7 @@ export function BoundaryEditor({
         </div>
       ))}
       <div className="builder-preset-row">
-        <Button variant="danger" onClick={onRemove}>
+        <Button variant="danger" onClick={onRemove ?? undefined} disabled={onRemove === null}>
           Remove boundary
         </Button>
       </div>

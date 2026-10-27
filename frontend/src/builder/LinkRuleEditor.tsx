@@ -43,7 +43,8 @@ interface LinkRuleEditorProps {
   allocation: BuilderRuleAllocation | null;
   onUpdate: (patch: Partial<DraftLinkRule>) => void;
   onUpdateEndpoint: (side: "a" | "b", patch: Partial<DraftLinkEndpoint>) => void;
-  onRemove: () => void;
+  /** Null while a change is being applied: removing waits for it. */
+  onRemove: (() => void) | null;
   /** focus the name when a create gesture opened this editor. */
   autoFocusName?: boolean;
   /** what each segment's faceplates can form (resolver truth). */
@@ -276,7 +277,7 @@ export function LinkRuleEditor({
         <Button active={rule.enabled} onClick={() => onUpdate({ enabled: !rule.enabled })}>
           {rule.enabled ? "enabled" : "disabled"}
         </Button>
-        <Button variant="danger" onClick={onRemove}>
+        <Button variant="danger" onClick={onRemove ?? undefined} disabled={onRemove === null}>
           Remove rule
         </Button>
       </div>

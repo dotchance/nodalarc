@@ -521,6 +521,7 @@ export function PasteArea({
  *  typing take?" */
 export function EditorApplyRow({
   dirty,
+  busy,
   stale = false,
   onApply,
   onOk,
@@ -529,6 +530,8 @@ export function EditorApplyRow({
   onCancel,
 }: {
   dirty: boolean;
+  /** A change is being applied: Apply and OK wait for it. */
+  busy: boolean;
   stale?: boolean;
   onApply: () => void;
   onOk: () => void;
@@ -576,10 +579,19 @@ export function EditorApplyRow({
         <Button onClick={onCancel} title="Close without applying">
           Cancel
         </Button>
-        <Button onClick={onApply} disabled={!dirty} title="Apply edits to the session">
+        <Button
+          onClick={onApply}
+          disabled={!dirty || busy}
+          title={busy ? "A change is being applied" : "Apply edits to the session"}
+        >
           Apply
         </Button>
-        <Button icon="check" onClick={onOk} title="Apply and close">
+        <Button
+          icon="check"
+          onClick={onOk}
+          disabled={busy}
+          title={busy ? "A change is being applied" : "Apply and close"}
+        >
           OK
         </Button>
       </div>

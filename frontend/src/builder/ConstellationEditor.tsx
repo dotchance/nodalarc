@@ -52,7 +52,8 @@ interface ConstellationEditorProps {
     role: NonNullable<DraftTerminalMount["role"]>,
   ) => Promise<void>;
   onAddNodeEthernet: () => Promise<void>;
-  onRemove: () => void;
+  /** Null while a change is being applied: removing waits for it. */
+  onRemove: (() => void) | null;
   /** focus the name when a create gesture opened this editor. */
   autoFocusName?: boolean;
   /** Connect gesture context ("+ link to…" on the segment). */
@@ -381,7 +382,7 @@ export function ConstellationEditor({
         onConnect={onConnect}
       />
 
-      <Button variant="danger" onClick={onRemove}>
+      <Button variant="danger" onClick={onRemove ?? undefined} disabled={onRemove === null}>
         Remove constellation
       </Button>
     </div>

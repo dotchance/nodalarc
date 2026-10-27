@@ -53,7 +53,8 @@ interface GroundEditorProps {
   onSetStampNodeModel: (ref: string) => Promise<void>;
   onSetSiteNodeModel: (memberId: string, nodeId: string, ref: string) => Promise<void>;
   onAddSiteNode: (memberId: string) => Promise<void>;
-  onRemove: () => void;
+  /** Null while a change is being applied: removing waits for it. */
+  onRemove: (() => void) | null;
   /** focus the name when a create gesture opened this editor. */
   autoFocusName?: boolean;
   /** Connect gesture context ("+ link to…" on the segment). */
@@ -484,7 +485,7 @@ export function GroundEditor({
       {editorError && <div className="builder-warning">{editorError}</div>}
 
       <div className="builder-preset-row">
-        <Button variant="danger" onClick={onRemove}>
+        <Button variant="danger" onClick={onRemove ?? undefined} disabled={onRemove === null}>
           Discard segment
         </Button>
       </div>

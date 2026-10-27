@@ -13,6 +13,7 @@
 
 import type { FunnelGate, GateState, Producer, RejectingEndpoint } from "./families";
 import type { ActuationState } from "./reasons";
+import type { SurfaceBody } from "../types";
 
 export type NodeFocus = "gs" | "sat" | "pair";
 
@@ -44,11 +45,11 @@ export interface EnvelopeEndpoint {
 }
 
 export interface EffectiveEnvelopeFacts {
-  reference_body: string;
-  configured_min_elevation_deg: number | null;
-  effective_min_elevation_deg: number | null;
+  reference_body: SurfaceBody;
+  configured_min_elevation_deg: number;
+  effective_min_elevation_deg: number;
   binding_source: "field_of_regard" | "min_elevation_mask";
-  dead_knobs: string[];
+  dead_knobs: "min_elevation_deg"[];
   max_range_km: number | null;
   ground: EnvelopeEndpoint;
   satellite: EnvelopeEndpoint;
@@ -61,16 +62,16 @@ export interface CandidateFacts {
   binding_gate: FunnelGate | null;
   binding_reason_code: string | null;
   rejecting_endpoint: RejectingEndpoint | null;
-  range_km: number | null;
-  elevation_deg: number | null;
+  range_km: number;
+  elevation_deg: number;
   viable_withheld: boolean;
 }
 
 export interface ActuationFacts {
   state: ActuationState;
-  ome_desired: boolean | null;
-  kernel_up: boolean | null;
-  diverged: boolean | null;
+  ome_desired: boolean;
+  kernel_up: boolean;
+  diverged: boolean;
   /** Wall-clock UTC instant the divergence was first observed; null if not diverged. */
   diverged_since: string | null;
   /** Server-computed age (ms) of the divergence at compose time; null if not diverged. */
@@ -83,17 +84,17 @@ export interface ActuationFacts {
 
 export interface DecisionFacts {
   gs_id: string;
-  pair: [string, string] | null;
+  pair: [string, string];
   node_focus: NodeFocus;
-  reference_body: string;
+  reference_body: SurfaceBody;
   tenant_id: string;
   binding_gate: FunnelGate | null;
   binding_reason_code: string | null;
   rejecting_endpoint: RejectingEndpoint | null;
   ladder: LadderGate[];
   envelope: EffectiveEnvelopeFacts;
-  best_candidate: CandidateFacts | null;
-  actuation: ActuationFacts | null;
+  best_candidate: CandidateFacts;
+  actuation: ActuationFacts;
   sim_time: string;
   snapshot_seq: number;
   epoch_id: number;
@@ -108,12 +109,12 @@ export interface GsDecisionTimelineSample {
   snapshot_seq: number;
   epoch_id: number;
   state: DecisionSampleState;
-  pair: [string, string] | null;
+  pair: [string, string];
   binding_gate: FunnelGate | null;
   reason_code: string | null;
   rejecting_endpoint: RejectingEndpoint | null;
-  range_km: number | null;
-  elevation_deg: number | null;
+  range_km: number;
+  elevation_deg: number;
 }
 
 export interface GsDecisionReasonCount {

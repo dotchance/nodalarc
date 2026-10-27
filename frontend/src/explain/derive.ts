@@ -47,9 +47,9 @@ export function deriveFamily(facts: DecisionFacts): Family {
   const act = facts.actuation;
 
   if (facts.binding_gate === "actuation_proof") {
-    if (act?.state === "kernel_dirty" || act?.state === "actuation_blocked") return "faulted";
-    if (act?.state === "unknown") return "unknown";
-    if (act?.diverged) {
+    if (act.state === "kernel_dirty" || act.state === "actuation_blocked") return "faulted";
+    if (act.state === "unknown") return "unknown";
+    if (act.diverged) {
       const elapsed = act.actuation_elapsed_ms;
       const bound = act.fault_after_ms;
       if (elapsed !== null && bound !== null && elapsed >= bound) return "faulted";
@@ -63,7 +63,7 @@ export function deriveFamily(facts: DecisionFacts): Family {
   // kernel-up but roster-unknown is "unknown" (proven up, health unconfirmed) — never
   // silently green, per the family contract.
   if (facts.binding_gate === null) {
-    if (facts.actuation?.state === "unknown") return "unknown";
+    if (act.state === "unknown") return "unknown";
     return "connected";
   }
 
@@ -158,9 +158,9 @@ export function candidateStatus(o: {
 /** A one-line headline for the focal pair, built from the binding reason + facts. */
 export function headline(facts: DecisionFacts): string {
   const fam = deriveFamily(facts);
-  const sat = facts.pair ? facts.pair.find((n) => n !== facts.gs_id) ?? facts.pair[1] : null;
-  if (fam === "connected") return sat ? `Connected to ${sat}.` : "Connected.";
-  if (fam === "in_flight") return sat ? `Converging on ${sat} (handover in flight).` : "Converging.";
+  const sat = facts.pair.find((n) => n !== facts.gs_id) ?? facts.pair[1];
+  if (fam === "connected") return `Connected to ${sat}.`;
+  if (fam === "in_flight") return `Converging on ${sat} (handover in flight).`;
 
   const code = facts.binding_reason_code;
   const rec = code ? REASON_REGISTRY[code] : undefined;
@@ -172,7 +172,7 @@ export function headline(facts: DecisionFacts): string {
   const threshold = row?.threshold != null ? round1(row.threshold) : undefined;
   const filled = fillSentence(rec.sentence, { actual, threshold, margin: margin ?? undefined });
 
-  if (fam === "eligible_unselected" && sat) {
+  if (fam === "eligible_unselected") {
     return `${sat} is eligible but not selected — ${filled}`;
   }
   return filled;
@@ -202,16 +202,14 @@ export function displayLadder(facts: DecisionFacts): DisplayRow[] {
   // geometry is NOT co-linear with the ground floor, so keep the rows separate — folding
   // would hide a satellite-side FoR failure behind a passing ground floor.
   const collapse =
-    env != null &&
     env.ground.boresight_mode === "local_vertical" &&
-    env.effective_min_elevation_deg != null &&
     (env.binding_endpoint === "none" || env.binding_endpoint === "ground") &&
     hasElev &&
     hasFor;
 
   if (!collapse) return facts.ladder.map((row) => ({ row }));
 
-  const floor = env!.effective_min_elevation_deg!;
+  const floor = env.effective_min_elevation_deg;
   const elevRow = facts.ladder.find((g) => g.gate === "elevation_mask")!;
   const forRow = facts.ladder.find((g) => g.gate === "field_of_regard")!;
   const elevation = elevRow.actual;

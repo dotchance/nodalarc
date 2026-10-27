@@ -13,7 +13,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from enum import StrEnum
-from typing import Any, Literal
+from typing import Any, Literal, TypeIs, get_args
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -23,6 +23,16 @@ class ActuationState(StrEnum):
     ACTUATION_BLOCKED = "actuation_blocked"
     KERNEL_DIRTY = "kernel_dirty"
     UNKNOWN = "unknown"
+
+
+# The roster states in which a station's actuation is not proven.
+FailingActuationState = Literal[ActuationState.KERNEL_DIRTY, ActuationState.ACTUATION_BLOCKED]
+_FAILING_ACTUATION_STATES = frozenset(get_args(FailingActuationState))
+
+
+def is_failing_actuation(state: ActuationState) -> TypeIs[FailingActuationState]:
+    """Whether a roster state fails the station's actuation proof."""
+    return state in _FAILING_ACTUATION_STATES
 
 
 def parse_actuation_state(value: object) -> ActuationState:

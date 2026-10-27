@@ -26,7 +26,9 @@ from nodalarc.models.decision_explanation import (
     DecisionReasonCode,
     DecisionSampleState,
     EffectiveEnvelopeFacts,
+    EnvelopeBindingSource,
     EnvelopeEndpoint,
+    EnvelopeKnob,
     ExplanationProducer,
     FunnelGate,
     GateState,
@@ -41,7 +43,11 @@ from nodalarc.models.link_decisions import (
     GroundVisibilityRejectReason,
     UnscheduledPair,
 )
-from nodalarc.models.scheduler_ops import ActuationState, parse_actuation_state
+from nodalarc.models.scheduler_ops import (
+    ActuationState,
+    is_failing_actuation,
+    parse_actuation_state,
+)
 
 Pair = tuple[str, str]
 
@@ -214,10 +220,12 @@ def _effective_envelope(d: GroundVisibilityDecisionWire) -> EffectiveEnvelopeFac
     if d.applied_gs_boresight_mode == "local_vertical" and gs_for is not None:
         for_floor = 90.0 - gs_for / 2.0
 
+    binding_source: EnvelopeBindingSource
+    dead_knobs: tuple[EnvelopeKnob, ...]
     if for_floor is not None and for_floor > configured:
         effective = for_floor
         binding_source = "field_of_regard"
-        dead_knobs: tuple[str, ...] = ("min_elevation_deg",)
+        dead_knobs = ("min_elevation_deg",)
     else:
         effective = configured
         binding_source = "min_elevation_mask"
@@ -293,8 +301,8 @@ def compose_gs_explanation(
     binding_gate: FunnelGate | None
     binding_reason: BindingReasonCode | None
     viable_withheld: bool
-    ome_desired: bool | None
-    kernel_up: bool | None
+    ome_desired: bool
+    kernel_up: bool
     actuation_pass: bool | None
 
     def _category(d: GroundVisibilityDecisionWire) -> str:
@@ -347,9 +355,9 @@ def compose_gs_explanation(
         kernel_up = _ordered_pair(focal.pair) in active_pairs
         ome_desired = True
         viable_withheld = False
-        if actuation_state in (ActuationState.KERNEL_DIRTY, ActuationState.ACTUATION_BLOCKED):
+        if is_failing_actuation(actuation_state):
             binding_gate = "actuation_proof"
-            binding_reason = actuation_state.value
+            binding_reason = actuation_state
             actuation_pass = False
         elif not kernel_up:
             # OME desires it and the roster is not failing, but the kernel does not have
@@ -391,7 +399,7 @@ def compose_gs_explanation(
         actuation_pass=actuation_pass,
     )
 
-    diverged: bool | None = (ome_desired and not kernel_up) if ome_desired is not None else None
+    diverged = ome_desired and not kernel_up
 
     diverged_since: datetime | None = None
     actuation_elapsed_ms: float | None = None

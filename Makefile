@@ -449,6 +449,7 @@ typecheck: ## Type-check Builder, session-configuration, and OME frame authority
 		lib/nodalarc/models/link_decisions.py \
 		lib/nodalarc/models/link_rules.py \
 		lib/nodalarc/models/resolved_session.py \
+		lib/nodalarc/models/scheduler_ops.py \
 		lib/nodalarc/models/session_sources.py \
 		services/vs_api/builder_catalog_draft.py \
 		services/vs_api/builder_catalog_service.py \

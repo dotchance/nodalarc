@@ -45,44 +45,34 @@ export function GroundStationCard({
       </div>
       <div className="gs-card-headline">{headline(facts)}</div>
 
-      {facts.actuation ? (
-        <div className="gs-card-actuation">
-          <div className="detail-row">
-            <span className="detail-label">Actuation</span>
-            <span className="detail-value">{reasonLabel(facts.actuation.state)}</span>
-          </div>
-          {facts.actuation.diverged ? (
-            <div className="detail-row">
-              <span className="detail-label">Divergence</span>
-              <span className="detail-value detail-value--failed">
-                OME desired, kernel not up
-              </span>
-            </div>
-          ) : null}
-          {act && act.diverged && act.actuation_elapsed_ms !== null && act.fault_after_ms !== null ? (
-            <div className="detail-row">
-              <span className="detail-label">Convergence</span>
-              <span className={`detail-value${family === "faulted" ? " detail-value--failed" : ""}`}>
-                {fmtMs(act.actuation_elapsed_ms)} elapsed / fault at {fmtMs(act.fault_after_ms)}
-              </span>
-            </div>
-          ) : null}
+      <div className="gs-card-actuation">
+        <div className="detail-row">
+          <span className="detail-label">Actuation</span>
+          <span className="detail-value">{reasonLabel(act.state)}</span>
         </div>
-      ) : null}
+        {act.diverged ? (
+          <div className="detail-row">
+            <span className="detail-label">Divergence</span>
+            <span className="detail-value detail-value--failed">
+              OME desired, kernel not up
+            </span>
+          </div>
+        ) : null}
+        {act.diverged && act.actuation_elapsed_ms !== null && act.fault_after_ms !== null ? (
+          <div className="detail-row">
+            <span className="detail-label">Convergence</span>
+            <span className={`detail-value${family === "faulted" ? " detail-value--failed" : ""}`}>
+              {fmtMs(act.actuation_elapsed_ms)} elapsed / fault at {fmtMs(act.fault_after_ms)}
+            </span>
+          </div>
+        ) : null}
+      </div>
 
-      {facts.best_candidate ? (
-        <>
-          <h3>Best candidate</h3>
-          <BestCandidate candidate={facts.best_candidate} gsId={facts.gs_id} />
-        </>
-      ) : null}
+      <h3>Best candidate</h3>
+      <BestCandidate candidate={facts.best_candidate} gsId={facts.gs_id} />
 
-      {facts.envelope ? (
-        <>
-          <h3>Effective envelope</h3>
-          <EffectiveEnvelopePanel envelope={facts.envelope} />
-        </>
-      ) : null}
+      <h3>Effective envelope</h3>
+      <EffectiveEnvelopePanel envelope={facts.envelope} />
 
       {timeline ? (
         <>

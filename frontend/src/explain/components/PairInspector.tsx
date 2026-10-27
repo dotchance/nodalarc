@@ -11,10 +11,6 @@
 import type { DecisionFacts } from "../types";
 import { GroundStationCard } from "./GroundStationCard";
 
-function tri(v: boolean | null): string {
-  return v === null ? "—" : v ? "yes" : "no";
-}
-
 export function PairInspector({
   gsId,
   satId,
@@ -26,7 +22,6 @@ export function PairInspector({
   facts: DecisionFacts | null;
   onBack: () => void;
 }) {
-  const act = facts?.actuation ?? null;
   return (
     <div className="pair-inspector">
       <div className="pair-inspector-head">
@@ -41,20 +36,16 @@ export function PairInspector({
       {facts ? (
         <>
           <GroundStationCard facts={facts} />
-          {act ? (
-            <div className="pair-inspector-truth">
-              <div className="detail-row">
-                <span className="detail-label">OME desired</span>
-                <span className="detail-value">{tri(act.ome_desired)}</span>
-              </div>
-              <div className="detail-row">
-                <span className="detail-label">Kernel actual</span>
-                <span className="detail-value">
-                  {act.kernel_up === null ? "—" : act.kernel_up ? "up" : "down"}
-                </span>
-              </div>
+          <div className="pair-inspector-truth">
+            <div className="detail-row">
+              <span className="detail-label">OME desired</span>
+              <span className="detail-value">{facts.actuation.ome_desired ? "yes" : "no"}</span>
             </div>
-          ) : null}
+            <div className="detail-row">
+              <span className="detail-label">Kernel actual</span>
+              <span className="detail-value">{facts.actuation.kernel_up ? "up" : "down"}</span>
+            </div>
+          </div>
           <div className="pair-inspector-provenance">
             sim {facts.sim_time} · seq {facts.snapshot_seq} · epoch {facts.epoch_id}
           </div>

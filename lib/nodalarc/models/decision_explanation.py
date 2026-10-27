@@ -24,12 +24,13 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict
 
+from nodalarc.body_frames import SupportedSurfaceBody
 from nodalarc.models.link_decisions import (
     GroundUnscheduledReason,
     GroundVisibilityRejectingEndpoint,
     GroundVisibilityRejectReason,
 )
-from nodalarc.models.scheduler_ops import ActuationState
+from nodalarc.models.scheduler_ops import ActuationState, FailingActuationState
 from nodalarc.models.terminal_physics import GroundBoresightMode, SatGroundBoresightMode
 
 # The canonical decision funnel, in order. A pair stops at exactly one binding gate.
@@ -54,9 +55,12 @@ ActuationExplanationReason = Literal["actuation_diverged"]
 DecisionReasonCode = GroundVisibilityRejectReason | GroundUnscheduledReason
 # The reason a binding gate states: a decision reason, a failing actuation state,
 # or the composer's actuation divergence.
-BindingReasonCode = (
-    DecisionReasonCode | Literal["kernel_dirty", "actuation_blocked"] | ActuationExplanationReason
-)
+BindingReasonCode = DecisionReasonCode | FailingActuationState | ActuationExplanationReason
+
+# The constraint that sets a station's effective minimum elevation.
+EnvelopeBindingSource = Literal["field_of_regard", "min_elevation_mask"]
+# A configured envelope value another constraint can make non-binding.
+EnvelopeKnob = Literal["min_elevation_deg"]
 
 # Which source-of-truth component owns a gate's verdict.
 ExplanationProducer = Literal["ome_visibility", "ome_allocator", "scheduler", "node_agent"]
@@ -121,11 +125,11 @@ class EffectiveEnvelopeFacts(BaseModel):
 
     model_config = ConfigDict(frozen=True)
 
-    reference_body: str
-    configured_min_elevation_deg: float | None
-    effective_min_elevation_deg: float | None
-    binding_source: Literal["field_of_regard", "min_elevation_mask"]
-    dead_knobs: tuple[str, ...]
+    reference_body: SupportedSurfaceBody
+    configured_min_elevation_deg: float
+    effective_min_elevation_deg: float
+    binding_source: EnvelopeBindingSource
+    dead_knobs: tuple[EnvelopeKnob, ...]
     max_range_km: float | None
     ground: EnvelopeEndpoint
     satellite: EnvelopeEndpoint
@@ -147,8 +151,8 @@ class CandidateFacts(BaseModel):
     binding_gate: FunnelGate | None
     binding_reason_code: BindingReasonCode | None
     rejecting_endpoint: GroundVisibilityRejectingEndpoint | None
-    range_km: float | None
-    elevation_deg: float | None
+    range_km: float
+    elevation_deg: float
     viable_withheld: bool
 
 
@@ -186,9 +190,9 @@ class ActuationFacts(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     state: ActuationState
-    ome_desired: bool | None
-    kernel_up: bool | None
-    diverged: bool | None
+    ome_desired: bool
+    kernel_up: bool
+    diverged: bool
     diverged_since: datetime | None = None
     actuation_elapsed_ms: float | None = None
     expected_latency_ms: float | None = None
@@ -206,17 +210,17 @@ class DecisionExplanationFacts(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     gs_id: str
-    pair: tuple[str, str] | None
+    pair: tuple[str, str]
     node_focus: NodeFocus
-    reference_body: str
+    reference_body: SupportedSurfaceBody
     tenant_id: str
     binding_gate: FunnelGate | None
     binding_reason_code: BindingReasonCode | None
     rejecting_endpoint: GroundVisibilityRejectingEndpoint | None
     ladder: tuple[LadderGate, ...]
     envelope: EffectiveEnvelopeFacts
-    best_candidate: CandidateFacts | None
-    actuation: ActuationFacts | None
+    best_candidate: CandidateFacts
+    actuation: ActuationFacts
     sim_time: datetime
     snapshot_seq: int
     epoch_id: int
@@ -238,12 +242,12 @@ class GsDecisionTimelineSample(BaseModel):
     snapshot_seq: int
     epoch_id: int
     state: DecisionSampleState
-    pair: tuple[str, str] | None
+    pair: tuple[str, str]
     binding_gate: FunnelGate | None
     reason_code: DecisionReasonCode | None
     rejecting_endpoint: GroundVisibilityRejectingEndpoint | None
-    range_km: float | None
-    elevation_deg: float | None
+    range_km: float
+    elevation_deg: float
 
 
 class GsDecisionReasonCount(BaseModel):

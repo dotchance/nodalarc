@@ -871,7 +871,10 @@
         "pair",
         "sat"
       ],
-      "reference_body": null,
+      "reference_body": [
+        "earth",
+        "luna"
+      ],
       "rejecting_endpoint": [
         "both",
         "ground",
@@ -891,7 +894,10 @@
         "field_of_regard",
         "min_elevation_mask"
       ],
-      "reference_body": null
+      "reference_body": [
+        "earth",
+        "luna"
+      ]
     },
     "EnvelopeEndpoint": {
       "boresight_mode": [

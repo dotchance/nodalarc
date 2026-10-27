@@ -526,7 +526,8 @@ per-router assignment, so a multi-area OSPF instance is refused, and the
 Wizard offers only `flat` for OSPF. IS-IS instances may use every strategy.
 
 If `routing` is omitted, the resolver creates one instance, `default_domain`,
-running IS-IS over the routers whose adapter renders IS-IS.
+running IS-IS over the routers whose adapter renders IS-IS. A session with no
+`routing` block and no router runs no routing.
 
 ## Time and ephemeris
 

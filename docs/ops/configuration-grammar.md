@@ -1130,6 +1130,8 @@ When `routing` is present, every node running a routing workload participates
 in an instance, and every instance has at least one participant. With
 `routing` omitted, the default instance runs IS-IS and its participants are
 every node running a routing workload; each one's adapter must render IS-IS.
+A session with `routing` omitted in which no node runs a routing workload runs
+no routing.
 
 These rules govern what the platform renders and delivers. They state
 nothing about protocol behavior: what the running images do with their
@@ -1479,10 +1481,11 @@ non-`peer_loopback` token is passed as the explicit next-hop or interface
 value. Materialization omits a route to the receiving node's own loopback and
 the peer-loopback seed route.
 
-When `routing` is omitted, the resolver creates `default_domain`, running
-IS-IS over every node that runs a routing workload, and requires at least one
-such node. A session with no `routing` block in which any such node's adapter
-cannot render IS-IS is refused; declare routing explicitly.
+When `routing` is omitted and at least one node runs a routing workload, the
+resolver creates `default_domain`, running IS-IS over every such node. A
+session with no `routing` block in which any such node's adapter cannot render
+IS-IS is refused; declare routing explicitly. When `routing` is omitted and no
+node runs a routing workload, the session runs no routing.
 
 ## Simulation, time, ephemeris, and dispatch
 

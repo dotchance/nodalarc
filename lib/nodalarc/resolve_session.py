@@ -2445,11 +2445,12 @@ def _resolve_routing_domains(
     # make a router; a router also forwards between subnets.
     adapters = _routing_adapters(runtime_nodes)
     if cfg.routing is None:
+        # With routing omitted, the default domain runs IS-IS over the nodes
+        # that run a routing workload. A session in which no node does runs no
+        # routing at all.
         participants = [item for item in runtime_nodes if item.node.node_id in adapters]
         if not participants:
-            raise SessionResolutionError(
-                "session declares no routing and no node runs a routing workload"
-            )
+            return []
         default_domain = ResolvedRoutingDomain(
             domain_id="default_domain",
             protocol="isis",

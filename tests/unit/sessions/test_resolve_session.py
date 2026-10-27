@@ -1169,9 +1169,10 @@ def test_runtime_node_id_length_fails_before_kubernetes() -> None:
         resolve_session(raw)
 
 
-def test_omitted_routing_requires_at_least_one_router() -> None:
+def test_omitted_routing_without_a_router_runs_no_routing() -> None:
     # Participation derives from the workload profile: a session whose
-    # profiles render no routing has no participant.
+    # profiles render no routing has no participant, and with routing omitted
+    # it runs no routing domain.
     raw = _raw_session()
     assert raw.space_node_ref is not None
     assert raw.ground_node_ref is not None
@@ -1181,11 +1182,10 @@ def test_omitted_routing_requires_at_least_one_router() -> None:
         raw.write_catalog(node_ref, node_document)
     raw.pop("routing")
 
-    with pytest.raises(
-        SessionResolutionError,
-        match="declares no routing and no node runs a routing workload",
-    ):
-        resolve_session(raw)
+    resolved = resolve_session(raw)
+
+    assert resolved.routing_domains == ()
+    assert resolved.nodes
 
 
 def test_source_changes_change_resolved_session() -> None:

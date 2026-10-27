@@ -32,7 +32,6 @@ from nodalarc.models.builder_catalog_api import (
     CatalogDeleteResult,
     CatalogDependencyImpact,
     CatalogDependentsRequest,
-    CatalogDocumentWriteRequest,
     CatalogDraftAddNodeEthernetPortRequest,
     CatalogDraftAddNodeTerminalMountRequest,
     CatalogDraftAddSiteNodeRequest,
@@ -46,12 +45,9 @@ from nodalarc.models.builder_catalog_api import (
     CatalogDraftPatchRequest,
     CatalogDraftSaveRequest,
     CatalogDraftSaveResult,
-    CatalogForkRequest,
-    CatalogForkResult,
     CatalogGetRequest,
     CatalogListPage,
     CatalogListRequest,
-    CatalogMutationResult,
     CatalogOperationRefusal,
     CatalogSessionYamlExport,
     CatalogSessionYamlExportRequest,
@@ -104,10 +100,6 @@ class CatalogService(Protocol):
     def get_catalog(self, request: CatalogGetRequest) -> BuilderCatalogDocument: ...
 
     def dependents(self, request: CatalogDependentsRequest) -> CatalogDependencyImpact: ...
-
-    def save_component(self, request: CatalogDocumentWriteRequest) -> CatalogMutationResult: ...
-
-    def fork_component(self, request: CatalogForkRequest) -> CatalogForkResult: ...
 
     def delete_catalog(self, request: CatalogDeleteRequest) -> CatalogDeleteResult: ...
 
@@ -838,14 +830,6 @@ def create_builder_router(services: BuilderRouterServices) -> APIRouter:
         return await invoke_catalog(context, lambda service: service.dependents(request))
 
     @router.post(
-        "/catalog/write",
-        response_model=CatalogMutationResult,
-        responses=_CATALOG_ERROR_RESPONSES,
-    )
-    async def write_catalog(request: CatalogDocumentWriteRequest, context: Context):
-        return await invoke_catalog(context, lambda service: service.save_component(request))
-
-    @router.post(
         "/catalog/draft/new",
         response_model=CatalogComponentDraftEnvelope,
         responses=_CATALOG_ERROR_RESPONSES,
@@ -954,14 +938,6 @@ def create_builder_router(services: BuilderRouterServices) -> APIRouter:
     )
     async def save_catalog_draft(request: CatalogDraftSaveRequest, context: Context):
         return await invoke_catalog_draft(context, lambda service: service.save(request))
-
-    @router.post(
-        "/catalog/fork",
-        response_model=CatalogForkResult,
-        responses=_CATALOG_ERROR_RESPONSES,
-    )
-    async def fork_catalog(request: CatalogForkRequest, context: Context):
-        return await invoke_catalog(context, lambda service: service.fork_component(request))
 
     @router.post(
         "/catalog/delete",

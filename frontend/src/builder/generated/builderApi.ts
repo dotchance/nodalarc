@@ -1094,14 +1094,6 @@ export interface BuilderVisualOrbitShapeMetadata {
   readonly label: string;
 }
 
-/** Presentation and runtime facts for one visual orbit propagator. */
-export interface BuilderVisualOrbitPropagatorMetadata {
-  readonly runtime_supported: boolean;
-  readonly support_note?: string | null;
-  readonly id: BuilderVisualOrbitPropagator;
-  readonly label: string;
-}
-
 /** Presentation and runtime facts for one visual link topology mode. */
 export interface BuilderVisualTopologyModeMetadata {
   readonly runtime_supported: boolean;
@@ -1115,11 +1107,8 @@ export interface BuilderVisualTopologyModeMetadata {
 export interface BuilderVisualAuthoringFacts {
   readonly default_phasing_mode: BuilderVisualPhasingMode;
   readonly single_plane_phasing_mode: BuilderVisualPhasingMode;
-  readonly default_scheduling_preset: BuilderVisualSchedulingPreset;
   readonly default_mount_role: WizardTerminalRole;
-  readonly default_terminal_mount_count: number;
   readonly default_body_ref: string;
-  readonly default_node: BuilderVisualNode;
   readonly space_access_boresight: BuilderVisualSpaceBoresight;
   readonly ground_access_boresight: BuilderVisualGroundBoresight;
   readonly mount_roles: ReadonlyArray<BuilderVisualMountRoleMetadata>;
@@ -1129,7 +1118,6 @@ export interface BuilderVisualAuthoringFacts {
   readonly boundary_adapters: ReadonlyArray<BuilderVisualBoundaryAdapterMetadata>;
   readonly phasing_modes: ReadonlyArray<BuilderVisualPhasingModeMetadata>;
   readonly orbit_shapes: ReadonlyArray<BuilderVisualOrbitShapeMetadata>;
-  readonly orbit_propagators: ReadonlyArray<BuilderVisualOrbitPropagatorMetadata>;
   readonly topology_modes: ReadonlyArray<BuilderVisualTopologyModeMetadata>;
 }
 
@@ -1513,13 +1501,6 @@ export interface CatalogDraftSaveResult {
   readonly compile_result: CatalogDraftCompileResult;
 }
 
-/** Fork one complete component document to a new user-owned identity. */
-export interface CatalogForkRequest {
-  readonly source_ref: CatalogRef;
-  readonly target_ref: CatalogRef;
-  readonly expected_source_revision?: string | null;
-}
-
 /** Request current overwrite and delete impact for one exact catalog ref. */
 export interface CatalogDependentsRequest {
   readonly ref: CatalogRef;
@@ -1548,12 +1529,6 @@ export interface CatalogDependencyImpact {
 export interface CatalogMutationResult {
   readonly document: BuilderCatalogDocument;
   readonly impact: CatalogDependencyImpact;
-}
-
-/** Fork provenance and the complete newly persisted component. */
-export interface CatalogForkResult {
-  readonly source_ref: CatalogRef;
-  readonly result: CatalogMutationResult;
 }
 
 /** Fenced deletion request bound to exact bytes and reviewed graph impact. */

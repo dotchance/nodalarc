@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import base64
-import copy
 import hashlib
 import hmac
 import json
@@ -51,7 +50,6 @@ from nodalarc.models.builder_catalog_api import (
     BuilderVisualForwardingClassMetadata,
     BuilderVisualLinkMediumMetadata,
     BuilderVisualMountRoleMetadata,
-    BuilderVisualOrbitPropagatorMetadata,
     BuilderVisualOrbitShapeMetadata,
     BuilderVisualPhasingModeMetadata,
     BuilderVisualRoutingProtocolMetadata,
@@ -65,8 +63,6 @@ from nodalarc.models.builder_catalog_api import (
     CatalogDocumentSummary,
     CatalogDocumentWriteRequest,
     CatalogFamilyMetadata,
-    CatalogForkRequest,
-    CatalogForkResult,
     CatalogGetRequest,
     CatalogListPage,
     CatalogListRequest,
@@ -83,7 +79,6 @@ from nodalarc.models.builder_catalog_api import (
 )
 from nodalarc.models.builder_visual_api import (
     BuilderVisualGroundBoresight,
-    BuilderVisualNode,
     BuilderVisualSpaceBoresight,
 )
 from nodalarc.models.segment_session import LINK_STATE_PROTOCOLS
@@ -97,11 +92,9 @@ from .builder_visual_defaults import (
     DEFAULT_COMPONENT_IDS,
     DEFAULT_MOUNT_ROLE,
     DEFAULT_PHASING_MODE,
-    DEFAULT_SCHEDULING_PRESET,
     FORWARDING_CLASS_LABELS,
     LINK_MEDIUM_LABELS,
     MOUNT_ROLE_LABELS,
-    ORBIT_PROPAGATOR_LABELS,
     ORBIT_SHAPE_LABELS,
     PHASING_MODE_LABELS,
     ROUTING_PROTOCOL_LABELS,
@@ -598,17 +591,8 @@ class BuilderCatalogAuthoringService:
             authoring=BuilderVisualAuthoringFacts(
                 default_phasing_mode=DEFAULT_PHASING_MODE,
                 single_plane_phasing_mode=SINGLE_PLANE_PHASING_MODE,
-                default_scheduling_preset=DEFAULT_SCHEDULING_PRESET,
                 default_mount_role=DEFAULT_MOUNT_ROLE,
-                default_terminal_mount_count=1,
                 default_body_ref=DEFAULT_BODY_REF,
-                default_node=BuilderVisualNode(
-                    id="my-node",
-                    display_name="My node",
-                    forwarding=None,
-                    ethernet=(),
-                    terminals=(),
-                ),
                 space_access_boresight=BuilderVisualSpaceBoresight(mode="nadir"),
                 ground_access_boresight=BuilderVisualGroundBoresight(mode="local_vertical"),
                 mount_roles=tuple(
@@ -659,15 +643,6 @@ class BuilderCatalogAuthoringService:
                 orbit_shapes=tuple(
                     BuilderVisualOrbitShapeMetadata(id=identifier, label=label)
                     for identifier, label in ORBIT_SHAPE_LABELS
-                ),
-                orbit_propagators=tuple(
-                    BuilderVisualOrbitPropagatorMetadata(
-                        id=identifier,
-                        label=label,
-                        runtime_supported=(issue := runtime.check_propagator(identifier)) is None,
-                        support_note=issue.support_note if issue is not None else None,
-                    )
-                    for identifier, label in ORBIT_PROPAGATOR_LABELS
                 ),
                 topology_modes=tuple(
                     BuilderVisualTopologyModeMetadata(
@@ -975,57 +950,6 @@ class BuilderCatalogAuthoringService:
             document=_canonical_document(saved),
             impact=self._impact(committed, saved),
         )
-
-    def save_component(self, request: CatalogDocumentWriteRequest) -> CatalogMutationResult:
-        """Strictly canonicalize and atomically create or CAS-replace a component."""
-
-        if not isinstance(request, CatalogDocumentWriteRequest):
-            raise TypeError("request must be a CatalogDocumentWriteRequest")
-        return self.save_component_at_snapshot(request, self._snapshot())
-
-    def fork_component(self, request: CatalogForkRequest) -> CatalogForkResult:
-        """Fork a full source model while changing only wrapper identity/ownership."""
-
-        if not isinstance(request, CatalogForkRequest):
-            raise TypeError("request must be a CatalogForkRequest")
-        snapshot = self._snapshot()
-        source = _repository_document(snapshot, request.source_ref)
-        if request.expected_source_revision is not None and request.expected_source_revision != str(
-            source.revision
-        ):
-            _refuse(
-                "catalog_authoring.stale_revision",
-                f"Fork source {request.source_ref} changed before it was copied",
-                ref=request.source_ref,
-                expected_revision=request.expected_source_revision,
-                current_revision=str(source.revision),
-            )
-        canonical_source = _canonical_document(source)
-        family = cast(CatalogFamily, request.source_ref.family)
-        wrapper = catalog_family_spec(family).wrapper
-        if wrapper is None:
-            _refuse(
-                "catalog_authoring.invalid_document",
-                "Sessions are saved through Builder drafts and cannot be forked as components",
-                ref=request.source_ref,
-            )
-        forked_json = copy.deepcopy(canonical_source.canonical_json)
-        value = forked_json.get(wrapper)
-        if not isinstance(value, dict):
-            _refuse(
-                "catalog_authoring.invalid_document",
-                f"Canonical source {request.source_ref} omitted wrapper {wrapper!r}",
-                ref=request.source_ref,
-            )
-        value["id"] = request.target_ref.relative_path.stem
-        result = self.save_component_at_snapshot(
-            CatalogDocumentWriteRequest(
-                ref=request.target_ref,
-                document=forked_json,
-            ),
-            snapshot,
-        )
-        return CatalogForkResult(source_ref=request.source_ref, result=result)
 
     def delete_catalog(self, request: CatalogDeleteRequest) -> CatalogDeleteResult:
         """Delete only an unreferenced user document after exact impact review."""

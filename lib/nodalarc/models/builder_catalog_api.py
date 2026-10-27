@@ -29,8 +29,6 @@ from nodalarc.models.builder_api import (
 from nodalarc.models.builder_controls_api import BuilderControlMutation, BuilderControlTree
 from nodalarc.models.builder_visual_api import (
     BuilderVisualGroundBoresight,
-    BuilderVisualNode,
-    BuilderVisualOrbitPropagator,
     BuilderVisualOrbitShape,
     BuilderVisualPhasingMode,
     BuilderVisualSchedulingPreset,
@@ -183,13 +181,6 @@ class BuilderVisualOrbitShapeMetadata(_CatalogApplicationModel):
     label: str = Field(min_length=1, max_length=80)
 
 
-class BuilderVisualOrbitPropagatorMetadata(BuilderVisualRuntimeChoiceMetadata):
-    """Presentation and runtime facts for one visual orbit propagator."""
-
-    id: BuilderVisualOrbitPropagator
-    label: str = Field(min_length=1, max_length=120)
-
-
 class BuilderVisualTopologyModeMetadata(BuilderVisualRuntimeChoiceMetadata):
     """Presentation and runtime facts for one visual link topology mode."""
 
@@ -207,11 +198,8 @@ class BuilderVisualAuthoringFacts(_CatalogApplicationModel):
 
     default_phasing_mode: BuilderVisualPhasingMode
     single_plane_phasing_mode: BuilderVisualPhasingMode
-    default_scheduling_preset: BuilderVisualSchedulingPreset
     default_mount_role: MountRole
-    default_terminal_mount_count: int = Field(ge=1)
     default_body_ref: BodyRef
-    default_node: BuilderVisualNode
     space_access_boresight: BuilderVisualSpaceBoresight
     ground_access_boresight: BuilderVisualGroundBoresight
     mount_roles: tuple[BuilderVisualMountRoleMetadata, ...]
@@ -221,7 +209,6 @@ class BuilderVisualAuthoringFacts(_CatalogApplicationModel):
     boundary_adapters: tuple[BuilderVisualBoundaryAdapterMetadata, ...]
     phasing_modes: tuple[BuilderVisualPhasingModeMetadata, ...]
     orbit_shapes: tuple[BuilderVisualOrbitShapeMetadata, ...]
-    orbit_propagators: tuple[BuilderVisualOrbitPropagatorMetadata, ...]
     topology_modes: tuple[BuilderVisualTopologyModeMetadata, ...]
 
     @model_validator(mode="after")
@@ -234,7 +221,6 @@ class BuilderVisualAuthoringFacts(_CatalogApplicationModel):
             ("boundary adapters", self.boundary_adapters, RoutingBoundaryAdapter),
             ("phasing modes", self.phasing_modes, BuilderVisualPhasingMode),
             ("orbit shapes", self.orbit_shapes, BuilderVisualOrbitShape),
-            ("orbit propagators", self.orbit_propagators, BuilderVisualOrbitPropagator),
             ("topology modes", self.topology_modes, BuilderVisualTopologyMode),
         )
         for label, metadata, alias in choices:
@@ -275,8 +261,6 @@ class BuilderCatalogBootstrap(_CatalogApplicationModel):
             raise ValueError("bootstrap scheduling presets must be unique")
         if set(presets) != set(get_args(BuilderVisualSchedulingPreset)):
             raise ValueError("bootstrap must describe every visual scheduling preset")
-        if self.authoring.default_scheduling_preset not in set(presets):
-            raise ValueError("default scheduling preset must be advertised")
         return self
 
 
@@ -334,26 +318,6 @@ class CatalogDocumentWriteRequest(_CatalogApplicationModel):
         family = parse_catalog_reference(self.ref).family
         if family not in get_args(CatalogFamily) or family == "sessions":
             raise ValueError("direct catalog writes must target a registered component family")
-        return self
-
-
-class CatalogForkRequest(_CatalogApplicationModel):
-    """Fork one complete component document to a new user-owned identity."""
-
-    source_ref: CatalogRef
-    target_ref: CatalogRef
-    expected_source_revision: OpaqueRevision | None = None
-
-    @model_validator(mode="after")
-    def _fork_identity_is_valid(self) -> CatalogForkRequest:
-        source = parse_catalog_reference(self.source_ref)
-        target = parse_catalog_reference(self.target_ref)
-        if source.family not in get_args(CatalogFamily) or source.family == "sessions":
-            raise ValueError("sessions are saved through Builder drafts and cannot be forked")
-        if target.namespace != "user":
-            raise ValueError("fork targets must use the user: namespace")
-        if target.family != source.family:
-            raise ValueError("fork source and target must use the same catalog family")
         return self
 
 
@@ -419,13 +383,6 @@ class CatalogMutationResult(_CatalogApplicationModel):
         if self.document.revision != self.impact.target_revision:
             raise ValueError("mutation document and impact revisions must match")
         return self
-
-
-class CatalogForkResult(_CatalogApplicationModel):
-    """Fork provenance and the complete newly persisted component."""
-
-    source_ref: CatalogRef
-    result: CatalogMutationResult
 
 
 class CatalogDeleteRequest(_CatalogApplicationModel):

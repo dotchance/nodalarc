@@ -18,9 +18,9 @@ from nodalarc.models.builder_catalog_api import (
     CatalogDeleteRequest,
     CatalogDependentsRequest,
     CatalogDocumentWriteRequest,
-    CatalogForkRequest,
     CatalogGetRequest,
     CatalogListRequest,
+    CatalogMutationResult,
     CatalogSessionYamlExportRequest,
     CatalogSessionYamlImportRequest,
     CatalogYamlImportFile,
@@ -67,6 +67,26 @@ def _first_shipped_ref(family: str) -> CatalogRef:
 
 def _canonical_json(fixture: ServiceFixture, ref: str | CatalogRef) -> dict[str, Any]:
     return fixture.service.get_catalog(CatalogGetRequest(ref=CatalogRef(str(ref)))).canonical_json
+
+
+def _store(fixture: ServiceFixture, request: CatalogDocumentWriteRequest) -> CatalogMutationResult:
+    """Store one component through the save every committed Library draft runs."""
+    return fixture.service.save_component_at_snapshot(
+        request, fixture.context.repository.snapshot(fixture.context.scope)
+    )
+
+
+def _copy_shipped(
+    fixture: ServiceFixture,
+    source_ref: str | CatalogRef,
+    target_ref: str | CatalogRef,
+) -> CatalogMutationResult:
+    """Store a copy of a shipped component under a user ref, its id changed."""
+    target = CatalogRef(str(target_ref))
+    document = copy.deepcopy(dict(_canonical_json(fixture, source_ref)))
+    wrapper = next(iter(document))
+    document[wrapper]["id"] = target.relative_path.stem
+    return _store(fixture, CatalogDocumentWriteRequest(ref=target, document=document))
 
 
 def test_exact_document_validation_uses_shared_reference_identity_contract() -> None:
@@ -167,7 +187,6 @@ def test_bootstrap_is_complete_scope_free_and_truthful(tmp_path: Path) -> None:
     assert bootstrap.authoring.default_body_ref == "nodalarc:bodies/earth.yaml"
     assert bootstrap.authoring.default_phasing_mode == "walker_delta"
     assert bootstrap.authoring.single_plane_phasing_mode == "evenly_spaced_mean_anomaly"
-    assert bootstrap.authoring.default_scheduling_preset == "leo-fast-handover"
     assert {item.id for item in bootstrap.authoring.mount_roles} == {
         "access",
         "isl",
@@ -200,101 +219,6 @@ def test_bootstrap_is_complete_scope_free_and_truthful(tmp_path: Path) -> None:
         )
 
 
-def test_every_component_family_noop_fork_preserves_all_fields(tmp_path: Path) -> None:
-    fixture = _service(tmp_path, "forks")
-
-    for family, spec in CATALOG_FAMILY_REGISTRY.items():
-        if family == "sessions":
-            continue
-        if family == "payloads":
-            source_ref = CatalogRef("user:payloads/source-payload.yaml")
-            fixture.service.save_component(
-                CatalogDocumentWriteRequest(
-                    ref=source_ref,
-                    document={
-                        "payload": {
-                            "id": "source-payload",
-                            "display_name": "Complete payload fixture",
-                            "forwarding": "host",
-                            "profile": str(_first_shipped_ref("profiles")),
-                            "tags": ["primary"],
-                            "reference": "urn:nodalarc:test",
-                            "notes": "Preserve every payload field",
-                        }
-                    },
-                )
-            )
-        else:
-            source_ref = _first_shipped_ref(family)
-        target_ref = CatalogRef(f"user:{family}/fork-{family.replace('-', '_')}.yaml")
-        source = _canonical_json(fixture, source_ref)
-        expected = copy.deepcopy(source)
-        expected[spec.wrapper]["id"] = target_ref.relative_path.stem
-
-        forked = fixture.service.fork_component(
-            CatalogForkRequest(source_ref=source_ref, target_ref=target_ref)
-        )
-
-        assert forked.source_ref == source_ref
-        assert forked.result.document.canonical_json == expected
-        assert fixture.context.repository.snapshot(fixture.context.scope).get(
-            target_ref
-        ).content == forked.result.document.canonical_yaml.encode("utf-8")
-
-    with pytest.raises(ValidationError, match="cannot be forked"):
-        CatalogForkRequest(
-            source_ref="nodalarc:sessions/earth-leo-simple.yaml",
-            target_ref="user:sessions/copy.yaml",
-        )
-
-
-def test_fork_is_generation_fenced_to_the_exact_source_snapshot(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    fixture = _service(tmp_path, "fork-source-race")
-    source_ref = CatalogRef("user:terminals/source-race.yaml")
-    source = fixture.service.fork_component(
-        CatalogForkRequest(source_ref=_first_shipped_ref("terminals"), target_ref=source_ref)
-    ).result.document
-    target_ref = CatalogRef("user:terminals/source-race-copy.yaml")
-    replacement = copy.deepcopy(source.canonical_json)
-    replacement["terminal"]["notes"] = "Changed while the fork was being committed"
-    original_canonical_document = service_module._canonical_document
-    raced = False
-
-    def race_after_source_read(document):
-        nonlocal raced
-        canonical = original_canonical_document(document)
-        if document.ref == source_ref and not raced:
-            raced = True
-            fixture.service.save_component(
-                CatalogDocumentWriteRequest(
-                    ref=source_ref,
-                    document=replacement,
-                    expected_revision=source.revision,
-                )
-            )
-        return canonical
-
-    monkeypatch.setattr(service_module, "_canonical_document", race_after_source_read)
-
-    with pytest.raises(CatalogAuthoringError) as stale:
-        fixture.service.fork_component(
-            CatalogForkRequest(
-                source_ref=source_ref,
-                target_ref=target_ref,
-                expected_source_revision=source.revision,
-            )
-        )
-
-    assert stale.value.code == "catalog_authoring.stale_revision"
-    current = fixture.context.repository.snapshot(fixture.context.scope)
-    assert current.get(source_ref).revision != source.revision
-    with pytest.raises(CatalogNotFoundError):
-        current.get(target_ref)
-
-
 def test_pagination_is_deterministic_snapshot_bound_and_scope_bound(tmp_path: Path) -> None:
     first = _service(tmp_path, "page-a")
     second = _service(tmp_path, "page-b")
@@ -322,12 +246,7 @@ def test_pagination_is_deterministic_snapshot_bound_and_scope_bound(tmp_path: Pa
     assert cross_scope.value.code == "catalog_authoring.invalid_page_token"
 
     first_page = first.service.list_catalog(request)
-    first.service.fork_component(
-        CatalogForkRequest(
-            source_ref=_first_shipped_ref("terminals"),
-            target_ref="user:terminals/page-change.yaml",
-        )
-    )
+    _copy_shipped(first, _first_shipped_ref("terminals"), "user:terminals/page-change.yaml")
     with pytest.raises(CatalogAuthoringError) as stale:
         first.service.list_catalog(
             CatalogListRequest(page_size=7, page_token=first_page.next_page_token)
@@ -339,14 +258,10 @@ def test_cas_and_two_scopes_never_fallback_or_overwrite(tmp_path: Path) -> None:
     first = _service(tmp_path, "scope-a")
     second = _service(tmp_path, "scope-b")
     target = CatalogRef("user:terminals/shared.yaml")
-    one = first.service.fork_component(
-        CatalogForkRequest(source_ref=_first_shipped_ref("terminals"), target_ref=target)
-    ).result.document
+    one = _copy_shipped(first, _first_shipped_ref("terminals"), target).document
     alternative = sorted((SHIPPED_ROOT / "terminals").rglob("*.yaml"))[1]
     alternative_ref = CatalogRef(f"nodalarc:{alternative.relative_to(SHIPPED_ROOT).as_posix()}")
-    two = second.service.fork_component(
-        CatalogForkRequest(source_ref=alternative_ref, target_ref=target)
-    ).result.document
+    two = _copy_shipped(second, alternative_ref, target).document
     assert one.canonical_json != two.canonical_json
     assert (
         first.service.get_catalog(CatalogGetRequest(ref=target)).canonical_json
@@ -359,21 +274,23 @@ def test_cas_and_two_scopes_never_fallback_or_overwrite(tmp_path: Path) -> None:
 
     replacement = copy.deepcopy(one.canonical_json)
     replacement["terminal"]["notes"] = "scope A replacement"
-    updated = first.service.save_component(
+    updated = _store(
+        first,
         CatalogDocumentWriteRequest(
             ref=target,
             document=replacement,
             expected_revision=one.revision,
-        )
+        ),
     )
     assert updated.document.revision != one.revision
     with pytest.raises(CatalogAuthoringError) as stale:
-        first.service.save_component(
+        _store(
+            first,
             CatalogDocumentWriteRequest(
                 ref=target,
                 document=replacement,
                 expected_revision=one.revision,
-            )
+            ),
         )
     assert stale.value.code == "catalog_authoring.stale_revision"
 
@@ -393,9 +310,7 @@ def test_cas_and_two_scopes_never_fallback_or_overwrite(tmp_path: Path) -> None:
 def test_typed_dependency_impact_delete_fencing_and_graph_race(tmp_path: Path) -> None:
     fixture = _service(tmp_path, "impact")
     terminal_ref = CatalogRef("user:terminals/impact-terminal.yaml")
-    fixture.service.fork_component(
-        CatalogForkRequest(source_ref=_first_shipped_ref("terminals"), target_ref=terminal_ref)
-    )
+    _copy_shipped(fixture, _first_shipped_ref("terminals"), terminal_ref)
     initial = fixture.service.dependents(CatalogDependentsRequest(ref=terminal_ref))
     terminal_revision = initial.target_revision
     assert initial.delete_allowed is True
@@ -404,7 +319,7 @@ def test_typed_dependency_impact_delete_fencing_and_graph_race(tmp_path: Path) -
     node = _canonical_json(fixture, "nodalarc:nodes/ground/geo-gateway.yaml")
     node["node"]["id"] = node_ref.relative_path.stem
     node["node"]["terminals"][0]["terminal"] = terminal_ref
-    fixture.service.save_component(CatalogDocumentWriteRequest(ref=node_ref, document=node))
+    _store(fixture, CatalogDocumentWriteRequest(ref=node_ref, document=node))
 
     constellation_ref = CatalogRef("user:constellations/impact-constellation.yaml")
     constellation = _canonical_json(
@@ -412,9 +327,7 @@ def test_typed_dependency_impact_delete_fencing_and_graph_race(tmp_path: Path) -
     )
     constellation["constellation"]["id"] = constellation_ref.relative_path.stem
     constellation["constellation"]["node"] = node_ref
-    fixture.service.save_component(
-        CatalogDocumentWriteRequest(ref=constellation_ref, document=constellation)
-    )
+    _store(fixture, CatalogDocumentWriteRequest(ref=constellation_ref, document=constellation))
     session_ref = _seed_session(
         fixture,
         "impact-session",
@@ -452,9 +365,7 @@ def test_typed_dependency_impact_delete_fencing_and_graph_race(tmp_path: Path) -
 def test_unreferenced_delete_requires_exact_revision_and_impact_ack(tmp_path: Path) -> None:
     fixture = _service(tmp_path, "delete")
     target = CatalogRef("user:terminals/delete-me.yaml")
-    saved = fixture.service.fork_component(
-        CatalogForkRequest(source_ref=_first_shipped_ref("terminals"), target_ref=target)
-    ).result.document
+    saved = _copy_shipped(fixture, _first_shipped_ref("terminals"), target).document
     impact = fixture.service.dependents(CatalogDependentsRequest(ref=target))
 
     with pytest.raises(CatalogAuthoringError) as mismatch:
@@ -578,11 +489,8 @@ def test_import_commit_requires_the_exact_reviewed_proposal(tmp_path: Path) -> N
         )
     assert changed.value.code == "catalog_authoring.stale_import_proposal"
 
-    target.service.fork_component(
-        CatalogForkRequest(
-            source_ref=_first_shipped_ref("terminals"),
-            target_ref="user:terminals/unrelated-after-review.yaml",
-        )
+    _copy_shipped(
+        target, _first_shipped_ref("terminals"), "user:terminals/unrelated-after-review.yaml"
     )
     with pytest.raises(CatalogAuthoringError) as stale:
         target.service.import_session_yaml(
@@ -670,15 +578,13 @@ def test_export_import_preserves_a_transitive_user_reference_closure(tmp_path: P
     node_ref = CatalogRef("user:nodes/imported/portable-node.yaml")
     node = _canonical_json(source, _first_shipped_ref("nodes"))
     node["node"]["id"] = node_ref.relative_path.stem
-    source.service.save_component(CatalogDocumentWriteRequest(ref=node_ref, document=node))
+    _store(source, CatalogDocumentWriteRequest(ref=node_ref, document=node))
 
     constellation_ref = CatalogRef("user:constellations/imported/portable-constellation.yaml")
     constellation = _canonical_json(source, _first_shipped_ref("constellations"))
     constellation["constellation"]["id"] = constellation_ref.relative_path.stem
     constellation["constellation"]["node"] = node_ref
-    source.service.save_component(
-        CatalogDocumentWriteRequest(ref=constellation_ref, document=constellation)
-    )
+    _store(source, CatalogDocumentWriteRequest(ref=constellation_ref, document=constellation))
     session_ref = _seed_session(
         source,
         "portable-user-closure",
@@ -726,7 +632,7 @@ def test_export_import_disambiguates_nested_refs_with_the_same_document_id(
         node = _canonical_json(source, _first_shipped_ref("nodes"))
         node["node"]["id"] = "shared-node"
         node["node"]["notes"] = f"Distinct nested node {position}"
-        source.service.save_component(CatalogDocumentWriteRequest(ref=node_ref, document=node))
+        _store(source, CatalogDocumentWriteRequest(ref=node_ref, document=node))
     for position, (constellation_ref, node_ref) in enumerate(
         zip(constellation_refs, node_refs, strict=True),
         start=1,
@@ -735,9 +641,7 @@ def test_export_import_disambiguates_nested_refs_with_the_same_document_id(
         constellation["constellation"]["id"] = constellation_ref.relative_path.stem
         constellation["constellation"]["display_name"] = f"Nested ring {position}"
         constellation["constellation"]["node"] = node_ref
-        source.service.save_component(
-            CatalogDocumentWriteRequest(ref=constellation_ref, document=constellation)
-        )
+        _store(source, CatalogDocumentWriteRequest(ref=constellation_ref, document=constellation))
 
     session_ref = _seed_session(
         source,
@@ -852,9 +756,7 @@ def test_import_requires_unstored_user_refs_and_refuses_ambiguous_identity(
     constellation_ref = CatalogRef("user:constellations/missing/import-ring.yaml")
     constellation = _canonical_json(source, _first_shipped_ref("constellations"))
     constellation["constellation"]["id"] = constellation_ref.relative_path.stem
-    source.service.save_component(
-        CatalogDocumentWriteRequest(ref=constellation_ref, document=constellation)
-    )
+    _store(source, CatalogDocumentWriteRequest(ref=constellation_ref, document=constellation))
     session_ref = _seed_session(
         source,
         "missing-user-session",
@@ -877,9 +779,7 @@ def test_import_requires_unstored_user_refs_and_refuses_ambiguous_identity(
     unrelated = _canonical_json(target, _first_shipped_ref("constellations"))
     unrelated["constellation"]["id"] = constellation_ref.relative_path.stem
     unrelated["constellation"]["display_name"] = "Unrelated destination object"
-    target.service.save_component(
-        CatalogDocumentWriteRequest(ref=constellation_ref, document=unrelated)
-    )
+    _store(target, CatalogDocumentWriteRequest(ref=constellation_ref, document=unrelated))
     with pytest.raises(CatalogAuthoringError) as destination_binding:
         target.service.import_session_yaml(
             CatalogSessionYamlImportRequest(
@@ -956,18 +856,19 @@ def test_catalog_mutations_still_reject_dangling_and_shipped_writes(tmp_path: Pa
     node["node"]["id"] = "dangling-node"
     node["node"]["terminals"][0]["terminal"] = "user:terminals/missing.yaml"
     with pytest.raises(CatalogAuthoringError) as dangling:
-        fixture.service.save_component(
-            CatalogDocumentWriteRequest(ref="user:nodes/dangling-node.yaml", document=node)
+        _store(
+            fixture, CatalogDocumentWriteRequest(ref="user:nodes/dangling-node.yaml", document=node)
         )
     assert dangling.value.code == "catalog_authoring.invalid_graph"
 
     shipped_ref = _first_shipped_ref("terminals")
     with pytest.raises(CatalogAuthoringError) as read_only:
-        fixture.service.save_component(
+        _store(
+            fixture,
             CatalogDocumentWriteRequest(
                 ref=shipped_ref,
                 document=_canonical_json(fixture, shipped_ref),
-            )
+            ),
         )
     assert read_only.value.code == "catalog_authoring.read_only"
 
@@ -976,7 +877,8 @@ def test_catalog_mutations_still_reject_dangling_and_shipped_writes(tmp_path: Pa
     wrong_family = copy.deepcopy(node)
     wrong_family["node"]["terminals"][0]["terminal"] = "user:orbits/not-terminal.yaml"
     with pytest.raises(CatalogAuthoringError) as wrong:
-        fixture.service.save_component(
-            CatalogDocumentWriteRequest(ref="user:nodes/dangling-node.yaml", document=wrong_family)
+        _store(
+            fixture,
+            CatalogDocumentWriteRequest(ref="user:nodes/dangling-node.yaml", document=wrong_family),
         )
     assert wrong.value.code == "catalog_authoring.invalid_document"

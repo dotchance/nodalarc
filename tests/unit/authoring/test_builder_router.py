@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import copy
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
@@ -201,15 +200,6 @@ def test_router_executes_every_typed_authoring_operation(catalog_context: Catalo
     assert client.post("/api/v1/builder/session/import", json={}).status_code == 404
 
     source_ref = _first_shipped_ref("terminals")
-    forked = client.post(
-        "/api/v1/builder/catalog/fork",
-        json={
-            "source_ref": source_ref,
-            "target_ref": "user:terminals/router-terminal.yaml",
-        },
-    )
-    assert forked.status_code == 200
-    fork_document = forked.json()["result"]["document"]
 
     incomplete_draft = client.post(
         "/api/v1/builder/catalog/draft/new",
@@ -260,39 +250,23 @@ def test_router_executes_every_typed_authoring_operation(catalog_context: Catalo
         },
     )
     assert saved_draft.status_code == 200, saved_draft.text
-    assert (
-        saved_draft.json()["result"]["document"]["canonical_json"]["terminal"]["notes"]
-        == "Patched by the backend"
-    )
-
-    replacement = copy.deepcopy(fork_document["canonical_json"])
-    replacement["terminal"]["notes"] = "Updated through the typed router"
-    written = client.post(
-        "/api/v1/builder/catalog/write",
-        json={
-            "ref": fork_document["ref"],
-            "document": replacement,
-            "expected_revision": fork_document["revision"],
-        },
-    )
-    assert written.status_code == 200
-    updated = written.json()
-    assert updated["document"]["canonical_json"]["terminal"]["notes"].startswith("Updated")
+    saved_component = saved_draft.json()["result"]["document"]
+    assert saved_component["canonical_json"]["terminal"]["notes"] == "Patched by the backend"
 
     impact = client.post(
         "/api/v1/builder/catalog/dependents",
-        json={"ref": fork_document["ref"]},
+        json={"ref": saved_component["ref"]},
     ).json()
     deleted = client.post(
         "/api/v1/builder/catalog/delete",
         json={
-            "ref": fork_document["ref"],
-            "expected_revision": updated["document"]["revision"],
+            "ref": saved_component["ref"],
+            "expected_revision": saved_component["revision"],
             "impact_acknowledgement": impact["acknowledgement"],
         },
     )
     assert deleted.status_code == 200
-    assert deleted.json()["deleted_ref"] == fork_document["ref"]
+    assert deleted.json()["deleted_ref"] == saved_component["ref"]
 
 
 def test_router_compiles_wizard_intent_into_builder_contract(

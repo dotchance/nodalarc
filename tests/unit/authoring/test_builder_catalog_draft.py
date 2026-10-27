@@ -25,6 +25,7 @@ from nodalarc.models.builder_catalog_api import (
     CatalogDraftPatchRequest,
     CatalogDraftSaveRequest,
     CatalogGetRequest,
+    CatalogMutationResult,
 )
 from pydantic import ValidationError
 from vs_api import builder_catalog_draft as draft_module
@@ -48,12 +49,27 @@ def _context(tmp_path: Path, name: str = "user-catalog") -> CatalogContext:
     )
 
 
-def _services(tmp_path: Path) -> tuple[BuilderCatalogDraftService, BuilderCatalogAuthoringService]:
+def _services(
+    tmp_path: Path,
+) -> tuple[BuilderCatalogDraftService, BuilderCatalogAuthoringService, CatalogContext]:
     context = _context(tmp_path)
-    return BuilderCatalogDraftService(context), BuilderCatalogAuthoringService(
+    return (
+        BuilderCatalogDraftService(context),
+        BuilderCatalogAuthoringService(
+            context,
+            page_token_secret=b"catalog-draft-test-page-key-0001",
+        ),
         context,
-        page_token_secret=b"catalog-draft-test-page-key-0001",
     )
+
+
+def _store(
+    context: CatalogContext,
+    authoring: BuilderCatalogAuthoringService,
+    request: CatalogDocumentWriteRequest,
+) -> CatalogMutationResult:
+    """Store one component through the save every committed Library draft runs."""
+    return authoring.save_component_at_snapshot(request, context.repository.snapshot(context.scope))
 
 
 def _first_shipped_ref(family: str) -> CatalogRef:
@@ -61,9 +77,14 @@ def _first_shipped_ref(family: str) -> CatalogRef:
     return CatalogRef(f"nodalarc:{source.relative_to(SHIPPED_ROOT).as_posix()}")
 
 
-def _payload_source(authoring: BuilderCatalogAuthoringService) -> CatalogRef:
+def _payload_source(
+    context: CatalogContext,
+    authoring: BuilderCatalogAuthoringService,
+) -> CatalogRef:
     source_ref = CatalogRef("user:payloads/component-draft-source.yaml")
-    authoring.save_component(
+    _store(
+        context,
+        authoring,
         CatalogDocumentWriteRequest(
             ref=source_ref,
             document={
@@ -77,7 +98,7 @@ def _payload_source(authoring: BuilderCatalogAuthoringService) -> CatalogRef:
                     "notes": "Every payload field must survive",
                 }
             },
-        )
+        ),
     )
     return source_ref
 
@@ -112,7 +133,7 @@ def _schema_property_names(
 def test_new_drafts_cover_every_component_family_and_remain_truthfully_incomplete(
     tmp_path: Path,
 ) -> None:
-    drafts, _ = _services(tmp_path)
+    drafts, _, _ = _services(tmp_path)
 
     for family in get_args(CatalogComponentFamily):
         object_id = f"new-{family.replace('-', '_')}"
@@ -134,8 +155,8 @@ def test_new_drafts_cover_every_component_family_and_remain_truthfully_incomplet
 def test_all_families_open_compile_and_save_without_losing_advanced_fields(
     tmp_path: Path,
 ) -> None:
-    drafts, authoring = _services(tmp_path)
-    payload_ref = _payload_source(authoring)
+    drafts, authoring, context = _services(tmp_path)
+    payload_ref = _payload_source(context, authoring)
 
     for family in get_args(CatalogComponentFamily):
         source_ref = payload_ref if family == "payloads" else _first_shipped_ref(family)
@@ -175,14 +196,14 @@ def test_all_families_open_compile_and_save_without_losing_advanced_fields(
 def test_component_forks_cannot_replace_an_existing_user_target(
     tmp_path: Path,
 ) -> None:
-    drafts, authoring = _services(tmp_path)
-    source_ref = _payload_source(authoring)
+    drafts, authoring, context = _services(tmp_path)
+    source_ref = _payload_source(context, authoring)
     source = authoring.get_catalog(CatalogGetRequest(ref=source_ref))
     target_ref = CatalogRef("user:payloads/existing-fork-target.yaml")
     target_document = copy.deepcopy(source.canonical_json)
     target_document["payload"]["id"] = target_ref.relative_path.stem
-    target = authoring.save_component(
-        CatalogDocumentWriteRequest(ref=target_ref, document=target_document)
+    target = _store(
+        context, authoring, CatalogDocumentWriteRequest(ref=target_ref, document=target_document)
     ).document
 
     with pytest.raises(CatalogAuthoringError) as occupied:
@@ -218,7 +239,7 @@ def test_component_forks_cannot_replace_an_existing_user_target(
 def test_specialized_patch_changes_only_the_selected_field_on_an_advanced_site(
     tmp_path: Path,
 ) -> None:
-    drafts, authoring = _services(tmp_path)
+    drafts, authoring, _ = _services(tmp_path)
     source_ref = CatalogRef("nodalarc:sites/earth/fj/earth-fj-suva.yaml")
     source = authoring.get_catalog(CatalogGetRequest(ref=source_ref)).canonical_json
     opened = drafts.open(CatalogDraftOpenRequest(source_ref=source_ref))
@@ -259,7 +280,7 @@ def test_specialized_patch_changes_only_the_selected_field_on_an_advanced_site(
 def test_site_node_command_uses_explicit_identity_and_backend_derived_shape(
     tmp_path: Path,
 ) -> None:
-    drafts, authoring = _services(tmp_path)
+    drafts, authoring, _ = _services(tmp_path)
     node_ref = CatalogRef("nodalarc:nodes/ground/leo-gateway.yaml")
     node_definition = authoring.get_catalog(CatalogGetRequest(ref=node_ref)).canonical_json["node"]
     opened = drafts.new(CatalogDraftNewRequest(family="sites", object_id="command-site"))
@@ -313,7 +334,7 @@ def test_site_node_command_uses_explicit_identity_and_backend_derived_shape(
 def test_node_commands_derive_unique_mount_and_ethernet_shapes(
     tmp_path: Path,
 ) -> None:
-    drafts, _ = _services(tmp_path)
+    drafts, _, _ = _services(tmp_path)
     opened = drafts.new(CatalogDraftNewRequest(family="nodes", object_id="command-node"))
     terminal_ref = CatalogRef("nodalarc:terminals/rf/rf-ka-starlink-space-gateway.yaml")
 
@@ -382,7 +403,7 @@ def test_node_commands_derive_unique_mount_and_ethernet_shapes(
 def test_default_shipped_customization_never_overwrites_an_existing_user_object(
     tmp_path: Path,
 ) -> None:
-    drafts, _ = _services(tmp_path)
+    drafts, _, _ = _services(tmp_path)
     source_ref = _first_shipped_ref("terminals")
     first = drafts.open(CatalogDraftOpenRequest(source_ref=source_ref))
     drafts.save(
@@ -412,7 +433,7 @@ def test_patch_rejects_identity_family_prototype_and_traversal_changes(
     tmp_path: Path,
     pointer: str,
 ) -> None:
-    drafts, _ = _services(tmp_path)
+    drafts, _, _ = _services(tmp_path)
     opened = drafts.open(CatalogDraftOpenRequest(source_ref=_first_shipped_ref("terminals")))
 
     with pytest.raises(CatalogAuthoringError) as raised:
@@ -436,7 +457,7 @@ def test_patch_rejects_identity_family_prototype_and_traversal_changes(
 def test_patch_compile_and_save_reject_stale_draft_or_catalog_revisions(
     tmp_path: Path,
 ) -> None:
-    drafts, authoring = _services(tmp_path)
+    drafts, authoring, context = _services(tmp_path)
     opened = drafts.open(CatalogDraftOpenRequest(source_ref=_first_shipped_ref("terminals")))
 
     with pytest.raises(CatalogAuthoringError) as stale_draft:
@@ -455,12 +476,14 @@ def test_patch_compile_and_save_reject_stale_draft_or_catalog_revisions(
         )
     assert stale_draft.value.code == "catalog_authoring.stale_revision"
 
-    authoring.save_component(
+    _store(
+        context,
+        authoring,
         CatalogDocumentWriteRequest(
             ref=opened.target_ref,
             document=opened.document,
             expected_revision=None,
-        )
+        ),
     )
     for operation in (
         lambda: drafts.compile(CatalogDraftCompileRequest(draft=opened, expected_draft_revision=0)),
@@ -475,17 +498,19 @@ def test_draft_save_is_generation_fenced_to_its_compile_snapshot(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    drafts, authoring = _services(tmp_path)
+    drafts, authoring, context = _services(tmp_path)
     source_ref = CatalogRef("user:terminals/draft-race-source.yaml")
     source_document = copy.deepcopy(
         authoring.get_catalog(CatalogGetRequest(ref=_first_shipped_ref("terminals"))).canonical_json
     )
     source_document["terminal"]["id"] = source_ref.relative_path.stem
-    source = authoring.save_component(
+    source = _store(
+        context,
+        authoring,
         CatalogDocumentWriteRequest(
             ref=source_ref,
             document=source_document,
-        )
+        ),
     ).document
     opened = drafts.open(
         CatalogDraftOpenRequest(
@@ -503,12 +528,14 @@ def test_draft_save_is_generation_fenced_to_its_compile_snapshot(
         issues = original_reference_issues(*args, **kwargs)
         if not raced:
             raced = True
-            authoring.save_component(
+            _store(
+                context,
+                authoring,
                 CatalogDocumentWriteRequest(
                     ref=source_ref,
                     document=replacement,
                     expected_revision=source.revision,
-                )
+                ),
             )
         return issues
 
@@ -531,7 +558,7 @@ def test_draft_save_is_generation_fenced_to_its_compile_snapshot(
 def test_compile_separates_structural_saveability_from_runtime_support(
     tmp_path: Path,
 ) -> None:
-    drafts, _ = _services(tmp_path)
+    drafts, _, _ = _services(tmp_path)
     opened = drafts.open(CatalogDraftOpenRequest(source_ref=_first_shipped_ref("orbits")))
     patched = drafts.patch(
         CatalogDraftPatchRequest(
@@ -563,7 +590,7 @@ def test_compile_separates_structural_saveability_from_runtime_support(
 def test_compile_blocks_dangling_component_reference_before_save(
     tmp_path: Path,
 ) -> None:
-    drafts, _ = _services(tmp_path)
+    drafts, _, _ = _services(tmp_path)
     opened = drafts.open(CatalogDraftOpenRequest(source_ref=_first_shipped_ref("nodes")))
     assert opened.document["node"]["terminals"]
     patched = drafts.patch(
@@ -596,7 +623,7 @@ def test_compile_blocks_dangling_component_reference_before_save(
 def test_patch_commands_round_trip_through_strict_json_transport_models(
     tmp_path: Path,
 ) -> None:
-    drafts, _ = _services(tmp_path)
+    drafts, _, _ = _services(tmp_path)
     opened = drafts.open(CatalogDraftOpenRequest(source_ref=_first_shipped_ref("terminals")))
     request: dict[str, Any] = {
         "draft": opened.model_dump(mode="json"),
@@ -618,8 +645,8 @@ def test_patch_commands_round_trip_through_strict_json_transport_models(
 def test_yaml_buffer_is_parsed_identity_checked_and_revisioned_by_backend(
     tmp_path: Path,
 ) -> None:
-    drafts, authoring = _services(tmp_path)
-    opened = drafts.open(CatalogDraftOpenRequest(source_ref=_payload_source(authoring)))
+    drafts, authoring, context = _services(tmp_path)
+    opened = drafts.open(CatalogDraftOpenRequest(source_ref=_payload_source(context, authoring)))
     yaml_text = "# exact editor buffer\n" + opened.projected_yaml.replace(
         "Advanced payload source",
         "Backend parsed",

@@ -8,7 +8,6 @@ from nodalarc.catalog_refs import BodyRef
 from nodalarc.model_validation import TerminalMedium
 from nodalarc.models.builder_api import JsonDocument
 from nodalarc.models.builder_visual_api import (
-    BuilderVisualOrbitPropagator,
     BuilderVisualOrbitShape,
     BuilderVisualPhasingMode,
     BuilderVisualSchedulingPreset,
@@ -78,10 +77,6 @@ PHASING_MODE_LABELS: tuple[tuple[BuilderVisualPhasingMode, str], ...] = (
 ORBIT_SHAPE_LABELS: tuple[tuple[BuilderVisualOrbitShape, str], ...] = (
     ("circular", "circular"),
     ("elliptical", "elliptical"),
-)
-ORBIT_PROPAGATOR_LABELS: tuple[tuple[BuilderVisualOrbitPropagator, str], ...] = (
-    ("two_body", "two body"),
-    ("j2_mean_elements", "J2 mean elements"),
 )
 TOPOLOGY_MODE_LABELS: tuple[tuple[BuilderVisualTopologyMode, str], ...] = (
     ("visible_candidates", "all visible pairs"),

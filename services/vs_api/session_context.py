@@ -75,6 +75,7 @@ from nodalarc.models.vs_api import (
     NodeAddress,
     NodeRoutingInstance,
     NodeState,
+    PublicLinkType,
     RecentEvent,
 )
 from nodalarc.nats_channels import (
@@ -985,7 +986,7 @@ class SessionContext:
         node_a, node_b = event.node_a, event.node_b
         key = _link_key(node_a, node_b)
         public_link_type = self._public_link_type(
-            data["link_type"],
+            event.link_type,
             link_rule_id=data.get("link_rule_id"),
             endpoint_segments=data.get("endpoint_segments"),
         )
@@ -1625,11 +1626,11 @@ class SessionContext:
 
     def _public_link_type(
         self,
-        raw_type: str | None,
+        raw_type: Literal["isl", "ground"],
         *,
         link_rule_id: str | None = None,
         endpoint_segments: tuple[str, str] | list[str] | None = None,
-    ) -> str:
+    ) -> PublicLinkType:
         return _derive_link_type(
             raw_type,
             resolved_kind=(
@@ -1943,16 +1944,14 @@ def _link_key(node_a: str, node_b: str) -> str:
 
 
 def _derive_link_type(
-    raw_type: str | None,
+    raw_type: Literal["isl", "ground"],
     *,
     resolved_kind: str | None = None,
     link_rule_id: str | None = None,
     endpoint_segments: tuple[str, str] | list[str] | None = None,
-) -> str:
-    if raw_type and raw_type != "isl":
-        return raw_type
-    if raw_type is None:
-        raise ValueError("link_type is required; VS-API does not infer ground links from node IDs")
+) -> PublicLinkType:
+    if raw_type == "ground":
+        return "ground"
     if resolved_kind == "inter_body":
         return "inter_body_relay"
     if resolved_kind not in (None, "isl"):
@@ -1963,6 +1962,4 @@ def _derive_link_type(
         a, b = endpoint_segments
         if a != b:
             return "inter_constellation"
-    if link_rule_id and link_rule_id.endswith(".internal_isl"):
-        return "isl"
     return "isl"

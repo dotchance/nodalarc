@@ -996,12 +996,19 @@
       "interface_a": null,
       "interface_b": null,
       "link_rule_id": null,
-      "link_type": null,
+      "link_type": [
+        "ground",
+        "inter_body_relay",
+        "inter_constellation",
+        "isl"
+      ],
       "node_a": null,
       "node_b": null,
       "reason": null,
       "rtt_to_one_way_policy": null,
-      "state": null,
+      "state": [
+        "active"
+      ],
       "topology_mode": null
     },
     "LinkDown": {
@@ -1040,11 +1047,18 @@
       "interface_b": null,
       "link_reason": null,
       "link_rule_id": null,
-      "link_type": null,
+      "link_type": [
+        "ground",
+        "inter_body_relay",
+        "inter_constellation",
+        "isl"
+      ],
       "node_a": null,
       "node_b": null,
       "scheduling_state": null,
-      "state": null,
+      "state": [
+        "active"
+      ],
       "topology_mode": null
     },
     "LinkUp": {

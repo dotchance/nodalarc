@@ -63,8 +63,9 @@ Press **Q** to open the filter drawer. Use it to:
 
 Inter-satellite links are drawn between active space nodes. Same-body
 constellation links use the configured ISL candidate rules. Cross-body links,
-such as Earth relay to lunar relay, use `inter_body_relay` rules and carry their
-own range-derived latency.
+such as Earth relay to lunar relay, come from link rules whose endpoints are on
+different bodies; VS-API reports them with link type `inter_body_relay`, and
+they carry their own range-derived latency.
 
 Toggle ISL and relay link visibility with **L**.
 

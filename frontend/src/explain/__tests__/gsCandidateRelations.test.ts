@@ -5,12 +5,12 @@ import { gsCandidateRelations } from "../gsCandidateRelations";
 import type { GroundDecisionsSnapshot } from "../client";
 import type { LinkState } from "../../types";
 
-function link(a: string, b: string, state = "active"): LinkState {
+function link(a: string, b: string): LinkState {
   return {
     node_a: a,
     node_b: b,
-    state,
-    link_type: null,
+    state: "active",
+    link_type: "ground",
     link_reason: null,
     latency_ms: 0,
     transmit_mbps_a: 0,
@@ -48,11 +48,6 @@ describe("gsCandidateRelations (single source: globe agrees with the card)", () 
     } as unknown as GroundDecisionsSnapshot;
     const rel = gsCandidateRelations("gs-1", d, [link("sat-x", "gs-1")]);
     expect(rel.get("sat-x")?.family).toBe("connected");
-  });
-
-  it("handles pair order in either direction and ignores inactive links", () => {
-    const rel = gsCandidateRelations("gs-1", null, [link("gs-1", "sat-down", "inactive")]);
-    expect(rel.has("sat-down")).toBe(false);
   });
 
   it("a sat in no decision and no link is absent (far/irrelevant)", () => {

@@ -23,7 +23,7 @@ from nodalarc.ephemeris_runtime import (
     session_epoch_unix,
 )
 from nodalarc.link_metadata import LinkRuleMetadata
-from nodalarc.models.addressing import NeighborAssignment
+from nodalarc.models.addressing import IslPlaneRelation, NeighborAssignment
 from nodalarc.models.ephemeris import EphemerisConfig
 from nodalarc.models.events import EphemerisBodyFrame
 from nodalarc.models.ground_policy import HandoverPolicySpec, SelectionPolicySpec
@@ -494,7 +494,7 @@ def _neighbors_from_resolved(
     return frozenset(assignments)
 
 
-def _isl_link_type(left: ResolvedNode, right: ResolvedNode) -> str:
+def _isl_link_type(left: ResolvedNode, right: ResolvedNode) -> IslPlaneRelation:
     if left.kind == "satellite" and right.kind == "satellite":
         if (
             left.segment_id == right.segment_id

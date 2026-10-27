@@ -6,17 +6,12 @@
  * `NodeState.node_type` and links from `LinkState.link_type`, not from prefixes.
  */
 
-import type { LinkState, NodeState } from "./types";
+import type { LinkState, NodeState, PublicLinkType } from "./types";
 
-const GROUND_LINK_TYPES = new Set(["ground", "ground_uplink", "ground_downlink"]);
-const NON_GROUND_LINK_TYPES = new Set([
+const NON_GROUND_LINK_TYPES: ReadonlySet<string> = new Set<PublicLinkType>([
   "isl",
-  "intra_plane_isl",
-  "cross_plane_isl",
-  "override",
   "inter_constellation",
   "inter_body_relay",
-  "relay",
 ]);
 
 export function isGroundNode(node: Pick<NodeState, "node_type">): boolean {
@@ -36,13 +31,11 @@ export function nodeDisplayLabel(
   return local && local.length > 0 ? local : node.node_id;
 }
 
-export function isGroundLinkType(linkType: string | null | undefined): boolean {
-  if (linkType == null || linkType === "") {
-    throw new Error("LinkState.link_type is required for frontend link classification");
-  }
-  if (GROUND_LINK_TYPES.has(linkType)) return true;
+export function isGroundLinkType(linkType: PublicLinkType): boolean {
+  if (linkType === "ground") return true;
   if (NON_GROUND_LINK_TYPES.has(linkType)) return false;
-  throw new Error(`Unknown link_type for frontend link classification: ${linkType}`);
+  // A feed from another VS-API release can carry a kind this page does not know.
+  throw new Error(`Unknown link_type for frontend link classification: ${String(linkType)}`);
 }
 
 export function isGroundLinkState(link: Pick<LinkState, "link_type">): boolean {

@@ -15,7 +15,7 @@ to a model nested in it, or to what VS-API adds to a recorded frame bumps it.
 
 import sqlite3
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 
 class HistorySchemaError(RuntimeError):

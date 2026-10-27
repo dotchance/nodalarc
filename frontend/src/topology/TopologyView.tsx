@@ -3,7 +3,7 @@
 /** TopologyView — HTML5 Canvas 2D topology diagram with hover tooltips. */
 
 import { useEffect, useRef, useCallback, useState } from "react";
-import { computeLayout } from "./layout";
+import { computeLayout, type TopologyLink } from "./layout";
 import { drawNode, drawAreaBounds, hitTestNode } from "./nodes";
 import { drawLinks, hitTestLink, type FlowDrawing } from "./topoLinks";
 import { TraceFades } from "../trace/traceFades";
@@ -106,7 +106,7 @@ export function TopologyView({
     }
 
     // Merge active + failed links for layout
-    const mergedLinks: LinkState[] = [...snapshot.links];
+    const mergedLinks: TopologyLink[] = [...snapshot.links];
     for (const [, fl] of failedLinksRef.current) {
       mergedLinks.push({ ...fl.link, state: "failed" });
     }

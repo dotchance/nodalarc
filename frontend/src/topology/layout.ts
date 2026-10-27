@@ -21,10 +21,16 @@ export interface LayoutNode {
   slot: number | null;
 }
 
+/** A link the topology draws: an active one from the feed, or one that left
+ *  the feed and is fading out. */
+export type TopologyLink = Pick<LinkState, "node_a" | "node_b" | "link_type"> & {
+  state: "active" | "failed";
+};
+
 export interface LayoutLink {
   nodeA: string;
   nodeB: string;
-  state: string;
+  state: TopologyLink["state"];
   isGround: boolean;
 }
 
@@ -53,7 +59,7 @@ const MARGIN = 40;
 
 export function computeLayout(
   nodes: NodeState[],
-  links: LinkState[],
+  links: readonly TopologyLink[],
   bandOf: (node: NodeState) => string | null,
 ): TopologyLayout {
   const sats = nodes.filter((n) => n.node_type === "satellite");

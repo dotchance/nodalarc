@@ -60,17 +60,14 @@ describe("network identity classification", () => {
 
   it("classifies ground links from link_type, not endpoint ids", () => {
     expect(isGroundLinkState(link("ground"))).toBe(true);
-    expect(isGroundLinkState(link("intra_plane_isl"))).toBe(false);
-    expect(isGroundLinkState(link("cross_plane_isl"))).toBe(false);
+    expect(isGroundLinkState(link("isl"))).toBe(false);
+    expect(isGroundLinkState(link("inter_constellation"))).toBe(false);
+    expect(isGroundLinkState(link("inter_body_relay"))).toBe(false);
   });
 
-  it("fails loudly when link_type is missing", () => {
-    expect(() => isGroundLinkState(link(null))).toThrow(/link_type is required/);
-  });
-
-  it("fails loudly when link_type is not in the runtime vocabulary", () => {
-    expect(() => isGroundLinkState(link("link_rule:earth-access"))).toThrow(/Unknown link_type/);
-    expect(() => isGroundLinkState(link("not-real"))).toThrow(/Unknown link_type/);
+  it("fails loudly on a link_type another VS-API release sends", () => {
+    const unknown = "intra_plane_isl" as unknown as LinkState["link_type"];
+    expect(() => isGroundLinkState(link(unknown))).toThrow(/Unknown link_type/);
   });
 
   it("selects namespaced ground nodes as ground station cards", () => {

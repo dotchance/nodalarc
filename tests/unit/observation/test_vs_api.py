@@ -1185,7 +1185,7 @@ class TestSubscriberResilience:
             node_a="sat-P00S00",
             node_b="sat-P00S01",
             state="active",
-            link_type="intra_plane_isl",
+            link_type="isl",
             link_reason="vis_gained",
             latency_ms=5.0,
             transmit_mbps_a=1000.0,

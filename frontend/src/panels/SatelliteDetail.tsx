@@ -15,6 +15,7 @@ import { PairInspectorView } from "../explain/components/PairInspectorView";
 import { FamilyBadge } from "../explain/components/FamilyBadge";
 import { isGroundLinkState, selectionTypeForNodeId } from "../networkIdentity";
 import { RoutingRows } from "./RoutingRows";
+import { translateLinkType } from "../translate";
 
 interface SatelliteDetailProps {
   node: NodeState;
@@ -37,17 +38,6 @@ export function scopeLocalName(n: NodeState): string {
     return local.slice(n.namespace.length + 1);
   }
   return local;
-}
-
-function linkTypeLabel(linkType: string | null): string {
-  switch (linkType) {
-    case "intra_plane_isl": return "intra-area";
-    case "cross_plane_isl": return "cross-area";
-    case "ground": return "ground";
-    case "ground_uplink": return "ground";
-    case "ground_downlink": return "ground";
-    default: return linkType ?? "unknown";
-  }
 }
 
 export function SatelliteDetail({ node, snapshot, anchorGsId,
@@ -246,7 +236,7 @@ export function SatelliteDetail({ node, snapshot, anchorGsId,
                   <span className={stateUp ? "link-state--up" : "link-state--down"}>
                     {stateUp ? "UP" : "DOWN"}
                   </span>
-                  {" "}{l.latency_ms.toFixed(1)}ms {linkTypeLabel(l.link_type)}
+                  {" "}{l.latency_ms.toFixed(1)}ms {translateLinkType(l.link_type)}
                   {!stateUp && l.link_reason ? ` — ${linkEventLabel(l.link_reason)}` : ""}
                 </span>
               </div>

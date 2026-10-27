@@ -77,11 +77,15 @@ export interface NodeState {
   tags?: string[];
 }
 
+/** The kinds VS-API reports for a link. */
+export type PublicLinkType = "ground" | "isl" | "inter_constellation" | "inter_body_relay";
+
 export interface LinkState {
   node_a: string;
   node_b: string;
-  state: string; // "active" | "inactive"
-  link_type: string | null;
+  /** VS-API lists only active links; a link that goes down leaves the list. */
+  state: "active";
+  link_type: PublicLinkType;
   link_reason: string | null;
   latency_ms: number;
   // Each direction runs at its sending end's terminal transmit rate.
@@ -104,8 +108,8 @@ export interface LinkState {
 export interface LinkDecisionTrace {
   node_a: string;
   node_b: string;
-  link_type: string;
-  state: string;
+  link_type: PublicLinkType;
+  state: "active";
   interface_a: string;
   interface_b: string;
   reason: string | null;

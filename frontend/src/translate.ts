@@ -6,22 +6,18 @@
  * src/explain/linkEvents.ts (linkEventLabel). The old REASON_MAP was a parallel, untaxonomized
  * vocabulary that conflicted with the registry — removed so there is one source. */
 
+import type { PublicLinkType } from "./types";
+
 /** VF spec Section 8.4 — link type translation */
-const LINK_TYPE_MAP: Record<string, string> = {
-  intra_plane_isl: "Intra-plane ISL",
-  cross_plane_isl: "Cross-plane ISL",
+const LINK_TYPE_MAP: Record<PublicLinkType, string> = {
   isl: "ISL",
   inter_constellation: "Inter-constellation ISL",
   inter_body_relay: "Inter-body relay",
-  relay: "Relay link",
   ground: "Ground Link",
-  ground_uplink: "Ground Uplink",
-  ground_downlink: "Ground Downlink",
 };
 
-export function translateLinkType(linkType: string | null): string {
-  if (!linkType) return "unknown";
-  return LINK_TYPE_MAP[linkType] ?? linkType;
+export function translateLinkType(linkType: PublicLinkType): string {
+  return LINK_TYPE_MAP[linkType];
 }
 
 /** Format milliseconds as human-readable duration. */

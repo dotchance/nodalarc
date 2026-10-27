@@ -119,7 +119,7 @@ See [VS-API component docs](../components/vs-api.md) for the full schema. Key fi
     {"node_id": "space-sat-p00s00", "node_type": "satellite", "segment_id": "space", "reference_body": "earth", ...}
   ],
   "links": [
-    {"node_a": "space-sat-p00s00", "node_b": "space-sat-p00s01", "link_type": "intra_plane_isl", "latency_ms": 13.0, ...}
+    {"node_a": "space-sat-p00s00", "node_b": "space-sat-p00s01", "link_type": "isl", "latency_ms": 13.0, ...}
   ],
   "recent_events": [
     {"sim_time": "...", "node_id": "ground-gs-hawthorne", "event_type": "link_up", "summary": "..."}

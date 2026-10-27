@@ -2,11 +2,12 @@
 // Licensed under the Apache License, Version 2.0. See LICENSE file.
 /** Network summary — shown when nothing is selected. */
 
-import type { NodeRole, StateSnapshot } from "../types";
-import { isGroundLinkState } from "../networkIdentity";
+import type { NodeRole, PublicLinkType, StateSnapshot } from "../types";
 import { instanceLabel } from "../routing/instances";
+import { translateLinkType } from "../translate";
 
 const ROLES: readonly NodeRole[] = ["router", "host", "forwarding_only"];
+const LINK_KINDS: readonly PublicLinkType[] = ["isl", "inter_constellation", "inter_body_relay", "ground"];
 const ROLE_COUNT_LABELS: Record<NodeRole, string> = {
   router: "Routers",
   host: "Hosts",
@@ -29,15 +30,9 @@ export function NetworkSummary({ snapshot }: NetworkSummaryProps) {
   const gss = snapshot.nodes.filter((n) => n.node_type === "ground_station");
   const activeLinks = snapshot.links.filter((l) => l.state === "active");
 
-  // Link breakdown by authoritative link_type.
-  let intraCount = 0;
-  let crossCount = 0;
-  let groundCount = 0;
-  for (const l of activeLinks) {
-    if (isGroundLinkState(l)) groundCount++;
-    else if (l.link_type === "intra_plane_isl") intraCount++;
-    else crossCount++;
-  }
+  // Link breakdown by the kind VS-API reports.
+  const kindCounts = new Map<PublicLinkType, number>(LINK_KINDS.map((kind) => [kind, 0]));
+  for (const l of activeLinks) kindCounts.set(l.link_type, (kindCounts.get(l.link_type) ?? 0) + 1);
 
   // Roles and routing instances, read from the backend's facts.
   const roleCounts = new Map<NodeRole, number>(ROLES.map((role) => [role, 0]));
@@ -109,18 +104,12 @@ export function NetworkSummary({ snapshot }: NetworkSummaryProps) {
       </div>
 
       <h3>Link Breakdown</h3>
-      <div className="detail-row">
-        <span className="detail-label">Intra-plane ISL</span>
-        <span className="detail-value">{intraCount}</span>
-      </div>
-      <div className="detail-row">
-        <span className="detail-label">Cross-plane ISL</span>
-        <span className="detail-value">{crossCount}</span>
-      </div>
-      <div className="detail-row">
-        <span className="detail-label">Ground</span>
-        <span className="detail-value">{groundCount}</span>
-      </div>
+      {LINK_KINDS.map((kind) => (
+        <div className="detail-row" key={kind}>
+          <span className="detail-label">{translateLinkType(kind)}</span>
+          <span className="detail-value">{kindCounts.get(kind)}</span>
+        </div>
+      ))}
 
       <h3>Routing Instances</h3>
       {[...instances.entries()].map(([domainId, tally]) => (

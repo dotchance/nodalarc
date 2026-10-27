@@ -62,7 +62,7 @@ def summarize_state(state: Mapping[str, Any]) -> str:
         if link_type == "ground":
             ground_links += 1
             continue
-        if link_type in {"isl", "intra_plane_isl", "cross_plane_isl"}:
+        if link_type == "isl":
             segment_a, segment_b = _link_segments(link, node_segment_by_id)
             if segment_a is not None and segment_a == segment_b:
                 isl_by_segment[segment_a] += 1
@@ -78,7 +78,7 @@ def summarize_state(state: Mapping[str, Any]) -> str:
             else:
                 other_links += 1
             continue
-        other_links += 1
+        raise ValueError(f"VS-API sent a link_type this summary does not know: {link_type!r}")
 
     lines: list[str] = []
     lines.append("Constellations:")

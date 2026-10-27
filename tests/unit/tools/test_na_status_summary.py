@@ -6,6 +6,8 @@ from __future__ import annotations
 import importlib.util
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).resolve().parents[3]
 SUMMARY_PATH = ROOT / "scripts" / "na_status_summary.py"
 
@@ -67,21 +69,11 @@ def test_status_summary_groups_nodes_and_isls_by_constellation() -> None:
     assert "Total active: 4" in summary
 
 
-def test_status_summary_keeps_old_internal_isl_names_compatible() -> None:
+def test_status_summary_refuses_a_link_type_vs_api_does_not_send() -> None:
     state = {
-        "nodes": [
-            _sat("leo-sat-0", "leo"),
-            _sat("leo-sat-1", "leo"),
-            _sat("leo-sat-2", "leo"),
-        ],
-        "links": [
-            _link("leo-sat-0", "leo-sat-1", "intra_plane_isl", None),
-            _link("leo-sat-1", "leo-sat-2", "cross_plane_isl", None),
-        ],
+        "nodes": [_sat("leo-sat-0", "leo"), _sat("leo-sat-1", "leo")],
+        "links": [_link("leo-sat-0", "leo-sat-1", "intra_plane_isl", None)],
     }
 
-    summary = na_status_summary.summarize_state(state)
-
-    assert "leo: 3 satellite nodes, 2 ISLs" in summary
-    assert "ISLs: 2" in summary
-    assert "Total active: 2" in summary
+    with pytest.raises(ValueError, match="intra_plane_isl"):
+        na_status_summary.summarize_state(state)

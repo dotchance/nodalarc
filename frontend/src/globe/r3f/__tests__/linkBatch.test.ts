@@ -31,8 +31,8 @@ const getPos = (id: string, t: THREE.Vector3): boolean => {
 function link(
   node_a: string,
   node_b: string,
-  state: string,
-  link_type: LinkState["link_type"] = "intra_plane_isl",
+  state: LinkState["state"],
+  link_type: LinkState["link_type"] = "isl",
 ): LinkState {
   return {
     node_a,
@@ -80,17 +80,12 @@ describe("LinkBatch", () => {
     expect(batch._debugEntry("ground-gs-x", "sat-a")?.segmentCount).toBe(1);
   });
 
-  it("renders an active ISL as finite bowed segments and an inactive link as NaN", () => {
-    batch.update([
-      link("sat-a", "sat-b", "active"),
-      link("sat-a", "ground-gs-x", "inactive", "ground"),
-    ], parent, 0);
+  it("renders an active ISL as finite bowed segments", () => {
+    batch.update([link("sat-a", "sat-b", "active")], parent, 0);
     batch.animate(true, true, 0);
     const buf = batch._debugPositions()!;
     const isl = batch._debugEntry("sat-a", "sat-b")!;
-    const inactive = batch._debugEntry("sat-a", "ground-gs-x")!;
     expect(segIsFinite(buf, isl.bufferIndex, 16)).toBe(true);
-    expect(segIsNaN(buf, inactive.bufferIndex, 1)).toBe(true);
   });
 
   it("hides ISL links when showIslLinks is false but keeps ground links", () => {

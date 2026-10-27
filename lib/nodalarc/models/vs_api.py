@@ -109,6 +109,11 @@ class NodeState(BaseModel):
     tags: tuple[str, ...] = ()
 
 
+# The kinds VS-API reports for a link: OME and the Scheduler carry "isl" and
+# "ground"; VS-API refines an ISL by its resolved rule (see _derive_link_type).
+PublicLinkType = Literal["ground", "isl", "inter_constellation", "inter_body_relay"]
+
+
 class LinkState(BaseModel):
     """State of a single link between two nodes."""
 
@@ -116,8 +121,9 @@ class LinkState(BaseModel):
 
     node_a: str
     node_b: str
-    state: str  # "active" or "inactive"
-    link_type: str | None  # intra_plane_isl, cross_plane_isl, ground_uplink, ground_downlink
+    # VS-API lists only active links; a link that goes down leaves the list.
+    state: Literal["active"]
+    link_type: PublicLinkType
     link_reason: str | None
     latency_ms: float
     # Each end's own terminal rates: node_a's terminal sends at transmit_mbps_a
@@ -147,8 +153,8 @@ class LinkDecisionTrace(BaseModel):
 
     node_a: str
     node_b: str
-    link_type: str
-    state: str
+    link_type: PublicLinkType
+    state: Literal["active"]
     interface_a: str
     interface_b: str
     reason: str | None = None

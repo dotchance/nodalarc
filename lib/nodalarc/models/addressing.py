@@ -4,7 +4,10 @@
 
 from __future__ import annotations
 
-from typing import NamedTuple
+from typing import Literal, NamedTuple
+
+# OME's plane relation for an ISL neighbor; it never leaves OME.
+IslPlaneRelation = Literal["intra_plane_isl", "cross_plane_isl"]
 
 
 class NeighborAssignment(NamedTuple):
@@ -12,7 +15,7 @@ class NeighborAssignment(NamedTuple):
 
     interface: str  # "isl0", "isl1", etc.
     peer_node_id: str  # "sat-P03S08"
-    link_type: str  # "intra_plane_isl", "cross_plane_isl", "ground_uplink", "ground_downlink"
+    link_type: IslPlaneRelation
     priority: int  # 0=intra-fwd, 1=intra-aft, 2=cross-right, 3=cross-left
 
 

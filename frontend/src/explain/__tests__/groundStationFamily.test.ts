@@ -4,12 +4,12 @@ import { describe, it, expect } from "vitest";
 import { groundStationFamily } from "../groundStationFamily";
 import type { ActuationNotice, LinkState } from "../../types";
 
-function link(a: string, b: string, state = "active"): LinkState {
+function link(a: string, b: string): LinkState {
   return {
     node_a: a,
     node_b: b,
-    state,
-    link_type: null,
+    state: "active",
+    link_type: "ground",
     link_reason: null,
     latency_ms: 0,
     transmit_mbps_a: 0,
@@ -57,11 +57,6 @@ describe("groundStationFamily (default-state snapshot approximation)", () => {
     expect(groundStationFamily("gs-1", [link("sat-2", "gs-1")], []).family).toBe("connected");
   });
 
-  it("ignores inactive links when deciding connected", () => {
-    expect(groundStationFamily("gs-1", [link("gs-1", "sat-1", "inactive")], []).family).toBe(
-      "expected_no_link",
-    );
-  });
 
   it("is expected_no_link when there is no link and no notice — never eligible_unselected from the snapshot", () => {
     const r = groundStationFamily("gs-1", [link("sat-1", "sat-2")], []);

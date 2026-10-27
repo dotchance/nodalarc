@@ -36,6 +36,7 @@ from nodalarc.models.builder_api import (
     BuilderVerdict,
     JsonDocument,
 )
+from nodalarc.models.builder_controls_api import BuilderControlTree
 from nodalarc.models.builder_visual_api import (
     BuilderVisualAddBoundaryCommand,
     BuilderVisualAddGeneratedSpaceCommand,
@@ -1528,7 +1529,6 @@ def _boundary_document_identity(boundary: JsonDocument) -> tuple[str, str | None
 def _workspace_from_applied_session(
     session: SegmentSessionConfig,
     *,
-    revision: int,
     proposals: tuple[BuilderProposedCatalogDocument, ...] = (),
     catalog_facts: Mapping[CatalogRef, _CatalogProjectionFact] | None = None,
     prior_workspace: BuilderVisualWorkspace | None = None,
@@ -1644,11 +1644,6 @@ def _workspace_from_applied_session(
         )
         if (projected := _routing_boundary_projection(boundary, index=index)) is not None
     )
-    control_tree = build_session_control_tree(
-        session,
-        projection_revision=revision,
-        specialized_fields=BUILDER_VISUAL_SPECIALIZED_FIELDS,
-    ).tree
     return BuilderVisualWorkspace(
         session_name=session.session.name,
         display_name=session.session.display_name,
@@ -1665,9 +1660,17 @@ def _workspace_from_applied_session(
         start_time=session.time.start_time,
         step_seconds=session.time.step_seconds,
         compression=session.time.compression,
-        projection_revision=revision,
-        control_tree=control_tree,
     )
+
+
+def _applied_control_tree(session: SegmentSessionConfig, revision: int) -> BuilderControlTree:
+    """The control tree of an applied session, bound to its revision."""
+
+    return build_session_control_tree(
+        session,
+        projection_revision=revision,
+        specialized_fields=BUILDER_VISUAL_SPECIALIZED_FIELDS,
+    ).tree
 
 
 def _assemble_authoring_workspace(
@@ -2096,17 +2099,6 @@ def _overlay_applied_workspace(
     candidate, proposals, issues = _assemble_authoring_workspace(draft)
     session = deepcopy(draft.applied_session)
 
-    if workspace.control_tree is not None and workspace.control_tree != baseline.control_tree:
-        issues = (
-            *issues,
-            _issue(
-                "builder.draft.control_tree_read_only",
-                "Backend-derived controls must match the applied session revision",
-                target_ref=draft.target_ref,
-                draft_path="authoring_workspace.control_tree",
-            ),
-        )
-
     session_meta = cast(JsonDocument, session["session"])
     candidate_meta = cast(JsonDocument, candidate["session"])
     for workspace_field, canonical_field in (
@@ -2464,7 +2456,6 @@ def _assemble_structured(
     applied_model = SegmentSessionConfig.model_validate(draft.applied_session)
     baseline = _workspace_from_applied_session(
         applied_model,
-        revision=draft.applied_revision,
         proposals=draft.catalog_documents,
         prior_workspace=draft.applied_workspace,
     )
@@ -2686,10 +2677,9 @@ def _apply_workspace_revision(
                 "projection_status": projection_status,
                 "reserved_authoring_ids": tuple(reserved_authoring_ids),
                 "session_yaml": yaml.safe_dump(session, sort_keys=False),
-                "authoring_workspace": workspace.model_copy(
-                    update={"projection_revision": None, "control_tree": None}
-                ),
+                "authoring_workspace": workspace,
                 "catalog_documents": proposals,
+                "control_tree": None,
             }
         )
     else:
@@ -2699,7 +2689,6 @@ def _apply_workspace_revision(
         )
         applied_workspace = _workspace_from_applied_session(
             applied_model,
-            revision=next_revision,
             proposals=proposals,
             prior_workspace=workspace,
         )
@@ -2714,6 +2703,7 @@ def _apply_workspace_revision(
                 "applied_workspace": applied_workspace,
                 "applied_revision": next_revision,
                 "applied_session": applied_session,
+                "control_tree": _applied_control_tree(applied_model, next_revision),
                 "catalog_documents": proposals,
             }
         )
@@ -2891,7 +2881,6 @@ class BuilderVisualDraftService:
         catalog_facts = _stored_catalog_facts(snapshot, source.content)
         workspace = _workspace_from_applied_session(
             applied_model,
-            revision=0,
             catalog_facts=catalog_facts,
         )
         return BuilderVisualDraftEnvelope(
@@ -2910,6 +2899,7 @@ class BuilderVisualDraftService:
             applied_workspace=workspace,
             applied_revision=0,
             applied_session=applied_session,
+            control_tree=_applied_control_tree(applied_model, 0),
         )
 
     def apply_yaml(
@@ -2945,9 +2935,7 @@ class BuilderVisualDraftService:
                 updates.update(
                     {
                         "projection_status": "pending_authoring",
-                        "authoring_workspace": draft.authoring_workspace.model_copy(
-                            update={"projection_revision": None, "control_tree": None}
-                        ),
+                        "control_tree": None,
                     }
                 )
             refused = draft.model_copy(update=updates)
@@ -2970,7 +2958,6 @@ class BuilderVisualDraftService:
         prior_workspace = draft.applied_workspace or draft.authoring_workspace
         workspace = _workspace_from_applied_session(
             applied_model,
-            revision=next_revision,
             proposals=reachable_proposals,
             catalog_facts=catalog_facts,
             prior_workspace=prior_workspace,
@@ -2991,6 +2978,7 @@ class BuilderVisualDraftService:
                 "applied_workspace": workspace,
                 "applied_revision": next_revision,
                 "applied_session": applied_session,
+                "control_tree": _applied_control_tree(applied_model, next_revision),
             }
         )
         return BuilderVisualDraftApplyYamlResult(
@@ -3071,7 +3059,6 @@ class BuilderVisualDraftService:
         next_revision = draft.draft_revision + 1
         workspace = _workspace_from_applied_session(
             candidate_model,
-            revision=next_revision,
             proposals=reachable_proposals,
             catalog_facts=catalog_facts,
             prior_workspace=draft.applied_workspace,
@@ -3093,6 +3080,7 @@ class BuilderVisualDraftService:
                 "applied_workspace": workspace,
                 "applied_revision": next_revision,
                 "applied_session": candidate_session,
+                "control_tree": _applied_control_tree(candidate_model, next_revision),
             }
         )
         return _compile_visual_application(
@@ -3278,7 +3266,6 @@ class BuilderVisualDraftService:
         next_revision = draft.draft_revision + 1
         applied_workspace = _workspace_from_applied_session(
             applied_model,
-            revision=next_revision,
             proposals=proposals,
             prior_workspace=draft.authoring_workspace,
         )
@@ -3295,6 +3282,7 @@ class BuilderVisualDraftService:
                 "applied_workspace": applied_workspace,
                 "applied_revision": next_revision,
                 "applied_session": applied_session,
+                "control_tree": _applied_control_tree(applied_model, next_revision),
             }
         )
         return _compile_visual_application(
@@ -4723,7 +4711,6 @@ class BuilderVisualDraftService:
         )
         applied_workspace = _workspace_from_applied_session(
             applied_model,
-            revision=next_revision,
             proposals=reachable_proposals,
             prior_workspace=workspace,
         )
@@ -4737,6 +4724,7 @@ class BuilderVisualDraftService:
                 "applied_workspace": applied_workspace,
                 "applied_revision": next_revision,
                 "applied_session": applied_session,
+                "control_tree": _applied_control_tree(applied_model, next_revision),
                 "catalog_documents": reachable_proposals,
             }
         )
@@ -4762,7 +4750,14 @@ class BuilderVisualDraftService:
         visual_draft = request.draft
         _assert_visual_draft_ownership(visual_draft)
         snapshot: CatalogReadSnapshot = self._context.repository.snapshot(self._context.scope)
-        if visual_draft.authoring_workspace is not None:
+        if request.workspace is not None:
+            # The page's preview: the workspace is assembled over the draft the
+            # way the accepting apply assembles it, and nothing is accepted.
+            session, proposals, assembly_issues = _assemble_structured(
+                visual_draft.model_copy(update={"authoring_workspace": request.workspace}),
+                allow_workspace_overlay=True,
+            )
+        elif visual_draft.authoring_workspace is not None:
             session, proposals, assembly_issues = _assemble_structured(visual_draft)
         else:
             assert visual_draft.projection_status == "no_valid_projection"

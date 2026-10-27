@@ -227,7 +227,7 @@ def test_visual_control_mutation_route_is_revision_fenced_and_typed(
         "/api/v1/builder/draft/open",
         json={"source_ref": "nodalarc:sessions/earth-leo-simple.yaml"},
     ).json()
-    controls = tuple(_walk_controls(opened["applied_workspace"]["control_tree"]["root"]))
+    controls = tuple(_walk_controls(opened["control_tree"]["root"]))
     display_name = next(
         control
         for control in controls

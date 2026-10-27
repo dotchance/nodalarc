@@ -281,6 +281,19 @@ export function useEditorWindows({
       };
     });
   };
+  /** A command accepted this window's object as `value`. When the window's
+   *  working copy is still `startedFrom`, the window shows the accepted object
+   *  with nothing pending (as after Apply); a copy edited meanwhile is kept. */
+  const settleBuffer = (key: string, value: unknown, startedFrom: EditorBuffer | undefined) => {
+    markBufferMutation();
+    setBuffers((prev) => {
+      if (!(key in prev) || prev[key] !== startedFrom) return prev;
+      return {
+        ...prev,
+        [key]: { opened: structuredClone(value), draft: structuredClone(value), dirty: false },
+      };
+    });
+  };
   /** The session as the canvas should show it: the applied workspace with
    *  every dirty window's working copy substituted in. Editing previews live
    *  (drag a slider, the sats move); the workspace itself still only changes
@@ -407,6 +420,7 @@ export function useEditorWindows({
     staleKeys,
     staleList,
     loadCurrentValues,
+    settleBuffer,
     dropAppliedBuffers,
   };
 }

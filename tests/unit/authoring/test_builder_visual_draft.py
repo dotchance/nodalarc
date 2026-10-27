@@ -233,7 +233,7 @@ def test_backend_creates_an_incomplete_authoring_visual_draft(
     assert draft.authoring_workspace.session_name == "my_visual_session"
     assert draft.authoring_workspace.display_name == "My visual session"
     assert draft.authoring_workspace.start_time == "2026-07-10T12:34:00Z"
-    assert draft.authoring_workspace.projection_revision is None
+    assert draft.control_tree is None
     assert draft.applied_workspace is None
     assert draft.applied_revision is None
     assert draft.applied_session is None
@@ -1057,8 +1057,9 @@ def test_backend_repairs_nullable_space_population_one_field_at_a_time(
             "draft_revision": pending_revision,
             "projection_status": "pending_authoring",
             "authoring_workspace": created.authoring_workspace.model_copy(
-                update={"space": (incomplete_space,), "projection_revision": None}
+                update={"space": (incomplete_space,)}
             ),
+            "control_tree": None,
         }
     )
     assert draft.projection_status == "pending_authoring"
@@ -1107,9 +1108,8 @@ def test_backend_repairs_nullable_space_population_one_field_at_a_time(
         update={
             "draft_revision": pending_revision,
             "projection_status": "pending_authoring",
-            "authoring_workspace": draft.authoring_workspace.model_copy(
-                update={"space": (reset,), "projection_revision": None}
-            ),
+            "authoring_workspace": draft.authoring_workspace.model_copy(update={"space": (reset,)}),
+            "control_tree": None,
         }
     )
     assert draft.projection_status == "pending_authoring"
@@ -1157,9 +1157,8 @@ def test_backend_reports_direct_missing_phase_edit_as_pending_authoring(
         update={
             "draft_revision": pending_revision,
             "projection_status": "pending_authoring",
-            "authoring_workspace": draft.authoring_workspace.model_copy(
-                update={"space": (space,), "projection_revision": None}
-            ),
+            "authoring_workspace": draft.authoring_workspace.model_copy(update={"space": (space,)}),
+            "control_tree": None,
         }
     )
     assert draft.projection_status == "pending_authoring"
@@ -1307,7 +1306,8 @@ def test_pending_visual_labels_do_not_redefine_backend_issued_identifiers(
         update={
             "draft_revision": draft.draft_revision + 1,
             "projection_status": "pending_authoring",
-            "authoring_workspace": workspace.model_copy(update={"projection_revision": None}),
+            "authoring_workspace": workspace,
+            "control_tree": None,
         }
     )
     assert pending.applied_revision == draft.applied_revision

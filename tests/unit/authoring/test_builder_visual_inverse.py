@@ -17,14 +17,18 @@ from nodalarc.models.builder_visual_api import (
     BuilderVisualDraftCommandRequest,
     BuilderVisualDraftCompileRequest,
     BuilderVisualDraftCreateRequest,
+    BuilderVisualDraftEnvelope,
     BuilderVisualDraftOpenRequest,
+    BuilderVisualWorkspace,
 )
 from nodalarc.models.segment_session import SegmentSessionConfig
+from pydantic import ValidationError
 from vs_api.builder_compiler import canonicalize_persisted_configuration
 from vs_api.builder_session_service import save_builder_session
 from vs_api.builder_visual_draft import (
     BuilderVisualDraftCommandError,
     BuilderVisualDraftService,
+    _applied_control_tree,
     _assemble_structured,
     _is_builder_owned_component_ref,
     _workspace_from_applied_session,
@@ -87,9 +91,8 @@ def test_open_projects_and_no_edit_compiles_every_shipped_session_canonically(
     assert opened.applied_revision == opened.draft_revision == 0
     assert opened.applied_workspace == opened.authoring_workspace
     assert opened.applied_workspace is not None
-    assert opened.applied_workspace.projection_revision == opened.applied_revision
-    assert opened.applied_workspace.control_tree is not None
-    assert opened.applied_workspace.control_tree.projection_revision == opened.applied_revision
+    assert opened.control_tree is not None
+    assert opened.control_tree.projection_revision == opened.applied_revision
 
     compiled = service.compile(
         BuilderVisualDraftCompileRequest(draft=opened),
@@ -101,6 +104,43 @@ def test_open_projects_and_no_edit_compiles_every_shipped_session_canonically(
 
     assert compiled.assembly_issues == ()
     assert compiled.compile_result.canonical_session_json == expected.canonical_json
+
+
+def test_a_workspace_preview_compiles_the_edit_and_accepts_nothing(
+    service: BuilderVisualDraftService,
+) -> None:
+    opened = service.open(
+        BuilderVisualDraftOpenRequest(source_ref="nodalarc:sessions/earth-leo-simple.yaml")
+    )
+    assert opened.authoring_workspace is not None
+    edited = opened.authoring_workspace.model_copy(
+        update={"display_name": "Previewed name", "max_pairs_per_rule": 600}
+    )
+
+    preview = service.compile(
+        BuilderVisualDraftCompileRequest(draft=opened, workspace=edited),
+        available_node_count=1_000_000,
+        preview_factory=preview_from_resolution,
+    )
+
+    compiled_session = preview.compile_result.canonical_session_json
+    assert compiled_session is not None
+    assert compiled_session["session"]["display_name"] == "Previewed name"
+    assert preview.compile_result.resolved_preview is not None
+    assert preview.visual_draft == opened
+
+
+def test_a_workspace_preview_needs_a_graphical_projection() -> None:
+    unprojected = BuilderVisualDraftEnvelope(
+        draft_revision=2,
+        projection_status="no_valid_projection",
+        target_ref="user:sessions/unprojected.yaml",
+        session_name_is_placeholder=False,
+        reserved_authoring_ids=(),
+        session_yaml="session: [",
+    )
+    with pytest.raises(ValidationError, match="graphical projection"):
+        BuilderVisualDraftCompileRequest(draft=unprojected, workspace=BuilderVisualWorkspace())
 
 
 def test_overlay_changes_owned_metadata_without_touching_rich_unprojected_rule(
@@ -117,9 +157,8 @@ def test_overlay_changes_owned_metadata_without_touching_rich_unprojected_rule(
     constraints["max_links_per_node"] = {"leo": 4, "ground": 1}
     constraints["require_mutual_visibility"] = True
     model = SegmentSessionConfig.model_validate(rich)
-    workspace = _workspace_from_applied_session(model, revision=0)
+    workspace = _workspace_from_applied_session(model)
     assert all(rule.rule_id != rich_rule["id"] for rule in workspace.links)
-    assert workspace.control_tree is not None
     draft = opened.model_copy(
         update={
             "applied_session": rich,
@@ -230,16 +269,8 @@ def test_yaml_apply_refusal_retains_last_valid_projection_and_source_location(
     assert refused.draft.projection_status == "pending_authoring"
     assert refused.draft.applied_workspace == opened.applied_workspace
     assert refused.draft.applied_session == opened.applied_session
-    assert refused.draft.authoring_workspace is not None
-    assert (
-        refused.draft.authoring_workspace.model_copy(
-            update={
-                "projection_revision": opened.applied_revision,
-                "control_tree": opened.applied_workspace.control_tree,
-            }
-        )
-        == opened.applied_workspace
-    )
+    assert refused.draft.authoring_workspace == opened.applied_workspace
+    assert refused.draft.control_tree is None
     assert refused.issues[0].code == "builder.draft.yaml.invalid_syntax"
     assert refused.issues[0].source_line == 3
     assert refused.issues[0].source_column is not None
@@ -452,7 +483,7 @@ def test_workspace_apply_retains_last_applied_facts_when_graph_is_incomplete(
     assert result.visual_draft.applied_revision == opened.applied_revision
     assert result.visual_draft.applied_session == opened.applied_session
     assert result.visual_draft.applied_workspace == opened.applied_workspace
-    assert result.visual_draft.authoring_workspace.projection_revision is None
+    assert result.visual_draft.control_tree is None
     assert result.compile_result.save_verdict.allowed is False
     assert any(
         issue.code == "builder.draft.space_source_ref_required" for issue in result.assembly_issues
@@ -563,7 +594,6 @@ def test_authored_ground_scheduling_command_preserves_unowned_ipv6_prefixes(
     model = SegmentSessionConfig.model_validate(rich)
     workspace = _workspace_from_applied_session(
         model,
-        revision=minted.applied_revision,
         proposals=minted.catalog_documents,
     )
     enriched = minted.model_copy(
@@ -571,6 +601,7 @@ def test_authored_ground_scheduling_command_preserves_unowned_ipv6_prefixes(
             "applied_session": rich,
             "applied_workspace": workspace,
             "authoring_workspace": workspace,
+            "control_tree": _applied_control_tree(model, minted.applied_revision),
         }
     )
 

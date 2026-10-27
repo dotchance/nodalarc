@@ -7,7 +7,6 @@ import { newWorkspace } from "./fixtures/workspaceFixtures";
 
 function envelope(): BuilderVisualDraftEnvelope {
   const applied = newWorkspace("projection");
-  applied.projection_revision = 4;
   const authoring = structuredClone(applied);
   authoring.description = "authoring projection";
   return {

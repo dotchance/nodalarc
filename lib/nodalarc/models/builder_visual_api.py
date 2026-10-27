@@ -330,19 +330,6 @@ class BuilderVisualWorkspace(_BuilderVisualModel):
     start_time: str = ""
     step_seconds: float | None = 1.0
     compression: float | None = 1.0
-    projection_revision: int | None = Field(default=None, ge=0)
-    control_tree: BuilderControlTree | None = None
-
-    @model_validator(mode="after")
-    def _control_tree_matches_projection_revision(self) -> BuilderVisualWorkspace:
-        if self.projection_revision is None:
-            if self.control_tree is not None:
-                raise ValueError("unapplied workspaces must not claim a control tree")
-        elif self.control_tree is None:
-            raise ValueError("applied workspaces require a backend-derived control tree")
-        elif self.control_tree.projection_revision != self.projection_revision:
-            raise ValueError("control tree revision must match the workspace projection")
-        return self
 
 
 class BuilderVisualDraftEnvelope(_BuilderVisualModel):
@@ -361,6 +348,7 @@ class BuilderVisualDraftEnvelope(_BuilderVisualModel):
     applied_workspace: BuilderVisualWorkspace | None = None
     applied_revision: int | None = Field(default=None, ge=0)
     applied_session: JsonDocument | None = None
+    control_tree: BuilderControlTree | None = None
 
     @field_validator("applied_session")
     @classmethod
@@ -405,8 +393,10 @@ class BuilderVisualDraftEnvelope(_BuilderVisualModel):
                 raise ValueError(
                     "fully applied drafts require matching current and applied revisions"
                 )
-            if self.applied_workspace.projection_revision != self.applied_revision:
-                raise ValueError("applied workspace must be stamped with applied_revision")
+            if self.control_tree is None:
+                raise ValueError("applied drafts require the backend-derived control tree")
+            if self.control_tree.projection_revision != self.applied_revision:
+                raise ValueError("the control tree must belong to applied_revision")
             if self.authoring_workspace != self.applied_workspace:
                 raise ValueError("authoring workspace must equal the last applied workspace")
         elif self.projection_status == "pending_authoring":
@@ -415,17 +405,11 @@ class BuilderVisualDraftEnvelope(_BuilderVisualModel):
             assert self.applied_workspace is not None and self.applied_revision is not None
             if self.applied_revision > self.draft_revision:
                 raise ValueError("applied revision cannot be newer than current draft revision")
-            if self.applied_workspace.projection_revision != self.applied_revision:
-                raise ValueError("last-applied workspace must be stamped with applied_revision")
-            if self.authoring_workspace.projection_revision is not None:
-                raise ValueError("pending authoring workspace must not claim an applied revision")
         elif self.projection_status == "incomplete_authoring":
             if any(item is not None for item in applied_facts):
                 raise ValueError("incomplete authoring drafts must not claim applied facts")
             if self.authoring_workspace is None:
                 raise ValueError("incomplete authoring drafts require an authoring workspace")
-            if self.authoring_workspace.projection_revision is not None:
-                raise ValueError("incomplete authoring workspaces must not claim a revision")
         elif any(
             item is not None
             for item in (
@@ -436,6 +420,8 @@ class BuilderVisualDraftEnvelope(_BuilderVisualModel):
             )
         ):
             raise ValueError("no-valid-projection drafts must not carry graphical facts")
+        if self.projection_status != "applied" and self.control_tree is not None:
+            raise ValueError("only a fully applied draft carries a control tree")
         if len({item.ref for item in self.catalog_documents}) != len(self.catalog_documents):
             raise ValueError("visual draft catalog documents must target unique refs")
         if len(set(self.reserved_authoring_ids)) != len(self.reserved_authoring_ids):
@@ -529,9 +515,20 @@ class BuilderVisualControlMutationRequest(_BuilderVisualModel):
 
 
 class BuilderVisualDraftCompileRequest(_BuilderVisualModel):
-    """Compile a complete visual draft through backend assembly and grammar authorities."""
+    """Compile a complete visual draft through backend assembly and grammar authorities.
+
+    With a workspace, the compile assembles that workspace over the draft and
+    accepts nothing: the draft and its revision stay as they were.
+    """
 
     draft: BuilderVisualDraftEnvelope
+    workspace: BuilderVisualWorkspace | None = None
+
+    @model_validator(mode="after")
+    def _workspace_needs_a_projection(self) -> BuilderVisualDraftCompileRequest:
+        if self.workspace is not None and self.draft.authoring_workspace is None:
+            raise ValueError("a workspace compiles only over a draft with a graphical projection")
+        return self
 
 
 class BuilderVisualAddGeneratedSpaceCommand(_BuilderVisualModel):

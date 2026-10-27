@@ -87,7 +87,12 @@ import {
   GraphicalControlTreeEditor,
   type BuilderControlMutation,
 } from "./GraphicalControlTreeEditor";
-import { workspaceForSave, useWorkspace } from "./useWorkspace";
+import {
+  appliedObjectForKey,
+  overlayBuffers,
+  workspaceForSave,
+  useWorkspace,
+} from "./useWorkspace";
 import {
   useEditorWindows,
   targetKey,
@@ -495,6 +500,8 @@ export function BuilderView({
     applyYamlBuffer,
     useCanonicalYaml,
     applyWorkspace,
+    compilePreview,
+    showAcceptedCompile,
     customizeChain,
     runVisualCommand,
     mutateControls,
@@ -619,6 +626,7 @@ export function BuilderView({
     staleKeys,
     staleList,
     loadCurrentValues,
+    settleBuffer,
     dropAppliedBuffers,
   } = useEditorWindows({
     workspace,
@@ -632,14 +640,38 @@ export function BuilderView({
   const [saveState, setSaveState] = useState<SaveState>({ kind: "idle" });
   // Whether the next deploy records the session run's history.
   const [recordHistory, setRecordHistory] = useState(false);
+  // The twin as the last accepted result seeded it. An accepted result
+  // re-seeds the twin when the twin is still what its request started from, or
+  // still this seed; a twin the user changed meanwhile is kept, and the preview
+  // effect then applies it.
+  const seededTwin = useRef<Workspace | null>(null);
+  const seedTwin = useCallback(
+    (draft: BuilderVisualDraftEnvelope, reason?: string) => {
+      const next = workspaceFromVisualDraft(draft);
+      seededTwin.current = next;
+      if (reason) commitWorkspace(next, reason);
+      else openWorkspace(next);
+    },
+    [commitWorkspace, openWorkspace],
+  );
+  const adoptAccepted = (
+    draft: BuilderVisualDraftEnvelope,
+    startedFrom: Workspace | null,
+    reason?: string,
+  ) => {
+    const twin = currentWorkspace();
+    if (twin === startedFrom || twin === seededTwin.current) seedTwin(draft, reason);
+  };
+  // A twin the backend refused is not sent again until the user changes it.
+  const refusedTwin = useRef<Workspace | null>(null);
   const adoptAppliedYaml = useCallback(
     (result: BuilderVisualDraftApplyYamlResult) => {
       if (!result.applied) return result;
-      openWorkspace(workspaceFromVisualDraft(result.draft));
+      seedTwin(result.draft);
       setSaveState({ kind: "idle" });
       return result;
     },
-    [openWorkspace],
+    [seedTwin],
   );
   const applySessionYaml = useCallback(
     async (generation?: number) => adoptAppliedYaml(await applyYamlBuffer(generation)),
@@ -687,7 +719,7 @@ export function BuilderView({
       void createDraft({}).then(
         (draft) => {
           markClean(draft);
-          openWorkspace(workspaceFromVisualDraft(draft));
+          seedTwin(draft);
         },
         (cause) => setDraftError(cause instanceof Error ? cause.message : String(cause)),
       );
@@ -699,7 +731,7 @@ export function BuilderView({
         void createDraft({})
           .then((draft) => {
             markClean(draft);
-            openWorkspace(workspaceFromVisualDraft(draft));
+            seedTwin(draft);
             create();
           })
           .catch((cause) =>
@@ -714,10 +746,11 @@ export function BuilderView({
   /** Inline wall text for one open editor window (null = not this window's). */
   const wallFor = (target: EditorTarget): string | null =>
     wall && targetKey(target) === wall.key ? (resolveError?.error ?? null) : null;
-  // The edit-to-compile loop submits applied state plus
-  // dirty working copies so the canvas moves while you edit; Apply/Cancel
-  // land here too (buffers change) and re-resolve the applied truth. The
-  // library revision is a dependency on purpose: a user-catalog mutation
+  // The edit-to-compile loop. A twin that moved (OK, Apply, undo) is applied
+  // as the next accepted revision, and the twin is re-seeded from the result
+  // unless it moved again meanwhile. Open windows' unapplied edits are only
+  // previewed: the backend compiles them over the draft and accepts nothing.
+  // The library revision is a dependency on purpose: a user-catalog mutation
   // changes its dependency closure, so both settled digests must recompile.
   const libraryRevision = useLibraryRevision();
   // A New session the backend refuses surfaces here; the current workspace stands.
@@ -732,25 +765,43 @@ export function BuilderView({
       0;
   const yamlBlocksGui = yamlBlocksGraphicalEditing(visualDraft !== null, yamlBuffer);
   useEffect(() => {
-    if (saveState.kind === "saving" || !workspace || !visualDraft || yamlBlocksGui) return;
-    const preview = previewWorkspace();
-    if (!preview) return;
-    const projected = visualDraft.authoring_workspace ?? visualDraft.applied_workspace;
-    if (sameWorkspace(preview, projected as Workspace | null)) return;
-    const bufferRevision = currentBufferMutationRevision();
+    if (
+      saveState.kind === "saving" ||
+      writer !== null ||
+      !workspace ||
+      !visualDraft ||
+      yamlBlocksGui
+    ) {
+      return;
+    }
+    const projected = (visualDraft.authoring_workspace ??
+      visualDraft.applied_workspace) as Workspace | null;
     const appliedWorkspace = currentWorkspace();
+    if (!sameWorkspace(workspace, projected)) {
+      if (workspace === refusedTwin.current) return;
+      const timer = setTimeout(() => {
+        void applyWorkspace(workspace)
+          .then((result) => adoptAccepted(result.visual_draft, appliedWorkspace))
+          .catch(() => {
+            // applyWorkspace put the refusal on screen.
+            refusedTwin.current = workspace;
+          });
+      }, 300);
+      return () => clearTimeout(timer);
+    }
+    const preview = previewWorkspace();
+    if (!preview || sameWorkspace(preview, projected)) {
+      showAcceptedCompile();
+      return;
+    }
+    const bufferRevision = currentBufferMutationRevision();
     const timer = setTimeout(() => {
-      void applyWorkspace(preview)
-        .then((result) => {
-          if (
-            currentBufferMutationRevision() === bufferRevision &&
-            currentWorkspace() === appliedWorkspace &&
-            dirtyWindows === 0
-          ) {
-            openWorkspace(workspaceFromVisualDraft(result.visual_draft));
-          }
-        })
-        .catch(() => undefined);
+      void compilePreview(
+        preview,
+        () =>
+          currentBufferMutationRevision() === bufferRevision &&
+          currentWorkspace() === appliedWorkspace,
+      );
     }, 300);
     return () => clearTimeout(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -761,6 +812,7 @@ export function BuilderView({
     visualDraft,
     yamlBlocksGui,
     saveState.kind,
+    writer,
   ]);
 
   useEffect(() => {
@@ -966,7 +1018,7 @@ export function BuilderView({
         dropAppliedBuffers(appliedBuffers);
       }
       markClean(saved.reopenedDraft);
-      openWorkspace(workspaceFromVisualDraft(saved.reopenedDraft));
+      seedTwin(saved.reopenedDraft);
       setSaveState({
         kind: "saved",
         name: next.session_name,
@@ -990,7 +1042,7 @@ export function BuilderView({
           captureIsCurrent(saveCapture)
         ) {
           adoptCommittedRetarget(preparedRetargetForSave, { ref: committedRef });
-          openWorkspace(workspaceFromVisualDraft(preparedRetargetForSave.visual_draft));
+          seedTwin(preparedRetargetForSave.visual_draft);
         }
         setSaveState({
           kind: "save-committed-unverified",
@@ -1065,11 +1117,13 @@ export function BuilderView({
     }));
   };
 
+  /** Run one command over `sourceWorkspace`; the backend accepts it as the
+   *  next revision, and the twin is re-seeded from it unless the user changed
+   *  the twin since `startedFrom`. */
   const executeVisualCommand = async (
     command: BuilderVisualDraftCommandRequest["command"],
     sourceWorkspace: Workspace,
-    appliedWorkspace: Workspace,
-    bufferRevision?: number,
+    startedFrom: Workspace,
   ): Promise<BuilderVisualDraftCommandResult> => {
     if (visualCommandInFlight.current) {
       throw new Error("another visual command is still being applied");
@@ -1081,19 +1135,32 @@ export function BuilderView({
         await applyWorkspace(sourceWorkspace);
       }
       const result = await runVisualCommand(command);
-      if (currentWorkspace() !== appliedWorkspace) {
-        throw new Error("the session changed while the visual command was running; try again");
-      }
-      if (
-        bufferRevision !== undefined &&
-        currentBufferMutationRevision() !== bufferRevision
-      ) {
-        throw new Error("an editor changed while the visual command was running; try again");
-      }
+      adoptAccepted(result.draft, startedFrom, `backend visual command: ${result.operation}`);
       return result;
     } finally {
       visualCommandInFlight.current = false;
     }
+  };
+
+  /** A command from inside an editor window. It is evaluated over the session
+   *  with this window's pending edit applied (other windows' edits stay
+   *  pending), it is accepted as the next revision, and the window then shows
+   *  the accepted object with nothing pending. */
+  const runWindowCommand = async (
+    key: string,
+    command: BuilderVisualDraftCommandRequest["command"],
+  ): Promise<BuilderVisualDraftCommandResult> => {
+    const startedFrom = currentWorkspace();
+    if (!startedFrom) throw new Error("there is no structured workspace to edit");
+    const own = buffers[key];
+    const sourceWorkspace = own ? overlayBuffers(startedFrom, { [key]: own }) : startedFrom;
+    const result = await executeVisualCommand(command, sourceWorkspace, startedFrom);
+    if (currentWorkspace() === seededTwin.current) {
+      const accepted = appliedObjectForKey(workspaceFromVisualDraft(result.draft), key);
+      if (accepted === null) throw new Error(`VS-API returned no object for ${key}`);
+      settleBuffer(key, accepted, own);
+    }
+    return result;
   };
 
   const applyWorkspaceCommand = async (
@@ -1102,10 +1169,6 @@ export function BuilderView({
     const applied = currentWorkspace();
     if (!applied) throw new Error("there is no structured workspace to edit");
     const result = await executeVisualCommand(command, applied, applied);
-    commitWorkspace(
-      workspaceFromVisualDraft(result.draft),
-      `backend visual command: ${result.operation}`,
-    );
     rememberSchedulingSelection(command, result);
     return result;
   };
@@ -1433,23 +1496,7 @@ export function BuilderView({
         const applySpaceEditorCommand = async (
           command: BuilderVisualDraftCommandRequest["command"],
         ) => {
-          const appliedWorkspace = currentWorkspace();
-          const sourceWorkspace = previewWorkspace();
-          if (!appliedWorkspace || !sourceWorkspace) {
-            throw new Error("there is no structured workspace to edit");
-          }
-          const bufferRevision = currentBufferMutationRevision();
-          const result = await executeVisualCommand(
-            command,
-            sourceWorkspace,
-            appliedWorkspace,
-            bufferRevision,
-          );
-          const updated = workspaceFromVisualDraft(result.draft).space.find(
-            (candidate) => candidate.segment_id === draft.segment_id,
-          );
-          if (!updated) throw new Error("VS-API returned no updated space segment");
-          patchBuffer(key, applied, () => updated);
+          await runWindowCommand(key, command);
         };
         const setPopulation: ComponentProps<typeof ConstellationEditor>["onSetPopulation"] = async (
           change,
@@ -1534,23 +1581,7 @@ export function BuilderView({
         const applyGroundEditorCommand = async (
           command: BuilderVisualDraftCommandRequest["command"],
         ) => {
-          const appliedWorkspace = currentWorkspace();
-          const sourceWorkspace = previewWorkspace();
-          if (!appliedWorkspace || !sourceWorkspace) {
-            throw new Error("there is no structured workspace to edit");
-          }
-          const bufferRevision = currentBufferMutationRevision();
-          const result = await executeVisualCommand(
-            command,
-            sourceWorkspace,
-            appliedWorkspace,
-            bufferRevision,
-          );
-          const updated = workspaceFromVisualDraft(result.draft).ground.find(
-            (candidate) => candidate.segment_id === draft.segment_id,
-          );
-          if (!updated) throw new Error("VS-API returned no updated ground segment");
-          patchBuffer(key, applied, () => updated);
+          await runWindowCommand(key, command);
         };
         return {
           title: draft.display_name,
@@ -1578,27 +1609,11 @@ export function BuilderView({
                 ] ?? null
               }
               onMintSites={async (sites) => {
-                const appliedWorkspace = currentWorkspace();
-                const sourceWorkspace = previewWorkspace();
-                if (!appliedWorkspace || !sourceWorkspace) {
-                  throw new Error("there is no structured workspace to edit");
-                }
-                const bufferRevision = currentBufferMutationRevision();
-                const result = await executeVisualCommand(
-                  {
-                    operation: "mint_ground_members",
-                    segment_id: draft.segment_id,
-                    sites,
-                  },
-                  sourceWorkspace,
-                  appliedWorkspace,
-                  bufferRevision,
-                );
-                const updated = workspaceFromVisualDraft(result.draft).ground.find(
-                  (candidate) => candidate.segment_id === draft.segment_id,
-                );
-                if (!updated) throw new Error("VS-API returned no updated ground segment");
-                patchBuffer(key, applied, () => updated);
+                await runWindowCommand(key, {
+                  operation: "mint_ground_members",
+                  segment_id: draft.segment_id,
+                  sites,
+                });
               }}
               onAddSiteReference={(ref) =>
                 applyGroundEditorCommand({
@@ -1631,28 +1646,12 @@ export function BuilderView({
                 })
               }
               onSchedulingPreset={async (preset, memberId) => {
-                const appliedWorkspace = currentWorkspace();
-                const sourceWorkspace = previewWorkspace();
-                if (!appliedWorkspace || !sourceWorkspace) {
-                  throw new Error("there is no structured workspace to edit");
-                }
-                const bufferRevision = currentBufferMutationRevision();
-                const result = await executeVisualCommand(
-                  {
-                    operation: "set_scheduling_preset",
-                    segment_id: draft.segment_id,
-                    preset,
-                    ...(memberId ? { member_id: memberId } : {}),
-                  },
-                  sourceWorkspace,
-                  appliedWorkspace,
-                  bufferRevision,
-                );
-                const updated = workspaceFromVisualDraft(result.draft).ground.find(
-                  (candidate) => candidate.segment_id === draft.segment_id,
-                );
-                if (!updated) throw new Error("VS-API returned no updated ground segment");
-                patchBuffer(key, applied, () => updated);
+                const result = await runWindowCommand(key, {
+                  operation: "set_scheduling_preset",
+                  segment_id: draft.segment_id,
+                  preset,
+                  ...(memberId ? { member_id: memberId } : {}),
+                });
                 rememberSchedulingSelection(
                   {
                     operation: "set_scheduling_preset",
@@ -1700,28 +1699,12 @@ export function BuilderView({
               capabilities={segmentCapabilities}
               allocation={ruleAllocation}
               onRepoint={async (side, newSegmentId) => {
-                const appliedWorkspace = currentWorkspace();
-                const sourceWorkspace = previewWorkspace();
-                if (!appliedWorkspace || !sourceWorkspace) {
-                  throw new Error("there is no structured workspace to edit");
-                }
-                const bufferRevision = currentBufferMutationRevision();
-                const result = await executeVisualCommand(
-                  {
-                    operation: "rederive_link",
-                    rule_id: rule.rule_id,
-                    side,
-                    segment_id: newSegmentId,
-                  },
-                  sourceWorkspace,
-                  appliedWorkspace,
-                  bufferRevision,
-                );
-                const updated = workspaceFromVisualDraft(result.draft).links.find(
-                  (candidate) => candidate.rule_id === rule.rule_id,
-                );
-                if (!updated) throw new Error("VS-API returned no rederived link rule");
-                patchBuffer(key, applied, () => updated);
+                const result = await runWindowCommand(key, {
+                  operation: "rederive_link",
+                  rule_id: rule.rule_id,
+                  side,
+                  segment_id: newSegmentId,
+                });
                 return result.notice ?? "link physics rederived by VS-API";
               }}
               onUpdate={(patch) =>
@@ -1853,18 +1836,16 @@ export function BuilderView({
               rootRef={target.rootRef}
               dependencyRefs={dependencyRefs}
               onCustomize={async (leafRef, targetLeafRef) => {
+                const startedFrom = currentWorkspace();
                 const result = await customizeChain({
                   segment_id: target.segmentId,
                   leaf_ref: leafRef,
                   ...(targetLeafRef ? { target_leaf_ref: targetLeafRef } : {}),
                 });
                 if (result.applied) {
-                  commitWorkspace(
-                    workspaceFromVisualDraft(result.draft),
-                    "customize-chain",
-                  );
+                  adoptAccepted(result.draft, startedFrom, "customize-chain");
+                  setSaveState({ kind: "idle" });
                 }
-                if (result.applied) setSaveState({ kind: "idle" });
                 return result;
               }}
               onClose={() => closeWindow(targetKey(target))}
@@ -1885,7 +1866,7 @@ export function BuilderView({
                 return;
               }
               markClean(result.draft);
-              openWorkspace(workspaceFromVisualDraft(result.draft));
+              seedTwin(result.draft);
               closeSessionWindows();
               setSelection(null);
               setSaveState({ kind: "idle" });
@@ -2876,18 +2857,19 @@ export function BuilderView({
       </div>
       <div className="builder-inspector" data-testid="builder-yaml">
         <div className="builder-zone-title">Session YAML</div>
-        {visualDraft?.authoring_workspace?.control_tree?.root && (
+        {visualDraft?.control_tree?.root && (
           <details className="builder-generic-controls" data-testid="session-generic-controls">
             <summary>Additional graphical fields</summary>
             <GraphicalControlTreeEditor
-              tree={visualDraft.authoring_workspace.control_tree}
+              tree={visualDraft.control_tree}
               disabled={yamlBlocksGui || dirtyWindows > 0 || writer !== null}
               hideSpecialized
               onMutate={async (commands: ReadonlyArray<BuilderControlMutation>) => {
                 setLibraryError(null);
                 try {
+                  const startedFrom = currentWorkspace();
                   const result = await mutateControls(commands);
-                  openWorkspace(workspaceFromVisualDraft(result.visual_draft));
+                  adoptAccepted(result.visual_draft, startedFrom);
                   setSaveState({ kind: "idle" });
                 } catch (cause) {
                   setLibraryError(cause instanceof Error ? cause.message : String(cause));

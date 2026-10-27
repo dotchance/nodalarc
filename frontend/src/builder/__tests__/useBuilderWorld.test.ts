@@ -38,7 +38,6 @@ const sessionsResponse = response({
 
 function draft(revision = 4): BuilderVisualDraftEnvelope {
   const workspace = newWorkspace("coordinated");
-  workspace.projection_revision = revision;
   return {
     draft_revision: revision,
     projection_status: "applied",
@@ -164,6 +163,55 @@ describe("useBuilderWorld session coordinator", () => {
     expect(
       fetchMock.mock.calls.some(([url]) => String(url).includes("/builder/session/save")),
     ).toBe(false);
+  });
+
+  it("previews window edits through the compile and accepts nothing", async () => {
+    const original = draft();
+    const { result } = renderHook(() => useBuilderWorld());
+    await act(async () => undefined);
+    await openAsThePageDoes(result, fetchMock, original);
+    const accepted = result.current.visualDraft;
+    const acceptedAssembly = result.current.assemblyResult;
+    const edited = { ...original.authoring_workspace!, display_name: "previewed" };
+    fetchMock.mockImplementation((url: string) => {
+      if (url.includes("/builder/draft/compile")) {
+        return Promise.resolve(response(assembly(original, "preview")));
+      }
+      throw new Error(`unexpected request ${url}`);
+    });
+
+    await act(async () => {
+      await result.current.compilePreview(edited, () => true);
+    });
+
+    const [url, init] = fetchMock.mock.calls[fetchMock.mock.calls.length - 1]!;
+    expect(String(url)).toContain("/builder/draft/compile");
+    const body = JSON.parse(String((init as RequestInit).body));
+    expect(body.workspace.display_name).toBe("previewed");
+    expect(body.draft.draft_revision).toBe(original.draft_revision);
+    expect((result.current.world as unknown as { marker: string }).marker).toBe("preview");
+    expect(result.current.visualDraft).toBe(accepted);
+    expect(result.current.assemblyResult).toBe(acceptedAssembly);
+  });
+
+  it("drops a preview the windows moved past", async () => {
+    const original = draft();
+    const { result } = renderHook(() => useBuilderWorld());
+    await act(async () => undefined);
+    await openAsThePageDoes(result, fetchMock, original);
+    const shown = result.current.world;
+    fetchMock.mockImplementation((url: string) => {
+      if (url.includes("/builder/draft/compile")) {
+        return Promise.resolve(response(assembly(original, "preview")));
+      }
+      throw new Error(`unexpected request ${url}`);
+    });
+
+    await act(async () => {
+      await result.current.compilePreview(original.authoring_workspace!, () => false);
+    });
+
+    expect(result.current.world).toBe(shown);
   });
 
   it("blocks commands and customization while YAML is unapplied", async () => {

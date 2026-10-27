@@ -267,7 +267,7 @@ def test_complex_sequence_item_insert_uses_virtual_branch_and_child_controls(
     inserted = result.visual_draft.applied_session["segments"][insert_at]
     assert inserted == {"id": "extra-space", "source": source_ref}
     assert result.visual_draft.applied_workspace is not None
-    assert result.visual_draft.applied_workspace.control_tree is not None
+    assert result.visual_draft.control_tree is not None
 
 
 def test_runtime_gated_choice_remains_saveable_and_deploy_blocked(
@@ -485,7 +485,7 @@ def test_pending_workspace_can_be_completed_without_residual_tree_deadlock(
         )
     ).draft
     assert invalid.authoring_workspace is not None
-    assert invalid.authoring_workspace.control_tree is None
+    assert invalid.control_tree is None
 
     completed = service.apply_workspace(
         BuilderVisualDraftApplyWorkspaceRequest(
@@ -499,7 +499,7 @@ def test_pending_workspace_can_be_completed_without_residual_tree_deadlock(
 
     assert completed.visual_draft.projection_status == "applied"
     assert completed.visual_draft.applied_workspace is not None
-    assert completed.visual_draft.applied_workspace.control_tree is not None
+    assert completed.visual_draft.control_tree is not None
 
 
 def test_all_structural_operations_are_ordered_and_atomic() -> None:

@@ -811,8 +811,6 @@ export interface BuilderVisualWorkspace {
   readonly start_time?: string;
   readonly step_seconds?: number | null;
   readonly compression?: number | null;
-  readonly projection_revision?: number | null;
-  readonly control_tree?: BuilderControlTree | null;
 }
 
 /** One revision of a stateless YAML buffer plus explicit authoring and applied facts. */
@@ -830,6 +828,7 @@ export interface BuilderVisualDraftEnvelope {
   readonly applied_workspace?: BuilderVisualWorkspace | null;
   readonly applied_revision?: number | null;
   readonly applied_session?: Readonly<Record<string, JsonValue>> | null;
+  readonly control_tree?: BuilderControlTree | null;
 }
 
 /** Request a backend-created blank structured visual draft. */
@@ -877,9 +876,10 @@ export interface BuilderVisualDraftRetargetRequest {
   readonly target_ref: SessionRef;
 }
 
-/** Compile a complete visual draft through backend assembly and grammar authorities. */
+/** Compile a complete visual draft through backend assembly and grammar authorities. With a workspace, the compile assembles that workspace over the draft and accepts nothing: the draft and its revision stay as they were. */
 export interface BuilderVisualDraftCompileRequest {
   readonly draft: BuilderVisualDraftEnvelope;
+  readonly workspace?: BuilderVisualWorkspace | null;
 }
 
 /** Backend assembly, typed issues, save request, and authoritative compile facts. */

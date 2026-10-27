@@ -625,25 +625,35 @@ export function useBuilderWorld() {
     settledDigestsRef.current = { document: null, dependency: null };
   }, []);
 
+  /** Fill the on-screen compile slots from one compile, or clear them and
+   *  show `failure` when a request produced no compile. */
+  const showCompile = useCallback(
+    (compile: BuilderCompileResult | null, failure: string | null = null) => {
+      const issues = compile?.issues ?? [];
+      const message = failure ?? issues.find((issue) => issue.severity === "error")?.message ?? null;
+      setCompileResult(compile);
+      setCompileIssues(issues);
+      setWorld(compile?.resolved_preview ?? null);
+      setResolveError((current) =>
+        message === null ? null : current?.error === message ? current : { error: message },
+      );
+    },
+    [],
+  );
+
   const adoptCompileResult = useCallback((result: BuilderVisualDraftAssemblyResult) => {
     const compile = result.compile_result;
-    const issues = compile.issues ?? [];
-    const firstError = issues.find((issue) => issue.severity === "error");
-    const preview = compile.resolved_preview;
     setVisualDraft(result.visual_draft);
     setAssemblyResult(result);
-    setCompileResult(compile);
-    setCompileIssues(issues);
     setDocumentYaml(compile.canonical_session_yaml ?? null);
-    setWorld(preview ?? null);
     setSettledDocumentDigest(compile.digests?.document ?? null);
     setSettledDependencySha256(compile.digests?.dependency ?? null);
     settledDigestsRef.current = {
       document: compile.digests?.document ?? null,
       dependency: compile.digests?.dependency ?? null,
     };
-    setResolveError(firstError ? { error: firstError.message } : null);
-  }, [setVisualDraft]);
+    showCompile(compile);
+  }, [setVisualDraft, showCompile]);
 
   const createDraft = useCallback(
     async (request: BuilderVisualDraftCreateRequest): Promise<BuilderVisualDraftEnvelope> => {
@@ -818,8 +828,7 @@ export function useBuilderWorld() {
         assertEpoch(epoch);
       } catch (cause) {
         assertEpoch(epoch);
-        resetCompileFacts();
-        setResolveError({ error: cause instanceof Error ? cause.message : String(cause) });
+        showCompile(null, cause instanceof Error ? cause.message : String(cause));
         throw cause;
       }
       adoptCompileResult(result);
@@ -835,7 +844,34 @@ export function useBuilderWorld() {
         issues: [],
       });
       return result;
-    }), [adoptCompileResult, assertEpoch, enqueueWriter, resetCompileFacts, setYamlBuffer]);
+    }), [adoptCompileResult, assertEpoch, enqueueWriter, setYamlBuffer, showCompile]);
+
+  /** Put the accepted draft's compile back in the on-screen slots once no
+   *  window edit is being previewed. */
+  const showAcceptedCompile = useCallback(() => {
+    if (assemblyResult) showCompile(assemblyResult.compile_result);
+  }, [assemblyResult, showCompile]);
+
+  /** The page's preview of unapplied window edits: the backend compiles the
+   *  workspace over the draft and accepts nothing. The result fills only the
+   *  on-screen slots, and only while the draft and the caller's edits are the
+   *  ones it was computed for. */
+  const compilePreview = useCallback(
+    async (workspace: BuilderVisualWorkspace, isCurrent: () => boolean): Promise<void> => {
+      const draft = visualDraftRef.current;
+      if (!draft) throw new Error("there is no session draft to preview");
+      const stillCurrent = () => visualDraftRef.current === draft && isCurrent();
+      let result: BuilderVisualDraftAssemblyResult;
+      try {
+        result = await compileVisualDraft({ draft, workspace });
+      } catch (cause) {
+        if (stillCurrent()) showCompile(null, cause instanceof Error ? cause.message : String(cause));
+        return;
+      }
+      if (stillCurrent()) showCompile(result.compile_result);
+    },
+    [showCompile],
+  );
 
   const customizeChain = useCallback(
     async (
@@ -1134,6 +1170,8 @@ export function useBuilderWorld() {
     assemblyResult,
     world,
     documentYaml,
+    compilePreview,
+    showAcceptedCompile,
     loading,
     error: resolveError?.error ?? null,
     resolveError,

@@ -141,7 +141,7 @@ export const SCHEDULER_OPS_CODES = [
 ] as const;
 export type SchedulerOpsCode = (typeof SCHEDULER_OPS_CODES)[number];
 
-export interface SchedulerOpsRecord {
+interface SchedulerOpsRecord {
   code: SchedulerOpsCode;
   label: string;
   sentence: string;
@@ -192,7 +192,7 @@ export function effectiveEnvelopeBindingLabel(source: string | null | undefined)
   return "Unknown binding constraint";
 }
 
-export type ReasonDomain = "visibility" | "unscheduled" | "allocation_event" | "actuation";
+type ReasonDomain = "visibility" | "unscheduled" | "allocation_event" | "actuation";
 
 export interface ReasonRecord {
   /** Stable code string, matching the backend enum value verbatim. */

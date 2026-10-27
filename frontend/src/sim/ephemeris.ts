@@ -110,7 +110,7 @@ export interface PlaybackStateMsg {
   state: "seeking" | "playing" | "paused";
 }
 
-export interface PropagatedPosition {
+interface PropagatedPosition {
   latDeg: number;
   lonDeg: number;
   altKm: number;

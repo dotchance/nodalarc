@@ -322,7 +322,7 @@ export type {
 export type SessionInfo = CatalogSessionSummary;
 
 /** App-level selection state */
-export type SelectionType = "satellite" | "ground_station" | "link" | null;
+type SelectionType = "satellite" | "ground_station" | "link" | null;
 
 export interface Selection {
   type: SelectionType;

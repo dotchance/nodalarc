@@ -39,12 +39,6 @@ function snapshot(): StateSnapshot {
     kernel_actual_pairs: [],
     traced_paths: [],
     recent_events: [],
-    network_health: {
-      status: "converged",
-      converging_since_ms: null,
-      unreachable_flows: 0,
-      last_convergence_ms: null,
-    },
     routing_stack: "isis-plain",
     constellation_name: "test",
     session_status: "ready",

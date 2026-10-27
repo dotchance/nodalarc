@@ -8,12 +8,14 @@ match Pydantic model field names. Every stored time is ISO 8601 text in UTC
 (``queries.history_time``), so times compare correctly as text.
 
 PRAGMA user_version records SCHEMA_VERSION. A database at another version was
-written by another release; it is refused, never migrated.
+written by another release; it is refused, never migrated. SCHEMA_VERSION
+covers the recorded state frame as well as the rows: a change to StateSnapshot,
+to a model nested in it, or to what VS-API adds to a recorded frame bumps it.
 """
 
 import sqlite3
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 
 class HistorySchemaError(RuntimeError):

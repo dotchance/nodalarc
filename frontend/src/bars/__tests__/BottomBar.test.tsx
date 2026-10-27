@@ -22,12 +22,6 @@ function snapshot(history_recording: HistoryRecordingState | null): StateSnapsho
     links: [],
     traced_paths: [],
     recent_events: [],
-    network_health: {
-      status: "converged",
-      converging_since_ms: null,
-      unreachable_flows: 0,
-      last_convergence_ms: null,
-    },
     routing_stack: "isis",
     constellation_name: "demo",
     session_status: "ready",

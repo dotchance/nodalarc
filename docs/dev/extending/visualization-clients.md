@@ -123,8 +123,7 @@ See [VS-API component docs](../components/vs-api.md) for the full schema. Key fi
   ],
   "recent_events": [
     {"sim_time": "...", "node_id": "ground-gs-hawthorne", "event_type": "link_up", "summary": "..."}
-  ],
-  "network_health": {"status": "converged", ...}
+  ]
 }
 ```
 

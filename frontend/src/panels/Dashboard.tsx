@@ -51,9 +51,6 @@ export function Dashboard({ snapshot }: DashboardProps) {
     );
   }
 
-  const health = snapshot.network_health;
-  const healthTone =
-    health.status === "converged" ? "ok" : health.status === "converging" ? "warn" : "fail";
   const notices = snapshot.actuation_notices ?? [];
 
   return (
@@ -63,7 +60,6 @@ export function Dashboard({ snapshot }: DashboardProps) {
           <h2 className="dashboard-title">{stats.constellation}</h2>
           <div className="dashboard-time">{stats.simTime}</div>
         </div>
-        <span className={`dashboard-state dashboard-state--${healthTone}`}>{health.status}</span>
       </div>
 
       <div className="dashboard-grid">
@@ -80,11 +76,6 @@ export function Dashboard({ snapshot }: DashboardProps) {
       </div>
 
       <div className="dashboard-feed">
-        {health.status === "degraded" && (health.unreachable_flows ?? 0) > 0 && (
-          <div className="dashboard-alert dashboard-alert--fail">
-            {health.unreachable_flows} flows unreachable
-          </div>
-        )}
         {notices.map((n) => (
           <div
             key={`${n.gs_id}:${n.reason_code}`}
@@ -93,8 +84,8 @@ export function Dashboard({ snapshot }: DashboardProps) {
             {n.gs_id}: {schedulerOpsLabel(n.reason_code)}
           </div>
         ))}
-        {notices.length === 0 && health.status === "converged" && (
-          <div className="dashboard-alert dashboard-alert--ok">All actuation clean; routing converged</div>
+        {notices.length === 0 && (
+          <div className="dashboard-alert dashboard-alert--ok">All actuation clean</div>
         )}
       </div>
     </div>

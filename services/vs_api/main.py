@@ -823,9 +823,6 @@ def _build_snapshot(*, ops_after: int = 0) -> dict | None:
                 nodes.append(n)
         recent = list(ctx.recent_events)
 
-        ctx.compute_convergence_state()
-        health = ctx.network_health
-
         _traced: list[TracedPath] = []
         if ctx.continuous_tracer is not None:
             tp = ctx.continuous_tracer.traced_path
@@ -851,7 +848,6 @@ def _build_snapshot(*, ops_after: int = 0) -> dict | None:
             kernel_actual_pairs=[[a, b] for (a, b) in sorted(ctx.actual_kernel_pairs())],
             traced_paths=_traced,
             recent_events=recent,
-            network_health=health,
             routing_stack=ctx.routing_stack,
             constellation_name=ctx.constellation_name,
             session_status=_session_manager.status if _session_manager else None,
@@ -3708,9 +3704,6 @@ async def _poll_cr_until_ready() -> None:
                     _active_cr_generation = ready.generation
                     _mark_session_manager_ready(ready.session, ready.source_id)
 
-                ctx = _active_context
-                if ctx:
-                    ctx.session_ready_time = _time.monotonic()
                 if _session_manager:
                     _session_manager._status = "ready"
                     _session_manager.status_detail = ""

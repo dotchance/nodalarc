@@ -72,7 +72,6 @@ from nodalarc.models.vs_api import (
     HistoryRecordingState,
     LinkDecisionTrace,
     LinkState,
-    NetworkHealth,
     NodeAddress,
     NodeRoutingInstance,
     NodeState,
@@ -109,8 +108,6 @@ from vs_api.resolved_runtime_views import routing_instances_by_node_id, routing_
 log = logging.getLogger(__name__)
 
 STALE_THRESHOLD_S: float = 15.0
-CONVERGENCE_DWELL_S: float = 15.0
-BULK_CHANGE_THRESHOLD: float = 0.10
 GROUND_DECISION_SAMPLE_LIMIT: int = 720
 
 
@@ -235,13 +232,6 @@ class SessionContext:
         self.latest_ground_link_decision_snapshot: GroundLinkDecisionSnapshot | None = None
         self.ground_decision_samples_by_gs: dict[str, deque] = {}
         self.recent_events: list[RecentEvent] = []
-        self.network_health: NetworkHealth = NetworkHealth(
-            status="no measurement",
-            converging_since_ms=None,
-            unreachable_flows=0,
-            last_convergence_ms=None,
-        )
-        self.mi_active: bool = False
         # Unknown until the session clock reports it; no reader substitutes
         # wall time for it.
         self.sim_time: str | None = None
@@ -263,9 +253,6 @@ class SessionContext:
         # sim/wall divergence while sim is frozen.
         self.heartbeat_wall_time: str | None = None
         self.last_heartbeat_wall_time: float = 0.0
-        self.session_ready_time: float = 0.0
-        self.prev_snapshot_active_count: int = 0
-        self.curr_snapshot_active_count: int = 0
         self.last_snapshot_seq: int = 0
         self.cached_ephemeris: dict | None = None
         self.cached_ephemeris_obj: object | None = None
@@ -836,8 +823,6 @@ class SessionContext:
             self.links.update(new_links)
             self.link_decision_traces.clear()
             self.link_decision_traces.update(new_traces)
-            self.prev_snapshot_active_count = self.curr_snapshot_active_count
-            self.curr_snapshot_active_count = len(self.links)
             self.last_snapshot_seq = snapshot.snapshot_seq
 
         if not self._snapshot_received:
@@ -1785,27 +1770,6 @@ class SessionContext:
             topology_mode=existing.topology_mode,
             endpoint_segments=existing.endpoint_segments,
         )
-
-    def compute_convergence_state(self) -> None:
-        """Update network_health based on current link counts."""
-        active = self.curr_snapshot_active_count
-        if self.mi_active:
-            return
-        if active == 0:
-            self.network_health = self.network_health.model_copy(
-                update={"status": "no measurement"}
-            )
-            return
-        now = _time.monotonic()
-        if self.session_ready_time > 0 and (now - self.session_ready_time) < CONVERGENCE_DWELL_S:
-            self.network_health = self.network_health.model_copy(update={"status": "stabilizing"})
-            return
-        total = max(active, self.prev_snapshot_active_count, 1)
-        delta = abs(active - self.prev_snapshot_active_count)
-        if delta / total > BULK_CHANGE_THRESHOLD:
-            self.network_health = self.network_health.model_copy(update={"status": "converging"})
-        else:
-            self.network_health = self.network_health.model_copy(update={"status": "converged"})
 
     @staticmethod
     def _platform_config():

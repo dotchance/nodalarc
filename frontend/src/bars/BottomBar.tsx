@@ -4,7 +4,6 @@
  *  The build hash line is part of the deploy drift-gate workflow — keep it. */
 
 import { WS_URL } from "../config";
-import { formatDuration } from "../translate";
 import { StatusDot } from "../ui/Badge";
 import type { StateSnapshot } from "../types";
 
@@ -20,20 +19,7 @@ export function BottomBar({ snapshot, connected, historicalMode, logPanelOpen, o
   const activeLinks = snapshot?.links.filter((l) => l.state === "active").length ?? 0;
   const totalLinks = snapshot?.links.length ?? 0;
   const nodeCount = snapshot?.nodes.length ?? 0;
-  const convergence = snapshot?.network_health.status ?? "unknown";
-  const unreachableFlows = snapshot?.network_health.unreachable_flows ?? 0;
-  const lastConvergenceMs = snapshot?.network_health.last_convergence_ms;
-  const convergingSinceMs = snapshot?.network_health.converging_since_ms;
   const recording = snapshot?.history_recording ?? null;
-
-  const convClass =
-    convergence === "converged"
-      ? "bottombar-ok"
-      : convergence === "converging" || convergence === "stabilizing"
-        ? "bottombar-warn"
-        : convergence === "degraded"
-          ? "bottombar-fail"
-          : "";
 
   const wsTone = historicalMode ? "warn" : connected ? "ok" : "fail";
   const wsClass = historicalMode ? "bottombar-warn" : connected ? "bottombar-ok" : "bottombar-fail";
@@ -43,14 +29,6 @@ export function BottomBar({ snapshot, connected, historicalMode, logPanelOpen, o
     <div className="area-bottombar bottombar">
       <span className="bottombar-stat">Links {activeLinks}/{totalLinks}</span>
       <span className="bottombar-stat">Nodes {nodeCount}</span>
-      <span
-        className={`bottombar-stat ${convClass}`}
-        title={lastConvergenceMs != null ? `Last convergence: ${formatDuration(lastConvergenceMs)}` : undefined}
-      >
-        Conv: {convergence}
-        {convergence === "converging" && convergingSinceMs != null ? ` (${formatDuration(convergingSinceMs)})` : ""}
-        {convergence === "degraded" && unreachableFlows > 0 ? ` (${unreachableFlows} flows)` : ""}
-      </span>
       {recording !== null && (
         <span
           className={`bottombar-stat ${recording.state === "recording" ? "bottombar-ok" : "bottombar-fail"}`}

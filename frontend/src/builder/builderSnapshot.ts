@@ -12,7 +12,7 @@
  *  space-link participants; the world carries every node).
  *
  *  This object exists only as Scene input. Fields the Scene never reads but
- *  the StateSnapshot type requires (network_health, session ids, ops fields)
+ *  the StateSnapshot type requires (session ids, ops fields)
  *  get neutral values — never surface them in builder UI as session state.
  */
 
@@ -168,12 +168,6 @@ export function builderSnapshotFromWorld(world: BuilderWorld): StateSnapshot {
     links: [],
     traced_paths: [],
     recent_events: [],
-    network_health: {
-      status: "converged",
-      converging_since_ms: null,
-      unreachable_flows: 0,
-      last_convergence_ms: null,
-    },
     routing_stack: null,
     constellation_name: `builder:${world.session.name}`,
     session_status: null,

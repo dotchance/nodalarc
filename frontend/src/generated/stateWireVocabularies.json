@@ -392,12 +392,6 @@
       "sim_time",
       "wall_time"
     ],
-    "NetworkHealth": [
-      "converging_since_ms",
-      "last_convergence_ms",
-      "status",
-      "unreachable_flows"
-    ],
     "NodeAddress": [
       "address",
       "family",
@@ -493,7 +487,6 @@
       "history_recording",
       "kernel_actual_pairs",
       "links",
-      "network_health",
       "nodes",
       "ome_lifecycle_notices",
       "pacing_degraded",
@@ -1065,9 +1058,6 @@
       "node_b": null,
       "reason": null
     },
-    "NetworkHealth": {
-      "status": null
-    },
     "NodeAddress": {
       "address": null,
       "family": [
@@ -1334,7 +1324,6 @@
     "LinkHistoryPage": "lib/nodalarc/models/vs_api.py",
     "LinkState": "lib/nodalarc/models/vs_api.py",
     "LinkUp": "lib/nodalarc/models/link_events.py",
-    "NetworkHealth": "lib/nodalarc/models/vs_api.py",
     "NodeAddress": "lib/nodalarc/models/vs_api.py",
     "NodeInstanceInterface": "lib/nodalarc/models/vs_api.py",
     "NodeRoutingInstance": "lib/nodalarc/models/vs_api.py",

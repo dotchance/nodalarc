@@ -17,12 +17,6 @@ function snapshotWithActuationNotice(): StateSnapshot {
     links: [],
     traced_paths: [],
     recent_events: [],
-    network_health: {
-      status: "converged",
-      converging_since_ms: null,
-      unreachable_flows: 0,
-      last_convergence_ms: 42,
-    },
     routing_stack: "ospf",
     constellation_name: "demo",
     session_status: "running",

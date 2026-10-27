@@ -238,17 +238,6 @@ class TracedPath(BaseModel):
         return self
 
 
-class NetworkHealth(BaseModel):
-    """Overall network health status."""
-
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-    status: str  # "converged", "converging", or "degraded"
-    converging_since_ms: int | None
-    unreachable_flows: int
-    last_convergence_ms: float | None
-
-
 class RecentEvent(BaseModel):
     """Recent event for the VF event log."""
 
@@ -362,7 +351,6 @@ class StateSnapshot(BaseModel):
     kernel_actual_pairs: list[list[str]] = Field(default_factory=list)
     traced_paths: list[TracedPath]
     recent_events: list[RecentEvent]
-    network_health: NetworkHealth
     routing_stack: str | None = None
     constellation_name: str | None = None
     session_status: str | None = None  # "ready", "switching", "error", "idle"

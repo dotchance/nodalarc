@@ -157,13 +157,6 @@ export interface TracedPath {
   sim_time: string;
 }
 
-export interface NetworkHealth {
-  status: string; // "converged" | "converging" | "degraded"
-  converging_since_ms: number | null;
-  unreachable_flows: number;
-  last_convergence_ms: number | null;
-}
-
 export interface RecentEvent {
   sim_time: string;
   node_id: string;
@@ -282,7 +275,6 @@ export interface StateSnapshot {
   kernel_actual_pairs?: [string, string][];
   traced_paths: TracedPath[];
   recent_events: RecentEvent[];
-  network_health: NetworkHealth;
   routing_stack: string | null;
   constellation_name: string | null;
   session_status: string | null;

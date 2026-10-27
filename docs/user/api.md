@@ -27,7 +27,7 @@ TOKEN=$(curl -s http://localhost:8080/api/v1/auth/token | python3 -c "import jso
 curl -s -H "Authorization: Bearer $TOKEN" http://localhost:8080/api/v1/state | python3 -m json.tool
 ```
 
-Returns a JSON snapshot with all nodes (positions, link counts), all links (latency, each direction's transmit rate, type), recent events, and network health status.
+Returns a JSON snapshot with all nodes (positions, link counts), all links (latency, each direction's transmit rate, type), and recent events.
 
 ### Count satellites, ground nodes, and links
 
@@ -225,7 +225,9 @@ the same state. Recording never delays live state: writes wait in a queue of
 at most `vs_api_history_queue_max_writes`, and a write that finds the queue
 full stops the recording with that reason. When VS-API restarts during a
 recording, the links active when it resumes are recorded with reason
-`recording_resumed`; transitions during the restart were not recorded.
+`recording_resumed`; transitions during the restart were not recorded. A
+recording stops when VS-API is replaced by a release that records another
+shape.
 
 Time parameters (`start`, `end`, and the `sim_time` of
 `/api/v1/state/{sim_time}`) must name their UTC offset or `Z`; a time without
@@ -238,7 +240,6 @@ The state snapshot contains:
 - **nodes** - array of all satellites and ground nodes with position, link counts, segment metadata, and body/frame metadata
 - **links** - array of all active links with latency, each end's terminal rates (`transmit_mbps_a` and `receive_mbps_a` for node_a, `transmit_mbps_b` and `receive_mbps_b` for node_b), type, and rule-derived relationship where available. A direction carries no more than its sender transmits or its receiver takes in.
 - **recent_events** - last 50 link state changes and handoffs
-- **network_health** - convergence status
 - **sim_time** / **wall_time** - current simulation and wall-clock time
 - **playback_paused** / **playback_speed** - time control state
 
@@ -254,7 +255,6 @@ For the full schema with field descriptions, see the [VS-API Reference](../dev/c
 
 ## Use Cases
 
-- **Automated convergence testing** - deploy a session, wait for convergence, inject a link failure, measure time to reconverge via the API
 - **Custom dashboards** - stream state over WebSocket and render your own visualization
 - **CI/CD validation** - script path traces and verify reachability as part of a test pipeline
 - **Data collection** - record state snapshots over time for offline analysis of routing behavior

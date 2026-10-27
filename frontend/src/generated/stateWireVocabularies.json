@@ -776,7 +776,27 @@
         "selection_policy",
         "tracking_rate"
       ],
-      "binding_reason_code": null,
+      "binding_reason_code": [
+        "actuation_blocked",
+        "actuation_diverged",
+        "bbm_no_spare",
+        "elevation_below_min",
+        "failed_acquire",
+        "failed_successor",
+        "field_of_regard",
+        "gs_capacity",
+        "hysteresis_hold",
+        "incumbent_held",
+        "kernel_dirty",
+        "los_blocked",
+        "mbb_overlap_locked",
+        "ok",
+        "range_exceeded",
+        "replaced_by_successor",
+        "sat_capacity",
+        "successor_aborted",
+        "tracking_exceeded"
+      ],
       "rejecting_endpoint": [
         "both",
         "ground",
@@ -824,7 +844,27 @@
         "selection_policy",
         "tracking_rate"
       ],
-      "binding_reason_code": null,
+      "binding_reason_code": [
+        "actuation_blocked",
+        "actuation_diverged",
+        "bbm_no_spare",
+        "elevation_below_min",
+        "failed_acquire",
+        "failed_successor",
+        "field_of_regard",
+        "gs_capacity",
+        "hysteresis_hold",
+        "incumbent_held",
+        "kernel_dirty",
+        "los_blocked",
+        "mbb_overlap_locked",
+        "ok",
+        "range_exceeded",
+        "replaced_by_successor",
+        "sat_capacity",
+        "successor_aborted",
+        "tracking_exceeded"
+      ],
       "gs_id": null,
       "node_focus": [
         "gs",
@@ -847,11 +887,19 @@
         "none",
         "satellite"
       ],
-      "binding_source": null,
+      "binding_source": [
+        "field_of_regard",
+        "min_elevation_mask"
+      ],
       "reference_body": null
     },
     "EnvelopeEndpoint": {
-      "boresight_mode": null,
+      "boresight_mode": [
+        "configured_topocentric",
+        "local_vertical",
+        "nadir",
+        "steerable_envelope"
+      ],
       "node_role": [
         "ground",
         "satellite"
@@ -938,7 +986,24 @@
       "tenant_id": null
     },
     "GsDecisionReasonCount": {
-      "reason_code": null,
+      "reason_code": [
+        "bbm_no_spare",
+        "elevation_below_min",
+        "failed_acquire",
+        "failed_successor",
+        "field_of_regard",
+        "gs_capacity",
+        "hysteresis_hold",
+        "incumbent_held",
+        "los_blocked",
+        "mbb_overlap_locked",
+        "ok",
+        "range_exceeded",
+        "replaced_by_successor",
+        "sat_capacity",
+        "successor_aborted",
+        "tracking_exceeded"
+      ],
       "state": [
         "eligible_unselected",
         "expected_no_link",
@@ -961,7 +1026,24 @@
         "tracking_rate"
       ],
       "gs_id": null,
-      "reason_code": null,
+      "reason_code": [
+        "bbm_no_spare",
+        "elevation_below_min",
+        "failed_acquire",
+        "failed_successor",
+        "field_of_regard",
+        "gs_capacity",
+        "hysteresis_hold",
+        "incumbent_held",
+        "los_blocked",
+        "mbb_overlap_locked",
+        "ok",
+        "range_exceeded",
+        "replaced_by_successor",
+        "sat_capacity",
+        "successor_aborted",
+        "tracking_exceeded"
+      ],
       "rejecting_endpoint": [
         "both",
         "ground",
@@ -1008,7 +1090,27 @@
         "ome_visibility",
         "scheduler"
       ],
-      "reason_code": null,
+      "reason_code": [
+        "actuation_blocked",
+        "actuation_diverged",
+        "bbm_no_spare",
+        "elevation_below_min",
+        "failed_acquire",
+        "failed_successor",
+        "field_of_regard",
+        "gs_capacity",
+        "hysteresis_hold",
+        "incumbent_held",
+        "kernel_dirty",
+        "los_blocked",
+        "mbb_overlap_locked",
+        "ok",
+        "range_exceeded",
+        "replaced_by_successor",
+        "sat_capacity",
+        "successor_aborted",
+        "tracking_exceeded"
+      ],
       "rejecting_endpoint": [
         "both",
         "ground",

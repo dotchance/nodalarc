@@ -32,7 +32,12 @@ export interface LadderGate {
 export interface EnvelopeEndpoint {
   node_role: "ground" | "satellite";
   terminal_profile: string | null;
-  boresight_mode: string | null;
+  boresight_mode:
+    | "local_vertical"
+    | "configured_topocentric"
+    | "steerable_envelope"
+    | "nadir"
+    | null;
   field_of_regard_deg: number | null;
   max_tracking_rate_deg_s: number | null;
   max_range_km: number | null;
@@ -42,7 +47,7 @@ export interface EffectiveEnvelopeFacts {
   reference_body: string;
   configured_min_elevation_deg: number | null;
   effective_min_elevation_deg: number | null;
-  binding_source: string | null;
+  binding_source: "field_of_regard" | "min_elevation_mask";
   dead_knobs: string[];
   max_range_km: number | null;
   ground: EnvelopeEndpoint;
@@ -86,7 +91,7 @@ export interface DecisionFacts {
   binding_reason_code: string | null;
   rejecting_endpoint: RejectingEndpoint | null;
   ladder: LadderGate[];
-  envelope: EffectiveEnvelopeFacts | null;
+  envelope: EffectiveEnvelopeFacts;
   best_candidate: CandidateFacts | null;
   actuation: ActuationFacts | null;
   sim_time: string;

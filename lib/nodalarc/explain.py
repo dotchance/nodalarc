@@ -15,13 +15,19 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from datetime import datetime
+from typing import get_args
 
 from nodalarc.models.decision_explanation import (
+    ActuationExplanationReason,
     ActuationFacts,
+    BindingReasonCode,
     CandidateFacts,
     DecisionExplanationFacts,
+    DecisionReasonCode,
+    DecisionSampleState,
     EffectiveEnvelopeFacts,
     EnvelopeEndpoint,
+    ExplanationProducer,
     FunnelGate,
     GateState,
     GsDecisionTimelineSample,
@@ -30,7 +36,9 @@ from nodalarc.models.decision_explanation import (
 )
 from nodalarc.models.link_decisions import (
     GroundLinkDecisionSnapshot,
+    GroundUnscheduledReason,
     GroundVisibilityDecisionWire,
+    GroundVisibilityRejectReason,
     UnscheduledPair,
 )
 from nodalarc.models.scheduler_ops import ActuationState, parse_actuation_state
@@ -40,24 +48,19 @@ Pair = tuple[str, str]
 # Binding-reason codes the composer SYNTHESIZES for an actuation_proof binding (not raw
 # ActuationStates): a clean roster but OME-desired-and-not-kernel-up is a divergence, NOT
 # "clean". Bound to the frontend registry via tests/unit/observation/test_explain_contract.py.
-_ACTUATION_DIVERGED = "actuation_diverged"
-ACTUATION_EXPLANATION_REASONS: tuple[str, ...] = (_ACTUATION_DIVERGED,)
-
-# Funnel order is canonical; index gives before/at/after the binding gate.
-FUNNEL_ORDER: tuple[FunnelGate, ...] = (
-    "line_of_sight",
-    "range",
-    "elevation_mask",
-    "field_of_regard",
-    "tracking_rate",
-    "selection_policy",
-    "capacity",
-    "handover_policy",
-    "actuation_proof",
+_ACTUATION_DIVERGED: ActuationExplanationReason = "actuation_diverged"
+ACTUATION_EXPLANATION_REASONS: tuple[ActuationExplanationReason, ...] = get_args(
+    ActuationExplanationReason
 )
+
+# Funnel order is canonical (the order of the FunnelGate Literal); index gives
+# before/at/after the binding gate.
+FUNNEL_ORDER: tuple[FunnelGate, ...] = get_args(FunnelGate)
 _GATE_INDEX = {g: i for i, g in enumerate(FUNNEL_ORDER)}
 
-_REJECT_GATE: dict[str, FunnelGate] = {
+# The gate each reason binds at. Every reason OME can state has a gate ("ok" is
+# not a rejection), and a reason without one raises where it is looked up.
+_REJECT_GATE: dict[GroundVisibilityRejectReason, FunnelGate] = {
     "los_blocked": "line_of_sight",
     "range_exceeded": "range",
     "elevation_below_min": "elevation_mask",
@@ -65,7 +68,7 @@ _REJECT_GATE: dict[str, FunnelGate] = {
     "tracking_exceeded": "tracking_rate",
 }
 
-_UNSCHEDULED_GATE: dict[str, FunnelGate] = {
+_UNSCHEDULED_GATE: dict[GroundUnscheduledReason, FunnelGate] = {
     "gs_capacity": "capacity",
     "sat_capacity": "capacity",
     "bbm_no_spare": "capacity",
@@ -78,7 +81,12 @@ _UNSCHEDULED_GATE: dict[str, FunnelGate] = {
     "failed_acquire": "handover_policy",
 }
 
-_GATE_PRODUCER = {
+if set(_REJECT_GATE) != set(get_args(GroundVisibilityRejectReason)) - {"ok"}:
+    raise RuntimeError("every ground visibility rejection reason needs a funnel gate")
+if set(_UNSCHEDULED_GATE) != set(get_args(GroundUnscheduledReason)):
+    raise RuntimeError("every ground unscheduled reason needs a funnel gate")
+
+_GATE_PRODUCER: dict[FunnelGate, ExplanationProducer] = {
     "line_of_sight": "ome_visibility",
     "range": "ome_visibility",
     "elevation_mask": "ome_visibility",
@@ -155,7 +163,7 @@ def _build_ladder(
     d: GroundVisibilityDecisionWire,
     *,
     binding_gate: FunnelGate | None,
-    binding_reason: str | None,
+    binding_reason: BindingReasonCode | None,
     actuation_pass: bool | None,
 ) -> tuple[LadderGate, ...]:
     """Walk the funnel: before binding = pass, binding = fail, after = not_evaluated.
@@ -192,7 +200,7 @@ def _build_ladder(
                 threshold=threshold,
                 rejecting_endpoint=rejecting,
                 reason_code=reason,
-                producer=producer,  # type: ignore[arg-type]
+                producer=producer,
                 is_binding=is_binding,
             )
         )
@@ -283,7 +291,7 @@ def compose_gs_explanation(
 
     focal: GroundVisibilityDecisionWire
     binding_gate: FunnelGate | None
-    binding_reason: str | None
+    binding_reason: BindingReasonCode | None
     viable_withheld: bool
     ome_desired: bool | None
     kernel_up: bool | None
@@ -323,7 +331,7 @@ def compose_gs_explanation(
         # wrong: a high satellite can be badly range/FoR-bound while a lower one is a
         # degree under its binding gate.
         def _reject_depth(d: GroundVisibilityDecisionWire) -> int:
-            return _GATE_INDEX.get(_REJECT_GATE.get(d.reject_reason, "line_of_sight"), 0)
+            return _GATE_INDEX[_REJECT_GATE[d.reject_reason]]
 
         focal = max(decisions, key=lambda d: (_reject_depth(d), d.elevation_deg))
         category = "rejected"
@@ -361,7 +369,7 @@ def compose_gs_explanation(
     elif category == "withheld":
         # Connectivity was available but policy/capacity withheld it (the message to surface).
         u = unscheduled[_ordered_pair(focal.pair)]
-        binding_gate = _UNSCHEDULED_GATE.get(u.unscheduled_reason, "handover_policy")
+        binding_gate = _UNSCHEDULED_GATE[u.unscheduled_reason]
         binding_reason = u.unscheduled_reason
         viable_withheld = True
         ome_desired = False
@@ -369,7 +377,7 @@ def compose_gs_explanation(
         actuation_pass = None
     else:
         # Physically rejected (not visible) — the closest-to-connecting near-miss.
-        binding_gate = _REJECT_GATE.get(focal.reject_reason)
+        binding_gate = _REJECT_GATE[focal.reject_reason]
         binding_reason = focal.reject_reason
         viable_withheld = False
         ome_desired = False
@@ -452,6 +460,9 @@ def compose_gs_decision_timeline_sample(
     scheduled = [d for d in visible if _ordered_pair(d.pair) not in unscheduled]
     withheld = [d for d in visible if _ordered_pair(d.pair) in unscheduled]
 
+    state: DecisionSampleState
+    binding_gate: FunnelGate | None
+    reason_code: DecisionReasonCode | None
     if scheduled:
         focal = scheduled[0]
         state = "scheduled"
@@ -462,17 +473,17 @@ def compose_gs_decision_timeline_sample(
         focal = withheld[0]
         u = unscheduled[_ordered_pair(focal.pair)]
         state = "eligible_unselected"
-        binding_gate = _UNSCHEDULED_GATE.get(u.unscheduled_reason, "handover_policy")
+        binding_gate = _UNSCHEDULED_GATE[u.unscheduled_reason]
         reason_code = u.unscheduled_reason
         rejecting_endpoint = None
     else:
 
         def _reject_depth(d: GroundVisibilityDecisionWire) -> int:
-            return _GATE_INDEX.get(_REJECT_GATE.get(d.reject_reason, "line_of_sight"), 0)
+            return _GATE_INDEX[_REJECT_GATE[d.reject_reason]]
 
         focal = max(decisions, key=lambda d: (_reject_depth(d), d.elevation_deg))
         state = "expected_no_link"
-        binding_gate = _REJECT_GATE.get(focal.reject_reason)
+        binding_gate = _REJECT_GATE[focal.reject_reason]
         reason_code = focal.reject_reason
         rejecting_endpoint = focal.rejecting_endpoint
 
@@ -481,7 +492,7 @@ def compose_gs_decision_timeline_sample(
         sim_time=snapshot.sim_time,
         snapshot_seq=snapshot.snapshot_seq,
         epoch_id=snapshot.epoch_id,
-        state=state,  # type: ignore[arg-type]
+        state=state,
         pair=_ordered_pair(focal.pair),
         binding_gate=binding_gate,
         reason_code=reason_code,

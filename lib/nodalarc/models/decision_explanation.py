@@ -24,8 +24,13 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict
 
-from nodalarc.models.link_decisions import GroundVisibilityRejectingEndpoint
+from nodalarc.models.link_decisions import (
+    GroundUnscheduledReason,
+    GroundVisibilityRejectingEndpoint,
+    GroundVisibilityRejectReason,
+)
 from nodalarc.models.scheduler_ops import ActuationState
+from nodalarc.models.terminal_physics import GroundBoresightMode, SatGroundBoresightMode
 
 # The canonical decision funnel, in order. A pair stops at exactly one binding gate.
 FunnelGate = Literal[
@@ -41,6 +46,17 @@ FunnelGate = Literal[
 ]
 
 GateState = Literal["pass", "fail", "not_evaluated", "not_applicable"]
+
+# The reason the composer derives for an actuation-proof binding when the roster
+# is clean but OME desires a pair the kernel has not brought up.
+ActuationExplanationReason = Literal["actuation_diverged"]
+# A decision's reason: OME's visibility or allocation reason for the pair.
+DecisionReasonCode = GroundVisibilityRejectReason | GroundUnscheduledReason
+# The reason a binding gate states: a decision reason, a failing actuation state,
+# or the composer's actuation divergence.
+BindingReasonCode = (
+    DecisionReasonCode | Literal["kernel_dirty", "actuation_blocked"] | ActuationExplanationReason
+)
 
 # Which source-of-truth component owns a gate's verdict.
 ExplanationProducer = Literal["ome_visibility", "ome_allocator", "scheduler", "node_agent"]
@@ -65,7 +81,7 @@ class LadderGate(BaseModel):
     actual: float | None
     threshold: float | None
     rejecting_endpoint: GroundVisibilityRejectingEndpoint | None
-    reason_code: str | None
+    reason_code: BindingReasonCode | None
     producer: ExplanationProducer
     is_binding: bool
 
@@ -84,7 +100,7 @@ class EnvelopeEndpoint(BaseModel):
 
     node_role: Literal["ground", "satellite"]
     terminal_profile: str | None
-    boresight_mode: str | None
+    boresight_mode: GroundBoresightMode | SatGroundBoresightMode | None
     field_of_regard_deg: float | None
     max_tracking_rate_deg_s: float | None
     max_range_km: float | None
@@ -108,7 +124,7 @@ class EffectiveEnvelopeFacts(BaseModel):
     reference_body: str
     configured_min_elevation_deg: float | None
     effective_min_elevation_deg: float | None
-    binding_source: str | None
+    binding_source: Literal["field_of_regard", "min_elevation_mask"]
     dead_knobs: tuple[str, ...]
     max_range_km: float | None
     ground: EnvelopeEndpoint
@@ -129,7 +145,7 @@ class CandidateFacts(BaseModel):
 
     pair: tuple[str, str]
     binding_gate: FunnelGate | None
-    binding_reason_code: str | None
+    binding_reason_code: BindingReasonCode | None
     rejecting_endpoint: GroundVisibilityRejectingEndpoint | None
     range_km: float | None
     elevation_deg: float | None
@@ -195,10 +211,10 @@ class DecisionExplanationFacts(BaseModel):
     reference_body: str
     tenant_id: str
     binding_gate: FunnelGate | None
-    binding_reason_code: str | None
+    binding_reason_code: BindingReasonCode | None
     rejecting_endpoint: GroundVisibilityRejectingEndpoint | None
     ladder: tuple[LadderGate, ...]
-    envelope: EffectiveEnvelopeFacts | None
+    envelope: EffectiveEnvelopeFacts
     best_candidate: CandidateFacts | None
     actuation: ActuationFacts | None
     sim_time: datetime
@@ -224,7 +240,7 @@ class GsDecisionTimelineSample(BaseModel):
     state: DecisionSampleState
     pair: tuple[str, str] | None
     binding_gate: FunnelGate | None
-    reason_code: str | None
+    reason_code: DecisionReasonCode | None
     rejecting_endpoint: GroundVisibilityRejectingEndpoint | None
     range_km: float | None
     elevation_deg: float | None
@@ -236,7 +252,7 @@ class GsDecisionReasonCount(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     state: DecisionSampleState
-    reason_code: str | None
+    reason_code: DecisionReasonCode | None
     count: int
 
 

@@ -9,10 +9,11 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime
-from typing import Annotated, Literal
+from typing import Annotated, Literal, get_args
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from nodalarc.models.link_decisions import GroundUnscheduledReason, GroundVisibilityRejectReason
 from nodalarc.models.link_state import SchedulingState
 
 # A platform service that publishes ops events and answers debug control,
@@ -65,10 +66,11 @@ class PositionEvent(BaseModel):
     vel_z_km_s: float
 
 
-VisibilityRejectReason = Literal[
+# Reasons an ISL pair fails visibility or allocation. The ground sets are owned
+# by nodalarc.models.link_decisions, whose decision snapshots carry them.
+IslVisibilityRejectReason = Literal[
     "ok",
     "los_blocked",
-    "elevation_below_min",
     "range_exceeded",
     "field_of_regard",
     "tracking_exceeded",
@@ -76,88 +78,22 @@ VisibilityRejectReason = Literal[
     "terminal_type_mismatch",
     "terminal_role_mismatch",
 ]
-"""Full union of physical/geometric rejection reasons across ground + ISL.
+IslUnscheduledReason = Literal["isl_terminal_capacity"]
 
-`VisibilityEvent` carries either axis but is constrained at runtime by
-its model validator to the link-type-specific subset (see
-``_GROUND_REJECT_REASONS`` and ``_ISL_REJECT_REASONS`` below). The
-narrower wire form for ground decisions
-(``GroundVisibilityRejectReason`` in
-``nodalarc.models.link_decisions``) is the type used on
-``GroundVisibilityDecisionWire``."""
+VisibilityRejectReason = GroundVisibilityRejectReason | IslVisibilityRejectReason
+"""Every physical or geometric rejection reason across ground and ISL.
 
+`VisibilityEvent` carries either axis; its model validator holds a ground
+event to the ground set and an ISL event to the ISL set."""
 
-UnscheduledReason = Literal[
-    "gs_capacity",
-    "sat_capacity",
-    "isl_terminal_capacity",
-    "hysteresis_hold",
-    "incumbent_held",
-    "bbm_no_spare",
-    "mbb_overlap_locked",
-    "replaced_by_successor",
-    "successor_aborted",
-    "failed_successor",
-    "failed_acquire",
-]
-"""Full union of allocation rejection reasons across ground + ISL.
+UnscheduledReason = GroundUnscheduledReason | IslUnscheduledReason
+"""Every allocation reason across ground and ISL, held to the link type's set
+by the `VisibilityEvent` validator."""
 
-`VisibilityEvent` carries either axis but is constrained at runtime by
-its model validator to the link-type-specific subset (see
-``_GROUND_UNSCHEDULED_REASONS`` and ``_ISL_UNSCHEDULED_REASONS``
-below). The narrower wire form for ground decisions
-(``GroundUnscheduledReason`` in ``nodalarc.models.link_decisions``)
-is the type used on ``UnscheduledPair``."""
-
-
-# Link-type-specific reason taxonomy. The validator on `VisibilityEvent`
-# enforces these at construction so an ISL-only value (``polar_seam``,
-# ``terminal_type_mismatch``, ``terminal_role_mismatch``,
-# ``isl_terminal_capacity``) cannot land on a ground event, and a
-# ground-only value (``elevation_below_min``, ``gs_capacity``,
-# ``sat_capacity``, ``hysteresis_hold``, ``incumbent_held``,
-# ``bbm_no_spare``, ``mbb_overlap_locked``,
-# ``replaced_by_successor``, ``successor_aborted``, ``failed_successor``,
-# ``failed_acquire``) cannot land on an ISL event. The overlap set (``ok``, ``los_blocked``, ``range_exceeded``,
-# ``field_of_regard``, ``tracking_exceeded``) is legitimately shared
-# because the underlying physics gate applies to both terminal types.
-_GROUND_REJECT_REASONS: frozenset[str] = frozenset(
-    {
-        "ok",
-        "los_blocked",
-        "elevation_below_min",
-        "range_exceeded",
-        "field_of_regard",
-        "tracking_exceeded",
-    }
-)
-_ISL_REJECT_REASONS: frozenset[str] = frozenset(
-    {
-        "ok",
-        "los_blocked",
-        "range_exceeded",
-        "field_of_regard",
-        "tracking_exceeded",
-        "polar_seam",
-        "terminal_type_mismatch",
-        "terminal_role_mismatch",
-    }
-)
-_GROUND_UNSCHEDULED_REASONS: frozenset[str] = frozenset(
-    {
-        "gs_capacity",
-        "sat_capacity",
-        "hysteresis_hold",
-        "incumbent_held",
-        "bbm_no_spare",
-        "mbb_overlap_locked",
-        "replaced_by_successor",
-        "successor_aborted",
-        "failed_successor",
-        "failed_acquire",
-    }
-)
-_ISL_UNSCHEDULED_REASONS: frozenset[str] = frozenset({"isl_terminal_capacity"})
+_GROUND_REJECT_REASONS: frozenset[str] = frozenset(get_args(GroundVisibilityRejectReason))
+_ISL_REJECT_REASONS: frozenset[str] = frozenset(get_args(IslVisibilityRejectReason))
+_GROUND_UNSCHEDULED_REASONS: frozenset[str] = frozenset(get_args(GroundUnscheduledReason))
+_ISL_UNSCHEDULED_REASONS: frozenset[str] = frozenset(get_args(IslUnscheduledReason))
 
 
 class VisibilityEvent(BaseModel):

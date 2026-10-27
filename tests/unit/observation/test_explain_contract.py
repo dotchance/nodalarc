@@ -21,7 +21,7 @@ from __future__ import annotations
 import re
 from enum import StrEnum
 from pathlib import Path
-from typing import get_args
+from typing import Literal, get_args, get_origin
 
 from nodalarc.explain import ACTUATION_EXPLANATION_REASONS
 from nodalarc.models.decision_explanation import (
@@ -123,7 +123,10 @@ def _frontend_array(const_name: str, path: Path = _REASONS_TS) -> set[str]:
 def _literal_values(literal_type: object) -> set[str]:
     if isinstance(literal_type, type) and issubclass(literal_type, StrEnum):
         return {m.value for m in literal_type}
-    return set(get_args(literal_type))
+    if get_origin(literal_type) is Literal:
+        return set(get_args(literal_type))
+    # A union of Literals admits every member's values.
+    return {value for member in get_args(literal_type) for value in _literal_values(member)}
 
 
 def _ts_interface_field_literals(interface: str, field: str, *, path: Path) -> set[str]:

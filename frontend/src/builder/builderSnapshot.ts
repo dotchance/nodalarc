@@ -138,7 +138,9 @@ function _groundNodeState(node: BuilderWorldNode): NodeState {
 /** A ground site's identity is its namespace, which all of the site's nodes
  *  share. The resolved site count is the number of distinct ground-station
  *  namespaces in the resolved world, not the raw ground-node count. */
-export function distinctGroundStationSites(nodes: ReadonlyArray<BuilderWorldNode>): number {
+export function distinctGroundStationSites(
+  nodes: ReadonlyArray<Pick<BuilderWorldNode, "kind" | "namespace">>,
+): number {
   return new Set(
     nodes.filter((node) => node.kind === "ground_station").map((node) => node.namespace),
   ).size;

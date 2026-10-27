@@ -12,6 +12,7 @@
  */
 
 import { readdirSync, readFileSync } from "node:fs";
+import type { ComponentProps } from "react";
 import { join } from "node:path";
 import {
   act,
@@ -44,9 +45,8 @@ import {
   newDraftConstellation,
   newDraftGroundSet,
   newWorkspace,
-  testGroundMember,
 } from "./fixtures/workspaceFixtures";
-import type { CatalogDocumentSummary } from "../generated/builderApi";
+import type { CatalogDocumentSummary, JsonValue } from "../generated/builderApi";
 import { canDeploy } from "../useBuilderWorld";
 import {
   appliedObjectForKey,
@@ -639,77 +639,148 @@ describe("deferred-clamp number contract (local string draft)", () => {
 
 describe("the anatomy guide answers what-next in any order", () => {
   afterEach(cleanup);
-  const guideProps = (
-    ws: ReturnType<typeof newWorkspace>,
-    resolvedSiteCount: number | null = null,
-    sessionNameIsPlaceholder = false,
-  ) => ({
-    workspace: ws,
-    sessionNameIsPlaceholder,
+  const space = (id: string): JsonValue => ({ id, source: "nodalarc:constellations/x.yaml" });
+  const document = (name: string, segments: JsonValue[]) => ({ session: { name }, segments });
+  const station = (namespace: string) => ({
+    kind: "ground_station" as const,
+    namespace,
+    routing_instances: [],
+  });
+  const guideProps = (overrides: Partial<ComponentProps<typeof BuildGuide>> = {}) => ({
+    compiled: null,
+    refusal: null,
+    hasAcceptedSession: true,
+    placeholderName: null,
     saved: null,
-    deployed: false,
-    resolvedSiteCount,
     onAddConstellation: () => {},
     onAddGround: () => {},
     onAddDomain: () => {},
     onOpenSession: () => {},
     onOpenSegment: () => {},
+    ...overrides,
   });
 
-  it("pending rows say why and act; gated rows say what unblocks them", () => {
+  it("a new draft's rows say what to add first, and act", () => {
     const calls: string[] = [];
-    const ws = newWorkspace("untitled-session-a1b2");
     render(
       <BuildGuide
-        {...guideProps(ws, null, true)}
+        {...guideProps({ hasAcceptedSession: false })}
         onAddConstellation={() => calls.push("space")}
       />,
     );
     fireEvent.click(screen.getByText("Space segments"));
     expect(calls).toEqual(["space"]);
     // No segments yet: comms intent explains its precondition instead of acting.
-    expect(screen.getByText("needs two segments first")).toBeTruthy();
+    expect(screen.getByText("add a segment first")).toBeTruthy();
     expect(screen.getByText("add links first")).toBeTruthy();
   });
 
   it("uses the backend placeholder fact instead of guessing from the generated name", () => {
-    render(<BuildGuide {...guideProps(newWorkspace("backend-generated-name"), null, true)} />);
+    render(
+      <BuildGuide
+        {...guideProps({
+          compiled: { canonical_session_json: document("backend-generated-name", [space("leo")]) },
+          placeholderName: "backend-generated-name",
+        })}
+      />,
+    );
 
     expect(screen.getByText("name it — real time unless you say otherwise")).toBeTruthy();
     expect(screen.queryByText("backend-generated-name")).toBeNull();
   });
 
-  it("keeps an empty session name incomplete even when it is not marked as a placeholder", () => {
-    render(<BuildGuide {...guideProps(newWorkspace(""), null, false)} />);
-
-    expect(screen.getByText("name it — real time unless you say otherwise")).toBeTruthy();
-  });
-
   it("done rows show counts, not health claims", () => {
-    const ws = newWorkspace("named-session");
-    ws.space.push(newDraftConstellation("nodalarc:nodes/space/x.yaml"));
-    render(<BuildGuide {...guideProps(ws)} />);
+    render(
+      <BuildGuide
+        {...guideProps({ compiled: { canonical_session_json: document("named-session", [space("leo")]) } })}
+      />,
+    );
     expect(screen.getByText("1 segment · add more")).toBeTruthy();
     expect(screen.getByText("named-session")).toBeTruthy();
   });
 
   it("the resolved distinct-namespace site count is shown as-is", () => {
     // A single two-node site resolves to ONE namespace → count 1, not 2.
-    render(<BuildGuide {...guideProps(newWorkspace("named"), 1)} />);
+    render(
+      <BuildGuide
+        {...guideProps({
+          compiled: {
+            canonical_session_json: document("named", [space("leo")]),
+            resolved_preview: { nodes: [station("denver"), station("denver")] },
+          },
+        })}
+      />,
+    );
     expect(screen.getByText("1 site · add more")).toBeTruthy();
   });
 
-  it("before the world resolves, the count falls back to the draft, flagged unresolved", () => {
-    const ws = newWorkspace("named");
-    const ground = newDraftGroundSet("nodalarc:nodes/ground/gw.yaml", {});
-    ground.members = [
-      testGroundMember(ground, "Denver", 39.7, -104.9),
-      testGroundMember(ground, "Ames", 42, -93),
-    ];
-    ws.ground.push(ground);
-    // resolvedSiteCount null → the draft member count (2) with the qualifier.
-    render(<BuildGuide {...guideProps(ws, null)} />);
-    expect(screen.getByText("2 sites (unresolved) · add more")).toBeTruthy();
+  it("before the world resolves, the rows that need it show the refusal and no count", () => {
+    render(
+      <BuildGuide
+        {...guideProps({
+          compiled: { canonical_session_json: document("named", [space("leo")]), resolved_preview: null },
+          refusal: "link rule leo_isl selects no node",
+        })}
+      />,
+    );
+    expect(screen.getByText("not resolved — link rule leo_isl selects no node")).toBeTruthy();
+    expect(
+      screen.getByText("not resolved — link rule leo_isl selects no node · routing omitted"),
+    ).toBeTruthy();
+    expect(screen.getByText("1 segment · add more")).toBeTruthy();
+  });
+
+  it("an accepted session the backend has not answered for yet shows no count", () => {
+    render(<BuildGuide {...guideProps()} />);
+    expect(screen.getAllByText("not checked yet")).toHaveLength(5);
+  });
+
+  it("a new draft the backend refused shows the refusal, not what to add first", () => {
+    // A new draft can hold segments before it holds an accepted session; once
+    // the backend has answered, its refusal is shown.
+    render(
+      <BuildGuide
+        {...guideProps({
+          compiled: { canonical_session_json: null, resolved_preview: null },
+          refusal: "Ground segments require at least one site",
+          hasAcceptedSession: false,
+        })}
+      />,
+    );
+    expect(
+      screen.getAllByText("not resolved — Ground segments require at least one site"),
+    ).toHaveLength(5);
+    expect(screen.queryByText("none yet — satellites carry the traffic")).toBeNull();
+  });
+
+  it("an unresolved session still says routing was omitted", () => {
+    render(
+      <BuildGuide
+        {...guideProps({
+          compiled: { canonical_session_json: document("named", [space("leo")]), resolved_preview: null },
+          refusal: "link rule leo_isl selects no node",
+        })}
+      />,
+    );
+    expect(
+      screen.getByText("not resolved — link rule leo_isl selects no node · routing omitted"),
+    ).toBeTruthy();
+  });
+
+  it("a session with routing omitted and no router says it runs no routing", () => {
+    render(
+      <BuildGuide
+        {...guideProps({
+          compiled: {
+            canonical_session_json: document("named", [space("leo")]),
+            resolved_preview: { nodes: [station("denver")] },
+          },
+        })}
+      />,
+    );
+    expect(
+      screen.getByText("none · routing omitted, and no node runs a routing workload"),
+    ).toBeTruthy();
   });
 });
 

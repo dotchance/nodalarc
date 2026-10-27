@@ -975,11 +975,11 @@ button.builder-guide-row:hover {
   font-weight: var(--font-weight-semibold);
 }
 
+/* Details wrap: a row states the backend's facts in full (each routing
+   domain with its protocol and participants, or the refusal). */
 .builder-guide-detail {
   min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  overflow-wrap: anywhere;
 }
 
 /* Tier seam in the library list: yours lead; the shipped set is labeled. */

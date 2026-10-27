@@ -65,9 +65,10 @@ Two generated files tie the frontend tests to the backend's wire models:
   the backend does not declare, any `types.ts` interface whose field names differ from the wire
   model's, and any `types.ts` field that does not mirror a closed vocabulary.
 - `scripts/gen_builder_shipped_drafts.py` writes `frontend/src/builder/__tests__/fixtures/shipped/`:
-  for each shipped session, the visual draft VS-API answers when the Builder opens it and the
-  world the backend resolves for it. `shippedSessionAnatomy.test.tsx` renders the Builder's
-  anatomy guide from the draft and checks each row against the world.
+  for each shipped session, the parts of the compile result the Builder receives when it opens
+  and compiles the session: the canonical session document and the world the backend resolves
+  for it. `shippedSessionAnatomy.test.tsx` renders the Builder's anatomy guide from that compile
+  result and checks each row against the world.
 
 `tests/unit/observation/test_state_feed_contract.py` and
 `tests/unit/authoring/test_builder_shipped_drafts_fixture.py` fail when either generated file is

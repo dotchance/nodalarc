@@ -1,8 +1,9 @@
 """The Builder fixtures the frontend tests render are what VS-API answers today.
 
 `frontend/src/builder/__tests__/fixtures/shipped/<session>.json` holds, per shipped session, the
-visual draft the Builder receives on open and the world the backend resolves for it. The
-frontend test `shippedSessionAnatomy.test.tsx` checks the page's claims against that world.
+parts of the compile result the Builder receives on open and compile: the canonical session
+document and the world the backend resolves for it. The frontend test
+`shippedSessionAnatomy.test.tsx` checks the page's claims against that world.
 This test opens and compiles every shipped session in-process and refuses a stale file.
 """
 

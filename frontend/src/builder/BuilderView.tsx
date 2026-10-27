@@ -46,7 +46,7 @@ import {
 } from "./BuilderTransitionStatus";
 import { AreaLegend } from "../routing/AreaLegend";
 import { buildAreaColoring } from "../routing/instances";
-import { builderSnapshotFromWorld, distinctGroundStationSites } from "./builderSnapshot";
+import { builderSnapshotFromWorld } from "./builderSnapshot";
 import { CandidateLines } from "./CandidateLines";
 import { computeCandidates } from "./candidates";
 import { EditorApplyRow, Field, InlineSelect, PasteArea } from "./editorKit";
@@ -2338,13 +2338,6 @@ export function BuilderView({
           <div className="builder-warning" data-testid="opened-session-lossless">
             {openedSession.display_name} is open as a synchronized graphical and YAML draft.
             VS-API owns parsing, canonicalization, component-chain forking, and save assembly.
-            {visualDraft.source_ref && visualDraft.source_ref !== visualDraft.target_ref && (
-              <div className="builder-site-derived">
-                This copy targets {visualDraft.target_ref}. Change session.name in the source YAML
-                to {(visualDraft.target_ref.split("/").pop() ?? "").replace(/\.ya?ml$/, "")} before
-                Save; the backend blocks a mismatched identity.
-              </div>
-            )}
           </div>
         )}
         {workspace && (nodeCatalog.error || terminalCatalog.error) && (
@@ -2363,17 +2356,23 @@ export function BuilderView({
         )}
         {workspace && (
           <BuildGuide
-            workspace={previewWorkspace() ?? workspace}
-            sessionNameIsPlaceholder={
-              visualDraft
-                ? visualDraft.session_name_is_placeholder &&
-                  (previewWorkspace() ?? workspace).session_name ===
-                    (visualDraft.target_ref.split("/").pop() ?? "").replace(/\.ya?ml$/, "")
-                : false
+            compiled={compileResult}
+            refusal={resolveError?.error ?? null}
+            hasAcceptedSession={!!visualDraft?.applied_session}
+            placeholderName={
+              visualDraft?.session_name_is_placeholder
+                ? visualDraft.target_ref
+                    .slice(visualDraft.target_ref.lastIndexOf("/") + 1)
+                    .replace(/\.ya?ml$/, "")
+                : null
             }
-            saved={saveState.kind === "saved" || saveState.kind === "deploying" || saveState.kind === "deploy-accepted" ? ("name" in saveState ? saveState.name : null) : null}
-            deployed={false}
-            resolvedSiteCount={world ? distinctGroundStationSites(world.nodes) : null}
+            saved={
+              saveState.kind === "saved" ||
+              saveState.kind === "deploying" ||
+              saveState.kind === "deploy-accepted"
+                ? { name: saveState.name, deployRefusal: deployGate.ok ? null : deployGate.reason }
+                : null
+            }
             onAddConstellation={() => {
               ensureThenCreate(() => {
                 setLibraryError(null);

@@ -4,7 +4,7 @@
  *  Field names are snake_case to match Pydantic JSON output.
  */
 
-import type { ActuationState } from "./explain/reasons";
+import type { ActuationState, SchedulerOpsCode } from "./explain/reasons";
 import type { CatalogSessionSummary } from "./builder/generated/builderApi";
 
 export interface NodeAddress {
@@ -77,6 +77,12 @@ export interface NodeState {
   tags?: string[];
 }
 
+/** Where VS-API's session manager stands. */
+export type SessionStatus = "idle" | "switching" | "wiring" | "ready" | "error";
+
+/** A platform service that publishes ops events and answers debug control. */
+export type ServiceSource = "ome" | "scheduler" | "node_agent" | "operator" | "vs_api";
+
 /** The kinds VS-API reports for a link. */
 export type PublicLinkType = "ground" | "isl" | "inter_constellation" | "inter_body_relay";
 
@@ -100,7 +106,7 @@ export interface LinkState {
   link_rule_id?: string | null;
   topology_mode?: string | null;
   endpoint_segments?: [string, string] | null;
-  scheduling_state?: string;
+  scheduling_state: "active" | "teardown";
   teardown_remaining_ticks?: number | null;
   successor_pair?: [string, string] | null;
 }
@@ -164,7 +170,7 @@ export interface TracedPath {
 export interface RecentEvent {
   sim_time: string;
   node_id: string;
-  event_type: string;
+  event_type: "link_up" | "link_down" | "PATH_CHANGE";
   summary: string;
 }
 
@@ -204,9 +210,9 @@ export interface LinkHistoryPage {
 export interface OpsEvent {
   timestamp: string;
   session_id: string;
-  source: string;
+  source: ServiceSource;
   hostname: string;
-  level: string;
+  level: "critical" | "error" | "warning" | "info" | "debug";
   code: string;
   message: string;
   details?: Record<string, unknown> | null;
@@ -219,7 +225,7 @@ export interface OpsEvent {
 export interface ActuationNotice {
   gs_id: string;
   actuation_state: ActuationState;
-  reason_code: string;
+  reason_code: SchedulerOpsCode;
   message: string;
   since: string | null;
   blocking_new_ground_link_up: boolean;
@@ -235,7 +241,7 @@ export interface ActuationHealthGroundStation {
   gs_id: string;
   actuation_state: ActuationState;
   since: string | null;
-  reason_code: string | null;
+  reason_code: SchedulerOpsCode;
   blocking_new_ground_link_up: boolean;
   recovery_status: Record<string, unknown>;
   /* The raw event is deliberately not on the health wire — notices
@@ -245,7 +251,7 @@ export interface ActuationHealthGroundStation {
 export interface ActuationHealthInstance {
   scheduler_instance_id: string;
   hostname: string;
-  status: string;
+  status: "clean" | "dirty" | "degraded" | "unknown";
   ground_stations: ActuationHealthGroundStation[];
 }
 
@@ -281,7 +287,7 @@ export interface StateSnapshot {
   recent_events: RecentEvent[];
   routing_stack: string | null;
   constellation_name: string | null;
-  session_status: string | null;
+  session_status: SessionStatus;
   session_status_detail: string | null;
   playback_paused: boolean;
   playback_speed: number;

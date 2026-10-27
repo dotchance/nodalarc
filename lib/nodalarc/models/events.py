@@ -7,10 +7,26 @@ Published via NATS JetStream.
 
 from __future__ import annotations
 
+import logging
 from datetime import datetime
 from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
+
+from nodalarc.models.link_state import SchedulingState
+
+# A platform service that publishes ops events and answers debug control,
+# named as the service passes it to nodal.logging.configure().
+ServiceSource = Literal["ome", "scheduler", "node_agent", "operator", "vs_api"]
+OpsLevel = Literal["critical", "error", "warning", "info", "debug"]
+# The logging level each ops level is logged at.
+OPS_LOG_LEVELS: dict[OpsLevel, int] = {
+    "critical": logging.CRITICAL,
+    "error": logging.ERROR,
+    "warning": logging.WARNING,
+    "info": logging.INFO,
+    "debug": logging.DEBUG,
+}
 
 
 class NodePosition(BaseModel):
@@ -188,7 +204,7 @@ class VisibilityEvent(BaseModel):
     link_type: Literal["isl", "ground"]  # set by OME from node type registry
     gs_terminal_index: int | None = None  # None for ISL events
     sat_terminal_index: int | None = None  # None for ISL events
-    scheduling_state: str = "active"  # "active" | "teardown"
+    scheduling_state: SchedulingState = "active"
     visibility_reject_reason: VisibilityRejectReason
     unscheduled_reason: UnscheduledReason | None
 
@@ -658,7 +674,7 @@ class ReplayAnchor(BaseModel):
     epoch_id: int
     step: int
     isl_state: dict[str, tuple[bool, bool]]
-    gs_state: dict[str, tuple[bool, bool, str]]
+    gs_state: dict[str, tuple[bool, bool, SchedulingState]]
     associations: dict[str, CheckpointAssociation]
     pending_teardowns: dict[str, TeardownEntry]
     written_at: float
@@ -677,9 +693,9 @@ class OpsEvent(BaseModel):
     timestamp: datetime
     tenant_id: str = ""
     session_id: str
-    source: str  # "operator", "scheduler", "ome", "node_agent", "validator"
+    source: ServiceSource
     hostname: str
-    level: str  # "critical", "error", "warning", "info", "debug"
+    level: OpsLevel
     code: str
     message: str
     details: dict | None = None

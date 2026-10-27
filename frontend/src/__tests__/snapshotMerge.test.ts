@@ -4,13 +4,13 @@
 
 import { describe, it, expect } from "vitest";
 import { mergeSnapshot } from "../snapshotMerge";
-import type { StateSnapshot } from "../types";
+import type { OpsEvent, StateSnapshot } from "../types";
 
 const base = (over: Partial<StateSnapshot>): StateSnapshot =>
   ({ ops_log_token: "tok-a", ...over }) as StateSnapshot;
 
-const ev = (seq: number, code = `E${seq}`) =>
-  ({ seq, code, timestamp: "", session_id: "", source: "", hostname: "", level: "info", message: "" });
+const ev = (seq: number, code = `E${seq}`): OpsEvent =>
+  ({ seq, code, timestamp: "", session_id: "", source: "ome", hostname: "", level: "info", message: "" });
 
 describe("mergeSnapshot", () => {
   it("appends incremental events to the scrollback", () => {

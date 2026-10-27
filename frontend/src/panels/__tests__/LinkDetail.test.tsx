@@ -10,6 +10,7 @@ function link(overrides: Partial<LinkState> = {}): LinkState {
     node_a: "leo-sat-p00s00",
     node_b: "meo-sat-p00s00",
     state: "active",
+    scheduling_state: "active",
     link_type: "isl",
     link_reason: "link_state_snapshot",
     latency_ms: 42,

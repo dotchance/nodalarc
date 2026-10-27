@@ -20,6 +20,7 @@ from nodalarc.cr_runtime_config import (
     cr_status_observes_current_generation,
 )
 from nodalarc.kube_watch import watch_snapshots
+from nodalarc.models.vs_api import SessionStatus
 from nodalarc.workload_target import NODE_ID_LABEL
 from pydantic import ValidationError
 
@@ -116,12 +117,12 @@ class SessionManager:
 
     def __init__(self) -> None:
         self._current_source_id: str | None = None
-        self._status: str = "idle"
+        self._status: SessionStatus = "idle"
         self._status_detail: str = ""
         self._detail_lock = threading.Lock()
 
     @property
-    def status(self) -> str:
+    def status(self) -> SessionStatus:
         return self._status
 
     @property

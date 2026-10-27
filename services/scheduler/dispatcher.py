@@ -54,10 +54,17 @@ from datetime import UTC, datetime, timedelta
 from typing import Literal
 
 import nats
-from nodalarc.models.events import OpsEvent, PlaybackState, SessionEphemeris, VisibilityEvent
+from nodalarc.models.events import (
+    OPS_LOG_LEVELS,
+    OpsEvent,
+    OpsLevel,
+    PlaybackState,
+    SessionEphemeris,
+    VisibilityEvent,
+)
 from nodalarc.models.link_decisions import GroundLinkDecisionSnapshot
 from nodalarc.models.link_events import LinkDecisionProvenance
-from nodalarc.models.link_state import LinkStateSnapshot
+from nodalarc.models.link_state import LinkStateSnapshot, SchedulingState
 from nodalarc.models.resolved_session import InterfaceRates
 from nodalarc.models.scheduler_ops import (
     ActualLinkSnapshot,
@@ -340,7 +347,7 @@ class Dispatcher:
         #   - Tuple shape mirrors event_diff's GroundVisibilityState
         #     and LinkStateSnapshot's gs_state for direct comparison:
         #     (visible: bool, scheduled: bool, sched_state: str).
-        self._ome_view: dict[tuple[str, str], tuple[bool, bool, str]] = {}
+        self._ome_view: dict[tuple[str, str], tuple[bool, bool, SchedulingState]] = {}
 
         # Actuator state: what IS active (confirmed by Node Agent).
         # Written ONLY by the dispatch worker after Node Agent ACK.
@@ -1255,7 +1262,7 @@ class Dispatcher:
         *,
         code: SchedulerOpsCode,
         message: str,
-        level: str = "error",
+        level: OpsLevel = "error",
         details: ActuationOpsDetails | None = None,
     ) -> None:
         details_dict = None if details is None else details.model_dump(mode="json")
@@ -1269,8 +1276,12 @@ class Dispatcher:
             message=message,
             details=details_dict,
         )
-        log_level = getattr(logging, level.upper(), logging.INFO)
-        log.log(log_level, "%s", message, extra={"code": code.value, "details": details_dict})
+        log.log(
+            OPS_LOG_LEVELS[level],
+            "%s",
+            message,
+            extra={"code": code.value, "details": details_dict},
+        )
         js = getattr(self, "_js", None)
         if js is None:
             return
@@ -2329,11 +2340,11 @@ class Dispatcher:
             self._ome_view[pair] = (
                 vis.visible,
                 vis.scheduled,
-                getattr(vis, "scheduling_state", "active"),
+                vis.scheduling_state,
             )
 
             if vis.visible and vis.scheduled:
-                sched_state = getattr(vis, "scheduling_state", "active")
+                sched_state = vis.scheduling_state
                 if sched_state == "teardown":
                     self._teardown_pairs.add(pair)
                 else:
@@ -2398,7 +2409,7 @@ class Dispatcher:
         # fields, independent of any safety-net override applied later
         # via _apply_events_to_desired. The C-A repro test compares
         # _ome_view to _desired_links to surface divergence.
-        new_ome_view: dict[tuple[str, str], tuple[bool, bool, str]] = {}
+        new_ome_view: dict[tuple[str, str], tuple[bool, bool, SchedulingState]] = {}
 
         for link in snapshot.links:
             pair = (link.node_a, link.node_b)
@@ -2409,7 +2420,7 @@ class Dispatcher:
             # DOWN → (False, False, sched_state).
             from nodalarc.models.link_state import CarrierState as _Carrier
 
-            sched_state = getattr(link, "scheduling_state", "active") or "active"
+            sched_state = link.scheduling_state
             if link.carrier == _Carrier.UP:
                 new_ome_view[pair] = (True, True, sched_state)
             elif link.carrier == _Carrier.LOWERLAYERDOWN:

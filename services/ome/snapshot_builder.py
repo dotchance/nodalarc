@@ -43,13 +43,14 @@ from nodalarc.models.link_state import (
     LinkState,
     LinkStateSnapshot,
     RoutingState,
+    SchedulingState,
 )
 
 from ome.propagation_engine import PropagatedState
 from ome.types import GroundVisibilityDecisionMap, MbbTeardownState
 
 IslSnapshotState = Mapping[tuple[str, str], tuple[bool, bool]]
-GroundSnapshotState = Mapping[tuple[str, str], tuple[bool, bool, str]]
+GroundSnapshotState = Mapping[tuple[str, str], tuple[bool, bool, SchedulingState]]
 
 
 @dataclass(frozen=True)

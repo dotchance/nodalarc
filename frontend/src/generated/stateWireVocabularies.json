@@ -660,13 +660,39 @@
         "unknown"
       ],
       "gs_id": null,
-      "reason_code": null,
+      "reason_code": [
+        "ACTUATION_BLOCKED",
+        "ACTUATION_CLEAN",
+        "ACTUATION_HALTED",
+        "AGENT_DEGRADED",
+        "AGENT_RECOVERED",
+        "AUTHORITY_SUBSET_VIOLATION",
+        "GROUND_LATENCY_UPDATE_FAILED",
+        "GROUND_LINK_DOWN_FAILED",
+        "GROUND_LINK_UP_FAILED",
+        "KERNEL_DIRTY",
+        "KERNEL_VERIFY_ATTEMPTED",
+        "KERNEL_VERIFY_EXHAUSTED",
+        "OLD_PAIR_DROPPED_WITHOUT_SUCCESSOR",
+        "OPERATOR_REPAIR_FAILED",
+        "OPERATOR_REPAIR_REJECTED",
+        "OPERATOR_REPAIR_REQUESTED",
+        "OPERATOR_REPAIR_STARTED",
+        "OPERATOR_REPAIR_SUCCEEDED",
+        "REPLACEMENT_LINK_UP_FAILED",
+        "SCHEDULER_SUPERSEDED"
+      ],
       "since": null
     },
     "ActuationHealthInstance": {
       "hostname": null,
       "scheduler_instance_id": null,
-      "status": null
+      "status": [
+        "clean",
+        "degraded",
+        "dirty",
+        "unknown"
+      ]
     },
     "ActuationNotice": {
       "actuation_state": [
@@ -677,7 +703,28 @@
       ],
       "gs_id": null,
       "message": null,
-      "reason_code": null,
+      "reason_code": [
+        "ACTUATION_BLOCKED",
+        "ACTUATION_CLEAN",
+        "ACTUATION_HALTED",
+        "AGENT_DEGRADED",
+        "AGENT_RECOVERED",
+        "AUTHORITY_SUBSET_VIOLATION",
+        "GROUND_LATENCY_UPDATE_FAILED",
+        "GROUND_LINK_DOWN_FAILED",
+        "GROUND_LINK_UP_FAILED",
+        "KERNEL_DIRTY",
+        "KERNEL_VERIFY_ATTEMPTED",
+        "KERNEL_VERIFY_EXHAUSTED",
+        "OLD_PAIR_DROPPED_WITHOUT_SUCCESSOR",
+        "OPERATOR_REPAIR_FAILED",
+        "OPERATOR_REPAIR_REJECTED",
+        "OPERATOR_REPAIR_REQUESTED",
+        "OPERATOR_REPAIR_STARTED",
+        "OPERATOR_REPAIR_SUCCEEDED",
+        "REPLACEMENT_LINK_UP_FAILED",
+        "SCHEDULER_SUPERSEDED"
+      ],
       "since": null
     },
     "ActuationOpsDetails": {
@@ -701,9 +748,7 @@
         "ground_kernel_dirty",
         "ground_unknown",
         "isl_failure",
-        "none",
-        "ome_contract",
-        "ops_publish_failure"
+        "none"
       ],
       "gs_id": null,
       "hostname": null,
@@ -1055,7 +1100,10 @@
       ],
       "node_a": null,
       "node_b": null,
-      "scheduling_state": null,
+      "scheduling_state": [
+        "active",
+        "teardown"
+      ],
       "state": [
         "active"
       ],
@@ -1133,7 +1181,6 @@
       "message": null,
       "status": [
         "accepted",
-        "error",
         "rejected"
       ]
     },
@@ -1142,7 +1189,11 @@
       "operation": null
     },
     "RecentEvent": {
-      "event_type": null,
+      "event_type": [
+        "PATH_CHANGE",
+        "link_down",
+        "link_up"
+      ],
       "node_id": null,
       "summary": null
     },
@@ -1159,7 +1210,13 @@
       "constellation_name": null,
       "routing_stack": null,
       "session_id": null,
-      "session_status": null,
+      "session_status": [
+        "error",
+        "idle",
+        "ready",
+        "switching",
+        "wiring"
+      ],
       "session_status_detail": null
     },
     "StoredTransitionOperation": {

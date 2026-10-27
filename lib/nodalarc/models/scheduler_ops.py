@@ -63,7 +63,6 @@ class SchedulerOpsCode(StrEnum):
 class ActuationFailureClass(StrEnum):
     NONE = "none"
     AUTHORITY_INVARIANT = "authority_invariant"
-    OME_CONTRACT = "ome_contract"
     FENCE = "fence"
     GROUND_CLEAN_FAILURE = "ground_clean_failure"
     GROUND_KERNEL_DIRTY = "ground_kernel_dirty"
@@ -74,7 +73,6 @@ class ActuationFailureClass(StrEnum):
     # nothing: "could not observe" is never reported as observed divergence.
     AGENT_UNREACHABLE = "agent_unreachable"
     ISL_FAILURE = "isl_failure"
-    OPS_PUBLISH_FAILURE = "ops_publish_failure"
 
 
 class RecoveryStatus(BaseModel):
@@ -193,6 +191,6 @@ class OperatorRepairCommand(BaseModel):
 class OperatorRepairResponse(BaseModel):
     model_config = ConfigDict(frozen=True)
 
-    status: Literal["accepted", "rejected", "error"]
+    status: Literal["accepted", "rejected"]
     intervention_id: str
     message: str

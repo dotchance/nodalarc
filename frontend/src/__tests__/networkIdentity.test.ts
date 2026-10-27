@@ -38,6 +38,7 @@ function link(link_type: LinkState["link_type"]): LinkState {
     node_a: "ground-gs-santiago",
     node_b: "meo-sat-p00s00",
     state: "active",
+    scheduling_state: "active",
     link_type,
     link_reason: null,
     latency_ms: 1,

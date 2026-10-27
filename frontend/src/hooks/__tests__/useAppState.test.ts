@@ -119,7 +119,7 @@ describe("useAppState", () => {
 
   it("null snapshot does not crash derived state", () => {
     const { result } = renderHook(() => useAppState(makeInputs({ snapshot: null })));
-    expect(result.current.sessionStatus).toBe("idle");
+    expect(result.current.sessionStatus).toBeNull();
     expect(result.current.hasActiveSession).toBe(false);
     expect(result.current.activeSessionName).toBeNull();
     expect(result.current.simTimeAdvanced).toBe(false);

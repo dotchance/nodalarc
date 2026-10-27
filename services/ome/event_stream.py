@@ -45,6 +45,7 @@ from nodalarc.models.ground_policy import (
     SelectionPolicySpec,
 )
 from nodalarc.models.link_decisions import GroundPolicyAudit
+from nodalarc.models.link_state import SchedulingState
 from nodalarc.models.session import GroundSchedulingConfig
 from nodalarc.ome_runtime import (
     GroundStationFile,
@@ -369,7 +370,7 @@ class TimelineWindowResult:
 
     events: list[TimelineEvent]
     isl_state: dict[tuple[str, str], tuple[bool, bool]]
-    gs_state: dict[tuple[str, str], tuple[bool, bool, str]]
+    gs_state: dict[tuple[str, str], tuple[bool, bool, SchedulingState]]
     associations: dict[tuple[str, str], tuple[int, int]]
     pending_teardowns: MbbTeardownState
     predictive: bool = False
@@ -754,7 +755,7 @@ def _build_link_snapshot_source(
             continue
         isl_state[pair] = (visible, scheduled)
 
-    ground_state: dict[tuple[str, str], tuple[bool, bool, str]] = {}
+    ground_state: dict[tuple[str, str], tuple[bool, bool, SchedulingState]] = {}
     forwarding_pairs = (
         set(ground_allocation.scheduled_pairs)
         | set(ground_allocation.pending_teardowns)
@@ -798,7 +799,7 @@ def compute_step(
     step_seconds: float,
     timestamp_offset: float,
     isl_state: dict[tuple[str, str], tuple[bool, bool]],
-    gs_state: dict[tuple[str, str], tuple[bool, bool, str]],
+    gs_state: dict[tuple[str, str], tuple[bool, bool, SchedulingState]],
     current_associations: dict[tuple[str, str], tuple[int, int]] | None = None,
     mbb_pending_teardowns: MbbTeardownState | None = None,
     dwell_state: dict[tuple[str, str], DwellPassState] | None = None,
@@ -999,7 +1000,7 @@ def precompute_timeline_window_from_context(
     duration_s: float,
     step_seconds: float = 1.0,
     initial_isl_state: dict[tuple[str, str], tuple[bool, bool]] | None = None,
-    initial_gs_state: dict[tuple[str, str], tuple[bool, bool, str]] | None = None,
+    initial_gs_state: dict[tuple[str, str], tuple[bool, bool, SchedulingState]] | None = None,
     initial_associations: dict[tuple[str, str], tuple[int, int]] | None = None,
     initial_pending_teardowns: MbbTeardownState | None = None,
     timestamp_offset: float = 0.0,
@@ -1017,7 +1018,7 @@ def precompute_timeline_window_from_context(
     isl_state: dict[tuple[str, str], tuple[bool, bool]] = (
         dict(initial_isl_state) if initial_isl_state else {}
     )
-    gs_state: dict[tuple[str, str], tuple[bool, bool, str]] = (
+    gs_state: dict[tuple[str, str], tuple[bool, bool, SchedulingState]] = (
         dict(initial_gs_state) if initial_gs_state else {}
     )
     associations: dict[tuple[str, str], tuple[int, int]] = (
@@ -1073,7 +1074,7 @@ def precompute_timeline_window(
     ground_defaults_applied: bool = False,
     ground_candidate_satellites_by_gs: Mapping[str, tuple[str, ...]] | None = None,
     initial_isl_state: dict[tuple[str, str], tuple[bool, bool]] | None = None,
-    initial_gs_state: dict[tuple[str, str], tuple[bool, bool, str]] | None = None,
+    initial_gs_state: dict[tuple[str, str], tuple[bool, bool, SchedulingState]] | None = None,
     initial_associations: dict[tuple[str, str], tuple[int, int]] | None = None,
     initial_pending_teardowns: MbbTeardownState | None = None,
     timestamp_offset: float = 0.0,

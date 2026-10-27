@@ -21,13 +21,14 @@ from nodalarc.models.events import (
     VisibilityEvent,
     VisibilityRejectReason,
 )
+from nodalarc.models.link_state import SchedulingState
 
 from ome.ground_allocator import GroundAllocationResult
 from ome.isl_engine import IslFeasibilityResult, ScheduledIsl
 from ome.types import GroundVisibilityDecisionMap
 
 IslVisibilityState = dict[tuple[str, str], tuple[bool, bool]]
-GroundVisibilityState = dict[tuple[str, str], tuple[bool, bool, str]]
+GroundVisibilityState = dict[tuple[str, str], tuple[bool, bool, SchedulingState]]
 
 
 @dataclass(frozen=True)
@@ -119,7 +120,7 @@ def diff_ground_visibility_events(
     sim_time: datetime,
     visibility_decisions: GroundVisibilityDecisionMap,
     allocation: GroundAllocationResult,
-    previous_state: Mapping[tuple[str, str], tuple[bool, bool, str]],
+    previous_state: Mapping[tuple[str, str], tuple[bool, bool, SchedulingState]],
     terminal_types: Mapping[tuple[str, str], str],
 ) -> GroundEventDiff:
     """Emit ground VisibilityEvents for changed visibility/allocation state.

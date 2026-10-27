@@ -96,25 +96,21 @@ export const ACTUATION_EXPLANATION_REASONS = ["actuation_diverged"] as const;
 export type ActuationFailureClass =
   | "none"
   | "authority_invariant"
-  | "ome_contract"
   | "fence"
   | "ground_clean_failure"
   | "ground_kernel_dirty"
   | "ground_unknown"
   | "agent_unreachable"
-  | "isl_failure"
-  | "ops_publish_failure";
+  | "isl_failure";
 export const ACTUATION_FAILURE_CLASSES: readonly ActuationFailureClass[] = [
   "none",
   "authority_invariant",
-  "ome_contract",
   "fence",
   "ground_clean_failure",
   "ground_kernel_dirty",
   "ground_unknown",
   "agent_unreachable",
   "isl_failure",
-  "ops_publish_failure",
 ];
 
 export const SCHEDULER_OPS_CODES = [
@@ -576,18 +572,6 @@ export const REASON_REGISTRY: Record<string, ReasonRecord> = {
     levers: [],
     producer: "scheduler",
   }),
-  ome_contract: rec({
-    code: "ome_contract",
-    domains: ["actuation"],
-    gate: "actuation_proof",
-    layer: "actuation",
-    family: "faulted",
-    severity: "alarm",
-    label: "OME contract violation",
-    sentence: "An OME contract was violated during dispatch; dispatch halted.",
-    levers: [],
-    producer: "scheduler",
-  }),
   fence: rec({
     code: "fence",
     domains: ["actuation"],
@@ -658,18 +642,6 @@ export const REASON_REGISTRY: Record<string, ReasonRecord> = {
     severity: "alarm",
     label: "ISL actuation failure",
     sentence: "An inter-satellite link actuation failed; ISL failures halt the session (no per-link degraded state).",
-    levers: [],
-    producer: "scheduler",
-  }),
-  ops_publish_failure: rec({
-    code: "ops_publish_failure",
-    domains: ["actuation"],
-    gate: "actuation_proof",
-    layer: "actuation",
-    family: "faulted",
-    severity: "warning",
-    label: "Ops publish failure",
-    sentence: "An operational event failed to publish; observability for this action is degraded.",
     levers: [],
     producer: "scheduler",
   }),

@@ -32,7 +32,7 @@ export function useAppState(inputs: AppStateInputs) {
   const [showCatalog, setShowCatalog] = useState(true);
   const [hasEverDeployed, setHasEverDeployed] = useState(false);
 
-  const sessionStatus = snapshot?.session_status ?? "idle";
+  const sessionStatus = snapshot?.session_status ?? null;
   const hasActiveSession =
     sessionStatus === "ready" ||
     sessionStatus === "switching" ||

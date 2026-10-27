@@ -38,6 +38,7 @@ function link(
     node_a,
     node_b,
     state,
+    scheduling_state: "active",
     link_type,
     link_reason: null,
     latency_ms: 1,

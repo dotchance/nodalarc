@@ -13,7 +13,7 @@ import { IconButton } from "../ui/Button";
 import { Icon } from "../ui/icons/Icon";
 import { setSearchTarget } from "../ui/searchFocus";
 import { formatTime } from "../translate";
-import type { OpsEvent } from "../types";
+import type { OpsEvent, ServiceSource } from "../types";
 
 interface LogPanelProps {
   events: OpsEvent[];
@@ -23,7 +23,13 @@ interface LogPanelProps {
   onClose: () => void;
 }
 
-const DEBUG_SOURCE_TYPES = ["ome", "scheduler", "node_agent", "operator"] as const;
+const DEBUG_SOURCE_TYPES: readonly ServiceSource[] = [
+  "ome",
+  "scheduler",
+  "node_agent",
+  "operator",
+  "vs_api",
+];
 const LEVELS = ["critical", "error", "warning", "info"] as const;
 
 function levelClass(level: string): string {

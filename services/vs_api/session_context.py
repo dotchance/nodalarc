@@ -1229,7 +1229,7 @@ class SessionContext:
         notice = {
             "gs_id": gs_id,
             "actuation_state": after,
-            "reason_code": event.get("code", ""),
+            "reason_code": event["code"],
             "message": event.get("message", ""),
             "since": event.get("timestamp"),
             "blocking_new_ground_link_up": after_state != ActuationState.CLEAN,
@@ -1257,7 +1257,7 @@ class SessionContext:
             "gs_id": gs_id,
             "teardown_id": teardown_id,
             "terminal_outcome": outcome,
-            "reason_code": event.get("code", ""),
+            "reason_code": event["code"],
             "message": event.get("message", ""),
             "since": event.get("timestamp"),
             "epoch_id": details.get("epoch_id"),
@@ -1327,7 +1327,7 @@ class SessionContext:
                     "gs_id": gs_id,
                     "actuation_state": state,
                     "since": event.get("timestamp"),
-                    "reason_code": event.get("code"),
+                    "reason_code": event["code"],
                     "blocking_new_ground_link_up": state != ActuationState.CLEAN.value,
                     "recovery_status": details.get("recovery_status") or {},
                     # The raw event is deliberately NOT embedded: it

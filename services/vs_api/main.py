@@ -27,7 +27,7 @@ from contextvars import ContextVar
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, get_args
 
 import asyncssh
 import nats
@@ -86,6 +86,7 @@ from nodalarc.models.builder_api import (
     WizardSatelliteTypePresetResponse,
 )
 from nodalarc.models.coverage import CoveragePreviewResult
+from nodalarc.models.events import OPS_LOG_LEVELS, OpsLevel, ServiceSource
 from nodalarc.models.resolved_session import ResolvedSession
 from nodalarc.models.scheduler_ops import OperatorRepairCommand
 from nodalarc.models.session_sources import (
@@ -342,7 +343,7 @@ _debug_clients: dict[int, set[str]] = {}
 _debug_sub: object | None = None
 _debug_events: deque = deque(maxlen=500)
 
-_KNOWN_DEBUG_SOURCES = ("ome", "scheduler", "node_agent", "operator", "vs_api")
+_KNOWN_DEBUG_SOURCES: tuple[ServiceSource, ...] = get_args(ServiceSource)
 
 
 def _get_transition_operation_store() -> TransitionOperationStore:
@@ -669,7 +670,7 @@ async def _handle_ws_debug_command(ws_id: int, msg: dict) -> None:
 
 
 async def _publish_system_ops_event(
-    level: str, code: str, message: str, details: dict | None = None
+    level: OpsLevel, code: str, message: str, details: dict | None = None
 ) -> None:
     """Buffer a system-scoped OpsEvent for WebSocket delivery and log it.
 
@@ -681,7 +682,7 @@ async def _publish_system_ops_event(
     event = {
         "timestamp": datetime.now(UTC).isoformat(),
         "session_id": "_system",
-        "source": "vs-api",
+        "source": "vs_api",
         "hostname": socket.gethostname(),
         "level": level,
         "code": code,
@@ -691,8 +692,7 @@ async def _publish_system_ops_event(
     if is_operator_visible_ops_event(event):
         _system_ops_events.append(stamp_ops_event(event))
 
-    log_level = getattr(logging, level.upper(), logging.INFO)
-    log.log(log_level, "%s", message, extra={"code": code, "details": details})
+    log.log(OPS_LOG_LEVELS[level], "%s", message, extra={"code": code, "details": details})
 
 
 # Operator-log visibility policy lives in ops_log (shared with the
@@ -850,8 +850,8 @@ def _build_snapshot(*, ops_after: int = 0) -> dict | None:
             recent_events=recent,
             routing_stack=ctx.routing_stack,
             constellation_name=ctx.constellation_name,
-            session_status=_session_manager.status if _session_manager else None,
-            session_status_detail=_session_manager.status_detail if _session_manager else None,
+            session_status=_session_manager.status,
+            session_status_detail=_session_manager.status_detail,
             playback_paused=ctx.playback_paused,
             playback_speed=ctx.playback_speed,
             playback_achieved=ctx.playback_achieved,

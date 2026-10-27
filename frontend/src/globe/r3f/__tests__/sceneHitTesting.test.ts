@@ -52,6 +52,7 @@ function link(node_a: string, node_b: string): LinkState {
     node_a,
     node_b,
     state: "active",
+    scheduling_state: "active",
     link_type: "isl",
     link_reason: null,
     latency_ms: 1,

@@ -733,9 +733,9 @@ class TestIncrementalOpsFeed:
         from vs_api import main as vs_main
         from vs_api.ops_log import stamp_ops_event
 
-        e1 = stamp_ops_event({"code": "E1", "level": "error", "timestamp": "t1"})
-        e2 = stamp_ops_event({"code": "E2", "level": "error", "timestamp": "t2"})
-        e3 = stamp_ops_event({"code": "E3", "level": "error", "timestamp": "t3"})
+        e1 = stamp_ops_event({"code": "E1", "level": "error", "message": "", "timestamp": "t1"})
+        e2 = stamp_ops_event({"code": "E2", "level": "error", "message": "", "timestamp": "t2"})
+        e3 = stamp_ops_event({"code": "E3", "level": "error", "message": "", "timestamp": "t3"})
         ctx = SimpleNamespace(session_ops_events=[e2])
 
         original = list(vs_main._system_ops_events)

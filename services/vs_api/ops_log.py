@@ -45,27 +45,27 @@ def is_operator_visible_ops_event(event: dict) -> bool:
     telemetry). The NODALARC_OPS stream remains the unfiltered archive —
     this gates only the operator-facing log panel's window.
     """
-    level = str(event.get("level") or "").lower()
-    code = event.get("code")
-    message = str(event.get("message") or "")
+    level = event["level"]
+    code = event["code"]
+    message = event["message"]
 
     if level == "debug":
         return False
 
-    if code == "COMMAND_APPLIED" and level in {"", "info"}:
+    if code == "COMMAND_APPLIED" and level == "info":
         return False
 
     # Periodic engine pacing statistics — ops telemetry, not events.
-    if code == "PACING_TELEMETRY" and level in {"", "info"}:
+    if code == "PACING_TELEMETRY" and level == "info":
         return False
 
     # Routine substrate measurement writes; failures arrive at warning+.
-    if code == "SUBSTRATE_MONITOR" and level in {"", "info"}:
+    if code == "SUBSTRATE_MONITOR" and level == "info":
         return False
 
     return not (
         code == "DISPATCH_ACTUATOR"
-        and level in {"", "info"}
+        and level == "info"
         and message.startswith("Actuation latency op=")
         and " failed=0" in message
     )

@@ -12,8 +12,9 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from nodalarc.body_frames import SupportedSurfaceBody
 from nodalarc.model_validation import AddressFamily
+from nodalarc.models.link_state import SchedulingState
 from nodalarc.models.resolved_session import NodeKind, NodeRole
-from nodalarc.models.scheduler_ops import ActuationState
+from nodalarc.models.scheduler_ops import ActuationState, SchedulerOpsCode
 from nodalarc.models.segment_session import LINK_STATE_PROTOCOLS, RoutingProtocol
 
 
@@ -109,6 +110,9 @@ class NodeState(BaseModel):
     tags: tuple[str, ...] = ()
 
 
+# Where VS-API's session manager stands; see SessionManager.
+SessionStatus = Literal["idle", "switching", "wiring", "ready", "error"]
+
 # The kinds VS-API reports for a link: OME and the Scheduler carry "isl" and
 # "ground"; VS-API refines an ISL by its resolved rule (see _derive_link_type).
 PublicLinkType = Literal["ground", "isl", "inter_constellation", "inter_body_relay"]
@@ -141,7 +145,7 @@ class LinkState(BaseModel):
     link_rule_id: str | None = None
     topology_mode: str | None = None
     endpoint_segments: tuple[str, str] | None = None
-    scheduling_state: str = "active"
+    scheduling_state: SchedulingState = "active"
     teardown_remaining_ticks: int | None = None
     successor_pair: tuple[str, str] | None = None
 
@@ -251,7 +255,7 @@ class RecentEvent(BaseModel):
 
     sim_time: datetime
     node_id: str
-    event_type: str
+    event_type: Literal["link_up", "link_down", "PATH_CHANGE"]
     summary: str
 
 
@@ -262,7 +266,7 @@ class ActuationNotice(BaseModel):
 
     gs_id: str
     actuation_state: ActuationState
-    reason_code: str
+    reason_code: SchedulerOpsCode
     message: str
     since: str | None = None
     blocking_new_ground_link_up: bool
@@ -282,7 +286,7 @@ class ActuationHealthGroundStation(BaseModel):
     gs_id: str
     actuation_state: ActuationState
     since: str | None = None
-    reason_code: str | None = None
+    reason_code: SchedulerOpsCode
     blocking_new_ground_link_up: bool
     recovery_status: dict = Field(default_factory=dict)
     last_event: dict = Field(default_factory=dict)
@@ -295,7 +299,7 @@ class ActuationHealthInstance(BaseModel):
 
     scheduler_instance_id: str
     hostname: str
-    status: str
+    status: Literal["clean", "dirty", "degraded", "unknown"]
     ground_stations: list[ActuationHealthGroundStation] = Field(default_factory=list)
 
 
@@ -359,7 +363,7 @@ class StateSnapshot(BaseModel):
     recent_events: list[RecentEvent]
     routing_stack: str | None = None
     constellation_name: str | None = None
-    session_status: str | None = None  # "ready", "switching", "error", "idle"
+    session_status: SessionStatus
     session_status_detail: str | None = None
     playback_paused: bool = False
     playback_speed: float = 1.0

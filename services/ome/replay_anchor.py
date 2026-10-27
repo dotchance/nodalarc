@@ -20,6 +20,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from nodalarc.models.events import CheckpointAssociation, ReplayAnchor, TeardownEntry
+from nodalarc.models.link_state import SchedulingState
 
 from ome.types import MbbTeardown, MbbTeardownState
 
@@ -40,7 +41,7 @@ def build_replay_anchor(
     epoch_id: int,
     step: int,
     isl_state: dict[tuple[str, str], tuple[bool, bool]],
-    gs_state: dict[tuple[str, str], tuple[bool, bool, str]],
+    gs_state: dict[tuple[str, str], tuple[bool, bool, SchedulingState]],
     associations: dict[tuple[str, str], tuple[int, int]],
     teardowns: MbbTeardownState,
     ground_station_ids: frozenset[str],
@@ -105,7 +106,7 @@ def replay_state_from_anchor(
     anchor: ReplayAnchor,
 ) -> tuple[
     dict[tuple[str, str], tuple[bool, bool]],
-    dict[tuple[str, str], tuple[bool, bool, str]],
+    dict[tuple[str, str], tuple[bool, bool, SchedulingState]],
     dict[tuple[str, str], tuple[int, int]],
     MbbTeardownState,
 ]:
@@ -115,9 +116,7 @@ def replay_state_from_anchor(
     exact shapes the pacing loop threads through compute_step.
     """
     isl_state = {_key_pair(k): (bool(v[0]), bool(v[1])) for k, v in anchor.isl_state.items()}
-    gs_state = {
-        _key_pair(k): (bool(v[0]), bool(v[1]), str(v[2])) for k, v in anchor.gs_state.items()
-    }
+    gs_state = {_key_pair(k): (v[0], v[1], v[2]) for k, v in anchor.gs_state.items()}
     associations = {
         _key_pair(k): (entry.gs_terminal_index, entry.sat_terminal_index)
         for k, entry in anchor.associations.items()

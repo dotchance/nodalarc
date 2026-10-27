@@ -170,7 +170,7 @@ export function builderSnapshotFromWorld(world: BuilderWorld): StateSnapshot {
     recent_events: [],
     routing_stack: null,
     constellation_name: `builder:${world.session.name}`,
-    session_status: null,
+    session_status: "idle",
     session_status_detail: null,
     playback_paused: true,
     playback_speed: 1,

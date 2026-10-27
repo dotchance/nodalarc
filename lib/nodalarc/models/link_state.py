@@ -23,6 +23,10 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict
 
+# Whether OME's ground allocator holds a link open only for its make-before-break
+# teardown ("teardown") or schedules it ("active").
+SchedulingState = Literal["active", "teardown"]
+
 
 class AdminState(StrEnum):
     """Interface administrative state. Lowest layer."""
@@ -72,7 +76,7 @@ class LinkState(BaseModel):
     endpoint_segments: tuple[str, str] | None = None
     gs_terminal_index: int | None = None
     sat_terminal_index: int | None = None
-    scheduling_state: str = "active"
+    scheduling_state: SchedulingState = "active"
     teardown_remaining_ticks: int | None = None
     successor_pair: tuple[str, str] | None = None
     sim_time: datetime

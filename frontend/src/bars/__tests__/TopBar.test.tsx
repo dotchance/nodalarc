@@ -19,7 +19,7 @@ function snapshotWithActuationNotice(): StateSnapshot {
     recent_events: [],
     routing_stack: "ospf",
     constellation_name: "demo",
-    session_status: "running",
+    session_status: "ready",
     session_status_detail: null,
     playback_paused: false,
     playback_speed: 1,

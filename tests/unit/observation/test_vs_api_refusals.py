@@ -291,3 +291,46 @@ def test_a_text_route_declares_its_refusals_as_json() -> None:
     assert set(responses["200"]["content"]) == {"text/plain"}
     for status in ("404", "409", "413", "500", "503"):
         assert set(responses[status]["content"]) == {"application/json"}, status
+
+
+def _free_form(schema: dict | None) -> bool:
+    """A schema that says nothing about the value: no model, no fields, no type."""
+    if not schema:
+        return True
+    if "$ref" in schema:
+        return False
+    for combined in ("anyOf", "oneOf", "allOf"):
+        if combined in schema:
+            return any(
+                _free_form(member) for member in schema[combined] if member.get("type") != "null"
+            )
+    kind = schema.get("type")
+    if kind == "array":
+        return _free_form(schema.get("items"))
+    if kind == "object":
+        if schema.get("properties"):
+            return False
+        extra = schema.get("additionalProperties")
+        return not isinstance(extra, dict) or _free_form(extra)
+    return kind is None and "const" not in schema and "enum" not in schema
+
+
+def test_every_route_declares_what_it_answers_and_takes() -> None:
+    """An automation client reads /openapi.json: every answer a route declares and every
+    request body it takes has a schema that names its fields."""
+    from vs_api.main import app
+
+    undeclared = []
+    for path, operations in app.openapi()["paths"].items():
+        if not path.startswith("/api/"):
+            continue
+        for method, operation in operations.items():
+            for status, answer in operation["responses"].items():
+                contents = answer.get("content") or {"(none)": {}}
+                for media, entry in contents.items():
+                    if _free_form(entry.get("schema")):
+                        undeclared.append(f"{method.upper()} {path} answers {status} {media}")
+            for media, entry in (operation.get("requestBody") or {}).get("content", {}).items():
+                if _free_form(entry.get("schema")):
+                    undeclared.append(f"{method.upper()} {path} takes {media}")
+    assert not undeclared, "\n".join(undeclared)

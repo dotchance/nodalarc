@@ -2959,7 +2959,13 @@ def list_sessions(
 @app.get(
     "/api/v1/sessions/yaml",
     response_class=Response,
-    responses=_REFUSAL_RESPONSES,
+    responses={
+        200: {
+            "description": "The session's stored YAML",
+            "content": {"application/yaml": {"schema": {"type": "string"}}},
+        },
+        **_REFUSAL_RESPONSES,
+    },
     dependencies=[Depends(_require_api_key)],
 )
 def download_session_yaml(

@@ -422,6 +422,79 @@ def test_object_edit_route_answers_the_editors_and_typed_refusals(client: TestCl
     assert mismatched_response.status_code == 422
 
 
+def test_apply_edits_route_accepts_one_revision_and_answers_typed_refusals(
+    client: TestClient,
+) -> None:
+    opened = client.post(
+        "/api/v1/builder/draft/open",
+        json={"source_ref": "nodalarc:sessions/earth-leo-simple.yaml"},
+    ).json()
+    rule = next(item for item in opened["applied_session"]["link_rules"] if item["id"] == "leo_isl")
+    ranged = {**rule, "constraints": {"max_range_km": 12345.0}}
+
+    def edit(base: dict) -> dict:
+        return {
+            "kind": "content",
+            "address": {"kind": "member", "list_pointer": "/link_rules", "id": "leo_isl"},
+            "base": base,
+            "working": ranged,
+        }
+
+    stale_base_response = client.post(
+        "/api/v1/builder/draft/apply-edits",
+        json={
+            "draft": opened,
+            "expected_draft_revision": 0,
+            "edits": [edit({**rule, "topology": {"mode": "nearest_n", "n": 1}})],
+        },
+    )
+    assert stale_base_response.status_code == 200, stale_base_response.text
+    stale_base = stale_base_response.json()
+    assert stale_base["applied"] is False
+    assert stale_base["assembly"] is None
+    assert [outcome["status"] for outcome in stale_base["outcomes"]] == ["stale"]
+
+    applied_response = client.post(
+        "/api/v1/builder/draft/apply-edits",
+        json={"draft": opened, "expected_draft_revision": 0, "edits": [edit(rule)]},
+    )
+    assert applied_response.status_code == 200, applied_response.text
+    applied = applied_response.json()
+    assert applied["applied"] is True
+    assert [outcome["status"] for outcome in applied["outcomes"]] == ["applied"]
+    assert applied["assembly"]["visual_draft"]["draft_revision"] == 1
+    canonical = applied["assembly"]["compile_result"]["canonical_session_json"]
+    assert next(item for item in canonical["link_rules"] if item["id"] == "leo_isl") == ranged
+
+    stale_response = client.post(
+        "/api/v1/builder/draft/apply-edits",
+        json={
+            "draft": applied["assembly"]["visual_draft"],
+            "expected_draft_revision": 0,
+            "edits": [edit(ranged)],
+        },
+    )
+    assert stale_response.status_code == 409, stale_response.text
+    assert stale_response.json()["code"] == "catalog_authoring.stale_revision"
+
+    created = client.post(
+        "/api/v1/builder/draft/new",
+        json={"session_name": "apply-edits-without-a-session"},
+    ).json()
+    unaccepted_response = client.post(
+        "/api/v1/builder/draft/apply-edits",
+        json={"draft": created, "expected_draft_revision": 0, "edits": [edit(rule)]},
+    )
+    assert unaccepted_response.status_code == 422, unaccepted_response.text
+    assert unaccepted_response.json()["code"] == "catalog_authoring.invalid_graph"
+
+    empty_response = client.post(
+        "/api/v1/builder/draft/apply-edits",
+        json={"draft": opened, "expected_draft_revision": 0, "edits": []},
+    )
+    assert empty_response.status_code == 422
+
+
 def test_customize_chain_requires_the_current_draft_revision(client: TestClient) -> None:
     opened = client.post(
         "/api/v1/builder/draft/open",

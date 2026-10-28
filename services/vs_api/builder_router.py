@@ -57,6 +57,8 @@ from nodalarc.models.builder_visual_api import (
     BuilderVisualControlMutationRequest,
     BuilderVisualCustomizeChainRequest,
     BuilderVisualCustomizeChainResult,
+    BuilderVisualDraftApplyEditsRequest,
+    BuilderVisualDraftApplyEditsResult,
     BuilderVisualDraftApplyWorkspaceRequest,
     BuilderVisualDraftApplyYamlRequest,
     BuilderVisualDraftApplyYamlResult,
@@ -154,6 +156,14 @@ class VisualDraftService(Protocol):
     def edit_object(
         self, request: BuilderVisualObjectEditRequest
     ) -> BuilderVisualObjectEditResult: ...
+
+    def apply_edits(
+        self,
+        request: BuilderVisualDraftApplyEditsRequest,
+        *,
+        available_node_count: int,
+        preview_factory: PreviewFactory | None = None,
+    ) -> BuilderVisualDraftApplyEditsResult: ...
 
     def customize_chain(
         self,
@@ -619,6 +629,46 @@ def create_builder_router(services: BuilderRouterServices) -> APIRouter:
                 cause_type=type(error).__name__,
             )
             return _catalog_refusal_response(CatalogAuthoringError(refusal))
+
+    @router.post(
+        "/draft/apply-edits",
+        response_model=BuilderVisualDraftApplyEditsResult,
+        responses={
+            409: {"model": CatalogOperationRefusal},
+            422: {"model": CatalogOperationRefusal},
+            503: {"model": CatalogOperationRefusal},
+        },
+    )
+    async def apply_visual_draft_edits(
+        request: BuilderVisualDraftApplyEditsRequest,
+        context: Context,
+        available_node_count: NodeCount,
+    ):
+        def apply_edits() -> BuilderVisualDraftApplyEditsResult:
+            return selected.visual_draft_service_factory(context).apply_edits(
+                request,
+                available_node_count=available_node_count,
+                preview_factory=selected.preview_factory,
+            )
+
+        try:
+            return await run_in_threadpool(apply_edits)
+        except BuilderVisualDraftCommandError as error:
+            refusal = CatalogOperationRefusal(
+                code=error.code,
+                message=str(error),
+                ref=str(error.ref),
+                expected_revision=(
+                    str(error.expected_revision) if error.expected_revision is not None else None
+                ),
+                current_revision=(
+                    str(error.current_revision) if error.current_revision is not None else None
+                ),
+                cause_type=type(error).__name__,
+            )
+            return _catalog_refusal_response(CatalogAuthoringError(refusal))
+        except (CatalogRepositoryError, OSError) as error:
+            return _catalog_unavailable_response(error)
 
     @router.post(
         "/draft/compile",

@@ -63,6 +63,8 @@ from nodalarc.models.builder_visual_api import (
     BuilderVisualCustomizeChainEntry,
     BuilderVisualCustomizeChainRequest,
     BuilderVisualCustomizeChainResult,
+    BuilderVisualDraftApplyEditsRequest,
+    BuilderVisualDraftApplyEditsResult,
     BuilderVisualDraftApplyWorkspaceRequest,
     BuilderVisualDraftApplyYamlRequest,
     BuilderVisualDraftApplyYamlResult,
@@ -149,6 +151,7 @@ from pydantic import BaseModel, ConfigDict, JsonValue, ValidationError
 from .builder_compiler import (
     OverlayCatalogReadView,
     PreviewFactory,
+    apply_pending_edits,
     canonicalize_persisted_configuration,
     compile_builder_draft,
 )
@@ -3409,21 +3412,106 @@ class BuilderVisualDraftService:
                 f"Control mutation batch does not produce a valid session: {error}",
                 code="catalog_authoring.invalid_graph",
             ) from error
-        candidate_model = cast(SegmentSessionConfig, validated)
+        return self._accept_session(
+            draft,
+            cast(SegmentSessionConfig, validated),
+            available_node_count=available_node_count,
+            preview_factory=preview_factory,
+        )
+
+    def apply_edits(
+        self,
+        request: BuilderVisualDraftApplyEditsRequest,
+        *,
+        available_node_count: int,
+        preview_factory: PreviewFactory | None = None,
+    ) -> BuilderVisualDraftApplyEditsResult:
+        """Accept pending link rule, routing domain and boundary edits as one revision.
+
+        The edits are applied to the accepted session with the function the
+        compile uses. One stale or invalid edit refuses the whole batch. A refused
+        batch mints no revision.
+        """
+
+        if not isinstance(request, BuilderVisualDraftApplyEditsRequest):
+            raise TypeError("request must be a BuilderVisualDraftApplyEditsRequest")
+        draft = request.draft
+        _assert_visual_draft_ownership(draft)
+        if request.expected_draft_revision != draft.draft_revision:
+            raise self._command_error(
+                draft,
+                "Visual draft revision changed before the pending edits were applied",
+                code="catalog_authoring.stale_revision",
+                expected_revision=request.expected_draft_revision,
+                current_revision=draft.draft_revision,
+            )
+        if draft.projection_status != "applied" or draft.applied_session is None:
+            raise self._command_error(
+                draft,
+                "Pending edits require a fully applied draft revision",
+                code="catalog_authoring.invalid_graph",
+            )
+
+        candidate, outcomes = apply_pending_edits(
+            draft.applied_session,
+            request.edits,
+            source_ref=str(draft.target_ref),
+        )
+        if any(outcome.status != "applied" for outcome in outcomes):
+            return BuilderVisualDraftApplyEditsResult(
+                applied=False,
+                outcomes=outcomes,
+                assembly=None,
+            )
+        try:
+            _wrapper, validated = validate_referenced_configuration_document(
+                draft.target_ref,
+                candidate,
+            )
+        except (ValidationError, TypeError, ValueError) as error:
+            raise self._command_error(
+                draft,
+                f"Pending edits do not produce a valid session: {error}",
+                code="catalog_authoring.invalid_graph",
+            ) from error
+        return BuilderVisualDraftApplyEditsResult(
+            applied=True,
+            outcomes=outcomes,
+            assembly=self._accept_session(
+                draft,
+                cast(SegmentSessionConfig, validated),
+                available_node_count=available_node_count,
+                preview_factory=preview_factory,
+            ),
+        )
+
+    def _accept_session(
+        self,
+        draft: BuilderVisualDraftEnvelope,
+        session: SegmentSessionConfig,
+        *,
+        available_node_count: int,
+        preview_factory: PreviewFactory | None,
+    ) -> BuilderVisualDraftAssemblyResult:
+        """Accept a validated session as the draft's next revision and compile it.
+
+        Proposals the session no longer reaches are dropped. The allocation
+        history gains the ids the session holds and never loses one.
+        """
 
         snapshot = self._context.repository.snapshot(self._context.scope)
         reachable_proposals, catalog_facts = _reachable_projection_inputs(
-            candidate_model,
+            session,
             draft.catalog_documents,
             snapshot,
         )
-        candidate_session = cast(
+        accepted_session = cast(
             JsonDocument,
-            candidate_model.model_dump(mode="json", by_alias=True, exclude_none=True),
+            session.model_dump(mode="json", by_alias=True, exclude_none=True),
         )
         next_revision = draft.draft_revision + 1
         workspace = _workspace_from_applied_session(
-            candidate_model,
+            session,
             proposals=reachable_proposals,
             catalog_facts=catalog_facts,
             prior_workspace=draft.applied_workspace,
@@ -3433,7 +3521,7 @@ class BuilderVisualDraftService:
                 (*draft.reserved_authoring_ids, *_current_and_referenced_authoring_ids(workspace))
             )
         )
-        canonical = canonicalize_persisted_configuration(draft.target_ref, candidate_session)
+        canonical = canonicalize_persisted_configuration(draft.target_ref, accepted_session)
         updated = draft.model_copy(
             update={
                 "draft_revision": next_revision,
@@ -3444,13 +3532,13 @@ class BuilderVisualDraftService:
                 "authoring_workspace": workspace,
                 "applied_workspace": workspace,
                 "applied_revision": next_revision,
-                "applied_session": candidate_session,
-                "control_tree": _applied_control_tree(candidate_model, next_revision),
+                "applied_session": accepted_session,
+                "control_tree": _applied_control_tree(session, next_revision),
             }
         )
         return _compile_visual_application(
             updated,
-            candidate_session,
+            accepted_session,
             reachable_proposals,
             (),
             snapshot,

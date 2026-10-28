@@ -16,6 +16,8 @@ from nodalarc.filesystem_catalog_repository import FilesystemCatalogRepository
 from nodalarc.models.builder_api import BuilderIssue
 from nodalarc.models.builder_visual_api import (
     BuilderVisualCustomizeChainRequest,
+    BuilderVisualDraftApplyEditsRequest,
+    BuilderVisualDraftApplyEditsResult,
     BuilderVisualDraftApplyWorkspaceRequest,
     BuilderVisualDraftApplyYamlRequest,
     BuilderVisualDraftCommandRequest,
@@ -3175,6 +3177,261 @@ def test_object_edit_refuses_id_changes_and_unknown_controls(
                 ],
             },
         )
+
+
+def _apply_edits(
+    service: BuilderVisualDraftService,
+    draft: BuilderVisualDraftEnvelope,
+    edits: list[dict[str, Any]],
+    *,
+    expected_draft_revision: int | None = None,
+) -> BuilderVisualDraftApplyEditsResult:
+    """One apply sent as the page sends it: JSON validated into the request."""
+    body = {
+        "draft": json.loads(draft.model_dump_json()),
+        "expected_draft_revision": (
+            draft.draft_revision if expected_draft_revision is None else expected_draft_revision
+        ),
+        "edits": edits,
+    }
+    return service.apply_edits(
+        BuilderVisualDraftApplyEditsRequest.model_validate_json(json.dumps(body)),
+        available_node_count=1_000_000,
+        preview_factory=_preview,
+    )
+
+
+def _content_edit(address: dict[str, Any], base: Any, working: Any) -> dict[str, Any]:
+    return {"kind": "content", "address": address, "base": base, "working": working}
+
+
+def _ranged(rule: dict[str, Any]) -> dict[str, Any]:
+    return {**rule, "constraints": {**rule.get("constraints", {}), "max_range_km": 12345.0}}
+
+
+def test_apply_edits_accepts_a_batch_as_the_next_revision_and_saves_it(
+    context: CatalogContext,
+    service: BuilderVisualDraftService,
+) -> None:
+    session_path = SHIPPED_ROOT / "sessions/earth-leo-heo-geo-luna-reachability.yaml"
+    opened = service.open(
+        BuilderVisualDraftOpenRequest(source_ref=f"nodalarc:sessions/{session_path.name}")
+    )
+    assert opened.applied_session is not None
+    session = opened.applied_session
+    rule = _member(session, "/link_rules", "leo_a_access")
+    domain = _member(session, "/routing/domains", "luna_domain")
+    boundaries = session["routing"]["boundaries"]
+    unexported = json.loads(json.dumps(boundaries))
+    for export in unexported[0]["export"]:
+        export["export_node_loopbacks"] = False
+    timers = {"hello_interval_s": 2, "hold_interval_s": 7}
+
+    result = _apply_edits(
+        service,
+        opened,
+        [
+            _content_edit({**_RULE_ADDRESS, "id": "leo_a_access"}, rule, _ranged(rule)),
+            _content_edit(
+                {**_DOMAIN_ADDRESS, "id": "luna_domain"}, domain, {**domain, "timers": timers}
+            ),
+            _content_edit(_BOUNDARIES_ADDRESS, boundaries, unexported),
+        ],
+    )
+
+    edited = yaml.safe_load(session_path.read_bytes())
+    edited_rule = next(item for item in edited["link_rules"] if item["id"] == "leo_a_access")
+    edited_rule["constraints"] = {"max_range_km": 12345.0}
+    edited_domain = next(
+        item for item in edited["routing"]["domains"] if item["id"] == "luna_domain"
+    )
+    edited_domain["timers"] = timers
+    for export in edited["routing"]["boundaries"][0]["export"]:
+        export["export_node_loopbacks"] = False
+    expected = canonicalize_persisted_configuration(opened.target_ref, edited)
+
+    assert result.applied is True
+    assert [outcome.status for outcome in result.outcomes] == ["applied"] * 3
+    assert result.assembly is not None
+    accepted = result.assembly.visual_draft
+    assert accepted.draft_revision == accepted.applied_revision == opened.draft_revision + 1
+    assert accepted.projection_status == "applied"
+    assert accepted.control_tree is not None
+    assert accepted.control_tree.projection_revision == accepted.applied_revision
+    assert accepted.applied_session == expected.canonical_json
+    assert accepted.session_yaml == expected.yaml_bytes.decode("utf-8")
+    assert set(opened.reserved_authoring_ids) <= set(accepted.reserved_authoring_ids)
+    listing = result.assembly.listing
+    assert listing is not None
+    luna = next(item for item in listing.routing_domains if item.domain_id == "luna_domain")
+    assert luna.widget is not None
+    assert (luna.widget.hello_interval_s, luna.widget.hold_interval_s) == (2, 7)
+    compiled = result.assembly.compile_result
+    assert compiled.save_verdict.allowed is True, compiled.issues
+    assert compiled.canonical_session_json == expected.canonical_json
+
+    saved = save_builder_session(
+        result.assembly.save_request,
+        context,
+        available_node_count=1_000_000,
+        preview_factory=_preview,
+    )
+    assert saved.session.canonical_json == expected.canonical_json
+
+
+def test_apply_edits_removes_members_and_drops_an_emptied_routing_section(
+    service: BuilderVisualDraftService,
+) -> None:
+    opened = service.open(
+        BuilderVisualDraftOpenRequest(
+            source_ref="nodalarc:sessions/earth-leo-heo-geo-luna-reachability.yaml"
+        )
+    )
+    assert opened.applied_session is not None
+    session = opened.applied_session
+    rule_ids = [rule["id"] for rule in session["link_rules"]]
+    domain_ids = [domain["id"] for domain in session["routing"]["domains"]]
+    remove_rule = {
+        "kind": "list",
+        "list_pointer": "/link_rules",
+        "ids_before": rule_ids,
+        "ids_wanted": [rule_id for rule_id in rule_ids if rule_id != "santiago_geo_access"],
+    }
+    remove_domains = {
+        "kind": "list",
+        "list_pointer": "/routing/domains",
+        "ids_before": domain_ids,
+        "ids_wanted": [],
+    }
+
+    # The last domain cannot go while a boundary remains.
+    refused = _apply_edits(service, opened, [remove_rule, remove_domains])
+    assert refused.applied is False
+    assert refused.assembly is None
+    assert [outcome.status for outcome in refused.outcomes] == ["applied", "invalid"]
+    assert [issue.code for issue in refused.outcomes[1].issues] == [
+        "builder.draft.routing_boundaries_remain"
+    ]
+
+    result = _apply_edits(
+        service,
+        opened,
+        [
+            remove_rule,
+            remove_domains,
+            _content_edit(_BOUNDARIES_ADDRESS, session["routing"]["boundaries"], []),
+        ],
+    )
+    assert result.applied is True
+    assert result.assembly is not None
+    accepted = result.assembly.visual_draft
+    assert accepted.draft_revision == opened.draft_revision + 1
+    assert accepted.applied_session is not None
+    assert "routing" not in accepted.applied_session
+    assert [rule["id"] for rule in accepted.applied_session["link_rules"]] == [
+        rule_id for rule_id in rule_ids if rule_id != "santiago_geo_access"
+    ]
+    assert result.assembly.listing is not None
+    assert result.assembly.listing.routing_domains == ()
+    assert result.assembly.listing.boundaries == ()
+    # The allocation history never shrinks, so a removed id it held is not minted again.
+    assert "luna_domain" in opened.reserved_authoring_ids
+    assert set(opened.reserved_authoring_ids) <= set(accepted.reserved_authoring_ids)
+
+
+def test_apply_edits_refuses_the_whole_batch_for_one_stale_or_invalid_edit(
+    service: BuilderVisualDraftService,
+) -> None:
+    opened = service.open(
+        BuilderVisualDraftOpenRequest(source_ref="nodalarc:sessions/earth-leo-simple.yaml")
+    )
+    assert opened.applied_session is not None
+    access = _member(opened.applied_session, "/link_rules", "leo_access")
+    isl = _member(opened.applied_session, "/link_rules", "leo_isl")
+    access_address = {**_RULE_ADDRESS, "id": "leo_access"}
+    ranged_isl = _content_edit({**_RULE_ADDRESS, "id": "leo_isl"}, isl, _ranged(isl))
+
+    stale = _apply_edits(
+        service,
+        opened,
+        [
+            ranged_isl,
+            _content_edit(
+                access_address, {**access, "topology": {"mode": "nearest_n", "n": 1}}, access
+            ),
+        ],
+    )
+    assert stale.applied is False
+    assert stale.assembly is None
+    assert [outcome.status for outcome in stale.outcomes] == ["applied", "stale"]
+    assert [
+        (issue.code, issue.draft_path, issue.json_pointer) for issue in stale.outcomes[1].issues
+    ] == [("builder.staleness.pending_edit", "pending_edits.1", "/link_rules/0")]
+
+    untopologized = {key: value for key, value in access.items() if key != "topology"}
+    invalid = _apply_edits(
+        service,
+        opened,
+        [ranged_isl, _content_edit(access_address, access, untopologized)],
+    )
+    assert invalid.applied is False
+    assert invalid.assembly is None
+    assert [outcome.status for outcome in invalid.outcomes] == ["applied", "invalid"]
+    assert [
+        (issue.code, issue.draft_path, issue.json_pointer) for issue in invalid.outcomes[1].issues
+    ] == [("builder.structural.missing", "pending_edits.1", "/link_rules/0/topology")]
+
+    # Neither refusal minted a revision: the opened revision still takes the good edit.
+    applied = _apply_edits(service, opened, [ranged_isl])
+    assert applied.applied is True
+    assert applied.assembly is not None
+    assert applied.assembly.visual_draft.draft_revision == opened.draft_revision + 1
+    assert applied.assembly.visual_draft.applied_session is not None
+    assert _member(applied.assembly.visual_draft.applied_session, "/link_rules", "leo_isl") == (
+        _saved_form(LinkRule, _ranged(isl))
+    )
+
+
+def test_apply_edits_is_revision_fenced_and_needs_an_accepted_valid_session(
+    service: BuilderVisualDraftService,
+) -> None:
+    opened = service.open(
+        BuilderVisualDraftOpenRequest(source_ref="nodalarc:sessions/earth-leo-simple.yaml")
+    )
+    assert opened.applied_session is not None
+    isl = _member(opened.applied_session, "/link_rules", "leo_isl")
+    ranged_isl = _content_edit({**_RULE_ADDRESS, "id": "leo_isl"}, isl, _ranged(isl))
+
+    with pytest.raises(BuilderVisualDraftCommandError) as stale:
+        _apply_edits(
+            service,
+            opened,
+            [ranged_isl],
+            expected_draft_revision=opened.draft_revision + 1,
+        )
+    assert stale.value.code == "catalog_authoring.stale_revision"
+
+    created = service.create(BuilderVisualDraftCreateRequest(session_name="no-accepted-session"))
+    with pytest.raises(BuilderVisualDraftCommandError, match="fully applied draft") as unaccepted:
+        _apply_edits(service, created, [ranged_isl])
+    assert unaccepted.value.code == "catalog_authoring.invalid_graph"
+
+    # Each boundary is valid on its own, but a routing section needs a domain.
+    boundary = {
+        "over": "leo_isl",
+        "adapter": "static_ip",
+        "export": [
+            {"from": "a_domain", "to": "b_domain", "prefixes": {"aggregate_of": "originated"}}
+        ],
+    }
+    RoutingBoundary.model_validate(boundary)
+    with pytest.raises(BuilderVisualDraftCommandError, match="valid session") as invalid:
+        _apply_edits(
+            service,
+            opened,
+            [{"kind": "content", "address": _BOUNDARIES_ADDRESS, "working": [boundary]}],
+        )
+    assert invalid.value.code == "catalog_authoring.invalid_graph"
 
 
 def test_graphical_boundary_edit_preserves_unprojected_and_sibling_boundaries(

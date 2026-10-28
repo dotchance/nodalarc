@@ -32,6 +32,8 @@ from nodalarc.models.builder_api import (
     BuilderEditAddress,
     BuilderIssue,
     BuilderMemberAddress,
+    BuilderPendingEditOutcome,
+    BuilderPendingEdits,
     BuilderProposedCatalogDocument,
     BuilderSessionSaveRequest,
     BuilderWholeListAddress,
@@ -1059,4 +1061,33 @@ class BuilderVisualObjectEditResult(_BuilderVisualModel):
             _widget_fits_address(self.address, self.working, self.widget)
         elif isinstance(self.address, BuilderWholeListAddress):
             raise ValueError("the boundary list answers a card value or null for each boundary")
+        return self
+
+
+class BuilderVisualDraftApplyEditsRequest(_BuilderVisualModel):
+    """Accept pending link rule, routing domain and boundary edits as one revision."""
+
+    draft: BuilderVisualDraftEnvelope
+    expected_draft_revision: int = Field(ge=0)
+    edits: BuilderPendingEdits = Field(min_length=1)
+
+
+class BuilderVisualDraftApplyEditsResult(_BuilderVisualModel):
+    """The next accepted revision with its compile, or the refusal of the whole batch.
+
+    ``outcomes`` holds one outcome per edit, in request order. One stale or
+    invalid edit refuses the batch. A refused batch accepts nothing and returns
+    no assembly, so every edit in it stays pending.
+    """
+
+    applied: bool
+    outcomes: tuple[BuilderPendingEditOutcome, ...] = Field(min_length=1)
+    assembly: BuilderVisualDraftAssemblyResult | None
+
+    @model_validator(mode="after")
+    def _applied_exactly_when_every_edit_applies(self) -> BuilderVisualDraftApplyEditsResult:
+        if self.applied != all(outcome.status == "applied" for outcome in self.outcomes):
+            raise ValueError("a batch is applied exactly when every edit in it applies")
+        if self.applied != (self.assembly is not None):
+            raise ValueError("an applied batch returns its assembly and a refused batch none")
         return self

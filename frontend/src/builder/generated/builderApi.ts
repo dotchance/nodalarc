@@ -649,6 +649,20 @@ export interface BuilderVisualCustomizeChainResult {
 /**  */
 export type BuilderVisualDraftAffectedKind = "space" | "ground" | "routing_domain" | "boundary" | "link" | "ground_member";
 
+/** Accept pending link rule, routing domain and boundary edits as one revision. */
+export interface BuilderVisualDraftApplyEditsRequest {
+  readonly draft: BuilderVisualDraftEnvelope;
+  readonly expected_draft_revision: number;
+  readonly edits: ReadonlyArray<BuilderContentEdit | BuilderListEdit>;
+}
+
+/** The next accepted revision with its compile, or the refusal of the whole batch. ``outcomes`` holds one outcome per edit, in request order. One stale or invalid edit refuses the batch. A refused batch accepts nothing and returns no assembly, so every edit in it stays pending. */
+export interface BuilderVisualDraftApplyEditsResult {
+  readonly applied: boolean;
+  readonly outcomes: ReadonlyArray<BuilderPendingEditOutcome>;
+  readonly assembly: BuilderVisualDraftAssemblyResult | null;
+}
+
 /** Apply one complete graphical workspace to a fenced draft revision. */
 export interface BuilderVisualDraftApplyWorkspaceRequest {
   readonly draft: BuilderVisualDraftEnvelope;

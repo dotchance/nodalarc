@@ -58,6 +58,7 @@ import { SessionEditor, timeRateSummary } from "./SessionEditor";
 import {
   canDeploy,
   draftHoldsUnsavedWork,
+  pendingEditsPhrase,
   yamlBlocksGraphicalEditing,
   announceCatalogDraftSaved,
   claimLibraryReveal,
@@ -115,6 +116,7 @@ import type {
   BuilderVisualAuthoringFacts,
   BuilderVisualDraftApplyYamlResult,
   BuilderVisualSchedulingPreset,
+  BuilderVisualDraftCommandOperation,
   BuilderVisualDraftCommandRequest,
   BuilderVisualDraftCommandResult,
   CatalogComponentDraftEnvelope,
@@ -194,6 +196,32 @@ function summarizeSegments(world: BuilderWorld): SegmentSummary[] {
 function count(n: number, word: string): string {
   return `${n} ${word}${n === 1 ? "" : "s"}`;
 }
+
+/** The commands that write link rules, routing domains and boundaries. They
+ *  run against the accepted session. */
+const LINK_AND_ROUTING_COMMANDS: ReadonlySet<BuilderVisualDraftCommandOperation> = new Set([
+  "connect_segments",
+  "add_routing_domain",
+  "add_boundary",
+  "rederive_link",
+]);
+
+/** The windows that edit the session's own fields and its segments. */
+const SESSION_AND_SEGMENT_WINDOW_KINDS: ReadonlySet<EditorTarget["kind"]> = new Set([
+  "session",
+  "segment",
+  "ground",
+]);
+
+/** The windows whose edits change the twin. */
+const BUFFERED_WINDOW_KINDS: ReadonlySet<EditorTarget["kind"]> = new Set([
+  "session",
+  "segment",
+  "ground",
+  "link",
+  "domain",
+  "boundary",
+]);
 
 /** One-line form of a refusal for the compact surfaces (canvas note,
  *  status bar) — the owning window's wall carries the full text. */
@@ -475,6 +503,7 @@ export function BuilderView({
     openedSession,
     visualDraft,
     yamlBuffer,
+    pendingEdits,
     writer,
     assemblyResult,
     world,
@@ -699,11 +728,28 @@ export function BuilderView({
     const reason = unsettledReason();
     if (reason !== null) throw new Error(reason);
   };
+  // Pending link rule, routing domain and boundary edits. The YAML buffer, the
+  // session pane and the windows that edit the twin wait while any is pending.
+  const pendingEditCount = pendingEdits.size;
+  const unappliedSessionAndSegmentWindows = windows.filter(
+    (w) => SESSION_AND_SEGMENT_WINDOW_KINDS.has(w.target.kind) && buffers[w.key]?.dirty === true,
+  ).length;
+  /** Link and routing changes are made on the accepted session, so they wait
+   *  while a session, segment or ground window holds edits the backend has not
+   *  accepted. Null when they may start; otherwise why not. */
+  const linkAndRoutingRefusal = (): string | null =>
+    unappliedSessionAndSegmentWindows > 0
+      ? `Apply or discard the ${count(
+          unappliedSessionAndSegmentWindows,
+          "session, segment or ground window",
+        )} with unapplied edits first.`
+      : null;
   const unsavedSessionWork = draftHoldsUnsavedWork({
     draft: visualDraft,
     clean: cleanDraft,
     twinMatchesDraft,
     dirtyWindowCount: dirtyWindows,
+    pendingEditCount,
     yamlDirty: yamlBuffer.dirty,
   });
   /** Run a gesture that replaces the open draft, asking first when the draft
@@ -825,13 +871,29 @@ export function BuilderView({
   ]);
 
   useEffect(() => {
-    if (!visualDraft || !yamlBuffer.dirty || dirtyWindows > 0 || !twinMatchesDraft) return;
+    if (
+      !visualDraft ||
+      !yamlBuffer.dirty ||
+      dirtyWindows > 0 ||
+      pendingEditCount > 0 ||
+      !twinMatchesDraft
+    ) {
+      return;
+    }
     const generation = yamlBuffer.generation;
     const timer = setTimeout(() => {
       void applySessionYaml(generation).catch(() => undefined);
     }, 500);
     return () => clearTimeout(timer);
-  }, [applySessionYaml, dirtyWindows, visualDraft, yamlBuffer.dirty, yamlBuffer.generation, twinMatchesDraft]);
+  }, [
+    applySessionYaml,
+    dirtyWindows,
+    pendingEditCount,
+    visualDraft,
+    yamlBuffer.dirty,
+    yamlBuffer.generation,
+    twinMatchesDraft,
+  ]);
 
   // Ctrl/Cmd+Z undoes the last workspace mutation unless
   // the user is typing in a field (native input undo wins there). Gated on
@@ -1077,6 +1139,7 @@ export function BuilderView({
     settledDocumentDigest,
     settledDependencyDigest: settledDependencySha256,
     dirtyWindowCount: dirtyWindows,
+    pendingEditCount,
   });
   // Standalone component authoring (Your library) — independent of sessions.
   const [catalogDraftDirty, setCatalogDraftDirty] = useState(false);
@@ -1138,6 +1201,10 @@ export function BuilderView({
       throw new Error("another visual command is still being applied");
     }
     refuseUnlessSettled();
+    if (LINK_AND_ROUTING_COMMANDS.has(command.operation)) {
+      const refusal = linkAndRoutingRefusal();
+      if (refusal !== null) throw new Error(refusal);
+    }
     visualCommandInFlight.current = true;
     try {
       const projected = visualDraft?.authoring_workspace ?? visualDraft?.applied_workspace;
@@ -2824,9 +2891,8 @@ export function BuilderView({
           const body = renderWindow(win.target);
           if (!body) return null;
           const buf = buffers[win.key];
-          const buffered = ["session", "segment", "ground", "link", "domain", "boundary"].includes(
-            win.target.kind,
-          );
+          const buffered = BUFFERED_WINDOW_KINDS.has(win.target.kind);
+          const lockedByPendingEdits = buffered && pendingEditCount > 0;
           return (
             <FloatingWindow
               key={win.key}
@@ -2837,7 +2903,15 @@ export function BuilderView({
               minWidth={320}
               minHeight={240}
             >
-              <div className="builder-window-body">{body.content}</div>
+              <div className="builder-window-body" inert={lockedByPendingEdits}>
+                {lockedByPendingEdits && (
+                  <div className="builder-warning">
+                    Apply or discard the {pendingEditsPhrase(pendingEditCount)} before editing
+                    here.
+                  </div>
+                )}
+                {body.content}
+              </div>
               {buffered && (
                 <EditorApplyRow
                   dirty={buf?.dirty ?? false}
@@ -2865,9 +2939,20 @@ export function BuilderView({
             {unsettledReason() !== null && (
               <div className="builder-zone-empty">{unsettledReason()}</div>
             )}
+            {pendingEditCount > 0 && (
+              <div className="builder-zone-empty">
+                Apply or discard the {pendingEditsPhrase(pendingEditCount)} before editing these
+                fields.
+              </div>
+            )}
             <GraphicalControlTreeEditor
               tree={visualDraft.control_tree}
-              disabled={yamlBlocksGui || dirtyWindows > 0 || unsettledReason() !== null}
+              disabled={
+                yamlBlocksGui ||
+                dirtyWindows > 0 ||
+                pendingEditCount > 0 ||
+                unsettledReason() !== null
+              }
               hideSpecialized
               onMutate={async (commands: ReadonlyArray<BuilderControlMutation>) => {
                 setLibraryError(null);
@@ -2901,11 +2986,19 @@ export function BuilderView({
                 Apply or discard graphical window edits before editing YAML.
               </div>
             )}
+            {pendingEditCount > 0 && (
+              <div className="builder-site-derived">
+                Apply or discard the {pendingEditsPhrase(pendingEditCount)} before editing YAML.
+              </div>
+            )}
             <PasteArea
               className="builder-yaml-editor"
               value={yamlBuffer.text}
               disabled={
-                dirtyWindows > 0 || (writer !== null && writer !== "yaml") || !twinMatchesDraft
+                dirtyWindows > 0 ||
+                pendingEditCount > 0 ||
+                (writer !== null && writer !== "yaml") ||
+                !twinMatchesDraft
               }
               onChange={editYamlBuffer}
               ariaLabel="Session YAML"
@@ -2915,6 +3008,7 @@ export function BuilderView({
               <Button
                 disabled={
                   dirtyWindows > 0 ||
+                  pendingEditCount > 0 ||
                   writer !== null ||
                   !twinMatchesDraft ||
                   (!yamlBuffer.dirty && yamlBuffer.issues.length === 0)
@@ -2926,7 +3020,12 @@ export function BuilderView({
               {yamlBuffer.canonicalizationRequired && (
                 <Button
                   variant="primary"
-                  disabled={writer !== null || dirtyWindows > 0 || !twinMatchesDraft}
+                  disabled={
+                    writer !== null ||
+                    dirtyWindows > 0 ||
+                    pendingEditCount > 0 ||
+                    !twinMatchesDraft
+                  }
                   onClick={() => void useCanonicalSessionYaml()}
                 >
                   Use canonical YAML

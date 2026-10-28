@@ -13,6 +13,7 @@ import {
   customizeVisualDraftChain,
   deleteCatalogDocument,
   deployBuilderSession,
+  editVisualDraftObject,
   exportCatalogSessionYaml,
   getBuilderBootstrap,
   getCatalogDependents,
@@ -29,6 +30,7 @@ import { writeSessionYamlExport } from "./sessionYamlTransfer";
 import type {
   BuilderCatalogBootstrap,
   BuilderCompileResult,
+  BuilderContentEdit,
   BuilderDeployVerdict,
   BuilderIssue,
   BuilderWorld,
@@ -46,12 +48,15 @@ import type {
   BuilderVisualDraftCreateRequest,
   BuilderVisualDraftEnvelope,
   BuilderVisualDraftRetargetRequest,
+  BuilderVisualObjectEditRequest,
+  BuilderVisualObjectEditResult,
   BuilderVisualWorkspace,
   CatalogDocumentSummary,
   CatalogFamily,
   CatalogSessionYamlImportResult,
   CatalogYamlImportFile,
   CatalogDraftSaveResult,
+  JsonValue,
   SessionRef,
 } from "./generated/builderApi";
 
@@ -269,12 +274,18 @@ export function useBuilderBootstrap() {
   return { bootstrap, error, refresh };
 }
 
+/** The pending link rule, routing domain and boundary edits, as notices name them. */
+export function pendingEditsPhrase(count: number): string {
+  return count === 1 ? "pending link or routing edit" : `${count} pending link and routing edits`;
+}
+
 /** Fail-closed deploy gate bound to one backend-issued saved revision verdict. */
 export function canDeploy(input: {
   savedVerdict: BuilderDeployVerdict | null;
   settledDocumentDigest: string | null;
   settledDependencyDigest: string | null;
   dirtyWindowCount: number;
+  pendingEditCount: number;
 }): { ok: boolean; reason: string | null } {
   if (!input.savedVerdict) {
     return { ok: false, reason: "save the session first, then deploy" };
@@ -296,6 +307,12 @@ export function canDeploy(input: {
       reason: `apply or discard the ${input.dirtyWindowCount} ${
         input.dirtyWindowCount === 1 ? "window" : "windows"
       } with unapplied edits first`,
+    };
+  }
+  if (input.pendingEditCount > 0) {
+    return {
+      ok: false,
+      reason: `apply or discard the ${pendingEditsPhrase(input.pendingEditCount)} first`,
     };
   }
   if (
@@ -324,13 +341,15 @@ export function yamlBlocksGraphicalEditing(
 
 /** Whether the open session draft holds work the user has not saved: it moved
  *  past the revision it was last opened, created or saved at, its workspace
- *  holds edits the backend has not accepted yet, or it holds unapplied window
- *  or YAML edits. The Builder keeps no copy of such work. */
+ *  holds edits the backend has not accepted yet, or it holds unapplied window,
+ *  pending link and routing, or YAML edits. The Builder keeps no copy of such
+ *  work. */
 export function draftHoldsUnsavedWork(input: {
   draft: Pick<BuilderVisualDraftEnvelope, "target_ref" | "draft_revision"> | null;
   clean: { targetRef: string; revision: number } | null;
   twinMatchesDraft: boolean;
   dirtyWindowCount: number;
+  pendingEditCount: number;
   yamlDirty: boolean;
 }): boolean {
   const { draft, clean } = input;
@@ -341,6 +360,7 @@ export function draftHoldsUnsavedWork(input: {
     clean.revision !== draft.draft_revision ||
     !input.twinMatchesDraft ||
     input.dirtyWindowCount > 0 ||
+    input.pendingEditCount > 0 ||
     input.yamlDirty
   );
 }
@@ -476,6 +496,70 @@ export interface BuilderSessionSaveAdoption {
   postCommitError: string | null;
 }
 
+/** Where a pending edit applies: a link rule or a routing domain by the id it
+ *  had when the edit began, or the routing boundary list as a whole. */
+type PendingEditAddress = BuilderContentEdit["address"];
+
+/** A pending edit of one link rule, one routing domain or the boundary list:
+ *  the edit as the backend applies it, beside the backend's latest answer for
+ *  its working JSON. Nothing in it is accepted. */
+interface PendingObjectEdit {
+  readonly edit: BuilderContentEdit;
+  readonly answer: BuilderVisualObjectEditResult;
+}
+
+/** The key an address holds its pending edit under. */
+function pendingEditKey(address: PendingEditAddress): string {
+  return address.kind === "member" ? `${address.list_pointer}/${address.id}` : address.pointer;
+}
+
+const NO_PENDING_EDITS: ReadonlyMap<string, PendingObjectEdit> = new Map();
+
+function isJsonList(value: JsonValue | undefined): value is ReadonlyArray<JsonValue> {
+  return Array.isArray(value);
+}
+
+function isJsonObject(value: JsonValue | undefined): value is Readonly<Record<string, JsonValue>> {
+  return value !== undefined && value !== null && typeof value === "object" && !isJsonList(value);
+}
+
+/** The value at a pointer of the accepted session; undefined where it holds none. */
+function acceptedValueAt(
+  session: Readonly<Record<string, JsonValue>>,
+  pointer: string,
+): JsonValue | undefined {
+  let value: JsonValue | undefined = session;
+  for (const token of pointer.split("/").slice(1)) {
+    value = isJsonObject(value) ? value[token] : undefined;
+  }
+  return value;
+}
+
+/** A new pending edit of the object at `address` in the accepted session. Its
+ *  base and its working JSON are that object as the session holds it. */
+function beginPendingEdit(
+  session: Readonly<Record<string, JsonValue>>,
+  address: PendingEditAddress,
+): BuilderContentEdit {
+  if (address.kind === "whole_list") {
+    const list = acceptedValueAt(session, address.pointer);
+    if (!isJsonList(list)) {
+      throw new Error(`the accepted session holds no ${address.pointer} list to edit`);
+    }
+    return { kind: "content", address, base: list, working: list };
+  }
+  const members = acceptedValueAt(session, address.list_pointer);
+  const matches = (isJsonList(members) ? members : []).filter(
+    (member): member is Readonly<Record<string, JsonValue>> =>
+      isJsonObject(member) && member.id === address.id,
+  );
+  const [member] = matches;
+  if (member === undefined || matches.length !== 1) {
+    throw new Error(`the accepted session holds no ${address.id} in ${address.list_pointer}`);
+  }
+  return { kind: "content", address, base: member, working: member };
+}
+
 const EMPTY_YAML_BUFFER: SessionYamlBufferState = {
   text: "",
   appliedText: "",
@@ -522,6 +606,15 @@ export function useBuilderWorld() {
     document: null,
     dependency: null,
   });
+  // Pending link rule, routing domain and boundary edits by address. The ref
+  // holds the same map so writers check the edits as they are now.
+  const [pendingEdits, setPendingEditsState] =
+    useState<ReadonlyMap<string, PendingObjectEdit>>(NO_PENDING_EDITS);
+  const pendingEditsRef = useRef<ReadonlyMap<string, PendingObjectEdit>>(NO_PENDING_EDITS);
+  // The latest object edit asked for each address. An older request's answer
+  // is not held.
+  const objectEditSequenceRef = useRef(0);
+  const latestObjectEditRef = useRef(new Map<string, number>());
 
   const refreshSessions = useCallback(async () => {
     try {
@@ -555,6 +648,26 @@ export function useBuilderWorld() {
   const setYamlBuffer = useCallback((next: SessionYamlBufferState) => {
     yamlBufferRef.current = next;
     setYamlBufferState(next);
+  }, []);
+
+  const setPendingEdits = useCallback((next: ReadonlyMap<string, PendingObjectEdit>) => {
+    pendingEditsRef.current = next;
+    setPendingEditsState(next);
+  }, []);
+
+  /** Drop every pending edit when the page adopts a different draft. */
+  const dropPendingEdits = useCallback(() => {
+    latestObjectEditRef.current = new Map();
+    setPendingEdits(NO_PENDING_EDITS);
+  }, [setPendingEdits]);
+
+  /** The YAML buffer and the session pane change the session as a whole, so
+   *  they wait until no link or routing edit is pending. */
+  const refuseWhileEditsPending = useCallback((gesture: string) => {
+    const count = pendingEditsRef.current.size;
+    if (count > 0) {
+      throw new Error(`apply or discard the ${pendingEditsPhrase(count)} before ${gesture}`);
+    }
   }, []);
 
   const beginEpoch = useCallback(() => {
@@ -665,6 +778,7 @@ export function useBuilderWorld() {
         assertEpoch(epoch);
         setOpenedSession(null);
         adoptCompileResult(assembled);
+        dropPendingEdits();
         const canonical = assembled.compile_result.canonical_session_yaml;
         setYamlBuffer({
           text: draft.session_yaml,
@@ -681,7 +795,7 @@ export function useBuilderWorld() {
         return draft;
       });
     },
-    [adoptCompileResult, assertEpoch, beginEpoch, enqueueWriter, setYamlBuffer],
+    [adoptCompileResult, assertEpoch, beginEpoch, dropPendingEdits, enqueueWriter, setYamlBuffer],
   );
 
   const openSession = useCallback(
@@ -701,6 +815,7 @@ export function useBuilderWorld() {
           assertEpoch(epoch);
           setOpenedSession(entry);
           adoptCompileResult(assembled);
+          dropPendingEdits();
           const canonical = assembled.compile_result.canonical_session_yaml;
           setYamlBuffer({
             text: opened.session_yaml,
@@ -722,11 +837,12 @@ export function useBuilderWorld() {
         };
       }
     },
-    [adoptCompileResult, assertEpoch, beginEpoch, enqueueWriter, setYamlBuffer],
+    [adoptCompileResult, assertEpoch, beginEpoch, dropPendingEdits, enqueueWriter, setYamlBuffer],
   );
 
   const editYamlBuffer = useCallback((text: string) => {
     if (writerRef.current !== null && writerRef.current !== "yaml") return false;
+    if (pendingEditsRef.current.size > 0) return false;
     const current = yamlBufferRef.current;
     setYamlBuffer({
       ...current,
@@ -746,6 +862,7 @@ export function useBuilderWorld() {
       const draft = visualDraftRef.current;
       const buffer = yamlBufferRef.current;
       if (!draft) throw new Error("there is no session draft to edit");
+      refuseWhileEditsPending("applying the YAML");
       if (expectedGeneration !== undefined && buffer.generation !== expectedGeneration) {
         throw new SupersededSessionOperation();
       }
@@ -787,11 +904,19 @@ export function useBuilderWorld() {
         issues: result.issues ?? [],
       });
       return result;
-    }), [adoptCompileResult, assertEpoch, enqueueWriter, setVisualDraft, setYamlBuffer]);
+    }), [
+      adoptCompileResult,
+      assertEpoch,
+      enqueueWriter,
+      refuseWhileEditsPending,
+      setVisualDraft,
+      setYamlBuffer,
+    ]);
 
   const useCanonicalYaml = useCallback(async () => {
     const canonical = assemblyResult?.compile_result.canonical_session_yaml;
     if (!canonical) throw new Error("canonical session YAML is not available");
+    refuseWhileEditsPending("applying the YAML");
     const current = yamlBufferRef.current;
     setYamlBuffer({
       ...current,
@@ -802,7 +927,12 @@ export function useBuilderWorld() {
       issues: [],
     });
     return applyYamlBuffer(current.generation + 1);
-  }, [applyYamlBuffer, assemblyResult?.compile_result.canonical_session_yaml, setYamlBuffer]);
+  }, [
+    applyYamlBuffer,
+    assemblyResult?.compile_result.canonical_session_yaml,
+    refuseWhileEditsPending,
+    setYamlBuffer,
+  ]);
 
   const applyWorkspace = useCallback(async (
     workspace: BuilderVisualWorkspace,
@@ -997,6 +1127,7 @@ export function useBuilderWorld() {
         ) {
           throw new Error("apply or canonicalize the YAML buffer before editing graphically");
         }
+        refuseWhileEditsPending("editing the session fields");
         const result = await mutateVisualDraftControls({
           draft,
           expected_draft_revision: draft.draft_revision,
@@ -1018,7 +1149,59 @@ export function useBuilderWorld() {
         });
         return result;
       }),
-    [adoptCompileResult, assertEpoch, enqueueWriter, setYamlBuffer],
+    [adoptCompileResult, assertEpoch, enqueueWriter, refuseWhileEditsPending, setYamlBuffer],
+  );
+
+  /** Edit one link rule, one routing domain or the boundary list without
+   *  accepting it. The first edit of an object starts from the object in the
+   *  accepted session; a later one builds on the working JSON of its latest
+   *  answer. The backend applies the card value or field-editor batch and
+   *  answers with the new working JSON, the card value that writes it back, the
+   *  field editor over it and its issues. That answer is held as the object's
+   *  pending edit when it answers the latest request for the object. */
+  const editPendingObject = useCallback(
+    async (
+      address: PendingEditAddress,
+      change: NonNullable<BuilderVisualObjectEditRequest["change"]>,
+    ): Promise<BuilderVisualObjectEditResult> => {
+      const epoch = epochRef.current;
+      const draft = visualDraftRef.current;
+      if (!draft) throw new Error("there is no visual draft to edit");
+      const accepted = draft.applied_session ?? null;
+      const appliedRevision = draft.applied_revision ?? null;
+      if (accepted === null || appliedRevision === null) {
+        throw new Error(
+          "link rules, routing domains and boundaries are edited on an accepted session",
+        );
+      }
+      if (yamlBlocksGraphicalEditing(true, yamlBufferRef.current)) {
+        throw new Error("apply or canonicalize the YAML buffer before editing graphically");
+      }
+      const key = pendingEditKey(address);
+      const edit = pendingEditsRef.current.get(key)?.edit ?? beginPendingEdit(accepted, address);
+      const request = ++objectEditSequenceRef.current;
+      latestObjectEditRef.current.set(key, request);
+      const answer = await editVisualDraftObject({
+        target_ref: draft.target_ref,
+        applied_revision: appliedRevision,
+        address,
+        working: edit.working,
+        change,
+      });
+      assertEpoch(epoch);
+      if (latestObjectEditRef.current.get(key) !== request) throw new SupersededSessionOperation();
+      if (yamlBlocksGraphicalEditing(true, yamlBufferRef.current)) {
+        throw new Error("the YAML buffer changed while this edit was made; apply it first");
+      }
+      setPendingEdits(
+        new Map(pendingEditsRef.current).set(key, {
+          edit: { ...edit, working: answer.working },
+          answer,
+        }),
+      );
+      return answer;
+    },
+    [assertEpoch, setPendingEdits],
   );
 
   const captureCoordinator = useCallback((): SessionCoordinatorCapture => ({
@@ -1157,8 +1340,9 @@ export function useBuilderWorld() {
     setOpenedSession(null);
     setVisualDraft(null);
     setYamlBuffer(EMPTY_YAML_BUFFER);
+    dropPendingEdits();
     resetCompileFacts();
-  }, [beginEpoch, resetCompileFacts, setVisualDraft, setYamlBuffer]);
+  }, [beginEpoch, dropPendingEdits, resetCompileFacts, setVisualDraft, setYamlBuffer]);
 
   return {
     sessions,
@@ -1166,6 +1350,7 @@ export function useBuilderWorld() {
     openedSession,
     visualDraft,
     yamlBuffer,
+    pendingEdits,
     writer,
     assemblyResult,
     world,
@@ -1188,6 +1373,7 @@ export function useBuilderWorld() {
     customizeChain,
     runVisualCommand,
     mutateControls,
+    editPendingObject,
     prepareRetarget,
     captureCoordinator,
     captureIsCurrent,

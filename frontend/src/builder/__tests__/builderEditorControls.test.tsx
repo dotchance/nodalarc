@@ -850,19 +850,25 @@ describe("the YAML buffer locks graphical editing only around an open draft's te
 describe("a gesture that replaces the draft asks first only when work would be lost", () => {
   const draft = { target_ref: "user:sessions/s.yaml", draft_revision: 3 };
   const clean = { targetRef: "user:sessions/s.yaml", revision: 3 };
-  const quiet = { twinMatchesDraft: true, dirtyWindowCount: 0, yamlDirty: false };
+  const quiet = {
+    twinMatchesDraft: true,
+    dirtyWindowCount: 0,
+    pendingEditCount: 0,
+    yamlDirty: false,
+  };
 
   it("a draft as it was opened, created or saved holds no unsaved work", () => {
     expect(draftHoldsUnsavedWork({ draft, clean, ...quiet })).toBe(false);
     expect(draftHoldsUnsavedWork({ draft: null, clean: null, ...quiet })).toBe(false);
   });
 
-  it("an accepted edit, an edit not yet accepted, an open edit or unapplied YAML is unsaved work", () => {
+  it("an accepted edit, an edit not yet accepted, an open or pending edit or unapplied YAML is unsaved work", () => {
     expect(draftHoldsUnsavedWork({ draft: { ...draft, draft_revision: 4 }, clean, ...quiet })).toBe(
       true,
     );
     expect(draftHoldsUnsavedWork({ draft, clean, ...quiet, twinMatchesDraft: false })).toBe(true);
     expect(draftHoldsUnsavedWork({ draft, clean, ...quiet, dirtyWindowCount: 1 })).toBe(true);
+    expect(draftHoldsUnsavedWork({ draft, clean, ...quiet, pendingEditCount: 1 })).toBe(true);
     expect(draftHoldsUnsavedWork({ draft, clean, ...quiet, yamlDirty: true })).toBe(true);
     expect(draftHoldsUnsavedWork({ draft, clean: null, ...quiet })).toBe(true);
   });
@@ -1138,6 +1144,7 @@ describe("deploy gate: saved backend verdict and exact digest truth", () => {
         settledDocumentDigest: "doc-x",
         settledDependencyDigest: "dep-x",
         dirtyWindowCount: 0,
+        pendingEditCount: 0,
       }),
     ).toEqual({ ok: true, reason: null });
   });
@@ -1148,6 +1155,7 @@ describe("deploy gate: saved backend verdict and exact digest truth", () => {
       settledDocumentDigest: "doc-x",
       settledDependencyDigest: "dep-x",
       dirtyWindowCount: 0,
+      pendingEditCount: 0,
     });
     expect(gate.ok).toBe(false);
     expect(gate.reason).toMatch(/save the session first/);
@@ -1159,6 +1167,7 @@ describe("deploy gate: saved backend verdict and exact digest truth", () => {
       settledDocumentDigest: null,
       settledDependencyDigest: null,
       dirtyWindowCount: 0,
+      pendingEditCount: 0,
     });
     expect(gate.ok).toBe(false);
     expect(gate.reason).toMatch(/must compile/);
@@ -1188,6 +1197,7 @@ describe("deploy gate: saved backend verdict and exact digest truth", () => {
       settledDocumentDigest: "doc-x",
       settledDependencyDigest: "dep-x",
       dirtyWindowCount: 0,
+      pendingEditCount: 0,
     });
     expect(gate.ok).toBe(false);
     expect(gate.reason).toMatch(/no satellites/);
@@ -1199,9 +1209,32 @@ describe("deploy gate: saved backend verdict and exact digest truth", () => {
       settledDocumentDigest: "doc-x",
       settledDependencyDigest: "dep-x",
       dirtyWindowCount: 2,
+      pendingEditCount: 0,
     });
     expect(gate.ok).toBe(false);
     expect(gate.reason).toMatch(/2 windows with unapplied edits/);
+  });
+
+  it("refuses while link and routing edits are pending", () => {
+    const one = canDeploy({
+      savedVerdict,
+      settledDocumentDigest: "doc-x",
+      settledDependencyDigest: "dep-x",
+      dirtyWindowCount: 0,
+      pendingEditCount: 1,
+    });
+    expect(one).toEqual({
+      ok: false,
+      reason: "apply or discard the pending link or routing edit first",
+    });
+    const three = canDeploy({
+      savedVerdict,
+      settledDocumentDigest: "doc-x",
+      settledDependencyDigest: "dep-x",
+      dirtyWindowCount: 0,
+      pendingEditCount: 3,
+    });
+    expect(three.reason).toBe("apply or discard the 3 pending link and routing edits first");
   });
 
   it("names the staleness when the saved copy is behind the edits", () => {
@@ -1210,6 +1243,7 @@ describe("deploy gate: saved backend verdict and exact digest truth", () => {
       settledDocumentDigest: "doc-y",
       settledDependencyDigest: "dep-x",
       dirtyWindowCount: 0,
+      pendingEditCount: 0,
     });
     expect(gate.ok).toBe(false);
     expect(gate.reason).toMatch(/behind your edits/);

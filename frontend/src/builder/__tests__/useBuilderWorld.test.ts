@@ -5,7 +5,10 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   BuilderVisualDraftAssemblyResult,
   BuilderVisualDraftEnvelope,
+  BuilderVisualLinkRuleWidget,
+  BuilderVisualObjectEditResult,
   CatalogDocumentSummary,
+  JsonValue,
 } from "../generated/builderApi";
 import { newWorkspace } from "./fixtures/workspaceFixtures";
 
@@ -109,6 +112,67 @@ function assembly(
     },
     assembly_issues: [],
   } as unknown as BuilderVisualDraftAssemblyResult;
+}
+
+/** A link rule as the accepted session holds it. */
+const ACCEPTED_RULE: Readonly<Record<string, JsonValue>> = {
+  enabled: true,
+  endpoints: [
+    { select: { segment: "leo" }, terminal: { all: [{ role: "isl" }, { medium: "optical" }] } },
+    { select: { segment: "leo" }, terminal: { all: [{ role: "isl" }, { medium: "optical" }] } },
+  ],
+  id: "leo_isl",
+  topology: { mode: "visible_candidates" },
+};
+
+const RULE_ADDRESS = { kind: "member", list_pointer: "/link_rules", id: "leo_isl" } as const;
+
+function ruleCard(maxRangeKm: number): BuilderVisualLinkRuleWidget {
+  return {
+    kind: "link_rule",
+    rule: {
+      rule_id: "leo_isl",
+      enabled: true,
+      a: { segment_id: "leo", role: "isl", medium: "optical" },
+      b: { segment_id: "leo", role: "isl", medium: "optical" },
+      topology_mode: "visible_candidates",
+      max_range_km: maxRangeKm,
+    },
+  };
+}
+
+/** A draft whose accepted session holds the link rule. */
+function linkDraft(revision = 4): BuilderVisualDraftEnvelope {
+  return {
+    ...draft(revision),
+    applied_session: { session: { name: "coordinated" }, link_rules: [ACCEPTED_RULE] },
+  };
+}
+
+/** The backend's answer for the rule with `maxRangeKm` set. */
+function ruleAnswer(maxRangeKm: number): BuilderVisualObjectEditResult {
+  return {
+    address: RULE_ADDRESS,
+    working: { ...ACCEPTED_RULE, max_range_km: maxRangeKm },
+    widget: ruleCard(maxRangeKm),
+    control_tree: {
+      projection_revision: 4,
+      root: {
+        control_id: "link-rule",
+        json_pointer: "",
+        label: "Link rule",
+        required: true,
+        present: true,
+      },
+    },
+    issues: [],
+  };
+}
+
+function requestsTo(fetchMock: ReturnType<typeof vi.fn>, path: string): unknown[] {
+  return fetchMock.mock.calls
+    .filter(([url]) => String(url).includes(path))
+    .map(([, init]) => JSON.parse(String((init as RequestInit).body)));
 }
 
 /** Open `opened` the way the page does: open the stored session, then compile it. */
@@ -241,6 +305,201 @@ describe("useBuilderWorld session coordinator", () => {
         String(url).includes("/builder/draft/customize-chain"),
       ),
     ).toBe(false);
+  });
+});
+
+describe("pending link and routing edits", () => {
+  let fetchMock: ReturnType<typeof vi.fn>;
+
+  beforeEach(() => {
+    fetchMock = vi.fn((url: string) => {
+      if (url.includes("/builder/catalog/list")) return Promise.resolve(sessionsResponse);
+      throw new Error(`unexpected request ${url}`);
+    });
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+  });
+
+  function answerObjectEdits(...answers: BuilderVisualObjectEditResult[]): void {
+    fetchMock.mockImplementation((url: string) => {
+      if (url.includes("/builder/draft/object-edit")) {
+        const answer = answers.shift();
+        if (answer) return Promise.resolve(response(answer));
+      }
+      throw new Error(`unexpected request ${url}`);
+    });
+  }
+
+  it("holds each object's edit beside the accepted session with its latest answer", async () => {
+    const original = linkDraft();
+    const { result } = renderHook(() => useBuilderWorld());
+    await act(async () => undefined);
+    await openAsThePageDoes(result, fetchMock, original);
+    const accepted = result.current.visualDraft;
+    answerObjectEdits(ruleAnswer(12345), ruleAnswer(500));
+
+    await act(async () => {
+      await result.current.editPendingObject(RULE_ADDRESS, ruleCard(12345));
+    });
+    await act(async () => {
+      await result.current.editPendingObject(RULE_ADDRESS, ruleCard(500));
+    });
+
+    const [first, second] = requestsTo(fetchMock, "/builder/draft/object-edit");
+    // The first edit starts from the rule as the accepted session holds it.
+    expect(first).toEqual({
+      target_ref: original.target_ref,
+      applied_revision: 4,
+      address: RULE_ADDRESS,
+      working: ACCEPTED_RULE,
+      change: ruleCard(12345),
+    });
+    // A later edit builds on the working JSON the latest answer holds.
+    expect((second as { working: JsonValue }).working).toEqual({
+      ...ACCEPTED_RULE,
+      max_range_km: 12345,
+    });
+    expect([...result.current.pendingEdits.values()]).toEqual([
+      {
+        edit: {
+          kind: "content",
+          address: RULE_ADDRESS,
+          base: ACCEPTED_RULE,
+          working: { ...ACCEPTED_RULE, max_range_km: 500 },
+        },
+        answer: ruleAnswer(500),
+      },
+    ]);
+    expect(result.current.visualDraft).toBe(accepted);
+  });
+
+  it("does not hold an answer a newer edit of the same object overtook", async () => {
+    const { result } = renderHook(() => useBuilderWorld());
+    await act(async () => undefined);
+    await openAsThePageDoes(result, fetchMock, linkDraft());
+    let answerFirst!: () => void;
+    let calls = 0;
+    fetchMock.mockImplementation((url: string) => {
+      if (url.includes("/builder/draft/object-edit")) {
+        calls += 1;
+        if (calls === 1) {
+          return new Promise((resolve) => {
+            answerFirst = () => resolve(response(ruleAnswer(1)));
+          });
+        }
+        return Promise.resolve(response(ruleAnswer(2)));
+      }
+      throw new Error(`unexpected request ${url}`);
+    });
+
+    let first!: Promise<unknown>;
+    await act(async () => {
+      first = result.current.editPendingObject(RULE_ADDRESS, ruleCard(1));
+      await result.current.editPendingObject(RULE_ADDRESS, ruleCard(2));
+    });
+    await act(async () => {
+      answerFirst();
+      await expect(first).rejects.toThrow("changed while");
+    });
+
+    expect([...result.current.pendingEdits.values()].map((pending) => pending.answer)).toEqual([
+      ruleAnswer(2),
+    ]);
+  });
+
+  it("locks the YAML buffer and the session pane while an edit is pending", async () => {
+    const { result } = renderHook(() => useBuilderWorld());
+    await act(async () => undefined);
+    await openAsThePageDoes(result, fetchMock, linkDraft());
+    answerObjectEdits(ruleAnswer(12345));
+    await act(async () => {
+      await result.current.editPendingObject(RULE_ADDRESS, ruleCard(12345));
+    });
+    const buffer = result.current.yamlBuffer;
+
+    act(() => {
+      expect(result.current.editYamlBuffer("session:\n  name: typed\n")).toBe(false);
+    });
+    await act(async () => {
+      await expect(result.current.applyYamlBuffer()).rejects.toThrow(
+        "apply or discard the pending link or routing edit before applying the YAML",
+      );
+      await expect(result.current.useCanonicalYaml()).rejects.toThrow(
+        "apply or discard the pending link or routing edit before applying the YAML",
+      );
+      await expect(
+        result.current.mutateControls([
+          { operation: "set_scalar", control_id: "session-description", value: "typed" },
+        ]),
+      ).rejects.toThrow(
+        "apply or discard the pending link or routing edit before editing the session fields",
+      );
+    });
+
+    expect(result.current.yamlBuffer).toBe(buffer);
+    expect(requestsTo(fetchMock, "/builder/draft/apply-yaml")).toEqual([]);
+    expect(requestsTo(fetchMock, "/builder/draft/control-mutate")).toEqual([]);
+  });
+
+  it("refuses an edit while the YAML buffer is unapplied", async () => {
+    const { result } = renderHook(() => useBuilderWorld());
+    await act(async () => undefined);
+    await openAsThePageDoes(result, fetchMock, linkDraft());
+    act(() => result.current.editYamlBuffer("session:\n  name: typed\n"));
+
+    await act(async () => {
+      await expect(
+        result.current.editPendingObject(RULE_ADDRESS, ruleCard(12345)),
+      ).rejects.toThrow("apply or canonicalize the YAML buffer");
+    });
+
+    expect(requestsTo(fetchMock, "/builder/draft/object-edit")).toEqual([]);
+    expect(result.current.pendingEdits.size).toBe(0);
+  });
+
+  it("edits only objects of an accepted session", async () => {
+    const { result } = renderHook(() => useBuilderWorld());
+    await act(async () => undefined);
+    await openAsThePageDoes(result, fetchMock, {
+      ...draft(0),
+      projection_status: "incomplete_authoring",
+      applied_revision: null,
+      applied_session: null,
+    });
+    await act(async () => {
+      await expect(
+        result.current.editPendingObject(RULE_ADDRESS, ruleCard(12345)),
+      ).rejects.toThrow("edited on an accepted session");
+    });
+
+    await openAsThePageDoes(result, fetchMock, linkDraft());
+    await act(async () => {
+      await expect(
+        result.current.editPendingObject(
+          { kind: "member", list_pointer: "/routing/domains", id: "isis" },
+          {
+            kind: "routing_domain",
+            domain: { domain_id: "isis", protocol: "isis", member_segment_ids: ["leo"] },
+          },
+        ),
+      ).rejects.toThrow("the accepted session holds no isis in /routing/domains");
+    });
+
+    expect(requestsTo(fetchMock, "/builder/draft/object-edit")).toEqual([]);
+  });
+
+  it("drops the pending edits when another session opens", async () => {
+    const { result } = renderHook(() => useBuilderWorld());
+    await act(async () => undefined);
+    await openAsThePageDoes(result, fetchMock, linkDraft());
+    answerObjectEdits(ruleAnswer(12345));
+    await act(async () => {
+      await result.current.editPendingObject(RULE_ADDRESS, ruleCard(12345));
+    });
+    expect(result.current.pendingEdits.size).toBe(1);
+
+    await openAsThePageDoes(result, fetchMock, draft(9));
+
+    expect(result.current.pendingEdits.size).toBe(0);
   });
 });
 

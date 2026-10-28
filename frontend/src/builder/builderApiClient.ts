@@ -2,6 +2,7 @@ import { REST_URL, authHeaders } from "../config";
 import type {
   BuilderCatalogBootstrap,
   BuilderCatalogDocument,
+  BuilderCompileRequest,
   BuilderCompileResult,
   BuilderSessionDeployAccepted,
   BuilderSessionDeployRequest,
@@ -10,7 +11,10 @@ import type {
   BuilderVisualCustomizeChainRequest,
   BuilderVisualCustomizeChainResult,
   BuilderVisualControlMutationRequest,
+  BuilderVisualDraftAcceptStateRequest,
   BuilderVisualDraftAssemblyResult,
+  BuilderVisualDraftApplyEditsRequest,
+  BuilderVisualDraftApplyEditsResult,
   BuilderVisualDraftApplyWorkspaceRequest,
   BuilderVisualDraftApplyYamlRequest,
   BuilderVisualDraftApplyYamlResult,
@@ -21,6 +25,8 @@ import type {
   BuilderVisualDraftEnvelope,
   BuilderVisualDraftOpenRequest,
   BuilderVisualDraftRetargetRequest,
+  BuilderVisualObjectEditRequest,
+  BuilderVisualObjectEditResult,
   BuilderVisualWalkerLayoutRequest,
   BuilderVisualWalkerLayoutResult,
   CatalogComponentDraftEnvelope,
@@ -194,6 +200,24 @@ export function applyVisualDraftWorkspace(
   return request("/draft/apply-workspace", input);
 }
 
+export function editVisualDraftObject(
+  input: BuilderVisualObjectEditRequest,
+): Promise<BuilderVisualObjectEditResult> {
+  return request("/draft/object-edit", input);
+}
+
+export function applyVisualDraftEdits(
+  input: BuilderVisualDraftApplyEditsRequest,
+): Promise<BuilderVisualDraftApplyEditsResult> {
+  return request("/draft/apply-edits", input);
+}
+
+export function acceptVisualDraftState(
+  input: BuilderVisualDraftAcceptStateRequest,
+): Promise<BuilderVisualDraftAssemblyResult> {
+  return request("/draft/accept-state", input);
+}
+
 export function mutateVisualDraftControls(
   input: BuilderVisualControlMutationRequest,
 ): Promise<BuilderVisualDraftAssemblyResult> {
@@ -222,6 +246,10 @@ export function customizeVisualDraftChain(
   input: BuilderVisualCustomizeChainRequest,
 ): Promise<BuilderVisualCustomizeChainResult> {
   return request("/draft/customize-chain", input);
+}
+
+export function compileBuilderDraft(input: BuilderCompileRequest): Promise<BuilderCompileResult> {
+  return request("/compile", input);
 }
 
 export function compileWizardSession(input: WizardCompileRequest): Promise<BuilderCompileResult> {

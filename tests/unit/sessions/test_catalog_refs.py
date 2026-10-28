@@ -55,7 +55,7 @@ class ReferenceEnvelope(BaseModel):
 
 
 def test_catalog_family_vocabulary_is_closed() -> None:
-    assert set(get_args(CatalogFamily)) == {
+    assert set(get_args(CatalogFamily.__value__)) == {
         family for _reference_type, family in FAMILY_REFERENCE_TYPES
     }
 

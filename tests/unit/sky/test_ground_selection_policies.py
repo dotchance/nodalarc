@@ -9,7 +9,7 @@ from ome.ground_selection_policies import SCORE_FUNCTIONS
 
 
 def test_selection_dispatch_tables_match_policy_literal() -> None:
-    expected = set(get_args(SelectionPolicyName))
+    expected = set(get_args(SelectionPolicyName.__value__))
 
     assert set(SCORE_FUNCTIONS) == expected
     assert set(SELECTION_POLICY_SCORE_SCALES) == expected

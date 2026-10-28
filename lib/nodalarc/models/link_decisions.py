@@ -47,7 +47,7 @@ from nodalarc.models.ground_policy import (
 )
 from nodalarc.models.terminal_physics import GroundBoresightMode, SatGroundBoresightMode
 
-GroundVisibilityRejectReason = Literal[
+type GroundVisibilityRejectReason = Literal[
     "ok",
     "los_blocked",
     "elevation_below_min",
@@ -69,7 +69,7 @@ This is the GROUND-ONLY subset. ISL adds its own rejection reasons
 ISL-only reason is a producer bug, and the type system refuses it."""
 
 
-GroundVisibilityRejectingEndpoint = Literal["none", "ground", "satellite", "both"]
+type GroundVisibilityRejectingEndpoint = Literal["none", "ground", "satellite", "both"]
 """Which ground-link endpoint caused a terminal-bound visibility rejection.
 
 ``none`` is used for visible decisions and non-terminal-bound rejections
@@ -78,7 +78,7 @@ profiles impose the same limiting value.
 """
 
 
-GroundUnscheduledReason = Literal[
+type GroundUnscheduledReason = Literal[
     "gs_capacity",
     "sat_capacity",
     "hysteresis_hold",
@@ -110,7 +110,7 @@ use `successor_aborted`,
 replacement from a failed handover."""
 
 
-GroundAllocationEventCategory = Literal[
+type GroundAllocationEventCategory = Literal[
     "mbb_overlap_started",
     "teardown_completed",
     "teardown_invalidated_by_epoch",
@@ -135,7 +135,7 @@ widens beyond `off`; when that policy exists, add `mbb_preempted` here and emit
 it from the preemption decision path.
 """
 
-GroundAllocationPolicyKind = Literal[
+type GroundAllocationPolicyKind = Literal[
     "selection_policy",
     "handover_policy",
     "handover_mode",
@@ -143,8 +143,8 @@ GroundAllocationPolicyKind = Literal[
     "mbb_preemption",
     "cross_tenant_displacement",
 ]
-GroundHandoverModeName = Literal["bbm", "mbb"]
-GroundAllocationPolicyName = (
+type GroundHandoverModeName = Literal["bbm", "mbb"]
+type GroundAllocationPolicyName = (
     SelectionPolicyName
     | HandoverPolicyName
     | GroundHandoverModeName
@@ -153,12 +153,12 @@ GroundAllocationPolicyName = (
     | CrossTenantDisplacementPolicy
 )
 GROUND_ALLOCATION_POLICY_NAMES_BY_KIND: dict[str, frozenset[str]] = {
-    "selection_policy": frozenset(get_args(SelectionPolicyName)),
-    "handover_policy": frozenset(get_args(HandoverPolicyName)),
-    "handover_mode": frozenset(get_args(GroundHandoverModeName)),
-    "successor_abort_policy": frozenset(get_args(SuccessorAbortPolicy)),
-    "mbb_preemption": frozenset(get_args(MbbPreemptionPolicy)),
-    "cross_tenant_displacement": frozenset(get_args(CrossTenantDisplacementPolicy)),
+    "selection_policy": frozenset(get_args(SelectionPolicyName.__value__)),
+    "handover_policy": frozenset(get_args(HandoverPolicyName.__value__)),
+    "handover_mode": frozenset(get_args(GroundHandoverModeName.__value__)),
+    "successor_abort_policy": frozenset(get_args(SuccessorAbortPolicy.__value__)),
+    "mbb_preemption": frozenset(get_args(MbbPreemptionPolicy.__value__)),
+    "cross_tenant_displacement": frozenset(get_args(CrossTenantDisplacementPolicy.__value__)),
 }
 
 
@@ -230,7 +230,7 @@ class GroundAllocationEvent(BaseModel):
         return self
 
 
-ObserverFrame = Literal["body_local"]
+type ObserverFrame = Literal["body_local"]
 """Reference frame for `elevation_deg` / `azimuth_deg`.
 
 Ground-link look angles are computed in the body-local topocentric frame

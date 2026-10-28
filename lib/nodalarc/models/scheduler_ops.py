@@ -26,8 +26,8 @@ class ActuationState(StrEnum):
 
 
 # The roster states in which a station's actuation is not proven.
-FailingActuationState = Literal[ActuationState.KERNEL_DIRTY, ActuationState.ACTUATION_BLOCKED]
-_FAILING_ACTUATION_STATES = frozenset(get_args(FailingActuationState))
+type FailingActuationState = Literal[ActuationState.KERNEL_DIRTY, ActuationState.ACTUATION_BLOCKED]
+_FAILING_ACTUATION_STATES = frozenset(get_args(FailingActuationState.__value__))
 
 
 def is_failing_actuation(state: ActuationState) -> TypeIs[FailingActuationState]:

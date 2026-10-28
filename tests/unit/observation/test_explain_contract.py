@@ -121,6 +121,8 @@ def _frontend_array(const_name: str, path: Path = _REASONS_TS) -> set[str]:
 
 
 def _literal_values(literal_type: object) -> set[str]:
+    # A `type` alias names its value; read the value.
+    literal_type = getattr(literal_type, "__value__", literal_type)
     if isinstance(literal_type, type) and issubclass(literal_type, StrEnum):
         return {m.value for m in literal_type}
     if get_origin(literal_type) is Literal:
@@ -196,7 +198,7 @@ def test_builder_preview_reasons_are_runtime_verbatim():
     from nodalarc.models.builder_world import BuilderPreviewRejectReason
     from nodalarc.models.events import VisibilityRejectReason
 
-    physics = set(get_args(BuilderPreviewRejectReason)) - {"no_geometry"}
+    physics = set(get_args(BuilderPreviewRejectReason.__value__)) - {"no_geometry"}
     runtime = _literal_values(VisibilityRejectReason)
     assert physics <= runtime, f"non-runtime reason tokens: {physics - runtime}"
 

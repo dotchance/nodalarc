@@ -14,10 +14,10 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from nodalarc.catalog_refs import CatalogFamily
 
 BuilderControlScalarValue = str | int | float | bool | None
-BuilderControlScalarKind = Literal["text", "number", "boolean", "datetime", "reference"]
-BuilderControlNumberKind = Literal["integer", "float"]
-BuilderControlChoiceKind = Literal["literal", "type", "null"]
-BuilderControlMutationOperation = Literal[
+type BuilderControlScalarKind = Literal["text", "number", "boolean", "datetime", "reference"]
+type BuilderControlNumberKind = Literal["integer", "float"]
+type BuilderControlChoiceKind = Literal["literal", "type", "null"]
+type BuilderControlMutationOperation = Literal[
     "set_scalar",
     "set_present",
     "select_choice",

@@ -56,12 +56,12 @@ Pair = tuple[str, str]
 # "clean". Bound to the frontend registry via tests/unit/observation/test_explain_contract.py.
 _ACTUATION_DIVERGED: ActuationExplanationReason = "actuation_diverged"
 ACTUATION_EXPLANATION_REASONS: tuple[ActuationExplanationReason, ...] = get_args(
-    ActuationExplanationReason
+    ActuationExplanationReason.__value__
 )
 
 # Funnel order is canonical (the order of the FunnelGate Literal); index gives
 # before/at/after the binding gate.
-FUNNEL_ORDER: tuple[FunnelGate, ...] = get_args(FunnelGate)
+FUNNEL_ORDER: tuple[FunnelGate, ...] = get_args(FunnelGate.__value__)
 _GATE_INDEX = {g: i for i, g in enumerate(FUNNEL_ORDER)}
 
 # The gate each reason binds at. Every reason OME can state has a gate ("ok" is
@@ -87,9 +87,9 @@ _UNSCHEDULED_GATE: dict[GroundUnscheduledReason, FunnelGate] = {
     "failed_acquire": "handover_policy",
 }
 
-if set(_REJECT_GATE) != set(get_args(GroundVisibilityRejectReason)) - {"ok"}:
+if set(_REJECT_GATE) != set(get_args(GroundVisibilityRejectReason.__value__)) - {"ok"}:
     raise RuntimeError("every ground visibility rejection reason needs a funnel gate")
-if set(_UNSCHEDULED_GATE) != set(get_args(GroundUnscheduledReason)):
+if set(_UNSCHEDULED_GATE) != set(get_args(GroundUnscheduledReason.__value__)):
     raise RuntimeError("every ground unscheduled reason needs a funnel gate")
 
 _GATE_PRODUCER: dict[FunnelGate, ExplanationProducer] = {

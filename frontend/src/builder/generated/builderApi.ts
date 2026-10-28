@@ -23,57 +23,15 @@ export type SessionRef = CatalogRef;
 /** Path-free deployable source selected by the browser. */
 export type SessionSourceId = CatalogSessionSourceId;
 
-export type CatalogFamily = "bodies" | "terminals" | "payloads" | "profiles" | "orbits" | "nodes" | "sites" | "site-sets" | "constellations" | "space-node-sets" | "sessions";
-export type BuilderIssueStage = "draft" | "structural" | "reference" | "semantic" | "runtime_support" | "readiness" | "persistence" | "deployment" | "staleness";
-export type BuilderIssueSeverity = "info" | "warning" | "error";
-export type BuilderBlockedOperation = "save" | "deploy";
-export type WizardOrbitPropagator = "two_body" | "j2_mean_elements" | "sgp4_tle";
-export type WizardConstellationSourceKind = "constellation" | "space_node_set" | "custom_geometry";
-export type WizardTerminalRole = "access" | "isl" | "crosslink" | "backbone";
-export type WizardExtension = "sr" | "te" | "mpls";
-export type WizardAreaStrategy = "flat" | "stripe" | "per_plane";
-export type WizardRoutingProtocol = "isis" | "ospf";
-export type WizardWalkerPattern = "walker_delta" | "walker_star";
-export type WizardRoutingBooleanField = "bfd";
-export type WizardRoutingTimerField = "bfd_detect_multiplier" | "bfd_rx_interval" | "bfd_tx_interval" | "isis_hello_interval" | "isis_hello_multiplier" | "spf_init_delay" | "spf_short_delay" | "spf_long_delay" | "spf_holddown" | "ospf_hello_interval" | "ospf_dead_interval" | "ospf_spf_delay" | "ospf_spf_initial_hold" | "ospf_spf_max_hold";
-export type BuilderVisualDraftProjectionStatus = "applied" | "incomplete_authoring" | "no_valid_projection" | "pending_authoring";
-export type BuilderControlMutationOperation = "set_scalar" | "set_present" | "select_choice" | "insert_item" | "remove_item" | "move_item" | "insert_map_entry" | "remove_map_entry" | "rename_map_key";
-export type BuilderVisualSchedulingPreset = "leo-fast-handover" | "geo-longest-pass";
-export type BuilderVisualPhasingMode = "walker_delta" | "walker_star" | "evenly_spaced_mean_anomaly";
-export type BuilderVisualOrbitShape = "circular" | "elliptical";
-export type BuilderVisualOrbitPropagator = "two_body" | "j2_mean_elements";
-export type BuilderVisualTopologyMode = "visible_candidates" | "nearest_n";
-export type BuilderVisualDraftCommandOperation = "place_space_reference" | "place_ground_reference" | "add_generated_space" | "set_space_population" | "author_inline_space_node" | "add_or_increment_node_terminal" | "set_node_terminal_role" | "add_node_ethernet_port" | "add_ground" | "add_ground_site_reference" | "set_ground_stamp_node" | "set_ground_site_node" | "add_ground_site_node" | "mint_ground_members" | "add_routing_domain" | "add_boundary" | "connect_segments" | "rederive_link" | "set_scheduling_preset";
-export type BuilderVisualDraftAffectedKind = "space" | "ground" | "routing_domain" | "boundary" | "link" | "ground_member";
-export type CatalogComponentFamily = "bodies" | "terminals" | "payloads" | "orbits" | "nodes" | "sites" | "site-sets" | "constellations" | "space-node-sets";
-export type CatalogDraftIssueStage = "structural" | "reference" | "runtime_support";
-export type BuilderSessionSaveRefusalCode = "builder_session_save.save_blocked" | "builder_session_save.stale_write" | "builder_session_save.graph_invalid" | "builder_session_save.persistence_failed" | "builder_session_save.storage_verification_failed";
-export type CatalogAuthoringRefusalCode = "catalog_authoring.not_found" | "catalog_authoring.read_only" | "catalog_authoring.invalid_document" | "catalog_authoring.invalid_patch" | "catalog_authoring.invalid_graph" | "catalog_authoring.conflict" | "catalog_authoring.stale_revision" | "catalog_authoring.invalid_page_token" | "catalog_authoring.stale_page_token" | "catalog_authoring.impact_mismatch" | "catalog_authoring.dependents_exist" | "catalog_authoring.import_limit" | "catalog_authoring.import_incomplete" | "catalog_authoring.import_collision" | "catalog_authoring.stale_import_proposal" | "catalog_authoring.persistence_failed";
-export type CatalogImportOutcome = "proposed" | "committed" | "unchanged" | "blocked";
-export type CatalogImportCollisionReason = "shipped_missing" | "shipped_content_mismatch" | "user_content_mismatch";
-export type CatalogNamespace = "nodalarc" | "user";
-export type BuilderControlScalarKind = "text" | "number" | "boolean" | "datetime" | "reference";
-export type BuilderControlNumberKind = "integer" | "float";
-export type BuilderControlChoiceKind = "literal" | "type" | "null";
-export type PreviewScope = "computed" | "inter_body_pending" | "terrestrial_pending" | "disabled";
-export type BuilderPreviewRejectReason = "los_blocked" | "range_exceeded" | "elevation_below_min" | "field_of_regard" | "terminal_type_mismatch" | "no_geometry";
-export type SupportedSurfaceBody = "earth" | "luna";
-export type TerminalMedium = "rf" | "optical";
-export type ForwardingClass = "routed" | "host" | "bridge" | "control_only";
-export type RoutingProtocol = "isis" | "ospf" | "bgp" | "static";
-export type RoutingBoundaryAdapter = "static_ip" | "bgp" | "dtn_bundle";
-export type NodeKind = "satellite" | "ground_station";
-export type NodeRole = "router" | "host" | "forwarding_only";
-export type LinkLabel = "access" | "isl" | "inter_body";
-export type TopologyMode = "visible_candidates" | "nearest_visible" | "nearest_n" | "explicit_pairs";
-export type GroundBoresightMode = "local_vertical" | "configured_topocentric" | "steerable_envelope";
-
 /** Stable, path-free refusal evidence for one request. ``code`` is the refusing component's own vocabulary (an exception family's enum value or one fixed name per family). ``message`` names the declared inputs and catalog references involved; the host filesystem and other exceptions' text never appear in it. ``cause_type`` is the class name of a wrapped cause when the refusal carries one. */
 export interface ApiRefusal {
   readonly code: string;
   readonly message: string;
   readonly cause_type: string | null;
 }
+
+/**  */
+export type BuilderBlockedOperation = "save" | "deploy";
 
 /** Public documentation and catalog metadata needed to start Builder authoring. */
 export interface BuilderCatalogBootstrap {
@@ -144,6 +102,15 @@ export interface BuilderCompileResult {
   readonly deploy_eligibility_after_save: BuilderVerdict;
 }
 
+/**  */
+export type BuilderControlChoiceKind = "literal" | "type" | "null";
+
+/**  */
+export type BuilderControlNumberKind = "integer" | "float";
+
+/**  */
+export type BuilderControlScalarKind = "text" | "number" | "boolean" | "datetime" | "reference";
+
 /** Complete graphical control projection for one applied configuration revision. */
 export interface BuilderControlTree {
   readonly projection_revision: number;
@@ -208,10 +175,16 @@ export interface BuilderIssue {
   readonly related_refs: ReadonlyArray<string>;
 }
 
+/**  */
+export type BuilderIssueSeverity = "info" | "warning" | "error";
+
+/**  */
+export type BuilderIssueStage = "draft" | "structural" | "reference" | "semantic" | "runtime_support" | "readiness" | "persistence" | "deployment" | "staleness";
+
 /** One resolved link-rule endpoint, flattened for builder display. */
 export interface BuilderLinkEndpoint {
   readonly segment_id: string;
-  readonly terminal_role: WizardTerminalRole;
+  readonly terminal_role: MountRole;
   readonly terminal_medium: string | null;
   readonly min_elevation_deg: number | null;
   readonly node_ids: ReadonlyArray<string>;
@@ -309,6 +282,9 @@ export interface BuilderPreviewReasonCount {
   readonly reason: BuilderPreviewRejectReason;
   readonly count: number;
 }
+
+/**  */
+export type BuilderPreviewRejectReason = "los_blocked" | "range_exceeded" | "elevation_below_min" | "field_of_regard" | "terminal_type_mismatch" | "no_geometry";
 
 /** One complete new catalog document proposed for a ``user:`` ref. */
 export interface BuilderProposedCatalogDocument {
@@ -461,6 +437,9 @@ export interface BuilderSessionSaveRefusal {
   readonly compile_result: BuilderCompileResult | null;
 }
 
+/**  */
+export type BuilderSessionSaveRefusalCode = "builder_session_save.save_blocked" | "builder_session_save.stale_write" | "builder_session_save.graph_invalid" | "builder_session_save.persistence_failed" | "builder_session_save.storage_verification_failed";
+
 /** Transactional request to publish a complete draft as a catalog session. */
 export interface BuilderSessionSaveRequest {
   readonly draft: BuilderDraftEnvelope;
@@ -545,7 +524,7 @@ export interface BuilderVisualAddOrIncrementNodeTerminalCommand {
   readonly operation: "add_or_increment_node_terminal";
   readonly segment_id: string;
   readonly terminal_ref: string;
-  readonly role: WizardTerminalRole;
+  readonly role: MountRole;
 }
 
 /** Add one backend-seeded routing domain over uncovered segments. */
@@ -563,7 +542,7 @@ export interface BuilderVisualAuthorInlineSpaceNodeCommand {
 export interface BuilderVisualAuthoringFacts {
   readonly default_phasing_mode: BuilderVisualPhasingMode;
   readonly single_plane_phasing_mode: BuilderVisualPhasingMode;
-  readonly default_mount_role: WizardTerminalRole;
+  readonly default_mount_role: MountRole;
   readonly default_body_ref: string;
   readonly space_access_boresight: BuilderVisualSpaceBoresight;
   readonly ground_access_boresight: BuilderVisualGroundBoresight;
@@ -624,6 +603,9 @@ export interface BuilderVisualCustomizeChainResult {
   readonly issues: ReadonlyArray<BuilderIssue>;
 }
 
+/**  */
+export type BuilderVisualDraftAffectedKind = "space" | "ground" | "routing_domain" | "boundary" | "link" | "ground_member";
+
 /** Apply one complete graphical workspace to a fenced draft revision. */
 export interface BuilderVisualDraftApplyWorkspaceRequest {
   readonly draft: BuilderVisualDraftEnvelope;
@@ -657,6 +639,9 @@ export interface BuilderVisualDraftAssemblyResult {
   readonly compile_result: BuilderCompileResult;
   readonly assembly_issues: ReadonlyArray<BuilderIssue>;
 }
+
+/**  */
+export type BuilderVisualDraftCommandOperation = "place_space_reference" | "place_ground_reference" | "add_generated_space" | "set_space_population" | "author_inline_space_node" | "add_or_increment_node_terminal" | "set_node_terminal_role" | "add_node_ethernet_port" | "add_ground" | "add_ground_site_reference" | "set_ground_stamp_node" | "set_ground_site_node" | "add_ground_site_node" | "mint_ground_members" | "add_routing_domain" | "add_boundary" | "connect_segments" | "rederive_link" | "set_scheduling_preset";
 
 /** Apply one typed command to an exact visual-draft revision. */
 export interface BuilderVisualDraftCommandRequest {
@@ -712,6 +697,9 @@ export interface BuilderVisualDraftOpenRequest {
   readonly source_ref: SessionRef;
   readonly target_ref?: SessionRef | null;
 }
+
+/**  */
+export type BuilderVisualDraftProjectionStatus = "applied" | "incomplete_authoring" | "no_valid_projection" | "pending_authoring";
 
 /** Prepare a fenced draft for saving under one exact user session ref. */
 export interface BuilderVisualDraftRetargetRequest {
@@ -782,7 +770,7 @@ export interface BuilderVisualGroundStamp {
 export interface BuilderVisualLinkEndpoint {
   readonly segment_id?: string;
   readonly tag?: string | null;
-  readonly role?: WizardTerminalRole | null;
+  readonly role?: MountRole | null;
   readonly medium?: TerminalMedium | null;
   readonly min_elevation_deg?: number | null;
 }
@@ -814,7 +802,7 @@ export interface BuilderVisualMintGroundMembersCommand {
 
 /** Presentation facts for one canonical terminal-mount role. */
 export interface BuilderVisualMountRoleMetadata {
-  readonly id: WizardTerminalRole;
+  readonly id: MountRole;
   readonly label: string;
   readonly description: string;
 }
@@ -843,11 +831,20 @@ export interface BuilderVisualOrbit {
   readonly propagator?: BuilderVisualOrbitPropagator | null;
 }
 
+/**  */
+export type BuilderVisualOrbitPropagator = "two_body" | "j2_mean_elements";
+
+/**  */
+export type BuilderVisualOrbitShape = "circular" | "elliptical";
+
 /** Presentation facts for one visual orbit-shape form. */
 export interface BuilderVisualOrbitShapeMetadata {
   readonly id: BuilderVisualOrbitShape;
   readonly label: string;
 }
+
+/**  */
+export type BuilderVisualPhasingMode = "walker_delta" | "walker_star" | "evenly_spaced_mean_anomaly";
 
 /** Presentation facts for one canonical constellation phasing mode. */
 export interface BuilderVisualPhasingModeMetadata {
@@ -904,6 +901,9 @@ export interface BuilderVisualRoutingProtocolMetadata {
   readonly timer_fields: boolean;
 }
 
+/**  */
+export type BuilderVisualSchedulingPreset = "leo-fast-handover" | "geo-longest-pass";
+
 /** Typed presentation metadata for one backend-owned scheduling preset. */
 export interface BuilderVisualSchedulingPresetMetadata {
   readonly id: BuilderVisualSchedulingPreset;
@@ -931,7 +931,7 @@ export interface BuilderVisualSetNodeTerminalRoleCommand {
   readonly operation: "set_node_terminal_role";
   readonly segment_id: string;
   readonly mount_id: string;
-  readonly role: WizardTerminalRole;
+  readonly role: MountRole;
 }
 
 /** Apply one complete backend-owned scheduling block or inherit at a site. */
@@ -1000,11 +1000,14 @@ export interface BuilderVisualSpaceReference {
 /** Editable terminal mount on a visual node draft. */
 export interface BuilderVisualTerminalMount {
   readonly mount_id?: string;
-  readonly role?: WizardTerminalRole | null;
+  readonly role?: MountRole | null;
   readonly terminal_ref?: string | null;
   readonly count?: number | null;
   readonly boresight?: BuilderVisualSpaceBoresight | null;
 }
+
+/**  */
+export type BuilderVisualTopologyMode = "visible_candidates" | "nearest_n";
 
 /** Presentation and runtime facts for one visual link topology mode. */
 export interface BuilderVisualTopologyModeMetadata {
@@ -1017,7 +1020,7 @@ export interface BuilderVisualTopologyModeMetadata {
 
 /** Walker population intent whose derived angular values remain backend-owned. */
 export interface BuilderVisualWalkerLayoutRequest {
-  readonly pattern: WizardWalkerPattern;
+  readonly pattern: "walker_delta" | "walker_star";
   readonly planes: number;
   readonly slots_per_plane: number;
 }
@@ -1072,7 +1075,7 @@ export interface BuilderWorldNode {
   readonly tags: ReadonlyArray<string>;
   readonly surface_position: ResolvedSurfacePosition | null;
   readonly epoch_position: NodePosition | null;
-  readonly forwarding: ForwardingClass | null;
+  readonly forwarding: "routed" | "host" | "bridge" | "control_only" | null;
   readonly role: NodeRole;
   readonly routing_instances: ReadonlyArray<NodeRoutingInstance>;
   readonly terminal_inventory: ReadonlyArray<ResolvedTerminalBlock>;
@@ -1085,6 +1088,9 @@ export interface BuilderWorldSegment {
   readonly segment_id: string;
   readonly display_name: string;
 }
+
+/**  */
+export type CatalogAuthoringRefusalCode = "catalog_authoring.not_found" | "catalog_authoring.read_only" | "catalog_authoring.invalid_document" | "catalog_authoring.invalid_patch" | "catalog_authoring.invalid_graph" | "catalog_authoring.conflict" | "catalog_authoring.stale_revision" | "catalog_authoring.invalid_page_token" | "catalog_authoring.stale_page_token" | "catalog_authoring.impact_mismatch" | "catalog_authoring.dependents_exist" | "catalog_authoring.import_limit" | "catalog_authoring.import_incomplete" | "catalog_authoring.import_collision" | "catalog_authoring.stale_import_proposal" | "catalog_authoring.persistence_failed";
 
 /** One component draft state with the backend's projection of it. */
 export interface CatalogComponentDraftEnvelope {
@@ -1104,6 +1110,9 @@ export interface CatalogComponentDraftState {
   readonly expected_target_revision?: string | null;
   readonly document: Readonly<Record<string, JsonValue>>;
 }
+
+/**  */
+export type CatalogComponentFamily = "bodies" | "terminals" | "payloads" | "orbits" | "nodes" | "sites" | "site-sets" | "constellations" | "space-node-sets";
 
 /** Fenced deletion request bound to exact bytes and reviewed graph impact. */
 export interface CatalogDeleteRequest {
@@ -1173,7 +1182,7 @@ export interface CatalogDraftAddNodeTerminalMountRequest {
   readonly draft: CatalogComponentDraftState;
   readonly expected_draft_revision: number;
   readonly terminal_ref: string;
-  readonly role: WizardTerminalRole;
+  readonly role: MountRole;
 }
 
 /** Add one explicitly identified node using backend-derived persisted fields. */
@@ -1199,6 +1208,9 @@ export interface CatalogDraftApplyYamlResult {
   readonly canonicalization_required: boolean;
   readonly issues: ReadonlyArray<CatalogDraftIssue>;
 }
+
+/**  */
+export type CatalogDraftBlockedOperation = "save" | "deploy";
 
 /** Validate one exact draft without mutating catalog persistence. */
 export interface CatalogDraftCompileRequest {
@@ -1232,8 +1244,11 @@ export interface CatalogDraftIssue {
   readonly pointer: string;
   readonly source_line: number | null;
   readonly source_column: number | null;
-  readonly blocks: ReadonlyArray<BuilderBlockedOperation>;
+  readonly blocks: ReadonlyArray<CatalogDraftBlockedOperation>;
 }
+
+/**  */
+export type CatalogDraftIssueStage = "structural" | "reference" | "runtime_support";
 
 /** Create one new, intentionally incomplete user-owned component draft. */
 export interface CatalogDraftNewRequest {
@@ -1260,6 +1275,9 @@ export interface CatalogDraftSaveResult {
   readonly compile_result: CatalogDraftCompileResult;
 }
 
+/**  */
+export type CatalogFamily = "bodies" | "terminals" | "payloads" | "profiles" | "orbits" | "nodes" | "sites" | "site-sets" | "constellations" | "space-node-sets" | "sessions";
+
 /** Backend-owned authoring capabilities for one public catalog family. */
 export interface CatalogFamilyMetadata {
   readonly family: CatalogFamily;
@@ -1274,6 +1292,12 @@ export interface CatalogFamilyMetadata {
 export interface CatalogGetRequest {
   readonly ref: CatalogRef;
 }
+
+/**  */
+export type CatalogImportCollisionReason = "shipped_missing" | "shipped_content_mismatch" | "user_content_mismatch";
+
+/**  */
+export type CatalogImportOutcome = "proposed" | "committed" | "unchanged" | "blocked";
 
 /** One deterministic page pinned to an immutable catalog generation. */
 export interface CatalogListPage {
@@ -1295,6 +1319,9 @@ export interface CatalogMutationResult {
   readonly document: BuilderCatalogDocument;
   readonly impact: CatalogDependencyImpact;
 }
+
+/**  */
+export type CatalogNamespace = "nodalarc" | "user";
 
 /** Stable typed evidence for an authoring operation refused by the backend. */
 export interface CatalogOperationRefusal {
@@ -1318,7 +1345,7 @@ export interface CatalogSessionSourceId {
 export interface CatalogSessionSummary {
   readonly source_id: CatalogSessionSourceId;
   readonly name: string;
-  readonly source: CatalogNamespace;
+  readonly source: "nodalarc" | "user";
   readonly constellation: string;
   readonly routing_stack: string;
   readonly deploy_allowed: boolean;
@@ -1519,6 +1546,12 @@ export interface EphemerisNodeTLE {
   readonly frame_id: SupportedSurfaceBody;
 }
 
+/**  */
+export type ForwardingClass = "routed" | "host" | "bridge" | "control_only";
+
+/**  */
+export type GroundBoresightMode = "local_vertical" | "configured_topocentric" | "steerable_envelope";
+
 /** Ground station coverage statistics for one orbital period. */
 export interface GsPreview {
   readonly per_station: Readonly<Record<string, GsStationPreview>>;
@@ -1557,11 +1590,20 @@ export interface IslPreview {
   readonly failure_reasons: IslFailureBreakdown | null;
 }
 
+/**  */
+export type LinkLabel = "access" | "isl" | "inter_body";
+
+/**  */
+export type MountRole = "access" | "isl" | "crosslink" | "backbone";
+
 /** One interface a node runs a routing instance on. */
 export interface NodeInstanceInterface {
   readonly name: string;
   readonly area_id: string | null;
 }
+
+/**  */
+export type NodeKind = "satellite" | "ground_station";
 
 /** Position and velocity of a single node. Position is geodetic (WGS84). Velocity is ECEF (Earth-Centered Earth-Fixed) in km/s — includes Earth rotation subtraction, so it represents motion relative to the rotating Earth. Ground stations have zero velocity. The frontend's worldVelocity() function in astronomy.ts expects ECEF velocity and applies the view-frame rotation to produce world-frame velocity. */
 export interface NodePosition {
@@ -1573,6 +1615,9 @@ export interface NodePosition {
   readonly vel_z_km_s: number;
 }
 
+/**  */
+export type NodeRole = "router" | "host" | "forwarding_only";
+
 /** A node's participation in one routing instance (a ``routing.domains`` entry). */
 export interface NodeRoutingInstance {
   readonly domain_id: string;
@@ -1582,6 +1627,9 @@ export interface NodeRoutingInstance {
   readonly area_border: boolean;
   readonly as_boundary: boolean;
 }
+
+/**  */
+export type PreviewScope = "computed" | "inter_body_pending" | "terrestrial_pending" | "disabled";
 
 /** A numbered interface address set. */
 export interface ResolvedInterfaceAddress {
@@ -1613,8 +1661,8 @@ export interface ResolvedSurfacePosition {
 export interface ResolvedTerminalBlock {
   readonly terminal_id: string;
   readonly owner_node_id: string;
-  readonly endpoint_role: WizardTerminalRole;
-  readonly medium: TerminalMedium;
+  readonly endpoint_role: MountRole;
+  readonly medium: TerminalMediumLiteral;
   readonly source_terminal_id: string | null;
   readonly link_role: string | null;
   readonly count: number;
@@ -1629,10 +1677,19 @@ export interface ResolvedTerminalBlock {
   readonly source_ref: string;
 }
 
+/**  */
+export type RoutingBoundaryAdapter = "static_ip" | "bgp" | "dtn_bundle";
+
+/**  */
+export type RoutingProtocol = "isis" | "ospf" | "bgp" | "static";
+
+/**  */
+export type SatGroundBoresightMode = "nadir";
+
 /** Boresight reference for a satellite ground-terminal FoR cone. ``target_body`` identifies which body the nadir vector points toward. The cone width itself lives on the terminal's ``field_of_regard_deg`` field as the full apex angle. */
 export interface SatGroundTerminalBoresight {
   readonly target_body: SupportedSurfaceBody;
-  readonly mode: "nadir";
+  readonly mode: SatGroundBoresightMode;
 }
 
 /** Orbital elements for all nodes, distributed once per epoch. Published to NODALARC_SESSION stream (MaxMsgsPerSubject=1) at session start (epoch_id=0) and immediately after each Tier 2 seek. Late-joining subscribers always get the current ephemeris. Edges instantiate local propagators from this payload and compute positions on demand. No per-tick position data is broadcast. */
@@ -1651,6 +1708,9 @@ export interface SessionMeta {
   readonly description: string | null;
 }
 
+/**  */
+export type SupportedSurfaceBody = "earth" | "luna";
+
 /** Boresight reference for a ground terminal field-of-regard cone. The cone width itself lives on the terminal's ``field_of_regard_deg`` field as the full apex angle. This model only states what direction that cone is centered on. */
 export interface TerminalBoresight {
   readonly mode: GroundBoresightMode;
@@ -1661,6 +1721,15 @@ export interface TerminalBoresight {
   readonly min_el_deg: number | null;
   readonly max_el_deg: number | null;
 }
+
+/**  */
+export type TerminalMedium = "rf" | "optical";
+
+/**  */
+export type TerminalMediumLiteral = "rf" | "optical";
+
+/**  */
+export type TopologyMode = "visible_candidates" | "nearest_visible" | "nearest_n" | "explicit_pairs";
 
 /** Public, path-free representation returned for an opaque operation ID. */
 export interface TransitionOperation {
@@ -1718,6 +1787,9 @@ export interface TransitionRuntimeResult {
   readonly generation: number;
 }
 
+/**  */
+export type WizardAreaStrategy = "flat" | "stripe" | "per_plane";
+
 /** One located catalog site available to a custom Wizard site set. */
 export interface WizardAvailableStation {
   readonly name: string;
@@ -1734,7 +1806,7 @@ export interface WizardAvailableStationResponse {
 /** Backend-owned presentation facts for the Wizard BFD controls. The timer controls and their bounds belong to each protocol, because the bounds are what the runtime renders for that protocol. */
 export interface WizardBfdMetadata {
   readonly heading: string;
-  readonly enabled_field: "bfd";
+  readonly enabled_field: WizardRoutingBooleanField;
   readonly enable_label: string;
   readonly enable_description: string;
 }
@@ -1794,10 +1866,16 @@ export interface WizardConstellationPresetResponse {
   readonly orbit_models: ReadonlyArray<WizardOrbitModelMetadata>;
 }
 
+/**  */
+export type WizardConstellationSourceKind = "constellation" | "space_node_set" | "custom_geometry";
+
 /** Request one physical coverage preview from backend-selected catalog facts. */
 export interface WizardCoverageRequest {
   readonly intent: WizardPhysicalIntent;
 }
+
+/**  */
+export type WizardExtension = "sr" | "te" | "mpls";
 
 /** Presentation facts for one backend-supported Wizard extension. */
 export interface WizardExtensionMetadata {
@@ -1834,6 +1912,9 @@ export interface WizardOrbitModelMetadata {
   readonly description: string;
 }
 
+/**  */
+export type WizardOrbitPropagator = "two_body" | "j2_mean_elements" | "sgp4_tle";
+
 /** Wizard-selected physical sources used for preview and authoring. */
 export interface WizardPhysicalIntent {
   readonly constellation_ref?: string | null;
@@ -1857,6 +1938,15 @@ export interface WizardProtocolMetadata {
   readonly area_strategies: ReadonlyArray<WizardAreaStrategy>;
   readonly default_area_strategy: WizardAreaStrategy;
 }
+
+/**  */
+export type WizardRoutingBooleanField = "bfd";
+
+/**  */
+export type WizardRoutingProtocol = "isis" | "ospf";
+
+/**  */
+export type WizardRoutingTimerField = "bfd_detect_multiplier" | "bfd_rx_interval" | "bfd_tx_interval" | "isis_hello_interval" | "isis_hello_multiplier" | "spf_init_delay" | "spf_short_delay" | "spf_long_delay" | "spf_holddown" | "ospf_hello_interval" | "ospf_dead_interval" | "ospf_spf_delay" | "ospf_spf_initial_hold" | "ospf_spf_max_hold";
 
 /** Presentation and validation facts for one numeric protocol timer control. */
 export interface WizardRoutingTimerFieldMetadata {
@@ -1923,6 +2013,12 @@ export interface WizardSessionIntent {
   readonly area_strategy?: WizardAreaStrategy;
   readonly routing_timers: WizardRoutingTimerIntent;
 }
+
+/**  */
+export type WizardTerminalRole = "access" | "isl" | "crosslink" | "backbone";
+
+/**  */
+export type WizardWalkerPattern = "walker_delta" | "walker_star";
 
 /** Presentation facts for one backend-supported custom Walker pattern. */
 export interface WizardWalkerPatternMetadata {

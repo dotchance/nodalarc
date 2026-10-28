@@ -120,11 +120,11 @@ class NodeState(BaseModel):
 
 
 # Where VS-API's session manager stands; see SessionManager.
-SessionStatus = Literal["idle", "switching", "wiring", "ready", "error"]
+type SessionStatus = Literal["idle", "switching", "wiring", "ready", "error"]
 
 # The kinds VS-API reports for a link: OME and the Scheduler carry "isl" and
 # "ground"; VS-API refines an ISL by its resolved rule (see _derive_link_type).
-PublicLinkType = Literal["ground", "isl", "inter_constellation", "inter_body_relay"]
+type PublicLinkType = Literal["ground", "isl", "inter_constellation", "inter_body_relay"]
 
 
 class LinkState(BaseModel):
@@ -187,10 +187,10 @@ class LinkDecisionTrace(BaseModel):
     endpoint_segments: tuple[str, str] | None = None
 
 
-TraceState = Literal["running", "reached", "not_reached", "failed"]
+type TraceState = Literal["running", "reached", "not_reached", "failed"]
 # Why a continuous trace stopped on its own: its time limit, or an internal
 # error in the trace loop.
-TraceStopReason = Literal["time_limit", "internal_error"]
+type TraceStopReason = Literal["time_limit", "internal_error"]
 
 
 class TraceRequest(BaseModel):

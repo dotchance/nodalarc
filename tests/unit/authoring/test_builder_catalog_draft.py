@@ -167,7 +167,7 @@ def test_new_drafts_cover_every_component_family_and_remain_truthfully_incomplet
 ) -> None:
     drafts, _, _ = _services(tmp_path)
 
-    for family in get_args(CatalogComponentFamily):
+    for family in get_args(CatalogComponentFamily.__value__):
         object_id = f"new-{family.replace('-', '_')}"
         draft = drafts.new(CatalogDraftNewRequest(family=family, object_id=object_id))
 
@@ -190,7 +190,7 @@ def test_all_families_open_compile_and_save_without_losing_advanced_fields(
     drafts, authoring, context = _services(tmp_path)
     payload_ref = _payload_source(context, authoring)
 
-    for family in get_args(CatalogComponentFamily):
+    for family in get_args(CatalogComponentFamily.__value__):
         source_ref = payload_ref if family == "payloads" else _first_shipped_ref(family)
         source = authoring.get_catalog(CatalogGetRequest(ref=source_ref))
         target_id = f"draft-{family.replace('-', '_')}"

@@ -32,9 +32,9 @@ from nodalarc.model_validation import (
 from nodalarc.models.catalog import MountRole
 
 # The class the resolver derives for a link rule (see _derive_link_label).
-LinkLabel = Literal["access", "isl", "inter_body"]
+type LinkLabel = Literal["access", "isl", "inter_body"]
 # The topology modes the grammar declares; each topology class discriminates on one.
-TopologyMode = Literal["visible_candidates", "nearest_visible", "nearest_n", "explicit_pairs"]
+type TopologyMode = Literal["visible_candidates", "nearest_visible", "nearest_n", "explicit_pairs"]
 LinkRelation = Literal["intra_segment", "inter_segment", "inter_body"]
 LinkMedium = Literal["rf", "optical", "terrestrial", "mixed"]
 
@@ -170,7 +170,7 @@ LinkTopology = Annotated[
 if {
     get_args(topology.model_fields["mode"].annotation)[0]
     for topology in get_args(get_args(LinkTopology)[0])
-} != set(get_args(TopologyMode)):
+} != set(get_args(TopologyMode.__value__)):
     raise RuntimeError("TopologyMode must list exactly the grammar's topology modes")
 
 

@@ -12,7 +12,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Literal
 
-SupportedSurfaceBody = Literal["earth", "luna"]
+type SupportedSurfaceBody = Literal["earth", "luna"]
 SUPPORTED_BODY_NAMES: tuple[SupportedSurfaceBody, ...] = ("earth", "luna")
 
 # Frame bodies extend surface bodies with celestial frames that are not surface

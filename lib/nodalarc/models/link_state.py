@@ -27,7 +27,7 @@ from nodalarc.models.link_rules import TopologyMode
 
 # Whether OME's ground allocator holds a link open only for its make-before-break
 # teardown ("teardown") or schedules it ("active").
-SchedulingState = Literal["active", "teardown"]
+type SchedulingState = Literal["active", "teardown"]
 
 
 class AdminState(StrEnum):

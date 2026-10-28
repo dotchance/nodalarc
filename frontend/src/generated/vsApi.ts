@@ -15,35 +15,10 @@ import type {
   NodeKind,
   NodeRole,
   NodeRoutingInstance,
+  SatGroundBoresightMode,
   SupportedSurfaceBody,
   TopologyMode,
 } from "../builder/generated/builderApi";
-
-export type AddressFamily = "ipv4" | "ipv6";
-export type SchedulingState = "active" | "teardown";
-export type SelectionPolicyName = "highest-elevation" | "lowest-elevation" | "longest-remaining-pass";
-export type HandoverPolicyName = "hysteresis" | "none";
-export type SuccessorAbortPolicy = "hard_release" | "soft_retain";
-export type SessionStatus = "idle" | "switching" | "wiring" | "ready" | "error";
-export type PublicLinkType = "ground" | "isl" | "inter_constellation" | "inter_body_relay";
-export type TraceState = "running" | "reached" | "not_reached" | "failed";
-export type TraceStopReason = "time_limit" | "internal_error";
-export type ServiceSource = "ome" | "scheduler" | "node_agent" | "operator" | "vs_api";
-export type OpsLevel = "critical" | "error" | "warning" | "info" | "debug";
-export type DebugControlAction = "enable" | "disable";
-export type FunnelGate = "line_of_sight" | "range" | "elevation_mask" | "field_of_regard" | "tracking_rate" | "selection_policy" | "capacity" | "handover_policy" | "actuation_proof";
-export type GateState = "pass" | "fail" | "not_evaluated" | "not_applicable";
-export type EnvelopeBindingSource = "field_of_regard" | "min_elevation_mask";
-export type ExplanationProducer = "ome_visibility" | "ome_allocator" | "scheduler" | "node_agent";
-export type NodeFocus = "gs" | "sat" | "pair";
-export type DecisionSampleState = "scheduled" | "eligible_unselected" | "expected_no_link";
-export type FailingActuationState = "kernel_dirty" | "actuation_blocked";
-export type GroundVisibilityRejectReason = "ok" | "los_blocked" | "elevation_below_min" | "range_exceeded" | "field_of_regard" | "tracking_exceeded";
-export type GroundVisibilityRejectingEndpoint = "none" | "ground" | "satellite" | "both";
-export type GroundUnscheduledReason = "gs_capacity" | "sat_capacity" | "hysteresis_hold" | "incumbent_held" | "bbm_no_spare" | "mbb_overlap_locked" | "replaced_by_successor" | "successor_aborted" | "failed_successor" | "failed_acquire";
-export type GroundAllocationEventCategory = "mbb_overlap_started" | "teardown_completed" | "teardown_invalidated_by_epoch" | "successor_aborted" | "failed_successor" | "failed_acquire" | "incumbent_lost" | "bbm_gap";
-export type GroundAllocationPolicyKind = "selection_policy" | "handover_policy" | "handover_mode" | "successor_abort_policy" | "mbb_preemption" | "cross_tenant_displacement";
-export type GroundHandoverModeName = "bbm" | "mbb";
 
 export type StateFeedFrame = StateSnapshot | SessionEphemerisFrame | WiringProgressFrame | SessionTransitioningFrame | SessionReadyFrame | SessionFailedFrame;
 
@@ -52,6 +27,9 @@ export type StateSocketCommand = DebugStreamCommand | DebugStopCommand | DebugSt
 export type TerminalMessage = TerminalInput | TerminalResize | TerminalOutput;
 
 export type DebugSourceControl = DebugControlAcknowledgedFact | DebugControlRejectedFact | DebugControlUnansweredFact | DebugControlFailedFact;
+
+/**  */
+export type ActuationExplanationReason = "actuation_diverged";
 
 /** Realization facts. The client decides in_flight vs faulted by comparing ``actuation_elapsed_ms`` to ``fault_after_ms`` — the backend states the raw facts and carries the contract bounds; it never assigns the family. ``diverged_since`` is the wall-clock instant (UTC) the SCHEDULER folded this pair into its desired set without kernel proof (recovered from the retained ActualLinkSnapshot, not VS-API's observation time); ``actuation_elapsed_ms`` is the skew-free age of that divergence at compose time. Both are ``None`` when the pair is not diverged, or when the Scheduler's pending clock has not yet reached VS-API. ``expected_latency_ms``/ ``fault_after_ms`` are the ``simulation.actuation`` contract, wall-clock not sim-time: a divergence younger than ``fault_after_ms`` is calm in_flight, at/older is faulted; the deadline a UI shows is ``diverged_since + fault_after_ms``. */
 export interface ActuationFacts {
@@ -109,16 +87,22 @@ export interface ActuationNotice {
 /**  */
 export type ActuationState = "clean" | "actuation_blocked" | "kernel_dirty" | "unknown";
 
+/**  */
+export type AddressFamily = "ipv4" | "ipv6";
+
 /** The API key a client sends as its bearer token. */
 export interface AuthToken {
   readonly token: string;
 }
 
+/**  */
+export type BindingReasonCode = DecisionReasonCode | FailingActuationState | ActuationExplanationReason;
+
 /** The pair the card leads with. Ordering is by meaning, resolved by the composer: a viable-but-withheld pair (`viable_withheld=True` — cleared physics/terminal gates, withheld by policy/capacity) dominates a physics near-miss. Only when no viable pair exists is the closest-to-visible rejected pair chosen. */
 export interface CandidateFacts {
   readonly pair: readonly [string, string];
   readonly binding_gate: FunnelGate | null;
-  readonly binding_reason_code: GroundVisibilityRejectReason | GroundUnscheduledReason | FailingActuationState | "actuation_diverged" | null;
+  readonly binding_reason_code: BindingReasonCode | null;
   readonly rejecting_endpoint: GroundVisibilityRejectingEndpoint | null;
   readonly range_km: number;
   readonly elevation_deg: number;
@@ -145,6 +129,9 @@ export interface ContinuousTraceStopped {
   readonly ok: true;
 }
 
+/**  */
+export type CrossTenantDisplacementPolicy = "off";
+
 /** One instance of the service changed its log level. The request reaches every instance; this is the first one's reply, not a statement about the others. */
 export interface DebugControlAcknowledgedFact {
   readonly source: ServiceSource;
@@ -153,6 +140,9 @@ export interface DebugControlAcknowledgedFact {
   readonly outcome: "acknowledged";
   readonly level: string;
 }
+
+/**  */
+export type DebugControlAction = "enable" | "disable";
 
 /** VS-API could not send the request or could not read the reply. */
 export interface DebugControlFailedFact {
@@ -205,7 +195,7 @@ export interface DecisionExplanationFacts {
   readonly reference_body: SupportedSurfaceBody;
   readonly tenant_id: string;
   readonly binding_gate: FunnelGate | null;
-  readonly binding_reason_code: GroundVisibilityRejectReason | GroundUnscheduledReason | FailingActuationState | "actuation_diverged" | null;
+  readonly binding_reason_code: BindingReasonCode | null;
   readonly rejecting_endpoint: GroundVisibilityRejectingEndpoint | null;
   readonly ladder: ReadonlyArray<LadderGate>;
   readonly envelope: EffectiveEnvelopeFacts;
@@ -222,6 +212,12 @@ export interface DecisionExplanationQuery {
   readonly sat?: string | null;
 }
 
+/**  */
+export type DecisionReasonCode = GroundVisibilityRejectReason | GroundUnscheduledReason;
+
+/**  */
+export type DecisionSampleState = "scheduled" | "eligible_unselected" | "expected_no_link";
+
 /** The ground station whose recent decisions to return, and how many. */
 export interface DecisionTimelineQuery {
   readonly gs: string;
@@ -234,22 +230,40 @@ export interface EffectiveEnvelopeFacts {
   readonly configured_min_elevation_deg: number;
   readonly effective_min_elevation_deg: number;
   readonly binding_source: EnvelopeBindingSource;
-  readonly dead_knobs: ReadonlyArray<"min_elevation_deg">;
+  readonly dead_knobs: ReadonlyArray<EnvelopeKnob>;
   readonly max_range_km: number | null;
   readonly ground: EnvelopeEndpoint;
   readonly satellite: EnvelopeEndpoint;
   readonly binding_endpoint: GroundVisibilityRejectingEndpoint;
 }
 
+/**  */
+export type EnvelopeBindingSource = "field_of_regard" | "min_elevation_mask";
+
 /** One terminal's raw pointing/range constraints. Carried for BOTH endpoints so the "what to change" lever targets the terminal that actually binds — the satellite terminal can be the limiting constraint, not always the ground station. A satellite's nadir boresight does not collapse to a ground elevation floor, so its envelope is shown as the raw pointing/range constraints rather than pretending it is one scalar (see the UX plan, Effective Envelope). */
 export interface EnvelopeEndpoint {
   readonly node_role: "ground" | "satellite";
   readonly terminal_profile: string | null;
-  readonly boresight_mode: GroundBoresightMode | "nadir" | null;
+  readonly boresight_mode: GroundBoresightMode | SatGroundBoresightMode | null;
   readonly field_of_regard_deg: number | null;
   readonly max_tracking_rate_deg_s: number | null;
   readonly max_range_km: number | null;
 }
+
+/**  */
+export type EnvelopeKnob = "min_elevation_deg";
+
+/**  */
+export type ExplanationProducer = "ome_visibility" | "ome_allocator" | "scheduler" | "node_agent";
+
+/**  */
+export type FailingActuationState = "kernel_dirty" | "actuation_blocked";
+
+/**  */
+export type FunnelGate = "line_of_sight" | "range" | "elevation_mask" | "field_of_regard" | "tracking_rate" | "selection_policy" | "capacity" | "handover_policy" | "actuation_proof";
+
+/**  */
+export type GateState = "pass" | "fail" | "not_evaluated" | "not_applicable";
 
 /** Typed non-steady transition produced by the ground allocator. `policy_kind` names the taxonomy for `policy_name`. Events that are not caused by a policy decision, such as physical incumbent visibility loss, set both fields to `None`. */
 export interface GroundAllocationEvent {
@@ -261,8 +275,20 @@ export interface GroundAllocationEvent {
   readonly successor_pair: readonly [string, string] | null;
   readonly challenger_pair: readonly [string, string] | null;
   readonly policy_kind: GroundAllocationPolicyKind | null;
-  readonly policy_name: SelectionPolicyName | HandoverPolicyName | GroundHandoverModeName | SuccessorAbortPolicy | "off" | null;
+  readonly policy_name: GroundAllocationPolicyName | null;
 }
+
+/**  */
+export type GroundAllocationEventCategory = "mbb_overlap_started" | "teardown_completed" | "teardown_invalidated_by_epoch" | "successor_aborted" | "failed_successor" | "failed_acquire" | "incumbent_lost" | "bbm_gap";
+
+/**  */
+export type GroundAllocationPolicyKind = "selection_policy" | "handover_policy" | "handover_mode" | "successor_abort_policy" | "mbb_preemption" | "cross_tenant_displacement";
+
+/**  */
+export type GroundAllocationPolicyName = SelectionPolicyName | HandoverPolicyName | GroundHandoverModeName | SuccessorAbortPolicy | MbbPreemptionPolicy | CrossTenantDisplacementPolicy;
+
+/**  */
+export type GroundHandoverModeName = "bbm" | "mbb";
 
 /** Companion to `LinkStateSnapshot`: what the OME decided about GROUND links, and why. Ground-scoped. Carries decisions only for GS↔satellite pairs. ISL pair decisions are not snapshotted today; a separate `IslLinkDecisionSnapshot` type and subject will be added when ISL decision attribution lands. Consumers must not interpret an absent pair as "the OME ignored it" — it may simply be an ISL pair this snapshot does not cover. Published on `ground_link_decision_snapshot_subject(session_id)` (same `sim_time` and `snapshot_seq` as the corresponding `LinkStateSnapshot`, for pairing). `LinkStateSnapshot` carries the actuated forwarding-plane state across both link types. `GroundLinkDecisionSnapshot` carries the OME's decision context for every GROUND pair the OME considered — visible-and-scheduled, visible-but-rejected, and visible-but-unscheduled. The two snapshots are correlatable by `sim_time` and `snapshot_seq`. Consumers asking "what is forwarding?" read the state snapshot; consumers asking "why isn't this ground link up?" read this decision snapshot. Internal consistency invariants (enforced at construction): 1. `decisions` has no duplicate pairs. Each (gs, sat) pair gets exactly one decision per snapshot. 2. Every `UnscheduledPair` references a `pair` that is present in `decisions` with `visible=True`. An unscheduled pair by definition is visible-but-not-scheduled; pointing at an invisible pair or a pair not in the decision set is a producer bug. 3. Every `UnscheduledPair`'s `tenant_id` and `reference_body` match the corresponding decision's. Divergence means the allocator and visibility engine disagree about which tenant/body owns the pair — a fatal contract break. 4. `unscheduled_pairs` has no duplicate pairs. Producers that fail any of these are wrong. Foundational types reject impossible states at construction. */
 export interface GroundLinkDecisionSnapshot {
@@ -300,6 +326,9 @@ export interface GroundPolicyAudit {
   readonly ignored_capacity_fields: ReadonlyArray<string>;
 }
 
+/**  */
+export type GroundUnscheduledReason = "gs_capacity" | "sat_capacity" | "hysteresis_hold" | "incumbent_held" | "bbm_no_spare" | "mbb_overlap_locked" | "replaced_by_successor" | "successor_aborted" | "failed_successor" | "failed_acquire";
+
 /** Per-pair ground visibility decision in wire form. Published as part of `GroundLinkDecisionSnapshot` on the subject `ground_link_decision_snapshot_subject(session_id)` builds (``nodalarc.links.<session>.ground_decisions``). Every field is required at construction. `applied_*` fields use `None` to mean "this constraint was not in effect for the decision" (e.g., a `geometry_only` session does not declare `max_range_km`, so the field is `None`); they never mean "we forgot to populate this." A `terminal_physics` session must populate every applied constraint that the GS or sat terminal declares. Terminal profile fields explained: - `applied_gs_terminal_profile` and `applied_sat_terminal_profile` identify which *terminal definition / constraint profile* the visibility check evaluated against — NOT the kernel interface name (`term0`, `gnd0`) and NOT the terminal instance index. A satellite may carry multiple resolved access-terminal blocks. entries with different `max_range_km` / boresight values; the profile identifier names which definition's constraints applied to this decision. Use `None` only when the session is `geometry_only` and no terminal-level constraints were applied. The instance index (which physical terminal got the assignment) is carried separately on `VisibilityEvent` / `LinkState` as `gs_terminal_index` / `sat_terminal_index`. Invariant (enforced by the model validator below): if `reject_reason` names a terminal-bound constraint (`range_exceeded`, `field_of_regard`, `tracking_exceeded`), at least one side's profile MUST be identified — otherwise the rejection is unattributable to a specific terminal and cannot be audited. */
 export interface GroundVisibilityDecisionWire {
   readonly pair: readonly [string, string];
@@ -310,7 +339,7 @@ export interface GroundVisibilityDecisionWire {
   readonly elevation_deg: number;
   readonly azimuth_deg: number | null;
   readonly sat_off_nadir_deg: number | null;
-  readonly observer_frame: "body_local";
+  readonly observer_frame: ObserverFrame;
   readonly reject_reason: GroundVisibilityRejectReason;
   readonly rejecting_endpoint: GroundVisibilityRejectingEndpoint;
   readonly applied_min_elevation_deg: number;
@@ -321,15 +350,21 @@ export interface GroundVisibilityDecisionWire {
   readonly applied_gs_max_tracking_rate_deg_s: number | null;
   readonly applied_sat_max_tracking_rate_deg_s: number | null;
   readonly applied_gs_boresight_mode: GroundBoresightMode | null;
-  readonly applied_sat_boresight_mode: "nadir" | null;
+  readonly applied_sat_boresight_mode: SatGroundBoresightMode | null;
   readonly applied_gs_terminal_profile: string | null;
   readonly applied_sat_terminal_profile: string | null;
 }
 
+/**  */
+export type GroundVisibilityRejectReason = "ok" | "los_blocked" | "elevation_below_min" | "range_exceeded" | "field_of_regard" | "tracking_exceeded";
+
+/**  */
+export type GroundVisibilityRejectingEndpoint = "none" | "ground" | "satellite" | "both";
+
 /** Aggregated count for a reason/state in the sampled window. */
 export interface GsDecisionReasonCount {
   readonly state: DecisionSampleState;
-  readonly reason_code: GroundVisibilityRejectReason | GroundUnscheduledReason | null;
+  readonly reason_code: DecisionReasonCode | null;
   readonly count: number;
 }
 
@@ -352,11 +387,14 @@ export interface GsDecisionTimelineSample {
   readonly state: DecisionSampleState;
   readonly pair: readonly [string, string];
   readonly binding_gate: FunnelGate | null;
-  readonly reason_code: GroundVisibilityRejectReason | GroundUnscheduledReason | null;
+  readonly reason_code: DecisionReasonCode | null;
   readonly rejecting_endpoint: GroundVisibilityRejectingEndpoint | null;
   readonly range_km: number;
   readonly elevation_deg: number;
 }
+
+/**  */
+export type HandoverPolicyName = "hysteresis" | "none";
 
 /** VS-API is serving, and where its session manager stands. */
 export interface HealthStatus {
@@ -392,7 +430,7 @@ export interface LadderGate {
   readonly actual: number | null;
   readonly threshold: number | null;
   readonly rejecting_endpoint: GroundVisibilityRejectingEndpoint | null;
-  readonly reason_code: GroundVisibilityRejectReason | GroundUnscheduledReason | FailingActuationState | "actuation_diverged" | null;
+  readonly reason_code: BindingReasonCode | null;
   readonly producer: ExplanationProducer;
   readonly is_binding: boolean;
 }
@@ -493,6 +531,9 @@ export interface LinkState {
   readonly successor_pair: readonly [string, string] | null;
 }
 
+/**  */
+export type MbbPreemptionPolicy = "off";
+
 /** Configured network identity/address associated with one node. */
 export interface NodeAddress {
   readonly purpose: "router_loopback" | "site_interface" | "site_prefix";
@@ -501,6 +542,9 @@ export interface NodeAddress {
   readonly interface: string | null;
   readonly metric: number | null;
 }
+
+/**  */
+export type NodeFocus = "gs" | "sat" | "pair";
 
 /** State of a single node in the constellation. */
 export interface NodeState {
@@ -530,6 +574,9 @@ export interface NodeState {
   readonly namespace: string;
   readonly tags: ReadonlyArray<string>;
 }
+
+/**  */
+export type ObserverFrame = "body_local";
 
 /** What an operator sends to repair one station. VS-API fills the Scheduler instance and wiring generation from the station's latest actuation state when the request leaves them out, then sends an OperatorRepairCommand. */
 export interface OperatorRepairRequest {
@@ -567,6 +614,9 @@ export interface OpsEventsQuery {
   readonly limit?: number;
 }
 
+/**  */
+export type OpsLevel = "critical" | "error" | "warning" | "info" | "debug";
+
 /** Validated command payload for the OME playback-control subject. */
 export interface PlaybackControlCommand {
   readonly action: "pause" | "resume" | "set_speed" | "seek" | "get_status";
@@ -594,6 +644,9 @@ export interface ProjectAbout {
   readonly notice: string;
 }
 
+/**  */
+export type PublicLinkType = "ground" | "isl" | "inter_constellation" | "inter_body_relay";
+
 /** Recent event for the VF event log. */
 export interface RecentEvent {
   readonly sim_time: string;
@@ -604,6 +657,15 @@ export interface RecentEvent {
 
 /**  */
 export type SchedulerOpsCode = "REPLACEMENT_LINK_UP_FAILED" | "GROUND_LINK_UP_FAILED" | "GROUND_LINK_DOWN_FAILED" | "GROUND_LATENCY_UPDATE_FAILED" | "OLD_PAIR_DROPPED_WITHOUT_SUCCESSOR" | "ACTUATION_BLOCKED" | "ACTUATION_CLEAN" | "KERNEL_DIRTY" | "KERNEL_VERIFY_ATTEMPTED" | "KERNEL_VERIFY_EXHAUSTED" | "AUTHORITY_SUBSET_VIOLATION" | "ACTUATION_HALTED" | "SCHEDULER_SUPERSEDED" | "OPERATOR_REPAIR_REQUESTED" | "OPERATOR_REPAIR_STARTED" | "OPERATOR_REPAIR_SUCCEEDED" | "OPERATOR_REPAIR_FAILED" | "OPERATOR_REPAIR_REJECTED" | "AGENT_DEGRADED" | "AGENT_RECOVERED";
+
+/**  */
+export type SchedulingState = "active" | "teardown";
+
+/**  */
+export type SelectionPolicyName = "highest-elevation" | "lowest-elevation" | "longest-remaining-pass";
+
+/**  */
+export type ServiceSource = "ome" | "scheduler" | "node_agent" | "operator" | "vs_api";
 
 /** The session ephemeris as the state socket sends it: on connect and when a session becomes active. */
 export interface SessionEphemerisFrame {
@@ -626,6 +688,9 @@ export interface SessionReadyFrame {
   readonly msg_type: "session_ready";
   readonly snapshot: StateSnapshot;
 }
+
+/**  */
+export type SessionStatus = "idle" | "switching" | "wiring" | "ready" | "error";
 
 /** A session switch has started; later frames carry its progress detail. */
 export interface SessionTransitioningFrame {
@@ -677,6 +742,9 @@ export interface StateSnapshot {
   readonly debug_subscription_open: boolean;
 }
 
+/**  */
+export type SuccessorAbortPolicy = "hard_release" | "soft_retain";
+
 /** Keystrokes the browser sends to a node's terminal. */
 export interface TerminalInput {
   readonly type: "input";
@@ -701,6 +769,12 @@ export interface TraceRequest {
   readonly src_node: string;
   readonly dst_node: string;
 }
+
+/**  */
+export type TraceState = "running" | "reached" | "not_reached" | "failed";
+
+/**  */
+export type TraceStopReason = "time_limit" | "internal_error";
 
 /** The live measured path between two nodes: one traceroute per direction. Each direction lists what answered at every hop, in hop order, after the node the trace starts from: a node id when the resolver assigned the answering address to that node, the address itself when no node owns it, and ``*`` when nothing answered. ``state`` says how the trace ended. ``rtt_ms`` is the destination's round trip and exists only when the destination answered; ``error`` exists only when the trace could not run. ``asymmetry_detected`` exists only when both directions reached their destination and every hop between the ends answered from a node's address. ``tracing`` is false once the trace loop has stopped; the last result then stays until the trace is stopped or restarted. ``stop_reason`` says why a continuous trace stopped on its own; a one-shot trace and a running trace have none. */
 export interface TracedPath {

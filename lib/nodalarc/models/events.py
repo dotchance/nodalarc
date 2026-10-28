@@ -19,8 +19,8 @@ from nodalarc.models.link_state import SchedulingState
 
 # A platform service that publishes ops events and answers debug control,
 # named as the service passes it to nodal.logging.configure().
-ServiceSource = Literal["ome", "scheduler", "node_agent", "operator", "vs_api"]
-OpsLevel = Literal["critical", "error", "warning", "info", "debug"]
+type ServiceSource = Literal["ome", "scheduler", "node_agent", "operator", "vs_api"]
+type OpsLevel = Literal["critical", "error", "warning", "info", "debug"]
 # The logging level each ops level is logged at.
 OPS_LOG_LEVELS: dict[OpsLevel, int] = {
     "critical": logging.CRITICAL,
@@ -32,7 +32,7 @@ OPS_LOG_LEVELS: dict[OpsLevel, int] = {
 
 
 # What VS-API asks a service to do with its debug output.
-DebugControlAction = Literal["enable", "disable"]
+type DebugControlAction = Literal["enable", "disable"]
 
 
 class DebugControlRequest(BaseModel):
@@ -128,9 +128,9 @@ UnscheduledReason = GroundUnscheduledReason | IslUnscheduledReason
 """Every allocation reason across ground and ISL, held to the link type's set
 by the `VisibilityEvent` validator."""
 
-_GROUND_REJECT_REASONS: frozenset[str] = frozenset(get_args(GroundVisibilityRejectReason))
+_GROUND_REJECT_REASONS: frozenset[str] = frozenset(get_args(GroundVisibilityRejectReason.__value__))
 _ISL_REJECT_REASONS: frozenset[str] = frozenset(get_args(IslVisibilityRejectReason))
-_GROUND_UNSCHEDULED_REASONS: frozenset[str] = frozenset(get_args(GroundUnscheduledReason))
+_GROUND_UNSCHEDULED_REASONS: frozenset[str] = frozenset(get_args(GroundUnscheduledReason.__value__))
 _ISL_UNSCHEDULED_REASONS: frozenset[str] = frozenset(get_args(IslUnscheduledReason))
 
 

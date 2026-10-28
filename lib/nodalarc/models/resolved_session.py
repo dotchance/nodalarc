@@ -48,7 +48,7 @@ from nodalarc.models.segments import GroundScheduling, SegmentClock
 from nodalarc.models.terminal_physics import SatGroundTerminalBoresight, TerminalBoresight
 from nodalarc.tle import tle_epoch_unix, tle_norad_id, validate_tle_pair
 
-NodeKind = Literal["satellite", "ground_station"]
+type NodeKind = Literal["satellite", "ground_station"]
 
 
 class InterfaceRates(NamedTuple):
@@ -62,7 +62,7 @@ class InterfaceRates(NamedTuple):
 # participates in at least one routing instance; a host forwards nothing; a
 # node that forwards and participates in no instance forwards only between
 # its connected subnets.
-NodeRole = Literal["router", "host", "forwarding_only"]
+type NodeRole = Literal["router", "host", "forwarding_only"]
 
 
 @dataclass(frozen=True)
@@ -154,7 +154,7 @@ def router_node_ids(
     )
 
 
-TerminalMediumLiteral = Literal["rf", "optical"]
+type TerminalMediumLiteral = Literal["rf", "optical"]
 
 
 class ResolvedOrbitFacts(BaseModel):

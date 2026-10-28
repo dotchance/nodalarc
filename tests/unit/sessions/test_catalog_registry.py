@@ -27,8 +27,8 @@ ROOT = Path(__file__).resolve().parents[3]
 
 
 def test_registry_covers_the_closed_catalog_family_vocabulary() -> None:
-    assert set(CATALOG_FAMILY_REGISTRY) == set(get_args(CatalogFamily))
-    assert set(CONFIGURATION_DOCUMENT_MODELS) == set(get_args(CatalogFamily))
+    assert set(CATALOG_FAMILY_REGISTRY) == set(get_args(CatalogFamily.__value__))
+    assert set(CONFIGURATION_DOCUMENT_MODELS) == set(get_args(CatalogFamily.__value__))
     assert {
         family: spec.document_model_type for family, spec in CATALOG_FAMILY_REGISTRY.items()
     } == dict(CONFIGURATION_DOCUMENT_MODELS)

@@ -28,15 +28,15 @@ from nodalarc.model_validation import (
 from nodalarc.models.link_rules import LinkRule, NodeSelector
 from nodalarc.models.segments import Segment
 
-RoutingProtocol = Literal["isis", "ospf", "bgp", "static"]
-ROUTING_PROTOCOLS: tuple[RoutingProtocol, ...] = get_args(RoutingProtocol)
+type RoutingProtocol = Literal["isis", "ospf", "bgp", "static"]
+ROUTING_PROTOCOLS: tuple[RoutingProtocol, ...] = get_args(RoutingProtocol.__value__)
 # The link-state interior gateway protocols: the ones divided into areas and
 # run with IGP hello, hold and SPF timers.
 LINK_STATE_PROTOCOLS: frozenset[RoutingProtocol] = frozenset({"isis", "ospf"})
 # A routing domain's capability names: the fields of RoutingCapabilities.
 RoutingCapability = Literal["mpls", "segment_routing", "traffic_engineering"]
 ROUTING_CAPABILITIES: tuple[RoutingCapability, ...] = get_args(RoutingCapability)
-RoutingBoundaryAdapter = Literal["static_ip", "bgp", "dtn_bundle"]
+type RoutingBoundaryAdapter = Literal["static_ip", "bgp", "dtn_bundle"]
 
 
 class SessionMeta(BaseModel):

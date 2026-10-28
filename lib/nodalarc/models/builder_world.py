@@ -134,7 +134,7 @@ class BuilderRuleAllocation(BaseModel):
 #: counts and drawn pairs; the client renders the other three statuses without
 #: deciding them client-side. A module-level alias lets tests compare the
 #: vocabulary with the TypeScript union through ``get_args``.
-PreviewScope = Literal[
+type PreviewScope = Literal[
     "computed",
     "inter_body_pending",
     "terrestrial_pending",
@@ -150,7 +150,7 @@ PreviewScope = Literal[
 #: ``terminal_type_mismatch`` is the one allocator-layer gate the preview does
 #: replicate — the runtime refuses to bring up an ISL pair between incompatible
 #: terminal types, so drawing it would be a false-positive line.
-BuilderPreviewRejectReason = Literal[
+type BuilderPreviewRejectReason = Literal[
     "los_blocked",
     "range_exceeded",
     "elevation_below_min",

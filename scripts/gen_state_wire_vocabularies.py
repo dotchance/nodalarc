@@ -20,7 +20,7 @@ import sys
 import types
 from enum import Enum
 from pathlib import Path
-from typing import Literal, Union, get_args, get_origin
+from typing import Literal, TypeAliasType, Union, get_args, get_origin
 
 from nodalarc.models import (
     api_refusal,
@@ -50,6 +50,8 @@ Vocabulary = list[str] | None
 
 def _vocabulary(annotation: object) -> Vocabulary | object:
     """The values a string-valued annotation admits; None when open; _NOT_STRING otherwise."""
+    while isinstance(annotation, TypeAliasType):
+        annotation = annotation.__value__
     origin = get_origin(annotation)
     if origin is Literal:
         values = get_args(annotation)

@@ -18,7 +18,7 @@ import json
 import sys
 from collections.abc import Sequence
 from pathlib import Path
-from typing import Any, get_args
+from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
 # The repository root carries the adapter packages that session resolution
@@ -26,31 +26,19 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "lib"))
 
-from nodalarc import body_frames, model_validation  # noqa: E402
 from nodalarc.catalog_refs import (  # noqa: E402
-    CatalogFamily,
-    CatalogNamespace,
     CatalogRef,
     SessionRef,
 )
 from nodalarc.models import (  # noqa: E402
-    builder_world,
-    catalog,
     decision_explanation,
     events,
-    ground_policy,
     link_decisions,
-    link_rules,
-    link_state,
-    resolved_session,
     scheduler_ops,
-    segment_session,
-    terminal_physics,
     vs_api,
 )
 from nodalarc.models.api_refusal import ApiRefusal, LegacyRefusal  # noqa: E402
 from nodalarc.models.builder_api import (  # noqa: E402
-    BuilderBlockedOperation,
     BuilderCatalogDocument,
     BuilderCompileRequest,
     BuilderCompileResult,
@@ -59,21 +47,17 @@ from nodalarc.models.builder_api import (  # noqa: E402
     BuilderDraftEnvelope,
     BuilderDraftState,
     BuilderIssue,
-    BuilderIssueSeverity,
-    BuilderIssueStage,
     BuilderProposedCatalogDocument,
     BuilderSessionDeployAccepted,
     BuilderSessionDeployRefusal,
     BuilderSessionDeployRequest,
     BuilderSessionSaveRefusal,
-    BuilderSessionSaveRefusalCode,
     BuilderSessionSaveRequest,
     BuilderSessionSaveResult,
     BuilderVerdict,
     DependencyClosureEntry,
     DependencyClosureInventory,
     Sha256Digest,
-    WizardAreaStrategy,
     WizardAvailableStation,
     WizardAvailableStationResponse,
     WizardBfdMetadata,
@@ -83,28 +67,20 @@ from nodalarc.models.builder_api import (  # noqa: E402
     WizardConstellationGeometry,
     WizardConstellationPreset,
     WizardConstellationPresetResponse,
-    WizardConstellationSourceKind,
     WizardCoverageRequest,
-    WizardExtension,
     WizardExtensionMetadata,
     WizardExtensionRulesResponse,
     WizardGroundStationSetPreset,
     WizardGroundStationSetPresetResponse,
     WizardOrbitModelMetadata,
-    WizardOrbitPropagator,
     WizardPhysicalIntent,
     WizardProtocolMetadata,
-    WizardRoutingBooleanField,
-    WizardRoutingProtocol,
-    WizardRoutingTimerField,
     WizardRoutingTimerFieldMetadata,
     WizardRoutingTimerIntent,
     WizardSatelliteTerminalSummary,
     WizardSatelliteTypePreset,
     WizardSatelliteTypePresetResponse,
     WizardSessionIntent,
-    WizardTerminalRole,
-    WizardWalkerPattern,
     WizardWalkerPatternMetadata,
 )
 from nodalarc.models.builder_catalog_api import (  # noqa: E402
@@ -120,10 +96,8 @@ from nodalarc.models.builder_catalog_api import (  # noqa: E402
     BuilderVisualRoutingProtocolMetadata,
     BuilderVisualSchedulingPresetMetadata,
     BuilderVisualTopologyModeMetadata,
-    CatalogAuthoringRefusalCode,
     CatalogComponentDraftEnvelope,
     CatalogComponentDraftState,
-    CatalogComponentFamily,
     CatalogDeleteRequest,
     CatalogDeleteResult,
     CatalogDependencyImpact,
@@ -140,15 +114,12 @@ from nodalarc.models.builder_catalog_api import (  # noqa: E402
     CatalogDraftCompileResult,
     CatalogDraftControlMutationRequest,
     CatalogDraftIssue,
-    CatalogDraftIssueStage,
     CatalogDraftNewRequest,
     CatalogDraftOpenRequest,
     CatalogDraftSaveRequest,
     CatalogDraftSaveResult,
     CatalogFamilyMetadata,
     CatalogGetRequest,
-    CatalogImportCollisionReason,
-    CatalogImportOutcome,
     CatalogListPage,
     CatalogListRequest,
     CatalogMutationResult,
@@ -165,10 +136,6 @@ from nodalarc.models.builder_catalog_api import (  # noqa: E402
 from nodalarc.models.builder_controls_api import (  # noqa: E402
     BuilderChoiceBranch,
     BuilderChoiceControl,
-    BuilderControlChoiceKind,
-    BuilderControlMutationOperation,
-    BuilderControlNumberKind,
-    BuilderControlScalarKind,
     BuilderControlTree,
     BuilderInsertItemCommand,
     BuilderInsertMapEntryCommand,
@@ -203,19 +170,16 @@ from nodalarc.models.builder_visual_api import (  # noqa: E402
     BuilderVisualCustomizeChainEntry,
     BuilderVisualCustomizeChainRequest,
     BuilderVisualCustomizeChainResult,
-    BuilderVisualDraftAffectedKind,
     BuilderVisualDraftApplyWorkspaceRequest,
     BuilderVisualDraftApplyYamlRequest,
     BuilderVisualDraftApplyYamlResult,
     BuilderVisualDraftAssemblyResult,
-    BuilderVisualDraftCommandOperation,
     BuilderVisualDraftCommandRequest,
     BuilderVisualDraftCommandResult,
     BuilderVisualDraftCompileRequest,
     BuilderVisualDraftCreateRequest,
     BuilderVisualDraftEnvelope,
     BuilderVisualDraftOpenRequest,
-    BuilderVisualDraftProjectionStatus,
     BuilderVisualDraftRetargetRequest,
     BuilderVisualGroundBoresight,
     BuilderVisualGroundDraft,
@@ -228,15 +192,11 @@ from nodalarc.models.builder_visual_api import (  # noqa: E402
     BuilderVisualMintGroundMembersCommand,
     BuilderVisualNode,
     BuilderVisualOrbit,
-    BuilderVisualOrbitPropagator,
-    BuilderVisualOrbitShape,
-    BuilderVisualPhasingMode,
     BuilderVisualPlaceGroundReferenceCommand,
     BuilderVisualPlaceSpaceReferenceCommand,
     BuilderVisualRederiveLinkCommand,
     BuilderVisualRoutingBoundary,
     BuilderVisualRoutingDomain,
-    BuilderVisualSchedulingPreset,
     BuilderVisualSetGroundSiteNodeCommand,
     BuilderVisualSetGroundStampNodeCommand,
     BuilderVisualSetNodeTerminalRoleCommand,
@@ -248,7 +208,6 @@ from nodalarc.models.builder_visual_api import (  # noqa: E402
     BuilderVisualSpaceDraft,
     BuilderVisualSpaceReference,
     BuilderVisualTerminalMount,
-    BuilderVisualTopologyMode,
     BuilderVisualWalkerLayoutRequest,
     BuilderVisualWalkerLayoutResult,
     BuilderVisualWorkspace,
@@ -551,102 +510,6 @@ REQUEST_ROOTS: frozenset[str] = frozenset(
 )
 
 
-def _alias_args(alias: Any) -> tuple[Any, ...]:
-    """Return Literal members through ordinary and PEP 695 type aliases."""
-
-    value = getattr(alias, "__value__", alias)
-    return get_args(value)
-
-
-LITERAL_ALIASES: tuple[tuple[str, tuple[Any, ...]], ...] = (
-    ("CatalogFamily", _alias_args(CatalogFamily)),
-    ("BuilderIssueStage", _alias_args(BuilderIssueStage)),
-    ("BuilderIssueSeverity", _alias_args(BuilderIssueSeverity)),
-    ("BuilderBlockedOperation", _alias_args(BuilderBlockedOperation)),
-    ("WizardOrbitPropagator", _alias_args(WizardOrbitPropagator)),
-    ("WizardConstellationSourceKind", _alias_args(WizardConstellationSourceKind)),
-    ("WizardTerminalRole", _alias_args(WizardTerminalRole)),
-    ("WizardExtension", _alias_args(WizardExtension)),
-    ("WizardAreaStrategy", _alias_args(WizardAreaStrategy)),
-    ("WizardRoutingProtocol", _alias_args(WizardRoutingProtocol)),
-    ("WizardWalkerPattern", _alias_args(WizardWalkerPattern)),
-    ("WizardRoutingBooleanField", _alias_args(WizardRoutingBooleanField)),
-    ("WizardRoutingTimerField", _alias_args(WizardRoutingTimerField)),
-    (
-        "BuilderVisualDraftProjectionStatus",
-        _alias_args(BuilderVisualDraftProjectionStatus),
-    ),
-    (
-        "BuilderControlMutationOperation",
-        _alias_args(BuilderControlMutationOperation),
-    ),
-    ("BuilderVisualSchedulingPreset", _alias_args(BuilderVisualSchedulingPreset)),
-    ("BuilderVisualPhasingMode", _alias_args(BuilderVisualPhasingMode)),
-    ("BuilderVisualOrbitShape", _alias_args(BuilderVisualOrbitShape)),
-    ("BuilderVisualOrbitPropagator", _alias_args(BuilderVisualOrbitPropagator)),
-    ("BuilderVisualTopologyMode", _alias_args(BuilderVisualTopologyMode)),
-    (
-        "BuilderVisualDraftCommandOperation",
-        _alias_args(BuilderVisualDraftCommandOperation),
-    ),
-    ("BuilderVisualDraftAffectedKind", _alias_args(BuilderVisualDraftAffectedKind)),
-    ("CatalogComponentFamily", _alias_args(CatalogComponentFamily)),
-    ("CatalogDraftIssueStage", _alias_args(CatalogDraftIssueStage)),
-    ("BuilderSessionSaveRefusalCode", _alias_args(BuilderSessionSaveRefusalCode)),
-    ("CatalogAuthoringRefusalCode", _alias_args(CatalogAuthoringRefusalCode)),
-    ("CatalogImportOutcome", _alias_args(CatalogImportOutcome)),
-    ("CatalogImportCollisionReason", _alias_args(CatalogImportCollisionReason)),
-    ("CatalogNamespace", _alias_args(CatalogNamespace)),
-    ("BuilderControlScalarKind", _alias_args(BuilderControlScalarKind)),
-    ("BuilderControlNumberKind", _alias_args(BuilderControlNumberKind)),
-    ("BuilderControlChoiceKind", _alias_args(BuilderControlChoiceKind)),
-    ("PreviewScope", _alias_args(builder_world.PreviewScope)),
-    ("BuilderPreviewRejectReason", _alias_args(builder_world.BuilderPreviewRejectReason)),
-    ("SupportedSurfaceBody", _alias_args(body_frames.SupportedSurfaceBody)),
-    ("AddressFamily", _alias_args(model_validation.AddressFamily)),
-    ("TerminalMedium", _alias_args(model_validation.TerminalMedium)),
-    ("ForwardingClass", _alias_args(catalog.ForwardingClass)),
-    ("RoutingProtocol", _alias_args(segment_session.RoutingProtocol)),
-    ("RoutingBoundaryAdapter", _alias_args(segment_session.RoutingBoundaryAdapter)),
-    ("NodeKind", _alias_args(resolved_session.NodeKind)),
-    ("NodeRole", _alias_args(resolved_session.NodeRole)),
-    ("LinkLabel", _alias_args(link_rules.LinkLabel)),
-    ("TopologyMode", _alias_args(link_rules.TopologyMode)),
-    ("SchedulingState", _alias_args(link_state.SchedulingState)),
-    ("GroundBoresightMode", _alias_args(terminal_physics.GroundBoresightMode)),
-    ("SelectionPolicyName", _alias_args(ground_policy.SelectionPolicyName)),
-    ("HandoverPolicyName", _alias_args(ground_policy.HandoverPolicyName)),
-    ("SuccessorAbortPolicy", _alias_args(ground_policy.SuccessorAbortPolicy)),
-    ("SessionStatus", _alias_args(vs_api.SessionStatus)),
-    ("PublicLinkType", _alias_args(vs_api.PublicLinkType)),
-    ("TraceState", _alias_args(vs_api.TraceState)),
-    ("TraceStopReason", _alias_args(vs_api.TraceStopReason)),
-    ("ServiceSource", _alias_args(events.ServiceSource)),
-    ("OpsLevel", _alias_args(events.OpsLevel)),
-    ("DebugControlAction", _alias_args(events.DebugControlAction)),
-    ("FunnelGate", _alias_args(decision_explanation.FunnelGate)),
-    ("GateState", _alias_args(decision_explanation.GateState)),
-    ("EnvelopeBindingSource", _alias_args(decision_explanation.EnvelopeBindingSource)),
-    ("ExplanationProducer", _alias_args(decision_explanation.ExplanationProducer)),
-    ("NodeFocus", _alias_args(decision_explanation.NodeFocus)),
-    ("DecisionSampleState", _alias_args(decision_explanation.DecisionSampleState)),
-    ("FailingActuationState", _alias_args(scheduler_ops.FailingActuationState)),
-    ("GroundVisibilityRejectReason", _alias_args(link_decisions.GroundVisibilityRejectReason)),
-    (
-        "GroundVisibilityRejectingEndpoint",
-        _alias_args(link_decisions.GroundVisibilityRejectingEndpoint),
-    ),
-    ("GroundUnscheduledReason", _alias_args(link_decisions.GroundUnscheduledReason)),
-    (
-        "GroundAllocationEventCategory",
-        _alias_args(link_decisions.GroundAllocationEventCategory),
-    ),
-    ("GroundAllocationPolicyKind", _alias_args(link_decisions.GroundAllocationPolicyKind)),
-    ("GroundHandoverModeName", _alias_args(link_decisions.GroundHandoverModeName)),
-)
-_LITERAL_ALIAS_BY_VALUES = {values: name for name, values in LITERAL_ALIASES}
-if len(_LITERAL_ALIAS_BY_VALUES) != len(LITERAL_ALIASES):
-    raise ValueError("two literal aliases name the same value set")
 _SHA256_PATTERN = TypeAdapter(Sha256Digest).json_schema()["pattern"]
 _REFERENCE_ALIAS_BY_PATTERN = {
     TypeAdapter(CatalogRef).json_schema()["pattern"]: "CatalogRef",
@@ -691,9 +554,7 @@ def _render_type(schema: dict[str, Any]) -> str:
 
     enum = schema.get("enum")
     if enum is not None:
-        values = tuple(enum)
-        alias = _LITERAL_ALIAS_BY_VALUES.get(values)
-        return _named(alias) if alias is not None else _literal_union(values)
+        return _literal_union(enum)
 
     if "const" in schema:
         return _literal(schema["const"])
@@ -791,10 +652,10 @@ def _render_definition(
     name: str, schema: dict[str, Any], *, every_field_present: bool
 ) -> list[str]:
     description = " ".join(str(schema.get("description", "")).split())
-    if "enum" in schema:
-        return [f"/** {description} */", f"export type {name} = {_literal_union(schema['enum'])};"]
     if schema.get("type") != "object":
-        raise ValueError(f"{name} must be an object contract or an enumeration")
+        # A named value set: an enumeration, or a `type` alias of values or of other sets.
+        rendered = _render_type(schema)
+        return [f"/** {description} */", f"export type {name} = {rendered};"]
     if schema.get("additionalProperties") is not False:
         raise ValueError(f"{name} must remain a closed object contract")
     properties = schema.get("properties", {})
@@ -830,12 +691,11 @@ def render() -> dict[Path, str]:
     requested = _reach({name: schemas[name] for name in REQUEST_ROOTS}, definitions)
     in_builder = _reach({name: schemas[name] for name in builder_names}, definitions)
     in_runtime = _reach(schemas, definitions) - in_builder
-    alias_names = {name for name, _ in LITERAL_ALIASES}
 
     def definitions_of(names: set[str]) -> list[str]:
         lines: list[str] = []
         for name in definitions:
-            if name not in names or name in alias_names or name == "JsonValue":
+            if name not in names or name == "JsonValue":
                 continue
             lines.extend(
                 _render_definition(
@@ -869,8 +729,7 @@ def render() -> dict[Path, str]:
         "export type SessionSourceId = CatalogSessionSourceId;",
         "",
     ]
-    builder_definitions = definitions_of(in_builder)
-    used_by_builder = set(_used_names)
+    builder.extend(definitions_of(in_builder))
 
     _used_names.clear()
     runtime_body: list[str] = []
@@ -879,26 +738,8 @@ def render() -> dict[Path, str]:
             runtime_body.append(f"export type {name} = {_render_type(schemas[name])};")
             runtime_body.append("")
     runtime_body.extend(definitions_of(in_runtime))
-
-    # A named value set only the runtime contracts use is declared with them;
-    # every other one is declared in the Builder module.
-    runtime_aliases = {
-        name for name in alias_names if name in _used_names and name not in used_by_builder
-    }
-    builder.extend(
-        f"export type {name} = {_literal_union(values)};"
-        for name, values in LITERAL_ALIASES
-        if name not in runtime_aliases
-    )
-    builder.append("")
-    builder.extend(builder_definitions)
-
     from_builder = sorted(
-        name
-        for name in _used_names
-        if name in in_builder
-        or (name in alias_names and name not in runtime_aliases)
-        or name in _BUILDER_PRELUDE_NAMES
+        name for name in _used_names if name in in_builder or name in _BUILDER_PRELUDE_NAMES
     )
     runtime = [*_HEADER, "// The runtime contracts VS-API serves and the clients it accepts.", ""]
     if from_builder:
@@ -906,12 +747,6 @@ def render() -> dict[Path, str]:
         runtime.extend(f"  {name}," for name in from_builder)
         runtime.append('} from "../builder/generated/builderApi";')
         runtime.append("")
-    runtime.extend(
-        f"export type {name} = {_literal_union(values)};"
-        for name, values in LITERAL_ALIASES
-        if name in runtime_aliases
-    )
-    runtime.append("")
     runtime.extend(runtime_body)
     return {
         BUILDER_OUT: "\n".join(builder).rstrip() + "\n",

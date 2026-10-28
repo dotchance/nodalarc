@@ -34,7 +34,7 @@ from nodalarc.models.scheduler_ops import ActuationState, FailingActuationState
 from nodalarc.models.terminal_physics import GroundBoresightMode, SatGroundBoresightMode
 
 # The canonical decision funnel, in order. A pair stops at exactly one binding gate.
-FunnelGate = Literal[
+type FunnelGate = Literal[
     "line_of_sight",
     "range",
     "elevation_mask",
@@ -46,27 +46,27 @@ FunnelGate = Literal[
     "actuation_proof",
 ]
 
-GateState = Literal["pass", "fail", "not_evaluated", "not_applicable"]
+type GateState = Literal["pass", "fail", "not_evaluated", "not_applicable"]
 
 # The reason the composer derives for an actuation-proof binding when the roster
 # is clean but OME desires a pair the kernel has not brought up.
-ActuationExplanationReason = Literal["actuation_diverged"]
+type ActuationExplanationReason = Literal["actuation_diverged"]
 # A decision's reason: OME's visibility or allocation reason for the pair.
-DecisionReasonCode = GroundVisibilityRejectReason | GroundUnscheduledReason
+type DecisionReasonCode = GroundVisibilityRejectReason | GroundUnscheduledReason
 # The reason a binding gate states: a decision reason, a failing actuation state,
 # or the composer's actuation divergence.
-BindingReasonCode = DecisionReasonCode | FailingActuationState | ActuationExplanationReason
+type BindingReasonCode = DecisionReasonCode | FailingActuationState | ActuationExplanationReason
 
 # The constraint that sets a station's effective minimum elevation.
-EnvelopeBindingSource = Literal["field_of_regard", "min_elevation_mask"]
+type EnvelopeBindingSource = Literal["field_of_regard", "min_elevation_mask"]
 # A configured envelope value another constraint can make non-binding.
-EnvelopeKnob = Literal["min_elevation_deg"]
+type EnvelopeKnob = Literal["min_elevation_deg"]
 
 # Which source-of-truth component owns a gate's verdict.
-ExplanationProducer = Literal["ome_visibility", "ome_allocator", "scheduler", "node_agent"]
+type ExplanationProducer = Literal["ome_visibility", "ome_allocator", "scheduler", "node_agent"]
 
-NodeFocus = Literal["gs", "sat", "pair"]
-DecisionSampleState = Literal["scheduled", "eligible_unselected", "expected_no_link"]
+type NodeFocus = Literal["gs", "sat", "pair"]
+type DecisionSampleState = Literal["scheduled", "eligible_unselected", "expected_no_link"]
 
 
 class LadderGate(BaseModel):

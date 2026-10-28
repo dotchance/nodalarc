@@ -78,7 +78,7 @@ def test_hysteresis_policy_emits_policy_specific_hold_score():
 
 
 def test_handover_dispatch_table_matches_policy_literal() -> None:
-    assert set(HOLD_SCORE_FUNCTIONS) == set(get_args(HandoverPolicyName))
+    assert set(HOLD_SCORE_FUNCTIONS) == set(get_args(HandoverPolicyName.__value__))
 
 
 def test_none_policy_holds_when_challenger_does_not_beat_incumbent() -> None:

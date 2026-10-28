@@ -60,7 +60,7 @@ type ValidatedSessionJson = Annotated[
     AfterValidator(_validated_configuration_json),
     _JSON_IDENTITY_SERIALIZER,
 ]
-BuilderIssueStage = Literal[
+type BuilderIssueStage = Literal[
     "draft",
     "structural",
     "reference",
@@ -71,28 +71,28 @@ BuilderIssueStage = Literal[
     "deployment",
     "staleness",
 ]
-BuilderIssueSeverity = Literal["info", "warning", "error"]
-BuilderBlockedOperation = Literal["save", "deploy"]
-BuilderSessionSaveRefusalCode = Literal[
+type BuilderIssueSeverity = Literal["info", "warning", "error"]
+type BuilderBlockedOperation = Literal["save", "deploy"]
+type BuilderSessionSaveRefusalCode = Literal[
     "builder_session_save.save_blocked",
     "builder_session_save.stale_write",
     "builder_session_save.graph_invalid",
     "builder_session_save.persistence_failed",
     "builder_session_save.storage_verification_failed",
 ]
-WizardOrbitPropagator = Literal["two_body", "j2_mean_elements", "sgp4_tle"]
-WizardConstellationSourceKind = Literal[
+type WizardOrbitPropagator = Literal["two_body", "j2_mean_elements", "sgp4_tle"]
+type WizardConstellationSourceKind = Literal[
     "constellation",
     "space_node_set",
     "custom_geometry",
 ]
 type WizardTerminalRole = MountRole
-WizardExtension = Literal["sr", "te", "mpls"]
-WizardAreaStrategy = Literal["flat", "stripe", "per_plane"]
-WizardRoutingProtocol = Literal["isis", "ospf"]
-WizardWalkerPattern = Literal["walker_delta", "walker_star"]
-WizardRoutingBooleanField = Literal["bfd"]
-WizardRoutingTimerField = Literal[
+type WizardExtension = Literal["sr", "te", "mpls"]
+type WizardAreaStrategy = Literal["flat", "stripe", "per_plane"]
+type WizardRoutingProtocol = Literal["isis", "ospf"]
+type WizardWalkerPattern = Literal["walker_delta", "walker_star"]
+type WizardRoutingBooleanField = Literal["bfd"]
+type WizardRoutingTimerField = Literal[
     "bfd_detect_multiplier",
     "bfd_rx_interval",
     "bfd_tx_interval",
@@ -173,7 +173,7 @@ class BuilderProposedCatalogDocument(_BuilderApplicationModel):
         parsed = parse_catalog_reference(self.ref)
         if parsed.namespace != "user":
             raise ValueError("proposed catalog documents must target the user: namespace")
-        if parsed.family not in get_args(CatalogFamily) or parsed.family == "sessions":
+        if parsed.family not in get_args(CatalogFamily.__value__) or parsed.family == "sessions":
             raise ValueError(
                 "proposed catalog documents must target a registered component catalog family; "
                 "the draft session candidate is stored separately"
@@ -408,12 +408,12 @@ class WizardConstellationPresetResponse(_BuilderApplicationModel):
         orbit_model_ids = tuple(model.id for model in self.orbit_models)
         if len(set(orbit_model_ids)) != len(orbit_model_ids):
             raise ValueError("Wizard orbit-model metadata ids must be unique")
-        if set(orbit_model_ids) != set(get_args(WizardOrbitPropagator)):
+        if set(orbit_model_ids) != set(get_args(WizardOrbitPropagator.__value__)):
             raise ValueError("Wizard orbit-model metadata must describe every orbit choice")
         pattern_ids = tuple(pattern.id for pattern in self.custom_geometry_patterns)
         if len(set(pattern_ids)) != len(pattern_ids):
             raise ValueError("Wizard Walker-pattern metadata ids must be unique")
-        if set(pattern_ids) != set(get_args(WizardWalkerPattern)):
+        if set(pattern_ids) != set(get_args(WizardWalkerPattern.__value__)):
             raise ValueError("Wizard Walker-pattern metadata must describe every pattern choice")
         if self.custom_geometry_seed.pattern not in pattern_ids:
             raise ValueError("custom geometry seed must use an available Walker pattern")
@@ -595,12 +595,12 @@ class WizardExtensionRulesResponse(_BuilderApplicationModel):
         protocol_ids = [protocol.id for protocol in self.protocols]
         if len(set(protocol_ids)) != len(protocol_ids):
             raise ValueError("Wizard routing protocols must be unique")
-        if set(protocol_ids) != set(get_args(WizardRoutingProtocol)):
+        if set(protocol_ids) != set(get_args(WizardRoutingProtocol.__value__)):
             raise ValueError("Wizard protocol metadata must describe every protocol choice")
         extension_ids = [extension.id for extension in self.extensions]
         if len(set(extension_ids)) != len(extension_ids):
             raise ValueError("Wizard extension metadata ids must be unique")
-        if set(extension_ids) != set(get_args(WizardExtension)):
+        if set(extension_ids) != set(get_args(WizardExtension.__value__)):
             raise ValueError("Wizard extension metadata must describe every extension choice")
         return self
 

@@ -11,8 +11,8 @@ from typing import ClassVar, Literal, Self, get_args
 from pydantic.json_schema import GetJsonSchemaHandler, JsonSchemaValue
 from pydantic_core import core_schema
 
-CatalogNamespace = Literal["nodalarc", "user"]
-CatalogFamily = Literal[
+type CatalogNamespace = Literal["nodalarc", "user"]
+type CatalogFamily = Literal[
     "bodies",
     "terminals",
     "payloads",
@@ -27,7 +27,7 @@ CatalogFamily = Literal[
 ]
 
 _CATALOG_NAMESPACES: tuple[CatalogNamespace, ...] = ("nodalarc", "user")
-_CATALOG_FAMILIES = frozenset(get_args(CatalogFamily))
+_CATALOG_FAMILIES = frozenset(get_args(CatalogFamily.__value__))
 _SAFE_NAME = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
 _YAML_SUFFIXES = {".yaml", ".yml"}
 

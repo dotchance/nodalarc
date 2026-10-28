@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from pathlib import PurePosixPath
-from typing import Literal, get_args
+from typing import Literal, TypeAliasType, get_args
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -38,13 +38,13 @@ from nodalarc.models.builder_visual_api import (
 from nodalarc.models.catalog import ForwardingClass, MountRole
 from nodalarc.models.segment_session import RoutingBoundaryAdapter, RoutingProtocol
 
-CatalogImportOutcome = Literal["proposed", "committed", "unchanged", "blocked"]
-CatalogImportCollisionReason = Literal[
+type CatalogImportOutcome = Literal["proposed", "committed", "unchanged", "blocked"]
+type CatalogImportCollisionReason = Literal[
     "shipped_missing",
     "shipped_content_mismatch",
     "user_content_mismatch",
 ]
-CatalogAuthoringRefusalCode = Literal[
+type CatalogAuthoringRefusalCode = Literal[
     "catalog_authoring.not_found",
     "catalog_authoring.read_only",
     "catalog_authoring.invalid_document",
@@ -62,7 +62,7 @@ CatalogAuthoringRefusalCode = Literal[
     "catalog_authoring.stale_import_proposal",
     "catalog_authoring.persistence_failed",
 ]
-CatalogComponentFamily = Literal[
+type CatalogComponentFamily = Literal[
     "bodies",
     "terminals",
     "payloads",
@@ -73,8 +73,8 @@ CatalogComponentFamily = Literal[
     "constellations",
     "space-node-sets",
 ]
-CatalogDraftIssueStage = Literal["structural", "reference", "runtime_support"]
-CatalogDraftBlockedOperation = Literal["save", "deploy"]
+type CatalogDraftIssueStage = Literal["structural", "reference", "runtime_support"]
+type CatalogDraftBlockedOperation = Literal["save", "deploy"]
 
 
 class _CatalogApplicationModel(BaseModel):
@@ -188,7 +188,9 @@ class BuilderVisualTopologyModeMetadata(BuilderVisualRuntimeChoiceMetadata):
 
 
 def _literal_members(alias: object) -> set[object]:
-    return set(get_args(getattr(alias, "__value__", alias)))
+    while isinstance(alias, TypeAliasType):
+        alias = alias.__value__
+    return set(get_args(alias))
 
 
 class BuilderVisualAuthoringFacts(_CatalogApplicationModel):
@@ -250,12 +252,12 @@ class BuilderCatalogBootstrap(_CatalogApplicationModel):
         families = tuple(item.family for item in self.families)
         if len(set(families)) != len(families):
             raise ValueError("bootstrap catalog families must be unique")
-        if set(families) != set(get_args(CatalogFamily)):
+        if set(families) != set(get_args(CatalogFamily.__value__)):
             raise ValueError("bootstrap must describe every public catalog family")
         presets = tuple(item.id for item in self.scheduling_presets)
         if len(set(presets)) != len(presets):
             raise ValueError("bootstrap scheduling presets must be unique")
-        if set(presets) != set(get_args(BuilderVisualSchedulingPreset)):
+        if set(presets) != set(get_args(BuilderVisualSchedulingPreset.__value__)):
             raise ValueError("bootstrap must describe every visual scheduling preset")
         return self
 
@@ -312,7 +314,7 @@ class CatalogDocumentWriteRequest(_CatalogApplicationModel):
     @model_validator(mode="after")
     def _targets_a_component_family(self) -> CatalogDocumentWriteRequest:
         family = parse_catalog_reference(self.ref).family
-        if family not in get_args(CatalogFamily) or family == "sessions":
+        if family not in get_args(CatalogFamily.__value__) or family == "sessions":
             raise ValueError("direct catalog writes must target a registered component family")
         return self
 
@@ -660,7 +662,7 @@ class CatalogDraftOpenRequest(_CatalogApplicationModel):
     @model_validator(mode="after")
     def _component_refs_are_compatible(self) -> CatalogDraftOpenRequest:
         source = parse_catalog_reference(self.source_ref)
-        if source.family not in get_args(CatalogComponentFamily):
+        if source.family not in get_args(CatalogComponentFamily.__value__):
             raise ValueError("catalog component drafts do not accept sessions")
         if self.target_ref is not None:
             target = parse_catalog_reference(self.target_ref)

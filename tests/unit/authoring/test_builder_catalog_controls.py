@@ -64,7 +64,7 @@ def _first_shipped_ref(family: str) -> CatalogRef:
 
 def test_every_catalog_family_model_graph_has_exact_graphical_coverage() -> None:
     counts: dict[str, int] = {}
-    for family in get_args(CatalogComponentFamily):
+    for family in get_args(CatalogComponentFamily.__value__):
         spec = CATALOG_FAMILY_REGISTRY[family]
         assert spec.wrapper is not None
         graph = discover_builder_model_graph(spec.document_model_type)
@@ -83,7 +83,7 @@ def test_every_catalog_family_model_graph_has_exact_graphical_coverage() -> None
         )
         counts[family] = len(graph.obligation_keys)
 
-    assert set(counts) == set(get_args(CatalogComponentFamily))
+    assert set(counts) == set(get_args(CatalogComponentFamily.__value__))
     assert all(count > 1 for count in counts.values())
 
 
@@ -162,7 +162,7 @@ def _json_pointers(value: object, pointer: str = "") -> list[str]:
     return pointers
 
 
-@pytest.mark.parametrize("family", get_args(CatalogComponentFamily))
+@pytest.mark.parametrize("family", get_args(CatalogComponentFamily.__value__))
 def test_component_controls_render_every_field_of_every_shipped_component(
     tmp_path: Path,
     family: str,
@@ -200,7 +200,7 @@ def test_component_controls_render_every_field_of_every_shipped_component(
         assert specialized <= {f"/{wrapper}/id"}, f"{ref}: specialized {sorted(specialized)}"
 
 
-@pytest.mark.parametrize("family", get_args(CatalogComponentFamily))
+@pytest.mark.parametrize("family", get_args(CatalogComponentFamily.__value__))
 def test_a_field_edit_sent_as_the_browser_sends_it_is_accepted(
     tmp_path: Path,
     family: str,

@@ -40,18 +40,18 @@ from nodalarc.models.catalog import ForwardingClass, PhasingMode
 from nodalarc.models.link_rules import MountRole
 from nodalarc.models.segment_session import RoutingBoundaryAdapter, RoutingProtocol
 
-BuilderVisualDraftProjectionStatus = Literal[
+type BuilderVisualDraftProjectionStatus = Literal[
     "applied",
     "incomplete_authoring",
     "no_valid_projection",
     "pending_authoring",
 ]
-BuilderVisualSchedulingPreset = Literal["leo-fast-handover", "geo-longest-pass"]
+type BuilderVisualSchedulingPreset = Literal["leo-fast-handover", "geo-longest-pass"]
 type BuilderVisualPhasingMode = PhasingMode
-BuilderVisualOrbitShape = Literal["circular", "elliptical"]
-BuilderVisualOrbitPropagator = Literal["two_body", "j2_mean_elements"]
-BuilderVisualTopologyMode = Literal["visible_candidates", "nearest_n"]
-BuilderVisualDraftCommandOperation = Literal[
+type BuilderVisualOrbitShape = Literal["circular", "elliptical"]
+type BuilderVisualOrbitPropagator = Literal["two_body", "j2_mean_elements"]
+type BuilderVisualTopologyMode = Literal["visible_candidates", "nearest_n"]
+type BuilderVisualDraftCommandOperation = Literal[
     "place_space_reference",
     "place_ground_reference",
     "add_generated_space",
@@ -72,7 +72,7 @@ BuilderVisualDraftCommandOperation = Literal[
     "rederive_link",
     "set_scheduling_preset",
 ]
-BuilderVisualDraftAffectedKind = Literal[
+type BuilderVisualDraftAffectedKind = Literal[
     "space",
     "ground",
     "routing_domain",

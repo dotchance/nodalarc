@@ -66,13 +66,13 @@ Url = Annotated[
     WithJsonSchema({"type": "string", "format": "uri"}),
 ]
 
-MountRole = Literal["access", "isl", "crosslink", "backbone"]
-ForwardingClass = Literal["routed", "host", "bridge", "control_only"]
+type MountRole = Literal["access", "isl", "crosslink", "backbone"]
+type ForwardingClass = Literal["routed", "host", "bridge", "control_only"]
 # "crtbp" (three-body NRHO/halo trajectories) is structurally valid grammar;
 # the runtime-support layer rejects it with a typed UnsupportedFeature until a
 # CR3BP propagator lands. Kepler elements cannot represent those orbits.
 Propagator = Literal["two_body", "j2_mean_elements", "crtbp"]
-PhasingMode = Literal["walker_delta", "walker_star", "evenly_spaced_mean_anomaly"]
+type PhasingMode = Literal["walker_delta", "walker_star", "evenly_spaced_mean_anomaly"]
 
 
 class _FrozenModel(BaseModel):

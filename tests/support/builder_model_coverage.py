@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from dataclasses import field as dataclass_field
 from enum import Enum
 from types import NoneType, UnionType
-from typing import Annotated, Literal, Union, get_args, get_origin
+from typing import Annotated, Literal, TypeAliasType, Union, get_args, get_origin
 
 from pydantic import BaseModel
 from pydantic.fields import FieldInfo
@@ -366,9 +366,13 @@ def _walk_annotation(
 
 
 def _unwrap_annotated(annotation: object) -> object:
-    while get_origin(annotation) is Annotated:
-        annotation = get_args(annotation)[0]
-    return annotation
+    while True:
+        if isinstance(annotation, TypeAliasType):
+            annotation = annotation.__value__
+        elif get_origin(annotation) is Annotated:
+            annotation = get_args(annotation)[0]
+        else:
+            return annotation
 
 
 def _is_model_type(annotation: object) -> bool:

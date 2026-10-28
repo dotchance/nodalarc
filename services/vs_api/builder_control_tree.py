@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
 from types import MappingProxyType, NoneType, UnionType
-from typing import Annotated, Literal, TypeGuard, Union, cast, get_args, get_origin
+from typing import Annotated, Literal, TypeAliasType, TypeGuard, Union, cast, get_args, get_origin
 
 from nodalarc.catalog_refs import CatalogFamily, CatalogRef
 from nodalarc.models.builder_controls_api import (
@@ -1053,12 +1053,17 @@ def _mark_specialized_controls(
 
 
 def _split_annotated(annotation: object) -> tuple[object, tuple[object, ...]]:
+    """The annotation under its `type` aliases and Annotated wrappers, and their metadata."""
     metadata: list[object] = []
-    while get_origin(annotation) is Annotated:
-        arguments = get_args(annotation)
-        annotation = arguments[0]
-        metadata.extend(arguments[1:])
-    return annotation, tuple(metadata)
+    while True:
+        if isinstance(annotation, TypeAliasType):
+            annotation = annotation.__value__
+        elif get_origin(annotation) is Annotated:
+            arguments = get_args(annotation)
+            annotation = arguments[0]
+            metadata.extend(arguments[1:])
+        else:
+            return annotation, tuple(metadata)
 
 
 def _is_model_type(annotation: object) -> TypeGuard[type[BaseModel]]:

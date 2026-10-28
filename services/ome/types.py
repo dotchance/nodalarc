@@ -181,8 +181,10 @@ class GroundVisibilityDecision:
             )
 
 
-_GROUND_REJECT_REASONS: frozenset[str] = frozenset(get_args(GroundVisibilityRejectReason))
-_GROUND_REJECTING_ENDPOINTS: frozenset[str] = frozenset(get_args(GroundVisibilityRejectingEndpoint))
+_GROUND_REJECT_REASONS: frozenset[str] = frozenset(get_args(GroundVisibilityRejectReason.__value__))
+_GROUND_REJECTING_ENDPOINTS: frozenset[str] = frozenset(
+    get_args(GroundVisibilityRejectingEndpoint.__value__)
+)
 
 
 GroundVisibilityDecisionMap = dict[tuple[str, str], GroundVisibilityDecision]

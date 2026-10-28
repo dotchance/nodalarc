@@ -16,12 +16,12 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 from nodalarc.frozen import FrozenDict, ImmutableStrDict
 
-SelectionPolicyName = Literal[
+type SelectionPolicyName = Literal[
     "highest-elevation",
     "lowest-elevation",
     "longest-remaining-pass",
 ]
-HandoverPolicyName = Literal["hysteresis", "none"]
+type HandoverPolicyName = Literal["hysteresis", "none"]
 RankingComponent = Literal[
     "service_priority",
     "selection_score",
@@ -29,12 +29,12 @@ RankingComponent = Literal[
     "satellite_ground_terminal_capacity",
     "lex_pair",
 ]
-MbbPreemptionPolicy = Literal["off"]
-SuccessorAbortPolicy = Literal["hard_release", "soft_retain"]
-CrossTenantDisplacementPolicy = Literal["off"]
+type MbbPreemptionPolicy = Literal["off"]
+type SuccessorAbortPolicy = Literal["hard_release", "soft_retain"]
+type CrossTenantDisplacementPolicy = Literal["off"]
 
-VALID_SELECTION_POLICY_NAMES: frozenset[str] = frozenset(get_args(SelectionPolicyName))
-VALID_HANDOVER_POLICY_NAMES: frozenset[str] = frozenset(get_args(HandoverPolicyName))
+VALID_SELECTION_POLICY_NAMES: frozenset[str] = frozenset(get_args(SelectionPolicyName.__value__))
+VALID_HANDOVER_POLICY_NAMES: frozenset[str] = frozenset(get_args(HandoverPolicyName.__value__))
 
 
 class HysteresisParameters(BaseModel):

@@ -2,16 +2,18 @@
 # Licensed under the Apache License, Version 2.0. See LICENSE file.
 """VS-API state models — all frozen (immutable after creation).
 
-StateSnapshot is the complete payload sent over WebSocket at ~1Hz.
+StateSnapshot is the complete payload sent over WebSocket at ~1Hz. StateFeedFrame is the
+union of every message the state socket sends, discriminated on ``msg_type``.
 """
 
 from datetime import datetime
-from typing import Any, Literal
+from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from nodalarc.body_frames import SupportedSurfaceBody
 from nodalarc.model_validation import AddressFamily
+from nodalarc.models.events import OpsEvent, ServiceSource, SessionEphemeris
 from nodalarc.models.link_rules import TopologyMode
 from nodalarc.models.link_state import SchedulingState
 from nodalarc.models.resolved_session import NodeKind, NodeRole
@@ -291,7 +293,6 @@ class ActuationHealthGroundStation(BaseModel):
     reason_code: SchedulerOpsCode
     blocking_new_ground_link_up: bool
     recovery_status: dict = Field(default_factory=dict)
-    last_event: dict = Field(default_factory=dict)
 
 
 class ActuationHealthInstance(BaseModel):
@@ -339,15 +340,25 @@ class HistoryRecordingState(BaseModel):
     error: str | None
 
 
+class StampedOpsEvent(OpsEvent):
+    """An ops event as VS-API serves it, stamped with its arrival seq."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    seq: int
+
+
 class StateSnapshot(BaseModel):
     """Complete constellation state sent via WebSocket at ~1Hz.
 
-    Full snapshots only — no deltas. Drop intermediate frames
-    if behind, never queue.
+    Full snapshots only, except the ops log: a connection's frame carries only the ops
+    events that connection has not been sent. Drop intermediate frames if behind, never
+    queue.
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
+    msg_type: Literal["state_snapshot"] = "state_snapshot"
     sim_time: datetime
     wall_time: datetime
     schema_version: int  # Always 1
@@ -378,10 +389,75 @@ class StateSnapshot(BaseModel):
     pacing_degraded: bool = False
     stale: bool = False
     actuation_notices: list[ActuationNotice] = Field(default_factory=list)
-    ome_lifecycle_notices: list[dict[str, Any]] = Field(default_factory=list)
     actuation_health: ActuationHealth | None = None
     # This run's history recording; None when the run was deployed without one.
     history_recording: HistoryRecordingState | None
+    # Operator-visible ops events, seq-ordered: the full tail on a connection's first
+    # frame, then only the events newer than that connection's cursor.
+    ops_events: list[StampedOpsEvent]
+    # Identifies VS-API's seq space; a change means VS-API restarted and the client
+    # replaces its scrollback.
+    ops_log_token: str
+    # The latest debug events and the services sending them; empty while no client
+    # streams debug output.
+    debug_events: list[OpsEvent]
+    debug_sources: list[ServiceSource]
+
+
+class SessionEphemerisFrame(SessionEphemeris):
+    """The session ephemeris as the state socket sends it: on connect and on epoch change."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    msg_type: Literal["session_ephemeris"] = "session_ephemeris"
+
+
+class WiringProgressFrame(BaseModel):
+    """A wiring progress line from the Node Agent, relayed as it arrives."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    msg_type: Literal["wiring_progress"] = "wiring_progress"
+    message: str
+
+
+class SessionTransitioningFrame(BaseModel):
+    """A session switch has started; later frames carry its progress detail."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    msg_type: Literal["session_transitioning"] = "session_transitioning"
+    detail: str | None = None
+
+
+class SessionReadyFrame(BaseModel):
+    """The switched-to session is live; carries its first state snapshot."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    msg_type: Literal["session_ready"] = "session_ready"
+    snapshot: StateSnapshot
+
+
+class SessionFailedFrame(BaseModel):
+    """A session switch failed."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    msg_type: Literal["session_failed"] = "session_failed"
+    error: str
+
+
+# Every message the state socket sends.
+StateFeedFrame = Annotated[
+    StateSnapshot
+    | SessionEphemerisFrame
+    | WiringProgressFrame
+    | SessionTransitioningFrame
+    | SessionReadyFrame
+    | SessionFailedFrame,
+    Field(discriminator="msg_type"),
+]
 
 
 class LinkHistoryEvent(BaseModel):

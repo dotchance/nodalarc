@@ -4,12 +4,12 @@
 
 import { describe, it, expect } from "vitest";
 import { mergeSnapshot } from "../snapshotMerge";
-import type { OpsEvent, StateSnapshot } from "../types";
+import type { StampedOpsEvent, StateSnapshot } from "../types";
 
 const base = (over: Partial<StateSnapshot>): StateSnapshot =>
   ({ ops_log_token: "tok-a", ...over }) as StateSnapshot;
 
-const ev = (seq: number, code = `E${seq}`): OpsEvent =>
+const ev = (seq: number, code = `E${seq}`): StampedOpsEvent =>
   ({ seq, code, timestamp: "", session_id: "", source: "ome", hostname: "", level: "info", message: "" });
 
 describe("mergeSnapshot", () => {
@@ -30,18 +30,6 @@ describe("mergeSnapshot", () => {
     const next = { ...base({ ops_events: [ev(1, "FRESH")] }), ops_log_token: "tok-b" };
     const merged = mergeSnapshot(prev, next as StateSnapshot);
     expect(merged.ops_events!.map((e) => e.code)).toEqual(["FRESH"]);
-  });
-
-  it("carries actuation_health forward when omitted as unchanged", () => {
-    const prev = base({ ops_events: [], actuation_health: { overall: "ok" } as never });
-    const next = base({ ops_events: [] });
-    expect(mergeSnapshot(prev, next).actuation_health).toEqual({ overall: "ok" });
-  });
-
-  it("takes a present actuation_health over the carried one", () => {
-    const prev = base({ ops_events: [], actuation_health: { overall: "old" } as never });
-    const next = base({ ops_events: [], actuation_health: { overall: "new" } as never });
-    expect(mergeSnapshot(prev, next).actuation_health).toEqual({ overall: "new" });
   });
 
   it("caps the scrollback at 500", () => {

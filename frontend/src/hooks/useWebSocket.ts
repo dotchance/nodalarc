@@ -5,7 +5,7 @@
 import { useEffect, useRef, useState, useCallback } from "react";
 import { getWsUrl, fetchApiKey } from "../config";
 import { mergeSnapshot } from "../snapshotMerge";
-import type { StateSnapshot } from "../types";
+import type { SessionEphemerisFrame, SessionReadyFrame, StateSnapshot } from "../types";
 import type { SessionEphemeris, PlaybackStateMsg } from "../sim/ephemeris";
 
 interface WebSocketState {
@@ -59,7 +59,7 @@ export function useWebSocket(): WebSocketState {
 
         // SessionEphemeris — sent on connect and on epoch change
         if (data.msg_type === "session_ephemeris") {
-          setEphemeris(data as SessionEphemeris);
+          setEphemeris(data as SessionEphemerisFrame);
           return;
         }
 
@@ -90,12 +90,11 @@ export function useWebSocket(): WebSocketState {
           setSessionTransitioning(false);
           setSessionError(null);
           setSwitchDetail(null);
-          if (data.snapshot) {
-            // Stamp transport arrival here, not at React effect time —
-            // render scheduling delay must not fold into the clock phase.
-            data.snapshot.client_arrival_ms = performance.now();
-            setSnapshot(data.snapshot as StateSnapshot);
-          }
+          const ready = data as SessionReadyFrame;
+          // Stamp transport arrival here, not at React effect time —
+          // render scheduling delay must not fold into the clock phase.
+          ready.snapshot.client_arrival_ms = performance.now();
+          setSnapshot(ready.snapshot);
           return;
         }
         if (data.msg_type === "session_failed") {
@@ -118,9 +117,8 @@ export function useWebSocket(): WebSocketState {
 
         // StateSnapshot — the regular per-tick payload. Stamp transport
         // arrival here, not at React effect time — render scheduling
-        // delay must not fold into the clock phase. Incremental fields
-        // (ops_events, actuation_health) merge against the previous
-        // snapshot — the server ships them as deltas.
+        // delay must not fold into the clock phase. ops_events merge
+        // against the previous snapshot — the server ships them as deltas.
         data.client_arrival_ms = performance.now();
         setSnapshot((prev) => mergeSnapshot(prev, data as StateSnapshot));
       } catch {

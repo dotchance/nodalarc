@@ -31,7 +31,6 @@
       "actuation_state",
       "blocking_new_ground_link_up",
       "gs_id",
-      "last_event",
       "reason_code",
       "recovery_status",
       "since"
@@ -476,19 +475,55 @@
       "verify_attempt_count",
       "verify_exhausted"
     ],
+    "SessionEphemerisFrame": [
+      "body_frames",
+      "epoch_id",
+      "epoch_unix",
+      "msg_type",
+      "nodes",
+      "sim_time"
+    ],
+    "SessionFailedFrame": [
+      "error",
+      "msg_type"
+    ],
+    "SessionReadyFrame": [
+      "msg_type",
+      "snapshot"
+    ],
     "SessionSourceId": [
       "kind",
       "session_ref"
+    ],
+    "SessionTransitioningFrame": [
+      "detail",
+      "msg_type"
+    ],
+    "StampedOpsEvent": [
+      "code",
+      "details",
+      "hostname",
+      "level",
+      "message",
+      "seq",
+      "session_id",
+      "source",
+      "tenant_id",
+      "timestamp"
     ],
     "StateSnapshot": [
       "actuation_health",
       "actuation_notices",
       "constellation_name",
+      "debug_events",
+      "debug_sources",
       "history_recording",
       "kernel_actual_pairs",
       "links",
+      "msg_type",
       "nodes",
-      "ome_lifecycle_notices",
+      "ops_events",
+      "ops_log_token",
       "pacing_degraded",
       "playback_achieved",
       "playback_paused",
@@ -629,6 +664,10 @@
       "reference_body",
       "tenant_id",
       "unscheduled_reason"
+    ],
+    "WiringProgressFrame": [
+      "message",
+      "msg_type"
     ],
     "_OperationModel": [],
     "_SessionSourceModel": []
@@ -1322,13 +1361,60 @@
       "active_intervention_id": null,
       "last_verify_result": null
     },
+    "SessionEphemerisFrame": {
+      "msg_type": [
+        "session_ephemeris"
+      ]
+    },
+    "SessionFailedFrame": {
+      "error": null,
+      "msg_type": [
+        "session_failed"
+      ]
+    },
+    "SessionReadyFrame": {
+      "msg_type": [
+        "session_ready"
+      ]
+    },
     "SessionSourceId": {
       "kind": [
         "catalog"
       ]
     },
+    "SessionTransitioningFrame": {
+      "detail": null,
+      "msg_type": [
+        "session_transitioning"
+      ]
+    },
+    "StampedOpsEvent": {
+      "code": null,
+      "hostname": null,
+      "level": [
+        "critical",
+        "debug",
+        "error",
+        "info",
+        "warning"
+      ],
+      "message": null,
+      "session_id": null,
+      "source": [
+        "node_agent",
+        "ome",
+        "operator",
+        "scheduler",
+        "vs_api"
+      ],
+      "tenant_id": null
+    },
     "StateSnapshot": {
       "constellation_name": null,
+      "msg_type": [
+        "state_snapshot"
+      ],
+      "ops_log_token": null,
       "routing_stack": null,
       "session_id": null,
       "session_status": [
@@ -1475,6 +1561,12 @@
         "successor_aborted"
       ]
     },
+    "WiringProgressFrame": {
+      "message": null,
+      "msg_type": [
+        "wiring_progress"
+      ]
+    },
     "_OperationModel": {},
     "_SessionSourceModel": {}
   },
@@ -1525,7 +1617,12 @@
     "PendingActuationPair": "lib/nodalarc/models/scheduler_ops.py",
     "RecentEvent": "lib/nodalarc/models/vs_api.py",
     "RecoveryStatus": "lib/nodalarc/models/scheduler_ops.py",
+    "SessionEphemerisFrame": "lib/nodalarc/models/vs_api.py",
+    "SessionFailedFrame": "lib/nodalarc/models/vs_api.py",
+    "SessionReadyFrame": "lib/nodalarc/models/vs_api.py",
     "SessionSourceId": "lib/nodalarc/models/session_sources.py",
+    "SessionTransitioningFrame": "lib/nodalarc/models/vs_api.py",
+    "StampedOpsEvent": "lib/nodalarc/models/vs_api.py",
     "StateSnapshot": "lib/nodalarc/models/vs_api.py",
     "StoredTransitionOperation": "services/vs_api/transition_operations.py",
     "TracedPath": "lib/nodalarc/models/vs_api.py",
@@ -1543,6 +1640,7 @@
     "TransitionRuntimeResult": "services/vs_api/transition_operations.py",
     "TransitionRuntimeStatusProof": "services/vs_api/transition_operations.py",
     "UnscheduledPair": "lib/nodalarc/models/link_decisions.py",
+    "WiringProgressFrame": "lib/nodalarc/models/vs_api.py",
     "_OperationModel": "services/vs_api/transition_operations.py",
     "_SessionSourceModel": "lib/nodalarc/models/session_sources.py"
   }

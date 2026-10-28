@@ -104,7 +104,7 @@ def shared_names(ts_interfaces, py_models) -> set[str]:
 
 
 _FRONTEND_ONLY_INTERFACES = {
-    # Nodal logging payload appended to StateSnapshot after model serialization.
+    # The debug events' shape; its backend model lives in events.py.
     "OpsEvent",
     # Local UI selection state, not a backend payload.
     "Selection",
@@ -163,10 +163,6 @@ def test_shared_models_exist(shared_pairs):
     assert "StateSnapshot" in names, "StateSnapshot must be shared"
 
 
-_DYNAMIC_FIELDS = {
-    "StateSnapshot": {"ops_events", "ops_log_token", "debug_events", "debug_sources"},
-}
-
 # Fields the FRONTEND stamps onto a wire model after decode — never sent
 # by the backend, so "missing from the backend schema" is their correct
 # state. Anything added here must be optional in the TS interface and
@@ -181,17 +177,14 @@ def test_frontend_fields_exist_in_backend(shared_pairs):
     exist in the backend JSON schema. If it doesn't, the backend
     serialization will silently drop it and the UI will show blank/zero.
 
-    Fields in _DYNAMIC_FIELDS are appended to the JSON dict after Pydantic
-    serialization (e.g., ops_events) and are excluded from this check.
     Fields in _CLIENT_STAMPED_FIELDS are written by the frontend itself
     at decode time and are likewise excluded.
     """
     failures = []
     for name, ts_fields, py_model in shared_pairs:
         backend_fields = _schema_fields(py_model)
-        dynamic = _DYNAMIC_FIELDS.get(name, set())
         client_stamped = _CLIENT_STAMPED_FIELDS.get(name, set())
-        missing = ts_fields - backend_fields - dynamic - client_stamped
+        missing = ts_fields - backend_fields - client_stamped
         if missing:
             failures.append(f"  {name}: frontend has {sorted(missing)} not in backend")
     assert not failures, "Frontend declares fields that backend will silently drop:\n" + "\n".join(

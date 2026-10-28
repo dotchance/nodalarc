@@ -66,7 +66,7 @@ async def stream_state():
     async with websockets.connect(url) as ws:
         async for raw in ws:
             msg = json.loads(raw)
-            msg_type = msg.get("msg_type", "state_snapshot")
+            msg_type = msg["msg_type"]
 
             if msg_type == "session_ephemeris":
                 print(f"Received ephemeris for {len(msg.get('nodes', {}))} nodes")
@@ -89,8 +89,7 @@ ws.onmessage = (event) => {
   if (msg.msg_type === "session_ephemeris") {
     // Store orbital elements for local propagation
     initPropagation(msg.satellites);
-  } else {
-    // State snapshot
+  } else if (msg.msg_type === "state_snapshot") {
     updateDashboard(msg);
   }
 };

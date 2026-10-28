@@ -6,6 +6,7 @@
 
 import type { ActuationState, SchedulerOpsCode } from "./explain/reasons";
 import type { CatalogSessionSummary } from "./builder/generated/builderApi";
+import type { SessionEphemeris } from "./sim/ephemeris";
 
 export interface NodeAddress {
   purpose: "router_loopback" | "site_interface" | "site_prefix";
@@ -223,9 +224,21 @@ export interface OpsEvent {
   code: string;
   message: string;
   details?: Record<string, unknown> | null;
+}
+
+/** An ops event as VS-API serves it, stamped with its arrival seq. */
+export interface StampedOpsEvent {
+  timestamp: string;
+  session_id: string;
+  source: ServiceSource;
+  hostname: string;
+  level: "critical" | "error" | "warning" | "info" | "debug";
+  code: string;
+  message: string;
+  details?: Record<string, unknown> | null;
   /** VS-API arrival sequence — the merge/dedupe key for the
    *  incremental ops feed (events ship once per connection). */
-  seq?: number;
+  seq: number;
 }
 
 
@@ -310,12 +323,46 @@ export interface StateSnapshot {
   actuation_health?: ActuationHealth | null;
   /** This run's history recording; null when it was deployed without one. */
   history_recording: HistoryRecordingState | null;
-  ops_events?: OpsEvent[];
+  ops_events?: StampedOpsEvent[];
   /** Identifies VS-API's ops seq space; a change means the server
    *  restarted and the scrollback must replace, not merge. */
   ops_log_token?: string;
   debug_events?: OpsEvent[];
   debug_sources?: string[];
+}
+
+/** The session ephemeris as the state socket sends it. */
+export interface SessionEphemerisFrame {
+  msg_type: "session_ephemeris";
+  epoch_id: number;
+  sim_time: string;
+  epoch_unix: number;
+  nodes: SessionEphemeris["nodes"];
+  body_frames: SessionEphemeris["body_frames"];
+}
+
+/** A wiring progress line from the Node Agent. */
+export interface WiringProgressFrame {
+  msg_type: "wiring_progress";
+  message: string;
+}
+
+/** A session switch has started; later frames carry its progress detail. */
+export interface SessionTransitioningFrame {
+  msg_type: "session_transitioning";
+  detail: string | null;
+}
+
+/** The switched-to session is live; carries its first state snapshot. */
+export interface SessionReadyFrame {
+  msg_type: "session_ready";
+  snapshot: StateSnapshot;
+}
+
+/** A session switch failed. */
+export interface SessionFailedFrame {
+  msg_type: "session_failed";
+  error: string;
 }
 
 // Distributed ephemeris model (PRD v0.71)

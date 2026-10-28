@@ -24,15 +24,16 @@ from __future__ import annotations
 import itertools
 import uuid
 
+from nodalarc.models.vs_api import StampedOpsEvent
+
 OPS_LOG_TOKEN = uuid.uuid4().hex
 
 _counter = itertools.count(1)
 
 
-def stamp_ops_event(event: dict) -> dict:
+def stamp_ops_event(event: dict) -> StampedOpsEvent:
     """Stamp an arrival seq onto an ops event. CPython-atomic."""
-    event["seq"] = next(_counter)
-    return event
+    return StampedOpsEvent.model_validate({**event, "seq": next(_counter)})
 
 
 def is_operator_visible_ops_event(event: dict) -> bool:
@@ -69,7 +70,3 @@ def is_operator_visible_ops_event(event: dict) -> bool:
         and message.startswith("Actuation latency op=")
         and " failed=0" in message
     )
-
-
-def operator_visible_ops_events(events: list[dict]) -> list[dict]:
-    return [event for event in events if is_operator_visible_ops_event(event)]

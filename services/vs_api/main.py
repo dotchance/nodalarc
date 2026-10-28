@@ -86,7 +86,7 @@ from nodalarc.models.builder_api import (
     WizardSatelliteTypePresetResponse,
 )
 from nodalarc.models.coverage import CoveragePreviewResult
-from nodalarc.models.events import OPS_LOG_LEVELS, OpsLevel, ServiceSource
+from nodalarc.models.events import OPS_LOG_LEVELS, OpsEvent, OpsLevel, ServiceSource
 from nodalarc.models.resolved_session import ResolvedSession
 from nodalarc.models.scheduler_ops import OperatorRepairCommand
 from nodalarc.models.session_sources import (
@@ -100,8 +100,13 @@ from nodalarc.models.vs_api import (
     LINK_HISTORY_PAGE_MAX,
     LinkHistoryEvent,
     LinkHistoryPage,
+    SessionFailedFrame,
+    SessionReadyFrame,
+    SessionTransitioningFrame,
+    StampedOpsEvent,
     StateSnapshot,
     TracedPath,
+    WiringProgressFrame,
 )
 from nodalarc.nats_channels import (
     NATS_CONNECT_OPTIONS,
@@ -144,7 +149,6 @@ from vs_api.introspect import VTYSH_COMMANDS, IntrospectRequest, IntrospectResul
 from vs_api.ops_log import (
     OPS_LOG_TOKEN,
     is_operator_visible_ops_event,
-    operator_visible_ops_events,
     stamp_ops_event,
 )
 from vs_api.path_tracer import PathTracer
@@ -335,13 +339,13 @@ _CATALOG_UPLOAD_RECONCILE_INTERVAL_SECONDS = 60.0
 # System OpsEvents — meta-session, not cleared on switch
 from collections import deque
 
-_system_ops_events: deque = deque(maxlen=500)
+_system_ops_events: deque[StampedOpsEvent] = deque(maxlen=500)
 
 # On-demand debug — state managed by WebSocket command handlers
 _debug_sources: set[str] = set()
 _debug_clients: dict[int, set[str]] = {}
 _debug_sub: object | None = None
-_debug_events: deque = deque(maxlen=500)
+_debug_events: deque[OpsEvent] = deque(maxlen=500)
 
 _KNOWN_DEBUG_SOURCES: tuple[ServiceSource, ...] = get_args(ServiceSource)
 
@@ -639,7 +643,7 @@ async def _cleanup_debug_client(ws_id: int) -> None:
 async def _on_debug_event(msg) -> None:
     """Callback for NODALARC_DEBUG stream subscription."""
     with contextlib.suppress(Exception):
-        _debug_events.append(json.loads(msg.data))
+        _debug_events.append(OpsEvent.model_validate_json(msg.data))
 
 
 async def _handle_ws_debug_command(ws_id: int, msg: dict) -> None:
@@ -695,24 +699,18 @@ async def _publish_system_ops_event(
     log.log(OPS_LOG_LEVELS[level], "%s", message, extra={"code": code, "details": details})
 
 
-# Operator-log visibility policy lives in ops_log (shared with the
-# session context, which filters at append time).
-_operator_visible_ops_events = operator_visible_ops_events
-
-
-def _ops_events_tail(ctx, *, ops_after: int = 0) -> list[dict]:
+def _ops_events_tail(ctx, *, ops_after: int = 0) -> list[StampedOpsEvent]:
     """Operator-visible ops events newer than the cursor, seq-ordered.
 
+    Both logs admit only operator-visible events at append time.
     ops_after=0 returns the full 500-tail (REST consumers, first frame
     of a fresh websocket); a connection's producer passes its cursor so
     steady-state frames carry only newly arrived events.
     """
-    all_ops = _operator_visible_ops_events(
-        list(_system_ops_events) + (list(ctx.session_ops_events) if ctx else [])
-    )
-    all_ops.sort(key=lambda e: e.get("seq", 0))
+    all_ops = list(_system_ops_events) + (list(ctx.session_ops_events) if ctx else [])
+    all_ops.sort(key=lambda e: e.seq)
     if ops_after:
-        all_ops = [e for e in all_ops if e.get("seq", 0) > ops_after]
+        all_ops = [e for e in all_ops if e.seq > ops_after]
     return all_ops[-500:]
 
 
@@ -724,14 +722,10 @@ class _SharedFrame:
     the full snapshot every second under the state lock — O(clients ×
     session size) of identical work on the serving loop. One builder
     now produces the base frame once per second; each connection
-    overlays only its per-connection increments (ops cursor slice,
-    health-on-change) onto a shallow copy. Nested structures are shared
-    read-only — overlays replace top-level keys, never mutate nested
-    state.
+    overlays only its ops cursor slice onto a copy.
     """
 
-    frame: dict
-    health_json: str
+    frame: StateSnapshot
 
 
 _shared_frame: _SharedFrame | None = None
@@ -739,53 +733,40 @@ _shared_frame_ready: asyncio.Event | None = None
 
 
 def _overlay_connection_increments(
-    shared: _SharedFrame,
-    *,
-    ops_cursor: int,
-    last_health_json: str | None,
-) -> tuple[dict, int, str]:
+    shared: _SharedFrame, *, ops_cursor: int
+) -> tuple[StateSnapshot, int]:
     """Per-connection view of a shared frame. Pure; never mutates shared.
 
-    Returns (snapshot, new_ops_cursor, new_health_json): the ops list is
-    sliced to events newer than the cursor (cursor 0 = first frame =
-    full tail), and actuation_health is omitted when unchanged for this
-    connection.
+    Returns (snapshot, new_ops_cursor): the ops list is sliced to events
+    newer than the cursor (cursor 0 = first frame = full tail).
     """
-    snapshot = dict(shared.frame)
-    full_ops = snapshot.get("ops_events") or []
+    ops = shared.frame.ops_events
     if ops_cursor:
-        snapshot["ops_events"] = [e for e in full_ops if e.get("seq", 0) > ops_cursor]
-    new_cursor = ops_cursor
-    if snapshot["ops_events"]:
-        new_cursor = max(new_cursor, snapshot["ops_events"][-1].get("seq", 0))
-    if shared.health_json == last_health_json:
-        snapshot.pop("actuation_health", None)
-    return snapshot, new_cursor, shared.health_json
+        ops = [e for e in ops if e.seq > ops_cursor]
+    new_cursor = max(ops_cursor, ops[-1].seq) if ops else ops_cursor
+    return shared.frame.model_copy(update={"ops_events": ops}), new_cursor
 
 
-def _carry_unsent_increments(pending: dict | None, snapshot: dict) -> dict:
-    """Fold an UNSENT frame's increments into its replacement.
+def _carry_unsent_increments(
+    pending: StateSnapshot | None, snapshot: StateSnapshot
+) -> StateSnapshot:
+    """Fold an UNSENT frame's ops events into its replacement.
 
     The mailbox is latest-wins: a slow client's unshipped frame is
     overwritten. State fields (nodes, links, clock) are idempotent and
-    safely replaced — but the incremental fields are deltas, and a delta
-    that never shipped would be lost with its frame. Ops events from the
+    safely replaced — but the ops events are a delta, and a delta that
+    never shipped would be lost with its frame. Ops events from the
     pending frame prepend (both lists are seq-sorted and the pending
-    ones are strictly older); an unsent actuation_health update carries
-    into a replacement that omitted health as unchanged.
+    ones are strictly older).
     """
-    if pending is None:
+    if pending is None or not pending.ops_events:
         return snapshot
-    pending_ops = pending.get("ops_events") or []
-    if pending_ops:
-        snapshot["ops_events"] = (pending_ops + (snapshot.get("ops_events") or []))[-500:]
-    if "actuation_health" not in snapshot and "actuation_health" in pending:
-        snapshot["actuation_health"] = pending["actuation_health"]
-    return snapshot
+    ops = (pending.ops_events + snapshot.ops_events)[-500:]
+    return snapshot.model_copy(update={"ops_events": ops})
 
 
-def _build_snapshot(*, ops_after: int = 0) -> dict | None:
-    """Build a StateSnapshot dict from the active SessionContext.
+def _build_snapshot(*, ops_after: int = 0) -> StateSnapshot | None:
+    """Build a StateSnapshot from the active SessionContext.
 
     Returns None if no active context (mid-transition or no session), or
     before the session clock has reported its sim time. Takes a local
@@ -858,22 +839,19 @@ def _build_snapshot(*, ops_after: int = 0) -> dict | None:
             pacing_degraded=ctx.pacing_degraded,
             stale=ctx.is_stale(),
             actuation_notices=list(ctx.actuation_notices_by_key.values()),
-            ome_lifecycle_notices=list(ctx.ome_lifecycle_notices_by_key.values()),
             actuation_health=ctx.build_actuation_health(),
             history_recording=ctx.history_recording_state(),
+            # System + session OpsEvents merged for the log panel — shipped
+            # INCREMENTALLY per connection (ops_after cursor): re-serializing
+            # the whole 500-entry log into every 1 Hz frame measured 96% of a
+            # 2.5 MB frame. The token lets clients detect a seq-space restart
+            # and replace their scrollback instead of merging.
+            ops_events=_ops_events_tail(ctx, ops_after=ops_after),
+            ops_log_token=OPS_LOG_TOKEN,
+            debug_events=list(_debug_events)[-100:] if _debug_sources else [],
+            debug_sources=sorted(_debug_sources),
         )
-        result = json.loads(snapshot.model_dump_json())
-        # System + session OpsEvents merged for the log panel — shipped
-        # INCREMENTALLY per connection (ops_after cursor): re-serializing
-        # the whole 500-entry log into every 1 Hz frame measured 96% of a
-        # 2.5 MB frame. The token lets clients detect a seq-space restart
-        # and replace their scrollback instead of merging.
-        result["ops_events"] = _ops_events_tail(ctx, ops_after=ops_after)
-        result["ops_log_token"] = OPS_LOG_TOKEN
-        if _debug_sources:
-            result["debug_events"] = list(_debug_events)[-100:]
-            result["debug_sources"] = sorted(_debug_sources)
-        return result
+        return snapshot
 
 
 # --- NATS subscriber ---
@@ -1220,12 +1198,9 @@ async def _activate_session_context_from_cr(
         _active_context = None
         _active_cr_generation = None
         await _broadcast_to_all(
-            json.dumps(
-                {
-                    "msg_type": "session_transitioning",
-                    "detail": f"Activating session {ready.session_name}",
-                }
-            )
+            SessionTransitioningFrame(
+                detail=f"Activating session {ready.session_name}"
+            ).model_dump_json()
         )
         await _terminal_manager.close_all("Session switched")
         if old_ctx is not None:
@@ -1263,12 +1238,9 @@ async def _activate_session_context_from_cr(
             },
         )
         await _broadcast_to_all(
-            json.dumps(
-                {
-                    "msg_type": "session_failed",
-                    "error": f"Session {ready.session_id} did not publish live state",
-                }
-            )
+            SessionFailedFrame(
+                error=f"Session {ready.session_id} did not publish live state"
+            ).model_dump_json()
         )
         raise TimeoutError(f"VS-API context did not become ready for {ready.session_id}") from exc
 
@@ -1293,11 +1265,12 @@ async def _activate_session_context_from_cr(
         },
     )
 
-    if new_ctx.cached_ephemeris:
-        await _broadcast_to_all(json.dumps(new_ctx.cached_ephemeris))
-    await _broadcast_to_all(
-        json.dumps({"msg_type": "session_ready", "snapshot": _build_snapshot()})
-    )
+    if new_ctx.cached_ephemeris is not None:
+        await _broadcast_to_all(new_ctx.cached_ephemeris.model_dump_json())
+    first_snapshot = _build_snapshot()
+    if first_snapshot is None:
+        raise RuntimeError(f"activated session {ready.session_id} built no state snapshot")
+    await _broadcast_to_all(SessionReadyFrame(snapshot=first_snapshot).model_dump_json())
     log.info(
         "CR session activation complete: session_id=%s generation=%s source=%s",
         ready.session_id,
@@ -1439,10 +1412,7 @@ async def _shared_frame_builder() -> None:
         if _ws_clients:
             frame = _build_snapshot()
             if frame is not None:
-                _shared_frame = _SharedFrame(
-                    frame=frame,
-                    health_json=json.dumps(frame.get("actuation_health"), sort_keys=True),
-                )
+                _shared_frame = _SharedFrame(frame=frame)
                 previous_ready = _shared_frame_ready
                 _shared_frame_ready = asyncio.Event()
                 previous_ready.set()
@@ -1516,7 +1486,7 @@ async def _nats_subscriber() -> None:
             progress_msg = data.get("message", "")
             if _session_manager and progress_msg:
                 _session_manager.status_detail = progress_msg
-                frame = json.dumps({"msg_type": "wiring_progress", "message": progress_msg})
+                frame = WiringProgressFrame(message=progress_msg).model_dump_json()
                 for ws in list(_ws_clients):
                     with contextlib.suppress(Exception):
                         await ws.send_text(frame)
@@ -1991,20 +1961,24 @@ async def request_operator_repair(body: dict) -> dict:
         return JSONResponse(status_code=500, content={"error": "Scheduler repair request failed"})
 
 
-@app.get("/api/v1/ops/events", dependencies=[Depends(_require_api_key)])
+@app.get(
+    "/api/v1/ops/events",
+    response_model=list[StampedOpsEvent],
+    dependencies=[Depends(_require_api_key)],
+)
 async def get_ops_events(
     source: str = Query("", description="Filter by event source (e.g. 'operator', 'scheduler')"),
     level: str = Query("", description="Filter by level (e.g. 'error', 'warning')"),
     limit: int = Query(100, ge=1, le=500, description="Max events to return"),
-) -> list[dict]:
+) -> list[StampedOpsEvent]:
     """Return recent operational events from the NODALARC_OPS stream."""
     ctx = _active_context
     session_events = list(ctx.session_ops_events) if ctx else []
-    events = _operator_visible_ops_events(list(_system_ops_events) + session_events)
+    events = list(_system_ops_events) + session_events
     if source:
-        events = [e for e in events if e.get("source") == source]
+        events = [e for e in events if e.source == source]
     if level:
-        events = [e for e in events if e.get("level") == level]
+        events = [e for e in events if e.level == level]
     return events[-limit:]
 
 
@@ -2068,8 +2042,8 @@ async def ws_state(websocket: WebSocket) -> None:
 
     async def _sender():
         ctx = _active_context
-        if ctx and ctx.cached_ephemeris:
-            await websocket.send_json(ctx.cached_ephemeris)
+        if ctx and ctx.cached_ephemeris is not None:
+            await websocket.send_text(ctx.cached_ephemeris.model_dump_json())
         # Latest-wins delivery (the websocket form of replace-not-merge):
         # the producer fills a one-slot mailbox on an absolute 1 s
         # schedule and never blocks on the socket; the shipper always
@@ -2080,17 +2054,15 @@ async def ws_state(websocket: WebSocket) -> None:
         # (measured live 2026-06-11: a 1.6 s/frame consumer accumulated
         # +0.6 s of staleness per queued frame under the old send loop).
 
-        latest: list[dict | None] = [None]
+        latest: list[StateSnapshot | None] = [None]
         fresh = asyncio.Event()
 
         async def _producer():
             # Per-connection increment state: ops events ship once (seq
-            # cursor) and actuation_health ships on change — re-sending
-            # both wholesale measured 98% of the frame. The frame itself
-            # is built ONCE per second by the shared builder; this task
-            # only overlays this connection's increments on a copy.
+            # cursor). The frame itself is built ONCE per second by the
+            # shared builder; this task only overlays this connection's
+            # ops slice on a copy.
             ops_cursor = 0
-            last_health_json: str | None = None
             while not done.is_set():
                 ready = _shared_frame_ready
                 if ready is None:
@@ -2100,9 +2072,7 @@ async def ws_state(websocket: WebSocket) -> None:
                 shared = _shared_frame
                 if shared is None:
                     continue
-                snapshot, ops_cursor, last_health_json = _overlay_connection_increments(
-                    shared, ops_cursor=ops_cursor, last_health_json=last_health_json
-                )
+                snapshot, ops_cursor = _overlay_connection_increments(shared, ops_cursor=ops_cursor)
                 # A still-unshipped previous frame is about to be
                 # overwritten — its increments must survive into the
                 # replacement or a slow client silently loses them.
@@ -2117,7 +2087,7 @@ async def ws_state(websocket: WebSocket) -> None:
                 fresh.clear()
                 snapshot = latest[0]
                 if snapshot is not None:
-                    await websocket.send_json(snapshot)
+                    await websocket.send_text(snapshot.model_dump_json())
         finally:
             producer_task.cancel()
 
@@ -2328,8 +2298,8 @@ async def get_node_config(node_id: str) -> Response:
         await session.close()
 
 
-@app.get("/api/v1/state", response_model=None, dependencies=[Depends(_require_api_key)])
-def get_state() -> dict:
+@app.get("/api/v1/state", response_model=StateSnapshot, dependencies=[Depends(_require_api_key)])
+def get_state() -> StateSnapshot:
     """Current state snapshot."""
     snapshot = _build_snapshot()
     if snapshot is None:
@@ -2374,6 +2344,7 @@ def _zoned_time_refusal(**times: datetime | None) -> JSONResponse | None:
 
 @app.get(
     "/api/v1/state/{sim_time}",
+    response_model=StateSnapshot,
     responses=_REFUSAL_RESPONSES,
     dependencies=[Depends(_require_api_key)],
 )
@@ -2390,7 +2361,7 @@ def get_historical_state(sim_time: datetime) -> Any:
         return refusal_response(
             404, "history.no_snapshot", "No state snapshot is recorded for this session yet"
         )
-    return json.loads(result["snapshot_json"])
+    return StateSnapshot.model_validate_json(result["snapshot_json"])
 
 
 @app.get(
@@ -3506,7 +3477,7 @@ async def _run_prepared_switch_locked(
             f"Session switch initiated: {old_session} → {source_id}",
             {"old_session": old_session, "new_session_source": source_id},
         )
-        await _broadcast_to_all(json.dumps({"msg_type": "session_transitioning"}))
+        await _broadcast_to_all(SessionTransitioningFrame().model_dump_json())
         await _terminal_manager.close_all("Session switched")
         if old_context is not None:
             await old_context.stop()
@@ -3535,7 +3506,7 @@ async def _run_prepared_switch_locked(
                     TransitionOperationState.SWITCHING,
                     detail=detail,
                 )
-        await _broadcast_to_all(json.dumps({"msg_type": "session_transitioning", "detail": detail}))
+        await _broadcast_to_all(SessionTransitioningFrame(detail=detail).model_dump_json())
 
     try:
         ready_cr = await _session_manager.switch_catalog(
@@ -3583,9 +3554,7 @@ async def _run_prepared_switch_locked(
             "Session switch failed",
             {"session_source": source_id, "error_type": type(exc).__name__},
         )
-        await _broadcast_to_all(
-            json.dumps({"msg_type": "session_failed", "error": "Session switch failed"})
-        )
+        await _broadcast_to_all(SessionFailedFrame(error="Session switch failed").model_dump_json())
         raise
 
 

@@ -77,6 +77,9 @@ from nodalarc.models.vs_api import (
     NodeState,
     PublicLinkType,
     RecentEvent,
+    SessionEphemerisFrame,
+    StampedOpsEvent,
+    StateSnapshot,
 )
 from nodalarc.nats_channels import (
     STREAM_LINK_EVENTS,
@@ -256,14 +259,14 @@ class SessionContext:
         self.heartbeat_wall_time: str | None = None
         self.last_heartbeat_wall_time: float = 0.0
         self.last_snapshot_seq: int = 0
-        self.cached_ephemeris: dict | None = None
+        self.cached_ephemeris: SessionEphemerisFrame | None = None
         self.cached_ephemeris_obj: object | None = None
         self.almanac_lock = threading.Lock()
         self.almanac: AlmanacState = AlmanacState()
         self.continuous_tracer = None
         # Serializes starting, stopping and tearing down the continuous trace.
         self.trace_lock = asyncio.Lock()
-        self.session_ops_events: deque = deque(maxlen=500)
+        self.session_ops_events: deque[StampedOpsEvent] = deque(maxlen=500)
         self.actuation_notices_by_key: dict[tuple[str, str], dict] = {}
         self.actuation_latest_by_gs: dict[tuple[str, str], dict] = {}
         # Recoverable kernel-actual + pending state per Scheduler instance, replace-not-
@@ -275,7 +278,6 @@ class SessionContext:
         # "received_at" (VS-API wall clock at receipt) + "emitted_at" (Scheduler publish
         # clock) give skew-free divergence age without cross-pod NTP drift.
         self.actual_links_by_instance: dict[str, dict] = {}
-        self.ome_lifecycle_notices_by_key: dict[tuple[str, str], dict] = {}
         # Recorded sessions open their link history with the kernel-actual links.
         # _history_baseline_after_seq is the link-stream sequence of the newest
         # LinkUp or LinkDown published before the link-event subscriptions existed;
@@ -701,9 +703,7 @@ class SessionContext:
             )
             return
         self.cached_ephemeris_obj = eph
-        eph_dict = json.loads(msg.data.decode())
-        eph_dict["msg_type"] = "session_ephemeris"
-        self.cached_ephemeris = eph_dict
+        self.cached_ephemeris = SessionEphemerisFrame.model_validate(eph.model_dump())
         self._propagate_positions_from_time(eph.sim_time.isoformat())
         if not self._ephemeris_received:
             self._ephemeris_received = True
@@ -967,16 +967,16 @@ class SessionContext:
         if self.history is not None:
             self.history.submit(what, write)
 
-    def record_snapshot(self, snapshot: dict) -> None:
+    def record_snapshot(self, snapshot: StateSnapshot) -> None:
         """Record one full state snapshot in this session's history."""
         self._record_history(
             "state snapshot",
             lambda conn: insert_snapshot(
                 conn,
                 session_id=self.session_id,
-                sim_time=datetime.fromisoformat(snapshot["sim_time"]),
-                wall_time=datetime.fromisoformat(snapshot["wall_time"]),
-                snapshot_json=json.dumps(snapshot),
+                sim_time=snapshot.sim_time,
+                wall_time=snapshot.wall_time,
+                snapshot_json=snapshot.model_dump_json(),
             ),
         )
 
@@ -1102,7 +1102,6 @@ class SessionContext:
             if is_operator_visible_ops_event(data):
                 self.session_ops_events.append(stamp_ops_event(data))
             self._update_actuation_notice(data)
-            self._update_ome_lifecycle_notice(data)
         self._persist_operator_intervention(data)
         self._persist_ome_lifecycle_event(data)
 
@@ -1254,36 +1253,6 @@ class SessionContext:
             "last_event": event,
         }
         self.actuation_notices_by_key[key] = notice
-
-    def _update_ome_lifecycle_notice(self, event: dict) -> None:
-        if event.get("source") != "ome" or event.get("code") != "MBB_TEARDOWN_TERMINAL":
-            return
-        details = event.get("details") or {}
-        gs_id = details.get("gs_id")
-        teardown_id = details.get("teardown_id")
-        outcome = details.get("terminal_outcome")
-        if not gs_id or not teardown_id or not outcome:
-            return
-        notice = {
-            "gs_id": gs_id,
-            "teardown_id": teardown_id,
-            "terminal_outcome": outcome,
-            "reason_code": event["code"],
-            "message": event.get("message", ""),
-            "since": event.get("timestamp"),
-            "epoch_id": details.get("epoch_id"),
-            "snapshot_seq": details.get("snapshot_seq"),
-            "allocator_step": details.get("allocator_step"),
-            "master_sim_time": details.get("master_sim_time"),
-            "old_pair": details.get("old_pair", []),
-            "successor_pair": details.get("successor_pair", []),
-            "source_allocation_event_category": details.get("source_allocation_event_category"),
-            "authority_before": details.get("authority_before", {}),
-            "authority_after": details.get("authority_after"),
-            "seek_target_sim_time": details.get("seek_target_sim_time"),
-            "last_event": event,
-        }
-        self.ome_lifecycle_notices_by_key[(gs_id, teardown_id)] = notice
 
     def _persist_operator_intervention(self, event: dict) -> None:
         """Record an ops event that belongs to an operator intervention."""

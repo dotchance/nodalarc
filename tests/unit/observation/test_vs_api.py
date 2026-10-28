@@ -24,6 +24,8 @@ from nodalarc.models.resolved_session import InterfaceRates, SourceContext
 from nodalarc.models.vs_api import (
     LinkDecisionTrace,
     LinkState,
+    StampedOpsEvent,
+    StateSnapshot,
 )
 from nodalarc.prepared_session import (
     PreparedSessionFiles,
@@ -50,6 +52,49 @@ class _Message:
 
     data: bytes
     metadata: Msg.Metadata
+
+
+def _ops_event_dict(code: str) -> dict:
+    """An ops event as a service publishes it."""
+    return {
+        "timestamp": "2026-09-24T12:00:00+00:00",
+        "session_id": "run-1",
+        "source": "scheduler",
+        "hostname": "sched-0",
+        "level": "error",
+        "code": code,
+        "message": "",
+        "details": None,
+    }
+
+
+def _ops(seq: int, code: str = "E") -> StampedOpsEvent:
+    return StampedOpsEvent.model_validate({**_ops_event_dict(code), "seq": seq})
+
+
+def _frame(
+    *ops: StampedOpsEvent,
+    at: datetime = datetime(2026, 9, 24, 12, 0, tzinfo=UTC),
+    session_status_detail: str | None = None,
+) -> StateSnapshot:
+    """A state frame as VS-API builds it, with no nodes or links."""
+    return StateSnapshot(
+        sim_time=at,
+        wall_time=at,
+        schema_version=1,
+        session_id="run-history-0001",
+        nodes=[],
+        links=[],
+        traced_paths=[],
+        recent_events=[],
+        session_status="ready",
+        session_status_detail=session_status_detail,
+        history_recording=None,
+        ops_events=list(ops),
+        ops_log_token="token",
+        debug_events=[],
+        debug_sources=[],
+    )
 
 
 class TestOpsEventVisibility:
@@ -83,7 +128,7 @@ class TestOpsEventVisibility:
             },
         ]
 
-        visible = m._operator_visible_ops_events(events)
+        visible = [e for e in events if m.is_operator_visible_ops_event(e)]
 
         assert visible == events[2:]
 
@@ -720,9 +765,16 @@ class TestIncrementalOpsFeed:
     def test_stamp_assigns_monotonic_seq(self):
         from vs_api.ops_log import stamp_ops_event
 
-        a = stamp_ops_event({"code": "A", "level": "info"})
-        b = stamp_ops_event({"code": "B", "level": "info"})
-        assert b["seq"] > a["seq"] > 0
+        a = stamp_ops_event(_ops_event_dict("A"))
+        b = stamp_ops_event(_ops_event_dict("B"))
+        assert b.seq > a.seq > 0
+
+    def test_stamp_refuses_an_event_that_is_not_an_ops_event(self):
+        from pydantic import ValidationError
+        from vs_api.ops_log import stamp_ops_event
+
+        with pytest.raises(ValidationError):
+            stamp_ops_event({"code": "A", "level": "info"})
 
     def test_ops_tail_filters_by_cursor_and_sorts_by_seq(self):
         from types import SimpleNamespace
@@ -730,9 +782,9 @@ class TestIncrementalOpsFeed:
         from vs_api import main as vs_main
         from vs_api.ops_log import stamp_ops_event
 
-        e1 = stamp_ops_event({"code": "E1", "level": "error", "message": "", "timestamp": "t1"})
-        e2 = stamp_ops_event({"code": "E2", "level": "error", "message": "", "timestamp": "t2"})
-        e3 = stamp_ops_event({"code": "E3", "level": "error", "message": "", "timestamp": "t3"})
+        e1 = stamp_ops_event(_ops_event_dict("E1"))
+        e2 = stamp_ops_event(_ops_event_dict("E2"))
+        e3 = stamp_ops_event(_ops_event_dict("E3"))
         ctx = SimpleNamespace(session_ops_events=[e2])
 
         original = list(vs_main._system_ops_events)
@@ -740,10 +792,10 @@ class TestIncrementalOpsFeed:
         vs_main._system_ops_events.extend([e1, e3])
         try:
             full = vs_main._ops_events_tail(ctx)
-            assert [e["code"] for e in full] == ["E1", "E2", "E3"]  # seq order across logs
-            after = vs_main._ops_events_tail(ctx, ops_after=e1["seq"])
-            assert [e["code"] for e in after] == ["E2", "E3"]
-            assert vs_main._ops_events_tail(ctx, ops_after=e3["seq"]) == []
+            assert [e.code for e in full] == ["E1", "E2", "E3"]  # seq order across logs
+            after = vs_main._ops_events_tail(ctx, ops_after=e1.seq)
+            assert [e.code for e in after] == ["E2", "E3"]
+            assert vs_main._ops_events_tail(ctx, ops_after=e3.seq) == []
         finally:
             vs_main._system_ops_events.clear()
             vs_main._system_ops_events.extend(original)
@@ -751,80 +803,44 @@ class TestIncrementalOpsFeed:
     def test_unsent_frame_increments_survive_replacement(self):
         from vs_api.main import _carry_unsent_increments
 
-        pending = {
-            "ops_events": [{"code": "LOST?", "seq": 5}],
-            "actuation_health": {"gs": "degraded"},
-            "nodes": ["stale-state"],
-        }
-        replacement = {"ops_events": [{"code": "NEW", "seq": 6}], "nodes": ["fresh-state"]}
+        pending = _frame(_ops(5, "LOST?"), session_status_detail="stale-state")
+        replacement = _frame(_ops(6, "NEW"), session_status_detail="fresh-state")
         merged = _carry_unsent_increments(pending, replacement)
-        # Deltas accumulate; idempotent state is replaced, never carried.
-        assert [e["code"] for e in merged["ops_events"]] == ["LOST?", "NEW"]
-        assert merged["actuation_health"] == {"gs": "degraded"}
-        assert merged["nodes"] == ["fresh-state"]
+        # Ops events accumulate; idempotent state is replaced, never carried.
+        assert [e.code for e in merged.ops_events] == ["LOST?", "NEW"]
+        assert merged.session_status_detail == "fresh-state"
 
     def test_shipped_frame_replacement_carries_nothing(self):
         from vs_api.main import _carry_unsent_increments
 
-        replacement = {"ops_events": [], "nodes": ["fresh"]}
+        replacement = _frame()
         assert _carry_unsent_increments(None, replacement) is replacement
-
-    def test_unsent_health_does_not_override_newer_change(self):
-        from vs_api.main import _carry_unsent_increments
-
-        pending = {"ops_events": [], "actuation_health": {"gs": "old"}}
-        replacement = {"ops_events": [], "actuation_health": {"gs": "newer"}}
-        merged = _carry_unsent_increments(pending, replacement)
-        assert merged["actuation_health"] == {"gs": "newer"}
 
     def test_overlay_slices_by_cursor_without_mutating_shared(self):
         from vs_api.main import _overlay_connection_increments, _SharedFrame
 
-        shared = _SharedFrame(
-            frame={
-                "nodes": ["state"],
-                "ops_events": [{"seq": 1}, {"seq": 2}, {"seq": 3}],
-                "actuation_health": {"gs": "ok"},
-            },
-            health_json='{"gs": "ok"}',
-        )
-        snap, cursor, health = _overlay_connection_increments(
-            shared, ops_cursor=1, last_health_json=None
-        )
-        assert [e["seq"] for e in snap["ops_events"]] == [2, 3]
+        shared = _SharedFrame(frame=_frame(_ops(1), _ops(2), _ops(3)))
+        snap, cursor = _overlay_connection_increments(shared, ops_cursor=1)
+        assert [e.seq for e in snap.ops_events] == [2, 3]
         assert cursor == 3
-        assert health == '{"gs": "ok"}'
-        assert snap["actuation_health"] == {"gs": "ok"}  # first send: present
         # Shared frame untouched — other connections see the full tail.
-        assert len(shared.frame["ops_events"]) == 3
-        assert "actuation_health" in shared.frame
+        assert len(shared.frame.ops_events) == 3
 
     def test_overlay_first_frame_ships_full_tail(self):
         from vs_api.main import _overlay_connection_increments, _SharedFrame
 
-        shared = _SharedFrame(
-            frame={"ops_events": [{"seq": 7}, {"seq": 9}]},
-            health_json="null",
-        )
-        snap, cursor, _h = _overlay_connection_increments(
-            shared, ops_cursor=0, last_health_json=None
-        )
-        assert [e["seq"] for e in snap["ops_events"]] == [7, 9]
+        shared = _SharedFrame(frame=_frame(_ops(7), _ops(9)))
+        snap, cursor = _overlay_connection_increments(shared, ops_cursor=0)
+        assert [e.seq for e in snap.ops_events] == [7, 9]
         assert cursor == 9
 
-    def test_overlay_omits_unchanged_health_and_holds_cursor(self):
+    def test_overlay_with_nothing_new_ships_no_events_and_holds_cursor(self):
         from vs_api.main import _overlay_connection_increments, _SharedFrame
 
-        shared = _SharedFrame(
-            frame={"ops_events": [{"seq": 4}], "actuation_health": {"gs": "ok"}},
-            health_json='{"gs": "ok"}',
-        )
-        snap, cursor, _h = _overlay_connection_increments(
-            shared, ops_cursor=4, last_health_json='{"gs": "ok"}'
-        )
-        assert snap["ops_events"] == []
+        shared = _SharedFrame(frame=_frame(_ops(4)))
+        snap, cursor = _overlay_connection_increments(shared, ops_cursor=4)
+        assert snap.ops_events == []
         assert cursor == 4
-        assert "actuation_health" not in snap
 
 
 class TestEphemerisPositionPropagation:
@@ -2121,54 +2137,6 @@ class TestKernelActualRecovery:
         assert missing.status_code == 404
 
 
-class TestOmeLifecycleNotices:
-    def test_ome_lifecycle_terminal_event_becomes_operator_notice(self):
-        ctx = SessionContext.__new__(SessionContext)
-        ctx._init_state_only()
-        event = {
-            "timestamp": "2026-05-27T12:00:00+00:00",
-            "session_id": "test",
-            "source": "ome",
-            "hostname": "ome-0",
-            "level": "warning",
-            "code": "MBB_TEARDOWN_TERMINAL",
-            "message": "MBB successor aborted",
-            "details": {
-                "gs_id": "gs-den",
-                "teardown_id": "gs-den:sat-old->gs-den:sat-new",
-                "terminal_outcome": "successor_aborted",
-                "epoch_id": 3,
-                "snapshot_seq": 9,
-                "allocator_step": 44,
-                "master_sim_time": "2026-05-27T12:00:00+00:00",
-                "old_pair": ["gs-den", "sat-old"],
-                "successor_pair": ["gs-den", "sat-new"],
-                "authority_before": {"old_pair": {"scheduled": True}},
-                "authority_after": {"old_pair": {"scheduled": False}},
-            },
-        }
-
-        ctx._update_ome_lifecycle_notice(event)
-
-        notice = ctx.ome_lifecycle_notices_by_key[
-            (
-                "gs-den",
-                "gs-den:sat-old->gs-den:sat-new",
-            )
-        ]
-        assert notice["terminal_outcome"] == "successor_aborted"
-        assert notice["old_pair"] == ["gs-den", "sat-old"]
-        assert notice["last_event"] == event
-
-    def test_non_lifecycle_ops_event_does_not_create_notice(self):
-        ctx = SessionContext.__new__(SessionContext)
-        ctx._init_state_only()
-        ctx._update_ome_lifecycle_notice(
-            {"source": "scheduler", "code": "MBB_TEARDOWN_TERMINAL", "details": {}}
-        )
-        assert ctx.ome_lifecycle_notices_by_key == {}
-
-
 def _recorded_context(history_path, *, max_bytes: int = 262_144_000) -> SessionContext:
     from vs_api.history_recorder import HistoryRecorder
 
@@ -2783,8 +2751,8 @@ class TestSessionHistory:
         ctx._record_history("session metadata", ctx._open_history)
         start = datetime(2026, 9, 24, 12, 0, tzinfo=UTC)
         for step in range(60):
-            at = (start + timedelta(seconds=10 * step)).isoformat()
-            ctx.record_snapshot({"sim_time": at, "wall_time": at, "payload": "x" * 20_000})
+            at = start + timedelta(seconds=10 * step)
+            ctx.record_snapshot(_frame(session_status_detail="x" * 20_000, at=at))
 
         assert _recording_error(ctx) is None
         conn = sqlite3.connect(ctx.history.path)
@@ -2909,6 +2877,40 @@ class TestSessionHistory:
             state="stopped", error="failed to record LinkUp"
         )
 
+    def test_both_state_routes_serve_the_frame_vs_api_built(self, tmp_path, monkeypatch):
+        from types import SimpleNamespace
+
+        import vs_api.main as m
+        from nodalarc.models.events import OpsEvent
+
+        ctx = _recorded_context(tmp_path / "run-history-0001.db")
+        ctx._record_history("session metadata", ctx._open_history)
+        ctx.sim_time = "2026-09-24T12:00:00+00:00"
+        debug_event = OpsEvent.model_validate({**_ops_event_dict("TICK"), "level": "debug"})
+        monkeypatch.setattr(m, "_API_KEY", "")
+        monkeypatch.setattr(m, "_active_context", ctx)
+        monkeypatch.setattr(
+            m, "_session_manager", SimpleNamespace(status="ready", status_detail=None)
+        )
+        monkeypatch.setattr(m, "_debug_sources", {"scheduler"})
+        monkeypatch.setattr(m, "_debug_events", [debug_event])
+        client = TestClient(m.app)
+
+        live = client.get("/api/v1/state")
+
+        assert live.status_code == 200
+        frame = StateSnapshot.model_validate(live.json())
+        assert frame.msg_type == "state_snapshot"
+        assert frame.debug_events == [debug_event]
+        assert frame.debug_sources == ["scheduler"]
+
+        ctx.record_snapshot(m._build_snapshot())
+        assert _recording_error(ctx) is None
+        recorded = client.get("/api/v1/state/2026-09-24T12:00:00+00:00")
+
+        assert recorded.status_code == 200
+        assert StateSnapshot.model_validate(recorded.json()).debug_events == [debug_event]
+
     @pytest.mark.parametrize(
         "path",
         ["/api/v1/links?start=2026-09-24T12:00:00", "/api/v1/state/2026-09-24T12:00:00"],
@@ -2957,8 +2959,8 @@ class TestSessionHistory:
         start = datetime(2026, 9, 24, 12, 0, tzinfo=UTC)
         # About 6 MB of writes: SQLite checkpoints every 1000 pages (4 MiB).
         for step in range(600):
-            at = (start + timedelta(seconds=step)).isoformat()
-            ctx.record_snapshot({"sim_time": at, "wall_time": at, "payload": "x" * 10_000})
+            at = start + timedelta(seconds=step)
+            ctx.record_snapshot(_frame(session_status_detail="x" * 10_000, at=at))
 
         assert _recording_error(ctx) is None
         wal = ctx.history.path.with_name(ctx.history.path.name + "-wal")

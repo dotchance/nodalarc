@@ -13,22 +13,30 @@ import { IconButton } from "../ui/Button";
 import { Icon } from "../ui/icons/Icon";
 import { setSearchTarget } from "../ui/searchFocus";
 import { formatTime } from "../translate";
-import type { DebugSourceControl } from "../builder/generated/builderApi";
-import type { OpsEvent, ServiceSource, StateSocketCommand } from "../types";
+import type { DebugSourceControl, OpsEvent, ServiceSource, StateSocketCommand } from "../types";
 
 interface LogPanelProps {
   events: OpsEvent[];
   debugEvents: OpsEvent[];
   debugControl: DebugSourceControl[];
+  debugSubscriptionOpen: boolean;
   sendMessage: (command: StateSocketCommand) => void;
   onClose: () => void;
 }
 
-/** Why an enable did not take, in the words the menu shows. */
-function debugFailure(control: DebugSourceControl): string {
-  if (control.outcome === "timed_out") return "no reply";
-  if (control.outcome === "no_responders") return "not running";
-  return control.error ?? "refused";
+/** Why a request did not take, in the words the menu shows. */
+function debugFailure(control: DebugSourceControl): string | null {
+  switch (control.outcome) {
+    case "acknowledged":
+      return null;
+    case "timed_out":
+      return "no reply";
+    case "no_responders":
+      return "not running";
+    case "rejected":
+    case "failed":
+      return control.error;
+  }
 }
 
 const DEBUG_SOURCE_TYPES: readonly ServiceSource[] = [
@@ -56,7 +64,14 @@ const LOG_COLUMNS: TableColumn[] = [
 ];
 
 
-export function LogPanel({ events, debugEvents, debugControl, sendMessage, onClose }: LogPanelProps) {
+export function LogPanel({
+  events,
+  debugEvents,
+  debugControl,
+  debugSubscriptionOpen,
+  sendMessage,
+  onClose,
+}: LogPanelProps) {
   const [paused, setPaused] = useState(false);
   const [pausedEvents, setPausedEvents] = useState<OpsEvent[]>([]);
   const [sort, setSort] = useState<SortState | null>({ key: "timestamp", dir: "desc" });
@@ -289,12 +304,16 @@ export function LogPanel({ events, debugEvents, debugControl, sendMessage, onClo
               {debugDropdownOpen && (
                 <div className="log-debug-menu">
                   <div className="log-debug-head">Enable debug output:</div>
+                  {debugActive.length > 0 && !debugSubscriptionOpen && (
+                    <div className="log-debug-head log-level--fail">
+                      VS-API is not reading the debug stream
+                    </div>
+                  )}
                   {DEBUG_SOURCE_TYPES.map((src) => {
                     const control = controlBySource.get(src);
                     const active = debugOn(src);
                     const pending = debugPending.has(src);
-                    const failure =
-                      !pending && control?.request === "enable" && !active ? debugFailure(control) : null;
+                    const failure = !pending && control ? debugFailure(control) : null;
                     const failed = failure !== null;
                     return (
                       <button key={src} className="log-debug-row" onClick={() => toggleDebugSource(src)}>
@@ -306,7 +325,14 @@ export function LogPanel({ events, debugEvents, debugControl, sendMessage, onClo
                         </span>
                         {src.replace("_", " ")}
                         {pending && <small>enabling…</small>}
-                        {failed && <small>failed: {failure}</small>}
+                        {active && control?.outcome === "acknowledged" && (
+                          <small>one instance at {control.level}</small>
+                        )}
+                        {failed && (
+                          <small>
+                            {control?.request} failed: {failure}
+                          </small>
+                        )}
                       </button>
                     );
                   })}

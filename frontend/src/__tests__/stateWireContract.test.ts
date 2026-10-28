@@ -38,7 +38,8 @@ function program(): ts.Program {
 }
 
 interface Comparison {
-  wireType: string;
+  /** Every wire model the compared object can be: one, or the members of a union. */
+  wireTypes: string[];
   field: string;
   literal: string;
   where: string;
@@ -68,15 +69,15 @@ function comparisons(checker: ts.TypeChecker, file: ts.SourceFile): Comparison[]
   const found: Comparison[] = [];
   const record = (access: ts.PropertyAccessExpression, literals: string[], at: ts.Node) => {
     const { line } = file.getLineAndCharacterOfPosition(at.getStart());
-    for (const wireType of wireTypeNames(checker.getTypeAtLocation(access.expression))) {
-      for (const literal of literals) {
-        found.push({
-          wireType,
-          field: access.name.text,
-          literal,
-          where: `${relative(ROOT, file.fileName)}:${line + 1}`,
-        });
-      }
+    const wireTypes = wireTypeNames(checker.getTypeAtLocation(access.expression));
+    if (wireTypes.length === 0) return;
+    for (const literal of literals) {
+      found.push({
+        wireTypes,
+        field: access.name.text,
+        literal,
+        where: `${relative(ROOT, file.fileName)}:${line + 1}`,
+      });
     }
   };
   const declaredMembers = (expression: ts.Expression): string[] | null => {
@@ -147,19 +148,24 @@ describe("the page and the state feed agree on every vocabulary", () => {
 
   it("compares wire fields only against values the backend declares", () => {
     const wrong: string[] = [];
-    for (const { wireType, field, literal, where } of found) {
-      const fields = WIRE[wireType]!;
-      const vocabulary = fields[field];
-      if (vocabulary === undefined) continue; // not a string field of the wire model
-      if (vocabulary === null) {
+    for (const { wireTypes, field, literal, where } of found) {
+      // A union is compared on the field its members share; a value any member admits is
+      // one the backend can send.
+      const vocabularies = wireTypes
+        .map((wireType) => WIRE[wireType]![field])
+        .filter((vocabulary) => vocabulary !== undefined);
+      if (vocabularies.length === 0) continue; // not a string field of the wire model
+      const open = wireTypes.find((wireType) => WIRE[wireType]![field] === null);
+      if (open !== undefined) {
         wrong.push(
-          `${where}: the page branches on ${wireType}.${field} ("${literal}"), ` +
-            `which the backend sends as an open string; close it in ${MODULE_OF[wireType]}`,
+          `${where}: the page branches on ${open}.${field} ("${literal}"), ` +
+            `which the backend sends as an open string; close it in ${MODULE_OF[open]}`,
         );
-      } else if (!vocabulary.includes(literal)) {
+      } else if (!vocabularies.some((vocabulary) => vocabulary!.includes(literal))) {
+        const sent = [...new Set(vocabularies.flatMap((vocabulary) => vocabulary!))];
         wrong.push(
-          `${where}: ${wireType}.${field} is never "${literal}"; the backend sends one of ` +
-            vocabulary.join(", "),
+          `${where}: ${wireTypes.join(" | ")}.${field} is never "${literal}"; the backend ` +
+            `sends one of ${sent.join(", ")}`,
         );
       }
     }

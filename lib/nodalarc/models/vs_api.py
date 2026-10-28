@@ -363,17 +363,8 @@ class StampedOpsEvent(OpsEvent):
     seq: int
 
 
-# What came back from a debug control request: the first instance's acknowledgement,
-# no reply in time, no instance listening, or an instance's rejection.
-DebugControlOutcome = Literal["acknowledged", "timed_out", "no_responders", "rejected"]
-
-
-class DebugSourceControl(BaseModel):
-    """The last debug control request VS-API sent to one service, and what came back.
-
-    The request reaches every instance of the service; ``acknowledged`` is the first
-    instance's reply, not a statement about the others.
-    """
+class _DebugControlFact(BaseModel):
+    """The last debug control request VS-API sent to one service."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -381,11 +372,44 @@ class DebugSourceControl(BaseModel):
     # Counts VS-API's debug control requests; a later request has a higher number.
     request_seq: int
     request: DebugControlAction
-    outcome: DebugControlOutcome
+
+
+class DebugControlAcknowledgedFact(_DebugControlFact):
+    """One instance of the service changed its log level. The request reaches every
+    instance; this is the first one's reply, not a statement about the others."""
+
+    outcome: Literal["acknowledged"]
     # The acknowledging instance's log level after the request.
-    level: str | None
-    # The rejecting instance's reason.
-    error: str | None
+    level: str
+
+
+class DebugControlRejectedFact(_DebugControlFact):
+    """One instance of the service refused the request."""
+
+    outcome: Literal["rejected"]
+    error: str
+
+
+class DebugControlUnansweredFact(_DebugControlFact):
+    """No instance replied in time, or no instance was listening."""
+
+    outcome: Literal["timed_out", "no_responders"]
+
+
+class DebugControlFailedFact(_DebugControlFact):
+    """VS-API could not send the request or could not read the reply."""
+
+    outcome: Literal["failed"]
+    error: str
+
+
+DebugSourceControl = Annotated[
+    DebugControlAcknowledgedFact
+    | DebugControlRejectedFact
+    | DebugControlUnansweredFact
+    | DebugControlFailedFact,
+    Field(discriminator="outcome"),
+]
 
 
 class StateSnapshot(BaseModel):

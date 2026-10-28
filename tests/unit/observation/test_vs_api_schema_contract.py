@@ -71,7 +71,12 @@ def _discover_all_pydantic_models() -> dict[str, type[BaseModel]]:
     mod = importlib.import_module(VS_API_MODULE)
     models: dict[str, type[BaseModel]] = {}
     for name, obj in inspect.getmembers(mod, inspect.isclass):
-        if issubclass(obj, BaseModel) and obj is not BaseModel and obj.__module__ == mod.__name__:
+        if (
+            issubclass(obj, BaseModel)
+            and obj is not BaseModel
+            and obj.__module__ == mod.__name__
+            and not name.startswith("_")  # a private base is no wire model
+        ):
             models[name] = obj
     return models
 

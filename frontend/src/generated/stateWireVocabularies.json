@@ -157,9 +157,28 @@
     "ContinuousTraceStopped": [
       "ok"
     ],
-    "DebugSourceControl": [
-      "error",
+    "DebugControlAcknowledgedFact": [
       "level",
+      "outcome",
+      "request",
+      "request_seq",
+      "source"
+    ],
+    "DebugControlFailedFact": [
+      "error",
+      "outcome",
+      "request",
+      "request_seq",
+      "source"
+    ],
+    "DebugControlRejectedFact": [
+      "error",
+      "outcome",
+      "request",
+      "request_seq",
+      "source"
+    ],
+    "DebugControlUnansweredFact": [
       "outcome",
       "request",
       "request_seq",
@@ -716,6 +735,11 @@
       "message",
       "msg_type"
     ],
+    "_DebugControlFact": [
+      "request",
+      "request_seq",
+      "source"
+    ],
     "_SessionSourceModel": []
   },
   "models": {
@@ -937,13 +961,60 @@
       "src": null
     },
     "ContinuousTraceStopped": {},
-    "DebugSourceControl": {
-      "error": null,
+    "DebugControlAcknowledgedFact": {
       "level": null,
       "outcome": [
-        "acknowledged",
+        "acknowledged"
+      ],
+      "request": [
+        "disable",
+        "enable"
+      ],
+      "source": [
+        "node_agent",
+        "ome",
+        "operator",
+        "scheduler",
+        "vs_api"
+      ]
+    },
+    "DebugControlFailedFact": {
+      "error": null,
+      "outcome": [
+        "failed"
+      ],
+      "request": [
+        "disable",
+        "enable"
+      ],
+      "source": [
+        "node_agent",
+        "ome",
+        "operator",
+        "scheduler",
+        "vs_api"
+      ]
+    },
+    "DebugControlRejectedFact": {
+      "error": null,
+      "outcome": [
+        "rejected"
+      ],
+      "request": [
+        "disable",
+        "enable"
+      ],
+      "source": [
+        "node_agent",
+        "ome",
+        "operator",
+        "scheduler",
+        "vs_api"
+      ]
+    },
+    "DebugControlUnansweredFact": {
+      "outcome": [
         "no_responders",
-        "rejected",
         "timed_out"
       ],
       "request": [
@@ -1706,6 +1777,19 @@
         "wiring_progress"
       ]
     },
+    "_DebugControlFact": {
+      "request": [
+        "disable",
+        "enable"
+      ],
+      "source": [
+        "node_agent",
+        "ome",
+        "operator",
+        "scheduler",
+        "vs_api"
+      ]
+    },
     "_SessionSourceModel": {}
   },
   "modules": {
@@ -1729,7 +1813,10 @@
     "ContinuousTraceStarted": "lib/nodalarc/models/vs_api.py",
     "ContinuousTraceStatus": "lib/nodalarc/models/vs_api.py",
     "ContinuousTraceStopped": "lib/nodalarc/models/vs_api.py",
-    "DebugSourceControl": "lib/nodalarc/models/vs_api.py",
+    "DebugControlAcknowledgedFact": "lib/nodalarc/models/vs_api.py",
+    "DebugControlFailedFact": "lib/nodalarc/models/vs_api.py",
+    "DebugControlRejectedFact": "lib/nodalarc/models/vs_api.py",
+    "DebugControlUnansweredFact": "lib/nodalarc/models/vs_api.py",
     "DebugStopAllCommand": "lib/nodalarc/models/vs_api.py",
     "DebugStopCommand": "lib/nodalarc/models/vs_api.py",
     "DebugStreamCommand": "lib/nodalarc/models/vs_api.py",
@@ -1795,6 +1882,7 @@
     "TransitionRuntimeResult": "lib/nodalarc/models/session_sources.py",
     "UnscheduledPair": "lib/nodalarc/models/link_decisions.py",
     "WiringProgressFrame": "lib/nodalarc/models/vs_api.py",
+    "_DebugControlFact": "lib/nodalarc/models/vs_api.py",
     "_SessionSourceModel": "lib/nodalarc/models/session_sources.py"
   }
 }

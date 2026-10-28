@@ -7,7 +7,10 @@
 import type { ActuationState, SchedulerOpsCode } from "./explain/reasons";
 import type {
   CatalogSessionSummary,
-  DebugSourceControl,
+  DebugControlAcknowledgedFact,
+  DebugControlFailedFact,
+  DebugControlRejectedFact,
+  DebugControlUnansweredFact,
   DebugStopAllCommand,
   DebugStopCommand,
   DebugStreamCommand,
@@ -231,6 +234,13 @@ export interface OpsEvent {
   message: string;
   details?: Record<string, unknown> | null;
 }
+
+/** VS-API's last debug control request to one service, and what came back. */
+export type DebugSourceControl =
+  | DebugControlAcknowledgedFact
+  | DebugControlRejectedFact
+  | DebugControlUnansweredFact
+  | DebugControlFailedFact;
 
 /** Every message the page sends on the state socket. */
 export type StateSocketCommand = DebugStreamCommand | DebugStopCommand | DebugStopAllCommand;

@@ -557,6 +557,7 @@ function AppInner() {
           events={snapshot?.ops_events ?? []}
           debugEvents={snapshot?.debug_events ?? []}
           debugControl={snapshot?.debug_control ?? []}
+          debugSubscriptionOpen={snapshot?.debug_subscription_open ?? false}
           sendMessage={sendMessage}
           onClose={() => setLogPanelOpen(false)}
         />

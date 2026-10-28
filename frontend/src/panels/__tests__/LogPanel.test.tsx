@@ -3,8 +3,7 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
 import { render, screen, fireEvent, cleanup } from "@testing-library/react";
 import { LogPanel } from "../LogPanel";
-import type { DebugSourceControl } from "../../builder/generated/builderApi";
-import type { OpsEvent } from "../../types";
+import type { DebugSourceControl, OpsEvent } from "../../types";
 
 afterEach(cleanup);
 
@@ -14,13 +13,14 @@ const OPS: OpsEvent[] = [
 ];
 
 
-function renderPanel(debugControl: DebugSourceControl[] = []) {
+function renderPanel(debugControl: DebugSourceControl[] = [], debugSubscriptionOpen = true) {
   const onClose = vi.fn();
   render(
     <LogPanel
       events={OPS}
       debugEvents={[]}
       debugControl={debugControl}
+      debugSubscriptionOpen={debugSubscriptionOpen}
       sendMessage={vi.fn()}
       onClose={onClose}
     />,
@@ -47,11 +47,23 @@ describe("LogPanel", () => {
 
   it("shows each service's debug state from what VS-API last heard back", () => {
     renderPanel([
-      { source: "scheduler", request_seq: 4, request: "enable", outcome: "acknowledged", level: "debug", error: null },
-      { source: "ome", request_seq: 5, request: "enable", outcome: "no_responders", level: null, error: null },
+      { source: "scheduler", request_seq: 4, request: "enable", outcome: "acknowledged", level: "debug" },
+      { source: "ome", request_seq: 5, request: "enable", outcome: "no_responders" },
+      { source: "vs_api", request_seq: 6, request: "disable", outcome: "timed_out" },
     ]);
     fireEvent.click(screen.getByRole("button", { name: /debug \(1\)/ }));
-    expect(screen.getByRole("button", { name: /ome.*failed: not running/ })).toBeTruthy();
-    expect(screen.queryByRole("button", { name: /scheduler.*failed/ })).toBeNull();
+    expect(screen.getByRole("button", { name: /scheduler.*one instance at debug/ })).toBeTruthy();
+    expect(screen.getByRole("button", { name: /ome.*enable failed: not running/ })).toBeTruthy();
+    expect(screen.getByRole("button", { name: /vs api.*disable failed: no reply/ })).toBeTruthy();
+    expect(screen.queryByText("VS-API is not reading the debug stream")).toBeNull();
+  });
+
+  it("says when VS-API is not reading the debug stream it asked for", () => {
+    renderPanel(
+      [{ source: "scheduler", request_seq: 4, request: "enable", outcome: "acknowledged", level: "debug" }],
+      false,
+    );
+    fireEvent.click(screen.getByRole("button", { name: /debug \(1\)/ }));
+    expect(screen.getByText("VS-API is not reading the debug stream")).toBeTruthy();
   });
 });

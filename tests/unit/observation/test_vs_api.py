@@ -22,7 +22,7 @@ from nodalarc.db.schema import create_tables
 from nodalarc.models.events import EphemerisNodeFixed, EphemerisNodeTLE, SessionEphemeris
 from nodalarc.models.resolved_session import InterfaceRates, SourceContext
 from nodalarc.models.vs_api import (
-    DebugSourceControl,
+    DebugControlAcknowledgedFact,
     LinkDecisionTrace,
     LinkState,
     StampedOpsEvent,
@@ -1353,15 +1353,16 @@ class TestSubscriberResilience:
 
 
 @pytest.mark.parametrize(
-    ("reply", "outcome", "level", "error"),
+    ("reply", "said"),
     [
-        (b'{"status": "ok", "level": "debug"}', "acknowledged", "debug", None),
-        (b'{"status": "error", "error": "no"}', "rejected", None, "no"),
-        ("no responders", "no_responders", None, None),
-        ("timeout", "timed_out", None, None),
+        (b'{"status": "ok", "level": "debug"}', {"outcome": "acknowledged", "level": "debug"}),
+        (b'{"status": "error", "error": "no"}', {"outcome": "rejected", "error": "no"}),
+        (b'{"status": "ok"}', {"outcome": "failed"}),
+        ("no responders", {"outcome": "no_responders"}),
+        ("timeout", {"outcome": "timed_out"}),
     ],
 )
-def test_a_debug_control_request_records_what_came_back(monkeypatch, reply, outcome, level, error):
+def test_a_debug_control_request_records_what_came_back(monkeypatch, reply, said):
     import asyncio
     from types import SimpleNamespace
 
@@ -1381,12 +1382,9 @@ def test_a_debug_control_request_records_what_came_back(monkeypatch, reply, outc
 
     control = asyncio.run(m._send_debug_control("scheduler", "enable"))
 
-    assert (control.request, control.outcome, control.level, control.error) == (
-        "enable",
-        outcome,
-        level,
-        error,
-    )
+    recorded = control.model_dump()
+    assert recorded["request"] == "enable"
+    assert {key: recorded[key] for key in said} == said
     assert m._debug_control == {"scheduler": control}
 
 
@@ -2930,13 +2928,12 @@ class TestSessionHistory:
         monkeypatch.setattr(
             m, "_session_manager", SimpleNamespace(status="ready", status_detail=None)
         )
-        enabled = DebugSourceControl(
+        enabled = DebugControlAcknowledgedFact(
             source="scheduler",
             request_seq=1,
             request="enable",
             outcome="acknowledged",
             level="debug",
-            error=None,
         )
         monkeypatch.setattr(m, "_debug_sources", {"scheduler"})
         monkeypatch.setattr(m, "_debug_control", {"scheduler": enabled})

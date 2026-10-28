@@ -133,7 +133,10 @@ from nodalarc.models.vs_api import (
     ContinuousTraceStarted,
     ContinuousTraceStatus,
     ContinuousTraceStopped,
-    DebugControlOutcome,
+    DebugControlAcknowledgedFact,
+    DebugControlFailedFact,
+    DebugControlRejectedFact,
+    DebugControlUnansweredFact,
     DebugSourceControl,
     DebugStopAllCommand,
     DebugStopCommand,
@@ -600,34 +603,33 @@ async def _send_debug_control(
     if nc is None:
         log.error("Cannot %s debug for %s: no NATS connection", action, source)
         return None
-    request_seq = next(_debug_request_seq)
-    outcome: DebugControlOutcome
-    level: str | None = None
-    error: str | None = None
+    sent = {"source": source, "request_seq": next(_debug_request_seq), "request": action}
+    control: DebugSourceControl
     try:
         resp = await nc.request(
             debug_ctrl_subject(source),
             DebugControlRequest(action=action).model_dump_json().encode(),
             timeout=5.0,
         )
-    except nats.errors.NoRespondersError:
-        outcome = "no_responders"
-    except nats.errors.TimeoutError:
-        outcome = "timed_out"
-    else:
         reply = _DEBUG_REPLY.validate_json(resp.data)
+    except nats.errors.NoRespondersError:
+        control = DebugControlUnansweredFact(**sent, outcome="no_responders")
+    except nats.errors.TimeoutError:
+        control = DebugControlUnansweredFact(**sent, outcome="timed_out")
+    except Exception as exc:
+        log.error("Debug %s for %s failed: %s", action, source, exc, exc_info=True)
+        control = DebugControlFailedFact(
+            **sent,
+            outcome="failed",
+            error=f"VS-API could not send the request or read the reply ({type(exc).__name__})",
+        )
+    else:
         if isinstance(reply, DebugControlAcknowledged):
-            outcome, level = "acknowledged", reply.level
+            control = DebugControlAcknowledgedFact(
+                **sent, outcome="acknowledged", level=reply.level
+            )
         else:
-            outcome, error = "rejected", reply.error
-    control = DebugSourceControl(
-        source=source,
-        request_seq=request_seq,
-        request=action,
-        outcome=outcome,
-        level=level,
-        error=error,
-    )
+            control = DebugControlRejectedFact(**sent, outcome="rejected", error=reply.error)
     _debug_control[source] = control
     return control
 
@@ -641,8 +643,14 @@ async def _enable_debug_source(source: ServiceSource) -> bool:
     global _debug_sub
 
     control = await _send_debug_control(source, "enable")
-    if control is None or control.outcome != "acknowledged":
-        reason = "no NATS connection" if control is None else control.outcome
+    if not isinstance(control, DebugControlAcknowledgedFact):
+        reason = (
+            "no NATS connection"
+            if control is None
+            else control.error
+            if isinstance(control, DebugControlRejectedFact | DebugControlFailedFact)
+            else control.outcome
+        )
         log.error("Debug enable failed for %s: %s", source, reason)
         await _publish_system_ops_event(
             "error", "DEBUG_ENABLE_FAILED", f"Failed to enable debug for {source}: {reason}"
@@ -682,7 +690,7 @@ async def _disable_debug_source(source: ServiceSource) -> None:
     global _debug_sub
 
     control = await _send_debug_control(source, "disable")
-    if control is not None and control.outcome != "acknowledged":
+    if control is not None and not isinstance(control, DebugControlAcknowledgedFact):
         log.warning("Debug disable for %s: %s", source, control.outcome)
 
     _debug_sources.discard(source)
@@ -2191,28 +2199,39 @@ async def ws_state(websocket: WebSocket) -> None:
         finally:
             producer_task.cancel()
 
-    async def _receiver():
-        try:
-            while True:
-                try:
-                    command = _STATE_SOCKET_COMMAND.validate_json(await websocket.receive_text())
-                except ValidationError:
-                    _audit_log.warning(f"WS_MALFORMED_COMMAND ip={ws_ip}")
-                    await websocket.close(code=4400, reason="Malformed command")
-                    return
-                await _handle_ws_debug_command(ws_id, command)
-        except WebSocketDisconnect:
-            pass
-        finally:
-            done.set()
+    async def _receiver() -> bool:
+        """Handle the page's commands. True when it sent one that is not a command."""
+        while True:
+            received = await websocket.receive()
+            if received["type"] == "websocket.disconnect":
+                return False
+            text = received.get("text")
+            try:
+                command = None if text is None else _STATE_SOCKET_COMMAND.validate_json(text)
+            except ValidationError:
+                command = None
+            if command is None:
+                _audit_log.warning(f"WS_MALFORMED_COMMAND ip={ws_ip}")
+                return True
+            await _handle_ws_debug_command(ws_id, command)
 
+    sender = asyncio.create_task(_sender())
+    receiver = asyncio.create_task(_receiver())
     try:
-        await asyncio.gather(_sender(), _receiver())
-    except WebSocketDisconnect:
-        pass
-    except Exception as exc:
-        if not done.is_set():
-            log.warning("WS error for %s: %s %s", ws_ip, type(exc).__name__, exc)
+        finished, running = await asyncio.wait(
+            [sender, receiver], return_when=asyncio.FIRST_COMPLETED
+        )
+        done.set()
+        for task in running:
+            task.cancel()
+        await asyncio.gather(*running, return_exceptions=True)
+        for task in finished:
+            if (error := task.exception()) is not None and not isinstance(
+                error, WebSocketDisconnect
+            ):
+                log.warning("WS error for %s: %s %s", ws_ip, type(error).__name__, error)
+        if receiver in finished and receiver.exception() is None and receiver.result():
+            await websocket.close(code=4400, reason="Malformed command")
     finally:
         await _cleanup_debug_client(ws_id)
         _ws_clients.discard(websocket)

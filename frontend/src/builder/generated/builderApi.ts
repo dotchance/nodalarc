@@ -1029,14 +1029,39 @@ export interface TraceRequest {
   readonly dst_node: string;
 }
 
-/** The last debug control request VS-API sent to one service, and what came back. The request reaches every instance of the service; ``acknowledged`` is the first instance's reply, not a statement about the others. */
-export interface DebugSourceControl {
+/** One instance of the service changed its log level. The request reaches every instance; this is the first one's reply, not a statement about the others. */
+export interface DebugControlAcknowledgedFact {
   readonly source: "ome" | "scheduler" | "node_agent" | "operator" | "vs_api";
   readonly request_seq: number;
   readonly request: "enable" | "disable";
-  readonly outcome: "acknowledged" | "timed_out" | "no_responders" | "rejected";
-  readonly level: string | null;
-  readonly error: string | null;
+  readonly outcome: "acknowledged";
+  readonly level: string;
+}
+
+/** One instance of the service refused the request. */
+export interface DebugControlRejectedFact {
+  readonly source: "ome" | "scheduler" | "node_agent" | "operator" | "vs_api";
+  readonly request_seq: number;
+  readonly request: "enable" | "disable";
+  readonly outcome: "rejected";
+  readonly error: string;
+}
+
+/** No instance replied in time, or no instance was listening. */
+export interface DebugControlUnansweredFact {
+  readonly source: "ome" | "scheduler" | "node_agent" | "operator" | "vs_api";
+  readonly request_seq: number;
+  readonly request: "enable" | "disable";
+  readonly outcome: "timed_out" | "no_responders";
+}
+
+/** VS-API could not send the request or could not read the reply. */
+export interface DebugControlFailedFact {
+  readonly source: "ome" | "scheduler" | "node_agent" | "operator" | "vs_api";
+  readonly request_seq: number;
+  readonly request: "enable" | "disable";
+  readonly outcome: "failed";
+  readonly error: string;
 }
 
 /** The page asks for these services' debug output. */

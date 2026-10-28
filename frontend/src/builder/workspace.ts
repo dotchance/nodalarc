@@ -170,7 +170,7 @@ export function linkWarnings(workspace: Workspace): string[] {
     for (const endpoint of [rule.a, rule.b]) {
       if (!placed.has(endpoint.segment_id)) {
         warnings.push(
-          `${rule.label || id}: segment "${endpoint.segment_id}" is no longer in the session`,
+          `${id}: segment "${endpoint.segment_id}" is no longer in the session`,
         );
       }
     }
@@ -178,7 +178,7 @@ export function linkWarnings(workspace: Workspace): string[] {
     const b = placed.get(rule.b.segment_id);
     if (a?.kind === "ground" && b?.kind === "ground") {
       warnings.push(
-        `${rule.label || id}: ground-to-ground links are terrestrial network territory — that arrives with routing, not link rules`,
+        `${id}: ground-to-ground links are terrestrial network territory — that arrives with routing, not link rules`,
       );
     }
   }
@@ -205,11 +205,11 @@ export function routingWarnings(workspace: Workspace): string[] {
     if (domainIds.has(id)) warnings.push(`two routing domains named "${id}" — rename one`);
     domainIds.add(id);
     if (domain.member_segment_ids.length === 0) {
-      warnings.push(`${domain.label}: no member segments yet`);
+      warnings.push(`${id}: no member segments yet`);
     }
     for (const member of domain.member_segment_ids) {
       if (!placed.has(member)) {
-        warnings.push(`${domain.label}: segment "${member}" is no longer in the session`);
+        warnings.push(`${id}: segment "${member}" is no longer in the session`);
       }
     }
     if (
@@ -217,7 +217,7 @@ export function routingWarnings(workspace: Workspace): string[] {
       domain.hold_interval_s !== null &&
       domain.hold_interval_s <= domain.hello_interval_s
     ) {
-      warnings.push(`${domain.label}: hold must exceed hello`);
+      warnings.push(`${id}: hold must exceed hello`);
     }
   }
   const ruleById = new Map(workspace.links.map((rule) => [rule.rule_id, rule]));

@@ -136,7 +136,6 @@ export function defaultRoutingDomain(workspace: Workspace): DraftRoutingDomain {
   domainCounter += 1;
   return {
     domain_id: `domain-${domainCounter}`,
-    label: `domain ${domainCounter}`,
     protocol: "isis",
     member_segment_ids: [
       ...workspace.space.map((draft) => draft.segment_id),

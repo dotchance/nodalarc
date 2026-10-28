@@ -790,7 +790,6 @@ export interface BuilderVisualLinkMediumMetadata {
 /** Editable physical link rule; every authored rule is assembled. */
 export interface BuilderVisualLinkRule {
   readonly rule_id?: string;
-  readonly label?: string;
   readonly enabled?: boolean;
   readonly a?: BuilderVisualLinkEndpoint;
   readonly b?: BuilderVisualLinkEndpoint;
@@ -891,7 +890,6 @@ export interface BuilderVisualRoutingBoundary {
 /** Editable routing domain; empty membership remains visible to validation. */
 export interface BuilderVisualRoutingDomain {
   readonly domain_id?: string;
-  readonly label?: string;
   readonly protocol?: RoutingProtocol | null;
   readonly member_segment_ids?: ReadonlyArray<string>;
   readonly hello_interval_s?: number | null;

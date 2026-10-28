@@ -1401,10 +1401,7 @@ export function BuilderView({
       from_segment_id: fromSegmentId,
       to_segment_id: targetSegmentId,
     })
-      .then((result) => {
-        openEditor({ kind: "link", id: result.affected_id });
-        setFreshId(result.affected_id);
-      })
+      .then((result) => openEditor({ kind: "link", id: result.affected_id }))
       .catch((cause) =>
         setLibraryError(cause instanceof Error ? cause.message : String(cause)),
       );
@@ -1689,7 +1686,7 @@ export function BuilderView({
         const ruleAllocation =
           world?.allocations.find((a) => a.rule_id === emittedRuleId(rule)) ?? null;
         return {
-          title: rule.label || rule.rule_id,
+          title: rule.rule_id,
           content: (
             <>
             {ruleWall && (
@@ -1700,7 +1697,6 @@ export function BuilderView({
             <LinkRuleEditor
               authoring={authoring!}
               key={rule.rule_id}
-              autoFocusName={freshId === rule.rule_id}
               workspace={workspace}
               rule={rule}
               segments={world?.segments ?? null}
@@ -1741,7 +1737,7 @@ export function BuilderView({
         const domain = (buffers[key]?.draft as DraftRoutingDomain | undefined) ?? applied;
         const domainWall = wallFor(target);
         return {
-          title: domain.label,
+          title: domain.domain_id,
           content: (
             <>
             {domainWall && (
@@ -1752,7 +1748,6 @@ export function BuilderView({
             <RoutingDomainEditor
               authoring={authoring!}
               key={domain.domain_id}
-              autoFocusName={freshId === domain.domain_id}
               workspace={workspace}
               domain={domain}
               onUpdate={(patch) =>
@@ -2270,10 +2265,7 @@ export function BuilderView({
             onAddDomain={() => {
               setLibraryError(null);
               void applyWorkspaceCommand({ operation: "add_routing_domain" })
-                .then((result) => {
-                  openEditor({ kind: "domain", id: result.affected_id });
-                  setFreshId(result.affected_id);
-                })
+                .then((result) => openEditor({ kind: "domain", id: result.affected_id }))
                 .catch((cause) =>
                   setLibraryError(cause instanceof Error ? cause.message : String(cause)),
                 );
@@ -2470,11 +2462,11 @@ export function BuilderView({
                 }`}
                 key={rule.rule_id}
                 onClick={() => openEditor({ kind: "link", id: rule.rule_id })}
-                title={`Edit ${rule.label || rule.rule_id}`}
+                title={`Edit ${rule.rule_id}`}
               >
                 <span className="builder-outline-name">
                   <Icon name="spline" size={12} />
-                  {rule.label || rule.rule_id}
+                  {rule.rule_id}
                 </span>
                 <span className="builder-outline-count">
                   {rule.a.role === null || rule.b.role === null
@@ -2502,42 +2494,37 @@ export function BuilderView({
                 }`}
                 key={domain.domain_id}
                 onClick={() => openEditor({ kind: "domain", id: domain.domain_id })}
-                title={`Edit ${domain.label}`}
+                title={`Edit ${domain.domain_id}`}
               >
                 <span className="builder-outline-name">
                   <Icon name="network" size={12} />
-                  {domain.label}
+                  {domain.domain_id}
                 </span>
                 <span className="builder-outline-count">
                   {domain.protocol ?? "protocol incomplete"}
                 </span>
               </button>
             ))}
-            {workspace.boundaries.map((boundary) => {
-              const overRule = workspace.links.find(
-                (rule) => rule.rule_id === boundary.over_rule_id,
-              );
-              return (
-                <button
-                  className={`builder-outline-row builder-outline-row--segment${
-                    isOpen(`boundary:${boundary.boundary_id}`)
-                      ? " builder-outline-row--selected"
-                      : ""
-                  }`}
-                  key={boundary.boundary_id}
-                  onClick={() => openEditor({ kind: "boundary", id: boundary.boundary_id })}
-                  title="Edit boundary"
-                >
-                  <span className="builder-outline-name">
-                    <Icon name="columns-2" size={12} />
-                    over {overRule?.label || boundary.over_rule_id}
-                  </span>
-                  <span className="builder-outline-count">
-                    {boundary.adapter ?? "adapter incomplete"}
-                  </span>
-                </button>
-              );
-            })}
+            {workspace.boundaries.map((boundary) => (
+              <button
+                className={`builder-outline-row builder-outline-row--segment${
+                  isOpen(`boundary:${boundary.boundary_id}`)
+                    ? " builder-outline-row--selected"
+                    : ""
+                }`}
+                key={boundary.boundary_id}
+                onClick={() => openEditor({ kind: "boundary", id: boundary.boundary_id })}
+                title="Edit boundary"
+              >
+                <span className="builder-outline-name">
+                  <Icon name="columns-2" size={12} />
+                  over {boundary.over_rule_id}
+                </span>
+                <span className="builder-outline-count">
+                  {boundary.adapter ?? "adapter incomplete"}
+                </span>
+              </button>
+            ))}
             {placedSegments(workspace).length > 0 && (
               <div className="builder-preset-row">
                 <Button
@@ -2545,10 +2532,9 @@ export function BuilderView({
                   onClick={() => {
                     setLibraryError(null);
                     void applyWorkspaceCommand({ operation: "add_routing_domain" })
-                      .then((result) => {
-                        openEditor({ kind: "domain", id: result.affected_id });
-                        setFreshId(result.affected_id);
-                      })
+                      .then((result) =>
+                        openEditor({ kind: "domain", id: result.affected_id }),
+                      )
                       .catch((cause) =>
                         setLibraryError(
                           cause instanceof Error ? cause.message : String(cause),

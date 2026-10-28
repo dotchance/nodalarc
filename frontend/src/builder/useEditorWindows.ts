@@ -75,8 +75,9 @@ export function targetKey(target: EditorTarget): string {
 }
 
 /** A human title for a window's object — the name shown in the stale-window
- *  confirm list. Reads the object's own display name/label, falling back to the
- *  id; the session window names the session. */
+ *  confirm list. A segment reads its own display name, falling back to the id;
+ *  a link rule or routing domain is named by its id; the session window names
+ *  the session. */
 function objectTitle(workspace: Workspace, target: EditorTarget): string {
   switch (target.kind) {
     case "session":
@@ -89,14 +90,9 @@ function objectTitle(workspace: Workspace, target: EditorTarget): string {
       return (
         workspace.ground.find((d) => d.segment_id === target.id)?.display_name ?? target.id
       );
-    case "link": {
-      const rule = workspace.links.find((r) => r.rule_id === target.id);
-      return rule?.label || target.id;
-    }
+    case "link":
     case "domain":
-      return (
-        workspace.routing_domains.find((d) => d.domain_id === target.id)?.label ?? target.id
-      );
+      return target.id;
     case "boundary":
       return "Boundary";
     default:

@@ -162,7 +162,6 @@ describe("truthful incomplete routing and link summaries", () => {
     workspace.links = [
       {
         rule_id: "link-1",
-        label: "A to B",
         enabled: true,
         a: {
           segment_id: "space-1",

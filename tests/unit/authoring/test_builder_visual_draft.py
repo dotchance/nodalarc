@@ -422,7 +422,6 @@ def test_backend_segment_creation_never_reuses_ids_held_by_dangling_intent(
                     "links": (
                         BuilderVisualLinkRule(
                             rule_id="dangling-space-link",
-                            label="Dangling space link",
                             a=BuilderVisualLinkEndpoint(
                                 segment_id="space-1",
                                 role="isl",
@@ -440,7 +439,6 @@ def test_backend_segment_creation_never_reuses_ids_held_by_dangling_intent(
                     "routing_domains": (
                         BuilderVisualRoutingDomain(
                             domain_id="dangling-ground-domain",
-                            label="Dangling ground domain",
                             protocol="isis",
                             member_segment_ids=("ground-1",),
                         ),
@@ -813,7 +811,6 @@ def test_backend_visual_commands_own_seeds_and_advance_one_fenced_revision(
     )
     assert link_result.affected_id == "link-1"
     link = draft.authoring_workspace.links[0]
-    assert link.label == "Ground segment 1 to Constellation 1"
     assert (link.a.segment_id, link.b.segment_id) == ("ground-1", "space-1")
     # The stub world declares no terminals. Connect writes no substitute floor.
     assert (link.a.role, link.a.medium, link.a.min_elevation_deg) == (
@@ -1321,66 +1318,6 @@ def test_backend_visual_node_commands_derive_identity_shape_and_counts(
                 },
             }
         )
-
-
-def test_pending_visual_labels_do_not_redefine_backend_issued_identifiers(
-    service: BuilderVisualDraftService,
-) -> None:
-    draft = service.create(BuilderVisualDraftCreateRequest(session_name="stable-identities"))
-    for command in (
-        {"operation": "add_generated_space", "phasing_mode": "walker_delta"},
-        {"operation": "add_routing_domain"},
-        {
-            "operation": "connect_segments",
-            "from_segment_id": "space-1",
-            "to_segment_id": "space-1",
-        },
-    ):
-        draft = service.apply_command(
-            BuilderVisualDraftCommandRequest(
-                draft=draft,
-                expected_draft_revision=draft.draft_revision,
-                command=command,
-            ),
-            available_node_count=1_000_000,
-            preview_factory=_preview,
-        ).draft
-
-    assert draft.authoring_workspace is not None
-    workspace = draft.authoring_workspace.model_copy(
-        update={
-            "links": (
-                draft.authoring_workspace.links[0].model_copy(update={"label": "Human link label"}),
-            ),
-            "routing_domains": (
-                draft.authoring_workspace.routing_domains[0].model_copy(
-                    update={"label": "Human domain label"}
-                ),
-            ),
-        }
-    )
-    pending = draft.model_copy(
-        update={
-            "draft_revision": draft.draft_revision + 1,
-            "projection_status": "pending_authoring",
-            "authoring_workspace": workspace,
-            "control_tree": None,
-        }
-    )
-    assert pending.applied_revision == draft.applied_revision
-    compiled = service.compile(
-        BuilderVisualDraftCompileRequest(draft=pending),
-        available_node_count=1_000_000,
-        preview_factory=_preview,
-    )
-
-    assert [issue.code for issue in compiled.assembly_issues] == [
-        "builder.draft.unapplied_workspace_changes"
-    ]
-    assert compiled.compile_result.save_verdict.allowed is False
-    session = compiled.assembled_draft.state.session
-    assert [rule["id"] for rule in session["link_rules"]] == ["link-1"]
-    assert [domain["id"] for domain in session["routing"]["domains"]] == ["domain-1"]
 
 
 def test_backend_visual_command_revision_and_missing_projection_refusals_are_typed(

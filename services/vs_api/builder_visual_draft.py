@@ -321,7 +321,6 @@ def _assert_visual_draft_ownership(draft: BuilderVisualDraftEnvelope) -> None:
 @dataclass(frozen=True, slots=True)
 class _PlacedSegment:
     segment_id: str
-    label: str
     kind: Literal["space", "ground"]
 
 
@@ -342,13 +341,10 @@ class _DerivedLinkPhysics:
 
 def _placed_segments(workspace: BuilderVisualWorkspace) -> tuple[_PlacedSegment, ...]:
     return (
-        *(_PlacedSegment(item.segment_id, item.label, "space") for item in workspace.space_refs),
-        *(_PlacedSegment(item.segment_id, item.display_name, "space") for item in workspace.space),
-        *(_PlacedSegment(item.segment_id, item.label, "ground") for item in workspace.ground_refs),
-        *(
-            _PlacedSegment(item.segment_id, item.display_name, "ground")
-            for item in workspace.ground
-        ),
+        *(_PlacedSegment(item.segment_id, "space") for item in workspace.space_refs),
+        *(_PlacedSegment(item.segment_id, "space") for item in workspace.space),
+        *(_PlacedSegment(item.segment_id, "ground") for item in workspace.ground_refs),
+        *(_PlacedSegment(item.segment_id, "ground") for item in workspace.ground),
     )
 
 
@@ -1391,7 +1387,6 @@ def _link_projection(rule: LinkRule) -> BuilderVisualLinkRule | None:
         )
     return BuilderVisualLinkRule(
         rule_id=rule.id,
-        label=rule.id,
         enabled=rule.enabled,
         a=endpoints[0],
         b=endpoints[1],
@@ -1429,7 +1424,6 @@ def _routing_domain_projection(domain: RoutingDomain) -> BuilderVisualRoutingDom
         return None
     return BuilderVisualRoutingDomain(
         domain_id=domain.id,
-        label=domain.id,
         protocol=domain.protocol,
         member_segment_ids=members,
         hello_interval_s=domain.timers.hello_interval_s if domain.timers is not None else None,
@@ -4198,7 +4192,6 @@ class BuilderVisualDraftService:
             }
             domain = BuilderVisualRoutingDomain(
                 domain_id=domain_id,
-                label=f"domain {number}",
                 protocol="isis",
                 member_segment_ids=tuple(
                     item.segment_id
@@ -4273,24 +4266,6 @@ class BuilderVisualDraftService:
                 _reserved_authoring_ids(workspace, draft.reserved_authoring_ids),
             )
             rule_id = f"link-{number}"
-            label = (
-                f"{first.label} mesh"
-                if first.segment_id == second.segment_id
-                else f"{first.label} to {second.label}"
-            )
-            taken = {_identifier(item.label) or item.rule_id for item in workspace.links}
-            if _identifier(label) in taken:
-                base = label[:40]
-                suffix = 2
-                while _identifier(f"{base} {suffix}") in taken:
-                    suffix += 1
-                    if suffix >= 1_000:
-                        raise self._command_error(
-                            draft,
-                            f"Cannot allocate a unique link label for {label!r}",
-                            code="catalog_authoring.invalid_graph",
-                        )
-                label = f"{base} {suffix}"
 
             def endpoint_for_segment(segment: _PlacedSegment) -> BuilderVisualLinkEndpoint:
                 # Connect writes no elevation floor. Each ground station keeps the
@@ -4303,7 +4278,6 @@ class BuilderVisualDraftService:
 
             rule = BuilderVisualLinkRule(
                 rule_id=rule_id,
-                label=label,
                 a=endpoint_for_segment(first),
                 b=endpoint_for_segment(second),
                 topology_mode=physics.topology_mode,

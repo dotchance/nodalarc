@@ -13,10 +13,10 @@
  */
 
 import { Button } from "../ui/Button";
+import { KeyValueRow } from "../ui/KeyValueRow";
 import {
   CheckboxField,
   EditorCard,
-  EditorName,
   NullableNumberField,
   SelectField,
 } from "./editorKit";
@@ -37,8 +37,6 @@ interface DomainEditorProps {
   onUpdate: (patch: Partial<DraftRoutingDomain>) => void;
   /** Null while a change is being applied: removing waits for it. */
   onRemove: (() => void) | null;
-  /** focus the name when a create gesture opened this editor. */
-  autoFocusName?: boolean;
   authoring: BuilderVisualAuthoringFacts;
 }
 
@@ -47,7 +45,6 @@ export function RoutingDomainEditor({
   domain,
   onUpdate,
   onRemove,
-  autoFocusName = false,
   authoring,
 }: DomainEditorProps) {
   const placed = placedSegments(workspace);
@@ -60,11 +57,8 @@ export function RoutingDomainEditor({
   );
   return (
     <div className="builder-inspector-stack" data-testid="builder-domain-editor">
-      <EditorName
-        value={domain.label}
-        onChange={(label) => onUpdate({ label })}
-        autoFocus={autoFocusName}
-      />
+      {/* The card shows the id read-only. A rename is a YAML edit. */}
+      <KeyValueRow label="id">{domain.domain_id}</KeyValueRow>
       <SelectField
         label="protocol"
         ariaLabel="Routing protocol"
@@ -204,7 +198,7 @@ export function BoundaryEditor({
         options={[
           ...fixedRules.map((rule) => ({
             value: rule.rule_id,
-            label: rule.label || rule.rule_id,
+            label: rule.rule_id,
           })),
           ...(fixedRules.some((rule) => rule.rule_id === boundary.over_rule_id)
             ? []
@@ -237,7 +231,7 @@ export function BoundaryEditor({
           onChange={(value) => onUpdate({ [side]: value })}
           options={workspace.routing_domains.map((domain) => ({
             value: domain.domain_id,
-            label: domain.label,
+            label: domain.domain_id,
           }))}
         />
       ))}

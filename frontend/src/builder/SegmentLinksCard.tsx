@@ -42,10 +42,10 @@ export function SegmentLinksCard({
             <button
               key={rule.rule_id}
               className="builder-outline-row"
-              title={`Edit ${rule.label || rule.rule_id}`}
+              title={`Edit ${rule.rule_id}`}
               onClick={() => onOpenRule(rule.rule_id)}
             >
-              <span>{rule.label || rule.rule_id}</span>
+              <span>{rule.rule_id}</span>
               <span className="builder-outline-count">
                 {rule.a.role === null || rule.b.role === null
                   ? "role incomplete"

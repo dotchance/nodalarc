@@ -13,9 +13,9 @@
 
 import { useState } from "react";
 import { Button } from "../ui/Button";
+import { KeyValueRow } from "../ui/KeyValueRow";
 import {
   EditorCard,
-  EditorName,
   Field,
   NullableNumberField,
   NumberField,
@@ -44,8 +44,6 @@ interface LinkRuleEditorProps {
   onUpdateEndpoint: (side: "a" | "b", patch: Partial<DraftLinkEndpoint>) => void;
   /** Null while a change is being applied: removing waits for it. */
   onRemove: (() => void) | null;
-  /** focus the name when a create gesture opened this editor. */
-  autoFocusName?: boolean;
   /** The resolved world's segments, each with the terminal roles and media
    *  its nodes carry. Null while the world is unresolved. */
   segments: ReadonlyArray<BuilderWorldSegment> | null;
@@ -169,7 +167,6 @@ export function LinkRuleEditor({
   onUpdate,
   onUpdateEndpoint,
   onRemove,
-  autoFocusName = false,
   segments,
   onRepoint,
   allocation,
@@ -189,11 +186,8 @@ export function LinkRuleEditor({
   };
   return (
     <div className="builder-inspector-stack" data-testid="builder-link-editor">
-      <EditorName
-        value={rule.label}
-        onChange={(label) => onUpdate({ label })}
-        autoFocus={autoFocusName}
-      />
+      {/* The card shows the id read-only. A rename is a YAML edit. */}
+      <KeyValueRow label="id">{rule.rule_id}</KeyValueRow>
 
       <EndpointCard
         title="Endpoint A"

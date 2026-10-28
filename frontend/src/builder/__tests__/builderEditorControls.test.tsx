@@ -37,12 +37,14 @@ import { GroundEditor } from "../GroundEditor";
 import { SiteEditor } from "../SiteEditor";
 import { ConstellationEditor } from "../ConstellationEditor";
 import { LinkRuleEditor } from "../LinkRuleEditor";
+import { RoutingDomainEditor } from "../RoutingEditor";
 import {
   accessBeamElevationDeg,
 } from "../linkPhysics";
 import { type DraftLinkRule, type DraftSiteObject } from "../workspace";
 import { AUTHORING_FACTS } from "./fixtures/authoringFacts";
 import {
+  defaultRoutingDomain,
   newDraftConstellation,
   newDraftGroundSet,
   newWorkspace,
@@ -555,7 +557,6 @@ describe("the link editor reads terminal capabilities from the world", () => {
     });
     const rule: DraftLinkRule = {
       rule_id: "ground-to-space",
-      label: "ground to space",
       enabled: true,
       a: endpoint(ground.segment_id),
       b: endpoint(space.segment_id),
@@ -610,6 +611,66 @@ describe("the link editor reads terminal capabilities from the world", () => {
     renderLinkEditor(false);
     expect(disabledOptions("Endpoint A terminal role")).toEqual([]);
     expect(disabledOptions("Endpoint A medium")).toEqual([]);
+  });
+});
+
+describe("link and domain cards show the grammar id and offer no rename", () => {
+  afterEach(cleanup);
+
+  it("the link card shows its rule id outside any input", () => {
+    const workspace = newWorkspace("t");
+    const space = newDraftConstellation("nodalarc:nodes/space/leo.yaml");
+    workspace.space.push(space);
+    const endpoint = {
+      segment_id: space.segment_id,
+      tag: null,
+      role: "isl" as const,
+      medium: "optical" as const,
+      min_elevation_deg: null,
+    };
+    const rule: DraftLinkRule = {
+      rule_id: "fabric-1",
+      enabled: true,
+      a: endpoint,
+      b: { ...endpoint },
+      topology_mode: "nearest_n",
+      topology_n: 2,
+      max_range_km: null,
+    };
+    workspace.links.push(rule);
+    render(
+      <LinkRuleEditor
+        authoring={AUTHORING_FACTS}
+        workspace={workspace}
+        rule={rule}
+        segments={null}
+        allocation={null}
+        onRepoint={async () => ""}
+        onUpdate={() => {}}
+        onUpdateEndpoint={() => {}}
+        onRemove={null}
+      />,
+    );
+    expect(screen.getByText("fabric-1")).toBeTruthy();
+    expect(screen.queryByDisplayValue("fabric-1")).toBeNull();
+  });
+
+  it("the domain card shows its domain id outside any input", () => {
+    const workspace = newWorkspace("t");
+    workspace.space.push(newDraftConstellation("nodalarc:nodes/space/leo.yaml"));
+    const domain = defaultRoutingDomain(workspace);
+    workspace.routing_domains.push(domain);
+    render(
+      <RoutingDomainEditor
+        authoring={AUTHORING_FACTS}
+        workspace={workspace}
+        domain={domain}
+        onUpdate={() => {}}
+        onRemove={null}
+      />,
+    );
+    expect(screen.getByText(domain.domain_id)).toBeTruthy();
+    expect(screen.queryByDisplayValue(domain.domain_id)).toBeNull();
   });
 });
 

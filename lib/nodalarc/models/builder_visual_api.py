@@ -281,7 +281,6 @@ class BuilderVisualLinkRule(_BuilderVisualModel):
     """Editable physical link rule; every authored rule is assembled."""
 
     rule_id: str = ""
-    label: str = ""
     enabled: bool = True
     a: BuilderVisualLinkEndpoint = Field(default_factory=BuilderVisualLinkEndpoint)
     b: BuilderVisualLinkEndpoint = Field(default_factory=BuilderVisualLinkEndpoint)
@@ -294,7 +293,6 @@ class BuilderVisualRoutingDomain(_BuilderVisualModel):
     """Editable routing domain; empty membership remains visible to validation."""
 
     domain_id: str = ""
-    label: str = ""
     protocol: RoutingProtocol | None = None
     member_segment_ids: tuple[str, ...] = ()
     hello_interval_s: float | None = None

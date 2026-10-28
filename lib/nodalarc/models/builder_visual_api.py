@@ -1091,18 +1091,25 @@ class BuilderVisualDraftApplyEditsResult(_BuilderVisualModel):
     """The next accepted revision with its compile, or the refusal of the whole batch.
 
     ``outcomes`` holds one outcome per edit, in request order. One stale or
-    invalid edit refuses the batch. A refused batch accepts nothing and returns
-    no assembly, so every edit in it stays pending.
+    invalid edit refuses the batch. ``issues`` holds what the session made from
+    every edit refuses that no single edit owns. A refused batch accepts nothing
+    and returns no assembly, so every edit in it stays pending.
     """
 
     applied: bool
     outcomes: tuple[BuilderPendingEditOutcome, ...] = Field(min_length=1)
+    issues: tuple[BuilderIssue, ...] = ()
     assembly: BuilderVisualDraftAssemblyResult | None
 
     @model_validator(mode="after")
     def _applied_exactly_when_every_edit_applies(self) -> BuilderVisualDraftApplyEditsResult:
-        if self.applied != all(outcome.status == "applied" for outcome in self.outcomes):
-            raise ValueError("a batch is applied exactly when every edit in it applies")
+        if self.applied != (
+            all(outcome.status == "applied" for outcome in self.outcomes) and not self.issues
+        ):
+            raise ValueError(
+                "a batch is applied exactly when every edit in it applies and the session "
+                "they make has no issue"
+            )
         if self.applied != (self.assembly is not None):
             raise ValueError("an applied batch returns its assembly and a refused batch none")
         return self

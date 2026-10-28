@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Iterator
+from copy import deepcopy
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -787,6 +788,38 @@ def test_a_new_boundary_runs_over_the_first_enabled_rule_that_is_not_access(
         ("polar_domain", "meo_domain"),
         ("meo_domain", "polar_domain"),
     ]
+
+
+def test_a_new_boundary_joins_the_list_as_its_pending_edit_holds_it(
+    service: BuilderVisualDraftService,
+) -> None:
+    """A boundary card's pending edit goes into the revision "+ boundary" makes, so the
+    command never leaves the user's change behind to go stale."""
+    draft = _applied_yaml(service, _boundary_overlay_session())
+    assert draft.applied_session is not None
+    declared = draft.applied_session["routing"]["boundaries"]
+    working = deepcopy(declared)
+    for export in working[1]["export"]:
+        export["export_node_loopbacks"] = False
+    pending = {
+        "kind": "content",
+        "address": _BOUNDARIES_ADDRESS,
+        "base": declared,
+        "working": working,
+    }
+
+    result = _command(service, draft, {"operation": "add_boundary"}, pending_edits=(pending,))
+
+    assert result.draft.draft_revision == draft.draft_revision + 1
+    assert result.created_edits == ()
+    boundaries = result.draft.applied_session["routing"]["boundaries"]
+    assert boundaries[:3] == working
+    assert len(boundaries) == 4
+
+    stale = {**pending, "base": working}
+    with pytest.raises(BuilderVisualDraftCommandError, match="pending edit") as refused:
+        _command(service, draft, {"operation": "add_boundary"}, pending_edits=(stale,))
+    assert refused.value.code == "catalog_authoring.invalid_graph"
 
 
 def test_backend_atomically_creates_a_ground_for_a_site_reference(
@@ -3741,13 +3774,18 @@ def test_apply_edits_is_revision_fenced_and_needs_an_accepted_valid_session(
         ],
     }
     RoutingBoundary.model_validate(boundary)
-    with pytest.raises(BuilderVisualDraftCommandError, match="valid session") as invalid:
-        _apply_edits(
-            service,
-            opened,
-            [{"kind": "content", "address": _BOUNDARIES_ADDRESS, "working": [boundary]}],
-        )
-    assert invalid.value.code == "catalog_authoring.invalid_graph"
+    refused = _apply_edits(
+        service,
+        opened,
+        [{"kind": "content", "address": _BOUNDARIES_ADDRESS, "working": [boundary]}],
+    )
+    # The edit created the routing section, so the session's refusal is the edit's.
+    assert refused.applied is False and refused.assembly is None and refused.issues == ()
+    (outcome,) = refused.outcomes
+    assert outcome.status == "invalid"
+    assert [(issue.json_pointer, issue.draft_path) for issue in outcome.issues] == [
+        ("/routing/domains", "pending_edits.0")
+    ]
 
 
 def _stored_state(draft: BuilderVisualDraftEnvelope) -> dict[str, Any]:

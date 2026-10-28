@@ -216,6 +216,21 @@ def _candidate_place(
         if outcome.status != "stale"
     ]
 
+    def ids_of(document: JsonDocument, list_pointer: str) -> list[JsonValue]:
+        """Each member's id, or None for a member that is not an object."""
+        try:
+            members = _list_at(document, list_pointer) or []
+        except _UnaddressableList:
+            return []
+        return [member.get("id") if isinstance(member, dict) else None for member in members]
+
+    def target(edit: BuilderContentEdit | BuilderListEdit) -> str:
+        if isinstance(edit, BuilderListEdit):
+            return edit.list_pointer
+        if isinstance(edit.address, BuilderWholeListAddress):
+            return edit.address.pointer
+        return edit.address.list_pointer
+
     def place(pointer: str) -> str:
         for index, edit in applied:
             if isinstance(edit, BuilderListEdit) and pointer == edit.list_pointer:
@@ -226,15 +241,23 @@ def _candidate_place(
                 whole = edit.address.pointer
                 if pointer == whole or pointer.startswith(f"{whole}/"):
                     return f"pending_edits.{index}"
+        # A section the accepted session does not declare was created by an edit.
+        for index, edit in applied:
+            section = target(edit).split("/")[1]
+            if section not in session and (
+                pointer == f"/{section}" or pointer.startswith(f"/{section}/")
+            ):
+                return f"pending_edits.{index}"
         for list_pointer in ("/link_rules", "/routing/domains"):
             position, _, rest = pointer.removeprefix(f"{list_pointer}/").partition("/")
             if not pointer.startswith(f"{list_pointer}/") or not position.isdigit():
                 continue
-            members = _list_at(candidate, list_pointer) or []
-            if int(position) >= len(members):
+            candidate_ids = ids_of(candidate, list_pointer)
+            if int(position) >= len(candidate_ids):
                 continue
-            member = members[int(position)]
-            member_id = member.get("id") if isinstance(member, dict) else None
+            member_id = candidate_ids[int(position)]
+            if member_id is None:
+                continue
             for index, edit in applied:
                 if (
                     isinstance(edit, BuilderContentEdit)
@@ -243,16 +266,53 @@ def _candidate_place(
                     and edit.address.id == member_id
                 ):
                     return f"pending_edits.{index}"
+            # Members that share an id keep their order, so the nth one maps to the nth.
+            occurrence = candidate_ids[: int(position)].count(member_id)
             accepted = [
-                cast(JsonDocument, accepted_member).get("id")
-                for accepted_member in _list_at(session, list_pointer) or []
+                at
+                for at, accepted_id in enumerate(ids_of(session, list_pointer))
+                if accepted_id == member_id
             ]
-            if member_id in accepted:
+            if occurrence < len(accepted):
                 tail = f"/{rest}" if rest else ""
-                return f"state.session{list_pointer}/{accepted.index(member_id)}{tail}"
+                return f"state.session{list_pointer}/{accepted[occurrence]}{tail}"
         return f"state.session{pointer}"
 
     return place
+
+
+def place_candidate_issues(
+    error: ValidationError,
+    *,
+    session: JsonDocument,
+    candidate: JsonDocument,
+    edits: BuilderPendingEdits,
+    outcomes: tuple[BuilderPendingEditOutcome, ...],
+    source_ref: str,
+) -> tuple[tuple[BuilderPendingEditOutcome, ...], tuple[BuilderIssue, ...]]:
+    """The candidate session's validation issues, each on the edit whose object it is
+    about. An edit that holds one becomes invalid; an issue no edit owns is returned
+    beside the outcomes."""
+    issues = _validation_issues(
+        error,
+        source_ref=source_ref,
+        draft_path="state.session",
+        place=_candidate_place(session, candidate, edits, outcomes),
+    )
+    owned: dict[int, list[BuilderIssue]] = {}
+    unowned: list[BuilderIssue] = []
+    for issue in issues:
+        if issue.draft_path is not None and issue.draft_path.startswith("pending_edits."):
+            owned.setdefault(int(issue.draft_path.removeprefix("pending_edits.")), []).append(issue)
+        else:
+            unowned.append(issue)
+    placed = tuple(
+        BuilderPendingEditOutcome(status="invalid", issues=(*outcome.issues, *owned[index]))
+        if index in owned
+        else outcome
+        for index, outcome in enumerate(outcomes)
+    )
+    return placed, tuple(unowned)
 
 
 def _structural_issue(

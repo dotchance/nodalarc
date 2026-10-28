@@ -159,6 +159,7 @@ from .builder_compiler import (
     apply_pending_edits,
     canonicalize_persisted_configuration,
     compile_builder_draft,
+    place_candidate_issues,
 )
 from .builder_control_mutation import (
     BuilderControlMutationError,
@@ -3687,7 +3688,23 @@ class BuilderVisualDraftService:
                 draft.target_ref,
                 candidate,
             )
-        except (ValidationError, TypeError, ValueError) as error:
+        except ValidationError as error:
+            # Each edit is valid alone; the session they make together is not.
+            placed, unowned = place_candidate_issues(
+                error,
+                session=draft.applied_session,
+                candidate=candidate,
+                edits=request.edits,
+                outcomes=outcomes,
+                source_ref=str(draft.target_ref),
+            )
+            return BuilderVisualDraftApplyEditsResult(
+                applied=False,
+                outcomes=placed,
+                issues=unowned,
+                assembly=None,
+            )
+        except (TypeError, ValueError) as error:
             raise self._command_error(
                 draft,
                 f"Pending edits do not produce a valid session: {error}",
@@ -4401,9 +4418,40 @@ class BuilderVisualDraftService:
                 if session.routing is not None and session.routing.boundaries is not None
                 else None
             )
-            base = deepcopy(current)
+            # The list's own pending edit is folded into this one, as rederive folds
+            # its rule's: the new boundary joins the list as the card holds it.
+            own_list = next(
+                (
+                    edit
+                    for edit in request.pending_edits
+                    if isinstance(edit, BuilderContentEdit)
+                    and isinstance(edit.address, BuilderWholeListAddress)
+                    and edit.address.pointer == "/routing/boundaries"
+                ),
+                None,
+            )
+            if own_list is not None:
+                _, (own_outcome,) = apply_pending_edits(
+                    draft.applied_session,
+                    (own_list,),
+                    source_ref=str(draft.target_ref),
+                )
+                if own_outcome.status != "applied":
+                    raise self._command_error(
+                        draft,
+                        "The boundary list has a pending edit that cannot be applied: "
+                        + "; ".join(issue.message for issue in own_outcome.issues),
+                        code="catalog_authoring.invalid_graph",
+                    )
+            base = deepcopy(current) if own_list is None else deepcopy(own_list.base)
             boundary_issues: list[BuilderIssue] = []
-            listed: list[JsonValue] = deepcopy(current) if current is not None else []
+            listed: list[JsonValue] = (
+                deepcopy(cast(list[JsonValue], own_list.working))
+                if own_list is not None
+                else deepcopy(current)
+                if current is not None
+                else []
+            )
             listed.append(
                 _routing_boundary_document(
                     BuilderVisualRoutingBoundary(

@@ -879,6 +879,39 @@ def test_compile_leaves_a_stale_edit_out_and_reports_it(snapshot: CatalogReadSna
     assert result.canonical_session_json == expected
 
 
+def test_a_compile_issue_in_a_member_that_is_not_an_object_is_typed(
+    snapshot: CatalogReadSnapshot,
+) -> None:
+    session = _accepted(SHIPPED_ROOT / "sessions" / "earth-leo-simple.yaml")
+    session["link_rules"].append("not-a-rule")
+    position = len(session["link_rules"]) - 1
+
+    result = _compile(_edits_request(session), snapshot)
+
+    assert [(issue.json_pointer, issue.draft_path) for issue in result.issues] == [
+        (f"/link_rules/{position}", f"state.session/link_rules/{position}")
+    ]
+
+
+def test_a_compile_issue_in_the_second_of_two_rules_sharing_an_id_names_the_second(
+    snapshot: CatalogReadSnapshot,
+) -> None:
+    session = _accepted(SHIPPED_ROOT / "sessions" / "earth-leo-simple.yaml")
+    twin = deepcopy(session["link_rules"][0])
+    del twin["endpoints"][1]["select"]
+    session["link_rules"].append(twin)
+    position = len(session["link_rules"]) - 1
+    other = _member(session, "/link_rules", session["link_rules"][1]["id"])
+    request = _edits_request(session, _edited(session, "/link_rules", other["id"], enabled=True))
+
+    result = _compile(request, snapshot)
+
+    pointer = f"/link_rules/{position}/endpoints/1/select"
+    assert (pointer, f"state.session{pointer}") in [
+        (issue.json_pointer, issue.draft_path) for issue in result.issues
+    ]
+
+
 def test_a_compile_issue_names_the_edit_whose_object_it_is_about(
     snapshot: CatalogReadSnapshot,
 ) -> None:

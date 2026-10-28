@@ -663,10 +663,11 @@ export interface BuilderVisualDraftApplyEditsRequest {
   readonly edits: ReadonlyArray<BuilderContentEdit | BuilderListEdit>;
 }
 
-/** The next accepted revision with its compile, or the refusal of the whole batch. ``outcomes`` holds one outcome per edit, in request order. One stale or invalid edit refuses the batch. A refused batch accepts nothing and returns no assembly, so every edit in it stays pending. */
+/** The next accepted revision with its compile, or the refusal of the whole batch. ``outcomes`` holds one outcome per edit, in request order. One stale or invalid edit refuses the batch. ``issues`` holds what the session made from every edit refuses that no single edit owns. A refused batch accepts nothing and returns no assembly, so every edit in it stays pending. */
 export interface BuilderVisualDraftApplyEditsResult {
   readonly applied: boolean;
   readonly outcomes: ReadonlyArray<BuilderPendingEditOutcome>;
+  readonly issues: ReadonlyArray<BuilderIssue>;
   readonly assembly: BuilderVisualDraftAssemblyResult | null;
 }
 

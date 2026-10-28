@@ -175,27 +175,24 @@ function renderOutline(
 }
 
 describe("the outline's Links and Routing groups", () => {
-  it("lists the rules and domains no card writes back, and opens every rule", () => {
+  it("lists the rules and domains no card writes back, and opens every rule and domain", () => {
     const onOpen = renderOutline(listSessionObjects(LISTING, []));
     fireEvent.click(screen.getByRole("button", { name: /leo-isl/ }));
     expect(onOpen).toHaveBeenCalledWith({ kind: "link", id: "leo-isl" });
-    // No card writes geo-relay back: its window shows the field editor.
+    // No card writes geo-relay or geo-core back: their windows show the field editor.
     fireEvent.click(screen.getByRole("button", { name: /^geo-relay/ }));
     expect(onOpen).toHaveBeenCalledWith({ kind: "link", id: "geo-relay" });
     fireEvent.click(screen.getByRole("button", { name: /leo-core/ }));
     expect(onOpen).toHaveBeenCalledWith({ kind: "domain", id: "leo-core" });
+    fireEvent.click(screen.getByRole("button", { name: /geo-core/ }));
+    expect(onOpen).toHaveBeenCalledWith({ kind: "domain", id: "geo-core" });
     fireEvent.click(screen.getByRole("button", { name: /over geo-relay/ }));
     expect(onOpen).toHaveBeenCalledWith({ kind: "boundary", id: "boundary-1" });
-    for (const [name, kind] of [
-      ["geo-core", "routing domain"],
-      ["over leo-isl", "boundary"],
-    ] as const) {
-      expect(screen.queryByRole("button", { name: new RegExp(`^${name}`) })).toBeNull();
-      const row = screen.getByText(name).closest(".builder-library-entry");
-      expect(row?.getAttribute("title")).toBe(
-        `No card writes this ${kind} back unchanged. Edit it in the session YAML.`,
-      );
-    }
+    expect(screen.queryByRole("button", { name: /^over leo-isl/ })).toBeNull();
+    const row = screen.getByText("over leo-isl").closest(".builder-library-entry");
+    expect(row?.getAttribute("title")).toBe(
+      "No card writes this boundary back unchanged. Edit it in the session YAML.",
+    );
     // A declared session shows its own domains, not the resolver's.
     expect(screen.queryByText("made-a")).toBeNull();
   });
@@ -212,13 +209,14 @@ describe("the outline's Links and Routing groups", () => {
     );
     const rule = screen.getByRole("button", { name: /leo-isl/ });
     expect(rule.textContent).toContain("isl · off · pending edit");
-    // A pending rule opens its window, which shows the pending edit.
+    // A pending rule or domain opens its window, which shows the pending edit.
     fireEvent.click(rule);
     expect(onOpen).toHaveBeenCalledWith({ kind: "link", id: "leo-isl" });
-    const domain = screen.getByText("leo-core").closest(".builder-library-entry");
-    expect(domain?.textContent).toContain("pending edit");
-    expect(domain?.textContent).not.toContain("isis");
-    expect(screen.queryByRole("button", { name: /leo-core/ })).toBeNull();
+    const domain = screen.getByRole("button", { name: /leo-core/ });
+    expect(domain.textContent).toContain("pending edit");
+    expect(domain.textContent).not.toContain("isis");
+    fireEvent.click(domain);
+    expect(onOpen).toHaveBeenCalledWith({ kind: "domain", id: "leo-core" });
   });
 
   it("shows the resolver's domains read-only when the session declares none", () => {

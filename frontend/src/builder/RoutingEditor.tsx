@@ -10,6 +10,11 @@
  *  exchanges over a fixed link rule (never access — those links schedule);
  *  v1 export is the shipped exchange: originated prefixes both ways via
  *  peer loopback.
+ *
+ *  A domain's window edits the domain as a pending edit. It shows the card
+ *  while the backend states a card value for the domain. Otherwise it shows
+ *  the field editor over the domain's grammar JSON. An edit can move the
+ *  window from one to the other.
  */
 
 import { Button } from "../ui/Button";
@@ -20,22 +25,40 @@ import {
   NullableNumberField,
   SelectField,
 } from "./editorKit";
-import type { BuilderVisualAuthoringFacts } from "./generated/builderApi";
+import type {
+  BuilderVisualAuthoringFacts,
+  BuilderVisualObjectControlEdit,
+  BuilderVisualObjectEditResult,
+  BuilderVisualRoutingDomain,
+  BuilderVisualRoutingDomainWidget,
+  RoutingProtocol,
+} from "./generated/builderApi";
+import {
+  PendingObjectFieldEditor,
+  PendingObjectIssues,
+  useCardValueEdits,
+  useLatestObjectChange,
+} from "./pendingEditKit";
+import type { ListedRoutingDomain } from "./sessionListing";
 import {
   placedSegments,
   routingWarnings,
   type Adapter,
   type DraftBoundary,
-  type DraftRoutingDomain,
-  type Protocol,
   type Workspace,
 } from "./workspace";
 
+/** One change of a routing domain: its whole card value, or a field-editor batch. */
+export type RoutingDomainChange = BuilderVisualRoutingDomainWidget | BuilderVisualObjectControlEdit;
+
 interface DomainEditorProps {
   workspace: Workspace;
-  domain: DraftRoutingDomain;
-  onUpdate: (patch: Partial<DraftRoutingDomain>) => void;
-  /** Null while a change is being applied: removing waits for it. */
+  /** The domain's card value as the card shows it. */
+  domain: BuilderVisualRoutingDomain;
+  /** Change the domain. A typed change waits for a pause in typing. */
+  onUpdate: (patch: Partial<BuilderVisualRoutingDomain>, typed?: boolean) => void;
+  /** Null while the domain cannot be removed: a change is being applied, or a
+   *  link or routing edit is pending. */
   onRemove: (() => void) | null;
   authoring: BuilderVisualAuthoringFacts;
 }
@@ -48,23 +71,32 @@ export function RoutingDomainEditor({
   authoring,
 }: DomainEditorProps) {
   const placed = placedSegments(workspace);
-  const timersUseDefaults =
-    domain.hello_interval_s === null && domain.hold_interval_s === null;
-  const timersComplete =
-    domain.hello_interval_s !== null && domain.hold_interval_s !== null;
+  const members = domain.member_segment_ids ?? [];
+  const hello = domain.hello_interval_s ?? null;
+  const hold = domain.hold_interval_s ?? null;
+  // A member the session no longer places stays listed, so it can be removed.
+  const removedMembers = members.filter(
+    (member) => !placed.some((segment) => segment.segment_id === member),
+  );
+  const timersUseDefaults = hello === null && hold === null;
+  const timersComplete = hello !== null && hold !== null;
   const selectedProtocol = authoring.routing_protocols.find(
     (choice) => choice.id === domain.protocol,
   );
+  const toggleMember = (segmentId: string) =>
+    onUpdate({
+      member_segment_ids: members.includes(segmentId)
+        ? members.filter((id) => id !== segmentId)
+        : [...members, segmentId],
+    });
   return (
     <div className="builder-inspector-stack" data-testid="builder-domain-editor">
-      {/* The card shows the id read-only. A rename is a YAML edit. */}
-      <KeyValueRow label="id">{domain.domain_id}</KeyValueRow>
       <SelectField
         label="protocol"
         ariaLabel="Routing protocol"
-        value={domain.protocol}
+        value={domain.protocol ?? null}
         onChange={(value) => {
-          const protocol = value as Protocol;
+          const protocol = value as RoutingProtocol;
           // Timers are IGP-only grammar; clear them on the way out.
           onUpdate(
             authoring.routing_protocols.find((choice) => choice.id === protocol)
@@ -86,27 +118,27 @@ export function RoutingDomainEditor({
         open
         summary={
           <>
-            {domain.member_segment_ids.length} of {placed.length} segments
+            {members.length - removedMembers.length} of {placed.length} segments
+            {removedMembers.length > 0 ? ` · ${removedMembers.length} removed` : ""}
           </>
         }
       >
-          {placed.map((segment) => {
-            const member = domain.member_segment_ids.includes(segment.segment_id);
-            return (
-              <CheckboxField
-                key={segment.segment_id}
-                label={segment.label}
-                checked={member}
-                onChange={() =>
-                  onUpdate({
-                    member_segment_ids: member
-                      ? domain.member_segment_ids.filter((id) => id !== segment.segment_id)
-                      : [...domain.member_segment_ids, segment.segment_id],
-                  })
-                }
-              />
-            );
-          })}
+          {placed.map((segment) => (
+            <CheckboxField
+              key={segment.segment_id}
+              label={segment.label}
+              checked={members.includes(segment.segment_id)}
+              onChange={() => toggleMember(segment.segment_id)}
+            />
+          ))}
+          {removedMembers.map((member) => (
+            <CheckboxField
+              key={member}
+              label={`${member} (removed)`}
+              checked
+              onChange={() => toggleMember(member)}
+            />
+          ))}
           <div className="builder-site-derived">
             whole segments join a domain — per-terminal membership is a
             pending grammar change
@@ -119,7 +151,7 @@ export function RoutingDomainEditor({
           open
           summary={
             timersComplete
-              ? `hello ${domain.hello_interval_s}s · hold ${domain.hold_interval_s}s`
+              ? `hello ${hello}s · hold ${hold}s`
               : timersUseDefaults
                 ? "engine defaults"
                 : "timers incomplete"
@@ -136,34 +168,123 @@ export function RoutingDomainEditor({
             <NullableNumberField
               label="hello"
               placeholder="engine default"
-              value={domain.hello_interval_s}
+              value={hello}
               min={1}
               integer
               suffix="s"
-              onChange={(hello_interval_s) => onUpdate({ hello_interval_s })}
+              onChange={(hello_interval_s) => onUpdate({ hello_interval_s }, true)}
             />
             <NullableNumberField
               label="hold"
               placeholder="engine default"
-              value={domain.hold_interval_s}
+              value={hold}
               min={1}
               integer
               suffix="s"
-              onChange={(hold_interval_s) => onUpdate({ hold_interval_s })}
+              onChange={(hold_interval_s) => onUpdate({ hold_interval_s }, true)}
             />
         </EditorCard>
       )}
 
-      {routingWarnings(workspace).map((warning) => (
-        <div className="builder-warning" key={warning}>
-          {warning}
-        </div>
-      ))}
       <div className="builder-preset-row">
-        <Button variant="danger" onClick={onRemove ?? undefined} disabled={onRemove === null}>
+        <Button
+          variant="danger"
+          onClick={onRemove ?? undefined}
+          disabled={onRemove === null}
+          title={
+            onRemove === null
+              ? "Removing waits while a change is being applied or a link or routing edit is pending."
+              : undefined
+          }
+        >
           Remove domain
         </Button>
       </div>
+    </div>
+  );
+}
+
+/** The card over a domain the backend states a card value for. Each change is
+ *  sent as the whole card value. */
+function RoutingDomainCard({
+  card,
+  editPending,
+  send,
+  onRemove,
+  ...shared
+}: Omit<DomainEditorProps, "domain" | "onUpdate"> & {
+  card: BuilderVisualRoutingDomain;
+  /** Whether an edit of the domain is pending. */
+  editPending: boolean;
+  send: (domain: BuilderVisualRoutingDomain) => Promise<boolean>;
+}) {
+  const edits = useCardValueEdits(card, send);
+  // A removal starts from the accepted domain, so it waits while an edit of
+  // the domain is pending or still being checked.
+  const edited = editPending || edits.checking;
+  return (
+    <>
+      <RoutingDomainEditor
+        {...shared}
+        domain={edits.shown}
+        onUpdate={(patch, typed) => edits.change((domain) => ({ ...domain, ...patch }), typed)}
+        onRemove={edited ? null : onRemove}
+      />
+      {edits.checking && <div className="builder-site-derived">Checking the edit…</div>}
+      {edits.error && <div className="builder-warning">{edits.error}</div>}
+    </>
+  );
+}
+
+interface RoutingDomainWindowProps extends Omit<DomainEditorProps, "domain" | "onUpdate"> {
+  /** The domain as the page lists it: the accepted domain with its pending
+   *  edit laid over it. */
+  listed: ListedRoutingDomain;
+  /** The accepted revision. The field editor is built at it. */
+  appliedRevision: number;
+  /** Send one change of the domain. It settles once the backend's answer is
+   *  held as the domain's pending edit. */
+  onEdit: (change: RoutingDomainChange) => Promise<unknown>;
+  /** Ask the backend for the domain's field editor without changing the domain. */
+  onDescribe: () => Promise<BuilderVisualObjectEditResult>;
+}
+
+/** One routing domain's window: the card while the backend states a card
+ *  value for the domain, otherwise the field editor, then the issues of its
+ *  pending edit. */
+export function RoutingDomainWindow({
+  listed,
+  appliedRevision,
+  onEdit,
+  onDescribe,
+  ...shared
+}: RoutingDomainWindowProps) {
+  const send = useLatestObjectChange(onEdit);
+  return (
+    <div className="builder-inspector-stack" data-testid="builder-domain-window">
+      {/* The window shows the id read-only. A rename is a YAML edit. */}
+      <KeyValueRow label="id">{listed.id}</KeyValueRow>
+      {listed.pending !== null && (
+        <div className="builder-site-derived">
+          Pending edit. It is not applied to the session yet.
+        </div>
+      )}
+      {listed.card !== null ? (
+        <RoutingDomainCard
+          {...shared}
+          card={listed.card}
+          editPending={listed.pending !== null}
+          send={(domain) => send({ kind: "routing_domain", domain })}
+        />
+      ) : (
+        <PendingObjectFieldEditor
+          pending={listed.pending}
+          appliedRevision={appliedRevision}
+          describe={onDescribe}
+          send={(commands) => send({ kind: "controls", commands })}
+        />
+      )}
+      <PendingObjectIssues issues={listed.pending?.issues ?? []} />
     </div>
   );
 }

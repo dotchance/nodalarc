@@ -13,18 +13,24 @@ vi.mock("../../config", () => ({
 const { NodeEditor } = await import("../NodeEditor");
 const { ConstellationEditor } = await import("../ConstellationEditor");
 const { SessionEditor } = await import("../SessionEditor");
-const { RoutingDomainEditor } = await import("../RoutingEditor");
+const { RoutingDomainWindow } = await import("../RoutingEditor");
 const { SegmentLinksCard } = await import("../SegmentLinksCard");
 const { resetCatalogStores } = await import("../useBuilderWorld");
 const { listSessionObjects } = await import("../sessionListing");
+const { newDraftConstellation, defaultDraftNode, newWorkspace } = await import(
+  "./fixtures/workspaceFixtures"
+);
 const {
-  newDraftConstellation,
-  defaultDraftNode,
-  defaultRoutingDomain,
-  newWorkspace,
-} = await import("./fixtures/workspaceFixtures");
-const { acceptedRule, pendingAnswer, ruleAddress, ruleCard, sessionListing, workingIssue } =
-  await import("./fixtures/listingFixtures");
+  acceptedDomain,
+  acceptedRule,
+  domainAddress,
+  domainCard,
+  pendingAnswer,
+  ruleAddress,
+  ruleCard,
+  sessionListing,
+  workingIssue,
+} = await import("./fixtures/listingFixtures");
 
 const NODE_REF = "user:nodes/gw.yaml";
 
@@ -128,25 +134,53 @@ describe("truthful incomplete session summaries", () => {
 });
 
 describe("truthful incomplete routing and link summaries", () => {
-  it("labels partial routing timers without rendering null seconds", () => {
+  it("states the backend's issue for a domain whose pending edit set one timer", () => {
     const workspace = newWorkspace("partial-timers");
-    const domain = defaultRoutingDomain(workspace);
-    domain.hello_interval_s = 5;
-    domain.hold_interval_s = null;
-    workspace.routing_domains = [domain];
+    workspace.space_refs = [
+      { segment_id: "leo", source_ref: "nodalarc:constellations/leo.yaml", label: "LEO" },
+    ];
+    // The pending edit set hello to 5 and left hold unset. The backend writes
+    // hello alone, states no card value and names the missing hold.
+    const answer = pendingAnswer(domainAddress("leo-core"), null, [
+      workingIssue(
+        "Routing timers require both hello and hold intervals",
+        "/timers/hold_interval_s",
+      ),
+    ]);
+    const [domain] = listSessionObjects(
+      sessionListing({
+        routing_domains: [
+          acceptedDomain("leo-core", "isis", ["leo"], domainCard("leo-core", "isis", ["leo"])),
+        ],
+      }),
+      [
+        {
+          ...answer,
+          control_tree: {
+            projection_revision: 1,
+            root: { ...answer.control_tree.root, model_name: "RoutingDomain", fields: [] },
+          },
+        },
+      ],
+    ).routingDomains;
 
     render(
-      <RoutingDomainEditor
+      <RoutingDomainWindow
+        listed={domain!}
+        appliedRevision={1}
+        onEdit={() => Promise.reject(new Error("nothing is edited"))}
+        onDescribe={() => Promise.reject(new Error("the answer's field editor is current"))}
         workspace={workspace}
-        domain={domain}
-        onUpdate={() => {}}
-        onRemove={() => {}}
+        onRemove={null}
         authoring={AUTHORING_FACTS}
       />,
     );
 
-    expect(screen.getByText("timers incomplete")).toBeTruthy();
-    expect(document.body.textContent).not.toContain("nulls");
+    expect(screen.getByText("Pending edit. It is not applied to the session yet.")).toBeTruthy();
+    expect(screen.getByText("Routing timers require both hello and hold intervals")).toBeTruthy();
+    expect(screen.getByText("/timers/hold_interval_s")).toBeTruthy();
+    expect(screen.queryByTestId("builder-domain-editor")).toBeNull();
+    expect(document.body.textContent).not.toContain("null");
   });
 
   it("states no role for a rule whose pending edit lost its endpoint role", () => {

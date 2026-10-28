@@ -54,7 +54,7 @@ import { LinkAndRoutingOutline } from "./LinkAndRoutingOutline";
 import { LinkRuleWindow } from "./LinkRuleEditor";
 import { CatalogDraftEditorWindow } from "./CatalogDraftEditorWindow";
 import { OpenSessionPicker } from "./OpenSessionPicker";
-import { BoundaryEditor, RoutingDomainEditor } from "./RoutingEditor";
+import { BoundaryEditor, RoutingDomainWindow } from "./RoutingEditor";
 import { SessionEditor, timeRateSummary } from "./SessionEditor";
 import { listSessionObjects } from "./sessionListing";
 import {
@@ -105,7 +105,6 @@ import {
   type DraftBoundary,
   type DraftConstellation,
   type DraftGroundSet,
-  type DraftRoutingDomain,
   type Workspace,
 } from "./workspace";
 import type {
@@ -216,12 +215,11 @@ const BUFFERED_WINDOW_KINDS: ReadonlySet<EditorTarget["kind"]> = new Set([
   "session",
   "segment",
   "ground",
-  "domain",
   "boundary",
 ]);
 
 /** The windows whose edits are pending edits of the accepted session. */
-const PENDING_EDIT_WINDOW_KINDS: ReadonlySet<EditorTarget["kind"]> = new Set(["link"]);
+const PENDING_EDIT_WINDOW_KINDS: ReadonlySet<EditorTarget["kind"]> = new Set(["link", "domain"]);
 
 /** One-line form of a refusal for the compact surfaces (canvas note,
  *  status bar) — the owning window's wall carries the full text. */
@@ -807,14 +805,16 @@ export function BuilderView({
       ),
     [assemblyResult?.listing, pendingEdits],
   );
-  // A link window shows a rule the backend lists or a pending edit holds. It
-  // closes when neither holds the rule any more.
+  // A link or domain window shows an object the backend lists or a pending
+  // edit holds. It closes when neither holds the object any more.
   useEffect(() => {
     for (const w of windows) {
       const target = w.target;
-      if (target.kind === "link" && !listed.linkRules.some((rule) => rule.id === target.id)) {
-        closeWindow(w.key);
-      }
+      const gone =
+        (target.kind === "link" && !listed.linkRules.some((rule) => rule.id === target.id)) ||
+        (target.kind === "domain" &&
+          !listed.routingDomains.some((domain) => domain.id === target.id));
+      if (gone) closeWindow(w.key);
     }
   }, [closeWindow, listed, windows]);
   // The wall's owning editor target (wallTarget). A segment is matched against
@@ -1827,15 +1827,26 @@ export function BuilderView({
         };
       }
       case "domain": {
-        const applied = workspace?.routing_domains.find(
-          (d) => d.domain_id === target.id,
-        );
-        if (!workspace || !applied) return null;
-        const key = targetKey(target);
-        const domain = (buffers[key]?.draft as DraftRoutingDomain | undefined) ?? applied;
+        const domain = listed.routingDomains.find((candidate) => candidate.id === target.id);
+        const appliedRevision = visualDraft?.applied_revision ?? null;
+        if (!workspace || !domain || appliedRevision === null) return null;
+        const address = {
+          kind: "member",
+          list_pointer: "/routing/domains",
+          id: domain.id,
+        } as const;
         const domainWall = wallFor(target);
+        // The domain is removed from the twin, so removing waits while a change
+        // is being applied or any link or routing edit is pending.
+        const removeDomain =
+          writer !== null || pendingEditCount > 0
+            ? null
+            : () => {
+                removeRoutingDomain(domain.id);
+                closeWindow(targetKey(target));
+              };
         return {
-          title: domain.domain_id,
+          title: domain.pending === null ? domain.id : `${domain.id} •`,
           content: (
             <>
             {domainWall && (
@@ -1843,18 +1854,15 @@ export function BuilderView({
                 {domainWall}
               </div>
             )}
-            <RoutingDomainEditor
+            <RoutingDomainWindow
               authoring={authoring!}
-              key={domain.domain_id}
+              key={domain.id}
+              listed={domain}
+              appliedRevision={appliedRevision}
+              onEdit={(change) => editPendingObject(address, change)}
+              onDescribe={() => describePendingObject(address)}
               workspace={workspace}
-              domain={domain}
-              onUpdate={(patch) =>
-                patchBuffer(key, applied, (d) => ({ ...d, ...patch }))
-              }
-              onRemove={writer !== null ? null : () => {
-                removeRoutingDomain(domain.domain_id);
-                closeWindow(key);
-              }}
+              onRemove={removeDomain}
             />
             </>
           ),

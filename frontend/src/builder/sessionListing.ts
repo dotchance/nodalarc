@@ -231,9 +231,9 @@ export function listSessionObjects(
   return { linkRules, routingDomains, boundaries };
 }
 
-/** Whether a routing domain or boundary window can show its object. That
- *  window edits the accepted object through its card, so it needs the accepted
- *  card value and no pending edit laid over it. */
+/** Whether a boundary window can show its object. That window edits the
+ *  accepted object through its card, so it needs the accepted card value and
+ *  no pending edit laid over it. */
 export function cardWindowShows(listed: {
   readonly accepted: { readonly widget: unknown } | null;
   readonly pending: BuilderVisualObjectEditResult | null;

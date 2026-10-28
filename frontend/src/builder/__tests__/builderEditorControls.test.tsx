@@ -37,20 +37,20 @@ import { GroundEditor } from "../GroundEditor";
 import { SiteEditor } from "../SiteEditor";
 import { ConstellationEditor } from "../ConstellationEditor";
 import { LinkRuleEditor, LinkRuleWindow } from "../LinkRuleEditor";
-import { RoutingDomainEditor } from "../RoutingEditor";
+import { RoutingDomainWindow } from "../RoutingEditor";
 import {
   accessBeamElevationDeg,
 } from "../linkPhysics";
 import { type DraftSiteObject } from "../workspace";
 import { AUTHORING_FACTS } from "./fixtures/authoringFacts";
 import {
-  defaultRoutingDomain,
   newDraftConstellation,
   newDraftGroundSet,
   newWorkspace,
 } from "./fixtures/workspaceFixtures";
 import type {
   BuilderVisualLinkRule,
+  BuilderVisualRoutingDomain,
   CatalogDocumentSummary,
   JsonValue,
 } from "../generated/builderApi";
@@ -669,20 +669,39 @@ describe("link and domain cards show the grammar id and offer no rename", () => 
 
   it("the domain card shows its domain id outside any input", () => {
     const workspace = newWorkspace("t");
-    workspace.space.push(newDraftConstellation("nodalarc:nodes/space/leo.yaml"));
-    const domain = defaultRoutingDomain(workspace);
-    workspace.routing_domains.push(domain);
+    const space = newDraftConstellation("nodalarc:nodes/space/leo.yaml");
+    workspace.space.push(space);
+    const domain: BuilderVisualRoutingDomain = {
+      domain_id: "core-1",
+      protocol: "isis",
+      member_segment_ids: [space.segment_id],
+      hello_interval_s: null,
+      hold_interval_s: null,
+    };
     render(
-      <RoutingDomainEditor
+      <RoutingDomainWindow
         authoring={AUTHORING_FACTS}
         workspace={workspace}
-        domain={domain}
-        onUpdate={() => {}}
+        listed={{
+          id: "core-1",
+          accepted: {
+            domain_id: "core-1",
+            protocol: "isis",
+            segment_ids: [space.segment_id],
+            widget: domain,
+          },
+          pending: null,
+          card: domain,
+          protocol: "isis",
+        }}
+        appliedRevision={1}
+        onEdit={async () => undefined}
+        onDescribe={() => Promise.reject(new Error("a card domain is not described"))}
         onRemove={null}
       />,
     );
-    expect(screen.getByText(domain.domain_id)).toBeTruthy();
-    expect(screen.queryByDisplayValue(domain.domain_id)).toBeNull();
+    expect(screen.getByText("core-1")).toBeTruthy();
+    expect(screen.queryByDisplayValue("core-1")).toBeNull();
   });
 });
 

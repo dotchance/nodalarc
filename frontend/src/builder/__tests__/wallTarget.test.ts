@@ -40,7 +40,8 @@ function placedWorkspace(): Workspace {
 }
 
 /** The backend's listing of an access rule a card writes back, one rule no
- *  card writes back, and a routing domain a card writes back. */
+ *  card writes back, a routing domain a card writes back and one no card
+ *  writes back. */
 const LISTING = sessionListing({
   link_rules: [
     acceptedRule("gw-access", ["gw", "leo"], ruleCard("gw-access", "gw", "leo", "access")),
@@ -48,6 +49,7 @@ const LISTING = sessionListing({
   ],
   routing_domains: [
     acceptedDomain("core", "isis", ["leo", "gw"], domainCard("core", "isis", ["leo", "gw"])),
+    acceptedDomain("relay", "ospf", ["leo"], null),
   ],
 });
 
@@ -89,15 +91,17 @@ describe("wallTarget", () => {
     }
   });
 
-  it("leaves to the session-level wall a subject no window shows", () => {
-    // core holds a pending edit, so its window cannot show it.
+  it("routes a domain no card writes back, or a pending domain, to its window", () => {
     const listed = listSessionObjects(LISTING, [pendingAnswer(domainAddress("core"), null)]);
-    expect(
-      wallTarget(placedWorkspace(), listed, {
-        error: "refused",
-        subject: { kind: "routing_domain", id: "core" },
-      }),
-    ).toBeNull();
+    for (const id of ["relay", "core"]) {
+      const target = { kind: "domain" as const, id };
+      expect(
+        wallTarget(placedWorkspace(), listed, {
+          error: "refused",
+          subject: { kind: "routing_domain", id },
+        }),
+      ).toEqual({ target, key: targetKey(target) });
+    }
   });
 
   it("a segment subject falls through space→ground", () => {
@@ -118,6 +122,12 @@ describe("wallTarget", () => {
     ).toBeNull();
     expect(
       wallTarget(ws, listed, { error: "x", subject: { kind: "link_rule", id: "no-such-rule" } }),
+    ).toBeNull();
+    expect(
+      wallTarget(ws, listed, {
+        error: "x",
+        subject: { kind: "routing_domain", id: "no-such-domain" },
+      }),
     ).toBeNull();
     expect(wallTarget(ws, listed, { error: "x", segment_id: "does-not-exist" })).toBeNull();
     expect(wallTarget(ws, listed, { error: "x" })).toBeNull(); // no subject, no segment

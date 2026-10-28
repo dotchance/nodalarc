@@ -104,13 +104,13 @@ function objectTitle(workspace: Workspace, target: EditorTarget): string {
  *  resolve through appliedObjectForKey and must prune when it vanishes. The
  *  other kinds (session's applied view is a field-pick, not an object;
  *  library/catalog/open-session/save-session are chrome; inspect/node-view are
- *  read-only views of catalog/world state; a link window edits a pending edit
- *  of the accepted session) are never pruned or re-seeded by the pass. */
+ *  read-only views of catalog/world state; a link or domain window edits a
+ *  pending edit of the accepted session) are never pruned or re-seeded by the
+ *  pass. */
 function isObjectTarget(target: EditorTarget): boolean {
   switch (target.kind) {
     case "segment":
     case "ground":
-    case "domain":
     case "boundary":
       return true;
     default:

@@ -2,9 +2,9 @@
 // Licensed under the Apache License, Version 2.0. See LICENSE file.
 /** The outline's Links and Routing groups: every link rule, routing domain
  *  and boundary the session declares, as the backend lists them with the
- *  pending edits laid over them. Every link rule opens its window. When the
- *  session declares no routing domain, the Routing group shows the resolver's
- *  default domains, read-only.
+ *  pending edits laid over them. Every link rule and routing domain opens its
+ *  window. When the session declares no routing domain, the Routing group
+ *  shows the resolver's default domains, read-only.
  */
 
 import { Icon, type IconName } from "../ui/icons/Icon";
@@ -164,12 +164,8 @@ export function LinkAndRoutingOutline({
           icon="network"
           name={domain.id}
           detail={details(domain.protocol, domain.pending === null ? null : "pending edit")}
-          target={cardWindowShows(domain) ? { kind: "domain", id: domain.id } : null}
-          why={
-            cardWindowShows(domain)
-              ? `Edit ${domain.id}`
-              : noWindowReason("routing domain", domain.pending !== null)
-          }
+          target={{ kind: "domain", id: domain.id }}
+          why={`Edit ${domain.id}`}
           isOpen={isOpen}
           onOpen={onOpen}
         />

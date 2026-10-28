@@ -4,7 +4,6 @@ import type {
   DraftGroundSet,
   DraftGroundSite,
   DraftNode,
-  DraftRoutingDomain,
   GroundBoresight,
   Workspace,
 } from "../../workspace";
@@ -13,7 +12,6 @@ export const EARTH_BODY_REF = "nodalarc:bodies/earth.yaml";
 
 let spaceCounter = 0;
 let groundCounter = 0;
-let domainCounter = 0;
 let boundaryCounter = 0;
 let siteCounter = 0;
 
@@ -129,22 +127,6 @@ export function testGroundMember(
         boresights: { ...ground.stamp.boresights },
       }],
     },
-  };
-}
-
-export function defaultRoutingDomain(workspace: Workspace): DraftRoutingDomain {
-  domainCounter += 1;
-  return {
-    domain_id: `domain-${domainCounter}`,
-    protocol: "isis",
-    member_segment_ids: [
-      ...workspace.space.map((draft) => draft.segment_id),
-      ...workspace.space_refs.map((draft) => draft.segment_id),
-      ...workspace.ground.map((draft) => draft.segment_id),
-      ...workspace.ground_refs.map((draft) => draft.segment_id),
-    ],
-    hello_interval_s: null,
-    hold_interval_s: null,
   };
 }
 

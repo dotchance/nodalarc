@@ -132,8 +132,8 @@ class BuilderRuleAllocation(BaseModel):
 
 #: How a rule's preview geometry was resolved. Only ``computed`` carries reason
 #: counts and drawn pairs; the client renders the other three statuses without
-#: deciding them client-side. A module-level alias lets tests compare the
-#: vocabulary with the TypeScript union through ``get_args``.
+#: deciding them client-side. The `type` statement names it in the schema, so the
+#: page's generated types carry it as ``PreviewScope``.
 type PreviewScope = Literal[
     "computed",
     "inter_body_pending",

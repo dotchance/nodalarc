@@ -17,17 +17,6 @@ BuilderControlScalarValue = str | int | float | bool | None
 type BuilderControlScalarKind = Literal["text", "number", "boolean", "datetime", "reference"]
 type BuilderControlNumberKind = Literal["integer", "float"]
 type BuilderControlChoiceKind = Literal["literal", "type", "null"]
-type BuilderControlMutationOperation = Literal[
-    "set_scalar",
-    "set_present",
-    "select_choice",
-    "insert_item",
-    "remove_item",
-    "move_item",
-    "insert_map_entry",
-    "remove_map_entry",
-    "rename_map_key",
-]
 BuilderMutationScalar = str | int | float | bool
 
 

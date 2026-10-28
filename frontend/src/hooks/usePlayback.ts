@@ -41,7 +41,7 @@ export function usePlayback(snapshotPaused?: boolean, snapshotSpeed?: number): P
         headers: authHeaders({ "Content-Type": "application/json" }),
         body: JSON.stringify(body),
       });
-      // A refused command changed nothing; the snapshot keeps showing the clock's state.
+      // A refused or failed command answers no state; the snapshot shows the clock's.
       if (!res.ok) return;
       const answer = (await res.json()) as PlaybackStateMsg;
       setPaused(answer.state === "paused");

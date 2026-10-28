@@ -2964,3 +2964,18 @@ class TestSessionHistory:
         wal = ctx.history.path.with_name(ctx.history.path.name + "-wal")
         # Without the limit the log keeps its 4 MiB high-water size after a checkpoint.
         assert wal.stat().st_size < 4 * 1024 * 1024
+
+
+def test_a_playback_speed_that_is_not_a_number_is_refused_before_ome(monkeypatch):
+    import vs_api.main as m
+
+    monkeypatch.setattr(m, "_API_KEY", "")
+    monkeypatch.setattr(m, "_nats_connection", None)
+
+    response = TestClient(m.app).post(
+        "/api/v1/playback",
+        content='{"action": "set_speed", "factor": Infinity}',
+        headers={"Content-Type": "application/json"},
+    )
+
+    assert response.status_code == 422

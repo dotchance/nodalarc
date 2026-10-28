@@ -10,10 +10,13 @@ bodies from exception text themselves: they raise, or return
 from __future__ import annotations
 
 import logging
+import math
 from collections.abc import Callable
 from dataclasses import dataclass
 
 from fastapi import FastAPI, Request
+from fastapi.encoders import jsonable_encoder
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from nodalarc.catalog_closure import (
     CatalogClosureError,
@@ -267,7 +270,18 @@ def install_refusal_handlers(app: FastAPI) -> None:
             raise TypeError(f"{type(exc).__name__} is registered but not translated")
         return outcome.response()
 
+    async def validation_handler(_request: Request, exc: Exception) -> JSONResponse:
+        # FastAPI's own 422 body, except that an input JSON cannot carry (an infinite
+        # or NaN number the request spelled out) is written as text.
+        assert isinstance(exc, RequestValidationError)
+        errors = jsonable_encoder(
+            exc.errors(),
+            custom_encoder={float: lambda value: value if math.isfinite(value) else str(value)},
+        )
+        return JSONResponse(status_code=422, content={"detail": errors})
+
     handler: Callable = refusal_handler
     for family in REFUSAL_FAMILIES:
         app.add_exception_handler(family, handler)
+    app.add_exception_handler(RequestValidationError, validation_handler)
     app.add_middleware(UnhandledFailureMiddleware)

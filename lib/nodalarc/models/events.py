@@ -474,7 +474,7 @@ class PlaybackControlCommand(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     action: Literal["pause", "resume", "set_speed", "seek", "get_status"]
-    factor: float | None = None
+    factor: float | None = Field(default=None, allow_inf_nan=False)
     target_sim_time: datetime | None = None
 
     @model_validator(mode="after")

@@ -665,6 +665,57 @@ def test_backend_atomically_creates_a_ground_for_a_site_reference(
     assert refused.authoring_workspace.ground == ()
 
 
+def test_a_session_built_from_placed_references_keeps_its_candidate_limits(
+    service: BuilderVisualDraftService,
+) -> None:
+    """The limits a new draft states survive the commands before its first link rule,
+    so a session built only from Builder commands compiles and saves."""
+    draft = service.create(BuilderVisualDraftCreateRequest(session_name="placed-references"))
+    assert draft.authoring_workspace is not None
+    seeded = {
+        "max_pairs_per_rule": draft.authoring_workspace.max_pairs_per_rule,
+        "max_pairs_per_tick": draft.authoring_workspace.max_pairs_per_tick,
+    }
+
+    def apply(command: dict[str, Any]):
+        nonlocal draft
+        result = service.apply_command(
+            BuilderVisualDraftCommandRequest(
+                draft=draft,
+                expected_draft_revision=draft.draft_revision,
+                command=command,
+            ),
+            available_node_count=1_000_000,
+            preview_factory=_preview,
+        )
+        draft = result.draft
+        return result
+
+    space = apply(
+        {
+            "operation": "place_space_reference",
+            "source_ref": "nodalarc:constellations/earth/heo/earth-heo-molniya-3.yaml",
+        }
+    ).affected_id
+    assert draft.applied_session["simulation"]["candidate_limits"] == seeded
+    ground = apply(
+        {
+            "operation": "place_ground_reference",
+            "site_set_ref": "nodalarc:site-sets/earth/heo/earth-heo-gateway-sites.yaml",
+        }
+    ).affected_id
+    apply({"operation": "connect_segments", "from_segment_id": space, "to_segment_id": ground})
+    apply({"operation": "add_routing_domain"})
+    assert draft.applied_session["simulation"]["candidate_limits"] == seeded
+
+    compiled = service.compile(
+        BuilderVisualDraftCompileRequest(draft=draft),
+        available_node_count=1_000_000,
+        preview_factory=_preview,
+    )
+    assert compiled.compile_result.save_verdict.allowed, compiled.compile_result.issues
+
+
 def test_backend_visual_commands_own_seeds_and_advance_one_fenced_revision(
     service: BuilderVisualDraftService,
 ) -> None:

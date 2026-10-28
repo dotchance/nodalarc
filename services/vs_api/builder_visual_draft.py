@@ -2061,6 +2061,9 @@ def _assemble_authoring_workspace(
         }
     if link_rules:
         session["link_rules"] = link_rules
+    # The limits are written whenever the draft states them, so a session keeps them
+    # through the commands that come before its first link rule.
+    if workspace.max_pairs_per_rule is not None or workspace.max_pairs_per_tick is not None:
         session["simulation"] = {
             "candidate_limits": {
                 "max_pairs_per_rule": cast(JsonValue, workspace.max_pairs_per_rule),

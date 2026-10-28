@@ -1069,7 +1069,7 @@ export interface OpsEventsQuery {
   readonly limit?: number;
 }
 
-/** One link's decision trace when both nodes are named; every trace otherwise. */
+/** Both nodes name one link's decision trace; neither returns every trace. Naming one node alone is refused. */
 export interface LinkDecisionTracesQuery {
   readonly node_a?: string | null;
   readonly node_b?: string | null;

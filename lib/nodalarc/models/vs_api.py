@@ -611,7 +611,8 @@ class OpsEventsQuery(BaseModel):
 
 
 class LinkDecisionTracesQuery(BaseModel):
-    """One link's decision trace when both nodes are named; every trace otherwise."""
+    """Both nodes name one link's decision trace; neither returns every trace. Naming
+    one node alone is refused."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 

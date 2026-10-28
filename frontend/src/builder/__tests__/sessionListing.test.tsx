@@ -175,9 +175,9 @@ function renderOutline(
 }
 
 describe("the outline's Links and Routing groups", () => {
-  it("lists the rules and domains no card writes back, and opens every rule and domain", () => {
+  it("lists the objects no card writes back, and opens every rule, domain and boundary", () => {
     const onOpen = renderOutline(listSessionObjects(LISTING, []));
-    fireEvent.click(screen.getByRole("button", { name: /leo-isl/ }));
+    fireEvent.click(screen.getByRole("button", { name: /^leo-isl/ }));
     expect(onOpen).toHaveBeenCalledWith({ kind: "link", id: "leo-isl" });
     // No card writes geo-relay or geo-core back: their windows show the field editor.
     fireEvent.click(screen.getByRole("button", { name: /^geo-relay/ }));
@@ -186,13 +186,11 @@ describe("the outline's Links and Routing groups", () => {
     expect(onOpen).toHaveBeenCalledWith({ kind: "domain", id: "leo-core" });
     fireEvent.click(screen.getByRole("button", { name: /geo-core/ }));
     expect(onOpen).toHaveBeenCalledWith({ kind: "domain", id: "geo-core" });
+    // Each boundary, with a card value or none, opens the one boundary list window.
+    onOpen.mockClear();
     fireEvent.click(screen.getByRole("button", { name: /over geo-relay/ }));
-    expect(onOpen).toHaveBeenCalledWith({ kind: "boundary", id: "boundary-1" });
-    expect(screen.queryByRole("button", { name: /^over leo-isl/ })).toBeNull();
-    const row = screen.getByText("over leo-isl").closest(".builder-library-entry");
-    expect(row?.getAttribute("title")).toBe(
-      "No card writes this boundary back unchanged. Edit it in the session YAML.",
-    );
+    fireEvent.click(screen.getByRole("button", { name: /over leo-isl/ }));
+    expect(onOpen.mock.calls).toEqual([[{ kind: "boundaries" }], [{ kind: "boundaries" }]]);
     // A declared session shows its own domains, not the resolver's.
     expect(screen.queryByText("made-a")).toBeNull();
   });
@@ -207,7 +205,7 @@ describe("the outline's Links and Routing groups", () => {
         pendingAnswer(domainAddress("leo-core"), null),
       ]),
     );
-    const rule = screen.getByRole("button", { name: /leo-isl/ });
+    const rule = screen.getByRole("button", { name: /^leo-isl/ });
     expect(rule.textContent).toContain("isl · off · pending edit");
     // A pending rule or domain opens its window, which shows the pending edit.
     fireEvent.click(rule);
@@ -217,6 +215,18 @@ describe("the outline's Links and Routing groups", () => {
     expect(domain.textContent).not.toContain("isis");
     fireEvent.click(domain);
     expect(onOpen).toHaveBeenCalledWith({ kind: "domain", id: "leo-core" });
+  });
+
+  it("shows a boundary list whose pending edit no card value states as one row", () => {
+    const onOpen = renderOutline(
+      listSessionObjects(LISTING, [pendingAnswer(BOUNDARIES_ADDRESS, null)]),
+    );
+    // The page cannot tell the pending list's boundaries apart.
+    expect(screen.queryByText(/^over /)).toBeNull();
+    const row = screen.getByRole("button", { name: /^boundaries/ });
+    expect(row.textContent).toContain("pending edit");
+    fireEvent.click(row);
+    expect(onOpen).toHaveBeenCalledWith({ kind: "boundaries" });
   });
 
   it("shows the resolver's domains read-only when the session declares none", () => {

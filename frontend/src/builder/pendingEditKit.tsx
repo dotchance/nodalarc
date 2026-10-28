@@ -14,7 +14,11 @@ import {
   GraphicalControlTreeEditor,
   type BuilderControlMutation,
 } from "./GraphicalControlTreeEditor";
-import type { BuilderIssue, BuilderVisualObjectEditResult } from "./generated/builderApi";
+import type {
+  BuilderControlTree,
+  BuilderIssue,
+  BuilderVisualObjectEditResult,
+} from "./generated/builderApi";
 
 /** How long a typed change waits for the next keystroke before it is sent. */
 const TYPING_PAUSE_MS = 350;
@@ -116,24 +120,25 @@ export function useCardValueEdits<T extends object>(
   return { shown: asked ?? answered, change, checking: asked !== null, error };
 }
 
-/** The field editor over an object's working JSON. It edits the tree the
+/** The field editor's tree over an object's working JSON, while it is known. */
+export type FieldEditorTree =
+  | { readonly kind: "tree"; readonly tree: BuilderControlTree }
+  | { readonly kind: "loading" }
+  | { readonly kind: "failed"; readonly failure: string; readonly retry: () => void };
+
+/** The tree the field editor over an object's working JSON edits: the tree the
  *  object's latest answer built at the accepted revision. When there is no such
  *  tree, because no edit of the object is pending or the session was accepted
- *  again since that answer, the backend describes the object first. */
-export function PendingObjectFieldEditor({
-  pending,
-  appliedRevision,
-  describe,
-  send,
-}: {
+ *  again since that answer, the backend describes the object first. Nothing is
+ *  described while `needed` is false. */
+export function useFieldEditorTree(
   /** The latest answer for the object's pending edit; null when none is pending. */
-  pending: BuilderVisualObjectEditResult | null;
-  appliedRevision: number;
+  pending: BuilderVisualObjectEditResult | null,
+  appliedRevision: number,
   /** Ask the backend for the field editor over the object without changing it. */
-  describe: () => Promise<BuilderVisualObjectEditResult>;
-  /** Send one batch of field changes; resolves true when it was the latest. */
-  send: (commands: ReadonlyArray<BuilderControlMutation>) => Promise<boolean>;
-}) {
+  describe: () => Promise<BuilderVisualObjectEditResult>,
+  needed: boolean,
+): FieldEditorTree {
   const current =
     pending !== null && pending.control_tree.projection_revision === appliedRevision
       ? pending
@@ -150,7 +155,7 @@ export function PendingObjectFieldEditor({
       : null;
   const describeRef = useRef(describe);
   describeRef.current = describe;
-  const needsDescription = current === null && describedNow === null;
+  const needsDescription = needed && current === null && describedNow === null;
   useEffect(() => {
     if (!needsDescription) return;
     let live = true;
@@ -168,23 +173,52 @@ export function PendingObjectFieldEditor({
       live = false;
     };
   }, [needsDescription, pending, appliedRevision]);
-  if (current === null && describedNow !== null && "failure" in describedNow) {
+  if (current !== null) return { kind: "tree", tree: current.control_tree };
+  if (describedNow === null) return { kind: "loading" };
+  if ("failure" in describedNow) {
+    return { kind: "failed", failure: describedNow.failure, retry: () => setDescribed(null) };
+  }
+  return { kind: "tree", tree: describedNow.answer.control_tree };
+}
+
+/** What a field editor shows while its tree is not known. */
+export function FieldEditorTreeWaiting({
+  state,
+}: {
+  state: Exclude<FieldEditorTree, { readonly kind: "tree" }>;
+}) {
+  if (state.kind === "failed") {
     return (
       <div className="builder-warning">
-        The field editor could not be loaded: {describedNow.failure}{" "}
-        <Button onClick={() => setDescribed(null)}>retry</Button>
+        The field editor could not be loaded: {state.failure}{" "}
+        <Button onClick={state.retry}>retry</Button>
       </div>
     );
   }
-  const tree =
-    current?.control_tree ??
-    (describedNow !== null && "answer" in describedNow ? describedNow.answer.control_tree : null);
-  if (tree === null) {
-    return <div className="builder-site-derived">Loading the field editor…</div>;
-  }
+  return <div className="builder-site-derived">Loading the field editor…</div>;
+}
+
+/** The field editor over an object's working JSON, at the tree
+ *  useFieldEditorTree finds for it. */
+export function PendingObjectFieldEditor({
+  pending,
+  appliedRevision,
+  describe,
+  send,
+}: {
+  /** The latest answer for the object's pending edit; null when none is pending. */
+  pending: BuilderVisualObjectEditResult | null;
+  appliedRevision: number;
+  /** Ask the backend for the field editor over the object without changing it. */
+  describe: () => Promise<BuilderVisualObjectEditResult>;
+  /** Send one batch of field changes; resolves true when it was the latest. */
+  send: (commands: ReadonlyArray<BuilderControlMutation>) => Promise<boolean>;
+}) {
+  const field = useFieldEditorTree(pending, appliedRevision, describe, true);
+  if (field.kind !== "tree") return <FieldEditorTreeWaiting state={field} />;
   return (
     <GraphicalControlTreeEditor
-      tree={tree}
+      tree={field.tree}
       onMutate={async (commands) => {
         await send(commands);
       }}

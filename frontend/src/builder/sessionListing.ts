@@ -230,21 +230,3 @@ export function listSessionObjects(
   }
   return { linkRules, routingDomains, boundaries };
 }
-
-/** Whether a boundary window can show its object. That window edits the
- *  accepted object through its card, so it needs the accepted card value and
- *  no pending edit laid over it. */
-export function cardWindowShows(listed: {
-  readonly accepted: { readonly widget: unknown } | null;
-  readonly pending: BuilderVisualObjectEditResult | null;
-}): boolean {
-  return listed.pending === null && listed.accepted !== null && listed.accepted.widget !== null;
-}
-
-/** Why a row's object opens no window: an edit of it is pending, or no card
- *  writes it back unchanged. */
-export function noWindowReason(kind: string, pending: boolean): string {
-  return pending
-    ? `An edit of this ${kind} is pending.`
-    : `No card writes this ${kind} back unchanged. Edit it in the session YAML.`;
-}

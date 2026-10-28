@@ -22,7 +22,6 @@ import {
   type EditorBuffer,
 } from "./useWorkspace";
 import type {
-  DraftBoundary,
   DraftConstellation,
   DraftGroundSet,
   DraftLinkRule,
@@ -37,7 +36,7 @@ export type EditorTarget =
   | { kind: "ground"; id: string }
   | { kind: "link"; id: string }
   | { kind: "domain"; id: string }
-  | { kind: "boundary"; id: string }
+  | { kind: "boundaries" }
   | { kind: "inspect"; ref: string; document: Record<string, unknown> }
   | { kind: "node-view"; nodeId: string }
   | { kind: "library" }
@@ -62,6 +61,7 @@ export function targetKey(target: EditorTarget): string {
     case "open-session":
     case "source-yaml":
     case "save-session":
+    case "boundaries":
       return target.kind;
     case "customize-chain":
       return `customize:${target.segmentId}`;
@@ -93,8 +93,6 @@ function objectTitle(workspace: Workspace, target: EditorTarget): string {
     case "link":
     case "domain":
       return target.id;
-    case "boundary":
-      return "Boundary";
     default:
       return targetKey(target);
   }
@@ -104,14 +102,13 @@ function objectTitle(workspace: Workspace, target: EditorTarget): string {
  *  resolve through appliedObjectForKey and must prune when it vanishes. The
  *  other kinds (session's applied view is a field-pick, not an object;
  *  library/catalog/open-session/save-session are chrome; inspect/node-view are
- *  read-only views of catalog/world state; a link or domain window edits a
- *  pending edit of the accepted session) are never pruned or re-seeded by the
- *  pass. */
+ *  read-only views of catalog/world state; a link, domain or boundary list
+ *  window edits a pending edit of the accepted session) are never pruned or
+ *  re-seeded by the pass. */
 function isObjectTarget(target: EditorTarget): boolean {
   switch (target.kind) {
     case "segment":
     case "ground":
-    case "boundary":
       return true;
     default:
       return false;
@@ -136,7 +133,6 @@ interface UseEditorWindowsDeps {
   updateGroundDraft: (segmentId: string, draft: DraftGroundSet) => void;
   updateLinkRule: (ruleId: string, draft: DraftLinkRule) => void;
   updateRoutingDomain: (domainId: string, draft: DraftRoutingDomain) => void;
-  updateBoundary: (boundaryId: string, draft: DraftBoundary) => void;
 }
 
 export function useEditorWindows({
@@ -146,7 +142,6 @@ export function useEditorWindows({
   updateGroundDraft,
   updateLinkRule,
   updateRoutingDomain,
-  updateBoundary,
 }: UseEditorWindowsDeps) {
   // The diagram workspace: editors are floating, anchored windows — many
   // can be open at once, keyed per object (re-open focuses, ).
@@ -259,9 +254,6 @@ export function useEditorWindows({
         break;
       case "domain":
         updateRoutingDomain(target.id, buf.draft as DraftRoutingDomain);
-        break;
-      case "boundary":
-        updateBoundary(target.id, buf.draft as DraftBoundary);
         break;
       default:
         return;

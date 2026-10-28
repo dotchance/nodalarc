@@ -3,13 +3,14 @@
 /** The outline's Links and Routing groups: every link rule, routing domain
  *  and boundary the session declares, as the backend lists them with the
  *  pending edits laid over them. Every link rule and routing domain opens its
- *  window. When the session declares no routing domain, the Routing group
- *  shows the resolver's default domains, read-only.
+ *  window, and every boundary opens the window of the boundary list. When the
+ *  session declares no routing domain, the Routing group shows the resolver's
+ *  default domains, read-only.
  */
 
 import { Icon, type IconName } from "../ui/icons/Icon";
 import { resolvedDomains, type GuideWorldNode } from "./BuildGuide";
-import { cardWindowShows, noWindowReason, type ListedSessionObjects } from "./sessionListing";
+import type { ListedSessionObjects } from "./sessionListing";
 import { targetKey, type EditorTarget } from "./useEditorWindows";
 
 interface LinkAndRoutingOutlineProps {
@@ -25,7 +26,10 @@ interface LinkAndRoutingOutlineProps {
   onOpen: (target: EditorTarget) => void;
 }
 
-/** One outline row. A row whose object has no window to open says why. */
+/** The boundary list is edited in one window. */
+const BOUNDARIES: EditorTarget = { kind: "boundaries" };
+
+/** One outline row. It opens its object's window. */
 function OutlineRow({
   icon,
   name,
@@ -38,22 +42,11 @@ function OutlineRow({
   icon: IconName;
   name: string;
   detail: string;
-  target: EditorTarget | null;
+  target: EditorTarget;
   why: string;
   isOpen: (key: string) => boolean;
   onOpen: (target: EditorTarget) => void;
 }) {
-  if (target === null) {
-    return (
-      <div className="builder-library-entry" title={why}>
-        <span className="builder-outline-name builder-outline-row--segment">
-          <Icon name={icon} size={12} />
-          {name}
-        </span>
-        <span className="builder-outline-count">{detail}</span>
-      </div>
-    );
-  }
   return (
     <button
       className={`builder-outline-row builder-outline-row--segment${
@@ -178,37 +171,27 @@ export function LinkAndRoutingOutline({
           icon="columns-2"
           name="boundaries"
           detail="pending edit"
-          target={null}
-          why={noWindowReason("boundary list", true)}
+          target={BOUNDARIES}
+          why="Edit the boundaries"
           isOpen={isOpen}
           onOpen={onOpen}
         />
       ) : (
-        boundaryItems.map((boundary, index) => {
-          const windowId =
-            cardWindowShows({ accepted: boundary.accepted, pending: boundaries.pending })
-              ? (boundary.accepted?.widget?.boundary_id ?? null)
-              : null;
-          return (
-            <OutlineRow
-              key={index}
-              icon="columns-2"
-              name={boundary.overRuleId === null ? "boundary" : `over ${boundary.overRuleId}`}
-              detail={details(
-                boundary.card?.adapter,
-                boundaries.pending === null ? null : "pending edit",
-              )}
-              target={windowId === null ? null : { kind: "boundary", id: windowId }}
-              why={
-                windowId === null
-                  ? noWindowReason("boundary", boundaries.pending !== null)
-                  : "Edit boundary"
-              }
-              isOpen={isOpen}
-              onOpen={onOpen}
-            />
-          );
-        })
+        boundaryItems.map((boundary, index) => (
+          <OutlineRow
+            key={index}
+            icon="columns-2"
+            name={boundary.overRuleId === null ? "boundary" : `over ${boundary.overRuleId}`}
+            detail={details(
+              boundary.card?.adapter,
+              boundaries.pending === null ? null : "pending edit",
+            )}
+            target={BOUNDARIES}
+            why="Edit the boundaries"
+            isOpen={isOpen}
+            onOpen={onOpen}
+          />
+        ))
       )}
     </>
   );

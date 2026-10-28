@@ -35,7 +35,6 @@ function useHarness() {
     updateGroundDraft: ws.updateGroundDraft,
     updateLinkRule: ws.updateLinkRule,
     updateRoutingDomain: ws.updateRoutingDomain,
-    updateBoundary: ws.updateBoundary,
   });
   return { ws, editor };
 }
@@ -121,20 +120,22 @@ describe("useEditorWindows — buffered editing", () => {
     expect(result.current.editor.buffers[key]).toBeUndefined();
   });
 
-  it("keeps a link or domain window whose object the workspace does not hold", () => {
-    // A link or domain window shows an object the backend lists, which the
-    // workspace may not hold. A boundary window still edits the workspace, so
-    // it closes with its object.
+  it("keeps a link, domain or boundary list window whose object the workspace does not hold", () => {
+    // These windows show objects the backend lists, which the workspace may
+    // not hold. A segment window still edits the workspace, so it closes with
+    // its object.
     const { result } = withSegment();
     const link: EditorTarget = { kind: "link", id: "relay-rule" };
     const domain: EditorTarget = { kind: "domain", id: "relay-domain" };
-    const boundary: EditorTarget = { kind: "boundary", id: "no-such-boundary" };
-    act(() => result.current.editor.openEditor(link));
-    act(() => result.current.editor.openEditor(domain));
-    act(() => result.current.editor.openEditor(boundary));
+    const boundaries: EditorTarget = { kind: "boundaries" };
+    const segment: EditorTarget = { kind: "segment", id: "no-such-segment" };
+    for (const target of [link, domain, boundaries, segment]) {
+      act(() => result.current.editor.openEditor(target));
+    }
     expect(result.current.editor.isOpen(targetKey(link))).toBe(true);
     expect(result.current.editor.isOpen(targetKey(domain))).toBe(true);
-    expect(result.current.editor.isOpen(targetKey(boundary))).toBe(false);
+    expect(result.current.editor.isOpen(targetKey(boundaries))).toBe(true);
+    expect(result.current.editor.isOpen(targetKey(segment))).toBe(false);
   });
 
   it("a session gesture closes every window except the component draft", () => {

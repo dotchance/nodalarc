@@ -54,7 +54,7 @@ import { LinkAndRoutingOutline } from "./LinkAndRoutingOutline";
 import { LinkRuleWindow } from "./LinkRuleEditor";
 import { CatalogDraftEditorWindow } from "./CatalogDraftEditorWindow";
 import { OpenSessionPicker } from "./OpenSessionPicker";
-import { BoundaryEditor, RoutingDomainWindow } from "./RoutingEditor";
+import { BoundaryListWindow, RoutingDomainWindow } from "./RoutingEditor";
 import { SessionEditor, timeRateSummary } from "./SessionEditor";
 import { listSessionObjects } from "./sessionListing";
 import {
@@ -102,7 +102,6 @@ import {
 import { workspaceFromVisualDraft } from "./visualWorkspace";
 import {
   placedSegments,
-  type DraftBoundary,
   type DraftConstellation,
   type DraftGroundSet,
   type Workspace,
@@ -215,11 +214,14 @@ const BUFFERED_WINDOW_KINDS: ReadonlySet<EditorTarget["kind"]> = new Set([
   "session",
   "segment",
   "ground",
-  "boundary",
 ]);
 
 /** The windows whose edits are pending edits of the accepted session. */
-const PENDING_EDIT_WINDOW_KINDS: ReadonlySet<EditorTarget["kind"]> = new Set(["link", "domain"]);
+const PENDING_EDIT_WINDOW_KINDS: ReadonlySet<EditorTarget["kind"]> = new Set([
+  "link",
+  "domain",
+  "boundaries",
+]);
 
 /** One-line form of a refusal for the compact surfaces (canvas note,
  *  status bar) — the owning window's wall carries the full text. */
@@ -557,7 +559,6 @@ export function BuilderView({
     removeLinkRule,
     updateRoutingDomain,
     removeRoutingDomain,
-    updateBoundary,
     removeBoundary,
   } = useWorkspace();
   const nodeCatalog = useBuilderCatalog("nodes");
@@ -656,7 +657,6 @@ export function BuilderView({
     updateGroundDraft,
     updateLinkRule,
     updateRoutingDomain,
-    updateBoundary,
   });
   const [saveState, setSaveState] = useState<SaveState>({ kind: "idle" });
   // Whether the next deploy records the session run's history.
@@ -806,14 +806,19 @@ export function BuilderView({
     [assemblyResult?.listing, pendingEdits],
   );
   // A link or domain window shows an object the backend lists or a pending
-  // edit holds. It closes when neither holds the object any more.
+  // edit holds. It closes when neither holds the object any more. The boundary
+  // list window closes when the list holds no boundary and no edit of it is
+  // pending.
   useEffect(() => {
     for (const w of windows) {
       const target = w.target;
       const gone =
         (target.kind === "link" && !listed.linkRules.some((rule) => rule.id === target.id)) ||
         (target.kind === "domain" &&
-          !listed.routingDomains.some((domain) => domain.id === target.id));
+          !listed.routingDomains.some((domain) => domain.id === target.id)) ||
+        (target.kind === "boundaries" &&
+          listed.boundaries.pending === null &&
+          listed.boundaries.items?.length === 0);
       if (gone) closeWindow(w.key);
     }
   }, [closeWindow, listed, windows]);
@@ -1550,7 +1555,7 @@ export function BuilderView({
     if (!workspace && !standalone) return null;
     if (
       !authoring &&
-      ["segment", "ground", "link", "domain", "boundary", "library"].includes(
+      ["segment", "ground", "link", "domain", "boundaries", "library"].includes(
         target.kind,
       )
     ) {
@@ -1868,28 +1873,26 @@ export function BuilderView({
           ),
         };
       }
-      case "boundary": {
-        const applied = workspace?.boundaries.find(
-          (b) => b.boundary_id === target.id,
-        );
-        if (!workspace || !applied) return null;
-        const key = targetKey(target);
-        const boundary = (buffers[key]?.draft as DraftBoundary | undefined) ?? applied;
+      case "boundaries": {
+        const appliedRevision = visualDraft?.applied_revision ?? null;
+        if (appliedRevision === null) return null;
+        const address = { kind: "whole_list", pointer: "/routing/boundaries" } as const;
+        // A boundary is removed from the twin, so removing waits while a change
+        // is being applied or any link or routing edit is pending.
+        const removeAcceptedBoundary =
+          writer !== null || pendingEditCount > 0 ? null : removeBoundary;
         return {
-          title: "Boundary",
+          title: listed.boundaries.pending === null ? "Boundaries" : "Boundaries •",
           content: (
-            <BoundaryEditor
+            <BoundaryListWindow
               authoring={authoring!}
-              key={boundary.boundary_id}
-              workspace={workspace}
-              boundary={boundary}
-              onUpdate={(patch) =>
-                patchBuffer(key, applied, (b) => ({ ...b, ...patch }))
-              }
-              onRemove={writer !== null ? null : () => {
-                removeBoundary(boundary.boundary_id);
-                closeWindow(key);
-              }}
+              listed={listed.boundaries}
+              linkRules={listed.linkRules}
+              routingDomains={listed.routingDomains}
+              appliedRevision={appliedRevision}
+              onEdit={(change) => editPendingObject(address, change)}
+              onDescribe={() => describePendingObject(address)}
+              onRemove={removeAcceptedBoundary}
             />
           ),
         };
@@ -2590,9 +2593,7 @@ export function BuilderView({
                   onClick={() => {
                     setLibraryError(null);
                     void applyWorkspaceCommand({ operation: "add_boundary" })
-                      .then((result) =>
-                        openEditor({ kind: "boundary", id: result.affected_id }),
-                      )
+                      .then(() => openEditor({ kind: "boundaries" }))
                       .catch((cause) =>
                         setLibraryError(
                           cause instanceof Error ? cause.message : String(cause),

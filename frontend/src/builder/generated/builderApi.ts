@@ -674,12 +674,13 @@ export interface BuilderVisualDraftApplyYamlResult {
   readonly issues: ReadonlyArray<BuilderIssue>;
 }
 
-/** Backend assembly, typed issues, save request, and authoritative compile facts. */
+/** Backend assembly, typed issues, save request, and authoritative compile facts. The listing names every rule, domain and boundary of the accepted session. */
 export interface BuilderVisualDraftAssemblyResult {
   readonly visual_draft: BuilderVisualDraftEnvelope;
   readonly assembled_draft: BuilderDraftEnvelope;
   readonly save_request: BuilderSessionSaveRequest;
   readonly compile_result: BuilderCompileResult;
+  readonly listing: BuilderVisualSessionListing | null;
   readonly assembly_issues: ReadonlyArray<BuilderIssue>;
 }
 
@@ -835,6 +836,13 @@ export interface BuilderVisualLinkRule {
   readonly max_range_km?: number | null;
 }
 
+/** One link rule of the accepted session and the card value that writes it back. */
+export interface BuilderVisualLinkRuleListing {
+  readonly rule_id: string;
+  readonly segment_ids: ReadonlyArray<string>;
+  readonly widget: BuilderVisualLinkRule | null;
+}
+
 /** Mint complete sites and addresses from typed locations and one ground stamp. */
 export interface BuilderVisualMintGroundMembersCommand {
   readonly operation: "mint_ground_members";
@@ -924,6 +932,14 @@ export interface BuilderVisualRoutingBoundary {
   readonly export_node_loopbacks?: boolean;
 }
 
+/** One routing boundary of the accepted session, addressed by its position. */
+export interface BuilderVisualRoutingBoundaryListing {
+  readonly index: number;
+  readonly over_rule_id: string;
+  readonly domain_ids: ReadonlyArray<string>;
+  readonly widget: BuilderVisualRoutingBoundary | null;
+}
+
 /** Editable routing domain; empty membership remains visible to validation. */
 export interface BuilderVisualRoutingDomain {
   readonly domain_id?: string;
@@ -931,6 +947,14 @@ export interface BuilderVisualRoutingDomain {
   readonly member_segment_ids?: ReadonlyArray<string>;
   readonly hello_interval_s?: number | null;
   readonly hold_interval_s?: number | null;
+}
+
+/** One routing domain of the accepted session and the card value that writes it back. */
+export interface BuilderVisualRoutingDomainListing {
+  readonly domain_id: string;
+  readonly protocol: RoutingProtocol;
+  readonly segment_ids: ReadonlyArray<string>;
+  readonly widget: BuilderVisualRoutingDomain | null;
 }
 
 /** Presentation and runtime facts for one routing protocol. */
@@ -949,6 +973,13 @@ export type BuilderVisualSchedulingPreset = "leo-fast-handover" | "geo-longest-p
 export interface BuilderVisualSchedulingPresetMetadata {
   readonly id: BuilderVisualSchedulingPreset;
   readonly label: string;
+}
+
+/** Every link rule, routing domain and boundary the accepted session declares, in order. The backend derives it from the accepted session and never reads it back. A null widget means no card writes that object back unchanged. */
+export interface BuilderVisualSessionListing {
+  readonly link_rules: ReadonlyArray<BuilderVisualLinkRuleListing>;
+  readonly routing_domains: ReadonlyArray<BuilderVisualRoutingDomainListing>;
+  readonly boundaries: ReadonlyArray<BuilderVisualRoutingBoundaryListing>;
 }
 
 /** Select one authored site's node model and derive its installed inventory. */

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from collections.abc import Callable
 from copy import deepcopy
 from pathlib import Path
@@ -16,11 +17,16 @@ from nodalarc.models.builder_visual_api import (
     BuilderVisualCustomizeChainRequest,
     BuilderVisualDraftApplyWorkspaceRequest,
     BuilderVisualDraftApplyYamlRequest,
+    BuilderVisualDraftAssemblyResult,
     BuilderVisualDraftCommandRequest,
     BuilderVisualDraftCompileRequest,
     BuilderVisualDraftCreateRequest,
     BuilderVisualDraftEnvelope,
     BuilderVisualDraftOpenRequest,
+    BuilderVisualLinkRuleListing,
+    BuilderVisualRoutingBoundaryListing,
+    BuilderVisualRoutingDomainListing,
+    BuilderVisualSessionListing,
     BuilderVisualWorkspace,
 )
 from nodalarc.models.link_rules import LinkRule
@@ -32,7 +38,6 @@ from vs_api.builder_visual_draft import (
     BuilderVisualDraftCommandError,
     BuilderVisualDraftService,
     _applied_control_tree,
-    _assemble_structured,
     _is_builder_owned_component_ref,
     _link_projection,
     _link_rule_document,
@@ -113,6 +118,172 @@ def test_open_projects_and_no_edit_compiles_every_shipped_session_canonically(
 
     assert compiled.assembly_issues == ()
     assert compiled.compile_result.canonical_session_json == expected.canonical_json
+
+
+def _widgets(
+    entries: tuple[
+        BuilderVisualLinkRuleListing
+        | BuilderVisualRoutingDomainListing
+        | BuilderVisualRoutingBoundaryListing,
+        ...,
+    ],
+) -> tuple[BaseModel, ...]:
+    return tuple(entry.widget for entry in entries if entry.widget is not None)
+
+
+@pytest.mark.parametrize("session_path", SHIPPED_SESSIONS, ids=lambda path: path.stem)
+def test_the_listing_names_every_rule_domain_and_boundary_of_every_shipped_session(
+    session_path: Path,
+    service: BuilderVisualDraftService,
+) -> None:
+    opened = service.open(
+        BuilderVisualDraftOpenRequest(source_ref=f"nodalarc:sessions/{session_path.name}")
+    )
+    compiled = service.compile(
+        BuilderVisualDraftCompileRequest(draft=opened),
+        available_node_count=1_000_000,
+        preview_factory=preview_from_resolution,
+    )
+    accepted = opened.applied_session
+    workspace = opened.applied_workspace
+    assert accepted is not None and workspace is not None
+    routing = accepted.get("routing", {})
+    listing = compiled.listing
+    assert listing is not None
+
+    assert [entry.rule_id for entry in listing.link_rules] == [
+        rule["id"] for rule in accepted.get("link_rules", [])
+    ]
+    assert [(entry.domain_id, entry.protocol) for entry in listing.routing_domains] == [
+        (domain["id"], domain["protocol"]) for domain in routing.get("domains", [])
+    ]
+    assert [(entry.index, entry.over_rule_id) for entry in listing.boundaries] == [
+        (index, boundary["over"]) for index, boundary in enumerate(routing.get("boundaries", []))
+    ]
+    # An object carries a card value exactly when today's cards show it.
+    assert _widgets(listing.link_rules) == workspace.links
+    assert _widgets(listing.routing_domains) == workspace.routing_domains
+    assert _widgets(listing.boundaries) == workspace.boundaries
+
+
+def test_the_listing_states_the_segments_and_domains_each_object_names(
+    service: BuilderVisualDraftService,
+) -> None:
+    opened = service.open(
+        BuilderVisualDraftOpenRequest(
+            source_ref="nodalarc:sessions/earth-leo-heo-geo-luna-reachability.yaml"
+        )
+    )
+    listing = service.compile(
+        BuilderVisualDraftCompileRequest(draft=opened),
+        available_node_count=1_000_000,
+        preview_factory=preview_from_resolution,
+    ).listing
+    assert listing is not None
+    rules = {entry.rule_id: entry for entry in listing.link_rules}
+    domains = {entry.domain_id: entry for entry in listing.routing_domains}
+
+    # A mount predicate is a shape no card writes.
+    assert rules["geo_access"].segment_ids == ("geo_ground", "geo_relay")
+    assert rules["geo_access"].widget is None
+    assert rules["leo_a_isl"].segment_ids == ("leo_a",)
+    assert rules["leo_a_isl"].widget is not None
+    # Capabilities are a field no domain card writes.
+    assert domains["earth_domain"].segment_ids == (
+        "leo_a",
+        "leo_b",
+        "meo",
+        "heo_relay",
+        "geo_relay",
+        "leo_a_ground",
+        "leo_b_ground",
+        "heo_ground",
+        "geo_ground",
+    )
+    assert domains["earth_domain"].widget is None
+    assert domains["luna_domain"].segment_ids == ("luna_relay", "luna_ground")
+    assert domains["luna_domain"].widget is not None
+    # `install_via` is a field no boundary card writes.
+    [boundary] = listing.boundaries
+    assert boundary.over_rule_id == "geo_to_luna"
+    assert boundary.domain_ids == ("earth_domain", "luna_domain")
+    assert boundary.widget is None
+
+
+def test_a_segment_named_inside_a_not_is_not_listed(
+    service: BuilderVisualDraftService,
+) -> None:
+    opened = service.open(
+        BuilderVisualDraftOpenRequest(source_ref="nodalarc:sessions/earth-leo-simple.yaml")
+    )
+    assert opened.applied_session is not None
+    document = deepcopy(opened.applied_session)
+    document["routing"] = {
+        "domains": [
+            {
+                "id": "leo_only",
+                "protocol": "static",
+                "selectors": [{"all": [{"segment": "leo"}, {"not": {"segment": "ground"}}]}],
+            }
+        ]
+    }
+    applied = service.apply_yaml(
+        BuilderVisualDraftApplyYamlRequest(
+            draft=opened,
+            expected_draft_revision=opened.draft_revision,
+            buffer_generation=1,
+            yaml_text=yaml.safe_dump(document, sort_keys=False),
+        )
+    )
+    assert applied.applied is True
+
+    listing = service.compile(
+        BuilderVisualDraftCompileRequest(draft=applied.draft),
+        available_node_count=1_000_000,
+        preview_factory=preview_from_resolution,
+    ).listing
+
+    assert listing is not None
+    assert [(entry.domain_id, entry.segment_ids) for entry in listing.routing_domains] == [
+        ("leo_only", ("leo",))
+    ]
+
+
+def test_a_draft_with_no_accepted_session_has_no_listing(
+    service: BuilderVisualDraftService,
+) -> None:
+    created = service.create(BuilderVisualDraftCreateRequest(session_name="nothing-accepted"))
+    compiled = service.compile(
+        BuilderVisualDraftCompileRequest(draft=created),
+        available_node_count=1_000_000,
+        preview_factory=preview_from_resolution,
+    )
+
+    assert created.applied_session is None
+    assert compiled.listing is None
+    empty = BuilderVisualSessionListing(link_rules=(), routing_domains=(), boundaries=())
+    with pytest.raises(ValidationError, match="accepted session"):
+        BuilderVisualDraftAssemblyResult.model_validate({**dict(compiled), "listing": empty})
+
+
+def test_a_listed_boundary_is_addressed_by_its_position() -> None:
+    with pytest.raises(ValidationError, match="position"):
+        BuilderVisualSessionListing.model_validate_json(
+            json.dumps(
+                {
+                    "link_rules": [],
+                    "routing_domains": [],
+                    "boundaries": [
+                        {
+                            "index": 1,
+                            "over_rule_id": "geo_to_luna",
+                            "domain_ids": ["earth_domain", "luna_domain"],
+                            "widget": None,
+                        }
+                    ],
+                }
+            )
+        )
 
 
 def _canonical(model: BaseModel) -> Any:
@@ -244,7 +415,11 @@ def test_a_workspace_preview_compiles_the_edit_and_accepts_nothing(
     )
     assert opened.authoring_workspace is not None
     edited = opened.authoring_workspace.model_copy(
-        update={"display_name": "Previewed name", "max_pairs_per_rule": 600}
+        update={
+            "display_name": "Previewed name",
+            "max_pairs_per_rule": 600,
+            "links": opened.authoring_workspace.links[:1],
+        }
     )
 
     preview = service.compile(
@@ -256,8 +431,12 @@ def test_a_workspace_preview_compiles_the_edit_and_accepts_nothing(
     compiled_session = preview.compile_result.canonical_session_json
     assert compiled_session is not None
     assert compiled_session["session"]["display_name"] == "Previewed name"
+    assert [rule["id"] for rule in compiled_session["link_rules"]] == ["leo_access"]
     assert preview.compile_result.resolved_preview is not None
     assert preview.visual_draft == opened
+    # The listing describes the accepted session, which the preview leaves alone.
+    assert preview.listing is not None
+    assert [entry.rule_id for entry in preview.listing.link_rules] == ["leo_access", "leo_isl"]
 
 
 def test_a_workspace_preview_needs_a_graphical_projection() -> None:
@@ -273,7 +452,7 @@ def test_a_workspace_preview_needs_a_graphical_projection() -> None:
         BuilderVisualDraftCompileRequest(draft=unprojected, workspace=BuilderVisualWorkspace())
 
 
-def test_overlay_changes_owned_metadata_without_touching_rich_unprojected_rule(
+def test_a_rich_rule_is_listed_without_a_widget_and_kept_by_other_edits(
     service: BuilderVisualDraftService,
 ) -> None:
     opened = service.open(
@@ -286,27 +465,40 @@ def test_overlay_changes_owned_metadata_without_touching_rich_unprojected_rule(
     constraints = rich_rule.setdefault("constraints", {})
     constraints["max_links_per_node"] = {"leo": 4, "ground": 1}
     constraints["require_mutual_visibility"] = True
-    model = SegmentSessionConfig.model_validate(rich)
-    workspace = _workspace_from_applied_session(model)
-    assert all(rule.rule_id != rich_rule["id"] for rule in workspace.links)
-    draft = opened.model_copy(
-        update={
-            "applied_session": rich,
-            "applied_workspace": workspace,
-            "authoring_workspace": workspace.model_copy(
-                update={"display_name": "Changed graphically"}
-            ),
-        }
+    applied = service.apply_yaml(
+        BuilderVisualDraftApplyYamlRequest(
+            draft=opened,
+            expected_draft_revision=opened.draft_revision,
+            buffer_generation=1,
+            yaml_text=yaml.safe_dump(rich, sort_keys=False),
+        )
+    )
+    assert applied.applied is True
+    workspace = applied.draft.authoring_workspace
+    assert workspace is not None
+
+    edited = service.apply_workspace(
+        BuilderVisualDraftApplyWorkspaceRequest(
+            draft=applied.draft,
+            expected_draft_revision=applied.draft.draft_revision,
+            workspace=workspace.model_copy(update={"display_name": "Changed graphically"}),
+        ),
+        available_node_count=1_000_000,
+        preview_factory=preview_from_resolution,
     )
 
-    assembled, _proposals, issues = _assemble_structured(
-        draft,
-        allow_workspace_overlay=True,
+    assert edited.assembly_issues == ()
+    compiled_session = edited.compile_result.canonical_session_json
+    assert compiled_session is not None
+    assert compiled_session["session"]["display_name"] == "Changed graphically"
+    assert compiled_session["link_rules"][0] == rich_rule
+    assert edited.listing is not None
+    listed = edited.listing.link_rules[0]
+    assert (listed.rule_id, listed.segment_ids, listed.widget) == (
+        rich_rule["id"],
+        ("ground", "leo"),
+        None,
     )
-
-    assert issues == ()
-    assert assembled["session"]["display_name"] == "Changed graphically"
-    assert assembled["link_rules"][0] == rich_rule
 
 
 def test_runtime_unsupported_valid_session_opens_and_remains_saveable(

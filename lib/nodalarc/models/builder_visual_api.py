@@ -858,17 +858,67 @@ class BuilderVisualCustomizeChainResult(_BuilderVisualModel):
         return self
 
 
+class BuilderVisualLinkRuleListing(_BuilderVisualModel):
+    """One link rule of the accepted session and the card value that writes it back."""
+
+    rule_id: Identifier
+    segment_ids: tuple[Identifier, ...]
+    widget: BuilderVisualLinkRule | None
+
+
+class BuilderVisualRoutingDomainListing(_BuilderVisualModel):
+    """One routing domain of the accepted session and the card value that writes it back."""
+
+    domain_id: Identifier
+    protocol: RoutingProtocol
+    segment_ids: tuple[Identifier, ...]
+    widget: BuilderVisualRoutingDomain | None
+
+
+class BuilderVisualRoutingBoundaryListing(_BuilderVisualModel):
+    """One routing boundary of the accepted session, addressed by its position."""
+
+    index: int = Field(ge=0)
+    over_rule_id: Identifier
+    domain_ids: tuple[Identifier, ...]
+    widget: BuilderVisualRoutingBoundary | None
+
+
+class BuilderVisualSessionListing(_BuilderVisualModel):
+    """Every link rule, routing domain and boundary the accepted session declares, in order.
+
+    The backend derives it from the accepted session and never reads it back. A null
+    widget means no card writes that object back unchanged.
+    """
+
+    link_rules: tuple[BuilderVisualLinkRuleListing, ...]
+    routing_domains: tuple[BuilderVisualRoutingDomainListing, ...]
+    boundaries: tuple[BuilderVisualRoutingBoundaryListing, ...]
+
+    @model_validator(mode="after")
+    def _boundaries_are_addressed_by_position(self) -> BuilderVisualSessionListing:
+        if any(boundary.index != position for position, boundary in enumerate(self.boundaries)):
+            raise ValueError("a listed boundary's index must be its position in the session")
+        return self
+
+
 class BuilderVisualDraftAssemblyResult(_BuilderVisualModel):
-    """Backend assembly, typed issues, save request, and authoritative compile facts."""
+    """Backend assembly, typed issues, save request, and authoritative compile facts.
+
+    The listing names every rule, domain and boundary of the accepted session.
+    """
 
     visual_draft: BuilderVisualDraftEnvelope
     assembled_draft: BuilderDraftEnvelope
     save_request: BuilderSessionSaveRequest
     compile_result: BuilderCompileResult
+    listing: BuilderVisualSessionListing | None
     assembly_issues: tuple[BuilderIssue, ...] = ()
 
     @model_validator(mode="after")
     def _identities_match(self) -> BuilderVisualDraftAssemblyResult:
+        if (self.listing is None) != (self.visual_draft.applied_session is None):
+            raise ValueError("the listing exists exactly when the draft has an accepted session")
         if self.save_request.target_ref != self.visual_draft.target_ref:
             raise ValueError("save request target must match the visual draft target")
         if self.save_request.draft != self.assembled_draft:

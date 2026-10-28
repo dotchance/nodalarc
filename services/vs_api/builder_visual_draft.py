@@ -73,6 +73,7 @@ from nodalarc.models.builder_visual_api import (
     BuilderVisualGroundStamp,
     BuilderVisualLinkEndpoint,
     BuilderVisualLinkRule,
+    BuilderVisualLinkRuleListing,
     BuilderVisualMintGroundMembersCommand,
     BuilderVisualNode,
     BuilderVisualOrbit,
@@ -80,7 +81,10 @@ from nodalarc.models.builder_visual_api import (
     BuilderVisualPlaceSpaceReferenceCommand,
     BuilderVisualRederiveLinkCommand,
     BuilderVisualRoutingBoundary,
+    BuilderVisualRoutingBoundaryListing,
     BuilderVisualRoutingDomain,
+    BuilderVisualRoutingDomainListing,
+    BuilderVisualSessionListing,
     BuilderVisualSetGroundSiteNodeCommand,
     BuilderVisualSetGroundStampNodeCommand,
     BuilderVisualSetNodeTerminalRoleCommand,
@@ -1726,6 +1730,60 @@ def _boundary_document_identity(boundary: JsonDocument) -> tuple[str, str | None
     )
 
 
+def _named_segments(selectors: tuple[NodeSelector, ...]) -> tuple[str, ...]:
+    """The segments selectors name outside every `not`, in order of first appearance.
+
+    A segment named inside a `not` is excluded from the selection, so it is not listed.
+    """
+    named: list[str] = []
+    for selector in selectors:
+        if selector.segment is not None:
+            named.append(selector.segment)
+        named.extend(_named_segments((*(selector.all or ()), *(selector.any or ()))))
+    return tuple(dict.fromkeys(named))
+
+
+def _accepted_session_listing(session: SegmentSessionConfig) -> BuilderVisualSessionListing:
+    """Every rule, domain and boundary of the accepted session, each with its card value."""
+    routing = session.routing
+    return BuilderVisualSessionListing(
+        link_rules=tuple(
+            BuilderVisualLinkRuleListing(
+                rule_id=rule.id,
+                segment_ids=_named_segments(tuple(endpoint.select for endpoint in rule.endpoints)),
+                widget=_link_projection(rule),
+            )
+            for rule in session.link_rules or ()
+        ),
+        routing_domains=tuple(
+            BuilderVisualRoutingDomainListing(
+                domain_id=domain.id,
+                protocol=domain.protocol,
+                segment_ids=_named_segments(domain.selectors),
+                widget=_routing_domain_projection(domain),
+            )
+            for domain in (routing.domains if routing is not None else ())
+        ),
+        boundaries=tuple(
+            BuilderVisualRoutingBoundaryListing(
+                index=index,
+                over_rule_id=boundary.over,
+                domain_ids=tuple(
+                    dict.fromkeys(
+                        domain_id
+                        for export in boundary.export
+                        for domain_id in (export.from_, export.to)
+                    )
+                ),
+                widget=_routing_boundary_projection(boundary, index=index),
+            )
+            for index, boundary in enumerate(
+                routing.boundaries or () if routing is not None else ()
+            )
+        ),
+    )
+
+
 def _workspace_from_applied_session(
     session: SegmentSessionConfig,
     *,
@@ -2847,11 +2905,19 @@ def _compile_visual_application(
         target_ref=visual_draft.target_ref,
         expected_session_revision=visual_draft.expected_session_revision,
     )
+    listing = (
+        None
+        if visual_draft.applied_session is None
+        else _accepted_session_listing(
+            SegmentSessionConfig.model_validate(visual_draft.applied_session)
+        )
+    )
     return BuilderVisualDraftAssemblyResult(
         visual_draft=visual_draft,
         assembled_draft=assembled,
         save_request=save_request,
         compile_result=compile_result,
+        listing=listing,
         assembly_issues=assembly_issues,
     )
 

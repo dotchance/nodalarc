@@ -2,19 +2,26 @@
 
 from __future__ import annotations
 
+import json
 import subprocess
 import sys
 from pathlib import Path
+from typing import Any
 
 import pytest
 from nodalarc.models.builder_api import (
     BuilderCatalogDocument,
     BuilderCompileRequest,
     BuilderCompileResult,
+    BuilderContentEdit,
     BuilderDeployVerdict,
     BuilderDigests,
     BuilderDraftEnvelope,
     BuilderIssue,
+    BuilderListEdit,
+    BuilderPendingEdit,
+    BuilderPendingEditOutcome,
+    BuilderPendingEdits,
     BuilderSessionSaveRequest,
     BuilderSessionSaveResult,
     BuilderVerdict,
@@ -22,11 +29,13 @@ from nodalarc.models.builder_api import (
     DependencyClosureInventory,
     WizardConstellationCapability,
 )
-from pydantic import ValidationError
+from pydantic import TypeAdapter, ValidationError
 
 from tests.builder_world_fixtures import builder_world_preview
 
 ROOT = Path(__file__).resolve().parents[3]
+PENDING_EDIT = TypeAdapter(BuilderPendingEdit)
+PENDING_EDITS = TypeAdapter(BuilderPendingEdits)
 DOCUMENT_DIGEST = f"sha256:{'a' * 64}"
 DEPENDENCY_DIGEST = f"sha256:{'b' * 64}"
 OTHER_DIGEST = f"sha256:{'c' * 64}"
@@ -106,6 +115,35 @@ def _digests() -> BuilderDigests:
         document=DOCUMENT_DIGEST,
         dependency=DEPENDENCY_DIGEST,
     )
+
+
+def _member_edit(list_pointer: str, object_id: str, **values: Any) -> dict[str, Any]:
+    return {
+        "kind": "content",
+        "address": {"kind": "member", "list_pointer": list_pointer, "id": object_id},
+        "base": {"id": object_id},
+        "working": {"id": object_id},
+        **values,
+    }
+
+
+def _boundaries_edit(**values: Any) -> dict[str, Any]:
+    return {
+        "kind": "content",
+        "address": {"kind": "whole_list", "pointer": "/routing/boundaries"},
+        "base": [],
+        "working": [],
+        **values,
+    }
+
+
+def _list_edit(list_pointer: str, ids_before: list[str], ids_wanted: list[str]) -> dict[str, Any]:
+    return {
+        "kind": "list",
+        "list_pointer": list_pointer,
+        "ids_before": ids_before,
+        "ids_wanted": ids_wanted,
+    }
 
 
 def _session_document() -> BuilderCatalogDocument:
@@ -410,6 +448,118 @@ def test_blocked_deploy_verdict_requires_a_deploy_blocker() -> None:
             digests=_digests(),
             blockers=(_blocking_issue("save"),),
         )
+
+
+def test_pending_edits_address_only_the_closed_session_lists() -> None:
+    rule = PENDING_EDIT.validate_json(json.dumps(_member_edit("/link_rules", "leo_isl")))
+    domain = PENDING_EDIT.validate_json(json.dumps(_member_edit("/routing/domains", "earth")))
+    boundaries = PENDING_EDIT.validate_json(json.dumps(_boundaries_edit()))
+    removal = PENDING_EDIT.validate_json(
+        json.dumps(_list_edit("/routing/domains", ["earth", "luna"], ["luna"]))
+    )
+    assert isinstance(rule, BuilderContentEdit)
+    assert isinstance(domain, BuilderContentEdit)
+    assert isinstance(boundaries, BuilderContentEdit)
+    assert isinstance(removal, BuilderListEdit)
+    assert removal.ids_wanted == ("luna",)
+
+    for address in (
+        {"kind": "member", "list_pointer": "/segments", "id": "leo"},
+        {"kind": "member", "list_pointer": "/routing/boundaries", "id": "leo"},
+        {"kind": "member", "list_pointer": "/link_rules", "id": "Leo ISL"},
+        {"kind": "whole_list", "pointer": "/link_rules"},
+        {"kind": "member", "list_pointer": "/link_rules", "id": "leo", "label": "ISL"},
+    ):
+        with pytest.raises(ValidationError):
+            PENDING_EDIT.validate_python({**_member_edit("/link_rules", "leo"), "address": address})
+
+    # A boundary has no id to remove or reorder it by; the whole list is one content edit.
+    with pytest.raises(ValidationError, match="'/link_rules' or '/routing/domains'"):
+        PENDING_EDIT.validate_python(_list_edit("/routing/boundaries", ["a"], []))
+
+
+def test_pending_edit_values_fit_their_address_and_keep_its_id() -> None:
+    new_rule = PENDING_EDIT.validate_python({**_member_edit("/link_rules", "isl"), "base": None})
+    assert isinstance(new_rule, BuilderContentEdit)
+    assert new_rule.base is None
+    absent_list = PENDING_EDIT.validate_python({**_boundaries_edit(), "base": None})
+    assert isinstance(absent_list, BuilderContentEdit)
+    assert absent_list.base is None
+
+    with pytest.raises(ValidationError, match="holds that member's object"):
+        PENDING_EDIT.validate_python(_member_edit("/link_rules", "isl", working=[]))
+    with pytest.raises(ValidationError, match="holds that member's object"):
+        PENDING_EDIT.validate_python(_member_edit("/link_rules", "isl", base=[]))
+    with pytest.raises(ValidationError, match="holds that list"):
+        PENDING_EDIT.validate_python(_boundaries_edit(working={"over": "isl"}))
+    with pytest.raises(ValidationError, match="holds that list"):
+        PENDING_EDIT.validate_python(_boundaries_edit(base={"over": "isl"}))
+    for values in (
+        {"working": {"id": "renamed"}},
+        {"working": {"topology": {"mode": "visible_candidates"}}},
+        {"base": {"id": "other"}},
+    ):
+        with pytest.raises(ValidationError, match="a rename is an edit of the session YAML"):
+            PENDING_EDIT.validate_python(_member_edit("/link_rules", "isl", **values))
+
+
+def test_list_edits_only_remove_or_reorder_their_ids() -> None:
+    reorder = PENDING_EDIT.validate_python(_list_edit("/link_rules", ["a", "b"], ["b", "a"]))
+    assert isinstance(reorder, BuilderListEdit)
+    assert reorder.ids_before == ("a", "b")
+    emptied = PENDING_EDIT.validate_python(_list_edit("/link_rules", ["a"], []))
+    assert isinstance(emptied, BuilderListEdit)
+    assert emptied.ids_wanted == ()
+
+    with pytest.raises(ValidationError, match="only removes or reorders"):
+        PENDING_EDIT.validate_python(_list_edit("/link_rules", ["a"], ["a", "c"]))
+    with pytest.raises(ValidationError, match="ids must be unique"):
+        PENDING_EDIT.validate_python(_list_edit("/link_rules", ["a", "a"], ["a"]))
+    with pytest.raises(ValidationError, match="ids must be unique"):
+        PENDING_EDIT.validate_python(_list_edit("/link_rules", ["a", "b"], ["a", "a"]))
+
+
+def test_a_pending_edit_batch_holds_one_edit_per_address() -> None:
+    accepted = PENDING_EDITS.validate_json(
+        json.dumps(
+            [
+                _member_edit("/link_rules", "isl"),
+                _member_edit("/routing/domains", "isl"),
+                _list_edit("/link_rules", ["isl"], ["isl"]),
+                _list_edit("/routing/domains", ["isl"], ["isl"]),
+                _boundaries_edit(),
+            ]
+        )
+    )
+    assert len(accepted) == 5
+
+    for duplicated in (
+        _member_edit("/link_rules", "isl"),
+        _boundaries_edit(),
+        _list_edit("/routing/domains", ["isl"], []),
+    ):
+        with pytest.raises(ValidationError, match="one content edit per address"):
+            PENDING_EDITS.validate_python([duplicated, duplicated])
+
+
+def test_pending_edit_outcomes_carry_issues_only_when_not_applied() -> None:
+    stale = BuilderIssue(
+        code="builder.staleness.pending_edit",
+        stage="staleness",
+        severity="error",
+        message="Link rule 'isl' changed since the edit began",
+        blocks=("save", "deploy"),
+        json_pointer="/link_rules/0",
+        draft_path="pending_edits.0",
+    )
+    assert BuilderPendingEditOutcome(status="applied").issues == ()
+    assert BuilderPendingEditOutcome(status="stale", issues=(stale,)).issues == (stale,)
+
+    with pytest.raises(ValidationError, match="applied edit carries no issues"):
+        BuilderPendingEditOutcome(status="applied", issues=(stale,))
+    for status in ("stale", "invalid"):
+        with pytest.raises(ValidationError, match="names at least one issue"):
+            BuilderPendingEditOutcome(status=status)
 
 
 def test_generated_builder_api_types_are_fresh() -> None:

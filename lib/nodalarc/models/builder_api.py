@@ -9,7 +9,7 @@ configuration models owned by the grammar authority.
 
 from __future__ import annotations
 
-from typing import Annotated, Literal, get_args
+from typing import Annotated, Literal, cast, get_args
 
 from pydantic import (
     AfterValidator,
@@ -33,6 +33,7 @@ from nodalarc.catalog_refs import (
     parse_catalog_reference,
 )
 from nodalarc.catalog_registry import catalog_family_spec
+from nodalarc.model_validation import Identifier
 from nodalarc.models.builder_world import BuilderWorld
 from nodalarc.models.configuration import ConfigurationDocument
 from nodalarc.models.link_rules import MountRole
@@ -73,6 +74,9 @@ type BuilderIssueStage = Literal[
 ]
 type BuilderIssueSeverity = Literal["info", "warning", "error"]
 type BuilderBlockedOperation = Literal["save", "deploy"]
+type BuilderMemberListPointer = Literal["/link_rules", "/routing/domains"]
+type BuilderWholeListPointer = Literal["/routing/boundaries"]
+type BuilderPendingEditStatus = Literal["applied", "stale", "invalid"]
 type BuilderSessionSaveRefusalCode = Literal[
     "builder_session_save.save_blocked",
     "builder_session_save.stale_write",
@@ -210,6 +214,124 @@ class BuilderDraftEnvelope(_BuilderApplicationModel):
 
     draft_revision: int = Field(ge=0)
     state: BuilderDraftState
+
+
+class BuilderMemberAddress(_BuilderApplicationModel):
+    """One member of an id-bearing session list, by the id it had when the edit began."""
+
+    kind: Literal["member"]
+    list_pointer: BuilderMemberListPointer
+    id: Identifier
+
+
+class BuilderWholeListAddress(_BuilderApplicationModel):
+    """A session list whose members carry no id, edited as one whole."""
+
+    kind: Literal["whole_list"]
+    pointer: BuilderWholeListPointer
+
+
+BuilderEditAddress = Annotated[
+    BuilderMemberAddress | BuilderWholeListAddress,
+    Field(discriminator="kind"),
+]
+
+
+class BuilderContentEdit(_BuilderApplicationModel):
+    """Working grammar JSON for one address, beside the value it began from.
+
+    ``base`` is absent for a new object. Both values stay generic JSON so an
+    incomplete object can cross the API boundary and come back with issues.
+    """
+
+    kind: Literal["content"]
+    address: BuilderEditAddress
+    base: JsonDocument | list[JsonValue] | None = None
+    working: JsonDocument | list[JsonValue]
+
+    @model_validator(mode="after")
+    def _values_fit_the_address(self) -> BuilderContentEdit:
+        values = (self.working,) if self.base is None else (self.base, self.working)
+        if isinstance(self.address, BuilderWholeListAddress):
+            if not all(isinstance(value, list) for value in values):
+                raise ValueError("an edit to a whole list holds that list")
+            return self
+        if not all(isinstance(value, dict) for value in values):
+            raise ValueError("an edit to a list member holds that member's object")
+        if any(cast(JsonDocument, value).get("id") != self.address.id for value in values):
+            raise ValueError(
+                "an edit keeps the id it is addressed by; a rename is an edit of the session YAML"
+            )
+        return self
+
+
+class BuilderListEdit(_BuilderApplicationModel):
+    """A removal or reorder of an id-bearing session list's members."""
+
+    kind: Literal["list"]
+    list_pointer: BuilderMemberListPointer
+    ids_before: tuple[Identifier, ...]
+    ids_wanted: tuple[Identifier, ...]
+
+    @field_validator("ids_before", "ids_wanted", mode="before")
+    @classmethod
+    def _accept_json_array(cls, value: object) -> object:
+        return tuple(value) if isinstance(value, list) else value
+
+    @model_validator(mode="after")
+    def _only_removes_or_reorders(self) -> BuilderListEdit:
+        for ids in (self.ids_before, self.ids_wanted):
+            if len(set(ids)) != len(ids):
+                raise ValueError("list edit ids must be unique")
+        if not set(self.ids_wanted) <= set(self.ids_before):
+            raise ValueError("a list edit only removes or reorders the ids it began with")
+        return self
+
+
+BuilderPendingEdit = Annotated[
+    BuilderContentEdit | BuilderListEdit,
+    Field(discriminator="kind"),
+]
+
+
+def _edit_target(edit: BuilderContentEdit | BuilderListEdit) -> tuple[str, ...]:
+    if isinstance(edit, BuilderListEdit):
+        return ("list", edit.list_pointer)
+    if isinstance(edit.address, BuilderWholeListAddress):
+        return ("content", edit.address.pointer)
+    return ("content", edit.address.list_pointer, edit.address.id)
+
+
+def _one_edit_per_address(
+    edits: tuple[BuilderContentEdit | BuilderListEdit, ...],
+) -> tuple[BuilderContentEdit | BuilderListEdit, ...]:
+    targets = [_edit_target(edit) for edit in edits]
+    if len(set(targets)) != len(targets):
+        raise ValueError(
+            "pending edits hold one content edit per address and one list edit per list"
+        )
+    return edits
+
+
+BuilderPendingEdits = Annotated[
+    tuple[BuilderPendingEdit, ...],
+    AfterValidator(_one_edit_per_address),
+]
+
+
+class BuilderPendingEditOutcome(_BuilderApplicationModel):
+    """What applying one pending edit did, at that edit's position in its batch."""
+
+    status: BuilderPendingEditStatus
+    issues: tuple[BuilderIssue, ...] = ()
+
+    @model_validator(mode="after")
+    def _issues_match_status(self) -> BuilderPendingEditOutcome:
+        if self.status == "applied" and self.issues:
+            raise ValueError("an applied edit carries no issues")
+        if self.status != "applied" and not self.issues:
+            raise ValueError("a stale or invalid edit names at least one issue")
+        return self
 
 
 class DependencyClosureEntry(_BuilderApplicationModel):

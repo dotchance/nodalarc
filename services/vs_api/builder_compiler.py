@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import hashlib
 from collections.abc import Callable, Mapping
+from copy import deepcopy
 from dataclasses import dataclass, field
+from types import MappingProxyType
 from typing import Any, cast
 
 import yaml
@@ -26,16 +28,25 @@ from nodalarc.models.builder_api import (
     BuilderBlockedOperation,
     BuilderCompileRequest,
     BuilderCompileResult,
+    BuilderContentEdit,
     BuilderDigests,
     BuilderIssue,
+    BuilderIssueStage,
+    BuilderListEdit,
+    BuilderMemberListPointer,
+    BuilderPendingEditOutcome,
+    BuilderPendingEdits,
     BuilderProposedCatalogDocument,
     BuilderVerdict,
+    BuilderWholeListAddress,
     DependencyClosureEntry,
     DependencyClosureInventory,
     JsonDocument,
 )
 from nodalarc.models.builder_world import BuilderWorld
+from nodalarc.models.link_rules import LinkRule
 from nodalarc.models.resolved_session import SourceContext
+from nodalarc.models.segment_session import RoutingBoundary, RoutingDomain
 from nodalarc.resolve_session import (
     SessionResolution,
     SessionResolutionError,
@@ -44,7 +55,7 @@ from nodalarc.resolve_session import (
 from nodalarc.runtime_support import RuntimeSupport, UnsupportedFeatureError
 from nodalarc.semantic_projection import resolved_session_semantic_digest
 from nodalarc.session_validator import validate_session_readiness
-from pydantic import ValidationError
+from pydantic import BaseModel, JsonValue, TypeAdapter, ValidationError
 
 PreviewFactory = Callable[[SessionResolution], BuilderWorld]
 
@@ -367,6 +378,287 @@ def _compile_result(
         save_verdict=_verdict("save", issues),
         deploy_eligibility_after_save=_verdict("deploy", issues),
     )
+
+
+_MEMBER_LISTS: Mapping[BuilderMemberListPointer, tuple[str, type[BaseModel]]] = MappingProxyType(
+    {
+        "/link_rules": ("Link rule", LinkRule),
+        "/routing/domains": ("Routing domain", RoutingDomain),
+    }
+)
+_ROUTING_BOUNDARIES = TypeAdapter(tuple[RoutingBoundary, ...])
+_PENDING_EDITS = TypeAdapter(BuilderPendingEdits)
+
+
+class _UnaddressableList(ValueError):
+    """The session holds something other than a list where a closed pointer names one."""
+
+
+def _list_at(document: JsonDocument, pointer: str) -> list[JsonValue] | None:
+    """The list at one closed pointer, or None when the document does not declare it."""
+    value: JsonValue = document
+    for part in pointer.split("/")[1:]:
+        if not isinstance(value, dict):
+            raise _UnaddressableList(f"The session holds no list at {pointer}")
+        value = value.get(part)
+        if value is None:
+            return None
+    if not isinstance(value, list):
+        raise _UnaddressableList(f"The session holds no list at {pointer}")
+    return value
+
+
+def _write_list(document: JsonDocument, pointer: str, values: list[JsonValue]) -> None:
+    """Write a list at a closed pointer whose parents the base check found to be objects."""
+    *parents, name = pointer.split("/")[1:]
+    container = document
+    for part in parents:
+        child = container.get(part)
+        if child is None:
+            child = {}
+            container[part] = child
+        container = cast(JsonDocument, child)
+    container[name] = values
+
+
+def _remove_list(document: JsonDocument, pointer: str) -> None:
+    *parents, name = pointer.split("/")[1:]
+    container: JsonValue = document
+    for part in parents:
+        if not isinstance(container, dict):
+            return
+        container = container.get(part)
+    if isinstance(container, dict):
+        container.pop(name, None)
+
+
+def _member_index(members: list[JsonValue] | None, member_id: str) -> int | None:
+    for index, member in enumerate(members or ()):
+        if isinstance(member, dict) and member.get("id") == member_id:
+            return index
+    return None
+
+
+def _member_pointer(document: JsonDocument, list_pointer: str, member_id: str) -> str:
+    """Where one member sits in a document, or its list's pointer when it is not there."""
+    try:
+        index = _member_index(_list_at(document, list_pointer), member_id)
+    except _UnaddressableList:
+        return list_pointer
+    return list_pointer if index is None else f"{list_pointer}/{index}"
+
+
+def _edit_pointer(document: JsonDocument, edit: BuilderContentEdit | BuilderListEdit) -> str:
+    """Where an edit's object or list sits in a document."""
+    if isinstance(edit, BuilderListEdit):
+        return edit.list_pointer
+    if isinstance(edit.address, BuilderWholeListAddress):
+        return edit.address.pointer
+    return _member_pointer(document, edit.address.list_pointer, edit.address.id)
+
+
+def _stale_reason(session: JsonDocument, edit: BuilderContentEdit | BuilderListEdit) -> str | None:
+    """Why an edit no longer fits the session it is applied to, or None when its base holds."""
+    try:
+        if isinstance(edit, BuilderListEdit):
+            label, _model = _MEMBER_LISTS[edit.list_pointer]
+            members = _list_at(session, edit.list_pointer) or []
+            ids = tuple(
+                member.get("id") if isinstance(member, dict) else None for member in members
+            )
+            if ids != edit.ids_before:
+                return f"The {label.lower()} list changed since the edit began"
+            return None
+        if isinstance(edit.address, BuilderWholeListAddress):
+            if _list_at(session, edit.address.pointer) != edit.base:
+                return "The routing boundary list changed since the edit began"
+            return None
+        label, _model = _MEMBER_LISTS[edit.address.list_pointer]
+        member_id = edit.address.id
+        members = _list_at(session, edit.address.list_pointer) or []
+        matches = [
+            member
+            for member in members
+            if isinstance(member, dict) and member.get("id") == member_id
+        ]
+    except _UnaddressableList as error:
+        return str(error)
+    if edit.base is None:
+        return f"{label} '{member_id}' already exists" if matches else None
+    if not matches:
+        return f"{label} '{member_id}' no longer exists"
+    if matches != [edit.base]:
+        return f"{label} '{member_id}' changed since the edit began"
+    return None
+
+
+def _pending_edit_issue(
+    code: str,
+    stage: BuilderIssueStage,
+    message: str,
+    *,
+    index: int,
+    json_pointer: str,
+    source_ref: str,
+) -> BuilderIssue:
+    return BuilderIssue(
+        code=code,
+        stage=stage,
+        severity="error",
+        message=message,
+        blocks=("save", "deploy"),
+        source_ref=source_ref,
+        json_pointer=json_pointer,
+        draft_path=f"pending_edits.{index}",
+    )
+
+
+def _pending_edit_validation_issues(
+    error: ValidationError,
+    *,
+    index: int,
+    json_pointer: str,
+    source_ref: str,
+) -> tuple[BuilderIssue, ...]:
+    return tuple(
+        _pending_edit_issue(
+            f"builder.structural.{item['type']}",
+            "structural",
+            item["msg"],
+            index=index,
+            json_pointer=json_pointer + _json_pointer(tuple(item["loc"])),
+            source_ref=source_ref,
+        )
+        for item in error.errors(include_url=False)
+    )
+
+
+def apply_pending_edits(
+    session: JsonDocument,
+    edits: BuilderPendingEdits,
+    *,
+    source_ref: str,
+) -> tuple[JsonDocument, tuple[BuilderPendingEditOutcome, ...]]:
+    """Apply pending object edits to a copy of one session without accepting them.
+
+    Every base is checked against ``session`` first. List edits then remove or
+    reorder members, and content edits replace their object by id. A new object
+    appends to its list in id order, so the order of the batch never changes
+    where an edit lands. A stale edit is left out of the candidate. An invalid
+    edit is written into it, so a compile of the candidate shows the refusal.
+    Each object is validated as its standalone grammar model, and every issue
+    names its edit by ``pending_edits.N`` and its place in the candidate.
+    The routing section is created with the first domain. Removing the last
+    domain removes the section, and is refused while boundaries remain.
+    """
+    edits = _PENDING_EDITS.validate_python(edits)
+    stale = {
+        index: reason
+        for index, edit in enumerate(edits)
+        if (reason := _stale_reason(session, edit)) is not None
+    }
+    invalid: dict[int, tuple[BuilderIssue, ...]] = {}
+    candidate = deepcopy(session)
+
+    emptied_domains: int | None = None
+    for index, edit in enumerate(edits):
+        if index in stale or not isinstance(edit, BuilderListEdit):
+            continue
+        by_id = {
+            cast(str, cast(JsonDocument, member)["id"]): member
+            for member in _list_at(candidate, edit.list_pointer) or []
+        }
+        wanted = [by_id[member_id] for member_id in edit.ids_wanted]
+        if wanted:
+            _write_list(candidate, edit.list_pointer, wanted)
+        elif edit.list_pointer == "/routing/domains":
+            # Settled after the content edits, since a new domain may still land here.
+            _write_list(candidate, edit.list_pointer, wanted)
+            emptied_domains = index
+        else:
+            # Removing the last rule removes the section, as removing the last boundary does.
+            _remove_list(candidate, edit.list_pointer)
+
+    content = [
+        (index, edit)
+        for index, edit in enumerate(edits)
+        if index not in stale and isinstance(edit, BuilderContentEdit)
+    ]
+    new_members: list[tuple[str, str, JsonValue]] = []
+    for index, edit in content:
+        working = deepcopy(edit.working)
+        if isinstance(edit.address, BuilderWholeListAddress):
+            if working:
+                _write_list(candidate, edit.address.pointer, cast(list[JsonValue], working))
+            else:
+                _remove_list(candidate, edit.address.pointer)
+            continue
+        label, _model = _MEMBER_LISTS[edit.address.list_pointer]
+        if edit.base is None:
+            new_members.append((edit.address.list_pointer, edit.address.id, working))
+            continue
+        members = _list_at(candidate, edit.address.list_pointer)
+        position = _member_index(members, edit.address.id)
+        if members is None or position is None:
+            stale[index] = f"{label} '{edit.address.id}' is removed by a list edit in this batch"
+            continue
+        members[position] = working
+    for list_pointer, _member_id, working in sorted(new_members, key=lambda item: item[:2]):
+        members = _list_at(candidate, list_pointer)
+        if members is None:
+            _write_list(candidate, list_pointer, [working])
+        else:
+            members.append(working)
+
+    if emptied_domains is not None and not _list_at(candidate, "/routing/domains"):
+        if cast(JsonDocument, candidate["routing"]).get("boundaries"):
+            invalid[emptied_domains] = (
+                _pending_edit_issue(
+                    "builder.draft.routing_boundaries_remain",
+                    "draft",
+                    "The last routing domain cannot be removed while routing boundaries remain",
+                    index=emptied_domains,
+                    json_pointer="/routing/domains",
+                    source_ref=source_ref,
+                ),
+            )
+        else:
+            candidate.pop("routing")
+
+    for index, edit in content:
+        if index in stale:
+            continue
+        try:
+            if isinstance(edit.address, BuilderWholeListAddress):
+                _ROUTING_BOUNDARIES.validate_python(edit.working)
+            else:
+                _label, model = _MEMBER_LISTS[edit.address.list_pointer]
+                model.model_validate(edit.working)
+        except ValidationError as error:
+            invalid[index] = _pending_edit_validation_issues(
+                error,
+                index=index,
+                json_pointer=_edit_pointer(candidate, edit),
+                source_ref=source_ref,
+            )
+
+    outcomes: list[BuilderPendingEditOutcome] = []
+    for index, edit in enumerate(edits):
+        if index in stale:
+            issue = _pending_edit_issue(
+                "builder.staleness.pending_edit",
+                "staleness",
+                stale[index],
+                index=index,
+                json_pointer=_edit_pointer(candidate, edit),
+                source_ref=source_ref,
+            )
+            outcomes.append(BuilderPendingEditOutcome(status="stale", issues=(issue,)))
+        elif index in invalid:
+            outcomes.append(BuilderPendingEditOutcome(status="invalid", issues=invalid[index]))
+        else:
+            outcomes.append(BuilderPendingEditOutcome(status="applied"))
+    return candidate, tuple(outcomes)
 
 
 def compile_builder_draft(

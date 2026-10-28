@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import json
 from copy import deepcopy
+from itertools import permutations
 from pathlib import Path
 from typing import Any
 
@@ -13,16 +15,28 @@ from nodalarc.catalog_refs import CatalogRef
 from nodalarc.catalog_registry import validate_referenced_configuration_document
 from nodalarc.catalog_repository import CatalogReadSnapshot, CatalogScope
 from nodalarc.filesystem_catalog_repository import FilesystemCatalogRepository
-from nodalarc.models.builder_api import BuilderCompileRequest, BuilderDraftEnvelope
+from nodalarc.models.builder_api import (
+    BuilderCompileRequest,
+    BuilderContentEdit,
+    BuilderDraftEnvelope,
+    BuilderPendingEdits,
+)
 from nodalarc.models.builder_world import BuilderWorld
 from nodalarc.resolve_session import SessionResolution, SessionResolutionError
-from vs_api.builder_compiler import canonicalize_persisted_configuration, compile_builder_draft
+from pydantic import TypeAdapter, ValidationError
+from vs_api.builder_compiler import (
+    apply_pending_edits,
+    canonicalize_persisted_configuration,
+    compile_builder_draft,
+)
 
 from tests.builder_world_fixtures import builder_world_preview, preview_from_resolution
 
 ROOT = Path(__file__).resolve().parents[3]
 SHIPPED_ROOT = ROOT / "catalog" / "nodalarc"
 SIMPLE_SESSION = SHIPPED_ROOT / "sessions" / "earth-leo-simple.yaml"
+QUIC_SESSION = SHIPPED_ROOT / "sessions" / "earth-luna-quic.yaml"
+PENDING_EDITS = TypeAdapter(BuilderPendingEdits)
 SHIPPED_CONSTELLATION = SHIPPED_ROOT / "constellations" / "earth" / "leo" / "earth-leo-ring-36.yaml"
 SHIPPED_NODE = SHIPPED_ROOT / "nodes" / "space" / "starlink-v2-mesh.yaml"
 SHIPPED_SESSIONS = tuple(sorted((SHIPPED_ROOT / "sessions").glob("*.yaml")))
@@ -498,3 +512,275 @@ def test_compile_resolves_the_captured_closure_not_the_live_snapshot(
     for node in satellites:
         assert node.epoch_position is not None
         assert abs(node.epoch_position.alt_km - authored_altitude_km) < 100
+
+
+def _accepted(path: Path) -> dict[str, Any]:
+    """A shipped session as the Builder holds it once accepted: canonical JSON."""
+    ref = CatalogRef(f"user:sessions/{path.stem}.yaml")
+    return canonicalize_persisted_configuration(ref, _load(path)).canonical_json
+
+
+def _apply(session: dict[str, Any], *edits: dict[str, Any]):
+    batch = PENDING_EDITS.validate_json(json.dumps(edits))
+    return apply_pending_edits(session, batch, source_ref="user:sessions/earth-luna-quic.yaml")
+
+
+def _member(session: dict[str, Any], list_pointer: str, object_id: str) -> dict[str, Any]:
+    members = (
+        session["link_rules"] if list_pointer == "/link_rules" else session["routing"]["domains"]
+    )
+    return next(member for member in members if member["id"] == object_id)
+
+
+def _content(
+    list_pointer: str,
+    object_id: str,
+    working: dict[str, Any],
+    *,
+    base: dict[str, Any] | None,
+) -> dict[str, Any]:
+    return {
+        "kind": "content",
+        "address": {"kind": "member", "list_pointer": list_pointer, "id": object_id},
+        "base": base,
+        "working": working,
+    }
+
+
+def _edited(
+    session: dict[str, Any], list_pointer: str, object_id: str, **fields: Any
+) -> dict[str, Any]:
+    base = _member(session, list_pointer, object_id)
+    return _content(list_pointer, object_id, {**deepcopy(base), **fields}, base=base)
+
+
+def _created(session: dict[str, Any], list_pointer: str, template_id: str, object_id: str):
+    working = {**deepcopy(_member(session, list_pointer, template_id)), "id": object_id}
+    return _content(list_pointer, object_id, working, base=None)
+
+
+def _boundaries(base: list[Any] | None, working: list[Any]) -> dict[str, Any]:
+    return {
+        "kind": "content",
+        "address": {"kind": "whole_list", "pointer": "/routing/boundaries"},
+        "base": base,
+        "working": working,
+    }
+
+
+def _ids(session: dict[str, Any], list_pointer: str) -> list[str]:
+    members = (
+        session["link_rules"] if list_pointer == "/link_rules" else session["routing"]["domains"]
+    )
+    return [member["id"] for member in members]
+
+
+def _removal(session: dict[str, Any], list_pointer: str, ids_wanted: list[str]):
+    return {
+        "kind": "list",
+        "list_pointer": list_pointer,
+        "ids_before": _ids(session, list_pointer),
+        "ids_wanted": ids_wanted,
+    }
+
+
+def test_pending_edits_land_in_the_same_place_whatever_the_batch_order() -> None:
+    session = _accepted(QUIC_SESSION)
+    untouched = deepcopy(session)
+    rule_ids = _ids(session, "/link_rules")
+    kept = [rule_id for rule_id in reversed(rule_ids) if rule_id != "luna_access"]
+    boundaries = deepcopy(session["routing"]["boundaries"])
+    for export in boundaries[0]["export"]:
+        export["export_node_loopbacks"] = False
+    edits = (
+        _removal(session, "/link_rules", kept),
+        _edited(session, "/link_rules", "leo_isl", constraints={"max_range_km": 12345.0}),
+        _created(session, "/link_rules", "geo_isl", "zz_isl"),
+        _created(session, "/link_rules", "leo_isl", "aa_isl"),
+        _edited(
+            session,
+            "/routing/domains",
+            "luna_domain",
+            timers={"hello_interval_s": 2, "hold_interval_s": 7},
+        ),
+        _boundaries(session["routing"]["boundaries"], boundaries),
+    )
+
+    candidates = []
+    for order in permutations(range(len(edits))):
+        candidate, outcomes = _apply(session, *(edits[index] for index in order))
+        assert [outcome.status for outcome in outcomes] == ["applied"] * len(edits)
+        candidates.append(candidate)
+
+    candidate = candidates[0]
+    assert all(other == candidate for other in candidates)
+    assert session == untouched
+    # The list edit orders the members it kept; new members follow it in id order.
+    assert _ids(candidate, "/link_rules") == [*kept, "aa_isl", "zz_isl"]
+    assert _member(candidate, "/link_rules", "leo_isl")["constraints"] == {"max_range_km": 12345.0}
+    assert _member(candidate, "/routing/domains", "luna_domain")["timers"] == {
+        "hello_interval_s": 2,
+        "hold_interval_s": 7,
+    }
+    assert candidate["routing"]["boundaries"] == boundaries
+    ref = CatalogRef("user:sessions/earth-luna-quic.yaml")
+    canonical = canonicalize_persisted_configuration(ref, candidate).canonical_json
+    assert _ids(canonical, "/link_rules") == _ids(candidate, "/link_rules")
+
+
+def test_a_stale_base_leaves_its_edit_out_and_names_it() -> None:
+    session = _accepted(QUIC_SESSION)
+    leo_isl = _member(session, "/link_rules", "leo_isl")
+    timers = {"hello_interval_s": 2, "hold_interval_s": 7}
+    edits = (
+        _content(
+            "/link_rules",
+            "leo_isl",
+            {**leo_isl, "enabled": False},
+            base={**leo_isl, "topology": {"mode": "visible_candidates"}},
+        ),
+        _content("/link_rules", "gone_isl", {"id": "gone_isl"}, base={"id": "gone_isl"}),
+        _created(session, "/link_rules", "leo_isl", "geo_isl"),
+        {
+            "kind": "list",
+            "list_pointer": "/routing/domains",
+            "ids_before": ["luna_domain", "earth_domain"],
+            "ids_wanted": ["luna_domain"],
+        },
+        _boundaries([], []),
+        _edited(session, "/routing/domains", "earth_domain", timers=timers),
+    )
+
+    candidate, outcomes = _apply(session, *edits)
+
+    expected = deepcopy(session)
+    _member(expected, "/routing/domains", "earth_domain")["timers"] = timers
+    assert candidate == expected
+    assert [outcome.status for outcome in outcomes] == ["stale"] * 5 + ["applied"]
+    messages = [outcome.issues[0].message for outcome in outcomes[:5]]
+    assert messages == [
+        "Link rule 'leo_isl' changed since the edit began",
+        "Link rule 'gone_isl' no longer exists",
+        "Link rule 'geo_isl' already exists",
+        "The routing domain list changed since the edit began",
+        "The routing boundary list changed since the edit began",
+    ]
+    pointers = [outcome.issues[0].json_pointer for outcome in outcomes[:5]]
+    leo_isl_at = _ids(session, "/link_rules").index("leo_isl")
+    assert pointers == [
+        f"/link_rules/{leo_isl_at}",
+        "/link_rules",
+        f"/link_rules/{_ids(session, '/link_rules').index('geo_isl')}",
+        "/routing/domains",
+        "/routing/boundaries",
+    ]
+    for index, outcome in enumerate(outcomes[:5]):
+        (issue,) = outcome.issues
+        assert issue.code == "builder.staleness.pending_edit"
+        assert issue.stage == "staleness"
+        assert issue.blocks == ("save", "deploy")
+        assert issue.draft_path == f"pending_edits.{index}"
+
+    # A member a list edit in the same batch removes has nothing left to edit.
+    kept = [rule_id for rule_id in _ids(session, "/link_rules") if rule_id != "leo_isl"]
+    candidate, outcomes = _apply(
+        session,
+        _edited(session, "/link_rules", "leo_isl", enabled=False),
+        _removal(session, "/link_rules", kept),
+    )
+    assert _ids(candidate, "/link_rules") == kept
+    assert [outcome.status for outcome in outcomes] == ["stale", "applied"]
+    assert outcomes[0].issues[0].message == (
+        "Link rule 'leo_isl' is removed by a list edit in this batch"
+    )
+
+
+def test_an_incomplete_edit_is_written_and_named_where_it_lands() -> None:
+    session = _accepted(QUIC_SESSION)
+    working = {**deepcopy(_member(session, "/link_rules", "geo_isl")), "id": "new_isl"}
+    del working["endpoints"][1]["select"]
+
+    candidate, outcomes = _apply(
+        session,
+        _edited(session, "/link_rules", "leo_isl", enabled=False),
+        _content("/link_rules", "new_isl", working, base=None),
+    )
+
+    assert _member(candidate, "/link_rules", "new_isl") == working
+    assert _member(candidate, "/link_rules", "leo_isl")["enabled"] is False
+    assert [outcome.status for outcome in outcomes] == ["applied", "invalid"]
+    (issue,) = outcomes[1].issues
+    new_isl_at = _ids(candidate, "/link_rules").index("new_isl")
+    assert issue.json_pointer == f"/link_rules/{new_isl_at}/endpoints/1/select"
+    assert issue.code == "builder.structural.missing"
+    assert issue.draft_path == "pending_edits.1"
+    assert issue.stage == "structural"
+    assert issue.blocks == ("save", "deploy")
+
+
+def test_removing_the_last_domain_drops_routing_only_once_no_boundary_remains() -> None:
+    session = _accepted(QUIC_SESSION)
+    no_domains = _removal(session, "/routing/domains", [])
+
+    candidate, outcomes = _apply(session, no_domains)
+    assert candidate["routing"] == {"domains": [], "boundaries": session["routing"]["boundaries"]}
+    assert [outcome.status for outcome in outcomes] == ["invalid"]
+    (issue,) = outcomes[0].issues
+    assert issue.code == "builder.draft.routing_boundaries_remain"
+    assert issue.json_pointer == "/routing/domains"
+    assert issue.draft_path == "pending_edits.0"
+
+    candidate, outcomes = _apply(
+        session, _boundaries(session["routing"]["boundaries"], []), no_domains
+    )
+    assert "routing" not in candidate
+    assert [outcome.status for outcome in outcomes] == ["applied", "applied"]
+    ref = CatalogRef("user:sessions/earth-luna-quic.yaml")
+    assert canonicalize_persisted_configuration(ref, candidate).canonical_json == candidate
+
+    # A domain created in the same batch keeps the section and its boundaries.
+    candidate, outcomes = _apply(
+        session, no_domains, _created(session, "/routing/domains", "earth_domain", "solo")
+    )
+    assert _ids(candidate, "/routing/domains") == ["solo"]
+    assert candidate["routing"]["boundaries"] == session["routing"]["boundaries"]
+    assert [outcome.status for outcome in outcomes] == ["applied", "applied"]
+
+    # Removing the last link rule removes that section too.
+    candidate, outcomes = _apply(session, _removal(session, "/link_rules", []))
+    assert "link_rules" not in candidate
+    assert [outcome.status for outcome in outcomes] == ["applied"]
+
+
+def test_the_first_domain_creates_a_routing_section_that_compiles(
+    snapshot: CatalogReadSnapshot,
+) -> None:
+    session = _accepted(SIMPLE_SESSION)
+    assert "routing" not in session
+    domain = {
+        "id": "earth_domain",
+        "protocol": "isis",
+        "selectors": [{"any": [{"segment": "leo"}, {"segment": "ground"}]}],
+        "area_assignment": {"strategy": "flat"},
+    }
+
+    candidate, outcomes = _apply(
+        session, _content("/routing/domains", "earth_domain", domain, base=None)
+    )
+
+    assert candidate["routing"] == {"domains": [domain]}
+    assert [outcome.status for outcome in outcomes] == ["applied"]
+    result = _compile(_request(candidate), snapshot)
+    assert result.save_verdict.allowed is True
+    assert result.canonical_session_json is not None
+    assert result.canonical_session_json["routing"] == {"domains": [domain]}
+
+
+def test_applying_refuses_a_batch_that_addresses_one_object_twice() -> None:
+    session = _accepted(SIMPLE_SESSION)
+    edit = BuilderContentEdit.model_validate(
+        _edited(session, "/link_rules", "leo_isl", enabled=False)
+    )
+
+    with pytest.raises(ValidationError, match="one content edit per address"):
+        apply_pending_edits(session, (edit, edit), source_ref="user:sessions/earth-leo-simple.yaml")

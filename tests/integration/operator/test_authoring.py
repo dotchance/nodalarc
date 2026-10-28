@@ -5,11 +5,19 @@ Each test ends on the session it found and deletes the user catalog objects it c
 
 from __future__ import annotations
 
+from collections import Counter
 from collections.abc import Callable, Iterator
 from typing import Any
 
 import pytest
 import yaml
+from nodalarc.models.builder_controls_api import (
+    BuilderChoiceControl,
+    BuilderControlTree,
+    BuilderSequenceControl,
+)
+
+from tests.support.builder_controls import control_at, scalar_at
 
 from .harness.client import Operator, Refused
 from .harness.network import watch
@@ -336,4 +344,247 @@ def test_a_forked_terminal_with_a_shorter_range_limits_the_links_that_run(
         f"the forked terminal reaches {shorter} km and a ground link of "
         f"{forked_ranges[-1]:.0f} km is running"
     )
+    assert_session_is_truthful(operator)
+
+
+_EARTH = "nodalarc:bodies/earth.yaml"
+_PROFILE = "nodalarc:profiles/frr-router.yaml"
+
+
+def _segments_a_selector_names(selector: Any) -> set[str]:
+    """The segments a selector selects when it is a segment predicate or a union of them;
+    None of any other selector, which this test does not read."""
+    if isinstance(selector, dict) and set(selector) == {"segment"}:
+        return {selector["segment"]}
+    if isinstance(selector, dict) and set(selector) == {"any"}:
+        return set().union(*(_segments_a_selector_names(item) for item in selector["any"]))
+    if isinstance(selector, list):
+        return set().union(*(_segments_a_selector_names(item) for item in selector))
+    raise AssertionError(f"not a union of segment predicates: {selector}")
+
+
+def _segments_an_endpoint_lies_in(selector: Any) -> set[str] | None:
+    """The segments an endpoint selector's nodes lie in; None when it names no segment."""
+    if isinstance(selector, list):
+        selector = {"any": selector}
+    if "segment" in selector:
+        return {selector["segment"]}
+    if "any" in selector:
+        within = [_segments_an_endpoint_lies_in(item) for item in selector["any"]]
+        return None if None in within else set().union(*within)
+    if "all" in selector:
+        within = [
+            named
+            for item in selector["all"]
+            if (named := _segments_an_endpoint_lies_in(item)) is not None
+        ]
+        return set.intersection(*within) if within else None
+    return None  # a tag, node or complement selector
+
+
+def _earth_satellite_count(operator: Operator, constellation_ref: str) -> int | None:
+    """How many satellites the constellation places, or None when it orbits another body."""
+    constellation = operator.catalog_object(constellation_ref)["constellation"]
+    if operator.catalog_object(constellation["orbit"])["orbit"]["central_body"] != _EARTH:
+        return None
+    return constellation["planes"]["count"] * constellation["slots_per_plane"]
+
+
+def _a_shipped_earth_constellation_with_sites_it_reaches(
+    operator: Operator,
+) -> tuple[str, str, str]:
+    """The smallest shipped Earth constellation, a site set a shipped session links it to,
+    and that session's start time, when its sky puts the satellites over those sites."""
+    pairs: set[tuple[str, str, str]] = set()
+    for session in operator.sessions():
+        if session["source"] != "nodalarc" or not session["deploy_allowed"]:
+            continue
+        document = yaml.safe_load(operator.session_yaml(session))
+        constellations = {
+            segment["id"]: segment["source"]
+            for segment in document["segments"]
+            if str(segment.get("source", "")).startswith("nodalarc:constellations/")
+        }
+        site_sets = {
+            segment["id"]: segment["placement"]["from_site_set"]
+            for segment in document["segments"]
+            if "placement" in segment
+        }
+        for rule in document.get("link_rules", []):
+            ends = [_segments_an_endpoint_lies_in(end["select"]) for end in rule["endpoints"]]
+            for space, ground in (ends, ends[::-1]):
+                if space is not None and ground is not None and len(space) == len(ground) == 1:
+                    (space_id,), (ground_id,) = space, ground
+                    if space_id in constellations and ground_id in site_sets:
+                        pairs.add(
+                            (
+                                constellations[space_id],
+                                site_sets[ground_id],
+                                str(document["time"]["start_time"]),
+                            )
+                        )
+    counted = [
+        (count, constellation, site_set, start_time)
+        for constellation, site_set, start_time in sorted(pairs)
+        if (count := _earth_satellite_count(operator, constellation)) is not None
+    ]
+    assert counted, "no shipped session links an Earth constellation to a site set"
+    _, constellation, site_set, start_time = min(counted)
+    return constellation, site_set, start_time
+
+
+def _session_controls(draft: dict[str, Any], segment_ids: tuple[str, ...]) -> dict[str, str]:
+    """The control ids of the session's start time and of each segment's profile field."""
+    root = BuilderControlTree.model_validate(draft["control_tree"]).root
+    controls = {"start_time": scalar_at(root, "/time/start_time").control_id}
+    segments = control_at(root, "/segments")
+    assert isinstance(segments, BuilderSequenceControl)
+    for item in segments.items:
+        # Each segment item offers one branch per segment kind; the selected one is its own.
+        assert isinstance(item.control, BuilderChoiceControl)
+        branch = next(branch for branch in item.control.branches if branch.selected)
+        assert branch.control is not None
+        segment_id = scalar_at(branch.control, f"/segments/{item.index}/id").value
+        if segment_id in segment_ids:
+            controls[str(segment_id)] = scalar_at(
+                branch.control, f"/segments/{item.index}/profile"
+            ).control_id
+    return controls
+
+
+def test_a_session_built_in_the_builder_runs_the_rules_and_domains_it_authored(
+    operator: Operator, created: list[str]
+) -> None:
+    """A user starts an empty Builder session, places a constellation and a site set,
+    connects them, adds a routing domain, chooses each segment's profile and the start
+    time, saves and deploys.
+
+    Each authored id comes from the command that made it, and each domain's members and
+    protocol from the saved session. The draft's workspace is never read.
+    """
+    constellation_ref, site_set_ref, start_time = (
+        _a_shipped_earth_constellation_with_sites_it_reaches(operator)
+    )
+    print(f"placing {constellation_ref} and {site_set_ref}, starting at {start_time}")
+    name = "operator-test-builder-session"
+    session_ref = f"user:sessions/{name}.yaml"
+    operator.delete_user_object(session_ref)  # a leftover of an interrupted run
+    created.append(session_ref)
+
+    draft = operator.post("/api/v1/builder/draft/new", {"session_name": name})
+
+    def command(body: dict[str, Any], kind: str) -> str:
+        nonlocal draft
+        result = operator.post(
+            "/api/v1/builder/draft/command",
+            {"draft": draft, "expected_draft_revision": draft["draft_revision"], "command": body},
+        )
+        assert result["affected_kind"] == kind, f"{body['operation']} made a {result}"
+        draft = result["draft"]
+        return result["affected_id"]
+
+    space = command(
+        {"operation": "place_space_reference", "source_ref": constellation_ref}, "space"
+    )
+    ground = command(
+        {"operation": "place_ground_reference", "site_set_ref": site_set_ref}, "ground"
+    )
+    rule = command(
+        {"operation": "connect_segments", "from_segment_id": space, "to_segment_id": ground}, "link"
+    )
+    domain = command({"operation": "add_routing_domain"}, "routing_domain")
+
+    controls = _session_controls(draft, (space, ground))
+    edited = operator.post(
+        "/api/v1/builder/draft/control-mutate",
+        {
+            "draft": draft,
+            "expected_draft_revision": draft["draft_revision"],
+            "commands": [
+                {
+                    "operation": "set_scalar",
+                    "control_id": controls["start_time"],
+                    "value": start_time,
+                },
+                *(
+                    {"operation": "set_scalar", "control_id": controls[segment], "value": _PROFILE}
+                    for segment in (space, ground)
+                ),
+            ],
+        },
+    )
+    verdicts = edited["compile_result"]
+    blockers = (
+        verdicts["save_verdict"]["blockers"] + verdicts["deploy_eligibility_after_save"]["blockers"]
+    )
+    assert not blockers, "the Builder refuses the session it built:\n" + "\n".join(
+        f"{blocker['code']}: {blocker['message']}" for blocker in blockers
+    )
+    saved = operator.post("/api/v1/builder/session/save", edited["save_request"])
+    canonical = saved["session"]["canonical_json"]
+
+    assert {segment["id"]: segment.get("profile") for segment in canonical["segments"]} == {
+        space: _PROFILE,
+        ground: _PROFILE,
+    }
+    assert [link_rule["id"] for link_rule in canonical["link_rules"]] == [rule]
+    domains = {
+        saved_domain["id"]: (
+            saved_domain["protocol"],
+            _segments_a_selector_names(saved_domain["selectors"]),
+        )
+        for saved_domain in canonical["routing"]["domains"]
+    }
+    assert set(domains) == {domain}
+    # The command covers every placed segment.
+    assert domains[domain][1] == {space, ground}, domains
+    print(
+        f"{name}: rule {rule}, "
+        + ", ".join(
+            f"domain {domain_id} {protocol} over {sorted(members)}"
+            for domain_id, (protocol, members) in domains.items()
+        )
+        + f", profile {_PROFILE} on {space} and {ground}"
+    )
+
+    operator.run_saved_session(saved)
+    heard = operator.watch_state(
+        180.0,
+        until=lambda messages: any(
+            link["link_type"] == "ground" for link in messages[-1][1].get("links", [])
+        ),
+    )
+    snapshots = [message for _, message in heard if "links" in message]
+    assert snapshots, "the state feed delivered no snapshot"
+    latest = snapshots[-1]
+
+    print(
+        f"links running per rule: {dict(Counter(link['link_rule_id'] for link in latest['links']))}"
+    )
+    running_rules = {link["link_rule_id"] for snapshot in snapshots for link in snapshot["links"]}
+    assert running_rules <= {rule}, f"links run under rules other than {rule}: {running_rules}"
+    assert any(link["link_type"] == "ground" for link in latest["links"]), (
+        "no ground link ran within 180 s of the session being ready"
+    )
+
+    for domain_id, (protocol, members) in domains.items():
+        in_domain = [node for node in latest["nodes"] if node["segment_id"] in members]
+        assert {node["segment_id"] for node in in_domain} == members, (
+            f"the session shows no node of {sorted(members - {n['segment_id'] for n in in_domain})}"
+        )
+        not_in_domain = [
+            node["node_id"]
+            for node in in_domain
+            if (domain_id, protocol)
+            not in {
+                (instance["domain_id"], instance["protocol"])
+                for instance in node["routing_instances"]
+            }
+        ]
+        print(f"domain {domain_id}: {len(in_domain)} nodes, {len(not_in_domain)} outside it")
+        assert not not_in_domain, (
+            f"these nodes are not in {domain_id} ({protocol}): {not_in_domain}"
+        )
+    # The routers' own neighbour tables over the shown ground links, and a ping from a
+    # ground router: the protocol runs on the links the session shows.
     assert_session_is_truthful(operator)

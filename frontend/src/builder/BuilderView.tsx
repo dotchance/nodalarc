@@ -50,11 +50,13 @@ import { ConstellationEditor } from "./ConstellationEditor";
 import { CustomizeChainEditor } from "./CustomizeChainEditor";
 import { GroundEditor } from "./GroundEditor";
 import { LibraryPanel } from "./LibraryPanel";
+import { LinkAndRoutingOutline } from "./LinkAndRoutingOutline";
 import { LinkRuleEditor } from "./LinkRuleEditor";
 import { CatalogDraftEditorWindow } from "./CatalogDraftEditorWindow";
 import { OpenSessionPicker } from "./OpenSessionPicker";
 import { BoundaryEditor, RoutingDomainEditor } from "./RoutingEditor";
 import { SessionEditor, timeRateSummary } from "./SessionEditor";
+import { listSessionObjects } from "./sessionListing";
 import {
   canDeploy,
   draftHoldsUnsavedWork,
@@ -100,9 +102,7 @@ import {
 import { workspaceFromVisualDraft } from "./visualWorkspace";
 import {
   emittedRuleId,
-  linkWarnings,
   placedSegments,
-  routingWarnings,
   type DraftBoundary,
   type DraftConstellation,
   type DraftGroundSet,
@@ -795,10 +795,20 @@ export function BuilderView({
           );
       }, label);
   };
-  // The wall's owning editor target (wallTarget). Matched against the
-  // preview overlay — the refused document was serialized from it, so a dirty
-  // rename must be matched by the dirty draft, not the applied state.
-  const wall = wallTarget(previewWorkspace() ?? workspace, resolveError);
+  // Every link rule, routing domain and boundary the accepted session
+  // declares, as the backend lists them, with the pending edits laid over them.
+  const listed = useMemo(
+    () =>
+      listSessionObjects(
+        assemblyResult?.listing ?? null,
+        [...pendingEdits.values()].map((pending) => pending.answer),
+      ),
+    [assemblyResult?.listing, pendingEdits],
+  );
+  // The wall's owning editor target (wallTarget). A segment is matched against
+  // the preview overlay — the refused document was serialized from it, so a
+  // dirty segment must be matched by the dirty draft, not the applied state.
+  const wall = wallTarget(previewWorkspace() ?? workspace, listed, resolveError);
   /** Inline wall text for one open editor window (null = not this window's). */
   const wallFor = (target: EditorTarget): string | null =>
     wall && targetKey(target) === wall.key ? (resolveError?.error ?? null) : null;
@@ -955,9 +965,7 @@ export function BuilderView({
   const findings = useMemo(() => {
     if (!workspace) return [];
     return (assemblyResult?.assembly_issues ?? []).map((issue) => {
-      const match = /^workspace\.(space|ground|links|routing_domains|boundaries)\.(\d+)/.exec(
-        issue.draft_path ?? "",
-      );
+      const match = /^workspace\.(space|ground)\.(\d+)/.exec(issue.draft_path ?? "");
       if (!match) return { message: issue.message, target: null as EditorTarget | null };
       const index = Number(match[2]);
       const target =
@@ -965,21 +973,9 @@ export function BuilderView({
           ? workspace.space[index]
             ? ({ kind: "segment", id: workspace.space[index]!.segment_id } as const)
             : null
-          : match[1] === "ground"
-            ? workspace.ground[index]
-              ? ({ kind: "ground", id: workspace.ground[index]!.segment_id } as const)
-              : null
-            : match[1] === "links"
-              ? workspace.links[index]
-                ? ({ kind: "link", id: workspace.links[index]!.rule_id } as const)
-                : null
-              : match[1] === "routing_domains"
-                ? workspace.routing_domains[index]
-                  ? ({ kind: "domain", id: workspace.routing_domains[index]!.domain_id } as const)
-                  : null
-                : workspace.boundaries[index]
-                  ? ({ kind: "boundary", id: workspace.boundaries[index]!.boundary_id } as const)
-                  : null;
+          : workspace.ground[index]
+            ? ({ kind: "ground", id: workspace.ground[index]!.segment_id } as const)
+            : null;
       return { message: issue.message, target };
     });
   }, [assemblyResult?.assembly_issues, workspace]);
@@ -1605,6 +1601,7 @@ export function BuilderView({
               // overlays) so a dirty session buffer's start_time is reflected,
               // never a stale applied value.
               workspace={previewWorkspace() ?? workspace}
+              linkRules={listed.linkRules}
               onOpenRule={openRule}
               onConnect={(other) => connect(draft.segment_id, other)}
               draft={draft}
@@ -1678,6 +1675,7 @@ export function BuilderView({
               key={draft.segment_id}
               autoFocusName={freshId === draft.segment_id}
               workspace={workspace}
+              linkRules={listed.linkRules}
               onOpenRule={openRule}
               onConnect={(other) => connect(draft.segment_id, other)}
               schedulingPresets={schedulingPresets}
@@ -2529,79 +2527,14 @@ export function BuilderView({
               {connectPicker(draft.segment_id)}
               </Fragment>
             ))}
-            {(workspace.links.length > 0 || placedSegments(workspace).length > 0) && (
-              <div className="builder-outline-kind">Links</div>
-            )}
-            {workspace.links.map((rule) => (
-              <button
-                className={`builder-outline-row builder-outline-row--segment${
-                  isOpen(`link:${rule.rule_id}`) ? " builder-outline-row--selected" : ""
-                }`}
-                key={rule.rule_id}
-                onClick={() => openEditor({ kind: "link", id: rule.rule_id })}
-                title={`Edit ${rule.rule_id}`}
-              >
-                <span className="builder-outline-name">
-                  <Icon name="spline" size={12} />
-                  {rule.rule_id}
-                </span>
-                <span className="builder-outline-count">
-                  {rule.a.role === null || rule.b.role === null
-                    ? "role incomplete"
-                    : rule.a.role}
-                  {!rule.enabled && " · off"}
-                </span>
-              </button>
-            ))}
-            {linkWarnings(workspace).map((warning) => (
-              <div className="builder-warning" key={warning}>
-                {warning}
-              </div>
-            ))}
-            {(workspace.routing_domains.length > 0 ||
-              placedSegments(workspace).length > 0) && (
-              <div className="builder-outline-kind">Routing</div>
-            )}
-            {workspace.routing_domains.map((domain) => (
-              <button
-                className={`builder-outline-row builder-outline-row--segment${
-                  isOpen(`domain:${domain.domain_id}`)
-                    ? " builder-outline-row--selected"
-                    : ""
-                }`}
-                key={domain.domain_id}
-                onClick={() => openEditor({ kind: "domain", id: domain.domain_id })}
-                title={`Edit ${domain.domain_id}`}
-              >
-                <span className="builder-outline-name">
-                  <Icon name="network" size={12} />
-                  {domain.domain_id}
-                </span>
-                <span className="builder-outline-count">
-                  {domain.protocol ?? "protocol incomplete"}
-                </span>
-              </button>
-            ))}
-            {workspace.boundaries.map((boundary) => (
-              <button
-                className={`builder-outline-row builder-outline-row--segment${
-                  isOpen(`boundary:${boundary.boundary_id}`)
-                    ? " builder-outline-row--selected"
-                    : ""
-                }`}
-                key={boundary.boundary_id}
-                onClick={() => openEditor({ kind: "boundary", id: boundary.boundary_id })}
-                title="Edit boundary"
-              >
-                <span className="builder-outline-name">
-                  <Icon name="columns-2" size={12} />
-                  over {boundary.over_rule_id}
-                </span>
-                <span className="builder-outline-count">
-                  {boundary.adapter ?? "adapter incomplete"}
-                </span>
-              </button>
-            ))}
+            <LinkAndRoutingOutline
+              listed={listed}
+              hasSegments={placedSegments(workspace).length > 0}
+              resolvedNodes={world?.nodes ?? null}
+              refusal={resolveError?.error ?? null}
+              isOpen={isOpen}
+              onOpen={openEditor}
+            />
             {placedSegments(workspace).length > 0 && (
               <div className="builder-preset-row">
                 <Button
@@ -2622,12 +2555,6 @@ export function BuilderView({
                   + domain
                 </Button>
                 <Button
-                  disabled={
-                    workspace.routing_domains.length < 2 ||
-                    !workspace.links.some(
-                      (rule) => rule.a.role !== "access" && rule.b.role !== "access",
-                    )
-                  }
                   title="A controlled exchange over a fixed link rule between two domains"
                   onClick={() => {
                     setLibraryError(null);
@@ -2646,11 +2573,6 @@ export function BuilderView({
                 </Button>
               </div>
             )}
-            {routingWarnings(workspace).map((warning) => (
-              <div className="builder-warning" key={warning}>
-                {warning}
-              </div>
-            ))}
             <Button
               onClick={() => {
                 ensureThenCreate(() => {

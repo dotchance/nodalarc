@@ -27,6 +27,7 @@ import {
   SelectField,
 } from "./editorKit";
 import { SegmentLinksCard } from "./SegmentLinksCard";
+import type { ListedLinkRule } from "./sessionListing";
 import { SiteEditor } from "./SiteEditor";
 import { useBuilderCatalog } from "./useBuilderWorld";
 import {
@@ -59,6 +60,9 @@ interface GroundEditorProps {
   autoFocusName?: boolean;
   /** Connect gesture context ("+ link to…" on the segment). */
   workspace: Workspace;
+  /** Every link rule the session declares, as the backend lists them with
+   *  the pending edits laid over them. */
+  linkRules: ReadonlyArray<ListedLinkRule>;
   onOpenRule: (ruleId: string) => void;
   onConnect: (targetSegmentId: string) => void;
   schedulingPresets: readonly BuilderVisualSchedulingPresetMetadata[];
@@ -90,6 +94,7 @@ export function GroundEditor({
   onRemove,
   autoFocusName = false,
   workspace,
+  linkRules,
   onOpenRule,
   onConnect,
   schedulingPresets,
@@ -472,6 +477,7 @@ export function GroundEditor({
 
       <SegmentLinksCard
         workspace={workspace}
+        rules={linkRules}
         segmentId={draft.segment_id}
         onOpenRule={onOpenRule}
         onConnect={onConnect}

@@ -8,10 +8,14 @@
  */
 
 import { EditorCard, SelectField } from "./editorKit";
+import { cardWindowShows, noWindowReason, type ListedLinkRule } from "./sessionListing";
 import { placedSegments, type Workspace } from "./workspace";
 
 interface SegmentLinksCardProps {
   workspace: Workspace;
+  /** Every link rule the session declares, as the backend lists them with
+   *  the pending edits laid over them. */
+  rules: ReadonlyArray<ListedLinkRule>;
   segmentId: string;
   onOpenRule: (ruleId: string) => void;
   onConnect: (targetSegmentId: string) => void;
@@ -19,41 +23,62 @@ interface SegmentLinksCardProps {
 
 export function SegmentLinksCard({
   workspace,
+  rules,
   segmentId,
   onOpenRule,
   onConnect,
 }: SegmentLinksCardProps) {
   const placed = placedSegments(workspace);
   const label = (id: string) => placed.find((s) => s.segment_id === id)?.label ?? id;
-  const touching = workspace.links.filter(
-    (rule) => rule.a.segment_id === segmentId || rule.b.segment_id === segmentId,
-  );
+  const touching = rules.filter((rule) => rule.segmentIds.includes(segmentId));
+  /** What the row states about the rule: its role and other end from its card
+   *  value, or the other segments the accepted rule names when no card states
+   *  it. A pending edit with no card value states neither. */
+  const detail = (rule: ListedLinkRule): string => {
+    const parts: string[] = [];
+    const card = rule.card;
+    if (card !== null) {
+      const a = card.a?.segment_id;
+      const b = card.b?.segment_id;
+      const other = a === segmentId ? b : a;
+      if (card.a?.role) parts.push(card.a.role);
+      if (a !== undefined && a === b) parts.push("mesh");
+      else if (other) parts.push(label(other));
+    } else if (rule.pending === null) {
+      const others = rule.segmentIds.filter((id) => id !== segmentId).map(label);
+      if (others.length > 0) parts.push(others.join(", "));
+    }
+    if (rule.pending !== null) parts.push("pending edit");
+    return parts.join(" · ");
+  };
   return (
     <EditorCard
       title="Links"
       open
       summary={touching.length === 1 ? "1 rule" : `${touching.length} rules`}
     >
-        {touching.map((rule) => {
-          const otherId =
-            rule.a.segment_id === segmentId ? rule.b.segment_id : rule.a.segment_id;
-          const mesh = rule.a.segment_id === rule.b.segment_id;
-          return (
+        {touching.map((rule) =>
+          cardWindowShows(rule) ? (
             <button
-              key={rule.rule_id}
+              key={rule.id}
               className="builder-outline-row"
-              title={`Edit ${rule.rule_id}`}
-              onClick={() => onOpenRule(rule.rule_id)}
+              title={`Edit ${rule.id}`}
+              onClick={() => onOpenRule(rule.id)}
             >
-              <span>{rule.rule_id}</span>
-              <span className="builder-outline-count">
-                {rule.a.role === null || rule.b.role === null
-                  ? "role incomplete"
-                  : rule.a.role} · {mesh ? "mesh" : label(otherId)}
-              </span>
+              <span>{rule.id}</span>
+              <span className="builder-outline-count">{detail(rule)}</span>
             </button>
-          );
-        })}
+          ) : (
+            <div
+              key={rule.id}
+              className="builder-library-entry"
+              title={noWindowReason("link rule", rule.pending !== null)}
+            >
+              <span>{rule.id}</span>
+              <span className="builder-outline-count">{detail(rule)}</span>
+            </div>
+          ),
+        )}
         <SelectField
           stack
           label="+ link to…"

@@ -224,6 +224,7 @@ describe("editors delegate authoring to VS-API", () => {
         authoring={AUTHORING_FACTS}
         draft={draft}
         workspace={newWorkspace("t")}
+        linkRules={[]}
         onUpdate={onUpdate}
         onUpdateOrbit={() => {}}
         onSetPopulation={onSetPopulation}
@@ -255,6 +256,7 @@ describe("editors delegate authoring to VS-API", () => {
         authoring={AUTHORING_FACTS}
         draft={newDraftConstellation("nodalarc:nodes/space/leo.yaml")}
         workspace={newWorkspace("t")}
+        linkRules={[]}
         onUpdate={onUpdate}
         onUpdateOrbit={() => {}}
         onSetPopulation={async () => {}}
@@ -367,6 +369,7 @@ describe("BodySelect failure contract + node-id collision", () => {
         authoring={AUTHORING_FACTS}
         draft={draft}
         workspace={newWorkspace("t")}
+        linkRules={[]}
         onOpenRule={() => {}}
         onConnect={() => {}}
         schedulingPresets={[]}

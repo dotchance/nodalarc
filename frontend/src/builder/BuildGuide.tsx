@@ -15,7 +15,7 @@ import type {
 } from "./generated/builderApi";
 
 /** The resolved node facts the overview reads. */
-type GuideWorldNode = Pick<BuilderWorldNode, "kind" | "namespace"> & {
+export type GuideWorldNode = Pick<BuilderWorldNode, "kind" | "namespace"> & {
   readonly routing_instances: ReadonlyArray<Pick<NodeRoutingInstance, "domain_id" | "protocol">>;
 };
 
@@ -113,7 +113,7 @@ function canonicalFacts(document: Readonly<Record<string, JsonValue>>): Canonica
 }
 
 /** Group the resolved world's routing instances by domain. */
-function resolvedDomains(nodes: ReadonlyArray<GuideWorldNode>): ResolvedDomain[] {
+export function resolvedDomains(nodes: ReadonlyArray<GuideWorldNode>): ResolvedDomain[] {
   const domains = new Map<string, ResolvedDomain>();
   for (const node of nodes) {
     for (const instance of node.routing_instances) {

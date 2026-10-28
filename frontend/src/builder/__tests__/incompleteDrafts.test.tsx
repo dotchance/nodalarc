@@ -16,12 +16,15 @@ const { SessionEditor } = await import("../SessionEditor");
 const { RoutingDomainEditor } = await import("../RoutingEditor");
 const { SegmentLinksCard } = await import("../SegmentLinksCard");
 const { resetCatalogStores } = await import("../useBuilderWorld");
+const { listSessionObjects } = await import("../sessionListing");
 const {
   newDraftConstellation,
   defaultDraftNode,
   defaultRoutingDomain,
   newWorkspace,
 } = await import("./fixtures/workspaceFixtures");
+const { acceptedRule, pendingAnswer, ruleAddress, ruleCard, sessionListing, workingIssue } =
+  await import("./fixtures/listingFixtures");
 
 const NODE_REF = "user:nodes/gw.yaml";
 
@@ -91,6 +94,7 @@ describe("truthful incomplete node summaries", () => {
         onAddNodeEthernet={async () => {}}
         onRemove={() => {}}
         workspace={newWorkspace("incomplete-terminal-count")}
+        linkRules={[]}
         onOpenRule={() => {}}
         onConnect={() => {}}
       />,
@@ -145,7 +149,7 @@ describe("truthful incomplete routing and link summaries", () => {
     expect(document.body.textContent).not.toContain("nulls");
   });
 
-  it("labels an incomplete endpoint role in a segment link summary", () => {
+  it("states no role for a rule whose pending edit lost its endpoint role", () => {
     const workspace = newWorkspace("partial-link");
     workspace.space_refs = [
       {
@@ -159,39 +163,38 @@ describe("truthful incomplete routing and link summaries", () => {
         label: "B",
       },
     ];
-    workspace.links = [
-      {
-        rule_id: "link-1",
-        enabled: true,
-        a: {
-          segment_id: "space-1",
-          tag: null,
-          role: null,
-          medium: null,
-          min_elevation_deg: null,
-        },
-        b: {
-          segment_id: "space-2",
-          tag: null,
-          role: "isl",
-          medium: "optical",
-          min_elevation_deg: null,
-        },
-        topology_mode: null,
-        topology_n: null,
-        max_range_km: null,
-      },
-    ];
+    // The accepted rule is a crosslink. Its pending edit removed the first
+    // endpoint's role, so the backend answers no card value and an issue.
+    const listed = listSessionObjects(
+      sessionListing({
+        link_rules: [
+          acceptedRule(
+            "link-1",
+            ["space-1", "space-2"],
+            ruleCard("link-1", "space-1", "space-2", "crosslink"),
+          ),
+        ],
+      }),
+      [
+        pendingAnswer(ruleAddress("link-1"), null, [
+          workingIssue("Field required", "/endpoints/0/terminal/all/0/role"),
+        ]),
+      ],
+    );
 
     render(
       <SegmentLinksCard
         workspace={workspace}
+        rules={listed.linkRules}
         segmentId="space-1"
         onOpenRule={() => {}}
         onConnect={() => {}}
       />,
     );
 
-    expect(screen.getByText(/role incomplete · B/)).toBeTruthy();
+    expect(screen.getByText("link-1")).toBeTruthy();
+    expect(screen.getByText("pending edit")).toBeTruthy();
+    expect(document.body.textContent).not.toContain("crosslink");
+    expect(document.body.textContent).not.toContain("null");
   });
 });

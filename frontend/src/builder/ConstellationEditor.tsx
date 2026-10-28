@@ -15,6 +15,7 @@ import { Button } from "../ui/Button";
 import { BodySelect, EditorCard, EditorName, NumberField, SelectField, SliderField } from "./editorKit";
 import { NodeEditor } from "./NodeEditor";
 import { SegmentLinksCard } from "./SegmentLinksCard";
+import type { ListedLinkRule } from "./sessionListing";
 import type {
   BuilderVisualAuthoringFacts,
   BuilderVisualSetSpacePopulationCommand,
@@ -58,6 +59,9 @@ interface ConstellationEditorProps {
   autoFocusName?: boolean;
   /** Connect gesture context ("+ link to…" on the segment). */
   workspace: Workspace;
+  /** Every link rule the session declares, as the backend lists them with
+   *  the pending edits laid over them. */
+  linkRules: ReadonlyArray<ListedLinkRule>;
   onOpenRule: (ruleId: string) => void;
   onConnect: (targetSegmentId: string) => void;
   authoring: BuilderVisualAuthoringFacts;
@@ -95,6 +99,7 @@ export function ConstellationEditor({
   onRemove,
   autoFocusName = false,
   workspace,
+  linkRules,
   onOpenRule,
   onConnect,
   authoring,
@@ -377,6 +382,7 @@ export function ConstellationEditor({
 
       <SegmentLinksCard
         workspace={workspace}
+        rules={linkRules}
         segmentId={draft.segment_id}
         onOpenRule={onOpenRule}
         onConnect={onConnect}

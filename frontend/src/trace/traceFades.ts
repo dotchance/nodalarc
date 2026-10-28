@@ -56,12 +56,12 @@ export class TraceFades {
           : (entry.stoppedAt ?? now);
       this.entries.set(traceKey(path), { path, stoppedAt, present: true });
     }
-    for (const [flowId, entry] of this.entries) {
+    for (const [key, entry] of this.entries) {
       if (entry.present) continue;
       if (entry.stoppedAt === null) {
         entry.stoppedAt = now;
       } else if (stoppedTraceOpacity(now - entry.stoppedAt) === null) {
-        this.entries.delete(flowId);
+        this.entries.delete(key);
       }
     }
   }
@@ -78,5 +78,12 @@ export class TraceFades {
       if (opacity !== null) drawn.push({ path, opacity, animate: false });
     }
     return drawn;
+  }
+
+  /** The one trace a view with room for a single trace draws at `now`: the live
+   *  trace when one runs, else the stopped trace still fading. */
+  primary(now: number): DrawnTrace | null {
+    const drawn = this.drawn(now);
+    return drawn.find((trace) => trace.animate) ?? drawn[0] ?? null;
   }
 }

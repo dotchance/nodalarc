@@ -223,7 +223,6 @@ def _site_lan_neighbors_by_node(resolved: ResolvedSession) -> dict[str, set[str]
         if (
             node.kind == "ground_station"
             and node.forwarding == "routed"
-            and node.namespace is not None
             and node.interfaces is not None
             and node.interfaces.ethernet
         ):

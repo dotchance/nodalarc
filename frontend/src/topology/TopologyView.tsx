@@ -151,7 +151,7 @@ export function TopologyView({
 
     // Draw links first (below nodes)
     traceFadesRef.current.observe(snapshot.traced_paths, now);
-    const drawnTrace = traceFadesRef.current.drawn(now)[0] ?? null;
+    const drawnTrace = traceFadesRef.current.primary(now);
     // Each drawn leg with its color and where its hop numbers sit: forward above
     // the node, reverse below it.
     const legs: { hops: readonly string[]; color: string; labelDy: number }[] = [];

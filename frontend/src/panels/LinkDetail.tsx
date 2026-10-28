@@ -225,7 +225,7 @@ export function LinkDetail({ link, snapshot }: LinkDetailProps) {
           <h3>Flow Paths</h3>
           {flowsOnLink.map((tp) => (
             <div className="detail-row" key={traceKey(tp)}>
-              <span className="detail-label">{tp.src_node} \u2192 {tp.dst_node}</span>
+              <span className="detail-label">{tp.src_node} → {tp.dst_node}</span>
               <span className="detail-value">{tp.hops.length} hops</span>
             </div>
           ))}

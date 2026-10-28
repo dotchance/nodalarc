@@ -94,6 +94,26 @@ describe("TraceFades", () => {
     const fades = new TraceFades();
     fades.observe([trace("first", true)], 0);
     fades.observe([trace("second", true), trace("first", true)], 10);
-    expect(drawn(fades, 10).map(([flowId]) => flowId)).toEqual(["first", "second"]);
+    expect(drawn(fades, 10).map(([source]) => source)).toEqual(["first", "second"]);
+  });
+
+  it("gives a single-trace view the live trace that replaced a running one", () => {
+    const fades = new TraceFades();
+    fades.observe([trace("old", true)], 0);
+    fades.observe([trace("new", true)], 10);
+    expect(drawn(fades, 10)).toEqual([
+      ["old", 1, false],
+      ["new", 1, true],
+    ]);
+    expect(fades.primary(10)?.path.src_node).toBe("new");
+  });
+
+  it("gives a single-trace view the stopped trace while it fades, then nothing", () => {
+    const fades = new TraceFades();
+    fades.observe([trace("t", true)], 0);
+    fades.observe([], 10);
+    expect(fades.primary(10)?.path.src_node).toBe("t");
+    fades.observe([], 10 + GONE);
+    expect(fades.primary(10 + GONE)).toBeNull();
   });
 });

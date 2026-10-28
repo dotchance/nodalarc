@@ -78,11 +78,9 @@ export function GroundStationDetail({ node, snapshot, onSelect }: GroundStationD
   // (namespace). Rendered as a switcher so each colocated gateway is one
   // click away - the map fans them apart, but the site is the entity a
   // user thinks in. (A fuller site-level tab is planned UX.)
-  const siteMembers = node.namespace
-    ? snapshot.nodes
-        .filter((n) => n.node_type === "ground_station" && n.namespace === node.namespace)
-        .sort((a, b) => a.node_id.localeCompare(b.node_id))
-    : [node];
+  const siteMembers = snapshot.nodes
+    .filter((n) => n.node_type === "ground_station" && n.namespace === node.namespace)
+    .sort((a, b) => a.node_id.localeCompare(b.node_id));
   const nodeAddresses = node.addresses ?? [];
   const loopbacks = nodeAddresses.filter((a) => a.purpose === "router_loopback");
   const siteInterfaces = nodeAddresses.filter((a) => a.purpose === "site_interface");

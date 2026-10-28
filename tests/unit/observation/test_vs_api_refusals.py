@@ -381,7 +381,9 @@ def test_every_model_a_route_answers_with_is_generated_for_the_page() -> None:
     generator = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(generator)
     schemas, definitions, _ = generator._root_schemas()
-    generated = set(schemas) | set(definitions)
+    # What the page gets a type for: the roots and what they reach outside the
+    # configuration documents, which the page holds as generic JSON.
+    generated = set(schemas) | generator._reach(schemas, definitions)
 
     def models(annotation: object) -> set[str]:
         if isinstance(annotation, type) and issubclass(annotation, BaseModel):

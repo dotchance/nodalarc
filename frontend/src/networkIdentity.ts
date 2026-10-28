@@ -19,7 +19,7 @@ const GROUND_LINK: Record<PublicLinkType, boolean> = {
 };
 
 export function isGroundNode(node: Pick<NodeState, "node_type">): boolean {
-  if (!(node.node_type in GROUND_NODE)) {
+  if (!Object.prototype.hasOwnProperty.call(GROUND_NODE, node.node_type)) {
     throw new Error(`Unknown node_type for frontend classification: ${String(node.node_type)}`);
   }
   return GROUND_NODE[node.node_type];
@@ -31,7 +31,7 @@ export function selectionTypeForNode(node: Pick<NodeState, "node_type">): "groun
 
 export function isGroundLinkType(linkType: PublicLinkType): boolean {
   // A feed from another VS-API release can carry a kind this page does not know.
-  if (!(linkType in GROUND_LINK)) {
+  if (!Object.prototype.hasOwnProperty.call(GROUND_LINK, linkType)) {
     throw new Error(`Unknown link_type for frontend link classification: ${String(linkType)}`);
   }
   return GROUND_LINK[linkType];

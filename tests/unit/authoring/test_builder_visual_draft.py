@@ -401,154 +401,229 @@ def test_backend_places_catalog_references_and_derives_catalog_identity(
         )
 
 
-def test_backend_segment_creation_never_reuses_ids_held_by_dangling_intent(
+def _command(
+    service: BuilderVisualDraftService,
+    draft: BuilderVisualDraftEnvelope,
+    command: dict[str, Any],
+    *,
+    pending_edits: tuple[dict[str, Any], ...] = (),
+) -> BuilderVisualDraftCommandResult:
+    """One command sent as the page sends it: JSON validated into the request."""
+    body = {
+        "draft": json.loads(draft.model_dump_json()),
+        "expected_draft_revision": draft.draft_revision,
+        "command": command,
+        "pending_edits": list(pending_edits),
+    }
+    return service.apply_command(
+        BuilderVisualDraftCommandRequest.model_validate_json(json.dumps(body)),
+        available_node_count=1_000_000,
+        preview_factory=_preview,
+    )
+
+
+def _relay_session(name: str) -> dict[str, Any]:
+    return {
+        "session": {"name": name},
+        "segments": [
+            {
+                "id": "relay",
+                "source": "nodalarc:constellations/earth/leo/earth-leo-polar-36.yaml",
+            }
+        ],
+        "time": {"start_time": "2026-07-10T00:00:00Z", "step_seconds": 1, "compression": 1},
+    }
+
+
+_ID_GESTURES: tuple[dict[str, Any], ...] = (
+    {
+        "operation": "place_space_reference",
+        "source_ref": "nodalarc:constellations/luna/elfo/luna-elfo-relay-2.yaml",
+    },
+    {"operation": "add_generated_space", "phasing_mode": "walker_delta"},
+    {
+        "operation": "place_ground_reference",
+        "site_set_ref": "nodalarc:site-sets/luna/luna-surface-sites.yaml",
+    },
+    {"operation": "add_ground"},
+    {"operation": "add_routing_domain"},
+    {"operation": "connect_segments", "from_segment_id": "relay", "to_segment_id": "relay"},
+)
+
+
+def test_backend_gestures_never_mint_an_id_the_session_or_a_pending_edit_holds(
     service: BuilderVisualDraftService,
 ) -> None:
-    draft = service.create(BuilderVisualDraftCreateRequest(session_name="reserved-identities"))
-
-    def apply(command: dict[str, Any], *, source: BuilderVisualDraftEnvelope | None = None):
-        nonlocal draft
-        active = source or draft
-        result = service.apply_command(
-            BuilderVisualDraftCommandRequest(
-                draft=active,
-                expected_draft_revision=active.draft_revision,
-                command=command,
-            ),
-            available_node_count=1_000_000,
-            preview_factory=_preview,
-        )
-        if source is None:
-            draft = result.draft
-        return result
-
-    assert (
-        apply({"operation": "add_generated_space", "phasing_mode": "walker_delta"}).affected_id
-        == "space-1"
-    )
-    assert apply({"operation": "add_ground"}).affected_id == "ground-1"
-    assert draft.authoring_workspace is not None
-    stripped = draft.model_copy(
-        update={
-            "authoring_workspace": draft.authoring_workspace.model_copy(
-                update={
-                    "space": (),
-                    "ground": (),
-                    "links": (
-                        BuilderVisualLinkRule(
-                            rule_id="dangling-space-link",
-                            a=BuilderVisualLinkEndpoint(
-                                segment_id="space-1",
-                                role="isl",
-                                medium="optical",
-                            ),
-                            b=BuilderVisualLinkEndpoint(
-                                segment_id="space-1",
-                                role="isl",
-                                medium="optical",
-                            ),
-                            topology_mode="nearest_n",
-                            topology_n=1,
-                        ),
-                    ),
-                    "routing_domains": (
-                        BuilderVisualRoutingDomain(
-                            domain_id="dangling-ground-domain",
-                            protocol="isis",
-                            member_segment_ids=("ground-1",),
-                        ),
-                    ),
+    created = service.create(BuilderVisualDraftCreateRequest(session_name="reserved-identities"))
+    # The rule, the loopback pool and the domain name segments the session does not
+    # declare. Such a selector matches no node, so a new segment that took one of
+    # these ids would silently join or leave the selection.
+    crosslink = {"all": [{"role": "crosslink"}, {"medium": "optical"}]}
+    session = {
+        **_relay_session("reserved-identities"),
+        "link_rules": [
+            {
+                "id": "relay_isl",
+                "endpoints": [
+                    {"select": {"segment": "relay"}, "terminal": crosslink},
+                    {
+                        "select": {"all": [{"segment": "relay"}, {"not": {"segment": "space-1"}}]},
+                        "terminal": crosslink,
+                    },
+                ],
+                "topology": {"mode": "nearest_n", "n": 1},
+                "constraints": {"max_links_per_node": {"relay": 1, "ground-1": 1}},
+            }
+        ],
+        "addressing": {
+            "loopbacks": [
+                {
+                    "id": "loopbacks",
+                    "applies_to": {"any": [{"segment": "relay"}, {"segment": "space-2"}]},
+                    "ipv4_pool": "10.240.0.0/16",
+                    "prefix_length": 32,
                 }
-            )
-        }
+            ]
+        },
+        "routing": {
+            "domains": [
+                {
+                    "id": "relay_domain",
+                    "protocol": "isis",
+                    "selectors": [{"segment": "relay"}, {"segment": "ground-2"}],
+                }
+            ]
+        },
+    }
+    applied = service.apply_yaml(
+        BuilderVisualDraftApplyYamlRequest(
+            draft=created,
+            expected_draft_revision=created.draft_revision,
+            buffer_generation=1,
+            yaml_text=yaml.safe_dump(session, sort_keys=False),
+        )
     )
+    assert applied.applied is True
+    # With the allocation history emptied, only the accepted session holds these ids.
+    accepted = applied.draft.model_copy(update={"reserved_authoring_ids": ()})
+    assert accepted.applied_session is not None
 
-    commands = (
-        (
+    assert [_command(service, accepted, gesture).affected_id for gesture in _ID_GESTURES] == [
+        "space-3",
+        "space-3",
+        "ground-3",
+        "ground-3",
+        "domain-1",
+        "link-1",
+    ]
+
+    # Pending edits hold the next ids: a new rule that is not complete yet, a
+    # changed domain and a new boundary list. None of them is in the session.
+    domain = accepted.applied_session["routing"]["domains"][0]
+    pending_edits = (
+        _content_edit(
+            {**_RULE_ADDRESS, "id": "link-1"},
+            None,
             {
-                "operation": "place_space_reference",
-                "source_ref": "nodalarc:constellations/luna/elfo/luna-elfo-relay-2.yaml",
+                "id": "link-1",
+                "endpoints": [
+                    {"select": {"segment": "space-3"}, "terminal": crosslink},
+                    {"select": {"segment": "relay"}, "terminal": crosslink},
+                ],
             },
-            "space-2",
         ),
-        (
-            {"operation": "add_generated_space", "phasing_mode": "walker_delta"},
-            "space-2",
+        _content_edit(
+            {**_DOMAIN_ADDRESS, "id": "relay_domain"},
+            domain,
+            {**domain, "selectors": [*domain["selectors"], {"not": {"segment": "ground-3"}}]},
         ),
-        (
-            {
-                "operation": "place_ground_reference",
-                "site_set_ref": "nodalarc:site-sets/luna/luna-surface-sites.yaml",
-            },
-            "ground-2",
+        _content_edit(
+            _BOUNDARIES_ADDRESS,
+            None,
+            [
+                {
+                    "over": "link-2",
+                    "adapter": "static_ip",
+                    "export": [{"from": "relay_domain", "to": "domain-1"}],
+                }
+            ],
         ),
-        ({"operation": "add_ground"}, "ground-2"),
     )
-    for command, expected_id in commands:
-        assert apply(command, source=stripped).affected_id == expected_id
+    assert [
+        _command(service, accepted, gesture, pending_edits=pending_edits).affected_id
+        for gesture in _ID_GESTURES
+    ] == ["space-4", "space-4", "ground-4", "ground-4", "domain-2", "link-3"]
 
 
-def test_backend_authoring_allocation_history_survives_local_segment_deletion(
+def test_backend_authoring_allocation_history_survives_segment_deletion(
     service: BuilderVisualDraftService,
 ) -> None:
     draft = service.create(BuilderVisualDraftCreateRequest(session_name="allocation-history"))
-
-    def apply(command: dict[str, Any], *, source: BuilderVisualDraftEnvelope | None = None):
-        nonlocal draft
-        active = source or draft
-        result = service.apply_command(
-            BuilderVisualDraftCommandRequest(
-                draft=active,
-                expected_draft_revision=active.draft_revision,
-                command=command,
-            ),
-            available_node_count=1_000_000,
-            preview_factory=_preview,
-        )
-        if source is None:
-            draft = result.draft
-        return result
-
-    apply({"operation": "add_generated_space", "phasing_mode": "walker_delta"})
-    apply({"operation": "add_ground"})
+    for gesture in (
+        {"operation": "add_generated_space", "phasing_mode": "walker_delta"},
+        {"operation": "add_ground"},
+    ):
+        draft = _command(service, draft, gesture).draft
     assert draft.reserved_authoring_ids == ("space-1", "ground-1")
-    assert draft.authoring_workspace is not None
-    locally_deleted = draft.model_copy(
-        update={
-            "authoring_workspace": draft.authoring_workspace.model_copy(
-                update={"space": (), "ground": (), "links": (), "routing_domains": ()}
-            )
-        }
-    )
 
-    commands = (
-        (
-            {
-                "operation": "place_space_reference",
-                "source_ref": "nodalarc:constellations/luna/elfo/luna-elfo-relay-2.yaml",
-            },
-            "space-2",
-        ),
-        (
-            {"operation": "add_generated_space", "phasing_mode": "walker_delta"},
-            "space-2",
-        ),
-        (
-            {
-                "operation": "place_ground_reference",
-                "site_set_ref": "nodalarc:site-sets/luna/luna-surface-sites.yaml",
-            },
-            "ground-2",
-        ),
-        ({"operation": "add_ground"}, "ground-2"),
+    # The YAML pane replaces the session, so neither the session nor the twin holds
+    # either segment. Only the allocation history does.
+    replaced = service.apply_yaml(
+        BuilderVisualDraftApplyYamlRequest(
+            draft=draft,
+            expected_draft_revision=draft.draft_revision,
+            buffer_generation=1,
+            yaml_text=yaml.safe_dump(_relay_session("allocation-history"), sort_keys=False),
+        )
     )
-    for command, expected_id in commands:
-        result = apply(command, source=locally_deleted)
+    assert replaced.applied is True
+    deleted = replaced.draft
+    assert deleted.applied_session is not None
+    assert [segment["id"] for segment in deleted.applied_session["segments"]] == ["relay"]
+    assert deleted.reserved_authoring_ids == ("space-1", "ground-1", "relay")
+
+    for gesture, expected_id in zip(
+        _ID_GESTURES[:4],
+        ("space-2", "space-2", "ground-2", "ground-2"),
+        strict=True,
+    ):
+        result = _command(service, deleted, gesture)
         assert result.affected_id == expected_id
         assert result.draft.reserved_authoring_ids == (
             "space-1",
             "ground-1",
+            "relay",
             expected_id,
+        )
+
+
+def test_a_command_result_is_one_accepted_revision_or_edits_at_the_same_revision(
+    service: BuilderVisualDraftService,
+) -> None:
+    created = service.create(BuilderVisualDraftCreateRequest(session_name="command-results"))
+    accepted = _command(service, created, {"operation": "add_routing_domain"})
+    assert accepted.draft.draft_revision == created.draft_revision + 1
+    assert accepted.created_edits == ()
+    answer = json.loads(accepted.model_dump_json())
+    unchanged = json.loads(created.model_dump_json())
+    created_edit = _content_edit(
+        {**_DOMAIN_ADDRESS, "id": "domain-1"},
+        None,
+        {"id": "domain-1", "protocol": "isis"},
+    )
+
+    kept = BuilderVisualDraftCommandResult.model_validate_json(
+        json.dumps({**answer, "draft": unchanged, "created_edits": [created_edit]})
+    )
+    assert kept.draft == created
+    assert [edit.working for edit in kept.created_edits] == [created_edit["working"]]
+    with pytest.raises(ValidationError, match="must leave draft_revision unchanged"):
+        BuilderVisualDraftCommandResult.model_validate_json(
+            json.dumps({**answer, "created_edits": [created_edit]})
+        )
+    with pytest.raises(ValidationError, match="advance draft_revision exactly once"):
+        BuilderVisualDraftCommandResult.model_validate_json(
+            json.dumps({**answer, "draft": unchanged})
         )
 
 
@@ -583,18 +658,18 @@ def test_backend_never_reuses_topology_ids_or_repairs_dangling_boundaries(
         }
     )
     apply({"operation": "add_boundary"})
+    # A boundary has no grammar id, so the allocation history holds none.
     assert draft.reserved_authoring_ids == (
         "space-1",
         "ground-1",
         "domain-1",
         "link-1",
-        "boundary-1",
     )
     assert draft.authoring_workspace is not None
 
     deleted_topology = draft.model_copy(
         update={
-            "reserved_authoring_ids": ("space-1", "ground-1", "boundary-1"),
+            "reserved_authoring_ids": ("space-1", "ground-1"),
             "authoring_workspace": draft.authoring_workspace.model_copy(
                 update={"links": (), "routing_domains": ()}
             ),
@@ -632,7 +707,8 @@ def test_backend_never_reuses_topology_ids_or_repairs_dangling_boundaries(
         }
     )
     boundary_result = apply({"operation": "add_boundary"}, source=without_boundaries)
-    assert boundary_result.affected_id == "boundary-2"
+    assert boundary_result.affected_id == "boundary-1"
+    assert "boundary-1" not in boundary_result.draft.reserved_authoring_ids
 
 
 def test_backend_atomically_creates_a_ground_for_a_site_reference(

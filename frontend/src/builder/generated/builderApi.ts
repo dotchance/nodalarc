@@ -708,14 +708,15 @@ export interface BuilderVisualDraftAssemblyResult {
 /**  */
 export type BuilderVisualDraftCommandOperation = "place_space_reference" | "place_ground_reference" | "add_generated_space" | "set_space_population" | "author_inline_space_node" | "add_or_increment_node_terminal" | "set_node_terminal_role" | "add_node_ethernet_port" | "add_ground" | "add_ground_site_reference" | "set_ground_stamp_node" | "set_ground_site_node" | "add_ground_site_node" | "mint_ground_members" | "add_routing_domain" | "add_boundary" | "connect_segments" | "rederive_link" | "set_scheduling_preset";
 
-/** Apply one typed command to an exact visual-draft revision. */
+/** Apply one typed command to an exact visual-draft revision. ``pending_edits`` are the edits not yet accepted. A command mints no id they define or reference. */
 export interface BuilderVisualDraftCommandRequest {
   readonly draft: BuilderVisualDraftEnvelope;
   readonly expected_draft_revision: number;
   readonly command: BuilderVisualPlaceSpaceReferenceCommand | BuilderVisualPlaceGroundReferenceCommand | BuilderVisualAddGeneratedSpaceCommand | BuilderVisualSetSpacePopulationCommand | BuilderVisualAuthorInlineSpaceNodeCommand | BuilderVisualAddOrIncrementNodeTerminalCommand | BuilderVisualSetNodeTerminalRoleCommand | BuilderVisualAddNodeEthernetPortCommand | BuilderVisualAddGroundCommand | BuilderVisualAddGroundSiteReferenceCommand | BuilderVisualSetGroundStampNodeCommand | BuilderVisualSetGroundSiteNodeCommand | BuilderVisualAddGroundSiteNodeCommand | BuilderVisualMintGroundMembersCommand | BuilderVisualAddRoutingDomainCommand | BuilderVisualAddBoundaryCommand | BuilderVisualConnectSegmentsCommand | BuilderVisualRederiveLinkCommand | BuilderVisualSetSchedulingPresetCommand;
+  readonly pending_edits?: ReadonlyArray<BuilderContentEdit | BuilderListEdit>;
 }
 
-/** One applied command and the next revision of the complete draft. */
+/** One command's result: the next revision of the complete draft, or pending edits. A command either accepts its result as the next revision and creates no edit, or leaves the draft at its revision and returns the edits it created. */
 export interface BuilderVisualDraftCommandResult {
   readonly operation: BuilderVisualDraftCommandOperation;
   readonly base_draft_revision: number;
@@ -724,6 +725,7 @@ export interface BuilderVisualDraftCommandResult {
   readonly affected_id: string;
   readonly scheduling_preset: BuilderVisualSchedulingPreset | null;
   readonly notice: string | null;
+  readonly created_edits: ReadonlyArray<BuilderContentEdit>;
 }
 
 /** Compile a complete visual draft through backend assembly and grammar authorities. With a workspace, the compile assembles that workspace over the draft and accepts nothing: the draft and its revision stay as they were. */

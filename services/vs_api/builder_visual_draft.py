@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import secrets
-from collections.abc import Callable, Collection, Mapping
+from collections.abc import Callable, Collection, Iterator, Mapping
 from copy import deepcopy
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -33,9 +33,12 @@ from nodalarc.marked_yaml import MarkedYamlError, YamlSourceMap, load_marked_yam
 from nodalarc.models.builder_api import (
     BuilderCompileRequest,
     BuilderCompileResult,
+    BuilderContentEdit,
     BuilderDraftEnvelope,
     BuilderIssue,
+    BuilderListEdit,
     BuilderMemberAddress,
+    BuilderPendingEdits,
     BuilderProposedCatalogDocument,
     BuilderSessionSaveRequest,
     BuilderVerdict,
@@ -379,36 +382,162 @@ def _placed_segments(workspace: BuilderVisualWorkspace) -> tuple[_PlacedSegment,
 
 
 def _reserved_authoring_ids(
-    workspace: BuilderVisualWorkspace,
-    allocation_history: tuple[str, ...] = (),
+    draft: BuilderVisualDraftEnvelope,
+    pending_edits: BuilderPendingEdits,
 ) -> set[str]:
-    reserved = set(allocation_history)
-    reserved.update(_current_and_referenced_authoring_ids(workspace))
-    reserved.discard("")
-    return reserved
+    """The ids a gesture may not mint.
+
+    These are the allocation history and every id the accepted session, the
+    pending edits and the twin define or reference.
+    """
+    return {
+        *draft.reserved_authoring_ids,
+        *_current_and_referenced_authoring_ids(
+            draft.applied_session,
+            pending_edits=pending_edits,
+            workspace=draft.authoring_workspace,
+        ),
+    }
 
 
 def _current_and_referenced_authoring_ids(
-    workspace: BuilderVisualWorkspace,
+    session: JsonDocument | None,
+    *,
+    pending_edits: BuilderPendingEdits = (),
+    workspace: BuilderVisualWorkspace | None = None,
 ) -> tuple[str, ...]:
-    return (
-        *(item.segment_id for item in _placed_segments(workspace)),
-        *(endpoint.segment_id for rule in workspace.links for endpoint in (rule.a, rule.b)),
+    """Every segment, link rule and routing domain id defined or referenced, in order.
+
+    The walk covers a session document, the working JSON of pending edits and
+    the twin. An object the session cannot hold yet is in the twin only.
+    Incomplete JSON contributes the ids it holds. A routing boundary has no id
+    of its own.
+    """
+    found = [
+        *_session_authoring_ids(session),
+        *(_twin_authoring_ids(workspace) if workspace is not None else ()),
         *(
-            segment_id
-            for domain in workspace.routing_domains
-            for segment_id in domain.member_segment_ids
+            authoring_id
+            for edit in pending_edits
+            for authoring_id in _pending_edit_authoring_ids(edit)
         ),
-        *(item.rule_id for item in workspace.links),
-        *(boundary.over_rule_id for boundary in workspace.boundaries),
-        *(item.domain_id for item in workspace.routing_domains),
-        *(
-            domain_id
-            for boundary in workspace.boundaries
-            for domain_id in (boundary.from_domain_id, boundary.to_domain_id)
-        ),
-        *(item.boundary_id for item in workspace.boundaries),
-    )
+    ]
+    return tuple(dict.fromkeys(item for item in found if item))
+
+
+def _twin_authoring_ids(workspace: BuilderVisualWorkspace) -> Iterator[str]:
+    """Every segment, link rule and routing domain id the twin defines or references."""
+    yield from (item.segment_id for item in _placed_segments(workspace))
+    for rule in workspace.links:
+        yield from (rule.rule_id, rule.a.segment_id, rule.b.segment_id)
+    for domain in workspace.routing_domains:
+        yield domain.domain_id
+        yield from domain.member_segment_ids
+    for boundary in workspace.boundaries:
+        yield from (boundary.over_rule_id, boundary.from_domain_id, boundary.to_domain_id)
+
+
+def _json_items(value: JsonValue) -> list[JsonValue]:
+    """The members of a JSON list; any other value holds none."""
+    return value if isinstance(value, list) else []
+
+
+def _selector_segment_ids(selector: JsonValue) -> Iterator[str]:
+    """Every segment a node selector tree names, inside a `not` as well.
+
+    A new segment that took an id named inside a `not` would be excluded from
+    the selection.
+    """
+    if not isinstance(selector, dict):
+        return
+    segment = selector.get("segment")
+    if isinstance(segment, str):
+        yield segment
+    for operator in ("all", "any"):
+        for child in _json_items(selector.get(operator)):
+            yield from _selector_segment_ids(child)
+    yield from _selector_segment_ids(selector.get("not"))
+
+
+def _link_rule_authoring_ids(rule: JsonValue) -> Iterator[str]:
+    """A link rule's id and the segments its endpoints and per-segment caps name."""
+    if not isinstance(rule, dict):
+        return
+    rule_id = rule.get("id")
+    if isinstance(rule_id, str):
+        yield rule_id
+    for endpoint in _json_items(rule.get("endpoints")):
+        if isinstance(endpoint, dict):
+            yield from _selector_segment_ids(endpoint.get("select"))
+    constraints = rule.get("constraints")
+    if isinstance(constraints, dict):
+        caps = constraints.get("max_links_per_node")
+        if isinstance(caps, dict):
+            yield from caps
+
+
+def _routing_domain_authoring_ids(domain: JsonValue) -> Iterator[str]:
+    """A routing domain's id and the segments its selectors name."""
+    if not isinstance(domain, dict):
+        return
+    domain_id = domain.get("id")
+    if isinstance(domain_id, str):
+        yield domain_id
+    for selector in _json_items(domain.get("selectors")):
+        yield from _selector_segment_ids(selector)
+
+
+def _routing_boundary_authoring_ids(boundary: JsonValue) -> Iterator[str]:
+    """The link rule a routing boundary runs over and the domains its exports join."""
+    if not isinstance(boundary, dict):
+        return
+    over = boundary.get("over")
+    if isinstance(over, str):
+        yield over
+    for export in _json_items(boundary.get("export")):
+        if isinstance(export, dict):
+            for field_name in ("from", "to"):
+                domain_id = export.get(field_name)
+                if isinstance(domain_id, str):
+                    yield domain_id
+
+
+def _session_authoring_ids(session: JsonDocument | None) -> Iterator[str]:
+    """Every segment, link rule and routing domain id a session document holds."""
+    if session is None:
+        return
+    for segment in _json_items(session.get("segments")):
+        if isinstance(segment, dict):
+            segment_id = segment.get("id")
+            if isinstance(segment_id, str):
+                yield segment_id
+    for rule in _json_items(session.get("link_rules")):
+        yield from _link_rule_authoring_ids(rule)
+    routing = session.get("routing")
+    if isinstance(routing, dict):
+        for domain in _json_items(routing.get("domains")):
+            yield from _routing_domain_authoring_ids(domain)
+        for boundary in _json_items(routing.get("boundaries")):
+            yield from _routing_boundary_authoring_ids(boundary)
+    addressing = session.get("addressing")
+    if isinstance(addressing, dict):
+        for assignments in addressing.values():
+            for assignment in _json_items(assignments):
+                if isinstance(assignment, dict):
+                    yield from _selector_segment_ids(assignment.get("applies_to"))
+
+
+def _pending_edit_authoring_ids(edit: BuilderContentEdit | BuilderListEdit) -> Iterator[str]:
+    """The ids one pending edit defines or references."""
+    if isinstance(edit, BuilderListEdit):
+        yield from edit.ids_before
+    elif isinstance(edit.address, BuilderWholeListAddress):
+        for boundary in _json_items(edit.working):
+            yield from _routing_boundary_authoring_ids(boundary)
+    elif edit.address.list_pointer == "/link_rules":
+        yield from _link_rule_authoring_ids(edit.working)
+    else:
+        yield from _routing_domain_authoring_ids(edit.working)
 
 
 def _next_number(prefix: str, values: set[str]) -> int:
@@ -3010,14 +3139,18 @@ def _apply_workspace_revision(
     draft: BuilderVisualDraftEnvelope,
     workspace: BuilderVisualWorkspace,
 ) -> _WorkspaceApplication:
-    reserved_authoring_ids = list(draft.reserved_authoring_ids)
-    for authoring_id in _current_and_referenced_authoring_ids(workspace):
-        if authoring_id and authoring_id not in reserved_authoring_ids:
-            reserved_authoring_ids.append(authoring_id)
     candidate = draft.model_copy(update={"authoring_workspace": workspace})
     session, proposals, assembly_issues = _assemble_structured(
         candidate,
         allow_workspace_overlay=True,
+    )
+    reserved_authoring_ids = tuple(
+        dict.fromkeys(
+            (
+                *draft.reserved_authoring_ids,
+                *_current_and_referenced_authoring_ids(session, workspace=workspace),
+            )
+        )
     )
     try:
         applied_model = SegmentSessionConfig.model_validate(session)
@@ -3032,7 +3165,7 @@ def _apply_workspace_revision(
             update={
                 "draft_revision": next_revision,
                 "projection_status": projection_status,
-                "reserved_authoring_ids": tuple(reserved_authoring_ids),
+                "reserved_authoring_ids": reserved_authoring_ids,
                 "session_yaml": yaml.safe_dump(session, sort_keys=False),
                 "authoring_workspace": workspace,
                 "catalog_documents": proposals,
@@ -3054,7 +3187,7 @@ def _apply_workspace_revision(
             update={
                 "draft_revision": next_revision,
                 "projection_status": "applied",
-                "reserved_authoring_ids": tuple(reserved_authoring_ids),
+                "reserved_authoring_ids": reserved_authoring_ids,
                 "session_yaml": canonical.yaml_bytes.decode("utf-8"),
                 "authoring_workspace": applied_workspace,
                 "applied_workspace": applied_workspace,
@@ -3256,9 +3389,7 @@ class BuilderVisualDraftService:
             expected_session_revision=expected_revision,
             catalog_documents=(),
             session_name_is_placeholder=False,
-            reserved_authoring_ids=tuple(
-                dict.fromkeys(_current_and_referenced_authoring_ids(workspace))
-            ),
+            reserved_authoring_ids=_current_and_referenced_authoring_ids(applied_session),
             session_yaml=session_yaml,
             authoring_workspace=workspace,
             applied_workspace=workspace,
@@ -3329,7 +3460,10 @@ class BuilderVisualDraftService:
         )
         reserved_authoring_ids = tuple(
             dict.fromkeys(
-                (*draft.reserved_authoring_ids, *_current_and_referenced_authoring_ids(workspace))
+                (
+                    *draft.reserved_authoring_ids,
+                    *_current_and_referenced_authoring_ids(applied_session),
+                )
             )
         )
         updated = draft.model_copy(
@@ -3573,7 +3707,10 @@ class BuilderVisualDraftService:
         )
         reserved_authoring_ids = tuple(
             dict.fromkeys(
-                (*draft.reserved_authoring_ids, *_current_and_referenced_authoring_ids(workspace))
+                (
+                    *draft.reserved_authoring_ids,
+                    *_current_and_referenced_authoring_ids(accepted_session),
+                )
             )
         )
         canonical = canonicalize_persisted_configuration(draft.target_ref, accepted_session)
@@ -4024,17 +4161,14 @@ class BuilderVisualDraftService:
         self,
         draft: BuilderVisualDraftEnvelope,
         snapshot: CatalogReadSnapshot,
-        workspace: BuilderVisualWorkspace,
+        reserved: set[str],
         *,
         node_ref: CatalogRef | None = None,
         installed_counts: dict[str, int] | None = None,
         authored_boresights: dict[str, BuilderVisualGroundBoresight] | None = None,
         body_ref: BodyRef | None = None,
     ) -> BuilderVisualGroundDraft:
-        number = _next_number(
-            "ground",
-            _reserved_authoring_ids(workspace, draft.reserved_authoring_ids),
-        )
+        number = _next_number("ground", reserved)
         segment_id = f"ground-{number}"
         selected_node_ref = self._node_ref_for_command(
             draft,
@@ -4133,6 +4267,8 @@ class BuilderVisualDraftService:
 
         snapshot = self._context.repository.snapshot(self._context.scope)
         workspace = draft.authoring_workspace
+        # Every id the draft and the pending edits hold, before the gesture changes the twin.
+        reserved = _reserved_authoring_ids(draft, request.pending_edits)
         command = request.command
         affected_kind: Literal[
             "space",
@@ -4161,10 +4297,7 @@ class BuilderVisualDraftService:
                     "constellation or space-node-set component",
                     code="catalog_authoring.invalid_graph",
                 )
-            number = _next_number(
-                "space",
-                _reserved_authoring_ids(workspace, draft.reserved_authoring_ids),
-            )
+            number = _next_number("space", reserved)
             segment_id = f"space-{number}"
             space_reference = BuilderVisualSpaceReference(
                 segment_id=segment_id,
@@ -4192,10 +4325,7 @@ class BuilderVisualDraftService:
                     "site-set component",
                     code="catalog_authoring.invalid_graph",
                 )
-            number = _next_number(
-                "ground",
-                _reserved_authoring_ids(workspace, draft.reserved_authoring_ids),
-            )
+            number = _next_number("ground", reserved)
             segment_id = f"ground-{number}"
             ground_reference = BuilderVisualGroundReference(
                 segment_id=segment_id,
@@ -4210,10 +4340,7 @@ class BuilderVisualDraftService:
             affected_id = segment_id
             scheduling_preset = DEFAULT_SCHEDULING_PRESET
         elif isinstance(command, BuilderVisualAddGeneratedSpaceCommand):
-            number = _next_number(
-                "space",
-                _reserved_authoring_ids(workspace, draft.reserved_authoring_ids),
-            )
+            number = _next_number("space", reserved)
             segment_id = f"space-{number}"
             node_ref = self._node_ref_for_command(
                 draft,
@@ -4513,7 +4640,7 @@ class BuilderVisualDraftService:
             ground = self._new_ground_draft(
                 draft,
                 snapshot,
-                workspace,
+                reserved,
                 node_ref=command.node_ref,
                 installed_counts=command.installed,
                 authored_boresights=command.boresights,
@@ -4539,7 +4666,7 @@ class BuilderVisualDraftService:
                     code="catalog_authoring.invalid_graph",
                 )
             if command.segment_id is None:
-                ground = self._new_ground_draft(draft, snapshot, workspace)
+                ground = self._new_ground_draft(draft, snapshot, reserved)
                 workspace = workspace.model_copy(update={"ground": (*workspace.ground, ground)})
                 ground_index = len(workspace.ground) - 1
                 scheduling_preset = DEFAULT_SCHEDULING_PRESET
@@ -4818,10 +4945,7 @@ class BuilderVisualDraftService:
             affected_id = command.segment_id
             notice = f"minted {len(minted)} site{'s' if len(minted) != 1 else ''}"
         elif isinstance(command, BuilderVisualAddRoutingDomainCommand):
-            number = _next_number(
-                "domain",
-                _reserved_authoring_ids(workspace, draft.reserved_authoring_ids),
-            )
+            number = _next_number("domain", reserved)
             domain_id = f"domain-{number}"
             covered = {
                 member
@@ -4843,9 +4967,11 @@ class BuilderVisualDraftService:
             affected_kind = "routing_domain"
             affected_id = domain_id
         elif isinstance(command, BuilderVisualAddBoundaryCommand):
+            # The grammar gives a boundary no id. A twin boundary's id is unique within
+            # the twin only, so no allocation history holds it.
             number = _next_number(
                 "boundary",
-                _reserved_authoring_ids(workspace, draft.reserved_authoring_ids),
+                {item.boundary_id for item in workspace.boundaries},
             )
             boundary_id = f"boundary-{number}"
             first_rule = next(
@@ -4899,10 +5025,7 @@ class BuilderVisualDraftService:
                 first,
                 second,
             )
-            number = _next_number(
-                "link",
-                _reserved_authoring_ids(workspace, draft.reserved_authoring_ids),
-            )
+            number = _next_number("link", reserved)
             rule_id = f"link-{number}"
 
             def endpoint_for_segment(segment: _PlacedSegment) -> BuilderVisualLinkEndpoint:

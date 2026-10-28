@@ -28,6 +28,7 @@ from nodalarc.catalog_refs import (
 from nodalarc.model_validation import Identifier, TerminalMedium
 from nodalarc.models.builder_api import (
     BuilderCompileResult,
+    BuilderContentEdit,
     BuilderDraftEnvelope,
     BuilderDraftState,
     BuilderEditAddress,
@@ -778,15 +779,24 @@ def derive_walker_layout(
 
 
 class BuilderVisualDraftCommandRequest(_BuilderVisualModel):
-    """Apply one typed command to an exact visual-draft revision."""
+    """Apply one typed command to an exact visual-draft revision.
+
+    ``pending_edits`` are the edits not yet accepted. A command mints no id
+    they define or reference.
+    """
 
     draft: BuilderVisualDraftEnvelope
     expected_draft_revision: int = Field(ge=0)
     command: BuilderVisualDraftCommand
+    pending_edits: BuilderPendingEdits = ()
 
 
 class BuilderVisualDraftCommandResult(_BuilderVisualModel):
-    """One applied command and the next revision of the complete draft."""
+    """One command's result: the next revision of the complete draft, or pending edits.
+
+    A command either accepts its result as the next revision and creates no
+    edit, or leaves the draft at its revision and returns the edits it created.
+    """
 
     operation: BuilderVisualDraftCommandOperation
     base_draft_revision: int = Field(ge=0)
@@ -795,10 +805,14 @@ class BuilderVisualDraftCommandResult(_BuilderVisualModel):
     affected_id: str = Field(min_length=1, max_length=160)
     scheduling_preset: BuilderVisualSchedulingPreset | None = None
     notice: str | None = None
+    created_edits: tuple[BuilderContentEdit, ...] = ()
 
     @model_validator(mode="after")
-    def _revision_advanced_exactly_once(self) -> BuilderVisualDraftCommandResult:
-        if self.draft.draft_revision != self.base_draft_revision + 1:
+    def _accepted_once_or_created_edits(self) -> BuilderVisualDraftCommandResult:
+        if self.created_edits:
+            if self.draft.draft_revision != self.base_draft_revision:
+                raise ValueError("a command that creates edits must leave draft_revision unchanged")
+        elif self.draft.draft_revision != self.base_draft_revision + 1:
             raise ValueError("an applied visual command must advance draft_revision exactly once")
         return self
 

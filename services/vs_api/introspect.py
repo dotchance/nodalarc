@@ -23,7 +23,7 @@ from vs_api import k8s
 
 log = logging.getLogger(__name__)
 
-# How long a command may run; the Kubernetes client's deadline for a preloaded exec.
+# How long a command may run before it counts as an exec that failed.
 _EXEC_DEADLINE_S = 60
 
 VTYSH_COMMANDS = {
@@ -93,24 +93,29 @@ def run_vtysh(node_id: str, command: str) -> IntrospectResult:
         raise IntrospectExecError("vtysh exec failed") from exc
 
     try:
-        resp.run_forever(timeout=_EXEC_DEADLINE_S)
-        if resp.is_open():
-            log.warning("vtysh did not finish for %s cmd=%s", node_id, command)
-            raise IntrospectExecError(f"vtysh did not finish within {_EXEC_DEADLINE_S} s")
-        # The exit status first: reading every channel at once clears the status channel.
         try:
-            exit_code = resp.returncode
+            resp.run_forever(timeout=_EXEC_DEADLINE_S)
+            finished = not resp.is_open()
+            if finished:
+                # The status channel carries the exit status once the command ends; it
+                # does not parse when vtysh never started.
+                exit_code = resp.returncode
+                stdout = resp.read_stdout()
+                stderr = resp.read_stderr()
         except Exception as exc:
-            log.warning("vtysh never ran for %s cmd=%s: %s", node_id, command, exc, exc_info=True)
+            log.warning("vtysh exec failed for %s cmd=%s: %s", node_id, command, exc, exc_info=True)
             raise IntrospectExecError("vtysh exec failed") from exc
-        stdout = resp.read_stdout()
-        stderr = resp.read_stderr()
     finally:
         resp.close()
+    if not finished:
+        log.warning("vtysh did not finish for %s cmd=%s", node_id, command)
+        raise IntrospectExecError(f"vtysh did not finish within {_EXEC_DEADLINE_S} s")
 
     max_bytes = cfg.vs_api_introspect_max_response_bytes
     if len(stdout) > max_bytes:
         stdout = stdout[:max_bytes] + "\n... (truncated)"
+    if len(stderr) > max_bytes:
+        stderr = stderr[:max_bytes] + "\n... (truncated)"
 
     return IntrospectResult(
         node_id=node_id, command=command, output=stdout, exit_code=exit_code, stderr=stderr

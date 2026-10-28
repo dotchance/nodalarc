@@ -2339,7 +2339,7 @@ async def ws_terminal(websocket: WebSocket, node_id: str) -> None:
             409: ("LegacyRefusal",),
             413: ("LegacyRefusal",),
             500: ("ApiRefusal", "LegacyRefusal"),
-            502: ("LegacyRefusal",),
+            502: ("ApiRefusal",),
             503: ("LegacyRefusal",),
         }
     ),
@@ -2387,8 +2387,8 @@ async def get_node_config(node_id: str) -> Response:
             },
         )
     except CommandExitError as exc:
-        return JSONResponse(
-            status_code=502, content={"error": f"{exc.command} exited {exc.exit_status}"}
+        return refusal_response(
+            502, "terminal.command_exit", f"show running-config exited {exc.exit_status}"
         )
     except Exception as exc:
         log.warning("Config export error for %s: %s", node_id, exc, exc_info=True)

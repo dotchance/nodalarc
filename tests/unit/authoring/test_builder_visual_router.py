@@ -233,7 +233,35 @@ def test_visual_control_mutation_route_is_revision_fenced_and_typed(
         for control in controls
         if control["kind"] == "scalar" and control["json_pointer"] == "/session/display_name"
     )
+    session_name = next(
+        control
+        for control in controls
+        if control["kind"] == "scalar" and control["json_pointer"] == "/session/name"
+    )
 
+    renamed_response = client.post(
+        "/api/v1/builder/draft/control-mutate",
+        json={
+            "draft": opened,
+            "expected_draft_revision": 0,
+            "commands": [
+                {
+                    "operation": "set_scalar",
+                    "control_id": session_name["control_id"],
+                    "value": "renamed-through-controls",
+                }
+            ],
+        },
+    )
+    assert renamed_response.status_code == 422, renamed_response.text
+    renamed = renamed_response.json()
+    assert renamed["code"] == "catalog_authoring.invalid_graph"
+    assert (
+        "session.name 'renamed-through-controls' must match filename stem 'earth-leo-simple'"
+        in renamed["message"]
+    )
+
+    # The refused rename issued no revision: revision 0 is still the one to edit.
     applied_response = client.post(
         "/api/v1/builder/draft/control-mutate",
         json={

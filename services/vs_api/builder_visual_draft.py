@@ -18,7 +18,10 @@ from nodalarc.catalog_closure import (
     load_catalog_object,
 )
 from nodalarc.catalog_refs import BodyRef, CatalogFamily, CatalogRef, SessionRef, SiteRef
-from nodalarc.catalog_registry import catalog_family_spec
+from nodalarc.catalog_registry import (
+    catalog_family_spec,
+    validate_referenced_configuration_document,
+)
 from nodalarc.catalog_repository import (
     CatalogConflictError,
     CatalogNotFoundError,
@@ -3135,13 +3138,17 @@ class BuilderVisualDraftService:
         except BuilderControlMutationError as error:
             raise self._command_error(draft, str(error)) from error
         try:
-            candidate_model = SegmentSessionConfig.model_validate(candidate)
+            _wrapper, validated = validate_referenced_configuration_document(
+                draft.target_ref,
+                candidate,
+            )
         except (ValidationError, TypeError, ValueError) as error:
             raise self._command_error(
                 draft,
                 f"Control mutation batch does not produce a valid session: {error}",
                 code="catalog_authoring.invalid_graph",
             ) from error
+        candidate_model = cast(SegmentSessionConfig, validated)
 
         snapshot = self._context.repository.snapshot(self._context.scope)
         reachable_proposals, catalog_facts = _reachable_projection_inputs(

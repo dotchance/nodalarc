@@ -16,13 +16,10 @@ import {
 export interface SegmentCapability {
   /** "role|medium" tokens present on at least one node of the segment. */
   pairs: Set<string>;
-  /** Strictest access-terminal elevation floor seen on the segment. */
-  access_min_elevation_deg: number | null;
 }
 
 /** The elevation floor a node's access beam is drawn with: the strictest
- *  floor its access terminals declare (the same reading as
- *  capabilitiesBySegment). No access terminal, no beam: null. */
+ *  floor its access terminals declare. No access terminal, no beam: null. */
 export function accessBeamElevationDeg(node: BuilderWorldNode): number | null {
   const floors = node.terminal_inventory
     .filter((block) => block.endpoint_role === "access")
@@ -39,16 +36,11 @@ export function capabilitiesBySegment(
   for (const node of world.nodes) {
     let capability = capabilities.get(node.segment_id);
     if (!capability) {
-      capability = { pairs: new Set(), access_min_elevation_deg: null };
+      capability = { pairs: new Set() };
       capabilities.set(node.segment_id, capability);
     }
     for (const block of node.terminal_inventory) {
       capability.pairs.add(`${block.endpoint_role}|${block.medium}`);
-      if (block.endpoint_role === "access") {
-        const floor = capability.access_min_elevation_deg;
-        capability.access_min_elevation_deg =
-          floor === null ? block.min_elevation_deg : Math.max(floor, block.min_elevation_deg);
-      }
     }
   }
   return capabilities;

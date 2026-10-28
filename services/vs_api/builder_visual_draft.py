@@ -163,7 +163,6 @@ _DE440S_EPHEMERIS: JsonDocument = {
         }
     ],
 }
-_DEFAULT_GROUND_MASK_DEG = 25.0
 _BUILDER_GENERATED_COMPONENT_FAMILIES = frozenset(
     {"constellations", "orbits", "nodes", "site-sets", "sites"}
 )
@@ -335,14 +334,12 @@ class _CatalogProjectionFact:
 @dataclass(slots=True)
 class _SegmentCapability:
     pairs: set[tuple[str, str]]
-    access_min_elevation_deg: float | None = None
 
 
 @dataclass(frozen=True, slots=True)
 class _DerivedLinkPhysics:
     role: Literal["access", "isl", "crosslink", "backbone"]
     medium: Literal["rf", "optical"]
-    ground_mask_deg: float | None
     topology_mode: Literal["visible_candidates", "nearest_n"]
     topology_n: int
     formable: bool
@@ -426,13 +423,6 @@ def _capabilities_by_segment(world: BuilderWorld) -> dict[str, _SegmentCapabilit
         capability = capabilities.setdefault(node.segment_id, _SegmentCapability(pairs=set()))
         for block in node.terminal_inventory:
             capability.pairs.add((block.endpoint_role, block.medium))
-            if block.endpoint_role == "access":
-                floor = capability.access_min_elevation_deg
-                capability.access_min_elevation_deg = (
-                    block.min_elevation_deg
-                    if floor is None
-                    else max(floor, block.min_elevation_deg)
-                )
     return capabilities
 
 
@@ -444,13 +434,6 @@ def _derive_link_physics(
     capabilities = _capabilities_by_segment(world)
     first_capability = capabilities.get(first.segment_id)
     second_capability = capabilities.get(second.segment_id)
-    ground_capability = (
-        first_capability
-        if first.kind == "ground"
-        else second_capability
-        if second.kind == "ground"
-        else None
-    )
     preferences: tuple[
         tuple[
             Literal["access", "isl", "crosslink", "backbone"],
@@ -477,11 +460,6 @@ def _derive_link_physics(
                 return _DerivedLinkPhysics(
                     role=role,
                     medium=medium,
-                    ground_mask_deg=(
-                        ground_capability.access_min_elevation_deg
-                        if ground_capability is not None
-                        else None
-                    ),
                     topology_mode=topology_mode,
                     topology_n=topology_n,
                     formable=True,
@@ -490,32 +468,20 @@ def _derive_link_physics(
     return _DerivedLinkPhysics(
         role=role,
         medium="rf" if role == "access" else "optical",
-        ground_mask_deg=(
-            ground_capability.access_min_elevation_deg if ground_capability is not None else None
-        ),
         topology_mode=topology_mode,
         topology_n=topology_n,
         formable=False,
     )
 
 
-def _physics_notice(physics: _DerivedLinkPhysics, *, has_ground: bool) -> str:
-    mask = ""
-    if has_ground and physics.role == "access":
-        if physics.ground_mask_deg is None:
-            mask = (
-                " · no terminal declares an elevation floor — seeded default "
-                f"{int(_DEFAULT_GROUND_MASK_DEG)}°"
-            )
-        else:
-            mask = f" · {physics.ground_mask_deg:g}° mask"
+def _physics_notice(physics: _DerivedLinkPhysics) -> str:
     topology = (
         f" · nearest-{physics.topology_n}"
         if physics.topology_mode == "nearest_n"
         else " · all visible pairs"
     )
     warning = "" if physics.formable else " — WARNING: neither side has matching terminals"
-    return f"re-derived: {physics.role} · {physics.medium}{mask}{topology}{warning}"
+    return f"re-derived: {physics.role} · {physics.medium}{topology}{warning}"
 
 
 def _issue(
@@ -4336,20 +4302,12 @@ class BuilderVisualDraftService:
                 label = f"{base} {suffix}"
 
             def endpoint_for_segment(segment: _PlacedSegment) -> BuilderVisualLinkEndpoint:
-                ground_mask = (
-                    physics.ground_mask_deg
-                    if physics.ground_mask_deg is not None
-                    else _DEFAULT_GROUND_MASK_DEG
-                )
+                # Connect writes no elevation floor. Each ground station keeps the
+                # floor its own terminals declare until the user authors one here.
                 return BuilderVisualLinkEndpoint(
                     segment_id=segment.segment_id,
                     role=physics.role,
                     medium=physics.medium,
-                    min_elevation_deg=(
-                        ground_mask
-                        if physics.role == "access" and segment.kind == "ground"
-                        else None
-                    ),
                 )
 
             rule = BuilderVisualLinkRule(
@@ -4404,18 +4362,15 @@ class BuilderVisualDraftService:
                     existing: BuilderVisualLinkEndpoint,
                     segment: _PlacedSegment,
                 ) -> BuilderVisualLinkEndpoint:
-                    ground_mask = (
-                        physics.ground_mask_deg
-                        if physics.ground_mask_deg is not None
-                        else _DEFAULT_GROUND_MASK_DEG
-                    )
+                    # An authored floor stays only while this endpoint is the ground
+                    # side of an access rule. The resolver refuses it anywhere else.
                     return existing.model_copy(
                         update={
                             "segment_id": segment.segment_id,
                             "role": physics.role,
                             "medium": physics.medium,
                             "min_elevation_deg": (
-                                ground_mask
+                                existing.min_elevation_deg
                                 if physics.role == "access" and segment.kind == "ground"
                                 else None
                             ),
@@ -4430,10 +4385,7 @@ class BuilderVisualDraftService:
                         "topology_n": physics.topology_n,
                     }
                 )
-                notice = _physics_notice(
-                    physics,
-                    has_ground=first.kind == "ground" or second.kind == "ground",
-                )
+                notice = _physics_notice(physics)
             links = list(workspace.links)
             links[rule_index] = updated_rule
             workspace = workspace.model_copy(update={"links": tuple(links)})

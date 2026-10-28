@@ -16,6 +16,7 @@ from nodalarc.models.builder_visual_api import (
     BuilderVisualDraftApplyWorkspaceRequest,
     BuilderVisualDraftApplyYamlRequest,
     BuilderVisualDraftCommandRequest,
+    BuilderVisualDraftCommandResult,
     BuilderVisualDraftCompileRequest,
     BuilderVisualDraftCreateRequest,
     BuilderVisualDraftEnvelope,
@@ -42,12 +43,13 @@ from nodalarc.models.builder_world import BuilderWorld, BuilderWorldNode
 from nodalarc.models.resolved_session import ResolvedTerminalBlock
 from nodalarc.resolve_session import SessionResolution
 from pydantic import ValidationError
-from vs_api.builder_compiler import canonicalize_persisted_configuration
+from vs_api.builder_compiler import PreviewFactory, canonicalize_persisted_configuration
 from vs_api.builder_session_service import save_builder_session
 from vs_api.builder_visual_draft import (
     BuilderVisualDraftCommandError,
     BuilderVisualDraftService,
 )
+from vs_api.builder_world import world_from_resolution
 from vs_api.catalog_context import CatalogContext
 
 from tests.builder_world_fixtures import builder_world_preview
@@ -810,10 +812,11 @@ def test_backend_visual_commands_own_seeds_and_advance_one_fenced_revision(
     link = draft.authoring_workspace.links[0]
     assert link.label == "Ground segment 1 to Constellation 1"
     assert (link.a.segment_id, link.b.segment_id) == ("ground-1", "space-1")
+    # The stub world declares no terminals. Connect writes no substitute floor.
     assert (link.a.role, link.a.medium, link.a.min_elevation_deg) == (
         "access",
         "rf",
-        25.0,
+        None,
     )
     assert (link.topology_mode, link.topology_n) == ("visible_candidates", 1)
 
@@ -1590,6 +1593,139 @@ def test_connect_refuses_a_draft_that_does_not_resolve(
             available_node_count=1_000_000,
             preview_factory=failing_preview,
         )
+
+
+def _connected_heo_access_draft(
+    service: BuilderVisualDraftService,
+    session_name: str,
+    preview_factory: PreviewFactory,
+) -> BuilderVisualDraftEnvelope:
+    """A Molniya constellation and the HEO gateway sites, joined by the connect gesture."""
+    draft = service.create(BuilderVisualDraftCreateRequest(session_name=session_name))
+    for command in (
+        {
+            "operation": "place_space_reference",
+            "source_ref": "nodalarc:constellations/earth/heo/earth-heo-molniya-3.yaml",
+        },
+        {
+            "operation": "place_ground_reference",
+            "site_set_ref": "nodalarc:site-sets/earth/heo/earth-heo-gateway-sites.yaml",
+        },
+        {
+            "operation": "connect_segments",
+            "from_segment_id": "space-1",
+            "to_segment_id": "ground-1",
+        },
+    ):
+        draft = service.apply_command(
+            BuilderVisualDraftCommandRequest(
+                draft=draft,
+                expected_draft_revision=draft.draft_revision,
+                command=command,
+            ),
+            available_node_count=1_000_000,
+            preview_factory=preview_factory,
+        ).draft
+    return draft
+
+
+def test_connect_leaves_each_ground_station_on_its_own_elevation_floor(
+    service: BuilderVisualDraftService,
+) -> None:
+    """Connect writes no floor on the ground endpoint, so the resolver keeps each
+    station on the floor its own access terminals declare."""
+    effective_floors: dict[str, float] = {}
+
+    def resolved_world(resolution: SessionResolution) -> BuilderWorld:
+        effective_floors.clear()
+        effective_floors.update(resolution.resolved.effective_ground_min_elevation_by_gs())
+        return world_from_resolution(resolution)
+
+    draft = _connected_heo_access_draft(service, "own-floors", resolved_world)
+    ground_endpoint, space_endpoint = draft.applied_session["link_rules"][0]["endpoints"]
+    assert ground_endpoint["select"] == {"segment": "ground-1"}
+    assert "min_elevation_deg" not in ground_endpoint
+    assert "min_elevation_deg" not in space_endpoint
+
+    compiled = service.compile(
+        BuilderVisualDraftCompileRequest(draft=draft),
+        available_node_count=1_000_000,
+        preview_factory=resolved_world,
+    )
+    assert compiled.compile_result.save_verdict.allowed, compiled.compile_result.issues
+    world = compiled.compile_result.resolved_preview
+    assert world is not None
+    declared = {
+        node.node_id: max(
+            block.min_elevation_deg
+            for block in node.terminal_inventory
+            if block.endpoint_role == "access"
+        )
+        for node in world.nodes
+        if node.segment_id == "ground-1"
+    }
+    # The stations declare different floors, so a copy of the strictest one
+    # on the endpoint would raise the others to it.
+    assert len(set(declared.values())) > 1
+    assert effective_floors == declared
+
+
+def test_rederive_keeps_an_authored_floor_only_on_the_ground_side_of_an_access_rule(
+    service: BuilderVisualDraftService,
+) -> None:
+    draft = _connected_heo_access_draft(service, "authored-floor", world_from_resolution)
+    assert draft.authoring_workspace is not None
+    rule = draft.authoring_workspace.links[0]
+    authored = service.apply_workspace(
+        BuilderVisualDraftApplyWorkspaceRequest(
+            draft=draft,
+            expected_draft_revision=draft.draft_revision,
+            workspace=draft.authoring_workspace.model_copy(
+                update={
+                    "links": (
+                        rule.model_copy(
+                            update={"a": rule.a.model_copy(update={"min_elevation_deg": 20.0})}
+                        ),
+                    )
+                }
+            ),
+        ),
+        available_node_count=1_000_000,
+        preview_factory=world_from_resolution,
+    ).visual_draft
+
+    def rederive_side_a(
+        draft: BuilderVisualDraftEnvelope,
+        segment_id: str,
+    ) -> BuilderVisualDraftCommandResult:
+        return service.apply_command(
+            BuilderVisualDraftCommandRequest(
+                draft=draft,
+                expected_draft_revision=draft.draft_revision,
+                command={
+                    "operation": "rederive_link",
+                    "rule_id": "link-1",
+                    "side": "a",
+                    "segment_id": segment_id,
+                },
+            ),
+            available_node_count=1_000_000,
+            preview_factory=world_from_resolution,
+        )
+
+    # Side a stays on the ground segment, so the authored 20 degrees stay.
+    kept = rederive_side_a(authored, "ground-1")
+    assert kept.notice == "re-derived: access · rf · all visible pairs"
+    ground_endpoint = kept.draft.applied_session["link_rules"][0]["endpoints"][0]
+    assert ground_endpoint["select"] == {"segment": "ground-1"}
+    assert ground_endpoint["min_elevation_deg"] == 20.0
+
+    # With both sides in space the rule is no longer access. The floor is removed.
+    cleared = rederive_side_a(kept.draft, "space-1")
+    assert cleared.notice == "re-derived: isl · optical · nearest-2"
+    endpoints = cleared.draft.applied_session["link_rules"][0]["endpoints"]
+    assert [endpoint["select"] for endpoint in endpoints] == [{"segment": "space-1"}] * 2
+    assert all("min_elevation_deg" not in endpoint for endpoint in endpoints)
 
 
 def test_visual_authoring_assembly_creates_ref_composed_component_proposals(

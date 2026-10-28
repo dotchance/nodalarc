@@ -352,8 +352,8 @@ _PROFILE = "nodalarc:profiles/frr-router.yaml"
 
 
 def _segments_a_selector_names(selector: Any) -> set[str]:
-    """The segments a selector selects when it is a segment predicate or a union of them;
-    None of any other selector, which this test does not read."""
+    """The segments a selector selects when it is a segment predicate or a union of them.
+    Any other selector fails the test, which does not read it."""
     if isinstance(selector, dict) and set(selector) == {"segment"}:
         return {selector["segment"]}
     if isinstance(selector, dict) and set(selector) == {"any"}:
@@ -365,8 +365,6 @@ def _segments_a_selector_names(selector: Any) -> set[str]:
 
 def _segments_an_endpoint_lies_in(selector: Any) -> set[str] | None:
     """The segments an endpoint selector's nodes lie in; None when it names no segment."""
-    if isinstance(selector, list):
-        selector = {"any": selector}
     if "segment" in selector:
         return {selector["segment"]}
     if "any" in selector:
@@ -380,6 +378,20 @@ def _segments_an_endpoint_lies_in(selector: Any) -> set[str] | None:
         ]
         return set.intersection(*within) if within else None
     return None  # a tag, node or complement selector
+
+
+def _isis_interfaces(printed: str) -> dict[str, set[str]]:
+    """The interfaces of each IS-IS process a router runs, by area tag, from
+    `show isis interface`."""
+    areas: dict[str, set[str]] = {}
+    area = None
+    for line in printed.splitlines():
+        if line.startswith("Area "):
+            area = line.removeprefix("Area ").rstrip(":")
+            areas[area] = set()
+        elif area is not None and line.strip() and line.split()[0] != "Interface":
+            areas[area].add(line.split()[0])
+    return areas
 
 
 def _earth_satellite_count(operator: Operator, constellation_ref: str) -> int | None:
@@ -585,6 +597,17 @@ def test_a_session_built_in_the_builder_runs_the_rules_and_domains_it_authored(
         assert not not_in_domain, (
             f"these nodes are not in {domain_id} ({protocol}): {not_in_domain}"
         )
+        # Each router of the domain runs the protocol on the interfaces the session gives it.
+        assert protocol == "isis", f"this test reads IS-IS routers; {domain_id} runs {protocol}"
+        not_running = {}
+        for node in in_domain:
+            (instance,) = (i for i in node["routing_instances"] if i["domain_id"] == domain_id)
+            declared = {interface["name"] for interface in instance["interfaces"]}
+            running = _isis_interfaces(operator.introspect(node["node_id"], "show isis interface"))
+            if not declared <= running.get(domain_id, set()):
+                not_running[node["node_id"]] = (sorted(declared), running)
+        print(f"domain {domain_id}: {len(in_domain) - len(not_running)} routers run {protocol}")
+        assert not not_running, f"routers of {domain_id} not running {protocol}: {not_running}"
     # The routers' own neighbour tables over the shown ground links, and a ping from a
     # ground router: the protocol runs on the links the session shows.
     assert_session_is_truthful(operator)

@@ -82,6 +82,15 @@ describe("network identity classification", () => {
     expect(() => isGroundLinkState(link(unknown))).toThrow(/Unknown link_type/);
   });
 
+  it("fails loudly on a kind named like an object's own built-in property", () => {
+    for (const name of ["constructor", "toString", "hasOwnProperty", "__proto__"]) {
+      const kind = name as unknown as LinkState["link_type"];
+      expect(() => isGroundLinkState(link(kind))).toThrow(/Unknown link_type/);
+      const nodeType = name as unknown as NodeState["node_type"];
+      expect(() => isGroundNode({ node_type: nodeType })).toThrow(/Unknown node_type/);
+    }
+  });
+
   it("selects namespaced ground nodes as ground station cards", () => {
     const nodes = [
       node("ground-gs-santiago", "ground_station"),

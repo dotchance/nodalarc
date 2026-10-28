@@ -126,7 +126,7 @@ def test_no_backend_models_missing_from_frontend(ts_interfaces, py_models):
     backend_only = set(py_models.keys()) - set(ts_interfaces.keys()) - generated
     assert not backend_only, (
         f"Backend models with no frontend interface: {sorted(backend_only)}. "
-        f"Add matching interfaces to frontend/src/types.ts."
+        f"Add them to the generated types in scripts/gen_builder_api_types.py."
     )
 
 

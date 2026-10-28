@@ -139,7 +139,6 @@ from nodalarc.models.vs_api import (
     LinkHistoryPage,
     LinkHistoryQuery,
     OpsEventsQuery,
-    ProjectAbout,
     SessionFailedFrame,
     SessionReadyFrame,
     SessionTransitioningFrame,
@@ -162,7 +161,7 @@ from nodalarc.nats_channels import (
     wiring_progress_subscribe_subject,
 )
 from nodalarc.platform_config import get_platform_config
-from nodalarc.project_info import project_attribution, project_version
+from nodalarc.project_info import ProjectAbout, project_attribution, project_version
 from nodalarc.resolve_session import (
     SessionResolution,
 )
@@ -1758,6 +1757,8 @@ install_refusal_handlers(app)
 # ApiRefusal; a 422 is also FastAPI's own request-validation body.
 _REFUSAL_RESPONSES = {
     **{status: {"model": ApiRefusal} for status in (400, 404, 409, 500, 502, 503)},
+    # BodySizeLimitMiddleware refuses an oversized request body before any route runs.
+    413: {"model": LegacyRefusal},
     422: {
         "description": "Refused, or the request failed validation",
         "content": {
@@ -1783,6 +1784,24 @@ def _with_legacy_refusals(*statuses: int) -> dict[int | str, dict[str, Any]]:
             "model": ApiRefusal | LegacyRefusal if status in _REFUSAL_RESPONSES else LegacyRefusal
         }
     return responses
+
+
+def _json_refusals(bodies: dict[int, tuple[str, ...]]) -> dict[int | str, dict[str, Any]]:
+    """Refusal entries for a route whose answer is not JSON: each status names the
+    JSON bodies it can carry. FastAPI files a model-only entry under the route's own
+    media type, so these spell out JSON."""
+
+    def schema(names: tuple[str, ...]) -> dict[str, Any]:
+        refs = [{"$ref": f"#/components/schemas/{name}"} for name in names]
+        return refs[0] if len(refs) == 1 else {"anyOf": refs}
+
+    return {
+        status: {
+            "description": "Refused",
+            "content": {"application/json": {"schema": schema(names)}},
+        }
+        for status, names in bodies.items()
+    }
 
 
 app.mount(
@@ -1939,7 +1958,7 @@ def health_check() -> HealthStatus:
 @app.get("/api/v1/about", response_model=ProjectAbout)
 def about() -> ProjectAbout:
     """Unauthenticated project attribution and provenance metadata."""
-    return ProjectAbout(**project_attribution())
+    return project_attribution()
 
 
 @app.get("/api/v1/auth/token", response_model=AuthToken)
@@ -2302,7 +2321,15 @@ async def ws_terminal(websocket: WebSocket, node_id: str) -> None:
 @app.get(
     "/api/v1/nodes/{node_id}/config",
     response_class=PlainTextResponse,
-    responses=_with_legacy_refusals(404, 409, 500, 503),
+    responses=_json_refusals(
+        {
+            404: ("LegacyRefusal",),
+            409: ("LegacyRefusal",),
+            413: ("LegacyRefusal",),
+            500: ("ApiRefusal", "LegacyRefusal"),
+            503: ("LegacyRefusal",),
+        }
+    ),
     dependencies=[Depends(_require_api_key)],
 )
 async def get_node_config(node_id: str) -> Response:
@@ -2622,7 +2649,8 @@ def get_ground_link_decisions(query: Annotated[GroundLinkDecisionsQuery, Query()
 
     - No query: the full snapshot.
     - ``node`` (a single GS or satellite id): the snapshot SLICED to the
-      decisions and unscheduled pairs that node participates in — the
+      decisions, unscheduled pairs and allocation events whose pairs contain
+      that node — the
       candidate-list surface for the selected node, so a node card does not
       poll and discard the whole GS×satellite cross-product. Same shape as
       the full snapshot, fewer rows; empty ``decisions``/``unscheduled_pairs``
@@ -2644,6 +2672,14 @@ def get_ground_link_decisions(query: Annotated[GroundLinkDecisionsQuery, Query()
         update={
             "decisions": tuple(d for d in snapshot.decisions if node in d.pair),
             "unscheduled_pairs": tuple(u for u in snapshot.unscheduled_pairs if node in u.pair),
+            "allocation_events": tuple(
+                event
+                for event in snapshot.allocation_events
+                if any(
+                    pair is not None and node in pair
+                    for pair in (event.pair, event.successor_pair, event.challenger_pair)
+                )
+            ),
         }
     )
 

@@ -1527,18 +1527,20 @@ class TestLinkDecisionSnapshotSubscription:
 class TestLinkDecisionsEndpoint:
     """`GET /api/v1/ground-link-decisions` exposes the OME's reasons to operators.
 
-    Without an active session: 404. Without a snapshot: 404. Full
-    snapshot when called with no pair query; per-pair view (decision +
-    matching unscheduled record) when called with both query params."""
+    Without an active session: 503. Without a snapshot: 404. The full
+    snapshot with no query; with ``node``, the snapshot sliced to the rows
+    whose pairs contain that node."""
 
-    def _make_ctx_with_snapshot(self):
+    def _make_ctx_with_snapshot(self, allocation_events: tuple[dict, ...] = ()):
 
         ctx = SessionContext.__new__(SessionContext)
         ctx._init_state_only()
         import asyncio
 
         msg = _Message()
-        msg.data = json.dumps(_decision_snapshot_payload()).encode()
+        payload = _decision_snapshot_payload()
+        payload["allocation_events"] = list(allocation_events)
+        msg.data = json.dumps(payload).encode()
         asyncio.run(ctx._on_ground_link_decision_snapshot(msg))
         return ctx
 
@@ -1604,6 +1606,31 @@ class TestLinkDecisionsEndpoint:
         body = r.json()
         assert [tuple(d["pair"]) for d in body["decisions"]] == [("gs-den", "sat-b")]
         assert [tuple(u["pair"]) for u in body["unscheduled_pairs"]] == [("gs-den", "sat-b")]
+
+    def test_node_slice_keeps_only_the_allocation_events_of_the_nodes_pairs(self, monkeypatch):
+        import vs_api.main as m
+
+        def event(pair, successor=None):
+            return {
+                "category": "mbb_overlap_started",
+                "pair": pair,
+                "tenant_id": "default",
+                "reference_body": "earth",
+                "message": "handover",
+                "successor_pair": successor,
+                "challenger_pair": None,
+                "policy_kind": None,
+                "policy_name": None,
+            }
+
+        handover = event(["gs-den", "sat-a"], successor=["gs-den", "sat-b"])
+        other = event(["gs-den", "sat-c"])
+        monkeypatch.setattr(m, "_active_context", self._make_ctx_with_snapshot((handover, other)))
+
+        r = TestClient(m.app).get("/api/v1/ground-link-decisions", params={"node": "sat-b"})
+
+        assert r.status_code == 200
+        assert [e["successor_pair"] for e in r.json()["allocation_events"]] == [["gs-den", "sat-b"]]
 
     def test_node_slice_with_no_candidates_is_200_empty_not_404(self, monkeypatch):
         # A node the snapshot exists but does not cover (e.g. a satellite with no GS

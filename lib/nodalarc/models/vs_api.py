@@ -479,23 +479,6 @@ class HealthStatus(BaseModel):
     session_status: SessionStatus
 
 
-class ProjectAbout(BaseModel):
-    """The project's attribution and the build serving this API."""
-
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-    name: str
-    version: str
-    revision: str
-    build_date: str
-    author: str
-    copyright: str
-    source: str
-    url: str
-    license: str
-    notice: str
-
-
 class AuthToken(BaseModel):
     """The API key a client sends as its bearer token."""
 
@@ -523,7 +506,9 @@ class ContinuousTraceStopped(BaseModel):
 
 
 class ContinuousTraceStatus(BaseModel):
-    """The continuous trace's endpoints and latest result; all empty when none runs."""
+    """The continuous trace's endpoints and latest result. ``active`` turns false when
+    the trace stops on its own, which keeps its endpoints and last result until it is
+    stopped or replaced; all are empty when no trace was started."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 

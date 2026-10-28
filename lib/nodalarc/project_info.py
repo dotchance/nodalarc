@@ -10,6 +10,8 @@ import subprocess
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 
+from pydantic import BaseModel, ConfigDict
+
 PROJECT_NAME = "NodalArc"
 PROJECT_PACKAGE_NAMES = ("nodal", "nodalarc")
 PROJECT_AUTHOR = ".chance (dotchance)"
@@ -132,16 +134,33 @@ def project_build_date() -> str:
     )
 
 
-def project_attribution() -> dict[str, str]:
-    return {
-        "name": PROJECT_NAME,
-        "version": project_version(),
-        "revision": project_revision(),
-        "build_date": project_build_date(),
-        "author": PROJECT_AUTHOR,
-        "copyright": PROJECT_COPYRIGHT,
-        "source": PROJECT_SOURCE_URL,
-        "url": PROJECT_URL,
-        "license": PROJECT_LICENSE,
-        "notice": PROJECT_NOTICE,
-    }
+class ProjectAbout(BaseModel):
+    """The project's attribution and the build serving it."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    name: str
+    version: str
+    revision: str
+    build_date: str
+    author: str
+    copyright: str
+    source: str
+    url: str
+    license: str
+    notice: str
+
+
+def project_attribution() -> ProjectAbout:
+    return ProjectAbout(
+        name=PROJECT_NAME,
+        version=project_version(),
+        revision=project_revision(),
+        build_date=project_build_date(),
+        author=PROJECT_AUTHOR,
+        copyright=PROJECT_COPYRIGHT,
+        source=PROJECT_SOURCE_URL,
+        url=PROJECT_URL,
+        license=PROJECT_LICENSE,
+        notice=PROJECT_NOTICE,
+    )

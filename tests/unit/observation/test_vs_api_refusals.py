@@ -280,3 +280,14 @@ def test_a_request_that_fails_validation_answers_with_the_declared_validation_bo
 
     assert response.status_code == 422
     assert list(response.json()) == ["detail"]
+
+
+def test_a_text_route_declares_its_refusals_as_json() -> None:
+    """The config download answers text, and refuses with JSON bodies."""
+    from vs_api.main import app
+
+    responses = app.openapi()["paths"]["/api/v1/nodes/{node_id}/config"]["get"]["responses"]
+
+    assert set(responses["200"]["content"]) == {"text/plain"}
+    for status in ("404", "409", "413", "500", "503"):
+        assert set(responses[status]["content"]) == {"application/json"}, status

@@ -961,7 +961,7 @@ export interface HealthStatus {
   readonly session_status: "idle" | "switching" | "wiring" | "ready" | "error";
 }
 
-/** The project's attribution and the build serving this API. */
+/** The project's attribution and the build serving it. */
 export interface ProjectAbout {
   readonly name: string;
   readonly version: string;
@@ -1014,7 +1014,7 @@ export interface TracedPath {
   readonly stop_reason?: "time_limit" | "internal_error" | null;
 }
 
-/** The continuous trace's endpoints and latest result; all empty when none runs. */
+/** The continuous trace's endpoints and latest result. ``active`` turns false when the trace stops on its own, which keeps its endpoints and last result until it is stopped or replaced; all are empty when no trace was started. */
 export interface ContinuousTraceStatus {
   readonly active: boolean;
   readonly src: string | null;

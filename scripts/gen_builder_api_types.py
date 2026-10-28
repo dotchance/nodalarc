@@ -259,10 +259,10 @@ from nodalarc.models.vs_api import (  # noqa: E402
     LinkDecisionTracesQuery,
     LinkHistoryQuery,
     OpsEventsQuery,
-    ProjectAbout,
     TracedPath,
     TraceRequest,
 )
+from nodalarc.project_info import ProjectAbout  # noqa: E402
 from pydantic import BaseModel, TypeAdapter  # noqa: E402
 
 OUT = ROOT / "frontend/src/builder/generated/builderApi.ts"

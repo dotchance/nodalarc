@@ -529,18 +529,6 @@
       "pending_since",
       "snapshot_seq"
     ],
-    "ProjectAbout": [
-      "author",
-      "build_date",
-      "copyright",
-      "license",
-      "name",
-      "notice",
-      "revision",
-      "source",
-      "url",
-      "version"
-    ],
     "RecentEvent": [
       "event_type",
       "node_id",
@@ -1453,18 +1441,6 @@
     "PendingActuationPair": {
       "operation": null
     },
-    "ProjectAbout": {
-      "author": null,
-      "build_date": null,
-      "copyright": null,
-      "license": null,
-      "name": null,
-      "notice": null,
-      "revision": null,
-      "source": null,
-      "url": null,
-      "version": null
-    },
     "RecentEvent": {
       "event_type": [
         "PATH_CHANGE",
@@ -1704,7 +1680,6 @@
     "OpsEventsQuery": "lib/nodalarc/models/vs_api.py",
     "PendingActuation": "lib/nodalarc/models/decision_explanation.py",
     "PendingActuationPair": "lib/nodalarc/models/scheduler_ops.py",
-    "ProjectAbout": "lib/nodalarc/models/vs_api.py",
     "RecentEvent": "lib/nodalarc/models/vs_api.py",
     "RecoveryStatus": "lib/nodalarc/models/scheduler_ops.py",
     "SessionEphemerisFrame": "lib/nodalarc/models/vs_api.py",

@@ -556,7 +556,7 @@ class TerminalInput(BaseModel):
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    type: Literal["input"] = "input"
+    type: Literal["input"]
     data: str
 
 
@@ -565,9 +565,10 @@ class TerminalResize(BaseModel):
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    type: Literal["resize"] = "resize"
-    cols: int = Field(gt=0)
-    rows: int = Field(gt=0)
+    type: Literal["resize"]
+    # Bounded by the Kubernetes exec resize channel's 16-bit sizes.
+    cols: int = Field(gt=0, le=65535)
+    rows: int = Field(gt=0, le=65535)
 
 
 class TerminalOutput(BaseModel):
@@ -575,7 +576,7 @@ class TerminalOutput(BaseModel):
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    type: Literal["output"] = "output"
+    type: Literal["output"]
     data: str
 
 
@@ -590,7 +591,7 @@ class DebugStreamCommand(BaseModel):
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    action: Literal["debug_stream"] = "debug_stream"
+    action: Literal["debug_stream"]
     sources: list[ServiceSource] = Field(min_length=1)
 
 
@@ -599,7 +600,7 @@ class DebugStopCommand(BaseModel):
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    action: Literal["debug_stop"] = "debug_stop"
+    action: Literal["debug_stop"]
     sources: list[ServiceSource] = Field(min_length=1)
 
 
@@ -608,7 +609,7 @@ class DebugStopAllCommand(BaseModel):
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    action: Literal["debug_stop_all"] = "debug_stop_all"
+    action: Literal["debug_stop_all"]
 
 
 # Every message the page sends on the state socket.

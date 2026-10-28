@@ -59,7 +59,7 @@ def test_a_terminal_closes_when_its_shell_ends(operator: Operator) -> None:
         with connect(operator.socket_url(f"/ws/v1/terminal/{node_id}")) as socket:
             with operator.terminal(node_id):
                 pass  # the node answers a terminal before this one says exit
-            socket.send(TerminalInput(data="exit\n").model_dump_json())
+            socket.send(TerminalInput(type="input", data="exit\n").model_dump_json())
             with pytest.raises(ConnectionClosed):
                 for _ in range(40):
                     try:

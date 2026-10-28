@@ -2267,11 +2267,12 @@ async def ws_terminal(websocket: WebSocket, node_id: str) -> None:
         await websocket.accept()
         await websocket.send_text(
             TerminalOutput(
+                type="output",
                 data=(
                     f"\r\nNode {node_id} runs a workload that declares "
                     "no terminal access.\r\nInspect it with its own "
                     "logs and tooling instead.\r\n"
-                )
+                ),
             ).model_dump_json()
         )
         await websocket.close(code=4409, reason="Workload declares no terminal access")
@@ -2302,24 +2303,25 @@ async def ws_terminal(websocket: WebSocket, node_id: str) -> None:
         await session.connect()
         _term_conn_id = await _terminal_manager.register(node_id, session, websocket)
 
-        async def ws_to_ssh():
-            """Forward browser input to SSH session."""
-            try:
-                async for msg in websocket.iter_text():
-                    try:
-                        message = _TERMINAL_MESSAGE.validate_json(msg)
-                    except ValidationError:
-                        message = None
-                    if isinstance(message, TerminalInput):
-                        await session.send(message.data)
-                    elif isinstance(message, TerminalResize):
-                        await session.resize(message.cols, message.rows)
-                    else:
-                        _audit_log.warning(f"WS_TERMINAL_MALFORMED ip={ws_ip} node={node_id}")
-                        await websocket.close(code=4400, reason="Malformed terminal message")
-                        return
-            except WebSocketDisconnect:
-                pass
+        async def ws_to_ssh() -> bool:
+            """Forward browser input to SSH session. True when the browser sent a
+            message that is not an input or a resize."""
+            while True:
+                received = await websocket.receive()
+                if received["type"] == "websocket.disconnect":
+                    return False
+                text = received.get("text")
+                try:
+                    message = None if text is None else _TERMINAL_MESSAGE.validate_json(text)
+                except ValidationError:
+                    message = None
+                if isinstance(message, TerminalInput):
+                    await session.send(message.data)
+                elif isinstance(message, TerminalResize):
+                    await session.resize(message.cols, message.rows)
+                else:
+                    _audit_log.warning(f"WS_TERMINAL_MALFORMED ip={ws_ip} node={node_id}")
+                    return True
 
         async def ssh_to_ws():
             """Forward SSH output to browser."""
@@ -2334,17 +2336,22 @@ async def ws_terminal(websocket: WebSocket, node_id: str) -> None:
                             return
                         await asyncio.sleep(0.05)
                         continue
-                    await websocket.send_text(TerminalOutput(data=output).model_dump_json())
+                    await websocket.send_text(
+                        TerminalOutput(type="output", data=output).model_dump_json()
+                    )
             except WebSocketDisconnect, asyncio.CancelledError:
                 pass
 
-        # Run both directions concurrently; when either exits, cancel the other
-        done, pending = await asyncio.wait(
-            [asyncio.create_task(ws_to_ssh()), asyncio.create_task(ssh_to_ws())],
-            return_when=asyncio.FIRST_COMPLETED,
-        )
+        # Run both directions concurrently; when either exits, stop the other
+        # before the socket closes, so nothing sends on a closing socket.
+        reader = asyncio.create_task(ws_to_ssh())
+        writer = asyncio.create_task(ssh_to_ws())
+        done, pending = await asyncio.wait([reader, writer], return_when=asyncio.FIRST_COMPLETED)
         for task in pending:
             task.cancel()
+        await asyncio.gather(*pending, return_exceptions=True)
+        if reader in done and reader.result():
+            await websocket.close(code=4400, reason="Malformed terminal message")
 
     except asyncssh.misc.DisconnectError as e:
         log.warning("SSH disconnect for %s: %s", node_id, e)

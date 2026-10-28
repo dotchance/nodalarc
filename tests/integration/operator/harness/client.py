@@ -148,7 +148,7 @@ class Terminal:
         return "\n".join([*lines[1:-1], *([before_prompt] if before_prompt else [])])
 
     def _send(self, data: str) -> None:
-        self._socket.send(TerminalInput(data=data).model_dump_json())
+        self._socket.send(TerminalInput(type="input", data=data).model_dump_json())
 
     def _receive(self, wait: float) -> str:
         try:

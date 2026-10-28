@@ -79,7 +79,7 @@ class NodePosition(BaseModel):
     velocity and applies the view-frame rotation to produce world-frame velocity.
     """
 
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
     lat_deg: float
     lon_deg: float
@@ -360,7 +360,7 @@ class EphemerisNodeKeplerian(BaseModel):
     Consumers must not silently treat J2 sessions as Keplerian.
     """
 
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
     type: Literal["keplerian"] = "keplerian"
     propagator: Literal["two-body", "keplerian-circular", "j2-mean-elements"]
@@ -383,7 +383,7 @@ class EphemerisNodeKeplerian(BaseModel):
 class EphemerisNodeTLE(BaseModel):
     """TLE-backed satellite ephemeris for SGP4 propagation."""
 
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
     type: Literal["tle"] = "tle"
     tle_line_1: str
@@ -409,7 +409,7 @@ class EphemerisNodeTLE(BaseModel):
 class EphemerisNodeFixed(BaseModel):
     """Fixed geodetic position for a ground station."""
 
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
     type: Literal["fixed"] = "fixed"
     lat_deg: float
@@ -438,7 +438,7 @@ class EphemerisBodyFrame(BaseModel):
     physical frame facts used to place bodies relative to one another.
     """
 
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
     body_id: SupportedSurfaceBody
     mean_radius_km: float
@@ -470,7 +470,7 @@ class SessionEphemeris(BaseModel):
     positions on demand. No per-tick position data is broadcast.
     """
 
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
     epoch_id: int
     sim_time: datetime
@@ -701,7 +701,7 @@ class OpsEvent(BaseModel):
     anomalies) to a centralized event bus.
     """
 
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
     timestamp: datetime
     tenant_id: str = ""

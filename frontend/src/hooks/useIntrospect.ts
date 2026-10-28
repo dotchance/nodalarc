@@ -3,7 +3,7 @@
 /** Hook for running whitelisted vtysh commands via VS-API introspect endpoint. */
 
 import { useState, useEffect, useCallback } from "react";
-import type { IntrospectResult } from "../builder/generated/builderApi";
+import type { IntrospectResult } from "../generated/vsApi";
 import { REST_URL, authHeaders } from "../config";
 import { apiErrorMessage, apiErrorFromException } from "../ui/apiError";
 

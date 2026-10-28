@@ -476,10 +476,10 @@ format-diff: ## Preview deterministic Ruff import and formatting changes
 	uv run ruff check --select I --fix --diff .
 	uv run ruff format --diff .
 
-generate-contracts: ## Regenerate Builder API transport types
+generate-contracts: ## Regenerate the page's contract types from the backend models
 	uv run python scripts/gen_builder_api_types.py
 
-check-contracts: ## Verify generated Builder API transport types
+check-contracts: ## Verify the page's generated contract types are current
 	uv run python scripts/gen_builder_api_types.py --check
 
 dead-code: ## Report high-confidence unused code findings

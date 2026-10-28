@@ -334,3 +334,27 @@ def test_every_route_declares_what_it_answers_and_takes() -> None:
                 if _free_form(entry.get("schema")):
                     undeclared.append(f"{method.upper()} {path} takes {media}")
     assert not undeclared, "\n".join(undeclared)
+
+
+def test_the_generated_types_treat_every_body_and_query_a_route_takes_as_a_request() -> None:
+    """The generator renders a defaulted field optional only in what a client sends; a
+    route body or query model it does not list as a request would demand fields a client
+    may leave out."""
+    import importlib.util
+    from pathlib import Path
+
+    from fastapi.routing import APIRoute
+    from vs_api.main import app
+
+    path = Path(__file__).resolve().parents[3] / "scripts" / "gen_builder_api_types.py"
+    spec = importlib.util.spec_from_file_location("gen_builder_api_types", path)
+    generator = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(generator)
+
+    taken = {
+        param.field_info.annotation.__name__
+        for route in app.routes
+        if isinstance(route, APIRoute)
+        for param in (*route.dependant.body_params, *route.dependant.query_params)
+    }
+    assert taken <= generator.REQUEST_ROOTS, sorted(taken - generator.REQUEST_ROOTS)

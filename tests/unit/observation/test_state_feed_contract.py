@@ -59,5 +59,10 @@ def test_every_response_model_the_app_declares_is_a_served_module_model() -> Non
 
 def _has_generated_types(model: type) -> bool:
     """The model reaches the page as a generated TypeScript type."""
-    generated = (ROOT / "frontend/src/builder/generated/builderApi.ts").read_text()
-    return re.search(rf"^export (?:interface|type) {model.__name__}\b", generated, re.M) is not None
+    return any(
+        re.search(rf"^export (?:interface|type) {model.__name__}\b", module.read_text(), re.M)
+        for module in (
+            ROOT / "frontend/src/builder/generated/builderApi.ts",
+            ROOT / "frontend/src/generated/vsApi.ts",
+        )
+    )

@@ -20,7 +20,6 @@ export type Sha256Digest = string;
 export type CatalogRef = string;
 /** Catalog reference whose family is sessions. */
 export type SessionRef = CatalogRef;
-/** Workload binding reference resolved against the package source. */
 /** Path-free deployable source selected by the browser. */
 export type SessionSourceId = CatalogSessionSourceId;
 
@@ -48,22 +47,27 @@ export type BuilderVisualDraftCommandOperation = "place_space_reference" | "plac
 export type BuilderVisualDraftAffectedKind = "space" | "ground" | "routing_domain" | "boundary" | "link" | "ground_member";
 export type CatalogComponentFamily = "bodies" | "terminals" | "payloads" | "orbits" | "nodes" | "sites" | "site-sets" | "constellations" | "space-node-sets";
 export type CatalogDraftIssueStage = "structural" | "reference" | "runtime_support";
-export type TransitionOperationState = "reserved" | "collecting" | "uploading" | "verifying" | "switching" | "succeeded" | "failed" | "cancelled";
-export type TransitionOperationSourceKind = "catalog_session";
 
-/** One typed finding routed to its owning authoring or deployment stage. */
-export interface BuilderIssue {
+/** Stable, path-free refusal evidence for one request. ``code`` is the refusing component's own vocabulary (an exception family's enum value or one fixed name per family). ``message`` names the declared inputs and catalog references involved; the host filesystem and other exceptions' text never appear in it. ``cause_type`` is the class name of a wrapped cause when the refusal carries one. */
+export interface ApiRefusal {
   readonly code: string;
-  readonly stage: BuilderIssueStage;
-  readonly severity: BuilderIssueSeverity;
   readonly message: string;
-  readonly blocks?: ReadonlyArray<BuilderBlockedOperation>;
-  readonly source_ref?: string | null;
-  readonly json_pointer?: string | null;
-  readonly draft_path?: string | null;
-  readonly source_line?: number | null;
-  readonly source_column?: number | null;
-  readonly related_refs?: ReadonlyArray<string>;
+  readonly cause_type: string | null;
+}
+
+/** Public documentation and catalog metadata needed to start Builder authoring. */
+export interface BuilderCatalogBootstrap {
+  readonly public_grammar_href: string;
+  readonly capabilities: BuilderCatalogCapabilities;
+  readonly families: ReadonlyArray<CatalogFamilyMetadata>;
+  readonly scheduling_presets: ReadonlyArray<BuilderVisualSchedulingPresetMetadata>;
+  readonly authoring: BuilderVisualAuthoringFacts;
+}
+
+/** Backend capabilities available to the Builder. */
+export interface BuilderCatalogCapabilities {
+  readonly user_catalog_write: true;
+  readonly deploy_yaml_closure: true;
 }
 
 /** One canonical catalog or session document with opaque revision identity. */
@@ -76,64 +80,28 @@ export interface BuilderCatalogDocument {
   readonly revision: string;
 }
 
-/** One complete new catalog document proposed for a ``user:`` ref. */
-export interface BuilderProposedCatalogDocument {
-  readonly ref: CatalogRef;
-  readonly document: Readonly<Record<string, JsonValue>>;
-  readonly origin: "generated" | "customized";
+/** One selectable Literal, union type, or null branch. */
+export interface BuilderChoiceBranch {
+  readonly branch_id: string;
+  readonly label: string;
+  readonly branch_kind: "literal" | "type" | "null";
+  readonly selected: boolean;
+  readonly literal_value?: string | number | boolean | null;
+  readonly control?: BuilderScalarControl | BuilderObjectControl | BuilderChoiceControl | BuilderSequenceControl | BuilderMapControl | null;
 }
 
-/** Complete transient configuration state compiled by the backend. The inner mappings intentionally remain generic JSON so incomplete or invalid configuration can cross the API boundary and return typed compile issues instead of being rejected as a malformed application request. */
-export interface BuilderDraftState {
-  readonly session: Readonly<Record<string, JsonValue>>;
-  readonly catalog_documents?: ReadonlyArray<BuilderProposedCatalogDocument>;
-}
-
-/** One revision of transient editor state accepted by compile/save APIs only. */
-export interface BuilderDraftEnvelope {
-  readonly draft_revision: number;
-  readonly state: BuilderDraftState;
-}
-
-/** One backend-discovered document in a transitive reference closure. */
-export interface DependencyClosureEntry {
-  readonly ref: CatalogRef;
-  readonly family: CatalogFamily;
-  readonly revision?: string | null;
-  readonly document_digest: Sha256Digest;
-  readonly preserved_path: string;
-  readonly size_bytes: number;
-}
-
-/** Response-only facts for the exact dependency closure found by the backend. */
-export interface DependencyClosureInventory {
-  readonly entries: ReadonlyArray<DependencyClosureEntry>;
-  readonly file_count: number;
-  readonly total_bytes: number;
-  readonly closure_digest: Sha256Digest;
-}
-
-/** Content identities reviewed across compile, save, and deployment. */
-export interface BuilderDigests {
-  readonly document: Sha256Digest;
-  readonly dependency: Sha256Digest;
-  readonly resolved_semantic?: Sha256Digest | null;
-}
-
-/** Backend-owned allow/block decision for one workflow operation. */
-export interface BuilderVerdict {
-  readonly operation: BuilderBlockedOperation;
-  readonly allowed: boolean;
-  readonly blockers?: ReadonlyArray<BuilderIssue>;
-}
-
-/** Deployment decision bound to one exact saved session revision. */
-export interface BuilderDeployVerdict {
-  readonly allowed: boolean;
-  readonly session_ref: SessionRef;
-  readonly session_revision: string;
-  readonly digests: BuilderDigests;
-  readonly blockers?: ReadonlyArray<BuilderIssue>;
+/** A compact selector whose branches remain fully typed. */
+export interface BuilderChoiceControl {
+  readonly control_id: string;
+  readonly json_pointer: string;
+  readonly label: string;
+  readonly required: boolean;
+  readonly present: boolean;
+  readonly editable?: true;
+  readonly specialized?: boolean;
+  readonly description?: string | null;
+  readonly kind?: "choice";
+  readonly branches: ReadonlyArray<BuilderChoiceBranch>;
 }
 
 /** Request to compile one transient draft through backend authorities. */
@@ -146,1182 +114,229 @@ export interface BuilderCompileRequest {
 export interface BuilderCompileResult {
   readonly draft: BuilderDraftEnvelope;
   readonly target_ref: SessionRef;
-  readonly canonical_session_yaml?: string | null;
-  readonly canonical_session_json?: Readonly<Record<string, JsonValue>> | null;
-  readonly dependency_closure?: DependencyClosureInventory | null;
-  readonly resolved_preview?: BuilderWorld | null;
-  readonly digests?: BuilderDigests | null;
-  readonly issues?: ReadonlyArray<BuilderIssue>;
+  readonly canonical_session_yaml: string | null;
+  readonly canonical_session_json: Readonly<Record<string, JsonValue>> | null;
+  readonly dependency_closure: DependencyClosureInventory | null;
+  readonly resolved_preview: BuilderWorld | null;
+  readonly digests: BuilderDigests | null;
+  readonly issues: ReadonlyArray<BuilderIssue>;
   readonly save_verdict: BuilderVerdict;
   readonly deploy_eligibility_after_save: BuilderVerdict;
 }
 
-/** Typed orbital geometry authored by the Wizard, not persisted grammar. */
-export interface WizardConstellationGeometry {
-  readonly display_name: string;
-  readonly description: string;
-  readonly altitude_km: number;
-  readonly inclination_deg: number;
-  readonly pattern: WizardWalkerPattern;
-  readonly planes: number;
-  readonly slots_per_plane: number;
-  readonly raan_spacing_deg: number;
-  readonly phase_offset_deg: number;
+/** Complete graphical control projection for one applied configuration revision. */
+export interface BuilderControlTree {
+  readonly projection_revision: number;
+  readonly root: BuilderObjectControl;
 }
 
-/** Backend-owned runtime capability for one Wizard space source. */
-export interface WizardConstellationCapability {
-  readonly source_kind: WizardConstellationSourceKind;
-  readonly runtime_supported_propagators: ReadonlyArray<WizardOrbitPropagator>;
-  readonly default_propagator: WizardOrbitPropagator | null;
-  readonly unavailable_reason: string | null;
+/** Deployment decision bound to one exact saved session revision. */
+export interface BuilderDeployVerdict {
+  readonly allowed: boolean;
+  readonly session_ref: SessionRef;
+  readonly session_revision: string;
+  readonly digests: BuilderDigests;
+  readonly blockers: ReadonlyArray<BuilderIssue>;
 }
 
-/** One catalog-backed constellation choice exposed to the Wizard. */
-export interface WizardConstellationPreset {
-  readonly name: string;
-  readonly description: string;
-  readonly satellite_count: number;
-  readonly constellation: string;
-  readonly ground_stations: string;
-  readonly default_node: string | null;
-  readonly capability: WizardConstellationCapability;
+/** Content identities reviewed across compile, save, and deployment. */
+export interface BuilderDigests {
+  readonly document: Sha256Digest;
+  readonly dependency: Sha256Digest;
+  readonly resolved_semantic: Sha256Digest | null;
 }
 
-/** Closed Wizard constellation catalog plus custom-geometry capability. */
-export interface WizardConstellationPresetResponse {
-  readonly presets: ReadonlyArray<WizardConstellationPreset>;
-  readonly custom_geometry: WizardConstellationCapability;
-  readonly custom_geometry_seed: WizardConstellationGeometry;
-  readonly custom_geometry_default_node: string;
-  readonly custom_geometry_patterns: ReadonlyArray<WizardWalkerPatternMetadata>;
-  readonly orbit_models: ReadonlyArray<WizardOrbitModelMetadata>;
+/** One revision of transient editor state accepted by compile/save APIs only. */
+export interface BuilderDraftEnvelope {
+  readonly draft_revision: number;
+  readonly state: BuilderDraftState;
 }
 
-/** Presentation metadata for one backend-supported Wizard orbit choice. */
-export interface WizardOrbitModelMetadata {
-  readonly id: WizardOrbitPropagator;
+/** Complete transient configuration state compiled by the backend. The inner mappings intentionally remain generic JSON so incomplete or invalid configuration can cross the API boundary and return typed compile issues instead of being rejected as a malformed application request. */
+export interface BuilderDraftState {
+  readonly session: Readonly<Record<string, JsonValue>>;
+  readonly catalog_documents?: ReadonlyArray<BuilderProposedCatalogDocument>;
+}
+
+/**  */
+export interface BuilderInsertItemCommand {
+  readonly operation: "insert_item";
+  readonly control_id: string;
+  readonly index: number;
+}
+
+/**  */
+export interface BuilderInsertMapEntryCommand {
+  readonly operation: "insert_map_entry";
+  readonly control_id: string;
+  readonly key: string | number | boolean;
+  readonly value?: string | number | boolean | null;
+}
+
+/** One typed finding routed to its owning authoring or deployment stage. */
+export interface BuilderIssue {
+  readonly code: string;
+  readonly stage: BuilderIssueStage;
+  readonly severity: BuilderIssueSeverity;
+  readonly message: string;
+  readonly blocks: ReadonlyArray<BuilderBlockedOperation>;
+  readonly source_ref: string | null;
+  readonly json_pointer: string | null;
+  readonly draft_path: string | null;
+  readonly source_line: number | null;
+  readonly source_column: number | null;
+  readonly related_refs: ReadonlyArray<string>;
+}
+
+/** One resolved link-rule endpoint, flattened for builder display. */
+export interface BuilderLinkEndpoint {
+  readonly segment_id: string;
+  readonly terminal_role: WizardTerminalRole;
+  readonly terminal_medium: string | null;
+  readonly min_elevation_deg: number | null;
+  readonly node_ids: ReadonlyArray<string>;
+}
+
+/** Display projection of one ``ResolvedLinkRule``. The resolved rule's topology is a discriminated union; the builder needs the flat facts (mode, n, explicit pairs, range cap) to preview candidate geometry. This is a projection for display — candidate truth at runtime stays with OME. */
+export interface BuilderLinkRule {
+  readonly rule_id: string;
+  readonly kind: "access" | "isl" | "inter_body";
+  readonly enabled: boolean;
+  readonly endpoints: readonly [BuilderLinkEndpoint, BuilderLinkEndpoint];
+  readonly topology_mode: "visible_candidates" | "nearest_visible" | "nearest_n" | "explicit_pairs";
+  readonly topology_n: number | null;
+  readonly explicit_pairs: ReadonlyArray<readonly [string, string]>;
+  readonly max_range_km: number | null;
+}
+
+/** A typed mapping editor with explicit key and value controls. */
+export interface BuilderMapControl {
+  readonly control_id: string;
+  readonly json_pointer: string;
   readonly label: string;
-  readonly description: string;
+  readonly required: boolean;
+  readonly present: boolean;
+  readonly editable?: true;
+  readonly specialized?: boolean;
+  readonly description?: string | null;
+  readonly kind?: "map";
+  readonly entries?: ReadonlyArray<BuilderMapEntry>;
+  readonly add_key_control: BuilderScalarControl | BuilderObjectControl | BuilderChoiceControl | BuilderSequenceControl | BuilderMapControl;
+  readonly add_value_control: BuilderScalarControl | BuilderObjectControl | BuilderChoiceControl | BuilderSequenceControl | BuilderMapControl;
+  readonly can_add?: true;
+  readonly can_remove?: true;
+  readonly can_rename_keys?: true;
+  readonly min_entries?: number | null;
+  readonly max_entries?: number | null;
 }
 
-/** Presentation facts for one backend-supported custom Walker pattern. */
-export interface WizardWalkerPatternMetadata {
-  readonly id: WizardWalkerPattern;
+/** One typed key/value row in a mapping. */
+export interface BuilderMapEntry {
+  readonly key: BuilderScalarControl | BuilderObjectControl | BuilderChoiceControl | BuilderSequenceControl | BuilderMapControl;
+  readonly value: BuilderScalarControl | BuilderObjectControl | BuilderChoiceControl | BuilderSequenceControl | BuilderMapControl;
+}
+
+/**  */
+export interface BuilderMoveItemCommand {
+  readonly operation: "move_item";
+  readonly control_id: string;
+  readonly from_index: number;
+  readonly to_index: number;
+}
+
+/** One node's fixed-interface capacity for one rule, as allocated. */
+export interface BuilderNodeInterfaceFacts {
+  readonly node_id: string;
+  readonly segment_id: string;
+  readonly matching: number;
+  readonly free: number;
+}
+
+/** A structured object editor, including explicit empty parameter objects. */
+export interface BuilderObjectControl {
+  readonly control_id: string;
+  readonly json_pointer: string;
   readonly label: string;
-  readonly description: string;
+  readonly required: boolean;
+  readonly present: boolean;
+  readonly editable?: true;
+  readonly specialized?: boolean;
+  readonly description?: string | null;
+  readonly kind?: "object";
+  readonly model_name?: string | null;
+  readonly fields?: ReadonlyArray<BuilderObjectField>;
+  readonly empty_parameters?: boolean;
+  readonly recursive_reference?: boolean;
 }
 
-/** One installed terminal mount summarized for a satellite preset card. */
-export interface WizardSatelliteTerminalSummary {
-  readonly id: string;
-  readonly role: WizardTerminalRole;
+/** One canonical model field and its graphical control. */
+export interface BuilderObjectField {
+  readonly field_name: string;
+  readonly wire_name: string;
+  readonly control: BuilderScalarControl | BuilderObjectControl | BuilderChoiceControl | BuilderSequenceControl | BuilderMapControl;
+}
+
+/** One drawn preview pair: a runtime node pair whose frozen-epoch geometry passed every armed gate, oriented to the rule's endpoints server-side. canvas draws these directly and never re-derives pair identities. */
+export interface BuilderPreviewPair {
+  readonly rule_id: string;
+  readonly kind: "access" | "isl" | "inter_body";
+  readonly node_a: string;
+  readonly node_b: string;
+}
+
+/** How many tested pairs one reject reason accounts for. ``reason`` is the runtime's reject_reason verbatim (or ``no_geometry``); counts sum over ``pairs_tested`` — never an untested remainder. */
+export interface BuilderPreviewReasonCount {
+  readonly reason: "los_blocked" | "range_exceeded" | "elevation_below_min" | "field_of_regard" | "terminal_type_mismatch" | "no_geometry";
   readonly count: number;
 }
 
-/** One catalog node primitive that can fly a Wizard constellation. */
-export interface WizardSatelliteTypePreset {
-  readonly name: string;
-  readonly display_name: string;
-  readonly notes: string;
-  readonly file: string;
-  readonly terminals: ReadonlyArray<WizardSatelliteTerminalSummary>;
+/** One complete new catalog document proposed for a ``user:`` ref. */
+export interface BuilderProposedCatalogDocument {
+  readonly ref: CatalogRef;
+  readonly document: Readonly<Record<string, JsonValue>>;
+  readonly origin: "generated" | "customized";
 }
 
-/** Closed catalog-node response for the Wizard satellite picker. */
-export interface WizardSatelliteTypePresetResponse {
-  readonly presets: ReadonlyArray<WizardSatelliteTypePreset>;
+/**  */
+export interface BuilderRemoveItemCommand {
+  readonly operation: "remove_item";
+  readonly control_id: string;
+  readonly index: number;
 }
 
-/** One catalog site-set choice for the Wizard ground picker. */
-export interface WizardGroundStationSetPreset {
-  readonly name: string;
-  readonly description: string;
-  readonly stations: ReadonlyArray<string>;
-  readonly file: string;
+/**  */
+export interface BuilderRemoveMapEntryCommand {
+  readonly operation: "remove_map_entry";
+  readonly control_id: string;
+  readonly index: number;
 }
 
-/** Closed catalog site-set response for the Wizard. */
-export interface WizardGroundStationSetPresetResponse {
-  readonly presets: ReadonlyArray<WizardGroundStationSetPreset>;
+/**  */
+export interface BuilderRenameMapKeyCommand {
+  readonly operation: "rename_map_key";
+  readonly control_id: string;
+  readonly index: number;
+  readonly key: string | number | boolean;
 }
 
-/** One located catalog site available to a custom Wizard site set. */
-export interface WizardAvailableStation {
-  readonly name: string;
-  readonly lat_deg: number;
-  readonly lon_deg: number;
-  readonly file: string;
-}
-
-/** Closed catalog-site response for custom Wizard ground selection. */
-export interface WizardAvailableStationResponse {
-  readonly stations: ReadonlyArray<WizardAvailableStation>;
-}
-
-/** Backend-owned presentation facts for the Wizard BFD controls. The timer controls and their bounds belong to each protocol, because the bounds are what the runtime renders for that protocol. */
-export interface WizardBfdMetadata {
-  readonly heading: string;
-  readonly enabled_field: "bfd";
-  readonly enable_label: string;
-  readonly enable_description: string;
-}
-
-/** Presentation facts for one backend-supported Wizard extension. */
-export interface WizardExtensionMetadata {
-  readonly id: WizardExtension;
-  readonly label: string;
-  readonly description: string;
-}
-
-/** Presentation and validation facts for one numeric protocol timer control. */
-export interface WizardRoutingTimerFieldMetadata {
-  readonly id: WizardRoutingTimerField;
-  readonly label: string;
-  readonly unit?: string | null;
-  readonly description: string;
-  readonly guidance: string;
-  readonly minimum: number;
-  readonly maximum?: number | null;
-}
-
-/** One selectable routing protocol and its backend-owned Wizard behavior. */
-export interface WizardProtocolMetadata {
-  readonly id: WizardRoutingProtocol;
-  readonly label: string;
-  readonly description: string;
-  readonly extensions: ReadonlyArray<WizardExtension>;
-  readonly extension_constraints: Readonly<Record<string, ReadonlyArray<WizardExtension>>>;
-  readonly timer_label: string;
-  readonly timer_fields: ReadonlyArray<WizardRoutingTimerFieldMetadata>;
-  readonly bfd_timer_fields?: ReadonlyArray<WizardRoutingTimerFieldMetadata> | null;
-  readonly area_strategies: ReadonlyArray<WizardAreaStrategy>;
-  readonly default_area_strategy: WizardAreaStrategy;
-}
-
-/** Closed backend-owned Wizard protocol and area-strategy rules. */
-export interface WizardExtensionRulesResponse {
-  readonly protocols: ReadonlyArray<WizardProtocolMetadata>;
-  readonly extensions: ReadonlyArray<WizardExtensionMetadata>;
-  readonly bfd: WizardBfdMetadata;
-  readonly routing_timer_defaults: WizardRoutingTimerIntent;
-}
-
-/** Wizard-selected physical sources used for preview and authoring. */
-export interface WizardPhysicalIntent {
-  readonly constellation_ref?: string | null;
-  readonly custom_constellation?: WizardConstellationGeometry | null;
-  readonly satellite_node_ref?: string | null;
-  readonly ground_site_set_ref?: string | null;
-  readonly custom_site_refs?: ReadonlyArray<string>;
-  readonly orbit_propagator: WizardOrbitPropagator;
-}
-
-/** Raw Wizard routing controls mapped to session grammar only by the backend. */
-export interface WizardRoutingTimerIntent {
-  readonly bfd: boolean;
-  readonly bfd_detect_multiplier: number;
-  readonly bfd_rx_interval: number;
-  readonly bfd_tx_interval: number;
-  readonly isis_hello_interval: number;
-  readonly isis_hello_multiplier: number;
-  readonly spf_init_delay: number;
-  readonly spf_short_delay: number;
-  readonly spf_long_delay: number;
-  readonly spf_holddown: number;
-  readonly spf_time_to_learn: number;
-  readonly ospf_hello_interval: number;
-  readonly ospf_dead_interval: number;
-  readonly ospf_spf_delay: number;
-  readonly ospf_spf_initial_hold: number;
-  readonly ospf_spf_max_hold: number;
-}
-
-/** One Wizard selection set compiled into an ordinary Builder draft. */
-export interface WizardSessionIntent {
-  readonly constellation_ref?: string | null;
-  readonly custom_constellation?: WizardConstellationGeometry | null;
-  readonly satellite_node_ref?: string | null;
-  readonly ground_site_set_ref?: string | null;
-  readonly custom_site_refs?: ReadonlyArray<string>;
-  readonly orbit_propagator: WizardOrbitPropagator;
-  readonly protocol: WizardRoutingProtocol;
-  readonly extensions?: ReadonlyArray<WizardExtension>;
-  readonly area_strategy?: WizardAreaStrategy;
-  readonly routing_timers: WizardRoutingTimerIntent;
-}
-
-/** Request backend construction and compilation of one Wizard intent. */
-export interface WizardCompileRequest {
-  readonly draft_revision: number;
-  readonly intent: WizardSessionIntent;
-}
-
-/** Request one physical coverage preview from backend-selected catalog facts. */
-export interface WizardCoverageRequest {
-  readonly intent: WizardPhysicalIntent;
-}
-
-/** Stable refusal when Wizard intent cannot become a Builder draft. */
-export interface WizardCompileRefusal {
-  readonly code: "wizard_compile.invalid_selection" | "wizard_compile.reference_error" | "wizard_compile.repository_unavailable";
-  readonly message: string;
-  readonly cause_type?: string | null;
-}
-
-/** Request deployment of one exact saved session revision and closure. */
-export interface BuilderSessionDeployRequest {
-  readonly session_ref: SessionRef;
-  readonly expected_session_revision: string;
-  readonly expected_document_digest: Sha256Digest;
-  readonly expected_dependency_digest: Sha256Digest;
-  readonly record_history: boolean;
-}
-
-/** Opaque accepted operation bound to the exact requested catalog source. */
-export interface BuilderSessionDeployAccepted {
-  readonly operation_id: string;
-  readonly status?: "accepted";
-  readonly source: BuilderSessionDeployRequest;
-}
-
-/** Stable, path-free refusal for one guarded saved-session deployment. ``code`` is the refusing component's own vocabulary, the same one the ``ApiRefusal`` envelope carries; this model adds the deployment's identity and precondition evidence. */
-export interface BuilderSessionDeployRefusal {
-  readonly code: string;
-  readonly message: string;
-  readonly session_ref: SessionRef;
-  readonly expected?: string | null;
-  readonly observed?: string | null;
-  readonly cause_type?: string | null;
-}
-
-/** Transactional request to publish a complete draft as a catalog session. */
-export interface BuilderSessionSaveRequest {
-  readonly draft: BuilderDraftEnvelope;
-  readonly target_ref: SessionRef;
-  readonly expected_session_revision?: string | null;
-}
-
-/** Exact saved document identity plus its saved-revision deploy verdict. */
-export interface BuilderSessionSaveResult {
-  readonly session: BuilderCatalogDocument;
-  readonly digests: BuilderDigests;
-  readonly dependency_closure: DependencyClosureInventory;
-  readonly deploy_verdict: BuilderDeployVerdict;
-  readonly issues?: ReadonlyArray<BuilderIssue>;
-}
-
-/** Stable transport evidence for a Builder session save that did not succeed. */
-export interface BuilderSessionSaveRefusal {
-  readonly code: "builder_session_save.save_blocked" | "builder_session_save.stale_write" | "builder_session_save.graph_invalid" | "builder_session_save.persistence_failed" | "builder_session_save.storage_verification_failed";
-  readonly message: string;
-  readonly target_ref: SessionRef;
-  readonly base_generation?: string | null;
-  readonly repository_committed?: boolean;
-  readonly issues?: ReadonlyArray<BuilderIssue>;
-  readonly cause_type?: string | null;
-  readonly compile_result?: BuilderCompileResult | null;
-}
-
-/** Apply an atomic batch through revision-scoped backend control identities. */
-export interface BuilderVisualControlMutationRequest {
-  readonly draft: BuilderVisualDraftEnvelope;
-  readonly expected_draft_revision: number;
-  readonly commands: ReadonlyArray<BuilderSetScalarCommand | BuilderSetPresentCommand | BuilderSelectChoiceCommand | BuilderInsertItemCommand | BuilderRemoveItemCommand | BuilderMoveItemCommand | BuilderInsertMapEntryCommand | BuilderRemoveMapEntryCommand | BuilderRenameMapKeyCommand>;
-}
-
-/** Fork the minimal catalog ancestor path for one placed nested component. */
-export interface BuilderVisualCustomizeChainRequest {
-  readonly draft: BuilderVisualDraftEnvelope;
-  readonly expected_draft_revision: number;
-  readonly segment_id: string;
-  readonly leaf_ref: CatalogRef;
-  readonly target_leaf_ref?: CatalogRef | null;
-}
-
-/** One source-to-user fork in a minimal nested customization path. */
-export interface BuilderVisualCustomizeChainEntry {
-  readonly source_ref: CatalogRef;
-  readonly target_ref: CatalogRef;
-}
-
-/** Updated draft or typed refusal evidence for one customize-chain command. */
-export interface BuilderVisualCustomizeChainResult {
-  readonly applied: boolean;
-  readonly draft: BuilderVisualDraftEnvelope;
-  readonly root_source_ref?: CatalogRef | null;
-  readonly root_target_ref?: CatalogRef | null;
-  readonly forked_chain?: ReadonlyArray<BuilderVisualCustomizeChainEntry>;
-  readonly issues?: ReadonlyArray<BuilderIssue>;
-}
-
-/** Place one existing constellation or space-node-set by catalog reference. */
-export interface BuilderVisualPlaceSpaceReferenceCommand {
-  readonly operation: "place_space_reference";
-  readonly source_ref: string;
-}
-
-/** Place one existing site set with backend-owned scheduling. */
-export interface BuilderVisualPlaceGroundReferenceCommand {
-  readonly operation: "place_ground_reference";
-  readonly site_set_ref: string;
-}
-
-/** Add one backend-seeded generated constellation draft. */
-export interface BuilderVisualAddGeneratedSpaceCommand {
-  readonly operation: "add_generated_space";
-  readonly node_ref?: string | null;
-  readonly phasing_mode: BuilderVisualPhasingMode;
-}
-
-/** Change one population input and let the backend derive its complete phasing. */
-export interface BuilderVisualSetSpacePopulationCommand {
-  readonly operation: "set_space_population";
-  readonly segment_id: string;
-  readonly phasing_mode?: BuilderVisualPhasingMode | null;
-  readonly planes?: number | null;
-  readonly slots_per_plane?: number | null;
-}
-
-/** Create one backend-seeded inline node for an authored space segment. */
-export interface BuilderVisualAuthorInlineSpaceNodeCommand {
-  readonly operation: "author_inline_space_node";
-  readonly segment_id: string;
-}
-
-/** Mount a selected terminal or increment the matching backend-owned mount. */
-export interface BuilderVisualAddOrIncrementNodeTerminalCommand {
-  readonly operation: "add_or_increment_node_terminal";
-  readonly segment_id: string;
-  readonly terminal_ref: string;
-  readonly role: WizardTerminalRole;
-}
-
-/** Change one inline-node mount role with backend-owned pointing semantics. */
-export interface BuilderVisualSetNodeTerminalRoleCommand {
-  readonly operation: "set_node_terminal_role";
-  readonly segment_id: string;
-  readonly mount_id: string;
-  readonly role: WizardTerminalRole;
-}
-
-/** Add one uniquely identified Ethernet port to an authored inline node. */
-export interface BuilderVisualAddNodeEthernetPortCommand {
-  readonly operation: "add_node_ethernet_port";
-  readonly segment_id: string;
-}
-
-/** Add one backend-seeded authored ground-segment draft. */
-export interface BuilderVisualAddGroundCommand {
-  readonly operation: "add_ground";
-  readonly node_ref?: string | null;
-  readonly installed?: Readonly<Record<string, number>>;
-  readonly boresights?: Readonly<Record<string, BuilderVisualGroundBoresight>>;
-  readonly body_ref?: string | null;
-}
-
-/** Place one existing site, creating its authored ground segment when needed. */
-export interface BuilderVisualAddGroundSiteReferenceCommand {
-  readonly operation: "add_ground_site_reference";
-  readonly segment_id?: string | null;
-  readonly site_ref: string;
-}
-
-/** Select a ground stamp node and derive its installed terminal inventory. */
-export interface BuilderVisualSetGroundStampNodeCommand {
-  readonly operation: "set_ground_stamp_node";
-  readonly segment_id: string;
-  readonly node_ref: string;
-}
-
-/** Select one authored site's node model and derive its installed inventory. */
-export interface BuilderVisualSetGroundSiteNodeCommand {
-  readonly operation: "set_ground_site_node";
-  readonly segment_id: string;
-  readonly member_id: string;
-  readonly node_id: string;
-  readonly node_ref: string;
-}
-
-/** Add one backend-seeded node installation to an authored site. */
-export interface BuilderVisualAddGroundSiteNodeCommand {
-  readonly operation: "add_ground_site_node";
-  readonly segment_id: string;
-  readonly member_id: string;
-  readonly node_ref?: string | null;
-}
-
-/** One user-entered surface location awaiting backend-owned site allocation. */
-export interface BuilderVisualGroundSiteIntent {
-  readonly name: string;
-  readonly lat_deg: number;
-  readonly lon_deg: number;
-  readonly alt_m?: number;
-}
-
-/** Mint complete sites and addresses from typed locations and one ground stamp. */
-export interface BuilderVisualMintGroundMembersCommand {
-  readonly operation: "mint_ground_members";
-  readonly segment_id: string;
-  readonly sites: ReadonlyArray<BuilderVisualGroundSiteIntent>;
-}
-
-/** Add one backend-seeded routing domain over uncovered segments. */
-export interface BuilderVisualAddRoutingDomainCommand {
-  readonly operation: "add_routing_domain";
-}
-
-/** Add one backend-seeded routing boundary. */
-export interface BuilderVisualAddBoundaryCommand {
-  readonly operation: "add_boundary";
-}
-
-/** Create a link rule whose initial physics comes from both endpoints. */
-export interface BuilderVisualConnectSegmentsCommand {
-  readonly operation: "connect_segments";
-  readonly from_segment_id: string;
-  readonly to_segment_id: string;
-}
-
-/** Repoint one link endpoint and explicitly rederive its physical seed. */
-export interface BuilderVisualRederiveLinkCommand {
-  readonly operation: "rederive_link";
+/** The allocator's own outcome for one rule — the single capacity truth every display reports instead of re-deriving. For access rules nothing is consumed at resolve time (the runtime schedules access within terminal capacity): ``allocated_pairs`` counts the declared candidate universe and ``free`` always mirrors ``matching``. Displays must not present access facts as fixed allocation. */
+export interface BuilderRuleAllocation {
   readonly rule_id: string;
-  readonly side: "a" | "b";
-  readonly segment_id: string;
-}
-
-/** Apply one complete backend-owned scheduling block or inherit at a site. */
-export interface BuilderVisualSetSchedulingPresetCommand {
-  readonly operation: "set_scheduling_preset";
-  readonly segment_id: string;
-  readonly preset: BuilderVisualSchedulingPreset | null;
-  readonly member_id?: string | null;
-}
-
-/** Apply one typed command to an exact visual-draft revision. */
-export interface BuilderVisualDraftCommandRequest {
-  readonly draft: BuilderVisualDraftEnvelope;
-  readonly expected_draft_revision: number;
-  readonly command: BuilderVisualPlaceSpaceReferenceCommand | BuilderVisualPlaceGroundReferenceCommand | BuilderVisualAddGeneratedSpaceCommand | BuilderVisualSetSpacePopulationCommand | BuilderVisualAuthorInlineSpaceNodeCommand | BuilderVisualAddOrIncrementNodeTerminalCommand | BuilderVisualSetNodeTerminalRoleCommand | BuilderVisualAddNodeEthernetPortCommand | BuilderVisualAddGroundCommand | BuilderVisualAddGroundSiteReferenceCommand | BuilderVisualSetGroundStampNodeCommand | BuilderVisualSetGroundSiteNodeCommand | BuilderVisualAddGroundSiteNodeCommand | BuilderVisualMintGroundMembersCommand | BuilderVisualAddRoutingDomainCommand | BuilderVisualAddBoundaryCommand | BuilderVisualConnectSegmentsCommand | BuilderVisualRederiveLinkCommand | BuilderVisualSetSchedulingPresetCommand;
-}
-
-/** One applied command and the next revision of the complete draft. */
-export interface BuilderVisualDraftCommandResult {
-  readonly operation: BuilderVisualDraftCommandOperation;
-  readonly base_draft_revision: number;
-  readonly draft: BuilderVisualDraftEnvelope;
-  readonly affected_kind: BuilderVisualDraftAffectedKind;
-  readonly affected_id: string;
-  readonly scheduling_preset?: BuilderVisualSchedulingPreset | null;
-  readonly notice?: string | null;
-}
-
-/** Walker population intent whose derived angular values remain backend-owned. */
-export interface BuilderVisualWalkerLayoutRequest {
-  readonly pattern: WizardWalkerPattern;
-  readonly planes: number;
-  readonly slots_per_plane: number;
-}
-
-/** Backend-issued angular layout for one Walker population intent. */
-export interface BuilderVisualWalkerLayoutResult {
-  readonly raan_spacing_deg: number;
-  readonly phase_offset_deg: number;
-}
-
-/** Spacecraft access-terminal pointing authored into a node mount. */
-export interface BuilderVisualSpaceBoresight {
-  readonly mode: "nadir";
-}
-
-/** Ground access-terminal pointing authored into a site installation. */
-export interface BuilderVisualGroundBoresight {
-  readonly mode: "local_vertical";
-}
-
-/** Editable terminal mount on a visual node draft. */
-export interface BuilderVisualTerminalMount {
-  readonly mount_id?: string;
-  readonly role?: WizardTerminalRole | null;
-  readonly terminal_ref?: string | null;
-  readonly count?: number | null;
-  readonly boresight?: BuilderVisualSpaceBoresight | null;
-}
-
-/** Editable node object nested in a generated space component. */
-export interface BuilderVisualNode {
-  readonly id?: string;
-  readonly display_name?: string;
-  readonly forwarding?: "routed" | "host" | "bridge" | "control_only" | null;
-  readonly profile?: string | null;
-  readonly ethernet?: ReadonlyArray<string>;
-  readonly terminals?: ReadonlyArray<BuilderVisualTerminalMount>;
-}
-
-/** Editable orbital geometry for one generated constellation. */
-export interface BuilderVisualOrbit {
-  readonly central_body?: string | null;
-  readonly shape_kind?: BuilderVisualOrbitShape | null;
-  readonly altitude_km?: number | null;
-  readonly perigee_altitude_km?: number | null;
-  readonly apogee_altitude_km?: number | null;
-  readonly inclination_deg?: number | null;
-  readonly raan_deg?: number | null;
-  readonly argument_of_perigee_deg?: number | null;
-  readonly mean_anomaly_deg?: number | null;
-  readonly propagator?: BuilderVisualOrbitPropagator | null;
-}
-
-/** Editable generated space segment that becomes referenced catalog objects. */
-export interface BuilderVisualSpaceDraft {
-  readonly segment_id?: string;
-  readonly display_name?: string;
-  readonly node_ref?: string | null;
-  readonly node_draft?: BuilderVisualNode | null;
-  readonly orbit?: BuilderVisualOrbit;
-  readonly planes?: number | null;
-  readonly raan_spacing_deg?: number | null;
-  readonly slots_per_plane?: number | null;
-  readonly phasing_mode: BuilderVisualPhasingMode;
-  readonly phase_offset_deg?: number | null;
-}
-
-/** One library space source placed by reference. */
-export interface BuilderVisualSpaceReference {
-  readonly segment_id?: string;
-  readonly source_ref?: string | null;
-  readonly label?: string;
-}
-
-/** One installed node in an editable site object. */
-export interface BuilderVisualSiteNode {
-  readonly node_id?: string;
-  readonly node_ref?: string | null;
-  readonly installed?: Readonly<Record<string, number>>;
-  readonly boresights: Readonly<Record<string, BuilderVisualGroundBoresight>>;
-}
-
-/** Editable complete site object. */
-export interface BuilderVisualSite {
-  readonly site_id?: string;
-  readonly display_name?: string;
-  readonly body?: string | null;
-  readonly lat_deg?: number | null;
-  readonly lon_deg?: number | null;
-  readonly alt_m?: number | null;
-  readonly tags?: ReadonlyArray<string>;
-  readonly nodes?: ReadonlyArray<BuilderVisualSiteNode>;
-}
-
-/** Referenced or authored member of an editable ground site set. */
-export interface BuilderVisualGroundMember {
-  readonly member_id?: string;
-  readonly kind: "ref" | "draft";
-  readonly ref?: string | null;
-  readonly site_id?: string;
-  readonly label?: string;
-  readonly summary?: string | null;
-  readonly site?: BuilderVisualSite | null;
-  readonly scheduling_override?: Readonly<Record<string, JsonValue>> | null;
-}
-
-/** Backend-issued minting facts retained as visual state, never persisted. */
-export interface BuilderVisualGroundStamp {
-  readonly node_ref?: string | null;
-  readonly installed?: Readonly<Record<string, number>>;
-  readonly boresights: Readonly<Record<string, BuilderVisualGroundBoresight>>;
-  readonly body?: string | null;
-}
-
-/** Editable ground segment assembled into site and site-set refs. */
-export interface BuilderVisualGroundDraft {
-  readonly segment_id?: string;
-  readonly display_name?: string;
-  readonly members?: ReadonlyArray<BuilderVisualGroundMember>;
-  readonly stamp: BuilderVisualGroundStamp;
-  readonly scheduling?: Readonly<Record<string, JsonValue>>;
-  readonly originated_ipv4?: ReadonlyArray<string>;
-  readonly tags?: ReadonlyArray<string>;
-}
-
-/** One library site set placed by reference with session scheduling. */
-export interface BuilderVisualGroundReference {
-  readonly segment_id?: string;
-  readonly site_set_ref?: string | null;
-  readonly label?: string;
-  readonly scheduling?: Readonly<Record<string, JsonValue>>;
-}
-
-/** Editable endpoint selector for one visual link rule. */
-export interface BuilderVisualLinkEndpoint {
-  readonly segment_id?: string;
-  readonly tag?: string | null;
-  readonly role?: WizardTerminalRole | null;
-  readonly medium?: "rf" | "optical" | null;
-  readonly min_elevation_deg?: number | null;
-}
-
-/** Editable physical link rule; every authored rule is assembled. */
-export interface BuilderVisualLinkRule {
-  readonly rule_id?: string;
-  readonly label?: string;
-  readonly enabled?: boolean;
-  readonly a?: BuilderVisualLinkEndpoint;
-  readonly b?: BuilderVisualLinkEndpoint;
-  readonly topology_mode?: BuilderVisualTopologyMode | null;
-  readonly topology_n?: number | null;
-  readonly max_range_km?: number | null;
-}
-
-/** Editable routing domain; empty membership remains visible to validation. */
-export interface BuilderVisualRoutingDomain {
-  readonly domain_id?: string;
-  readonly label?: string;
-  readonly protocol?: "isis" | "ospf" | "bgp" | "static" | null;
-  readonly member_segment_ids?: ReadonlyArray<string>;
-  readonly hello_interval_s?: number | null;
-  readonly hold_interval_s?: number | null;
-}
-
-/** Editable routing boundary assembled without omission. */
-export interface BuilderVisualRoutingBoundary {
-  readonly boundary_id?: string;
-  readonly over_rule_id?: string;
-  readonly adapter?: "static_ip" | "bgp" | "dtn_bundle" | null;
-  readonly from_domain_id?: string;
-  readonly to_domain_id?: string;
-  readonly export_node_loopbacks?: boolean;
-}
-
-/** Closed visual workspace whose persisted grammar is assembled by VS-API. */
-export interface BuilderVisualWorkspace {
-  readonly session_name?: string;
-  readonly display_name?: string | null;
-  readonly description?: string | null;
-  readonly space?: ReadonlyArray<BuilderVisualSpaceDraft>;
-  readonly space_refs?: ReadonlyArray<BuilderVisualSpaceReference>;
-  readonly ground?: ReadonlyArray<BuilderVisualGroundDraft>;
-  readonly ground_refs?: ReadonlyArray<BuilderVisualGroundReference>;
-  readonly links?: ReadonlyArray<BuilderVisualLinkRule>;
-  readonly routing_domains?: ReadonlyArray<BuilderVisualRoutingDomain>;
-  readonly boundaries?: ReadonlyArray<BuilderVisualRoutingBoundary>;
-  readonly max_pairs_per_rule?: number | null;
-  readonly max_pairs_per_tick?: number | null;
-  readonly start_time?: string;
-  readonly step_seconds?: number | null;
-  readonly compression?: number | null;
-}
-
-/** One revision of a stateless YAML buffer plus explicit authoring and applied facts. */
-export interface BuilderVisualDraftEnvelope {
-  readonly draft_revision: number;
-  readonly projection_status: BuilderVisualDraftProjectionStatus;
-  readonly target_ref: SessionRef;
-  readonly source_ref?: SessionRef | null;
-  readonly expected_session_revision?: string | null;
-  readonly catalog_documents?: ReadonlyArray<BuilderProposedCatalogDocument>;
-  readonly session_name_is_placeholder: boolean;
-  readonly reserved_authoring_ids: ReadonlyArray<string>;
-  readonly session_yaml: string;
-  readonly authoring_workspace?: BuilderVisualWorkspace | null;
-  readonly applied_workspace?: BuilderVisualWorkspace | null;
-  readonly applied_revision?: number | null;
-  readonly applied_session?: Readonly<Record<string, JsonValue>> | null;
-  readonly control_tree?: BuilderControlTree | null;
-}
-
-/** Request a backend-created blank structured visual draft. */
-export interface BuilderVisualDraftCreateRequest {
-  readonly session_name?: string | null;
-  readonly display_name?: string | null;
-  readonly description?: string | null;
-}
-
-/** Open any stored session as synchronized YAML and graphical projections. */
-export interface BuilderVisualDraftOpenRequest {
-  readonly source_ref: SessionRef;
-  readonly target_ref?: SessionRef | null;
-}
-
-/** Apply one complete graphical workspace to a fenced draft revision. */
-export interface BuilderVisualDraftApplyWorkspaceRequest {
-  readonly draft: BuilderVisualDraftEnvelope;
-  readonly expected_draft_revision: number;
-  readonly workspace: BuilderVisualWorkspace;
-}
-
-/** Apply one exact session YAML buffer to a fenced visual draft revision. */
-export interface BuilderVisualDraftApplyYamlRequest {
-  readonly draft: BuilderVisualDraftEnvelope;
-  readonly expected_draft_revision: number;
-  readonly buffer_generation: number;
-  readonly yaml_text: string;
-}
-
-/** Applied projection or typed refusal for one exact session YAML buffer. */
-export interface BuilderVisualDraftApplyYamlResult {
-  readonly draft: BuilderVisualDraftEnvelope;
-  readonly buffer_generation: number;
-  readonly yaml_text: string;
-  readonly applied: boolean;
-  readonly canonicalization_required: boolean;
-  readonly issues?: ReadonlyArray<BuilderIssue>;
-}
-
-/** Prepare a fenced draft for saving under one exact user session ref. */
-export interface BuilderVisualDraftRetargetRequest {
-  readonly draft: BuilderVisualDraftEnvelope;
-  readonly expected_draft_revision: number;
-  readonly target_ref: SessionRef;
-}
-
-/** Compile a complete visual draft through backend assembly and grammar authorities. With a workspace, the compile assembles that workspace over the draft and accepts nothing: the draft and its revision stay as they were. */
-export interface BuilderVisualDraftCompileRequest {
-  readonly draft: BuilderVisualDraftEnvelope;
-  readonly workspace?: BuilderVisualWorkspace | null;
-}
-
-/** Backend assembly, typed issues, save request, and authoritative compile facts. */
-export interface BuilderVisualDraftAssemblyResult {
-  readonly visual_draft: BuilderVisualDraftEnvelope;
-  readonly assembled_draft: BuilderDraftEnvelope;
-  readonly save_request: BuilderSessionSaveRequest;
-  readonly compile_result: BuilderCompileResult;
-  readonly assembly_issues?: ReadonlyArray<BuilderIssue>;
-}
-
-/** Stable, path-free refusal evidence for one request. ``code`` is the refusing component's own vocabulary (an exception family's enum value or one fixed name per family). ``message`` names the declared inputs and catalog references involved; the host filesystem and other exceptions' text never appear in it. ``cause_type`` is the class name of a wrapped cause when the refusal carries one. */
-export interface ApiRefusal {
-  readonly code: string;
-  readonly message: string;
-  readonly cause_type?: string | null;
-}
-
-/** First-class catalog session selected inside a server-owned scope. */
-export interface CatalogSessionSourceId {
-  readonly kind?: "catalog";
-  readonly session_ref: SessionRef;
-}
-
-/** Revisioned browser listing for one scoped catalog session. */
-export interface CatalogSessionSummary {
-  readonly source_id: CatalogSessionSourceId;
-  readonly name: string;
-  readonly source: "nodalarc" | "user";
-  readonly constellation: string;
-  readonly routing_stack: string;
-  readonly deploy_allowed: boolean;
-  readonly source_revision?: Sha256Digest | null;
-  readonly document_digest?: Sha256Digest | null;
-  readonly dependency_digest?: Sha256Digest | null;
-  readonly blockers?: ReadonlyArray<ApiRefusal>;
-  readonly active?: boolean;
-}
-
-/** Deploy one reviewed session revision from the request catalog scope. */
-export interface CatalogSessionSwitchRequest {
-  readonly source: CatalogSessionSourceId;
-  readonly expected_source_revision: Sha256Digest;
-  readonly expected_document_digest: Sha256Digest;
-  readonly expected_dependency_digest: Sha256Digest;
-  readonly record_history: boolean;
-}
-
-/** Accepted catalog deployment operation. */
-export interface CatalogSessionSwitchAccepted {
-  readonly status?: "accepted";
-  readonly operation_id: string;
-  readonly source: CatalogSessionSourceId;
-}
-
-/** One standard persisted session document to save into the user catalog. */
-export interface CatalogSessionYamlUploadRequest {
-  readonly yaml: string;
-  readonly record_history: boolean;
-}
-
-/** One whitelisted vtysh command addressed to one runtime node. */
-export interface IntrospectRequest {
-  readonly node_id: string;
-  readonly command: string;
-}
-
-/** The exact output and exit status of one executed vtysh command. */
-export interface IntrospectResult {
-  readonly node_id: string;
-  readonly command: string;
-  readonly output: string;
-  readonly exit_code: number;
-  readonly stderr: string;
-}
-
-/** VS-API is serving, and where its session manager stands. */
-export interface HealthStatus {
-  readonly status: "ok";
-  readonly session_status: "idle" | "switching" | "wiring" | "ready" | "error";
-}
-
-/** The project's attribution and the build serving it. */
-export interface ProjectAbout {
-  readonly name: string;
-  readonly version: string;
-  readonly revision: string;
-  readonly build_date: string;
-  readonly author: string;
-  readonly copyright: string;
-  readonly source: string;
-  readonly url: string;
-  readonly license: string;
-  readonly notice: string;
-}
-
-/** The API key a client sends as its bearer token. */
-export interface AuthToken {
-  readonly token: string;
-}
-
-/** The continuous trace now runs between these two nodes. */
-export interface ContinuousTraceStarted {
-  readonly ok: true;
-  readonly src: string;
-  readonly dst: string;
-}
-
-/** No continuous trace runs. */
-export interface ContinuousTraceStopped {
-  readonly ok: true;
-}
-
-/** The live measured path between two nodes: one traceroute per direction. Each direction lists what answered at every hop, in hop order, after the node the trace starts from: a node id when the resolver assigned the answering address to that node, the address itself when no node owns it, and ``*`` when nothing answered. ``state`` says how the trace ended. ``rtt_ms`` is the destination's round trip and exists only when the destination answered; ``error`` exists only when the trace could not run. ``asymmetry_detected`` exists only when both directions reached their destination and every hop between the ends answered from a node's address. ``tracing`` is false once the trace loop has stopped; the last result then stays until the trace is stopped or restarted. ``stop_reason`` says why a continuous trace stopped on its own; a one-shot trace and a running trace have none. */
-export interface TracedPath {
-  readonly continuous_trace: boolean;
-  readonly src_node: string;
-  readonly dst_node: string;
-  readonly hops: ReadonlyArray<string>;
-  readonly hop_rtts: ReadonlyArray<number | null>;
-  readonly state: "running" | "reached" | "not_reached" | "failed";
-  readonly rtt_ms: number | null;
-  readonly error: string | null;
-  readonly reverse_hops: ReadonlyArray<string>;
-  readonly reverse_hop_rtts: ReadonlyArray<number | null>;
-  readonly reverse_state: "running" | "reached" | "not_reached" | "failed";
-  readonly reverse_rtt_ms: number | null;
-  readonly reverse_error: string | null;
-  readonly asymmetry_detected: boolean | null;
-  readonly tracing: boolean;
-  readonly traced_at: string;
-  readonly sim_time: string;
-  readonly stop_reason?: "time_limit" | "internal_error" | null;
-}
-
-/** The continuous trace's endpoints and latest result. ``active`` turns false when the trace stops on its own, which keeps its endpoints and last result until it is stopped or replaced; all are empty when no trace was started. */
-export interface ContinuousTraceStatus {
-  readonly active: boolean;
-  readonly src: string | null;
-  readonly dst: string | null;
-  readonly result: TracedPath | null;
-}
-
-/** The two nodes a trace runs between. */
-export interface TraceRequest {
-  readonly src_node: string;
-  readonly dst_node: string;
-}
-
-/** One instance of the service changed its log level. The request reaches every instance; this is the first one's reply, not a statement about the others. */
-export interface DebugControlAcknowledgedFact {
-  readonly source: "ome" | "scheduler" | "node_agent" | "operator" | "vs_api";
-  readonly request_seq: number;
-  readonly request: "enable" | "disable";
-  readonly outcome: "acknowledged";
-  readonly level: string;
-}
-
-/** One instance of the service refused the request. */
-export interface DebugControlRejectedFact {
-  readonly source: "ome" | "scheduler" | "node_agent" | "operator" | "vs_api";
-  readonly request_seq: number;
-  readonly request: "enable" | "disable";
-  readonly outcome: "rejected";
-  readonly error: string;
-}
-
-/** No instance replied in time, or no instance was listening. */
-export interface DebugControlUnansweredFact {
-  readonly source: "ome" | "scheduler" | "node_agent" | "operator" | "vs_api";
-  readonly request_seq: number;
-  readonly request: "enable" | "disable";
-  readonly outcome: "timed_out" | "no_responders";
-}
-
-/** VS-API could not send the request or could not read the reply. */
-export interface DebugControlFailedFact {
-  readonly source: "ome" | "scheduler" | "node_agent" | "operator" | "vs_api";
-  readonly request_seq: number;
-  readonly request: "enable" | "disable";
-  readonly outcome: "failed";
-  readonly error: string;
-}
-
-/** The page asks for these services' debug output. */
-export interface DebugStreamCommand {
-  readonly action: "debug_stream";
-  readonly sources: ReadonlyArray<"ome" | "scheduler" | "node_agent" | "operator" | "vs_api">;
-}
-
-/** The page stops asking for these services' debug output. */
-export interface DebugStopCommand {
-  readonly action: "debug_stop";
-  readonly sources: ReadonlyArray<"ome" | "scheduler" | "node_agent" | "operator" | "vs_api">;
-}
-
-/** The page stops asking for any debug output. */
-export interface DebugStopAllCommand {
-  readonly action: "debug_stop_all";
-}
-
-/** Keystrokes the browser sends to a node's terminal. */
-export interface TerminalInput {
-  readonly type: "input";
-  readonly data: string;
-}
-
-/** The browser's terminal window changed size. */
-export interface TerminalResize {
-  readonly type: "resize";
-  readonly cols: number;
-  readonly rows: number;
-}
-
-/** What the node's terminal printed. */
-export interface TerminalOutput {
-  readonly type: "output";
-  readonly data: string;
-}
-
-/** What an operator sends to repair one station. VS-API fills the Scheduler instance and wiring generation from the station's latest actuation state when the request leaves them out, then sends an OperatorRepairCommand. */
-export interface OperatorRepairRequest {
-  readonly gs_id: string;
-  readonly reason: string;
-  readonly scheduler_instance_id?: string | null;
-  readonly wiring_generation?: string | null;
-  readonly intervention_id?: string | null;
-}
-
-/** Validated command payload for the OME playback-control subject. */
-export interface PlaybackControlCommand {
-  readonly action: "pause" | "resume" | "set_speed" | "seek" | "get_status";
-  readonly factor?: number | null;
-  readonly target_sim_time?: string | null;
-}
-
-/** OME playback state — seeking/playing/paused. Published to NODALARC_SESSION stream (MaxMsgsPerSubject=1) at every state transition. Late-joining subscribers immediately know current state. The 'seeking' state is a mutex — edges must suspend until all epoch dependencies are satisfied. */
-export interface PlaybackState {
-  readonly epoch_id: number;
-  readonly state: "seeking" | "playing" | "paused";
-}
-
-/** The filters and page of a link history request. */
-export interface LinkHistoryQuery {
-  readonly start?: string | null;
-  readonly end?: string | null;
-  readonly node?: string | null;
-  readonly peer?: string | null;
-  readonly order?: "oldest_first" | "newest_first";
-  readonly limit?: number;
-  readonly cursor?: string | null;
-}
-
-/** Filters on the operator-visible ops log. */
-export interface OpsEventsQuery {
-  readonly source?: "ome" | "scheduler" | "node_agent" | "operator" | "vs_api" | null;
-  readonly level?: "critical" | "error" | "warning" | "info" | "debug" | null;
-  readonly limit?: number;
-}
-
-/** Both nodes name one link's decision trace; neither returns every trace. Naming one node alone is refused. */
-export interface LinkDecisionTracesQuery {
-  readonly node_a?: string | null;
-  readonly node_b?: string | null;
-}
-
-/** The ground station to explain, and optionally one satellite paired with it. */
-export interface DecisionExplanationQuery {
-  readonly gs: string;
-  readonly sat?: string | null;
-}
-
-/** The ground station whose recent decisions to return, and how many. */
-export interface DecisionTimelineQuery {
-  readonly gs: string;
-  readonly limit?: number;
-}
-
-/** The node whose candidate pairs to return; the whole snapshot when absent. */
-export interface GroundLinkDecisionsQuery {
-  readonly node?: string | null;
-}
-
-/** The scoped catalog session whose stored YAML to download. */
-export interface CatalogSessionYamlQuery {
-  readonly session_ref: string;
-}
-
-/**  */
-export interface TransitionOperationSource {
-  readonly kind: TransitionOperationSourceKind;
-  readonly logical_id: string;
-}
-
-/** Reviewed, browser-safe facts bound to one operation. */
-export interface TransitionOperationFacts {
-  readonly document_digest?: Sha256Digest | null;
-  readonly closure_digest?: Sha256Digest | null;
-  readonly resolved_semantic_digest?: Sha256Digest | null;
-  readonly file_count?: number | null;
-  readonly total_bytes?: number | null;
-  readonly release: string;
-  readonly build: string;
-}
-
-/**  */
-export interface TransitionOperationEvent {
-  readonly state: TransitionOperationState;
-  readonly occurred_at: string;
-  readonly detail?: string | null;
-}
-
-/**  */
-export interface TransitionOperationFailure {
-  readonly code: string;
-  readonly message: string;
-  readonly cause_type?: string | null;
-}
-
-/**  */
-export interface TransitionRuntimeResult {
-  readonly session_id: string;
-  readonly generation: number;
-}
-
-/** Public, path-free representation returned for an opaque operation ID. */
-export interface TransitionOperation {
-  readonly operation_id: string;
-  readonly state: TransitionOperationState;
-  readonly source: TransitionOperationSource;
-  readonly facts: TransitionOperationFacts;
-  readonly created_at: string;
-  readonly updated_at: string;
-  readonly events: ReadonlyArray<TransitionOperationEvent>;
-  readonly failure?: TransitionOperationFailure | null;
-  readonly runtime?: TransitionRuntimeResult | null;
-}
-
-/** Backend-owned authoring capabilities for one public catalog family. */
-export interface CatalogFamilyMetadata {
-  readonly family: CatalogFamily;
-  readonly wrapper?: string | null;
-  readonly direct_user_write: boolean;
-  readonly component_fork: boolean;
-  readonly session_draft_save: boolean;
-  readonly suggested_object_id?: string | null;
-}
-
-/** Backend capabilities available to the Builder. */
-export interface BuilderCatalogCapabilities {
-  readonly user_catalog_write?: true;
-  readonly deploy_yaml_closure?: true;
-}
-
-/** Typed presentation metadata for one backend-owned scheduling preset. */
-export interface BuilderVisualSchedulingPresetMetadata {
-  readonly id: BuilderVisualSchedulingPreset;
-  readonly label: string;
-}
-
-/** Presentation facts for one canonical terminal-mount role. */
-export interface BuilderVisualMountRoleMetadata {
-  readonly id: WizardTerminalRole;
-  readonly label: string;
-  readonly description: string;
-}
-
-/** Presentation facts for one canonical link-terminal medium. */
-export interface BuilderVisualLinkMediumMetadata {
-  readonly id: "rf" | "optical";
-  readonly label: string;
-}
-
-/** Presentation facts for one canonical node forwarding class. */
-export interface BuilderVisualForwardingClassMetadata {
-  readonly id: "routed" | "host" | "bridge" | "control_only";
-  readonly label: string;
-}
-
-/** Presentation and runtime facts for one routing protocol. */
-export interface BuilderVisualRoutingProtocolMetadata {
-  readonly runtime_supported: boolean;
-  readonly support_note?: string | null;
-  readonly id: "isis" | "ospf" | "bgp" | "static";
-  readonly label: string;
-  readonly timer_fields: boolean;
-}
-
-/** Presentation and runtime facts for one routing-boundary adapter. */
-export interface BuilderVisualBoundaryAdapterMetadata {
-  readonly runtime_supported: boolean;
-  readonly support_note?: string | null;
-  readonly id: "static_ip" | "bgp" | "dtn_bundle";
-  readonly label: string;
-}
-
-/** Presentation facts for one canonical constellation phasing mode. */
-export interface BuilderVisualPhasingModeMetadata {
-  readonly id: BuilderVisualPhasingMode;
-  readonly label: string;
-}
-
-/** Presentation facts for one visual orbit-shape form. */
-export interface BuilderVisualOrbitShapeMetadata {
-  readonly id: BuilderVisualOrbitShape;
-  readonly label: string;
-}
-
-/** Presentation and runtime facts for one visual link topology mode. */
-export interface BuilderVisualTopologyModeMetadata {
-  readonly runtime_supported: boolean;
-  readonly support_note?: string | null;
-  readonly id: BuilderVisualTopologyMode;
-  readonly label: string;
-  readonly requires_n: boolean;
-}
-
-/** Backend-owned choices and seeds used by the visual authoring surface. */
-export interface BuilderVisualAuthoringFacts {
-  readonly default_phasing_mode: BuilderVisualPhasingMode;
-  readonly single_plane_phasing_mode: BuilderVisualPhasingMode;
-  readonly default_mount_role: WizardTerminalRole;
-  readonly default_body_ref: string;
-  readonly space_access_boresight: BuilderVisualSpaceBoresight;
-  readonly ground_access_boresight: BuilderVisualGroundBoresight;
-  readonly mount_roles: ReadonlyArray<BuilderVisualMountRoleMetadata>;
-  readonly link_media: ReadonlyArray<BuilderVisualLinkMediumMetadata>;
-  readonly forwarding_classes: ReadonlyArray<BuilderVisualForwardingClassMetadata>;
-  readonly routing_protocols: ReadonlyArray<BuilderVisualRoutingProtocolMetadata>;
-  readonly boundary_adapters: ReadonlyArray<BuilderVisualBoundaryAdapterMetadata>;
-  readonly phasing_modes: ReadonlyArray<BuilderVisualPhasingModeMetadata>;
-  readonly orbit_shapes: ReadonlyArray<BuilderVisualOrbitShapeMetadata>;
-  readonly topology_modes: ReadonlyArray<BuilderVisualTopologyModeMetadata>;
-}
-
-/** Public documentation and catalog metadata needed to start Builder authoring. */
-export interface BuilderCatalogBootstrap {
-  readonly public_grammar_href: string;
-  readonly capabilities: BuilderCatalogCapabilities;
-  readonly families: ReadonlyArray<CatalogFamilyMetadata>;
-  readonly scheduling_presets: ReadonlyArray<BuilderVisualSchedulingPresetMetadata>;
-  readonly authoring: BuilderVisualAuthoringFacts;
+  readonly kind: "access" | "isl" | "inter_body";
+  readonly allocated_pairs: number;
+  readonly per_node: ReadonlyArray<BuilderNodeInterfaceFacts>;
+}
+
+/** The server's frozen-epoch visibility verdict for one link rule. NodalArc computes preview geometry through the same OME visibility composites the runtime uses; the builder renders these facts and never runs a second physics engine. ``preview_scope`` says whether geometry ran and, if not, why. Only ``computed`` carries reason counts and drawn pairs. The preview is bounded, not a simulation. ``pairs_total`` is the candidate universe size (a closed-form count, never a materialized pair set); ``pairs_tested`` is the deterministic subset geometry actually ran on (``min(pairs_total, budget)``, first pairs in authored/node-id order — never distance-ranked); ``pairs_drawn`` is how many tested pairs passed (the first such, capped to the draw cap). ``capped`` is true when the preview is partial on either axis (``pairs_tested < pairs_total`` or more passed than were drawn). Reason counts and drawn pairs describe the tested subset only. */
+export interface BuilderRulePreview {
+  readonly rule_id: string;
+  readonly preview_scope: "computed" | "inter_body_pending" | "terrestrial_pending" | "disabled";
+  readonly pairs_total: number;
+  readonly pairs_tested: number;
+  readonly pairs_drawn: number;
+  readonly capped: boolean;
+  readonly reason_counts: ReadonlyArray<BuilderPreviewReasonCount>;
+  readonly drawable_pairs: ReadonlyArray<BuilderPreviewPair>;
 }
 
 /** Pydantic-derived restrictions used to configure one scalar widget. */
@@ -1355,58 +370,11 @@ export interface BuilderScalarControl {
   readonly reference_families?: ReadonlyArray<CatalogFamily>;
 }
 
-/** One canonical model field and its graphical control. */
-export interface BuilderObjectField {
-  readonly field_name: string;
-  readonly wire_name: string;
-  readonly control: BuilderScalarControl | BuilderObjectControl | BuilderChoiceControl | BuilderSequenceControl | BuilderMapControl;
-}
-
-/** A structured object editor, including explicit empty parameter objects. */
-export interface BuilderObjectControl {
+/**  */
+export interface BuilderSelectChoiceCommand {
+  readonly operation: "select_choice";
   readonly control_id: string;
-  readonly json_pointer: string;
-  readonly label: string;
-  readonly required: boolean;
-  readonly present: boolean;
-  readonly editable?: true;
-  readonly specialized?: boolean;
-  readonly description?: string | null;
-  readonly kind?: "object";
-  readonly model_name?: string | null;
-  readonly fields?: ReadonlyArray<BuilderObjectField>;
-  readonly empty_parameters?: boolean;
-  readonly recursive_reference?: boolean;
-}
-
-/** One selectable Literal, union type, or null branch. */
-export interface BuilderChoiceBranch {
   readonly branch_id: string;
-  readonly label: string;
-  readonly branch_kind: "literal" | "type" | "null";
-  readonly selected: boolean;
-  readonly literal_value?: string | number | boolean | null;
-  readonly control?: BuilderScalarControl | BuilderObjectControl | BuilderChoiceControl | BuilderSequenceControl | BuilderMapControl | null;
-}
-
-/** A compact selector whose branches remain fully typed. */
-export interface BuilderChoiceControl {
-  readonly control_id: string;
-  readonly json_pointer: string;
-  readonly label: string;
-  readonly required: boolean;
-  readonly present: boolean;
-  readonly editable?: true;
-  readonly specialized?: boolean;
-  readonly description?: string | null;
-  readonly kind?: "choice";
-  readonly branches: ReadonlyArray<BuilderChoiceBranch>;
-}
-
-/** One typed row in an ordered sequence. */
-export interface BuilderSequenceItem {
-  readonly index: number;
-  readonly control: BuilderScalarControl | BuilderObjectControl | BuilderChoiceControl | BuilderSequenceControl | BuilderMapControl;
 }
 
 /** A typed row editor for variable or fixed-length sequences. */
@@ -1429,44 +397,64 @@ export interface BuilderSequenceControl {
   readonly max_items?: number | null;
 }
 
-/** One typed key/value row in a mapping. */
-export interface BuilderMapEntry {
-  readonly key: BuilderScalarControl | BuilderObjectControl | BuilderChoiceControl | BuilderSequenceControl | BuilderMapControl;
-  readonly value: BuilderScalarControl | BuilderObjectControl | BuilderChoiceControl | BuilderSequenceControl | BuilderMapControl;
+/** One typed row in an ordered sequence. */
+export interface BuilderSequenceItem {
+  readonly index: number;
+  readonly control: BuilderScalarControl | BuilderObjectControl | BuilderChoiceControl | BuilderSequenceControl | BuilderMapControl;
 }
 
-/** A typed mapping editor with explicit key and value controls. */
-export interface BuilderMapControl {
-  readonly control_id: string;
-  readonly json_pointer: string;
-  readonly label: string;
-  readonly required: boolean;
-  readonly present: boolean;
-  readonly editable?: true;
-  readonly specialized?: boolean;
-  readonly description?: string | null;
-  readonly kind?: "map";
-  readonly entries?: ReadonlyArray<BuilderMapEntry>;
-  readonly add_key_control: BuilderScalarControl | BuilderObjectControl | BuilderChoiceControl | BuilderSequenceControl | BuilderMapControl;
-  readonly add_value_control: BuilderScalarControl | BuilderObjectControl | BuilderChoiceControl | BuilderSequenceControl | BuilderMapControl;
-  readonly can_add?: true;
-  readonly can_remove?: true;
-  readonly can_rename_keys?: true;
-  readonly min_entries?: number | null;
-  readonly max_entries?: number | null;
+/** Opaque accepted operation bound to the exact requested catalog source. */
+export interface BuilderSessionDeployAccepted {
+  readonly operation_id: string;
+  readonly status: "accepted";
+  readonly source: BuilderSessionDeployRequest;
 }
 
-/** Complete graphical control projection for one applied configuration revision. */
-export interface BuilderControlTree {
-  readonly projection_revision: number;
-  readonly root: BuilderObjectControl;
+/** Stable, path-free refusal for one guarded saved-session deployment. ``code`` is the refusing component's own vocabulary, the same one the ``ApiRefusal`` envelope carries; this model adds the deployment's identity and precondition evidence. */
+export interface BuilderSessionDeployRefusal {
+  readonly code: string;
+  readonly message: string;
+  readonly session_ref: SessionRef;
+  readonly expected: string | null;
+  readonly observed: string | null;
+  readonly cause_type: string | null;
 }
 
-/**  */
-export interface BuilderSetScalarCommand {
-  readonly operation: "set_scalar";
-  readonly control_id: string;
-  readonly value: string | number | boolean;
+/** Request deployment of one exact saved session revision and closure. */
+export interface BuilderSessionDeployRequest {
+  readonly session_ref: SessionRef;
+  readonly expected_session_revision: string;
+  readonly expected_document_digest: Sha256Digest;
+  readonly expected_dependency_digest: Sha256Digest;
+  readonly record_history: boolean;
+}
+
+/** Stable transport evidence for a Builder session save that did not succeed. */
+export interface BuilderSessionSaveRefusal {
+  readonly code: "builder_session_save.save_blocked" | "builder_session_save.stale_write" | "builder_session_save.graph_invalid" | "builder_session_save.persistence_failed" | "builder_session_save.storage_verification_failed";
+  readonly message: string;
+  readonly target_ref: SessionRef;
+  readonly base_generation: string | null;
+  readonly repository_committed: boolean;
+  readonly issues: ReadonlyArray<BuilderIssue>;
+  readonly cause_type: string | null;
+  readonly compile_result: BuilderCompileResult | null;
+}
+
+/** Transactional request to publish a complete draft as a catalog session. */
+export interface BuilderSessionSaveRequest {
+  readonly draft: BuilderDraftEnvelope;
+  readonly target_ref: SessionRef;
+  readonly expected_session_revision?: string | null;
+}
+
+/** Exact saved document identity plus its saved-revision deploy verdict. */
+export interface BuilderSessionSaveResult {
+  readonly session: BuilderCatalogDocument;
+  readonly digests: BuilderDigests;
+  readonly dependency_closure: DependencyClosureInventory;
+  readonly deploy_verdict: BuilderDeployVerdict;
+  readonly issues: ReadonlyArray<BuilderIssue>;
 }
 
 /**  */
@@ -1477,126 +465,613 @@ export interface BuilderSetPresentCommand {
 }
 
 /**  */
-export interface BuilderSelectChoiceCommand {
-  readonly operation: "select_choice";
+export interface BuilderSetScalarCommand {
+  readonly operation: "set_scalar";
   readonly control_id: string;
-  readonly branch_id: string;
+  readonly value: string | number | boolean;
 }
 
-/**  */
-export interface BuilderInsertItemCommand {
-  readonly operation: "insert_item";
-  readonly control_id: string;
-  readonly index: number;
+/** Backend-owned allow/block decision for one workflow operation. */
+export interface BuilderVerdict {
+  readonly operation: BuilderBlockedOperation;
+  readonly allowed: boolean;
+  readonly blockers: ReadonlyArray<BuilderIssue>;
 }
 
-/**  */
-export interface BuilderRemoveItemCommand {
-  readonly operation: "remove_item";
-  readonly control_id: string;
-  readonly index: number;
+/** Add one backend-seeded routing boundary. */
+export interface BuilderVisualAddBoundaryCommand {
+  readonly operation: "add_boundary";
 }
 
-/**  */
-export interface BuilderMoveItemCommand {
-  readonly operation: "move_item";
-  readonly control_id: string;
-  readonly from_index: number;
-  readonly to_index: number;
+/** Add one backend-seeded generated constellation draft. */
+export interface BuilderVisualAddGeneratedSpaceCommand {
+  readonly operation: "add_generated_space";
+  readonly node_ref?: string | null;
+  readonly phasing_mode: BuilderVisualPhasingMode;
 }
 
-/**  */
-export interface BuilderInsertMapEntryCommand {
-  readonly operation: "insert_map_entry";
-  readonly control_id: string;
-  readonly key: string | number | boolean;
-  readonly value?: string | number | boolean | null;
+/** Add one backend-seeded authored ground-segment draft. */
+export interface BuilderVisualAddGroundCommand {
+  readonly operation: "add_ground";
+  readonly node_ref?: string | null;
+  readonly installed?: Readonly<Record<string, number>>;
+  readonly boresights?: Readonly<Record<string, BuilderVisualGroundBoresight>>;
+  readonly body_ref?: string | null;
 }
 
-/**  */
-export interface BuilderRemoveMapEntryCommand {
-  readonly operation: "remove_map_entry";
-  readonly control_id: string;
-  readonly index: number;
+/** Add one backend-seeded node installation to an authored site. */
+export interface BuilderVisualAddGroundSiteNodeCommand {
+  readonly operation: "add_ground_site_node";
+  readonly segment_id: string;
+  readonly member_id: string;
+  readonly node_ref?: string | null;
 }
 
-/**  */
-export interface BuilderRenameMapKeyCommand {
-  readonly operation: "rename_map_key";
-  readonly control_id: string;
-  readonly index: number;
-  readonly key: string | number | boolean;
+/** Place one existing site, creating its authored ground segment when needed. */
+export interface BuilderVisualAddGroundSiteReferenceCommand {
+  readonly operation: "add_ground_site_reference";
+  readonly segment_id?: string | null;
+  readonly site_ref: string;
 }
 
-/** Bounded catalog-list request using an opaque server cursor. */
-export interface CatalogListRequest {
-  readonly family?: CatalogFamily | null;
-  readonly namespace?: "nodalarc" | "user" | null;
-  readonly page_size?: number;
-  readonly page_token?: string | null;
+/** Add one uniquely identified Ethernet port to an authored inline node. */
+export interface BuilderVisualAddNodeEthernetPortCommand {
+  readonly operation: "add_node_ethernet_port";
+  readonly segment_id: string;
 }
 
-/** Revisioned metadata for one catalog library row. */
-export interface CatalogDocumentSummary {
-  readonly ref: CatalogRef;
-  readonly namespace: "nodalarc" | "user";
-  readonly family: CatalogFamily;
-  readonly revision: string;
-  readonly size_bytes: number;
-  readonly display_name: string;
-  readonly summary?: string | null;
-}
-
-/** One deterministic page pinned to an immutable catalog generation. */
-export interface CatalogListPage {
-  readonly generation: string;
-  readonly items: ReadonlyArray<CatalogDocumentSummary>;
-  readonly next_page_token?: string | null;
-}
-
-/** Request one catalog document by namespace-qualified identity. */
-export interface CatalogGetRequest {
-  readonly ref: CatalogRef;
-}
-
-/** Create or compare-and-swap replace one complete user component. */
-export interface CatalogDocumentWriteRequest {
-  readonly ref: CatalogRef;
-  readonly document: Readonly<Record<string, JsonValue>>;
-  readonly expected_revision?: string | null;
-}
-
-/** Add one node terminal mount with backend-generated persisted fields. */
-export interface CatalogDraftAddNodeTerminalMountRequest {
-  readonly draft: CatalogComponentDraftState;
-  readonly expected_draft_revision: number;
+/** Mount a selected terminal or increment the matching backend-owned mount. */
+export interface BuilderVisualAddOrIncrementNodeTerminalCommand {
+  readonly operation: "add_or_increment_node_terminal";
+  readonly segment_id: string;
   readonly terminal_ref: string;
   readonly role: WizardTerminalRole;
 }
 
-/** Add one node Ethernet port with a backend-generated unique identifier. */
-export interface CatalogDraftAddNodeEthernetPortRequest {
-  readonly draft: CatalogComponentDraftState;
-  readonly expected_draft_revision: number;
+/** Add one backend-seeded routing domain over uncovered segments. */
+export interface BuilderVisualAddRoutingDomainCommand {
+  readonly operation: "add_routing_domain";
 }
 
-/** Add one explicitly identified node using backend-derived persisted fields. */
-export interface CatalogDraftAddSiteNodeRequest {
-  readonly draft: CatalogComponentDraftState;
+/** Create one backend-seeded inline node for an authored space segment. */
+export interface BuilderVisualAuthorInlineSpaceNodeCommand {
+  readonly operation: "author_inline_space_node";
+  readonly segment_id: string;
+}
+
+/** Backend-owned choices and seeds used by the visual authoring surface. */
+export interface BuilderVisualAuthoringFacts {
+  readonly default_phasing_mode: BuilderVisualPhasingMode;
+  readonly single_plane_phasing_mode: BuilderVisualPhasingMode;
+  readonly default_mount_role: WizardTerminalRole;
+  readonly default_body_ref: string;
+  readonly space_access_boresight: BuilderVisualSpaceBoresight;
+  readonly ground_access_boresight: BuilderVisualGroundBoresight;
+  readonly mount_roles: ReadonlyArray<BuilderVisualMountRoleMetadata>;
+  readonly link_media: ReadonlyArray<BuilderVisualLinkMediumMetadata>;
+  readonly forwarding_classes: ReadonlyArray<BuilderVisualForwardingClassMetadata>;
+  readonly routing_protocols: ReadonlyArray<BuilderVisualRoutingProtocolMetadata>;
+  readonly boundary_adapters: ReadonlyArray<BuilderVisualBoundaryAdapterMetadata>;
+  readonly phasing_modes: ReadonlyArray<BuilderVisualPhasingModeMetadata>;
+  readonly orbit_shapes: ReadonlyArray<BuilderVisualOrbitShapeMetadata>;
+  readonly topology_modes: ReadonlyArray<BuilderVisualTopologyModeMetadata>;
+}
+
+/** Presentation and runtime facts for one routing-boundary adapter. */
+export interface BuilderVisualBoundaryAdapterMetadata {
+  readonly runtime_supported: boolean;
+  readonly support_note: string | null;
+  readonly id: "static_ip" | "bgp" | "dtn_bundle";
+  readonly label: string;
+}
+
+/** Create a link rule whose initial physics comes from both endpoints. */
+export interface BuilderVisualConnectSegmentsCommand {
+  readonly operation: "connect_segments";
+  readonly from_segment_id: string;
+  readonly to_segment_id: string;
+}
+
+/** Apply an atomic batch through revision-scoped backend control identities. */
+export interface BuilderVisualControlMutationRequest {
+  readonly draft: BuilderVisualDraftEnvelope;
   readonly expected_draft_revision: number;
+  readonly commands: ReadonlyArray<BuilderSetScalarCommand | BuilderSetPresentCommand | BuilderSelectChoiceCommand | BuilderInsertItemCommand | BuilderRemoveItemCommand | BuilderMoveItemCommand | BuilderInsertMapEntryCommand | BuilderRemoveMapEntryCommand | BuilderRenameMapKeyCommand>;
+}
+
+/** One source-to-user fork in a minimal nested customization path. */
+export interface BuilderVisualCustomizeChainEntry {
+  readonly source_ref: CatalogRef;
+  readonly target_ref: CatalogRef;
+}
+
+/** Fork the minimal catalog ancestor path for one placed nested component. */
+export interface BuilderVisualCustomizeChainRequest {
+  readonly draft: BuilderVisualDraftEnvelope;
+  readonly expected_draft_revision: number;
+  readonly segment_id: string;
+  readonly leaf_ref: CatalogRef;
+  readonly target_leaf_ref?: CatalogRef | null;
+}
+
+/** Updated draft or typed refusal evidence for one customize-chain command. */
+export interface BuilderVisualCustomizeChainResult {
+  readonly applied: boolean;
+  readonly draft: BuilderVisualDraftEnvelope;
+  readonly root_source_ref: CatalogRef | null;
+  readonly root_target_ref: CatalogRef | null;
+  readonly forked_chain: ReadonlyArray<BuilderVisualCustomizeChainEntry>;
+  readonly issues: ReadonlyArray<BuilderIssue>;
+}
+
+/** Apply one complete graphical workspace to a fenced draft revision. */
+export interface BuilderVisualDraftApplyWorkspaceRequest {
+  readonly draft: BuilderVisualDraftEnvelope;
+  readonly expected_draft_revision: number;
+  readonly workspace: BuilderVisualWorkspace;
+}
+
+/** Apply one exact session YAML buffer to a fenced visual draft revision. */
+export interface BuilderVisualDraftApplyYamlRequest {
+  readonly draft: BuilderVisualDraftEnvelope;
+  readonly expected_draft_revision: number;
+  readonly buffer_generation: number;
+  readonly yaml_text: string;
+}
+
+/** Applied projection or typed refusal for one exact session YAML buffer. */
+export interface BuilderVisualDraftApplyYamlResult {
+  readonly draft: BuilderVisualDraftEnvelope;
+  readonly buffer_generation: number;
+  readonly yaml_text: string;
+  readonly applied: boolean;
+  readonly canonicalization_required: boolean;
+  readonly issues: ReadonlyArray<BuilderIssue>;
+}
+
+/** Backend assembly, typed issues, save request, and authoritative compile facts. */
+export interface BuilderVisualDraftAssemblyResult {
+  readonly visual_draft: BuilderVisualDraftEnvelope;
+  readonly assembled_draft: BuilderDraftEnvelope;
+  readonly save_request: BuilderSessionSaveRequest;
+  readonly compile_result: BuilderCompileResult;
+  readonly assembly_issues: ReadonlyArray<BuilderIssue>;
+}
+
+/** Apply one typed command to an exact visual-draft revision. */
+export interface BuilderVisualDraftCommandRequest {
+  readonly draft: BuilderVisualDraftEnvelope;
+  readonly expected_draft_revision: number;
+  readonly command: BuilderVisualPlaceSpaceReferenceCommand | BuilderVisualPlaceGroundReferenceCommand | BuilderVisualAddGeneratedSpaceCommand | BuilderVisualSetSpacePopulationCommand | BuilderVisualAuthorInlineSpaceNodeCommand | BuilderVisualAddOrIncrementNodeTerminalCommand | BuilderVisualSetNodeTerminalRoleCommand | BuilderVisualAddNodeEthernetPortCommand | BuilderVisualAddGroundCommand | BuilderVisualAddGroundSiteReferenceCommand | BuilderVisualSetGroundStampNodeCommand | BuilderVisualSetGroundSiteNodeCommand | BuilderVisualAddGroundSiteNodeCommand | BuilderVisualMintGroundMembersCommand | BuilderVisualAddRoutingDomainCommand | BuilderVisualAddBoundaryCommand | BuilderVisualConnectSegmentsCommand | BuilderVisualRederiveLinkCommand | BuilderVisualSetSchedulingPresetCommand;
+}
+
+/** One applied command and the next revision of the complete draft. */
+export interface BuilderVisualDraftCommandResult {
+  readonly operation: BuilderVisualDraftCommandOperation;
+  readonly base_draft_revision: number;
+  readonly draft: BuilderVisualDraftEnvelope;
+  readonly affected_kind: BuilderVisualDraftAffectedKind;
+  readonly affected_id: string;
+  readonly scheduling_preset: BuilderVisualSchedulingPreset | null;
+  readonly notice: string | null;
+}
+
+/** Compile a complete visual draft through backend assembly and grammar authorities. With a workspace, the compile assembles that workspace over the draft and accepts nothing: the draft and its revision stay as they were. */
+export interface BuilderVisualDraftCompileRequest {
+  readonly draft: BuilderVisualDraftEnvelope;
+  readonly workspace?: BuilderVisualWorkspace | null;
+}
+
+/** Request a backend-created blank structured visual draft. */
+export interface BuilderVisualDraftCreateRequest {
+  readonly session_name?: string | null;
+  readonly display_name?: string | null;
+  readonly description?: string | null;
+}
+
+/** One revision of a stateless YAML buffer plus explicit authoring and applied facts. */
+export interface BuilderVisualDraftEnvelope {
+  readonly draft_revision: number;
+  readonly projection_status: BuilderVisualDraftProjectionStatus;
+  readonly target_ref: SessionRef;
+  readonly source_ref?: SessionRef | null;
+  readonly expected_session_revision?: string | null;
+  readonly catalog_documents?: ReadonlyArray<BuilderProposedCatalogDocument>;
+  readonly session_name_is_placeholder: boolean;
+  readonly reserved_authoring_ids: ReadonlyArray<string>;
+  readonly session_yaml: string;
+  readonly authoring_workspace?: BuilderVisualWorkspace | null;
+  readonly applied_workspace?: BuilderVisualWorkspace | null;
+  readonly applied_revision?: number | null;
+  readonly applied_session?: Readonly<Record<string, JsonValue>> | null;
+  readonly control_tree?: BuilderControlTree | null;
+}
+
+/** Open any stored session as synchronized YAML and graphical projections. */
+export interface BuilderVisualDraftOpenRequest {
+  readonly source_ref: SessionRef;
+  readonly target_ref?: SessionRef | null;
+}
+
+/** Prepare a fenced draft for saving under one exact user session ref. */
+export interface BuilderVisualDraftRetargetRequest {
+  readonly draft: BuilderVisualDraftEnvelope;
+  readonly expected_draft_revision: number;
+  readonly target_ref: SessionRef;
+}
+
+/** Presentation facts for one canonical node forwarding class. */
+export interface BuilderVisualForwardingClassMetadata {
+  readonly id: "routed" | "host" | "bridge" | "control_only";
+  readonly label: string;
+}
+
+/** Ground access-terminal pointing authored into a site installation. */
+export interface BuilderVisualGroundBoresight {
+  readonly mode: "local_vertical";
+}
+
+/** Editable ground segment assembled into site and site-set refs. */
+export interface BuilderVisualGroundDraft {
+  readonly segment_id?: string;
+  readonly display_name?: string;
+  readonly members?: ReadonlyArray<BuilderVisualGroundMember>;
+  readonly stamp: BuilderVisualGroundStamp;
+  readonly scheduling?: Readonly<Record<string, JsonValue>>;
+  readonly originated_ipv4?: ReadonlyArray<string>;
+  readonly tags?: ReadonlyArray<string>;
+}
+
+/** Referenced or authored member of an editable ground site set. */
+export interface BuilderVisualGroundMember {
+  readonly member_id?: string;
+  readonly kind: "ref" | "draft";
+  readonly ref?: string | null;
+  readonly site_id?: string;
+  readonly label?: string;
+  readonly summary?: string | null;
+  readonly site?: BuilderVisualSite | null;
+  readonly scheduling_override?: Readonly<Record<string, JsonValue>> | null;
+}
+
+/** One library site set placed by reference with session scheduling. */
+export interface BuilderVisualGroundReference {
+  readonly segment_id?: string;
+  readonly site_set_ref?: string | null;
+  readonly label?: string;
+  readonly scheduling?: Readonly<Record<string, JsonValue>>;
+}
+
+/** One user-entered surface location awaiting backend-owned site allocation. */
+export interface BuilderVisualGroundSiteIntent {
+  readonly name: string;
+  readonly lat_deg: number;
+  readonly lon_deg: number;
+  readonly alt_m?: number;
+}
+
+/** Backend-issued minting facts retained as visual state, never persisted. */
+export interface BuilderVisualGroundStamp {
+  readonly node_ref?: string | null;
+  readonly installed?: Readonly<Record<string, number>>;
+  readonly boresights: Readonly<Record<string, BuilderVisualGroundBoresight>>;
+  readonly body?: string | null;
+}
+
+/** Editable endpoint selector for one visual link rule. */
+export interface BuilderVisualLinkEndpoint {
+  readonly segment_id?: string;
+  readonly tag?: string | null;
+  readonly role?: WizardTerminalRole | null;
+  readonly medium?: "rf" | "optical" | null;
+  readonly min_elevation_deg?: number | null;
+}
+
+/** Presentation facts for one canonical link-terminal medium. */
+export interface BuilderVisualLinkMediumMetadata {
+  readonly id: "rf" | "optical";
+  readonly label: string;
+}
+
+/** Editable physical link rule; every authored rule is assembled. */
+export interface BuilderVisualLinkRule {
+  readonly rule_id?: string;
+  readonly label?: string;
+  readonly enabled?: boolean;
+  readonly a?: BuilderVisualLinkEndpoint;
+  readonly b?: BuilderVisualLinkEndpoint;
+  readonly topology_mode?: BuilderVisualTopologyMode | null;
+  readonly topology_n?: number | null;
+  readonly max_range_km?: number | null;
+}
+
+/** Mint complete sites and addresses from typed locations and one ground stamp. */
+export interface BuilderVisualMintGroundMembersCommand {
+  readonly operation: "mint_ground_members";
+  readonly segment_id: string;
+  readonly sites: ReadonlyArray<BuilderVisualGroundSiteIntent>;
+}
+
+/** Presentation facts for one canonical terminal-mount role. */
+export interface BuilderVisualMountRoleMetadata {
+  readonly id: WizardTerminalRole;
+  readonly label: string;
+  readonly description: string;
+}
+
+/** Editable node object nested in a generated space component. */
+export interface BuilderVisualNode {
+  readonly id?: string;
+  readonly display_name?: string;
+  readonly forwarding?: "routed" | "host" | "bridge" | "control_only" | null;
+  readonly profile?: string | null;
+  readonly ethernet?: ReadonlyArray<string>;
+  readonly terminals?: ReadonlyArray<BuilderVisualTerminalMount>;
+}
+
+/** Editable orbital geometry for one generated constellation. */
+export interface BuilderVisualOrbit {
+  readonly central_body?: string | null;
+  readonly shape_kind?: BuilderVisualOrbitShape | null;
+  readonly altitude_km?: number | null;
+  readonly perigee_altitude_km?: number | null;
+  readonly apogee_altitude_km?: number | null;
+  readonly inclination_deg?: number | null;
+  readonly raan_deg?: number | null;
+  readonly argument_of_perigee_deg?: number | null;
+  readonly mean_anomaly_deg?: number | null;
+  readonly propagator?: BuilderVisualOrbitPropagator | null;
+}
+
+/** Presentation facts for one visual orbit-shape form. */
+export interface BuilderVisualOrbitShapeMetadata {
+  readonly id: BuilderVisualOrbitShape;
+  readonly label: string;
+}
+
+/** Presentation facts for one canonical constellation phasing mode. */
+export interface BuilderVisualPhasingModeMetadata {
+  readonly id: BuilderVisualPhasingMode;
+  readonly label: string;
+}
+
+/** Place one existing site set with backend-owned scheduling. */
+export interface BuilderVisualPlaceGroundReferenceCommand {
+  readonly operation: "place_ground_reference";
+  readonly site_set_ref: string;
+}
+
+/** Place one existing constellation or space-node-set by catalog reference. */
+export interface BuilderVisualPlaceSpaceReferenceCommand {
+  readonly operation: "place_space_reference";
+  readonly source_ref: string;
+}
+
+/** Repoint one link endpoint and explicitly rederive its physical seed. */
+export interface BuilderVisualRederiveLinkCommand {
+  readonly operation: "rederive_link";
+  readonly rule_id: string;
+  readonly side: "a" | "b";
+  readonly segment_id: string;
+}
+
+/** Editable routing boundary assembled without omission. */
+export interface BuilderVisualRoutingBoundary {
+  readonly boundary_id?: string;
+  readonly over_rule_id?: string;
+  readonly adapter?: "static_ip" | "bgp" | "dtn_bundle" | null;
+  readonly from_domain_id?: string;
+  readonly to_domain_id?: string;
+  readonly export_node_loopbacks?: boolean;
+}
+
+/** Editable routing domain; empty membership remains visible to validation. */
+export interface BuilderVisualRoutingDomain {
+  readonly domain_id?: string;
+  readonly label?: string;
+  readonly protocol?: "isis" | "ospf" | "bgp" | "static" | null;
+  readonly member_segment_ids?: ReadonlyArray<string>;
+  readonly hello_interval_s?: number | null;
+  readonly hold_interval_s?: number | null;
+}
+
+/** Presentation and runtime facts for one routing protocol. */
+export interface BuilderVisualRoutingProtocolMetadata {
+  readonly runtime_supported: boolean;
+  readonly support_note: string | null;
+  readonly id: "isis" | "ospf" | "bgp" | "static";
+  readonly label: string;
+  readonly timer_fields: boolean;
+}
+
+/** Typed presentation metadata for one backend-owned scheduling preset. */
+export interface BuilderVisualSchedulingPresetMetadata {
+  readonly id: BuilderVisualSchedulingPreset;
+  readonly label: string;
+}
+
+/** Select one authored site's node model and derive its installed inventory. */
+export interface BuilderVisualSetGroundSiteNodeCommand {
+  readonly operation: "set_ground_site_node";
+  readonly segment_id: string;
+  readonly member_id: string;
   readonly node_id: string;
   readonly node_ref: string;
 }
 
-/** One backend-produced component-draft finding at an exact JSON pointer. */
-export interface CatalogDraftIssue {
-  readonly code: string;
-  readonly stage: CatalogDraftIssueStage;
-  readonly message: string;
-  readonly pointer: string;
-  readonly source_line?: number | null;
-  readonly source_column?: number | null;
-  readonly blocks: ReadonlyArray<BuilderBlockedOperation>;
+/** Select a ground stamp node and derive its installed terminal inventory. */
+export interface BuilderVisualSetGroundStampNodeCommand {
+  readonly operation: "set_ground_stamp_node";
+  readonly segment_id: string;
+  readonly node_ref: string;
+}
+
+/** Change one inline-node mount role with backend-owned pointing semantics. */
+export interface BuilderVisualSetNodeTerminalRoleCommand {
+  readonly operation: "set_node_terminal_role";
+  readonly segment_id: string;
+  readonly mount_id: string;
+  readonly role: WizardTerminalRole;
+}
+
+/** Apply one complete backend-owned scheduling block or inherit at a site. */
+export interface BuilderVisualSetSchedulingPresetCommand {
+  readonly operation: "set_scheduling_preset";
+  readonly segment_id: string;
+  readonly preset: BuilderVisualSchedulingPreset | null;
+  readonly member_id?: string | null;
+}
+
+/** Change one population input and let the backend derive its complete phasing. */
+export interface BuilderVisualSetSpacePopulationCommand {
+  readonly operation: "set_space_population";
+  readonly segment_id: string;
+  readonly phasing_mode?: BuilderVisualPhasingMode | null;
+  readonly planes?: number | null;
+  readonly slots_per_plane?: number | null;
+}
+
+/** Editable complete site object. */
+export interface BuilderVisualSite {
+  readonly site_id?: string;
+  readonly display_name?: string;
+  readonly body?: string | null;
+  readonly lat_deg?: number | null;
+  readonly lon_deg?: number | null;
+  readonly alt_m?: number | null;
+  readonly tags?: ReadonlyArray<string>;
+  readonly nodes?: ReadonlyArray<BuilderVisualSiteNode>;
+}
+
+/** One installed node in an editable site object. */
+export interface BuilderVisualSiteNode {
+  readonly node_id?: string;
+  readonly node_ref?: string | null;
+  readonly installed?: Readonly<Record<string, number>>;
+  readonly boresights: Readonly<Record<string, BuilderVisualGroundBoresight>>;
+}
+
+/** Spacecraft access-terminal pointing authored into a node mount. */
+export interface BuilderVisualSpaceBoresight {
+  readonly mode: "nadir";
+}
+
+/** Editable generated space segment that becomes referenced catalog objects. */
+export interface BuilderVisualSpaceDraft {
+  readonly segment_id?: string;
+  readonly display_name?: string;
+  readonly node_ref?: string | null;
+  readonly node_draft?: BuilderVisualNode | null;
+  readonly orbit?: BuilderVisualOrbit;
+  readonly planes?: number | null;
+  readonly raan_spacing_deg?: number | null;
+  readonly slots_per_plane?: number | null;
+  readonly phasing_mode: BuilderVisualPhasingMode;
+  readonly phase_offset_deg?: number | null;
+}
+
+/** One library space source placed by reference. */
+export interface BuilderVisualSpaceReference {
+  readonly segment_id?: string;
+  readonly source_ref?: string | null;
+  readonly label?: string;
+}
+
+/** Editable terminal mount on a visual node draft. */
+export interface BuilderVisualTerminalMount {
+  readonly mount_id?: string;
+  readonly role?: WizardTerminalRole | null;
+  readonly terminal_ref?: string | null;
+  readonly count?: number | null;
+  readonly boresight?: BuilderVisualSpaceBoresight | null;
+}
+
+/** Presentation and runtime facts for one visual link topology mode. */
+export interface BuilderVisualTopologyModeMetadata {
+  readonly runtime_supported: boolean;
+  readonly support_note: string | null;
+  readonly id: BuilderVisualTopologyMode;
+  readonly label: string;
+  readonly requires_n: boolean;
+}
+
+/** Walker population intent whose derived angular values remain backend-owned. */
+export interface BuilderVisualWalkerLayoutRequest {
+  readonly pattern: WizardWalkerPattern;
+  readonly planes: number;
+  readonly slots_per_plane: number;
+}
+
+/** Backend-issued angular layout for one Walker population intent. */
+export interface BuilderVisualWalkerLayoutResult {
+  readonly raan_spacing_deg: number;
+  readonly phase_offset_deg: number;
+}
+
+/** Closed visual workspace whose persisted grammar is assembled by VS-API. */
+export interface BuilderVisualWorkspace {
+  readonly session_name?: string;
+  readonly display_name?: string | null;
+  readonly description?: string | null;
+  readonly space?: ReadonlyArray<BuilderVisualSpaceDraft>;
+  readonly space_refs?: ReadonlyArray<BuilderVisualSpaceReference>;
+  readonly ground?: ReadonlyArray<BuilderVisualGroundDraft>;
+  readonly ground_refs?: ReadonlyArray<BuilderVisualGroundReference>;
+  readonly links?: ReadonlyArray<BuilderVisualLinkRule>;
+  readonly routing_domains?: ReadonlyArray<BuilderVisualRoutingDomain>;
+  readonly boundaries?: ReadonlyArray<BuilderVisualRoutingBoundary>;
+  readonly max_pairs_per_rule?: number | null;
+  readonly max_pairs_per_tick?: number | null;
+  readonly start_time?: string;
+  readonly step_seconds?: number | null;
+  readonly compression?: number | null;
+}
+
+/** One resolved session as a render-ready, read-only world. */
+export interface BuilderWorld {
+  readonly session: SessionMeta;
+  readonly epoch_unix: number;
+  readonly ephemeris: SessionEphemeris;
+  readonly nodes: ReadonlyArray<BuilderWorldNode>;
+  readonly link_rules: ReadonlyArray<BuilderLinkRule>;
+  readonly segments: ReadonlyArray<BuilderWorldSegment>;
+  readonly allocations: ReadonlyArray<BuilderRuleAllocation>;
+  readonly rule_previews: ReadonlyArray<BuilderRulePreview>;
+}
+
+/** One resolved node's facts for builder display, mirrored from ``ResolvedNode``. ``kind`` is carried explicitly so no consumer infers it from the ephemeris variant shape. Satellite placement (orbital elements, frames) lives in the ephemeris; ``epoch_position`` is the OME-propagated state used to seed renderers that cannot propagate that ephemeris variant locally. Ground placement is the resolver's ``surface_position``: the ephemeris only carries ground nodes that participate in space-link physics, while the world contains every resolved node — a gateway with no space links still exists. Hardware and network facts reuse the resolved models verbatim — they are the wire truth; the builder never re-shapes them. */
+export interface BuilderWorldNode {
+  readonly node_id: string;
+  readonly local_node_id: string;
+  readonly segment_id: string;
+  readonly namespace: string;
+  readonly tenant_id: string;
+  readonly kind: "satellite" | "ground_station";
+  readonly plane: number | null;
+  readonly slot: number | null;
+  readonly tags: ReadonlyArray<string>;
+  readonly surface_position: ResolvedSurfacePosition | null;
+  readonly epoch_position: NodePosition | null;
+  readonly forwarding: "routed" | "host" | "bridge" | "control_only" | null;
+  readonly role: "router" | "host" | "forwarding_only";
+  readonly routing_instances: ReadonlyArray<NodeRoutingInstance>;
+  readonly terminal_inventory: ReadonlyArray<ResolvedTerminalBlock>;
+  readonly interfaces: ResolvedNodeInterfaces | null;
+  readonly originated_prefixes: ResolvedOriginatedPrefixes | null;
+}
+
+/** One segment as the user named it — the world tree speaks their words, never bare runtime ids. */
+export interface BuilderWorldSegment {
+  readonly segment_id: string;
+  readonly display_name: string;
+}
+
+/** One component draft state with the backend's projection of it. */
+export interface CatalogComponentDraftEnvelope {
+  readonly state: CatalogComponentDraftState;
+  readonly projected_yaml: string;
+  readonly control_tree: BuilderControlTree;
+  readonly issues: ReadonlyArray<CatalogDraftIssue>;
 }
 
 /** One revision of a full-document component draft: the state every draft request carries. */
@@ -1610,31 +1085,83 @@ export interface CatalogComponentDraftState {
   readonly document: Readonly<Record<string, JsonValue>>;
 }
 
-/** One component draft state with the backend's projection of it. */
-export interface CatalogComponentDraftEnvelope {
-  readonly state: CatalogComponentDraftState;
-  readonly projected_yaml: string;
-  readonly control_tree: BuilderControlTree;
-  readonly issues: ReadonlyArray<CatalogDraftIssue>;
+/** Fenced deletion request bound to exact bytes and reviewed graph impact. */
+export interface CatalogDeleteRequest {
+  readonly ref: CatalogRef;
+  readonly expected_revision: string;
+  readonly impact_acknowledgement: Sha256Digest;
 }
 
-/** Create one new, intentionally incomplete user-owned component draft. */
-export interface CatalogDraftNewRequest {
-  readonly family: CatalogComponentFamily;
-  readonly object_id: string;
+/** Evidence that one exact user document was removed atomically. */
+export interface CatalogDeleteResult {
+  readonly deleted_ref: CatalogRef;
+  readonly deleted_revision: string;
+  readonly impact_acknowledgement: Sha256Digest;
+  readonly generation: string;
 }
 
-/** Open one complete component and optionally select a user-owned fork target. */
-export interface CatalogDraftOpenRequest {
-  readonly source_ref: CatalogRef;
-  readonly target_ref?: CatalogRef | null;
+/** Current typed reverse graph used for overwrite review and delete fencing. */
+export interface CatalogDependencyImpact {
+  readonly target_ref: CatalogRef;
+  readonly target_revision: string;
+  readonly direct_dependents: ReadonlyArray<CatalogDependent>;
+  readonly transitive_dependents: ReadonlyArray<CatalogDependent>;
+  readonly overwrite_affects_dependents: boolean;
+  readonly delete_allowed: boolean;
+  readonly acknowledgement: Sha256Digest;
 }
 
-/** Apply canonical graphical commands under one component draft revision. */
-export interface CatalogDraftControlMutationRequest {
+/** One typed reverse dependency and its shortest distance from the target. */
+export interface CatalogDependent {
+  readonly ref: CatalogRef;
+  readonly family: CatalogFamily;
+  readonly revision: string;
+  readonly minimum_depth: number;
+}
+
+/** Request current overwrite and delete impact for one exact catalog ref. */
+export interface CatalogDependentsRequest {
+  readonly ref: CatalogRef;
+}
+
+/** Revisioned metadata for one catalog library row. */
+export interface CatalogDocumentSummary {
+  readonly ref: CatalogRef;
+  readonly namespace: "nodalarc" | "user";
+  readonly family: CatalogFamily;
+  readonly revision: string;
+  readonly size_bytes: number;
+  readonly display_name: string;
+  readonly summary: string | null;
+}
+
+/** Create or compare-and-swap replace one complete user component. */
+export interface CatalogDocumentWriteRequest {
+  readonly ref: CatalogRef;
+  readonly document: Readonly<Record<string, JsonValue>>;
+  readonly expected_revision: string | null;
+}
+
+/** Add one node Ethernet port with a backend-generated unique identifier. */
+export interface CatalogDraftAddNodeEthernetPortRequest {
   readonly draft: CatalogComponentDraftState;
   readonly expected_draft_revision: number;
-  readonly commands: ReadonlyArray<BuilderSetScalarCommand | BuilderSetPresentCommand | BuilderSelectChoiceCommand | BuilderInsertItemCommand | BuilderRemoveItemCommand | BuilderMoveItemCommand | BuilderInsertMapEntryCommand | BuilderRemoveMapEntryCommand | BuilderRenameMapKeyCommand>;
+}
+
+/** Add one node terminal mount with backend-generated persisted fields. */
+export interface CatalogDraftAddNodeTerminalMountRequest {
+  readonly draft: CatalogComponentDraftState;
+  readonly expected_draft_revision: number;
+  readonly terminal_ref: string;
+  readonly role: WizardTerminalRole;
+}
+
+/** Add one explicitly identified node using backend-derived persisted fields. */
+export interface CatalogDraftAddSiteNodeRequest {
+  readonly draft: CatalogComponentDraftState;
+  readonly expected_draft_revision: number;
+  readonly node_id: string;
+  readonly node_ref: string;
 }
 
 /** Apply one exact YAML buffer under backend grammar authority. */
@@ -1664,10 +1191,40 @@ export interface CatalogDraftCompileResult {
   readonly draft: CatalogComponentDraftEnvelope;
   readonly save_allowed: boolean;
   readonly runtime_supported: boolean;
-  readonly canonical_yaml?: string | null;
-  readonly canonical_json?: Readonly<Record<string, JsonValue>> | null;
-  readonly content_digest?: Sha256Digest | null;
+  readonly canonical_yaml: string | null;
+  readonly canonical_json: Readonly<Record<string, JsonValue>> | null;
+  readonly content_digest: Sha256Digest | null;
   readonly issues: ReadonlyArray<CatalogDraftIssue>;
+}
+
+/** Apply canonical graphical commands under one component draft revision. */
+export interface CatalogDraftControlMutationRequest {
+  readonly draft: CatalogComponentDraftState;
+  readonly expected_draft_revision: number;
+  readonly commands: ReadonlyArray<BuilderSetScalarCommand | BuilderSetPresentCommand | BuilderSelectChoiceCommand | BuilderInsertItemCommand | BuilderRemoveItemCommand | BuilderMoveItemCommand | BuilderInsertMapEntryCommand | BuilderRemoveMapEntryCommand | BuilderRenameMapKeyCommand>;
+}
+
+/** One backend-produced component-draft finding at an exact JSON pointer. */
+export interface CatalogDraftIssue {
+  readonly code: string;
+  readonly stage: CatalogDraftIssueStage;
+  readonly message: string;
+  readonly pointer: string;
+  readonly source_line: number | null;
+  readonly source_column: number | null;
+  readonly blocks: ReadonlyArray<BuilderBlockedOperation>;
+}
+
+/** Create one new, intentionally incomplete user-owned component draft. */
+export interface CatalogDraftNewRequest {
+  readonly family: CatalogComponentFamily;
+  readonly object_id: string;
+}
+
+/** Open one complete component and optionally select a user-owned fork target. */
+export interface CatalogDraftOpenRequest {
+  readonly source_ref: CatalogRef;
+  readonly target_ref?: CatalogRef | null;
 }
 
 /** Persist one structurally valid component draft through scoped CAS storage. */
@@ -1683,28 +1240,34 @@ export interface CatalogDraftSaveResult {
   readonly compile_result: CatalogDraftCompileResult;
 }
 
-/** Request current overwrite and delete impact for one exact catalog ref. */
-export interface CatalogDependentsRequest {
-  readonly ref: CatalogRef;
-}
-
-/** One typed reverse dependency and its shortest distance from the target. */
-export interface CatalogDependent {
-  readonly ref: CatalogRef;
+/** Backend-owned authoring capabilities for one public catalog family. */
+export interface CatalogFamilyMetadata {
   readonly family: CatalogFamily;
-  readonly revision: string;
-  readonly minimum_depth: number;
+  readonly wrapper: string | null;
+  readonly direct_user_write: boolean;
+  readonly component_fork: boolean;
+  readonly session_draft_save: boolean;
+  readonly suggested_object_id: string | null;
 }
 
-/** Current typed reverse graph used for overwrite review and delete fencing. */
-export interface CatalogDependencyImpact {
-  readonly target_ref: CatalogRef;
-  readonly target_revision: string;
-  readonly direct_dependents: ReadonlyArray<CatalogDependent>;
-  readonly transitive_dependents: ReadonlyArray<CatalogDependent>;
-  readonly overwrite_affects_dependents: boolean;
-  readonly delete_allowed: boolean;
-  readonly acknowledgement: Sha256Digest;
+/** Request one catalog document by namespace-qualified identity. */
+export interface CatalogGetRequest {
+  readonly ref: CatalogRef;
+}
+
+/** One deterministic page pinned to an immutable catalog generation. */
+export interface CatalogListPage {
+  readonly generation: string;
+  readonly items: ReadonlyArray<CatalogDocumentSummary>;
+  readonly next_page_token: string | null;
+}
+
+/** Bounded catalog-list request using an opaque server cursor. */
+export interface CatalogListRequest {
+  readonly family?: CatalogFamily | null;
+  readonly namespace?: "nodalarc" | "user" | null;
+  readonly page_size?: number;
+  readonly page_token?: string | null;
 }
 
 /** Canonical saved component plus its current downstream impact. */
@@ -1713,31 +1276,53 @@ export interface CatalogMutationResult {
   readonly impact: CatalogDependencyImpact;
 }
 
-/** Fenced deletion request bound to exact bytes and reviewed graph impact. */
-export interface CatalogDeleteRequest {
-  readonly ref: CatalogRef;
-  readonly expected_revision: string;
-  readonly impact_acknowledgement: Sha256Digest;
+/** Stable typed evidence for an authoring operation refused by the backend. */
+export interface CatalogOperationRefusal {
+  readonly code: "catalog_authoring.not_found" | "catalog_authoring.read_only" | "catalog_authoring.invalid_document" | "catalog_authoring.invalid_patch" | "catalog_authoring.invalid_graph" | "catalog_authoring.conflict" | "catalog_authoring.stale_revision" | "catalog_authoring.invalid_page_token" | "catalog_authoring.stale_page_token" | "catalog_authoring.impact_mismatch" | "catalog_authoring.dependents_exist" | "catalog_authoring.import_limit" | "catalog_authoring.import_incomplete" | "catalog_authoring.import_collision" | "catalog_authoring.stale_import_proposal" | "catalog_authoring.persistence_failed";
+  readonly message: string;
+  readonly ref: string | null;
+  readonly expected_revision: string | null;
+  readonly current_revision: string | null;
+  readonly impact: CatalogDependencyImpact | null;
+  readonly collisions: ReadonlyArray<CatalogYamlImportCollision>;
+  readonly cause_type: string | null;
 }
 
-/** Evidence that one exact user document was removed atomically. */
-export interface CatalogDeleteResult {
-  readonly deleted_ref: CatalogRef;
-  readonly deleted_revision: string;
-  readonly impact_acknowledgement: Sha256Digest;
-  readonly generation: string;
-}
-
-/** Request ordinary YAML files for one saved session. */
-export interface CatalogSessionYamlExportRequest {
+/** First-class catalog session selected inside a server-owned scope. */
+export interface CatalogSessionSourceId {
+  readonly kind?: "catalog";
   readonly session_ref: SessionRef;
-  readonly expected_session_revision?: string | null;
 }
 
-/** One ordinary YAML file and its backend-derived logical path. */
-export interface CatalogYamlFile {
-  readonly logical_path: string;
-  readonly yaml_text: string;
+/** Revisioned browser listing for one scoped catalog session. */
+export interface CatalogSessionSummary {
+  readonly source_id: CatalogSessionSourceId;
+  readonly name: string;
+  readonly source: "nodalarc" | "user";
+  readonly constellation: string;
+  readonly routing_stack: string;
+  readonly deploy_allowed: boolean;
+  readonly source_revision: Sha256Digest | null;
+  readonly document_digest: Sha256Digest | null;
+  readonly dependency_digest: Sha256Digest | null;
+  readonly blockers: ReadonlyArray<ApiRefusal>;
+  readonly active: boolean;
+}
+
+/** Accepted catalog deployment operation. */
+export interface CatalogSessionSwitchAccepted {
+  readonly status: "accepted";
+  readonly operation_id: string;
+  readonly source: CatalogSessionSourceId;
+}
+
+/** Deploy one reviewed session revision from the request catalog scope. */
+export interface CatalogSessionSwitchRequest {
+  readonly source: CatalogSessionSourceId;
+  readonly expected_source_revision: Sha256Digest;
+  readonly expected_document_digest: Sha256Digest;
+  readonly expected_dependency_digest: Sha256Digest;
+  readonly record_history: boolean;
 }
 
 /** Ordinary root and catalog YAML files for browser-side file writing. */
@@ -1747,10 +1332,10 @@ export interface CatalogSessionYamlExport {
   readonly files: ReadonlyArray<CatalogYamlFile>;
 }
 
-/** One YAML text with an optional graph-verified placement hint. */
-export interface CatalogYamlImportFile {
-  readonly yaml_text: string;
-  readonly logical_path_hint?: string | null;
+/** Request ordinary YAML files for one saved session. */
+export interface CatalogSessionYamlExportRequest {
+  readonly session_ref: SessionRef;
+  readonly expected_session_revision?: string | null;
 }
 
 /** Ordinary YAML files proposed for identity-derived catalog import. */
@@ -1758,6 +1343,47 @@ export interface CatalogSessionYamlImportRequest {
   readonly yaml_files: ReadonlyArray<CatalogYamlImportFile>;
   readonly commit?: boolean;
   readonly proposal_token?: string | null;
+}
+
+/** Proposed, committed, unchanged, or blocked YAML-file import result. */
+export interface CatalogSessionYamlImportResult {
+  readonly root_ref: SessionRef;
+  readonly outcome: "proposed" | "committed" | "unchanged" | "blocked";
+  readonly generation: string;
+  readonly proposal_token: string | null;
+  readonly proposed_writes: ReadonlyArray<CatalogYamlImportWrite>;
+  readonly identical_refs: ReadonlyArray<CatalogRef>;
+  readonly collisions: ReadonlyArray<CatalogYamlImportCollision>;
+}
+
+/** The scoped catalog session whose stored YAML to download. */
+export interface CatalogSessionYamlQuery {
+  readonly session_ref: string;
+}
+
+/** One standard persisted session document to save into the user catalog. */
+export interface CatalogSessionYamlUploadRequest {
+  readonly yaml: string;
+  readonly record_history: boolean;
+}
+
+/** One ordinary YAML file and its backend-derived logical path. */
+export interface CatalogYamlFile {
+  readonly logical_path: string;
+  readonly yaml_text: string;
+}
+
+/** Exact identity collision that import will never rename or deep-match. */
+export interface CatalogYamlImportCollision {
+  readonly ref: CatalogRef;
+  readonly reason: "shipped_missing" | "shipped_content_mismatch" | "user_content_mismatch";
+  readonly existing_revision: string | null;
+}
+
+/** One YAML text with an optional graph-verified placement hint. */
+export interface CatalogYamlImportFile {
+  readonly yaml_text: string;
+  readonly logical_path_hint?: string | null;
 }
 
 /** One canonical user document proposed for transactional creation. */
@@ -1769,124 +1395,37 @@ export interface CatalogYamlImportWrite {
   readonly canonicalization_changed: boolean;
 }
 
-/** Exact identity collision that import will never rename or deep-match. */
-export interface CatalogYamlImportCollision {
-  readonly ref: CatalogRef;
-  readonly reason: "shipped_missing" | "shipped_content_mismatch" | "user_content_mismatch";
-  readonly existing_revision?: string | null;
-}
-
-/** Proposed, committed, unchanged, or blocked YAML-file import result. */
-export interface CatalogSessionYamlImportResult {
-  readonly root_ref: SessionRef;
-  readonly outcome: "proposed" | "committed" | "unchanged" | "blocked";
-  readonly generation: string;
-  readonly proposal_token?: string | null;
-  readonly proposed_writes: ReadonlyArray<CatalogYamlImportWrite>;
-  readonly identical_refs: ReadonlyArray<CatalogRef>;
-  readonly collisions: ReadonlyArray<CatalogYamlImportCollision>;
-}
-
-/** Stable typed evidence for an authoring operation refused by the backend. */
-export interface CatalogOperationRefusal {
-  readonly code: "catalog_authoring.not_found" | "catalog_authoring.read_only" | "catalog_authoring.invalid_document" | "catalog_authoring.invalid_patch" | "catalog_authoring.invalid_graph" | "catalog_authoring.conflict" | "catalog_authoring.stale_revision" | "catalog_authoring.invalid_page_token" | "catalog_authoring.stale_page_token" | "catalog_authoring.impact_mismatch" | "catalog_authoring.dependents_exist" | "catalog_authoring.import_limit" | "catalog_authoring.import_incomplete" | "catalog_authoring.import_collision" | "catalog_authoring.stale_import_proposal" | "catalog_authoring.persistence_failed";
+/** A single insight about the constellation configuration. Severity levels: - "info": expected physics behavior, normal operation (e.g., Earth occlusion, range limits) - "note": topology characteristic worth knowing (e.g., full mesh, terminal allocation) - "warning": potential issue that may affect routing (e.g., tracking rate dropouts, coverage gaps) - "error": configuration problem that will prevent connectivity (e.g., no cross-plane links, station beyond visibility) */
+export interface CoverageInsight {
+  readonly severity: "info" | "note" | "warning" | "error";
   readonly message: string;
-  readonly ref?: string | null;
-  readonly expected_revision?: string | null;
-  readonly current_revision?: string | null;
-  readonly impact?: CatalogDependencyImpact | null;
-  readonly collisions?: ReadonlyArray<CatalogYamlImportCollision>;
-  readonly cause_type?: string | null;
 }
 
-/** One resolved link-rule endpoint, flattened for builder display. */
-export interface BuilderLinkEndpoint {
-  readonly segment_id: string;
-  readonly terminal_role: WizardTerminalRole;
-  readonly terminal_medium: string | null;
-  readonly min_elevation_deg: number | null;
-  readonly node_ids: ReadonlyArray<string>;
+/** Complete coverage preview result. */
+export interface CoveragePreviewResult {
+  readonly orbital_period_s: number;
+  readonly preview_step_s: number;
+  readonly isl: IslPreview;
+  readonly ground_stations: GsPreview;
+  readonly warnings: ReadonlyArray<CoverageInsight>;
 }
 
-/** Display projection of one ``ResolvedLinkRule``. The resolved rule's topology is a discriminated union; the builder needs the flat facts (mode, n, explicit pairs, range cap) to preview candidate geometry. This is a projection for display — candidate truth at runtime stays with OME. */
-export interface BuilderLinkRule {
-  readonly rule_id: string;
-  readonly kind: "access" | "isl" | "inter_body";
-  readonly enabled: boolean;
-  readonly endpoints: readonly [BuilderLinkEndpoint, BuilderLinkEndpoint];
-  readonly topology_mode: "visible_candidates" | "nearest_visible" | "nearest_n" | "explicit_pairs";
-  readonly topology_n: number | null;
-  readonly explicit_pairs: ReadonlyArray<readonly [string, string]>;
-  readonly max_range_km: number | null;
+/** One backend-discovered document in a transitive reference closure. */
+export interface DependencyClosureEntry {
+  readonly ref: CatalogRef;
+  readonly family: CatalogFamily;
+  readonly revision: string | null;
+  readonly document_digest: Sha256Digest;
+  readonly preserved_path: string;
+  readonly size_bytes: number;
 }
 
-/** One node's fixed-interface capacity for one rule, as allocated. */
-export interface BuilderNodeInterfaceFacts {
-  readonly node_id: string;
-  readonly segment_id: string;
-  readonly matching: number;
-  readonly free: number;
-}
-
-/** One drawn preview pair: a runtime node pair whose frozen-epoch geometry passed every armed gate, oriented to the rule's endpoints server-side. canvas draws these directly and never re-derives pair identities. */
-export interface BuilderPreviewPair {
-  readonly rule_id: string;
-  readonly kind: "access" | "isl" | "inter_body";
-  readonly node_a: string;
-  readonly node_b: string;
-}
-
-/** How many tested pairs one reject reason accounts for. ``reason`` is the runtime's reject_reason verbatim (or ``no_geometry``); counts sum over ``pairs_tested`` — never an untested remainder. */
-export interface BuilderPreviewReasonCount {
-  readonly reason: "los_blocked" | "range_exceeded" | "elevation_below_min" | "field_of_regard" | "terminal_type_mismatch" | "no_geometry";
-  readonly count: number;
-}
-
-/** The allocator's own outcome for one rule — the single capacity truth every display reports instead of re-deriving. For access rules nothing is consumed at resolve time (the runtime schedules access within terminal capacity): ``allocated_pairs`` counts the declared candidate universe and ``free`` always mirrors ``matching``. Displays must not present access facts as fixed allocation. */
-export interface BuilderRuleAllocation {
-  readonly rule_id: string;
-  readonly kind: "access" | "isl" | "inter_body";
-  readonly allocated_pairs: number;
-  readonly per_node: ReadonlyArray<BuilderNodeInterfaceFacts>;
-}
-
-/** The server's frozen-epoch visibility verdict for one link rule. NodalArc computes preview geometry through the same OME visibility composites the runtime uses; the builder renders these facts and never runs a second physics engine. ``preview_scope`` says whether geometry ran and, if not, why. Only ``computed`` carries reason counts and drawn pairs. The preview is bounded, not a simulation. ``pairs_total`` is the candidate universe size (a closed-form count, never a materialized pair set); ``pairs_tested`` is the deterministic subset geometry actually ran on (``min(pairs_total, budget)``, first pairs in authored/node-id order — never distance-ranked); ``pairs_drawn`` is how many tested pairs passed (the first such, capped to the draw cap). ``capped`` is true when the preview is partial on either axis (``pairs_tested < pairs_total`` or more passed than were drawn). Reason counts and drawn pairs describe the tested subset only. */
-export interface BuilderRulePreview {
-  readonly rule_id: string;
-  readonly preview_scope: "computed" | "inter_body_pending" | "terrestrial_pending" | "disabled";
-  readonly pairs_total: number;
-  readonly pairs_tested: number;
-  readonly pairs_drawn: number;
-  readonly capped: boolean;
-  readonly reason_counts: ReadonlyArray<BuilderPreviewReasonCount>;
-  readonly drawable_pairs: ReadonlyArray<BuilderPreviewPair>;
-}
-
-/** One resolved node's facts for builder display, mirrored from ``ResolvedNode``. ``kind`` is carried explicitly so no consumer infers it from the ephemeris variant shape. Satellite placement (orbital elements, frames) lives in the ephemeris; ``epoch_position`` is the OME-propagated state used to seed renderers that cannot propagate that ephemeris variant locally. Ground placement is the resolver's ``surface_position``: the ephemeris only carries ground nodes that participate in space-link physics, while the world contains every resolved node — a gateway with no space links still exists. Hardware and network facts reuse the resolved models verbatim — they are the wire truth; the builder never re-shapes them. */
-export interface BuilderWorldNode {
-  readonly node_id: string;
-  readonly local_node_id: string;
-  readonly segment_id: string;
-  readonly namespace: string;
-  readonly tenant_id: string;
-  readonly kind: "satellite" | "ground_station";
-  readonly plane: number | null;
-  readonly slot: number | null;
-  readonly tags: ReadonlyArray<string>;
-  readonly surface_position: ResolvedSurfacePosition | null;
-  readonly epoch_position: NodePosition | null;
-  readonly forwarding: "routed" | "host" | "bridge" | "control_only" | null;
-  readonly role: "router" | "host" | "forwarding_only";
-  readonly routing_instances: ReadonlyArray<NodeRoutingInstance>;
-  readonly terminal_inventory: ReadonlyArray<ResolvedTerminalBlock>;
-  readonly interfaces: ResolvedNodeInterfaces | null;
-  readonly originated_prefixes: ResolvedOriginatedPrefixes | null;
-}
-
-/** One segment as the user named it — the world tree speaks their words, never bare runtime ids. */
-export interface BuilderWorldSegment {
-  readonly segment_id: string;
-  readonly display_name: string;
+/** Response-only facts for the exact dependency closure found by the backend. */
+export interface DependencyClosureInventory {
+  readonly entries: ReadonlyArray<DependencyClosureEntry>;
+  readonly file_count: number;
+  readonly total_bytes: number;
+  readonly closure_digest: Sha256Digest;
 }
 
 /** Body origin in the session common frame at ``epoch_unix``. Positions and velocities are Earth-relative GCRS-like km vectors supplied by the backend ephemeris provider. The renderer may apply a visual scale or camera-relative transform, but these numbers remain the authoritative physical frame facts used to place bodies relative to one another. */
@@ -1958,6 +1497,44 @@ export interface EphemerisNodeTLE {
   readonly tags: ReadonlyArray<string>;
   readonly reference_body: "earth" | "luna";
   readonly frame_id: "earth" | "luna";
+}
+
+/** Ground station coverage statistics for one orbital period. */
+export interface GsPreview {
+  readonly per_station: Readonly<Record<string, GsStationPreview>>;
+  readonly simultaneous_min: number;
+  readonly simultaneous_max: number;
+  readonly simultaneous_mean: number;
+  readonly max_gap_s: number;
+}
+
+/** Per-ground-station coverage statistics. The preview samples one finite window; nothing here asserts periodic recurrence. ``longest_gap_s`` is the longest contiguous disconnected run inside that window. Leading and trailing runs count as sampled, and are never merged across the window boundary. ``total_disconnected_s`` is the window's disconnected time summed across every gap. */
+export interface GsStationPreview {
+  readonly coverage_pct: number;
+  readonly longest_gap_s: number;
+  readonly total_disconnected_s: number;
+  readonly reason: string | null;
+}
+
+/** Why ISLs fail to form — per-reason counts from visibility checks. */
+export interface IslFailureBreakdown {
+  readonly range_exceeded: number;
+  readonly tracking_exceeded: number;
+  readonly field_of_regard: number;
+  readonly los_blocked: number;
+  readonly polar_seam: number;
+  readonly terminal_exhausted: number;
+}
+
+/** ISL link feasibility statistics for one orbital period. */
+export interface IslPreview {
+  readonly total_possible: number;
+  readonly formed_at_least_once: number;
+  readonly never_formed: number;
+  readonly feasibility_pct: number;
+  readonly min_active: number;
+  readonly max_active: number;
+  readonly failure_reasons: IslFailureBreakdown | null;
 }
 
 /** One interface a node runs a routing instance on. */
@@ -2065,67 +1642,271 @@ export interface TerminalBoresight {
   readonly max_el_deg: number | null;
 }
 
-/** One resolved session as a render-ready, read-only world. */
-export interface BuilderWorld {
-  readonly session: SessionMeta;
-  readonly epoch_unix: number;
-  readonly ephemeris: SessionEphemeris;
-  readonly nodes: ReadonlyArray<BuilderWorldNode>;
-  readonly link_rules: ReadonlyArray<BuilderLinkRule>;
-  readonly segments: ReadonlyArray<BuilderWorldSegment>;
-  readonly allocations: ReadonlyArray<BuilderRuleAllocation>;
-  readonly rule_previews: ReadonlyArray<BuilderRulePreview>;
+/** Public, path-free representation returned for an opaque operation ID. */
+export interface TransitionOperation {
+  readonly operation_id: string;
+  readonly state: TransitionOperationState;
+  readonly source: TransitionOperationSource;
+  readonly facts: TransitionOperationFacts;
+  readonly created_at: string;
+  readonly updated_at: string;
+  readonly events: ReadonlyArray<TransitionOperationEvent>;
+  readonly failure: TransitionOperationFailure | null;
+  readonly runtime: TransitionRuntimeResult | null;
 }
 
-/** A single insight about the constellation configuration. Severity levels: - "info": expected physics behavior, normal operation (e.g., Earth occlusion, range limits) - "note": topology characteristic worth knowing (e.g., full mesh, terminal allocation) - "warning": potential issue that may affect routing (e.g., tracking rate dropouts, coverage gaps) - "error": configuration problem that will prevent connectivity (e.g., no cross-plane links, station beyond visibility) */
-export interface CoverageInsight {
-  readonly severity: "info" | "note" | "warning" | "error";
+/**  */
+export interface TransitionOperationEvent {
+  readonly state: TransitionOperationState;
+  readonly occurred_at: string;
+  readonly detail: string | null;
+}
+
+/** Reviewed, browser-safe facts bound to one operation. */
+export interface TransitionOperationFacts {
+  readonly document_digest: Sha256Digest | null;
+  readonly closure_digest: Sha256Digest | null;
+  readonly resolved_semantic_digest: Sha256Digest | null;
+  readonly file_count: number | null;
+  readonly total_bytes: number | null;
+  readonly release: string;
+  readonly build: string;
+}
+
+/**  */
+export interface TransitionOperationFailure {
+  readonly code: string;
   readonly message: string;
+  readonly cause_type: string | null;
 }
 
-/** Ground station coverage statistics for one orbital period. */
-export interface GsPreview {
-  readonly per_station: Readonly<Record<string, GsStationPreview>>;
-  readonly simultaneous_min: number;
-  readonly simultaneous_max: number;
-  readonly simultaneous_mean: number;
-  readonly max_gap_s: number;
+/**  */
+export interface TransitionOperationSource {
+  readonly kind: TransitionOperationSourceKind;
+  readonly logical_id: string;
 }
 
-/** Per-ground-station coverage statistics. The preview samples one finite window; nothing here asserts periodic recurrence. ``longest_gap_s`` is the longest contiguous disconnected run inside that window. Leading and trailing runs count as sampled, and are never merged across the window boundary. ``total_disconnected_s`` is the window's disconnected time summed across every gap. */
-export interface GsStationPreview {
-  readonly coverage_pct: number;
-  readonly longest_gap_s: number;
-  readonly total_disconnected_s: number;
-  readonly reason: string | null;
+/** Path-free source classes admitted by VS-API. */
+export type TransitionOperationSourceKind = "catalog_session";
+
+/** Persisted lifecycle states for one admitted session transition. */
+export type TransitionOperationState = "reserved" | "collecting" | "uploading" | "verifying" | "switching" | "succeeded" | "failed" | "cancelled";
+
+/**  */
+export interface TransitionRuntimeResult {
+  readonly session_id: string;
+  readonly generation: number;
 }
 
-/** Why ISLs fail to form — per-reason counts from visibility checks. */
-export interface IslFailureBreakdown {
-  readonly range_exceeded: number;
-  readonly tracking_exceeded: number;
-  readonly field_of_regard: number;
-  readonly los_blocked: number;
-  readonly polar_seam: number;
-  readonly terminal_exhausted: number;
+/** One located catalog site available to a custom Wizard site set. */
+export interface WizardAvailableStation {
+  readonly name: string;
+  readonly lat_deg: number;
+  readonly lon_deg: number;
+  readonly file: string;
 }
 
-/** ISL link feasibility statistics for one orbital period. */
-export interface IslPreview {
-  readonly total_possible: number;
-  readonly formed_at_least_once: number;
-  readonly never_formed: number;
-  readonly feasibility_pct: number;
-  readonly min_active: number;
-  readonly max_active: number;
-  readonly failure_reasons: IslFailureBreakdown | null;
+/** Closed catalog-site response for custom Wizard ground selection. */
+export interface WizardAvailableStationResponse {
+  readonly stations: ReadonlyArray<WizardAvailableStation>;
 }
 
-/** Complete coverage preview result. */
-export interface CoveragePreviewResult {
-  readonly orbital_period_s: number;
-  readonly preview_step_s: number;
-  readonly isl: IslPreview;
-  readonly ground_stations: GsPreview;
-  readonly warnings: ReadonlyArray<CoverageInsight>;
+/** Backend-owned presentation facts for the Wizard BFD controls. The timer controls and their bounds belong to each protocol, because the bounds are what the runtime renders for that protocol. */
+export interface WizardBfdMetadata {
+  readonly heading: string;
+  readonly enabled_field: "bfd";
+  readonly enable_label: string;
+  readonly enable_description: string;
+}
+
+/** Stable refusal when Wizard intent cannot become a Builder draft. */
+export interface WizardCompileRefusal {
+  readonly code: "wizard_compile.invalid_selection" | "wizard_compile.reference_error" | "wizard_compile.repository_unavailable";
+  readonly message: string;
+  readonly cause_type: string | null;
+}
+
+/** Request backend construction and compilation of one Wizard intent. */
+export interface WizardCompileRequest {
+  readonly draft_revision: number;
+  readonly intent: WizardSessionIntent;
+}
+
+/** Backend-owned runtime capability for one Wizard space source. */
+export interface WizardConstellationCapability {
+  readonly source_kind: WizardConstellationSourceKind;
+  readonly runtime_supported_propagators: ReadonlyArray<WizardOrbitPropagator>;
+  readonly default_propagator: WizardOrbitPropagator | null;
+  readonly unavailable_reason: string | null;
+}
+
+/** Typed orbital geometry authored by the Wizard, not persisted grammar. */
+export interface WizardConstellationGeometry {
+  readonly display_name: string;
+  readonly description: string;
+  readonly altitude_km: number;
+  readonly inclination_deg: number;
+  readonly pattern: WizardWalkerPattern;
+  readonly planes: number;
+  readonly slots_per_plane: number;
+  readonly raan_spacing_deg: number;
+  readonly phase_offset_deg: number;
+}
+
+/** One catalog-backed constellation choice exposed to the Wizard. */
+export interface WizardConstellationPreset {
+  readonly name: string;
+  readonly description: string;
+  readonly satellite_count: number;
+  readonly constellation: string;
+  readonly ground_stations: string;
+  readonly default_node: string | null;
+  readonly capability: WizardConstellationCapability;
+}
+
+/** Closed Wizard constellation catalog plus custom-geometry capability. */
+export interface WizardConstellationPresetResponse {
+  readonly presets: ReadonlyArray<WizardConstellationPreset>;
+  readonly custom_geometry: WizardConstellationCapability;
+  readonly custom_geometry_seed: WizardConstellationGeometry;
+  readonly custom_geometry_default_node: string;
+  readonly custom_geometry_patterns: ReadonlyArray<WizardWalkerPatternMetadata>;
+  readonly orbit_models: ReadonlyArray<WizardOrbitModelMetadata>;
+}
+
+/** Request one physical coverage preview from backend-selected catalog facts. */
+export interface WizardCoverageRequest {
+  readonly intent: WizardPhysicalIntent;
+}
+
+/** Presentation facts for one backend-supported Wizard extension. */
+export interface WizardExtensionMetadata {
+  readonly id: WizardExtension;
+  readonly label: string;
+  readonly description: string;
+}
+
+/** Closed backend-owned Wizard protocol and area-strategy rules. */
+export interface WizardExtensionRulesResponse {
+  readonly protocols: ReadonlyArray<WizardProtocolMetadata>;
+  readonly extensions: ReadonlyArray<WizardExtensionMetadata>;
+  readonly bfd: WizardBfdMetadata;
+  readonly routing_timer_defaults: WizardRoutingTimerIntent;
+}
+
+/** One catalog site-set choice for the Wizard ground picker. */
+export interface WizardGroundStationSetPreset {
+  readonly name: string;
+  readonly description: string;
+  readonly stations: ReadonlyArray<string>;
+  readonly file: string;
+}
+
+/** Closed catalog site-set response for the Wizard. */
+export interface WizardGroundStationSetPresetResponse {
+  readonly presets: ReadonlyArray<WizardGroundStationSetPreset>;
+}
+
+/** Presentation metadata for one backend-supported Wizard orbit choice. */
+export interface WizardOrbitModelMetadata {
+  readonly id: WizardOrbitPropagator;
+  readonly label: string;
+  readonly description: string;
+}
+
+/** Wizard-selected physical sources used for preview and authoring. */
+export interface WizardPhysicalIntent {
+  readonly constellation_ref?: string | null;
+  readonly custom_constellation?: WizardConstellationGeometry | null;
+  readonly satellite_node_ref?: string | null;
+  readonly ground_site_set_ref?: string | null;
+  readonly custom_site_refs?: ReadonlyArray<string>;
+  readonly orbit_propagator: WizardOrbitPropagator;
+}
+
+/** One selectable routing protocol and its backend-owned Wizard behavior. */
+export interface WizardProtocolMetadata {
+  readonly id: WizardRoutingProtocol;
+  readonly label: string;
+  readonly description: string;
+  readonly extensions: ReadonlyArray<WizardExtension>;
+  readonly extension_constraints: Readonly<Record<string, ReadonlyArray<WizardExtension>>>;
+  readonly timer_label: string;
+  readonly timer_fields: ReadonlyArray<WizardRoutingTimerFieldMetadata>;
+  readonly bfd_timer_fields: ReadonlyArray<WizardRoutingTimerFieldMetadata> | null;
+  readonly area_strategies: ReadonlyArray<WizardAreaStrategy>;
+  readonly default_area_strategy: WizardAreaStrategy;
+}
+
+/** Presentation and validation facts for one numeric protocol timer control. */
+export interface WizardRoutingTimerFieldMetadata {
+  readonly id: WizardRoutingTimerField;
+  readonly label: string;
+  readonly unit: string | null;
+  readonly description: string;
+  readonly guidance: string;
+  readonly minimum: number;
+  readonly maximum: number | null;
+}
+
+/** Raw Wizard routing controls mapped to session grammar only by the backend. */
+export interface WizardRoutingTimerIntent {
+  readonly bfd: boolean;
+  readonly bfd_detect_multiplier: number;
+  readonly bfd_rx_interval: number;
+  readonly bfd_tx_interval: number;
+  readonly isis_hello_interval: number;
+  readonly isis_hello_multiplier: number;
+  readonly spf_init_delay: number;
+  readonly spf_short_delay: number;
+  readonly spf_long_delay: number;
+  readonly spf_holddown: number;
+  readonly spf_time_to_learn: number;
+  readonly ospf_hello_interval: number;
+  readonly ospf_dead_interval: number;
+  readonly ospf_spf_delay: number;
+  readonly ospf_spf_initial_hold: number;
+  readonly ospf_spf_max_hold: number;
+}
+
+/** One installed terminal mount summarized for a satellite preset card. */
+export interface WizardSatelliteTerminalSummary {
+  readonly id: string;
+  readonly role: WizardTerminalRole;
+  readonly count: number;
+}
+
+/** One catalog node primitive that can fly a Wizard constellation. */
+export interface WizardSatelliteTypePreset {
+  readonly name: string;
+  readonly display_name: string;
+  readonly notes: string;
+  readonly file: string;
+  readonly terminals: ReadonlyArray<WizardSatelliteTerminalSummary>;
+}
+
+/** Closed catalog-node response for the Wizard satellite picker. */
+export interface WizardSatelliteTypePresetResponse {
+  readonly presets: ReadonlyArray<WizardSatelliteTypePreset>;
+}
+
+/** One Wizard selection set compiled into an ordinary Builder draft. */
+export interface WizardSessionIntent {
+  readonly constellation_ref?: string | null;
+  readonly custom_constellation?: WizardConstellationGeometry | null;
+  readonly satellite_node_ref?: string | null;
+  readonly ground_site_set_ref?: string | null;
+  readonly custom_site_refs?: ReadonlyArray<string>;
+  readonly orbit_propagator: WizardOrbitPropagator;
+  readonly protocol: WizardRoutingProtocol;
+  readonly extensions?: ReadonlyArray<WizardExtension>;
+  readonly area_strategy?: WizardAreaStrategy;
+  readonly routing_timers: WizardRoutingTimerIntent;
+}
+
+/** Presentation facts for one backend-supported custom Walker pattern. */
+export interface WizardWalkerPatternMetadata {
+  readonly id: WizardWalkerPattern;
+  readonly label: string;
+  readonly description: string;
 }

@@ -30,12 +30,12 @@ function operation(state: "verifying" | "succeeded" | "failed") {
     created_at: "2026-07-10T00:00:00Z",
     updated_at: "2026-07-10T00:00:01Z",
     events: [
-      { state: "reserved" as const, occurred_at: "2026-07-10T00:00:00Z" },
-      { state, occurred_at: "2026-07-10T00:00:01Z" },
+      { state: "reserved" as const, occurred_at: "2026-07-10T00:00:00Z", detail: null },
+      { state, occurred_at: "2026-07-10T00:00:01Z", detail: null },
     ],
     failure:
       state === "failed"
-        ? { code: "switch_failed", message: "Operator refused the runtime proof" }
+        ? { code: "switch_failed", message: "Operator refused the runtime proof", cause_type: null }
         : null,
     runtime: state === "succeeded" ? { session_id: "proof", generation: 3 } : null,
   };

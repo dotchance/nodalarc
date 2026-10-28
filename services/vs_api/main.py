@@ -890,7 +890,6 @@ def _build_snapshot(*, ops_after: int = 0) -> StateSnapshot | None:
                 if (engine_wall := ctx.engine_wall_time())
                 else now
             ),
-            schema_version=1,
             session_id=ctx.session_id,
             nodes=nodes,
             links=links,

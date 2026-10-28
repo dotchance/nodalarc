@@ -27,7 +27,14 @@ sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "lib"))
 
 from nodalarc.catalog_refs import CatalogFamily, CatalogRef, SessionRef  # noqa: E402
-from nodalarc.models.api_refusal import ApiRefusal  # noqa: E402
+from nodalarc.models import (  # noqa: E402
+    decision_explanation,
+    events,
+    link_decisions,
+    scheduler_ops,
+    vs_api,
+)
+from nodalarc.models.api_refusal import ApiRefusal, LegacyRefusal  # noqa: E402
 from nodalarc.models.builder_api import (  # noqa: E402
     BuilderBlockedOperation,
     BuilderCatalogDocument,
@@ -227,8 +234,6 @@ from nodalarc.models.builder_visual_api import (  # noqa: E402
 )
 from nodalarc.models.builder_world import BuilderWorld  # noqa: E402
 from nodalarc.models.coverage import CoveragePreviewResult  # noqa: E402
-from nodalarc.models.events import PlaybackControlCommand, PlaybackState  # noqa: E402
-from nodalarc.models.scheduler_ops import OperatorRepairRequest  # noqa: E402
 from nodalarc.models.session_sources import (  # noqa: E402
     CatalogSessionSourceId,
     CatalogSessionSummary,
@@ -241,43 +246,17 @@ from nodalarc.models.session_sources import (  # noqa: E402
     TransitionOperationFacts,
     TransitionOperationFailure,
     TransitionOperationSource,
-    TransitionOperationSourceKind,
-    TransitionOperationState,
     TransitionRuntimeResult,
-)
-from nodalarc.models.vs_api import (  # noqa: E402
-    AuthToken,
-    ContinuousTraceStarted,
-    ContinuousTraceStatus,
-    ContinuousTraceStopped,
-    DebugControlAcknowledgedFact,
-    DebugControlFailedFact,
-    DebugControlRejectedFact,
-    DebugControlUnansweredFact,
-    DebugStopAllCommand,
-    DebugStopCommand,
-    DebugStreamCommand,
-    DecisionExplanationQuery,
-    DecisionTimelineQuery,
-    GroundLinkDecisionsQuery,
-    HealthStatus,
-    IntrospectRequest,
-    IntrospectResult,
-    LinkDecisionTracesQuery,
-    LinkHistoryQuery,
-    OpsEventsQuery,
-    TerminalInput,
-    TerminalOutput,
-    TerminalResize,
-    TracedPath,
-    TraceRequest,
 )
 from nodalarc.project_info import ProjectAbout  # noqa: E402
 from pydantic import BaseModel, TypeAdapter  # noqa: E402
+from pydantic.json_schema import GenerateJsonSchema  # noqa: E402
 
-OUT = ROOT / "frontend/src/builder/generated/builderApi.ts"
+BUILDER_OUT = ROOT / "frontend/src/builder/generated/builderApi.ts"
+RUNTIME_OUT = ROOT / "frontend/src/generated/vsApi.ts"
 
-MODEL_TYPES: tuple[type[BaseModel], ...] = (
+# The Builder, Wizard, catalog and session-switch contracts.
+BUILDER_ROOTS: tuple[type[BaseModel], ...] = (
     BuilderIssue,
     BuilderCatalogDocument,
     BuilderProposedCatalogDocument,
@@ -381,35 +360,6 @@ MODEL_TYPES: tuple[type[BaseModel], ...] = (
     CatalogSessionSwitchRequest,
     CatalogSessionSwitchAccepted,
     CatalogSessionYamlUploadRequest,
-    IntrospectRequest,
-    IntrospectResult,
-    HealthStatus,
-    ProjectAbout,
-    AuthToken,
-    ContinuousTraceStarted,
-    ContinuousTraceStopped,
-    TracedPath,
-    ContinuousTraceStatus,
-    TraceRequest,
-    DebugControlAcknowledgedFact,
-    DebugControlRejectedFact,
-    DebugControlUnansweredFact,
-    DebugControlFailedFact,
-    DebugStreamCommand,
-    DebugStopCommand,
-    DebugStopAllCommand,
-    TerminalInput,
-    TerminalResize,
-    TerminalOutput,
-    OperatorRepairRequest,
-    PlaybackControlCommand,
-    PlaybackState,
-    LinkHistoryQuery,
-    OpsEventsQuery,
-    LinkDecisionTracesQuery,
-    DecisionExplanationQuery,
-    DecisionTimelineQuery,
-    GroundLinkDecisionsQuery,
     CatalogSessionYamlQuery,
     TransitionOperationSource,
     TransitionOperationFacts,
@@ -485,13 +435,99 @@ MODEL_TYPES: tuple[type[BaseModel], ...] = (
     CatalogYamlImportCollision,
     CatalogSessionYamlImportResult,
     CatalogOperationRefusal,
+    BuilderWorld,
+    CoveragePreviewResult,
 )
 
-# Schema roots whose complete nested wire contracts are part of the generated
-# application API. Pydantic places their referenced models in ``$defs``; emit
-# those definitions recursively so the browser never maintains handwritten
-# twins of backend-owned response DTOs.
-EMBEDDED_MODEL_TYPES: tuple[type[BaseModel], ...] = (BuilderWorld, CoveragePreviewResult)
+# The runtime contracts: the state socket and terminal socket messages, and every
+# other route's request, query and answer.
+RUNTIME_ROOTS: tuple[tuple[str, Any], ...] = (
+    ("StateFeedFrame", vs_api.StateFeedFrame),
+    ("StateSocketCommand", vs_api.StateSocketCommand),
+    ("TerminalMessage", vs_api.TerminalMessage),
+    ("DebugSourceControl", vs_api.DebugSourceControl),
+    ("HealthStatus", vs_api.HealthStatus),
+    ("ProjectAbout", ProjectAbout),
+    ("AuthToken", vs_api.AuthToken),
+    ("LegacyRefusal", LegacyRefusal),
+    ("ActuationHealth", vs_api.ActuationHealth),
+    ("StampedOpsEvent", vs_api.StampedOpsEvent),
+    ("OpsEventsQuery", vs_api.OpsEventsQuery),
+    ("OperatorRepairRequest", scheduler_ops.OperatorRepairRequest),
+    ("OperatorRepairResponse", scheduler_ops.OperatorRepairResponse),
+    ("LinkHistoryPage", vs_api.LinkHistoryPage),
+    ("LinkHistoryQuery", vs_api.LinkHistoryQuery),
+    ("LinkDecisionTrace", vs_api.LinkDecisionTrace),
+    ("LinkDecisionTracesQuery", vs_api.LinkDecisionTracesQuery),
+    ("DecisionExplanationFacts", decision_explanation.DecisionExplanationFacts),
+    ("DecisionExplanationQuery", vs_api.DecisionExplanationQuery),
+    ("GsDecisionTimelineFacts", decision_explanation.GsDecisionTimelineFacts),
+    ("DecisionTimelineQuery", vs_api.DecisionTimelineQuery),
+    ("GroundLinkDecisionSnapshot", link_decisions.GroundLinkDecisionSnapshot),
+    ("GroundLinkDecisionsQuery", vs_api.GroundLinkDecisionsQuery),
+    ("TraceRequest", vs_api.TraceRequest),
+    ("TracedPath", vs_api.TracedPath),
+    ("ContinuousTraceStarted", vs_api.ContinuousTraceStarted),
+    ("ContinuousTraceStopped", vs_api.ContinuousTraceStopped),
+    ("ContinuousTraceStatus", vs_api.ContinuousTraceStatus),
+    ("PlaybackControlCommand", events.PlaybackControlCommand),
+    ("PlaybackState", events.PlaybackState),
+    ("IntrospectRequest", vs_api.IntrospectRequest),
+    ("IntrospectResult", vs_api.IntrospectResult),
+)
+
+# Every model a client sends: route bodies, query strings and socket messages.
+# A definition any of them reaches renders a field with a default as optional;
+# a definition only answers reach renders every field, since VS-API sends them all.
+REQUEST_ROOTS: frozenset[str] = frozenset(
+    {
+        "BuilderCompileRequest",
+        "BuilderSessionDeployRequest",
+        "BuilderSessionSaveRequest",
+        "BuilderVisualControlMutationRequest",
+        "BuilderVisualCustomizeChainRequest",
+        "BuilderVisualDraftApplyWorkspaceRequest",
+        "BuilderVisualDraftApplyYamlRequest",
+        "BuilderVisualDraftCommandRequest",
+        "BuilderVisualDraftCompileRequest",
+        "BuilderVisualDraftCreateRequest",
+        "BuilderVisualDraftOpenRequest",
+        "BuilderVisualDraftRetargetRequest",
+        "BuilderVisualWalkerLayoutRequest",
+        "CatalogDeleteRequest",
+        "CatalogDependentsRequest",
+        "CatalogDraftAddNodeEthernetPortRequest",
+        "CatalogDraftAddNodeTerminalMountRequest",
+        "CatalogDraftAddSiteNodeRequest",
+        "CatalogDraftApplyYamlRequest",
+        "CatalogDraftCompileRequest",
+        "CatalogDraftControlMutationRequest",
+        "CatalogDraftNewRequest",
+        "CatalogDraftOpenRequest",
+        "CatalogDraftSaveRequest",
+        "CatalogGetRequest",
+        "CatalogListRequest",
+        "CatalogSessionSwitchRequest",
+        "CatalogSessionYamlExportRequest",
+        "CatalogSessionYamlImportRequest",
+        "CatalogSessionYamlQuery",
+        "CatalogSessionYamlUploadRequest",
+        "DecisionExplanationQuery",
+        "DecisionTimelineQuery",
+        "GroundLinkDecisionsQuery",
+        "IntrospectRequest",
+        "LinkDecisionTracesQuery",
+        "LinkHistoryQuery",
+        "OperatorRepairRequest",
+        "OpsEventsQuery",
+        "PlaybackControlCommand",
+        "StateSocketCommand",
+        "TerminalMessage",
+        "TraceRequest",
+        "WizardCompileRequest",
+        "WizardCoverageRequest",
+    }
+)
 
 
 def _alias_args(alias: Any) -> tuple[Any, ...]:
@@ -535,11 +571,6 @@ LITERAL_ALIASES: tuple[tuple[str, tuple[Any, ...]], ...] = (
     ("BuilderVisualDraftAffectedKind", _alias_args(BuilderVisualDraftAffectedKind)),
     ("CatalogComponentFamily", _alias_args(CatalogComponentFamily)),
     ("CatalogDraftIssueStage", _alias_args(CatalogDraftIssueStage)),
-    ("TransitionOperationState", tuple(state.value for state in TransitionOperationState)),
-    (
-        "TransitionOperationSourceKind",
-        tuple(kind.value for kind in TransitionOperationSourceKind),
-    ),
 )
 _LITERAL_ALIAS_BY_VALUES = {values: name for name, values in LITERAL_ALIASES}
 _SHA256_PATTERN = TypeAdapter(Sha256Digest).json_schema()["pattern"]
@@ -561,24 +592,34 @@ def _literal_union(values: Sequence[Any]) -> str:
     return " | ".join(_literal(value) for value in values)
 
 
+# The generated names one module's types refer to, collected while it renders.
+_used_names: set[str] = set()
+
+
+def _named(name: str) -> str:
+    _used_names.add(name)
+    return name
+
+
 def _render_type(schema: dict[str, Any]) -> str:
     reference = schema.get("$ref")
     if reference is not None:
         name = reference.rsplit("/", 1)[-1]
         if name in _GENERIC_CONFIGURATION_SCHEMA_REFS:
-            return "Readonly<Record<string, JsonValue>>"
-        return name
+            return f"Readonly<Record<string, {_named('JsonValue')}>>"
+        return _named(name)
 
     if schema.get("pattern") == _SHA256_PATTERN:
-        return "Sha256Digest"
+        return _named("Sha256Digest")
     reference_alias = _REFERENCE_ALIAS_BY_PATTERN.get(schema.get("pattern"))
     if reference_alias is not None:
-        return reference_alias
+        return _named(reference_alias)
 
     enum = schema.get("enum")
     if enum is not None:
         values = tuple(enum)
-        return _LITERAL_ALIAS_BY_VALUES.get(values, _literal_union(values))
+        alias = _LITERAL_ALIAS_BY_VALUES.get(values)
+        return _named(alias) if alias is not None else _literal_union(values)
 
     if "const" in schema:
         return _literal(schema["const"])
@@ -609,56 +650,130 @@ def _render_type(schema: dict[str, Any]) -> str:
         pattern_properties = schema.get("patternProperties")
         if isinstance(pattern_properties, dict) and len(pattern_properties) == 1:
             pattern, value_schema = next(iter(pattern_properties.items()))
-            key_type = _REFERENCE_ALIAS_BY_PATTERN.get(pattern, "string")
-            return f"Readonly<Record<{key_type}, {_render_type(value_schema)}>>"
+            key_type = _REFERENCE_ALIAS_BY_PATTERN.get(pattern)
+            key = _named(key_type) if key_type is not None else "string"
+            return f"Readonly<Record<{key}, {_render_type(value_schema)}>>"
+        if not schema.get("properties"):
+            # A free-form object: any JSON object.
+            return f"Readonly<Record<string, {_named('JsonValue')}>>"
 
     if not schema:
-        return "JsonValue"
+        return _named("JsonValue")
     raise ValueError(f"unsupported Builder API JSON Schema fragment: {schema!r}")
 
 
-def _render_model(model: type[BaseModel]) -> list[str]:
-    schema = model.model_json_schema()
-    root = schema
-    reference = schema.get("$ref")
-    if reference is not None:
-        root = schema.get("$defs", {})[reference.rsplit("/", 1)[-1]]
-    if root.get("type") != "object" or root.get("additionalProperties") is not False:
-        raise ValueError(f"{model.__name__} must remain a closed object contract")
+def _root_schemas() -> tuple[dict[str, Any], dict[str, dict[str, Any]], frozenset[str]]:
+    """One schema pass over every root: each root's schema by name, every shared
+    definition once, and the names of the Builder roots."""
 
-    return _render_object_schema(model.__name__, root)
+    roots: list[tuple[str, Any]] = [(model.__name__, model) for model in BUILDER_ROOTS]
+    roots.extend(RUNTIME_ROOTS)
+    names = [name for name, _ in roots]
+    if len(set(names)) != len(names):
+        raise ValueError("a generated root is listed twice")
+    unknown_requests = REQUEST_ROOTS - set(names)
+    if unknown_requests:
+        raise ValueError(f"request roots that are not generated: {sorted(unknown_requests)}")
+    generator = GenerateJsonSchema(ref_template="#/$defs/{model}")
+    by_key, definitions = generator.generate_definitions(
+        [(name, "validation", TypeAdapter(root).core_schema) for name, root in roots]
+    )
+    schemas = {name: by_key[(name, "validation")] for name in names}
+    return schemas, definitions, frozenset(model.__name__ for model in BUILDER_ROOTS)
 
 
-def _render_object_schema(
-    name: str,
-    schema: dict[str, Any],
-    *,
-    serialized_defaults_are_present: bool = False,
+def _references(schema: Any) -> set[str]:
+    """The definitions a schema refers to directly."""
+
+    found: set[str] = set()
+    if isinstance(schema, dict):
+        reference = schema.get("$ref")
+        if isinstance(reference, str):
+            found.add(reference.rsplit("/", 1)[-1])
+        for value in schema.values():
+            found |= _references(value)
+    elif isinstance(schema, list):
+        for value in schema:
+            found |= _references(value)
+    return found
+
+
+def _reach(start: dict[str, Any], definitions: dict[str, dict[str, Any]]) -> set[str]:
+    """Every definition the given schemas reach. Configuration documents are generic
+    JSON on the page, so the walk does not enter them."""
+
+    reached: set[str] = set()
+    pending = [name for schema in start.values() for name in _references(schema)]
+    while pending:
+        name = pending.pop()
+        if name in reached or name in _GENERIC_CONFIGURATION_SCHEMA_REFS:
+            continue
+        reached.add(name)
+        pending.extend(_references(definitions[name]))
+    return reached
+
+
+def _render_definition(
+    name: str, schema: dict[str, Any], *, every_field_present: bool
 ) -> list[str]:
-    if schema.get("type") != "object":
-        raise ValueError(f"{name} must remain an object contract")
-
     description = " ".join(str(schema.get("description", "")).split())
+    if "enum" in schema:
+        return [f"/** {description} */", f"export type {name} = {_literal_union(schema['enum'])};"]
+    if schema.get("type") != "object":
+        raise ValueError(f"{name} must be an object contract or an enumeration")
+    if schema.get("additionalProperties") is not False:
+        raise ValueError(f"{name} must remain a closed object contract")
+    properties = schema.get("properties", {})
     required = (
-        frozenset(schema.get("properties", {}))
-        if serialized_defaults_are_present
-        else frozenset(schema.get("required", ()))
+        frozenset(properties) if every_field_present else frozenset(schema.get("required", ()))
     )
     lines = [f"/** {description} */", f"export interface {name} {{"]
-    for name, field_schema in schema["properties"].items():
-        optional = "" if name in required else "?"
-        lines.append(f"  readonly {name}{optional}: {_render_type(field_schema)};")
+    for field, field_schema in properties.items():
+        optional = "" if field in required else "?"
+        lines.append(f"  readonly {field}{optional}: {_render_type(field_schema)};")
     lines.append("}")
     return lines
 
 
-def render() -> str:
-    lines = [
-        "// GENERATED FILE — DO NOT EDIT BY HAND.",
-        "// Sources of truth: backend Pydantic application contracts in",
-        "// lib/nodalarc/models.",
-        "// Regenerate: make generate-contracts",
-        "//",
+_HEADER = [
+    "// GENERATED FILE — DO NOT EDIT BY HAND.",
+    "// Sources of truth: backend Pydantic application contracts in",
+    "// lib/nodalarc/models.",
+    "// Regenerate: make generate-contracts",
+    "//",
+]
+
+# Names the Builder module declares by hand: JSON values and the reference aliases.
+_BUILDER_PRELUDE_NAMES = frozenset(
+    {"JsonValue", "Sha256Digest", "CatalogRef", "SessionRef", "SessionSourceId"}
+)
+
+
+def render() -> dict[Path, str]:
+    """The generated text of each output module."""
+
+    schemas, definitions, builder_names = _root_schemas()
+    requested = _reach({name: schemas[name] for name in REQUEST_ROOTS}, definitions)
+    in_builder = _reach({name: schemas[name] for name in builder_names}, definitions)
+    in_runtime = _reach(schemas, definitions) - in_builder
+    alias_names = {name for name, _ in LITERAL_ALIASES}
+
+    def definitions_of(names: set[str]) -> list[str]:
+        lines: list[str] = []
+        for name in definitions:
+            if name not in names or name in alias_names or name == "JsonValue":
+                continue
+            lines.extend(
+                _render_definition(
+                    name, definitions[name], every_field_present=name not in requested
+                )
+            )
+            lines.append("")
+        return lines
+
+    _used_names.clear()
+    builder = [
+        *_HEADER,
         "// These are non-grammar application contracts. Configuration fields remain",
         "// generic JSON in TypeScript and are validated by backend Pydantic models.",
         "",
@@ -676,46 +791,38 @@ def render() -> str:
         "export type CatalogRef = string;",
         "/** Catalog reference whose family is sessions. */",
         "export type SessionRef = CatalogRef;",
-        "/** Workload binding reference resolved against the package source. */",
         "/** Path-free deployable source selected by the browser. */",
         "export type SessionSourceId = CatalogSessionSourceId;",
         "",
     ]
     for name, values in LITERAL_ALIASES:
-        lines.append(f"export type {name} = {_literal_union(values)};")
-    lines.append("")
+        builder.append(f"export type {name} = {_literal_union(values)};")
+    builder.append("")
+    builder.extend(definitions_of(in_builder))
 
-    for model in MODEL_TYPES:
-        lines.extend(_render_model(model))
-        lines.append("")
-    emitted_names = {model.__name__ for model in MODEL_TYPES}
-    for model in EMBEDDED_MODEL_TYPES:
-        schema = model.model_json_schema()
-        definitions = schema.get("$defs", {})
-        for name, definition in definitions.items():
-            if name in emitted_names:
-                raise ValueError(f"duplicate generated Builder API contract {name}")
-            lines.extend(
-                _render_object_schema(
-                    name,
-                    definition,
-                    serialized_defaults_are_present=True,
-                )
-            )
-            lines.append("")
-            emitted_names.add(name)
-        if model.__name__ in emitted_names:
-            raise ValueError(f"duplicate generated Builder API contract {model.__name__}")
-        lines.extend(
-            _render_object_schema(
-                model.__name__,
-                schema,
-                serialized_defaults_are_present=True,
-            )
-        )
-        lines.append("")
-        emitted_names.add(model.__name__)
-    return "\n".join(lines).rstrip() + "\n"
+    _used_names.clear()
+    runtime_body: list[str] = []
+    for name, _root in RUNTIME_ROOTS:
+        if "$ref" not in schemas[name]:
+            runtime_body.append(f"export type {name} = {_render_type(schemas[name])};")
+            runtime_body.append("")
+    runtime_body.extend(definitions_of(in_runtime))
+    from_builder = sorted(
+        name
+        for name in _used_names
+        if name in in_builder or name in alias_names or name in _BUILDER_PRELUDE_NAMES
+    )
+    runtime = [*_HEADER, "// The runtime contracts VS-API serves and the clients it accepts.", ""]
+    if from_builder:
+        runtime.append("import type {")
+        runtime.extend(f"  {name}," for name in from_builder)
+        runtime.append('} from "../builder/generated/builderApi";')
+        runtime.append("")
+    runtime.extend(runtime_body)
+    return {
+        BUILDER_OUT: "\n".join(builder).rstrip() + "\n",
+        RUNTIME_OUT: "\n".join(runtime).rstrip() + "\n",
+    }
 
 
 def main(argv: Sequence[str] | None = None) -> None:
@@ -725,25 +832,25 @@ def main(argv: Sequence[str] | None = None) -> None:
 
     generated = render()
     if args.check:
-        current = OUT.read_text(encoding="utf-8") if OUT.exists() else ""
-        if current != generated:
+        stale = [
+            path.relative_to(ROOT)
+            for path, text in generated.items()
+            if (path.read_text(encoding="utf-8") if path.exists() else "") != text
+        ]
+        if stale:
             print(
-                "STALE: frontend/src/builder/generated/builderApi.ts differs from "
-                "lib/nodalarc/models/builder_api.py. Regenerate with "
-                "make generate-contracts",
+                f"STALE: {', '.join(map(str, stale))} differ from lib/nodalarc/models. "
+                "Regenerate with make generate-contracts",
                 file=sys.stderr,
             )
             raise SystemExit(1)
-        print("builderApi.ts is up to date.")
+        print("generated contracts are up to date.")
         return
 
-    OUT.parent.mkdir(parents=True, exist_ok=True)
-    OUT.write_text(generated, encoding="utf-8")
-    print(
-        f"wrote {OUT.relative_to(ROOT)} "
-        f"({len(MODEL_TYPES)} application roots + "
-        f"{len(EMBEDDED_MODEL_TYPES)} embedded schema roots)"
-    )
+    for path, text in generated.items():
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text, encoding="utf-8")
+        print(f"wrote {path.relative_to(ROOT)}")
 
 
 if __name__ == "__main__":

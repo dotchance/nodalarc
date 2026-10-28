@@ -168,7 +168,6 @@ export function builderSnapshotFromWorld(world: BuilderWorld): StateSnapshot {
     debug_subscription_open: false,
     sim_time: world.ephemeris.sim_time,
     wall_time: world.ephemeris.sim_time,
-    schema_version: 0,
     session_id: `builder:${world.session.name}`,
     nodes,
     links: [],

@@ -171,7 +171,7 @@ class GroundPolicyAudit(BaseModel):
     params; the params bag is not a global schema shared by every policy.
     """
 
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
     selection_policies: dict[str, str]
     selection_policy_params: dict[str, dict[str, Any]]
@@ -201,7 +201,7 @@ class GroundAllocationEvent(BaseModel):
     set both fields to `None`.
     """
 
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
     category: GroundAllocationEventCategory
     pair: tuple[str, str]
@@ -276,7 +276,7 @@ class GroundVisibilityDecisionWire(BaseModel):
     audited.
     """
 
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
     pair: tuple[str, str]
     tenant_id: str
@@ -449,7 +449,7 @@ class UnscheduledPair(BaseModel):
     ground-terminal id).
     """
 
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
     pair: tuple[str, str]
     tenant_id: str
@@ -504,7 +504,7 @@ class GroundLinkDecisionSnapshot(BaseModel):
     impossible states at construction.
     """
 
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
     sim_time: datetime
     snapshot_seq: int

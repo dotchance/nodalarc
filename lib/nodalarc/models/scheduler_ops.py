@@ -213,7 +213,7 @@ class OperatorRepairCommand(BaseModel):
 
 
 class OperatorRepairResponse(BaseModel):
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
     status: Literal["accepted", "rejected"]
     intervention_id: str

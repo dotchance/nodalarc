@@ -113,8 +113,7 @@ export function useWebSocket(): WebSocketState {
         if (
           data.state &&
           data.epoch_id !== undefined &&
-          !data.sim_time &&
-          !data.schema_version
+          !data.sim_time
         ) {
           setPlaybackState(data as PlaybackStateMsg);
           return;

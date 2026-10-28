@@ -5,16 +5,8 @@
  */
 
 import type { ActuationState, SchedulerOpsCode } from "./explain/reasons";
-import type {
-  CatalogSessionSummary,
-  DebugControlAcknowledgedFact,
-  DebugControlFailedFact,
-  DebugControlRejectedFact,
-  DebugControlUnansweredFact,
-  DebugStopAllCommand,
-  DebugStopCommand,
-  DebugStreamCommand,
-} from "./builder/generated/builderApi";
+import type { CatalogSessionSummary } from "./builder/generated/builderApi";
+import type { DebugSourceControl, StateSocketCommand } from "./generated/vsApi";
 import type { SessionEphemeris } from "./sim/ephemeris";
 
 export interface NodeAddress {
@@ -235,15 +227,7 @@ export interface OpsEvent {
   details?: Record<string, unknown> | null;
 }
 
-/** VS-API's last debug control request to one service, and what came back. */
-export type DebugSourceControl =
-  | DebugControlAcknowledgedFact
-  | DebugControlRejectedFact
-  | DebugControlUnansweredFact
-  | DebugControlFailedFact;
-
-/** Every message the page sends on the state socket. */
-export type StateSocketCommand = DebugStreamCommand | DebugStopCommand | DebugStopAllCommand;
+export type { DebugSourceControl, StateSocketCommand };
 
 /** An ops event as VS-API serves it, stamped with its arrival seq. */
 export interface StampedOpsEvent {
@@ -316,7 +300,6 @@ export interface StateSnapshot {
   msg_type: "state_snapshot";
   sim_time: string;
   wall_time: string;
-  schema_version: number;
   session_id: string;
   nodes: NodeState[];
   links: LinkState[];

@@ -638,7 +638,6 @@
       "playback_speed",
       "recent_events",
       "routing_stack",
-      "schema_version",
       "session_id",
       "session_status",
       "session_status_detail",

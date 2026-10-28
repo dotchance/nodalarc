@@ -82,7 +82,6 @@ def _frame(
     return StateSnapshot(
         sim_time=at,
         wall_time=at,
-        schema_version=1,
         session_id="run-history-0001",
         nodes=[],
         links=[],

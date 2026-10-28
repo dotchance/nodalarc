@@ -425,7 +425,6 @@ class StateSnapshot(BaseModel):
     msg_type: Literal["state_snapshot"] = "state_snapshot"
     sim_time: datetime
     wall_time: datetime
-    schema_version: int  # Always 1
     session_id: str
     nodes: list[NodeState]
     links: list[LinkState]

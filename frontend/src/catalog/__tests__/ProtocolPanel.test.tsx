@@ -41,6 +41,7 @@ const RULES: ExtensionRules = {
           description: "Backend timer description",
           guidance: "Backend timer guidance",
           minimum: 0,
+          maximum: null,
         },
       ],
       bfd_timer_fields: [
@@ -90,6 +91,7 @@ const RULES: ExtensionRules = {
           description: "Backend hello description",
           guidance: "Backend hello guidance",
           minimum: 1,
+          maximum: null,
         },
       ],
       bfd_timer_fields: null,

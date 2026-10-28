@@ -969,6 +969,7 @@ describe("deploy gate: saved backend verdict and exact digest truth", () => {
     digests: {
       document: "doc-x",
       dependency: "dep-x",
+      resolved_semantic: null,
     },
     blockers: [],
   };
@@ -1018,6 +1019,12 @@ describe("deploy gate: saved backend verdict and exact digest truth", () => {
             severity: "error",
             message: "no satellites — the session cannot start on the cluster",
             blocks: ["deploy"],
+            source_ref: null,
+            json_pointer: null,
+            draft_path: null,
+            source_line: null,
+            source_column: null,
+            related_refs: [],
           },
         ],
       },

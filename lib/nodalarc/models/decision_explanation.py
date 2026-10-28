@@ -78,7 +78,7 @@ class LadderGate(BaseModel):
     renders the reason_code through the registry — this row carries no human text.
     """
 
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
     gate: FunnelGate
     state: GateState
@@ -100,7 +100,7 @@ class EnvelopeEndpoint(BaseModel):
     rather than pretending it is one scalar (see the UX plan, Effective Envelope).
     """
 
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
     node_role: Literal["ground", "satellite"]
     terminal_profile: str | None
@@ -123,7 +123,7 @@ class EffectiveEnvelopeFacts(BaseModel):
     points at the terminal that actually limits the link.
     """
 
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
     reference_body: SupportedSurfaceBody
     configured_min_elevation_deg: float
@@ -145,7 +145,7 @@ class CandidateFacts(BaseModel):
     exists is the closest-to-visible rejected pair chosen.
     """
 
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
     pair: tuple[str, str]
     binding_gate: FunnelGate | None
@@ -187,7 +187,7 @@ class ActuationFacts(BaseModel):
     a divergence younger than ``fault_after_ms`` is calm in_flight, at/older is faulted;
     the deadline a UI shows is ``diverged_since + fault_after_ms``."""
 
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
     state: ActuationState
     ome_desired: bool
@@ -207,7 +207,7 @@ class DecisionExplanationFacts(BaseModel):
     the explanation to the committed snapshot it was derived from.
     """
 
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
     gs_id: str
     pair: tuple[str, str]
@@ -235,7 +235,7 @@ class GsDecisionTimelineSample(BaseModel):
     this station been doing recently?" without polling the full GS×sat matrix.
     """
 
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
     gs_id: str
     sim_time: datetime
@@ -253,7 +253,7 @@ class GsDecisionTimelineSample(BaseModel):
 class GsDecisionReasonCount(BaseModel):
     """Aggregated count for a reason/state in the sampled window."""
 
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
     state: DecisionSampleState
     reason_code: DecisionReasonCode | None
@@ -263,7 +263,7 @@ class GsDecisionReasonCount(BaseModel):
 class GsDecisionTimelineFacts(BaseModel):
     """Bounded observed window for one GS, plus diagnosis roll-up facts."""
 
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
     gs_id: str
     sample_count: int

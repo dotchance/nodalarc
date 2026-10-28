@@ -14,7 +14,7 @@ import { FitAddon } from "@xterm/addon-fit";
 import { WebLinksAddon } from "@xterm/addon-web-links";
 import "@xterm/xterm/css/xterm.css";
 import { REST_URL, getApiKey } from "../config";
-import type { TerminalInput, TerminalOutput, TerminalResize } from "../builder/generated/builderApi";
+import type { TerminalInput, TerminalOutput, TerminalResize } from "../generated/vsApi";
 import { tokens, withAlpha } from "../styles/tokens";
 
 type ConnectionStatus = "connecting" | "connected" | "disconnected" | "error";

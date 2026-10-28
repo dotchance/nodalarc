@@ -19,7 +19,6 @@ function snapshot(history_recording: HistoryRecordingState | null): StateSnapsho
     debug_subscription_open: false,
     sim_time: "2026-06-01T12:00:00.000Z",
     wall_time: "2026-06-01T12:00:00.000Z",
-    schema_version: 1,
     session_id: "test",
     nodes: [],
     links: [],

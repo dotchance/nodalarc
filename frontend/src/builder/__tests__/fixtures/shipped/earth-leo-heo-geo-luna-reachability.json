@@ -16161,46 +16161,156 @@
       ],
       "segments": [
         {
+          "capabilities": [
+            {
+              "endpoint_role": "access",
+              "medium": "rf"
+            },
+            {
+              "endpoint_role": "isl",
+              "medium": "optical"
+            }
+          ],
           "display_name": "Earth LEO simple 36-satellite ring",
           "segment_id": "leo_a"
         },
         {
+          "capabilities": [
+            {
+              "endpoint_role": "access",
+              "medium": "rf"
+            },
+            {
+              "endpoint_role": "crosslink",
+              "medium": "optical"
+            },
+            {
+              "endpoint_role": "isl",
+              "medium": "optical"
+            }
+          ],
           "display_name": "Earth polar LEO 36-satellite shell",
           "segment_id": "leo_b"
         },
         {
+          "capabilities": [
+            {
+              "endpoint_role": "access",
+              "medium": "rf"
+            },
+            {
+              "endpoint_role": "crosslink",
+              "medium": "optical"
+            },
+            {
+              "endpoint_role": "isl",
+              "medium": "optical"
+            }
+          ],
           "display_name": "Earth GPS-altitude MEO 24-satellite shell",
           "segment_id": "meo"
         },
         {
+          "capabilities": [
+            {
+              "endpoint_role": "access",
+              "medium": "rf"
+            },
+            {
+              "endpoint_role": "crosslink",
+              "medium": "optical"
+            },
+            {
+              "endpoint_role": "isl",
+              "medium": "optical"
+            }
+          ],
           "display_name": "Earth HEO Molniya 3-satellite relay",
           "segment_id": "heo_relay"
         },
         {
+          "capabilities": [
+            {
+              "endpoint_role": "access",
+              "medium": "rf"
+            },
+            {
+              "endpoint_role": "crosslink",
+              "medium": "optical"
+            },
+            {
+              "endpoint_role": "isl",
+              "medium": "optical"
+            }
+          ],
           "display_name": "Earth GEO 8-satellite equatorial ring",
           "segment_id": "geo_relay"
         },
         {
+          "capabilities": [
+            {
+              "endpoint_role": "access",
+              "medium": "rf"
+            },
+            {
+              "endpoint_role": "crosslink",
+              "medium": "optical"
+            },
+            {
+              "endpoint_role": "isl",
+              "medium": "optical"
+            }
+          ],
           "display_name": "Two-node lunar ELFO relay constellation",
           "segment_id": "luna_relay"
         },
         {
+          "capabilities": [
+            {
+              "endpoint_role": "access",
+              "medium": "rf"
+            }
+          ],
           "display_name": "LEO A gateway sites",
           "segment_id": "leo_a_ground"
         },
         {
+          "capabilities": [
+            {
+              "endpoint_role": "access",
+              "medium": "rf"
+            }
+          ],
           "display_name": "LEO B gateway sites",
           "segment_id": "leo_b_ground"
         },
         {
+          "capabilities": [
+            {
+              "endpoint_role": "access",
+              "medium": "rf"
+            }
+          ],
           "display_name": "HEO gateway sites",
           "segment_id": "heo_ground"
         },
         {
+          "capabilities": [
+            {
+              "endpoint_role": "access",
+              "medium": "rf"
+            }
+          ],
           "display_name": "GEO gateway sites",
           "segment_id": "geo_ground"
         },
         {
+          "capabilities": [
+            {
+              "endpoint_role": "access",
+              "medium": "rf"
+            }
+          ],
           "display_name": "Luna surface sites",
           "segment_id": "luna_ground"
         }

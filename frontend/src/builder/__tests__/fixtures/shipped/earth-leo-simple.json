@@ -4352,10 +4352,26 @@
       ],
       "segments": [
         {
+          "capabilities": [
+            {
+              "endpoint_role": "access",
+              "medium": "rf"
+            },
+            {
+              "endpoint_role": "isl",
+              "medium": "optical"
+            }
+          ],
           "display_name": "Earth LEO simple 36-satellite ring",
           "segment_id": "leo"
         },
         {
+          "capabilities": [
+            {
+              "endpoint_role": "access",
+              "medium": "rf"
+            }
+          ],
           "display_name": "Starlink PoP gateway sites",
           "segment_id": "ground"
         }

@@ -11643,34 +11643,106 @@
       ],
       "segments": [
         {
+          "capabilities": [
+            {
+              "endpoint_role": "access",
+              "medium": "rf"
+            },
+            {
+              "endpoint_role": "crosslink",
+              "medium": "optical"
+            },
+            {
+              "endpoint_role": "isl",
+              "medium": "optical"
+            }
+          ],
           "display_name": "Earth polar LEO 66-satellite shell",
           "segment_id": "leo"
         },
         {
+          "capabilities": [
+            {
+              "endpoint_role": "access",
+              "medium": "rf"
+            },
+            {
+              "endpoint_role": "crosslink",
+              "medium": "optical"
+            },
+            {
+              "endpoint_role": "isl",
+              "medium": "optical"
+            }
+          ],
           "display_name": "Earth GEO 8-satellite equatorial ring",
           "segment_id": "geo_relay"
         },
         {
+          "capabilities": [
+            {
+              "endpoint_role": "access",
+              "medium": "rf"
+            },
+            {
+              "endpoint_role": "crosslink",
+              "medium": "optical"
+            },
+            {
+              "endpoint_role": "isl",
+              "medium": "optical"
+            }
+          ],
           "display_name": "luna-dtn-custody-relay-1",
           "segment_id": "luna_relay"
         },
         {
+          "capabilities": [
+            {
+              "endpoint_role": "access",
+              "medium": "rf"
+            }
+          ],
           "display_name": "Earth QUIC lab sites",
           "segment_id": "client_ground"
         },
         {
+          "capabilities": [
+            {
+              "endpoint_role": "access",
+              "medium": "rf"
+            }
+          ],
           "display_name": "Earth QUIC relay sites",
           "segment_id": "relay_ground"
         },
         {
+          "capabilities": [
+            {
+              "endpoint_role": "access",
+              "medium": "rf"
+            }
+          ],
           "display_name": "Luna QUIC lab sites",
           "segment_id": "luna_ground"
         },
         {
+          "capabilities": [
+            {
+              "endpoint_role": "access",
+              "medium": "rf"
+            }
+          ],
           "display_name": "Earth DTN lab sites, Tidbinbilla",
           "segment_id": "dtn_earth_ground"
         },
         {
+          "capabilities": [
+            {
+              "endpoint_role": "access",
+              "medium": "rf"
+            }
+          ],
           "display_name": "Luna DTN lab sites",
           "segment_id": "dtn_luna_ground"
         }

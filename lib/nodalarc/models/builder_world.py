@@ -24,6 +24,7 @@ from nodalarc.models.resolved_session import (
     ResolvedOriginatedPrefixes,
     ResolvedSurfacePosition,
     ResolvedTerminalBlock,
+    TerminalMediumLiteral,
 )
 from nodalarc.models.segment_session import SessionMeta
 from nodalarc.models.vs_api import NodeRoutingInstance
@@ -212,14 +213,27 @@ class BuilderRulePreview(BaseModel):
     drawable_pairs: tuple[BuilderPreviewPair, ...] = ()
 
 
+class BuilderSegmentCapability(BaseModel):
+    """One terminal role and medium that some node in a segment carries."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    endpoint_role: MountRole
+    medium: TerminalMediumLiteral
+
+
 class BuilderWorldSegment(BaseModel):
     """One segment as the user named it — the world tree speaks their words,
-    never bare runtime ids."""
+    never bare runtime ids.
+
+    ``capabilities`` lists each pair of terminal role and medium that the
+    resolved terminal blocks of the segment's nodes carry, once per pair."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     segment_id: str
     display_name: str
+    capabilities: tuple[BuilderSegmentCapability, ...]
 
 
 class BuilderWorld(BaseModel):

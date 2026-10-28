@@ -39,8 +39,11 @@ from nodalarc.models.builder_visual_api import (
     BuilderVisualTerminalMount,
     BuilderVisualWorkspace,
 )
-from nodalarc.models.builder_world import BuilderWorld, BuilderWorldNode
-from nodalarc.models.resolved_session import ResolvedTerminalBlock
+from nodalarc.models.builder_world import (
+    BuilderSegmentCapability,
+    BuilderWorld,
+    BuilderWorldSegment,
+)
 from nodalarc.resolve_session import SessionResolution
 from pydantic import ValidationError
 from vs_api.builder_compiler import PreviewFactory, canonicalize_persisted_configuration
@@ -1504,37 +1507,15 @@ def test_connect_command_uses_backend_resolved_terminal_facts(
 
     def resolved_preview(resolution: SessionResolution) -> BuilderWorld:
         base = builder_world_preview(resolution.resolved.session.name)
-        nodes = tuple(
-            BuilderWorldNode(
-                node_id=f"{segment_id}-node",
-                local_node_id="node",
+        segments = tuple(
+            BuilderWorldSegment(
                 segment_id=segment_id,
-                namespace=segment_id,
-                tenant_id="default",
-                kind="satellite",
-                role="forwarding_only",
-                routing_instances=(),
-                terminal_inventory=(
-                    ResolvedTerminalBlock(
-                        terminal_id=f"{segment_id}-crosslink",
-                        owner_node_id=f"{segment_id}-node",
-                        endpoint_role="crosslink",
-                        medium="rf",
-                        count=1,
-                        tracking_capacity=1,
-                        max_range_km=5000.0,
-                        min_elevation_deg=0.0,
-                        field_of_regard_deg=360.0,
-                        tracking_rate_deg_s=3.0,
-                        transmit_mbps=100.0,
-                        receive_mbps=100.0,
-                        source_ref="test:resolved-terminal-facts",
-                    ),
-                ),
+                display_name=segment_id,
+                capabilities=(BuilderSegmentCapability(endpoint_role="crosslink", medium="rf"),),
             )
             for segment_id in ("space-1", "space-2")
         )
-        return base.model_copy(update={"nodes": nodes})
+        return base.model_copy(update={"segments": segments})
 
     connected = service.apply_command(
         BuilderVisualDraftCommandRequest(

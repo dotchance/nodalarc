@@ -331,11 +331,6 @@ class _CatalogProjectionFact:
     summary: str | None = None
 
 
-@dataclass(slots=True)
-class _SegmentCapability:
-    pairs: set[tuple[str, str]]
-
-
 @dataclass(frozen=True, slots=True)
 class _DerivedLinkPhysics:
     role: Literal["access", "isl", "crosslink", "backbone"]
@@ -417,23 +412,19 @@ def _site_summary(site: Site) -> str | None:
     return normalized or None
 
 
-def _capabilities_by_segment(world: BuilderWorld) -> dict[str, _SegmentCapability]:
-    capabilities: dict[str, _SegmentCapability] = {}
-    for node in world.nodes:
-        capability = capabilities.setdefault(node.segment_id, _SegmentCapability(pairs=set()))
-        for block in node.terminal_inventory:
-            capability.pairs.add((block.endpoint_role, block.medium))
-    return capabilities
-
-
 def _derive_link_physics(
     world: BuilderWorld,
     first: _PlacedSegment,
     second: _PlacedSegment,
 ) -> _DerivedLinkPhysics:
-    capabilities = _capabilities_by_segment(world)
-    first_capability = capabilities.get(first.segment_id)
-    second_capability = capabilities.get(second.segment_id)
+    pairs_by_segment = {
+        segment.segment_id: {
+            (capability.endpoint_role, capability.medium) for capability in segment.capabilities
+        }
+        for segment in world.segments
+    }
+    first_pairs = pairs_by_segment.get(first.segment_id)
+    second_pairs = pairs_by_segment.get(second.segment_id)
     preferences: tuple[
         tuple[
             Literal["access", "isl", "crosslink", "backbone"],
@@ -452,10 +443,10 @@ def _derive_link_physics(
         for medium in ("optical", "rf"):
             token = (role, medium)
             if (
-                first_capability is not None
-                and second_capability is not None
-                and token in first_capability.pairs
-                and token in second_capability.pairs
+                first_pairs is not None
+                and second_pairs is not None
+                and token in first_pairs
+                and token in second_pairs
             ):
                 return _DerivedLinkPhysics(
                     role=role,

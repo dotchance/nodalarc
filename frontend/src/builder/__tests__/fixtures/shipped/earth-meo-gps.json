@@ -3739,10 +3739,30 @@
       ],
       "segments": [
         {
+          "capabilities": [
+            {
+              "endpoint_role": "access",
+              "medium": "rf"
+            },
+            {
+              "endpoint_role": "crosslink",
+              "medium": "optical"
+            },
+            {
+              "endpoint_role": "isl",
+              "medium": "optical"
+            }
+          ],
           "display_name": "Earth GPS-altitude MEO 24-satellite shell",
           "segment_id": "meo"
         },
         {
+          "capabilities": [
+            {
+              "endpoint_role": "access",
+              "medium": "rf"
+            }
+          ],
           "display_name": "MEO gateway sites",
           "segment_id": "ground"
         }

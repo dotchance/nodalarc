@@ -5744,10 +5744,30 @@
       ],
       "segments": [
         {
+          "capabilities": [
+            {
+              "endpoint_role": "access",
+              "medium": "rf"
+            },
+            {
+              "endpoint_role": "crosslink",
+              "medium": "optical"
+            },
+            {
+              "endpoint_role": "isl",
+              "medium": "optical"
+            }
+          ],
           "display_name": "Earth polar LEO 36-satellite shell",
           "segment_id": "leo"
         },
         {
+          "capabilities": [
+            {
+              "endpoint_role": "access",
+              "medium": "rf"
+            }
+          ],
           "display_name": "Polar LEO gateway sites",
           "segment_id": "ground"
         }

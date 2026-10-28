@@ -25,6 +25,7 @@ from tests.catalog_session_fixtures import (
 )
 
 WALKER_PATH = Path("catalog/nodalarc/sessions/earth-leo-walker.yaml")
+LUNA_DTN_PATH = Path("catalog/nodalarc/sessions/earth-luna-dtn.yaml")
 SHIPPED_CATALOG = shipped_read_view()
 
 
@@ -83,6 +84,45 @@ def test_world_projects_resolver_hardware_and_links(walker_world: BuilderWorld) 
             assert set(endpoint.node_ids) <= world_ids
             assert endpoint.segment_id
             assert endpoint.terminal_role
+
+
+def test_world_segments_carry_the_terminal_roles_and_media_of_their_nodes() -> None:
+    world = _world(yaml.safe_load(LUNA_DTN_PATH.read_text(encoding="utf-8")))
+    space = [("access", "rf"), ("crosslink", "optical"), ("isl", "optical")]
+    ground = [("access", "rf")]
+
+    assert {
+        segment.segment_id: [
+            (capability.endpoint_role, capability.medium) for capability in segment.capabilities
+        ]
+        for segment in world.segments
+    } == {
+        "leo": space,
+        "geo_relay": space,
+        "luna_relay": space,
+        "client_ground": ground,
+        "relay_ground": ground,
+        "luna_ground": ground,
+        "dtn_earth_ground": ground,
+        "dtn_luna_ground": ground,
+    }
+    # The relay segment holds the relay satellite and a DTN node with no terminal.
+    # The segment lists the satellite's pairs and carries no elevation floor.
+    relay_inventories = [
+        node.terminal_inventory for node in world.nodes if node.segment_id == "luna_relay"
+    ]
+    assert len(relay_inventories) == 2
+    assert () in relay_inventories
+    relay = next(segment for segment in world.segments if segment.segment_id == "luna_relay")
+    assert relay.model_dump(mode="json") == {
+        "segment_id": "luna_relay",
+        "display_name": "luna-dtn-relay-1",
+        "capabilities": [
+            {"endpoint_role": "access", "medium": "rf"},
+            {"endpoint_role": "crosslink", "medium": "optical"},
+            {"endpoint_role": "isl", "medium": "optical"},
+        ],
+    }
 
 
 def test_allocator_projection_uses_resolved_truth_only() -> None:

@@ -366,6 +366,12 @@ export interface BuilderScalarControl {
   readonly reference_families?: ReadonlyArray<CatalogFamily>;
 }
 
+/** One terminal role and medium that some node in a segment carries. */
+export interface BuilderSegmentCapability {
+  readonly endpoint_role: MountRole;
+  readonly medium: TerminalMediumLiteral;
+}
+
 /**  */
 export interface BuilderSelectChoiceCommand {
   readonly operation: "select_choice";
@@ -1083,10 +1089,11 @@ export interface BuilderWorldNode {
   readonly originated_prefixes: ResolvedOriginatedPrefixes | null;
 }
 
-/** One segment as the user named it — the world tree speaks their words, never bare runtime ids. */
+/** One segment as the user named it — the world tree speaks their words, never bare runtime ids. ``capabilities`` lists each pair of terminal role and medium that the resolved terminal blocks of the segment's nodes carry, once per pair. */
 export interface BuilderWorldSegment {
   readonly segment_id: string;
   readonly display_name: string;
+  readonly capabilities: ReadonlyArray<BuilderSegmentCapability>;
 }
 
 /**  */

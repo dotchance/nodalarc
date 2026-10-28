@@ -20,13 +20,20 @@ from nodalarc.models.builder_world import (
     BuilderPreviewReasonCount,
     BuilderRuleAllocation,
     BuilderRulePreview,
+    BuilderSegmentCapability,
     BuilderWorld,
     BuilderWorldNode,
     BuilderWorldSegment,
     PreviewScope,
 )
+from nodalarc.models.catalog import MountRole
 from nodalarc.models.events import NodePosition, SessionEphemeris
-from nodalarc.models.resolved_session import ResolvedLinkRule, ResolvedNode, ResolvedSession
+from nodalarc.models.resolved_session import (
+    ResolvedLinkRule,
+    ResolvedNode,
+    ResolvedSession,
+    TerminalMediumLiteral,
+)
 from nodalarc.ome_inputs import build_ome_inputs_from_resolved, resolved_body_frames_at_epoch
 from nodalarc.resolve_session import (
     SessionResolution,
@@ -642,10 +649,13 @@ def world_from_resolution(resolution: SessionResolution) -> BuilderWorld:
     # segment's authored display name. Runtime ids stay the identity; the
     # name is presentation.
     names = {segment.segment_id: segment.display_name for segment in resolved.segments}
-    seen_segments: list[str] = []
+    # Each segment's terminal roles and media come from the resolved terminal
+    # blocks of its nodes. Segments keep the order of their first node.
+    capabilities: dict[str, set[tuple[MountRole, TerminalMediumLiteral]]] = {}
     for node in resolved.nodes:
-        if node.segment_id not in seen_segments:
-            seen_segments.append(node.segment_id)
+        capabilities.setdefault(node.segment_id, set()).update(
+            (block.endpoint_role, block.medium) for block in node.terminal_inventory
+        )
     return BuilderWorld(
         session=resolved.session,
         epoch_unix=epoch_unix,
@@ -655,8 +665,15 @@ def world_from_resolution(resolution: SessionResolution) -> BuilderWorld:
             _builder_link_rule(rule, local_to_runtime) for rule in resolved.link_rules
         ),
         segments=tuple(
-            BuilderWorldSegment(segment_id=seg, display_name=names.get(seg, seg))
-            for seg in seen_segments
+            BuilderWorldSegment(
+                segment_id=seg,
+                display_name=names.get(seg, seg),
+                capabilities=tuple(
+                    BuilderSegmentCapability(endpoint_role=role, medium=medium)
+                    for role, medium in sorted(pairs)
+                ),
+            )
+            for seg, pairs in capabilities.items()
         ),
         # Capacity truth is computed once, by the allocator, and shipped:
         # displays report what allocation did, never re-derive what it might.

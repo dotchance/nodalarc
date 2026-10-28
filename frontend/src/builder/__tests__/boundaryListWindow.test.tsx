@@ -143,12 +143,10 @@ function BoundariesWindow({
   accepted,
   backend,
   pendingAtOpen = null,
-  onRemove = null,
 }: {
   accepted: ReadonlyArray<BuilderVisualRoutingBoundaryListing>;
   backend: Backend;
   pendingAtOpen?: BuilderVisualObjectEditResult | null;
-  onRemove?: ((boundaryId: string) => void) | null;
 }) {
   const [pending, setPending] = useState(pendingAtOpen);
   const latest = useRef(0);
@@ -170,7 +168,6 @@ function BoundariesWindow({
         return answered;
       }}
       onDescribe={backend.describe}
-      onRemove={onRemove}
       authoring={AUTHORING_FACTS}
     />
   );
@@ -373,38 +370,88 @@ describe("a boundary list whose pending edit no card value states", () => {
 });
 
 describe("a removal of a boundary", () => {
-  it("removes an accepted boundary by its id, and waits while the list's edit is pending", () => {
-    const onRemove = vi.fn();
-    const accepted = [acceptedBoundary(0, "leo-geo", ["leo-core", "geo-core"], CARD)];
-    const backend = { edit: vi.fn(echo), describe: NOT_DESCRIBED };
-    render(<BoundariesWindow accepted={accepted} backend={backend} onRemove={onRemove} />);
-    fireEvent.click(screen.getByRole("button", { name: "Remove boundary" }));
-    expect(onRemove.mock.calls).toEqual([["boundary-1"]]);
-    cleanup();
+  const ACCEPTED = [acceptedBoundary(0, "leo-geo", ["leo-core", "geo-core"], CARD)];
 
+  it("removes the boundary's item through the list's field editor, asking for it first", async () => {
+    // Every boundary has a card, so no field editor is known until the removal asks.
+    const describeList = vi.fn(async () =>
+      answer([CARD], listTree(APPLIED_REVISION, ["leo-geo"])),
+    );
+    const edit = vi.fn(async (_change: RoutingBoundariesChange) =>
+      answer([], listTree(APPLIED_REVISION, [])),
+    );
+    render(<BoundariesWindow accepted={ACCEPTED} backend={{ edit, describe: describeList }} />);
+    expect(describeList).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("button", { name: "Remove boundary" }));
+    await act(async () => undefined);
+
+    expect(describeList).toHaveBeenCalledTimes(1);
+    expect(edit.mock.calls.map(([change]) => change)).toEqual([
+      {
+        kind: "controls",
+        commands: [{ operation: "remove_item", control_id: "boundaries-4-leo-geo", index: 0 }],
+      },
+    ]);
+    // The removal is the list's pending edit; nothing is accepted.
+    expect(screen.getByText("The list holds no boundary.")).toBeTruthy();
+    expect(screen.getByText("Pending edit. It is not applied to the session yet.")).toBeTruthy();
+  });
+
+  it("removes a boundary from the list's pending edit over the field editor it answered", async () => {
+    const pendingTree = listTree(APPLIED_REVISION, ["leo-geo", "geo-relay"]);
+    const edit = vi.fn(async (_change: RoutingBoundariesChange) =>
+      answer([{ ...CARD, adapter: "bgp" }], listTree(APPLIED_REVISION, ["leo-geo"])),
+    );
     render(
       <BoundariesWindow
-        accepted={accepted}
-        backend={backend}
-        pendingAtOpen={answer(
-          [{ ...CARD, adapter: "bgp" }],
-          listTree(APPLIED_REVISION, ["leo-geo"]),
-        )}
-        onRemove={onRemove}
+        accepted={ACCEPTED}
+        backend={{ edit, describe: NOT_DESCRIBED }}
+        pendingAtOpen={answer([{ ...CARD, adapter: "bgp" }, CARD], pendingTree)}
       />,
     );
-    const remove = screen.getByRole("button", { name: "Remove boundary" }) as HTMLButtonElement;
-    expect(remove.disabled).toBe(true);
-    fireEvent.click(remove);
-    expect(onRemove).toHaveBeenCalledTimes(1);
-    cleanup();
+    const [, second] = screen.getAllByRole("button", { name: "Remove boundary" });
 
-    // A first edit of the list waits for its answer; removing waits with it.
+    fireEvent.click(second!);
+    await act(async () => undefined);
+
+    expect(edit.mock.calls.map(([change]) => change)).toEqual([
+      {
+        kind: "controls",
+        commands: [
+          { operation: "remove_item", control_id: "boundaries-4-leo-geo+geo-relay", index: 1 },
+        ],
+      },
+    ]);
+    expect(screen.getAllByTestId("builder-boundary-editor")).toHaveLength(1);
+  });
+
+  it("shows a removal the backend refuses and keeps the list", async () => {
+    const edit = vi.fn(() => Promise.reject(new Error("VS-API could not be reached")));
+    render(
+      <BoundariesWindow
+        accepted={ACCEPTED}
+        backend={{
+          edit,
+          describe: async () => answer([CARD], listTree(APPLIED_REVISION, ["leo-geo"])),
+        }}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Remove boundary" }));
+    await act(async () => undefined);
+
+    expect(screen.getByText("VS-API could not be reached")).toBeTruthy();
+    expect(screen.getAllByTestId("builder-boundary-editor")).toHaveLength(1);
+    expect(screen.queryByText(/Pending edit/)).toBeNull();
+  });
+
+  it("waits while a change of the list is checked", () => {
     const unanswered = {
       edit: vi.fn(() => new Promise<never>(() => undefined)),
       describe: NOT_DESCRIBED,
     };
-    render(<BoundariesWindow accepted={accepted} backend={unanswered} onRemove={onRemove} />);
+    render(<BoundariesWindow accepted={ACCEPTED} backend={unanswered} />);
     fireEvent.click(screen.getByLabelText("export loopbacks"));
     expect(screen.getByText("Checking the edit…")).toBeTruthy();
     expect(

@@ -14,7 +14,13 @@
  */
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { renderHook, act } from "@testing-library/react";
-import { useEditorWindows, targetKey, type EditorTarget } from "../useEditorWindows";
+import {
+  pendingEditAddress,
+  pendingEditTarget,
+  useEditorWindows,
+  targetKey,
+  type EditorTarget,
+} from "../useEditorWindows";
 import { useWorkspace } from "../useWorkspace";
 import type { DraftConstellation } from "../workspace";
 import {
@@ -136,6 +142,33 @@ describe("useEditorWindows — buffered editing", () => {
     expect(result.current.editor.isOpen(targetKey(domain))).toBe(true);
     expect(result.current.editor.isOpen(targetKey(boundaries))).toBe(true);
     expect(result.current.editor.isOpen(targetKey(segment))).toBe(false);
+  });
+
+  it("a link, domain or boundary list window edits the pending edit that opens it", () => {
+    // Cancel discards the pending edit a window's address names, and a rail
+    // entry for a pending edit opens the window that edits it: the two agree.
+    const editing: EditorTarget[] = [
+      { kind: "link", id: "leo-isl" },
+      { kind: "domain", id: "leo-core" },
+      { kind: "boundaries" },
+    ];
+    expect(editing.map((target) => pendingEditAddress(target))).toEqual([
+      { kind: "member", list_pointer: "/link_rules", id: "leo-isl" },
+      { kind: "member", list_pointer: "/routing/domains", id: "leo-core" },
+      { kind: "whole_list", pointer: "/routing/boundaries" },
+    ]);
+    for (const target of editing) {
+      expect(targetKey(pendingEditTarget(pendingEditAddress(target)!))).toBe(targetKey(target));
+    }
+    // A window that edits the twin or shows a view edits no pending edit.
+    for (const target of [
+      { kind: "session" },
+      { kind: "segment", id: "leo" },
+      { kind: "ground", id: "gw" },
+      { kind: "save-session" },
+    ] as EditorTarget[]) {
+      expect(pendingEditAddress(target)).toBeNull();
+    }
   });
 
   it("a session gesture closes every window except the component draft", () => {

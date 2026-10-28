@@ -6,6 +6,7 @@ import { useState, useEffect, useCallback, useRef, useSyncExternalStore } from "
 import { downloadBlob } from "../ui/downloadBlob";
 import {
   applyVisualDraftCommand,
+  applyVisualDraftEdits,
   applyVisualDraftWorkspace,
   applyVisualDraftYaml,
   compileBuilderDraft,
@@ -34,6 +35,8 @@ import type {
   BuilderContentEdit,
   BuilderDeployVerdict,
   BuilderIssue,
+  BuilderListEdit,
+  BuilderPendingEditOutcome,
   BuilderWorld,
   BuilderSessionSaveRequest,
   BuilderSessionSaveResult,
@@ -43,6 +46,7 @@ import type {
   BuilderVisualCustomizeChainResult,
   BuilderVisualControlMutationRequest,
   BuilderVisualDraftAssemblyResult,
+  BuilderVisualDraftApplyEditsResult,
   BuilderVisualDraftApplyYamlResult,
   BuilderVisualDraftCommandRequest,
   BuilderVisualDraftCommandResult,
@@ -468,6 +472,7 @@ export type SessionDraftWriter =
   | "command"
   | "customize"
   | "control"
+  | "edits"
   | "retarget"
   | "compile"
   | "save";
@@ -510,11 +515,24 @@ interface PendingObjectEdit {
 }
 
 /** The key an address holds its pending edit under. */
-function pendingEditKey(address: PendingEditAddress): string {
+export function pendingEditKey(address: PendingEditAddress): string {
   return address.kind === "member" ? `${address.list_pointer}/${address.id}` : address.pointer;
 }
 
 const NO_PENDING_EDITS: ReadonlyMap<string, PendingObjectEdit> = new Map();
+
+/** What the backend last said about each pending edit, held with the accepted
+ *  draft and the pending edits it said it about: a preview's outcome for every
+ *  edit, or a refused apply's outcome for each edit the apply sent. */
+interface PendingEditVerdicts {
+  readonly draft: BuilderVisualDraftEnvelope;
+  readonly edits: ReadonlyMap<string, PendingObjectEdit>;
+  readonly outcomes: ReadonlyMap<string, BuilderPendingEditOutcome>;
+}
+
+const NO_OUTCOMES: ReadonlyMap<string, BuilderPendingEditOutcome> = new Map();
+
+const NO_KEYS: ReadonlySet<string> = new Set();
 
 function isJsonList(value: JsonValue | undefined): value is ReadonlyArray<JsonValue> {
   return Array.isArray(value);
@@ -536,29 +554,83 @@ function acceptedValueAt(
   return value;
 }
 
-/** A new pending edit of the object at `address` in the accepted session. Its
- *  base and its working JSON are that object as the session holds it. */
-function beginPendingEdit(
+/** The object the accepted session holds at `address`: the list itself, or the
+ *  member with the address's id. Undefined where the session holds none. */
+function acceptedObjectAt(
   session: Readonly<Record<string, JsonValue>>,
   address: PendingEditAddress,
-): BuilderContentEdit {
+): Readonly<Record<string, JsonValue>> | ReadonlyArray<JsonValue> | undefined {
   if (address.kind === "whole_list") {
     const list = acceptedValueAt(session, address.pointer);
-    if (!isJsonList(list)) {
-      throw new Error(`the accepted session holds no ${address.pointer} list to edit`);
+    if (list !== undefined && !isJsonList(list)) {
+      throw new Error(`the accepted session holds ${address.pointer} as something other than a list`);
     }
-    return { kind: "content", address, base: list, working: list };
+    return list;
   }
   const members = acceptedValueAt(session, address.list_pointer);
   const matches = (isJsonList(members) ? members : []).filter(
     (member): member is Readonly<Record<string, JsonValue>> =>
       isJsonObject(member) && member.id === address.id,
   );
-  const [member] = matches;
-  if (member === undefined || matches.length !== 1) {
-    throw new Error(`the accepted session holds no ${address.id} in ${address.list_pointer}`);
+  if (matches.length > 1) {
+    throw new Error(`the accepted session holds ${address.id} twice in ${address.list_pointer}`);
   }
-  return { kind: "content", address, base: member, working: member };
+  return matches[0];
+}
+
+/** A new pending edit of the object at `address` in the accepted session. Its
+ *  base and its working JSON are that object as the session holds it. */
+function beginPendingEdit(
+  session: Readonly<Record<string, JsonValue>>,
+  address: PendingEditAddress,
+): BuilderContentEdit {
+  const object = acceptedObjectAt(session, address);
+  if (object === undefined) {
+    throw new Error(
+      address.kind === "whole_list"
+        ? `the accepted session holds no ${address.pointer} list to edit`
+        : `the accepted session holds no ${address.id} in ${address.list_pointer}`,
+    );
+  }
+  return { kind: "content", address, base: object, working: object };
+}
+
+/** `edit` taken against the object the accepted session now holds at its
+ *  address. Its base becomes that object, or is absent when the session holds
+ *  none; its working JSON stays as the user left it. */
+function rebasePendingEdit(
+  session: Readonly<Record<string, JsonValue>>,
+  edit: BuilderContentEdit,
+): BuilderContentEdit {
+  const object = acceptedObjectAt(session, edit.address);
+  return object === undefined
+    ? { kind: "content", address: edit.address, working: edit.working }
+    : { kind: "content", address: edit.address, base: object, working: edit.working };
+}
+
+/** The ids of the members of one id-bearing list of the accepted session, in
+ *  the session's order. */
+function acceptedMemberIds(
+  session: Readonly<Record<string, JsonValue>>,
+  listPointer: BuilderListEdit["list_pointer"],
+): string[] {
+  const members = acceptedValueAt(session, listPointer);
+  return (isJsonList(members) ? members : []).map((member) => {
+    const id = isJsonObject(member) ? member.id : undefined;
+    if (typeof id !== "string") {
+      throw new Error(`a member of ${listPointer} in the accepted session has no id`);
+    }
+    return id;
+  });
+}
+
+/** The backend's reasons for a refused batch: the issues of each edit it did
+ *  not apply. */
+export function refusalMessage(outcomes: ReadonlyArray<BuilderPendingEditOutcome>): string {
+  return outcomes
+    .filter((outcome) => outcome.status !== "applied")
+    .flatMap((outcome) => outcome.issues.map((issue) => issue.message))
+    .join("; ");
 }
 
 /** What an object edit is made against: the accepted draft, its revision, and
@@ -640,6 +712,9 @@ export function useBuilderWorld() {
   // is not held.
   const objectEditSequenceRef = useRef(0);
   const latestObjectEditRef = useRef(new Map<string, number>());
+  const [pendingEditVerdicts, setPendingEditVerdicts] = useState<PendingEditVerdicts | null>(
+    null,
+  );
 
   const refreshSessions = useCallback(async () => {
     try {
@@ -684,7 +759,35 @@ export function useBuilderWorld() {
   const dropPendingEdits = useCallback(() => {
     latestObjectEditRef.current = new Map();
     setPendingEdits(NO_PENDING_EDITS);
+    setPendingEditVerdicts(null);
   }, [setPendingEdits]);
+
+  /** No answer still on its way for the edit under `key` is held: the edit was
+   *  applied or discarded since the request was made. */
+  const supersedeObjectEdits = useCallback((key: string) => {
+    latestObjectEditRef.current.set(key, ++objectEditSequenceRef.current);
+  }, []);
+
+  /** Hold what the backend said about the pending edits `edits` over `draft`,
+   *  beside what it said earlier about the same edits over the same draft. */
+  const holdPendingEditOutcomes = useCallback(
+    (
+      draft: BuilderVisualDraftEnvelope,
+      edits: ReadonlyMap<string, PendingObjectEdit>,
+      said: ReadonlyArray<readonly [string, BuilderPendingEditOutcome]>,
+    ) => {
+      setPendingEditVerdicts((current) => {
+        const outcomes = new Map(
+          current !== null && current.draft === draft && current.edits === edits
+            ? current.outcomes
+            : NO_OUTCOMES,
+        );
+        for (const [key, outcome] of said) outcomes.set(key, outcome);
+        return { draft, edits, outcomes };
+      });
+    },
+    [],
+  );
 
   /** The YAML buffer and the session pane change the session as a whole, so
    *  they wait until no link or routing edit is pending. */
@@ -1032,7 +1135,8 @@ export function useBuilderWorld() {
    *  edits: the backend compiles the accepted session with the edits applied
    *  and accepts nothing. The result fills only the on-screen slots, and only
    *  while the accepted draft and the pending edits are the ones it was
-   *  computed for. */
+   *  computed for. Its outcome for each edit is held for those edits, so a
+   *  stale edit shows as stale before anyone applies it. */
   const previewPendingEdits = useCallback(async (): Promise<void> => {
     const draft = visualDraftRef.current;
     const edits = pendingEditsRef.current;
@@ -1061,8 +1165,19 @@ export function useBuilderWorld() {
       if (stillCurrent()) showCompile(null, cause instanceof Error ? cause.message : String(cause));
       return;
     }
-    if (stillCurrent()) showCompile(result);
-  }, [showCompile]);
+    if (!stillCurrent()) return;
+    const keys = [...edits.keys()];
+    if (result.pending_edit_outcomes.length !== keys.length) {
+      showCompile(null, "the preview did not answer one outcome per pending edit");
+      return;
+    }
+    showCompile(result);
+    holdPendingEditOutcomes(
+      draft,
+      edits,
+      keys.map((key, index) => [key, result.pending_edit_outcomes[index]!] as const),
+    );
+  }, [holdPendingEditOutcomes, showCompile]);
 
   const customizeChain = useCallback(
     async (
@@ -1284,6 +1399,176 @@ export function useBuilderWorld() {
     [assertEpoch],
   );
 
+  /** Adopt an accepted revision of link and routing edits: its compile, and
+   *  the YAML buffer as the canonical text of the new accepted session. */
+  const adoptAcceptedEdits = useCallback(
+    (assembly: BuilderVisualDraftAssemblyResult) => {
+      adoptCompileResult(assembly);
+      const canonical =
+        assembly.compile_result.canonical_session_yaml ?? assembly.visual_draft.session_yaml;
+      setYamlBuffer({
+        text: canonical,
+        appliedText: canonical,
+        generation: yamlBufferRef.current.generation + 1,
+        dirty: false,
+        applied: true,
+        canonicalizationRequired: false,
+        canonicalizationAccepted: true,
+        issues: [],
+      });
+    },
+    [adoptCompileResult, setYamlBuffer],
+  );
+
+  /** The draft that link and routing edits are applied to, with its accepted
+   *  session. The apply route requires an accepted session, and graphical
+   *  edits wait for an applied YAML buffer. */
+  const acceptedDraftForEdits = useCallback((): {
+    draft: BuilderVisualDraftEnvelope;
+    accepted: Readonly<Record<string, JsonValue>>;
+  } => {
+    const draft = visualDraftRef.current;
+    if (!draft) throw new Error("there is no visual draft to edit");
+    const accepted = draft.projection_status === "applied" ? (draft.applied_session ?? null) : null;
+    if (accepted === null) {
+      throw new Error("link rules, routing domains and boundaries are edited on an accepted session");
+    }
+    if (yamlBlocksGraphicalEditing(true, yamlBufferRef.current)) {
+      throw new Error("apply or canonicalize the YAML buffer before editing graphically");
+    }
+    return { draft, accepted };
+  }, []);
+
+  /** Accept the pending edits held under `keys` as the next revision, through
+   *  the route that applies them, and adopt only its answer. Each key in
+   *  `reapply` names a stale edit the user chose to keep: it is first taken
+   *  against the object the accepted session now holds, and stays so taken.
+   *  One stale or invalid edit refuses the whole batch: nothing is accepted,
+   *  every edit stays pending, and the backend's outcome for each is held. An
+   *  applied edit leaves the store unless it changed while the apply ran. */
+  const applyPendingEdits = useCallback(
+    (
+      keys: ReadonlyArray<string>,
+      reapply: ReadonlySet<string> = NO_KEYS,
+    ): Promise<BuilderVisualDraftApplyEditsResult> =>
+      enqueueWriter("edits", async (epoch) => {
+        const { draft, accepted } = acceptedDraftForEdits();
+        let held = pendingEditsRef.current;
+        if (reapply.size > 0) {
+          const rebased = new Map(held);
+          for (const key of reapply) {
+            const pending = held.get(key);
+            if (!pending) throw new Error(`no pending edit is held for ${key}`);
+            rebased.set(key, { ...pending, edit: rebasePendingEdit(accepted, pending.edit) });
+          }
+          setPendingEdits(rebased);
+          held = rebased;
+        }
+        const sent = keys.map((key) => {
+          const pending = held.get(key);
+          if (!pending) throw new Error(`no pending edit is held for ${key}`);
+          return [key, pending] as const;
+        });
+        const result = await applyVisualDraftEdits({
+          draft,
+          expected_draft_revision: draft.draft_revision,
+          edits: sent.map(([, pending]) => pending.edit),
+        });
+        assertEpoch(epoch);
+        if (result.outcomes.length !== sent.length) {
+          throw new Error("the backend did not answer one outcome per pending edit");
+        }
+        if (!result.applied) {
+          if (visualDraftRef.current === draft && pendingEditsRef.current === held) {
+            holdPendingEditOutcomes(
+              draft,
+              held,
+              sent.map(([key], index) => [key, result.outcomes[index]!] as const),
+            );
+          }
+          return result;
+        }
+        if (!result.assembly) {
+          throw new Error("the backend applied the pending edits and returned no accepted revision");
+        }
+        adoptAcceptedEdits(result.assembly);
+        const remaining = new Map(pendingEditsRef.current);
+        for (const [key, pending] of sent) {
+          if (remaining.get(key) !== pending) continue;
+          remaining.delete(key);
+          supersedeObjectEdits(key);
+        }
+        setPendingEdits(remaining);
+        return result;
+      }),
+    [
+      acceptedDraftForEdits,
+      adoptAcceptedEdits,
+      assertEpoch,
+      enqueueWriter,
+      holdPendingEditOutcomes,
+      setPendingEdits,
+      supersedeObjectEdits,
+    ],
+  );
+
+  /** Drop one object's pending edit. An answer still on its way for it is not
+   *  held. */
+  const discardPendingEdit = useCallback(
+    (address: PendingEditAddress) => {
+      const key = pendingEditKey(address);
+      supersedeObjectEdits(key);
+      if (!pendingEditsRef.current.has(key)) return;
+      const remaining = new Map(pendingEditsRef.current);
+      remaining.delete(key);
+      setPendingEdits(remaining);
+    },
+    [setPendingEdits, supersedeObjectEdits],
+  );
+
+  /** Remove one link rule or routing domain from the accepted session at once,
+   *  as one accepted revision, through the route that applies pending edits.
+   *  The removal is a list edit: the list's ids now, and those ids without
+   *  this one. It waits while an edit of the object is pending. A refusal
+   *  accepts nothing and is thrown with the backend's reasons. */
+  const removeListMember = useCallback(
+    (
+      listPointer: BuilderListEdit["list_pointer"],
+      id: string,
+    ): Promise<BuilderVisualDraftAssemblyResult> =>
+      enqueueWriter("edits", async (epoch) => {
+        const { draft, accepted } = acceptedDraftForEdits();
+        const ownEdit = pendingEditKey({ kind: "member", list_pointer: listPointer, id });
+        if (pendingEditsRef.current.has(ownEdit)) {
+          throw new Error(`apply or discard the pending edit of ${id} before removing it`);
+        }
+        const idsBefore = acceptedMemberIds(accepted, listPointer);
+        if (!idsBefore.includes(id)) {
+          throw new Error(`the accepted session holds no ${id} in ${listPointer}`);
+        }
+        const result = await applyVisualDraftEdits({
+          draft,
+          expected_draft_revision: draft.draft_revision,
+          edits: [
+            {
+              kind: "list",
+              list_pointer: listPointer,
+              ids_before: idsBefore,
+              ids_wanted: idsBefore.filter((member) => member !== id),
+            },
+          ],
+        });
+        assertEpoch(epoch);
+        if (!result.applied) throw new Error(refusalMessage(result.outcomes));
+        if (!result.assembly) {
+          throw new Error("the backend applied the removal and returned no accepted revision");
+        }
+        adoptAcceptedEdits(result.assembly);
+        return result.assembly;
+      }),
+    [acceptedDraftForEdits, adoptAcceptedEdits, assertEpoch, enqueueWriter],
+  );
+
   const captureCoordinator = useCallback((): SessionCoordinatorCapture => ({
     epoch: epochRef.current,
     draftRevision: visualDraftRef.current?.draft_revision ?? -1,
@@ -1424,6 +1709,15 @@ export function useBuilderWorld() {
     resetCompileFacts();
   }, [beginEpoch, dropPendingEdits, resetCompileFacts, setVisualDraft, setYamlBuffer]);
 
+  // The backend's outcome for each pending edit, while it was said about the
+  // accepted draft and the pending edits the page now holds.
+  const pendingEditOutcomes =
+    pendingEditVerdicts !== null &&
+    pendingEditVerdicts.draft === visualDraft &&
+    pendingEditVerdicts.edits === pendingEdits
+      ? pendingEditVerdicts.outcomes
+      : NO_OUTCOMES;
+
   return {
     sessions,
     sessionsError,
@@ -1431,6 +1725,7 @@ export function useBuilderWorld() {
     visualDraft,
     yamlBuffer,
     pendingEdits,
+    pendingEditOutcomes,
     writer,
     assemblyResult,
     world,
@@ -1456,6 +1751,9 @@ export function useBuilderWorld() {
     mutateControls,
     editPendingObject,
     describePendingObject,
+    applyPendingEdits,
+    discardPendingEdit,
+    removeListMember,
     prepareRetarget,
     captureCoordinator,
     captureIsCurrent,

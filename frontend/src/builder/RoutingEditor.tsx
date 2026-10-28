@@ -74,8 +74,9 @@ interface DomainEditorProps {
   domain: BuilderVisualRoutingDomain;
   /** Change the domain. A typed change waits for a pause in typing. */
   onUpdate: (patch: Partial<BuilderVisualRoutingDomain>, typed?: boolean) => void;
-  /** Null while the domain cannot be removed: a change is being applied, or a
-   *  link or routing edit is pending. */
+  /** Remove the domain from the session at once, as one accepted change. Null
+   *  while it cannot be removed: a change is being applied, or an edit of
+   *  the domain is pending. */
   onRemove: (() => void) | null;
   authoring: BuilderVisualAuthoringFacts;
 }
@@ -210,8 +211,8 @@ export function RoutingDomainEditor({
           disabled={onRemove === null}
           title={
             onRemove === null
-              ? "Removing waits while a change is being applied or a link or routing edit is pending."
-              : undefined
+              ? "Removing waits while a change is being applied or this domain's edit is pending."
+              : "Removes the domain from the session at once"
           }
         >
           Remove domain
@@ -314,8 +315,8 @@ interface BoundaryEditorProps {
   linkRules: ReadonlyArray<ListedLinkRule>;
   routingDomains: ReadonlyArray<ListedRoutingDomain>;
   onUpdate: (patch: Partial<BuilderVisualRoutingBoundary>) => void;
-  /** Null while the boundary cannot be removed: a change is being applied, or
-   *  a link or routing edit is pending. */
+  /** Remove the boundary from the list's pending edit. Null while another
+   *  change of the list is being sent or checked. */
   onRemove: (() => void) | null;
   authoring: BuilderVisualAuthoringFacts;
 }
@@ -405,8 +406,8 @@ function BoundaryEditor({
           disabled={onRemove === null}
           title={
             onRemove === null
-              ? "Removing waits while a change is being applied or a link or routing edit is pending."
-              : undefined
+              ? "Removing waits while another change of the list is being sent."
+              : "Removes the boundary from the list's pending edit"
           }
         >
           Remove boundary
@@ -434,14 +435,17 @@ function isObjectControl(control: TreeControl): control is BuilderObjectControl 
   return "fields" in control || "empty_parameters" in control || "model_name" in control;
 }
 
+/** The list control of the boundary list's field editor; null when the tree
+ *  holds none. */
+function boundaryListControl(tree: BuilderControlTree): BuilderSequenceControl | null {
+  const list = tree.root.fields?.find((field) => field.wire_name === "boundaries")?.control;
+  return list !== undefined && isSequenceControl(list) ? list : null;
+}
+
 /** The field editor over one boundary: the subtree of the list's field editor
  *  at that boundary. Null when the list's field editor holds no such boundary. */
 function boundarySubtree(tree: BuilderControlTree, index: number): BuilderControlTree | null {
-  const list = tree.root.fields?.find((field) => field.wire_name === "boundaries")?.control;
-  const item =
-    list !== undefined && isSequenceControl(list)
-      ? list.items?.find((entry) => entry.index === index)?.control
-      : undefined;
+  const item = boundaryListControl(tree)?.items?.find((entry) => entry.index === index)?.control;
   if (item === undefined || !isObjectControl(item)) return null;
   return { projection_revision: tree.projection_revision, root: item };
 }
@@ -480,11 +484,10 @@ interface BoundaryListShared {
  *  otherwise its part of the list's field editor. A card change is sent as
  *  the card value of every boundary. One change of the list is made at a
  *  time, since each builds on the list the last answer states. The cards wait
- *  while a field-editor batch is sent. The field editor waits while a card
- *  change is checked. */
+ *  while a field-editor batch or a removal is sent. The field editor and the
+ *  removals wait while a card change is checked. */
 function BoundaryItems({
   items,
-  editPending,
   field,
   sendCards,
   sendControls,
@@ -493,26 +496,21 @@ function BoundaryItems({
   ...shared
 }: BoundaryListShared & {
   items: ReadonlyArray<ListedRoutingBoundary>;
-  /** Whether an edit of the list is pending. */
-  editPending: boolean;
   field: FieldEditorTree;
   sendCards: (cards: BoundaryCards) => Promise<boolean>;
   sendControls: (commands: ReadonlyArray<BuilderControlMutation>) => Promise<void>;
-  /** Whether a field-editor batch is being sent. */
+  /** Whether a field-editor batch or a removal is being sent. */
   fieldBusy: boolean;
-  onRemove: ((boundaryId: string) => void) | null;
+  /** Remove the boundary at an index of the list as it now stands. */
+  onRemove: (index: number) => void;
 }) {
   const answered = useMemo(() => items.map((item) => item.card), [items]);
   const edits = useCardValueEdits<BoundaryCards>(answered, sendCards);
-  // A removal starts from the accepted list, so it waits while an edit of the
-  // list is pending or still being checked.
-  const edited = editPending || edits.checking;
   return (
     <>
       {edits.shown.map((card, index) => {
         const overRuleId =
           card === null ? (items[index]?.overRuleId ?? null) : card.over_rule_id || null;
-        const acceptedId = items[index]?.accepted?.widget?.boundary_id;
         return (
           <EditorCard
             key={index}
@@ -532,11 +530,7 @@ function BoundaryItems({
                       ),
                     )
                   }
-                  onRemove={
-                    edited || onRemove === null || acceptedId === undefined
-                      ? null
-                      : () => onRemove(acceptedId)
-                  }
+                  onRemove={edits.checking || fieldBusy ? null : () => onRemove(index)}
                 />
               </fieldset>
             ) : (
@@ -567,22 +561,17 @@ interface BoundaryListWindowProps extends BoundaryListShared {
   onEdit: (change: RoutingBoundariesChange) => Promise<unknown>;
   /** Ask the backend for the list's field editor without changing the list. */
   onDescribe: () => Promise<BuilderVisualObjectEditResult>;
-  /** Remove an accepted boundary, named by the id its accepted card value
-   *  states. Null while removing waits: a change is being applied, or a link
-   *  or routing edit is pending. */
-  onRemove: ((boundaryId: string) => void) | null;
 }
 
 /** The window of the routing boundary list. Its boundaries have no ids, so the
- *  list is edited as a whole, as one pending edit. Each boundary shows its card
- *  or its part of the list's field editor. The issues of the list's pending
- *  edit follow. */
+ *  list is edited as a whole, as one pending edit, and removing a boundary is
+ *  a change of that edit. Each boundary shows its card or its part of the
+ *  list's field editor. The issues of the list's pending edit follow. */
 export function BoundaryListWindow({
   listed,
   appliedRevision,
   onEdit,
   onDescribe,
-  onRemove,
   ...shared
 }: BoundaryListWindowProps) {
   const send = useLatestObjectChange(onEdit);
@@ -594,10 +583,33 @@ export function BoundaryListWindow({
     items === null || items.some((item) => item.card === null),
   );
   const [fieldBusy, setFieldBusy] = useState(false);
+  const [removeFailure, setRemoveFailure] = useState<string | null>(null);
   const sendControls = async (commands: ReadonlyArray<BuilderControlMutation>) => {
     setFieldBusy(true);
     try {
       await send({ kind: "controls", commands });
+    } finally {
+      setFieldBusy(false);
+    }
+  };
+  // A removal is the field editor's removal of the boundary's item, over the
+  // tree the backend builds for the list as it now stands. That tree is asked
+  // for first when none is known.
+  const removeBoundary = async (index: number) => {
+    setFieldBusy(true);
+    setRemoveFailure(null);
+    try {
+      const tree = field.kind === "tree" ? field.tree : (await onDescribe()).control_tree;
+      const list = boundaryListControl(tree);
+      if (list === null || !list.can_remove) {
+        throw new Error("The field editor of the boundary list offers no removal.");
+      }
+      await send({
+        kind: "controls",
+        commands: [{ operation: "remove_item", control_id: list.control_id, index }],
+      });
+    } catch (cause) {
+      setRemoveFailure(cause instanceof Error ? cause.message : String(cause));
     } finally {
       setFieldBusy(false);
     }
@@ -622,14 +634,14 @@ export function BoundaryListWindow({
         <BoundaryItems
           {...shared}
           items={items}
-          editPending={listed.pending !== null}
           field={field}
           sendCards={(boundaries) => send({ kind: "routing_boundaries", boundaries })}
           sendControls={sendControls}
           fieldBusy={fieldBusy}
-          onRemove={onRemove}
+          onRemove={(index) => void removeBoundary(index)}
         />
       )}
+      {removeFailure && <div className="builder-warning">{removeFailure}</div>}
       <PendingObjectIssues issues={listed.pending?.issues ?? []} />
     </div>
   );

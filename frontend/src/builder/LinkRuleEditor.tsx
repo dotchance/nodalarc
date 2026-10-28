@@ -68,8 +68,9 @@ interface LinkRuleEditorProps {
     patch: Partial<BuilderVisualLinkEndpoint>,
     typed?: boolean,
   ) => void;
-  /** Null while the rule cannot be removed: a change is being applied, or a
-   *  link or routing edit is pending. */
+  /** Remove the rule from the session at once, as one accepted change. Null
+   *  while it cannot be removed: a change is being applied, or an edit of
+   *  the rule is pending. */
   onRemove: (() => void) | null;
   /** The resolved world's segments, each with the terminal roles and media
    *  its nodes carry. Null while the world is unresolved. */
@@ -313,8 +314,8 @@ export function LinkRuleEditor({
           disabled={onRemove === null}
           title={
             onRemove === null
-              ? "Removing waits while a change is being applied or a link or routing edit is pending."
-              : undefined
+              ? "Removing waits while a change is being applied or this rule's edit is pending."
+              : "Removes the rule from the session at once"
           }
         >
           Remove rule

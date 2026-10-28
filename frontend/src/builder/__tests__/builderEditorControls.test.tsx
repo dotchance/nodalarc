@@ -37,6 +37,7 @@ import { GroundEditor } from "../GroundEditor";
 import { SiteEditor } from "../SiteEditor";
 import { ConstellationEditor } from "../ConstellationEditor";
 import { LinkRuleEditor, LinkRuleWindow } from "../LinkRuleEditor";
+import { PendingEditApplyRow } from "../pendingEditKit";
 import { RoutingDomainWindow } from "../RoutingEditor";
 import {
   accessBeamElevationDeg,
@@ -49,6 +50,7 @@ import {
   newWorkspace,
 } from "./fixtures/workspaceFixtures";
 import type {
+  BuilderPendingEditOutcome,
   BuilderVisualLinkRule,
   BuilderVisualRoutingDomain,
   CatalogDocumentSummary,
@@ -522,6 +524,140 @@ describe("buffered windows commit through the apply row", () => {
     expect((screen.getByText("Apply") as HTMLButtonElement).disabled).toBe(true);
     expect((screen.getByText("OK") as HTMLButtonElement).disabled).toBe(true);
     expect((screen.getByText("Cancel") as HTMLButtonElement).disabled).toBe(false);
+  });
+});
+
+describe("a link or routing window applies its pending edit through the backend", () => {
+  afterEach(cleanup);
+
+  /** The row with each gesture recorded in `calls`; Apply and Re-apply answer
+   *  with `applied`, or fail with `failure`. */
+  function renderRow(
+    calls: string[],
+    {
+      pending = true,
+      outcome = null,
+      blocked = null,
+      applied = true,
+      failure = null,
+    }: {
+      pending?: boolean;
+      outcome?: BuilderPendingEditOutcome | null;
+      blocked?: string | null;
+      applied?: boolean;
+      failure?: string | null;
+    } = {},
+  ) {
+    const answer = (gesture: string) => () => {
+      calls.push(gesture);
+      return failure === null ? Promise.resolve(applied) : Promise.reject(new Error(failure));
+    };
+    render(
+      <PendingEditApplyRow
+        pending={pending}
+        outcome={outcome}
+        blocked={blocked}
+        onApply={answer("apply")}
+        onReapply={answer("reapply")}
+        onDiscard={() => calls.push("discard")}
+        onClose={() => calls.push("close")}
+      />,
+    );
+  }
+
+  const button = (name: string) => screen.getByRole("button", { name }) as HTMLButtonElement;
+
+  it("OK on an edit the backend refuses closes the window and keeps the edit pending", async () => {
+    const calls: string[] = [];
+    renderRow(calls, { applied: false });
+    expect(screen.getByText("pending edit")).toBeTruthy();
+
+    fireEvent.click(button("OK"));
+    await act(async () => undefined);
+
+    expect(calls).toEqual(["apply", "close"]);
+  });
+
+  it("a failed apply is shown and the window stays open", async () => {
+    const calls: string[] = [];
+    renderRow(calls, { failure: "VS-API could not be reached" });
+
+    fireEvent.click(button("OK"));
+    await act(async () => undefined);
+    fireEvent.click(button("Apply"));
+    await act(async () => undefined);
+
+    expect(calls).toEqual(["apply", "apply"]);
+    expect(screen.getByText("VS-API could not be reached")).toBeTruthy();
+  });
+
+  it("Apply keeps the window open; Cancel discards the edit and closes it", async () => {
+    const calls: string[] = [];
+    renderRow(calls);
+
+    fireEvent.click(button("Apply"));
+    await act(async () => undefined);
+    fireEvent.click(button("Cancel"));
+
+    expect(calls).toEqual(["apply", "discard", "close"]);
+  });
+
+  it("a stale edit says why and is re-applied or discarded only on request", async () => {
+    const calls: string[] = [];
+    renderRow(calls, {
+      outcome: {
+        status: "stale",
+        issues: [
+          {
+            code: "builder.staleness.pending_edit",
+            stage: "staleness",
+            severity: "error",
+            message: "Link rule 'leo_isl' changed since the edit began",
+            blocks: ["save", "deploy"],
+            source_ref: null,
+            json_pointer: "/link_rules/0",
+            draft_path: "pending_edits.0",
+            source_line: null,
+            source_column: null,
+            related_refs: [],
+          },
+        ],
+      },
+    });
+    expect(screen.getByText("stale")).toBeTruthy();
+    expect(screen.getByTestId("builder-stale-notice").textContent).toContain(
+      "Link rule 'leo_isl' changed since the edit began",
+    );
+
+    fireEvent.click(button("Re-apply"));
+    await act(async () => undefined);
+    fireEvent.click(button("Discard"));
+
+    expect(calls).toEqual(["reapply", "discard"]);
+  });
+
+  it("with no pending edit, Apply waits and OK only closes", () => {
+    const calls: string[] = [];
+    renderRow(calls, {
+      pending: false,
+      outcome: { status: "stale", issues: [] },
+    });
+    expect(screen.getByText("applied")).toBeTruthy();
+    expect(screen.queryByTestId("builder-stale-notice")).toBeNull();
+    expect(button("Apply").disabled).toBe(true);
+
+    fireEvent.click(button("OK"));
+
+    expect(calls).toEqual(["close"]);
+  });
+
+  it("while the edit cannot be applied, Apply and OK wait and say why, and Cancel stays", () => {
+    const calls: string[] = [];
+    renderRow(calls, { blocked: "Apply or canonicalize the session YAML before editing here." });
+    expect(button("Apply").disabled).toBe(true);
+    expect(button("OK").disabled).toBe(true);
+    expect(button("OK").title).toBe("Apply or canonicalize the session YAML before editing here.");
+    expect(button("Cancel").disabled).toBe(false);
   });
 });
 

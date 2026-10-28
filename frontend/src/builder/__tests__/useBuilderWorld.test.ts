@@ -4,6 +4,8 @@ import { act, renderHook } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   BuilderCompileResult,
+  BuilderIssue,
+  BuilderPendingEditOutcome,
   BuilderVisualDraftAssemblyResult,
   BuilderVisualDraftEnvelope,
   BuilderVisualLinkRuleWidget,
@@ -20,6 +22,7 @@ vi.mock("../../config", () => ({
 
 const {
   claimOutlineReveal,
+  pendingEditKey,
   requestOutlineReveal,
   useBuilderWorld,
   useOutlineReveal,
@@ -548,6 +551,30 @@ describe("pending link and routing edits", () => {
   });
 });
 
+/** The backend's issue for a pending edit it did not apply. */
+function editIssue(stage: "staleness" | "draft", message: string): BuilderIssue {
+  return {
+    code: stage === "staleness" ? "builder.staleness.pending_edit" : "builder.draft.refused",
+    stage,
+    severity: "error",
+    message,
+    blocks: ["save", "deploy"],
+    source_ref: null,
+    json_pointer: "/link_rules/0",
+    draft_path: "pending_edits.0",
+    source_line: null,
+    source_column: null,
+    related_refs: [],
+  };
+}
+
+const RULE_KEY = pendingEditKey(RULE_ADDRESS);
+
+const STALE: BuilderPendingEditOutcome = {
+  status: "stale",
+  issues: [editIssue("staleness", "Link rule 'leo_isl' changed since the edit began")],
+};
+
 describe("pending edit preview", () => {
   let fetchMock: ReturnType<typeof vi.fn>;
 
@@ -642,6 +669,55 @@ describe("pending edit preview", () => {
     expect(result.current.visualDraft).toBe(accepted);
     expect(result.current.assemblyResult).toBe(acceptedAssembly);
     expect(result.current.pendingEdits.size).toBe(1);
+  });
+
+  it("holds the preview's outcome for each edit while the draft and the edits stand", async () => {
+    const { result } = renderHook(() => useBuilderWorld());
+    await act(async () => undefined);
+    await openWithPendingEdit(result);
+    fetchMock.mockImplementation((url: string) => {
+      if (url.includes("/builder/compile")) {
+        return Promise.resolve(
+          response({ ...previewCompile("stale-preview"), pending_edit_outcomes: [STALE] }),
+        );
+      }
+      if (url.includes("/builder/draft/object-edit")) {
+        return Promise.resolve(response(ruleAnswer(500)));
+      }
+      throw new Error(`unexpected request ${url}`);
+    });
+
+    await act(async () => {
+      await result.current.previewPendingEdits();
+    });
+    expect(result.current.pendingEditOutcomes.get(RULE_KEY)).toEqual(STALE);
+
+    await act(async () => {
+      await result.current.editPendingObject(RULE_ADDRESS, ruleCard(500));
+    });
+    expect(result.current.pendingEditOutcomes.size).toBe(0);
+  });
+
+  it("shows a preview whose outcomes do not pair with the pending edits as a failure", async () => {
+    const { result } = renderHook(() => useBuilderWorld());
+    await act(async () => undefined);
+    await openWithPendingEdit(result);
+    fetchMock.mockImplementation((url: string) => {
+      if (url.includes("/builder/compile")) {
+        return Promise.resolve(
+          response({ ...previewCompile("unpaired"), pending_edit_outcomes: [] }),
+        );
+      }
+      throw new Error(`unexpected request ${url}`);
+    });
+
+    await act(async () => {
+      await result.current.previewPendingEdits();
+    });
+
+    expect(result.current.error).toBe("the preview did not answer one outcome per pending edit");
+    expect(result.current.world).toBeNull();
+    expect(result.current.pendingEditOutcomes.size).toBe(0);
   });
 
   it("drops a preview the pending edits moved past", async () => {
@@ -768,6 +844,286 @@ describe("pending edit preview", () => {
       "pending link and routing edits are previewed only on a fully accepted session",
     );
     expect(result.current.world).toBeNull();
+  });
+});
+
+describe("applying, discarding and removing pending edits", () => {
+  let fetchMock: ReturnType<typeof vi.fn>;
+
+  beforeEach(() => {
+    fetchMock = vi.fn((url: string) => {
+      if (url.includes("/builder/catalog/list")) return Promise.resolve(sessionsResponse);
+      throw new Error(`unexpected request ${url}`);
+    });
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+  });
+
+  /** A later accepted revision of the link draft whose session holds `rules`. */
+  function acceptedLater(
+    revision: number,
+    rules: ReadonlyArray<Readonly<Record<string, JsonValue>>>,
+  ): BuilderVisualDraftEnvelope {
+    return {
+      ...linkDraft(revision),
+      session_yaml: `session:\n  name: revision-${revision}\n`,
+      applied_session: { session: { name: "coordinated" }, link_rules: [...rules] },
+    };
+  }
+
+  /** Open `opened` and hold one pending edit of its rule. */
+  async function openWithPendingEdit(
+    hook: { current: ReturnType<typeof useBuilderWorld> },
+    opened: BuilderVisualDraftEnvelope = linkDraft(),
+  ): Promise<void> {
+    await openAsThePageDoes(hook, fetchMock, opened);
+    fetchMock.mockImplementation((url: string) => {
+      if (url.includes("/builder/draft/object-edit")) {
+        return Promise.resolve(response(ruleAnswer(12345)));
+      }
+      throw new Error(`unexpected request ${url}`);
+    });
+    await act(async () => {
+      await hook.current.editPendingObject(RULE_ADDRESS, ruleCard(12345));
+    });
+  }
+
+  /** Answer every apply with `answer`. */
+  function answerApplies(answer: unknown): void {
+    fetchMock.mockImplementation((url: string) => {
+      if (url.includes("/builder/draft/apply-edits")) return Promise.resolve(response(answer));
+      throw new Error(`unexpected request ${url}`);
+    });
+  }
+
+  it("applies an edit as the next revision and adopts only that answer", async () => {
+    const { result } = renderHook(() => useBuilderWorld());
+    await act(async () => undefined);
+    await openWithPendingEdit(result);
+    const applied = acceptedLater(5, [{ ...ACCEPTED_RULE, max_range_km: 12345 }]);
+    answerApplies({
+      applied: true,
+      outcomes: [{ status: "applied", issues: [] }],
+      assembly: assembly(applied),
+    });
+    fetchMock.mockClear();
+
+    await act(async () => {
+      await result.current.applyPendingEdits([RULE_KEY]);
+    });
+
+    // One request: the apply. Its answer is the next revision with its compile.
+    expect(fetchMock.mock.calls.map(([url]) => String(url))).toEqual([
+      "http://test:8080/api/v1/builder/draft/apply-edits",
+    ]);
+    const [sent] = requestsTo(fetchMock, "/builder/draft/apply-edits") as Array<{
+      draft: BuilderVisualDraftEnvelope;
+      expected_draft_revision: number;
+      edits: unknown;
+    }>;
+    expect(sent!.draft.draft_revision).toBe(4);
+    expect(sent!.expected_draft_revision).toBe(4);
+    expect(sent!.edits).toEqual([
+      {
+        kind: "content",
+        address: RULE_ADDRESS,
+        base: ACCEPTED_RULE,
+        working: { ...ACCEPTED_RULE, max_range_km: 12345 },
+      },
+    ]);
+    expect(result.current.visualDraft).toBe(applied);
+    expect(result.current.assemblyResult?.visual_draft).toBe(applied);
+    expect(result.current.yamlBuffer.text).toBe(applied.session_yaml);
+    expect(result.current.yamlBuffer.applied).toBe(true);
+    expect(result.current.pendingEdits.size).toBe(0);
+  });
+
+  it("refuses the whole batch, keeps the edit pending and holds the backend's outcome", async () => {
+    const { result } = renderHook(() => useBuilderWorld());
+    await act(async () => undefined);
+    await openWithPendingEdit(result);
+    const accepted = result.current.visualDraft;
+    const held = result.current.pendingEdits;
+    answerApplies({ applied: false, outcomes: [STALE], assembly: null });
+
+    await act(async () => {
+      const answer = await result.current.applyPendingEdits([RULE_KEY]);
+      expect(answer.applied).toBe(false);
+    });
+
+    expect(result.current.visualDraft).toBe(accepted);
+    expect(result.current.pendingEdits).toBe(held);
+    expect(result.current.pendingEditOutcomes.get(RULE_KEY)).toEqual(STALE);
+
+    // The outcome was said about the edit as it was; a later edit is not stale on its word.
+    fetchMock.mockImplementation((url: string) => {
+      if (url.includes("/builder/draft/object-edit")) {
+        return Promise.resolve(response(ruleAnswer(500)));
+      }
+      throw new Error(`unexpected request ${url}`);
+    });
+    await act(async () => {
+      await result.current.editPendingObject(RULE_ADDRESS, ruleCard(500));
+    });
+    expect(result.current.pendingEditOutcomes.size).toBe(0);
+  });
+
+  it("re-applies a stale edit over the object the accepted session now holds", async () => {
+    const { result } = renderHook(() => useBuilderWorld());
+    await act(async () => undefined);
+    await openWithPendingEdit(result);
+    // A command accepts a revision that changed the rule under the edit.
+    const disabledRule = { ...ACCEPTED_RULE, enabled: false };
+    const commanded = acceptedLater(5, [disabledRule]);
+    fetchMock.mockImplementation((url: string) => {
+      if (url.includes("/builder/draft/command")) {
+        return Promise.resolve(
+          response({ draft: commanded, draft_revision: 5, affected_id: "space-1" }),
+        );
+      }
+      if (url.includes("/builder/draft/compile")) {
+        return Promise.resolve(response(assembly(commanded)));
+      }
+      throw new Error(`unexpected request ${url}`);
+    });
+    await act(async () => {
+      await result.current.runVisualCommand({
+        operation: "add_generated_space",
+        phasing_mode: "walker_delta",
+      });
+    });
+    answerApplies({
+      applied: true,
+      outcomes: [{ status: "applied", issues: [] }],
+      assembly: assembly(acceptedLater(6, [{ ...ACCEPTED_RULE, max_range_km: 12345 }])),
+    });
+
+    await act(async () => {
+      await result.current.applyPendingEdits([RULE_KEY], new Set([RULE_KEY]));
+    });
+
+    const [sent] = requestsTo(fetchMock, "/builder/draft/apply-edits") as Array<{
+      expected_draft_revision: number;
+      edits: unknown;
+    }>;
+    expect(sent!.expected_draft_revision).toBe(5);
+    // The base is the rule as revision 5 holds it; the working JSON is the user's.
+    expect(sent!.edits).toEqual([
+      {
+        kind: "content",
+        address: RULE_ADDRESS,
+        base: disabledRule,
+        working: { ...ACCEPTED_RULE, max_range_km: 12345 },
+      },
+    ]);
+    expect(result.current.pendingEdits.size).toBe(0);
+  });
+
+  it("discards an edit, and an answer still on its way for it is not held", async () => {
+    const { result } = renderHook(() => useBuilderWorld());
+    await act(async () => undefined);
+    await openWithPendingEdit(result);
+    let answerLate!: () => void;
+    fetchMock.mockImplementation((url: string) => {
+      if (url.includes("/builder/draft/object-edit")) {
+        return new Promise((resolve) => {
+          answerLate = () => resolve(response(ruleAnswer(500)));
+        });
+      }
+      throw new Error(`unexpected request ${url}`);
+    });
+
+    let late!: Promise<unknown>;
+    act(() => {
+      late = result.current.editPendingObject(RULE_ADDRESS, ruleCard(500));
+    });
+    act(() => result.current.discardPendingEdit(RULE_ADDRESS));
+    expect(result.current.pendingEdits.size).toBe(0);
+    await act(async () => {
+      answerLate();
+      await expect(late).rejects.toThrow("changed while");
+    });
+
+    expect(result.current.pendingEdits.size).toBe(0);
+    expect(requestsTo(fetchMock, "/builder/draft/apply-edits")).toEqual([]);
+  });
+
+  it("removes a rule at once as a list edit of the accepted ids", async () => {
+    const otherRule = { ...ACCEPTED_RULE, id: "geo_isl" };
+    const opened = acceptedLater(4, [ACCEPTED_RULE, otherRule]);
+    const { result } = renderHook(() => useBuilderWorld());
+    await act(async () => undefined);
+    await openAsThePageDoes(result, fetchMock, opened);
+    const removed = acceptedLater(5, [otherRule]);
+    answerApplies({
+      applied: true,
+      outcomes: [{ status: "applied", issues: [] }],
+      assembly: assembly(removed),
+    });
+
+    await act(async () => {
+      await result.current.removeListMember("/link_rules", "leo_isl");
+    });
+
+    const [sent] = requestsTo(fetchMock, "/builder/draft/apply-edits") as Array<{
+      expected_draft_revision: number;
+      edits: unknown;
+    }>;
+    expect(sent!.expected_draft_revision).toBe(4);
+    expect(sent!.edits).toEqual([
+      {
+        kind: "list",
+        list_pointer: "/link_rules",
+        ids_before: ["leo_isl", "geo_isl"],
+        ids_wanted: ["geo_isl"],
+      },
+    ]);
+    expect(result.current.visualDraft).toBe(removed);
+    expect(result.current.yamlBuffer.text).toBe(removed.session_yaml);
+  });
+
+  it("shows a removal the backend refuses and accepts nothing", async () => {
+    const { result } = renderHook(() => useBuilderWorld());
+    await act(async () => undefined);
+    await openAsThePageDoes(result, fetchMock, linkDraft());
+    const accepted = result.current.visualDraft;
+    answerApplies({
+      applied: false,
+      outcomes: [
+        {
+          status: "invalid",
+          issues: [
+            editIssue(
+              "draft",
+              "The last routing domain cannot be removed while routing boundaries remain",
+            ),
+          ],
+        },
+      ],
+      assembly: null,
+    });
+
+    await act(async () => {
+      await expect(result.current.removeListMember("/link_rules", "leo_isl")).rejects.toThrow(
+        "The last routing domain cannot be removed while routing boundaries remain",
+      );
+    });
+
+    expect(result.current.visualDraft).toBe(accepted);
+  });
+
+  it("waits to remove an object while its edit is pending", async () => {
+    const { result } = renderHook(() => useBuilderWorld());
+    await act(async () => undefined);
+    await openWithPendingEdit(result);
+
+    await act(async () => {
+      await expect(result.current.removeListMember("/link_rules", "leo_isl")).rejects.toThrow(
+        "apply or discard the pending edit of leo_isl before removing it",
+      );
+    });
+
+    expect(requestsTo(fetchMock, "/builder/draft/apply-edits")).toEqual([]);
+    expect(result.current.pendingEdits.size).toBe(1);
   });
 });
 

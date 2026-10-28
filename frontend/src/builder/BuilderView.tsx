@@ -44,6 +44,7 @@ import { builderSnapshotFromWorld } from "./builderSnapshot";
 import { CandidateLines } from "./CandidateLines";
 import { computeCandidates } from "./candidates";
 import { EditorApplyRow, Field, InlineSelect, PasteArea } from "./editorKit";
+import { PendingEditApplyRow } from "./pendingEditKit";
 import { accessBeamElevationDeg } from "./linkPhysics";
 import { CatalogObjectView } from "./CatalogObjectView";
 import { ConstellationEditor } from "./ConstellationEditor";
@@ -60,7 +61,9 @@ import { listSessionObjects } from "./sessionListing";
 import {
   canDeploy,
   draftHoldsUnsavedWork,
+  pendingEditKey,
   pendingEditsPhrase,
+  refusalMessage,
   yamlBlocksGraphicalEditing,
   announceCatalogDraftSaved,
   claimLibraryReveal,
@@ -88,6 +91,9 @@ import {
   useWorkspace,
 } from "./useWorkspace";
 import {
+  pendingEditAddress,
+  pendingEditTarget,
+  pendingEditTitle,
   useEditorWindows,
   targetKey,
   type EditorTarget,
@@ -107,6 +113,8 @@ import {
   type Workspace,
 } from "./workspace";
 import type {
+  BuilderMemberAddress,
+  BuilderVisualDraftAssemblyResult,
   BuilderVisualDraftEnvelope,
   BuilderDeployVerdict,
   BuilderVisualAuthoringFacts,
@@ -216,13 +224,6 @@ const BUFFERED_WINDOW_KINDS: ReadonlySet<EditorTarget["kind"]> = new Set([
   "ground",
 ]);
 
-/** The windows whose edits are pending edits of the accepted session. */
-const PENDING_EDIT_WINDOW_KINDS: ReadonlySet<EditorTarget["kind"]> = new Set([
-  "link",
-  "domain",
-  "boundaries",
-]);
-
 /** One-line form of a refusal for the compact surfaces (canvas note,
  *  status bar) — the owning window's wall carries the full text. */
 function truncateError(text: string, max = 180): string {
@@ -278,14 +279,15 @@ type SaveState =
 
 /** Save is a small dialog, not a silent write. The name is buffered here and
  *  committed once on Save (— the Session window stays the only live
- *  name editor); with unapplied windows the primary action applies them
- *  first, and saving around them is the quieter, explicit choice. */
+ *  name editor); with unapplied window edits or pending link and routing
+ *  edits the primary action applies them first, and saving around them is
+ *  the quieter, explicit choice. */
 function SaveSessionDialog({
   workspaceName,
   canSave,
   blockedReason,
   saveState,
-  dirtyWindows,
+  unappliedEdits,
   staleList,
   onSave,
   onClose,
@@ -294,7 +296,9 @@ function SaveSessionDialog({
   canSave: boolean;
   blockedReason: string | null;
   saveState: SaveState;
-  dirtyWindows: number;
+  /** Windows with unapplied edits, and pending link and routing edits. */
+  unappliedEdits: number;
+  /** The stale windows and stale pending edits, each named by its object. */
   staleList: { key: string; title: string }[];
   onSave: (opts: {
     applyAll: boolean;
@@ -309,7 +313,7 @@ function SaveSessionDialog({
   // overlays carry in from a dirty Session window — only a name the user
   // actually typed here wins.
   const [nameTouched, setNameTouched] = useState(false);
-  // The stale-window confirm sub-view. Each stale window starts DECLINED:
+  // The stale confirm sub-view. Each stale window or edit starts DECLINED:
   // overwriting a value that moved underneath the edit is always an explicit
   // opt-in, never a default of a bulk gesture.
   const [confirming, setConfirming] = useState(false);
@@ -331,9 +335,9 @@ function SaveSessionDialog({
     return (
       <div className="builder-inspector-stack" data-testid="builder-save-dialog">
         <div className="builder-warning" data-testid="save-stale-confirm">
-          {count(staleList.length, "window")} changed underneath your edits.
+          {count(staleList.length, "object")} changed underneath your edits.
           Check the ones whose edits should overwrite the current values; the
-          rest are left open with their edits.
+          rest are left out and keep their edits.
         </div>
         <label className="builder-checkbox-row">
           <input
@@ -380,8 +384,8 @@ function SaveSessionDialog({
             {saving
               ? "Saving…"
               : confirmCount > 0
-                ? `Overwrite ${count(confirmCount, "window")} and save`
-                : "Save without the stale windows"}
+                ? `Overwrite ${count(confirmCount, "object")} and save`
+                : "Save without the stale edits"}
           </Button>
           <Button disabled={saving} onClick={() => setConfirming(false)}>
             Back
@@ -408,12 +412,12 @@ function SaveSessionDialog({
       <div className="builder-site-derived">
         VS-API validates and owns the saved session identifier.
       </div>
-      {!canSave && dirtyWindows === 0 && (
+      {!canSave && unappliedEdits === 0 && (
         <div className="builder-warning">
           {blockedReason ?? "the session must resolve before it can be saved"}
         </div>
       )}
-      {!canSave && dirtyWindows > 0 && (
+      {!canSave && unappliedEdits > 0 && (
         <div className="builder-warning" data-testid="save-preview-refused">
           the previewed edits do not resolve
           {blockedReason ? `: ${blockedReason}` : ""} — apply and save is
@@ -436,7 +440,7 @@ function SaveSessionDialog({
         </div>
       )}
       <div className="builder-preset-row">
-        {dirtyWindows > 0 ? (
+        {unappliedEdits > 0 ? (
           <>
             <Button
               variant="primary"
@@ -453,16 +457,16 @@ function SaveSessionDialog({
               {saving
                 ? "Saving…"
                 : hasStale
-                  ? `Apply ${count(dirtyWindows, "edit")} and save…`
-                  : `Apply ${count(dirtyWindows, "edit")} and save`}
+                  ? `Apply ${count(unappliedEdits, "edit")} and save…`
+                  : `Apply ${count(unappliedEdits, "edit")} and save`}
             </Button>
             <Button
               // The applied-only escape hatch is gated by the APPLIED
-              // session's truth, which only the server knows once dirty
-              // windows diverge the preview — so it always attempts, and a
+              // session's truth, which only the server knows once unapplied
+              // edits diverge the preview — so it always attempts, and a
               // refusal lands verbatim as the save error.
               disabled={saving}
-              title={`leaves out the ${count(dirtyWindows, "window")} with unapplied edits`}
+              title={`leaves out the ${count(unappliedEdits, "unapplied edit")}`}
               onClick={() => onSave({ applyAll: false, name, nameTouched })}
             >
               Save applied state only
@@ -504,6 +508,7 @@ export function BuilderView({
     visualDraft,
     yamlBuffer,
     pendingEdits,
+    pendingEditOutcomes,
     writer,
     assemblyResult,
     world,
@@ -528,6 +533,9 @@ export function BuilderView({
     mutateControls,
     editPendingObject,
     describePendingObject,
+    applyPendingEdits,
+    discardPendingEdit,
+    removeListMember,
     prepareRetarget,
     captureCoordinator,
     captureIsCurrent,
@@ -556,10 +564,7 @@ export function BuilderView({
     updateGroundDraft,
     removeGroundDraft,
     updateLinkRule,
-    removeLinkRule,
     updateRoutingDomain,
-    removeRoutingDomain,
-    removeBoundary,
   } = useWorkspace();
   const nodeCatalog = useBuilderCatalog("nodes");
   const terminalCatalog = useBuilderCatalog("terminals");
@@ -659,6 +664,11 @@ export function BuilderView({
     updateRoutingDomain,
   });
   const [saveState, setSaveState] = useState<SaveState>({ kind: "idle" });
+  // Why the last removal from a link rule or routing domain window was
+  // refused, with that window's key.
+  const [removalFailure, setRemovalFailure] = useState<{ key: string; message: string } | null>(
+    null,
+  );
   // Whether the next deploy records the session run's history.
   const [recordHistory, setRecordHistory] = useState(false);
   // The twin as the last accepted result seeded it. An accepted result
@@ -732,6 +742,11 @@ export function BuilderView({
   // Pending link rule, routing domain and boundary edits. The YAML buffer, the
   // session pane and the windows that edit the twin wait while any is pending.
   const pendingEditCount = pendingEdits.size;
+  // The pending edits the backend found stale: the accepted session changed
+  // their object since the edit began. Each is named as the save dialog lists it.
+  const stalePendingEdits = [...pendingEdits.entries()]
+    .filter(([key]) => pendingEditOutcomes.get(key)?.status === "stale")
+    .map(([key, pending]) => ({ key, title: pendingEditTitle(pending.edit.address) }));
   const unappliedSessionAndSegmentWindows = windows.filter(
     (w) => SESSION_AND_SEGMENT_WINDOW_KINDS.has(w.target.kind) && buffers[w.key]?.dirty === true,
   ).length;
@@ -1009,6 +1024,25 @@ export function BuilderView({
       return { message: issue.message, target };
     });
   }, [assemblyResult?.assembly_issues, workspace]);
+  // The pending edits the backend has issues with: the issues of its latest
+  // answer, or its refusal of the edit. Each names its object and opens the
+  // window that edits it.
+  const pendingEditFindings = [...pendingEdits.entries()].flatMap(([key, pending]) => {
+    const outcome = pendingEditOutcomes.get(key);
+    const [first] = [
+      ...(outcome !== undefined && outcome.status !== "applied" ? outcome.issues : []),
+      ...pending.answer.issues,
+    ];
+    if (first === undefined) return [];
+    const address = pending.edit.address;
+    return [
+      {
+        key,
+        message: `${pendingEditTitle(address)}: ${first.message}`,
+        target: pendingEditTarget(address),
+      },
+    ];
+  });
   /** One save path for both dialog actions: submit the exact draft, then adopt it. */
   const performSave = async ({
     applyAll,
@@ -1022,15 +1056,20 @@ export function BuilderView({
     confirmedStaleKeys?: ReadonlySet<string>;
   }) => {
     if (!workspace) return;
-    if (applyAll && staleKeys.size > 0 && confirmedStaleKeys === undefined) {
-      // Fail-closed backstop: a bulk apply-and-save with stale windows must
-      // pass through the confirm flow, which decides each stale window
-      // (confirm = overwrite the moved value, decline = leave the window out).
-      // A direct call carrying no decisions refuses rather than silently
+    const stalePendingKeys = new Set(stalePendingEdits.map((stale) => stale.key));
+    if (
+      applyAll &&
+      (staleKeys.size > 0 || stalePendingKeys.size > 0) &&
+      confirmedStaleKeys === undefined
+    ) {
+      // Fail-closed backstop: a bulk apply-and-save with stale windows or
+      // stale pending edits must pass through the confirm flow, which decides
+      // each one (confirm = overwrite the moved value, decline = leave it
+      // out). A direct call carrying no decisions refuses rather than silently
       // overwrite an object the user reverted.
       setSaveState({
         kind: "failed",
-        message: "confirm the stale windows before applying",
+        message: "confirm the stale windows and edits before applying",
       });
       return;
     }
@@ -1038,6 +1077,42 @@ export function BuilderView({
     let saveCapture: ReturnType<typeof captureCoordinator> | null = null;
     setSaveState({ kind: "saving" });
     try {
+      if (yamlBlocksGui) {
+        throw new Error("apply valid canonical YAML before saving the graphical session");
+      }
+      if (nameTouched && !name.trim()) {
+        throw new Error("session name is required");
+      }
+      // Pending link rule, routing domain and boundary edits are applied
+      // first, as one accepted revision through the route that applies them.
+      // A declined stale edit stays pending; a confirmed one is re-applied over
+      // the object as the session now holds it. A refusal applies none of them
+      // and fails the save.
+      let editsApplied: BuilderVisualDraftAssemblyResult | null = null;
+      if (applyAll) {
+        const keys = [...pendingEdits.keys()].filter(
+          (key) => !stalePendingKeys.has(key) || confirmedStaleKeys?.has(key) === true,
+        );
+        if (keys.length > 0) {
+          const result = await applyEdits(
+            keys,
+            new Set(keys.filter((key) => stalePendingKeys.has(key))),
+          );
+          if (!result.applied || result.assembly === null) {
+            throw new Error(
+              `the backend applied none of the ${count(keys.length, "pending edit")}: ${refusalMessage(
+                result.outcomes,
+              )}`,
+            );
+          }
+          editsApplied = result.assembly;
+        }
+      }
+      // The session as this save starts from: the accepted revision the
+      // pending edits made, or the one the page held.
+      const savedFrom = editsApplied ? workspaceFromVisualDraft(editsApplied.visual_draft) : workspace;
+      const draftNow = editsApplied?.visual_draft ?? visualDraft;
+      const assemblyNow = editsApplied ?? assemblyResult;
       // Declined stale windows (stale, not confirmed) are excluded from the
       // overlay and survive the save open/dirty/stale; confirmed stale +
       // non-stale dirty buffers apply.
@@ -1053,19 +1128,13 @@ export function BuilderView({
       const appliedBuffers = new Map(
         Object.entries(buffers).filter(([k, b]) => b.dirty && !excludeKeys.has(k)),
       );
-      const next = workspaceForSave(workspace, buffers, {
+      const next = workspaceForSave(savedFrom, buffers, {
         applyAll,
         dialogName: name,
         nameTouched,
         excludeKeys,
       });
-      if (yamlBlocksGui) {
-        throw new Error("apply valid canonical YAML before saving the graphical session");
-      }
-      if (nameTouched && !name.trim()) {
-        throw new Error("session name is required");
-      }
-      const currentTargetName = visualDraft?.target_ref
+      const currentTargetName = draftNow?.target_ref
         .split("/")
         .pop()
         ?.replace(/\.ya?ml$/, "");
@@ -1074,13 +1143,13 @@ export function BuilderView({
       const workspaceForCurrentTarget = retargetRequired
         ? { ...next, session_name: currentTargetName }
         : next;
-      const currentProjection = visualDraft?.authoring_workspace ?? visualDraft?.applied_workspace;
+      const currentProjection = draftNow?.authoring_workspace ?? draftNow?.applied_workspace;
       let assembled =
-        assemblyResult && sameWorkspace(
+        assemblyNow && sameWorkspace(
           workspaceForCurrentTarget,
           currentProjection as Workspace | null,
         )
-          ? assemblyResult
+          ? assemblyNow
           : await applyWorkspace(workspaceForCurrentTarget);
       const preparedRetarget = retargetRequired
         ? await prepareRetarget(`user:sessions/${next.session_name}.yaml`)
@@ -1105,7 +1174,7 @@ export function BuilderView({
             canonicalYaml: result.session.canonical_yaml,
           });
         }
-        if (next !== workspace) {
+        if (next !== savedFrom) {
           commitWorkspace(next, "save-committed-unverified");
         }
         if (applyAll) dropAppliedBuffers(appliedBuffers);
@@ -1118,7 +1187,7 @@ export function BuilderView({
         });
         return;
       }
-      if (next !== workspace) {
+      if (next !== savedFrom) {
         commitWorkspace(next, applyAll ? "apply-all-save" : "save-rename");
       }
       if (applyAll) {
@@ -1284,6 +1353,57 @@ export function BuilderView({
     const result = await executeVisualCommand(command, applied, applied);
     rememberSchedulingSelection(command, result);
     return result;
+  };
+
+  /** Apply pending edits as the next accepted revision, through the route
+   *  that applies them, and re-seed the twin from the answer. A refused batch
+   *  accepts nothing and leaves every edit pending with the backend's outcome. */
+  const applyEdits = async (keys: ReadonlyArray<string>, reapply?: ReadonlySet<string>) => {
+    const refusal = pendingEditRefusal();
+    if (refusal !== null) throw new Error(refusal);
+    const startedFrom = currentWorkspace();
+    const result = await applyPendingEdits(keys, reapply);
+    if (result.assembly) adoptAccepted(result.assembly.visual_draft, startedFrom);
+    return result;
+  };
+
+  /** Apply the pending edit of one window, re-applying it over the object as
+   *  the session now holds it when `reapply`. Resolves whether it was applied. */
+  const applyWindowEdit = async (key: string, reapply: boolean): Promise<boolean> => {
+    const result = await applyEdits([key], reapply ? new Set([key]) : undefined);
+    if (result.applied) setSaveState({ kind: "idle" });
+    return result.applied;
+  };
+
+  /** Remove a link rule or routing domain at once, as one accepted revision,
+   *  and close its window. A refusal changes nothing and is shown in the
+   *  window. */
+  const removeAtOnce = (target: EditorTarget, address: BuilderMemberAddress) => {
+    const key = targetKey(target);
+    setRemovalFailure(null);
+    const remove = async () => {
+      const refusal = pendingEditRefusal();
+      if (refusal !== null) throw new Error(refusal);
+      const startedFrom = currentWorkspace();
+      const assembly = await removeListMember(address.list_pointer, address.id);
+      adoptAccepted(assembly.visual_draft, startedFrom);
+      setSaveState({ kind: "idle" });
+      closeWindow(key);
+    };
+    remove().catch((cause) =>
+      setRemovalFailure({ key, message: cause instanceof Error ? cause.message : String(cause) }),
+    );
+  };
+
+  /** Close a link rule, routing domain or boundary list window. With
+   *  `discard`, as Cancel and the title-bar X close it, its pending edit is
+   *  dropped too; OK leaves a refused edit pending. */
+  const closePendingEditWindow = (target: EditorTarget, discard: boolean) => {
+    const key = targetKey(target);
+    const address = pendingEditAddress(target);
+    if (discard && address !== null) discardPendingEdit(address);
+    setRemovalFailure((failure) => (failure?.key === key ? null : failure));
+    closeWindow(key);
   };
 
   const discardCatalogDraft = useCallback(() => {
@@ -1788,17 +1908,9 @@ export function BuilderView({
         if (!workspace || !rule || appliedRevision === null) return null;
         const address = { kind: "member", list_pointer: "/link_rules", id: rule.id } as const;
         const ruleWall = wallFor(target);
-        // The rule is removed from the twin, so removing waits while a change
-        // is being applied or any link or routing edit is pending.
-        const removeRule =
-          writer !== null || pendingEditCount > 0
-            ? null
-            : () => {
-                removeLinkRule(rule.id);
-                closeWindow(targetKey(target));
-              };
         return {
           title: rule.pending === null ? rule.id : `${rule.id} •`,
+          close: () => closePendingEditWindow(target, true),
           content: (
             <>
             {ruleWall && (
@@ -1825,7 +1937,7 @@ export function BuilderView({
                 });
                 return result.notice ?? "link physics rederived by VS-API";
               }}
-              onRemove={removeRule}
+              onRemove={writer !== null ? null : () => removeAtOnce(target, address)}
             />
             </>
           ),
@@ -1841,17 +1953,9 @@ export function BuilderView({
           id: domain.id,
         } as const;
         const domainWall = wallFor(target);
-        // The domain is removed from the twin, so removing waits while a change
-        // is being applied or any link or routing edit is pending.
-        const removeDomain =
-          writer !== null || pendingEditCount > 0
-            ? null
-            : () => {
-                removeRoutingDomain(domain.id);
-                closeWindow(targetKey(target));
-              };
         return {
           title: domain.pending === null ? domain.id : `${domain.id} •`,
+          close: () => closePendingEditWindow(target, true),
           content: (
             <>
             {domainWall && (
@@ -1867,7 +1971,7 @@ export function BuilderView({
               onEdit={(change) => editPendingObject(address, change)}
               onDescribe={() => describePendingObject(address)}
               workspace={workspace}
-              onRemove={removeDomain}
+              onRemove={writer !== null ? null : () => removeAtOnce(target, address)}
             />
             </>
           ),
@@ -1877,12 +1981,9 @@ export function BuilderView({
         const appliedRevision = visualDraft?.applied_revision ?? null;
         if (appliedRevision === null) return null;
         const address = { kind: "whole_list", pointer: "/routing/boundaries" } as const;
-        // A boundary is removed from the twin, so removing waits while a change
-        // is being applied or any link or routing edit is pending.
-        const removeAcceptedBoundary =
-          writer !== null || pendingEditCount > 0 ? null : removeBoundary;
         return {
           title: listed.boundaries.pending === null ? "Boundaries" : "Boundaries •",
+          close: () => closePendingEditWindow(target, true),
           content: (
             <BoundaryListWindow
               authoring={authoring!}
@@ -1892,7 +1993,6 @@ export function BuilderView({
               appliedRevision={appliedRevision}
               onEdit={(change) => editPendingObject(address, change)}
               onDescribe={() => describePendingObject(address)}
-              onRemove={removeAcceptedBoundary}
             />
           ),
         };
@@ -2026,8 +2126,8 @@ export function BuilderView({
               canSave={canSave}
               blockedReason={saveBlocker}
               saveState={saveState}
-              dirtyWindows={dirtyWindows}
-              staleList={staleList}
+              unappliedEdits={dirtyWindows + pendingEditCount}
+              staleList={[...staleList, ...stalePendingEdits]}
               onSave={(opts) => void performSave(opts)}
               onClose={() => closeWindow("save-session")}
             />
@@ -2856,11 +2956,15 @@ export function BuilderView({
           if (!body) return null;
           const buf = buffers[win.key];
           const buffered = BUFFERED_WINDOW_KINDS.has(win.target.kind);
+          // The pending edit this window edits, by its address and the key it is
+          // held under; null for a window that edits none.
+          const address = pendingEditAddress(win.target);
+          const edit = address === null ? null : { address, key: pendingEditKey(address) };
           const lockReason = buffered
             ? pendingEditCount > 0
               ? `Apply or discard the ${pendingEditsPhrase(pendingEditCount)} before editing here.`
               : null
-            : PENDING_EDIT_WINDOW_KINDS.has(win.target.kind)
+            : edit !== null
               ? pendingEditRefusal()
               : null;
           return (
@@ -2891,6 +2995,22 @@ export function BuilderView({
                   onLoadCurrent={() => loadCurrentValues(win.target)}
                   onCancel={() => closeWindow(win.key)}
                 />
+              )}
+              {edit !== null && (
+                <>
+                  {removalFailure?.key === win.key && (
+                    <div className="builder-warning">{removalFailure.message}</div>
+                  )}
+                  <PendingEditApplyRow
+                    pending={pendingEdits.has(edit.key)}
+                    outcome={pendingEditOutcomes.get(edit.key) ?? null}
+                    blocked={lockReason}
+                    onApply={() => applyWindowEdit(edit.key, false)}
+                    onReapply={() => applyWindowEdit(edit.key, true)}
+                    onDiscard={() => discardPendingEdit(edit.address)}
+                    onClose={() => closePendingEditWindow(win.target, false)}
+                  />
+                </>
               )}
             </FloatingWindow>
           );
@@ -3052,7 +3172,7 @@ export function BuilderView({
         )}
       </div>
       {workspace &&
-        ((wall && !isOpen(wall.key)) || findings.length > 0) && (
+        ((wall && !isOpen(wall.key)) || findings.length > 0 || pendingEditFindings.length > 0) && (
         <div className="builder-rail" data-testid="builder-rail">
           {wall && !isOpen(wall.key) && (
             <button
@@ -3075,6 +3195,16 @@ export function BuilderView({
                 if (!target) return;
                 openEditor(target);
               }}
+            >
+              {finding.message}
+            </button>
+          ))}
+          {pendingEditFindings.map((finding) => (
+            <button
+              key={finding.key}
+              className="builder-rail-chip"
+              title="Open the pending edit"
+              onClick={() => openEditor(finding.target)}
             >
               {finding.message}
             </button>

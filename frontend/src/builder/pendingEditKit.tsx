@@ -5,7 +5,8 @@
  *  value, and the field editor sends batches of field changes. The backend
  *  answers each with the object's new working JSON, the card value that writes
  *  it back (or none), the field editor over it and its issues. The page holds
- *  the latest answer as the object's pending edit and accepts nothing.
+ *  the latest answer as the object's pending edit. Nothing is accepted until
+ *  the window's Apply or OK sends the edit to the route that applies it.
  */
 
 import { useEffect, useRef, useState } from "react";
@@ -17,6 +18,7 @@ import {
 import type {
   BuilderControlTree,
   BuilderIssue,
+  BuilderPendingEditOutcome,
   BuilderVisualObjectEditResult,
 } from "./generated/builderApi";
 
@@ -223,6 +225,130 @@ export function PendingObjectFieldEditor({
         await send(commands);
       }}
     />
+  );
+}
+
+/** The commit row of a link rule, routing domain or boundary list window.
+ *  Apply and OK send the object's pending edit to the route that applies it.
+ *  OK closes the window once the backend has answered, whether it applied the
+ *  edit or refused it: a refused edit stays pending with its issues. A request
+ *  that fails keeps the window open and shows the failure. Cancel discards the
+ *  pending edit and closes the window, as the title-bar X does. A stale edit is
+ *  never applied silently: the row offers to re-apply it over the object as the
+ *  session now holds it, or to discard it. */
+export function PendingEditApplyRow({
+  pending,
+  outcome,
+  blocked,
+  onApply,
+  onReapply,
+  onDiscard,
+  onClose,
+}: {
+  /** Whether an edit of the window's object is pending. */
+  pending: boolean;
+  /** The backend's latest outcome for the pending edit; null while it has
+   *  stated none for the edit as it now stands. */
+  outcome: BuilderPendingEditOutcome | null;
+  /** Why the edit cannot be applied now, while Apply, OK and Re-apply wait;
+   *  null when it can. */
+  blocked: string | null;
+  /** Apply the pending edit; resolves whether the backend applied it. */
+  onApply: () => Promise<boolean>;
+  /** Re-apply a stale edit over the object as the session now holds it;
+   *  resolves whether the backend applied it. */
+  onReapply: () => Promise<boolean>;
+  onDiscard: () => void;
+  onClose: () => void;
+}) {
+  const [running, setRunning] = useState(false);
+  const [failure, setFailure] = useState<string | null>(null);
+  const mounted = useRef(false);
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
+  const run = async (apply: () => Promise<boolean>, close: boolean) => {
+    setRunning(true);
+    setFailure(null);
+    try {
+      await apply();
+    } catch (cause) {
+      if (mounted.current) setFailure(messageOf(cause));
+      return;
+    } finally {
+      if (mounted.current) setRunning(false);
+    }
+    if (close) onClose();
+  };
+  // The outcome the backend refused the pending edit with; none while no edit
+  // is pending.
+  const refused = pending && outcome !== null && outcome.status !== "applied" ? outcome : null;
+  const stale = refused?.status === "stale" ? refused : null;
+  const waiting = blocked !== null || running;
+  const waitingReason = running ? "The edit is being applied" : blocked;
+  return (
+    <>
+      {stale && (
+        <div className="builder-stale-notice" data-testid="builder-stale-notice">
+          <span className="builder-stale-notice-text">
+            The session changed since this edit began:{" "}
+            {stale.issues.map((issue) => issue.message).join(" ")}
+          </span>
+          <Button
+            onClick={() => void run(onReapply, false)}
+            disabled={waiting}
+            title={waitingReason ?? "Apply this edit over the object as the session now holds it"}
+          >
+            Re-apply
+          </Button>
+          <Button
+            onClick={onDiscard}
+            disabled={running}
+            title="Drop this edit and show the object as the session holds it"
+          >
+            Discard
+          </Button>
+        </div>
+      )}
+      {failure && <div className="builder-warning">{failure}</div>}
+      <div className="builder-apply-row" data-testid="builder-apply-row">
+        <span
+          className={`builder-apply-state${
+            refused ? " builder-apply-state--stale" : pending ? " builder-apply-state--dirty" : ""
+          }`}
+        >
+          {!pending ? "applied" : refused ? refused.status : "pending edit"}
+        </span>
+        <Button
+          onClick={() => {
+            onDiscard();
+            onClose();
+          }}
+          disabled={running}
+          title="Discard the pending edit and close"
+        >
+          Cancel
+        </Button>
+        <Button
+          onClick={() => void run(onApply, false)}
+          disabled={!pending || waiting}
+          title={waitingReason ?? "Apply the pending edit to the session"}
+        >
+          Apply
+        </Button>
+        <Button
+          icon="check"
+          onClick={() => (pending ? void run(onApply, true) : onClose())}
+          disabled={waiting}
+          title={waitingReason ?? "Apply and close"}
+        >
+          OK
+        </Button>
+      </div>
+    </>
   );
 }
 

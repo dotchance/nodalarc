@@ -28,6 +28,7 @@ import type {
   DraftRoutingDomain,
   Workspace,
 } from "./workspace";
+import type { BuilderContentEdit } from "./generated/builderApi";
 
 /** A floating editor window's target — one per object, keyed. */
 export type EditorTarget =
@@ -72,6 +73,34 @@ export function targetKey(target: EditorTarget): string {
     default:
       return `${target.kind}:${target.id}`;
   }
+}
+
+/** The address of the pending edit a link rule, routing domain or boundary
+ *  list window edits; null for every other window. */
+export function pendingEditAddress(target: EditorTarget): BuilderContentEdit["address"] | null {
+  switch (target.kind) {
+    case "link":
+      return { kind: "member", list_pointer: "/link_rules", id: target.id };
+    case "domain":
+      return { kind: "member", list_pointer: "/routing/domains", id: target.id };
+    case "boundaries":
+      return { kind: "whole_list", pointer: "/routing/boundaries" };
+    default:
+      return null;
+  }
+}
+
+/** The window that edits the pending edit at `address`. */
+export function pendingEditTarget(address: BuilderContentEdit["address"]): EditorTarget {
+  if (address.kind === "whole_list") return { kind: "boundaries" };
+  return address.list_pointer === "/link_rules"
+    ? { kind: "link", id: address.id }
+    : { kind: "domain", id: address.id };
+}
+
+/** A pending edit's object as notices name it: its id, or the boundary list. */
+export function pendingEditTitle(address: BuilderContentEdit["address"]): string {
+  return address.kind === "whole_list" ? "Boundaries" : address.id;
 }
 
 /** A human title for a window's object — the name shown in the stale-window

@@ -435,6 +435,26 @@ def _relay_session(name: str) -> dict[str, Any]:
     }
 
 
+def _applied_yaml(
+    service: BuilderVisualDraftService,
+    session: dict[str, Any],
+) -> BuilderVisualDraftEnvelope:
+    """A new draft whose accepted session is ``session``, applied from the YAML pane."""
+    created = service.create(
+        BuilderVisualDraftCreateRequest(session_name=session["session"]["name"])
+    )
+    applied = service.apply_yaml(
+        BuilderVisualDraftApplyYamlRequest(
+            draft=created,
+            expected_draft_revision=created.draft_revision,
+            buffer_generation=1,
+            yaml_text=yaml.safe_dump(session, sort_keys=False),
+        )
+    )
+    assert applied.applied is True
+    return applied.draft
+
+
 _ID_GESTURES: tuple[dict[str, Any], ...] = (
     {
         "operation": "place_space_reference",
@@ -454,7 +474,6 @@ _ID_GESTURES: tuple[dict[str, Any], ...] = (
 def test_backend_gestures_never_mint_an_id_the_session_or_a_pending_edit_holds(
     service: BuilderVisualDraftService,
 ) -> None:
-    created = service.create(BuilderVisualDraftCreateRequest(session_name="reserved-identities"))
     # The rule, the loopback pool and the domain name segments the session does not
     # declare. Such a selector matches no node, so a new segment that took one of
     # these ids would silently join or leave the selection.
@@ -495,17 +514,8 @@ def test_backend_gestures_never_mint_an_id_the_session_or_a_pending_edit_holds(
             ]
         },
     }
-    applied = service.apply_yaml(
-        BuilderVisualDraftApplyYamlRequest(
-            draft=created,
-            expected_draft_revision=created.draft_revision,
-            buffer_generation=1,
-            yaml_text=yaml.safe_dump(session, sort_keys=False),
-        )
-    )
-    assert applied.applied is True
     # With the allocation history emptied, only the accepted session holds these ids.
-    accepted = applied.draft.model_copy(update={"reserved_authoring_ids": ()})
+    accepted = _applied_yaml(service, session).model_copy(update={"reserved_authoring_ids": ()})
     assert accepted.applied_session is not None
 
     assert [_command(service, accepted, gesture).affected_id for gesture in _ID_GESTURES] == [
@@ -600,12 +610,12 @@ def test_backend_authoring_allocation_history_survives_segment_deletion(
 def test_a_command_result_is_one_accepted_revision_or_edits_at_the_same_revision(
     service: BuilderVisualDraftService,
 ) -> None:
-    created = service.create(BuilderVisualDraftCreateRequest(session_name="command-results"))
-    accepted = _command(service, created, {"operation": "add_routing_domain"})
-    assert accepted.draft.draft_revision == created.draft_revision + 1
+    applied = _applied_yaml(service, _relay_session("command-results"))
+    accepted = _command(service, applied, {"operation": "add_routing_domain"})
+    assert accepted.draft.draft_revision == applied.draft_revision + 1
     assert accepted.created_edits == ()
     answer = json.loads(accepted.model_dump_json())
-    unchanged = json.loads(created.model_dump_json())
+    unchanged = json.loads(applied.model_dump_json())
     created_edit = _content_edit(
         {**_DOMAIN_ADDRESS, "id": "domain-1"},
         None,
@@ -615,7 +625,7 @@ def test_a_command_result_is_one_accepted_revision_or_edits_at_the_same_revision
     kept = BuilderVisualDraftCommandResult.model_validate_json(
         json.dumps({**answer, "draft": unchanged, "created_edits": [created_edit]})
     )
-    assert kept.draft == created
+    assert kept.draft == applied
     assert [edit.working for edit in kept.created_edits] == [created_edit["working"]]
     with pytest.raises(ValidationError, match="must leave draft_revision unchanged"):
         BuilderVisualDraftCommandResult.model_validate_json(
@@ -630,69 +640,106 @@ def test_a_command_result_is_one_accepted_revision_or_edits_at_the_same_revision
 def test_backend_never_reuses_topology_ids_or_repairs_dangling_boundaries(
     service: BuilderVisualDraftService,
 ) -> None:
-    draft = service.create(BuilderVisualDraftCreateRequest(session_name="topology-history"))
+    """A boundary left naming a removed rule and domain is never repaired.
 
-    def apply(command: dict[str, Any], *, source: BuilderVisualDraftEnvelope | None = None):
-        nonlocal draft
-        active = source or draft
-        result = service.apply_command(
-            BuilderVisualDraftCommandRequest(
-                draft=active,
-                expected_draft_revision=active.draft_revision,
-                command=command,
-            ),
-            available_node_count=1_000_000,
-            preview_factory=_preview,
-        )
-        draft = result.draft
-        return result
+    A new domain skips the id the boundary still names. "+ boundary" refuses where
+    it used to pick. Connect refuses the draft, since the boundary keeps it from
+    resolving.
+    """
+    crosslink = {"all": [{"role": "crosslink"}, {"medium": "optical"}]}
 
-    apply({"operation": "add_generated_space", "phasing_mode": "walker_delta"})
-    apply({"operation": "add_ground"})
-    apply({"operation": "add_routing_domain"})
-    apply(
-        {
-            "operation": "connect_segments",
-            "from_segment_id": "space-1",
-            "to_segment_id": "ground-1",
+    def exchange(source: str, target: str) -> dict[str, Any]:
+        return {
+            "from": source,
+            "to": target,
+            "prefixes": {"aggregate_of": "originated"},
+            "export_node_loopbacks": True,
         }
-    )
-    apply({"operation": "add_boundary"})
-    # A boundary has no grammar id, so the allocation history holds none.
-    assert draft.reserved_authoring_ids == (
-        "space-1",
-        "ground-1",
-        "domain-1",
-        "link-1",
-    )
-    assert draft.authoring_workspace is not None
 
-    deleted_topology = draft.model_copy(
-        update={
-            "reserved_authoring_ids": ("space-1", "ground-1"),
-            "authoring_workspace": draft.authoring_workspace.model_copy(
-                update={"links": (), "routing_domains": ()}
-            ),
-        }
-    )
-    link_result = apply(
-        {
-            "operation": "connect_segments",
-            "from_segment_id": "space-1",
-            "to_segment_id": "ground-1",
+    boundary = {
+        "over": "link-1",
+        "adapter": "static_ip",
+        "export": [exchange("domain-1", "domain-2"), exchange("domain-2", "domain-1")],
+    }
+    session = {
+        "session": {"name": "topology-history"},
+        "segments": [
+            {"id": "polar", "source": "nodalarc:constellations/earth/leo/earth-leo-polar-36.yaml"},
+            {"id": "meo", "source": "nodalarc:constellations/earth/meo/earth-meo-gps-24.yaml"},
+        ],
+        "link_rules": [
+            {
+                "id": "link-1",
+                "endpoints": [
+                    {"select": {"segment": "polar"}, "terminal": crosslink},
+                    {"select": {"segment": "meo"}, "terminal": crosslink},
+                ],
+                "topology": {"mode": "nearest_n", "n": 1},
+            }
+        ],
+        "routing": {
+            "domains": [
+                {"id": "domain-1", "protocol": "static", "selectors": [{"segment": "polar"}]},
+                {"id": "domain-2", "protocol": "static", "selectors": [{"segment": "meo"}]},
+            ],
+            "boundaries": [boundary],
         },
-        source=deleted_topology,
+        "time": {"start_time": "2026-07-10T00:00:00Z", "step_seconds": 1, "compression": 1},
+    }
+    removed = _apply_edits(
+        service,
+        _applied_yaml(service, session),
+        [
+            {
+                "kind": "list",
+                "list_pointer": "/link_rules",
+                "ids_before": ["link-1"],
+                "ids_wanted": [],
+            },
+            {
+                "kind": "list",
+                "list_pointer": "/routing/domains",
+                "ids_before": ["domain-1", "domain-2"],
+                "ids_wanted": ["domain-1"],
+            },
+        ],
     )
-    assert link_result.affected_id == "link-2"
-    assert "link-1" in link_result.draft.reserved_authoring_ids
-    assert "domain-1" in link_result.draft.reserved_authoring_ids
-    domain_result = apply({"operation": "add_routing_domain"})
-    assert domain_result.affected_id == "domain-2"
-    assert draft.authoring_workspace is not None
-    dangling_boundary = draft.authoring_workspace.boundaries[0]
-    assert dangling_boundary.over_rule_id == "link-1"
-    assert dangling_boundary.from_domain_id == "domain-1"
-    assert dangling_boundary.to_domain_id == "domain-1"
+    assert removed.applied is True and removed.assembly is not None
+    # With the allocation history emptied, only the dangling boundary holds link-1 and domain-2.
+    draft = removed.assembly.visual_draft.model_copy(update={"reserved_authoring_ids": ()})
+    assert draft.applied_session is not None
+    assert "link_rules" not in draft.applied_session
+    assert draft.applied_session["routing"]["boundaries"] == [boundary]
+
+    with pytest.raises(BuilderVisualDraftCommandError) as no_rule_or_domain:
+        _command(service, draft, {"operation": "add_boundary"})
+    assert no_rule_or_domain.value.code == "catalog_authoring.invalid_graph"
+    assert str(no_rule_or_domain.value) == (
+        "A routing boundary needs an enabled link rule that is not an access rule. "
+        "The session has none. A routing boundary needs two routing domains. "
+        "The session declares 1."
+    )
+
+    domain_result = _command(service, draft, {"operation": "add_routing_domain"})
+    assert domain_result.affected_id == "domain-3"
+    draft = domain_result.draft
+    assert draft.applied_session is not None
+    assert [domain["id"] for domain in draft.applied_session["routing"]["domains"]] == [
+        "domain-1",
+        "domain-3",
+    ]
+    assert draft.applied_session["routing"]["domains"][1]["selectors"] == [{"segment": "meo"}]
+
+    # Connect cannot learn terminal facts from a draft that does not resolve.
+    with pytest.raises(BuilderVisualDraftCommandError, match="names no declared link rule"):
+        _command(
+            service,
+            draft,
+            {"operation": "connect_segments", "from_segment_id": "polar", "to_segment_id": "meo"},
+        )
+    with pytest.raises(BuilderVisualDraftCommandError, match="needs an enabled link rule"):
+        _command(service, draft, {"operation": "add_boundary"})
+    assert draft.applied_session["routing"]["boundaries"] == [boundary]
 
     compiled = service.compile(
         BuilderVisualDraftCompileRequest(draft=draft),
@@ -700,15 +747,46 @@ def test_backend_never_reuses_topology_ids_or_repairs_dangling_boundaries(
         preview_factory=_preview,
     )
     assert compiled.compile_result.save_verdict.allowed is False
+    assert any(
+        "names no declared link rule" in issue.message for issue in compiled.compile_result.issues
+    )
 
-    without_boundaries = draft.model_copy(
-        update={
-            "authoring_workspace": draft.authoring_workspace.model_copy(update={"boundaries": ()})
+
+def test_a_new_boundary_runs_over_the_first_enabled_rule_that_is_not_access(
+    service: BuilderVisualDraftService,
+) -> None:
+    """The resolver's own rule decides access: the role an endpoint's terminal names
+    outside every `not`. An endpoint that names no single role leaves its rule without
+    one."""
+    session = _boundary_overlay_session()
+    polar_to_meo, meo_to_heo, heo_to_geo = session["link_rules"]
+    polar_to_meo["enabled"] = False
+    meo_to_heo["endpoints"][1]["terminal"] = {"medium": "optical"}
+    heo_to_geo["endpoints"][0]["terminal"] = {"all": [{"role": "access"}, {"medium": "optical"}]}
+    not_access = {"all": [{"not": {"role": "access"}}, {"role": "crosslink"}]}
+    session["link_rules"].append(
+        {
+            "id": "geo_to_polar",
+            "topology": {"mode": "nearest_n", "n": 1},
+            "endpoints": [
+                {"select": {"segment": "geo"}, "terminal": not_access},
+                {"select": {"segment": "polar"}, "terminal": not_access},
+            ],
         }
     )
-    boundary_result = apply({"operation": "add_boundary"}, source=without_boundaries)
-    assert boundary_result.affected_id == "boundary-1"
-    assert "boundary-1" not in boundary_result.draft.reserved_authoring_ids
+    draft = _applied_yaml(service, session)
+    assert draft.applied_session is not None
+    declared = draft.applied_session["routing"]["boundaries"]
+
+    result = _command(service, draft, {"operation": "add_boundary"})
+    assert (result.affected_kind, result.affected_id) == ("boundary", "/routing/boundaries")
+    boundaries = result.draft.applied_session["routing"]["boundaries"]
+    assert boundaries[:3] == declared
+    assert boundaries[3]["over"] == "geo_to_polar"
+    assert [(item["from"], item["to"]) for item in boundaries[3]["export"]] == [
+        ("polar_domain", "meo_domain"),
+        ("meo_domain", "polar_domain"),
+    ]
 
 
 def test_backend_atomically_creates_a_ground_for_a_site_reference(
@@ -815,20 +893,19 @@ def test_backend_visual_commands_own_seeds_and_advance_one_fenced_revision(
 ) -> None:
     draft = service.create(BuilderVisualDraftCreateRequest(session_name="command-owned"))
 
-    def apply(command: dict[str, Any]):
+    def apply(command: dict[str, Any]) -> BuilderVisualDraftCommandResult:
         nonlocal draft
-        result = service.apply_command(
-            BuilderVisualDraftCommandRequest(
-                draft=draft,
-                expected_draft_revision=draft.draft_revision,
-                command=command,
-            ),
-            available_node_count=1_000_000,
-            preview_factory=_preview,
-        )
+        result = _command(service, draft, command)
+        assert result.created_edits == ()
         assert result.base_draft_revision + 1 == result.draft.draft_revision
         draft = result.draft
         return result
+
+    def refused(command: dict[str, Any]) -> str:
+        with pytest.raises(BuilderVisualDraftCommandError) as refusal:
+            _command(service, draft, command)
+        assert refusal.value.code == "catalog_authoring.invalid_graph"
+        return str(refusal.value)
 
     space_result = apply({"operation": "add_generated_space", "phasing_mode": "walker_delta"})
     assert (space_result.affected_kind, space_result.affected_id) == ("space", "space-1")
@@ -886,11 +963,49 @@ def test_backend_visual_commands_own_seeds_and_advance_one_fenced_revision(
         "lex_pair",
     ]
 
+    # A ground segment with no site leaves the session pending. Link rule and
+    # routing commands run on an accepted session only.
+    assert draft.projection_status == "pending_authoring"
+    assert "fully applied" in refused({"operation": "add_routing_domain"})
+    apply(
+        {
+            "operation": "mint_ground_members",
+            "segment_id": "ground-1",
+            "sites": [{"name": "Denver", "lat_deg": 39.7, "lon_deg": -104.9}],
+        }
+    )
+    assert draft.projection_status == "applied"
+    assert draft.applied_session is not None
+
     domain_result = apply({"operation": "add_routing_domain"})
-    assert domain_result.affected_id == "domain-1"
-    assert draft.authoring_workspace.routing_domains[0].member_segment_ids == (
-        "space-1",
-        "ground-1",
+    assert (domain_result.affected_kind, domain_result.affected_id) == (
+        "routing_domain",
+        "domain-1",
+    )
+    assert draft.applied_session["routing"] == {
+        "domains": [
+            {
+                "id": "domain-1",
+                "protocol": "isis",
+                "selectors": [{"any": [{"segment": "space-1"}, {"segment": "ground-1"}]}],
+                "area_assignment": {"strategy": "flat"},
+            }
+        ]
+    }
+    assert refused({"operation": "add_boundary"}) == (
+        "A routing boundary needs an enabled link rule that is not an access rule. "
+        "The session has none. A routing boundary needs two routing domains. "
+        "The session declares 1."
+    )
+    assert (
+        refused(
+            {
+                "operation": "connect_segments",
+                "from_segment_id": "space-1",
+                "to_segment_id": "nowhere",
+            }
+        )
+        == "The session declares no segment 'nowhere'"
     )
 
     link_result = apply(
@@ -900,22 +1015,68 @@ def test_backend_visual_commands_own_seeds_and_advance_one_fenced_revision(
             "to_segment_id": "ground-1",
         }
     )
-    assert link_result.affected_id == "link-1"
-    link = draft.authoring_workspace.links[0]
-    assert (link.a.segment_id, link.b.segment_id) == ("ground-1", "space-1")
-    # The stub world declares no terminals. Connect writes no substitute floor.
-    assert (link.a.role, link.a.medium, link.a.min_elevation_deg) == (
-        "access",
-        "rf",
-        None,
+    assert (link_result.affected_kind, link_result.affected_id) == ("link", "link-1")
+    # The stub world declares no terminals, so the role and medium are a guess.
+    # Connect writes no elevation floor on either endpoint.
+    access = {"all": [{"role": "access"}, {"medium": "rf"}]}
+    assert draft.applied_session["link_rules"] == [
+        {
+            "id": "link-1",
+            "enabled": True,
+            "endpoints": [
+                {"select": {"segment": "ground-1"}, "terminal": access},
+                {"select": {"segment": "space-1"}, "terminal": access},
+            ],
+            "topology": {"mode": "visible_candidates"},
+        }
+    ]
+    connected = service.compile(
+        BuilderVisualDraftCompileRequest(draft=draft),
+        available_node_count=1_000_000,
+        preview_factory=_preview,
     )
-    assert (link.topology_mode, link.topology_n) == ("visible_candidates", 1)
+    assert connected.compile_result.save_verdict.allowed, connected.compile_result.issues
 
-    boundary_result = apply({"operation": "add_boundary"})
-    assert boundary_result.affected_id == "boundary-1"
-    boundary = draft.authoring_workspace.boundaries[0]
-    assert boundary.over_rule_id == "link-1"
-    assert boundary.from_domain_id == boundary.to_domain_id == "domain-1"
+    # Every segment is in a domain, so the new domain has no member. It is returned
+    # as a pending edit with no selectors. The draft keeps its revision.
+    uncovered = _command(service, draft, {"operation": "add_routing_domain"})
+    assert (uncovered.affected_kind, uncovered.affected_id) == ("routing_domain", "domain-2")
+    assert uncovered.draft == draft
+    assert [edit.model_dump(mode="json") for edit in uncovered.created_edits] == [
+        _content_edit(
+            {**_DOMAIN_ADDRESS, "id": "domain-2"},
+            None,
+            {"id": "domain-2", "protocol": "isis", "area_assignment": {"strategy": "flat"}},
+        )
+    ]
+    domain_one = draft.applied_session["routing"]["domains"][0]
+    split = _apply_edits(
+        service,
+        draft,
+        [
+            _content_edit(
+                {**_DOMAIN_ADDRESS, "id": "domain-1"},
+                domain_one,
+                {**domain_one, "selectors": [{"segment": "space-1"}]},
+            ),
+            _content_edit(
+                {**_DOMAIN_ADDRESS, "id": "domain-2"},
+                None,
+                {
+                    **uncovered.created_edits[0].working,
+                    "selectors": [{"segment": "ground-1"}],
+                },
+            ),
+        ],
+    )
+    assert split.applied is True and split.assembly is not None
+    draft = split.assembly.visual_draft
+    assert draft.applied_session is not None
+    # An access rule cannot carry a boundary.
+    assert refused({"operation": "add_boundary"}) == (
+        "A routing boundary needs an enabled link rule that is not an access rule. "
+        "The session has none."
+    )
 
     scheduling_result = apply(
         {
@@ -939,15 +1100,37 @@ def test_backend_visual_commands_own_seeds_and_advance_one_fenced_revision(
     assert rederived.notice == (
         "re-derived: isl · optical · nearest-2 — WARNING: neither side has matching terminals"
     )
-    link = draft.authoring_workspace.links[0]
-    assert link.a.segment_id == link.b.segment_id == "space-1"
-    assert (link.a.role, link.a.medium, link.topology_mode, link.topology_n) == (
-        "isl",
-        "optical",
-        "nearest_n",
-        2,
+    isl = {"all": [{"role": "isl"}, {"medium": "optical"}]}
+    assert draft.applied_session["link_rules"] == [
+        {
+            "id": "link-1",
+            "enabled": True,
+            "endpoints": [{"select": {"segment": "space-1"}, "terminal": isl}] * 2,
+            "topology": {"mode": "nearest_n", "n": 2},
+        }
+    ]
+
+    # The seed runs over the first rule that is not access, between the first two
+    # domains. The user changes it on the boundary card.
+    boundary_result = apply({"operation": "add_boundary"})
+    assert (boundary_result.affected_kind, boundary_result.affected_id) == (
+        "boundary",
+        "/routing/boundaries",
     )
-    assert draft.draft_revision == 7
+    exchange = {"prefixes": {"aggregate_of": "originated"}, "export_node_loopbacks": True}
+    assert draft.applied_session["routing"]["boundaries"] == [
+        {
+            "over": "link-1",
+            "adapter": "static_ip",
+            "export": [
+                {"from": "domain-1", "to": "domain-2", **exchange},
+                {"from": "domain-2", "to": "domain-1", **exchange},
+            ],
+        }
+    ]
+    # A boundary has no grammar id, so the allocation history holds none.
+    assert draft.reserved_authoring_ids == ("space-1", "ground-1", "domain-1", "link-1", "domain-2")
+    assert draft.draft_revision == 9
 
     independent = service.create(
         BuilderVisualDraftCreateRequest(session_name="independent-command-owned")
@@ -1559,14 +1742,11 @@ def test_connect_command_uses_backend_resolved_terminal_facts(
         preview_factory=resolved_preview,
     )
 
-    assert connected.draft.authoring_workspace is not None
-    rule = connected.draft.authoring_workspace.links[0]
-    assert (rule.a.role, rule.a.medium, rule.topology_mode, rule.topology_n) == (
-        "crosslink",
-        "rf",
-        "nearest_n",
-        1,
-    )
+    assert connected.draft.applied_session is not None
+    rule = connected.draft.applied_session["link_rules"][-1]
+    crosslink = {"all": [{"role": "crosslink"}, {"medium": "rf"}]}
+    assert [endpoint["terminal"] for endpoint in rule["endpoints"]] == [crosslink, crosslink]
+    assert rule["topology"] == {"mode": "nearest_n", "n": 1}
 
 
 def test_connect_refuses_a_draft_that_does_not_resolve(
@@ -1735,6 +1915,64 @@ def test_rederive_keeps_an_authored_floor_only_on_the_ground_side_of_an_access_r
     endpoints = cleared.draft.applied_session["link_rules"][0]["endpoints"]
     assert [endpoint["select"] for endpoint in endpoints] == [{"segment": "space-1"}] * 2
     assert all("min_elevation_deg" not in endpoint for endpoint in endpoints)
+
+
+def test_rederive_accepts_the_rules_own_pending_edit_with_it(
+    service: BuilderVisualDraftService,
+) -> None:
+    """A rederive started in a link card carries the card's edit. One revision holds both."""
+    draft = _connected_heo_access_draft(service, "rederive-pending", _preview)
+    assert draft.applied_session is not None
+    rule = draft.applied_session["link_rules"][0]
+    address = {**_RULE_ADDRESS, "id": "link-1"}
+
+    def rederive(segment_id: str, working: dict[str, Any]) -> BuilderVisualDraftCommandResult:
+        return _command(
+            service,
+            draft,
+            {
+                "operation": "rederive_link",
+                "rule_id": "link-1",
+                "side": "a",
+                "segment_id": segment_id,
+            },
+            pending_edits=(_content_edit(address, rule, working),),
+        )
+
+    rederived = rederive("space-1", _ranged(rule))
+    assert rederived.created_edits == ()
+    assert rederived.draft.draft_revision == draft.draft_revision + 1
+    isl = {"all": [{"role": "isl"}, {"medium": "optical"}]}
+    assert rederived.draft.applied_session["link_rules"] == [
+        {
+            "id": "link-1",
+            "enabled": True,
+            "endpoints": [{"select": {"segment": "space-1"}, "terminal": isl}] * 2,
+            "topology": {"mode": "nearest_n", "n": 2},
+            "constraints": {"max_range_km": 12345.0},
+        }
+    ]
+
+    with pytest.raises(BuilderVisualDraftCommandError, match="no segment 'nowhere'"):
+        rederive("nowhere", _ranged(rule))
+    with pytest.raises(BuilderVisualDraftCommandError, match="cannot be applied"):
+        rederive("space-1", {key: value for key, value in rule.items() if key != "topology"})
+    # A rule in a form the card does not write back is never rewritten in the card's form.
+    with pytest.raises(BuilderVisualDraftCommandError, match="does not write back"):
+        rederive("space-1", {**rule, "tags": ["relay"]})
+    # After the accepted rederive, an edit begun from the earlier rule is stale.
+    with pytest.raises(BuilderVisualDraftCommandError, match="changed since the edit began"):
+        _command(
+            service,
+            rederived.draft,
+            {
+                "operation": "rederive_link",
+                "rule_id": "link-1",
+                "side": "a",
+                "segment_id": "ground-1",
+            },
+            pending_edits=(_content_edit(address, rule, _ranged(rule)),),
+        )
 
 
 def test_visual_authoring_assembly_creates_ref_composed_component_proposals(

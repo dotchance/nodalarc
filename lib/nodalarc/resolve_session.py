@@ -2271,7 +2271,7 @@ def _resolve_link_rule(rule: LinkRule, runtime_nodes: tuple[_RuntimeNode, ...]) 
     endpoints: list[ResolvedEndpoint] = []
     endpoint_nodes: list[tuple[ResolvedNode, ...]] = []
     for endpoint in rule.endpoints:
-        terminal_role = _endpoint_terminal_role(endpoint.terminal)
+        terminal_role = endpoint_terminal_role(endpoint.terminal)
         terminal_medium = _endpoint_terminal_medium(endpoint.terminal)
         terminal_mount = _endpoint_terminal_mount(endpoint.terminal)
         selected = _eval_node_selector(endpoint.select, runtime_nodes)
@@ -3688,7 +3688,11 @@ def _collect_terminal_leaves(selector: TerminalSelector, attr: str) -> set[str]:
     return values
 
 
-def _endpoint_terminal_role(selector: TerminalSelector) -> str:
+def endpoint_terminal_role(selector: TerminalSelector) -> str:
+    """The one role a link endpoint's terminal selector names outside every ``not``.
+
+    A rule with an endpoint whose role is ``access`` is an access rule.
+    """
     roles = _collect_terminal_leaves(selector, "role")
     if len(roles) != 1:
         raise SessionResolutionError(

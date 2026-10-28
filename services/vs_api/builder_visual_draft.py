@@ -150,6 +150,7 @@ from nodalarc.models.segment_session import (
     TimeConfig,
 )
 from nodalarc.models.segments import GroundPlacement, GroundSegment, SpaceSegment
+from nodalarc.resolve_session import SessionResolutionError, endpoint_terminal_role
 from pydantic import BaseModel, ConfigDict, JsonValue, ValidationError
 
 from .builder_compiler import (
@@ -379,6 +380,36 @@ def _placed_segments(workspace: BuilderVisualWorkspace) -> tuple[_PlacedSegment,
         *(_PlacedSegment(item.segment_id, "ground") for item in workspace.ground_refs),
         *(_PlacedSegment(item.segment_id, "ground") for item in workspace.ground),
     )
+
+
+def _session_segments(session: SegmentSessionConfig) -> dict[str, _PlacedSegment]:
+    """Each segment a session declares, by id, with the kind of node it holds.
+
+    A Lagrange-point segment holds a space node.
+    """
+    return {
+        segment.id: _PlacedSegment(
+            segment.id,
+            "ground" if isinstance(segment, GroundSegment) else "space",
+        )
+        for segment in session.segments
+    }
+
+
+def _boundary_may_run_over(rule: LinkRule) -> bool:
+    """Whether a routing boundary may run over a link rule: it is enabled and not access.
+
+    The resolver's own rule decides access: an endpoint whose terminal selector
+    names the access role. An endpoint that names no single role leaves the
+    rule without one. The compile reports the resolver's refusal of that rule.
+    """
+    if not rule.enabled:
+        return False
+    try:
+        roles = {endpoint_terminal_role(endpoint.terminal) for endpoint in rule.endpoints}
+    except SessionResolutionError:
+        return False
+    return "access" not in roles
 
 
 def _reserved_authoring_ids(
@@ -3206,6 +3237,58 @@ def _apply_workspace_revision(
     )
 
 
+def _accepted_draft(
+    draft: BuilderVisualDraftEnvelope,
+    session: SegmentSessionConfig,
+    proposals: tuple[BuilderProposedCatalogDocument, ...],
+    snapshot: CatalogReadSnapshot,
+) -> BuilderVisualDraftEnvelope:
+    """A validated session accepted as the draft's next revision.
+
+    Proposals the session does not reach are dropped. The allocation history
+    gains the ids the session holds and never loses one.
+    """
+    reachable_proposals, catalog_facts = _reachable_projection_inputs(
+        session,
+        proposals,
+        snapshot,
+    )
+    accepted_session = cast(
+        JsonDocument,
+        session.model_dump(mode="json", by_alias=True, exclude_none=True),
+    )
+    next_revision = draft.draft_revision + 1
+    workspace = _workspace_from_applied_session(
+        session,
+        proposals=reachable_proposals,
+        catalog_facts=catalog_facts,
+        prior_workspace=draft.applied_workspace,
+    )
+    reserved_authoring_ids = tuple(
+        dict.fromkeys(
+            (
+                *draft.reserved_authoring_ids,
+                *_current_and_referenced_authoring_ids(accepted_session),
+            )
+        )
+    )
+    canonical = canonicalize_persisted_configuration(draft.target_ref, accepted_session)
+    return draft.model_copy(
+        update={
+            "draft_revision": next_revision,
+            "projection_status": "applied",
+            "catalog_documents": reachable_proposals,
+            "reserved_authoring_ids": reserved_authoring_ids,
+            "session_yaml": canonical.yaml_bytes.decode("utf-8"),
+            "authoring_workspace": workspace,
+            "applied_workspace": workspace,
+            "applied_revision": next_revision,
+            "applied_session": accepted_session,
+            "control_tree": _applied_control_tree(session, next_revision),
+        }
+    )
+
+
 def _compile_visual_application(
     visual_draft: BuilderVisualDraftEnvelope,
     session: JsonDocument,
@@ -3682,56 +3765,14 @@ class BuilderVisualDraftService:
         available_node_count: int,
         preview_factory: PreviewFactory | None,
     ) -> BuilderVisualDraftAssemblyResult:
-        """Accept a validated session as the draft's next revision and compile it.
-
-        Proposals the session does not reach are dropped. The allocation
-        history gains the ids the session holds and never loses one.
-        """
+        """Accept a validated session as the draft's next revision and compile it."""
 
         snapshot = self._context.repository.snapshot(self._context.scope)
-        reachable_proposals, catalog_facts = _reachable_projection_inputs(
-            session,
-            proposals,
-            snapshot,
-        )
-        accepted_session = cast(
-            JsonDocument,
-            session.model_dump(mode="json", by_alias=True, exclude_none=True),
-        )
-        next_revision = draft.draft_revision + 1
-        workspace = _workspace_from_applied_session(
-            session,
-            proposals=reachable_proposals,
-            catalog_facts=catalog_facts,
-            prior_workspace=draft.applied_workspace,
-        )
-        reserved_authoring_ids = tuple(
-            dict.fromkeys(
-                (
-                    *draft.reserved_authoring_ids,
-                    *_current_and_referenced_authoring_ids(accepted_session),
-                )
-            )
-        )
-        canonical = canonicalize_persisted_configuration(draft.target_ref, accepted_session)
-        updated = draft.model_copy(
-            update={
-                "draft_revision": next_revision,
-                "projection_status": "applied",
-                "catalog_documents": reachable_proposals,
-                "reserved_authoring_ids": reserved_authoring_ids,
-                "session_yaml": canonical.yaml_bytes.decode("utf-8"),
-                "authoring_workspace": workspace,
-                "applied_workspace": workspace,
-                "applied_revision": next_revision,
-                "applied_session": accepted_session,
-                "control_tree": _applied_control_tree(session, next_revision),
-            }
-        )
+        updated = _accepted_draft(draft, session, proposals, snapshot)
         return _compile_visual_application(
             updated,
-            accepted_session,
-            reachable_proposals,
+            cast(JsonDocument, updated.applied_session),
+            updated.catalog_documents,
             (),
             snapshot,
             available_node_count=available_node_count,
@@ -4240,6 +4281,340 @@ class BuilderVisualDraftService:
             )
         return preview
 
+    def _session_segment_pair(
+        self,
+        draft: BuilderVisualDraftEnvelope,
+        session: SegmentSessionConfig,
+        first_id: str,
+        second_id: str,
+    ) -> tuple[_PlacedSegment, _PlacedSegment]:
+        """Two segments of the accepted session; a segment it does not declare is refused."""
+        segments = _session_segments(session)
+        unknown = [segment_id for segment_id in (first_id, second_id) if segment_id not in segments]
+        if unknown:
+            raise self._command_error(
+                draft,
+                "The session declares no segment "
+                + " or ".join(repr(segment_id) for segment_id in dict.fromkeys(unknown)),
+                code="catalog_authoring.invalid_graph",
+            )
+        return segments[first_id], segments[second_id]
+
+    def _apply_session_command(
+        self,
+        request: BuilderVisualDraftCommandRequest,
+        command: (
+            BuilderVisualAddRoutingDomainCommand
+            | BuilderVisualAddBoundaryCommand
+            | BuilderVisualConnectSegmentsCommand
+            | BuilderVisualRederiveLinkCommand
+        ),
+        reserved: set[str],
+        snapshot: CatalogReadSnapshot,
+        *,
+        available_node_count: int,
+        preview_factory: PreviewFactory | None,
+    ) -> BuilderVisualDraftCommandResult:
+        """Run one link rule or routing command on the accepted session.
+
+        The card functions write the object's grammar JSON. A complete object is
+        accepted as the next revision. An incomplete one is returned as a pending
+        edit. The draft then keeps its revision.
+        """
+
+        draft = request.draft
+        if (
+            draft.projection_status != "applied"
+            or draft.applied_session is None
+            or draft.authoring_workspace != draft.applied_workspace
+        ):
+            raise self._command_error(
+                draft,
+                "Link rule and routing commands require a fully applied draft revision",
+                code="catalog_authoring.invalid_graph",
+            )
+        session = SegmentSessionConfig.model_validate(draft.applied_session)
+        address: BuilderMemberAddress | BuilderWholeListAddress
+        base: JsonDocument | list[JsonValue] | None = None
+        working: JsonDocument | list[JsonValue]
+        issues: tuple[BuilderIssue, ...]
+        affected_kind: Literal["routing_domain", "boundary", "link"]
+        affected_id: str
+        notice: str | None = None
+        if isinstance(command, BuilderVisualAddRoutingDomainCommand):
+            domain_id = f"domain-{_next_number('domain', reserved)}"
+            # A segment a domain selector names outside every `not` is covered.
+            covered = {
+                segment_id
+                for domain in (session.routing.domains if session.routing is not None else ())
+                for segment_id in _named_segments(domain.selectors)
+            }
+            working, issues = _routing_domain_document(
+                BuilderVisualRoutingDomain(
+                    domain_id=domain_id,
+                    protocol="isis",
+                    member_segment_ids=tuple(
+                        segment.id for segment in session.segments if segment.id not in covered
+                    ),
+                )
+            )
+            address = BuilderMemberAddress(
+                kind="member",
+                list_pointer="/routing/domains",
+                id=domain_id,
+            )
+            affected_kind = "routing_domain"
+            affected_id = domain_id
+        elif isinstance(command, BuilderVisualAddBoundaryCommand):
+            over = next(
+                (rule.id for rule in session.link_rules or () if _boundary_may_run_over(rule)),
+                None,
+            )
+            domains: tuple[RoutingDomain, ...] = (
+                session.routing.domains if session.routing is not None else ()
+            )
+            if over is None or len(domains) < 2:
+                conditions = (
+                    (
+                        over is None,
+                        "A routing boundary needs an enabled link rule that is not an "
+                        "access rule. The session has none.",
+                    ),
+                    (
+                        len(domains) < 2,
+                        "A routing boundary needs two routing domains. "
+                        f"The session declares {len(domains)}.",
+                    ),
+                )
+                raise self._command_error(
+                    draft,
+                    " ".join(message for absent, message in conditions if absent),
+                    code="catalog_authoring.invalid_graph",
+                )
+            # The whole boundary list is the edited object. Its base is absent when
+            # the session declares no list.
+            current = (
+                cast(
+                    list[JsonValue],
+                    cast(JsonDocument, draft.applied_session["routing"])["boundaries"],
+                )
+                if session.routing is not None and session.routing.boundaries is not None
+                else None
+            )
+            base = deepcopy(current)
+            boundary_issues: list[BuilderIssue] = []
+            listed: list[JsonValue] = deepcopy(current) if current is not None else []
+            listed.append(
+                _routing_boundary_document(
+                    BuilderVisualRoutingBoundary(
+                        over_rule_id=over,
+                        adapter="static_ip",
+                        from_domain_id=domains[0].id,
+                        to_domain_id=domains[1].id,
+                        export_node_loopbacks=True,
+                    ),
+                    boundary_issues,
+                    at=(len(listed),),
+                )
+            )
+            working = listed
+            issues = tuple(boundary_issues)
+            address = BuilderWholeListAddress(kind="whole_list", pointer="/routing/boundaries")
+            affected_kind = "boundary"
+            affected_id = address.pointer
+        elif isinstance(command, BuilderVisualConnectSegmentsCommand):
+            source, target = self._session_segment_pair(
+                draft,
+                session,
+                command.from_segment_id,
+                command.to_segment_id,
+            )
+            first, second = (
+                (source, target)
+                if source.kind == "ground" or target.kind != "ground"
+                else (target, source)
+            )
+            physics = _derive_link_physics(
+                self._preview_for_command(
+                    draft,
+                    available_node_count=available_node_count,
+                    preview_factory=preview_factory,
+                ),
+                first,
+                second,
+            )
+            rule_id = f"link-{_next_number('link', reserved)}"
+
+            def endpoint_for_segment(segment: _PlacedSegment) -> BuilderVisualLinkEndpoint:
+                # Connect writes no elevation floor. Each ground station keeps the
+                # floor its own terminals declare until the user authors one here.
+                return BuilderVisualLinkEndpoint(
+                    segment_id=segment.segment_id,
+                    role=physics.role,
+                    medium=physics.medium,
+                )
+
+            working, issues = _link_rule_document(
+                BuilderVisualLinkRule(
+                    rule_id=rule_id,
+                    a=endpoint_for_segment(first),
+                    b=endpoint_for_segment(second),
+                    topology_mode=physics.topology_mode,
+                    topology_n=physics.topology_n,
+                )
+            )
+            address = BuilderMemberAddress(kind="member", list_pointer="/link_rules", id=rule_id)
+            affected_kind = "link"
+            affected_id = rule_id
+        else:
+            own = next(
+                (
+                    edit
+                    for edit in request.pending_edits
+                    if isinstance(edit, BuilderContentEdit)
+                    and isinstance(edit.address, BuilderMemberAddress)
+                    and edit.address.list_pointer == "/link_rules"
+                    and edit.address.id == command.rule_id
+                ),
+                None,
+            )
+            # The rule as its card shows it: accepted, with its own pending edit applied.
+            edited, outcomes = apply_pending_edits(
+                draft.applied_session,
+                () if own is None else (own,),
+                source_ref=str(draft.target_ref),
+            )
+            refusals = [
+                issue.message
+                for outcome in outcomes
+                if outcome.status != "applied"
+                for issue in outcome.issues
+            ]
+            if refusals:
+                raise self._command_error(
+                    draft,
+                    f"Link rule {command.rule_id!r} has a pending edit that cannot be applied: "
+                    + "; ".join(refusals),
+                    code="catalog_authoring.invalid_graph",
+                )
+            matches = [
+                rule
+                for rule in _json_items(edited.get("link_rules"))
+                if isinstance(rule, dict) and rule.get("id") == command.rule_id
+            ]
+            if len(matches) != 1:
+                raise self._command_error(
+                    draft,
+                    f"Link rule {command.rule_id!r} was not found exactly once",
+                    code="catalog_authoring.invalid_graph",
+                )
+            card = _link_projection(LinkRule.model_validate(matches[0]))
+            if card is None:
+                raise self._command_error(
+                    draft,
+                    f"Link rule {command.rule_id!r} has a form the link card does not write "
+                    "back, so its endpoints are edited in its field editor",
+                    code="catalog_authoring.invalid_graph",
+                )
+            first, second = self._session_segment_pair(
+                draft,
+                session,
+                command.segment_id if command.side == "a" else card.a.segment_id,
+                command.segment_id if command.side == "b" else card.b.segment_id,
+            )
+            # Terminal facts come from the accepted session's world. A rule edit
+            # does not change them.
+            physics = _derive_link_physics(
+                self._preview_for_command(
+                    draft,
+                    available_node_count=available_node_count,
+                    preview_factory=preview_factory,
+                ),
+                first,
+                second,
+            )
+
+            def updated_endpoint_for(
+                existing: BuilderVisualLinkEndpoint,
+                segment: _PlacedSegment,
+            ) -> BuilderVisualLinkEndpoint:
+                # An authored floor stays only while this endpoint is the ground
+                # side of an access rule. The resolver refuses it anywhere else.
+                return existing.model_copy(
+                    update={
+                        "segment_id": segment.segment_id,
+                        "role": physics.role,
+                        "medium": physics.medium,
+                        "min_elevation_deg": (
+                            existing.min_elevation_deg
+                            if physics.role == "access" and segment.kind == "ground"
+                            else None
+                        ),
+                    }
+                )
+
+            working, issues = _link_rule_document(
+                card.model_copy(
+                    update={
+                        "a": updated_endpoint_for(card.a, first),
+                        "b": updated_endpoint_for(card.b, second),
+                        "topology_mode": physics.topology_mode,
+                        "topology_n": physics.topology_n,
+                    }
+                )
+            )
+            address = BuilderMemberAddress(
+                kind="member",
+                list_pointer="/link_rules",
+                id=command.rule_id,
+            )
+            # The rule's own pending edit is folded into this one.
+            base = own.base if own is not None else cast(JsonDocument, matches[0])
+            affected_kind = "link"
+            affected_id = command.rule_id
+            notice = _physics_notice(physics)
+
+        edit = BuilderContentEdit(kind="content", address=address, base=base, working=working)
+        candidate, (outcome,) = apply_pending_edits(
+            draft.applied_session,
+            (edit,),
+            source_ref=str(draft.target_ref),
+        )
+        if issues or outcome.status != "applied":
+            return BuilderVisualDraftCommandResult(
+                operation=command.operation,
+                base_draft_revision=draft.draft_revision,
+                draft=draft,
+                affected_kind=affected_kind,
+                affected_id=affected_id,
+                notice=notice,
+                created_edits=(edit,),
+            )
+        try:
+            _wrapper, validated = validate_referenced_configuration_document(
+                draft.target_ref,
+                candidate,
+            )
+        except (ValidationError, TypeError, ValueError) as error:
+            raise self._command_error(
+                draft,
+                f"The {command.operation} command does not produce a valid session: {error}",
+                code="catalog_authoring.invalid_graph",
+            ) from error
+        return BuilderVisualDraftCommandResult(
+            operation=command.operation,
+            base_draft_revision=draft.draft_revision,
+            draft=_accepted_draft(
+                draft,
+                cast(SegmentSessionConfig, validated),
+                draft.catalog_documents,
+                snapshot,
+            ),
+            affected_kind=affected_kind,
+            affected_id=affected_id,
+            notice=notice,
+        )
+
     def apply_command(
         self,
         request: BuilderVisualDraftCommandRequest,
@@ -4270,14 +4645,22 @@ class BuilderVisualDraftService:
         # Every id the draft and the pending edits hold, before the gesture changes the twin.
         reserved = _reserved_authoring_ids(draft, request.pending_edits)
         command = request.command
-        affected_kind: Literal[
-            "space",
-            "ground",
-            "routing_domain",
-            "boundary",
-            "link",
-            "ground_member",
-        ]
+        if isinstance(
+            command,
+            BuilderVisualAddRoutingDomainCommand
+            | BuilderVisualAddBoundaryCommand
+            | BuilderVisualConnectSegmentsCommand
+            | BuilderVisualRederiveLinkCommand,
+        ):
+            return self._apply_session_command(
+                request,
+                command,
+                reserved,
+                snapshot,
+                available_node_count=available_node_count,
+                preview_factory=preview_factory,
+            )
+        affected_kind: Literal["space", "ground", "ground_member"]
         affected_id: str
         notice: str | None = None
         scheduling_preset = None
@@ -4944,179 +5327,6 @@ class BuilderVisualDraftService:
             affected_kind = "ground"
             affected_id = command.segment_id
             notice = f"minted {len(minted)} site{'s' if len(minted) != 1 else ''}"
-        elif isinstance(command, BuilderVisualAddRoutingDomainCommand):
-            number = _next_number("domain", reserved)
-            domain_id = f"domain-{number}"
-            covered = {
-                member
-                for domain in workspace.routing_domains
-                for member in domain.member_segment_ids
-            }
-            domain = BuilderVisualRoutingDomain(
-                domain_id=domain_id,
-                protocol="isis",
-                member_segment_ids=tuple(
-                    item.segment_id
-                    for item in _placed_segments(workspace)
-                    if item.segment_id not in covered
-                ),
-            )
-            workspace = workspace.model_copy(
-                update={"routing_domains": (*workspace.routing_domains, domain)}
-            )
-            affected_kind = "routing_domain"
-            affected_id = domain_id
-        elif isinstance(command, BuilderVisualAddBoundaryCommand):
-            # The grammar gives a boundary no id. A twin boundary's id is unique within
-            # the twin only, so no allocation history holds it.
-            number = _next_number(
-                "boundary",
-                {item.boundary_id for item in workspace.boundaries},
-            )
-            boundary_id = f"boundary-{number}"
-            first_rule = next(
-                (
-                    rule
-                    for rule in workspace.links
-                    if rule.a.role != "access" and rule.b.role != "access"
-                ),
-                workspace.links[0] if workspace.links else None,
-            )
-            from_domain = workspace.routing_domains[0] if workspace.routing_domains else None
-            to_domain = (
-                workspace.routing_domains[1] if len(workspace.routing_domains) > 1 else from_domain
-            )
-            boundary = BuilderVisualRoutingBoundary(
-                boundary_id=boundary_id,
-                over_rule_id=first_rule.rule_id if first_rule is not None else "",
-                adapter="static_ip",
-                from_domain_id=from_domain.domain_id if from_domain is not None else "",
-                to_domain_id=to_domain.domain_id if to_domain is not None else "",
-                export_node_loopbacks=True,
-            )
-            workspace = workspace.model_copy(
-                update={"boundaries": (*workspace.boundaries, boundary)}
-            )
-            affected_kind = "boundary"
-            affected_id = boundary_id
-        elif isinstance(command, BuilderVisualConnectSegmentsCommand):
-            placed = _placed_segments(workspace)
-            from_matches = [item for item in placed if item.segment_id == command.from_segment_id]
-            to_matches = [item for item in placed if item.segment_id == command.to_segment_id]
-            if len(from_matches) != 1 or len(to_matches) != 1:
-                raise self._command_error(
-                    draft,
-                    "Connect endpoints must each identify exactly one placed segment",
-                    code="catalog_authoring.invalid_graph",
-                )
-            source = from_matches[0]
-            target = to_matches[0]
-            first, second = (
-                (source, target)
-                if source.kind == "ground" or target.kind != "ground"
-                else (target, source)
-            )
-            physics = _derive_link_physics(
-                self._preview_for_command(
-                    draft,
-                    available_node_count=available_node_count,
-                    preview_factory=preview_factory,
-                ),
-                first,
-                second,
-            )
-            number = _next_number("link", reserved)
-            rule_id = f"link-{number}"
-
-            def endpoint_for_segment(segment: _PlacedSegment) -> BuilderVisualLinkEndpoint:
-                # Connect writes no elevation floor. Each ground station keeps the
-                # floor its own terminals declare until the user authors one here.
-                return BuilderVisualLinkEndpoint(
-                    segment_id=segment.segment_id,
-                    role=physics.role,
-                    medium=physics.medium,
-                )
-
-            rule = BuilderVisualLinkRule(
-                rule_id=rule_id,
-                a=endpoint_for_segment(first),
-                b=endpoint_for_segment(second),
-                topology_mode=physics.topology_mode,
-                topology_n=physics.topology_n,
-            )
-            workspace = workspace.model_copy(update={"links": (*workspace.links, rule)})
-            affected_kind = "link"
-            affected_id = rule_id
-        elif isinstance(command, BuilderVisualRederiveLinkCommand):
-            matches = [
-                (index, rule)
-                for index, rule in enumerate(workspace.links)
-                if rule.rule_id == command.rule_id
-            ]
-            if len(matches) != 1:
-                raise self._command_error(
-                    draft,
-                    f"Link rule {command.rule_id!r} was not found exactly once",
-                    code="catalog_authoring.invalid_graph",
-                )
-            rule_index, rule = matches[0]
-            placed = _placed_segments(workspace)
-            a_id = command.segment_id if command.side == "a" else rule.a.segment_id
-            b_id = command.segment_id if command.side == "b" else rule.b.segment_id
-            a_matches = [item for item in placed if item.segment_id == a_id]
-            b_matches = [item for item in placed if item.segment_id == b_id]
-            if len(a_matches) != 1 or len(b_matches) != 1:
-                selected_endpoint = rule.a if command.side == "a" else rule.b
-                updated_endpoint = selected_endpoint.model_copy(
-                    update={"segment_id": command.segment_id}
-                )
-                updated_rule = rule.model_copy(update={command.side: updated_endpoint})
-                notice = "endpoint changed — pick a placed segment to re-derive physics"
-            else:
-                first, second = a_matches[0], b_matches[0]
-                physics = _derive_link_physics(
-                    self._preview_for_command(
-                        draft,
-                        available_node_count=available_node_count,
-                        preview_factory=preview_factory,
-                    ),
-                    first,
-                    second,
-                )
-
-                def updated_endpoint_for(
-                    existing: BuilderVisualLinkEndpoint,
-                    segment: _PlacedSegment,
-                ) -> BuilderVisualLinkEndpoint:
-                    # An authored floor stays only while this endpoint is the ground
-                    # side of an access rule. The resolver refuses it anywhere else.
-                    return existing.model_copy(
-                        update={
-                            "segment_id": segment.segment_id,
-                            "role": physics.role,
-                            "medium": physics.medium,
-                            "min_elevation_deg": (
-                                existing.min_elevation_deg
-                                if physics.role == "access" and segment.kind == "ground"
-                                else None
-                            ),
-                        }
-                    )
-
-                updated_rule = rule.model_copy(
-                    update={
-                        "a": updated_endpoint_for(rule.a, first),
-                        "b": updated_endpoint_for(rule.b, second),
-                        "topology_mode": physics.topology_mode,
-                        "topology_n": physics.topology_n,
-                    }
-                )
-                notice = _physics_notice(physics)
-            links = list(workspace.links)
-            links[rule_index] = updated_rule
-            workspace = workspace.model_copy(update={"links": tuple(links)})
-            affected_kind = "link"
-            affected_id = command.rule_id
         elif isinstance(command, BuilderVisualSetSchedulingPresetCommand):
             scheduling_preset = command.preset
             ground_matches = [

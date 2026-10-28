@@ -51,13 +51,9 @@ from nodalarc.models.scheduler_ops import (
 
 Pair = tuple[str, str]
 
-# Binding-reason codes the composer SYNTHESIZES for an actuation_proof binding (not raw
-# ActuationStates): a clean roster but OME-desired-and-not-kernel-up is a divergence, NOT
-# "clean". Bound to the frontend registry via tests/unit/observation/test_explain_contract.py.
+# The binding-reason code the composer synthesizes for an actuation_proof binding (not a raw
+# ActuationState): a clean roster but OME-desired-and-not-kernel-up is a divergence, not "clean".
 _ACTUATION_DIVERGED: ActuationExplanationReason = "actuation_diverged"
-ACTUATION_EXPLANATION_REASONS: tuple[ActuationExplanationReason, ...] = get_args(
-    ActuationExplanationReason.__value__
-)
 
 # Funnel order is canonical (the order of the FunnelGate Literal); index gives
 # before/at/after the binding gate.

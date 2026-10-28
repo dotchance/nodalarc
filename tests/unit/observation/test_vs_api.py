@@ -25,6 +25,7 @@ from nodalarc.models.vs_api import (
     DebugControlAcknowledgedFact,
     LinkDecisionTrace,
     LinkState,
+    NodeState,
     StampedOpsEvent,
     StateSnapshot,
 )
@@ -665,6 +666,35 @@ class TestPlaybackRoute:
         assert response.status_code == 200
         assert response.json() == {"epoch_id": 3, "state": "playing"}
         assert (ctx.playback_speed, ctx.playback_paused) == (10.0, False)
+
+
+def test_a_node_states_its_body_and_frame():
+    """VS-API never sends a node whose body a client would have to assume is Earth."""
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError) as refused:
+        NodeState.model_validate(
+            {
+                "node_id": "ground-gw1",
+                "node_type": "ground_station",
+                "lat_deg": 0.0,
+                "lon_deg": 0.0,
+                "alt_km": 0.0,
+                "vel_x_km_s": None,
+                "vel_y_km_s": None,
+                "vel_z_km_s": None,
+                "plane": None,
+                "slot": None,
+                "routing_instances": [],
+                "role": "router",
+                "tenant_id": "default",
+                "segment_id": "ground",
+                "local_node_id": "gw1",
+                "namespace": "ground",
+            }
+        )
+    missing = {error["loc"][0] for error in refused.value.errors() if error["type"] == "missing"}
+    assert missing == {"reference_body", "frame_id"}
 
 
 class TestStateSnapshot:

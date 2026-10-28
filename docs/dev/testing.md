@@ -56,23 +56,20 @@ The frontend test suite covers React components and rendering logic. It must pas
 
 ### Contracts the page is held to
 
-Two generated files tie the frontend tests to the backend's wire models:
+Two kinds of generated file tie the frontend to the backend's wire models:
 
-- `scripts/gen_state_wire_vocabularies.py` writes `frontend/src/generated/stateWireVocabularies.json`:
-  for every string field of every model VS-API serves to the page, the values it admits, or
-  `null` when the backend leaves it open. `frontend/src/__tests__/stateWireContract.test.ts` walks the page's
-  source with the TypeScript checker and refuses any comparison of a wire field against a value
-  the backend does not declare, any `types.ts` interface whose field names differ from the wire
-  model's, and any `types.ts` field that does not mirror a closed vocabulary.
+- `make generate-contracts` writes the page's wire types, `frontend/src/generated/vsApi.ts` and
+  `frontend/src/builder/generated/builderApi.ts`, from the backend Pydantic models. The page
+  imports them, so `npx tsc --noEmit` refuses a page that reads a field the backend does not send
+  or compares a wire field with a value the backend does not declare. `make check-contracts`
+  fails when they are stale.
 - `scripts/gen_builder_shipped_drafts.py` writes `frontend/src/builder/__tests__/fixtures/shipped/`:
   for each shipped session, the parts of the compile result the Builder receives when it opens
   and compiles the session: the canonical session document and the world the backend resolves
   for it. `shippedSessionAnatomy.test.tsx` renders the Builder's anatomy guide from that compile
   result and checks each row against the world.
-
-`tests/unit/observation/test_state_feed_contract.py` and
-`tests/unit/authoring/test_builder_shipped_drafts_fixture.py` fail when either generated file is
-stale; rerun the script named in the failure.
+  `tests/unit/authoring/test_builder_shipped_drafts_fixture.py` fails when these files are stale;
+  rerun the script.
 
 ## Integration Tests
 

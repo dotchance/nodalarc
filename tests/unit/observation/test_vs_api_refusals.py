@@ -364,3 +364,34 @@ def test_the_generated_types_treat_every_body_and_query_a_route_takes_as_a_reque
         for param in (*route.dependant.body_params, *route.dependant.query_params)
     }
     assert taken <= generator.REQUEST_ROOTS, sorted(taken - generator.REQUEST_ROOTS)
+
+
+def test_every_model_a_route_answers_with_is_generated_for_the_page() -> None:
+    """A route answer outside the generator's roots would reach clients with no type."""
+    import importlib.util
+    from pathlib import Path
+    from typing import get_args
+
+    from fastapi.routing import APIRoute
+    from pydantic import BaseModel
+    from vs_api.main import app
+
+    path = Path(__file__).resolve().parents[3] / "scripts" / "gen_builder_api_types.py"
+    spec = importlib.util.spec_from_file_location("gen_builder_api_types", path)
+    generator = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(generator)
+    schemas, definitions, _ = generator._root_schemas()
+    generated = set(schemas) | set(definitions)
+
+    def models(annotation: object) -> set[str]:
+        if isinstance(annotation, type) and issubclass(annotation, BaseModel):
+            return {annotation.__name__}
+        return {name for argument in get_args(annotation) for name in models(argument)}
+
+    answered = set()
+    for route in app.routes:
+        if isinstance(route, APIRoute):
+            answered |= models(route.response_model)
+            for response in route.responses.values():
+                answered |= models(response.get("model"))
+    assert answered <= generated, sorted(answered - generated)

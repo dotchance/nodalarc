@@ -176,3 +176,19 @@ def test_tle_world_carries_ome_propagated_epoch_positions() -> None:
     assert all(
         node.epoch_position is not None and node.epoch_position.alt_km > 0 for node in satellites
     )
+
+
+def test_builder_preview_reasons_are_runtime_verbatim() -> None:
+    """Every builder preview reason except the one server-only bucket is a runtime
+    reject_reason verbatim (the full ground and ISL union), never a renamed dialect."""
+    from typing import get_args
+
+    from nodalarc.models.builder_world import BuilderPreviewRejectReason
+    from nodalarc.models.events import IslVisibilityRejectReason
+    from nodalarc.models.link_decisions import GroundVisibilityRejectReason
+
+    physics = set(get_args(BuilderPreviewRejectReason.__value__)) - {"no_geometry"}
+    runtime = set(get_args(GroundVisibilityRejectReason.__value__)) | set(
+        get_args(IslVisibilityRejectReason)
+    )
+    assert physics <= runtime, f"non-runtime reason tokens: {physics - runtime}"

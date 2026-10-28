@@ -8,9 +8,8 @@
  * GS<->sat pair was scheduled. But it shares the SAME 6-family vocabulary (the only family law),
  * so the panels render link reasons through this registry — never the old ad-hoc translate.ts map.
  *
- * Codes mirror lib/nodalarc/models/link_events.py (LinkUp/LinkDown `reason`); the cross-language
- * contract test (tests/unit/test_explain_contract.py) asserts LINK_EVENT_REASONS matches the
- * backend LINK_EVENT_REASONS constant so the two cannot drift.
+ * The Scheduler's link reasons stay an open string on the wire, so this registry is keyed by
+ * string and a code it does not list shows as the raw code.
  */
 import type { Family } from "./families";
 
@@ -106,9 +105,6 @@ export const LINK_EVENT_REGISTRY: Record<string, LinkEventReasonRecord> = {
     sentence: "The link was up in the kernel when recording resumed after VS-API restarted; transitions between the last recorded event and this one were not recorded.",
   }),
 };
-
-/** The authoritative link-event reason codes (mirrors backend link_events.LINK_EVENT_REASONS). */
-export const LINK_EVENT_REASONS: readonly string[] = Object.keys(LINK_EVENT_REGISTRY);
 
 /** Human label for a link-event reason code, from the single registry. Never invents text;
  *  falls back to the raw code (honest) rather than a fabricated phrase. */

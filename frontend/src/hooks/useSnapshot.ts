@@ -5,7 +5,7 @@
 import { useState, useCallback, useEffect, useRef } from "react";
 import { REST_URL, authHeaders } from "../config";
 import { useWebSocket } from "./useWebSocket";
-import type { StateSnapshot } from "../types";
+import type { StateSnapshot, StateSocketCommand } from "../types";
 import type { SessionEphemeris, PlaybackStateMsg } from "../sim/ephemeris";
 
 
@@ -37,7 +37,7 @@ interface SnapshotState {
   setHistoricalMode: (val: boolean) => void;
   fetchHistorical: (simTime: string) => Promise<boolean>;
   historicalError: string | null;
-  sendMessage: (data: Record<string, unknown>) => void;
+  sendMessage: (command: StateSocketCommand) => void;
 }
 
 export function useSnapshot(): SnapshotState {

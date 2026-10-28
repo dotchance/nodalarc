@@ -31,6 +31,43 @@ OPS_LOG_LEVELS: dict[OpsLevel, int] = {
 }
 
 
+# What VS-API asks a service to do with its debug output.
+DebugControlAction = Literal["enable", "disable"]
+
+
+class DebugControlRequest(BaseModel):
+    """VS-API asks every instance of one service to change its debug output."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    action: DebugControlAction
+
+
+class DebugControlAcknowledged(BaseModel):
+    """One instance of the service changed its log level."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    status: Literal["ok"] = "ok"
+    # The instance's ops-stream log level after the request.
+    level: str
+
+
+class DebugControlRejected(BaseModel):
+    """One instance of the service did not change its log level."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    status: Literal["error"] = "error"
+    error: str
+
+
+# A service instance's reply on its debug-control subject.
+DebugControlReply = Annotated[
+    DebugControlAcknowledged | DebugControlRejected, Field(discriminator="status")
+]
+
+
 class NodePosition(BaseModel):
     """Position and velocity of a single node.
 

@@ -82,6 +82,18 @@ def test_a_terminal_closes_on_a_message_that_is_not_input_or_resize(operator: Op
     assert closed.value.rcvd is not None and closed.value.rcvd.code == 4400, closed.value
 
 
+def test_the_state_feed_closes_on_a_command_it_does_not_know(operator: Operator) -> None:
+    with connect(operator.socket_url("/ws/v1/state")) as socket:
+        socket.send(json.dumps({"action": "debug_stream", "sources": ["nobody"]}))
+        with pytest.raises(ConnectionClosed) as closed:
+            for _ in range(40):
+                try:
+                    socket.recv(timeout=0.5)
+                except TimeoutError:
+                    continue
+    assert closed.value.rcvd is not None and closed.value.rcvd.code == 4400, closed.value
+
+
 def test_a_closed_terminal_leaves_nothing_running_in_the_workload(operator: Operator) -> None:
     """A user closes the terminal without saying exit. Its shell must not stay in the workload."""
     host = _one_of_each_kind(operator).get("host")

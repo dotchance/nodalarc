@@ -13,7 +13,13 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from nodalarc.body_frames import SupportedSurfaceBody
 from nodalarc.model_validation import AddressFamily
-from nodalarc.models.events import OpsEvent, OpsLevel, ServiceSource, SessionEphemeris
+from nodalarc.models.events import (
+    DebugControlAction,
+    OpsEvent,
+    OpsLevel,
+    ServiceSource,
+    SessionEphemeris,
+)
 from nodalarc.models.link_rules import TopologyMode
 from nodalarc.models.link_state import SchedulingState
 from nodalarc.models.resolved_session import NodeKind, NodeRole
@@ -357,6 +363,31 @@ class StampedOpsEvent(OpsEvent):
     seq: int
 
 
+# What came back from a debug control request: the first instance's acknowledgement,
+# no reply in time, no instance listening, or an instance's rejection.
+DebugControlOutcome = Literal["acknowledged", "timed_out", "no_responders", "rejected"]
+
+
+class DebugSourceControl(BaseModel):
+    """The last debug control request VS-API sent to one service, and what came back.
+
+    The request reaches every instance of the service; ``acknowledged`` is the first
+    instance's reply, not a statement about the others.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    source: ServiceSource
+    # Counts VS-API's debug control requests; a later request has a higher number.
+    request_seq: int
+    request: DebugControlAction
+    outcome: DebugControlOutcome
+    # The acknowledging instance's log level after the request.
+    level: str | None
+    # The rejecting instance's reason.
+    error: str | None
+
+
 class StateSnapshot(BaseModel):
     """Complete constellation state sent via WebSocket at ~1Hz.
 
@@ -407,10 +438,12 @@ class StateSnapshot(BaseModel):
     # Identifies VS-API's seq space; a change means VS-API restarted and the client
     # replaces its scrollback.
     ops_log_token: str
-    # The latest debug events and the services sending them; empty while no client
-    # streams debug output.
+    # The latest debug events; empty while no service acknowledged an enable.
     debug_events: list[OpsEvent]
-    debug_sources: list[ServiceSource]
+    # VS-API's last debug control request to each service it has asked.
+    debug_control: list[DebugSourceControl]
+    # Whether VS-API's own subscription to the debug stream is open.
+    debug_subscription_open: bool
 
 
 class SessionEphemerisFrame(SessionEphemeris):
@@ -549,6 +582,38 @@ class TerminalOutput(BaseModel):
 # Every message on a terminal socket: input and resize from the browser, output from VS-API.
 TerminalMessage = Annotated[
     TerminalInput | TerminalResize | TerminalOutput, Field(discriminator="type")
+]
+
+
+class DebugStreamCommand(BaseModel):
+    """The page asks for these services' debug output."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    action: Literal["debug_stream"] = "debug_stream"
+    sources: list[ServiceSource] = Field(min_length=1)
+
+
+class DebugStopCommand(BaseModel):
+    """The page stops asking for these services' debug output."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    action: Literal["debug_stop"] = "debug_stop"
+    sources: list[ServiceSource] = Field(min_length=1)
+
+
+class DebugStopAllCommand(BaseModel):
+    """The page stops asking for any debug output."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    action: Literal["debug_stop_all"] = "debug_stop_all"
+
+
+# Every message the page sends on the state socket.
+StateSocketCommand = Annotated[
+    DebugStreamCommand | DebugStopCommand | DebugStopAllCommand, Field(discriminator="action")
 ]
 
 

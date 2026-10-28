@@ -5,7 +5,13 @@
  */
 
 import type { ActuationState, SchedulerOpsCode } from "./explain/reasons";
-import type { CatalogSessionSummary } from "./builder/generated/builderApi";
+import type {
+  CatalogSessionSummary,
+  DebugSourceControl,
+  DebugStopAllCommand,
+  DebugStopCommand,
+  DebugStreamCommand,
+} from "./builder/generated/builderApi";
 import type { SessionEphemeris } from "./sim/ephemeris";
 
 export interface NodeAddress {
@@ -226,6 +232,9 @@ export interface OpsEvent {
   details?: Record<string, unknown> | null;
 }
 
+/** Every message the page sends on the state socket. */
+export type StateSocketCommand = DebugStreamCommand | DebugStopCommand | DebugStopAllCommand;
+
 /** An ops event as VS-API serves it, stamped with its arrival seq. */
 export interface StampedOpsEvent {
   timestamp: string;
@@ -330,7 +339,8 @@ export interface StateSnapshot {
    *  restarted and the scrollback must replace, not merge. */
   ops_log_token?: string;
   debug_events?: OpsEvent[];
-  debug_sources?: string[];
+  debug_control: DebugSourceControl[];
+  debug_subscription_open: boolean;
 }
 
 /** The session ephemeris as the state socket sends it. */

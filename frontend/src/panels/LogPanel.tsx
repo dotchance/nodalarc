@@ -13,14 +13,22 @@ import { IconButton } from "../ui/Button";
 import { Icon } from "../ui/icons/Icon";
 import { setSearchTarget } from "../ui/searchFocus";
 import { formatTime } from "../translate";
-import type { OpsEvent, ServiceSource } from "../types";
+import type { DebugSourceControl } from "../builder/generated/builderApi";
+import type { OpsEvent, ServiceSource, StateSocketCommand } from "../types";
 
 interface LogPanelProps {
   events: OpsEvent[];
   debugEvents: OpsEvent[];
-  debugSources: string[];
-  sendMessage: (data: Record<string, unknown>) => void;
+  debugControl: DebugSourceControl[];
+  sendMessage: (command: StateSocketCommand) => void;
   onClose: () => void;
+}
+
+/** Why an enable did not take, in the words the menu shows. */
+function debugFailure(control: DebugSourceControl): string {
+  if (control.outcome === "timed_out") return "no reply";
+  if (control.outcome === "no_responders") return "not running";
+  return control.error ?? "refused";
 }
 
 const DEBUG_SOURCE_TYPES: readonly ServiceSource[] = [
@@ -48,7 +56,7 @@ const LOG_COLUMNS: TableColumn[] = [
 ];
 
 
-export function LogPanel({ events, debugEvents, debugSources, sendMessage, onClose }: LogPanelProps) {
+export function LogPanel({ events, debugEvents, debugControl, sendMessage, onClose }: LogPanelProps) {
   const [paused, setPaused] = useState(false);
   const [pausedEvents, setPausedEvents] = useState<OpsEvent[]>([]);
   const [sort, setSort] = useState<SortState | null>({ key: "timestamp", dir: "desc" });
@@ -57,8 +65,9 @@ export function LogPanel({ events, debugEvents, debugSources, sendMessage, onClo
   const [searchPattern, setSearchPattern] = useState("");
   const [searchValid, setSearchValid] = useState(true);
   const [debugDropdownOpen, setDebugDropdownOpen] = useState(false);
-  const [debugPending, setDebugPending] = useState<Set<string>>(new Set());
-  const [debugFailed, setDebugFailed] = useState<Set<string>>(new Set());
+  // An enable the page sent, by source: the request_seq VS-API showed for that source
+  // when it was sent. It is pending until a later request's outcome arrives.
+  const [debugPending, setDebugPending] = useState<Map<ServiceSource, number>>(new Map());
   const [fontSize, setFontSize] = useState(11);
   const [clearedAt, setClearedAt] = useState<number | null>(null);
   const [logColumns, setLogColumns] = useState(LOG_COLUMNS);
@@ -90,29 +99,27 @@ export function LogPanel({ events, debugEvents, debugSources, sendMessage, onClo
     }
   }, [paused, pausedEvents.length, events]);
 
-  // Debug enable lifecycle: pending until confirmed in debugSources; failed on
-  // the DEBUG_ENABLE_FAILED ops code.
+  // VS-API's last debug control request to each service, and what came back.
+  const controlBySource = useMemo(
+    () => new Map(debugControl.map((control) => [control.source, control])),
+    [debugControl],
+  );
+  const debugOn = (source: ServiceSource) => {
+    const control = controlBySource.get(source);
+    return control?.request === "enable" && control.outcome === "acknowledged";
+  };
+  const debugActive = DEBUG_SOURCE_TYPES.filter(debugOn);
+
   useEffect(() => {
     if (debugPending.size === 0) return;
     setDebugPending((prev) => {
-      const next = new Set(prev);
-      for (const s of debugSources) next.delete(s);
+      const next = new Map(prev);
+      for (const [source, sentAfter] of prev) {
+        if ((controlBySource.get(source)?.request_seq ?? 0) > sentAfter) next.delete(source);
+      }
       return next.size === prev.size ? prev : next;
     });
-  }, [debugSources, debugPending.size]);
-
-  useEffect(() => {
-    for (const e of events) {
-      if (e.code === "DEBUG_ENABLE_FAILED" && e.message) {
-        for (const src of DEBUG_SOURCE_TYPES) {
-          if (e.message.includes(src) && debugPending.has(src)) {
-            setDebugPending((prev) => { const n = new Set(prev); n.delete(src); return n; });
-            setDebugFailed((prev) => { const n = new Set(prev); n.add(src); return n; });
-          }
-        }
-      }
-    }
-  }, [events, debugPending]);
+  }, [controlBySource, debugPending.size]);
 
   useEffect(() => {
     if (!debugDropdownOpen) return;
@@ -138,7 +145,7 @@ export function LogPanel({ events, debugEvents, debugSources, sendMessage, onClo
 
   const displayEvents = useMemo(() => {
     const opsSource = paused ? pausedEvents : events;
-    const allEvents = debugSources.length > 0 ? [...opsSource, ...debugEvents] : opsSource;
+    const allEvents = debugActive.length > 0 ? [...opsSource, ...debugEvents] : opsSource;
     if (clearedAt === null) return allEvents;
     return allEvents.filter((e) => {
       try {
@@ -147,7 +154,7 @@ export function LogPanel({ events, debugEvents, debugSources, sendMessage, onClo
         return true;
       }
     });
-  }, [paused, pausedEvents, events, debugEvents, debugSources, clearedAt]);
+  }, [paused, pausedEvents, events, debugEvents, debugActive.length, clearedAt]);
 
   const sortedLogs = useMemo(() => {
     let result = displayEvents.filter((e) => {
@@ -208,20 +215,19 @@ export function LogPanel({ events, debugEvents, debugSources, sendMessage, onClo
     });
   };
 
-  const toggleDebugSource = (source: string) => {
-    if (debugSources.includes(source)) {
+  const toggleDebugSource = (source: ServiceSource) => {
+    if (debugOn(source)) {
       sendMessage({ action: "debug_stop", sources: [source] });
     } else {
-      setDebugPending((prev) => new Set(prev).add(source));
-      setDebugFailed((prev) => { const n = new Set(prev); n.delete(source); return n; });
+      const sentAfter = controlBySource.get(source)?.request_seq ?? 0;
+      setDebugPending((prev) => new Map(prev).set(source, sentAfter));
       sendMessage({ action: "debug_stream", sources: [source] });
     }
   };
 
   const disableAllDebug = () => {
     sendMessage({ action: "debug_stop_all" });
-    setDebugPending(new Set());
-    setDebugFailed(new Set());
+    setDebugPending(new Map());
     setDebugDropdownOpen(false);
   };
 
@@ -274,19 +280,22 @@ export function LogPanel({ events, debugEvents, debugSources, sendMessage, onClo
             <div className="log-debug" ref={debugRootRef}>
               <button
                 onClick={() => setDebugDropdownOpen((v) => !v)}
-                className={`log-chip log-level--debug${debugSources.length > 0 ? " log-chip--on" : ""}`}
+                className={`log-chip log-level--debug${debugActive.length > 0 ? " log-chip--on" : ""}`}
                 aria-expanded={debugDropdownOpen}
               >
-                {debugSources.length > 0 ? `debug (${debugSources.length})` : "debug"}
+                {debugActive.length > 0 ? `debug (${debugActive.length})` : "debug"}
                 <Icon name="chevron-down" size={10} />
               </button>
               {debugDropdownOpen && (
                 <div className="log-debug-menu">
                   <div className="log-debug-head">Enable debug output:</div>
                   {DEBUG_SOURCE_TYPES.map((src) => {
-                    const active = debugSources.includes(src);
+                    const control = controlBySource.get(src);
+                    const active = debugOn(src);
                     const pending = debugPending.has(src);
-                    const failed = debugFailed.has(src);
+                    const failure =
+                      !pending && control?.request === "enable" && !active ? debugFailure(control) : null;
+                    const failed = failure !== null;
                     return (
                       <button key={src} className="log-debug-row" onClick={() => toggleDebugSource(src)}>
                         <span className={`log-debug-state${failed ? " log-level--fail" : active ? " log-debug-state--on" : ""}`}>
@@ -297,11 +306,11 @@ export function LogPanel({ events, debugEvents, debugSources, sendMessage, onClo
                         </span>
                         {src.replace("_", " ")}
                         {pending && <small>enabling…</small>}
-                        {failed && <small>failed</small>}
+                        {failed && <small>failed: {failure}</small>}
                       </button>
                     );
                   })}
-                  {debugSources.length > 0 && (
+                  {debugActive.length > 0 && (
                     <button className="log-debug-row log-level--fail" onClick={disableAllDebug}>
                       Disable all
                     </button>

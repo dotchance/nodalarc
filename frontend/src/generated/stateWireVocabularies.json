@@ -157,6 +157,25 @@
     "ContinuousTraceStopped": [
       "ok"
     ],
+    "DebugSourceControl": [
+      "error",
+      "level",
+      "outcome",
+      "request",
+      "request_seq",
+      "source"
+    ],
+    "DebugStopAllCommand": [
+      "action"
+    ],
+    "DebugStopCommand": [
+      "action",
+      "sources"
+    ],
+    "DebugStreamCommand": [
+      "action",
+      "sources"
+    ],
     "DecisionExplanationFacts": [
       "actuation",
       "best_candidate",
@@ -584,8 +603,9 @@
       "actuation_health",
       "actuation_notices",
       "constellation_name",
+      "debug_control",
       "debug_events",
-      "debug_sources",
+      "debug_subscription_open",
       "history_recording",
       "kernel_actual_pairs",
       "links",
@@ -917,6 +937,42 @@
       "src": null
     },
     "ContinuousTraceStopped": {},
+    "DebugSourceControl": {
+      "error": null,
+      "level": null,
+      "outcome": [
+        "acknowledged",
+        "no_responders",
+        "rejected",
+        "timed_out"
+      ],
+      "request": [
+        "disable",
+        "enable"
+      ],
+      "source": [
+        "node_agent",
+        "ome",
+        "operator",
+        "scheduler",
+        "vs_api"
+      ]
+    },
+    "DebugStopAllCommand": {
+      "action": [
+        "debug_stop_all"
+      ]
+    },
+    "DebugStopCommand": {
+      "action": [
+        "debug_stop"
+      ]
+    },
+    "DebugStreamCommand": {
+      "action": [
+        "debug_stream"
+      ]
+    },
     "DecisionExplanationFacts": {
       "binding_gate": [
         "actuation_proof",
@@ -1673,6 +1729,10 @@
     "ContinuousTraceStarted": "lib/nodalarc/models/vs_api.py",
     "ContinuousTraceStatus": "lib/nodalarc/models/vs_api.py",
     "ContinuousTraceStopped": "lib/nodalarc/models/vs_api.py",
+    "DebugSourceControl": "lib/nodalarc/models/vs_api.py",
+    "DebugStopAllCommand": "lib/nodalarc/models/vs_api.py",
+    "DebugStopCommand": "lib/nodalarc/models/vs_api.py",
+    "DebugStreamCommand": "lib/nodalarc/models/vs_api.py",
     "DecisionExplanationFacts": "lib/nodalarc/models/decision_explanation.py",
     "DecisionExplanationQuery": "lib/nodalarc/models/vs_api.py",
     "DecisionTimelineQuery": "lib/nodalarc/models/vs_api.py",

@@ -1029,6 +1029,33 @@ export interface TraceRequest {
   readonly dst_node: string;
 }
 
+/** The last debug control request VS-API sent to one service, and what came back. The request reaches every instance of the service; ``acknowledged`` is the first instance's reply, not a statement about the others. */
+export interface DebugSourceControl {
+  readonly source: "ome" | "scheduler" | "node_agent" | "operator" | "vs_api";
+  readonly request_seq: number;
+  readonly request: "enable" | "disable";
+  readonly outcome: "acknowledged" | "timed_out" | "no_responders" | "rejected";
+  readonly level: string | null;
+  readonly error: string | null;
+}
+
+/** The page asks for these services' debug output. */
+export interface DebugStreamCommand {
+  readonly action?: "debug_stream";
+  readonly sources: ReadonlyArray<"ome" | "scheduler" | "node_agent" | "operator" | "vs_api">;
+}
+
+/** The page stops asking for these services' debug output. */
+export interface DebugStopCommand {
+  readonly action?: "debug_stop";
+  readonly sources: ReadonlyArray<"ome" | "scheduler" | "node_agent" | "operator" | "vs_api">;
+}
+
+/** The page stops asking for any debug output. */
+export interface DebugStopAllCommand {
+  readonly action?: "debug_stop_all";
+}
+
 /** Keystrokes the browser sends to a node's terminal. */
 export interface TerminalInput {
   readonly type?: "input";

@@ -158,43 +158,37 @@ async def connect(nc: Any) -> None:
         )
     await _nats_handler.connect(nc)
 
-    import json
+    from nodalarc.models.events import (
+        DebugControlAcknowledged,
+        DebugControlRejected,
+        DebugControlRequest,
+    )
+    from pydantic import ValidationError
 
     subject = debug_ctrl_subject(_nodal_filter._source)
     _log = logging.getLogger(__name__)
 
     async def _handle_debug_ctrl(msg):
+        reply: DebugControlAcknowledged | DebugControlRejected
         try:
-            cmd = json.loads(msg.data)
-        except Exception as exc:
+            cmd = DebugControlRequest.model_validate_json(msg.data)
+        except ValidationError as exc:
             _log.error("Malformed debug_ctrl message: %s", exc)
-            await msg.respond(
-                json.dumps({"status": "error", "error": f"malformed: {exc}"}).encode()
-            )
-            return
-
-        action = cmd.get("action")
-        try:
-            if action == "enable":
-                _nats_handler.set_nats_level(logging.DEBUG)
-                _log.info("Debug logging enabled by operator")
-                await msg.respond(json.dumps({"status": "ok", "level": "debug"}).encode())
-            elif action == "disable":
-                level = _nats_handler.restore_configured_level()
-                _log.info("Debug logging disabled")
-                await msg.respond(
-                    json.dumps(
-                        {"status": "ok", "level": logging.getLevelName(level).lower()}
-                    ).encode()
-                )
-            else:
-                _log.error("Unknown debug_ctrl action: %s", action)
-                await msg.respond(
-                    json.dumps({"status": "error", "error": f"unknown action: {action}"}).encode()
-                )
-        except Exception as exc:
-            _log.error("Failed to change debug level: %s", exc)
-            await msg.respond(json.dumps({"status": "error", "error": str(exc)}).encode())
+            reply = DebugControlRejected(error="malformed debug control request")
+        else:
+            try:
+                if cmd.action == "enable":
+                    _nats_handler.set_nats_level(logging.DEBUG)
+                    _log.info("Debug logging enabled by operator")
+                    reply = DebugControlAcknowledged(level="debug")
+                else:
+                    level = _nats_handler.restore_configured_level()
+                    _log.info("Debug logging disabled")
+                    reply = DebugControlAcknowledged(level=logging.getLevelName(level).lower())
+            except Exception as exc:
+                _log.error("Failed to change debug level: %s", exc, exc_info=True)
+                reply = DebugControlRejected(error="the service could not change its log level")
+        await msg.respond(reply.model_dump_json().encode())
 
     try:
         await nc.subscribe(subject, cb=_handle_debug_ctrl)

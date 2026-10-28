@@ -5,7 +5,12 @@
 import { useEffect, useRef, useState, useCallback } from "react";
 import { getWsUrl, fetchApiKey } from "../config";
 import { mergeSnapshot } from "../snapshotMerge";
-import type { SessionEphemerisFrame, SessionReadyFrame, StateSnapshot } from "../types";
+import type {
+  SessionEphemerisFrame,
+  SessionReadyFrame,
+  StateSnapshot,
+  StateSocketCommand,
+} from "../types";
 import type { SessionEphemeris, PlaybackStateMsg } from "../sim/ephemeris";
 
 interface WebSocketState {
@@ -20,7 +25,7 @@ interface WebSocketState {
   switchDetail: string | null;
   /** Why the last token fetch failed while reconnecting; null once one succeeds. */
   tokenError: string | null;
-  sendMessage: (data: Record<string, unknown>) => void;
+  sendMessage: (command: StateSocketCommand) => void;
 }
 
 export function useWebSocket(): WebSocketState {
@@ -178,7 +183,7 @@ export function useWebSocket(): WebSocketState {
     };
   }, [connect]);
 
-  const sendMessage = useCallback((data: Record<string, unknown>) => {
+  const sendMessage = useCallback((data: StateSocketCommand) => {
     if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
       wsRef.current.send(JSON.stringify(data));
     }

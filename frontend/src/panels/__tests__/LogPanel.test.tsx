@@ -3,6 +3,7 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
 import { render, screen, fireEvent, cleanup } from "@testing-library/react";
 import { LogPanel } from "../LogPanel";
+import type { DebugSourceControl } from "../../builder/generated/builderApi";
 import type { OpsEvent } from "../../types";
 
 afterEach(cleanup);
@@ -13,13 +14,13 @@ const OPS: OpsEvent[] = [
 ];
 
 
-function renderPanel() {
+function renderPanel(debugControl: DebugSourceControl[] = []) {
   const onClose = vi.fn();
   render(
     <LogPanel
       events={OPS}
       debugEvents={[]}
-      debugSources={[]}
+      debugControl={debugControl}
       sendMessage={vi.fn()}
       onClose={onClose}
     />,
@@ -42,5 +43,15 @@ describe("LogPanel", () => {
     expect(screen.queryByText(/export waiting/)).toBeNull();
     fireEvent.change(input, { target: { value: "[" } });
     expect(screen.getByText("invalid regex")).toBeTruthy();
+  });
+
+  it("shows each service's debug state from what VS-API last heard back", () => {
+    renderPanel([
+      { source: "scheduler", request_seq: 4, request: "enable", outcome: "acknowledged", level: "debug", error: null },
+      { source: "ome", request_seq: 5, request: "enable", outcome: "no_responders", level: null, error: null },
+    ]);
+    fireEvent.click(screen.getByRole("button", { name: /debug \(1\)/ }));
+    expect(screen.getByRole("button", { name: /ome.*failed: not running/ })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /scheduler.*failed/ })).toBeNull();
   });
 });

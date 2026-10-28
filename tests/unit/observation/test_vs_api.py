@@ -22,6 +22,7 @@ from nodalarc.db.schema import create_tables
 from nodalarc.models.events import EphemerisNodeFixed, EphemerisNodeTLE, SessionEphemeris
 from nodalarc.models.resolved_session import InterfaceRates, SourceContext
 from nodalarc.models.vs_api import (
+    DebugSourceControl,
     LinkDecisionTrace,
     LinkState,
     StampedOpsEvent,
@@ -93,7 +94,8 @@ def _frame(
         ops_events=list(ops),
         ops_log_token="token",
         debug_events=[],
-        debug_sources=[],
+        debug_control=[],
+        debug_subscription_open=False,
     )
 
 
@@ -1346,8 +1348,46 @@ class TestSubscriberResilience:
 
 
 # ---------------------------------------------------------------------------
-# On-demand debug: ref-counting and cleanup
+# On-demand debug: what VS-API records about each control request
 # ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("reply", "outcome", "level", "error"),
+    [
+        (b'{"status": "ok", "level": "debug"}', "acknowledged", "debug", None),
+        (b'{"status": "error", "error": "no"}', "rejected", None, "no"),
+        ("no responders", "no_responders", None, None),
+        ("timeout", "timed_out", None, None),
+    ],
+)
+def test_a_debug_control_request_records_what_came_back(monkeypatch, reply, outcome, level, error):
+    import asyncio
+    from types import SimpleNamespace
+
+    import nats.errors
+    import vs_api.main as m
+
+    class _ServiceOnNats:
+        async def request(self, subject, payload, timeout):
+            if reply == "no responders":
+                raise nats.errors.NoRespondersError
+            if reply == "timeout":
+                raise nats.errors.TimeoutError
+            return SimpleNamespace(data=reply)
+
+    monkeypatch.setattr(m, "_nats_connection", _ServiceOnNats())
+    monkeypatch.setattr(m, "_debug_control", {})
+
+    control = asyncio.run(m._send_debug_control("scheduler", "enable"))
+
+    assert (control.request, control.outcome, control.level, control.error) == (
+        "enable",
+        outcome,
+        level,
+        error,
+    )
+    assert m._debug_control == {"scheduler": control}
 
 
 # ---------------------------------------------------------------------------
@@ -2890,7 +2930,16 @@ class TestSessionHistory:
         monkeypatch.setattr(
             m, "_session_manager", SimpleNamespace(status="ready", status_detail=None)
         )
+        enabled = DebugSourceControl(
+            source="scheduler",
+            request_seq=1,
+            request="enable",
+            outcome="acknowledged",
+            level="debug",
+            error=None,
+        )
         monkeypatch.setattr(m, "_debug_sources", {"scheduler"})
+        monkeypatch.setattr(m, "_debug_control", {"scheduler": enabled})
         monkeypatch.setattr(m, "_debug_events", [debug_event])
         client = TestClient(m.app)
 
@@ -2900,7 +2949,7 @@ class TestSessionHistory:
         frame = StateSnapshot.model_validate(live.json())
         assert frame.msg_type == "state_snapshot"
         assert frame.debug_events == [debug_event]
-        assert frame.debug_sources == ["scheduler"]
+        assert frame.debug_control == [enabled]
 
         ctx.record_snapshot(m._build_snapshot())
         assert _recording_error(ctx) is None

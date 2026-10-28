@@ -14,6 +14,7 @@ import argparse
 import asyncio
 import base64
 import contextlib
+import itertools
 import json
 import logging
 import os
@@ -27,10 +28,11 @@ from contextvars import ContextVar
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Annotated, Any, Literal, get_args
+from typing import Annotated, Any, Literal
 
 import asyncssh
 import nats
+import nats.errors
 from fastapi import Depends, FastAPI, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, PlainTextResponse, Response
@@ -89,6 +91,10 @@ from nodalarc.models.coverage import CoveragePreviewResult
 from nodalarc.models.decision_explanation import DecisionExplanationFacts, GsDecisionTimelineFacts
 from nodalarc.models.events import (
     OPS_LOG_LEVELS,
+    DebugControlAcknowledged,
+    DebugControlAction,
+    DebugControlReply,
+    DebugControlRequest,
     OpsEvent,
     OpsLevel,
     PlaybackControlCommand,
@@ -127,6 +133,11 @@ from nodalarc.models.vs_api import (
     ContinuousTraceStarted,
     ContinuousTraceStatus,
     ContinuousTraceStopped,
+    DebugControlOutcome,
+    DebugSourceControl,
+    DebugStopAllCommand,
+    DebugStopCommand,
+    DebugStreamCommand,
     DecisionExplanationQuery,
     DecisionTimelineQuery,
     GroundLinkDecisionsQuery,
@@ -144,6 +155,7 @@ from nodalarc.models.vs_api import (
     SessionTransitioningFrame,
     StampedOpsEvent,
     StateSnapshot,
+    StateSocketCommand,
     TerminalInput,
     TerminalMessage,
     TerminalOutput,
@@ -379,12 +391,13 @@ from collections import deque
 _system_ops_events: deque[StampedOpsEvent] = deque(maxlen=500)
 
 # On-demand debug — state managed by WebSocket command handlers
-_debug_sources: set[str] = set()
-_debug_clients: dict[int, set[str]] = {}
+_debug_sources: set[ServiceSource] = set()
+_debug_clients: dict[int, set[ServiceSource]] = {}
 _debug_sub: object | None = None
+# VS-API's last debug control request to each service, and what came back.
+_debug_control: dict[ServiceSource, DebugSourceControl] = {}
+_debug_request_seq = itertools.count(1)
 _debug_events: deque[OpsEvent] = deque(maxlen=500)
-
-_KNOWN_DEBUG_SOURCES: tuple[ServiceSource, ...] = get_args(ServiceSource)
 
 
 def _get_transition_operation_store() -> TransitionOperationStore:
@@ -573,50 +586,73 @@ async def _admit_transition(
         return operation_id
 
 
-async def _enable_debug_source(source: str) -> bool:
+_DEBUG_REPLY: TypeAdapter[DebugControlReply] = TypeAdapter(DebugControlReply)
+
+
+async def _send_debug_control(
+    source: ServiceSource, action: DebugControlAction
+) -> DebugSourceControl | None:
+    """Send one debug control request to a service and record what came back.
+
+    None when VS-API has no NATS connection to send it on.
+    """
+    nc = _nats_connection
+    if nc is None:
+        log.error("Cannot %s debug for %s: no NATS connection", action, source)
+        return None
+    request_seq = next(_debug_request_seq)
+    outcome: DebugControlOutcome
+    level: str | None = None
+    error: str | None = None
+    try:
+        resp = await nc.request(
+            debug_ctrl_subject(source),
+            DebugControlRequest(action=action).model_dump_json().encode(),
+            timeout=5.0,
+        )
+    except nats.errors.NoRespondersError:
+        outcome = "no_responders"
+    except nats.errors.TimeoutError:
+        outcome = "timed_out"
+    else:
+        reply = _DEBUG_REPLY.validate_json(resp.data)
+        if isinstance(reply, DebugControlAcknowledged):
+            outcome, level = "acknowledged", reply.level
+        else:
+            outcome, error = "rejected", reply.error
+    control = DebugSourceControl(
+        source=source,
+        request_seq=request_seq,
+        request=action,
+        outcome=outcome,
+        level=level,
+        error=error,
+    )
+    _debug_control[source] = control
+    return control
+
+
+async def _enable_debug_source(source: ServiceSource) -> bool:
     """Enable debug for a service type via NATS request/reply.
 
-    Returns True on success. On failure, publishes an ERROR event
-    to the log panel and returns False.
+    Returns True when an instance acknowledged. On failure, publishes an ERROR
+    event to the log panel and returns False.
     """
     global _debug_sub
 
-    if source not in _KNOWN_DEBUG_SOURCES:
-        log.error("Unknown debug source: %s", source)
-        return False
-
-    nc = _nats_connection
-    if nc is None:
-        log.error("Cannot enable debug for %s: no NATS connection", source)
-        return False
-
-    subject = debug_ctrl_subject(source)
-    payload = json.dumps({"action": "enable"}).encode()
-    try:
-        resp = await nc.request(subject, payload, timeout=5.0)
-        result = json.loads(resp.data)
-        if result.get("status") != "ok":
-            error = result.get("error", "unknown")
-            log.error("Debug enable failed for %s: %s", source, error)
-            await _publish_system_ops_event(
-                "error",
-                "DEBUG_ENABLE_FAILED",
-                f"Failed to enable debug for {source}: {error}",
-            )
-            return False
-    except Exception as exc:
-        log.error("Debug enable failed for %s: %s", source, exc, exc_info=True)
+    control = await _send_debug_control(source, "enable")
+    if control is None or control.outcome != "acknowledged":
+        reason = "no NATS connection" if control is None else control.outcome
+        log.error("Debug enable failed for %s: %s", source, reason)
         await _publish_system_ops_event(
-            "error",
-            "DEBUG_ENABLE_FAILED",
-            f"Failed to enable debug for {source}",
-            {"cause_type": type(exc).__name__},
+            "error", "DEBUG_ENABLE_FAILED", f"Failed to enable debug for {source}: {reason}"
         )
         return False
 
     _debug_sources.add(source)
 
-    if _debug_sub is None:
+    nc = _nats_connection
+    if _debug_sub is None and nc is not None:
         try:
             js = nc.jetstream()
             from nats.js.api import DeliverPolicy
@@ -641,20 +677,13 @@ async def _enable_debug_source(source: str) -> bool:
     return True
 
 
-async def _disable_debug_source(source: str) -> None:
+async def _disable_debug_source(source: ServiceSource) -> None:
     """Disable debug for a service type."""
     global _debug_sub
 
-    nc = _nats_connection
-    if nc is None:
-        return
-
-    subject = debug_ctrl_subject(source)
-    payload = json.dumps({"action": "disable"}).encode()
-    try:
-        await nc.request(subject, payload, timeout=5.0)
-    except Exception as exc:
-        log.warning("Debug disable request failed for %s: %s", source, exc)
+    control = await _send_debug_control(source, "disable")
+    if control is not None and control.outcome != "acknowledged":
+        log.warning("Debug disable for %s: %s", source, control.outcome)
 
     _debug_sources.discard(source)
 
@@ -683,30 +712,25 @@ async def _on_debug_event(msg) -> None:
         _debug_events.append(OpsEvent.model_validate_json(msg.data))
 
 
-async def _handle_ws_debug_command(ws_id: int, msg: dict) -> None:
-    """Handle debug_stream/debug_stop WebSocket commands."""
-    action = msg.get("action")
-
-    if action == "debug_stream":
-        sources = msg.get("sources", [])
-        if not sources:
-            return
-        if ws_id not in _debug_clients:
-            _debug_clients[ws_id] = set()
-        for source in sources:
+async def _handle_ws_debug_command(
+    ws_id: int, command: DebugStreamCommand | DebugStopCommand | DebugStopAllCommand
+) -> None:
+    """Handle debug_stream/debug_stop/debug_stop_all WebSocket commands."""
+    if isinstance(command, DebugStreamCommand):
+        client_sources = _debug_clients.setdefault(ws_id, set())
+        for source in command.sources:
             if await _enable_debug_source(source):
-                _debug_clients[ws_id].add(source)
+                client_sources.add(source)
 
-    elif action == "debug_stop":
-        sources = msg.get("sources", [])
+    elif isinstance(command, DebugStopCommand):
         client_sources = _debug_clients.get(ws_id, set())
-        for source in sources:
+        for source in command.sources:
             client_sources.discard(source)
             still_wanted = any(source in cs for cid, cs in _debug_clients.items() if cid != ws_id)
             if not still_wanted:
                 await _disable_debug_source(source)
 
-    elif action == "debug_stop_all":
+    else:
         await _cleanup_debug_client(ws_id)
 
 
@@ -886,7 +910,8 @@ def _build_snapshot(*, ops_after: int = 0) -> StateSnapshot | None:
             ops_events=_ops_events_tail(ctx, ops_after=ops_after),
             ops_log_token=OPS_LOG_TOKEN,
             debug_events=list(_debug_events)[-100:] if _debug_sources else [],
-            debug_sources=sorted(_debug_sources),
+            debug_control=sorted(_debug_control.values(), key=lambda control: control.source),
+            debug_subscription_open=_debug_sub is not None,
         )
         return snapshot
 
@@ -2088,12 +2113,16 @@ async def _history_snapshot_recorder() -> None:
             ctx.record_snapshot(snapshot)
 
 
+_STATE_SOCKET_COMMAND: TypeAdapter[StateSocketCommand] = TypeAdapter(StateSocketCommand)
+
+
 @app.websocket("/ws/v1/state")
 async def ws_state(websocket: WebSocket) -> None:
     """WebSocket endpoint — bidirectional: push snapshots + receive commands.
 
     Sender: pushes StateSnapshot at ~1Hz (existing behavior).
-    Receiver: handles debug_stream/debug_stop commands from the log panel.
+    Receiver: handles the StateSocketCommand union from the log panel; a message
+    that is not one closes the socket with code 4400.
     Both run concurrently via asyncio.gather. Either side ending
     terminates the connection cleanly.
     """
@@ -2165,15 +2194,13 @@ async def ws_state(websocket: WebSocket) -> None:
     async def _receiver():
         try:
             while True:
-                data = await websocket.receive_json()
                 try:
-                    action = data.get("action", "")
-                    if action in ("debug_stream", "debug_stop", "debug_stop_all"):
-                        await _handle_ws_debug_command(ws_id, data)
-                    elif action:
-                        log.warning("Unknown WS action: %s", action)
-                except Exception as exc:
-                    log.warning("WS command error (ignored): %s", exc)
+                    command = _STATE_SOCKET_COMMAND.validate_json(await websocket.receive_text())
+                except ValidationError:
+                    _audit_log.warning(f"WS_MALFORMED_COMMAND ip={ws_ip}")
+                    await websocket.close(code=4400, reason="Malformed command")
+                    return
+                await _handle_ws_debug_command(ws_id, command)
         except WebSocketDisconnect:
             pass
         finally:

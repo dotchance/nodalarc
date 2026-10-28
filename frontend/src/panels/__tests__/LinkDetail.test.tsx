@@ -32,6 +32,8 @@ function link(overrides: Partial<LinkState> = {}): LinkState {
 function snapshot(): StateSnapshot {
   return {
     msg_type: "state_snapshot",
+    debug_control: [],
+    debug_subscription_open: false,
     sim_time: "2026-01-01T00:00:00Z",
     wall_time: "2026-01-01T00:00:00Z",
     schema_version: 1,

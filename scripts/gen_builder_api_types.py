@@ -22,10 +22,9 @@ from typing import Any, get_args
 
 ROOT = Path(__file__).resolve().parents[1]
 # The repository root carries the adapter packages that session resolution
-# reads; lib and services take precedence over it.
+# reads; lib takes precedence over it.
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "lib"))
-sys.path.insert(0, str(ROOT / "services"))
 
 from nodalarc.catalog_refs import CatalogFamily, CatalogRef, SessionRef  # noqa: E402
 from nodalarc.models.api_refusal import ApiRefusal  # noqa: E402
@@ -228,16 +227,12 @@ from nodalarc.models.builder_visual_api import (  # noqa: E402
 )
 from nodalarc.models.builder_world import BuilderWorld  # noqa: E402
 from nodalarc.models.coverage import CoveragePreviewResult  # noqa: E402
-from nodalarc.models.session_sources import (  # noqa: E402
+from nodalarc.models.session_sources import (  # noqa: E402  # noqa: E402
     CatalogSessionSourceId,
     CatalogSessionSummary,
     CatalogSessionSwitchAccepted,
     CatalogSessionSwitchRequest,
     CatalogSessionYamlUploadRequest,
-)
-from pydantic import BaseModel, TypeAdapter  # noqa: E402
-from vs_api.introspect import IntrospectRequest, IntrospectResult  # noqa: E402
-from vs_api.transition_operations import (  # noqa: E402
     TransitionOperation,
     TransitionOperationEvent,
     TransitionOperationFacts,
@@ -247,6 +242,18 @@ from vs_api.transition_operations import (  # noqa: E402
     TransitionOperationState,
     TransitionRuntimeResult,
 )
+from nodalarc.models.vs_api import (  # noqa: E402
+    AuthToken,
+    ContinuousTraceStarted,
+    ContinuousTraceStatus,
+    ContinuousTraceStopped,
+    HealthStatus,
+    IntrospectRequest,
+    IntrospectResult,
+    ProjectAbout,
+    TracedPath,
+)
+from pydantic import BaseModel, TypeAdapter  # noqa: E402
 
 OUT = ROOT / "frontend/src/builder/generated/builderApi.ts"
 
@@ -356,6 +363,13 @@ MODEL_TYPES: tuple[type[BaseModel], ...] = (
     CatalogSessionYamlUploadRequest,
     IntrospectRequest,
     IntrospectResult,
+    HealthStatus,
+    ProjectAbout,
+    AuthToken,
+    ContinuousTraceStarted,
+    ContinuousTraceStopped,
+    TracedPath,
+    ContinuousTraceStatus,
     TransitionOperationSource,
     TransitionOperationFacts,
     TransitionOperationEvent,
@@ -601,7 +615,7 @@ def render() -> str:
     lines = [
         "// GENERATED FILE — DO NOT EDIT BY HAND.",
         "// Sources of truth: backend Pydantic application contracts in",
-        "// lib/nodalarc/models and services/vs_api/transition_operations.py.",
+        "// lib/nodalarc/models.",
         "// Regenerate: make generate-contracts",
         "//",
         "// These are non-grammar application contracts. Configuration fields remain",

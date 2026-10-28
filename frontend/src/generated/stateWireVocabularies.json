@@ -90,6 +90,14 @@
       "nodes_succeeded",
       "recomputation_count"
     ],
+    "ApiRefusal": [
+      "cause_type",
+      "code",
+      "message"
+    ],
+    "AuthToken": [
+      "token"
+    ],
     "CandidateFacts": [
       "binding_gate",
       "binding_reason_code",
@@ -131,6 +139,20 @@
     "CatalogSessionYamlUploadRequest": [
       "record_history",
       "yaml"
+    ],
+    "ContinuousTraceStarted": [
+      "dst",
+      "ok",
+      "src"
+    ],
+    "ContinuousTraceStatus": [
+      "active",
+      "dst",
+      "result",
+      "src"
+    ],
+    "ContinuousTraceStopped": [
+      "ok"
     ],
     "DecisionExplanationFacts": [
       "actuation",
@@ -256,6 +278,10 @@
       "snapshot_seq",
       "state"
     ],
+    "HealthStatus": [
+      "session_status",
+      "status"
+    ],
     "HistoryRecordingState": [
       "error",
       "state"
@@ -288,6 +314,9 @@
       "range_km",
       "sim_time",
       "wall_time"
+    ],
+    "LegacyRefusal": [
+      "error"
     ],
     "LinkDecisionProvenance": [
       "authority_age_ms",
@@ -461,6 +490,18 @@
       "pending_since",
       "snapshot_seq"
     ],
+    "ProjectAbout": [
+      "author",
+      "build_date",
+      "copyright",
+      "license",
+      "name",
+      "notice",
+      "revision",
+      "source",
+      "url",
+      "version"
+    ],
     "RecentEvent": [
       "event_type",
       "node_id",
@@ -539,20 +580,6 @@
       "traced_paths",
       "wall_time"
     ],
-    "StoredTransitionOperation": [
-      "created_at",
-      "events",
-      "facts",
-      "failure",
-      "operation_id",
-      "provenance",
-      "runtime",
-      "schema_name",
-      "source",
-      "state",
-      "updated_at",
-      "version"
-    ],
     "TracedPath": [
       "asymmetry_detected",
       "continuous_trace",
@@ -572,12 +599,6 @@
       "stop_reason",
       "traced_at",
       "tracing"
-    ],
-    "TransitionConstellationSpecObservation": [
-      "generation",
-      "name",
-      "namespace",
-      "status"
     ],
     "TransitionOperation": [
       "created_at",
@@ -609,53 +630,14 @@
       "code",
       "message"
     ],
-    "TransitionOperationProvenance": [
-      "constellation_spec",
-      "repository_generation",
-      "runtime_plan",
-      "source_revision",
-      "upload_id",
-      "upload_resource_names"
-    ],
-    "TransitionOperationProvenancePatch": [
-      "constellation_spec",
-      "upload_resource_name"
-    ],
-    "TransitionOperationReservation": [
-      "facts",
-      "provenance",
-      "source"
-    ],
     "TransitionOperationSource": [
       "kind",
       "logical_id"
     ],
-    "TransitionReconciliation": [
-      "detail",
-      "disposition",
-      "failure",
-      "runtime"
-    ],
-    "TransitionRuntimePlan": [
-      "name",
-      "namespace"
-    ],
+    "TransitionRecordModel": [],
     "TransitionRuntimeResult": [
       "generation",
       "session_id"
-    ],
-    "TransitionRuntimeStatusProof": [
-      "build",
-      "closure_digest",
-      "document_digest",
-      "observed_generation",
-      "phase",
-      "pod_count",
-      "ready_pods",
-      "release",
-      "resolved_semantic_digest",
-      "session_id",
-      "wired_pods"
     ],
     "UnscheduledPair": [
       "capacity_constraint",
@@ -669,7 +651,6 @@
       "message",
       "msg_type"
     ],
-    "_OperationModel": [],
     "_SessionSourceModel": []
   },
   "models": {
@@ -803,6 +784,14 @@
       "last_push_sim_time": null,
       "last_topology_state_id": null
     },
+    "ApiRefusal": {
+      "cause_type": null,
+      "code": null,
+      "message": null
+    },
+    "AuthToken": {
+      "token": null
+    },
     "CandidateFacts": {
       "binding_gate": [
         "actuation_proof",
@@ -871,6 +860,15 @@
     "CatalogSessionYamlUploadRequest": {
       "yaml": null
     },
+    "ContinuousTraceStarted": {
+      "dst": null,
+      "src": null
+    },
+    "ContinuousTraceStatus": {
+      "dst": null,
+      "src": null
+    },
+    "ContinuousTraceStopped": {},
     "DecisionExplanationFacts": {
       "binding_gate": [
         "actuation_proof",
@@ -1101,6 +1099,18 @@
         "scheduled"
       ]
     },
+    "HealthStatus": {
+      "session_status": [
+        "error",
+        "idle",
+        "ready",
+        "switching",
+        "wiring"
+      ],
+      "status": [
+        "ok"
+      ]
+    },
     "HistoryRecordingState": {
       "error": null,
       "state": [
@@ -1172,6 +1182,9 @@
     "LatencyUpdate": {
       "node_a": null,
       "node_b": null
+    },
+    "LegacyRefusal": {
+      "error": null
     },
     "LinkDecisionProvenance": {
       "authority_source": null,
@@ -1348,6 +1361,18 @@
     "PendingActuationPair": {
       "operation": null
     },
+    "ProjectAbout": {
+      "author": null,
+      "build_date": null,
+      "copyright": null,
+      "license": null,
+      "name": null,
+      "notice": null,
+      "revision": null,
+      "source": null,
+      "url": null,
+      "version": null
+    },
     "RecentEvent": {
       "event_type": [
         "PATH_CHANGE",
@@ -1426,22 +1451,6 @@
       ],
       "session_status_detail": null
     },
-    "StoredTransitionOperation": {
-      "operation_id": null,
-      "schema_name": [
-        "nodalarc.transition-operation.v2"
-      ],
-      "state": [
-        "cancelled",
-        "collecting",
-        "failed",
-        "reserved",
-        "succeeded",
-        "switching",
-        "uploading",
-        "verifying"
-      ]
-    },
     "TracedPath": {
       "dst_node": null,
       "error": null,
@@ -1465,10 +1474,6 @@
         "time_limit"
       ],
       "traced_at": null
-    },
-    "TransitionConstellationSpecObservation": {
-      "name": null,
-      "namespace": null
     },
     "TransitionOperation": {
       "operation_id": null,
@@ -1505,40 +1510,14 @@
       "code": null,
       "message": null
     },
-    "TransitionOperationProvenance": {
-      "repository_generation": null,
-      "upload_id": null
-    },
-    "TransitionOperationProvenancePatch": {
-      "upload_resource_name": null
-    },
-    "TransitionOperationReservation": {},
     "TransitionOperationSource": {
       "kind": [
         "catalog_session"
       ],
       "logical_id": null
     },
-    "TransitionReconciliation": {
-      "detail": null,
-      "disposition": [
-        "cancelled",
-        "failed",
-        "still_switching",
-        "succeeded"
-      ]
-    },
-    "TransitionRuntimePlan": {
-      "name": null,
-      "namespace": null
-    },
+    "TransitionRecordModel": {},
     "TransitionRuntimeResult": {
-      "session_id": null
-    },
-    "TransitionRuntimeStatusProof": {
-      "build": null,
-      "phase": null,
-      "release": null,
       "session_id": null
     },
     "UnscheduledPair": {
@@ -1567,7 +1546,6 @@
         "wiring_progress"
       ]
     },
-    "_OperationModel": {},
     "_SessionSourceModel": {}
   },
   "modules": {
@@ -1579,12 +1557,17 @@
     "ActuationNotice": "lib/nodalarc/models/vs_api.py",
     "ActuationOpsDetails": "lib/nodalarc/models/scheduler_ops.py",
     "AlmanacState": "lib/nodalarc/models/vs_api.py",
+    "ApiRefusal": "lib/nodalarc/models/api_refusal.py",
+    "AuthToken": "lib/nodalarc/models/vs_api.py",
     "CandidateFacts": "lib/nodalarc/models/decision_explanation.py",
     "CatalogSessionSourceId": "lib/nodalarc/models/session_sources.py",
     "CatalogSessionSummary": "lib/nodalarc/models/session_sources.py",
     "CatalogSessionSwitchAccepted": "lib/nodalarc/models/session_sources.py",
     "CatalogSessionSwitchRequest": "lib/nodalarc/models/session_sources.py",
     "CatalogSessionYamlUploadRequest": "lib/nodalarc/models/session_sources.py",
+    "ContinuousTraceStarted": "lib/nodalarc/models/vs_api.py",
+    "ContinuousTraceStatus": "lib/nodalarc/models/vs_api.py",
+    "ContinuousTraceStopped": "lib/nodalarc/models/vs_api.py",
     "DecisionExplanationFacts": "lib/nodalarc/models/decision_explanation.py",
     "EffectiveEnvelopeFacts": "lib/nodalarc/models/decision_explanation.py",
     "EnvelopeEndpoint": "lib/nodalarc/models/decision_explanation.py",
@@ -1595,11 +1578,13 @@
     "GsDecisionReasonCount": "lib/nodalarc/models/decision_explanation.py",
     "GsDecisionTimelineFacts": "lib/nodalarc/models/decision_explanation.py",
     "GsDecisionTimelineSample": "lib/nodalarc/models/decision_explanation.py",
+    "HealthStatus": "lib/nodalarc/models/vs_api.py",
     "HistoryRecordingState": "lib/nodalarc/models/vs_api.py",
-    "IntrospectRequest": "services/vs_api/introspect.py",
-    "IntrospectResult": "services/vs_api/introspect.py",
+    "IntrospectRequest": "lib/nodalarc/models/vs_api.py",
+    "IntrospectResult": "lib/nodalarc/models/vs_api.py",
     "LadderGate": "lib/nodalarc/models/decision_explanation.py",
     "LatencyUpdate": "lib/nodalarc/models/link_events.py",
+    "LegacyRefusal": "lib/nodalarc/models/api_refusal.py",
     "LinkDecisionProvenance": "lib/nodalarc/models/link_events.py",
     "LinkDecisionTrace": "lib/nodalarc/models/vs_api.py",
     "LinkDown": "lib/nodalarc/models/link_events.py",
@@ -1615,6 +1600,7 @@
     "OperatorRepairResponse": "lib/nodalarc/models/scheduler_ops.py",
     "PendingActuation": "lib/nodalarc/models/decision_explanation.py",
     "PendingActuationPair": "lib/nodalarc/models/scheduler_ops.py",
+    "ProjectAbout": "lib/nodalarc/models/vs_api.py",
     "RecentEvent": "lib/nodalarc/models/vs_api.py",
     "RecoveryStatus": "lib/nodalarc/models/scheduler_ops.py",
     "SessionEphemerisFrame": "lib/nodalarc/models/vs_api.py",
@@ -1624,24 +1610,16 @@
     "SessionTransitioningFrame": "lib/nodalarc/models/vs_api.py",
     "StampedOpsEvent": "lib/nodalarc/models/vs_api.py",
     "StateSnapshot": "lib/nodalarc/models/vs_api.py",
-    "StoredTransitionOperation": "services/vs_api/transition_operations.py",
     "TracedPath": "lib/nodalarc/models/vs_api.py",
-    "TransitionConstellationSpecObservation": "services/vs_api/transition_operations.py",
-    "TransitionOperation": "services/vs_api/transition_operations.py",
-    "TransitionOperationEvent": "services/vs_api/transition_operations.py",
-    "TransitionOperationFacts": "services/vs_api/transition_operations.py",
-    "TransitionOperationFailure": "services/vs_api/transition_operations.py",
-    "TransitionOperationProvenance": "services/vs_api/transition_operations.py",
-    "TransitionOperationProvenancePatch": "services/vs_api/transition_operations.py",
-    "TransitionOperationReservation": "services/vs_api/transition_operations.py",
-    "TransitionOperationSource": "services/vs_api/transition_operations.py",
-    "TransitionReconciliation": "services/vs_api/transition_operations.py",
-    "TransitionRuntimePlan": "services/vs_api/transition_operations.py",
-    "TransitionRuntimeResult": "services/vs_api/transition_operations.py",
-    "TransitionRuntimeStatusProof": "services/vs_api/transition_operations.py",
+    "TransitionOperation": "lib/nodalarc/models/session_sources.py",
+    "TransitionOperationEvent": "lib/nodalarc/models/session_sources.py",
+    "TransitionOperationFacts": "lib/nodalarc/models/session_sources.py",
+    "TransitionOperationFailure": "lib/nodalarc/models/session_sources.py",
+    "TransitionOperationSource": "lib/nodalarc/models/session_sources.py",
+    "TransitionRecordModel": "lib/nodalarc/models/session_sources.py",
+    "TransitionRuntimeResult": "lib/nodalarc/models/session_sources.py",
     "UnscheduledPair": "lib/nodalarc/models/link_decisions.py",
     "WiringProgressFrame": "lib/nodalarc/models/vs_api.py",
-    "_OperationModel": "services/vs_api/transition_operations.py",
     "_SessionSourceModel": "lib/nodalarc/models/session_sources.py"
   }
 }

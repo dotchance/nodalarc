@@ -33,7 +33,7 @@ import asyncssh
 import nats
 from fastapi import Depends, FastAPI, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, Response
+from fastapi.responses import JSONResponse, PlainTextResponse, Response
 from fastapi.staticfiles import StaticFiles
 from kubernetes.client.rest import ApiException
 from nodal.logging import configure as _configure_logging
@@ -72,7 +72,7 @@ from nodalarc.kubernetes_runtime_config import (
     KubernetesRuntimeConfigError,
     KubernetesRuntimeConfigErrorCode,
 )
-from nodalarc.models.api_refusal import ApiRefusal
+from nodalarc.models.api_refusal import ApiRefusal, LegacyRefusal
 from nodalarc.models.builder_api import (
     WizardAvailableStation,
     WizardAvailableStationResponse,
@@ -86,20 +86,39 @@ from nodalarc.models.builder_api import (
     WizardSatelliteTypePresetResponse,
 )
 from nodalarc.models.coverage import CoveragePreviewResult
+from nodalarc.models.decision_explanation import DecisionExplanationFacts, GsDecisionTimelineFacts
 from nodalarc.models.events import OPS_LOG_LEVELS, OpsEvent, OpsLevel, ServiceSource
+from nodalarc.models.link_decisions import GroundLinkDecisionSnapshot
 from nodalarc.models.resolved_session import ResolvedSession
-from nodalarc.models.scheduler_ops import OperatorRepairCommand
+from nodalarc.models.scheduler_ops import OperatorRepairCommand, OperatorRepairResponse
 from nodalarc.models.session_sources import (
     CatalogSessionSourceId,
     CatalogSessionSummary,
     CatalogSessionSwitchAccepted,
     CatalogSessionSwitchRequest,
     CatalogSessionYamlUploadRequest,
+    TransitionOperation,
+    TransitionOperationFacts,
+    TransitionOperationFailure,
+    TransitionOperationSource,
+    TransitionOperationSourceKind,
+    TransitionOperationState,
+    TransitionRuntimeResult,
 )
 from nodalarc.models.vs_api import (
     LINK_HISTORY_PAGE_MAX,
+    ActuationHealth,
+    AuthToken,
+    ContinuousTraceStarted,
+    ContinuousTraceStatus,
+    ContinuousTraceStopped,
+    HealthStatus,
+    IntrospectRequest,
+    IntrospectResult,
+    LinkDecisionTrace,
     LinkHistoryEvent,
     LinkHistoryPage,
+    ProjectAbout,
     SessionFailedFrame,
     SessionReadyFrame,
     SessionTransitioningFrame,
@@ -145,7 +164,7 @@ from vs_api.catalog_upload_store import (
 )
 from vs_api.continuous_tracer import ContinuousTracer
 from vs_api.history_recorder import HistoryRecorder, HistoryUnavailableError
-from vs_api.introspect import VTYSH_COMMANDS, IntrospectRequest, IntrospectResult, run_vtysh
+from vs_api.introspect import VTYSH_COMMANDS, run_vtysh
 from vs_api.ops_log import (
     OPS_LOG_TOKEN,
     is_operator_visible_ops_event,
@@ -166,21 +185,14 @@ from vs_api.terminal import TerminalManager
 from vs_api.transition_operations import (
     FilesystemTransitionOperationStore,
     TransitionConstellationSpecObservation,
-    TransitionOperation,
     TransitionOperationConflictError,
-    TransitionOperationFacts,
-    TransitionOperationFailure,
     TransitionOperationNotFoundError,
     TransitionOperationProvenance,
     TransitionOperationProvenancePatch,
     TransitionOperationReservation,
-    TransitionOperationSource,
-    TransitionOperationSourceKind,
-    TransitionOperationState,
     TransitionOperationStore,
     TransitionReconciliationDisposition,
     TransitionRuntimePlan,
-    TransitionRuntimeResult,
     TransitionRuntimeStatusProof,
     reconcile_transition_operation,
     transition_failure_from_exception,
@@ -1738,6 +1750,19 @@ _REFUSAL_RESPONSES = {
         },
     },
 }
+
+
+def _with_legacy_refusals(*statuses: int) -> dict[int | str, dict[str, Any]]:
+    """The refusal entries for a route that still refuses some requests with
+    ``{"error": ...}``: at those statuses it answers either body."""
+    responses = dict(_REFUSAL_RESPONSES)
+    for status in statuses:
+        responses[status] = {
+            "model": ApiRefusal | LegacyRefusal if status in _REFUSAL_RESPONSES else LegacyRefusal
+        }
+    return responses
+
+
 app.mount(
     "/docs/ops",
     StaticFiles(directory=Path(__file__).resolve().parents[2] / "docs" / "ops"),
@@ -1880,37 +1905,47 @@ app.add_middleware(BodySizeLimitMiddleware)
 app.add_middleware(AuditLogMiddleware)
 
 
-@app.get("/api/v1/health")
-def health_check() -> dict:
+@app.get("/api/v1/health", response_model=HealthStatus)
+def health_check() -> HealthStatus:
     """Unauthenticated health check for load balancers and integration tests."""
-    return {
-        "status": "ok",
-        "session_status": _session_manager.status if _session_manager else "idle",
-    }
+    return HealthStatus(
+        status="ok",
+        session_status=_session_manager.status if _session_manager else "idle",
+    )
 
 
-@app.get("/api/v1/about")
-def about() -> dict:
+@app.get("/api/v1/about", response_model=ProjectAbout)
+def about() -> ProjectAbout:
     """Unauthenticated project attribution and provenance metadata."""
-    return project_attribution()
+    return ProjectAbout(**project_attribution())
 
 
-@app.get("/api/v1/auth/token")
-def get_auth_token() -> dict:
+@app.get("/api/v1/auth/token", response_model=AuthToken)
+def get_auth_token() -> AuthToken:
     """Return the current API key. Unauthenticated — dev-mode only."""
-    return {"token": _API_KEY}
+    return AuthToken(token=_API_KEY)
 
 
-@app.get("/api/v1/ops/health", dependencies=[Depends(_require_api_key)])
-def get_ops_health() -> dict:
+@app.get(
+    "/api/v1/ops/health",
+    response_model=ActuationHealth,
+    responses=_REFUSAL_RESPONSES,
+    dependencies=[Depends(_require_api_key)],
+)
+def get_ops_health() -> ActuationHealth:
     """Return latest Scheduler actuation health derived from typed OpsEvents."""
     ctx = _require_active_context()
     with ctx.state_lock:
-        return ctx.build_actuation_health()
+        return ActuationHealth.model_validate(ctx.build_actuation_health())
 
 
-@app.post("/api/v1/ops/repair", dependencies=[Depends(_require_api_key)])
-async def request_operator_repair(body: dict) -> dict:
+@app.post(
+    "/api/v1/ops/repair",
+    response_model=OperatorRepairResponse,
+    responses=_with_legacy_refusals(400, 409, 500, 503, 504),
+    dependencies=[Depends(_require_api_key)],
+)
+async def request_operator_repair(body: dict) -> Any:
     """Explicit operator-triggered GS repair routed to the reporting Scheduler."""
     ctx = _require_active_context()
     nc = _nats_connection
@@ -1951,7 +1986,7 @@ async def request_operator_repair(body: dict) -> dict:
             cmd.model_dump_json().encode(),
             timeout=10,
         )
-        return json.loads(resp.data)
+        return OperatorRepairResponse.model_validate_json(resp.data)
     except TimeoutError:
         return JSONResponse(
             status_code=504, content={"error": "Scheduler repair request timed out"}
@@ -2253,6 +2288,8 @@ async def ws_terminal(websocket: WebSocket, node_id: str) -> None:
 
 @app.get(
     "/api/v1/nodes/{node_id}/config",
+    response_class=PlainTextResponse,
+    responses=_with_legacy_refusals(404, 409, 500, 503),
     dependencies=[Depends(_require_api_key)],
 )
 async def get_node_config(node_id: str) -> Response:
@@ -2366,6 +2403,7 @@ def get_historical_state(sim_time: datetime) -> Any:
 
 @app.get(
     "/api/v1/links",
+    response_model=LinkHistoryPage,
     responses=_REFUSAL_RESPONSES,
     dependencies=[Depends(_require_api_key)],
 )
@@ -2442,13 +2480,14 @@ def _decode_link_history_cursor(cursor: str) -> tuple[str, int] | None:
 
 @app.get(
     "/api/v1/link-decision-traces",
+    response_model=list[LinkDecisionTrace] | LinkDecisionTrace,
+    responses=_with_legacy_refusals(400, 404),
     dependencies=[Depends(_require_api_key)],
-    response_model=None,
 )
 def get_link_decision_traces(
     node_a: str = Query(None),
     node_b: str = Query(None),
-) -> list[dict] | dict | JSONResponse:
+) -> Any:
     """Return active-link decision traces retained by the current session."""
     ctx = _require_active_context()
     if (node_a is None) != (node_b is None):
@@ -2462,20 +2501,19 @@ def get_link_decision_traces(
             trace = ctx.link_decision_traces.get(key)
             if trace is None:
                 return JSONResponse(status_code=404, content={"error": "Link trace not found"})
-            return json.loads(trace.model_dump_json())
-        traces = [json.loads(t.model_dump_json()) for t in ctx.link_decision_traces.values()]
-    traces.sort(key=lambda item: (item["node_a"], item["node_b"]))
+            return trace
+        traces = list(ctx.link_decision_traces.values())
+    traces.sort(key=lambda item: (item.node_a, item.node_b))
     return traces
 
 
 @app.get(
     "/api/v1/decision-explanation",
+    response_model=DecisionExplanationFacts,
+    responses=_with_legacy_refusals(404),
     dependencies=[Depends(_require_api_key)],
-    response_model=None,
 )
-def get_decision_explanation(
-    gs: str = Query(...), sat: str | None = Query(None)
-) -> dict | JSONResponse:
+def get_decision_explanation(gs: str = Query(...), sat: str | None = Query(None)) -> Any:
     """Composed decision-explanation FACTS for one ground station, or one pair.
 
     VS-API composes the funnel ladder, effective envelope, best-candidate,
@@ -2530,17 +2568,18 @@ def get_decision_explanation(
             status_code=404,
             content={"error": f"No ground decision covers {gs} in the latest snapshot"},
         )
-    return json.loads(facts.model_dump_json())
+    return facts
 
 
 @app.get(
     "/api/v1/decision-explanation/timeline",
+    response_model=GsDecisionTimelineFacts,
+    responses=_with_legacy_refusals(404),
     dependencies=[Depends(_require_api_key)],
-    response_model=None,
 )
 def get_decision_explanation_timeline(
     gs: str = Query(...), limit: int = Query(120, ge=1, le=720)
-) -> dict | JSONResponse:
+) -> Any:
     """Bounded observed decision window for one ground station.
 
     This is not historical playback. VS-API samples the committed OME ground
@@ -2555,26 +2594,20 @@ def get_decision_explanation_timeline(
             status_code=404,
             content={"error": f"No decision timeline samples for {gs}"},
         )
-    return json.loads(timeline.model_dump_json())
+    return timeline
 
 
 @app.get(
     "/api/v1/ground-link-decisions",
+    response_model=GroundLinkDecisionSnapshot,
+    responses=_with_legacy_refusals(404),
     dependencies=[Depends(_require_api_key)],
-    response_model=None,
 )
-def get_ground_link_decisions(
-    node_a: str = Query(None),
-    node_b: str = Query(None),
-    node: str = Query(None),
-) -> dict | JSONResponse:
+def get_ground_link_decisions(node: str = Query(None)) -> Any:
     """Return the latest OME GroundLinkDecisionSnapshot.
 
     GROUND-SCOPED. The OME only publishes ground (GS↔satellite) link
-    decisions today; ISL pair decisions are not yet snapshotted and a
-    separate endpoint will be added when they are. Querying an
-    ISL-only pair (sat-sat) returns 404 — not because the OME has no
-    opinion, but because the ISL decision surface does not exist yet.
+    decisions today; ISL pair decisions are not yet snapshotted.
 
     Operator-facing surface for "why isn't this ground pair up?" Every
     ground pair the OME considered carries
@@ -2582,35 +2615,16 @@ def get_ground_link_decisions(
     additionally carry ``unscheduled_reason`` plus the incumbent or
     capacity constraint the allocator chose them over.
 
-    Three modes, mutually exclusive:
-
-    - No query: the full snapshot (``sim_time``, ``snapshot_seq``,
-      ``epoch_id``, all ground decisions, all unscheduled ground pairs).
+    - No query: the full snapshot.
     - ``node`` (a single GS or satellite id): the snapshot SLICED to the
       decisions and unscheduled pairs that node participates in — the
       candidate-list surface for the selected node, so a node card does not
-      poll and discard the whole GS×satellite cross-product (wrong primitive
-      at thousand-satellite scale). Same shape as the full snapshot, fewer
-      rows; ``200`` with empty ``decisions``/``unscheduled_pairs`` when the
-      node has no candidates this tick (honest — the snapshot exists, the node
-      simply has none), distinct from the no-snapshot ``404``.
-    - ``node_a`` + ``node_b`` (both): just that ground pair's decision and
-      matching unscheduled-pair record (if any).
-
-    ``404`` if no snapshot has been received yet; ``404`` for a
-    specific pair the OME's ground decision set does not cover.
+      poll and discard the whole GS×satellite cross-product. Same shape as
+      the full snapshot, fewer rows; empty ``decisions``/``unscheduled_pairs``
+      when the node has no candidates this tick, distinct from the
+      no-snapshot ``404``.
     """
     ctx = _require_active_context()
-    if (node_a is None) != (node_b is None):
-        return JSONResponse(
-            status_code=400,
-            content={"error": "node_a and node_b must be provided together"},
-        )
-    if node is not None and (node_a is not None or node_b is not None):
-        return JSONResponse(
-            status_code=400,
-            content={"error": "node is mutually exclusive with node_a/node_b"},
-        )
     with ctx.state_lock:
         snapshot = ctx.latest_ground_link_decision_snapshot
     if snapshot is None:
@@ -2618,49 +2632,20 @@ def get_ground_link_decisions(
             status_code=404,
             content={"error": "No GroundLinkDecisionSnapshot received yet"},
         )
-    if node is not None:
-        return {
-            "sim_time": snapshot.sim_time.isoformat(),
-            "snapshot_seq": snapshot.snapshot_seq,
-            "epoch_id": snapshot.epoch_id,
-            "decisions": [
-                json.loads(d.model_dump_json()) for d in snapshot.decisions if node in d.pair
-            ],
-            "unscheduled_pairs": [
-                json.loads(u.model_dump_json())
-                for u in snapshot.unscheduled_pairs
-                if node in u.pair
-            ],
+    if node is None:
+        return snapshot
+    return snapshot.model_copy(
+        update={
+            "decisions": tuple(d for d in snapshot.decisions if node in d.pair),
+            "unscheduled_pairs": tuple(u for u in snapshot.unscheduled_pairs if node in u.pair),
         }
-    if node_a and node_b:
-        target = tuple(sorted((node_a, node_b)))
-        decision = next((d for d in snapshot.decisions if d.pair == target), None)
-        if decision is None:
-            return JSONResponse(
-                status_code=404,
-                content={
-                    "error": (
-                        f"OME ground-decision snapshot does not cover pair "
-                        f"{node_a}<->{node_b}. Note: ISL pair decisions are "
-                        "not exposed on this endpoint."
-                    )
-                },
-            )
-        unscheduled = next((u for u in snapshot.unscheduled_pairs if u.pair == target), None)
-        return {
-            "sim_time": snapshot.sim_time.isoformat(),
-            "snapshot_seq": snapshot.snapshot_seq,
-            "epoch_id": snapshot.epoch_id,
-            "decision": json.loads(decision.model_dump_json()),
-            "unscheduled": (
-                json.loads(unscheduled.model_dump_json()) if unscheduled is not None else None
-            ),
-        }
-    return json.loads(snapshot.model_dump_json())
+    )
 
 
 @app.get(
     "/api/v1/metrics/convergence",
+    status_code=501,
+    response_model=ApiRefusal,
     responses=_REFUSAL_RESPONSES,
     dependencies=[Depends(_require_api_key)],
 )
@@ -2673,6 +2658,8 @@ def get_convergence_events() -> JSONResponse:
 
 @app.get(
     "/api/v1/metrics/flows/{flow_id}",
+    status_code=501,
+    response_model=ApiRefusal,
     responses=_REFUSAL_RESPONSES,
     dependencies=[Depends(_require_api_key)],
 )
@@ -2704,7 +2691,12 @@ def _trace_request_endpoints(ctx: SessionContext, body: dict) -> tuple[str, str]
     return src, dst
 
 
-@app.post("/api/v1/trace", responses=_REFUSAL_RESPONSES, dependencies=[Depends(_require_api_key)])
+@app.post(
+    "/api/v1/trace",
+    response_model=TracedPath,
+    responses=_REFUSAL_RESPONSES,
+    dependencies=[Depends(_require_api_key)],
+)
 async def trace_between(body: dict) -> Any:
     """Trace the path between two nodes once, in both directions.
 
@@ -2725,11 +2717,14 @@ async def trace_between(body: dict) -> Any:
         result = await asyncio.to_thread(
             _create_path_tracer(ctx).trace_between, src, dst, continuous_trace=False
         )
-    return result.model_dump(mode="json")
+    return result
 
 
 @app.post(
-    "/api/v1/trace/start", responses=_REFUSAL_RESPONSES, dependencies=[Depends(_require_api_key)]
+    "/api/v1/trace/start",
+    response_model=ContinuousTraceStarted,
+    responses=_REFUSAL_RESPONSES,
+    dependencies=[Depends(_require_api_key)],
 )
 async def start_continuous_trace(body: dict) -> Any:
     """Start continuous path tracing between two nodes, replacing a running trace.
@@ -2751,37 +2746,39 @@ async def start_continuous_trace(body: dict) -> Any:
         tracer = _create_continuous_tracer(ctx)
         await tracer.start(src, dst)
         ctx.continuous_tracer = tracer
-    return {"ok": True, "src": src, "dst": dst}
+    return ContinuousTraceStarted(ok=True, src=src, dst=dst)
 
 
 @app.post(
-    "/api/v1/trace/stop", responses=_REFUSAL_RESPONSES, dependencies=[Depends(_require_api_key)]
+    "/api/v1/trace/stop",
+    response_model=ContinuousTraceStopped,
+    responses=_REFUSAL_RESPONSES,
+    dependencies=[Depends(_require_api_key)],
 )
-async def stop_continuous_trace() -> dict:
+async def stop_continuous_trace() -> ContinuousTraceStopped:
     """Stop continuous path tracing and forget its result."""
     ctx = _require_active_context()
     async with ctx.trace_lock:
         if ctx.continuous_tracer is not None:
             await ctx.continuous_tracer.stop()
             ctx.continuous_tracer = None
-    return {"ok": True}
+    return ContinuousTraceStopped(ok=True)
 
 
 @app.get(
-    "/api/v1/trace/status", responses=_REFUSAL_RESPONSES, dependencies=[Depends(_require_api_key)]
+    "/api/v1/trace/status",
+    response_model=ContinuousTraceStatus,
+    responses=_REFUSAL_RESPONSES,
+    dependencies=[Depends(_require_api_key)],
 )
-def get_trace_status() -> dict:
+def get_trace_status() -> ContinuousTraceStatus:
     """The running trace's endpoints and latest result, or that none runs."""
     tracer = _require_active_context().continuous_tracer
     if tracer is None:
-        return {"active": False, "src": None, "dst": None, "result": None}
-    result = tracer.traced_path
-    return {
-        "active": tracer.active,
-        "src": tracer.src,
-        "dst": tracer.dst,
-        "result": result.model_dump(mode="json") if result is not None else None,
-    }
+        return ContinuousTraceStatus(active=False, src=None, dst=None, result=None)
+    return ContinuousTraceStatus(
+        active=tracer.active, src=tracer.src, dst=tracer.dst, result=tracer.traced_path
+    )
 
 
 def _create_path_tracer(ctx: SessionContext) -> PathTracer:
@@ -3384,6 +3381,7 @@ async def deploy_from_yaml(
 
 @app.get(
     "/api/v1/introspect/commands",
+    response_model=list[str],
     dependencies=[Depends(_require_api_key), Depends(_rate_limit_introspect)],
 )
 def introspect_commands() -> list[str]:

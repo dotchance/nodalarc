@@ -460,6 +460,89 @@ StateFeedFrame = Annotated[
 ]
 
 
+class HealthStatus(BaseModel):
+    """VS-API is serving, and where its session manager stands."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    status: Literal["ok"]
+    session_status: SessionStatus
+
+
+class ProjectAbout(BaseModel):
+    """The project's attribution and the build serving this API."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    name: str
+    version: str
+    revision: str
+    build_date: str
+    author: str
+    copyright: str
+    source: str
+    url: str
+    license: str
+    notice: str
+
+
+class AuthToken(BaseModel):
+    """The API key a client sends as its bearer token."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    token: str
+
+
+class ContinuousTraceStarted(BaseModel):
+    """The continuous trace now runs between these two nodes."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    ok: Literal[True]
+    src: str
+    dst: str
+
+
+class ContinuousTraceStopped(BaseModel):
+    """No continuous trace runs."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    ok: Literal[True]
+
+
+class ContinuousTraceStatus(BaseModel):
+    """The continuous trace's endpoints and latest result; all empty when none runs."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    active: bool
+    src: str | None
+    dst: str | None
+    result: TracedPath | None
+
+
+class IntrospectRequest(BaseModel):
+    """One whitelisted vtysh command addressed to one runtime node."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid", strict=True)
+
+    node_id: str = Field(min_length=1)
+    command: str = Field(min_length=1)
+
+
+class IntrospectResult(BaseModel):
+    """The exact output of one executed vtysh command."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid", strict=True)
+
+    node_id: str
+    command: str
+    output: str
+    exit_code: int
+
+
 class LinkHistoryEvent(BaseModel):
     """One recorded link event: a transition, a latency change, or a link
     active when the recording started (``LinkActive``, reason

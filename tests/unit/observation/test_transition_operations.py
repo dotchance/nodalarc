@@ -6,6 +6,14 @@ from pathlib import Path
 import pytest
 from nodalarc.catalog_upload import CatalogUploadSelection
 from nodalarc.content_identity import sha256_digest
+from nodalarc.models.session_sources import (
+    TransitionOperationFacts,
+    TransitionOperationFailure,
+    TransitionOperationSource,
+    TransitionOperationSourceKind,
+    TransitionOperationState,
+    TransitionRuntimeResult,
+)
 from vs_api.catalog_upload_store import (
     CatalogUploadStoreError,
     CatalogUploadStoreErrorCode,
@@ -20,18 +28,12 @@ from vs_api.transition_operations import (
     FilesystemTransitionOperationStore,
     TransitionConstellationSpecObservation,
     TransitionOperationConflictError,
-    TransitionOperationFacts,
-    TransitionOperationFailure,
     TransitionOperationProvenance,
     TransitionOperationProvenancePatch,
     TransitionOperationReservation,
-    TransitionOperationSource,
-    TransitionOperationSourceKind,
-    TransitionOperationState,
     TransitionOperationStateError,
     TransitionReconciliationDisposition,
     TransitionRuntimePlan,
-    TransitionRuntimeResult,
     TransitionRuntimeStatusProof,
     reconcile_transition_operation,
     transition_failure_from_exception,

@@ -22,6 +22,14 @@ import pytest
 from pydantic import BaseModel
 
 TYPES_TS = Path(__file__).resolve().parents[3] / "frontend" / "src" / "types.ts"
+GENERATED_TS = (
+    Path(__file__).resolve().parents[3]
+    / "frontend"
+    / "src"
+    / "builder"
+    / "generated"
+    / "builderApi.ts"
+)
 VS_API_MODULE = "nodalarc.models.vs_api"
 
 
@@ -113,8 +121,9 @@ _FRONTEND_ONLY_INTERFACES = {
 
 def test_no_backend_models_missing_from_frontend(ts_interfaces, py_models):
     """Every Pydantic model in vs_api.py must have a matching TypeScript
-    interface in types.ts."""
-    backend_only = set(py_models.keys()) - set(ts_interfaces.keys())
+    interface in types.ts, or reach the page as a generated type."""
+    generated = set(re.findall(r"^export (?:interface|type) (\w+)", GENERATED_TS.read_text(), re.M))
+    backend_only = set(py_models.keys()) - set(ts_interfaces.keys()) - generated
     assert not backend_only, (
         f"Backend models with no frontend interface: {sorted(backend_only)}. "
         f"Add matching interfaces to frontend/src/types.ts."

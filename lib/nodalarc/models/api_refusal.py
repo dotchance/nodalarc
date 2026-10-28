@@ -20,3 +20,11 @@ class ApiRefusal(BaseModel):
     code: str = Field(min_length=1)
     message: str = Field(min_length=1)
     cause_type: str | None = Field(default=None, min_length=1)
+
+
+class LegacyRefusal(BaseModel):
+    """The ``{"error": ...}`` body some older routes still refuse with."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid", strict=True)
+
+    error: str

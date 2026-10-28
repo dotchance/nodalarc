@@ -12,12 +12,12 @@ import logging
 
 import kubernetes.client
 import kubernetes.stream
+from nodalarc.models.vs_api import IntrospectResult
 from nodalarc.platform_config import get_platform_config
 from nodalarc.workload_target import (
     read_workload_target,
     validate_node_id,
 )
-from pydantic import BaseModel, ConfigDict, Field
 
 from vs_api import k8s
 
@@ -37,26 +37,6 @@ VTYSH_COMMANDS = {
     "show isis summary",
     "show bgp summary",
 }
-
-
-class IntrospectRequest(BaseModel):
-    """One whitelisted vtysh command addressed to one runtime node."""
-
-    model_config = ConfigDict(frozen=True, extra="forbid", strict=True)
-
-    node_id: str = Field(min_length=1)
-    command: str = Field(min_length=1)
-
-
-class IntrospectResult(BaseModel):
-    """The exact output of one executed vtysh command."""
-
-    model_config = ConfigDict(frozen=True, extra="forbid", strict=True)
-
-    node_id: str
-    command: str
-    output: str
-    exit_code: int
 
 
 class IntrospectExecError(Exception):

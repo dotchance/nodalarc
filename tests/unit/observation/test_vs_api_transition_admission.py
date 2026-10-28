@@ -16,6 +16,12 @@ from nodalarc.kubernetes_runtime_config import (
     encode_catalog_upload_config_map,
     read_catalog_upload,
 )
+from nodalarc.models.session_sources import (
+    TransitionOperationFacts,
+    TransitionOperationSource,
+    TransitionOperationSourceKind,
+    TransitionOperationState,
+)
 from nodalarc.runtime_config import (
     RuntimeConfigError,
     RuntimeConfigErrorCode,
@@ -28,11 +34,7 @@ from vs_api.catalog_upload_store import (
 )
 from vs_api.transition_operations import (
     InMemoryTransitionOperationStore,
-    TransitionOperationFacts,
     TransitionOperationReservation,
-    TransitionOperationSource,
-    TransitionOperationSourceKind,
-    TransitionOperationState,
 )
 
 ROOT_YAML = "session:\n  name: transition-admission-test\n"

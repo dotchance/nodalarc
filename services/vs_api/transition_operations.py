@@ -19,7 +19,6 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Annotated, Any, Final, Literal
 
-from nodalarc.catalog_refs import SessionRef
 from nodalarc.content_identity import sha256_digest
 from nodalarc.cr_runtime_config import (
     CATALOG_GENERATION_ANNOTATION,
@@ -31,102 +30,35 @@ from nodalarc.cr_runtime_config import (
     ConstellationSpecSpec,
     ConstellationSpecStatus,
 )
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from nodalarc.models.builder_api import Sha256Digest
+from nodalarc.models.session_sources import (
+    OPERATION_ID_PATTERN,
+    TransitionOperation,
+    TransitionOperationEvent,
+    TransitionOperationFacts,
+    TransitionOperationFailure,
+    TransitionOperationSource,
+    TransitionOperationState,
+    TransitionRecordModel,
+    TransitionRuntimeResult,
+)
+from pydantic import Field, model_validator
 
-_OPERATION_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{15,127}$")
-_SHA256_PATTERN = r"^sha256:[0-9a-f]{64}$"
 _KUBERNETES_NAME_PATTERN = r"^[a-z0-9](?:[-a-z0-9.]*[a-z0-9])?$"
 _TYPED_FAILURE_CODE_PATTERN = re.compile(r"^[a-z][a-z0-9_.-]{0,127}$")
 TRANSITION_OPERATION_SCHEMA: Final[Literal["nodalarc.transition-operation.v2"]] = (
     "nodalarc.transition-operation.v2"
 )
 
-Sha256Digest = Annotated[str, Field(pattern=_SHA256_PATTERN)]
 
-
-class TransitionOperationState(StrEnum):
-    """Persisted lifecycle states for one admitted session transition."""
-
-    RESERVED = "reserved"
-    COLLECTING = "collecting"
-    UPLOADING = "uploading"
-    VERIFYING = "verifying"
-    SWITCHING = "switching"
-    SUCCEEDED = "succeeded"
-    FAILED = "failed"
-    CANCELLED = "cancelled"
-
-    @property
-    def terminal(self) -> bool:
-        return self in {
-            TransitionOperationState.SUCCEEDED,
-            TransitionOperationState.FAILED,
-            TransitionOperationState.CANCELLED,
-        }
-
-
-class TransitionOperationSourceKind(StrEnum):
-    """Path-free source classes admitted by VS-API."""
-
-    CATALOG_SESSION = "catalog_session"
-
-
-class _OperationModel(BaseModel):
-    model_config = ConfigDict(frozen=True, extra="forbid", strict=True, allow_inf_nan=False)
-
-
-class TransitionOperationSource(_OperationModel):
-    kind: TransitionOperationSourceKind
-    logical_id: str = Field(min_length=1, max_length=512)
-
-    @model_validator(mode="after")
-    def _source_identity_matches_kind(self) -> TransitionOperationSource:
-        try:
-            canonical = str(SessionRef(self.logical_id))
-        except (TypeError, ValueError) as exc:
-            raise ValueError("catalog transition identity must be a SessionRef") from exc
-        if canonical != self.logical_id:
-            raise ValueError("catalog transition identity must be canonical")
-        return self
-
-
-class TransitionOperationFacts(_OperationModel):
-    """Reviewed, browser-safe facts bound to one operation."""
-
-    document_digest: Sha256Digest | None = None
-    closure_digest: Sha256Digest | None = None
-    resolved_semantic_digest: Sha256Digest | None = None
-    file_count: int | None = Field(default=None, ge=0)
-    total_bytes: int | None = Field(default=None, gt=0)
-    release: str = Field(min_length=1, max_length=128)
-    build: str = Field(min_length=1, max_length=128)
-
-
-class TransitionOperationEvent(_OperationModel):
-    state: TransitionOperationState
-    occurred_at: datetime
-    detail: str | None = Field(default=None, min_length=1, max_length=512)
-
-
-class TransitionOperationFailure(_OperationModel):
-    code: str = Field(min_length=1, max_length=128)
-    message: str = Field(min_length=1, max_length=512)
-    cause_type: str | None = Field(default=None, min_length=1, max_length=128)
-
-
-class TransitionRuntimeResult(_OperationModel):
-    session_id: str = Field(min_length=1, max_length=128)
-    generation: int = Field(gt=0)
-
-
-class TransitionRuntimePlan(_OperationModel):
+class TransitionRuntimePlan(TransitionRecordModel):
     """Server-selected runtime resource identity, never supplied by the browser."""
 
     namespace: str = Field(min_length=1, max_length=253, pattern=_KUBERNETES_NAME_PATTERN)
     name: str = Field(min_length=1, max_length=253, pattern=_KUBERNETES_NAME_PATTERN)
 
 
-class TransitionRuntimeStatusProof(_OperationModel):
+class TransitionRuntimeStatusProof(TransitionRecordModel):
     """Operator status proof observed on one selected ConstellationSpec."""
 
     observed_generation: int | None = Field(default=None, gt=0)
@@ -142,7 +74,7 @@ class TransitionRuntimeStatusProof(_OperationModel):
     build: str | None = Field(default=None, min_length=1, max_length=128)
 
 
-class TransitionConstellationSpecObservation(_OperationModel):
+class TransitionConstellationSpecObservation(TransitionRecordModel):
     """Exact selected CR identity and its latest durably observed status proof."""
 
     namespace: str = Field(min_length=1, max_length=253, pattern=_KUBERNETES_NAME_PATTERN)
@@ -151,40 +83,7 @@ class TransitionConstellationSpecObservation(_OperationModel):
     status: TransitionRuntimeStatusProof = TransitionRuntimeStatusProof()
 
 
-class TransitionOperation(_OperationModel):
-    """Public, path-free representation returned for an opaque operation ID."""
-
-    operation_id: str = Field(min_length=16, max_length=128)
-    state: TransitionOperationState
-    source: TransitionOperationSource
-    facts: TransitionOperationFacts
-    created_at: datetime
-    updated_at: datetime
-    events: tuple[TransitionOperationEvent, ...] = Field(min_length=1)
-    failure: TransitionOperationFailure | None = None
-    runtime: TransitionRuntimeResult | None = None
-
-    @model_validator(mode="after")
-    def _state_matches_evidence(self) -> TransitionOperation:
-        if not _OPERATION_ID_PATTERN.fullmatch(self.operation_id):
-            raise ValueError("operation_id contains unsupported characters")
-        if self.events[-1].state is not self.state:
-            raise ValueError("the final operation event must match the current state")
-        if (
-            self.state
-            in {
-                TransitionOperationState.FAILED,
-                TransitionOperationState.CANCELLED,
-            }
-            and self.failure is None
-        ):
-            raise ValueError("failed and cancelled transitions require failure evidence")
-        if not self.state.terminal and (self.failure is not None or self.runtime is not None):
-            raise ValueError("nonterminal transitions cannot carry terminal evidence")
-        return self
-
-
-class TransitionOperationProvenance(_OperationModel):
+class TransitionOperationProvenance(TransitionRecordModel):
     """Server-only values used to match a live ConstellationSpec after restart."""
 
     source_revision: Sha256Digest | None = None
@@ -214,7 +113,7 @@ class TransitionOperationProvenance(_OperationModel):
         return self
 
 
-class TransitionOperationProvenancePatch(_OperationModel):
+class TransitionOperationProvenancePatch(TransitionRecordModel):
     """One atomic internal evidence update for a nonterminal operation."""
 
     upload_resource_name: str | None = Field(
@@ -246,7 +145,7 @@ class StoredTransitionOperation(TransitionOperation):
         )
 
 
-class TransitionOperationReservation(_OperationModel):
+class TransitionOperationReservation(TransitionRecordModel):
     """Trusted server input used to create one reserved operation."""
 
     source: TransitionOperationSource
@@ -338,7 +237,7 @@ def _utc_now() -> datetime:
 
 
 def _validated_operation_id(operation_id: str) -> str:
-    if not isinstance(operation_id, str) or not _OPERATION_ID_PATTERN.fullmatch(operation_id):
+    if not isinstance(operation_id, str) or not OPERATION_ID_PATTERN.fullmatch(operation_id):
         raise ValueError("operation_id must be an opaque 16-128 character token")
     return operation_id
 
@@ -727,7 +626,7 @@ class TransitionReconciliationDisposition(StrEnum):
     STILL_SWITCHING = "still_switching"
 
 
-class TransitionReconciliation(_OperationModel):
+class TransitionReconciliation(TransitionRecordModel):
     disposition: TransitionReconciliationDisposition
     detail: str = Field(min_length=1, max_length=512)
     runtime: TransitionRuntimeResult | None = None

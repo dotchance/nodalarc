@@ -1,6 +1,6 @@
 // GENERATED FILE — DO NOT EDIT BY HAND.
 // Sources of truth: backend Pydantic application contracts in
-// lib/nodalarc/models and services/vs_api/transition_operations.py.
+// lib/nodalarc/models.
 // Regenerate: make generate-contracts
 //
 // These are non-grammar application contracts. Configuration fields remain
@@ -953,6 +953,73 @@ export interface IntrospectResult {
   readonly command: string;
   readonly output: string;
   readonly exit_code: number;
+}
+
+/** VS-API is serving, and where its session manager stands. */
+export interface HealthStatus {
+  readonly status: "ok";
+  readonly session_status: "idle" | "switching" | "wiring" | "ready" | "error";
+}
+
+/** The project's attribution and the build serving this API. */
+export interface ProjectAbout {
+  readonly name: string;
+  readonly version: string;
+  readonly revision: string;
+  readonly build_date: string;
+  readonly author: string;
+  readonly copyright: string;
+  readonly source: string;
+  readonly url: string;
+  readonly license: string;
+  readonly notice: string;
+}
+
+/** The API key a client sends as its bearer token. */
+export interface AuthToken {
+  readonly token: string;
+}
+
+/** The continuous trace now runs between these two nodes. */
+export interface ContinuousTraceStarted {
+  readonly ok: true;
+  readonly src: string;
+  readonly dst: string;
+}
+
+/** No continuous trace runs. */
+export interface ContinuousTraceStopped {
+  readonly ok: true;
+}
+
+/** The live measured path between two nodes: one traceroute per direction. Each direction lists what answered at every hop, in hop order, after the node the trace starts from: a node id when the resolver assigned the answering address to that node, the address itself when no node owns it, and ``*`` when nothing answered. ``state`` says how the trace ended. ``rtt_ms`` is the destination's round trip and exists only when the destination answered; ``error`` exists only when the trace could not run. ``asymmetry_detected`` exists only when both directions reached their destination and every hop between the ends answered from a node's address. ``tracing`` is false once the trace loop has stopped; the last result then stays until the trace is stopped or restarted. ``stop_reason`` says why a continuous trace stopped on its own; a one-shot trace and a running trace have none. */
+export interface TracedPath {
+  readonly continuous_trace: boolean;
+  readonly src_node: string;
+  readonly dst_node: string;
+  readonly hops: ReadonlyArray<string>;
+  readonly hop_rtts: ReadonlyArray<number | null>;
+  readonly state: "running" | "reached" | "not_reached" | "failed";
+  readonly rtt_ms: number | null;
+  readonly error: string | null;
+  readonly reverse_hops: ReadonlyArray<string>;
+  readonly reverse_hop_rtts: ReadonlyArray<number | null>;
+  readonly reverse_state: "running" | "reached" | "not_reached" | "failed";
+  readonly reverse_rtt_ms: number | null;
+  readonly reverse_error: string | null;
+  readonly asymmetry_detected: boolean | null;
+  readonly tracing: boolean;
+  readonly traced_at: string;
+  readonly sim_time: string;
+  readonly stop_reason?: "time_limit" | "internal_error" | null;
+}
+
+/** The continuous trace's endpoints and latest result; all empty when none runs. */
+export interface ContinuousTraceStatus {
+  readonly active: boolean;
+  readonly src: string | null;
+  readonly dst: string | null;
+  readonly result: TracedPath | null;
 }
 
 /**  */

@@ -23,6 +23,7 @@ from pathlib import Path
 from typing import Literal, Union, get_args, get_origin
 
 from nodalarc.models import (
+    api_refusal,
     decision_explanation,
     link_decisions,
     link_events,
@@ -31,18 +32,15 @@ from nodalarc.models import (
     vs_api,
 )
 from pydantic import BaseModel
-from vs_api import introspect, transition_operations
 
-# Two wire models still live in the service package; the page reads them all the same.
 SERVED_MODULES = (
     vs_api,
+    api_refusal,
     scheduler_ops,
     link_decisions,
     decision_explanation,
     link_events,
     session_sources,
-    introspect,
-    transition_operations,
 )
 ROOT = Path(__file__).resolve().parents[1]
 OUTPUT = ROOT / "frontend/src/generated/stateWireVocabularies.json"

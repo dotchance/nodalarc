@@ -144,7 +144,11 @@ def _ts_interface_field_literals(interface: str, field: str, *, path: Path) -> s
         re.MULTILINE,
     )
     assert field_match, f"field {interface}.{field} not found in {path}"
-    return set(re.findall(r'"([^"]+)"', field_match.group(1)))
+    field_type = field_match.group(1)
+    alias_match = re.search(rf"^export type {re.escape(field_type)} = (.+);$", text, re.MULTILINE)
+    if alias_match:
+        field_type = alias_match.group(1)
+    return set(re.findall(r'"([^"]+)"', field_type))
 
 
 def _link_event_codes_ts() -> set[str]:

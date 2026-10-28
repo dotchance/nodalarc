@@ -26,12 +26,26 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "lib"))
 
-from nodalarc.catalog_refs import CatalogFamily, CatalogRef, SessionRef  # noqa: E402
+from nodalarc import body_frames, model_validation  # noqa: E402
+from nodalarc.catalog_refs import (  # noqa: E402
+    CatalogFamily,
+    CatalogNamespace,
+    CatalogRef,
+    SessionRef,
+)
 from nodalarc.models import (  # noqa: E402
+    builder_world,
+    catalog,
     decision_explanation,
     events,
+    ground_policy,
     link_decisions,
+    link_rules,
+    link_state,
+    resolved_session,
     scheduler_ops,
+    segment_session,
+    terminal_physics,
     vs_api,
 )
 from nodalarc.models.api_refusal import ApiRefusal, LegacyRefusal  # noqa: E402
@@ -52,6 +66,7 @@ from nodalarc.models.builder_api import (  # noqa: E402
     BuilderSessionDeployRefusal,
     BuilderSessionDeployRequest,
     BuilderSessionSaveRefusal,
+    BuilderSessionSaveRefusalCode,
     BuilderSessionSaveRequest,
     BuilderSessionSaveResult,
     BuilderVerdict,
@@ -105,6 +120,7 @@ from nodalarc.models.builder_catalog_api import (  # noqa: E402
     BuilderVisualRoutingProtocolMetadata,
     BuilderVisualSchedulingPresetMetadata,
     BuilderVisualTopologyModeMetadata,
+    CatalogAuthoringRefusalCode,
     CatalogComponentDraftEnvelope,
     CatalogComponentDraftState,
     CatalogComponentFamily,
@@ -131,6 +147,8 @@ from nodalarc.models.builder_catalog_api import (  # noqa: E402
     CatalogDraftSaveResult,
     CatalogFamilyMetadata,
     CatalogGetRequest,
+    CatalogImportCollisionReason,
+    CatalogImportOutcome,
     CatalogListPage,
     CatalogListRequest,
     CatalogMutationResult,
@@ -147,7 +165,10 @@ from nodalarc.models.builder_catalog_api import (  # noqa: E402
 from nodalarc.models.builder_controls_api import (  # noqa: E402
     BuilderChoiceBranch,
     BuilderChoiceControl,
+    BuilderControlChoiceKind,
     BuilderControlMutationOperation,
+    BuilderControlNumberKind,
+    BuilderControlScalarKind,
     BuilderControlTree,
     BuilderInsertItemCommand,
     BuilderInsertMapEntryCommand,
@@ -571,8 +592,61 @@ LITERAL_ALIASES: tuple[tuple[str, tuple[Any, ...]], ...] = (
     ("BuilderVisualDraftAffectedKind", _alias_args(BuilderVisualDraftAffectedKind)),
     ("CatalogComponentFamily", _alias_args(CatalogComponentFamily)),
     ("CatalogDraftIssueStage", _alias_args(CatalogDraftIssueStage)),
+    ("BuilderSessionSaveRefusalCode", _alias_args(BuilderSessionSaveRefusalCode)),
+    ("CatalogAuthoringRefusalCode", _alias_args(CatalogAuthoringRefusalCode)),
+    ("CatalogImportOutcome", _alias_args(CatalogImportOutcome)),
+    ("CatalogImportCollisionReason", _alias_args(CatalogImportCollisionReason)),
+    ("CatalogNamespace", _alias_args(CatalogNamespace)),
+    ("BuilderControlScalarKind", _alias_args(BuilderControlScalarKind)),
+    ("BuilderControlNumberKind", _alias_args(BuilderControlNumberKind)),
+    ("BuilderControlChoiceKind", _alias_args(BuilderControlChoiceKind)),
+    ("PreviewScope", _alias_args(builder_world.PreviewScope)),
+    ("BuilderPreviewRejectReason", _alias_args(builder_world.BuilderPreviewRejectReason)),
+    ("SupportedSurfaceBody", _alias_args(body_frames.SupportedSurfaceBody)),
+    ("AddressFamily", _alias_args(model_validation.AddressFamily)),
+    ("TerminalMedium", _alias_args(model_validation.TerminalMedium)),
+    ("ForwardingClass", _alias_args(catalog.ForwardingClass)),
+    ("RoutingProtocol", _alias_args(segment_session.RoutingProtocol)),
+    ("RoutingBoundaryAdapter", _alias_args(segment_session.RoutingBoundaryAdapter)),
+    ("NodeKind", _alias_args(resolved_session.NodeKind)),
+    ("NodeRole", _alias_args(resolved_session.NodeRole)),
+    ("LinkLabel", _alias_args(link_rules.LinkLabel)),
+    ("TopologyMode", _alias_args(link_rules.TopologyMode)),
+    ("SchedulingState", _alias_args(link_state.SchedulingState)),
+    ("GroundBoresightMode", _alias_args(terminal_physics.GroundBoresightMode)),
+    ("SelectionPolicyName", _alias_args(ground_policy.SelectionPolicyName)),
+    ("HandoverPolicyName", _alias_args(ground_policy.HandoverPolicyName)),
+    ("SuccessorAbortPolicy", _alias_args(ground_policy.SuccessorAbortPolicy)),
+    ("SessionStatus", _alias_args(vs_api.SessionStatus)),
+    ("PublicLinkType", _alias_args(vs_api.PublicLinkType)),
+    ("TraceState", _alias_args(vs_api.TraceState)),
+    ("TraceStopReason", _alias_args(vs_api.TraceStopReason)),
+    ("ServiceSource", _alias_args(events.ServiceSource)),
+    ("OpsLevel", _alias_args(events.OpsLevel)),
+    ("DebugControlAction", _alias_args(events.DebugControlAction)),
+    ("FunnelGate", _alias_args(decision_explanation.FunnelGate)),
+    ("GateState", _alias_args(decision_explanation.GateState)),
+    ("EnvelopeBindingSource", _alias_args(decision_explanation.EnvelopeBindingSource)),
+    ("ExplanationProducer", _alias_args(decision_explanation.ExplanationProducer)),
+    ("NodeFocus", _alias_args(decision_explanation.NodeFocus)),
+    ("DecisionSampleState", _alias_args(decision_explanation.DecisionSampleState)),
+    ("FailingActuationState", _alias_args(scheduler_ops.FailingActuationState)),
+    ("GroundVisibilityRejectReason", _alias_args(link_decisions.GroundVisibilityRejectReason)),
+    (
+        "GroundVisibilityRejectingEndpoint",
+        _alias_args(link_decisions.GroundVisibilityRejectingEndpoint),
+    ),
+    ("GroundUnscheduledReason", _alias_args(link_decisions.GroundUnscheduledReason)),
+    (
+        "GroundAllocationEventCategory",
+        _alias_args(link_decisions.GroundAllocationEventCategory),
+    ),
+    ("GroundAllocationPolicyKind", _alias_args(link_decisions.GroundAllocationPolicyKind)),
+    ("GroundHandoverModeName", _alias_args(link_decisions.GroundHandoverModeName)),
 )
 _LITERAL_ALIAS_BY_VALUES = {values: name for name, values in LITERAL_ALIASES}
+if len(_LITERAL_ALIAS_BY_VALUES) != len(LITERAL_ALIASES):
+    raise ValueError("two literal aliases name the same value set")
 _SHA256_PATTERN = TypeAdapter(Sha256Digest).json_schema()["pattern"]
 _REFERENCE_ALIAS_BY_PATTERN = {
     TypeAdapter(CatalogRef).json_schema()["pattern"]: "CatalogRef",
@@ -795,10 +869,8 @@ def render() -> dict[Path, str]:
         "export type SessionSourceId = CatalogSessionSourceId;",
         "",
     ]
-    for name, values in LITERAL_ALIASES:
-        builder.append(f"export type {name} = {_literal_union(values)};")
-    builder.append("")
-    builder.extend(definitions_of(in_builder))
+    builder_definitions = definitions_of(in_builder)
+    used_by_builder = set(_used_names)
 
     _used_names.clear()
     runtime_body: list[str] = []
@@ -807,10 +879,26 @@ def render() -> dict[Path, str]:
             runtime_body.append(f"export type {name} = {_render_type(schemas[name])};")
             runtime_body.append("")
     runtime_body.extend(definitions_of(in_runtime))
+
+    # A named value set only the runtime contracts use is declared with them;
+    # every other one is declared in the Builder module.
+    runtime_aliases = {
+        name for name in alias_names if name in _used_names and name not in used_by_builder
+    }
+    builder.extend(
+        f"export type {name} = {_literal_union(values)};"
+        for name, values in LITERAL_ALIASES
+        if name not in runtime_aliases
+    )
+    builder.append("")
+    builder.extend(builder_definitions)
+
     from_builder = sorted(
         name
         for name in _used_names
-        if name in in_builder or name in alias_names or name in _BUILDER_PRELUDE_NAMES
+        if name in in_builder
+        or (name in alias_names and name not in runtime_aliases)
+        or name in _BUILDER_PRELUDE_NAMES
     )
     runtime = [*_HEADER, "// The runtime contracts VS-API serves and the clients it accepts.", ""]
     if from_builder:
@@ -818,6 +906,12 @@ def render() -> dict[Path, str]:
         runtime.extend(f"  {name}," for name in from_builder)
         runtime.append('} from "../builder/generated/builderApi";')
         runtime.append("")
+    runtime.extend(
+        f"export type {name} = {_literal_union(values)};"
+        for name, values in LITERAL_ALIASES
+        if name in runtime_aliases
+    )
+    runtime.append("")
     runtime.extend(runtime_body)
     return {
         BUILDER_OUT: "\n".join(builder).rstrip() + "\n",

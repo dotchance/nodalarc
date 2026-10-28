@@ -88,7 +88,7 @@ class RefusalOutcome:
     def response(self) -> JSONResponse:
         return JSONResponse(
             status_code=self.status_code,
-            content=self.refusal.model_dump(mode="json", exclude_none=True),
+            content=self.refusal.model_dump(mode="json"),
         )
 
 
@@ -251,7 +251,7 @@ class UnhandledFailureMiddleware:
             )
             response = JSONResponse(
                 status_code=500,
-                content=internal_error_refusal().model_dump(mode="json", exclude_none=True),
+                content=internal_error_refusal().model_dump(mode="json"),
             )
             await response(scope, receive, send)
 

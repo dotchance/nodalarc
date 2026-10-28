@@ -401,6 +401,10 @@ def test_compile_maps_catalog_snapshot_outage_to_typed_503(
     assert response.json() == {
         "code": "catalog_authoring.persistence_failed",
         "message": "Catalog storage is unavailable",
+        "ref": None,
+        "expected_revision": None,
+        "current_revision": None,
+        "impact": None,
         "collisions": [],
         "cause_type": "OSError",
     }

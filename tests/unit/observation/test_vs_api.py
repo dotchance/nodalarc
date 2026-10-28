@@ -648,6 +648,7 @@ class TestPlaybackRoute:
         assert response.json() == {
             "code": "playback.seeking",
             "message": "Cannot pause during the seek",
+            "cause_type": None,
         }
         assert ctx.playback_paused is False
 
@@ -686,6 +687,7 @@ class TestStateSnapshot:
         assert response.json() == {
             "code": "session.inactive",
             "message": "No active session: Session switch in progress",
+            "cause_type": None,
         }
         assert "abc123" not in response.text
         assert "/var/run/secrets" not in response.text
@@ -1588,7 +1590,11 @@ class TestLinkDecisionsEndpoint:
         monkeypatch.setattr(m, "_active_context", None)
         r = TestClient(m.app).get("/api/v1/ground-link-decisions")
         assert r.status_code == 503
-        assert r.json() == {"code": "session.inactive", "message": "No active session"}
+        assert r.json() == {
+            "code": "session.inactive",
+            "message": "No active session",
+            "cause_type": None,
+        }
 
     def test_returns_404_when_no_snapshot_received(self, monkeypatch):
         import vs_api.main as m
@@ -2237,7 +2243,11 @@ def test_every_session_route_refuses_the_same_way_without_a_session(
     response = TestClient(m.app).request(method, path, json=body)
 
     assert response.status_code == 503
-    assert response.json() == {"code": "session.inactive", "message": "No active session"}
+    assert response.json() == {
+        "code": "session.inactive",
+        "message": "No active session",
+        "cause_type": None,
+    }
 
 
 class TestContinuousTraceSession:
@@ -2288,6 +2298,7 @@ class TestContinuousTraceSession:
         assert response.json() == {
             "code": "trace.untraceable_node",
             "message": "site-host has no loopback address to trace",
+            "cause_type": None,
         }
         assert ctx.continuous_tracer is None
 
@@ -2298,7 +2309,11 @@ class TestContinuousTraceSession:
         response = TestClient(m.app).post(path, json={"src_node": "site-host", "dst_node": "ghost"})
 
         assert response.status_code == 404
-        assert response.json() == {"code": "trace.unknown_node", "message": "Unknown node: ghost"}
+        assert response.json() == {
+            "code": "trace.unknown_node",
+            "message": "Unknown node: ghost",
+            "cause_type": None,
+        }
 
     @pytest.mark.parametrize("path", ["/api/v1/trace/start", "/api/v1/trace"])
     def test_both_trace_routes_refuse_a_request_without_both_nodes(self, monkeypatch, path):
@@ -2320,6 +2335,7 @@ class TestContinuousTraceSession:
         assert response.json() == {
             "code": "session.clock_pending",
             "message": "The session clock has not reported its sim time yet",
+            "cause_type": None,
         }
         assert ctx.continuous_tracer is None
 
@@ -2341,6 +2357,7 @@ class TestContinuousTraceSession:
         assert response.json() == {
             "code": "trace.busy",
             "message": "A one-shot trace is already running; try again when it finishes",
+            "cause_type": None,
         }
 
     def test_a_context_being_torn_down_takes_no_new_trace(self, monkeypatch):
@@ -2506,6 +2523,7 @@ class TestSessionHistory:
         assert response.json() == {
             "code": "history.not_recorded",
             "message": "History recording is off for this session",
+            "cause_type": None,
         }
 
     def test_a_failed_write_stops_recording_and_every_read_reports_it(self, tmp_path, monkeypatch):
@@ -2818,7 +2836,11 @@ class TestSessionHistory:
         response = TestClient(m.app).get(path)
 
         assert response.status_code == 501
-        assert response.json() == {"code": "history.not_collected", "message": message}
+        assert response.json() == {
+            "code": "history.not_collected",
+            "message": message,
+            "cause_type": None,
+        }
 
     def test_a_recording_resumed_after_a_restart_opens_its_links_as_resumed(self, tmp_path):
         path = tmp_path / "run-history-0001.db"

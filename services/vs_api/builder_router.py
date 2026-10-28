@@ -296,7 +296,7 @@ def _catalog_refusal_response(error: CatalogAuthoringError) -> JSONResponse:
     status = _CATALOG_REFUSAL_STATUS[error.refusal.code]
     return JSONResponse(
         status_code=status,
-        content=error.refusal.model_dump(mode="json", exclude_none=True),
+        content=error.refusal.model_dump(mode="json"),
     )
 
 
@@ -308,7 +308,7 @@ def _catalog_unavailable_response(error: BaseException) -> JSONResponse:
     )
     return JSONResponse(
         status_code=503,
-        content=refusal.model_dump(mode="json", exclude_none=True),
+        content=refusal.model_dump(mode="json"),
     )
 
 
@@ -326,7 +326,7 @@ def _save_refusal_response(error: BuilderSessionSaveError) -> JSONResponse:
     )
     return JSONResponse(
         status_code=_SAVE_REFUSAL_STATUS[refusal.code],
-        content=refusal.model_dump(mode="json", exclude_none=True),
+        content=refusal.model_dump(mode="json"),
     )
 
 
@@ -407,7 +407,7 @@ def create_builder_router(services: BuilderRouterServices) -> APIRouter:
             )
             return JSONResponse(
                 status_code=409,
-                content=refusal.model_dump(mode="json", exclude_none=True),
+                content=refusal.model_dump(mode="json"),
             )
         except (CatalogRepositoryError, OSError) as error:
             return _catalog_unavailable_response(error)
@@ -436,7 +436,7 @@ def create_builder_router(services: BuilderRouterServices) -> APIRouter:
             )
             return JSONResponse(
                 status_code=404,
-                content=refusal.model_dump(mode="json", exclude_none=True),
+                content=refusal.model_dump(mode="json"),
             )
         except BuilderVisualDraftConflictError as error:
             refusal = CatalogOperationRefusal(
@@ -447,7 +447,7 @@ def create_builder_router(services: BuilderRouterServices) -> APIRouter:
             )
             return JSONResponse(
                 status_code=409,
-                content=refusal.model_dump(mode="json", exclude_none=True),
+                content=refusal.model_dump(mode="json"),
             )
         except (CatalogRepositoryError, OSError, UnicodeError) as error:
             return _catalog_unavailable_response(error)
@@ -737,7 +737,7 @@ def create_builder_router(services: BuilderRouterServices) -> APIRouter:
             )
             return JSONResponse(
                 status_code=422,
-                content=refusal.model_dump(mode="json", exclude_none=True),
+                content=refusal.model_dump(mode="json"),
             )
         except (TypeError, ValueError) as error:
             refusal = WizardCompileRefusal(
@@ -747,7 +747,7 @@ def create_builder_router(services: BuilderRouterServices) -> APIRouter:
             )
             return JSONResponse(
                 status_code=422,
-                content=refusal.model_dump(mode="json", exclude_none=True),
+                content=refusal.model_dump(mode="json"),
             )
         except (CatalogRepositoryError, OSError) as error:
             refusal = WizardCompileRefusal(
@@ -757,7 +757,7 @@ def create_builder_router(services: BuilderRouterServices) -> APIRouter:
             )
             return JSONResponse(
                 status_code=503,
-                content=refusal.model_dump(mode="json", exclude_none=True),
+                content=refusal.model_dump(mode="json"),
             )
 
     @router.post(
@@ -799,7 +799,7 @@ def create_builder_router(services: BuilderRouterServices) -> APIRouter:
             except BuilderSessionDeployError as error:
                 return JSONResponse(
                     status_code=error.status_code,
-                    content=error.refusal.model_dump(mode="json", exclude_none=True),
+                    content=error.refusal.model_dump(mode="json"),
                 )
 
     @router.post(

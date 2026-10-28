@@ -10,9 +10,40 @@ import type {
   EphemerisNodeFixed,
   EphemerisNodeKeplerian,
   EphemerisNodeTLE,
+  GroundBoresightMode,
   JsonValue,
+  NodeKind,
+  NodeRole,
   NodeRoutingInstance,
+  SupportedSurfaceBody,
+  TopologyMode,
 } from "../builder/generated/builderApi";
+
+export type AddressFamily = "ipv4" | "ipv6";
+export type SchedulingState = "active" | "teardown";
+export type SelectionPolicyName = "highest-elevation" | "lowest-elevation" | "longest-remaining-pass";
+export type HandoverPolicyName = "hysteresis" | "none";
+export type SuccessorAbortPolicy = "hard_release" | "soft_retain";
+export type SessionStatus = "idle" | "switching" | "wiring" | "ready" | "error";
+export type PublicLinkType = "ground" | "isl" | "inter_constellation" | "inter_body_relay";
+export type TraceState = "running" | "reached" | "not_reached" | "failed";
+export type TraceStopReason = "time_limit" | "internal_error";
+export type ServiceSource = "ome" | "scheduler" | "node_agent" | "operator" | "vs_api";
+export type OpsLevel = "critical" | "error" | "warning" | "info" | "debug";
+export type DebugControlAction = "enable" | "disable";
+export type FunnelGate = "line_of_sight" | "range" | "elevation_mask" | "field_of_regard" | "tracking_rate" | "selection_policy" | "capacity" | "handover_policy" | "actuation_proof";
+export type GateState = "pass" | "fail" | "not_evaluated" | "not_applicable";
+export type EnvelopeBindingSource = "field_of_regard" | "min_elevation_mask";
+export type ExplanationProducer = "ome_visibility" | "ome_allocator" | "scheduler" | "node_agent";
+export type NodeFocus = "gs" | "sat" | "pair";
+export type DecisionSampleState = "scheduled" | "eligible_unselected" | "expected_no_link";
+export type FailingActuationState = "kernel_dirty" | "actuation_blocked";
+export type GroundVisibilityRejectReason = "ok" | "los_blocked" | "elevation_below_min" | "range_exceeded" | "field_of_regard" | "tracking_exceeded";
+export type GroundVisibilityRejectingEndpoint = "none" | "ground" | "satellite" | "both";
+export type GroundUnscheduledReason = "gs_capacity" | "sat_capacity" | "hysteresis_hold" | "incumbent_held" | "bbm_no_spare" | "mbb_overlap_locked" | "replaced_by_successor" | "successor_aborted" | "failed_successor" | "failed_acquire";
+export type GroundAllocationEventCategory = "mbb_overlap_started" | "teardown_completed" | "teardown_invalidated_by_epoch" | "successor_aborted" | "failed_successor" | "failed_acquire" | "incumbent_lost" | "bbm_gap";
+export type GroundAllocationPolicyKind = "selection_policy" | "handover_policy" | "handover_mode" | "successor_abort_policy" | "mbb_preemption" | "cross_tenant_displacement";
+export type GroundHandoverModeName = "bbm" | "mbb";
 
 export type StateFeedFrame = StateSnapshot | SessionEphemerisFrame | WiringProgressFrame | SessionTransitioningFrame | SessionReadyFrame | SessionFailedFrame;
 
@@ -86,9 +117,9 @@ export interface AuthToken {
 /** The pair the card leads with. Ordering is by meaning, resolved by the composer: a viable-but-withheld pair (`viable_withheld=True` — cleared physics/terminal gates, withheld by policy/capacity) dominates a physics near-miss. Only when no viable pair exists is the closest-to-visible rejected pair chosen. */
 export interface CandidateFacts {
   readonly pair: readonly [string, string];
-  readonly binding_gate: "line_of_sight" | "range" | "elevation_mask" | "field_of_regard" | "tracking_rate" | "selection_policy" | "capacity" | "handover_policy" | "actuation_proof" | null;
-  readonly binding_reason_code: "ok" | "los_blocked" | "elevation_below_min" | "range_exceeded" | "field_of_regard" | "tracking_exceeded" | "gs_capacity" | "sat_capacity" | "hysteresis_hold" | "incumbent_held" | "bbm_no_spare" | "mbb_overlap_locked" | "replaced_by_successor" | "successor_aborted" | "failed_successor" | "failed_acquire" | "kernel_dirty" | "actuation_blocked" | "actuation_diverged" | null;
-  readonly rejecting_endpoint: "none" | "ground" | "satellite" | "both" | null;
+  readonly binding_gate: FunnelGate | null;
+  readonly binding_reason_code: GroundVisibilityRejectReason | GroundUnscheduledReason | FailingActuationState | "actuation_diverged" | null;
+  readonly rejecting_endpoint: GroundVisibilityRejectingEndpoint | null;
   readonly range_km: number;
   readonly elevation_deg: number;
   readonly viable_withheld: boolean;
@@ -116,36 +147,36 @@ export interface ContinuousTraceStopped {
 
 /** One instance of the service changed its log level. The request reaches every instance; this is the first one's reply, not a statement about the others. */
 export interface DebugControlAcknowledgedFact {
-  readonly source: "ome" | "scheduler" | "node_agent" | "operator" | "vs_api";
+  readonly source: ServiceSource;
   readonly request_seq: number;
-  readonly request: "enable" | "disable";
+  readonly request: DebugControlAction;
   readonly outcome: "acknowledged";
   readonly level: string;
 }
 
 /** VS-API could not send the request or could not read the reply. */
 export interface DebugControlFailedFact {
-  readonly source: "ome" | "scheduler" | "node_agent" | "operator" | "vs_api";
+  readonly source: ServiceSource;
   readonly request_seq: number;
-  readonly request: "enable" | "disable";
+  readonly request: DebugControlAction;
   readonly outcome: "failed";
   readonly error: string;
 }
 
 /** One instance of the service refused the request. */
 export interface DebugControlRejectedFact {
-  readonly source: "ome" | "scheduler" | "node_agent" | "operator" | "vs_api";
+  readonly source: ServiceSource;
   readonly request_seq: number;
-  readonly request: "enable" | "disable";
+  readonly request: DebugControlAction;
   readonly outcome: "rejected";
   readonly error: string;
 }
 
 /** No instance replied in time, or no instance was listening. */
 export interface DebugControlUnansweredFact {
-  readonly source: "ome" | "scheduler" | "node_agent" | "operator" | "vs_api";
+  readonly source: ServiceSource;
   readonly request_seq: number;
-  readonly request: "enable" | "disable";
+  readonly request: DebugControlAction;
   readonly outcome: "timed_out" | "no_responders";
 }
 
@@ -157,25 +188,25 @@ export interface DebugStopAllCommand {
 /** The page stops asking for these services' debug output. */
 export interface DebugStopCommand {
   readonly action: "debug_stop";
-  readonly sources: ReadonlyArray<"ome" | "scheduler" | "node_agent" | "operator" | "vs_api">;
+  readonly sources: ReadonlyArray<ServiceSource>;
 }
 
 /** The page asks for these services' debug output. */
 export interface DebugStreamCommand {
   readonly action: "debug_stream";
-  readonly sources: ReadonlyArray<"ome" | "scheduler" | "node_agent" | "operator" | "vs_api">;
+  readonly sources: ReadonlyArray<ServiceSource>;
 }
 
 /** The structured facts a single explainability surface consumes. Carries no family/label/sentence — the client registry adds those. The `pair` is the focal pair (connected, else best candidate). Provenance ties the explanation to the committed snapshot it was derived from. */
 export interface DecisionExplanationFacts {
   readonly gs_id: string;
   readonly pair: readonly [string, string];
-  readonly node_focus: "gs" | "sat" | "pair";
-  readonly reference_body: "earth" | "luna";
+  readonly node_focus: NodeFocus;
+  readonly reference_body: SupportedSurfaceBody;
   readonly tenant_id: string;
-  readonly binding_gate: "line_of_sight" | "range" | "elevation_mask" | "field_of_regard" | "tracking_rate" | "selection_policy" | "capacity" | "handover_policy" | "actuation_proof" | null;
-  readonly binding_reason_code: "ok" | "los_blocked" | "elevation_below_min" | "range_exceeded" | "field_of_regard" | "tracking_exceeded" | "gs_capacity" | "sat_capacity" | "hysteresis_hold" | "incumbent_held" | "bbm_no_spare" | "mbb_overlap_locked" | "replaced_by_successor" | "successor_aborted" | "failed_successor" | "failed_acquire" | "kernel_dirty" | "actuation_blocked" | "actuation_diverged" | null;
-  readonly rejecting_endpoint: "none" | "ground" | "satellite" | "both" | null;
+  readonly binding_gate: FunnelGate | null;
+  readonly binding_reason_code: GroundVisibilityRejectReason | GroundUnscheduledReason | FailingActuationState | "actuation_diverged" | null;
+  readonly rejecting_endpoint: GroundVisibilityRejectingEndpoint | null;
   readonly ladder: ReadonlyArray<LadderGate>;
   readonly envelope: EffectiveEnvelopeFacts;
   readonly best_candidate: CandidateFacts;
@@ -199,22 +230,22 @@ export interface DecisionTimelineQuery {
 
 /** The combined envelope a user cannot infer by eye. Under a local-vertical GROUND boresight, elevation and field-of-regard collapse to a single floor: `effective_min_elevation_deg = max(configured_min_elevation, 90 - FoR/2)`. `binding_source` names which constraint produced the floor and `dead_knobs` lists configured values that are non-binding because another constraint dominates (e.g. a 25 deg mask under a FoR-derived 30 deg floor). The collapse is ground-specific; `ground`/`satellite` carry each terminal's raw constraints and `binding_endpoint` names which terminal the binding gate rejected at, so a hint points at the terminal that actually limits the link. */
 export interface EffectiveEnvelopeFacts {
-  readonly reference_body: "earth" | "luna";
+  readonly reference_body: SupportedSurfaceBody;
   readonly configured_min_elevation_deg: number;
   readonly effective_min_elevation_deg: number;
-  readonly binding_source: "field_of_regard" | "min_elevation_mask";
+  readonly binding_source: EnvelopeBindingSource;
   readonly dead_knobs: ReadonlyArray<"min_elevation_deg">;
   readonly max_range_km: number | null;
   readonly ground: EnvelopeEndpoint;
   readonly satellite: EnvelopeEndpoint;
-  readonly binding_endpoint: "none" | "ground" | "satellite" | "both";
+  readonly binding_endpoint: GroundVisibilityRejectingEndpoint;
 }
 
 /** One terminal's raw pointing/range constraints. Carried for BOTH endpoints so the "what to change" lever targets the terminal that actually binds — the satellite terminal can be the limiting constraint, not always the ground station. A satellite's nadir boresight does not collapse to a ground elevation floor, so its envelope is shown as the raw pointing/range constraints rather than pretending it is one scalar (see the UX plan, Effective Envelope). */
 export interface EnvelopeEndpoint {
   readonly node_role: "ground" | "satellite";
   readonly terminal_profile: string | null;
-  readonly boresight_mode: "local_vertical" | "configured_topocentric" | "steerable_envelope" | "nadir" | null;
+  readonly boresight_mode: GroundBoresightMode | "nadir" | null;
   readonly field_of_regard_deg: number | null;
   readonly max_tracking_rate_deg_s: number | null;
   readonly max_range_km: number | null;
@@ -222,15 +253,15 @@ export interface EnvelopeEndpoint {
 
 /** Typed non-steady transition produced by the ground allocator. `policy_kind` names the taxonomy for `policy_name`. Events that are not caused by a policy decision, such as physical incumbent visibility loss, set both fields to `None`. */
 export interface GroundAllocationEvent {
-  readonly category: "mbb_overlap_started" | "teardown_completed" | "teardown_invalidated_by_epoch" | "successor_aborted" | "failed_successor" | "failed_acquire" | "incumbent_lost" | "bbm_gap";
+  readonly category: GroundAllocationEventCategory;
   readonly pair: readonly [string, string];
   readonly tenant_id: string;
-  readonly reference_body: "earth" | "luna";
+  readonly reference_body: SupportedSurfaceBody;
   readonly message: string;
   readonly successor_pair: readonly [string, string] | null;
   readonly challenger_pair: readonly [string, string] | null;
-  readonly policy_kind: "selection_policy" | "handover_policy" | "handover_mode" | "successor_abort_policy" | "mbb_preemption" | "cross_tenant_displacement" | null;
-  readonly policy_name: "highest-elevation" | "lowest-elevation" | "longest-remaining-pass" | "hysteresis" | "none" | "bbm" | "mbb" | "hard_release" | "soft_retain" | "off" | null;
+  readonly policy_kind: GroundAllocationPolicyKind | null;
+  readonly policy_name: SelectionPolicyName | HandoverPolicyName | GroundHandoverModeName | SuccessorAbortPolicy | "off" | null;
 }
 
 /** Companion to `LinkStateSnapshot`: what the OME decided about GROUND links, and why. Ground-scoped. Carries decisions only for GS↔satellite pairs. ISL pair decisions are not snapshotted today; a separate `IslLinkDecisionSnapshot` type and subject will be added when ISL decision attribution lands. Consumers must not interpret an absent pair as "the OME ignored it" — it may simply be an ISL pair this snapshot does not cover. Published on `ground_link_decision_snapshot_subject(session_id)` (same `sim_time` and `snapshot_seq` as the corresponding `LinkStateSnapshot`, for pairing). `LinkStateSnapshot` carries the actuated forwarding-plane state across both link types. `GroundLinkDecisionSnapshot` carries the OME's decision context for every GROUND pair the OME considered — visible-and-scheduled, visible-but-rejected, and visible-but-unscheduled. The two snapshots are correlatable by `sim_time` and `snapshot_seq`. Consumers asking "what is forwarding?" read the state snapshot; consumers asking "why isn't this ground link up?" read this decision snapshot. Internal consistency invariants (enforced at construction): 1. `decisions` has no duplicate pairs. Each (gs, sat) pair gets exactly one decision per snapshot. 2. Every `UnscheduledPair` references a `pair` that is present in `decisions` with `visible=True`. An unscheduled pair by definition is visible-but-not-scheduled; pointing at an invisible pair or a pair not in the decision set is a producer bug. 3. Every `UnscheduledPair`'s `tenant_id` and `reference_body` match the corresponding decision's. Divergence means the allocator and visibility engine disagree about which tenant/body owns the pair — a fatal contract break. 4. `unscheduled_pairs` has no duplicate pairs. Producers that fail any of these are wrong. Foundational types reject impossible states at construction. */
@@ -273,15 +304,15 @@ export interface GroundPolicyAudit {
 export interface GroundVisibilityDecisionWire {
   readonly pair: readonly [string, string];
   readonly tenant_id: string;
-  readonly reference_body: "earth" | "luna";
+  readonly reference_body: SupportedSurfaceBody;
   readonly visible: boolean;
   readonly range_km: number;
   readonly elevation_deg: number;
   readonly azimuth_deg: number | null;
   readonly sat_off_nadir_deg: number | null;
   readonly observer_frame: "body_local";
-  readonly reject_reason: "ok" | "los_blocked" | "elevation_below_min" | "range_exceeded" | "field_of_regard" | "tracking_exceeded";
-  readonly rejecting_endpoint: "none" | "ground" | "satellite" | "both";
+  readonly reject_reason: GroundVisibilityRejectReason;
+  readonly rejecting_endpoint: GroundVisibilityRejectingEndpoint;
   readonly applied_min_elevation_deg: number;
   readonly applied_gs_max_range_km: number | null;
   readonly applied_sat_max_range_km: number | null;
@@ -289,7 +320,7 @@ export interface GroundVisibilityDecisionWire {
   readonly applied_sat_field_of_regard_deg: number | null;
   readonly applied_gs_max_tracking_rate_deg_s: number | null;
   readonly applied_sat_max_tracking_rate_deg_s: number | null;
-  readonly applied_gs_boresight_mode: "local_vertical" | "configured_topocentric" | "steerable_envelope" | null;
+  readonly applied_gs_boresight_mode: GroundBoresightMode | null;
   readonly applied_sat_boresight_mode: "nadir" | null;
   readonly applied_gs_terminal_profile: string | null;
   readonly applied_sat_terminal_profile: string | null;
@@ -297,8 +328,8 @@ export interface GroundVisibilityDecisionWire {
 
 /** Aggregated count for a reason/state in the sampled window. */
 export interface GsDecisionReasonCount {
-  readonly state: "scheduled" | "eligible_unselected" | "expected_no_link";
-  readonly reason_code: "ok" | "los_blocked" | "elevation_below_min" | "range_exceeded" | "field_of_regard" | "tracking_exceeded" | "gs_capacity" | "sat_capacity" | "hysteresis_hold" | "incumbent_held" | "bbm_no_spare" | "mbb_overlap_locked" | "replaced_by_successor" | "successor_aborted" | "failed_successor" | "failed_acquire" | null;
+  readonly state: DecisionSampleState;
+  readonly reason_code: GroundVisibilityRejectReason | GroundUnscheduledReason | null;
   readonly count: number;
 }
 
@@ -318,11 +349,11 @@ export interface GsDecisionTimelineSample {
   readonly sim_time: string;
   readonly snapshot_seq: number;
   readonly epoch_id: number;
-  readonly state: "scheduled" | "eligible_unselected" | "expected_no_link";
+  readonly state: DecisionSampleState;
   readonly pair: readonly [string, string];
-  readonly binding_gate: "line_of_sight" | "range" | "elevation_mask" | "field_of_regard" | "tracking_rate" | "selection_policy" | "capacity" | "handover_policy" | "actuation_proof" | null;
-  readonly reason_code: "ok" | "los_blocked" | "elevation_below_min" | "range_exceeded" | "field_of_regard" | "tracking_exceeded" | "gs_capacity" | "sat_capacity" | "hysteresis_hold" | "incumbent_held" | "bbm_no_spare" | "mbb_overlap_locked" | "replaced_by_successor" | "successor_aborted" | "failed_successor" | "failed_acquire" | null;
-  readonly rejecting_endpoint: "none" | "ground" | "satellite" | "both" | null;
+  readonly binding_gate: FunnelGate | null;
+  readonly reason_code: GroundVisibilityRejectReason | GroundUnscheduledReason | null;
+  readonly rejecting_endpoint: GroundVisibilityRejectingEndpoint | null;
   readonly range_km: number;
   readonly elevation_deg: number;
 }
@@ -330,7 +361,7 @@ export interface GsDecisionTimelineSample {
 /** VS-API is serving, and where its session manager stands. */
 export interface HealthStatus {
   readonly status: "ok";
-  readonly session_status: "idle" | "switching" | "wiring" | "ready" | "error";
+  readonly session_status: SessionStatus;
 }
 
 /** A recorded session run's history recording: running, or stopped and why. */
@@ -356,13 +387,13 @@ export interface IntrospectResult {
 
 /** One row of the decision funnel for a focal pair. `actual`/`threshold` are populated where the value is numeric and available in the committed decision; `None` where not applicable or not carried by the source decision (e.g. the required slew rate is not on the wire). The client renders the reason_code through the registry — this row carries no human text. */
 export interface LadderGate {
-  readonly gate: "line_of_sight" | "range" | "elevation_mask" | "field_of_regard" | "tracking_rate" | "selection_policy" | "capacity" | "handover_policy" | "actuation_proof";
-  readonly state: "pass" | "fail" | "not_evaluated" | "not_applicable";
+  readonly gate: FunnelGate;
+  readonly state: GateState;
   readonly actual: number | null;
   readonly threshold: number | null;
-  readonly rejecting_endpoint: "none" | "ground" | "satellite" | "both" | null;
-  readonly reason_code: "ok" | "los_blocked" | "elevation_below_min" | "range_exceeded" | "field_of_regard" | "tracking_exceeded" | "gs_capacity" | "sat_capacity" | "hysteresis_hold" | "incumbent_held" | "bbm_no_spare" | "mbb_overlap_locked" | "replaced_by_successor" | "successor_aborted" | "failed_successor" | "failed_acquire" | "kernel_dirty" | "actuation_blocked" | "actuation_diverged" | null;
-  readonly producer: "ome_visibility" | "ome_allocator" | "scheduler" | "node_agent";
+  readonly rejecting_endpoint: GroundVisibilityRejectingEndpoint | null;
+  readonly reason_code: GroundVisibilityRejectReason | GroundUnscheduledReason | FailingActuationState | "actuation_diverged" | null;
+  readonly producer: ExplanationProducer;
   readonly is_binding: boolean;
 }
 
@@ -375,7 +406,7 @@ export interface LegacyRefusal {
 export interface LinkDecisionTrace {
   readonly node_a: string;
   readonly node_b: string;
-  readonly link_type: "ground" | "isl" | "inter_constellation" | "inter_body_relay";
+  readonly link_type: PublicLinkType;
   readonly state: "active";
   readonly interface_a: string;
   readonly interface_b: string;
@@ -392,7 +423,7 @@ export interface LinkDecisionTrace {
   readonly netem_one_way_ms: number | null;
   readonly rtt_to_one_way_policy: string | null;
   readonly link_rule_id: string | null;
-  readonly topology_mode: "visible_candidates" | "nearest_visible" | "nearest_n" | "explicit_pairs" | null;
+  readonly topology_mode: TopologyMode | null;
   readonly endpoint_segments: readonly [string, string] | null;
 }
 
@@ -443,7 +474,7 @@ export interface LinkState {
   readonly node_a: string;
   readonly node_b: string;
   readonly state: "active";
-  readonly link_type: "ground" | "isl" | "inter_constellation" | "inter_body_relay";
+  readonly link_type: PublicLinkType;
   readonly link_reason: string | null;
   readonly latency_ms: number;
   readonly transmit_mbps_a: number;
@@ -455,9 +486,9 @@ export interface LinkState {
   readonly interface_a: string;
   readonly interface_b: string;
   readonly link_rule_id: string | null;
-  readonly topology_mode: "visible_candidates" | "nearest_visible" | "nearest_n" | "explicit_pairs" | null;
+  readonly topology_mode: TopologyMode | null;
   readonly endpoint_segments: readonly [string, string] | null;
-  readonly scheduling_state: "active" | "teardown";
+  readonly scheduling_state: SchedulingState;
   readonly teardown_remaining_ticks: number | null;
   readonly successor_pair: readonly [string, string] | null;
 }
@@ -465,7 +496,7 @@ export interface LinkState {
 /** Configured network identity/address associated with one node. */
 export interface NodeAddress {
   readonly purpose: "router_loopback" | "site_interface" | "site_prefix";
-  readonly family: "ipv4" | "ipv6";
+  readonly family: AddressFamily;
   readonly address: string;
   readonly interface: string | null;
   readonly metric: number | null;
@@ -474,7 +505,7 @@ export interface NodeAddress {
 /** State of a single node in the constellation. */
 export interface NodeState {
   readonly node_id: string;
-  readonly node_type: "satellite" | "ground_station";
+  readonly node_type: NodeKind;
   readonly lat_deg: number;
   readonly lon_deg: number;
   readonly alt_km: number;
@@ -484,15 +515,15 @@ export interface NodeState {
   readonly plane: number | null;
   readonly slot: number | null;
   readonly routing_instances: ReadonlyArray<NodeRoutingInstance>;
-  readonly role: "router" | "host" | "forwarding_only";
+  readonly role: NodeRole;
   readonly isl_count: number;
   readonly gnd_count: number;
   readonly prefix: string | null;
   readonly addresses: ReadonlyArray<NodeAddress>;
   readonly min_elevation_deg: number | null;
   readonly beam_falloff_exponent: number | null;
-  readonly reference_body: "earth" | "luna";
-  readonly frame_id: "earth" | "luna";
+  readonly reference_body: SupportedSurfaceBody;
+  readonly frame_id: SupportedSurfaceBody;
   readonly tenant_id: string;
   readonly segment_id: string;
   readonly local_node_id: string;
@@ -521,9 +552,9 @@ export interface OpsEvent {
   readonly timestamp: string;
   readonly tenant_id: string;
   readonly session_id: string;
-  readonly source: "ome" | "scheduler" | "node_agent" | "operator" | "vs_api";
+  readonly source: ServiceSource;
   readonly hostname: string;
-  readonly level: "critical" | "error" | "warning" | "info" | "debug";
+  readonly level: OpsLevel;
   readonly code: string;
   readonly message: string;
   readonly details: Readonly<Record<string, JsonValue>> | null;
@@ -531,8 +562,8 @@ export interface OpsEvent {
 
 /** Filters on the operator-visible ops log. */
 export interface OpsEventsQuery {
-  readonly source?: "ome" | "scheduler" | "node_agent" | "operator" | "vs_api" | null;
-  readonly level?: "critical" | "error" | "warning" | "info" | "debug" | null;
+  readonly source?: ServiceSource | null;
+  readonly level?: OpsLevel | null;
   readonly limit?: number;
 }
 
@@ -607,9 +638,9 @@ export interface StampedOpsEvent {
   readonly timestamp: string;
   readonly tenant_id: string;
   readonly session_id: string;
-  readonly source: "ome" | "scheduler" | "node_agent" | "operator" | "vs_api";
+  readonly source: ServiceSource;
   readonly hostname: string;
-  readonly level: "critical" | "error" | "warning" | "info" | "debug";
+  readonly level: OpsLevel;
   readonly code: string;
   readonly message: string;
   readonly details: Readonly<Record<string, JsonValue>> | null;
@@ -629,7 +660,7 @@ export interface StateSnapshot {
   readonly recent_events: ReadonlyArray<RecentEvent>;
   readonly routing_stack: string | null;
   readonly constellation_name: string | null;
-  readonly session_status: "idle" | "switching" | "wiring" | "ready" | "error";
+  readonly session_status: SessionStatus;
   readonly session_status_detail: string | null;
   readonly playback_paused: boolean;
   readonly playback_speed: number;
@@ -678,27 +709,27 @@ export interface TracedPath {
   readonly dst_node: string;
   readonly hops: ReadonlyArray<string>;
   readonly hop_rtts: ReadonlyArray<number | null>;
-  readonly state: "running" | "reached" | "not_reached" | "failed";
+  readonly state: TraceState;
   readonly rtt_ms: number | null;
   readonly error: string | null;
   readonly reverse_hops: ReadonlyArray<string>;
   readonly reverse_hop_rtts: ReadonlyArray<number | null>;
-  readonly reverse_state: "running" | "reached" | "not_reached" | "failed";
+  readonly reverse_state: TraceState;
   readonly reverse_rtt_ms: number | null;
   readonly reverse_error: string | null;
   readonly asymmetry_detected: boolean | null;
   readonly tracing: boolean;
   readonly traced_at: string;
   readonly sim_time: string;
-  readonly stop_reason: "time_limit" | "internal_error" | null;
+  readonly stop_reason: TraceStopReason | null;
 }
 
 /** A pair that was visible but not scheduled, with the reason. Carried in `GroundLinkDecisionSnapshot.unscheduled_pairs`. A pair appears here when `GroundVisibilityDecisionWire.visible=True` but the allocator did not schedule it. Teardown-overlap pairs do NOT appear here — they are scheduled (the old terminal is still active) and carry `scheduling_state="teardown"` on `VisibilityEvent` / `LinkState`. `incumbent_pair` is populated when this pair was rejected because a specific incumbent held the slot (`hysteresis_hold` or `incumbent_held`). `capacity_constraint` is populated when the reason names a specific resource that ran out (e.g., the sat ground-terminal id). */
 export interface UnscheduledPair {
   readonly pair: readonly [string, string];
   readonly tenant_id: string;
-  readonly reference_body: "earth" | "luna";
-  readonly unscheduled_reason: "gs_capacity" | "sat_capacity" | "hysteresis_hold" | "incumbent_held" | "bbm_no_spare" | "mbb_overlap_locked" | "replaced_by_successor" | "successor_aborted" | "failed_successor" | "failed_acquire";
+  readonly reference_body: SupportedSurfaceBody;
+  readonly unscheduled_reason: GroundUnscheduledReason;
   readonly incumbent_pair: readonly [string, string] | null;
   readonly capacity_constraint: string | null;
 }

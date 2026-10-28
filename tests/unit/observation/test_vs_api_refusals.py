@@ -220,6 +220,7 @@ def test_registered_handler_answers_a_refusal_with_the_envelope() -> None:
     assert response.json() == {
         "code": "workload_target.unavailable",
         "message": "sat-p00s00: expected one live session pod, found 0: []",
+        "cause_type": None,
     }
 
 
@@ -227,7 +228,11 @@ def test_an_unhandled_failure_is_a_500_envelope_without_its_text_or_class() -> N
     response = TestClient(_application()).get("/failed", headers={"Origin": "https://ui.example"})
 
     assert response.status_code == 500
-    assert response.json() == {"code": INTERNAL_ERROR_CODE, "message": "Request failed"}
+    assert response.json() == {
+        "code": INTERNAL_ERROR_CODE,
+        "message": "Request failed",
+        "cause_type": None,
+    }
     assert PRIVATE not in response.text
     assert "abc123" not in response.text
     assert "/var/run/secrets" not in response.text
@@ -243,6 +248,7 @@ def test_a_route_stated_refusal_uses_the_same_envelope() -> None:
     assert response.json() == {
         "code": "session_switch.conflict",
         "message": "Switch already in progress",
+        "cause_type": None,
     }
 
 

@@ -47,6 +47,26 @@ export type BuilderVisualDraftCommandOperation = "place_space_reference" | "plac
 export type BuilderVisualDraftAffectedKind = "space" | "ground" | "routing_domain" | "boundary" | "link" | "ground_member";
 export type CatalogComponentFamily = "bodies" | "terminals" | "payloads" | "orbits" | "nodes" | "sites" | "site-sets" | "constellations" | "space-node-sets";
 export type CatalogDraftIssueStage = "structural" | "reference" | "runtime_support";
+export type BuilderSessionSaveRefusalCode = "builder_session_save.save_blocked" | "builder_session_save.stale_write" | "builder_session_save.graph_invalid" | "builder_session_save.persistence_failed" | "builder_session_save.storage_verification_failed";
+export type CatalogAuthoringRefusalCode = "catalog_authoring.not_found" | "catalog_authoring.read_only" | "catalog_authoring.invalid_document" | "catalog_authoring.invalid_patch" | "catalog_authoring.invalid_graph" | "catalog_authoring.conflict" | "catalog_authoring.stale_revision" | "catalog_authoring.invalid_page_token" | "catalog_authoring.stale_page_token" | "catalog_authoring.impact_mismatch" | "catalog_authoring.dependents_exist" | "catalog_authoring.import_limit" | "catalog_authoring.import_incomplete" | "catalog_authoring.import_collision" | "catalog_authoring.stale_import_proposal" | "catalog_authoring.persistence_failed";
+export type CatalogImportOutcome = "proposed" | "committed" | "unchanged" | "blocked";
+export type CatalogImportCollisionReason = "shipped_missing" | "shipped_content_mismatch" | "user_content_mismatch";
+export type CatalogNamespace = "nodalarc" | "user";
+export type BuilderControlScalarKind = "text" | "number" | "boolean" | "datetime" | "reference";
+export type BuilderControlNumberKind = "integer" | "float";
+export type BuilderControlChoiceKind = "literal" | "type" | "null";
+export type PreviewScope = "computed" | "inter_body_pending" | "terrestrial_pending" | "disabled";
+export type BuilderPreviewRejectReason = "los_blocked" | "range_exceeded" | "elevation_below_min" | "field_of_regard" | "terminal_type_mismatch" | "no_geometry";
+export type SupportedSurfaceBody = "earth" | "luna";
+export type TerminalMedium = "rf" | "optical";
+export type ForwardingClass = "routed" | "host" | "bridge" | "control_only";
+export type RoutingProtocol = "isis" | "ospf" | "bgp" | "static";
+export type RoutingBoundaryAdapter = "static_ip" | "bgp" | "dtn_bundle";
+export type NodeKind = "satellite" | "ground_station";
+export type NodeRole = "router" | "host" | "forwarding_only";
+export type LinkLabel = "access" | "isl" | "inter_body";
+export type TopologyMode = "visible_candidates" | "nearest_visible" | "nearest_n" | "explicit_pairs";
+export type GroundBoresightMode = "local_vertical" | "configured_topocentric" | "steerable_envelope";
 
 /** Stable, path-free refusal evidence for one request. ``code`` is the refusing component's own vocabulary (an exception family's enum value or one fixed name per family). ``message`` names the declared inputs and catalog references involved; the host filesystem and other exceptions' text never appear in it. ``cause_type`` is the class name of a wrapped cause when the refusal carries one. */
 export interface ApiRefusal {
@@ -84,7 +104,7 @@ export interface BuilderCatalogDocument {
 export interface BuilderChoiceBranch {
   readonly branch_id: string;
   readonly label: string;
-  readonly branch_kind: "literal" | "type" | "null";
+  readonly branch_kind: BuilderControlChoiceKind;
   readonly selected: boolean;
   readonly literal_value?: string | number | boolean | null;
   readonly control?: BuilderScalarControl | BuilderObjectControl | BuilderChoiceControl | BuilderSequenceControl | BuilderMapControl | null;
@@ -200,10 +220,10 @@ export interface BuilderLinkEndpoint {
 /** Display projection of one ``ResolvedLinkRule``. The resolved rule's topology is a discriminated union; the builder needs the flat facts (mode, n, explicit pairs, range cap) to preview candidate geometry. This is a projection for display — candidate truth at runtime stays with OME. */
 export interface BuilderLinkRule {
   readonly rule_id: string;
-  readonly kind: "access" | "isl" | "inter_body";
+  readonly kind: LinkLabel;
   readonly enabled: boolean;
   readonly endpoints: readonly [BuilderLinkEndpoint, BuilderLinkEndpoint];
-  readonly topology_mode: "visible_candidates" | "nearest_visible" | "nearest_n" | "explicit_pairs";
+  readonly topology_mode: TopologyMode;
   readonly topology_n: number | null;
   readonly explicit_pairs: ReadonlyArray<readonly [string, string]>;
   readonly max_range_km: number | null;
@@ -279,14 +299,14 @@ export interface BuilderObjectField {
 /** One drawn preview pair: a runtime node pair whose frozen-epoch geometry passed every armed gate, oriented to the rule's endpoints server-side. canvas draws these directly and never re-derives pair identities. */
 export interface BuilderPreviewPair {
   readonly rule_id: string;
-  readonly kind: "access" | "isl" | "inter_body";
+  readonly kind: LinkLabel;
   readonly node_a: string;
   readonly node_b: string;
 }
 
 /** How many tested pairs one reject reason accounts for. ``reason`` is the runtime's reject_reason verbatim (or ``no_geometry``); counts sum over ``pairs_tested`` — never an untested remainder. */
 export interface BuilderPreviewReasonCount {
-  readonly reason: "los_blocked" | "range_exceeded" | "elevation_below_min" | "field_of_regard" | "terminal_type_mismatch" | "no_geometry";
+  readonly reason: BuilderPreviewRejectReason;
   readonly count: number;
 }
 
@@ -322,7 +342,7 @@ export interface BuilderRenameMapKeyCommand {
 /** The allocator's own outcome for one rule — the single capacity truth every display reports instead of re-deriving. For access rules nothing is consumed at resolve time (the runtime schedules access within terminal capacity): ``allocated_pairs`` counts the declared candidate universe and ``free`` always mirrors ``matching``. Displays must not present access facts as fixed allocation. */
 export interface BuilderRuleAllocation {
   readonly rule_id: string;
-  readonly kind: "access" | "isl" | "inter_body";
+  readonly kind: LinkLabel;
   readonly allocated_pairs: number;
   readonly per_node: ReadonlyArray<BuilderNodeInterfaceFacts>;
 }
@@ -330,7 +350,7 @@ export interface BuilderRuleAllocation {
 /** The server's frozen-epoch visibility verdict for one link rule. NodalArc computes preview geometry through the same OME visibility composites the runtime uses; the builder renders these facts and never runs a second physics engine. ``preview_scope`` says whether geometry ran and, if not, why. Only ``computed`` carries reason counts and drawn pairs. The preview is bounded, not a simulation. ``pairs_total`` is the candidate universe size (a closed-form count, never a materialized pair set); ``pairs_tested`` is the deterministic subset geometry actually ran on (``min(pairs_total, budget)``, first pairs in authored/node-id order — never distance-ranked); ``pairs_drawn`` is how many tested pairs passed (the first such, capped to the draw cap). ``capped`` is true when the preview is partial on either axis (``pairs_tested < pairs_total`` or more passed than were drawn). Reason counts and drawn pairs describe the tested subset only. */
 export interface BuilderRulePreview {
   readonly rule_id: string;
-  readonly preview_scope: "computed" | "inter_body_pending" | "terrestrial_pending" | "disabled";
+  readonly preview_scope: PreviewScope;
   readonly pairs_total: number;
   readonly pairs_tested: number;
   readonly pairs_drawn: number;
@@ -363,9 +383,9 @@ export interface BuilderScalarControl {
   readonly specialized?: boolean;
   readonly description?: string | null;
   readonly kind?: "scalar";
-  readonly scalar_kind: "text" | "number" | "boolean" | "datetime" | "reference";
+  readonly scalar_kind: BuilderControlScalarKind;
   readonly value?: string | number | boolean | null;
-  readonly number_kind?: "integer" | "float" | null;
+  readonly number_kind?: BuilderControlNumberKind | null;
   readonly constraints?: BuilderScalarConstraints;
   readonly reference_families?: ReadonlyArray<CatalogFamily>;
 }
@@ -431,7 +451,7 @@ export interface BuilderSessionDeployRequest {
 
 /** Stable transport evidence for a Builder session save that did not succeed. */
 export interface BuilderSessionSaveRefusal {
-  readonly code: "builder_session_save.save_blocked" | "builder_session_save.stale_write" | "builder_session_save.graph_invalid" | "builder_session_save.persistence_failed" | "builder_session_save.storage_verification_failed";
+  readonly code: BuilderSessionSaveRefusalCode;
   readonly message: string;
   readonly target_ref: SessionRef;
   readonly base_generation: string | null;
@@ -561,7 +581,7 @@ export interface BuilderVisualAuthoringFacts {
 export interface BuilderVisualBoundaryAdapterMetadata {
   readonly runtime_supported: boolean;
   readonly support_note: string | null;
-  readonly id: "static_ip" | "bgp" | "dtn_bundle";
+  readonly id: RoutingBoundaryAdapter;
   readonly label: string;
 }
 
@@ -702,7 +722,7 @@ export interface BuilderVisualDraftRetargetRequest {
 
 /** Presentation facts for one canonical node forwarding class. */
 export interface BuilderVisualForwardingClassMetadata {
-  readonly id: "routed" | "host" | "bridge" | "control_only";
+  readonly id: ForwardingClass;
   readonly label: string;
 }
 
@@ -763,13 +783,13 @@ export interface BuilderVisualLinkEndpoint {
   readonly segment_id?: string;
   readonly tag?: string | null;
   readonly role?: WizardTerminalRole | null;
-  readonly medium?: "rf" | "optical" | null;
+  readonly medium?: TerminalMedium | null;
   readonly min_elevation_deg?: number | null;
 }
 
 /** Presentation facts for one canonical link-terminal medium. */
 export interface BuilderVisualLinkMediumMetadata {
-  readonly id: "rf" | "optical";
+  readonly id: TerminalMedium;
   readonly label: string;
 }
 
@@ -803,7 +823,7 @@ export interface BuilderVisualMountRoleMetadata {
 export interface BuilderVisualNode {
   readonly id?: string;
   readonly display_name?: string;
-  readonly forwarding?: "routed" | "host" | "bridge" | "control_only" | null;
+  readonly forwarding?: ForwardingClass | null;
   readonly profile?: string | null;
   readonly ethernet?: ReadonlyArray<string>;
   readonly terminals?: ReadonlyArray<BuilderVisualTerminalMount>;
@@ -859,7 +879,7 @@ export interface BuilderVisualRederiveLinkCommand {
 export interface BuilderVisualRoutingBoundary {
   readonly boundary_id?: string;
   readonly over_rule_id?: string;
-  readonly adapter?: "static_ip" | "bgp" | "dtn_bundle" | null;
+  readonly adapter?: RoutingBoundaryAdapter | null;
   readonly from_domain_id?: string;
   readonly to_domain_id?: string;
   readonly export_node_loopbacks?: boolean;
@@ -869,7 +889,7 @@ export interface BuilderVisualRoutingBoundary {
 export interface BuilderVisualRoutingDomain {
   readonly domain_id?: string;
   readonly label?: string;
-  readonly protocol?: "isis" | "ospf" | "bgp" | "static" | null;
+  readonly protocol?: RoutingProtocol | null;
   readonly member_segment_ids?: ReadonlyArray<string>;
   readonly hello_interval_s?: number | null;
   readonly hold_interval_s?: number | null;
@@ -879,7 +899,7 @@ export interface BuilderVisualRoutingDomain {
 export interface BuilderVisualRoutingProtocolMetadata {
   readonly runtime_supported: boolean;
   readonly support_note: string | null;
-  readonly id: "isis" | "ospf" | "bgp" | "static";
+  readonly id: RoutingProtocol;
   readonly label: string;
   readonly timer_fields: boolean;
 }
@@ -1046,14 +1066,14 @@ export interface BuilderWorldNode {
   readonly segment_id: string;
   readonly namespace: string;
   readonly tenant_id: string;
-  readonly kind: "satellite" | "ground_station";
+  readonly kind: NodeKind;
   readonly plane: number | null;
   readonly slot: number | null;
   readonly tags: ReadonlyArray<string>;
   readonly surface_position: ResolvedSurfacePosition | null;
   readonly epoch_position: NodePosition | null;
-  readonly forwarding: "routed" | "host" | "bridge" | "control_only" | null;
-  readonly role: "router" | "host" | "forwarding_only";
+  readonly forwarding: ForwardingClass | null;
+  readonly role: NodeRole;
   readonly routing_instances: ReadonlyArray<NodeRoutingInstance>;
   readonly terminal_inventory: ReadonlyArray<ResolvedTerminalBlock>;
   readonly interfaces: ResolvedNodeInterfaces | null;
@@ -1127,7 +1147,7 @@ export interface CatalogDependentsRequest {
 /** Revisioned metadata for one catalog library row. */
 export interface CatalogDocumentSummary {
   readonly ref: CatalogRef;
-  readonly namespace: "nodalarc" | "user";
+  readonly namespace: CatalogNamespace;
   readonly family: CatalogFamily;
   readonly revision: string;
   readonly size_bytes: number;
@@ -1265,7 +1285,7 @@ export interface CatalogListPage {
 /** Bounded catalog-list request using an opaque server cursor. */
 export interface CatalogListRequest {
   readonly family?: CatalogFamily | null;
-  readonly namespace?: "nodalarc" | "user" | null;
+  readonly namespace?: CatalogNamespace | null;
   readonly page_size?: number;
   readonly page_token?: string | null;
 }
@@ -1278,7 +1298,7 @@ export interface CatalogMutationResult {
 
 /** Stable typed evidence for an authoring operation refused by the backend. */
 export interface CatalogOperationRefusal {
-  readonly code: "catalog_authoring.not_found" | "catalog_authoring.read_only" | "catalog_authoring.invalid_document" | "catalog_authoring.invalid_patch" | "catalog_authoring.invalid_graph" | "catalog_authoring.conflict" | "catalog_authoring.stale_revision" | "catalog_authoring.invalid_page_token" | "catalog_authoring.stale_page_token" | "catalog_authoring.impact_mismatch" | "catalog_authoring.dependents_exist" | "catalog_authoring.import_limit" | "catalog_authoring.import_incomplete" | "catalog_authoring.import_collision" | "catalog_authoring.stale_import_proposal" | "catalog_authoring.persistence_failed";
+  readonly code: CatalogAuthoringRefusalCode;
   readonly message: string;
   readonly ref: string | null;
   readonly expected_revision: string | null;
@@ -1298,7 +1318,7 @@ export interface CatalogSessionSourceId {
 export interface CatalogSessionSummary {
   readonly source_id: CatalogSessionSourceId;
   readonly name: string;
-  readonly source: "nodalarc" | "user";
+  readonly source: CatalogNamespace;
   readonly constellation: string;
   readonly routing_stack: string;
   readonly deploy_allowed: boolean;
@@ -1348,7 +1368,7 @@ export interface CatalogSessionYamlImportRequest {
 /** Proposed, committed, unchanged, or blocked YAML-file import result. */
 export interface CatalogSessionYamlImportResult {
   readonly root_ref: SessionRef;
-  readonly outcome: "proposed" | "committed" | "unchanged" | "blocked";
+  readonly outcome: CatalogImportOutcome;
   readonly generation: string;
   readonly proposal_token: string | null;
   readonly proposed_writes: ReadonlyArray<CatalogYamlImportWrite>;
@@ -1376,7 +1396,7 @@ export interface CatalogYamlFile {
 /** Exact identity collision that import will never rename or deep-match. */
 export interface CatalogYamlImportCollision {
   readonly ref: CatalogRef;
-  readonly reason: "shipped_missing" | "shipped_content_mismatch" | "user_content_mismatch";
+  readonly reason: CatalogImportCollisionReason;
   readonly existing_revision: string | null;
 }
 
@@ -1430,7 +1450,7 @@ export interface DependencyClosureInventory {
 
 /** Body origin in the session common frame at ``epoch_unix``. Positions and velocities are Earth-relative GCRS-like km vectors supplied by the backend ephemeris provider. The renderer may apply a visual scale or camera-relative transform, but these numbers remain the authoritative physical frame facts used to place bodies relative to one another. */
 export interface EphemerisBodyFrame {
-  readonly body_id: "earth" | "luna";
+  readonly body_id: SupportedSurfaceBody;
   readonly mean_radius_km: number;
   readonly equatorial_radius_km: number;
   readonly polar_radius_km: number;
@@ -1459,8 +1479,8 @@ export interface EphemerisNodeFixed {
   readonly local_node_id: string;
   readonly namespace: string;
   readonly tags: ReadonlyArray<string>;
-  readonly reference_body: "earth" | "luna";
-  readonly frame_id: "earth" | "luna";
+  readonly reference_body: SupportedSurfaceBody;
+  readonly frame_id: SupportedSurfaceBody;
 }
 
 /** Mean-element ephemeris for a satellite. Fields mirror ``nodalarc.orbital.OrbitalElements``. The ``propagator`` field is part of the contract because the same element fields can drive either the two-body Keplerian engine or the J2 mean-element engine. Consumers must not silently treat J2 sessions as Keplerian. */
@@ -1479,8 +1499,8 @@ export interface EphemerisNodeKeplerian {
   readonly local_node_id: string;
   readonly namespace: string;
   readonly tags: ReadonlyArray<string>;
-  readonly reference_body: "earth" | "luna";
-  readonly frame_id: "earth" | "luna";
+  readonly reference_body: SupportedSurfaceBody;
+  readonly frame_id: SupportedSurfaceBody;
 }
 
 /** TLE-backed satellite ephemeris for SGP4 propagation. */
@@ -1495,8 +1515,8 @@ export interface EphemerisNodeTLE {
   readonly local_node_id: string;
   readonly namespace: string;
   readonly tags: ReadonlyArray<string>;
-  readonly reference_body: "earth" | "luna";
-  readonly frame_id: "earth" | "luna";
+  readonly reference_body: SupportedSurfaceBody;
+  readonly frame_id: SupportedSurfaceBody;
 }
 
 /** Ground station coverage statistics for one orbital period. */
@@ -1556,7 +1576,7 @@ export interface NodePosition {
 /** A node's participation in one routing instance (a ``routing.domains`` entry). */
 export interface NodeRoutingInstance {
   readonly domain_id: string;
-  readonly protocol: "isis" | "ospf" | "bgp" | "static";
+  readonly protocol: RoutingProtocol;
   readonly areas: ReadonlyArray<string>;
   readonly interfaces: ReadonlyArray<NodeInstanceInterface>;
   readonly area_border: boolean;
@@ -1583,7 +1603,7 @@ export interface ResolvedOriginatedPrefixes {
 
 /** Fixed body-surface position for one placed node. */
 export interface ResolvedSurfacePosition {
-  readonly body: "earth" | "luna";
+  readonly body: SupportedSurfaceBody;
   readonly lat_deg: number;
   readonly lon_deg: number;
   readonly alt_m: number;
@@ -1594,7 +1614,7 @@ export interface ResolvedTerminalBlock {
   readonly terminal_id: string;
   readonly owner_node_id: string;
   readonly endpoint_role: WizardTerminalRole;
-  readonly medium: "rf" | "optical";
+  readonly medium: TerminalMedium;
   readonly source_terminal_id: string | null;
   readonly link_role: string | null;
   readonly count: number;
@@ -1611,7 +1631,7 @@ export interface ResolvedTerminalBlock {
 
 /** Boresight reference for a satellite ground-terminal FoR cone. ``target_body`` identifies which body the nadir vector points toward. The cone width itself lives on the terminal's ``field_of_regard_deg`` field as the full apex angle. */
 export interface SatGroundTerminalBoresight {
-  readonly target_body: "earth" | "luna";
+  readonly target_body: SupportedSurfaceBody;
   readonly mode: "nadir";
 }
 
@@ -1633,7 +1653,7 @@ export interface SessionMeta {
 
 /** Boresight reference for a ground terminal field-of-regard cone. The cone width itself lives on the terminal's ``field_of_regard_deg`` field as the full apex angle. This model only states what direction that cone is centered on. */
 export interface TerminalBoresight {
-  readonly mode: "local_vertical" | "configured_topocentric" | "steerable_envelope";
+  readonly mode: GroundBoresightMode;
   readonly configured_az_deg: number | null;
   readonly configured_el_deg: number | null;
   readonly min_az_deg: number | null;

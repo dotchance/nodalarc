@@ -427,6 +427,7 @@ def test_visual_draft_command_route_returns_next_revision_and_typed_stale_refusa
         "ref": "user:sessions/api-command-draft.yaml",
         "expected_revision": "0",
         "current_revision": "1",
+        "impact": None,
         "collisions": [],
         "cause_type": "BuilderVisualDraftCommandError",
     }
@@ -462,6 +463,9 @@ def test_visual_open_missing_source_is_a_typed_path_free_404(client: TestClient)
         "code": "catalog_authoring.not_found",
         "message": "Catalog document user:sessions/missing.yaml was not found",
         "ref": "user:sessions/missing.yaml",
+        "expected_revision": None,
+        "current_revision": None,
+        "impact": None,
         "collisions": [],
         "cause_type": "CatalogNotFoundError",
     }

@@ -15,14 +15,20 @@ import * as THREE from "three";
 import { useFrame } from "@react-three/fiber";
 import { LINK_GROUND_COLOR, LINK_ISL_COLOR } from "../config";
 import { getNodeWorldPosition } from "../globe/r3f/positions";
-import type { BuilderPreviewPair } from "./generated/builderApi";
+import type { BuilderPreviewPair, LinkLabel } from "./generated/builderApi";
 
 const _a = new THREE.Vector3();
 const _b = new THREE.Vector3();
 const _color = new THREE.Color();
 
-function kindColor(kind: string): THREE.Color {
-  return _color.set(kind === "access" ? LINK_GROUND_COLOR : LINK_ISL_COLOR);
+const KIND_COLOR: Record<LinkLabel, number> = {
+  access: LINK_GROUND_COLOR,
+  isl: LINK_ISL_COLOR,
+  inter_body: LINK_ISL_COLOR,
+};
+
+function kindColor(kind: LinkLabel): THREE.Color {
+  return _color.set(KIND_COLOR[kind]);
 }
 
 /** the geometry attributes are stale — and must be rebuilt — when the

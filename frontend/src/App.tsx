@@ -224,7 +224,7 @@ function AppInner() {
     const next = !historicalMode;
     setHistoricalPlaying(false);
     if (next) {
-      setHistoricalRangeEnd(snapshot?.sim_time ?? new Date().toISOString());
+      setHistoricalRangeEnd(snapshot?.sim_time ?? null);
     }
     setHistoricalMode(next);
   }, [historicalMode, setHistoricalMode, snapshot?.sim_time]);

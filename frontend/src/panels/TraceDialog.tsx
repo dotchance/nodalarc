@@ -9,6 +9,7 @@ import { REST_URL, TRACE_FORWARD_COLOR, TRACE_REVERSE_COLOR, authHeaders, hexToC
 import { apiErrorFromException, apiErrorMessage } from "../ui/apiError";
 import { formatTime } from "../translate";
 import type { NodeState, StateSnapshot, TraceState, TraceStopReason } from "../generated/vsApi";
+import { isGroundNode } from "../networkIdentity";
 
 // Forward and reverse hops take their line colors, so the lists match the globe.
 const FORWARD_CSS = hexToCSS(TRACE_FORWARD_COLOR);
@@ -58,7 +59,7 @@ export function TraceDialog({ nodes, selectedNodeId, snapshot }: TraceDialogProp
   }, [selectedNodeId]);
 
   const sorted = [...nodes].sort((a, b) => {
-    if (a.node_type !== b.node_type) return a.node_type === "ground_station" ? -1 : 1;
+    if (a.node_type !== b.node_type) return isGroundNode(a) ? -1 : 1;
     return a.node_id.localeCompare(b.node_id);
   });
 

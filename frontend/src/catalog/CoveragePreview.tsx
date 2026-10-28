@@ -6,6 +6,7 @@
  * severity: info (neutral), note (blue), warning (amber), error (red).
  */
 
+import type { CoverageInsight } from "../builder/generated/builderApi";
 import type { CoveragePreviewResult } from "./wizardTypes";
 
 interface CoveragePreviewProps {
@@ -22,33 +23,19 @@ function feasibilityColor(pct: number): string {
   return "var(--accent-red, #ff4444)";
 }
 
-/** Severity → CSS class mapping. */
-function severityClass(severity: string): string {
-  switch (severity) {
-    case "info": return "wizard-insight--info";
-    case "note": return "wizard-insight--note";
-    case "warning": return "wizard-insight--warning";
-    case "error": return "wizard-insight--error";
-    default: return "wizard-insight--note";
-  }
-}
-
-/** Severity → label. */
-function severityLabel(severity: string): string {
-  switch (severity) {
-    case "info": return "\u2139\ufe0f";
-    case "note": return "\u2139\ufe0f";
-    case "warning": return "\u26a0\ufe0f";
-    case "error": return "\u274c";
-    default: return "";
-  }
-}
+/** Severity → CSS class and icon. */
+const SEVERITY: Record<CoverageInsight["severity"], { className: string; icon: string }> = {
+  info: { className: "wizard-insight--info", icon: "\u2139\ufe0f" },
+  note: { className: "wizard-insight--note", icon: "\u2139\ufe0f" },
+  warning: { className: "wizard-insight--warning", icon: "\u26a0\ufe0f" },
+  error: { className: "wizard-insight--error", icon: "\u274c" },
+};
 
 /** Render one backend-typed coverage insight. */
-function Insight({ item }: { item: { severity: string; message: string } }) {
+function Insight({ item }: { item: CoverageInsight }) {
   return (
-    <div className={`wizard-insight ${severityClass(item.severity)}`}>
-      <span className="wizard-insight-icon">{severityLabel(item.severity)}</span>
+    <div className={`wizard-insight ${SEVERITY[item.severity].className}`}>
+      <span className="wizard-insight-icon">{SEVERITY[item.severity].icon}</span>
       <span>{item.message}</span>
     </div>
   );

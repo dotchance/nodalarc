@@ -82,14 +82,14 @@ export function GroundStationDetail({ node, snapshot, onSelect }: GroundStationD
   const siteMembers = snapshot.nodes
     .filter((n) => n.node_type === "ground_station" && n.namespace === node.namespace)
     .sort((a, b) => a.node_id.localeCompare(b.node_id));
-  const nodeAddresses = node.addresses ?? [];
+  const nodeAddresses = node.addresses;
   const loopbacks = nodeAddresses.filter((a) => a.purpose === "router_loopback");
   const siteInterfaces = nodeAddresses.filter((a) => a.purpose === "site_interface");
   const sitePrefixes = nodeAddresses.filter((a) => a.purpose === "site_prefix");
   const remoteSiteTargets = snapshot.nodes
     .filter((n) => n.node_type === "ground_station" && n.node_id !== node.node_id)
     .flatMap((n) =>
-      (n.addresses ?? [])
+      n.addresses
         .filter((a) => a.purpose === "site_interface" && a.family === "ipv4")
         .map((a) => ({
           nodeId: n.node_id,

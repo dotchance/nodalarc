@@ -24,6 +24,7 @@ import { linkKey } from "./linkBatch";
 import type { Selection } from "../../types";
 import { pickSceneAtScreenPoint, type PickBody } from "./sceneHitTesting";
 import type { LinkState, NodeState } from "../../generated/vsApi";
+import { selectionTypeForNode } from "../../networkIdentity";
 
 interface LinkPickerProps {
   nodes: readonly NodeState[];
@@ -88,7 +89,7 @@ export function LinkPicker({
       if (hit.kind === "node") {
         const node = hit.node;
         onSelect({
-          type: node.node_type === "ground_station" ? "ground_station" : "satellite",
+          type: selectionTypeForNode(node),
           id: node.node_id,
         });
         if (e.detail >= 2) onFocusNode(node.node_id);

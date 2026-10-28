@@ -11,6 +11,7 @@ import { Icon } from "../../ui/icons/Icon";
 import { REGIME_TINT, type Regime } from "../../taxonomy/regime";
 import { roleLabel, routingSummary } from "../../routing/instances";
 import type { NodeState } from "../../generated/vsApi";
+import { isGroundNode } from "../../networkIdentity";
 
 export interface HoverInfo {
   node: NodeState;
@@ -24,7 +25,7 @@ export interface HoverInfo {
 export function Tooltip({ hover, regime }: { hover: HoverInfo | null; regime?: Regime }) {
   if (!hover) return null;
   const n = hover.node;
-  const isGround = n.node_type === "ground_station";
+  const isGround = isGroundNode(n);
   const detail = hover.caption
     ? hover.caption
     : isGround

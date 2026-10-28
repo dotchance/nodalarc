@@ -10,6 +10,7 @@ import { REGIME_TINT, type Regime } from "../taxonomy/regime";
 import type { Selection } from "../types";
 import { instanceDetail, instanceLabel, roleLabel } from "../routing/instances";
 import type { StateSnapshot } from "../generated/vsApi";
+import { isGroundNode } from "../networkIdentity";
 
 interface NodePopoverProps {
   snapshot: StateSnapshot | null;
@@ -27,7 +28,7 @@ export function NodePopover({ snapshot, selection, regime, onClose, onOpenCli }:
     <div className="node-popover">
       <div className="node-popover-head">
         <span className="object-head-icon">
-          <Icon name={node?.node_type === "ground_station" ? "satellite-dish" : "satellite"} size={14} />
+          <Icon name={node && isGroundNode(node) ? "satellite-dish" : "satellite"} size={14} />
         </span>
         <span className="node-popover-title">{node?.node_id ?? selection.id}</span>
         {regime && regime !== "unknown" && (
@@ -38,7 +39,7 @@ export function NodePopover({ snapshot, selection, regime, onClose, onOpenCli }:
       {node ? (
         <>
           <KeyValueRow label="Type" mono={false}>
-            {node.node_type === "ground_station" ? "Ground station" : "Satellite"}
+            {isGroundNode(node) ? "Ground station" : "Satellite"}
           </KeyValueRow>
           <KeyValueRow label="Role" mono={false}>{roleLabel(node.role)}</KeyValueRow>
           {node.routing_instances.map((instance) => (

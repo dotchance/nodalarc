@@ -6,18 +6,23 @@
  * `NodeState.node_type` and links from `LinkState.link_type`, not from prefixes.
  */
 
+import type { NodeKind } from "./builder/generated/builderApi";
 import type { LinkState, NodeState, PublicLinkType } from "./generated/vsApi";
 
-const NON_GROUND_LINK_TYPES: ReadonlySet<string> = new Set<PublicLinkType>([
-  "isl",
-  "inter_constellation",
-  "inter_body_relay",
-]);
+const GROUND_NODE: Record<NodeKind, boolean> = { ground_station: true, satellite: false };
+
+const GROUND_LINK: Record<PublicLinkType, boolean> = {
+  ground: true,
+  isl: false,
+  inter_constellation: false,
+  inter_body_relay: false,
+};
 
 export function isGroundNode(node: Pick<NodeState, "node_type">): boolean {
-  if (node.node_type === "ground_station") return true;
-  if (node.node_type === "satellite") return false;
-  throw new Error(`Unknown node_type for frontend classification: ${node.node_type}`);
+  if (!(node.node_type in GROUND_NODE)) {
+    throw new Error(`Unknown node_type for frontend classification: ${String(node.node_type)}`);
+  }
+  return GROUND_NODE[node.node_type];
 }
 
 export function selectionTypeForNode(node: Pick<NodeState, "node_type">): "ground_station" | "satellite" {
@@ -25,10 +30,11 @@ export function selectionTypeForNode(node: Pick<NodeState, "node_type">): "groun
 }
 
 export function isGroundLinkType(linkType: PublicLinkType): boolean {
-  if (linkType === "ground") return true;
-  if (NON_GROUND_LINK_TYPES.has(linkType)) return false;
   // A feed from another VS-API release can carry a kind this page does not know.
-  throw new Error(`Unknown link_type for frontend link classification: ${String(linkType)}`);
+  if (!(linkType in GROUND_LINK)) {
+    throw new Error(`Unknown link_type for frontend link classification: ${String(linkType)}`);
+  }
+  return GROUND_LINK[linkType];
 }
 
 export function isGroundLinkState(link: Pick<LinkState, "link_type">): boolean {

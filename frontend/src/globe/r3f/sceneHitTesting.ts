@@ -3,7 +3,7 @@
 
 import * as THREE from "three";
 import { GS_SIZE, SAT_RADIUS } from "../../config";
-import { isGroundLinkState } from "../../networkIdentity";
+import { isGroundLinkState, isGroundNode } from "../../networkIdentity";
 import { getNodeWorldPosition } from "./positions";
 import type { LinkState, NodeState } from "../../generated/vsApi";
 
@@ -110,7 +110,7 @@ function projectedRadiusPx(
 function nodeVisualRadius(node: NodeState): number {
   // Kept as a single hook for model-specific glyphs: when satellite/terminal types get custom
   // glyph geometry, the visual radius and the screen-space pick target change in one place.
-  return node.node_type === "ground_station" ? GS_SIZE * 0.5 : SAT_RADIUS;
+  return isGroundNode(node) ? GS_SIZE * 0.5 : SAT_RADIUS;
 }
 
 function pickNode(

@@ -27,6 +27,7 @@ import { isOccludedBySphere, getLabelsEnabled } from "../labels";
 import { getGsLabelsEnabled } from "../groundStations";
 import { getNodeBodySphere, getNodeWorldPosition } from "./positions";
 import type { NodeState } from "../../generated/vsApi";
+import { isGroundNode } from "../../networkIdentity";
 
 // Satellite-label distance fade (globe/labels.ts FADE_IN_DIST / FADE_OUT_DIST).
 const SAT_FADE_IN_DIST = 200;
@@ -98,12 +99,7 @@ export function collectFoldSegments(
   probe.clear();
   for (const node of nodes) {
     if (!probe.has(node.reference_body)) probe.set(node.reference_body, node.node_id);
-    const classEnabled =
-      node.node_type === "satellite"
-        ? satEnabled
-        : node.node_type === "ground_station"
-          ? gsEnabled
-          : false;
+    const classEnabled = isGroundNode(node) ? gsEnabled : satEnabled;
     if (!classEnabled) continue;
     let segments = out.get(node.reference_body);
     if (!segments) {

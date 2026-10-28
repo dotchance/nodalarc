@@ -14,8 +14,16 @@
  * but unselected" without the decision. Pure; unit-tested.
  */
 import type { Family } from "./families";
-import { schedulerOpsLabel } from "./reasons";
-import type { ActuationNotice, LinkState } from "../generated/vsApi";
+import type { ActuationNotice, ActuationState, LinkState } from "../generated/vsApi";
+
+/** The family an actuation state implies; a clean state implies none, so the glyph
+ *  follows the link snapshot. */
+const ACTUATION_FAMILY: Record<ActuationState, Family | null> = {
+  clean: null,
+  actuation_blocked: "faulted",
+  kernel_dirty: "faulted",
+  unknown: "unknown",
+};
 
 export interface GsFamily {
   family: Family;
@@ -30,11 +38,10 @@ export function groundStationFamily(
 ): GsFamily {
   const notice = actuationNotices.find((n) => n.gs_id === gsId);
   if (notice) {
-    const reason = notice.message || schedulerOpsLabel(notice.reason_code);
-    if (notice.blocking_new_ground_link_up || notice.actuation_state === "kernel_dirty" || notice.actuation_state === "actuation_blocked") {
-      return { family: "faulted", reason };
-    }
-    if (notice.actuation_state === "unknown") return { family: "unknown", reason };
+    const reason = notice.message;
+    if (notice.blocking_new_ground_link_up) return { family: "faulted", reason };
+    const family = ACTUATION_FAMILY[notice.actuation_state];
+    if (family !== null) return { family, reason };
     // A retained clean heartbeat is health metadata, not a visual state. Fall through to the
     // actual link snapshot so clean notices cannot manufacture an in-flight/degraded glyph.
   }

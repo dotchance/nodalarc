@@ -51,7 +51,7 @@ export function Dashboard({ snapshot }: DashboardProps) {
     );
   }
 
-  const notices = snapshot.actuation_notices ?? [];
+  const notices = snapshot.actuation_notices;
 
   return (
     <div className="dashboard">

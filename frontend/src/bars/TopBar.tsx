@@ -161,7 +161,7 @@ export function TopBar({ snapshot, historicalMode, onToggleHistorical, activeSes
         style={switching ? { cursor: "wait" } : undefined}
         title="Open session catalog"
       >
-        {activeSessionName ?? snapshot?.constellation_name ?? "No session"}
+        {activeSessionName ?? "NodalArc"}
       </button>
       {snapshot?.routing_stack && <span className="topbar-stack">{snapshot.routing_stack}</span>}
 

@@ -24,7 +24,7 @@ interface WebSocketState {
   switchDetail: string | null;
   /** Why the last token fetch failed while reconnecting; null once one succeeds. */
   tokenError: string | null;
-  /** Why the last frame could not be read; null once one is read. */
+  /** Why a frame on this connection could not be read; null until one fails. */
   frameError: string | null;
   sendMessage: (command: StateSocketCommand) => void;
 }
@@ -51,6 +51,8 @@ export function useWebSocket(): WebSocketState {
     wsRef.current = ws;
 
     ws.onopen = () => {
+      // A new connection resends the whole state, so a frame the last one dropped no longer matters.
+      setFrameError(null);
       setConnected(true);
       setHasEverConnected(true);
       everConnectedRef.current = true;
@@ -68,7 +70,6 @@ export function useWebSocket(): WebSocketState {
         setFrameError(`VS-API sent a state frame that is not JSON: ${String(err)}`);
         return;
       }
-      setFrameError(null);
       switch (frame.msg_type) {
         // Sent on connect and on epoch change.
         case "session_ephemeris":

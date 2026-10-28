@@ -518,6 +518,40 @@ class ContinuousTraceStatus(BaseModel):
     result: TracedPath | None
 
 
+class TerminalInput(BaseModel):
+    """Keystrokes the browser sends to a node's terminal."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    type: Literal["input"] = "input"
+    data: str
+
+
+class TerminalResize(BaseModel):
+    """The browser's terminal window changed size."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    type: Literal["resize"] = "resize"
+    cols: int = Field(gt=0)
+    rows: int = Field(gt=0)
+
+
+class TerminalOutput(BaseModel):
+    """What the node's terminal printed."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    type: Literal["output"] = "output"
+    data: str
+
+
+# Every message on a terminal socket: input and resize from the browser, output from VS-API.
+TerminalMessage = Annotated[
+    TerminalInput | TerminalResize | TerminalOutput, Field(discriminator="type")
+]
+
+
 class IntrospectRequest(BaseModel):
     """One whitelisted vtysh command addressed to one runtime node."""
 

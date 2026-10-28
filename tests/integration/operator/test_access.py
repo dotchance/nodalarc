@@ -7,6 +7,7 @@ import re
 import time
 
 import pytest
+from nodalarc.models.vs_api import TerminalInput
 from websockets.exceptions import ConnectionClosed, InvalidStatus
 from websockets.sync.client import connect
 
@@ -58,7 +59,7 @@ def test_a_terminal_closes_when_its_shell_ends(operator: Operator) -> None:
         with connect(operator.socket_url(f"/ws/v1/terminal/{node_id}")) as socket:
             with operator.terminal(node_id):
                 pass  # the node answers a terminal before this one says exit
-            socket.send(json.dumps({"type": "input", "data": "exit\n"}))
+            socket.send(TerminalInput(data="exit\n").model_dump_json())
             with pytest.raises(ConnectionClosed):
                 for _ in range(40):
                     try:
@@ -66,6 +67,19 @@ def test_a_terminal_closes_when_its_shell_ends(operator: Operator) -> None:
                     except TimeoutError:
                         continue
             print(f"{kind} {node_id}: the terminal closed after exit")
+
+
+def test_a_terminal_closes_on_a_message_that_is_not_input_or_resize(operator: Operator) -> None:
+    router = _one_of_each_kind(operator)["router"]
+    with connect(operator.socket_url(f"/ws/v1/terminal/{router}")) as socket:
+        socket.send(json.dumps({"type": "resize", "cols": "wide"}))
+        with pytest.raises(ConnectionClosed) as closed:
+            for _ in range(40):
+                try:
+                    socket.recv(timeout=0.5)
+                except TimeoutError:
+                    continue
+    assert closed.value.rcvd is not None and closed.value.rcvd.code == 4400, closed.value
 
 
 def test_a_closed_terminal_leaves_nothing_running_in_the_workload(operator: Operator) -> None:

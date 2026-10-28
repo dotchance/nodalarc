@@ -1029,6 +1029,25 @@ export interface TraceRequest {
   readonly dst_node: string;
 }
 
+/** Keystrokes the browser sends to a node's terminal. */
+export interface TerminalInput {
+  readonly type?: "input";
+  readonly data: string;
+}
+
+/** The browser's terminal window changed size. */
+export interface TerminalResize {
+  readonly type?: "resize";
+  readonly cols: number;
+  readonly rows: number;
+}
+
+/** What the node's terminal printed. */
+export interface TerminalOutput {
+  readonly type?: "output";
+  readonly data: string;
+}
+
 /** What an operator sends to repair one station. VS-API fills the Scheduler instance and wiring generation from the station's latest actuation state when the request leaves them out, then sends an OperatorRepairCommand. */
 export interface OperatorRepairRequest {
   readonly gs_id: string;

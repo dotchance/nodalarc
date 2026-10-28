@@ -14,6 +14,7 @@ import { FitAddon } from "@xterm/addon-fit";
 import { WebLinksAddon } from "@xterm/addon-web-links";
 import "@xterm/xterm/css/xterm.css";
 import { REST_URL, getApiKey } from "../config";
+import type { TerminalInput, TerminalOutput, TerminalResize } from "../builder/generated/builderApi";
 import { tokens, withAlpha } from "../styles/tokens";
 
 type ConnectionStatus = "connecting" | "connected" | "disconnected" | "error";
@@ -130,14 +131,14 @@ export function PersistentTerminal({
         if (fitRef.current) {
           const dims = fitRef.current.proposeDimensions();
           if (dims) {
-            ws.send(JSON.stringify({ type: "resize", cols: dims.cols, rows: dims.rows }));
+            ws.send(JSON.stringify({ type: "resize", cols: dims.cols, rows: dims.rows } satisfies TerminalResize));
           }
         }
       };
 
       ws.onmessage = (event) => {
         try {
-          const msg = JSON.parse(event.data);
+          const msg = JSON.parse(event.data) as TerminalOutput;
           if (msg.type === "output" && msg.data) {
             if (!session.receivedFirstOutput) {
               session.receivedFirstOutput = true;
@@ -246,7 +247,7 @@ export function PersistentTerminal({
     // Attach keyboard listener to this session's WebSocket
     dataListenerRef.current = terminal.onData((data) => {
       if (session.ws && session.ws.readyState === WebSocket.OPEN) {
-        session.ws.send(JSON.stringify({ type: "input", data }));
+        session.ws.send(JSON.stringify({ type: "input", data } satisfies TerminalInput));
       }
     });
 
@@ -258,7 +259,7 @@ export function PersistentTerminal({
       if (fitRef.current && session.ws?.readyState === WebSocket.OPEN) {
         const dims = fitRef.current.proposeDimensions();
         if (dims) {
-          session.ws.send(JSON.stringify({ type: "resize", cols: dims.cols, rows: dims.rows }));
+          session.ws.send(JSON.stringify({ type: "resize", cols: dims.cols, rows: dims.rows } satisfies TerminalResize));
         }
       }
     });
@@ -275,7 +276,7 @@ export function PersistentTerminal({
       if (session?.ws?.readyState === WebSocket.OPEN && fitRef.current) {
         const dims = fitRef.current.proposeDimensions();
         if (dims) {
-          session.ws.send(JSON.stringify({ type: "resize", cols: dims.cols, rows: dims.rows }));
+          session.ws.send(JSON.stringify({ type: "resize", cols: dims.cols, rows: dims.rows } satisfies TerminalResize));
         }
       }
     });

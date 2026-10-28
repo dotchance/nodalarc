@@ -18,6 +18,8 @@ from typing import Any
 
 import httpx
 from nodalarc.models.builder_catalog_api import CatalogComponentDraftEnvelope
+from nodalarc.models.vs_api import TerminalInput, TerminalMessage, TerminalOutput
+from pydantic import TypeAdapter
 from websockets.exceptions import ConnectionClosed
 from websockets.sync.client import ClientConnection, connect
 
@@ -58,6 +60,9 @@ class Refused(Exception):
         super().__init__(f"{status}: {body}")
         self.status = status
         self.body = body
+
+
+_TERMINAL_MESSAGE: TypeAdapter[TerminalMessage] = TypeAdapter(TerminalMessage)
 
 
 class Terminal:
@@ -143,14 +148,15 @@ class Terminal:
         return "\n".join([*lines[1:-1], *([before_prompt] if before_prompt else [])])
 
     def _send(self, data: str) -> None:
-        self._socket.send(json.dumps({"type": "input", "data": data}))
+        self._socket.send(TerminalInput(data=data).model_dump_json())
 
     def _receive(self, wait: float) -> str:
         try:
-            message = json.loads(self._socket.recv(timeout=wait))
+            message = _TERMINAL_MESSAGE.validate_json(self._socket.recv(timeout=wait))
         except TimeoutError:
             return ""
-        return _ANSI.sub("", message.get("data", ""))
+        assert isinstance(message, TerminalOutput), f"{self._node_id} sent {message!r}"
+        return _ANSI.sub("", message.data)
 
     def _read_for(self, seconds: float) -> str:
         printed = ""

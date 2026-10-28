@@ -608,6 +608,19 @@
       "traced_paths",
       "wall_time"
     ],
+    "TerminalInput": [
+      "data",
+      "type"
+    ],
+    "TerminalOutput": [
+      "data",
+      "type"
+    ],
+    "TerminalResize": [
+      "cols",
+      "rows",
+      "type"
+    ],
     "TraceRequest": [
       "dst_node",
       "src_node"
@@ -1521,6 +1534,23 @@
       ],
       "session_status_detail": null
     },
+    "TerminalInput": {
+      "data": null,
+      "type": [
+        "input"
+      ]
+    },
+    "TerminalOutput": {
+      "data": null,
+      "type": [
+        "output"
+      ]
+    },
+    "TerminalResize": {
+      "type": [
+        "resize"
+      ]
+    },
     "TraceRequest": {
       "dst_node": null,
       "src_node": null
@@ -1691,6 +1721,9 @@
     "SessionTransitioningFrame": "lib/nodalarc/models/vs_api.py",
     "StampedOpsEvent": "lib/nodalarc/models/vs_api.py",
     "StateSnapshot": "lib/nodalarc/models/vs_api.py",
+    "TerminalInput": "lib/nodalarc/models/vs_api.py",
+    "TerminalOutput": "lib/nodalarc/models/vs_api.py",
+    "TerminalResize": "lib/nodalarc/models/vs_api.py",
     "TraceRequest": "lib/nodalarc/models/vs_api.py",
     "TracedPath": "lib/nodalarc/models/vs_api.py",
     "TransitionOperation": "lib/nodalarc/models/session_sources.py",

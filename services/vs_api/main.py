@@ -144,6 +144,10 @@ from nodalarc.models.vs_api import (
     SessionTransitioningFrame,
     StampedOpsEvent,
     StateSnapshot,
+    TerminalInput,
+    TerminalMessage,
+    TerminalOutput,
+    TerminalResize,
     TracedPath,
     TraceRequest,
     WiringProgressFrame,
@@ -167,7 +171,7 @@ from nodalarc.resolve_session import (
 )
 from nodalarc.runtime_config import ResolvedRuntimeConfig, RuntimeConfigError
 from nodalarc.session_nodes import available_session_nodes
-from pydantic import TypeAdapter
+from pydantic import TypeAdapter, ValidationError
 from urllib3.exceptions import HTTPError as TransportHTTPError
 from yaml import YAMLError
 
@@ -2188,6 +2192,9 @@ async def ws_state(websocket: WebSocket) -> None:
         _audit_log.info(f"WS_DISCONNECT ip={ws_ip}")
 
 
+_TERMINAL_MESSAGE: TypeAdapter[TerminalMessage] = TypeAdapter(TerminalMessage)
+
+
 @app.websocket("/ws/v1/terminal/{node_id}")
 async def ws_terminal(websocket: WebSocket, node_id: str) -> None:
     """Persistent interactive terminal to a constellation node via SSH.
@@ -2196,10 +2203,12 @@ async def ws_terminal(websocket: WebSocket, node_id: str) -> None:
     bidirectionally pipes data between the browser's WebSocket and the
     SSH channel. The user lands in vtysh — full FRR CLI access.
 
-    Message protocol (JSON over WebSocket):
+    Message protocol (JSON over WebSocket), the TerminalMessage union:
       Browser → VS-API: {"type": "input", "data": "show ip route\\n"}
       Browser → VS-API: {"type": "resize", "cols": 120, "rows": 40}
       VS-API → Browser: {"type": "output", "data": "Codes: K - kernel..."}
+    A browser message that is not an input or a resize closes the socket with
+    code 4400.
     """
     from vs_api.terminal import (
         ExecTerminalSession,
@@ -2230,16 +2239,13 @@ async def ws_terminal(websocket: WebSocket, node_id: str) -> None:
         _audit_log.info(f"WS_TERMINAL_NO_SURFACE ip={ws_ip} node={node_id}")
         await websocket.accept()
         await websocket.send_text(
-            json.dumps(
-                {
-                    "type": "output",
-                    "data": (
-                        f"\r\nNode {node_id} runs a workload that declares "
-                        "no terminal access.\r\nInspect it with its own "
-                        "logs and tooling instead.\r\n"
-                    ),
-                }
-            )
+            TerminalOutput(
+                data=(
+                    f"\r\nNode {node_id} runs a workload that declares "
+                    "no terminal access.\r\nInspect it with its own "
+                    "logs and tooling instead.\r\n"
+                )
+            ).model_dump_json()
         )
         await websocket.close(code=4409, reason="Workload declares no terminal access")
         return
@@ -2273,12 +2279,18 @@ async def ws_terminal(websocket: WebSocket, node_id: str) -> None:
             """Forward browser input to SSH session."""
             try:
                 async for msg in websocket.iter_text():
-                    data = json.loads(msg)
-                    msg_type = data.get("type", "")
-                    if msg_type == "input":
-                        await session.send(data.get("data", ""))
-                    elif msg_type == "resize":
-                        await session.resize(data.get("cols", 80), data.get("rows", 24))
+                    try:
+                        message = _TERMINAL_MESSAGE.validate_json(msg)
+                    except ValidationError:
+                        message = None
+                    if isinstance(message, TerminalInput):
+                        await session.send(message.data)
+                    elif isinstance(message, TerminalResize):
+                        await session.resize(message.cols, message.rows)
+                    else:
+                        _audit_log.warning(f"WS_TERMINAL_MALFORMED ip={ws_ip} node={node_id}")
+                        await websocket.close(code=4400, reason="Malformed terminal message")
+                        return
             except WebSocketDisconnect:
                 pass
 
@@ -2295,7 +2307,7 @@ async def ws_terminal(websocket: WebSocket, node_id: str) -> None:
                             return
                         await asyncio.sleep(0.05)
                         continue
-                    await websocket.send_json({"type": "output", "data": output})
+                    await websocket.send_text(TerminalOutput(data=output).model_dump_json())
             except WebSocketDisconnect, asyncio.CancelledError:
                 pass
 

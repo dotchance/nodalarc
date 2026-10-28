@@ -3,7 +3,7 @@
 import { describe, expect, it } from "vitest";
 import { FAIL_FADE_MS, FAIL_HOLD_MS } from "../../config";
 import { TraceFades, stoppedTraceOpacity } from "../traceFades";
-import type { TracedPath } from "../../types";
+import type { TracedPath } from "../../generated/vsApi";
 
 const GONE = FAIL_HOLD_MS + FAIL_FADE_MS;
 

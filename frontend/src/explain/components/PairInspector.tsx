@@ -8,8 +8,8 @@
  * and (later) a beam or timeline segment.
  */
 
-import type { DecisionFacts } from "../types";
 import { GroundStationCard } from "./GroundStationCard";
+import type { DecisionExplanationFacts } from "../../generated/vsApi";
 
 export function PairInspector({
   gsId,
@@ -19,7 +19,7 @@ export function PairInspector({
 }: {
   gsId: string;
   satId: string;
-  facts: DecisionFacts | null;
+  facts: DecisionExplanationFacts | null;
   onBack: () => void;
 }) {
   return (

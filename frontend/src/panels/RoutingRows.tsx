@@ -2,8 +2,8 @@
 // Licensed under the Apache License, Version 2.0. See LICENSE file.
 /** A node's routing role and the routing instances it participates in. */
 
-import type { NodeState } from "../types";
 import { instanceDetail, instanceLabel, roleLabel } from "../routing/instances";
+import type { NodeState } from "../generated/vsApi";
 
 export function RoutingRows({ node }: { node: Pick<NodeState, "role" | "routing_instances"> }) {
   return (

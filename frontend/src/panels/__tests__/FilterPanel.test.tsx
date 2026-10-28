@@ -3,7 +3,7 @@
 import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { FilterPanel } from "../FilterPanel";
-import type { NodeState, StateSnapshot } from "../../types";
+import type { NodeState, StateSnapshot } from "../../generated/vsApi";
 
 function node(node_id: string, segment_id: string, tags: string[]): NodeState {
   return {
@@ -60,6 +60,13 @@ function snapshot(): StateSnapshot {
     playback_speed: 1,
     stale: false,
     history_recording: null,
+    playback_achieved: null,
+    pacing_degraded: false,
+    actuation_notices: [],
+    actuation_health: null,
+    ops_events: [],
+    ops_log_token: "t",
+    debug_events: [],
   };
 }
 

@@ -12,8 +12,9 @@
 import React, { useState } from "react";
 import { KeyValueRow } from "../ui/KeyValueRow";
 import { EditorCard } from "./editorKit";
-import type { EphemerisNode, SessionEphemeris } from "../sim/ephemeris";
+import type { EphemerisNode } from "../sim/ephemeris";
 import type { BuilderWorldNode } from "./builderTypes";
+import type { SessionEphemeris } from "./generated/builderApi";
 
 interface BuilderInspectorProps {
   node: BuilderWorldNode;

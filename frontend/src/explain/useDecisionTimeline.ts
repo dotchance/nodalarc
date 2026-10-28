@@ -4,7 +4,7 @@
 
 import { useEffect, useState } from "react";
 import { fetchDecisionTimeline } from "./client";
-import type { GsDecisionTimelineFacts } from "./types";
+import type { GsDecisionTimelineFacts } from "../generated/vsApi";
 
 const REFRESH_MS = 2000;
 

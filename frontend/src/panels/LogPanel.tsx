@@ -13,12 +13,12 @@ import { IconButton } from "../ui/Button";
 import { Icon } from "../ui/icons/Icon";
 import { setSearchTarget } from "../ui/searchFocus";
 import { formatTime } from "../translate";
-import type { DebugSourceControl, OpsEvent, ServiceSource, StateSocketCommand } from "../types";
+import type { DebugSourceControl, OpsEvent, OpsLevel, ServiceSource, StateSocketCommand } from "../generated/vsApi";
 
 interface LogPanelProps {
-  events: OpsEvent[];
-  debugEvents: OpsEvent[];
-  debugControl: DebugSourceControl[];
+  events: readonly OpsEvent[];
+  debugEvents: readonly OpsEvent[];
+  debugControl: readonly DebugSourceControl[];
   debugSubscriptionOpen: boolean;
   sendMessage: (command: StateSocketCommand) => void;
   onClose: () => void;
@@ -46,14 +46,16 @@ const DEBUG_SOURCE_TYPES: readonly ServiceSource[] = [
   "operator",
   "vs_api",
 ];
-const LEVELS = ["critical", "error", "warning", "info"] as const;
+/** The level chips; debug rows have their own control. */
+const LEVELS: readonly OpsLevel[] = ["critical", "error", "warning", "info"];
 
-function levelClass(level: string): string {
-  if (level === "critical" || level === "error") return "log-level--fail";
-  if (level === "warning") return "log-level--warn";
-  if (level === "info") return "log-level--info";
-  return "log-level--debug";
-}
+const LEVEL_CLASS: Record<OpsLevel, string> = {
+  critical: "log-level--fail",
+  error: "log-level--fail",
+  warning: "log-level--warn",
+  info: "log-level--info",
+  debug: "log-level--debug",
+};
 
 const LOG_COLUMNS: TableColumn[] = [
   { key: "timestamp", label: "timestamp", width: 90, minWidth: 60, sortable: true },
@@ -75,7 +77,8 @@ export function LogPanel({
   const [paused, setPaused] = useState(false);
   const [pausedEvents, setPausedEvents] = useState<OpsEvent[]>([]);
   const [sort, setSort] = useState<SortState | null>({ key: "timestamp", dir: "desc" });
-  const [levelFilter, setLevelFilter] = useState<Set<string>>(new Set(LEVELS));
+  // The levels the user hid; a row is dropped only when its level is hidden.
+  const [hiddenLevels, setHiddenLevels] = useState<ReadonlySet<OpsLevel>>(new Set());
   const [sourceFilter, setSourceFilter] = useState<string>("all");
   const [searchPattern, setSearchPattern] = useState("");
   const [searchValid, setSearchValid] = useState(true);
@@ -173,7 +176,7 @@ export function LogPanel({
 
   const sortedLogs = useMemo(() => {
     let result = displayEvents.filter((e) => {
-      if (!levelFilter.has(e.level)) return false;
+      if (hiddenLevels.has(e.level)) return false;
       if (sourceFilter !== "all" && e.source !== sourceFilter) return false;
       return true;
     });
@@ -192,7 +195,7 @@ export function LogPanel({
       });
     }
     return result;
-  }, [displayEvents, levelFilter, sourceFilter, searchRegex, sort]);
+  }, [displayEvents, hiddenLevels, sourceFilter, searchRegex, sort]);
 
 
   // Follow-live auto-scroll: newest-first sorts pin to the top, otherwise the
@@ -221,8 +224,8 @@ export function LogPanel({
     return () => el.removeEventListener("scroll", handleScroll);
   }, [handleScroll]);
 
-  const toggleLevel = (level: string) => {
-    setLevelFilter((prev) => {
+  const toggleLevel = (level: OpsLevel) => {
+    setHiddenLevels((prev) => {
       const next = new Set(prev);
       if (next.has(level)) next.delete(level);
       else next.add(level);
@@ -286,7 +289,7 @@ export function LogPanel({
               <button
                 key={lvl}
                 onClick={() => toggleLevel(lvl)}
-                className={`log-chip ${levelClass(lvl)}${levelFilter.has(lvl) ? " log-chip--on" : ""}`}
+                className={`log-chip ${LEVEL_CLASS[lvl]}${hiddenLevels.has(lvl) ? "" : " log-chip--on"}`}
               >
                 {lvl}
               </button>
@@ -388,7 +391,7 @@ export function LogPanel({
             rowClassName={(e) => (e.level === "critical" || e.level === "error" ? "log-row--fail" : "")}
             renderCell={(e, key) => {
               if (key === "timestamp") return formatTime(e.timestamp);
-              if (key === "level") return <span className={levelClass(e.level)}>{e.level}</span>;
+              if (key === "level") return <span className={LEVEL_CLASS[e.level]}>{e.level}</span>;
               if (key === "message") {
                 return (
                   <span title={e.details ? JSON.stringify(e.details) : e.message}>{highlight(e.message)}</span>

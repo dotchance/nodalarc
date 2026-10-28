@@ -1,45 +1,44 @@
 // Copyright 2024-2026 .chance (dotchance)
 // Licensed under the Apache License, Version 2.0. See LICENSE file.
-/** WebSocket hook — connects to VS-API, parses StateSnapshot and SessionEphemeris. */
+/** WebSocket hook — connects to VS-API and reads the state feed's frames. */
 
 import { useEffect, useRef, useState, useCallback } from "react";
 import { getWsUrl, fetchApiKey } from "../config";
 import { mergeSnapshot } from "../snapshotMerge";
-import type {
-  SessionEphemerisFrame,
-  SessionReadyFrame,
-  StateSnapshot,
-  StateSocketCommand,
-} from "../types";
-import type { SessionEphemeris, PlaybackStateMsg } from "../sim/ephemeris";
+import type { SessionEphemeris } from "../builder/generated/builderApi";
+import type { StateFeedFrame, StateSnapshot, StateSocketCommand } from "../generated/vsApi";
+
+/** A state snapshot and when its frame arrived (performance.now() at decode). */
+export interface ReceivedSnapshot {
+  snapshot: StateSnapshot;
+  arrivalMs: number;
+}
 
 interface WebSocketState {
-  snapshot: StateSnapshot | null;
+  received: ReceivedSnapshot | null;
   ephemeris: SessionEphemeris | null;
-  playbackState: PlaybackStateMsg | null;
   connected: boolean;
   hasEverConnected: boolean;
-  kicked: boolean;
   sessionTransitioning: boolean;
   sessionError: string | null;
   switchDetail: string | null;
   /** Why the last token fetch failed while reconnecting; null once one succeeds. */
   tokenError: string | null;
+  /** Why the last frame could not be read; null once one is read. */
+  frameError: string | null;
   sendMessage: (command: StateSocketCommand) => void;
 }
 
 export function useWebSocket(): WebSocketState {
-  const [snapshot, setSnapshot] = useState<StateSnapshot | null>(null);
+  const [received, setReceived] = useState<ReceivedSnapshot | null>(null);
   const [ephemeris, setEphemeris] = useState<SessionEphemeris | null>(null);
-  const [playbackState, setPlaybackState] =
-    useState<PlaybackStateMsg | null>(null);
   const [connected, setConnected] = useState(false);
   const [hasEverConnected, setHasEverConnected] = useState(false);
-  const [kicked, setKicked] = useState(false);
   const [sessionTransitioning, setSessionTransitioning] = useState(false);
   const [sessionError, setSessionError] = useState<string | null>(null);
   const [switchDetail, setSwitchDetail] = useState<string | null>(null);
   const [tokenError, setTokenError] = useState<string | null>(null);
+  const [frameError, setFrameError] = useState<string | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
   const retriesRef = useRef(0);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -59,92 +58,72 @@ export function useWebSocket(): WebSocketState {
     };
 
     ws.onmessage = (event) => {
+      // Stamp transport arrival here, not at React effect time — render
+      // scheduling delay must not fold into the clock phase.
+      const arrivalMs = performance.now();
+      let frame: StateFeedFrame;
       try {
-        const data = JSON.parse(event.data as string);
-
-        // SessionEphemeris — sent on connect and on epoch change
-        if (data.msg_type === "session_ephemeris") {
-          setEphemeris(data as SessionEphemerisFrame);
+        frame = JSON.parse(event.data as string) as StateFeedFrame;
+      } catch (err) {
+        setFrameError(`VS-API sent a state frame that is not JSON: ${String(err)}`);
+        return;
+      }
+      setFrameError(null);
+      switch (frame.msg_type) {
+        // Sent on connect and on epoch change.
+        case "session_ephemeris":
+          setEphemeris(frame);
           return;
-        }
-
-        // Wiring progress — instant update from Node Agent via NATS
-        if (data.msg_type === "wiring_progress") {
-          setSnapshot((prev) =>
-            prev ? { ...prev, session_status_detail: data.message } : prev,
+        // Wiring progress from the Node Agent.
+        case "wiring_progress":
+          setReceived((prev) =>
+            prev
+              ? { ...prev, snapshot: { ...prev.snapshot, session_status_detail: frame.message } }
+              : prev,
           );
           return;
-        }
-
-        // Session lifecycle — VS-API sequential switch flow.
-        // The first message clears state. Subsequent messages carry
-        // progress detail from the Operator (pod counts, wiring status).
-        if (data.msg_type === "session_transitioning") {
+        // VS-API's sequential switch flow. The first message clears state;
+        // later ones carry progress detail from the Operator.
+        case "session_transitioning":
           if (!sessionTransitioning) {
-            setSnapshot(null);
+            setReceived(null);
             setEphemeris(null);
           }
           setSessionTransitioning(true);
           setSessionError(null);
-          if (data.detail) {
-            setSwitchDetail(data.detail as string);
-          }
+          setSwitchDetail(frame.detail);
           return;
-        }
-        if (data.msg_type === "session_ready") {
+        case "session_ready":
           setSessionTransitioning(false);
           setSessionError(null);
           setSwitchDetail(null);
-          const ready = data as SessionReadyFrame;
-          // Stamp transport arrival here, not at React effect time —
-          // render scheduling delay must not fold into the clock phase.
-          ready.snapshot.client_arrival_ms = performance.now();
-          setSnapshot(ready.snapshot);
+          setReceived({ snapshot: frame.snapshot, arrivalMs });
           return;
-        }
-        if (data.msg_type === "session_failed") {
+        case "session_failed":
           setSessionTransitioning(false);
-          setSessionError(data.error || "Session switch failed");
+          setSessionError(frame.error);
           setSwitchDetail(null);
           return;
-        }
-
-        // PlaybackState — sent on state transitions
-        if (
-          data.state &&
-          data.epoch_id !== undefined &&
-          !data.sim_time
-        ) {
-          setPlaybackState(data as PlaybackStateMsg);
+        // The regular per-tick payload. ops_events merge against the previous
+        // snapshot — the server ships them as deltas.
+        case "state_snapshot":
+          setReceived((prev) => ({
+            snapshot: mergeSnapshot(prev?.snapshot ?? null, frame),
+            arrivalMs,
+          }));
           return;
+        default: {
+          const unknown: { msg_type: unknown } = frame;
+          setFrameError(`VS-API sent a state frame the page does not know: ${String(unknown.msg_type)}`);
         }
-
-        // StateSnapshot — the regular per-tick payload. Stamp transport
-        // arrival here, not at React effect time — render scheduling
-        // delay must not fold into the clock phase. ops_events merge
-        // against the previous snapshot — the server ships them as deltas.
-        data.client_arrival_ms = performance.now();
-        setSnapshot((prev) => mergeSnapshot(prev, data as StateSnapshot));
-      } catch {
-        // Drop malformed frames
       }
     };
 
-    ws.onclose = (ev) => {
+    ws.onclose = () => {
       setConnected(false);
       wsRef.current = null;
-      // Kicked by another browser — stop reconnecting
-      if (ev.code === 4409) {
-        setKicked(true);
-        return;
-      }
       // Only auto-retry after having connected at least once (VF spec Section 14).
-      if (everConnectedRef.current) {
-        if (ev.code === 4401 || ev.code === 4003 || ev.code === 1008) {
-          retriesRef.current = 0;
-        }
-        scheduleReconnect();
-      }
+      if (everConnectedRef.current) scheduleReconnect();
     };
 
     ws.onerror = () => {
@@ -189,16 +168,15 @@ export function useWebSocket(): WebSocketState {
   }, []);
 
   return {
-    snapshot,
+    received,
     ephemeris,
-    playbackState,
     connected,
     hasEverConnected,
-    kicked,
     sessionTransitioning,
     sessionError,
     switchDetail,
     tokenError,
+    frameError,
     sendMessage,
   };
 }

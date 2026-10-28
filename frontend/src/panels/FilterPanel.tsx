@@ -7,7 +7,8 @@
 
 import { useMemo } from "react";
 import { getPlaneColor } from "../config";
-import type { StateSnapshot, ColorMode } from "../types";
+import type { ColorMode } from "../types";
+import type { StateSnapshot } from "../generated/vsApi";
 
 interface FilterPanelProps {
   snapshot: StateSnapshot | null;

@@ -21,11 +21,11 @@ import * as THREE from "three";
 import { useFrame, useThree } from "@react-three/fiber";
 import { LinkBatch, linkKey } from "./linkBatch";
 import { getNodeWorldPosition } from "./positions";
-import type { LinkState } from "../../types";
+import type { LinkState } from "../../generated/vsApi";
 
 interface LinksProps {
-  links: LinkState[];
-  kernelActualPairs: [string, string][];
+  links: readonly LinkState[];
+  kernelActualPairs: ReadonlyArray<readonly [string, string]>;
   showIslLinks: boolean;
   showGroundLinks: boolean;
   /** Bump (e.g. constellation name) to drop the whole batch on a session switch — its links map

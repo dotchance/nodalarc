@@ -10,7 +10,7 @@
  *  is drawn in its own style. Hops after the last placed hop draw nothing.
  */
 
-import type { TracedPath } from "../types";
+import type { TracedPath } from "../generated/vsApi";
 
 /** Whether a trace's reverse leg is drawn: only when it measured a different path
  *  back; a symmetric reverse leg would lie on the forward one. */

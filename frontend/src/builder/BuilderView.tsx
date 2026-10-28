@@ -22,20 +22,14 @@ import {
   type ComponentProps,
   type MutableRefObject,
 } from "react";
-import { Scene } from "../globe/r3f/Scene";
+import { Scene, type SceneSnapshot } from "../globe/r3f/Scene";
 import { VisualizationErrorBoundary } from "../globe/VisualizationErrorBoundary";
 import { buildRegimeIndex } from "../taxonomy/regime";
 import { Button, IconButton } from "../ui/Button";
 import { FloatingWindow } from "../ui/FloatingWindow";
 import { RecordHistoryToggle } from "../ui/RecordHistoryToggle";
 import type { GlobeActions } from "../globe/actions";
-import type {
-  ColorMode,
-  GlobeMode,
-  ReferenceFrame,
-  Selection,
-  StateSnapshot,
-} from "../types";
+import type { ColorMode, GlobeMode, ReferenceFrame, Selection } from "../types";
 import { Icon } from "../ui/icons/Icon";
 import { BuildGuide } from "./BuildGuide";
 import { BuilderInspector } from "./BuilderInspector";
@@ -2023,15 +2017,24 @@ export function BuilderView({
   const worldKey = world ? `${world.session.name}:${world.epoch_unix}` : null;
   useEffect(() => setSelection(null), [worldKey]);
 
-  const { snapshot, snapshotError } = useMemo((): {
-    snapshot: StateSnapshot | null;
+  const { snapshot, snapshotArrivalMs, snapshotError } = useMemo((): {
+    snapshot: SceneSnapshot | null;
+    snapshotArrivalMs: number | null;
     snapshotError: string | null;
   } => {
-    if (!world) return { snapshot: null, snapshotError: null };
+    if (!world) return { snapshot: null, snapshotArrivalMs: null, snapshotError: null };
     try {
-      return { snapshot: builderSnapshotFromWorld(world), snapshotError: null };
+      return {
+        snapshot: builderSnapshotFromWorld(world),
+        snapshotArrivalMs: performance.now(),
+        snapshotError: null,
+      };
     } catch (e) {
-      return { snapshot: null, snapshotError: e instanceof Error ? e.message : String(e) };
+      return {
+        snapshot: null,
+        snapshotArrivalMs: null,
+        snapshotError: e instanceof Error ? e.message : String(e),
+      };
     }
   }, [world]);
   const regimeById = useMemo(() => buildRegimeIndex(world?.ephemeris ?? null), [world]);
@@ -2053,13 +2056,11 @@ export function BuilderView({
       ) ?? [],
     [candidates, showGroundLinks, showIslLinks],
   );
-  const darkRules = candidates
-    ? candidates.previews.filter((p) => p.enabled && p.candidates === 0).length
-    : 0;
+  const darkRules = candidates ? candidates.darkRules : 0;
   const ruleNotes = candidates
-    ? candidates.previews
-        .filter((p) => p.note)
-        .map((p) => `${p.rule_id}: ${p.note}`)
+    ? [...candidates.notes]
+        .filter(([, note]) => note !== null)
+        .map(([ruleId, note]) => `${ruleId}: ${note}`)
         .join("\n")
     : "";
   const assemblySettled =
@@ -2763,12 +2764,12 @@ export function BuilderView({
           <VisualizationErrorBoundary onError={() => {}}>
             <Scene
               snapshot={snapshot}
+              snapshotArrivalMs={snapshotArrivalMs}
               ephemeris={world.ephemeris}
               colorMode={colorMode}
               globeMode={globeMode}
               referenceFrame={referenceFrame}
               playbackPaused={true}
-              playbackState={null}
               showIslLinks={showIslLinks}
               showGroundLinks={showGroundLinks}
               showSatPaths={showSatPaths}

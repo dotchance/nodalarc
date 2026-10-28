@@ -7,9 +7,9 @@ import { translateLinkType } from "../translate";
 import { linkEventLabel } from "../explain/linkEvents";
 import { REST_URL, authHeaders } from "../config";
 import { apiErrorFromException, apiErrorMessage } from "../ui/apiError";
-import type { LinkHistoryPage, LinkState, StateSnapshot } from "../types";
 import { instanceLabel, interfaceInstances } from "../routing/instances";
 import { traceKey } from "../trace/traceFades";
+import type { LinkHistoryPage, LinkState, StateSnapshot } from "../generated/vsApi";
 
 interface LinkDetailProps {
   link: LinkState;
@@ -253,7 +253,7 @@ export function LinkDetail({ link, snapshot }: LinkDetailProps) {
           {[...history.events].reverse().map((h, i) => (
             <div className="detail-row" key={i}>
               <span className="detail-label" style={{ fontSize: 10 }}>
-                {h.sim_time?.substring(11, 19) ?? ""}
+                {h.sim_time.substring(11, 19)}
               </span>
               <span className="detail-value" style={{ fontSize: 10 }}>
                 {h.event_type} — {linkEventLabel(h.reason)}

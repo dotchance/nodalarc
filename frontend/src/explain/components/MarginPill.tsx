@@ -3,7 +3,7 @@
 /** L1: a gate's numeric margin (actual / threshold / delta), unit-aware. */
 
 import { formatMargin } from "../derive";
-import type { LadderGate } from "../types";
+import type { LadderGate } from "../../generated/vsApi";
 
 export function MarginPill({ gate }: { gate: LadderGate }) {
   const text = formatMargin(gate);

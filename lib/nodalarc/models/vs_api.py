@@ -7,6 +7,7 @@ union of every message the state socket sends, discriminated on ``msg_type``.
 """
 
 from datetime import datetime
+from enum import IntEnum
 from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -434,7 +435,7 @@ class StateSnapshot(BaseModel):
     # OME-desired-but-not-proven link dimmed, so a beam never reads connected while the
     # decision card says in_flight/faulted. Empty until the first ActualLinkSnapshot lands
     # (honest: nothing proven), never a masked connected.
-    kernel_actual_pairs: list[list[str]] = Field(default_factory=list)
+    kernel_actual_pairs: list[tuple[str, str]] = Field(default_factory=list)
     traced_paths: list[TracedPath]
     recent_events: list[RecentEvent]
     routing_stack: str | None = None
@@ -639,6 +640,21 @@ class DebugStopAllCommand(BaseModel):
 StateSocketCommand = Annotated[
     DebugStreamCommand | DebugStopCommand | DebugStopAllCommand, Field(discriminator="action")
 ]
+
+
+class SocketCloseCode(IntEnum):
+    """The codes VS-API closes an accepted state or terminal socket with.
+
+    A refusal before VS-API accepts the socket (a wrong token) reaches the
+    browser as a failed handshake, so it has no code here.
+    """
+
+    TERMINAL_ENDED = 1000
+    MALFORMED_MESSAGE = 4400
+    NODE_NOT_FOUND = 4404
+    NO_TERMINAL_ACCESS = 4409
+    SESSION_SWITCHED = 4410
+    TERMINAL_KEY_UNAVAILABLE = 4503
 
 
 class IntrospectRequest(BaseModel):

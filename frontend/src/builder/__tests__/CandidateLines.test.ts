@@ -9,13 +9,13 @@
 
 import { describe, expect, it } from "vitest";
 import { candidateBufferStale, candidateColors } from "../CandidateLines";
-import type { CandidatePair } from "../candidates";
+import type { BuilderPreviewPair } from "../generated/builderApi";
 
-const pair = (kind: CandidatePair["kind"], a: string, b: string): CandidatePair => ({
+const pair = (kind: BuilderPreviewPair["kind"], node_a: string, node_b: string): BuilderPreviewPair => ({
   rule_id: "r",
   kind,
-  a,
-  b,
+  node_a,
+  node_b,
 });
 
 describe("buffers rebuild on identity change or remount", () => {

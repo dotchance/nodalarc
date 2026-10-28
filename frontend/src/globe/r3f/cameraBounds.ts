@@ -9,6 +9,7 @@
  */
 
 import { CAMERA_FOV, CAMERA_MAX_DISTANCE } from "../../config";
+import type { NodeState } from "../../generated/vsApi";
 import { EARTH_RADIUS_RENDER, kmToRender } from "./units";
 
 export interface CameraBoundsBody {
@@ -17,18 +18,7 @@ export interface CameraBoundsBody {
   position: readonly [number, number, number];
 }
 
-export interface CameraBoundsNode {
-  node_id?: string;
-  reference_body: string;
-  alt_km?: number | null;
-}
-
-function nodeReferenceBody(node: CameraBoundsNode): string {
-  if (!node.reference_body) {
-    throw new Error(`camera bounds node ${node.node_id ?? "<unknown>"} is missing reference_body`);
-  }
-  return node.reference_body;
-}
+export type CameraBoundsNode = Pick<NodeState, "reference_body" | "alt_km">;
 
 export interface CameraSceneFrame {
   center: [number, number, number];
@@ -72,12 +62,12 @@ export function sceneRadiusForCamera(
   }
 
   for (const node of nodes) {
-    const bodyId = nodeReferenceBody(node);
+    const bodyId = node.reference_body;
     const center = bodyCenter.get(bodyId);
     if (center === undefined) continue;
     const surfaceKm = bodyRadiusKm.get(bodyId);
     if (surfaceKm === undefined) continue;
-    const altitudeKm = Math.max(0, node.alt_km ?? 0);
+    const altitudeKm = Math.max(0, node.alt_km);
     radius = Math.max(radius, center + kmToRender(surfaceKm + altitudeKm, kmPerRenderUnit));
   }
 
@@ -109,12 +99,12 @@ export function sceneFrameForCamera(
   }
 
   for (const node of nodes) {
-    const bodyId = nodeReferenceBody(node);
+    const bodyId = node.reference_body;
     const center = bodyCenter.get(bodyId);
     if (!center) continue;
     const surfaceKm = bodyRadiusKm.get(bodyId);
     if (surfaceKm === undefined) continue;
-    const altitudeKm = Math.max(0, node.alt_km ?? 0);
+    const altitudeKm = Math.max(0, node.alt_km);
     includeSphere(min, max, center, kmToRender(surfaceKm + altitudeKm, kmPerRenderUnit));
   }
 

@@ -15,7 +15,7 @@ import * as THREE from "three";
 import { useFrame } from "@react-three/fiber";
 import { LINK_GROUND_COLOR, LINK_ISL_COLOR } from "../config";
 import { getNodeWorldPosition } from "../globe/r3f/positions";
-import type { CandidatePair } from "./candidates";
+import type { BuilderPreviewPair } from "./generated/builderApi";
 
 const _a = new THREE.Vector3();
 const _b = new THREE.Vector3();
@@ -31,8 +31,8 @@ function kindColor(kind: string): THREE.Color {
  *  path). Keying on length alone missed both: stale kind colors after a
  *  same-length swap, and an empty buffer after a remount. */
 export function candidateBufferStale(
-  builtFor: CandidatePair[] | null,
-  list: CandidatePair[],
+  builtFor: readonly BuilderPreviewPair[] | null,
+  list: readonly BuilderPreviewPair[],
   hasPositionAttribute: boolean,
 ): boolean {
   return builtFor !== list || !hasPositionAttribute;
@@ -41,7 +41,7 @@ export function candidateBufferStale(
 /** The per-vertex color buffer for a pairs list — two vertices per pair, each
  *  the pair's kind color. Rebuilt on every stale check so kind colors always
  *  follow the current pairs. */
-export function candidateColors(pairs: CandidatePair[]): Float32Array {
+export function candidateColors(pairs: readonly BuilderPreviewPair[]): Float32Array {
   const colors = new Float32Array(pairs.length * 6);
   for (let i = 0; i < pairs.length; i++) {
     const color = kindColor(pairs[i]!.kind);
@@ -54,7 +54,7 @@ export function candidateColors(pairs: CandidatePair[]): Float32Array {
   return colors;
 }
 
-export function CandidateLines({ pairs }: { pairs: CandidatePair[] }) {
+export function CandidateLines({ pairs }: { pairs: readonly BuilderPreviewPair[] }) {
   const geometryRef = useRef<THREE.BufferGeometry | null>(null);
   const pairsRef = useRef(pairs);
   pairsRef.current = pairs;
@@ -63,7 +63,7 @@ export function CandidateLines({ pairs }: { pairs: CandidatePair[] }) {
   // colors changed) OR when the mounted geometry has no position attribute (a
   // geometry remount, e.g. the N->0->N path). Keying on length alone missed
   // both — stale colors and an empty buffer after a same-length swap or remount.
-  const builtForRef = useRef<CandidatePair[] | null>(null);
+  const builtForRef = useRef<readonly BuilderPreviewPair[] | null>(null);
 
   useFrame(() => {
     const geometry = geometryRef.current;
@@ -82,7 +82,7 @@ export function CandidateLines({ pairs }: { pairs: CandidatePair[] }) {
     const array = attribute.array as Float32Array;
     for (let i = 0; i < list.length; i++) {
       const pair = list[i]!;
-      if (getNodeWorldPosition(pair.a, _a) && getNodeWorldPosition(pair.b, _b)) {
+      if (getNodeWorldPosition(pair.node_a, _a) && getNodeWorldPosition(pair.node_b, _b)) {
         array[i * 6] = _a.x;
         array[i * 6 + 1] = _a.y;
         array[i * 6 + 2] = _a.z;

@@ -28,9 +28,9 @@ import {
   FAIL_HOLD_MS,
   FAIL_FADE_MS,
 } from "../../config";
-import type { LinkState } from "../../types";
 import { isGroundLinkState } from "../../networkIdentity";
 import { SEGMENTS_PER_ISL, writeBowedArc } from "./linkCurve";
+import type { LinkState } from "../../generated/vsApi";
 
 const MIN_ISL_SLOTS = 200;
 const MIN_GROUND_SLOTS = 100;
@@ -205,7 +205,7 @@ export class LinkBatch {
     return entry;
   }
 
-  private initBatch(linkStates: LinkState[], parent: THREE.Object3D): void {
+  private initBatch(linkStates: readonly LinkState[], parent: THREE.Object3D): void {
     const islKeys = new Set<string>();
     const gndKeys = new Set<string>();
     for (const ls of linkStates) {
@@ -242,7 +242,7 @@ export class LinkBatch {
   }
 
   /** Data-driven: reconcile link metadata + state transitions on each snapshot. */
-  update(linkStates: LinkState[], parent: THREE.Object3D, now: number): void {
+  update(linkStates: readonly LinkState[], parent: THREE.Object3D, now: number): void {
     if (!this.initialized) this.initBatch(linkStates, parent);
     const active = new Set<string>();
     for (const ls of linkStates) {

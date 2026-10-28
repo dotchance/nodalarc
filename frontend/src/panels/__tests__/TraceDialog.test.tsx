@@ -3,8 +3,8 @@
 import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
 import { TraceDialog } from "../TraceDialog";
-import type { NodeState, StateSnapshot, TracedPath } from "../../types";
 import { TRACE_FORWARD_COLOR, TRACE_REVERSE_COLOR } from "../../config";
+import type { NodeState, StateSnapshot, TracedPath } from "../../generated/vsApi";
 
 afterEach(cleanup);
 

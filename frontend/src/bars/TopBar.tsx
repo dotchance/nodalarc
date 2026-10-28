@@ -8,14 +8,14 @@ import { schedulerOpsLabel } from "../explain/reasons";
 import { Icon } from "../ui/icons/Icon";
 import { Button } from "../ui/Button";
 import { StatusDot } from "../ui/Badge";
-import type { ActuationNotice, StateSnapshot } from "../types";
+import type { ActuationNotice, StateSnapshot } from "../generated/vsApi";
 
-function pairLabel(pair: string[] | undefined): string {
+function pairLabel(pair: ReadonlyArray<string> | undefined): string {
   if (!pair || pair.length === 0) return "none";
   return pair.join(" -> ");
 }
 
-function pairList(pairs: string[][] | undefined): string {
+function pairList(pairs: ReadonlyArray<ReadonlyArray<string>> | undefined): string {
   if (!pairs || pairs.length === 0) return "none";
   return pairs.map(pairLabel).join(", ");
 }
@@ -40,7 +40,7 @@ function proofFailure(notice: ActuationNotice): string {
 }
 
 function recoveryText(notice: ActuationNotice): string {
-  const recovery = notice.recovery_status ?? {};
+  const recovery = notice.recovery_status;
   if (recovery.operator_action_required === true || recovery.verify_exhausted === true) {
     return `Run operator repair for ${notice.gs_id}, or restart/redeploy after capturing evidence.`;
   }
@@ -53,7 +53,7 @@ function plural(count: number, singular: string, pluralWord = `${singular}s`): s
   return `${count} ${count === 1 ? singular : pluralWord}`;
 }
 
-function noticeSummary(notices: ActuationNotice[]): string {
+function noticeSummary(notices: readonly ActuationNotice[]): string {
   const faultCount = notices.filter((n) => n.actuation_state === "kernel_dirty").length;
   const warningCount = notices.length - faultCount;
   if (faultCount > 0 && warningCount > 0) {
@@ -63,7 +63,7 @@ function noticeSummary(notices: ActuationNotice[]): string {
   return plural(warningCount, "actuation warning");
 }
 
-function ActuationNoticeButton({ notices, dirty }: { notices: ActuationNotice[]; dirty: boolean }) {
+function ActuationNoticeButton({ notices, dirty }: { notices: readonly ActuationNotice[]; dirty: boolean }) {
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLSpanElement>(null);
   const label = noticeSummary(notices);
@@ -108,7 +108,7 @@ function ActuationNoticeButton({ notices, dirty }: { notices: ActuationNotice[];
             <Button onClick={() => setOpen(false)}>Close</Button>
           </div>
           {notices.map((notice) => (
-            <div key={`${notice.gs_id}:${notice.reason_code}:${notice.since ?? "unknown"}`} className="topbar-actuation-notice">
+            <div key={`${notice.gs_id}:${notice.reason_code}:${notice.since}`} className="topbar-actuation-notice">
               <div><strong>Ground station:</strong> {notice.gs_id}</div>
               <div><strong>State:</strong> {notice.actuation_state}</div>
               <div><strong>Reason:</strong> {schedulerOpsLabel(notice.reason_code)}</div>
@@ -137,8 +137,9 @@ interface TopBarProps {
   activeSessionName: string | null;
   switching: boolean;
   onOpenCatalog: () => void;
-  playbackPaused: boolean;
-  playbackSpeed: number;
+  /** Null until a snapshot states it; the controls show once both are known. */
+  playbackPaused: boolean | null;
+  playbackSpeed: number | null;
   playbackLoading: boolean;
   onPlaybackPause: () => void;
   onPlaybackResume: () => void;
@@ -160,7 +161,7 @@ export function TopBar({ snapshot, historicalMode, onToggleHistorical, activeSes
         style={switching ? { cursor: "wait" } : undefined}
         title="Open session catalog"
       >
-        {activeSessionName ?? snapshot?.constellation_name ?? "NodalArc"}
+        {activeSessionName ?? snapshot?.constellation_name ?? "No session"}
       </button>
       {snapshot?.routing_stack && <span className="topbar-stack">{snapshot.routing_stack}</span>}
 
@@ -178,6 +179,7 @@ export function TopBar({ snapshot, historicalMode, onToggleHistorical, activeSes
         </div>
       )}
 
+      {playbackPaused !== null && playbackSpeed !== null && (
       <div className="topbar-playback">
         <button
           onClick={playbackPaused ? onPlaybackResume : onPlaybackPause}
@@ -226,6 +228,7 @@ export function TopBar({ snapshot, historicalMode, onToggleHistorical, activeSes
           Now
         </button>
       </div>
+      )}
 
       <div className="topbar-spring" />
 

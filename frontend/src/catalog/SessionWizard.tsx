@@ -14,9 +14,8 @@
 import { useState, useCallback, useRef } from "react";
 import { useWizard } from "../hooks/useWizard";
 import type { WizardStep } from "./wizardTypes";
-import type { SessionInfo } from "../types";
 import type { SessionSwitchResult } from "../hooks/useSessionSwitcher";
-import type { CatalogSessionSourceId } from "../builder/generated/builderApi";
+import type { CatalogSessionSourceId, CatalogSessionSummary } from "../builder/generated/builderApi";
 import { REST_URL, authHeaders } from "../config";
 import { apiErrorMessage, apiErrorFromException } from "../ui/apiError";
 import { RecordHistoryToggle } from "../ui/RecordHistoryToggle";
@@ -34,11 +33,11 @@ interface SessionWizardProps {
   deploying: boolean;
   systemNotice?: string;
   /** Scoped user and shipped catalog sessions, deployable as-is via session switch. */
-  sessions: SessionInfo[];
+  sessions: CatalogSessionSummary[];
   /** Why the session list did not load from VS-API; null once it loaded. */
   sessionsError: string | null;
   /** Ask VS-API to switch to a session; resolves with its answer. */
-  onLaunchSession: (session: SessionInfo, recordHistory: boolean) => Promise<SessionSwitchResult>;
+  onLaunchSession: (session: CatalogSessionSummary, recordHistory: boolean) => Promise<SessionSwitchResult>;
   /** Feature-gated session-builder entry: navigates to the builder view.
    *  Day-0 authoring needs no deployed session, so this bypasses the
    *  hasEverDeployed close gate — it goes somewhere, not to nothing. */

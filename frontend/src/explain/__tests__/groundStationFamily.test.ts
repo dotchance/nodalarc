@@ -2,7 +2,7 @@
 // Licensed under the Apache License, Version 2.0. See LICENSE file.
 import { describe, it, expect } from "vitest";
 import { groundStationFamily } from "../groundStationFamily";
-import type { ActuationNotice, LinkState } from "../../types";
+import type { ActuationNotice, LinkState } from "../../generated/vsApi";
 
 function link(a: string, b: string): LinkState {
   return {

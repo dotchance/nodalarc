@@ -7,8 +7,9 @@ import { KeyValueRow } from "../ui/KeyValueRow";
 import { Icon } from "../ui/icons/Icon";
 import { TaxonomyChip } from "../ui/Badge";
 import { REGIME_TINT, type Regime } from "../taxonomy/regime";
-import type { StateSnapshot, Selection } from "../types";
+import type { Selection } from "../types";
 import { instanceDetail, instanceLabel, roleLabel } from "../routing/instances";
+import type { StateSnapshot } from "../generated/vsApi";
 
 interface NodePopoverProps {
   snapshot: StateSnapshot | null;

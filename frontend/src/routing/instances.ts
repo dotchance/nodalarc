@@ -10,7 +10,8 @@
  */
 
 import { tokens } from "../styles/tokens";
-import type { NodeRole, NodeRoutingInstance, NodeState, RoutingProtocol } from "../types";
+import type { NodeState } from "../generated/vsApi";
+import type { NodeRole, NodeRoutingInstance, RoutingProtocol } from "../builder/generated/builderApi";
 
 const PROTOCOL_LABELS: Record<RoutingProtocol, string> = {
   isis: "IS-IS",

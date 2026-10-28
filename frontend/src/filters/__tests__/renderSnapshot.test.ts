@@ -2,7 +2,7 @@
 // Licensed under the Apache License, Version 2.0. See LICENSE file.
 import { describe, expect, it } from "vitest";
 import { filterSnapshotForRender } from "../renderSnapshot";
-import type { LinkState, NodeState, StateSnapshot, TracedPath } from "../../types";
+import type { LinkState, NodeState, StateSnapshot, TracedPath } from "../../generated/vsApi";
 
 function traced(hops: string[], reverseHops: string[]): TracedPath {
   return {
@@ -44,6 +44,7 @@ function node(node_id: string, segment_id: string, plane: number | null): NodeSt
     isl_count: 0,
     gnd_count: 0,
     prefix: null,
+    addresses: [],
     min_elevation_deg: null,
     beam_falloff_exponent: null,
     segment_id,
@@ -64,6 +65,11 @@ function link(node_a: string, node_b: string): LinkState {
     scheduling_state: "active",
     link_type: "inter_constellation",
     link_reason: null,
+    link_rule_id: null,
+    topology_mode: null,
+    endpoint_segments: null,
+    teardown_remaining_ticks: null,
+    successor_pair: null,
     latency_ms: 1,
     transmit_mbps_a: 1000,
     receive_mbps_a: 1000,
@@ -114,6 +120,13 @@ function snapshot(): StateSnapshot {
     playback_speed: 1,
     stale: false,
     history_recording: null,
+    playback_achieved: null,
+    pacing_degraded: false,
+    actuation_notices: [],
+    actuation_health: null,
+    ops_events: [],
+    ops_log_token: "t",
+    debug_events: [],
   };
 }
 

@@ -3,7 +3,8 @@
 import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { GroundStationDetail } from "../GroundStationDetail";
-import type { NodeRole, NodeRoutingInstance, NodeState, StateSnapshot } from "../../types";
+import type { NodeState, StateSnapshot } from "../../generated/vsApi";
+import type { NodeRole, NodeRoutingInstance } from "../../builder/generated/builderApi";
 
 function station(role: NodeRole, instances: NodeRoutingInstance[]): NodeState {
   return {
@@ -22,6 +23,7 @@ function station(role: NodeRole, instances: NodeRoutingInstance[]): NodeState {
     isl_count: 0,
     gnd_count: 0,
     prefix: null,
+    addresses: [],
     min_elevation_deg: 10,
     beam_falloff_exponent: null,
     reference_body: "earth",

@@ -7,7 +7,7 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import * as THREE from "three";
 import { LinkBatch } from "../linkBatch";
-import type { LinkState } from "../../../types";
+import type { LinkState } from "../../../generated/vsApi";
 
 const POS: Record<string, [number, number, number]> = {
   "sat-a": [100, 0, 0],
@@ -41,6 +41,11 @@ function link(
     scheduling_state: "active",
     link_type,
     link_reason: null,
+    link_rule_id: null,
+    topology_mode: null,
+    endpoint_segments: null,
+    teardown_remaining_ticks: null,
+    successor_pair: null,
     latency_ms: 1,
     transmit_mbps_a: 1,
     receive_mbps_a: 1,

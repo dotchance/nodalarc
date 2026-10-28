@@ -3,7 +3,6 @@
 
 import { beforeEach, describe, expect, it } from "vitest";
 import * as THREE from "three";
-import type { LinkState, NodeState } from "../../../types";
 import { clearPositions, setBodyFrame, setNodeLocalPosition } from "../positions";
 import {
   bodyHitRadiusPx,
@@ -11,6 +10,7 @@ import {
   pickSceneAtScreenPoint,
   pointToSegment2D,
 } from "../sceneHitTesting";
+import type { LinkState, NodeState } from "../../../generated/vsApi";
 
 const rect = { width: 1000, height: 1000 };
 
@@ -40,6 +40,7 @@ function node(node_id: string, node_type: "satellite" | "ground_station" = "sate
     isl_count: 0,
     gnd_count: 0,
     prefix: null,
+    addresses: [],
     min_elevation_deg: null,
     beam_falloff_exponent: null,
     reference_body: "earth",
@@ -60,6 +61,11 @@ function link(node_a: string, node_b: string): LinkState {
     scheduling_state: "active",
     link_type: "isl",
     link_reason: null,
+    link_rule_id: null,
+    topology_mode: null,
+    endpoint_segments: null,
+    teardown_remaining_ticks: null,
+    successor_pair: null,
     latency_ms: 1,
     transmit_mbps_a: 100,
     receive_mbps_a: 100,

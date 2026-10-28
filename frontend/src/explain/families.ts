@@ -31,44 +31,8 @@ export const FAMILIES: readonly Family[] = [
   "unknown",
 ];
 
-/** Per-gate/per-reason severity. Escalates with stability (see ReasonRecord). */
+/** Per-reason severity. */
 export type Severity = "info" | "warning" | "alarm";
-
-/** Temporal axis: a per-tick-explainable reason can still be a problem in motion. */
-export type Stability = "stable" | "churning" | "settling" | "stale";
-
-/** What lever changes the outcome — groups reasons by remediation, not component. */
-export type RemediationLayer =
-  | "geometry" // orbit/position: more planes/sats, different orbit, move GS.
-  | "terminal_capability" // FoR, tracking rate, max range, terminal capacity.
-  | "policy" // selection, hysteresis, handover mode, ranking.
-  | "actuation"; // not a model refusal — a realization/proof state.
-
-/** Which source-of-truth component owns a gate's verdict. */
-export const PRODUCERS = ["ome_visibility", "ome_allocator", "scheduler", "node_agent"] as const;
-export type Producer = (typeof PRODUCERS)[number];
-
-/** The canonical decision funnel. A pair stops at exactly one binding gate. */
-export const FUNNEL_GATES = [
-  "line_of_sight",
-  "range",
-  "elevation_mask",
-  "field_of_regard",
-  "tracking_rate",
-  "selection_policy",
-  "capacity",
-  "handover_policy",
-  "actuation_proof",
-] as const;
-export type FunnelGate = (typeof FUNNEL_GATES)[number];
-
-/** A gate's evaluation result. `not_applicable` matters for non-Earth/space nodes. */
-export const GATE_STATES = ["pass", "fail", "not_evaluated", "not_applicable"] as const;
-export type GateState = (typeof GATE_STATES)[number];
-
-/** Which ground-link endpoint imposed a terminal-bound rejection. */
-export const REJECTING_ENDPOINTS = ["none", "ground", "satellite", "both"] as const;
-export type RejectingEndpoint = (typeof REJECTING_ENDPOINTS)[number];
 
 function cssToHex(css: string): number {
   return parseInt(css.replace("#", ""), 16);

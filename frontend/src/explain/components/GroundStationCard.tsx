@@ -3,19 +3,19 @@
 /**
  * L3: the ground-station explanation card. Composes the family headline,
  * actuation summary, best candidate, effective envelope, and decision ladder
- * from one DecisionFacts object. The card's tone is the family tone, so a
+ * from one DecisionExplanationFacts object. The card's tone is the family tone, so a
  * restrictive-but-correct station reads calm and only a true fault reads red.
  */
 
 import { FAMILY_TONE } from "../families";
 import { reasonLabel } from "../reasons";
 import { deriveFamily, headline } from "../derive";
-import type { DecisionFacts, GsDecisionTimelineFacts } from "../types";
 import { BestCandidate } from "./BestCandidate";
 import { DecisionLadder } from "./DecisionLadder";
 import { EffectiveEnvelopePanel } from "./EffectiveEnvelopePanel";
 import { FamilyBadge } from "./FamilyBadge";
 import { ObservedDiagnosis } from "./ObservedDiagnosis";
+import type { DecisionExplanationFacts, GsDecisionTimelineFacts } from "../../generated/vsApi";
 
 function fmtMs(ms: number): string {
   return ms >= 1000 ? `${(ms / 1000).toFixed(1)}s` : `${Math.round(ms)}ms`;
@@ -28,7 +28,7 @@ export function GroundStationCard({
   onTimelineLimitChange,
   onInspectSat,
 }: {
-  facts: DecisionFacts;
+  facts: DecisionExplanationFacts;
   timeline?: GsDecisionTimelineFacts | null;
   timelineLimit?: number;
   onTimelineLimitChange?: (limit: number) => void;

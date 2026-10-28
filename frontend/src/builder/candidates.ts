@@ -7,34 +7,28 @@
  *  reason tokens remain unchanged; only their display text is defined here.
  */
 
-import type { BuilderPreviewPair, BuilderRulePreview, BuilderWorld } from "./builderTypes";
-
-export interface CandidatePair {
-  rule_id: string;
-  kind: BuilderPreviewPair["kind"];
-  a: string;
-  b: string;
-}
-
-export interface RulePreview {
-  rule_id: string;
-  /** "enabled" here means the rule has COMPUTED geometry — the only rules that
-   *  can read as "dark" (on, yet zero lines). A disabled or preview-pending rule
-   *  is never dark; it shows its scope note. */
-  enabled: boolean;
-  candidates: number;
-  note: string | null;
-}
+import type {
+  BuilderPreviewPair,
+  BuilderPreviewRejectReason,
+  BuilderRulePreview,
+  BuilderWorld,
+  PreviewScope,
+} from "./generated/builderApi";
 
 export interface CandidateComputation {
-  pairs: CandidatePair[];
-  previews: RulePreview[];
+  /** Every rule's drawable pairs, as the server sent them. */
+  pairs: readonly BuilderPreviewPair[];
+  /** Each rule's note by rule id; null when the rule has nothing to say. */
+  notes: ReadonlyMap<string, string | null>;
+  /** Rules whose geometry the server computed and that drew no pair. A disabled
+   *  or preview-pending rule is never dark; it shows its scope note. */
+  darkRules: number;
 }
 
 /** The human phrasing of each runtime reject reason, read after a pair count.
  *  The machine token stays on the wire (BuilderRulePreview.reason_counts) — this
  *  is display only, so it never renames the vocabulary. */
-const REASON_COPY: Record<string, string> = {
+const REASON_COPY: Record<BuilderPreviewRejectReason, string> = {
   los_blocked: "with no line of sight",
   range_exceeded: "beyond terminal range",
   elevation_below_min: "below the elevation mask",
@@ -44,7 +38,7 @@ const REASON_COPY: Record<string, string> = {
 };
 
 /** Notes for preview scopes the server did not compute. */
-const SCOPE_NOTE: Record<string, string> = {
+const SCOPE_NOTE: Record<Exclude<PreviewScope, "computed">, string> = {
   inter_body_pending: "inter-body span — preview pending, runtime computes contacts",
   terrestrial_pending: "terrestrial run — surface routing preview pending",
   disabled: "rule disabled",
@@ -66,7 +60,7 @@ function previewNote(
   fixed: boolean,
 ): string | null {
   if (preview.preview_scope !== "computed") {
-    return SCOPE_NOTE[preview.preview_scope] ?? null; // (a)
+    return SCOPE_NOTE[preview.preview_scope]; // (a)
   }
   if (fixed && allocatedPairs === 0) {
     return "the allocator granted no pairs for this rule"; // (b)
@@ -76,8 +70,7 @@ function previewNote(
     ? ` among ${preview.pairs_tested} tested of ${preview.pairs_total} possible`
     : "";
   for (const rc of preview.reason_counts) {
-    const copy = REASON_COPY[rc.reason] ?? rc.reason;
-    notes.push(`${rc.count} ${rc.count === 1 ? "pair" : "pairs"} ${copy}${denom}`); // (c)
+    notes.push(`${rc.count} ${rc.count === 1 ? "pair" : "pairs"} ${REASON_COPY[rc.reason]}${denom}`); // (c)
   }
   if (preview.pairs_drawn === 0 && preview.reason_counts.length === 0) {
     notes.push("rule permits, geometry currently forbids — runtime computes contacts over time"); // (d)
@@ -96,23 +89,22 @@ export function computeCandidates(world: BuilderWorld): CandidateComputation {
     world.allocations.map((alloc) => [alloc.rule_id, alloc.allocated_pairs]),
   );
 
-  const pairs: CandidatePair[] = [];
-  const previews: RulePreview[] = [];
+  const pairs: BuilderPreviewPair[] = [];
+  const notes = new Map<string, string | null>();
+  let darkRules = 0;
   for (const preview of world.rule_previews) {
     const mode = modeByRule.get(preview.rule_id);
     if (mode === undefined) {
       throw new Error(`rule preview ${preview.rule_id} has no resolved link rule`);
     }
-    const fixed = mode === "explicit_pairs" || mode === "nearest_n";
-    previews.push({
-      rule_id: preview.rule_id,
-      enabled: preview.preview_scope === "computed",
-      candidates: preview.pairs_drawn,
-      note: previewNote(preview, allocByRule.get(preview.rule_id) ?? 0, fixed),
-    });
-    for (const pair of preview.drawable_pairs) {
-      pairs.push({ rule_id: pair.rule_id, kind: pair.kind, a: pair.node_a, b: pair.node_b });
+    const allocated = allocByRule.get(preview.rule_id);
+    if (allocated === undefined) {
+      throw new Error(`rule preview ${preview.rule_id} has no allocation`);
     }
+    const fixed = mode === "explicit_pairs" || mode === "nearest_n";
+    notes.set(preview.rule_id, previewNote(preview, allocated, fixed));
+    if (preview.preview_scope === "computed" && preview.pairs_drawn === 0) darkRules += 1;
+    pairs.push(...preview.drawable_pairs);
   }
-  return { pairs, previews };
+  return { pairs, notes, darkRules };
 }

@@ -3,13 +3,13 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
 import { render, screen, fireEvent, cleanup } from "@testing-library/react";
 import { LogPanel } from "../LogPanel";
-import type { DebugSourceControl, OpsEvent } from "../../types";
+import type { DebugSourceControl, OpsEvent } from "../../generated/vsApi";
 
 afterEach(cleanup);
 
 const OPS: OpsEvent[] = [
-  { timestamp: "2026-06-12T06:11:04Z", source: "scheduler", level: "warning", code: "BOUNDARY", message: "export waiting for kernel proof", session_id: "s1", hostname: "node02" },
-  { timestamp: "2026-06-12T06:11:06Z", source: "node_agent", level: "error", code: "ACTUATION", message: "kernel state mismatch after LinkUp", session_id: "s1", hostname: "node02" },
+  { timestamp: "2026-06-12T06:11:04Z", source: "scheduler", level: "warning", code: "BOUNDARY", message: "export waiting for kernel proof", session_id: "s1", hostname: "node02", tenant_id: "tenant", details: null },
+  { timestamp: "2026-06-12T06:11:06Z", source: "node_agent", level: "error", code: "ACTUATION", message: "kernel state mismatch after LinkUp", session_id: "s1", hostname: "node02", tenant_id: "tenant", details: null },
 ];
 
 

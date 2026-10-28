@@ -271,9 +271,8 @@ export const tokens = {
   zWindow: 500, // floating operational windows (logs, trace) ride above all chrome
 
   // Scene-local DOM ladder (inside the viewport's own stacking context):
-  // labels (none) < hud < seek overlay < scene tooltip.
+  // labels (none) < hud < scene tooltip.
   zSceneHud: 8,
-  zSceneSeek: 10,
   zSceneTooltip: 20,
 
   // --- Border radii ---
@@ -408,7 +407,6 @@ export function applyTheme(): void {
   s.setProperty("--z-tooltip", String(tokens.zTooltip));
   s.setProperty("--z-window", String(tokens.zWindow));
   s.setProperty("--z-scene-hud", String(tokens.zSceneHud));
-  s.setProperty("--z-scene-seek", String(tokens.zSceneSeek));
   s.setProperty("--z-scene-tooltip", String(tokens.zSceneTooltip));
 
   // Border radii

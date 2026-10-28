@@ -14,12 +14,26 @@ import { FitAddon } from "@xterm/addon-fit";
 import { WebLinksAddon } from "@xterm/addon-web-links";
 import "@xterm/xterm/css/xterm.css";
 import { REST_URL, getApiKey } from "../config";
-import type { TerminalInput, TerminalOutput, TerminalResize } from "../generated/vsApi";
+import type { SocketCloseCode, TerminalInput, TerminalOutput, TerminalResize } from "../generated/vsApi";
 import { tokens, withAlpha } from "../styles/tokens";
 
 type ConnectionStatus = "connecting" | "connected" | "disconnected" | "error";
 
 const MAX_BUFFER_LINES = 10_000;
+
+/** Why VS-API closed a terminal, for every code it closes one with. */
+const CLOSE_REASON: Record<SocketCloseCode, string> = {
+  1000: "Disconnected.",
+  4400: "VS-API refused a malformed terminal message.",
+  4404: "Node not found.",
+  4409: "The node's workload declares no terminal access.",
+  4410: "The session switched; this terminal closed.",
+  4503: "VS-API cannot read the terminal key.",
+};
+
+function isSocketCloseCode(code: number): code is SocketCloseCode {
+  return Object.prototype.hasOwnProperty.call(CLOSE_REASON, code);
+}
 
 /** Lightweight session — WebSocket + text buffer, no xterm.js instance. */
 interface Session {
@@ -153,24 +167,17 @@ export function PersistentTerminal({
             appendOutput(msg.data);
           }
         } catch {
-          appendOutput(event.data);
+          appendOutput("\r\n\x1b[31mVS-API sent a terminal message that is not JSON.\x1b[0m");
         }
       };
 
       ws.onclose = (event) => {
-        if (event.code === 4401) {
-          session.status = "error";
-          onSessionStatusChange(nodeId, "error");
-          appendOutput("\r\n\x1b[31mAuthentication failed.\x1b[0m");
-        } else if (event.code === 4404) {
-          session.status = "error";
-          onSessionStatusChange(nodeId, "error");
-          appendOutput(`\r\n\x1b[31mNode ${nodeId} not found.\x1b[0m`);
-        } else {
-          session.status = "disconnected";
-          onSessionStatusChange(nodeId, "disconnected");
-          appendOutput("\r\n\x1b[90mDisconnected.\x1b[0m");
-        }
+        const known = isSocketCloseCode(event.code);
+        const failed = known && event.code !== 1000;
+        const text = known ? CLOSE_REASON[event.code] : `Disconnected (code ${event.code}).`;
+        session.status = failed ? "error" : "disconnected";
+        onSessionStatusChange(nodeId, session.status);
+        appendOutput(`\r\n\x1b[${failed ? 31 : 90}m${text}\x1b[0m`);
       };
 
       ws.onerror = () => {

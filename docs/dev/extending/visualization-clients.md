@@ -42,9 +42,34 @@ ws://host:8080/ws/v1/state?token=$TOKEN
 | `msg_type` | Content | When |
 |------------|---------|------|
 | `session_ephemeris` | Ephemeris inputs for all nodes, fixed ground positions, and body/frame facts | On connect, on epoch change |
-| `state_snapshot` | Full state (nodes, links, events, health) | ~1 Hz continuous |
-| `session_transitioning` | Progress updates during session switch | During switch only |
-| `playback_state` | Playing/paused/speed | On change |
+| `state_snapshot` | Full state: nodes, links, traced paths, recent events, ops events | ~1 Hz continuous |
+| `wiring_progress` | One wiring progress line from the Node Agent | While a session wires |
+| `session_transitioning` | Progress detail during a session switch | During a switch |
+| `session_ready` | The switched-to session's first state snapshot | When a switch completes |
+| `session_failed` | Why the session switch failed | When a switch fails |
+
+Each message is one member of the `StateFeedFrame` union in
+`lib/nodalarc/models/vs_api.py`, told apart by `msg_type`.
+
+### Messages the client sends
+
+The state socket accepts the `StateSocketCommand` messages: `debug_stream` and
+`debug_stop` with a list of `sources`, and `debug_stop_all`. Any other message
+closes the socket with code 4400.
+
+### Close codes
+
+| Code | Socket | Meaning |
+|------|--------|---------|
+| 1000 | terminal | The node's shell ended |
+| 4400 | state, terminal | The client sent a message the socket does not accept |
+| 4404 | terminal | The session has no node with that ID |
+| 4409 | terminal | The node's workload declares no terminal access |
+| 4410 | terminal | The session switched; every open terminal closes |
+| 4503 | terminal | VS-API cannot read the terminal key |
+
+A wrong or missing token is refused before VS-API accepts the socket, so the
+client sees a failed connection and no close code.
 
 ### Python client example
 
@@ -69,7 +94,7 @@ async def stream_state():
             msg_type = msg["msg_type"]
 
             if msg_type == "session_ephemeris":
-                print(f"Received ephemeris for {len(msg.get('nodes', {}))} nodes")
+                print(f"Received ephemeris for {len(msg['nodes'])} nodes")
             elif msg_type == "state_snapshot":
                 print(f"[{msg['sim_time'][:19]}] {len(msg['links'])} links")
 
@@ -88,7 +113,7 @@ ws.onmessage = (event) => {
   const msg = JSON.parse(event.data);
   if (msg.msg_type === "session_ephemeris") {
     // Store orbital elements for local propagation
-    initPropagation(msg.satellites);
+    initPropagation(msg.nodes);
   } else if (msg.msg_type === "state_snapshot") {
     updateDashboard(msg);
   }
@@ -109,7 +134,10 @@ ws.onmessage = (event) => {
 
 ## StateSnapshot Schema
 
-See [VS-API component docs](../components/vs-api.md) for the full schema. Key fields:
+The schema is the `StateSnapshot` model in `lib/nodalarc/models/vs_api.py`.
+`GET /openapi.json` serves it with every route's request and answer, and the
+browser's TypeScript types are generated from the same models into
+`frontend/src/generated/vsApi.ts`. Key fields:
 
 ```json
 {

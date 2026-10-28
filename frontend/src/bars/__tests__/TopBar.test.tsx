@@ -2,8 +2,8 @@
 // Licensed under the Apache License, Version 2.0. See LICENSE file.
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { StateSnapshot } from "../../types";
 import { TopBar } from "../TopBar";
+import type { StateSnapshot } from "../../generated/vsApi";
 
 afterEach(cleanup);
 
@@ -27,6 +27,13 @@ function snapshotWithActuationNotice(): StateSnapshot {
     playback_speed: 1,
     stale: false,
     history_recording: null,
+    kernel_actual_pairs: [],
+    playback_achieved: null,
+    pacing_degraded: false,
+    actuation_health: null,
+    ops_events: [],
+    ops_log_token: "t",
+    debug_events: [],
     actuation_notices: [
       {
         gs_id: "gs-buenos-aires",
@@ -100,11 +107,11 @@ describe("TopBar actuation notices", () => {
     expect(screen.getByText(/run operator repair for gs-buenos-aires/i)).toBeTruthy();
   });
   it("labels mixed actuation conditions without implying every notice is a fault", () => {
-    const snapshot = snapshotWithActuationNotice();
-    snapshot.actuation_notices = [
-      ...(snapshot.actuation_notices ?? []),
+    const base = snapshotWithActuationNotice();
+    const snapshot: StateSnapshot = { ...base, actuation_notices: [
+      ...base.actuation_notices,
       {
-        ...(snapshot.actuation_notices ?? [])[0]!,
+        ...base.actuation_notices[0]!,
         gs_id: "gs-denver",
         actuation_state: "actuation_blocked",
         reason_code: "ACTUATION_BLOCKED",
@@ -115,7 +122,7 @@ describe("TopBar actuation notices", () => {
         actual_pairs_for_gs: [["gs-denver", "sat-P01S01"]],
         ome_visible_scheduled_pairs_for_gs: [["gs-denver", "sat-P01S02"]],
       },
-    ];
+    ] };
 
     renderTopBar(snapshot);
 

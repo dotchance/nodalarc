@@ -14,7 +14,8 @@
  */
 
 import { tokens } from "../styles/tokens";
-import type { EphemerisNode, SessionEphemeris } from "../sim/ephemeris";
+import type { EphemerisNode } from "../sim/ephemeris";
+import type { SessionEphemeris } from "../builder/generated/builderApi";
 
 export type Regime = "leo" | "meo" | "geo" | "heo" | "luna" | "unknown";
 

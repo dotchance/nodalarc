@@ -3,7 +3,6 @@
 /** The client-side meaning layer: family classification, margin formatting, headline. */
 
 import { describe, it, expect } from "vitest";
-import type { FunnelGate, GateState } from "../families";
 import {
   candidateStatus,
   deriveFamily,
@@ -12,13 +11,7 @@ import {
   formatMargin,
   headline,
 } from "../derive";
-import type {
-  ActuationFacts,
-  DecisionFacts,
-  EffectiveEnvelopeFacts,
-  EnvelopeEndpoint,
-  LadderGate,
-} from "../types";
+import type { ActuationFacts, DecisionExplanationFacts, EffectiveEnvelopeFacts, EnvelopeEndpoint, FunnelGate, GateState, LadderGate } from "../../generated/vsApi";
 
 const ep = (
   role: "ground" | "satellite",
@@ -46,7 +39,7 @@ const env = (over: Partial<EffectiveEnvelopeFacts> = {}): EffectiveEnvelopeFacts
   ...over,
 });
 
-function facts(over: Partial<DecisionFacts>): DecisionFacts {
+function facts(over: Partial<DecisionExplanationFacts>): DecisionExplanationFacts {
   return {
     gs_id: "gs-denver",
     pair: ["gs-denver", "sat-P00S02"],
@@ -165,32 +158,17 @@ describe("deriveSeverity", () => {
 describe("candidateStatus", () => {
   it("rejected (not visible) takes the reject reason's registry family", () => {
     expect(
-      candidateStatus({
-        visible: false,
-        isWithheld: false,
-        rejectReason: "elevation_below_min",
-        unscheduledReason: null,
-      }),
+      candidateStatus({ visible: false, rejectReason: "elevation_below_min" }),
     ).toEqual({ family: "expected_no_link", label: "Below elevation mask" });
   });
   it("withheld (visible) takes the unscheduled reason's registry family", () => {
     expect(
-      candidateStatus({
-        visible: true,
-        isWithheld: true,
-        rejectReason: "ok",
-        unscheduledReason: "gs_capacity",
-      }),
+      candidateStatus({ visible: true, unscheduledReason: "gs_capacity" }),
     ).toEqual({ family: "eligible_unselected", label: "Ground capacity full" });
   });
   it("scheduled (visible, not withheld) reads neutral — actuation is not in the raw decision", () => {
     expect(
-      candidateStatus({
-        visible: true,
-        isWithheld: false,
-        rejectReason: "ok",
-        unscheduledReason: null,
-      }),
+      candidateStatus({ visible: true, unscheduledReason: null }),
     ).toEqual({ family: "unknown", label: "scheduled" });
   });
 });
@@ -254,7 +232,7 @@ describe("displayLadder co-linearity collapse", () => {
     state: GateState,
     actual: number | null,
     is_binding = false,
-    reason: string | null = null,
+    reason: LadderGate["reason_code"] = null,
   ): LadderGate => ({
     gate,
     state,

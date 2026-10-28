@@ -6,8 +6,8 @@
  *  (an area, or area border routers). GS row below.
  */
 
-import type { NodeState, LinkState } from "../types";
 import { isGroundLinkState } from "../networkIdentity";
+import type { LinkState, NodeState } from "../generated/vsApi";
 
 export interface LayoutNode {
   id: string;
@@ -58,7 +58,7 @@ const BAND_GAP = 32;
 const MARGIN = 40;
 
 export function computeLayout(
-  nodes: NodeState[],
+  nodes: readonly NodeState[],
   links: readonly TopologyLink[],
   bandOf: (node: NodeState) => string | null,
 ): TopologyLayout {

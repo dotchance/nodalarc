@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { nextSiteMember } from "../GroundStation";
-import type { NodeState } from "../../../types";
+import type { NodeState } from "../../../generated/vsApi";
 
 function gs(id: string, namespace: string): NodeState {
   return {

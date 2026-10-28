@@ -21,12 +21,13 @@
 import { useEffect, useRef, type MutableRefObject } from "react";
 import { useThree } from "@react-three/fiber";
 import { linkKey } from "./linkBatch";
-import type { LinkState, NodeState, Selection } from "../../types";
+import type { Selection } from "../../types";
 import { pickSceneAtScreenPoint, type PickBody } from "./sceneHitTesting";
+import type { LinkState, NodeState } from "../../generated/vsApi";
 
 interface LinkPickerProps {
-  nodes: NodeState[];
-  links: LinkState[];
+  nodes: readonly NodeState[];
+  links: readonly LinkState[];
   bodies: PickBody[];
   showIslLinks: boolean;
   showGroundLinks: boolean;

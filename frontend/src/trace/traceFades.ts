@@ -9,7 +9,7 @@
  */
 
 import { FAIL_FADE_MS, FAIL_HOLD_MS } from "../config";
-import type { TracedPath } from "../types";
+import type { TracedPath } from "../generated/vsApi";
 
 /** The opacity of a stopped trace `elapsedMs` after it stopped, like a failed
  *  link: full while it holds, fading to nothing, then null once it is gone. */

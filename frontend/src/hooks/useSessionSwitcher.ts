@@ -12,15 +12,14 @@
 
 import { useState, useEffect, useCallback, useRef } from "react";
 import { REST_URL, authHeaders } from "../config";
-import type { SessionInfo } from "../types";
-import type { CatalogSessionSwitchRequest } from "../builder/generated/builderApi";
+import type { CatalogSessionSummary, CatalogSessionSwitchRequest } from "../builder/generated/builderApi";
 import { apiErrorFromException, apiErrorMessage } from "../ui/apiError";
 
 /** How a switch request ended: accepted by VS-API, or refused with its reason. */
 export type SessionSwitchResult = { ok: true } | { ok: false; message: string };
 
 export function useSessionSwitcher(sessionTransitioning: boolean) {
-  const [sessions, setSessions] = useState<SessionInfo[]>([]);
+  const [sessions, setSessions] = useState<CatalogSessionSummary[]>([]);
   // Why the session list did not load; null once it loaded.
   const [sessionsError, setSessionsError] = useState<string | null>(null);
   const [switching, setSwitching] = useState(false);
@@ -34,7 +33,7 @@ export function useSessionSwitcher(sessionTransitioning: boolean) {
         setSessionsError(await apiErrorMessage(response));
         return;
       }
-      setSessions((await response.json()) as SessionInfo[]);
+      setSessions((await response.json()) as CatalogSessionSummary[]);
       setSessionsError(null);
     } catch (err) {
       setSessionsError(apiErrorFromException(err));
@@ -65,7 +64,7 @@ export function useSessionSwitcher(sessionTransitioning: boolean) {
   }, [switching, sessionTransitioning, fetchSessions]);
 
   const switchSession = useCallback(
-    async (session: SessionInfo, recordHistory: boolean): Promise<SessionSwitchResult> => {
+    async (session: CatalogSessionSummary, recordHistory: boolean): Promise<SessionSwitchResult> => {
       if (switching) return { ok: false, message: "A session switch is already in progress" };
       if (
         !session.deploy_allowed

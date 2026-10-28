@@ -7,12 +7,13 @@
  */
 
 import { useEffect, useState } from "react";
-import { fetchGroundDecisions, type GroundDecisionsSnapshot } from "./client";
+import type { GroundLinkDecisionSnapshot } from "../generated/vsApi";
+import { fetchGroundDecisions } from "./client";
 
 const REFRESH_MS = 2000;
 
 export interface GroundCandidatesState {
-  data: GroundDecisionsSnapshot | null;
+  data: GroundLinkDecisionSnapshot | null;
   loading: boolean;
   error: string | null;
 }

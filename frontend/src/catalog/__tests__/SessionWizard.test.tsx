@@ -8,7 +8,7 @@
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, fireEvent, cleanup, within, waitFor } from "@testing-library/react";
-import type { SessionInfo } from "../../types";
+import type { CatalogSessionSummary } from "../../builder/generated/builderApi";
 
 afterEach(cleanup);
 
@@ -19,7 +19,7 @@ vi.mock("../../config", () => ({
 
 const { SessionWizard } = await import("../SessionWizard");
 
-const SESSIONS: SessionInfo[] = [
+const SESSIONS: CatalogSessionSummary[] = [
   {
     source_id: {
       kind: "catalog",
@@ -163,8 +163,8 @@ describe("SessionWizard catalog sessions", () => {
   });
 
   it("keeps same-named user and shipped sessions visibly distinct", () => {
-    const shipped: SessionInfo = { ...SESSIONS[1]!, active: true };
-    const user: SessionInfo = {
+    const shipped: CatalogSessionSummary = { ...SESSIONS[1]!, active: true };
+    const user: CatalogSessionSummary = {
       ...shipped,
       source_id: {
         kind: "catalog",

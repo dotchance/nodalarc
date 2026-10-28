@@ -3,12 +3,8 @@
 
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import {
-  bodyMathFromFrame,
-  kmPerRenderUnitFromEphemeris,
-  type EphemerisBodyFrame,
-  type SessionEphemeris,
-} from "../ephemeris";
+import { bodyMathFromFrame, kmPerRenderUnitFromEphemeris } from "../ephemeris";
+import type { EphemerisBodyFrame, SessionEphemeris } from "../../builder/generated/builderApi";
 
 const BODY_FILES = {
   earth: resolve(process.cwd(), "../catalog/nodalarc/bodies/earth.yaml"),

@@ -425,6 +425,7 @@ RUNTIME_ROOTS: tuple[tuple[str, Any], ...] = (
     ("StateFeedFrame", vs_api.StateFeedFrame),
     ("StateSocketCommand", vs_api.StateSocketCommand),
     ("TerminalMessage", vs_api.TerminalMessage),
+    ("SocketCloseCode", vs_api.SocketCloseCode),
     ("DebugSourceControl", vs_api.DebugSourceControl),
     ("HealthStatus", vs_api.HealthStatus),
     ("ProjectAbout", ProjectAbout),

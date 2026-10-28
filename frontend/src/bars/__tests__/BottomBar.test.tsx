@@ -2,8 +2,8 @@
 // Licensed under the Apache License, Version 2.0. See LICENSE file.
 import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { HistoryRecordingState, StateSnapshot } from "../../types";
 import { BottomBar } from "../BottomBar";
+import type { HistoryRecordingState, StateSnapshot } from "../../generated/vsApi";
 
 // Vite defines the build hash at build time; vitest does not.
 beforeEach(() => vi.stubGlobal("__BUILD_HASH__", "test"));
@@ -32,6 +32,14 @@ function snapshot(history_recording: HistoryRecordingState | null): StateSnapsho
     playback_speed: 1,
     stale: false,
     history_recording,
+    kernel_actual_pairs: [],
+    playback_achieved: null,
+    pacing_degraded: false,
+    actuation_notices: [],
+    actuation_health: null,
+    ops_events: [],
+    ops_log_token: "t",
+    debug_events: [],
   };
 }
 

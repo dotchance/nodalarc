@@ -12,8 +12,9 @@
  */
 
 import { describe, expect, it } from "vitest";
-import { ecefToGeodetic, propagateNode, type EphemerisNodeKeplerian } from "../ephemeris";
+import { ecefToGeodetic, propagateNode } from "../ephemeris";
 import { catalogEarthBodyMath, catalogEarthFrame } from "./bodyModelFixture";
+import type { EphemerisNodeKeplerian } from "../../builder/generated/builderApi";
 
 const EPOCH = 1735689600.0; // 2025-01-01T00:00:00 UTC
 const TOL = 0.01; // degrees tolerance

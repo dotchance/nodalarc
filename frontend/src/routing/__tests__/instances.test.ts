@@ -2,7 +2,6 @@
 // Licensed under the Apache License, Version 2.0. See LICENSE file.
 import { describe, expect, it } from "vitest";
 import { tokens } from "../../styles/tokens";
-import type { NodeRoutingInstance, NodeState } from "../../types";
 import {
   areaColorAt,
   areaInstances,
@@ -11,6 +10,8 @@ import {
   interfaceInstances,
   routingSummary,
 } from "../instances";
+import type { NodeState } from "../../generated/vsApi";
+import type { NodeRoutingInstance } from "../../builder/generated/builderApi";
 
 function instance(
   domainId: string,

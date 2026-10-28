@@ -3,10 +3,10 @@
 /** L2: the full decision funnel — every gate, binding one emphasized. */
 
 import { displayLadder } from "../derive";
-import type { DecisionFacts } from "../types";
 import { GateRow } from "./GateRow";
+import type { DecisionExplanationFacts } from "../../generated/vsApi";
 
-export function DecisionLadder({ facts, tone }: { facts: DecisionFacts; tone?: string }) {
+export function DecisionLadder({ facts, tone }: { facts: DecisionExplanationFacts; tone?: string }) {
   return (
     <div className="decision-ladder">
       {displayLadder(facts).map(({ row, label }) => (

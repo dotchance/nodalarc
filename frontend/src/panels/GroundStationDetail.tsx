@@ -3,11 +3,11 @@
 /** Ground station detail panel — role, area, terminals, uplinks, flows. */
 
 import { useEffect, useState } from "react";
-import type { NodeState, StateSnapshot, Selection } from "../types";
+import type { Selection } from "../types";
 import { useDecisionExplanation } from "../explain/useDecisionExplanation";
 import { scopeLocalName } from "./SatelliteDetail";
 import { useDecisionTimeline } from "../explain/useDecisionTimeline";
-import { fetchGroundDecisions, type GroundDecisionsSnapshot } from "../explain/client";
+import { fetchGroundDecisions } from "../explain/client";
 import { candidateStatus } from "../explain/derive";
 import { CandidateRow } from "../explain/components/CandidateRow";
 import { GroundStationCard } from "../explain/components/GroundStationCard";
@@ -18,6 +18,7 @@ import { Icon } from "../ui/icons/Icon";
 import { TaxonomyChip } from "../ui/Badge";
 import { REGIME_TINT } from "../taxonomy/regime";
 import { tokens } from "../styles/tokens";
+import type { GroundLinkDecisionSnapshot, NodeState, StateSnapshot } from "../generated/vsApi";
 
 interface GroundStationDetailProps {
   node: NodeState;
@@ -31,7 +32,7 @@ const _withoutPrefixLen = (address: string): string => address.split("/")[0] ?? 
 
 export function GroundStationDetail({ node, snapshot, onSelect }: GroundStationDetailProps) {
   const [inspectedSat, setInspectedSat] = useState<string | null>(null);
-  const [decisions, setDecisions] = useState<GroundDecisionsSnapshot | null>(null);
+  const [decisions, setDecisions] = useState<GroundLinkDecisionSnapshot | null>(null);
   const [candidateError, setCandidateError] = useState<string | null>(null);
   const [timelineLimit, setTimelineLimit] = useState(120);
   const explanation = useDecisionExplanation(node.node_id);
@@ -116,9 +117,6 @@ export function GroundStationDetail({ node, snapshot, onSelect }: GroundStationD
     );
   }
 
-  const withheld = new Set(
-    (decisions?.unscheduled_pairs ?? []).map((u) => _ordered(u.pair[0], u.pair[1])),
-  );
   const unschedReason = new Map(
     (decisions?.unscheduled_pairs ?? []).map((u) => [
       _ordered(u.pair[0], u.pair[1]),
@@ -130,12 +128,11 @@ export function GroundStationDetail({ node, snapshot, onSelect }: GroundStationD
     .map((d) => {
       const sat = d.pair[0] === node.node_id ? d.pair[1] : d.pair[0];
       const key = _ordered(d.pair[0], d.pair[1]);
-      const status = candidateStatus({
-        visible: d.visible,
-        isWithheld: withheld.has(key),
-        rejectReason: d.reject_reason,
-        unscheduledReason: unschedReason.get(key) ?? null,
-      });
+      const status = candidateStatus(
+        d.visible
+          ? { visible: true, unscheduledReason: unschedReason.get(key) ?? null }
+          : { visible: false, rejectReason: d.reject_reason },
+      );
       return { sat, d, status };
     });
 
@@ -220,7 +217,7 @@ export function GroundStationDetail({ node, snapshot, onSelect }: GroundStationD
           ))}
           {siteInterfaces.map((addr) => (
             <div className="detail-row" key={`site-iface:${addr.address}`}>
-              <span className="detail-label">{addr.interface ?? "site"} interface</span>
+              <span className="detail-label">{addr.interface} interface</span>
               <span className="detail-value detail-value--code">{addr.address}</span>
             </div>
           ))}

@@ -8,13 +8,8 @@
  */
 
 import { useState, useCallback, useEffect, useRef } from "react";
-import type {
-  ViewMode,
-  ColorMode,
-  GlobeMode,
-  ReferenceFrame,
-  StateSnapshot,
-} from "../types";
+import type { ViewMode, ColorMode, GlobeMode, ReferenceFrame } from "../types";
+import type { StateSnapshot } from "../generated/vsApi";
 
 const REFERENCE_FRAME_STORAGE_KEY = "nodalarc.referenceFrame";
 

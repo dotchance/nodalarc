@@ -16,7 +16,7 @@
  */
 
 import { gmstRadians } from "../globe/astronomy";
-import type { SurfaceBody } from "../types";
+import type { EphemerisBodyFrame, SessionEphemeris } from "../builder/generated/builderApi";
 import {
   J2000_UNIX_SECONDS,
   SCENE_EARTH_RADIUS,
@@ -25,91 +25,8 @@ import {
   type BodyMath,
 } from "./orbitalMath";
 
-// ---------------------------------------------------------------------------
-// Types (match lib/nodalarc/models/events.py SessionEphemeris)
-// ---------------------------------------------------------------------------
-
-export interface EphemerisNodeKeplerian {
-  type: "keplerian";
-  propagator: "two-body" | "keplerian-circular" | "j2-mean-elements";
-  semi_major_axis_km: number;
-  eccentricity: number;
-  inclination_deg: number;
-  raan_deg: number;
-  argument_of_perigee_deg: number;
-  mean_anomaly_deg: number;
-  plane: number;
-  slot: number;
-  segment_id: string;
-  local_node_id: string;
-  namespace: string;
-  tags: readonly string[];
-  reference_body: SurfaceBody;
-  frame_id: SurfaceBody;
-}
-
-export interface EphemerisNodeTLE {
-  type: "tle";
-  tle_line_1: string;
-  tle_line_2: string;
-  plane: number;
-  slot: number;
-  norad_id?: number | null;
-  segment_id: string;
-  local_node_id: string;
-  namespace: string;
-  tags: readonly string[];
-  reference_body: SurfaceBody;
-  frame_id: SurfaceBody;
-}
-
-export interface EphemerisNodeFixed {
-  type: "fixed";
-  lat_deg: number;
-  lon_deg: number;
-  alt_km: number;
-  segment_id: string;
-  local_node_id: string;
-  namespace: string;
-  tags: readonly string[];
-  reference_body: SurfaceBody;
-  frame_id: SurfaceBody;
-}
-
-export type EphemerisNode = EphemerisNodeKeplerian | EphemerisNodeTLE | EphemerisNodeFixed;
-
-export interface EphemerisBodyFrame {
-  body_id: SurfaceBody;
-  mean_radius_km: number;
-  equatorial_radius_km: number;
-  polar_radius_km: number;
-  gravitational_parameter_km3_s2: number;
-  rotation_rate_rad_s: number;
-  j2: number;
-  origin_x_km: number;
-  origin_y_km: number;
-  origin_z_km: number;
-  vel_x_km_s: number;
-  vel_y_km_s: number;
-  vel_z_km_s: number;
-  provider: string;
-  kernel_id: string;
-  quality_tier: string;
-  frame: string;
-}
-
-export interface SessionEphemeris {
-  epoch_id: number;
-  sim_time: string; // ISO 8601
-  epoch_unix: number;
-  nodes: Readonly<Record<string, EphemerisNode>>;
-  body_frames: Readonly<Partial<Record<SurfaceBody, EphemerisBodyFrame>>>;
-}
-
-export interface PlaybackStateMsg {
-  epoch_id: number;
-  state: "seeking" | "playing" | "paused";
-}
+/** One node's ephemeris entry, as SessionEphemeris carries it. */
+export type EphemerisNode = SessionEphemeris["nodes"][string];
 
 interface PropagatedPosition {
   latDeg: number;

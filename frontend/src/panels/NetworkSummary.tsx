@@ -2,9 +2,10 @@
 // Licensed under the Apache License, Version 2.0. See LICENSE file.
 /** Network summary — shown when nothing is selected. */
 
-import type { NodeRole, PublicLinkType, StateSnapshot } from "../types";
 import { instanceLabel } from "../routing/instances";
 import { translateLinkType } from "../translate";
+import type { PublicLinkType, StateSnapshot } from "../generated/vsApi";
+import type { NodeRole } from "../builder/generated/builderApi";
 
 const ROLES: readonly NodeRole[] = ["router", "host", "forwarding_only"];
 const LINK_KINDS: readonly PublicLinkType[] = ["isl", "inter_constellation", "inter_body_relay", "ground"];

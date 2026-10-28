@@ -3,7 +3,7 @@
 /** Builder world → Scene input adapter.
  *
  *  The R3F Scene is the single production globe; its input contract is a
- *  StateSnapshot + SessionEphemeris. For a resolved-but-not-deployed session
+ *  SceneSnapshot + SessionEphemeris. For a resolved-but-not-deployed session
  *  there is no runtime snapshot, so this module derives one from the
  *  BuilderWorld: node identities from the resolver, satellite positions
  *  propagated at the session epoch with the same client math the live globe
@@ -11,19 +11,15 @@
  *  from the resolver's surface_position (the ephemeris only carries
  *  space-link participants; the world carries every node).
  *
- *  This object exists only as Scene input. Fields the Scene never reads but
- *  the StateSnapshot type requires (session ids, ops fields)
- *  get neutral values — never surface them in builder UI as session state.
+ *  This object exists only as Scene input. Node fields the Scene never reads
+ *  but NodeState requires (counts, prefix, addresses) get neutral values —
+ *  never surface them in builder UI as session state.
  */
 
-import type { NodeState, StateSnapshot } from "../types";
-import {
-  bodyMathFromFrame,
-  kmPerRenderUnitFromEphemeris,
-  propagateNode,
-  type EphemerisNode,
-} from "../sim/ephemeris";
+import { bodyMathFromFrame, kmPerRenderUnitFromEphemeris, propagateNode, type EphemerisNode } from "../sim/ephemeris";
 import type { BuilderWorld, BuilderWorldNode } from "./builderTypes";
+import type { NodeState } from "../generated/vsApi";
+import type { SceneSnapshot } from "../globe/r3f/Scene";
 
 function _satelliteNodeState(
   node: BuilderWorldNode,
@@ -53,6 +49,7 @@ function _satelliteNodeState(
       isl_count: 0,
       gnd_count: 0,
       prefix: null,
+    addresses: [],
       min_elevation_deg: null,
       beam_falloff_exponent: null,
       reference_body: entry.reference_body,
@@ -93,6 +90,7 @@ function _satelliteNodeState(
     isl_count: 0,
     gnd_count: 0,
     prefix: null,
+    addresses: [],
     min_elevation_deg: null,
     beam_falloff_exponent: null,
     reference_body: entry.reference_body,
@@ -126,6 +124,7 @@ function _groundNodeState(node: BuilderWorldNode): NodeState {
     isl_count: 0,
     gnd_count: 0,
     prefix: null,
+    addresses: [],
     min_elevation_deg: null,
     beam_falloff_exponent: null,
     reference_body: surface.body,
@@ -150,7 +149,7 @@ export function distinctGroundStationSites(
 }
 
 /** Derive the Scene-input snapshot for a resolved world, frozen at its epoch. */
-export function builderSnapshotFromWorld(world: BuilderWorld): StateSnapshot {
+export function builderSnapshotFromWorld(world: BuilderWorld): SceneSnapshot {
   const nodes: NodeState[] = world.nodes.map((node) => {
     const entry = world.ephemeris.nodes[node.node_id];
     if (node.kind === "satellite") {
@@ -163,24 +162,14 @@ export function builderSnapshotFromWorld(world: BuilderWorld): StateSnapshot {
   });
 
   return {
-    msg_type: "state_snapshot",
-    debug_control: [],
-    debug_subscription_open: false,
     sim_time: world.ephemeris.sim_time,
-    wall_time: world.ephemeris.sim_time,
-    session_id: `builder:${world.session.name}`,
+    constellation_name: `builder:${world.session.name}`,
     nodes,
     links: [],
+    kernel_actual_pairs: [],
     traced_paths: [],
-    recent_events: [],
-    routing_stack: null,
-    constellation_name: `builder:${world.session.name}`,
-    session_status: "idle",
-    session_status_detail: null,
-    playback_paused: true,
+    actuation_notices: [],
     playback_speed: 1,
-    client_arrival_ms: performance.now(),
-    stale: false,
-    history_recording: null,
+    playback_achieved: null,
   };
 }

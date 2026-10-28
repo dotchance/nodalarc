@@ -7,9 +7,16 @@
  * the Expected/Faulted classification happens.
  */
 
-import type { Family, FunnelGate, Producer, Severity } from "./families";
+import type { Family, Severity } from "./families";
 import { REASON_REGISTRY } from "./reasons";
-import type { DecisionFacts, LadderGate } from "./types";
+import type {
+  DecisionExplanationFacts,
+  ExplanationProducer,
+  FunnelGate,
+  GroundUnscheduledReason,
+  GroundVisibilityRejectReason,
+  LadderGate,
+} from "../generated/vsApi";
 
 export const GATE_LABELS: Record<FunnelGate, string> = {
   line_of_sight: "Line of sight",
@@ -25,7 +32,7 @@ export const GATE_LABELS: Record<FunnelGate, string> = {
 
 /** Operator-facing label for the authoritative producer of a gate's verdict (the spec's
  *  "which component owns this" — single source for the Per-Pair Inspector's provenance). */
-export const PRODUCER_LABELS: Record<Producer, string> = {
+export const PRODUCER_LABELS: Record<ExplanationProducer, string> = {
   ome_visibility: "OME visibility",
   ome_allocator: "OME allocator",
   scheduler: "Scheduler",
@@ -43,7 +50,7 @@ export const PRODUCER_LABELS: Record<Producer, string> = {
  * client's clock. A divergence with no age yet (e.g. just after a VS-API restart) stays
  * the calm, non-green in_flight, never red, until the age is known.
  */
-export function deriveFamily(facts: DecisionFacts): Family {
+export function deriveFamily(facts: DecisionExplanationFacts): Family {
   const act = facts.actuation;
 
   if (facts.binding_gate === "actuation_proof") {
@@ -67,19 +74,20 @@ export function deriveFamily(facts: DecisionFacts): Family {
     return "connected";
   }
 
-  const rec = facts.binding_reason_code ? REASON_REGISTRY[facts.binding_reason_code] : undefined;
-  return rec?.family ?? "unknown";
+  // A binding gate with no reason code cannot be classified.
+  if (facts.binding_reason_code === null) return "unknown";
+  return REASON_REGISTRY[facts.binding_reason_code].family;
 }
 
-export function deriveSeverity(facts: DecisionFacts): Severity {
+export function deriveSeverity(facts: DecisionExplanationFacts): Severity {
   if (facts.binding_gate === "actuation_proof") {
     const fam = deriveFamily(facts);
     if (fam === "faulted") return "alarm";
     if (fam === "unknown") return "warning";
     return "info";
   }
-  const rec = facts.binding_reason_code ? REASON_REGISTRY[facts.binding_reason_code] : undefined;
-  return rec?.severity ?? "info";
+  if (facts.binding_reason_code === null) return "info";
+  return REASON_REGISTRY[facts.binding_reason_code].severity;
 }
 
 function round1(n: number): string {
@@ -127,9 +135,15 @@ export function fillSentence(
 }
 
 /** The binding ladder row (the gate the pair stopped at), if any. */
-export function bindingRow(facts: DecisionFacts): LadderGate | null {
+export function bindingRow(facts: DecisionExplanationFacts): LadderGate | null {
   return facts.ladder.find((g) => g.is_binding) ?? null;
 }
+
+/** A candidate as the raw OME decision states it: rejected with a reason, or
+ *  visible and either withheld with a reason or scheduled (no reason). */
+export type CandidateDecision =
+  | { visible: false; rejectReason: GroundVisibilityRejectReason }
+  | { visible: true; unscheduledReason: GroundUnscheduledReason | null };
 
 /**
  * Lightweight family + label for a candidate row in the GS candidate list, derived
@@ -138,33 +152,26 @@ export function bindingRow(facts: DecisionFacts): LadderGate | null {
  * ("unknown") in the list rather than a possibly-false green. Family for rejected /
  * withheld rows comes from the reason registry — single source, no drift.
  */
-export function candidateStatus(o: {
-  visible: boolean;
-  isWithheld: boolean;
-  rejectReason: string;
-  unscheduledReason: string | null;
-}): { family: Family; label: string } {
-  if (o.visible && o.isWithheld) {
-    const rec = o.unscheduledReason ? REASON_REGISTRY[o.unscheduledReason] : undefined;
-    return { family: rec?.family ?? "eligible_unselected", label: rec?.label ?? "Withheld" };
+export function candidateStatus(o: CandidateDecision): { family: Family; label: string } {
+  if (!o.visible) {
+    const rec = REASON_REGISTRY[o.rejectReason];
+    return { family: rec.family, label: rec.label };
   }
-  if (o.visible) {
-    return { family: "unknown", label: "scheduled" };
-  }
-  const rec = REASON_REGISTRY[o.rejectReason];
-  return { family: rec?.family ?? "expected_no_link", label: rec?.label ?? "Unknown reason" };
+  if (o.unscheduledReason === null) return { family: "unknown", label: "scheduled" };
+  const rec = REASON_REGISTRY[o.unscheduledReason];
+  return { family: rec.family, label: rec.label };
 }
 
 /** A one-line headline for the focal pair, built from the binding reason + facts. */
-export function headline(facts: DecisionFacts): string {
+export function headline(facts: DecisionExplanationFacts): string {
   const fam = deriveFamily(facts);
   const sat = facts.pair.find((n) => n !== facts.gs_id) ?? facts.pair[1];
   if (fam === "connected") return `Connected to ${sat}.`;
   if (fam === "in_flight") return `Converging on ${sat} (handover in flight).`;
 
   const code = facts.binding_reason_code;
-  const rec = code ? REASON_REGISTRY[code] : undefined;
-  if (!rec) return "State unknown.";
+  if (code === null) return "State unknown.";
+  const rec = REASON_REGISTRY[code];
 
   const row = bindingRow(facts);
   const margin = row ? formatMargin(row) : null;
@@ -192,7 +199,7 @@ export interface DisplayRow {
  * agrees with the effective-envelope panel. Non-vertical (steerable) boresights
  * keep the rows separate — there they genuinely decouple.
  */
-export function displayLadder(facts: DecisionFacts): DisplayRow[] {
+export function displayLadder(facts: DecisionExplanationFacts): DisplayRow[] {
   const env = facts.envelope;
   const hasElev = facts.ladder.some((g) => g.gate === "elevation_mask");
   const hasFor = facts.ladder.some((g) => g.gate === "field_of_regard");

@@ -6,7 +6,6 @@ page can do.
 
 from __future__ import annotations
 
-import json
 import os
 import re
 import subprocess
@@ -18,7 +17,7 @@ from typing import Any
 
 import httpx
 from nodalarc.models.builder_catalog_api import CatalogComponentDraftEnvelope
-from nodalarc.models.vs_api import TerminalInput, TerminalMessage, TerminalOutput
+from nodalarc.models.vs_api import StateFeedFrame, TerminalInput, TerminalMessage, TerminalOutput
 from pydantic import TypeAdapter
 from websockets.exceptions import ConnectionClosed
 from websockets.sync.client import ClientConnection, connect
@@ -63,6 +62,7 @@ class Refused(Exception):
 
 
 _TERMINAL_MESSAGE: TypeAdapter[TerminalMessage] = TypeAdapter(TerminalMessage)
+_STATE_FEED_FRAME: TypeAdapter[StateFeedFrame] = TypeAdapter(StateFeedFrame)
 
 
 class Terminal:
@@ -405,7 +405,8 @@ class Operator:
     ) -> list[tuple[float, dict[str, Any]]]:
         """Listen to the state feed for `seconds`, or until `until` says enough was heard.
 
-        Returns each message with the wall time it arrived.
+        Returns each message with the wall time it arrived. A message that is not a
+        state feed frame fails the read.
         """
         messages: list[tuple[float, dict[str, Any]]] = []
         with connect(self.socket_url("/ws/v1/state"), max_size=None) as socket:
@@ -415,7 +416,8 @@ class Operator:
                     raw = socket.recv(timeout=remaining)
                 except TimeoutError:
                     break
-                messages.append((time.monotonic(), json.loads(raw)))
+                frame = _STATE_FEED_FRAME.validate_json(raw)
+                messages.append((time.monotonic(), frame.model_dump(mode="json")))
                 if until is not None and until(messages):
                     break
         return messages

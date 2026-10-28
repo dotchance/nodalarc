@@ -31,9 +31,9 @@
 import { useEffect, useMemo, useRef } from "react";
 import * as THREE from "three";
 import { useFrame } from "@react-three/fiber";
-import type { NodeState } from "../../types";
 import { getNodeWorldPosition } from "./positions";
 import { tokens } from "../../styles/tokens";
+import type { NodeState } from "../../generated/vsApi";
 
 // --- Trail ring-buffer constants ---
 const TRAIL_LENGTH = 600;
@@ -326,7 +326,7 @@ interface TrailsProps {
   /** Whether trails render + extend. When false, history is flushed and nothing is drawn. */
   enabled: boolean;
   /** The session nodes (same source as <Constellation>); satellites are filtered out here. */
-  nodes: NodeState[];
+  nodes: readonly NodeState[];
   /**
    * Bump on any constellation / epoch change to flush trail history (declarative reset).
    * Pass `ephemeris.epoch_id` (and/or a session id) — the legacy code flushed on epoch_id

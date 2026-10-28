@@ -21,27 +21,6 @@
   white-space: nowrap;
 }
 
-.scene-seek-overlay {
-  position: absolute;
-  inset: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: var(--bg-scrim-light);
-  pointer-events: none;
-  z-index: var(--z-scene-seek);
-}
-
-.scene-seek-box {
-  color: var(--text-primary);
-  font-size: var(--font-size-xl);
-  font-family: var(--font-ui);
-  padding: var(--space-6) var(--space-12);
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-lg);
-  background: var(--bg-overlay-94);
-}
-
 .scene-tooltip {
   position: fixed;
   pointer-events: none;

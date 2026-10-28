@@ -27,21 +27,8 @@ import {
   requestFlush,
   sendEphemeris,
 } from "../../sim/workerBridge";
-import {
-  kmPerRenderUnitFromEphemeris,
-  type EphemerisBodyFrame,
-  type PlaybackStateMsg,
-  type SessionEphemeris,
-} from "../../sim/ephemeris";
-import type {
-  ColorMode,
-  GlobeMode,
-  NodeState,
-  ReferenceFrame,
-  Selection,
-  StateSnapshot,
-  SurfaceBody,
-} from "../../types";
+import { kmPerRenderUnitFromEphemeris } from "../../sim/ephemeris";
+import type { ColorMode, GlobeMode, ReferenceFrame, Selection } from "../../types";
 import type { GlobeActions } from "../actions";
 import { isGroundNode } from "../../networkIdentity";
 import { Universe } from "./Universe";
@@ -71,16 +58,36 @@ import {
   sceneFrameForCamera,
   sceneRadiusForCamera,
 } from "./cameraBounds";
+import type { NodeState, StateSnapshot } from "../../generated/vsApi";
+import type { EphemerisBodyFrame, SessionEphemeris, SupportedSurfaceBody } from "../../builder/generated/builderApi";
 
 const MAX_PINS = 7;
+
+/** The state fields the scene renders. The live feed passes its frame; the
+ *  builder derives these from a resolved world. */
+export type SceneSnapshot = Pick<
+  StateSnapshot,
+  | "sim_time"
+  | "constellation_name"
+  | "nodes"
+  | "links"
+  | "kernel_actual_pairs"
+  | "traced_paths"
+  | "actuation_notices"
+  | "playback_speed"
+  | "playback_achieved"
+>;
+
 interface SceneProps {
-  snapshot: StateSnapshot | null;
+  snapshot: SceneSnapshot | null;
+  /** When the snapshot arrived (performance.now() at decode); anchors the clock phase. */
+  snapshotArrivalMs: number | null;
   ephemeris: SessionEphemeris | null;
   colorMode: ColorMode;
   globeMode: GlobeMode;
   referenceFrame: ReferenceFrame;
-  playbackPaused: boolean;
-  playbackState: PlaybackStateMsg | null;
+  /** Null until a snapshot states it. */
+  playbackPaused: boolean | null;
   showIslLinks: boolean;
   showGroundLinks: boolean;
   showSatPaths: boolean;
@@ -110,12 +117,12 @@ interface SceneProps {
 
 export function Scene({
   snapshot,
+  snapshotArrivalMs,
   ephemeris,
   colorMode,
   globeMode,
   referenceFrame,
   playbackPaused,
-  playbackState,
   showIslLinks,
   showGroundLinks,
   showSatPaths,
@@ -179,7 +186,7 @@ export function Scene({
   const bodies = useMemo(() => {
     if (!ephemeris || kmPerRenderUnit === null) return [];
     const frames = ephemeris.body_frames;
-    const ids = new Set<SurfaceBody>();
+    const ids = new Set<SupportedSurfaceBody>();
     for (const frame of Object.values(frames)) if (frame) ids.add(frame.body_id);
     for (const node of nodes) ids.add(node.reference_body);
 
@@ -282,31 +289,22 @@ export function Scene({
     });
   }, [nodes]);
 
-  // Epoch-suspension overlay (PRD seek protocol). "seeking" shows the overlay; only "playing"
-  // clears it ("paused" leaves it as-is) — legacy GlobeView verbatim. Trails flush on seek is
-  // handled by the resetKey below (a seek resets the epoch, so epoch_id changes).
-  const [seeking, setSeeking] = useState(false);
-  useEffect(() => {
-    if (playbackState?.state === "seeking") setSeeking(true);
-    else if (playbackState?.state === "playing") setSeeking(false);
-  }, [playbackState]);
-
   // Feed the shared clock on each snapshot (drives propagation timing +
   // interpolation). Phase anchors at transport arrival (stamped at WS
   // decode), not at effect execution — render scheduling jitter must not
   // enter the clock.
   useEffect(() => {
-    if (snapshot)
+    if (snapshot && snapshotArrivalMs !== null)
       onSnapshot(
         snapshot.sim_time,
-        snapshot.client_arrival_ms ?? performance.now(),
+        snapshotArrivalMs,
         snapshot.playback_achieved ?? snapshot.playback_speed,
       );
-  }, [snapshot]);
+  }, [snapshot, snapshotArrivalMs]);
 
   // Freeze/unfreeze the clock on pause; d(sim)/d(wall) is 0 while paused.
   useEffect(() => {
-    setPlaybackPaused(playbackPaused);
+    if (playbackPaused !== null) setPlaybackPaused(playbackPaused);
   }, [playbackPaused]);
 
   // Drive the Keplerian/J2 worker on ephemeris change. The Constellation reads worker
@@ -469,12 +467,6 @@ export function Scene({
       />
       <Tooltip hover={hover} regime={hover ? regimeById.get(hover.node.node_id) : undefined} />
       <div className="scene-hud">Focus: {cameraFocusLabel}</div>
-      {/* Epoch-suspension overlay during a seek (PRD seek protocol) — legacy "Recalculating Epoch". */}
-      {seeking && (
-        <div className="scene-seek-overlay">
-          <div className="scene-seek-box">Recalculating epoch…</div>
-        </div>
-      )}
     </div>
   );
 }

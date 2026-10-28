@@ -15,7 +15,7 @@
  */
 import type { Family } from "./families";
 import { schedulerOpsLabel } from "./reasons";
-import type { ActuationNotice, LinkState } from "../types";
+import type { ActuationNotice, LinkState } from "../generated/vsApi";
 
 export interface GsFamily {
   family: Family;

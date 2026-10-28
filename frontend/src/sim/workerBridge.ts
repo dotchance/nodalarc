@@ -4,13 +4,9 @@
 // Allocates the double-buffered SharedArrayBuffer, sends ephemeris data
 // to the Worker, and reads interpolated positions for the render loop.
 
-import {
-  bodyMathFromFrame,
-  kmPerRenderUnitFromEphemeris,
-  type SessionEphemeris,
-  type EphemerisNodeKeplerian,
-} from "./ephemeris";
+import { bodyMathFromFrame, kmPerRenderUnitFromEphemeris } from "./ephemeris";
 import type { KeplerianElements } from "./orbitalMath";
+import type { EphemerisNodeKeplerian, SessionEphemeris } from "../builder/generated/builderApi";
 
 // --- Configuration ---
 

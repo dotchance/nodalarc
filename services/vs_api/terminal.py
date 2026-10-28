@@ -33,6 +33,7 @@ from kubernetes.stream.ws_client import (
     STDIN_CHANNEL,
     STDOUT_CHANNEL,
 )
+from nodalarc.models.vs_api import SocketCloseCode
 from nodalarc.workload_target import NODE_ID_LABEL, TERMINAL_ACCESS_ANNOTATION
 from starlette.websockets import WebSocket
 from websocket import WebSocketException
@@ -464,6 +465,6 @@ class TerminalManager:
                     log.warning("Failed to close terminal %s (%s): %s", conn_id, node_id, exc)
                 if ws is not None:
                     with contextlib.suppress(Exception):
-                        await ws.close(code=4410, reason=reason)
+                        await ws.close(code=SocketCloseCode.SESSION_SWITCHED, reason=reason)
             self._sessions.clear()
             log.info("All terminal sessions closed")

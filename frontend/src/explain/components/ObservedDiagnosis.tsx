@@ -3,9 +3,9 @@
 /** L2: observed GS decision window and reason roll-up. */
 
 import { FAMILY_TONE, type Family } from "../families";
-import type { DecisionSampleState, GsDecisionTimelineFacts } from "../types";
 import { reasonLabel } from "../reasons";
 import { ReasonText } from "./ReasonText";
+import type { DecisionSampleState, GsDecisionTimelineFacts } from "../../generated/vsApi";
 
 const STATE_FAMILY: Record<DecisionSampleState, Family> = {
   scheduled: "connected",
@@ -19,7 +19,7 @@ const STATE_LABEL: Record<DecisionSampleState, string> = {
   expected_no_link: "Expected no link",
 };
 
-function peerOf(pair: [string, string] | null, gsId: string): string | null {
+function peerOf(pair: readonly [string, string] | null, gsId: string): string | null {
   if (!pair) return null;
   return pair[0] === gsId ? pair[1] : pair[0];
 }
@@ -89,7 +89,7 @@ export function ObservedDiagnosis({
         <div className="detail-row">
           <span className="detail-label">Dominant</span>
           <span className="detail-value">
-            {top.reason_code ? <ReasonText code={top.reason_code} /> : STATE_LABEL[top.state]}
+            {top.reason_code !== null ? <ReasonText code={top.reason_code} /> : STATE_LABEL[top.state]}
             {` · ${top.count}/${timeline.sample_count}`}
           </span>
         </div>
@@ -99,7 +99,7 @@ export function ObservedDiagnosis({
         {timeline.samples.map((sample) => {
           const family = STATE_FAMILY[sample.state];
           const peer = peerOf(sample.pair, timeline.gs_id);
-          const reason = reasonLabel(sample.reason_code);
+          const reason = sample.reason_code === null ? null : reasonLabel(sample.reason_code);
           const title = `${STATE_LABEL[sample.state]}${peer ? ` · ${peer}` : ""}${reason ? ` · ${reason}` : ""}`;
           return (
             <button

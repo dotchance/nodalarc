@@ -41,9 +41,10 @@ import { computeOrbitPositions, ORBIT_SAMPLES, supportsStaticOrbitRing } from ".
 import { sampleOrbitPathSceneXYZ } from "../../sim/orbitalMath";
 import { bodyMathFromFrame } from "../../sim/ephemeris";
 import { interpolatedSimTimeMs } from "../../sim/simClock";
-import type { NodeState, ReferenceFrame } from "../../types";
-import type { SessionEphemeris } from "../../sim/ephemeris";
+import type { ReferenceFrame } from "../../types";
 import { bodyLocalToWorld, getNodeLocalPosition, getNodeWorldPosition } from "./positions";
+import type { NodeState } from "../../generated/vsApi";
+import type { SessionEphemeris } from "../../builder/generated/builderApi";
 
 const SEGMENTS_PER_ORBIT = ORBIT_SAMPLES; // closed ring = N segments from N+1 vertices
 const FLOATS_PER_ORBIT = SEGMENTS_PER_ORBIT * 6;
@@ -72,7 +73,7 @@ function createGeometry(positions: Float32Array, colors: Float32Array): LineSegm
 
 interface AllOrbitsProps {
   /** All session nodes; satellites with velocity + plane get a ring. */
-  nodes: NodeState[];
+  nodes: readonly NodeState[];
   /** The "Satellite Paths" toggle. When false, the batch is torn down. */
   show: boolean;
   /**
@@ -153,7 +154,7 @@ export function AllOrbits({
   // Rebuild the batch from the current satellite set.
   // Returns false if no rings were produced (count gate keeps retrying next frame).
   const rebuild = (
-    sats: NodeState[],
+    sats: readonly NodeState[],
     viewFrameRotationRad: number,
     frameAngularVelocityRadS: number,
     simTimeUnix: number | null,

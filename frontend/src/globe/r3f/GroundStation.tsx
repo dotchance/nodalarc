@@ -22,11 +22,11 @@ import { geoToWorld } from "../geo";
 import { computeConeRadius } from "../groundStations";
 import { FAMILY_TONE } from "../../explain/families";
 import { groundStationFamily, type GsFamily } from "../../explain/groundStationFamily";
-import type { EffectiveEnvelopeFacts } from "../../explain/types";
 import { removeNode, setNodeLocalPosition } from "./positions";
 import { useBodyFrame } from "./BodyFrame";
 import type { HoverInfo } from "./Tooltip";
-import type { ActuationNotice, LinkState, NodeState, Selection } from "../../types";
+import type { Selection } from "../../types";
+import type { ActuationNotice, EffectiveEnvelopeFacts, LinkState, NodeState } from "../../generated/vsApi";
 
 /** The shared 64x64 antenna glyph texture. Drawn WHITE so the per-GS spriteMaterial.color tints
  *  it to the canonical family tone (globe/groundStations.ts getSharedTexture, recolored). */
@@ -77,7 +77,7 @@ function ringGeometry(radius: number): THREE.BufferGeometry {
  * site section lists all members for direct selection.
  */
 export function nextSiteMember(
-  nodes: NodeState[],
+  nodes: readonly NodeState[],
   clickedId: string,
   selectedId: string | null,
 ): string {
@@ -99,7 +99,8 @@ interface GroundStationProps {
   /** Resolve which node a click on this (possibly stacked) marker selects. */
   resolveClickTarget: (clickedId: string) => string;
   selected: boolean;
-  orbitalAltKm: number;
+  /** A satellite's altitude, which sizes the envelope cone; null with no satellite. */
+  orbitalAltKm: number | null;
   texture: THREE.CanvasTexture;
   /** Effective binding floor (deg) for the selected GS, from the decision explanation. */
   effectiveMinElevDeg: number | null;
@@ -155,7 +156,7 @@ function GroundStation({
     // missing, hide the cone instead of inventing an Earth-default mask.
     const effElev = selected ? effectiveMinElevDeg : null;
     const confElev = selected ? configuredMinElevDeg : null;
-    const hasEnvelope = effElev !== null && confElev !== null;
+    const hasEnvelope = effElev !== null && confElev !== null && orbitalAltKm !== null;
     const effRadius = hasEnvelope
       ? computeConeRadius(effElev, orbitalAltKm, bodyFrame.radiusKm, bodyFrame.kmPerRenderUnit)
       : 0;
@@ -272,11 +273,11 @@ function GroundStation({
 }
 
 interface GroundStationsProps {
-  nodes: NodeState[];
+  nodes: readonly NodeState[];
   selection: Selection | null;
   /** Active links + Scheduler actuation notices from the snapshot — drive default-state family. */
-  links: LinkState[];
-  actuationNotices: ActuationNotice[];
+  links: readonly LinkState[];
+  actuationNotices: readonly ActuationNotice[];
   /** The selected GS's effective envelope (binding floor + configured mask), lifted from Scene
    *  so the cone, the lead-line, and the sat tinting share ONE decision-explanation fetch. */
   envelope: EffectiveEnvelopeFacts | null;
@@ -299,7 +300,7 @@ export function GroundStations({
   useEffect(() => () => texture.dispose(), [texture]);
 
   const gsNodes = nodes.filter((n) => n.node_type === "ground_station");
-  const orbitalAltKm = nodes.find((n) => n.node_type === "satellite")?.alt_km ?? 550;
+  const orbitalAltKm = nodes.find((n) => n.node_type === "satellite")?.alt_km ?? null;
   const selectedGsId = selection?.type === "ground_station" ? selection.id : null;
   const resolveClickTarget = (clickedId: string) =>
     nextSiteMember(gsNodes, clickedId, selectedGsId);

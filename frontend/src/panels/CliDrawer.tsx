@@ -6,11 +6,13 @@ import { useState, useRef, useEffect, useCallback } from "react";
 import { useIntrospect } from "../hooks/useIntrospect";
 import { PersistentTerminal } from "./PersistentTerminal";
 import { REST_URL, authHeaders } from "../config";
+import { apiErrorFromException, apiErrorMessage } from "../ui/apiError";
 import { Button, IconButton } from "../ui/Button";
 import { downloadBlob } from "../ui/downloadBlob";
 import { Tabs, type TabItem } from "../ui/Tabs";
 import type { StatusTone } from "../ui/Badge";
-import type { StateSnapshot, Selection } from "../types";
+import type { Selection } from "../types";
+import type { StateSnapshot } from "../generated/vsApi";
 
 type CliMode = "commands" | "terminal";
 type ConnectionStatus = "connecting" | "connected" | "disconnected" | "error";
@@ -154,13 +156,13 @@ export function CliDrawer({ open, onClose, snapshot, selection }: CliDrawerProps
         { headers: authHeaders() },
       );
       if (!resp.ok) {
-        setDownloadError(`config download failed: HTTP ${resp.status}`);
+        setDownloadError(`config download failed: ${await apiErrorMessage(resp)}`);
         return;
       }
       const text = await resp.text();
       downloadBlob(text, `${target}.conf`, "text/plain");
-    } catch {
-      setDownloadError("config download failed: network error");
+    } catch (err) {
+      setDownloadError(`config download failed: ${apiErrorFromException(err)}`);
     }
   }, [mode, activeSession, selectedNode]);
 

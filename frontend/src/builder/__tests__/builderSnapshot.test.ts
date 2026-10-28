@@ -245,7 +245,6 @@ describe("builderSnapshotFromWorld", () => {
   it("freezes the snapshot at the epoch with no links", () => {
     const snapshot = builderSnapshotFromWorld(WORLD);
     expect(snapshot.sim_time).toBe(EPOCH_ISO);
-    expect(snapshot.playback_paused).toBe(true);
     expect(snapshot.links).toEqual([]);
   });
 

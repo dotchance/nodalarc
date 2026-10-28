@@ -25,7 +25,7 @@ import { useEffect, useRef } from "react";
 import * as THREE from "three";
 import { geoToWorld, velocityToScene } from "../geo";
 import { useBodyFrame } from "./BodyFrame";
-import type { NodeState } from "../../types";
+import type { NodeState } from "../../generated/vsApi";
 
 const STEPS = 40;
 const DT_PER_STEP = 30; // seconds per step → +/-10 minutes total
@@ -36,14 +36,11 @@ function buildTrackPoints(
   radiusRender: number,
   kmPerRenderUnit: number,
 ): THREE.Vector3[] {
+  // A satellite whose velocity VS-API did not state has no track.
+  if (sat.vel_x_km_s === null || sat.vel_y_km_s === null || sat.vel_z_km_s === null) return [];
   const surfaceOffset = radiusRender * 1.002;
   const pos = geoToWorld(sat.lat_deg, sat.lon_deg, sat.alt_km, radiusRender, kmPerRenderUnit);
-  const vel = velocityToScene(
-    sat.vel_x_km_s ?? 0,
-    sat.vel_y_km_s ?? 0,
-    sat.vel_z_km_s ?? 0,
-    kmPerRenderUnit,
-  );
+  const vel = velocityToScene(sat.vel_x_km_s, sat.vel_y_km_s, sat.vel_z_km_s, kmPerRenderUnit);
   const points: THREE.Vector3[] = [];
   for (let i = -STEPS / 2; i <= STEPS / 2; i++) {
     const t = i * DT_PER_STEP;
@@ -60,7 +57,7 @@ function buildTrackPoints(
 
 interface GroundTracksProps {
   /** All session nodes; satellites with velocity get a ground track. */
-  nodes: NodeState[];
+  nodes: readonly NodeState[];
   /** Master toggle — OFF by default; when false, all tracks are torn down. */
   enabled: boolean;
   /** A satellite's color in the current color mode. */

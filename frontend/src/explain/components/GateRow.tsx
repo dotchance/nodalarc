@@ -8,8 +8,8 @@
  */
 
 import { GATE_LABELS, PRODUCER_LABELS } from "../derive";
-import type { LadderGate } from "../types";
 import { MarginPill } from "./MarginPill";
+import type { LadderGate } from "../../generated/vsApi";
 
 const MARK: Record<LadderGate["state"], string> = {
   pass: "✓",

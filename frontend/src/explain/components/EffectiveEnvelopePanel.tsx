@@ -9,7 +9,7 @@
  */
 
 import { effectiveEnvelopeBindingLabel } from "../reasons";
-import type { EffectiveEnvelopeFacts, EnvelopeEndpoint } from "../types";
+import type { EffectiveEnvelopeFacts, EnvelopeEndpoint } from "../../generated/vsApi";
 
 function deg(v: number | null): string {
   return v == null ? "—" : `${Math.round(v * 10) / 10} deg`;
@@ -79,7 +79,7 @@ export function EffectiveEnvelopePanel({ envelope }: { envelope: EffectiveEnvelo
       {maskDead ? (
         <div className="env-deadknob">
           The {deg(envelope.configured_min_elevation_deg)} mask has no effect —{" "}
-          {bindingLabel ?? "A binding constraint"} sets the {deg(envelope.effective_min_elevation_deg)} floor.
+          {bindingLabel} sets the {deg(envelope.effective_min_elevation_deg)} floor.
         </div>
       ) : null}
     </div>

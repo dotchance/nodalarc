@@ -3,7 +3,7 @@
 import { cleanup, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { LinkDetail, formatRate } from "../LinkDetail";
-import type { LinkState, StateSnapshot } from "../../types";
+import type { LinkState, StateSnapshot } from "../../generated/vsApi";
 
 function link(overrides: Partial<LinkState> = {}): LinkState {
   return {
@@ -13,6 +13,8 @@ function link(overrides: Partial<LinkState> = {}): LinkState {
     scheduling_state: "active",
     link_type: "isl",
     link_reason: "link_state_snapshot",
+    teardown_remaining_ticks: null,
+    successor_pair: null,
     latency_ms: 42,
     transmit_mbps_a: 1000,
     receive_mbps_a: 1000,
@@ -50,6 +52,13 @@ function snapshot(): StateSnapshot {
     playback_speed: 1,
     stale: false,
     history_recording: null,
+    playback_achieved: null,
+    pacing_degraded: false,
+    actuation_notices: [],
+    actuation_health: null,
+    ops_events: [],
+    ops_log_token: "t",
+    debug_events: [],
   };
 }
 

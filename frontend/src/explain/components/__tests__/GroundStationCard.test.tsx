@@ -6,9 +6,21 @@ import { afterEach, describe, it, expect } from "vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 
 afterEach(cleanup);
-import { FUNNEL_GATES } from "../../families";
-import type { DecisionFacts, LadderGate } from "../../types";
 import { GroundStationCard } from "../GroundStationCard";
+import type { DecisionExplanationFacts, FunnelGate, LadderGate } from "../../../generated/vsApi";
+
+/** The funnel in the order the composer emits it. */
+const FUNNEL_GATES: readonly FunnelGate[] = [
+  "line_of_sight",
+  "range",
+  "elevation_mask",
+  "field_of_regard",
+  "tracking_rate",
+  "selection_policy",
+  "capacity",
+  "handover_policy",
+  "actuation_proof",
+];
 
 function ladder(rows: (Partial<LadderGate> & { gate: LadderGate["gate"] })[]): LadderGate[] {
   const byGate = new Map(rows.map((r) => [r.gate, r]));
@@ -27,7 +39,7 @@ function ladder(rows: (Partial<LadderGate> & { gate: LadderGate["gate"] })[]): L
   });
 }
 
-const denverGap: DecisionFacts = {
+const denverGap: DecisionExplanationFacts = {
   gs_id: "gs-denver",
   pair: ["gs-denver", "sat-P00S02"],
   node_focus: "gs",
@@ -97,7 +109,7 @@ const denverGap: DecisionFacts = {
   epoch_id: 0,
 };
 
-const faulted: DecisionFacts = {
+const faulted: DecisionExplanationFacts = {
   ...denverGap,
   binding_gate: "actuation_proof",
   binding_reason_code: "kernel_dirty",

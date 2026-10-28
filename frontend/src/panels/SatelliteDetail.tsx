@@ -7,8 +7,8 @@ import { linkEventLabel } from "../explain/linkEvents";
 import { Icon } from "../ui/icons/Icon";
 import { TaxonomyChip } from "../ui/Badge";
 import { REGIME_TINT, type Regime } from "../taxonomy/regime";
-import type { NodeState, StateSnapshot, Selection } from "../types";
-import { fetchGroundDecisions, type GroundDecisionsSnapshot } from "../explain/client";
+import type { Selection } from "../types";
+import { fetchGroundDecisions } from "../explain/client";
 import { candidateStatus } from "../explain/derive";
 import { CandidateRow } from "../explain/components/CandidateRow";
 import { PairInspectorView } from "../explain/components/PairInspectorView";
@@ -16,6 +16,7 @@ import { FamilyBadge } from "../explain/components/FamilyBadge";
 import { isGroundLinkState, selectionTypeForNodeId } from "../networkIdentity";
 import { RoutingRows } from "./RoutingRows";
 import { translateLinkType } from "../translate";
+import type { GroundLinkDecisionSnapshot, NodeState, StateSnapshot } from "../generated/vsApi";
 
 interface SatelliteDetailProps {
   node: NodeState;
@@ -43,7 +44,7 @@ export function scopeLocalName(n: NodeState): string {
 export function SatelliteDetail({ node, snapshot, anchorGsId,
   regime, onSelect }: SatelliteDetailProps) {
   const [inspectedGs, setInspectedGs] = useState<string | null>(null);
-  const [decisions, setDecisions] = useState<GroundDecisionsSnapshot | null>(null);
+  const [decisions, setDecisions] = useState<GroundLinkDecisionSnapshot | null>(null);
   const [candidateError, setCandidateError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -92,7 +93,7 @@ export function SatelliteDetail({ node, snapshot, anchorGsId,
   // A true actuator/proof fault involving this satellite (spec: "fault badge if true actuator/proof
   // fault exists"). Sourced from the Scheduler actuation notices (kernel dirty / dispatch blocked),
   // NOT OME link authority — only a real, blocking actuation problem reads as a fault.
-  const satFault = (snapshot.actuation_notices ?? []).find(
+  const satFault = snapshot.actuation_notices.find(
     (n) => n.blocking_new_ground_link_up && n.affected_pairs.some((p) => p.includes(node.node_id)),
   );
 
@@ -117,9 +118,6 @@ export function SatelliteDetail({ node, snapshot, anchorGsId,
     );
   }
 
-  const withheld = new Set(
-    (decisions?.unscheduled_pairs ?? []).map((u) => _ordered(u.pair[0], u.pair[1])),
-  );
   const unschedReason = new Map(
     (decisions?.unscheduled_pairs ?? []).map((u) => [
       _ordered(u.pair[0], u.pair[1]),
@@ -136,12 +134,11 @@ export function SatelliteDetail({ node, snapshot, anchorGsId,
     .map((d) => {
       const gs = d.pair[0] === node.node_id ? d.pair[1] : d.pair[0];
       const key = _ordered(d.pair[0], d.pair[1]);
-      const status = candidateStatus({
-        visible: d.visible,
-        isWithheld: withheld.has(key),
-        rejectReason: d.reject_reason,
-        unscheduledReason: unschedReason.get(key) ?? null,
-      });
+      const status = candidateStatus(
+        d.visible
+          ? { visible: true, unscheduledReason: unschedReason.get(key) ?? null }
+          : { visible: false, rejectReason: d.reject_reason },
+      );
       return { gs, d, status };
     });
 

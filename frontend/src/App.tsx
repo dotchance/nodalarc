@@ -91,7 +91,7 @@ export function App() {
 }
 
 function AppInner() {
-  const { snapshot, ephemeris, playbackState, connected, hasEverConnected, kicked, sessionTransitioning, sessionError, switchDetail, tokenError, historicalMode, setHistoricalMode, fetchHistorical, historicalError, sendMessage } =
+  const { snapshot, snapshotArrivalMs, ephemeris, connected, hasEverConnected, sessionTransitioning, sessionError, switchDetail, tokenError, frameError, historicalMode, setHistoricalMode, fetchHistorical, historicalError, sendMessage } =
     useSnapshot();
   const { selection, select, clearSelection, anchorGsId } = useSelection();
   const preselectedAppliedRef = useRef(false);
@@ -112,7 +112,7 @@ function AppInner() {
 
   const { sessions, sessionsError, switching, switchSession } =
     useSessionSwitcher(sessionTransitioning);
-  const playback = usePlayback(snapshot?.playback_paused, snapshot?.playback_speed);
+  const playback = usePlayback(snapshot?.playback_paused ?? null, snapshot?.playback_speed ?? null);
 
   const appState = useAppState({
     snapshot,
@@ -281,7 +281,7 @@ function AppInner() {
       onPlayPause: () => {
         if (historicalMode) {
           setHistoricalPlaying((prev) => !prev);
-        } else {
+        } else if (playback.paused !== null) {
           playback.paused ? playback.resume() : playback.pause();
         }
       },
@@ -358,16 +358,7 @@ function AppInner() {
 
   const centerContent = (
     <>
-      {kicked && (
-        <div className="connection-startup-error">
-          <div className="startup-error-box">
-            <h2>Session taken over</h2>
-            <p>Another browser connected and took control of this session.</p>
-            <button onClick={() => window.location.reload()}>Reconnect</button>
-          </div>
-        </div>
-      )}
-      {!kicked && !connected && !hasEverConnected && (
+      {!connected && !hasEverConnected && (
         <div className="connection-startup-error">
           <div className="startup-error-box">
             <h2>Cannot connect to VS-API</h2>
@@ -380,7 +371,7 @@ function AppInner() {
           has its own status home. Never let live state read as builder state. */}
       {viewMode !== "builder" && (
       <div className="banner-stack">
-        {!kicked && !connected && hasEverConnected && (
+        {!connected && hasEverConnected && (
           <div className="connection-banner">
             Connection lost. Reconnecting...
             {tokenError !== null && ` VS-API token: ${tokenError}`}
@@ -392,6 +383,14 @@ function AppInner() {
         {connected && !switching && snapshot && snapshot.nodes.length > 0 && !simTimeAdvanced && (
           <div className="connection-banner">
             Waiting for orbital propagation - satellites will begin moving shortly
+          </div>
+        )}
+        {frameError !== null && (
+          <div className="connection-banner connection-banner--fail">{frameError}</div>
+        )}
+        {playback.error !== null && (
+          <div className="connection-banner connection-banner--fail">
+            Playback command failed: {playback.error}
           </div>
         )}
         {snapshot?.stale && (
@@ -422,7 +421,7 @@ function AppInner() {
         <div className="session-switching-overlay">
           <div className="switching-box">
             <p>Data plane wiring in progress</p>
-            <p className="switching-detail">{snapshot?.session_status_detail ?? "Waiting for Node Agent..."}</p>
+            <p className="switching-detail">{snapshot?.session_status_detail}</p>
           </div>
         </div>
       )}
@@ -439,12 +438,12 @@ function AppInner() {
         <VisualizationErrorBoundary onError={handleVisualizationFatalError}>
           <R3FScene
             snapshot={renderedSnapshot}
+            snapshotArrivalMs={snapshotArrivalMs}
             ephemeris={ephemeris}
             colorMode={colorMode}
             globeMode={globeMode}
             referenceFrame={referenceFrame}
             playbackPaused={playback.paused}
-            playbackState={playbackState}
             showIslLinks={showIslLinks}
             showGroundLinks={showGroundLinks}
             showSatPaths={showSatPaths}
@@ -620,12 +619,13 @@ function AppInner() {
     />
   ) : undefined;
 
-  const historicalEndTime = historicalRangeEnd ?? snapshot?.sim_time ?? new Date().toISOString();
-  const historicalStartTime = subtractMsIso(historicalEndTime, HISTORICAL_WINDOW_MS);
-  const historicalControlsContent = historicalMode && viewMode !== "builder" ? (
+  // The window ends at the chosen end, else at the shown frame's sim time; with
+  // neither there is no window to show.
+  const historicalEndTime = historicalRangeEnd ?? snapshot?.sim_time ?? null;
+  const historicalControlsContent = historicalMode && viewMode !== "builder" && historicalEndTime !== null ? (
     <TimeControls
       onSeek={fetchHistorical}
-      startTime={historicalStartTime}
+      startTime={subtractMsIso(historicalEndTime, HISTORICAL_WINDOW_MS)}
       endTime={historicalEndTime}
       events={snapshot?.recent_events}
       externalPlaying={historicalPlaying}

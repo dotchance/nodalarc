@@ -6,7 +6,7 @@
  * `NodeState.node_type` and links from `LinkState.link_type`, not from prefixes.
  */
 
-import type { LinkState, NodeState, PublicLinkType } from "./types";
+import type { LinkState, NodeState, PublicLinkType } from "./generated/vsApi";
 
 const NON_GROUND_LINK_TYPES: ReadonlySet<string> = new Set<PublicLinkType>([
   "isl",

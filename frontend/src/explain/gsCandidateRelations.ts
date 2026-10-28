@@ -13,8 +13,8 @@
 import type { Family } from "./families";
 import { candidateStatus } from "./derive";
 import { reasonLabel } from "./reasons";
-import type { GroundDecisionsSnapshot } from "./client";
-import type { LinkState } from "../types";
+import type { GroundLinkDecisionSnapshot } from "../generated/vsApi";
+import type { LinkState } from "../generated/vsApi";
 
 export interface SatRelation {
   family: Family;
@@ -24,7 +24,7 @@ export interface SatRelation {
 
 export function gsCandidateRelations(
   gsId: string,
-  decisions: GroundDecisionsSnapshot | null,
+  decisions: GroundLinkDecisionSnapshot | null,
   links: readonly LinkState[],
 ): Map<string, SatRelation> {
   const rel = new Map<string, SatRelation>();
@@ -40,12 +40,7 @@ export function gsCandidateRelations(
   for (const u of decisions?.unscheduled_pairs ?? []) {
     const sat = u.pair[0] === gsId ? u.pair[1] : u.pair[0];
     if (rel.has(sat)) continue;
-    const { family } = candidateStatus({
-      visible: true,
-      isWithheld: true,
-      rejectReason: "",
-      unscheduledReason: u.unscheduled_reason,
-    });
+    const { family } = candidateStatus({ visible: true, unscheduledReason: u.unscheduled_reason });
     rel.set(sat, { family, reason: reasonLabel(u.unscheduled_reason) });
   }
 
@@ -53,12 +48,7 @@ export function gsCandidateRelations(
   for (const d of decisions?.decisions ?? []) {
     const sat = d.pair[0] === gsId ? d.pair[1] : d.pair[0];
     if (rel.has(sat)) continue;
-    const { family } = candidateStatus({
-      visible: false,
-      isWithheld: false,
-      rejectReason: d.reject_reason,
-      unscheduledReason: null,
-    });
+    const { family } = candidateStatus({ visible: false, rejectReason: d.reject_reason });
     rel.set(sat, { family, reason: reasonLabel(d.reject_reason) });
   }
 

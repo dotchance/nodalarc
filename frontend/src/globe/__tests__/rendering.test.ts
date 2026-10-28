@@ -12,10 +12,10 @@ import { cleanup, render } from "@testing-library/react";
 import * as THREE from "three";
 import { Labels } from "../r3f/Labels";
 import { clearPositions, setBodyFrame, setNodeLocalPosition } from "../r3f/positions";
-import type { NodeState } from "../../types";
 import { tokens } from "../../styles/tokens";
 import { SCENE_EARTH_RADIUS } from "../../sim/orbitalMath";
 import { catalogEarthKmPerRenderUnit } from "../../sim/__tests__/bodyModelFixture";
+import type { NodeState } from "../../generated/vsApi";
 
 const EARTH_KM_PER_RENDER_UNIT = catalogEarthKmPerRenderUnit();
 

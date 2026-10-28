@@ -2,8 +2,7 @@
 // Licensed under the Apache License, Version 2.0. See LICENSE file.
 import { describe, it, expect } from "vitest";
 import { gsCandidateRelations } from "../gsCandidateRelations";
-import type { GroundDecisionsSnapshot } from "../client";
-import type { LinkState } from "../../types";
+import type { GroundLinkDecisionSnapshot, LinkState } from "../../generated/vsApi";
 
 function link(a: string, b: string): LinkState {
   return {
@@ -24,11 +23,11 @@ function link(a: string, b: string): LinkState {
   } as LinkState;
 }
 
-const decisions: GroundDecisionsSnapshot = {
+const decisions: GroundLinkDecisionSnapshot = {
   // intentionally generic shape; only the fields the classifier reads matter
   decisions: [{ pair: ["gs-1", "sat-rej"], reject_reason: "elevation_below_min" }],
   unscheduled_pairs: [{ pair: ["sat-elig", "gs-1"], unscheduled_reason: "gs_capacity" }],
-} as unknown as GroundDecisionsSnapshot;
+} as unknown as GroundLinkDecisionSnapshot;
 
 describe("gsCandidateRelations (single source: globe agrees with the card)", () => {
   it("marks an active-linked sat connected (and connected wins over a decision)", () => {
@@ -42,10 +41,10 @@ describe("gsCandidateRelations (single source: globe agrees with the card)", () 
   });
 
   it("connected wins over a withheld/rejected classification for the same sat", () => {
-    const d: GroundDecisionsSnapshot = {
+    const d: GroundLinkDecisionSnapshot = {
       decisions: [{ pair: ["gs-1", "sat-x"], reject_reason: "elevation_below_min" }],
       unscheduled_pairs: [],
-    } as unknown as GroundDecisionsSnapshot;
+    } as unknown as GroundLinkDecisionSnapshot;
     const rel = gsCandidateRelations("gs-1", d, [link("sat-x", "gs-1")]);
     expect(rel.get("sat-x")?.family).toBe("connected");
   });

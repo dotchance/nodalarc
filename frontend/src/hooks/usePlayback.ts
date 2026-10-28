@@ -2,12 +2,17 @@
 // Licensed under the Apache License, Version 2.0. See LICENSE file.
 import { useState, useCallback, useEffect } from "react";
 import { REST_URL, authHeaders } from "../config";
-import type { PlaybackStateMsg } from "../sim/ephemeris";
+import type { PlaybackControlCommand, PlaybackState } from "../generated/vsApi";
+import { apiErrorFromException, apiErrorMessage } from "../ui/apiError";
 
-interface PlaybackState {
-  paused: boolean;
-  speed: number;
+interface PlaybackControls {
+  /** Null until a snapshot or a command answer states it. */
+  paused: boolean | null;
+  /** Null until a snapshot or a command answer states it. */
+  speed: number | null;
   loading: boolean;
+  /** Why the last command failed; null once one succeeds. */
+  error: string | null;
   pause: () => Promise<void>;
   resume: () => Promise<void>;
   setSpeed: (factor: number) => Promise<void>;
@@ -19,35 +24,41 @@ interface PlaybackState {
  * Playback hook.  Accepts snapshot-driven paused/speed so the UI always
  * reflects backend state (pushed via WebSocket), not just local guesses.
  */
-export function usePlayback(snapshotPaused?: boolean, snapshotSpeed?: number): PlaybackState {
-  const [paused, setPaused] = useState(false);
-  const [speed, setSpeedState] = useState(1.0);
+export function usePlayback(snapshotPaused: boolean | null, snapshotSpeed: number | null): PlaybackControls {
+  const [paused, setPaused] = useState<boolean | null>(null);
+  const [speed, setSpeedState] = useState<number | null>(null);
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   // Sync from snapshot whenever it changes
   useEffect(() => {
-    if (snapshotPaused !== undefined) setPaused(snapshotPaused);
+    setPaused(snapshotPaused);
   }, [snapshotPaused]);
 
   useEffect(() => {
-    if (snapshotSpeed !== undefined && snapshotSpeed > 0) setSpeedState(snapshotSpeed);
+    setSpeedState(snapshotSpeed);
   }, [snapshotSpeed]);
 
-  const sendCommand = useCallback(async (body: Record<string, unknown>) => {
+  // True when the clock accepted the command.
+  const sendCommand = useCallback(async (command: PlaybackControlCommand): Promise<boolean> => {
     setLoading(true);
     try {
       const res = await fetch(`${REST_URL}/api/v1/playback`, {
         method: "POST",
         headers: authHeaders({ "Content-Type": "application/json" }),
-        body: JSON.stringify(body),
+        body: JSON.stringify(command),
       });
-      // A refused or failed command answers no state; the snapshot shows the clock's.
-      if (!res.ok) return;
-      const answer = (await res.json()) as PlaybackStateMsg;
+      if (!res.ok) {
+        setError(await apiErrorMessage(res));
+        return false;
+      }
+      const answer = (await res.json()) as PlaybackState;
+      setError(null);
       setPaused(answer.state === "paused");
-      if (typeof body.factor === "number") setSpeedState(body.factor);
-    } catch {
-      // Non-fatal
+      return true;
+    } catch (err) {
+      setError(apiErrorFromException(err));
+      return false;
     } finally {
       setLoading(false);
     }
@@ -57,10 +68,21 @@ export function usePlayback(snapshotPaused?: boolean, snapshotSpeed?: number): P
     paused,
     speed,
     loading,
-    pause: useCallback(() => sendCommand({ action: "pause" }), [sendCommand]),
-    resume: useCallback(() => sendCommand({ action: "resume" }), [sendCommand]),
-    setSpeed: useCallback((f: number) => sendCommand({ action: "set_speed", factor: f }), [sendCommand]),
-    seekToNow: useCallback(() => sendCommand({ action: "seek" }), [sendCommand]),
-    seek: useCallback((t: string) => sendCommand({ action: "seek", target_sim_time: t }), [sendCommand]),
+    error,
+    pause: useCallback(async () => {
+      await sendCommand({ action: "pause" });
+    }, [sendCommand]),
+    resume: useCallback(async () => {
+      await sendCommand({ action: "resume" });
+    }, [sendCommand]),
+    setSpeed: useCallback(async (factor: number) => {
+      if (await sendCommand({ action: "set_speed", factor })) setSpeedState(factor);
+    }, [sendCommand]),
+    seekToNow: useCallback(async () => {
+      await sendCommand({ action: "seek" });
+    }, [sendCommand]),
+    seek: useCallback(async (target_sim_time: string) => {
+      await sendCommand({ action: "seek", target_sim_time });
+    }, [sendCommand]),
   };
 }

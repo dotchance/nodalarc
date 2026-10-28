@@ -10,7 +10,7 @@
  *  spaces would dedupe fresh events against stale ones.
  */
 
-import type { StateSnapshot } from "./types";
+import type { StateSnapshot } from "./generated/vsApi";
 
 const OPS_SCROLLBACK_CAP = 500;
 
@@ -21,9 +21,10 @@ export function mergeSnapshot(
   if (!prev || prev.ops_log_token !== next.ops_log_token) {
     return next;
   }
-  const incoming = next.ops_events ?? [];
-  const seen = new Set(incoming.map((e) => e.seq));
-  const carried = (prev.ops_events ?? []).filter((e) => !seen.has(e.seq));
-  next.ops_events = [...carried, ...incoming].slice(-OPS_SCROLLBACK_CAP);
-  return next;
+  const seen = new Set(next.ops_events.map((e) => e.seq));
+  const carried = prev.ops_events.filter((e) => !seen.has(e.seq));
+  return {
+    ...next,
+    ops_events: [...carried, ...next.ops_events].slice(-OPS_SCROLLBACK_CAP),
+  };
 }

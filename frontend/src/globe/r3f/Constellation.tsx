@@ -24,19 +24,16 @@ import { geoToWorld } from "../geo";
 import { interpolatedSimTimeMs } from "../../sim/simClock";
 import { isWorkerReady, readPosition, requestPropagate } from "../../sim/workerBridge";
 import { propagateToSceneXYZ } from "../../sim/orbitalMath";
-import {
-  bodyMathFromFrame,
-  kmPerRenderUnitFromEphemeris,
-  type EphemerisNodeKeplerian,
-  type SessionEphemeris,
-} from "../../sim/ephemeris";
-import type { ColorMode, NodeState, Selection } from "../../types";
+import { bodyMathFromFrame, kmPerRenderUnitFromEphemeris } from "../../sim/ephemeris";
+import type { ColorMode, Selection } from "../../types";
 import type { AreaColoring } from "../../routing/instances";
 import { FAMILY_TONE } from "../../explain/families";
 import type { SatRelation } from "../../explain/gsCandidateRelations";
 import { removeNode, setNodeLocalPosition } from "./positions";
 import { useBodyFrame } from "./BodyFrame";
 import type { HoverInfo } from "./Tooltip";
+import type { NodeState } from "../../generated/vsApi";
+import type { EphemerisNodeKeplerian, SessionEphemeris } from "../../builder/generated/builderApi";
 
 const MAX_SATELLITES = 10_000;
 
@@ -58,7 +55,7 @@ export function satColor(
 }
 
 interface ConstellationProps {
-  nodes: NodeState[];
+  nodes: readonly NodeState[];
   ephemeris: SessionEphemeris | null;
   colorMode: ColorMode;
   onSelect: (sel: Selection | null) => void;

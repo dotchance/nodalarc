@@ -168,14 +168,17 @@ async def main():
     async with websockets.connect(f"ws://localhost:8080/ws/v1/state?token={token}") as ws:
         async for msg in ws:
             s = json.loads(msg)
-            print(f"[{s['sim_time'][:19]}] {len(s['links'])} links active")
+            if s["msg_type"] == "state_snapshot":
+                print(f"[{s['sim_time'][:19]}] {len(s['links'])} links active")
 
 asyncio.run(main())
 ```
 
 The WebSocket pushes a full state snapshot at ~1 Hz. On connect, you first
 receive the session ephemeris and body/frame metadata used for local position
-computation, then continuous state updates.
+computation, then continuous state updates. Every message names its kind in
+`msg_type`; during a session switch the socket also sends `session_transitioning`,
+`wiring_progress`, `session_ready` and `session_failed` messages.
 
 ## Available Endpoints
 
@@ -251,7 +254,8 @@ combine the catalog site ID with the installed node ID, such as
 segment does not replace the site ID. Query `/api/v1/state` first and use the
 node IDs it returns.
 
-For the full schema with field descriptions, see the [VS-API Reference](../dev/components/vs-api.md) in the developer documentation.
+`GET /openapi.json` on VS-API returns the full schema of every route, the state
+snapshot included.
 
 ## Use Cases
 

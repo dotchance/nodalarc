@@ -5,7 +5,7 @@ import { createElement } from "react";
 import { afterEach, describe, expect, it } from "vitest";
 import { cleanup, render } from "@testing-library/react";
 import { Tooltip, type HoverInfo } from "../r3f/Tooltip";
-import type { NodeState } from "../../types";
+import type { NodeState } from "../../generated/vsApi";
 
 function node(nodeId: string, nodeType: NodeState["node_type"]): NodeState {
   return {
@@ -24,6 +24,7 @@ function node(nodeId: string, nodeType: NodeState["node_type"]): NodeState {
     isl_count: 0,
     gnd_count: 0,
     prefix: null,
+    addresses: [],
     min_elevation_deg: null,
     beam_falloff_exponent: null,
     reference_body: "earth",

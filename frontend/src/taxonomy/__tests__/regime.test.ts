@@ -2,7 +2,8 @@
 // Licensed under the Apache License, Version 2.0. See LICENSE file.
 import { describe, it, expect } from "vitest";
 import { classifyRegime, buildRegimeIndex } from "../regime";
-import type { EphemerisBodyFrame, EphemerisNode, SessionEphemeris } from "../../sim/ephemeris";
+import type { EphemerisNode } from "../../sim/ephemeris";
+import type { EphemerisBodyFrame, SessionEphemeris } from "../../builder/generated/builderApi";
 
 const EARTH_R = 6371;
 

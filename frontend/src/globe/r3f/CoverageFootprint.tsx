@@ -33,7 +33,8 @@ import { computeConeRadius } from "../groundStations";
 import { tokens } from "../../styles/tokens";
 import { getNodeLocalPosition } from "./positions";
 import { useBodyFrame } from "./BodyFrame";
-import type { NodeState, Selection } from "../../types";
+import type { Selection } from "../../types";
+import type { NodeState } from "../../generated/vsApi";
 
 const FOOTPRINT_COLOR = new THREE.Color(tokens.colorFootprint);
 const MIN_ELEV_DEG = 25;
@@ -89,7 +90,7 @@ function FootprintDisc({ sat, elevDeg }: FootprintDiscProps) {
   const meshRef = useRef<THREE.Mesh>(null);
   const bodyFrame = useBodyFrame();
 
-  const altKm = sat.alt_km ?? 0;
+  const altKm = sat.alt_km;
   const falloff = sat.beam_falloff_exponent ?? DEFAULT_FALLOFF;
 
   // Rebuild geometry only when the satellite changes or its altitude shifts >1 km (the legacy
@@ -157,7 +158,7 @@ function FootprintDisc({ sat, elevDeg }: FootprintDiscProps) {
 
 interface CoverageFootprintProps {
   selection: Selection | null;
-  nodes: NodeState[];
+  nodes: readonly NodeState[];
   beams?: BeamFootprints;
 }
 

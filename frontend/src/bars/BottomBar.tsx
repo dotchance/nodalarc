@@ -5,7 +5,7 @@
 
 import { WS_URL } from "../config";
 import { StatusDot } from "../ui/Badge";
-import type { StateSnapshot } from "../types";
+import type { StateSnapshot } from "../generated/vsApi";
 
 interface BottomBarProps {
   snapshot: StateSnapshot | null;
@@ -16,9 +16,6 @@ interface BottomBarProps {
 }
 
 export function BottomBar({ snapshot, connected, historicalMode, logPanelOpen, onToggleLogPanel }: BottomBarProps) {
-  const activeLinks = snapshot?.links.filter((l) => l.state === "active").length ?? 0;
-  const totalLinks = snapshot?.links.length ?? 0;
-  const nodeCount = snapshot?.nodes.length ?? 0;
   const recording = snapshot?.history_recording ?? null;
 
   const wsTone = historicalMode ? "warn" : connected ? "ok" : "fail";
@@ -27,8 +24,14 @@ export function BottomBar({ snapshot, connected, historicalMode, logPanelOpen, o
 
   return (
     <div className="area-bottombar bottombar">
-      <span className="bottombar-stat">Links {activeLinks}/{totalLinks}</span>
-      <span className="bottombar-stat">Nodes {nodeCount}</span>
+      {snapshot !== null && (
+        <>
+          <span className="bottombar-stat">
+            Links {snapshot.links.filter((l) => l.state === "active").length}/{snapshot.links.length}
+          </span>
+          <span className="bottombar-stat">Nodes {snapshot.nodes.length}</span>
+        </>
+      )}
       {recording !== null && (
         <span
           className={`bottombar-stat ${recording.state === "recording" ? "bottombar-ok" : "bottombar-fail"}`}

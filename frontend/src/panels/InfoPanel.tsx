@@ -9,7 +9,8 @@ import { GroundStationDetail } from "./GroundStationDetail";
 import { LinkDetail } from "./LinkDetail";
 import { TraceDialog } from "./TraceDialog";
 import type { Regime } from "../taxonomy/regime";
-import type { StateSnapshot, Selection } from "../types";
+import type { Selection } from "../types";
+import type { StateSnapshot } from "../generated/vsApi";
 
 interface InfoPanelProps {
   snapshot: StateSnapshot | null;

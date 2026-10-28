@@ -4,12 +4,12 @@
 
 import { useEffect, useRef, useState } from "react";
 import { fetchDecisionExplanation } from "./client";
-import type { DecisionFacts } from "./types";
+import type { DecisionExplanationFacts } from "../generated/vsApi";
 
 const REFRESH_MS = 2000;
 
 export interface DecisionExplanationState {
-  facts: DecisionFacts | null;
+  facts: DecisionExplanationFacts | null;
   loading: boolean;
   error: string | null;
 }

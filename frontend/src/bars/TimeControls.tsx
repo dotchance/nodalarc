@@ -3,14 +3,14 @@
 /** Time controls for historical playback mode. */
 
 import { useState, useRef, useEffect, useCallback } from "react";
-import type { RecentEvent } from "../types";
 import { Icon } from "../ui/icons/Icon";
+import type { RecentEvent } from "../generated/vsApi";
 
 interface TimeControlsProps {
   onSeek: (simTime: string) => boolean | void | Promise<boolean | void>;
   startTime: string;
   endTime: string;
-  events?: RecentEvent[];
+  events?: readonly RecentEvent[];
   externalPlaying?: boolean;
   onPlayingChange?: (playing: boolean) => void;
   initialProgress?: number;

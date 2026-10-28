@@ -3,9 +3,9 @@
 
 import * as THREE from "three";
 import { GS_SIZE, SAT_RADIUS } from "../../config";
-import type { LinkState, NodeState } from "../../types";
 import { isGroundLinkState } from "../../networkIdentity";
 import { getNodeWorldPosition } from "./positions";
+import type { LinkState, NodeState } from "../../generated/vsApi";
 
 export interface ScreenRect {
   width: number;
@@ -118,7 +118,7 @@ function pickNode(
   yPx: number,
   camera: THREE.Camera,
   rect: ScreenRect,
-  nodes: NodeState[],
+  nodes: readonly NodeState[],
 ): ScreenPick {
   let best: { score: number; node: NodeState } | null = null;
   const screen = new THREE.Vector2();
@@ -140,7 +140,7 @@ function pickLink(
   yPx: number,
   camera: THREE.Camera,
   rect: ScreenRect,
-  links: LinkState[],
+  links: readonly LinkState[],
   showIsl: boolean,
   showGnd: boolean,
 ): ScreenPick {
@@ -202,8 +202,8 @@ export function pickSceneAtScreenPoint({
   yPx: number;
   camera: THREE.Camera;
   rect: ScreenRect;
-  nodes: NodeState[];
-  links: LinkState[];
+  nodes: readonly NodeState[];
+  links: readonly LinkState[];
   bodies: PickBody[];
   showIslLinks: boolean;
   showGroundLinks: boolean;

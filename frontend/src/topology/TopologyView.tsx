@@ -12,13 +12,14 @@ import { setupInteraction, type ViewTransform } from "./interaction";
 import { FAIL_HOLD_MS, FAIL_FADE_MS, TRACE_FORWARD_COLOR, TRACE_REVERSE_COLOR, hexToCSS } from "../config";
 import { tokens } from "../styles/tokens";
 import type { Regime } from "../taxonomy/regime";
-import type { StateSnapshot, Selection, LinkState, ColorMode, NodeState } from "../types";
+import type { Selection, ColorMode } from "../types";
 import {
   nodeInstance,
   roleLabel,
   routingSummary,
   type AreaColoring,
 } from "../routing/instances";
+import type { LinkState, NodeState, StateSnapshot } from "../generated/vsApi";
 
 /** Recently-removed link kept for fail-flash animation. */
 interface FailedLink {

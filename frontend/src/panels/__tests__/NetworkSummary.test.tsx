@@ -3,7 +3,8 @@
 import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
 import { NetworkSummary } from "../NetworkSummary";
-import type { NodeRole, NodeRoutingInstance, NodeState, StateSnapshot } from "../../types";
+import type { NodeState, StateSnapshot } from "../../generated/vsApi";
+import type { NodeRole, NodeRoutingInstance } from "../../builder/generated/builderApi";
 
 function node(
   id: string,

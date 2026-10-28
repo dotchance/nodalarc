@@ -11,7 +11,7 @@ interface UseIntrospectResult {
   loading: boolean;
   output: string | null;
   error: string | null;
-  commands: string[];
+  commands: readonly string[];
   execute: (nodeId: string, command: string) => Promise<void>;
 }
 
@@ -19,22 +19,25 @@ export function useIntrospect(): UseIntrospectResult {
   const [loading, setLoading] = useState(false);
   const [output, setOutput] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [commands, setCommands] = useState<string[]>([]);
+  const [commands, setCommands] = useState<readonly string[]>([]);
 
-  // Fetch available commands on mount
+  // Fetch available commands on mount; a failed read is shown where command output goes.
   useEffect(() => {
     let cancelled = false;
-    fetch(`${REST_URL}/api/v1/introspect/commands`, { headers: authHeaders() })
-      .then((res) => {
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        return res.json();
-      })
-      .then((data) => {
-        if (!cancelled && Array.isArray(data)) setCommands(data);
-      })
-      .catch(() => {
-        /* ignore — commands will be empty until VS-API is reachable */
-      });
+    (async () => {
+      try {
+        const res = await fetch(`${REST_URL}/api/v1/introspect/commands`, { headers: authHeaders() });
+        if (!res.ok) {
+          const message = await apiErrorMessage(res);
+          if (!cancelled) setError(`command list unavailable: ${message}`);
+          return;
+        }
+        const data = (await res.json()) as string[];
+        if (!cancelled) setCommands(data);
+      } catch (err) {
+        if (!cancelled) setError(`command list unavailable: ${apiErrorFromException(err)}`);
+      }
+    })();
     return () => { cancelled = true; };
   }, []);
 
@@ -56,7 +59,7 @@ export function useIntrospect(): UseIntrospectResult {
       if (data.exit_code !== 0) {
         setError(`vtysh exited ${data.exit_code}: ${data.stderr.trim() || "no error output"}`);
       }
-      setOutput(data.output || null);
+      setOutput(data.output);
     } catch (err) {
       setError(apiErrorFromException(err));
     } finally {

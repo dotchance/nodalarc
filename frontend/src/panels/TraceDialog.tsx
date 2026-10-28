@@ -6,9 +6,9 @@
 
 import { useState, useEffect, useCallback } from "react";
 import { REST_URL, TRACE_FORWARD_COLOR, TRACE_REVERSE_COLOR, authHeaders, hexToCSS } from "../config";
-import type { NodeState, StateSnapshot, TraceState, TraceStopReason } from "../types";
 import { apiErrorFromException, apiErrorMessage } from "../ui/apiError";
 import { formatTime } from "../translate";
+import type { NodeState, StateSnapshot, TraceState, TraceStopReason } from "../generated/vsApi";
 
 // Forward and reverse hops take their line colors, so the lists match the globe.
 const FORWARD_CSS = hexToCSS(TRACE_FORWARD_COLOR);
@@ -21,7 +21,7 @@ const STOP_REASON_TEXT: Record<TraceStopReason, string> = {
 };
 
 interface TraceDialogProps {
-  nodes: NodeState[];
+  nodes: readonly NodeState[];
   selectedNodeId?: string | null;
   snapshot?: StateSnapshot | null;
 }
@@ -209,8 +209,8 @@ function HopList({
   hopRtts,
   color,
 }: {
-  hops: string[];
-  hopRtts: (number | null)[];
+  hops: readonly string[];
+  hopRtts: readonly (number | null)[];
   /** The direction's color, the same as its line on the globe. */
   color: string;
 }) {

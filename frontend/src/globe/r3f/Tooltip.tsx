@@ -9,8 +9,8 @@
 
 import { Icon } from "../../ui/icons/Icon";
 import { REGIME_TINT, type Regime } from "../../taxonomy/regime";
-import type { NodeState } from "../../types";
 import { roleLabel, routingSummary } from "../../routing/instances";
+import type { NodeState } from "../../generated/vsApi";
 
 export interface HoverInfo {
   node: NodeState;

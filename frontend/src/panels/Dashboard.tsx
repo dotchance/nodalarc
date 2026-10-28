@@ -6,8 +6,8 @@
 
 import { useMemo } from "react";
 import { schedulerOpsLabel } from "../explain/reasons";
-import type { StateSnapshot } from "../types";
 import { isGroundLinkState } from "../networkIdentity";
+import type { StateSnapshot } from "../generated/vsApi";
 
 interface DashboardProps {
   snapshot: StateSnapshot | null;

@@ -156,6 +156,7 @@ from nodalarc.models.vs_api import (
     SessionFailedFrame,
     SessionReadyFrame,
     SessionTransitioningFrame,
+    SocketCloseCode,
     StampedOpsEvent,
     StateSnapshot,
     StateSocketCommand,
@@ -893,7 +894,7 @@ def _build_snapshot(*, ops_after: int = 0) -> StateSnapshot | None:
             session_id=ctx.session_id,
             nodes=nodes,
             links=links,
-            kernel_actual_pairs=[[a, b] for (a, b) in sorted(ctx.actual_kernel_pairs())],
+            kernel_actual_pairs=sorted(ctx.actual_kernel_pairs()),
             traced_paths=_traced,
             recent_events=recent,
             routing_stack=ctx.routing_stack,
@@ -2137,7 +2138,8 @@ async def ws_state(websocket: WebSocket) -> None:
         token = websocket.query_params.get("token", "")
         if token != _API_KEY:
             _audit_log.warning(f"WS_AUTH_FAIL ip={ws_ip}")
-            await websocket.close(code=4401, reason="Unauthorized")
+            # Before accept, a close refuses the handshake: the browser sees a failed connection.
+            await websocket.close()
             return
     await websocket.accept()
     _ws_clients.add(websocket)
@@ -2236,7 +2238,9 @@ async def ws_state(websocket: WebSocket) -> None:
             ):
                 log.warning("WS error for %s: %s %s", ws_ip, type(error).__name__, error)
         if receiver in finished and receiver.exception() is None and receiver.result():
-            await websocket.close(code=4400, reason="Malformed command")
+            await websocket.close(
+                code=SocketCloseCode.MALFORMED_MESSAGE, reason="Malformed command"
+            )
     finally:
         for error in await asyncio.gather(*commands, return_exceptions=True):
             if isinstance(error, Exception):
@@ -2276,7 +2280,8 @@ async def ws_terminal(websocket: WebSocket, node_id: str) -> None:
         token = websocket.query_params.get("token", "")
         if token != _API_KEY:
             _audit_log.warning(f"WS_TERMINAL_AUTH_FAIL ip={ws_ip} node={node_id}")
-            await websocket.close(code=4401, reason="Unauthorized")
+            # Before accept, a close refuses the handshake: the browser sees a failed connection.
+            await websocket.close()
             return
 
     # Resolve node_id to pod + terminal contract (async — runs the K8s
@@ -2284,7 +2289,9 @@ async def ws_terminal(websocket: WebSocket, node_id: str) -> None:
     namespace = get_platform_config().kubernetes_namespace
     resolved = await resolve_pod_terminal(node_id, namespace)
     if resolved is None:
-        await websocket.close(code=4404, reason="Node not found")
+        # Accepted first, so the page receives the code and says why the terminal closed.
+        await websocket.accept()
+        await websocket.close(code=SocketCloseCode.NODE_NOT_FOUND, reason="Node not found")
         return
     pod_name, pod_ip, contract = resolved
     if contract is None:
@@ -2302,7 +2309,9 @@ async def ws_terminal(websocket: WebSocket, node_id: str) -> None:
                 ),
             ).model_dump_json()
         )
-        await websocket.close(code=4409, reason="Workload declares no terminal access")
+        await websocket.close(
+            code=SocketCloseCode.NO_TERMINAL_ACCESS, reason="Workload declares no terminal access"
+        )
         return
 
     if contract["surface"] == "ssh":
@@ -2312,7 +2321,10 @@ async def ws_terminal(websocket: WebSocket, node_id: str) -> None:
             ssh_key = await asyncio.to_thread(_load_ssh_key, namespace)
         except RuntimeError as e:
             log.warning("Terminal key error: %s", e)
-            await websocket.close(code=4503, reason="Terminal key unavailable")
+            await websocket.accept()
+            await websocket.close(
+                code=SocketCloseCode.TERMINAL_KEY_UNAVAILABLE, reason="Terminal key unavailable"
+            )
             return
         session = TerminalSession(pod_ip, ssh_key)
     else:
@@ -2359,7 +2371,9 @@ async def ws_terminal(websocket: WebSocket, node_id: str) -> None:
                         if session.ended:
                             # The shell exited or its connection broke. The page
                             # shows the terminal as disconnected.
-                            await websocket.close(code=1000, reason="Terminal session ended")
+                            await websocket.close(
+                                code=SocketCloseCode.TERMINAL_ENDED, reason="Terminal session ended"
+                            )
                             return
                         await asyncio.sleep(0.05)
                         continue
@@ -2381,7 +2395,9 @@ async def ws_terminal(websocket: WebSocket, node_id: str) -> None:
             if (error := task.exception()) is not None:
                 log.error("Terminal session error for %s", node_id, exc_info=error)
         if reader in done and reader.exception() is None and reader.result():
-            await websocket.close(code=4400, reason="Malformed terminal message")
+            await websocket.close(
+                code=SocketCloseCode.MALFORMED_MESSAGE, reason="Malformed terminal message"
+            )
 
     except asyncssh.misc.DisconnectError as e:
         log.warning("SSH disconnect for %s: %s", node_id, e)

@@ -7,7 +7,7 @@ import {
   isGroundNode,
   selectionTypeForNodeId,
 } from "../networkIdentity";
-import type { LinkState, NodeState } from "../types";
+import type { LinkState, NodeState } from "../generated/vsApi";
 
 function node(node_id: string, node_type: NodeState["node_type"]): NodeState {
   return {
@@ -26,6 +26,7 @@ function node(node_id: string, node_type: NodeState["node_type"]): NodeState {
     isl_count: 0,
     gnd_count: 0,
     prefix: null,
+    addresses: [],
     min_elevation_deg: null,
     beam_falloff_exponent: null,
     reference_body: "earth",
@@ -46,6 +47,11 @@ function link(link_type: LinkState["link_type"]): LinkState {
     scheduling_state: "active",
     link_type,
     link_reason: null,
+    link_rule_id: null,
+    topology_mode: null,
+    endpoint_segments: null,
+    teardown_remaining_ticks: null,
+    successor_pair: null,
     latency_ms: 1,
     transmit_mbps_a: 1,
     receive_mbps_a: 1,

@@ -4,13 +4,13 @@
 
 import { describe, it, expect } from "vitest";
 import { mergeSnapshot } from "../snapshotMerge";
-import type { StampedOpsEvent, StateSnapshot } from "../types";
+import type { StampedOpsEvent, StateSnapshot } from "../generated/vsApi";
 
 const base = (over: Partial<StateSnapshot>): StateSnapshot =>
   ({ ops_log_token: "tok-a", ...over }) as StateSnapshot;
 
 const ev = (seq: number, code = `E${seq}`): StampedOpsEvent =>
-  ({ seq, code, timestamp: "", tenant_id: "", session_id: "", source: "ome", hostname: "", level: "info", message: "" });
+  ({ seq, code, timestamp: "", tenant_id: "", session_id: "", source: "ome", hostname: "", level: "info", message: "", details: null });
 
 describe("mergeSnapshot", () => {
   it("appends incremental events to the scrollback", () => {

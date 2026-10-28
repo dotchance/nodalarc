@@ -4,35 +4,23 @@
 
 import { useState, useCallback, useEffect, useRef } from "react";
 import { REST_URL, authHeaders } from "../config";
-import { useWebSocket } from "./useWebSocket";
-import type { StateSnapshot, StateSocketCommand } from "../types";
-import type { SessionEphemeris, PlaybackStateMsg } from "../sim/ephemeris";
-
-
-function isStateSnapshot(value: unknown): value is StateSnapshot {
-  if (value === null || typeof value !== "object") return false;
-  const v = value as Partial<StateSnapshot>;
-  return (
-    typeof v.sim_time === "string" &&
-    typeof v.wall_time === "string" &&
-    Array.isArray(v.nodes) &&
-    Array.isArray(v.links) &&
-    Array.isArray(v.traced_paths) &&
-    Array.isArray(v.recent_events)
-  );
-}
+import { useWebSocket, type ReceivedSnapshot } from "./useWebSocket";
+import type { SessionEphemeris } from "../builder/generated/builderApi";
+import type { StateSnapshot, StateSocketCommand } from "../generated/vsApi";
+import { apiErrorFromException, apiErrorMessage } from "../ui/apiError";
 
 interface SnapshotState {
   snapshot: StateSnapshot | null;
+  /** When the shown snapshot arrived (performance.now()); null with no snapshot. */
+  snapshotArrivalMs: number | null;
   ephemeris: SessionEphemeris | null;
-  playbackState: PlaybackStateMsg | null;
   connected: boolean;
   hasEverConnected: boolean;
-  kicked: boolean;
   sessionTransitioning: boolean;
   sessionError: string | null;
   switchDetail: string | null;
   tokenError: string | null;
+  frameError: string | null;
   historicalMode: boolean;
   setHistoricalMode: (val: boolean) => void;
   fetchHistorical: (simTime: string) => Promise<boolean>;
@@ -42,31 +30,30 @@ interface SnapshotState {
 
 export function useSnapshot(): SnapshotState {
   const {
-    snapshot: liveSnapshot,
+    received: live,
     ephemeris,
-    playbackState,
     connected,
     hasEverConnected,
-    kicked,
     sessionTransitioning,
     sessionError,
     switchDetail,
     tokenError,
+    frameError,
     sendMessage,
   } = useWebSocket();
   const [historicalMode, setHistoricalModeState] = useState(false);
-  const [historicalSnapshot, setHistoricalSnapshot] = useState<StateSnapshot | null>(null);
+  const [historical, setHistorical] = useState<ReceivedSnapshot | null>(null);
   const [historicalError, setHistoricalError] = useState<string | null>(null);
   const historyAbortRef = useRef<AbortController | null>(null);
   const historyRequestSeqRef = useRef(0);
 
   const setHistoricalMode = useCallback((enabled: boolean) => {
     setHistoricalModeState(enabled);
-    if (enabled && liveSnapshot) {
-      setHistoricalSnapshot(liveSnapshot);
+    if (enabled && live) {
+      setHistorical(live);
       setHistoricalError(null);
     }
-  }, [liveSnapshot]);
+  }, [live]);
 
   useEffect(() => {
     if (sessionTransitioning) {
@@ -74,7 +61,7 @@ export function useSnapshot(): SnapshotState {
       historyAbortRef.current?.abort();
       historyAbortRef.current = null;
       setHistoricalModeState(false);
-      setHistoricalSnapshot(null);
+      setHistorical(null);
       setHistoricalError(null);
     }
   }, [sessionTransitioning]);
@@ -94,39 +81,37 @@ export function useSnapshot(): SnapshotState {
         headers: authHeaders(),
         signal: controller.signal,
       });
-      const data = await res.json().catch(() => null);
-      if (!isCurrentRequest()) return false;
-      if (res.ok && isStateSnapshot(data)) {
-        setHistoricalSnapshot(data);
-        setHistoricalError(null);
-        return true;
+      if (!res.ok) {
+        const message = await apiErrorMessage(res);
+        if (isCurrentRequest()) setHistoricalError(message);
+        return false;
       }
-      const message =
-        data && typeof data === "object" && "error" in data && typeof data.error === "string"
-          ? data.error
-          : `Historical state unavailable (${res.status})`;
-      setHistoricalError(message);
-      return false;
+      const snapshot = (await res.json()) as StateSnapshot;
+      if (!isCurrentRequest()) return false;
+      setHistorical({ snapshot, arrivalMs: performance.now() });
+      setHistoricalError(null);
+      return true;
     } catch (err) {
       if (controller.signal.aborted) return false;
-      setHistoricalError("Historical state unavailable");
+      setHistoricalError(apiErrorFromException(err));
       return false;
     } finally {
       if (historyAbortRef.current === controller) historyAbortRef.current = null;
     }
   }, []);
 
+  const shown = historicalMode ? historical : live;
   return {
-    snapshot: historicalMode ? historicalSnapshot : liveSnapshot,
+    snapshot: shown?.snapshot ?? null,
+    snapshotArrivalMs: shown?.arrivalMs ?? null,
     ephemeris,
-    playbackState,
     connected,
     hasEverConnected,
-    kicked,
     sessionTransitioning,
     sessionError,
     switchDetail,
     tokenError,
+    frameError,
     historicalMode,
     setHistoricalMode,
     fetchHistorical,

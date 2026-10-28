@@ -60,9 +60,41 @@ Connection flow:
 4. Server broadcasts state updates at ~1 Hz (link state, events, clock)
 5. On epoch change: server pushes new `SessionEphemeris`
 
-Also broadcasts:
-- `session_transitioning` messages during session switch (with progress detail)
-- `playback_state` changes (pause/resume/speed)
+Also broadcasts, during a session switch:
+- `session_transitioning` messages with progress detail
+- `wiring_progress` lines from the Node Agent
+- `session_ready` with the new session's first snapshot, or `session_failed` with the reason
+
+The client may send the `StateSocketCommand` messages (`debug_stream`,
+`debug_stop`, `debug_stop_all`); any other message closes the socket with code
+4400.
+
+## Wire Contract
+
+Every message and route body is a Pydantic model in `lib/nodalarc/models`:
+`vs_api.py` holds the state frames (the `StateFeedFrame` union), the socket
+messages and the route answers, and composes the models of
+`decision_explanation.py`, `link_decisions.py`, `scheduler_ops.py` and
+`events.py`. `GET /openapi.json` describes every route. `make generate-contracts`
+writes the browser's TypeScript types from the same models into
+`frontend/src/generated/vsApi.ts` and `frontend/src/builder/generated/builderApi.ts`,
+and `make check-contracts` fails when they are stale.
+
+A served model sends every field: a null in the body is a value VS-API states.
+
+### Close codes
+
+| Code | Socket | Meaning |
+|------|--------|---------|
+| 1000 | terminal | The node's shell ended |
+| 4400 | state, terminal | The client sent a message the socket does not accept |
+| 4404 | terminal | The session has no node with that ID |
+| 4409 | terminal | The node's workload declares no terminal access |
+| 4410 | terminal | The session switched; every open terminal closes |
+| 4503 | terminal | VS-API cannot read the terminal key |
+
+A wrong or missing token is refused before VS-API accepts the socket, so the
+client sees a failed connection and no close code.
 
 ## Session Management
 
@@ -119,5 +151,4 @@ On startup, VS-API:
 | `main.py` | FastAPI app, routes, WebSocket handler, bootstrap |
 | `session_context.py` | NATS subscriptions, state aggregation |
 | `session_manager.py` | Session switch orchestration |
-| `state_snapshot.py` | StateSnapshot model for clients |
 | `terminal.py` | SSH proxy for browser terminal |

@@ -698,6 +698,9 @@ export interface SessionTransitioningFrame {
   readonly detail: string | null;
 }
 
+/** The codes VS-API closes an accepted state or terminal socket with. A refusal before VS-API accepts the socket (a wrong token) reaches the browser as a failed handshake, so it has no code here. */
+export type SocketCloseCode = 1000 | 4400 | 4404 | 4409 | 4410 | 4503;
+
 /** An ops event as VS-API serves it, stamped with its arrival seq. */
 export interface StampedOpsEvent {
   readonly timestamp: string;
@@ -720,7 +723,7 @@ export interface StateSnapshot {
   readonly session_id: string;
   readonly nodes: ReadonlyArray<NodeState>;
   readonly links: ReadonlyArray<LinkState>;
-  readonly kernel_actual_pairs: ReadonlyArray<ReadonlyArray<string>>;
+  readonly kernel_actual_pairs: ReadonlyArray<readonly [string, string]>;
   readonly traced_paths: ReadonlyArray<TracedPath>;
   readonly recent_events: ReadonlyArray<RecentEvent>;
   readonly routing_stack: string | null;

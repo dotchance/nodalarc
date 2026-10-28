@@ -7,7 +7,7 @@
  * truth from VS-API.
  */
 
-import type { StateSnapshot } from "../types";
+import type { StateSnapshot } from "../generated/vsApi";
 
 export function filterSnapshotForRender(
   snapshot: StateSnapshot | null,
@@ -33,7 +33,7 @@ export function filterSnapshotForRender(
   const links = snapshot.links.filter(
     (link) => visibleNodeIds.has(link.node_a) && visibleNodeIds.has(link.node_b),
   );
-  const kernelActualPairs = snapshot.kernel_actual_pairs?.filter(
+  const kernelActualPairs = snapshot.kernel_actual_pairs.filter(
     ([a, b]) => visibleNodeIds.has(a) && visibleNodeIds.has(b),
   );
 

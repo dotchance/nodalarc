@@ -6,7 +6,7 @@
  * src/explain/linkEvents.ts (linkEventLabel). The old REASON_MAP was a parallel, untaxonomized
  * vocabulary that conflicted with the registry — removed so there is one source. */
 
-import type { PublicLinkType } from "./types";
+import type { PublicLinkType } from "./generated/vsApi";
 
 /** VF spec Section 8.4 — link type translation */
 const LINK_TYPE_MAP: Record<PublicLinkType, string> = {

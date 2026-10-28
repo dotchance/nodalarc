@@ -57,7 +57,8 @@ function world(
   previews: BuilderRulePreview[],
   // The backend sends one resolved rule for every rule preview.
   rules: BuilderLinkRule[] = previews.map((p) => rule(p.rule_id, "visible_candidates")),
-  allocations: BuilderRuleAllocation[] = [],
+  // And one allocation for every rule.
+  allocations: BuilderRuleAllocation[] = rules.map((r) => alloc(r.rule_id, 0)),
 ): BuilderWorld {
   return {
     session: { name: "t", display_name: null, description: null },
@@ -71,11 +72,15 @@ function world(
   };
 }
 
-const only = (w: BuilderWorld) => computeCandidates(w).previews[0]!;
+/** The one rule's note, and whether it reads as dark. */
+const only = (w: BuilderWorld) => {
+  const { notes, darkRules } = computeCandidates(w);
+  return { note: [...notes.values()][0]!, dark: darkRules === 1 };
+};
 
 describe("adapter: drawable pairs and the dark-rule mapping", () => {
   it("passes the server's drawn pairs to the canvas verbatim, oriented as sent", () => {
-    const { pairs, previews } = computeCandidates(
+    const { pairs, darkRules } = computeCandidates(
       world([
         preview({
           rule_id: "r",
@@ -87,16 +92,16 @@ describe("adapter: drawable pairs and the dark-rule mapping", () => {
         }),
       ]),
     );
-    expect(pairs).toEqual([{ rule_id: "r", kind: "access", a: "g1", b: "s1" }]);
-    expect(previews[0]!.candidates).toBe(1); // == pairs_drawn
+    expect(pairs).toEqual([{ rule_id: "r", kind: "access", node_a: "g1", node_b: "s1" }]);
+    expect(darkRules).toBe(0); // it drew a pair
   });
 
-  it("only a computed rule reads as enabled/dark; a pending or disabled rule never does", () => {
-    // The status bar counts dark = enabled && candidates===0; that must be
-    // exactly "computed with nothing drawn", never a pending or off rule.
-    expect(only(world([preview({ preview_scope: "computed", pairs_drawn: 0 })])).enabled).toBe(true);
-    expect(only(world([preview({ preview_scope: "terrestrial_pending" })])).enabled).toBe(false);
-    expect(only(world([preview({ preview_scope: "disabled" })])).enabled).toBe(false);
+  it("only a computed rule reads as dark; a pending or disabled rule never does", () => {
+    // The status bar counts dark rules; that must be exactly "computed with
+    // nothing drawn", never a pending or off rule.
+    expect(only(world([preview({ preview_scope: "computed", pairs_drawn: 0 })])).dark).toBe(true);
+    expect(only(world([preview({ preview_scope: "terrestrial_pending" })])).dark).toBe(false);
+    expect(only(world([preview({ preview_scope: "disabled" })])).dark).toBe(false);
   });
 });
 
@@ -109,8 +114,8 @@ describe("note-mapping table — one row at a time", () => {
       "terrestrial run — surface routing preview pending",
     );
     const disabled = computeCandidates(world([preview({ preview_scope: "disabled" })]));
-    expect(disabled.previews[0]!.note).toBe("rule disabled");
-    expect(disabled.previews[0]!.candidates).toBe(0);
+    expect(disabled.notes.get("r")).toBe("rule disabled");
+    expect(disabled.darkRules).toBe(0);
     expect(disabled.pairs).toEqual([]); // ZERO lines, no counts, no pairs
   });
 

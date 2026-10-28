@@ -7,8 +7,8 @@
  */
 
 import { GATE_LABELS } from "../derive";
-import type { CandidateFacts } from "../types";
 import { ReasonText } from "./ReasonText";
+import type { CandidateFacts } from "../../generated/vsApi";
 
 export function BestCandidate({ candidate, gsId }: { candidate: CandidateFacts; gsId: string }) {
   const sat = candidate.pair.find((n) => n !== gsId) ?? candidate.pair[1];

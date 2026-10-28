@@ -25,9 +25,10 @@ import { computeOrbitPositions, ORBIT_SAMPLES, supportsStaticOrbitRing } from ".
 import { sampleOrbitPathSceneXYZ } from "../../sim/orbitalMath";
 import { bodyMathFromFrame } from "../../sim/ephemeris";
 import { interpolatedSimTimeMs } from "../../sim/simClock";
-import type { NodeState, ReferenceFrame } from "../../types";
-import type { SessionEphemeris } from "../../sim/ephemeris";
+import type { ReferenceFrame } from "../../types";
 import { bodyLocalToWorld, getNodeLocalPosition, getNodeWorldPosition } from "./positions";
+import type { NodeState } from "../../generated/vsApi";
+import type { SessionEphemeris } from "../../builder/generated/builderApi";
 
 const FLOATS_PER_ORBIT = ORBIT_SAMPLES * 6;
 
@@ -54,7 +55,7 @@ function createGeometry(positions: Float32Array, colors: Float32Array): LineSegm
 interface OrbitPinsProps {
   /** The ctrl/cmd-click pinned satellite ids. */
   pinnedIds: string[];
-  nodes: NodeState[];
+  nodes: readonly NodeState[];
   earthFrame: React.RefObject<THREE.Group | null>;
   referenceFrame: ReferenceFrame;
   kmPerRenderUnit: number;

@@ -38,7 +38,7 @@ import { drawsReverse, traceSegments } from "../../trace/traceSegments";
 import { bodyWorldSpheres, getNodeWorldPosition } from "./positions";
 import { MAX_TRACE_LINE_POINTS, traceLinePoints, type BodySphere } from "./linkCurve";
 import { SegmentLineBuffer } from "./segmentLineBuffer";
-import type { TracedPath } from "../../types";
+import type { TracedPath } from "../../generated/vsApi";
 
 const DASH_SCALE = 3;
 const DASH_SIZE = 0.5;
@@ -57,7 +57,7 @@ interface SegmentLine {
 }
 
 interface DirectionLines {
-  hops: string[];
+  hops: readonly string[];
   measured: SegmentLine;
   bridged: SegmentLine;
   /** Reused every frame: the placed hops' world positions, from a pool of vectors. */
@@ -98,7 +98,7 @@ function makeSegmentLine(
 
 function makeDirection(
   group: THREE.Group,
-  hops: string[],
+  hops: readonly string[],
   color: number,
   resolution: THREE.Vector2,
 ): DirectionLines {
@@ -217,7 +217,7 @@ function drawDirection(
 }
 
 interface FlowPathsProps {
-  tracedPaths: TracedPath[];
+  tracedPaths: readonly TracedPath[];
   /** Ground station node ids: a segment touching one is drawn straight, like a ground link. */
   groundNodeIds: ReadonlySet<string>;
 }

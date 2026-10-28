@@ -26,7 +26,7 @@ import { useFrame, useThree } from "@react-three/fiber";
 import { isOccludedBySphere, getLabelsEnabled } from "../labels";
 import { getGsLabelsEnabled } from "../groundStations";
 import { getNodeBodySphere, getNodeWorldPosition } from "./positions";
-import type { NodeState } from "../../types";
+import type { NodeState } from "../../generated/vsApi";
 
 // Satellite-label distance fade (globe/labels.ts FADE_IN_DIST / FADE_OUT_DIST).
 const SAT_FADE_IN_DIST = 200;
@@ -88,7 +88,7 @@ export function overlapsPlaced(rects: PlacedRect[], candidate: PlacedRect): bool
  * that body unfolded — labels render as before, never hidden with no chip.
  */
 export function collectFoldSegments(
-  nodes: NodeState[],
+  nodes: readonly NodeState[],
   satEnabled: boolean,
   gsEnabled: boolean,
   out: Map<string, Set<string>>,
@@ -152,7 +152,7 @@ function createGsLabel(label: string): HTMLDivElement {
 }
 
 interface LabelsProps {
-  nodes: NodeState[];
+  nodes: readonly NodeState[];
   /** The position-absolute overlay div (sibling of the canvas) this component owns its labels in. */
   containerRef: React.RefObject<HTMLDivElement | null>;
   /** Selected ground station id - the stacked-site label follows it. */
@@ -187,7 +187,7 @@ function createBodyChip(): HTMLDivElement {
  * site, the first member (sorted) otherwise.
  */
 export function siteLabelRepresentatives(
-  nodes: NodeState[],
+  nodes: readonly NodeState[],
   selectedGsId: string | null,
 ): Set<string> {
   const bySite = new Map<string, string[]>();

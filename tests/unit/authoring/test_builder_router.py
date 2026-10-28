@@ -378,6 +378,52 @@ def test_catalog_refusals_have_stable_http_statuses(
     assert response.json()["message"] == "typed refusal"
 
 
+def test_compile_route_applies_pending_edits_to_the_draft_it_was_sent(
+    catalog_context: CatalogContext,
+) -> None:
+    client = TestClient(_application(catalog_context))
+    draft = _session_save_request("router-session")["draft"]
+    rules = draft["state"]["session"]["link_rules"]
+    leo_isl = next(rule for rule in rules if rule["id"] == "leo_isl")
+    topology = {"mode": "nearest_n", "n": 3}
+    edit = {
+        "kind": "content",
+        "address": {"kind": "member", "list_pointer": "/link_rules", "id": "leo_isl"},
+        "base": leo_isl,
+        "working": {**leo_isl, "topology": topology},
+    }
+
+    response = client.post(
+        "/api/v1/builder/compile",
+        json={
+            "draft": draft,
+            "target_ref": "user:sessions/router-session.yaml",
+            "pending_edits": [edit],
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["draft"] == draft
+    assert body["pending_edit_outcomes"] == [{"status": "applied", "issues": []}]
+    assert body["save_verdict"]["allowed"] is True
+    (compiled,) = (
+        rule for rule in body["canonical_session_json"]["link_rules"] if rule["id"] == "leo_isl"
+    )
+    assert compiled["topology"] == topology
+
+    outside = {**edit, "address": {"kind": "member", "list_pointer": "/segments", "id": "leo"}}
+    refused = client.post(
+        "/api/v1/builder/compile",
+        json={
+            "draft": draft,
+            "target_ref": "user:sessions/router-session.yaml",
+            "pending_edits": [outside],
+        },
+    )
+    assert refused.status_code == 422
+
+
 def test_compile_maps_catalog_snapshot_outage_to_typed_503(
     catalog_context: CatalogContext,
     monkeypatch: pytest.MonkeyPatch,

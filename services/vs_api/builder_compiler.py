@@ -361,6 +361,7 @@ def _compile_result(
     resolved_preview: BuilderWorld | None,
     digests: BuilderDigests | None,
     issues: list[BuilderIssue],
+    pending_edit_outcomes: tuple[BuilderPendingEditOutcome, ...],
 ) -> BuilderCompileResult:
     return BuilderCompileResult(
         draft=request.draft,
@@ -375,6 +376,7 @@ def _compile_result(
         resolved_preview=resolved_preview,
         digests=digests,
         issues=tuple(issues),
+        pending_edit_outcomes=pending_edit_outcomes,
         save_verdict=_verdict("save", issues),
         deploy_eligibility_after_save=_verdict("deploy", issues),
     )
@@ -669,7 +671,7 @@ def compile_builder_draft(
     runtime_support: RuntimeSupport | None = None,
     preview_factory: PreviewFactory | None = None,
 ) -> BuilderCompileResult:
-    """Compile one complete draft without mutating its catalog snapshot."""
+    """Compile one draft with its pending edits applied, without mutating its catalog snapshot."""
 
     if not isinstance(request, BuilderCompileRequest):
         raise TypeError("request must be a BuilderCompileRequest")
@@ -679,12 +681,21 @@ def compile_builder_draft(
         raise TypeError("available_node_count must be an integer")
     if available_node_count < 0:
         raise ValueError("available_node_count must be non-negative")
-    issues: list[BuilderIssue] = []
+    session, outcomes = apply_pending_edits(
+        request.draft.state.session,
+        request.pending_edits,
+        source_ref=str(request.target_ref),
+    )
+    # A stale edit is left out of the session, so only its outcome can report it.
+    # An invalid edit is written into the session, whose validation below refuses it.
+    issues: list[BuilderIssue] = [
+        issue for outcome in outcomes if outcome.status == "stale" for issue in outcome.issues
+    ]
     canonical_session: CanonicalConfigurationDocument | None = None
     try:
         canonical_session = canonicalize_persisted_configuration(
             request.target_ref,
-            request.draft.state.session,
+            session,
         )
     except ValidationError as error:
         issues.extend(
@@ -711,6 +722,7 @@ def compile_builder_draft(
             resolved_preview=None,
             digests=None,
             issues=issues,
+            pending_edit_outcomes=outcomes,
         )
 
     overlay = OverlayCatalogReadView(
@@ -733,6 +745,7 @@ def compile_builder_draft(
             resolved_preview=None,
             digests=None,
             issues=issues,
+            pending_edit_outcomes=outcomes,
         )
     except CatalogClosureError as error:
         issues.append(_reference_issue(error, fallback_ref=str(request.target_ref)))
@@ -744,6 +757,7 @@ def compile_builder_draft(
             resolved_preview=None,
             digests=None,
             issues=issues,
+            pending_edit_outcomes=outcomes,
         )
 
     reached_proposals = overlay.reached_proposals()
@@ -923,4 +937,5 @@ def compile_builder_draft(
         resolved_preview=preview,
         digests=digests,
         issues=issues,
+        pending_edit_outcomes=outcomes,
     )

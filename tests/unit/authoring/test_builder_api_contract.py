@@ -390,6 +390,64 @@ def test_compile_result_cannot_approve_deploy_when_save_is_blocked() -> None:
         )
 
 
+def test_compile_result_counts_every_pending_edit_it_refused() -> None:
+    stale_issue = BuilderIssue(
+        code="builder.staleness.pending_edit",
+        stage="staleness",
+        severity="error",
+        message="Link rule 'isl' changed since the edit began",
+        blocks=("save", "deploy"),
+        json_pointer="/link_rules/0",
+        draft_path="pending_edits.0",
+    )
+    stale = BuilderPendingEditOutcome(status="stale", issues=(stale_issue,))
+    blocked = {
+        "save_verdict": BuilderVerdict(operation="save", allowed=False, blockers=(stale_issue,)),
+        "deploy_eligibility_after_save": BuilderVerdict(
+            operation="deploy", allowed=False, blockers=(stale_issue,)
+        ),
+    }
+    result = BuilderCompileResult(
+        draft=_draft(),
+        target_ref="user:sessions/demo.yaml",
+        issues=(stale_issue,),
+        pending_edit_outcomes=(stale,),
+        **blocked,
+    )
+    assert result.pending_edit_outcomes == (stale,)
+
+    with pytest.raises(ValidationError, match="stale edit's issues must be among"):
+        BuilderCompileResult(
+            draft=_draft(),
+            target_ref="user:sessions/demo.yaml",
+            pending_edit_outcomes=(stale,),
+            **blocked,
+        )
+
+    missing_issue = BuilderIssue(
+        code="builder.structural.missing",
+        stage="structural",
+        severity="error",
+        message="Field required",
+        blocks=("save", "deploy"),
+        json_pointer="/link_rules/0/endpoints",
+        draft_path="pending_edits.0",
+    )
+    invalid = BuilderPendingEditOutcome(status="invalid", issues=(missing_issue,))
+    with pytest.raises(ValidationError, match="invalid edit cannot be saveable"):
+        BuilderCompileResult(
+            draft=_draft(),
+            target_ref="user:sessions/demo.yaml",
+            canonical_session_yaml=SESSION_YAML,
+            canonical_session_json=SESSION_DOCUMENT,
+            dependency_closure=_closure(),
+            digests=_digests(),
+            pending_edit_outcomes=(invalid,),
+            save_verdict=BuilderVerdict(operation="save", allowed=True),
+            deploy_eligibility_after_save=BuilderVerdict(operation="deploy", allowed=True),
+        )
+
+
 def test_save_result_binds_document_closure_and_deploy_verdict_identity() -> None:
     digests = _digests()
     deploy_verdict = BuilderDeployVerdict(

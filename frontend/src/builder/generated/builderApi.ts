@@ -82,13 +82,14 @@ export interface BuilderChoiceControl {
   readonly branches: ReadonlyArray<BuilderChoiceBranch>;
 }
 
-/** Request to compile one transient draft through backend authorities. */
+/** Request to compile one transient draft through backend authorities. ``pending_edits`` are applied to the draft's session before it compiles; the draft itself is not changed. */
 export interface BuilderCompileRequest {
   readonly draft: BuilderDraftEnvelope;
   readonly target_ref: SessionRef;
+  readonly pending_edits?: ReadonlyArray<BuilderContentEdit | BuilderListEdit>;
 }
 
-/** Backend compilation result for a transient Builder draft. */
+/** Backend compilation result for a transient Builder draft. ``draft`` is the draft the request sent. The canonical facts, the preview and the issues describe that draft with its pending edits applied, and ``pending_edit_outcomes`` holds one outcome per pending edit, in request order. */
 export interface BuilderCompileResult {
   readonly draft: BuilderDraftEnvelope;
   readonly target_ref: SessionRef;
@@ -98,8 +99,17 @@ export interface BuilderCompileResult {
   readonly resolved_preview: BuilderWorld | null;
   readonly digests: BuilderDigests | null;
   readonly issues: ReadonlyArray<BuilderIssue>;
+  readonly pending_edit_outcomes: ReadonlyArray<BuilderPendingEditOutcome>;
   readonly save_verdict: BuilderVerdict;
   readonly deploy_eligibility_after_save: BuilderVerdict;
+}
+
+/** Working grammar JSON for one address, beside the value it began from. ``base`` is absent for a new object. Both values stay generic JSON so an incomplete object can cross the API boundary and come back with issues. */
+export interface BuilderContentEdit {
+  readonly kind: "content";
+  readonly address: BuilderMemberAddress | BuilderWholeListAddress;
+  readonly base?: Readonly<Record<string, JsonValue>> | ReadonlyArray<JsonValue> | null;
+  readonly working: Readonly<Record<string, JsonValue>> | ReadonlyArray<JsonValue>;
 }
 
 /**  */
@@ -202,6 +212,14 @@ export interface BuilderLinkRule {
   readonly max_range_km: number | null;
 }
 
+/** A removal or reorder of an id-bearing session list's members. */
+export interface BuilderListEdit {
+  readonly kind: "list";
+  readonly list_pointer: BuilderMemberListPointer;
+  readonly ids_before: ReadonlyArray<string>;
+  readonly ids_wanted: ReadonlyArray<string>;
+}
+
 /** A typed mapping editor with explicit key and value controls. */
 export interface BuilderMapControl {
   readonly control_id: string;
@@ -228,6 +246,16 @@ export interface BuilderMapEntry {
   readonly key: BuilderScalarControl | BuilderObjectControl | BuilderChoiceControl | BuilderSequenceControl | BuilderMapControl;
   readonly value: BuilderScalarControl | BuilderObjectControl | BuilderChoiceControl | BuilderSequenceControl | BuilderMapControl;
 }
+
+/** One member of an id-bearing session list, by the id it had when the edit began. */
+export interface BuilderMemberAddress {
+  readonly kind: "member";
+  readonly list_pointer: BuilderMemberListPointer;
+  readonly id: string;
+}
+
+/**  */
+export type BuilderMemberListPointer = "/link_rules" | "/routing/domains";
 
 /**  */
 export interface BuilderMoveItemCommand {
@@ -268,6 +296,15 @@ export interface BuilderObjectField {
   readonly wire_name: string;
   readonly control: BuilderScalarControl | BuilderObjectControl | BuilderChoiceControl | BuilderSequenceControl | BuilderMapControl;
 }
+
+/** What applying one pending edit did, at that edit's position in its batch. */
+export interface BuilderPendingEditOutcome {
+  readonly status: BuilderPendingEditStatus;
+  readonly issues: ReadonlyArray<BuilderIssue>;
+}
+
+/**  */
+export type BuilderPendingEditStatus = "applied" | "stale" | "invalid";
 
 /** One drawn preview pair: a runtime node pair whose frozen-epoch geometry passed every armed gate, oriented to the rule's endpoints server-side. canvas draws these directly and never re-derives pair identities. */
 export interface BuilderPreviewPair {
@@ -1053,6 +1090,15 @@ export interface BuilderVisualWorkspace {
   readonly step_seconds?: number | null;
   readonly compression?: number | null;
 }
+
+/** A session list whose members carry no id, edited as one whole. */
+export interface BuilderWholeListAddress {
+  readonly kind: "whole_list";
+  readonly pointer: BuilderWholeListPointer;
+}
+
+/**  */
+export type BuilderWholeListPointer = "/routing/boundaries";
 
 /** One resolved session as a render-ready, read-only world. */
 export interface BuilderWorld {

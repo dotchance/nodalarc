@@ -422,10 +422,20 @@ class BuilderDeployVerdict(_BuilderApplicationModel):
 
 
 class BuilderCompileRequest(_BuilderApplicationModel):
-    """Request to compile one transient draft through backend authorities."""
+    """Request to compile one transient draft through backend authorities.
+
+    ``pending_edits`` are applied to the draft's session before it compiles;
+    the draft itself is not changed.
+    """
 
     draft: BuilderDraftEnvelope
     target_ref: SessionRef
+    pending_edits: BuilderPendingEdits = ()
+
+    @field_validator("pending_edits", mode="before")
+    @classmethod
+    def _accept_json_array(cls, value: object) -> object:
+        return tuple(value) if isinstance(value, list) else value
 
     @model_validator(mode="after")
     def _target_is_user_owned(self) -> BuilderCompileRequest:
@@ -803,7 +813,13 @@ class WizardCompileRefusal(_BuilderApplicationModel):
 
 
 class BuilderCompileResult(_BuilderApplicationModel):
-    """Backend compilation result for a transient Builder draft."""
+    """Backend compilation result for a transient Builder draft.
+
+    ``draft`` is the draft the request sent. The canonical facts, the preview
+    and the issues describe that draft with its pending edits applied, and
+    ``pending_edit_outcomes`` holds one outcome per pending edit, in request
+    order.
+    """
 
     draft: BuilderDraftEnvelope
     target_ref: SessionRef
@@ -813,6 +829,7 @@ class BuilderCompileResult(_BuilderApplicationModel):
     resolved_preview: BuilderWorld | None = None
     digests: BuilderDigests | None = None
     issues: tuple[BuilderIssue, ...] = ()
+    pending_edit_outcomes: tuple[BuilderPendingEditOutcome, ...] = ()
     save_verdict: BuilderVerdict
     deploy_eligibility_after_save: BuilderVerdict
 
@@ -824,6 +841,11 @@ class BuilderCompileResult(_BuilderApplicationModel):
             raise ValueError("deploy_eligibility_after_save must describe deployment")
         if self.deploy_eligibility_after_save.allowed and not self.save_verdict.allowed:
             raise ValueError("an unsaveable draft cannot be eligible for deployment")
+        for outcome in self.pending_edit_outcomes:
+            if outcome.status == "stale" and not set(outcome.issues) <= set(self.issues):
+                raise ValueError("a stale edit's issues must be among the compile issues")
+            if outcome.status == "invalid" and self.save_verdict.allowed:
+                raise ValueError("a draft holding an invalid edit cannot be saveable")
         canonical_facts = (
             self.canonical_session_yaml,
             self.canonical_session_json,

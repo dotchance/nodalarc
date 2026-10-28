@@ -784,3 +784,119 @@ def test_applying_refuses_a_batch_that_addresses_one_object_twice() -> None:
 
     with pytest.raises(ValidationError, match="one content edit per address"):
         apply_pending_edits(session, (edit, edit), source_ref="user:sessions/earth-leo-simple.yaml")
+
+
+def _edits_request(session: dict[str, Any], *edits: dict[str, Any]) -> BuilderCompileRequest:
+    """A compile request as the page sends it: the accepted session and its pending edits."""
+    return BuilderCompileRequest.model_validate_json(
+        json.dumps(
+            {
+                "draft": {
+                    "draft_revision": 4,
+                    "state": {"session": session, "catalog_documents": []},
+                },
+                "target_ref": f"user:sessions/{session['session']['name']}.yaml",
+                "pending_edits": edits,
+            }
+        )
+    )
+
+
+def test_compile_applies_pending_edits_and_echoes_the_draft_it_was_sent(
+    snapshot: CatalogReadSnapshot,
+) -> None:
+    session = _accepted(QUIC_SESSION)
+    untouched = deepcopy(session)
+    timers = {"hello_interval_s": 2, "hold_interval_s": 7}
+    boundaries = deepcopy(session["routing"]["boundaries"])
+    for export in boundaries[0]["export"]:
+        export["export_node_loopbacks"] = False
+    topology = {"mode": "nearest_n", "n": 3}
+    request = _edits_request(
+        session,
+        _edited(session, "/link_rules", "leo_isl", topology=topology),
+        _edited(session, "/routing/domains", "luna_domain", timers=timers),
+        _boundaries(session["routing"]["boundaries"], boundaries),
+    )
+
+    # The default preview factory builds the resolved world the page renders.
+    result = compile_builder_draft(request, snapshot, available_node_count=1_000_000)
+
+    assert result.draft == request.draft
+    assert session == untouched
+    assert [outcome.status for outcome in result.pending_edit_outcomes] == ["applied"] * 3
+    assert result.save_verdict.allowed is True
+    assert result.deploy_eligibility_after_save.allowed is True
+    canonical = result.canonical_session_json
+    assert canonical is not None
+    assert _member(canonical, "/link_rules", "leo_isl")["topology"] == topology
+    domain_timers = _member(canonical, "/routing/domains", "luna_domain")["timers"]
+    assert (domain_timers["hello_interval_s"], domain_timers["hold_interval_s"]) == (2, 7)
+    assert canonical["routing"]["boundaries"] == boundaries
+    assert result.resolved_preview is not None
+    (leo_isl,) = (rule for rule in result.resolved_preview.link_rules if rule.rule_id == "leo_isl")
+    assert leo_isl.topology_n == 3
+    # The edits compile exactly as the edited session does when it is the draft.
+    edited = deepcopy(session)
+    _member(edited, "/link_rules", "leo_isl")["topology"] = topology
+    _member(edited, "/routing/domains", "luna_domain")["timers"] = timers
+    edited["routing"]["boundaries"] = boundaries
+    direct = compile_builder_draft(_request(edited), snapshot, available_node_count=1_000_000)
+    assert canonical == direct.canonical_session_json
+    assert result.canonical_session_yaml == direct.canonical_session_yaml
+    assert result.digests == direct.digests
+    assert result.resolved_preview == direct.resolved_preview
+    assert result.issues == direct.issues
+
+
+def test_compile_leaves_a_stale_edit_out_and_reports_it(snapshot: CatalogReadSnapshot) -> None:
+    session = _accepted(QUIC_SESSION)
+    leo_isl = _member(session, "/link_rules", "leo_isl")
+    request = _edits_request(
+        session,
+        _content(
+            "/link_rules",
+            "leo_isl",
+            {**leo_isl, "enabled": False},
+            base={**leo_isl, "topology": {"mode": "visible_candidates"}},
+        ),
+        _edited(session, "/link_rules", "geo_isl", topology={"mode": "nearest_n", "n": 1}),
+    )
+
+    result = _compile(request, snapshot)
+
+    assert result.draft == request.draft
+    stale, applied = result.pending_edit_outcomes
+    assert (stale.status, applied.status) == ("stale", "applied")
+    (issue,) = stale.issues
+    assert issue.message == "Link rule 'leo_isl' changed since the edit began"
+    assert issue.draft_path == "pending_edits.0"
+    assert issue in result.issues
+    assert result.save_verdict.blockers == (issue,)
+    assert result.deploy_eligibility_after_save.blockers == (issue,)
+    expected = deepcopy(session)
+    _member(expected, "/link_rules", "geo_isl")["topology"] = {"mode": "nearest_n", "n": 1}
+    assert result.canonical_session_json == expected
+
+
+def test_compile_includes_an_incomplete_edit_so_the_session_refuses_it(
+    snapshot: CatalogReadSnapshot,
+) -> None:
+    session = _accepted(QUIC_SESSION)
+    working = {**deepcopy(_member(session, "/link_rules", "geo_isl")), "id": "new_isl"}
+    del working["endpoints"][1]["select"]
+    request = _edits_request(session, _content("/link_rules", "new_isl", working, base=None))
+
+    result = _compile(request, snapshot)
+
+    assert result.draft == request.draft
+    (outcome,) = result.pending_edit_outcomes
+    assert outcome.status == "invalid"
+    pointer = f"/link_rules/{len(session['link_rules'])}/endpoints/1/select"
+    assert [issue.json_pointer for issue in outcome.issues] == [pointer]
+    # The session holding the edit refuses it once, where the edit landed.
+    assert [(issue.json_pointer, issue.draft_path) for issue in result.issues] == [
+        (pointer, f"state.session{pointer}")
+    ]
+    assert result.canonical_session_json is None
+    assert result.save_verdict.allowed is False

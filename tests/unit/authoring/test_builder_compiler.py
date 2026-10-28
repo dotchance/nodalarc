@@ -879,6 +879,38 @@ def test_compile_leaves_a_stale_edit_out_and_reports_it(snapshot: CatalogReadSna
     assert result.canonical_session_json == expected
 
 
+def test_a_compile_issue_names_the_edit_whose_object_it_is_about(
+    snapshot: CatalogReadSnapshot,
+) -> None:
+    """A reorder moves every rule, so a position in the compiled session is not a position
+    in the request's accepted session; the issue names the edit that wrote the object."""
+    session = _accepted(QUIC_SESSION)
+    rule_ids = [rule["id"] for rule in session["link_rules"]]
+    edited = _member(session, "/link_rules", "client_access")
+    working = deepcopy(edited)
+    del working["endpoints"][1]["select"]
+    request = _edits_request(
+        session,
+        {
+            "kind": "list",
+            "list_pointer": "/link_rules",
+            "ids_before": rule_ids,
+            "ids_wanted": list(reversed(rule_ids)),
+        },
+        _content("/link_rules", "client_access", working, base=edited),
+    )
+
+    result = _compile(request, snapshot)
+
+    position = list(reversed(rule_ids)).index("client_access")
+    pointer = f"/link_rules/{position}/endpoints/1/select"
+    assert [(issue.json_pointer, issue.draft_path) for issue in result.issues] == [
+        (pointer, "pending_edits.1")
+    ]
+    # In the accepted session that position holds another, unedited rule.
+    assert session["link_rules"][position]["id"] != "client_access"
+
+
 def test_compile_includes_an_incomplete_edit_so_the_session_refuses_it(
     snapshot: CatalogReadSnapshot,
 ) -> None:
@@ -894,9 +926,9 @@ def test_compile_includes_an_incomplete_edit_so_the_session_refuses_it(
     assert outcome.status == "invalid"
     pointer = f"/link_rules/{len(session['link_rules'])}/endpoints/1/select"
     assert [issue.json_pointer for issue in outcome.issues] == [pointer]
-    # The session holding the edit refuses it once, where the edit landed.
+    # The session holding the edit refuses it once, at the edit that put it there.
     assert [(issue.json_pointer, issue.draft_path) for issue in result.issues] == [
-        (pointer, f"state.session{pointer}")
+        (pointer, "pending_edits.0")
     ]
     assert result.canonical_session_json is None
     assert result.save_verdict.allowed is False

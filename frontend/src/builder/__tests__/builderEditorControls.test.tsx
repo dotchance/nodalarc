@@ -793,6 +793,27 @@ describe("deferred-clamp number contract (local string draft)", () => {
     fireEvent.change(box, { target: { value: "" } });
     expect(value).toBeNull(); // empty → null contract survives the draft rewrite
   });
+
+  it("NullableNumberField: a whole-number field commits no fraction", () => {
+    let value: number | null = 2;
+    render(
+      <NullableNumberField
+        label="hello"
+        placeholder="engine default"
+        value={value}
+        min={1}
+        integer
+        onChange={(v) => {
+          value = v;
+        }}
+      />,
+    );
+    const box = screen.getByPlaceholderText("engine default");
+    fireEvent.change(box, { target: { value: "2.5" } });
+    expect(value).toBe(2); // a fraction is not committed, and never rounded
+    fireEvent.change(box, { target: { value: "3" } });
+    expect(value).toBe(3);
+  });
 });
 
 describe("the YAML buffer locks graphical editing only around an open draft's text", () => {

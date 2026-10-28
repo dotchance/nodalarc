@@ -179,7 +179,10 @@ def _validation_issues(
     *,
     source_ref: str,
     draft_path: str,
+    place: Callable[[str], str] | None = None,
 ) -> list[BuilderIssue]:
+    """One structural issue per validation error. ``place`` gives the draft path of a
+    pointer when the validated document is not the one at ``draft_path``."""
     issues: list[BuilderIssue] = []
     for item in error.errors(include_url=False):
         pointer = _json_pointer(tuple(item["loc"]))
@@ -192,10 +195,64 @@ def _validation_issues(
                 blocks=("save", "deploy"),
                 source_ref=source_ref,
                 json_pointer=pointer or None,
-                draft_path=f"{draft_path}{pointer}",
+                draft_path=place(pointer) if place is not None else f"{draft_path}{pointer}",
             )
         )
     return issues
+
+
+def _candidate_place(
+    session: JsonDocument,
+    candidate: JsonDocument,
+    edits: BuilderPendingEdits,
+    outcomes: tuple[BuilderPendingEditOutcome, ...],
+) -> Callable[[str], str]:
+    """Where a pointer into the session with pending edits applied sits in the request:
+    inside an applied edit's object at ``pending_edits.N``, elsewhere at the same object
+    in ``state.session``. List edits and new members move objects, so positions differ."""
+    applied = [
+        (index, edit)
+        for index, (edit, outcome) in enumerate(zip(edits, outcomes, strict=True))
+        if outcome.status != "stale"
+    ]
+
+    def place(pointer: str) -> str:
+        for index, edit in applied:
+            if isinstance(edit, BuilderListEdit) and pointer == edit.list_pointer:
+                return f"pending_edits.{index}"
+            if isinstance(edit, BuilderContentEdit) and isinstance(
+                edit.address, BuilderWholeListAddress
+            ):
+                whole = edit.address.pointer
+                if pointer == whole or pointer.startswith(f"{whole}/"):
+                    return f"pending_edits.{index}"
+        for list_pointer in ("/link_rules", "/routing/domains"):
+            position, _, rest = pointer.removeprefix(f"{list_pointer}/").partition("/")
+            if not pointer.startswith(f"{list_pointer}/") or not position.isdigit():
+                continue
+            members = _list_at(candidate, list_pointer) or []
+            if int(position) >= len(members):
+                continue
+            member = members[int(position)]
+            member_id = member.get("id") if isinstance(member, dict) else None
+            for index, edit in applied:
+                if (
+                    isinstance(edit, BuilderContentEdit)
+                    and not isinstance(edit.address, BuilderWholeListAddress)
+                    and edit.address.list_pointer == list_pointer
+                    and edit.address.id == member_id
+                ):
+                    return f"pending_edits.{index}"
+            accepted = [
+                cast(JsonDocument, accepted_member).get("id")
+                for accepted_member in _list_at(session, list_pointer) or []
+            ]
+            if member_id in accepted:
+                tail = f"/{rest}" if rest else ""
+                return f"state.session{list_pointer}/{accepted.index(member_id)}{tail}"
+        return f"state.session{pointer}"
+
+    return place
 
 
 def _structural_issue(
@@ -686,6 +743,7 @@ def compile_builder_draft(
         request.pending_edits,
         source_ref=str(request.target_ref),
     )
+    place = _candidate_place(request.draft.state.session, session, request.pending_edits, outcomes)
     # A stale edit is left out of the session, so only its outcome can report it.
     # An invalid edit is written into the session, whose validation below refuses it.
     issues: list[BuilderIssue] = [
@@ -703,6 +761,7 @@ def compile_builder_draft(
                 error,
                 source_ref=str(request.target_ref),
                 draft_path="state.session",
+                place=place,
             )
         )
     except (TypeError, ValueError) as error:
@@ -805,6 +864,7 @@ def compile_builder_draft(
                 error,
                 source_ref=str(request.target_ref),
                 draft_path="state.session",
+                place=place,
             )
         )
     except SessionResolutionError as error:

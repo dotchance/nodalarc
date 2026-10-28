@@ -290,6 +290,84 @@ def _canonical(model: BaseModel) -> Any:
     return model.model_dump(mode="json", by_alias=True, exclude_none=True)
 
 
+# The shipped objects a card writes back unchanged: (link rules, routing domains, boundary
+# positions). A change to a card's writer or to the round-trip gate that withdraws or adds a
+# card changes this set.
+_OFFERED_CARDS: dict[str, tuple[tuple[str, ...], tuple[str, ...], tuple[int, ...]]] = {
+    "earth-geo-inmarsat": (("geo_isl",), (), ()),
+    "earth-geo-tdrs": (("geo_isl",), (), ()),
+    "earth-leo-heo-geo-luna-reachability": (
+        (
+            "leo_a_access",
+            "leo_b_access",
+            "heo_access",
+            "luna_access",
+            "leo_a_isl",
+            "leo_b_isl",
+            "heo_isl",
+            "geo_isl",
+            "luna_isl",
+            "leo_to_heo",
+            "meo_access",
+            "meo_to_geo",
+            "heo_to_geo",
+            "geo_to_luna",
+        ),
+        ("luna_domain",),
+        (),
+    ),
+    "earth-leo-polar-seam-tracking": (("leo_access",), (), ()),
+    "earth-leo-polar-seam": (("leo_access",), (), ()),
+    "earth-leo-polar": (("leo_access",), (), ()),
+    "earth-leo-simple": (("leo_access", "leo_isl"), (), ()),
+    "earth-leo-walker": (("leo_access",), (), ()),
+    "earth-luna-dtn-custody": (
+        (
+            "client_access",
+            "relay_leo_access",
+            "leo_isl",
+            "leo_to_geo",
+            "geo_isl",
+            "geo_to_luna",
+            "luna_access",
+            "dtn_earth_access",
+            "dtn_luna_access",
+        ),
+        (),
+        (),
+    ),
+    "earth-luna-dtn": (
+        (
+            "client_access",
+            "relay_leo_access",
+            "leo_isl",
+            "leo_to_geo",
+            "geo_isl",
+            "geo_to_luna",
+            "luna_access",
+            "dtn_earth_access",
+            "dtn_luna_access",
+        ),
+        (),
+        (),
+    ),
+    "earth-luna-quic": (
+        (
+            "client_access",
+            "relay_leo_access",
+            "leo_isl",
+            "leo_to_geo",
+            "geo_isl",
+            "geo_to_luna",
+            "luna_access",
+        ),
+        (),
+        (),
+    ),
+    "earth-meo-gps": (("meo_access", "meo_isl"), (), ()),
+}
+
+
 @pytest.mark.parametrize("session_path", SHIPPED_SESSIONS, ids=lambda path: path.stem)
 def test_every_shipped_object_offered_a_card_saves_back_unchanged(session_path: Path) -> None:
     canonical: dict[str, Any] = canonicalize_persisted_configuration(
@@ -298,11 +376,13 @@ def test_every_shipped_object_offered_a_card_saves_back_unchanged(session_path: 
     ).canonical_json
     session = SegmentSessionConfig.model_validate(canonical)
     routing = canonical.get("routing", {})
+    offered: tuple[list[str], list[str], list[int]] = ([], [], [])
 
     for rule, saved_rule in zip(
         session.link_rules or (), canonical.get("link_rules", []), strict=True
     ):
         if (card := _link_projection(rule)) is not None:
+            offered[0].append(rule.id)
             written, issues = _link_rule_document(card)
             assert issues == ()
             assert _canonical(LinkRule.model_validate(written)) == saved_rule
@@ -312,6 +392,7 @@ def test_every_shipped_object_offered_a_card_saves_back_unchanged(session_path: 
         strict=True,
     ):
         if (domain_card := _routing_domain_projection(domain)) is not None:
+            offered[1].append(domain.id)
             written, issues = _routing_domain_document(domain_card)
             assert issues == ()
             assert _canonical(RoutingDomain.model_validate(written)) == saved_domain
@@ -323,9 +404,11 @@ def test_every_shipped_object_offered_a_card_saves_back_unchanged(session_path: 
         )
     ):
         if (boundary_card := _routing_boundary_projection(boundary, index=index)) is not None:
+            offered[2].append(index)
             written_list, issues = _routing_boundary_documents((boundary_card,))
             assert issues == ()
             assert _canonical(RoutingBoundary.model_validate(written_list[0])) == saved_boundary
+    assert tuple(tuple(ids) for ids in offered) == _OFFERED_CARDS[session_path.stem]
 
 
 def _isl_rule(**fields: Any) -> dict[str, Any]:

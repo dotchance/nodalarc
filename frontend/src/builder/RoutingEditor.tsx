@@ -138,6 +138,7 @@ export function RoutingDomainEditor({
               placeholder="engine default"
               value={domain.hello_interval_s}
               min={1}
+              integer
               suffix="s"
               onChange={(hello_interval_s) => onUpdate({ hello_interval_s })}
             />
@@ -146,6 +147,7 @@ export function RoutingDomainEditor({
               placeholder="engine default"
               value={domain.hold_interval_s}
               min={1}
+              integer
               suffix="s"
               onChange={(hold_interval_s) => onUpdate({ hold_interval_s })}
             />

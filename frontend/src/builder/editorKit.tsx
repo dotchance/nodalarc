@@ -232,6 +232,7 @@ export function NullableNumberField({
   placeholder,
   suffix,
   min,
+  integer = false,
 }: {
   label: string;
   value: number | null;
@@ -239,6 +240,8 @@ export function NullableNumberField({
   placeholder: string;
   suffix?: string;
   min?: number;
+  /** A whole number only: a fraction is not committed, as a value under min is not. */
+  integer?: boolean;
 }) {
   const { shown, handleChange, handleBlur } = useNumberDraft(value, (raw) => {
     if (raw === "") {
@@ -248,6 +251,7 @@ export function NullableNumberField({
     const parsed = Number(raw);
     if (!Number.isFinite(parsed)) return;
     if (min !== undefined && parsed < min) return;
+    if (integer && !Number.isInteger(parsed)) return;
     onChange(parsed);
   });
   return (

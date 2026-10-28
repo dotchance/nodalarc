@@ -87,7 +87,18 @@ from nodalarc.models.builder_api import (
 )
 from nodalarc.models.coverage import CoveragePreviewResult
 from nodalarc.models.decision_explanation import DecisionExplanationFacts, GsDecisionTimelineFacts
-from nodalarc.models.events import OPS_LOG_LEVELS, OpsEvent, OpsLevel, ServiceSource
+from nodalarc.models.events import (
+    OPS_LOG_LEVELS,
+    OpsEvent,
+    OpsLevel,
+    PlaybackControlCommand,
+    PlaybackControlFailed,
+    PlaybackControlRefused,
+    PlaybackControlReply,
+    PlaybackRefusalReason,
+    PlaybackState,
+    ServiceSource,
+)
 from nodalarc.models.link_decisions import GroundLinkDecisionSnapshot
 from nodalarc.models.resolved_session import ResolvedSession
 from nodalarc.models.scheduler_ops import (
@@ -2796,44 +2807,51 @@ def _create_continuous_tracer(ctx: SessionContext) -> ContinuousTracer:
     )
 
 
-@app.post(
-    "/api/v1/playback", dependencies=[Depends(_require_api_key), Depends(_rate_limit_playback)]
-)
-def playback_control(body: dict) -> Any:
-    """Relay playback command to dispatcher via NATS request/reply."""
-    import asyncio
+_PLAYBACK_REPLY: TypeAdapter[PlaybackControlReply] = TypeAdapter(PlaybackControlReply)
+# The status a refused playback command answers with: a command the clock cannot take
+# right now conflicts with its state; a speed outside the range is a bad request.
+_PLAYBACK_REFUSAL_STATUS: dict[PlaybackRefusalReason, int] = {
+    "bootstrapping": 409,
+    "seeking": 409,
+    "speed_out_of_range": 400,
+}
 
+
+@app.post(
+    "/api/v1/playback",
+    response_model=PlaybackState,
+    responses=_with_legacy_refusals(500, 503, 504),
+    dependencies=[Depends(_require_api_key), Depends(_rate_limit_playback)],
+)
+async def playback_control(command: PlaybackControlCommand) -> Any:
+    """Relay one playback command to OME and answer its playback state after it."""
     from nodalarc.nats_channels import SUBJECT_PLAYBACK_CONTROL
 
-    action = body.get("action", "")
-    if action not in ("pause", "resume", "set_speed", "get_status", "seek"):
-        return JSONResponse(status_code=400, content={"error": "Unknown action"})
-
-    async def _request():
-        nc = _nats_connection
-        if nc is None:
-            return None
-        resp = await nc.request(SUBJECT_PLAYBACK_CONTROL, json.dumps(body).encode(), timeout=5)
-        return json.loads(resp.data)
-
-    try:
-        loop = asyncio.get_running_loop()
-        result = loop.run_until_complete(_request())
-    except RuntimeError:
-        result = asyncio.run(_request())
-    except Exception:
-        return JSONResponse(status_code=504, content={"error": "Dispatcher timeout"})
-
-    if result is None:
+    nc = _nats_connection
+    if nc is None:
         return JSONResponse(status_code=503, content={"error": "NATS not connected"})
-
+    try:
+        resp = await nc.request(
+            SUBJECT_PLAYBACK_CONTROL, command.model_dump_json().encode(), timeout=5
+        )
+    except TimeoutError:
+        return JSONResponse(status_code=504, content={"error": "Dispatcher timeout"})
+    except Exception as exc:
+        log.warning("Playback request failed for %s: %s", command.action, exc, exc_info=True)
+        return JSONResponse(status_code=500, content={"error": "Playback request failed"})
+    reply = _PLAYBACK_REPLY.validate_json(resp.data)
+    if isinstance(reply, PlaybackControlRefused):
+        return refusal_response(
+            _PLAYBACK_REFUSAL_STATUS[reply.reason], f"playback.{reply.reason}", reply.message
+        )
+    if isinstance(reply, PlaybackControlFailed):
+        return refusal_response(500, "playback.failed", reply.message)
     ctx = _active_context
     if ctx is not None:
-        if "paused" in result:
-            ctx.playback_paused = result["paused"]
-        if "speed" in result:
-            ctx.playback_speed = result["speed"]
-    return result
+        ctx.playback_paused = reply.state.state == "paused"
+        if command.factor is not None:
+            ctx.playback_speed = command.factor
+    return reply.state
 
 
 @app.get(

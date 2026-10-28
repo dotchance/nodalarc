@@ -9,7 +9,10 @@ from datetime import UTC, datetime
 
 import ome.main as ome_main
 from nodalarc.models.events import (
+    PlaybackControlAccepted,
     PlaybackControlCommand,
+    PlaybackControlRefused,
+    PlaybackState,
 )
 from nodalarc.models.link_decisions import GroundPolicyAudit
 from ome.types import GroundVisibilityDecision
@@ -84,6 +87,7 @@ def test_playback_control_rejects_mutating_commands_before_initial_commit():
             action="seek",
             target_sim_time=datetime(2030, 1, 1, tzinfo=UTC),
         ),
+        PlaybackControlCommand(action="get_status"),
     )
 
     for command in commands:
@@ -91,26 +95,12 @@ def test_playback_control_rejects_mutating_commands_before_initial_commit():
         published: list[str] = []
         reply = asyncio.run(ome_main._handle_playback_control_command(command, _publish))
 
-        assert reply == {
-            "error": "session bootstrapping; retry after ready",
-            "state": "bootstrapping",
-            "paused": False,
-            "speed": 1.0,
-            "epoch_id": 0,
-        }
+        assert isinstance(reply, PlaybackControlRefused)
+        assert reply.reason == "bootstrapping"
         assert published == []
         assert ome_main._epoch_id == 0
         assert ome_main._seek_target is None
         assert ome_main._seeking is False
-
-    status = asyncio.run(
-        ome_main._handle_playback_control_command(
-            PlaybackControlCommand(action="get_status"),
-            _publish,
-        )
-    )
-    assert status["state"] == "bootstrapping"
-    assert published == []
 
 
 def test_playback_control_seek_mutex_rejects_pause_but_allows_seek_retry():
@@ -130,8 +120,8 @@ def test_playback_control_seek_mutex_rejects_pause_but_allows_seek_retry():
             _publish,
         )
     )
-    assert pause_reply["state"] == "seeking"
-    assert pause_reply["error"] == "cannot pause during seek (epoch_id=4)"
+    assert isinstance(pause_reply, PlaybackControlRefused)
+    assert pause_reply.reason == "seeking"
     assert published == []
     assert ome_main._epoch_id == 4
 
@@ -142,8 +132,27 @@ def test_playback_control_seek_mutex_rejects_pause_but_allows_seek_retry():
             _publish,
         )
     )
-    assert retry_reply["state"] == "seeking"
-    assert retry_reply["epoch_id"] == 5
-    assert retry_reply["paused"] is False
+    assert isinstance(retry_reply, PlaybackControlAccepted)
+    assert retry_reply.state == PlaybackState(epoch_id=5, state="seeking")
+    assert ome_main._paused is False
     assert published == ["seeking"]
     assert ome_main._seek_target == target.timestamp()
+
+
+def test_playback_control_refuses_a_speed_outside_the_range_and_keeps_the_clock():
+    _reset_playback_globals()
+    ome_main._initial_epoch_committed = True
+
+    async def _publish(state: str) -> None:
+        raise AssertionError(f"a refused command published {state}")
+
+    reply = asyncio.run(
+        ome_main._handle_playback_control_command(
+            PlaybackControlCommand(action="set_speed", factor=ome_main.MAX_TIME_ACCEL * 2),
+            _publish,
+        )
+    )
+
+    assert isinstance(reply, PlaybackControlRefused)
+    assert reply.reason == "speed_out_of_range"
+    assert ome_main._time_accel == 1.0

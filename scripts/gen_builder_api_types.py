@@ -227,6 +227,7 @@ from nodalarc.models.builder_visual_api import (  # noqa: E402
 )
 from nodalarc.models.builder_world import BuilderWorld  # noqa: E402
 from nodalarc.models.coverage import CoveragePreviewResult  # noqa: E402
+from nodalarc.models.events import PlaybackControlCommand, PlaybackState  # noqa: E402
 from nodalarc.models.scheduler_ops import OperatorRepairRequest  # noqa: E402
 from nodalarc.models.session_sources import (  # noqa: E402
     CatalogSessionSourceId,
@@ -381,6 +382,8 @@ MODEL_TYPES: tuple[type[BaseModel], ...] = (
     ContinuousTraceStatus,
     TraceRequest,
     OperatorRepairRequest,
+    PlaybackControlCommand,
+    PlaybackState,
     LinkHistoryQuery,
     OpsEventsQuery,
     LinkDecisionTracesQuery,

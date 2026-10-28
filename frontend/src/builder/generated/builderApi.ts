@@ -1037,6 +1037,19 @@ export interface OperatorRepairRequest {
   readonly intervention_id?: string | null;
 }
 
+/** Validated command payload for the OME playback-control subject. */
+export interface PlaybackControlCommand {
+  readonly action: "pause" | "resume" | "set_speed" | "seek" | "get_status";
+  readonly factor?: number | null;
+  readonly target_sim_time?: string | null;
+}
+
+/** OME playback state — seeking/playing/paused. Published to NODALARC_SESSION stream (MaxMsgsPerSubject=1) at every state transition. Late-joining subscribers immediately know current state. The 'seeking' state is a mutex — edges must suspend until all epoch dependencies are satisfied. */
+export interface PlaybackState {
+  readonly epoch_id: number;
+  readonly state: "seeking" | "playing" | "paused";
+}
+
 /** The filters and page of a link history request. */
 export interface LinkHistoryQuery {
   readonly start?: string | null;

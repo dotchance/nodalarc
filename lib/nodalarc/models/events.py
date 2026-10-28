@@ -462,7 +462,7 @@ class PlaybackState(BaseModel):
     all epoch dependencies are satisfied.
     """
 
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
     epoch_id: int
     state: Literal["seeking", "playing", "paused"]
@@ -491,6 +491,45 @@ class PlaybackControlCommand(BaseModel):
         if self.action != "seek" and self.target_sim_time is not None:
             raise ValueError(f"{self.action} does not accept target_sim_time")
         return self
+
+
+# Why OME did not apply a playback command.
+PlaybackRefusalReason = Literal["bootstrapping", "seeking", "speed_out_of_range"]
+
+
+class PlaybackControlAccepted(BaseModel):
+    """OME applied a playback command; its playback state after the command."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    reply: Literal["accepted"] = "accepted"
+    state: PlaybackState
+
+
+class PlaybackControlRefused(BaseModel):
+    """OME did not apply a playback command."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    reply: Literal["refused"] = "refused"
+    reason: PlaybackRefusalReason
+    message: str
+
+
+class PlaybackControlFailed(BaseModel):
+    """OME failed while handling a playback command, which may have taken effect."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    reply: Literal["failed"] = "failed"
+    message: str
+
+
+# OME's reply on the playback-control subject.
+PlaybackControlReply = Annotated[
+    PlaybackControlAccepted | PlaybackControlRefused | PlaybackControlFailed,
+    Field(discriminator="reply"),
+]
 
 
 class ValidationResult(BaseModel):

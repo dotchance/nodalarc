@@ -613,6 +613,58 @@ class TestSessionContextNetworkIdentity:
         assert active_id in ctx.nodes
 
 
+class TestPlaybackRoute:
+    """VS-API relays a playback command to OME and answers OME's verdict on it."""
+
+    @staticmethod
+    def _relay(monkeypatch, reply):
+        from types import SimpleNamespace
+
+        import vs_api.main as m
+
+        class _OmeOnNats:
+            async def request(self, subject, payload, timeout):
+                return SimpleNamespace(data=reply.model_dump_json().encode())
+
+        ctx = SessionContext.__new__(SessionContext)
+        ctx._init_state_only()
+        monkeypatch.setattr(m, "_API_KEY", "")
+        monkeypatch.setattr(m, "_nats_connection", _OmeOnNats())
+        monkeypatch.setattr(m, "_active_context", ctx)
+        return TestClient(m.app), ctx
+
+    def test_a_command_ome_refuses_answers_its_reason(self, monkeypatch):
+        from nodalarc.models.events import PlaybackControlRefused
+
+        client, ctx = self._relay(
+            monkeypatch,
+            PlaybackControlRefused(reason="seeking", message="Cannot pause during the seek"),
+        )
+
+        response = client.post("/api/v1/playback", json={"action": "pause"})
+
+        assert response.status_code == 409
+        assert response.json() == {
+            "code": "playback.seeking",
+            "message": "Cannot pause during the seek",
+        }
+        assert ctx.playback_paused is False
+
+    def test_an_accepted_speed_is_the_speed_the_state_reports(self, monkeypatch):
+        from nodalarc.models.events import PlaybackControlAccepted, PlaybackState
+
+        client, ctx = self._relay(
+            monkeypatch,
+            PlaybackControlAccepted(state=PlaybackState(epoch_id=3, state="playing")),
+        )
+
+        response = client.post("/api/v1/playback", json={"action": "set_speed", "factor": 10.0})
+
+        assert response.status_code == 200
+        assert response.json() == {"epoch_id": 3, "state": "playing"}
+        assert (ctx.playback_speed, ctx.playback_paused) == (10.0, False)
+
+
 class TestStateSnapshot:
     """Test that SessionContext state manipulation produces correct snapshots."""
 

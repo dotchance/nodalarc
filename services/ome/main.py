@@ -14,12 +14,20 @@ import os
 import time
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, NamedTuple
+from typing import TYPE_CHECKING, Literal, NamedTuple
 
 from nodal.logging import configure as _configure_logging
 from nodal.logging import connect as _connect_logging
 from nodalarc.link_metadata import LinkRuleMetadata
-from nodalarc.models.events import OpsEvent, PlaybackControlCommand, SchedulingCheckpoint
+from nodalarc.models.events import (
+    OpsEvent,
+    PlaybackControlAccepted,
+    PlaybackControlCommand,
+    PlaybackControlFailed,
+    PlaybackControlRefused,
+    PlaybackState,
+    SchedulingCheckpoint,
+)
 from nodalarc.models.ome_lifecycle import (
     MbbPairAuthority,
     MbbTeardownLifecycleDetails,
@@ -276,19 +284,11 @@ _initial_epoch_committed: bool = (
 )
 
 
-def _playback_control_state() -> str:
-    if not _initial_epoch_committed:
-        return "bootstrapping"
-    if _seeking:
-        return "seeking"
-    return "paused" if _paused else "playing"
-
-
 async def _handle_playback_control_command(
     cmd: PlaybackControlCommand,
     publish_playback_state,
-) -> dict:
-    """Apply one playback-control command and return the API reply.
+) -> PlaybackControlAccepted | PlaybackControlRefused:
+    """Apply one playback-control command and return OME's reply.
 
     Playback control owns operator intent only. The out-of-band
     ``PlaybackState(seeking)`` publish is deliberate: it is the epoch-boundary
@@ -300,28 +300,16 @@ async def _handle_playback_control_command(
     global _time_accel, _paused, _seeking, _seek_target, _epoch_id
 
     action = cmd.action
-    if not _initial_epoch_committed and action in (
-        "pause",
-        "resume",
-        "set_speed",
-        "seek",
-    ):
-        return {
-            "error": "session bootstrapping; retry after ready",
-            "state": "bootstrapping",
-            "paused": _paused,
-            "speed": _time_accel,
-            "epoch_id": _epoch_id,
-        }
+    if not _initial_epoch_committed:
+        return PlaybackControlRefused(
+            reason="bootstrapping",
+            message="The session clock has not committed its first epoch; retry once it is ready",
+        )
 
     if _seeking and action in ("pause", "resume", "set_speed"):
-        return {
-            "error": f"cannot {action} during seek (epoch_id={_epoch_id})",
-            "state": "seeking",
-            "paused": _paused,
-            "speed": _time_accel,
-            "epoch_id": _epoch_id,
-        }
+        return PlaybackControlRefused(
+            reason="seeking", message=f"Cannot {action} during the seek to epoch {_epoch_id}"
+        )
 
     if action == "pause":
         _paused = True
@@ -336,11 +324,10 @@ async def _handle_playback_control_command(
             raise ValueError("set_speed requires factor")
         factor = float(cmd.factor)
         if factor < MIN_TIME_ACCEL or factor > MAX_TIME_ACCEL:
-            return {
-                "error": f"factor {factor} out of range [{MIN_TIME_ACCEL}, {MAX_TIME_ACCEL}]",
-                "paused": _paused,
-                "speed": _time_accel,
-            }
+            return PlaybackControlRefused(
+                reason="speed_out_of_range",
+                message=f"Speed {factor} is outside [{MIN_TIME_ACCEL}, {MAX_TIME_ACCEL}]",
+            )
         _time_accel = factor
         logging.info("Playback speed set to %.1fx", factor)
     elif action == "seek":
@@ -354,21 +341,11 @@ async def _handle_playback_control_command(
         await publish_playback_state("seeking")
         target_iso = datetime.fromtimestamp(_seek_target, UTC).isoformat()
         logging.info("Seek requested: %s epoch_id=%d (auto-resumed)", target_iso, _epoch_id)
-    elif action == "get_status":
-        pass
-    else:
-        return {
-            "error": f"unknown action: {action}",
-            "paused": _paused,
-            "speed": _time_accel,
-        }
 
-    return {
-        "paused": _paused,
-        "speed": _time_accel,
-        "epoch_id": _epoch_id,
-        "state": _playback_control_state(),
-    }
+    state: Literal["seeking", "playing", "paused"] = (
+        "seeking" if _seeking else "paused" if _paused else "playing"
+    )
+    return PlaybackControlAccepted(state=PlaybackState(epoch_id=_epoch_id, state=state))
 
 
 def run(
@@ -449,11 +426,9 @@ async def _nats_publisher_loop(
     them each tick.
     """
     import asyncio
-    import json
     import queue
 
     import nats
-    from nodalarc.models.events import PlaybackState
     from nodalarc.nats_channels import (
         NATS_CONNECT_OPTIONS,
         SUBJECT_PLAYBACK_CONTROL,
@@ -489,13 +464,16 @@ async def _nats_publisher_loop(
     # --- Playback control subscriber ---
 
     async def _handle_playback(msg) -> None:
+        reply: PlaybackControlAccepted | PlaybackControlRefused | PlaybackControlFailed
         try:
             cmd = PlaybackControlCommand.model_validate_json(msg.data)
             reply = await _handle_playback_control_command(cmd, _publish_playback_state)
-            await msg.respond(json.dumps(reply).encode())
-        except Exception as exc:
-            logging.error("Playback control error: %s", exc)
-            await msg.respond(json.dumps({"error": str(exc)}).encode())
+        except Exception:
+            logging.exception("Playback control failed")
+            reply = PlaybackControlFailed(
+                message="OME failed while handling the playback command; see the OME log"
+            )
+        await msg.respond(reply.model_dump_json().encode())
 
     await nc.subscribe(SUBJECT_PLAYBACK_CONTROL, cb=_handle_playback)
     logging.debug("OME playback control active on %s", SUBJECT_PLAYBACK_CONTROL)

@@ -2,6 +2,7 @@
 // Licensed under the Apache License, Version 2.0. See LICENSE file.
 import { useState, useCallback, useEffect } from "react";
 import { REST_URL, authHeaders } from "../config";
+import type { PlaybackStateMsg } from "../sim/ephemeris";
 
 interface PlaybackState {
   paused: boolean;
@@ -40,9 +41,11 @@ export function usePlayback(snapshotPaused?: boolean, snapshotSpeed?: number): P
         headers: authHeaders({ "Content-Type": "application/json" }),
         body: JSON.stringify(body),
       });
-      const data = await res.json();
-      if (data.paused !== undefined) setPaused(data.paused);
-      if (data.speed !== undefined) setSpeedState(data.speed);
+      // A refused command changed nothing; the snapshot keeps showing the clock's state.
+      if (!res.ok) return;
+      const answer = (await res.json()) as PlaybackStateMsg;
+      setPaused(answer.state === "paused");
+      if (typeof body.factor === "number") setSpeedState(body.factor);
     } catch {
       // Non-fatal
     } finally {

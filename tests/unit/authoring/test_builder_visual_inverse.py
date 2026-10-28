@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from copy import deepcopy
 from pathlib import Path
+from typing import Any
 
 import pytest
 import yaml
@@ -21,8 +23,9 @@ from nodalarc.models.builder_visual_api import (
     BuilderVisualDraftOpenRequest,
     BuilderVisualWorkspace,
 )
-from nodalarc.models.segment_session import SegmentSessionConfig
-from pydantic import ValidationError
+from nodalarc.models.link_rules import LinkRule
+from nodalarc.models.segment_session import RoutingBoundary, RoutingDomain, SegmentSessionConfig
+from pydantic import BaseModel, ValidationError
 from vs_api.builder_compiler import canonicalize_persisted_configuration
 from vs_api.builder_session_service import save_builder_session
 from vs_api.builder_visual_draft import (
@@ -31,6 +34,12 @@ from vs_api.builder_visual_draft import (
     _applied_control_tree,
     _assemble_structured,
     _is_builder_owned_component_ref,
+    _link_projection,
+    _link_rule_document,
+    _routing_boundary_documents,
+    _routing_boundary_projection,
+    _routing_domain_document,
+    _routing_domain_projection,
     _workspace_from_applied_session,
 )
 from vs_api.catalog_context import CatalogContext
@@ -104,6 +113,127 @@ def test_open_projects_and_no_edit_compiles_every_shipped_session_canonically(
 
     assert compiled.assembly_issues == ()
     assert compiled.compile_result.canonical_session_json == expected.canonical_json
+
+
+def _canonical(model: BaseModel) -> Any:
+    return model.model_dump(mode="json", by_alias=True, exclude_none=True)
+
+
+@pytest.mark.parametrize("session_path", SHIPPED_SESSIONS, ids=lambda path: path.stem)
+def test_every_shipped_object_offered_a_card_saves_back_unchanged(session_path: Path) -> None:
+    canonical: dict[str, Any] = canonicalize_persisted_configuration(
+        CatalogRef(f"nodalarc:sessions/{session_path.name}"),
+        yaml.safe_load(session_path.read_bytes()),
+    ).canonical_json
+    session = SegmentSessionConfig.model_validate(canonical)
+    routing = canonical.get("routing", {})
+
+    for rule, saved_rule in zip(
+        session.link_rules or (), canonical.get("link_rules", []), strict=True
+    ):
+        if (card := _link_projection(rule)) is not None:
+            written, issues = _link_rule_document(card)
+            assert issues == ()
+            assert _canonical(LinkRule.model_validate(written)) == saved_rule
+    for domain, saved_domain in zip(
+        session.routing.domains if session.routing is not None else (),
+        routing.get("domains", []),
+        strict=True,
+    ):
+        if (domain_card := _routing_domain_projection(domain)) is not None:
+            written, issues = _routing_domain_document(domain_card)
+            assert issues == ()
+            assert _canonical(RoutingDomain.model_validate(written)) == saved_domain
+    for index, (boundary, saved_boundary) in enumerate(
+        zip(
+            session.routing.boundaries or () if session.routing is not None else (),
+            routing.get("boundaries", []),
+            strict=True,
+        )
+    ):
+        if (boundary_card := _routing_boundary_projection(boundary, index=index)) is not None:
+            written_list, issues = _routing_boundary_documents((boundary_card,))
+            assert issues == ()
+            assert _canonical(RoutingBoundary.model_validate(written_list[0])) == saved_boundary
+
+
+def _isl_rule(**fields: Any) -> dict[str, Any]:
+    endpoint = {
+        "select": {"segment": "leo"},
+        "terminal": {"all": [{"role": "isl"}, {"medium": "optical"}]},
+    }
+    return {
+        "id": "leo_isl",
+        "topology": {"mode": "nearest_n", "n": 2},
+        "endpoints": [endpoint, endpoint],
+        **fields,
+    }
+
+
+def _boundary(**export_fields: Any) -> dict[str, Any]:
+    def export(source: str, target: str) -> dict[str, Any]:
+        return {
+            "from": source,
+            "to": target,
+            "prefixes": {"aggregate_of": "originated"},
+            **export_fields,
+        }
+
+    return {
+        "over": "geo_relay",
+        "adapter": "static_ip",
+        "export": [export("earth_domain", "luna_domain"), export("luna_domain", "earth_domain")],
+    }
+
+
+_LEO_ISL_REORDERED = _isl_rule(
+    endpoints=[
+        {
+            "select": {"segment": "leo"},
+            "terminal": {"all": [{"medium": "optical"}, {"role": "isl"}]},
+        },
+        _isl_rule()["endpoints"][1],
+    ]
+)
+_DOMAIN = {"id": "earth_domain", "protocol": "isis", "area_assignment": {"strategy": "flat"}}
+_PROJECTIONS: dict[str, Callable[[dict[str, Any]], BaseModel | None]] = {
+    "rule": lambda document: _link_projection(LinkRule.model_validate(document)),
+    "domain": lambda document: _routing_domain_projection(RoutingDomain.model_validate(document)),
+    "boundary": lambda document: _routing_boundary_projection(
+        RoutingBoundary.model_validate(document), index=0
+    ),
+}
+
+
+@pytest.mark.parametrize(
+    ("kind", "card_shape", "rewritten_shape"),
+    [
+        pytest.param("rule", _isl_rule(), _LEO_ISL_REORDERED, id="reordered_terminal_predicates"),
+        pytest.param("rule", _isl_rule(), _isl_rule(constraints={}), id="empty_constraints"),
+        pytest.param("rule", _isl_rule(), _isl_rule(tags=[]), id="empty_tags"),
+        pytest.param(
+            "domain",
+            {**_DOMAIN, "selectors": [{"any": [{"segment": "leo"}, {"segment": "geo"}]}]},
+            {**_DOMAIN, "selectors": [{"segment": "leo"}, {"segment": "geo"}]},
+            id="two_top_level_domain_selectors",
+        ),
+        pytest.param(
+            "boundary",
+            _boundary(export_node_loopbacks=True),
+            _boundary(),
+            id="boundary_export_without_export_node_loopbacks",
+        ),
+    ],
+)
+def test_a_card_is_offered_only_for_the_shape_it_writes(
+    kind: str,
+    card_shape: dict[str, Any],
+    rewritten_shape: dict[str, Any],
+) -> None:
+    projection = _PROJECTIONS[kind]
+
+    assert projection(card_shape) is not None
+    assert projection(rewritten_shape) is None
 
 
 def test_a_workspace_preview_compiles_the_edit_and_accepts_nothing(

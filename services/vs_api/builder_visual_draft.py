@@ -1579,6 +1579,23 @@ def _terminal_selector_projection(
     return role, medium
 
 
+def _saves_unchanged(
+    original: BaseModel,
+    document: JsonValue,
+    issues: tuple[BuilderIssue, ...],
+) -> bool:
+    """Whether a card's grammar JSON saves as exactly the object the card was read from.
+
+    A card is offered only for such an object. Any other shape would be rewritten
+    in the card's own form by an edit to one of its fields.
+    """
+    if issues:
+        return False
+    saved = original.model_dump(mode="json", by_alias=True, exclude_none=True)
+    written = type(original).model_validate(document)
+    return written.model_dump(mode="json", by_alias=True, exclude_none=True) == saved
+
+
 def _link_projection(rule: LinkRule) -> BuilderVisualLinkRule | None:
     if not isinstance(rule.topology, VisibleCandidatesTopology | NearestNTopology):
         return None
@@ -1604,7 +1621,7 @@ def _link_projection(rule: LinkRule) -> BuilderVisualLinkRule | None:
                 min_elevation_deg=endpoint.min_elevation_deg,
             )
         )
-    return BuilderVisualLinkRule(
+    projected = BuilderVisualLinkRule(
         rule_id=rule.id,
         enabled=rule.enabled,
         a=endpoints[0],
@@ -1613,6 +1630,9 @@ def _link_projection(rule: LinkRule) -> BuilderVisualLinkRule | None:
         topology_n=rule.topology.n if isinstance(rule.topology, NearestNTopology) else None,
         max_range_km=rule.constraints.max_range_km if rule.constraints is not None else None,
     )
+    if not _saves_unchanged(rule, *_link_rule_document(projected)):
+        return None
+    return projected
 
 
 def _routing_member_segments(domain: RoutingDomain) -> tuple[str, ...] | None:
@@ -1641,13 +1661,16 @@ def _routing_domain_projection(domain: RoutingDomain) -> BuilderVisualRoutingDom
         hold_interval_s=domain.timers.hold_interval_s,
     ):
         return None
-    return BuilderVisualRoutingDomain(
+    projected = BuilderVisualRoutingDomain(
         domain_id=domain.id,
         protocol=domain.protocol,
         member_segment_ids=members,
         hello_interval_s=domain.timers.hello_interval_s if domain.timers is not None else None,
         hold_interval_s=domain.timers.hold_interval_s if domain.timers is not None else None,
     )
+    if not _saves_unchanged(domain, *_routing_domain_document(projected)):
+        return None
+    return projected
 
 
 def _routing_boundary_projection(
@@ -1671,7 +1694,7 @@ def _routing_boundary_projection(
         for export in boundary.export
     ):
         return None
-    return BuilderVisualRoutingBoundary(
+    projected = BuilderVisualRoutingBoundary(
         boundary_id=f"boundary-{index + 1}",
         over_rule_id=boundary.over,
         adapter=boundary.adapter,
@@ -1679,6 +1702,10 @@ def _routing_boundary_projection(
         to_domain_id=first.to,
         export_node_loopbacks=first_loopbacks is not False,
     )
+    documents, issues = _routing_boundary_documents((projected,))
+    if not _saves_unchanged(boundary, documents[0], issues):
+        return None
+    return projected
 
 
 def _projected_boundary_identity(

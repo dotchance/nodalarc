@@ -57,6 +57,7 @@ from nodalarc.models.builder_visual_api import (
     BuilderVisualControlMutationRequest,
     BuilderVisualCustomizeChainRequest,
     BuilderVisualCustomizeChainResult,
+    BuilderVisualDraftAcceptStateRequest,
     BuilderVisualDraftApplyEditsRequest,
     BuilderVisualDraftApplyEditsResult,
     BuilderVisualDraftApplyWorkspaceRequest,
@@ -164,6 +165,14 @@ class VisualDraftService(Protocol):
         available_node_count: int,
         preview_factory: PreviewFactory | None = None,
     ) -> BuilderVisualDraftApplyEditsResult: ...
+
+    def accept_state(
+        self,
+        request: BuilderVisualDraftAcceptStateRequest,
+        *,
+        available_node_count: int,
+        preview_factory: PreviewFactory | None = None,
+    ) -> BuilderVisualDraftAssemblyResult: ...
 
     def customize_chain(
         self,
@@ -653,6 +662,46 @@ def create_builder_router(services: BuilderRouterServices) -> APIRouter:
 
         try:
             return await run_in_threadpool(apply_edits)
+        except BuilderVisualDraftCommandError as error:
+            refusal = CatalogOperationRefusal(
+                code=error.code,
+                message=str(error),
+                ref=str(error.ref),
+                expected_revision=(
+                    str(error.expected_revision) if error.expected_revision is not None else None
+                ),
+                current_revision=(
+                    str(error.current_revision) if error.current_revision is not None else None
+                ),
+                cause_type=type(error).__name__,
+            )
+            return _catalog_refusal_response(CatalogAuthoringError(refusal))
+        except (CatalogRepositoryError, OSError) as error:
+            return _catalog_unavailable_response(error)
+
+    @router.post(
+        "/draft/accept-state",
+        response_model=BuilderVisualDraftAssemblyResult,
+        responses={
+            409: {"model": CatalogOperationRefusal},
+            422: {"model": CatalogOperationRefusal},
+            503: {"model": CatalogOperationRefusal},
+        },
+    )
+    async def accept_visual_draft_state(
+        request: BuilderVisualDraftAcceptStateRequest,
+        context: Context,
+        available_node_count: NodeCount,
+    ):
+        def accept_state() -> BuilderVisualDraftAssemblyResult:
+            return selected.visual_draft_service_factory(context).accept_state(
+                request,
+                available_node_count=available_node_count,
+                preview_factory=selected.preview_factory,
+            )
+
+        try:
+            return await run_in_threadpool(accept_state)
         except BuilderVisualDraftCommandError as error:
             refusal = CatalogOperationRefusal(
                 code=error.code,

@@ -646,6 +646,13 @@ export interface BuilderVisualCustomizeChainResult {
   readonly issues: ReadonlyArray<BuilderIssue>;
 }
 
+/** Accept a stored session with its proposals as the draft's next revision. Undo sends the state an accepted change replaced. Its session is validated as every accepted session is. The allocation history never shrinks. */
+export interface BuilderVisualDraftAcceptStateRequest {
+  readonly draft: BuilderVisualDraftEnvelope;
+  readonly expected_draft_revision: number;
+  readonly state: BuilderDraftState;
+}
+
 /**  */
 export type BuilderVisualDraftAffectedKind = "space" | "ground" | "routing_domain" | "boundary" | "link" | "ground_member";
 

@@ -29,6 +29,7 @@ from nodalarc.model_validation import Identifier, TerminalMedium
 from nodalarc.models.builder_api import (
     BuilderCompileResult,
     BuilderDraftEnvelope,
+    BuilderDraftState,
     BuilderEditAddress,
     BuilderIssue,
     BuilderMemberAddress,
@@ -1091,3 +1092,15 @@ class BuilderVisualDraftApplyEditsResult(_BuilderVisualModel):
         if self.applied != (self.assembly is not None):
             raise ValueError("an applied batch returns its assembly and a refused batch none")
         return self
+
+
+class BuilderVisualDraftAcceptStateRequest(_BuilderVisualModel):
+    """Accept a stored session with its proposals as the draft's next revision.
+
+    Undo sends the state an accepted change replaced. Its session is validated
+    as every accepted session is. The allocation history never shrinks.
+    """
+
+    draft: BuilderVisualDraftEnvelope
+    expected_draft_revision: int = Field(ge=0)
+    state: BuilderDraftState

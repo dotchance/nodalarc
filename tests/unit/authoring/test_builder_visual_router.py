@@ -495,6 +495,71 @@ def test_apply_edits_route_accepts_one_revision_and_answers_typed_refusals(
     assert empty_response.status_code == 422
 
 
+def test_accept_state_route_re_accepts_a_stored_state_and_answers_typed_refusals(
+    client: TestClient,
+) -> None:
+    opened = client.post(
+        "/api/v1/builder/draft/open",
+        json={"source_ref": "nodalarc:sessions/earth-leo-simple.yaml"},
+    ).json()
+    stored = {"session": opened["applied_session"], "catalog_documents": []}
+    rule = next(item for item in opened["applied_session"]["link_rules"] if item["id"] == "leo_isl")
+    applied = client.post(
+        "/api/v1/builder/draft/apply-edits",
+        json={
+            "draft": opened,
+            "expected_draft_revision": 0,
+            "edits": [
+                {
+                    "kind": "content",
+                    "address": {"kind": "member", "list_pointer": "/link_rules", "id": "leo_isl"},
+                    "base": rule,
+                    "working": {**rule, "constraints": {"max_range_km": 12345.0}},
+                }
+            ],
+        },
+    ).json()["assembly"]["visual_draft"]
+
+    accepted_response = client.post(
+        "/api/v1/builder/draft/accept-state",
+        json={"draft": applied, "expected_draft_revision": 1, "state": stored},
+    )
+    assert accepted_response.status_code == 200, accepted_response.text
+    accepted = accepted_response.json()
+    assert accepted["visual_draft"]["draft_revision"] == 2
+    assert accepted["visual_draft"]["applied_session"] == opened["applied_session"]
+    assert accepted["compile_result"]["canonical_session_json"] == opened["applied_session"]
+
+    stale_response = client.post(
+        "/api/v1/builder/draft/accept-state",
+        json={"draft": applied, "expected_draft_revision": 0, "state": stored},
+    )
+    assert stale_response.status_code == 409, stale_response.text
+    assert stale_response.json()["code"] == "catalog_authoring.stale_revision"
+
+    renamed = {
+        **opened["applied_session"],
+        "session": {**opened["applied_session"]["session"], "name": "another-session"},
+    }
+    invalid_response = client.post(
+        "/api/v1/builder/draft/accept-state",
+        json={"draft": applied, "expected_draft_revision": 1, "state": {"session": renamed}},
+    )
+    assert invalid_response.status_code == 422, invalid_response.text
+    assert invalid_response.json()["code"] == "catalog_authoring.invalid_graph"
+
+    created = client.post(
+        "/api/v1/builder/draft/new",
+        json={"session_name": "accept-state-without-a-session"},
+    ).json()
+    unaccepted_response = client.post(
+        "/api/v1/builder/draft/accept-state",
+        json={"draft": created, "expected_draft_revision": 0, "state": stored},
+    )
+    assert unaccepted_response.status_code == 422, unaccepted_response.text
+    assert unaccepted_response.json()["code"] == "catalog_authoring.invalid_graph"
+
+
 def test_customize_chain_requires_the_current_draft_revision(client: TestClient) -> None:
     opened = client.post(
         "/api/v1/builder/draft/open",

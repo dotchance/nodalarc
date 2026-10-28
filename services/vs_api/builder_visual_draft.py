@@ -63,6 +63,7 @@ from nodalarc.models.builder_visual_api import (
     BuilderVisualCustomizeChainEntry,
     BuilderVisualCustomizeChainRequest,
     BuilderVisualCustomizeChainResult,
+    BuilderVisualDraftAcceptStateRequest,
     BuilderVisualDraftApplyEditsRequest,
     BuilderVisualDraftApplyEditsResult,
     BuilderVisualDraftApplyWorkspaceRequest,
@@ -3415,6 +3416,7 @@ class BuilderVisualDraftService:
         return self._accept_session(
             draft,
             cast(SegmentSessionConfig, validated),
+            draft.catalog_documents,
             available_node_count=available_node_count,
             preview_factory=preview_factory,
         )
@@ -3480,29 +3482,82 @@ class BuilderVisualDraftService:
             assembly=self._accept_session(
                 draft,
                 cast(SegmentSessionConfig, validated),
+                draft.catalog_documents,
                 available_node_count=available_node_count,
                 preview_factory=preview_factory,
             ),
+        )
+
+    def accept_state(
+        self,
+        request: BuilderVisualDraftAcceptStateRequest,
+        *,
+        available_node_count: int,
+        preview_factory: PreviewFactory | None = None,
+    ) -> BuilderVisualDraftAssemblyResult:
+        """Accept a stored session with its proposals as the draft's next revision.
+
+        Undo re-accepts the state an accepted change replaced. The stored
+        proposals replace the draft's. The allocation history keeps every id it
+        held. Undo therefore never frees an id.
+        """
+
+        if not isinstance(request, BuilderVisualDraftAcceptStateRequest):
+            raise TypeError("request must be a BuilderVisualDraftAcceptStateRequest")
+        draft = request.draft
+        _assert_visual_draft_ownership(draft)
+        if request.expected_draft_revision != draft.draft_revision:
+            raise self._command_error(
+                draft,
+                "Visual draft revision changed before the stored state was accepted",
+                code="catalog_authoring.stale_revision",
+                expected_revision=request.expected_draft_revision,
+                current_revision=draft.draft_revision,
+            )
+        if draft.projection_status != "applied" or draft.applied_session is None:
+            raise self._command_error(
+                draft,
+                "Accepting a stored state requires a fully applied draft revision",
+                code="catalog_authoring.invalid_graph",
+            )
+        try:
+            _wrapper, validated = validate_referenced_configuration_document(
+                draft.target_ref,
+                request.state.session,
+            )
+        except (ValidationError, TypeError, ValueError) as error:
+            raise self._command_error(
+                draft,
+                f"The stored state is not a valid session: {error}",
+                code="catalog_authoring.invalid_graph",
+            ) from error
+        return self._accept_session(
+            draft,
+            cast(SegmentSessionConfig, validated),
+            request.state.catalog_documents,
+            available_node_count=available_node_count,
+            preview_factory=preview_factory,
         )
 
     def _accept_session(
         self,
         draft: BuilderVisualDraftEnvelope,
         session: SegmentSessionConfig,
+        proposals: tuple[BuilderProposedCatalogDocument, ...],
         *,
         available_node_count: int,
         preview_factory: PreviewFactory | None,
     ) -> BuilderVisualDraftAssemblyResult:
         """Accept a validated session as the draft's next revision and compile it.
 
-        Proposals the session no longer reaches are dropped. The allocation
+        Proposals the session does not reach are dropped. The allocation
         history gains the ids the session holds and never loses one.
         """
 
         snapshot = self._context.repository.snapshot(self._context.scope)
         reachable_proposals, catalog_facts = _reachable_projection_inputs(
             session,
-            draft.catalog_documents,
+            proposals,
             snapshot,
         )
         accepted_session = cast(

@@ -16,10 +16,12 @@ from nodalarc.filesystem_catalog_repository import FilesystemCatalogRepository
 from nodalarc.models.builder_api import BuilderIssue
 from nodalarc.models.builder_visual_api import (
     BuilderVisualCustomizeChainRequest,
+    BuilderVisualDraftAcceptStateRequest,
     BuilderVisualDraftApplyEditsRequest,
     BuilderVisualDraftApplyEditsResult,
     BuilderVisualDraftApplyWorkspaceRequest,
     BuilderVisualDraftApplyYamlRequest,
+    BuilderVisualDraftAssemblyResult,
     BuilderVisualDraftCommandRequest,
     BuilderVisualDraftCommandResult,
     BuilderVisualDraftCompileRequest,
@@ -3432,6 +3434,150 @@ def test_apply_edits_is_revision_fenced_and_needs_an_accepted_valid_session(
             [{"kind": "content", "address": _BOUNDARIES_ADDRESS, "working": [boundary]}],
         )
     assert invalid.value.code == "catalog_authoring.invalid_graph"
+
+
+def _stored_state(draft: BuilderVisualDraftEnvelope) -> dict[str, Any]:
+    """What an undo entry holds: the accepted session and its proposals."""
+    return {
+        "session": draft.applied_session,
+        "catalog_documents": [
+            json.loads(proposal.model_dump_json()) for proposal in draft.catalog_documents
+        ],
+    }
+
+
+def _accept_state(
+    service: BuilderVisualDraftService,
+    draft: BuilderVisualDraftEnvelope,
+    state: dict[str, Any],
+    *,
+    expected_draft_revision: int | None = None,
+) -> BuilderVisualDraftAssemblyResult:
+    """One re-accept sent as the page sends it: JSON validated into the request."""
+    body = {
+        "draft": json.loads(draft.model_dump_json()),
+        "expected_draft_revision": (
+            draft.draft_revision if expected_draft_revision is None else expected_draft_revision
+        ),
+        "state": state,
+    }
+    return service.accept_state(
+        BuilderVisualDraftAcceptStateRequest.model_validate_json(json.dumps(body)),
+        available_node_count=1_000_000,
+        preview_factory=_preview,
+    )
+
+
+def test_accept_state_re_accepts_a_stored_session_and_its_proposals(
+    service: BuilderVisualDraftService,
+) -> None:
+    opened = service.open(
+        BuilderVisualDraftOpenRequest(source_ref="nodalarc:sessions/earth-leo-simple.yaml")
+    )
+    assert opened.applied_session is not None
+    customized = service.customize_chain(
+        BuilderVisualCustomizeChainRequest(
+            draft=opened,
+            expected_draft_revision=opened.draft_revision,
+            segment_id="leo",
+            leaf_ref="nodalarc:terminals/rf/rf-ka-starlink-space-gateway.yaml",
+        )
+    )
+    assert customized.applied is True
+    assert customized.draft.catalog_documents
+    revision = customized.draft.draft_revision
+
+    # Undo of the customize: the opened state becomes the next revision.
+    undone = _accept_state(service, customized.draft, _stored_state(opened))
+    reverted = undone.visual_draft
+    expected = canonicalize_persisted_configuration(opened.target_ref, opened.applied_session)
+    assert reverted.draft_revision == reverted.applied_revision == revision + 1
+    assert reverted.projection_status == "applied"
+    assert reverted.control_tree is not None
+    assert reverted.control_tree.projection_revision == reverted.applied_revision
+    assert reverted.applied_session == opened.applied_session
+    assert reverted.session_yaml == expected.yaml_bytes.decode("utf-8")
+    assert reverted.catalog_documents == ()
+    assert undone.compile_result.save_verdict.allowed is True, undone.compile_result.issues
+    assert undone.compile_result.canonical_session_json == expected.canonical_json
+
+    # The customized state comes back with its forks, which the draft no longer holds.
+    redone = _accept_state(service, reverted, _stored_state(customized.draft))
+    restored = redone.visual_draft
+    assert restored.draft_revision == revision + 2
+    assert restored.applied_session == customized.draft.applied_session
+    assert restored.catalog_documents == customized.draft.catalog_documents
+    assert redone.compile_result.save_verdict.allowed is True, redone.compile_result.issues
+
+
+def test_accept_state_never_frees_an_allocated_id(service: BuilderVisualDraftService) -> None:
+    opened = service.open(
+        BuilderVisualDraftOpenRequest(source_ref="nodalarc:sessions/earth-leo-simple.yaml")
+    )
+
+    def place(draft: BuilderVisualDraftEnvelope) -> BuilderVisualDraftCommandResult:
+        return service.apply_command(
+            BuilderVisualDraftCommandRequest(
+                draft=draft,
+                expected_draft_revision=draft.draft_revision,
+                command={
+                    "operation": "place_space_reference",
+                    "source_ref": "nodalarc:constellations/earth/leo/earth-leo-ring-36.yaml",
+                },
+            ),
+            available_node_count=1_000_000,
+            preview_factory=_preview,
+        )
+
+    placed = place(opened)
+    assert placed.affected_id == "space-1"
+    assert "space-1" not in opened.reserved_authoring_ids
+
+    undone = _accept_state(service, placed.draft, _stored_state(opened)).visual_draft
+    assert undone.applied_session == opened.applied_session
+    history = placed.draft.reserved_authoring_ids
+    assert undone.reserved_authoring_ids[: len(history)] == history
+
+    # The undone segment's id stays taken, so the next placement mints another.
+    assert place(undone).affected_id == "space-2"
+
+
+def test_accept_state_is_revision_fenced_and_refuses_an_invalid_state(
+    service: BuilderVisualDraftService,
+) -> None:
+    opened = service.open(
+        BuilderVisualDraftOpenRequest(source_ref="nodalarc:sessions/earth-leo-simple.yaml")
+    )
+    assert opened.applied_session is not None
+    state = _stored_state(opened)
+
+    with pytest.raises(BuilderVisualDraftCommandError) as stale:
+        _accept_state(
+            service,
+            opened,
+            state,
+            expected_draft_revision=opened.draft_revision + 1,
+        )
+    assert stale.value.code == "catalog_authoring.stale_revision"
+
+    created = service.create(BuilderVisualDraftCreateRequest(session_name="no-accepted-session"))
+    with pytest.raises(BuilderVisualDraftCommandError, match="fully applied draft") as unaccepted:
+        _accept_state(service, created, state)
+    assert unaccepted.value.code == "catalog_authoring.invalid_graph"
+
+    session = opened.applied_session
+    renamed = {**session, "session": {**session["session"], "name": "another-session"}}
+    untopologized = {
+        **session,
+        "link_rules": [
+            {key: value for key, value in rule.items() if key != "topology"}
+            for rule in session["link_rules"]
+        ],
+    }
+    for invalid in (renamed, untopologized):
+        with pytest.raises(BuilderVisualDraftCommandError, match="not a valid session") as refused:
+            _accept_state(service, opened, {"session": invalid})
+        assert refused.value.code == "catalog_authoring.invalid_graph"
 
 
 def test_graphical_boundary_edit_preserves_unprojected_and_sibling_boundaries(

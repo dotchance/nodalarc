@@ -49,9 +49,9 @@ import { placedSegments, type Workspace } from "./workspace";
 /** One change of a link rule: its whole card value, or a field-editor batch. */
 export type LinkRuleChange = BuilderVisualLinkRuleWidget | BuilderVisualObjectControlEdit;
 
-/** Why a segment change waits while the rule has an edit. */
-const REPOINT_WAITS_FOR_EDIT =
-  "A segment change starts from the accepted rule. Apply or discard this rule's pending edit first.";
+/** Why a segment change waits while a change of the rule is checked. */
+const REPOINT_WAITS_FOR_CHECK =
+  "A segment change is sent with this rule's edit. Wait until the edit is checked.";
 
 interface LinkRuleEditorProps {
   workspace: Workspace;
@@ -341,9 +341,9 @@ function LinkRuleCard({
   send: (rule: BuilderVisualLinkRule) => Promise<boolean>;
 }) {
   const edits = useCardValueEdits(card, send);
-  // A segment change and a removal start from the accepted rule, so they wait
-  // while an edit of the rule is pending or still being checked.
-  const edited = editPending || edits.checking;
+  // A segment change is sent with the rule's pending edit, so it waits only
+  // while a change of the rule is still being checked. A removal starts from
+  // the accepted rule, so it also waits while an edit of the rule is pending.
   return (
     <>
       <LinkRuleEditor
@@ -354,11 +354,11 @@ function LinkRuleCard({
           edits.change((rule) => ({ ...rule, [side]: { ...rule[side], ...patch } }), typed)
         }
         onRepoint={(side, newSegmentId) =>
-          edited
-            ? Promise.reject(new Error(REPOINT_WAITS_FOR_EDIT))
+          edits.checking
+            ? Promise.reject(new Error(REPOINT_WAITS_FOR_CHECK))
             : onRepoint(side, newSegmentId)
         }
-        onRemove={edited ? null : onRemove}
+        onRemove={editPending || edits.checking ? null : onRemove}
       />
       {edits.checking && <div className="builder-site-derived">Checking the edit…</div>}
       {edits.error && <div className="builder-warning">{edits.error}</div>}

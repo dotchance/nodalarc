@@ -1294,9 +1294,10 @@ export function BuilderView({
     }));
   };
 
-  /** Run one command over `sourceWorkspace`; the backend accepts it as the
-   *  next revision, and the twin is re-seeded from it unless the user changed
-   *  the twin since `startedFrom`. */
+  /** Run one command over `sourceWorkspace`. When the backend accepts it as
+   *  the next revision, the twin is re-seeded from it unless the user changed
+   *  the twin since `startedFrom`. A command that created pending edits
+   *  accepted nothing, and the twin stays. */
   const executeVisualCommand = async (
     command: BuilderVisualDraftCommandRequest["command"],
     sourceWorkspace: Workspace,
@@ -1317,7 +1318,9 @@ export function BuilderView({
         await applyWorkspace(sourceWorkspace);
       }
       const result = await runVisualCommand(command);
-      adoptAccepted(result.draft, startedFrom, `backend visual command: ${result.operation}`);
+      if (result.created_edits.length === 0) {
+        adoptAccepted(result.draft, startedFrom, `backend visual command: ${result.operation}`);
+      }
       return result;
     } finally {
       visualCommandInFlight.current = false;
@@ -1929,6 +1932,8 @@ export function BuilderView({
               segments={world?.segments ?? null}
               allocation={world?.allocations.find((a) => a.rule_id === rule.id) ?? null}
               onRepoint={async (side, newSegmentId) => {
+                // The rule's pending edit goes with the command, which
+                // accepts both as one revision or returns them as one edit.
                 const result = await applyWorkspaceCommand({
                   operation: "rederive_link",
                   rule_id: rule.id,

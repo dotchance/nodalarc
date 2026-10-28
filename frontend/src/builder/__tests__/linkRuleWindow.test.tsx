@@ -246,7 +246,7 @@ describe("the card of a rule the backend states a card value for", () => {
 });
 
 describe("a segment change and a removal of a rule with an edit", () => {
-  it("wait while the rule's edit is pending, and run on the accepted rule otherwise", async () => {
+  it("a segment change goes with the rule's pending edit; a removal waits while it is pending", async () => {
     const onRepoint = vi.fn(async () => "rederived");
     const onRemove = vi.fn();
     const backend = { edit: vi.fn(), describe: NOT_DESCRIBED };
@@ -275,13 +275,39 @@ describe("a segment change and a removal of a rule with an edit", () => {
     fireEvent.change(screen.getByLabelText("Endpoint A segment"), { target: { value: "geo" } });
     await act(async () => undefined);
 
-    expect(onRepoint).not.toHaveBeenCalled();
-    expect(screen.getByTestId("rederive-note").textContent).toBe(
-      "A segment change starts from the accepted rule. Apply or discard this rule's pending edit first.",
-    );
+    expect(onRepoint).toHaveBeenCalledWith("a", "geo");
+    expect(screen.getByTestId("rederive-note").textContent).toBe("rederived");
     expect((screen.getByRole("button", { name: "Remove rule" }) as HTMLButtonElement).disabled).toBe(
       true,
     );
+  });
+
+  it("a segment change waits while a change of the rule is checked", async () => {
+    const onRepoint = vi.fn(async () => "rederived");
+    const { waiting, backend } = deferredBackend();
+    render(
+      <RuleWindow
+        accepted={acceptedRule("leo-isl", ["leo"], CARD)}
+        backend={backend}
+        onRepoint={onRepoint}
+      />,
+    );
+    fireEvent.change(screen.getByLabelText("Endpoint A terminal role"), {
+      target: { value: "crosslink" },
+    });
+    fireEvent.change(screen.getByLabelText("Endpoint A segment"), { target: { value: "geo" } });
+    await act(async () => undefined);
+
+    expect(onRepoint).not.toHaveBeenCalled();
+    expect(screen.getByTestId("rederive-note").textContent).toBe(
+      "A segment change is sent with this rule's edit. Wait until the edit is checked.",
+    );
+
+    await waiting[0]!.settle(answer({ ...CARD, a: { ...CARD.a, role: "crosslink" } }));
+    fireEvent.change(screen.getByLabelText("Endpoint A segment"), { target: { value: "geo" } });
+    await act(async () => undefined);
+
+    expect(onRepoint).toHaveBeenCalledWith("a", "geo");
   });
 });
 

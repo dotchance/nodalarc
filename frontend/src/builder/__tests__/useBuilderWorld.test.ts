@@ -7,12 +7,14 @@ import type {
   BuilderIssue,
   BuilderPendingEditOutcome,
   BuilderVisualDraftAssemblyResult,
+  BuilderVisualDraftCommandResult,
   BuilderVisualDraftEnvelope,
   BuilderVisualLinkRuleWidget,
   BuilderVisualObjectEditResult,
   CatalogDocumentSummary,
   JsonValue,
 } from "../generated/builderApi";
+import { domainAddress, workingIssue } from "./fixtures/listingFixtures";
 import { newWorkspace } from "./fixtures/workspaceFixtures";
 
 vi.mock("../../config", () => ({
@@ -177,6 +179,27 @@ function requestsTo(fetchMock: ReturnType<typeof vi.fn>, path: string): unknown[
   return fetchMock.mock.calls
     .filter(([url]) => String(url).includes(path))
     .map(([, init]) => JSON.parse(String((init as RequestInit).body)));
+}
+
+/** The backend's answer to a command: `draft` is the next accepted revision,
+ *  or, when the answer names created edits, the draft the command left as it
+ *  was. */
+function commandAnswer(
+  draft: BuilderVisualDraftEnvelope,
+  answer: Partial<BuilderVisualDraftCommandResult> = {},
+): BuilderVisualDraftCommandResult {
+  const created = answer.created_edits ?? [];
+  return {
+    operation: "add_generated_space",
+    base_draft_revision: created.length > 0 ? draft.draft_revision : draft.draft_revision - 1,
+    draft,
+    affected_kind: "space",
+    affected_id: "space-1",
+    scheduling_preset: null,
+    notice: null,
+    created_edits: created,
+    ...answer,
+  };
 }
 
 /** Open `opened` the way the page does: open the stored session, then compile it. */
@@ -753,9 +776,7 @@ describe("pending edit preview", () => {
     const commanded = linkDraft(5);
     const compile = holdCompile((url) => {
       if (url.includes("/builder/draft/command")) {
-        return Promise.resolve(
-          response({ draft: commanded, draft_revision: 5, affected_id: "space-1" }),
-        );
+        return Promise.resolve(response(commandAnswer(commanded)));
       }
       if (url.includes("/builder/draft/compile")) {
         return Promise.resolve(response(assembly(commanded)));
@@ -819,9 +840,7 @@ describe("pending edit preview", () => {
     };
     fetchMock.mockImplementation((url: string) => {
       if (url.includes("/builder/draft/command")) {
-        return Promise.resolve(
-          response({ draft: pendingAuthoring, draft_revision: 5, affected_id: "space-1" }),
-        );
+        return Promise.resolve(response(commandAnswer(pendingAuthoring)));
       }
       if (url.includes("/builder/draft/compile")) {
         return Promise.resolve(response(assembly(pendingAuthoring)));
@@ -976,9 +995,7 @@ describe("applying, discarding and removing pending edits", () => {
     const commanded = acceptedLater(5, [disabledRule]);
     fetchMock.mockImplementation((url: string) => {
       if (url.includes("/builder/draft/command")) {
-        return Promise.resolve(
-          response({ draft: commanded, draft_revision: 5, affected_id: "space-1" }),
-        );
+        return Promise.resolve(response(commandAnswer(commanded)));
       }
       if (url.includes("/builder/draft/compile")) {
         return Promise.resolve(response(assembly(commanded)));
@@ -1124,6 +1141,383 @@ describe("applying, discarding and removing pending edits", () => {
 
     expect(requestsTo(fetchMock, "/builder/draft/apply-edits")).toEqual([]);
     expect(result.current.pendingEdits.size).toBe(1);
+  });
+});
+
+describe("commands and the pending edits", () => {
+  let fetchMock: ReturnType<typeof vi.fn>;
+
+  beforeEach(() => {
+    fetchMock = vi.fn((url: string) => {
+      if (url.includes("/builder/catalog/list")) return Promise.resolve(sessionsResponse);
+      throw new Error(`unexpected request ${url}`);
+    });
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+  });
+
+  const GEO_RULE: Readonly<Record<string, JsonValue>> = { ...ACCEPTED_RULE, id: "geo_isl" };
+  const GEO_ADDRESS = { kind: "member", list_pointer: "/link_rules", id: "geo_isl" } as const;
+  const REDERIVE = {
+    operation: "rederive_link",
+    rule_id: "leo_isl",
+    side: "a",
+    segment_id: "geo",
+  } as const;
+
+  /** A draft whose accepted session holds `rules`. */
+  function rulesDraft(
+    revision: number,
+    rules: ReadonlyArray<Readonly<Record<string, JsonValue>>>,
+  ): BuilderVisualDraftEnvelope {
+    return {
+      ...linkDraft(revision),
+      session_yaml: `session:\n  name: revision-${revision}\n`,
+      applied_session: { session: { name: "coordinated" }, link_rules: [...rules] },
+    };
+  }
+
+  /** The backend's description of `working` at `address`, which no card states. */
+  function described(
+    address: BuilderVisualObjectEditResult["address"],
+    working: BuilderVisualObjectEditResult["working"],
+    issues: ReadonlyArray<BuilderIssue> = [],
+  ): BuilderVisualObjectEditResult {
+    return {
+      address,
+      working,
+      widget: null,
+      control_tree: {
+        projection_revision: 4,
+        root: {
+          control_id: "object",
+          json_pointer: "",
+          label: "Object",
+          required: true,
+          present: true,
+        },
+      },
+      issues,
+    };
+  }
+
+  /** Hold an edit of `address`, which the backend answers with `answer`. */
+  async function holdEdit(
+    hook: { current: ReturnType<typeof useBuilderWorld> },
+    address: BuilderVisualObjectEditResult["address"],
+    change: Parameters<ReturnType<typeof useBuilderWorld>["editPendingObject"]>[1],
+    answer: BuilderVisualObjectEditResult,
+  ): Promise<void> {
+    fetchMock.mockImplementation((url: string) => {
+      if (url.includes("/builder/draft/object-edit")) return Promise.resolve(response(answer));
+      throw new Error(`unexpected request ${url}`);
+    });
+    await act(async () => {
+      await hook.current.editPendingObject(address, change);
+    });
+  }
+
+  /** The rule with its second endpoint moved to `geo` and no terminal there yet. */
+  const INCOMPLETE_RULE: Readonly<Record<string, JsonValue>> = {
+    ...ACCEPTED_RULE,
+    max_range_km: 12345,
+    endpoints: [
+      { select: { segment: "leo" }, terminal: { all: [{ role: "isl" }, { medium: "optical" }] } },
+      { select: { segment: "geo" } },
+    ],
+  };
+
+  it("sends every pending edit with a command; an edit it did not start from stays pending", async () => {
+    const { result } = renderHook(() => useBuilderWorld());
+    await act(async () => undefined);
+    await openAsThePageDoes(result, fetchMock, linkDraft());
+    await holdEdit(result, RULE_ADDRESS, ruleCard(12345), ruleAnswer(12345));
+    const held = result.current.pendingEdits.get(RULE_KEY);
+    const commanded = linkDraft(5);
+    fetchMock.mockImplementation((url: string) => {
+      if (url.includes("/builder/draft/command")) {
+        return Promise.resolve(
+          response(
+            commandAnswer(commanded, {
+              operation: "add_routing_domain",
+              affected_kind: "routing_domain",
+              affected_id: "domain-1",
+            }),
+          ),
+        );
+      }
+      if (url.includes("/builder/draft/compile")) {
+        return Promise.resolve(response(assembly(commanded)));
+      }
+      throw new Error(`unexpected request ${url}`);
+    });
+
+    await act(async () => {
+      await result.current.runVisualCommand({ operation: "add_routing_domain" });
+    });
+
+    const [sent] = requestsTo(fetchMock, "/builder/draft/command") as Array<{
+      pending_edits: unknown;
+    }>;
+    expect(sent!.pending_edits).toEqual([
+      {
+        kind: "content",
+        address: RULE_ADDRESS,
+        base: ACCEPTED_RULE,
+        working: { ...ACCEPTED_RULE, max_range_km: 12345 },
+      },
+    ]);
+    expect(result.current.visualDraft).toBe(commanded);
+    expect(result.current.pendingEdits.get(RULE_KEY)).toBe(held);
+  });
+
+  it("accepts a rederive with its rule's pending edit as one revision, which takes the edit's place", async () => {
+    const { result } = renderHook(() => useBuilderWorld());
+    await act(async () => undefined);
+    await openAsThePageDoes(result, fetchMock, rulesDraft(4, [ACCEPTED_RULE, GEO_RULE]));
+    await holdEdit(result, RULE_ADDRESS, ruleCard(12345), ruleAnswer(12345));
+    const geoWorking = { ...GEO_RULE, max_range_km: 500 };
+    await holdEdit(
+      result,
+      GEO_ADDRESS,
+      {
+        kind: "controls",
+        commands: [{ operation: "set_scalar", control_id: "range", value: 500 }],
+      },
+      described(GEO_ADDRESS, geoWorking),
+    );
+    const geoHeld = result.current.pendingEdits.get(pendingEditKey(GEO_ADDRESS));
+    const rederived = rulesDraft(5, [{ ...ACCEPTED_RULE, max_range_km: 12345 }, GEO_RULE]);
+    fetchMock.mockImplementation((url: string) => {
+      if (url.includes("/builder/draft/command")) {
+        return Promise.resolve(
+          response(
+            commandAnswer(rederived, {
+              operation: "rederive_link",
+              affected_kind: "link",
+              affected_id: "leo_isl",
+              notice: "re-derived: isl · optical · all visible pairs",
+            }),
+          ),
+        );
+      }
+      if (url.includes("/builder/draft/compile")) {
+        return Promise.resolve(response(assembly(rederived)));
+      }
+      throw new Error(`unexpected request ${url}`);
+    });
+
+    await act(async () => {
+      await result.current.runVisualCommand(REDERIVE);
+    });
+
+    const [sent] = requestsTo(fetchMock, "/builder/draft/command") as Array<{
+      pending_edits: unknown;
+    }>;
+    expect(sent!.pending_edits).toEqual([
+      {
+        kind: "content",
+        address: RULE_ADDRESS,
+        base: ACCEPTED_RULE,
+        working: { ...ACCEPTED_RULE, max_range_km: 12345 },
+      },
+      { kind: "content", address: GEO_ADDRESS, base: GEO_RULE, working: geoWorking },
+    ]);
+    expect(result.current.visualDraft).toBe(rederived);
+    expect([...result.current.pendingEdits.keys()]).toEqual([pendingEditKey(GEO_ADDRESS)]);
+    expect(result.current.pendingEdits.get(pendingEditKey(GEO_ADDRESS))).toBe(geoHeld);
+  });
+
+  it("holds the edits a command created, as the backend describes them, and accepts nothing", async () => {
+    const opened = linkDraft();
+    const { result } = renderHook(() => useBuilderWorld());
+    await act(async () => undefined);
+    await openAsThePageDoes(result, fetchMock, opened);
+    const accepted = result.current.visualDraft;
+    const acceptedAssembly = result.current.assemblyResult;
+    const buffer = result.current.yamlBuffer;
+    const address = domainAddress("domain-1");
+    const created = {
+      kind: "content",
+      address,
+      base: null,
+      working: { id: "domain-1", protocol: "isis", area_assignment: { strategy: "flat" } },
+    } as const;
+    const description = described(address, created.working, [
+      workingIssue("Field required", "/selectors"),
+    ]);
+    fetchMock.mockClear();
+    fetchMock.mockImplementation((url: string) => {
+      if (url.includes("/builder/draft/command")) {
+        return Promise.resolve(
+          response(
+            commandAnswer(opened, {
+              operation: "add_routing_domain",
+              affected_kind: "routing_domain",
+              affected_id: "domain-1",
+              created_edits: [created],
+            }),
+          ),
+        );
+      }
+      if (url.includes("/builder/draft/object-edit")) return Promise.resolve(response(description));
+      throw new Error(`unexpected request ${url}`);
+    });
+
+    await act(async () => {
+      await result.current.runVisualCommand({ operation: "add_routing_domain" });
+    });
+
+    // The command, then the description of what it created; no compile.
+    expect(fetchMock.mock.calls.map(([url]) => String(url))).toEqual([
+      "http://test:8080/api/v1/builder/draft/command",
+      "http://test:8080/api/v1/builder/draft/object-edit",
+    ]);
+    expect(requestsTo(fetchMock, "/builder/draft/object-edit")).toEqual([
+      {
+        target_ref: opened.target_ref,
+        applied_revision: 4,
+        address,
+        working: created.working,
+      },
+    ]);
+    expect(result.current.visualDraft).toBe(accepted);
+    expect(result.current.assemblyResult).toBe(acceptedAssembly);
+    expect(result.current.yamlBuffer).toBe(buffer);
+    expect(result.current.pendingEdits.get(pendingEditKey(address))).toEqual({
+      edit: created,
+      answer: description,
+    });
+  });
+
+  it("holds a rederive's incomplete result in the place of its rule's pending edit", async () => {
+    const { result } = renderHook(() => useBuilderWorld());
+    await act(async () => undefined);
+    await openAsThePageDoes(result, fetchMock, linkDraft());
+    await holdEdit(result, RULE_ADDRESS, ruleCard(12345), ruleAnswer(12345));
+    const accepted = result.current.visualDraft!;
+    const created = {
+      kind: "content",
+      address: RULE_ADDRESS,
+      base: ACCEPTED_RULE,
+      working: INCOMPLETE_RULE,
+    } as const;
+    const description = described(RULE_ADDRESS, INCOMPLETE_RULE, [
+      workingIssue("Field required", "/endpoints/1/terminal"),
+    ]);
+    fetchMock.mockImplementation((url: string) => {
+      if (url.includes("/builder/draft/command")) {
+        return Promise.resolve(
+          response(
+            commandAnswer(accepted, {
+              operation: "rederive_link",
+              affected_kind: "link",
+              affected_id: "leo_isl",
+              created_edits: [created],
+            }),
+          ),
+        );
+      }
+      if (url.includes("/builder/draft/object-edit")) return Promise.resolve(response(description));
+      throw new Error(`unexpected request ${url}`);
+    });
+
+    await act(async () => {
+      await result.current.runVisualCommand(REDERIVE);
+    });
+
+    expect(result.current.visualDraft).toBe(accepted);
+    expect([...result.current.pendingEdits.entries()]).toEqual([
+      [RULE_KEY, { edit: created, answer: description }],
+    ]);
+  });
+
+  /** Run a rederive that the backend answers with `answer` only after the
+   *  rule's pending edit changed to the one answered `ruleAnswer(500)`. */
+  async function rederiveWhileTheEditChanges(
+    hook: { current: ReturnType<typeof useBuilderWorld> },
+    answer: BuilderVisualDraftCommandResult,
+  ): Promise<{ command: Promise<unknown>; changed: ReadonlyMap<string, unknown> }> {
+    let answerCommand: (() => void) | null = null;
+    fetchMock.mockImplementation((url: string, init: RequestInit) => {
+      if (url.includes("/builder/draft/command")) {
+        return new Promise((resolve) => {
+          answerCommand = () => resolve(response(answer));
+        });
+      }
+      if (url.includes("/builder/draft/compile")) {
+        return Promise.resolve(response(assembly(answer.draft)));
+      }
+      if (url.includes("/builder/draft/object-edit")) {
+        const body = JSON.parse(String(init.body)) as { change?: unknown };
+        return Promise.resolve(
+          response(body.change ? ruleAnswer(500) : described(RULE_ADDRESS, INCOMPLETE_RULE)),
+        );
+      }
+      throw new Error(`unexpected request ${url}`);
+    });
+    let command!: Promise<unknown>;
+    await act(async () => {
+      command = hook.current.runVisualCommand(REDERIVE);
+      command.catch(() => undefined);
+    });
+    await act(async () => {
+      await hook.current.editPendingObject(RULE_ADDRESS, ruleCard(500));
+    });
+    const changed = hook.current.pendingEdits;
+    await act(async () => {
+      if (answerCommand === null) throw new Error("the command was not sent");
+      answerCommand();
+      await command.catch(() => undefined);
+    });
+    return { command, changed };
+  }
+
+  it("refuses an edit a command created over an edit that changed while it ran", async () => {
+    const { result } = renderHook(() => useBuilderWorld());
+    await act(async () => undefined);
+    await openAsThePageDoes(result, fetchMock, linkDraft());
+    await holdEdit(result, RULE_ADDRESS, ruleCard(12345), ruleAnswer(12345));
+    const accepted = result.current.visualDraft!;
+
+    const { command, changed } = await rederiveWhileTheEditChanges(
+      result,
+      commandAnswer(accepted, {
+        operation: "rederive_link",
+        affected_kind: "link",
+        affected_id: "leo_isl",
+        created_edits: [
+          { kind: "content", address: RULE_ADDRESS, base: ACCEPTED_RULE, working: INCOMPLETE_RULE },
+        ],
+      }),
+    );
+
+    await expect(command).rejects.toThrow(
+      "the rederive_link command created an edit of leo_isl, which holds another pending edit",
+    );
+    expect(result.current.pendingEdits).toBe(changed);
+    expect(result.current.pendingEdits.get(RULE_KEY)?.answer).toEqual(ruleAnswer(500));
+    expect(result.current.visualDraft).toBe(accepted);
+  });
+
+  it("keeps an edit of the rule made while an accepted rederive ran", async () => {
+    const { result } = renderHook(() => useBuilderWorld());
+    await act(async () => undefined);
+    await openAsThePageDoes(result, fetchMock, linkDraft());
+    await holdEdit(result, RULE_ADDRESS, ruleCard(12345), ruleAnswer(12345));
+    const rederived = rulesDraft(5, [{ ...ACCEPTED_RULE, max_range_km: 12345 }]);
+
+    const { command, changed } = await rederiveWhileTheEditChanges(
+      result,
+      commandAnswer(rederived, {
+        operation: "rederive_link",
+        affected_kind: "link",
+        affected_id: "leo_isl",
+      }),
+    );
+
+    await expect(command).resolves.toMatchObject({ operation: "rederive_link" });
+    expect(result.current.visualDraft).toBe(rederived);
+    expect(result.current.pendingEdits.get(RULE_KEY)).toBe(changed.get(RULE_KEY));
   });
 });
 

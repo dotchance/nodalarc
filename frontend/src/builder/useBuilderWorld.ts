@@ -657,6 +657,16 @@ function objectEditBasis(
   return { draft, appliedRevision, key, edit };
 }
 
+/** The key of the pending edit a command starts from. A rederive starts from
+ *  its rule as the rule's card shows it, with the rule's pending edit applied,
+ *  and its result takes that edit's place. No other command starts from a
+ *  pending edit. */
+function commandStartEditKey(command: BuilderVisualDraftCommandRequest["command"]): string | null {
+  return command.operation === "rederive_link"
+    ? pendingEditKey({ kind: "member", list_pointer: "/link_rules", id: command.rule_id })
+    : null;
+}
+
 const EMPTY_YAML_BUFFER: SessionYamlBufferState = {
   text: "",
   appliedText: "",
@@ -1225,6 +1235,14 @@ export function useBuilderWorld() {
     [adoptCompileResult, assertEpoch, enqueueWriter, setYamlBuffer],
   );
 
+  /** Run one command with every pending edit sent beside it: the command mints
+   *  no id an edit holds, and a command that starts from a pending edit is
+   *  evaluated with it. A complete result is the next accepted revision, and
+   *  the edit the command started from leaves the store. An incomplete result
+   *  accepts nothing: each edit it created is held under its address with the
+   *  backend's description of it, in the place of the edit the command started
+   *  from. A created edit whose address holds another pending edit, or one
+   *  that changed while the command ran, is refused and nothing is held. */
   const runVisualCommand = useCallback(
     (command: BuilderVisualDraftCommandRequest["command"]): Promise<BuilderVisualDraftCommandResult> =>
       enqueueWriter("command", async (epoch) => {
@@ -1238,12 +1256,49 @@ export function useBuilderWorld() {
         ) {
           throw new Error("apply or canonicalize the YAML buffer before editing graphically");
         }
+        const sent = pendingEditsRef.current;
+        const startKey = commandStartEditKey(command);
         const result = await applyVisualDraftCommand({
           draft,
           expected_draft_revision: draft.draft_revision,
           command,
+          pending_edits: [...sent.values()].map((pending) => pending.edit),
         });
         assertEpoch(epoch);
+        if (result.created_edits.length > 0) {
+          const appliedRevision = draft.applied_revision ?? null;
+          if (appliedRevision === null) {
+            throw new Error("the backend created pending edits on a draft with no accepted revision");
+          }
+          const described = await Promise.all(
+            result.created_edits.map((edit) =>
+              editVisualDraftObject({
+                target_ref: draft.target_ref,
+                applied_revision: appliedRevision,
+                address: edit.address,
+                working: edit.working,
+              }),
+            ),
+          );
+          assertEpoch(epoch);
+          const held = new Map(pendingEditsRef.current);
+          const created = result.created_edits.map((edit, index) => {
+            const key = pendingEditKey(edit.address);
+            if (held.get(key) !== (key === startKey ? sent.get(key) : undefined)) {
+              const object =
+                edit.address.kind === "member" ? edit.address.id : "the boundary list";
+              throw new Error(
+                `the ${result.operation} command created an edit of ${object}, which holds ` +
+                  "another pending edit; apply or discard that edit first",
+              );
+            }
+            held.set(key, { edit, answer: described[index]! });
+            return key;
+          });
+          for (const key of created) supersedeObjectEdits(key);
+          setPendingEdits(held);
+          return result;
+        }
         const assembled = await compileVisualDraft({ draft: result.draft });
         assertEpoch(epoch);
         adoptCompileResult(assembled);
@@ -1259,9 +1314,28 @@ export function useBuilderWorld() {
           canonicalizationAccepted: true,
           issues: [],
         });
+        // The accepted revision holds the edit the command started from,
+        // unless that edit changed while the command ran.
+        if (
+          startKey !== null &&
+          sent.has(startKey) &&
+          pendingEditsRef.current.get(startKey) === sent.get(startKey)
+        ) {
+          const remaining = new Map(pendingEditsRef.current);
+          remaining.delete(startKey);
+          supersedeObjectEdits(startKey);
+          setPendingEdits(remaining);
+        }
         return result;
       }),
-    [adoptCompileResult, assertEpoch, enqueueWriter, setYamlBuffer],
+    [
+      adoptCompileResult,
+      assertEpoch,
+      enqueueWriter,
+      setPendingEdits,
+      setYamlBuffer,
+      supersedeObjectEdits,
+    ],
   );
 
   const prepareRetarget = useCallback(

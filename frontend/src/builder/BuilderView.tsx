@@ -44,10 +44,7 @@ import { builderSnapshotFromWorld } from "./builderSnapshot";
 import { CandidateLines } from "./CandidateLines";
 import { computeCandidates } from "./candidates";
 import { EditorApplyRow, Field, InlineSelect, PasteArea } from "./editorKit";
-import {
-  accessBeamElevationDeg,
-  capabilitiesBySegment,
-} from "./linkPhysics";
+import { accessBeamElevationDeg } from "./linkPhysics";
 import { CatalogObjectView } from "./CatalogObjectView";
 import { ConstellationEditor } from "./ConstellationEditor";
 import { CustomizeChainEditor } from "./CustomizeChainEditor";
@@ -1355,9 +1352,6 @@ export function BuilderView({
       throw cause;
     }
   };
-  // The connect gesture: both endpoints known before the rule
-  // exists, physics derived from the resolved world's faceplates.
-  const segmentCapabilities = useMemo(() => capabilitiesBySegment(world), [world]);
   // Beam discs on the body while a segment's editor is open: every satellite
   // of that segment, at the elevation floor its access terminals actually
   // declare — the resolved world is the only physics source (a node with no
@@ -1709,7 +1703,7 @@ export function BuilderView({
               autoFocusName={freshId === rule.rule_id}
               workspace={workspace}
               rule={rule}
-              capabilities={segmentCapabilities}
+              segments={world?.segments ?? null}
               allocation={ruleAllocation}
               onRepoint={async (side, newSegmentId) => {
                 const result = await runWindowCommand(key, {

@@ -21,8 +21,7 @@ import {
   NumberField,
   SelectField,
 } from "./editorKit";
-import { canForm, type SegmentCapability } from "./linkPhysics";
-import type { BuilderRuleAllocation } from "./builderTypes";
+import type { BuilderRuleAllocation, BuilderWorldSegment } from "./builderTypes";
 import type { BuilderVisualAuthoringFacts } from "./generated/builderApi";
 import {
   linkWarnings,
@@ -47,8 +46,9 @@ interface LinkRuleEditorProps {
   onRemove: (() => void) | null;
   /** focus the name when a create gesture opened this editor. */
   autoFocusName?: boolean;
-  /** what each segment's faceplates can form (resolver truth). */
-  capabilities: Map<string, SegmentCapability>;
+  /** The resolved world's segments, each with the terminal roles and media
+   *  its nodes carry. Null while the world is unresolved. */
+  segments: ReadonlyArray<BuilderWorldSegment> | null;
   /** Re-point an endpoint through VS-API and surface its derivation notice. */
   onRepoint: (side: "a" | "b", newSegmentId: string) => Promise<string>;
   authoring: BuilderVisualAuthoringFacts;
@@ -59,7 +59,7 @@ function EndpointCard({
   endpoint,
   other,
   workspace,
-  capabilities,
+  segments,
   onUpdate,
   onSegmentChange,
   authoring,
@@ -68,25 +68,29 @@ function EndpointCard({
   endpoint: DraftLinkEndpoint;
   other: DraftLinkEndpoint;
   workspace: Workspace;
-  capabilities: Map<string, SegmentCapability>;
+  segments: ReadonlyArray<BuilderWorldSegment> | null;
   onUpdate: (patch: Partial<DraftLinkEndpoint>) => void;
   onSegmentChange: (newSegmentId: string) => void;
   authoring: BuilderVisualAuthoringFacts;
 }) {
   const placed = placedSegments(workspace);
-  const selfCap = capabilities.get(endpoint.segment_id);
-  const otherCap = capabilities.get(other.segment_id);
+  const carries = (segmentId: string, role: MountRole, medium: LinkMedium) =>
+    segments?.some(
+      (segment) =>
+        segment.segment_id === segmentId &&
+        segment.capabilities.some(
+          (capability) => capability.endpoint_role === role && capability.medium === medium,
+        ),
+    ) === true;
+  const bothCarry = (role: MountRole, medium: LinkMedium) =>
+    carries(endpoint.segment_id, role, medium) && carries(other.segment_id, role, medium);
   // Combinations neither side can form remain visible and disabled with
-  // the reason. No capabilities yet (unresolved
-  // world) means nothing is disabled.
-  const known = capabilities.size > 0;
+  // the reason. An unresolved world means nothing is disabled.
+  const known = segments !== null;
   const roleDisabled = (role: MountRole) =>
-    known &&
-    !authoring.link_media.some((choice) =>
-      canForm(selfCap, otherCap, role, choice.id),
-    );
+    known && !authoring.link_media.some((choice) => bothCarry(role, choice.id));
   const mediumDisabled = (medium: LinkMedium) =>
-    endpoint.role !== null && known && !canForm(selfCap, otherCap, endpoint.role, medium);
+    endpoint.role !== null && known && !bothCarry(endpoint.role, medium);
   return (
     <EditorCard
       title={title}
@@ -166,7 +170,7 @@ export function LinkRuleEditor({
   onUpdateEndpoint,
   onRemove,
   autoFocusName = false,
-  capabilities,
+  segments,
   onRepoint,
   allocation,
   authoring,
@@ -196,7 +200,7 @@ export function LinkRuleEditor({
         endpoint={rule.a}
         other={rule.b}
         workspace={workspace}
-        capabilities={capabilities}
+        segments={segments}
         onUpdate={(patch) => onUpdateEndpoint("a", patch)}
         onSegmentChange={repoint("a")}
         authoring={authoring}
@@ -206,7 +210,7 @@ export function LinkRuleEditor({
         endpoint={rule.b}
         other={rule.a}
         workspace={workspace}
-        capabilities={capabilities}
+        segments={segments}
         onUpdate={(patch) => onUpdateEndpoint("b", patch)}
         onSegmentChange={repoint("b")}
         authoring={authoring}

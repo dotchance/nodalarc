@@ -3,7 +3,8 @@
 /** A wire-faithful two-segment BuilderWorld for link-physics tests.
  *
  *  One ground station and one satellite, each carrying a terminal inventory the
- *  physics derivation reads. Built from the production wire types: the ground node is
+ *  physics derivation reads, and each segment listing the terminal roles and
+ *  media its node carries. Built from the production wire types: the ground node is
  *  `kind: "ground_station"` (not a mislabelled satellite) and the ephemeris is a
  *  SessionEphemeris, not a bare `{nodes:{}}` cast. Tests using this fixture
  *  exercise the same shapes the resolver emits. candidates.test.ts deliberately
@@ -88,7 +89,21 @@ export function tinyWorld(
       node("s1", spaceId, "satellite", [block("access", "rf", 0), block("isl", "optical", 0)]),
     ],
     link_rules: [],
-    segments: [],
+    segments: [
+      {
+        segment_id: groundId,
+        display_name: groundId,
+        capabilities: [{ endpoint_role: "access", medium: "rf" }],
+      },
+      {
+        segment_id: spaceId,
+        display_name: spaceId,
+        capabilities: [
+          { endpoint_role: "access", medium: "rf" },
+          { endpoint_role: "isl", medium: "optical" },
+        ],
+      },
+    ],
     allocations: [],
     rule_previews: [],
   };

@@ -36,10 +36,11 @@ import { BuildGuide } from "../BuildGuide";
 import { GroundEditor } from "../GroundEditor";
 import { SiteEditor } from "../SiteEditor";
 import { ConstellationEditor } from "../ConstellationEditor";
+import { LinkRuleEditor } from "../LinkRuleEditor";
 import {
   accessBeamElevationDeg,
 } from "../linkPhysics";
-import { type DraftSiteObject } from "../workspace";
+import { type DraftLinkRule, type DraftSiteObject } from "../workspace";
 import { AUTHORING_FACTS } from "./fixtures/authoringFacts";
 import {
   newDraftConstellation,
@@ -535,6 +536,80 @@ describe("beam footprints read the terminals, never a default", () => {
       (b) => b.endpoint_role !== "access",
     );
     expect(accessBeamElevationDeg(node)).toBe(null);
+  });
+});
+
+describe("the link editor reads terminal capabilities from the world", () => {
+  afterEach(cleanup);
+
+  function renderLinkEditor(withWorld: boolean) {
+    const workspace = newWorkspace("t");
+    const space = newDraftConstellation("nodalarc:nodes/space/leo.yaml");
+    const ground = newDraftGroundSet("nodalarc:nodes/ground/gw.yaml", {});
+    const endpoint = (segment_id: string) => ({
+      segment_id,
+      tag: null,
+      role: "access" as const,
+      medium: "rf" as const,
+      min_elevation_deg: null,
+    });
+    const rule: DraftLinkRule = {
+      rule_id: "ground-to-space",
+      label: "ground to space",
+      enabled: true,
+      a: endpoint(ground.segment_id),
+      b: endpoint(space.segment_id),
+      topology_mode: null,
+      topology_n: null,
+      max_range_km: null,
+    };
+    workspace.space.push(space);
+    workspace.ground.push(ground);
+    workspace.links.push(rule);
+    // The ground segment carries rf access only; the space segment also
+    // carries optical isl.
+    const world = tinyWorld(ground.segment_id, space.segment_id);
+    render(
+      <LinkRuleEditor
+        authoring={AUTHORING_FACTS}
+        workspace={workspace}
+        rule={rule}
+        segments={withWorld ? world.segments : null}
+        allocation={null}
+        onRepoint={async () => ""}
+        onUpdate={() => {}}
+        onUpdateEndpoint={() => {}}
+        onRemove={null}
+      />,
+    );
+  }
+
+  function disabledOptions(label: string): string[] {
+    const select = screen.getByLabelText(label) as HTMLSelectElement;
+    return Array.from(select.options)
+      .filter((option) => option.disabled)
+      .map((option) => option.value);
+  }
+
+  it("a role or medium one endpoint segment does not carry is disabled", () => {
+    renderLinkEditor(true);
+    expect(disabledOptions("Endpoint A terminal role")).toEqual([
+      "isl",
+      "crosslink",
+      "backbone",
+    ]);
+    expect(disabledOptions("Endpoint A medium")).toEqual(["optical"]);
+    expect(disabledOptions("Endpoint B terminal role")).toEqual([
+      "isl",
+      "crosslink",
+      "backbone",
+    ]);
+  });
+
+  it("an unresolved world disables nothing", () => {
+    renderLinkEditor(false);
+    expect(disabledOptions("Endpoint A terminal role")).toEqual([]);
+    expect(disabledOptions("Endpoint A medium")).toEqual([]);
   });
 });
 

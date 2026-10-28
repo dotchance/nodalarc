@@ -2214,16 +2214,13 @@ async def ws_state(websocket: WebSocket) -> None:
                 return True
             # A command runs to its end even when the socket closes meanwhile: an
             # enable already sent gets its outcome recorded, and the cleanup after
-            # it disables what it enabled.
+            # it disables what it enabled. Waiting does not cancel the command when
+            # this task is cancelled, nor raise its error; the teardown reads both.
             handling = asyncio.create_task(_handle_ws_debug_command(ws_id, command))
-            commands.add(handling)
-            try:
-                await asyncio.shield(handling)
-            finally:
-                if handling.done():
-                    commands.discard(handling)
+            commands.append(handling)
+            await asyncio.wait([handling])
 
-    commands: set[asyncio.Task[None]] = set()
+    commands: list[asyncio.Task[None]] = []
     sender = asyncio.create_task(_sender())
     receiver = asyncio.create_task(_receiver())
     try:
@@ -2382,10 +2379,8 @@ async def ws_terminal(websocket: WebSocket, node_id: str) -> None:
             task.cancel()
         await asyncio.gather(*pending, return_exceptions=True)
         for task in done:
-            if (error := task.exception()) is not None and not isinstance(
-                error, WebSocketDisconnect
-            ):
-                log.warning("Terminal error for %s: %s %s", node_id, type(error).__name__, error)
+            if (error := task.exception()) is not None:
+                log.error("Terminal session error for %s", node_id, exc_info=error)
         if reader in done and reader.exception() is None and reader.result():
             await websocket.close(code=4400, reason="Malformed terminal message")
 

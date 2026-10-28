@@ -13,7 +13,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from nodalarc.body_frames import SupportedSurfaceBody
 from nodalarc.model_validation import AddressFamily
-from nodalarc.models.events import OpsEvent, ServiceSource, SessionEphemeris
+from nodalarc.models.events import OpsEvent, OpsLevel, ServiceSource, SessionEphemeris
 from nodalarc.models.link_rules import TopologyMode
 from nodalarc.models.link_state import SchedulingState
 from nodalarc.models.resolved_session import NodeKind, NodeRole
@@ -185,6 +185,15 @@ TraceState = Literal["running", "reached", "not_reached", "failed"]
 # Why a continuous trace stopped on its own: its time limit, or an internal
 # error in the trace loop.
 TraceStopReason = Literal["time_limit", "internal_error"]
+
+
+class TraceRequest(BaseModel):
+    """The two nodes a trace runs between."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    src_node: str = Field(min_length=1)
+    dst_node: str = Field(min_length=1)
 
 
 class TracedPath(BaseModel):
@@ -586,3 +595,64 @@ class LinkHistoryPage(BaseModel):
     total: int
     next_cursor: str | None
     retained_from: str | None
+
+
+class LinkHistoryQuery(BaseModel):
+    """The filters and page of a link history request."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    start: datetime | None = None
+    end: datetime | None = None
+    node: str | None = None
+    peer: str | None = Field(
+        default=None, description="The node at the other end of the link; needs node"
+    )
+    order: Literal["oldest_first", "newest_first"] = "oldest_first"
+    limit: int = Field(default=LINK_HISTORY_PAGE_MAX, ge=1, le=LINK_HISTORY_PAGE_MAX)
+    cursor: str | None = Field(default=None, description="next_cursor of the previous page")
+
+
+class OpsEventsQuery(BaseModel):
+    """Filters on the operator-visible ops log."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    source: ServiceSource | None = None
+    level: OpsLevel | None = None
+    limit: int = Field(default=100, ge=1, le=500, description="Max events to return")
+
+
+class LinkDecisionTracesQuery(BaseModel):
+    """One link's decision trace when both nodes are named; every trace otherwise."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    node_a: str | None = None
+    node_b: str | None = None
+
+
+class DecisionExplanationQuery(BaseModel):
+    """The ground station to explain, and optionally one satellite paired with it."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    gs: str
+    sat: str | None = None
+
+
+class DecisionTimelineQuery(BaseModel):
+    """The ground station whose recent decisions to return, and how many."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    gs: str
+    limit: int = Field(default=120, ge=1, le=720)
+
+
+class GroundLinkDecisionsQuery(BaseModel):
+    """The node whose candidate pairs to return; the whole snapshot when absent."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    node: str | None = None

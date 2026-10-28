@@ -136,6 +136,9 @@
       "record_history",
       "source"
     ],
+    "CatalogSessionYamlQuery": [
+      "session_ref"
+    ],
     "CatalogSessionYamlUploadRequest": [
       "record_history",
       "yaml"
@@ -170,6 +173,14 @@
       "sim_time",
       "snapshot_seq",
       "tenant_id"
+    ],
+    "DecisionExplanationQuery": [
+      "gs",
+      "sat"
+    ],
+    "DecisionTimelineQuery": [
+      "gs",
+      "limit"
     ],
     "EffectiveEnvelopeFacts": [
       "binding_endpoint",
@@ -209,6 +220,9 @@
       "sim_time",
       "snapshot_seq",
       "unscheduled_pairs"
+    ],
+    "GroundLinkDecisionsQuery": [
+      "node"
     ],
     "GroundPolicyAudit": [
       "bbm_acquire_timeout_ticks",
@@ -354,6 +368,10 @@
       "substrate_rtt_ms",
       "topology_mode"
     ],
+    "LinkDecisionTracesQuery": [
+      "node_a",
+      "node_b"
+    ],
     "LinkDown": [
       "interface_a",
       "interface_b",
@@ -384,6 +402,15 @@
       "retained_from",
       "returned",
       "total"
+    ],
+    "LinkHistoryQuery": [
+      "cursor",
+      "end",
+      "limit",
+      "node",
+      "order",
+      "peer",
+      "start"
     ],
     "LinkState": [
       "endpoint_segments",
@@ -474,10 +501,22 @@
       "session_id",
       "wiring_generation"
     ],
+    "OperatorRepairRequest": [
+      "gs_id",
+      "intervention_id",
+      "reason",
+      "scheduler_instance_id",
+      "wiring_generation"
+    ],
     "OperatorRepairResponse": [
       "intervention_id",
       "message",
       "status"
+    ],
+    "OpsEventsQuery": [
+      "level",
+      "limit",
+      "source"
     ],
     "PendingActuation": [
       "actuation_elapsed_ms",
@@ -579,6 +618,10 @@
       "stale",
       "traced_paths",
       "wall_time"
+    ],
+    "TraceRequest": [
+      "dst_node",
+      "src_node"
     ],
     "TracedPath": [
       "asymmetry_detected",
@@ -857,6 +900,9 @@
       "expected_document_digest": null,
       "expected_source_revision": null
     },
+    "CatalogSessionYamlQuery": {
+      "session_ref": null
+    },
     "CatalogSessionYamlUploadRequest": {
       "yaml": null
     },
@@ -919,6 +965,13 @@
         "satellite"
       ],
       "tenant_id": null
+    },
+    "DecisionExplanationQuery": {
+      "gs": null,
+      "sat": null
+    },
+    "DecisionTimelineQuery": {
+      "gs": null
     },
     "EffectiveEnvelopeFacts": {
       "binding_endpoint": [
@@ -988,6 +1041,9 @@
       "tenant_id": null
     },
     "GroundLinkDecisionSnapshot": {},
+    "GroundLinkDecisionsQuery": {
+      "node": null
+    },
     "GroundPolicyAudit": {
       "cross_tenant_displacement": null,
       "handover_mode": null,
@@ -1221,6 +1277,10 @@
         "visible_candidates"
       ]
     },
+    "LinkDecisionTracesQuery": {
+      "node_a": null,
+      "node_b": null
+    },
     "LinkDown": {
       "interface_a": null,
       "interface_b": null,
@@ -1251,6 +1311,15 @@
     "LinkHistoryPage": {
       "next_cursor": null,
       "retained_from": null
+    },
+    "LinkHistoryQuery": {
+      "cursor": null,
+      "node": null,
+      "order": [
+        "newest_first",
+        "oldest_first"
+      ],
+      "peer": null
     },
     "LinkState": {
       "interface_a": null,
@@ -1349,12 +1418,35 @@
       "session_id": null,
       "wiring_generation": null
     },
+    "OperatorRepairRequest": {
+      "gs_id": null,
+      "intervention_id": null,
+      "reason": null,
+      "scheduler_instance_id": null,
+      "wiring_generation": null
+    },
     "OperatorRepairResponse": {
       "intervention_id": null,
       "message": null,
       "status": [
         "accepted",
         "rejected"
+      ]
+    },
+    "OpsEventsQuery": {
+      "level": [
+        "critical",
+        "debug",
+        "error",
+        "info",
+        "warning"
+      ],
+      "source": [
+        "node_agent",
+        "ome",
+        "operator",
+        "scheduler",
+        "vs_api"
       ]
     },
     "PendingActuation": {},
@@ -1450,6 +1542,10 @@
         "wiring"
       ],
       "session_status_detail": null
+    },
+    "TraceRequest": {
+      "dst_node": null,
+      "src_node": null
     },
     "TracedPath": {
       "dst_node": null,
@@ -1564,15 +1660,19 @@
     "CatalogSessionSummary": "lib/nodalarc/models/session_sources.py",
     "CatalogSessionSwitchAccepted": "lib/nodalarc/models/session_sources.py",
     "CatalogSessionSwitchRequest": "lib/nodalarc/models/session_sources.py",
+    "CatalogSessionYamlQuery": "lib/nodalarc/models/session_sources.py",
     "CatalogSessionYamlUploadRequest": "lib/nodalarc/models/session_sources.py",
     "ContinuousTraceStarted": "lib/nodalarc/models/vs_api.py",
     "ContinuousTraceStatus": "lib/nodalarc/models/vs_api.py",
     "ContinuousTraceStopped": "lib/nodalarc/models/vs_api.py",
     "DecisionExplanationFacts": "lib/nodalarc/models/decision_explanation.py",
+    "DecisionExplanationQuery": "lib/nodalarc/models/vs_api.py",
+    "DecisionTimelineQuery": "lib/nodalarc/models/vs_api.py",
     "EffectiveEnvelopeFacts": "lib/nodalarc/models/decision_explanation.py",
     "EnvelopeEndpoint": "lib/nodalarc/models/decision_explanation.py",
     "GroundAllocationEvent": "lib/nodalarc/models/link_decisions.py",
     "GroundLinkDecisionSnapshot": "lib/nodalarc/models/link_decisions.py",
+    "GroundLinkDecisionsQuery": "lib/nodalarc/models/vs_api.py",
     "GroundPolicyAudit": "lib/nodalarc/models/link_decisions.py",
     "GroundVisibilityDecisionWire": "lib/nodalarc/models/link_decisions.py",
     "GsDecisionReasonCount": "lib/nodalarc/models/decision_explanation.py",
@@ -1587,9 +1687,11 @@
     "LegacyRefusal": "lib/nodalarc/models/api_refusal.py",
     "LinkDecisionProvenance": "lib/nodalarc/models/link_events.py",
     "LinkDecisionTrace": "lib/nodalarc/models/vs_api.py",
+    "LinkDecisionTracesQuery": "lib/nodalarc/models/vs_api.py",
     "LinkDown": "lib/nodalarc/models/link_events.py",
     "LinkHistoryEvent": "lib/nodalarc/models/vs_api.py",
     "LinkHistoryPage": "lib/nodalarc/models/vs_api.py",
+    "LinkHistoryQuery": "lib/nodalarc/models/vs_api.py",
     "LinkState": "lib/nodalarc/models/vs_api.py",
     "LinkUp": "lib/nodalarc/models/link_events.py",
     "NodeAddress": "lib/nodalarc/models/vs_api.py",
@@ -1597,7 +1699,9 @@
     "NodeRoutingInstance": "lib/nodalarc/models/vs_api.py",
     "NodeState": "lib/nodalarc/models/vs_api.py",
     "OperatorRepairCommand": "lib/nodalarc/models/scheduler_ops.py",
+    "OperatorRepairRequest": "lib/nodalarc/models/scheduler_ops.py",
     "OperatorRepairResponse": "lib/nodalarc/models/scheduler_ops.py",
+    "OpsEventsQuery": "lib/nodalarc/models/vs_api.py",
     "PendingActuation": "lib/nodalarc/models/decision_explanation.py",
     "PendingActuationPair": "lib/nodalarc/models/scheduler_ops.py",
     "ProjectAbout": "lib/nodalarc/models/vs_api.py",
@@ -1610,6 +1714,7 @@
     "SessionTransitioningFrame": "lib/nodalarc/models/vs_api.py",
     "StampedOpsEvent": "lib/nodalarc/models/vs_api.py",
     "StateSnapshot": "lib/nodalarc/models/vs_api.py",
+    "TraceRequest": "lib/nodalarc/models/vs_api.py",
     "TracedPath": "lib/nodalarc/models/vs_api.py",
     "TransitionOperation": "lib/nodalarc/models/session_sources.py",
     "TransitionOperationEvent": "lib/nodalarc/models/session_sources.py",

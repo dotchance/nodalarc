@@ -63,6 +63,12 @@ class CatalogSessionSwitchAccepted(_SessionSourceModel):
     source: CatalogSessionSourceId
 
 
+class CatalogSessionYamlQuery(_SessionSourceModel):
+    """The scoped catalog session whose stored YAML to download."""
+
+    session_ref: str
+
+
 class CatalogSessionYamlUploadRequest(_SessionSourceModel):
     """One standard persisted session document to save into the user catalog."""
 

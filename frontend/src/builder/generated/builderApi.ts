@@ -1022,6 +1022,67 @@ export interface ContinuousTraceStatus {
   readonly result: TracedPath | null;
 }
 
+/** The two nodes a trace runs between. */
+export interface TraceRequest {
+  readonly src_node: string;
+  readonly dst_node: string;
+}
+
+/** What an operator sends to repair one station. VS-API fills the Scheduler instance and wiring generation from the station's latest actuation state when the request leaves them out, then sends an OperatorRepairCommand. */
+export interface OperatorRepairRequest {
+  readonly gs_id: string;
+  readonly reason: string;
+  readonly scheduler_instance_id?: string | null;
+  readonly wiring_generation?: string | null;
+  readonly intervention_id?: string | null;
+}
+
+/** The filters and page of a link history request. */
+export interface LinkHistoryQuery {
+  readonly start?: string | null;
+  readonly end?: string | null;
+  readonly node?: string | null;
+  readonly peer?: string | null;
+  readonly order?: "oldest_first" | "newest_first";
+  readonly limit?: number;
+  readonly cursor?: string | null;
+}
+
+/** Filters on the operator-visible ops log. */
+export interface OpsEventsQuery {
+  readonly source?: "ome" | "scheduler" | "node_agent" | "operator" | "vs_api" | null;
+  readonly level?: "critical" | "error" | "warning" | "info" | "debug" | null;
+  readonly limit?: number;
+}
+
+/** One link's decision trace when both nodes are named; every trace otherwise. */
+export interface LinkDecisionTracesQuery {
+  readonly node_a?: string | null;
+  readonly node_b?: string | null;
+}
+
+/** The ground station to explain, and optionally one satellite paired with it. */
+export interface DecisionExplanationQuery {
+  readonly gs: string;
+  readonly sat?: string | null;
+}
+
+/** The ground station whose recent decisions to return, and how many. */
+export interface DecisionTimelineQuery {
+  readonly gs: string;
+  readonly limit?: number;
+}
+
+/** The node whose candidate pairs to return; the whole snapshot when absent. */
+export interface GroundLinkDecisionsQuery {
+  readonly node?: string | null;
+}
+
+/** The scoped catalog session whose stored YAML to download. */
+export interface CatalogSessionYamlQuery {
+  readonly session_ref: string;
+}
+
 /**  */
 export interface TransitionOperationSource {
   readonly kind: TransitionOperationSourceKind;

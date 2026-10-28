@@ -27,7 +27,7 @@ from contextvars import ContextVar
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Literal, get_args
+from typing import Annotated, Any, Literal, get_args
 
 import asyncssh
 import nats
@@ -90,12 +90,17 @@ from nodalarc.models.decision_explanation import DecisionExplanationFacts, GsDec
 from nodalarc.models.events import OPS_LOG_LEVELS, OpsEvent, OpsLevel, ServiceSource
 from nodalarc.models.link_decisions import GroundLinkDecisionSnapshot
 from nodalarc.models.resolved_session import ResolvedSession
-from nodalarc.models.scheduler_ops import OperatorRepairCommand, OperatorRepairResponse
+from nodalarc.models.scheduler_ops import (
+    OperatorRepairCommand,
+    OperatorRepairRequest,
+    OperatorRepairResponse,
+)
 from nodalarc.models.session_sources import (
     CatalogSessionSourceId,
     CatalogSessionSummary,
     CatalogSessionSwitchAccepted,
     CatalogSessionSwitchRequest,
+    CatalogSessionYamlQuery,
     CatalogSessionYamlUploadRequest,
     TransitionOperation,
     TransitionOperationFacts,
@@ -106,18 +111,23 @@ from nodalarc.models.session_sources import (
     TransitionRuntimeResult,
 )
 from nodalarc.models.vs_api import (
-    LINK_HISTORY_PAGE_MAX,
     ActuationHealth,
     AuthToken,
     ContinuousTraceStarted,
     ContinuousTraceStatus,
     ContinuousTraceStopped,
+    DecisionExplanationQuery,
+    DecisionTimelineQuery,
+    GroundLinkDecisionsQuery,
     HealthStatus,
     IntrospectRequest,
     IntrospectResult,
     LinkDecisionTrace,
+    LinkDecisionTracesQuery,
     LinkHistoryEvent,
     LinkHistoryPage,
+    LinkHistoryQuery,
+    OpsEventsQuery,
     ProjectAbout,
     SessionFailedFrame,
     SessionReadyFrame,
@@ -125,6 +135,7 @@ from nodalarc.models.vs_api import (
     StampedOpsEvent,
     StateSnapshot,
     TracedPath,
+    TraceRequest,
     WiringProgressFrame,
 )
 from nodalarc.nats_channels import (
@@ -1942,19 +1953,16 @@ def get_ops_health() -> ActuationHealth:
 @app.post(
     "/api/v1/ops/repair",
     response_model=OperatorRepairResponse,
-    responses=_with_legacy_refusals(400, 409, 500, 503, 504),
+    responses=_with_legacy_refusals(409, 500, 503, 504),
     dependencies=[Depends(_require_api_key)],
 )
-async def request_operator_repair(body: dict) -> Any:
+async def request_operator_repair(body: OperatorRepairRequest) -> Any:
     """Explicit operator-triggered GS repair routed to the reporting Scheduler."""
     ctx = _require_active_context()
     nc = _nats_connection
     if nc is None:
         return JSONResponse(status_code=503, content={"error": "NATS not connected"})
-    gs_id = body.get("gs_id", "")
-    reason = body.get("reason", "")
-    if not gs_id or not reason:
-        return JSONResponse(status_code=400, content={"error": "gs_id and reason are required"})
+    gs_id = body.gs_id
     with ctx.state_lock:
         matching = [
             event
@@ -1963,10 +1971,8 @@ async def request_operator_repair(body: dict) -> Any:
         ]
         latest = matching[-1] if matching else {}
     details = latest.get("details") or {}
-    scheduler_instance_id = body.get("scheduler_instance_id") or details.get(
-        "scheduler_instance_id"
-    )
-    wiring_generation = body.get("wiring_generation") or details.get("wiring_generation")
+    scheduler_instance_id = body.scheduler_instance_id or details.get("scheduler_instance_id")
+    wiring_generation = body.wiring_generation or details.get("wiring_generation")
     if not scheduler_instance_id or not wiring_generation:
         return JSONResponse(
             status_code=409,
@@ -1977,8 +1983,8 @@ async def request_operator_repair(body: dict) -> Any:
         wiring_generation=wiring_generation,
         scheduler_instance_id=scheduler_instance_id,
         gs_id=gs_id,
-        reason=reason,
-        intervention_id=body.get("intervention_id") or str(uuid.uuid4()),
+        reason=body.reason,
+        intervention_id=body.intervention_id or str(uuid.uuid4()),
     )
     try:
         resp = await nc.request(
@@ -2001,20 +2007,16 @@ async def request_operator_repair(body: dict) -> Any:
     response_model=list[StampedOpsEvent],
     dependencies=[Depends(_require_api_key)],
 )
-async def get_ops_events(
-    source: str = Query("", description="Filter by event source (e.g. 'operator', 'scheduler')"),
-    level: str = Query("", description="Filter by level (e.g. 'error', 'warning')"),
-    limit: int = Query(100, ge=1, le=500, description="Max events to return"),
-) -> list[StampedOpsEvent]:
+async def get_ops_events(query: Annotated[OpsEventsQuery, Query()]) -> list[StampedOpsEvent]:
     """Return recent operational events from the NODALARC_OPS stream."""
     ctx = _active_context
     session_events = list(ctx.session_ops_events) if ctx else []
     events = list(_system_ops_events) + session_events
-    if source:
-        events = [e for e in events if e.source == source]
-    if level:
-        events = [e for e in events if e.level == level]
-    return events[-limit:]
+    if query.source is not None:
+        events = [e for e in events if e.source == query.source]
+    if query.level is not None:
+        events = [e for e in events if e.level == query.level]
+    return events[-query.limit :]
 
 
 def _require_active_context(detail: str = "") -> SessionContext:
@@ -2407,17 +2409,11 @@ def get_historical_state(sim_time: datetime) -> Any:
     responses=_REFUSAL_RESPONSES,
     dependencies=[Depends(_require_api_key)],
 )
-def get_link_events(
-    start: datetime = Query(None),
-    end: datetime = Query(None),
-    node: str = Query(None),
-    peer: str = Query(None, description="The node at the other end of the link; needs node"),
-    order: Literal["oldest_first", "newest_first"] = Query("oldest_first"),
-    limit: int = Query(LINK_HISTORY_PAGE_MAX, ge=1, le=LINK_HISTORY_PAGE_MAX),
-    cursor: str = Query(None, description="next_cursor of the previous page"),
-) -> Any:
+def get_link_events(query: Annotated[LinkHistoryQuery, Query()]) -> Any:
     """One page of the recorded session's link events, optionally for one node's
     links or one link. Further pages follow ``next_cursor`` with the same filters."""
+    start, end, node, peer = query.start, query.end, query.node, query.peer
+    order, limit, cursor = query.order, query.limit, query.cursor
     ctx, history = _history_session()
     if (refusal := _zoned_time_refusal(start=start, end=end)) is not None:
         return refusal
@@ -2484,11 +2480,9 @@ def _decode_link_history_cursor(cursor: str) -> tuple[str, int] | None:
     responses=_with_legacy_refusals(400, 404),
     dependencies=[Depends(_require_api_key)],
 )
-def get_link_decision_traces(
-    node_a: str = Query(None),
-    node_b: str = Query(None),
-) -> Any:
+def get_link_decision_traces(query: Annotated[LinkDecisionTracesQuery, Query()]) -> Any:
     """Return active-link decision traces retained by the current session."""
+    node_a, node_b = query.node_a, query.node_b
     ctx = _require_active_context()
     if (node_a is None) != (node_b is None):
         return JSONResponse(
@@ -2513,7 +2507,7 @@ def get_link_decision_traces(
     responses=_with_legacy_refusals(404),
     dependencies=[Depends(_require_api_key)],
 )
-def get_decision_explanation(gs: str = Query(...), sat: str | None = Query(None)) -> Any:
+def get_decision_explanation(query: Annotated[DecisionExplanationQuery, Query()]) -> Any:
     """Composed decision-explanation FACTS for one ground station, or one pair.
 
     VS-API composes the funnel ladder, effective envelope, best-candidate,
@@ -2533,6 +2527,7 @@ def get_decision_explanation(gs: str = Query(...), sat: str | None = Query(None)
     """
     from nodalarc.explain import compose_gs_explanation
 
+    gs, sat = query.gs, query.sat
     ctx = _require_active_context()
     with ctx.state_lock:
         snapshot = ctx.latest_ground_link_decision_snapshot
@@ -2577,9 +2572,7 @@ def get_decision_explanation(gs: str = Query(...), sat: str | None = Query(None)
     responses=_with_legacy_refusals(404),
     dependencies=[Depends(_require_api_key)],
 )
-def get_decision_explanation_timeline(
-    gs: str = Query(...), limit: int = Query(120, ge=1, le=720)
-) -> Any:
+def get_decision_explanation_timeline(query: Annotated[DecisionTimelineQuery, Query()]) -> Any:
     """Bounded observed decision window for one ground station.
 
     This is not historical playback. VS-API samples the committed OME ground
@@ -2587,6 +2580,7 @@ def get_decision_explanation_timeline(
     the UI can roll up recent no-link causes without polling the full GS×sat
     matrix.
     """
+    gs, limit = query.gs, query.limit
     ctx = _require_active_context()
     timeline = ctx.ground_decision_timeline(gs, limit=limit)
     if timeline is None:
@@ -2603,7 +2597,7 @@ def get_decision_explanation_timeline(
     responses=_with_legacy_refusals(404),
     dependencies=[Depends(_require_api_key)],
 )
-def get_ground_link_decisions(node: str = Query(None)) -> Any:
+def get_ground_link_decisions(query: Annotated[GroundLinkDecisionsQuery, Query()]) -> Any:
     """Return the latest OME GroundLinkDecisionSnapshot.
 
     GROUND-SCOPED. The OME only publishes ground (GS↔satellite) link
@@ -2632,6 +2626,7 @@ def get_ground_link_decisions(node: str = Query(None)) -> Any:
             status_code=404,
             content={"error": "No GroundLinkDecisionSnapshot received yet"},
         )
+    node = query.node
     if node is None:
         return snapshot
     return snapshot.model_copy(
@@ -2676,12 +2671,11 @@ def get_flow_metrics() -> JSONResponse:
 _one_shot_trace_lock = asyncio.Lock()
 
 
-def _trace_request_endpoints(ctx: SessionContext, body: dict) -> tuple[str, str] | JSONResponse:
+def _trace_request_endpoints(
+    ctx: SessionContext, body: TraceRequest
+) -> tuple[str, str] | JSONResponse:
     """The request's source and destination nodes, or the refusal that says why not."""
-    src = body.get("src_node", "")
-    dst = body.get("dst_node", "")
-    if not src or not dst:
-        return refusal_response(400, "trace.invalid_request", "src_node and dst_node are required")
+    src, dst = body.src_node, body.dst_node
     with ctx.state_lock:
         for node_id in (src, dst):
             if node_id not in ctx.nodes:
@@ -2697,7 +2691,7 @@ def _trace_request_endpoints(ctx: SessionContext, body: dict) -> tuple[str, str]
     responses=_REFUSAL_RESPONSES,
     dependencies=[Depends(_require_api_key)],
 )
-async def trace_between(body: dict) -> Any:
+async def trace_between(body: TraceRequest) -> Any:
     """Trace the path between two nodes once, in both directions.
 
     The request returns when both traceroutes finish, within the trace
@@ -2726,7 +2720,7 @@ async def trace_between(body: dict) -> Any:
     responses=_REFUSAL_RESPONSES,
     dependencies=[Depends(_require_api_key)],
 )
-async def start_continuous_trace(body: dict) -> Any:
+async def start_continuous_trace(body: TraceRequest) -> Any:
     """Start continuous path tracing between two nodes, replacing a running trace.
 
     The trace stops on its own after the platform's trace time limit.
@@ -2866,11 +2860,11 @@ def list_sessions(
     dependencies=[Depends(_require_api_key)],
 )
 def download_session_yaml(
-    session_ref: str = Query(...),
+    query: Annotated[CatalogSessionYamlQuery, Query()],
     catalog_context: CatalogContext = Depends(get_catalog_context),
 ) -> Response:
     """Return exact stored YAML for one scoped catalog session reference."""
-    root_yaml = CatalogSessionService(catalog_context).read_session_yaml(session_ref)
+    root_yaml = CatalogSessionService(catalog_context).read_session_yaml(query.session_ref)
     return Response(content=root_yaml, media_type="application/yaml")
 
 

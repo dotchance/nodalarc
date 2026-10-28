@@ -187,6 +187,20 @@ class ActualLinkSnapshot(BaseModel):
     emitted_at: datetime
 
 
+class OperatorRepairRequest(BaseModel):
+    """What an operator sends to repair one station. VS-API fills the Scheduler
+    instance and wiring generation from the station's latest actuation state
+    when the request leaves them out, then sends an OperatorRepairCommand."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    gs_id: str = Field(min_length=1)
+    reason: str = Field(min_length=1)
+    scheduler_instance_id: str | None = None
+    wiring_generation: str | None = None
+    intervention_id: str | None = None
+
+
 class OperatorRepairCommand(BaseModel):
     model_config = ConfigDict(frozen=True)
 

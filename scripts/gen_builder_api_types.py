@@ -227,11 +227,13 @@ from nodalarc.models.builder_visual_api import (  # noqa: E402
 )
 from nodalarc.models.builder_world import BuilderWorld  # noqa: E402
 from nodalarc.models.coverage import CoveragePreviewResult  # noqa: E402
-from nodalarc.models.session_sources import (  # noqa: E402  # noqa: E402
+from nodalarc.models.scheduler_ops import OperatorRepairRequest  # noqa: E402
+from nodalarc.models.session_sources import (  # noqa: E402
     CatalogSessionSourceId,
     CatalogSessionSummary,
     CatalogSessionSwitchAccepted,
     CatalogSessionSwitchRequest,
+    CatalogSessionYamlQuery,
     CatalogSessionYamlUploadRequest,
     TransitionOperation,
     TransitionOperationEvent,
@@ -247,11 +249,18 @@ from nodalarc.models.vs_api import (  # noqa: E402
     ContinuousTraceStarted,
     ContinuousTraceStatus,
     ContinuousTraceStopped,
+    DecisionExplanationQuery,
+    DecisionTimelineQuery,
+    GroundLinkDecisionsQuery,
     HealthStatus,
     IntrospectRequest,
     IntrospectResult,
+    LinkDecisionTracesQuery,
+    LinkHistoryQuery,
+    OpsEventsQuery,
     ProjectAbout,
     TracedPath,
+    TraceRequest,
 )
 from pydantic import BaseModel, TypeAdapter  # noqa: E402
 
@@ -370,6 +379,15 @@ MODEL_TYPES: tuple[type[BaseModel], ...] = (
     ContinuousTraceStopped,
     TracedPath,
     ContinuousTraceStatus,
+    TraceRequest,
+    OperatorRepairRequest,
+    LinkHistoryQuery,
+    OpsEventsQuery,
+    LinkDecisionTracesQuery,
+    DecisionExplanationQuery,
+    DecisionTimelineQuery,
+    GroundLinkDecisionsQuery,
+    CatalogSessionYamlQuery,
     TransitionOperationSource,
     TransitionOperationFacts,
     TransitionOperationEvent,

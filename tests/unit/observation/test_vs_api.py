@@ -2190,11 +2190,8 @@ class TestContinuousTraceSession:
 
         response = TestClient(m.app).post(path, json={"src_node": "site-host"})
 
-        assert response.status_code == 400
-        assert response.json() == {
-            "code": "trace.invalid_request",
-            "message": "src_node and dst_node are required",
-        }
+        assert response.status_code == 422
+        assert [error["loc"] for error in response.json()["detail"]] == [["body", "dst_node"]]
 
     @pytest.mark.parametrize("path", ["/api/v1/trace/start", "/api/v1/trace"])
     def test_both_trace_routes_wait_for_the_session_clock(self, monkeypatch, path):

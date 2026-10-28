@@ -378,8 +378,13 @@ class Operator:
         return self.post("/api/v1/trace", {"src_node": src_node, "dst_node": dst_node})
 
     def introspect(self, node_id: str, command: str) -> str:
-        """Run one of the commands the page offers on a node; returns what the router printed."""
-        return self.post("/api/v1/introspect", {"node_id": node_id, "command": command})["output"]
+        """Run one of the commands the page offers on a node; returns what the router printed.
+        Fails when the command exits non-zero."""
+        answer = self.post("/api/v1/introspect", {"node_id": node_id, "command": command})
+        assert answer["exit_code"] == 0, (
+            f"{command} on {node_id} exited {answer['exit_code']}: {answer['stderr']}"
+        )
+        return answer["output"]
 
     # --- Live feeds -----------------------------------------------------------------------
 

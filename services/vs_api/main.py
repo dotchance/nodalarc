@@ -2327,6 +2327,7 @@ async def ws_terminal(websocket: WebSocket, node_id: str) -> None:
             409: ("LegacyRefusal",),
             413: ("LegacyRefusal",),
             500: ("ApiRefusal", "LegacyRefusal"),
+            502: ("LegacyRefusal",),
             503: ("LegacyRefusal",),
         }
     ),
@@ -2338,7 +2339,12 @@ async def get_node_config(node_id: str) -> Response:
     Opens a temporary SSH session, runs 'show running-config', returns
     the output as a downloadable text file.
     """
-    from vs_api.terminal import TerminalSession, _load_ssh_key, resolve_pod_terminal
+    from vs_api.terminal import (
+        CommandExitError,
+        TerminalSession,
+        _load_ssh_key,
+        resolve_pod_terminal,
+    )
 
     namespace = get_platform_config().kubernetes_namespace
     resolved = await resolve_pod_terminal(node_id, namespace)
@@ -2367,6 +2373,10 @@ async def get_node_config(node_id: str) -> Response:
             headers={
                 "Content-Disposition": f'attachment; filename="{node_id}.conf"',
             },
+        )
+    except CommandExitError as exc:
+        return JSONResponse(
+            status_code=502, content={"error": f"{exc.command} exited {exc.exit_status}"}
         )
     except Exception as exc:
         log.warning("Config export error for %s: %s", node_id, exc, exc_info=True)

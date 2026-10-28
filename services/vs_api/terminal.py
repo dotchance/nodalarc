@@ -301,6 +301,15 @@ class ExecTerminalSession:
             await asyncio.get_running_loop().run_in_executor(None, self._close, stream)
 
 
+class CommandExitError(RuntimeError):
+    """A command run over SSH exited with a non-zero status, or without one."""
+
+    def __init__(self, command: str, exit_status: int | None) -> None:
+        super().__init__(f"{command} exited {exit_status}")
+        self.command = command
+        self.exit_status = exit_status
+
+
 class TerminalSession:
     """Manages a single SSH session to a constellation node.
 
@@ -375,7 +384,8 @@ class TerminalSession:
         """Run a single vtysh command and return output (non-interactive).
 
         Used by config export endpoint. Opens a fresh channel, runs the
-        command, returns stdout.
+        command, returns stdout. A command that exits non-zero raises
+        ``CommandExitError``.
         """
         if not self._conn:
             raise RuntimeError("Not connected")
@@ -385,10 +395,13 @@ class TerminalSession:
             self._conn.run(command),
             timeout=timeout,
         )
+        if result.exit_status != 0:
+            log.warning("%s exited %s: %s", command, result.exit_status, str(result.stderr).strip())
+            raise CommandExitError(command, result.exit_status)
         if result.stdout is None:
             log.error("SSH exec returned None stdout for command: %s", command)
             raise ValueError(f"SSH exec returned None stdout for: {command}")
-        return result.stdout
+        return str(result.stdout)
 
     async def close(self) -> None:
         """Clean up SSH connection."""

@@ -308,7 +308,8 @@
       "command",
       "exit_code",
       "node_id",
-      "output"
+      "output",
+      "stderr"
     ],
     "LadderGate": [
       "actual",
@@ -1169,7 +1170,8 @@
     "IntrospectResult": {
       "command": null,
       "node_id": null,
-      "output": null
+      "output": null,
+      "stderr": null
     },
     "LadderGate": {
       "gate": [

@@ -528,7 +528,7 @@ class IntrospectRequest(BaseModel):
 
 
 class IntrospectResult(BaseModel):
-    """The exact output of one executed vtysh command."""
+    """The exact output and exit status of one executed vtysh command."""
 
     model_config = ConfigDict(frozen=True, extra="forbid", strict=True)
 
@@ -536,6 +536,8 @@ class IntrospectResult(BaseModel):
     command: str
     output: str
     exit_code: int
+    # What the command wrote to its error output; empty when it wrote none.
+    stderr: str
 
 
 class LinkHistoryEvent(BaseModel):

@@ -23,6 +23,9 @@ from vs_api import k8s
 
 log = logging.getLogger(__name__)
 
+# How long a command may run; the Kubernetes client's deadline for a preloaded exec.
+_EXEC_DEADLINE_S = 60
+
 VTYSH_COMMANDS = {
     "show isis neighbor",
     "show ip route",
@@ -68,16 +71,17 @@ def run_vtysh(node_id: str, command: str) -> IntrospectResult:
     target = read_workload_target(v1, namespace, node_id)
 
     try:
-        stdout = kubernetes.stream.stream(
+        resp = kubernetes.stream.stream(
             v1.connect_get_namespaced_pod_exec,
             target.pod_name,
             namespace,
             container=target.container,
             command=["vtysh", "-c", command],
-            stderr=False,
+            stderr=True,
             stdout=True,
             stdin=False,
             tty=False,
+            _preload_content=False,
         )
     except kubernetes.client.rest.ApiException as exc:
         log.warning(
@@ -88,11 +92,26 @@ def run_vtysh(node_id: str, command: str) -> IntrospectResult:
         log.warning("vtysh exec failed for %s cmd=%s: %s", node_id, command, exc, exc_info=True)
         raise IntrospectExecError("vtysh exec failed") from exc
 
-    if stdout is None:
-        log.error("vtysh exec returned None stdout for %s cmd=%s", node_id, command)
-        raise IntrospectExecError("vtysh exec returned no output")
+    try:
+        resp.run_forever(timeout=_EXEC_DEADLINE_S)
+        if resp.is_open():
+            log.warning("vtysh did not finish for %s cmd=%s", node_id, command)
+            raise IntrospectExecError(f"vtysh did not finish within {_EXEC_DEADLINE_S} s")
+        # The exit status first: reading every channel at once clears the status channel.
+        try:
+            exit_code = resp.returncode
+        except Exception as exc:
+            log.warning("vtysh never ran for %s cmd=%s: %s", node_id, command, exc, exc_info=True)
+            raise IntrospectExecError("vtysh exec failed") from exc
+        stdout = resp.read_stdout()
+        stderr = resp.read_stderr()
+    finally:
+        resp.close()
+
     max_bytes = cfg.vs_api_introspect_max_response_bytes
     if len(stdout) > max_bytes:
         stdout = stdout[:max_bytes] + "\n... (truncated)"
 
-    return IntrospectResult(node_id=node_id, command=command, output=stdout, exit_code=0)
+    return IntrospectResult(
+        node_id=node_id, command=command, output=stdout, exit_code=exit_code, stderr=stderr
+    )

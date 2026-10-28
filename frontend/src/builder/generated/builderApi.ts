@@ -947,12 +947,13 @@ export interface IntrospectRequest {
   readonly command: string;
 }
 
-/** The exact output of one executed vtysh command. */
+/** The exact output and exit status of one executed vtysh command. */
 export interface IntrospectResult {
   readonly node_id: string;
   readonly command: string;
   readonly output: string;
   readonly exit_code: number;
+  readonly stderr: string;
 }
 
 /** VS-API is serving, and where its session manager stands. */

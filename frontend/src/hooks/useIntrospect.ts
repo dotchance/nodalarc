@@ -53,7 +53,10 @@ export function useIntrospect(): UseIntrospectResult {
         return;
       }
       const data = (await res.json()) as IntrospectResult;
-      setOutput(data.output);
+      if (data.exit_code !== 0) {
+        setError(`vtysh exited ${data.exit_code}: ${data.stderr.trim() || "no error output"}`);
+      }
+      setOutput(data.output || null);
     } catch (err) {
       setError(apiErrorFromException(err));
     } finally {

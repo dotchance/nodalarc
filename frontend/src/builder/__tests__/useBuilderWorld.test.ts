@@ -3,6 +3,7 @@
 import { act, renderHook } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type {
+  BuilderCompileResult,
   BuilderVisualDraftAssemblyResult,
   BuilderVisualDraftEnvelope,
   BuilderVisualLinkRuleWidget,
@@ -500,6 +501,229 @@ describe("pending link and routing edits", () => {
     await openAsThePageDoes(result, fetchMock, draft(9));
 
     expect(result.current.pendingEdits.size).toBe(0);
+  });
+});
+
+describe("pending edit preview", () => {
+  let fetchMock: ReturnType<typeof vi.fn>;
+
+  beforeEach(() => {
+    fetchMock = vi.fn((url: string) => {
+      if (url.includes("/builder/catalog/list")) return Promise.resolve(sessionsResponse);
+      throw new Error(`unexpected request ${url}`);
+    });
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+  });
+
+  /** The compile of the accepted session with the pending edits applied. */
+  function previewCompile(marker: string): BuilderCompileResult {
+    return {
+      ...assembly(linkDraft(), marker).compile_result,
+      pending_edit_outcomes: [{ status: "applied", issues: [] }],
+    };
+  }
+
+  /** Open the link draft and hold one pending edit of its rule. */
+  async function openWithPendingEdit(hook: {
+    current: ReturnType<typeof useBuilderWorld>;
+  }): Promise<void> {
+    await openAsThePageDoes(hook, fetchMock, linkDraft());
+    fetchMock.mockImplementation((url: string) => {
+      if (url.includes("/builder/draft/object-edit")) {
+        return Promise.resolve(response(ruleAnswer(12345)));
+      }
+      throw new Error(`unexpected request ${url}`);
+    });
+    await act(async () => {
+      await hook.current.editPendingObject(RULE_ADDRESS, ruleCard(12345));
+    });
+  }
+
+  /** Hold the preview compile until the test answers it; `otherwise` answers
+   *  every other request. */
+  function holdCompile(otherwise: (url: string) => Promise<unknown>): { answer: () => void } {
+    let answer: (() => void) | null = null;
+    fetchMock.mockImplementation((url: string) => {
+      if (url.includes("/builder/compile")) {
+        return new Promise((resolve) => {
+          answer = () => resolve(response(previewCompile("pending-preview")));
+        });
+      }
+      return otherwise(url);
+    });
+    return {
+      answer: () => {
+        if (answer === null) throw new Error("no preview compile was asked for");
+        answer();
+      },
+    };
+  }
+
+  it("compiles the accepted session with the pending edits and accepts nothing", async () => {
+    const original = linkDraft();
+    const { result } = renderHook(() => useBuilderWorld());
+    await act(async () => undefined);
+    await openWithPendingEdit(result);
+    const accepted = result.current.visualDraft;
+    const acceptedAssembly = result.current.assemblyResult;
+    const preview = previewCompile("pending-preview");
+    fetchMock.mockImplementation((url: string) => {
+      if (url.includes("/builder/compile")) return Promise.resolve(response(preview));
+      throw new Error(`unexpected request ${url}`);
+    });
+
+    await act(async () => {
+      await result.current.previewPendingEdits();
+    });
+
+    expect(requestsTo(fetchMock, "/builder/compile")).toEqual([
+      {
+        draft: {
+          draft_revision: 4,
+          state: { session: original.applied_session, catalog_documents: [] },
+        },
+        target_ref: original.target_ref,
+        pending_edits: [
+          {
+            kind: "content",
+            address: RULE_ADDRESS,
+            base: ACCEPTED_RULE,
+            working: { ...ACCEPTED_RULE, max_range_km: 12345 },
+          },
+        ],
+      },
+    ]);
+    expect((result.current.world as unknown as { marker: string }).marker).toBe("pending-preview");
+    expect(result.current.compileResult).toEqual(preview);
+    expect(result.current.visualDraft).toBe(accepted);
+    expect(result.current.assemblyResult).toBe(acceptedAssembly);
+    expect(result.current.pendingEdits.size).toBe(1);
+  });
+
+  it("drops a preview the pending edits moved past", async () => {
+    const { result } = renderHook(() => useBuilderWorld());
+    await act(async () => undefined);
+    await openWithPendingEdit(result);
+    const shown = result.current.world;
+    const compile = holdCompile((url) => {
+      if (url.includes("/builder/draft/object-edit")) {
+        return Promise.resolve(response(ruleAnswer(500)));
+      }
+      throw new Error(`unexpected request ${url}`);
+    });
+
+    let preview!: Promise<void>;
+    await act(async () => {
+      preview = result.current.previewPendingEdits();
+      await result.current.editPendingObject(RULE_ADDRESS, ruleCard(500));
+    });
+    await act(async () => {
+      compile.answer();
+      await preview;
+    });
+
+    expect(requestsTo(fetchMock, "/builder/compile")).toHaveLength(1);
+    expect(result.current.world).toBe(shown);
+  });
+
+  it("drops a preview the accepted draft moved past", async () => {
+    const { result } = renderHook(() => useBuilderWorld());
+    await act(async () => undefined);
+    await openWithPendingEdit(result);
+    const commanded = linkDraft(5);
+    const compile = holdCompile((url) => {
+      if (url.includes("/builder/draft/command")) {
+        return Promise.resolve(
+          response({ draft: commanded, draft_revision: 5, affected_id: "space-1" }),
+        );
+      }
+      if (url.includes("/builder/draft/compile")) {
+        return Promise.resolve(response(assembly(commanded)));
+      }
+      throw new Error(`unexpected request ${url}`);
+    });
+
+    let preview!: Promise<void>;
+    await act(async () => {
+      preview = result.current.previewPendingEdits();
+      await result.current.runVisualCommand({
+        operation: "add_generated_space",
+        phasing_mode: "walker_delta",
+      });
+    });
+    const shown = result.current.world;
+    await act(async () => {
+      compile.answer();
+      await preview;
+    });
+
+    expect(requestsTo(fetchMock, "/builder/compile")).toHaveLength(1);
+    expect(result.current.pendingEdits.size).toBe(1);
+    expect((shown as unknown as { marker: string }).marker).toBe("revision-5");
+    expect(result.current.world).toBe(shown);
+  });
+
+  it("shows a preview the backend refused", async () => {
+    const { result } = renderHook(() => useBuilderWorld());
+    await act(async () => undefined);
+    await openWithPendingEdit(result);
+    fetchMock.mockImplementation((url: string) => {
+      if (url.includes("/builder/compile")) {
+        return Promise.resolve({
+          ok: false,
+          status: 503,
+          json: () => Promise.resolve({ detail: { message: "the catalog is unavailable" } }),
+        });
+      }
+      throw new Error(`unexpected request ${url}`);
+    });
+
+    await act(async () => {
+      await result.current.previewPendingEdits();
+    });
+
+    expect(result.current.error).toBe("the catalog is unavailable");
+    expect(result.current.world).toBeNull();
+    expect(result.current.compileResult).toBeNull();
+  });
+
+  it("compiles nothing on a draft whose session is not fully accepted, and says so", async () => {
+    const { result } = renderHook(() => useBuilderWorld());
+    await act(async () => undefined);
+    await openWithPendingEdit(result);
+    const pendingAuthoring: BuilderVisualDraftEnvelope = {
+      ...linkDraft(5),
+      projection_status: "pending_authoring",
+      applied_revision: 4,
+      authoring_workspace: newWorkspace("unaccepted"),
+    };
+    fetchMock.mockImplementation((url: string) => {
+      if (url.includes("/builder/draft/command")) {
+        return Promise.resolve(
+          response({ draft: pendingAuthoring, draft_revision: 5, affected_id: "space-1" }),
+        );
+      }
+      if (url.includes("/builder/draft/compile")) {
+        return Promise.resolve(response(assembly(pendingAuthoring)));
+      }
+      throw new Error(`unexpected request ${url}`);
+    });
+    await act(async () => {
+      await result.current.runVisualCommand({
+        operation: "add_generated_space",
+        phasing_mode: "walker_delta",
+      });
+    });
+
+    await act(async () => {
+      await result.current.previewPendingEdits();
+    });
+
+    expect(requestsTo(fetchMock, "/builder/compile")).toEqual([]);
+    expect(result.current.error).toBe(
+      "pending link and routing edits are previewed only on a fully accepted session",
+    );
+    expect(result.current.world).toBeNull();
   });
 });
 

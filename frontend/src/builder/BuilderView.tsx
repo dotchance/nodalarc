@@ -521,6 +521,7 @@ export function BuilderView({
     useCanonicalYaml,
     applyWorkspace,
     compilePreview,
+    previewPendingEdits,
     showAcceptedCompile,
     customizeChain,
     runVisualCommand,
@@ -805,6 +806,8 @@ export function BuilderView({
   // as the next accepted revision, and the twin is re-seeded from the result
   // unless it moved again meanwhile. Open windows' unapplied edits are only
   // previewed: the backend compiles them over the draft and accepts nothing.
+  // Pending link rule, routing domain and boundary edits are previewed the
+  // same way: the backend compiles the accepted session with them applied.
   // The library revision is a dependency so a preview recompiles when a
   // user-catalog mutation changes the dependency closure under open edits.
   const libraryRevision = useLibraryRevision();
@@ -844,6 +847,12 @@ export function BuilderView({
       }, 300);
       return () => clearTimeout(timer);
     }
+    // While a link or routing edit is pending, the windows that edit the twin
+    // wait, and the preview compiles the pending edits.
+    if (pendingEdits.size > 0) {
+      const timer = setTimeout(() => void previewPendingEdits(), 300);
+      return () => clearTimeout(timer);
+    }
     const preview = previewWorkspace();
     if (!preview || sameWorkspace(preview, projected)) {
       showAcceptedCompile();
@@ -863,6 +872,7 @@ export function BuilderView({
   }, [
     workspace,
     buffers,
+    pendingEdits,
     libraryRevision,
     visualDraft,
     yamlBlocksGui,

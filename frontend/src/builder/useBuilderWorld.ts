@@ -8,6 +8,7 @@ import {
   applyVisualDraftCommand,
   applyVisualDraftWorkspace,
   applyVisualDraftYaml,
+  compileBuilderDraft,
   compileVisualDraft,
   createVisualDraft,
   customizeVisualDraftChain,
@@ -1003,6 +1004,42 @@ export function useBuilderWorld() {
     [showCompile],
   );
 
+  /** The page's preview of the pending link rule, routing domain and boundary
+   *  edits: the backend compiles the accepted session with the edits applied
+   *  and accepts nothing. The result fills only the on-screen slots, and only
+   *  while the accepted draft and the pending edits are the ones it was
+   *  computed for. */
+  const previewPendingEdits = useCallback(async (): Promise<void> => {
+    const draft = visualDraftRef.current;
+    const edits = pendingEditsRef.current;
+    if (!draft) throw new Error("there is no session draft to preview");
+    const accepted = draft.projection_status === "applied" ? (draft.applied_session ?? null) : null;
+    if (accepted === null) {
+      showCompile(
+        null,
+        "pending link and routing edits are previewed only on a fully accepted session",
+      );
+      return;
+    }
+    const stillCurrent = () =>
+      visualDraftRef.current === draft && pendingEditsRef.current === edits;
+    let result: BuilderCompileResult;
+    try {
+      result = await compileBuilderDraft({
+        draft: {
+          draft_revision: draft.draft_revision,
+          state: { session: accepted, catalog_documents: draft.catalog_documents },
+        },
+        target_ref: draft.target_ref,
+        pending_edits: [...edits.values()].map((pending) => pending.edit),
+      });
+    } catch (cause) {
+      if (stillCurrent()) showCompile(null, cause instanceof Error ? cause.message : String(cause));
+      return;
+    }
+    if (stillCurrent()) showCompile(result);
+  }, [showCompile]);
+
   const customizeChain = useCallback(
     async (
       request: Omit<
@@ -1356,6 +1393,7 @@ export function useBuilderWorld() {
     world,
     documentYaml,
     compilePreview,
+    previewPendingEdits,
     showAcceptedCompile,
     loading,
     error: resolveError?.error ?? null,

@@ -594,17 +594,18 @@ _DEBUG_REPLY: TypeAdapter[DebugControlReply] = TypeAdapter(DebugControlReply)
 
 async def _send_debug_control(
     source: ServiceSource, action: DebugControlAction
-) -> DebugSourceControl | None:
-    """Send one debug control request to a service and record what came back.
-
-    None when VS-API has no NATS connection to send it on.
-    """
+) -> DebugSourceControl:
+    """Send one debug control request to a service and record what came back."""
+    sent = {"source": source, "request_seq": next(_debug_request_seq), "request": action}
+    control: DebugSourceControl
     nc = _nats_connection
     if nc is None:
         log.error("Cannot %s debug for %s: no NATS connection", action, source)
-        return None
-    sent = {"source": source, "request_seq": next(_debug_request_seq), "request": action}
-    control: DebugSourceControl
+        control = DebugControlFailedFact(
+            **sent, outcome="failed", error="VS-API has no NATS connection to send it on"
+        )
+        _debug_control[source] = control
+        return control
     try:
         resp = await nc.request(
             debug_ctrl_subject(source),
@@ -645,9 +646,7 @@ async def _enable_debug_source(source: ServiceSource) -> bool:
     control = await _send_debug_control(source, "enable")
     if not isinstance(control, DebugControlAcknowledgedFact):
         reason = (
-            "no NATS connection"
-            if control is None
-            else control.error
+            control.error
             if isinstance(control, DebugControlRejectedFact | DebugControlFailedFact)
             else control.outcome
         )
@@ -690,7 +689,7 @@ async def _disable_debug_source(source: ServiceSource) -> None:
     global _debug_sub
 
     control = await _send_debug_control(source, "disable")
-    if control is not None and not isinstance(control, DebugControlAcknowledgedFact):
+    if not isinstance(control, DebugControlAcknowledgedFact):
         log.warning("Debug disable for %s: %s", source, control.outcome)
 
     _debug_sources.discard(source)
@@ -2131,8 +2130,8 @@ async def ws_state(websocket: WebSocket) -> None:
     Sender: pushes StateSnapshot at ~1Hz (existing behavior).
     Receiver: handles the StateSocketCommand union from the log panel; a message
     that is not one closes the socket with code 4400.
-    Both run concurrently via asyncio.gather. Either side ending
-    terminates the connection cleanly.
+    Both run as tasks; when either ends, the other is cancelled and the
+    connection ends.
     """
     ws_ip = websocket.client.host if websocket.client else "unknown"
     if _API_KEY:
@@ -2213,8 +2212,18 @@ async def ws_state(websocket: WebSocket) -> None:
             if command is None:
                 _audit_log.warning(f"WS_MALFORMED_COMMAND ip={ws_ip}")
                 return True
-            await _handle_ws_debug_command(ws_id, command)
+            # A command runs to its end even when the socket closes meanwhile: an
+            # enable already sent gets its outcome recorded, and the cleanup after
+            # it disables what it enabled.
+            handling = asyncio.create_task(_handle_ws_debug_command(ws_id, command))
+            commands.add(handling)
+            try:
+                await asyncio.shield(handling)
+            finally:
+                if handling.done():
+                    commands.discard(handling)
 
+    commands: set[asyncio.Task[None]] = set()
     sender = asyncio.create_task(_sender())
     receiver = asyncio.create_task(_receiver())
     try:
@@ -2233,6 +2242,9 @@ async def ws_state(websocket: WebSocket) -> None:
         if receiver in finished and receiver.exception() is None and receiver.result():
             await websocket.close(code=4400, reason="Malformed command")
     finally:
+        for error in await asyncio.gather(*commands, return_exceptions=True):
+            if isinstance(error, Exception):
+                log.warning("WS command error for %s: %s %s", ws_ip, type(error).__name__, error)
         await _cleanup_debug_client(ws_id)
         _ws_clients.discard(websocket)
         _audit_log.info(f"WS_DISCONNECT ip={ws_ip}")
@@ -2369,7 +2381,12 @@ async def ws_terminal(websocket: WebSocket, node_id: str) -> None:
         for task in pending:
             task.cancel()
         await asyncio.gather(*pending, return_exceptions=True)
-        if reader in done and reader.result():
+        for task in done:
+            if (error := task.exception()) is not None and not isinstance(
+                error, WebSocketDisconnect
+            ):
+                log.warning("Terminal error for %s: %s %s", node_id, type(error).__name__, error)
+        if reader in done and reader.exception() is None and reader.result():
             await websocket.close(code=4400, reason="Malformed terminal message")
 
     except asyncssh.misc.DisconnectError as e:

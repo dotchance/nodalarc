@@ -3025,3 +3025,17 @@ def test_a_playback_speed_that_is_not_a_number_is_refused_before_ome(monkeypatch
     )
 
     assert response.status_code == 422
+
+
+def test_a_debug_control_request_with_no_nats_connection_records_a_failure(monkeypatch):
+    import asyncio
+
+    import vs_api.main as m
+
+    monkeypatch.setattr(m, "_nats_connection", None)
+    monkeypatch.setattr(m, "_debug_control", {})
+
+    control = asyncio.run(m._send_debug_control("ome", "enable"))
+
+    assert control.outcome == "failed"
+    assert m._debug_control == {"ome": control}

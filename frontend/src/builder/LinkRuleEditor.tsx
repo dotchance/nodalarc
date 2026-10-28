@@ -8,7 +8,12 @@
  *  ground↔space); every value is then owned by the user. Tag scopes are how
  *  one ground segment serves multiple constellations differently. The LOS
  *  candidate preview on the canvas and the dark-rule notes come from the
- *  resolver's expansion of exactly what this editor emits.
+ *  resolver's expansion of the rule the backend writes from this card.
+ *
+ *  The window edits the rule as a pending edit. It shows the card while the
+ *  backend states a card value for the rule. Otherwise it shows the field
+ *  editor over the rule's grammar JSON. An edit can move the window from one
+ *  to the other.
  */
 
 import { useState } from "react";
@@ -22,27 +27,49 @@ import {
   SelectField,
 } from "./editorKit";
 import type { BuilderRuleAllocation, BuilderWorldSegment } from "./builderTypes";
-import type { BuilderVisualAuthoringFacts } from "./generated/builderApi";
+import type {
+  BuilderVisualAuthoringFacts,
+  BuilderVisualLinkEndpoint,
+  BuilderVisualLinkRule,
+  BuilderVisualLinkRuleWidget,
+  BuilderVisualObjectControlEdit,
+  BuilderVisualObjectEditResult,
+  MountRole,
+  TerminalMedium,
+} from "./generated/builderApi";
 import {
-  linkWarnings,
-  placedSegments,
-  type DraftLinkEndpoint,
-  type DraftLinkRule,
-  type Workspace,
-  type LinkMedium,
-  type MountRole,
-} from "./workspace";
+  PendingObjectFieldEditor,
+  PendingObjectIssues,
+  useCardValueEdits,
+  useLatestObjectChange,
+} from "./pendingEditKit";
+import type { ListedLinkRule } from "./sessionListing";
+import { placedSegments, type Workspace } from "./workspace";
+
+/** One change of a link rule: its whole card value, or a field-editor batch. */
+export type LinkRuleChange = BuilderVisualLinkRuleWidget | BuilderVisualObjectControlEdit;
+
+/** Why a segment change waits while the rule has an edit. */
+const REPOINT_WAITS_FOR_EDIT =
+  "A segment change starts from the accepted rule. Apply or discard this rule's pending edit first.";
 
 interface LinkRuleEditorProps {
   workspace: Workspace;
-  rule: DraftLinkRule;
+  /** The rule's card value as the card shows it. */
+  rule: BuilderVisualLinkRule;
   /** The allocator's own outcome for this rule from the last resolve —
    *  displays report it; nothing here re-derives capacity. Null while the
    *  world is unresolved (show nothing, the existing precedent). */
   allocation: BuilderRuleAllocation | null;
-  onUpdate: (patch: Partial<DraftLinkRule>) => void;
-  onUpdateEndpoint: (side: "a" | "b", patch: Partial<DraftLinkEndpoint>) => void;
-  /** Null while a change is being applied: removing waits for it. */
+  /** Change the rule. A typed change waits for a pause in typing. */
+  onUpdate: (patch: Partial<BuilderVisualLinkRule>, typed?: boolean) => void;
+  onUpdateEndpoint: (
+    side: "a" | "b",
+    patch: Partial<BuilderVisualLinkEndpoint>,
+    typed?: boolean,
+  ) => void;
+  /** Null while the rule cannot be removed: a change is being applied, or a
+   *  link or routing edit is pending. */
   onRemove: (() => void) | null;
   /** The resolved world's segments, each with the terminal roles and media
    *  its nodes carry. Null while the world is unresolved. */
@@ -63,39 +90,44 @@ function EndpointCard({
   authoring,
 }: {
   title: string;
-  endpoint: DraftLinkEndpoint;
-  other: DraftLinkEndpoint;
+  endpoint: BuilderVisualLinkEndpoint;
+  other: BuilderVisualLinkEndpoint;
   workspace: Workspace;
   segments: ReadonlyArray<BuilderWorldSegment> | null;
-  onUpdate: (patch: Partial<DraftLinkEndpoint>) => void;
+  onUpdate: (patch: Partial<BuilderVisualLinkEndpoint>, typed?: boolean) => void;
   onSegmentChange: (newSegmentId: string) => void;
   authoring: BuilderVisualAuthoringFacts;
 }) {
   const placed = placedSegments(workspace);
-  const carries = (segmentId: string, role: MountRole, medium: LinkMedium) =>
+  const segmentId = endpoint.segment_id ?? "";
+  const role = endpoint.role ?? null;
+  const medium = endpoint.medium ?? null;
+  const carries = (candidate: string, carriedRole: MountRole, carriedMedium: TerminalMedium) =>
     segments?.some(
       (segment) =>
-        segment.segment_id === segmentId &&
+        segment.segment_id === candidate &&
         segment.capabilities.some(
-          (capability) => capability.endpoint_role === role && capability.medium === medium,
+          (capability) =>
+            capability.endpoint_role === carriedRole && capability.medium === carriedMedium,
         ),
     ) === true;
-  const bothCarry = (role: MountRole, medium: LinkMedium) =>
-    carries(endpoint.segment_id, role, medium) && carries(other.segment_id, role, medium);
+  const bothCarry = (carriedRole: MountRole, carriedMedium: TerminalMedium) =>
+    carries(segmentId, carriedRole, carriedMedium) &&
+    carries(other.segment_id ?? "", carriedRole, carriedMedium);
   // Combinations neither side can form remain visible and disabled with
   // the reason. An unresolved world means nothing is disabled.
   const known = segments !== null;
-  const roleDisabled = (role: MountRole) =>
-    known && !authoring.link_media.some((choice) => bothCarry(role, choice.id));
-  const mediumDisabled = (medium: LinkMedium) =>
-    endpoint.role !== null && known && !bothCarry(endpoint.role, medium);
+  const roleDisabled = (choice: MountRole) =>
+    known && !authoring.link_media.some((media) => bothCarry(choice, media.id));
+  const mediumDisabled = (choice: TerminalMedium) =>
+    role !== null && known && !bothCarry(role, choice);
   return (
     <EditorCard
       title={title}
       open
       summary={
         <>
-          {endpoint.role ?? "role incomplete"} · {endpoint.medium ?? "medium incomplete"}
+          {role ?? "role incomplete"} · {medium ?? "medium incomplete"}
           {endpoint.tag ? ` · tag ${endpoint.tag}` : ""}
         </>
       }
@@ -104,32 +136,32 @@ function EndpointCard({
           stack
           label="segment"
           ariaLabel={`${title} segment`}
-          value={endpoint.segment_id}
+          value={segmentId}
           onChange={(segment_id) => onSegmentChange(segment_id)}
           options={[
             ...placed.map((segment) => ({
               value: segment.segment_id,
               label: `${segment.label} (${segment.kind})`,
             })),
-            ...(placed.some((s) => s.segment_id === endpoint.segment_id)
+            ...(segmentId === "" || placed.some((s) => s.segment_id === segmentId)
               ? []
-              : [{ value: endpoint.segment_id, label: `${endpoint.segment_id} (removed)` }]),
+              : [{ value: segmentId, label: `${segmentId} (removed)` }]),
           ]}
         />
         <Field
           label="scope to tag"
           placeholder="every node in the segment"
           value={endpoint.tag ?? ""}
-          onChange={(value) => onUpdate({ tag: value.trim() || null })}
+          onChange={(value) => onUpdate({ tag: value.trim() || null }, true)}
         />
         <SelectField
           label="terminal role"
           ariaLabel={`${title} terminal role`}
-          value={endpoint.role}
-          onChange={(value) => onUpdate({ role: value as DraftLinkEndpoint["role"] })}
+          value={role}
+          onChange={(value) => onUpdate({ role: value as MountRole })}
           options={authoring.mount_roles.map((choice) => ({
             value: choice.id,
-            label: `${choice.label} \u2014 ${choice.description}`,
+            label: `${choice.label} — ${choice.description}`,
             disabled: roleDisabled(choice.id),
             title: roleDisabled(choice.id)
               ? `no ${choice.label} terminals on both ends`
@@ -139,14 +171,14 @@ function EndpointCard({
         <SelectField
           label="medium"
           ariaLabel={`${title} medium`}
-          value={endpoint.medium}
-          onChange={(value) => onUpdate({ medium: value as DraftLinkEndpoint["medium"] })}
+          value={medium}
+          onChange={(value) => onUpdate({ medium: value as TerminalMedium })}
           options={authoring.link_media.map((choice) => ({
             value: choice.id,
             label: choice.label,
             disabled: mediumDisabled(choice.id),
             title: mediumDisabled(choice.id)
-              ? `no ${endpoint.role} ${choice.label} terminals on both ends`
+              ? `no ${role} ${choice.label} terminals on both ends`
               : undefined,
           }))}
         />
@@ -154,8 +186,8 @@ function EndpointCard({
           label="min elevation"
           placeholder="none"
           suffix="deg"
-          value={endpoint.min_elevation_deg}
-          onChange={(min_elevation_deg) => onUpdate({ min_elevation_deg })}
+          value={endpoint.min_elevation_deg ?? null}
+          onChange={(min_elevation_deg) => onUpdate({ min_elevation_deg }, true)}
         />
     </EditorCard>
   );
@@ -172,7 +204,10 @@ export function LinkRuleEditor({
   allocation,
   authoring,
 }: LinkRuleEditorProps) {
-  const warnings = linkWarnings(workspace);
+  const a = rule.a ?? {};
+  const b = rule.b ?? {};
+  // An omitted `enabled` means an enabled rule, as in the grammar.
+  const enabled = rule.enabled !== false;
   const topologyRequiresN = authoring.topology_modes.find(
     (choice) => choice.id === rule.topology_mode,
   )?.requires_n;
@@ -186,26 +221,23 @@ export function LinkRuleEditor({
   };
   return (
     <div className="builder-inspector-stack" data-testid="builder-link-editor">
-      {/* The card shows the id read-only. A rename is a YAML edit. */}
-      <KeyValueRow label="id">{rule.rule_id}</KeyValueRow>
-
       <EndpointCard
         title="Endpoint A"
-        endpoint={rule.a}
-        other={rule.b}
+        endpoint={a}
+        other={b}
         workspace={workspace}
         segments={segments}
-        onUpdate={(patch) => onUpdateEndpoint("a", patch)}
+        onUpdate={(patch, typed) => onUpdateEndpoint("a", patch, typed)}
         onSegmentChange={repoint("a")}
         authoring={authoring}
       />
       <EndpointCard
         title="Endpoint B"
-        endpoint={rule.b}
-        other={rule.a}
+        endpoint={b}
+        other={a}
         workspace={workspace}
         segments={segments}
-        onUpdate={(patch) => onUpdateEndpoint("b", patch)}
+        onUpdate={(patch, typed) => onUpdateEndpoint("b", patch, typed)}
         onSegmentChange={repoint("b")}
         authoring={authoring}
       />
@@ -229,11 +261,11 @@ export function LinkRuleEditor({
       {topologyRequiresN && (
         <NumberField
           label="N"
-          value={rule.topology_n}
+          value={rule.topology_n ?? null}
           min={1}
           integer
           suffix="neighbors"
-          onChange={(topology_n) => onUpdate({ topology_n })}
+          onChange={(topology_n) => onUpdate({ topology_n }, true)}
         />
       )}
       {allocation && allocation.per_node.length > 0 && (() => {
@@ -268,23 +300,122 @@ export function LinkRuleEditor({
         placeholder="unlimited"
         suffix="km"
         min={1}
-        value={rule.max_range_km}
-        onChange={(max_range_km) => onUpdate({ max_range_km })}
+        value={rule.max_range_km ?? null}
+        onChange={(max_range_km) => onUpdate({ max_range_km }, true)}
       />
       <div className="builder-preset-row">
-        <Button active={rule.enabled} onClick={() => onUpdate({ enabled: !rule.enabled })}>
-          {rule.enabled ? "enabled" : "disabled"}
+        <Button active={enabled} onClick={() => onUpdate({ enabled: !enabled })}>
+          {enabled ? "enabled" : "disabled"}
         </Button>
-        <Button variant="danger" onClick={onRemove ?? undefined} disabled={onRemove === null}>
+        <Button
+          variant="danger"
+          onClick={onRemove ?? undefined}
+          disabled={onRemove === null}
+          title={
+            onRemove === null
+              ? "Removing waits while a change is being applied or a link or routing edit is pending."
+              : undefined
+          }
+        >
           Remove rule
         </Button>
       </div>
+    </div>
+  );
+}
 
-      {warnings.map((warning) => (
-        <div className="builder-warning" key={warning}>
-          {warning}
+/** The card over a rule the backend states a card value for. Each change is
+ *  sent as the whole card value. */
+function LinkRuleCard({
+  card,
+  editPending,
+  send,
+  onRepoint,
+  onRemove,
+  ...shared
+}: Omit<LinkRuleEditorProps, "rule" | "onUpdate" | "onUpdateEndpoint"> & {
+  card: BuilderVisualLinkRule;
+  /** Whether an edit of the rule is pending. */
+  editPending: boolean;
+  send: (rule: BuilderVisualLinkRule) => Promise<boolean>;
+}) {
+  const edits = useCardValueEdits(card, send);
+  // A segment change and a removal start from the accepted rule, so they wait
+  // while an edit of the rule is pending or still being checked.
+  const edited = editPending || edits.checking;
+  return (
+    <>
+      <LinkRuleEditor
+        {...shared}
+        rule={edits.shown}
+        onUpdate={(patch, typed) => edits.change((rule) => ({ ...rule, ...patch }), typed)}
+        onUpdateEndpoint={(side, patch, typed) =>
+          edits.change((rule) => ({ ...rule, [side]: { ...rule[side], ...patch } }), typed)
+        }
+        onRepoint={(side, newSegmentId) =>
+          edited
+            ? Promise.reject(new Error(REPOINT_WAITS_FOR_EDIT))
+            : onRepoint(side, newSegmentId)
+        }
+        onRemove={edited ? null : onRemove}
+      />
+      {edits.checking && <div className="builder-site-derived">Checking the edit…</div>}
+      {edits.error && <div className="builder-warning">{edits.error}</div>}
+    </>
+  );
+}
+
+interface LinkRuleWindowProps extends Omit<
+  LinkRuleEditorProps,
+  "rule" | "onUpdate" | "onUpdateEndpoint"
+> {
+  /** The rule as the page lists it: the accepted rule with its pending edit
+   *  laid over it. */
+  listed: ListedLinkRule;
+  /** The accepted revision. The field editor is built at it. */
+  appliedRevision: number;
+  /** Send one change of the rule. It settles once the backend's answer is
+   *  held as the rule's pending edit. */
+  onEdit: (change: LinkRuleChange) => Promise<unknown>;
+  /** Ask the backend for the rule's field editor without changing the rule. */
+  onDescribe: () => Promise<BuilderVisualObjectEditResult>;
+}
+
+/** One link rule's window: the card while the backend states a card value for
+ *  the rule, otherwise the field editor, then the issues of its pending edit. */
+export function LinkRuleWindow({
+  listed,
+  appliedRevision,
+  onEdit,
+  onDescribe,
+  ...shared
+}: LinkRuleWindowProps) {
+  const send = useLatestObjectChange(onEdit);
+  return (
+    <div className="builder-inspector-stack" data-testid="builder-link-window">
+      {/* The window shows the id read-only. A rename is a YAML edit. */}
+      <KeyValueRow label="id">{listed.id}</KeyValueRow>
+      {listed.pending !== null && (
+        <div className="builder-site-derived">
+          Pending edit. It is not applied to the session yet.
         </div>
-      ))}
+      )}
+      {listed.card !== null ? (
+        <LinkRuleCard
+          {...shared}
+          card={listed.card}
+          editPending={listed.pending !== null}
+          send={(rule) => send({ kind: "link_rule", rule })}
+        />
+      ) : (
+        <PendingObjectFieldEditor
+          pending={listed.pending}
+          appliedRevision={appliedRevision}
+          describe={onDescribe}
+          send={(commands) => send({ kind: "controls", commands })}
+        />
+      )}
+      <PendingObjectIssues issues={listed.pending?.issues ?? []} />
     </div>
   );
 }

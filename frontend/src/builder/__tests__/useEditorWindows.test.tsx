@@ -121,6 +121,18 @@ describe("useEditorWindows — buffered editing", () => {
     expect(result.current.editor.buffers[key]).toBeUndefined();
   });
 
+  it("keeps a link window whose rule the workspace does not hold", () => {
+    // A link window shows a rule the backend lists, which the workspace may not
+    // hold. A domain window still edits the workspace, so it closes with its object.
+    const { result } = withSegment();
+    const link: EditorTarget = { kind: "link", id: "relay-rule" };
+    const domain: EditorTarget = { kind: "domain", id: "no-such-domain" };
+    act(() => result.current.editor.openEditor(link));
+    act(() => result.current.editor.openEditor(domain));
+    expect(result.current.editor.isOpen(targetKey(link))).toBe(true);
+    expect(result.current.editor.isOpen(targetKey(domain))).toBe(false);
+  });
+
   it("a session gesture closes every window except the component draft", () => {
     const { result, segmentId } = withSegment();
     const segment = targetKey({ kind: "segment", id: segmentId });

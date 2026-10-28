@@ -5,8 +5,9 @@
  *  A resolve refusal names a subject — a link rule, a routing domain, or a
  *  segment. This maps that subject back to the editor window that owns it, so
  *  the wall opens the right editor. A rule or domain is found by its grammar id
- *  among the objects the backend lists, with the pending edits laid over them;
- *  a segment is found in the PREVIEW workspace (applied + dirty overlays). It
+ *  among the objects the backend lists, with the pending edits laid over them.
+ *  Every listed rule has a window. A segment is found in the PREVIEW workspace
+ *  (applied + dirty overlays). It
  *  matches by the stable backend-issued subject id — never by parsing labels,
  *  prose, or runtime ids. A subject with no window to show it returns null, and
  *  the caller shows the session-level wall instead: a refusal is never dropped.
@@ -25,7 +26,7 @@ export function wallTarget(
   const subject = resolveError.subject;
   if (subject?.kind === "link_rule") {
     const rule = listed.linkRules.find((r) => r.id === subject.id);
-    if (rule && cardWindowShows(rule)) {
+    if (rule) {
       const target: EditorTarget = { kind: "link", id: rule.id };
       return { target, key: targetKey(target) };
     }

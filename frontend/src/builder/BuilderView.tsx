@@ -51,7 +51,7 @@ import { CustomizeChainEditor } from "./CustomizeChainEditor";
 import { GroundEditor } from "./GroundEditor";
 import { LibraryPanel } from "./LibraryPanel";
 import { LinkAndRoutingOutline } from "./LinkAndRoutingOutline";
-import { LinkRuleEditor } from "./LinkRuleEditor";
+import { LinkRuleWindow } from "./LinkRuleEditor";
 import { CatalogDraftEditorWindow } from "./CatalogDraftEditorWindow";
 import { OpenSessionPicker } from "./OpenSessionPicker";
 import { BoundaryEditor, RoutingDomainEditor } from "./RoutingEditor";
@@ -101,12 +101,10 @@ import {
 } from "./builderApiClient";
 import { workspaceFromVisualDraft } from "./visualWorkspace";
 import {
-  emittedRuleId,
   placedSegments,
   type DraftBoundary,
   type DraftConstellation,
   type DraftGroundSet,
-  type DraftLinkRule,
   type DraftRoutingDomain,
   type Workspace,
 } from "./workspace";
@@ -218,10 +216,12 @@ const BUFFERED_WINDOW_KINDS: ReadonlySet<EditorTarget["kind"]> = new Set([
   "session",
   "segment",
   "ground",
-  "link",
   "domain",
   "boundary",
 ]);
+
+/** The windows whose edits are pending edits of the accepted session. */
+const PENDING_EDIT_WINDOW_KINDS: ReadonlySet<EditorTarget["kind"]> = new Set(["link"]);
 
 /** One-line form of a refusal for the compact surfaces (canvas note,
  *  status bar) — the owning window's wall carries the full text. */
@@ -526,6 +526,8 @@ export function BuilderView({
     customizeChain,
     runVisualCommand,
     mutateControls,
+    editPendingObject,
+    describePendingObject,
     prepareRetarget,
     captureCoordinator,
     captureIsCurrent,
@@ -805,6 +807,16 @@ export function BuilderView({
       ),
     [assemblyResult?.listing, pendingEdits],
   );
+  // A link window shows a rule the backend lists or a pending edit holds. It
+  // closes when neither holds the rule any more.
+  useEffect(() => {
+    for (const w of windows) {
+      const target = w.target;
+      if (target.kind === "link" && !listed.linkRules.some((rule) => rule.id === target.id)) {
+        closeWindow(w.key);
+      }
+    }
+  }, [closeWindow, listed, windows]);
   // The wall's owning editor target (wallTarget). A segment is matched against
   // the preview overlay — the refused document was serialized from it, so a
   // dirty segment must be matched by the dirty draft, not the applied state.
@@ -832,6 +844,19 @@ export function BuilderView({
       workspace.ground_refs.length >
       0;
   const yamlBlocksGui = yamlBlocksGraphicalEditing(visualDraft !== null, yamlBuffer);
+  /** Why the windows that edit pending edits cannot change their objects now;
+   *  null when they can. Those edits are made on the accepted session, so they
+   *  wait while a change is being applied, while a window holds twin edits the
+   *  backend has not accepted, and while the YAML is unapplied. */
+  const pendingEditRefusal = (): string | null => {
+    const unsettled = unsettledReason();
+    if (unsettled !== null) return unsettled;
+    if (yamlBlocksGui) return "Apply or canonicalize the session YAML before editing here.";
+    if (dirtyWindows > 0) {
+      return `Apply or discard the ${count(dirtyWindows, "window")} with unapplied edits first.`;
+    }
+    return null;
+  };
   useEffect(() => {
     if (
       saveState.kind === "saving" ||
@@ -1753,15 +1778,22 @@ export function BuilderView({
         };
       }
       case "link": {
-        const applied = workspace?.links.find((r) => r.rule_id === target.id);
-        if (!workspace || !applied) return null;
-        const key = targetKey(target);
-        const rule = (buffers[key]?.draft as DraftLinkRule | undefined) ?? applied;
+        const rule = listed.linkRules.find((candidate) => candidate.id === target.id);
+        const appliedRevision = visualDraft?.applied_revision ?? null;
+        if (!workspace || !rule || appliedRevision === null) return null;
+        const address = { kind: "member", list_pointer: "/link_rules", id: rule.id } as const;
         const ruleWall = wallFor(target);
-        const ruleAllocation =
-          world?.allocations.find((a) => a.rule_id === emittedRuleId(rule)) ?? null;
+        // The rule is removed from the twin, so removing waits while a change
+        // is being applied or any link or routing edit is pending.
+        const removeRule =
+          writer !== null || pendingEditCount > 0
+            ? null
+            : () => {
+                removeLinkRule(rule.id);
+                closeWindow(targetKey(target));
+              };
         return {
-          title: rule.rule_id,
+          title: rule.pending === null ? rule.id : `${rule.id} •`,
           content: (
             <>
             {ruleWall && (
@@ -1769,35 +1801,26 @@ export function BuilderView({
                 {ruleWall}
               </div>
             )}
-            <LinkRuleEditor
+            <LinkRuleWindow
               authoring={authoring!}
-              key={rule.rule_id}
+              key={rule.id}
+              listed={rule}
+              appliedRevision={appliedRevision}
+              onEdit={(change) => editPendingObject(address, change)}
+              onDescribe={() => describePendingObject(address)}
               workspace={workspace}
-              rule={rule}
               segments={world?.segments ?? null}
-              allocation={ruleAllocation}
+              allocation={world?.allocations.find((a) => a.rule_id === rule.id) ?? null}
               onRepoint={async (side, newSegmentId) => {
-                const result = await runWindowCommand(key, {
+                const result = await applyWorkspaceCommand({
                   operation: "rederive_link",
-                  rule_id: rule.rule_id,
+                  rule_id: rule.id,
                   side,
                   segment_id: newSegmentId,
                 });
                 return result.notice ?? "link physics rederived by VS-API";
               }}
-              onUpdate={(patch) =>
-                patchBuffer(key, applied, (r) => ({ ...r, ...patch }))
-              }
-              onUpdateEndpoint={(side, patch) =>
-                patchBuffer(key, applied, (r) => ({
-                  ...r,
-                  [side]: { ...r[side], ...patch },
-                }))
-              }
-              onRemove={writer !== null ? null : () => {
-                removeLinkRule(rule.rule_id);
-                closeWindow(key);
-              }}
+              onRemove={removeRule}
             />
             </>
           ),
@@ -2824,7 +2847,13 @@ export function BuilderView({
           if (!body) return null;
           const buf = buffers[win.key];
           const buffered = BUFFERED_WINDOW_KINDS.has(win.target.kind);
-          const lockedByPendingEdits = buffered && pendingEditCount > 0;
+          const lockReason = buffered
+            ? pendingEditCount > 0
+              ? `Apply or discard the ${pendingEditsPhrase(pendingEditCount)} before editing here.`
+              : null
+            : PENDING_EDIT_WINDOW_KINDS.has(win.target.kind)
+              ? pendingEditRefusal()
+              : null;
           return (
             <FloatingWindow
               key={win.key}
@@ -2835,13 +2864,8 @@ export function BuilderView({
               minWidth={320}
               minHeight={240}
             >
-              <div className="builder-window-body" inert={lockedByPendingEdits}>
-                {lockedByPendingEdits && (
-                  <div className="builder-warning">
-                    Apply or discard the {pendingEditsPhrase(pendingEditCount)} before editing
-                    here.
-                  </div>
-                )}
+              <div className="builder-window-body" inert={lockReason !== null}>
+                {lockReason !== null && <div className="builder-warning">{lockReason}</div>}
                 {body.content}
               </div>
               {buffered && (

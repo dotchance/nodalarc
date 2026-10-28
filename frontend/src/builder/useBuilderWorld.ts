@@ -561,6 +561,30 @@ function beginPendingEdit(
   return { kind: "content", address, base: member, working: member };
 }
 
+/** What an object edit is made against: the accepted draft, its revision, and
+ *  the object's edit as it now stands, which is its pending edit or a new one
+ *  that starts from the object in the accepted session. */
+function objectEditBasis(
+  draft: BuilderVisualDraftEnvelope | null,
+  pending: ReadonlyMap<string, PendingObjectEdit>,
+  address: PendingEditAddress,
+): {
+  draft: BuilderVisualDraftEnvelope;
+  appliedRevision: number;
+  key: string;
+  edit: BuilderContentEdit;
+} {
+  if (!draft) throw new Error("there is no visual draft to edit");
+  const accepted = draft.applied_session ?? null;
+  const appliedRevision = draft.applied_revision ?? null;
+  if (accepted === null || appliedRevision === null) {
+    throw new Error("link rules, routing domains and boundaries are edited on an accepted session");
+  }
+  const key = pendingEditKey(address);
+  const edit = pending.get(key)?.edit ?? beginPendingEdit(accepted, address);
+  return { draft, appliedRevision, key, edit };
+}
+
 const EMPTY_YAML_BUFFER: SessionYamlBufferState = {
   text: "",
   appliedText: "",
@@ -1202,20 +1226,14 @@ export function useBuilderWorld() {
       change: NonNullable<BuilderVisualObjectEditRequest["change"]>,
     ): Promise<BuilderVisualObjectEditResult> => {
       const epoch = epochRef.current;
-      const draft = visualDraftRef.current;
-      if (!draft) throw new Error("there is no visual draft to edit");
-      const accepted = draft.applied_session ?? null;
-      const appliedRevision = draft.applied_revision ?? null;
-      if (accepted === null || appliedRevision === null) {
-        throw new Error(
-          "link rules, routing domains and boundaries are edited on an accepted session",
-        );
-      }
+      const { draft, appliedRevision, key, edit } = objectEditBasis(
+        visualDraftRef.current,
+        pendingEditsRef.current,
+        address,
+      );
       if (yamlBlocksGraphicalEditing(true, yamlBufferRef.current)) {
         throw new Error("apply or canonicalize the YAML buffer before editing graphically");
       }
-      const key = pendingEditKey(address);
-      const edit = pendingEditsRef.current.get(key)?.edit ?? beginPendingEdit(accepted, address);
       const request = ++objectEditSequenceRef.current;
       latestObjectEditRef.current.set(key, request);
       const answer = await editVisualDraftObject({
@@ -1239,6 +1257,31 @@ export function useBuilderWorld() {
       return answer;
     },
     [assertEpoch, setPendingEdits],
+  );
+
+  /** Describe one link rule, one routing domain or the boundary list as it now
+   *  stands, without changing it: the backend answers for its pending edit's
+   *  working JSON, or for the object in the accepted session when no edit of it
+   *  is pending, with the field editor over that JSON at the accepted revision.
+   *  Nothing is held. */
+  const describePendingObject = useCallback(
+    async (address: PendingEditAddress): Promise<BuilderVisualObjectEditResult> => {
+      const epoch = epochRef.current;
+      const { draft, appliedRevision, edit } = objectEditBasis(
+        visualDraftRef.current,
+        pendingEditsRef.current,
+        address,
+      );
+      const answer = await editVisualDraftObject({
+        target_ref: draft.target_ref,
+        applied_revision: appliedRevision,
+        address,
+        working: edit.working,
+      });
+      assertEpoch(epoch);
+      return answer;
+    },
+    [assertEpoch],
   );
 
   const captureCoordinator = useCallback((): SessionCoordinatorCapture => ({
@@ -1412,6 +1455,7 @@ export function useBuilderWorld() {
     runVisualCommand,
     mutateControls,
     editPendingObject,
+    describePendingObject,
     prepareRetarget,
     captureCoordinator,
     captureIsCurrent,

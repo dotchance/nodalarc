@@ -36,12 +36,12 @@ import { BuildGuide } from "../BuildGuide";
 import { GroundEditor } from "../GroundEditor";
 import { SiteEditor } from "../SiteEditor";
 import { ConstellationEditor } from "../ConstellationEditor";
-import { LinkRuleEditor } from "../LinkRuleEditor";
+import { LinkRuleEditor, LinkRuleWindow } from "../LinkRuleEditor";
 import { RoutingDomainEditor } from "../RoutingEditor";
 import {
   accessBeamElevationDeg,
 } from "../linkPhysics";
-import { type DraftLinkRule, type DraftSiteObject } from "../workspace";
+import { type DraftSiteObject } from "../workspace";
 import { AUTHORING_FACTS } from "./fixtures/authoringFacts";
 import {
   defaultRoutingDomain,
@@ -49,7 +49,11 @@ import {
   newDraftGroundSet,
   newWorkspace,
 } from "./fixtures/workspaceFixtures";
-import type { CatalogDocumentSummary, JsonValue } from "../generated/builderApi";
+import type {
+  BuilderVisualLinkRule,
+  CatalogDocumentSummary,
+  JsonValue,
+} from "../generated/builderApi";
 import {
   canDeploy,
   draftHoldsUnsavedWork,
@@ -558,7 +562,7 @@ describe("the link editor reads terminal capabilities from the world", () => {
       medium: "rf" as const,
       min_elevation_deg: null,
     });
-    const rule: DraftLinkRule = {
+    const rule: BuilderVisualLinkRule = {
       rule_id: "ground-to-space",
       enabled: true,
       a: endpoint(ground.segment_id),
@@ -569,7 +573,6 @@ describe("the link editor reads terminal capabilities from the world", () => {
     };
     workspace.space.push(space);
     workspace.ground.push(ground);
-    workspace.links.push(rule);
     // The ground segment carries rf access only; the space segment also
     // carries optical isl.
     const world = tinyWorld(ground.segment_id, space.segment_id);
@@ -631,7 +634,7 @@ describe("link and domain cards show the grammar id and offer no rename", () => 
       medium: "optical" as const,
       min_elevation_deg: null,
     };
-    const rule: DraftLinkRule = {
+    const rule: BuilderVisualLinkRule = {
       rule_id: "fabric-1",
       enabled: true,
       a: endpoint,
@@ -640,17 +643,23 @@ describe("link and domain cards show the grammar id and offer no rename", () => 
       topology_n: 2,
       max_range_km: null,
     };
-    workspace.links.push(rule);
     render(
-      <LinkRuleEditor
+      <LinkRuleWindow
         authoring={AUTHORING_FACTS}
         workspace={workspace}
-        rule={rule}
+        listed={{
+          id: "fabric-1",
+          accepted: { rule_id: "fabric-1", segment_ids: [space.segment_id], widget: rule },
+          pending: null,
+          card: rule,
+          segmentIds: [space.segment_id],
+        }}
+        appliedRevision={1}
+        onEdit={async () => undefined}
+        onDescribe={() => Promise.reject(new Error("a card rule is not described"))}
         segments={null}
         allocation={null}
         onRepoint={async () => ""}
-        onUpdate={() => {}}
-        onUpdateEndpoint={() => {}}
         onRemove={null}
       />,
     );

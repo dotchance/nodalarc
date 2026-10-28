@@ -102,15 +102,14 @@ function objectTitle(workspace: Workspace, target: EditorTarget): string {
 
 /** A window bound to a workspace object — one the reconciliation pass can
  *  resolve through appliedObjectForKey and must prune when it vanishes. The
- *  seven other kinds (session's applied view is a field-pick, not an object;
+ *  other kinds (session's applied view is a field-pick, not an object;
  *  library/catalog/open-session/save-session are chrome; inspect/node-view are
- *  read-only views of catalog/world state) own no editable object and are never
- *  pruned or re-seeded by the pass. */
+ *  read-only views of catalog/world state; a link window edits a pending edit
+ *  of the accepted session) are never pruned or re-seeded by the pass. */
 function isObjectTarget(target: EditorTarget): boolean {
   switch (target.kind) {
     case "segment":
     case "ground":
-    case "link":
     case "domain":
     case "boundary":
       return true;

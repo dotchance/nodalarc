@@ -175,16 +175,18 @@ function renderOutline(
 }
 
 describe("the outline's Links and Routing groups", () => {
-  it("lists the rules and domains no card writes back, and opens only those a card shows", () => {
+  it("lists the rules and domains no card writes back, and opens every rule", () => {
     const onOpen = renderOutline(listSessionObjects(LISTING, []));
     fireEvent.click(screen.getByRole("button", { name: /leo-isl/ }));
     expect(onOpen).toHaveBeenCalledWith({ kind: "link", id: "leo-isl" });
+    // No card writes geo-relay back: its window shows the field editor.
+    fireEvent.click(screen.getByRole("button", { name: /^geo-relay/ }));
+    expect(onOpen).toHaveBeenCalledWith({ kind: "link", id: "geo-relay" });
     fireEvent.click(screen.getByRole("button", { name: /leo-core/ }));
     expect(onOpen).toHaveBeenCalledWith({ kind: "domain", id: "leo-core" });
     fireEvent.click(screen.getByRole("button", { name: /over geo-relay/ }));
     expect(onOpen).toHaveBeenCalledWith({ kind: "boundary", id: "boundary-1" });
     for (const [name, kind] of [
-      ["geo-relay", "link rule"],
       ["geo-core", "routing domain"],
       ["over leo-isl", "boundary"],
     ] as const) {
@@ -199,7 +201,7 @@ describe("the outline's Links and Routing groups", () => {
   });
 
   it("marks a pending row and states only what its edit's answer states", () => {
-    renderOutline(
+    const onOpen = renderOutline(
       listSessionObjects(LISTING, [
         pendingAnswer(ruleAddress("leo-isl"), {
           kind: "link_rule",
@@ -208,12 +210,15 @@ describe("the outline's Links and Routing groups", () => {
         pendingAnswer(domainAddress("leo-core"), null),
       ]),
     );
-    const rule = screen.getByText("leo-isl").closest(".builder-library-entry");
-    expect(rule?.textContent).toContain("isl · off · pending edit");
+    const rule = screen.getByRole("button", { name: /leo-isl/ });
+    expect(rule.textContent).toContain("isl · off · pending edit");
+    // A pending rule opens its window, which shows the pending edit.
+    fireEvent.click(rule);
+    expect(onOpen).toHaveBeenCalledWith({ kind: "link", id: "leo-isl" });
     const domain = screen.getByText("leo-core").closest(".builder-library-entry");
     expect(domain?.textContent).toContain("pending edit");
     expect(domain?.textContent).not.toContain("isis");
-    expect(screen.queryByRole("button", { name: /leo-isl|leo-core/ })).toBeNull();
+    expect(screen.queryByRole("button", { name: /leo-core/ })).toBeNull();
   });
 
   it("shows the resolver's domains read-only when the session declares none", () => {
@@ -241,7 +246,7 @@ describe("the outline's Links and Routing groups", () => {
 });
 
 describe("the segment links card", () => {
-  it("lists every rule that names the segment, a card's or not", () => {
+  it("lists and opens every rule that names the segment, a card's or not", () => {
     const workspace = newWorkspace("links");
     workspace.space_refs = [
       { segment_id: "leo", source_ref: "nodalarc:constellations/leo.yaml", label: "LEO" },
@@ -262,9 +267,10 @@ describe("the segment links card", () => {
     expect(onOpenRule).toHaveBeenCalledWith("leo-isl");
     expect(screen.getByText("leo-isl").closest("button")?.textContent).toContain("isl · mesh");
     // No card writes geo-relay back: the row names the other segment the rule
-    // names and opens nothing.
-    const relay = screen.getByText("geo-relay").closest(".builder-library-entry");
-    expect(relay?.textContent).toContain("GEO");
-    expect(screen.queryByRole("button", { name: /geo-relay/ })).toBeNull();
+    // names and opens the rule's window.
+    const relay = screen.getByRole("button", { name: /geo-relay/ });
+    expect(relay.textContent).toContain("GEO");
+    fireEvent.click(relay);
+    expect(onOpenRule).toHaveBeenCalledWith("geo-relay");
   });
 });

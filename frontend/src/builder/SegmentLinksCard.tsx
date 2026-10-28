@@ -8,7 +8,7 @@
  */
 
 import { EditorCard, SelectField } from "./editorKit";
-import { cardWindowShows, noWindowReason, type ListedLinkRule } from "./sessionListing";
+import type { ListedLinkRule } from "./sessionListing";
 import { placedSegments, type Workspace } from "./workspace";
 
 interface SegmentLinksCardProps {
@@ -57,28 +57,17 @@ export function SegmentLinksCard({
       open
       summary={touching.length === 1 ? "1 rule" : `${touching.length} rules`}
     >
-        {touching.map((rule) =>
-          cardWindowShows(rule) ? (
-            <button
-              key={rule.id}
-              className="builder-outline-row"
-              title={`Edit ${rule.id}`}
-              onClick={() => onOpenRule(rule.id)}
-            >
-              <span>{rule.id}</span>
-              <span className="builder-outline-count">{detail(rule)}</span>
-            </button>
-          ) : (
-            <div
-              key={rule.id}
-              className="builder-library-entry"
-              title={noWindowReason("link rule", rule.pending !== null)}
-            >
-              <span>{rule.id}</span>
-              <span className="builder-outline-count">{detail(rule)}</span>
-            </div>
-          ),
-        )}
+        {touching.map((rule) => (
+          <button
+            key={rule.id}
+            className="builder-outline-row"
+            title={`Edit ${rule.id}`}
+            onClick={() => onOpenRule(rule.id)}
+          >
+            <span>{rule.id}</span>
+            <span className="builder-outline-count">{detail(rule)}</span>
+          </button>
+        ))}
         <SelectField
           stack
           label="+ link to…"

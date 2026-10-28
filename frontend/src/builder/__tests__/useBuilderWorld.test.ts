@@ -373,6 +373,50 @@ describe("pending link and routing edits", () => {
     expect(result.current.visualDraft).toBe(accepted);
   });
 
+  it("describes an object as it now stands and holds nothing", async () => {
+    const { result } = renderHook(() => useBuilderWorld());
+    await act(async () => undefined);
+    await openAsThePageDoes(result, fetchMock, linkDraft());
+    // The backend's answer for the accepted rule, as if no card writes it back.
+    const description: BuilderVisualObjectEditResult = {
+      ...ruleAnswer(0),
+      working: ACCEPTED_RULE,
+      widget: null,
+    };
+    answerObjectEdits(description, ruleAnswer(12345), ruleAnswer(12345));
+
+    let described!: BuilderVisualObjectEditResult;
+    await act(async () => {
+      described = await result.current.describePendingObject(RULE_ADDRESS);
+    });
+    // With no edit pending, the accepted rule is described, with no change.
+    expect(described).toEqual(description);
+    expect(result.current.pendingEdits.size).toBe(0);
+
+    await act(async () => {
+      await result.current.editPendingObject(RULE_ADDRESS, ruleCard(12345));
+    });
+    const held = result.current.pendingEdits;
+    await act(async () => {
+      await result.current.describePendingObject(RULE_ADDRESS);
+    });
+    // With an edit pending, its working JSON is described, and the edit stays as it was.
+    const [first, , third] = requestsTo(fetchMock, "/builder/draft/object-edit");
+    expect(first).toEqual({
+      target_ref: "user:sessions/coordinated.yaml",
+      applied_revision: 4,
+      address: RULE_ADDRESS,
+      working: ACCEPTED_RULE,
+    });
+    expect(third).toEqual({
+      target_ref: "user:sessions/coordinated.yaml",
+      applied_revision: 4,
+      address: RULE_ADDRESS,
+      working: { ...ACCEPTED_RULE, max_range_km: 12345 },
+    });
+    expect(result.current.pendingEdits).toBe(held);
+  });
+
   it("does not hold an answer a newer edit of the same object overtook", async () => {
     const { result } = renderHook(() => useBuilderWorld());
     await act(async () => undefined);

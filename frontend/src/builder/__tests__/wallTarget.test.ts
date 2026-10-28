@@ -76,20 +76,28 @@ describe("wallTarget", () => {
     });
   });
 
-  it("leaves to the session-level wall a subject no window shows", () => {
-    // No card writes leo-fabric back, and core holds a pending edit: neither
-    // window can show its object.
-    const listed = listSessionObjects(LISTING, [
-      pendingAnswer(domainAddress("core"), null),
-      pendingAnswer(ruleAddress("gw-access"), null),
-    ]);
-    for (const subject of [
-      { kind: "link_rule", id: "leo-fabric" },
-      { kind: "link_rule", id: "gw-access" },
-      { kind: "routing_domain", id: "core" },
-    ]) {
-      expect(wallTarget(placedWorkspace(), listed, { error: "refused", subject })).toBeNull();
+  it("routes a rule no card writes back, or a pending rule, to its window", () => {
+    const listed = listSessionObjects(LISTING, [pendingAnswer(ruleAddress("gw-access"), null)]);
+    for (const id of ["leo-fabric", "gw-access"]) {
+      const target = { kind: "link" as const, id };
+      expect(
+        wallTarget(placedWorkspace(), listed, {
+          error: "refused",
+          subject: { kind: "link_rule", id },
+        }),
+      ).toEqual({ target, key: targetKey(target) });
     }
+  });
+
+  it("leaves to the session-level wall a subject no window shows", () => {
+    // core holds a pending edit, so its window cannot show it.
+    const listed = listSessionObjects(LISTING, [pendingAnswer(domainAddress("core"), null)]);
+    expect(
+      wallTarget(placedWorkspace(), listed, {
+        error: "refused",
+        subject: { kind: "routing_domain", id: "core" },
+      }),
+    ).toBeNull();
   });
 
   it("a segment subject falls through space→ground", () => {

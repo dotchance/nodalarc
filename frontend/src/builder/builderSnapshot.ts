@@ -163,6 +163,7 @@ export function builderSnapshotFromWorld(world: BuilderWorld): StateSnapshot {
   });
 
   return {
+    msg_type: "state_snapshot",
     sim_time: world.ephemeris.sim_time,
     wall_time: world.ephemeris.sim_time,
     schema_version: 0,

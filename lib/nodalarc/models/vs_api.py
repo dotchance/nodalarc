@@ -405,7 +405,8 @@ class StateSnapshot(BaseModel):
 
 
 class SessionEphemerisFrame(SessionEphemeris):
-    """The session ephemeris as the state socket sends it: on connect and on epoch change."""
+    """The session ephemeris as the state socket sends it: on connect and when a session
+    becomes active."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 

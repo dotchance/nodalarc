@@ -14,6 +14,7 @@ afterEach(() => {
 
 function snapshot(history_recording: HistoryRecordingState | null): StateSnapshot {
   return {
+    msg_type: "state_snapshot",
     sim_time: "2026-06-01T12:00:00.000Z",
     wall_time: "2026-06-01T12:00:00.000Z",
     schema_version: 1,

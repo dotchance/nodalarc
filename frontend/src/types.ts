@@ -229,6 +229,7 @@ export interface OpsEvent {
 /** An ops event as VS-API serves it, stamped with its arrival seq. */
 export interface StampedOpsEvent {
   timestamp: string;
+  tenant_id: string;
   session_id: string;
   source: ServiceSource;
   hostname: string;
@@ -293,6 +294,7 @@ export interface AlmanacState {
 }
 
 export interface StateSnapshot {
+  msg_type: "state_snapshot";
   sim_time: string;
   wall_time: string;
   schema_version: number;

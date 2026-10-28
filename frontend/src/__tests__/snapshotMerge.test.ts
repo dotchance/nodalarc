@@ -10,7 +10,7 @@ const base = (over: Partial<StateSnapshot>): StateSnapshot =>
   ({ ops_log_token: "tok-a", ...over }) as StateSnapshot;
 
 const ev = (seq: number, code = `E${seq}`): StampedOpsEvent =>
-  ({ seq, code, timestamp: "", session_id: "", source: "ome", hostname: "", level: "info", message: "" });
+  ({ seq, code, timestamp: "", tenant_id: "", session_id: "", source: "ome", hostname: "", level: "info", message: "" });
 
 describe("mergeSnapshot", () => {
   it("appends incremental events to the scrollback", () => {

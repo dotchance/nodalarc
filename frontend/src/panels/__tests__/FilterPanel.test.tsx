@@ -37,6 +37,7 @@ function node(node_id: string, segment_id: string, tags: string[]): NodeState {
 
 function snapshot(): StateSnapshot {
   return {
+    msg_type: "state_snapshot",
     sim_time: "2026-01-01T00:00:00Z",
     wall_time: "2026-01-01T00:00:00Z",
     schema_version: 1,

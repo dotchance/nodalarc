@@ -843,6 +843,12 @@ export interface BuilderVisualLinkRuleListing {
   readonly widget: BuilderVisualLinkRule | null;
 }
 
+/** A link rule's card value, which states the whole rule. */
+export interface BuilderVisualLinkRuleWidget {
+  readonly kind: "link_rule";
+  readonly rule: BuilderVisualLinkRule;
+}
+
 /** Mint complete sites and addresses from typed locations and one ground stamp. */
 export interface BuilderVisualMintGroundMembersCommand {
   readonly operation: "mint_ground_members";
@@ -865,6 +871,30 @@ export interface BuilderVisualNode {
   readonly profile?: string | null;
   readonly ethernet?: ReadonlyArray<string>;
   readonly terminals?: ReadonlyArray<BuilderVisualTerminalMount>;
+}
+
+/** A field-editor batch over the tree an earlier object edit answered. */
+export interface BuilderVisualObjectControlEdit {
+  readonly kind: "controls";
+  readonly commands: ReadonlyArray<BuilderSetScalarCommand | BuilderSetPresentCommand | BuilderSelectChoiceCommand | BuilderInsertItemCommand | BuilderRemoveItemCommand | BuilderMoveItemCommand | BuilderInsertMapEntryCommand | BuilderRemoveMapEntryCommand | BuilderRenameMapKeyCommand>;
+}
+
+/** Edit one link rule, one routing domain or the boundary list without accepting it. ``working`` is the object's grammar JSON as its pending edit holds it. With no change, the answer describes that JSON. A card value states the whole object. A control edit names controls of the tree an earlier answer built over this same working JSON at ``applied_revision``. */
+export interface BuilderVisualObjectEditRequest {
+  readonly target_ref: SessionRef;
+  readonly applied_revision: number;
+  readonly address: BuilderMemberAddress | BuilderWholeListAddress;
+  readonly working: Readonly<Record<string, JsonValue>> | ReadonlyArray<JsonValue>;
+  readonly change?: BuilderVisualLinkRuleWidget | BuilderVisualRoutingDomainWidget | BuilderVisualRoutingBoundariesWidget | BuilderVisualObjectControlEdit | null;
+}
+
+/** One object's working JSON after an edit, with the editors that state it. Nothing is accepted. ``widget`` is the card value that writes the working JSON back unchanged; it is null for an object that does not validate on its own or that no card writes back unchanged. The control tree covers the working JSON at the accepted revision and keeps the object's id read-only. Issue pointers are within the working JSON. */
+export interface BuilderVisualObjectEditResult {
+  readonly address: BuilderMemberAddress | BuilderWholeListAddress;
+  readonly working: Readonly<Record<string, JsonValue>> | ReadonlyArray<JsonValue>;
+  readonly widget: BuilderVisualLinkRuleWidget | BuilderVisualRoutingDomainWidget | BuilderVisualRoutingBoundariesWidget | null;
+  readonly control_tree: BuilderControlTree;
+  readonly issues: ReadonlyArray<BuilderIssue>;
 }
 
 /** Editable orbital geometry for one generated constellation. */
@@ -922,6 +952,12 @@ export interface BuilderVisualRederiveLinkCommand {
   readonly segment_id: string;
 }
 
+/** The card value of each routing boundary, in list order. A null entry is a boundary no card writes back unchanged. Sent with an edit, a null entry leaves that boundary as the working list holds it. */
+export interface BuilderVisualRoutingBoundariesWidget {
+  readonly kind: "routing_boundaries";
+  readonly boundaries: ReadonlyArray<BuilderVisualRoutingBoundary | null>;
+}
+
 /** Editable routing boundary assembled without omission. */
 export interface BuilderVisualRoutingBoundary {
   readonly boundary_id?: string;
@@ -955,6 +991,12 @@ export interface BuilderVisualRoutingDomainListing {
   readonly protocol: RoutingProtocol;
   readonly segment_ids: ReadonlyArray<string>;
   readonly widget: BuilderVisualRoutingDomain | null;
+}
+
+/** A routing domain's card value, which states the whole domain. */
+export interface BuilderVisualRoutingDomainWidget {
+  readonly kind: "routing_domain";
+  readonly domain: BuilderVisualRoutingDomain;
 }
 
 /** Presentation and runtime facts for one routing protocol. */

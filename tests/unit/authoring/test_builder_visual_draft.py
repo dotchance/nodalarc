@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Iterator
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -31,7 +32,10 @@ from nodalarc.models.builder_visual_api import (
     BuilderVisualLinkEndpoint,
     BuilderVisualLinkRule,
     BuilderVisualNode,
+    BuilderVisualObjectEditRequest,
+    BuilderVisualObjectEditResult,
     BuilderVisualOrbit,
+    BuilderVisualRoutingBoundariesWidget,
     BuilderVisualRoutingBoundary,
     BuilderVisualRoutingDomain,
     BuilderVisualSite,
@@ -49,7 +53,7 @@ from nodalarc.models.builder_world import (
 from nodalarc.models.link_rules import LinkRule
 from nodalarc.models.segment_session import RoutingBoundary, RoutingDomain
 from nodalarc.resolve_session import SessionResolution
-from pydantic import TypeAdapter, ValidationError
+from pydantic import BaseModel, TypeAdapter, ValidationError
 from vs_api.builder_compiler import PreviewFactory, canonicalize_persisted_configuration
 from vs_api.builder_session_service import save_builder_session
 from vs_api.builder_visual_draft import (
@@ -2683,6 +2687,494 @@ def test_domain_timers_sent_as_json_are_applied_and_compile(
     assert result.visual_draft.projection_status == "applied"
     assert result.compile_result.save_verdict.allowed is True, result.compile_result.issues
     assert result.compile_result.canonical_session_json == expected.canonical_json
+
+
+def _object_edit(
+    service: BuilderVisualDraftService,
+    *,
+    target_ref: str,
+    applied_revision: int,
+    address: dict[str, Any],
+    working: Any,
+    change: dict[str, Any] | None = None,
+) -> BuilderVisualObjectEditResult:
+    """One object edit sent as the page sends it: JSON validated into the request."""
+    body: dict[str, Any] = {
+        "target_ref": target_ref,
+        "applied_revision": applied_revision,
+        "address": address,
+        "working": working,
+    }
+    if change is not None:
+        body["change"] = change
+    return service.edit_object(BuilderVisualObjectEditRequest.model_validate_json(json.dumps(body)))
+
+
+def _tree_controls(control: dict[str, Any]) -> Iterator[dict[str, Any]]:
+    yield control
+    for field in control.get("fields", ()):
+        yield from _tree_controls(field["control"])
+    for branch in control.get("branches", ()):
+        if branch.get("control") is not None:
+            yield from _tree_controls(branch["control"])
+    for item in control.get("items", ()):
+        yield from _tree_controls(item["control"])
+
+
+def _edited_control(
+    result: BuilderVisualObjectEditResult,
+    pointer: str,
+    kind: str,
+) -> dict[str, Any]:
+    root = result.control_tree.model_dump(mode="json")["root"]
+    return next(
+        control
+        for control in _tree_controls(root)
+        if control["json_pointer"] == pointer and control["kind"] == kind
+    )
+
+
+def _present_branch(choice: dict[str, Any]) -> str:
+    """The branch of an optional field's choice that makes the field present."""
+    return next(branch["branch_id"] for branch in choice["branches"] if branch["control"])
+
+
+def _saved_form(model: type[BaseModel], value: Any) -> dict[str, Any]:
+    return model.model_validate(value).model_dump(mode="json", by_alias=True, exclude_none=True)
+
+
+_RULE_ADDRESS = {"kind": "member", "list_pointer": "/link_rules"}
+_DOMAIN_ADDRESS = {"kind": "member", "list_pointer": "/routing/domains"}
+_BOUNDARIES_ADDRESS = {"kind": "whole_list", "pointer": "/routing/boundaries"}
+
+
+def _accepted(
+    service: BuilderVisualDraftService,
+    session: str,
+) -> tuple[str, int, dict[str, Any]]:
+    """A shipped session's target, accepted revision and accepted session JSON."""
+    opened = service.open(
+        BuilderVisualDraftOpenRequest(source_ref=f"nodalarc:sessions/{session}.yaml")
+    )
+    assert opened.applied_session is not None and opened.applied_revision is not None
+    return opened.target_ref, opened.applied_revision, opened.applied_session
+
+
+def _member(session: dict[str, Any], list_pointer: str, member_id: str) -> dict[str, Any]:
+    if list_pointer == "/link_rules":
+        members = session["link_rules"]
+    else:
+        members = session["routing"]["domains"]
+    return next(member for member in members if member["id"] == member_id)
+
+
+def test_object_edit_writes_a_card_value_as_the_whole_object(
+    service: BuilderVisualDraftService,
+) -> None:
+    target_ref, revision, session = _accepted(service, "earth-leo-simple")
+    rule = _member(session, "/link_rules", "leo_access")
+    address = {**_RULE_ADDRESS, "id": "leo_access"}
+    described = _object_edit(
+        service, target_ref=target_ref, applied_revision=revision, address=address, working=rule
+    )
+    assert described.working == rule
+    assert described.issues == ()
+    assert described.widget is not None and described.widget.kind == "link_rule"
+    # The field editor is bound to the accepted revision and shows the id read-only.
+    assert described.control_tree.projection_revision == revision
+    assert _edited_control(described, "/id", "scalar")["specialized"] is True
+
+    card = described.widget.model_dump(mode="json")
+    card["rule"]["max_range_km"] = 12345.0
+    edited = _object_edit(
+        service,
+        target_ref=target_ref,
+        applied_revision=revision,
+        address=address,
+        working=described.working,
+        change=card,
+    )
+    assert edited.issues == ()
+    assert _saved_form(LinkRule, edited.working) == _saved_form(
+        LinkRule, {**rule, "constraints": {"max_range_km": 12345.0}}
+    )
+    assert edited.widget is not None and edited.widget.kind == "link_rule"
+    assert edited.widget.rule.max_range_km == 12345.0
+
+    target_ref, revision, session = _accepted(service, "earth-leo-heo-geo-luna-reachability")
+    domain = _member(session, "/routing/domains", "luna_domain")
+    domain_address = {**_DOMAIN_ADDRESS, "id": "luna_domain"}
+    described = _object_edit(
+        service,
+        target_ref=target_ref,
+        applied_revision=revision,
+        address=domain_address,
+        working=domain,
+    )
+    assert described.widget is not None and described.widget.kind == "routing_domain"
+    card = described.widget.model_dump(mode="json")
+    card["domain"]["hello_interval_s"] = 2
+    card["domain"]["hold_interval_s"] = 7
+    timed = _object_edit(
+        service,
+        target_ref=target_ref,
+        applied_revision=revision,
+        address=domain_address,
+        working=described.working,
+        change=card,
+    )
+    assert timed.issues == ()
+    assert timed.working == {**domain, "timers": {"hello_interval_s": 2, "hold_interval_s": 7}}
+    RoutingDomain.model_validate(timed.working)
+    assert timed.widget is not None and timed.widget.kind == "routing_domain"
+    assert (timed.widget.domain.hello_interval_s, timed.widget.domain.hold_interval_s) == (2, 7)
+
+
+def test_object_edit_field_controls_edit_objects_no_card_writes_back(
+    service: BuilderVisualDraftService,
+) -> None:
+    target_ref, revision, session = _accepted(service, "earth-luna-dtn")
+
+    rule = _member(session, "/link_rules", "relay_geo_access")
+    rule_address = {**_RULE_ADDRESS, "id": "relay_geo_access"}
+    described = _object_edit(
+        service,
+        target_ref=target_ref,
+        applied_revision=revision,
+        address=rule_address,
+        working=rule,
+    )
+    # The mount predicate has no place on the link card.
+    assert described.widget is None
+    assert described.issues == ()
+    constraints = _edited_control(described, "/constraints", "choice")
+    ranged = _object_edit(
+        service,
+        target_ref=target_ref,
+        applied_revision=revision,
+        address=rule_address,
+        working=described.working,
+        change={
+            "kind": "controls",
+            "commands": [
+                {
+                    "operation": "select_choice",
+                    "control_id": constraints["control_id"],
+                    "branch_id": _present_branch(constraints),
+                },
+                {
+                    "operation": "set_scalar",
+                    "control_id": _edited_control(described, "/constraints/max_range_km", "scalar")[
+                        "control_id"
+                    ],
+                    "value": 12345.0,
+                },
+            ],
+        },
+    )
+    assert ranged.issues == ()
+    assert ranged.widget is None
+    assert ranged.working == {**rule, "constraints": {"max_range_km": 12345.0}}
+
+    domain = _member(session, "/routing/domains", "earth_domain")
+    domain_address = {**_DOMAIN_ADDRESS, "id": "earth_domain"}
+    described = _object_edit(
+        service,
+        target_ref=target_ref,
+        applied_revision=revision,
+        address=domain_address,
+        working=domain,
+    )
+    assert described.widget is None
+    timers = _edited_control(described, "/timers", "choice")
+    timed = _object_edit(
+        service,
+        target_ref=target_ref,
+        applied_revision=revision,
+        address=domain_address,
+        working=described.working,
+        change={
+            "kind": "controls",
+            "commands": [
+                {
+                    "operation": "select_choice",
+                    "control_id": timers["control_id"],
+                    "branch_id": _present_branch(timers),
+                },
+                *(
+                    {
+                        "operation": "set_scalar",
+                        "control_id": _edited_control(described, f"/timers/{name}", "scalar")[
+                            "control_id"
+                        ],
+                        "value": value,
+                    }
+                    for name, value in (("hello_interval_s", 2), ("hold_interval_s", 7))
+                ),
+            ],
+        },
+    )
+    assert timed.issues == ()
+    assert timed.widget is None
+    assert timed.working == {**domain, "timers": {"hello_interval_s": 2, "hold_interval_s": 7}}
+
+    boundaries = session["routing"]["boundaries"]
+    described = _object_edit(
+        service,
+        target_ref=target_ref,
+        applied_revision=revision,
+        address=_BOUNDARIES_ADDRESS,
+        working=boundaries,
+    )
+    # The boundary installs routes through the peer loopback, which no card states.
+    assert described.widget == BuilderVisualRoutingBoundariesWidget(
+        kind="routing_boundaries", boundaries=(None,)
+    )
+    unexported = _object_edit(
+        service,
+        target_ref=target_ref,
+        applied_revision=revision,
+        address=_BOUNDARIES_ADDRESS,
+        working=described.working,
+        change={
+            "kind": "controls",
+            "commands": [
+                {
+                    "operation": "set_scalar",
+                    "control_id": _edited_control(
+                        described, f"/boundaries/0/export/{export}/export_node_loopbacks", "scalar"
+                    )["control_id"],
+                    "value": False,
+                }
+                for export in (0, 1)
+            ],
+        },
+    )
+    assert unexported.issues == ()
+    expected = json.loads(json.dumps(boundaries))
+    for export in expected[0]["export"]:
+        export["export_node_loopbacks"] = False
+    assert unexported.working == expected
+
+
+def test_object_edit_writes_only_the_boundaries_that_have_a_card(
+    service: BuilderVisualDraftService,
+) -> None:
+    boundaries = _boundary_overlay_session()["routing"]["boundaries"]
+    target_ref = "user:sessions/boundary-overlay.yaml"
+    described = _object_edit(
+        service,
+        target_ref=target_ref,
+        applied_revision=0,
+        address=_BOUNDARIES_ADDRESS,
+        working=boundaries,
+    )
+    assert described.widget is not None and described.widget.kind == "routing_boundaries"
+    first, second, third = described.widget.boundaries
+    assert first is None
+    assert second is not None and third is not None
+
+    cards = described.widget.model_dump(mode="json")
+    cards["boundaries"][1]["export_node_loopbacks"] = False
+    edited = _object_edit(
+        service,
+        target_ref=target_ref,
+        applied_revision=0,
+        address=_BOUNDARIES_ADDRESS,
+        working=described.working,
+        change=cards,
+    )
+    assert edited.issues == ()
+    # A boundary with no card stays as the working list holds it.
+    assert edited.working[0] == boundaries[0]
+    changed = json.loads(json.dumps(boundaries[1]))
+    for export in changed["export"]:
+        export["export_node_loopbacks"] = False
+    assert edited.working[1] == changed
+    assert edited.working[2] == boundaries[2]
+
+    # Removing one boundary is an item command on the list, which stays open.
+    removed = _object_edit(
+        service,
+        target_ref=target_ref,
+        applied_revision=0,
+        address=_BOUNDARIES_ADDRESS,
+        working=boundaries,
+        change={
+            "kind": "controls",
+            "commands": [
+                {
+                    "operation": "remove_item",
+                    "control_id": _edited_control(described, "/boundaries", "sequence")[
+                        "control_id"
+                    ],
+                    "index": 0,
+                }
+            ],
+        },
+    )
+    assert removed.working == boundaries[1:]
+
+
+def test_object_edit_names_a_removed_required_field_in_an_issue(
+    service: BuilderVisualDraftService,
+) -> None:
+    target_ref, revision, session = _accepted(service, "earth-leo-simple")
+    rule = _member(session, "/link_rules", "leo_access")
+    address = {**_RULE_ADDRESS, "id": "leo_access"}
+    described = _object_edit(
+        service, target_ref=target_ref, applied_revision=revision, address=address, working=rule
+    )
+    removed = _object_edit(
+        service,
+        target_ref=target_ref,
+        applied_revision=revision,
+        address=address,
+        working=described.working,
+        change={
+            "kind": "controls",
+            "commands": [
+                {
+                    "operation": "set_present",
+                    "control_id": _edited_control(described, "/topology", "choice")["control_id"],
+                    "present": False,
+                }
+            ],
+        },
+    )
+    assert "topology" not in removed.working
+    assert removed.widget is None
+    assert [(issue.code, issue.json_pointer) for issue in removed.issues] == [
+        ("builder.structural.missing", "/topology")
+    ]
+    assert all(
+        issue.source_ref == target_ref and {"save", "deploy"} <= set(issue.blocks)
+        for issue in removed.issues
+    )
+
+    # A card left without a topology mode writes the rule without one and says so.
+    assert described.widget is not None
+    card = described.widget.model_dump(mode="json")
+    card["rule"]["topology_mode"] = None
+    unset = _object_edit(
+        service,
+        target_ref=target_ref,
+        applied_revision=revision,
+        address=address,
+        working=described.working,
+        change=card,
+    )
+    assert unset.working["topology"] == {}
+    assert unset.widget is None
+    assert ("builder.draft.link_topology_required", "/topology/mode") in {
+        (issue.code, issue.json_pointer) for issue in unset.issues
+    }
+
+
+def test_object_edit_refuses_id_changes_and_unknown_controls(
+    service: BuilderVisualDraftService,
+) -> None:
+    target_ref, revision, session = _accepted(service, "earth-luna-dtn")
+    rule = _member(session, "/link_rules", "relay_geo_access")
+    address = {**_RULE_ADDRESS, "id": "relay_geo_access"}
+    described = _object_edit(
+        service, target_ref=target_ref, applied_revision=revision, address=address, working=rule
+    )
+
+    def controls(*commands: dict[str, Any], applied_revision: int = revision) -> None:
+        _object_edit(
+            service,
+            target_ref=target_ref,
+            applied_revision=applied_revision,
+            address=address,
+            working=described.working,
+            change={"kind": "controls", "commands": list(commands)},
+        )
+
+    rename = {
+        "operation": "set_scalar",
+        "control_id": _edited_control(described, "/id", "scalar")["control_id"],
+        "value": "renamed",
+    }
+    with pytest.raises(
+        BuilderVisualDraftCommandError, match="rename is an edit of the session YAML"
+    ) as refused:
+        controls(rename)
+    assert refused.value.code == "catalog_authoring.invalid_patch"
+    with pytest.raises(BuilderVisualDraftCommandError, match="cannot remove a link rule"):
+        controls(
+            {
+                "operation": "set_present",
+                "control_id": _edited_control(described, "", "object")["control_id"],
+                "present": False,
+            }
+        )
+    with pytest.raises(BuilderVisualDraftCommandError, match="unknown or stale control id"):
+        controls(
+            {
+                "operation": "set_scalar",
+                "control_id": "ctl_00000000000000000000000000000000",
+                "value": 7.5,
+            }
+        )
+    # Control ids belong to the accepted revision the tree was built at.
+    elevation = {
+        "operation": "set_scalar",
+        "control_id": _edited_control(described, "/endpoints/0/min_elevation_deg", "scalar")[
+            "control_id"
+        ],
+        "value": 7.5,
+    }
+    with pytest.raises(BuilderVisualDraftCommandError, match="unknown or stale control id"):
+        controls(elevation, applied_revision=revision + 1)
+    controls(elevation)
+
+    card = {
+        "kind": "link_rule",
+        "rule": {"rule_id": "renamed", "topology_mode": "visible_candidates"},
+    }
+    for working, change in (
+        ({**rule, "id": "renamed"}, None),
+        (rule, card),
+        (rule, {"kind": "routing_domain", "domain": {"domain_id": "relay_geo_access"}}),
+    ):
+        with pytest.raises(ValidationError):
+            _object_edit(
+                service,
+                target_ref=target_ref,
+                applied_revision=revision,
+                address=address,
+                working=working,
+                change=change,
+            )
+
+    boundaries = _object_edit(
+        service,
+        target_ref=target_ref,
+        applied_revision=revision,
+        address=_BOUNDARIES_ADDRESS,
+        working=session["routing"]["boundaries"],
+    )
+    with pytest.raises(BuilderVisualDraftCommandError, match="cannot remove the routing boundary"):
+        _object_edit(
+            service,
+            target_ref=target_ref,
+            applied_revision=revision,
+            address=_BOUNDARIES_ADDRESS,
+            working=boundaries.working,
+            change={
+                "kind": "controls",
+                "commands": [
+                    {
+                        "operation": "set_present",
+                        "control_id": _edited_control(boundaries, "/boundaries", "sequence")[
+                            "control_id"
+                        ],
+                        "present": False,
+                    }
+                ],
+            },
+        )
 
 
 def test_graphical_boundary_edit_preserves_unprojected_and_sibling_boundaries(

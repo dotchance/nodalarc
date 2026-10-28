@@ -68,6 +68,8 @@ from nodalarc.models.builder_visual_api import (
     BuilderVisualDraftEnvelope,
     BuilderVisualDraftOpenRequest,
     BuilderVisualDraftRetargetRequest,
+    BuilderVisualObjectEditRequest,
+    BuilderVisualObjectEditResult,
     BuilderVisualWalkerLayoutRequest,
     BuilderVisualWalkerLayoutResult,
     derive_walker_layout,
@@ -148,6 +150,10 @@ class VisualDraftService(Protocol):
         available_node_count: int,
         preview_factory: PreviewFactory | None = None,
     ) -> BuilderVisualDraftAssemblyResult: ...
+
+    def edit_object(
+        self, request: BuilderVisualObjectEditRequest
+    ) -> BuilderVisualObjectEditResult: ...
 
     def customize_chain(
         self,
@@ -590,6 +596,29 @@ def create_builder_router(services: BuilderRouterServices) -> APIRouter:
             return _catalog_refusal_response(CatalogAuthoringError(refusal))
         except (CatalogRepositoryError, OSError) as error:
             return _catalog_unavailable_response(error)
+
+    @router.post(
+        "/draft/object-edit",
+        response_model=BuilderVisualObjectEditResult,
+        responses={422: {"model": CatalogOperationRefusal}},
+    )
+    async def edit_visual_draft_object(
+        request: BuilderVisualObjectEditRequest,
+        context: Context,
+    ):
+        try:
+            return await run_in_threadpool(
+                selected.visual_draft_service_factory(context).edit_object,
+                request,
+            )
+        except BuilderVisualDraftCommandError as error:
+            refusal = CatalogOperationRefusal(
+                code=error.code,
+                message=str(error),
+                ref=str(error.ref),
+                cause_type=type(error).__name__,
+            )
+            return _catalog_refusal_response(CatalogAuthoringError(refusal))
 
     @router.post(
         "/draft/compile",

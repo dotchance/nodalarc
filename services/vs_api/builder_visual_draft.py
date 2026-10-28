@@ -7,6 +7,7 @@ from collections.abc import Callable, Collection, Mapping
 from copy import deepcopy
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from types import MappingProxyType
 from typing import Any, Literal, cast
 
 import yaml
@@ -34,12 +35,19 @@ from nodalarc.models.builder_api import (
     BuilderCompileResult,
     BuilderDraftEnvelope,
     BuilderIssue,
+    BuilderMemberAddress,
     BuilderProposedCatalogDocument,
     BuilderSessionSaveRequest,
     BuilderVerdict,
+    BuilderWholeListAddress,
     JsonDocument,
 )
-from nodalarc.models.builder_controls_api import BuilderControlTree
+from nodalarc.models.builder_controls_api import (
+    BuilderControlTree,
+    BuilderInsertItemCommand,
+    BuilderMoveItemCommand,
+    BuilderRemoveItemCommand,
+)
 from nodalarc.models.builder_visual_api import (
     BuilderVisualAddBoundaryCommand,
     BuilderVisualAddGeneratedSpaceCommand,
@@ -74,16 +82,23 @@ from nodalarc.models.builder_visual_api import (
     BuilderVisualLinkEndpoint,
     BuilderVisualLinkRule,
     BuilderVisualLinkRuleListing,
+    BuilderVisualLinkRuleWidget,
     BuilderVisualMintGroundMembersCommand,
     BuilderVisualNode,
+    BuilderVisualObjectControlEdit,
+    BuilderVisualObjectEditRequest,
+    BuilderVisualObjectEditResult,
+    BuilderVisualObjectWidget,
     BuilderVisualOrbit,
     BuilderVisualPlaceGroundReferenceCommand,
     BuilderVisualPlaceSpaceReferenceCommand,
     BuilderVisualRederiveLinkCommand,
+    BuilderVisualRoutingBoundariesWidget,
     BuilderVisualRoutingBoundary,
     BuilderVisualRoutingBoundaryListing,
     BuilderVisualRoutingDomain,
     BuilderVisualRoutingDomainListing,
+    BuilderVisualRoutingDomainWidget,
     BuilderVisualSessionListing,
     BuilderVisualSetGroundSiteNodeCommand,
     BuilderVisualSetGroundStampNodeCommand,
@@ -129,7 +144,7 @@ from nodalarc.models.segment_session import (
     TimeConfig,
 )
 from nodalarc.models.segments import GroundPlacement, GroundSegment, SpaceSegment
-from pydantic import BaseModel, JsonValue, ValidationError
+from pydantic import BaseModel, ConfigDict, JsonValue, ValidationError
 
 from .builder_compiler import (
     OverlayCatalogReadView,
@@ -141,7 +156,11 @@ from .builder_control_mutation import (
     BuilderControlMutationError,
     apply_builder_control_mutations,
 )
-from .builder_control_tree import build_session_control_tree
+from .builder_control_tree import (
+    BuilderControlTreeBuild,
+    build_model_control_tree,
+    build_session_control_tree,
+)
 from .builder_visual_defaults import (
     DEFAULT_BODY_REF,
     DEFAULT_NODE_PROFILES,
@@ -1165,68 +1184,79 @@ def _boundary_exchange(
     return exchange
 
 
+def _routing_boundary_document(
+    boundary: BuilderVisualRoutingBoundary,
+    issues: list[BuilderIssue],
+    *,
+    at: tuple[str | int, ...],
+) -> JsonDocument:
+    """The grammar boundary one boundary card states, with an issue for each absent field."""
+    document: JsonDocument = {}
+    if boundary.over_rule_id:
+        document["over"] = boundary.over_rule_id
+    else:
+        issues.append(
+            _object_issue(
+                "builder.draft.boundary_over_required",
+                "Boundary link rule is required",
+                *at,
+                "over",
+            )
+        )
+    if boundary.adapter is None:
+        issues.append(
+            _object_issue(
+                "builder.draft.routing_adapter_required",
+                "Routing boundary adapter is required",
+                *at,
+                "adapter",
+            )
+        )
+    else:
+        document["adapter"] = boundary.adapter
+    # A boundary domain is the source of one export and the target of the other.
+    # A missing domain therefore leaves one field absent in each export.
+    for name, domain_id, reverse in (
+        ("from", boundary.from_domain_id, "to"),
+        ("to", boundary.to_domain_id, "from"),
+    ):
+        if domain_id:
+            continue
+        for export, field_name in ((0, name), (1, reverse)):
+            issues.append(
+                _object_issue(
+                    f"builder.draft.boundary_{name}_domain_required",
+                    f"Boundary {name} domain is required",
+                    *at,
+                    "export",
+                    export,
+                    field_name,
+                )
+            )
+    document["export"] = [
+        _boundary_exchange(
+            boundary.from_domain_id,
+            boundary.to_domain_id,
+            export_node_loopbacks=boundary.export_node_loopbacks,
+        ),
+        _boundary_exchange(
+            boundary.to_domain_id,
+            boundary.from_domain_id,
+            export_node_loopbacks=boundary.export_node_loopbacks,
+        ),
+    ]
+    return document
+
+
 def _routing_boundary_documents(
     boundaries: tuple[BuilderVisualRoutingBoundary, ...],
 ) -> tuple[list[JsonValue], tuple[BuilderIssue, ...]]:
     """The grammar boundary list the boundary cards state, with an issue for each absent field."""
     issues: list[BuilderIssue] = []
-    documents: list[JsonValue] = []
-    for index, boundary in enumerate(boundaries):
-        document: JsonDocument = {}
-        if boundary.over_rule_id:
-            document["over"] = boundary.over_rule_id
-        else:
-            issues.append(
-                _object_issue(
-                    "builder.draft.boundary_over_required",
-                    "Boundary link rule is required",
-                    index,
-                    "over",
-                )
-            )
-        if boundary.adapter is None:
-            issues.append(
-                _object_issue(
-                    "builder.draft.routing_adapter_required",
-                    "Routing boundary adapter is required",
-                    index,
-                    "adapter",
-                )
-            )
-        else:
-            document["adapter"] = boundary.adapter
-        # A boundary domain is the source of one export and the target of the other.
-        # A missing domain therefore leaves one field absent in each export.
-        for name, domain_id, reverse in (
-            ("from", boundary.from_domain_id, "to"),
-            ("to", boundary.to_domain_id, "from"),
-        ):
-            if domain_id:
-                continue
-            for export, field_name in ((0, name), (1, reverse)):
-                issues.append(
-                    _object_issue(
-                        f"builder.draft.boundary_{name}_domain_required",
-                        f"Boundary {name} domain is required",
-                        index,
-                        "export",
-                        export,
-                        field_name,
-                    )
-                )
-        document["export"] = [
-            _boundary_exchange(
-                boundary.from_domain_id,
-                boundary.to_domain_id,
-                export_node_loopbacks=boundary.export_node_loopbacks,
-            ),
-            _boundary_exchange(
-                boundary.to_domain_id,
-                boundary.from_domain_id,
-                export_node_loopbacks=boundary.export_node_loopbacks,
-            ),
-        ]
-        documents.append(document)
+    documents: list[JsonValue] = [
+        _routing_boundary_document(boundary, issues, at=(index,))
+        for index, boundary in enumerate(boundaries)
+    ]
     return documents, tuple(issues)
 
 
@@ -1782,6 +1812,171 @@ def _accepted_session_listing(session: SegmentSessionConfig) -> BuilderVisualSes
             )
         ),
     )
+
+
+class _RoutingBoundaryList(BaseModel):
+    """Every routing boundary of the session, edited as one list."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    boundaries: tuple[RoutingBoundary, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class _ObjectEditor:
+    """The field editor of one kind of addressed object."""
+
+    root_model: type[BaseModel]
+    root_label: str
+    specialized_fields: frozenset[tuple[type[BaseModel], str]]
+    # A control at one of these pointers is neither set nor removed: the editor's
+    # root, and the object's id or the list itself. Items of a list stay editable.
+    protected_pointers: frozenset[str]
+    protected_reason: str
+
+
+_OBJECT_EDITORS: Mapping[str, _ObjectEditor] = MappingProxyType(
+    {
+        "/link_rules": _ObjectEditor(
+            root_model=LinkRule,
+            root_label="Link rule",
+            specialized_fields=frozenset({(LinkRule, "id")}),
+            protected_pointers=frozenset({"", "/id"}),
+            protected_reason=(
+                "A field edit cannot remove a link rule or change its id; "
+                "a rename is an edit of the session YAML"
+            ),
+        ),
+        "/routing/domains": _ObjectEditor(
+            root_model=RoutingDomain,
+            root_label="Routing domain",
+            specialized_fields=frozenset({(RoutingDomain, "id")}),
+            protected_pointers=frozenset({"", "/id"}),
+            protected_reason=(
+                "A field edit cannot remove a routing domain or change its id; "
+                "a rename is an edit of the session YAML"
+            ),
+        ),
+        "/routing/boundaries": _ObjectEditor(
+            root_model=_RoutingBoundaryList,
+            root_label="Routing boundaries",
+            specialized_fields=frozenset(),
+            protected_pointers=frozenset({"", "/boundaries"}),
+            protected_reason=(
+                "A field edit cannot remove the routing boundary list; "
+                "it removes the boundaries one at a time"
+            ),
+        ),
+    }
+)
+_LIST_ITEM_COMMANDS = (BuilderInsertItemCommand, BuilderRemoveItemCommand, BuilderMoveItemCommand)
+
+
+def _object_editor(address: BuilderMemberAddress | BuilderWholeListAddress) -> _ObjectEditor:
+    if isinstance(address, BuilderWholeListAddress):
+        return _OBJECT_EDITORS[address.pointer]
+    return _OBJECT_EDITORS[address.list_pointer]
+
+
+def _editor_document(
+    address: BuilderMemberAddress | BuilderWholeListAddress,
+    working: JsonDocument | list[JsonValue],
+) -> JsonDocument:
+    """The document an object's field editor covers: the object, or the list inside its root."""
+    if isinstance(address, BuilderWholeListAddress):
+        return {"boundaries": cast(list[JsonValue], working)}
+    return cast(JsonDocument, working)
+
+
+def _object_control_build(
+    address: BuilderMemberAddress | BuilderWholeListAddress,
+    working: JsonDocument | list[JsonValue],
+    *,
+    applied_revision: int,
+) -> BuilderControlTreeBuild:
+    editor = _object_editor(address)
+    return build_model_control_tree(
+        editor.root_model,
+        _editor_document(address, working),
+        projection_revision=applied_revision,
+        root_label=editor.root_label,
+        specialized_fields=editor.specialized_fields,
+    )
+
+
+def _object_validation_issues(
+    error: ValidationError,
+    *,
+    at: tuple[str | int, ...],
+    source_ref: str,
+) -> list[BuilderIssue]:
+    """The grammar's refusal of one object, named by pointers within the working JSON."""
+    return [
+        BuilderIssue(
+            code=f"builder.structural.{item['type']}",
+            stage="structural",
+            severity="error",
+            message=item["msg"],
+            blocks=("save", "deploy"),
+            source_ref=source_ref,
+            json_pointer=_json_pointer((*at, *item["loc"])) or None,
+        )
+        for item in error.errors(include_url=False)
+    ]
+
+
+def _classified_object(
+    address: BuilderMemberAddress | BuilderWholeListAddress,
+    working: JsonDocument | list[JsonValue],
+    *,
+    source_ref: str,
+) -> tuple[BuilderVisualObjectWidget | None, list[BuilderIssue]]:
+    """Validate working JSON as its standalone grammar model, then offer the card for it.
+
+    A card is offered only for an object that validates and that the card writes
+    back unchanged. Each boundary of the list is validated and classified on its own.
+    """
+    if isinstance(address, BuilderWholeListAddress):
+        issues: list[BuilderIssue] = []
+        cards: list[BuilderVisualRoutingBoundary | None] = []
+        for index, item in enumerate(cast(list[JsonValue], working)):
+            try:
+                boundary = RoutingBoundary.model_validate(item)
+            except ValidationError as error:
+                issues.extend(_object_validation_issues(error, at=(index,), source_ref=source_ref))
+                cards.append(None)
+            else:
+                cards.append(_routing_boundary_projection(boundary, index=index))
+        widget = BuilderVisualRoutingBoundariesWidget(
+            kind="routing_boundaries", boundaries=tuple(cards)
+        )
+        return widget, issues
+    try:
+        validated = _object_editor(address).root_model.model_validate(working)
+    except ValidationError as error:
+        return None, _object_validation_issues(error, at=(), source_ref=source_ref)
+    if isinstance(validated, LinkRule):
+        rule_card = _link_projection(validated)
+        if rule_card is None:
+            return None, []
+        return BuilderVisualLinkRuleWidget(kind="link_rule", rule=rule_card), []
+    domain_card = _routing_domain_projection(cast(RoutingDomain, validated))
+    if domain_card is None:
+        return None, []
+    return BuilderVisualRoutingDomainWidget(kind="routing_domain", domain=domain_card), []
+
+
+def _carded_boundaries(
+    working: list[JsonValue],
+    cards: BuilderVisualRoutingBoundariesWidget,
+) -> tuple[list[JsonValue], tuple[BuilderIssue, ...]]:
+    """The working boundary list with each boundary that has a card value written by its card."""
+    issues: list[BuilderIssue] = []
+    written: list[JsonValue] = [
+        item if card is None else _routing_boundary_document(card, issues, at=(index,))
+        for index, (item, card) in enumerate(zip(working, cards.boundaries, strict=True))
+    ]
+    return written, tuple(issues)
 
 
 def _workspace_from_applied_session(
@@ -3262,6 +3457,90 @@ class BuilderVisualDraftService:
             available_node_count=available_node_count,
             preview_factory=preview_factory,
         )
+
+    def edit_object(
+        self,
+        request: BuilderVisualObjectEditRequest,
+    ) -> BuilderVisualObjectEditResult:
+        """Apply one card value or field-editor batch to an object's working JSON.
+
+        Nothing is accepted and no revision is minted. The answer holds the new
+        working JSON, the card value that writes it back unchanged, the field
+        editor over it and its issues.
+        """
+
+        if not isinstance(request, BuilderVisualObjectEditRequest):
+            raise TypeError("request must be a BuilderVisualObjectEditRequest")
+        source_ref = str(request.target_ref)
+        change = request.change
+        working = request.working
+        card_issues: tuple[BuilderIssue, ...] = ()
+        if isinstance(change, BuilderVisualObjectControlEdit):
+            working = self._apply_object_controls(request, change)
+        elif isinstance(change, BuilderVisualLinkRuleWidget):
+            working, card_issues = _link_rule_document(change.rule)
+        elif isinstance(change, BuilderVisualRoutingDomainWidget):
+            working, card_issues = _routing_domain_document(change.domain)
+        elif isinstance(change, BuilderVisualRoutingBoundariesWidget):
+            working, card_issues = _carded_boundaries(cast(list[JsonValue], working), change)
+        widget, validation_issues = _classified_object(
+            request.address,
+            working,
+            source_ref=source_ref,
+        )
+        return BuilderVisualObjectEditResult(
+            address=request.address,
+            working=working,
+            widget=widget,
+            control_tree=_object_control_build(
+                request.address,
+                working,
+                applied_revision=request.applied_revision,
+            ).tree,
+            issues=(
+                *(issue.model_copy(update={"source_ref": source_ref}) for issue in card_issues),
+                *validation_issues,
+            ),
+        )
+
+    @staticmethod
+    def _apply_object_controls(
+        request: BuilderVisualObjectEditRequest,
+        change: BuilderVisualObjectControlEdit,
+    ) -> JsonDocument | list[JsonValue]:
+        editor = _object_editor(request.address)
+        control_build = _object_control_build(
+            request.address,
+            request.working,
+            applied_revision=request.applied_revision,
+        )
+        for command in change.commands:
+            binding = control_build.bindings.get(command.control_id)
+            if (
+                binding is not None
+                and binding.json_pointer in editor.protected_pointers
+                and not isinstance(command, _LIST_ITEM_COMMANDS)
+            ):
+                raise BuilderVisualDraftCommandError(
+                    editor.protected_reason,
+                    code="catalog_authoring.invalid_patch",
+                    ref=request.target_ref,
+                )
+        try:
+            edited = apply_builder_control_mutations(
+                _editor_document(request.address, request.working),
+                control_build.bindings,
+                change.commands,
+            )
+        except BuilderControlMutationError as error:
+            raise BuilderVisualDraftCommandError(
+                str(error),
+                code="catalog_authoring.invalid_patch",
+                ref=request.target_ref,
+            ) from error
+        if isinstance(request.address, BuilderWholeListAddress):
+            return cast(list[JsonValue], edited["boundaries"])
+        return edited
 
     def apply_workspace(
         self,

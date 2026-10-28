@@ -9,7 +9,7 @@ configuration models owned by the grammar authority.
 
 from __future__ import annotations
 
-from typing import Annotated, Literal, cast, get_args
+from typing import Annotated, Literal, get_args
 
 from pydantic import (
     AfterValidator,
@@ -237,6 +237,27 @@ BuilderEditAddress = Annotated[
 ]
 
 
+def check_value_fits_address(
+    address: BuilderMemberAddress | BuilderWholeListAddress,
+    value: JsonDocument | list[JsonValue],
+) -> None:
+    """Raise ValueError unless ``value`` is what ``address`` holds.
+
+    A whole list holds a list. A list member holds an object that keeps the id
+    it is addressed by.
+    """
+    if isinstance(address, BuilderWholeListAddress):
+        if not isinstance(value, list):
+            raise ValueError("an edit to a whole list holds that list")
+        return
+    if not isinstance(value, dict):
+        raise ValueError("an edit to a list member holds that member's object")
+    if value.get("id") != address.id:
+        raise ValueError(
+            "an edit keeps the id it is addressed by; a rename is an edit of the session YAML"
+        )
+
+
 class BuilderContentEdit(_BuilderApplicationModel):
     """Working grammar JSON for one address, beside the value it began from.
 
@@ -251,17 +272,8 @@ class BuilderContentEdit(_BuilderApplicationModel):
 
     @model_validator(mode="after")
     def _values_fit_the_address(self) -> BuilderContentEdit:
-        values = (self.working,) if self.base is None else (self.base, self.working)
-        if isinstance(self.address, BuilderWholeListAddress):
-            if not all(isinstance(value, list) for value in values):
-                raise ValueError("an edit to a whole list holds that list")
-            return self
-        if not all(isinstance(value, dict) for value in values):
-            raise ValueError("an edit to a list member holds that member's object")
-        if any(cast(JsonDocument, value).get("id") != self.address.id for value in values):
-            raise ValueError(
-                "an edit keeps the id it is addressed by; a rename is an edit of the session YAML"
-            )
+        for value in (self.working,) if self.base is None else (self.base, self.working):
+            check_value_fits_address(self.address, value)
         return self
 
 

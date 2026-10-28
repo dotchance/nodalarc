@@ -11,7 +11,7 @@ from __future__ import annotations
 from decimal import ROUND_HALF_UP, Decimal
 from typing import Annotated, Literal, get_origin
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, JsonValue, field_validator, model_validator
 
 from nodalarc.catalog_refs import (
     BodyRef,
@@ -29,11 +29,15 @@ from nodalarc.model_validation import Identifier, TerminalMedium
 from nodalarc.models.builder_api import (
     BuilderCompileResult,
     BuilderDraftEnvelope,
+    BuilderEditAddress,
     BuilderIssue,
+    BuilderMemberAddress,
     BuilderProposedCatalogDocument,
     BuilderSessionSaveRequest,
+    BuilderWholeListAddress,
     JsonDocument,
     OpaqueRevision,
+    check_value_fits_address,
 )
 from nodalarc.models.builder_controls_api import BuilderControlMutation, BuilderControlTree
 from nodalarc.models.catalog import ForwardingClass, PhasingMode
@@ -927,4 +931,132 @@ class BuilderVisualDraftAssemblyResult(_BuilderVisualModel):
             raise ValueError("compile result draft must equal the assembled draft")
         if self.compile_result.target_ref != self.visual_draft.target_ref:
             raise ValueError("compile result target must match the visual draft target")
+        return self
+
+
+class BuilderVisualLinkRuleWidget(_BuilderVisualModel):
+    """A link rule's card value, which states the whole rule."""
+
+    kind: Literal["link_rule"]
+    rule: BuilderVisualLinkRule
+
+
+class BuilderVisualRoutingDomainWidget(_BuilderVisualModel):
+    """A routing domain's card value, which states the whole domain."""
+
+    kind: Literal["routing_domain"]
+    domain: BuilderVisualRoutingDomain
+
+
+class BuilderVisualRoutingBoundariesWidget(_BuilderVisualModel):
+    """The card value of each routing boundary, in list order.
+
+    A null entry is a boundary no card writes back unchanged. Sent with an
+    edit, a null entry leaves that boundary as the working list holds it.
+    """
+
+    kind: Literal["routing_boundaries"]
+    boundaries: tuple[BuilderVisualRoutingBoundary | None, ...]
+
+
+BuilderVisualObjectWidget = Annotated[
+    BuilderVisualLinkRuleWidget
+    | BuilderVisualRoutingDomainWidget
+    | BuilderVisualRoutingBoundariesWidget,
+    Field(discriminator="kind"),
+]
+
+
+class BuilderVisualObjectControlEdit(_BuilderVisualModel):
+    """A field-editor batch over the tree an earlier object edit answered."""
+
+    kind: Literal["controls"]
+    commands: tuple[BuilderControlMutation, ...] = Field(min_length=1)
+
+
+BuilderVisualObjectChange = Annotated[
+    BuilderVisualLinkRuleWidget
+    | BuilderVisualRoutingDomainWidget
+    | BuilderVisualRoutingBoundariesWidget
+    | BuilderVisualObjectControlEdit,
+    Field(discriminator="kind"),
+]
+
+
+def _widget_fits_address(
+    address: BuilderMemberAddress | BuilderWholeListAddress,
+    working: JsonDocument | list[JsonValue],
+    widget: BuilderVisualLinkRuleWidget
+    | BuilderVisualRoutingDomainWidget
+    | BuilderVisualRoutingBoundariesWidget,
+) -> None:
+    """Raise ValueError unless a card value states the object ``address`` names."""
+    if isinstance(address, BuilderWholeListAddress):
+        if not isinstance(widget, BuilderVisualRoutingBoundariesWidget):
+            raise ValueError("the routing boundary list takes the boundary card values")
+        if len(widget.boundaries) != len(working):
+            raise ValueError("the boundary card values pair one to one with the working list")
+        return
+    if address.list_pointer == "/link_rules":
+        if not isinstance(widget, BuilderVisualLinkRuleWidget):
+            raise ValueError("a link rule takes a link rule card value")
+        card_id = widget.rule.rule_id
+    else:
+        if not isinstance(widget, BuilderVisualRoutingDomainWidget):
+            raise ValueError("a routing domain takes a routing domain card value")
+        card_id = widget.domain.domain_id
+    if card_id != address.id:
+        raise ValueError(
+            "a card keeps the id it is addressed by; a rename is an edit of the session YAML"
+        )
+
+
+class BuilderVisualObjectEditRequest(_BuilderVisualModel):
+    """Edit one link rule, one routing domain or the boundary list without accepting it.
+
+    ``working`` is the object's grammar JSON as its pending edit holds it. With
+    no change, the answer describes that JSON. A card value states the whole
+    object. A control edit names controls of the tree an earlier answer built
+    over this same working JSON at ``applied_revision``.
+    """
+
+    target_ref: SessionRef
+    applied_revision: int = Field(ge=0)
+    address: BuilderEditAddress
+    working: JsonDocument | list[JsonValue]
+    change: BuilderVisualObjectChange | None = None
+
+    @model_validator(mode="after")
+    def _change_fits_the_address(self) -> BuilderVisualObjectEditRequest:
+        if self.target_ref.namespace != "user":
+            raise ValueError("Builder session targets must use the user: namespace")
+        check_value_fits_address(self.address, self.working)
+        if self.change is not None and not isinstance(self.change, BuilderVisualObjectControlEdit):
+            _widget_fits_address(self.address, self.working, self.change)
+        return self
+
+
+class BuilderVisualObjectEditResult(_BuilderVisualModel):
+    """One object's working JSON after an edit, with the editors that state it.
+
+    Nothing is accepted. ``widget`` is the card value that writes the working
+    JSON back unchanged; it is null for an object that does not validate on its
+    own or that no card writes back unchanged. The control tree covers the
+    working JSON at the accepted revision and keeps the object's id read-only.
+    Issue pointers are within the working JSON.
+    """
+
+    address: BuilderEditAddress
+    working: JsonDocument | list[JsonValue]
+    widget: BuilderVisualObjectWidget | None
+    control_tree: BuilderControlTree
+    issues: tuple[BuilderIssue, ...] = ()
+
+    @model_validator(mode="after")
+    def _editors_fit_the_address(self) -> BuilderVisualObjectEditResult:
+        check_value_fits_address(self.address, self.working)
+        if self.widget is not None:
+            _widget_fits_address(self.address, self.working, self.widget)
+        elif isinstance(self.address, BuilderWholeListAddress):
+            raise ValueError("the boundary list answers a card value or null for each boundary")
         return self

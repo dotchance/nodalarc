@@ -319,6 +319,109 @@ def test_visual_control_mutation_route_is_revision_fenced_and_typed(
     assert unknown_response.json()["code"] == "catalog_authoring.invalid_patch"
 
 
+def test_object_edit_route_answers_the_editors_and_typed_refusals(client: TestClient) -> None:
+    opened = client.post(
+        "/api/v1/builder/draft/open",
+        json={"source_ref": "nodalarc:sessions/earth-luna-dtn.yaml"},
+    ).json()
+    rule = next(
+        item for item in opened["applied_session"]["link_rules"] if item["id"] == "relay_geo_access"
+    )
+    request = {
+        "target_ref": opened["target_ref"],
+        "applied_revision": opened["applied_revision"],
+        "address": {"kind": "member", "list_pointer": "/link_rules", "id": "relay_geo_access"},
+        "working": rule,
+    }
+
+    described_response = client.post("/api/v1/builder/draft/object-edit", json=request)
+    assert described_response.status_code == 200, described_response.text
+    described = described_response.json()
+    assert described["working"] == rule
+    assert described["widget"] is None
+    assert described["issues"] == []
+    assert described["control_tree"]["projection_revision"] == opened["applied_revision"]
+    controls = tuple(_walk_controls(described["control_tree"]["root"]))
+    rule_id = next(
+        control
+        for control in controls
+        if control["kind"] == "scalar" and control["json_pointer"] == "/id"
+    )
+    elevation = next(
+        control
+        for control in controls
+        if control["kind"] == "scalar"
+        and control["json_pointer"] == "/endpoints/0/min_elevation_deg"
+    )
+    assert rule_id["specialized"] is True
+
+    edited_response = client.post(
+        "/api/v1/builder/draft/object-edit",
+        json={
+            **request,
+            "change": {
+                "kind": "controls",
+                "commands": [
+                    {
+                        "operation": "set_scalar",
+                        "control_id": elevation["control_id"],
+                        "value": 7.5,
+                    }
+                ],
+            },
+        },
+    )
+    assert edited_response.status_code == 200, edited_response.text
+    edited = edited_response.json()["working"]
+    assert edited["endpoints"][0]["min_elevation_deg"] == 7.5
+    assert {**edited, "endpoints": rule["endpoints"]} == rule
+
+    renamed_response = client.post(
+        "/api/v1/builder/draft/object-edit",
+        json={
+            **request,
+            "change": {
+                "kind": "controls",
+                "commands": [
+                    {
+                        "operation": "set_scalar",
+                        "control_id": rule_id["control_id"],
+                        "value": "renamed",
+                    }
+                ],
+            },
+        },
+    )
+    assert renamed_response.status_code == 422, renamed_response.text
+    assert renamed_response.json()["code"] == "catalog_authoring.invalid_patch"
+    assert renamed_response.json()["ref"] == opened["target_ref"]
+
+    unknown_response = client.post(
+        "/api/v1/builder/draft/object-edit",
+        json={
+            **request,
+            "change": {
+                "kind": "controls",
+                "commands": [
+                    {
+                        "operation": "set_scalar",
+                        "control_id": "ctl_00000000000000000000000000000000",
+                        "value": 7.5,
+                    }
+                ],
+            },
+        },
+    )
+    assert unknown_response.status_code == 422
+    assert unknown_response.json()["code"] == "catalog_authoring.invalid_patch"
+
+    mismatched_response = client.post(
+        "/api/v1/builder/draft/object-edit",
+        json={**request, "working": {**rule, "id": "renamed"}},
+    )
+    assert mismatched_response.status_code == 422
+
+
 def test_customize_chain_requires_the_current_draft_revision(client: TestClient) -> None:
     opened = client.post(
         "/api/v1/builder/draft/open",

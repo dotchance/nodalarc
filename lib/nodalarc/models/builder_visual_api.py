@@ -295,8 +295,8 @@ class BuilderVisualRoutingDomain(_BuilderVisualModel):
     domain_id: str = ""
     protocol: RoutingProtocol | None = None
     member_segment_ids: tuple[str, ...] = ()
-    hello_interval_s: float | None = None
-    hold_interval_s: float | None = None
+    hello_interval_s: int | None = None
+    hold_interval_s: int | None = None
 
 
 class BuilderVisualRoutingBoundary(_BuilderVisualModel):

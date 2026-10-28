@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -11,6 +12,7 @@ import yaml
 from nodalarc.catalog_refs import CatalogRef
 from nodalarc.catalog_repository import CatalogConflictError, CatalogNotFoundError, CatalogScope
 from nodalarc.filesystem_catalog_repository import FilesystemCatalogRepository
+from nodalarc.models.builder_api import BuilderIssue
 from nodalarc.models.builder_visual_api import (
     BuilderVisualCustomizeChainRequest,
     BuilderVisualDraftApplyWorkspaceRequest,
@@ -44,13 +46,18 @@ from nodalarc.models.builder_world import (
     BuilderWorld,
     BuilderWorldSegment,
 )
+from nodalarc.models.link_rules import LinkRule
+from nodalarc.models.segment_session import RoutingBoundary, RoutingDomain
 from nodalarc.resolve_session import SessionResolution
-from pydantic import ValidationError
+from pydantic import TypeAdapter, ValidationError
 from vs_api.builder_compiler import PreviewFactory, canonicalize_persisted_configuration
 from vs_api.builder_session_service import save_builder_session
 from vs_api.builder_visual_draft import (
     BuilderVisualDraftCommandError,
     BuilderVisualDraftService,
+    _link_rule_document,
+    _routing_boundary_documents,
+    _routing_domain_document,
 )
 from vs_api.builder_world import world_from_resolution
 from vs_api.catalog_context import CatalogContext
@@ -2419,8 +2426,263 @@ def test_incomplete_authored_content_is_reported_and_never_filtered(
     assert "builder.draft.link_endpoint_role_required" in codes
     assert "builder.draft.routing_members_required" in codes
     assert "builder.draft.routing_adapter_required" in codes
+    # A missing value leaves its field absent. Each issue names the workspace entry
+    # and the field within the object built from it.
+    assert session["link_rules"][0]["endpoints"][1]["select"] == {}
+    assert session["routing"]["domains"][0] == {"id": "unfinished-domain"}
+    assert "over" not in session["routing"]["boundaries"][0]
+    paths = {issue.draft_path for issue in result.assembly_issues}
+    assert {
+        "workspace.links.0.endpoints.1.select.segment",
+        "workspace.routing_domains.0.selectors",
+        "workspace.boundaries.0.over",
+    } <= paths
     assert result.compile_result.save_verdict.allowed is False
     assert all({"save", "deploy"}.issubset(issue.blocks) for issue in result.assembly_issues)
+
+
+def _issue_pointers(issues: tuple[BuilderIssue, ...]) -> set[str | None]:
+    assert all(issue.blocks == ("save", "deploy") for issue in issues)
+    return {issue.json_pointer for issue in issues}
+
+
+def test_complete_card_values_build_objects_that_validate_on_their_own() -> None:
+    rule, rule_issues = _link_rule_document(
+        BuilderVisualLinkRule(
+            rule_id="leo_ground",
+            enabled=False,
+            a=BuilderVisualLinkEndpoint(
+                segment_id="ground",
+                tag="gateways",
+                role="access",
+                medium="rf",
+                min_elevation_deg=10.0,
+            ),
+            b=BuilderVisualLinkEndpoint(segment_id="leo", role="access", medium="rf"),
+            topology_mode="nearest_n",
+            topology_n=2,
+            max_range_km=3000.0,
+        )
+    )
+    assert rule_issues == ()
+    assert rule == {
+        "id": "leo_ground",
+        "enabled": False,
+        "topology": {"mode": "nearest_n", "n": 2},
+        "endpoints": [
+            {
+                "select": {"all": [{"segment": "ground"}, {"tag": "gateways"}]},
+                "terminal": {"all": [{"role": "access"}, {"medium": "rf"}]},
+                "min_elevation_deg": 10.0,
+            },
+            {
+                "select": {"segment": "leo"},
+                "terminal": {"all": [{"role": "access"}, {"medium": "rf"}]},
+            },
+        ],
+        "constraints": {"max_range_km": 3000.0},
+    }
+    LinkRule.model_validate(rule)
+
+    domain, domain_issues = _routing_domain_document(
+        BuilderVisualRoutingDomain(
+            domain_id="leo_domain",
+            protocol="isis",
+            member_segment_ids=("leo", "ground"),
+            hello_interval_s=2,
+            hold_interval_s=7,
+        )
+    )
+    assert domain_issues == ()
+    assert domain == {
+        "id": "leo_domain",
+        "protocol": "isis",
+        "selectors": [{"any": [{"segment": "leo"}, {"segment": "ground"}]}],
+        "area_assignment": {"strategy": "flat"},
+        "timers": {"hello_interval_s": 2, "hold_interval_s": 7},
+    }
+    RoutingDomain.model_validate(domain)
+
+    boundaries, boundary_issues = _routing_boundary_documents(
+        (
+            BuilderVisualRoutingBoundary(
+                boundary_id="boundary-1",
+                over_rule_id="leo_meo",
+                adapter="static_ip",
+                from_domain_id="leo_domain",
+                to_domain_id="meo_domain",
+                export_node_loopbacks=False,
+            ),
+        )
+    )
+    assert boundary_issues == ()
+    assert boundaries == [
+        {
+            "over": "leo_meo",
+            "adapter": "static_ip",
+            "export": [
+                {
+                    "from": "leo_domain",
+                    "to": "meo_domain",
+                    "prefixes": {"aggregate_of": "originated"},
+                    "export_node_loopbacks": False,
+                },
+                {
+                    "from": "meo_domain",
+                    "to": "leo_domain",
+                    "prefixes": {"aggregate_of": "originated"},
+                    "export_node_loopbacks": False,
+                },
+            ],
+        }
+    ]
+    TypeAdapter(tuple[RoutingBoundary, ...]).validate_python(boundaries)
+
+
+def test_missing_card_values_stay_absent_and_each_is_named_in_an_issue() -> None:
+    rule, rule_issues = _link_rule_document(
+        BuilderVisualLinkRule(
+            a=BuilderVisualLinkEndpoint(tag="gateways"),
+            b=BuilderVisualLinkEndpoint(segment_id="leo", medium="optical"),
+        )
+    )
+    assert rule == {
+        "topology": {},
+        "endpoints": [
+            {
+                "select": {"all": [{}, {"tag": "gateways"}]},
+                "terminal": {"all": [{}, {}]},
+            },
+            {
+                "select": {"segment": "leo"},
+                "terminal": {"all": [{}, {"medium": "optical"}]},
+            },
+        ],
+    }
+    assert _issue_pointers(rule_issues) == {
+        "/id",
+        "/topology/mode",
+        "/endpoints/0/select/all/0/segment",
+        "/endpoints/0/terminal/all/0/role",
+        "/endpoints/0/terminal/all/1/medium",
+        "/endpoints/1/terminal/all/0/role",
+    }
+
+    nearest, nearest_issues = _link_rule_document(
+        BuilderVisualLinkRule(
+            rule_id="leo_isl",
+            a=BuilderVisualLinkEndpoint(role="isl", medium="optical"),
+            b=BuilderVisualLinkEndpoint(segment_id="leo", role="isl", medium="optical"),
+            topology_mode="nearest_n",
+        )
+    )
+    assert nearest["topology"] == {"mode": "nearest_n"}
+    assert nearest["endpoints"][0]["select"] == {}
+    assert _issue_pointers(nearest_issues) == {"/topology/n", "/endpoints/0/select/segment"}
+
+    domain, domain_issues = _routing_domain_document(
+        BuilderVisualRoutingDomain(member_segment_ids=("leo", ""), hello_interval_s=5)
+    )
+    assert domain == {
+        "selectors": [{"any": [{"segment": "leo"}, {}]}],
+        "timers": {"hello_interval_s": 5},
+    }
+    assert _issue_pointers(domain_issues) == {
+        "/id",
+        "/protocol",
+        "/selectors/0/any/1/segment",
+        "/timers/hold_interval_s",
+    }
+
+    lone, lone_issues = _routing_domain_document(
+        BuilderVisualRoutingDomain(
+            domain_id="ospf_domain", protocol="ospf", member_segment_ids=("",)
+        )
+    )
+    assert lone["selectors"] == [{}]
+    assert _issue_pointers(lone_issues) == {"/selectors/0/segment"}
+
+    empty, empty_issues = _routing_domain_document(
+        BuilderVisualRoutingDomain(domain_id="ospf_domain", protocol="ospf")
+    )
+    assert empty == {
+        "id": "ospf_domain",
+        "protocol": "ospf",
+        "area_assignment": {"strategy": "flat"},
+    }
+    assert _issue_pointers(empty_issues) == {"/selectors"}
+
+    boundaries, boundary_issues = _routing_boundary_documents(
+        (
+            BuilderVisualRoutingBoundary(
+                over_rule_id="leo_meo",
+                adapter="static_ip",
+                from_domain_id="leo_domain",
+                to_domain_id="meo_domain",
+            ),
+            BuilderVisualRoutingBoundary(to_domain_id="meo_domain"),
+        )
+    )
+    assert boundaries[1] == {
+        "export": [
+            {
+                "to": "meo_domain",
+                "prefixes": {"aggregate_of": "originated"},
+                "export_node_loopbacks": True,
+            },
+            {
+                "from": "meo_domain",
+                "prefixes": {"aggregate_of": "originated"},
+                "export_node_loopbacks": True,
+            },
+        ]
+    }
+    assert _issue_pointers(boundary_issues) == {
+        "/1/over",
+        "/1/adapter",
+        "/1/export/0/from",
+        "/1/export/1/to",
+    }
+
+
+def test_domain_timers_sent_as_json_are_applied_and_compile(
+    service: BuilderVisualDraftService,
+) -> None:
+    session_path = SHIPPED_ROOT / "sessions/earth-leo-heo-geo-luna-reachability.yaml"
+    opened = service.open(
+        BuilderVisualDraftOpenRequest(source_ref=f"nodalarc:sessions/{session_path.name}")
+    )
+    assert opened.authoring_workspace is not None
+    workspace = json.loads(opened.authoring_workspace.model_dump_json())
+    luna = next(
+        domain for domain in workspace["routing_domains"] if domain["domain_id"] == "luna_domain"
+    )
+    luna["hello_interval_s"] = 2
+    luna["hold_interval_s"] = 7
+    request = BuilderVisualDraftApplyWorkspaceRequest.model_validate_json(
+        json.dumps(
+            {
+                "draft": json.loads(opened.model_dump_json()),
+                "expected_draft_revision": opened.draft_revision,
+                "workspace": workspace,
+            }
+        )
+    )
+
+    result = service.apply_workspace(
+        request,
+        available_node_count=1_000_000,
+        preview_factory=_preview,
+    )
+
+    edited = yaml.safe_load(session_path.read_bytes())
+    domain = next(item for item in edited["routing"]["domains"] if item["id"] == "luna_domain")
+    domain["timers"] = {"hello_interval_s": 2, "hold_interval_s": 7}
+    expected = canonicalize_persisted_configuration(opened.target_ref, edited)
+    assert result.assembly_issues == ()
+    assert result.visual_draft.projection_status == "applied"
+    assert result.compile_result.save_verdict.allowed is True, result.compile_result.issues
+    assert result.compile_result.canonical_session_json == expected.canonical_json
 
 
 def test_graphical_boundary_edit_preserves_unprojected_and_sibling_boundaries(

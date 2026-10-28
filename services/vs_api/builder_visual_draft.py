@@ -648,20 +648,6 @@ def _parse_session_yaml_application(
     )
 
 
-def _boundary_exchange(
-    source: str,
-    target: str,
-    *,
-    export_node_loopbacks: bool,
-) -> JsonDocument:
-    return {
-        "from": source,
-        "to": target,
-        "prefixes": {"aggregate_of": "originated"},
-        "export_node_loopbacks": export_node_loopbacks,
-    }
-
-
 class _Assembly:
     def __init__(self, draft: BuilderVisualDraftEnvelope) -> None:
         self.draft = draft
@@ -674,6 +660,12 @@ class _Assembly:
 
     def issue(self, code: str, message: str, path: str) -> None:
         self.issues.append(_issue(code, message, target_ref=self.draft.target_ref, draft_path=path))
+
+    def object_issues(self, issues: tuple[BuilderIssue, ...], path: str) -> None:
+        """Report issues about one assembled object at the workspace entry it came from."""
+        for found in issues:
+            pointer = found.json_pointer or ""
+            self.issue(found.code, found.message, f"{path}{pointer.replace('/', '.')}")
 
     def required_identifier(self, value: str, *, path: str, fallback: str) -> str:
         normalized = _identifier(value)
@@ -964,44 +956,271 @@ def _site_document(
     }
 
 
-def _endpoint_document(
-    assembly: _Assembly,
-    endpoint: BuilderVisualLinkEndpoint,
-    *,
-    path: str,
-) -> JsonDocument:
-    segment_id = assembly.required_identifier(
-        endpoint.segment_id,
-        path=f"{path}.segment_id",
-        fallback="missing-segment",
+def _object_issue(code: str, message: str, *pointer: str | int) -> BuilderIssue:
+    """A missing field of one grammar object, named by its pointer within that object."""
+    return BuilderIssue(
+        code=code,
+        stage="draft",
+        severity="error",
+        message=message,
+        blocks=("save", "deploy"),
+        json_pointer=_json_pointer(pointer),
     )
-    for field_name, value in (("role", endpoint.role), ("medium", endpoint.medium)):
-        if value is None:
-            assembly.issue(
-                f"builder.draft.link_endpoint_{field_name}_required",
-                f"Link endpoint {field_name} is required",
-                f"{path}.{field_name}",
-            )
-    selector: JsonDocument = {"segment": segment_id}
+
+
+def _endpoint_document(
+    endpoint: BuilderVisualLinkEndpoint,
+    issues: list[BuilderIssue],
+    *,
+    at: tuple[str | int, ...],
+) -> JsonDocument:
+    segment: JsonDocument = {}
+    if endpoint.segment_id:
+        segment["segment"] = endpoint.segment_id
+    selector = segment
+    segment_at: tuple[str | int, ...] = (*at, "select", "segment")
     if endpoint.tag:
-        selector = {
-            "all": [
-                {"segment": segment_id},
-                {"tag": _identifier(endpoint.tag)},
-            ]
-        }
-    document: JsonDocument = {
-        "select": selector,
-        "terminal": {
-            "all": [
-                {"role": cast(JsonValue, endpoint.role)},
-                {"medium": cast(JsonValue, endpoint.medium)},
-            ]
-        },
-    }
+        selector = {"all": [segment, {"tag": endpoint.tag}]}
+        segment_at = (*at, "select", "all", 0, "segment")
+    if not endpoint.segment_id:
+        issues.append(
+            _object_issue(
+                "builder.draft.link_endpoint_segment_required",
+                "Link endpoint segment is required",
+                *segment_at,
+            )
+        )
+    predicates: list[JsonValue] = []
+    for index, (field_name, value) in enumerate(
+        (("role", endpoint.role), ("medium", endpoint.medium))
+    ):
+        if value is None:
+            predicates.append({})
+            issues.append(
+                _object_issue(
+                    f"builder.draft.link_endpoint_{field_name}_required",
+                    f"Link endpoint {field_name} is required",
+                    *at,
+                    "terminal",
+                    "all",
+                    index,
+                    field_name,
+                )
+            )
+        else:
+            predicates.append({field_name: value})
+    document: JsonDocument = {"select": selector, "terminal": {"all": predicates}}
     if endpoint.min_elevation_deg is not None:
         document["min_elevation_deg"] = endpoint.min_elevation_deg
     return document
+
+
+def _link_rule_document(
+    rule: BuilderVisualLinkRule,
+) -> tuple[JsonDocument, tuple[BuilderIssue, ...]]:
+    """The grammar link rule a link card states, with an issue for each field it leaves absent."""
+    issues: list[BuilderIssue] = []
+    document: JsonDocument = {}
+    if rule.rule_id:
+        document["id"] = rule.rule_id
+    else:
+        issues.append(
+            _object_issue("builder.draft.link_rule_id_required", "Link rule id is required", "id")
+        )
+    if not rule.enabled:
+        document["enabled"] = False
+    topology: JsonDocument = {}
+    if rule.topology_mode is None:
+        issues.append(
+            _object_issue(
+                "builder.draft.link_topology_required",
+                "Link topology mode is required",
+                "topology",
+                "mode",
+            )
+        )
+    else:
+        topology["mode"] = rule.topology_mode
+        if rule.topology_mode == "nearest_n":
+            if rule.topology_n is None:
+                issues.append(
+                    _object_issue(
+                        "builder.draft.link_topology_n_required",
+                        "nearest_n topology requires n",
+                        "topology",
+                        "n",
+                    )
+                )
+            else:
+                topology["n"] = rule.topology_n
+    document["topology"] = topology
+    document["endpoints"] = [
+        _endpoint_document(rule.a, issues, at=("endpoints", 0)),
+        _endpoint_document(rule.b, issues, at=("endpoints", 1)),
+    ]
+    if rule.max_range_km is not None:
+        document["constraints"] = {"max_range_km": rule.max_range_km}
+    return document, tuple(issues)
+
+
+def _routing_domain_document(
+    domain: BuilderVisualRoutingDomain,
+) -> tuple[JsonDocument, tuple[BuilderIssue, ...]]:
+    """The grammar routing domain a domain card states, with an issue for each absent field."""
+    issues: list[BuilderIssue] = []
+    document: JsonDocument = {}
+    if domain.domain_id:
+        document["id"] = domain.domain_id
+    else:
+        issues.append(
+            _object_issue(
+                "builder.draft.routing_domain_id_required",
+                "Routing domain id is required",
+                "id",
+            )
+        )
+    if domain.protocol is None:
+        issues.append(
+            _object_issue(
+                "builder.draft.routing_protocol_required",
+                "Routing protocol is required",
+                "protocol",
+            )
+        )
+    else:
+        document["protocol"] = domain.protocol
+    members = domain.member_segment_ids
+    if not members:
+        issues.append(
+            _object_issue(
+                "builder.draft.routing_members_required",
+                "Routing domains require members; the domain was not omitted",
+                "selectors",
+            )
+        )
+    else:
+        # One member is its own selector; several are the branches of one `any`.
+        listed_at: tuple[str | int, ...] = (
+            ("selectors",) if len(members) == 1 else ("selectors", 0, "any")
+        )
+        selectors: list[JsonValue] = []
+        for index, member in enumerate(members):
+            if member:
+                selectors.append({"segment": member})
+            else:
+                selectors.append({})
+                issues.append(
+                    _object_issue(
+                        "builder.draft.routing_member_segment_required",
+                        "Routing domain member segment is required",
+                        *listed_at,
+                        index,
+                        "segment",
+                    )
+                )
+        document["selectors"] = selectors if len(selectors) == 1 else [{"any": selectors}]
+    if domain.protocol in LINK_STATE_PROTOCOLS:
+        document["area_assignment"] = {"strategy": "flat"}
+    if domain.hello_interval_s is not None or domain.hold_interval_s is not None:
+        timers: JsonDocument = {}
+        for field_name, value in (
+            ("hello_interval_s", domain.hello_interval_s),
+            ("hold_interval_s", domain.hold_interval_s),
+        ):
+            if value is None:
+                issues.append(
+                    _object_issue(
+                        "builder.draft.routing_timers_incomplete",
+                        "Routing timers require both hello and hold intervals",
+                        "timers",
+                        field_name,
+                    )
+                )
+            else:
+                timers[field_name] = value
+        document["timers"] = timers
+    return document, tuple(issues)
+
+
+def _boundary_exchange(
+    source: str,
+    target: str,
+    *,
+    export_node_loopbacks: bool,
+) -> JsonDocument:
+    exchange: JsonDocument = {}
+    if source:
+        exchange["from"] = source
+    if target:
+        exchange["to"] = target
+    exchange["prefixes"] = {"aggregate_of": "originated"}
+    exchange["export_node_loopbacks"] = export_node_loopbacks
+    return exchange
+
+
+def _routing_boundary_documents(
+    boundaries: tuple[BuilderVisualRoutingBoundary, ...],
+) -> tuple[list[JsonValue], tuple[BuilderIssue, ...]]:
+    """The grammar boundary list the boundary cards state, with an issue for each absent field."""
+    issues: list[BuilderIssue] = []
+    documents: list[JsonValue] = []
+    for index, boundary in enumerate(boundaries):
+        document: JsonDocument = {}
+        if boundary.over_rule_id:
+            document["over"] = boundary.over_rule_id
+        else:
+            issues.append(
+                _object_issue(
+                    "builder.draft.boundary_over_required",
+                    "Boundary link rule is required",
+                    index,
+                    "over",
+                )
+            )
+        if boundary.adapter is None:
+            issues.append(
+                _object_issue(
+                    "builder.draft.routing_adapter_required",
+                    "Routing boundary adapter is required",
+                    index,
+                    "adapter",
+                )
+            )
+        else:
+            document["adapter"] = boundary.adapter
+        # A boundary domain is the source of one export and the target of the other.
+        # A missing domain therefore leaves one field absent in each export.
+        for name, domain_id, reverse in (
+            ("from", boundary.from_domain_id, "to"),
+            ("to", boundary.to_domain_id, "from"),
+        ):
+            if domain_id:
+                continue
+            for export, field_name in ((0, name), (1, reverse)):
+                issues.append(
+                    _object_issue(
+                        f"builder.draft.boundary_{name}_domain_required",
+                        f"Boundary {name} domain is required",
+                        index,
+                        "export",
+                        export,
+                        field_name,
+                    )
+                )
+        document["export"] = [
+            _boundary_exchange(
+                boundary.from_domain_id,
+                boundary.to_domain_id,
+                export_node_loopbacks=boundary.export_node_loopbacks,
+            ),
+            _boundary_exchange(
+                boundary.to_domain_id,
+                boundary.from_domain_id,
+                export_node_loopbacks=boundary.export_node_loopbacks,
+            ),
+        ]
+        documents.append(document)
+    return documents, tuple(issues)
 
 
 def _proposal_documents(
@@ -1863,130 +2082,19 @@ def _assemble_authoring_workspace(
         segments.append(segment)
 
     link_rules: list[JsonValue] = []
-    rule_ids: dict[str, str] = {}
     for index, rule in enumerate(workspace.links):
-        path = f"workspace.links.{index}"
-        rule_id = assembly.required_identifier(
-            rule.rule_id,
-            path=f"{path}.rule_id",
-            fallback=f"link-{index + 1}",
-        )
-        rule_ids[rule.rule_id] = rule_id
-        if rule.topology_mode is None:
-            assembly.issue(
-                "builder.draft.link_topology_required",
-                "Link topology mode is required",
-                f"{path}.topology_mode",
-            )
-        topology: JsonDocument = {"mode": cast(JsonValue, rule.topology_mode)}
-        if rule.topology_mode == "nearest_n":
-            topology["n"] = cast(JsonValue, rule.topology_n)
-            if rule.topology_n is None:
-                assembly.issue(
-                    "builder.draft.link_topology_n_required",
-                    "nearest_n topology requires n",
-                    f"{path}.topology_n",
-                )
-        document: JsonDocument = {
-            "id": rule_id,
-            **({} if rule.enabled else {"enabled": False}),
-            "topology": topology,
-            "endpoints": [
-                _endpoint_document(assembly, rule.a, path=f"{path}.a"),
-                _endpoint_document(assembly, rule.b, path=f"{path}.b"),
-            ],
-        }
-        if rule.max_range_km is not None:
-            document["constraints"] = {"max_range_km": rule.max_range_km}
-        link_rules.append(document)
+        rule_document, rule_issues = _link_rule_document(rule)
+        assembly.object_issues(rule_issues, f"workspace.links.{index}")
+        link_rules.append(rule_document)
 
     domains: list[JsonValue] = []
-    domain_ids: dict[str, str] = {}
     for index, domain in enumerate(workspace.routing_domains):
-        path = f"workspace.routing_domains.{index}"
-        domain_id = assembly.required_identifier(
-            domain.domain_id,
-            path=f"{path}.domain_id",
-            fallback=f"domain-{index + 1}",
-        )
-        domain_ids[domain.domain_id] = domain_id
-        if domain.protocol is None:
-            assembly.issue(
-                "builder.draft.routing_protocol_required",
-                "Routing protocol is required",
-                f"{path}.protocol",
-            )
-        if not domain.member_segment_ids:
-            assembly.issue(
-                "builder.draft.routing_members_required",
-                "Routing domains require members; the domain was not omitted",
-                f"{path}.member_segment_ids",
-            )
-        selectors = [
-            {"segment": assembly.required_identifier(member, path=path, fallback="missing-segment")}
-            for member in domain.member_segment_ids
-        ]
-        domain_document: JsonDocument = {
-            "id": domain_id,
-            "protocol": cast(JsonValue, domain.protocol),
-            "selectors": selectors if len(selectors) <= 1 else [{"any": selectors}],
-        }
-        if domain.protocol in LINK_STATE_PROTOCOLS:
-            domain_document["area_assignment"] = {"strategy": "flat"}
-        if domain.hello_interval_s is not None or domain.hold_interval_s is not None:
-            if domain.hello_interval_s is None or domain.hold_interval_s is None:
-                assembly.issue(
-                    "builder.draft.routing_timers_incomplete",
-                    "Routing timers require both hello and hold intervals",
-                    path,
-                )
-            domain_document["timers"] = {
-                "hello_interval_s": cast(JsonValue, domain.hello_interval_s),
-                "hold_interval_s": cast(JsonValue, domain.hold_interval_s),
-            }
+        domain_document, domain_issues = _routing_domain_document(domain)
+        assembly.object_issues(domain_issues, f"workspace.routing_domains.{index}")
         domains.append(domain_document)
 
-    boundaries: list[JsonValue] = []
-    for index, boundary in enumerate(workspace.boundaries):
-        path = f"workspace.boundaries.{index}"
-        if boundary.adapter is None:
-            assembly.issue(
-                "builder.draft.routing_adapter_required",
-                "Routing boundary adapter is required",
-                f"{path}.adapter",
-            )
-        from_id = domain_ids.get(boundary.from_domain_id, boundary.from_domain_id)
-        to_id = domain_ids.get(boundary.to_domain_id, boundary.to_domain_id)
-        over_id = rule_ids.get(boundary.over_rule_id, boundary.over_rule_id)
-        for field_name, value in (
-            ("over_rule_id", over_id),
-            ("from_domain_id", from_id),
-            ("to_domain_id", to_id),
-        ):
-            if not value:
-                assembly.issue(
-                    f"builder.draft.boundary_{field_name}_required",
-                    f"Boundary {field_name.replace('_', ' ')} is required",
-                    f"{path}.{field_name}",
-                )
-        boundaries.append(
-            {
-                "over": over_id,
-                "adapter": cast(JsonValue, boundary.adapter),
-                "export": [
-                    _boundary_exchange(
-                        from_id,
-                        to_id,
-                        export_node_loopbacks=boundary.export_node_loopbacks,
-                    ),
-                    _boundary_exchange(
-                        to_id,
-                        from_id,
-                        export_node_loopbacks=boundary.export_node_loopbacks,
-                    ),
-                ],
-            }
-        )
+    boundaries, boundary_issues = _routing_boundary_documents(workspace.boundaries)
+    assembly.object_issues(boundary_issues, "workspace.boundaries")
 
     session: JsonDocument = {
         "session": {
@@ -2234,10 +2342,15 @@ def _overlay_applied_workspace(
         for rule in cast(list[JsonDocument], session.get("link_rules", []))
         if rule.get("id") not in baseline_link_ids - current_link_ids
     ]
-    candidate_links = {
-        cast(str, rule["id"]): rule
-        for rule in cast(list[JsonDocument], candidate.get("link_rules", []))
-    }
+    # The assembly writes one rule per workspace link, in order, and leaves a missing id
+    # absent, so its rules are keyed by the workspace ids they were built from.
+    candidate_links = dict(
+        zip(
+            (rule.rule_id for rule in workspace.links),
+            cast(list[JsonDocument], candidate.get("link_rules", [])),
+            strict=True,
+        )
+    )
     baseline_links = {rule.rule_id: rule for rule in baseline.links}
     current_links = {rule.rule_id: rule for rule in workspace.links}
     existing_links = [
@@ -2268,10 +2381,13 @@ def _overlay_applied_workspace(
             for domain in cast(list[JsonDocument], routing.get("domains", []))
             if domain.get("id") not in baseline_domain_ids - current_domain_ids
         ]
-        candidate_domains = {
-            cast(str, domain["id"]): domain
-            for domain in cast(list[JsonDocument], candidate_routing.get("domains", []))
-        }
+        candidate_domains = dict(
+            zip(
+                (domain.domain_id for domain in workspace.routing_domains),
+                cast(list[JsonDocument], candidate_routing.get("domains", [])),
+                strict=True,
+            )
+        )
         baseline_domains = {domain.domain_id: domain for domain in baseline.routing_domains}
         current_domains = {domain.domain_id: domain for domain in workspace.routing_domains}
         existing_domains = [

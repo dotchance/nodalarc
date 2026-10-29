@@ -871,6 +871,7 @@ export function BuilderView({
       workspace.ground_refs.length >
       0;
   const yamlBlocksGui = yamlBlocksGraphicalEditing(visualDraft !== null, yamlBuffer);
+  const yamlHasErrors = yamlBuffer.issues.length > 0 || yamlBuffer.applyFailure !== null;
   /** Why the windows that edit pending edits cannot change their objects now;
    *  null when they can. Those edits are made on the accepted session, so they
    *  wait while a change is being applied, while the draft holds a change the
@@ -962,6 +963,7 @@ export function BuilderView({
     }
     const generation = yamlBuffer.generation;
     const timer = setTimeout(() => {
+      // A failed apply is held in the buffer state, which the YAML pane shows.
       void applySessionYamlOnce(generation).catch(() => undefined);
     }, 500);
     return () => clearTimeout(timer);
@@ -3110,12 +3112,12 @@ export function BuilderView({
         {visualDraft ? (
           <>
             <div
-              className={`builder-yaml-revision${yamlBuffer.issues.length > 0 ? " builder-yaml-revision--error" : ""}`}
+              className={`builder-yaml-revision${yamlHasErrors ? " builder-yaml-revision--error" : ""}`}
               data-testid="builder-yaml-revision"
             >
               {visualDraft.applied_revision !== null && visualDraft.applied_revision !== undefined
                 ? `Showing applied revision ${visualDraft.applied_revision}; buffer generation ${yamlBuffer.generation}${
-                    yamlBuffer.issues.length > 0 ? " has errors" : ""
+                    yamlHasErrors ? " has errors" : ""
                   }`
                 : `Buffer generation ${yamlBuffer.generation} has no valid graphical projection`}
             </div>
@@ -3151,7 +3153,8 @@ export function BuilderView({
                   !twinMatchesDraft ||
                   (!yamlBuffer.dirty && yamlBuffer.applied)
                 }
-                onClick={() => void applySessionYaml(yamlBuffer.generation)}
+                // A failed apply is held in the buffer state, which this pane shows.
+                onClick={() => void applySessionYaml(yamlBuffer.generation).catch(() => undefined)}
               >
                 {writer === "yaml" ? "Applying…" : "Apply YAML"}
               </Button>
@@ -3204,6 +3207,11 @@ export function BuilderView({
                 This buffer contains comments or formatting that canonical save and graphical edits
                 cannot preserve. Review and choose Use canonical YAML before continuing graphically or
                 saving.
+              </div>
+            )}
+            {yamlBuffer.applyFailure !== null && (
+              <div className="builder-warning" data-testid="builder-yaml-apply-failure">
+                The YAML was not applied: {yamlBuffer.applyFailure}
               </div>
             )}
             {yamlBuffer.issues.map((issue, index) => (

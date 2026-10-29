@@ -497,6 +497,9 @@ export interface SessionYamlBufferState {
   /** The backend's findings for this generation. A new generation holds none
    *  until the backend answers it. */
   issues: readonly BuilderIssue[];
+  /** Why the latest apply of this generation failed with no answer from the
+   *  backend for it; null when none failed. A new generation holds none. */
+  applyFailure: string | null;
 }
 
 /** Whether the automatic apply sends the buffer: no apply was handed its
@@ -724,6 +727,7 @@ const EMPTY_YAML_BUFFER: SessionYamlBufferState = {
   appliedText: "",
   generation: 0,
   sentGeneration: 0,
+  applyFailure: null,
   dirty: false,
   applied: false,
   canonicalizationRequired: false,
@@ -1055,6 +1059,7 @@ export function useBuilderWorld() {
           appliedText: draft.session_yaml,
           generation: 0,
           sentGeneration: 0,
+          applyFailure: null,
           dirty: false,
           applied:
             draft.projection_status === "applied" ||
@@ -1102,6 +1107,7 @@ export function useBuilderWorld() {
             appliedText: opened.session_yaml,
             generation: 0,
             sentGeneration: 0,
+            applyFailure: null,
             dirty: false,
             applied: opened.projection_status === "applied",
             canonicalizationRequired: canonical !== null && canonical !== undefined && canonical !== opened.session_yaml,
@@ -1141,6 +1147,7 @@ export function useBuilderWorld() {
       generation: current.generation + 1,
       dirty: text !== current.appliedText,
       issues: [],
+      applyFailure: null,
     });
     return true;
   }, [setYamlBuffer]);
@@ -1155,6 +1162,16 @@ export function useBuilderWorld() {
     if (marked.generation === generation && marked.sentGeneration !== generation) {
       setYamlBuffer({ ...marked, sentGeneration: generation });
     }
+    // A failure is held against the generation it belongs to, so the pane
+    // shows it until a newer generation replaces it.
+    const holdFailure = (cause: unknown) => {
+      const current = yamlBufferRef.current;
+      if (cause instanceof SupersededSessionOperation || current.generation !== generation) return;
+      setYamlBuffer({
+        ...current,
+        applyFailure: cause instanceof Error ? cause.message : String(cause),
+      });
+    };
     return enqueueWriter("yaml", async (epoch) => {
       const draft = visualDraftRef.current;
       const buffer = yamlBufferRef.current;
@@ -1180,6 +1197,7 @@ export function useBuilderWorld() {
           appliedText: buffer.appliedText,
           generation: result.buffer_generation,
           sentGeneration: result.buffer_generation,
+          applyFailure: null,
           dirty: result.yaml_text !== buffer.appliedText,
           applied: false,
           canonicalizationRequired: false,
@@ -1196,6 +1214,7 @@ export function useBuilderWorld() {
         appliedText: result.yaml_text,
         generation: result.buffer_generation,
         sentGeneration: result.buffer_generation,
+        applyFailure: null,
         dirty: false,
         applied: true,
         canonicalizationRequired: result.canonicalization_required,
@@ -1203,6 +1222,9 @@ export function useBuilderWorld() {
         issues: result.issues ?? [],
       });
       return result;
+    }).catch((cause: unknown) => {
+      holdFailure(cause);
+      throw cause;
     });
   }, [
     adoptAcceptedChange,
@@ -1282,6 +1304,7 @@ export function useBuilderWorld() {
         appliedText: canonical,
         generation: buffer.generation + 1,
         sentGeneration: buffer.generation + 1,
+        applyFailure: null,
         dirty: false,
         applied: true,
         canonicalizationRequired: false,
@@ -1408,6 +1431,7 @@ export function useBuilderWorld() {
           appliedText: canonical,
           generation: nextBuffer.generation + 1,
           sentGeneration: nextBuffer.generation + 1,
+          applyFailure: null,
           dirty: false,
           applied: true,
           canonicalizationRequired: false,
@@ -1514,6 +1538,7 @@ export function useBuilderWorld() {
           appliedText: canonical,
           generation: buffer.generation + 1,
           sentGeneration: buffer.generation + 1,
+          applyFailure: null,
           dirty: false,
           applied: true,
           canonicalizationRequired: false,
@@ -1593,6 +1618,7 @@ export function useBuilderWorld() {
           appliedText: canonical,
           generation: buffer.generation + 1,
           sentGeneration: buffer.generation + 1,
+          applyFailure: null,
           dirty: false,
           applied: true,
           canonicalizationRequired: false,
@@ -1695,6 +1721,7 @@ export function useBuilderWorld() {
         appliedText: canonical,
         generation: yamlBufferRef.current.generation + 1,
         sentGeneration: yamlBufferRef.current.generation + 1,
+        applyFailure: null,
         dirty: false,
         applied: true,
         canonicalizationRequired: false,
@@ -1901,6 +1928,7 @@ export function useBuilderWorld() {
             appliedText: canonical,
             generation: yamlBufferRef.current.generation + 1,
             sentGeneration: yamlBufferRef.current.generation + 1,
+            applyFailure: null,
             dirty: false,
             applied: true,
             canonicalizationRequired: false,
@@ -2004,6 +2032,7 @@ export function useBuilderWorld() {
             appliedText: canonical,
             generation: capture.bufferGeneration + 1,
             sentGeneration: capture.bufferGeneration + 1,
+            applyFailure: null,
             dirty: false,
             applied: true,
             canonicalizationRequired: false,
@@ -2058,6 +2087,7 @@ export function useBuilderWorld() {
       appliedText: canonical,
       generation: yamlBufferRef.current.generation + 1,
       sentGeneration: yamlBufferRef.current.generation + 1,
+      applyFailure: null,
       dirty: false,
       applied: true,
       canonicalizationRequired: false,

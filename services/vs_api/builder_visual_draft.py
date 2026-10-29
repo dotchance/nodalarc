@@ -458,15 +458,8 @@ def _current_and_referenced_authoring_ids(
 
 
 def _twin_authoring_ids(workspace: BuilderVisualWorkspace) -> Iterator[str]:
-    """Every segment, link rule and routing domain id the twin defines or references."""
+    """Every segment id the twin defines."""
     yield from (item.segment_id for item in _placed_segments(workspace))
-    for rule in workspace.links:
-        yield from (rule.rule_id, rule.a.segment_id, rule.b.segment_id)
-    for domain in workspace.routing_domains:
-        yield domain.domain_id
-        yield from domain.member_segment_ids
-    for boundary in workspace.boundaries:
-        yield from (boundary.over_rule_id, boundary.from_domain_id, boundary.to_domain_id)
 
 
 def _json_items(value: JsonValue) -> list[JsonValue]:
@@ -851,12 +844,6 @@ class _Assembly:
 
     def issue(self, code: str, message: str, path: str) -> None:
         self.issues.append(_issue(code, message, target_ref=self.draft.target_ref, draft_path=path))
-
-    def object_issues(self, issues: tuple[BuilderIssue, ...], path: str) -> None:
-        """Report issues about one assembled object at the workspace entry it came from."""
-        for found in issues:
-            pointer = found.json_pointer or ""
-            self.issue(found.code, found.message, f"{path}{pointer.replace('/', '.')}")
 
     def required_identifier(self, value: str, *, path: str, fallback: str) -> str:
         normalized = _identifier(value)
@@ -1910,21 +1897,6 @@ def _routing_boundary_projection(
     return projected
 
 
-def _projected_boundary_identity(
-    boundary: BuilderVisualRoutingBoundary,
-) -> tuple[str, str | None]:
-    return boundary.over_rule_id, boundary.adapter
-
-
-def _boundary_document_identity(boundary: JsonDocument) -> tuple[str, str | None]:
-    over = boundary.get("over")
-    adapter = boundary.get("adapter")
-    return (
-        over if isinstance(over, str) else "",
-        adapter if isinstance(adapter, str) else None,
-    )
-
-
 def _named_segments(selectors: tuple[NodeSelector, ...]) -> tuple[str, ...]:
     """The segments selectors name outside every `not`, in order of first appearance.
 
@@ -2245,23 +2217,6 @@ def _workspace_from_applied_session(
         max_pairs_per_rule = limits.max_pairs_per_rule
         max_pairs_per_tick = limits.max_pairs_per_tick
 
-    links = tuple(
-        projected
-        for rule in session.link_rules or ()
-        if (projected := _link_projection(rule)) is not None
-    )
-    routing_domains = tuple(
-        projected
-        for domain in (session.routing.domains if session.routing is not None else ())
-        if (projected := _routing_domain_projection(domain)) is not None
-    )
-    boundaries = tuple(
-        projected
-        for index, boundary in enumerate(
-            session.routing.boundaries or () if session.routing is not None else ()
-        )
-        if (projected := _routing_boundary_projection(boundary, index=index)) is not None
-    )
     return BuilderVisualWorkspace(
         session_name=session.session.name,
         display_name=session.session.display_name,
@@ -2270,9 +2225,6 @@ def _workspace_from_applied_session(
         space_refs=tuple(space_refs),
         ground=tuple(ground_drafts),
         ground_refs=tuple(ground_refs),
-        links=links,
-        routing_domains=routing_domains,
-        boundaries=boundaries,
         max_pairs_per_rule=max_pairs_per_rule,
         max_pairs_per_tick=max_pairs_per_tick,
         start_time=session.time.start_time,
@@ -2529,21 +2481,6 @@ def _assemble_authoring_workspace(
             segment["overrides"] = overrides
         segments.append(segment)
 
-    link_rules: list[JsonValue] = []
-    for index, rule in enumerate(workspace.links):
-        rule_document, rule_issues = _link_rule_document(rule)
-        assembly.object_issues(rule_issues, f"workspace.links.{index}")
-        link_rules.append(rule_document)
-
-    domains: list[JsonValue] = []
-    for index, domain in enumerate(workspace.routing_domains):
-        domain_document, domain_issues = _routing_domain_document(domain)
-        assembly.object_issues(domain_issues, f"workspace.routing_domains.{index}")
-        domains.append(domain_document)
-
-    boundaries, boundary_issues = _routing_boundary_documents(workspace.boundaries)
-    assembly.object_issues(boundary_issues, "workspace.boundaries")
-
     session: JsonDocument = {
         "session": {
             "name": target_name,
@@ -2561,13 +2498,6 @@ def _assemble_authoring_workspace(
             "compression": cast(JsonValue, workspace.compression),
         },
     }
-    if domains or boundaries:
-        session["routing"] = {
-            "domains": domains,
-            **({"boundaries": boundaries} if boundaries else {}),
-        }
-    if link_rules:
-        session["link_rules"] = link_rules
     # The limits are written whenever the draft states them, so a session keeps them
     # through the commands that come before its first link rule.
     if workspace.max_pairs_per_rule is not None or workspace.max_pairs_per_tick is not None:
@@ -2782,181 +2712,6 @@ def _overlay_applied_workspace(
                 existing["overrides"] = merged_overrides
             else:
                 existing.pop("overrides", None)
-
-    baseline_link_ids = {rule.rule_id for rule in baseline.links}
-    current_link_ids = {rule.rule_id for rule in workspace.links}
-    existing_links = [
-        rule
-        for rule in cast(list[JsonDocument], session.get("link_rules", []))
-        if rule.get("id") not in baseline_link_ids - current_link_ids
-    ]
-    # The assembly writes one rule per workspace link, in order, and leaves a missing id
-    # absent, so its rules are keyed by the workspace ids they were built from.
-    candidate_links = dict(
-        zip(
-            (rule.rule_id for rule in workspace.links),
-            cast(list[JsonDocument], candidate.get("link_rules", [])),
-            strict=True,
-        )
-    )
-    baseline_links = {rule.rule_id: rule for rule in baseline.links}
-    current_links = {rule.rule_id: rule for rule in workspace.links}
-    existing_links = [
-        deepcopy(candidate_links[cast(str, rule.get("id"))])
-        if cast(str, rule.get("id")) in baseline_links
-        and cast(str, rule.get("id")) in current_links
-        and current_links[cast(str, rule.get("id"))] != baseline_links[cast(str, rule.get("id"))]
-        else rule
-        for rule in existing_links
-    ]
-    existing_link_ids = {cast(str, rule.get("id")) for rule in existing_links}
-    for rule in workspace.links:
-        if rule.rule_id not in existing_link_ids and rule.rule_id in candidate_links:
-            existing_links.append(deepcopy(candidate_links[rule.rule_id]))
-    if existing_links:
-        session["link_rules"] = existing_links
-    else:
-        session.pop("link_rules", None)
-    candidate_routing = candidate.get("routing")
-    routing = session.get("routing")
-    if not isinstance(routing, dict):
-        routing = {}
-    if isinstance(candidate_routing, dict):
-        baseline_domain_ids = {domain.domain_id for domain in baseline.routing_domains}
-        current_domain_ids = {domain.domain_id for domain in workspace.routing_domains}
-        existing_domains = [
-            domain
-            for domain in cast(list[JsonDocument], routing.get("domains", []))
-            if domain.get("id") not in baseline_domain_ids - current_domain_ids
-        ]
-        candidate_domains = dict(
-            zip(
-                (domain.domain_id for domain in workspace.routing_domains),
-                cast(list[JsonDocument], candidate_routing.get("domains", [])),
-                strict=True,
-            )
-        )
-        baseline_domains = {domain.domain_id: domain for domain in baseline.routing_domains}
-        current_domains = {domain.domain_id: domain for domain in workspace.routing_domains}
-        existing_domains = [
-            deepcopy(candidate_domains[cast(str, domain.get("id"))])
-            if cast(str, domain.get("id")) in baseline_domains
-            and cast(str, domain.get("id")) in current_domains
-            and current_domains[cast(str, domain.get("id"))]
-            != baseline_domains[cast(str, domain.get("id"))]
-            else domain
-            for domain in existing_domains
-        ]
-        existing_domain_ids = {cast(str, domain.get("id")) for domain in existing_domains}
-        for domain in workspace.routing_domains:
-            if (
-                domain.domain_id not in existing_domain_ids
-                and domain.domain_id in candidate_domains
-            ):
-                existing_domains.append(deepcopy(candidate_domains[domain.domain_id]))
-        if existing_domains:
-            routing["domains"] = existing_domains
-        else:
-            routing.pop("domains", None)
-
-        raw_boundaries = cast(list[JsonDocument], routing.get("boundaries", []))
-        candidate_boundaries = cast(
-            list[JsonDocument],
-            candidate_routing.get("boundaries", []),
-        )
-        workspace_boundary_ids = tuple(boundary.boundary_id for boundary in workspace.boundaries)
-        raw_boundary_identities = tuple(
-            _boundary_document_identity(boundary) for boundary in raw_boundaries
-        )
-        baseline_boundary_identities = tuple(
-            _projected_boundary_identity(boundary) for boundary in baseline.boundaries
-        )
-        candidate_boundary_identities = tuple(
-            _boundary_document_identity(boundary) for boundary in candidate_boundaries
-        )
-        projection_issue: BuilderIssue | None = None
-        if len(candidate_boundaries) != len(workspace.boundaries):
-            projection_issue = _issue(
-                "builder.draft.routing_boundary_projection_mismatch",
-                "Graphical boundary assembly did not preserve the workspace boundary count",
-                target_ref=draft.target_ref,
-                draft_path="authoring_workspace.boundaries",
-            )
-        elif (
-            len(workspace_boundary_ids) != len(set(workspace_boundary_ids))
-            or len(raw_boundary_identities) != len(set(raw_boundary_identities))
-            or len(baseline_boundary_identities) != len(set(baseline_boundary_identities))
-            or len(candidate_boundary_identities) != len(set(candidate_boundary_identities))
-        ):
-            projection_issue = _issue(
-                "builder.draft.routing_boundary_identity_ambiguous",
-                "Graphical boundary overlay requires unique boundary IDs and "
-                "unique over/adapter pairs",
-                target_ref=draft.target_ref,
-                draft_path="authoring_workspace.boundaries",
-            )
-        elif not set(baseline_boundary_identities).issubset(raw_boundary_identities):
-            projection_issue = _issue(
-                "builder.draft.routing_boundary_projection_mismatch",
-                "A projected boundary no longer identifies exactly one applied boundary",
-                target_ref=draft.target_ref,
-                draft_path="authoring_workspace.boundaries",
-            )
-
-        if projection_issue is not None:
-            issues = (*issues, projection_issue)
-        else:
-            candidate_by_boundary_id = dict(
-                zip(workspace_boundary_ids, candidate_boundaries, strict=True)
-            )
-            current_boundaries = {
-                boundary.boundary_id: boundary for boundary in workspace.boundaries
-            }
-            baseline_by_identity = {
-                _projected_boundary_identity(boundary): boundary for boundary in baseline.boundaries
-            }
-            handled_boundary_ids: set[str] = set()
-            existing_boundaries: list[JsonDocument] = []
-            for boundary in raw_boundaries:
-                baseline_boundary = baseline_by_identity.get(_boundary_document_identity(boundary))
-                if baseline_boundary is None:
-                    existing_boundaries.append(boundary)
-                    continue
-                current_boundary = current_boundaries.get(baseline_boundary.boundary_id)
-                if current_boundary is None:
-                    continue
-                handled_boundary_ids.add(current_boundary.boundary_id)
-                if current_boundary == baseline_boundary:
-                    existing_boundaries.append(boundary)
-                    continue
-                replacement = candidate_by_boundary_id[current_boundary.boundary_id]
-                existing_boundaries.append(deepcopy(replacement))
-            for boundary in workspace.boundaries:
-                if boundary.boundary_id in handled_boundary_ids:
-                    continue
-                candidate = candidate_by_boundary_id[boundary.boundary_id]
-                existing_boundaries.append(deepcopy(candidate))
-            existing_boundary_identities = tuple(
-                _boundary_document_identity(boundary) for boundary in existing_boundaries
-            )
-            if len(existing_boundary_identities) != len(set(existing_boundary_identities)):
-                issues = (
-                    *issues,
-                    _issue(
-                        "builder.draft.routing_boundary_identity_ambiguous",
-                        "Graphical boundary edits would create duplicate over/adapter pairs",
-                        target_ref=draft.target_ref,
-                        draft_path="authoring_workspace.boundaries",
-                    ),
-                )
-            elif existing_boundaries:
-                routing["boundaries"] = existing_boundaries
-            else:
-                routing.pop("boundaries", None)
-    if routing.get("domains"):
-        session["routing"] = routing
-    else:
-        session.pop("routing", None)
 
     return session, proposals, issues
 

@@ -23,9 +23,6 @@ from nodalarc.models.builder_visual_api import (
     BuilderVisualDraftCreateRequest,
     BuilderVisualDraftEnvelope,
     BuilderVisualDraftOpenRequest,
-    BuilderVisualLinkRuleListing,
-    BuilderVisualRoutingBoundaryListing,
-    BuilderVisualRoutingDomainListing,
     BuilderVisualSessionListing,
     BuilderVisualWorkspace,
 )
@@ -120,17 +117,6 @@ def test_open_projects_and_no_edit_compiles_every_shipped_session_canonically(
     assert compiled.compile_result.canonical_session_json == expected.canonical_json
 
 
-def _widgets(
-    entries: tuple[
-        BuilderVisualLinkRuleListing
-        | BuilderVisualRoutingDomainListing
-        | BuilderVisualRoutingBoundaryListing,
-        ...,
-    ],
-) -> tuple[BaseModel, ...]:
-    return tuple(entry.widget for entry in entries if entry.widget is not None)
-
-
 @pytest.mark.parametrize("session_path", SHIPPED_SESSIONS, ids=lambda path: path.stem)
 def test_the_listing_names_every_rule_domain_and_boundary_of_every_shipped_session(
     session_path: Path,
@@ -145,8 +131,7 @@ def test_the_listing_names_every_rule_domain_and_boundary_of_every_shipped_sessi
         preview_factory=preview_from_resolution,
     )
     accepted = opened.applied_session
-    workspace = opened.applied_workspace
-    assert accepted is not None and workspace is not None
+    assert accepted is not None
     routing = accepted.get("routing", {})
     listing = compiled.listing
     assert listing is not None
@@ -160,10 +145,6 @@ def test_the_listing_names_every_rule_domain_and_boundary_of_every_shipped_sessi
     assert [(entry.index, entry.over_rule_id) for entry in listing.boundaries] == [
         (index, boundary["over"]) for index, boundary in enumerate(routing.get("boundaries", []))
     ]
-    # An object carries a card value exactly when today's cards show it.
-    assert _widgets(listing.link_rules) == workspace.links
-    assert _widgets(listing.routing_domains) == workspace.routing_domains
-    assert _widgets(listing.boundaries) == workspace.boundaries
 
 
 def test_the_listing_states_the_segments_and_domains_each_object_names(
@@ -501,7 +482,6 @@ def test_a_workspace_preview_compiles_the_edit_and_accepts_nothing(
         update={
             "display_name": "Previewed name",
             "max_pairs_per_rule": 600,
-            "links": opened.authoring_workspace.links[:1],
         }
     )
 
@@ -514,7 +494,8 @@ def test_a_workspace_preview_compiles_the_edit_and_accepts_nothing(
     compiled_session = preview.compile_result.canonical_session_json
     assert compiled_session is not None
     assert compiled_session["session"]["display_name"] == "Previewed name"
-    assert [rule["id"] for rule in compiled_session["link_rules"]] == ["leo_access"]
+    # The workspace holds no link rules, so the preview keeps the accepted ones.
+    assert [rule["id"] for rule in compiled_session["link_rules"]] == ["leo_access", "leo_isl"]
     assert preview.compile_result.resolved_preview is not None
     assert preview.visual_draft == opened
     # The listing describes the accepted session, which the preview leaves alone.

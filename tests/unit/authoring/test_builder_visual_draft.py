@@ -1896,25 +1896,17 @@ def test_rederive_keeps_an_authored_floor_only_on_the_ground_side_of_an_access_r
     service: BuilderVisualDraftService,
 ) -> None:
     draft = _connected_heo_access_draft(service, "authored-floor", world_from_resolution)
-    assert draft.authoring_workspace is not None
-    rule = draft.authoring_workspace.links[0]
-    authored = service.apply_workspace(
-        BuilderVisualDraftApplyWorkspaceRequest(
-            draft=draft,
-            expected_draft_revision=draft.draft_revision,
-            workspace=draft.authoring_workspace.model_copy(
-                update={
-                    "links": (
-                        rule.model_copy(
-                            update={"a": rule.a.model_copy(update={"min_elevation_deg": 20.0})}
-                        ),
-                    )
-                }
-            ),
-        ),
-        available_node_count=1_000_000,
-        preview_factory=world_from_resolution,
-    ).visual_draft
+    assert draft.applied_session is not None
+    rule = draft.applied_session["link_rules"][0]
+    floored = deepcopy(rule)
+    floored["endpoints"][0]["min_elevation_deg"] = 20.0
+    applied = _apply_edits(
+        service,
+        draft,
+        [_content_edit({**_RULE_ADDRESS, "id": "link-1"}, rule, floored)],
+    )
+    assert applied.assembly is not None, applied.outcomes
+    authored = applied.assembly.visual_draft
 
     def rederive_side_a(
         draft: BuilderVisualDraftEnvelope,
@@ -2742,15 +2734,6 @@ def test_incomplete_authored_content_is_reported_and_never_filtered(
                 stamp=BuilderVisualGroundStamp(boresights={}),
             ),
         ),
-        links=(
-            BuilderVisualLinkRule(
-                rule_id="unfinished-rule",
-                a=BuilderVisualLinkEndpoint(segment_id="empty-ground"),
-                b=BuilderVisualLinkEndpoint(),
-            ),
-        ),
-        routing_domains=(BuilderVisualRoutingDomain(domain_id="unfinished-domain"),),
-        boundaries=(BuilderVisualRoutingBoundary(boundary_id="unfinished-boundary"),),
     )
     draft = _incomplete_draft(
         "user:sessions/incomplete-visual.yaml",
@@ -2767,9 +2750,6 @@ def test_incomplete_authored_content_is_reported_and_never_filtered(
 
     session = result.assembled_draft.state.session
     assert [segment["id"] for segment in session["segments"]] == ["empty-ground"]
-    assert len(session["link_rules"]) == 1
-    assert len(session["routing"]["domains"]) == 1
-    assert len(session["routing"]["boundaries"]) == 1
     site_set = next(
         proposal
         for proposal in result.assembled_draft.state.catalog_documents
@@ -2778,20 +2758,6 @@ def test_incomplete_authored_content_is_reported_and_never_filtered(
     assert site_set.document["site_set"]["sites"] == []
     codes = {issue.code for issue in result.assembly_issues}
     assert "builder.draft.ground_members_required" in codes
-    assert "builder.draft.link_endpoint_role_required" in codes
-    assert "builder.draft.routing_members_required" in codes
-    assert "builder.draft.routing_adapter_required" in codes
-    # A missing value leaves its field absent. Each issue names the workspace entry
-    # and the field within the object built from it.
-    assert session["link_rules"][0]["endpoints"][1]["select"] == {}
-    assert session["routing"]["domains"][0] == {"id": "unfinished-domain"}
-    assert "over" not in session["routing"]["boundaries"][0]
-    paths = {issue.draft_path for issue in result.assembly_issues}
-    assert {
-        "workspace.links.0.endpoints.1.select.segment",
-        "workspace.routing_domains.0.selectors",
-        "workspace.boundaries.0.over",
-    } <= paths
     assert result.compile_result.save_verdict.allowed is False
     assert all({"save", "deploy"}.issubset(issue.blocks) for issue in result.assembly_issues)
 
@@ -2998,46 +2964,6 @@ def test_missing_card_values_stay_absent_and_each_is_named_in_an_issue() -> None
         "/1/export/0/from",
         "/1/export/1/to",
     }
-
-
-def test_domain_timers_sent_as_json_are_applied_and_compile(
-    service: BuilderVisualDraftService,
-) -> None:
-    session_path = SHIPPED_ROOT / "sessions/earth-leo-heo-geo-luna-reachability.yaml"
-    opened = service.open(
-        BuilderVisualDraftOpenRequest(source_ref=f"nodalarc:sessions/{session_path.name}")
-    )
-    assert opened.authoring_workspace is not None
-    workspace = json.loads(opened.authoring_workspace.model_dump_json())
-    luna = next(
-        domain for domain in workspace["routing_domains"] if domain["domain_id"] == "luna_domain"
-    )
-    luna["hello_interval_s"] = 2
-    luna["hold_interval_s"] = 7
-    request = BuilderVisualDraftApplyWorkspaceRequest.model_validate_json(
-        json.dumps(
-            {
-                "draft": json.loads(opened.model_dump_json()),
-                "expected_draft_revision": opened.draft_revision,
-                "workspace": workspace,
-            }
-        )
-    )
-
-    result = service.apply_workspace(
-        request,
-        available_node_count=1_000_000,
-        preview_factory=_preview,
-    )
-
-    edited = yaml.safe_load(session_path.read_bytes())
-    domain = next(item for item in edited["routing"]["domains"] if item["id"] == "luna_domain")
-    domain["timers"] = {"hello_interval_s": 2, "hold_interval_s": 7}
-    expected = canonicalize_persisted_configuration(opened.target_ref, edited)
-    assert result.assembly_issues == ()
-    assert result.visual_draft.projection_status == "applied"
-    assert result.compile_result.save_verdict.allowed is True, result.compile_result.issues
-    assert result.compile_result.canonical_session_json == expected.canonical_json
 
 
 def _object_edit(
@@ -3930,104 +3856,6 @@ def test_accept_state_is_revision_fenced_and_refuses_an_invalid_state(
         with pytest.raises(BuilderVisualDraftCommandError, match="not a valid session") as refused:
             _accept_state(service, opened, {"session": invalid})
         assert refused.value.code == "catalog_authoring.invalid_graph"
-
-
-def test_graphical_boundary_edit_preserves_unprojected_and_sibling_boundaries(
-    service: BuilderVisualDraftService,
-) -> None:
-    created = service.create(BuilderVisualDraftCreateRequest(session_name="boundary-overlay"))
-    applied = service.apply_yaml(
-        BuilderVisualDraftApplyYamlRequest(
-            draft=created,
-            expected_draft_revision=created.draft_revision,
-            buffer_generation=1,
-            yaml_text=yaml.safe_dump(_boundary_overlay_session(), sort_keys=False),
-        )
-    )
-
-    assert applied.applied is True
-    workspace = applied.draft.authoring_workspace
-    assert workspace is not None
-    assert [boundary.boundary_id for boundary in workspace.boundaries] == [
-        "boundary-2",
-        "boundary-3",
-    ]
-    edited_boundaries = tuple(
-        boundary.model_copy(update={"export_node_loopbacks": False})
-        if boundary.boundary_id == "boundary-2"
-        else boundary
-        for boundary in workspace.boundaries
-    )
-    revised = service.apply_workspace(
-        BuilderVisualDraftApplyWorkspaceRequest(
-            draft=applied.draft,
-            expected_draft_revision=applied.draft.draft_revision,
-            workspace=workspace.model_copy(update={"boundaries": edited_boundaries}),
-        ),
-        available_node_count=1_000_000,
-        preview_factory=_preview,
-    )
-
-    assert revised.assembly_issues == ()
-    assert revised.compile_result.save_verdict.allowed is True, revised.compile_result.issues
-    boundaries = revised.assembled_draft.state.session["routing"]["boundaries"]
-    assert [(boundary["over"], boundary["adapter"]) for boundary in boundaries] == [
-        ("polar_to_meo", "static_ip"),
-        ("meo_to_heo", "static_ip"),
-        ("heo_to_geo", "static_ip"),
-    ]
-    assert boundaries[0]["export"][0]["install_via"] == "peer_loopback"
-    assert [export["export_node_loopbacks"] for export in boundaries[1]["export"]] == [
-        False,
-        False,
-    ]
-    assert [export["export_node_loopbacks"] for export in boundaries[2]["export"]] == [
-        True,
-        True,
-    ]
-
-
-@pytest.mark.parametrize("over_rule_id", ("meo_to_heo", "polar_to_meo"))
-def test_graphical_boundary_edit_refuses_duplicate_boundary_identity(
-    service: BuilderVisualDraftService,
-    over_rule_id: str,
-) -> None:
-    created = service.create(BuilderVisualDraftCreateRequest(session_name="boundary-overlay"))
-    applied = service.apply_yaml(
-        BuilderVisualDraftApplyYamlRequest(
-            draft=created,
-            expected_draft_revision=created.draft_revision,
-            buffer_generation=1,
-            yaml_text=yaml.safe_dump(_boundary_overlay_session(), sort_keys=False),
-        )
-    )
-
-    assert applied.applied is True
-    workspace = applied.draft.authoring_workspace
-    assert workspace is not None
-    assert applied.draft.applied_session is not None
-    original_boundaries = applied.draft.applied_session["routing"]["boundaries"]
-    edited_boundaries = tuple(
-        boundary.model_copy(update={"over_rule_id": over_rule_id})
-        if boundary.boundary_id == "boundary-3"
-        else boundary
-        for boundary in workspace.boundaries
-    )
-    revised = service.apply_workspace(
-        BuilderVisualDraftApplyWorkspaceRequest(
-            draft=applied.draft,
-            expected_draft_revision=applied.draft.draft_revision,
-            workspace=workspace.model_copy(update={"boundaries": edited_boundaries}),
-        ),
-        available_node_count=1_000_000,
-        preview_factory=_preview,
-    )
-
-    assert [issue.code for issue in revised.assembly_issues] == [
-        "builder.draft.routing_boundary_identity_ambiguous"
-    ]
-    assert revised.compile_result.save_verdict.allowed is False
-    assert revised.assembled_draft.state.session["routing"]["boundaries"] == original_boundaries
 
 
 @pytest.mark.parametrize("session_path", SHIPPED_SESSIONS, ids=lambda path: path.stem)

@@ -1178,9 +1178,6 @@ export interface BuilderVisualWorkspace {
   readonly space_refs?: ReadonlyArray<BuilderVisualSpaceReference>;
   readonly ground?: ReadonlyArray<BuilderVisualGroundDraft>;
   readonly ground_refs?: ReadonlyArray<BuilderVisualGroundReference>;
-  readonly links?: ReadonlyArray<BuilderVisualLinkRule>;
-  readonly routing_domains?: ReadonlyArray<BuilderVisualRoutingDomain>;
-  readonly boundaries?: ReadonlyArray<BuilderVisualRoutingBoundary>;
   readonly max_pairs_per_rule?: number | null;
   readonly max_pairs_per_tick?: number | null;
   readonly start_time?: string;

@@ -328,9 +328,6 @@ class BuilderVisualWorkspace(_BuilderVisualModel):
     space_refs: tuple[BuilderVisualSpaceReference, ...] = ()
     ground: tuple[BuilderVisualGroundDraft, ...] = ()
     ground_refs: tuple[BuilderVisualGroundReference, ...] = ()
-    links: tuple[BuilderVisualLinkRule, ...] = ()
-    routing_domains: tuple[BuilderVisualRoutingDomain, ...] = ()
-    boundaries: tuple[BuilderVisualRoutingBoundary, ...] = ()
     max_pairs_per_rule: int | None = 2_000
     max_pairs_per_tick: int | None = 10_000
     start_time: str = ""

@@ -909,9 +909,12 @@ def test_a_session_built_from_placed_references_keeps_its_candidate_limits(
 
 
 # The Builder's first ground node mounts rf-ka-leo-access, whose -70 degree elevation limit
-# the resolver keeps as the station's floor; OME takes no floor below 0, so the save is refused.
+# the resolver keeps as the station's floor; OME takes no floor below 0, so the save is refused
+# and every later command that builds the preview fails the same way. Once the floor is settled
+# the whole flow runs, and the strict mark fails until it is removed.
 @pytest.mark.xfail(
     strict=True,
+    raises=AssertionError,
     reason="a ground floor below 0 degrees resolves but OME refuses it",
 )
 def test_backend_visual_commands_own_seeds_and_advance_one_fenced_revision(
@@ -1121,9 +1124,8 @@ def test_backend_visual_commands_own_seeds_and_advance_one_fenced_revision(
             "segment_id": "space-1",
         }
     )
-    assert rederived.notice == (
-        "re-derived: isl · optical · nearest-2 — WARNING: neither side has matching terminals"
-    )
+    # The generated space node mounts an optical isl terminal on both sides.
+    assert rederived.notice == "re-derived: isl · optical · nearest-2"
     isl = {"all": [{"role": "isl"}, {"medium": "optical"}]}
     assert draft.applied_session["link_rules"] == [
         {
@@ -1747,35 +1749,54 @@ def test_connect_command_uses_backend_resolved_terminal_facts(
 def test_connect_refuses_a_draft_that_does_not_resolve(
     service: BuilderVisualDraftService,
 ) -> None:
-    draft = service.create(BuilderVisualDraftCreateRequest(session_name="unresolved-connect"))
-    for _ in range(2):
-        draft = service.apply_command(
-            BuilderVisualDraftCommandRequest(
-                draft=draft,
-                expected_draft_revision=draft.draft_revision,
-                command={"operation": "add_generated_space", "phasing_mode": "walker_delta"},
-            ),
-            available_node_count=1_000_000,
-        ).draft
-
-    def failing_preview(resolution: SessionResolution) -> BuilderWorld:
-        raise ValueError("preview could not be built")
+    exchange = {"prefixes": {"aggregate_of": "originated"}, "export_node_loopbacks": True}
+    # The boundary names no declared link rule, so the draft does not resolve.
+    draft = _applied_yaml(
+        service,
+        {
+            "session": {"name": "unresolved-connect"},
+            "segments": [
+                {
+                    "id": "polar",
+                    "source": "nodalarc:constellations/earth/leo/earth-leo-polar-36.yaml",
+                },
+                {"id": "meo", "source": "nodalarc:constellations/earth/meo/earth-meo-gps-24.yaml"},
+            ],
+            "routing": {
+                "domains": [
+                    {"id": "domain-1", "protocol": "static", "selectors": [{"segment": "polar"}]},
+                    {"id": "domain-2", "protocol": "static", "selectors": [{"segment": "meo"}]},
+                ],
+                "boundaries": [
+                    {
+                        "over": "link-1",
+                        "adapter": "static_ip",
+                        "export": [
+                            {"from": "domain-1", "to": "domain-2", **exchange},
+                            {"from": "domain-2", "to": "domain-1", **exchange},
+                        ],
+                    }
+                ],
+            },
+            "time": {"start_time": "2026-07-10T00:00:00Z", "step_seconds": 1, "compression": 1},
+        },
+    )
 
     # Without a resolved world the terminals are unknown; connect does not guess them.
-    with pytest.raises(BuilderVisualDraftCommandError, match="does not resolve"):
+    with pytest.raises(BuilderVisualDraftCommandError, match="does not resolve") as refused:
         service.apply_command(
             BuilderVisualDraftCommandRequest(
                 draft=draft,
                 expected_draft_revision=draft.draft_revision,
                 command={
                     "operation": "connect_segments",
-                    "from_segment_id": "space-1",
-                    "to_segment_id": "space-2",
+                    "from_segment_id": "polar",
+                    "to_segment_id": "meo",
                 },
             ),
             available_node_count=1_000_000,
-            preview_factory=failing_preview,
         )
+    assert "names no declared link rule" in str(refused.value)
 
 
 def _connected_heo_access_draft(

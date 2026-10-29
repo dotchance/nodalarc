@@ -18,7 +18,6 @@ from vs_api.wizard_builder import (
     wizard_preview_inputs,
 )
 
-from tests.builder_world_fixtures import preview_from_resolution
 from tests.catalog_session_fixtures import ISS_TLE_LINE_1, ISS_TLE_LINE_2
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -121,7 +120,6 @@ def _build_and_compile(request: WizardCompileRequest, tmp_path: Path):
         builder_request,
         snapshot,
         available_node_count=1_000_000,
-        preview_factory=preview_from_resolution,
     )
     return builder_request, result
 

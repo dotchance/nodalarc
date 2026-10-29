@@ -32,7 +32,6 @@ from vs_api.builder_session_service import (
 )
 from vs_api.catalog_context import CatalogContext
 
-from tests.builder_world_fixtures import preview_from_resolution
 from tests.ephemeris_fixtures import KERNEL_DENIAL_STAGES, deny_kernel_access
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -146,7 +145,6 @@ def _compile(request: BuilderSessionSaveRequest, harness: SaveHarness):
         BuilderCompileRequest(draft=request.draft, target_ref=request.target_ref),
         harness.repository.snapshot(harness.scope),
         available_node_count=1_000_000,
-        preview_factory=preview_from_resolution,
     )
 
 
@@ -159,7 +157,6 @@ def _save(
         request,
         harness.context,
         available_node_count=1_000_000,
-        preview_factory=preview_from_resolution,
         **kwargs,
     )
 
@@ -274,7 +271,6 @@ def test_every_shipped_session_saves_and_reopens_as_first_class_user_yaml(
         ),
         reopened_snapshot,
         available_node_count=1_000_000,
-        preview_factory=preview_from_resolution,
     )
     assert reopened.save_verdict.allowed is True
     assert reopened.deploy_eligibility_after_save.allowed is True

@@ -26,8 +26,6 @@ from vs_api.session_deployment import (
     prepare_catalog_session_deployment,
 )
 
-from tests.builder_world_fixtures import builder_world_preview
-
 ROOT = Path(__file__).resolve().parents[3]
 SHIPPED_ROOT = ROOT / "catalog" / "nodalarc"
 
@@ -55,7 +53,6 @@ def _save_user_session(context: CatalogContext):
         request,
         context,
         available_node_count=1_000_000,
-        preview_factory=lambda *_: builder_world_preview(),
     )
 
 
@@ -190,7 +187,6 @@ def test_final_staleness_check_ignores_unrelated_writes_but_blocks_root_change(
         ),
         context,
         available_node_count=1_000_000,
-        preview_factory=lambda *_: builder_world_preview(),
     )
     assert changed.session.revision != saved.session.revision
 

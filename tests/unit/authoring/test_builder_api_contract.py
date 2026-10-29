@@ -29,9 +29,11 @@ from nodalarc.models.builder_api import (
     DependencyClosureInventory,
     WizardConstellationCapability,
 )
+from nodalarc.resolve_session import resolve_session_with_assets
 from pydantic import TypeAdapter, ValidationError
+from vs_api.builder_world import world_from_resolution
 
-from tests.builder_world_fixtures import builder_world_preview
+from tests.catalog_session_fixtures import shipped_read_view
 
 ROOT = Path(__file__).resolve().parents[3]
 PENDING_EDIT = TypeAdapter(BuilderPendingEdit)
@@ -332,7 +334,9 @@ def test_compile_result_requires_canonical_facts_before_save() -> None:
         canonical_session_yaml=SESSION_YAML,
         canonical_session_json=SESSION_DOCUMENT,
         dependency_closure=_closure(),
-        resolved_preview=builder_world_preview("demo"),
+        resolved_preview=world_from_resolution(
+            resolve_session_with_assets(SESSION_DOCUMENT, catalog=shipped_read_view())
+        ),
         digests=_digests(),
         save_verdict=save_allowed,
         deploy_eligibility_after_save=deploy_allowed,

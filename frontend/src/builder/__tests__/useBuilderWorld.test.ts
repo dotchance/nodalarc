@@ -26,6 +26,7 @@ vi.mock("../../config", () => ({
 const {
   claimOutlineReveal,
   pendingEditKey,
+  refusalMessage,
   requestOutlineReveal,
   useBuilderWorld,
   useOutlineReveal,
@@ -947,6 +948,7 @@ describe("applying, discarding and removing pending edits", () => {
     answerApplies({
       applied: true,
       outcomes: [{ status: "applied", issues: [] }],
+      issues: [],
       assembly: assembly(applied),
     });
     fetchMock.mockClear();
@@ -987,7 +989,7 @@ describe("applying, discarding and removing pending edits", () => {
     await openWithPendingEdit(result);
     const accepted = result.current.visualDraft;
     const held = result.current.pendingEdits;
-    answerApplies({ applied: false, outcomes: [STALE], assembly: null });
+    answerApplies({ applied: false, outcomes: [STALE], issues: [], assembly: null });
 
     await act(async () => {
       const answer = await result.current.applyPendingEdits([RULE_KEY]);
@@ -1036,6 +1038,7 @@ describe("applying, discarding and removing pending edits", () => {
     answerApplies({
       applied: true,
       outcomes: [{ status: "applied", issues: [] }],
+      issues: [],
       assembly: assembly(acceptedLater(6, [{ ...ACCEPTED_RULE, max_range_km: 12345 }])),
     });
 
@@ -1099,6 +1102,7 @@ describe("applying, discarding and removing pending edits", () => {
     answerApplies({
       applied: true,
       outcomes: [{ status: "applied", issues: [] }],
+      issues: [],
       assembly: assembly(removed),
     });
 
@@ -1141,6 +1145,7 @@ describe("applying, discarding and removing pending edits", () => {
           ],
         },
       ],
+      issues: [],
       assembly: null,
     });
 
@@ -1697,6 +1702,7 @@ describe("undo history", () => {
             "/builder/draft/apply-edits": {
               applied: true,
               outcomes: [{ status: "applied", issues: [] }],
+              issues: [],
               assembly: assembly(CHANGED),
             },
           });
@@ -1710,6 +1716,7 @@ describe("undo history", () => {
             "/builder/draft/apply-edits": {
               applied: true,
               outcomes: [{ status: "applied", issues: [] }],
+              issues: [],
               assembly: assembly(CHANGED),
             },
           });
@@ -2219,5 +2226,28 @@ describe("outline reveal", () => {
     act(() => requestOutlineReveal("space-777"));
     expect(claimOutlineReveal("outline", result.current)?.segmentId).toBe("space-777");
     expect(claimOutlineReveal("outline", result.current)).toBeNull();
+  });
+});
+
+describe("the reasons a refused batch of pending edits gives", () => {
+  it("names each edit's issues and the session's issues no edit owns", () => {
+    expect(
+      refusalMessage({
+        outcomes: [
+          { status: "applied", issues: [] },
+          { status: "invalid", issues: [workingIssue("Field required", "/endpoints/1/select")] },
+        ],
+        issues: [workingIssue("domains must be declared", "/routing/domains")],
+      }),
+    ).toBe("Field required; domains must be declared");
+  });
+
+  it("names a refusal no edit owns", () => {
+    expect(
+      refusalMessage({
+        outcomes: [{ status: "applied", issues: [] }],
+        issues: [workingIssue("domains must be declared", "/routing/domains")],
+      }),
+    ).toBe("domains must be declared");
   });
 });

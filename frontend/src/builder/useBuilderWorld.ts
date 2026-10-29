@@ -628,12 +628,16 @@ function acceptedMemberIds(
 }
 
 /** The backend's reasons for a refused batch: the issues of each edit it did
- *  not apply. */
-export function refusalMessage(outcomes: ReadonlyArray<BuilderPendingEditOutcome>): string {
-  return outcomes
-    .filter((outcome) => outcome.status !== "applied")
-    .flatMap((outcome) => outcome.issues.map((issue) => issue.message))
-    .join("; ");
+ *  not apply, then those of the session the edits made that no edit owns. */
+export function refusalMessage(
+  result: Pick<BuilderVisualDraftApplyEditsResult, "outcomes" | "issues">,
+): string {
+  return [
+    ...result.outcomes
+      .filter((outcome) => outcome.status !== "applied")
+      .flatMap((outcome) => outcome.issues.map((issue) => issue.message)),
+    ...result.issues.map((issue) => issue.message),
+  ].join("; ");
 }
 
 /** What an object edit is made against: the accepted draft, its revision, and
@@ -1724,7 +1728,7 @@ export function useBuilderWorld() {
           ],
         });
         assertEpoch(epoch);
-        if (!result.applied) throw new Error(refusalMessage(result.outcomes));
+        if (!result.applied) throw new Error(refusalMessage(result));
         if (!result.assembly) {
           throw new Error("the backend applied the removal and returned no accepted revision");
         }

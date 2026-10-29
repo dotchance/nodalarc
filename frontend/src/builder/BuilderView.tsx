@@ -1079,7 +1079,7 @@ export function BuilderView({
           if (!result.applied || result.assembly === null) {
             throw new Error(
               `the backend applied none of the ${count(keys.length, "pending edit")}: ${refusalMessage(
-                result.outcomes,
+                result,
               )}`,
             );
           }
@@ -1353,6 +1353,8 @@ export function BuilderView({
   const applyWindowEdit = async (key: string, reapply: boolean): Promise<boolean> => {
     const result = await applyEdits([key], reapply ? new Set([key]) : undefined);
     if (result.applied) setSaveState({ kind: "idle" });
+    // A refusal the edit's own outcome does not explain is shown in its window.
+    if (!result.applied && result.issues.length > 0) throw new Error(refusalMessage(result));
     return result.applied;
   };
 

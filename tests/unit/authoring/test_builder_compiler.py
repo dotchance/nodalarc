@@ -30,8 +30,6 @@ from vs_api.builder_compiler import (
     compile_builder_draft,
 )
 
-from tests.builder_world_fixtures import builder_world_preview, preview_from_resolution
-
 ROOT = Path(__file__).resolve().parents[3]
 SHIPPED_ROOT = ROOT / "catalog" / "nodalarc"
 SIMPLE_SESSION = SHIPPED_ROOT / "sessions" / "earth-leo-simple.yaml"
@@ -130,7 +128,6 @@ def _compile(
         request,
         snapshot,
         available_node_count=1_000_000,
-        preview_factory=preview_from_resolution,
     )
 
 
@@ -207,7 +204,12 @@ def test_shipped_simple_no_op_compile_is_saveable_and_deployable(
     )
     assert result.digests is not None
     assert result.digests.resolved_semantic is not None
-    assert result.resolved_preview == builder_world_preview("earth-leo-simple")
+    preview = result.resolved_preview
+    assert preview is not None
+    assert preview.session.name == "earth-leo-simple"
+    # The ring places 36 satellites and the session declares two link rules.
+    assert sum(node.kind == "satellite" for node in preview.nodes) == 36
+    assert [rule.rule_id for rule in preview.link_rules] == ["leo_access", "leo_isl"]
     assert snapshot.generation == before_generation
     assert snapshot.list(namespace="user") == before_user_documents
 

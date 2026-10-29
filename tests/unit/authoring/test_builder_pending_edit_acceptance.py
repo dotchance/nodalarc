@@ -52,7 +52,6 @@ from tests.unit.authoring.test_builder_visual_draft import (
     _member,
     _object_edit,
     _present_branch,
-    _preview,
     _stored_state,
 )
 
@@ -131,7 +130,6 @@ def _listing(
     compiled = service.compile(
         BuilderVisualDraftCompileRequest.model_validate_json(json.dumps({"draft": _json(draft)})),
         available_node_count=1_000_000,
-        preview_factory=_preview,
     )
     assert compiled.listing is not None
     return compiled.listing
@@ -301,7 +299,6 @@ def _preview_with(
         ),
         context.repository.snapshot(context.scope),
         available_node_count=1_000_000,
-        preview_factory=_preview,
     )
 
 
@@ -370,7 +367,6 @@ def test_pending_edits_to_every_rule_domain_and_boundary_save_as_the_edited_sess
         ),
         context,
         available_node_count=1_000_000,
-        preview_factory=_preview,
     )
     assert saved.session.ref == draft.target_ref
     assert saved.session.canonical_json == expected.canonical_json

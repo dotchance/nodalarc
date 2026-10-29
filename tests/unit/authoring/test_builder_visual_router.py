@@ -12,7 +12,6 @@ from vs_api.builder_router import BuilderRouterServices, create_builder_router
 from vs_api.catalog_context import CatalogContext
 
 from tests.asgi_client import ASGITestClient as TestClient
-from tests.builder_world_fixtures import preview_from_resolution
 
 ROOT = Path(__file__).resolve().parents[3]
 SHIPPED_ROOT = ROOT / "catalog/nodalarc"
@@ -56,7 +55,6 @@ def client(tmp_path: Path) -> TestClient:
             BuilderRouterServices(
                 context_provider=lambda: context,
                 available_node_count_provider=lambda: 1_000_000,
-                preview_factory=preview_from_resolution,
             )
         )
     )

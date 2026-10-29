@@ -299,6 +299,17 @@ def place_candidate_issues(
         draft_path="state.session",
         place=_candidate_place(session, candidate, edits, outcomes),
     )
+    return _own_candidate_issues(issues, outcomes)
+
+
+def _own_candidate_issues(
+    issues: list[BuilderIssue],
+    outcomes: tuple[BuilderPendingEditOutcome, ...],
+) -> tuple[tuple[BuilderPendingEditOutcome, ...], tuple[BuilderIssue, ...]]:
+    """Each applied edit that an issue is placed on becomes invalid with that issue,
+    as the apply route refuses it. An edit already invalid keeps its own issues, the
+    ones the apply route refuses it with. The issues placed on no edit are returned
+    beside the outcomes."""
     owned: dict[int, list[BuilderIssue]] = {}
     unowned: list[BuilderIssue] = []
     for issue in issues:
@@ -307,8 +318,8 @@ def place_candidate_issues(
         else:
             unowned.append(issue)
     placed = tuple(
-        BuilderPendingEditOutcome(status="invalid", issues=(*outcome.issues, *owned[index]))
-        if index in owned
+        BuilderPendingEditOutcome(status="invalid", issues=tuple(owned[index]))
+        if index in owned and outcome.status == "applied"
         else outcome
         for index, outcome in enumerate(outcomes)
     )
@@ -816,14 +827,15 @@ def compile_builder_draft(
             session,
         )
     except ValidationError as error:
-        issues.extend(
-            _validation_issues(
-                error,
-                source_ref=str(request.target_ref),
-                draft_path="state.session",
-                place=place,
-            )
+        candidate_issues = _validation_issues(
+            error,
+            source_ref=str(request.target_ref),
+            draft_path="state.session",
+            place=place,
         )
+        # Each outcome states what the apply route would answer for its edit.
+        outcomes, _unowned = _own_candidate_issues(candidate_issues, outcomes)
+        issues.extend(candidate_issues)
     except (TypeError, ValueError) as error:
         issues.append(
             _structural_issue(

@@ -14,7 +14,7 @@ import yaml
 from nodalarc.catalog_refs import CatalogRef
 from nodalarc.catalog_repository import CatalogConflictError, CatalogNotFoundError, CatalogScope
 from nodalarc.filesystem_catalog_repository import FilesystemCatalogRepository
-from nodalarc.models.builder_api import BuilderIssue
+from nodalarc.models.builder_api import BuilderCompileRequest, BuilderIssue
 from nodalarc.models.builder_visual_api import (
     BuilderVisualCustomizeChainRequest,
     BuilderVisualDraftAcceptStateRequest,
@@ -59,7 +59,11 @@ from nodalarc.models.link_rules import LinkRule
 from nodalarc.models.segment_session import RoutingBoundary, RoutingDomain
 from nodalarc.resolve_session import SessionResolution
 from pydantic import BaseModel, TypeAdapter, ValidationError
-from vs_api.builder_compiler import PreviewFactory, canonicalize_persisted_configuration
+from vs_api.builder_compiler import (
+    PreviewFactory,
+    canonicalize_persisted_configuration,
+    compile_builder_draft,
+)
 from vs_api.builder_session_service import save_builder_session
 from vs_api.builder_visual_draft import (
     BuilderVisualDraftCommandError,
@@ -3710,6 +3714,55 @@ def test_apply_edits_is_revision_fenced_and_needs_an_accepted_valid_session(
     (outcome,) = refused.outcomes
     assert outcome.status == "invalid"
     assert [(issue.json_pointer, issue.draft_path) for issue in outcome.issues] == [
+        ("/routing/domains", "pending_edits.0")
+    ]
+
+
+def test_a_preview_refuses_an_edit_as_the_apply_route_does(
+    context: CatalogContext,
+    service: BuilderVisualDraftService,
+) -> None:
+    opened = service.open(
+        BuilderVisualDraftOpenRequest(source_ref="nodalarc:sessions/earth-leo-simple.yaml")
+    )
+    assert opened.applied_session is not None
+    # The boundary is valid on its own, but the routing section it creates needs a domain.
+    boundary = {
+        "over": "leo_isl",
+        "adapter": "static_ip",
+        "export": [
+            {"from": "a_domain", "to": "b_domain", "prefixes": {"aggregate_of": "originated"}}
+        ],
+    }
+    edits = [{"kind": "content", "address": _BOUNDARIES_ADDRESS, "working": [boundary]}]
+
+    refused = _apply_edits(service, opened, edits)
+    preview = compile_builder_draft(
+        BuilderCompileRequest.model_validate_json(
+            json.dumps(
+                {
+                    "draft": {
+                        "draft_revision": opened.draft_revision,
+                        "state": {
+                            "session": opened.applied_session,
+                            "catalog_documents": [],
+                        },
+                    },
+                    "target_ref": str(opened.target_ref),
+                    "pending_edits": edits,
+                }
+            )
+        ),
+        context.repository.snapshot(context.scope),
+        available_node_count=1_000_000,
+        preview_factory=_preview,
+    )
+
+    assert refused.applied is False
+    assert preview.pending_edit_outcomes == refused.outcomes
+    (outcome,) = preview.pending_edit_outcomes
+    assert outcome.status == "invalid"
+    assert [(issue.json_pointer, issue.draft_path) for issue in preview.issues] == [
         ("/routing/domains", "pending_edits.0")
     ]
 

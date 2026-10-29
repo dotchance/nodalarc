@@ -734,12 +734,17 @@ export function BuilderView({
   const stalePendingEdits = [...pendingEdits.entries()]
     .filter(([key]) => pendingEditOutcomes.get(key)?.status === "stale")
     .map(([key, pending]) => ({ key, title: pendingEditTitle(pending.edit.address) }));
-  // A segment removal changes the twin, so it waits while link and routing
-  // edits are pending.
-  const twinRemovalLabel =
+  /** Why a change of the twin waits, named for `gesture`; null when it may
+   *  start. It waits while a link or routing edit is pending, and while a
+   *  change of one is being checked, which becomes a pending edit when
+   *  answered. */
+  const twinWait = (gesture: string): string | null =>
     pendingEditCount > 0
-      ? `Apply or discard the ${pendingEditsPhrase(pendingEditCount)} before removing a segment`
-      : "Remove from the session";
+      ? `Apply or discard the ${pendingEditsPhrase(pendingEditCount)} before ${gesture}.`
+      : checkingObjects.size > 0
+        ? `Wait for the link or routing change being checked before ${gesture}.`
+        : null;
+  const twinRemovalWait = twinWait("removing a segment");
   const unappliedSessionAndSegmentWindows = windows.filter(
     (w) => SESSION_AND_SEGMENT_WINDOW_KINDS.has(w.target.kind) && buffers[w.key]?.dirty === true,
   ).length;
@@ -859,16 +864,16 @@ export function BuilderView({
   const yamlBlocksGui = yamlBlocksGraphicalEditing(visualDraft !== null, yamlBuffer);
   /** Why the windows that edit pending edits cannot change their objects now;
    *  null when they can. Those edits are made on the accepted session, so they
-   *  wait while a change is being applied, while the draft holds segment,
-   *  ground or session changes the backend has not accepted, while the YAML is
-   *  unapplied, and while a window holds twin edits not yet applied. */
+   *  wait while a change is being applied, while the draft holds a change the
+   *  backend has not accepted, while the YAML is unapplied, and while a window
+   *  holds twin edits not yet applied. */
   const pendingEditRefusal = (): string | null => {
     const unsettled = unsettledReason();
     if (unsettled !== null) return unsettled;
     if (visualDraft?.projection_status !== "applied") {
       return (
-        "The session holds segment, ground or session changes the backend has not " +
-        "accepted. Fix or undo them before editing link rules, routing domains and boundaries."
+        "The session draft holds a change the backend has not accepted. Fix or undo it " +
+        "before editing link rules, routing domains and boundaries."
       );
     }
     if (yamlBlocksGui) return "Apply or canonicalize the session YAML before editing here.";
@@ -2565,8 +2570,8 @@ export function BuilderView({
                   <IconButton
                     icon="x"
                     size={12}
-                    label={twinRemovalLabel}
-                    disabled={pendingEditCount > 0}
+                    label={twinRemovalWait ?? "Remove from the session"}
+                    disabled={twinRemovalWait !== null}
                     onClick={() => removeRefSegment(placed.segment_id)}
                   />
                 </span>
@@ -2661,8 +2666,8 @@ export function BuilderView({
                   <IconButton
                     icon="x"
                     size={12}
-                    label={twinRemovalLabel}
-                    disabled={pendingEditCount > 0}
+                    label={twinRemovalWait ?? "Remove from the session"}
+                    disabled={twinRemovalWait !== null}
                     onClick={() => removeGroundRef(placed.segment_id)}
                   />
                 </span>
@@ -2997,9 +3002,7 @@ export function BuilderView({
           const address = pendingEditAddress(win.target);
           const edit = address === null ? null : { address, key: pendingEditKey(address) };
           const lockReason = buffered
-            ? pendingEditCount > 0
-              ? `Apply or discard the ${pendingEditsPhrase(pendingEditCount)} before editing here.`
-              : null
+            ? twinWait("editing here")
             : edit !== null
               ? pendingEditRefusal()
               : null;
@@ -3255,7 +3258,9 @@ export function BuilderView({
             previewing {count(dirtyWindows, "window")} of unapplied edits
           </span>
         )}
-        {pendingEditCount > 0 && (
+        {/* The pending edits are previewed only while the twin is the accepted
+            draft's; a twin change being applied or refused shows instead. */}
+        {pendingEditCount > 0 && twinMatchesDraft && (
           <span className="builder-preview-chip" data-testid="builder-preview-chip">
             previewing{" "}
             {pendingEditCount === 1

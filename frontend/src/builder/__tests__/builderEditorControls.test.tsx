@@ -399,35 +399,24 @@ describe("buffered windows commit through the apply row", () => {
   });
 });
 
-describe("a link or routing window applies its pending edit through the backend", () => {
+describe("a link or routing window's commit row", () => {
   afterEach(cleanup);
-
-  /** The row of a pending edit with each gesture recorded in `calls`; Apply
-   *  and Re-apply answer that the edit applied. */
-  function renderRow(calls: string[], { blocked }: { blocked: string | null }) {
-    const answer = (gesture: string) => () => {
-      calls.push(gesture);
-      return Promise.resolve(true);
-    };
-    render(
-      <PendingEditApplyRow
-        pending
-        outcome={null}
-        blocked={blocked}
-        checking={false}
-        onApply={answer("apply")}
-        onReapply={answer("reapply")}
-        onDiscard={() => calls.push("discard")}
-        onClose={() => calls.push("close")}
-      />,
-    );
-  }
 
   const button = (name: string) => screen.getByRole("button", { name }) as HTMLButtonElement;
 
   it("while the edit cannot be applied, Apply and OK wait and say why, and Cancel stays", () => {
-    const calls: string[] = [];
-    renderRow(calls, { blocked: "Apply or canonicalize the session YAML before editing here." });
+    render(
+      <PendingEditApplyRow
+        pending
+        outcome={null}
+        blocked="Apply or canonicalize the session YAML before editing here."
+        checking={false}
+        onApply={() => Promise.resolve(true)}
+        onReapply={() => Promise.resolve(true)}
+        onDiscard={() => undefined}
+        onClose={() => undefined}
+      />,
+    );
     expect(button("Apply").disabled).toBe(true);
     expect(button("OK").disabled).toBe(true);
     expect(button("OK").title).toBe("Apply or canonicalize the session YAML before editing here.");

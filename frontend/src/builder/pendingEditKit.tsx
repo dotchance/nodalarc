@@ -320,8 +320,12 @@ export function PendingEditApplyRow({
           </Button>
           <Button
             onClick={onDiscard}
-            disabled={running}
-            title="Drop this edit and show the object as the session holds it"
+            disabled={running || checking}
+            title={
+              checking
+                ? "The edit is being checked"
+                : "Drop this edit and show the object as the session holds it"
+            }
           >
             Discard
           </Button>

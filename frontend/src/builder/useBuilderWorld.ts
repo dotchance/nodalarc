@@ -685,10 +685,13 @@ function commandStartEditKey(command: BuilderVisualDraftCommandRequest["command"
 /** One step of the undo history. `replaced` is the accepted session a change
  *  replaced, with its proposals; it is null for a command that accepted
  *  nothing and only created pending edits. `created` holds the keys of the
- *  pending edits the change created that are still pending. */
+ *  pending edits the change created that are still pending. `consumed` holds
+ *  the pending edit a command started from and took the place of; undo holds
+ *  it again, since it was the user's change and not the command's. */
 interface UndoStep {
   readonly replaced: BuilderDraftState | null;
   readonly created: ReadonlySet<string>;
+  readonly consumed: ReadonlyMap<string, PendingObjectEdit>;
 }
 
 /** The most steps the undo history holds; the oldest goes first. */
@@ -816,9 +819,9 @@ export function useBuilderWorld() {
     // undo drops. A step left with nothing to undo goes.
     undoStepsRef.current = undoStepsRef.current.flatMap((step) => {
       const created = new Set([...step.created].filter((key) => !left.includes(key)));
-      return step.replaced === null && created.size === 0
+      return step.replaced === null && created.size === 0 && step.consumed.size === 0
         ? []
-        : [{ replaced: step.replaced, created }];
+        : [{ ...step, created }];
     });
   }, []);
 
@@ -889,12 +892,16 @@ export function useBuilderWorld() {
     [],
   );
 
-  /** The YAML buffer and the session pane change the session as a whole, so
-   *  they wait until no link or routing edit is pending. */
+  /** The YAML buffer, the session pane and the twin change the session as a
+   *  whole, so they wait until no link or routing edit is pending or being
+   *  checked: a change being checked becomes a pending edit when answered. */
   const refuseWhileEditsPending = useCallback((gesture: string) => {
     const count = pendingEditsRef.current.size;
     if (count > 0) {
       throw new Error(`apply or discard the ${pendingEditsPhrase(count)} before ${gesture}`);
+    }
+    if (objectChecksRef.current.size > 0) {
+      throw new Error(`wait for the link or routing change being checked before ${gesture}`);
     }
   }, []);
 
@@ -1002,11 +1009,14 @@ export function useBuilderWorld() {
    *  replaced as one undo step. A result that is not fully accepted records
    *  nothing; the change that completes it records the state both replaced. */
   const adoptAcceptedChange = useCallback(
-    (result: BuilderVisualDraftAssemblyResult) => {
+    (
+      result: BuilderVisualDraftAssemblyResult,
+      consumed: ReadonlyMap<string, PendingObjectEdit> = NO_PENDING_EDITS,
+    ) => {
       const replaced = acceptedStateRef.current;
       adoptCompileResult(result);
       if (replaced !== null && acceptedStateRef.current !== replaced) {
-        recordUndoStep({ replaced, created: NO_KEYS });
+        recordUndoStep({ replaced, created: NO_KEYS, consumed });
       }
     },
     [adoptCompileResult, recordUndoStep],
@@ -1210,10 +1220,10 @@ export function useBuilderWorld() {
       ) {
         throw new Error("apply or canonicalize the YAML buffer before editing graphically");
       }
-      // A twin change and a pending link or routing edit exclude each other.
-      refuseWhileEditsPending("changing segments, ground sites or session fields");
       let result: BuilderVisualDraftAssemblyResult;
       try {
+        // A twin change and a pending link or routing edit exclude each other.
+        refuseWhileEditsPending("changing segments, ground sites or session fields");
         result = await applyVisualDraftWorkspace({
           draft,
           expected_draft_revision: draft.draft_revision,
@@ -1393,6 +1403,14 @@ export function useBuilderWorld() {
         }
         const sent = pendingEditsRef.current;
         const startKey = commandStartEditKey(command);
+        /** The pending edit the command started from, while the store still
+         *  holds it as it was sent. */
+        const consumedStartEdit = (): ReadonlyMap<string, PendingObjectEdit> => {
+          const start = startKey === null ? undefined : sent.get(startKey);
+          return start !== undefined && pendingEditsRef.current.get(startKey!) === start
+            ? new Map([[startKey!, start]])
+            : NO_PENDING_EDITS;
+        };
         const result = await applyVisualDraftCommand({
           draft,
           expected_draft_revision: draft.draft_revision,
@@ -1430,14 +1448,23 @@ export function useBuilderWorld() {
             held.set(key, { edit, answer: described[index]! });
             return key;
           });
+          // A created edit in the place of the edit the command started from
+          // takes that edit's place.
+          const consumed =
+            startKey !== null && created.includes(startKey)
+              ? consumedStartEdit()
+              : NO_PENDING_EDITS;
           for (const key of created) supersedeObjectEdits(key);
           setPendingEdits(held);
-          recordUndoStep({ replaced: null, created: new Set(created) });
+          recordUndoStep({ replaced: null, created: new Set(created), consumed });
           return result;
         }
         const assembled = await compileVisualDraft({ draft: result.draft });
         assertEpoch(epoch);
-        adoptAcceptedChange(assembled);
+        // The accepted revision holds the edit the command started from,
+        // unless that edit changed while the command ran.
+        const consumed = consumedStartEdit();
+        adoptAcceptedChange(assembled, consumed);
         const canonical = assembled.compile_result.canonical_session_yaml ?? result.draft.session_yaml;
         const buffer = yamlBufferRef.current;
         setYamlBuffer({
@@ -1450,16 +1477,10 @@ export function useBuilderWorld() {
           canonicalizationAccepted: true,
           issues: [],
         });
-        // The accepted revision holds the edit the command started from,
-        // unless that edit changed while the command ran.
-        if (
-          startKey !== null &&
-          sent.has(startKey) &&
-          pendingEditsRef.current.get(startKey) === sent.get(startKey)
-        ) {
+        for (const key of consumed.keys()) {
           const remaining = new Map(pendingEditsRef.current);
-          remaining.delete(startKey);
-          supersedeObjectEdits(startKey);
+          remaining.delete(key);
+          supersedeObjectEdits(key);
           setPendingEdits(remaining);
         }
         return result;
@@ -1846,11 +1867,16 @@ export function useBuilderWorld() {
         const steps = undoStepsRef.current;
         const undone = steps[steps.length - 1]!;
         undoStepsRef.current = steps.slice(0, -1);
-        if (undone.created.size > 0) {
+        if (undone.created.size > 0 || undone.consumed.size > 0) {
           const remaining = new Map(pendingEditsRef.current);
           for (const key of undone.created) {
             remaining.delete(key);
             supersedeObjectEdits(key);
+          }
+          // The edit a command took the place of is the user's again, unless
+          // the user began another edit of the object since.
+          for (const [key, edit] of undone.consumed) {
+            if (!remaining.has(key)) remaining.set(key, edit);
           }
           setPendingEdits(remaining);
         }

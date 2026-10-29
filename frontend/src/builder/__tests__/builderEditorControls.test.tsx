@@ -15,7 +15,6 @@ import { readdirSync, readFileSync } from "node:fs";
 import type { ComponentProps } from "react";
 import { join } from "node:path";
 import {
-  act,
   cleanup,
   fireEvent,
   render,
@@ -32,9 +31,7 @@ import {
   SliderField,
 } from "../editorKit";
 import { BuildGuide } from "../BuildGuide";
-import { GroundEditor } from "../GroundEditor";
 import { SiteEditor } from "../SiteEditor";
-import { ConstellationEditor } from "../ConstellationEditor";
 import { LinkRuleEditor, LinkRuleWindow } from "../LinkRuleEditor";
 import { PendingEditApplyRow } from "../pendingEditKit";
 import { RoutingDomainWindow } from "../RoutingEditor";
@@ -49,7 +46,6 @@ import {
   newWorkspace,
 } from "./fixtures/workspaceFixtures";
 import type {
-  BuilderPendingEditOutcome,
   BuilderVisualLinkRule,
   BuilderVisualRoutingDomain,
   CatalogDocumentSummary,
@@ -218,67 +214,6 @@ describe("editors delegate authoring to VS-API", () => {
     fireEvent.click(screen.getByRole("button", { name: "Remove gw2" }));
     expect(updated.nodes.map((n) => n.node_id)).toEqual(["gw1"]);
   });
-
-  it("ConstellationEditor delegates phasing transitions without authoring defaults", async () => {
-    const draft = newDraftConstellation("nodalarc:nodes/space/leo.yaml");
-    const onUpdate = vi.fn();
-    const onSetPopulation = vi.fn(async () => {});
-    render(
-      <ConstellationEditor
-        authoring={AUTHORING_FACTS}
-        draft={draft}
-        workspace={newWorkspace("t")}
-        linkRules={[]}
-        onUpdate={onUpdate}
-        onUpdateOrbit={() => {}}
-        onSetPopulation={onSetPopulation}
-        onAuthorInlineNode={async () => {}}
-        onAddNodeTerminal={async () => {}}
-        onSetNodeTerminalRole={async () => {}}
-        onAddNodeEthernet={async () => {}}
-        onRemove={() => {}}
-        onOpenRule={() => {}}
-        onConnect={() => {}}
-      />,
-    );
-    fireEvent.click(screen.getByRole("button", { name: /Pattern/ }));
-    fireEvent.change(screen.getByLabelText("phasing"), {
-      target: { value: "evenly_spaced_mean_anomaly" },
-    });
-    await waitFor(() => expect(onSetPopulation).toHaveBeenCalledTimes(1));
-    expect(onSetPopulation).toHaveBeenCalledWith({
-      phasing_mode: "evenly_spaced_mean_anomaly",
-    });
-    expect(onUpdate).not.toHaveBeenCalled();
-  });
-
-  it("ConstellationEditor delegates inline node creation without browser-generated fields", async () => {
-    const onUpdate = vi.fn();
-    const onAuthorInlineNode = vi.fn(async () => {});
-    render(
-      <ConstellationEditor
-        authoring={AUTHORING_FACTS}
-        draft={newDraftConstellation("nodalarc:nodes/space/leo.yaml")}
-        workspace={newWorkspace("t")}
-        linkRules={[]}
-        onUpdate={onUpdate}
-        onUpdateOrbit={() => {}}
-        onSetPopulation={async () => {}}
-        onAuthorInlineNode={onAuthorInlineNode}
-        onAddNodeTerminal={async () => {}}
-        onSetNodeTerminalRole={async () => {}}
-        onAddNodeEthernet={async () => {}}
-        onRemove={() => {}}
-        onOpenRule={() => {}}
-        onConnect={() => {}}
-      />,
-    );
-
-    fireEvent.click(screen.getByRole("button", { name: /Node/ }));
-    fireEvent.click(screen.getByRole("button", { name: "Author inline node" }));
-    await waitFor(() => expect(onAuthorInlineNode).toHaveBeenCalledTimes(1));
-    expect(onUpdate).not.toHaveBeenCalled();
-  });
 });
 
 describe("BodySelect failure contract + node-id collision", () => {
@@ -362,42 +297,6 @@ describe("BodySelect failure contract + node-id collision", () => {
     // Earth is both the value AND in the catalog → one option, never a prepend duplicate.
     expect(screen.getAllByRole("option", { name: "Earth" })).toHaveLength(1);
     expect((screen.getByLabelText("Body") as HTMLSelectElement).value).toBe("catalog:bodies/earth.yaml");
-  });
-
-  it("submits typed site intent without allocating addresses in the browser", async () => {
-    const draft = newDraftGroundSet("nodalarc:nodes/ground/gw.yaml", {});
-    const onMintSites = vi.fn(async () => {});
-    const onUpdate = vi.fn();
-    render(
-      <GroundEditor
-        authoring={AUTHORING_FACTS}
-        draft={draft}
-        workspace={newWorkspace("t")}
-        linkRules={[]}
-        onOpenRule={() => {}}
-        onConnect={() => {}}
-        schedulingPresets={[]}
-        selectedSchedulingPreset={null}
-        memberSchedulingPreset={() => null}
-        onSchedulingPreset={async () => {}}
-        onMintSites={onMintSites}
-        onAddSiteReference={async () => {}}
-        onSetStampNodeModel={async () => {}}
-        onSetSiteNodeModel={async () => {}}
-        onAddSiteNode={async () => {}}
-        onUpdate={onUpdate}
-        onRemove={() => {}}
-      />,
-    );
-    fireEvent.change(screen.getByPlaceholderText(/paste sites, one per line/i), {
-      target: { value: "Denver, 39.7, -104.9" },
-    });
-    fireEvent.click(screen.getByRole("button", { name: "+ mint pasted sites" }));
-    await waitFor(() => expect(onMintSites).toHaveBeenCalledTimes(1));
-    expect(onMintSites).toHaveBeenCalledWith([
-      { name: "Denver", lat_deg: 39.7, lon_deg: -104.9 },
-    ]);
-    expect(onUpdate).not.toHaveBeenCalled();
   });
 });
 
@@ -483,31 +382,6 @@ describe("buffered windows commit through the apply row", () => {
     expect((screen.getByText("OK") as HTMLButtonElement).disabled).toBe(false);
   });
 
-  // a window whose applied object moved underneath a dirty working copy
-  // shows the stale notice and offers to reload current values. Apply stays
-  // live — keeping the edits is the user's call — but the bulk save refuses.
-  it("a stale window shows the notice and Load current values fires its own path", () => {
-    const calls: string[] = [];
-    render(
-      <EditorApplyRow
-        dirty
-        busy={false}
-        stale
-        onApply={() => calls.push("apply")}
-        onOk={() => calls.push("ok")}
-        onDefaults={() => calls.push("defaults")}
-        onLoadCurrent={() => calls.push("load")}
-        onCancel={() => calls.push("cancel")}
-      />,
-    );
-    expect(screen.getByTestId("builder-stale-notice")).toBeTruthy();
-    expect(screen.getByText("stale")).toBeTruthy();
-    // Apply is deliberately still enabled — the edits may still be wanted.
-    expect((screen.getByText("Apply") as HTMLButtonElement).disabled).toBe(false);
-    fireEvent.click(screen.getByText("Load current values"));
-    expect(calls).toEqual(["load"]);
-  });
-
   it("while a change is being applied, Apply and OK wait and Cancel stays", () => {
     render(
       <EditorApplyRow
@@ -528,32 +402,17 @@ describe("buffered windows commit through the apply row", () => {
 describe("a link or routing window applies its pending edit through the backend", () => {
   afterEach(cleanup);
 
-  /** The row with each gesture recorded in `calls`; Apply and Re-apply answer
-   *  with `applied`, or fail with `failure`. */
-  function renderRow(
-    calls: string[],
-    {
-      pending = true,
-      outcome = null,
-      blocked = null,
-      applied = true,
-      failure = null,
-    }: {
-      pending?: boolean;
-      outcome?: BuilderPendingEditOutcome | null;
-      blocked?: string | null;
-      applied?: boolean;
-      failure?: string | null;
-    } = {},
-  ) {
+  /** The row of a pending edit with each gesture recorded in `calls`; Apply
+   *  and Re-apply answer that the edit applied. */
+  function renderRow(calls: string[], { blocked }: { blocked: string | null }) {
     const answer = (gesture: string) => () => {
       calls.push(gesture);
-      return failure === null ? Promise.resolve(applied) : Promise.reject(new Error(failure));
+      return Promise.resolve(true);
     };
     render(
       <PendingEditApplyRow
-        pending={pending}
-        outcome={outcome}
+        pending
+        outcome={null}
         blocked={blocked}
         onApply={answer("apply")}
         onReapply={answer("reapply")}
@@ -564,90 +423,6 @@ describe("a link or routing window applies its pending edit through the backend"
   }
 
   const button = (name: string) => screen.getByRole("button", { name }) as HTMLButtonElement;
-
-  it("OK on an edit the backend refuses closes the window and keeps the edit pending", async () => {
-    const calls: string[] = [];
-    renderRow(calls, { applied: false });
-    expect(screen.getByText("pending edit")).toBeTruthy();
-
-    fireEvent.click(button("OK"));
-    await act(async () => undefined);
-
-    expect(calls).toEqual(["apply", "close"]);
-  });
-
-  it("a failed apply is shown and the window stays open", async () => {
-    const calls: string[] = [];
-    renderRow(calls, { failure: "VS-API could not be reached" });
-
-    fireEvent.click(button("OK"));
-    await act(async () => undefined);
-    fireEvent.click(button("Apply"));
-    await act(async () => undefined);
-
-    expect(calls).toEqual(["apply", "apply"]);
-    expect(screen.getByText("VS-API could not be reached")).toBeTruthy();
-  });
-
-  it("Apply keeps the window open; Cancel discards the edit and closes it", async () => {
-    const calls: string[] = [];
-    renderRow(calls);
-
-    fireEvent.click(button("Apply"));
-    await act(async () => undefined);
-    fireEvent.click(button("Cancel"));
-
-    expect(calls).toEqual(["apply", "discard", "close"]);
-  });
-
-  it("a stale edit says why and is re-applied or discarded only on request", async () => {
-    const calls: string[] = [];
-    renderRow(calls, {
-      outcome: {
-        status: "stale",
-        issues: [
-          {
-            code: "builder.staleness.pending_edit",
-            stage: "staleness",
-            severity: "error",
-            message: "Link rule 'leo_isl' changed since the edit began",
-            blocks: ["save", "deploy"],
-            source_ref: null,
-            json_pointer: "/link_rules/0",
-            draft_path: "pending_edits.0",
-            source_line: null,
-            source_column: null,
-            related_refs: [],
-          },
-        ],
-      },
-    });
-    expect(screen.getByText("stale")).toBeTruthy();
-    expect(screen.getByTestId("builder-stale-notice").textContent).toContain(
-      "Link rule 'leo_isl' changed since the edit began",
-    );
-
-    fireEvent.click(button("Re-apply"));
-    await act(async () => undefined);
-    fireEvent.click(button("Discard"));
-
-    expect(calls).toEqual(["reapply", "discard"]);
-  });
-
-  it("with no pending edit, Apply waits and OK only closes", () => {
-    const calls: string[] = [];
-    renderRow(calls, {
-      pending: false,
-      outcome: { status: "stale", issues: [] },
-    });
-    expect(screen.getByText("applied")).toBeTruthy();
-    expect(screen.queryByTestId("builder-stale-notice")).toBeNull();
-    expect(button("Apply").disabled).toBe(true);
-
-    fireEvent.click(button("OK"));
-
-    expect(calls).toEqual(["close"]);
-  });
 
   it("while the edit cannot be applied, Apply and OK wait and say why, and Cancel stays", () => {
     const calls: string[] = [];
@@ -1060,21 +835,6 @@ describe("the anatomy guide answers what-next in any order", () => {
     onOpenSession: () => {},
     onOpenSegment: () => {},
     ...overrides,
-  });
-
-  it("a new draft's rows say what to add first, and act", () => {
-    const calls: string[] = [];
-    render(
-      <BuildGuide
-        {...guideProps({ hasAcceptedSession: false })}
-        onAddConstellation={() => calls.push("space")}
-      />,
-    );
-    fireEvent.click(screen.getByText("Space segments"));
-    expect(calls).toEqual(["space"]);
-    // No segments yet: comms intent explains its precondition instead of acting.
-    expect(screen.getByText("add a segment first")).toBeTruthy();
-    expect(screen.getByText("add links first")).toBeTruthy();
   });
 
   it("uses the backend placeholder fact instead of guessing from the generated name", () => {

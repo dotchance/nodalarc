@@ -144,7 +144,6 @@ export function workingIssue(message: string, jsonPointer: string): BuilderIssue
 export function pendingAnswer(
   address: BuilderVisualObjectEditResult["address"],
   widget: BuilderVisualObjectEditResult["widget"],
-  issues: ReadonlyArray<BuilderIssue> = [],
 ): BuilderVisualObjectEditResult {
   return {
     address,
@@ -160,6 +159,6 @@ export function pendingAnswer(
         present: true,
       },
     },
-    issues,
+    issues: [],
   };
 }

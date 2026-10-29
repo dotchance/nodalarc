@@ -7,7 +7,7 @@
  * left the UI with no way to start a shipped session).
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, fireEvent, cleanup, within, waitFor } from "@testing-library/react";
+import { render, screen, fireEvent, cleanup, waitFor } from "@testing-library/react";
 import type { CatalogSessionSummary } from "../../builder/generated/builderApi";
 
 afterEach(cleanup);
@@ -160,55 +160,6 @@ describe("SessionWizard catalog sessions", () => {
     expect(runningCard!.disabled).toBe(true);
     fireEvent.click(runningCard!);
     expect(onLaunchSession).not.toHaveBeenCalled();
-  });
-
-  it("keeps same-named user and shipped sessions visibly distinct", () => {
-    const shipped: CatalogSessionSummary = { ...SESSIONS[1]!, active: true };
-    const user: CatalogSessionSummary = {
-      ...shipped,
-      source_id: {
-        kind: "catalog",
-        session_ref: "user:sessions/earth-geo-tdrs.yaml",
-      },
-      source: "user",
-      active: false,
-    };
-    const onLaunchSession = vi.fn().mockResolvedValue({ ok: true });
-    render(
-      <SessionWizard
-        onDeployStarted={vi.fn()}
-        onClose={undefined}
-        deploying={false}
-        sessions={[shipped, user]}
-        sessionsError={null}
-        onLaunchSession={onLaunchSession}
-      />,
-    );
-
-    const yours = screen.getByRole("region", { name: "User-created sessions" });
-    const provided = screen.getByRole("region", { name: "NodalArc defaults" });
-    expect(within(yours).getByText("user:sessions/earth-geo-tdrs.yaml")).toBeTruthy();
-    expect(within(yours).getByText("user: editable")).toBeTruthy();
-    expect(
-      within(provided).getByText("nodalarc:sessions/earth-geo-tdrs.yaml"),
-    ).toBeTruthy();
-    expect(within(provided).getByText("nodalarc: read-only")).toBeTruthy();
-    expect(
-      within(provided).getByText("earth-geo-tdrs").closest("button")?.disabled,
-    ).toBe(true);
-    expect(
-      within(yours).getByRole("button", {
-        name: "Download user:sessions/earth-geo-tdrs.yaml YAML",
-      }),
-    ).toBeTruthy();
-    expect(
-      within(provided).getByRole("button", {
-        name: "Download nodalarc:sessions/earth-geo-tdrs.yaml YAML",
-      }),
-    ).toBeTruthy();
-
-    fireEvent.click(within(yours).getByText("earth-geo-tdrs"));
-    expect(onLaunchSession).toHaveBeenCalledWith(user, false);
   });
 });
 

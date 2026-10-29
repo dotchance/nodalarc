@@ -484,11 +484,25 @@ export interface SessionYamlBufferState {
   text: string;
   appliedText: string;
   generation: number;
+  /** The newest generation handed to an apply, or set from the draft. The
+   *  automatic apply sends only a newer generation. */
+  sentGeneration: number;
   dirty: boolean;
+  /** Whether the draft holds `appliedText` as its accepted session. A refused
+   *  apply leaves the draft holding the refused text, so this stays false
+   *  until an apply is accepted. An edit of the buffer does not change it. */
   applied: boolean;
   canonicalizationRequired: boolean;
   canonicalizationAccepted: boolean;
+  /** The backend's findings for this generation. A new generation holds none
+   *  until the backend answers it. */
   issues: readonly BuilderIssue[];
+}
+
+/** Whether the automatic apply sends the buffer: no apply was handed its
+ *  generation, and the draft does not hold its text as the accepted session. */
+export function yamlBufferAwaitsApply(buffer: SessionYamlBufferState): boolean {
+  return buffer.generation !== buffer.sentGeneration && (buffer.dirty || !buffer.applied);
 }
 
 export interface SessionCoordinatorCapture {
@@ -709,6 +723,7 @@ const EMPTY_YAML_BUFFER: SessionYamlBufferState = {
   text: "",
   appliedText: "",
   generation: 0,
+  sentGeneration: 0,
   dirty: false,
   applied: false,
   canonicalizationRequired: false,
@@ -1039,6 +1054,7 @@ export function useBuilderWorld() {
           text: draft.session_yaml,
           appliedText: draft.session_yaml,
           generation: 0,
+          sentGeneration: 0,
           dirty: false,
           applied:
             draft.projection_status === "applied" ||
@@ -1085,6 +1101,7 @@ export function useBuilderWorld() {
             text: opened.session_yaml,
             appliedText: opened.session_yaml,
             generation: 0,
+            sentGeneration: 0,
             dirty: false,
             applied: opened.projection_status === "applied",
             canonicalizationRequired: canonical !== null && canonical !== undefined && canonical !== opened.session_yaml,
@@ -1116,26 +1133,34 @@ export function useBuilderWorld() {
     if (writerRef.current !== null && writerRef.current !== "yaml") return false;
     if (pendingEditsRef.current.size > 0) return false;
     const current = yamlBufferRef.current;
+    // An edit leaves the draft as it was, so `applied` stands, and the
+    // findings of an older generation are not this generation's.
     setYamlBuffer({
       ...current,
       text,
       generation: current.generation + 1,
       dirty: text !== current.appliedText,
-      applied: text === current.appliedText && current.applied,
-      issues: text === current.appliedText ? current.issues : [],
+      issues: [],
     });
     return true;
   }, [setYamlBuffer]);
 
-  const applyYamlBuffer = useCallback(async (
-    expectedGeneration?: number,
-  ): Promise<BuilderVisualDraftApplyYamlResult> =>
-    enqueueWriter("yaml", async (epoch) => {
+  /** Send buffer generation `generation` to the backend. The generation is
+   *  marked sent before it waits its turn, so the automatic apply never sends
+   *  it again. */
+  const applyYamlBuffer = useCallback((
+    generation: number,
+  ): Promise<BuilderVisualDraftApplyYamlResult> => {
+    const marked = yamlBufferRef.current;
+    if (marked.generation === generation && marked.sentGeneration !== generation) {
+      setYamlBuffer({ ...marked, sentGeneration: generation });
+    }
+    return enqueueWriter("yaml", async (epoch) => {
       const draft = visualDraftRef.current;
       const buffer = yamlBufferRef.current;
       if (!draft) throw new Error("there is no session draft to edit");
       refuseWhileEditsPending("applying the YAML");
-      if (expectedGeneration !== undefined && buffer.generation !== expectedGeneration) {
+      if (buffer.generation !== generation) {
         throw new SupersededSessionOperation();
       }
       const result = await applyVisualDraftYaml({
@@ -1154,6 +1179,7 @@ export function useBuilderWorld() {
           text: result.yaml_text,
           appliedText: buffer.appliedText,
           generation: result.buffer_generation,
+          sentGeneration: result.buffer_generation,
           dirty: result.yaml_text !== buffer.appliedText,
           applied: false,
           canonicalizationRequired: false,
@@ -1169,6 +1195,7 @@ export function useBuilderWorld() {
         text: result.yaml_text,
         appliedText: result.yaml_text,
         generation: result.buffer_generation,
+        sentGeneration: result.buffer_generation,
         dirty: false,
         applied: true,
         canonicalizationRequired: result.canonicalization_required,
@@ -1176,14 +1203,27 @@ export function useBuilderWorld() {
         issues: result.issues ?? [],
       });
       return result;
-    }), [
-      adoptAcceptedChange,
-      assertEpoch,
-      enqueueWriter,
-      refuseWhileEditsPending,
-      setVisualDraft,
-      setYamlBuffer,
-    ]);
+    });
+  }, [
+    adoptAcceptedChange,
+    assertEpoch,
+    enqueueWriter,
+    refuseWhileEditsPending,
+    setVisualDraft,
+    setYamlBuffer,
+  ]);
+
+  /** The automatic apply: send generation `generation` when it is still the
+   *  buffer's generation and awaits apply. Each generation is sent at most
+   *  once; resolves null when nothing is sent. */
+  const applyYamlBufferOnce = useCallback(
+    async (generation: number): Promise<BuilderVisualDraftApplyYamlResult | null> => {
+      const buffer = yamlBufferRef.current;
+      if (buffer.generation !== generation || !yamlBufferAwaitsApply(buffer)) return null;
+      return applyYamlBuffer(generation);
+    },
+    [applyYamlBuffer],
+  );
 
   const useCanonicalYaml = useCallback(async () => {
     const canonical = assemblyResult?.compile_result.canonical_session_yaml;
@@ -1241,6 +1281,7 @@ export function useBuilderWorld() {
         text: canonical,
         appliedText: canonical,
         generation: buffer.generation + 1,
+        sentGeneration: buffer.generation + 1,
         dirty: false,
         applied: true,
         canonicalizationRequired: false,
@@ -1366,6 +1407,7 @@ export function useBuilderWorld() {
           text: canonical,
           appliedText: canonical,
           generation: nextBuffer.generation + 1,
+          sentGeneration: nextBuffer.generation + 1,
           dirty: false,
           applied: true,
           canonicalizationRequired: false,
@@ -1471,6 +1513,7 @@ export function useBuilderWorld() {
           text: canonical,
           appliedText: canonical,
           generation: buffer.generation + 1,
+          sentGeneration: buffer.generation + 1,
           dirty: false,
           applied: true,
           canonicalizationRequired: false,
@@ -1549,6 +1592,7 @@ export function useBuilderWorld() {
           text: canonical,
           appliedText: canonical,
           generation: buffer.generation + 1,
+          sentGeneration: buffer.generation + 1,
           dirty: false,
           applied: true,
           canonicalizationRequired: false,
@@ -1650,6 +1694,7 @@ export function useBuilderWorld() {
         text: canonical,
         appliedText: canonical,
         generation: yamlBufferRef.current.generation + 1,
+        sentGeneration: yamlBufferRef.current.generation + 1,
         dirty: false,
         applied: true,
         canonicalizationRequired: false,
@@ -1855,6 +1900,7 @@ export function useBuilderWorld() {
             text: canonical,
             appliedText: canonical,
             generation: yamlBufferRef.current.generation + 1,
+            sentGeneration: yamlBufferRef.current.generation + 1,
             dirty: false,
             applied: true,
             canonicalizationRequired: false,
@@ -1957,6 +2003,7 @@ export function useBuilderWorld() {
             text: canonical,
             appliedText: canonical,
             generation: capture.bufferGeneration + 1,
+            sentGeneration: capture.bufferGeneration + 1,
             dirty: false,
             applied: true,
             canonicalizationRequired: false,
@@ -2010,6 +2057,7 @@ export function useBuilderWorld() {
       text: canonical,
       appliedText: canonical,
       generation: yamlBufferRef.current.generation + 1,
+      sentGeneration: yamlBufferRef.current.generation + 1,
       dirty: false,
       applied: true,
       canonicalizationRequired: false,
@@ -2088,6 +2136,7 @@ export function useBuilderWorld() {
     openSession,
     editYamlBuffer,
     applyYamlBuffer,
+    applyYamlBufferOnce,
     useCanonicalYaml,
     applyWorkspace,
     customizeChain,

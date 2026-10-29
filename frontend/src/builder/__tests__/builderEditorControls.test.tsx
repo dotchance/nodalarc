@@ -754,6 +754,7 @@ describe("the YAML buffer locks graphical editing only around an open draft's te
     text: "",
     appliedText: "",
     generation: 0,
+    sentGeneration: 0,
     dirty: false,
     applied: false,
     canonicalizationRequired: false,

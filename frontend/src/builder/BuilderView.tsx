@@ -65,6 +65,7 @@ import {
   pendingEditsPhrase,
   refusalMessage,
   yamlBlocksGraphicalEditing,
+  yamlBufferAwaitsApply,
   announceCatalogDraftSaved,
   claimLibraryReveal,
   claimOutlineReveal,
@@ -518,6 +519,7 @@ export function BuilderView({
     openSession,
     editYamlBuffer,
     applyYamlBuffer,
+    applyYamlBufferOnce,
     useCanonicalYaml,
     applyWorkspace,
     compilePreview,
@@ -692,8 +694,15 @@ export function BuilderView({
     [seedTwin],
   );
   const applySessionYaml = useCallback(
-    async (generation?: number) => adoptAppliedYaml(await applyYamlBuffer(generation)),
+    async (generation: number) => adoptAppliedYaml(await applyYamlBuffer(generation)),
     [adoptAppliedYaml, applyYamlBuffer],
+  );
+  const applySessionYamlOnce = useCallback(
+    async (generation: number) => {
+      const result = await applyYamlBufferOnce(generation);
+      return result === null ? null : adoptAppliedYaml(result);
+    },
+    [adoptAppliedYaml, applyYamlBufferOnce],
   );
   const useCanonicalSessionYaml = useCallback(
     async () => adoptAppliedYaml(await useCanonicalYaml()),
@@ -937,10 +946,14 @@ export function BuilderView({
     writer,
   ]);
 
+  // The automatic apply sends a generation the draft does not hold once, after
+  // a pause in typing. A refused generation is not sent again; the next edit
+  // makes a newer one.
+  const yamlAwaitsApply = yamlBufferAwaitsApply(yamlBuffer);
   useEffect(() => {
     if (
       !visualDraft ||
-      !yamlBuffer.dirty ||
+      !yamlAwaitsApply ||
       dirtyWindows > 0 ||
       pendingEditCount > 0 ||
       !twinMatchesDraft
@@ -949,15 +962,15 @@ export function BuilderView({
     }
     const generation = yamlBuffer.generation;
     const timer = setTimeout(() => {
-      void applySessionYaml(generation).catch(() => undefined);
+      void applySessionYamlOnce(generation).catch(() => undefined);
     }, 500);
     return () => clearTimeout(timer);
   }, [
-    applySessionYaml,
+    applySessionYamlOnce,
     dirtyWindows,
     pendingEditCount,
     visualDraft,
-    yamlBuffer.dirty,
+    yamlAwaitsApply,
     yamlBuffer.generation,
     twinMatchesDraft,
   ]);
@@ -3136,7 +3149,7 @@ export function BuilderView({
                   pendingEditCount > 0 ||
                   writer !== null ||
                   !twinMatchesDraft ||
-                  (!yamlBuffer.dirty && yamlBuffer.issues.length === 0)
+                  (!yamlBuffer.dirty && yamlBuffer.applied)
                 }
                 onClick={() => void applySessionYaml(yamlBuffer.generation)}
               >

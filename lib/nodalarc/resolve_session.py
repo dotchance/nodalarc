@@ -212,6 +212,7 @@ def resolve_session_with_assets(
     _check_node_workloads(tuple(expanded_nodes), support)
     allocated_nodes, ethernet_segments = _allocate_segment_addressing(list(expanded_nodes))
     runtime_nodes = _apply_addressing(cfg, tuple(allocated_nodes))
+    _check_boundary_references(cfg)
     routing_domains = tuple(_resolve_routing_domains(cfg, runtime_nodes))
     runtime_nodes = _derive_host_attachments(runtime_nodes, routing_domains)
     resolved_nodes = tuple(item.node for item in runtime_nodes)
@@ -3827,16 +3828,45 @@ def _enforce_link_rule_constraints(resolved: ResolvedSession, candidates: tuple[
                 )
 
 
+def _check_boundary_references(cfg: SegmentSessionConfig) -> None:
+    """Every name a routing boundary holds is declared by the session.
+
+    A boundary's ``over`` names a link rule, and the ``from`` and ``to`` of
+    each export name routing domains. The check reads the declared names
+    only, so it runs before domain participation resolves. A boundary left
+    naming a removed domain is refused as that boundary, before the routers
+    the removal left in no domain are counted.
+    """
+    if cfg.routing is None:
+        return
+    rule_ids = {rule.id for rule in cfg.link_rules or ()}
+    domain_ids = {domain.id for domain in cfg.routing.domains}
+    for boundary_index, boundary in enumerate(cfg.routing.boundaries or ()):
+        if boundary.over not in rule_ids:
+            raise SessionResolutionError(
+                f"routing boundary over {boundary.over!r} names no declared link rule"
+            )
+        for export_index, export in enumerate(boundary.export):
+            for field_name, domain_id in (("from", export.from_), ("to", export.to)):
+                if domain_id not in domain_ids:
+                    raise SessionResolutionError(
+                        f"routing boundary {boundary_index} over {boundary.over!r} export "
+                        f"{export_index} {field_name!r} names undeclared routing domain "
+                        f"{domain_id!r}"
+                    )
+
+
 def _validate_routing_boundaries(
     cfg: SegmentSessionConfig,
     domains: tuple[ResolvedRoutingDomain, ...],
     link_rules: tuple[ResolvedLinkRule, ...],
 ) -> None:
     """Boundary declarations must be materializable, and domain separation
-    must be real.
+    must be real. ``_check_boundary_references`` has already found every
+    rule and domain a boundary names.
 
-    1. Every boundary's ``over`` names an existing, enabled, non-access rule;
-       its exports join exactly two domains, and each endpoint's nodes all
+    1. Every boundary's ``over`` names an enabled, non-access rule; its
+       exports join exactly two domains, and each endpoint's nodes all
        participate in the same one of the two, opposite to the other
        endpoint's. Endpoint nodes may also participate in other domains.
     2. A non-access rule that can connect two routers sharing no routing
@@ -3845,7 +3875,6 @@ def _validate_routing_boundaries(
        way for routes to cross it. Two routers sharing a domain run that
        domain over the link.
     """
-    domains_by_id = {domain.domain_id: domain for domain in domains}
     rules_by_id = {rule.rule_id: rule for rule in link_rules}
     domains_of_node: dict[str, frozenset[str]] = {}
     for domain in domains:
@@ -3856,11 +3885,7 @@ def _validate_routing_boundaries(
     boundary_rule_ids: set[str] = set()
 
     for boundary in cfg.routing.boundaries or () if cfg.routing is not None else ():
-        rule = rules_by_id.get(boundary.over)
-        if rule is None:
-            raise SessionResolutionError(
-                f"routing boundary over {boundary.over!r} names no declared link rule"
-            )
+        rule = rules_by_id[boundary.over]
         if not rule.enabled:
             raise SessionResolutionError(
                 f"routing boundary over {boundary.over!r} names a disabled link rule"
@@ -3871,11 +3896,6 @@ def _validate_routing_boundaries(
                 "boundaries run over fixed inter-domain links"
             )
         for export in boundary.export:
-            for domain_id in (export.from_, export.to):
-                if domain_id not in domains_by_id:
-                    raise SessionResolutionError(
-                        f"routing boundary export references unknown domain {domain_id!r}"
-                    )
             if export.from_ == export.to:
                 raise SessionResolutionError(
                     f"routing boundary export from/to must differ; got {export.from_!r}"

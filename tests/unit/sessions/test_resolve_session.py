@@ -530,6 +530,32 @@ def test_a_link_runs_each_domain_its_two_routers_share() -> None:
     assert {same_plane, other_plane} <= set(assignment["space-all"])
 
 
+@pytest.mark.parametrize(
+    ("removed_domain", "field_name"),
+    [("earth_domain", "from"), ("luna_domain", "to")],
+)
+def test_a_boundary_naming_an_undeclared_domain_is_refused_as_that_boundary(
+    removed_domain: str,
+    field_name: str,
+) -> None:
+    """Removing a domain also leaves its routers in no domain. The boundary
+    that still names the domain is the refusal."""
+    session = yaml.safe_load(
+        (SHIPPED_ROOT / "sessions" / "earth-luna-quic.yaml").read_text(encoding="utf-8")
+    )
+    session["routing"]["domains"] = [
+        domain for domain in session["routing"]["domains"] if domain["id"] != removed_domain
+    ]
+
+    with pytest.raises(SessionResolutionError) as refused:
+        resolver_module.resolve_session(session, catalog=shipped_read_view())
+
+    assert str(refused.value) == (
+        f"routing boundary 0 over 'geo_to_luna' export 0 '{field_name}' names undeclared "
+        f"routing domain '{removed_domain}'"
+    )
+
+
 def test_ground_override_must_target_a_site_in_the_selected_site_set() -> None:
     raw = _raw_session()
     raw["segments"][1]["overrides"] = [

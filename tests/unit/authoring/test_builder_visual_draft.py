@@ -3568,6 +3568,54 @@ def test_apply_edits_removes_members_and_drops_an_emptied_routing_section(
     assert set(opened.reserved_authoring_ids) <= set(accepted.reserved_authoring_ids)
 
 
+def test_removing_a_domain_a_boundary_names_compiles_to_that_boundary_refusal(
+    service: BuilderVisualDraftService,
+) -> None:
+    opened = service.open(
+        BuilderVisualDraftOpenRequest(source_ref="nodalarc:sessions/earth-luna-quic.yaml")
+    )
+    assert opened.applied_session is not None
+    domain_ids = [domain["id"] for domain in opened.applied_session["routing"]["domains"]]
+    assert domain_ids == ["earth_domain", "luna_domain"]
+
+    # Each edit and the session they make are structurally valid, so the batch is accepted.
+    result = _apply_edits(
+        service,
+        opened,
+        [
+            {
+                "kind": "list",
+                "list_pointer": "/routing/domains",
+                "ids_before": domain_ids,
+                "ids_wanted": ["luna_domain"],
+            }
+        ],
+    )
+    assert result.applied is True
+    assert result.assembly is not None
+    accepted = result.assembly.visual_draft
+    assert accepted.applied_session is not None
+    assert accepted.applied_session["routing"]["boundaries"][0]["export"][0]["from"] == (
+        "earth_domain"
+    )
+
+    compiled = result.assembly.compile_result
+    assert compiled.save_verdict.allowed is False
+    assert compiled.resolved_preview is None
+    assert [
+        (issue.code, issue.stage, issue.message)
+        for issue in compiled.issues
+        if issue.severity == "error"
+    ] == [
+        (
+            "builder.semantic.session_resolution",
+            "semantic",
+            "routing boundary 0 over 'geo_to_luna' export 0 'from' names undeclared "
+            "routing domain 'earth_domain'",
+        )
+    ]
+
+
 def test_apply_edits_refuses_the_whole_batch_for_one_stale_or_invalid_edit(
     service: BuilderVisualDraftService,
 ) -> None:

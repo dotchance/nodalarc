@@ -5,6 +5,7 @@
 import { useState, useEffect, useCallback, useRef, useSyncExternalStore } from "react";
 import { downloadBlob } from "../ui/downloadBlob";
 import {
+  acceptVisualDraftState,
   applyVisualDraftCommand,
   applyVisualDraftEdits,
   applyVisualDraftWorkspace,
@@ -34,6 +35,7 @@ import type {
   BuilderCompileResult,
   BuilderContentEdit,
   BuilderDeployVerdict,
+  BuilderDraftState,
   BuilderIssue,
   BuilderListEdit,
   BuilderPendingEditOutcome,
@@ -475,7 +477,8 @@ export type SessionDraftWriter =
   | "edits"
   | "retarget"
   | "compile"
-  | "save";
+  | "save"
+  | "undo";
 
 export interface SessionYamlBufferState {
   text: string;
@@ -667,6 +670,26 @@ function commandStartEditKey(command: BuilderVisualDraftCommandRequest["command"
     : null;
 }
 
+/** One step of the undo history. `replaced` is the accepted session a change
+ *  replaced, with its proposals; it is null for a command that accepted
+ *  nothing and only created pending edits. `created` holds the keys of the
+ *  pending edits the change created that are still pending. */
+interface UndoStep {
+  readonly replaced: BuilderDraftState | null;
+  readonly created: ReadonlySet<string>;
+}
+
+/** The most steps the undo history holds; the oldest goes first. */
+const UNDO_LIMIT = 100;
+
+/** The accepted session of `draft` with its proposals, or null when the draft
+ *  is not fully accepted. The proposals of such a draft can belong to an edit
+ *  the backend has not accepted. */
+function acceptedStateOf(draft: BuilderVisualDraftEnvelope): BuilderDraftState | null {
+  const session = draft.projection_status === "applied" ? (draft.applied_session ?? null) : null;
+  return session === null ? null : { session, catalog_documents: draft.catalog_documents };
+}
+
 const EMPTY_YAML_BUFFER: SessionYamlBufferState = {
   text: "",
   appliedText: "",
@@ -725,6 +748,13 @@ export function useBuilderWorld() {
   const [pendingEditVerdicts, setPendingEditVerdicts] = useState<PendingEditVerdicts | null>(
     null,
   );
+  // The undo history of the draft the page holds, oldest step first. Only the
+  // writers that accept a change record a step.
+  const undoStepsRef = useRef<ReadonlyArray<UndoStep>>([]);
+  // The accepted session the page last adopted, with its proposals: the state
+  // the next accepted change replaces. A draft that is not fully accepted
+  // leaves it as it was.
+  const acceptedStateRef = useRef<BuilderDraftState | null>(null);
 
   const refreshSessions = useCallback(async () => {
     try {
@@ -761,8 +791,29 @@ export function useBuilderWorld() {
   }, []);
 
   const setPendingEdits = useCallback((next: ReadonlyMap<string, PendingObjectEdit>) => {
+    const left = [...pendingEditsRef.current.keys()].filter((key) => !next.has(key));
     pendingEditsRef.current = next;
     setPendingEditsState(next);
+    if (left.length === 0) return;
+    // An edit that left the store, applied or discarded, is no longer one an
+    // undo drops. A step left with nothing to undo goes.
+    undoStepsRef.current = undoStepsRef.current.flatMap((step) => {
+      const created = new Set([...step.created].filter((key) => !left.includes(key)));
+      return step.replaced === null && created.size === 0
+        ? []
+        : [{ replaced: step.replaced, created }];
+    });
+  }, []);
+
+  /** Record one step of the undo history. */
+  const recordUndoStep = useCallback((step: UndoStep) => {
+    undoStepsRef.current = [...undoStepsRef.current, step].slice(-UNDO_LIMIT);
+  }, []);
+
+  /** Empty the undo history when the page adopts a different draft. */
+  const forgetUndoHistory = useCallback(() => {
+    undoStepsRef.current = [];
+    acceptedStateRef.current = null;
   }, []);
 
   /** Drop every pending edit when the page adopts a different draft. */
@@ -894,6 +945,8 @@ export function useBuilderWorld() {
 
   const adoptCompileResult = useCallback((result: BuilderVisualDraftAssemblyResult) => {
     const compile = result.compile_result;
+    const accepted = acceptedStateOf(result.visual_draft);
+    if (accepted !== null) acceptedStateRef.current = accepted;
     setVisualDraft(result.visual_draft);
     setAssemblyResult(result);
     setDocumentYaml(compile.canonical_session_yaml ?? null);
@@ -906,6 +959,20 @@ export function useBuilderWorld() {
     showCompile(compile);
   }, [setVisualDraft, showCompile]);
 
+  /** Adopt the result of an accepted change, and record the accepted state it
+   *  replaced as one undo step. A result that is not fully accepted records
+   *  nothing; the change that completes it records the state both replaced. */
+  const adoptAcceptedChange = useCallback(
+    (result: BuilderVisualDraftAssemblyResult) => {
+      const replaced = acceptedStateRef.current;
+      adoptCompileResult(result);
+      if (replaced !== null && acceptedStateRef.current !== replaced) {
+        recordUndoStep({ replaced, created: NO_KEYS });
+      }
+    },
+    [adoptCompileResult, recordUndoStep],
+  );
+
   const createDraft = useCallback(
     async (request: BuilderVisualDraftCreateRequest): Promise<BuilderVisualDraftEnvelope> => {
       beginEpoch();
@@ -915,6 +982,7 @@ export function useBuilderWorld() {
         const assembled = await compileVisualDraft({ draft });
         assertEpoch(epoch);
         setOpenedSession(null);
+        forgetUndoHistory();
         adoptCompileResult(assembled);
         dropPendingEdits();
         const canonical = assembled.compile_result.canonical_session_yaml;
@@ -933,7 +1001,15 @@ export function useBuilderWorld() {
         return draft;
       });
     },
-    [adoptCompileResult, assertEpoch, beginEpoch, dropPendingEdits, enqueueWriter, setYamlBuffer],
+    [
+      adoptCompileResult,
+      assertEpoch,
+      beginEpoch,
+      dropPendingEdits,
+      enqueueWriter,
+      forgetUndoHistory,
+      setYamlBuffer,
+    ],
   );
 
   const openSession = useCallback(
@@ -952,6 +1028,7 @@ export function useBuilderWorld() {
           const assembled = await compileVisualDraft({ draft: opened });
           assertEpoch(epoch);
           setOpenedSession(entry);
+          forgetUndoHistory();
           adoptCompileResult(assembled);
           dropPendingEdits();
           const canonical = assembled.compile_result.canonical_session_yaml;
@@ -975,7 +1052,15 @@ export function useBuilderWorld() {
         };
       }
     },
-    [adoptCompileResult, assertEpoch, beginEpoch, dropPendingEdits, enqueueWriter, setYamlBuffer],
+    [
+      adoptCompileResult,
+      assertEpoch,
+      beginEpoch,
+      dropPendingEdits,
+      enqueueWriter,
+      forgetUndoHistory,
+      setYamlBuffer,
+    ],
   );
 
   const editYamlBuffer = useCallback((text: string) => {
@@ -1030,7 +1115,7 @@ export function useBuilderWorld() {
       }
       const assembled = await compileVisualDraft({ draft: result.draft });
       assertEpoch(epoch);
-      adoptCompileResult(assembled);
+      adoptAcceptedChange(assembled);
       setYamlBuffer({
         text: result.yaml_text,
         appliedText: result.yaml_text,
@@ -1043,7 +1128,7 @@ export function useBuilderWorld() {
       });
       return result;
     }), [
-      adoptCompileResult,
+      adoptAcceptedChange,
       assertEpoch,
       enqueueWriter,
       refuseWhileEditsPending,
@@ -1099,7 +1184,7 @@ export function useBuilderWorld() {
         showCompile(null, cause instanceof Error ? cause.message : String(cause));
         throw cause;
       }
-      adoptCompileResult(result);
+      adoptAcceptedChange(result);
       const canonical = result.compile_result.canonical_session_yaml ?? result.visual_draft.session_yaml;
       setYamlBuffer({
         text: canonical,
@@ -1112,7 +1197,7 @@ export function useBuilderWorld() {
         issues: [],
       });
       return result;
-    }), [adoptCompileResult, assertEpoch, enqueueWriter, setYamlBuffer, showCompile]);
+    }), [adoptAcceptedChange, assertEpoch, enqueueWriter, setYamlBuffer, showCompile]);
 
   /** Put the accepted draft's compile back in the on-screen slots once no
    *  window edit is being previewed. */
@@ -1216,7 +1301,7 @@ export function useBuilderWorld() {
         if (!result.applied) return result;
         const assembled = await compileVisualDraft({ draft: result.draft });
         assertEpoch(epoch);
-        adoptCompileResult(assembled);
+        adoptAcceptedChange(assembled);
         const canonical = assembled.compile_result.canonical_session_yaml ?? result.draft.session_yaml;
         const nextBuffer = yamlBufferRef.current;
         setYamlBuffer({
@@ -1232,7 +1317,7 @@ export function useBuilderWorld() {
         return result;
       });
     },
-    [adoptCompileResult, assertEpoch, enqueueWriter, setYamlBuffer],
+    [adoptAcceptedChange, assertEpoch, enqueueWriter, setYamlBuffer],
   );
 
   /** Run one command with every pending edit sent beside it: the command mints
@@ -1242,7 +1327,9 @@ export function useBuilderWorld() {
    *  accepts nothing: each edit it created is held under its address with the
    *  backend's description of it, in the place of the edit the command started
    *  from. A created edit whose address holds another pending edit, or one
-   *  that changed while the command ran, is refused and nothing is held. */
+   *  that changed while the command ran, is refused and nothing is held.
+   *  Either result is one undo step; undoing an incomplete one drops the edits
+   *  it created. */
   const runVisualCommand = useCallback(
     (command: BuilderVisualDraftCommandRequest["command"]): Promise<BuilderVisualDraftCommandResult> =>
       enqueueWriter("command", async (epoch) => {
@@ -1297,11 +1384,12 @@ export function useBuilderWorld() {
           });
           for (const key of created) supersedeObjectEdits(key);
           setPendingEdits(held);
+          recordUndoStep({ replaced: null, created: new Set(created) });
           return result;
         }
         const assembled = await compileVisualDraft({ draft: result.draft });
         assertEpoch(epoch);
-        adoptCompileResult(assembled);
+        adoptAcceptedChange(assembled);
         const canonical = assembled.compile_result.canonical_session_yaml ?? result.draft.session_yaml;
         const buffer = yamlBufferRef.current;
         setYamlBuffer({
@@ -1329,9 +1417,10 @@ export function useBuilderWorld() {
         return result;
       }),
     [
-      adoptCompileResult,
+      adoptAcceptedChange,
       assertEpoch,
       enqueueWriter,
+      recordUndoStep,
       setPendingEdits,
       setYamlBuffer,
       supersedeObjectEdits,
@@ -1384,7 +1473,7 @@ export function useBuilderWorld() {
           commands,
         });
         assertEpoch(epoch);
-        adoptCompileResult(result);
+        adoptAcceptedChange(result);
         const canonical =
           result.compile_result.canonical_session_yaml ?? result.visual_draft.session_yaml;
         setYamlBuffer({
@@ -1399,7 +1488,7 @@ export function useBuilderWorld() {
         });
         return result;
       }),
-    [adoptCompileResult, assertEpoch, enqueueWriter, refuseWhileEditsPending, setYamlBuffer],
+    [adoptAcceptedChange, assertEpoch, enqueueWriter, refuseWhileEditsPending, setYamlBuffer],
   );
 
   /** Edit one link rule, one routing domain or the boundary list without
@@ -1473,11 +1562,12 @@ export function useBuilderWorld() {
     [assertEpoch],
   );
 
-  /** Adopt an accepted revision of link and routing edits: its compile, and
-   *  the YAML buffer as the canonical text of the new accepted session. */
+  /** Adopt an accepted revision of link and routing edits as one undo step:
+   *  its compile, and the YAML buffer as the canonical text of the new
+   *  accepted session. */
   const adoptAcceptedEdits = useCallback(
     (assembly: BuilderVisualDraftAssemblyResult) => {
-      adoptCompileResult(assembly);
+      adoptAcceptedChange(assembly);
       const canonical =
         assembly.compile_result.canonical_session_yaml ?? assembly.visual_draft.session_yaml;
       setYamlBuffer({
@@ -1491,7 +1581,7 @@ export function useBuilderWorld() {
         issues: [],
       });
     },
-    [adoptCompileResult, setYamlBuffer],
+    [adoptAcceptedChange, setYamlBuffer],
   );
 
   /** The draft that link and routing edits are applied to, with its accepted
@@ -1601,7 +1691,8 @@ export function useBuilderWorld() {
   );
 
   /** Remove one link rule or routing domain from the accepted session at once,
-   *  as one accepted revision, through the route that applies pending edits.
+   *  as one accepted revision and one undo step, through the route that
+   *  applies pending edits.
    *  The removal is a list edit: the list's ids now, and those ids without
    *  this one. It waits while an edit of the object is pending. A refusal
    *  accepts nothing and is thrown with the backend's reasons. */
@@ -1641,6 +1732,73 @@ export function useBuilderWorld() {
         return result.assembly;
       }),
     [acceptedDraftForEdits, adoptAcceptedEdits, assertEpoch, enqueueWriter],
+  );
+
+  /** Undo the newest step of the undo history. A step that replaced an
+   *  accepted session re-accepts that session with its proposals as the next
+   *  revision, through the route that accepts a stored state, and the page
+   *  adopts only its answer. The request carries the draft as it now stands,
+   *  so the allocation history keeps every id and undo frees none. The pending
+   *  edits the step's change created are dropped. Other pending edits stay;
+   *  the preview shows each one whose object changed as stale. A refusal
+   *  changes nothing and is thrown with the backend's reason. Resolves the
+   *  accepted revision, or null when the step accepted nothing and undo only
+   *  dropped the edits it created. */
+  const undo = useCallback(
+    (): Promise<BuilderVisualDraftAssemblyResult | null> =>
+      enqueueWriter("undo", async (epoch) => {
+        const draft = visualDraftRef.current;
+        if (!draft) throw new Error("there is no session draft to undo");
+        if (yamlBlocksGraphicalEditing(true, yamlBufferRef.current)) {
+          throw new Error("apply or canonicalize the YAML buffer before undoing");
+        }
+        const newest = undoStepsRef.current[undoStepsRef.current.length - 1];
+        if (newest === undefined) throw new Error("there is no accepted change to undo");
+        let assembly: BuilderVisualDraftAssemblyResult | null = null;
+        if (newest.replaced !== null) {
+          assembly = await acceptVisualDraftState({
+            draft,
+            expected_draft_revision: draft.draft_revision,
+            state: newest.replaced,
+          });
+          assertEpoch(epoch);
+          adoptCompileResult(assembly);
+          const canonical =
+            assembly.compile_result.canonical_session_yaml ?? assembly.visual_draft.session_yaml;
+          setYamlBuffer({
+            text: canonical,
+            appliedText: canonical,
+            generation: yamlBufferRef.current.generation + 1,
+            dirty: false,
+            applied: true,
+            canonicalizationRequired: false,
+            canonicalizationAccepted: true,
+            issues: [],
+          });
+        }
+        // Only writers record steps, so the newest step is still the newest.
+        // An edit that left the store while the request ran is already off it.
+        const steps = undoStepsRef.current;
+        const undone = steps[steps.length - 1]!;
+        undoStepsRef.current = steps.slice(0, -1);
+        if (undone.created.size > 0) {
+          const remaining = new Map(pendingEditsRef.current);
+          for (const key of undone.created) {
+            remaining.delete(key);
+            supersedeObjectEdits(key);
+          }
+          setPendingEdits(remaining);
+        }
+        return assembly;
+      }),
+    [
+      adoptCompileResult,
+      assertEpoch,
+      enqueueWriter,
+      setPendingEdits,
+      setYamlBuffer,
+      supersedeObjectEdits,
+    ],
   );
 
   const captureCoordinator = useCallback((): SessionCoordinatorCapture => ({
@@ -1699,6 +1857,9 @@ export function useBuilderWorld() {
           }
           const assembled = await compileVisualDraft({ draft: reopened });
           assertEpoch(epoch);
+          // The reopen records no undo step. A save under a new name adopts
+          // a different draft, whose history starts empty.
+          if (reopened.target_ref !== visualDraftRef.current?.target_ref) forgetUndoHistory();
           adoptCompileResult(assembled);
           const canonical = assembled.compile_result.canonical_session_yaml ?? reopened.session_yaml;
           setYamlBuffer({
@@ -1730,7 +1891,15 @@ export function useBuilderWorld() {
           };
         }
       }, false),
-    [adoptCompileResult, assertEpoch, captureIsCurrent, enqueueWriter, refreshSessions, setYamlBuffer],
+    [
+      adoptCompileResult,
+      assertEpoch,
+      captureIsCurrent,
+      enqueueWriter,
+      forgetUndoHistory,
+      refreshSessions,
+      setYamlBuffer,
+    ],
   );
 
   const adoptCommittedRetarget = useCallback((
@@ -1742,6 +1911,7 @@ export function useBuilderWorld() {
     },
   ) => {
     beginEpoch();
+    forgetUndoHistory();
     adoptCompileResult(prepared);
     const canonical =
       prepared.compile_result.canonical_session_yaml ?? prepared.visual_draft.session_yaml;
@@ -1764,7 +1934,7 @@ export function useBuilderWorld() {
       display_name: saved.ref.split("/").pop()?.replace(/\.ya?ml$/, "") ?? "session",
       summary: null,
     });
-  }, [adoptCompileResult, beginEpoch, setYamlBuffer]);
+  }, [adoptCompileResult, beginEpoch, forgetUndoHistory, setYamlBuffer]);
 
   const deploySession = useCallback(
     (request: BuilderSessionDeployRequest): Promise<BuilderSessionDeployAccepted> =>
@@ -1780,8 +1950,16 @@ export function useBuilderWorld() {
     setVisualDraft(null);
     setYamlBuffer(EMPTY_YAML_BUFFER);
     dropPendingEdits();
+    forgetUndoHistory();
     resetCompileFacts();
-  }, [beginEpoch, dropPendingEdits, resetCompileFacts, setVisualDraft, setYamlBuffer]);
+  }, [
+    beginEpoch,
+    dropPendingEdits,
+    forgetUndoHistory,
+    resetCompileFacts,
+    setVisualDraft,
+    setYamlBuffer,
+  ]);
 
   // The backend's outcome for each pending edit, while it was said about the
   // accepted draft and the pending edits the page now holds.
@@ -1828,6 +2006,7 @@ export function useBuilderWorld() {
     applyPendingEdits,
     discardPendingEdit,
     removeListMember,
+    undo,
     prepareRetarget,
     captureCoordinator,
     captureIsCurrent,

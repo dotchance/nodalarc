@@ -536,6 +536,7 @@ export function BuilderView({
     applyPendingEdits,
     discardPendingEdit,
     removeListMember,
+    undo,
     prepareRetarget,
     captureCoordinator,
     captureIsCurrent,
@@ -556,7 +557,6 @@ export function BuilderView({
     openWorkspace,
     commitWorkspace,
     updateSession,
-    undo,
     removeRefSegment,
     removeConstellation,
     updateConstellation,
@@ -677,21 +677,16 @@ export function BuilderView({
   // effect then applies it.
   const seededTwin = useRef<Workspace | null>(null);
   const seedTwin = useCallback(
-    (draft: BuilderVisualDraftEnvelope, reason?: string) => {
+    (draft: BuilderVisualDraftEnvelope) => {
       const next = workspaceFromVisualDraft(draft);
       seededTwin.current = next;
-      if (reason) commitWorkspace(next, reason);
-      else openWorkspace(next);
+      openWorkspace(next);
     },
-    [commitWorkspace, openWorkspace],
+    [openWorkspace],
   );
-  const adoptAccepted = (
-    draft: BuilderVisualDraftEnvelope,
-    startedFrom: Workspace | null,
-    reason?: string,
-  ) => {
+  const adoptAccepted = (draft: BuilderVisualDraftEnvelope, startedFrom: Workspace | null) => {
     const twin = currentWorkspace();
-    if (twin === startedFrom || twin === seededTwin.current) seedTwin(draft, reason);
+    if (twin === startedFrom || twin === seededTwin.current) seedTwin(draft);
   };
   // A twin the backend refused is not sent again until the user changes it.
   const refusedTwin = useRef<Workspace | null>(null);
@@ -844,7 +839,7 @@ export function BuilderView({
   /** Inline wall text for one open editor window (null = not this window's). */
   const wallFor = (target: EditorTarget): string | null =>
     wall && targetKey(target) === wall.key ? (resolveError?.error ?? null) : null;
-  // The edit-to-compile loop. A twin that moved (OK, Apply, undo) is applied
+  // The edit-to-compile loop. A twin that moved (OK, Apply) is applied
   // as the next accepted revision, and the twin is re-seeded from the result
   // unless it moved again meanwhile. Open windows' unapplied edits are only
   // previewed: the backend compiles them over the draft and accepts nothing.
@@ -960,23 +955,6 @@ export function BuilderView({
     twinMatchesDraft,
   ]);
 
-  // Ctrl/Cmd+Z undoes the last workspace mutation unless
-  // the user is typing in a field (native input undo wins there). Gated on
-  // `active`: a hidden-but-mounted builder must never intercept a Ctrl+Z
-  // the live view's user intends for something else.
-  useEffect(() => {
-    if (!active) return;
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (!(event.ctrlKey || event.metaKey) || event.key.toLowerCase() !== "z") return;
-      const target = event.target as HTMLElement | null;
-      const tag = target?.tagName;
-      if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
-      event.preventDefault();
-      if (writer === null) undo();
-    };
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
-  }, [active, undo, writer]);
   // the object a create gesture just made — its editor focuses the
   // name once.
   const [freshId, setFreshId] = useState<string | null>(null);
@@ -1175,7 +1153,7 @@ export function BuilderView({
           });
         }
         if (next !== savedFrom) {
-          commitWorkspace(next, "save-committed-unverified");
+          commitWorkspace(next);
         }
         if (applyAll) dropAppliedBuffers(appliedBuffers);
         setSaveState({
@@ -1188,7 +1166,7 @@ export function BuilderView({
         return;
       }
       if (next !== savedFrom) {
-        commitWorkspace(next, applyAll ? "apply-all-save" : "save-rename");
+        commitWorkspace(next);
       }
       if (applyAll) {
         dropAppliedBuffers(appliedBuffers);
@@ -1319,7 +1297,7 @@ export function BuilderView({
       }
       const result = await runVisualCommand(command);
       if (result.created_edits.length === 0) {
-        adoptAccepted(result.draft, startedFrom, `backend visual command: ${result.operation}`);
+        adoptAccepted(result.draft, startedFrom);
       }
       return result;
     } finally {
@@ -1408,6 +1386,47 @@ export function BuilderView({
     setRemovalFailure((failure) => (failure?.key === key ? null : failure));
     closeWindow(key);
   };
+
+  /** Undo the newest accepted change, and re-seed the twin from the answer.
+   *  While the twin holds an edit the backend refused, undo discards that
+   *  edit instead: the twin returns to the accepted draft. A refusal changes
+   *  nothing and is shown. */
+  const undoLastChange = () => {
+    setLibraryError(null);
+    if (visualDraft && writer === null && !twinMatchesDraft && workspace === refusedTwin.current) {
+      seedTwin(visualDraft);
+      return;
+    }
+    const undoOnce = async () => {
+      const unsettled = unsettledReason();
+      if (unsettled !== null) throw new Error(unsettled);
+      const startedFrom = currentWorkspace();
+      const assembly = await undo();
+      if (assembly === null) return;
+      adoptAccepted(assembly.visual_draft, startedFrom);
+      setSaveState({ kind: "idle" });
+    };
+    undoOnce().catch((cause) =>
+      setLibraryError(cause instanceof Error ? cause.message : String(cause)),
+    );
+  };
+  // Ctrl/Cmd+Z undoes the newest accepted change unless the user is typing in
+  // a field (native input undo wins there). Gated on `active`: a
+  // hidden-but-mounted builder must never intercept a Ctrl+Z the live view's
+  // user intends for something else.
+  useEffect(() => {
+    if (!active) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (!(event.ctrlKey || event.metaKey) || event.key.toLowerCase() !== "z") return;
+      const target = event.target as HTMLElement | null;
+      const tag = target?.tagName;
+      if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
+      event.preventDefault();
+      undoLastChange();
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [active, undoLastChange]);
 
   const discardCatalogDraft = useCallback(() => {
     setCatalogDraftDirty(false);
@@ -2060,7 +2079,7 @@ export function BuilderView({
                   ...(targetLeafRef ? { target_leaf_ref: targetLeafRef } : {}),
                 });
                 if (result.applied) {
-                  adoptAccepted(result.draft, startedFrom, "customize-chain");
+                  adoptAccepted(result.draft, startedFrom);
                   setSaveState({ kind: "idle" });
                 }
                 return result;

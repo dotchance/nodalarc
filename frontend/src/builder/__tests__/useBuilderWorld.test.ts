@@ -6,6 +6,7 @@ import type {
   BuilderCompileResult,
   BuilderIssue,
   BuilderPendingEditOutcome,
+  BuilderVisualDraftAcceptStateRequest,
   BuilderVisualDraftAssemblyResult,
   BuilderVisualDraftCommandResult,
   BuilderVisualDraftEnvelope,
@@ -172,6 +173,30 @@ function ruleAnswer(maxRangeKm: number): BuilderVisualObjectEditResult {
       },
     },
     issues: [],
+  };
+}
+
+/** The backend's description of `working` at `address`, which no card states. */
+function described(
+  address: BuilderVisualObjectEditResult["address"],
+  working: BuilderVisualObjectEditResult["working"],
+  issues: ReadonlyArray<BuilderIssue> = [],
+): BuilderVisualObjectEditResult {
+  return {
+    address,
+    working,
+    widget: null,
+    control_tree: {
+      projection_revision: 4,
+      root: {
+        control_id: "object",
+        json_pointer: "",
+        label: "Object",
+        required: true,
+        present: true,
+      },
+    },
+    issues,
   };
 }
 
@@ -1176,30 +1201,6 @@ describe("commands and the pending edits", () => {
     };
   }
 
-  /** The backend's description of `working` at `address`, which no card states. */
-  function described(
-    address: BuilderVisualObjectEditResult["address"],
-    working: BuilderVisualObjectEditResult["working"],
-    issues: ReadonlyArray<BuilderIssue> = [],
-  ): BuilderVisualObjectEditResult {
-    return {
-      address,
-      working,
-      widget: null,
-      control_tree: {
-        projection_revision: 4,
-        root: {
-          control_id: "object",
-          json_pointer: "",
-          label: "Object",
-          required: true,
-          present: true,
-        },
-      },
-      issues,
-    };
-  }
-
   /** Hold an edit of `address`, which the backend answers with `answer`. */
   async function holdEdit(
     hook: { current: ReturnType<typeof useBuilderWorld> },
@@ -1518,6 +1519,697 @@ describe("commands and the pending edits", () => {
     await expect(command).resolves.toMatchObject({ operation: "rederive_link" });
     expect(result.current.visualDraft).toBe(rederived);
     expect(result.current.pendingEdits.get(RULE_KEY)).toBe(changed.get(RULE_KEY));
+  });
+});
+
+describe("undo history", () => {
+  let fetchMock: ReturnType<typeof vi.fn>;
+
+  beforeEach(() => {
+    fetchMock = vi.fn((url: string) => {
+      if (url.includes("/builder/catalog/list")) return Promise.resolve(sessionsResponse);
+      throw new Error(`unexpected request ${url}`);
+    });
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+  });
+
+  const PROPOSAL = {
+    ref: "user:constellations/coordinated/leo.yaml",
+    document: { constellation: { id: "leo" } },
+    origin: "generated",
+  } as const;
+
+  /** The opened revision: its session holds the link rule, beside one proposal. */
+  function openedDraft(): BuilderVisualDraftEnvelope {
+    return { ...linkDraft(4), catalog_documents: [PROPOSAL] };
+  }
+
+  /** The accepted state of the opened revision, as an undo sends it back. */
+  const OPENED_STATE = { session: linkDraft(4).applied_session, catalog_documents: [PROPOSAL] };
+
+  /** A fully accepted revision whose session is named `name`, with the ids the
+   *  allocation history holds by then. */
+  function acceptedRevision(
+    revision: number,
+    name: string,
+    reserved: ReadonlyArray<string> = [],
+  ): BuilderVisualDraftEnvelope {
+    return {
+      ...draft(revision),
+      reserved_authoring_ids: reserved,
+      session_yaml: `session:\n  name: ${name}\n`,
+      applied_session: { session: { name } },
+    };
+  }
+
+  /** The revision every accepted change below makes from the opened one. */
+  const CHANGED = acceptedRevision(5, "changed", ["space-1"]);
+
+  /** Answer each request with the answer of the first route its path names. */
+  function answerRoutes(routes: Readonly<Record<string, unknown>>): void {
+    fetchMock.mockImplementation((url: string) => {
+      const route = Object.keys(routes).find((path) => url.includes(path));
+      if (route === undefined) throw new Error(`unexpected request ${url}`);
+      return Promise.resolve(response(routes[route]));
+    });
+  }
+
+  /** The backend's answer to an undo: the stored state accepted as the next
+   *  revision of the draft the request carried. */
+  function acceptedStoredState(init: RequestInit): BuilderVisualDraftAssemblyResult {
+    const sent = JSON.parse(String(init.body)) as BuilderVisualDraftAcceptStateRequest;
+    const revision = sent.draft.draft_revision + 1;
+    return assembly({
+      ...sent.draft,
+      draft_revision: revision,
+      applied_revision: revision,
+      session_yaml: `session:\n  name: undone-to-${revision}\n`,
+      applied_session: sent.state.session,
+      catalog_documents: sent.state.catalog_documents ?? [],
+    });
+  }
+
+  /** Answer every undo with the stored state accepted as the next revision. */
+  function answerUndos(): void {
+    fetchMock.mockImplementation((url: string, init: RequestInit) => {
+      if (url.includes("/builder/draft/accept-state")) {
+        return Promise.resolve(response(acceptedStoredState(init)));
+      }
+      throw new Error(`unexpected request ${url}`);
+    });
+  }
+
+  type Hook = { current: ReturnType<typeof useBuilderWorld> };
+
+  /** Open the opened revision as the page does. */
+  async function openTheSession(): Promise<Hook> {
+    const { result } = renderHook(() => useBuilderWorld());
+    await act(async () => undefined);
+    await openAsThePageDoes(result, fetchMock, openedDraft());
+    return result;
+  }
+
+  /** Make the revision CHANGED with a command. */
+  async function changeByCommand(hook: Hook): Promise<void> {
+    answerRoutes({
+      "/builder/draft/command": commandAnswer(CHANGED),
+      "/builder/draft/compile": assembly(CHANGED),
+    });
+    await act(async () => {
+      await hook.current.runVisualCommand({
+        operation: "add_generated_space",
+        phasing_mode: "walker_delta",
+      });
+    });
+  }
+
+  /** Undo refuses: the history holds no step. */
+  async function expectNothingToUndo(hook: Hook): Promise<void> {
+    await act(async () => {
+      await expect(hook.current.undo()).rejects.toThrow("there is no accepted change to undo");
+    });
+  }
+
+  /** Each change the page accepts, each making CHANGED from the opened revision. */
+  const ACCEPTED_CHANGES: ReadonlyArray<{ change: string; make: (hook: Hook) => Promise<unknown> }> =
+    [
+      { change: "a command", make: changeByCommand },
+      {
+        change: "a customization",
+        make: (hook) => {
+          answerRoutes({
+            "/builder/draft/customize-chain": {
+              applied: true,
+              draft: CHANGED,
+              root_source_ref: null,
+              root_target_ref: null,
+              forked_chain: [],
+              issues: [],
+            },
+            "/builder/draft/compile": assembly(CHANGED),
+          });
+          return hook.current.customizeChain({
+            segment_id: "space-1",
+            leaf_ref: "nodalarc:nodes/space/relay.yaml",
+          });
+        },
+      },
+      {
+        change: "a session pane batch",
+        make: (hook) => {
+          answerRoutes({ "/builder/draft/control-mutate": assembly(CHANGED) });
+          return hook.current.mutateControls([
+            { operation: "set_scalar", control_id: "session-name", value: "changed" },
+          ]);
+        },
+      },
+      {
+        change: "a YAML apply",
+        make: (hook) => {
+          hook.current.editYamlBuffer(CHANGED.session_yaml);
+          answerRoutes({
+            "/builder/draft/apply-yaml": {
+              draft: CHANGED,
+              buffer_generation: 1,
+              yaml_text: CHANGED.session_yaml,
+              applied: true,
+              canonicalization_required: false,
+              issues: [],
+            },
+            "/builder/draft/compile": assembly(CHANGED),
+          });
+          return hook.current.applyYamlBuffer();
+        },
+      },
+      {
+        change: "a segment, ground or session window apply",
+        make: (hook) => {
+          answerRoutes({ "/builder/draft/apply-workspace": assembly(CHANGED) });
+          return hook.current.applyWorkspace(CHANGED.authoring_workspace!);
+        },
+      },
+      {
+        change: "a pending edit apply",
+        make: async (hook) => {
+          answerRoutes({ "/builder/draft/object-edit": ruleAnswer(12345) });
+          await hook.current.editPendingObject(RULE_ADDRESS, ruleCard(12345));
+          answerRoutes({
+            "/builder/draft/apply-edits": {
+              applied: true,
+              outcomes: [{ status: "applied", issues: [] }],
+              assembly: assembly(CHANGED),
+            },
+          });
+          return hook.current.applyPendingEdits([RULE_KEY]);
+        },
+      },
+      {
+        change: "a removal",
+        make: (hook) => {
+          answerRoutes({
+            "/builder/draft/apply-edits": {
+              applied: true,
+              outcomes: [{ status: "applied", issues: [] }],
+              assembly: assembly(CHANGED),
+            },
+          });
+          return hook.current.removeListMember("/link_rules", "leo_isl");
+        },
+      },
+    ];
+
+  it.each(ACCEPTED_CHANGES)(
+    "re-accepts the state $change replaced as the next revision, as one step",
+    async ({ make }) => {
+      const result = await openTheSession();
+      await act(async () => {
+        await make(result);
+      });
+      expect(result.current.visualDraft).toBe(CHANGED);
+      answerUndos();
+
+      await act(async () => {
+        await result.current.undo();
+      });
+
+      // The request carries the draft as it now stands, so the allocation
+      // history keeps the id the change reserved.
+      expect(requestsTo(fetchMock, "/builder/draft/accept-state")).toEqual([
+        { draft: CHANGED, expected_draft_revision: 5, state: OPENED_STATE },
+      ]);
+      expect(result.current.visualDraft?.draft_revision).toBe(6);
+      expect(result.current.visualDraft?.reserved_authoring_ids).toEqual(["space-1"]);
+      expect(result.current.visualDraft?.applied_session).toEqual(OPENED_STATE.session);
+      expect(result.current.yamlBuffer.text).toBe("session:\n  name: undone-to-6\n");
+      expect(result.current.yamlBuffer.applied).toBe(true);
+      await expectNothingToUndo(result);
+      expect(requestsTo(fetchMock, "/builder/draft/accept-state")).toHaveLength(1);
+    },
+  );
+
+  it("records no step for card edits, previews and compiles", async () => {
+    const result = await openTheSession();
+    answerRoutes({
+      "/builder/draft/object-edit": ruleAnswer(12345),
+      "/builder/compile": {
+        ...assembly(openedDraft(), "preview").compile_result,
+        pending_edit_outcomes: [{ status: "applied", issues: [] }],
+      },
+      "/builder/draft/compile": assembly(openedDraft(), "preview"),
+    });
+    await act(async () => {
+      await result.current.editPendingObject(RULE_ADDRESS, ruleCard(12345));
+      await result.current.previewPendingEdits();
+      await result.current.compilePreview(newWorkspace("previewed"), () => true);
+    });
+
+    await expectNothingToUndo(result);
+    expect(requestsTo(fetchMock, "/builder/draft/accept-state")).toEqual([]);
+    expect(result.current.pendingEdits.size).toBe(1);
+  });
+
+  it("records no step for the reopen after a save in place, and keeps the history", async () => {
+    const result = await openTheSession();
+    await changeByCommand(result);
+    const reopened = { ...acceptedRevision(0, "changed"), catalog_documents: [] };
+    answerRoutes({
+      "/builder/session/save": {
+        session: {
+          ref: reopened.target_ref,
+          revision: "saved-revision",
+          canonical_yaml: reopened.session_yaml,
+        },
+        digests: { document: "saved-document", dependency: "saved-dependency" },
+        dependency_closure: { entries: [], file_count: 0, total_bytes: 0, closure_digest: "c" },
+        deploy_verdict: { operation: "deploy", allowed: true, blockers: [] },
+        issues: [],
+      },
+      "/builder/catalog/list": {
+        generation: "catalog-generation",
+        items: [],
+        next_page_token: null,
+      },
+      "/builder/draft/open": reopened,
+      "/builder/draft/compile": assembly(reopened),
+    });
+    await act(async () => {
+      const saved = await result.current.saveSession(
+        assembly(CHANGED).save_request,
+        result.current.captureCoordinator(),
+      );
+      expect(saved.reopenedDraft).toBe(reopened);
+    });
+    answerUndos();
+
+    await act(async () => {
+      await result.current.undo();
+    });
+
+    // The step the command recorded before the save is undone.
+    expect(requestsTo(fetchMock, "/builder/draft/accept-state")).toEqual([
+      { draft: reopened, expected_draft_revision: 0, state: OPENED_STATE },
+    ]);
+    await expectNothingToUndo(result);
+  });
+
+  /** Each gesture that adopts a different draft. */
+  const DIFFERENT_DRAFTS: ReadonlyArray<{ gesture: string; adopt: (hook: Hook) => Promise<unknown> }> =
+    [
+      {
+        gesture: "opening a session",
+        adopt: (hook) => openAsThePageDoes(hook, fetchMock, acceptedRevision(0, "other")),
+      },
+      {
+        gesture: "creating a session",
+        adopt: async (hook) => {
+          const created = acceptedRevision(0, "untitled");
+          answerRoutes({
+            "/builder/draft/new": created,
+            "/builder/draft/compile": assembly(created),
+          });
+          await act(async () => {
+            await hook.current.createDraft({});
+          });
+        },
+      },
+      {
+        gesture: "a save under a new name",
+        adopt: async (hook) => {
+          const renamed = {
+            ...acceptedRevision(0, "renamed"),
+            target_ref: "user:sessions/renamed.yaml",
+          };
+          answerRoutes({
+            "/builder/session/save": {
+              session: {
+                ref: renamed.target_ref,
+                revision: "saved-revision",
+                canonical_yaml: renamed.session_yaml,
+              },
+              digests: { document: "saved-document", dependency: "saved-dependency" },
+              dependency_closure: { entries: [], file_count: 0, total_bytes: 0, closure_digest: "c" },
+              deploy_verdict: { operation: "deploy", allowed: true, blockers: [] },
+              issues: [],
+            },
+            "/builder/catalog/list": {
+              generation: "catalog-generation",
+              items: [],
+              next_page_token: null,
+            },
+            "/builder/draft/open": renamed,
+            "/builder/draft/compile": assembly(renamed),
+          });
+          await act(async () => {
+            await hook.current.saveSession(
+              assembly(renamed).save_request,
+              hook.current.captureCoordinator(),
+            );
+          });
+          expect(hook.current.visualDraft).toBe(renamed);
+        },
+      },
+      {
+        gesture: "a save under a new name whose reopen failed",
+        adopt: async (hook) => {
+          const renamed = {
+            ...acceptedRevision(6, "renamed"),
+            target_ref: "user:sessions/renamed.yaml",
+          };
+          act(() => {
+            hook.current.adoptCommittedRetarget(assembly(renamed), { ref: renamed.target_ref });
+          });
+        },
+      },
+    ];
+
+  it.each(DIFFERENT_DRAFTS)("starts an empty history on $gesture", async ({ adopt }) => {
+    const result = await openTheSession();
+    await changeByCommand(result);
+
+    await adopt(result);
+
+    answerUndos();
+    await expectNothingToUndo(result);
+    expect(requestsTo(fetchMock, "/builder/draft/accept-state")).toEqual([]);
+  });
+
+  it("holds the newest 100 steps", async () => {
+    const { result } = renderHook(() => useBuilderWorld());
+    await act(async () => undefined);
+    await openAsThePageDoes(result, fetchMock, acceptedRevision(0, "step-0"));
+    let revision = 0;
+    fetchMock.mockImplementation((url: string, init: RequestInit) => {
+      if (url.includes("/builder/draft/control-mutate")) {
+        revision += 1;
+        return Promise.resolve(response(assembly(acceptedRevision(revision, `step-${revision}`))));
+      }
+      if (url.includes("/builder/draft/accept-state")) {
+        return Promise.resolve(response(acceptedStoredState(init)));
+      }
+      throw new Error(`unexpected request ${url}`);
+    });
+    for (let change = 1; change <= 101; change += 1) {
+      await act(async () => {
+        await result.current.mutateControls([
+          { operation: "set_scalar", control_id: "session-name", value: `step-${change}` },
+        ]);
+      });
+    }
+
+    for (let step = 0; step < 100; step += 1) {
+      await act(async () => {
+        await result.current.undo();
+      });
+    }
+
+    const undone = requestsTo(fetchMock, "/builder/draft/accept-state") as Array<{
+      state: { session: unknown };
+    }>;
+    // Newest first, back to the state the second change replaced; the step
+    // of the first change went when the 101st was recorded.
+    expect(undone.map((sent) => sent.state.session)).toEqual(
+      Array.from({ length: 100 }, (_, index) => ({ session: { name: `step-${100 - index}` } })),
+    );
+    await expectNothingToUndo(result);
+  });
+
+  it("returns past a change left not fully accepted to the state before it", async () => {
+    const result = await openTheSession();
+    // A window apply the backend could not fully accept: the session stays the
+    // opened one, and the proposals are the window's.
+    const unaccepted: BuilderVisualDraftEnvelope = {
+      ...openedDraft(),
+      draft_revision: 5,
+      projection_status: "pending_authoring",
+      authoring_workspace: newWorkspace("unaccepted"),
+      catalog_documents: [{ ...PROPOSAL, document: { constellation: { id: "unaccepted" } } }],
+    };
+    answerRoutes({ "/builder/draft/apply-workspace": assembly(unaccepted) });
+    await act(async () => {
+      await result.current.applyWorkspace(newWorkspace("unaccepted"));
+    });
+    await expectNothingToUndo(result);
+    const completed = acceptedRevision(6, "completed");
+    answerRoutes({ "/builder/draft/apply-workspace": assembly(completed) });
+    await act(async () => {
+      await result.current.applyWorkspace(completed.authoring_workspace!);
+    });
+    answerUndos();
+
+    await act(async () => {
+      await result.current.undo();
+    });
+
+    expect(requestsTo(fetchMock, "/builder/draft/accept-state")).toEqual([
+      { draft: completed, expected_draft_revision: 6, state: OPENED_STATE },
+    ]);
+    await expectNothingToUndo(result);
+  });
+
+  it("returns past a refused YAML apply to the state the accepted one replaced", async () => {
+    const result = await openTheSession();
+    const refused: BuilderVisualDraftEnvelope = {
+      ...openedDraft(),
+      projection_status: "pending_authoring",
+      session_yaml: "session: [\n",
+    };
+    act(() => {
+      result.current.editYamlBuffer("session: [\n");
+    });
+    answerRoutes({
+      "/builder/draft/apply-yaml": {
+        draft: refused,
+        buffer_generation: 1,
+        yaml_text: "session: [\n",
+        applied: false,
+        canonicalization_required: false,
+        issues: [],
+      },
+    });
+    await act(async () => {
+      await result.current.applyYamlBuffer();
+    });
+    act(() => {
+      result.current.editYamlBuffer(CHANGED.session_yaml);
+    });
+    answerRoutes({
+      "/builder/draft/apply-yaml": {
+        draft: CHANGED,
+        buffer_generation: 2,
+        yaml_text: CHANGED.session_yaml,
+        applied: true,
+        canonicalization_required: false,
+        issues: [],
+      },
+      "/builder/draft/compile": assembly(CHANGED),
+    });
+    await act(async () => {
+      await result.current.applyYamlBuffer();
+    });
+    answerUndos();
+
+    await act(async () => {
+      await result.current.undo();
+    });
+
+    expect(requestsTo(fetchMock, "/builder/draft/accept-state")).toEqual([
+      { draft: CHANGED, expected_draft_revision: 5, state: OPENED_STATE },
+    ]);
+    await expectNothingToUndo(result);
+  });
+
+  it("refuses while the YAML buffer is unapplied", async () => {
+    const result = await openTheSession();
+    await changeByCommand(result);
+    act(() => {
+      result.current.editYamlBuffer("session:\n  name: typed\n");
+    });
+    answerUndos();
+
+    await act(async () => {
+      await expect(result.current.undo()).rejects.toThrow(
+        "apply or canonicalize the YAML buffer before undoing",
+      );
+    });
+
+    expect(requestsTo(fetchMock, "/builder/draft/accept-state")).toEqual([]);
+    expect(result.current.visualDraft).toBe(CHANGED);
+  });
+
+  it("changes nothing when the backend refuses, gives its reason and keeps the step", async () => {
+    const result = await openTheSession();
+    await changeByCommand(result);
+    const shownAssembly = result.current.assemblyResult;
+    const buffer = result.current.yamlBuffer;
+    fetchMock.mockImplementation((url: string) => {
+      if (url.includes("/builder/draft/accept-state")) {
+        return Promise.resolve({
+          ok: false,
+          status: 422,
+          json: () =>
+            Promise.resolve({
+              detail: { message: "The stored state is not a valid session: segments missing" },
+            }),
+        });
+      }
+      throw new Error(`unexpected request ${url}`);
+    });
+
+    await act(async () => {
+      await expect(result.current.undo()).rejects.toThrow(
+        "The stored state is not a valid session: segments missing",
+      );
+    });
+
+    expect(result.current.visualDraft).toBe(CHANGED);
+    expect(result.current.assemblyResult).toBe(shownAssembly);
+    expect(result.current.yamlBuffer).toBe(buffer);
+    answerUndos();
+    await act(async () => {
+      await result.current.undo();
+    });
+    expect(
+      (requestsTo(fetchMock, "/builder/draft/accept-state") as Array<{ state: unknown }>).map(
+        (sent) => sent.state,
+      ),
+    ).toEqual([OPENED_STATE, OPENED_STATE]);
+    expect(result.current.visualDraft?.applied_session).toEqual(OPENED_STATE.session);
+  });
+
+  it("keeps the pending edits the undone change did not create", async () => {
+    const result = await openTheSession();
+    answerRoutes({ "/builder/draft/object-edit": ruleAnswer(12345) });
+    await act(async () => {
+      await result.current.editPendingObject(RULE_ADDRESS, ruleCard(12345));
+    });
+    const held = result.current.pendingEdits.get(RULE_KEY);
+    await changeByCommand(result);
+    answerUndos();
+
+    await act(async () => {
+      await result.current.undo();
+    });
+
+    expect(result.current.visualDraft?.draft_revision).toBe(6);
+    expect([...result.current.pendingEdits.keys()]).toEqual([RULE_KEY]);
+    expect(result.current.pendingEdits.get(RULE_KEY)).toBe(held);
+  });
+
+  /** A new routing domain the add-domain command leaves incomplete. */
+  const CREATED_DOMAIN = {
+    kind: "content",
+    address: domainAddress("domain-1"),
+    base: null,
+    working: { id: "domain-1", protocol: "isis", area_assignment: { strategy: "flat" } },
+  } as const;
+
+  /** Run add-domain, which creates the incomplete domain and accepts nothing. */
+  async function addIncompleteDomain(hook: Hook): Promise<void> {
+    const accepted = hook.current.visualDraft!;
+    answerRoutes({
+      "/builder/draft/command": commandAnswer(accepted, {
+        operation: "add_routing_domain",
+        affected_kind: "routing_domain",
+        affected_id: "domain-1",
+        created_edits: [CREATED_DOMAIN],
+      }),
+      "/builder/draft/object-edit": described(
+        CREATED_DOMAIN.address,
+        CREATED_DOMAIN.working,
+        [workingIssue("Field required", "/selectors")],
+      ),
+    });
+    await act(async () => {
+      await hook.current.runVisualCommand({ operation: "add_routing_domain" });
+    });
+  }
+
+  it("drops the edits the undone command created, and keeps the others", async () => {
+    const result = await openTheSession();
+    answerRoutes({ "/builder/draft/object-edit": ruleAnswer(12345) });
+    await act(async () => {
+      await result.current.editPendingObject(RULE_ADDRESS, ruleCard(12345));
+    });
+    const held = result.current.pendingEdits.get(RULE_KEY);
+    const accepted = result.current.visualDraft;
+    await addIncompleteDomain(result);
+    expect(result.current.pendingEdits.has(pendingEditKey(CREATED_DOMAIN.address))).toBe(true);
+    fetchMock.mockClear();
+
+    await act(async () => {
+      await expect(result.current.undo()).resolves.toBeNull();
+    });
+
+    // The command accepted nothing, so its undo sends nothing.
+    expect(fetchMock.mock.calls).toEqual([]);
+    expect(result.current.visualDraft).toBe(accepted);
+    expect([...result.current.pendingEdits.keys()]).toEqual([RULE_KEY]);
+    expect(result.current.pendingEdits.get(RULE_KEY)).toBe(held);
+    await expectNothingToUndo(result);
+  });
+
+  it("drops a created edit the user changed since", async () => {
+    const result = await openTheSession();
+    await addIncompleteDomain(result);
+    const working = { ...CREATED_DOMAIN.working, selectors: [{ segment: "leo" }] };
+    answerRoutes({
+      "/builder/draft/object-edit": described(CREATED_DOMAIN.address, working),
+    });
+    await act(async () => {
+      await result.current.editPendingObject(CREATED_DOMAIN.address, {
+        kind: "controls",
+        commands: [{ operation: "set_scalar", control_id: "selector", value: "leo" }],
+      });
+    });
+
+    await act(async () => {
+      await result.current.undo();
+    });
+
+    expect(result.current.pendingEdits.size).toBe(0);
+  });
+
+  it("keeps an edit begun at an address after the edit a command created there left the store", async () => {
+    const result = await openTheSession();
+    const accepted = result.current.visualDraft!;
+    const incomplete: Readonly<Record<string, JsonValue>> = {
+      ...ACCEPTED_RULE,
+      endpoints: [
+        { select: { segment: "leo" }, terminal: { all: [{ role: "isl" }, { medium: "optical" }] } },
+        { select: { segment: "geo" } },
+      ],
+    };
+    answerRoutes({
+      "/builder/draft/command": commandAnswer(accepted, {
+        operation: "rederive_link",
+        affected_kind: "link",
+        affected_id: "leo_isl",
+        created_edits: [
+          { kind: "content", address: RULE_ADDRESS, base: ACCEPTED_RULE, working: incomplete },
+        ],
+      }),
+      "/builder/draft/object-edit": described(RULE_ADDRESS, incomplete, [
+        workingIssue("Field required", "/endpoints/1/terminal"),
+      ]),
+    });
+    await act(async () => {
+      await result.current.runVisualCommand({
+        operation: "rederive_link",
+        rule_id: "leo_isl",
+        side: "a",
+        segment_id: "geo",
+      });
+    });
+    act(() => result.current.discardPendingEdit(RULE_ADDRESS));
+    answerRoutes({ "/builder/draft/object-edit": ruleAnswer(500) });
+    await act(async () => {
+      await result.current.editPendingObject(RULE_ADDRESS, ruleCard(500));
+    });
+    const begun = result.current.pendingEdits.get(RULE_KEY);
+
+    await expectNothingToUndo(result);
+
+    expect(result.current.pendingEdits.get(RULE_KEY)).toBe(begun);
   });
 });
 

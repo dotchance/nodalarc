@@ -1,6 +1,6 @@
 // Copyright 2024-2026 .chance (dotchance)
 // Licensed under the Apache License, Version 2.0. See LICENSE file.
-/** Workspace state: the applied session drafts plus bounded undo history.
+/** Workspace state: the applied session drafts.
  *
  *  The edit→compile loop lives in BuilderView, which submits the
  *  workspace with any open windows' working copies overlaid — the canvas
@@ -10,7 +10,7 @@
  *  expansion, ever.
  */
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useRef, useState } from "react";
 import {
   type DraftConstellation,
   type DraftGroundSet,
@@ -215,14 +215,12 @@ export function workspaceForSave(
   const sessionName = opts.nameTouched ? opts.dialogName : base.session_name;
   return base.session_name === sessionName ? base : { ...base, session_name: sessionName };
 }
-const HISTORY_LIMIT = 100;
 
 export function useWorkspace() {
   const [workspace, setWorkspaceState] = useState<Workspace | null>(null);
   // The mutation path updates workspaceRef synchronously so a live-workspace
   // read never lags the commit for either the
-  // value and updater forms — then set React state. Undo history observes the
-  // state change.
+  // value and updater forms — then set React state.
   const workspaceRef = useRef<Workspace | null>(null);
   const commit = useCallback(
     (update: Workspace | null | ((prev: Workspace | null) => Workspace | null)) => {
@@ -236,27 +234,6 @@ export function useWorkspace() {
     [],
   );
 
-  // Every mutation lands in bounded undo history.
-  const historyRef = useRef<(Workspace | null)[]>([]);
-  const skipHistoryRef = useRef(false);
-  const previousRef = useRef<Workspace | null>(null);
-  useEffect(() => {
-    if (skipHistoryRef.current) {
-      skipHistoryRef.current = false;
-    } else if (previousRef.current !== workspace) {
-      historyRef.current.push(previousRef.current);
-      if (historyRef.current.length > HISTORY_LIMIT) historyRef.current.shift();
-    }
-    previousRef.current = workspace;
-  }, [workspace]);
-
-  const undo = useCallback(() => {
-    if (historyRef.current.length === 0) return;
-    const past = historyRef.current.pop() as Workspace | null;
-    skipHistoryRef.current = true;
-    commit(past);
-  }, []);
-
   /** Adopt a ready-made workspace returned by import or a backend operation. */
   const openWorkspace = useCallback((imported: Workspace) => {
     commit(imported);
@@ -264,9 +241,9 @@ export function useWorkspace() {
 
   /** Atomic adoption of a next workspace the caller composed from the
    *  current one (apply-all-and-save, save-time rename). Rides the single
-   *  mutation path: exactly one undo entry. Import
-   *  adoption stays `openWorkspace`; apply-all must not abuse it. */
-  const commitWorkspace = useCallback((next: Workspace, _reason: string) => {
+   *  mutation path. Import adoption stays `openWorkspace`; apply-all must not
+   *  abuse it. */
+  const commitWorkspace = useCallback((next: Workspace) => {
     commit(next);
   }, []);
 
@@ -449,7 +426,6 @@ export function useWorkspace() {
     openWorkspace,
     commitWorkspace,
     updateSession,
-    undo,
     close,
     removeRefSegment,
     removeConstellation,

@@ -19,7 +19,6 @@ import {
   cleanup,
   fireEvent,
   render,
-  renderHook,
   screen,
   waitFor,
 } from "@testing-library/react";
@@ -66,7 +65,6 @@ import {
   bufferAppliedChanged,
   overlayBuffers,
   staleBufferKeys,
-  useWorkspace,
   workspaceForSave,
 } from "../useWorkspace";
 import { tinyWorld } from "./fixtures/tinyWorld";
@@ -1414,24 +1412,6 @@ describe("deploy gate: saved backend verdict and exact digest truth", () => {
     });
     expect(gate.ok).toBe(false);
     expect(gate.reason).toMatch(/behind your edits/);
-  });
-});
-
-describe("commitWorkspace: one atomic adoption, one undo entry", () => {
-  it("undo after commitWorkspace returns exactly to the pre-commit state", () => {
-    const { result } = renderHook(() => useWorkspace());
-    act(() => result.current.openWorkspace(newWorkspace("alpha")));
-    const before = result.current.workspace;
-    expect(before?.session_name).toBe("alpha");
-    act(() =>
-      result.current.commitWorkspace(
-        { ...before!, session_name: "beta" },
-        "test-adoption",
-      ),
-    );
-    expect(result.current.workspace?.session_name).toBe("beta");
-    act(() => result.current.undo());
-    expect(result.current.workspace?.session_name).toBe("alpha");
   });
 });
 

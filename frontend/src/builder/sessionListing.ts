@@ -21,6 +21,7 @@ import type {
   BuilderVisualSessionListing,
   RoutingProtocol,
 } from "./generated/builderApi";
+import { pendingEditKey } from "./useBuilderWorld";
 
 /** One link rule as the page lists it. */
 export interface ListedLinkRule {
@@ -83,12 +84,6 @@ const LINK_RULES = "/link_rules";
 const ROUTING_DOMAINS = "/routing/domains";
 const ROUTING_BOUNDARIES = "/routing/boundaries";
 
-/** The key a pending answer is found under: its list and member id, or the
- *  pointer of a list edited as a whole. */
-function answerKey(answer: BuilderVisualObjectEditResult): string {
-  const address = answer.address;
-  return address.kind === "member" ? `${address.list_pointer}/${address.id}` : address.pointer;
-}
 
 function linkRuleCard(answer: BuilderVisualObjectEditResult): BuilderVisualLinkRule | null {
   const widget = answer.widget;
@@ -195,7 +190,7 @@ export function listSessionObjects(
 ): ListedSessionObjects {
   const pending = new Map<string, BuilderVisualObjectEditResult>();
   for (const answer of pendingAnswers) {
-    const key = answerKey(answer);
+    const key = pendingEditKey(answer.address);
     if (pending.has(key)) throw new Error(`two pending edits address ${key}`);
     pending.set(key, answer);
   }

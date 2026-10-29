@@ -67,10 +67,13 @@ export interface CardValueEdits<T> {
 /** A card's edits of one object. Each change applies to the value the card
  *  last asked for, so changes made before an answer arrives build on each
  *  other. `send` resolves true when its value was the latest the object was
- *  sent. A change still waiting when the card closes is not sent. */
+ *  sent. A change still waiting when the card closes is not sent. While a
+ *  change is being typed or checked, the card holds a check of the object
+ *  through `hold`, so the window's Apply and Remove wait for it. */
 export function useCardValueEdits<T extends object>(
   answered: T,
   send: (value: T) => Promise<boolean>,
+  hold: () => () => void,
 ): CardValueEdits<T> {
   const askedRef = useRef<T | null>(null);
   const [asked, setAsked] = useState<T | null>(null);
@@ -85,6 +88,10 @@ export function useCardValueEdits<T extends object>(
       timer.current = null;
     };
   }, []);
+  const checking = asked !== null;
+  const holdRef = useRef(hold);
+  holdRef.current = hold;
+  useEffect(() => (checking ? holdRef.current() : undefined), [checking]);
   /** The answer settled the latest change; show what it states unless a typed
    *  change is still waiting. */
   const settle = () => {
@@ -119,7 +126,7 @@ export function useCardValueEdits<T extends object>(
     if (typed) timer.current = window.setTimeout(flush, TYPING_PAUSE_MS);
     else flush();
   };
-  return { shown: asked ?? answered, change, checking: asked !== null, error };
+  return { shown: asked ?? answered, change, checking, error };
 }
 
 /** The field editor's tree over an object's working JSON, while it is known. */
@@ -240,6 +247,7 @@ export function PendingEditApplyRow({
   pending,
   outcome,
   blocked,
+  checking,
   onApply,
   onReapply,
   onDiscard,
@@ -253,6 +261,10 @@ export function PendingEditApplyRow({
   /** Why the edit cannot be applied now, while Apply, OK and Re-apply wait;
    *  null when it can. */
   blocked: string | null;
+  /** Whether a change of the object is still being typed or checked. Apply,
+   *  OK and Re-apply wait for its answer, so they never apply an older edit
+   *  or close the window over a change still on its way. */
+  checking: boolean;
   /** Apply the pending edit; resolves whether the backend applied it. */
   onApply: () => Promise<boolean>;
   /** Re-apply a stale edit over the object as the session now holds it;
@@ -287,8 +299,10 @@ export function PendingEditApplyRow({
   // is pending.
   const refused = pending && outcome !== null && outcome.status !== "applied" ? outcome : null;
   const stale = refused?.status === "stale" ? refused : null;
-  const waiting = blocked !== null || running;
-  const waitingReason = running ? "The edit is being applied" : blocked;
+  const waiting = blocked !== null || running || checking;
+  const waitingReason = running
+    ? "The edit is being applied"
+    : (blocked ?? (checking ? "The edit is being checked" : null));
   return (
     <>
       {stale && (
@@ -349,6 +363,47 @@ export function PendingEditApplyRow({
         </Button>
       </div>
     </>
+  );
+}
+
+/** Remove a link rule or routing domain from the session at once, as one
+ *  accepted change, from its window whatever edits it: its card or the field
+ *  editor. A removal starts from the object the session holds, so it waits
+ *  while an edit of the object is pending or a change of it is being checked. */
+export function RemoveAtOnceButton({
+  object,
+  onRemove,
+  pending,
+  checking,
+}: {
+  /** What the object is called in the button: "rule" or "domain". */
+  object: string;
+  /** Null while a change is being applied. */
+  onRemove: (() => void) | null;
+  /** Whether an edit of the object is pending. */
+  pending: boolean;
+  /** Whether a change of the object is being typed or checked. */
+  checking: boolean;
+}) {
+  const reason =
+    onRemove === null
+      ? "Removing waits while a change is being applied."
+      : pending
+        ? `Removing waits while this ${object}'s edit is pending: apply or discard it first.`
+        : checking
+          ? `Removing waits while a change of this ${object} is being checked.`
+          : null;
+  return (
+    <div className="builder-preset-row">
+      <Button
+        variant="danger"
+        onClick={reason === null && onRemove !== null ? onRemove : undefined}
+        disabled={reason !== null}
+        title={reason ?? `Removes the ${object} from the session at once`}
+      >
+        Remove {object}
+      </Button>
+    </div>
   );
 }
 

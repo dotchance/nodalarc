@@ -149,6 +149,8 @@ function BoundariesWindow({
       linkRules={listed.linkRules}
       routingDomains={listed.routingDomains}
       appliedRevision={APPLIED_REVISION}
+      onHold={() => () => undefined}
+      checking={false}
       onEdit={async (change) => {
         const request = ++latest.current;
         const answered = await backend.edit(change);

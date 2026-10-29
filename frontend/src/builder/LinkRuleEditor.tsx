@@ -40,6 +40,7 @@ import type {
 import {
   PendingObjectFieldEditor,
   PendingObjectIssues,
+  RemoveAtOnceButton,
   useCardValueEdits,
   useLatestObjectChange,
 } from "./pendingEditKit";
@@ -68,10 +69,6 @@ interface LinkRuleEditorProps {
     patch: Partial<BuilderVisualLinkEndpoint>,
     typed?: boolean,
   ) => void;
-  /** Remove the rule from the session at once, as one accepted change. Null
-   *  while it cannot be removed: a change is being applied, or an edit of
-   *  the rule is pending. */
-  onRemove: (() => void) | null;
   /** The resolved world's segments, each with the terminal roles and media
    *  its nodes carry. Null while the world is unresolved. */
   segments: ReadonlyArray<BuilderWorldSegment> | null;
@@ -199,7 +196,6 @@ export function LinkRuleEditor({
   rule,
   onUpdate,
   onUpdateEndpoint,
-  onRemove,
   segments,
   onRepoint,
   allocation,
@@ -308,18 +304,6 @@ export function LinkRuleEditor({
         <Button active={enabled} onClick={() => onUpdate({ enabled: !enabled })}>
           {enabled ? "enabled" : "disabled"}
         </Button>
-        <Button
-          variant="danger"
-          onClick={onRemove ?? undefined}
-          disabled={onRemove === null}
-          title={
-            onRemove === null
-              ? "Removing waits while a change is being applied or this rule's edit is pending."
-              : "Removes the rule from the session at once"
-          }
-        >
-          Remove rule
-        </Button>
       </div>
     </div>
   );
@@ -329,21 +313,18 @@ export function LinkRuleEditor({
  *  sent as the whole card value. */
 function LinkRuleCard({
   card,
-  editPending,
   send,
+  hold,
   onRepoint,
-  onRemove,
   ...shared
 }: Omit<LinkRuleEditorProps, "rule" | "onUpdate" | "onUpdateEndpoint"> & {
   card: BuilderVisualLinkRule;
-  /** Whether an edit of the rule is pending. */
-  editPending: boolean;
   send: (rule: BuilderVisualLinkRule) => Promise<boolean>;
+  hold: () => () => void;
 }) {
-  const edits = useCardValueEdits(card, send);
+  const edits = useCardValueEdits(card, send, hold);
   // A segment change is sent with the rule's pending edit, so it waits only
-  // while a change of the rule is still being checked. A removal starts from
-  // the accepted rule, so it also waits while an edit of the rule is pending.
+  // while a change of the rule is still being checked.
   return (
     <>
       <LinkRuleEditor
@@ -358,7 +339,6 @@ function LinkRuleCard({
             ? Promise.reject(new Error(REPOINT_WAITS_FOR_CHECK))
             : onRepoint(side, newSegmentId)
         }
-        onRemove={editPending || edits.checking ? null : onRemove}
       />
       {edits.checking && <div className="builder-site-derived">Checking the edit…</div>}
       {edits.error && <div className="builder-warning">{edits.error}</div>}
@@ -380,15 +360,27 @@ interface LinkRuleWindowProps extends Omit<
   onEdit: (change: LinkRuleChange) => Promise<unknown>;
   /** Ask the backend for the rule's field editor without changing the rule. */
   onDescribe: () => Promise<BuilderVisualObjectEditResult>;
+  /** Mark the rule as holding a change not yet answered; call the function
+   *  returned once it is answered or dropped. */
+  onHold: () => () => void;
+  /** Whether a change of the rule is being typed or checked. */
+  checking: boolean;
+  /** Remove the rule from the session at once, as one accepted change. Null
+   *  while a change is being applied. */
+  onRemove: (() => void) | null;
 }
 
 /** One link rule's window: the card while the backend states a card value for
- *  the rule, otherwise the field editor, then the issues of its pending edit. */
+ *  the rule, otherwise the field editor, then the issues of its pending edit
+ *  and the rule's removal. */
 export function LinkRuleWindow({
   listed,
   appliedRevision,
   onEdit,
   onDescribe,
+  onHold,
+  checking,
+  onRemove,
   ...shared
 }: LinkRuleWindowProps) {
   const send = useLatestObjectChange(onEdit);
@@ -405,8 +397,8 @@ export function LinkRuleWindow({
         <LinkRuleCard
           {...shared}
           card={listed.card}
-          editPending={listed.pending !== null}
           send={(rule) => send({ kind: "link_rule", rule })}
+          hold={onHold}
         />
       ) : (
         <PendingObjectFieldEditor
@@ -417,6 +409,12 @@ export function LinkRuleWindow({
         />
       )}
       <PendingObjectIssues issues={listed.pending?.issues ?? []} />
+      <RemoveAtOnceButton
+        object="rule"
+        onRemove={onRemove}
+        pending={listed.pending !== null}
+        checking={checking}
+      />
     </div>
   );
 }

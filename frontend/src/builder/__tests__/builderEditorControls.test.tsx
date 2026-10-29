@@ -414,6 +414,7 @@ describe("a link or routing window applies its pending edit through the backend"
         pending
         outcome={null}
         blocked={blocked}
+        checking={false}
         onApply={answer("apply")}
         onReapply={answer("reapply")}
         onDiscard={() => calls.push("discard")}
@@ -495,7 +496,6 @@ describe("the link editor reads terminal capabilities from the world", () => {
         onRepoint={async () => ""}
         onUpdate={() => {}}
         onUpdateEndpoint={() => {}}
-        onRemove={null}
       />,
     );
   }
@@ -566,6 +566,8 @@ describe("link and domain cards show the grammar id and offer no rename", () => 
         appliedRevision={1}
         onEdit={async () => undefined}
         onDescribe={() => Promise.reject(new Error("a card rule is not described"))}
+        onHold={() => () => undefined}
+        checking={false}
         segments={null}
         allocation={null}
         onRepoint={async () => ""}
@@ -606,6 +608,8 @@ describe("link and domain cards show the grammar id and offer no rename", () => 
         appliedRevision={1}
         onEdit={async () => undefined}
         onDescribe={() => Promise.reject(new Error("a card domain is not described"))}
+        onHold={() => () => undefined}
+        checking={false}
         onRemove={null}
       />,
     );

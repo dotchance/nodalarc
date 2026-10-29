@@ -654,24 +654,32 @@ function objectEditBasis(
   edit: BuilderContentEdit;
 } {
   if (!draft) throw new Error("there is no visual draft to edit");
-  const accepted = draft.applied_session ?? null;
+  // The apply route takes edits only over a fully accepted draft.
+  const accepted = draft.projection_status === "applied" ? (draft.applied_session ?? null) : null;
   const appliedRevision = draft.applied_revision ?? null;
   if (accepted === null || appliedRevision === null) {
-    throw new Error("link rules, routing domains and boundaries are edited on an accepted session");
+    throw new Error(
+      "link rules, routing domains and boundaries are edited on a fully accepted session",
+    );
   }
   const key = pendingEditKey(address);
   const edit = pending.get(key)?.edit ?? beginPendingEdit(accepted, address);
   return { draft, appliedRevision, key, edit };
 }
 
-/** The key of the pending edit a command starts from. A rederive starts from
- *  its rule as the rule's card shows it, with the rule's pending edit applied,
- *  and its result takes that edit's place. No other command starts from a
- *  pending edit. */
+/** The key of the pending edit a command starts from, whose place its result
+ *  takes. A rederive starts from its rule with the rule's pending edit
+ *  applied. A new boundary joins the boundary list as the list's pending edit
+ *  holds it. No other command starts from a pending edit. */
 function commandStartEditKey(command: BuilderVisualDraftCommandRequest["command"]): string | null {
-  return command.operation === "rederive_link"
-    ? pendingEditKey({ kind: "member", list_pointer: "/link_rules", id: command.rule_id })
-    : null;
+  switch (command.operation) {
+    case "rederive_link":
+      return pendingEditKey({ kind: "member", list_pointer: "/link_rules", id: command.rule_id });
+    case "add_boundary":
+      return pendingEditKey({ kind: "whole_list", pointer: "/routing/boundaries" });
+    default:
+      return null;
+  }
 }
 
 /** One step of the undo history. `replaced` is the accepted session a change
@@ -749,6 +757,11 @@ export function useBuilderWorld() {
   // is not held.
   const objectEditSequenceRef = useRef(0);
   const latestObjectEditRef = useRef(new Map<string, number>());
+  // The objects with a change not yet answered: one being typed, or one sent
+  // and waiting for its answer. Each holds a count of such changes, and the
+  // state names the objects for the windows that wait on them.
+  const objectChecksRef = useRef(new Map<string, number>());
+  const [checkingObjects, setCheckingObjects] = useState<ReadonlySet<string>>(NO_KEYS);
   const [pendingEditVerdicts, setPendingEditVerdicts] = useState<PendingEditVerdicts | null>(
     null,
   );
@@ -823,9 +836,31 @@ export function useBuilderWorld() {
   /** Drop every pending edit when the page adopts a different draft. */
   const dropPendingEdits = useCallback(() => {
     latestObjectEditRef.current = new Map();
+    objectChecksRef.current = new Map();
+    setCheckingObjects(NO_KEYS);
     setPendingEdits(NO_PENDING_EDITS);
     setPendingEditVerdicts(null);
   }, [setPendingEdits]);
+
+  /** Mark the object at `address` as holding a change not yet answered, until
+   *  the function returned is called. Apply and Remove wait while any such
+   *  change is held. */
+  const holdObjectCheck = useCallback((address: PendingEditAddress): (() => void) => {
+    const key = pendingEditKey(address);
+    const checks = objectChecksRef.current;
+    checks.set(key, (checks.get(key) ?? 0) + 1);
+    setCheckingObjects(new Set(checks.keys()));
+    let released = false;
+    return () => {
+      // A change held over a draft the page has since left counts for nothing.
+      if (released || objectChecksRef.current !== checks) return;
+      released = true;
+      const left = (checks.get(key) ?? 0) - 1;
+      if (left > 0) checks.set(key, left);
+      else checks.delete(key);
+      setCheckingObjects(new Set(checks.keys()));
+    };
+  }, []);
 
   /** No answer still on its way for the edit under `key` is held: the edit was
    *  applied or discarded since the request was made. */
@@ -1175,6 +1210,8 @@ export function useBuilderWorld() {
       ) {
         throw new Error("apply or canonicalize the YAML buffer before editing graphically");
       }
+      // A twin change and a pending link or routing edit exclude each other.
+      refuseWhileEditsPending("changing segments, ground sites or session fields");
       let result: BuilderVisualDraftAssemblyResult;
       try {
         result = await applyVisualDraftWorkspace({
@@ -1201,7 +1238,14 @@ export function useBuilderWorld() {
         issues: [],
       });
       return result;
-    }), [adoptAcceptedChange, assertEpoch, enqueueWriter, setYamlBuffer, showCompile]);
+    }), [
+      adoptAcceptedChange,
+      assertEpoch,
+      enqueueWriter,
+      refuseWhileEditsPending,
+      setYamlBuffer,
+      showCompile,
+    ]);
 
   /** Put the accepted draft's compile back in the on-screen slots once no
    *  window edit is being previewed. */
@@ -1518,27 +1562,34 @@ export function useBuilderWorld() {
       }
       const request = ++objectEditSequenceRef.current;
       latestObjectEditRef.current.set(key, request);
-      const answer = await editVisualDraftObject({
-        target_ref: draft.target_ref,
-        applied_revision: appliedRevision,
-        address,
-        working: edit.working,
-        change,
-      });
-      assertEpoch(epoch);
-      if (latestObjectEditRef.current.get(key) !== request) throw new SupersededSessionOperation();
-      if (yamlBlocksGraphicalEditing(true, yamlBufferRef.current)) {
-        throw new Error("the YAML buffer changed while this edit was made; apply it first");
+      const release = holdObjectCheck(address);
+      try {
+        const answer = await editVisualDraftObject({
+          target_ref: draft.target_ref,
+          applied_revision: appliedRevision,
+          address,
+          working: edit.working,
+          change,
+        });
+        assertEpoch(epoch);
+        if (latestObjectEditRef.current.get(key) !== request) {
+          throw new SupersededSessionOperation();
+        }
+        if (yamlBlocksGraphicalEditing(true, yamlBufferRef.current)) {
+          throw new Error("the YAML buffer changed while this edit was made; apply it first");
+        }
+        setPendingEdits(
+          new Map(pendingEditsRef.current).set(key, {
+            edit: { ...edit, working: answer.working },
+            answer,
+          }),
+        );
+        return answer;
+      } finally {
+        release();
       }
-      setPendingEdits(
-        new Map(pendingEditsRef.current).set(key, {
-          edit: { ...edit, working: answer.working },
-          answer,
-        }),
-      );
-      return answer;
     },
-    [assertEpoch, setPendingEdits],
+    [assertEpoch, holdObjectCheck, setPendingEdits],
   );
 
   /** Describe one link rule, one routing domain or the boundary list as it now
@@ -1637,6 +1688,16 @@ export function useBuilderWorld() {
           if (!pending) throw new Error(`no pending edit is held for ${key}`);
           return [key, pending] as const;
         });
+        // A change still being typed or checked is not in the held edit yet.
+        const unchecked = sent.filter(([key]) => objectChecksRef.current.has(key));
+        if (unchecked.length > 0) {
+          const names = unchecked.map(([, pending]) =>
+            pending.edit.address.kind === "member" ? pending.edit.address.id : "the boundary list",
+          );
+          throw new Error(
+            `a change of ${names.join(", ")} is still being checked; apply once it is answered`,
+          );
+        }
         const result = await applyVisualDraftEdits({
           draft,
           expected_draft_revision: draft.draft_revision,
@@ -1981,6 +2042,7 @@ export function useBuilderWorld() {
     visualDraft,
     yamlBuffer,
     pendingEdits,
+    checkingObjects,
     pendingEditOutcomes,
     writer,
     assemblyResult,
@@ -2007,6 +2069,7 @@ export function useBuilderWorld() {
     mutateControls,
     editPendingObject,
     describePendingObject,
+    holdObjectCheck,
     applyPendingEdits,
     discardPendingEdit,
     removeListMember,

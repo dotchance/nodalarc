@@ -52,6 +52,7 @@ import {
   FieldEditorTreeWaiting,
   PendingObjectFieldEditor,
   PendingObjectIssues,
+  RemoveAtOnceButton,
   useCardValueEdits,
   useFieldEditorTree,
   useLatestObjectChange,
@@ -74,10 +75,6 @@ interface DomainEditorProps {
   domain: BuilderVisualRoutingDomain;
   /** Change the domain. A typed change waits for a pause in typing. */
   onUpdate: (patch: Partial<BuilderVisualRoutingDomain>, typed?: boolean) => void;
-  /** Remove the domain from the session at once, as one accepted change. Null
-   *  while it cannot be removed: a change is being applied, or an edit of
-   *  the domain is pending. */
-  onRemove: (() => void) | null;
   authoring: BuilderVisualAuthoringFacts;
 }
 
@@ -85,7 +82,6 @@ export function RoutingDomainEditor({
   workspace,
   domain,
   onUpdate,
-  onRemove,
   authoring,
 }: DomainEditorProps) {
   const placed = placedSegments(workspace);
@@ -203,21 +199,6 @@ export function RoutingDomainEditor({
             />
         </EditorCard>
       )}
-
-      <div className="builder-preset-row">
-        <Button
-          variant="danger"
-          onClick={onRemove ?? undefined}
-          disabled={onRemove === null}
-          title={
-            onRemove === null
-              ? "Removing waits while a change is being applied or this domain's edit is pending."
-              : "Removes the domain from the session at once"
-          }
-        >
-          Remove domain
-        </Button>
-      </div>
     </div>
   );
 }
@@ -226,27 +207,21 @@ export function RoutingDomainEditor({
  *  sent as the whole card value. */
 function RoutingDomainCard({
   card,
-  editPending,
   send,
-  onRemove,
+  hold,
   ...shared
 }: Omit<DomainEditorProps, "domain" | "onUpdate"> & {
   card: BuilderVisualRoutingDomain;
-  /** Whether an edit of the domain is pending. */
-  editPending: boolean;
   send: (domain: BuilderVisualRoutingDomain) => Promise<boolean>;
+  hold: () => () => void;
 }) {
-  const edits = useCardValueEdits(card, send);
-  // A removal starts from the accepted domain, so it waits while an edit of
-  // the domain is pending or still being checked.
-  const edited = editPending || edits.checking;
+  const edits = useCardValueEdits(card, send, hold);
   return (
     <>
       <RoutingDomainEditor
         {...shared}
         domain={edits.shown}
         onUpdate={(patch, typed) => edits.change((domain) => ({ ...domain, ...patch }), typed)}
-        onRemove={edited ? null : onRemove}
       />
       {edits.checking && <div className="builder-site-derived">Checking the edit…</div>}
       {edits.error && <div className="builder-warning">{edits.error}</div>}
@@ -265,16 +240,27 @@ interface RoutingDomainWindowProps extends Omit<DomainEditorProps, "domain" | "o
   onEdit: (change: RoutingDomainChange) => Promise<unknown>;
   /** Ask the backend for the domain's field editor without changing the domain. */
   onDescribe: () => Promise<BuilderVisualObjectEditResult>;
+  /** Mark the domain as holding a change not yet answered; call the function
+   *  returned once it is answered or dropped. */
+  onHold: () => () => void;
+  /** Whether a change of the domain is being typed or checked. */
+  checking: boolean;
+  /** Remove the domain from the session at once, as one accepted change. Null
+   *  while a change is being applied. */
+  onRemove: (() => void) | null;
 }
 
 /** One routing domain's window: the card while the backend states a card
  *  value for the domain, otherwise the field editor, then the issues of its
- *  pending edit. */
+ *  pending edit and the domain's removal. */
 export function RoutingDomainWindow({
   listed,
   appliedRevision,
   onEdit,
   onDescribe,
+  onHold,
+  checking,
+  onRemove,
   ...shared
 }: RoutingDomainWindowProps) {
   const send = useLatestObjectChange(onEdit);
@@ -291,8 +277,8 @@ export function RoutingDomainWindow({
         <RoutingDomainCard
           {...shared}
           card={listed.card}
-          editPending={listed.pending !== null}
           send={(domain) => send({ kind: "routing_domain", domain })}
+          hold={onHold}
         />
       ) : (
         <PendingObjectFieldEditor
@@ -303,6 +289,12 @@ export function RoutingDomainWindow({
         />
       )}
       <PendingObjectIssues issues={listed.pending?.issues ?? []} />
+      <RemoveAtOnceButton
+        object="domain"
+        onRemove={onRemove}
+        pending={listed.pending !== null}
+        checking={checking}
+      />
     </div>
   );
 }
@@ -315,9 +307,6 @@ interface BoundaryEditorProps {
   linkRules: ReadonlyArray<ListedLinkRule>;
   routingDomains: ReadonlyArray<ListedRoutingDomain>;
   onUpdate: (patch: Partial<BuilderVisualRoutingBoundary>) => void;
-  /** Remove the boundary from the list's pending edit. Null while another
-   *  change of the list is being sent or checked. */
-  onRemove: (() => void) | null;
   authoring: BuilderVisualAuthoringFacts;
 }
 
@@ -334,7 +323,6 @@ function BoundaryEditor({
   linkRules,
   routingDomains,
   onUpdate,
-  onRemove,
   authoring,
 }: BoundaryEditorProps) {
   // Boundaries run over fixed links. Access rules schedule on visibility, so
@@ -398,20 +386,6 @@ function BoundaryEditor({
       <div className="builder-site-derived">
         exchanges each domain's originated prefixes both ways, installed via
         the peer's loopback
-      </div>
-      <div className="builder-preset-row">
-        <Button
-          variant="danger"
-          onClick={onRemove ?? undefined}
-          disabled={onRemove === null}
-          title={
-            onRemove === null
-              ? "Removing waits while another change of the list is being sent."
-              : "Removes the boundary from the list's pending edit"
-          }
-        >
-          Remove boundary
-        </Button>
       </div>
     </div>
   );
@@ -492,6 +466,8 @@ function BoundaryItems({
   sendCards,
   sendControls,
   fieldBusy,
+  checking,
+  hold,
   onRemove,
   ...shared
 }: BoundaryListShared & {
@@ -501,11 +477,16 @@ function BoundaryItems({
   sendControls: (commands: ReadonlyArray<BuilderControlMutation>) => Promise<void>;
   /** Whether a field-editor batch or a removal is being sent. */
   fieldBusy: boolean;
+  /** Whether a change of the list is being typed or checked. */
+  checking: boolean;
+  hold: () => () => void;
   /** Remove the boundary at an index of the list as it now stands. */
   onRemove: (index: number) => void;
 }) {
   const answered = useMemo(() => items.map((item) => item.card), [items]);
-  const edits = useCardValueEdits<BoundaryCards>(answered, sendCards);
+  const edits = useCardValueEdits<BoundaryCards>(answered, sendCards, hold);
+  // A removal is a change of the list, so it waits for the one being made.
+  const removalWaits = edits.checking || fieldBusy || checking;
   return (
     <>
       {edits.shown.map((card, index) => {
@@ -530,7 +511,6 @@ function BoundaryItems({
                       ),
                     )
                   }
-                  onRemove={edits.checking || fieldBusy ? null : () => onRemove(index)}
                 />
               </fieldset>
             ) : (
@@ -541,6 +521,20 @@ function BoundaryItems({
                 send={sendControls}
               />
             )}
+            <div className="builder-preset-row">
+              <Button
+                variant="danger"
+                onClick={removalWaits ? undefined : () => onRemove(index)}
+                disabled={removalWaits}
+                title={
+                  removalWaits
+                    ? "Removing waits while another change of the list is being checked."
+                    : "Removes the boundary from the list's pending edit"
+                }
+              >
+                Remove boundary
+              </Button>
+            </div>
           </EditorCard>
         );
       })}
@@ -561,6 +555,11 @@ interface BoundaryListWindowProps extends BoundaryListShared {
   onEdit: (change: RoutingBoundariesChange) => Promise<unknown>;
   /** Ask the backend for the list's field editor without changing the list. */
   onDescribe: () => Promise<BuilderVisualObjectEditResult>;
+  /** Mark the list as holding a change not yet answered; call the function
+   *  returned once it is answered or dropped. */
+  onHold: () => () => void;
+  /** Whether a change of the list is being typed or checked. */
+  checking: boolean;
 }
 
 /** The window of the routing boundary list. Its boundaries have no ids, so the
@@ -572,6 +571,8 @@ export function BoundaryListWindow({
   appliedRevision,
   onEdit,
   onDescribe,
+  onHold,
+  checking,
   ...shared
 }: BoundaryListWindowProps) {
   const send = useLatestObjectChange(onEdit);
@@ -598,6 +599,7 @@ export function BoundaryListWindow({
   const removeBoundary = async (index: number) => {
     setFieldBusy(true);
     setRemoveFailure(null);
+    const release = onHold();
     try {
       const tree = field.kind === "tree" ? field.tree : (await onDescribe()).control_tree;
       const list = boundaryListControl(tree);
@@ -611,6 +613,7 @@ export function BoundaryListWindow({
     } catch (cause) {
       setRemoveFailure(cause instanceof Error ? cause.message : String(cause));
     } finally {
+      release();
       setFieldBusy(false);
     }
   };
@@ -638,6 +641,8 @@ export function BoundaryListWindow({
           sendCards={(boundaries) => send({ kind: "routing_boundaries", boundaries })}
           sendControls={sendControls}
           fieldBusy={fieldBusy}
+          checking={checking}
+          hold={onHold}
           onRemove={(index) => void removeBoundary(index)}
         />
       )}

@@ -210,15 +210,9 @@ const LINK_AND_ROUTING_COMMANDS: ReadonlySet<BuilderVisualDraftCommandOperation>
   "rederive_link",
 ]);
 
-/** The windows that edit the session's own fields and its segments. */
+/** The windows that edit the session's own fields and its segments. Their
+ *  edits change the twin. */
 const SESSION_AND_SEGMENT_WINDOW_KINDS: ReadonlySet<EditorTarget["kind"]> = new Set([
-  "session",
-  "segment",
-  "ground",
-]);
-
-/** The windows whose edits change the twin. */
-const BUFFERED_WINDOW_KINDS: ReadonlySet<EditorTarget["kind"]> = new Set([
   "session",
   "segment",
   "ground",
@@ -509,6 +503,7 @@ export function BuilderView({
     yamlBuffer,
     pendingEdits,
     pendingEditOutcomes,
+    checkingObjects,
     writer,
     assemblyResult,
     world,
@@ -533,6 +528,7 @@ export function BuilderView({
     mutateControls,
     editPendingObject,
     describePendingObject,
+    holdObjectCheck,
     applyPendingEdits,
     discardPendingEdit,
     removeListMember,
@@ -738,6 +734,12 @@ export function BuilderView({
   const stalePendingEdits = [...pendingEdits.entries()]
     .filter(([key]) => pendingEditOutcomes.get(key)?.status === "stale")
     .map(([key, pending]) => ({ key, title: pendingEditTitle(pending.edit.address) }));
+  // A segment removal changes the twin, so it waits while link and routing
+  // edits are pending.
+  const twinRemovalLabel =
+    pendingEditCount > 0
+      ? `Apply or discard the ${pendingEditsPhrase(pendingEditCount)} before removing a segment`
+      : "Remove from the session";
   const unappliedSessionAndSegmentWindows = windows.filter(
     (w) => SESSION_AND_SEGMENT_WINDOW_KINDS.has(w.target.kind) && buffers[w.key]?.dirty === true,
   ).length;
@@ -857,16 +859,20 @@ export function BuilderView({
   const yamlBlocksGui = yamlBlocksGraphicalEditing(visualDraft !== null, yamlBuffer);
   /** Why the windows that edit pending edits cannot change their objects now;
    *  null when they can. Those edits are made on the accepted session, so they
-   *  wait while a change is being applied, while a window holds twin edits the
-   *  backend has not accepted, and while the YAML is unapplied. */
+   *  wait while a change is being applied, while the draft holds segment,
+   *  ground or session changes the backend has not accepted, while the YAML is
+   *  unapplied, and while a window holds twin edits not yet applied. */
   const pendingEditRefusal = (): string | null => {
     const unsettled = unsettledReason();
     if (unsettled !== null) return unsettled;
-    if (yamlBlocksGui) return "Apply or canonicalize the session YAML before editing here.";
-    if (dirtyWindows > 0) {
-      return `Apply or discard the ${count(dirtyWindows, "window")} with unapplied edits first.`;
+    if (visualDraft?.projection_status !== "applied") {
+      return (
+        "The session holds segment, ground or session changes the backend has not " +
+        "accepted. Fix or undo them before editing link rules, routing domains and boundaries."
+      );
     }
-    return null;
+    if (yamlBlocksGui) return "Apply or canonicalize the session YAML before editing here.";
+    return linkAndRoutingRefusal();
   };
   useEffect(() => {
     if (
@@ -1945,6 +1951,8 @@ export function BuilderView({
               appliedRevision={appliedRevision}
               onEdit={(change) => editPendingObject(address, change)}
               onDescribe={() => describePendingObject(address)}
+              onHold={() => holdObjectCheck(address)}
+              checking={checkingObjects.has(pendingEditKey(address))}
               workspace={workspace}
               segments={world?.segments ?? null}
               allocation={world?.allocations.find((a) => a.rule_id === rule.id) ?? null}
@@ -1992,6 +2000,8 @@ export function BuilderView({
               appliedRevision={appliedRevision}
               onEdit={(change) => editPendingObject(address, change)}
               onDescribe={() => describePendingObject(address)}
+              onHold={() => holdObjectCheck(address)}
+              checking={checkingObjects.has(pendingEditKey(address))}
               workspace={workspace}
               onRemove={writer !== null ? null : () => removeAtOnce(target, address)}
             />
@@ -2015,6 +2025,8 @@ export function BuilderView({
               appliedRevision={appliedRevision}
               onEdit={(change) => editPendingObject(address, change)}
               onDescribe={() => describePendingObject(address)}
+              onHold={() => holdObjectCheck(address)}
+              checking={checkingObjects.has(pendingEditKey(address))}
             />
           ),
         };
@@ -2553,7 +2565,8 @@ export function BuilderView({
                   <IconButton
                     icon="x"
                     size={12}
-                    label="Remove from the session"
+                    label={twinRemovalLabel}
+                    disabled={pendingEditCount > 0}
                     onClick={() => removeRefSegment(placed.segment_id)}
                   />
                 </span>
@@ -2648,7 +2661,8 @@ export function BuilderView({
                   <IconButton
                     icon="x"
                     size={12}
-                    label="Remove from the session"
+                    label={twinRemovalLabel}
+                    disabled={pendingEditCount > 0}
                     onClick={() => removeGroundRef(placed.segment_id)}
                   />
                 </span>
@@ -2977,7 +2991,7 @@ export function BuilderView({
           const body = renderWindow(win.target);
           if (!body) return null;
           const buf = buffers[win.key];
-          const buffered = BUFFERED_WINDOW_KINDS.has(win.target.kind);
+          const buffered = SESSION_AND_SEGMENT_WINDOW_KINDS.has(win.target.kind);
           // The pending edit this window edits, by its address and the key it is
           // held under; null for a window that edits none.
           const address = pendingEditAddress(win.target);
@@ -3027,6 +3041,7 @@ export function BuilderView({
                     pending={pendingEdits.has(edit.key)}
                     outcome={pendingEditOutcomes.get(edit.key) ?? null}
                     blocked={lockReason}
+                    checking={checkingObjects.has(edit.key)}
                     onApply={() => applyWindowEdit(edit.key, false)}
                     onReapply={() => applyWindowEdit(edit.key, true)}
                     onDiscard={() => discardPendingEdit(edit.address)}
@@ -3238,6 +3253,14 @@ export function BuilderView({
         {dirtyWindows > 0 && (
           <span className="builder-preview-chip" data-testid="builder-preview-chip">
             previewing {count(dirtyWindows, "window")} of unapplied edits
+          </span>
+        )}
+        {pendingEditCount > 0 && (
+          <span className="builder-preview-chip" data-testid="builder-preview-chip">
+            previewing{" "}
+            {pendingEditCount === 1
+              ? "the pending link or routing edit"
+              : pendingEditsPhrase(pendingEditCount)}
           </span>
         )}
         {error ? (

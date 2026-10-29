@@ -1,5 +1,4 @@
 import type {
-  DraftBoundary,
   DraftConstellation,
   DraftGroundSet,
   DraftGroundSite,
@@ -12,7 +11,6 @@ export const EARTH_BODY_REF = "nodalarc:bodies/earth.yaml";
 
 let spaceCounter = 0;
 let groundCounter = 0;
-let boundaryCounter = 0;
 let siteCounter = 0;
 
 export function newWorkspace(name: string): Workspace {
@@ -127,20 +125,5 @@ export function testGroundMember(
         boresights: { ...ground.stamp.boresights },
       }],
     },
-  };
-}
-
-export function defaultBoundary(workspace: Workspace): DraftBoundary {
-  boundaryCounter += 1;
-  return {
-    boundary_id: `boundary-${boundaryCounter}`,
-    over_rule_id: workspace.links[0]?.rule_id ?? "",
-    adapter: "static_ip",
-    from_domain_id: workspace.routing_domains[0]?.domain_id ?? "",
-    to_domain_id:
-      workspace.routing_domains[1]?.domain_id ??
-      workspace.routing_domains[0]?.domain_id ??
-      "",
-    export_node_loopbacks: true,
   };
 }

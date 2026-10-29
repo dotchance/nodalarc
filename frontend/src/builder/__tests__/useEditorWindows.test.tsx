@@ -39,8 +39,6 @@ function useHarness() {
     updateSession: ws.updateSession,
     updateConstellation: ws.updateConstellation,
     updateGroundDraft: ws.updateGroundDraft,
-    updateLinkRule: ws.updateLinkRule,
-    updateRoutingDomain: ws.updateRoutingDomain,
   });
   return { ws, editor };
 }

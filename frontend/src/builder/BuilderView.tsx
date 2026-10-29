@@ -563,8 +563,6 @@ export function BuilderView({
     removeGroundRef,
     updateGroundDraft,
     removeGroundDraft,
-    updateLinkRule,
-    updateRoutingDomain,
   } = useWorkspace();
   const nodeCatalog = useBuilderCatalog("nodes");
   const terminalCatalog = useBuilderCatalog("terminals");
@@ -660,8 +658,6 @@ export function BuilderView({
     updateSession,
     updateConstellation,
     updateGroundDraft,
-    updateLinkRule,
-    updateRoutingDomain,
   });
   const [saveState, setSaveState] = useState<SaveState>({ kind: "idle" });
   // Why the last removal from a link rule or routing domain window was

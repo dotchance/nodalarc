@@ -24,8 +24,6 @@ import {
 import type {
   DraftConstellation,
   DraftGroundSet,
-  DraftLinkRule,
-  DraftRoutingDomain,
   Workspace,
 } from "./workspace";
 import type { BuilderContentEdit } from "./generated/builderApi";
@@ -160,8 +158,6 @@ interface UseEditorWindowsDeps {
   updateSession: (patch: SessionBuffer) => void;
   updateConstellation: (segmentId: string, draft: DraftConstellation) => void;
   updateGroundDraft: (segmentId: string, draft: DraftGroundSet) => void;
-  updateLinkRule: (ruleId: string, draft: DraftLinkRule) => void;
-  updateRoutingDomain: (domainId: string, draft: DraftRoutingDomain) => void;
 }
 
 export function useEditorWindows({
@@ -169,8 +165,6 @@ export function useEditorWindows({
   updateSession,
   updateConstellation,
   updateGroundDraft,
-  updateLinkRule,
-  updateRoutingDomain,
 }: UseEditorWindowsDeps) {
   // The diagram workspace: editors are floating, anchored windows — many
   // can be open at once, keyed per object (re-open focuses, ).
@@ -277,12 +271,6 @@ export function useEditorWindows({
         break;
       case "ground":
         updateGroundDraft(target.id, buf.draft as DraftGroundSet);
-        break;
-      case "link":
-        updateLinkRule(target.id, buf.draft as DraftLinkRule);
-        break;
-      case "domain":
-        updateRoutingDomain(target.id, buf.draft as DraftRoutingDomain);
         break;
       default:
         return;

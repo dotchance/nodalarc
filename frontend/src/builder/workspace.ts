@@ -38,10 +38,6 @@ export type DraftGroundSet = Workspace["ground"][number];
 export type DraftGroundSite = DraftGroundSet["members"][number];
 export type DraftSiteObject = Exclude<DraftGroundSite["site"], null>;
 export type DraftSiteNode = DraftSiteObject["nodes"][number];
-export type DraftLinkRule = Workspace["links"][number];
-export type DraftLinkEndpoint = DraftLinkRule["a"];
-export type DraftRoutingDomain = Workspace["routing_domains"][number];
-export type DraftBoundary = Workspace["boundaries"][number];
 export type ParsedSiteLine = BuilderVisualGroundSiteIntent;
 
 /** UI labels over generated visual-authoring application types. */
@@ -154,86 +150,4 @@ export function placedSegments(workspace: Workspace): PlacedSegment[] {
       kind: "ground" as const,
     })),
   ];
-}
-
-/** Link interaction guidance. Persisted validation belongs to backend compile. */
-export function linkWarnings(workspace: Workspace): string[] {
-  const warnings: string[] = [];
-  const placed = new Map(placedSegments(workspace).map((s) => [s.segment_id, s]));
-  const seenIds = new Set<string>();
-  for (const rule of workspace.links) {
-    const id = emittedRuleId(rule);
-    if (seenIds.has(id)) {
-      warnings.push(`two link rules named "${id}" — rename one`);
-    }
-    seenIds.add(id);
-    for (const endpoint of [rule.a, rule.b]) {
-      if (!placed.has(endpoint.segment_id)) {
-        warnings.push(
-          `${id}: segment "${endpoint.segment_id}" is no longer in the session`,
-        );
-      }
-    }
-    const a = placed.get(rule.a.segment_id);
-    const b = placed.get(rule.b.segment_id);
-    if (a?.kind === "ground" && b?.kind === "ground") {
-      warnings.push(
-        `${id}: ground-to-ground links are terrestrial network territory — that arrives with routing, not link rules`,
-      );
-    }
-  }
-  return warnings;
-}
-
-/** The grammar id a link rule serializes under (boundaries key on it). */
-export function emittedRuleId(rule: DraftLinkRule): string {
-  return rule.rule_id;
-}
-
-export function emittedDomainId(domain: DraftRoutingDomain): string {
-  return domain.domain_id;
-}
-
-/** Routing interaction guidance. Persisted validation belongs to backend compile. */
-export function routingWarnings(workspace: Workspace): string[] {
-  const warnings: string[] = [];
-  const segments = placedSegments(workspace);
-  const placed = new Set(segments.map((s) => s.segment_id));
-  const domainIds = new Set<string>();
-  for (const domain of workspace.routing_domains) {
-    const id = emittedDomainId(domain);
-    if (domainIds.has(id)) warnings.push(`two routing domains named "${id}" — rename one`);
-    domainIds.add(id);
-    if (domain.member_segment_ids.length === 0) {
-      warnings.push(`${id}: no member segments yet`);
-    }
-    for (const member of domain.member_segment_ids) {
-      if (!placed.has(member)) {
-        warnings.push(`${id}: segment "${member}" is no longer in the session`);
-      }
-    }
-    if (
-      domain.hello_interval_s !== null &&
-      domain.hold_interval_s !== null &&
-      domain.hold_interval_s <= domain.hello_interval_s
-    ) {
-      warnings.push(`${id}: hold must exceed hello`);
-    }
-  }
-  const ruleById = new Map(workspace.links.map((rule) => [rule.rule_id, rule]));
-  const draftDomainIds = new Set(workspace.routing_domains.map((d) => d.domain_id));
-  for (const boundary of workspace.boundaries) {
-    if (!ruleById.has(boundary.over_rule_id)) {
-      warnings.push("a boundary rides a link rule that is no longer in the session");
-    }
-    if (
-      !draftDomainIds.has(boundary.from_domain_id) ||
-      !draftDomainIds.has(boundary.to_domain_id)
-    ) {
-      warnings.push("a boundary references a routing domain that no longer exists");
-    } else if (boundary.from_domain_id === boundary.to_domain_id) {
-      warnings.push("a boundary must exchange between two different domains");
-    }
-  }
-  return warnings;
 }

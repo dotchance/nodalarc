@@ -14,9 +14,6 @@ import { useCallback, useRef, useState } from "react";
 import {
   type DraftConstellation,
   type DraftGroundSet,
-  type DraftBoundary,
-  type DraftLinkRule,
-  type DraftRoutingDomain,
   type Workspace,
 } from "./workspace";
 
@@ -93,28 +90,6 @@ export function overlayBuffers(
           ),
         };
         break;
-      case "link":
-        out = {
-          ...out,
-          links: out.links.map((r) => (r.rule_id === id ? (buf.draft as DraftLinkRule) : r)),
-        };
-        break;
-      case "domain":
-        out = {
-          ...out,
-          routing_domains: out.routing_domains.map((d) =>
-            d.domain_id === id ? (buf.draft as DraftRoutingDomain) : d,
-          ),
-        };
-        break;
-      case "boundary":
-        out = {
-          ...out,
-          boundaries: out.boundaries.map((b) =>
-            b.boundary_id === id ? (buf.draft as DraftBoundary) : b,
-          ),
-        };
-        break;
     }
   }
   return out;
@@ -137,12 +112,6 @@ export function appliedObjectForKey(workspace: Workspace, key: string): unknown 
       return workspace.space.find((d) => d.segment_id === id) ?? null;
     case "ground":
       return workspace.ground.find((d) => d.segment_id === id) ?? null;
-    case "link":
-      return workspace.links.find((r) => r.rule_id === id) ?? null;
-    case "domain":
-      return workspace.routing_domains.find((d) => d.domain_id === id) ?? null;
-    case "boundary":
-      return workspace.boundaries.find((b) => b.boundary_id === id) ?? null;
     default:
       return null;
   }
@@ -310,76 +279,6 @@ export function useWorkspace() {
     );
   }, []);
 
-  const updateLinkRule = useCallback((ruleId: string, patch: Partial<DraftLinkRule>) => {
-    commit((prev) =>
-      prev
-        ? {
-            ...prev,
-            links: prev.links.map((rule) =>
-              rule.rule_id === ruleId ? { ...rule, ...patch } : rule,
-            ),
-          }
-        : prev,
-    );
-  }, []);
-
-  const removeLinkRule = useCallback((ruleId: string) => {
-    commit((prev) =>
-      prev ? { ...prev, links: prev.links.filter((rule) => rule.rule_id !== ruleId) } : prev,
-    );
-  }, []);
-
-  const updateRoutingDomain = useCallback(
-    (domainId: string, patch: Partial<DraftRoutingDomain>) => {
-      commit((prev) =>
-        prev
-          ? {
-              ...prev,
-              routing_domains: prev.routing_domains.map((domain) =>
-                domain.domain_id === domainId ? { ...domain, ...patch } : domain,
-              ),
-            }
-          : prev,
-      );
-    },
-    [],
-  );
-
-  const removeRoutingDomain = useCallback((domainId: string) => {
-    commit((prev) =>
-      prev
-        ? {
-            ...prev,
-            routing_domains: prev.routing_domains.filter((d) => d.domain_id !== domainId),
-          }
-        : prev,
-    );
-  }, []);
-
-  const updateBoundary = useCallback(
-    (boundaryId: string, patch: Partial<DraftBoundary>) => {
-      commit((prev) =>
-        prev
-          ? {
-              ...prev,
-              boundaries: prev.boundaries.map((boundary) =>
-                boundary.boundary_id === boundaryId ? { ...boundary, ...patch } : boundary,
-              ),
-            }
-          : prev,
-      );
-    },
-    [],
-  );
-
-  const removeBoundary = useCallback((boundaryId: string) => {
-    commit((prev) =>
-      prev
-        ? { ...prev, boundaries: prev.boundaries.filter((b) => b.boundary_id !== boundaryId) }
-        : prev,
-    );
-  }, []);
-
   /** Customize-a-block for ground: swap a placed reference for its fork. */
   const replaceGroundRefWithDraft = useCallback(
     (segmentId: string, draft: DraftGroundSet) => {
@@ -434,11 +333,5 @@ export function useWorkspace() {
     replaceGroundRefWithDraft,
     updateGroundDraft,
     removeGroundDraft,
-    updateLinkRule,
-    removeLinkRule,
-    updateRoutingDomain,
-    removeRoutingDomain,
-    updateBoundary,
-    removeBoundary,
   };
 }

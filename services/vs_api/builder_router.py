@@ -61,7 +61,6 @@ from nodalarc.models.builder_visual_api import (
     BuilderVisualDraftAcceptStateRequest,
     BuilderVisualDraftApplyEditsRequest,
     BuilderVisualDraftApplyEditsResult,
-    BuilderVisualDraftApplyWorkspaceRequest,
     BuilderVisualDraftApplyYamlRequest,
     BuilderVisualDraftApplyYamlResult,
     BuilderVisualDraftAssemblyResult,
@@ -130,14 +129,6 @@ class VisualDraftService(Protocol):
         self,
         request: BuilderVisualDraftApplyYamlRequest,
     ) -> BuilderVisualDraftApplyYamlResult: ...
-
-    def apply_workspace(
-        self,
-        request: BuilderVisualDraftApplyWorkspaceRequest,
-        *,
-        available_node_count: int,
-        preview_factory: PreviewFactory | None = None,
-    ) -> BuilderVisualDraftAssemblyResult: ...
 
     def retarget(
         self,
@@ -496,42 +487,6 @@ def create_builder_router(services: BuilderRouterServices) -> APIRouter:
                 selected.visual_draft_service_factory(context).apply_yaml,
                 request,
             )
-        except BuilderVisualDraftCommandError as error:
-            refusal = CatalogOperationRefusal(
-                code=error.code,
-                message=str(error),
-                ref=str(error.ref),
-                expected_revision=(
-                    str(error.expected_revision) if error.expected_revision is not None else None
-                ),
-                current_revision=(
-                    str(error.current_revision) if error.current_revision is not None else None
-                ),
-                cause_type=type(error).__name__,
-            )
-            return _catalog_refusal_response(CatalogAuthoringError(refusal))
-        except (CatalogRepositoryError, OSError) as error:
-            return _catalog_unavailable_response(error)
-
-    @router.post(
-        "/draft/apply-workspace",
-        response_model=BuilderVisualDraftAssemblyResult,
-        responses=_CATALOG_ERROR_RESPONSES,
-    )
-    async def apply_visual_draft_workspace(
-        request: BuilderVisualDraftApplyWorkspaceRequest,
-        context: Context,
-        available_node_count: NodeCount,
-    ):
-        def apply_workspace() -> BuilderVisualDraftAssemblyResult:
-            return selected.visual_draft_service_factory(context).apply_workspace(
-                request,
-                available_node_count=available_node_count,
-                preview_factory=selected.preview_factory,
-            )
-
-        try:
-            return await run_in_threadpool(apply_workspace)
         except BuilderVisualDraftCommandError as error:
             refusal = CatalogOperationRefusal(
                 code=error.code,

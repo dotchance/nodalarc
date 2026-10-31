@@ -70,10 +70,8 @@ def test_visual_draft_routes_create_open_and_compile_backend_contracts(
     )
     assert created_response.status_code == 200
     created = created_response.json()
-    assert created["projection_status"] == "incomplete_authoring"
     assert created["applied_revision"] is None
     assert created["applied_session"] is None
-    assert created["applied_workspace"] is None
     assert created["target_ref"] == "user:sessions/api-visual-draft.yaml"
 
     incomplete_response = client.post(
@@ -83,7 +81,7 @@ def test_visual_draft_routes_create_open_and_compile_backend_contracts(
     assert incomplete_response.status_code == 200
     incomplete = incomplete_response.json()
     assert incomplete["compile_result"]["save_verdict"]["allowed"] is False
-    assert incomplete["save_request"]["target_ref"] == created["target_ref"]
+    assert incomplete["listing"] is None
 
     opened_response = client.post(
         "/api/v1/builder/draft/open",
@@ -91,9 +89,7 @@ def test_visual_draft_routes_create_open_and_compile_backend_contracts(
     )
     assert opened_response.status_code == 200
     opened = opened_response.json()
-    assert opened["projection_status"] == "applied"
     assert opened["applied_revision"] == opened["draft_revision"] == 0
-    assert opened["authoring_workspace"] == opened["applied_workspace"]
     assert opened["applied_session"] is not None
     assert opened["target_ref"] == "user:sessions/earth-leo-simple.yaml"
     assert "earth-leo-ring-36.yaml" in opened["session_yaml"]
@@ -126,9 +122,12 @@ def test_visual_draft_routes_create_open_and_compile_backend_contracts(
     )
     assert compiled_response.status_code == 200, compiled_response.text
     compiled = compiled_response.json()
-    assert compiled["assembly_issues"] == []
     assert compiled["compile_result"]["save_verdict"]["allowed"] is True
-    assert compiled["save_request"]["draft"] == compiled["assembled_draft"]
+    # The compile is of the accepted session with its proposals, as saved.
+    assert compiled["compile_result"]["draft"]["state"] == {
+        "session": opened["applied_session"],
+        "catalog_documents": opened["catalog_documents"],
+    }
 
 
 def test_visual_yaml_apply_route_echoes_buffer_and_returns_typed_stale_refusal(
@@ -157,7 +156,7 @@ def test_visual_yaml_apply_route_echoes_buffer_and_returns_typed_stale_refusal(
     assert refused["buffer_generation"] == 41
     assert refused["yaml_text"] == invalid
     assert refused["draft"]["draft_revision"] == 0
-    assert refused["draft"]["projection_status"] == "applied"
+    assert refused["draft"] == opened
     assert refused["issues"][0]["source_line"] == 3
 
     stale_response = client.post(
@@ -173,49 +172,6 @@ def test_visual_yaml_apply_route_echoes_buffer_and_returns_typed_stale_refusal(
     assert stale_response.json()["code"] == "catalog_authoring.stale_revision"
     assert stale_response.json()["expected_revision"] == "1"
     assert stale_response.json()["current_revision"] == "0"
-
-
-def test_visual_workspace_apply_route_returns_compiled_revision_and_stale_refusal(
-    client: TestClient,
-) -> None:
-    opened_response = client.post(
-        "/api/v1/builder/draft/open",
-        json={"source_ref": "nodalarc:sessions/earth-leo-simple.yaml"},
-    )
-    assert opened_response.status_code == 200
-    opened = opened_response.json()
-    workspace = dict(opened["authoring_workspace"])
-    workspace["display_name"] = "Changed through workspace route"
-
-    applied_response = client.post(
-        "/api/v1/builder/draft/apply-workspace",
-        json={
-            "draft": opened,
-            "expected_draft_revision": 0,
-            "workspace": workspace,
-        },
-    )
-    assert applied_response.status_code == 200, applied_response.text
-    applied = applied_response.json()
-    assert applied["visual_draft"]["draft_revision"] == 1
-    assert applied["visual_draft"]["projection_status"] == "applied"
-    assert applied["assembled_draft"]["draft_revision"] == 1
-    assert applied["compile_result"]["save_verdict"]["allowed"] is True
-    assert (
-        applied["compile_result"]["canonical_session_json"]["session"]["display_name"]
-        == "Changed through workspace route"
-    )
-
-    stale_response = client.post(
-        "/api/v1/builder/draft/apply-workspace",
-        json={
-            "draft": opened,
-            "expected_draft_revision": 1,
-            "workspace": workspace,
-        },
-    )
-    assert stale_response.status_code == 409, stale_response.text
-    assert stale_response.json()["code"] == "catalog_authoring.stale_revision"
 
 
 def test_visual_control_mutation_route_is_revision_fenced_and_typed(
@@ -593,7 +549,7 @@ def test_visual_draft_route_generates_name_and_places_catalog_reference(
     created_response = client.post("/api/v1/builder/draft/new", json={})
     assert created_response.status_code == 200, created_response.text
     created = created_response.json()
-    generated_name = created["authoring_workspace"]["session_name"]
+    generated_name = created["target_ref"].removeprefix("user:sessions/").removesuffix(".yaml")
     assert generated_name.startswith("untitled-session-")
     assert created["target_ref"] == f"user:sessions/{generated_name}.yaml"
     assert created["session_name_is_placeholder"] is True
@@ -615,11 +571,10 @@ def test_visual_draft_route_generates_name_and_places_catalog_reference(
     assert applied["operation"] == "place_space_reference"
     assert applied["affected_id"] == "space-1"
     assert applied["draft"]["reserved_authoring_ids"] == ["space-1"]
-    assert applied["draft"]["authoring_workspace"]["space_refs"] == [
+    assert applied["draft"]["applied_session"]["segments"] == [
         {
-            "segment_id": "space-1",
-            "source_ref": "nodalarc:constellations/luna/elfo/luna-elfo-relay-2.yaml",
-            "label": "Two-node lunar ELFO relay constellation",
+            "id": "space-1",
+            "source": "nodalarc:constellations/luna/elfo/luna-elfo-relay-2.yaml",
         }
     ]
 
@@ -661,17 +616,20 @@ def test_visual_draft_command_route_returns_next_revision_and_typed_stale_refusa
     assert applied["operation"] == "add_generated_space"
     assert applied["base_draft_revision"] == 0
     assert applied["draft"]["draft_revision"] == 1
-    assert applied["draft"]["projection_status"] == "applied"
     assert applied["draft"]["applied_revision"] == 1
-    assert applied["draft"]["authoring_workspace"] == applied["draft"]["applied_workspace"]
     assert applied["affected_kind"] == "space"
     assert applied["affected_id"] == "space-1"
-    space = applied["draft"]["authoring_workspace"]["space"][0]
+    [segment] = applied["draft"]["applied_session"]["segments"]
+    [constellation] = [
+        proposal["document"]["constellation"]
+        for proposal in applied["draft"]["catalog_documents"]
+        if proposal["ref"] == segment["source"]
+    ]
     assert (
-        space["planes"],
-        space["raan_spacing_deg"],
-        space["phasing_mode"],
-        space["phase_offset_deg"],
+        constellation["planes"]["count"],
+        constellation["planes"]["raan_spacing_deg"],
+        constellation["phasing"]["mode"],
+        constellation["phasing"]["phase_offset_deg"],
     ) == (
         3,
         120.0,
@@ -684,7 +642,7 @@ def test_visual_draft_command_route_returns_next_revision_and_typed_stale_refusa
         json={
             "draft": applied["draft"],
             "expected_draft_revision": 0,
-            "command": {"operation": "add_ground"},
+            "command": {"operation": "add_routing_domain"},
         },
     )
     assert stale_response.status_code == 409
@@ -749,9 +707,20 @@ def test_visual_session_target_collisions_are_typed_409(client: TestClient) -> N
         json={"draft": opened.json()},
     )
     assert compiled.status_code == 200
+    draft = compiled.json()["visual_draft"]
     saved = client.post(
         "/api/v1/builder/session/save",
-        json=compiled.json()["save_request"],
+        json={
+            "draft": {
+                "draft_revision": draft["draft_revision"],
+                "state": {
+                    "session": draft["applied_session"],
+                    "catalog_documents": draft["catalog_documents"],
+                },
+            },
+            "target_ref": draft["target_ref"],
+            "expected_session_revision": draft["expected_session_revision"],
+        },
     )
     assert saved.status_code == 200
 

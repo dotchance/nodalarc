@@ -53,6 +53,7 @@ from tests.unit.authoring.test_builder_visual_draft import (
     _member,
     _object_edit,
     _present_branch,
+    _save_request,
     _stored_state,
 )
 
@@ -292,7 +293,7 @@ def _preview_with(
         BuilderCompileRequest.model_validate_json(
             json.dumps(
                 {
-                    "draft": _json(accepted.assembled_draft),
+                    "draft": _json(_save_request(accepted.visual_draft).draft),
                     "target_ref": accepted.visual_draft.target_ref,
                     "pending_edits": pending,
                 }
@@ -364,7 +365,7 @@ def test_pending_edits_to_every_rule_domain_and_boundary_save_as_the_edited_sess
     assert compiled.save_verdict.allowed is True, compiled.issues
     saved = save_builder_session(
         BuilderSessionSaveRequest.model_validate_json(
-            result.assembly.save_request.model_dump_json()
+            _save_request(result.assembly.visual_draft).model_dump_json()
         ),
         context,
         available_node_count=1_000_000,
@@ -439,7 +440,7 @@ def test_an_incomplete_edit_refuses_its_batch_stays_pending_and_blocks_save(
     # The incomplete edit still fits the accepted session. A preview holding it
     # shows the refusal where it lands, and the session cannot be saved.
     preview = _preview_with(context, applied.assembly, [incomplete])
-    assert preview.draft == applied.assembly.assembled_draft
+    assert preview.draft == _save_request(applied.assembly.visual_draft).draft
     (outcome,) = preview.pending_edit_outcomes
     assert outcome.status == "invalid"
     assert [issue.json_pointer for issue in outcome.issues] == [pointer]
@@ -601,7 +602,7 @@ def test_a_pending_edit_of_a_proposed_node_saves_with_the_session(
     assert result.assembly.compile_result.save_verdict.allowed is True
     saved = save_builder_session(
         BuilderSessionSaveRequest.model_validate_json(
-            result.assembly.save_request.model_dump_json()
+            _save_request(result.assembly.visual_draft).model_dump_json()
         ),
         context,
         available_node_count=1_000_000,

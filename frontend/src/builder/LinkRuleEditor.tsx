@@ -45,7 +45,7 @@ import {
   useLatestObjectChange,
 } from "./pendingEditKit";
 import type { ListedLinkRule } from "./sessionListing";
-import { placedSegments, type Workspace } from "./workspace";
+import type { SessionSegment } from "./sessionSegments";
 
 /** One change of a link rule: its whole card value, or a field-editor batch. */
 export type LinkRuleChange = BuilderVisualLinkRuleWidget | BuilderVisualObjectControlEdit;
@@ -55,7 +55,8 @@ const REPOINT_WAITS_FOR_CHECK =
   "A segment change is sent with this rule's edit. Wait until the edit is checked.";
 
 interface LinkRuleEditorProps {
-  workspace: Workspace;
+  /** Every segment the session declares. */
+  placed: ReadonlyArray<SessionSegment>;
   /** The rule's card value as the card shows it. */
   rule: BuilderVisualLinkRule;
   /** The allocator's own outcome for this rule from the last resolve —
@@ -81,7 +82,7 @@ function EndpointCard({
   title,
   endpoint,
   other,
-  workspace,
+  placed,
   segments,
   onUpdate,
   onSegmentChange,
@@ -90,13 +91,13 @@ function EndpointCard({
   title: string;
   endpoint: BuilderVisualLinkEndpoint;
   other: BuilderVisualLinkEndpoint;
-  workspace: Workspace;
+  /** Every segment the session declares. */
+  placed: ReadonlyArray<SessionSegment>;
   segments: ReadonlyArray<BuilderWorldSegment> | null;
   onUpdate: (patch: Partial<BuilderVisualLinkEndpoint>, typed?: boolean) => void;
   onSegmentChange: (newSegmentId: string) => void;
   authoring: BuilderVisualAuthoringFacts;
 }) {
-  const placed = placedSegments(workspace);
   const segmentId = endpoint.segment_id ?? "";
   const role = endpoint.role ?? null;
   const medium = endpoint.medium ?? null;
@@ -192,7 +193,7 @@ function EndpointCard({
 }
 
 export function LinkRuleEditor({
-  workspace,
+  placed,
   rule,
   onUpdate,
   onUpdateEndpoint,
@@ -222,7 +223,7 @@ export function LinkRuleEditor({
         title="Endpoint A"
         endpoint={a}
         other={b}
-        workspace={workspace}
+        placed={placed}
         segments={segments}
         onUpdate={(patch, typed) => onUpdateEndpoint("a", patch, typed)}
         onSegmentChange={repoint("a")}
@@ -232,7 +233,7 @@ export function LinkRuleEditor({
         title="Endpoint B"
         endpoint={b}
         other={a}
-        workspace={workspace}
+        placed={placed}
         segments={segments}
         onUpdate={(patch, typed) => onUpdateEndpoint("b", patch, typed)}
         onSegmentChange={repoint("b")}

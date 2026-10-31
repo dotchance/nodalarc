@@ -19,7 +19,6 @@ import {
   useMemo,
   useRef,
   useState,
-  type ComponentProps,
   type MutableRefObject,
 } from "react";
 import { Scene, type SceneSnapshot } from "../globe/r3f/Scene";
@@ -43,9 +42,8 @@ import { buildAreaColoring } from "../routing/instances";
 import { builderSnapshotFromWorld } from "./builderSnapshot";
 import { CandidateLines } from "./CandidateLines";
 import { computeCandidates } from "./candidates";
-import { EditorApplyRow, Field, InlineSelect, PasteArea } from "./editorKit";
-import { PendingEditApplyRow } from "./pendingEditKit";
-import { accessBeamElevationDeg } from "./linkPhysics";
+import { Field, PasteArea } from "./editorKit";
+import { PendingEditApplyRow, PendingObjectFields } from "./pendingEditKit";
 import { CatalogObjectView } from "./CatalogObjectView";
 import { ConstellationEditor } from "./ConstellationEditor";
 import { CustomizeChainEditor } from "./CustomizeChainEditor";
@@ -86,12 +84,6 @@ import {
   type BuilderControlMutation,
 } from "./GraphicalControlTreeEditor";
 import {
-  appliedObjectForKey,
-  overlayBuffers,
-  workspaceForSave,
-  useWorkspace,
-} from "./useWorkspace";
-import {
   pendingEditAddress,
   pendingEditTarget,
   pendingEditTitle,
@@ -104,14 +96,8 @@ import {
   createCatalogDraft,
   openCatalogDraft,
 } from "./builderApiClient";
-import { workspaceFromVisualDraft } from "./visualWorkspace";
 import { useYamlAutoApply } from "./useYamlBuffer";
-import {
-  placedSegments,
-  type DraftConstellation,
-  type DraftGroundSet,
-  type Workspace,
-} from "./workspace";
+import { isJsonObject, refStem, sessionSegment, sessionSegments } from "./sessionSegments";
 import type {
   BuilderMemberAddress,
   BuilderVisualDraftAssemblyResult,
@@ -121,7 +107,6 @@ import type {
   BuilderVisualAuthoringFacts,
   BuilderVisualDraftApplyYamlResult,
   BuilderVisualSchedulingPreset,
-  BuilderVisualDraftCommandOperation,
   BuilderVisualDraftCommandRequest,
   BuilderVisualDraftCommandResult,
   CatalogComponentDraftEnvelope,
@@ -145,11 +130,7 @@ function refusalTarget(
   const id = member["id"];
   if (typeof id !== "string") return null;
   const target: EditorTarget =
-    match![1] === "link_rules"
-      ? { kind: "link", id }
-      : "placement" in member
-        ? { kind: "ground", id }
-        : { kind: "segment", id };
+    match![1] === "link_rules" ? { kind: "link", id } : { kind: "segment", id };
   return { target, key: targetKey(target) };
 }
 import type { BuilderWorld } from "./builderTypes";
@@ -225,33 +206,10 @@ function count(n: number, word: string): string {
   return `${n} ${word}${n === 1 ? "" : "s"}`;
 }
 
-/** The commands that write link rules, routing domains and boundaries. They
- *  run against the accepted session. */
-const LINK_AND_ROUTING_COMMANDS: ReadonlySet<BuilderVisualDraftCommandOperation> = new Set([
-  "connect_segments",
-  "add_routing_domain",
-  "add_boundary",
-  "rederive_link",
-]);
-
-/** The windows that edit the session's own fields and its segments. Their
- *  edits change the twin. */
-const SESSION_AND_SEGMENT_WINDOW_KINDS: ReadonlySet<EditorTarget["kind"]> = new Set([
-  "session",
-  "segment",
-  "ground",
-]);
-
 /** One-line form of a refusal for the compact surfaces (canvas note,
  *  status bar) — the owning window's wall carries the full text. */
 function truncateError(text: string, max = 180): string {
   return text.length > max ? `${text.slice(0, max)}\u2026` : text;
-}
-
-function sameWorkspace(left: Workspace | null, right: Workspace | null): boolean {
-  if (left === right) return true;
-  if (!left || !right) return false;
-  return JSON.stringify(left) === JSON.stringify(right);
 }
 
 function groupByBody(segments: SegmentSummary[]): [string, SegmentSummary[]][] {
@@ -295,13 +253,12 @@ type SaveState =
   | { kind: "save-committed-unverified"; message: string; sessionRef: string }
   | { kind: "failed"; message: string };
 
-/** Save is a small dialog, not a silent write. The name is buffered here and
- *  committed once on Save (— the Session window stays the only live
- *  name editor); with unapplied window edits or pending link and routing
- *  edits the primary action applies them first, and saving around them is
- *  the quieter, explicit choice. */
+/** Save is a small dialog, not a silent write. The name it saves under is the
+ *  session's identity: a new name saves the session under that name. With
+ *  pending edits the primary action applies them first, and saving around
+ *  them is the quieter, explicit choice. */
 function SaveSessionDialog({
-  workspaceName,
+  sessionName,
   canSave,
   blockedReason,
   saveState,
@@ -310,28 +267,23 @@ function SaveSessionDialog({
   onSave,
   onClose,
 }: {
-  workspaceName: string;
+  sessionName: string;
   canSave: boolean;
   blockedReason: string | null;
   saveState: SaveState;
-  /** Windows with unapplied edits, and pending link and routing edits. */
+  /** The pending edits. */
   unappliedEdits: number;
-  /** The stale windows and stale pending edits, each named by its object. */
+  /** The stale pending edits, each named by its object. */
   staleList: { key: string; title: string }[];
   onSave: (opts: {
     applyAll: boolean;
     name: string;
-    nameTouched: boolean;
     confirmedStaleKeys?: ReadonlySet<string>;
   }) => void;
   onClose: () => void;
 }) {
-  const [name, setName] = useState(workspaceName);
-  // An untouched name field must never override a rename the apply-all
-  // overlays carry in from a dirty Session window — only a name the user
-  // actually typed here wins.
-  const [nameTouched, setNameTouched] = useState(false);
-  // The stale confirm sub-view. Each stale window or edit starts DECLINED:
+  const [name, setName] = useState(sessionName);
+  // The stale confirm sub-view. Each stale edit starts DECLINED:
   // overwriting a value that moved underneath the edit is always an explicit
   // opt-in, never a default of a bulk gesture.
   const [confirming, setConfirming] = useState(false);
@@ -347,7 +299,7 @@ function SaveSessionDialog({
   }, [saveState.kind]);
 
   // `hasStale` guards the sub-view: an external change that resolves the last
-  // stale window mid-confirm falls back to the summary rather than an empty list.
+  // stale edit mid-confirm falls back to the summary rather than an empty list.
   if (confirming && hasStale) {
     const confirmCount = staleList.filter((s) => confirmed[s.key]).length;
     return (
@@ -395,7 +347,7 @@ function SaveSessionDialog({
             variant="primary"
             disabled={!canSave || saving}
             onClick={() =>
-              onSave({ applyAll: true, name, nameTouched, confirmedStaleKeys: confirmedKeys() })
+              onSave({ applyAll: true, name, confirmedStaleKeys: confirmedKeys() })
             }
           >
             <Icon name="save" size={13} />{" "}
@@ -422,10 +374,7 @@ function SaveSessionDialog({
       <Field
         label="save as"
         value={name}
-        onChange={(value) => {
-          setName(value);
-          setNameTouched(true);
-        }}
+        onChange={setName}
       />
       <div className="builder-site-derived">
         VS-API validates and owns the saved session identifier.
@@ -468,7 +417,7 @@ function SaveSessionDialog({
               onClick={() =>
                 hasStale
                   ? setConfirming(true)
-                  : onSave({ applyAll: true, name, nameTouched })
+                  : onSave({ applyAll: true, name })
               }
             >
               <Icon name="save" size={13} />{" "}
@@ -485,7 +434,7 @@ function SaveSessionDialog({
               // refusal lands verbatim as the save error.
               disabled={saving}
               title={`leaves out the ${count(unappliedEdits, "unapplied edit")}`}
-              onClick={() => onSave({ applyAll: false, name, nameTouched })}
+              onClick={() => onSave({ applyAll: false, name })}
             >
               Save applied state only
             </Button>
@@ -494,7 +443,7 @@ function SaveSessionDialog({
           <Button
             variant="primary"
             disabled={!canSave || saving}
-            onClick={() => onSave({ applyAll: false, name, nameTouched })}
+            onClick={() => onSave({ applyAll: false, name })}
           >
             <Icon name="save" size={13} /> {saving ? "Saving…" : "Save"}
           </Button>
@@ -544,8 +493,6 @@ export function BuilderView({
     applyYamlBuffer,
     applyYamlBufferOnce,
     useCanonicalYaml,
-    applyWorkspace,
-    compilePreview,
     previewPendingEdits,
     showAcceptedCompile,
     customizeChain,
@@ -572,21 +519,6 @@ export function BuilderView({
   // Builder-local selection: inspect-only, never shared with the live view's
   // selection (two different worlds must not share a pointer).
   const [selection, setSelection] = useState<Selection | null>(null);
-  // The authoring workspace: client-side drafts, backend-compiled on every
-  // edit; the world on screen is always the resolver's expansion of it.
-  const {
-    workspace,
-    currentWorkspace,
-    openWorkspace,
-    commitWorkspace,
-    updateSession,
-    removeRefSegment,
-    removeConstellation,
-    updateConstellation,
-    removeGroundRef,
-    updateGroundDraft,
-    removeGroundDraft,
-  } = useWorkspace();
   const nodeCatalog = useBuilderCatalog("nodes");
   const terminalCatalog = useBuilderCatalog("terminals");
   const builderBootstrap = useBuilderBootstrap();
@@ -635,8 +567,7 @@ export function BuilderView({
   const [revealedSegment, setRevealedSegment] = useState<string | null>(null);
   useEffect(() => {
     // Clear the flash when the builder is hidden — otherwise the effect cleanup
-    // cancels the reset timer and the row stays lit, replaying on every re-show
-    // (the same reason freshId resets on !active).
+    // cancels the reset timer and the row stays lit, replaying on every re-show.
     if (!active) {
       setRevealedSegment(null);
       return;
@@ -657,31 +588,8 @@ export function BuilderView({
     // scrollIntoView is optional-chained: jsdom does not implement it.
     document.querySelector(`[data-segment-id="${escaped}"]`)?.scrollIntoView?.({ block: "nearest" });
   }, [revealedSegment]);
-  // The floating-editor windows and their buffered edits (useEditorWindows).
-  const {
-    windows,
-    openEditor,
-    closeWindow,
-    closeSessionWindows,
-    isOpen,
-    buffers,
-    currentBufferMutationRevision,
-    patchBuffer,
-    revertBuffer,
-    applyBuffer,
-    previewWorkspace,
-    dirtyWindows,
-    staleKeys,
-    staleList,
-    loadCurrentValues,
-    settleBuffer,
-    dropAppliedBuffers,
-  } = useEditorWindows({
-    workspace,
-    updateSession,
-    updateConstellation,
-    updateGroundDraft,
-  });
+  // The floating-editor windows (useEditorWindows).
+  const { windows, openEditor, closeWindow, closeSessionWindows, isOpen } = useEditorWindows();
   const [saveState, setSaveState] = useState<SaveState>({ kind: "idle" });
   // Why the last removal from a link rule or routing domain window was
   // refused, with that window's key.
@@ -690,34 +598,10 @@ export function BuilderView({
   );
   // Whether the next deploy records the session run's history.
   const [recordHistory, setRecordHistory] = useState(false);
-  // The twin as the last accepted result seeded it. An accepted result
-  // re-seeds the twin when the twin is still what its request started from, or
-  // still this seed; a twin the user changed meanwhile is kept, and the preview
-  // effect then applies it.
-  const seededTwin = useRef<Workspace | null>(null);
-  const seedTwin = useCallback(
-    (draft: BuilderVisualDraftEnvelope) => {
-      const next = workspaceFromVisualDraft(draft);
-      seededTwin.current = next;
-      openWorkspace(next);
-    },
-    [openWorkspace],
-  );
-  const adoptAccepted = (draft: BuilderVisualDraftEnvelope, startedFrom: Workspace | null) => {
-    const twin = currentWorkspace();
-    if (twin === startedFrom || twin === seededTwin.current) seedTwin(draft);
-  };
-  // A twin the backend refused is not sent again until the user changes it.
-  const refusedTwin = useRef<Workspace | null>(null);
-  const adoptAppliedYaml = useCallback(
-    (result: BuilderVisualDraftApplyYamlResult) => {
-      if (!result.applied) return result;
-      seedTwin(result.draft);
-      setSaveState({ kind: "idle" });
-      return result;
-    },
-    [seedTwin],
-  );
+  const adoptAppliedYaml = useCallback((result: BuilderVisualDraftApplyYamlResult) => {
+    if (result.applied) setSaveState({ kind: "idle" });
+    return result;
+  }, []);
   const applySessionYaml = useCallback(
     async (generation: number) => adoptAppliedYaml(await applyYamlBuffer(generation)),
     [adoptAppliedYaml, applyYamlBuffer],
@@ -739,64 +623,29 @@ export function BuilderView({
   );
   const markClean = (draft: BuilderVisualDraftEnvelope) =>
     setCleanDraft({ targetRef: draft.target_ref, revision: draft.draft_revision });
-  // Whether the twin holds no edit the backend has not accepted.
-  const twinMatchesDraft = sameWorkspace(
-    workspace,
-    (visualDraft?.authoring_workspace ?? visualDraft?.applied_workspace ?? null) as Workspace | null,
-  );
   /** One accepting gesture at a time: a command, a customization, a control
-   *  edit or a YAML apply starts only when no change is being applied and the
-   *  twin holds no edit the backend has not accepted (it would be discarded
-   *  otherwise). Null when one may start; otherwise why not. */
+   *  edit or a YAML apply starts only when no change is being applied. Null
+   *  when one may start; otherwise why not. */
   const unsettledReason = (): string | null => {
     if (!visualDraft) return "No session draft is open.";
     if (writer !== null) return "A change is still being applied; try again when it finishes.";
-    if (twinMatchesDraft) return null;
-    return workspace === refusedTwin.current
-      ? "The last edit was not accepted; change it or undo it first."
-      : "The last edit is still being applied; try again when it finishes.";
+    return null;
   };
   const refuseUnlessSettled = () => {
     const reason = unsettledReason();
     if (reason !== null) throw new Error(reason);
   };
-  // Pending link rule, routing domain and boundary edits. The YAML buffer, the
-  // session pane and the windows that edit the twin wait while any is pending.
+  // Pending edits. The YAML buffer and the session pane wait while any is
+  // pending.
   const pendingEditCount = pendingEdits.size;
   // The pending edits the backend found stale: the accepted session changed
   // their object since the edit began. Each is named as the save dialog lists it.
   const stalePendingEdits = [...pendingEdits.entries()]
     .filter(([key]) => pendingEditOutcomes.get(key)?.status === "stale")
     .map(([key, pending]) => ({ key, title: pendingEditTitle(pending.edit.address) }));
-  /** Why a change of the twin waits, named for `gesture`; null when it may
-   *  start. It waits while a link or routing edit is pending, and while a
-   *  change of one is being checked, which becomes a pending edit when
-   *  answered. */
-  const twinWait = (gesture: string): string | null =>
-    pendingEditCount > 0
-      ? `Apply or discard the ${pendingEditsPhrase(pendingEditCount)} before ${gesture}.`
-      : checkingObjects.size > 0
-        ? `Wait for the link or routing change being checked before ${gesture}.`
-        : null;
-  const twinRemovalWait = twinWait("removing a segment");
-  const unappliedSessionAndSegmentWindows = windows.filter(
-    (w) => SESSION_AND_SEGMENT_WINDOW_KINDS.has(w.target.kind) && buffers[w.key]?.dirty === true,
-  ).length;
-  /** Link and routing changes are made on the accepted session, so they wait
-   *  while a session, segment or ground window holds edits the backend has not
-   *  accepted. Null when they may start; otherwise why not. */
-  const linkAndRoutingRefusal = (): string | null =>
-    unappliedSessionAndSegmentWindows > 0
-      ? `Apply or discard the ${count(
-          unappliedSessionAndSegmentWindows,
-          "session, segment or ground window",
-        )} with unapplied edits first.`
-      : null;
   const unsavedSessionWork = draftHoldsUnsavedWork({
     draft: visualDraft,
     clean: cleanDraft,
-    twinMatchesDraft,
-    dirtyWindowCount: dirtyWindows,
     pendingEditCount,
     yamlDirty: yamlBuffer.dirty,
   });
@@ -820,21 +669,17 @@ export function BuilderView({
       closeSessionWindows();
       setSaveState({ kind: "idle" });
       void createDraft({}).then(
-        (draft) => {
-          markClean(draft);
-          seedTwin(draft);
-        },
+        (draft) => markClean(draft),
         (cause) => setDraftError(cause instanceof Error ? cause.message : String(cause)),
       );
     }, "starting a new session");
   const ensureThenCreate = (create: () => void, label: string) => {
-    if (workspace) create();
+    if (visualDraft) create();
     else
       displace(() => {
         void createDraft({})
           .then((draft) => {
             markClean(draft);
-            seedTwin(draft);
             create();
           })
           .catch((cause) =>
@@ -844,22 +689,6 @@ export function BuilderView({
   };
   // Every link rule, routing domain and boundary the accepted session
   // declares, as the backend lists them, with the pending edits laid over them.
-  /** The documents of one family the accepted session proposes, for the editors
-   *  that pick or open them. */
-  const proposedDocuments = (family: "nodes" | "sites") =>
-    (visualDraft?.catalog_documents ?? [])
-      .filter((proposal) => proposal.ref.startsWith(`user:${family}/`))
-      .map((proposal) => {
-        const body = proposal.document[family === "nodes" ? "node" : "site"];
-        const name =
-          body && typeof body === "object" && !Array.isArray(body)
-            ? (body as Readonly<Record<string, JsonValue>>).display_name
-            : undefined;
-        return {
-          ref: proposal.ref,
-          label: typeof name === "string" ? name : proposal.ref.slice(proposal.ref.lastIndexOf("/") + 1),
-        };
-      });
   const listed = useMemo(
     () =>
       listSessionObjects(
@@ -891,101 +720,49 @@ export function BuilderView({
   /** Inline wall text for one open editor window (null = not this window's). */
   const wallFor = (target: EditorTarget): string | null =>
     wall && targetKey(target) === wall.key ? (resolveError?.error ?? null) : null;
-  // The edit-to-compile loop. A twin that moved (OK, Apply) is applied
-  // as the next accepted revision, and the twin is re-seeded from the result
-  // unless it moved again meanwhile. Open windows' unapplied edits are only
-  // previewed: the backend compiles them over the draft and accepts nothing.
-  // Pending link rule, routing domain and boundary edits are previewed the
-  // same way: the backend compiles the accepted session with them applied.
+  // The edit-to-compile preview: pending edits are previewed by compiling the
+  // accepted session with them applied; the backend accepts nothing.
   // The library revision is a dependency so a preview recompiles when a
   // user-catalog mutation changes the dependency closure under open edits.
   const libraryRevision = useLibraryRevision();
-  // A New session the backend refuses surfaces here; the current workspace stands.
+  // A New session the backend refuses surfaces here; the current draft stands.
   const [draftError, setDraftError] = useState<string | null>(null);
   const [openSessionError, setOpenSessionError] = useState<string | null>(null);
-  const hasDrafts =
-    !!workspace &&
-    workspace.space.length +
-      workspace.space_refs.length +
-      workspace.ground.length +
-      workspace.ground_refs.length >
-      0;
+  const draftSegments = sessionSegments(visualDraft?.applied_session);
+  const hasDrafts = draftSegments.length > 0;
+  const sessionTime = visualDraft?.applied_session?.time;
+  const sessionTimeRate =
+    isJsonObject(sessionTime)
+      ? timeRateSummary(
+          typeof sessionTime.step_seconds === "number" ? sessionTime.step_seconds : null,
+          typeof sessionTime.compression === "number" ? sessionTime.compression : null,
+        )
+      : "no accepted session yet";
   const yamlBlocksGui = yamlBlocksGraphicalEditing(visualDraft !== null, yamlBuffer);
   const yamlHasErrors = yamlBuffer.issues.length > 0 || yamlBuffer.applyFailure !== null;
   /** Why the windows that edit pending edits cannot change their objects now;
    *  null when they can. Those edits are made on the accepted session, so they
-   *  wait while a change is being applied, while the draft holds a change the
-   *  backend has not accepted, while the YAML is unapplied, and while a window
-   *  holds twin edits not yet applied. */
+   *  wait while a change is being applied, while the draft holds no accepted
+   *  session, and while the YAML is unapplied. */
   const pendingEditRefusal = (): string | null => {
     const unsettled = unsettledReason();
     if (unsettled !== null) return unsettled;
-    if (visualDraft?.projection_status !== "applied") {
-      return (
-        "The session draft holds a change the backend has not accepted. Fix or undo it " +
-        "before editing link rules, routing domains and boundaries."
-      );
+    if (!visualDraft?.applied_session) {
+      return "The session draft holds no accepted session yet. Add a segment first.";
     }
     if (yamlBlocksGui) return "Apply or canonicalize the session YAML before editing here.";
-    return linkAndRoutingRefusal();
+    return null;
   };
   useEffect(() => {
-    if (
-      saveState.kind === "saving" ||
-      writer !== null ||
-      !workspace ||
-      !visualDraft ||
-      yamlBlocksGui
-    ) {
-      return;
-    }
-    const projected = (visualDraft.authoring_workspace ??
-      visualDraft.applied_workspace) as Workspace | null;
-    const appliedWorkspace = currentWorkspace();
-    if (!sameWorkspace(workspace, projected)) {
-      if (workspace === refusedTwin.current) return;
-      const timer = setTimeout(() => {
-        void applyWorkspace(workspace)
-          .then((result) => adoptAccepted(result.visual_draft, appliedWorkspace))
-          .catch(() => {
-            // applyWorkspace put the refusal on screen.
-            refusedTwin.current = workspace;
-          });
-      }, 300);
-      return () => clearTimeout(timer);
-    }
-    // While a link or routing edit is pending, the windows that edit the twin
-    // wait, and the preview compiles the pending edits.
-    if (pendingEdits.size > 0) {
-      const timer = setTimeout(() => void previewPendingEdits(), 300);
-      return () => clearTimeout(timer);
-    }
-    const preview = previewWorkspace();
-    if (!preview || sameWorkspace(preview, projected)) {
+    if (saveState.kind === "saving" || writer !== null || !visualDraft || yamlBlocksGui) return;
+    if (pendingEdits.size === 0) {
       showAcceptedCompile();
       return;
     }
-    const bufferRevision = currentBufferMutationRevision();
-    const timer = setTimeout(() => {
-      void compilePreview(
-        preview,
-        () =>
-          currentBufferMutationRevision() === bufferRevision &&
-          currentWorkspace() === appliedWorkspace,
-      );
-    }, 300);
+    const timer = setTimeout(() => void previewPendingEdits(), 300);
     return () => clearTimeout(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [
-    workspace,
-    buffers,
-    pendingEdits,
-    libraryRevision,
-    visualDraft,
-    yamlBlocksGui,
-    saveState.kind,
-    writer,
-  ]);
+  }, [pendingEdits, libraryRevision, visualDraft, yamlBlocksGui, saveState.kind, writer]);
 
   // A failed apply is held in the buffer state, which the YAML pane shows.
   const autoApplySessionYaml = useCallback(
@@ -994,13 +771,10 @@ export function BuilderView({
   );
   useYamlAutoApply(
     yamlBuffer,
-    visualDraft !== null && dirtyWindows === 0 && pendingEditCount === 0 && twinMatchesDraft,
+    visualDraft !== null && pendingEditCount === 0,
     autoApplySessionYaml,
   );
 
-  // the object a create gesture just made — its editor focuses the
-  // name once.
-  const [freshId, setFreshId] = useState<string | null>(null);
   const acceptedOperationId =
     saveState.kind === "deploy-accepted" ? saveState.operationId : null;
   const { operation: transitionOperation, error: transitionPollError } =
@@ -1009,18 +783,6 @@ export function BuilderView({
     saveState.kind === "deploy-accepted" &&
     (transitionOperation === null || !transitionIsTerminal(transitionOperation.state));
   const [copyState, setCopyState] = useState<"idle" | "copied" | "failed">("idle");
-  // the create-focus marker is one-shot. Drop it once the window it names
-  // is gone (a closed window must not re-grab focus if that id reappears), and
-  // whenever the builder is left, so returning never focuses a stale field.
-  useEffect(() => {
-    if (!active) {
-      if (freshId !== null) setFreshId(null);
-      return;
-    }
-    if (freshId && !windows.some((w) => "id" in w.target && w.target.id === freshId)) {
-      setFreshId(null);
-    }
-  }, [active, windows, freshId]);
   // the Copy result is transient feedback, cleared after a beat so the
   // control returns to its resting label.
   useEffect(() => {
@@ -1028,23 +790,6 @@ export function BuilderView({
     const t = setTimeout(() => setCopyState("idle"), 2000);
     return () => clearTimeout(t);
   }, [copyState]);
-  const findings = useMemo(() => {
-    if (!workspace) return [];
-    return (assemblyResult?.assembly_issues ?? []).map((issue) => {
-      const match = /^workspace\.(space|ground)\.(\d+)/.exec(issue.draft_path ?? "");
-      if (!match) return { message: issue.message, target: null as EditorTarget | null };
-      const index = Number(match[2]);
-      const target =
-        match[1] === "space"
-          ? workspace.space[index]
-            ? ({ kind: "segment", id: workspace.space[index]!.segment_id } as const)
-            : null
-          : workspace.ground[index]
-            ? ({ kind: "ground", id: workspace.ground[index]!.segment_id } as const)
-            : null;
-      return { message: issue.message, target };
-    });
-  }, [assemblyResult?.assembly_issues, workspace]);
   // The pending edits the backend has issues with: the issues of its latest
   // answer, or its refusal of the edit. Each names its object and opens the
   // window that edits it.
@@ -1064,33 +809,28 @@ export function BuilderView({
       },
     ];
   });
-  /** One save path for both dialog actions: submit the exact draft, then adopt it. */
+  /** One save path for both dialog actions: submit the accepted session with
+   *  its proposals under the name the dialog states, then adopt it. */
   const performSave = async ({
     applyAll,
     name,
-    nameTouched,
     confirmedStaleKeys,
   }: {
     applyAll: boolean;
     name: string;
-    nameTouched: boolean;
     confirmedStaleKeys?: ReadonlySet<string>;
   }) => {
-    if (!workspace) return;
+    if (!visualDraft) return;
     const stalePendingKeys = new Set(stalePendingEdits.map((stale) => stale.key));
-    if (
-      applyAll &&
-      (staleKeys.size > 0 || stalePendingKeys.size > 0) &&
-      confirmedStaleKeys === undefined
-    ) {
-      // Fail-closed backstop: a bulk apply-and-save with stale windows or
-      // stale pending edits must pass through the confirm flow, which decides
-      // each one (confirm = overwrite the moved value, decline = leave it
-      // out). A direct call carrying no decisions refuses rather than silently
-      // overwrite an object the user reverted.
+    if (applyAll && stalePendingKeys.size > 0 && confirmedStaleKeys === undefined) {
+      // Fail-closed backstop: a bulk apply-and-save with stale pending edits
+      // must pass through the confirm flow, which decides each one (confirm =
+      // overwrite the moved value, decline = leave it out). A direct call
+      // carrying no decisions refuses rather than silently overwrite an
+      // object the user reverted.
       setSaveState({
         kind: "failed",
-        message: "confirm the stale windows and edits before applying",
+        message: "confirm the stale edits before applying",
       });
       return;
     }
@@ -1101,14 +841,12 @@ export function BuilderView({
       if (yamlBlocksGui) {
         throw new Error("apply valid canonical YAML before saving the graphical session");
       }
-      if (nameTouched && !name.trim()) {
-        throw new Error("session name is required");
-      }
-      // Pending link rule, routing domain and boundary edits are applied
-      // first, as one accepted revision through the route that applies them.
-      // A declined stale edit stays pending; a confirmed one is re-applied over
-      // the object as the session now holds it. A refusal applies none of them
-      // and fails the save.
+      const saveName = name.trim();
+      if (!saveName) throw new Error("session name is required");
+      // Pending edits are applied first, as one accepted revision through the
+      // route that applies them. A declined stale edit stays pending; a
+      // confirmed one is re-applied over the object as the session now holds
+      // it. A refusal applies none of them and fails the save.
       let editsApplied: BuilderVisualDraftAssemblyResult | null = null;
       if (applyAll) {
         const keys = [...pendingEdits.keys()].filter(
@@ -1129,63 +867,45 @@ export function BuilderView({
           editsApplied = result.assembly;
         }
       }
-      // The session as this save starts from: the accepted revision the
-      // pending edits made, or the one the page held.
-      const savedFrom = editsApplied ? workspaceFromVisualDraft(editsApplied.visual_draft) : workspace;
-      const draftNow = editsApplied?.visual_draft ?? visualDraft;
-      const assemblyNow = editsApplied ?? assemblyResult;
-      // Declined stale windows (stale, not confirmed) are excluded from the
-      // overlay and survive the save open/dirty/stale; confirmed stale +
-      // non-stale dirty buffers apply.
-      const excludeKeys = new Set(
-        [...staleKeys].filter((k) => !confirmedStaleKeys?.has(k)),
-      );
-      // The exact buffers this save overlays, captured by identity BEFORE the
-      // network round-trip. The save is non-modal — other editor windows stay
-      // live — so the post-save clear removes only these applied buffers,
-      // matched by reference. Anything created or re-edited during the await
-      // has a fresh identity and survives, and declined-stale buffers were
-      // never in this set: no in-flight edit is silently discarded.
-      const appliedBuffers = new Map(
-        Object.entries(buffers).filter(([k, b]) => b.dirty && !excludeKeys.has(k)),
-      );
-      const next = workspaceForSave(savedFrom, buffers, {
-        applyAll,
-        dialogName: name,
-        nameTouched,
-        excludeKeys,
-      });
-      const currentTargetName = draftNow?.target_ref
-        .split("/")
-        .pop()
-        ?.replace(/\.ya?ml$/, "");
-      if (!currentTargetName) throw new Error("the current session target is unavailable");
-      const retargetRequired = next.session_name !== currentTargetName;
-      const workspaceForCurrentTarget = retargetRequired
-        ? { ...next, session_name: currentTargetName }
-        : next;
-      const currentProjection = draftNow?.authoring_workspace ?? draftNow?.applied_workspace;
-      let assembled =
-        assemblyNow && sameWorkspace(
-          workspaceForCurrentTarget,
-          currentProjection as Workspace | null,
-        )
-          ? assemblyNow
-          : await applyWorkspace(workspaceForCurrentTarget);
-      const preparedRetarget = retargetRequired
-        ? await prepareRetarget(`user:sessions/${next.session_name}.yaml`)
-        : null;
+      // The accepted session this save writes: the revision the pending
+      // edits made, or the one the page holds.
+      let assembled = editsApplied ?? assemblyResult;
+      if (
+        assembled === null ||
+        (editsApplied === null && assembled.visual_draft.draft_revision !== visualDraft.draft_revision)
+      ) {
+        throw new Error("the latest session draft must compile before save");
+      }
+      const preparedRetarget =
+        saveName !== refStem(assembled.visual_draft.target_ref)
+          ? await prepareRetarget(`user:sessions/${saveName}.yaml`)
+          : null;
       preparedRetargetForSave = preparedRetarget;
       if (preparedRetarget) assembled = preparedRetarget;
       if (!assembled.compile_result.save_verdict.allowed) {
         throw new Error(
           assembled.compile_result.save_verdict.blockers?.[0]?.message ??
-            "the backend blocked this visual draft from saving",
+            "the backend blocked this session draft from saving",
         );
       }
+      const draft = assembled.visual_draft;
+      if (!draft.applied_session) throw new Error("the session draft holds no accepted session");
       const capture = captureCoordinator();
       saveCapture = capture;
-      const saved = await saveSession(assembled.save_request, capture);
+      const saved = await saveSession(
+        {
+          draft: {
+            draft_revision: draft.draft_revision,
+            state: {
+              session: draft.applied_session,
+              catalog_documents: draft.catalog_documents ?? [],
+            },
+          },
+          target_ref: draft.target_ref,
+          expected_session_revision: draft.expected_session_revision ?? null,
+        },
+        capture,
+      );
       const result = saved.result;
       if (!saved.reopenedDraft) {
         if (preparedRetarget && captureIsCurrent(capture)) {
@@ -1195,10 +915,6 @@ export function BuilderView({
             canonicalYaml: result.session.canonical_yaml,
           });
         }
-        if (next !== savedFrom) {
-          commitWorkspace(next);
-        }
-        if (applyAll) dropAppliedBuffers(appliedBuffers);
         setSaveState({
           kind: "save-committed-unverified",
           message:
@@ -1208,17 +924,10 @@ export function BuilderView({
         });
         return;
       }
-      if (next !== savedFrom) {
-        commitWorkspace(next);
-      }
-      if (applyAll) {
-        dropAppliedBuffers(appliedBuffers);
-      }
       markClean(saved.reopenedDraft);
-      seedTwin(saved.reopenedDraft);
       setSaveState({
         kind: "saved",
-        name: next.session_name,
+        name: saveName,
         sessionRef: result.session.ref,
         sessionRevision: result.session.revision,
         deployVerdict: result.deploy_verdict,
@@ -1239,7 +948,6 @@ export function BuilderView({
           captureIsCurrent(saveCapture)
         ) {
           adoptCommittedRetarget(preparedRetargetForSave, { ref: committedRef });
-          seedTwin(preparedRetargetForSave.visual_draft);
         }
         setSaveState({
           kind: "save-committed-unverified",
@@ -1264,7 +972,6 @@ export function BuilderView({
         : null,
     settledDocumentDigest,
     settledDependencyDigest: settledDependencySha256,
-    dirtyWindowCount: dirtyWindows,
     pendingEditCount,
   });
   // Standalone component authoring (Your library) — independent of sessions.
@@ -1275,9 +982,9 @@ export function BuilderView({
 
   const schedulingSelectionKey = (
     segmentId: string,
-    memberId?: string,
+    siteId?: string,
     targetRef = visualDraft?.target_ref,
-  ) => `${targetRef ?? "no-draft"}|${segmentId}${memberId ? `/${memberId}` : ""}`;
+  ) => `${targetRef ?? "no-draft"}|${segmentId}${siteId ? `/${siteId}` : ""}`;
 
   const rememberSchedulingSelection = (
     command: BuilderVisualDraftCommandRequest["command"],
@@ -1289,24 +996,12 @@ export function BuilderView({
     if (command.operation === "set_scheduling_preset") {
       key = schedulingSelectionKey(
         command.segment_id,
-        command.member_id ?? undefined,
+        command.site_id ?? undefined,
         result.draft.target_ref,
       );
-    } else if (
-      command.operation === "add_ground" ||
-      command.operation === "place_ground_reference"
-    ) {
+    } else if (result.affected_kind === "ground" && preset !== null) {
+      // A command that created a ground segment states the preset it wrote.
       key = schedulingSelectionKey(result.affected_id, undefined, result.draft.target_ref);
-    } else if (
-      command.operation === "add_ground_site_reference" &&
-      command.segment_id === undefined
-    ) {
-      const ground = result.draft.authoring_workspace?.ground?.find((candidate) =>
-        candidate.members?.some((member) => member.member_id === result.affected_id),
-      );
-      if (ground?.segment_id) {
-        key = schedulingSelectionKey(ground.segment_id, undefined, result.draft.target_ref);
-      }
     }
     if (!key) return;
     setSchedulingSelections((current) => ({
@@ -1315,80 +1010,33 @@ export function BuilderView({
     }));
   };
 
-  /** Run one command over `sourceWorkspace`. When the backend accepts it as
-   *  the next revision, the twin is re-seeded from it unless the user changed
-   *  the twin since `startedFrom`. A command that created pending edits
-   *  accepted nothing, and the twin stays. */
-  const executeVisualCommand = async (
+  /** Run one command over the accepted draft, with every pending edit sent
+   *  beside it. A command that created pending edits accepted nothing. */
+  const runCommand = async (
     command: BuilderVisualDraftCommandRequest["command"],
-    sourceWorkspace: Workspace,
-    startedFrom: Workspace,
   ): Promise<BuilderVisualDraftCommandResult> => {
     if (visualCommandInFlight.current) {
       throw new Error("another visual command is still being applied");
     }
     refuseUnlessSettled();
-    if (LINK_AND_ROUTING_COMMANDS.has(command.operation)) {
-      const refusal = linkAndRoutingRefusal();
-      if (refusal !== null) throw new Error(refusal);
-    }
     visualCommandInFlight.current = true;
     try {
-      const projected = visualDraft?.authoring_workspace ?? visualDraft?.applied_workspace;
-      if (!sameWorkspace(sourceWorkspace, projected as Workspace | null)) {
-        await applyWorkspace(sourceWorkspace);
-      }
       const result = await runVisualCommand(command);
-      if (result.created_edits.length === 0) {
-        adoptAccepted(result.draft, startedFrom);
-      }
+      rememberSchedulingSelection(command, result);
+      setSaveState({ kind: "idle" });
       return result;
     } finally {
       visualCommandInFlight.current = false;
     }
   };
 
-  /** A command from inside an editor window. It is evaluated over the session
-   *  with this window's pending edit applied (other windows' edits stay
-   *  pending), it is accepted as the next revision, and the window then shows
-   *  the accepted object with nothing pending. */
-  const runWindowCommand = async (
-    key: string,
-    command: BuilderVisualDraftCommandRequest["command"],
-  ): Promise<BuilderVisualDraftCommandResult> => {
-    const startedFrom = currentWorkspace();
-    if (!startedFrom) throw new Error("there is no structured workspace to edit");
-    const own = buffers[key];
-    const sourceWorkspace = own ? overlayBuffers(startedFrom, { [key]: own }) : startedFrom;
-    const result = await executeVisualCommand(command, sourceWorkspace, startedFrom);
-    if (currentWorkspace() === seededTwin.current) {
-      const accepted = appliedObjectForKey(workspaceFromVisualDraft(result.draft), key);
-      if (accepted === null) throw new Error(`VS-API returned no object for ${key}`);
-      settleBuffer(key, accepted, own);
-    }
-    return result;
-  };
-
-  const applyWorkspaceCommand = async (
-    command: BuilderVisualDraftCommandRequest["command"],
-  ): Promise<BuilderVisualDraftCommandResult> => {
-    const applied = currentWorkspace();
-    if (!applied) throw new Error("there is no structured workspace to edit");
-    const result = await executeVisualCommand(command, applied, applied);
-    rememberSchedulingSelection(command, result);
-    return result;
-  };
-
   /** Apply pending edits as the next accepted revision, through the route
-   *  that applies them, and re-seed the twin from the answer. A refused batch
-   *  accepts nothing and leaves every edit pending with the backend's outcome. */
+   *  that applies them. A refused batch accepts nothing and leaves every edit
+   *  pending with the backend's outcome. */
   const applyEdits = async (keys: ReadonlyArray<string>, reapply?: ReadonlySet<string>) => {
     const refusal = pendingEditRefusal();
     if (refusal !== null) throw new Error(refusal);
-    const startedFrom = currentWorkspace();
-    const result = await applyPendingEdits(keys, reapply);
-    if (result.assembly) adoptAccepted(result.assembly.visual_draft, startedFrom);
-    return result;
+    return applyPendingEdits(keys, reapply);
   };
 
   /** Apply the pending edit of one window, re-applying it over the object as
@@ -1401,27 +1049,25 @@ export function BuilderView({
     return result.applied;
   };
 
-  /** Remove a link rule or routing domain at once, as one accepted revision,
-   *  and close its window. A refusal changes nothing and is shown in the
-   *  window. */
+  /** Remove a segment, link rule or routing domain at once, as one accepted
+   *  revision, and close its window. A refusal changes nothing and is shown in
+   *  the window. */
+  const removeMember = async (target: EditorTarget, address: BuilderMemberAddress) => {
+    const refusal = pendingEditRefusal();
+    if (refusal !== null) throw new Error(refusal);
+    await removeListMember(address.list_pointer, address.id);
+    setSaveState({ kind: "idle" });
+    closeWindow(targetKey(target));
+  };
   const removeAtOnce = (target: EditorTarget, address: BuilderMemberAddress) => {
     const key = targetKey(target);
     setRemovalFailure(null);
-    const remove = async () => {
-      const refusal = pendingEditRefusal();
-      if (refusal !== null) throw new Error(refusal);
-      const startedFrom = currentWorkspace();
-      const assembly = await removeListMember(address.list_pointer, address.id);
-      adoptAccepted(assembly.visual_draft, startedFrom);
-      setSaveState({ kind: "idle" });
-      closeWindow(key);
-    };
-    remove().catch((cause) =>
+    removeMember(target, address).catch((cause) =>
       setRemovalFailure({ key, message: cause instanceof Error ? cause.message : String(cause) }),
     );
   };
 
-  /** Close a link rule, routing domain or boundary list window. With
+  /** Close a segment, link rule, routing domain or boundary list window. With
    *  `discard`, as Cancel and the title-bar X close it, its pending edit is
    *  dropped too; OK leaves a refused edit pending. */
   const closePendingEditWindow = (target: EditorTarget, discard: boolean) => {
@@ -1432,23 +1078,14 @@ export function BuilderView({
     closeWindow(key);
   };
 
-  /** Undo the newest accepted change, and re-seed the twin from the answer.
-   *  While the twin holds an edit the backend refused, undo discards that
-   *  edit instead: the twin returns to the accepted draft. A refusal changes
-   *  nothing and is shown. */
+  /** Undo the newest accepted change. A refusal changes nothing and is shown. */
   const undoLastChange = () => {
     setLibraryError(null);
-    if (visualDraft && writer === null && !twinMatchesDraft && workspace === refusedTwin.current) {
-      seedTwin(visualDraft);
-      return;
-    }
     const undoOnce = async () => {
       const unsettled = unsettledReason();
       if (unsettled !== null) throw new Error(unsettled);
-      const startedFrom = currentWorkspace();
       const assembly = await undo();
       if (assembly === null) return;
-      adoptAccepted(assembly.visual_draft, startedFrom);
       setSaveState({ kind: "idle" });
     };
     undoOnce().catch((cause) =>
@@ -1496,9 +1133,9 @@ export function BuilderView({
   // The Library's per-entry gestures. USE places a catalog reference in an
   // editable session; CUSTOMIZE opens a full backend draft at an explicit
   // user: target and persists it only when the backend save succeeds. Starting
-  // an editable workspace from a typed read-only open clears that preview.
+  // an editable draft from a typed read-only open clears that preview.
   const clearReadOnlyWorldBeforeCreate = () => {
-    if (world && !workspace) clear();
+    if (world && !visualDraft) clear();
   };
 
   const handleLibraryUse = (entry: CatalogDocumentSummary) => {
@@ -1511,7 +1148,7 @@ export function BuilderView({
       // after placement.
       ensureThenCreate(() => {
         clearReadOnlyWorldBeforeCreate();
-        void applyWorkspaceCommand({
+        void runCommand({
           operation: "place_space_reference",
           source_ref: entry.ref,
         })
@@ -1523,7 +1160,7 @@ export function BuilderView({
     } else if (entry.family === "site-sets") {
       ensureThenCreate(() => {
         clearReadOnlyWorldBeforeCreate();
-        void applyWorkspaceCommand({
+        void runCommand({
           operation: "place_ground_reference",
           site_set_ref: entry.ref,
         })
@@ -1540,14 +1177,13 @@ export function BuilderView({
           setLibraryError("Builder authoring facts are unavailable");
           return;
         }
-        void applyWorkspaceCommand({
+        void runCommand({
           operation: "add_generated_space",
           phasing_mode: authoring.default_phasing_mode,
           node_ref: entry.ref,
         })
           .then((result) => {
             openEditor({ kind: "segment", id: result.affected_id });
-            setFreshId(result.affected_id);
           })
           .catch((cause) =>
             setLibraryError(cause instanceof Error ? cause.message : String(cause)),
@@ -1557,22 +1193,22 @@ export function BuilderView({
       ensureThenCreate(() => {
         clearReadOnlyWorldBeforeCreate();
         void (async () => {
-          const currentGround = currentWorkspace()?.ground ?? [];
-          const ground = currentGround[currentGround.length - 1] ?? null;
-          const result = await applyWorkspaceCommand({
+          // The site joins the last ground segment whose site set the session
+          // proposes, or a new ground segment.
+          const proposedGround = sessionSegments(visualDraft?.applied_session).filter((segment) => {
+            const placement = segment.segment.placement;
+            const siteSetRef = isJsonObject(placement) ? placement.from_site_set : null;
+            return (visualDraft?.catalog_documents ?? []).some(
+              (proposal) => proposal.ref === siteSetRef,
+            );
+          });
+          const ground = proposedGround[proposedGround.length - 1] ?? null;
+          const result = await runCommand({
             operation: "add_ground_site_reference",
             ...(ground ? { segment_id: ground.segment_id } : {}),
             site_ref: entry.ref,
           });
-          const receivingGround = workspaceFromVisualDraft(result.draft).ground.find(
-            (candidate) =>
-              candidate.members.some((member) => member.member_id === result.affected_id),
-          );
-          if (!receivingGround) {
-            throw new Error("backend site command returned no receiving ground segment");
-          }
-          openEditor({ kind: "ground", id: receivingGround.segment_id });
-          if (!ground) setFreshId(receivingGround.segment_id);
+          openEditor({ kind: "segment", id: result.affected_id });
         })().catch((cause) =>
           setLibraryError(cause instanceof Error ? cause.message : String(cause)),
         );
@@ -1642,30 +1278,6 @@ export function BuilderView({
       throw cause;
     }
   };
-  // Beam discs on the body while a segment's editor is open: every satellite
-  // of that segment, at the elevation floor its access terminals actually
-  // declare — the resolved world is the only physics source (a node with no
-  // access terminal simply has no beam). The selected satellite always shows
-  // (CoverageFootprint unions it in) and reads the same real floors here.
-  const beamFootprints = useMemo(() => {
-    if (!world) return undefined;
-    const openSegments = new Set(
-      windows
-        .filter((w) => w.target.kind === "segment")
-        .map((w) => (w.target as { kind: "segment"; id: string }).id),
-    );
-    const nodeIds = world.nodes
-      .filter((n) => n.kind === "satellite" && openSegments.has(n.segment_id))
-      .map((n) => n.node_id);
-    const byId = new Map(world.nodes.map((n) => [n.node_id, n]));
-    return {
-      nodeIds,
-      elevationFor: (nodeId: string) => {
-        const node = byId.get(nodeId);
-        return node ? accessBeamElevationDeg(node) : null;
-      },
-    };
-  }, [world, windows]);
   const openRule = (ruleId: string) => {
     openEditor({ kind: "link", id: ruleId });
   };
@@ -1675,7 +1287,7 @@ export function BuilderView({
   // blank broken field, narrow it read as glyph soup.
   const [connectFor, setConnectFor] = useState<string | null>(null);
   const connectTargets = (selfId: string) =>
-    (workspace ? placedSegments(workspace) : []).map((segment) => ({
+    draftSegments.map((segment) => ({
       value: segment.segment_id,
       label:
         segment.segment_id === selfId
@@ -1683,10 +1295,9 @@ export function BuilderView({
           : `${segment.label} (${segment.kind})`,
     }));
   const connect = (fromSegmentId: string, targetSegmentId: string) => {
-    if (!workspace) return;
     setConnectFor(null);
     setLibraryError(null);
-    void applyWorkspaceCommand({
+    void runCommand({
       operation: "connect_segments",
       from_segment_id: fromSegmentId,
       to_segment_id: targetSegmentId,
@@ -1740,10 +1351,10 @@ export function BuilderView({
       "catalog",
       "library",
     ].includes(target.kind);
-    if (!workspace && !standalone) return null;
+    if (!visualDraft && !standalone) return null;
     if (
       !authoring &&
-      ["segment", "ground", "link", "domain", "boundaries", "library", "proposal"].includes(
+      ["segment", "new-ground", "link", "domain", "boundaries", "library", "proposal"].includes(
         target.kind,
       )
     ) {
@@ -1796,171 +1407,166 @@ export function BuilderView({
         };
       }
       case "segment": {
-        const applied = workspace?.space.find((d) => d.segment_id === target.id);
-        if (!workspace || !applied) return null;
-        const key = targetKey(target);
-        const draft = (buffers[key]?.draft as DraftConstellation | undefined) ?? applied;
+        const appliedRevision = visualDraft?.applied_revision ?? null;
+        if (!visualDraft || appliedRevision === null) return null;
+        const address = { kind: "member", list_pointer: "/segments", id: target.id } as const;
+        const held = pendingEdits.get(pendingEditKey(address));
+        // The segment as its pending edit holds it, or as the session holds it.
+        const segment =
+          held !== undefined
+            ? sessionSegment(held.edit.working)
+            : (draftSegments.find((candidate) => candidate.segment_id === target.id) ?? null);
+        if (!segment) return null;
         const segWall = wallFor(target);
-        const applySpaceEditorCommand = async (
-          command: BuilderVisualDraftCommandRequest["command"],
-        ) => {
-          await runWindowCommand(key, command);
+        const proposals = visualDraft.catalog_documents ?? [];
+        const fields = (
+          <PendingObjectFields
+            pending={held?.answer ?? null}
+            appliedRevision={appliedRevision}
+            describe={() => describePendingObject(address)}
+            onEdit={(change) => editPendingObject(address, change)}
+          />
+        );
+        const customize = (rootRef: unknown) => {
+          if (typeof rootRef !== "string") return;
+          openEditor({ kind: "customize-chain", segmentId: segment.segment_id, rootRef });
         };
-        const setPopulation: ComponentProps<typeof ConstellationEditor>["onSetPopulation"] = async (
-          change,
-        ) => {
-          await applySpaceEditorCommand({
-            operation: "set_space_population",
-            segment_id: draft.segment_id,
-            ...change,
-          });
-        };
+        const onRemove = writer !== null ? null : () => removeAtOnce(target, address);
+        const placement = segment.segment.placement;
         return {
-          title: draft.display_name,
+          title: held === undefined ? segment.label : `${segment.label} •`,
+          close: () => closePendingEditWindow(target, true),
           content: (
             <>
-            {segWall && (
-              <div className="builder-wall" data-testid="wall-banner">
-                {segWall}
-              </div>
-            )}
-            <ConstellationEditor
-              authoring={authoring!}
-              key={draft.segment_id}
-              autoFocusName={freshId === draft.segment_id}
-              // the dwell readout reads the PREVIEW (applied + dirty
-              // overlays) so a dirty session buffer's start_time is reflected,
-              // never a stale applied value.
-              workspace={previewWorkspace() ?? workspace}
-              linkRules={listed.linkRules}
-              onOpenRule={openRule}
-              onConnect={(other) => connect(draft.segment_id, other)}
-              draft={draft}
-              onUpdate={(update) => patchBuffer(key, applied, update)}
-              onSetPopulation={setPopulation}
-              proposedNodes={proposedDocuments("nodes")}
-              onEditNode={(ref) => openEditor({ kind: "proposal", ref })}
-              onCustomizeNode={async () => {
-                // Fork the node into a document the session proposes, as one
-                // accepted revision; the Node card then edits that document.
-                if (draft.node_ref === null) return;
-                refuseUnlessSettled();
-                const startedFrom = currentWorkspace();
-                const result = await customizeChain({
-                  segment_id: draft.segment_id,
-                  leaf_ref: draft.node_ref,
-                });
-                if (!result.applied) {
-                  throw new Error(result.issues.map((issue) => issue.message).join("; "));
-                }
-                adoptAccepted(result.draft, startedFrom);
-              }}
-              onUpdateOrbit={(patch) =>
-                patchBuffer(key, applied, (d) => ({
-                  ...d,
-                  orbit: { ...d.orbit, ...patch },
-                }))
-              }
-              onRemove={writer !== null ? null : () => {
-                removeConstellation(draft.segment_id);
-                closeWindow(key);
-              }}
-            />
+              {segWall && (
+                <div className="builder-wall" data-testid="wall-banner">
+                  {segWall}
+                </div>
+              )}
+              {segment.kind === "space" ? (
+                <ConstellationEditor
+                  key={segment.segment_id}
+                  authoring={authoring!}
+                  segment={segment}
+                  fields={fields}
+                  proposals={proposals}
+                  onSetPopulation={async (change) => {
+                    await runCommand({
+                      operation: "set_space_population",
+                      segment_id: segment.segment_id,
+                      ...change,
+                    });
+                  }}
+                  onEdit={(ref) => openEditor({ kind: "proposal", ref })}
+                  onCustomize={() => customize(segment.segment.source)}
+                  onCustomizeNode={async (nodeRef) => {
+                    // Fork the node into a document the session proposes, as
+                    // one accepted revision.
+                    refuseUnlessSettled();
+                    const result = await customizeChain({
+                      segment_id: segment.segment_id,
+                      leaf_ref: nodeRef,
+                    });
+                    if (!result.applied) {
+                      throw new Error(result.issues.map((issue) => issue.message).join("; "));
+                    }
+                    setSaveState({ kind: "idle" });
+                  }}
+                  onRemove={onRemove}
+                  placed={draftSegments}
+                  linkRules={listed.linkRules}
+                  onOpenRule={openRule}
+                  onConnect={(other) => connect(segment.segment_id, other)}
+                />
+              ) : (
+                <GroundEditor
+                  key={segment.segment_id}
+                  authoring={authoring!}
+                  proposals={proposals}
+                  ground={{
+                    segment,
+                    fields,
+                    onCustomize: () =>
+                      customize(isJsonObject(placement) ? placement.from_site_set : null),
+                    schedulingPresets,
+                    selectedSchedulingPreset:
+                      schedulingSelections[schedulingSelectionKey(segment.segment_id)] ?? null,
+                    siteSchedulingPreset: (siteId) =>
+                      schedulingSelections[schedulingSelectionKey(segment.segment_id, siteId)] ??
+                      null,
+                    onSchedulingPreset: async (preset, siteId) => {
+                      await runCommand({
+                        operation: "set_scheduling_preset",
+                        segment_id: segment.segment_id,
+                        preset,
+                        ...(siteId ? { site_id: siteId } : {}),
+                      });
+                    },
+                    onRemove,
+                    placed: draftSegments,
+                    linkRules: listed.linkRules,
+                    onOpenRule: openRule,
+                    onConnect: (other) => connect(segment.segment_id, other),
+                  }}
+                  onMintSites={async (sites, nodeRef, bodyRef) => {
+                    await runCommand({
+                      operation: "mint_ground_members",
+                      segment_id: segment.segment_id,
+                      sites,
+                      node_ref: nodeRef,
+                      body_ref: bodyRef,
+                    });
+                  }}
+                  onAddSiteReference={async (ref) => {
+                    await runCommand({
+                      operation: "add_ground_site_reference",
+                      segment_id: segment.segment_id,
+                      site_ref: ref,
+                    });
+                  }}
+                  onEdit={(ref) => openEditor({ kind: "proposal", ref })}
+                />
+              )}
             </>
           ),
         };
       }
-      case "ground": {
-        const applied = workspace?.ground.find((d) => d.segment_id === target.id);
-        if (!workspace || !applied) return null;
-        const key = targetKey(target);
-        const draft = (buffers[key]?.draft as DraftGroundSet | undefined) ?? applied;
-        const groundWall = wallFor(target);
-        const applyGroundEditorCommand = async (
-          command: BuilderVisualDraftCommandRequest["command"],
-        ) => {
-          await runWindowCommand(key, command);
+      case "new-ground": {
+        if (!visualDraft) return null;
+        // The first sites create the segment; its own window then edits it.
+        const created = (result: BuilderVisualDraftCommandResult) => {
+          closeWindow(targetKey(target));
+          openEditor({ kind: "segment", id: result.affected_id });
         };
         return {
-          title: draft.display_name,
+          title: "New ground segment",
           content: (
-            <>
-            {groundWall && (
-              <div className="builder-wall" data-testid="wall-banner">
-                {groundWall}
-              </div>
-            )}
             <GroundEditor
               authoring={authoring!}
-              key={draft.segment_id}
-              autoFocusName={freshId === draft.segment_id}
-              workspace={workspace}
-              linkRules={listed.linkRules}
-              onOpenRule={openRule}
-              onConnect={(other) => connect(draft.segment_id, other)}
-              schedulingPresets={schedulingPresets}
-              selectedSchedulingPreset={
-                schedulingSelections[schedulingSelectionKey(draft.segment_id)] ?? null
-              }
-              memberSchedulingPreset={(memberId) =>
-                schedulingSelections[
-                  schedulingSelectionKey(draft.segment_id, memberId)
-                ] ?? null
-              }
-              onMintSites={async (sites) => {
-                await runWindowCommand(key, {
-                  operation: "mint_ground_members",
-                  segment_id: draft.segment_id,
-                  sites,
-                });
-              }}
-              onAddSiteReference={(ref) =>
-                applyGroundEditorCommand({
-                  operation: "add_ground_site_reference",
-                  segment_id: draft.segment_id,
-                  site_ref: ref,
-                })
-              }
-              onSetStampNodeModel={(ref) =>
-                applyGroundEditorCommand({
-                  operation: "set_ground_stamp_node",
-                  segment_id: draft.segment_id,
-                  node_ref: ref,
-                })
-              }
-              onEditSite={(ref) => openEditor({ kind: "proposal", ref })}
-              onSchedulingPreset={async (preset, memberId) => {
-                const result = await runWindowCommand(key, {
-                  operation: "set_scheduling_preset",
-                  segment_id: draft.segment_id,
-                  preset,
-                  ...(memberId ? { member_id: memberId } : {}),
-                });
-                rememberSchedulingSelection(
-                  {
-                    operation: "set_scheduling_preset",
-                    segment_id: draft.segment_id,
-                    preset,
-                    ...(memberId ? { member_id: memberId } : {}),
-                  },
-                  result,
+              ground={null}
+              proposals={visualDraft.catalog_documents ?? []}
+              onMintSites={async (sites, nodeRef, bodyRef) => {
+                created(
+                  await runCommand({
+                    operation: "mint_ground_members",
+                    sites,
+                    node_ref: nodeRef,
+                    body_ref: bodyRef,
+                  }),
                 );
               }}
-              draft={draft}
-              onUpdate={(update) => patchBuffer(key, applied, update)}
-              onRemove={writer !== null ? null : () => {
-                removeGroundDraft(draft.segment_id);
-                closeWindow(key);
+              onAddSiteReference={async (ref) => {
+                created(await runCommand({ operation: "add_ground_site_reference", site_ref: ref }));
               }}
+              onEdit={(ref) => openEditor({ kind: "proposal", ref })}
             />
-            </>
           ),
         };
       }
       case "link": {
         const rule = listed.linkRules.find((candidate) => candidate.id === target.id);
         const appliedRevision = visualDraft?.applied_revision ?? null;
-        if (!workspace || !rule || appliedRevision === null) return null;
+        if (!rule || appliedRevision === null) return null;
         const address = { kind: "member", list_pointer: "/link_rules", id: rule.id } as const;
         const ruleWall = wallFor(target);
         return {
@@ -1982,13 +1588,13 @@ export function BuilderView({
               onDescribe={() => describePendingObject(address)}
               onHold={() => holdObjectCheck(address)}
               checking={checkingObjects.has(pendingEditKey(address))}
-              workspace={workspace}
+              placed={draftSegments}
               segments={world?.segments ?? null}
               allocation={world?.allocations.find((a) => a.rule_id === rule.id) ?? null}
               onRepoint={async (side, newSegmentId) => {
                 // The rule's pending edit goes with the command, which
                 // accepts both as one revision or returns them as one edit.
-                const result = await applyWorkspaceCommand({
+                const result = await runCommand({
                   operation: "rederive_link",
                   rule_id: rule.id,
                   side,
@@ -2005,7 +1611,7 @@ export function BuilderView({
       case "domain": {
         const domain = listed.routingDomains.find((candidate) => candidate.id === target.id);
         const appliedRevision = visualDraft?.applied_revision ?? null;
-        if (!workspace || !domain || appliedRevision === null) return null;
+        if (!domain || appliedRevision === null) return null;
         const address = {
           kind: "member",
           list_pointer: "/routing/domains",
@@ -2031,7 +1637,7 @@ export function BuilderView({
               onDescribe={() => describePendingObject(address)}
               onHold={() => holdObjectCheck(address)}
               checking={checkingObjects.has(pendingEditKey(address))}
-              workspace={workspace}
+              placed={draftSegments}
               onRemove={writer !== null ? null : () => removeAtOnce(target, address)}
             />
             </>
@@ -2068,27 +1674,16 @@ export function BuilderView({
       case "node-view": {
         const node = world?.nodes.find((n) => n.node_id === target.nodeId);
         if (!world || !node) return null;
-        const owner =
-          workspace?.space.find((d) => d.segment_id === node.segment_id) ??
-          workspace?.ground.find((d) => d.segment_id === node.segment_id);
-        const ownerKind = workspace?.space.some((d) => d.segment_id === node.segment_id)
-          ? ("segment" as const)
-          : ("ground" as const);
+        const owner = draftSegments.find((candidate) => candidate.segment_id === node.segment_id);
         return {
           title: node.node_id,
           content: (
             <div className="builder-inspector-stack">
               <BuilderInspector node={node} ephemeris={world.ephemeris} />
-              {owner ? (
-                <Button
-                  onClick={() => openEditor({ kind: ownerKind, id: node.segment_id })}
-                >
-                  Edit {"display_name" in owner ? owner.display_name : node.segment_id}
+              {owner && (
+                <Button onClick={() => openEditor({ kind: "segment", id: owner.segment_id })}>
+                  Edit {owner.label}
                 </Button>
-              ) : (
-                <div className="builder-zone-empty">
-                  placed by reference — customize the block to edit it
-                </div>
               )}
             </div>
           ),
@@ -2134,16 +1729,12 @@ export function BuilderView({
               }}
               onCustomize={async (leafRef, targetLeafRef) => {
                 refuseUnlessSettled();
-                const startedFrom = currentWorkspace();
                 const result = await customizeChain({
                   segment_id: target.segmentId,
                   leaf_ref: leafRef,
                   ...(targetLeafRef ? { target_leaf_ref: targetLeafRef } : {}),
                 });
-                if (result.applied) {
-                  adoptAccepted(result.draft, startedFrom);
-                  setSaveState({ kind: "idle" });
-                }
+                if (result.applied) setSaveState({ kind: "idle" });
                 return result;
               }}
               onClose={() => closeWindow(targetKey(target))}
@@ -2153,7 +1744,7 @@ export function BuilderView({
       }
       case "open-session": {
         // Catalog identity → backend-owned lossless visual draft. The browser
-        // never parses persisted session grammar into its structured workspace.
+        // never parses persisted session grammar.
         const openEntry = (entry: CatalogDocumentSummary, targetRef?: string) => {
           setOpenSessionError(null);
           // Opening replaces the current draft; unsaved work is confirmed first.
@@ -2164,7 +1755,6 @@ export function BuilderView({
                 return;
               }
               markClean(result.draft);
-              seedTwin(result.draft);
               closeSessionWindows();
               setSelection(null);
               setSaveState({ kind: "idle" });
@@ -2194,7 +1784,7 @@ export function BuilderView({
         // saves under (into your library), then Save. Deploy stays its own
         // toolbar action.
         const canSave =
-          !!workspace &&
+          !!visualDraft?.applied_session &&
           !loading &&
           assemblyResult?.visual_draft.draft_revision === visualDraft?.draft_revision &&
           saveState.kind !== "save-committed-unverified" &&
@@ -2203,17 +1793,17 @@ export function BuilderView({
           compileResult?.save_verdict.blockers?.[0]?.message ?? error;
         return {
           title: "Save session",
-          content: workspace ? (
+          content: visualDraft?.applied_session ? (
             <SaveSessionDialog
-              // Remount per workspace identity: the buffered name follows
-              // the session being saved, not a previous one.
-              key={workspace.session_name}
-              workspaceName={workspace.session_name}
+              // Remount per session identity: the buffered name follows the
+              // session being saved, not a previous one.
+              key={visualDraft.target_ref}
+              sessionName={refStem(visualDraft.target_ref)}
               canSave={canSave}
               blockedReason={saveBlocker}
               saveState={saveState}
-              unappliedEdits={dirtyWindows + pendingEditCount}
-              staleList={[...staleList, ...stalePendingEdits]}
+              unappliedEdits={pendingEditCount}
+              staleList={stalePendingEdits}
               onSave={(opts) => void performSave(opts)}
               onClose={() => closeWindow("save-session")}
             />
@@ -2350,7 +1940,7 @@ export function BuilderView({
   const assemblySettled =
     visualDraft !== null &&
     assemblyResult?.visual_draft.draft_revision === visualDraft.draft_revision;
-  const hasSavableDraft = workspace !== null && visualDraft !== null;
+  const hasSavableDraft = !!visualDraft?.applied_session;
 
   return (
     <div
@@ -2491,7 +2081,7 @@ export function BuilderView({
             VS-API owns parsing, canonicalization, component-chain forking, and save assembly.
           </div>
         )}
-        {workspace && (nodeCatalog.error || terminalCatalog.error) && (
+        {visualDraft && (nodeCatalog.error || terminalCatalog.error) && (
           <div className="builder-warning" data-testid="builder-catalog-error">
             hardware catalog unavailable — new constellations need it.{" "}
             {nodeCatalog.error ?? terminalCatalog.error}{" "}
@@ -2505,7 +2095,7 @@ export function BuilderView({
             </Button>
           </div>
         )}
-        {workspace && (
+        {visualDraft && (
           <BuildGuide
             compiled={compileResult}
             refusal={resolveError?.error ?? null}
@@ -2531,13 +2121,12 @@ export function BuilderView({
                   setLibraryError("Builder authoring facts are unavailable");
                   return;
                 }
-                void applyWorkspaceCommand({
+                void runCommand({
                   operation: "add_generated_space",
                   phasing_mode: authoring.default_phasing_mode,
                 })
                   .then((result) => {
                     openEditor({ kind: "segment", id: result.affected_id });
-                    setFreshId(result.affected_id);
                   })
                   .catch((cause) =>
                     setLibraryError(cause instanceof Error ? cause.message : String(cause)),
@@ -2547,38 +2136,29 @@ export function BuilderView({
             onAddGround={() => {
               ensureThenCreate(() => {
                 setLibraryError(null);
-                void applyWorkspaceCommand({ operation: "add_ground" })
-                  .then((result) => {
-                    openEditor({ kind: "ground", id: result.affected_id });
-                    setFreshId(result.affected_id);
-                  })
-                  .catch((cause) =>
-                    setLibraryError(cause instanceof Error ? cause.message : String(cause)),
-                  );
+                openEditor({ kind: "new-ground" });
               }, "adding a ground segment");
             }}
             onAddDomain={() => {
               setLibraryError(null);
-              void applyWorkspaceCommand({ operation: "add_routing_domain" })
+              void runCommand({ operation: "add_routing_domain" })
                 .then((result) => openEditor({ kind: "domain", id: result.affected_id }))
                 .catch((cause) =>
                   setLibraryError(cause instanceof Error ? cause.message : String(cause)),
                 );
             }}
             onOpenSession={() => openEditor({ kind: "session" })}
-            onOpenSegment={(kind, id) => openEditor({ kind, id })}
+            onOpenSegment={(id) => openEditor({ kind: "segment", id })}
           />
         )}
-        {workspace && (
+        {visualDraft && (
           <div className="builder-outline-group" data-testid="builder-drafts">
             <div className="builder-library-entry">
               <span className="builder-outline-kind">
-                Drafts · {workspace.session_name}
+                Drafts · {refStem(visualDraft.target_ref)}
               </span>
               <span className="builder-library-actions">
-                <span className="builder-outline-count">
-                  {timeRateSummary(workspace.step_seconds, workspace.compression)}
-                </span>
+                <span className="builder-outline-count">{sessionTimeRate}</span>
                 <IconButton
                   icon="settings"
                   size={13}
@@ -2587,183 +2167,63 @@ export function BuilderView({
                 />
               </span>
             </div>
-            {workspace.space_refs.map((placed) => (
-              <Fragment key={placed.segment_id}>
+            {draftSegments.map((segment) => (
+              <Fragment key={segment.segment_id}>
               <div
                 className={`builder-library-entry${
-                  revealedSegment === placed.segment_id ? " builder-outline-row--revealed" : ""
+                  revealedSegment === segment.segment_id ? " builder-outline-row--revealed" : ""
                 }`}
-                data-segment-id={placed.segment_id}
+                data-segment-id={segment.segment_id}
               >
-                <span className="builder-outline-name builder-outline-name--space builder-outline-row--segment">
-                  <Icon name="orbit" size={12} />
-                  {placed.label}
-                </span>
-                <span className="builder-library-actions">
-                  {connectButton(placed.segment_id, placed.label)}
-                  <IconButton
-                    icon="pencil"
-                    size={12}
-                    label="Customize a nested component through backend-managed forks"
-                    disabled={placed.source_ref === null}
-                    onClick={() =>
-                      openEditor({
-                        kind: "customize-chain",
-                        segmentId: placed.segment_id,
-                        rootRef: placed.source_ref ?? "",
-                      })
-                    }
-                  />
-                  <IconButton
-                    icon="x"
-                    size={12}
-                    label={twinRemovalWait ?? "Remove from the session"}
-                    disabled={twinRemovalWait !== null}
-                    onClick={() => removeRefSegment(placed.segment_id)}
-                  />
-                </span>
-              </div>
-              {connectPicker(placed.segment_id)}
-              </Fragment>
-            ))}
-            {workspace.space.map((draft) => (
-              <Fragment key={draft.segment_id}>
-              <div className="builder-library-entry">
                 <button
                   className={`builder-outline-row builder-outline-row--segment${
-                    isOpen(`segment:${draft.segment_id}`)
-                      ? " builder-outline-row--selected"
-                      : ""
+                    isOpen(`segment:${segment.segment_id}`) ? " builder-outline-row--selected" : ""
                   }`}
-                  onClick={() => openEditor({ kind: "segment", id: draft.segment_id })}
-                  title={`Edit ${draft.display_name}`}
+                  onClick={() => openEditor({ kind: "segment", id: segment.segment_id })}
+                  title={`Edit ${segment.label}`}
                 >
-                  <span className="builder-outline-name builder-outline-name--space">
-                    <Icon name="orbit" size={12} />
-                    {draft.display_name}
-                  </span>
-                  <span className="builder-outline-count">
-                    {draft.planes === null || draft.slots_per_plane === null
-                      ? "incomplete"
-                      : `${draft.planes * draft.slots_per_plane} sat`}
+                  <span className={`builder-outline-name builder-outline-name--${segment.kind}`}>
+                    <Icon name={segment.kind === "space" ? "orbit" : "satellite-dish"} size={12} />
+                    {segment.label}
                   </span>
                 </button>
                 <span className="builder-library-actions">
-                  {connectButton(draft.segment_id, draft.display_name)}
-                </span>
-              </div>
-              {connectPicker(draft.segment_id)}
-              </Fragment>
-            ))}
-            {workspace.ground_refs.map((placed) => (
-              <Fragment key={placed.segment_id}>
-              <div
-                className={`builder-library-entry${
-                  revealedSegment === placed.segment_id ? " builder-outline-row--revealed" : ""
-                }`}
-                data-segment-id={placed.segment_id}
-              >
-                <span className="builder-outline-name builder-outline-name--ground builder-outline-row--segment">
-                  <Icon name="satellite-dish" size={12} />
-                  {placed.label}
-                </span>
-                <span className="builder-library-actions">
-                  {connectButton(placed.segment_id, placed.label)}
-                  <InlineSelect
-                    ariaLabel={`Scheduling for ${placed.label}`}
-                    title="Scheduling intent — writes the full explicit block"
-                    className="builder-ground-preset"
-                    value={
-                      schedulingSelections[schedulingSelectionKey(placed.segment_id)] ?? ""
-                    }
-                    onChange={(value) => {
-                      if (!value) return;
+                  {connectButton(segment.segment_id, segment.label)}
+                  <IconButton
+                    icon="x"
+                    size={12}
+                    label="Remove from the session"
+                    disabled={writer !== null}
+                    onClick={() => {
                       setLibraryError(null);
-                      void applyWorkspaceCommand({
-                        operation: "set_scheduling_preset",
-                        segment_id: placed.segment_id,
-                        preset: value as BuilderVisualSchedulingPreset,
-                      }).catch((cause) =>
+                      removeMember(
+                        { kind: "segment", id: segment.segment_id },
+                        { kind: "member", list_pointer: "/segments", id: segment.segment_id },
+                      ).catch((cause) =>
                         setLibraryError(cause instanceof Error ? cause.message : String(cause)),
                       );
                     }}
-                    options={[
-                      ...(schedulingSelections[schedulingSelectionKey(placed.segment_id)] == null
-                        ? [{ value: "", label: "Imported block (custom)" }]
-                        : []),
-                      ...schedulingPresets.map((preset) => ({
-                        value: preset.id,
-                        label: preset.label,
-                      })),
-                    ]}
-                  />
-                  <IconButton
-                    icon="pencil"
-                    size={12}
-                    label="Customize a nested component through backend-managed forks"
-                    disabled={placed.site_set_ref === null}
-                    onClick={() =>
-                      openEditor({
-                        kind: "customize-chain",
-                        segmentId: placed.segment_id,
-                        rootRef: placed.site_set_ref ?? "",
-                      })
-                    }
-                  />
-                  <IconButton
-                    icon="x"
-                    size={12}
-                    label={twinRemovalWait ?? "Remove from the session"}
-                    disabled={twinRemovalWait !== null}
-                    onClick={() => removeGroundRef(placed.segment_id)}
                   />
                 </span>
               </div>
-              {connectPicker(placed.segment_id)}
-              </Fragment>
-            ))}
-            {workspace.ground.map((draft) => (
-              <Fragment key={draft.segment_id}>
-              <div className="builder-library-entry">
-                <button
-                  className={`builder-outline-row builder-outline-row--segment${
-                    isOpen(`ground:${draft.segment_id}`)
-                      ? " builder-outline-row--selected"
-                      : ""
-                  }`}
-                  onClick={() => openEditor({ kind: "ground", id: draft.segment_id })}
-                  title={`Edit ${draft.display_name}`}
-                >
-                  <span className="builder-outline-name builder-outline-name--ground">
-                    <Icon name="satellite-dish" size={12} />
-                    {draft.display_name}
-                  </span>
-                  <span className="builder-outline-count">
-                    {count(draft.members.length, "site")}
-                  </span>
-                </button>
-                <span className="builder-library-actions">
-                  {connectButton(draft.segment_id, draft.display_name)}
-                </span>
-              </div>
-              {connectPicker(draft.segment_id)}
+              {connectPicker(segment.segment_id)}
               </Fragment>
             ))}
             <LinkAndRoutingOutline
               listed={listed}
-              hasSegments={placedSegments(workspace).length > 0}
+              hasSegments={draftSegments.length > 0}
               resolvedNodes={world?.nodes ?? null}
               refusal={resolveError?.error ?? null}
               isOpen={isOpen}
               onOpen={openEditor}
             />
-            {placedSegments(workspace).length > 0 && (
+            {draftSegments.length > 0 && (
               <div className="builder-preset-row">
                 <Button
                   title="A protocol over member segments — seeds over everything"
                   onClick={() => {
                     setLibraryError(null);
-                    void applyWorkspaceCommand({ operation: "add_routing_domain" })
+                    void runCommand({ operation: "add_routing_domain" })
                       .then((result) =>
                         openEditor({ kind: "domain", id: result.affected_id }),
                       )
@@ -2780,7 +2240,7 @@ export function BuilderView({
                   title="A controlled exchange over a fixed link rule between two domains"
                   onClick={() => {
                     setLibraryError(null);
-                    void applyWorkspaceCommand({ operation: "add_boundary" })
+                    void runCommand({ operation: "add_boundary" })
                       .then(() => openEditor({ kind: "boundaries" }))
                       .catch((cause) =>
                         setLibraryError(
@@ -2801,13 +2261,12 @@ export function BuilderView({
                     setLibraryError("Builder authoring facts are unavailable");
                     return;
                   }
-                  void applyWorkspaceCommand({
+                  void runCommand({
                     operation: "add_generated_space",
                     phasing_mode: authoring.default_phasing_mode,
                   })
                     .then((result) => {
                       openEditor({ kind: "segment", id: result.affected_id });
-                      setFreshId(result.affected_id);
                     })
                     .catch((cause) =>
                       setLibraryError(cause instanceof Error ? cause.message : String(cause)),
@@ -2817,12 +2276,6 @@ export function BuilderView({
             >
               + Add constellation
             </Button>
-            {dirtyWindows > 0 && (
-              <div className="builder-zone-empty">
-                {count(dirtyWindows, "window")} with unapplied edits — Apply to
-                include them in the save
-              </div>
-            )}
           </div>
         )}
         {saveState.kind === "deploying" && (
@@ -2947,7 +2400,7 @@ export function BuilderView({
           </div>
         ) : (
           <div className="builder-zone-empty">
-            {workspace
+            {visualDraft?.applied_session
               ? resolveError
                 ? "nothing resolves to list — fix the refusal below"
                 : "resolving…"
@@ -2984,7 +2437,6 @@ export function BuilderView({
               actionsRef={actionsRef}
               liveExplain={false}
               worldLayers={<CandidateLines pairs={visiblePairs} />}
-              beamFootprints={beamFootprints}
             />
           </VisualizationErrorBoundary>
           {colorMode === "area" && (
@@ -2993,7 +2445,7 @@ export function BuilderView({
           </>
         ) : snapshotError ? (
           <div className="builder-zone-empty">{snapshotError}</div>
-        ) : workspace ? (
+        ) : visualDraft ? (
           <div className="builder-zone-empty">
             {resolveError
               ? `The session does not resolve — the canvas returns when it does. ${truncateError(
@@ -3042,22 +2494,16 @@ export function BuilderView({
         {windows.map((win) => {
           const body = renderWindow(win.target);
           if (!body) return null;
-          const buf = buffers[win.key];
-          const buffered = SESSION_AND_SEGMENT_WINDOW_KINDS.has(win.target.kind);
           // The pending edit this window edits, by its address and the key it is
           // held under; null for a window that edits none.
           const address = pendingEditAddress(win.target);
           const edit = address === null ? null : { address, key: pendingEditKey(address) };
-          const lockReason = buffered
-            ? twinWait("editing here")
-            : edit !== null
-              ? pendingEditRefusal()
-              : null;
+          const lockReason = edit !== null ? pendingEditRefusal() : null;
           return (
             <FloatingWindow
               key={win.key}
               raiseId={win.key}
-              title={buf?.dirty ? `${body.title} •` : body.title}
+              title={body.title}
               onClose={body.close ?? (() => closeWindow(win.key))}
               initial={{ x: win.x, y: win.y, w: 380, h: 560 }}
               minWidth={320}
@@ -3067,21 +2513,6 @@ export function BuilderView({
                 {lockReason !== null && <div className="builder-warning">{lockReason}</div>}
                 {body.content}
               </div>
-              {buffered && (
-                <EditorApplyRow
-                  dirty={buf?.dirty ?? false}
-                  busy={writer !== null}
-                  stale={staleKeys.has(win.key)}
-                  onApply={() => applyBuffer(win.target)}
-                  onOk={() => {
-                    applyBuffer(win.target);
-                    closeWindow(win.key);
-                  }}
-                  onDefaults={() => revertBuffer(win.key)}
-                  onLoadCurrent={() => loadCurrentValues(win.target)}
-                  onCancel={() => closeWindow(win.key)}
-                />
-              )}
               {edit !== null && (
                 <>
                   {removalFailure?.key === win.key && (
@@ -3121,7 +2552,6 @@ export function BuilderView({
               tree={visualDraft.control_tree}
               disabled={
                 yamlBlocksGui ||
-                dirtyWindows > 0 ||
                 pendingEditCount > 0 ||
                 unsettledReason() !== null
               }
@@ -3129,9 +2559,7 @@ export function BuilderView({
               onMutate={async (commands: ReadonlyArray<BuilderControlMutation>) => {
                 setLibraryError(null);
                 try {
-                  const startedFrom = currentWorkspace();
-                  const result = await mutateControls(commands);
-                  adoptAccepted(result.visual_draft, startedFrom);
+                  await mutateControls(commands);
                   setSaveState({ kind: "idle" });
                 } catch (cause) {
                   setLibraryError(cause instanceof Error ? cause.message : String(cause));
@@ -3153,11 +2581,6 @@ export function BuilderView({
                   }`
                 : `Buffer generation ${yamlBuffer.generation} has no valid graphical projection`}
             </div>
-            {dirtyWindows > 0 && (
-              <div className="builder-site-derived">
-                Apply or discard graphical window edits before editing YAML.
-              </div>
-            )}
             {pendingEditCount > 0 && (
               <div className="builder-site-derived">
                 Apply or discard the {pendingEditsPhrase(pendingEditCount)} before editing YAML.
@@ -3166,12 +2589,7 @@ export function BuilderView({
             <PasteArea
               className="builder-yaml-editor"
               value={yamlBuffer.text}
-              disabled={
-                dirtyWindows > 0 ||
-                pendingEditCount > 0 ||
-                (writer !== null && writer !== "yaml") ||
-                !twinMatchesDraft
-              }
+              disabled={pendingEditCount > 0 || (writer !== null && writer !== "yaml")}
               onChange={editYamlBuffer}
               ariaLabel="Session YAML"
               rows={32}
@@ -3179,10 +2597,8 @@ export function BuilderView({
             <div className="builder-preset-row">
               <Button
                 disabled={
-                  dirtyWindows > 0 ||
                   pendingEditCount > 0 ||
                   writer !== null ||
-                  !twinMatchesDraft ||
                   (!yamlBuffer.dirty && yamlBuffer.applied)
                 }
                 // A failed apply is held in the buffer state, which this pane shows.
@@ -3193,12 +2609,7 @@ export function BuilderView({
               {yamlBuffer.canonicalizationRequired && (
                 <Button
                   variant="primary"
-                  disabled={
-                    writer !== null ||
-                    dirtyWindows > 0 ||
-                    pendingEditCount > 0 ||
-                    !twinMatchesDraft
-                  }
+                  disabled={writer !== null || pendingEditCount > 0}
                   onClick={() => void useCanonicalSessionYaml()}
                 >
                   Use canonical YAML
@@ -3227,7 +2638,7 @@ export function BuilderView({
                 onClick={() =>
                   downloadBlob(
                     yamlBuffer.text,
-                    `${world?.session.name ?? workspace?.session_name ?? "session"}.yaml`,
+                    `${world?.session.name ?? (visualDraft ? refStem(visualDraft.target_ref) : "session")}.yaml`,
                   )
                 }
               >
@@ -3264,8 +2675,8 @@ export function BuilderView({
           </div>
         )}
       </div>
-      {workspace &&
-        ((wall && !isOpen(wall.key)) || findings.length > 0 || pendingEditFindings.length > 0) && (
+      {visualDraft &&
+        ((wall && !isOpen(wall.key)) || pendingEditFindings.length > 0) && (
         <div className="builder-rail" data-testid="builder-rail">
           {wall && !isOpen(wall.key) && (
             <button
@@ -3277,21 +2688,6 @@ export function BuilderView({
               {(resolveError?.error ?? "").length > 96 ? "…" : ""}
             </button>
           )}
-          {findings.map((finding) => (
-            <button
-              key={finding.message}
-              className="builder-rail-chip"
-              disabled={finding.target === null}
-              title={finding.target ? "Jump to the owning editor" : undefined}
-              onClick={() => {
-                const target = finding.target;
-                if (!target) return;
-                openEditor(target);
-              }}
-            >
-              {finding.message}
-            </button>
-          ))}
           {pendingEditFindings.map((finding) => (
             <button
               key={finding.key}
@@ -3306,19 +2702,10 @@ export function BuilderView({
       )}
       <div className="builder-status" data-testid="builder-status">
         <span className="builder-mode-badge">Session Builder</span>
-        {dirtyWindows > 0 && (
-          <span className="builder-preview-chip" data-testid="builder-preview-chip">
-            previewing {count(dirtyWindows, "window")} of unapplied edits
-          </span>
-        )}
-        {/* The pending edits are previewed only while the twin is the accepted
-            draft's; a twin change being applied or refused shows instead. */}
-        {pendingEditCount > 0 && twinMatchesDraft && (
+        {pendingEditCount > 0 && (
           <span className="builder-preview-chip" data-testid="builder-preview-chip">
             previewing{" "}
-            {pendingEditCount === 1
-              ? "the pending link or routing edit"
-              : pendingEditsPhrase(pendingEditCount)}
+            {pendingEditCount === 1 ? "the pending edit" : pendingEditsPhrase(pendingEditCount)}
           </span>
         )}
         {error ? (
@@ -3355,7 +2742,7 @@ export function BuilderView({
           </>
         ) : (
           <span className="builder-status-item">
-            {workspace
+            {visualDraft
               ? loading
                 ? "resolving draft…"
                 : hasDrafts

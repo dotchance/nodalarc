@@ -23,25 +23,16 @@ import {
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   BodySelect,
-  EditorApplyRow,
   NumberField,
   NullableNumberField,
   SelectField,
-  SliderField,
 } from "../editorKit";
 import { BuildGuide } from "../BuildGuide";
 import { LinkRuleEditor, LinkRuleWindow } from "../LinkRuleEditor";
 import { PendingEditApplyRow } from "../pendingEditKit";
 import { RoutingDomainWindow } from "../RoutingEditor";
-import {
-  accessBeamElevationDeg,
-} from "../linkPhysics";
 import { AUTHORING_FACTS } from "./fixtures/authoringFacts";
-import {
-  newDraftConstellation,
-  newDraftGroundSet,
-  newWorkspace,
-} from "./fixtures/workspaceFixtures";
+import { sessionSegments } from "../sessionSegments";
 import type {
   BuilderVisualLinkRule,
   BuilderVisualRoutingDomain,
@@ -53,13 +44,6 @@ import {
   draftHoldsUnsavedWork,
   yamlBlocksGraphicalEditing,
 } from "../useBuilderWorld";
-import {
-  appliedObjectForKey,
-  bufferAppliedChanged,
-  overlayBuffers,
-  staleBufferKeys,
-  workspaceForSave,
-} from "../useWorkspace";
 import { tinyWorld } from "./fixtures/tinyWorld";
 
 const BUILDER_DIR = join(__dirname, "..");
@@ -78,16 +62,6 @@ function catalogSummary(
     display_name: displayName,
     summary: null,
   };
-}
-
-type DeepMutable<T> = T extends ReadonlyArray<infer Item>
-  ? DeepMutable<Item>[]
-  : T extends object
-    ? { -readonly [Key in keyof T]: DeepMutable<T[Key]> }
-    : T;
-
-function mutableClone<T>(value: T): DeepMutable<T> {
-  return structuredClone(value) as DeepMutable<T>;
 }
 
 describe("builder surfaces compose the kit, never raw controls", () => {
@@ -284,44 +258,6 @@ describe("editor kit behavior", () => {
   });
 });
 
-describe("buffered windows commit through the apply row", () => {
-  afterEach(cleanup);
-
-  it("a clean window says applied; Apply and Defaults are disabled", () => {
-    render(
-      <EditorApplyRow
-        dirty={false}
-        busy={false}
-        onApply={() => {}}
-        onOk={() => {}}
-        onDefaults={() => {}}
-        onCancel={() => {}}
-      />,
-    );
-    expect(screen.getByText("applied")).toBeTruthy();
-    expect((screen.getByText("Apply") as HTMLButtonElement).disabled).toBe(true);
-    expect((screen.getByText("Defaults") as HTMLButtonElement).disabled).toBe(true);
-    expect((screen.getByText("Cancel") as HTMLButtonElement).disabled).toBe(false);
-    expect((screen.getByText("OK") as HTMLButtonElement).disabled).toBe(false);
-  });
-
-  it("while a change is being applied, Apply and OK wait and Cancel stays", () => {
-    render(
-      <EditorApplyRow
-        dirty
-        busy
-        onApply={() => {}}
-        onOk={() => {}}
-        onDefaults={() => {}}
-        onCancel={() => {}}
-      />,
-    );
-    expect((screen.getByText("Apply") as HTMLButtonElement).disabled).toBe(true);
-    expect((screen.getByText("OK") as HTMLButtonElement).disabled).toBe(true);
-    expect((screen.getByText("Cancel") as HTMLButtonElement).disabled).toBe(false);
-  });
-});
-
 describe("a link or routing window's commit row", () => {
   afterEach(cleanup);
 
@@ -347,36 +283,16 @@ describe("a link or routing window's commit row", () => {
   });
 });
 
-describe("beam footprints read the terminals, never a default", () => {
-  const world = tinyWorld("gnd", "shell");
-
-  it("a declared access floor is the beam's floor; the strictest wins", () => {
-    const node = mutableClone(world.nodes.find((n) => n.segment_id === "gnd")!);
-    node.terminal_inventory[0]!.min_elevation_deg = 10;
-    node.terminal_inventory.push({
-      ...node.terminal_inventory[0]!,
-      terminal_id: "access_1",
-      min_elevation_deg: 30,
-    });
-    expect(accessBeamElevationDeg(node)).toBe(30);
-  });
-
-  it("no access terminal means no beam, not an invented one", () => {
-    const node = mutableClone(world.nodes.find((n) => n.segment_id === "shell")!);
-    node.terminal_inventory = node.terminal_inventory.filter(
-      (b) => b.endpoint_role !== "access",
-    );
-    expect(accessBeamElevationDeg(node)).toBe(null);
-  });
-});
-
 describe("the link editor reads terminal capabilities from the world", () => {
   afterEach(cleanup);
 
   function renderLinkEditor(withWorld: boolean) {
-    const workspace = newWorkspace("t");
-    const space = newDraftConstellation("nodalarc:nodes/space/leo.yaml");
-    const ground = newDraftGroundSet("nodalarc:nodes/ground/gw.yaml", {});
+    const placed = sessionSegments({
+      segments: [
+        { id: "shell", source: "nodalarc:constellations/leo.yaml" },
+        { id: "gnd", placement: { from_site_set: "nodalarc:site-sets/gw.yaml" } },
+      ],
+    });
     const endpoint = (segment_id: string) => ({
       segment_id,
       tag: null,
@@ -387,21 +303,19 @@ describe("the link editor reads terminal capabilities from the world", () => {
     const rule: BuilderVisualLinkRule = {
       rule_id: "ground-to-space",
       enabled: true,
-      a: endpoint(ground.segment_id),
-      b: endpoint(space.segment_id),
+      a: endpoint("gnd"),
+      b: endpoint("shell"),
       topology_mode: null,
       topology_n: null,
       max_range_km: null,
     };
-    workspace.space.push(space);
-    workspace.ground.push(ground);
     // The ground segment carries rf access only; the space segment also
     // carries optical isl.
-    const world = tinyWorld(ground.segment_id, space.segment_id);
+    const world = tinyWorld("gnd", "shell");
     render(
       <LinkRuleEditor
         authoring={AUTHORING_FACTS}
-        workspace={workspace}
+        placed={placed}
         rule={rule}
         segments={withWorld ? world.segments : null}
         allocation={null}
@@ -445,11 +359,11 @@ describe("link and domain cards show the grammar id and offer no rename", () => 
   afterEach(cleanup);
 
   it("the link card shows its rule id outside any input", () => {
-    const workspace = newWorkspace("t");
-    const space = newDraftConstellation("nodalarc:nodes/space/leo.yaml");
-    workspace.space.push(space);
+    const placed = sessionSegments({
+      segments: [{ id: "leo", source: "nodalarc:constellations/leo.yaml" }],
+    });
     const endpoint = {
-      segment_id: space.segment_id,
+      segment_id: "leo",
       tag: null,
       role: "isl" as const,
       medium: "optical" as const,
@@ -467,13 +381,13 @@ describe("link and domain cards show the grammar id and offer no rename", () => 
     render(
       <LinkRuleWindow
         authoring={AUTHORING_FACTS}
-        workspace={workspace}
+        placed={placed}
         listed={{
           id: "fabric-1",
-          accepted: { rule_id: "fabric-1", segment_ids: [space.segment_id], widget: rule },
+          accepted: { rule_id: "fabric-1", segment_ids: ["leo"], widget: rule },
           pending: null,
           card: rule,
-          segmentIds: [space.segment_id],
+          segmentIds: ["leo"],
         }}
         appliedRevision={1}
         onEdit={async () => undefined}
@@ -491,26 +405,26 @@ describe("link and domain cards show the grammar id and offer no rename", () => 
   });
 
   it("the domain card shows its domain id outside any input", () => {
-    const workspace = newWorkspace("t");
-    const space = newDraftConstellation("nodalarc:nodes/space/leo.yaml");
-    workspace.space.push(space);
+    const placed = sessionSegments({
+      segments: [{ id: "leo", source: "nodalarc:constellations/leo.yaml" }],
+    });
     const domain: BuilderVisualRoutingDomain = {
       domain_id: "core-1",
       protocol: "isis",
-      member_segment_ids: [space.segment_id],
+      member_segment_ids: ["leo"],
       hello_interval_s: null,
       hold_interval_s: null,
     };
     render(
       <RoutingDomainWindow
         authoring={AUTHORING_FACTS}
-        workspace={workspace}
+        placed={placed}
         listed={{
           id: "core-1",
           accepted: {
             domain_id: "core-1",
             protocol: "isis",
-            segment_ids: [space.segment_id],
+            segment_ids: ["leo"],
             widget: domain,
           },
           pending: null,
@@ -527,52 +441,6 @@ describe("link and domain cards show the grammar id and offer no rename", () => 
     );
     expect(screen.getByText("core-1")).toBeTruthy();
     expect(screen.queryByDisplayValue("core-1")).toBeNull();
-  });
-});
-
-describe("SliderField: track for the common range, box for the truth", () => {
-  afterEach(cleanup);
-
-  it("typing past the track is allowed and reported verbatim", () => {
-    const seen: number[] = [];
-    render(
-      <SliderField
-        label="altitude"
-        value={550}
-        min={150}
-        max={40000}
-        onChange={(v) => seen.push(v)}
-      />,
-    );
-    const box = document.querySelector('input[type="number"]') as HTMLInputElement;
-    fireEvent.change(box, { target: { value: "120000" } });
-    expect(seen).toEqual([120000]);
-  });
-
-  it("the slider itself streams values and clamps its display to the track", () => {
-    const seen: number[] = [];
-    const { rerender } = render(
-      <SliderField
-        label="altitude"
-        value={550}
-        min={150}
-        max={40000}
-        onChange={(v) => seen.push(v)}
-      />,
-    );
-    const track = screen.getByLabelText("altitude slider") as HTMLInputElement;
-    fireEvent.change(track, { target: { value: "36000" } });
-    expect(seen).toEqual([36000]);
-    rerender(
-      <SliderField
-        label="altitude"
-        value={120000}
-        min={150}
-        max={40000}
-        onChange={(v) => seen.push(v)}
-      />,
-    );
-    expect(track.value).toBe("40000");
   });
 });
 
@@ -615,19 +483,6 @@ describe("deferred-clamp number contract (local string draft)", () => {
     render(<NumberField label="offset" value={0} min={-90} onChange={(v) => seen.push(v)} />);
     fireEvent.change(numberInput(), { target: { value: "-45" } });
     expect(seen).toEqual([-45]);
-  });
-
-  it("SliderField box: min is the floor — below-min types but does not commit", () => {
-    const seen: number[] = [];
-    render(
-      <SliderField label="altitude" value={550} min={150} max={40000} onChange={(v) => seen.push(v)} />,
-    );
-    const box = numberInput();
-    fireEvent.change(box, { target: { value: "100" } });
-    expect(seen).toEqual([]); // below the floor → no commit
-    expect(box.value).toBe("100"); // typeable
-    fireEvent.blur(box);
-    expect(box.value).toBe("550"); // re-sync
   });
 
   it("NullableNumberField: below-min commits nothing, yet empty still means null", () => {
@@ -709,8 +564,6 @@ describe("a gesture that replaces the draft asks first only when work would be l
   const draft = { target_ref: "user:sessions/s.yaml", draft_revision: 3 };
   const clean = { targetRef: "user:sessions/s.yaml", revision: 3 };
   const quiet = {
-    twinMatchesDraft: true,
-    dirtyWindowCount: 0,
     pendingEditCount: 0,
     yamlDirty: false,
   };
@@ -720,12 +573,10 @@ describe("a gesture that replaces the draft asks first only when work would be l
     expect(draftHoldsUnsavedWork({ draft: null, clean: null, ...quiet })).toBe(false);
   });
 
-  it("an accepted edit, an edit not yet accepted, an open or pending edit or unapplied YAML is unsaved work", () => {
+  it("an accepted edit, a pending edit or unapplied YAML is unsaved work", () => {
     expect(draftHoldsUnsavedWork({ draft: { ...draft, draft_revision: 4 }, clean, ...quiet })).toBe(
       true,
     );
-    expect(draftHoldsUnsavedWork({ draft, clean, ...quiet, twinMatchesDraft: false })).toBe(true);
-    expect(draftHoldsUnsavedWork({ draft, clean, ...quiet, dirtyWindowCount: 1 })).toBe(true);
     expect(draftHoldsUnsavedWork({ draft, clean, ...quiet, pendingEditCount: 1 })).toBe(true);
     expect(draftHoldsUnsavedWork({ draft, clean, ...quiet, yamlDirty: true })).toBe(true);
     expect(draftHoldsUnsavedWork({ draft, clean: null, ...quiet })).toBe(true);
@@ -986,7 +837,6 @@ describe("deploy gate: saved backend verdict and exact digest truth", () => {
         savedVerdict,
         settledDocumentDigest: "doc-x",
         settledDependencyDigest: "dep-x",
-        dirtyWindowCount: 0,
         pendingEditCount: 0,
       }),
     ).toEqual({ ok: true, reason: null });
@@ -997,7 +847,6 @@ describe("deploy gate: saved backend verdict and exact digest truth", () => {
       savedVerdict: null,
       settledDocumentDigest: "doc-x",
       settledDependencyDigest: "dep-x",
-      dirtyWindowCount: 0,
       pendingEditCount: 0,
     });
     expect(gate.ok).toBe(false);
@@ -1009,7 +858,6 @@ describe("deploy gate: saved backend verdict and exact digest truth", () => {
       savedVerdict,
       settledDocumentDigest: null,
       settledDependencyDigest: null,
-      dirtyWindowCount: 0,
       pendingEditCount: 0,
     });
     expect(gate.ok).toBe(false);
@@ -1040,23 +888,10 @@ describe("deploy gate: saved backend verdict and exact digest truth", () => {
       },
       settledDocumentDigest: "doc-x",
       settledDependencyDigest: "dep-x",
-      dirtyWindowCount: 0,
       pendingEditCount: 0,
     });
     expect(gate.ok).toBe(false);
     expect(gate.reason).toMatch(/no satellites/);
-  });
-
-  it("refuses while windows hold unapplied edits", () => {
-    const gate = canDeploy({
-      savedVerdict,
-      settledDocumentDigest: "doc-x",
-      settledDependencyDigest: "dep-x",
-      dirtyWindowCount: 2,
-      pendingEditCount: 0,
-    });
-    expect(gate.ok).toBe(false);
-    expect(gate.reason).toMatch(/2 windows with unapplied edits/);
   });
 
   it("refuses while link and routing edits are pending", () => {
@@ -1064,7 +899,6 @@ describe("deploy gate: saved backend verdict and exact digest truth", () => {
       savedVerdict,
       settledDocumentDigest: "doc-x",
       settledDependencyDigest: "dep-x",
-      dirtyWindowCount: 0,
       pendingEditCount: 1,
     });
     expect(one).toEqual({
@@ -1075,7 +909,6 @@ describe("deploy gate: saved backend verdict and exact digest truth", () => {
       savedVerdict,
       settledDocumentDigest: "doc-x",
       settledDependencyDigest: "dep-x",
-      dirtyWindowCount: 0,
       pendingEditCount: 3,
     });
     expect(three.reason).toBe("apply or discard the 3 pending edits first");
@@ -1086,7 +919,6 @@ describe("deploy gate: saved backend verdict and exact digest truth", () => {
       savedVerdict,
       settledDocumentDigest: "doc-y",
       settledDependencyDigest: "dep-x",
-      dirtyWindowCount: 0,
       pendingEditCount: 0,
     });
     expect(gate.ok).toBe(false);
@@ -1094,213 +926,3 @@ describe("deploy gate: saved backend verdict and exact digest truth", () => {
   });
 });
 
-describe("buffer overlays and the stale guard", () => {
-  it("overlayBuffers substitutes only dirty working copies", () => {
-    const ws = newWorkspace("overlay-probe");
-    const draft = newDraftConstellation("nodalarc:nodes/x.yaml");
-    ws.space = [draft];
-    const edited = { ...draft, label: "edited" };
-    const clean = overlayBuffers(ws, {
-      [`segment:${draft.segment_id}`]: { draft: edited, opened: draft, dirty: false },
-    });
-    expect(clean).toBe(ws);
-    const overlaid = overlayBuffers(ws, {
-      [`segment:${draft.segment_id}`]: { draft: edited, opened: draft, dirty: true },
-    });
-    expect(overlaid.space[0]).toBe(edited);
-    // The session buffer is a field pick, never the whole workspace.
-    const renamed = overlayBuffers(ws, {
-      session: {
-        draft: { session_name: "picked" },
-        opened: { session_name: ws.session_name },
-        dirty: true,
-      },
-    });
-    expect(renamed.session_name).toBe("picked");
-    expect(renamed.space).toBe(ws.space);
-  });
-
-  it("a dirty buffer is stale once its applied object changed underneath", () => {
-    const ws = newWorkspace("stale-probe");
-    const draft = newDraftConstellation("nodalarc:nodes/x.yaml");
-    ws.space = [draft];
-    const key = `segment:${draft.segment_id}`;
-    const buffer = {
-      draft: { ...draft, label: "working copy" },
-      opened: structuredClone(draft),
-      dirty: true,
-    };
-    const buffers = { [key]: buffer };
-    // Applied still equals the opened base: not stale.
-    expect(staleBufferKeys(ws, buffers)).toEqual([]);
-    // Undo/restore changed the applied object underneath the window.
-    const undone = { ...ws, space: [{ ...draft, label: "reverted elsewhere" }] };
-    expect(staleBufferKeys(undone, buffers)).toEqual([key]);
-    // Deletion underneath is NOT "stale": the reconciliation pass prunes the
-    // window and its buffer, so no window is left to carry a notice and there is
-    // nothing to apply into. Prune (gone) and stale (moved-and-present) are
-    // disjoint so the two owners can never disagree.
-    const deleted = { ...ws, space: [] };
-    expect(staleBufferKeys(deleted, buffers)).toEqual([]);
-    // Clean buffers are never stale.
-    expect(staleBufferKeys(undone, { [key]: { ...buffer, dirty: false } })).toEqual([]);
-  });
-
-  it("the session-pick buffer compares only its own fields", () => {
-    const ws = newWorkspace("session-pick-probe");
-    const buffers = {
-      session: {
-        draft: { session_name: "typed" },
-        opened: { session_name: ws.session_name },
-        dirty: true,
-      },
-    };
-    expect(staleBufferKeys(ws, buffers)).toEqual([]);
-    expect(
-      staleBufferKeys({ ...ws, session_name: "renamed-by-undo" }, buffers),
-    ).toEqual([
-      "session",
-    ]);
-  });
-
-  // the reconciliation pass decides prune/drop through the same two
-  // primitives the stale guard uses — never a second key->object resolver.
-  it("appliedObjectForKey resolves object kinds by id, and null everywhere else", () => {
-    const ws = newWorkspace("resolve-probe");
-    const seg = newDraftConstellation("nodalarc:nodes/x.yaml");
-    ws.space = [seg];
-    expect(appliedObjectForKey(ws, `segment:${seg.segment_id}`)).toBe(seg);
-    // Gone object -> null: this is exactly the prune trigger.
-    expect(appliedObjectForKey(ws, "segment:missing")).toBeNull();
-    // The session kind names a field pick, not a single object; the chrome and
-    // read-only kinds own no object at all.
-    expect(appliedObjectForKey(ws, "session")).toBeNull();
-    expect(appliedObjectForKey(ws, "library")).toBeNull();
-    expect(appliedObjectForKey(ws, "node:sat-1")).toBeNull();
-  });
-
-  it("bufferAppliedChanged is the one primitive under staleness and the clean drop", () => {
-    const ws = newWorkspace("changed-probe");
-    const seg = newDraftConstellation("nodalarc:nodes/x.yaml");
-    ws.space = [seg];
-    const key = `segment:${seg.segment_id}`;
-    const buf = {
-      draft: { ...seg, label: "working copy" },
-      opened: structuredClone(seg),
-      dirty: true,
-    };
-    // Applied equals opened: unchanged, whatever the dirty flag says.
-    expect(bufferAppliedChanged(ws, key, buf)).toBe(false);
-    expect(bufferAppliedChanged(ws, key, { ...buf, dirty: false })).toBe(false);
-    // Applied moved underneath (undo, sibling edit) or gone (deletion).
-    const moved = { ...ws, space: [{ ...seg, label: "moved elsewhere" }] };
-    expect(bufferAppliedChanged(moved, key, buf)).toBe(true);
-    expect(bufferAppliedChanged({ ...ws, space: [] }, key, buf)).toBe(true);
-    // The dirty flag does not enter the primitive: a CLEAN buffer over a moved
-    // object is "changed" too — that is the clean-drop trigger, the mirror of
-    // the dirty-only staleBufferKeys projection.
-    expect(bufferAppliedChanged(moved, key, { ...buf, dirty: false })).toBe(true);
-    expect(staleBufferKeys(moved, { [key]: buf })).toEqual([key]);
-    expect(staleBufferKeys(moved, { [key]: { ...buf, dirty: false } })).toEqual([]);
-  });
-
-  // bulk apply-and-save: the confirm flow DECLINES a stale window by leaving
-  // its key out of the overlay, so an unconfirmed working copy is never written.
-  it("overlayBuffers skips declined keys; the rest apply", () => {
-    const ws = newWorkspace("skip-probe");
-    const a = newDraftConstellation("nodalarc:nodes/a.yaml");
-    const b = newDraftConstellation("nodalarc:nodes/b.yaml");
-    ws.space = [a, b];
-    const editedA = { ...a, label: "A!" };
-    const editedB = { ...b, label: "B!" };
-    const buffers = {
-      [`segment:${a.segment_id}`]: { draft: editedA, opened: a, dirty: true },
-      [`segment:${b.segment_id}`]: { draft: editedB, opened: b, dirty: true },
-    };
-    const out = overlayBuffers(ws, buffers, new Set([`segment:${b.segment_id}`]));
-    expect(out.space.find((d) => d.segment_id === a.segment_id)).toBe(editedA);
-    // B was declined — its applied object is untouched.
-    expect(out.space.find((d) => d.segment_id === b.segment_id)).toBe(b);
-  });
-
-  it("workspaceForSave threads excludeKeys into the apply-all overlay", () => {
-    const ws = newWorkspace("exclude-probe");
-    const a = newDraftConstellation("nodalarc:nodes/a.yaml");
-    ws.space = [a];
-    const editedA = { ...a, label: "A!" };
-    const key = `segment:${a.segment_id}`;
-    const buffers = { [key]: { draft: editedA, opened: a, dirty: true } };
-    // Declined: the applied object survives even under applyAll.
-    const excluded = workspaceForSave(ws, buffers, {
-      applyAll: true,
-      dialogName: "",
-      nameTouched: false,
-      excludeKeys: new Set([key]),
-    });
-    expect(excluded.space[0]).toBe(a);
-    // Confirmed (nothing excluded): the working copy applies.
-    const applied = workspaceForSave(ws, buffers, {
-      applyAll: true,
-      dialogName: "",
-      nameTouched: false,
-      excludeKeys: new Set(),
-    });
-    expect(applied.space[0]).toBe(editedA);
-  });
-});
-
-describe("workspaceForSave: the dialog name never silently undoes a rename", () => {
-  it("apply-and-save keeps a dirty Session-window rename when the field is untouched", () => {
-    const ws = newWorkspace("old-name");
-    const buffers = {
-      session: {
-        draft: { session_name: "renamed-in-session" },
-        opened: { session_name: "old-name" },
-        dirty: true,
-      },
-    };
-    const next = workspaceForSave(ws, buffers, {
-      applyAll: true,
-      dialogName: "old-name",
-      nameTouched: false,
-    });
-    expect(next.session_name).toBe("renamed-in-session");
-  });
-
-  it("a name the user actually typed in the dialog wins over the overlays", () => {
-    const ws = newWorkspace("old-name");
-    const buffers = {
-      session: {
-        draft: { session_name: "renamed-in-session" },
-        opened: { session_name: "old-name" },
-        dirty: true,
-      },
-    };
-    const next = workspaceForSave(ws, buffers, {
-      applyAll: true,
-      dialogName: "typed name",
-      nameTouched: true,
-    });
-    expect(next.session_name).toBe("typed name");
-  });
-
-  it("applied-only with an untouched field is the identity", () => {
-    const ws = newWorkspace("applied-name");
-    const next = workspaceForSave(ws, {}, {
-      applyAll: false,
-      dialogName: "applied-name",
-      nameTouched: false,
-    });
-    expect(next).toBe(ws);
-  });
-
-  it("a touched empty name is preserved for backend validation", () => {
-    const ws = newWorkspace("kept");
-    const next = workspaceForSave(ws, {}, {
-      applyAll: false,
-      dialogName: "",
-      nameTouched: true,
-    });
-    expect(next.session_name).toBe("");
-  });
-});

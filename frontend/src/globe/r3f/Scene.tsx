@@ -42,7 +42,7 @@ import { GroundTracks } from "./GroundTracks";
 import type { Regime } from "../../taxonomy/regime";
 import { Links } from "./Links";
 import { FlowPaths } from "./FlowPaths";
-import { CoverageFootprint, type BeamFootprints } from "./CoverageFootprint";
+import { CoverageFootprint } from "./CoverageFootprint";
 import { Trails } from "./Trails";
 import { AllOrbits } from "./AllOrbits";
 import { OrbitPins } from "./OrbitPins";
@@ -109,10 +109,6 @@ interface SceneProps {
    *  overlays per the viewer layering — e.g. the builder's candidate lines).
    *  Rendered at scene root alongside links/flows. */
   worldLayers?: React.ReactNode;
-  /** Beam discs requested by the hosting surface with real terminal data
-   *  (the builder: every satellite of a segment being edited). Absent = the
-   *  selected-satellite disc at the display default. */
-  beamFootprints?: BeamFootprints;
 }
 
 export function Scene({
@@ -135,7 +131,6 @@ export function Scene({
   actionsRef,
   liveExplain = true,
   worldLayers,
-  beamFootprints,
 }: SceneProps) {
   // The Earth body group, used by FrameDriver / AllOrbits / OrbitPins to drive its view-frame
   // rotation. <Body> populates this ref AND self-registers its frame in the position registry
@@ -446,7 +441,7 @@ export function Scene({
                 onHover={setHover}
               />
               <GroundTracks nodes={bodyNodes} enabled={showGroundTracks} colorOf={trackColorOf} />
-              <CoverageFootprint selection={selection} nodes={bodyNodes} beams={beamFootprints} />
+              <CoverageFootprint selection={selection} nodes={bodyNodes} />
             </Body>
           );
         })}

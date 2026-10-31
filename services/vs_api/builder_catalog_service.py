@@ -50,7 +50,6 @@ from nodalarc.models.builder_catalog_api import (
     BuilderVisualForwardingClassMetadata,
     BuilderVisualLinkMediumMetadata,
     BuilderVisualMountRoleMetadata,
-    BuilderVisualOrbitShapeMetadata,
     BuilderVisualPhasingModeMetadata,
     BuilderVisualRoutingProtocolMetadata,
     BuilderVisualSchedulingPresetMetadata,
@@ -77,9 +76,6 @@ from nodalarc.models.builder_catalog_api import (
     CatalogYamlImportFile,
     CatalogYamlImportWrite,
 )
-from nodalarc.models.builder_visual_api import (
-    BuilderVisualGroundBoresight,
-)
 from nodalarc.models.segment_session import LINK_STATE_PROTOCOLS
 from nodalarc.runtime_support import RuntimeSupport
 from pydantic import BaseModel, ValidationError
@@ -94,11 +90,9 @@ from .builder_visual_defaults import (
     FORWARDING_CLASS_LABELS,
     LINK_MEDIUM_LABELS,
     MOUNT_ROLE_LABELS,
-    ORBIT_SHAPE_LABELS,
     PHASING_MODE_LABELS,
     ROUTING_PROTOCOL_LABELS,
     SCHEDULING_PRESET_LABELS,
-    SINGLE_PLANE_PHASING_MODE,
     TOPOLOGY_MODE_LABELS,
 )
 from .catalog_context import CatalogContext
@@ -590,10 +584,8 @@ class BuilderCatalogAuthoringService:
             ),
             authoring=BuilderVisualAuthoringFacts(
                 default_phasing_mode=DEFAULT_PHASING_MODE,
-                single_plane_phasing_mode=SINGLE_PLANE_PHASING_MODE,
                 default_mount_role=DEFAULT_MOUNT_ROLE,
                 default_body_ref=DEFAULT_BODY_REF,
-                ground_access_boresight=BuilderVisualGroundBoresight(mode="local_vertical"),
                 mount_roles=tuple(
                     BuilderVisualMountRoleMetadata(
                         id=identifier,
@@ -634,10 +626,6 @@ class BuilderCatalogAuthoringService:
                 phasing_modes=tuple(
                     BuilderVisualPhasingModeMetadata(id=identifier, label=label)
                     for identifier, label in PHASING_MODE_LABELS
-                ),
-                orbit_shapes=tuple(
-                    BuilderVisualOrbitShapeMetadata(id=identifier, label=label)
-                    for identifier, label in ORBIT_SHAPE_LABELS
                 ),
                 topology_modes=tuple(
                     BuilderVisualTopologyModeMetadata(

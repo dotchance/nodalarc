@@ -2,10 +2,8 @@ import type { BuilderVisualAuthoringFacts } from "../../generated/builderApi";
 
 export const AUTHORING_FACTS: BuilderVisualAuthoringFacts = {
   default_phasing_mode: "walker_delta",
-  single_plane_phasing_mode: "evenly_spaced_mean_anomaly",
   default_mount_role: "access",
   default_body_ref: "nodalarc:bodies/earth.yaml",
-  ground_access_boresight: { mode: "local_vertical" },
   mount_roles: [
     { id: "access", label: "access", description: "space ↔ ground" },
     { id: "isl", label: "isl", description: "fabric within a constellation" },
@@ -37,10 +35,6 @@ export const AUTHORING_FACTS: BuilderVisualAuthoringFacts = {
     { id: "walker_delta", label: "Walker delta" },
     { id: "walker_star", label: "Walker star" },
     { id: "evenly_spaced_mean_anomaly", label: "single-plane evenly spaced" },
-  ],
-  orbit_shapes: [
-    { id: "circular", label: "circular" },
-    { id: "elliptical", label: "elliptical" },
   ],
   topology_modes: [
     { id: "visible_candidates", label: "all visible pairs", runtime_supported: true, support_note: null, requires_n: false },

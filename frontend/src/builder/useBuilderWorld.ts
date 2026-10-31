@@ -8,7 +8,6 @@ import {
   acceptVisualDraftState,
   applyVisualDraftCommand,
   applyVisualDraftEdits,
-  applyVisualDraftWorkspace,
   applyVisualDraftYaml,
   compileBuilderDraft,
   compileVisualDraft,
@@ -29,6 +28,7 @@ import {
   saveBuilderSession,
 } from "./builderApiClient";
 import { writeSessionYamlExport } from "./sessionYamlTransfer";
+import { isJsonObject } from "./sessionSegments";
 import {
   EMPTY_YAML_BUFFER,
   answeredYamlBuffer,
@@ -64,7 +64,6 @@ import type {
   BuilderVisualDraftRetargetRequest,
   BuilderVisualObjectEditRequest,
   BuilderVisualObjectEditResult,
-  BuilderVisualWorkspace,
   CatalogDocumentSummary,
   CatalogDraftSessionContext,
   CatalogFamily,
@@ -299,7 +298,6 @@ export function canDeploy(input: {
   savedVerdict: BuilderDeployVerdict | null;
   settledDocumentDigest: string | null;
   settledDependencyDigest: string | null;
-  dirtyWindowCount: number;
   pendingEditCount: number;
 }): { ok: boolean; reason: string | null } {
   if (!input.savedVerdict) {
@@ -315,14 +313,6 @@ export function canDeploy(input: {
   }
   if (input.settledDocumentDigest === null || input.settledDependencyDigest === null) {
     return { ok: false, reason: "the session must compile before deploy" };
-  }
-  if (input.dirtyWindowCount > 0) {
-    return {
-      ok: false,
-      reason: `apply or discard the ${input.dirtyWindowCount} ${
-        input.dirtyWindowCount === 1 ? "window" : "windows"
-      } with unapplied edits first`,
-    };
   }
   if (input.pendingEditCount > 0) {
     return {
@@ -350,15 +340,11 @@ export function yamlBlocksGraphicalEditing(
 }
 
 /** Whether the open session draft holds work the user has not saved: it moved
- *  past the revision it was last opened, created or saved at, its workspace
- *  holds edits the backend has not accepted yet, or it holds unapplied window,
- *  pending link and routing, or YAML edits. The Builder keeps no copy of such
- *  work. */
+ *  past the revision it was last opened, created or saved at, or it holds
+ *  pending edits or YAML edits. The Builder keeps no copy of such work. */
 export function draftHoldsUnsavedWork(input: {
   draft: Pick<BuilderVisualDraftEnvelope, "target_ref" | "draft_revision"> | null;
   clean: { targetRef: string; revision: number } | null;
-  twinMatchesDraft: boolean;
-  dirtyWindowCount: number;
   pendingEditCount: number;
   yamlDirty: boolean;
 }): boolean {
@@ -368,8 +354,6 @@ export function draftHoldsUnsavedWork(input: {
     clean === null ||
     clean.targetRef !== draft.target_ref ||
     clean.revision !== draft.draft_revision ||
-    !input.twinMatchesDraft ||
-    input.dirtyWindowCount > 0 ||
     input.pendingEditCount > 0 ||
     input.yamlDirty
   );
@@ -570,10 +554,6 @@ function isJsonList(value: JsonValue | undefined): value is ReadonlyArray<JsonVa
   return Array.isArray(value);
 }
 
-function isJsonObject(value: JsonValue | undefined): value is Readonly<Record<string, JsonValue>> {
-  return value !== undefined && value !== null && typeof value === "object" && !isJsonList(value);
-}
-
 /** The value at a pointer of the accepted session; undefined where it holds none. */
 function acceptedValueAt(
   session: Readonly<Record<string, JsonValue>>,
@@ -702,7 +682,7 @@ function objectEditBasis(
 } {
   if (!draft) throw new Error("there is no visual draft to edit");
   // The apply route takes edits only over a fully accepted draft.
-  const accepted = draft.projection_status === "applied" ? (draft.applied_session ?? null) : null;
+  const accepted = draft.applied_session ?? null;
   const appliedRevision = draft.applied_revision ?? null;
   if (accepted === null || appliedRevision === null) {
     throw new Error(
@@ -749,7 +729,7 @@ const UNDO_LIMIT = 100;
  *  is not fully accepted. The proposals of such a draft can belong to an edit
  *  the backend has not accepted. */
 function acceptedStateOf(draft: BuilderVisualDraftEnvelope): BuilderDraftState | null {
-  const session = draft.projection_status === "applied" ? (draft.applied_session ?? null) : null;
+  const session = draft.applied_session ?? null;
   return session === null ? null : { session, catalog_documents: draft.catalog_documents };
 }
 
@@ -1083,9 +1063,7 @@ export function useBuilderWorld() {
           sentGeneration: 0,
           applyFailure: null,
           dirty: false,
-          applied:
-            draft.projection_status === "applied" ||
-            draft.projection_status === "incomplete_authoring",
+          applied: true,
           canonicalizationRequired: canonical !== null && canonical !== undefined && canonical !== draft.session_yaml,
           canonicalizationAccepted: false,
           issues: [],
@@ -1131,7 +1109,7 @@ export function useBuilderWorld() {
             sentGeneration: 0,
             applyFailure: null,
             dirty: false,
-            applied: opened.projection_status === "applied",
+            applied: true,
             canonicalizationRequired: canonical !== null && canonical !== undefined && canonical !== opened.session_yaml,
             canonicalizationAccepted: false,
             issues: [],
@@ -1236,85 +1214,11 @@ export function useBuilderWorld() {
     setYamlBuffer,
   ]);
 
-  const applyWorkspace = useCallback(async (
-    workspace: BuilderVisualWorkspace,
-  ): Promise<BuilderVisualDraftAssemblyResult> =>
-    enqueueWriter("workspace", async (epoch) => {
-      const draft = visualDraftRef.current;
-      const buffer = yamlBufferRef.current;
-      if (!draft) throw new Error("there is no session draft to edit");
-      if (
-        buffer.dirty ||
-        !buffer.applied ||
-        (buffer.canonicalizationRequired && !buffer.canonicalizationAccepted)
-      ) {
-        throw new Error("apply or canonicalize the YAML buffer before editing graphically");
-      }
-      let result: BuilderVisualDraftAssemblyResult;
-      try {
-        // A twin change and a pending link or routing edit exclude each other.
-        refuseWhileEditsPending("changing segments, ground sites or session fields");
-        result = await applyVisualDraftWorkspace({
-          draft,
-          expected_draft_revision: draft.draft_revision,
-          workspace,
-        });
-        assertEpoch(epoch);
-      } catch (cause) {
-        assertEpoch(epoch);
-        showCompile(null, cause instanceof Error ? cause.message : String(cause));
-        throw cause;
-      }
-      adoptAcceptedChange(result);
-      const canonical = result.compile_result.canonical_session_yaml ?? result.visual_draft.session_yaml;
-      setYamlBuffer({
-        text: canonical,
-        appliedText: canonical,
-        generation: buffer.generation + 1,
-        sentGeneration: buffer.generation + 1,
-        applyFailure: null,
-        dirty: false,
-        applied: true,
-        canonicalizationRequired: false,
-        canonicalizationAccepted: true,
-        issues: [],
-      });
-      return result;
-    }), [
-      adoptAcceptedChange,
-      assertEpoch,
-      enqueueWriter,
-      refuseWhileEditsPending,
-      setYamlBuffer,
-      showCompile,
-    ]);
-
   /** Put the accepted draft's compile back in the on-screen slots once no
    *  window edit is being previewed. */
   const showAcceptedCompile = useCallback(() => {
     if (assemblyResult) showCompile(assemblyResult.compile_result);
   }, [assemblyResult, showCompile]);
-
-  /** The page's preview of unapplied window edits: the backend compiles the
-   *  workspace over the draft and accepts nothing. The result fills only the
-   *  on-screen slots, and only while the draft and the caller's edits are the
-   *  ones it was computed for. */
-  const compilePreview = useCallback(
-    async (workspace: BuilderVisualWorkspace, isCurrent: () => boolean): Promise<void> => {
-      const draft = visualDraftRef.current;
-      if (!draft) throw new Error("there is no session draft to preview");
-      const stillCurrent = () => visualDraftRef.current === draft && isCurrent();
-      let result: BuilderVisualDraftAssemblyResult;
-      try {
-        result = await compileVisualDraft({ draft, workspace });
-      } catch (cause) {
-        if (stillCurrent()) showCompile(null, cause instanceof Error ? cause.message : String(cause));
-        return;
-      }
-      if (stillCurrent()) showCompile(result.compile_result);
-    },
-    [showCompile],
-  );
 
   /** The page's preview of the pending link rule, routing domain and boundary
    *  edits: the backend compiles the accepted session with the edits applied
@@ -1326,7 +1230,7 @@ export function useBuilderWorld() {
     const draft = visualDraftRef.current;
     const edits = pendingEditsRef.current;
     if (!draft) throw new Error("there is no session draft to preview");
-    const accepted = draft.projection_status === "applied" ? (draft.applied_session ?? null) : null;
+    const accepted = draft.applied_session ?? null;
     if (accepted === null) {
       showCompile(
         null,
@@ -1457,15 +1361,19 @@ export function useBuilderWorld() {
           if (appliedRevision === null) {
             throw new Error("the backend created pending edits on a draft with no accepted revision");
           }
-          const createdEdits = result.created_edits.map(sessionObjectEdit);
+          const createdEdits = result.created_edits;
+          // A card's edit is held with the backend's description of it; a
+          // proposed document's edit is the component window's and has none.
           const described = await Promise.all(
             createdEdits.map((edit) =>
-              editVisualDraftObject({
-                target_ref: draft.target_ref,
-                applied_revision: appliedRevision,
-                address: edit.address,
-                working: edit.working,
-              }),
+              edit.address.kind === "proposal"
+                ? null
+                : editVisualDraftObject({
+                    target_ref: draft.target_ref,
+                    applied_revision: appliedRevision,
+                    address: sessionObjectEdit(edit).address,
+                    working: edit.working,
+                  }),
             ),
           );
           assertEpoch(epoch);
@@ -1479,7 +1387,7 @@ export function useBuilderWorld() {
                   "another pending edit; apply or discard that edit first",
               );
             }
-            held.set(key, { edit, answer: described[index]! });
+            held.set(key, { edit, answer: described[index] ?? null });
             return key;
           });
           // A created edit in the place of the edit the command started from
@@ -1709,7 +1617,7 @@ export function useBuilderWorld() {
   } => {
     const draft = visualDraftRef.current;
     if (!draft) throw new Error("there is no visual draft to edit");
-    const accepted = draft.projection_status === "applied" ? (draft.applied_session ?? null) : null;
+    const accepted = draft.applied_session ?? null;
     if (accepted === null) {
       throw new Error("link rules, routing domains and boundaries are edited on an accepted session");
     }
@@ -2167,7 +2075,6 @@ export function useBuilderWorld() {
     assemblyResult,
     world,
     documentYaml,
-    compilePreview,
     previewPendingEdits,
     showAcceptedCompile,
     loading,
@@ -2183,7 +2090,6 @@ export function useBuilderWorld() {
     applyYamlBuffer,
     applyYamlBufferOnce,
     useCanonicalYaml,
-    applyWorkspace,
     customizeChain,
     runVisualCommand,
     mutateControls,

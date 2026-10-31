@@ -15,7 +15,6 @@ import type {
   BuilderVisualDraftAssemblyResult,
   BuilderVisualDraftApplyEditsRequest,
   BuilderVisualDraftApplyEditsResult,
-  BuilderVisualDraftApplyWorkspaceRequest,
   BuilderVisualDraftApplyYamlRequest,
   BuilderVisualDraftApplyYamlResult,
   BuilderVisualDraftCommandRequest,
@@ -200,12 +199,6 @@ export function applyVisualDraftYaml(
   input: BuilderVisualDraftApplyYamlRequest,
 ): Promise<BuilderVisualDraftApplyYamlResult> {
   return request("/draft/apply-yaml", input);
-}
-
-export function applyVisualDraftWorkspace(
-  input: BuilderVisualDraftApplyWorkspaceRequest,
-): Promise<BuilderVisualDraftAssemblyResult> {
-  return request("/draft/apply-workspace", input);
 }
 
 export function editVisualDraftObject(

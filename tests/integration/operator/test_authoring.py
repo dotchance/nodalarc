@@ -238,6 +238,36 @@ def _author_with_the_library_and_a_yaml_file(
     operator.wait_for_session({"name": name}, accepted["operation_id"])
 
 
+def _builder_save_request(draft: dict[str, Any]) -> dict[str, Any]:
+    """The save request the page builds: the accepted session with its proposals,
+    under the target and the fence the draft carries."""
+    return {
+        "draft": {
+            "draft_revision": draft["draft_revision"],
+            "state": {
+                "session": draft["applied_session"],
+                "catalog_documents": draft["catalog_documents"],
+            },
+        },
+        "target_ref": draft["target_ref"],
+        "expected_session_revision": draft["expected_session_revision"],
+    }
+
+
+def _builder_save(operator: Operator, draft: dict[str, Any]) -> dict[str, Any]:
+    """Compile the accepted session for its verdict, as the page does, then save it."""
+    request = _builder_save_request(draft)
+    compiled = operator.post(
+        "/api/v1/builder/compile",
+        {"draft": request["draft"], "target_ref": request["target_ref"]},
+    )
+    blockers = compiled["save_verdict"]["blockers"]
+    assert compiled["save_verdict"]["allowed"], "the Builder refuses to save:\n" + "\n".join(
+        f"{blocker['code']}: {blocker['message']}" for blocker in blockers
+    )
+    return operator.post("/api/v1/builder/session/save", request)
+
+
 def _author_in_the_builder(
     operator: Operator, created: list[str], name: str, found: dict[str, Any], shorter: int
 ) -> None:
@@ -250,7 +280,7 @@ def _author_in_the_builder(
         "/api/v1/builder/draft/open",
         {"source_ref": found["reference"]["source_id"]["session_ref"], "target_ref": session_ref},
     )
-    assert opened["projection_status"] == "applied", (
+    assert opened["applied_session"] is not None, (
         f"the Builder did not open {found['reference']['name']}: {opened.get('issues')}"
     )
     customized = operator.post(
@@ -271,14 +301,12 @@ def _author_in_the_builder(
     print(f"the Builder forked {forked}")
     created.extend(forked)
     created.append(session_ref)
-    compiled = operator.post("/api/v1/builder/draft/compile", {"draft": customized["draft"]})
-    operator.post("/api/v1/builder/session/save", compiled["save_request"])
+    _builder_save(operator, customized["draft"])
 
     operator.edit_catalog_object(leaf, {"/terminal/max_range_km": shorter})
 
     reopened = operator.post("/api/v1/builder/draft/open", {"source_ref": session_ref})
-    recompiled = operator.post("/api/v1/builder/draft/compile", {"draft": reopened})
-    saved = operator.post("/api/v1/builder/session/save", recompiled["save_request"])
+    saved = _builder_save(operator, reopened)
     operator.run_saved_session(saved)
 
 
@@ -472,7 +500,7 @@ def test_a_session_built_in_the_builder_runs_the_rules_and_domains_it_authored(
     time, saves and deploys.
 
     Each authored id comes from the command that made it, and each domain's members and
-    protocol from the saved session. The draft's workspace is never read.
+    protocol from the saved session.
     """
     constellation_ref, site_set_ref, start_time = (
         _a_shipped_earth_constellation_with_sites_it_reaches(operator)
@@ -492,6 +520,7 @@ def test_a_session_built_in_the_builder_runs_the_rules_and_domains_it_authored(
             {"draft": draft, "expected_draft_revision": draft["draft_revision"], "command": body},
         )
         assert result["affected_kind"] == kind, f"{body['operation']} made a {result}"
+        assert not result["created_edits"], f"{body['operation']} accepted nothing: {result}"
         draft = result["draft"]
         return result["affected_id"]
 
@@ -501,6 +530,30 @@ def test_a_session_built_in_the_builder_runs_the_rules_and_domains_it_authored(
     ground = command(
         {"operation": "place_ground_reference", "site_set_ref": site_set_ref}, "ground"
     )
+    # A session with link rules declares its candidate limits; the user states
+    # them in the session window before connecting.
+    limited = operator.post(
+        "/api/v1/builder/draft/apply-edits",
+        {
+            "draft": draft,
+            "expected_draft_revision": draft["draft_revision"],
+            "edits": [
+                {
+                    "kind": "content",
+                    "address": {"kind": "section", "pointer": "/simulation"},
+                    "base": draft["applied_session"].get("simulation"),
+                    "working": {
+                        "candidate_limits": {
+                            "max_pairs_per_rule": 2_000,
+                            "max_pairs_per_tick": 10_000,
+                        }
+                    },
+                }
+            ],
+        },
+    )
+    assert limited["applied"], f"the candidate limits were not accepted: {limited}"
+    draft = limited["assembly"]["visual_draft"]
     rule = command(
         {"operation": "connect_segments", "from_segment_id": space, "to_segment_id": ground}, "link"
     )
@@ -532,7 +585,9 @@ def test_a_session_built_in_the_builder_runs_the_rules_and_domains_it_authored(
     assert not blockers, "the Builder refuses the session it built:\n" + "\n".join(
         f"{blocker['code']}: {blocker['message']}" for blocker in blockers
     )
-    saved = operator.post("/api/v1/builder/session/save", edited["save_request"])
+    saved = operator.post(
+        "/api/v1/builder/session/save", _builder_save_request(edited["visual_draft"])
+    )
     canonical = saved["session"]["canonical_json"]
 
     assert {segment["id"]: segment.get("profile") for segment in canonical["segments"]} == {

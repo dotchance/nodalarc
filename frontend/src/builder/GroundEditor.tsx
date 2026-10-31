@@ -1,108 +1,140 @@
 // Copyright 2024-2026 .chance (dotchance)
 // Licensed under the Apache License, Version 2.0. See LICENSE file.
-/** Ground segment editor — a segment is a combination of defined sites.
- *
- *  A site contains nodes, terminals, and networks at a
- *  location); members here are either references to defined sites — full
- *  fidelity, their nodes travel with them — or sites the session proposes,
- *  edited in the component window. Bulk paste mints full sites using the
- *  segment's stamp (node model + addressing bases, applied at creation;
- *  every minted site owns its configuration afterwards). Scheduling is an
- *  intent preset writing the full explicit block, with sparse per-site
- *  overrides ("= template", only exceptions stored). Findings warn, never
- *  block; the resolver's verdict arrives verbatim via backend compile.
+/** Ground segment editor. A ground segment places the sites of a site set.
+ *  The segment's own fields are its pending edit, edited in the field editor
+ *  the caller passes in. The site set and its sites are documents: one the
+ *  session proposes opens in the component window, and a catalog document is
+ *  customized first. Pasted sites are minted as sites the session proposes,
+ *  each installing the chosen node model on the chosen body; a site from the
+ *  library joins by reference. Scheduling is an intent preset writing the
+ *  full explicit block, with sparse per-site overrides ("= template", only
+ *  exceptions stored). With no segment yet, the editor offers only the
+ *  gestures that create one. The resolver's verdict arrives through backend
+ *  compile.
  */
 
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import { Button, IconButton } from "../ui/Button";
 import { Icon } from "../ui/icons/Icon";
+import { KeyValueRow } from "../ui/KeyValueRow";
 import {
   BodySelect,
   EditorCard,
-  EditorName,
-  Field,
   InlineSelect,
-  NumberField,
   PasteArea,
   SelectField,
 } from "./editorKit";
 import { SegmentLinksCard } from "./SegmentLinksCard";
 import type { ListedLinkRule } from "./sessionListing";
-import { useBuilderCatalog } from "./useBuilderWorld";
 import {
-  groundWarnings,
-  parseSiteLines,
-  type DraftGroundSet,
-  type ParsedSiteLine,
-  type Workspace,
-} from "./workspace";
+  isJsonObject,
+  proposedBody,
+  refStem,
+  type SessionSegment,
+} from "./sessionSegments";
+import { useBuilderCatalog } from "./useBuilderWorld";
 import type {
+  BuilderProposedCatalogDocument,
   BuilderVisualAuthoringFacts,
+  BuilderVisualGroundSiteIntent,
   BuilderVisualSchedulingPreset,
   BuilderVisualSchedulingPresetMetadata,
 } from "./generated/builderApi";
 
-interface GroundEditorProps {
-  draft: DraftGroundSet;
-  /** Functional-only: the caller reads the LATEST draft, never a stale
-   *  render-closure, so a concurrent edit during an in-flight model fetch
-   *  survives. */
-  onUpdate: (update: (prev: DraftGroundSet) => DraftGroundSet) => void;
-  onMintSites: (sites: ParsedSiteLine[]) => Promise<void>;
-  onAddSiteReference: (ref: string) => Promise<void>;
-  onSetStampNodeModel: (ref: string) => Promise<void>;
-  /** Open the site the session proposes at `ref` in the component window. */
-  onEditSite: (ref: string) => void;
-  /** Null while a change is being applied: removing waits for it. */
+/** Bulk site paste: one site per line, ``name, lat, lon[, alt_m]`` — commas
+ *  or tabs (spreadsheet columns paste as tabs). Bad lines are reported,
+ *  never silently dropped. */
+export function parseSiteLines(text: string): {
+  rows: BuilderVisualGroundSiteIntent[];
+  errors: string[];
+} {
+  const rows: BuilderVisualGroundSiteIntent[] = [];
+  const errors: string[] = [];
+  for (const rawLine of text.split("\n")) {
+    const line = rawLine.trim();
+    if (!line) continue;
+    const parts = line
+      .split(/[\t,]/)
+      .map((part) => part.trim())
+      .filter((part) => part.length > 0);
+    if (parts.length < 3) {
+      errors.push(`"${line}" — expected: name, lat, lon`);
+      continue;
+    }
+    const name = parts[0] ?? "";
+    const lat = Number(parts[1]);
+    const lon = Number(parts[2]);
+    const alt = parts.length > 3 ? Number(parts[3]) : undefined;
+    if (
+      !Number.isFinite(lat) ||
+      !Number.isFinite(lon) ||
+      (alt !== undefined && !Number.isFinite(alt))
+    ) {
+      errors.push(`"${line}" — lat, lon, alt must be numbers`);
+      continue;
+    }
+    if (!name) {
+      errors.push(`"${line}" — name is required`);
+      continue;
+    }
+    rows.push({
+      name,
+      lat_deg: lat,
+      lon_deg: lon,
+      ...(alt === undefined ? {} : { alt_m: alt }),
+    });
+  }
+  return { rows, errors };
+}
+
+/** The ground segment the editor edits, with its field editor. */
+interface GroundSegmentParts {
+  segment: SessionSegment;
+  /** The segment's field editor over its pending edit. */
+  fields: ReactNode;
+  /** Open the component chain under the segment's site set for customizing. */
+  onCustomize: () => void;
+  schedulingPresets: readonly BuilderVisualSchedulingPresetMetadata[];
+  selectedSchedulingPreset: BuilderVisualSchedulingPreset | null;
+  siteSchedulingPreset: (siteId: string) => BuilderVisualSchedulingPreset | null;
+  onSchedulingPreset: (
+    preset: BuilderVisualSchedulingPreset | null,
+    siteId?: string,
+  ) => Promise<void>;
+  /** Remove the segment from the session; null while a change is being applied. */
   onRemove: (() => void) | null;
-  /** focus the name when a create gesture opened this editor. */
-  autoFocusName?: boolean;
-  /** Connect gesture context ("+ link to…" on the segment). */
-  workspace: Workspace;
+  placed: ReadonlyArray<SessionSegment>;
   /** Every link rule the session declares, as the backend lists them with
    *  the pending edits laid over them. */
   linkRules: ReadonlyArray<ListedLinkRule>;
   onOpenRule: (ruleId: string) => void;
   onConnect: (targetSegmentId: string) => void;
-  schedulingPresets: readonly BuilderVisualSchedulingPresetMetadata[];
-  selectedSchedulingPreset: BuilderVisualSchedulingPreset | null;
-  memberSchedulingPreset: (memberId: string) => BuilderVisualSchedulingPreset | null;
-  onSchedulingPreset: (
-    preset: BuilderVisualSchedulingPreset | null,
-    memberId?: string,
+}
+
+interface GroundEditorProps {
+  /** Null before the segment exists: its first sites create it. */
+  ground: GroundSegmentParts | null;
+  /** The documents the session proposes. */
+  proposals: ReadonlyArray<BuilderProposedCatalogDocument>;
+  onMintSites: (
+    sites: BuilderVisualGroundSiteIntent[],
+    nodeRef: string,
+    bodyRef: string,
   ) => Promise<void>;
+  onAddSiteReference: (ref: string) => Promise<void>;
+  /** Open the document the session proposes at `ref` in the component window. */
+  onEdit: (ref: string) => void;
   authoring: BuilderVisualAuthoringFacts;
 }
 
-/** Parse a comma/space separated tag or prefix list; empty tokens drop. */
-function tokenList(value: string): string[] {
-  return value
-    .split(/[,\s]+/)
-    .map((token) => token.trim())
-    .filter((token) => token.length > 0);
-}
-
 export function GroundEditor({
-  draft,
-  onUpdate,
+  ground,
+  proposals,
   onMintSites,
   onAddSiteReference,
-  onSetStampNodeModel,
-  onEditSite,
-  onRemove,
-  autoFocusName = false,
-  workspace,
-  linkRules,
-  onOpenRule,
-  onConnect,
-  schedulingPresets,
-  selectedSchedulingPreset,
-  memberSchedulingPreset,
-  onSchedulingPreset,
+  onEdit,
   authoring,
 }: GroundEditorProps) {
-  const [openCard, setOpenCard] = useState<string | null>("sites");
-  const toggle = (id: string) => setOpenCard((prev) => (prev === id ? null : id));
   const nodes = useBuilderCatalog("nodes");
   const siteCatalog = useBuilderCatalog("sites");
   const bodies = useBuilderCatalog("bodies");
@@ -111,351 +143,280 @@ export function GroundEditor({
   const [libraryOpen, setLibraryOpen] = useState(false);
   const [editorError, setEditorError] = useState<string | null>(null);
   const [minting, setMinting] = useState(false);
-  const warnings = groundWarnings(draft);
+  const [nodeRef, setNodeRef] = useState<string | null>(null);
+  const [bodyRef, setBodyRef] = useState<string | null>(authoring.default_body_ref);
+  const report = (cause: unknown) =>
+    setEditorError(cause instanceof Error ? cause.message : String(cause));
 
-  const setSchedulingPreset = (
-    preset: BuilderVisualSchedulingPreset | null,
-    memberId?: string,
-  ) => {
-    setEditorError(null);
-    void onSchedulingPreset(preset, memberId).catch((cause) =>
-      setEditorError(cause instanceof Error ? cause.message : String(cause)),
+  const placement = ground?.segment.segment.placement;
+  const siteSetRef =
+    isJsonObject(placement) && typeof placement.from_site_set === "string"
+      ? placement.from_site_set
+      : null;
+  const siteSet = proposedBody(proposals, siteSetRef, "site_set");
+  const siteRefs = Array.isArray(siteSet?.sites)
+    ? siteSet.sites.filter((site): site is string => typeof site === "string")
+    : [];
+  const overrides = Array.isArray(ground?.segment.segment.overrides)
+    ? ground.segment.segment.overrides
+    : [];
+  const overridden = (siteId: string) =>
+    overrides.some(
+      (override) =>
+        isJsonObject(override) && isJsonObject(override.match) && override.match.site === siteId,
     );
+  // Sites are added where the session proposes the site set, or by creating
+  // the segment.
+  const canAddSites = ground === null || siteSet !== null;
+
+  const setSchedulingPreset = (preset: BuilderVisualSchedulingPreset | null, siteId?: string) => {
+    if (!ground) return;
+    setEditorError(null);
+    void ground.onSchedulingPreset(preset, siteId).catch(report);
   };
 
   const addPastedSites = async () => {
     const { rows, errors } = parseSiteLines(pasteText);
     setPasteErrors(errors);
-    if (rows.length > 0) {
-      setMinting(true);
-      setEditorError(null);
-      try {
-        await onMintSites(rows);
-        setPasteText("");
-      } catch (cause) {
-        setEditorError(cause instanceof Error ? cause.message : String(cause));
-      } finally {
-        setMinting(false);
-      }
+    if (rows.length === 0) return;
+    if (nodeRef === null || bodyRef === null) {
+      setEditorError("choose the node model and the body the pasted sites install");
+      return;
+    }
+    setMinting(true);
+    setEditorError(null);
+    try {
+      await onMintSites(rows, nodeRef, bodyRef);
+      setPasteText("");
+    } catch (cause) {
+      report(cause);
+    } finally {
+      setMinting(false);
     }
   };
 
-  // Place a defined site by reference — full fidelity, its nodes travel.
   const addFromLibrary = async (ref: string) => {
     setEditorError(null);
     try {
       await onAddSiteReference(ref);
     } catch (cause) {
-      setEditorError(cause instanceof Error ? cause.message : String(cause));
+      report(cause);
     }
   };
 
-  const setStampModel = async (ref: string) => {
-    setEditorError(null);
-    try {
-      await onSetStampNodeModel(ref);
-    } catch (e) {
-      setEditorError(e instanceof Error ? e.message : String(e));
-    }
+  const siteLabel = (ref: string) => {
+    const site = proposedBody(proposals, ref, "site");
+    return typeof site?.display_name === "string" ? site.display_name : refStem(ref);
   };
 
-  const stampLabel =
-    draft.stamp.node_ref?.split("/").pop()?.replace(/\.yaml$/, "") || "pick a model";
+  const addSites = (
+    <>
+      <PasteArea
+        placeholder={"paste sites, one per line:\nDenver, 39.7, -104.9\nPerth, -31.9, 115.8"}
+        value={pasteText}
+        onChange={setPasteText}
+      />
+      {pasteErrors.map((error) => (
+        <div className="builder-warning" key={error}>
+          {error}
+        </div>
+      ))}
+      <SelectField
+        stack
+        label="node model the pasted sites install"
+        ariaLabel="Site node model"
+        value={nodeRef}
+        onChange={(ref) => setNodeRef(ref || null)}
+        options={nodes.entries.map((entry) => ({ value: entry.ref, label: entry.display_name }))}
+      />
+      <BodySelect
+        label="on body"
+        ariaLabel="Site body"
+        value={bodyRef}
+        onChange={(ref) => setBodyRef(ref || null)}
+        bodies={bodies}
+      />
+      <div className="builder-preset-row">
+        <Button
+          onClick={() => void addPastedSites()}
+          disabled={pasteText.trim().length === 0 || minting}
+        >
+          {minting ? "minting…" : "+ mint pasted sites"}
+        </Button>
+        <Button active={libraryOpen} onClick={() => setLibraryOpen((open) => !open)}>
+          from library…
+        </Button>
+      </div>
+      {libraryOpen && (
+        <div className="builder-library-list">
+          {siteCatalog.entries.map((entry) => (
+            <button
+              key={entry.ref}
+              className="builder-outline-row"
+              title={`Add ${entry.ref}`}
+              onClick={() => void addFromLibrary(entry.ref)}
+            >
+              <span>{entry.display_name}</span>
+              {entry.summary && <span className="builder-outline-count">{entry.summary}</span>}
+            </button>
+          ))}
+        </div>
+      )}
+      <div className="builder-site-derived">
+        a minted site installs the node model with the terminals it carries; edit the site
+        afterwards in its own window
+      </div>
+    </>
+  );
+
+  if (ground === null) {
+    return (
+      <div className="builder-inspector-stack" data-testid="builder-ground-editor">
+        <div className="builder-site-derived">
+          The ground segment is created with its first sites.
+        </div>
+        {addSites}
+        {editorError && <div className="builder-warning">{editorError}</div>}
+      </div>
+    );
+  }
 
   return (
     <div className="builder-inspector-stack" data-testid="builder-ground-editor">
-      <EditorName
-        value={draft.display_name}
-        onChange={(display_name) => onUpdate((prev) => ({ ...prev, display_name }))}
-        autoFocus={autoFocusName}
-      />
+      <EditorCard title="Segment" open summary={ground.segment.segment_id}>
+        {ground.fields}
+      </EditorCard>
 
       <EditorCard
         title="Sites"
-        open={openCard === "sites"}
-        onToggle={() => toggle("sites")}
-        summary={draft.members.length === 1 ? "1 site" : `${draft.members.length} sites`}
+        open
+        summary={
+          siteSet === null
+            ? (siteSetRef === null ? "no site set" : refStem(siteSetRef))
+            : siteRefs.length === 1
+              ? "1 site"
+              : `${siteRefs.length} sites`
+        }
       >
-            {draft.members.map((member) => (
-              <div key={member.member_id}>
-                <div className="builder-site-row">
+        <KeyValueRow label="site set">{siteSetRef ?? "none"}</KeyValueRow>
+        {siteSet === null ? (
+          <>
+            <div className="builder-site-derived">
+              a library component — customize it to edit it in this session
+            </div>
+            <Button disabled={siteSetRef === null} onClick={ground.onCustomize}>
+              Customize…
+            </Button>
+          </>
+        ) : (
+          <>
+            {siteRefs.map((ref) => {
+              const siteId = refStem(ref);
+              const label = siteLabel(ref);
+              const preset = ground.siteSchedulingPreset(siteId);
+              const proposed = proposedBody(proposals, ref, "site") !== null;
+              return (
+                <div className="builder-site-row" key={ref}>
                   <div className="builder-site-head">
                     <span className="builder-site-name">
                       <Icon name="locate-fixed" size={12} />
-                      {member.label}
+                      {label}
                     </span>
                     <InlineSelect
                       className="builder-ground-preset"
-                      ariaLabel={`${member.label} scheduling`}
+                      ariaLabel={`${label} scheduling`}
                       title="Per-site scheduling — only exceptions are stored"
-                      value={
-                        member.scheduling_override === null
-                          ? ""
-                          : (memberSchedulingPreset(member.member_id) ?? "__custom__")
-                      }
+                      value={overridden(siteId) ? (preset ?? "__custom__") : ""}
                       onChange={(value) => {
                         if (value === "__custom__") return;
                         setSchedulingPreset(
                           value === "" ? null : (value as BuilderVisualSchedulingPreset),
-                          member.member_id,
+                          siteId,
                         );
                       }}
                       options={[
                         { value: "", label: "= template" },
-                        ...(member.scheduling_override !== null &&
-                        memberSchedulingPreset(member.member_id) === null
+                        ...(overridden(siteId) && preset === null
                           ? [{ value: "__custom__", label: "Imported block (custom)" }]
                           : []),
-                        ...schedulingPresets.map((preset) => ({
-                          value: preset.id,
-                          label: preset.label,
+                        ...ground.schedulingPresets.map((choice) => ({
+                          value: choice.id,
+                          label: choice.label,
                         })),
                       ]}
                     />
                     <IconButton
                       icon="pencil"
                       size={12}
-                      label={
-                        member.kind === "ref"
-                          ? `Customize ${member.label}: fork into an editable site`
-                          : `Edit ${member.label}`
-                      }
-                      onClick={() => {
-                        if (member.kind === "ref") {
-                          setEditorError(
-                            `Customize ${member.ref} from the Library, then update this session to use the new user: reference.`,
-                          );
-                        } else if (member.ref) {
-                          onEditSite(member.ref);
-                        }
-                      }}
-                    />
-                    <IconButton
-                      icon="x"
-                      size={12}
-                      label={`Remove ${member.label}`}
-                      onClick={() =>
-                        onUpdate((prev) => ({
-                          ...prev,
-                          members: prev.members.filter((m) => m.member_id !== member.member_id),
-                        }))
-                      }
+                      label={proposed ? `Edit ${label}` : `Customize ${label}`}
+                      onClick={() => (proposed ? onEdit(ref) : ground.onCustomize())}
                     />
                   </div>
                   <span className="builder-site-derived">
-                    {member.kind === "ref" ? (member.summary ?? member.ref) : "proposed by this session"}
+                    {proposed ? "proposed by this session" : ref}
                   </span>
                 </div>
-              </div>
-            ))}
-            <PasteArea
-              placeholder={"paste sites, one per line:\nDenver, 39.7, -104.9\nPerth, -31.9, 115.8"}
-              value={pasteText}
-              onChange={setPasteText}
-            />
-            {pasteErrors.map((error) => (
-              <div className="builder-warning" key={error}>
-                {error}
-              </div>
-            ))}
+              );
+            })}
             <div className="builder-preset-row">
-              <Button
-                onClick={() => void addPastedSites()}
-                disabled={pasteText.trim().length === 0 || minting}
-              >
-                {minting ? "minting…" : "+ mint pasted sites"}
-              </Button>
-              <Button active={libraryOpen} onClick={() => setLibraryOpen((open) => !open)}>
-                from library…
-              </Button>
+              <Button onClick={() => siteSetRef && onEdit(siteSetRef)}>Edit site set</Button>
             </div>
-            {libraryOpen && (
-              <div className="builder-library-list">
-                {siteCatalog.entries
-                  .map((entry) => (
-                    <button
-                      key={entry.ref}
-                      className="builder-outline-row"
-                      title={`Add ${entry.ref}`}
-                      onClick={() => void addFromLibrary(entry.ref)}
-                    >
-                      <span>{entry.display_name}</span>
-                      {entry.summary && (
-                        <span className="builder-outline-count">{entry.summary}</span>
-                      )}
-                    </button>
-                  ))}
-              </div>
-            )}
+          </>
+        )}
       </EditorCard>
 
-      <EditorCard
-        title="New-site stamp"
-        open={openCard === "stamp"}
-        onToggle={() => toggle("stamp")}
-        summary={
-          <>
-            {stampLabel}
-          </>
-        }
-      >
-            <div className="builder-site-derived">
-              applied when minting pasted sites — each site owns its
-              configuration afterwards (edit the site, not the stamp)
-            </div>
-            <BodySelect
-              label="on body"
-              ariaLabel="Stamp body"
-              value={draft.stamp.body}
-              onChange={(body) => onUpdate((prev) => ({ ...prev, stamp: { ...prev.stamp, body } }))}
-              bodies={bodies}
-            />
-            <SelectField
-              stack
-              label="node model"
-              ariaLabel="Stamp node"
-              value={draft.stamp.node_ref}
-              onChange={(ref) => void setStampModel(ref)}
-              options={nodes.entries
-                .map((entry) => ({
-                  value: entry.ref,
-                  label: entry.display_name,
-                }))}
-            />
-            {Object.entries(draft.stamp.installed).map(([mount, count]) => (
-              <div key={mount}>
-                <NumberField
-                  label={mount}
-                  value={count}
-                  min={1}
-                  integer
-                  suffix="installed"
-                  onChange={(parsed) =>
-                    onUpdate((prev) => ({
-                      ...prev,
-                      stamp: {
-                        ...prev.stamp,
-                        installed: { ...prev.stamp.installed, [mount]: parsed },
-                      },
-                    }))
-                  }
-                />
-                <SelectField
-                  label={`${mount} ground boresight`}
-                  value={draft.stamp.boresights[mount]?.mode ?? ""}
-                  onChange={(mode) =>
-                    onUpdate((prev) => {
-                      const boresights = { ...prev.stamp.boresights };
-                      if (mode === authoring.ground_access_boresight.mode) {
-                        boresights[mount] = { ...authoring.ground_access_boresight };
-                      } else {
-                        delete boresights[mount];
-                      }
-                      return {
-                        ...prev,
-                        stamp: { ...prev.stamp, boresights },
-                      };
-                    })
-                  }
-                  options={[
-                    { value: "", label: "none" },
-                    {
-                      value: authoring.ground_access_boresight.mode,
-                      label: authoring.ground_access_boresight.mode.replace(/_/g, " "),
-                    },
-                  ]}
-                />
-              </div>
-            ))}
-            <div className="builder-site-derived">
-              Addresses are resolver-allocated at deploy; minted sites carry
-              composition only.
-            </div>
-      </EditorCard>
+      {canAddSites && (
+        <EditorCard title="Add sites" open summary="paste or pick">
+          {addSites}
+        </EditorCard>
+      )}
 
       <EditorCard
         title="Scheduling"
-        open={openCard === "scheduling"}
-        onToggle={() => toggle("scheduling")}
+        open
         summary={
-          schedulingPresets
-            .find((preset) => preset.id === selectedSchedulingPreset)
+          ground.schedulingPresets
+            .find((preset) => preset.id === ground.selectedSchedulingPreset)
             ?.label.split(" — ")[0] ?? "Custom (imported)"
         }
       >
-            <SelectField
-              stack
-              label="intent preset — writes the full explicit block (see YAML)"
-              ariaLabel="Scheduling preset"
-              value={selectedSchedulingPreset ?? ""}
-              onChange={(value) => {
-                if (value) setSchedulingPreset(value as BuilderVisualSchedulingPreset);
-              }}
-              options={[
-                ...(selectedSchedulingPreset === null
-                  ? [{ value: "", label: "Imported block (custom)" }]
-                  : []),
-                ...schedulingPresets.map((preset) => ({
-                  value: preset.id,
-                  label: preset.label,
-                })),
-              ]}
-            />
-      </EditorCard>
-
-      <EditorCard
-        title="Routing intent"
-        open={openCard === "routing"}
-        onToggle={() => toggle("routing")}
-        summary={
-          <>
-            {draft.originated_ipv4.length > 0
-              ? `${draft.originated_ipv4.length} originated`
-              : "none originated"}
-            {draft.tags.length > 0 && ` · ${draft.tags.join(" ")}`}
-          </>
-        }
-      >
-            <Field
-              stack
-              label="originated IPv4 prefixes"
-              placeholder="198.51.100.0/24, 203.0.113.0/24"
-              value={draft.originated_ipv4.join(", ")}
-              onChange={(value) => onUpdate((prev) => ({ ...prev, originated_ipv4: tokenList(value) }))}
-            />
-            <Field
-              stack
-              label="segment tags — link rules select on these"
-              placeholder="teleport, edge"
-              value={draft.tags.join(", ")}
-              onChange={(value) => onUpdate((prev) => ({ ...prev, tags: tokenList(value) }))}
-            />
+        <SelectField
+          stack
+          label="intent preset — writes the full explicit block (see YAML)"
+          ariaLabel="Scheduling preset"
+          value={ground.selectedSchedulingPreset ?? ""}
+          onChange={(value) => {
+            if (value) setSchedulingPreset(value as BuilderVisualSchedulingPreset);
+          }}
+          options={[
+            ...(ground.selectedSchedulingPreset === null
+              ? [{ value: "", label: "Imported block (custom)" }]
+              : []),
+            ...ground.schedulingPresets.map((preset) => ({
+              value: preset.id,
+              label: preset.label,
+            })),
+          ]}
+        />
       </EditorCard>
 
       <SegmentLinksCard
-        workspace={workspace}
-        rules={linkRules}
-        segmentId={draft.segment_id}
-        onOpenRule={onOpenRule}
-        onConnect={onConnect}
+        placed={ground.placed}
+        rules={ground.linkRules}
+        segmentId={ground.segment.segment_id}
+        onOpenRule={ground.onOpenRule}
+        onConnect={ground.onConnect}
       />
 
-      {warnings.map((warning) => (
-        <div className="builder-warning" key={warning}>
-          {warning}
-        </div>
-      ))}
       {editorError && <div className="builder-warning">{editorError}</div>}
 
-      <div className="builder-preset-row">
-        <Button variant="danger" onClick={onRemove ?? undefined} disabled={onRemove === null}>
-          Discard segment
-        </Button>
-      </div>
-      <div className="builder-site-derived">
-        Session save persists authored sites through the backend proposal. Reusable site and
-        site-set components are created from the Library.
-      </div>
+      <Button
+        variant="danger"
+        onClick={ground.onRemove ?? undefined}
+        disabled={ground.onRemove === null}
+      >
+        Remove segment
+      </Button>
     </div>
   );
 }

@@ -1,58 +1,51 @@
 // Copyright 2024-2026 .chance (dotchance)
 // Licensed under the Apache License, Version 2.0. See LICENSE file.
-/** Constellation draft editor — the builder's first authoring surface.
- *
- *  Progressive disclosure like the read-only inspector: Orbit and Pattern
- *  cards, one open at a time, closed cards reading as the spec sheet. Every
- *  field is typeable; presets seed raw values the user then owns (never
- *  modes). The resolver's verdict arrives through backend compile and is
- *  shown verbatim in the status bar; this editor does not run separate
- *  orbital physics.
+/** Space segment editor. The segment's own fields are its pending edit,
+ *  edited in the field editor the caller passes in. The constellation it
+ *  places, with its orbit and node, is a document: one the session proposes
+ *  opens in the component window, and a catalog document is customized
+ *  first. The population gestures change the proposed constellation as one
+ *  accepted revision, with the plane spacing and phase offset the backend
+ *  derives. The resolver's verdict arrives through backend compile.
  */
 
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import { Button } from "../ui/Button";
-import { BodySelect, EditorCard, EditorName, NumberField, SelectField, SliderField } from "./editorKit";
+import { KeyValueRow } from "../ui/KeyValueRow";
+import { EditorCard, NumberField, SelectField } from "./editorKit";
 import { SegmentLinksCard } from "./SegmentLinksCard";
 import type { ListedLinkRule } from "./sessionListing";
+import {
+  isJsonObject,
+  proposedBody,
+  refStem,
+  type SessionSegment,
+} from "./sessionSegments";
 import type {
+  BuilderProposedCatalogDocument,
   BuilderVisualAuthoringFacts,
+  BuilderVisualPhasingMode,
   BuilderVisualSetSpacePopulationCommand,
 } from "./generated/builderApi";
-import {
-  exportCatalogObject,
-  useBuilderCatalog,
-} from "./useBuilderWorld";
-import {
-  type DraftConstellation,
-  type DraftOrbit,
-  type PhasingMode,
-  type Workspace,
-} from "./workspace";
 
 interface ConstellationEditorProps {
-  draft: DraftConstellation;
-  /** Functional-only: reached from an async path (customizeNode's fetch,
-   *  the node save-then-ref), so it reads the LATEST draft, never a stale
-   *  closure. `onUpdateOrbit` stays value-form — orbit params are sync-only
-   *  (NumberFields), never written from an async writer. */
-  onUpdate: (update: (prev: DraftConstellation) => DraftConstellation) => void;
-  onUpdateOrbit: (patch: Partial<DraftOrbit>) => void;
+  segment: SessionSegment;
+  /** The segment's field editor over its pending edit. */
+  fields: ReactNode;
+  /** The documents the session proposes. */
+  proposals: ReadonlyArray<BuilderProposedCatalogDocument>;
   onSetPopulation: (
     change: Omit<BuilderVisualSetSpacePopulationCommand, "operation" | "segment_id">,
   ) => Promise<void>;
-  /** The node documents the session proposes, which the node may be. */
-  proposedNodes: ReadonlyArray<{ ref: string; label: string }>;
-  /** Open the node the session proposes at `ref` in the component window. */
-  onEditNode: (ref: string) => void;
+  /** Open the document the session proposes at `ref` in the component window. */
+  onEdit: (ref: string) => void;
+  /** Open the component chain under the segment's source for customizing. */
+  onCustomize: () => void;
   /** Fork the node into a document the session proposes. */
-  onCustomizeNode: () => Promise<void>;
-  /** Null while a change is being applied: removing waits for it. */
+  onCustomizeNode: (nodeRef: string) => Promise<void>;
+  /** Remove the segment from the session; null while a change is being applied. */
   onRemove: (() => void) | null;
-  /** focus the name when a create gesture opened this editor. */
-  autoFocusName?: boolean;
-  /** Connect gesture context ("+ link to…" on the segment). */
-  workspace: Workspace;
+  placed: ReadonlyArray<SessionSegment>;
   /** Every link rule the session declares, as the backend lists them with
    *  the pending edits laid over them. */
   linkRules: ReadonlyArray<ListedLinkRule>;
@@ -61,184 +54,85 @@ interface ConstellationEditorProps {
   authoring: BuilderVisualAuthoringFacts;
 }
 
-/** "nodalarc:bodies/luna.yaml" -> "luna" for the card's spec line. */
-function bodyShortName(ref: string | null): string {
-  if (ref === null) return "body not selected";
-  const base = ref.split("/").pop() ?? ref;
-  return base.replace(/\.ya?ml$/, "");
+function numberOf(value: unknown): number | null {
+  return typeof value === "number" ? value : null;
 }
 
-function orbitDistance(value: number | null): string {
-  return value === null ? "incomplete" : String(Math.round(value));
+function textOf(value: unknown): string | null {
+  return typeof value === "string" ? value : null;
 }
 
 export function ConstellationEditor({
-  draft,
-  onUpdate,
-  onUpdateOrbit,
+  segment,
+  fields,
+  proposals,
   onSetPopulation,
-  proposedNodes,
-  onEditNode,
+  onEdit,
+  onCustomize,
   onCustomizeNode,
   onRemove,
-  autoFocusName = false,
-  workspace,
+  placed,
   linkRules,
   onOpenRule,
   onConnect,
   authoring,
 }: ConstellationEditorProps) {
-  const [openCard, setOpenCard] = useState<string | null>("orbit");
   const [editorError, setEditorError] = useState<string | null>(null);
-  const nodes = useBuilderCatalog("nodes");
-  const bodies = useBuilderCatalog("bodies");
-  const phasingLabel =
-    authoring.phasing_modes.find((choice) => choice.id === draft.phasing_mode)?.label ??
-    draft.phasing_mode;
-  const toggle = (id: string) => setOpenCard((prev) => (prev === id ? null : id));
+  const report = (cause: unknown) =>
+    setEditorError(cause instanceof Error ? cause.message : String(cause));
+  const sourceRef = textOf(segment.segment.source);
+  const constellation = proposedBody(proposals, sourceRef, "constellation");
+  const planesBlock = isJsonObject(constellation?.planes) ? constellation.planes : {};
+  const phasingBlock = isJsonObject(constellation?.phasing) ? constellation.phasing : {};
+  const planes = numberOf(planesBlock.count);
+  const slots = numberOf(constellation?.slots_per_plane);
+  const phasingMode = textOf(phasingBlock.mode);
+  const orbitRef = textOf(constellation?.orbit);
+  const nodeRef = textOf(constellation?.node);
+  const orbitProposed = proposedBody(proposals, orbitRef, "orbit") !== null;
+  const nodeProposed = proposedBody(proposals, nodeRef, "node") !== null;
   const setPopulation = (
     change: Omit<BuilderVisualSetSpacePopulationCommand, "operation" | "segment_id">,
   ) => {
     setEditorError(null);
-    void onSetPopulation(change).catch((cause) =>
-      setEditorError(cause instanceof Error ? cause.message : String(cause)),
-    );
+    void onSetPopulation(change).catch(report);
   };
-
-  const nodeIsProposed = proposedNodes.some((proposed) => proposed.ref === draft.node_ref);
 
   return (
     <div className="builder-inspector-stack" data-testid="builder-editor">
-      <EditorName
-        value={draft.display_name}
-        onChange={(display_name) => onUpdate((prev) => ({ ...prev, display_name }))}
-        autoFocus={autoFocusName}
-      />
-
-      <EditorCard
-        title="Orbit"
-        open={openCard === "orbit"}
-        onToggle={() => toggle("orbit")}
-        summary={
-          <>
-            {draft.orbit.shape_kind === "circular"
-              ? `${orbitDistance(draft.orbit.altitude_km)} km circular`
-              : draft.orbit.shape_kind === "elliptical"
-                ? `${orbitDistance(draft.orbit.perigee_altitude_km)} × ${orbitDistance(draft.orbit.apogee_altitude_km)} km`
-                : "orbit shape incomplete"}{" "}
-            · {draft.orbit.inclination_deg === null
-              ? "inclination incomplete"
-              : `${draft.orbit.inclination_deg.toFixed(1)}°`}
-            {draft.orbit.central_body !== authoring.default_body_ref &&
-              ` · ${bodyShortName(draft.orbit.central_body)}`}
-          </>
-        }
-      >
-            <BodySelect
-              label="around"
-              ariaLabel="Central body"
-              value={draft.orbit.central_body}
-              onChange={(central_body) => onUpdateOrbit({ central_body })}
-              bodies={bodies}
-            />
-            <div className="builder-preset-row" role="radiogroup" aria-label="Orbit shape">
-              {authoring.orbit_shapes.map((choice) => (
-                <Button
-                  key={choice.id}
-                  active={draft.orbit.shape_kind === choice.id}
-                  onClick={() => onUpdateOrbit({ shape_kind: choice.id })}
-                >
-                  {choice.label}
-                </Button>
-              ))}
-            </div>
-            {draft.orbit.shape_kind === "circular" ? (
-              <SliderField
-                label="altitude"
-                value={draft.orbit.altitude_km}
-                min={150}
-                max={40000}
-                step={10}
-                suffix="km"
-                onChange={(altitude_km) => onUpdateOrbit({ altitude_km })}
-              />
-            ) : (
-              <>
-                <SliderField
-                  label="perigee"
-                  value={draft.orbit.perigee_altitude_km}
-                  min={150}
-                  max={40000}
-                  step={10}
-                  suffix="km"
-                  onChange={(perigee_altitude_km) => onUpdateOrbit({ perigee_altitude_km })}
-                />
-                <SliderField
-                  label="apogee"
-                  value={draft.orbit.apogee_altitude_km}
-                  min={150}
-                  max={45000}
-                  step={10}
-                  suffix="km"
-                  onChange={(apogee_altitude_km) => onUpdateOrbit({ apogee_altitude_km })}
-                />
-                <SliderField
-                  label="arg of perigee"
-                  value={draft.orbit.argument_of_perigee_deg}
-                  min={0}
-                  max={360}
-                  suffix="deg"
-                  onChange={(argument_of_perigee_deg) =>
-                    onUpdateOrbit({ argument_of_perigee_deg })
-                  }
-                />
-              </>
-            )}
-            <SliderField
-              label="inclination"
-              value={draft.orbit.inclination_deg}
-              min={0}
-              max={180}
-              step={0.5}
-              suffix="deg"
-              onChange={(inclination_deg) => onUpdateOrbit({ inclination_deg })}
-            />
-            <SliderField
-              label="RAAN"
-              value={draft.orbit.raan_deg}
-              min={0}
-              max={360}
-              suffix="deg"
-              onChange={(raan_deg) => onUpdateOrbit({ raan_deg })}
-            />
-            <SliderField
-              label="mean anomaly"
-              value={draft.orbit.mean_anomaly_deg}
-              min={0}
-              max={360}
-              suffix="deg"
-              onChange={(mean_anomaly_deg) => onUpdateOrbit({ mean_anomaly_deg })}
-            />
+      <EditorCard title="Segment" open summary={segment.segment_id}>
+        {fields}
       </EditorCard>
 
       <EditorCard
-        title="Pattern"
-        open={openCard === "pattern"}
-        onToggle={() => toggle("pattern")}
+        title="Constellation"
+        open
         summary={
-          <>
-            {draft.planes ?? "?"} × {draft.slots_per_plane ?? "?"} ={" "}
-            {draft.planes === null || draft.slots_per_plane === null
-              ? "incomplete"
-              : draft.planes * draft.slots_per_plane}{" "}
-            sats · {phasingLabel}
-          </>
+          constellation === null
+            ? (sourceRef === null ? "no source" : refStem(sourceRef))
+            : `${planes ?? "?"} × ${slots ?? "?"} = ${
+                planes === null || slots === null ? "incomplete" : planes * slots
+              } sats`
         }
       >
+        <KeyValueRow label="source">{sourceRef ?? "none"}</KeyValueRow>
+        {constellation === null ? (
+          <>
+            <div className="builder-site-derived">
+              a library component — customize it to edit it in this session
+            </div>
+            <Button disabled={sourceRef === null} onClick={onCustomize}>
+              Customize…
+            </Button>
+          </>
+        ) : (
+          <>
             <SelectField
               label="phasing"
-              value={draft.phasing_mode}
-              onChange={(value) => setPopulation({ phasing_mode: value as PhasingMode })}
+              value={phasingMode}
+              onChange={(value) =>
+                setPopulation({ phasing_mode: value as BuilderVisualPhasingMode })
+              }
               options={authoring.phasing_modes.map((choice) => ({
                 value: choice.id,
                 label: choice.label,
@@ -246,105 +140,68 @@ export function ConstellationEditor({
             />
             <NumberField
               label="planes"
-              value={draft.planes}
+              value={planes}
               min={1}
               integer
-              onChange={(planes) => setPopulation({ planes })}
+              onChange={(value) => setPopulation({ planes: value })}
             />
             <NumberField
               label="slots per plane"
-              value={draft.slots_per_plane}
+              value={slots}
               min={1}
               integer
-              onChange={(slots_per_plane) => setPopulation({ slots_per_plane })}
+              onChange={(value) => setPopulation({ slots_per_plane: value })}
             />
-            <NumberField
-              label="RAAN spacing"
-              value={draft.raan_spacing_deg}
-              suffix="deg"
-              onChange={(raan_spacing_deg) => onUpdate((prev) => ({ ...prev, raan_spacing_deg }))}
-            />
-            {draft.phasing_mode === authoring.single_plane_phasing_mode ? (
-              <div className="builder-site-derived">
-                phase offset 0 deg — a single plane has no inter-plane offset
-              </div>
-            ) : (
-              <NumberField
-                label="phase offset"
-                value={draft.phase_offset_deg}
-                suffix="deg"
-                onChange={(phase_offset_deg) =>
-                  onUpdate((prev) => ({ ...prev, phase_offset_deg }))
-                }
-              />
-            )}
+            <div className="builder-site-derived">
+              RAAN spacing {numberOf(planesBlock.raan_spacing_deg) ?? "?"} deg · phase offset{" "}
+              {numberOf(phasingBlock.phase_offset_deg) ?? "?"} deg, derived from the pattern
+            </div>
+            <div className="builder-preset-row">
+              <Button onClick={() => sourceRef && onEdit(sourceRef)}>Edit constellation</Button>
+            </div>
+            <KeyValueRow label="orbit">{orbitRef ?? "none"}</KeyValueRow>
+            <div className="builder-preset-row">
+              {orbitProposed ? (
+                <Button onClick={() => orbitRef && onEdit(orbitRef)}>Edit orbit</Button>
+              ) : (
+                <Button disabled={orbitRef === null} onClick={onCustomize}>
+                  Customize orbit…
+                </Button>
+              )}
+            </div>
+            <KeyValueRow label="node">{nodeRef ?? "none"}</KeyValueRow>
+            <div className="builder-preset-row">
+              {nodeProposed ? (
+                <Button onClick={() => nodeRef && onEdit(nodeRef)}>Edit node</Button>
+              ) : (
+                <Button
+                  disabled={nodeRef === null}
+                  onClick={() => {
+                    if (nodeRef === null) return;
+                    setEditorError(null);
+                    void onCustomizeNode(nodeRef).catch(report);
+                  }}
+                >
+                  Customize node
+                </Button>
+              )}
+            </div>
+          </>
+        )}
       </EditorCard>
 
       {editorError && <div className="builder-warning">{editorError}</div>}
 
-      <EditorCard
-        title="Node"
-        open={openCard === "node"}
-        onToggle={() => toggle("node")}
-        summary={
-          draft.node_ref?.split("/").pop()?.replace(".yaml", "") ?? "node model incomplete"
-        }
-      >
-        <SelectField
-          stack
-          label="node"
-          ariaLabel="Node primitive"
-          value={draft.node_ref}
-          onChange={(node_ref) => onUpdate((prev) => ({ ...prev, node_ref }))}
-          options={[
-            ...proposedNodes.map((proposed) => ({
-              value: proposed.ref,
-              label: `\u2605 ${proposed.label} (this session)`,
-            })),
-            ...nodes.entries.map((entry) => ({
-              value: entry.ref,
-              label: (entry.ref.startsWith("user:") ? "\u2605 " : "") + entry.display_name,
-            })),
-          ]}
-        />
-        <div className="builder-preset-row">
-          {nodeIsProposed ? (
-            <Button onClick={() => draft.node_ref && onEditNode(draft.node_ref)}>Edit node</Button>
-          ) : (
-            <Button
-              disabled={draft.node_ref === null}
-              onClick={() => {
-                setEditorError(null);
-                void onCustomizeNode().catch((cause) =>
-                  setEditorError(cause instanceof Error ? cause.message : String(cause)),
-                );
-              }}
-            >
-              Customize node
-            </Button>
-          )}
-          <Button
-            disabled={draft.node_ref === null || nodeIsProposed}
-            onClick={() => {
-              if (draft.node_ref) void exportCatalogObject(draft.node_ref);
-            }}
-          >
-            Export file
-          </Button>
-        </div>
-        {nodes.error && <div className="builder-warning">{nodes.error}</div>}
-      </EditorCard>
-
       <SegmentLinksCard
-        workspace={workspace}
+        placed={placed}
         rules={linkRules}
-        segmentId={draft.segment_id}
+        segmentId={segment.segment_id}
         onOpenRule={onOpenRule}
         onConnect={onConnect}
       />
 
       <Button variant="danger" onClick={onRemove ?? undefined} disabled={onRemove === null}>
-        Remove constellation
+        Remove segment
       </Button>
     </div>
   );

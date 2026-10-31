@@ -64,13 +64,14 @@ import type {
   ListedRoutingBoundary,
   ListedRoutingDomain,
 } from "./sessionListing";
-import { placedSegments, type Workspace } from "./workspace";
+import type { SessionSegment } from "./sessionSegments";
 
 /** One change of a routing domain: its whole card value, or a field-editor batch. */
 export type RoutingDomainChange = BuilderVisualRoutingDomainWidget | BuilderVisualObjectControlEdit;
 
 interface DomainEditorProps {
-  workspace: Workspace;
+  /** Every segment the session declares. */
+  placed: ReadonlyArray<SessionSegment>;
   /** The domain's card value as the card shows it. */
   domain: BuilderVisualRoutingDomain;
   /** Change the domain. A typed change waits for a pause in typing. */
@@ -79,12 +80,11 @@ interface DomainEditorProps {
 }
 
 export function RoutingDomainEditor({
-  workspace,
+  placed,
   domain,
   onUpdate,
   authoring,
 }: DomainEditorProps) {
-  const placed = placedSegments(workspace);
   const members = domain.member_segment_ids ?? [];
   const hello = domain.hello_interval_s ?? null;
   const hold = domain.hold_interval_s ?? null;

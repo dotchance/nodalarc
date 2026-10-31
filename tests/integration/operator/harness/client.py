@@ -6,6 +6,7 @@ page can do.
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import subprocess
@@ -322,7 +323,10 @@ class Operator:
 
     def _save_catalog_draft(self, opening: dict[str, str], changes: dict[str, Any]) -> None:
         draft = self.post("/api/v1/builder/catalog/draft/open", opening)
-        tree = CatalogComponentDraftEnvelope.model_validate(draft).control_tree.root
+        # The answer is JSON, validated as JSON: its lists are the model's tuples.
+        tree = CatalogComponentDraftEnvelope.model_validate_json(
+            json.dumps(draft)
+        ).control_tree.root
         draft = self.post(
             "/api/v1/builder/catalog/draft/controls/mutate",
             {

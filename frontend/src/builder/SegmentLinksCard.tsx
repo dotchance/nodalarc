@@ -9,10 +9,11 @@
 
 import { EditorCard, SelectField } from "./editorKit";
 import type { ListedLinkRule } from "./sessionListing";
-import { placedSegments, type Workspace } from "./workspace";
+import type { SessionSegment } from "./sessionSegments";
 
 interface SegmentLinksCardProps {
-  workspace: Workspace;
+  /** Every segment the session declares. */
+  placed: ReadonlyArray<SessionSegment>;
   /** Every link rule the session declares, as the backend lists them with
    *  the pending edits laid over them. */
   rules: ReadonlyArray<ListedLinkRule>;
@@ -22,13 +23,12 @@ interface SegmentLinksCardProps {
 }
 
 export function SegmentLinksCard({
-  workspace,
+  placed,
   rules,
   segmentId,
   onOpenRule,
   onConnect,
 }: SegmentLinksCardProps) {
-  const placed = placedSegments(workspace);
   const label = (id: string) => placed.find((s) => s.segment_id === id)?.label ?? id;
   const touching = rules.filter((rule) => rule.segmentIds.includes(segmentId));
   /** What the row states about the rule: its role and other end from its card

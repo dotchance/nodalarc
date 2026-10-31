@@ -14,7 +14,6 @@ import type {
   JsonValue,
 } from "../generated/builderApi";
 import { workingIssue } from "./fixtures/listingFixtures";
-import { newWorkspace } from "./fixtures/workspaceFixtures";
 
 vi.mock("../../config", () => ({
   REST_URL: "http://test:8080",
@@ -45,10 +44,8 @@ const sessionsResponse = response({
 });
 
 function draft(revision = 4): BuilderVisualDraftEnvelope {
-  const workspace = newWorkspace("coordinated");
   return {
     draft_revision: revision,
-    projection_status: "applied",
     target_ref: "user:sessions/coordinated.yaml",
     source_ref: "user:sessions/coordinated.yaml",
     expected_session_revision: "session-revision",
@@ -56,8 +53,6 @@ function draft(revision = 4): BuilderVisualDraftEnvelope {
     session_name_is_placeholder: false,
     reserved_authoring_ids: [],
     session_yaml: "session:\n  name: coordinated\n",
-    authoring_workspace: workspace,
-    applied_workspace: workspace,
     applied_revision: revision,
     applied_session: { session: { name: "coordinated" } },
   };
@@ -76,12 +71,6 @@ function assembly(
   };
   return {
     visual_draft: visualDraft,
-    assembled_draft: assembledDraft,
-    save_request: {
-      draft: assembledDraft,
-      target_ref: visualDraft.target_ref,
-      expected_session_revision: visualDraft.expected_session_revision,
-    },
     compile_result: {
       draft: assembledDraft,
       target_ref: visualDraft.target_ref,
@@ -271,7 +260,17 @@ describe("useBuilderWorld session coordinator", () => {
     act(() => result.current.editYamlBuffer("session:\n  name: changed\n"));
     await act(async () => {
       await expect(
-        result.current.saveSession(assembly(original).save_request, capture),
+        result.current.saveSession(
+          {
+            draft: {
+              draft_revision: original.draft_revision,
+              state: { session: original.applied_session!, catalog_documents: [] },
+            },
+            target_ref: original.target_ref,
+            expected_session_revision: original.expected_session_revision ?? null,
+          },
+          capture,
+        ),
       ).rejects.toThrow("session changed");
     });
     expect(

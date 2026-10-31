@@ -1,31 +1,14 @@
 // Copyright 2024-2026 .chance (dotchance)
 // Licensed under the Apache License, Version 2.0. See LICENSE file.
-/** The builder's floating-editor windows and their buffered edits.
+/** The builder's floating-editor windows.
  *
- *  Extracted from BuilderView: the diagram workspace is a set of floating,
- *  per-object editor windows, each editing a copy (buffer) of its object that
- *  the session only adopts on Apply. This hook owns the windows list, the
- *  buffer map, and reconciliation when the applied workspace changes beneath
- *  an open window. The pure buffer maths
- *  (overlayBuffers/staleBufferKeys/workspaceForSave) stay in useWorkspace; this
- *  hook is the stateful shell that drives them.
+ *  Extracted from BuilderView: the diagram is a set of floating, per-object
+ *  editor windows. A window that edits a session object edits its pending
+ *  edit, which the page holds; this hook owns only the windows list.
  */
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useState } from "react";
 import { raiseWindow } from "../ui/windowStack";
-import {
-  overlayBuffers,
-  staleBufferKeys,
-  appliedObjectForKey,
-  bufferAppliedChanged,
-  type BufferMap,
-  type EditorBuffer,
-} from "./useWorkspace";
-import type {
-  DraftConstellation,
-  DraftGroundSet,
-  Workspace,
-} from "./workspace";
 import type {
   BuilderContentEdit,
   BuilderVisualObjectEditRequest,
@@ -35,7 +18,7 @@ import type {
 export type EditorTarget =
   | { kind: "session" }
   | { kind: "segment"; id: string }
-  | { kind: "ground"; id: string }
+  | { kind: "new-ground" }
   | { kind: "link"; id: string }
   | { kind: "domain"; id: string }
   | { kind: "boundaries" }
@@ -65,6 +48,7 @@ export function targetKey(target: EditorTarget): string {
     case "source-yaml":
     case "save-session":
     case "boundaries":
+    case "new-ground":
       return target.kind;
     case "customize-chain":
       return `customize:${target.segmentId}`;
@@ -79,12 +63,14 @@ export function targetKey(target: EditorTarget): string {
   }
 }
 
-/** The address of the pending edit a link rule, routing domain or boundary
- *  list window edits; null for every other window. */
+/** The address of the pending edit a segment, link rule, routing domain or
+ *  boundary list window edits; null for every other window. */
 export function pendingEditAddress(
   target: EditorTarget,
 ): BuilderVisualObjectEditRequest["address"] | null {
   switch (target.kind) {
+    case "segment":
+      return { kind: "member", list_pointer: "/segments", id: target.id };
     case "link":
       return { kind: "member", list_pointer: "/link_rules", id: target.id };
     case "domain":
@@ -118,80 +104,10 @@ export function pendingEditTitle(address: BuilderContentEdit["address"]): string
   return address.id;
 }
 
-/** A human title for a window's object — the name shown in the stale-window
- *  confirm list. A segment reads its own display name, falling back to the id;
- *  a link rule or routing domain is named by its id; the session window names
- *  the session. */
-function objectTitle(workspace: Workspace, target: EditorTarget): string {
-  switch (target.kind) {
-    case "session":
-      return `Session · ${workspace.session_name}`;
-    case "segment":
-      return (
-        workspace.space.find((d) => d.segment_id === target.id)?.display_name ?? target.id
-      );
-    case "ground":
-      return (
-        workspace.ground.find((d) => d.segment_id === target.id)?.display_name ?? target.id
-      );
-    case "link":
-    case "domain":
-      return target.id;
-    default:
-      return targetKey(target);
-  }
-}
-
-/** A window bound to a workspace object — one the reconciliation pass can
- *  resolve through appliedObjectForKey and must prune when it vanishes. The
- *  other kinds (session's applied view is a field-pick, not an object;
- *  library/catalog/open-session/save-session are chrome; inspect/node-view are
- *  read-only views of catalog/world state; a link, domain or boundary list
- *  window edits a pending edit of the accepted session) are never pruned or
- *  re-seeded by the pass. */
-function isObjectTarget(target: EditorTarget): boolean {
-  switch (target.kind) {
-    case "segment":
-    case "ground":
-      return true;
-    default:
-      return false;
-  }
-}
-
-export type SessionBuffer = Pick<
-  Workspace,
-  | "session_name"
-  | "start_time"
-  | "step_seconds"
-  | "compression"
-  | "max_pairs_per_rule"
-  | "max_pairs_per_tick"
->;
-
-/** The workspace mutators applyBuffer commits into. */
-interface UseEditorWindowsDeps {
-  workspace: Workspace | null;
-  updateSession: (patch: SessionBuffer) => void;
-  updateConstellation: (segmentId: string, draft: DraftConstellation) => void;
-  updateGroundDraft: (segmentId: string, draft: DraftGroundSet) => void;
-}
-
-export function useEditorWindows({
-  workspace,
-  updateSession,
-  updateConstellation,
-  updateGroundDraft,
-}: UseEditorWindowsDeps) {
-  // The diagram workspace: editors are floating, anchored windows — many
-  // can be open at once, keyed per object (re-open focuses, ).
+export function useEditorWindows() {
+  // Editors are floating, anchored windows — many can be open at once, keyed
+  // per object (re-open focuses).
   const [windows, setWindows] = useState<EditorWindow[]>([]);
-  const [buffers, setBuffers] = useState<BufferMap>({});
-  const bufferMutationRevisionRef = useRef(0);
-  const markBufferMutation = () => {
-    bufferMutationRevisionRef.current += 1;
-  };
-  const currentBufferMutationRevision = () => bufferMutationRevisionRef.current;
   const openEditor = (target: EditorTarget) => {
     const key = targetKey(target);
     // Re-open FOCUSES via the one stacking mechanism — the raise stack,
@@ -212,25 +128,10 @@ export function useEditorWindows({
       return [...prev, { key, target, x: 440 + step * 40, y: 84 + step * 32 }];
     });
   };
-  /** Every window teardown goes through here: closing a window removes it
-   *  AND its buffer, always together. */
   const closeWindows = (predicate: (w: EditorWindow) => boolean) => {
-    const closingWindows = windows.filter(predicate);
-    const closing = new Set(closingWindows.map((w) => w.key));
+    const closing = new Set(windows.filter(predicate).map((w) => w.key));
     if (closing.size === 0) return;
     setWindows((prev) => prev.filter((w) => !closing.has(w.key)));
-    if ([...closing].some((key) => key in buffers)) markBufferMutation();
-    setBuffers((prev) => {
-      let changed = false;
-      const next = { ...prev };
-      for (const key of closing) {
-        if (key in next) {
-          delete next[key];
-          changed = true;
-        }
-      }
-      return changed ? next : prev;
-    });
   };
   const closeWindow = (key: string) => closeWindows((w) => w.key === key);
   /** Close every window a session gesture (New, Open) replaces. The
@@ -238,210 +139,11 @@ export function useEditorWindows({
    *  unsaved work, so only its own gestures close it. */
   const closeSessionWindows = () => closeWindows((w) => w.target.kind !== "library");
   const isOpen = (key: string) => windows.some((w) => w.key === key);
-
-  // Buffered editing: an editor window works on a copy of its object; the
-  // session only changes on Apply/OK. Cancel and the title-bar X discard —
-  // the window says which state it is in, so closing is never a guess.
-  /** First edit creates the buffer from the object as rendered ("base");
-   *  later edits build on the working copy. "opened" — the Defaults target —
-   *  is the window's baseline: the values at window open, advanced to the
-   *  applied draft on each Apply (see applyBuffer). The session buffer is
-   *  a pick, never the whole workspace: applying a stale whole-workspace
-   *  clone would silently revert every other window's applied work. */
-  const patchBuffer = <T,>(key: string, base: T, fn: (draft: T) => T) => {
-    markBufferMutation();
-    setBuffers((prev) => {
-      const buf = prev[key];
-      const current = (buf?.draft as T | undefined) ?? structuredClone(base);
-      const opened = buf?.opened ?? structuredClone(base);
-      return { ...prev, [key]: { draft: fn(current), opened, dirty: true } };
-    });
-  };
-  const revertBuffer = (key: string) => {
-    markBufferMutation();
-    setBuffers((prev) => {
-      const buf = prev[key];
-      if (!buf) return prev;
-      // Defaults = the baseline: the values at window open, advanced to the
-      // applied draft on each Apply. On a stale window (the applied object moved
-      // underneath), restoring `opened` still does not
-      // match the applied object, so the buffer stays dirty+stale: the notice
-      // and Apply/"Load current values" persist, the reconciliation pass never
-      // drops it, and non-applied values are never relabeled "applied".
-      const stillStale = !!workspace && bufferAppliedChanged(workspace, key, buf);
-      return {
-        ...prev,
-        [key]: { ...buf, draft: structuredClone(buf.opened), dirty: stillStale },
-      };
-    });
-  };
-  const applyBuffer = (target: EditorTarget) => {
-    const key = targetKey(target);
-    const buf = buffers[key];
-    if (!buf || !buf.dirty) return;
-    switch (target.kind) {
-      case "session":
-        updateSession(buf.draft as SessionBuffer);
-        break;
-      case "segment":
-        updateConstellation(target.id, buf.draft as DraftConstellation);
-        break;
-      case "ground":
-        updateGroundDraft(target.id, buf.draft as DraftGroundSet);
-        break;
-      default:
-        return;
-    }
-    markBufferMutation();
-    setBuffers((prev) => {
-      const cur = prev[key];
-      if (!cur) return prev;
-      return {
-        ...prev,
-        [key]: { ...cur, opened: structuredClone(cur.draft), dirty: false },
-      };
-    });
-  };
-  /** A command accepted this window's object as `value`. When the window's
-   *  working copy is still `startedFrom`, the window shows the accepted object
-   *  with nothing pending (as after Apply); a copy edited meanwhile is kept. */
-  const settleBuffer = (key: string, value: unknown, startedFrom: EditorBuffer | undefined) => {
-    markBufferMutation();
-    setBuffers((prev) => {
-      if (!(key in prev) || prev[key] !== startedFrom) return prev;
-      return {
-        ...prev,
-        [key]: { opened: structuredClone(value), draft: structuredClone(value), dirty: false },
-      };
-    });
-  };
-  /** The session as the canvas should show it: the applied workspace with
-   *  every dirty window's working copy substituted in. Editing previews live
-   *  (drag a slider, the sats move); the workspace itself still only changes
-   *  on Apply. */
-  const previewWorkspace = (): Workspace | null =>
-    workspace ? overlayBuffers(workspace, buffers) : null;
-  const dirtyWindows = Object.values(buffers).filter((b) => b.dirty).length;
-  // reconcile open editors when the applied workspace moves underneath them
-  // (undo, restore, a sibling edit, a deletion). Two disjoint responses:
-  //  - GONE: a window whose object no longer exists (deleted, or an undone
-  //    create) is pruned with its buffer — dirty or clean. The object is gone;
-  //    there is nothing left to edit or apply into, and an unapplied buffer over
-  //    a vanished object is not recoverable state.
-  //  - MOVED-but-present: a CLEAN buffer whose applied object changed is dropped
-  //    and lazily re-seeded from current values on the next edit (its "applied"
-  //    label would otherwise be a lie); a DIRTY one survives, and staleKeys
-  //    surfaces it with a notice plus "Load current values" so unsaved work is
-  //    never silently discarded while its object still exists.
-  // The reads are pure and outside the updaters (StrictMode double-invokes
-  // updater bodies).
-  useEffect(() => {
-    if (!workspace) return;
-    const gone = new Set(
-      windows
-        .filter(
-          (w) =>
-            isObjectTarget(w.target) &&
-            appliedObjectForKey(workspace, targetKey(w.target)) === null,
-        )
-        .map((w) => w.key),
-    );
-    const dropClean = Object.entries(buffers)
-      .filter(([key, buf]) => !buf.dirty && bufferAppliedChanged(workspace, key, buf))
-      .map(([key]) => key);
-    if (gone.size === 0 && dropClean.length === 0) return;
-    if (gone.size > 0) setWindows((prev) => prev.filter((w) => !gone.has(w.key)));
-    const drop = new Set([...gone, ...dropClean]);
-    markBufferMutation();
-    setBuffers((prev) => {
-      let changed = false;
-      const next = { ...prev };
-      for (const key of drop) {
-        if (key in next) {
-          delete next[key];
-          changed = true;
-        }
-      }
-      return changed ? next : prev;
-    });
-  }, [workspace, windows, buffers]);
-  // Every dirty buffer whose applied object changed. Per-window notices, the
-  // save-dialog block, and the stale count all read this memo.
-  const staleKeys = useMemo(
-    () => (workspace ? new Set(staleBufferKeys(workspace, buffers)) : new Set<string>()),
-    [workspace, buffers],
-  );
-  // The stale windows the bulk apply-and-save confirm flow lists, each named by
-  // its object. Every stale key has an open window (a buffer cannot outlive its
-  // window); the fallback to the key is defensive only.
-  const staleList = useMemo(() => {
-    if (!workspace) return [];
-    return [...staleKeys].map((key) => {
-      const win = windows.find((w) => w.key === key);
-      return { key, title: win ? objectTitle(workspace, win.target) : key };
-    });
-  }, [workspace, staleKeys, windows]);
-  /** Replace a stale window's working copy with the object's current applied
-   *  values (the deliberate opposite of Defaults, which returns to the window's
-   *  baseline — the values at window open, advanced to the applied draft on each
-   *  Apply). Only reachable while the object still exists — a deleted object's
-   *  window is already pruned. */
-  const loadCurrentValues = (target: EditorTarget) => {
-    if (!workspace) return;
-    const key = targetKey(target);
-    let current: unknown;
-    if (target.kind === "session") {
-      const w = workspace as unknown as Record<string, unknown>;
-      const opened = buffers[key]?.opened as Record<string, unknown> | undefined;
-      const fields = opened ? Object.keys(opened) : [];
-      current = Object.fromEntries(fields.map((k) => [k, w[k]]));
-    } else {
-      current = appliedObjectForKey(workspace, key);
-    }
-    if (current === null || current === undefined) return;
-    markBufferMutation();
-    setBuffers((prev) => {
-      if (!(key in prev)) return prev;
-      return {
-        ...prev,
-        [key]: {
-          opened: structuredClone(current),
-          draft: structuredClone(current),
-          dirty: false,
-        },
-      };
-    });
-  };
-  /** After a bulk apply-and-save, drop exactly the buffers this save overlaid —
-   *  matched by identity, captured BEFORE the network round-trip. Anything
-   *  created or re-edited during the await has a fresh identity and survives. */
-  const dropAppliedBuffers = (applied: Map<string, EditorBuffer>) => {
-    markBufferMutation();
-    setBuffers((prev) => {
-      const kept: BufferMap = {};
-      for (const [k, b] of Object.entries(prev)) {
-        if (applied.get(k) !== b) kept[k] = b;
-      }
-      return kept;
-    });
-  };
   return {
     windows,
     openEditor,
     closeWindow,
     closeSessionWindows,
     isOpen,
-    buffers,
-    currentBufferMutationRevision,
-    patchBuffer,
-    revertBuffer,
-    applyBuffer,
-    previewWorkspace,
-    dirtyWindows,
-    staleKeys,
-    staleList,
-    loadCurrentValues,
-    settleBuffer,
-    dropAppliedBuffers,
   };
 }

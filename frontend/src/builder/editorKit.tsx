@@ -5,49 +5,11 @@
  *  Every editor composes these controls so field, card, and control behavior
  *  remains consistent. A raw <input>/<select>/<textarea> in an editor file
  *  fails the static conformance test.
- *
- *  EditorName carries create-focus (the name field is focused when a
- *  create gesture opens the editor; typing renames immediately).
  */
 
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import { Button } from "../ui/Button";
 import type { CatalogDocumentSummary } from "./generated/builderApi";
-
-/** The name field every editor leads with. autoFocus fires on mount when
- *  the editor was opened by a create gesture. */
-export function EditorName({
-  value,
-  onChange,
-  autoFocus = false,
-  label = "name",
-}: {
-  value: string;
-  onChange: (value: string) => void;
-  autoFocus?: boolean;
-  label?: string;
-}) {
-  const ref = useRef<HTMLInputElement>(null);
-  useEffect(() => {
-    if (autoFocus) {
-      ref.current?.focus();
-      ref.current?.select();
-    }
-  }, [autoFocus]);
-  return (
-    <label className="builder-field">
-      <span className="builder-field-label">{label}</span>
-      <span className="builder-field-input">
-        <input
-          ref={ref}
-          type="text"
-          value={value}
-          onChange={(e) => onChange(e.target.value)}
-        />
-      </span>
-    </label>
-  );
-}
 
 export function Field({
   label,
@@ -149,73 +111,6 @@ export function NumberField({
           step={step}
           onChange={(e) => handleChange(e.target.value)}
           onBlur={handleBlur}
-        />
-        {suffix && <span className="builder-field-suffix">{suffix}</span>}
-      </span>
-    </label>
-  );
-}
-
-/** A slider with a typeable value box beside it. The track covers the common
- *  range and streams onChange continuously as it drags (the canvas preview
- *  moves with the thumb); it can never produce an out-of-range value. The box
- *  types past the track's MAX (values above the common range are valid), but
- *  min is the hard floor — a below-min figure types but does not commit
- *  (deferred-clamp contract, shared with NumberField). */
-export function SliderField({
-  label,
-  value,
-  onChange,
-  min,
-  max,
-  step = 1,
-  suffix,
-  integer = false,
-}: {
-  label: string;
-  value: number | null;
-  onChange: (value: number) => void;
-  min: number;
-  max: number;
-  step?: number;
-  suffix?: string;
-  integer?: boolean;
-}) {
-  const roundIfInt = (raw: string): number | null => {
-    let parsed = Number(raw);
-    if (!Number.isFinite(parsed)) return null;
-    if (integer) parsed = Math.round(parsed);
-    return parsed;
-  };
-  const box = useNumberDraft(value, (raw) => {
-    if (raw === "") return;
-    const parsed = roundIfInt(raw);
-    if (parsed === null || parsed < min) return; // min floor deferred; no max ceiling
-    onChange(parsed);
-  });
-  return (
-    <label className="builder-field">
-      <span className="builder-field-label">{label}</span>
-      <span className="builder-field-input builder-slider-row">
-        <input
-          type="range"
-          min={min}
-          max={max}
-          step={step}
-          value={value === null ? min : Math.min(max, Math.max(min, value))}
-          disabled={value === null}
-          aria-label={`${label} slider`}
-          onChange={(e) => {
-            const parsed = roundIfInt(e.target.value);
-            if (parsed !== null) onChange(parsed);
-          }}
-        />
-        <input
-          type="number"
-          value={box.shown}
-          step={step}
-          onChange={(e) => box.handleChange(e.target.value)}
-          onBlur={box.handleBlur}
         />
         {suffix && <span className="builder-field-suffix">{suffix}</span>}
       </span>
@@ -516,89 +411,3 @@ export function PasteArea({
   );
 }
 
-/** The commit row every buffered editor window ends with. A window edits a
- *  working copy; nothing reaches the session until Apply (or OK, which
- *  applies and closes). Cancel closes without applying — the same outcome as
- *  the title-bar X, but said out loud. Defaults returns the window to its
- *  baseline: the values at window open, advanced to the applied draft on each
- *  Apply. The state label answers the question the buttons exist for: "did my
- *  typing take?" */
-export function EditorApplyRow({
-  dirty,
-  busy,
-  stale = false,
-  onApply,
-  onOk,
-  onDefaults,
-  onLoadCurrent,
-  onCancel,
-}: {
-  dirty: boolean;
-  /** A change is being applied: Apply and OK wait for it. */
-  busy: boolean;
-  stale?: boolean;
-  onApply: () => void;
-  onOk: () => void;
-  onDefaults: () => void;
-  onLoadCurrent?: () => void;
-  onCancel: () => void;
-}) {
-  return (
-    <>
-      {stale && (
-        <div className="builder-stale-notice" data-testid="builder-stale-notice">
-          <span className="builder-stale-notice-text">
-            The saved values changed since you started editing. Apply to keep your
-            edits, or load the current values.
-          </span>
-          {onLoadCurrent && (
-            <Button
-              onClick={onLoadCurrent}
-              title="Discard edits and reload the object's current saved values"
-            >
-              Load current values
-            </Button>
-          )}
-        </div>
-      )}
-      <div className="builder-apply-row" data-testid="builder-apply-row">
-        <span
-          className={`builder-apply-state${
-            stale
-              ? " builder-apply-state--stale"
-              : dirty
-                ? " builder-apply-state--dirty"
-                : ""
-          }`}
-        >
-          {stale ? "stale" : dirty ? "unapplied changes" : "applied"}
-        </span>
-        <Button
-          onClick={onDefaults}
-          disabled={!dirty}
-          title="Discard edits and return to the baseline — the values at window open, advanced to the applied draft on each Apply"
-        >
-          Defaults
-        </Button>
-        <Button onClick={onCancel} title="Close without applying">
-          Cancel
-        </Button>
-        <Button
-          onClick={onApply}
-          disabled={!dirty || busy}
-          title={busy ? "A change is being applied" : "Apply edits to the session"}
-        >
-          Apply
-        </Button>
-        <Button
-          icon="check"
-          onClick={onOk}
-          disabled={busy}
-          title={busy ? "A change is being applied" : "Apply and close"}
-        >
-          OK
-        </Button>
-      </div>
-    </>
-  );
-}

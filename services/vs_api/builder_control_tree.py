@@ -412,6 +412,14 @@ class _ControlFactory:
         selected_index = _select_union_branch(branches, value)
         # An optional value offers one option beside "Not set": the value the control names.
         optional = sum(1 for branch in branches if _split_annotated(branch)[0] is not NoneType) == 1
+        if optional and selected_index is None and value is not _MISSING and value is not None:
+            # A value that does not validate is still the value the field holds; its
+            # control shows it with its issue, so the user can replace it.
+            selected_index = next(
+                index
+                for index, branch in enumerate(branches)
+                if _split_annotated(branch)[0] is not NoneType
+            )
         rendered: list[BuilderChoiceBranch] = []
         for index, original_branch in enumerate(branches):
             branch, branch_metadata = _split_annotated(original_branch)

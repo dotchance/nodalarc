@@ -31,8 +31,6 @@ from nodalarc.models.builder_api import (
 )
 from nodalarc.models.builder_controls_api import BuilderControlMutation, BuilderControlTree
 from nodalarc.models.builder_visual_api import (
-    BuilderVisualGroundBoresight,
-    BuilderVisualOrbitShape,
     BuilderVisualPhasingMode,
     BuilderVisualSchedulingPreset,
     BuilderVisualTopologyMode,
@@ -172,13 +170,6 @@ class BuilderVisualPhasingModeMetadata(_CatalogApplicationModel):
     label: str = Field(min_length=1, max_length=120)
 
 
-class BuilderVisualOrbitShapeMetadata(_CatalogApplicationModel):
-    """Presentation facts for one visual orbit-shape form."""
-
-    id: BuilderVisualOrbitShape
-    label: str = Field(min_length=1, max_length=80)
-
-
 class BuilderVisualTopologyModeMetadata(BuilderVisualRuntimeChoiceMetadata):
     """Presentation and runtime facts for one visual link topology mode."""
 
@@ -197,17 +188,14 @@ class BuilderVisualAuthoringFacts(_CatalogApplicationModel):
     """Backend-owned choices and seeds used by the visual authoring surface."""
 
     default_phasing_mode: BuilderVisualPhasingMode
-    single_plane_phasing_mode: BuilderVisualPhasingMode
     default_mount_role: MountRole
     default_body_ref: BodyRef
-    ground_access_boresight: BuilderVisualGroundBoresight
     mount_roles: tuple[BuilderVisualMountRoleMetadata, ...]
     link_media: tuple[BuilderVisualLinkMediumMetadata, ...]
     forwarding_classes: tuple[BuilderVisualForwardingClassMetadata, ...]
     routing_protocols: tuple[BuilderVisualRoutingProtocolMetadata, ...]
     boundary_adapters: tuple[BuilderVisualBoundaryAdapterMetadata, ...]
     phasing_modes: tuple[BuilderVisualPhasingModeMetadata, ...]
-    orbit_shapes: tuple[BuilderVisualOrbitShapeMetadata, ...]
     topology_modes: tuple[BuilderVisualTopologyModeMetadata, ...]
 
     @model_validator(mode="after")
@@ -219,7 +207,6 @@ class BuilderVisualAuthoringFacts(_CatalogApplicationModel):
             ("routing protocols", self.routing_protocols, RoutingProtocol),
             ("boundary adapters", self.boundary_adapters, RoutingBoundaryAdapter),
             ("phasing modes", self.phasing_modes, BuilderVisualPhasingMode),
-            ("orbit shapes", self.orbit_shapes, BuilderVisualOrbitShape),
             ("topology modes", self.topology_modes, BuilderVisualTopologyMode),
         )
         for label, metadata, alias in choices:
@@ -230,8 +217,6 @@ class BuilderVisualAuthoringFacts(_CatalogApplicationModel):
                 raise ValueError(f"bootstrap must describe every visual {label} value")
         if self.default_phasing_mode not in {item.id for item in self.phasing_modes}:
             raise ValueError("default phasing mode must be advertised")
-        if self.single_plane_phasing_mode not in {item.id for item in self.phasing_modes}:
-            raise ValueError("single-plane phasing mode must be advertised")
         if self.default_mount_role not in {item.id for item in self.mount_roles}:
             raise ValueError("default mount role must be advertised")
         return self

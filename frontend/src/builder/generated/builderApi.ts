@@ -548,15 +548,6 @@ export interface BuilderVisualAddGeneratedSpaceCommand {
   readonly phasing_mode: BuilderVisualPhasingMode;
 }
 
-/** Add one backend-seeded authored ground-segment draft. */
-export interface BuilderVisualAddGroundCommand {
-  readonly operation: "add_ground";
-  readonly node_ref?: string | null;
-  readonly installed?: Readonly<Record<string, number>>;
-  readonly boresights?: Readonly<Record<string, BuilderVisualGroundBoresight>>;
-  readonly body_ref?: string | null;
-}
-
 /** Place one existing site, creating its authored ground segment when needed. */
 export interface BuilderVisualAddGroundSiteReferenceCommand {
   readonly operation: "add_ground_site_reference";
@@ -572,17 +563,14 @@ export interface BuilderVisualAddRoutingDomainCommand {
 /** Backend-owned choices and seeds used by the visual authoring surface. */
 export interface BuilderVisualAuthoringFacts {
   readonly default_phasing_mode: BuilderVisualPhasingMode;
-  readonly single_plane_phasing_mode: BuilderVisualPhasingMode;
   readonly default_mount_role: MountRole;
   readonly default_body_ref: string;
-  readonly ground_access_boresight: BuilderVisualGroundBoresight;
   readonly mount_roles: ReadonlyArray<BuilderVisualMountRoleMetadata>;
   readonly link_media: ReadonlyArray<BuilderVisualLinkMediumMetadata>;
   readonly forwarding_classes: ReadonlyArray<BuilderVisualForwardingClassMetadata>;
   readonly routing_protocols: ReadonlyArray<BuilderVisualRoutingProtocolMetadata>;
   readonly boundary_adapters: ReadonlyArray<BuilderVisualBoundaryAdapterMetadata>;
   readonly phasing_modes: ReadonlyArray<BuilderVisualPhasingModeMetadata>;
-  readonly orbit_shapes: ReadonlyArray<BuilderVisualOrbitShapeMetadata>;
   readonly topology_modes: ReadonlyArray<BuilderVisualTopologyModeMetadata>;
 }
 
@@ -658,13 +646,6 @@ export interface BuilderVisualDraftApplyEditsResult {
   readonly assembly: BuilderVisualDraftAssemblyResult | null;
 }
 
-/** Apply one complete graphical workspace to a fenced draft revision. */
-export interface BuilderVisualDraftApplyWorkspaceRequest {
-  readonly draft: BuilderVisualDraftEnvelope;
-  readonly expected_draft_revision: number;
-  readonly workspace: BuilderVisualWorkspace;
-}
-
 /** Apply one exact session YAML buffer to a fenced visual draft revision. */
 export interface BuilderVisualDraftApplyYamlRequest {
   readonly draft: BuilderVisualDraftEnvelope;
@@ -683,24 +664,21 @@ export interface BuilderVisualDraftApplyYamlResult {
   readonly issues: ReadonlyArray<BuilderIssue>;
 }
 
-/** Backend assembly, typed issues, save request, and authoritative compile facts. The listing names every rule, domain and boundary of the accepted session. */
+/** An accepted draft with its compile and the listing of its session objects. The listing names every rule, domain and boundary of the accepted session. */
 export interface BuilderVisualDraftAssemblyResult {
   readonly visual_draft: BuilderVisualDraftEnvelope;
-  readonly assembled_draft: BuilderDraftEnvelope;
-  readonly save_request: BuilderSessionSaveRequest;
   readonly compile_result: BuilderCompileResult;
   readonly listing: BuilderVisualSessionListing | null;
-  readonly assembly_issues: ReadonlyArray<BuilderIssue>;
 }
 
 /**  */
-export type BuilderVisualDraftCommandOperation = "place_space_reference" | "place_ground_reference" | "add_generated_space" | "set_space_population" | "add_ground" | "add_ground_site_reference" | "set_ground_stamp_node" | "mint_ground_members" | "add_routing_domain" | "add_boundary" | "connect_segments" | "rederive_link" | "set_scheduling_preset";
+export type BuilderVisualDraftCommandOperation = "place_space_reference" | "place_ground_reference" | "add_generated_space" | "set_space_population" | "add_ground_site_reference" | "mint_ground_members" | "add_routing_domain" | "add_boundary" | "connect_segments" | "rederive_link" | "set_scheduling_preset";
 
 /** Apply one typed command to an exact visual-draft revision. ``pending_edits`` are the edits not yet accepted. A command mints no id they define or reference. */
 export interface BuilderVisualDraftCommandRequest {
   readonly draft: BuilderVisualDraftEnvelope;
   readonly expected_draft_revision: number;
-  readonly command: BuilderVisualPlaceSpaceReferenceCommand | BuilderVisualPlaceGroundReferenceCommand | BuilderVisualAddGeneratedSpaceCommand | BuilderVisualSetSpacePopulationCommand | BuilderVisualAddGroundCommand | BuilderVisualAddGroundSiteReferenceCommand | BuilderVisualSetGroundStampNodeCommand | BuilderVisualMintGroundMembersCommand | BuilderVisualAddRoutingDomainCommand | BuilderVisualAddBoundaryCommand | BuilderVisualConnectSegmentsCommand | BuilderVisualRederiveLinkCommand | BuilderVisualSetSchedulingPresetCommand;
+  readonly command: BuilderVisualPlaceSpaceReferenceCommand | BuilderVisualPlaceGroundReferenceCommand | BuilderVisualAddGeneratedSpaceCommand | BuilderVisualSetSpacePopulationCommand | BuilderVisualAddGroundSiteReferenceCommand | BuilderVisualMintGroundMembersCommand | BuilderVisualAddRoutingDomainCommand | BuilderVisualAddBoundaryCommand | BuilderVisualConnectSegmentsCommand | BuilderVisualRederiveLinkCommand | BuilderVisualSetSchedulingPresetCommand;
   readonly pending_edits?: ReadonlyArray<BuilderContentEdit | BuilderListEdit>;
 }
 
@@ -716,10 +694,9 @@ export interface BuilderVisualDraftCommandResult {
   readonly created_edits: ReadonlyArray<BuilderContentEdit>;
 }
 
-/** Compile a complete visual draft through backend assembly and grammar authorities. With a workspace, the compile assembles that workspace over the draft and accepts nothing: the draft and its revision stay as they were. */
+/** Compile a draft's accepted session and list its objects; nothing is accepted. */
 export interface BuilderVisualDraftCompileRequest {
   readonly draft: BuilderVisualDraftEnvelope;
-  readonly workspace?: BuilderVisualWorkspace | null;
 }
 
 /** Request a backend-created blank structured visual draft. */
@@ -729,10 +706,9 @@ export interface BuilderVisualDraftCreateRequest {
   readonly description?: string | null;
 }
 
-/** One revision of a stateless YAML buffer plus explicit authoring and applied facts. */
+/** One session draft: its identity, YAML text and accepted session with proposals. A new draft holds no accepted session until its first segment gesture; every accepted revision is a structurally valid session. */
 export interface BuilderVisualDraftEnvelope {
   readonly draft_revision: number;
-  readonly projection_status: BuilderVisualDraftProjectionStatus;
   readonly target_ref: SessionRef;
   readonly source_ref?: SessionRef | null;
   readonly expected_session_revision?: string | null;
@@ -740,8 +716,6 @@ export interface BuilderVisualDraftEnvelope {
   readonly session_name_is_placeholder: boolean;
   readonly reserved_authoring_ids: ReadonlyArray<string>;
   readonly session_yaml: string;
-  readonly authoring_workspace?: BuilderVisualWorkspace | null;
-  readonly applied_workspace?: BuilderVisualWorkspace | null;
   readonly applied_revision?: number | null;
   readonly applied_session?: Readonly<Record<string, JsonValue>> | null;
   readonly control_tree?: BuilderControlTree | null;
@@ -752,9 +726,6 @@ export interface BuilderVisualDraftOpenRequest {
   readonly source_ref: SessionRef;
   readonly target_ref?: SessionRef | null;
 }
-
-/**  */
-export type BuilderVisualDraftProjectionStatus = "applied" | "incomplete_authoring" | "no_valid_projection" | "pending_authoring";
 
 /** Prepare a fenced draft for saving under one exact user session ref. */
 export interface BuilderVisualDraftRetargetRequest {
@@ -774,50 +745,12 @@ export interface BuilderVisualGroundBoresight {
   readonly mode: "local_vertical";
 }
 
-/** Editable ground segment assembled into site and site-set refs. */
-export interface BuilderVisualGroundDraft {
-  readonly segment_id?: string;
-  readonly display_name?: string;
-  readonly members?: ReadonlyArray<BuilderVisualGroundMember>;
-  readonly stamp: BuilderVisualGroundStamp;
-  readonly scheduling?: Readonly<Record<string, JsonValue>>;
-  readonly originated_ipv4?: ReadonlyArray<string>;
-  readonly tags?: ReadonlyArray<string>;
-}
-
-/** One site of an editable ground site set, by reference: a catalog site, or a site the session proposes (``draft``), edited as that proposed document. */
-export interface BuilderVisualGroundMember {
-  readonly member_id?: string;
-  readonly kind: "ref" | "draft";
-  readonly ref?: string | null;
-  readonly site_id?: string;
-  readonly label?: string;
-  readonly summary?: string | null;
-  readonly scheduling_override?: Readonly<Record<string, JsonValue>> | null;
-}
-
-/** One library site set placed by reference with session scheduling. */
-export interface BuilderVisualGroundReference {
-  readonly segment_id?: string;
-  readonly site_set_ref?: string | null;
-  readonly label?: string;
-  readonly scheduling?: Readonly<Record<string, JsonValue>>;
-}
-
 /** One user-entered surface location awaiting backend-owned site allocation. */
 export interface BuilderVisualGroundSiteIntent {
   readonly name: string;
   readonly lat_deg: number;
   readonly lon_deg: number;
   readonly alt_m?: number;
-}
-
-/** Backend-issued minting facts retained as visual state, never persisted. */
-export interface BuilderVisualGroundStamp {
-  readonly node_ref?: string | null;
-  readonly installed?: Readonly<Record<string, number>>;
-  readonly boresights: Readonly<Record<string, BuilderVisualGroundBoresight>>;
-  readonly body?: string | null;
 }
 
 /** Editable endpoint selector for one visual link rule. */
@@ -862,8 +795,12 @@ export interface BuilderVisualLinkRuleWidget {
 /** Mint complete sites and addresses from typed locations and one ground stamp. */
 export interface BuilderVisualMintGroundMembersCommand {
   readonly operation: "mint_ground_members";
-  readonly segment_id: string;
+  readonly segment_id?: string | null;
   readonly sites: ReadonlyArray<BuilderVisualGroundSiteIntent>;
+  readonly node_ref: string;
+  readonly body_ref: string;
+  readonly installed?: Readonly<Record<string, number>>;
+  readonly boresights?: Readonly<Record<string, BuilderVisualGroundBoresight>>;
 }
 
 /** Presentation facts for one canonical terminal-mount role. */
@@ -895,32 +832,6 @@ export interface BuilderVisualObjectEditResult {
   readonly widget: BuilderVisualLinkRuleWidget | BuilderVisualRoutingDomainWidget | BuilderVisualRoutingBoundariesWidget | null;
   readonly control_tree: BuilderControlTree;
   readonly issues: ReadonlyArray<BuilderIssue>;
-}
-
-/** Editable orbital geometry for one generated constellation. */
-export interface BuilderVisualOrbit {
-  readonly central_body?: string | null;
-  readonly shape_kind?: BuilderVisualOrbitShape | null;
-  readonly altitude_km?: number | null;
-  readonly perigee_altitude_km?: number | null;
-  readonly apogee_altitude_km?: number | null;
-  readonly inclination_deg?: number | null;
-  readonly raan_deg?: number | null;
-  readonly argument_of_perigee_deg?: number | null;
-  readonly mean_anomaly_deg?: number | null;
-  readonly propagator?: BuilderVisualOrbitPropagator | null;
-}
-
-/**  */
-export type BuilderVisualOrbitPropagator = "two_body" | "j2_mean_elements";
-
-/**  */
-export type BuilderVisualOrbitShape = "circular" | "elliptical";
-
-/** Presentation facts for one visual orbit-shape form. */
-export interface BuilderVisualOrbitShapeMetadata {
-  readonly id: BuilderVisualOrbitShape;
-  readonly label: string;
 }
 
 /**  */
@@ -1024,19 +935,12 @@ export interface BuilderVisualSessionListing {
   readonly boundaries: ReadonlyArray<BuilderVisualRoutingBoundaryListing>;
 }
 
-/** Select a ground stamp node and derive its installed terminal inventory. */
-export interface BuilderVisualSetGroundStampNodeCommand {
-  readonly operation: "set_ground_stamp_node";
-  readonly segment_id: string;
-  readonly node_ref: string;
-}
-
 /** Apply one complete backend-owned scheduling block or inherit at a site. */
 export interface BuilderVisualSetSchedulingPresetCommand {
   readonly operation: "set_scheduling_preset";
   readonly segment_id: string;
   readonly preset: BuilderVisualSchedulingPreset | null;
-  readonly member_id?: string | null;
+  readonly site_id?: string | null;
 }
 
 /** Change one population input and let the backend derive its complete phasing. */
@@ -1046,26 +950,6 @@ export interface BuilderVisualSetSpacePopulationCommand {
   readonly phasing_mode?: BuilderVisualPhasingMode | null;
   readonly planes?: number | null;
   readonly slots_per_plane?: number | null;
-}
-
-/** Editable generated space segment that becomes referenced catalog objects. */
-export interface BuilderVisualSpaceDraft {
-  readonly segment_id?: string;
-  readonly display_name?: string;
-  readonly node_ref?: string | null;
-  readonly orbit?: BuilderVisualOrbit;
-  readonly planes?: number | null;
-  readonly raan_spacing_deg?: number | null;
-  readonly slots_per_plane?: number | null;
-  readonly phasing_mode: BuilderVisualPhasingMode;
-  readonly phase_offset_deg?: number | null;
-}
-
-/** One library space source placed by reference. */
-export interface BuilderVisualSpaceReference {
-  readonly segment_id?: string;
-  readonly source_ref?: string | null;
-  readonly label?: string;
 }
 
 /**  */
@@ -1091,22 +975,6 @@ export interface BuilderVisualWalkerLayoutRequest {
 export interface BuilderVisualWalkerLayoutResult {
   readonly raan_spacing_deg: number;
   readonly phase_offset_deg: number;
-}
-
-/** Closed visual workspace whose persisted grammar is assembled by VS-API. */
-export interface BuilderVisualWorkspace {
-  readonly session_name?: string;
-  readonly display_name?: string | null;
-  readonly description?: string | null;
-  readonly space?: ReadonlyArray<BuilderVisualSpaceDraft>;
-  readonly space_refs?: ReadonlyArray<BuilderVisualSpaceReference>;
-  readonly ground?: ReadonlyArray<BuilderVisualGroundDraft>;
-  readonly ground_refs?: ReadonlyArray<BuilderVisualGroundReference>;
-  readonly max_pairs_per_rule?: number | null;
-  readonly max_pairs_per_tick?: number | null;
-  readonly start_time?: string;
-  readonly step_seconds?: number | null;
-  readonly compression?: number | null;
 }
 
 /** A session list whose members carry no id, edited as one whole. */

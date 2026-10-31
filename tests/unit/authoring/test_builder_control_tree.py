@@ -274,3 +274,31 @@ def test_rich_link_fields_remain_editable_in_complete_session_controls() -> None
         "/link_rules/0/topology/mode",
     ):
         assert controls[pointer].specialized is False
+
+
+def test_an_optional_field_holding_an_invalid_value_shows_its_value_control() -> None:
+    # A segment whose profile holds a value that is not a catalog reference: the
+    # editor selects the value branch, so the reference picker shows the value
+    # and the user can replace it.
+    from vs_api.builder_control_tree import build_model_control_tree
+
+    built = build_model_control_tree(
+        SpaceSegment,
+        {
+            "id": "space-1",
+            "source": "nodalarc:constellations/earth/leo/earth-leo-polar-36.yaml",
+            "profile": "",
+        },
+        projection_revision=1,
+        root_label="Segment",
+    )
+    [profile] = [
+        control
+        for control in _walk(built.tree.root)
+        if isinstance(control, BuilderChoiceControl) and control.json_pointer == "/profile"
+    ]
+    [selected] = [branch for branch in profile.branches if branch.selected]
+    assert selected.branch_kind == "type"
+    assert isinstance(selected.control, BuilderScalarControl)
+    assert selected.control.scalar_kind == "reference"
+    assert selected.control.value == ""

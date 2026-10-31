@@ -53,7 +53,7 @@ interface BuildGuideProps {
   onAddGround: () => void;
   onAddDomain: () => void;
   onOpenSession: () => void;
-  onOpenSegment: (kind: "segment" | "ground", id: string) => void;
+  onOpenSegment: (id: string) => void;
 }
 
 interface CanonicalSegment {
@@ -228,7 +228,7 @@ export function BuildGuide({
       action:
         firstSegment === null
           ? null
-          : () => onOpenSegment(firstSegment.ground ? "ground" : "segment", firstSegment.id),
+          : () => onOpenSegment(firstSegment.id),
     },
     {
       key: "routing",

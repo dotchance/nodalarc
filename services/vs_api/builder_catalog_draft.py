@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+from collections.abc import Mapping
 from typing import Any, Literal, cast
 
 import yaml
@@ -236,6 +237,50 @@ def _reference_issues(
             ),
         )
     return ()
+
+
+def rewrite_catalog_references(
+    value: Any,
+    replacements: Mapping[CatalogRef, CatalogRef],
+) -> Any:
+    """``value`` with every catalog reference in ``replacements`` replaced."""
+    if isinstance(value, CatalogRef):
+        return replacements.get(value, value)
+    if isinstance(value, BaseModel):
+        return value.model_copy(
+            update={
+                field_name: rewrite_catalog_references(getattr(value, field_name), replacements)
+                for field_name in type(value).model_fields
+            }
+        )
+    if isinstance(value, dict):
+        return {
+            rewrite_catalog_references(key, replacements): rewrite_catalog_references(
+                nested, replacements
+            )
+            for key, nested in value.items()
+        }
+    if isinstance(value, tuple):
+        return tuple(rewrite_catalog_references(item, replacements) for item in value)
+    if isinstance(value, list):
+        return [rewrite_catalog_references(item, replacements) for item in value]
+    return value
+
+
+def forked_document(
+    wrapper: str,
+    source: BaseModel,
+    target_ref: CatalogRef,
+    *,
+    replacements: Mapping[CatalogRef, CatalogRef],
+) -> JsonDocument:
+    """The one copy of a catalog component: ``source`` written as ``target_ref``,
+    its id the target's and its references in ``replacements`` replaced."""
+    model = rewrite_catalog_references(source, replacements)
+    model = model.model_copy(update={"id": target_ref.relative_path.stem})
+    return {
+        wrapper: cast(JsonDocument, model.model_dump(mode="json", by_alias=True, exclude_none=True))
+    }
 
 
 def _control_build(
@@ -557,9 +602,7 @@ class BuilderCatalogDraftService:
                 f"Catalog customization target already exists: {target_ref}",
                 ref=target_ref,
             )
-        body = cast(JsonDocument, source.model_dump(mode="json", by_alias=True, exclude_none=True))
-        body["id"] = target_ref.relative_path.stem
-        document: JsonDocument = {wrapper: body}
+        document = forked_document(wrapper, source, target_ref, replacements={})
         return _envelope(
             CatalogComponentDraftState(
                 draft_revision=0,

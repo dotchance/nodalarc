@@ -192,7 +192,7 @@ def test_scalar_presence_and_literal_choice_advance_one_compiled_revision(
         "max_pairs_per_rule": 500,
         "max_pairs_per_tick": 2000,
     }
-    assert result.assembled_draft.draft_revision == result.visual_draft.draft_revision
+    assert result.compile_result.draft.draft_revision == result.visual_draft.draft_revision
 
 
 def test_complex_sequence_item_insert_uses_virtual_branch_and_child_controls(
@@ -262,7 +262,6 @@ def test_complex_sequence_item_insert_uses_virtual_branch_and_child_controls(
     assert result.visual_draft.applied_session is not None
     inserted = result.visual_draft.applied_session["segments"][insert_at]
     assert inserted == {"id": "extra-space", "source": source_ref}
-    assert result.visual_draft.applied_workspace is not None
     assert result.visual_draft.control_tree is not None
 
 

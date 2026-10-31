@@ -15,16 +15,13 @@ from nodalarc.catalog_repository import CatalogScope
 from nodalarc.filesystem_catalog_repository import FilesystemCatalogRepository
 from nodalarc.models.builder_visual_api import (
     BuilderVisualCustomizeChainRequest,
-    BuilderVisualDraftApplyWorkspaceRequest,
     BuilderVisualDraftApplyYamlRequest,
     BuilderVisualDraftAssemblyResult,
     BuilderVisualDraftCommandRequest,
     BuilderVisualDraftCompileRequest,
     BuilderVisualDraftCreateRequest,
-    BuilderVisualDraftEnvelope,
     BuilderVisualDraftOpenRequest,
     BuilderVisualSessionListing,
-    BuilderVisualWorkspace,
 )
 from nodalarc.models.link_rules import LinkRule
 from nodalarc.models.segment_session import RoutingBoundary, RoutingDomain, SegmentSessionConfig
@@ -34,7 +31,6 @@ from vs_api.builder_session_service import save_builder_session
 from vs_api.builder_visual_draft import (
     BuilderVisualDraftCommandError,
     BuilderVisualDraftService,
-    _applied_control_tree,
     _is_builder_owned_component_ref,
     _link_projection,
     _link_rule_document,
@@ -42,9 +38,14 @@ from vs_api.builder_visual_draft import (
     _routing_boundary_projection,
     _routing_domain_document,
     _routing_domain_projection,
-    _workspace_from_applied_session,
 )
 from vs_api.catalog_context import CatalogContext
+
+from tests.unit.authoring.test_builder_visual_draft import (
+    _apply_edits,
+    _content_edit,
+    _save_request,
+)
 
 ROOT = Path(__file__).resolve().parents[3]
 SHIPPED_ROOT = ROOT / "catalog" / "nodalarc"
@@ -95,11 +96,9 @@ def test_open_projects_and_no_edit_compiles_every_shipped_session_canonically(
     source_ref = f"nodalarc:sessions/{session_path.name}"
     opened = service.open(BuilderVisualDraftOpenRequest(source_ref=source_ref))
 
-    assert opened.projection_status == "applied"
+    assert opened.applied_session is not None
     assert opened.session_yaml == session_path.read_text(encoding="utf-8")
     assert opened.applied_revision == opened.draft_revision == 0
-    assert opened.applied_workspace == opened.authoring_workspace
-    assert opened.applied_workspace is not None
     assert opened.control_tree is not None
     assert opened.control_tree.projection_revision == opened.applied_revision
 
@@ -110,7 +109,6 @@ def test_open_projects_and_no_edit_compiles_every_shipped_session_canonically(
     expected_document = yaml.safe_load(session_path.read_bytes())
     expected = canonicalize_persisted_configuration(opened.target_ref, expected_document)
 
-    assert compiled.assembly_issues == ()
     assert compiled.compile_result.canonical_session_json == expected.canonical_json
 
 
@@ -464,50 +462,6 @@ def test_a_card_is_offered_only_for_the_shape_it_writes(
     assert projection(rewritten_shape) is None
 
 
-def test_a_workspace_preview_compiles_the_edit_and_accepts_nothing(
-    service: BuilderVisualDraftService,
-) -> None:
-    opened = service.open(
-        BuilderVisualDraftOpenRequest(source_ref="nodalarc:sessions/earth-leo-simple.yaml")
-    )
-    assert opened.authoring_workspace is not None
-    edited = opened.authoring_workspace.model_copy(
-        update={
-            "display_name": "Previewed name",
-            "max_pairs_per_rule": 600,
-        }
-    )
-
-    preview = service.compile(
-        BuilderVisualDraftCompileRequest(draft=opened, workspace=edited),
-        available_node_count=1_000_000,
-    )
-
-    compiled_session = preview.compile_result.canonical_session_json
-    assert compiled_session is not None
-    assert compiled_session["session"]["display_name"] == "Previewed name"
-    # The workspace holds no link rules, so the preview keeps the accepted ones.
-    assert [rule["id"] for rule in compiled_session["link_rules"]] == ["leo_access", "leo_isl"]
-    assert preview.compile_result.resolved_preview is not None
-    assert preview.visual_draft == opened
-    # The listing describes the accepted session, which the preview leaves alone.
-    assert preview.listing is not None
-    assert [entry.rule_id for entry in preview.listing.link_rules] == ["leo_access", "leo_isl"]
-
-
-def test_a_workspace_preview_needs_a_graphical_projection() -> None:
-    unprojected = BuilderVisualDraftEnvelope(
-        draft_revision=2,
-        projection_status="no_valid_projection",
-        target_ref="user:sessions/unprojected.yaml",
-        session_name_is_placeholder=False,
-        reserved_authoring_ids=(),
-        session_yaml="session: [",
-    )
-    with pytest.raises(ValidationError, match="graphical projection"):
-        BuilderVisualDraftCompileRequest(draft=unprojected, workspace=BuilderVisualWorkspace())
-
-
 def test_a_rich_rule_is_listed_without_a_widget_and_kept_by_other_edits(
     service: BuilderVisualDraftService,
 ) -> None:
@@ -530,19 +484,22 @@ def test_a_rich_rule_is_listed_without_a_widget_and_kept_by_other_edits(
         )
     )
     assert applied.applied is True
-    workspace = applied.draft.authoring_workspace
-    assert workspace is not None
+    assert applied.draft.applied_session is not None
+    meta = applied.draft.applied_session["session"]
 
-    edited = service.apply_workspace(
-        BuilderVisualDraftApplyWorkspaceRequest(
-            draft=applied.draft,
-            expected_draft_revision=applied.draft.draft_revision,
-            workspace=workspace.model_copy(update={"display_name": "Changed graphically"}),
-        ),
-        available_node_count=1_000_000,
+    result = _apply_edits(
+        service,
+        applied.draft,
+        [
+            _content_edit(
+                {"kind": "section", "pointer": "/session"},
+                meta,
+                {**meta, "display_name": "Changed graphically"},
+            )
+        ],
     )
-
-    assert edited.assembly_issues == ()
+    assert result.applied and result.assembly is not None
+    edited = result.assembly
     compiled_session = edited.compile_result.canonical_session_json
     assert compiled_session is not None
     assert compiled_session["session"]["display_name"] == "Changed graphically"
@@ -581,7 +538,7 @@ def test_runtime_unsupported_valid_session_opens_and_remains_saveable(
         available_node_count=1_000_000,
     )
 
-    assert opened.projection_status == "applied"
+    assert opened.applied_session is not None
     assert opened.applied_session["segments"][0]["clock"] == {
         "model": "affine",
         "rate": 2.0,
@@ -618,7 +575,6 @@ def test_yaml_apply_advances_once_and_preserves_exact_buffer(
     assert applied.draft.draft_revision == opened.draft_revision + 1
     assert applied.draft.applied_revision == applied.draft.draft_revision
     assert applied.draft.session_yaml == canonical_yaml
-    assert applied.draft.authoring_workspace == applied.draft.applied_workspace
 
 
 def test_yaml_apply_refusal_retains_last_valid_projection_and_source_location(
@@ -709,22 +665,15 @@ def test_yaml_apply_is_revision_fenced(
     assert stale.value.code == "catalog_authoring.stale_revision"
 
 
-def test_no_valid_projection_cannot_customize_catalog_from_source_text(
+def test_a_draft_with_no_accepted_session_cannot_customize(
     service: BuilderVisualDraftService,
 ) -> None:
     draft = service.create(BuilderVisualDraftCreateRequest(session_name="no-source-customize"))
-    no_projection = draft.model_copy(
-        update={
-            "projection_status": "no_valid_projection",
-            "authoring_workspace": None,
-            "session_yaml": "session: [unterminated",
-        }
-    )
 
     result = service.customize_chain(
         BuilderVisualCustomizeChainRequest(
-            draft=no_projection,
-            expected_draft_revision=no_projection.draft_revision,
+            draft=draft,
+            expected_draft_revision=draft.draft_revision,
             segment_id="leo",
             leaf_ref="nodalarc:terminals/rf/rf-ka-starlink-space-gateway.yaml",
         )
@@ -732,7 +681,7 @@ def test_no_valid_projection_cannot_customize_catalog_from_source_text(
 
     assert result.applied is False
     assert result.issues[0].code == "builder.draft.no_valid_projection"
-    assert result.draft == no_projection
+    assert result.draft == draft
 
 
 def test_yaml_apply_accepts_runtime_gated_grammar_and_compile_blocks_only_deploy(
@@ -796,90 +745,7 @@ def test_yaml_apply_accepts_structurally_valid_missing_refs_for_later_compile_re
     assert any(issue.stage == "reference" for issue in compiled.compile_result.issues)
 
 
-def test_workspace_apply_advances_once_and_compiles_the_exact_applied_revision(
-    service: BuilderVisualDraftService,
-) -> None:
-    opened = service.open(
-        BuilderVisualDraftOpenRequest(source_ref="nodalarc:sessions/earth-leo-simple.yaml")
-    )
-    assert opened.authoring_workspace is not None
-    workspace = opened.authoring_workspace.model_copy(
-        update={"display_name": "Changed graphically"}
-    )
-
-    result = service.apply_workspace(
-        BuilderVisualDraftApplyWorkspaceRequest(
-            draft=opened,
-            expected_draft_revision=opened.draft_revision,
-            workspace=workspace,
-        ),
-        available_node_count=1_000_000,
-    )
-
-    assert result.visual_draft.draft_revision == opened.draft_revision + 1
-    assert result.visual_draft.applied_revision == result.visual_draft.draft_revision
-    assert result.visual_draft.projection_status == "applied"
-    assert result.visual_draft.authoring_workspace.display_name == "Changed graphically"
-    assert result.assembled_draft.draft_revision == result.visual_draft.draft_revision
-    assert result.compile_result.save_verdict.allowed is True
-    assert result.compile_result.canonical_session_json["session"]["display_name"] == (
-        "Changed graphically"
-    )
-
-
-def test_workspace_apply_retains_last_applied_facts_when_graph_is_incomplete(
-    service: BuilderVisualDraftService,
-) -> None:
-    opened = service.open(
-        BuilderVisualDraftOpenRequest(source_ref="nodalarc:sessions/earth-leo-simple.yaml")
-    )
-    assert opened.authoring_workspace is not None
-    placed = opened.authoring_workspace.space_refs[0].model_copy(update={"source_ref": None})
-    workspace = opened.authoring_workspace.model_copy(update={"space_refs": (placed,)})
-
-    result = service.apply_workspace(
-        BuilderVisualDraftApplyWorkspaceRequest(
-            draft=opened,
-            expected_draft_revision=opened.draft_revision,
-            workspace=workspace,
-        ),
-        available_node_count=1_000_000,
-    )
-
-    assert result.visual_draft.draft_revision == opened.draft_revision + 1
-    assert result.visual_draft.projection_status == "pending_authoring"
-    assert result.visual_draft.applied_revision == opened.applied_revision
-    assert result.visual_draft.applied_session == opened.applied_session
-    assert result.visual_draft.applied_workspace == opened.applied_workspace
-    assert result.visual_draft.control_tree is None
-    assert result.compile_result.save_verdict.allowed is False
-    assert any(
-        issue.code == "builder.draft.space_source_ref_required" for issue in result.assembly_issues
-    )
-
-
-def test_workspace_apply_is_revision_fenced(
-    service: BuilderVisualDraftService,
-) -> None:
-    opened = service.open(
-        BuilderVisualDraftOpenRequest(source_ref="nodalarc:sessions/earth-leo-simple.yaml")
-    )
-    assert opened.authoring_workspace is not None
-
-    with pytest.raises(BuilderVisualDraftCommandError) as stale:
-        service.apply_workspace(
-            BuilderVisualDraftApplyWorkspaceRequest(
-                draft=opened,
-                expected_draft_revision=1,
-                workspace=opened.authoring_workspace,
-            ),
-            available_node_count=1_000_000,
-        )
-
-    assert stale.value.code == "catalog_authoring.stale_revision"
-
-
-def test_workspace_apply_preserves_runtime_gated_fields_and_blocks_only_deploy(
+def test_a_section_edit_preserves_runtime_gated_fields_and_blocks_only_deploy(
     service: BuilderVisualDraftService,
 ) -> None:
     opened = service.open(
@@ -895,21 +761,24 @@ def test_workspace_apply_preserves_runtime_gated_fields_and_blocks_only_deploy(
             yaml_text=yaml.safe_dump(document, sort_keys=False),
         )
     )
-    assert yaml_applied.draft.authoring_workspace is not None
-    workspace = yaml_applied.draft.authoring_workspace.model_copy(
-        update={"description": "Still authorable"}
-    )
+    assert yaml_applied.draft.applied_session is not None
+    meta = yaml_applied.draft.applied_session["session"]
 
-    result = service.apply_workspace(
-        BuilderVisualDraftApplyWorkspaceRequest(
-            draft=yaml_applied.draft,
-            expected_draft_revision=yaml_applied.draft.draft_revision,
-            workspace=workspace,
-        ),
-        available_node_count=1_000_000,
+    applied = _apply_edits(
+        service,
+        yaml_applied.draft,
+        [
+            _content_edit(
+                {"kind": "section", "pointer": "/session"},
+                meta,
+                {**meta, "description": "Still authorable"},
+            )
+        ],
     )
+    assert applied.applied and applied.assembly is not None
+    result = applied.assembly
 
-    assert result.visual_draft.projection_status == "applied"
+    assert result.visual_draft.applied_session is not None
     assert result.visual_draft.applied_session["segments"][0]["clock"] == {
         "model": "affine",
         "rate": 2.0,
@@ -918,59 +787,42 @@ def test_workspace_apply_preserves_runtime_gated_fields_and_blocks_only_deploy(
     assert result.compile_result.deploy_eligibility_after_save.allowed is False
 
 
-def test_open_derives_reference_labels_from_catalog_documents(
-    service: BuilderVisualDraftService,
-) -> None:
-    opened = service.open(
-        BuilderVisualDraftOpenRequest(source_ref="nodalarc:sessions/earth-leo-simple.yaml")
-    )
-
-    assert opened.authoring_workspace is not None
-    assert opened.authoring_workspace.space_refs[0].label == ("Earth LEO simple 36-satellite ring")
-    assert opened.authoring_workspace.ground_refs[0].label == ("Starlink PoP gateway sites")
-
-
 def test_authored_ground_scheduling_command_preserves_unowned_ipv6_prefixes(
     service: BuilderVisualDraftService,
 ) -> None:
     draft = service.create(BuilderVisualDraftCreateRequest(session_name="ground-overlay"))
-    ground = service.apply_command(
+    minted = service.apply_command(
         BuilderVisualDraftCommandRequest(
             draft=draft,
             expected_draft_revision=0,
-            command={"operation": "add_ground"},
-        ),
-        available_node_count=1_000_000,
-    ).draft
-    minted = service.apply_command(
-        BuilderVisualDraftCommandRequest(
-            draft=ground,
-            expected_draft_revision=1,
             command={
                 "operation": "mint_ground_members",
-                "segment_id": "ground-1",
                 "sites": [{"name": "Denver", "lat_deg": 39.7, "lon_deg": -104.9}],
+                "node_ref": "nodalarc:nodes/ground/leo-gateway.yaml",
+                "body_ref": "nodalarc:bodies/earth.yaml",
             },
         ),
         available_node_count=1_000_000,
     ).draft
     assert minted.applied_session is not None
-    assert minted.applied_revision is not None
-    rich = deepcopy(minted.applied_session)
-    rich["segments"][0]["apply"]["originated_prefixes"] = {"ipv6": ["lan0"]}
-    model = SegmentSessionConfig.model_validate(rich)
-    workspace = _workspace_from_applied_session(
-        model,
-        proposals=minted.catalog_documents,
+    # The user states originated IPv6 prefixes on the segment, which no
+    # Builder command writes.
+    segment = minted.applied_session["segments"][0]
+    rich = deepcopy(segment)
+    rich["apply"]["originated_prefixes"] = {"ipv6": ["lan0"]}
+    applied = _apply_edits(
+        service,
+        minted,
+        [
+            _content_edit(
+                {"kind": "member", "list_pointer": "/segments", "id": "ground-1"},
+                segment,
+                rich,
+            )
+        ],
     )
-    enriched = minted.model_copy(
-        update={
-            "applied_session": rich,
-            "applied_workspace": workspace,
-            "authoring_workspace": workspace,
-            "control_tree": _applied_control_tree(model, minted.applied_revision),
-        }
-    )
+    assert applied.applied and applied.assembly is not None
+    enriched = applied.assembly.visual_draft
 
     scheduled = service.apply_command(
         BuilderVisualDraftCommandRequest(
@@ -1009,12 +861,12 @@ def test_saved_builder_session_reopens_as_refs_without_reowning_catalog_objects(
         ).draft
 
     apply_command({"operation": "add_generated_space", "phasing_mode": "walker_delta"})
-    apply_command({"operation": "add_ground"})
     apply_command(
         {
             "operation": "mint_ground_members",
-            "segment_id": "ground-1",
             "sites": [{"name": "Denver", "lat_deg": 39.7, "lon_deg": -104.9}],
+            "node_ref": "nodalarc:nodes/ground/leo-gateway.yaml",
+            "body_ref": "nodalarc:bodies/earth.yaml",
         }
     )
     compiled = service.compile(
@@ -1025,7 +877,7 @@ def test_saved_builder_session_reopens_as_refs_without_reowning_catalog_objects(
         (issue.code, issue.message) for issue in compiled.compile_result.save_verdict.blockers
     )
     saved = save_builder_session(
-        compiled.save_request,
+        _save_request(compiled.visual_draft),
         context,
         available_node_count=1_000_000,
     )
@@ -1052,14 +904,13 @@ def test_saved_builder_session_reopens_as_refs_without_reowning_catalog_objects(
     opened = service.open(
         BuilderVisualDraftOpenRequest(source_ref="user:sessions/rich-reopen.yaml")
     )
-    assert opened.projection_status == "applied"
+    assert opened.applied_session is not None
     assert opened.session_yaml == saved.session.canonical_yaml
-    assert opened.authoring_workspace == opened.applied_workspace
-    assert opened.authoring_workspace is not None
-    assert opened.authoring_workspace.space == ()
-    assert opened.authoring_workspace.ground == ()
-    assert len(opened.authoring_workspace.space_refs) == 1
-    assert len(opened.authoring_workspace.ground_refs) == 1
+    # The saved components are catalog documents now, which the session
+    # references; the reopened draft proposes none.
+    space_segment, ground_segment = opened.applied_session["segments"]
+    assert CatalogRef(space_segment["source"]).namespace == "user"
+    assert CatalogRef(ground_segment["placement"]["from_site_set"]).namespace == "user"
     assert opened.expected_session_revision == saved.session.revision
     assert opened.catalog_documents == ()
 
@@ -1067,25 +918,28 @@ def test_saved_builder_session_reopens_as_refs_without_reowning_catalog_objects(
         BuilderVisualDraftCompileRequest(draft=opened),
         available_node_count=1_000_000,
     )
-    assert no_op.assembly_issues == ()
     assert no_op.compile_result.canonical_session_yaml == saved.session.canonical_yaml
 
-    edited = service.apply_workspace(
-        BuilderVisualDraftApplyWorkspaceRequest(
-            draft=opened,
-            expected_draft_revision=opened.draft_revision,
-            workspace=opened.authoring_workspace.model_copy(
-                update={"description": "Unrelated session-only GUI edit"}
-            ),
-        ),
-        available_node_count=1_000_000,
-    ).visual_draft
+    meta = opened.applied_session["session"]
+    section_edit = _apply_edits(
+        service,
+        opened,
+        [
+            _content_edit(
+                {"kind": "section", "pointer": "/session"},
+                meta,
+                {**meta, "description": "Unrelated session-only GUI edit"},
+            )
+        ],
+    )
+    assert section_edit.applied and section_edit.assembly is not None
+    edited = section_edit.assembly.visual_draft
     recompiled = service.compile(
         BuilderVisualDraftCompileRequest(draft=edited),
         available_node_count=1_000_000,
     )
     resaved = save_builder_session(
-        recompiled.save_request,
+        _save_request(recompiled.visual_draft),
         context,
         available_node_count=1_000_000,
     )
@@ -1098,5 +952,5 @@ def test_saved_builder_session_reopens_as_refs_without_reowning_catalog_objects(
         enriched.yaml_bytes
     )
     assert edited.catalog_documents == ()
-    assert edited.authoring_workspace is not None
-    assert edited.authoring_workspace.description == "Unrelated session-only GUI edit"
+    assert edited.applied_session is not None
+    assert edited.applied_session["session"]["description"] == "Unrelated session-only GUI edit"

@@ -9,7 +9,7 @@ import { LinkAndRoutingOutline } from "../LinkAndRoutingOutline";
 import { SegmentLinksCard } from "../SegmentLinksCard";
 import { listSessionObjects } from "../sessionListing";
 import type { GuideWorldNode } from "../BuildGuide";
-import { newWorkspace } from "./fixtures/workspaceFixtures";
+import { sessionSegments } from "../sessionSegments";
 import {
   BOUNDARIES_ADDRESS,
   acceptedBoundary,
@@ -223,15 +223,16 @@ describe("the outline's Links and Routing groups", () => {
 
 describe("the segment links card", () => {
   it("lists and opens every rule that names the segment, a card's or not", () => {
-    const workspace = newWorkspace("links");
-    workspace.space_refs = [
-      { segment_id: "leo", source_ref: "nodalarc:constellations/leo.yaml", label: "LEO" },
-      { segment_id: "geo", source_ref: "nodalarc:constellations/geo.yaml", label: "GEO" },
-    ];
+    const placed = sessionSegments({
+      segments: [
+        { id: "leo", display_name: "LEO", source: "nodalarc:constellations/leo.yaml" },
+        { id: "geo", display_name: "GEO", source: "nodalarc:constellations/geo.yaml" },
+      ],
+    });
     const onOpenRule = vi.fn();
     render(
       <SegmentLinksCard
-        workspace={workspace}
+        placed={placed}
         rules={listSessionObjects(LISTING, []).linkRules}
         segmentId="leo"
         onOpenRule={onOpenRule}

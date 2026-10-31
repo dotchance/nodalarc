@@ -10,13 +10,8 @@
  * FOOTPRINT_COLOR. u_falloff is the satellite's beam_falloff_exponent (higher → tighter
  * center, e.g. Iridium 3.5; lower → broader, e.g. Starlink 2.0), defaulting to 2.0.
  *
- * Which satellites get a disc: the selected satellite always; plus any node ids the hosting
- * surface requests through the `beams` prop (the builder shows every satellite of a segment
- * whose editor window is open). The elevation floor likewise comes from the hosting surface
- * when it has real terminal data — `beams.elevationFor` returning null means the node has no
- * access terminal, so no beam is drawn rather than a made-up one. Without the prop the legacy
- * display default (25°) applies, as in the live view where per-node terminal data does not
- * reach the snapshot.
+ * Which satellites get a disc: the selected satellite, drawn at the display default
+ * elevation (25°); per-node terminal data does not reach the snapshot.
  *
  * Lives inside a <Body> (body-child), so positions are in that body's local frame. Each frame
  * a disc reads its satellite's body-local position from the shared registry (after
@@ -72,14 +67,6 @@ const _FOOTPRINT_LOCAL_Z_AXIS = new THREE.Vector3(0, 0, -1);
 const _localPos = new THREE.Vector3();
 const _outward = new THREE.Vector3();
 const _surfacePos = new THREE.Vector3();
-
-/** Beam requests from the hosting surface: extra satellites to draw discs
- *  for, and the elevation floor per node from real terminal data (null =
- *  no access terminal = no beam). */
-export interface BeamFootprints {
-  nodeIds: readonly string[];
-  elevationFor: (nodeId: string) => number | null;
-}
 
 interface FootprintDiscProps {
   sat: NodeState;
@@ -159,26 +146,17 @@ function FootprintDisc({ sat, elevDeg }: FootprintDiscProps) {
 interface CoverageFootprintProps {
   selection: Selection | null;
   nodes: readonly NodeState[];
-  beams?: BeamFootprints;
 }
 
-export function CoverageFootprint({ selection, nodes, beams }: CoverageFootprintProps) {
-  // One disc per satellite that earned one: the selection, plus the hosting
-  // surface's requests — deduped, restricted to this body's nodes (the scene
-  // renders one CoverageFootprint per body).
+export function CoverageFootprint({ selection, nodes }: CoverageFootprintProps) {
+  // The selected satellite's disc, when that satellite is on this body (the
+  // scene renders one CoverageFootprint per body).
   const discs = useMemo(() => {
-    const wanted = new Set<string>();
-    if (selection?.type === "satellite") wanted.add(selection.id);
-    for (const id of beams?.nodeIds ?? []) wanted.add(id);
-    const out: { sat: NodeState; elevDeg: number }[] = [];
-    for (const sat of nodes) {
-      if (sat.node_type !== "satellite" || !wanted.has(sat.node_id)) continue;
-      const elevDeg = beams ? beams.elevationFor(sat.node_id) : MIN_ELEV_DEG;
-      if (elevDeg === null) continue;
-      out.push({ sat, elevDeg });
-    }
-    return out;
-  }, [selection, nodes, beams]);
+    if (selection?.type !== "satellite") return [];
+    return nodes
+      .filter((sat) => sat.node_type === "satellite" && sat.node_id === selection.id)
+      .map((sat) => ({ sat, elevDeg: MIN_ELEV_DEG }));
+  }, [selection, nodes]);
 
   return (
     <>

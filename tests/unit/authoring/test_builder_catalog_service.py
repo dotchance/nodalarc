@@ -185,7 +185,6 @@ def test_bootstrap_is_complete_scope_free_and_truthful(tmp_path: Path) -> None:
     assert bootstrap.public_grammar_href == "/docs/ops/configuration-grammar.md"
     assert bootstrap.authoring.default_body_ref == "nodalarc:bodies/earth.yaml"
     assert bootstrap.authoring.default_phasing_mode == "walker_delta"
-    assert bootstrap.authoring.single_plane_phasing_mode == "evenly_spaced_mean_anomaly"
     assert {item.id for item in bootstrap.authoring.mount_roles} == {
         "access",
         "isl",

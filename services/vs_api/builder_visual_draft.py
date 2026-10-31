@@ -12,13 +12,12 @@ from typing import Any, Literal, cast
 
 import yaml
 from nodalarc.catalog_closure import (
-    CatalogClosureCollector,
     CatalogReadError,
     CatalogReadView,
     catalog_document_references,
     load_catalog_object,
 )
-from nodalarc.catalog_refs import BodyRef, CatalogFamily, CatalogRef, SessionRef, SiteRef
+from nodalarc.catalog_refs import CatalogFamily, CatalogRef, SessionRef
 from nodalarc.catalog_registry import (
     catalog_family_spec,
     validate_referenced_configuration_document,
@@ -32,7 +31,6 @@ from nodalarc.configuration_yaml import load_configuration_yaml
 from nodalarc.document_errors import document_errors
 from nodalarc.models.builder_api import (
     BuilderCompileRequest,
-    BuilderCompileResult,
     BuilderContentEdit,
     BuilderDraftEnvelope,
     BuilderIssue,
@@ -42,8 +40,6 @@ from nodalarc.models.builder_api import (
     BuilderProposalAddress,
     BuilderProposedCatalogDocument,
     BuilderSectionAddress,
-    BuilderSessionSaveRequest,
-    BuilderVerdict,
     BuilderWholeListAddress,
     JsonDocument,
 )
@@ -56,7 +52,6 @@ from nodalarc.models.builder_controls_api import (
 from nodalarc.models.builder_visual_api import (
     BuilderVisualAddBoundaryCommand,
     BuilderVisualAddGeneratedSpaceCommand,
-    BuilderVisualAddGroundCommand,
     BuilderVisualAddGroundSiteReferenceCommand,
     BuilderVisualAddRoutingDomainCommand,
     BuilderVisualConnectSegmentsCommand,
@@ -65,12 +60,13 @@ from nodalarc.models.builder_visual_api import (
     BuilderVisualCustomizeChainRequest,
     BuilderVisualCustomizeChainResult,
     BuilderVisualDraftAcceptStateRequest,
+    BuilderVisualDraftAffectedKind,
     BuilderVisualDraftApplyEditsRequest,
     BuilderVisualDraftApplyEditsResult,
-    BuilderVisualDraftApplyWorkspaceRequest,
     BuilderVisualDraftApplyYamlRequest,
     BuilderVisualDraftApplyYamlResult,
     BuilderVisualDraftAssemblyResult,
+    BuilderVisualDraftCommand,
     BuilderVisualDraftCommandRequest,
     BuilderVisualDraftCommandResult,
     BuilderVisualDraftCompileRequest,
@@ -79,10 +75,6 @@ from nodalarc.models.builder_visual_api import (
     BuilderVisualDraftOpenRequest,
     BuilderVisualDraftRetargetRequest,
     BuilderVisualGroundBoresight,
-    BuilderVisualGroundDraft,
-    BuilderVisualGroundMember,
-    BuilderVisualGroundReference,
-    BuilderVisualGroundStamp,
     BuilderVisualLinkEndpoint,
     BuilderVisualLinkRule,
     BuilderVisualLinkRuleListing,
@@ -92,7 +84,7 @@ from nodalarc.models.builder_visual_api import (
     BuilderVisualObjectEditRequest,
     BuilderVisualObjectEditResult,
     BuilderVisualObjectWidget,
-    BuilderVisualOrbit,
+    BuilderVisualPhasingMode,
     BuilderVisualPlaceGroundReferenceCommand,
     BuilderVisualPlaceSpaceReferenceCommand,
     BuilderVisualRederiveLinkCommand,
@@ -102,14 +94,11 @@ from nodalarc.models.builder_visual_api import (
     BuilderVisualRoutingDomain,
     BuilderVisualRoutingDomainListing,
     BuilderVisualRoutingDomainWidget,
+    BuilderVisualSchedulingPreset,
     BuilderVisualSessionListing,
-    BuilderVisualSetGroundStampNodeCommand,
     BuilderVisualSetSchedulingPresetCommand,
     BuilderVisualSetSpacePopulationCommand,
-    BuilderVisualSpaceDraft,
-    BuilderVisualSpaceReference,
     BuilderVisualWalkerLayoutRequest,
-    BuilderVisualWorkspace,
     derive_walker_layout,
 )
 from nodalarc.models.builder_world import BuilderWorld
@@ -119,7 +108,6 @@ from nodalarc.models.catalog import (
     Site,
     SiteSet,
     SpaceNodeSet,
-    Terminal,
 )
 from nodalarc.models.link_rules import (
     LinkRule,
@@ -133,7 +121,6 @@ from nodalarc.models.segment_session import (
     Addressing,
     AggregateOf,
     AreaAssignment,
-    CandidateLimits,
     Dispatch,
     Ephemeris,
     RoutingBoundary,
@@ -145,7 +132,6 @@ from nodalarc.models.segment_session import (
     TimeConfig,
 )
 from nodalarc.models.segments import (
-    GroundPlacement,
     GroundSegment,
     LagrangeSegment,
     SpaceSegment,
@@ -153,6 +139,7 @@ from nodalarc.models.segments import (
 from nodalarc.resolve_session import SessionResolutionError, endpoint_terminal_role
 from pydantic import BaseModel, ConfigDict, JsonValue, ValidationError
 
+from .builder_catalog_draft import forked_document, rewrite_catalog_references
 from .builder_compiler import (
     OverlayCatalogReadView,
     PreviewFactory,
@@ -182,40 +169,11 @@ from .catalog_context import CatalogContext
 
 Clock = Callable[[], datetime]
 
-_DE440S_EPHEMERIS: JsonDocument = {
-    "provider": "skyfield_bsp",
-    "quality_tier": "de440s",
-    "kernels": [
-        {
-            "id": "de440s",
-            "path": "configs/ephemerides/de440s.bsp",
-            "sha256": "c1c7feeab882263fc493a9d5a5b2ddd71b54826cdf65d8d17a76126b260a49f2",
-            "coverage_start": "1849-12-25T00:00:00Z",
-            "coverage_end": "2150-01-21T00:00:00Z",
-            "targets": ["nodalarc:bodies/earth.yaml", "nodalarc:bodies/luna.yaml"],
-            "frame": "gcrs",
-        }
-    ],
-}
 _BUILDER_GENERATED_COMPONENT_FAMILIES = frozenset(
     {"constellations", "orbits", "nodes", "site-sets", "sites"}
 )
-BUILDER_VISUAL_SPECIALIZED_FIELDS = frozenset(
-    {
-        (SessionMeta, "name"),
-        (SessionMeta, "display_name"),
-        (SessionMeta, "description"),
-        (TimeConfig, "start_time"),
-        (TimeConfig, "step_seconds"),
-        (TimeConfig, "compression"),
-        (CandidateLimits, "max_pairs_per_rule"),
-        (CandidateLimits, "max_pairs_per_tick"),
-        (SpaceSegment, "id"),
-        (SpaceSegment, "source"),
-        (GroundSegment, "id"),
-        (GroundPlacement, "from_site_set"),
-    }
-)
+# The session's name is its identity, which only Save under a new name changes.
+BUILDER_VISUAL_SPECIALIZED_FIELDS = frozenset({(SessionMeta, "name")})
 
 
 class BuilderVisualDraftConflictError(CatalogConflictError):
@@ -359,27 +317,12 @@ class _PlacedSegment:
 
 
 @dataclass(frozen=True, slots=True)
-class _CatalogProjectionFact:
-    label: str
-    summary: str | None = None
-
-
-@dataclass(frozen=True, slots=True)
 class _DerivedLinkPhysics:
     role: Literal["access", "isl", "crosslink", "backbone"]
     medium: Literal["rf", "optical"]
     topology_mode: Literal["visible_candidates", "nearest_n"]
     topology_n: int
     formable: bool
-
-
-def _placed_segments(workspace: BuilderVisualWorkspace) -> tuple[_PlacedSegment, ...]:
-    return (
-        *(_PlacedSegment(item.segment_id, "space") for item in workspace.space_refs),
-        *(_PlacedSegment(item.segment_id, "space") for item in workspace.space),
-        *(_PlacedSegment(item.segment_id, "ground") for item in workspace.ground_refs),
-        *(_PlacedSegment(item.segment_id, "ground") for item in workspace.ground),
-    )
 
 
 def _session_segments(session: SegmentSessionConfig) -> dict[str, _PlacedSegment]:
@@ -418,15 +361,14 @@ def _reserved_authoring_ids(
 ) -> set[str]:
     """The ids a gesture may not mint.
 
-    These are the allocation history and every id the accepted session, the
-    pending edits and the twin define or reference.
+    These are the allocation history and every id the accepted session and the
+    pending edits define or reference.
     """
     return {
         *draft.reserved_authoring_ids,
         *_current_and_referenced_authoring_ids(
             draft.applied_session,
             pending_edits=pending_edits,
-            workspace=draft.authoring_workspace,
         ),
     }
 
@@ -435,18 +377,15 @@ def _current_and_referenced_authoring_ids(
     session: JsonDocument | None,
     *,
     pending_edits: BuilderPendingEdits = (),
-    workspace: BuilderVisualWorkspace | None = None,
 ) -> tuple[str, ...]:
     """Every segment, link rule and routing domain id defined or referenced, in order.
 
-    The walk covers a session document, the working JSON of pending edits and
-    the twin. An object the session cannot hold yet is in the twin only.
+    The walk covers a session document and the working JSON of pending edits.
     Incomplete JSON contributes the ids it holds. A routing boundary has no id
     of its own.
     """
     found = [
         *_session_authoring_ids(session),
-        *(_twin_authoring_ids(workspace) if workspace is not None else ()),
         *(
             authoring_id
             for edit in pending_edits
@@ -454,11 +393,6 @@ def _current_and_referenced_authoring_ids(
         ),
     ]
     return tuple(dict.fromkeys(item for item in found if item))
-
-
-def _twin_authoring_ids(workspace: BuilderVisualWorkspace) -> Iterator[str]:
-    """Every segment id the twin defines."""
-    yield from (item.segment_id for item in _placed_segments(workspace))
 
 
 def _json_items(value: JsonValue) -> list[JsonValue]:
@@ -578,26 +512,6 @@ def _next_number(prefix: str, values: set[str]) -> int:
     return number
 
 
-def _catalog_label(model: BaseModel) -> str:
-    display_name = getattr(model, "display_name", None)
-    if isinstance(display_name, str) and display_name.strip():
-        return display_name.strip()
-    identifier = getattr(model, "id", None)
-    if not isinstance(identifier, str) or not identifier:
-        raise TypeError(f"{type(model).__name__} has no catalog identity")
-    return identifier
-
-
-def _site_summary(site: Site) -> str | None:
-    summary = site.verified.notes if site.verified is not None else None
-    if summary is None:
-        return None
-    normalized = " ".join(summary.split())
-    if len(normalized) > 512:
-        normalized = normalized[:509].rstrip() + "..."
-    return normalized or None
-
-
 def _derive_link_physics(
     world: BuilderWorld,
     first: _PlacedSegment,
@@ -683,138 +597,6 @@ def _json_pointer(parts: tuple[object, ...]) -> str:
     if not parts:
         return ""
     return "/" + "/".join(str(part).replace("~", "~0").replace("/", "~1") for part in parts)
-
-
-class _Assembly:
-    def __init__(self, draft: BuilderVisualDraftEnvelope) -> None:
-        self.draft = draft
-        self.issues: list[BuilderIssue] = []
-        self.proposals: dict[CatalogRef, BuilderProposedCatalogDocument] = {}
-        self.derived_ids: set[str] = set()
-        self.owner = _proposal_owner(draft.target_ref)
-        for proposal in draft.catalog_documents:
-            self.proposals[proposal.ref] = proposal
-
-    def issue(self, code: str, message: str, path: str) -> None:
-        self.issues.append(_issue(code, message, target_ref=self.draft.target_ref, draft_path=path))
-
-    def required_identifier(self, value: str, *, path: str, fallback: str) -> str:
-        normalized = _identifier(value)
-        if not normalized:
-            self.issue("builder.draft.identifier_required", "A valid identifier is required", path)
-            return fallback
-        if normalized != value:
-            self.issue(
-                "builder.draft.identifier_not_canonical",
-                f"Identifier {value!r} must be authored as {normalized!r}",
-                path,
-            )
-        return normalized
-
-    def unique_derived_id(self, value: str, *, path: str, fallback: str) -> str:
-        base = self.required_identifier(value, path=path, fallback=fallback)
-        if base not in self.derived_ids:
-            self.derived_ids.add(base)
-            return base
-        for suffix in range(2, 1_000):
-            candidate = _identifier(f"{base[:40]}-{suffix}")
-            if candidate not in self.derived_ids:
-                self.derived_ids.add(candidate)
-                self.issue(
-                    "builder.draft.derived_identity_collision",
-                    f"Derived identifier {base!r} collides with another authored object",
-                    path,
-                )
-                return candidate
-        self.issue(
-            "builder.draft.derived_identity_exhausted",
-            f"Unable to allocate a unique identifier for {base!r}",
-            path,
-        )
-        return fallback
-
-    def component_ref(self, family: str, object_id: str) -> CatalogRef:
-        return _owned_component_ref(family, self.owner, object_id)
-
-    def propose(self, ref: CatalogRef, document: JsonDocument, *, path: str) -> None:
-        candidate = BuilderProposedCatalogDocument(
-            ref=ref,
-            document=document,
-            origin="generated",
-        )
-        existing = self.proposals.get(ref)
-        if existing is None or existing.origin == "generated":
-            self.proposals[ref] = candidate
-        elif existing.document != candidate.document:
-            self.issue(
-                "builder.draft.component_identity_collision",
-                f"Multiple authored components target {ref} with different content",
-                path,
-            )
-
-
-def _orbit_document(
-    assembly: _Assembly,
-    orbit: BuilderVisualOrbit,
-    *,
-    orbit_id: str,
-    epoch: str,
-    path: str,
-) -> JsonDocument:
-    required = {
-        "central_body": orbit.central_body,
-        "shape_kind": orbit.shape_kind,
-        "inclination_deg": orbit.inclination_deg,
-        "raan_deg": orbit.raan_deg,
-        "argument_of_perigee_deg": orbit.argument_of_perigee_deg,
-        "mean_anomaly_deg": orbit.mean_anomaly_deg,
-        "propagator": orbit.propagator,
-    }
-    for field_name, value in required.items():
-        if value is None:
-            assembly.issue(
-                f"builder.draft.orbit_{field_name}_required",
-                f"Orbit {field_name.replace('_', ' ')} is required",
-                f"{path}.{field_name}",
-            )
-    if orbit.shape_kind == "elliptical":
-        shape: JsonDocument = {
-            "perigee_altitude_km": cast(JsonValue, orbit.perigee_altitude_km),
-            "apogee_altitude_km": cast(JsonValue, orbit.apogee_altitude_km),
-        }
-        for field_name in ("perigee_altitude_km", "apogee_altitude_km"):
-            if getattr(orbit, field_name) is None:
-                assembly.issue(
-                    f"builder.draft.orbit_{field_name}_required",
-                    f"Orbit {field_name.replace('_', ' ')} is required",
-                    f"{path}.{field_name}",
-                )
-    else:
-        shape = {"altitude_km": cast(JsonValue, orbit.altitude_km)}
-        if orbit.altitude_km is None:
-            assembly.issue(
-                "builder.draft.orbit_altitude_required",
-                "Orbit altitude is required",
-                f"{path}.altitude_km",
-            )
-    return {
-        "orbit": {
-            "id": orbit_id,
-            "central_body": cast(
-                JsonValue, str(orbit.central_body) if orbit.central_body else None
-            ),
-            "epoch": epoch,
-            "shape": shape,
-            "orientation": {
-                "inclination_deg": cast(JsonValue, orbit.inclination_deg),
-                "raan_deg": cast(JsonValue, orbit.raan_deg),
-                "argument_of_perigee_deg": cast(JsonValue, orbit.argument_of_perigee_deg),
-            },
-            "phase": {"mean_anomaly_deg": cast(JsonValue, orbit.mean_anomaly_deg)},
-            "propagator": cast(JsonValue, orbit.propagator),
-            "reference": "urn:nodalarc:session-builder-draft",
-        }
-    }
 
 
 def _object_issue(code: str, message: str, *pointer: str | int) -> BuilderIssue:
@@ -1088,12 +870,6 @@ def _routing_boundary_documents(
     return documents, tuple(issues)
 
 
-def _proposal_documents(
-    proposals: tuple[BuilderProposedCatalogDocument, ...],
-) -> dict[CatalogRef, JsonDocument]:
-    return {proposal.ref: proposal.document for proposal in proposals}
-
-
 def _is_builder_owned_component_ref(ref: CatalogRef, *, owner: str) -> bool:
     relative_parts = ref.relative_path.parts
     return (
@@ -1142,139 +918,19 @@ def _builder_generated_proposal_refs(
     return frozenset(generated)
 
 
-def _stored_catalog_facts(
-    snapshot: CatalogReadSnapshot,
-    root_yaml: bytes,
-) -> dict[CatalogRef, _CatalogProjectionFact]:
-    closure = CatalogClosureCollector.collect(root_yaml, snapshot)
-    catalog_facts: dict[CatalogRef, _CatalogProjectionFact] = {}
-    for entry in closure.entries:
-        stored_document = snapshot.get(entry.ref)
-        parsed = load_configuration_yaml(stored_document.content)
-        if not isinstance(parsed, dict):
-            continue
-        document = cast(JsonDocument, parsed)
-        model = catalog_family_spec(cast(CatalogFamily, entry.ref.family)).validate_document(
-            document
-        )
-        catalog_facts[entry.ref] = _CatalogProjectionFact(
-            label=_catalog_label(model),
-            summary=_site_summary(model) if isinstance(model, Site) else None,
-        )
-    return catalog_facts
-
-
-def _authored_space_projection(
-    segment: SpaceSegment,
-    proposals: dict[CatalogRef, JsonDocument],
-    *,
-    generated_refs: frozenset[CatalogRef],
-) -> BuilderVisualSpaceDraft | None:
-    constellation_ref = CatalogRef(segment.source)
-    constellation_document = proposals.get(constellation_ref)
-    if constellation_document is None or constellation_ref not in generated_refs:
-        return None
-    constellation = constellation_document.get("constellation")
-    if not isinstance(constellation, dict):
-        return None
-    orbit_ref = constellation.get("orbit")
-    node_ref = constellation.get("node")
-    if not isinstance(orbit_ref, str) or not isinstance(node_ref, str):
-        return None
-    orbit_document = proposals.get(CatalogRef(orbit_ref))
-    if orbit_document is None or not isinstance(orbit_document.get("orbit"), dict):
-        return None
-    orbit = cast(JsonDocument, orbit_document["orbit"])
-    shape = orbit.get("shape")
-    orientation = orbit.get("orientation")
-    phase = orbit.get("phase")
-    if (
-        not isinstance(shape, dict)
-        or not isinstance(orientation, dict)
-        or not isinstance(phase, dict)
-    ):
-        return None
-    shape_kind: Literal["circular", "elliptical"] = (
-        "circular" if "altitude_km" in shape else "elliptical"
-    )
-    circular_altitude = shape.get("altitude_km") if shape_kind == "circular" else None
-    planes = cast(JsonDocument, constellation.get("planes", {}))
-    phasing = cast(JsonDocument, constellation.get("phasing", {}))
-    return BuilderVisualSpaceDraft(
-        segment_id=segment.id,
-        display_name=cast(
-            str, constellation.get("display_name", segment.display_name or segment.id)
-        ),
-        node_ref=CatalogRef(node_ref),
-        orbit=BuilderVisualOrbit(
-            central_body=cast(Any, orbit.get("central_body")),
-            shape_kind=shape_kind,
-            altitude_km=cast(Any, shape.get("altitude_km")),
-            perigee_altitude_km=cast(
-                Any,
-                circular_altitude
-                if circular_altitude is not None
-                else shape.get("perigee_altitude_km"),
-            ),
-            apogee_altitude_km=cast(
-                Any,
-                circular_altitude
-                if circular_altitude is not None
-                else shape.get("apogee_altitude_km"),
-            ),
-            inclination_deg=cast(Any, orientation.get("inclination_deg")),
-            raan_deg=cast(Any, orientation.get("raan_deg")),
-            argument_of_perigee_deg=cast(Any, orientation.get("argument_of_perigee_deg")),
-            mean_anomaly_deg=cast(Any, phase.get("mean_anomaly_deg")),
-            propagator=cast(Any, orbit.get("propagator")),
-        ),
-        planes=cast(Any, planes.get("count")),
-        raan_spacing_deg=cast(Any, planes.get("raan_spacing_deg")),
-        slots_per_plane=cast(Any, constellation.get("slots_per_plane")),
-        phasing_mode=cast(Any, phasing.get("mode")),
-        phase_offset_deg=cast(Any, phasing.get("phase_offset_deg")),
-    )
-
-
-def _stamp_from_site(site: JsonDocument | None) -> BuilderVisualGroundStamp:
-    """The ground stamp a session-proposed site was minted with: its first node's
-    model, installed counts and boresights, and its body."""
-    if site is None:
-        return BuilderVisualGroundStamp(boresights={}, body=DEFAULT_BODY_REF)
-    frame = site.get("frame")
-    body_fixed = frame.get("body_fixed") if isinstance(frame, dict) else None
-    body = body_fixed.get("body") if isinstance(body_fixed, dict) else None
-    nodes = site.get("nodes")
-    first = nodes[0] if isinstance(nodes, list) and nodes and isinstance(nodes[0], dict) else {}
-    installed: dict[str, int] = {}
-    boresights: dict[str, BuilderVisualGroundBoresight] = {}
-    terminals = first.get("terminals")
-    for mount_id, installation in terminals.items() if isinstance(terminals, dict) else ():
-        if not isinstance(installation, dict):
-            continue
-        installed[mount_id] = cast(int, installation.get("installed_count", 0))
-        capabilities = installation.get("capabilities")
-        boresight = capabilities.get("boresight") if isinstance(capabilities, dict) else None
-        if isinstance(boresight, dict):
-            boresights[mount_id] = BuilderVisualGroundBoresight.model_validate(boresight)
-    return BuilderVisualGroundStamp(
-        node_ref=cast(Any, first.get("node")),
-        installed=installed,
-        boresights=boresights,
-        body=cast(Any, body) if isinstance(body, str) else DEFAULT_BODY_REF,
-    )
-
-
 def _minted_site(
     site_id: str,
     *,
     display_name: str,
-    stamp: BuilderVisualGroundStamp,
+    node_ref: CatalogRef,
+    installed: Mapping[str, int],
+    boresights: Mapping[str, BuilderVisualGroundBoresight],
+    body_ref: CatalogRef,
     lat_deg: float,
     lon_deg: float,
     alt_m: float,
 ) -> JsonDocument:
-    """A complete site document from one typed location and the ground stamp."""
+    """A complete site document from one typed location and the node it installs."""
     return {
         "site": {
             "id": site_id,
@@ -1283,7 +939,7 @@ def _minted_site(
             "nodes": [
                 {
                     "id": "gw1",
-                    "node": str(stamp.node_ref),
+                    "node": str(node_ref),
                     "payloads": {},
                     "terminals": {
                         mount: {
@@ -1291,122 +947,22 @@ def _minted_site(
                             **(
                                 {
                                     "capabilities": {
-                                        "boresight": stamp.boresights[mount].model_dump(mode="json")
+                                        "boresight": boresights[mount].model_dump(mode="json")
                                     }
                                 }
-                                if mount in stamp.boresights
+                                if mount in boresights
                                 else {}
                             ),
                         }
-                        for mount, count in stamp.installed.items()
+                        for mount, count in installed.items()
                     },
                     "interfaces": {"terr0": "lan0"},
                 }
             ],
-            "frame": {"body_fixed": {"body": str(stamp.body)}},
+            "frame": {"body_fixed": {"body": str(body_ref)}},
             "location": {"lat_deg": lat_deg, "lon_deg": lon_deg, "alt_m": alt_m},
         }
     }
-
-
-def _authored_ground_projection(
-    segment: GroundSegment,
-    proposals: dict[CatalogRef, JsonDocument],
-    *,
-    generated_refs: frozenset[CatalogRef],
-    catalog_facts: Mapping[CatalogRef, _CatalogProjectionFact],
-    prior: BuilderVisualGroundDraft | None,
-) -> BuilderVisualGroundDraft | None:
-    site_set_ref = CatalogRef(segment.placement.from_site_set)
-    site_set_document = proposals.get(site_set_ref)
-    if site_set_document is None or site_set_ref not in generated_refs:
-        return None
-    site_set = site_set_document.get("site_set")
-    if not isinstance(site_set, dict):
-        return None
-    overrides = {
-        override.match.site: override.scheduling.model_dump(
-            mode="json", by_alias=True, exclude_none=True
-        )
-        for override in segment.overrides or ()
-        if override.scheduling is not None
-    }
-    prior_members_by_ref = (
-        {member.ref: member for member in prior.members if member.ref is not None}
-        if prior is not None
-        else {}
-    )
-    prior_members_by_site = (
-        {member.site_id: member for member in prior.members if member.site_id}
-        if prior is not None
-        else {}
-    )
-    members: list[BuilderVisualGroundMember] = []
-    for index, raw_ref in enumerate(cast(list[str], site_set.get("sites", []))):
-        ref = SiteRef(raw_ref)
-        proposed = (
-            cast(JsonDocument, proposals[ref]["site"])
-            if ref in generated_refs and isinstance(proposals.get(ref, {}).get("site"), dict)
-            else None
-        )
-        site_id = (
-            cast(str, proposed.get("id", "")) if proposed is not None else ref.relative_path.stem
-        )
-        previous = prior_members_by_ref.get(ref) or prior_members_by_site.get(site_id)
-        fact = catalog_facts.get(ref)
-        members.append(
-            BuilderVisualGroundMember(
-                member_id=previous.member_id if previous is not None else f"member-{index + 1}",
-                kind="draft" if proposed is not None else "ref",
-                ref=ref,
-                site_id=site_id,
-                label=(
-                    cast(str, proposed.get("display_name", site_id))
-                    if proposed is not None
-                    else fact.label
-                    if fact is not None
-                    else previous.label
-                    if previous is not None
-                    else site_id
-                ),
-                summary=(
-                    fact.summary
-                    if proposed is None and fact is not None
-                    else previous.summary
-                    if proposed is None and previous is not None
-                    else None
-                ),
-                scheduling_override=cast(JsonDocument | None, overrides.get(site_id)),
-            )
-        )
-    scheduling = (
-        segment.apply.scheduling.model_dump(mode="json", by_alias=True, exclude_none=True)
-        if segment.apply is not None and segment.apply.scheduling is not None
-        else {}
-    )
-    originated_ipv4 = (
-        segment.apply.originated_prefixes.ipv4
-        if segment.apply is not None and segment.apply.originated_prefixes is not None
-        else None
-    )
-    first_site = next(
-        (
-            cast(JsonDocument, proposals[member.ref]["site"])
-            for member in members
-            if member.kind == "draft" and member.ref is not None
-        ),
-        None,
-    )
-    stamp = prior.stamp if prior is not None else _stamp_from_site(first_site)
-    return BuilderVisualGroundDraft(
-        segment_id=segment.id,
-        display_name=segment.display_name or cast(str, site_set.get("display_name", segment.id)),
-        members=tuple(members),
-        stamp=stamp,
-        scheduling=cast(JsonDocument, scheduling),
-        originated_ipv4=tuple(originated_ipv4 or ()),
-        tags=tuple(segment.apply.tags or ()) if segment.apply is not None else (),
-    )
 
 
 def _node_selector_projection(selector: NodeSelector) -> tuple[str, str | None] | None:
@@ -1850,123 +1406,6 @@ def _carded_boundaries(
     return written, tuple(issues)
 
 
-def _workspace_from_applied_session(
-    session: SegmentSessionConfig,
-    *,
-    proposals: tuple[BuilderProposedCatalogDocument, ...] = (),
-    catalog_facts: Mapping[CatalogRef, _CatalogProjectionFact] | None = None,
-    prior_workspace: BuilderVisualWorkspace | None = None,
-) -> BuilderVisualWorkspace:
-    space_refs: list[BuilderVisualSpaceReference] = []
-    space_drafts: list[BuilderVisualSpaceDraft] = []
-    ground_refs: list[BuilderVisualGroundReference] = []
-    ground_drafts: list[BuilderVisualGroundDraft] = []
-    proposal_documents = _proposal_documents(proposals)
-    generated_refs = frozenset(
-        proposal.ref for proposal in proposals if proposal.origin == "generated"
-    )
-    facts = catalog_facts or {}
-    prior_space_refs = (
-        {item.segment_id: item for item in prior_workspace.space_refs}
-        if prior_workspace is not None
-        else {}
-    )
-    prior_ground_refs = (
-        {item.segment_id: item for item in prior_workspace.ground_refs}
-        if prior_workspace is not None
-        else {}
-    )
-    prior_ground_drafts = (
-        {item.segment_id: item for item in prior_workspace.ground}
-        if prior_workspace is not None
-        else {}
-    )
-    for segment in session.segments:
-        if isinstance(segment, SpaceSegment):
-            authored = _authored_space_projection(
-                segment,
-                proposal_documents,
-                generated_refs=generated_refs,
-            )
-            if authored is None:
-                prior = prior_space_refs.get(segment.id)
-                fact = facts.get(CatalogRef(segment.source))
-                space_refs.append(
-                    BuilderVisualSpaceReference(
-                        segment_id=segment.id,
-                        source_ref=segment.source,
-                        label=(
-                            fact.label
-                            if fact is not None
-                            else prior.label
-                            if prior is not None
-                            else segment.display_name or segment.id
-                        ),
-                    )
-                )
-            else:
-                space_drafts.append(authored)
-        elif isinstance(segment, GroundSegment):
-            scheduling: JsonDocument = {}
-            if segment.apply is not None and segment.apply.scheduling is not None:
-                scheduling = cast(
-                    JsonDocument,
-                    segment.apply.scheduling.model_dump(
-                        mode="json",
-                        by_alias=True,
-                        exclude_none=True,
-                    ),
-                )
-            authored = _authored_ground_projection(
-                segment,
-                proposal_documents,
-                generated_refs=generated_refs,
-                catalog_facts=facts,
-                prior=prior_ground_drafts.get(segment.id),
-            )
-            if authored is None:
-                prior = prior_ground_refs.get(segment.id)
-                fact = facts.get(CatalogRef(segment.placement.from_site_set))
-                ground_refs.append(
-                    BuilderVisualGroundReference(
-                        segment_id=segment.id,
-                        site_set_ref=segment.placement.from_site_set,
-                        label=(
-                            fact.label
-                            if fact is not None
-                            else prior.label
-                            if prior is not None
-                            else segment.display_name or segment.id
-                        ),
-                        scheduling=scheduling,
-                    )
-                )
-            else:
-                ground_drafts.append(authored)
-
-    max_pairs_per_rule: int | None = None
-    max_pairs_per_tick: int | None = None
-    if session.simulation is not None and session.simulation.candidate_limits is not None:
-        limits = session.simulation.candidate_limits
-        max_pairs_per_rule = limits.max_pairs_per_rule
-        max_pairs_per_tick = limits.max_pairs_per_tick
-
-    return BuilderVisualWorkspace(
-        session_name=session.session.name,
-        display_name=session.session.display_name,
-        description=session.session.description,
-        space=tuple(space_drafts),
-        space_refs=tuple(space_refs),
-        ground=tuple(ground_drafts),
-        ground_refs=tuple(ground_refs),
-        max_pairs_per_rule=max_pairs_per_rule,
-        max_pairs_per_tick=max_pairs_per_tick,
-        start_time=session.time.start_time,
-        step_seconds=session.time.step_seconds,
-        compression=session.time.compression,
-    )
-
-
 def _applied_control_tree(session: SegmentSessionConfig, revision: int) -> BuilderControlTree:
     """The control tree of an applied session, bound to its revision."""
 
@@ -1977,498 +1416,6 @@ def _applied_control_tree(session: SegmentSessionConfig, revision: int) -> Build
     ).tree
 
 
-def _assemble_authoring_workspace(
-    draft: BuilderVisualDraftEnvelope,
-) -> tuple[JsonDocument, tuple[BuilderProposedCatalogDocument, ...], tuple[BuilderIssue, ...]]:
-    assert draft.authoring_workspace is not None
-    workspace = draft.authoring_workspace
-    assembly = _Assembly(draft)
-    target_name = draft.target_ref.relative_path.stem
-    authored_name = _identifier(workspace.session_name)
-    if not authored_name:
-        assembly.issue(
-            "builder.draft.session_name_required",
-            "Session name is required",
-            "workspace.session_name",
-        )
-    elif authored_name != target_name:
-        assembly.issue(
-            "builder.draft.session_identity_mismatch",
-            f"Session name {authored_name!r} must match target filename {target_name!r}",
-            "workspace.session_name",
-        )
-    if not workspace.start_time:
-        assembly.issue(
-            "builder.draft.start_time_required",
-            "Session start time is required",
-            "workspace.start_time",
-        )
-
-    segments: list[JsonValue] = []
-    for index, placed in enumerate(workspace.space_refs):
-        path = f"workspace.space_refs.{index}"
-        segment_id = assembly.required_identifier(
-            placed.segment_id,
-            path=f"{path}.segment_id",
-            fallback=f"space-ref-{index + 1}",
-        )
-        if placed.source_ref is None:
-            assembly.issue(
-                "builder.draft.space_source_ref_required",
-                "Referenced space segments require a source reference",
-                f"{path}.source_ref",
-            )
-        segments.append(
-            {
-                "id": segment_id,
-                "source": cast(JsonValue, str(placed.source_ref) if placed.source_ref else None),
-            }
-        )
-
-    for index, space in enumerate(workspace.space):
-        path = f"workspace.space.{index}"
-        segment_id = assembly.required_identifier(
-            space.segment_id,
-            path=f"{path}.segment_id",
-            fallback=f"space-{index + 1}",
-        )
-        constellation_id = assembly.unique_derived_id(
-            _segment_component_id(target_name, segment_id),
-            path=f"{path}.segment_id",
-            fallback=f"constellation-{index + 1}",
-        )
-        orbit_id = assembly.unique_derived_id(
-            f"{segment_id}-orbit",
-            path=f"{path}.orbit",
-            fallback=f"orbit-{index + 1}",
-        )
-        orbit_ref = assembly.component_ref("orbits", orbit_id)
-        assembly.propose(
-            orbit_ref,
-            _orbit_document(
-                assembly,
-                space.orbit,
-                orbit_id=orbit_id,
-                epoch=workspace.start_time,
-                path=f"{path}.orbit",
-            ),
-            path=f"{path}.orbit",
-        )
-        node_ref = CatalogRef(space.node_ref) if space.node_ref is not None else None
-        if node_ref is None:
-            assembly.issue(
-                "builder.draft.space_node_required",
-                "Generated space segments require a node reference",
-                f"{path}.node_ref",
-            )
-        for field_name, value in (
-            ("display_name", space.display_name),
-            ("planes", space.planes),
-            ("raan_spacing_deg", space.raan_spacing_deg),
-            ("slots_per_plane", space.slots_per_plane),
-            ("phase_offset_deg", space.phase_offset_deg),
-        ):
-            if value is None or value == "":
-                assembly.issue(
-                    f"builder.draft.constellation_{field_name}_required",
-                    f"Constellation {field_name.replace('_', ' ')} is required",
-                    f"{path}.{field_name}",
-                )
-        constellation_ref = assembly.component_ref("constellations", constellation_id)
-        constellation_document: JsonDocument = {
-            "constellation": {
-                "id": constellation_id,
-                "display_name": space.display_name,
-                "node": cast(JsonValue, str(node_ref) if node_ref is not None else None),
-                "orbit": str(orbit_ref),
-                "planes": {
-                    "count": cast(JsonValue, space.planes),
-                    "raan_spacing_deg": cast(JsonValue, space.raan_spacing_deg),
-                },
-                "slots_per_plane": cast(JsonValue, space.slots_per_plane),
-                "phasing": {
-                    "mode": space.phasing_mode,
-                    "phase_offset_deg": space.phase_offset_deg,
-                },
-                "node_tags": [{"tag": "all"}],
-            }
-        }
-        assembly.propose(constellation_ref, constellation_document, path=path)
-        segments.append({"id": segment_id, "source": str(constellation_ref)})
-
-    for index, placed in enumerate(workspace.ground_refs):
-        path = f"workspace.ground_refs.{index}"
-        segment_id = assembly.required_identifier(
-            placed.segment_id,
-            path=f"{path}.segment_id",
-            fallback=f"ground-ref-{index + 1}",
-        )
-        if placed.site_set_ref is None:
-            assembly.issue(
-                "builder.draft.site_set_ref_required",
-                "Referenced ground segments require a site-set reference",
-                f"{path}.site_set_ref",
-            )
-        segments.append(
-            {
-                "id": segment_id,
-                "placement": {
-                    "from_site_set": cast(
-                        JsonValue,
-                        str(placed.site_set_ref) if placed.site_set_ref is not None else None,
-                    )
-                },
-                "apply": {"scheduling": deepcopy(placed.scheduling)},
-            }
-        )
-
-    for index, ground in enumerate(workspace.ground):
-        path = f"workspace.ground.{index}"
-        segment_id = assembly.required_identifier(
-            ground.segment_id,
-            path=f"{path}.segment_id",
-            fallback=f"ground-{index + 1}",
-        )
-        site_set_id = assembly.unique_derived_id(
-            _segment_component_id(target_name, segment_id),
-            path=f"{path}.segment_id",
-            fallback=f"site-set-{index + 1}",
-        )
-        if not ground.members:
-            assembly.issue(
-                "builder.draft.ground_members_required",
-                "Ground segments require at least one site; the segment was not omitted",
-                f"{path}.members",
-            )
-        site_refs: list[JsonValue] = []
-        overrides: list[JsonValue] = []
-        for member_index, member in enumerate(ground.members):
-            member_path = f"{path}.members.{member_index}"
-            if member.ref is None:
-                assembly.issue(
-                    "builder.draft.ground_member_ref_required",
-                    "Ground members require a site reference",
-                    f"{member_path}.ref",
-                )
-                site_refs.append(None)
-            else:
-                site_refs.append(str(member.ref))
-            site_id = assembly.required_identifier(
-                member.site_id,
-                path=f"{member_path}.site_id",
-                fallback=f"site-{member_index + 1}",
-            )
-            if member.scheduling_override is not None:
-                overrides.append(
-                    {
-                        "match": {"site": site_id},
-                        "scheduling": deepcopy(member.scheduling_override),
-                    }
-                )
-        site_set_ref = assembly.component_ref("site-sets", site_set_id)
-        assembly.propose(
-            site_set_ref,
-            {
-                "site_set": {
-                    "id": site_set_id,
-                    "display_name": ground.display_name,
-                    "sites": site_refs,
-                }
-            },
-            path=path,
-        )
-        apply: JsonDocument = {"scheduling": deepcopy(ground.scheduling)}
-        if ground.originated_ipv4:
-            apply["originated_prefixes"] = {"ipv4": list(ground.originated_ipv4)}
-        if ground.tags:
-            apply["tags"] = [_identifier(tag) for tag in ground.tags]
-        segment: JsonDocument = {
-            "id": segment_id,
-            "display_name": ground.display_name,
-            "placement": {"from_site_set": str(site_set_ref)},
-            "apply": apply,
-        }
-        if overrides:
-            segment["overrides"] = overrides
-        segments.append(segment)
-
-    session: JsonDocument = {
-        "session": {
-            "name": target_name,
-            **(
-                {"display_name": workspace.display_name}
-                if workspace.display_name is not None
-                else {}
-            ),
-            **({"description": workspace.description} if workspace.description is not None else {}),
-        },
-        "segments": segments,
-        "time": {
-            "start_time": workspace.start_time,
-            "step_seconds": cast(JsonValue, workspace.step_seconds),
-            "compression": cast(JsonValue, workspace.compression),
-        },
-    }
-    # The limits are written whenever the draft states them, so a session keeps them
-    # through the commands that come before its first link rule.
-    if workspace.max_pairs_per_rule is not None or workspace.max_pairs_per_tick is not None:
-        session["simulation"] = {
-            "candidate_limits": {
-                "max_pairs_per_rule": cast(JsonValue, workspace.max_pairs_per_rule),
-                "max_pairs_per_tick": cast(JsonValue, workspace.max_pairs_per_tick),
-            }
-        }
-    uses_non_earth = any(
-        space.orbit.central_body is not None and space.orbit.central_body != DEFAULT_BODY_REF
-        for space in workspace.space
-    ) or any(
-        _stamp_from_site(_proposed_site(assembly, member)).body != DEFAULT_BODY_REF
-        for ground in workspace.ground
-        for member in ground.members
-        if member.kind == "draft"
-    )
-    if uses_non_earth:
-        session["ephemeris"] = deepcopy(_DE440S_EPHEMERIS)
-    return session, tuple(assembly.proposals.values()), tuple(assembly.issues)
-
-
-def _proposed_site(assembly: _Assembly, member: BuilderVisualGroundMember) -> JsonDocument | None:
-    proposal = assembly.proposals.get(member.ref) if member.ref is not None else None
-    site = proposal.document.get("site") if proposal is not None else None
-    return cast(JsonDocument, site) if isinstance(site, dict) else None
-
-
-def _set_optional_field(document: JsonDocument, key: str, value: JsonValue | None) -> None:
-    if value is None:
-        document.pop(key, None)
-    else:
-        document[key] = value
-
-
-def _overlay_applied_workspace(
-    draft: BuilderVisualDraftEnvelope,
-    baseline: BuilderVisualWorkspace,
-) -> tuple[JsonDocument, tuple[BuilderProposedCatalogDocument, ...], tuple[BuilderIssue, ...]]:
-    assert draft.applied_session is not None
-    assert draft.authoring_workspace is not None
-    workspace = draft.authoring_workspace
-    candidate, proposals, issues = _assemble_authoring_workspace(draft)
-    session = deepcopy(draft.applied_session)
-
-    session_meta = cast(JsonDocument, session["session"])
-    candidate_meta = cast(JsonDocument, candidate["session"])
-    for workspace_field, canonical_field in (
-        ("session_name", "name"),
-        ("display_name", "display_name"),
-        ("description", "description"),
-    ):
-        if getattr(workspace, workspace_field) != getattr(baseline, workspace_field):
-            _set_optional_field(session_meta, canonical_field, candidate_meta.get(canonical_field))
-
-    session_time = cast(JsonDocument, session["time"])
-    candidate_time = cast(JsonDocument, candidate["time"])
-    for field_name in ("start_time", "step_seconds", "compression"):
-        if getattr(workspace, field_name) != getattr(baseline, field_name):
-            _set_optional_field(session_time, field_name, candidate_time.get(field_name))
-
-    limits_changed = any(
-        getattr(workspace, field_name) != getattr(baseline, field_name)
-        for field_name in ("max_pairs_per_rule", "max_pairs_per_tick")
-    )
-    if limits_changed:
-        simulation = session.get("simulation")
-        if not isinstance(simulation, dict):
-            simulation = {}
-            session["simulation"] = simulation
-        if workspace.max_pairs_per_rule is None and workspace.max_pairs_per_tick is None:
-            simulation.pop("candidate_limits", None)
-            if not simulation:
-                session.pop("simulation", None)
-        else:
-            simulation["candidate_limits"] = {
-                "max_pairs_per_rule": cast(JsonValue, workspace.max_pairs_per_rule),
-                "max_pairs_per_tick": cast(JsonValue, workspace.max_pairs_per_tick),
-            }
-
-    canonical_segments = cast(list[JsonValue], session["segments"])
-    candidate_segments = {
-        cast(str, segment["id"]): segment
-        for segment in cast(list[JsonDocument], candidate["segments"])
-    }
-    baseline_direct_ids = {
-        *(item.segment_id for item in baseline.space_refs),
-        *(item.segment_id for item in baseline.ground_refs),
-    }
-    current_direct_ids = {
-        *(item.segment_id for item in workspace.space_refs),
-        *(item.segment_id for item in workspace.ground_refs),
-    }
-    removed_direct_ids = baseline_direct_ids - current_direct_ids
-    if removed_direct_ids:
-        issues = (
-            *issues,
-            _issue(
-                "builder.draft.placed_segment_identity_read_only",
-                "Placed segment identity cannot be removed or renamed through the flat editor: "
-                + ", ".join(sorted(removed_direct_ids)),
-                target_ref=draft.target_ref,
-                draft_path="authoring_workspace",
-            ),
-        )
-    canonical_by_id = {
-        cast(str, segment["id"]): segment
-        for segment in canonical_segments
-        if isinstance(segment, dict) and isinstance(segment.get("id"), str)
-    }
-    baseline_space = {item.segment_id: item for item in baseline.space_refs}
-    baseline_ground = {item.segment_id: item for item in baseline.ground_refs}
-    for placed in workspace.space_refs:
-        existing = canonical_by_id.get(placed.segment_id)
-        before = baseline_space.get(placed.segment_id)
-        if existing is None:
-            canonical_segments.append(deepcopy(candidate_segments[placed.segment_id]))
-        elif before is not None and placed.source_ref != before.source_ref:
-            existing["source"] = cast(
-                JsonValue,
-                str(placed.source_ref) if placed.source_ref is not None else None,
-            )
-    for placed in workspace.ground_refs:
-        existing = canonical_by_id.get(placed.segment_id)
-        before = baseline_ground.get(placed.segment_id)
-        if existing is None:
-            canonical_segments.append(deepcopy(candidate_segments[placed.segment_id]))
-            continue
-        if before is not None and placed.site_set_ref != before.site_set_ref:
-            placement = cast(JsonDocument, existing["placement"])
-            placement["from_site_set"] = cast(
-                JsonValue,
-                str(placed.site_set_ref) if placed.site_set_ref is not None else None,
-            )
-        if before is not None and placed.scheduling != before.scheduling:
-            apply = existing.get("apply")
-            if not isinstance(apply, dict):
-                apply = {}
-                existing["apply"] = apply
-            if placed.scheduling:
-                apply["scheduling"] = deepcopy(placed.scheduling)
-            else:
-                apply.pop("scheduling", None)
-                if not apply:
-                    existing.pop("apply", None)
-
-    for authored in workspace.space:
-        if authored.segment_id not in canonical_by_id:
-            canonical_segments.append(deepcopy(candidate_segments[authored.segment_id]))
-    baseline_ground_drafts = {ground.segment_id: ground for ground in baseline.ground}
-    for authored in workspace.ground:
-        existing = canonical_by_id.get(authored.segment_id)
-        before = baseline_ground_drafts.get(authored.segment_id)
-        candidate_ground = candidate_segments[authored.segment_id]
-        if existing is None:
-            canonical_segments.append(deepcopy(candidate_ground))
-            continue
-        if before is None:
-            continue
-        if authored.display_name != before.display_name:
-            _set_optional_field(existing, "display_name", candidate_ground.get("display_name"))
-        apply = existing.get("apply")
-        if not isinstance(apply, dict):
-            apply = {}
-            existing["apply"] = apply
-        candidate_apply = candidate_ground.get("apply")
-        if not isinstance(candidate_apply, dict):
-            candidate_apply = {}
-        if authored.scheduling != before.scheduling:
-            _set_optional_field(apply, "scheduling", candidate_apply.get("scheduling"))
-        if authored.tags != before.tags:
-            _set_optional_field(apply, "tags", candidate_apply.get("tags"))
-        if authored.originated_ipv4 != before.originated_ipv4:
-            existing_prefixes = apply.get("originated_prefixes")
-            if not isinstance(existing_prefixes, dict):
-                existing_prefixes = {}
-                apply["originated_prefixes"] = existing_prefixes
-            candidate_prefixes = candidate_apply.get("originated_prefixes")
-            candidate_ipv4 = (
-                candidate_prefixes.get("ipv4") if isinstance(candidate_prefixes, dict) else None
-            )
-            _set_optional_field(existing_prefixes, "ipv4", candidate_ipv4)
-            if not existing_prefixes:
-                apply.pop("originated_prefixes", None)
-        if not apply:
-            existing.pop("apply", None)
-
-        before_overrides = {member.site_id: member.scheduling_override for member in before.members}
-        current_overrides = {
-            member.site_id: member.scheduling_override for member in authored.members
-        }
-        if current_overrides != before_overrides:
-            candidate_overrides = {
-                cast(str, cast(JsonDocument, item.get("match", {})).get("site")): item
-                for item in cast(list[JsonDocument], candidate_ground.get("overrides", []))
-            }
-            existing_overrides = cast(list[JsonDocument], existing.get("overrides", []))
-            merged_overrides: list[JsonDocument] = []
-            seen_sites: set[str] = set()
-            for override in existing_overrides:
-                match = override.get("match")
-                site_id = cast(str, match.get("site")) if isinstance(match, dict) else ""
-                if site_id not in current_overrides:
-                    merged_overrides.append(override)
-                    continue
-                seen_sites.add(site_id)
-                scheduling = current_overrides[site_id]
-                updated_override = deepcopy(override)
-                _set_optional_field(updated_override, "scheduling", deepcopy(scheduling))
-                if set(updated_override) != {"match"}:
-                    merged_overrides.append(updated_override)
-            for site_id, scheduling in current_overrides.items():
-                if site_id not in seen_sites and scheduling is not None:
-                    merged_overrides.append(deepcopy(candidate_overrides[site_id]))
-            if merged_overrides:
-                existing["overrides"] = merged_overrides
-            else:
-                existing.pop("overrides", None)
-
-    return session, proposals, issues
-
-
-def _assemble_structured(
-    draft: BuilderVisualDraftEnvelope,
-    *,
-    allow_workspace_overlay: bool = False,
-) -> tuple[JsonDocument, tuple[BuilderProposedCatalogDocument, ...], tuple[BuilderIssue, ...]]:
-    if draft.applied_session is None:
-        return _assemble_authoring_workspace(draft)
-    assert draft.applied_workspace is not None
-    assert draft.applied_revision is not None
-    assert draft.authoring_workspace is not None
-    applied_model = SegmentSessionConfig.model_validate(draft.applied_session)
-    baseline = _workspace_from_applied_session(
-        applied_model,
-        proposals=draft.catalog_documents,
-        prior_workspace=draft.applied_workspace,
-    )
-    if draft.applied_workspace != baseline:
-        issue = _issue(
-            "builder.draft.applied_projection_mismatch",
-            "Applied workspace does not match the authoritative canonical session",
-            target_ref=draft.target_ref,
-            draft_path="applied_workspace",
-        )
-        return deepcopy(draft.applied_session), draft.catalog_documents, (issue,)
-    if draft.authoring_workspace == baseline:
-        return deepcopy(draft.applied_session), draft.catalog_documents, ()
-    if not allow_workspace_overlay:
-        issue = _issue(
-            "builder.draft.unapplied_workspace_changes",
-            "Workspace changes must be applied through a typed graphical command",
-            target_ref=draft.target_ref,
-            draft_path="authoring_workspace",
-        )
-        return deepcopy(draft.applied_session), draft.catalog_documents, (issue,)
-    return _overlay_applied_workspace(draft, baseline)
-
-
 def _validated_catalog_model(snapshot: CatalogReadSnapshot, ref: CatalogRef) -> BaseModel:
     document = snapshot.get(ref)
     data = load_configuration_yaml(document.content)
@@ -2476,18 +1423,15 @@ def _validated_catalog_model(snapshot: CatalogReadSnapshot, ref: CatalogRef) -> 
     return catalog_family_spec(family).validate_document(data)
 
 
-def _reachable_projection_inputs(
+def _reachable_proposals(
     session: SegmentSessionConfig,
     proposals: tuple[BuilderProposedCatalogDocument, ...],
     snapshot: CatalogReadSnapshot,
-) -> tuple[
-    tuple[BuilderProposedCatalogDocument, ...],
-    dict[CatalogRef, _CatalogProjectionFact],
-]:
+) -> tuple[BuilderProposedCatalogDocument, ...]:
+    """The proposals the session reaches through its references, in their order."""
     proposed_by_ref = {proposal.ref: proposal for proposal in proposals}
     reached_proposals: set[CatalogRef] = set()
     visited: set[CatalogRef] = set()
-    catalog_facts: dict[CatalogRef, _CatalogProjectionFact] = {}
 
     def visit(ref: CatalogRef) -> None:
         if ref in visited:
@@ -2504,19 +1448,12 @@ def _reachable_projection_inputs(
                 )
         except CatalogNotFoundError, ValidationError, TypeError, ValueError, yaml.YAMLError:
             return
-        catalog_facts[ref] = _CatalogProjectionFact(
-            label=_catalog_label(model),
-            summary=_site_summary(model) if isinstance(model, Site) else None,
-        )
         for dependency in catalog_document_references(model):
             visit(dependency)
 
     for ref in catalog_document_references(session):
         visit(ref)
-    return (
-        tuple(proposal for proposal in proposals if proposal.ref in reached_proposals),
-        catalog_facts,
-    )
+    return tuple(proposal for proposal in proposals if proposal.ref in reached_proposals)
 
 
 def _dependency_paths(
@@ -2548,165 +1485,21 @@ def _dependency_paths(
     return tuple(found)
 
 
-def _rewrite_catalog_references(
-    value: Any,
-    replacements: dict[CatalogRef, CatalogRef],
-) -> Any:
-    if isinstance(value, CatalogRef):
-        return replacements.get(value, value)
-    if isinstance(value, BaseModel):
-        return value.model_copy(
-            update={
-                field_name: _rewrite_catalog_references(
-                    getattr(value, field_name),
-                    replacements,
-                )
-                for field_name in type(value).model_fields
-            }
-        )
-    if isinstance(value, dict):
-        return {
-            _rewrite_catalog_references(key, replacements): _rewrite_catalog_references(
-                nested,
-                replacements,
-            )
-            for key, nested in value.items()
-        }
-    if isinstance(value, tuple):
-        return tuple(_rewrite_catalog_references(item, replacements) for item in value)
-    if isinstance(value, list):
-        return [_rewrite_catalog_references(item, replacements) for item in value]
-    return value
-
-
-def _forked_document(
-    view: CatalogReadView,
-    source_ref: CatalogRef,
-    target_ref: CatalogRef,
-    *,
-    replacements: dict[CatalogRef, CatalogRef],
-) -> JsonDocument:
-    """Copy one catalog object to ``target_ref``, its references replaced."""
-    wrapper, source = load_catalog_object(source_ref, view)
+def _catalog_object(view: CatalogReadView, ref: CatalogRef) -> tuple[str, BaseModel]:
+    """One catalog component as its wrapper key and validated model."""
+    wrapper, source = load_catalog_object(ref, view)
     if wrapper is None:
         raise ValueError("a session document cannot be forked as a component")
-    model = _rewrite_catalog_references(source, replacements)
-    model = model.model_copy(update={"id": target_ref.relative_path.stem})
-    normalized = cast(
-        JsonDocument,
-        model.model_dump(mode="json", by_alias=True, exclude_none=True),
-    )
-    return {wrapper: normalized}
+    return wrapper, source
 
 
-def _merge_assembly_issues(
-    result: BuilderCompileResult,
-    assembly_issues: tuple[BuilderIssue, ...],
-) -> BuilderCompileResult:
-    if not assembly_issues:
-        return result
-    issues = tuple(dict.fromkeys((*assembly_issues, *result.issues)))
-    save_blockers = tuple(issue for issue in issues if "save" in issue.blocks)
-    deploy_blockers = tuple(issue for issue in issues if "deploy" in issue.blocks)
-    return BuilderCompileResult(
-        draft=result.draft,
-        target_ref=result.target_ref,
-        canonical_session_yaml=result.canonical_session_yaml,
-        canonical_session_json=result.canonical_session_json,
-        dependency_closure=result.dependency_closure,
-        resolved_preview=result.resolved_preview,
-        digests=result.digests,
-        issues=issues,
-        save_verdict=BuilderVerdict(
-            operation="save",
-            allowed=not save_blockers,
-            blockers=save_blockers,
-        ),
-        deploy_eligibility_after_save=BuilderVerdict(
-            operation="deploy",
-            allowed=not deploy_blockers,
-            blockers=deploy_blockers,
-        ),
-    )
-
-
-@dataclass(frozen=True, slots=True)
-class _WorkspaceApplication:
-    draft: BuilderVisualDraftEnvelope
-    session: JsonDocument
-    proposals: tuple[BuilderProposedCatalogDocument, ...]
-    assembly_issues: tuple[BuilderIssue, ...]
-
-
-def _apply_workspace_revision(
-    draft: BuilderVisualDraftEnvelope,
-    workspace: BuilderVisualWorkspace,
-) -> _WorkspaceApplication:
-    candidate = draft.model_copy(update={"authoring_workspace": workspace})
-    session, proposals, assembly_issues = _assemble_structured(
-        candidate,
-        allow_workspace_overlay=True,
-    )
-    reserved_authoring_ids = tuple(
-        dict.fromkeys(
-            (
-                *draft.reserved_authoring_ids,
-                *_current_and_referenced_authoring_ids(session, workspace=workspace),
-            )
-        )
-    )
-    try:
-        applied_model = SegmentSessionConfig.model_validate(session)
-    except TypeError, ValueError:
-        applied_model = None
-    next_revision = draft.draft_revision + 1
-    if assembly_issues or applied_model is None:
-        projection_status = (
-            "pending_authoring" if draft.applied_session is not None else "incomplete_authoring"
-        )
-        updated = draft.model_copy(
-            update={
-                "draft_revision": next_revision,
-                "projection_status": projection_status,
-                "reserved_authoring_ids": reserved_authoring_ids,
-                "session_yaml": yaml.safe_dump(session, sort_keys=False),
-                "authoring_workspace": workspace,
-                "catalog_documents": proposals,
-                "control_tree": None,
-            }
-        )
-    else:
-        applied_session = cast(
-            JsonDocument,
-            applied_model.model_dump(mode="json", by_alias=True, exclude_none=True),
-        )
-        applied_workspace = _workspace_from_applied_session(
-            applied_model,
-            proposals=proposals,
-            prior_workspace=workspace,
-        )
-        canonical = canonicalize_persisted_configuration(draft.target_ref, applied_session)
-        updated = draft.model_copy(
-            update={
-                "draft_revision": next_revision,
-                "projection_status": "applied",
-                "reserved_authoring_ids": reserved_authoring_ids,
-                "session_yaml": canonical.yaml_bytes.decode("utf-8"),
-                "authoring_workspace": applied_workspace,
-                "applied_workspace": applied_workspace,
-                "applied_revision": next_revision,
-                "applied_session": applied_session,
-                "control_tree": _applied_control_tree(applied_model, next_revision),
-                "catalog_documents": proposals,
-            }
-        )
-        session = applied_session
-    return _WorkspaceApplication(
-        draft=updated,
-        session=session,
-        proposals=proposals,
-        assembly_issues=assembly_issues,
-    )
+def _command_base_session(draft: BuilderVisualDraftEnvelope) -> JsonDocument:
+    """The session a command edits: the accepted one, or the skeleton a new draft
+    starts from, which its first segment gesture completes."""
+    if draft.applied_session is not None:
+        return draft.applied_session
+    # The envelope guarantees a draft with no accepted session holds a skeleton.
+    return cast(JsonDocument, load_configuration_yaml(draft.session_yaml))
 
 
 def _accepted_draft(
@@ -2720,22 +1513,12 @@ def _accepted_draft(
     Proposals the session does not reach are dropped. The allocation history
     gains the ids the session holds and never loses one.
     """
-    reachable_proposals, catalog_facts = _reachable_projection_inputs(
-        session,
-        proposals,
-        snapshot,
-    )
+    reachable_proposals = _reachable_proposals(session, proposals, snapshot)
     accepted_session = cast(
         JsonDocument,
         session.model_dump(mode="json", by_alias=True, exclude_none=True),
     )
     next_revision = draft.draft_revision + 1
-    workspace = _workspace_from_applied_session(
-        session,
-        proposals=reachable_proposals,
-        catalog_facts=catalog_facts,
-        prior_workspace=draft.applied_workspace,
-    )
     reserved_authoring_ids = tuple(
         dict.fromkeys(
             (
@@ -2748,12 +1531,9 @@ def _accepted_draft(
     return draft.model_copy(
         update={
             "draft_revision": next_revision,
-            "projection_status": "applied",
             "catalog_documents": reachable_proposals,
             "reserved_authoring_ids": reserved_authoring_ids,
             "session_yaml": canonical.yaml_bytes.decode("utf-8"),
-            "authoring_workspace": workspace,
-            "applied_workspace": workspace,
             "applied_revision": next_revision,
             "applied_session": accepted_session,
             "control_tree": _applied_control_tree(session, next_revision),
@@ -2763,34 +1543,26 @@ def _accepted_draft(
 
 def _compile_visual_application(
     visual_draft: BuilderVisualDraftEnvelope,
-    session: JsonDocument,
-    proposals: tuple[BuilderProposedCatalogDocument, ...],
-    assembly_issues: tuple[BuilderIssue, ...],
     snapshot: CatalogReadSnapshot,
     *,
     available_node_count: int,
     preview_factory: PreviewFactory | None,
 ) -> BuilderVisualDraftAssemblyResult:
-    assembled = BuilderDraftEnvelope(
-        draft_revision=visual_draft.draft_revision,
-        state={"session": session, "catalog_documents": proposals},
-    )
-    compile_request = BuilderCompileRequest(
-        draft=assembled,
-        target_ref=visual_draft.target_ref,
-    )
+    """Compile a draft's accepted session, or a new draft's skeleton, and list its objects."""
     compile_result = compile_builder_draft(
-        compile_request,
+        BuilderCompileRequest(
+            draft=BuilderDraftEnvelope(
+                draft_revision=visual_draft.draft_revision,
+                state={
+                    "session": _command_base_session(visual_draft),
+                    "catalog_documents": visual_draft.catalog_documents,
+                },
+            ),
+            target_ref=visual_draft.target_ref,
+        ),
         snapshot,
         available_node_count=available_node_count,
         preview_factory=preview_factory,
-    )
-    compile_result = _merge_assembly_issues(compile_result, assembly_issues)
-    assembled = compile_result.draft
-    save_request = BuilderSessionSaveRequest(
-        draft=assembled,
-        target_ref=visual_draft.target_ref,
-        expected_session_revision=visual_draft.expected_session_revision,
     )
     listing = (
         None
@@ -2801,11 +1573,8 @@ def _compile_visual_application(
     )
     return BuilderVisualDraftAssemblyResult(
         visual_draft=visual_draft,
-        assembled_draft=assembled,
-        save_request=save_request,
         compile_result=compile_result,
         listing=listing,
-        assembly_issues=assembly_issues,
     )
 
 
@@ -2848,12 +1617,6 @@ class BuilderVisualDraftService:
                 ref=target_ref,
             )
         now = self._clock().astimezone(UTC).replace(second=0, microsecond=0)
-        workspace = BuilderVisualWorkspace(
-            session_name=name,
-            display_name=request.display_name,
-            description=request.description,
-            start_time=now.isoformat().replace("+00:00", "Z"),
-        )
         session_yaml = yaml.safe_dump(
             {
                 "session": {
@@ -2871,21 +1634,19 @@ class BuilderVisualDraftService:
                 },
                 "segments": [],
                 "time": {
-                    "start_time": workspace.start_time,
-                    "step_seconds": workspace.step_seconds,
-                    "compression": workspace.compression,
+                    "start_time": now.isoformat().replace("+00:00", "Z"),
+                    "step_seconds": 1.0,
+                    "compression": 1.0,
                 },
             },
             sort_keys=False,
         )
         return BuilderVisualDraftEnvelope(
             draft_revision=0,
-            projection_status="incomplete_authoring",
             target_ref=target_ref,
             session_name_is_placeholder=session_name_is_placeholder,
             reserved_authoring_ids=(),
             session_yaml=session_yaml,
-            authoring_workspace=workspace,
         )
 
     def open(self, request: BuilderVisualDraftOpenRequest) -> BuilderVisualDraftEnvelope:
@@ -2931,14 +1692,8 @@ class BuilderVisualDraftService:
             JsonDocument,
             applied_model.model_dump(mode="json", by_alias=True, exclude_none=True),
         )
-        catalog_facts = _stored_catalog_facts(snapshot, source.content)
-        workspace = _workspace_from_applied_session(
-            applied_model,
-            catalog_facts=catalog_facts,
-        )
         return BuilderVisualDraftEnvelope(
             draft_revision=0,
-            projection_status="applied",
             target_ref=target_ref,
             source_ref=request.source_ref,
             expected_session_revision=expected_revision,
@@ -2946,8 +1701,6 @@ class BuilderVisualDraftService:
             session_name_is_placeholder=False,
             reserved_authoring_ids=_current_and_referenced_authoring_ids(applied_session),
             session_yaml=session_yaml,
-            authoring_workspace=workspace,
-            applied_workspace=workspace,
             applied_revision=0,
             applied_session=applied_session,
             control_tree=_applied_control_tree(applied_model, 0),
@@ -2988,19 +1741,12 @@ class BuilderVisualDraftService:
         canonical_yaml = application.canonical.yaml_bytes.decode("utf-8")
 
         snapshot = self._context.repository.snapshot(self._context.scope)
-        reachable_proposals, catalog_facts = _reachable_projection_inputs(
+        reachable_proposals = _reachable_proposals(
             applied_model,
             draft.catalog_documents,
             snapshot,
         )
         next_revision = draft.draft_revision + 1
-        prior_workspace = draft.applied_workspace or draft.authoring_workspace
-        workspace = _workspace_from_applied_session(
-            applied_model,
-            proposals=reachable_proposals,
-            catalog_facts=catalog_facts,
-            prior_workspace=prior_workspace,
-        )
         reserved_authoring_ids = tuple(
             dict.fromkeys(
                 (
@@ -3012,12 +1758,9 @@ class BuilderVisualDraftService:
         updated = draft.model_copy(
             update={
                 "draft_revision": next_revision,
-                "projection_status": "applied",
                 "catalog_documents": reachable_proposals,
                 "reserved_authoring_ids": reserved_authoring_ids,
                 "session_yaml": request.yaml_text,
-                "authoring_workspace": workspace,
-                "applied_workspace": workspace,
                 "applied_revision": next_revision,
                 "applied_session": applied_session,
                 "control_tree": _applied_control_tree(applied_model, next_revision),
@@ -3053,13 +1796,7 @@ class BuilderVisualDraftService:
                 expected_revision=request.expected_draft_revision,
                 current_revision=draft.draft_revision,
             )
-        if (
-            draft.projection_status != "applied"
-            or draft.applied_session is None
-            or draft.applied_workspace is None
-            or draft.applied_revision is None
-            or draft.authoring_workspace != draft.applied_workspace
-        ):
+        if draft.applied_session is None or draft.applied_revision is None:
             raise self._command_error(
                 draft,
                 "Graphical control mutations require a fully applied draft revision",
@@ -3124,7 +1861,7 @@ class BuilderVisualDraftService:
                 expected_revision=request.expected_draft_revision,
                 current_revision=draft.draft_revision,
             )
-        if draft.projection_status != "applied" or draft.applied_session is None:
+        if draft.applied_session is None:
             raise self._command_error(
                 draft,
                 "Pending edits require a fully applied draft revision",
@@ -3209,7 +1946,7 @@ class BuilderVisualDraftService:
                 expected_revision=request.expected_draft_revision,
                 current_revision=draft.draft_revision,
             )
-        if draft.projection_status != "applied" or draft.applied_session is None:
+        if draft.applied_session is None:
             raise self._command_error(
                 draft,
                 "Accepting a stored state requires a fully applied draft revision",
@@ -3249,9 +1986,6 @@ class BuilderVisualDraftService:
         updated = _accepted_draft(draft, session, proposals, snapshot)
         return _compile_visual_application(
             updated,
-            cast(JsonDocument, updated.applied_session),
-            updated.catalog_documents,
-            (),
             snapshot,
             available_node_count=available_node_count,
             preview_factory=preview_factory,
@@ -3341,39 +2075,6 @@ class BuilderVisualDraftService:
             return cast(list[JsonValue], edited["boundaries"])
         return edited
 
-    def apply_workspace(
-        self,
-        request: BuilderVisualDraftApplyWorkspaceRequest,
-        *,
-        available_node_count: int,
-        preview_factory: PreviewFactory | None = None,
-    ) -> BuilderVisualDraftAssemblyResult:
-        """Apply and compile one graphical workspace as a single fenced revision."""
-
-        if not isinstance(request, BuilderVisualDraftApplyWorkspaceRequest):
-            raise TypeError("request must be a BuilderVisualDraftApplyWorkspaceRequest")
-        draft = request.draft
-        _assert_visual_draft_ownership(draft)
-        if request.expected_draft_revision != draft.draft_revision:
-            raise self._command_error(
-                draft,
-                "Visual draft revision changed before the workspace was applied",
-                code="catalog_authoring.stale_revision",
-                expected_revision=request.expected_draft_revision,
-                current_revision=draft.draft_revision,
-            )
-        application = _apply_workspace_revision(draft, request.workspace)
-        snapshot = self._context.repository.snapshot(self._context.scope)
-        return _compile_visual_application(
-            application.draft,
-            application.session,
-            application.proposals,
-            application.assembly_issues,
-            snapshot,
-            available_node_count=available_node_count,
-            preview_factory=preview_factory,
-        )
-
     def retarget(
         self,
         request: BuilderVisualDraftRetargetRequest,
@@ -3414,11 +2115,10 @@ class BuilderVisualDraftService:
                 draft,
                 f"Session name {new_name!r} must be written as {_identifier(new_name)!r}",
             )
-        if draft.applied_session is None or draft.projection_status != "applied":
+        if draft.applied_session is None:
             raise self._command_error(
                 draft,
-                "Save under a new name copies the accepted session; apply or discard the "
-                "pending edits first",
+                "Save under a new name copies the accepted session; the draft holds none yet",
                 code="catalog_authoring.invalid_graph",
             )
 
@@ -3482,9 +2182,8 @@ class BuilderVisualDraftService:
                 BuilderProposedCatalogDocument(
                     ref=renames[proposal.ref],
                     origin=proposal.origin,
-                    document=_forked_document(
-                        view,
-                        proposal.ref,
+                    document=forked_document(
+                        *_catalog_object(view, proposal.ref),
                         renames[proposal.ref],
                         replacements=renames,
                     ),
@@ -3499,7 +2198,7 @@ class BuilderVisualDraftService:
                 f"Save under a new name needs every generated component to be valid: {error}",
                 code="catalog_authoring.invalid_graph",
             ) from error
-        session = _rewrite_catalog_references(session, renames)
+        session = rewrite_catalog_references(session, renames)
         applied_model = session.model_copy(
             update={
                 "session": session.session.model_copy(
@@ -3512,11 +2211,6 @@ class BuilderVisualDraftService:
             applied_model.model_dump(mode="json", by_alias=True, exclude_none=True),
         )
         next_revision = draft.draft_revision + 1
-        applied_workspace = _workspace_from_applied_session(
-            applied_model,
-            proposals=proposals,
-            prior_workspace=draft.authoring_workspace,
-        )
         canonical = canonicalize_persisted_configuration(request.target_ref, applied_session)
         retargeted = draft.model_copy(
             update={
@@ -3526,8 +2220,6 @@ class BuilderVisualDraftService:
                 "draft_revision": next_revision,
                 "catalog_documents": proposals,
                 "session_yaml": canonical.yaml_bytes.decode("utf-8"),
-                "authoring_workspace": applied_workspace,
-                "applied_workspace": applied_workspace,
                 "applied_revision": next_revision,
                 "applied_session": applied_session,
                 "control_tree": _applied_control_tree(applied_model, next_revision),
@@ -3535,9 +2227,6 @@ class BuilderVisualDraftService:
         )
         return _compile_visual_application(
             retargeted,
-            applied_session,
-            proposals,
-            (),
             snapshot,
             available_node_count=available_node_count,
             preview_factory=preview_factory,
@@ -3676,65 +2365,6 @@ class BuilderVisualDraftService:
                 )
         return installed, boresights
 
-    def _new_ground_draft(
-        self,
-        draft: BuilderVisualDraftEnvelope,
-        snapshot: CatalogReadSnapshot,
-        reserved: set[str],
-        *,
-        node_ref: CatalogRef | None = None,
-        installed_counts: dict[str, int] | None = None,
-        authored_boresights: dict[str, BuilderVisualGroundBoresight] | None = None,
-        body_ref: BodyRef | None = None,
-    ) -> BuilderVisualGroundDraft:
-        number = _next_number("ground", reserved)
-        segment_id = f"ground-{number}"
-        selected_node_ref = self._node_ref_for_command(
-            draft,
-            snapshot,
-            node_ref,
-            placement="ground",
-        )
-        installed, boresights = self._ground_installation_facts(
-            draft,
-            snapshot,
-            selected_node_ref,
-            installed_counts=installed_counts,
-            authored_boresights=authored_boresights,
-        )
-        return BuilderVisualGroundDraft(
-            segment_id=segment_id,
-            display_name=f"Ground segment {number}",
-            stamp=BuilderVisualGroundStamp(
-                node_ref=selected_node_ref,
-                installed=installed,
-                boresights=boresights,
-                body=body_ref or DEFAULT_BODY_REF,
-            ),
-            scheduling=scheduling_preset_block(DEFAULT_SCHEDULING_PRESET),
-        )
-
-    def _assert_terminal_ref(
-        self,
-        draft: BuilderVisualDraftEnvelope,
-        snapshot: CatalogReadSnapshot,
-        terminal_ref: CatalogRef,
-    ) -> None:
-        try:
-            model = self._catalog_model_for_draft(draft, snapshot, terminal_ref)
-        except (CatalogNotFoundError, TypeError, ValueError) as error:
-            raise self._command_error(
-                draft,
-                f"Terminal reference {terminal_ref} is invalid: {error}",
-                code="catalog_authoring.invalid_graph",
-            ) from error
-        if not isinstance(model, Terminal):
-            raise self._command_error(
-                draft,
-                f"Terminal reference {terminal_ref} does not resolve to a terminal component",
-                code="catalog_authoring.invalid_graph",
-            )
-
     def _preview_for_command(
         self,
         draft: BuilderVisualDraftEnvelope,
@@ -3801,14 +2431,10 @@ class BuilderVisualDraftService:
         """
 
         draft = request.draft
-        if (
-            draft.projection_status != "applied"
-            or draft.applied_session is None
-            or draft.authoring_workspace != draft.applied_workspace
-        ):
+        if draft.applied_session is None:
             raise self._command_error(
                 draft,
-                "Link rule and routing commands require a fully applied draft revision",
+                "Link rule and routing commands require an accepted session",
                 code="catalog_authoring.invalid_graph",
             )
         session = SegmentSessionConfig.model_validate(draft.applied_session)
@@ -4087,70 +2713,17 @@ class BuilderVisualDraftService:
             notice = _physics_notice(physics)
 
         edit = BuilderContentEdit(kind="content", address=address, base=base, working=working)
-        edit_applied = apply_pending_edits(
-            draft.applied_session,
+        return self._accepted_command_result(
+            draft,
+            command,
             (edit,),
-            proposals=draft.catalog_documents,
-            source_ref=str(draft.target_ref),
-        )
-        candidate, (outcome,) = edit_applied.session, edit_applied.outcomes
-        if issues or outcome.status != "applied":
-            return BuilderVisualDraftCommandResult(
-                operation=command.operation,
-                base_draft_revision=draft.draft_revision,
-                draft=draft,
-                affected_kind=affected_kind,
-                affected_id=affected_id,
-                notice=notice,
-                created_edits=(edit,),
-            )
-        try:
-            _wrapper, validated = validate_referenced_configuration_document(
-                draft.target_ref,
-                candidate,
-            )
-        except (ValidationError, TypeError, ValueError) as error:
-            raise self._command_error(
-                draft,
-                f"The {command.operation} command does not produce a valid session: {error}",
-                code="catalog_authoring.invalid_graph",
-            ) from error
-        accepted = _accepted_draft(
-            draft,
-            cast(SegmentSessionConfig, validated),
-            draft.catalog_documents,
-            snapshot,
-        )
-        # A command never takes a complete draft to an incomplete one: when the
-        # draft resolved and could be saved, and would not with this object (a
-        # ground station with no stated floor, a boundary inside one domain), the
-        # object is held as a pending edit for the user to complete. A draft that
-        # was already incomplete is accepted, so a repair is never refused.
-        if self._is_complete(
-            draft,
-            available_node_count=available_node_count,
-            preview_factory=preview_factory,
-        ) and not self._is_complete(
-            accepted,
-            available_node_count=available_node_count,
-            preview_factory=preview_factory,
-        ):
-            return BuilderVisualDraftCommandResult(
-                operation=command.operation,
-                base_draft_revision=draft.draft_revision,
-                draft=draft,
-                affected_kind=affected_kind,
-                affected_id=affected_id,
-                notice=notice,
-                created_edits=(edit,),
-            )
-        return BuilderVisualDraftCommandResult(
-            operation=command.operation,
-            base_draft_revision=draft.draft_revision,
-            draft=accepted,
             affected_kind=affected_kind,
             affected_id=affected_id,
             notice=notice,
+            issues=tuple(issues),
+            snapshot=snapshot,
+            available_node_count=available_node_count,
+            preview_factory=preview_factory,
         )
 
     def _is_complete(
@@ -4187,15 +2760,8 @@ class BuilderVisualDraftService:
                 expected_revision=request.expected_draft_revision,
                 current_revision=draft.draft_revision,
             )
-        if draft.authoring_workspace is None:
-            raise self._command_error(
-                draft,
-                "Typed visual commands require an authoring workspace",
-            )
-
         snapshot = self._context.repository.snapshot(self._context.scope)
-        workspace = draft.authoring_workspace
-        # Every id the draft and the pending edits hold, before the gesture changes the twin.
+        # Every id the draft and the pending edits hold, before the gesture changes them.
         reserved = _reserved_authoring_ids(draft, request.pending_edits)
         command = request.command
         if isinstance(
@@ -4213,10 +2779,132 @@ class BuilderVisualDraftService:
                 available_node_count=available_node_count,
                 preview_factory=preview_factory,
             )
-        affected_kind: Literal["space", "ground", "ground_member"]
-        affected_id: str
-        notice: str | None = None
-        scheduling_preset = None
+        edits, affected_kind, affected_id, notice, scheduling_preset = self._segment_command_edits(
+            draft, command, reserved, snapshot
+        )
+        return self._accepted_command_result(
+            draft,
+            command,
+            edits,
+            affected_kind=affected_kind,
+            affected_id=affected_id,
+            notice=notice,
+            scheduling_preset=scheduling_preset,
+            snapshot=snapshot,
+            available_node_count=available_node_count,
+            preview_factory=preview_factory,
+        )
+
+    def _segment_command_edits(
+        self,
+        draft: BuilderVisualDraftEnvelope,
+        command: BuilderVisualDraftCommand,
+        reserved: set[str],
+        snapshot: CatalogReadSnapshot,
+    ) -> tuple[
+        tuple[BuilderContentEdit, ...],
+        Literal["space", "ground", "ground_member"],
+        str,
+        str | None,
+        BuilderVisualSchedulingPreset | None,
+    ]:
+        """The pending edits one segment command makes of the accepted session and
+        its proposed documents: new or changed segments, constellations, orbits,
+        site sets and sites."""
+        session = _command_base_session(draft)
+        session_name = draft.target_ref.relative_path.stem
+        owner = _proposal_owner(draft.target_ref)
+        proposals = {proposal.ref: proposal for proposal in draft.catalog_documents}
+        occupied: set[CatalogRef] = set(proposals)
+
+        def mint(family: str, stem: str) -> CatalogRef:
+            ref = _mint_component_ref(
+                family, owner, stem, taken=lambda ref: _ref_taken(ref, snapshot, occupied)
+            )
+            occupied.add(ref)
+            return ref
+
+        def proposal_edit(ref: CatalogRef, document: JsonDocument) -> BuilderContentEdit:
+            current = proposals.get(ref)
+            return BuilderContentEdit(
+                kind="content",
+                address=BuilderProposalAddress(kind="proposal", ref=ref),
+                base=current.document if current is not None else None,
+                working=document,
+            )
+
+        segments = cast(list[JsonDocument], session.get("segments", []))
+
+        def segment_at(segment_id: str) -> JsonDocument:
+            matches = [segment for segment in segments if segment.get("id") == segment_id]
+            if len(matches) != 1:
+                raise self._command_error(
+                    draft,
+                    f"Segment {segment_id!r} was not found exactly once",
+                    code="catalog_authoring.invalid_graph",
+                )
+            return matches[0]
+
+        def segment_edit(segment: JsonDocument, *, new: bool) -> BuilderContentEdit:
+            segment_id = cast(str, segment["id"])
+            return BuilderContentEdit(
+                kind="content",
+                address=BuilderMemberAddress(
+                    kind="member", list_pointer="/segments", id=segment_id
+                ),
+                base=None if new else segment_at(segment_id),
+                working=segment,
+            )
+
+        def proposed_document(ref: CatalogRef, family_noun: str) -> JsonDocument:
+            current = proposals.get(ref)
+            if current is None:
+                raise self._command_error(
+                    draft,
+                    f"{ref} is not this session's own {family_noun}; customize it first",
+                    code="catalog_authoring.invalid_graph",
+                )
+            return deepcopy(current.document)
+
+        def new_ground(site_refs: list[CatalogRef]) -> tuple[BuilderContentEdit, ...]:
+            number = _next_number("ground", reserved)
+            segment_id = f"ground-{number}"
+            site_set_ref = mint("site-sets", _segment_component_id(session_name, segment_id))
+            display_name = f"Ground segment {number}"
+            return (
+                proposal_edit(
+                    site_set_ref,
+                    {
+                        "site_set": {
+                            "id": site_set_ref.relative_path.stem,
+                            "display_name": display_name,
+                            "sites": [str(ref) for ref in site_refs],
+                        }
+                    },
+                ),
+                segment_edit(
+                    {
+                        "id": segment_id,
+                        "display_name": display_name,
+                        "placement": {"from_site_set": str(site_set_ref)},
+                        "apply": {"scheduling": scheduling_preset_block(DEFAULT_SCHEDULING_PRESET)},
+                    },
+                    new=True,
+                ),
+            )
+
+        def site_set_of(segment_id: str) -> tuple[CatalogRef, JsonDocument]:
+            segment = segment_at(segment_id)
+            placement = segment.get("placement")
+            if not isinstance(placement, dict):
+                raise self._command_error(
+                    draft,
+                    f"Segment {segment_id!r} is not a ground segment",
+                    code="catalog_authoring.invalid_graph",
+                )
+            ref = CatalogRef(cast(str, placement["from_site_set"]))
+            return ref, proposed_document(ref, "site set")
+
         if isinstance(command, BuilderVisualPlaceSpaceReferenceCommand):
             try:
                 model = self._catalog_model_for_draft(draft, snapshot, command.source_ref)
@@ -4233,19 +2921,10 @@ class BuilderVisualDraftService:
                     "constellation or space-node-set component",
                     code="catalog_authoring.invalid_graph",
                 )
-            number = _next_number("space", reserved)
-            segment_id = f"space-{number}"
-            space_reference = BuilderVisualSpaceReference(
-                segment_id=segment_id,
-                source_ref=command.source_ref,
-                label=_catalog_label(model),
-            )
-            workspace = workspace.model_copy(
-                update={"space_refs": (*workspace.space_refs, space_reference)}
-            )
-            affected_kind = "space"
-            affected_id = segment_id
-        elif isinstance(command, BuilderVisualPlaceGroundReferenceCommand):
+            segment_id = f"space-{_next_number('space', reserved)}"
+            edit = segment_edit({"id": segment_id, "source": str(command.source_ref)}, new=True)
+            return (edit,), "space", segment_id, None, None
+        if isinstance(command, BuilderVisualPlaceGroundReferenceCommand):
             try:
                 model = self._catalog_model_for_draft(draft, snapshot, command.site_set_ref)
             except (CatalogNotFoundError, TypeError, ValueError) as error:
@@ -4261,150 +2940,138 @@ class BuilderVisualDraftService:
                     "site-set component",
                     code="catalog_authoring.invalid_graph",
                 )
-            number = _next_number("ground", reserved)
-            segment_id = f"ground-{number}"
-            ground_reference = BuilderVisualGroundReference(
-                segment_id=segment_id,
-                site_set_ref=command.site_set_ref,
-                label=_catalog_label(model),
-                scheduling=scheduling_preset_block(DEFAULT_SCHEDULING_PRESET),
+            segment_id = f"ground-{_next_number('ground', reserved)}"
+            edit = segment_edit(
+                {
+                    "id": segment_id,
+                    "placement": {"from_site_set": str(command.site_set_ref)},
+                    "apply": {"scheduling": scheduling_preset_block(DEFAULT_SCHEDULING_PRESET)},
+                },
+                new=True,
             )
-            workspace = workspace.model_copy(
-                update={"ground_refs": (*workspace.ground_refs, ground_reference)}
-            )
-            affected_kind = "ground"
-            affected_id = segment_id
-            scheduling_preset = DEFAULT_SCHEDULING_PRESET
-        elif isinstance(command, BuilderVisualAddGeneratedSpaceCommand):
+            return (edit,), "ground", segment_id, None, DEFAULT_SCHEDULING_PRESET
+        if isinstance(command, BuilderVisualAddGeneratedSpaceCommand):
             number = _next_number("space", reserved)
             segment_id = f"space-{number}"
             node_ref = self._node_ref_for_command(
-                draft,
-                snapshot,
-                command.node_ref,
-                placement="space",
+                draft, snapshot, command.node_ref, placement="space"
             )
             single_plane = command.phasing_mode == SINGLE_PLANE_PHASING_MODE
-            walker_layout = (
+            layout = (
                 None
                 if single_plane
                 else derive_walker_layout(
                     BuilderVisualWalkerLayoutRequest(
-                        pattern=cast(
-                            Literal["walker_delta", "walker_star"],
-                            command.phasing_mode,
-                        ),
+                        pattern=cast(Literal["walker_delta", "walker_star"], command.phasing_mode),
                         planes=3,
                         slots_per_plane=8,
                     )
                 )
             )
-            space = BuilderVisualSpaceDraft(
-                segment_id=segment_id,
-                display_name=f"Constellation {number}",
-                node_ref=node_ref,
-                orbit=BuilderVisualOrbit(
-                    central_body=DEFAULT_BODY_REF,
-                    shape_kind="circular",
-                    altitude_km=550,
-                    perigee_altitude_km=550,
-                    apogee_altitude_km=550,
-                    inclination_deg=53,
-                    raan_deg=0,
-                    argument_of_perigee_deg=0,
-                    mean_anomaly_deg=0,
-                    propagator="j2_mean_elements",
-                ),
-                planes=1 if single_plane else 3,
-                raan_spacing_deg=(360 if walker_layout is None else walker_layout.raan_spacing_deg),
-                slots_per_plane=8,
-                phasing_mode=command.phasing_mode,
-                phase_offset_deg=(0 if walker_layout is None else walker_layout.phase_offset_deg),
+            orbit_ref = mint("orbits", f"{segment_id}-orbit")
+            constellation_ref = mint(
+                "constellations", _segment_component_id(session_name, segment_id)
             )
-            workspace = workspace.model_copy(update={"space": (*workspace.space, space)})
-            affected_kind = "space"
-            affected_id = segment_id
-        elif isinstance(command, BuilderVisualSetSpacePopulationCommand):
-            matches = [
-                (index, space)
-                for index, space in enumerate(workspace.space)
-                if space.segment_id == command.segment_id
-            ]
-            if len(matches) != 1:
-                raise self._command_error(
-                    draft,
-                    f"Authored space segment {command.segment_id!r} was not found exactly once",
-                    code="catalog_authoring.invalid_graph",
-                )
-            space_index, space = matches[0]
-            phasing_mode = command.phasing_mode or space.phasing_mode
-            planes = command.planes if command.planes is not None else space.planes
+            time = cast(JsonDocument, session.get("time", {}))
+            orbit: JsonDocument = {
+                "orbit": {
+                    "id": orbit_ref.relative_path.stem,
+                    "central_body": str(DEFAULT_BODY_REF),
+                    "epoch": cast(JsonValue, time.get("start_time")),
+                    "shape": {"altitude_km": 550},
+                    "orientation": {
+                        "inclination_deg": 53,
+                        "raan_deg": 0,
+                        "argument_of_perigee_deg": 0,
+                    },
+                    "phase": {"mean_anomaly_deg": 0},
+                    "propagator": "j2_mean_elements",
+                    "reference": "urn:nodalarc:session-builder-draft",
+                }
+            }
+            constellation: JsonDocument = {
+                "constellation": {
+                    "id": constellation_ref.relative_path.stem,
+                    "display_name": f"Constellation {number}",
+                    "node": str(node_ref),
+                    "orbit": str(orbit_ref),
+                    "planes": {
+                        "count": 1 if single_plane else 3,
+                        "raan_spacing_deg": 360 if layout is None else layout.raan_spacing_deg,
+                    },
+                    "slots_per_plane": 8,
+                    "phasing": {
+                        "mode": command.phasing_mode,
+                        "phase_offset_deg": 0 if layout is None else layout.phase_offset_deg,
+                    },
+                    "node_tags": [{"tag": "all"}],
+                }
+            }
+            return (
+                (
+                    proposal_edit(orbit_ref, orbit),
+                    proposal_edit(constellation_ref, constellation),
+                    segment_edit({"id": segment_id, "source": str(constellation_ref)}, new=True),
+                ),
+                "space",
+                segment_id,
+                None,
+                None,
+            )
+        if isinstance(command, BuilderVisualSetSpacePopulationCommand):
+            segment = segment_at(command.segment_id)
+            source_ref = CatalogRef(cast(str, segment.get("source")))
+            document = proposed_document(source_ref, "constellation")
+            body = cast(JsonDocument, document["constellation"])
+            planes_block = cast(JsonDocument, body.get("planes", {}))
+            phasing_block = cast(JsonDocument, body.get("phasing", {}))
+            phasing_mode = command.phasing_mode or cast(
+                BuilderVisualPhasingMode, phasing_block.get("mode")
+            )
+            planes = command.planes if command.planes is not None else planes_block.get("count")
             slots_per_plane = (
                 command.slots_per_plane
                 if command.slots_per_plane is not None
-                else space.slots_per_plane
+                else body.get("slots_per_plane")
             )
             if command.phasing_mode is not None:
                 if phasing_mode == SINGLE_PLANE_PHASING_MODE:
                     planes = 1
-                elif planes is not None:
+                elif isinstance(planes, int):
                     planes = max(2, planes)
             elif command.planes is not None:
                 if planes == 1:
                     phasing_mode = SINGLE_PLANE_PHASING_MODE
                 elif phasing_mode == SINGLE_PLANE_PHASING_MODE:
                     phasing_mode = DEFAULT_PHASING_MODE
-
-            single_plane = phasing_mode == SINGLE_PLANE_PHASING_MODE
-            raan_spacing_deg: float | None
-            phase_offset_deg: float | None
-            if planes is None or slots_per_plane is None:
-                raan_spacing_deg = None
-                phase_offset_deg = None
-            elif single_plane:
-                raan_spacing_deg = 360
-                phase_offset_deg = 0
+            if not isinstance(planes, int) or not isinstance(slots_per_plane, int):
+                raise self._command_error(
+                    draft,
+                    f"Constellation {source_ref} states no plane or slot count to derive from",
+                    code="catalog_authoring.invalid_graph",
+                )
+            if phasing_mode == SINGLE_PLANE_PHASING_MODE:
+                raan_spacing_deg: float = 360
+                phase_offset_deg: float = 0
             else:
-                walker_layout = derive_walker_layout(
+                layout = derive_walker_layout(
                     BuilderVisualWalkerLayoutRequest(
-                        pattern=cast(
-                            Literal["walker_delta", "walker_star"],
-                            phasing_mode,
-                        ),
+                        pattern=cast(Literal["walker_delta", "walker_star"], phasing_mode),
                         planes=planes,
                         slots_per_plane=slots_per_plane,
                     )
                 )
-                raan_spacing_deg = walker_layout.raan_spacing_deg
-                phase_offset_deg = walker_layout.phase_offset_deg
-            spaces = list(workspace.space)
-            spaces[space_index] = space.model_copy(
-                update={
-                    "phasing_mode": phasing_mode,
-                    "planes": planes,
-                    "slots_per_plane": slots_per_plane,
-                    "raan_spacing_deg": raan_spacing_deg,
-                    "phase_offset_deg": phase_offset_deg,
-                }
-            )
-            workspace = workspace.model_copy(update={"space": tuple(spaces)})
-            affected_kind = "space"
-            affected_id = command.segment_id
-        elif isinstance(command, BuilderVisualAddGroundCommand):
-            ground = self._new_ground_draft(
-                draft,
-                snapshot,
-                reserved,
-                node_ref=command.node_ref,
-                installed_counts=command.installed,
-                authored_boresights=command.boresights,
-                body_ref=command.body_ref,
-            )
-            workspace = workspace.model_copy(update={"ground": (*workspace.ground, ground)})
-            affected_kind = "ground"
-            affected_id = ground.segment_id
-            scheduling_preset = DEFAULT_SCHEDULING_PRESET
-        elif isinstance(command, BuilderVisualAddGroundSiteReferenceCommand):
+                raan_spacing_deg = layout.raan_spacing_deg
+                phase_offset_deg = layout.phase_offset_deg
+            body["planes"] = {**planes_block, "count": planes, "raan_spacing_deg": raan_spacing_deg}
+            body["slots_per_plane"] = slots_per_plane
+            body["phasing"] = {
+                **phasing_block,
+                "mode": phasing_mode,
+                "phase_offset_deg": phase_offset_deg,
+            }
+            return (proposal_edit(source_ref, document),), "space", command.segment_id, None, None
+        if isinstance(command, BuilderVisualAddGroundSiteReferenceCommand):
             try:
                 model = self._catalog_model_for_draft(draft, snapshot, command.site_ref)
             except (CatalogNotFoundError, TypeError, ValueError) as error:
@@ -4420,245 +3087,198 @@ class BuilderVisualDraftService:
                     code="catalog_authoring.invalid_graph",
                 )
             if command.segment_id is None:
-                ground = self._new_ground_draft(draft, snapshot, reserved)
-                workspace = workspace.model_copy(update={"ground": (*workspace.ground, ground)})
-                ground_index = len(workspace.ground) - 1
-                scheduling_preset = DEFAULT_SCHEDULING_PRESET
-            else:
-                matches = [
-                    (index, ground)
-                    for index, ground in enumerate(workspace.ground)
-                    if ground.segment_id == command.segment_id
-                ]
-                if len(matches) != 1:
-                    raise self._command_error(
-                        draft,
-                        f"Authored ground segment {command.segment_id!r} was not found exactly once",
-                        code="catalog_authoring.invalid_graph",
-                    )
-                ground_index, ground = matches[0]
-            if any(
-                member.ref == command.site_ref or member.site_id == model.id
-                for member in ground.members
-            ):
+                ground_edits = new_ground([CatalogRef(command.site_ref)])
+                segment_id = cast(BuilderMemberAddress, ground_edits[1].address).id
+                return ground_edits, "ground", segment_id, None, DEFAULT_SCHEDULING_PRESET
+            site_set_ref, document = site_set_of(command.segment_id)
+            sites = cast(list[str], document["site_set"]["sites"])
+            if str(command.site_ref) in sites:
                 raise self._command_error(
                     draft,
                     f"Site {model.id!r} is already placed in {command.segment_id!r}",
                     code="catalog_authoring.invalid_graph",
                 )
-            member_ids = {
-                member.member_id for candidate in workspace.ground for member in candidate.members
-            }
-            member_number = _next_number("member", member_ids)
-            member_id = f"member-{member_number}"
-            member = BuilderVisualGroundMember(
-                member_id=member_id,
-                kind="ref",
-                ref=command.site_ref,
-                site_id=model.id,
-                label=_catalog_label(model),
-                summary=_site_summary(model),
+            sites.append(str(command.site_ref))
+            return (
+                (proposal_edit(site_set_ref, document),),
+                "ground",
+                command.segment_id,
+                None,
+                None,
             )
-            grounds = list(workspace.ground)
-            grounds[ground_index] = ground.model_copy(update={"members": (*ground.members, member)})
-            workspace = workspace.model_copy(update={"ground": tuple(grounds)})
-            affected_kind = "ground_member"
-            affected_id = member_id
-        elif isinstance(command, BuilderVisualSetGroundStampNodeCommand):
-            matches = [
-                (index, ground)
-                for index, ground in enumerate(workspace.ground)
-                if ground.segment_id == command.segment_id
-            ]
-            if len(matches) != 1:
-                raise self._command_error(
-                    draft,
-                    f"Authored ground segment {command.segment_id!r} was not found exactly once",
-                    code="catalog_authoring.invalid_graph",
-                )
-            ground_index, ground = matches[0]
-            node_ref = self._node_ref_for_command(
-                draft,
-                snapshot,
-                command.node_ref,
-                placement="ground",
-            )
+        if isinstance(command, BuilderVisualMintGroundMembersCommand):
             installed, boresights = self._ground_installation_facts(
                 draft,
                 snapshot,
-                node_ref,
+                command.node_ref,
+                installed_counts=command.installed or None,
+                authored_boresights=command.boresights or None,
             )
-            grounds = list(workspace.ground)
-            grounds[ground_index] = ground.model_copy(
-                update={
-                    "stamp": ground.stamp.model_copy(
-                        update={
-                            "node_ref": node_ref,
-                            "installed": installed,
-                            "boresights": boresights,
-                        }
-                    )
-                }
-            )
-            workspace = workspace.model_copy(update={"ground": tuple(grounds)})
-            affected_kind = "ground"
-            affected_id = command.segment_id
-        elif isinstance(command, BuilderVisualMintGroundMembersCommand):
-            matches = [
-                (index, ground)
-                for index, ground in enumerate(workspace.ground)
-                if ground.segment_id == command.segment_id
-            ]
-            if len(matches) != 1:
-                raise self._command_error(
-                    draft,
-                    f"Authored ground segment {command.segment_id!r} was not found exactly once",
-                    code="catalog_authoring.invalid_graph",
-                )
-            ground_index, ground = matches[0]
-            if ground.stamp.node_ref is None or ground.stamp.body is None:
-                raise self._command_error(
-                    draft,
-                    "Ground stamp requires a node model and body before sites can be minted",
-                    code="catalog_authoring.invalid_graph",
-                )
-
-            member_ids = {
-                member.member_id for candidate in workspace.ground for member in candidate.members
-            }
-            site_ids = {
-                member.site_id for candidate in workspace.ground for member in candidate.members
-            }
-            # Each minted site is a complete document the session proposes; its
-            # member lists it by reference, and the site is edited as that document.
-            owner = _proposal_owner(draft.target_ref)
-            minted: list[BuilderVisualGroundMember] = []
-            minted_sites: list[BuilderProposedCatalogDocument] = []
+            site_edits: list[BuilderContentEdit] = []
+            site_refs: list[CatalogRef] = []
             for site_intent in command.sites:
-                member_number = _next_number("member", member_ids)
-                member_id = f"member-{member_number}"
-                member_ids.add(member_id)
-                site_number = _next_number("site", site_ids)
-                site_id = f"site-{site_number}"
-                site_ids.add(site_id)
-                site_ref = SiteRef(str(_owned_component_ref("sites", owner, site_id)))
-                minted_sites.append(
-                    BuilderProposedCatalogDocument(
-                        ref=site_ref,
-                        document=_minted_site(
-                            site_id,
+                site_ref = mint(
+                    "sites",
+                    f"site-{_next_number('site', {ref.relative_path.stem for ref in occupied})}",
+                )
+                site_refs.append(site_ref)
+                site_edits.append(
+                    proposal_edit(
+                        site_ref,
+                        _minted_site(
+                            site_ref.relative_path.stem,
                             display_name=site_intent.name,
-                            stamp=ground.stamp,
+                            node_ref=command.node_ref,
+                            installed=installed,
+                            boresights=boresights,
+                            body_ref=command.body_ref,
                             lat_deg=site_intent.lat_deg,
                             lon_deg=site_intent.lon_deg,
                             alt_m=site_intent.alt_m,
                         ),
-                        origin="generated",
                     )
                 )
-                minted.append(
-                    BuilderVisualGroundMember(
-                        member_id=member_id,
-                        kind="draft",
-                        ref=site_ref,
-                        site_id=site_id,
-                        label=site_intent.name,
-                    )
+            notice = f"minted {len(site_refs)} site{'s' if len(site_refs) != 1 else ''}"
+            if command.segment_id is None:
+                ground_edits = new_ground(site_refs)
+                segment_id = cast(BuilderMemberAddress, ground_edits[1].address).id
+                return (
+                    (*site_edits, *ground_edits),
+                    "ground",
+                    segment_id,
+                    notice,
+                    DEFAULT_SCHEDULING_PRESET,
                 )
-            draft = draft.model_copy(
-                update={"catalog_documents": (*draft.catalog_documents, *minted_sites)}
+            site_set_ref, document = site_set_of(command.segment_id)
+            cast(list[str], document["site_set"]["sites"]).extend(str(ref) for ref in site_refs)
+            return (
+                (*site_edits, proposal_edit(site_set_ref, document)),
+                "ground",
+                command.segment_id,
+                notice,
+                None,
             )
-            grounds = list(workspace.ground)
-            grounds[ground_index] = ground.model_copy(
-                update={"members": (*ground.members, *minted)}
-            )
-            workspace = workspace.model_copy(update={"ground": tuple(grounds)})
-            affected_kind = "ground"
-            affected_id = command.segment_id
-            notice = f"minted {len(minted)} site{'s' if len(minted) != 1 else ''}"
-        elif isinstance(command, BuilderVisualSetSchedulingPresetCommand):
-            scheduling_preset = command.preset
-            ground_matches = [
-                ("draft", index)
-                for index, item in enumerate(workspace.ground)
-                if item.segment_id == command.segment_id
-            ]
-            ground_matches.extend(
-                ("ref", index)
-                for index, item in enumerate(workspace.ground_refs)
-                if item.segment_id == command.segment_id
-            )
-            if len(ground_matches) != 1:
+        if isinstance(command, BuilderVisualSetSchedulingPresetCommand):
+            segment = deepcopy(segment_at(command.segment_id))
+            if not isinstance(segment.get("placement"), dict):
                 raise self._command_error(
                     draft,
-                    f"Ground segment {command.segment_id!r} was not found exactly once",
+                    f"Segment {command.segment_id!r} is not a ground segment",
                     code="catalog_authoring.invalid_graph",
                 )
-            kind, index = ground_matches[0]
-            if command.member_id is not None:
-                if kind != "draft":
-                    raise self._command_error(
-                        draft,
-                        "Only an authored ground segment exposes editable member scheduling",
-                    )
-                grounds = list(workspace.ground)
-                ground = grounds[index]
-                member_matches = [
-                    (member_index, member)
-                    for member_index, member in enumerate(ground.members)
-                    if member.member_id == command.member_id
-                ]
-                if len(member_matches) != 1:
-                    raise self._command_error(
-                        draft,
-                        f"Ground member {command.member_id!r} was not found exactly once",
-                        code="catalog_authoring.invalid_graph",
-                    )
-                member_index, member = member_matches[0]
-                members = list(ground.members)
-                members[member_index] = member.model_copy(
-                    update={
-                        "scheduling_override": (
-                            None
-                            if command.preset is None
-                            else scheduling_preset_block(command.preset)
-                        )
+            if command.site_id is None:
+                assert command.preset is not None
+                segment["apply"] = {
+                    **cast(JsonDocument, segment.get("apply") or {}),
+                    "scheduling": scheduling_preset_block(command.preset),
+                }
+                return (
+                    (segment_edit(segment, new=False),),
+                    "ground",
+                    command.segment_id,
+                    None,
+                    command.preset,
+                )
+            overrides = [
+                override
+                for override in cast(list[JsonDocument], segment.get("overrides") or [])
+                if cast(JsonDocument, override.get("match", {})).get("site") != command.site_id
+            ]
+            if command.preset is not None:
+                overrides.append(
+                    {
+                        "match": {"site": command.site_id},
+                        "scheduling": scheduling_preset_block(command.preset),
                     }
                 )
-                grounds[index] = ground.model_copy(update={"members": tuple(members)})
-                workspace = workspace.model_copy(update={"ground": tuple(grounds)})
-                affected_kind = "ground_member"
-                affected_id = command.member_id
-            elif kind == "draft":
-                assert command.preset is not None
-                grounds = list(workspace.ground)
-                grounds[index] = grounds[index].model_copy(
-                    update={"scheduling": scheduling_preset_block(command.preset)}
-                )
-                workspace = workspace.model_copy(update={"ground": tuple(grounds)})
-                affected_kind = "ground"
-                affected_id = command.segment_id
+            if overrides:
+                segment["overrides"] = cast(JsonValue, overrides)
             else:
-                assert command.preset is not None
-                ground_refs = list(workspace.ground_refs)
-                ground_refs[index] = ground_refs[index].model_copy(
-                    update={"scheduling": scheduling_preset_block(command.preset)}
-                )
-                workspace = workspace.model_copy(update={"ground_refs": tuple(ground_refs)})
-                affected_kind = "ground"
-                affected_id = command.segment_id
-        else:
-            raise AssertionError(f"unhandled visual draft command: {type(command).__name__}")
+                segment.pop("overrides", None)
+            return (
+                (segment_edit(segment, new=False),),
+                "ground_member",
+                command.site_id,
+                None,
+                command.preset,
+            )
+        raise AssertionError(f"unhandled visual draft command: {type(command).__name__}")
 
-        updated = _apply_workspace_revision(draft, workspace).draft
+    def _accepted_command_result(
+        self,
+        draft: BuilderVisualDraftEnvelope,
+        command: BuilderVisualDraftCommand,
+        edits: tuple[BuilderContentEdit, ...],
+        *,
+        affected_kind: BuilderVisualDraftAffectedKind,
+        affected_id: str,
+        notice: str | None,
+        snapshot: CatalogReadSnapshot,
+        available_node_count: int,
+        preview_factory: PreviewFactory | None,
+        scheduling_preset: BuilderVisualSchedulingPreset | None = None,
+        issues: tuple[BuilderIssue, ...] = (),
+    ) -> BuilderVisualDraftCommandResult:
+        """A command's edits accepted as the next revision, or held as pending edits.
+
+        Edits that do not apply, or that would take a complete draft to an
+        incomplete one, are returned for the user to complete; the draft keeps its
+        revision. A draft that was already incomplete is accepted, so a repair is
+        never refused.
+        """
+        held = BuilderVisualDraftCommandResult(
+            operation=command.operation,
+            base_draft_revision=draft.draft_revision,
+            draft=draft,
+            affected_kind=affected_kind,
+            affected_id=affected_id,
+            notice=notice,
+            scheduling_preset=scheduling_preset,
+            created_edits=edits,
+        )
+        applied = apply_pending_edits(
+            _command_base_session(draft),
+            edits,
+            proposals=draft.catalog_documents,
+            source_ref=str(draft.target_ref),
+        )
+        if issues or any(outcome.status != "applied" for outcome in applied.outcomes):
+            return held
+        try:
+            _wrapper, validated = validate_referenced_configuration_document(
+                draft.target_ref,
+                applied.session,
+            )
+        except (ValidationError, TypeError, ValueError) as error:
+            raise self._command_error(
+                draft,
+                f"The {command.operation} command does not produce a valid session: {error}",
+                code="catalog_authoring.invalid_graph",
+            ) from error
+        accepted = _accepted_draft(
+            draft,
+            cast(SegmentSessionConfig, validated),
+            applied.proposals,
+            snapshot,
+        )
+        if self._is_complete(
+            draft,
+            available_node_count=available_node_count,
+            preview_factory=preview_factory,
+        ) and not self._is_complete(
+            accepted,
+            available_node_count=available_node_count,
+            preview_factory=preview_factory,
+        ):
+            return held
         return BuilderVisualDraftCommandResult(
             operation=command.operation,
             base_draft_revision=draft.draft_revision,
-            draft=updated,
+            draft=accepted,
             affected_kind=affected_kind,
             affected_id=affected_id,
-            scheduling_preset=scheduling_preset,
             notice=notice,
+            scheduling_preset=scheduling_preset,
         )
 
     def customize_chain(
@@ -4691,45 +3311,65 @@ class BuilderVisualDraftService:
                 ),
             )
 
-        if draft.authoring_workspace is None:
+        if draft.applied_session is None:
             return refuse(
                 "builder.draft.no_valid_projection",
-                "Catalog customization requires a valid applied graphical projection",
+                "Catalog customization requires an accepted session",
                 "session_yaml",
             )
-        matches: list[tuple[str, int, CatalogRef | None]] = []
-        matches.extend(
-            ("space", index, placed.source_ref)
-            for index, placed in enumerate(draft.authoring_workspace.space_refs)
-            if placed.segment_id == request.segment_id
-        )
-        matches.extend(
-            ("ground", index, placed.site_set_ref)
-            for index, placed in enumerate(draft.authoring_workspace.ground_refs)
-            if placed.segment_id == request.segment_id
-        )
-        # A generated constellation is the session's own; its catalog root is its node.
-        matches.extend(
-            ("generated_space", index, generated.node_ref)
-            for index, generated in enumerate(draft.authoring_workspace.space)
-            if generated.segment_id == request.segment_id
-        )
-        if len(matches) != 1:
+        session_json = draft.applied_session
+        segment_matches = [
+            segment
+            for segment in cast(list[JsonDocument], session_json.get("segments", []))
+            if segment.get("id") == request.segment_id
+        ]
+        if len(segment_matches) != 1:
             return refuse(
                 "builder.draft.customize_segment_not_unique",
                 f"Placed segment {request.segment_id!r} was not found exactly once",
                 "segment_id",
             )
-        kind, selected_index, selected_ref = matches[0]
-        if selected_ref is None:
+        segment = segment_matches[0]
+        placement = segment.get("placement")
+        selected_ref = (
+            cast(JsonDocument, placement).get("from_site_set")
+            if isinstance(placement, dict)
+            else segment.get("source")
+        )
+        if not isinstance(selected_ref, str):
             return refuse(
                 "builder.draft.customize_root_ref_required",
                 "The selected segment does not contain a catalog root reference",
                 "segment_id",
             )
+        proposed_root = next(
+            (item for item in draft.catalog_documents if item.ref == CatalogRef(selected_ref)),
+            None,
+        )
         root_ref = CatalogRef(selected_ref)
+        if any(item.ref == request.leaf_ref for item in draft.catalog_documents):
+            return refuse(
+                "builder.draft.customize_leaf_proposed",
+                f"{request.leaf_ref} is already this session's own document; edit it instead",
+                "leaf_ref",
+            )
         try:
-            paths = _dependency_paths(snapshot, root_ref, request.leaf_ref)
+            if proposed_root is None:
+                paths = _dependency_paths(snapshot, root_ref, request.leaf_ref)
+            else:
+                # The session's own document is the root; the forks start below it,
+                # at the catalog documents it references. The session's other
+                # documents are edited, not forked.
+                root_model = catalog_family_spec(
+                    cast(CatalogFamily, root_ref.family)
+                ).validate_document(proposed_root.document)
+                proposed_refs = {item.ref for item in draft.catalog_documents}
+                paths = tuple(
+                    path
+                    for dependency in catalog_document_references(root_model)
+                    if dependency not in proposed_refs
+                    for path in _dependency_paths(snapshot, dependency, request.leaf_ref)
+                )
         except (CatalogNotFoundError, TypeError, ValueError, yaml.YAMLError) as error:
             return refuse(
                 "builder.draft.customize_graph_invalid",
@@ -4794,9 +3434,8 @@ class BuilderVisualDraftService:
                     BuilderProposedCatalogDocument(
                         ref=target_ref,
                         origin="customized",
-                        document=_forked_document(
-                            snapshot,
-                            source_ref,
+                        document=forked_document(
+                            *_catalog_object(snapshot, source_ref),
                             target_ref,
                             replacements=replacements,
                         ),
@@ -4810,77 +3449,80 @@ class BuilderVisualDraftService:
             )
 
         root_target = targets[0]
-        if kind == "generated_space":
-            generated_spaces = list(draft.authoring_workspace.space)
-            generated_spaces[selected_index] = generated_spaces[selected_index].model_copy(
-                update={"node_ref": root_target}
+        if proposed_root is None:
+            # A catalog root: the segment is re-pointed at its fork.
+            key = "placement" if isinstance(placement, dict) else "source"
+            repointed: JsonDocument = (
+                {
+                    **segment,
+                    "placement": {
+                        **cast(JsonDocument, placement),
+                        "from_site_set": str(root_target),
+                    },
+                }
+                if key == "placement"
+                else {**segment, "source": str(root_target)}
             )
-            workspace = draft.authoring_workspace.model_copy(
-                update={"space": tuple(generated_spaces)}
-            )
-        elif kind == "space":
-            space_refs = list(draft.authoring_workspace.space_refs)
-            space_refs[selected_index] = space_refs[selected_index].model_copy(
-                update={"source_ref": root_target}
-            )
-            workspace = draft.authoring_workspace.model_copy(
-                update={"space_refs": tuple(space_refs)}
+            edits: tuple[BuilderContentEdit, ...] = (
+                BuilderContentEdit(
+                    kind="content",
+                    address=BuilderMemberAddress(
+                        kind="member", list_pointer="/segments", id=request.segment_id
+                    ),
+                    base=segment,
+                    working=repointed,
+                ),
             )
         else:
-            ground_refs = list(draft.authoring_workspace.ground_refs)
-            ground_refs[selected_index] = ground_refs[selected_index].model_copy(
-                update={"site_set_ref": root_target}
+            # The session's own root document references the fork in place of its source.
+            edits = (
+                BuilderContentEdit(
+                    kind="content",
+                    address=BuilderProposalAddress(kind="proposal", ref=root_ref),
+                    base=proposed_root.document,
+                    working={
+                        cast(
+                            str, catalog_family_spec(cast(CatalogFamily, root_ref.family)).wrapper
+                        ): cast(
+                            JsonDocument,
+                            rewrite_catalog_references(
+                                catalog_family_spec(
+                                    cast(CatalogFamily, root_ref.family)
+                                ).validate_document(proposed_root.document),
+                                {path[0]: root_target},
+                            ).model_dump(mode="json", by_alias=True, exclude_none=True),
+                        )
+                    },
+                ),
             )
-            workspace = draft.authoring_workspace.model_copy(
-                update={"ground_refs": tuple(ground_refs)}
+        # The forks join the proposals as the user's customizations; the edits
+        # point the segment or the session's own root at them.
+        applied = apply_pending_edits(
+            session_json,
+            edits,
+            proposals=(*draft.catalog_documents, *proposals),
+            source_ref=str(draft.target_ref),
+        )
+        if any(outcome.status != "applied" for outcome in applied.outcomes):
+            return refuse(
+                "builder.draft.customize_projection_invalid",
+                "; ".join(
+                    issue.message for outcome in applied.outcomes for issue in outcome.issues
+                ),
+                "segment_id",
             )
-        candidate = draft.model_copy(
-            update={
-                "authoring_workspace": workspace,
-                "catalog_documents": (*draft.catalog_documents, *proposals),
-            }
-        )
-        session, reachable_proposals, assembly_issues = _assemble_structured(
-            candidate,
-            allow_workspace_overlay=True,
-        )
         try:
-            applied_model = SegmentSessionConfig.model_validate(session)
-        except (TypeError, ValueError) as error:
+            _wrapper, validated = validate_referenced_configuration_document(
+                draft.target_ref, applied.session
+            )
+        except (ValidationError, TypeError, ValueError) as error:
             return refuse(
                 "builder.draft.customize_projection_invalid",
-                f"Customized graphical projection is not canonical: {error}",
-                "authoring_workspace",
+                f"The customized session is not valid: {error}",
+                "segment_id",
             )
-        if assembly_issues:
-            return refuse(
-                "builder.draft.customize_projection_invalid",
-                "; ".join(issue.message for issue in assembly_issues),
-                "authoring_workspace",
-            )
-        next_revision = draft.draft_revision + 1
-        applied_session = cast(
-            JsonDocument,
-            applied_model.model_dump(mode="json", by_alias=True, exclude_none=True),
-        )
-        applied_workspace = _workspace_from_applied_session(
-            applied_model,
-            proposals=reachable_proposals,
-            prior_workspace=workspace,
-        )
-        canonical = canonicalize_persisted_configuration(draft.target_ref, applied_session)
-        updated = candidate.model_copy(
-            update={
-                "draft_revision": next_revision,
-                "projection_status": "applied",
-                "session_yaml": canonical.yaml_bytes.decode("utf-8"),
-                "authoring_workspace": applied_workspace,
-                "applied_workspace": applied_workspace,
-                "applied_revision": next_revision,
-                "applied_session": applied_session,
-                "control_tree": _applied_control_tree(applied_model, next_revision),
-                "catalog_documents": reachable_proposals,
-            }
+        updated = _accepted_draft(
+            draft, cast(SegmentSessionConfig, validated), applied.proposals, snapshot
         )
         chain = tuple(
             BuilderVisualCustomizeChainEntry(source_ref=source_ref, target_ref=target_ref)
@@ -4889,7 +3531,9 @@ class BuilderVisualDraftService:
         return BuilderVisualCustomizeChainResult(
             applied=True,
             draft=updated,
-            root_source_ref=root_ref,
+            # The head of the forked chain: the placed root, or for a root the
+            # session proposes, the catalog document below it.
+            root_source_ref=path[0],
             root_target_ref=root_target,
             forked_chain=chain,
         )
@@ -4904,32 +3548,8 @@ class BuilderVisualDraftService:
         visual_draft = request.draft
         _assert_visual_draft_ownership(visual_draft)
         snapshot: CatalogReadSnapshot = self._context.repository.snapshot(self._context.scope)
-        if request.workspace is not None:
-            # The page's preview: the workspace is assembled over the draft the
-            # way the accepting apply assembles it, and nothing is accepted.
-            session, proposals, assembly_issues = _assemble_structured(
-                visual_draft.model_copy(update={"authoring_workspace": request.workspace}),
-                allow_workspace_overlay=True,
-            )
-        elif visual_draft.authoring_workspace is not None:
-            session, proposals, assembly_issues = _assemble_structured(visual_draft)
-        else:
-            assert visual_draft.projection_status == "no_valid_projection"
-            session = {}
-            proposals = ()
-            assembly_issues = (
-                _issue(
-                    "builder.draft.no_valid_projection",
-                    "Session YAML has no valid applied graphical projection",
-                    target_ref=visual_draft.target_ref,
-                    draft_path="session_yaml",
-                ),
-            )
         return _compile_visual_application(
             visual_draft,
-            session,
-            proposals,
-            assembly_issues,
             snapshot,
             available_node_count=available_node_count,
             preview_factory=preview_factory,

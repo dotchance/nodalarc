@@ -19,6 +19,7 @@ import type {
   BuilderControlTree,
   BuilderIssue,
   BuilderPendingEditOutcome,
+  BuilderVisualObjectControlEdit,
   BuilderVisualObjectEditResult,
 } from "./generated/builderApi";
 
@@ -232,6 +233,36 @@ export function PendingObjectFieldEditor({
         await send(commands);
       }}
     />
+  );
+}
+
+/** The field editor over one object's pending edit with its issues, for an
+ *  object no card edits. Only the latest change's outcome counts. */
+export function PendingObjectFields({
+  pending,
+  appliedRevision,
+  describe,
+  onEdit,
+}: {
+  /** The latest answer for the object's pending edit; null when none is pending. */
+  pending: BuilderVisualObjectEditResult | null;
+  appliedRevision: number;
+  /** Ask the backend for the field editor over the object without changing it. */
+  describe: () => Promise<BuilderVisualObjectEditResult>;
+  /** Send one field-editor batch; it settles once the answer is held. */
+  onEdit: (change: BuilderVisualObjectControlEdit) => Promise<unknown>;
+}) {
+  const send = useLatestObjectChange(onEdit);
+  return (
+    <>
+      <PendingObjectFieldEditor
+        pending={pending}
+        appliedRevision={appliedRevision}
+        describe={describe}
+        send={(commands) => send({ kind: "controls", commands })}
+      />
+      <PendingObjectIssues issues={pending?.issues ?? []} />
+    </>
   );
 }
 

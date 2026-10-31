@@ -11,6 +11,7 @@ from __future__ import annotations
 from decimal import ROUND_HALF_UP, Decimal
 from typing import Annotated, Literal, get_origin
 
+import yaml
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, field_validator, model_validator
 
 from nodalarc.catalog_refs import (
@@ -23,11 +24,11 @@ from nodalarc.catalog_refs import (
     SpaceSourceRef,
     parse_catalog_reference,
 )
+from nodalarc.configuration_yaml import load_configuration_yaml
 from nodalarc.model_validation import Identifier, TerminalMedium
 from nodalarc.models.builder_api import (
     BuilderCompileResult,
     BuilderContentEdit,
-    BuilderDraftEnvelope,
     BuilderDraftState,
     BuilderIssue,
     BuilderMemberAddress,
@@ -35,7 +36,6 @@ from nodalarc.models.builder_api import (
     BuilderPendingEdits,
     BuilderProposedCatalogDocument,
     BuilderSessionObjectAddress,
-    BuilderSessionSaveRequest,
     BuilderWholeListAddress,
     JsonDocument,
     OpaqueRevision,
@@ -46,15 +46,8 @@ from nodalarc.models.catalog import PhasingMode
 from nodalarc.models.link_rules import MountRole
 from nodalarc.models.segment_session import RoutingBoundaryAdapter, RoutingProtocol
 
-type BuilderVisualDraftProjectionStatus = Literal[
-    "applied",
-    "incomplete_authoring",
-    "no_valid_projection",
-    "pending_authoring",
-]
 type BuilderVisualSchedulingPreset = Literal["leo-fast-handover", "geo-longest-pass"]
 type BuilderVisualPhasingMode = PhasingMode
-type BuilderVisualOrbitShape = Literal["circular", "elliptical"]
 type BuilderVisualOrbitPropagator = Literal["two_body", "j2_mean_elements"]
 type BuilderVisualTopologyMode = Literal["visible_candidates", "nearest_n"]
 type BuilderVisualDraftCommandOperation = Literal[
@@ -62,9 +55,7 @@ type BuilderVisualDraftCommandOperation = Literal[
     "place_ground_reference",
     "add_generated_space",
     "set_space_population",
-    "add_ground",
     "add_ground_site_reference",
-    "set_ground_stamp_node",
     "mint_ground_members",
     "add_routing_domain",
     "add_boundary",
@@ -107,104 +98,6 @@ class BuilderVisualGroundBoresight(_BuilderVisualModel):
     """Ground access-terminal pointing authored into a site installation."""
 
     mode: Literal["local_vertical"]
-
-
-class BuilderVisualOrbit(_BuilderVisualModel):
-    """Editable orbital geometry for one generated constellation."""
-
-    central_body: BodyRef | None = None
-    shape_kind: BuilderVisualOrbitShape | None = None
-    altitude_km: float | None = None
-    perigee_altitude_km: float | None = None
-    apogee_altitude_km: float | None = None
-    inclination_deg: float | None = None
-    raan_deg: float | None = None
-    argument_of_perigee_deg: float | None = None
-    mean_anomaly_deg: float | None = None
-    propagator: BuilderVisualOrbitPropagator | None = None
-
-
-class BuilderVisualSpaceDraft(_BuilderVisualModel):
-    """Editable generated space segment that becomes referenced catalog objects."""
-
-    segment_id: str = ""
-    display_name: str = ""
-    node_ref: NodeRef | None = None
-    orbit: BuilderVisualOrbit = Field(default_factory=BuilderVisualOrbit)
-    planes: int | None = None
-    raan_spacing_deg: float | None = None
-    slots_per_plane: int | None = None
-    phasing_mode: BuilderVisualPhasingMode
-    phase_offset_deg: float | None = None
-
-    @model_validator(mode="after")
-    def _phasing_matches_population(self) -> BuilderVisualSpaceDraft:
-        if self.planes is None:
-            return self
-        if self.phasing_mode == "evenly_spaced_mean_anomaly":
-            if self.planes != 1:
-                raise ValueError(
-                    "evenly_spaced_mean_anomaly phasing requires exactly one orbital plane"
-                )
-            if self.phase_offset_deg not in {None, 0}:
-                raise ValueError(
-                    "single-plane evenly_spaced_mean_anomaly phasing requires a zero "
-                    "phase_offset_deg"
-                )
-        elif self.planes < 2:
-            raise ValueError(f"{self.phasing_mode} phasing requires at least two planes")
-        return self
-
-
-class BuilderVisualSpaceReference(_BuilderVisualModel):
-    """One library space source placed by reference."""
-
-    segment_id: str = ""
-    source_ref: SpaceSourceRef | None = None
-    label: str = ""
-
-
-class BuilderVisualGroundMember(_BuilderVisualModel):
-    """One site of an editable ground site set, by reference: a catalog site, or a
-    site the session proposes (``draft``), edited as that proposed document."""
-
-    member_id: str = ""
-    kind: Literal["ref", "draft"]
-    ref: SiteRef | None = None
-    site_id: str = ""
-    label: str = ""
-    summary: str | None = None
-    scheduling_override: JsonDocument | None = None
-
-
-class BuilderVisualGroundStamp(_BuilderVisualModel):
-    """Backend-issued minting facts retained as visual state, never persisted."""
-
-    node_ref: NodeRef | None = None
-    installed: dict[str, int] = Field(default_factory=dict)
-    boresights: dict[str, BuilderVisualGroundBoresight]
-    body: BodyRef | None = None
-
-
-class BuilderVisualGroundDraft(_BuilderVisualModel):
-    """Editable ground segment assembled into site and site-set refs."""
-
-    segment_id: str = ""
-    display_name: str = ""
-    members: tuple[BuilderVisualGroundMember, ...] = ()
-    stamp: BuilderVisualGroundStamp
-    scheduling: JsonDocument = Field(default_factory=dict)
-    originated_ipv4: tuple[str, ...] = ()
-    tags: tuple[str, ...] = ()
-
-
-class BuilderVisualGroundReference(_BuilderVisualModel):
-    """One library site set placed by reference with session scheduling."""
-
-    segment_id: str = ""
-    site_set_ref: SiteSetRef | None = None
-    label: str = ""
-    scheduling: JsonDocument = Field(default_factory=dict)
 
 
 class BuilderVisualLinkEndpoint(_BuilderVisualModel):
@@ -250,28 +143,14 @@ class BuilderVisualRoutingBoundary(_BuilderVisualModel):
     export_node_loopbacks: bool = True
 
 
-class BuilderVisualWorkspace(_BuilderVisualModel):
-    """Closed visual workspace whose persisted grammar is assembled by VS-API."""
-
-    session_name: str = ""
-    display_name: str | None = None
-    description: str | None = None
-    space: tuple[BuilderVisualSpaceDraft, ...] = ()
-    space_refs: tuple[BuilderVisualSpaceReference, ...] = ()
-    ground: tuple[BuilderVisualGroundDraft, ...] = ()
-    ground_refs: tuple[BuilderVisualGroundReference, ...] = ()
-    max_pairs_per_rule: int | None = 2_000
-    max_pairs_per_tick: int | None = 10_000
-    start_time: str = ""
-    step_seconds: float | None = 1.0
-    compression: float | None = 1.0
-
-
 class BuilderVisualDraftEnvelope(_BuilderVisualModel):
-    """One revision of a stateless YAML buffer plus explicit authoring and applied facts."""
+    """One session draft: its identity, YAML text and accepted session with proposals.
+
+    A new draft holds no accepted session until its first segment gesture; every
+    accepted revision is a structurally valid session.
+    """
 
     draft_revision: int = Field(ge=0)
-    projection_status: BuilderVisualDraftProjectionStatus
     target_ref: SessionRef
     source_ref: SessionRef | None = None
     expected_session_revision: OpaqueRevision | None = None
@@ -279,8 +158,6 @@ class BuilderVisualDraftEnvelope(_BuilderVisualModel):
     session_name_is_placeholder: bool
     reserved_authoring_ids: tuple[str, ...]
     session_yaml: str
-    authoring_workspace: BuilderVisualWorkspace | None = None
-    applied_workspace: BuilderVisualWorkspace | None = None
     applied_revision: int | None = Field(default=None, ge=0)
     applied_session: JsonDocument | None = None
     control_tree: BuilderControlTree | None = None
@@ -299,7 +176,7 @@ class BuilderVisualDraftEnvelope(_BuilderVisualModel):
         )
 
     @model_validator(mode="after")
-    def _mode_payload_and_authority_are_consistent(self) -> BuilderVisualDraftEnvelope:
+    def _identity_and_accepted_facts_are_consistent(self) -> BuilderVisualDraftEnvelope:
         if parse_catalog_reference(self.target_ref).namespace != "user":
             raise ValueError("visual draft targets must use the user: namespace")
         if self.source_ref == self.target_ref:
@@ -311,52 +188,24 @@ class BuilderVisualDraftEnvelope(_BuilderVisualModel):
             raise ValueError(
                 "new and copied visual drafts cannot replace an existing session target"
             )
-        applied_facts = (
-            self.applied_workspace,
-            self.applied_revision,
-            self.applied_session,
-        )
-        if any(item is None for item in applied_facts) and any(
-            item is not None for item in applied_facts
-        ):
-            raise ValueError("applied revision, canonical session, and workspace are one fact")
-        if self.projection_status == "applied":
-            if any(item is None for item in applied_facts):
-                raise ValueError("applied drafts require canonical session and workspace facts")
-            assert self.applied_workspace is not None and self.applied_revision is not None
+        accepted = (self.applied_revision, self.applied_session, self.control_tree)
+        if any(item is None for item in accepted) and any(item is not None for item in accepted):
+            raise ValueError("an accepted revision, its session and its control tree are one fact")
+        if self.applied_session is None:
+            # A draft with no accepted session holds the skeleton its first
+            # segment gesture completes.
+            try:
+                skeleton = load_configuration_yaml(self.session_yaml)
+            except yaml.YAMLError as error:
+                raise ValueError(f"a new draft's session text does not parse: {error}") from error
+            if not isinstance(skeleton, dict):
+                raise ValueError("a new draft's session text is not a session skeleton")
+        if self.applied_revision is not None:
+            assert self.control_tree is not None
             if self.applied_revision != self.draft_revision:
-                raise ValueError(
-                    "fully applied drafts require matching current and applied revisions"
-                )
-            if self.control_tree is None:
-                raise ValueError("applied drafts require the backend-derived control tree")
+                raise ValueError("an accepted session is the draft's current revision")
             if self.control_tree.projection_revision != self.applied_revision:
                 raise ValueError("the control tree must belong to applied_revision")
-            if self.authoring_workspace != self.applied_workspace:
-                raise ValueError("authoring workspace must equal the last applied workspace")
-        elif self.projection_status == "pending_authoring":
-            if any(item is None for item in applied_facts) or self.authoring_workspace is None:
-                raise ValueError("pending authoring requires both last-applied and authoring facts")
-            assert self.applied_workspace is not None and self.applied_revision is not None
-            if self.applied_revision > self.draft_revision:
-                raise ValueError("applied revision cannot be newer than current draft revision")
-        elif self.projection_status == "incomplete_authoring":
-            if any(item is not None for item in applied_facts):
-                raise ValueError("incomplete authoring drafts must not claim applied facts")
-            if self.authoring_workspace is None:
-                raise ValueError("incomplete authoring drafts require an authoring workspace")
-        elif any(
-            item is not None
-            for item in (
-                self.authoring_workspace,
-                self.applied_workspace,
-                self.applied_revision,
-                self.applied_session,
-            )
-        ):
-            raise ValueError("no-valid-projection drafts must not carry graphical facts")
-        if self.projection_status != "applied" and self.control_tree is not None:
-            raise ValueError("only a fully applied draft carries a control tree")
         if len({item.ref for item in self.catalog_documents}) != len(self.catalog_documents):
             raise ValueError("visual draft catalog documents must target unique refs")
         if len(set(self.reserved_authoring_ids)) != len(self.reserved_authoring_ids):
@@ -418,14 +267,6 @@ class BuilderVisualDraftApplyYamlResult(_BuilderVisualModel):
         return self
 
 
-class BuilderVisualDraftApplyWorkspaceRequest(_BuilderVisualModel):
-    """Apply one complete graphical workspace to a fenced draft revision."""
-
-    draft: BuilderVisualDraftEnvelope
-    expected_draft_revision: int = Field(ge=0)
-    workspace: BuilderVisualWorkspace
-
-
 class BuilderVisualDraftRetargetRequest(_BuilderVisualModel):
     """Prepare a fenced draft for saving under one exact user session ref."""
 
@@ -451,20 +292,9 @@ class BuilderVisualControlMutationRequest(_BuilderVisualModel):
 
 
 class BuilderVisualDraftCompileRequest(_BuilderVisualModel):
-    """Compile a complete visual draft through backend assembly and grammar authorities.
-
-    With a workspace, the compile assembles that workspace over the draft and
-    accepts nothing: the draft and its revision stay as they were.
-    """
+    """Compile a draft's accepted session and list its objects; nothing is accepted."""
 
     draft: BuilderVisualDraftEnvelope
-    workspace: BuilderVisualWorkspace | None = None
-
-    @model_validator(mode="after")
-    def _workspace_needs_a_projection(self) -> BuilderVisualDraftCompileRequest:
-        if self.workspace is not None and self.draft.authoring_workspace is None:
-            raise ValueError("a workspace compiles only over a draft with a graphical projection")
-        return self
 
 
 class BuilderVisualAddGeneratedSpaceCommand(_BuilderVisualModel):
@@ -510,30 +340,12 @@ class BuilderVisualSetSpacePopulationCommand(_BuilderVisualModel):
         return self
 
 
-class BuilderVisualAddGroundCommand(_BuilderVisualModel):
-    """Add one backend-seeded authored ground-segment draft."""
-
-    operation: Literal["add_ground"]
-    node_ref: NodeRef | None = None
-    installed: dict[str, int] = Field(default_factory=dict)
-    boresights: dict[str, BuilderVisualGroundBoresight] = Field(default_factory=dict)
-    body_ref: BodyRef | None = None
-
-
 class BuilderVisualAddGroundSiteReferenceCommand(_BuilderVisualModel):
     """Place one existing site, creating its authored ground segment when needed."""
 
     operation: Literal["add_ground_site_reference"]
     segment_id: str | None = Field(default=None, min_length=1, max_length=160)
     site_ref: SiteRef
-
-
-class BuilderVisualSetGroundStampNodeCommand(_BuilderVisualModel):
-    """Select a ground stamp node and derive its installed terminal inventory."""
-
-    operation: Literal["set_ground_stamp_node"]
-    segment_id: str = Field(min_length=1, max_length=160)
-    node_ref: NodeRef
 
 
 class BuilderVisualGroundSiteIntent(_BuilderVisualModel):
@@ -549,8 +361,15 @@ class BuilderVisualMintGroundMembersCommand(_BuilderVisualModel):
     """Mint complete sites and addresses from typed locations and one ground stamp."""
 
     operation: Literal["mint_ground_members"]
-    segment_id: str = Field(min_length=1, max_length=160)
+    # Absent for the first sites of a new ground segment.
+    segment_id: str | None = Field(default=None, min_length=1, max_length=160)
     sites: tuple[BuilderVisualGroundSiteIntent, ...] = Field(min_length=1, max_length=255)
+    # The ground card states the node each site installs and the body it stands on.
+    # An empty installation installs each mount of the node as its model counts it.
+    node_ref: NodeRef
+    body_ref: BodyRef
+    installed: dict[str, int] = Field(default_factory=dict)
+    boresights: dict[str, BuilderVisualGroundBoresight] = Field(default_factory=dict)
 
 
 class BuilderVisualAddRoutingDomainCommand(_BuilderVisualModel):
@@ -588,12 +407,13 @@ class BuilderVisualSetSchedulingPresetCommand(_BuilderVisualModel):
     operation: Literal["set_scheduling_preset"]
     segment_id: str = Field(min_length=1, max_length=160)
     preset: BuilderVisualSchedulingPreset | None
-    member_id: str | None = Field(default=None, min_length=1, max_length=160)
+    # A site's override; absent for the segment's own scheduling.
+    site_id: str | None = Field(default=None, min_length=1, max_length=160)
 
     @model_validator(mode="after")
-    def _inheritance_targets_only_members(self) -> BuilderVisualSetSchedulingPresetCommand:
-        if self.preset is None and self.member_id is None:
-            raise ValueError("only a ground member can inherit segment scheduling")
+    def _inheritance_targets_only_sites(self) -> BuilderVisualSetSchedulingPresetCommand:
+        if self.preset is None and self.site_id is None:
+            raise ValueError("only a site can inherit its segment's scheduling")
         return self
 
 
@@ -602,9 +422,7 @@ BuilderVisualDraftCommand = Annotated[
     | BuilderVisualPlaceGroundReferenceCommand
     | BuilderVisualAddGeneratedSpaceCommand
     | BuilderVisualSetSpacePopulationCommand
-    | BuilderVisualAddGroundCommand
     | BuilderVisualAddGroundSiteReferenceCommand
-    | BuilderVisualSetGroundStampNodeCommand
     | BuilderVisualMintGroundMembersCommand
     | BuilderVisualAddRoutingDomainCommand
     | BuilderVisualAddBoundaryCommand
@@ -797,28 +615,19 @@ class BuilderVisualSessionListing(_BuilderVisualModel):
 
 
 class BuilderVisualDraftAssemblyResult(_BuilderVisualModel):
-    """Backend assembly, typed issues, save request, and authoritative compile facts.
+    """An accepted draft with its compile and the listing of its session objects.
 
     The listing names every rule, domain and boundary of the accepted session.
     """
 
     visual_draft: BuilderVisualDraftEnvelope
-    assembled_draft: BuilderDraftEnvelope
-    save_request: BuilderSessionSaveRequest
     compile_result: BuilderCompileResult
     listing: BuilderVisualSessionListing | None
-    assembly_issues: tuple[BuilderIssue, ...] = ()
 
     @model_validator(mode="after")
     def _identities_match(self) -> BuilderVisualDraftAssemblyResult:
         if (self.listing is None) != (self.visual_draft.applied_session is None):
             raise ValueError("the listing exists exactly when the draft has an accepted session")
-        if self.save_request.target_ref != self.visual_draft.target_ref:
-            raise ValueError("save request target must match the visual draft target")
-        if self.save_request.draft != self.assembled_draft:
-            raise ValueError("save request draft must equal the assembled draft")
-        if self.compile_result.draft != self.assembled_draft:
-            raise ValueError("compile result draft must equal the assembled draft")
         if self.compile_result.target_ref != self.visual_draft.target_ref:
             raise ValueError("compile result target must match the visual draft target")
         return self

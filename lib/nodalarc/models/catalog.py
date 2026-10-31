@@ -103,11 +103,15 @@ class DirectionalBandwidth(_FrozenModel):
 
 
 class RfSignal(_FrozenModel):
+    model_config = ConfigDict(title="RF signal")
+
     band: Identifier
     frequency_hz: PositiveFiniteFloat
 
 
 class OpticalSignal(_FrozenModel):
+    model_config = ConfigDict(title="Optical signal")
+
     wavelength_nm: PositiveFiniteFloat
 
 
@@ -178,10 +182,14 @@ class OrbitElements(_FrozenModel):
 
 
 class CircularShape(_FrozenModel):
+    model_config = ConfigDict(title="Circular orbit")
+
     altitude_km: PositiveFiniteFloat
 
 
 class PerigeeApogeeShape(_FrozenModel):
+    model_config = ConfigDict(title="Elliptical orbit")
+
     perigee_altitude_km: PositiveFiniteFloat
     apogee_altitude_km: PositiveFiniteFloat
 

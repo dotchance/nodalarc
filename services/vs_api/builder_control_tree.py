@@ -39,6 +39,51 @@ class BuilderControlTypeError(TypeError):
     """Raised when the canonical model graph contains an unhandled type shape."""
 
 
+class BuilderControlLabelError(BuilderControlTypeError):
+    """Raised when one option of a grammar choice has no user-facing name."""
+
+    def __init__(self, json_pointer: str, option: int) -> None:
+        self.json_pointer = json_pointer
+        self.option = option
+        super().__init__(
+            f"option {option} of the choice at {json_pointer or '/'} has no user-facing name"
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class _Term:
+    """The name of one kind of value as an option, and its plural inside a list name."""
+
+    name: str
+    plural: str
+
+
+_SCALAR_TERMS: Mapping[object, _Term] = MappingProxyType(
+    {
+        str: _Term("Text", "text"),
+        int: _Term("Whole number", "whole numbers"),
+        float: _Term("Number", "numbers"),
+        bool: _Term("True or false", "true or false values"),
+        datetime: _Term("Date and time", "dates and times"),
+    }
+)
+# Every string format the grammar declares in its JSON schema metadata.
+_FORMAT_TERMS: Mapping[str, _Term] = MappingProxyType(
+    {
+        "date-time": _Term("Date and time", "dates and times"),
+        "ipv4-interface": _Term("IPv4 interface", "IPv4 interfaces"),
+        "ipv4-network": _Term("IPv4 network", "IPv4 networks"),
+        "ipv6-interface": _Term("IPv6 interface", "IPv6 interfaces"),
+        "ipv6-network": _Term("IPv6 network", "IPv6 networks"),
+        "mount-path": _Term("Mount path", "mount paths"),
+        "relative-path": _Term("Relative path", "relative paths"),
+        "uri": _Term("URL", "URLs"),
+    }
+)
+_CATALOG_REFERENCE_TERM = _Term("Catalog reference", "catalog references")
+_DISCRIMINATOR_FIELDS = ("kind", "mode", "strategy", "provider", "adapter")
+
+
 @dataclass(frozen=True, slots=True)
 class BuilderControlBinding:
     """Server-only target for one revision-scoped control or choice branch."""
@@ -365,6 +410,8 @@ class _ControlFactory:
     ) -> BuilderChoiceControl:
         branches = get_args(annotation)
         selected_index = _select_union_branch(branches, value)
+        # An optional value offers one option beside "Not set": the value the control names.
+        optional = sum(1 for branch in branches if _split_annotated(branch)[0] is not NoneType) == 1
         rendered: list[BuilderChoiceBranch] = []
         for index, original_branch in enumerate(branches):
             branch, branch_metadata = _split_annotated(original_branch)
@@ -391,13 +438,16 @@ class _ControlFactory:
                     )
                 )
                 continue
+            option_label = label if optional else _option_label(original_branch)
+            if option_label is None:
+                raise BuilderControlLabelError(json_pointer, index + 1)
             branch_value = value if selected else _MISSING
             branch_control = self._build_annotation(
                 original_branch,
                 branch_value,
                 metadata=branch_metadata,
                 json_pointer=json_pointer,
-                label=_branch_label(original_branch),
+                label=option_label,
                 required=required,
                 present=selected and value is not _MISSING and value is not None,
                 description=description,
@@ -409,7 +459,7 @@ class _ControlFactory:
             rendered.append(
                 BuilderChoiceBranch(
                     branch_id=branch_id,
-                    label=_branch_label(original_branch),
+                    label=option_label,
                     branch_kind="type",
                     selected=selected,
                     control=branch_control,
@@ -1222,9 +1272,9 @@ def _scalar_constraints(metadata: tuple[object, ...]) -> BuilderScalarConstraint
             candidate = getattr(item, source, None)
             if candidate is not None:
                 values[target] = candidate
-        json_schema = getattr(item, "json_schema", None)
-        if isinstance(json_schema, dict) and isinstance(json_schema.get("format"), str):
-            values["format"] = json_schema["format"]
+    declared_format = _declared_format(metadata)
+    if declared_format is not None:
+        values["format"] = declared_format
     return BuilderScalarConstraints.model_validate(values)
 
 
@@ -1333,26 +1383,103 @@ def _literal_label(value: object) -> str:
     return str(value)
 
 
-def _branch_label(annotation: object) -> str:
+def _option_label(annotation: object) -> str | None:
+    """The grammar name of one option of a choice among several values, if it has one.
+
+    A model is named by its single-value discriminator, else by the key of a
+    one-key wrapper, else by the title it declares. A Literal or enum is named by
+    its values, a sequence is "List" (of its element's plural when the element has
+    one), a mapping is "Mapping", and a scalar is named by its YAML term.
+    """
     base, metadata = _split_annotated(annotation)
-    for item in metadata:
+    if _is_model_type(base):
+        return _discriminator_label(base) or _wrapper_label(base) or _model_title(base)
+    origin = get_origin(base)
+    if origin is Literal:
+        return _values_label(get_args(base))
+    if _is_enum_type(base):
+        return _values_label(tuple(member.value for member in base))
+    if origin in {tuple, list, set, frozenset}:
+        arguments = get_args(base)
+        plural = _element_plural(arguments[0]) if arguments else None
+        return f"List of {plural}" if plural is not None else "List"
+    if origin is dict or base is dict:
+        return "Mapping"
+    term = _scalar_term(base, metadata)
+    return term.name if term is not None else None
+
+
+def _discriminator_label(model: type[BaseModel]) -> str | None:
+    for discriminator in _DISCRIMINATOR_FIELDS:
+        field = model.model_fields.get(discriminator)
+        if field is None:
+            continue
+        literal = _split_annotated(field.annotation)[0]
+        if get_origin(literal) is Literal and len(get_args(literal)) == 1:
+            return _literal_label(get_args(literal)[0])
+    return None
+
+
+def _wrapper_label(model: type[BaseModel]) -> str | None:
+    """The key of a model whose one field holds the option's parameters or fixed value."""
+    if len(model.model_fields) != 1:
+        return None
+    ((field_name, field_info),) = model.model_fields.items()
+    value = _split_annotated(field_info.annotation)[0]
+    if _is_model_type(value) or get_origin(value) in {dict, Literal} or value is dict:
+        return _humanize(_wire_alias(field_name, field_info))
+    return None
+
+
+def _model_title(model: type[BaseModel]) -> str | None:
+    title = model.model_config.get("title")
+    return title if isinstance(title, str) and title.strip() else None
+
+
+def _values_label(values: tuple[object, ...]) -> str | None:
+    if not values:
+        return None
+    return _humanize(" or ".join(_literal_text(value) for value in values))
+
+
+def _literal_text(value: object) -> str:
+    """One closed value as YAML spells it."""
+    scalar = _literal_scalar(value)
+    return scalar if isinstance(scalar, str) else json.dumps(scalar)
+
+
+def _element_plural(annotation: object) -> str | None:
+    """The plural a list name gives its elements: scalar terms, and unions of them."""
+    base, metadata = _split_annotated(annotation)
+    if get_origin(base) in {Union, UnionType}:
+        plurals = [
+            _element_plural(branch)
+            for branch in get_args(base)
+            if _split_annotated(branch)[0] is not NoneType
+        ]
+        if not plurals or any(plural is None for plural in plurals):
+            return None
+        return " or ".join(cast(list[str], plurals))
+    term = _scalar_term(base, metadata)
+    return term.plural if term is not None else None
+
+
+def _scalar_term(base: object, metadata: tuple[object, ...]) -> _Term | None:
+    """The YAML term of a scalar: its declared string format, else its scalar type."""
+    if _is_catalog_ref_type(base):
+        return _CATALOG_REFERENCE_TERM
+    declared_format = _declared_format(metadata)
+    if declared_format is not None:
+        return _FORMAT_TERMS.get(declared_format)
+    return _SCALAR_TERMS.get(base)
+
+
+def _declared_format(metadata: tuple[object, ...]) -> str | None:
+    for item in _flatten_metadata(metadata):
         json_schema = getattr(item, "json_schema", None)
         if isinstance(json_schema, dict) and isinstance(json_schema.get("format"), str):
-            return _humanize(json_schema["format"])
-    if _is_model_type(base):
-        for discriminator in ("kind", "mode", "strategy", "provider", "adapter"):
-            field = base.model_fields.get(discriminator)
-            if field is None:
-                continue
-            literal = _split_annotated(field.annotation)[0]
-            if get_origin(literal) is Literal and len(get_args(literal)) == 1:
-                return _literal_label(get_args(literal)[0])
-        return _humanize(base.__name__)
-    if _is_catalog_ref_type(base):
-        return "Catalog reference"
-    if isinstance(base, type):
-        return _humanize(base.__name__)
-    return _humanize(_annotation_key(base))
+            return cast(str, json_schema["format"])
+    return None
 
 
 def _wire_alias(field_name: str, field_info: FieldInfo) -> str:

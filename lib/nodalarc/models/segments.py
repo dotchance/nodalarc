@@ -217,7 +217,7 @@ class GroundPlacement(BaseModel):
 
 
 class SpaceSegment(BaseModel):
-    model_config = ConfigDict(frozen=True, extra="forbid")
+    model_config = ConfigDict(frozen=True, extra="forbid", title="Space segment")
 
     id: Identifier
     display_name: str | None = None
@@ -233,7 +233,7 @@ class SpaceSegment(BaseModel):
 
 
 class GroundSegment(BaseModel):
-    model_config = ConfigDict(frozen=True, extra="forbid")
+    model_config = ConfigDict(frozen=True, extra="forbid", title="Ground segment")
 
     id: Identifier
     display_name: str | None = None
@@ -315,7 +315,7 @@ class LagrangeFrame(BaseModel):
 
 
 class LagrangeSegment(BaseModel):
-    model_config = ConfigDict(frozen=True, extra="forbid")
+    model_config = ConfigDict(frozen=True, extra="forbid", title="Lagrange segment")
 
     id: Identifier
     display_name: str | None = None

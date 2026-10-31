@@ -69,7 +69,11 @@ def apply_builder_control_mutations(
             pointer = _resolve_target(binding, virtual_targets, shifted_collections)
             if command.present:
                 if _get_pointer(shadow, pointer) is _MISSING:
-                    _set_pointer(shadow, pointer, _seed_for_annotation(binding.annotation))
+                    _set_pointer(
+                        shadow,
+                        pointer,
+                        _seed_for_annotation(binding.annotation, json_pointer=pointer),
+                    )
             else:
                 _delete_pointer(shadow, pointer)
         elif isinstance(command, BuilderSelectChoiceCommand):
@@ -88,7 +92,7 @@ def apply_builder_control_mutations(
                 _set_pointer(
                     shadow,
                     pointer,
-                    _seed_for_choice_annotation(branch.annotation),
+                    _seed_for_choice_annotation(branch.annotation, json_pointer=pointer),
                 )
         elif isinstance(command, BuilderInsertItemCommand):
             _require_role(binding, "sequence")
@@ -101,11 +105,15 @@ def apply_builder_control_mutations(
                 raise BuilderControlMutationError(
                     "one mutation batch may insert only one virtual item per sequence"
                 )
-            sequence.insert(command.index, _seed_for_annotation(item_annotation))
+            item_pointer = _pointer_append(binding.json_pointer, str(command.index))
+            sequence.insert(
+                command.index,
+                _seed_for_annotation(item_annotation, json_pointer=item_pointer),
+            )
             virtual_targets[template_trail] = _VirtualTarget(
                 trail=template_trail,
                 template_pointer=_pointer_append(binding.json_pointer, "-"),
-                actual_pointer=_pointer_append(binding.json_pointer, str(command.index)),
+                actual_pointer=item_pointer,
             )
             shifted_collections.add(binding.json_pointer)
         elif isinstance(command, BuilderRemoveItemCommand):
@@ -143,7 +151,10 @@ def apply_builder_control_mutations(
                     raise BuilderControlMutationError(
                         "structured mapping values are populated through child controls"
                     )
-                mapping[key] = _seed_for_annotation(value_annotation)
+                mapping[key] = _seed_for_annotation(
+                    value_annotation,
+                    json_pointer=_pointer_append(binding.json_pointer, key),
+                )
             template_trail = (*binding.trail, "add-value")
             virtual_targets[template_trail] = _VirtualTarget(
                 trail=template_trail,
@@ -236,7 +247,7 @@ def _split_annotated(annotation: object) -> tuple[object, tuple[object, ...]]:
             return annotation, tuple(metadata)
 
 
-def _seed_for_annotation(annotation: object) -> object:
+def _seed_for_annotation(annotation: object, *, json_pointer: str) -> object:
     annotation, metadata = _split_annotated(annotation)
     origin = get_origin(annotation)
     if origin in {Union, UnionType}:
@@ -248,7 +259,9 @@ def _seed_for_annotation(annotation: object) -> object:
             ),
             NoneType,
         )
-        return None if branch is NoneType else _seed_for_annotation(branch)
+        return (
+            None if branch is NoneType else _seed_for_annotation(branch, json_pointer=json_pointer)
+        )
     if origin is Literal:
         values = get_args(annotation)
         return _literal_value(values[0]) if values else None
@@ -276,10 +289,12 @@ def _seed_for_annotation(annotation: object) -> object:
         return ""
     if annotation is NoneType:
         return None
-    raise BuilderControlMutationError(f"cannot seed control type {annotation!r}")
+    raise BuilderControlMutationError(
+        f"the control at {json_pointer or '/'} has no starting value to add"
+    )
 
 
-def _seed_for_choice_annotation(annotation: object) -> object:
+def _seed_for_choice_annotation(annotation: object, *, json_pointer: str) -> object:
     """Seed enough branch structure for the next control projection to retain it."""
 
     base, _metadata = _split_annotated(annotation)
@@ -289,7 +304,11 @@ def _seed_for_choice_annotation(annotation: object) -> object:
             (branch for branch in get_args(base) if _split_annotated(branch)[0] is not NoneType),
             NoneType,
         )
-        return None if branch is NoneType else _seed_for_choice_annotation(branch)
+        return (
+            None
+            if branch is NoneType
+            else _seed_for_choice_annotation(branch, json_pointer=json_pointer)
+        )
     if isinstance(base, type) and issubclass(base, BaseModel):
         model_type = cast(type[BaseModel], base)
         seeded: dict[str, object] = {}
@@ -299,11 +318,14 @@ def _seed_for_choice_annotation(annotation: object) -> object:
             alias = field.serialization_alias or field.alias or field_name
             if not isinstance(alias, str):
                 raise BuilderControlMutationError(
-                    f"cannot seed non-string field alias on {model_type.__qualname__}.{field_name}"
+                    f"a field of the control at {json_pointer or '/'} has no YAML key"
                 )
-            seeded[alias] = _seed_for_choice_annotation(field.annotation)
+            seeded[alias] = _seed_for_choice_annotation(
+                field.annotation,
+                json_pointer=_pointer_append(json_pointer, alias),
+            )
         return seeded
-    return _seed_for_annotation(annotation)
+    return _seed_for_annotation(annotation, json_pointer=json_pointer)
 
 
 def _numeric_minimum(metadata: tuple[object, ...]) -> tuple[float | None, bool]:

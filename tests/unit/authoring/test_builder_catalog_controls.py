@@ -286,13 +286,13 @@ def test_component_controls_protect_identity_and_accept_incomplete_sequence_edit
     site = service.new(CatalogDraftNewRequest(family="sites", object_id="visual-site"))
     frame = control_at(site.control_tree.root, "/site/frame")
     assert isinstance(frame, BuilderChoiceControl)
-    body_fixed = next(
-        branch
-        for branch in frame.branches
-        if isinstance(branch.control, BuilderObjectControl)
-        and branch.control.model_name is not None
-        and branch.control.model_name.endswith(".BodyFixedFrameWrapper")
-    )
+    assert [branch.label for branch in frame.branches] == [
+        "Body fixed",
+        "Lagrange",
+        "Ephemeris anchor",
+    ]
+    body_fixed = frame.branches[0]
+    assert isinstance(body_fixed.control, BuilderObjectControl)
     framed = service.mutate_controls(
         CatalogDraftControlMutationRequest(
             draft=site.state,

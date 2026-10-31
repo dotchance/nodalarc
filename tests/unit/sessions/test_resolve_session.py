@@ -1225,10 +1225,12 @@ def test_runtime_node_id_length_fails_before_kubernetes() -> None:
         resolve_session(raw)
 
 
-def test_omitted_routing_without_a_router_runs_no_routing() -> None:
-    # Participation derives from the workload profile: a session whose
-    # profiles render no routing has no participant, and with routing omitted
-    # it runs no routing domain.
+def test_a_session_whose_routed_nodes_run_no_adapter_is_refused() -> None:
+    from nodalarc.runtime_support import FeatureCategory, UnsupportedFeatureError
+
+    # Both node models forward between subnets, and the linux-host profile names
+    # no adapter that could configure their loopback and WAN links, so their
+    # links would carry nothing. The session is refused, routing or not.
     raw = _raw_session()
     assert raw.space_node_ref is not None
     assert raw.ground_node_ref is not None
@@ -1238,10 +1240,20 @@ def test_omitted_routing_without_a_router_runs_no_routing() -> None:
         raw.write_catalog(node_ref, node_document)
     raw.pop("routing")
 
-    resolved = resolve_session(raw)
+    with pytest.raises(UnsupportedFeatureError) as refused:
+        resolve_session(raw)
 
-    assert resolved.routing_domains == ()
-    assert resolved.nodes
+    features = refused.value.features
+    assert features
+    for feature in features:
+        node_id, _, profile = feature.value.partition(":")
+        assert feature.category == FeatureCategory.WORKLOAD_ADAPTER
+        assert profile == "nodalarc:profiles/linux-host.yaml"
+        assert feature.message == (
+            f"node {node_id!r} forwards between subnets, but its profile "
+            "'nodalarc:profiles/linux-host.yaml' names no adapter to configure its "
+            "loopback and WAN links"
+        )
 
 
 def test_source_changes_change_resolved_session() -> None:

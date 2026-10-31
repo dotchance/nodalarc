@@ -213,6 +213,7 @@ def resolve_session_with_assets(
     allocated_nodes, ethernet_segments = _allocate_segment_addressing(list(expanded_nodes))
     runtime_nodes = _apply_addressing(cfg, tuple(allocated_nodes))
     _check_boundary_references(cfg)
+    _refuse_forwarding_nodes_without_adapter(runtime_nodes)
     routing_domains = tuple(_resolve_routing_domains(cfg, runtime_nodes))
     runtime_nodes = _derive_host_attachments(runtime_nodes, routing_domains)
     resolved_nodes = tuple(item.node for item in runtime_nodes)
@@ -2396,6 +2397,31 @@ def _check_node_workloads(
             unsupported.append(feature)
         if feature := support.check_forwarding_class(item.node.forwarding):
             unsupported.append(feature)
+    if unsupported:
+        raise UnsupportedFeatureError(unsupported)
+
+
+def _refuse_forwarding_nodes_without_adapter(runtime_nodes: tuple[_RuntimeNode, ...]) -> None:
+    """A node that forwards between subnets needs its loopback and WAN links
+    configured by its engine. The profile's adapter renders those resolved
+    facts for the engine to apply; a profile with no adapter has no engine
+    that can, so its links would come up carrying nothing. A host on a LAN is
+    different: the Node Agent gives it its address and default route.
+    """
+    unsupported = [
+        UnsupportedFeature(
+            category=FeatureCategory.WORKLOAD_ADAPTER,
+            value=f"{item.node.node_id}:{item.node.profile}",
+            message=(
+                f"node {item.node.node_id!r} forwards between subnets, but its profile "
+                f"{item.node.profile!r} names no adapter to configure its loopback and "
+                "WAN links"
+            ),
+            support_note="future runtime capability",
+        )
+        for item in runtime_nodes
+        if item.node.forwarding == "routed" and item.profile_adapter is None
+    ]
     if unsupported:
         raise UnsupportedFeatureError(unsupported)
 

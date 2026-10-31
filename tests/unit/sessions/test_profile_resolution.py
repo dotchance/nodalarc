@@ -13,7 +13,6 @@ from nodalarc.catalog_closure import CatalogDocumentNotFound, FilesystemCatalogR
 from nodalarc.catalog_paths import CatalogRoots
 from nodalarc.resolve_session import SessionResolutionError, resolve_session
 from nodalarc.runtime_support import UnsupportedFeatureError
-from nodalarc.workloads.adapter import AdapterRenderRefusal
 
 from tests.catalog_session_fixtures import shipped_read_view
 
@@ -34,11 +33,14 @@ def _write_yaml(path: Path, document: dict[str, Any]) -> None:
 
 
 def _user_profile_document(profile_id: str) -> dict[str, Any]:
+    # A user's own router profile: forked from the FRR router, so its adapter
+    # configures the node's loopback and WAN links.
     return {
         "profile": {
             "id": profile_id,
+            "adapter": "frr",
             "registry": "registry.example",
-            "image": f"nodalarc/base@sha256:{'0' * 64}",
+            "image": f"nodalarc/frr@sha256:{'0' * 64}",
             "command": ["/bin/bash", "-c", "sleep infinity"],
             "resources": {
                 "requests": {"cpu_m": 10, "memory_mi": 16},
@@ -189,24 +191,15 @@ def test_profile_reference_must_load_a_profile_document(tmp_path: Path) -> None:
         resolve_session(session, catalog=FilesystemCatalogReadView(roots))
 
 
-def test_non_router_workload_on_a_routed_bus_stands_outside_domains(tmp_path: Path) -> None:
-    # The probe-01 pattern: a routed-wired bus running a non-routing workload
-    # resolves, and the node simply is not a router, so no domain contains it.
+def test_a_routed_node_whose_profile_names_no_adapter_is_refused(tmp_path: Path) -> None:
+    # A node wired to forward between subnets runs linux-host, whose profile names
+    # no adapter, so nothing would configure its loopback and WAN links.
     def override_site(site):
         site["nodes"][0]["profile"] = "nodalarc:profiles/linux-host.yaml"
 
     session, roots = _session_with_user_ground(tmp_path, site_mutation=override_site)
-    resolution = resolve_session(session, catalog=FilesystemCatalogReadView(roots))
-
-    observers = [
-        node for node in resolution.nodes if node.profile == "nodalarc:profiles/linux-host.yaml"
-    ]
-    assert len(observers) == 1
-    member_ids = {node_id for domain in resolution.routing_domains for node_id in domain.node_ids}
-    assert observers[0].node_id not in member_ids
-    routers = [node for node in resolution.nodes if node.profile == FRR_PROFILE]
-    assert routers
-    assert all(router.node_id in member_ids for router in routers)
+    with pytest.raises(UnsupportedFeatureError, match="names no adapter to configure its loopback"):
+        resolve_session(session, catalog=FilesystemCatalogReadView(roots))
 
 
 def test_profile_naming_an_unavailable_adapter_is_refused(tmp_path: Path) -> None:
@@ -446,9 +439,9 @@ def test_a_host_may_participate_in_routing_without_being_a_router() -> None:
     assert gateway is not None and gateway.forwarding == "routed"
 
 
-def test_a_host_gateway_is_always_a_router() -> None:
-    # The site's only routed node runs no routing workload, so it forwards
-    # but is not a router, and the host on its LAN has no gateway.
+def test_a_host_behind_a_routed_node_that_cannot_route_is_refused() -> None:
+    # The site's only routed node runs linux-host, whose profile names no adapter,
+    # so it cannot be the gateway of the host on its LAN.
     fixture = _host_endpoint_fixture()
     for ref in fixture.site_refs:
         site = fixture.read_catalog(ref)
@@ -456,7 +449,7 @@ def test_a_host_gateway_is_always_a_router() -> None:
             node["profile"] = "nodalarc:profiles/linux-host.yaml"
         fixture.write_catalog(ref, site)
 
-    with pytest.raises(SessionResolutionError, match="has no router on its segment"):
+    with pytest.raises(UnsupportedFeatureError, match="names no adapter to configure its loopback"):
         resolve_session(fixture, catalog=FilesystemCatalogReadView(fixture.roots))
 
 
@@ -475,24 +468,3 @@ def test_an_unexecuted_forwarding_class_is_refused_with_a_typed_reason(forwardin
     assert {(feature.category, feature.value) for feature in refused.value.features} == {
         (FeatureCategory.FORWARDING_CLASS, forwarding)
     }
-
-
-def test_a_routed_node_without_a_routing_workload_participates_in_no_domain(tmp_path: Path) -> None:
-    from nodalarc.workloads.adapter import SessionContext
-
-    from adapters.frr.adapter import FrrAdapter
-
-    def override_site(site):
-        site["nodes"][0]["profile"] = "nodalarc:profiles/linux-host.yaml"
-
-    session, roots = _session_with_user_ground(tmp_path, site_mutation=override_site)
-    resolution = resolve_session(session, catalog=FilesystemCatalogReadView(roots))
-    [probe] = [
-        node for node in resolution.nodes if node.profile == "nodalarc:profiles/linux-host.yaml"
-    ]
-
-    assert probe.forwarding == "routed"
-    assert resolution.routing_domains_for(probe.node_id) == ()
-    assert resolution.node_roles()[probe.node_id] == "forwarding_only"
-    with pytest.raises(AdapterRenderRefusal, match="participates in no routing domain"):
-        FrrAdapter().render_node(probe, SessionContext(resolution))

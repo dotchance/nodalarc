@@ -18,7 +18,8 @@ Common issues you might encounter when using NodalArc and how to resolve them.
 **Symptom:** The globe loads but no satellites appear.
 
 **Causes:**
-- No session is deployed. Use the session wizard to create one.
+- No session is deployed. Deploy one from the Sessions window or author one in
+  the Session Builder.
 - The session is still deploying. Wait 1-2 minutes for pods to come online.
 - Zoom level - you may be zoomed too far in or out to see satellites at their altitude.
 
@@ -47,7 +48,7 @@ Common issues you might encounter when using NodalArc and how to resolve them.
 
 ## Session Won't Deploy
 
-**Symptom:** Session wizard shows an error or deployment hangs.
+**Symptom:** The Sessions window shows an error or deployment hangs.
 
 **Causes:**
 - The cluster may not have enough resources for the selected constellation size. Smaller constellations (36, 66) require less resources.

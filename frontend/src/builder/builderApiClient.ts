@@ -53,15 +53,7 @@ import type {
   CatalogSessionYamlExportRequest,
   CatalogSessionYamlImportRequest,
   CatalogSessionYamlImportResult,
-  CoveragePreviewResult,
   TransitionOperation,
-  WizardCompileRequest,
-  WizardAvailableStationResponse,
-  WizardConstellationPresetResponse,
-  WizardCoverageRequest,
-  WizardExtensionRulesResponse,
-  WizardGroundStationSetPresetResponse,
-  WizardSatelliteTypePresetResponse,
 } from "./generated/builderApi";
 
 export class BuilderApiError extends Error {
@@ -251,36 +243,6 @@ export function customizeVisualDraftChain(
 
 export function compileBuilderDraft(input: BuilderCompileRequest): Promise<BuilderCompileResult> {
   return request("/compile", input);
-}
-
-export function compileWizardSession(input: WizardCompileRequest): Promise<BuilderCompileResult> {
-  return request("/wizard/compile", input);
-}
-
-export function getWizardConstellationPresets(): Promise<WizardConstellationPresetResponse> {
-  return apiRequest("/presets/constellations");
-}
-
-export function getWizardSatelliteTypes(): Promise<WizardSatelliteTypePresetResponse> {
-  return apiRequest("/presets/satellite-types");
-}
-
-export function getWizardGroundStationSets(): Promise<WizardGroundStationSetPresetResponse> {
-  return apiRequest("/presets/ground-stations");
-}
-
-export function getWizardAvailableStations(): Promise<WizardAvailableStationResponse> {
-  return apiRequest("/presets/ground-stations/stations");
-}
-
-export function getWizardExtensionRules(): Promise<WizardExtensionRulesResponse> {
-  return apiRequest("/wizard/extensions");
-}
-
-export function previewWizardCoverage(
-  input: WizardCoverageRequest,
-): Promise<CoveragePreviewResult> {
-  return apiRequest("/session/preview-coverage", input);
 }
 
 export function getSessionTransition(operationId: string): Promise<TransitionOperation> {

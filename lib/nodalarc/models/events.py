@@ -585,7 +585,7 @@ class ValidationResult(BaseModel):
 
 
 class ValidationReport(BaseModel):
-    """User-facing validation report for CLI/API/wizard surfaces."""
+    """User-facing validation report for CLI and API surfaces."""
 
     model_config = ConfigDict(frozen=True)
 

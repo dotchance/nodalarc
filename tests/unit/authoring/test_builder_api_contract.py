@@ -27,7 +27,6 @@ from nodalarc.models.builder_api import (
     BuilderVerdict,
     DependencyClosureEntry,
     DependencyClosureInventory,
-    WizardConstellationCapability,
 )
 from nodalarc.resolve_session import resolve_session_with_assets
 from pydantic import TypeAdapter, ValidationError
@@ -157,24 +156,6 @@ def _session_document() -> BuilderCatalogDocument:
         content_digest=DOCUMENT_DIGEST,
         revision="session-rev-2",
     )
-
-
-def test_wizard_constellation_capability_cannot_claim_false_availability() -> None:
-    with pytest.raises(ValidationError, match="default propagator must be runtime-supported"):
-        WizardConstellationCapability(
-            source_kind="constellation",
-            runtime_supported_propagators=("two_body",),
-            default_propagator="j2_mean_elements",
-            unavailable_reason=None,
-        )
-
-    with pytest.raises(ValidationError, match="unavailable source must explain"):
-        WizardConstellationCapability(
-            source_kind="constellation",
-            runtime_supported_propagators=(),
-            default_propagator=None,
-            unavailable_reason=None,
-        )
 
 
 def test_draft_catalog_proposals_are_user_owned_unique_components() -> None:

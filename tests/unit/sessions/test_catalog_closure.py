@@ -18,7 +18,6 @@ from nodalarc.catalog_closure import (
     CatalogReadFailed,
     FilesystemCatalogReadView,
     load_catalog_object,
-    load_wrapped_catalog_object,
 )
 from nodalarc.catalog_paths import CatalogRoots
 from nodalarc.catalog_refs import CatalogRef
@@ -650,17 +649,6 @@ def test_every_shipped_session_has_a_complete_strict_exact_byte_closure(
     assert closure.file_count == len(closure.entries)
     assert closure.total_bytes == sum(entry.size_bytes for entry in closure.entries)
     assert all(entry.preserved_path.startswith("catalog/nodalarc/") for entry in closure.entries)
-
-
-def test_load_wrapped_catalog_object_refuses_a_session_document(
-    closure_fixture: ClosureFixture,
-) -> None:
-    ref = "user:sessions/closure-test.yaml"
-    _write_ref(closure_fixture.roots, ref, document=_session_document())
-    view = FilesystemCatalogReadView(closure_fixture.roots)
-
-    with pytest.raises(ValueError, match="expected wrapped catalog object"):
-        load_wrapped_catalog_object(ref, view, dump_mode="python")
 
 
 def test_read_view_reports_a_missing_document_as_not_found(

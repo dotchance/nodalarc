@@ -26,7 +26,7 @@ import { useAppState } from "./hooks/useAppState";
 import { filterSnapshotForRender } from "./filters/renderSnapshot";
 import { buildRegimeIndex } from "./taxonomy/regime";
 import { selectionTypeForNode } from "./networkIdentity";
-import { SessionWizard } from "./catalog/SessionWizard";
+import { SessionLauncher } from "./catalog/SessionLauncher";
 import { ShortcutHelp } from "./panels/ShortcutHelp";
 import { BuilderView } from "./builder/BuilderView";
 import { WS_URL, fetchApiKey } from "./config";
@@ -52,7 +52,6 @@ import "./styles/scene.css";
 import "./styles/topology.css";
 import "./styles/time-controls.css";
 import "./styles/launcher.css";
-import "./styles/wizard.css";
 import "./styles/explain.css";
 import "./styles/builder.css";
 
@@ -607,7 +606,7 @@ function AppInner() {
   );
 
   const overlayContent = showCatalog && viewMode !== "builder" ? (
-    <SessionWizard
+    <SessionLauncher
       onDeployStarted={() => { setShowCatalog(false); setHasEverDeployed(true); }}
       onClose={hasEverDeployed ? () => setShowCatalog(false) : undefined}
       deploying={switching}

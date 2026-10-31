@@ -21,7 +21,7 @@ from adapters.registry import registered_adapter_support
 from nodalarc.model_validation import ADDRESS_FAMILIES, AddressFamily
 from nodalarc.models.catalog import BodyFixedFrameWrapper, Node, Orbit, Site, SpaceNodeSet
 from nodalarc.models.segment_session import BfdConfig
-from nodalarc.workloads.adapter import BfdSupport, RoutingProtocolSupport
+from nodalarc.workloads.adapter import RoutingProtocolSupport
 
 
 class FeatureCategory(StrEnum):
@@ -160,64 +160,6 @@ def _named_members(node_ids: tuple[str, ...]) -> str:
         return f"node(s) {', '.join(ordered)}"
     shown = ", ".join(ordered[:_NAMED_MEMBER_LIMIT])
     return f"{len(ordered)} nodes ({shown} and {len(ordered) - _NAMED_MEMBER_LIMIT} more)"
-
-
-def registered_routing_support(protocol: str) -> RoutingProtocolSupport | None:
-    """What the registered adapters render for ``protocol``, combined.
-
-    The capabilities and address families are every capability and family
-    some adapter renders for the protocol; the BFD bounds span the ranges of
-    the adapters that render BFD for it, the domains per router are the most
-    any adapter renders, the link rate floor is the lowest any adapter
-    declares, and the prefix-SID capacity the largest. Authoring surfaces
-    offer these choices, so an adapter that a session does not use never
-    narrows them. Resolution decides for each domain member against its own
-    adapter. None when no registered adapter renders the protocol.
-    """
-    declared = [
-        support.routing[protocol]
-        for support in registered_adapter_support().values()
-        if protocol in support.routing
-    ]
-    if not declared:
-        return None
-    capabilities = frozenset().union(*(item.capabilities for item in declared))
-    address_families = frozenset().union(*(item.address_families for item in declared))
-    bounded = [item.domains_per_router for item in declared if item.domains_per_router is not None]
-    domains_per_router = max(bounded) if len(bounded) == len(declared) else None
-    floors = [item.link_rate_floor_mbps for item in declared]
-    link_rate_floor_mbps = None if None in floors else min(floors)
-    capacities = [
-        item.sid_index_capacity for item in declared if item.sid_index_capacity is not None
-    ]
-    sid_index_capacity = max(capacities) if capacities else None
-    bfd_declared = [item.bfd for item in declared if item.bfd is not None]
-    if not bfd_declared:
-        return RoutingProtocolSupport(
-            capabilities=capabilities,
-            address_families=address_families,
-            domains_per_router=domains_per_router,
-            link_rate_floor_mbps=link_rate_floor_mbps,
-            sid_index_capacity=sid_index_capacity,
-        )
-    bounds = {
-        name: (
-            min(getattr(item, name)[0] for item in bfd_declared),
-            max(getattr(item, name)[1] for item in bfd_declared),
-        )
-        for name in _BFD_TIMER_FIELDS
-    }
-    return RoutingProtocolSupport(
-        capabilities=capabilities,
-        bfd=BfdSupport(
-            **bounds,
-            mixed_family_peers=any(item.mixed_family_peers for item in bfd_declared),
-        ),
-        address_families=address_families,
-        domains_per_router=domains_per_router,
-        link_rate_floor_mbps=link_rate_floor_mbps,
-        sid_index_capacity=sid_index_capacity,
-    )
 
 
 def bfd_spans_mixed_family_peers(adapter: str, protocol: str) -> bool:
@@ -566,25 +508,6 @@ class RuntimeSupport(BaseModel):
         if propagator in self.supported_propagators:
             return None
         return self._unsupported(FeatureCategory.PROPAGATOR, propagator, "orbit propagator")
-
-    def compatible_supported_propagators(self, source_propagator: str) -> tuple[str, ...]:
-        """Return runtime-supported substitutions that preserve source physics.
-
-        Two-body and J2 catalog orbits share the same authored Keplerian
-        representation and may be deliberately compared. TLE and three-body
-        sources are different physical forms: the Wizard must never make one
-        appear runnable by silently replacing its declared propagator.
-        """
-
-        compatible = {
-            "two_body": ("j2_mean_elements", "two_body"),
-            "j2_mean_elements": ("j2_mean_elements", "two_body"),
-            "sgp4_tle": ("sgp4_tle",),
-            "crtbp": ("crtbp",),
-        }.get(source_propagator, (source_propagator,))
-        return tuple(
-            propagator for propagator in compatible if propagator in self.supported_propagators
-        )
 
     def check_central_body(self, body: str) -> UnsupportedFeature | None:
         if body in self.supported_central_bodies:

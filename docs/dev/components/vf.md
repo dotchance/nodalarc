@@ -9,7 +9,8 @@
 
 The VF renders the session visualization in the browser: 3D body view with
 satellite positions, relay nodes, ISL and ground links, body frames, topology
-graph, event log, terminal access, and session wizard.
+graph, event log, terminal access, the session launcher, and the Session
+Builder.
 
 ## Viewer Design Principles
 
@@ -185,6 +186,6 @@ src/
 +-- topology/           2D topology graph view
 +-- sim/                Simulation clock, Keplerian propagation
 +-- hooks/              React hooks (WebSocket, keyboard, etc.)
-+-- components/         UI components (panels, wizard, terminal)
++-- components/         UI components (panels, terminal)
 +-- types.ts            Shared TypeScript types
 ```

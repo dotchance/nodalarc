@@ -1,6 +1,6 @@
-/* Session launcher overlay: Launch (user and shipped sessions + YAML deploy) and
-   Build (the wizard flow) as two structurally separate surfaces. Matte —
-   no hero branding, no gradients. */
+/* Session launcher overlay: user and shipped sessions plus YAML deploy, with
+   the Session Builder one rail entry away. Matte — no hero branding, no
+   gradients. */
 
 .launcher-overlay {
   position: fixed;
@@ -256,4 +256,28 @@
 
 .launcher-row-shell .ui-iconbtn {
   align-self: center;
+}
+
+.launcher-error {
+  background: color-mix(in srgb, var(--status-fail) 10%, transparent);
+  border: 1px solid color-mix(in srgb, var(--status-fail) 30%, transparent);
+  border-radius: var(--radius-md);
+  padding: var(--space-4) var(--space-6);
+  font-size: var(--font-size-sm);
+  color: var(--status-fail);
+  margin-bottom: var(--space-8);
+  max-width: 800px;
+  width: 100%;
+}
+
+.launcher-warning {
+  background: color-mix(in srgb, var(--status-warn) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--status-warn) 35%, transparent);
+  border-radius: var(--radius-md);
+  padding: var(--space-4) var(--space-6);
+  font-size: var(--font-size-sm);
+  color: var(--accent-orange);
+  margin-bottom: var(--space-8);
+  max-width: 800px;
+  width: 100%;
 }

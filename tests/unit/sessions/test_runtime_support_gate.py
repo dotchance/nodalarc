@@ -108,21 +108,6 @@ def _move_ground_sites_to_luna(raw: CatalogSessionFixture) -> None:
         raw.write_catalog(site_ref, site_document)
 
 
-def test_source_propagator_compatibility_never_downgrades_distinct_physics() -> None:
-    support = RuntimeSupport.earth_luna()
-
-    assert support.compatible_supported_propagators("j2_mean_elements") == (
-        "j2_mean_elements",
-        "two_body",
-    )
-    assert support.compatible_supported_propagators("two_body") == (
-        "j2_mean_elements",
-        "two_body",
-    )
-    assert support.compatible_supported_propagators("sgp4_tle") == ("sgp4_tle",)
-    assert support.compatible_supported_propagators("crtbp") == ()
-
-
 class TestMandatoryGate:
     def test_bgp_routing_domain_rejected_typed_without_explicit_support(self) -> None:
         raw = _session(protocol="bgp")

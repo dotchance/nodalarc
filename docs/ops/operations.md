@@ -6,8 +6,8 @@ Day-to-day management of a running NodalArc deployment.
 
 ### From the UI
 
-Users can switch sessions from the browser wizard. They select or build a
-segment session, choose routing options, and deploy. The platform handles the
+Users can switch sessions from the browser's Sessions window. They select a
+session and deploy it, or author one in the Session Builder. The platform handles the
 transition automatically: it tears down the old session and brings up the new
 one.
 

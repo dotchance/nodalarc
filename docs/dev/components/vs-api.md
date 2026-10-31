@@ -47,7 +47,6 @@ NATS Streams --subscribe---> VS-API --WebSocket/REST---> Clients
 | GET | `/api/v1/metrics/flows/{flow_id}` | Refused with `501 history.not_collected`: VS-API records no probe results |
 | POST | `/api/v1/sessions/switch` | Deploy a catalog session revision; `record_history` chooses history recording |
 | POST | `/api/v1/session/deploy-from-yaml` | Save uploaded session YAML to the user catalog and deploy it; takes `record_history` |
-| GET | `/api/v1/sessions/coverage-preview` | Coverage preview for wizard |
 
 ## WebSocket
 
@@ -98,15 +97,14 @@ client sees a failed connection and no close code.
 
 ## Session Management
 
-### Deploy (from wizard)
+### Deploy
 
 1. Resolve segment session YAML through the shared resolver
 2. Create ConstellationSpec CR
 3. Return immediately - Operator handles pod creation async
 4. WebSocket broadcasts progress as session deploys
 
-The wizard generator emits the same segment grammar accepted by YAML upload.
-There is no separate wizard-only session format.
+The Session Builder saves the same segment grammar accepted by YAML upload.
 
 ### Switch
 

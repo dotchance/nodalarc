@@ -1,12 +1,12 @@
 // Copyright 2024-2026 .chance (dotchance)
 // Licensed under the Apache License, Version 2.0. See LICENSE file.
-/** The wizard's catalog-session launcher: catalog sessions deploy as-is.
+/** The catalog-session launcher: catalog sessions deploy as-is.
  *
  * The session list and switch endpoints are the launch path for worked
- * examples; the wizard must surface them (the wiring was once dropped and
+ * examples; the launcher must surface them (the wiring was once dropped and
  * left the UI with no way to start a shipped session).
  */
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, vi, afterEach } from "vitest";
 import { render, screen, fireEvent, cleanup, waitFor } from "@testing-library/react";
 import type { CatalogSessionSummary } from "../../builder/generated/builderApi";
 
@@ -17,7 +17,7 @@ vi.mock("../../config", () => ({
   authHeaders: (extra?: Record<string, string>) => ({ ...extra }),
 }));
 
-const { SessionWizard } = await import("../SessionWizard");
+const { SessionLauncher } = await import("../SessionLauncher");
 
 const SESSIONS: CatalogSessionSummary[] = [
   {
@@ -54,19 +54,12 @@ const SESSIONS: CatalogSessionSummary[] = [
   },
 ];
 
-describe("SessionWizard catalog sessions", () => {
-  beforeEach(() => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(() => Promise.resolve({ ok: true, json: () => Promise.resolve([]) })),
-    );
-  });
-
+describe("SessionLauncher catalog sessions", () => {
   it("launches an inactive catalog session via the switch path", async () => {
     const onLaunchSession = vi.fn().mockResolvedValue({ ok: true });
     const onDeployStarted = vi.fn();
     render(
-      <SessionWizard
+      <SessionLauncher
         onDeployStarted={onDeployStarted}
         onClose={undefined}
         deploying={false}
@@ -88,7 +81,7 @@ describe("SessionWizard catalog sessions", () => {
     });
     const onDeployStarted = vi.fn();
     render(
-      <SessionWizard
+      <SessionLauncher
         onDeployStarted={onDeployStarted}
         onClose={undefined}
         deploying={false}
@@ -106,7 +99,7 @@ describe("SessionWizard catalog sessions", () => {
 
   it("says why the session list did not load", () => {
     render(
-      <SessionWizard
+      <SessionLauncher
         onDeployStarted={vi.fn()}
         onClose={undefined}
         deploying={false}
@@ -122,7 +115,7 @@ describe("SessionWizard catalog sessions", () => {
   it("launches with history recording when the launcher toggle is set", () => {
     const onLaunchSession = vi.fn().mockResolvedValue({ ok: true });
     render(
-      <SessionWizard
+      <SessionLauncher
         onDeployStarted={vi.fn()}
         onClose={undefined}
         deploying={false}
@@ -142,7 +135,7 @@ describe("SessionWizard catalog sessions", () => {
   it("disables the currently running session", () => {
     const onLaunchSession = vi.fn().mockResolvedValue({ ok: true });
     render(
-      <SessionWizard
+      <SessionLauncher
         onDeployStarted={vi.fn()}
         onClose={undefined}
         deploying={false}

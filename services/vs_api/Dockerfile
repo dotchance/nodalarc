@@ -1,6 +1,6 @@
 # VS-API container — platform infrastructure service.
 #
-# VS-API is the user's front door: browser wizard, WebSocket streaming,
+# VS-API is the user's front door: the Session Builder, WebSocket streaming,
 # REST API, terminal proxy, and session lifecycle orchestrator. It is a
 # long-lived service that survives across session switches — the Operator
 # never restarts it. Session parameters are variables, not reasons to
@@ -62,7 +62,7 @@ COPY adapters/ adapters/
 # Copy VS-API service
 COPY services/vs_api/ services/vs_api/
 
-# Copy OME service (coverage_preview used by wizard)
+# Copy OME service (the Builder's world preview propagates through it)
 COPY services/ome/ services/ome/
 
 # Bake in deployment templates and the static catalog.

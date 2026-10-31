@@ -400,39 +400,6 @@ class TestCrossBodyAuthority:
         assert _distance(iss.velocity_ecef_km_s, GOLDEN[43200.0]["itrs_vel"]) < VEL_TOL_KMS
 
 
-class TestPreviewRefusal:
-    def test_mixed_body_diagnostic_pairs_are_refused(self):
-        from nodalarc.models.addressing import NeighborAssignment
-        from ome.coverage_preview import _scan_isl_failure_reasons
-
-        inputs, _ = _earth_luna_world()
-        earth_sat = next(s for s in inputs.satellites if s.central_body == "earth")
-        luna_sat = next(s for s in inputs.satellites if s.central_body == "luna")
-        neighbors = frozenset(
-            {
-                (
-                    earth_sat.node_id,
-                    NeighborAssignment("isl0", luna_sat.node_id, "isl", 0),
-                ),
-                (
-                    luna_sat.node_id,
-                    NeighborAssignment("isl0", earth_sat.node_id, "isl", 0),
-                ),
-            }
-        )
-        with pytest.raises(ValueError, match="mixed-body pair"):
-            _scan_isl_failure_reasons(
-                [earth_sat, luna_sat],
-                inputs.addressing,
-                neighbors,
-                1_780_876_800.0,
-                inputs.period,
-                inputs.propagator_id,
-                inputs.body_frames,
-                {"polar_seam_enabled": False, "latitude_threshold_deg": 70.0},
-            )
-
-
 class TestEphemerisFrameGate:
     def test_gcrs_is_the_only_supported_kernel_frame(self):
         from nodalarc.runtime_support import FeatureCategory, RuntimeSupport

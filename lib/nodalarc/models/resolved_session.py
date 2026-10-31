@@ -3,7 +3,7 @@
 """ResolvedSession — the frozen runtime view produced by session resolution.
 
 This module defines the authoritative object that the resolver will hand to OME,
-Scheduler, Operator, VS-API, MI, and coverage preview. The model self-defends the
+Scheduler, Operator, VS-API, and MI. The model self-defends the
 runtime truth it can validate locally: immutable config, concrete node identity,
 materialized terminal inventory, disjoint SID blocks, and resolved link-rule
 node sets.
@@ -794,7 +794,7 @@ class SourceContext(BaseModel):
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    # e.g. "vs_api.deploy", "operator.reconcile", "wizard", "test".
+    # e.g. "vs_api.deploy", "operator.reconcile", "test".
     origin: NonEmptyReference
     session_path: NonEmptyReference | None = None
     run_id: NonEmptyReference | None = None

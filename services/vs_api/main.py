@@ -43,13 +43,9 @@ from nodal.logging import connect as _connect_logging
 from nodal.logging import uvicorn_settings as _uvicorn_logging_settings
 from nodalarc.catalog_closure import (
     CatalogClosureError,
-    load_catalog_object,
     validate_session_root,
 )
 from nodalarc.catalog_refs import SessionRef
-from nodalarc.catalog_repository import (
-    CatalogReadSnapshot,
-)
 from nodalarc.catalog_upload import DEFAULT_CATALOG_UPLOAD_LIMITS
 from nodalarc.configuration_yaml import load_configuration_yaml
 from nodalarc.cr_runtime_config import (
@@ -75,19 +71,6 @@ from nodalarc.kubernetes_runtime_config import (
     KubernetesRuntimeConfigErrorCode,
 )
 from nodalarc.models.api_refusal import ApiRefusal, LegacyRefusal
-from nodalarc.models.builder_api import (
-    WizardAvailableStation,
-    WizardAvailableStationResponse,
-    WizardConstellationPresetResponse,
-    WizardCoverageRequest,
-    WizardExtensionRulesResponse,
-    WizardGroundStationSetPreset,
-    WizardGroundStationSetPresetResponse,
-    WizardSatelliteTerminalSummary,
-    WizardSatelliteTypePreset,
-    WizardSatelliteTypePresetResponse,
-)
-from nodalarc.models.coverage import CoveragePreviewResult
 from nodalarc.models.decision_explanation import DecisionExplanationFacts, GsDecisionTimelineFacts
 from nodalarc.models.events import (
     OPS_LOG_LEVELS,
@@ -3270,178 +3253,6 @@ async def switch_session(
         operation_id=operation_id,
         source=body.source,
     )
-
-
-# --- Wizard API endpoints ---
-
-
-def _shipped_snapshot(context: CatalogContext) -> CatalogReadSnapshot:
-    """One request's pinned catalog snapshot; presets list the shipped namespace."""
-    return context.repository.snapshot(context.scope)
-
-
-@app.get(
-    "/api/v1/presets/constellations",
-    dependencies=[Depends(_require_api_key)],
-    response_model=WizardConstellationPresetResponse,
-)
-def list_constellation_presets(
-    catalog_context: CatalogContext = Depends(get_catalog_context),
-) -> WizardConstellationPresetResponse:
-    """Return catalog presets with backend-owned runtime capability facts."""
-    from nodalarc.session_generator import load_constellation_preset_response
-
-    return load_constellation_preset_response(_shipped_snapshot(catalog_context))
-
-
-@app.get(
-    "/api/v1/presets/satellite-types",
-    dependencies=[Depends(_require_api_key)],
-    response_model=WizardSatelliteTypePresetResponse,
-)
-def list_satellite_types(
-    catalog_context: CatalogContext = Depends(get_catalog_context),
-) -> WizardSatelliteTypePresetResponse:
-    """Return the space node primitives that can fly a constellation.
-
-    Sessions assemble from primitives: the constellation supplies geometry
-    and a default node; the wizard may swap in any of these. (The retired
-    config-root satellite-type overrides are gone; these are catalog node
-    primitives, composed by the generator.)
-    """
-    from nodalarc.session_generator import list_space_node_presets
-
-    return WizardSatelliteTypePresetResponse(
-        presets=tuple(
-            WizardSatelliteTypePreset(
-                name=preset["name"],
-                display_name=preset["display_name"],
-                notes=preset["notes"],
-                file=preset["file"],
-                terminals=tuple(
-                    WizardSatelliteTerminalSummary(
-                        id=terminal["id"],
-                        role=terminal["role"],
-                        count=terminal["count"],
-                    )
-                    for terminal in preset["terminals"]
-                ),
-            )
-            for preset in list_space_node_presets(_shipped_snapshot(catalog_context))
-        )
-    )
-
-
-@app.get(
-    "/api/v1/presets/ground-stations",
-    dependencies=[Depends(_require_api_key)],
-    response_model=WizardGroundStationSetPresetResponse,
-)
-def list_ground_station_sets(
-    catalog_context: CatalogContext = Depends(get_catalog_context),
-) -> WizardGroundStationSetPresetResponse:
-    """Return available catalog site-set presets for the wizard."""
-    snapshot = _shipped_snapshot(catalog_context)
-    results: list[WizardGroundStationSetPreset] = []
-    for entry in snapshot.list(namespace="nodalarc", family="site-sets"):
-        wrapper, model = load_catalog_object(entry.ref, snapshot)
-        if wrapper != "site_set":
-            continue
-        data = model.model_dump(mode="python", by_alias=True, exclude_none=True)
-        results.append(
-            WizardGroundStationSetPreset(
-                name=data["id"],
-                description=data.get("display_name") or data.get("notes") or "",
-                stations=tuple(
-                    site.get("site", {}).get("id", "") if isinstance(site, dict) else str(site)
-                    for site in data.get("sites", [])
-                ),
-                file=str(entry.ref),
-            )
-        )
-    return WizardGroundStationSetPresetResponse(presets=tuple(results))
-
-
-@app.get(
-    "/api/v1/presets/ground-stations/stations",
-    dependencies=[Depends(_require_api_key)],
-    response_model=WizardAvailableStationResponse,
-)
-def list_individual_stations(
-    catalog_context: CatalogContext = Depends(get_catalog_context),
-) -> WizardAvailableStationResponse:
-    """Return all available catalog sites for custom set building."""
-    snapshot = _shipped_snapshot(catalog_context)
-    results: list[WizardAvailableStation] = []
-    for entry in snapshot.list(namespace="nodalarc", family="sites"):
-        wrapper, model = load_catalog_object(entry.ref, snapshot)
-        if wrapper != "site":
-            continue
-        site = model.model_dump(mode="python", by_alias=True, exclude_none=True)
-        location = site.get("location") or {}
-        if "lat_deg" not in location or "lon_deg" not in location:
-            continue
-        results.append(
-            WizardAvailableStation(
-                name=site["id"],
-                lat_deg=float(location["lat_deg"]),
-                lon_deg=float(location["lon_deg"]),
-                file=str(entry.ref),
-            )
-        )
-    return WizardAvailableStationResponse(stations=tuple(results))
-
-
-@app.get(
-    "/api/v1/wizard/extensions",
-    dependencies=[Depends(_require_api_key)],
-    response_model=WizardExtensionRulesResponse,
-)
-def wizard_extension_rules() -> WizardExtensionRulesResponse:
-    """Return the Wizard's backend-owned routing choices and initial controls."""
-    from vs_api.wizard_builder import wizard_extension_rules_response
-
-    return wizard_extension_rules_response()
-
-
-@app.post(
-    "/api/v1/session/preview-coverage",
-    response_model=CoveragePreviewResult,
-    responses=_REFUSAL_RESPONSES,
-    dependencies=[Depends(_require_api_key)],
-)
-async def preview_coverage(
-    request: WizardCoverageRequest,
-) -> CoveragePreviewResult | JSONResponse:
-    """Run OME coverage preview from typed Wizard intent and scoped catalog facts."""
-    from ome.coverage_preview import compute_coverage_preview
-
-    from vs_api.wizard_builder import wizard_preview_inputs
-
-    def compute():
-        context = get_catalog_context()
-        snapshot = context.repository.snapshot(context.scope)
-        inputs = wizard_preview_inputs(request, snapshot)
-        return compute_coverage_preview(
-            inputs.constellation_ref,
-            inputs.ground_site_set_ref,
-            catalog=inputs.catalog,
-        )
-
-    try:
-        result = await asyncio.to_thread(compute)
-    except ValueError as exc:
-        # Typed refusals are ValueError subclasses; they keep their own
-        # translation. A plain ValueError is a preview input the intent
-        # grammar admitted and the preview refused.
-        outcome = refusal_from_exception(exc)
-        if outcome is not None:
-            return outcome.response()
-        log.info("Invalid coverage preview request: %s", exc)
-        return refusal_response(
-            400, "coverage_preview.invalid", "Coverage preview request is invalid"
-        )
-    return result
 
 
 @app.post(

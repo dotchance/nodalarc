@@ -142,8 +142,8 @@ The resolver owns:
 - per-segment SID allocation
 - fail-loud rejection of future grammar that the runtime cannot execute yet
 
-VS-API, the Operator, OME, Scheduler, Measurement Interface, coverage preview,
-and session generation all use that resolved view. Production code should not
+VS-API, the Operator, OME, Scheduler, Measurement Interface, and the Session
+Builder all use that resolved view. Production code should not
 construct its own divergent view by independently validating old session shapes
 or expanding a constellation outside the resolver boundary.
 
@@ -271,7 +271,7 @@ routing domains, placement policy, time model, and optional body ephemeris.
 The path from a button click to routing looks like this:
 
 ```text
-User clicks Deploy in the wizard
+User deploys a session from the Sessions window
     -> VS-API resolves the segment session and creates a ConstellationSpec CR
     -> Operator watches the CR and resolves the same session runtime view
     -> Operator composes each node's workload and renders adapter config

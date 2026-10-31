@@ -524,8 +524,8 @@ Area assignment is per router: every OSPF interface of a router takes its
 router's area. Resolution refuses an OSPF instance with more than one area
 unless its backbone is contiguous over the instance's possible links and every
 other area has an area border router. No router joins two areas under
-per-router assignment, so a multi-area OSPF instance is refused, and the
-Wizard offers only `flat` for OSPF. IS-IS instances may use every strategy.
+per-router assignment, so a multi-area OSPF instance is refused. IS-IS
+instances may use every strategy.
 
 If `routing` is omitted, the resolver creates one instance, `default_domain`,
 running IS-IS over the routers whose adapter renders IS-IS. A session with no
@@ -558,7 +558,7 @@ is refused as unsupported.
 
 ## Deploying configuration
 
-The browser, upload API, Builder, Wizard, and Make-driven session path all use
+The browser, upload API, Builder, and Make-driven session path all use
 the same backend grammar and shared resolver. Deployment consists of:
 
 1. the persisted root session YAML selected for deployment;
@@ -571,7 +571,7 @@ into the session, rewrite `user:` references, or invent a separate deployment
 format. A missing, malformed, family-mismatched, or unsupported dependency
 blocks deployment before the session is treated as valid runtime state.
 
-Builder and Wizard saves are authored by the backend through the same strict
+Builder saves are authored by the backend through the same strict
 models. They preserve catalog references and configuration semantics, but they
 may normalize key ordering and YAML formatting. Import, reopen, save, and
 export do not promise byte-for-byte layout or comment preservation.

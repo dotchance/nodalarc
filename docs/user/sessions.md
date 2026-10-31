@@ -202,7 +202,7 @@ You can switch sessions without restarting the platform:
 make session DEFAULT_SESSION=catalog/nodalarc/sessions/earth-leo-walker.yaml
 ```
 
-The browser session wizard and YAML upload path use the same resolver as the
+The Session Builder and the YAML upload path use the same resolver as the
 command-line deploy. A session the browser accepts is the same shape the runtime
 accepts.
 

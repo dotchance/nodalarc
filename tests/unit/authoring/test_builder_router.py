@@ -274,57 +274,6 @@ def test_router_executes_every_typed_authoring_operation(catalog_context: Catalo
     assert deleted.json()["deleted_ref"] == saved_component["ref"]
 
 
-def test_router_compiles_wizard_intent_into_builder_contract(
-    catalog_context: CatalogContext,
-) -> None:
-    client = TestClient(_application(catalog_context))
-
-    response = client.post(
-        "/api/v1/builder/wizard/compile",
-        json={
-            "draft_revision": 2,
-            "intent": {
-                "constellation_ref": ("nodalarc:constellations/earth/leo/earth-leo-ring-36.yaml"),
-                "satellite_node_ref": "nodalarc:nodes/space/leo-relay.yaml",
-                "ground_site_set_ref": (
-                    "nodalarc:site-sets/earth/leo/earth-leo-starlink-pop-sites.yaml"
-                ),
-                "protocol": "isis",
-                "extensions": ["te", "mpls"],
-                "orbit_propagator": "j2_mean_elements",
-                "area_strategy": "per_plane",
-                "routing_timers": {
-                    "bfd": False,
-                    "bfd_detect_multiplier": 3,
-                    "bfd_rx_interval": 300,
-                    "bfd_tx_interval": 300,
-                    "isis_hello_interval": 1,
-                    "isis_hello_multiplier": 3,
-                    "spf_init_delay": 50,
-                    "spf_short_delay": 200,
-                    "spf_long_delay": 1000,
-                    "spf_holddown": 2000,
-                    "spf_time_to_learn": 500,
-                    "ospf_hello_interval": 1,
-                    "ospf_dead_interval": 3,
-                    "ospf_spf_delay": 50,
-                    "ospf_spf_initial_hold": 200,
-                    "ospf_spf_max_hold": 1000,
-                },
-            },
-        },
-    )
-
-    assert response.status_code == 200, response.text
-    compiled = response.json()
-    assert compiled["target_ref"].startswith("user:sessions/wizard/")
-    assert compiled["save_verdict"]["allowed"] is True
-    assert compiled["deploy_eligibility_after_save"]["allowed"] is True
-    session_source = compiled["draft"]["state"]["session"]["segments"][0]["source"]
-    assert session_source.startswith("user:constellations/wizard/")
-    assert compiled["draft"]["state"]["catalog_documents"][0]["ref"] == session_source
-
-
 @pytest.mark.parametrize(
     ("code", "expected_status"),
     [

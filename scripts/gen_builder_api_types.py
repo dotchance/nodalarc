@@ -58,30 +58,6 @@ from nodalarc.models.builder_api import (  # noqa: E402
     DependencyClosureEntry,
     DependencyClosureInventory,
     Sha256Digest,
-    WizardAvailableStation,
-    WizardAvailableStationResponse,
-    WizardBfdMetadata,
-    WizardCompileRefusal,
-    WizardCompileRequest,
-    WizardConstellationCapability,
-    WizardConstellationGeometry,
-    WizardConstellationPreset,
-    WizardConstellationPresetResponse,
-    WizardCoverageRequest,
-    WizardExtensionMetadata,
-    WizardExtensionRulesResponse,
-    WizardGroundStationSetPreset,
-    WizardGroundStationSetPresetResponse,
-    WizardOrbitModelMetadata,
-    WizardPhysicalIntent,
-    WizardProtocolMetadata,
-    WizardRoutingTimerFieldMetadata,
-    WizardRoutingTimerIntent,
-    WizardSatelliteTerminalSummary,
-    WizardSatelliteTypePreset,
-    WizardSatelliteTypePresetResponse,
-    WizardSessionIntent,
-    WizardWalkerPatternMetadata,
 )
 from nodalarc.models.builder_catalog_api import (  # noqa: E402
     BuilderCatalogBootstrap,
@@ -204,7 +180,6 @@ from nodalarc.models.builder_visual_api import (  # noqa: E402
     BuilderVisualWalkerLayoutResult,
 )
 from nodalarc.models.builder_world import BuilderWorld  # noqa: E402
-from nodalarc.models.coverage import CoveragePreviewResult  # noqa: E402
 from nodalarc.models.session_sources import (  # noqa: E402
     CatalogSessionSourceId,
     CatalogSessionSummary,
@@ -226,7 +201,7 @@ from pydantic.json_schema import GenerateJsonSchema  # noqa: E402
 BUILDER_OUT = ROOT / "frontend/src/builder/generated/builderApi.ts"
 RUNTIME_OUT = ROOT / "frontend/src/generated/vsApi.ts"
 
-# The Builder, Wizard, catalog and session-switch contracts.
+# The Builder, catalog and session-switch contracts.
 BUILDER_ROOTS: tuple[type[BaseModel], ...] = (
     BuilderIssue,
     BuilderCatalogDocument,
@@ -240,30 +215,6 @@ BUILDER_ROOTS: tuple[type[BaseModel], ...] = (
     BuilderDeployVerdict,
     BuilderCompileRequest,
     BuilderCompileResult,
-    WizardConstellationGeometry,
-    WizardConstellationCapability,
-    WizardConstellationPreset,
-    WizardConstellationPresetResponse,
-    WizardOrbitModelMetadata,
-    WizardWalkerPatternMetadata,
-    WizardSatelliteTerminalSummary,
-    WizardSatelliteTypePreset,
-    WizardSatelliteTypePresetResponse,
-    WizardGroundStationSetPreset,
-    WizardGroundStationSetPresetResponse,
-    WizardAvailableStation,
-    WizardAvailableStationResponse,
-    WizardBfdMetadata,
-    WizardExtensionMetadata,
-    WizardRoutingTimerFieldMetadata,
-    WizardProtocolMetadata,
-    WizardExtensionRulesResponse,
-    WizardPhysicalIntent,
-    WizardRoutingTimerIntent,
-    WizardSessionIntent,
-    WizardCompileRequest,
-    WizardCoverageRequest,
-    WizardCompileRefusal,
     BuilderSessionDeployRequest,
     BuilderSessionDeployAccepted,
     BuilderSessionDeployRefusal,
@@ -398,7 +349,6 @@ BUILDER_ROOTS: tuple[type[BaseModel], ...] = (
     CatalogSessionYamlImportResult,
     CatalogOperationRefusal,
     BuilderWorld,
-    CoveragePreviewResult,
 )
 
 # The runtime contracts: the state socket and terminal socket messages, and every
@@ -490,8 +440,6 @@ REQUEST_ROOTS: frozenset[str] = frozenset(
         "StateSocketCommand",
         "TerminalMessage",
         "TraceRequest",
-        "WizardCompileRequest",
-        "WizardCoverageRequest",
     }
 )
 

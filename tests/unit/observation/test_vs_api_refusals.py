@@ -257,7 +257,6 @@ def test_a_route_stated_refusal_uses_the_same_envelope() -> None:
     [
         ("/api/v1/sessions/switch", "post"),
         ("/api/v1/session/deploy-from-yaml", "post"),
-        ("/api/v1/session/preview-coverage", "post"),
         ("/api/v1/introspect", "post"),
         ("/api/v1/sessions/yaml", "get"),
     ],

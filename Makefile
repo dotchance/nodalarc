@@ -521,7 +521,7 @@ test-runtime-matrix: ## Destructively qualify every shipped session against the 
 	@echo "[runtime-matrix] WARNING: this replaces the active NodalArc session in $(NAMESPACE) once per shipped session."
 	@NAMESPACE='$(NAMESPACE)' PYTHONPATH=lib uv run pytest tests/integration/operator -m catalog --tb=short -q -rA
 
-test-builder-e2e: ## Destructively qualify authored sessions (Wizard, Builder, YAML, forked objects) on the live cluster
+test-builder-e2e: ## Destructively qualify authored sessions (Builder, YAML, forked objects) on the live cluster
 	@echo "[builder-e2e] WARNING: this replaces the active NodalArc session in $(NAMESPACE)."
 	@NAMESPACE='$(NAMESPACE)' PYTHONPATH=lib uv run pytest tests/integration/operator/test_authoring.py --tb=short -q -rA
 

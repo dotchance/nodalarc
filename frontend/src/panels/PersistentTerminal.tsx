@@ -192,7 +192,7 @@ export function PersistentTerminal({
   );
 
   // Runtime session identity changes even when router node IDs are reused.
-  // Tear down stale WebSockets so a wizard redeploy opens terminals into the
+  // Tear down stale WebSockets so a redeploy opens terminals into the
   // current pod set instead of replaying dead sessions from the previous run.
   useEffect(() => {
     for (const session of sessionsRef.current.values()) {

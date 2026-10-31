@@ -15,7 +15,7 @@ concept under `tests/unit`:
 |-----------|----------------|
 | `sky` | Orbits, visibility, link scheduling, latency |
 | `sessions` | Session grammar, catalog, resolver |
-| `authoring` | Session Builder and Wizard services |
+| `authoring` | Session Builder services |
 | `routing` | Router configuration and workload composition |
 | `runtime` | Operator, Scheduler and Node Agent logic |
 | `observation` | VS-API views, explanations, history, logging |
@@ -101,7 +101,7 @@ does and ends by checking every truth:
 | `test_sessions.py` | Selects, runs and switches sessions |
 | `test_time.py` | Pauses, changes speed, seeks |
 | `test_topology.py` | Lets the sky move; watches a make-before-break handover; seeks during one |
-| `test_authoring.py` | Authors a session with the Wizard, the Builder, a YAML file or forked catalog objects and runs it |
+| `test_authoring.py` | Authors a session with the Builder, a YAML file or forked catalog objects and runs it |
 | `test_history.py` | Records a session and reads its link history back |
 | `test_resilience.py` | Repairs a ground link that was cut under NodalArc; ends a host's workload from its shell |
 | `test_catalog.py` | Runs every shipped session |

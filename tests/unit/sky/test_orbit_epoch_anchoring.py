@@ -264,8 +264,8 @@ class TestRetargetSatellites:
 class TestConstructionAuthority:
     """Anchoring happens where inputs are built, so every consumer inherits.
 
-    Live pacing, the batch timeline, coverage preview, and the builder
-    preview all take satellites from build_ome_inputs_from_resolved and
+    Live pacing, the batch timeline, and the builder preview all take
+    satellites from build_ome_inputs_from_resolved and
     propagate dt from an epoch they supply. The working photograph must be
     valid at the session epoch the moment inputs exist, not only after the
     live loop re-anchors.
@@ -678,38 +678,3 @@ class TestFractionalTimeConstraint:
             # 1e-12 km above is the invariant.
             drift_km = _distance(state_got.position_ecef_km, state_want.position_ecef_km)
             assert drift_km < 1e-9, f"{propagator}: {drift_km} km"
-
-
-class TestPreviewAuthority:
-    """The coverage diagnostic honors the anchor like the other consumers."""
-
-    def test_shifted_anchor_feasibility_matches_aligned_reference(self):
-        from ome.coverage_preview import _scan_isl_failure_reasons
-
-        inputs_a = TestConstructionAuthority._inputs()
-        inputs_b = TestConstructionAuthority._inputs(start_time="2026-06-08T01:00:00Z")
-        window_epoch = 1_780_876_800.0 + 3600.0
-        vis_params = {"polar_seam_enabled": False, "latitude_threshold_deg": 70.0}
-
-        breakdown_a, feasible_a = _scan_isl_failure_reasons(
-            inputs_a.satellites,
-            inputs_a.addressing,
-            inputs_a.neighbors,
-            window_epoch,
-            inputs_a.period,
-            inputs_a.propagator_id,
-            inputs_a.body_frames,
-            vis_params,
-        )
-        breakdown_b, feasible_b = _scan_isl_failure_reasons(
-            inputs_b.satellites,
-            inputs_b.addressing,
-            inputs_b.neighbors,
-            window_epoch,
-            inputs_b.period,
-            inputs_b.propagator_id,
-            inputs_b.body_frames,
-            vis_params,
-        )
-        assert feasible_a == feasible_b
-        assert breakdown_a == breakdown_b

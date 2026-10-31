@@ -1,13 +1,13 @@
 # VS-API is platform infrastructure, not a session-scoped service.
 #
-# It is the user's front door — the browser wizard, WebSocket streaming,
+# It is the user's front door — the Session Builder, WebSocket streaming,
 # REST API, and session orchestrator. It must never be restarted by the
 # Operator during session switches (restart_platform_pods excludes it).
 #
 # Volume mount philosophy:
 #   platform-config  — platform infrastructure config, does not change per session
 #   session-config   — directory mount (auto-updates), bootstrap for dev path only;
-#                      the wizard path reads catalog sessions from catalog/nodalarc/
+#                      catalog sessions deploy from catalog/nodalarc/
 #   session-db       — PVC-backed session data: the user catalog, builder-saved
 #                      sessions, and one history SQLite file per session run
 #                      deployed with history recording. User work product;

@@ -83,8 +83,7 @@ NodalArc is built so a platform operator can install it, and a network engineer 
 
 From the browser you can:
 
-- choose constellations, satellite types, ground-site sets, relay segments, and routing stacks
-- preview coverage before deploying a bad session
+- author sessions in the Session Builder from constellations, node models, ground-site sets, relay segments, and routing stacks
 - deploy and switch sessions
 - watch satellites, ISLs, ground links, handoffs, and convergence events
 - inspect individual satellites and ground stations
@@ -103,23 +102,11 @@ The globe shows satellites, ground stations, orbital paths, inter-satellite link
 
 ### 2. Build Or Select A Session
 
-The session wizard reads the same files the runtime reads. You can deploy from existing YAML, choose from catalog presets, or build a new session from primitives.
+The Sessions window lists the shipped sessions and the sessions in your user catalog. You can deploy one as written, or import a session YAML file and deploy it.
 
-![Session catalog and constellation picker](docs/images/readme-session-catalog.png)
+The Session Builder authors new sessions. It edits the same session YAML the runtime reads and composes the session from catalog references: constellations, site sets, nodes, terminals and orbits. Every change compiles through the shared resolver, and a session that does not resolve shows the resolver's refusal.
 
-The important boundary is still the session. The wizard is a safer way to write it, not a second configuration system.
-
-![Session ready for coverage preview](docs/images/readme-session-ready.png)
-
-### 3. Preview The Geometry Before Deploy
-
-The coverage preview runs feasibility math before pods come up. It shows which ground stations are reachable, where the gaps are, how ISLs form, and where the selected geometry is going to disappoint you.
-
-![Coverage preview with ground-station gaps and ISL statistics](docs/images/readme-coverage-preview.png)
-
-The editor can tell you whether the YAML parses. The preview tells you whether the sky agrees.
-
-### 4. Inspect The Running Network
+### 3. Inspect The Running Network
 
 Select a satellite or ground station to see active links, link latency, position, route-adjacency context, and trace controls.
 
@@ -129,7 +116,7 @@ Switch to the topology view when the orbital picture is too physical and you wan
 
 ![Topology view of a running constellation](docs/images/readme-topology.png)
 
-### 5. Open A Router Terminal
+### 4. Open A Router Terminal
 
 Every satellite and ground station is a real running node. On a router, open the terminal and run the commands you already know. On a host, you get that host's own shell.
 
@@ -139,7 +126,7 @@ The terminal is not decorative. This is one shell into one real node among hundr
 
 ![FRR terminal showing show isis neighbor output](docs/images/readme-router-cli.png)
 
-### 6. Experiment Across Orbital And Lunar Segments
+### 5. Experiment Across Orbital And Lunar Segments
 
 Sessions can assemble independent building blocks into one emulated network: LEO, MEO, GEO, cislunar relay, lunar relay, and surface ground nodes all keep their own segment identity while sharing one live routing experiment.
 

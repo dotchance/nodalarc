@@ -23,7 +23,7 @@ interface AppStateInputs {
 export function useAppState(inputs: AppStateInputs) {
   const { snapshot, clearSelection, sessionTransitioning, switching } = inputs;
 
-  // --- Catalog / wizard ---
+  // --- Catalog / session launcher ---
   const [showCatalog, setShowCatalog] = useState(true);
   const [hasEverDeployed, setHasEverDeployed] = useState(false);
 

@@ -243,8 +243,8 @@ def _isl_limits(
     rule: ResolvedLinkRule,
 ) -> tuple[float | None, float]:
     """``(max_range_km, field_of_regard_deg)`` for an ISL pair, min-reduced
-    across the two endpoints' terminals — the reduction the runtime and the
-    coverage preview both apply. A fixed pair uses the terminals the allocator
+    across the two endpoints' terminals, the reduction the runtime applies.
+    A fixed pair uses the terminals the allocator
     assigned (its interfaces); a visible pair, which has no assignment, reduces
     across each node's ISL terminals. FoR defaults to 360 (gate off) when no
     terminal limit is known.

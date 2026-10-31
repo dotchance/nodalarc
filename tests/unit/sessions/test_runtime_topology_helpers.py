@@ -3,8 +3,6 @@
 from nodalarc.models.addressing import (
     NeighborAssignment,
     neighbors_by_node,
-    topology_summary,
-    unique_isl_pairs,
 )
 
 
@@ -58,20 +56,3 @@ def test_neighbors_by_node_is_deterministic_for_resolved_facts() -> None:
         "shell-b-sat-1",
         "shell-a-sat-2",
     ]
-
-
-def test_unique_pairs_do_not_regenerate_node_identity() -> None:
-    assert unique_isl_pairs(_resolved_assignments()) == {
-        ("shell-a-sat-1", "shell-a-sat-2"),
-        ("shell-a-sat-1", "shell-b-sat-1"),
-    }
-
-
-def test_topology_summary_aggregates_resolved_neighbor_types() -> None:
-    assert topology_summary(_resolved_assignments()) == {
-        "intra_per_sat": 1,
-        "cross_per_sat": 1,
-        "max_cross_per_sat": 1,
-        "has_cross_plane": True,
-        "total_unique_pairs": 2,
-    }

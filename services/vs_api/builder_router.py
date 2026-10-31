@@ -6,7 +6,6 @@ from typing import Annotated, Any, Protocol
 
 from fastapi import APIRouter, Depends
 from fastapi.responses import JSONResponse
-from nodalarc.catalog_closure import CatalogClosureError
 from nodalarc.catalog_repository import (
     CatalogNotFoundError,
     CatalogReadSnapshot,
@@ -22,8 +21,6 @@ from nodalarc.models.builder_api import (
     BuilderSessionSaveRefusal,
     BuilderSessionSaveRequest,
     BuilderSessionSaveResult,
-    WizardCompileRefusal,
-    WizardCompileRequest,
 )
 from nodalarc.models.builder_catalog_api import (
     BuilderCatalogBootstrap,
@@ -89,7 +86,6 @@ from .builder_visual_draft import (
     BuilderVisualDraftService,
 )
 from .catalog_context import CatalogContext, get_catalog_context
-from .wizard_builder import build_wizard_compile_request
 
 BUILDER_API_PREFIX = "/api/v1/builder"
 
@@ -234,7 +230,6 @@ VisualDraftServiceFactory = Callable[[CatalogContext], VisualDraftService]
 CatalogDraftServiceFactory = Callable[[CatalogContext], CatalogDraftService]
 CatalogOperation = Callable[[CatalogService], Any]
 BuilderCompiler = Callable[..., BuilderCompileResult]
-WizardRequestBuilder = Callable[..., BuilderCompileRequest]
 BuilderSessionService = Callable[..., BuilderSessionSaveResult]
 BuilderDeployCallback = Callable[
     [BuilderSessionDeployRequest, CatalogContext],
@@ -252,7 +247,6 @@ class BuilderRouterServices:
     available_node_count_provider: AvailableNodeCountProvider
     context_provider: CatalogContextProvider = get_catalog_context
     compiler: BuilderCompiler = compile_builder_draft
-    wizard_request_builder: WizardRequestBuilder = build_wizard_compile_request
     session_service: BuilderSessionService = save_builder_session
     catalog_service_factory: CatalogServiceFactory = BuilderCatalogAuthoringService
     visual_draft_service_factory: VisualDraftServiceFactory = BuilderVisualDraftService
@@ -791,62 +785,6 @@ def create_builder_router(services: BuilderRouterServices) -> APIRouter:
             return await run_in_threadpool(compile_request)
         except (CatalogRepositoryError, OSError) as error:
             return _catalog_unavailable_response(error)
-
-    @router.post(
-        "/wizard/compile",
-        response_model=BuilderCompileResult,
-        responses={
-            422: {"model": WizardCompileRefusal},
-            503: {"model": WizardCompileRefusal},
-        },
-    )
-    async def compile_wizard(
-        request: WizardCompileRequest,
-        context: Context,
-        available_node_count: NodeCount,
-    ):
-        def compile_request() -> BuilderCompileResult:
-            snapshot: CatalogReadSnapshot = context.repository.snapshot(context.scope)
-            builder_request = selected.wizard_request_builder(request, snapshot)
-            return selected.compiler(
-                builder_request,
-                snapshot,
-                available_node_count=available_node_count,
-                preview_factory=selected.preview_factory,
-            )
-
-        try:
-            return await run_in_threadpool(compile_request)
-        except CatalogClosureError as error:
-            refusal = WizardCompileRefusal(
-                code="wizard_compile.reference_error",
-                message=error.evidence.message,
-                cause_type=type(error).__name__,
-            )
-            return JSONResponse(
-                status_code=422,
-                content=refusal.model_dump(mode="json"),
-            )
-        except (TypeError, ValueError) as error:
-            refusal = WizardCompileRefusal(
-                code="wizard_compile.invalid_selection",
-                message=str(error),
-                cause_type=type(error).__name__,
-            )
-            return JSONResponse(
-                status_code=422,
-                content=refusal.model_dump(mode="json"),
-            )
-        except (CatalogRepositoryError, OSError) as error:
-            refusal = WizardCompileRefusal(
-                code="wizard_compile.repository_unavailable",
-                message="Catalog storage is unavailable",
-                cause_type=type(error).__name__,
-            )
-            return JSONResponse(
-                status_code=503,
-                content=refusal.model_dump(mode="json"),
-            )
 
     @router.post(
         "/session/save",

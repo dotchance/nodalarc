@@ -132,7 +132,8 @@ You should see adjacent satellites listed as FULL neighbors. If running IS-IS in
 make session DEFAULT_SESSION=catalog/nodalarc/sessions/earth-leo-walker.yaml
 ```
 
-Or users can deploy sessions from the browser wizard at http://localhost:3000.
+Or users can deploy sessions from the browser's Sessions window at
+http://localhost:3000.
 
 Available session configs:
 

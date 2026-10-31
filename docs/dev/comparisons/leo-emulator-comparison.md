@@ -80,7 +80,7 @@ NodalArc's differentiators are:
   closed.
 - Multi-node data-plane support through VXLAN and `tc`, with measured substrate
   latency subtracted from emulated orbital delay.
-- Operator-facing UX: session wizard, 3D globe, topology view, logs, panels,
+- Operator-facing UX: Session Builder, 3D globe, topology view, logs, panels,
   time controls, and node/terminal inspection.
 
 NodalArc's current limitations are also real:
@@ -271,8 +271,8 @@ paper-derived unless source becomes available for inspection.
 NodalArc and OpenSN are the only inspected systems with full integrated operator
 web interfaces.
 
-NodalArc's UX is broader for live operations: session catalog/wizard,
-protocol/timer choices, 3D globe, topology graph, live panels, logs, time
+NodalArc's UX is broader for live operations: session catalog and Session
+Builder, protocol/timer choices, 3D globe, topology graph, live panels, logs, time
 controls, terminal/command panels, and integrated state visualization. It is
 designed as an operator tool, not only an experiment script.
 

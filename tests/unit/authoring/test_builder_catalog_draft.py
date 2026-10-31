@@ -32,6 +32,7 @@ from nodalarc.models.builder_controls_api import (
     BuilderSelectChoiceCommand,
     BuilderSetScalarCommand,
 )
+from nodalarc.models.catalog import NadirBoresight
 from pydantic import ValidationError
 from vs_api import builder_catalog_draft as draft_module
 from vs_api.builder_catalog_draft import BuilderCatalogDraftService
@@ -358,12 +359,15 @@ def test_node_commands_derive_unique_mount_and_ethernet_shapes(
     opened = drafts.new(CatalogDraftNewRequest(family="nodes", object_id="command-node"))
     terminal_ref = CatalogRef("nodalarc:terminals/rf/rf-ka-starlink-space-gateway.yaml")
 
+    # A space node's mount points at nadir because the gesture says so; a mount
+    # added with no boresight carries none.
     mounted = drafts.add_node_terminal_mount(
         CatalogDraftAddNodeTerminalMountRequest(
             draft=opened.state,
             expected_draft_revision=opened.state.draft_revision,
             terminal_ref=terminal_ref,
             role="access",
+            boresight=NadirBoresight(mode="nadir"),
         )
     )
     mounted_again = drafts.add_node_terminal_mount(
@@ -400,7 +404,6 @@ def test_node_commands_derive_unique_mount_and_ethernet_shapes(
             "role": "access",
             "terminal": str(terminal_ref),
             "count": 1,
-            "boresight": {"mode": "nadir"},
         },
     ]
     assert second_port.state.document["node"]["ethernet"] == [
@@ -659,7 +662,7 @@ def test_yaml_buffer_is_parsed_identity_checked_and_revisioned_by_backend(
     assert invalid_model.applied is False
     assert invalid_model.draft == opened
     assert invalid_model.issues[0].code.endswith("extra_forbidden")
-    assert invalid_model.issues[0].pointer == "/payload/unknown_field"
+    assert invalid_model.issues[0].json_pointer == "/payload/unknown_field"
     assert invalid_model.issues[0].source_line == len(unknown_yaml.splitlines())
     assert set(invalid_model.issues[0].blocks) == {"save", "deploy"}
 

@@ -219,7 +219,7 @@ def test_router_executes_every_typed_authoring_operation(catalog_context: Catalo
     assert opened_draft.status_code == 200, opened_draft.text
     opened = opened_draft.json()
     notes = scalar_at(
-        CatalogComponentDraftEnvelope.model_validate(opened).control_tree.root,
+        CatalogComponentDraftEnvelope.model_validate_json(opened_draft.text).control_tree.root,
         "/terminal/notes",
     )
     patched_draft = client.post(

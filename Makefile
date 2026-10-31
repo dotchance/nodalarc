@@ -459,6 +459,7 @@ typecheck: ## Type-check Builder, session-configuration, and OME frame authority
 		services/vs_api/builder_control_tree.py \
 		services/vs_api/builder_session_service.py \
 		services/vs_api/builder_visual_draft.py \
+		services/vs_api/builder_yaml.py \
 		services/vs_api/catalog_context.py \
 		services/vs_api/session_deployment.py \
 		services/vs_api/transition_operations.py \

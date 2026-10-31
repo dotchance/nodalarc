@@ -109,7 +109,7 @@ def canonicalize_persisted_configuration(
     )
 
 
-class _ReachableProposalValidationError(ValueError):
+class ReachableProposalValidationError(ValueError):
     def __init__(
         self,
         proposal: BuilderProposedCatalogDocument,
@@ -142,7 +142,7 @@ class OverlayCatalogReadView(CatalogReadView):
                         proposal.document,
                     )
                 except (ValidationError, TypeError, ValueError) as error:
-                    raise _ReachableProposalValidationError(
+                    raise ReachableProposalValidationError(
                         proposal,
                         index,
                         error,
@@ -387,7 +387,7 @@ def _check_proposed_creates(
 
 
 def _reachable_proposal_validation_issues(
-    error: _ReachableProposalValidationError,
+    error: ReachableProposalValidationError,
 ) -> list[BuilderIssue]:
     draft_path = f"state.catalog_documents.{error.index}.document"
     if isinstance(error.cause, ValidationError):
@@ -916,7 +916,7 @@ def compile_builder_draft(
 
     try:
         closure = CatalogClosureCollector.collect(canonical_session.yaml_bytes, overlay)
-    except _ReachableProposalValidationError as error:
+    except ReachableProposalValidationError as error:
         issues.extend(_reachable_proposal_validation_issues(error))
         issues.extend(_check_proposed_creates(overlay.reached_proposals(), snapshot))
         return _compile_result(

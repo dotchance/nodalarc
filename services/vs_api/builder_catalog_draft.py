@@ -3,31 +3,30 @@
 from __future__ import annotations
 
 import copy
-from dataclasses import dataclass
-from typing import Any, NoReturn, cast
+from typing import Any, Literal, cast
 
 import yaml
 from nodalarc.catalog_closure import (
     CatalogClosureCollector,
     CatalogClosureError,
-    CatalogReadDocument,
+    CatalogDocumentNotFound,
     CatalogReadError,
     CatalogReadView,
     load_catalog_object,
-    preserved_catalog_path,
 )
 from nodalarc.catalog_refs import CatalogRef
 from nodalarc.catalog_registry import catalog_family_spec
 from nodalarc.catalog_repository import (
-    CatalogDocument,
     CatalogNotFoundError,
     CatalogReadSnapshot,
     CatalogRepositoryError,
 )
-from nodalarc.configuration_yaml import load_configuration_yaml
 from nodalarc.document_errors import document_errors
-from nodalarc.marked_yaml import MarkedYamlError, YamlSourceMap, load_marked_yaml
-from nodalarc.models.builder_api import JsonDocument
+from nodalarc.models.builder_api import (
+    BuilderIssue,
+    BuilderProposedCatalogDocument,
+    JsonDocument,
+)
 from nodalarc.models.builder_catalog_api import (
     CatalogComponentDraftEnvelope,
     CatalogComponentDraftState,
@@ -41,23 +40,27 @@ from nodalarc.models.builder_catalog_api import (
     CatalogDraftCompileRequest,
     CatalogDraftCompileResult,
     CatalogDraftControlMutationRequest,
-    CatalogDraftIssue,
     CatalogDraftNewRequest,
     CatalogDraftOpenRequest,
     CatalogDraftSaveRequest,
     CatalogDraftSaveResult,
-    CatalogOperationRefusal,
 )
 from nodalarc.models.catalog import (
     Node,
     Terminal,
 )
 from nodalarc.runtime_support import RuntimeSupport
-from pydantic import TypeAdapter, ValidationError
+from pydantic import BaseModel, TypeAdapter, ValidationError
 
-from .builder_catalog_service import BuilderCatalogAuthoringService, CatalogAuthoringError
+from .builder_catalog_service import (
+    BuilderCatalogAuthoringService,
+    catalog_snapshot,
+    refuse,
+)
 from .builder_compiler import (
     CanonicalConfigurationDocument,
+    OverlayCatalogReadView,
+    ReachableProposalValidationError,
     canonicalize_persisted_configuration,
 )
 from .builder_control_mutation import (
@@ -66,6 +69,7 @@ from .builder_control_mutation import (
 )
 from .builder_control_tree import BuilderControlTreeBuild, build_model_control_tree
 from .builder_visual_defaults import DEFAULT_TERMINAL_MOUNT_COUNT
+from .builder_yaml import parse_yaml_application
 from .catalog_context import CatalogContext
 
 _MAX_POINTER_DEPTH = 32
@@ -82,38 +86,12 @@ def _wrapper(family: CatalogComponentFamily) -> str:
     return wrapper
 
 
-def _refuse(
-    code: str,
-    message: str,
-    *,
-    ref: CatalogRef | None = None,
-    expected_revision: str | None = None,
-    current_revision: str | None = None,
-    cause: BaseException | None = None,
-) -> NoReturn:
-    raise CatalogAuthoringError(
-        CatalogOperationRefusal(
-            code=code,
-            message=message,
-            ref=str(ref) if ref is not None else None,
-            expected_revision=expected_revision,
-            current_revision=current_revision,
-            cause_type=type(cause).__name__ if cause is not None else None,
-        )
-    ) from cause
-
-
-def _issue_pointer(pointer: str) -> str:
-    """A draft issue names the document root "/"."""
-    return pointer or "/"
-
-
 def _decode_pointer(value: str) -> tuple[str, ...]:
     if not value.startswith("/"):
-        _refuse("catalog_authoring.invalid_patch", "JSON pointers must start with '/'")
+        refuse("catalog_authoring.invalid_patch", "JSON pointers must start with '/'")
     raw_tokens = value.split("/")[1:]
     if not raw_tokens or len(raw_tokens) > _MAX_POINTER_DEPTH:
-        _refuse(
+        refuse(
             "catalog_authoring.invalid_patch",
             f"JSON pointers must contain between 1 and {_MAX_POINTER_DEPTH} tokens",
         )
@@ -128,7 +106,7 @@ def _decode_pointer(value: str) -> tuple[str, ...]:
                 index += 1
                 continue
             if index + 1 >= len(raw) or raw[index + 1] not in {"0", "1"}:
-                _refuse(
+                refuse(
                     "catalog_authoring.invalid_patch",
                     f"JSON pointer {value!r} contains an invalid escape",
                 )
@@ -140,7 +118,7 @@ def _decode_pointer(value: str) -> tuple[str, ...]:
             or token in _FORBIDDEN_POINTER_TOKENS
             or any(ord(character) < 32 for character in token)
         ):
-            _refuse(
+            refuse(
                 "catalog_authoring.invalid_patch",
                 f"JSON pointer {value!r} contains a forbidden token",
             )
@@ -148,131 +126,53 @@ def _decode_pointer(value: str) -> tuple[str, ...]:
     return tuple(tokens)
 
 
+def _component_issue(
+    code: str,
+    stage: Literal["structural", "reference", "runtime_support"],
+    message: str,
+    *,
+    target_ref: CatalogRef,
+    json_pointer: str,
+) -> BuilderIssue:
+    """A component finding: structure and references block save and deploy;
+    runtime support blocks deploy only."""
+    return BuilderIssue(
+        code=code,
+        stage=stage,
+        severity="error",
+        message=message,
+        blocks=("deploy",) if stage == "runtime_support" else ("save", "deploy"),
+        source_ref=str(target_ref),
+        json_pointer=json_pointer,
+    )
+
+
 def _structural_issues(
     family: CatalogComponentFamily,
     target_ref: CatalogRef,
     document: JsonDocument,
     error: BaseException,
-) -> tuple[CatalogDraftIssue, ...]:
-    wrapper = _wrapper(family)
+) -> tuple[BuilderIssue, ...]:
     if isinstance(error, ValidationError):
         return tuple(
-            CatalogDraftIssue(
-                code=f"catalog_draft.structural.{item.type}",
-                stage="structural",
-                message=item.message,
-                pointer=_issue_pointer(item.pointer),
-                blocks=("save", "deploy"),
+            _component_issue(
+                f"builder.structural.{item.type}",
+                "structural",
+                item.message,
+                target_ref=target_ref,
+                json_pointer=item.pointer or "/",
             )
             for item in document_errors(error, document)
         )
     return (
-        CatalogDraftIssue(
-            code="catalog_draft.structural.invalid_document",
-            stage="structural",
-            message=f"Catalog component {target_ref} is invalid: {error}",
-            pointer=f"/{wrapper}",
-            blocks=("save", "deploy"),
+        _component_issue(
+            "builder.structural.invalid_document",
+            "structural",
+            f"Catalog component {target_ref} is invalid: {error}",
+            target_ref=target_ref,
+            json_pointer=f"/{_wrapper(family)}",
         ),
     )
-
-
-def _yaml_refusal_issue(
-    *,
-    code: str,
-    message: str,
-    pointer: str = "/",
-    source_line: int | None = None,
-    source_column: int | None = None,
-) -> CatalogDraftIssue:
-    return CatalogDraftIssue(
-        code=code,
-        stage="structural",
-        message=message,
-        pointer=pointer,
-        source_line=source_line,
-        source_column=source_column,
-        blocks=("save", "deploy"),
-    )
-
-
-def _issue_with_source(
-    issue: CatalogDraftIssue,
-    source_map: YamlSourceMap,
-) -> CatalogDraftIssue:
-    prefer_key = issue.code.endswith("extra_forbidden")
-    span = source_map.span_for(issue.pointer, prefer_key=prefer_key)
-    if span is None:
-        return issue
-    return CatalogDraftIssue(
-        **{
-            **issue.model_dump(mode="python"),
-            "source_line": span.start.line,
-            "source_column": span.start.column,
-        }
-    )
-
-
-def _parse_yaml_application(
-    family: CatalogComponentFamily,
-    target_ref: CatalogRef,
-    yaml_text: str,
-) -> tuple[JsonDocument | None, YamlSourceMap | None, tuple[CatalogDraftIssue, ...]]:
-    try:
-        marked = load_marked_yaml(yaml_text)
-    except (UnicodeError, MarkedYamlError, RecursionError) as error:
-        mark = error.problem_mark if isinstance(error, MarkedYamlError) else None
-        return (
-            None,
-            None,
-            (
-                _yaml_refusal_issue(
-                    code="catalog_draft.yaml.invalid_syntax",
-                    message=f"Catalog component YAML is invalid: {error}",
-                    source_line=(mark.line if mark is not None else None),
-                    source_column=(mark.column if mark is not None else None),
-                ),
-            ),
-        )
-    try:
-        document = _JSON_DOCUMENT.validate_python(marked.data, strict=True)
-    except ValidationError as error:
-        issues = tuple(
-            _issue_with_source(
-                _yaml_refusal_issue(
-                    code=f"catalog_draft.yaml.{item.type}",
-                    message=item.message,
-                    pointer=_issue_pointer(item.pointer),
-                ),
-                marked.source_map,
-            )
-            for item in document_errors(error, marked.data)
-        )
-        return None, marked.source_map, issues
-
-    wrapper = _wrapper(family)
-    if set(document) != {wrapper} or not isinstance(document.get(wrapper), dict):
-        issue = _issue_with_source(
-            _yaml_refusal_issue(
-                code="catalog_draft.yaml.invalid_wrapper",
-                message=f"Catalog component YAML must contain only the {wrapper!r} object",
-                pointer=f"/{wrapper}",
-            ),
-            marked.source_map,
-        )
-        return None, marked.source_map, (issue,)
-    expected_id = target_ref.relative_path.stem
-    if document[wrapper].get("id") != expected_id:
-        issue = _issue_with_source(
-            _yaml_refusal_issue(
-                code="catalog_draft.yaml.fixed_identity",
-                message="Component identity is fixed by its user: reference",
-                pointer=f"/{wrapper}/id",
-            ),
-            marked.source_map,
-        )
-        return None, marked.source_map, (issue,)
-    return document, marked.source_map, ()
 
 
 def _analyze(
@@ -281,7 +181,7 @@ def _analyze(
     document: JsonDocument,
     *,
     view: CatalogReadView,
-) -> tuple[CanonicalConfigurationDocument | None, tuple[CatalogDraftIssue, ...]]:
+) -> tuple[CanonicalConfigurationDocument | None, tuple[BuilderIssue, ...]]:
     try:
         canonical = canonicalize_persisted_configuration(target_ref, document)
     except (ValidationError, TypeError, ValueError) as error:
@@ -297,52 +197,39 @@ def _analyze(
         # which blocks save and deploy; its runtime support has nothing to judge.
         findings = ()
     runtime_issues = tuple(
-        CatalogDraftIssue(
-            code=f"catalog_draft.runtime_support.{feature.category.value}.{feature.value}",
-            stage="runtime_support",
-            message=feature.message,
-            pointer=pointer,
-            blocks=("deploy",),
+        _component_issue(
+            f"builder.runtime_support.{feature.category.value}.{feature.value}",
+            "runtime_support",
+            feature.message,
+            target_ref=target_ref,
+            json_pointer=pointer,
         )
         for feature, pointer in findings
     )
     return canonical, runtime_issues
 
 
-@dataclass(frozen=True, slots=True)
-class _DraftCatalogReadView(CatalogReadView):
-    snapshot: CatalogReadSnapshot
-    target_ref: CatalogRef
-    target: CanonicalConfigurationDocument
-
-    def read(self, ref: CatalogRef) -> CatalogReadDocument:
-        if ref == self.target_ref:
-            return CatalogReadDocument(
-                family=self.target.family,
-                preserved_path=preserved_catalog_path(ref),
-                yaml_bytes=self.target.yaml_bytes,
-            )
-        return self.snapshot.read(ref)
-
-
 def _reference_issues(
     snapshot: CatalogReadSnapshot,
     target_ref: CatalogRef,
     canonical: CanonicalConfigurationDocument,
-) -> tuple[CatalogDraftIssue, ...]:
+) -> tuple[BuilderIssue, ...]:
+    draft = BuilderProposedCatalogDocument(
+        ref=target_ref, document=canonical.canonical_json, origin="customized"
+    )
     try:
         CatalogClosureCollector.collect_references(
             (target_ref,),
-            _DraftCatalogReadView(snapshot, target_ref, canonical),
+            OverlayCatalogReadView(snapshot, {target_ref: (0, draft)}),
         )
     except CatalogClosureError as error:
         return (
-            CatalogDraftIssue(
-                code=f"catalog_draft.reference.{error.code.value}",
-                stage="reference",
-                message=error.evidence.message,
-                pointer=f"/{_wrapper(cast(CatalogComponentFamily, canonical.family))}",
-                blocks=("save", "deploy"),
+            _component_issue(
+                f"builder.reference.{error.code.value}",
+                "reference",
+                error.evidence.message,
+                target_ref=target_ref,
+                json_pointer=f"/{_wrapper(cast(CatalogComponentFamily, canonical.family))}",
             ),
         )
     return ()
@@ -405,34 +292,49 @@ def _next_state(
     )
 
 
-def _snapshot(context: CatalogContext) -> CatalogReadSnapshot:
-    try:
-        return context.repository.snapshot(context.scope)
-    except (CatalogRepositoryError, OSError) as error:
-        _refuse(
-            "catalog_authoring.persistence_failed",
-            f"Catalog snapshot is unavailable: {error}",
-            cause=error,
-        )
+def _referenced[T: BaseModel](
+    ref: CatalogRef,
+    view: CatalogReadView,
+    expected: type[T],
+    *,
+    draft_ref: CatalogRef,
+) -> T:
+    """The object a gesture references, read through the request's view.
 
-
-def _get(snapshot: CatalogReadSnapshot, ref: CatalogRef) -> CatalogDocument:
+    A ref the view cannot read is refused as missing or unreadable; an object
+    that does not validate, or is not the expected kind, is refused as an
+    invalid graph naming the ref.
+    """
     try:
-        return snapshot.get(ref)
-    except CatalogNotFoundError as error:
-        _refuse(
+        _, model = load_catalog_object(ref, view)
+    except CatalogDocumentNotFound as error:
+        refuse(
             "catalog_authoring.not_found",
             f"Catalog document does not exist: {ref}",
             ref=ref,
             cause=error,
         )
-    except (CatalogRepositoryError, OSError) as error:
-        _refuse(
+    except CatalogReadError as error:
+        refuse(
             "catalog_authoring.persistence_failed",
             f"Catalog document {ref} could not be read: {error}",
             ref=ref,
             cause=error,
         )
+    except (ReachableProposalValidationError, ValidationError, TypeError, ValueError) as error:
+        refuse(
+            "catalog_authoring.invalid_graph",
+            f"Referenced {ref} is invalid: {error}",
+            ref=draft_ref,
+            cause=error,
+        )
+    if not isinstance(model, expected):
+        refuse(
+            "catalog_authoring.invalid_graph",
+            f"Reference {ref} does not resolve to a {expected.__name__.lower()} component",
+            ref=draft_ref,
+        )
+    return model
 
 
 def _optional_revision(snapshot: CatalogReadSnapshot, ref: CatalogRef) -> str | None:
@@ -441,29 +343,10 @@ def _optional_revision(snapshot: CatalogReadSnapshot, ref: CatalogRef) -> str | 
     except CatalogNotFoundError:
         return None
     except (CatalogRepositoryError, OSError) as error:
-        _refuse(
+        refuse(
             "catalog_authoring.persistence_failed",
             f"Catalog document {ref} could not be read: {error}",
             ref=ref,
-            cause=error,
-        )
-
-
-def _canonical_source(document: CatalogDocument) -> JsonDocument:
-    try:
-        raw = load_configuration_yaml(document.content)
-        if not isinstance(raw, dict):
-            raise TypeError("catalog document root must be a mapping")
-        return canonicalize_persisted_configuration(
-            document.ref,
-            cast(JsonDocument, raw),
-        ).canonical_json
-    except (UnicodeError, yaml.YAMLError, ValidationError, TypeError, ValueError) as error:
-        _refuse(
-            "catalog_authoring.invalid_document",
-            f"Stored catalog document {document.ref} is invalid: {error}",
-            ref=document.ref,
-            current_revision=str(document.revision),
             cause=error,
         )
 
@@ -483,7 +366,7 @@ class BuilderCatalogDraftService:
         expected: int,
     ) -> None:
         if expected != draft.draft_revision:
-            _refuse(
+            refuse(
                 "catalog_authoring.stale_revision",
                 "Component draft changed before the requested operation",
                 ref=draft.target_ref,
@@ -500,7 +383,7 @@ class BuilderCatalogDraftService:
         if draft.source_ref is not None:
             current_source = _optional_revision(snapshot, draft.source_ref)
             if current_source != draft.expected_source_revision:
-                _refuse(
+                refuse(
                     "catalog_authoring.stale_revision",
                     f"Component draft source {draft.source_ref} changed after it was opened",
                     ref=draft.source_ref,
@@ -509,7 +392,7 @@ class BuilderCatalogDraftService:
                 )
         current_target = _optional_revision(snapshot, draft.target_ref)
         if current_target != draft.expected_target_revision:
-            _refuse(
+            refuse(
                 "catalog_authoring.stale_revision",
                 f"Component draft target {draft.target_ref} changed after it was opened",
                 ref=draft.target_ref,
@@ -524,7 +407,7 @@ class BuilderCatalogDraftService:
                 draft.expected_source_revision is not None
                 or draft.expected_target_revision is not None
             ):
-                _refuse(
+                refuse(
                     "catalog_authoring.invalid_graph",
                     "New component drafts cannot carry persisted catalog revisions",
                     ref=draft.target_ref,
@@ -536,20 +419,20 @@ class BuilderCatalogDraftService:
                 or draft.expected_source_revision is None
                 or draft.expected_target_revision != draft.expected_source_revision
             ):
-                _refuse(
+                refuse(
                     "catalog_authoring.invalid_graph",
                     "In-place component drafts require one matching user source and target revision",
                     ref=draft.target_ref,
                 )
             return
         if draft.expected_source_revision is None:
-            _refuse(
+            refuse(
                 "catalog_authoring.invalid_graph",
                 "Component forks require a pinned source revision",
                 ref=draft.target_ref,
             )
         if draft.expected_target_revision is not None:
-            _refuse(
+            refuse(
                 "catalog_authoring.conflict",
                 f"Component fork target already exists: {draft.target_ref}",
                 ref=draft.target_ref,
@@ -560,9 +443,9 @@ class BuilderCatalogDraftService:
         if not isinstance(request, CatalogDraftNewRequest):
             raise TypeError("request must be a CatalogDraftNewRequest")
         target_ref = CatalogRef(f"user:{request.family}/{request.object_id}.yaml")
-        snapshot = _snapshot(self._context)
+        snapshot = catalog_snapshot(self._context)
         if _optional_revision(snapshot, target_ref) is not None:
-            _refuse(
+            refuse(
                 "catalog_authoring.conflict",
                 f"Catalog component already exists: {target_ref}",
                 ref=target_ref,
@@ -581,9 +464,24 @@ class BuilderCatalogDraftService:
     def open(self, request: CatalogDraftOpenRequest) -> CatalogComponentDraftEnvelope:
         if not isinstance(request, CatalogDraftOpenRequest):
             raise TypeError("request must be a CatalogDraftOpenRequest")
-        snapshot = _snapshot(self._context)
-        source = _get(snapshot, request.source_ref)
-        family = cast(CatalogComponentFamily, source.family)
+        snapshot = catalog_snapshot(self._context)
+        return self._open(request, snapshot=snapshot, view=snapshot)
+
+    def _open(
+        self,
+        request: CatalogDraftOpenRequest,
+        *,
+        snapshot: CatalogReadSnapshot,
+        view: CatalogReadView,
+    ) -> CatalogComponentDraftEnvelope:
+        family = cast(CatalogComponentFamily, request.source_ref.family)
+        wrapper = _wrapper(family)
+        source = _referenced(
+            request.source_ref,
+            view,
+            BaseModel,
+            draft_ref=request.target_ref or request.source_ref,
+        )
         target_ref = request.target_ref
         if target_ref is None:
             target_ref = (
@@ -594,27 +492,27 @@ class BuilderCatalogDraftService:
         target_revision = _optional_revision(snapshot, target_ref)
         if target_ref == request.source_ref:
             if request.source_ref.namespace != "user":
-                _refuse(
+                refuse(
                     "catalog_authoring.read_only",
                     f"Shipped catalog document {request.source_ref} is read-only",
                     ref=request.source_ref,
                 )
         elif target_revision is not None:
-            _refuse(
+            refuse(
                 "catalog_authoring.conflict",
                 f"Catalog customization target already exists: {target_ref}",
                 ref=target_ref,
             )
-        document = copy.deepcopy(_canonical_source(source))
-        wrapper = _wrapper(family)
-        document[wrapper]["id"] = target_ref.relative_path.stem
+        body = cast(JsonDocument, source.model_dump(mode="json", by_alias=True, exclude_none=True))
+        body["id"] = target_ref.relative_path.stem
+        document: JsonDocument = {wrapper: body}
         return _envelope(
             CatalogComponentDraftState(
                 draft_revision=0,
                 family=family,
                 target_ref=target_ref,
                 source_ref=request.source_ref,
-                expected_source_revision=str(source.revision),
+                expected_source_revision=_optional_revision(snapshot, request.source_ref),
                 expected_target_revision=target_revision,
                 document=document,
             ),
@@ -630,7 +528,7 @@ class BuilderCatalogDraftService:
         if not isinstance(request, CatalogDraftControlMutationRequest):
             raise TypeError("request must be a CatalogDraftControlMutationRequest")
         self._assert_draft_revision(request.draft, request.expected_draft_revision)
-        snapshot = _snapshot(self._context)
+        snapshot = catalog_snapshot(self._context)
         self._assert_catalog_revisions(request.draft, snapshot)
         control_build = _control_build(
             request.draft.family,
@@ -643,7 +541,7 @@ class BuilderCatalogDraftService:
         for command in request.commands:
             binding = control_build.bindings.get(command.control_id)
             if binding is not None and binding.json_pointer in protected_pointers:
-                _refuse(
+                refuse(
                     "catalog_authoring.invalid_patch",
                     "Graphical controls cannot change the family wrapper or object identity",
                     ref=request.draft.target_ref,
@@ -656,7 +554,7 @@ class BuilderCatalogDraftService:
             )
             document = _JSON_DOCUMENT.validate_python(candidate, strict=True)
         except (BuilderControlMutationError, ValidationError, TypeError, ValueError) as error:
-            _refuse(
+            refuse(
                 "catalog_authoring.invalid_patch",
                 f"Component graphical mutation is invalid: {error}",
                 ref=request.draft.target_ref,
@@ -673,39 +571,33 @@ class BuilderCatalogDraftService:
         if not isinstance(request, CatalogDraftAddSiteNodeRequest):
             raise TypeError("request must be a CatalogDraftAddSiteNodeRequest")
         self._assert_draft_revision(request.draft, request.expected_draft_revision)
-        snapshot = _snapshot(self._context)
+        snapshot = catalog_snapshot(self._context)
         self._assert_catalog_revisions(request.draft, snapshot)
+        return self._add_site_node(request, snapshot=snapshot, view=snapshot)
 
-        node_document = _get(snapshot, request.node_ref)
-        try:
-            node_definition = catalog_family_spec("nodes").validate_document(
-                _canonical_source(node_document)
-            )
-        except (ValidationError, TypeError, ValueError) as error:
-            _refuse(
-                "catalog_authoring.invalid_graph",
-                f"Node reference {request.node_ref} is invalid: {error}",
-                ref=request.draft.target_ref,
-                cause=error,
-            )
-        if not isinstance(node_definition, Node):
-            _refuse(
-                "catalog_authoring.invalid_graph",
-                f"Node reference {request.node_ref} does not resolve to a node component",
-                ref=request.draft.target_ref,
-            )
+    def _add_site_node(
+        self,
+        request: CatalogDraftAddSiteNodeRequest,
+        *,
+        snapshot: CatalogReadSnapshot,
+        view: CatalogReadView,
+    ) -> CatalogComponentDraftEnvelope:
+
+        node_definition = _referenced(
+            request.node_ref, view, Node, draft_ref=request.draft.target_ref
+        )
 
         document = copy.deepcopy(request.draft.document)
         site = document[_wrapper("sites")]
         if not isinstance(site, dict):
-            _refuse(
+            refuse(
                 "catalog_authoring.invalid_document",
                 "Site component root must be an object before a node can be added",
                 ref=request.draft.target_ref,
             )
         nodes = site.get("nodes", [])
         if not isinstance(nodes, list):
-            _refuse(
+            refuse(
                 "catalog_authoring.invalid_document",
                 "Site nodes must be an array before a node can be added",
                 ref=request.draft.target_ref,
@@ -716,7 +608,7 @@ class BuilderCatalogDraftService:
             if isinstance(node, dict) and isinstance(node.get("id"), str)
         }
         if request.node_id in node_ids:
-            _refuse(
+            refuse(
                 "catalog_authoring.conflict",
                 f"Site node id already exists: {request.node_id}",
                 ref=request.draft.target_ref,
@@ -762,39 +654,31 @@ class BuilderCatalogDraftService:
         if not isinstance(request, CatalogDraftAddNodeTerminalMountRequest):
             raise TypeError("request must be a CatalogDraftAddNodeTerminalMountRequest")
         self._assert_draft_revision(request.draft, request.expected_draft_revision)
-        snapshot = _snapshot(self._context)
+        snapshot = catalog_snapshot(self._context)
         self._assert_catalog_revisions(request.draft, snapshot)
+        return self._add_node_terminal_mount(request, snapshot=snapshot, view=snapshot)
 
-        terminal_document = _get(snapshot, request.terminal_ref)
-        try:
-            terminal_model = catalog_family_spec("terminals").validate_document(
-                _canonical_source(terminal_document)
-            )
-        except (ValidationError, TypeError, ValueError) as error:
-            _refuse(
-                "catalog_authoring.invalid_graph",
-                f"Terminal reference {request.terminal_ref} is invalid: {error}",
-                ref=request.draft.target_ref,
-                cause=error,
-            )
-        if not isinstance(terminal_model, Terminal):
-            _refuse(
-                "catalog_authoring.invalid_graph",
-                f"Terminal reference {request.terminal_ref} does not resolve to a terminal component",
-                ref=request.draft.target_ref,
-            )
+    def _add_node_terminal_mount(
+        self,
+        request: CatalogDraftAddNodeTerminalMountRequest,
+        *,
+        snapshot: CatalogReadSnapshot,
+        view: CatalogReadView,
+    ) -> CatalogComponentDraftEnvelope:
+
+        _referenced(request.terminal_ref, view, Terminal, draft_ref=request.draft.target_ref)
 
         document = copy.deepcopy(request.draft.document)
         node = document[_wrapper("nodes")]
         if not isinstance(node, dict):
-            _refuse(
+            refuse(
                 "catalog_authoring.invalid_document",
                 "Node component root must be an object before a terminal mount can be added",
                 ref=request.draft.target_ref,
             )
         mounts = node.get("terminals", [])
         if not isinstance(mounts, list):
-            _refuse(
+            refuse(
                 "catalog_authoring.invalid_document",
                 "Node terminals must be an array before a terminal mount can be added",
                 ref=request.draft.target_ref,
@@ -815,7 +699,11 @@ class BuilderCatalogDraftService:
                 "role": request.role,
                 "terminal": str(request.terminal_ref),
                 "count": DEFAULT_TERMINAL_MOUNT_COUNT,
-                **({"boresight": {"mode": "nadir"}} if request.role == "access" else {}),
+                **(
+                    {"boresight": request.boresight.model_dump(mode="json")}
+                    if request.boresight is not None
+                    else {}
+                ),
             }
         )
         node["terminals"] = mounts
@@ -830,20 +718,20 @@ class BuilderCatalogDraftService:
         if not isinstance(request, CatalogDraftAddNodeEthernetPortRequest):
             raise TypeError("request must be a CatalogDraftAddNodeEthernetPortRequest")
         self._assert_draft_revision(request.draft, request.expected_draft_revision)
-        snapshot = _snapshot(self._context)
+        snapshot = catalog_snapshot(self._context)
         self._assert_catalog_revisions(request.draft, snapshot)
 
         document = copy.deepcopy(request.draft.document)
         node = document[_wrapper("nodes")]
         if not isinstance(node, dict):
-            _refuse(
+            refuse(
                 "catalog_authoring.invalid_document",
                 "Node component root must be an object before an Ethernet port can be added",
                 ref=request.draft.target_ref,
             )
         ethernet = node.get("ethernet", [])
         if not isinstance(ethernet, list):
-            _refuse(
+            refuse(
                 "catalog_authoring.invalid_document",
                 "Node ethernet must be an array before an Ethernet port can be added",
                 ref=request.draft.target_ref,
@@ -871,39 +759,21 @@ class BuilderCatalogDraftService:
         if not isinstance(request, CatalogDraftApplyYamlRequest):
             raise TypeError("request must be a CatalogDraftApplyYamlRequest")
         self._assert_draft_revision(request.draft, request.expected_draft_revision)
-        snapshot = _snapshot(self._context)
+        snapshot = catalog_snapshot(self._context)
         self._assert_catalog_revisions(request.draft, snapshot)
-        document, source_map, refusal_issues = _parse_yaml_application(
-            request.draft.family,
-            request.draft.target_ref,
-            request.yaml_text,
+        application = parse_yaml_application(request.draft.target_ref, request.yaml_text)
+        if application.canonical is None:
+            # The page holds the refused text; the draft stays as it was.
+            return CatalogDraftApplyYamlResult(
+                draft=_envelope(request.draft, view=snapshot),
+                yaml_text=request.yaml_text,
+                applied=False,
+                canonicalization_required=False,
+                issues=application.issues,
+            )
+        applied = _envelope(
+            _next_state(request.draft, application.canonical.canonical_json), view=snapshot
         )
-        if document is None:
-            return CatalogDraftApplyYamlResult(
-                draft=_envelope(request.draft, view=snapshot),
-                yaml_text=request.yaml_text,
-                applied=False,
-                canonicalization_required=False,
-                issues=refusal_issues,
-            )
-        applied = _envelope(_next_state(request.draft, document), view=snapshot)
-        if source_map is not None:
-            applied = CatalogComponentDraftEnvelope(
-                **{
-                    **applied.model_dump(mode="python"),
-                    "issues": tuple(
-                        _issue_with_source(issue, source_map) for issue in applied.issues
-                    ),
-                }
-            )
-        if any(issue.stage == "structural" for issue in applied.issues):
-            return CatalogDraftApplyYamlResult(
-                draft=_envelope(request.draft, view=snapshot),
-                yaml_text=request.yaml_text,
-                applied=False,
-                canonicalization_required=False,
-                issues=applied.issues,
-            )
         return CatalogDraftApplyYamlResult(
             draft=applied,
             yaml_text=request.yaml_text,
@@ -952,12 +822,12 @@ class BuilderCatalogDraftService:
     def compile(self, request: CatalogDraftCompileRequest) -> CatalogDraftCompileResult:
         if not isinstance(request, CatalogDraftCompileRequest):
             raise TypeError("request must be a CatalogDraftCompileRequest")
-        return self._compile_at_snapshot(request, _snapshot(self._context))
+        return self._compile_at_snapshot(request, catalog_snapshot(self._context))
 
     def save(self, request: CatalogDraftSaveRequest) -> CatalogDraftSaveResult:
         if not isinstance(request, CatalogDraftSaveRequest):
             raise TypeError("request must be a CatalogDraftSaveRequest")
-        snapshot = _snapshot(self._context)
+        snapshot = catalog_snapshot(self._context)
         compiled = self._compile_at_snapshot(
             CatalogDraftCompileRequest(
                 draft=request.draft,
@@ -967,7 +837,7 @@ class BuilderCatalogDraftService:
         )
         if not compiled.save_allowed or compiled.canonical_json is None:
             first = compiled.issues[0]
-            _refuse(
+            refuse(
                 (
                     "catalog_authoring.invalid_graph"
                     if first.stage == "reference"

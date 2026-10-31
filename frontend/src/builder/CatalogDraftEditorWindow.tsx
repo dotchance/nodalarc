@@ -1,6 +1,6 @@
 /** Backend-owned graphical and YAML catalog component editing. */
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Button } from "../ui/Button";
 import {
   EditorCard,
@@ -23,13 +23,20 @@ import {
   type BuilderControlMutation,
 } from "./GraphicalControlTreeEditor";
 import { useBuilderCatalog } from "./useBuilderWorld";
+import {
+  adoptedYamlBuffer,
+  answeredYamlBuffer,
+  useYamlAutoApply,
+  useYamlBuffer,
+  yamlBufferBlocksGraphicalEditing,
+} from "./useYamlBuffer";
 import type {
   BuilderVisualAuthoringFacts,
   CatalogComponentDraftEnvelope,
   CatalogDependencyImpact,
   CatalogDraftCompileResult,
-  CatalogDraftIssue,
   CatalogDraftSaveResult,
+  NadirBoresight,
   JsonValue,
 } from "./generated/builderApi";
 
@@ -67,6 +74,7 @@ interface NodeGesturesProps {
   addTerminalMount: (
     role: BuilderVisualAuthoringFacts["default_mount_role"],
     terminalRef: string,
+    boresight: NadirBoresight | null,
   ) => Promise<boolean>;
   addEthernetPort: () => Promise<boolean>;
 }
@@ -76,6 +84,9 @@ function NodeGestures({ authoring, disabled, addTerminalMount, addEthernetPort }
   const terminals = useBuilderCatalog("terminals");
   const [role, setRole] = useState(authoring.default_mount_role);
   const [terminal, setTerminal] = useState("");
+  // A space node's access mount points at nadir; a ground node's access mount
+  // carries no boresight, because its site installation states one.
+  const [pointing, setPointing] = useState<"nadir" | "none">("nadir");
   return (
     <EditorCard title="Add to this node" open>
       <SelectField
@@ -97,8 +108,28 @@ function NodeGestures({ authoring, disabled, addTerminalMount, addEthernetPort }
           })),
         ]}
       />
+      {role === "access" && (
+        <SelectField
+          label="new mount boresight"
+          value={pointing}
+          onChange={(value) => setPointing(value as "nadir" | "none")}
+          options={[
+            { value: "nadir", label: "nadir (a space node)" },
+            { value: "none", label: "none (its site states one)" },
+          ]}
+        />
+      )}
       <div className="builder-preset-row">
-        <Button disabled={disabled || !terminal} onClick={() => void addTerminalMount(role, terminal)}>
+        <Button
+          disabled={disabled || !terminal}
+          onClick={() =>
+            void addTerminalMount(
+              role,
+              terminal,
+              role === "access" && pointing === "nadir" ? { mode: "nadir" } : null,
+            )
+          }
+        >
           + terminal mount
         </Button>
         <Button disabled={disabled} onClick={() => void addEthernetPort()}>
@@ -180,12 +211,9 @@ export function CatalogDraftEditorWindow({
   const draftRef = useRef(initialDraft);
   const [baselineDocument, setBaselineDocument] = useState(initialDraft.state.document);
   const [compileResult, setCompileResult] = useState<CatalogDraftCompileResult | null>(null);
-  const [yamlText, setYamlText] = useState(initialDraft.projected_yaml);
-  const [appliedYamlText, setAppliedYamlText] = useState(initialDraft.projected_yaml);
-  const [yamlIssues, setYamlIssues] = useState<ReadonlyArray<CatalogDraftIssue>>([]);
-  const [canonicalizationRequired, setCanonicalizationRequired] = useState(false);
-  const [canonicalizationAccepted, setCanonicalizationAccepted] = useState(false);
-  const [yamlSync, setYamlSync] = useState<"idle" | "syncing" | "failed">("idle");
+  const yaml = useYamlBuffer(adoptedYamlBuffer(initialDraft.projected_yaml, 0));
+  const yamlBuffer = yaml.state;
+  const [yamlSyncing, setYamlSyncing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState<"idle" | "validating" | "saving">("idle");
   const [impact, setImpact] = useState<CatalogDependencyImpact | null>(null);
@@ -193,19 +221,18 @@ export function CatalogDraftEditorWindow({
     initialDraft.state.expected_target_revision ? "loading" : "not-required",
   );
   const [impactAttempt, setImpactAttempt] = useState(0);
-  const yamlBufferGeneration = useRef(0);
   const yamlApplyQueue = useRef<Promise<void>>(Promise.resolve());
   const yamlPendingApply = useRef<{
     generation: number;
     promise: Promise<CatalogComponentDraftEnvelope | null>;
   } | null>(null);
-  const yamlTextDirty = yamlText !== appliedYamlText;
+  const yamlTextDirty = yamlBuffer.dirty;
+  const canonicalizationRequired = yamlBuffer.canonicalizationRequired;
   const semanticDirty = !jsonEqual(baselineDocument, draft.state.document);
-  const dirty = semanticDirty || yamlTextDirty || canonicalizationRequired
-    || canonicalizationAccepted;
-  const graphicalEditingBlocked = yamlTextDirty || canonicalizationRequired;
-  const issues = yamlIssues.length > 0
-    ? yamlIssues
+  const dirty = semanticDirty || yamlTextDirty || canonicalizationRequired;
+  const graphicalEditingBlocked = yamlBufferBlocksGraphicalEditing(yamlBuffer);
+  const issues = yamlBuffer.issues.length > 0
+    ? yamlBuffer.issues
     : compileResult?.issues ?? draft.issues;
 
   useEffect(() => {
@@ -233,51 +260,41 @@ export function CatalogDraftEditorWindow({
   }, [draft.state.expected_target_revision, draft.state.target_ref, impactAttempt]);
 
   const adoptGraphicalDraft = (updated: CatalogComponentDraftEnvelope) => {
-    yamlBufferGeneration.current += 1;
     draftRef.current = updated;
     setDraft(updated);
-    setYamlText(updated.projected_yaml);
-    setAppliedYamlText(updated.projected_yaml);
-    setYamlIssues([]);
-    setCanonicalizationRequired(false);
-    setCanonicalizationAccepted(false);
+    yaml.set(adoptedYamlBuffer(updated.projected_yaml, yaml.ref.current.generation + 1));
     setCompileResult(null);
   };
 
-  const applyYamlBuffer = (
-    buffer: string,
-    generation: number,
-  ): Promise<CatalogComponentDraftEnvelope | null> => {
+  /** Send buffer generation `generation` to the backend, one apply at a time. */
+  const applyYamlBuffer = (generation: number): Promise<CatalogComponentDraftEnvelope | null> => {
     if (yamlPendingApply.current?.generation === generation) {
       return yamlPendingApply.current.promise;
     }
+    yaml.markSent(generation);
     const run = async (): Promise<CatalogComponentDraftEnvelope | null> => {
-      if (yamlBufferGeneration.current === generation) setYamlSync("syncing");
+      const buffer = yaml.ref.current;
+      if (buffer.generation !== generation) return null;
+      setYamlSyncing(true);
       try {
         const baseDraft = draftRef.current;
         const result = await applyCatalogDraftYaml({
           draft: baseDraft.state,
           expected_draft_revision: baseDraft.state.draft_revision,
-          yaml_text: buffer,
+          yaml_text: buffer.text,
         });
-        if (yamlBufferGeneration.current !== generation) return null;
-        setYamlIssues(result.issues);
-        setYamlSync("idle");
+        if (yaml.ref.current.generation !== generation) return null;
+        yaml.set(answeredYamlBuffer(yaml.ref.current, generation, result));
         if (!result.applied) return null;
         draftRef.current = result.draft;
         setDraft(result.draft);
-        setYamlText(result.yaml_text);
-        setAppliedYamlText(result.yaml_text);
-        setCanonicalizationRequired(result.canonicalization_required);
-        setCanonicalizationAccepted(false);
         setCompileResult(null);
         return result.draft;
       } catch (cause) {
-        if (yamlBufferGeneration.current === generation) {
-          setYamlSync("failed");
-          setError(cause instanceof Error ? cause.message : String(cause));
-        }
+        yaml.holdFailure(generation, cause);
         return null;
+      } finally {
+        setYamlSyncing(false);
       }
     };
     const operation = yamlApplyQueue.current.then(run, run);
@@ -290,19 +307,17 @@ export function CatalogDraftEditorWindow({
   };
 
   const applyYaml = (): Promise<CatalogComponentDraftEnvelope | null> => {
-    if (!yamlTextDirty) return Promise.resolve(draftRef.current);
-    return applyYamlBuffer(yamlText, yamlBufferGeneration.current);
+    const buffer = yaml.ref.current;
+    if (!buffer.dirty) return Promise.resolve(draftRef.current);
+    return applyYamlBuffer(buffer.generation);
   };
 
-  useEffect(() => {
-    if (!yamlTextDirty || busy !== "idle") return;
-    const generation = yamlBufferGeneration.current;
-    const buffer = yamlText;
-    const timer = window.setTimeout(() => {
-      void applyYamlBuffer(buffer, generation);
-    }, 400);
-    return () => window.clearTimeout(timer);
-  }, [busy, yamlText, yamlTextDirty]);
+  const applyYamlBufferRef = useRef(applyYamlBuffer);
+  applyYamlBufferRef.current = applyYamlBuffer;
+  const autoApplyYaml = useCallback((generation: number) => {
+    void applyYamlBufferRef.current(generation);
+  }, []);
+  useYamlAutoApply(yamlBuffer, busy === "idle", autoApplyYaml);
 
   const addSiteNode = async (nodeId: string, nodeRef: string): Promise<boolean> => {
     setBusy("validating");
@@ -328,6 +343,7 @@ export function CatalogDraftEditorWindow({
   const addNodeTerminalMount = async (
     role: BuilderVisualAuthoringFacts["default_mount_role"],
     terminalRef: string,
+    boresight: NadirBoresight | null,
   ): Promise<boolean> => {
     setBusy("validating");
     setError(null);
@@ -338,6 +354,7 @@ export function CatalogDraftEditorWindow({
         expected_draft_revision: base.state.draft_revision,
         terminal_ref: terminalRef,
         role,
+        boresight,
       });
       adoptGraphicalDraft(updated);
       return true;
@@ -401,7 +418,7 @@ export function CatalogDraftEditorWindow({
       });
       draftRef.current = compiled.draft;
       setDraft(compiled.draft);
-      setYamlIssues([]);
+      yaml.set({ ...yaml.ref.current, issues: [] });
       setCompileResult(compiled);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
@@ -424,7 +441,7 @@ export function CatalogDraftEditorWindow({
     try {
       const patched = yamlTextDirty ? await applyYaml() : draftRef.current;
       if (!patched) return;
-      if (yamlTextDirty && yamlText !== patched.projected_yaml) {
+      if (yaml.ref.current.canonicalizationRequired) {
         setError("Review and acknowledge canonical YAML formatting before saving.");
         return;
       }
@@ -434,22 +451,17 @@ export function CatalogDraftEditorWindow({
       });
       draftRef.current = compiled.draft;
       setDraft(compiled.draft);
-      setYamlIssues([]);
+      yaml.set({ ...yaml.ref.current, issues: [] });
       setCompileResult(compiled);
       if (!compiled.save_allowed) return;
       const saved = await saveCatalogDraft({
         draft: compiled.draft.state,
         expected_draft_revision: compiled.draft.state.draft_revision,
       });
-      yamlBufferGeneration.current += 1;
       draftRef.current = saved.draft;
       setDraft(saved.draft);
       setBaselineDocument(saved.draft.state.document);
-      setYamlText(saved.draft.projected_yaml);
-      setAppliedYamlText(saved.draft.projected_yaml);
-      setYamlIssues([]);
-      setCanonicalizationRequired(false);
-      setCanonicalizationAccepted(false);
+      yaml.set(adoptedYamlBuffer(saved.draft.projected_yaml, yaml.ref.current.generation + 1));
       setCompileResult(saved.compile_result);
       await onSaved(saved);
     } catch (cause) {
@@ -502,13 +514,8 @@ export function CatalogDraftEditorWindow({
                 <Button
                   disabled={busy !== "idle"}
                   onClick={() => {
-                    yamlBufferGeneration.current += 1;
-                    setYamlText(draft.projected_yaml);
-                    setAppliedYamlText(draft.projected_yaml);
-                    setYamlIssues(draft.issues);
-                    setCanonicalizationRequired(false);
-                    setCanonicalizationAccepted(true);
                     setError(null);
+                    void applyYamlBuffer(yaml.canonicalize(draft.projected_yaml));
                   }}
                 >
                   Use canonical YAML
@@ -527,13 +534,10 @@ export function CatalogDraftEditorWindow({
             ariaLabel="Component YAML"
             className="catalog-draft-yaml"
             rows={28}
-            value={yamlText}
+            value={yamlBuffer.text}
             disabled={busy !== "idle"}
             onChange={(value) => {
-              yamlBufferGeneration.current += 1;
-              setYamlText(value);
-              setYamlSync("idle");
-              setYamlIssues([]);
+              yaml.edit(value);
               setError(null);
             }}
             placeholder="catalog component YAML"
@@ -551,29 +555,28 @@ export function CatalogDraftEditorWindow({
             <Button
               disabled={busy !== "idle" || !yamlTextDirty}
               onClick={() => {
-                yamlBufferGeneration.current += 1;
-                setYamlText(appliedYamlText);
-                setYamlSync("idle");
-                setYamlIssues([]);
+                yaml.edit(yaml.ref.current.appliedText);
                 setError(null);
               }}
             >
               Revert buffer
             </Button>
           </div>
-          {yamlSync === "syncing" && (
+          {yamlSyncing && (
             <div className="builder-site-derived">validating YAML and updating the graphical view…</div>
           )}
-          {yamlSync === "failed" && (
-            <div className="builder-warning">YAML validation could not reach VS-API.</div>
+          {yamlBuffer.applyFailure && (
+            <div className="builder-warning">
+              The YAML was not applied: {yamlBuffer.applyFailure}
+            </div>
           )}
         </div>
       </div>
       {issues.map((issue) => (
-        <div className="builder-warning" key={`${issue.code}:${issue.pointer}`}>
+        <div className="builder-warning" key={`${issue.code}:${issue.json_pointer ?? ""}`}>
           {issue.message}{" "}
           <span className="builder-site-derived">
-            {issue.pointer}
+            {issue.json_pointer}
             {issue.source_line ? ` · line ${issue.source_line}:${issue.source_column ?? 1}` : ""}
           </span>
         </div>

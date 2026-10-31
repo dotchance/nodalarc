@@ -21,6 +21,7 @@ from nodalarc.catalog_registry import catalog_family_spec
 from nodalarc.model_validation import Identifier, TerminalMedium
 from nodalarc.models.builder_api import (
     BuilderCatalogDocument,
+    BuilderIssue,
     JsonDocument,
     OpaqueRevision,
     Sha256Digest,
@@ -35,7 +36,7 @@ from nodalarc.models.builder_visual_api import (
     BuilderVisualSpaceBoresight,
     BuilderVisualTopologyMode,
 )
-from nodalarc.models.catalog import ForwardingClass, MountRole
+from nodalarc.models.catalog import ForwardingClass, MountRole, NadirBoresight
 from nodalarc.models.segment_session import RoutingBoundaryAdapter, RoutingProtocol
 
 type CatalogImportOutcome = Literal["proposed", "committed", "unchanged", "blocked"]
@@ -73,8 +74,6 @@ type CatalogComponentFamily = Literal[
     "constellations",
     "space-node-sets",
 ]
-type CatalogDraftIssueStage = Literal["structural", "reference", "runtime_support"]
-type CatalogDraftBlockedOperation = Literal["save", "deploy"]
 
 
 class _CatalogApplicationModel(BaseModel):
@@ -549,35 +548,6 @@ class CatalogOperationRefusal(_CatalogApplicationModel):
     cause_type: str | None = None
 
 
-class CatalogDraftIssue(_CatalogApplicationModel):
-    """One backend-produced component-draft finding at an exact JSON pointer."""
-
-    code: str = Field(min_length=1)
-    stage: CatalogDraftIssueStage
-    message: str = Field(min_length=1)
-    pointer: str = Field(min_length=1, max_length=2048)
-    source_line: int | None = Field(default=None, ge=1)
-    source_column: int | None = Field(default=None, ge=1)
-    blocks: tuple[CatalogDraftBlockedOperation, ...]
-
-    @field_validator("blocks", mode="before")
-    @classmethod
-    def _accept_json_blocks(cls, value: object) -> object:
-        return tuple(value) if isinstance(value, list) else value
-
-    @model_validator(mode="after")
-    def _blocking_contract_is_consistent(self) -> CatalogDraftIssue:
-        if not self.blocks or len(set(self.blocks)) != len(self.blocks):
-            raise ValueError("draft issues must block one or more unique operations")
-        if self.stage == "structural" and set(self.blocks) != {"save", "deploy"}:
-            raise ValueError("structural draft issues must block save and deploy")
-        if self.stage == "reference" and set(self.blocks) != {"save", "deploy"}:
-            raise ValueError("reference draft issues must block save and deploy")
-        if self.stage == "runtime_support" and self.blocks != ("deploy",):
-            raise ValueError("runtime-support draft issues must block deploy only")
-        return self
-
-
 class CatalogComponentDraftState(_CatalogApplicationModel):
     """One revision of a full-document component draft: the state every draft request carries."""
 
@@ -632,12 +602,7 @@ class CatalogComponentDraftEnvelope(_CatalogApplicationModel):
     state: CatalogComponentDraftState
     projected_yaml: str = Field(min_length=1)
     control_tree: BuilderControlTree
-    issues: tuple[CatalogDraftIssue, ...]
-
-    @field_validator("issues", mode="before")
-    @classmethod
-    def _accept_json_issues(cls, value: object) -> object:
-        return tuple(value) if isinstance(value, list) else value
+    issues: tuple[BuilderIssue, ...]
 
     @model_validator(mode="after")
     def _controls_match_the_revision(self) -> CatalogComponentDraftEnvelope:
@@ -708,6 +673,9 @@ class CatalogDraftAddNodeTerminalMountRequest(_CatalogApplicationModel):
     expected_draft_revision: int = Field(ge=0)
     terminal_ref: TerminalRef
     role: MountRole
+    # Written on the mount only when the gesture states it; a ground node's
+    # mounts carry none.
+    boresight: NadirBoresight | None = None
 
     @model_validator(mode="after")
     def _node_draft_only(self) -> CatalogDraftAddNodeTerminalMountRequest:
@@ -744,12 +712,7 @@ class CatalogDraftApplyYamlResult(_CatalogApplicationModel):
     yaml_text: str
     applied: bool
     canonicalization_required: bool
-    issues: tuple[CatalogDraftIssue, ...]
-
-    @field_validator("issues", mode="before")
-    @classmethod
-    def _accept_json_issues(cls, value: object) -> object:
-        return tuple(value) if isinstance(value, list) else value
+    issues: tuple[BuilderIssue, ...]
 
     @model_validator(mode="after")
     def _result_matches_application_state(self) -> CatalogDraftApplyYamlResult:
@@ -780,12 +743,7 @@ class CatalogDraftCompileResult(_CatalogApplicationModel):
     canonical_yaml: str | None = Field(default=None, min_length=1)
     canonical_json: ValidatedConfigurationJson | None = None
     content_digest: Sha256Digest | None = None
-    issues: tuple[CatalogDraftIssue, ...]
-
-    @field_validator("issues", mode="before")
-    @classmethod
-    def _accept_json_compile_issues(cls, value: object) -> object:
-        return tuple(value) if isinstance(value, list) else value
+    issues: tuple[BuilderIssue, ...]
 
     @model_validator(mode="after")
     def _verdict_matches_evidence(self) -> CatalogDraftCompileResult:

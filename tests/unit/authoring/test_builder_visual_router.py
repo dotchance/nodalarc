@@ -157,7 +157,7 @@ def test_visual_yaml_apply_route_echoes_buffer_and_returns_typed_stale_refusal(
     assert refused["buffer_generation"] == 41
     assert refused["yaml_text"] == invalid
     assert refused["draft"]["draft_revision"] == 0
-    assert refused["draft"]["projection_status"] == "pending_authoring"
+    assert refused["draft"]["projection_status"] == "applied"
     assert refused["issues"][0]["source_line"] == 3
 
     stale_response = client.post(

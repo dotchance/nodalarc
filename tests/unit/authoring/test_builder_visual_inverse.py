@@ -641,13 +641,9 @@ def test_yaml_apply_refusal_retains_last_valid_projection_and_source_location(
     assert refused.applied is False
     assert refused.buffer_generation == 3
     assert refused.yaml_text == invalid
-    assert refused.draft.draft_revision == opened.draft_revision
-    assert refused.draft.projection_status == "pending_authoring"
-    assert refused.draft.applied_workspace == opened.applied_workspace
-    assert refused.draft.applied_session == opened.applied_session
-    assert refused.draft.authoring_workspace == opened.applied_workspace
-    assert refused.draft.control_tree is None
-    assert refused.issues[0].code == "builder.draft.yaml.invalid_syntax"
+    # The refused text stays on the page; the draft is the one sent.
+    assert refused.draft == opened
+    assert refused.issues[0].code == "builder.yaml.invalid_syntax"
     assert refused.issues[0].source_line == 3
     assert refused.issues[0].source_column is not None
 
@@ -688,7 +684,7 @@ def test_yaml_apply_rejects_unknown_fields_and_fixed_identity_with_source_mappin
         )
     )
     assert identity.applied is False
-    assert identity.issues[0].code == "builder.draft.yaml.fixed_identity"
+    assert identity.issues[0].code == "builder.yaml.fixed_identity"
     assert identity.issues[0].json_pointer == "/session/name"
     assert identity.issues[0].source_line == 2
 

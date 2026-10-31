@@ -124,7 +124,7 @@ class CatalogAuthoringError(RuntimeError):
         return self.refusal.code
 
 
-def _refuse(
+def refuse(
     code: str,
     message: str,
     *,
@@ -149,12 +149,24 @@ def _refuse(
     ) from cause
 
 
+def catalog_snapshot(context: CatalogContext) -> CatalogReadSnapshot:
+    """One pinned read of the request's catalog scope."""
+    try:
+        return context.repository.snapshot(context.scope)
+    except (CatalogRepositoryError, OSError) as error:
+        refuse(
+            "catalog_authoring.persistence_failed",
+            f"Catalog snapshot is unavailable: {error}",
+            cause=error,
+        )
+
+
 def _validated_exact_document(ref: CatalogRef, content: bytes) -> BaseModel:
     try:
         data = load_configuration_yaml(content)
         _wrapper, model = validate_referenced_configuration_document(ref, data)
     except (UnicodeError, yaml.YAMLError, ValidationError, TypeError, ValueError) as error:
-        _refuse(
+        refuse(
             "catalog_authoring.invalid_document",
             f"Catalog document {ref} is invalid: {error}",
             ref=ref,
@@ -173,7 +185,7 @@ def _canonical_import_bytes(ref: CatalogRef, content: bytes) -> bytes:
         document = cast(JsonDocument, load_configuration_yaml(content))
         return canonicalize_persisted_configuration(ref, document).yaml_bytes
     except (UnicodeError, yaml.YAMLError, ValidationError, TypeError, ValueError) as error:
-        _refuse(
+        refuse(
             "catalog_authoring.invalid_document",
             f"Catalog document {ref} cannot be canonicalized: {error}",
             ref=ref,
@@ -209,20 +221,20 @@ def _hinted_catalog_ref(
         return None
     parts = hint.split("/")
     if len(parts) < 4 or parts[0] != "catalog":
-        _refuse(
+        refuse(
             "catalog_authoring.import_incomplete",
             f"Catalog YAML path hint must have the form catalog/<namespace>/<family>/...: {hint}",
         )
     try:
         ref = CatalogRef(f"{parts[1]}:{'/'.join(parts[2:])}")
     except ValueError as error:
-        _refuse(
+        refuse(
             "catalog_authoring.import_incomplete",
             f"Catalog YAML path hint is not a valid catalog reference: {hint}",
             cause=error,
         )
     if ref.family != family or ref.relative_path.stem != identity:
-        _refuse(
+        refuse(
             "catalog_authoring.import_incomplete",
             f"Catalog YAML path hint {hint} does not match document identity {family}/{identity}",
             ref=ref,
@@ -240,20 +252,20 @@ def _hinted_session_ref(
         return None
     parts = hint.split("/")
     if len(parts) < 4 or parts[0] != "catalog":
-        _refuse(
+        refuse(
             "catalog_authoring.import_incomplete",
             f"Session YAML path hint must have the form catalog/<namespace>/sessions/...: {hint}",
         )
     try:
         source_ref = SessionRef(f"{parts[1]}:{'/'.join(parts[2:])}")
     except ValueError as error:
-        _refuse(
+        refuse(
             "catalog_authoring.import_incomplete",
             f"Session YAML path hint is not a valid session reference: {hint}",
             cause=error,
         )
     if source_ref.relative_path.stem != session_name:
-        _refuse(
+        refuse(
             "catalog_authoring.import_incomplete",
             f"Session YAML path hint {hint} does not match session.name {session_name!r}",
             ref=source_ref,
@@ -276,7 +288,7 @@ def _parse_yaml_import(
         try:
             data = load_configuration_yaml(content)
         except (UnicodeError, yaml.YAMLError) as error:
-            _refuse(
+            refuse(
                 "catalog_authoring.invalid_document",
                 f"Imported YAML file {position} cannot be parsed: {error}",
                 cause=error,
@@ -290,7 +302,7 @@ def _parse_yaml_import(
                 family = CATALOG_WRAPPER_TO_FAMILY[wrapper]
                 identity = str(component_model.id)
             except (ValidationError, TypeError, ValueError) as component_error:
-                _refuse(
+                refuse(
                     "catalog_authoring.invalid_document",
                     f"Imported YAML file {position} is neither a valid session nor a valid "
                     f"catalog component: session={session_error}; component={component_error}",
@@ -303,7 +315,7 @@ def _parse_yaml_import(
                 identity=identity,
             )
             if hinted_ref is not None and hinted_ref in hinted_refs:
-                _refuse(
+                refuse(
                     "catalog_authoring.import_incomplete",
                     f"Imported YAML files contain duplicate path hint {yaml_file.logical_path_hint}",
                     ref=hinted_ref,
@@ -330,7 +342,7 @@ def _parse_yaml_import(
         roots.append((root_ref, content, hinted_ref is not None))
 
     if len(roots) != 1:
-        _refuse(
+        refuse(
             "catalog_authoring.import_incomplete",
             f"YAML import requires exactly one session document; found {len(roots)}",
         )
@@ -354,14 +366,14 @@ def _derive_import_session_ref(
             if entry.ref.relative_path.stem == parsed_ref.relative_path.stem
         )
     except (CatalogRepositoryError, OSError) as error:
-        _refuse(
+        refuse(
             "catalog_authoring.persistence_failed",
             f"Session identity lookup failed: {error}",
             ref=parsed_ref,
             cause=error,
         )
     if len(matches) > 1:
-        _refuse(
+        refuse(
             "catalog_authoring.import_incomplete",
             f"Session identity {parsed_ref.relative_path.stem!r} already exists at multiple "
             f"user catalog refs: {', '.join(sorted(map(str, matches)))}",
@@ -375,7 +387,7 @@ def _canonical_document(document: CatalogDocument) -> BuilderCatalogDocument:
         data = cast(JsonDocument, load_configuration_yaml(document.content))
         canonical = canonicalize_persisted_configuration(document.ref, data)
     except (UnicodeError, yaml.YAMLError, ValidationError, TypeError, ValueError) as error:
-        _refuse(
+        refuse(
             "catalog_authoring.invalid_document",
             f"Stored catalog document {document.ref} cannot be canonicalized: {error}",
             ref=document.ref,
@@ -412,14 +424,14 @@ def _repository_document(snapshot: CatalogReadSnapshot, ref: CatalogRef) -> Cata
     try:
         return snapshot.get(ref)
     except CatalogNotFoundError as error:
-        _refuse(
+        refuse(
             "catalog_authoring.not_found",
             f"Catalog document does not exist: {ref}",
             ref=ref,
             cause=error,
         )
     except (CatalogRepositoryError, OSError) as error:
-        _refuse(
+        refuse(
             "catalog_authoring.persistence_failed",
             f"Catalog document {ref} could not be read: {error}",
             ref=ref,
@@ -429,7 +441,7 @@ def _repository_document(snapshot: CatalogReadSnapshot, ref: CatalogRef) -> Cata
 
 def _user_owned(ref: CatalogRef) -> None:
     if ref.namespace != "user":
-        _refuse(
+        refuse(
             "catalog_authoring.read_only",
             f"Shipped catalog document {ref} is read-only",
             ref=ref,
@@ -551,16 +563,6 @@ class BuilderCatalogAuthoringService:
         self._context = context
         self._public_grammar_href = public_grammar_href
         self._graph_cache: tuple[str, _GraphState] | None = None
-
-    def _snapshot(self) -> CatalogReadSnapshot:
-        try:
-            return self._context.repository.snapshot(self._context.scope)
-        except (CatalogRepositoryError, OSError) as error:
-            _refuse(
-                "catalog_authoring.persistence_failed",
-                f"Catalog snapshot is unavailable: {error}",
-                cause=error,
-            )
 
     def bootstrap(self) -> BuilderCatalogBootstrap:
         """Return generated-family metadata and factual backend capabilities."""
@@ -699,7 +701,7 @@ class BuilderCatalogAuthoringService:
                 raise ValueError("token cursor or generation is invalid")
             return decoded
         except (ValueError, UnicodeError, json.JSONDecodeError) as error:
-            _refuse(
+            refuse(
                 "catalog_authoring.invalid_page_token",
                 "Catalog page token is invalid",
                 cause=error,
@@ -710,17 +712,17 @@ class BuilderCatalogAuthoringService:
 
         if not isinstance(request, CatalogListRequest):
             raise TypeError("request must be a CatalogListRequest")
-        snapshot = self._snapshot()
+        snapshot = catalog_snapshot(self._context)
         cursor: str | None = None
         if request.page_token is not None:
             token = self._decode_page_token(request.page_token)
             if token["family"] != request.family or token["namespace"] != request.namespace:
-                _refuse(
+                refuse(
                     "catalog_authoring.invalid_page_token",
                     "Catalog page token filters do not match the request",
                 )
             if token["generation"] != str(snapshot.generation):
-                _refuse(
+                refuse(
                     "catalog_authoring.stale_page_token",
                     "Catalog changed while paging; restart listing from the first page",
                 )
@@ -729,7 +731,7 @@ class BuilderCatalogAuthoringService:
         try:
             entries = snapshot.list(namespace=request.namespace, family=request.family)
         except (CatalogRepositoryError, OSError) as error:
-            _refuse(
+            refuse(
                 "catalog_authoring.persistence_failed",
                 f"Catalog listing failed: {error}",
                 cause=error,
@@ -740,7 +742,7 @@ class BuilderCatalogAuthoringService:
             try:
                 start = refs.index(cursor) + 1
             except ValueError as error:
-                _refuse(
+                refuse(
                     "catalog_authoring.invalid_page_token",
                     "Catalog page token cursor is not present in its snapshot",
                     cause=error,
@@ -777,7 +779,9 @@ class BuilderCatalogAuthoringService:
 
         if not isinstance(request, CatalogGetRequest):
             raise TypeError("request must be a CatalogGetRequest")
-        return _canonical_document(_repository_document(self._snapshot(), request.ref))
+        return _canonical_document(
+            _repository_document(catalog_snapshot(self._context), request.ref)
+        )
 
     def _graph(self, snapshot: CatalogReadSnapshot) -> _GraphState:
         generation = str(snapshot.generation)
@@ -788,7 +792,7 @@ class BuilderCatalogAuthoringService:
         try:
             entries = snapshot.list()
         except (CatalogRepositoryError, OSError) as error:
-            _refuse(
+            refuse(
                 "catalog_authoring.persistence_failed",
                 f"Catalog dependency graph could not be listed: {error}",
                 cause=error,
@@ -868,7 +872,7 @@ class BuilderCatalogAuthoringService:
 
         if not isinstance(request, CatalogDependentsRequest):
             raise TypeError("request must be a CatalogDependentsRequest")
-        snapshot = self._snapshot()
+        snapshot = catalog_snapshot(self._context)
         return self._impact(snapshot, _repository_document(snapshot, request.ref))
 
     def save_component_at_snapshot(
@@ -888,7 +892,7 @@ class BuilderCatalogAuthoringService:
         try:
             canonical = canonicalize_persisted_configuration(request.ref, request.document)
         except (ValidationError, TypeError, ValueError) as error:
-            _refuse(
+            refuse(
                 "catalog_authoring.invalid_document",
                 f"Catalog document {request.ref} is invalid: {error}",
                 ref=request.ref,
@@ -907,7 +911,7 @@ class BuilderCatalogAuthoringService:
             )
             committed = transaction.commit()
         except CatalogReadOnlyError as error:
-            _refuse(
+            refuse(
                 "catalog_authoring.read_only",
                 str(error),
                 ref=request.ref,
@@ -916,8 +920,8 @@ class BuilderCatalogAuthoringService:
         except CatalogConflictError as error:
             current_revision = None
             with suppress(CatalogRepositoryError):
-                current_revision = str(self._snapshot().get(request.ref).revision)
-            _refuse(
+                current_revision = str(catalog_snapshot(self._context).get(request.ref).revision)
+            refuse(
                 "catalog_authoring.stale_revision",
                 str(error),
                 ref=request.ref,
@@ -926,14 +930,14 @@ class BuilderCatalogAuthoringService:
                 cause=error,
             )
         except CatalogValidationError as error:
-            _refuse(
+            refuse(
                 "catalog_authoring.invalid_graph",
                 str(error),
                 ref=request.ref,
                 cause=error,
             )
         except (CatalogRepositoryError, OSError) as error:
-            _refuse(
+            refuse(
                 "catalog_authoring.persistence_failed",
                 f"Catalog write failed: {error}",
                 ref=request.ref,
@@ -952,10 +956,10 @@ class BuilderCatalogAuthoringService:
         if not isinstance(request, CatalogDeleteRequest):
             raise TypeError("request must be a CatalogDeleteRequest")
         _user_owned(request.ref)
-        snapshot = self._snapshot()
+        snapshot = catalog_snapshot(self._context)
         target = _repository_document(snapshot, request.ref)
         if str(target.revision) != request.expected_revision:
-            _refuse(
+            refuse(
                 "catalog_authoring.stale_revision",
                 f"Catalog document {request.ref} changed before deletion",
                 ref=request.ref,
@@ -964,7 +968,7 @@ class BuilderCatalogAuthoringService:
             )
         impact = self._impact(snapshot, target)
         if request.impact_acknowledgement != impact.acknowledgement:
-            _refuse(
+            refuse(
                 "catalog_authoring.impact_mismatch",
                 f"Catalog dependency impact changed before deletion of {request.ref}",
                 ref=request.ref,
@@ -973,7 +977,7 @@ class BuilderCatalogAuthoringService:
                 impact=impact,
             )
         if not impact.delete_allowed:
-            _refuse(
+            refuse(
                 "catalog_authoring.dependents_exist",
                 f"Catalog document {request.ref} is still referenced",
                 ref=request.ref,
@@ -989,7 +993,7 @@ class BuilderCatalogAuthoringService:
             transaction.delete(request.ref, expected_revision=request.expected_revision)
             committed = transaction.commit()
         except CatalogConflictError as error:
-            _refuse(
+            refuse(
                 "catalog_authoring.stale_revision",
                 str(error),
                 ref=request.ref,
@@ -997,7 +1001,7 @@ class BuilderCatalogAuthoringService:
                 cause=error,
             )
         except CatalogValidationError as error:
-            _refuse(
+            refuse(
                 "catalog_authoring.invalid_graph",
                 str(error),
                 ref=request.ref,
@@ -1005,7 +1009,7 @@ class BuilderCatalogAuthoringService:
                 cause=error,
             )
         except (CatalogRepositoryError, OSError) as error:
-            _refuse(
+            refuse(
                 "catalog_authoring.persistence_failed",
                 f"Catalog delete failed: {error}",
                 ref=request.ref,
@@ -1026,13 +1030,13 @@ class BuilderCatalogAuthoringService:
 
         if not isinstance(request, CatalogSessionYamlExportRequest):
             raise TypeError("request must be a CatalogSessionYamlExportRequest")
-        snapshot = self._snapshot()
+        snapshot = catalog_snapshot(self._context)
         session = _repository_document(snapshot, request.session_ref)
         if (
             request.expected_session_revision is not None
             and request.expected_session_revision != str(session.revision)
         ):
-            _refuse(
+            refuse(
                 "catalog_authoring.stale_revision",
                 f"Session {request.session_ref} changed before export",
                 ref=request.session_ref,
@@ -1042,7 +1046,7 @@ class BuilderCatalogAuthoringService:
         try:
             closure = CatalogClosureCollector.collect(session.content, snapshot)
         except CatalogClosureError as error:
-            _refuse(
+            refuse(
                 "catalog_authoring.invalid_graph",
                 str(error),
                 ref=request.session_ref,
@@ -1084,13 +1088,13 @@ class BuilderCatalogAuthoringService:
         )
         for name, actual, maximum in checks:
             if actual > maximum:
-                _refuse(
+                refuse(
                     "catalog_authoring.import_limit",
                     f"Import exceeds {name}: {actual} > {maximum}",
                 )
         for position, content in enumerate(contents, start=1):
             if len(content) > limits.max_file_bytes:
-                _refuse(
+                refuse(
                     "catalog_authoring.import_limit",
                     f"Imported YAML file {position} exceeds max_file_bytes: "
                     f"{len(content)} > {limits.max_file_bytes}",
@@ -1151,14 +1155,14 @@ class BuilderCatalogAuthoringService:
         parsed = _parse_yaml_import(request.yaml_files)
         limits = DEFAULT_CATALOG_UPLOAD_LIMITS
         if len(parsed.root_content) > limits.max_root_yaml_bytes:
-            _refuse(
+            refuse(
                 "catalog_authoring.import_limit",
                 "Imported session exceeds max_root_yaml_bytes: "
                 f"{len(parsed.root_content)} > {limits.max_root_yaml_bytes}",
                 ref=parsed.root_ref,
             )
 
-        snapshot = self._snapshot()
+        snapshot = catalog_snapshot(self._context)
         root_ref = (
             parsed.root_ref
             if parsed.root_ref_hinted
@@ -1174,14 +1178,14 @@ class BuilderCatalogAuthoringService:
         try:
             CatalogClosureCollector.collect(parsed.root_content, read_view)
         except _ImportPlacementError as error:
-            _refuse(
+            refuse(
                 "catalog_authoring.import_incomplete",
                 str(error),
                 ref=root_ref,
                 cause=error,
             )
         except CatalogClosureError as error:
-            _refuse(
+            refuse(
                 "catalog_authoring.invalid_graph",
                 str(error),
                 ref=root_ref,
@@ -1197,7 +1201,7 @@ class BuilderCatalogAuthoringService:
             if component.position not in read_view.assigned_refs
         )
         if unused:
-            _refuse(
+            refuse(
                 "catalog_authoring.import_incomplete",
                 "Imported catalog YAML files are not referenced by the session graph: "
                 + ", ".join(unused),
@@ -1218,7 +1222,7 @@ class BuilderCatalogAuthoringService:
                 _OverlayImportReadView(snapshot=snapshot, documents=incoming),
             )
         except CatalogClosureError as error:
-            _refuse(
+            refuse(
                 "catalog_authoring.invalid_graph",
                 f"Canonicalized YAML import is invalid: {error}",
                 ref=root_ref,
@@ -1239,7 +1243,7 @@ class BuilderCatalogAuthoringService:
             except CatalogNotFoundError:
                 existing = None
             except (CatalogRepositoryError, OSError) as error:
-                _refuse(
+                refuse(
                     "catalog_authoring.persistence_failed",
                     f"Import collision check failed for {ref}: {error}",
                     ref=ref,
@@ -1294,7 +1298,7 @@ class BuilderCatalogAuthoringService:
             cast(str, request.proposal_token),
             proposal_token,
         ):
-            _refuse(
+            refuse(
                 "catalog_authoring.stale_import_proposal",
                 "The reviewed YAML import proposal is stale; review the current write set again",
                 ref=root_ref,
@@ -1344,21 +1348,21 @@ class BuilderCatalogAuthoringService:
                 )
             committed = transaction.commit()
         except CatalogConflictError as error:
-            _refuse(
+            refuse(
                 "catalog_authoring.conflict",
                 f"Catalog changed while importing YAML files: {error}",
                 ref=root_ref,
                 cause=error,
             )
         except CatalogValidationError as error:
-            _refuse(
+            refuse(
                 "catalog_authoring.invalid_graph",
                 str(error),
                 ref=root_ref,
                 cause=error,
             )
         except (CatalogRepositoryError, OSError) as error:
-            _refuse(
+            refuse(
                 "catalog_authoring.persistence_failed",
                 f"Catalog import failed: {error}",
                 ref=root_ref,
@@ -1367,7 +1371,7 @@ class BuilderCatalogAuthoringService:
         for item in proposed_writes:
             stored = _repository_document(committed, item.ref)
             if stored.content != item.canonical_yaml.encode("utf-8"):
-                _refuse(
+                refuse(
                     "catalog_authoring.persistence_failed",
                     f"Imported document {item.ref} failed exact-byte verification",
                     ref=item.ref,

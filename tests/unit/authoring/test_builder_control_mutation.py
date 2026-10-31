@@ -22,7 +22,6 @@ from nodalarc.models.builder_controls_api import (
 )
 from nodalarc.models.builder_visual_api import (
     BuilderVisualControlMutationRequest,
-    BuilderVisualDraftApplyWorkspaceRequest,
     BuilderVisualDraftApplyYamlRequest,
     BuilderVisualDraftOpenRequest,
 )
@@ -445,6 +444,7 @@ def test_invalid_stale_unknown_and_pending_batches_advance_nothing(
     assert invalid.value.code == "catalog_authoring.invalid_graph"
     assert opened.draft_revision == 0
 
+    # A refused YAML buffer advances nothing either: the draft is the one sent.
     dirty_yaml = "session:\n  name: earth-leo-simple\nsegments: [unterminated"
     pending = service.apply_yaml(
         BuilderVisualDraftApplyYamlRequest(
@@ -454,48 +454,7 @@ def test_invalid_stale_unknown_and_pending_batches_advance_nothing(
             yaml_text=dirty_yaml,
         )
     ).draft
-    with pytest.raises(BuilderVisualDraftCommandError) as dirty:
-        _mutate(
-            service,
-            pending,
-            BuilderSetScalarCommand(
-                operation="set_scalar",
-                control_id=step,
-                value=2,
-            ),
-        )
-    assert dirty.value.code == "catalog_authoring.invalid_graph"
-    assert pending.session_yaml == dirty_yaml
-    assert pending.draft_revision == opened.draft_revision
-
-
-def test_pending_workspace_can_be_completed_without_residual_tree_deadlock(
-    service: BuilderVisualDraftService,
-) -> None:
-    opened = _open(service)
-    invalid = service.apply_yaml(
-        BuilderVisualDraftApplyYamlRequest(
-            draft=opened,
-            expected_draft_revision=0,
-            buffer_generation=2,
-            yaml_text="session: [unterminated",
-        )
-    ).draft
-    assert invalid.authoring_workspace is not None
-    assert invalid.control_tree is None
-
-    completed = service.apply_workspace(
-        BuilderVisualDraftApplyWorkspaceRequest(
-            draft=invalid,
-            expected_draft_revision=invalid.draft_revision,
-            workspace=invalid.authoring_workspace,
-        ),
-        available_node_count=1_000_000,
-    )
-
-    assert completed.visual_draft.projection_status == "applied"
-    assert completed.visual_draft.applied_workspace is not None
-    assert completed.visual_draft.control_tree is not None
+    assert pending == opened
 
 
 def test_all_structural_operations_are_ordered_and_atomic() -> None:

@@ -30,7 +30,6 @@ from nodalarc.catalog_repository import (
 )
 from nodalarc.configuration_yaml import load_configuration_yaml
 from nodalarc.document_errors import document_errors
-from nodalarc.marked_yaml import MarkedYamlError, YamlSourceMap, load_marked_yaml
 from nodalarc.models.builder_api import (
     BuilderCompileRequest,
     BuilderCompileResult,
@@ -179,6 +178,7 @@ from .builder_visual_defaults import (
     SINGLE_PLANE_PHASING_MODE,
     scheduling_preset_block,
 )
+from .builder_yaml import parse_yaml_application
 from .catalog_context import CatalogContext
 
 Clock = Callable[[], datetime]
@@ -677,159 +677,6 @@ def _json_pointer(parts: tuple[object, ...]) -> str:
     if not parts:
         return ""
     return "/" + "/".join(str(part).replace("~", "~0").replace("/", "~1") for part in parts)
-
-
-def _yaml_issue(
-    code: str,
-    message: str,
-    *,
-    target_ref: SessionRef,
-    json_pointer: str | None = None,
-    source_line: int | None = None,
-    source_column: int | None = None,
-) -> BuilderIssue:
-    return BuilderIssue(
-        code=code,
-        stage="structural",
-        severity="error",
-        message=message,
-        blocks=("save", "deploy"),
-        source_ref=str(target_ref),
-        json_pointer=json_pointer,
-        draft_path="session_yaml",
-        source_line=source_line,
-        source_column=source_column,
-    )
-
-
-def _issue_with_yaml_source(
-    issue: BuilderIssue,
-    source_map: YamlSourceMap,
-    *,
-    prefer_key: bool = False,
-) -> BuilderIssue:
-    pointer = issue.json_pointer or ""
-    span = source_map.span_for(pointer, prefer_key=prefer_key)
-    if span is None:
-        return issue
-    return issue.model_copy(
-        update={
-            "source_line": span.start.line,
-            "source_column": span.start.column,
-        }
-    )
-
-
-def _parse_session_yaml_application(
-    target_ref: SessionRef,
-    yaml_text: str,
-) -> tuple[
-    SegmentSessionConfig | None,
-    JsonDocument | None,
-    str | None,
-    YamlSourceMap | None,
-    tuple[BuilderIssue, ...],
-]:
-    try:
-        marked = load_marked_yaml(yaml_text)
-    except (UnicodeError, MarkedYamlError, RecursionError) as error:
-        mark = error.problem_mark if isinstance(error, MarkedYamlError) else None
-        return (
-            None,
-            None,
-            None,
-            None,
-            (
-                _yaml_issue(
-                    "builder.draft.yaml.invalid_syntax",
-                    f"Session YAML is invalid: {error}",
-                    target_ref=target_ref,
-                    source_line=mark.line if mark is not None else None,
-                    source_column=mark.column if mark is not None else None,
-                ),
-            ),
-        )
-
-    try:
-        model = SegmentSessionConfig.model_validate(marked.data)
-    except ValidationError as error:
-        issues = tuple(
-            _issue_with_yaml_source(
-                _yaml_issue(
-                    f"builder.structural.{item.type}",
-                    item.message,
-                    target_ref=target_ref,
-                    json_pointer=item.pointer or None,
-                ),
-                marked.source_map,
-                prefer_key=item.type == "extra_forbidden",
-            )
-            for item in document_errors(error, marked.data)
-        )
-        return None, None, None, marked.source_map, issues
-    except (TypeError, ValueError) as error:
-        return (
-            None,
-            None,
-            None,
-            marked.source_map,
-            (
-                _issue_with_yaml_source(
-                    _yaml_issue(
-                        "builder.structural.invalid_document",
-                        str(error),
-                        target_ref=target_ref,
-                    ),
-                    marked.source_map,
-                ),
-            ),
-        )
-
-    if model.session.name != target_ref.relative_path.stem:
-        issue = _issue_with_yaml_source(
-            _yaml_issue(
-                "builder.draft.yaml.fixed_identity",
-                "Session identity is fixed by its user: reference",
-                target_ref=target_ref,
-                json_pointer="/session/name",
-            ),
-            marked.source_map,
-            prefer_key=True,
-        )
-        return None, None, None, marked.source_map, (issue,)
-
-    try:
-        canonical = canonicalize_persisted_configuration(
-            target_ref,
-            cast(
-                JsonDocument,
-                model.model_dump(mode="json", by_alias=True, exclude_none=True),
-            ),
-        )
-    except (ValidationError, TypeError, ValueError) as error:
-        return (
-            None,
-            None,
-            None,
-            marked.source_map,
-            (
-                _issue_with_yaml_source(
-                    _yaml_issue(
-                        "builder.structural.invalid_document",
-                        str(error),
-                        target_ref=target_ref,
-                    ),
-                    marked.source_map,
-                ),
-            ),
-        )
-    return (
-        model,
-        canonical.canonical_json,
-        canonical.yaml_bytes.decode("utf-8"),
-        marked.source_map,
-        (),
-    )
 
 
 class _Assembly:
@@ -3255,32 +3102,20 @@ class BuilderVisualDraftService:
                 current_revision=draft.draft_revision,
             )
 
-        (
-            applied_model,
-            applied_session,
-            canonical_yaml,
-            _source_map,
-            issues,
-        ) = _parse_session_yaml_application(draft.target_ref, request.yaml_text)
-        if applied_model is None or applied_session is None or canonical_yaml is None:
-            updates: dict[str, Any] = {"session_yaml": request.yaml_text}
-            if draft.projection_status == "applied":
-                assert draft.authoring_workspace is not None
-                updates.update(
-                    {
-                        "projection_status": "pending_authoring",
-                        "control_tree": None,
-                    }
-                )
-            refused = draft.model_copy(update=updates)
+        application = parse_yaml_application(draft.target_ref, request.yaml_text)
+        if application.canonical is None:
+            # The page holds the refused text; the draft stays as it was.
             return BuilderVisualDraftApplyYamlResult(
-                draft=refused,
+                draft=draft,
                 buffer_generation=request.buffer_generation,
                 yaml_text=request.yaml_text,
                 applied=False,
                 canonicalization_required=False,
-                issues=issues,
+                issues=application.issues,
             )
+        applied_model = cast(SegmentSessionConfig, application.model)
+        applied_session = application.canonical.canonical_json
+        canonical_yaml = application.canonical.yaml_bytes.decode("utf-8")
 
         snapshot = self._context.repository.snapshot(self._context.scope)
         reachable_proposals, catalog_facts = _reachable_projection_inputs(

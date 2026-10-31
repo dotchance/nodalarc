@@ -1244,7 +1244,7 @@ export interface CatalogComponentDraftEnvelope {
   readonly state: CatalogComponentDraftState;
   readonly projected_yaml: string;
   readonly control_tree: BuilderControlTree;
-  readonly issues: ReadonlyArray<CatalogDraftIssue>;
+  readonly issues: ReadonlyArray<BuilderIssue>;
 }
 
 /** One revision of a full-document component draft: the state every draft request carries. */
@@ -1330,6 +1330,7 @@ export interface CatalogDraftAddNodeTerminalMountRequest {
   readonly expected_draft_revision: number;
   readonly terminal_ref: string;
   readonly role: MountRole;
+  readonly boresight?: NadirBoresight | null;
 }
 
 /** Add one explicitly identified node using backend-derived persisted fields. */
@@ -1353,11 +1354,8 @@ export interface CatalogDraftApplyYamlResult {
   readonly yaml_text: string;
   readonly applied: boolean;
   readonly canonicalization_required: boolean;
-  readonly issues: ReadonlyArray<CatalogDraftIssue>;
+  readonly issues: ReadonlyArray<BuilderIssue>;
 }
-
-/**  */
-export type CatalogDraftBlockedOperation = "save" | "deploy";
 
 /** Validate one exact draft without mutating catalog persistence. */
 export interface CatalogDraftCompileRequest {
@@ -1373,7 +1371,7 @@ export interface CatalogDraftCompileResult {
   readonly canonical_yaml: string | null;
   readonly canonical_json: Readonly<Record<string, JsonValue>> | null;
   readonly content_digest: Sha256Digest | null;
-  readonly issues: ReadonlyArray<CatalogDraftIssue>;
+  readonly issues: ReadonlyArray<BuilderIssue>;
 }
 
 /** Apply canonical graphical commands under one component draft revision. */
@@ -1382,20 +1380,6 @@ export interface CatalogDraftControlMutationRequest {
   readonly expected_draft_revision: number;
   readonly commands: ReadonlyArray<BuilderSetScalarCommand | BuilderSetPresentCommand | BuilderSelectChoiceCommand | BuilderInsertItemCommand | BuilderRemoveItemCommand | BuilderMoveItemCommand | BuilderInsertMapEntryCommand | BuilderRemoveMapEntryCommand | BuilderRenameMapKeyCommand>;
 }
-
-/** One backend-produced component-draft finding at an exact JSON pointer. */
-export interface CatalogDraftIssue {
-  readonly code: string;
-  readonly stage: CatalogDraftIssueStage;
-  readonly message: string;
-  readonly pointer: string;
-  readonly source_line: number | null;
-  readonly source_column: number | null;
-  readonly blocks: ReadonlyArray<CatalogDraftBlockedOperation>;
-}
-
-/**  */
-export type CatalogDraftIssueStage = "structural" | "reference" | "runtime_support";
 
 /** Create one new, intentionally incomplete user-owned component draft. */
 export interface CatalogDraftNewRequest {
@@ -1742,6 +1726,11 @@ export type LinkLabel = "access" | "isl" | "inter_body";
 
 /**  */
 export type MountRole = "access" | "isl" | "crosslink" | "backbone";
+
+/**  */
+export interface NadirBoresight {
+  readonly mode: "nadir";
+}
 
 /** One interface a node runs a routing instance on. */
 export interface NodeInstanceInterface {

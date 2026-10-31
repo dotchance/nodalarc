@@ -29,6 +29,14 @@ import {
   saveBuilderSession,
 } from "./builderApiClient";
 import { writeSessionYamlExport } from "./sessionYamlTransfer";
+import {
+  EMPTY_YAML_BUFFER,
+  answeredYamlBuffer,
+  useYamlBuffer,
+  yamlBufferAwaitsApply,
+  yamlBufferBlocksGraphicalEditing,
+  type YamlBufferState,
+} from "./useYamlBuffer";
 import type {
   BuilderCatalogBootstrap,
   BuilderCompileResult,
@@ -335,14 +343,9 @@ export function canDeploy(input: {
  *  draft open the buffer holds no text, and nothing is locked. */
 export function yamlBlocksGraphicalEditing(
   hasDraft: boolean,
-  buffer: SessionYamlBufferState,
+  buffer: YamlBufferState,
 ): boolean {
-  return (
-    hasDraft &&
-    (buffer.dirty ||
-      !buffer.applied ||
-      (buffer.canonicalizationRequired && !buffer.canonicalizationAccepted))
-  );
+  return hasDraft && yamlBufferBlocksGraphicalEditing(buffer);
 }
 
 /** Whether the open session draft holds work the user has not saved: it moved
@@ -478,34 +481,6 @@ export type SessionDraftWriter =
   | "compile"
   | "save"
   | "undo";
-
-export interface SessionYamlBufferState {
-  text: string;
-  appliedText: string;
-  generation: number;
-  /** The newest generation handed to an apply, or set from the draft. The
-   *  automatic apply sends only a newer generation. */
-  sentGeneration: number;
-  dirty: boolean;
-  /** Whether the draft holds `appliedText` as its accepted session. A refused
-   *  apply leaves the draft holding the refused text, so this stays false
-   *  until an apply is accepted. An edit of the buffer does not change it. */
-  applied: boolean;
-  canonicalizationRequired: boolean;
-  canonicalizationAccepted: boolean;
-  /** The backend's findings for this generation. A new generation holds none
-   *  until the backend answers it. */
-  issues: readonly BuilderIssue[];
-  /** Why the latest apply of this generation failed with no answer from the
-   *  backend for it; null when none failed. A new generation holds none. */
-  applyFailure: string | null;
-}
-
-/** Whether the automatic apply sends the buffer: no apply was handed its
- *  generation, and the draft does not hold its text as the accepted session. */
-export function yamlBufferAwaitsApply(buffer: SessionYamlBufferState): boolean {
-  return buffer.generation !== buffer.sentGeneration && (buffer.dirty || !buffer.applied);
-}
 
 export interface SessionCoordinatorCapture {
   epoch: number;
@@ -721,19 +696,6 @@ function acceptedStateOf(draft: BuilderVisualDraftEnvelope): BuilderDraftState |
   return session === null ? null : { session, catalog_documents: draft.catalog_documents };
 }
 
-const EMPTY_YAML_BUFFER: SessionYamlBufferState = {
-  text: "",
-  appliedText: "",
-  generation: 0,
-  sentGeneration: 0,
-  applyFailure: null,
-  dirty: false,
-  applied: false,
-  canonicalizationRequired: false,
-  canonicalizationAccepted: false,
-  issues: [],
-};
-
 class SupersededSessionOperation extends Error {
   constructor() {
     super("the session changed while this operation was running");
@@ -746,8 +708,8 @@ export function useBuilderWorld() {
   const [openedSession, setOpenedSession] = useState<CatalogDocumentSummary | null>(null);
   const [visualDraft, setVisualDraftState] = useState<BuilderVisualDraftEnvelope | null>(null);
   const visualDraftRef = useRef<BuilderVisualDraftEnvelope | null>(null);
-  const [yamlBuffer, setYamlBufferState] = useState<SessionYamlBufferState>(EMPTY_YAML_BUFFER);
-  const yamlBufferRef = useRef<SessionYamlBufferState>(EMPTY_YAML_BUFFER);
+  const yaml = useYamlBuffer();
+  const { state: yamlBuffer, ref: yamlBufferRef, set: setYamlBuffer } = yaml;
   const [writer, setWriter] = useState<SessionDraftWriter | null>(null);
   const writerRef = useRef<SessionDraftWriter | null>(null);
   const writerTokenRef = useRef(0);
@@ -825,11 +787,6 @@ export function useBuilderWorld() {
   const setVisualDraft = useCallback((draft: BuilderVisualDraftEnvelope | null) => {
     visualDraftRef.current = draft;
     setVisualDraftState(draft);
-  }, []);
-
-  const setYamlBuffer = useCallback((next: SessionYamlBufferState) => {
-    yamlBufferRef.current = next;
-    setYamlBufferState(next);
   }, []);
 
   const setPendingEdits = useCallback((next: ReadonlyMap<string, PendingObjectEdit>) => {
@@ -1146,19 +1103,9 @@ export function useBuilderWorld() {
   const editYamlBuffer = useCallback((text: string) => {
     if (writerRef.current !== null && writerRef.current !== "yaml") return false;
     if (pendingEditsRef.current.size > 0) return false;
-    const current = yamlBufferRef.current;
-    // An edit leaves the draft as it was, so `applied` stands, and the
-    // findings of an older generation are not this generation's.
-    setYamlBuffer({
-      ...current,
-      text,
-      generation: current.generation + 1,
-      dirty: text !== current.appliedText,
-      issues: [],
-      applyFailure: null,
-    });
+    yaml.edit(text);
     return true;
-  }, [setYamlBuffer]);
+  }, [yaml]);
 
   /** Send buffer generation `generation` to the backend. The generation is
    *  marked sent before it waits its turn, so the automatic apply never sends
@@ -1166,20 +1113,7 @@ export function useBuilderWorld() {
   const applyYamlBuffer = useCallback((
     generation: number,
   ): Promise<BuilderVisualDraftApplyYamlResult> => {
-    const marked = yamlBufferRef.current;
-    if (marked.generation === generation && marked.sentGeneration !== generation) {
-      setYamlBuffer({ ...marked, sentGeneration: generation });
-    }
-    // A failure is held against the generation it belongs to, so the pane
-    // shows it until a newer generation replaces it.
-    const holdFailure = (cause: unknown) => {
-      const current = yamlBufferRef.current;
-      if (cause instanceof SupersededSessionOperation || current.generation !== generation) return;
-      setYamlBuffer({
-        ...current,
-        applyFailure: cause instanceof Error ? cause.message : String(cause),
-      });
-    };
+    yaml.markSent(generation);
     return enqueueWriter("yaml", async (epoch) => {
       const draft = visualDraftRef.current;
       const buffer = yamlBufferRef.current;
@@ -1199,39 +1133,17 @@ export function useBuilderWorld() {
         throw new SupersededSessionOperation();
       }
       if (!result.applied) {
-        setVisualDraft(result.draft);
-        setYamlBuffer({
-          text: result.yaml_text,
-          appliedText: buffer.appliedText,
-          generation: result.buffer_generation,
-          sentGeneration: result.buffer_generation,
-          applyFailure: null,
-          dirty: result.yaml_text !== buffer.appliedText,
-          applied: false,
-          canonicalizationRequired: false,
-          canonicalizationAccepted: false,
-          issues: result.issues ?? [],
-        });
+        // The draft stays as it was; the buffer holds the refused text.
+        setYamlBuffer(answeredYamlBuffer(buffer, result.buffer_generation, result));
         return result;
       }
       const assembled = await compileVisualDraft({ draft: result.draft });
       assertEpoch(epoch);
       adoptAcceptedChange(assembled);
-      setYamlBuffer({
-        text: result.yaml_text,
-        appliedText: result.yaml_text,
-        generation: result.buffer_generation,
-        sentGeneration: result.buffer_generation,
-        applyFailure: null,
-        dirty: false,
-        applied: true,
-        canonicalizationRequired: result.canonicalization_required,
-        canonicalizationAccepted: false,
-        issues: result.issues ?? [],
-      });
+      setYamlBuffer(answeredYamlBuffer(buffer, result.buffer_generation, result));
       return result;
     }).catch((cause: unknown) => {
-      holdFailure(cause);
+      if (!(cause instanceof SupersededSessionOperation)) yaml.holdFailure(generation, cause);
       throw cause;
     });
   }, [
@@ -1259,16 +1171,7 @@ export function useBuilderWorld() {
     const canonical = assemblyResult?.compile_result.canonical_session_yaml;
     if (!canonical) throw new Error("canonical session YAML is not available");
     refuseWhileEditsPending("applying the YAML");
-    const current = yamlBufferRef.current;
-    setYamlBuffer({
-      ...current,
-      text: canonical,
-      generation: current.generation + 1,
-      dirty: canonical !== current.appliedText,
-      canonicalizationAccepted: true,
-      issues: [],
-    });
-    return applyYamlBuffer(current.generation + 1);
+    return applyYamlBuffer(yaml.canonicalize(canonical));
   }, [
     applyYamlBuffer,
     assemblyResult?.compile_result.canonical_session_yaml,

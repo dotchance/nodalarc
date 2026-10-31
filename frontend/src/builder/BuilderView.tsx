@@ -65,7 +65,6 @@ import {
   pendingEditsPhrase,
   refusalMessage,
   yamlBlocksGraphicalEditing,
-  yamlBufferAwaitsApply,
   announceCatalogDraftSaved,
   claimLibraryReveal,
   claimOutlineReveal,
@@ -106,6 +105,7 @@ import {
   openCatalogDraft,
 } from "./builderApiClient";
 import { workspaceFromVisualDraft } from "./visualWorkspace";
+import { useYamlAutoApply } from "./useYamlBuffer";
 import {
   placedSegments,
   type DraftConstellation,
@@ -967,35 +967,16 @@ export function BuilderView({
     writer,
   ]);
 
-  // The automatic apply sends a generation the draft does not hold once, after
-  // a pause in typing. A refused generation is not sent again; the next edit
-  // makes a newer one.
-  const yamlAwaitsApply = yamlBufferAwaitsApply(yamlBuffer);
-  useEffect(() => {
-    if (
-      !visualDraft ||
-      !yamlAwaitsApply ||
-      dirtyWindows > 0 ||
-      pendingEditCount > 0 ||
-      !twinMatchesDraft
-    ) {
-      return;
-    }
-    const generation = yamlBuffer.generation;
-    const timer = setTimeout(() => {
-      // A failed apply is held in the buffer state, which the YAML pane shows.
-      void applySessionYamlOnce(generation).catch(() => undefined);
-    }, 500);
-    return () => clearTimeout(timer);
-  }, [
-    applySessionYamlOnce,
-    dirtyWindows,
-    pendingEditCount,
-    visualDraft,
-    yamlAwaitsApply,
-    yamlBuffer.generation,
-    twinMatchesDraft,
-  ]);
+  // A failed apply is held in the buffer state, which the YAML pane shows.
+  const autoApplySessionYaml = useCallback(
+    (generation: number) => void applySessionYamlOnce(generation).catch(() => undefined),
+    [applySessionYamlOnce],
+  );
+  useYamlAutoApply(
+    yamlBuffer,
+    visualDraft !== null && dirtyWindows === 0 && pendingEditCount === 0 && twinMatchesDraft,
+    autoApplySessionYaml,
+  );
 
   // the object a create gesture just made — its editor focuses the
   // name once.

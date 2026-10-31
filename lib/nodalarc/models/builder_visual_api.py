@@ -476,7 +476,8 @@ class BuilderVisualDraftApplyYamlResult(_BuilderVisualModel):
 
     @model_validator(mode="after")
     def _result_matches_buffer_state(self) -> BuilderVisualDraftApplyYamlResult:
-        if self.draft.session_yaml != self.yaml_text:
+        # A refused buffer changes no draft; the page holds the refused text.
+        if self.applied and self.draft.session_yaml != self.yaml_text:
             raise ValueError("returned draft must preserve the exact applied YAML buffer")
         if not self.applied and not self.issues:
             raise ValueError("refused YAML application requires typed findings")

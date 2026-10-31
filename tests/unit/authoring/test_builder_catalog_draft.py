@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import json
 from pathlib import Path
 from typing import Any, get_args
 
@@ -811,3 +812,16 @@ def test_a_gesture_on_an_invalid_proposed_node_is_refused_naming_it(tmp_path: Pa
         )
     assert refused.value.refusal.code == "catalog_authoring.invalid_graph"
     assert "user:nodes/proposals/gw.yaml" in refused.value.refusal.message
+
+
+def test_a_proposal_opens_from_the_body_the_page_sends(tmp_path: Path) -> None:
+    # A request body arrives as parsed JSON, with lists where the models hold tuples.
+    drafts, _, _ = _services(tmp_path)
+    proposal = _proposed_node("user:nodes/proposals/sat.yaml")
+    session = json.loads(_session_context(proposal).model_dump_json())
+
+    opened = drafts.open_proposal(
+        CatalogDraftOpenProposalRequest.model_validate({"session": session, "ref": proposal["ref"]})
+    )
+
+    assert opened.state.document == proposal["document"]

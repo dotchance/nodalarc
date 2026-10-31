@@ -289,9 +289,9 @@ export function useBuilderBootstrap() {
   return { bootstrap, error, refresh };
 }
 
-/** The pending link rule, routing domain and boundary edits, as notices name them. */
+/** The pending edits, as notices name them. */
 export function pendingEditsPhrase(count: number): string {
-  return count === 1 ? "pending link or routing edit" : `${count} pending link and routing edits`;
+  return count === 1 ? "pending edit" : `${count} pending edits`;
 }
 
 /** Fail-closed deploy gate bound to one backend-issued saved revision verdict. */
@@ -1320,7 +1320,7 @@ export function useBuilderWorld() {
     if (accepted === null) {
       showCompile(
         null,
-        "pending link and routing edits are previewed only on a fully accepted session",
+        "pending edits are previewed only on a fully accepted session",
       );
       return;
     }

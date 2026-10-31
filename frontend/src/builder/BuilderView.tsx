@@ -2115,6 +2115,11 @@ export function BuilderView({
               segmentId={target.segmentId}
               rootRef={target.rootRef}
               dependencyRefs={dependencyRefs}
+              proposedRefs={new Set((visualDraft?.catalog_documents ?? []).map((item) => item.ref))}
+              onEdit={(ref) => {
+                closeWindow(targetKey(target));
+                openEditor({ kind: "proposal", ref });
+              }}
               onCustomize={async (leafRef, targetLeafRef) => {
                 refuseUnlessSettled();
                 const startedFrom = currentWorkspace();

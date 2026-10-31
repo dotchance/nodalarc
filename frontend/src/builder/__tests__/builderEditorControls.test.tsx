@@ -1069,7 +1069,7 @@ describe("deploy gate: saved backend verdict and exact digest truth", () => {
     });
     expect(one).toEqual({
       ok: false,
-      reason: "apply or discard the pending link or routing edit first",
+      reason: "apply or discard the pending edit first",
     });
     const three = canDeploy({
       savedVerdict,
@@ -1078,7 +1078,7 @@ describe("deploy gate: saved backend verdict and exact digest truth", () => {
       dirtyWindowCount: 0,
       pendingEditCount: 3,
     });
-    expect(three.reason).toBe("apply or discard the 3 pending link and routing edits first");
+    expect(three.reason).toBe("apply or discard the 3 pending edits first");
   });
 
   it("names the staleness when the saved copy is behind the edits", () => {

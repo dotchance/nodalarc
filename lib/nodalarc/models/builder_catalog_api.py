@@ -623,6 +623,11 @@ class CatalogDraftSessionContext(_CatalogApplicationModel):
     draft: BuilderDraftEnvelope
     pending_edits: BuilderPendingEdits = ()
 
+    @field_validator("pending_edits", mode="before")
+    @classmethod
+    def _accept_json_array(cls, value: object) -> object:
+        return tuple(value) if isinstance(value, list) else value
+
 
 class CatalogDraftOpenProposalRequest(_CatalogApplicationModel):
     """Open one of a session's proposed documents as a component draft, with its

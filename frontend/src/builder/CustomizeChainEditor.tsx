@@ -7,12 +7,18 @@ export function CustomizeChainEditor({
   segmentId,
   rootRef,
   dependencyRefs,
+  proposedRefs,
   onCustomize,
+  onEdit,
   onClose,
 }: {
   segmentId: string;
   rootRef: string;
   dependencyRefs: readonly string[];
+  /** The documents the session already proposes; these open for editing. */
+  proposedRefs: ReadonlySet<string>;
+  /** Open the document the session proposes at `ref` in the component window. */
+  onEdit: (ref: string) => void;
   onCustomize: (
     leafRef: string,
     targetLeafRef: string | null,
@@ -51,6 +57,14 @@ export function CustomizeChainEditor({
           {issue}
         </div>
       ))}
+      {proposedRefs.has(leafRef) ? (
+        <div className="builder-preset-row">
+          <Button variant="primary" onClick={() => onEdit(leafRef)}>
+            Edit
+          </Button>
+          <Button onClick={onClose}>Cancel</Button>
+        </div>
+      ) : (
       <div className="builder-preset-row">
         <Button
           variant="primary"
@@ -64,7 +78,10 @@ export function CustomizeChainEditor({
             ).then(
               (result) => {
                 setSaving(false);
-                if (result.applied) onClose();
+                const forkedLeaf = result.forked_chain[result.forked_chain.length - 1]?.target_ref;
+                // The fork is the session's own document now; it opens for editing.
+                if (result.applied && forkedLeaf) onEdit(forkedLeaf);
+                else if (result.applied) onClose();
                 else setIssues((result.issues ?? []).map((issue) => issue.message));
               },
               (cause) => {
@@ -80,6 +97,7 @@ export function CustomizeChainEditor({
           Cancel
         </Button>
       </div>
+      )}
       <div className="builder-zone-empty">segment: {segmentId}</div>
     </div>
   );

@@ -367,13 +367,10 @@ def _segment_has_participant(
 def _timer_template_facts(domain: ResolvedRoutingDomain) -> dict[str, Any]:
     """Map resolved per-domain timers onto the protocol's FRR vocabulary.
 
-    The resolver populates SPF and BFD values, so those facts are concrete.
-    A session states hello and hold intervals together or not at all. When it
-    states neither, both facts are None and the templates render no hello or
-    hold line. FRR then runs its own intervals.
+    The resolver always populates ``timers`` with effective values, so every
+    emitted fact is concrete — templates carry no timer fallbacks.
     """
     timers = domain.timers
-    hello, hold = timers.hello_interval_s, timers.hold_interval_s
     facts: dict[str, Any] = {
         "bfd_detect_multiplier": timers.bfd.detect_multiplier,
         "bfd_rx_interval": timers.bfd.rx_interval_ms,
@@ -382,9 +379,9 @@ def _timer_template_facts(domain: ResolvedRoutingDomain) -> dict[str, Any]:
     if domain.protocol == "isis":
         facts.update(
             {
-                "isis_hello_interval": hello,
-                "isis_hello_multiplier": (
-                    None if hello is None or hold is None else max(2, -(-hold // hello))
+                "isis_hello_interval": timers.hello_interval_s,
+                "isis_hello_multiplier": max(
+                    2, -(-timers.hold_interval_s // timers.hello_interval_s)
                 ),
                 "spf_init_delay": timers.spf.init_delay_ms,
                 "spf_short_delay": timers.spf.short_delay_ms,
@@ -396,8 +393,8 @@ def _timer_template_facts(domain: ResolvedRoutingDomain) -> dict[str, Any]:
     elif domain.protocol == "ospf":
         facts.update(
             {
-                "ospf_hello_interval": hello,
-                "ospf_dead_interval": hold,
+                "ospf_hello_interval": timers.hello_interval_s,
+                "ospf_dead_interval": timers.hold_interval_s,
                 "ospf_spf_delay": timers.spf.init_delay_ms,
                 "ospf_spf_initial_hold": timers.spf.short_delay_ms,
                 "ospf_spf_max_hold": timers.spf.long_delay_ms,

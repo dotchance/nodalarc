@@ -383,10 +383,8 @@ class ResolvedRoutingDomain(BaseModel):
     node_ids: tuple[NonEmptyReference, ...] = Field(min_length=1)
     capabilities: tuple[RoutingCapability, ...] = ()
     area_assignment: AreaAssignment | None = None
-    # Effective timer values: SPF and BFD defaults are applied at resolution,
-    # so every consumer reads one populated truth and templates carry no
-    # fallbacks. Hello and hold intervals are present only when the session
-    # states them. When they are absent, the routing engine runs its own.
+    # Effective timer values — defaults applied at resolution, so every
+    # consumer reads one populated truth and templates carry no fallbacks.
     timers: RoutingTimers = RoutingTimers()
 
     @model_validator(mode="after")

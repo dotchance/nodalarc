@@ -4,8 +4,6 @@
 
 {# Timer and BFD values are resolver-owned per-domain facts supplied by the
    producer (routing.domains[].timers); the template carries no fallbacks.
-   A domain that states no hello and hold intervals renders neither line.
-   FRR then runs its own.
    Each IS-IS domain the router participates in is one instance, named by
    its domain, over the interfaces the session assigns to it. #}
 
@@ -59,10 +57,8 @@ interface {{ iface.name }}
 {% endif %}
  isis network point-to-point
  isis metric {{ iface.metric }}
-{% if domain.isis_hello_interval is not none %}
  isis hello-interval {{ domain.isis_hello_interval }}
  isis hello-multiplier {{ domain.isis_hello_multiplier }}
-{% endif %}
 {% if iface.bfd %}
  isis bfd
  isis bfd profile {{ domain.bfd_profile }}
@@ -78,11 +74,11 @@ interface {{ segment.name }}
 {% if "ipv6" in segment.igp_families %}
  ipv6 router isis {{ domain.domain_id }}
 {% endif %}
-{% if not segment.igp_active %}
- isis passive
-{% elif domain.isis_hello_interval is not none %}
+{% if segment.igp_active %}
  isis hello-interval {{ domain.isis_hello_interval }}
  isis hello-multiplier {{ domain.isis_hello_multiplier }}
+{% else %}
+ isis passive
 {% endif %}
  isis metric {{ segment.metric }}
 {% if segment.bfd %}

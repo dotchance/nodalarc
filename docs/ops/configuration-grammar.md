@@ -1409,8 +1409,8 @@ BfdConfig = MappingBegin,
             MappingEnd ;
 
 RoutingTimers = MappingBegin,
-                [ "hello_interval_s", ( PositiveInteger | Null ) ],
-                [ "hold_interval_s", ( PositiveInteger | Null ) ],
+                [ "hello_interval_s", PositiveInteger ],
+                [ "hold_interval_s", PositiveInteger ],
                 [ "spf", SpfThrottle ],
                 [ "bfd", BfdConfig ],
                 MappingEnd ;
@@ -1457,11 +1457,10 @@ and `1000` milliseconds. For IS-IS, the resolver supplies `2000` and `500`
 milliseconds when `holddown_ms` and `time_to_learn_ms` are omitted. OSPF
 forbids non-null `holddown_ms` and `time_to_learn_ms`. `BfdConfig` defaults are
 `false`, `3`, `300`, and `300`.
-`RoutingTimers.hello_interval_s` and `hold_interval_s` have no default. A
-domain states both or neither. With neither, the routing engine runs its own
-hello and hold intervals. When both are stated, the hold interval must exceed
-the hello interval. Omitted `spf` and `bfd` fields default to their respective
-default objects. A non-null `timers` field is valid only for `isis` and `ospf`.
+`RoutingTimers.hello_interval_s` defaults to `1`, `hold_interval_s` defaults to
+`3`, and omitted `spf` and `bfd` fields default to their respective default
+objects. The hold interval must exceed the hello interval. A non-null `timers`
+field is valid only for `isis` and `ospf`.
 
 Instance ids (the `id` of each `routing.domains` entry) are unique. When
 `routing` is present, every node running a routing workload participates in

@@ -2920,7 +2920,7 @@ def test_missing_card_values_stay_absent_and_each_is_named_in_an_issue() -> None
         "selectors": [{"any": [{"segment": "leo"}, {}]}],
         "timers": {"hello_interval_s": 5},
     }
-    # RoutingTimers validation reports the missing hold interval.
+    # The omitted hold interval takes its grammar default; the model judges it.
     assert _issue_pointers(domain_issues) == {
         "/id",
         "/protocol",
@@ -3119,7 +3119,7 @@ def test_object_edit_writes_a_card_value_as_the_whole_object(
     assert (timed.widget.domain.hello_interval_s, timed.widget.domain.hold_interval_s) == (2, 7)
 
 
-def test_object_edit_reports_a_hold_interval_left_empty_once_as_missing(
+def test_object_edit_reports_a_hello_interval_past_the_default_hold_once(
     service: BuilderVisualDraftService,
 ) -> None:
     target_ref, revision, session = _accepted(service, "earth-leo-heo-geo-luna-reachability")
@@ -3149,7 +3149,7 @@ def test_object_edit_reports_a_hold_interval_left_empty_once_as_missing(
     # The working JSON holds what the card states and nothing it does not.
     assert edited.working == {**domain, "timers": {"hello_interval_s": 5}}
     assert [(issue.json_pointer, issue.message) for issue in edited.issues] == [
-        ("/timers/hold_interval_s", "timers.hold_interval_s: is required")
+        ("/timers", "timers: hold_interval_s (default 3) must be greater than hello_interval_s (5)")
     ]
     assert edited.widget is None
 

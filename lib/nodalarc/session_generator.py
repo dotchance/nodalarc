@@ -807,9 +807,8 @@ def assemble_session_document(
 def _timers_block(timers: dict | None) -> dict:
     """Validated per-domain timer tuning for generated sessions.
 
-    A value equal to its grammar default is left out of the generated YAML.
-    Hello and hold intervals have no grammar default, so stated ones are
-    always written.
+    Defaults are engine-owned: only non-default values are written into the
+    generated YAML, so an untouched wizard panel emits no timers block.
     """
     if not timers:
         return {}

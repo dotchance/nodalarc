@@ -9,8 +9,7 @@ import re
 from datetime import datetime
 from typing import Annotated, Literal, get_args
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
-from pydantic_core import InitErrorDetails, PydanticCustomError
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from nodalarc.catalog_refs import BodyRef
 from nodalarc.model_validation import (
@@ -190,43 +189,30 @@ class BfdConfig(BaseModel):
 
 class RoutingTimers(BaseModel):
     """Per-domain IGP timer tuning. Protocol-neutral where the concept is
-    shared; the renderer maps values per protocol. The hello and hold
-    intervals have no default. A domain states both or neither. With neither,
-    the routing engine runs its own."""
+    shared; the renderer maps values per protocol. An omitted field takes its
+    grammar default."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    hello_interval_s: PositiveInteger | None = None
-    hold_interval_s: PositiveInteger | None = None
+    hello_interval_s: PositiveInteger = 1
+    hold_interval_s: PositiveInteger = 3
     spf: SpfThrottle = SpfThrottle()
     bfd: BfdConfig = BfdConfig()
 
     @model_validator(mode="after")
-    def _hello_and_hold(self) -> RoutingTimers:
-        hello, hold = self.hello_interval_s, self.hold_interval_s
-        if hello is None and hold is None:
-            return self
-        if hello is None or hold is None:
-            # The absent interval is the error's location, as for any absent field.
-            absent = "hello_interval_s" if hello is None else "hold_interval_s"
-            raise ValidationError.from_exception_data(
-                type(self).__name__,
-                [
-                    InitErrorDetails(
-                        type=PydanticCustomError(
-                            "missing",
-                            "Routing timers require both hello and hold intervals",
-                        ),
-                        loc=(absent,),
-                        input=self.model_dump(exclude_unset=True),
-                    )
-                ],
-            )
-        if hold <= hello:
+    def _hold_exceeds_hello(self) -> RoutingTimers:
+        if self.hold_interval_s <= self.hello_interval_s:
+            # A value the session did not state is the grammar default; say so.
+            hold = self._stated("hold_interval_s")
+            hello = self._stated("hello_interval_s")
             raise ValueError(
                 f"hold_interval_s ({hold}) must be greater than hello_interval_s ({hello})"
             )
         return self
+
+    def _stated(self, field_name: str) -> str:
+        value = getattr(self, field_name)
+        return str(value) if field_name in self.model_fields_set else f"default {value}"
 
 
 class RoutingDomain(BaseModel):

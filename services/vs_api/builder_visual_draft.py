@@ -1300,7 +1300,7 @@ def _routing_domain_document(
         document["selectors"] = selectors if len(selectors) == 1 else [{"any": selectors}]
     if domain.protocol in LINK_STATE_PROTOCOLS:
         document["area_assignment"] = {"strategy": "flat"}
-    # RoutingTimers validation reports an interval stated without the other.
+    # Each interval the card leaves empty takes its grammar default.
     timers: JsonDocument = {
         field_name: value
         for field_name, value in (

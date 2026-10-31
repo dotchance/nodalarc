@@ -131,7 +131,7 @@ def test_a_hello_interval_stated_alone_is_one_missing_hold_interval() -> None:
     assert _validation_errors(body) == [
         (
             ("routing", "domains", index, "timers", "hold_interval_s"),
-            "routing_timers_incomplete",
+            "missing",
             "Routing timers require both hello and hold intervals",
         )
     ]
@@ -143,7 +143,7 @@ def test_a_hold_interval_stated_alone_is_one_missing_hello_interval() -> None:
     assert _validation_errors(body) == [
         (
             ("routing", "domains", index, "timers", "hello_interval_s"),
-            "routing_timers_incomplete",
+            "missing",
             "Routing timers require both hello and hold intervals",
         )
     ]

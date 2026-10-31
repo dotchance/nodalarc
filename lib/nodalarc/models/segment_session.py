@@ -214,7 +214,7 @@ class RoutingTimers(BaseModel):
                 [
                     InitErrorDetails(
                         type=PydanticCustomError(
-                            "routing_timers_incomplete",
+                            "missing",
                             "Routing timers require both hello and hold intervals",
                         ),
                         loc=(absent,),

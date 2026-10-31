@@ -3149,7 +3149,7 @@ def test_object_edit_reports_a_hold_interval_left_empty_once_as_missing(
     # The working JSON holds what the card states and nothing it does not.
     assert edited.working == {**domain, "timers": {"hello_interval_s": 5}}
     assert [(issue.json_pointer, issue.message) for issue in edited.issues] == [
-        ("/timers/hold_interval_s", "Routing timers require both hello and hold intervals")
+        ("/timers/hold_interval_s", "timers.hold_interval_s: is required")
     ]
     assert edited.widget is None
 

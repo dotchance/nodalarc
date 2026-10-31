@@ -1,6 +1,8 @@
 {# OSPFv3 on an IPv6 router of an OSPF domain, beside OSPFv2: the same router
    id, areas, costs, timers and BFD profile, for IPv6. Timer and BFD values
-   are resolver-owned per-domain facts; the template carries no fallbacks. #}
+   are resolver-owned per-domain facts; the template carries no fallbacks.
+   A domain that states no hello and hold intervals renders no hello or
+   dead interval. FRR then runs its own. #}
 {% for domain in domains if domain.protocol == "ospf" %}
 router ospf6
  ospf6 router-id {{ ipv4_loopback }}
@@ -25,8 +27,10 @@ interface {{ iface.name }}
  ipv6 ospf6 area {{ iface.ospf_area }}
  ipv6 ospf6 network point-to-point
  ipv6 ospf6 cost {{ iface.metric }}
+{% if domain.ospf_hello_interval is not none %}
  ipv6 ospf6 hello-interval {{ domain.ospf_hello_interval }}
  ipv6 ospf6 dead-interval {{ domain.ospf_dead_interval }}
+{% endif %}
 {% if iface.bfd %}
  ipv6 ospf6 bfd
  ipv6 ospf6 bfd profile {{ domain.bfd_profile }}
@@ -38,11 +42,11 @@ exit
 interface {{ segment.name }}
  ipv6 ospf6 area {{ segment.ospf_area }}
  ipv6 ospf6 cost {{ segment.metric }}
-{% if segment.igp_active %}
+{% if not segment.igp_active %}
+ ipv6 ospf6 passive
+{% elif domain.ospf_hello_interval is not none %}
  ipv6 ospf6 hello-interval {{ domain.ospf_hello_interval }}
  ipv6 ospf6 dead-interval {{ domain.ospf_dead_interval }}
-{% else %}
- ipv6 ospf6 passive
 {% endif %}
 {% if segment.bfd %}
  ipv6 ospf6 bfd

@@ -104,3 +104,73 @@ def test_routing_selectors_use_same_set_expression_model() -> None:
     body["routing"]["domains"][0]["selectors"][0] = {"segments": ["leo_a"]}
     with pytest.raises(ValidationError):
         SegmentSessionConfig.model_validate(body)
+
+
+def _with_luna_timers(timers: dict | None) -> tuple[dict, int]:
+    """The reachability session with luna_domain stating ``timers``, and that domain's index."""
+    body = _load_session("earth-leo-heo-geo-luna-reachability.yaml")
+    [index] = [
+        index
+        for index, domain in enumerate(body["routing"]["domains"])
+        if domain["id"] == "luna_domain"
+    ]
+    if timers is not None:
+        body["routing"]["domains"][index]["timers"] = timers
+    return body, index
+
+
+def _validation_errors(body: dict) -> list[tuple[tuple, str, str]]:
+    with pytest.raises(ValidationError) as refused:
+        SegmentSessionConfig.model_validate(body)
+    return [(item["loc"], item["type"], item["msg"]) for item in refused.value.errors()]
+
+
+def test_a_hello_interval_stated_alone_is_one_missing_hold_interval() -> None:
+    body, index = _with_luna_timers({"hello_interval_s": 5})
+
+    assert _validation_errors(body) == [
+        (
+            ("routing", "domains", index, "timers", "hold_interval_s"),
+            "routing_timers_incomplete",
+            "Routing timers require both hello and hold intervals",
+        )
+    ]
+
+
+def test_a_hold_interval_stated_alone_is_one_missing_hello_interval() -> None:
+    body, index = _with_luna_timers({"hold_interval_s": 5})
+
+    assert _validation_errors(body) == [
+        (
+            ("routing", "domains", index, "timers", "hello_interval_s"),
+            "routing_timers_incomplete",
+            "Routing timers require both hello and hold intervals",
+        )
+    ]
+
+
+def test_a_hold_interval_not_above_the_hello_interval_is_refused() -> None:
+    body, index = _with_luna_timers({"hello_interval_s": 5, "hold_interval_s": 3})
+
+    assert _validation_errors(body) == [
+        (
+            ("routing", "domains", index, "timers"),
+            "value_error",
+            "Value error, hold_interval_s (3) must be greater than hello_interval_s (5)",
+        )
+    ]
+
+
+@pytest.mark.parametrize("timers", [None, {}, {"spf": {"init_delay_ms": 60}}])
+def test_a_domain_stating_neither_interval_carries_neither(timers: dict | None) -> None:
+    body, index = _with_luna_timers(timers)
+
+    session = SegmentSessionConfig.model_validate(body)
+
+    assert session.routing is not None
+    stated = session.routing.domains[index].timers
+    if timers is None:
+        assert stated is None
+    else:
+        assert stated is not None
+        assert (stated.hello_interval_s, stated.hold_interval_s) == (None, None)

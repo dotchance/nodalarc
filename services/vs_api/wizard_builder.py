@@ -460,23 +460,28 @@ def _routing_timers(intent: WizardSessionIntent) -> dict[str, Any] | None:
 
 
 def wizard_routing_timer_defaults() -> WizardRoutingTimerIntent:
-    """Return Wizard controls seeded from canonical routing timer defaults."""
+    """Return Wizard controls seeded from canonical routing timer defaults.
+
+    The grammar gives hello and hold intervals no default. The Wizard proposes
+    one and three seconds. The session it writes states them.
+    """
 
     defaults = RoutingTimers()
+    hello_s, hold_s = 1, 3
     return WizardRoutingTimerIntent(
         bfd=defaults.bfd.enabled,
         bfd_detect_multiplier=defaults.bfd.detect_multiplier,
         bfd_rx_interval=defaults.bfd.rx_interval_ms,
         bfd_tx_interval=defaults.bfd.tx_interval_ms,
-        isis_hello_interval=defaults.hello_interval_s,
-        isis_hello_multiplier=defaults.hold_interval_s // defaults.hello_interval_s,
+        isis_hello_interval=hello_s,
+        isis_hello_multiplier=hold_s // hello_s,
         spf_init_delay=defaults.spf.init_delay_ms,
         spf_short_delay=defaults.spf.short_delay_ms,
         spf_long_delay=defaults.spf.long_delay_ms,
         spf_holddown=2000,
         spf_time_to_learn=500,
-        ospf_hello_interval=defaults.hello_interval_s,
-        ospf_dead_interval=defaults.hold_interval_s,
+        ospf_hello_interval=hello_s,
+        ospf_dead_interval=hold_s,
         ospf_spf_delay=defaults.spf.init_delay_ms,
         ospf_spf_initial_hold=defaults.spf.short_delay_ms,
         ospf_spf_max_hold=defaults.spf.long_delay_ms,

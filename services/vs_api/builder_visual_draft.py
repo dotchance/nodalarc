@@ -1244,7 +1244,7 @@ def _link_rule_document(
 def _routing_domain_document(
     domain: BuilderVisualRoutingDomain,
 ) -> tuple[JsonDocument, tuple[BuilderIssue, ...]]:
-    """The grammar routing domain a domain card states, with an issue for each absent field."""
+    """The grammar routing domain a card states, with an issue for each absent required field."""
     issues: list[BuilderIssue] = []
     document: JsonDocument = {}
     if domain.domain_id:
@@ -1299,23 +1299,16 @@ def _routing_domain_document(
         document["selectors"] = selectors if len(selectors) == 1 else [{"any": selectors}]
     if domain.protocol in LINK_STATE_PROTOCOLS:
         document["area_assignment"] = {"strategy": "flat"}
-    if domain.hello_interval_s is not None or domain.hold_interval_s is not None:
-        timers: JsonDocument = {}
+    # RoutingTimers validation reports an interval stated without the other.
+    timers: JsonDocument = {
+        field_name: value
         for field_name, value in (
             ("hello_interval_s", domain.hello_interval_s),
             ("hold_interval_s", domain.hold_interval_s),
-        ):
-            if value is None:
-                issues.append(
-                    _object_issue(
-                        "builder.draft.routing_timers_incomplete",
-                        "Routing timers require both hello and hold intervals",
-                        "timers",
-                        field_name,
-                    )
-                )
-            else:
-                timers[field_name] = value
+        )
+        if value is not None
+    }
+    if timers:
         document["timers"] = timers
     return document, tuple(issues)
 

@@ -753,7 +753,8 @@ def test_non_border_nodes_render_no_boundary_routes_or_redistribution() -> None:
 
 
 def _simple_session_with_bfd(protocol: str) -> ResolvedSession:
-    """earth-leo-simple with one BFD-enabled domain over every node.
+    """earth-leo-simple with one BFD-enabled domain over every node, stating
+    a hello interval of 2 seconds and a hold interval of 8.
 
     Its Denver site wires two routed gateways to one LAN, so their terr0 runs
     the IGP actively; every other site has one gateway and a passive terr0.
@@ -770,12 +771,14 @@ def _simple_session_with_bfd(protocol: str) -> ResolvedSession:
                 "protocol": protocol,
                 "selectors": [{"any": [{"segment": "leo"}, {"segment": "ground"}]}],
                 "timers": {
+                    "hello_interval_s": 2,
+                    "hold_interval_s": 8,
                     "bfd": {
                         "enabled": True,
                         "detect_multiplier": 4,
                         "rx_interval_ms": 120,
                         "tx_interval_ms": 180,
-                    }
+                    },
                 },
             }
         ]
@@ -1312,6 +1315,48 @@ def test_an_active_site_lan_runs_the_domain_timers_and_every_lan_carries_its_cos
             assert f" {version} passive" in passive_lan
             assert f" {version} cost 10" in passive_lan
         assert not [line for line in passive_lan if "interval" in line]
+
+
+@pytest.mark.parametrize(
+    ("protocol", "stated_lines"),
+    [
+        ("isis", {" isis hello-interval 2", " isis hello-multiplier 4"}),
+        (
+            "ospf",
+            {
+                " ip ospf hello-interval 2",
+                " ip ospf dead-interval 8",
+                " ipv6 ospf6 hello-interval 2",
+                " ipv6 ospf6 dead-interval 8",
+            },
+        ),
+    ],
+)
+def test_stated_hello_and_hold_intervals_render_on_every_active_igp_interface(
+    protocol, stated_lines
+) -> None:
+    resolved = _simple_session_with_bfd(protocol)
+    router_id = _denver_router(resolved)
+    router = resolved.node_by_id(router_id)
+    assert router is not None
+    conf = _frr_conf(resolved, router_id)
+
+    for name in [*(wan.name for wan in router.wan_interfaces), "terr0"]:
+        assert stated_lines <= set(_stanza_lines(conf, f"interface {name}"))
+
+
+@pytest.mark.parametrize("protocol", ["isis", "ospf"])
+def test_a_domain_stating_no_hello_or_hold_interval_renders_neither(protocol) -> None:
+    resolved = _resolved(protocol=protocol)
+
+    for node_id in (_first_satellite(resolved), _first_ground(resolved)):
+        conf = _frr_conf(resolved, node_id)
+        assert f"router {protocol}" in conf
+        assert not [
+            line
+            for line in conf.splitlines()
+            if any(word in line for word in ("hello-interval", "hello-multiplier", "dead-interval"))
+        ]
 
 
 def test_a_fixed_link_to_a_node_outside_the_domain_carries_no_igp() -> None:

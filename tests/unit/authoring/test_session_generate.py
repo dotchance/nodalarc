@@ -287,18 +287,28 @@ def test_generated_session_carries_wizard_timers_into_resolved_domain() -> None:
     assert domain.timers.spf.init_delay_ms == 50
 
 
-def test_generated_session_with_default_timers_emits_no_timers_block() -> None:
+def test_generated_session_states_hello_and_hold_and_leaves_out_grammar_defaults() -> None:
+    generated = {
+        "constellation": LEO_RING,
+        "protocol": "isis",
+        "extensions": [],
+        "orbit_propagator": "j2_mean_elements",
+        "ground_stations": "nodalarc:site-sets/earth/leo/earth-leo-starlink-pop-sites.yaml",
+    }
     raw, resolved, _warnings = _generated_session(
-        constellation=LEO_RING,
-        protocol="isis",
-        extensions=[],
-        orbit_propagator="j2_mean_elements",
-        ground_stations="nodalarc:site-sets/earth/leo/earth-leo-starlink-pop-sites.yaml",
-        timers={"hello_interval_s": 1, "hold_interval_s": 3},
+        **generated,
+        timers={"hello_interval_s": 1, "hold_interval_s": 3, "bfd": {"enabled": False}},
     )
 
+    assert raw["routing"]["domains"][0]["timers"] == {"hello_interval_s": 1, "hold_interval_s": 3}
+    timers = resolved.routing_domains[0].timers
+    assert (timers.hello_interval_s, timers.hold_interval_s) == (1, 3)
+
+    raw, resolved, _warnings = _generated_session(**generated, timers={"bfd": {"enabled": False}})
+
     assert "timers" not in raw["routing"]["domains"][0]
-    assert resolved.routing_domains[0].timers.hello_interval_s == 1
+    timers = resolved.routing_domains[0].timers
+    assert (timers.hello_interval_s, timers.hold_interval_s) == (None, None)
 
 
 def test_generator_rejects_propagator_that_does_not_match_catalog_orbits() -> None:

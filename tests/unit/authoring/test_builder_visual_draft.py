@@ -2897,11 +2897,11 @@ def test_missing_card_values_stay_absent_and_each_is_named_in_an_issue() -> None
         "selectors": [{"any": [{"segment": "leo"}, {}]}],
         "timers": {"hello_interval_s": 5},
     }
+    # RoutingTimers validation reports the missing hold interval.
     assert _issue_pointers(domain_issues) == {
         "/id",
         "/protocol",
         "/selectors/0/any/1/segment",
-        "/timers/hold_interval_s",
     }
 
     lone, lone_issues = _routing_domain_document(
@@ -3094,6 +3094,41 @@ def test_object_edit_writes_a_card_value_as_the_whole_object(
     RoutingDomain.model_validate(timed.working)
     assert timed.widget is not None and timed.widget.kind == "routing_domain"
     assert (timed.widget.domain.hello_interval_s, timed.widget.domain.hold_interval_s) == (2, 7)
+
+
+def test_object_edit_reports_a_hold_interval_left_empty_once_as_missing(
+    service: BuilderVisualDraftService,
+) -> None:
+    target_ref, revision, session = _accepted(service, "earth-leo-heo-geo-luna-reachability")
+    domain = _member(session, "/routing/domains", "luna_domain")
+    domain_address = {**_DOMAIN_ADDRESS, "id": "luna_domain"}
+    described = _object_edit(
+        service,
+        target_ref=target_ref,
+        applied_revision=revision,
+        address=domain_address,
+        working=domain,
+    )
+    assert described.widget is not None and described.widget.kind == "routing_domain"
+    card = described.widget.model_dump(mode="json")
+    card["domain"]["hello_interval_s"] = 5
+    card["domain"]["hold_interval_s"] = None
+
+    edited = _object_edit(
+        service,
+        target_ref=target_ref,
+        applied_revision=revision,
+        address=domain_address,
+        working=described.working,
+        change=card,
+    )
+
+    # The working JSON holds what the card states and nothing it does not.
+    assert edited.working == {**domain, "timers": {"hello_interval_s": 5}}
+    assert [(issue.json_pointer, issue.message) for issue in edited.issues] == [
+        ("/timers/hold_interval_s", "Routing timers require both hello and hold intervals")
+    ]
+    assert edited.widget is None
 
 
 def test_object_edit_field_controls_edit_objects_no_card_writes_back(

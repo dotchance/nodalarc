@@ -39,7 +39,9 @@ from nodalarc.models.builder_api import (
     BuilderListEdit,
     BuilderMemberAddress,
     BuilderPendingEdits,
+    BuilderProposalAddress,
     BuilderProposedCatalogDocument,
+    BuilderSectionAddress,
     BuilderSessionSaveRequest,
     BuilderVerdict,
     BuilderWholeListAddress,
@@ -128,17 +130,26 @@ from nodalarc.models.link_rules import (
 )
 from nodalarc.models.segment_session import (
     LINK_STATE_PROTOCOLS,
+    Addressing,
     AggregateOf,
     AreaAssignment,
     CandidateLimits,
+    Dispatch,
+    Ephemeris,
     RoutingBoundary,
     RoutingDomain,
     RoutingTimers,
     SegmentSessionConfig,
     SessionMeta,
+    Simulation,
     TimeConfig,
 )
-from nodalarc.models.segments import GroundPlacement, GroundSegment, SpaceSegment
+from nodalarc.models.segments import (
+    GroundPlacement,
+    GroundSegment,
+    LagrangeSegment,
+    SpaceSegment,
+)
 from nodalarc.resolve_session import SessionResolutionError, endpoint_terminal_role
 from pydantic import BaseModel, ConfigDict, JsonValue, ValidationError
 
@@ -547,6 +558,13 @@ def _pending_edit_authoring_ids(edit: BuilderContentEdit | BuilderListEdit) -> I
     elif isinstance(edit.address, BuilderWholeListAddress):
         for boundary in _json_items(edit.working):
             yield from _routing_boundary_authoring_ids(boundary)
+    elif isinstance(edit.address, BuilderSectionAddress | BuilderProposalAddress):
+        # A section names no session object; a proposal's ids are its catalog's.
+        return
+    elif edit.address.list_pointer == "/segments":
+        segment_id = edit.working.get("id") if isinstance(edit.working, dict) else None
+        if isinstance(segment_id, str):
+            yield segment_id
     elif edit.address.list_pointer == "/link_rules":
         yield from _link_rule_authoring_ids(edit.working)
     else:
@@ -1660,14 +1678,68 @@ _OBJECT_EDITORS: Mapping[str, _ObjectEditor] = MappingProxyType(
 _LIST_ITEM_COMMANDS = (BuilderInsertItemCommand, BuilderRemoveItemCommand, BuilderMoveItemCommand)
 
 
-def _object_editor(address: BuilderMemberAddress | BuilderWholeListAddress) -> _ObjectEditor:
+_SECTION_EDITORS: Mapping[str, _ObjectEditor] = MappingProxyType(
+    {
+        "/session": _ObjectEditor(
+            root_model=SessionMeta,
+            root_label="Session",
+            specialized_fields=frozenset({(SessionMeta, "name")}),
+            protected_pointers=frozenset({"", "/name"}),
+            protected_reason=(
+                "A field edit cannot change the session's name; save under a new name renames it"
+            ),
+        ),
+        **{
+            pointer: _ObjectEditor(
+                root_model=model,
+                root_label=label,
+                specialized_fields=frozenset(),
+                protected_pointers=frozenset({""}),
+                protected_reason=f"A field edit cannot remove the {label.lower()} section",
+            )
+            for pointer, model, label in (
+                ("/time", TimeConfig, "Time"),
+                ("/simulation", Simulation, "Simulation"),
+                ("/addressing", Addressing, "Addressing"),
+                ("/ephemeris", Ephemeris, "Ephemeris"),
+                ("/dispatch", Dispatch, "Dispatch"),
+            )
+        },
+    }
+)
+
+
+def _segment_model(working: JsonDocument | list[JsonValue]) -> type[BaseModel]:
+    """A segment's grammar model, by the form its JSON states."""
+    if isinstance(working, dict) and "placement" in working:
+        return GroundSegment
+    if isinstance(working, dict) and "frame" in working:
+        return LagrangeSegment
+    return SpaceSegment
+
+
+def _object_editor(
+    address: BuilderMemberAddress | BuilderWholeListAddress | BuilderSectionAddress,
+    working: JsonDocument | list[JsonValue],
+) -> _ObjectEditor:
     if isinstance(address, BuilderWholeListAddress):
         return _OBJECT_EDITORS[address.pointer]
+    if isinstance(address, BuilderSectionAddress):
+        return _SECTION_EDITORS[address.pointer]
+    if address.list_pointer == "/segments":
+        # A segment's id is an ordinary field: a rename renames the segment.
+        return _ObjectEditor(
+            root_model=_segment_model(working),
+            root_label="Segment",
+            specialized_fields=frozenset(),
+            protected_pointers=frozenset({""}),
+            protected_reason="A field edit cannot remove a segment; Remove does",
+        )
     return _OBJECT_EDITORS[address.list_pointer]
 
 
 def _editor_document(
-    address: BuilderMemberAddress | BuilderWholeListAddress,
+    address: BuilderMemberAddress | BuilderWholeListAddress | BuilderSectionAddress,
     working: JsonDocument | list[JsonValue],
 ) -> JsonDocument:
     """The document an object's field editor covers: the object, or the list inside its root."""
@@ -1677,12 +1749,12 @@ def _editor_document(
 
 
 def _object_control_build(
-    address: BuilderMemberAddress | BuilderWholeListAddress,
+    address: BuilderMemberAddress | BuilderWholeListAddress | BuilderSectionAddress,
     working: JsonDocument | list[JsonValue],
     *,
     applied_revision: int,
 ) -> BuilderControlTreeBuild:
-    editor = _object_editor(address)
+    editor = _object_editor(address, working)
     return build_model_control_tree(
         editor.root_model,
         _editor_document(address, working),
@@ -1716,7 +1788,7 @@ def _object_validation_issues(
 
 
 def _classified_object(
-    address: BuilderMemberAddress | BuilderWholeListAddress,
+    address: BuilderMemberAddress | BuilderWholeListAddress | BuilderSectionAddress,
     working: JsonDocument | list[JsonValue],
     *,
     source_ref: str,
@@ -1746,11 +1818,14 @@ def _classified_object(
         )
         return widget, issues
     try:
-        validated = _object_editor(address).root_model.model_validate(working)
+        validated = _object_editor(address, working).root_model.model_validate(working)
     except ValidationError as error:
         return None, _object_validation_issues(
             error, document=working, at=(), source_ref=source_ref
         )
+    if not isinstance(validated, LinkRule | RoutingDomain):
+        # Segments and sections are edited in the field editor; no card writes them.
+        return None, []
     if isinstance(validated, LinkRule):
         rule_card = _link_projection(validated)
         if rule_card is None:
@@ -3232,7 +3307,7 @@ class BuilderVisualDraftService:
         request: BuilderVisualObjectEditRequest,
         change: BuilderVisualObjectControlEdit,
     ) -> JsonDocument | list[JsonValue]:
-        editor = _object_editor(request.address)
+        editor = _object_editor(request.address, request.working)
         control_build = _object_control_build(
             request.address,
             request.working,

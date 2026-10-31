@@ -410,7 +410,7 @@ def test_compile_route_applies_pending_edits_to_the_draft_it_was_sent(
     )
     assert compiled["topology"] == topology
 
-    outside = {**edit, "address": {"kind": "member", "list_pointer": "/segments", "id": "leo"}}
+    outside = {**edit, "address": {"kind": "member", "list_pointer": "/ephemeris", "id": "leo"}}
     refused = client.post(
         "/api/v1/builder/compile",
         json={

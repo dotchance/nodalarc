@@ -526,8 +526,9 @@ def test_pending_edits_address_only_the_closed_session_lists() -> None:
     assert removal.ids_wanted == ("luna",)
 
     for address in (
-        {"kind": "member", "list_pointer": "/segments", "id": "leo"},
+        {"kind": "member", "list_pointer": "/ephemeris", "id": "leo"},
         {"kind": "member", "list_pointer": "/routing/boundaries", "id": "leo"},
+        {"kind": "section", "pointer": "/link_rules"},
         {"kind": "member", "list_pointer": "/link_rules", "id": "Leo ISL"},
         {"kind": "whole_list", "pointer": "/link_rules"},
         {"kind": "member", "list_pointer": "/link_rules", "id": "leo", "label": "ISL"},
@@ -536,7 +537,7 @@ def test_pending_edits_address_only_the_closed_session_lists() -> None:
             PENDING_EDIT.validate_python({**_member_edit("/link_rules", "leo"), "address": address})
 
     # A boundary has no id to remove or reorder it by; the whole list is one content edit.
-    with pytest.raises(ValidationError, match="'/link_rules' or '/routing/domains'"):
+    with pytest.raises(ValidationError, match="'/routing/domains' or '/segments'"):
         PENDING_EDIT.validate_python(_list_edit("/routing/boundaries", ["a"], []))
 
 
@@ -548,9 +549,9 @@ def test_pending_edit_values_fit_their_address_and_keep_its_id() -> None:
     assert isinstance(absent_list, BuilderContentEdit)
     assert absent_list.base is None
 
-    with pytest.raises(ValidationError, match="holds that member's object"):
+    with pytest.raises(ValidationError, match="holds that object"):
         PENDING_EDIT.validate_python(_member_edit("/link_rules", "isl", working=[]))
-    with pytest.raises(ValidationError, match="holds that member's object"):
+    with pytest.raises(ValidationError, match="holds that object"):
         PENDING_EDIT.validate_python(_member_edit("/link_rules", "isl", base=[]))
     with pytest.raises(ValidationError, match="holds that list"):
         PENDING_EDIT.validate_python(_boundaries_edit(working={"over": "isl"}))

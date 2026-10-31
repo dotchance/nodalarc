@@ -1097,3 +1097,82 @@ def test_an_invalid_proposal_edit_names_its_field_in_the_proposed_document(
     )
     assert issue in result.issues
     assert result.save_verdict.allowed is False
+
+
+def _section_edit(pointer: str, base: Any, working: Any) -> dict[str, Any]:
+    return {
+        "kind": "content",
+        "address": {"kind": "section", "pointer": pointer},
+        "base": base,
+        "working": working,
+    }
+
+
+def test_a_section_edit_replaces_its_section_and_goes_stale_when_it_changed() -> None:
+    session = _load(SIMPLE_SESSION)
+    slower = {**session["time"], "step_seconds": 2.0}
+
+    applied = apply_pending_edits(
+        session,
+        PENDING_EDITS.validate_python((_section_edit("/time", session["time"], slower),)),
+        proposals=(),
+        source_ref="user:sessions/earth-leo-simple.yaml",
+    )
+    assert [outcome.status for outcome in applied.outcomes] == ["applied"]
+    assert applied.session["time"] == slower
+
+    began = {**session["time"], "step_seconds": 5.0}
+    stale = apply_pending_edits(
+        session,
+        PENDING_EDITS.validate_python((_section_edit("/time", began, slower),)),
+        proposals=(),
+        source_ref="user:sessions/earth-leo-simple.yaml",
+    )
+    [outcome] = stale.outcomes
+    assert outcome.status == "stale"
+    assert outcome.issues[0].json_pointer == "/time"
+    assert stale.session["time"] == session["time"]
+
+
+def test_an_invalid_section_edit_names_its_field() -> None:
+    session = _load(SIMPLE_SESSION)
+    broken = {**session["time"], "step_seconds": -1}
+
+    applied = apply_pending_edits(
+        session,
+        PENDING_EDITS.validate_python((_section_edit("/time", session["time"], broken),)),
+        proposals=(),
+        source_ref="user:sessions/earth-leo-simple.yaml",
+    )
+
+    [outcome] = applied.outcomes
+    assert outcome.status == "invalid"
+    assert [issue.json_pointer for issue in outcome.issues] == ["/time/step_seconds"]
+
+
+def test_a_segment_edit_may_rename_the_segment() -> None:
+    session = _load(SIMPLE_SESSION)
+    segment = session["segments"][0]
+    renamed = {**segment, "id": "renamed-shell"}
+
+    applied = apply_pending_edits(
+        session,
+        PENDING_EDITS.validate_python(
+            (
+                {
+                    "kind": "content",
+                    "address": {"kind": "member", "list_pointer": "/segments", "id": segment["id"]},
+                    "base": segment,
+                    "working": renamed,
+                },
+            )
+        ),
+        proposals=(),
+        source_ref="user:sessions/earth-leo-simple.yaml",
+    )
+
+    assert [outcome.status for outcome in applied.outcomes] == ["applied"]
+    assert applied.session["segments"][0]["id"] == "renamed-shell"
+    assert [item["id"] for item in applied.session["segments"][1:]] == [
+        item["id"] for item in session["segments"][1:]
+    ]

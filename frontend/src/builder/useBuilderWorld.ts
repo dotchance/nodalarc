@@ -530,6 +530,7 @@ export function pendingEditKey(address: PendingEditAddress): string {
     case "member":
       return `${address.list_pointer}/${address.id}`;
     case "whole_list":
+    case "section":
       return address.pointer;
     case "proposal":
       return `proposal:${address.ref}`;
@@ -545,6 +546,8 @@ function pendingEditName(address: PendingEditAddress): string {
       return address.id;
     case "whole_list":
       return "the boundary list";
+    case "section":
+      return `the ${address.pointer.slice(1)} section`;
     case "proposal":
       return address.ref;
   }
@@ -596,6 +599,13 @@ function acceptedObjectAt(
     }
     return list;
   }
+  if (address.kind === "section") {
+    const section = acceptedValueAt(session, address.pointer);
+    if (section !== undefined && !isJsonObject(section)) {
+      throw new Error(`the accepted session holds ${address.pointer} as something other than an object`);
+    }
+    return section;
+  }
   const members = acceptedValueAt(session, address.list_pointer);
   const matches = (isJsonList(members) ? members : []).filter(
     (member): member is Readonly<Record<string, JsonValue>> =>
@@ -616,9 +626,9 @@ function beginPendingEdit(
   const object = acceptedObjectAt(session, address);
   if (object === undefined) {
     throw new Error(
-      address.kind === "whole_list"
-        ? `the accepted session holds no ${address.pointer} list to edit`
-        : `the accepted session holds no ${address.id} in ${address.list_pointer}`,
+      address.kind === "member"
+        ? `the accepted session holds no ${address.id} in ${address.list_pointer}`
+        : `the accepted session holds no ${address.pointer} to edit`,
     );
   }
   return { kind: "content", address, base: object, working: object };
@@ -1825,17 +1835,23 @@ export function useBuilderWorld() {
     };
   }, [acceptedDraftForEdits]);
 
-  /** Hold `working` as the pending edit of the document the session proposes at
-   *  `ref`. Its base is that document in the accepted draft; nothing is accepted.
-   *  The preview compiles the session with it, and Apply accepts it. */
-  const stageProposalEdit = useCallback(
-    (ref: string, working: Readonly<Record<string, JsonValue>>) => {
+  /** Hold `working` as the pending edit of a document the session proposes, or of
+   *  one session section. Its base is that document or section in the accepted
+   *  draft, absent where the draft holds none; nothing is accepted. The preview
+   *  compiles the session with it, and Apply accepts it. */
+  const stageEdit = useCallback(
+    (
+      address: Extract<PendingEditAddress, { kind: "proposal" | "section" }>,
+      working: Readonly<Record<string, JsonValue>>,
+    ) => {
       const { draft, accepted } = acceptedDraftForEdits();
-      const base = acceptedProposalAt(
-        { session: accepted, catalog_documents: draft.catalog_documents },
-        ref,
-      );
-      const address = { kind: "proposal", ref } as const;
+      const base =
+        address.kind === "proposal"
+          ? acceptedProposalAt({ session: accepted, catalog_documents: draft.catalog_documents }, address.ref)
+          : acceptedValueAt(accepted, address.pointer);
+      if (base !== undefined && !isJsonObject(base)) {
+        throw new Error(`the accepted draft holds ${pendingEditName(address)} as something other than an object`);
+      }
       const key = pendingEditKey(address);
       setPendingEdits(
         new Map(pendingEditsRef.current).set(key, {
@@ -2177,7 +2193,7 @@ export function useBuilderWorld() {
     applyPendingEdits,
     discardPendingEdit,
     proposalSession,
-    stageProposalEdit,
+    stageEdit,
     removeListMember,
     undo,
     prepareRetarget,

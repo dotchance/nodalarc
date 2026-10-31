@@ -100,6 +100,8 @@ export function pendingEditAddress(
 export function pendingEditTarget(address: BuilderContentEdit["address"]): EditorTarget {
   if (address.kind === "whole_list") return { kind: "boundaries" };
   if (address.kind === "proposal") return { kind: "proposal", ref: address.ref };
+  if (address.kind === "section") return { kind: "session" };
+  if (address.list_pointer === "/segments") return { kind: "segment", id: address.id };
   return address.list_pointer === "/link_rules"
     ? { kind: "link", id: address.id }
     : { kind: "domain", id: address.id };
@@ -112,6 +114,7 @@ export function pendingEditTitle(address: BuilderContentEdit["address"]): string
   if (address.kind === "proposal") {
     return address.ref.slice(address.ref.lastIndexOf("/") + 1).replace(/\.ya?ml$/, "");
   }
+  if (address.kind === "section") return address.pointer.slice(1);
   return address.id;
 }
 

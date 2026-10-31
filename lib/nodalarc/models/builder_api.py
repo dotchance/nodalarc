@@ -75,7 +75,11 @@ type BuilderIssueStage = Literal[
 ]
 type BuilderIssueSeverity = Literal["info", "warning", "error"]
 type BuilderBlockedOperation = Literal["save", "deploy"]
-type BuilderMemberListPointer = Literal["/link_rules", "/routing/domains"]
+type BuilderMemberListPointer = Literal["/link_rules", "/routing/domains", "/segments"]
+# The session's singleton sections, each edited as one whole object.
+type BuilderSectionPointer = Literal[
+    "/session", "/time", "/simulation", "/addressing", "/ephemeris", "/dispatch"
+]
 type BuilderWholeListPointer = Literal["/routing/boundaries"]
 type BuilderPendingEditStatus = Literal["applied", "stale", "invalid"]
 type BuilderSessionSaveRefusalCode = Literal[
@@ -234,6 +238,13 @@ class BuilderWholeListAddress(_BuilderApplicationModel):
     pointer: BuilderWholeListPointer
 
 
+class BuilderSectionAddress(_BuilderApplicationModel):
+    """One singleton section of the session, by its pointer."""
+
+    kind: Literal["section"]
+    pointer: BuilderSectionPointer
+
+
 class BuilderProposalAddress(_BuilderApplicationModel):
     """One catalog document the session proposes, by its ``user:`` reference."""
 
@@ -250,17 +261,20 @@ class BuilderProposalAddress(_BuilderApplicationModel):
 
 
 BuilderSessionObjectAddress = Annotated[
-    BuilderMemberAddress | BuilderWholeListAddress,
+    BuilderMemberAddress | BuilderWholeListAddress | BuilderSectionAddress,
     Field(discriminator="kind"),
 ]
 BuilderEditAddress = Annotated[
-    BuilderMemberAddress | BuilderWholeListAddress | BuilderProposalAddress,
+    BuilderMemberAddress | BuilderWholeListAddress | BuilderSectionAddress | BuilderProposalAddress,
     Field(discriminator="kind"),
 ]
 
 
 def check_value_fits_address(
-    address: BuilderMemberAddress | BuilderWholeListAddress | BuilderProposalAddress,
+    address: BuilderMemberAddress
+    | BuilderWholeListAddress
+    | BuilderSectionAddress
+    | BuilderProposalAddress,
     value: JsonDocument | list[JsonValue],
 ) -> None:
     """Raise ValueError unless ``value`` is what ``address`` holds.
@@ -274,7 +288,12 @@ def check_value_fits_address(
             raise ValueError("an edit to a whole list holds that list")
         return
     if not isinstance(value, dict):
-        raise ValueError("an edit to a list member holds that member's object")
+        raise ValueError("an edit to a list member or section holds that object")
+    if isinstance(address, BuilderSectionAddress):
+        return
+    if isinstance(address, BuilderMemberAddress) and address.list_pointer == "/segments":
+        # A segment's id is one of its fields: an edit may rename it.
+        return
     if isinstance(address, BuilderProposalAddress):
         wrapper = catalog_family_spec(cast(CatalogFamily, address.ref.family)).wrapper
         body = value.get(cast(str, wrapper))
@@ -346,6 +365,8 @@ def _edit_target(edit: BuilderContentEdit | BuilderListEdit) -> tuple[str, ...]:
         return ("content", edit.address.pointer)
     if isinstance(edit.address, BuilderProposalAddress):
         return ("content", "proposal", str(edit.address.ref))
+    if isinstance(edit.address, BuilderSectionAddress):
+        return ("content", "section", edit.address.pointer)
     return ("content", edit.address.list_pointer, edit.address.id)
 
 

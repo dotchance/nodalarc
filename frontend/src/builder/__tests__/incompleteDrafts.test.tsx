@@ -11,7 +11,7 @@ vi.mock("../../config", () => ({
 
 const { SessionEditor } = await import("../SessionEditor");
 const { resetCatalogStores } = await import("../useBuilderWorld");
-const { newWorkspace } = await import("./fixtures/workspaceFixtures");
+import type { JsonValue } from "../generated/builderApi";
 
 beforeEach(() => resetCatalogStores());
 afterEach(() => {
@@ -20,11 +20,21 @@ afterEach(() => {
 });
 
 describe("truthful incomplete session summaries", () => {
+  const editor = (time: Record<string, JsonValue>, simulation: Record<string, JsonValue> | null) => (
+    <SessionEditor
+      name="incomplete"
+      meta={{ name: "incomplete" }}
+      time={time}
+      simulation={simulation}
+      pending={false}
+      onStage={() => {}}
+      onApply={() => {}}
+      onDiscard={() => {}}
+    />
+  );
+
   it("never renders null time values as an authored rate", () => {
-    const workspace = newWorkspace("incomplete-time");
-    workspace.step_seconds = null;
-    workspace.compression = null;
-    render(<SessionEditor workspace={workspace} onUpdate={() => {}} />);
+    render(editor({ start_time: "2026-01-01T00:00:00Z" }, null));
 
     expect(screen.getByText("time rate incomplete")).toBeTruthy();
     expect(document.body.textContent).not.toContain("×null");
@@ -32,9 +42,7 @@ describe("truthful incomplete session summaries", () => {
   });
 
   it("labels a partially missing candidate budget as incomplete", () => {
-    const workspace = newWorkspace("incomplete-budget");
-    workspace.max_pairs_per_rule = null;
-    render(<SessionEditor workspace={workspace} onUpdate={() => {}} />);
+    render(editor({ step_seconds: 1, compression: 1 }, { candidate_limits: { max_pairs_per_tick: 10 } }));
 
     expect(screen.getByText("candidate budget incomplete")).toBeTruthy();
     expect(document.body.textContent).not.toContain("null / rule");

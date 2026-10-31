@@ -148,7 +148,7 @@ export function pendingAnswer(
 ): BuilderVisualObjectEditResult {
   return {
     address,
-    working: address.kind === "whole_list" ? [] : { id: address.id },
+    working: address.kind === "whole_list" ? [] : address.kind === "member" ? { id: address.id } : {},
     widget,
     control_tree: {
       projection_revision: 1,

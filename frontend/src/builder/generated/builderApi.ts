@@ -107,7 +107,7 @@ export interface BuilderCompileResult {
 /** Working grammar JSON for one address, beside the value it began from. ``base`` is absent for a new object. Both values stay generic JSON so an incomplete object can cross the API boundary and come back with issues. */
 export interface BuilderContentEdit {
   readonly kind: "content";
-  readonly address: BuilderMemberAddress | BuilderWholeListAddress | BuilderProposalAddress;
+  readonly address: BuilderMemberAddress | BuilderWholeListAddress | BuilderSectionAddress | BuilderProposalAddress;
   readonly base?: Readonly<Record<string, JsonValue>> | ReadonlyArray<JsonValue> | null;
   readonly working: Readonly<Record<string, JsonValue>> | ReadonlyArray<JsonValue>;
 }
@@ -256,7 +256,7 @@ export interface BuilderMemberAddress {
 }
 
 /**  */
-export type BuilderMemberListPointer = "/link_rules" | "/routing/domains";
+export type BuilderMemberListPointer = "/link_rules" | "/routing/domains" | "/segments";
 
 /**  */
 export interface BuilderMoveItemCommand {
@@ -409,6 +409,15 @@ export interface BuilderScalarControl {
   readonly constraints?: BuilderScalarConstraints;
   readonly reference_families?: ReadonlyArray<CatalogFamily>;
 }
+
+/** One singleton section of the session, by its pointer. */
+export interface BuilderSectionAddress {
+  readonly kind: "section";
+  readonly pointer: BuilderSectionPointer;
+}
+
+/**  */
+export type BuilderSectionPointer = "/session" | "/time" | "/simulation" | "/addressing" | "/ephemeris" | "/dispatch";
 
 /** One terminal role and medium that some node in a segment carries. */
 export interface BuilderSegmentCapability {
@@ -874,14 +883,14 @@ export interface BuilderVisualObjectControlEdit {
 export interface BuilderVisualObjectEditRequest {
   readonly target_ref: SessionRef;
   readonly applied_revision: number;
-  readonly address: BuilderMemberAddress | BuilderWholeListAddress;
+  readonly address: BuilderMemberAddress | BuilderWholeListAddress | BuilderSectionAddress;
   readonly working: Readonly<Record<string, JsonValue>> | ReadonlyArray<JsonValue>;
   readonly change?: BuilderVisualLinkRuleWidget | BuilderVisualRoutingDomainWidget | BuilderVisualRoutingBoundariesWidget | BuilderVisualObjectControlEdit | null;
 }
 
 /** One object's working JSON after an edit, with the editors that state it. Nothing is accepted. ``widget`` is the card value that writes the working JSON back unchanged; it is null for an object that does not validate on its own or that no card writes back unchanged. The control tree covers the working JSON at the accepted revision and keeps the object's id read-only. Issue pointers are within the working JSON. */
 export interface BuilderVisualObjectEditResult {
-  readonly address: BuilderMemberAddress | BuilderWholeListAddress;
+  readonly address: BuilderMemberAddress | BuilderWholeListAddress | BuilderSectionAddress;
   readonly working: Readonly<Record<string, JsonValue>> | ReadonlyArray<JsonValue>;
   readonly widget: BuilderVisualLinkRuleWidget | BuilderVisualRoutingDomainWidget | BuilderVisualRoutingBoundariesWidget | null;
   readonly control_tree: BuilderControlTree;

@@ -34,11 +34,14 @@ from nodalarc.models.builder_api import (
     BuilderIssue,
     BuilderIssueStage,
     BuilderListEdit,
+    BuilderMemberAddress,
     BuilderMemberListPointer,
     BuilderPendingEditOutcome,
     BuilderPendingEdits,
     BuilderProposalAddress,
     BuilderProposedCatalogDocument,
+    BuilderSectionAddress,
+    BuilderSectionPointer,
     BuilderVerdict,
     BuilderWholeListAddress,
     DependencyClosureEntry,
@@ -48,7 +51,17 @@ from nodalarc.models.builder_api import (
 from nodalarc.models.builder_world import BuilderWorld
 from nodalarc.models.link_rules import LinkRule
 from nodalarc.models.resolved_session import SourceContext
-from nodalarc.models.segment_session import RoutingBoundary, RoutingDomain
+from nodalarc.models.segment_session import (
+    Addressing,
+    Dispatch,
+    Ephemeris,
+    RoutingBoundary,
+    RoutingDomain,
+    SessionMeta,
+    Simulation,
+    TimeConfig,
+)
+from nodalarc.models.segments import Segment
 from nodalarc.resolve_session import (
     SessionResolution,
     SessionResolutionError,
@@ -57,7 +70,7 @@ from nodalarc.resolve_session import (
 from nodalarc.runtime_support import RuntimeSupport, UnsupportedFeatureError
 from nodalarc.semantic_projection import resolved_session_semantic_digest
 from nodalarc.session_validator import validate_session_readiness
-from pydantic import BaseModel, JsonValue, TypeAdapter, ValidationError
+from pydantic import JsonValue, TypeAdapter, ValidationError
 
 PreviewFactory = Callable[[SessionResolution], BuilderWorld]
 
@@ -220,16 +233,16 @@ def _candidate_place(
     def target(edit: BuilderContentEdit | BuilderListEdit) -> str:
         if isinstance(edit, BuilderListEdit):
             return edit.list_pointer
-        if isinstance(edit.address, BuilderWholeListAddress):
+        if isinstance(edit.address, BuilderWholeListAddress | BuilderSectionAddress):
             return edit.address.pointer
-        return edit.address.list_pointer
+        return cast(BuilderMemberAddress, edit.address).list_pointer
 
     def place(pointer: str) -> str:
         for index, edit in applied:
             if isinstance(edit, BuilderListEdit) and pointer == edit.list_pointer:
                 return f"pending_edits.{index}"
             if isinstance(edit, BuilderContentEdit) and isinstance(
-                edit.address, BuilderWholeListAddress
+                edit.address, BuilderWholeListAddress | BuilderSectionAddress
             ):
                 whole = edit.address.pointer
                 if pointer == whole or pointer.startswith(f"{whole}/"):
@@ -241,7 +254,7 @@ def _candidate_place(
                 pointer == f"/{section}" or pointer.startswith(f"/{section}/")
             ):
                 return f"pending_edits.{index}"
-        for list_pointer in ("/link_rules", "/routing/domains"):
+        for list_pointer in ("/link_rules", "/routing/domains", "/segments"):
             position, _, rest = pointer.removeprefix(f"{list_pointer}/").partition("/")
             if not pointer.startswith(f"{list_pointer}/") or not position.isdigit():
                 continue
@@ -254,7 +267,7 @@ def _candidate_place(
             for index, edit in applied:
                 if (
                     isinstance(edit, BuilderContentEdit)
-                    and not isinstance(edit.address, BuilderWholeListAddress)
+                    and isinstance(edit.address, BuilderMemberAddress)
                     and edit.address.list_pointer == list_pointer
                     and edit.address.id == member_id
                 ):
@@ -513,10 +526,21 @@ def _compile_result(
     )
 
 
-_MEMBER_LISTS: Mapping[BuilderMemberListPointer, tuple[str, type[BaseModel]]] = MappingProxyType(
+_MEMBER_LISTS: Mapping[BuilderMemberListPointer, tuple[str, TypeAdapter[Any]]] = MappingProxyType(
     {
-        "/link_rules": ("Link rule", LinkRule),
-        "/routing/domains": ("Routing domain", RoutingDomain),
+        "/link_rules": ("Link rule", TypeAdapter(LinkRule)),
+        "/routing/domains": ("Routing domain", TypeAdapter(RoutingDomain)),
+        "/segments": ("Segment", TypeAdapter(Segment)),
+    }
+)
+_SECTIONS: Mapping[BuilderSectionPointer, tuple[str, TypeAdapter[Any]]] = MappingProxyType(
+    {
+        "/session": ("Session", TypeAdapter(SessionMeta)),
+        "/time": ("Time", TypeAdapter(TimeConfig)),
+        "/simulation": ("Simulation", TypeAdapter(Simulation)),
+        "/addressing": ("Addressing", TypeAdapter(Addressing)),
+        "/ephemeris": ("Ephemeris", TypeAdapter(Ephemeris)),
+        "/dispatch": ("Dispatch", TypeAdapter(Dispatch)),
     }
 )
 _ROUTING_BOUNDARIES = TypeAdapter(tuple[RoutingBoundary, ...])
@@ -591,7 +615,7 @@ def _edit_pointer(document: JsonDocument, edit: BuilderContentEdit | BuilderList
         return edit.list_pointer
     if isinstance(edit.address, BuilderProposalAddress):
         return ""
-    if isinstance(edit.address, BuilderWholeListAddress):
+    if isinstance(edit.address, BuilderWholeListAddress | BuilderSectionAddress):
         return edit.address.pointer
     return _member_pointer(document, edit.address.list_pointer, edit.address.id)
 
@@ -624,6 +648,14 @@ def _stale_reason(
         if isinstance(edit.address, BuilderWholeListAddress):
             if _list_at(session, edit.address.pointer) != edit.base:
                 return "The routing boundary list changed since the edit began"
+            return None
+        if isinstance(edit.address, BuilderSectionAddress):
+            section_label, _adapter = _SECTIONS[edit.address.pointer]
+            current = session.get(edit.address.pointer[1:])
+            if edit.base is None:
+                return f"The {section_label.lower()} section already exists" if current else None
+            if current != edit.base:
+                return f"The {section_label.lower()} section changed since the edit began"
             return None
         label, _model = _MEMBER_LISTS[edit.address.list_pointer]
         member_id = edit.address.id
@@ -803,6 +835,9 @@ def apply_pending_edits(
     new_members: list[tuple[str, str, JsonValue]] = []
     for index, edit in content:
         working = deepcopy(edit.working)
+        if isinstance(edit.address, BuilderSectionAddress):
+            candidate[edit.address.pointer[1:]] = working
+            continue
         if isinstance(edit.address, BuilderWholeListAddress):
             if working:
                 _write_list(candidate, edit.address.pointer, cast(list[JsonValue], working))
@@ -847,9 +882,12 @@ def apply_pending_edits(
         try:
             if isinstance(edit.address, BuilderWholeListAddress):
                 _ROUTING_BOUNDARIES.validate_python(edit.working)
+            elif isinstance(edit.address, BuilderSectionAddress):
+                _section_label, adapter = _SECTIONS[edit.address.pointer]
+                adapter.validate_python(edit.working)
             else:
-                _label, model = _MEMBER_LISTS[edit.address.list_pointer]
-                model.model_validate(edit.working)
+                _label, adapter = _MEMBER_LISTS[edit.address.list_pointer]
+                adapter.validate_python(edit.working)
         except ValidationError as error:
             invalid[index] = _pending_edit_validation_issues(
                 error,

@@ -4151,3 +4151,71 @@ def test_no_valid_projection_is_typed_and_never_parsed_as_a_save_candidate(
     )
     assert issue.draft_path == "session_yaml"
     assert issue.blocks == ("save", "deploy")
+
+
+def test_the_session_section_edits_without_renaming_the_session(
+    service: BuilderVisualDraftService,
+) -> None:
+    target_ref, revision, session = _accepted(service, "earth-leo-simple")
+    address = {"kind": "section", "pointer": "/session"}
+    described = _object_edit(
+        service,
+        target_ref=target_ref,
+        applied_revision=revision,
+        address=address,
+        working=session["session"],
+    )
+    name = _edited_control(described, "/name", "scalar")
+    with pytest.raises(BuilderVisualDraftCommandError, match="save under a new name"):
+        _object_edit(
+            service,
+            target_ref=target_ref,
+            applied_revision=revision,
+            address=address,
+            working=session["session"],
+            change={
+                "kind": "controls",
+                "commands": [
+                    {"operation": "set_scalar", "control_id": name["control_id"], "value": "x"}
+                ],
+            },
+        )
+    display = _edited_control(described, "/display_name", "choice")
+    assert display is not None
+
+
+def test_a_segment_field_edit_may_rename_the_segment(
+    service: BuilderVisualDraftService,
+) -> None:
+    target_ref, revision, session = _accepted(service, "earth-leo-simple")
+    segment = session["segments"][0]
+    address = {"kind": "member", "list_pointer": "/segments", "id": segment["id"]}
+    described = _object_edit(
+        service,
+        target_ref=target_ref,
+        applied_revision=revision,
+        address=address,
+        working=segment,
+    )
+    segment_id = _edited_control(described, "/id", "scalar")
+
+    renamed = _object_edit(
+        service,
+        target_ref=target_ref,
+        applied_revision=revision,
+        address=address,
+        working=segment,
+        change={
+            "kind": "controls",
+            "commands": [
+                {
+                    "operation": "set_scalar",
+                    "control_id": segment_id["control_id"],
+                    "value": "renamed-shell",
+                }
+            ],
+        },
+    )
+
+    assert renamed.working["id"] == "renamed-shell"
+    assert renamed.issues == ()

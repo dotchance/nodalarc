@@ -98,7 +98,6 @@ import {
   useEditorWindows,
   targetKey,
   type EditorTarget,
-  type SessionBuffer,
 } from "./useEditorWindows";
 import {
   BuilderApiError,
@@ -558,7 +557,7 @@ export function BuilderView({
     applyPendingEdits,
     discardPendingEdit,
     proposalSession,
-    stageProposalEdit,
+    stageEdit,
     removeListMember,
     undo,
     prepareRetarget,
@@ -1759,25 +1758,38 @@ export function BuilderView({
     }
     switch (target.kind) {
       case "session": {
-        if (!workspace) return null;
-        const key = targetKey(target);
-        const sessionPick: SessionBuffer = {
-          session_name: workspace.session_name,
-          start_time: workspace.start_time,
-          step_seconds: workspace.step_seconds,
-          compression: workspace.compression,
-          max_pairs_per_rule: workspace.max_pairs_per_rule,
-          max_pairs_per_tick: workspace.max_pairs_per_tick,
+        const accepted = visualDraft?.applied_session;
+        if (!accepted) return null;
+        const sections = ["/session", "/time", "/simulation"] as const;
+        const sectionOf = (pointer: (typeof sections)[number]) => {
+          const value = pendingEdits.get(pointer)?.edit.working ?? accepted[pointer.slice(1)];
+          return value !== undefined && value !== null && typeof value === "object" && !Array.isArray(value)
+            ? (value as Readonly<Record<string, JsonValue>>)
+            : null;
         };
-        const buf = buffers[key];
-        const view = buf ? { ...workspace, ...(buf.draft as SessionBuffer) } : workspace;
+        const pendingSections = sections.filter((pointer) => pendingEdits.has(pointer));
+        const meta = sectionOf("/session") ?? {};
+        const name = typeof meta.name === "string" ? meta.name : "";
+        const report = (cause: unknown) => setSaveState({ kind: "failed", message: cause instanceof Error ? cause.message : String(cause) });
         return {
-          title: `Session · ${view.session_name}`,
+          title: `Session · ${name}`,
           content: (
             <SessionEditor
-              workspace={view}
-              onUpdate={(patch) =>
-                patchBuffer(key, sessionPick, (d) => ({ ...d, ...patch }))
+              name={name}
+              meta={meta}
+              time={sectionOf("/time") ?? {}}
+              simulation={sectionOf("/simulation")}
+              pending={pendingSections.length > 0}
+              onStage={(pointer, working) => {
+                try {
+                  stageEdit({ kind: "section", pointer }, working);
+                } catch (cause) {
+                  report(cause);
+                }
+              }}
+              onApply={() => void applyEdits(pendingSections).catch(report)}
+              onDiscard={() =>
+                pendingSections.forEach((pointer) => discardPendingEdit({ kind: "section", pointer }))
               }
             />
           ),
@@ -2095,7 +2107,7 @@ export function BuilderView({
               authoring={authoring!}
               session={{
                 context: proposalSession,
-                onStage: (working) => stageProposalEdit(target.ref, working),
+                onStage: (working) => stageEdit({ kind: "proposal", ref: target.ref }, working),
               }}
               onClose={close}
             />

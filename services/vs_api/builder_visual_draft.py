@@ -3261,11 +3261,13 @@ class BuilderVisualDraftService:
                 code="catalog_authoring.invalid_graph",
             )
 
-        candidate, outcomes = apply_pending_edits(
+        applied = apply_pending_edits(
             draft.applied_session,
             request.edits,
+            proposals=draft.catalog_documents,
             source_ref=str(draft.target_ref),
         )
+        candidate, outcomes = applied.session, applied.outcomes
         if any(outcome.status != "applied" for outcome in outcomes):
             return BuilderVisualDraftApplyEditsResult(
                 applied=False,
@@ -3305,7 +3307,7 @@ class BuilderVisualDraftService:
             assembly=self._accept_session(
                 draft,
                 cast(SegmentSessionConfig, validated),
-                draft.catalog_documents,
+                applied.proposals,
                 available_node_count=available_node_count,
                 preview_factory=preview_factory,
             ),
@@ -4020,11 +4022,12 @@ class BuilderVisualDraftService:
                 None,
             )
             if own_list is not None:
-                _, (own_outcome,) = apply_pending_edits(
+                (own_outcome,) = apply_pending_edits(
                     draft.applied_session,
                     (own_list,),
+                    proposals=draft.catalog_documents,
                     source_ref=str(draft.target_ref),
-                )
+                ).outcomes
                 if own_outcome.status != "applied":
                     raise self._command_error(
                         draft,
@@ -4116,11 +4119,13 @@ class BuilderVisualDraftService:
                 None,
             )
             # The rule as its card shows it: accepted, with its own pending edit applied.
-            edited, outcomes = apply_pending_edits(
+            own_applied = apply_pending_edits(
                 draft.applied_session,
                 () if own is None else (own,),
+                proposals=draft.catalog_documents,
                 source_ref=str(draft.target_ref),
             )
+            edited, outcomes = own_applied.session, own_applied.outcomes
             refusals = [
                 issue.message
                 for outcome in outcomes
@@ -4212,11 +4217,13 @@ class BuilderVisualDraftService:
             notice = _physics_notice(physics)
 
         edit = BuilderContentEdit(kind="content", address=address, base=base, working=working)
-        candidate, (outcome,) = apply_pending_edits(
+        edit_applied = apply_pending_edits(
             draft.applied_session,
             (edit,),
+            proposals=draft.catalog_documents,
             source_ref=str(draft.target_ref),
         )
+        candidate, (outcome,) = edit_applied.session, edit_applied.outcomes
         if issues or outcome.status != "applied":
             return BuilderVisualDraftCommandResult(
                 operation=command.operation,

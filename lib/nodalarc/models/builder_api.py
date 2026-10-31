@@ -9,7 +9,7 @@ configuration models owned by the grammar authority.
 
 from __future__ import annotations
 
-from typing import Annotated, Literal, get_args
+from typing import Annotated, Literal, cast, get_args
 
 from pydantic import (
     AfterValidator,
@@ -234,20 +234,40 @@ class BuilderWholeListAddress(_BuilderApplicationModel):
     pointer: BuilderWholeListPointer
 
 
-BuilderEditAddress = Annotated[
+class BuilderProposalAddress(_BuilderApplicationModel):
+    """One catalog document the session proposes, by its ``user:`` reference."""
+
+    kind: Literal["proposal"]
+    ref: CatalogRef
+
+    @model_validator(mode="after")
+    def _ref_names_a_user_component(self) -> BuilderProposalAddress:
+        if self.ref.namespace != "user":
+            raise ValueError("a proposed document is a user: component")
+        if self.ref.family is None or catalog_family_spec(self.ref.family).wrapper is None:
+            raise ValueError("a proposed document is a wrapped catalog component")
+        return self
+
+
+BuilderSessionObjectAddress = Annotated[
     BuilderMemberAddress | BuilderWholeListAddress,
+    Field(discriminator="kind"),
+]
+BuilderEditAddress = Annotated[
+    BuilderMemberAddress | BuilderWholeListAddress | BuilderProposalAddress,
     Field(discriminator="kind"),
 ]
 
 
 def check_value_fits_address(
-    address: BuilderMemberAddress | BuilderWholeListAddress,
+    address: BuilderMemberAddress | BuilderWholeListAddress | BuilderProposalAddress,
     value: JsonDocument | list[JsonValue],
 ) -> None:
     """Raise ValueError unless ``value`` is what ``address`` holds.
 
     A whole list holds a list. A list member holds an object that keeps the id
-    it is addressed by.
+    it is addressed by. A proposal holds its whole wrapped document, whose id
+    is the reference's file name.
     """
     if isinstance(address, BuilderWholeListAddress):
         if not isinstance(value, list):
@@ -255,6 +275,16 @@ def check_value_fits_address(
         return
     if not isinstance(value, dict):
         raise ValueError("an edit to a list member holds that member's object")
+    if isinstance(address, BuilderProposalAddress):
+        wrapper = catalog_family_spec(cast(CatalogFamily, address.ref.family)).wrapper
+        body = value.get(cast(str, wrapper))
+        if set(value) != {wrapper} or not isinstance(body, dict):
+            raise ValueError(f"an edit to a proposed document holds its {wrapper!r} object")
+        if body.get("id") != address.ref.relative_path.stem:
+            raise ValueError(
+                "an edit keeps the id its reference fixes; a rename is an edit of the session YAML"
+            )
+        return
     if value.get("id") != address.id:
         raise ValueError(
             "an edit keeps the id it is addressed by; a rename is an edit of the session YAML"
@@ -314,6 +344,8 @@ def _edit_target(edit: BuilderContentEdit | BuilderListEdit) -> tuple[str, ...]:
         return ("list", edit.list_pointer)
     if isinstance(edit.address, BuilderWholeListAddress):
         return ("content", edit.address.pointer)
+    if isinstance(edit.address, BuilderProposalAddress):
+        return ("content", "proposal", str(edit.address.ref))
     return ("content", edit.address.list_pointer, edit.address.id)
 
 

@@ -5,11 +5,13 @@ from pathlib import Path
 from typing import Any, get_args
 
 import pytest
+import yaml
 from fastapi import FastAPI
 from nodalarc.catalog_refs import CatalogRef
 from nodalarc.catalog_registry import CATALOG_FAMILY_REGISTRY
 from nodalarc.catalog_repository import CatalogScope
 from nodalarc.filesystem_catalog_repository import FilesystemCatalogRepository
+from nodalarc.models.builder_api import BuilderDraftEnvelope
 from nodalarc.models.builder_catalog_api import (
     CatalogComponentDraftEnvelope,
     CatalogComponentDraftState,
@@ -22,8 +24,10 @@ from nodalarc.models.builder_catalog_api import (
     CatalogDraftCompileRequest,
     CatalogDraftControlMutationRequest,
     CatalogDraftNewRequest,
+    CatalogDraftOpenProposalRequest,
     CatalogDraftOpenRequest,
     CatalogDraftSaveRequest,
+    CatalogDraftSessionContext,
     CatalogGetRequest,
     CatalogMutationResult,
 )
@@ -741,3 +745,69 @@ def test_openapi_exposes_typed_scope_free_component_draft_routes(
         "filesystem_path",
         "path",
     }.isdisjoint(observed_names)
+
+
+def _session_context(*proposals: dict[str, Any], pending_edits=()) -> CatalogDraftSessionContext:
+    session = yaml.safe_load((SHIPPED_ROOT / "sessions" / "earth-leo-simple.yaml").read_text())
+    session["session"]["name"] = "proposals"
+    return CatalogDraftSessionContext(
+        target_ref="user:sessions/proposals.yaml",
+        draft=BuilderDraftEnvelope(
+            draft_revision=1,
+            state={"session": session, "catalog_documents": list(proposals)},
+        ),
+        pending_edits=pending_edits,
+    )
+
+
+def _proposed_node(ref: str, **changes: Any) -> dict[str, Any]:
+    node = yaml.safe_load((SHIPPED_ROOT / "nodes" / "space" / "starlink-v2-mesh.yaml").read_text())
+    node["node"]["id"] = CatalogRef(ref).relative_path.stem
+    node["node"].update(changes)
+    return {"ref": ref, "document": node, "origin": "generated"}
+
+
+def test_a_proposal_opens_with_its_pending_edit_applied(tmp_path: Path) -> None:
+    drafts, _, _ = _services(tmp_path)
+    proposal = _proposed_node("user:nodes/proposals/sat.yaml")
+    working = copy.deepcopy(proposal["document"])
+    working["node"]["display_name"] = "Edited in the session"
+    session = _session_context(
+        proposal,
+        pending_edits=(
+            {
+                "kind": "content",
+                "address": {"kind": "proposal", "ref": proposal["ref"]},
+                "base": proposal["document"],
+                "working": working,
+            },
+        ),
+    )
+
+    opened = drafts.open_proposal(
+        CatalogDraftOpenProposalRequest(session=session, ref=proposal["ref"])
+    )
+
+    assert opened.state.target_ref == proposal["ref"]
+    assert opened.state.source_ref is None
+    assert opened.state.document == working
+
+
+def test_a_gesture_on_an_invalid_proposed_node_is_refused_naming_it(tmp_path: Path) -> None:
+    drafts, _, _ = _services(tmp_path)
+    broken = _proposed_node("user:nodes/proposals/gw.yaml", forwarding="teleport")
+    session = _session_context(broken)
+    site = drafts.new(CatalogDraftNewRequest(family="sites", object_id="proposed-site"))
+
+    with pytest.raises(CatalogAuthoringError) as refused:
+        drafts.add_site_node(
+            CatalogDraftAddSiteNodeRequest(
+                draft=site.state,
+                expected_draft_revision=site.state.draft_revision,
+                session=session,
+                node_id="gw1",
+                node_ref=broken["ref"],
+            )
+        )
+    assert refused.value.refusal.code == "catalog_authoring.invalid_graph"
+    assert "user:nodes/proposals/gw.yaml" in refused.value.refusal.message

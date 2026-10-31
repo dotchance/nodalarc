@@ -37,6 +37,7 @@ from nodalarc.models.builder_api import (
     BuilderMemberListPointer,
     BuilderPendingEditOutcome,
     BuilderPendingEdits,
+    BuilderProposalAddress,
     BuilderProposedCatalogDocument,
     BuilderVerdict,
     BuilderWholeListAddress,
@@ -205,7 +206,7 @@ def _candidate_place(
     applied = [
         (index, edit)
         for index, (edit, outcome) in enumerate(zip(edits, outcomes, strict=True))
-        if outcome.status != "stale"
+        if outcome.status != "stale" and not _is_proposal_edit(edit)
     ]
 
     def ids_of(document: JsonDocument, list_pointer: str) -> list[JsonValue]:
@@ -388,8 +389,16 @@ def _check_proposed_creates(
 
 def _reachable_proposal_validation_issues(
     error: ReachableProposalValidationError,
+    edited: Mapping[CatalogRef, int],
 ) -> list[BuilderIssue]:
-    draft_path = f"state.catalog_documents.{error.index}.document"
+    """The issues of a reached proposal that does not validate: at the pending
+    edit that holds it, or at its place among the draft's proposals."""
+    edit_index = edited.get(error.proposal.ref)
+    draft_path = (
+        f"state.catalog_documents.{error.index}.document"
+        if edit_index is None
+        else f"pending_edits.{edit_index}"
+    )
     if isinstance(error.cause, ValidationError):
         return _validation_issues(
             error.cause,
@@ -572,17 +581,36 @@ def _member_pointer(document: JsonDocument, list_pointer: str, member_id: str) -
     return list_pointer if index is None else f"{list_pointer}/{index}"
 
 
+def _is_proposal_edit(edit: BuilderContentEdit | BuilderListEdit) -> bool:
+    return isinstance(edit, BuilderContentEdit) and isinstance(edit.address, BuilderProposalAddress)
+
+
 def _edit_pointer(document: JsonDocument, edit: BuilderContentEdit | BuilderListEdit) -> str:
-    """Where an edit's object or list sits in a document."""
+    """Where an edit's object or list sits in a document; a proposal is its own document."""
     if isinstance(edit, BuilderListEdit):
         return edit.list_pointer
+    if isinstance(edit.address, BuilderProposalAddress):
+        return ""
     if isinstance(edit.address, BuilderWholeListAddress):
         return edit.address.pointer
     return _member_pointer(document, edit.address.list_pointer, edit.address.id)
 
 
-def _stale_reason(session: JsonDocument, edit: BuilderContentEdit | BuilderListEdit) -> str | None:
-    """Why an edit no longer fits the session it is applied to, or None when its base holds."""
+def _stale_reason(
+    session: JsonDocument,
+    proposals: Mapping[CatalogRef, BuilderProposedCatalogDocument],
+    edit: BuilderContentEdit | BuilderListEdit,
+) -> str | None:
+    """Why an edit no longer fits the draft it is applied to, or None when its base holds."""
+    if isinstance(edit, BuilderContentEdit) and isinstance(edit.address, BuilderProposalAddress):
+        current = proposals.get(edit.address.ref)
+        if edit.base is None:
+            return f"Proposed component {edit.address.ref} already exists" if current else None
+        if current is None:
+            return f"Proposed component {edit.address.ref} no longer exists"
+        if current.document != edit.base:
+            return f"Proposed component {edit.address.ref} changed since the edit began"
+        return None
     try:
         if isinstance(edit, BuilderListEdit):
             label, _model = _MEMBER_LISTS[edit.list_pointer]
@@ -660,13 +688,28 @@ def _pending_edit_validation_issues(
     )
 
 
+@dataclass(frozen=True, slots=True)
+class PendingEditCandidate:
+    """A draft's session and proposals with its pending edits applied, and each edit's outcome."""
+
+    session: JsonDocument
+    proposals: tuple[BuilderProposedCatalogDocument, ...]
+    outcomes: tuple[BuilderPendingEditOutcome, ...]
+
+
 def apply_pending_edits(
     session: JsonDocument,
     edits: BuilderPendingEdits,
     *,
+    proposals: tuple[BuilderProposedCatalogDocument, ...],
     source_ref: str,
-) -> tuple[JsonDocument, tuple[BuilderPendingEditOutcome, ...]]:
-    """Apply pending object edits to a copy of one session without accepting them.
+) -> PendingEditCandidate:
+    """Apply pending object edits to a copy of one session and its proposals
+    without accepting them.
+
+    A proposal edit replaces its proposed document by ref, or proposes a new
+    one, which joins the proposals in ref order. Its issues name the
+    proposal's ref and point into that document.
 
     Every base is checked against ``session`` first. List edits then remove or
     reorder members, and content edits replace their object by id. A new object
@@ -679,10 +722,11 @@ def apply_pending_edits(
     domain removes the section, and is refused while boundaries remain.
     """
     edits = _PENDING_EDITS.validate_python(edits)
+    by_ref = {proposal.ref: proposal for proposal in proposals}
     stale = {
         index: reason
         for index, edit in enumerate(edits)
-        if (reason := _stale_reason(session, edit)) is not None
+        if (reason := _stale_reason(session, by_ref, edit)) is not None
     }
     invalid: dict[int, tuple[BuilderIssue, ...]] = {}
     candidate = deepcopy(session)
@@ -709,8 +753,53 @@ def apply_pending_edits(
     content = [
         (index, edit)
         for index, edit in enumerate(edits)
-        if index not in stale and isinstance(edit, BuilderContentEdit)
+        if index not in stale
+        and isinstance(edit, BuilderContentEdit)
+        and not _is_proposal_edit(edit)
     ]
+    candidate_proposals = dict(by_ref)
+    proposed: list[tuple[int, BuilderContentEdit, BuilderProposalAddress]] = [
+        (index, edit, edit.address)
+        for index, edit in enumerate(edits)
+        if index not in stale
+        and isinstance(edit, BuilderContentEdit)
+        and isinstance(edit.address, BuilderProposalAddress)
+    ]
+    for index, edit, address in proposed:
+        current = candidate_proposals.get(address.ref)
+        candidate_proposals[address.ref] = BuilderProposedCatalogDocument(
+            ref=address.ref,
+            document=cast(JsonDocument, deepcopy(edit.working)),
+            origin=current.origin if current is not None else "generated",
+        )
+        try:
+            canonicalize_persisted_configuration(address.ref, cast(JsonDocument, edit.working))
+        except ValidationError as error:
+            invalid[index] = _pending_edit_validation_issues(
+                error,
+                document=edit.working,
+                index=index,
+                json_pointer="",
+                source_ref=str(address.ref),
+            )
+        except (TypeError, ValueError) as error:
+            invalid[index] = (
+                _pending_edit_issue(
+                    "builder.structural.invalid_document",
+                    "structural",
+                    str(error),
+                    index=index,
+                    json_pointer="",
+                    source_ref=str(address.ref),
+                ),
+            )
+    ordered_proposals = (
+        *(candidate_proposals[proposal.ref] for proposal in proposals),
+        *sorted(
+            (value for ref, value in candidate_proposals.items() if ref not in by_ref),
+            key=lambda proposal: str(proposal.ref),
+        ),
+    )
     new_members: list[tuple[str, str, JsonValue]] = []
     for index, edit in content:
         working = deepcopy(edit.working)
@@ -779,14 +868,19 @@ def apply_pending_edits(
                 stale[index],
                 index=index,
                 json_pointer=_edit_pointer(candidate, edit),
-                source_ref=source_ref,
+                source_ref=(
+                    str(edit.address.ref)
+                    if isinstance(edit, BuilderContentEdit)
+                    and isinstance(edit.address, BuilderProposalAddress)
+                    else source_ref
+                ),
             )
             outcomes.append(BuilderPendingEditOutcome(status="stale", issues=(issue,)))
         elif index in invalid:
             outcomes.append(BuilderPendingEditOutcome(status="invalid", issues=invalid[index]))
         else:
             outcomes.append(BuilderPendingEditOutcome(status="applied"))
-    return candidate, tuple(outcomes)
+    return PendingEditCandidate(candidate, ordered_proposals, tuple(outcomes))
 
 
 def _resolution_issue(
@@ -858,16 +952,27 @@ def compile_builder_draft(
         raise TypeError("available_node_count must be an integer")
     if available_node_count < 0:
         raise ValueError("available_node_count must be non-negative")
-    session, outcomes = apply_pending_edits(
+    applied = apply_pending_edits(
         request.draft.state.session,
         request.pending_edits,
+        proposals=request.draft.state.catalog_documents,
         source_ref=str(request.target_ref),
     )
+    session, outcomes, proposals = applied.session, applied.outcomes, applied.proposals
+    edited = {
+        edit.address.ref: index
+        for index, edit in enumerate(request.pending_edits)
+        if isinstance(edit, BuilderContentEdit) and isinstance(edit.address, BuilderProposalAddress)
+    }
     place = _candidate_place(request.draft.state.session, session, request.pending_edits, outcomes)
     # A stale edit is left out of the session, so only its outcome can report it.
-    # An invalid edit is written into the session, whose validation below refuses it.
+    # An invalid session edit is written into the session, whose validation below
+    # refuses it; an invalid proposal edit reports its document's issues itself.
     issues: list[BuilderIssue] = [
-        issue for outcome in outcomes if outcome.status == "stale" for issue in outcome.issues
+        issue
+        for index, outcome in enumerate(outcomes)
+        if outcome.status == "stale" or (outcome.status == "invalid" and index in edited.values())
+        for issue in outcome.issues
     ]
     canonical_session: CanonicalConfigurationDocument | None = None
     try:
@@ -908,16 +1013,15 @@ def compile_builder_draft(
 
     overlay = OverlayCatalogReadView(
         snapshot,
-        {
-            proposal.ref: (index, proposal)
-            for index, proposal in enumerate(request.draft.state.catalog_documents)
-        },
+        {proposal.ref: (index, proposal) for index, proposal in enumerate(proposals)},
     )
 
     try:
         closure = CatalogClosureCollector.collect(canonical_session.yaml_bytes, overlay)
     except ReachableProposalValidationError as error:
-        issues.extend(_reachable_proposal_validation_issues(error))
+        if error.proposal.ref not in edited:
+            # A pending edit's own document reports its issues on its outcome.
+            issues.extend(_reachable_proposal_validation_issues(error, edited))
         issues.extend(_check_proposed_creates(overlay.reached_proposals(), snapshot))
         return _compile_result(
             request,
@@ -948,7 +1052,15 @@ def compile_builder_draft(
         for proposal in request.draft.state.catalog_documents
         if proposal.ref not in reached_refs
     )
-    request = _scope_request_to_proposals(request, reached_proposals)
+    # The answer's draft is the accepted one: its proposals the candidate still reaches.
+    request = _scope_request_to_proposals(
+        request,
+        tuple(
+            proposal
+            for proposal in request.draft.state.catalog_documents
+            if proposal.ref in reached_refs
+        ),
+    )
     issues.extend(_check_proposed_creates(reached_proposals, snapshot))
     if excluded_proposals:
         issues.append(_excluded_proposals_issue(request, excluded_proposals))

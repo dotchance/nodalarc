@@ -31,12 +31,12 @@ from nodalarc.models.builder_api import (
     BuilderContentEdit,
     BuilderDraftEnvelope,
     BuilderDraftState,
-    BuilderEditAddress,
     BuilderIssue,
     BuilderMemberAddress,
     BuilderPendingEditOutcome,
     BuilderPendingEdits,
     BuilderProposedCatalogDocument,
+    BuilderSessionObjectAddress,
     BuilderSessionSaveRequest,
     BuilderWholeListAddress,
     JsonDocument,
@@ -1037,7 +1037,7 @@ class BuilderVisualObjectEditRequest(_BuilderVisualModel):
 
     target_ref: SessionRef
     applied_revision: int = Field(ge=0)
-    address: BuilderEditAddress
+    address: BuilderSessionObjectAddress
     working: JsonDocument | list[JsonValue]
     change: BuilderVisualObjectChange | None = None
 
@@ -1061,7 +1061,7 @@ class BuilderVisualObjectEditResult(_BuilderVisualModel):
     Issue pointers are within the working JSON.
     """
 
-    address: BuilderEditAddress
+    address: BuilderSessionObjectAddress
     working: JsonDocument | list[JsonValue]
     widget: BuilderVisualObjectWidget | None
     control_tree: BuilderControlTree

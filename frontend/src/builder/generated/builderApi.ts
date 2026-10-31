@@ -107,7 +107,7 @@ export interface BuilderCompileResult {
 /** Working grammar JSON for one address, beside the value it began from. ``base`` is absent for a new object. Both values stay generic JSON so an incomplete object can cross the API boundary and come back with issues. */
 export interface BuilderContentEdit {
   readonly kind: "content";
-  readonly address: BuilderMemberAddress | BuilderWholeListAddress;
+  readonly address: BuilderMemberAddress | BuilderWholeListAddress | BuilderProposalAddress;
   readonly base?: Readonly<Record<string, JsonValue>> | ReadonlyArray<JsonValue> | null;
   readonly working: Readonly<Record<string, JsonValue>> | ReadonlyArray<JsonValue>;
 }
@@ -323,6 +323,12 @@ export interface BuilderPreviewReasonCount {
 
 /**  */
 export type BuilderPreviewRejectReason = "los_blocked" | "range_exceeded" | "elevation_below_min" | "field_of_regard" | "terminal_type_mismatch" | "no_geometry";
+
+/** One catalog document the session proposes, by its ``user:`` reference. */
+export interface BuilderProposalAddress {
+  readonly kind: "proposal";
+  readonly ref: CatalogRef;
+}
 
 /** One complete new catalog document proposed for a ``user:`` ref. */
 export interface BuilderProposedCatalogDocument {
@@ -1322,12 +1328,14 @@ export interface CatalogDocumentWriteRequest {
 export interface CatalogDraftAddNodeEthernetPortRequest {
   readonly draft: CatalogComponentDraftState;
   readonly expected_draft_revision: number;
+  readonly session?: CatalogDraftSessionContext | null;
 }
 
 /** Add one node terminal mount with backend-generated persisted fields. */
 export interface CatalogDraftAddNodeTerminalMountRequest {
   readonly draft: CatalogComponentDraftState;
   readonly expected_draft_revision: number;
+  readonly session?: CatalogDraftSessionContext | null;
   readonly terminal_ref: string;
   readonly role: MountRole;
   readonly boresight?: NadirBoresight | null;
@@ -1337,6 +1345,7 @@ export interface CatalogDraftAddNodeTerminalMountRequest {
 export interface CatalogDraftAddSiteNodeRequest {
   readonly draft: CatalogComponentDraftState;
   readonly expected_draft_revision: number;
+  readonly session?: CatalogDraftSessionContext | null;
   readonly node_id: string;
   readonly node_ref: string;
 }
@@ -1345,6 +1354,7 @@ export interface CatalogDraftAddSiteNodeRequest {
 export interface CatalogDraftApplyYamlRequest {
   readonly draft: CatalogComponentDraftState;
   readonly expected_draft_revision: number;
+  readonly session?: CatalogDraftSessionContext | null;
   readonly yaml_text: string;
 }
 
@@ -1378,6 +1388,7 @@ export interface CatalogDraftCompileResult {
 export interface CatalogDraftControlMutationRequest {
   readonly draft: CatalogComponentDraftState;
   readonly expected_draft_revision: number;
+  readonly session?: CatalogDraftSessionContext | null;
   readonly commands: ReadonlyArray<BuilderSetScalarCommand | BuilderSetPresentCommand | BuilderSelectChoiceCommand | BuilderInsertItemCommand | BuilderRemoveItemCommand | BuilderMoveItemCommand | BuilderInsertMapEntryCommand | BuilderRemoveMapEntryCommand | BuilderRenameMapKeyCommand>;
 }
 
@@ -1385,6 +1396,12 @@ export interface CatalogDraftControlMutationRequest {
 export interface CatalogDraftNewRequest {
   readonly family: CatalogComponentFamily;
   readonly object_id: string;
+}
+
+/** Open one of a session's proposed documents as a component draft, with its pending edit applied. */
+export interface CatalogDraftOpenProposalRequest {
+  readonly session: CatalogDraftSessionContext;
+  readonly ref: CatalogRef;
 }
 
 /** Open one complete component and optionally select a user-owned fork target. */
@@ -1404,6 +1421,13 @@ export interface CatalogDraftSaveResult {
   readonly draft: CatalogComponentDraftEnvelope;
   readonly result: CatalogMutationResult;
   readonly compile_result: CatalogDraftCompileResult;
+}
+
+/** The session a component draft belongs to. A gesture on one of the session's proposed documents reads the documents it references through the session's proposals with its pending edits applied. A Library draft belongs to no session. */
+export interface CatalogDraftSessionContext {
+  readonly target_ref: SessionRef;
+  readonly draft: BuilderDraftEnvelope;
+  readonly pending_edits?: ReadonlyArray<BuilderContentEdit | BuilderListEdit>;
 }
 
 /**  */

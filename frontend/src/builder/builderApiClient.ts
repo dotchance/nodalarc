@@ -43,6 +43,7 @@ import type {
   CatalogDraftCompileResult,
   CatalogDraftControlMutationRequest,
   CatalogDraftNewRequest,
+  CatalogDraftOpenProposalRequest,
   CatalogDraftOpenRequest,
   CatalogDraftSaveRequest,
   CatalogDraftSaveResult,
@@ -126,6 +127,13 @@ export function openCatalogDraft(
   input: CatalogDraftOpenRequest,
 ): Promise<CatalogComponentDraftEnvelope> {
   return request("/catalog/draft/open", input);
+}
+
+/** A session's proposed document as a component draft, its pending edit applied. */
+export function openCatalogDraftProposal(
+  input: CatalogDraftOpenProposalRequest,
+): Promise<CatalogComponentDraftEnvelope> {
+  return request("/catalog/draft/open-proposal", input);
 }
 
 export function mutateCatalogDraftControls(

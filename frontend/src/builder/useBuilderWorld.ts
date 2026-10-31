@@ -498,13 +498,23 @@ export interface BuilderSessionSaveAdoption {
 
 /** Where a pending edit applies: a link rule or a routing domain by the id it
  *  had when the edit began, or the routing boundary list as a whole. */
-type PendingEditAddress = BuilderContentEdit["address"];
+/** A session object a card edits: a link rule, a routing domain or the boundary list. */
+type PendingEditAddress = BuilderVisualObjectEditRequest["address"];
+type SessionObjectEdit = BuilderContentEdit & { readonly address: PendingEditAddress };
+
+/** A created edit a card holds; the backend creates no card edit of a proposed document. */
+function sessionObjectEdit(edit: BuilderContentEdit): SessionObjectEdit {
+  if (edit.address.kind === "proposal") {
+    throw new Error(`a card cannot hold the pending edit of ${edit.address.ref}`);
+  }
+  return { ...edit, address: edit.address };
+}
 
 /** A pending edit of one link rule, one routing domain or the boundary list:
  *  the edit as the backend applies it, beside the backend's latest answer for
  *  its working JSON. Nothing in it is accepted. */
 interface PendingObjectEdit {
-  readonly edit: BuilderContentEdit;
+  readonly edit: SessionObjectEdit;
   readonly answer: BuilderVisualObjectEditResult;
 }
 
@@ -577,7 +587,7 @@ function acceptedObjectAt(
 function beginPendingEdit(
   session: Readonly<Record<string, JsonValue>>,
   address: PendingEditAddress,
-): BuilderContentEdit {
+): SessionObjectEdit {
   const object = acceptedObjectAt(session, address);
   if (object === undefined) {
     throw new Error(
@@ -594,8 +604,8 @@ function beginPendingEdit(
  *  none; its working JSON stays as the user left it. */
 function rebasePendingEdit(
   session: Readonly<Record<string, JsonValue>>,
-  edit: BuilderContentEdit,
-): BuilderContentEdit {
+  edit: SessionObjectEdit,
+): SessionObjectEdit {
   const object = acceptedObjectAt(session, edit.address);
   return object === undefined
     ? { kind: "content", address: edit.address, working: edit.working }
@@ -642,7 +652,7 @@ function objectEditBasis(
   draft: BuilderVisualDraftEnvelope;
   appliedRevision: number;
   key: string;
-  edit: BuilderContentEdit;
+  edit: SessionObjectEdit;
 } {
   if (!draft) throw new Error("there is no visual draft to edit");
   // The apply route takes edits only over a fully accepted draft.
@@ -1400,8 +1410,9 @@ export function useBuilderWorld() {
           if (appliedRevision === null) {
             throw new Error("the backend created pending edits on a draft with no accepted revision");
           }
+          const createdEdits = result.created_edits.map(sessionObjectEdit);
           const described = await Promise.all(
-            result.created_edits.map((edit) =>
+            createdEdits.map((edit) =>
               editVisualDraftObject({
                 target_ref: draft.target_ref,
                 applied_revision: appliedRevision,
@@ -1412,7 +1423,7 @@ export function useBuilderWorld() {
           );
           assertEpoch(epoch);
           const held = new Map(pendingEditsRef.current);
-          const created = result.created_edits.map((edit, index) => {
+          const created = createdEdits.map((edit, index) => {
             const key = pendingEditKey(edit.address);
             if (held.get(key) !== (key === startKey ? sent.get(key) : undefined)) {
               const object =

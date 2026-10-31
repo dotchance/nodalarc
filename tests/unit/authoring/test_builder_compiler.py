@@ -20,6 +20,7 @@ from nodalarc.models.builder_api import (
     BuilderContentEdit,
     BuilderDraftEnvelope,
     BuilderPendingEdits,
+    BuilderProposalAddress,
 )
 from nodalarc.models.builder_world import BuilderWorld
 from nodalarc.resolve_session import SessionResolution, SessionResolutionError
@@ -569,7 +570,10 @@ def _accepted(path: Path) -> dict[str, Any]:
 
 def _apply(session: dict[str, Any], *edits: dict[str, Any]):
     batch = PENDING_EDITS.validate_json(json.dumps(edits))
-    return apply_pending_edits(session, batch, source_ref="user:sessions/earth-luna-quic.yaml")
+    applied = apply_pending_edits(
+        session, batch, proposals=(), source_ref="user:sessions/earth-luna-quic.yaml"
+    )
+    return applied.session, applied.outcomes
 
 
 def _member(session: dict[str, Any], list_pointer: str, object_id: str) -> dict[str, Any]:
@@ -830,7 +834,9 @@ def test_applying_refuses_a_batch_that_addresses_one_object_twice() -> None:
     )
 
     with pytest.raises(ValidationError, match="one content edit per address"):
-        apply_pending_edits(session, (edit, edit), source_ref="user:sessions/earth-leo-simple.yaml")
+        apply_pending_edits(
+            session, (edit, edit), proposals=(), source_ref="user:sessions/earth-leo-simple.yaml"
+        )
 
 
 def _edits_request(session: dict[str, Any], *edits: dict[str, Any]) -> BuilderCompileRequest:
@@ -1011,4 +1017,83 @@ def test_compile_includes_an_incomplete_edit_so_the_session_refuses_it(
         (pointer, "pending_edits.0")
     ]
     assert result.canonical_session_json is None
+    assert result.save_verdict.allowed is False
+
+
+def _node_edit(base: dict[str, Any] | None, working: dict[str, Any]) -> BuilderContentEdit:
+    return BuilderContentEdit(
+        kind="content",
+        address=BuilderProposalAddress(kind="proposal", ref="user:nodes/user-spacecraft.yaml"),
+        base=base,
+        working=working,
+    )
+
+
+def test_compile_resolves_a_proposed_node_with_its_pending_edit(
+    snapshot: CatalogReadSnapshot,
+) -> None:
+    session, proposals = _deep_user_draft()
+    node = proposals[1]["document"]
+    edited = deepcopy(node)
+    edited["node"]["display_name"] = "Edited spacecraft"
+    request = _request(session, catalog_documents=proposals).model_copy(
+        update={"pending_edits": (_node_edit(node, edited),)}
+    )
+
+    result = _compile(request, snapshot)
+
+    assert [outcome.status for outcome in result.pending_edit_outcomes] == ["applied"]
+    assert result.save_verdict.allowed is True
+    # The answer's draft is the one sent: the edit stays pending.
+    assert result.draft.state.catalog_documents[1].document == node
+    assert result.dependency_closure is not None
+    assert (
+        result.dependency_closure.closure_digest
+        != _compile(
+            _request(session, catalog_documents=proposals), snapshot
+        ).dependency_closure.closure_digest
+    )
+
+
+def test_a_proposal_edit_is_stale_when_its_document_changed(
+    snapshot: CatalogReadSnapshot,
+) -> None:
+    session, proposals = _deep_user_draft()
+    node = proposals[1]["document"]
+    began_from = deepcopy(node)
+    began_from["node"]["display_name"] = "What the card first showed"
+    request = _request(session, catalog_documents=proposals).model_copy(
+        update={"pending_edits": (_node_edit(began_from, node),)}
+    )
+
+    result = _compile(request, snapshot)
+
+    [outcome] = result.pending_edit_outcomes
+    assert outcome.status == "stale"
+    assert outcome.issues[0].source_ref == "user:nodes/user-spacecraft.yaml"
+    assert "changed since the edit began" in outcome.issues[0].message
+
+
+def test_an_invalid_proposal_edit_names_its_field_in_the_proposed_document(
+    snapshot: CatalogReadSnapshot,
+) -> None:
+    session, proposals = _deep_user_draft()
+    node = proposals[1]["document"]
+    broken = deepcopy(node)
+    broken["node"]["forwarding"] = "teleport"
+    request = _request(session, catalog_documents=proposals).model_copy(
+        update={"pending_edits": (_node_edit(node, broken),)}
+    )
+
+    result = _compile(request, snapshot)
+
+    [outcome] = result.pending_edit_outcomes
+    assert outcome.status == "invalid"
+    [issue] = outcome.issues
+    assert (issue.source_ref, issue.json_pointer, issue.draft_path) == (
+        "user:nodes/user-spacecraft.yaml",
+        "/node/forwarding",
+        "pending_edits.0",
+    )
+    assert issue in result.issues
     assert result.save_verdict.allowed is False

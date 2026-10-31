@@ -26,7 +26,7 @@ import type {
   DraftGroundSet,
   Workspace,
 } from "./workspace";
-import type { BuilderContentEdit } from "./generated/builderApi";
+import type { BuilderVisualObjectEditRequest } from "./generated/builderApi";
 
 /** A floating editor window's target — one per object, keyed. */
 export type EditorTarget =
@@ -75,7 +75,9 @@ export function targetKey(target: EditorTarget): string {
 
 /** The address of the pending edit a link rule, routing domain or boundary
  *  list window edits; null for every other window. */
-export function pendingEditAddress(target: EditorTarget): BuilderContentEdit["address"] | null {
+export function pendingEditAddress(
+  target: EditorTarget,
+): BuilderVisualObjectEditRequest["address"] | null {
   switch (target.kind) {
     case "link":
       return { kind: "member", list_pointer: "/link_rules", id: target.id };
@@ -89,7 +91,7 @@ export function pendingEditAddress(target: EditorTarget): BuilderContentEdit["ad
 }
 
 /** The window that edits the pending edit at `address`. */
-export function pendingEditTarget(address: BuilderContentEdit["address"]): EditorTarget {
+export function pendingEditTarget(address: BuilderVisualObjectEditRequest["address"]): EditorTarget {
   if (address.kind === "whole_list") return { kind: "boundaries" };
   return address.list_pointer === "/link_rules"
     ? { kind: "link", id: address.id }
@@ -97,7 +99,7 @@ export function pendingEditTarget(address: BuilderContentEdit["address"]): Edito
 }
 
 /** A pending edit's object as notices name it: its id, or the boundary list. */
-export function pendingEditTitle(address: BuilderContentEdit["address"]): string {
+export function pendingEditTitle(address: BuilderVisualObjectEditRequest["address"]): string {
   return address.kind === "whole_list" ? "Boundaries" : address.id;
 }
 

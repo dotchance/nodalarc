@@ -41,6 +41,7 @@ from nodalarc.models.builder_catalog_api import (
     CatalogDraftCompileResult,
     CatalogDraftControlMutationRequest,
     CatalogDraftNewRequest,
+    CatalogDraftOpenProposalRequest,
     CatalogDraftOpenRequest,
     CatalogDraftSaveRequest,
     CatalogDraftSaveResult,
@@ -202,6 +203,10 @@ class CatalogDraftService(Protocol):
     def new(self, request: CatalogDraftNewRequest) -> CatalogComponentDraftEnvelope: ...
 
     def open(self, request: CatalogDraftOpenRequest) -> CatalogComponentDraftEnvelope: ...
+
+    def open_proposal(
+        self, request: CatalogDraftOpenProposalRequest
+    ) -> CatalogComponentDraftEnvelope: ...
 
     def mutate_controls(
         self,
@@ -969,6 +974,16 @@ def create_builder_router(services: BuilderRouterServices) -> APIRouter:
     )
     async def open_catalog_draft(request: CatalogDraftOpenRequest, context: Context):
         return await invoke_catalog_draft(context, lambda service: service.open(request))
+
+    @router.post(
+        "/catalog/draft/open-proposal",
+        response_model=CatalogComponentDraftEnvelope,
+        responses=_CATALOG_ERROR_RESPONSES,
+    )
+    async def open_catalog_draft_proposal(
+        request: CatalogDraftOpenProposalRequest, context: Context
+    ):
+        return await invoke_catalog_draft(context, lambda service: service.open_proposal(request))
 
     @router.post(
         "/catalog/draft/controls/mutate",

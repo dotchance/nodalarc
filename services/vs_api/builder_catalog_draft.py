@@ -41,9 +41,11 @@ from nodalarc.models.builder_catalog_api import (
     CatalogDraftCompileResult,
     CatalogDraftControlMutationRequest,
     CatalogDraftNewRequest,
+    CatalogDraftOpenProposalRequest,
     CatalogDraftOpenRequest,
     CatalogDraftSaveRequest,
     CatalogDraftSaveResult,
+    CatalogDraftSessionContext,
 )
 from nodalarc.models.catalog import (
     Node,
@@ -61,6 +63,7 @@ from .builder_compiler import (
     CanonicalConfigurationDocument,
     OverlayCatalogReadView,
     ReachableProposalValidationError,
+    apply_pending_edits,
     canonicalize_persisted_configuration,
 )
 from .builder_control_mutation import (
@@ -439,6 +442,57 @@ class BuilderCatalogDraftService:
                 current_revision=draft.expected_target_revision,
             )
 
+    @staticmethod
+    def _session_view(
+        snapshot: CatalogReadSnapshot,
+        session: CatalogDraftSessionContext | None,
+    ) -> CatalogReadView:
+        """The catalog a gesture reads: the snapshot, under the session's proposals
+        with its pending edits applied when the draft belongs to a session."""
+        if session is None:
+            return snapshot
+        proposals = apply_pending_edits(
+            session.draft.state.session,
+            session.pending_edits,
+            proposals=session.draft.state.catalog_documents,
+            source_ref=str(session.target_ref),
+        ).proposals
+        return OverlayCatalogReadView(
+            snapshot, {proposal.ref: (index, proposal) for index, proposal in enumerate(proposals)}
+        )
+
+    def open_proposal(
+        self, request: CatalogDraftOpenProposalRequest
+    ) -> CatalogComponentDraftEnvelope:
+        """One of a session's proposed documents, with its pending edit applied, as a
+        component draft. Its edits return to the session as a pending edit."""
+        if not isinstance(request, CatalogDraftOpenProposalRequest):
+            raise TypeError("request must be a CatalogDraftOpenProposalRequest")
+        session = request.session
+        proposals = apply_pending_edits(
+            session.draft.state.session,
+            session.pending_edits,
+            proposals=session.draft.state.catalog_documents,
+            source_ref=str(session.target_ref),
+        ).proposals
+        proposal = next((item for item in proposals if item.ref == request.ref), None)
+        if proposal is None:
+            refuse(
+                "catalog_authoring.not_found",
+                f"The session proposes no document {request.ref}",
+                ref=request.ref,
+            )
+        snapshot = catalog_snapshot(self._context)
+        return _envelope(
+            CatalogComponentDraftState(
+                draft_revision=0,
+                family=cast(CatalogComponentFamily, request.ref.family),
+                target_ref=request.ref,
+                document=proposal.document,
+            ),
+            view=self._session_view(snapshot, session),
+        )
+
     def new(self, request: CatalogDraftNewRequest) -> CatalogComponentDraftEnvelope:
         if not isinstance(request, CatalogDraftNewRequest):
             raise TypeError("request must be a CatalogDraftNewRequest")
@@ -530,6 +584,7 @@ class BuilderCatalogDraftService:
         self._assert_draft_revision(request.draft, request.expected_draft_revision)
         snapshot = catalog_snapshot(self._context)
         self._assert_catalog_revisions(request.draft, snapshot)
+        view = self._session_view(snapshot, request.session)
         control_build = _control_build(
             request.draft.family,
             request.draft.document,
@@ -560,7 +615,7 @@ class BuilderCatalogDraftService:
                 ref=request.draft.target_ref,
                 cause=error,
             )
-        return _envelope(_next_state(request.draft, document), view=snapshot)
+        return _envelope(_next_state(request.draft, document), view=view)
 
     def add_site_node(
         self,
@@ -573,7 +628,8 @@ class BuilderCatalogDraftService:
         self._assert_draft_revision(request.draft, request.expected_draft_revision)
         snapshot = catalog_snapshot(self._context)
         self._assert_catalog_revisions(request.draft, snapshot)
-        return self._add_site_node(request, snapshot=snapshot, view=snapshot)
+        view = self._session_view(snapshot, request.session)
+        return self._add_site_node(request, snapshot=snapshot, view=view)
 
     def _add_site_node(
         self,
@@ -656,7 +712,8 @@ class BuilderCatalogDraftService:
         self._assert_draft_revision(request.draft, request.expected_draft_revision)
         snapshot = catalog_snapshot(self._context)
         self._assert_catalog_revisions(request.draft, snapshot)
-        return self._add_node_terminal_mount(request, snapshot=snapshot, view=snapshot)
+        view = self._session_view(snapshot, request.session)
+        return self._add_node_terminal_mount(request, snapshot=snapshot, view=view)
 
     def _add_node_terminal_mount(
         self,
@@ -720,6 +777,7 @@ class BuilderCatalogDraftService:
         self._assert_draft_revision(request.draft, request.expected_draft_revision)
         snapshot = catalog_snapshot(self._context)
         self._assert_catalog_revisions(request.draft, snapshot)
+        view = self._session_view(snapshot, request.session)
 
         document = copy.deepcopy(request.draft.document)
         node = document[_wrapper("nodes")]
@@ -748,7 +806,7 @@ class BuilderCatalogDraftService:
             port_id = f"terr{port_index}"
         ethernet.append({"id": port_id})
         node["ethernet"] = ethernet
-        return _envelope(_next_state(request.draft, document), view=snapshot)
+        return _envelope(_next_state(request.draft, document), view=view)
 
     def apply_yaml(
         self,
@@ -761,18 +819,19 @@ class BuilderCatalogDraftService:
         self._assert_draft_revision(request.draft, request.expected_draft_revision)
         snapshot = catalog_snapshot(self._context)
         self._assert_catalog_revisions(request.draft, snapshot)
+        view = self._session_view(snapshot, request.session)
         application = parse_yaml_application(request.draft.target_ref, request.yaml_text)
         if application.canonical is None:
             # The page holds the refused text; the draft stays as it was.
             return CatalogDraftApplyYamlResult(
-                draft=_envelope(request.draft, view=snapshot),
+                draft=_envelope(request.draft, view=view),
                 yaml_text=request.yaml_text,
                 applied=False,
                 canonicalization_required=False,
                 issues=application.issues,
             )
         applied = _envelope(
-            _next_state(request.draft, application.canonical.canonical_json), view=snapshot
+            _next_state(request.draft, application.canonical.canonical_json), view=view
         )
         return CatalogDraftApplyYamlResult(
             draft=applied,

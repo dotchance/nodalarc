@@ -21,7 +21,9 @@ from nodalarc.catalog_registry import catalog_family_spec
 from nodalarc.model_validation import Identifier, TerminalMedium
 from nodalarc.models.builder_api import (
     BuilderCatalogDocument,
+    BuilderDraftEnvelope,
     BuilderIssue,
+    BuilderPendingEdits,
     JsonDocument,
     OpaqueRevision,
     Sha256Digest,
@@ -611,6 +613,27 @@ class CatalogComponentDraftEnvelope(_CatalogApplicationModel):
         return self
 
 
+class CatalogDraftSessionContext(_CatalogApplicationModel):
+    """The session a component draft belongs to.
+
+    A gesture on one of the session's proposed documents reads the documents it
+    references through the session's proposals with its pending edits applied.
+    A Library draft belongs to no session.
+    """
+
+    target_ref: SessionRef
+    draft: BuilderDraftEnvelope
+    pending_edits: BuilderPendingEdits = ()
+
+
+class CatalogDraftOpenProposalRequest(_CatalogApplicationModel):
+    """Open one of a session's proposed documents as a component draft, with its
+    pending edit applied."""
+
+    session: CatalogDraftSessionContext
+    ref: CatalogRef
+
+
 class CatalogDraftNewRequest(_CatalogApplicationModel):
     """Create one new, intentionally incomplete user-owned component draft."""
 
@@ -643,6 +666,7 @@ class CatalogDraftControlMutationRequest(_CatalogApplicationModel):
 
     draft: CatalogComponentDraftState
     expected_draft_revision: int = Field(ge=0)
+    session: CatalogDraftSessionContext | None = None
     commands: tuple[BuilderControlMutation, ...] = Field(min_length=1, max_length=64)
 
     @field_validator("commands", mode="before")
@@ -656,6 +680,7 @@ class CatalogDraftAddSiteNodeRequest(_CatalogApplicationModel):
 
     draft: CatalogComponentDraftState
     expected_draft_revision: int = Field(ge=0)
+    session: CatalogDraftSessionContext | None = None
     node_id: Identifier
     node_ref: NodeRef
 
@@ -671,6 +696,7 @@ class CatalogDraftAddNodeTerminalMountRequest(_CatalogApplicationModel):
 
     draft: CatalogComponentDraftState
     expected_draft_revision: int = Field(ge=0)
+    session: CatalogDraftSessionContext | None = None
     terminal_ref: TerminalRef
     role: MountRole
     # Written on the mount only when the gesture states it; a ground node's
@@ -689,6 +715,7 @@ class CatalogDraftAddNodeEthernetPortRequest(_CatalogApplicationModel):
 
     draft: CatalogComponentDraftState
     expected_draft_revision: int = Field(ge=0)
+    session: CatalogDraftSessionContext | None = None
 
     @model_validator(mode="after")
     def _node_draft_only(self) -> CatalogDraftAddNodeEthernetPortRequest:
@@ -702,6 +729,7 @@ class CatalogDraftApplyYamlRequest(_CatalogApplicationModel):
 
     draft: CatalogComponentDraftState
     expected_draft_revision: int = Field(ge=0)
+    session: CatalogDraftSessionContext | None = None
     yaml_text: str = Field(max_length=1_048_576)
 
 

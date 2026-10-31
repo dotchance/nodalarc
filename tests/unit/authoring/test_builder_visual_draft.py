@@ -259,6 +259,29 @@ def test_backend_creates_an_incomplete_authoring_visual_draft(
     assert reposted == draft
 
 
+def test_an_empty_new_session_names_its_segments_in_plain_words(
+    service: BuilderVisualDraftService,
+) -> None:
+    draft = service.create(BuilderVisualDraftCreateRequest(session_name="empty-session"))
+
+    compiled = service.compile(
+        BuilderVisualDraftCompileRequest(draft=draft),
+        available_node_count=1_000_000,
+    )
+
+    assert [
+        (issue.code, issue.json_pointer, issue.draft_path, issue.message)
+        for issue in compiled.compile_result.issues
+    ] == [
+        (
+            "builder.structural.too_short",
+            "/segments",
+            "state.session/segments",
+            "segments: needs at least 1 item; it has 0",
+        )
+    ]
+
+
 @pytest.mark.parametrize("session_name", ["", "My Visual Session", "_leading"])
 def test_explicit_visual_draft_names_must_be_canonical_identifiers(
     session_name: str,

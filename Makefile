@@ -432,6 +432,7 @@ typecheck: ## Type-check Builder, session-configuration, and OME frame authority
 		lib/nodalarc/catalog_registry.py \
 		lib/nodalarc/catalog_repository.py \
 		lib/nodalarc/catalog_upload.py \
+		lib/nodalarc/document_errors.py \
 		lib/nodalarc/explain.py \
 		lib/nodalarc/link_metadata.py \
 		lib/nodalarc/link_rule_candidates.py \

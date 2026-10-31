@@ -29,6 +29,7 @@ from nodalarc.catalog_repository import (
     CatalogReadSnapshot,
 )
 from nodalarc.configuration_yaml import load_configuration_yaml
+from nodalarc.document_errors import document_errors
 from nodalarc.marked_yaml import MarkedYamlError, YamlSourceMap, load_marked_yaml
 from nodalarc.models.builder_api import (
     BuilderCompileRequest,
@@ -756,15 +757,15 @@ def _parse_session_yaml_application(
         issues = tuple(
             _issue_with_yaml_source(
                 _yaml_issue(
-                    f"builder.structural.{item['type']}",
-                    item["msg"],
+                    f"builder.structural.{item.type}",
+                    item.message,
                     target_ref=target_ref,
-                    json_pointer=_json_pointer(tuple(item["loc"])) or None,
+                    json_pointer=item.pointer or None,
                 ),
                 marked.source_map,
-                prefer_key=item["type"] == "extra_forbidden",
+                prefer_key=item.type == "extra_forbidden",
             )
-            for item in error.errors(include_url=False)
+            for item in document_errors(error, marked.data)
         )
         return None, None, None, marked.source_map, issues
     except (TypeError, ValueError) as error:
@@ -2037,21 +2038,23 @@ def _object_control_build(
 def _object_validation_issues(
     error: ValidationError,
     *,
+    document: JsonValue,
     at: tuple[str | int, ...],
     source_ref: str,
 ) -> list[BuilderIssue]:
-    """The grammar's refusal of one object, named by pointers within the working JSON."""
+    """The grammar's refusal of one object ``document``, which sits at ``at`` in the
+    working JSON, named by pointers within the working JSON."""
     return [
         BuilderIssue(
-            code=f"builder.structural.{item['type']}",
+            code=f"builder.structural.{item.type}",
             stage="structural",
             severity="error",
-            message=item["msg"],
+            message=item.message,
             blocks=("save", "deploy"),
             source_ref=source_ref,
-            json_pointer=_json_pointer((*at, *item["loc"])) or None,
+            json_pointer=_json_pointer(at) + item.pointer or None,
         )
-        for item in error.errors(include_url=False)
+        for item in document_errors(error, document)
     ]
 
 
@@ -2073,7 +2076,11 @@ def _classified_object(
             try:
                 boundary = RoutingBoundary.model_validate(item)
             except ValidationError as error:
-                issues.extend(_object_validation_issues(error, at=(index,), source_ref=source_ref))
+                issues.extend(
+                    _object_validation_issues(
+                        error, document=item, at=(index,), source_ref=source_ref
+                    )
+                )
                 cards.append(None)
             else:
                 cards.append(_routing_boundary_projection(boundary, index=index))
@@ -2084,7 +2091,9 @@ def _classified_object(
     try:
         validated = _object_editor(address).root_model.model_validate(working)
     except ValidationError as error:
-        return None, _object_validation_issues(error, at=(), source_ref=source_ref)
+        return None, _object_validation_issues(
+            error, document=working, at=(), source_ref=source_ref
+        )
     if isinstance(validated, LinkRule):
         rule_card = _link_projection(validated)
         if rule_card is None:

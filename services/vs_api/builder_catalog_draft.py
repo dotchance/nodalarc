@@ -23,6 +23,7 @@ from nodalarc.catalog_repository import (
     CatalogRepositoryError,
 )
 from nodalarc.configuration_yaml import load_configuration_yaml
+from nodalarc.document_errors import document_errors
 from nodalarc.marked_yaml import MarkedYamlError, YamlSourceMap, load_marked_yaml
 from nodalarc.models.builder_api import JsonDocument
 from nodalarc.models.builder_catalog_api import (
@@ -100,12 +101,9 @@ def _refuse(
     ) from cause
 
 
-def _escape_pointer_token(value: object) -> str:
-    return str(value).replace("~", "~0").replace("/", "~1")
-
-
-def _pointer(parts: tuple[object, ...]) -> str:
-    return "/" + "/".join(_escape_pointer_token(part) for part in parts)
+def _issue_pointer(pointer: str) -> str:
+    """A draft issue names the document root "/"."""
+    return pointer or "/"
 
 
 def _decode_pointer(value: str) -> tuple[str, ...]:
@@ -173,24 +171,21 @@ def _runtime_features(
 def _structural_issues(
     family: CatalogComponentFamily,
     target_ref: CatalogRef,
+    document: JsonDocument,
     error: BaseException,
 ) -> tuple[CatalogDraftIssue, ...]:
     wrapper = _wrapper(family)
     if isinstance(error, ValidationError):
-        issues: list[CatalogDraftIssue] = []
-        for item in error.errors(include_url=False):
-            location = tuple(item["loc"])
-            pointer_parts = location if location[:1] == (wrapper,) else (wrapper, *location)
-            issues.append(
-                CatalogDraftIssue(
-                    code=f"catalog_draft.structural.{item['type']}",
-                    stage="structural",
-                    message=item["msg"],
-                    pointer=_pointer(pointer_parts),
-                    blocks=("save", "deploy"),
-                )
+        return tuple(
+            CatalogDraftIssue(
+                code=f"catalog_draft.structural.{item.type}",
+                stage="structural",
+                message=item.message,
+                pointer=_issue_pointer(item.pointer),
+                blocks=("save", "deploy"),
             )
-        return tuple(issues)
+            for item in document_errors(error, document)
+        )
     return (
         CatalogDraftIssue(
             code="catalog_draft.structural.invalid_document",
@@ -265,13 +260,13 @@ def _parse_yaml_application(
         issues = tuple(
             _issue_with_source(
                 _yaml_refusal_issue(
-                    code=f"catalog_draft.yaml.{item['type']}",
-                    message=item["msg"],
-                    pointer=_pointer(tuple(item["loc"])),
+                    code=f"catalog_draft.yaml.{item.type}",
+                    message=item.message,
+                    pointer=_issue_pointer(item.pointer),
                 ),
                 marked.source_map,
             )
-            for item in error.errors(include_url=False)
+            for item in document_errors(error, marked.data)
         )
         return None, marked.source_map, issues
 
@@ -308,7 +303,7 @@ def _analyze(
     try:
         canonical = canonicalize_persisted_configuration(target_ref, document)
     except (ValidationError, TypeError, ValueError) as error:
-        return None, _structural_issues(family, target_ref, error)
+        return None, _structural_issues(family, target_ref, document, error)
     runtime_issues = tuple(
         CatalogDraftIssue(
             code=f"catalog_draft.runtime_support.{feature.category.value}.{feature.value}",

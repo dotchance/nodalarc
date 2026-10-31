@@ -376,6 +376,51 @@ def test_incomplete_inner_session_returns_structural_issues(
     assert all("save" in issue.blocks for issue in result.issues)
 
 
+def test_a_nearest_n_rule_without_n_names_the_field_where_the_yaml_holds_it(
+    snapshot: CatalogReadSnapshot,
+) -> None:
+    session = _load(SIMPLE_SESSION)
+    position = [rule["id"] for rule in session["link_rules"]].index("leo_isl")
+    session["link_rules"][position]["topology"] = {"mode": "nearest_n"}
+
+    result = _compile(_request(session), snapshot)
+
+    pointer = f"/link_rules/{position}/topology/n"
+    assert [
+        (issue.code, issue.json_pointer, issue.draft_path, issue.message) for issue in result.issues
+    ] == [
+        (
+            "builder.structural.missing",
+            pointer,
+            f"state.session{pointer}",
+            f"link_rules[{position}].topology.n: is required",
+        )
+    ]
+
+    # The same rule as a pending edit: its own refusal names the field within the rule.
+    accepted = _accepted(SIMPLE_SESSION)
+    rule = _member(accepted, "/link_rules", "leo_isl")
+    working = {**deepcopy(rule), "topology": {"mode": "nearest_n"}}
+    _candidate, outcomes = _apply(accepted, _content("/link_rules", "leo_isl", working, base=rule))
+    assert [(issue.json_pointer, issue.message) for issue in outcomes[0].issues] == [
+        (pointer, "topology.n: is required")
+    ]
+
+
+def test_a_value_error_keeps_its_text_without_the_value_error_prefix(
+    snapshot: CatalogReadSnapshot,
+) -> None:
+    session = _load(QUIC_SESSION)
+    domains = session["routing"]["domains"]
+    domains[1]["id"] = domains[0]["id"]
+
+    result = _compile(_request(session), snapshot)
+
+    assert [(issue.code, issue.json_pointer, issue.message) for issue in result.issues] == [
+        ("builder.structural.value_error", "/routing", "routing: routing domain ids must be unique")
+    ]
+
+
 def test_dangling_reference_and_semantic_failure_have_distinct_stages(
     snapshot: CatalogReadSnapshot,
 ) -> None:

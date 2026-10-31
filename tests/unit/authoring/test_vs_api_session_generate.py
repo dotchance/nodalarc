@@ -197,7 +197,9 @@ def test_an_upload_with_an_unknown_field_is_refused_naming_the_field(catalog_cli
     assert response.status_code == 422
     assert response.json() == {
         "code": "catalog_closure.invalid_session_root",
-        "message": ("Invalid persisted session root: not_a_field: Extra inputs are not permitted"),
+        "message": (
+            "Invalid persisted session root: not_a_field: is not a field the grammar allows here"
+        ),
         "cause_type": "ValidationError",
     }
     assert _user_sessions(context) == []

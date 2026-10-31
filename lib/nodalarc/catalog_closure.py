@@ -27,6 +27,7 @@ from nodalarc.catalog_registry import (
     validate_referenced_configuration_document,
 )
 from nodalarc.configuration_yaml import load_configuration_yaml
+from nodalarc.document_errors import document_errors
 
 
 class CatalogClosureErrorCode(StrEnum):
@@ -362,14 +363,11 @@ def _parse_yaml(
         ) from exc
 
 
-def _refused_fields(error: BaseException) -> str:
-    """Each field a document was refused for and why; any other refusal in its own words."""
+def _refused_fields(error: BaseException, document: Any) -> str:
+    """Each field ``document`` was refused for and why; any other refusal in its own words."""
     if not isinstance(error, ValidationError):
         return str(error)
-    return "; ".join(
-        f"{'.'.join(str(part) for part in item['loc']) or 'document'}: {item['msg']}"
-        for item in error.errors(include_url=False)
-    )
+    return "; ".join(item.message for item in document_errors(error, document))
 
 
 def _validate_document(
@@ -392,7 +390,7 @@ def _validate_document(
         subject = "persisted session root" if root else f"catalog dependency {ref}"
         raise _error(
             code,
-            f"Invalid {subject}: {_refused_fields(exc)}",
+            f"Invalid {subject}: {_refused_fields(exc, data)}",
             ref=offending_ref or (str(ref) if ref is not None else None),
             family=family,
             dependency_chain=dependency_chain,

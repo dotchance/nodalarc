@@ -24,6 +24,7 @@ from nodalarc.catalog_repository import (
     CatalogNotFoundError,
     CatalogReadSnapshot,
 )
+from nodalarc.document_errors import document_errors
 from nodalarc.models.builder_api import (
     BuilderBlockedOperation,
     BuilderCompileRequest,
@@ -167,38 +168,29 @@ class OverlayCatalogReadView(CatalogReadView):
         )
 
 
-def _json_pointer(parts: tuple[object, ...]) -> str:
-    if not parts:
-        return ""
-    escaped = [str(part).replace("~", "~0").replace("/", "~1") for part in parts]
-    return "/" + "/".join(escaped)
-
-
 def _validation_issues(
     error: ValidationError,
     *,
+    document: object,
     source_ref: str,
     draft_path: str,
     place: Callable[[str], str] | None = None,
 ) -> list[BuilderIssue]:
-    """One structural issue per validation error. ``place`` gives the draft path of a
-    pointer when the validated document is not the one at ``draft_path``."""
-    issues: list[BuilderIssue] = []
-    for item in error.errors(include_url=False):
-        pointer = _json_pointer(tuple(item["loc"]))
-        issues.append(
-            BuilderIssue(
-                code=f"builder.structural.{item['type']}",
-                stage="structural",
-                severity="error",
-                message=item["msg"],
-                blocks=("save", "deploy"),
-                source_ref=source_ref,
-                json_pointer=pointer or None,
-                draft_path=place(pointer) if place is not None else f"{draft_path}{pointer}",
-            )
+    """One structural issue per error of validating ``document``. ``place`` gives the
+    draft path of a pointer when the document is not the one at ``draft_path``."""
+    return [
+        BuilderIssue(
+            code=f"builder.structural.{item.type}",
+            stage="structural",
+            severity="error",
+            message=item.message,
+            blocks=("save", "deploy"),
+            source_ref=source_ref,
+            json_pointer=item.pointer or None,
+            draft_path=place(item.pointer) if place is not None else f"{draft_path}{item.pointer}",
         )
-    return issues
+        for item in document_errors(error, document)
+    ]
 
 
 def _candidate_place(
@@ -295,6 +287,7 @@ def place_candidate_issues(
     beside the outcomes."""
     issues = _validation_issues(
         error,
+        document=candidate,
         source_ref=source_ref,
         draft_path="state.session",
         place=_candidate_place(session, candidate, edits, outcomes),
@@ -400,6 +393,7 @@ def _reachable_proposal_validation_issues(
     if isinstance(error.cause, ValidationError):
         return _validation_issues(
             error.cause,
+            document=error.proposal.document,
             source_ref=str(error.proposal.ref),
             draft_path=draft_path,
         )
@@ -646,20 +640,23 @@ def _pending_edit_issue(
 def _pending_edit_validation_issues(
     error: ValidationError,
     *,
+    document: object,
     index: int,
     json_pointer: str,
     source_ref: str,
 ) -> tuple[BuilderIssue, ...]:
+    """One issue per error of validating an edit's object ``document``, which sits at
+    ``json_pointer`` in the candidate session."""
     return tuple(
         _pending_edit_issue(
-            f"builder.structural.{item['type']}",
+            f"builder.structural.{item.type}",
             "structural",
-            item["msg"],
+            item.message,
             index=index,
-            json_pointer=json_pointer + _json_pointer(tuple(item["loc"])),
+            json_pointer=json_pointer + item.pointer,
             source_ref=source_ref,
         )
-        for item in error.errors(include_url=False)
+        for item in document_errors(error, document)
     )
 
 
@@ -767,6 +764,7 @@ def apply_pending_edits(
         except ValidationError as error:
             invalid[index] = _pending_edit_validation_issues(
                 error,
+                document=edit.working,
                 index=index,
                 json_pointer=_edit_pointer(candidate, edit),
                 source_ref=source_ref,
@@ -829,6 +827,7 @@ def compile_builder_draft(
     except ValidationError as error:
         candidate_issues = _validation_issues(
             error,
+            document=session,
             source_ref=str(request.target_ref),
             draft_path="state.session",
             place=place,
@@ -934,6 +933,7 @@ def compile_builder_draft(
         issues.extend(
             _validation_issues(
                 error,
+                document=canonical_session.canonical_json,
                 source_ref=str(request.target_ref),
                 draft_path="state.session",
                 place=place,
@@ -1016,6 +1016,7 @@ def compile_builder_draft(
             issues.extend(
                 _validation_issues(
                     error,
+                    document=canonical_session.canonical_json,
                     source_ref=str(request.target_ref),
                     draft_path="state.session",
                 )

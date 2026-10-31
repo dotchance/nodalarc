@@ -5,7 +5,6 @@ export const AUTHORING_FACTS: BuilderVisualAuthoringFacts = {
   single_plane_phasing_mode: "evenly_spaced_mean_anomaly",
   default_mount_role: "access",
   default_body_ref: "nodalarc:bodies/earth.yaml",
-  space_access_boresight: { mode: "nadir" },
   ground_access_boresight: { mode: "local_vertical" },
   mount_roles: [
     { id: "access", label: "access", description: "space ↔ ground" },

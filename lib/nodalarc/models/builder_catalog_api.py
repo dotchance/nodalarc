@@ -35,7 +35,6 @@ from nodalarc.models.builder_visual_api import (
     BuilderVisualOrbitShape,
     BuilderVisualPhasingMode,
     BuilderVisualSchedulingPreset,
-    BuilderVisualSpaceBoresight,
     BuilderVisualTopologyMode,
 )
 from nodalarc.models.catalog import ForwardingClass, MountRole, NadirBoresight
@@ -201,7 +200,6 @@ class BuilderVisualAuthoringFacts(_CatalogApplicationModel):
     single_plane_phasing_mode: BuilderVisualPhasingMode
     default_mount_role: MountRole
     default_body_ref: BodyRef
-    space_access_boresight: BuilderVisualSpaceBoresight
     ground_access_boresight: BuilderVisualGroundBoresight
     mount_roles: tuple[BuilderVisualMountRoleMetadata, ...]
     link_media: tuple[BuilderVisualLinkMediumMetadata, ...]

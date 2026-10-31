@@ -4,8 +4,8 @@
  *
  *  A site contains nodes, terminals, and networks at a
  *  location); members here are either references to defined sites — full
- *  fidelity, their nodes travel with them — or authored site drafts edited
- *  in place with the SiteEditor. Bulk paste mints full sites using the
+ *  fidelity, their nodes travel with them — or sites the session proposes,
+ *  edited in the component window. Bulk paste mints full sites using the
  *  segment's stamp (node model + addressing bases, applied at creation;
  *  every minted site owns its configuration afterwards). Scheduling is an
  *  intent preset writing the full explicit block, with sparse per-site
@@ -28,7 +28,6 @@ import {
 } from "./editorKit";
 import { SegmentLinksCard } from "./SegmentLinksCard";
 import type { ListedLinkRule } from "./sessionListing";
-import { SiteEditor } from "./SiteEditor";
 import { useBuilderCatalog } from "./useBuilderWorld";
 import {
   groundWarnings,
@@ -52,8 +51,8 @@ interface GroundEditorProps {
   onMintSites: (sites: ParsedSiteLine[]) => Promise<void>;
   onAddSiteReference: (ref: string) => Promise<void>;
   onSetStampNodeModel: (ref: string) => Promise<void>;
-  onSetSiteNodeModel: (memberId: string, nodeId: string, ref: string) => Promise<void>;
-  onAddSiteNode: (memberId: string) => Promise<void>;
+  /** Open the site the session proposes at `ref` in the component window. */
+  onEditSite: (ref: string) => void;
   /** Null while a change is being applied: removing waits for it. */
   onRemove: (() => void) | null;
   /** focus the name when a create gesture opened this editor. */
@@ -89,8 +88,7 @@ export function GroundEditor({
   onMintSites,
   onAddSiteReference,
   onSetStampNodeModel,
-  onSetSiteNodeModel,
-  onAddSiteNode,
+  onEditSite,
   onRemove,
   autoFocusName = false,
   workspace,
@@ -111,7 +109,6 @@ export function GroundEditor({
   const [pasteText, setPasteText] = useState("");
   const [pasteErrors, setPasteErrors] = useState<string[]>([]);
   const [libraryOpen, setLibraryOpen] = useState(false);
-  const [editingMember, setEditingMember] = useState<string | null>(null);
   const [editorError, setEditorError] = useState<string | null>(null);
   const [minting, setMinting] = useState(false);
   const warnings = groundWarnings(draft);
@@ -228,10 +225,8 @@ export function GroundEditor({
                           setEditorError(
                             `Customize ${member.ref} from the Library, then update this session to use the new user: reference.`,
                           );
-                        } else {
-                          setEditingMember((prev) =>
-                            prev === member.member_id ? null : member.member_id,
-                          );
+                        } else if (member.ref) {
+                          onEditSite(member.ref);
                         }
                       }}
                     />
@@ -248,47 +243,9 @@ export function GroundEditor({
                     />
                   </div>
                   <span className="builder-site-derived">
-                    {member.kind === "ref"
-                      ? (member.summary ?? member.ref)
-                      : member.site
-                        ? `authored · ${
-                            member.site.nodes.length === 1
-                              ? "1 node"
-                              : `${member.site.nodes.length} nodes`
-                          }`
-                        : ""}
+                    {member.kind === "ref" ? (member.summary ?? member.ref) : "proposed by this session"}
                   </span>
                 </div>
-                {member.kind === "draft" &&
-                  member.site &&
-                  editingMember === member.member_id && (
-                    <div className="builder-site-embedded">
-                      <SiteEditor
-                        authoring={authoring}
-                        site={member.site}
-                        onSetNodeModel={(nodeId, ref) =>
-                          onSetSiteNodeModel(member.member_id, nodeId, ref)
-                        }
-                        onAddNode={() => onAddSiteNode(member.member_id)}
-                        onUpdate={(update) =>
-                          // Thread SiteEditor's functional update through the
-                          // ground's own — find the member in the LATEST members
-                          // and update its LATEST site, so a concurrent edit
-                          // (this member or another) during a site-level fetch
-                          // survives.
-                          onUpdate((prev) => ({
-                            ...prev,
-                            members: prev.members.map((m) => {
-                              if (m.member_id !== member.member_id || !m.site) return m;
-                              const site = update(m.site);
-                              return { ...m, site, site_id: site.site_id, label: site.display_name };
-                            }),
-                          }))
-                        }
-                        onClose={() => setEditingMember(null)}
-                      />
-                    </div>
-                  )}
               </div>
             ))}
             <PasteArea

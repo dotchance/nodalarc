@@ -13,7 +13,6 @@
 import { useState } from "react";
 import { Button } from "../ui/Button";
 import { BodySelect, EditorCard, EditorName, NumberField, SelectField, SliderField } from "./editorKit";
-import { NodeEditor } from "./NodeEditor";
 import { SegmentLinksCard } from "./SegmentLinksCard";
 import type { ListedLinkRule } from "./sessionListing";
 import type {
@@ -27,7 +26,6 @@ import {
 import {
   type DraftConstellation,
   type DraftOrbit,
-  type DraftTerminalMount,
   type PhasingMode,
   type Workspace,
 } from "./workspace";
@@ -43,16 +41,12 @@ interface ConstellationEditorProps {
   onSetPopulation: (
     change: Omit<BuilderVisualSetSpacePopulationCommand, "operation" | "segment_id">,
   ) => Promise<void>;
-  onAuthorInlineNode: () => Promise<void>;
-  onAddNodeTerminal: (
-    terminalRef: string,
-    role: NonNullable<DraftTerminalMount["role"]>,
-  ) => Promise<void>;
-  onSetNodeTerminalRole: (
-    mountId: string,
-    role: NonNullable<DraftTerminalMount["role"]>,
-  ) => Promise<void>;
-  onAddNodeEthernet: () => Promise<void>;
+  /** The node documents the session proposes, which the node may be. */
+  proposedNodes: ReadonlyArray<{ ref: string; label: string }>;
+  /** Open the node the session proposes at `ref` in the component window. */
+  onEditNode: (ref: string) => void;
+  /** Fork the node into a document the session proposes. */
+  onCustomizeNode: () => Promise<void>;
   /** Null while a change is being applied: removing waits for it. */
   onRemove: (() => void) | null;
   /** focus the name when a create gesture opened this editor. */
@@ -78,24 +72,14 @@ function orbitDistance(value: number | null): string {
   return value === null ? "incomplete" : String(Math.round(value));
 }
 
-function terminalCountSummary(mounts: DraftTerminalMount[]): string {
-  let count = 0;
-  for (const mount of mounts) {
-    if (mount.count === null) return "terminal count incomplete";
-    count += mount.count;
-  }
-  return `${count} terminals`;
-}
-
 export function ConstellationEditor({
   draft,
   onUpdate,
   onUpdateOrbit,
   onSetPopulation,
-  onAuthorInlineNode,
-  onAddNodeTerminal,
-  onSetNodeTerminalRole,
-  onAddNodeEthernet,
+  proposedNodes,
+  onEditNode,
+  onCustomizeNode,
   onRemove,
   autoFocusName = false,
   workspace,
@@ -121,12 +105,7 @@ export function ConstellationEditor({
     );
   };
 
-  const runNodeCommand = (command: () => Promise<void>) => {
-    setEditorError(null);
-    void command().catch((cause) =>
-      setEditorError(cause instanceof Error ? cause.message : String(cause)),
-    );
-  };
+  const nodeIsProposed = proposedNodes.some((proposed) => proposed.ref === draft.node_ref);
 
   return (
     <div className="builder-inspector-stack" data-testid="builder-editor">
@@ -308,76 +287,52 @@ export function ConstellationEditor({
         open={openCard === "node"}
         onToggle={() => toggle("node")}
         summary={
-          draft.node_draft
-            ? `${draft.node_draft.display_name} (custom) · ${terminalCountSummary(draft.node_draft.terminals)}`
-            : draft.node_ref?.split("/").pop()?.replace(".yaml", "") ??
-              "node model incomplete"
+          draft.node_ref?.split("/").pop()?.replace(".yaml", "") ?? "node model incomplete"
         }
       >
-            {draft.node_draft ? (
-              <>
-                <NodeEditor
-                  authoring={authoring}
-                  draft={draft.node_draft}
-                  onAddTerminal={(terminalRef, role) =>
-                    runNodeCommand(() => onAddNodeTerminal(terminalRef, role))
-                  }
-                  onSetTerminalRole={(mountId, role) =>
-                    runNodeCommand(() => onSetNodeTerminalRole(mountId, role))
-                  }
-                  onAddEthernet={() => runNodeCommand(onAddNodeEthernet)}
-                  onChange={(update) =>
-                    // Thread NodeEditor's functional update through the
-                    // constellation's own, reading the LATEST node_draft so a
-                    // concurrent edit during a terminal import/save survives.
-                    onUpdate((prev) => ({
-                      ...prev,
-                      node_draft: prev.node_draft ? update(prev.node_draft) : prev.node_draft,
-                    }))
-                  }
-                />
-                <div className="builder-site-derived">
-                  This inline node belongs to the session proposal. Create reusable node
-                  components from the Library.
-                </div>
-                <div className="builder-preset-row">
-                  <Button onClick={() => onUpdate((prev) => ({ ...prev, node_draft: null }))}>
-                    Discard customization
-                  </Button>
-                </div>
-              </>
-            ) : (
-              <>
-                <SelectField
-                  stack
-                  label="node"
-                  ariaLabel="Node primitive"
-                  value={draft.node_ref}
-                  onChange={(node_ref) => onUpdate((prev) => ({ ...prev, node_ref }))}
-                  options={nodes.entries
-                    .map((entry) => ({
-                      value: entry.ref,
-                      label:
-                        (entry.ref.startsWith("user:") ? "\u2605 " : "") +
-                        entry.display_name,
-                    }))}
-                />
-                <div className="builder-preset-row">
-                  <Button onClick={() => runNodeCommand(onAuthorInlineNode)}>
-                    Author inline node
-                  </Button>
-                  <Button
-                    disabled={draft.node_ref === null}
-                    onClick={() => {
-                      if (draft.node_ref) void exportCatalogObject(draft.node_ref);
-                    }}
-                  >
-                    Export file
-                  </Button>
-                </div>
-                {nodes.error && <div className="builder-warning">{nodes.error}</div>}
-              </>
-            )}
+        <SelectField
+          stack
+          label="node"
+          ariaLabel="Node primitive"
+          value={draft.node_ref}
+          onChange={(node_ref) => onUpdate((prev) => ({ ...prev, node_ref }))}
+          options={[
+            ...proposedNodes.map((proposed) => ({
+              value: proposed.ref,
+              label: `\u2605 ${proposed.label} (this session)`,
+            })),
+            ...nodes.entries.map((entry) => ({
+              value: entry.ref,
+              label: (entry.ref.startsWith("user:") ? "\u2605 " : "") + entry.display_name,
+            })),
+          ]}
+        />
+        <div className="builder-preset-row">
+          {nodeIsProposed ? (
+            <Button onClick={() => draft.node_ref && onEditNode(draft.node_ref)}>Edit node</Button>
+          ) : (
+            <Button
+              disabled={draft.node_ref === null}
+              onClick={() => {
+                setEditorError(null);
+                void onCustomizeNode().catch((cause) =>
+                  setEditorError(cause instanceof Error ? cause.message : String(cause)),
+                );
+              }}
+            >
+              Customize node
+            </Button>
+          )}
+          <Button
+            disabled={draft.node_ref === null || nodeIsProposed}
+            onClick={() => {
+              if (draft.node_ref) void exportCatalogObject(draft.node_ref);
+            }}
+          >
+            Export file
+          </Button>
+        </div>
+        {nodes.error && <div className="builder-warning">{nodes.error}</div>}
       </EditorCard>
 
       <SegmentLinksCard

@@ -36,6 +36,7 @@ import type {
   CatalogDependencyImpact,
   CatalogDraftCompileResult,
   CatalogDraftSaveResult,
+  CatalogDraftSessionContext,
   NadirBoresight,
   JsonValue,
 } from "./generated/builderApi";
@@ -191,6 +192,14 @@ function impactText(impact: CatalogDependencyImpact): string {
   return `Overwrite affects ${direct} direct and ${transitive} transitive dependent${transitive === 1 ? "" : "s"}.`;
 }
 
+/** A window over a document the session proposes. Its gestures read the
+ *  session's proposals, and OK holds the document as the session's pending edit;
+ *  nothing is saved to the library. */
+export interface ProposalSession {
+  readonly context: () => CatalogDraftSessionContext;
+  readonly onStage: (working: CatalogComponentDraftEnvelope["state"]["document"]) => void;
+}
+
 export function CatalogDraftEditorWindow({
   initialDraft,
   onSaved,
@@ -198,6 +207,7 @@ export function CatalogDraftEditorWindow({
   onDiscard,
   onDirtyChange,
   authoring,
+  session,
 }: {
   initialDraft: CatalogComponentDraftEnvelope;
   onSaved: (result: CatalogDraftSaveResult) => void | Promise<void>;
@@ -206,7 +216,11 @@ export function CatalogDraftEditorWindow({
   /** Told whether the window holds edits not yet saved to the library. */
   onDirtyChange?: (dirty: boolean) => void;
   authoring: BuilderVisualAuthoringFacts;
+  /** Set when the window edits a document the session proposes. */
+  session?: ProposalSession;
 }) {
+  // A proposed document's gestures read the session's proposals.
+  const sessionOf = () => (session ? { session: session.context() } : {});
   const [draft, setDraft] = useState(initialDraft);
   const draftRef = useRef(initialDraft);
   const [baselineDocument, setBaselineDocument] = useState(initialDraft.state.document);
@@ -279,6 +293,7 @@ export function CatalogDraftEditorWindow({
       try {
         const baseDraft = draftRef.current;
         const result = await applyCatalogDraftYaml({
+          ...sessionOf(),
           draft: baseDraft.state,
           expected_draft_revision: baseDraft.state.draft_revision,
           yaml_text: buffer.text,
@@ -325,6 +340,7 @@ export function CatalogDraftEditorWindow({
     try {
       const base = draftRef.current;
       const updated = await addCatalogDraftSiteNode({
+          ...sessionOf(),
         draft: base.state,
         expected_draft_revision: base.state.draft_revision,
         node_id: nodeId,
@@ -350,6 +366,7 @@ export function CatalogDraftEditorWindow({
     try {
       const base = draftRef.current;
       const updated = await addCatalogDraftNodeTerminal({
+          ...sessionOf(),
         draft: base.state,
         expected_draft_revision: base.state.draft_revision,
         terminal_ref: terminalRef,
@@ -372,6 +389,7 @@ export function CatalogDraftEditorWindow({
     try {
       const base = draftRef.current;
       const updated = await addCatalogDraftNodeEthernet({
+          ...sessionOf(),
         draft: base.state,
         expected_draft_revision: base.state.draft_revision,
       });
@@ -396,6 +414,7 @@ export function CatalogDraftEditorWindow({
     try {
       const baseDraft = draftRef.current;
       const updated = await mutateCatalogDraftControls({
+          ...sessionOf(),
         draft: baseDraft.state,
         expected_draft_revision: baseDraft.state.draft_revision,
         commands,
@@ -612,7 +631,28 @@ export function CatalogDraftEditorWindow({
           Structurally valid and savable; current runtime support blocks deployment.
         </div>
       )}
+      {compileResult && (
+        <div className="builder-site-derived">
+          This verdict covers this component alone. A session that places it decides the
+          gates that depend on placement and profile.
+        </div>
+      )}
       {error && <div className="builder-warning">{error}</div>}
+      {session ? (
+        <div className="builder-preset-row">
+          <Button
+            variant="primary"
+            disabled={busy !== "idle" || graphicalEditingBlocked}
+            onClick={() => {
+              session.onStage(draftRef.current.state.document);
+              onClose();
+            }}
+          >
+            OK
+          </Button>
+          <Button disabled={busy !== "idle"} onClick={onClose}>Cancel</Button>
+        </div>
+      ) : (
       <div className="builder-preset-row">
         <Button disabled={busy !== "idle"} onClick={() => void validate()}>
           {busy === "validating" ? "Validating…" : dirty ? "Validate edits" : "Validate"}
@@ -634,6 +674,7 @@ export function CatalogDraftEditorWindow({
         )}
         <Button disabled={busy !== "idle"} onClick={onClose}>Close</Button>
       </div>
+      )}
     </div>
   );
 }

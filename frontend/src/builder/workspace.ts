@@ -6,12 +6,10 @@ import type {
   BuilderVisualGroundSiteIntent,
   BuilderVisualWorkspace,
   BuilderVisualLinkEndpoint,
-  BuilderVisualNode,
   BuilderVisualGroundBoresight,
   BuilderVisualRoutingBoundary,
   BuilderVisualRoutingDomain,
   BuilderVisualSpaceDraft,
-  BuilderVisualTerminalMount,
 } from "./generated/builderApi";
 
 /** Mutable materialization of a Pydantic response model.
@@ -32,25 +30,19 @@ export type MaterializedMutable<T> =
 export type Workspace = MaterializedMutable<BuilderVisualWorkspace>;
 export type DraftConstellation = Workspace["space"][number];
 export type DraftOrbit = DraftConstellation["orbit"];
-export type DraftNode = Exclude<DraftConstellation["node_draft"], null>;
-export type DraftTerminalMount = DraftNode["terminals"][number];
 export type DraftGroundSet = Workspace["ground"][number];
 export type DraftGroundSite = DraftGroundSet["members"][number];
-export type DraftSiteObject = Exclude<DraftGroundSite["site"], null>;
-export type DraftSiteNode = DraftSiteObject["nodes"][number];
 export type ParsedSiteLine = BuilderVisualGroundSiteIntent;
 
 /** UI labels over generated visual-authoring application types. */
-export type MountRole = NonNullable<BuilderVisualTerminalMount["role"]>;
 export type LinkMedium = NonNullable<BuilderVisualLinkEndpoint["medium"]>;
 export type Protocol = NonNullable<BuilderVisualRoutingDomain["protocol"]>;
 export type Adapter = NonNullable<BuilderVisualRoutingBoundary["adapter"]>;
-export type Forwarding = NonNullable<BuilderVisualNode["forwarding"]>;
 export type PhasingMode = BuilderVisualSpaceDraft["phasing_mode"];
 export type GroundBoresight = BuilderVisualGroundBoresight;
 
 function memberSiteId(member: DraftGroundSite): string {
-  return member.kind === "draft" && member.site ? member.site.site_id : member.site_id;
+  return member.site_id;
 }
 
 /** Bulk site paste: one site per line, ``name, lat, lon[, alt_m]`` — commas
@@ -108,14 +100,6 @@ export function groundWarnings(draft: DraftGroundSet): string[] {
       warnings.push(`duplicate site id "${id}" — sites are places and exist once`);
     }
     seenIds.add(id);
-    const site = member.site;
-    if (!site) continue;
-    if (site.lat_deg !== null && Math.abs(site.lat_deg) > 90) {
-      warnings.push(`${site.display_name}: latitude ${site.lat_deg} is off the map (±90)`);
-    }
-    if (site.lon_deg !== null && Math.abs(site.lon_deg) > 180) {
-      warnings.push(`${site.display_name}: longitude ${site.lon_deg} is off the map (±180)`);
-    }
   }
   return warnings;
 }

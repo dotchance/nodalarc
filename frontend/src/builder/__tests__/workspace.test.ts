@@ -7,10 +7,7 @@
  */
 
 import { describe, expect, it } from "vitest";
-import { groundWarnings, parseSiteLines } from "../workspace";
-import { newDraftGroundSet, testGroundMember } from "./fixtures/workspaceFixtures";
-
-const GROUND_NODE = "nodalarc:nodes/ground/test.yaml";
+import { parseSiteLines } from "../workspace";
 
 describe("ground interaction helpers", () => {
   it("parses typed site-location intent without allocating configuration", () => {
@@ -22,10 +19,5 @@ describe("ground interaction helpers", () => {
     ]);
   });
 
-  it("keeps local guidance advisory while backend compile owns save refusal", () => {
-    const ground = newDraftGroundSet(GROUND_NODE, {});
-    ground.members = [testGroundMember(ground, "Bad", 95, 181)];
-    expect(groundWarnings(ground).join(" ")).toMatch(/latitude|longitude/);
-  });
 
 });

@@ -14,7 +14,11 @@ import yaml
 from nodalarc.catalog_refs import CatalogRef
 from nodalarc.catalog_repository import CatalogConflictError, CatalogNotFoundError, CatalogScope
 from nodalarc.filesystem_catalog_repository import FilesystemCatalogRepository
-from nodalarc.models.builder_api import BuilderCompileRequest, BuilderIssue
+from nodalarc.models.builder_api import (
+    BuilderCompileRequest,
+    BuilderIssue,
+    BuilderProposedCatalogDocument,
+)
 from nodalarc.models.builder_visual_api import (
     BuilderVisualCustomizeChainRequest,
     BuilderVisualDraftAcceptStateRequest,
@@ -32,22 +36,16 @@ from nodalarc.models.builder_visual_api import (
     BuilderVisualDraftRetargetRequest,
     BuilderVisualGroundBoresight,
     BuilderVisualGroundDraft,
-    BuilderVisualGroundMember,
     BuilderVisualGroundStamp,
     BuilderVisualLinkEndpoint,
     BuilderVisualLinkRule,
-    BuilderVisualNode,
     BuilderVisualObjectEditRequest,
     BuilderVisualObjectEditResult,
     BuilderVisualOrbit,
     BuilderVisualRoutingBoundariesWidget,
     BuilderVisualRoutingBoundary,
     BuilderVisualRoutingDomain,
-    BuilderVisualSite,
-    BuilderVisualSiteNode,
-    BuilderVisualSpaceBoresight,
     BuilderVisualSpaceDraft,
-    BuilderVisualTerminalMount,
     BuilderVisualWorkspace,
 )
 from nodalarc.models.builder_world import BuilderWorld
@@ -959,7 +957,6 @@ def test_backend_visual_commands_own_seeds_and_advance_one_fenced_revision(
         "segment_id": "space-1",
         "display_name": "Constellation 1",
         "node_ref": str(space.node_ref),
-        "node_draft": None,
         "orbit": {
             "central_body": "nodalarc:bodies/earth.yaml",
             "shape_kind": "circular",
@@ -1217,6 +1214,13 @@ def test_backend_visual_commands_own_seeds_and_advance_one_fenced_revision(
     assert independent_result.affected_id == "space-1"
 
 
+def _proposed_site(draft: BuilderVisualDraftEnvelope, member: Any) -> dict[str, Any]:
+    """The site document a session-proposed ground member lists by reference."""
+    assert member.kind == "draft" and member.ref is not None
+    [proposal] = [item for item in draft.catalog_documents if item.ref == member.ref]
+    return proposal.document["site"]
+
+
 def test_backend_command_mints_ground_sites_and_allocates_all_addresses(
     service: BuilderVisualDraftService,
 ) -> None:
@@ -1254,11 +1258,9 @@ def test_backend_command_mints_ground_sites_and_allocates_all_addresses(
         ("member-1", "site-1", "Denver"),
         ("member-2", "site-2", "Perth"),
     ]
-    # Addresses are resolver-allocated at deploy; minted draft sites carry
-    # composition only.
-    assert all(
-        member.site is not None and member.site.nodes[0].node_ref is not None for member in members
-    )
+    # Each minted site is a document the session proposes; addresses are
+    # resolver-allocated at deploy, so a minted site carries composition only.
+    assert all(_proposed_site(minted.draft, member)["nodes"][0]["node"] for member in members)
 
     workspace = minted.draft.authoring_workspace
     ground = workspace.ground[0]
@@ -1285,8 +1287,7 @@ def test_backend_command_mints_ground_sites_and_allocates_all_addresses(
     )
     assert third.draft.authoring_workspace is not None
     ames = third.draft.authoring_workspace.ground[0].members[-1]
-    assert ames.site is not None
-    assert ames.site.nodes[0].node_ref is not None
+    assert _proposed_site(third.draft, ames)["nodes"][0]["node"]
 
 
 def test_backend_commands_derive_space_transitions_and_ground_installations(
@@ -1370,55 +1371,15 @@ def test_backend_commands_derive_space_transitions_and_ground_installations(
             "sites": [{"name": "Denver", "lat_deg": 39.7, "lon_deg": -104.9}],
         }
     )
-    apply(
-        {
-            "operation": "set_ground_site_node",
-            "segment_id": "ground-1",
-            "member_id": "member-1",
-            "node_id": "gw1",
-            "node_ref": "nodalarc:nodes/ground/starlink-gateway.yaml",
-        }
-    )
     member = draft.authoring_workspace.ground[0].members[0]
-    assert member.site is not None
-    first_node = member.site.nodes[0]
-    assert first_node.installed == {"access_ka": 64}
-    assert first_node.node_ref is not None
-
-    site_with_gap = member.site.model_copy(
-        update={"nodes": (*member.site.nodes, first_node.model_copy(update={"node_id": "gw3"}))}
-    )
-    ground = draft.authoring_workspace.ground[0]
-    ground_with_gap = ground.model_copy(
-        update={
-            "members": (
-                ground.members[0].model_copy(update={"site": site_with_gap}),
-                *ground.members[1:],
-            )
+    site = _proposed_site(draft, member)
+    assert site["nodes"][0]["node"] == "nodalarc:nodes/ground/leo-gateway.yaml"
+    assert site["nodes"][0]["terminals"] == {
+        "access_ka": {
+            "installed_count": 8,
+            "capabilities": {"boresight": {"mode": "local_vertical"}},
         }
-    )
-    draft = service.apply_workspace(
-        BuilderVisualDraftApplyWorkspaceRequest(
-            draft=draft,
-            expected_draft_revision=draft.draft_revision,
-            workspace=draft.authoring_workspace.model_copy(update={"ground": (ground_with_gap,)}),
-        ),
-        available_node_count=1_000_000,
-    ).visual_draft
-    apply(
-        {
-            "operation": "add_ground_site_node",
-            "segment_id": "ground-1",
-            "member_id": "member-1",
-        }
-    )
-    member = draft.authoring_workspace.ground[0].members[0]
-    assert member.site is not None
-    added = member.site.nodes[-1]
-    assert added.node_id == "gw2"
-    assert added.node_ref == "nodalarc:nodes/ground/starlink-gateway.yaml"
-    assert added.installed == {"access_ka": 64}
-    assert added.boresights == {"access_ka": BuilderVisualGroundBoresight(mode="local_vertical")}
+    }
 
 
 def test_backend_repairs_nullable_space_population_one_field_at_a_time(
@@ -1565,94 +1526,6 @@ def test_backend_reports_direct_missing_phase_edit_as_pending_authoring(
     assert compiled.compile_result.save_verdict.allowed is False
 
 
-def test_backend_visual_node_commands_derive_identity_shape_and_counts(
-    service: BuilderVisualDraftService,
-) -> None:
-    draft = service.create(BuilderVisualDraftCreateRequest(session_name="node-command-owned"))
-
-    def apply(command: dict[str, Any]) -> None:
-        nonlocal draft
-        draft = service.apply_command(
-            BuilderVisualDraftCommandRequest(
-                draft=draft,
-                expected_draft_revision=draft.draft_revision,
-                command=command,
-            ),
-            available_node_count=1_000_000,
-        ).draft
-
-    apply({"operation": "add_generated_space", "phasing_mode": "walker_delta"})
-    apply({"operation": "author_inline_space_node", "segment_id": "space-1"})
-    for _ in range(2):
-        apply(
-            {
-                "operation": "add_or_increment_node_terminal",
-                "segment_id": "space-1",
-                "terminal_ref": ("nodalarc:terminals/rf/rf-ka-starlink-space-gateway.yaml"),
-                "role": "access",
-            }
-        )
-    apply({"operation": "add_node_ethernet_port", "segment_id": "space-1"})
-    apply({"operation": "add_node_ethernet_port", "segment_id": "space-1"})
-
-    assert draft.authoring_workspace is not None
-    node = draft.authoring_workspace.space[0].node_draft
-    assert node is not None
-    assert (node.id, node.display_name, node.forwarding) == (
-        "space-1-node",
-        "Constellation 1 node",
-        None,
-    )
-    assert node.ethernet == ("terr0", "terr1")
-    assert node.terminals == (
-        BuilderVisualTerminalMount(
-            mount_id="access_0",
-            role="access",
-            terminal_ref="nodalarc:terminals/rf/rf-ka-starlink-space-gateway.yaml",
-            count=2,
-            boresight=BuilderVisualSpaceBoresight(mode="nadir"),
-        ),
-    )
-
-    apply(
-        {
-            "operation": "set_node_terminal_role",
-            "segment_id": "space-1",
-            "mount_id": "access_0",
-            "role": "isl",
-        }
-    )
-    node = draft.authoring_workspace.space[0].node_draft
-    assert node is not None
-    assert (node.terminals[0].role, node.terminals[0].boresight) == ("isl", None)
-
-    apply(
-        {
-            "operation": "set_node_terminal_role",
-            "segment_id": "space-1",
-            "mount_id": "access_0",
-            "role": "access",
-        }
-    )
-    node = draft.authoring_workspace.space[0].node_draft
-    assert node is not None
-    assert node.terminals[0].role == "access"
-    assert node.terminals[0].boresight == BuilderVisualSpaceBoresight(mode="nadir")
-
-    with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
-        BuilderVisualDraftCommandRequest.model_validate(
-            {
-                "draft": draft.model_dump(mode="json"),
-                "expected_draft_revision": draft.draft_revision,
-                "command": {
-                    "operation": "add_node_ethernet_port",
-                    "segment_id": "space-1",
-                    "port_id": "browser-owned",
-                },
-            }
-        )
-
-
 def test_backend_visual_command_revision_and_missing_projection_refusals_are_typed(
     service: BuilderVisualDraftService,
 ) -> None:
@@ -1691,7 +1564,7 @@ def test_backend_visual_command_revision_and_missing_projection_refusals_are_typ
     assert missing_projection.value.code == "catalog_authoring.invalid_patch"
 
 
-def test_visual_phasing_and_space_access_boresight_are_explicit_application_state() -> None:
+def test_visual_phasing_is_explicit_application_state() -> None:
     with pytest.raises(ValidationError, match="exactly one orbital plane"):
         BuilderVisualSpaceDraft(
             segment_id="invalid",
@@ -1702,23 +1575,6 @@ def test_visual_phasing_and_space_access_boresight_are_explicit_application_stat
             phasing_mode="evenly_spaced_mean_anomaly",
             phase_offset_deg=0,
         )
-
-    with pytest.raises(ValidationError, match="explicit nadir boresight"):
-        BuilderVisualTerminalMount(
-            mount_id="access",
-            role="access",
-            terminal_ref="nodalarc:terminals/rf/rf-ka-leo-access.yaml",
-            count=1,
-        )
-
-    mount = BuilderVisualTerminalMount(
-        mount_id="access",
-        role="access",
-        terminal_ref="nodalarc:terminals/rf/rf-ka-leo-access.yaml",
-        count=1,
-        boresight=BuilderVisualSpaceBoresight(mode="nadir"),
-    )
-    assert mount.boresight == BuilderVisualSpaceBoresight(mode="nadir")
 
 
 def test_evenly_spaced_command_seeds_one_plane_and_compiles(
@@ -2037,30 +1893,37 @@ def test_rederive_accepts_the_rules_own_pending_edit_with_it(
         )
 
 
-def _authored_node_workspace(*, profile: str | None) -> BuilderVisualWorkspace:
-    return BuilderVisualWorkspace(
+_AUTHORED_NODE_REF = "user:nodes/visual-components/authored-node.yaml"
+
+
+def _authored_node_draft(*, profile: str | None) -> BuilderVisualDraftEnvelope:
+    """A draft whose generated shell places a node the session proposes."""
+    node: dict[str, Any] = {
+        "id": "authored-node",
+        "display_name": "Authored node",
+        "forwarding": "routed",
+        "ethernet": [],
+        "terminals": [
+            {
+                "id": "access",
+                "role": "access",
+                "terminal": "nodalarc:terminals/rf/rf-ka-leo-access.yaml",
+                "count": 1,
+                "boresight": {"mode": "nadir"},
+            }
+        ],
+        "payloads": [],
+    }
+    if profile is not None:
+        node["profile"] = profile
+    workspace = BuilderVisualWorkspace(
         session_name="visual-components",
         start_time="2026-07-10T00:00:00Z",
         space=(
             BuilderVisualSpaceDraft(
                 segment_id="space",
                 display_name="Authored shell",
-                node_draft=BuilderVisualNode(
-                    id="authored-node",
-                    display_name="Authored node",
-                    forwarding="routed",
-                    profile=profile,
-                    ethernet=(),
-                    terminals=(
-                        BuilderVisualTerminalMount(
-                            mount_id="access",
-                            role="access",
-                            terminal_ref="nodalarc:terminals/rf/rf-ka-leo-access.yaml",
-                            count=1,
-                            boresight=BuilderVisualSpaceBoresight(mode="nadir"),
-                        ),
-                    ),
-                ),
+                node_ref=_AUTHORED_NODE_REF,
                 orbit=_orbit(),
                 planes=1,
                 raan_spacing_deg=360,
@@ -2070,16 +1933,22 @@ def _authored_node_workspace(*, profile: str | None) -> BuilderVisualWorkspace:
             ),
         ),
     )
+    draft = _incomplete_draft("user:sessions/visual-components.yaml", workspace, draft_revision=4)
+    return draft.model_copy(
+        update={
+            "catalog_documents": (
+                BuilderProposedCatalogDocument(
+                    ref=_AUTHORED_NODE_REF, document={"node": node}, origin="generated"
+                ),
+            )
+        }
+    )
 
 
 def test_an_authored_node_with_no_profile_compiles_to_the_refusal_on_its_segment(
     service: BuilderVisualDraftService,
 ) -> None:
-    draft = _incomplete_draft(
-        "user:sessions/visual-components.yaml",
-        _authored_node_workspace(profile=None),
-        draft_revision=4,
-    )
+    draft = _authored_node_draft(profile=None)
 
     result = service.compile(
         BuilderVisualDraftCompileRequest(draft=draft),
@@ -2097,11 +1966,7 @@ def test_an_authored_node_with_no_profile_compiles_to_the_refusal_on_its_segment
 def test_visual_authoring_assembly_creates_ref_composed_component_proposals(
     service: BuilderVisualDraftService,
 ) -> None:
-    draft = _incomplete_draft(
-        "user:sessions/visual-components.yaml",
-        _authored_node_workspace(profile="nodalarc:profiles/frr-router.yaml"),
-        draft_revision=4,
-    )
+    draft = _authored_node_draft(profile="nodalarc:profiles/frr-router.yaml")
     assert draft.projection_status == "incomplete_authoring"
 
     result = service.compile(
@@ -2688,76 +2553,6 @@ def test_visual_retarget_is_revision_fenced_and_create_only(
         context.repository.snapshot(context.scope).get("user:sessions/occupied-target.yaml").content
         == before.content
     )
-
-
-def test_visual_ground_site_emits_explicit_installation_boresight(
-    service: BuilderVisualDraftService,
-) -> None:
-    boresight = BuilderVisualGroundBoresight(mode="local_vertical")
-    workspace = BuilderVisualWorkspace(
-        session_name="visual-ground",
-        start_time="2026-07-10T00:00:00Z",
-        ground=(
-            BuilderVisualGroundDraft(
-                segment_id="ground",
-                display_name="Authored ground",
-                members=(
-                    BuilderVisualGroundMember(
-                        member_id="member-1",
-                        kind="draft",
-                        site_id="authored-site",
-                        label="Authored site",
-                        site=BuilderVisualSite(
-                            site_id="authored-site",
-                            display_name="Authored site",
-                            body="nodalarc:bodies/earth.yaml",
-                            lat_deg=39.7,
-                            lon_deg=-104.9,
-                            alt_m=1600,
-                            nodes=(
-                                BuilderVisualSiteNode(
-                                    node_id="gw1",
-                                    node_ref="nodalarc:nodes/ground/leo-gateway.yaml",
-                                    installed={"access_ka": 1},
-                                    boresights={"access_ka": boresight},
-                                ),
-                            ),
-                        ),
-                    ),
-                ),
-                stamp=BuilderVisualGroundStamp(
-                    node_ref="nodalarc:nodes/ground/leo-gateway.yaml",
-                    installed={"access_ka": 1},
-                    boresights={"access_ka": boresight},
-                    body="nodalarc:bodies/earth.yaml",
-                ),
-            ),
-        ),
-    )
-    draft = _incomplete_draft(
-        "user:sessions/visual-ground.yaml",
-        workspace,
-        draft_revision=1,
-    )
-    assert draft.projection_status == "incomplete_authoring"
-
-    result = service.compile(
-        BuilderVisualDraftCompileRequest(draft=draft),
-        available_node_count=100,
-    )
-
-    assert result.assembly_issues == ()
-    assert result.compile_result.save_verdict.allowed is True
-    proposals = {
-        str(item.ref): item.document for item in result.save_request.draft.state.catalog_documents
-    }
-    installation = proposals["user:sites/visual-ground/authored-site.yaml"]["site"]["nodes"][0][
-        "terminals"
-    ]["access_ka"]
-    assert installation == {
-        "installed_count": 1,
-        "capabilities": {"boresight": {"mode": "local_vertical"}},
-    }
 
 
 def test_incomplete_authored_content_is_reported_and_never_filtered(
@@ -4129,6 +3924,40 @@ def test_new_and_default_customization_never_overwrite_user_session(
         service.open(BuilderVisualDraftOpenRequest(source_ref=source_ref))
     with pytest.raises(CatalogConflictError, match="open it to edit"):
         service.create(BuilderVisualDraftCreateRequest(session_name="earth-leo-simple"))
+
+
+def test_customizing_a_generated_constellations_node_proposes_it_for_the_session(
+    service: BuilderVisualDraftService,
+) -> None:
+    draft = service.create(BuilderVisualDraftCreateRequest(session_name="custom-node"))
+    draft = service.apply_command(
+        BuilderVisualDraftCommandRequest(
+            draft=draft,
+            expected_draft_revision=draft.draft_revision,
+            command={"operation": "add_generated_space", "phasing_mode": "walker_delta"},
+        ),
+        available_node_count=1_000_000,
+    ).draft
+    assert draft.authoring_workspace is not None
+    shipped_node = draft.authoring_workspace.space[0].node_ref
+    assert shipped_node is not None and shipped_node.namespace == "nodalarc"
+
+    customized = service.customize_chain(
+        BuilderVisualCustomizeChainRequest(
+            draft=draft,
+            expected_draft_revision=draft.draft_revision,
+            segment_id="space-1",
+            leaf_ref=shipped_node,
+        )
+    )
+
+    # The node becomes a document the session proposes, which the segment uses
+    # and the component window edits.
+    assert customized.applied is True
+    assert customized.draft.authoring_workspace is not None
+    node_ref = customized.draft.authoring_workspace.space[0].node_ref
+    assert node_ref is not None and node_ref.namespace == "user"
+    assert node_ref in {proposal.ref for proposal in customized.draft.catalog_documents}
 
 
 def test_nested_customization_forks_only_the_minimal_ancestor_chain(

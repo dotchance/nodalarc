@@ -19,7 +19,6 @@ import {
   fireEvent,
   render,
   screen,
-  waitFor,
 } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -31,14 +30,12 @@ import {
   SliderField,
 } from "../editorKit";
 import { BuildGuide } from "../BuildGuide";
-import { SiteEditor } from "../SiteEditor";
 import { LinkRuleEditor, LinkRuleWindow } from "../LinkRuleEditor";
 import { PendingEditApplyRow } from "../pendingEditKit";
 import { RoutingDomainWindow } from "../RoutingEditor";
 import {
   accessBeamElevationDeg,
 } from "../linkPhysics";
-import { type DraftSiteObject } from "../workspace";
 import { AUTHORING_FACTS } from "./fixtures/authoringFacts";
 import {
   newDraftConstellation,
@@ -66,24 +63,6 @@ import {
 import { tinyWorld } from "./fixtures/tinyWorld";
 
 const BUILDER_DIR = join(__dirname, "..");
-
-function draftSite(nodeRef = "nodalarc:nodes/ground/gw.yaml"): DraftSiteObject {
-  return {
-    site_id: "my-site",
-    display_name: "My site",
-    body: "nodalarc:bodies/earth.yaml",
-    lat_deg: 0,
-    lon_deg: 0,
-    alt_m: 0,
-    tags: [],
-    nodes: [{
-      node_id: "gw1",
-      node_ref: nodeRef,
-      installed: {},
-      boresights: {},
-    }],
-  };
-}
 
 function catalogSummary(
   ref: string,
@@ -192,42 +171,6 @@ describe("editors delegate authoring to VS-API", () => {
     cleanup();
   });
 
-  it("SiteEditor: a multi-node site card carries a working Remove (the actions slot)", () => {
-    const base = draftSite();
-    const site = { ...base, nodes: [base.nodes[0]!, { ...base.nodes[0]!, node_id: "gw2" }] };
-    let updated = site;
-    render(
-      <SiteEditor
-        authoring={AUTHORING_FACTS}
-        site={site}
-        onSetNodeModel={async () => {}}
-        onAddNode={async () => {}}
-        onUpdate={(update) => {
-          updated = update(updated);
-        }}
-      />,
-    );
-    // Both node cards render (the card title is the node id).
-    expect(screen.getByText("gw1")).toBeTruthy();
-    expect(screen.getByText("gw2")).toBeTruthy();
-    // The header Remove — carried through EditorCard's actions slot — drops its node.
-    fireEvent.click(screen.getByRole("button", { name: "Remove gw2" }));
-    expect(updated.nodes.map((n) => n.node_id)).toEqual(["gw1"]);
-  });
-});
-
-describe("BodySelect failure contract + node-id collision", () => {
-  beforeEach(() => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async () => ({ ok: true, json: async () => ({ generation: "g1", items: [] }) })),
-    );
-  });
-  afterEach(() => {
-    vi.unstubAllGlobals();
-    cleanup();
-  });
-
   it("BodySelect always includes the current value — the field never blanks an existing body", () => {
     render(
       <BodySelect
@@ -256,26 +199,6 @@ describe("BodySelect failure contract + node-id collision", () => {
     expect(screen.getByText(/bodies fetch failed/)).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "retry" }));
     expect(refresh).toHaveBeenCalled();
-  });
-
-  it("adding a node delegates installation and identifier seeding to VS-API", async () => {
-    const base = draftSite();
-    // A gap at gw2 (as a delete-then-render would leave): length+1 would re-mint gw3.
-    const site = { ...base, nodes: [base.nodes[0]!, { ...base.nodes[0]!, node_id: "gw3" }] };
-    const onAddNode = vi.fn(async () => {});
-    const onUpdate = vi.fn();
-    render(
-      <SiteEditor
-        authoring={AUTHORING_FACTS}
-        site={site}
-        onSetNodeModel={async () => {}}
-        onAddNode={onAddNode}
-        onUpdate={onUpdate}
-      />,
-    );
-    fireEvent.click(screen.getByRole("button", { name: "+ add node" }));
-    await waitFor(() => expect(onAddNode).toHaveBeenCalledTimes(1));
-    expect(onUpdate).not.toHaveBeenCalled();
   });
 
   it("BodySelect lists a catalog body exactly once when the value is already in the catalog", () => {

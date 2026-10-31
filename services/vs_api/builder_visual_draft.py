@@ -55,12 +55,8 @@ from nodalarc.models.builder_visual_api import (
     BuilderVisualAddBoundaryCommand,
     BuilderVisualAddGeneratedSpaceCommand,
     BuilderVisualAddGroundCommand,
-    BuilderVisualAddGroundSiteNodeCommand,
     BuilderVisualAddGroundSiteReferenceCommand,
-    BuilderVisualAddNodeEthernetPortCommand,
-    BuilderVisualAddOrIncrementNodeTerminalCommand,
     BuilderVisualAddRoutingDomainCommand,
-    BuilderVisualAuthorInlineSpaceNodeCommand,
     BuilderVisualConnectSegmentsCommand,
     BuilderVisualControlMutationRequest,
     BuilderVisualCustomizeChainEntry,
@@ -90,7 +86,6 @@ from nodalarc.models.builder_visual_api import (
     BuilderVisualLinkRuleListing,
     BuilderVisualLinkRuleWidget,
     BuilderVisualMintGroundMembersCommand,
-    BuilderVisualNode,
     BuilderVisualObjectControlEdit,
     BuilderVisualObjectEditRequest,
     BuilderVisualObjectEditResult,
@@ -106,17 +101,11 @@ from nodalarc.models.builder_visual_api import (
     BuilderVisualRoutingDomainListing,
     BuilderVisualRoutingDomainWidget,
     BuilderVisualSessionListing,
-    BuilderVisualSetGroundSiteNodeCommand,
     BuilderVisualSetGroundStampNodeCommand,
-    BuilderVisualSetNodeTerminalRoleCommand,
     BuilderVisualSetSchedulingPresetCommand,
     BuilderVisualSetSpacePopulationCommand,
-    BuilderVisualSite,
-    BuilderVisualSiteNode,
-    BuilderVisualSpaceBoresight,
     BuilderVisualSpaceDraft,
     BuilderVisualSpaceReference,
-    BuilderVisualTerminalMount,
     BuilderVisualWalkerLayoutRequest,
     BuilderVisualWorkspace,
     derive_walker_layout,
@@ -174,7 +163,6 @@ from .builder_visual_defaults import (
     DEFAULT_BODY_REF,
     DEFAULT_PHASING_MODE,
     DEFAULT_SCHEDULING_PRESET,
-    DEFAULT_TERMINAL_MOUNT_COUNT,
     SINGLE_PLANE_PHASING_MODE,
     scheduling_preset_block,
 )
@@ -747,77 +735,6 @@ class _Assembly:
             )
 
 
-def _node_document(
-    assembly: _Assembly,
-    node: BuilderVisualNode,
-    *,
-    path: str,
-    fallback_id: str,
-) -> tuple[str, JsonDocument]:
-    node_id = assembly.required_identifier(node.id, path=f"{path}.id", fallback=fallback_id)
-    if not node.display_name:
-        assembly.issue(
-            "builder.draft.node_display_name_required",
-            "Node display name is required",
-            f"{path}.display_name",
-        )
-    if node.forwarding is None:
-        assembly.issue(
-            "builder.draft.node_forwarding_required",
-            "Node forwarding mode is required",
-            f"{path}.forwarding",
-        )
-    terminals: list[JsonValue] = []
-    for index, mount in enumerate(node.terminals):
-        mount_path = f"{path}.terminals.{index}"
-        mount_id = assembly.required_identifier(
-            mount.mount_id,
-            path=f"{mount_path}.mount_id",
-            fallback=f"mount-{index + 1}",
-        )
-        for field_name, value in (
-            ("role", mount.role),
-            ("terminal_ref", mount.terminal_ref),
-            ("count", mount.count),
-        ):
-            if value is None:
-                assembly.issue(
-                    f"builder.draft.terminal_mount_{field_name}_required",
-                    f"Terminal mount {field_name.replace('_', ' ')} is required",
-                    f"{mount_path}.{field_name}",
-                )
-        terminals.append(
-            {
-                "id": mount_id,
-                "role": cast(JsonValue, mount.role),
-                "terminal": cast(
-                    JsonValue, str(mount.terminal_ref) if mount.terminal_ref else None
-                ),
-                "count": cast(JsonValue, mount.count),
-                **(
-                    {"boresight": mount.boresight.model_dump(mode="json")}
-                    if mount.boresight is not None
-                    else {}
-                ),
-            }
-        )
-    profile = node.profile
-    return node_id, {
-        "node": {
-            "id": node_id,
-            "display_name": node.display_name,
-            "forwarding": cast(JsonValue, node.forwarding),
-            **({"profile": cast(JsonValue, str(profile))} if profile is not None else {}),
-            "ethernet": [
-                {"id": assembly.required_identifier(port, path=path, fallback="terr0")}
-                for port in node.ethernet
-            ],
-            "terminals": terminals,
-            "payloads": [],
-        }
-    }
-
-
 def _orbit_document(
     assembly: _Assembly,
     orbit: BuilderVisualOrbit,
@@ -878,103 +795,6 @@ def _orbit_document(
             "phase": {"mean_anomaly_deg": cast(JsonValue, orbit.mean_anomaly_deg)},
             "propagator": cast(JsonValue, orbit.propagator),
             "reference": "urn:nodalarc:session-builder-draft",
-        }
-    }
-
-
-def _site_document(
-    assembly: _Assembly,
-    site: BuilderVisualSite | None,
-    *,
-    member: BuilderVisualGroundMember,
-    path: str,
-    fallback_id: str,
-) -> tuple[str, JsonDocument]:
-    if site is None:
-        assembly.issue(
-            "builder.draft.site_document_required",
-            "Draft ground members require a complete site object",
-            f"{path}.site",
-        )
-        site = BuilderVisualSite(site_id=member.site_id, display_name=member.label)
-    site_id = assembly.required_identifier(
-        site.site_id or member.site_id,
-        path=f"{path}.site.site_id",
-        fallback=fallback_id,
-    )
-    for field_name, value in (
-        ("display_name", site.display_name),
-        ("body", site.body),
-        ("lat_deg", site.lat_deg),
-        ("lon_deg", site.lon_deg),
-        ("alt_m", site.alt_m),
-    ):
-        if value is None or value == "":
-            assembly.issue(
-                f"builder.draft.site_{field_name}_required",
-                f"Site {field_name.replace('_', ' ')} is required",
-                f"{path}.site.{field_name}",
-            )
-    nodes: list[JsonValue] = []
-    for index, node in enumerate(site.nodes):
-        node_path = f"{path}.site.nodes.{index}"
-        node_id = assembly.required_identifier(
-            node.node_id,
-            path=f"{node_path}.node_id",
-            fallback=f"node-{index + 1}",
-        )
-        if node.node_ref is None:
-            assembly.issue(
-                "builder.draft.site_node_ref_required",
-                "Installed site nodes require a node model reference",
-                f"{node_path}.node_ref",
-            )
-        unknown_boresights = sorted(set(node.boresights).difference(node.installed))
-        for mount in unknown_boresights:
-            assembly.issue(
-                "builder.draft.site_node_boresight_without_installation",
-                f"Ground boresight {mount!r} requires an installed terminal mount",
-                f"{node_path}.boresights.{mount}",
-            )
-        terminals: dict[str, JsonValue] = {}
-        for mount, count in node.installed.items():
-            boresight = node.boresights.get(mount)
-            terminals[mount] = {
-                "installed_count": count,
-                **(
-                    {
-                        "capabilities": {
-                            "boresight": boresight.model_dump(mode="json"),
-                        }
-                    }
-                    if boresight is not None
-                    else {}
-                ),
-            }
-        nodes.append(
-            {
-                "id": node_id,
-                "node": cast(JsonValue, str(node.node_ref) if node.node_ref is not None else None),
-                "payloads": {},
-                "terminals": terminals,
-                "interfaces": {"terr0": "lan0"},
-            }
-        )
-    return site_id, {
-        "site": {
-            "id": site_id,
-            "display_name": site.display_name,
-            "ethernet": [{"id": "lan0"}],
-            **({"tags": [_identifier(tag) for tag in site.tags]} if site.tags else {}),
-            "nodes": nodes,
-            "frame": {
-                "body_fixed": {"body": cast(JsonValue, str(site.body) if site.body else None)}
-            },
-            "location": {
-                "lat_deg": cast(JsonValue, site.lat_deg),
-                "lon_deg": cast(JsonValue, site.lon_deg),
-                "alt_m": cast(JsonValue, site.alt_m),
-            },
         }
     }
 
@@ -1360,42 +1180,6 @@ def _authored_space_projection(
         "circular" if "altitude_km" in shape else "elliptical"
     )
     circular_altitude = shape.get("altitude_km") if shape_kind == "circular" else None
-    node_draft: BuilderVisualNode | None = None
-    parsed_node_ref = CatalogRef(node_ref)
-    proposed_node = proposals.get(parsed_node_ref)
-    if (
-        parsed_node_ref in generated_refs
-        and proposed_node is not None
-        and isinstance(proposed_node.get("node"), dict)
-    ):
-        node = cast(JsonDocument, proposed_node["node"])
-        terminal_mounts: list[BuilderVisualTerminalMount] = []
-        for mount in cast(list[JsonDocument], node.get("terminals", [])):
-            boresight = mount.get("boresight")
-            terminal_mounts.append(
-                BuilderVisualTerminalMount(
-                    mount_id=cast(str, mount.get("id", "")),
-                    role=cast(Any, mount.get("role")),
-                    terminal_ref=cast(Any, mount.get("terminal")),
-                    count=cast(Any, mount.get("count")),
-                    boresight=(
-                        BuilderVisualSpaceBoresight.model_validate(boresight)
-                        if isinstance(boresight, dict)
-                        else None
-                    ),
-                )
-            )
-        node_draft = BuilderVisualNode(
-            id=cast(str, node.get("id", "")),
-            display_name=cast(str, node.get("display_name", "")),
-            forwarding=cast(Any, node.get("forwarding")),
-            profile=cast(Any, node.get("profile")),
-            ethernet=tuple(
-                cast(str, item.get("id", ""))
-                for item in cast(list[JsonDocument], node.get("ethernet", []))
-            ),
-            terminals=tuple(terminal_mounts),
-        )
     planes = cast(JsonDocument, constellation.get("planes", {}))
     phasing = cast(JsonDocument, constellation.get("phasing", {}))
     return BuilderVisualSpaceDraft(
@@ -1403,8 +1187,7 @@ def _authored_space_projection(
         display_name=cast(
             str, constellation.get("display_name", segment.display_name or segment.id)
         ),
-        node_ref=None if node_draft is not None else CatalogRef(node_ref),
-        node_draft=node_draft,
+        node_ref=CatalogRef(node_ref),
         orbit=BuilderVisualOrbit(
             central_body=cast(Any, orbit.get("central_body")),
             shape_kind=shape_kind,
@@ -1435,49 +1218,77 @@ def _authored_space_projection(
     )
 
 
-def _authored_site_projection(document: JsonDocument) -> BuilderVisualSite | None:
-    site = document.get("site")
-    if not isinstance(site, dict):
-        return None
+def _stamp_from_site(site: JsonDocument | None) -> BuilderVisualGroundStamp:
+    """The ground stamp a session-proposed site was minted with: its first node's
+    model, installed counts and boresights, and its body."""
+    if site is None:
+        return BuilderVisualGroundStamp(boresights={}, body=DEFAULT_BODY_REF)
     frame = site.get("frame")
     body_fixed = frame.get("body_fixed") if isinstance(frame, dict) else None
-    location = site.get("location")
-    if not isinstance(body_fixed, dict) or not isinstance(location, dict):
-        return None
-    nodes: list[BuilderVisualSiteNode] = []
-    for raw_node in cast(list[JsonDocument], site.get("nodes", [])):
-        terminals = raw_node.get("terminals")
-        interfaces = raw_node.get("interfaces")
-        if not isinstance(terminals, dict) or not isinstance(interfaces, dict):
-            return None
-        installed: dict[str, int] = {}
-        boresights: dict[str, BuilderVisualGroundBoresight] = {}
-        for mount_id, raw_installation in terminals.items():
-            if not isinstance(raw_installation, dict):
-                return None
-            installed[mount_id] = cast(int, raw_installation.get("installed_count", 0))
-            capabilities = raw_installation.get("capabilities")
-            boresight = capabilities.get("boresight") if isinstance(capabilities, dict) else None
-            if isinstance(boresight, dict):
-                boresights[mount_id] = BuilderVisualGroundBoresight.model_validate(boresight)
-        nodes.append(
-            BuilderVisualSiteNode(
-                node_id=cast(str, raw_node.get("id", "")),
-                node_ref=cast(Any, raw_node.get("node")),
-                installed=installed,
-                boresights=boresights,
-            )
-        )
-    return BuilderVisualSite(
-        site_id=cast(str, site.get("id", "")),
-        display_name=cast(str, site.get("display_name", "")),
-        body=cast(Any, body_fixed.get("body")),
-        lat_deg=cast(Any, location.get("lat_deg")),
-        lon_deg=cast(Any, location.get("lon_deg")),
-        alt_m=cast(Any, location.get("alt_m")),
-        tags=tuple(cast(list[str], site.get("tags", []))),
-        nodes=tuple(nodes),
+    body = body_fixed.get("body") if isinstance(body_fixed, dict) else None
+    nodes = site.get("nodes")
+    first = nodes[0] if isinstance(nodes, list) and nodes and isinstance(nodes[0], dict) else {}
+    installed: dict[str, int] = {}
+    boresights: dict[str, BuilderVisualGroundBoresight] = {}
+    terminals = first.get("terminals")
+    for mount_id, installation in terminals.items() if isinstance(terminals, dict) else ():
+        if not isinstance(installation, dict):
+            continue
+        installed[mount_id] = cast(int, installation.get("installed_count", 0))
+        capabilities = installation.get("capabilities")
+        boresight = capabilities.get("boresight") if isinstance(capabilities, dict) else None
+        if isinstance(boresight, dict):
+            boresights[mount_id] = BuilderVisualGroundBoresight.model_validate(boresight)
+    return BuilderVisualGroundStamp(
+        node_ref=cast(Any, first.get("node")),
+        installed=installed,
+        boresights=boresights,
+        body=cast(Any, body) if isinstance(body, str) else DEFAULT_BODY_REF,
     )
+
+
+def _minted_site(
+    site_id: str,
+    *,
+    display_name: str,
+    stamp: BuilderVisualGroundStamp,
+    lat_deg: float,
+    lon_deg: float,
+    alt_m: float,
+) -> JsonDocument:
+    """A complete site document from one typed location and the ground stamp."""
+    return {
+        "site": {
+            "id": site_id,
+            "display_name": display_name,
+            "ethernet": [{"id": "lan0"}],
+            "nodes": [
+                {
+                    "id": "gw1",
+                    "node": str(stamp.node_ref),
+                    "payloads": {},
+                    "terminals": {
+                        mount: {
+                            "installed_count": count,
+                            **(
+                                {
+                                    "capabilities": {
+                                        "boresight": stamp.boresights[mount].model_dump(mode="json")
+                                    }
+                                }
+                                if mount in stamp.boresights
+                                else {}
+                            ),
+                        }
+                        for mount, count in stamp.installed.items()
+                    },
+                    "interfaces": {"terr0": "lan0"},
+                }
+            ],
+            "frame": {"body_fixed": {"body": str(stamp.body)}},
+            "location": {"lat_deg": lat_deg, "lon_deg": lon_deg, "alt_m": alt_m},
+        }
+    }
 
 
 def _authored_ground_projection(
@@ -1515,19 +1326,25 @@ def _authored_ground_projection(
     members: list[BuilderVisualGroundMember] = []
     for index, raw_ref in enumerate(cast(list[str], site_set.get("sites", []))):
         ref = SiteRef(raw_ref)
-        site = _authored_site_projection(proposals.get(ref, {})) if ref in generated_refs else None
-        site_id = site.site_id if site is not None else ref.relative_path.stem
+        proposed = (
+            cast(JsonDocument, proposals[ref]["site"])
+            if ref in generated_refs and isinstance(proposals.get(ref, {}).get("site"), dict)
+            else None
+        )
+        site_id = (
+            cast(str, proposed.get("id", "")) if proposed is not None else ref.relative_path.stem
+        )
         previous = prior_members_by_ref.get(ref) or prior_members_by_site.get(site_id)
         fact = catalog_facts.get(ref)
         members.append(
             BuilderVisualGroundMember(
                 member_id=previous.member_id if previous is not None else f"member-{index + 1}",
-                kind="draft" if site is not None else "ref",
-                ref=None if site is not None else ref,
+                kind="draft" if proposed is not None else "ref",
+                ref=ref,
                 site_id=site_id,
                 label=(
-                    site.display_name
-                    if site is not None
+                    cast(str, proposed.get("display_name", site_id))
+                    if proposed is not None
                     else fact.label
                     if fact is not None
                     else previous.label
@@ -1536,12 +1353,11 @@ def _authored_ground_projection(
                 ),
                 summary=(
                     fact.summary
-                    if site is None and fact is not None
+                    if proposed is None and fact is not None
                     else previous.summary
-                    if site is None and previous is not None
+                    if proposed is None and previous is not None
                     else None
                 ),
-                site=site,
                 scheduling_override=cast(JsonDocument | None, overrides.get(site_id)),
             )
         )
@@ -1555,18 +1371,15 @@ def _authored_ground_projection(
         if segment.apply is not None and segment.apply.originated_prefixes is not None
         else None
     )
-    first_site = next((member.site for member in members if member.site is not None), None)
-    first_node = first_site.nodes[0] if first_site is not None and first_site.nodes else None
-    stamp = (
-        prior.stamp
-        if prior is not None
-        else BuilderVisualGroundStamp(
-            node_ref=first_node.node_ref if first_node is not None else None,
-            installed=first_node.installed if first_node is not None else {},
-            boresights=first_node.boresights if first_node is not None else {},
-            body=first_site.body if first_site is not None else DEFAULT_BODY_REF,
-        )
+    first_site = next(
+        (
+            cast(JsonDocument, proposals[member.ref]["site"])
+            for member in members
+            if member.kind == "draft" and member.ref is not None
+        ),
+        None,
     )
+    stamp = prior.stamp if prior is not None else _stamp_from_site(first_site)
     return BuilderVisualGroundDraft(
         segment_id=segment.id,
         display_name=segment.display_name or cast(str, site_set.get("display_name", segment.id)),
@@ -2166,24 +1979,13 @@ def _assemble_authoring_workspace(
             ),
             path=f"{path}.orbit",
         )
-        node_ref: CatalogRef | None
-        if space.node_draft is not None:
-            node_id, node_document = _node_document(
-                assembly,
-                space.node_draft,
-                path=f"{path}.node_draft",
-                fallback_id=f"node-{index + 1}",
+        node_ref = CatalogRef(space.node_ref) if space.node_ref is not None else None
+        if node_ref is None:
+            assembly.issue(
+                "builder.draft.space_node_required",
+                "Generated space segments require a node reference",
+                f"{path}.node_ref",
             )
-            node_ref = assembly.component_ref("nodes", node_id)
-            assembly.propose(node_ref, node_document, path=f"{path}.node_draft")
-        else:
-            node_ref = CatalogRef(space.node_ref) if space.node_ref is not None else None
-            if node_ref is None:
-                assembly.issue(
-                    "builder.draft.space_node_required",
-                    "Generated space segments require a node reference or node draft",
-                    f"{path}.node_ref",
-                )
         for field_name, value in (
             ("display_name", space.display_name),
             ("planes", space.planes),
@@ -2267,32 +2069,20 @@ def _assemble_authoring_workspace(
         overrides: list[JsonValue] = []
         for member_index, member in enumerate(ground.members):
             member_path = f"{path}.members.{member_index}"
-            if member.kind == "ref":
-                if member.ref is None:
-                    assembly.issue(
-                        "builder.draft.ground_member_ref_required",
-                        "Referenced ground members require a site reference",
-                        f"{member_path}.ref",
-                    )
-                    site_refs.append(None)
-                else:
-                    site_refs.append(str(member.ref))
-                site_id = assembly.required_identifier(
-                    member.site_id,
-                    path=f"{member_path}.site_id",
-                    fallback=f"site-{member_index + 1}",
+            if member.ref is None:
+                assembly.issue(
+                    "builder.draft.ground_member_ref_required",
+                    "Ground members require a site reference",
+                    f"{member_path}.ref",
                 )
+                site_refs.append(None)
             else:
-                site_id, site_document = _site_document(
-                    assembly,
-                    member.site,
-                    member=member,
-                    path=member_path,
-                    fallback_id=f"site-{member_index + 1}",
-                )
-                site_ref = assembly.component_ref("sites", site_id)
-                assembly.propose(site_ref, site_document, path=member_path)
-                site_refs.append(str(site_ref))
+                site_refs.append(str(member.ref))
+            site_id = assembly.required_identifier(
+                member.site_id,
+                path=f"{member_path}.site_id",
+                fallback=f"site-{member_index + 1}",
+            )
             if member.scheduling_override is not None:
                 overrides.append(
                     {
@@ -2357,15 +2147,20 @@ def _assemble_authoring_workspace(
         space.orbit.central_body is not None and space.orbit.central_body != DEFAULT_BODY_REF
         for space in workspace.space
     ) or any(
-        member.site is not None
-        and member.site.body is not None
-        and member.site.body != DEFAULT_BODY_REF
+        _stamp_from_site(_proposed_site(assembly, member)).body != DEFAULT_BODY_REF
         for ground in workspace.ground
         for member in ground.members
+        if member.kind == "draft"
     )
     if uses_non_earth:
         session["ephemeris"] = deepcopy(_DE440S_EPHEMERIS)
     return session, tuple(assembly.proposals.values()), tuple(assembly.issues)
+
+
+def _proposed_site(assembly: _Assembly, member: BuilderVisualGroundMember) -> JsonDocument | None:
+    proposal = assembly.proposals.get(member.ref) if member.ref is not None else None
+    site = proposal.document.get("site") if proposal is not None else None
+    return cast(JsonDocument, site) if isinstance(site, dict) else None
 
 
 def _set_optional_field(document: JsonDocument, key: str, value: JsonValue | None) -> None:
@@ -4520,188 +4315,6 @@ class BuilderVisualDraftService:
             workspace = workspace.model_copy(update={"space": tuple(spaces)})
             affected_kind = "space"
             affected_id = command.segment_id
-        elif isinstance(command, BuilderVisualAuthorInlineSpaceNodeCommand):
-            matches = [
-                (index, space)
-                for index, space in enumerate(workspace.space)
-                if space.segment_id == command.segment_id
-            ]
-            if len(matches) != 1:
-                raise self._command_error(
-                    draft,
-                    f"Authored space segment {command.segment_id!r} was not found exactly once",
-                    code="catalog_authoring.invalid_graph",
-                )
-            space_index, space = matches[0]
-            if space.node_draft is not None:
-                raise self._command_error(
-                    draft,
-                    f"Authored space segment {command.segment_id!r} already has an inline node",
-                    code="catalog_authoring.invalid_patch",
-                )
-            node_ids = {
-                candidate.node_draft.id
-                for candidate in workspace.space
-                if candidate.node_draft is not None
-            }
-            node_id = f"{command.segment_id}-node"
-            suffix = 2
-            while node_id in node_ids:
-                node_id = f"{command.segment_id}-node-{suffix}"
-                suffix += 1
-            spaces = list(workspace.space)
-            spaces[space_index] = space.model_copy(
-                update={
-                    "node_draft": BuilderVisualNode(
-                        id=node_id,
-                        display_name=f"{space.display_name or command.segment_id} node",
-                        forwarding=None,
-                    )
-                }
-            )
-            workspace = workspace.model_copy(update={"space": tuple(spaces)})
-            affected_kind = "space"
-            affected_id = command.segment_id
-        elif isinstance(command, BuilderVisualAddOrIncrementNodeTerminalCommand):
-            matches = [
-                (index, space)
-                for index, space in enumerate(workspace.space)
-                if space.segment_id == command.segment_id
-            ]
-            if len(matches) != 1 or matches[0][1].node_draft is None:
-                raise self._command_error(
-                    draft,
-                    f"Authored inline node for {command.segment_id!r} was not found exactly once",
-                    code="catalog_authoring.invalid_graph",
-                )
-            self._assert_terminal_ref(draft, snapshot, command.terminal_ref)
-            space_index, space = matches[0]
-            assert space.node_draft is not None
-            terminals = list(space.node_draft.terminals)
-            existing_index = next(
-                (
-                    index
-                    for index, mount in enumerate(terminals)
-                    if mount.terminal_ref == command.terminal_ref and mount.role == command.role
-                ),
-                None,
-            )
-            if existing_index is not None:
-                existing = terminals[existing_index]
-                terminals[existing_index] = existing.model_copy(
-                    update={
-                        "count": (existing.count or DEFAULT_TERMINAL_MOUNT_COUNT) + 1,
-                    }
-                )
-            else:
-                mount_ids = {mount.mount_id for mount in terminals}
-                mount_index = 0
-                mount_id = f"{command.role}_{mount_index}"
-                while mount_id in mount_ids:
-                    mount_index += 1
-                    mount_id = f"{command.role}_{mount_index}"
-                terminals.append(
-                    BuilderVisualTerminalMount(
-                        mount_id=mount_id,
-                        role=command.role,
-                        terminal_ref=command.terminal_ref,
-                        count=DEFAULT_TERMINAL_MOUNT_COUNT,
-                        boresight=(
-                            BuilderVisualSpaceBoresight(mode="nadir")
-                            if command.role == "access"
-                            else None
-                        ),
-                    )
-                )
-            spaces = list(workspace.space)
-            spaces[space_index] = space.model_copy(
-                update={
-                    "node_draft": space.node_draft.model_copy(
-                        update={"terminals": tuple(terminals)}
-                    )
-                }
-            )
-            workspace = workspace.model_copy(update={"space": tuple(spaces)})
-            affected_kind = "space"
-            affected_id = command.segment_id
-        elif isinstance(command, BuilderVisualSetNodeTerminalRoleCommand):
-            matches = [
-                (index, space)
-                for index, space in enumerate(workspace.space)
-                if space.segment_id == command.segment_id
-            ]
-            if len(matches) != 1 or matches[0][1].node_draft is None:
-                raise self._command_error(
-                    draft,
-                    f"Authored inline node for {command.segment_id!r} was not found exactly once",
-                    code="catalog_authoring.invalid_graph",
-                )
-            space_index, space = matches[0]
-            assert space.node_draft is not None
-            mount_matches = [
-                (index, mount)
-                for index, mount in enumerate(space.node_draft.terminals)
-                if mount.mount_id == command.mount_id
-            ]
-            if len(mount_matches) != 1:
-                raise self._command_error(
-                    draft,
-                    f"Terminal mount {command.mount_id!r} was not found exactly once",
-                    code="catalog_authoring.invalid_graph",
-                )
-            mount_index, mount = mount_matches[0]
-            terminals = list(space.node_draft.terminals)
-            terminals[mount_index] = mount.model_copy(
-                update={
-                    "role": command.role,
-                    "boresight": (
-                        BuilderVisualSpaceBoresight(mode="nadir")
-                        if command.role == "access"
-                        else None
-                    ),
-                }
-            )
-            spaces = list(workspace.space)
-            spaces[space_index] = space.model_copy(
-                update={
-                    "node_draft": space.node_draft.model_copy(
-                        update={"terminals": tuple(terminals)}
-                    )
-                }
-            )
-            workspace = workspace.model_copy(update={"space": tuple(spaces)})
-            affected_kind = "space"
-            affected_id = command.segment_id
-        elif isinstance(command, BuilderVisualAddNodeEthernetPortCommand):
-            matches = [
-                (index, space)
-                for index, space in enumerate(workspace.space)
-                if space.segment_id == command.segment_id
-            ]
-            if len(matches) != 1 or matches[0][1].node_draft is None:
-                raise self._command_error(
-                    draft,
-                    f"Authored inline node for {command.segment_id!r} was not found exactly once",
-                    code="catalog_authoring.invalid_graph",
-                )
-            space_index, space = matches[0]
-            assert space.node_draft is not None
-            ethernet = list(space.node_draft.ethernet)
-            port_index = 0
-            port_id = f"terr{port_index}"
-            while port_id in ethernet:
-                port_index += 1
-                port_id = f"terr{port_index}"
-            ethernet.append(port_id)
-            spaces = list(workspace.space)
-            spaces[space_index] = space.model_copy(
-                update={
-                    "node_draft": space.node_draft.model_copy(update={"ethernet": tuple(ethernet)})
-                }
-            )
-            workspace = workspace.model_copy(update={"space": tuple(spaces)})
-            affected_kind = "space"
-            affected_id = command.segment_id
         elif isinstance(command, BuilderVisualAddGroundCommand):
             ground = self._new_ground_draft(
                 draft,
@@ -4815,134 +4428,6 @@ class BuilderVisualDraftService:
             workspace = workspace.model_copy(update={"ground": tuple(grounds)})
             affected_kind = "ground"
             affected_id = command.segment_id
-        elif isinstance(command, BuilderVisualSetGroundSiteNodeCommand):
-            matches = [
-                (index, ground)
-                for index, ground in enumerate(workspace.ground)
-                if ground.segment_id == command.segment_id
-            ]
-            if len(matches) != 1:
-                raise self._command_error(
-                    draft,
-                    f"Authored ground segment {command.segment_id!r} was not found exactly once",
-                    code="catalog_authoring.invalid_graph",
-                )
-            ground_index, ground = matches[0]
-            member_matches = [
-                (index, member)
-                for index, member in enumerate(ground.members)
-                if member.member_id == command.member_id
-            ]
-            if len(member_matches) != 1 or member_matches[0][1].site is None:
-                raise self._command_error(
-                    draft,
-                    f"Authored ground member {command.member_id!r} was not found exactly once",
-                    code="catalog_authoring.invalid_graph",
-                )
-            member_index, member = member_matches[0]
-            assert member.site is not None
-            node_matches = [
-                (index, node)
-                for index, node in enumerate(member.site.nodes)
-                if node.node_id == command.node_id
-            ]
-            if len(node_matches) != 1:
-                raise self._command_error(
-                    draft,
-                    f"Site node {command.node_id!r} was not found exactly once",
-                    code="catalog_authoring.invalid_graph",
-                )
-            node_index, node = node_matches[0]
-            node_ref = self._node_ref_for_command(
-                draft,
-                snapshot,
-                command.node_ref,
-                placement="ground",
-            )
-            installed, boresights = self._ground_installation_facts(
-                draft,
-                snapshot,
-                node_ref,
-            )
-            nodes = list(member.site.nodes)
-            nodes[node_index] = node.model_copy(
-                update={
-                    "node_ref": node_ref,
-                    "installed": installed,
-                    "boresights": boresights,
-                }
-            )
-            members = list(ground.members)
-            members[member_index] = member.model_copy(
-                update={"site": member.site.model_copy(update={"nodes": tuple(nodes)})}
-            )
-            grounds = list(workspace.ground)
-            grounds[ground_index] = ground.model_copy(update={"members": tuple(members)})
-            workspace = workspace.model_copy(update={"ground": tuple(grounds)})
-            affected_kind = "ground_member"
-            affected_id = command.member_id
-        elif isinstance(command, BuilderVisualAddGroundSiteNodeCommand):
-            matches = [
-                (index, ground)
-                for index, ground in enumerate(workspace.ground)
-                if ground.segment_id == command.segment_id
-            ]
-            if len(matches) != 1:
-                raise self._command_error(
-                    draft,
-                    f"Authored ground segment {command.segment_id!r} was not found exactly once",
-                    code="catalog_authoring.invalid_graph",
-                )
-            ground_index, ground = matches[0]
-            member_matches = [
-                (index, member)
-                for index, member in enumerate(ground.members)
-                if member.member_id == command.member_id
-            ]
-            if len(member_matches) != 1 or member_matches[0][1].site is None:
-                raise self._command_error(
-                    draft,
-                    f"Authored ground member {command.member_id!r} was not found exactly once",
-                    code="catalog_authoring.invalid_graph",
-                )
-            member_index, member = member_matches[0]
-            assert member.site is not None
-            source_ref = command.node_ref or (
-                member.site.nodes[0].node_ref if member.site.nodes else None
-            )
-            node_ref = self._node_ref_for_command(
-                draft,
-                snapshot,
-                source_ref,
-                placement="ground",
-            )
-            installed, boresights = self._ground_installation_facts(
-                draft,
-                snapshot,
-                node_ref,
-            )
-            node_ids = {node.node_id for node in member.site.nodes}
-            node_number = 1
-            while f"gw{node_number}" in node_ids:
-                node_number += 1
-            nodes_with_added = (
-                *member.site.nodes,
-                BuilderVisualSiteNode(
-                    node_id=f"gw{node_number}",
-                    node_ref=node_ref,
-                    installed=installed,
-                    boresights=boresights,
-                ),
-            )
-            members = list(ground.members)
-            members[member_index] = member.model_copy(
-                update={"site": member.site.model_copy(update={"nodes": nodes_with_added})}
-            )
-            grounds = list(workspace.ground)
-            grounds[ground_index] = ground.model_copy(update={"members": tuple(members)})
-            workspace = workspace.model_copy(update={"ground": tuple(grounds)})
-            affected_kind = "ground_member"
-            affected_id = command.member_id
         elif isinstance(command, BuilderVisualMintGroundMembersCommand):
             matches = [
                 (index, ground)
@@ -4969,7 +4454,11 @@ class BuilderVisualDraftService:
             site_ids = {
                 member.site_id for candidate in workspace.ground for member in candidate.members
             }
+            # Each minted site is a complete document the session proposes; its
+            # member lists it by reference, and the site is edited as that document.
+            owner = _proposal_owner(draft.target_ref)
             minted: list[BuilderVisualGroundMember] = []
+            minted_sites: list[BuilderProposedCatalogDocument] = []
             for site_intent in command.sites:
                 member_number = _next_number("member", member_ids)
                 member_id = f"member-{member_number}"
@@ -4977,31 +4466,33 @@ class BuilderVisualDraftService:
                 site_number = _next_number("site", site_ids)
                 site_id = f"site-{site_number}"
                 site_ids.add(site_id)
-                site = BuilderVisualSite(
-                    site_id=site_id,
-                    display_name=site_intent.name,
-                    body=ground.stamp.body,
-                    lat_deg=site_intent.lat_deg,
-                    lon_deg=site_intent.lon_deg,
-                    alt_m=site_intent.alt_m,
-                    nodes=(
-                        BuilderVisualSiteNode(
-                            node_id="gw1",
-                            node_ref=ground.stamp.node_ref,
-                            installed=dict(ground.stamp.installed),
-                            boresights=dict(ground.stamp.boresights),
+                site_ref = SiteRef(str(_owned_component_ref("sites", owner, site_id)))
+                minted_sites.append(
+                    BuilderProposedCatalogDocument(
+                        ref=site_ref,
+                        document=_minted_site(
+                            site_id,
+                            display_name=site_intent.name,
+                            stamp=ground.stamp,
+                            lat_deg=site_intent.lat_deg,
+                            lon_deg=site_intent.lon_deg,
+                            alt_m=site_intent.alt_m,
                         ),
-                    ),
+                        origin="generated",
+                    )
                 )
                 minted.append(
                     BuilderVisualGroundMember(
                         member_id=member_id,
                         kind="draft",
+                        ref=site_ref,
                         site_id=site_id,
                         label=site_intent.name,
-                        site=site,
                     )
                 )
+            draft = draft.model_copy(
+                update={"catalog_documents": (*draft.catalog_documents, *minted_sites)}
+            )
             grounds = list(workspace.ground)
             grounds[ground_index] = ground.model_copy(
                 update={"members": (*ground.members, *minted)}
@@ -5142,6 +4633,12 @@ class BuilderVisualDraftService:
             for index, placed in enumerate(draft.authoring_workspace.ground_refs)
             if placed.segment_id == request.segment_id
         )
+        # A generated constellation is the session's own; its catalog root is its node.
+        matches.extend(
+            ("generated_space", index, generated.node_ref)
+            for index, generated in enumerate(draft.authoring_workspace.space)
+            if generated.segment_id == request.segment_id
+        )
         if len(matches) != 1:
             return refuse(
                 "builder.draft.customize_segment_not_unique",
@@ -5238,7 +4735,15 @@ class BuilderVisualDraftService:
             )
 
         root_target = targets[0]
-        if kind == "space":
+        if kind == "generated_space":
+            generated_spaces = list(draft.authoring_workspace.space)
+            generated_spaces[selected_index] = generated_spaces[selected_index].model_copy(
+                update={"node_ref": root_target}
+            )
+            workspace = draft.authoring_workspace.model_copy(
+                update={"space": tuple(generated_spaces)}
+            )
+        elif kind == "space":
             space_refs = list(draft.authoring_workspace.space_refs)
             space_refs[selected_index] = space_refs[selected_index].model_copy(
                 update={"source_ref": root_target}

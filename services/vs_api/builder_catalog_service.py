@@ -79,7 +79,6 @@ from nodalarc.models.builder_catalog_api import (
 )
 from nodalarc.models.builder_visual_api import (
     BuilderVisualGroundBoresight,
-    BuilderVisualSpaceBoresight,
 )
 from nodalarc.models.segment_session import LINK_STATE_PROTOCOLS
 from nodalarc.runtime_support import RuntimeSupport
@@ -594,7 +593,6 @@ class BuilderCatalogAuthoringService:
                 single_plane_phasing_mode=SINGLE_PLANE_PHASING_MODE,
                 default_mount_role=DEFAULT_MOUNT_ROLE,
                 default_body_ref=DEFAULT_BODY_REF,
-                space_access_boresight=BuilderVisualSpaceBoresight(mode="nadir"),
                 ground_access_boresight=BuilderVisualGroundBoresight(mode="local_vertical"),
                 mount_roles=tuple(
                     BuilderVisualMountRoleMetadata(

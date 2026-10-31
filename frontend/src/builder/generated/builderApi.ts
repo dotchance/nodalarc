@@ -548,14 +548,6 @@ export interface BuilderVisualAddGroundCommand {
   readonly body_ref?: string | null;
 }
 
-/** Add one backend-seeded node installation to an authored site. */
-export interface BuilderVisualAddGroundSiteNodeCommand {
-  readonly operation: "add_ground_site_node";
-  readonly segment_id: string;
-  readonly member_id: string;
-  readonly node_ref?: string | null;
-}
-
 /** Place one existing site, creating its authored ground segment when needed. */
 export interface BuilderVisualAddGroundSiteReferenceCommand {
   readonly operation: "add_ground_site_reference";
@@ -563,29 +555,9 @@ export interface BuilderVisualAddGroundSiteReferenceCommand {
   readonly site_ref: string;
 }
 
-/** Add one uniquely identified Ethernet port to an authored inline node. */
-export interface BuilderVisualAddNodeEthernetPortCommand {
-  readonly operation: "add_node_ethernet_port";
-  readonly segment_id: string;
-}
-
-/** Mount a selected terminal or increment the matching backend-owned mount. */
-export interface BuilderVisualAddOrIncrementNodeTerminalCommand {
-  readonly operation: "add_or_increment_node_terminal";
-  readonly segment_id: string;
-  readonly terminal_ref: string;
-  readonly role: MountRole;
-}
-
 /** Add one backend-seeded routing domain over uncovered segments. */
 export interface BuilderVisualAddRoutingDomainCommand {
   readonly operation: "add_routing_domain";
-}
-
-/** Create one backend-seeded inline node for an authored space segment. */
-export interface BuilderVisualAuthorInlineSpaceNodeCommand {
-  readonly operation: "author_inline_space_node";
-  readonly segment_id: string;
 }
 
 /** Backend-owned choices and seeds used by the visual authoring surface. */
@@ -594,7 +566,6 @@ export interface BuilderVisualAuthoringFacts {
   readonly single_plane_phasing_mode: BuilderVisualPhasingMode;
   readonly default_mount_role: MountRole;
   readonly default_body_ref: string;
-  readonly space_access_boresight: BuilderVisualSpaceBoresight;
   readonly ground_access_boresight: BuilderVisualGroundBoresight;
   readonly mount_roles: ReadonlyArray<BuilderVisualMountRoleMetadata>;
   readonly link_media: ReadonlyArray<BuilderVisualLinkMediumMetadata>;
@@ -714,13 +685,13 @@ export interface BuilderVisualDraftAssemblyResult {
 }
 
 /**  */
-export type BuilderVisualDraftCommandOperation = "place_space_reference" | "place_ground_reference" | "add_generated_space" | "set_space_population" | "author_inline_space_node" | "add_or_increment_node_terminal" | "set_node_terminal_role" | "add_node_ethernet_port" | "add_ground" | "add_ground_site_reference" | "set_ground_stamp_node" | "set_ground_site_node" | "add_ground_site_node" | "mint_ground_members" | "add_routing_domain" | "add_boundary" | "connect_segments" | "rederive_link" | "set_scheduling_preset";
+export type BuilderVisualDraftCommandOperation = "place_space_reference" | "place_ground_reference" | "add_generated_space" | "set_space_population" | "add_ground" | "add_ground_site_reference" | "set_ground_stamp_node" | "mint_ground_members" | "add_routing_domain" | "add_boundary" | "connect_segments" | "rederive_link" | "set_scheduling_preset";
 
 /** Apply one typed command to an exact visual-draft revision. ``pending_edits`` are the edits not yet accepted. A command mints no id they define or reference. */
 export interface BuilderVisualDraftCommandRequest {
   readonly draft: BuilderVisualDraftEnvelope;
   readonly expected_draft_revision: number;
-  readonly command: BuilderVisualPlaceSpaceReferenceCommand | BuilderVisualPlaceGroundReferenceCommand | BuilderVisualAddGeneratedSpaceCommand | BuilderVisualSetSpacePopulationCommand | BuilderVisualAuthorInlineSpaceNodeCommand | BuilderVisualAddOrIncrementNodeTerminalCommand | BuilderVisualSetNodeTerminalRoleCommand | BuilderVisualAddNodeEthernetPortCommand | BuilderVisualAddGroundCommand | BuilderVisualAddGroundSiteReferenceCommand | BuilderVisualSetGroundStampNodeCommand | BuilderVisualSetGroundSiteNodeCommand | BuilderVisualAddGroundSiteNodeCommand | BuilderVisualMintGroundMembersCommand | BuilderVisualAddRoutingDomainCommand | BuilderVisualAddBoundaryCommand | BuilderVisualConnectSegmentsCommand | BuilderVisualRederiveLinkCommand | BuilderVisualSetSchedulingPresetCommand;
+  readonly command: BuilderVisualPlaceSpaceReferenceCommand | BuilderVisualPlaceGroundReferenceCommand | BuilderVisualAddGeneratedSpaceCommand | BuilderVisualSetSpacePopulationCommand | BuilderVisualAddGroundCommand | BuilderVisualAddGroundSiteReferenceCommand | BuilderVisualSetGroundStampNodeCommand | BuilderVisualMintGroundMembersCommand | BuilderVisualAddRoutingDomainCommand | BuilderVisualAddBoundaryCommand | BuilderVisualConnectSegmentsCommand | BuilderVisualRederiveLinkCommand | BuilderVisualSetSchedulingPresetCommand;
   readonly pending_edits?: ReadonlyArray<BuilderContentEdit | BuilderListEdit>;
 }
 
@@ -805,7 +776,7 @@ export interface BuilderVisualGroundDraft {
   readonly tags?: ReadonlyArray<string>;
 }
 
-/** Referenced or authored member of an editable ground site set. */
+/** One site of an editable ground site set, by reference: a catalog site, or a site the session proposes (``draft``), edited as that proposed document. */
 export interface BuilderVisualGroundMember {
   readonly member_id?: string;
   readonly kind: "ref" | "draft";
@@ -813,7 +784,6 @@ export interface BuilderVisualGroundMember {
   readonly site_id?: string;
   readonly label?: string;
   readonly summary?: string | null;
-  readonly site?: BuilderVisualSite | null;
   readonly scheduling_override?: Readonly<Record<string, JsonValue>> | null;
 }
 
@@ -892,16 +862,6 @@ export interface BuilderVisualMountRoleMetadata {
   readonly id: MountRole;
   readonly label: string;
   readonly description: string;
-}
-
-/** Editable node object nested in a generated space component. */
-export interface BuilderVisualNode {
-  readonly id?: string;
-  readonly display_name?: string;
-  readonly forwarding?: ForwardingClass | null;
-  readonly profile?: string | null;
-  readonly ethernet?: ReadonlyArray<string>;
-  readonly terminals?: ReadonlyArray<BuilderVisualTerminalMount>;
 }
 
 /** A field-editor batch over the tree an earlier object edit answered. */
@@ -1055,28 +1015,11 @@ export interface BuilderVisualSessionListing {
   readonly boundaries: ReadonlyArray<BuilderVisualRoutingBoundaryListing>;
 }
 
-/** Select one authored site's node model and derive its installed inventory. */
-export interface BuilderVisualSetGroundSiteNodeCommand {
-  readonly operation: "set_ground_site_node";
-  readonly segment_id: string;
-  readonly member_id: string;
-  readonly node_id: string;
-  readonly node_ref: string;
-}
-
 /** Select a ground stamp node and derive its installed terminal inventory. */
 export interface BuilderVisualSetGroundStampNodeCommand {
   readonly operation: "set_ground_stamp_node";
   readonly segment_id: string;
   readonly node_ref: string;
-}
-
-/** Change one inline-node mount role with backend-owned pointing semantics. */
-export interface BuilderVisualSetNodeTerminalRoleCommand {
-  readonly operation: "set_node_terminal_role";
-  readonly segment_id: string;
-  readonly mount_id: string;
-  readonly role: MountRole;
 }
 
 /** Apply one complete backend-owned scheduling block or inherit at a site. */
@@ -1096,37 +1039,11 @@ export interface BuilderVisualSetSpacePopulationCommand {
   readonly slots_per_plane?: number | null;
 }
 
-/** Editable complete site object. */
-export interface BuilderVisualSite {
-  readonly site_id?: string;
-  readonly display_name?: string;
-  readonly body?: string | null;
-  readonly lat_deg?: number | null;
-  readonly lon_deg?: number | null;
-  readonly alt_m?: number | null;
-  readonly tags?: ReadonlyArray<string>;
-  readonly nodes?: ReadonlyArray<BuilderVisualSiteNode>;
-}
-
-/** One installed node in an editable site object. */
-export interface BuilderVisualSiteNode {
-  readonly node_id?: string;
-  readonly node_ref?: string | null;
-  readonly installed?: Readonly<Record<string, number>>;
-  readonly boresights: Readonly<Record<string, BuilderVisualGroundBoresight>>;
-}
-
-/** Spacecraft access-terminal pointing authored into a node mount. */
-export interface BuilderVisualSpaceBoresight {
-  readonly mode: "nadir";
-}
-
 /** Editable generated space segment that becomes referenced catalog objects. */
 export interface BuilderVisualSpaceDraft {
   readonly segment_id?: string;
   readonly display_name?: string;
   readonly node_ref?: string | null;
-  readonly node_draft?: BuilderVisualNode | null;
   readonly orbit?: BuilderVisualOrbit;
   readonly planes?: number | null;
   readonly raan_spacing_deg?: number | null;
@@ -1140,15 +1057,6 @@ export interface BuilderVisualSpaceReference {
   readonly segment_id?: string;
   readonly source_ref?: string | null;
   readonly label?: string;
-}
-
-/** Editable terminal mount on a visual node draft. */
-export interface BuilderVisualTerminalMount {
-  readonly mount_id?: string;
-  readonly role?: MountRole | null;
-  readonly terminal_ref?: string | null;
-  readonly count?: number | null;
-  readonly boresight?: BuilderVisualSpaceBoresight | null;
 }
 
 /**  */

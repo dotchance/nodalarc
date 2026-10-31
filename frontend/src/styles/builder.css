@@ -668,13 +668,6 @@ button.builder-card-head:hover .builder-card-title {
   resize: vertical;
 }
 
-/* An authored member's SiteEditor, expanded in place under its row. */
-.builder-site-embedded {
-  margin: 0 var(--space-2) var(--space-2);
-  padding: var(--space-2);
-  border-left: 2px solid var(--border);
-}
-
 .builder-site-name svg {
   color: var(--accent-teal);
   flex: none;

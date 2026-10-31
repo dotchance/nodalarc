@@ -54,6 +54,7 @@ import { LibraryPanel } from "./LibraryPanel";
 import { LinkAndRoutingOutline } from "./LinkAndRoutingOutline";
 import { LinkRuleWindow } from "./LinkRuleEditor";
 import { CatalogDraftEditorWindow } from "./CatalogDraftEditorWindow";
+import { ProposalWindow } from "./ProposalWindow";
 import { OpenSessionPicker } from "./OpenSessionPicker";
 import { BoundaryListWindow, RoutingDomainWindow } from "./RoutingEditor";
 import { SessionEditor, timeRateSummary } from "./SessionEditor";
@@ -556,6 +557,8 @@ export function BuilderView({
     holdObjectCheck,
     applyPendingEdits,
     discardPendingEdit,
+    proposalSession,
+    stageProposalEdit,
     removeListMember,
     undo,
     prepareRetarget,
@@ -842,11 +845,29 @@ export function BuilderView({
   };
   // Every link rule, routing domain and boundary the accepted session
   // declares, as the backend lists them, with the pending edits laid over them.
+  /** The documents of one family the accepted session proposes, for the editors
+   *  that pick or open them. */
+  const proposedDocuments = (family: "nodes" | "sites") =>
+    (visualDraft?.catalog_documents ?? [])
+      .filter((proposal) => proposal.ref.startsWith(`user:${family}/`))
+      .map((proposal) => {
+        const body = proposal.document[family === "nodes" ? "node" : "site"];
+        const name =
+          body && typeof body === "object" && !Array.isArray(body)
+            ? (body as Readonly<Record<string, JsonValue>>).display_name
+            : undefined;
+        return {
+          ref: proposal.ref,
+          label: typeof name === "string" ? name : proposal.ref.slice(proposal.ref.lastIndexOf("/") + 1),
+        };
+      });
   const listed = useMemo(
     () =>
       listSessionObjects(
         assemblyResult?.listing ?? null,
-        [...pendingEdits.values()].map((pending) => pending.answer),
+        [...pendingEdits.values()].flatMap((pending) =>
+          pending.answer === null ? [] : [pending.answer],
+        ),
       ),
     [assemblyResult?.listing, pendingEdits],
   );
@@ -1032,7 +1053,7 @@ export function BuilderView({
     const outcome = pendingEditOutcomes.get(key);
     const [first] = [
       ...(outcome !== undefined && outcome.status !== "applied" ? outcome.issues : []),
-      ...pending.answer.issues,
+      ...(pending.answer?.issues ?? []),
     ];
     if (first === undefined) return [];
     const address = pending.edit.address;
@@ -1716,13 +1737,14 @@ export function BuilderView({
       "open-session",
       "source-yaml",
       "customize-chain",
+      "proposal",
       "catalog",
       "library",
     ].includes(target.kind);
     if (!workspace && !standalone) return null;
     if (
       !authoring &&
-      ["segment", "ground", "link", "domain", "boundaries", "library"].includes(
+      ["segment", "ground", "link", "domain", "boundaries", "library", "proposal"].includes(
         target.kind,
       )
     ) {
@@ -1804,34 +1826,23 @@ export function BuilderView({
               draft={draft}
               onUpdate={(update) => patchBuffer(key, applied, update)}
               onSetPopulation={setPopulation}
-              onAuthorInlineNode={() =>
-                applySpaceEditorCommand({
-                  operation: "author_inline_space_node",
+              proposedNodes={proposedDocuments("nodes")}
+              onEditNode={(ref) => openEditor({ kind: "proposal", ref })}
+              onCustomizeNode={async () => {
+                // Fork the node into a document the session proposes, as one
+                // accepted revision; the Node card then edits that document.
+                if (draft.node_ref === null) return;
+                refuseUnlessSettled();
+                const startedFrom = currentWorkspace();
+                const result = await customizeChain({
                   segment_id: draft.segment_id,
-                })
-              }
-              onAddNodeTerminal={(terminalRef, role) =>
-                applySpaceEditorCommand({
-                  operation: "add_or_increment_node_terminal",
-                  segment_id: draft.segment_id,
-                  terminal_ref: terminalRef,
-                  role,
-                })
-              }
-              onSetNodeTerminalRole={(mountId, role) =>
-                applySpaceEditorCommand({
-                  operation: "set_node_terminal_role",
-                  segment_id: draft.segment_id,
-                  mount_id: mountId,
-                  role,
-                })
-              }
-              onAddNodeEthernet={() =>
-                applySpaceEditorCommand({
-                  operation: "add_node_ethernet_port",
-                  segment_id: draft.segment_id,
-                })
-              }
+                  leaf_ref: draft.node_ref,
+                });
+                if (!result.applied) {
+                  throw new Error(result.issues.map((issue) => issue.message).join("; "));
+                }
+                adoptAccepted(result.draft, startedFrom);
+              }}
               onUpdateOrbit={(patch) =>
                 patchBuffer(key, applied, (d) => ({
                   ...d,
@@ -1905,22 +1916,7 @@ export function BuilderView({
                   node_ref: ref,
                 })
               }
-              onSetSiteNodeModel={(memberId, nodeId, ref) =>
-                applyGroundEditorCommand({
-                  operation: "set_ground_site_node",
-                  segment_id: draft.segment_id,
-                  member_id: memberId,
-                  node_id: nodeId,
-                  node_ref: ref,
-                })
-              }
-              onAddSiteNode={(memberId) =>
-                applyGroundEditorCommand({
-                  operation: "add_ground_site_node",
-                  segment_id: draft.segment_id,
-                  member_id: memberId,
-                })
-              }
+              onEditSite={(ref) => openEditor({ kind: "proposal", ref })}
               onSchedulingPreset={async (preset, memberId) => {
                 const result = await runWindowCommand(key, {
                   operation: "set_scheduling_preset",
@@ -2088,6 +2084,24 @@ export function BuilderView({
       }
       case "source-yaml": {
         return null;
+      }
+      case "proposal": {
+        const close = () => closeWindow(targetKey(target));
+        return {
+          title: `Proposed ${target.ref.slice(target.ref.lastIndexOf("/") + 1)}`,
+          content: (
+            <ProposalWindow
+              proposalRef={target.ref}
+              authoring={authoring!}
+              session={{
+                context: proposalSession,
+                onStage: (working) => stageProposalEdit(target.ref, working),
+              }}
+              onClose={close}
+            />
+          ),
+          close,
+        };
       }
       case "customize-chain": {
         const dependencyRefs =

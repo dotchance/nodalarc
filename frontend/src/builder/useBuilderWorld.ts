@@ -66,6 +66,7 @@ import type {
   BuilderVisualObjectEditResult,
   BuilderVisualWorkspace,
   CatalogDocumentSummary,
+  CatalogDraftSessionContext,
   CatalogFamily,
   CatalogSessionYamlImportResult,
   CatalogYamlImportFile,
@@ -498,11 +499,15 @@ export interface BuilderSessionSaveAdoption {
 
 /** Where a pending edit applies: a link rule or a routing domain by the id it
  *  had when the edit began, or the routing boundary list as a whole. */
-/** A session object a card edits: a link rule, a routing domain or the boundary list. */
-type PendingEditAddress = BuilderVisualObjectEditRequest["address"];
-type SessionObjectEdit = BuilderContentEdit & { readonly address: PendingEditAddress };
+/** What a pending edit addresses: a session object a card edits (a link rule, a
+ *  routing domain or the boundary list), or a document the session proposes,
+ *  which the component window edits. */
+type PendingEditAddress = BuilderContentEdit["address"];
+/** A session object a card edits. */
+type CardAddress = BuilderVisualObjectEditRequest["address"];
+type SessionObjectEdit = BuilderContentEdit & { readonly address: CardAddress };
 
-/** A created edit a card holds; the backend creates no card edit of a proposed document. */
+/** An edit a card holds; a proposed document's edit is the component window's. */
 function sessionObjectEdit(edit: BuilderContentEdit): SessionObjectEdit {
   if (edit.address.kind === "proposal") {
     throw new Error(`a card cannot hold the pending edit of ${edit.address.ref}`);
@@ -514,16 +519,36 @@ function sessionObjectEdit(edit: BuilderContentEdit): SessionObjectEdit {
  *  the edit as the backend applies it, beside the backend's latest answer for
  *  its working JSON. Nothing in it is accepted. */
 interface PendingObjectEdit {
-  readonly edit: SessionObjectEdit;
-  readonly answer: BuilderVisualObjectEditResult;
+  readonly edit: BuilderContentEdit;
+  /** The card's latest answer; null for a proposed document's edit. */
+  readonly answer: BuilderVisualObjectEditResult | null;
 }
 
 /** The key an address holds its pending edit under. */
 export function pendingEditKey(address: PendingEditAddress): string {
-  return address.kind === "member" ? `${address.list_pointer}/${address.id}` : address.pointer;
+  switch (address.kind) {
+    case "member":
+      return `${address.list_pointer}/${address.id}`;
+    case "whole_list":
+      return address.pointer;
+    case "proposal":
+      return `proposal:${address.ref}`;
+  }
 }
 
 const NO_PENDING_EDITS: ReadonlyMap<string, PendingObjectEdit> = new Map();
+
+/** The object a pending edit edits, as messages name it. */
+function pendingEditName(address: PendingEditAddress): string {
+  switch (address.kind) {
+    case "member":
+      return address.id;
+    case "whole_list":
+      return "the boundary list";
+    case "proposal":
+      return address.ref;
+  }
+}
 
 /** What the backend last said about each pending edit, held with the accepted
  *  draft and the pending edits it said it about: a preview's outcome for every
@@ -562,7 +587,7 @@ function acceptedValueAt(
  *  member with the address's id. Undefined where the session holds none. */
 function acceptedObjectAt(
   session: Readonly<Record<string, JsonValue>>,
-  address: PendingEditAddress,
+  address: CardAddress,
 ): Readonly<Record<string, JsonValue>> | ReadonlyArray<JsonValue> | undefined {
   if (address.kind === "whole_list") {
     const list = acceptedValueAt(session, address.pointer);
@@ -586,7 +611,7 @@ function acceptedObjectAt(
  *  base and its working JSON are that object as the session holds it. */
 function beginPendingEdit(
   session: Readonly<Record<string, JsonValue>>,
-  address: PendingEditAddress,
+  address: CardAddress,
 ): SessionObjectEdit {
   const object = acceptedObjectAt(session, address);
   if (object === undefined) {
@@ -603,13 +628,24 @@ function beginPendingEdit(
  *  address. Its base becomes that object, or is absent when the session holds
  *  none; its working JSON stays as the user left it. */
 function rebasePendingEdit(
-  session: Readonly<Record<string, JsonValue>>,
-  edit: SessionObjectEdit,
-): SessionObjectEdit {
-  const object = acceptedObjectAt(session, edit.address);
+  accepted: BuilderDraftState,
+  edit: BuilderContentEdit,
+): BuilderContentEdit {
+  const object =
+    edit.address.kind === "proposal"
+      ? acceptedProposalAt(accepted, edit.address.ref)
+      : acceptedObjectAt(accepted.session, edit.address);
   return object === undefined
     ? { kind: "content", address: edit.address, working: edit.working }
     : { kind: "content", address: edit.address, base: object, working: edit.working };
+}
+
+/** The document the accepted draft proposes at `ref`; undefined where it proposes none. */
+function acceptedProposalAt(
+  accepted: BuilderDraftState,
+  ref: string,
+): Readonly<Record<string, JsonValue>> | undefined {
+  return (accepted.catalog_documents ?? []).find((proposal) => proposal.ref === ref)?.document;
 }
 
 /** The ids of the members of one id-bearing list of the accepted session, in
@@ -647,7 +683,7 @@ export function refusalMessage(
 function objectEditBasis(
   draft: BuilderVisualDraftEnvelope | null,
   pending: ReadonlyMap<string, PendingObjectEdit>,
-  address: PendingEditAddress,
+  address: CardAddress,
 ): {
   draft: BuilderVisualDraftEnvelope;
   appliedRevision: number;
@@ -664,7 +700,8 @@ function objectEditBasis(
     );
   }
   const key = pendingEditKey(address);
-  const edit = pending.get(key)?.edit ?? beginPendingEdit(accepted, address);
+  const held = pending.get(key)?.edit;
+  const edit = held !== undefined ? sessionObjectEdit(held) : beginPendingEdit(accepted, address);
   return { draft, appliedRevision, key, edit };
 }
 
@@ -1426,8 +1463,7 @@ export function useBuilderWorld() {
           const created = createdEdits.map((edit, index) => {
             const key = pendingEditKey(edit.address);
             if (held.get(key) !== (key === startKey ? sent.get(key) : undefined)) {
-              const object =
-                edit.address.kind === "member" ? edit.address.id : "the boundary list";
+              const object = pendingEditName(edit.address);
               throw new Error(
                 `the ${result.operation} command created an edit of ${object}, which holds ` +
                   "another pending edit; apply or discard that edit first",
@@ -1561,7 +1597,7 @@ export function useBuilderWorld() {
    *  pending edit when it answers the latest request for the object. */
   const editPendingObject = useCallback(
     async (
-      address: PendingEditAddress,
+      address: CardAddress,
       change: NonNullable<BuilderVisualObjectEditRequest["change"]>,
     ): Promise<BuilderVisualObjectEditResult> => {
       const epoch = epochRef.current;
@@ -1611,7 +1647,7 @@ export function useBuilderWorld() {
    *  is pending, with the field editor over that JSON at the accepted revision.
    *  Nothing is held. */
   const describePendingObject = useCallback(
-    async (address: PendingEditAddress): Promise<BuilderVisualObjectEditResult> => {
+    async (address: CardAddress): Promise<BuilderVisualObjectEditResult> => {
       const epoch = epochRef.current;
       const { draft, appliedRevision, edit } = objectEditBasis(
         visualDraftRef.current,
@@ -1693,7 +1729,13 @@ export function useBuilderWorld() {
           for (const key of reapply) {
             const pending = held.get(key);
             if (!pending) throw new Error(`no pending edit is held for ${key}`);
-            rebased.set(key, { ...pending, edit: rebasePendingEdit(accepted, pending.edit) });
+            rebased.set(key, {
+              ...pending,
+              edit: rebasePendingEdit(
+                { session: accepted, catalog_documents: draft.catalog_documents },
+                pending.edit,
+              ),
+            });
           }
           setPendingEdits(rebased);
           held = rebased;
@@ -1706,9 +1748,7 @@ export function useBuilderWorld() {
         // A change still being typed or checked is not in the held edit yet.
         const unchecked = sent.filter(([key]) => objectChecksRef.current.has(key));
         if (unchecked.length > 0) {
-          const names = unchecked.map(([, pending]) =>
-            pending.edit.address.kind === "member" ? pending.edit.address.id : "the boundary list",
-          );
+          const names = unchecked.map(([, pending]) => pendingEditName(pending.edit.address));
           throw new Error(
             `a change of ${names.join(", ")} is still being checked; apply once it is answered`,
           );
@@ -1768,6 +1808,43 @@ export function useBuilderWorld() {
       setPendingEdits(remaining);
     },
     [setPendingEdits, supersedeObjectEdits],
+  );
+
+  /** The session a component window edits a proposed document of: the
+   *  accepted draft with every pending edit, so a gesture reads the proposals as
+   *  the preview compiles them. */
+  const proposalSession = useCallback((): CatalogDraftSessionContext => {
+    const { draft, accepted } = acceptedDraftForEdits();
+    return {
+      target_ref: draft.target_ref,
+      draft: {
+        draft_revision: draft.draft_revision,
+        state: { session: accepted, catalog_documents: draft.catalog_documents },
+      },
+      pending_edits: [...pendingEditsRef.current.values()].map((pending) => pending.edit),
+    };
+  }, [acceptedDraftForEdits]);
+
+  /** Hold `working` as the pending edit of the document the session proposes at
+   *  `ref`. Its base is that document in the accepted draft; nothing is accepted.
+   *  The preview compiles the session with it, and Apply accepts it. */
+  const stageProposalEdit = useCallback(
+    (ref: string, working: Readonly<Record<string, JsonValue>>) => {
+      const { draft, accepted } = acceptedDraftForEdits();
+      const base = acceptedProposalAt(
+        { session: accepted, catalog_documents: draft.catalog_documents },
+        ref,
+      );
+      const address = { kind: "proposal", ref } as const;
+      const key = pendingEditKey(address);
+      setPendingEdits(
+        new Map(pendingEditsRef.current).set(key, {
+          edit: { kind: "content", address, ...(base === undefined ? {} : { base }), working },
+          answer: null,
+        }),
+      );
+    },
+    [acceptedDraftForEdits, setPendingEdits],
   );
 
   /** Remove one link rule or routing domain from the accepted session at once,
@@ -2099,6 +2176,8 @@ export function useBuilderWorld() {
     holdObjectCheck,
     applyPendingEdits,
     discardPendingEdit,
+    proposalSession,
+    stageProposalEdit,
     removeListMember,
     undo,
     prepareRetarget,

@@ -17,12 +17,10 @@ from nodalarc.catalog_refs import (
     BodyRef,
     CatalogRef,
     NodeRef,
-    ProfileRef,
     SessionRef,
     SiteRef,
     SiteSetRef,
     SpaceSourceRef,
-    TerminalRef,
     parse_catalog_reference,
 )
 from nodalarc.model_validation import Identifier, TerminalMedium
@@ -44,7 +42,7 @@ from nodalarc.models.builder_api import (
     check_value_fits_address,
 )
 from nodalarc.models.builder_controls_api import BuilderControlMutation, BuilderControlTree
-from nodalarc.models.catalog import ForwardingClass, PhasingMode
+from nodalarc.models.catalog import PhasingMode
 from nodalarc.models.link_rules import MountRole
 from nodalarc.models.segment_session import RoutingBoundaryAdapter, RoutingProtocol
 
@@ -64,15 +62,9 @@ type BuilderVisualDraftCommandOperation = Literal[
     "place_ground_reference",
     "add_generated_space",
     "set_space_population",
-    "author_inline_space_node",
-    "add_or_increment_node_terminal",
-    "set_node_terminal_role",
-    "add_node_ethernet_port",
     "add_ground",
     "add_ground_site_reference",
     "set_ground_stamp_node",
-    "set_ground_site_node",
-    "add_ground_site_node",
     "mint_ground_members",
     "add_routing_domain",
     "add_boundary",
@@ -111,47 +103,10 @@ class _BuilderVisualModel(BaseModel):
         return normalized
 
 
-class BuilderVisualSpaceBoresight(_BuilderVisualModel):
-    """Spacecraft access-terminal pointing authored into a node mount."""
-
-    mode: Literal["nadir"]
-
-
 class BuilderVisualGroundBoresight(_BuilderVisualModel):
     """Ground access-terminal pointing authored into a site installation."""
 
     mode: Literal["local_vertical"]
-
-
-class BuilderVisualTerminalMount(_BuilderVisualModel):
-    """Editable terminal mount on a visual node draft."""
-
-    mount_id: str = ""
-    role: MountRole | None = None
-    terminal_ref: TerminalRef | None = None
-    count: int | None = None
-    boresight: BuilderVisualSpaceBoresight | None = None
-
-    @model_validator(mode="after")
-    def _boresight_matches_role(self) -> BuilderVisualTerminalMount:
-        if self.role == "access" and self.boresight is None:
-            raise ValueError(
-                "spacecraft access terminal mounts require an explicit nadir boresight"
-            )
-        if self.role not in {None, "access"} and self.boresight is not None:
-            raise ValueError("non-access terminal mounts must not declare a spacecraft boresight")
-        return self
-
-
-class BuilderVisualNode(_BuilderVisualModel):
-    """Editable node object nested in a generated space component."""
-
-    id: str = ""
-    display_name: str = ""
-    forwarding: ForwardingClass | None = None
-    profile: ProfileRef | None = None
-    ethernet: tuple[str, ...] = ()
-    terminals: tuple[BuilderVisualTerminalMount, ...] = ()
 
 
 class BuilderVisualOrbit(_BuilderVisualModel):
@@ -175,7 +130,6 @@ class BuilderVisualSpaceDraft(_BuilderVisualModel):
     segment_id: str = ""
     display_name: str = ""
     node_ref: NodeRef | None = None
-    node_draft: BuilderVisualNode | None = None
     orbit: BuilderVisualOrbit = Field(default_factory=BuilderVisualOrbit)
     planes: int | None = None
     raan_spacing_deg: float | None = None
@@ -210,30 +164,9 @@ class BuilderVisualSpaceReference(_BuilderVisualModel):
     label: str = ""
 
 
-class BuilderVisualSiteNode(_BuilderVisualModel):
-    """One installed node in an editable site object."""
-
-    node_id: str = ""
-    node_ref: NodeRef | None = None
-    installed: dict[str, int] = Field(default_factory=dict)
-    boresights: dict[str, BuilderVisualGroundBoresight]
-
-
-class BuilderVisualSite(_BuilderVisualModel):
-    """Editable complete site object."""
-
-    site_id: str = ""
-    display_name: str = ""
-    body: BodyRef | None = None
-    lat_deg: float | None = None
-    lon_deg: float | None = None
-    alt_m: float | None = None
-    tags: tuple[str, ...] = ()
-    nodes: tuple[BuilderVisualSiteNode, ...] = ()
-
-
 class BuilderVisualGroundMember(_BuilderVisualModel):
-    """Referenced or authored member of an editable ground site set."""
+    """One site of an editable ground site set, by reference: a catalog site, or a
+    site the session proposes (``draft``), edited as that proposed document."""
 
     member_id: str = ""
     kind: Literal["ref", "draft"]
@@ -241,7 +174,6 @@ class BuilderVisualGroundMember(_BuilderVisualModel):
     site_id: str = ""
     label: str = ""
     summary: str | None = None
-    site: BuilderVisualSite | None = None
     scheduling_override: JsonDocument | None = None
 
 
@@ -578,38 +510,6 @@ class BuilderVisualSetSpacePopulationCommand(_BuilderVisualModel):
         return self
 
 
-class BuilderVisualAuthorInlineSpaceNodeCommand(_BuilderVisualModel):
-    """Create one backend-seeded inline node for an authored space segment."""
-
-    operation: Literal["author_inline_space_node"]
-    segment_id: str = Field(min_length=1, max_length=160)
-
-
-class BuilderVisualAddOrIncrementNodeTerminalCommand(_BuilderVisualModel):
-    """Mount a selected terminal or increment the matching backend-owned mount."""
-
-    operation: Literal["add_or_increment_node_terminal"]
-    segment_id: str = Field(min_length=1, max_length=160)
-    terminal_ref: TerminalRef
-    role: MountRole
-
-
-class BuilderVisualSetNodeTerminalRoleCommand(_BuilderVisualModel):
-    """Change one inline-node mount role with backend-owned pointing semantics."""
-
-    operation: Literal["set_node_terminal_role"]
-    segment_id: str = Field(min_length=1, max_length=160)
-    mount_id: str = Field(min_length=1, max_length=160)
-    role: MountRole
-
-
-class BuilderVisualAddNodeEthernetPortCommand(_BuilderVisualModel):
-    """Add one uniquely identified Ethernet port to an authored inline node."""
-
-    operation: Literal["add_node_ethernet_port"]
-    segment_id: str = Field(min_length=1, max_length=160)
-
-
 class BuilderVisualAddGroundCommand(_BuilderVisualModel):
     """Add one backend-seeded authored ground-segment draft."""
 
@@ -634,25 +534,6 @@ class BuilderVisualSetGroundStampNodeCommand(_BuilderVisualModel):
     operation: Literal["set_ground_stamp_node"]
     segment_id: str = Field(min_length=1, max_length=160)
     node_ref: NodeRef
-
-
-class BuilderVisualSetGroundSiteNodeCommand(_BuilderVisualModel):
-    """Select one authored site's node model and derive its installed inventory."""
-
-    operation: Literal["set_ground_site_node"]
-    segment_id: str = Field(min_length=1, max_length=160)
-    member_id: str = Field(min_length=1, max_length=160)
-    node_id: str = Field(min_length=1, max_length=160)
-    node_ref: NodeRef
-
-
-class BuilderVisualAddGroundSiteNodeCommand(_BuilderVisualModel):
-    """Add one backend-seeded node installation to an authored site."""
-
-    operation: Literal["add_ground_site_node"]
-    segment_id: str = Field(min_length=1, max_length=160)
-    member_id: str = Field(min_length=1, max_length=160)
-    node_ref: NodeRef | None = None
 
 
 class BuilderVisualGroundSiteIntent(_BuilderVisualModel):
@@ -721,15 +602,9 @@ BuilderVisualDraftCommand = Annotated[
     | BuilderVisualPlaceGroundReferenceCommand
     | BuilderVisualAddGeneratedSpaceCommand
     | BuilderVisualSetSpacePopulationCommand
-    | BuilderVisualAuthorInlineSpaceNodeCommand
-    | BuilderVisualAddOrIncrementNodeTerminalCommand
-    | BuilderVisualSetNodeTerminalRoleCommand
-    | BuilderVisualAddNodeEthernetPortCommand
     | BuilderVisualAddGroundCommand
     | BuilderVisualAddGroundSiteReferenceCommand
     | BuilderVisualSetGroundStampNodeCommand
-    | BuilderVisualSetGroundSiteNodeCommand
-    | BuilderVisualAddGroundSiteNodeCommand
     | BuilderVisualMintGroundMembersCommand
     | BuilderVisualAddRoutingDomainCommand
     | BuilderVisualAddBoundaryCommand

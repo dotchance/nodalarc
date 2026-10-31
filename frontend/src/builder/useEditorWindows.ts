@@ -26,7 +26,10 @@ import type {
   DraftGroundSet,
   Workspace,
 } from "./workspace";
-import type { BuilderVisualObjectEditRequest } from "./generated/builderApi";
+import type {
+  BuilderContentEdit,
+  BuilderVisualObjectEditRequest,
+} from "./generated/builderApi";
 
 /** A floating editor window's target — one per object, keyed. */
 export type EditorTarget =
@@ -43,6 +46,7 @@ export type EditorTarget =
   | { kind: "open-session" }
   | { kind: "source-yaml" }
   | { kind: "customize-chain"; segmentId: string; rootRef: string }
+  | { kind: "proposal"; ref: string }
   | { kind: "save-session" };
 
 export interface EditorWindow {
@@ -68,6 +72,8 @@ export function targetKey(target: EditorTarget): string {
       return `inspect:${target.ref}`;
     case "node-view":
       return `node:${target.nodeId}`;
+    case "proposal":
+      return `proposal:${target.ref}`;
     default:
       return `${target.kind}:${target.id}`;
   }
@@ -91,16 +97,22 @@ export function pendingEditAddress(
 }
 
 /** The window that edits the pending edit at `address`. */
-export function pendingEditTarget(address: BuilderVisualObjectEditRequest["address"]): EditorTarget {
+export function pendingEditTarget(address: BuilderContentEdit["address"]): EditorTarget {
   if (address.kind === "whole_list") return { kind: "boundaries" };
+  if (address.kind === "proposal") return { kind: "proposal", ref: address.ref };
   return address.list_pointer === "/link_rules"
     ? { kind: "link", id: address.id }
     : { kind: "domain", id: address.id };
 }
 
-/** A pending edit's object as notices name it: its id, or the boundary list. */
-export function pendingEditTitle(address: BuilderVisualObjectEditRequest["address"]): string {
-  return address.kind === "whole_list" ? "Boundaries" : address.id;
+/** A pending edit's object as notices name it: its id, the boundary list, or
+ *  the proposed document's file name. */
+export function pendingEditTitle(address: BuilderContentEdit["address"]): string {
+  if (address.kind === "whole_list") return "Boundaries";
+  if (address.kind === "proposal") {
+    return address.ref.slice(address.ref.lastIndexOf("/") + 1).replace(/\.ya?ml$/, "");
+  }
+  return address.id;
 }
 
 /** A human title for a window's object — the name shown in the stale-window

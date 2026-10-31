@@ -22,6 +22,7 @@ from nodalarc.models.builder_api import (
     BuilderSessionSaveRequest,
 )
 from nodalarc.models.builder_visual_api import (
+    BuilderVisualCustomizeChainRequest,
     BuilderVisualDraftApplyYamlRequest,
     BuilderVisualDraftAssemblyResult,
     BuilderVisualDraftCompileRequest,
@@ -554,3 +555,57 @@ def test_an_edit_begun_before_an_undo_that_changed_its_object_is_stale(
     assert preview.canonical_session_json == (
         canonicalize_persisted_configuration(opened.target_ref, expected).canonical_json
     )
+
+
+def test_a_pending_edit_of_a_proposed_node_saves_with_the_session(
+    context: CatalogContext,
+    service: BuilderVisualDraftService,
+) -> None:
+    # The session proposes its own copy of the node, then edits it by ref.
+    opened = _accepted_draft(service, "earth-leo-simple")
+    customized = service.customize_chain(
+        BuilderVisualCustomizeChainRequest(
+            draft=opened,
+            expected_draft_revision=opened.draft_revision,
+            segment_id="leo",
+            leaf_ref="nodalarc:nodes/space/starlink-v2-mesh.yaml",
+        )
+    )
+    assert customized.applied is True, customized.issues
+    draft = customized.draft
+    node_ref = next(
+        entry.target_ref for entry in customized.forked_chain if entry.target_ref.family == "nodes"
+    )
+    [proposal] = [item for item in draft.catalog_documents if item.ref == node_ref]
+    working = deepcopy(proposal.document)
+    working["node"]["display_name"] = "Edited by the session"
+
+    result = _apply_edits(
+        service,
+        draft,
+        [
+            {
+                "kind": "content",
+                "address": {"kind": "proposal", "ref": str(node_ref)},
+                "base": proposal.document,
+                "working": working,
+            }
+        ],
+    )
+
+    assert result.applied is True, result.outcomes
+    assert result.assembly is not None
+    accepted = result.assembly.visual_draft
+    [edited] = [item for item in accepted.catalog_documents if item.ref == node_ref]
+    assert edited.document["node"]["display_name"] == "Edited by the session"
+    assert result.assembly.compile_result.save_verdict.allowed is True
+    saved = save_builder_session(
+        BuilderSessionSaveRequest.model_validate_json(
+            result.assembly.save_request.model_dump_json()
+        ),
+        context,
+        available_node_count=1_000_000,
+    )
+    stored = yaml.safe_load(context.repository.snapshot(context.scope).get(node_ref).content)
+    assert stored["node"]["display_name"] == "Edited by the session"
+    assert saved.session.ref == draft.target_ref

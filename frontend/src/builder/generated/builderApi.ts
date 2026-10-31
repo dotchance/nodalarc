@@ -1814,6 +1814,7 @@ export interface ResolvedTerminalBlock {
   readonly tracking_capacity: number;
   readonly max_range_km: number;
   readonly min_elevation_deg: number;
+  readonly installed_min_elevation_deg: number | null;
   readonly field_of_regard_deg: number;
   readonly tracking_rate_deg_s: number;
   readonly transmit_mbps: number;

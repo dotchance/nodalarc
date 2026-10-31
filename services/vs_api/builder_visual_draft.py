@@ -4404,19 +4404,58 @@ class BuilderVisualDraftService:
                 f"The {command.operation} command does not produce a valid session: {error}",
                 code="catalog_authoring.invalid_graph",
             ) from error
+        accepted = _accepted_draft(
+            draft,
+            cast(SegmentSessionConfig, validated),
+            draft.catalog_documents,
+            snapshot,
+        )
+        # A command never takes a complete draft to an incomplete one: when the
+        # draft resolved and could be saved, and would not with this object (a
+        # ground station with no stated floor, a boundary inside one domain), the
+        # object is held as a pending edit for the user to complete. A draft that
+        # was already incomplete is accepted, so a repair is never refused.
+        if self._is_complete(
+            draft,
+            available_node_count=available_node_count,
+            preview_factory=preview_factory,
+        ) and not self._is_complete(
+            accepted,
+            available_node_count=available_node_count,
+            preview_factory=preview_factory,
+        ):
+            return BuilderVisualDraftCommandResult(
+                operation=command.operation,
+                base_draft_revision=draft.draft_revision,
+                draft=draft,
+                affected_kind=affected_kind,
+                affected_id=affected_id,
+                notice=notice,
+                created_edits=(edit,),
+            )
         return BuilderVisualDraftCommandResult(
             operation=command.operation,
             base_draft_revision=draft.draft_revision,
-            draft=_accepted_draft(
-                draft,
-                cast(SegmentSessionConfig, validated),
-                draft.catalog_documents,
-                snapshot,
-            ),
+            draft=accepted,
             affected_kind=affected_kind,
             affected_id=affected_id,
             notice=notice,
         )
+
+    def _is_complete(
+        self,
+        draft: BuilderVisualDraftEnvelope,
+        *,
+        available_node_count: int,
+        preview_factory: PreviewFactory | None,
+    ) -> bool:
+        """Whether the draft resolves and can be saved."""
+        compiled = self.compile(
+            BuilderVisualDraftCompileRequest(draft=draft),
+            available_node_count=available_node_count,
+            preview_factory=preview_factory,
+        ).compile_result
+        return compiled.resolved_preview is not None and compiled.save_verdict.allowed
 
     def apply_command(
         self,

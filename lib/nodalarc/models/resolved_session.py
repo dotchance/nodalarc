@@ -234,7 +234,16 @@ class ResolvedTerminalBlock(BaseModel):
     count: int = Field(gt=0)
     tracking_capacity: int = Field(gt=0)
     max_range_km: float = Field(gt=0, allow_inf_nan=False)
+    # The lowest elevation the terminal can point to: its catalog pointing range,
+    # or the narrower range its site installation states.
     min_elevation_deg: float = Field(ge=-90.0, le=90.0, allow_inf_nan=False)
+    # The lowest elevation the site's installation states for this terminal;
+    # None where no installation states one. Of the two, only this is a ground
+    # station's elevation floor: a catalog pointing range describes the
+    # hardware wherever it is mounted, never a station's horizon.
+    installed_min_elevation_deg: float | None = Field(
+        default=None, ge=-90.0, le=90.0, allow_inf_nan=False
+    )
     field_of_regard_deg: float = Field(gt=0, le=360.0, allow_inf_nan=False)
     tracking_rate_deg_s: float = Field(gt=0, allow_inf_nan=False)
     # The terminal's own rates, independent of any peer: what it can send and
@@ -1316,9 +1325,10 @@ class ResolvedSession(BaseModel):
     def ground_min_elevation_by_gs_and_rule(self) -> dict[str, dict[str, float]]:
         """Each ground station's effective elevation mask, kept per rule.
 
-        Within one rule the endpoint's declared mask and the matching
-        terminal blocks' masks all constrain the same links, so their max is
-        that rule's effective mask. Across rules the values describe
+        Within one rule the endpoint's declared floor and the floors the
+        station's installation states for the matching terminals all constrain
+        the same links, so their max is that rule's effective mask. A
+        terminal's catalog pointing range is not a floor. Across rules the values describe
         different link populations and must never be silently merged; the
         resolver refuses a station whose rules disagree until masks are
         carried per candidate.
@@ -1334,20 +1344,21 @@ class ResolvedSession(BaseModel):
                     node = node_by_id[node_id]
                     if node.kind != "ground_station":
                         continue
-                    terminal_masks = [
-                        item.block.min_elevation_deg
+                    installed_floors = [
+                        item.block.installed_min_elevation_deg
                         for item in selected[node_id]
                         if endpoint.matches_terminal(item.block)
-                        and item.block.min_elevation_deg is not None
+                        and item.block.installed_min_elevation_deg is not None
                     ]
                     masks = [
                         value
-                        for value in (*terminal_masks, endpoint.min_elevation_deg)
+                        for value in (*installed_floors, endpoint.min_elevation_deg)
                         if value is not None
                     ]
                     if not masks:
                         raise ValueError(
-                            f"no resolved min_elevation_deg for access endpoint {node_id}"
+                            f"ground station {node_id!r} in access rule {rule.rule_id!r} "
+                            "states no elevation floor"
                         )
                     result.setdefault(node_id, {})[rule.rule_id] = max(
                         float(value) for value in masks

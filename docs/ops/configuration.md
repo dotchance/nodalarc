@@ -228,7 +228,9 @@ For `explicit_pairs`, `a` and `b` are the local node ids inside the rule's two
 endpoint segments, not the resolver-derived runtime ids. Ground local ids are
 site-qualified, and every pair must remain inside both endpoint selector sets.
 For an access rule, the effective ground elevation mask is the stricter of the
-selected terminal limit and the authored ground-endpoint `min_elevation_deg`.
+elevation limit the site installation states for the selected terminal and the
+authored ground-endpoint `min_elevation_deg`. A terminal's catalog pointing range
+is not a mask, and a ground station in an access rule must have one of the two.
 
 ## Sites, nodes, terminals, and addresses
 

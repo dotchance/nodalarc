@@ -68,6 +68,7 @@ def _terminal_projection(node: ResolvedNode) -> list[dict[str, Any]]:
                 "tracking_capacity": terminal.tracking_capacity,
                 "max_range_km": terminal.max_range_km,
                 "min_elevation_deg": terminal.min_elevation_deg,
+                "installed_min_elevation_deg": terminal.installed_min_elevation_deg,
                 "field_of_regard_deg": terminal.field_of_regard_deg,
                 "tracking_rate_deg_s": terminal.tracking_rate_deg_s,
                 "transmit_mbps": terminal.transmit_mbps,

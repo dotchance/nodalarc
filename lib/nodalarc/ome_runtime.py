@@ -124,7 +124,10 @@ class GroundStation(BaseModel):
     lat_deg: float = Field(ge=-90, le=90)
     lon_deg: float = Field(ge=-180, le=180)
     alt_m: float = 0.0
-    min_elevation_deg: float | None = Field(default=None, ge=0, le=90)
+    # A station above the body's surface sees below its local horizontal down
+    # to the horizon dip at its altitude; OME input building refuses a floor
+    # below that dip, which needs the body's radius.
+    min_elevation_deg: float | None = Field(default=None, ge=-90, le=90)
     terminals: list[GroundTerminal] | None = None
     tenant_id: str = "default"
     reference_body: SupportedSurfaceBody

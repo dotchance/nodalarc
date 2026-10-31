@@ -248,6 +248,7 @@ def resolve_session_with_assets(
     _validate_access_terminal_bindings(cfg, base_resolved)
     _refuse_selected_multi_user_terminals(cfg, base_resolved)
     _refuse_uncollapsible_access_physics(base_resolved)
+    _refuse_unstated_ground_floors(base_resolved)
     _refuse_divergent_ground_masks(base_resolved)
     _refuse_mixed_body_fixed_realizations(base_resolved)
     candidates = tuple(_resolve_link_candidates(base_resolved, cfg))
@@ -1559,6 +1560,11 @@ def _terminal_blocks_for_node(
                 ),
                 max_range_km=float(capabilities.get("max_range_km", terminal["max_range_km"])),
                 min_elevation_deg=float(limits["elevation_deg"]["min"]),
+                installed_min_elevation_deg=(
+                    float(capabilities["limits"]["elevation_deg"]["min"])
+                    if capabilities.get("limits")
+                    else None
+                ),
                 field_of_regard_deg=_field_of_regard_deg(
                     limits,
                     access=mount["role"] == "access",
@@ -3113,6 +3119,40 @@ def _refuse_uncollapsible_access_physics(resolved: ResolvedSession) -> None:
             )
     if unsupported:
         raise UnsupportedFeatureError(unsupported)
+
+
+def _refuse_unstated_ground_floors(resolved: ResolvedSession) -> None:
+    """A ground station in an access rule needs an elevation floor that its
+    installation or the rule states. The floor is a fact of the installation
+    (terrain, regulation, the operator's mask); a terminal's catalog pointing
+    range describes the hardware wherever it is mounted and is never one.
+    """
+    selected = resolved.selected_access_terminals_by_node()
+    node_by_id = {node.node_id: node for node in resolved.nodes}
+    for rule in resolved.link_rules:
+        if rule.kind != "access" or not rule.enabled:
+            continue
+        for endpoint in rule.endpoints:
+            if endpoint.min_elevation_deg is not None:
+                continue
+            for node_id in endpoint.node_ids:
+                if node_by_id[node_id].kind != "ground_station":
+                    continue
+                if any(
+                    endpoint.matches_terminal(item.block)
+                    and item.block.installed_min_elevation_deg is not None
+                    for item in selected[node_id]
+                ):
+                    continue
+                raise SessionResolutionError(
+                    f"ground station {node_id!r} in access rule {rule.rule_id!r} states no "
+                    "elevation floor; set min_elevation_deg on the rule's ground endpoint, "
+                    "or an elevation limit on the terminal its site installs",
+                    subject_kind="link_rule",
+                    subject_id=rule.rule_id,
+                    segment_id=endpoint.segment_id,
+                    node_id=node_id,
+                )
 
 
 def _refuse_divergent_ground_masks(resolved: ResolvedSession) -> None:

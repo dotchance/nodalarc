@@ -31,6 +31,7 @@ function block(
     tracking_capacity: 1,
     max_range_km: 5000,
     min_elevation_deg: elev,
+    installed_min_elevation_deg: null,
     field_of_regard_deg: role === "access" ? 180 : 360,
     tracking_rate_deg_s: 3,
     transmit_mbps: 1000,

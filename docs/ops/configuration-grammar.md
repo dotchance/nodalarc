@@ -1255,8 +1255,10 @@ body-specific rules. There is no authored `class`, `kind`, or link-label field.
 `Endpoint.min_elevation_deg` is in `[0, 90]` and is valid only on the ground
 endpoint of an access rule. It is invalid on a space endpoint or any non-access
 rule. For each ground station, the effective OME elevation mask is the maximum
-of the matching installed terminal minimum and every applicable access-rule
-endpoint minimum.
+of the elevation limit its site installation states for the matching terminal
+and the applicable access-rule endpoint minimum. A terminal's catalog pointing
+range is not a mask. A ground station in an access rule where neither is stated
+is invalid. A mask below the horizon dip at the station's altitude is invalid.
 
 `ExplicitPair.a` and `ExplicitPair.b` are local node ids within the two resolved
 endpoint segments, not resolver-derived runtime node ids. Ground local ids are

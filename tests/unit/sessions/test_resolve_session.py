@@ -556,6 +556,36 @@ def test_a_boundary_naming_an_undeclared_domain_is_refused_as_that_boundary(
     )
 
 
+def test_a_ground_floor_comes_from_the_rule_or_the_installation_never_the_terminal() -> None:
+    """The TDRS ground mounts' sites state no elevation limit, so only the access
+    rule's endpoint floor gives those stations one. The terminal's catalog pointing
+    range is not a floor."""
+    session = yaml.safe_load(
+        (SHIPPED_ROOT / "sessions" / "earth-geo-tdrs.yaml").read_text(encoding="utf-8")
+    )
+    resolved = resolver_module.resolve_session(session, catalog=shipped_read_view())
+    floors = resolved.effective_ground_min_elevation_by_gs()
+    assert floors and set(floors.values()) == {5.0}
+
+    (ground_endpoint,) = [
+        endpoint
+        for rule in session["link_rules"]
+        if rule["id"] == "geo_access"
+        for endpoint in rule["endpoints"]
+        if "min_elevation_deg" in endpoint
+    ]
+    del ground_endpoint["min_elevation_deg"]
+    with pytest.raises(SessionResolutionError) as refused:
+        resolver_module.resolve_session(session, catalog=shipped_read_view())
+    station = sorted(floors)[0]
+    assert str(refused.value) == (
+        f"ground station {station!r} in access rule 'geo_access' states no elevation floor; "
+        "set min_elevation_deg on the rule's ground endpoint, or an elevation limit on the "
+        "terminal its site installs"
+    )
+    assert (refused.value.subject_kind, refused.value.subject_id) == ("link_rule", "geo_access")
+
+
 def test_ground_override_must_target_a_site_in_the_selected_site_set() -> None:
     raw = _raw_session()
     raw["segments"][1]["overrides"] = [

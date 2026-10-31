@@ -163,6 +163,7 @@ def build_ome_inputs_from_resolved(resolved: ResolvedSession) -> ResolvedOmeInpu
         ground_nodes,
         resolved.effective_ground_min_elevation_by_gs(),
         selected_access,
+        {facts.body_id: facts.mean_radius_km for facts in resolved.bodies},
     )
     addressing = ResolvedAddressingView(resolved)
     neighbors = _neighbors_from_resolved(resolved)
@@ -408,10 +409,20 @@ def _satellite_from_resolved(
     )
 
 
+def _horizon_dip_deg(alt_m: float, radius_km: float) -> float:
+    """How far below its local horizontal a station at `alt_m` above a body of
+    `radius_km` sees the body's limb. A floor below this points into the body."""
+    if alt_m <= 0.0:
+        return 0.0
+    radius_m = radius_km * 1000.0
+    return math.degrees(math.acos(radius_m / (radius_m + alt_m)))
+
+
 def _ground_file_from_resolved(
     nodes: list[ResolvedNode],
     min_elevation_by_gs: dict[str, float],
     selected_access: dict[str, tuple[ResolvedAccessTerminalSelection, ...]],
+    radius_km_by_body: dict[str, float],
 ) -> GroundStationFile | None:
     stations: list[GroundStation] = []
     for node in nodes:
@@ -423,16 +434,25 @@ def _ground_file_from_resolved(
         if not access_selections:
             continue
         scheduling = _ground_scheduling_config(node.ground_scheduling)
+        reference_body = _node_reference_body(node)
+        floor = min_elevation_by_gs[node.node_id]
+        dip = _horizon_dip_deg(node.surface_position.alt_m, radius_km_by_body[reference_body])
+        if floor < -dip:
+            raise ValueError(
+                f"ground station {node.node_id!r} states an elevation floor of {floor:g} "
+                f"degrees, below the horizon dip of {dip:.3f} degrees at its altitude of "
+                f"{node.surface_position.alt_m:g} m; a lower floor points into {reference_body}"
+            )
         stations.append(
             GroundStation(
                 name=node.node_id,
                 lat_deg=node.surface_position.lat_deg,
                 lon_deg=node.surface_position.lon_deg,
                 alt_m=node.surface_position.alt_m,
-                min_elevation_deg=min_elevation_by_gs[node.node_id],
+                min_elevation_deg=floor,
                 terminals=tuple(_ground_terminal(item) for item in access_selections),
                 tenant_id=node.tenant_id,
-                reference_body=_node_reference_body(node),
+                reference_body=reference_body,
                 service_priority=node.service_priority or 10,
                 selection_policy=scheduling.selection_policy,
                 handover_policy=scheduling.handover_policy,

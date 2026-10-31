@@ -908,15 +908,6 @@ def test_a_session_built_from_placed_references_keeps_its_candidate_limits(
     assert compiled.compile_result.save_verdict.allowed, compiled.compile_result.issues
 
 
-# The Builder's first ground node mounts rf-ka-leo-access, whose -70 degree elevation limit
-# the resolver keeps as the station's floor; OME takes no floor below 0, so the save is refused
-# and every later command that builds the preview fails the same way. Once the floor is settled
-# the whole flow runs, and the strict mark fails until it is removed.
-@pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason="a ground floor below 0 degrees resolves but OME refuses it",
-)
 def test_backend_visual_commands_own_seeds_and_advance_one_fenced_revision(
     service: BuilderVisualDraftService,
 ) -> None:
@@ -1036,33 +1027,55 @@ def test_backend_visual_commands_own_seeds_and_advance_one_fenced_revision(
         == "The session declares no segment 'nowhere'"
     )
 
-    link_result = apply(
+    link_result = _command(
+        service,
+        draft,
         {
             "operation": "connect_segments",
             "from_segment_id": "space-1",
             "to_segment_id": "ground-1",
-        }
+        },
     )
     assert (link_result.affected_kind, link_result.affected_id) == ("link", "link-1")
     # Both segments mount Ka-band access terminals, so the rule is access over rf.
-    # Connect writes no elevation floor on either endpoint.
+    # Connect writes no elevation floor, and the ground node's terminal can point down
+    # to -70 degrees, which is its catalog pointing range and no station's floor. The
+    # station states no floor, so the rule is held as a pending edit and the accepted
+    # session stays one that can be saved.
     access = {"all": [{"role": "access"}, {"medium": "rf"}]}
-    assert draft.applied_session["link_rules"] == [
-        {
-            "id": "link-1",
-            "enabled": True,
-            "endpoints": [
-                {"select": {"segment": "ground-1"}, "terminal": access},
-                {"select": {"segment": "space-1"}, "terminal": access},
-            ],
-            "topology": {"mode": "visible_candidates"},
-        }
+    unfloored = {
+        "id": "link-1",
+        "endpoints": [
+            {"select": {"segment": "ground-1"}, "terminal": access},
+            {"select": {"segment": "space-1"}, "terminal": access},
+        ],
+        "topology": {"mode": "visible_candidates"},
+    }
+    assert link_result.draft == draft
+    assert [edit.model_dump(mode="json") for edit in link_result.created_edits] == [
+        _content_edit({**_RULE_ADDRESS, "id": "link-1"}, None, unfloored)
     ]
-    connected = service.compile(
-        BuilderVisualDraftCompileRequest(draft=draft),
-        available_node_count=1_000_000,
+    # The user states the floor on the rule's ground endpoint, and the rule is accepted.
+    ground_endpoint, space_endpoint = unfloored["endpoints"]
+    floored = _apply_edits(
+        service,
+        draft,
+        [
+            _content_edit(
+                {**_RULE_ADDRESS, "id": "link-1"},
+                None,
+                {
+                    **unfloored,
+                    "endpoints": [{**ground_endpoint, "min_elevation_deg": 10.0}, space_endpoint],
+                },
+            )
+        ],
     )
-    assert connected.compile_result.save_verdict.allowed, connected.compile_result.issues
+    assert floored.applied and floored.assembly is not None
+    draft = floored.assembly.visual_draft
+    assert floored.assembly.compile_result.save_verdict.allowed, (
+        floored.assembly.compile_result.issues
+    )
 
     # Every segment is in a domain, so the new domain has no member. It is returned
     # as a pending edit with no selectors. The draft keeps its revision.
@@ -1137,26 +1150,35 @@ def test_backend_visual_commands_own_seeds_and_advance_one_fenced_revision(
     ]
 
     # The seed runs over the first rule that is not access, between the first two
-    # domains. The user changes it on the boundary card.
-    boundary_result = apply({"operation": "add_boundary"})
+    # domains. Both ends of link-1 are in domain-1, so the session refuses the seed;
+    # the list is held as a pending edit for the user to change on the boundary card,
+    # and the accepted session stays one that can be saved.
+    boundary_result = _command(service, draft, {"operation": "add_boundary"})
     assert (boundary_result.affected_kind, boundary_result.affected_id) == (
         "boundary",
         "/routing/boundaries",
     )
+    assert boundary_result.draft == draft
     exchange = {"prefixes": {"aggregate_of": "originated"}, "export_node_loopbacks": True}
-    assert draft.applied_session["routing"]["boundaries"] == [
-        {
-            "over": "link-1",
-            "adapter": "static_ip",
-            "export": [
-                {"from": "domain-1", "to": "domain-2", **exchange},
-                {"from": "domain-2", "to": "domain-1", **exchange},
+    assert [edit.model_dump(mode="json") for edit in boundary_result.created_edits] == [
+        _content_edit(
+            _BOUNDARIES_ADDRESS,
+            None,
+            [
+                {
+                    "over": "link-1",
+                    "adapter": "static_ip",
+                    "export": [
+                        {"from": "domain-1", "to": "domain-2", **exchange},
+                        {"from": "domain-2", "to": "domain-1", **exchange},
+                    ],
+                }
             ],
-        }
+        )
     ]
     # A boundary has no grammar id, so the allocation history holds none.
     assert draft.reserved_authoring_ids == ("space-1", "ground-1", "domain-1", "link-1", "domain-2")
-    assert draft.draft_revision == 9
+    assert draft.draft_revision == 8
 
     independent = service.create(
         BuilderVisualDraftCreateRequest(session_name="independent-command-owned")
@@ -1945,19 +1967,30 @@ def test_rederive_accepts_the_rules_own_pending_edit_with_it(
             pending_edits=(_content_edit(address, rule, working),),
         )
 
-    rederived = rederive("space-1", _ranged(rule))
+    rederived = rederive("space-1", {**rule, "enabled": False})
     assert rederived.created_edits == ()
     assert rederived.draft.draft_revision == draft.draft_revision + 1
     isl = {"all": [{"role": "isl"}, {"medium": "optical"}]}
     assert rederived.draft.applied_session["link_rules"] == [
         {
             "id": "link-1",
-            "enabled": True,
+            "enabled": False,
             "endpoints": [{"select": {"segment": "space-1"}, "terminal": isl}] * 2,
             "topology": {"mode": "nearest_n", "n": 2},
-            "constraints": {"max_range_km": 12345.0},
         }
     ]
+    # The runtime does not support a range constraint, so a rederive carrying one
+    # would leave a complete draft unable to resolve. Both changes are held as one
+    # pending edit, and the draft keeps its revision.
+    held = rederive("space-1", _ranged(rule))
+    assert held.draft == draft
+    (held_edit,) = held.created_edits
+    assert held_edit.working == {
+        **{key: value for key, value in rule.items() if key != "enabled"},
+        "endpoints": [{"select": {"segment": "space-1"}, "terminal": isl}] * 2,
+        "topology": {"mode": "nearest_n", "n": 2},
+        "constraints": {"max_range_km": 12345.0},
+    }
 
     with pytest.raises(BuilderVisualDraftCommandError, match="no segment 'nowhere'"):
         rederive("nowhere", _ranged(rule))

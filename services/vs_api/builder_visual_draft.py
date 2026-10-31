@@ -173,7 +173,6 @@ from .builder_control_tree import (
 )
 from .builder_visual_defaults import (
     DEFAULT_BODY_REF,
-    DEFAULT_NODE_PROFILES,
     DEFAULT_PHASING_MODE,
     DEFAULT_SCHEDULING_PRESET,
     DEFAULT_TERMINAL_MOUNT_COUNT,
@@ -956,8 +955,6 @@ def _node_document(
             }
         )
     profile = node.profile
-    if profile is None and node.forwarding is not None:
-        profile = DEFAULT_NODE_PROFILES.get(node.forwarding)
     return node_id, {
         "node": {
             "id": node_id,

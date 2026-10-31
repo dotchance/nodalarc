@@ -1110,6 +1110,7 @@ describe("deploy gate: saved backend verdict and exact digest truth", () => {
             draft_path: null,
             source_line: null,
             source_column: null,
+            subject_kind: null,
             related_refs: [],
           },
         ],

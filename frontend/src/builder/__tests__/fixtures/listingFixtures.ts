@@ -136,6 +136,7 @@ export function workingIssue(message: string, jsonPointer: string): BuilderIssue
     draft_path: null,
     source_line: null,
     source_column: null,
+    subject_kind: null,
     related_refs: [],
   };
 }

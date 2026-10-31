@@ -182,6 +182,7 @@ export interface BuilderIssue {
   readonly draft_path: string | null;
   readonly source_line: number | null;
   readonly source_column: number | null;
+  readonly subject_kind: ResolutionSubjectKind | null;
   readonly related_refs: ReadonlyArray<string>;
 }
 
@@ -1220,6 +1221,7 @@ export interface BuilderWorldNode {
   readonly surface_position: ResolvedSurfacePosition | null;
   readonly epoch_position: NodePosition | null;
   readonly forwarding: "routed" | "host" | "bridge" | "control_only" | null;
+  readonly profile: string;
   readonly role: NodeRole;
   readonly routing_instances: ReadonlyArray<NodeRoutingInstance>;
   readonly terminal_inventory: ReadonlyArray<ResolvedTerminalBlock>;
@@ -1775,6 +1777,9 @@ export interface NodeRoutingInstance {
 
 /**  */
 export type PreviewScope = "computed" | "inter_body_pending" | "terrestrial_pending" | "disabled";
+
+/**  */
+export type ResolutionSubjectKind = "segment" | "link_rule" | "node";
 
 /** A numbered interface address set. */
 export interface ResolvedInterfaceAddress {

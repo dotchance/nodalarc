@@ -789,6 +789,57 @@ def apply_pending_edits(
     return candidate, tuple(outcomes)
 
 
+def _resolution_issue(
+    code: str,
+    error: SessionResolutionError,
+    *,
+    session: Mapping[str, Any],
+    source_ref: str,
+) -> BuilderIssue:
+    """A resolver refusal at the session object its raise site named.
+
+    A rule refusal points at its link rule; a node or segment refusal points at
+    the segment that places it. An unscoped refusal names the whole session.
+    """
+    pointer: str | None = None
+    if error.subject_kind == "link_rule":
+        rules = session.get("link_rules") or ()
+        pointer = next(
+            (
+                f"/link_rules/{index}"
+                for index, rule in enumerate(rules)
+                if rule.get("id") == error.subject_id
+            ),
+            None,
+        )
+    elif error.segment_id is not None:
+        segments = session.get("segments") or ()
+        pointer = next(
+            (
+                f"/segments/{index}"
+                for index, segment in enumerate(segments)
+                if segment.get("id") == error.segment_id
+            ),
+            None,
+        )
+    return BuilderIssue(
+        code=code,
+        stage="semantic",
+        severity="error",
+        message=str(error),
+        blocks=("save", "deploy"),
+        source_ref=source_ref,
+        json_pointer=pointer,
+        draft_path="state.session" if pointer is not None else None,
+        subject_kind=error.subject_kind,
+        related_refs=tuple(
+            value
+            for value in (error.subject_id, error.segment_id, error.node_id)
+            if value is not None
+        ),
+    )
+
+
 def compile_builder_draft(
     request: BuilderCompileRequest,
     snapshot: CatalogReadSnapshot,
@@ -941,18 +992,11 @@ def compile_builder_draft(
         )
     except SessionResolutionError as error:
         issues.append(
-            BuilderIssue(
-                code="builder.semantic.session_resolution",
-                stage="semantic",
-                severity="error",
-                message=str(error),
-                blocks=("save", "deploy"),
+            _resolution_issue(
+                "builder.semantic.session_resolution",
+                error,
+                session=canonical_session.canonical_json,
                 source_ref=str(request.target_ref),
-                related_refs=tuple(
-                    value
-                    for value in (error.subject_id, error.segment_id, error.node_id)
-                    if value is not None
-                ),
             )
         )
     except CatalogReadError as error:
@@ -1035,12 +1079,10 @@ def compile_builder_draft(
                 )
         except SessionResolutionError as error:
             issues.append(
-                BuilderIssue(
-                    code="builder.semantic.preview_resolution",
-                    stage="semantic",
-                    severity="error",
-                    message=str(error),
-                    blocks=("save", "deploy"),
+                _resolution_issue(
+                    "builder.semantic.preview_resolution",
+                    error,
+                    session=canonical_session.canonical_json,
                     source_ref=str(request.target_ref),
                 )
             )

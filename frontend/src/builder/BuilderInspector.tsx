@@ -124,38 +124,37 @@ export function BuilderInspector({ node, ephemeris }: BuilderInspectorProps) {
         ))}
       </EditorCard>
 
-      {(node.forwarding || node.interfaces || node.originated_prefixes) && (
-        <EditorCard
-          title="Network"
-          summary={networkSummary || "—"}
-          open={openCard === "network"}
-          onToggle={() => toggle("network")}
-        >
-          {node.forwarding && <KeyValueRow label="forwarding">{node.forwarding}</KeyValueRow>}
-          {lo0?.ipv4 && <KeyValueRow label="lo0 ipv4">{lo0.ipv4}</KeyValueRow>}
-          {lo0?.ipv6 && <KeyValueRow label="lo0 ipv6">{lo0.ipv6}</KeyValueRow>}
-          {Object.entries(node.interfaces?.ethernet ?? {}).map(([name, address]) => (
-            <React.Fragment key={name}>
-              {address.ipv4 && (
-                <KeyValueRow label={`${name} ipv4`}>{address.ipv4}</KeyValueRow>
-              )}
-              {address.ipv6 && (
-                <KeyValueRow label={`${name} ipv6`}>{address.ipv6}</KeyValueRow>
-              )}
-            </React.Fragment>
-          ))}
-          {node.originated_prefixes?.ipv4?.map((prefix) => (
-            <KeyValueRow label="originates" key={prefix}>
-              {prefix}
-            </KeyValueRow>
-          ))}
-          {node.originated_prefixes?.ipv6?.map((prefix) => (
-            <KeyValueRow label="originates" key={prefix}>
-              {prefix}
-            </KeyValueRow>
-          ))}
-        </EditorCard>
-      )}
+      <EditorCard
+        title="Network"
+        summary={networkSummary || "—"}
+        open={openCard === "network"}
+        onToggle={() => toggle("network")}
+      >
+        {node.forwarding && <KeyValueRow label="forwarding">{node.forwarding}</KeyValueRow>}
+        <KeyValueRow label="profile">{node.profile}</KeyValueRow>
+        {lo0?.ipv4 && <KeyValueRow label="lo0 ipv4">{lo0.ipv4}</KeyValueRow>}
+        {lo0?.ipv6 && <KeyValueRow label="lo0 ipv6">{lo0.ipv6}</KeyValueRow>}
+        {Object.entries(node.interfaces?.ethernet ?? {}).map(([name, address]) => (
+          <React.Fragment key={name}>
+            {address.ipv4 && (
+              <KeyValueRow label={`${name} ipv4`}>{address.ipv4}</KeyValueRow>
+            )}
+            {address.ipv6 && (
+              <KeyValueRow label={`${name} ipv6`}>{address.ipv6}</KeyValueRow>
+            )}
+          </React.Fragment>
+        ))}
+        {node.originated_prefixes?.ipv4?.map((prefix) => (
+          <KeyValueRow label="originates" key={prefix}>
+            {prefix}
+          </KeyValueRow>
+        ))}
+        {node.originated_prefixes?.ipv6?.map((prefix) => (
+          <KeyValueRow label="originates" key={prefix}>
+            {prefix}
+          </KeyValueRow>
+        ))}
+      </EditorCard>
     </div>
   );
 }

@@ -249,6 +249,7 @@
           "node_id": "geo-inmarsat-098w",
           "originated_prefixes": null,
           "plane": null,
+          "profile": "nodalarc:profiles/frr-router.yaml",
           "role": "router",
           "routing_instances": [
             {
@@ -366,6 +367,7 @@
           "node_id": "geo-inmarsat-054w",
           "originated_prefixes": null,
           "plane": null,
+          "profile": "nodalarc:profiles/frr-router.yaml",
           "role": "router",
           "routing_instances": [
             {
@@ -483,6 +485,7 @@
           "node_id": "geo-inmarsat-025e",
           "originated_prefixes": null,
           "plane": null,
+          "profile": "nodalarc:profiles/frr-router.yaml",
           "role": "router",
           "routing_instances": [
             {
@@ -600,6 +603,7 @@
           "node_id": "geo-inmarsat-143e",
           "originated_prefixes": null,
           "plane": null,
+          "profile": "nodalarc:profiles/frr-router.yaml",
           "role": "router",
           "routing_instances": [
             {
@@ -722,6 +726,7 @@
             ]
           },
           "plane": null,
+          "profile": "nodalarc:profiles/frr-router.yaml",
           "role": "router",
           "routing_instances": [
             {
@@ -853,6 +858,7 @@
             ]
           },
           "plane": null,
+          "profile": "nodalarc:profiles/frr-router.yaml",
           "role": "router",
           "routing_instances": [
             {
@@ -984,6 +990,7 @@
             ]
           },
           "plane": null,
+          "profile": "nodalarc:profiles/frr-router.yaml",
           "role": "router",
           "routing_instances": [
             {
@@ -1115,6 +1122,7 @@
             ]
           },
           "plane": null,
+          "profile": "nodalarc:profiles/frr-router.yaml",
           "role": "router",
           "routing_instances": [
             {

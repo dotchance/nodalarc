@@ -37,6 +37,7 @@ from nodalarc.model_validation import Identifier
 from nodalarc.models.builder_world import BuilderWorld
 from nodalarc.models.configuration import ConfigurationDocument
 from nodalarc.models.link_rules import MountRole
+from nodalarc.models.resolved_session import ResolutionSubjectKind
 from nodalarc.models.segment_session import SegmentSessionConfig
 
 Sha256Digest = Annotated[str, Field(pattern=r"^sha256:[0-9a-f]{64}$")]
@@ -133,6 +134,8 @@ class BuilderIssue(_BuilderApplicationModel):
     draft_path: str | None = None
     source_line: int | None = Field(default=None, ge=1)
     source_column: int | None = Field(default=None, ge=1)
+    # The authored object a resolver refusal names; ``json_pointer`` locates it.
+    subject_kind: ResolutionSubjectKind | None = None
     related_refs: tuple[str, ...] = ()
 
     @model_validator(mode="after")

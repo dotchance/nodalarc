@@ -2037,10 +2037,8 @@ def test_rederive_accepts_the_rules_own_pending_edit_with_it(
         )
 
 
-def test_visual_authoring_assembly_creates_ref_composed_component_proposals(
-    service: BuilderVisualDraftService,
-) -> None:
-    workspace = BuilderVisualWorkspace(
+def _authored_node_workspace(*, profile: str | None) -> BuilderVisualWorkspace:
+    return BuilderVisualWorkspace(
         session_name="visual-components",
         start_time="2026-07-10T00:00:00Z",
         space=(
@@ -2051,6 +2049,7 @@ def test_visual_authoring_assembly_creates_ref_composed_component_proposals(
                     id="authored-node",
                     display_name="Authored node",
                     forwarding="routed",
+                    profile=profile,
                     ethernet=(),
                     terminals=(
                         BuilderVisualTerminalMount(
@@ -2071,9 +2070,36 @@ def test_visual_authoring_assembly_creates_ref_composed_component_proposals(
             ),
         ),
     )
+
+
+def test_an_authored_node_with_no_profile_compiles_to_the_refusal_on_its_segment(
+    service: BuilderVisualDraftService,
+) -> None:
     draft = _incomplete_draft(
         "user:sessions/visual-components.yaml",
-        workspace,
+        _authored_node_workspace(profile=None),
+        draft_revision=4,
+    )
+
+    result = service.compile(
+        BuilderVisualDraftCompileRequest(draft=draft),
+        available_node_count=100,
+    )
+
+    # The Builder writes no profile of its own; the resolver's refusal names the
+    # node and points at the segment that places it.
+    [refusal] = [issue for issue in result.compile_result.issues if issue.stage == "semantic"]
+    assert "no workload profile at any level" in refusal.message
+    assert (refusal.subject_kind, refusal.json_pointer) == ("node", "/segments/0")
+    assert result.compile_result.save_verdict.allowed is False
+
+
+def test_visual_authoring_assembly_creates_ref_composed_component_proposals(
+    service: BuilderVisualDraftService,
+) -> None:
+    draft = _incomplete_draft(
+        "user:sessions/visual-components.yaml",
+        _authored_node_workspace(profile="nodalarc:profiles/frr-router.yaml"),
         draft_revision=4,
     )
     assert draft.projection_status == "incomplete_authoring"

@@ -28,7 +28,6 @@ import {
   retargetVisualDraft,
   saveBuilderSession,
 } from "./builderApiClient";
-import type { BuilderResolveError } from "./builderTypes";
 import { writeSessionYamlExport } from "./sessionYamlTransfer";
 import type {
   BuilderCatalogBootstrap,
@@ -761,7 +760,11 @@ export function useBuilderWorld() {
   const [world, setWorld] = useState<BuilderWorld | null>(null);
   const [documentYaml, setDocumentYaml] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
-  const [resolveError, setResolveError] = useState<BuilderResolveError | null>(null);
+  // The compile's first refusal, with the issue that names its object when one does.
+  const [resolveError, setResolveError] = useState<{
+    readonly error: string;
+    readonly issue: BuilderIssue | null;
+  } | null>(null);
   const [compileResult, setCompileResult] = useState<BuilderCompileResult | null>(null);
   const [compileIssues, setCompileIssues] = useState<readonly BuilderIssue[]>([]);
   const [settledDocumentDigest, setSettledDocumentDigest] = useState<string | null>(null);
@@ -997,12 +1000,17 @@ export function useBuilderWorld() {
   const showCompile = useCallback(
     (compile: BuilderCompileResult | null, failure: string | null = null) => {
       const issues = compile?.issues ?? [];
-      const message = failure ?? issues.find((issue) => issue.severity === "error")?.message ?? null;
+      const refusing = failure === null ? (issues.find((i) => i.severity === "error") ?? null) : null;
+      const message = failure ?? refusing?.message ?? null;
       setCompileResult(compile);
       setCompileIssues(issues);
       setWorld(compile?.resolved_preview ?? null);
       setResolveError((current) =>
-        message === null ? null : current?.error === message ? current : { error: message },
+        message === null
+          ? null
+          : current?.error === message && current.issue?.json_pointer === refusing?.json_pointer
+            ? current
+            : { error: message, issue: refusing },
       );
     },
     [],

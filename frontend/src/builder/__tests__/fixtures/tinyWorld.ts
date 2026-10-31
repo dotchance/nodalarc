@@ -60,6 +60,7 @@ function node(
     surface_position: null,
     epoch_position: null,
     forwarding: null,
+    profile: "nodalarc:profiles/frr-router.yaml",
     role: "forwarding_only",
     routing_instances: [],
     terminal_inventory: blocks,

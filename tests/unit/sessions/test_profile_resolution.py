@@ -139,8 +139,13 @@ def test_missing_profile_at_every_level_is_refused(tmp_path: Path) -> None:
 
     session, roots = _session_with_user_ground(tmp_path, node_mutation=strip_default)
 
-    with pytest.raises(SessionResolutionError, match="no workload profile at any level"):
+    with pytest.raises(SessionResolutionError, match="no workload profile at any level") as refusal:
         resolve_session(session, catalog=FilesystemCatalogReadView(roots))
+    # The refusal names the node and the segment that places it.
+    ground = next(segment for segment in session["segments"] if "placement" in segment)
+    assert refusal.value.subject_kind == "node"
+    assert refusal.value.segment_id == ground["id"]
+    assert refusal.value.node_id is not None
 
 
 def test_conflicting_shared_site_segment_profiles_are_refused(tmp_path: Path) -> None:

@@ -449,7 +449,7 @@ def _computed_preview(
                 raise SessionResolutionError(
                     f"link rule {rule.rule_id!r}: allocated pair ({na}, {nb}) "
                     "matches neither endpoint orientation",
-                    subject_kind="link",
+                    subject_kind="link_rule",
                     subject_id=rule.rule_id,
                 )
             if not forward:
@@ -637,6 +637,7 @@ def world_from_resolution(resolution: SessionResolution) -> BuilderWorld:
             surface_position=node.surface_position,
             epoch_position=epoch_positions.get(node.node_id),
             forwarding=node.forwarding,
+            profile=node.profile,
             role=roles[node.node_id],
             routing_instances=routing_instances.get(node.node_id, ()),
             terminal_inventory=node.terminal_inventory,

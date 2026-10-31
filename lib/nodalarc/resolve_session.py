@@ -37,6 +37,7 @@ from nodalarc.models.identity import IdentityMode
 from nodalarc.models.link_rules import LinkLabel, LinkRule, NodeSelector, TerminalSelector
 from nodalarc.models.resolved_session import (
     OspfInstanceAreas,
+    ResolutionSubjectKind,
     ResolvedBodyFacts,
     ResolvedEndpoint,
     ResolvedEphemeris,
@@ -107,7 +108,7 @@ class SessionResolutionError(ValueError):
         self,
         message: str,
         *,
-        subject_kind: str | None = None,
+        subject_kind: ResolutionSubjectKind | None = None,
         subject_id: str | None = None,
         segment_id: str | None = None,
         node_id: str | None = None,
@@ -735,6 +736,9 @@ def _expand_constellation_segment(
         segment_profile=segment.profile,
         definition=node.get("profile"),
         catalog=catalog,
+        segment_id=segment.id,
+        subject_id=str(constellation["node"]),
+        node_id=None,
     )
     expanded: list[_RuntimeNode] = []
 
@@ -848,6 +852,9 @@ def _space_node_from_entry(
         segment_profile=segment.profile,
         definition=node.get("profile"),
         catalog=catalog,
+        segment_id=segment.id,
+        subject_id=local_id,
+        node_id=_runtime_id(segment.id, local_id),
     )
     tags = tuple(sorted({*(segment.tags or ()), *(entry.get("tags") or ())}))
     entry_clock = (
@@ -1194,6 +1201,9 @@ def _expand_site_placement(
             segment_profile=segment_profile,
             definition=source_node.get("profile"),
             catalog=catalog,
+            segment_id=groups[0],
+            subject_id=runtime_id,
+            node_id=runtime_id,
         )
         expanded.append(
             _RuntimeNode(
@@ -1335,6 +1345,9 @@ def _expand_ground_payload_members(
                 segment_profile=segment_profile,
                 definition=payload.get("profile"),
                 catalog=catalog,
+                segment_id=groups[0],
+                subject_id=member_runtime_id,
+                node_id=member_runtime_id,
             )
             members.append(
                 _RuntimeNode(
@@ -1686,6 +1699,9 @@ def _expand_space_payload_members(
                 segment_profile=segment_profile,
                 definition=payload.get("profile"),
                 catalog=catalog,
+                segment_id=node.segment_id,
+                subject_id=member_runtime_id,
+                node_id=member_runtime_id,
             )
             member_tags = set(node.tags)
             member_tags.update(mount.get("tags") or ())
@@ -4147,6 +4163,9 @@ def _effective_profile(
     segment_profile: Any,
     definition: Any,
     catalog: _ResolutionCatalog,
+    segment_id: str,
+    subject_id: str,
+    node_id: str | None,
 ) -> tuple[str, str, str | None]:
     """The most specific authored profile statement wins; absence is a refusal."""
 
@@ -4160,7 +4179,11 @@ def _effective_profile(
         raise SessionResolutionError(
             f"{described} has no workload profile at any level: none on the placed "
             "entry, none on the segment, and none on the node definition. There is "
-            "no default workload; state what the node runs."
+            "no default workload; state what the node runs.",
+            subject_kind="node",
+            subject_id=subject_id,
+            segment_id=segment_id,
+            node_id=node_id,
         )
     profile_body = _load_expected(reference, catalog, "profile")
     return reference, level, profile_body.get("adapter")

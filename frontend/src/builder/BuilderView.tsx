@@ -100,7 +100,6 @@ import {
   type EditorTarget,
   type SessionBuffer,
 } from "./useEditorWindows";
-import { wallTarget } from "./wallTarget";
 import {
   BuilderApiError,
   createCatalogDraft,
@@ -118,6 +117,7 @@ import type {
   BuilderVisualDraftAssemblyResult,
   BuilderVisualDraftEnvelope,
   BuilderDeployVerdict,
+  BuilderIssue,
   BuilderVisualAuthoringFacts,
   BuilderVisualDraftApplyYamlResult,
   BuilderVisualSchedulingPreset,
@@ -127,8 +127,31 @@ import type {
   CatalogComponentDraftEnvelope,
   CatalogComponentFamily,
   CatalogDocumentSummary,
+  JsonValue,
   SessionRef,
 } from "./generated/builderApi";
+
+/** The editor that owns a refusal: the segment or link rule its pointer names in
+ *  the session the backend compiled. A refusal naming no such object has none,
+ *  and the page shows it at session level. */
+function refusalTarget(
+  issue: BuilderIssue | null,
+  session: Readonly<Record<string, JsonValue>> | null,
+): { target: EditorTarget; key: string } | null {
+  const match = /^\/(segments|link_rules)\/(\d+)$/.exec(issue?.json_pointer ?? "");
+  const list = match && session ? session[match[1]!] : undefined;
+  const member = Array.isArray(list) ? list[Number(match![2])] : undefined;
+  if (!member || typeof member !== "object" || Array.isArray(member)) return null;
+  const id = member["id"];
+  if (typeof id !== "string") return null;
+  const target: EditorTarget =
+    match![1] === "link_rules"
+      ? { kind: "link", id }
+      : "placement" in member
+        ? { kind: "ground", id }
+        : { kind: "segment", id };
+  return { target, key: targetKey(target) };
+}
 import type { BuilderWorld } from "./builderTypes";
 
 interface BuilderViewProps {
@@ -844,10 +867,7 @@ export function BuilderView({
       if (gone) closeWindow(w.key);
     }
   }, [closeWindow, listed, windows]);
-  // The wall's owning editor target (wallTarget). A segment is matched against
-  // the preview overlay — the refused document was serialized from it, so a
-  // dirty segment must be matched by the dirty draft, not the applied state.
-  const wall = wallTarget(previewWorkspace() ?? workspace, listed, resolveError);
+  const wall = refusalTarget(resolveError?.issue ?? null, compileResult?.canonical_session_json ?? null);
   /** Inline wall text for one open editor window (null = not this window's). */
   const wallFor = (target: EditorTarget): string | null =>
     wall && targetKey(target) === wall.key ? (resolveError?.error ?? null) : null;

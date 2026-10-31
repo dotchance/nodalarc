@@ -93,6 +93,8 @@ class BuilderWorldNode(BaseModel):
     surface_position: ResolvedSurfacePosition | None = None
     epoch_position: NodePosition | None = None
     forwarding: Literal["routed", "host", "bridge", "control_only"] | None = None
+    # The workload profile the resolver chose for the node.
+    profile: str
     # The node's routing role and the routing instances it participates in,
     # as VS-API reports them for the deployed session.
     role: NodeRole

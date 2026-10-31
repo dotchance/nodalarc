@@ -1942,6 +1942,7 @@
           "node_id": "leo-a-sat-p00s00",
           "originated_prefixes": null,
           "plane": 0,
+          "profile": "nodalarc:profiles/frr-router.yaml",
           "role": "router",
           "routing_instances": [
             {
@@ -2042,6 +2043,7 @@
           "node_id": "leo-a-sat-p00s01",
           "originated_prefixes": null,
           "plane": 0,
+          "profile": "nodalarc:profiles/frr-router.yaml",
           "role": "router",
           "routing_instances": [
             {
@@ -2142,6 +2144,7 @@
           "node_id": "leo-a-sat-p00s02",
           "originated_prefixes": null,
           "plane": 0,
+          "profile": "nodalarc:profiles/frr-router.yaml",
           "role": "router",
           "routing_instances": [
             {
@@ -2242,6 +2245,7 @@
           "node_id": "leo-a-sat-p00s03",
           "originated_prefixes": null,
           "plane": 0,
+          "profile": "nodalarc:profiles/frr-router.yaml",
           "role": "router",
           "routing_instances": [
             {
@@ -2342,6 +2346,7 @@
           "node_id": "leo-a-sat-p00s04",
           "originated_prefixes": null,
           "plane": 0,
+          "profile": "nodalarc:profiles/frr-router.yaml",
           "role": "router",
           "routing_instances": [
             {
@@ -2442,6 +2447,7 @@
           "node_id": "leo-a-sat-p00s05",
           "originated_prefixes": null,
           "plane": 0,
+          "profile": "nodalarc:profiles/frr-router.yaml",
           "role": "router",
           "routing_instances": [
             {
@@ -2542,6 +2548,7 @@
           "node_id": "leo-a-sat-p00s06",
           "originated_prefixes": null,
           "plane": 0,
+          "profile": "nodalarc:profiles/frr-router.yaml",
           "role": "router",
           "routing_instances": [
             {
@@ -2642,6 +2649,7 @@
           "node_id": "leo-a-sat-p00s07",
           "originated_prefixes": null,
           "plane": 0,
+          "profile": "nodalarc:profiles/frr-router.yaml",
           "role": "router",
           "routing_instances": [
             {
@@ -2742,6 +2750,7 @@
           "node_id": "leo-a-sat-p00s08",
           "originated_prefixes": null,
           "plane": 0,
+          "profile": "nodalarc:profiles/frr-router.yaml",
           "role": "router",
           "routing_instances": [
             {
@@ -2842,6 +2851,7 @@
           "node_id": "leo-a-sat-p00s09",
           "originated_prefixes": null,
           "plane": 0,
+          "profile": "nodalarc:profiles/frr-router.yaml",
           "role": "router",
           "routing_instances": [
             {
@@ -2942,6 +2952,7 @@
           "node_id": "leo-a-sat-p00s10",
           "originated_prefixes": null,
           "plane": 0,
+          "profile": "nodalarc:profiles/frr-router.yaml",
           "role": "router",
           "routing_instances": [
             {
@@ -3042,6 +3053,7 @@
           "node_id": "leo-a-sat-p00s11",
           "originated_prefixes": null,
           "plane": 0,
+          "profile": "nodalarc:profiles/frr-router.yaml",
           "role": "router",
           "routing_instances": [
             {
@@ -3142,6 +3154,7 @@
           "node_id": "leo-a-sat-p00s12",
           "originated_prefixes": null,
           "plane": 0,
+          "profile": "nodalarc:profiles/frr-router.yaml",
           "role": "router",
           "routing_instances": [
             {
@@ -3242,6 +3255,7 @@
           "node_id": "leo-a-sat-p00s13",
           "originated_prefixes": null,
           "plane": 0,
+          "profile": "nodalarc:profiles/frr-router.yaml",
           "role": "router",
           "routing_instances": [
             {
@@ -3342,6 +3356,7 @@
           "node_id": "leo-a-sat-p00s14",
           "originated_prefixes": null,
           "plane": 0,
+          "profile": "nodalarc:profiles/frr-router.yaml",
           "role": "router",
           "routing_instances": [
             {
@@ -3442,6 +3457,7 @@
           "node_id": "leo-a-sat-p00s15",
           "originated_prefixes": null,
           "plane": 0,
+          "profile": "nodalarc:profiles/frr-router.yaml",
           "role": "router",
           "routing_instances": [
             {
@@ -3542,6 +3558,7 @@
           "node_id": "leo-a-sat-p00s16",
           "originated_prefixes": null,
           "plane": 0,
+          "profile": "nodalarc:profiles/frr-router.yaml",
           "role": "router",
           "routing_instances": [
             {
@@ -3642,6 +3659,7 @@
           "node_id": "leo-a-sat-p00s17",
           "originated_prefixes": null,
           "plane": 0,
+          "profile": "nodalarc:profiles/frr-router.yaml",
           "role": "router",
           "routing_instances": [
             {
@@ -3742,6 +3760,7 @@
           "node_id": "leo-a-sat-p00s18",
           "originated_prefixes": null,
           "plane": 0,
+          "profile": "nodalarc:profiles/frr-router.yaml",
           "role": "router",
           "routing_instances": [
             {
@@ -3842,6 +3861,7 @@
           "node_id": "leo-a-sat-p00s19",
           "originated_prefixes": null,
           "plane": 0,
+          "profile": "nodalarc:profiles/frr-router.yaml",
           "role": "router",
           "routing_instances": [
             {
@@ -3942,6 +3962,7 @@
           "node_id": "leo-a-sat-p00s20",
           "originated_prefixes": null,
           "plane": 0,
+          "profile": "nodalarc:profiles/frr-router.yaml",
           "role": "router",
           "routing_instances": [
             {
@@ -4042,6 +4063,7 @@
           "node_id": "leo-a-sat-p00s21",
           "originated_prefixes": null,
           "plane": 0,
+          "profile": "nodalarc:profiles/frr-router.yaml",
           "role": "router",
           "routing_instances": [
             {
@@ -4142,6 +4164,7 @@
           "node_id": "leo-a-sat-p00s22",
           "originated_prefixes": null,
           "plane": 0,
+          "profile": "nodalarc:profiles/frr-router.yaml",
           "role": "router",
           "routing_instances": [
             {
@@ -4242,6 +4265,7 @@
           "node_id": "leo-a-sat-p00s23",
           "originated_prefixes": null,
           "plane": 0,
+          "profile": "nodalarc:profiles/frr-router.yaml",
           "role": "router",
           "routing_instances": [
             {
@@ -4342,6 +4366,7 @@
           "node_id": "leo-a-sat-p00s24",
           "originated_prefixes": null,
           "plane": 0,
+          "profile": "nodalarc:profiles/frr-router.yaml",
           "role": "router",
           "routing_instances": [
             {
@@ -4442,6 +4467,7 @@
           "node_id": "leo-a-sat-p00s25",
           "originated_prefixes": null,
           "plane": 0,
+          "profile": "nodalarc:profiles/frr-router.yaml",
           "role": "router",
           "routing_instances": [
             {
@@ -4542,6 +4568,7 @@
           "node_id": "leo-a-sat-p00s26",
           "originated_prefixes": null,
           "plane": 0,
+          "profile": "nodalarc:profiles/frr-router.yaml",
           "role": "router",
           "routing_instances": [
             {
@@ -4642,6 +4669,7 @@
           "node_id": "leo-a-sat-p00s27",
           "originated_prefixes": null,
           "plane": 0,
+          "profile": "nodalarc:profiles/frr-router.yaml",
           "role": "router",
           "routing_instances": [
             {
@@ -4742,6 +4770,7 @@
           "node_id": "leo-a-sat-p00s28",
           "originated_prefixes": null,
           "plane": 0,
+          "profile": "nodalarc:profiles/frr-router.yaml",
           "role": "router",
           "routing_instances": [
             {
@@ -4842,6 +4871,7 @@
           "node_id": "leo-a-sat-p00s29",
           "originated_prefixes": null,
           "plane": 0,
+          "profile": "nodalarc:profiles/frr-router.yaml",
           "role": "router",
           "routing_instances": [
             {
@@ -4942,6 +4972,7 @@
           "node_id": "leo-a-sat-p00s30",
           "originated_prefixes": null,
           "plane": 0,
+          "profile": "nodalarc:profiles/frr-router.yaml",
           "role": "router",
           "routing_instances": [
             {
@@ -5042,6 +5073,7 @@
           "node_id": "leo-a-sat-p00s31",
           "originated_prefixes": null,
           "plane": 0,
+          "profile": "nodalarc:profiles/frr-router.yaml",
           "role": "router",
           "routing_instances": [
             {
@@ -5142,6 +5174,7 @@
           "node_id": "leo-a-sat-p00s32",
           "originated_prefixes": null,
           "plane": 0,
+          "profile": "nodalarc:profiles/frr-router.yaml",
           "role": "router",
           "routing_instances": [
             {
@@ -5242,6 +5275,7 @@
           "node_id": "leo-a-sat-p00s33",
           "originated_prefixes": null,
           "plane": 0,
+          "profile": "nodalarc:profiles/frr-router.yaml",
           "role": "router",
           "routing_instances": [
             {
@@ -5342,6 +5376,7 @@
           "node_id": "leo-a-sat-p00s34",
           "originated_prefixes": null,
           "plane": 0,
+          "profile": "nodalarc:profiles/frr-router.yaml",
           "role": "router",
           "routing_instances": [
             {
@@ -5442,6 +5477,7 @@
           "node_id": "leo-a-sat-p00s35",
           "originated_prefixes": null,
           "plane": 0,
+          "profile": "nodalarc:profiles/frr-router.yaml",
           "role": "router",
           "routing_instances": [
             {
@@ -5542,6 +5578,7 @@
           "node_id": "leo-b-sat-p00s00",
           "originated_prefixes": null,
           "plane": 0,
+          "profile": "nodalarc:profiles/frr-router.yaml",
           "role": "router",
           "routing_instances": [
             {
@@ -5661,6 +5698,7 @@
           "node_id": "leo-b-sat-p00s01",
           "originated_prefixes": null,
           "plane": 0,
+          "profile": "nodalarc:profiles/frr-router.yaml",
           "role": "router",
           "routing_instances": [
             {
@@ -5780,6 +5818,7 @@
           "node_id": "leo-b-sat-p00s02",
           "originated_prefixes": null,
           "plane": 0,
+          "profile": "nodalarc:profiles/frr-router.yaml",
           "role": "router",
           "routing_instances": [
             {
@@ -5899,6 +5938,7 @@
           "node_id": "leo-b-sat-p00s03",
           "originated_prefixes": null,
           "plane": 0,
+          "profile": "nodalarc:profiles/frr-router.yaml",
           "role": "router",
           "routing_instances": [
             {
@@ -6018,6 +6058,7 @@
           "node_id": "leo-b-sat-p00s04",
           "originated_prefixes": null,
           "plane": 0,
+          "profile": "nodalarc:profiles/frr-router.yaml",
           "role": "router",
           "routing_instances": [
             {
@@ -6141,6 +6182,7 @@
           "node_id": "leo-b-sat-p00s05",
           "originated_prefixes": null,
           "plane": 0,
+          "profile": "nodalarc:profiles/frr-router.yaml",
           "role": "router",
           "routing_instances": [
             {
@@ -6260,6 +6302,7 @@
           "node_id": "leo-b-sat-p01s00",
           "originated_prefixes": null,
           "plane": 1,
+          "profile": "nodalarc:profiles/frr-router.yaml",
           "role": "router",
           "routing_instances": [
             {
@@ -6379,6 +6422,7 @@
           "node_id": "leo-b-sat-p01s01",
           "originated_prefixes": null,
           "plane": 1,
+          "profile": "nodalarc:profiles/frr-router.yaml",
           "role": "router",
           "routing_instances": [
             {
@@ -6502,6 +6546,7 @@
           "node_id": "leo-b-sat-p01s02",
           "originated_prefixes": null,
           "plane": 1,
+          "profile": "nodalarc:profiles/frr-router.yaml",
           "role": "router",
           "routing_instances": [
             {
@@ -6621,6 +6666,7 @@
           "node_id": "leo-b-sat-p01s03",
           "originated_prefixes": null,
           "plane": 1,
+          "profile": "nodalarc:profiles/frr-router.yaml",
           "role": "router",
           "routing_instances": [
             {
@@ -6740,6 +6786,7 @@
           "node_id": "leo-b-sat-p01s04",
           "originated_prefixes": null,
           "plane": 1,
+          "profile": "nodalarc:profiles/frr-router.yaml",
           "role": "router",
           "routing_instances": [
             {
@@ -6859,6 +6906,7 @@
           "node_id": "leo-b-sat-p01s05",
           "originated_prefixes": null,
           "plane": 1,
+          "profile": "nodalarc:profiles/frr-router.yaml",
           "role": "router",
           "routing_instances": [
             {
@@ -6978,6 +7026,7 @@
           "node_id": "leo-b-sat-p02s00",
           "originated_prefixes": null,
           "plane": 2,
+          "profile": "nodalarc:profiles/frr-router.yaml",
           "role": "router",
           "routing_instances": [
             {
@@ -7097,6 +7146,7 @@
           "node_id": "leo-b-sat-p02s01",
           "originated_prefixes": null,
           "plane": 2,
+          "profile": "nodalarc:profiles/frr-router.yaml",
           "role": "router",
           "routing_instances": [
             {
@@ -7216,6 +7266,7 @@
           "node_id": "leo-b-sat-p02s02",
           "originated_prefixes": null,
           "plane": 2,
+          "profile": "nodalarc:profiles/frr-router.yaml",
           "role": "router",
           "routing_instances": [
             {
@@ -7335,6 +7386,7 @@
           "node_id": "leo-b-sat-p02s03",
           "originated_prefixes": null,
           "plane": 2,
+          "profile": "nodalarc:profiles/frr-router.yaml",
           "role": "router",
           "routing_instances": [
             {
@@ -7454,6 +7506,7 @@
           "node_id": "leo-b-sat-p02s04",
           "originated_prefixes": null,
           "plane": 2,
+          "profile": "nodalarc:profiles/frr-router.yaml",
           "role": "router",
           "routing_instances": [
             {
@@ -7573,6 +7626,7 @@
           "node_id": "leo-b-sat-p02s05",
           "originated_prefixes": null,
           "plane": 2,
+          "profile": "nodalarc:profiles/frr-router.yaml",
           "role": "router",
           "routing_instances": [
             {
@@ -7692,6 +7746,7 @@
           "node_id": "leo-b-sat-p03s00",
           "originated_prefixes": null,
           "plane": 3,
+          "profile": "nodalarc:profiles/frr-router.yaml",
           "role": "router",
           "routing_instances": [
             {
@@ -7811,6 +7866,7 @@
           "node_id": "leo-b-sat-p03s01",
           "originated_prefixes": null,
           "plane": 3,
+          "profile": "nodalarc:profiles/frr-router.yaml",
           "role": "router",
           "routing_instances": [
             {
@@ -7930,6 +7986,7 @@
           "node_id": "leo-b-sat-p03s02",
           "originated_prefixes": null,
           "plane": 3,
+          "profile": "nodalarc:profiles/frr-router.yaml",
           "role": "router",
           "routing_instances": [
             {
@@ -8049,6 +8106,7 @@
           "node_id": "leo-b-sat-p03s03",
           "originated_prefixes": null,
           "plane": 3,
+          "profile": "nodalarc:profiles/frr-router.yaml",
           "role": "router",
           "routing_instances": [
             {
@@ -8168,6 +8226,7 @@
           "node_id": "leo-b-sat-p03s04",
           "originated_prefixes": null,
           "plane": 3,
+          "profile": "nodalarc:profiles/frr-router.yaml",
           "role": "router",
           "routing_instances": [
             {
@@ -8287,6 +8346,7 @@
           "node_id": "leo-b-sat-p03s05",
           "originated_prefixes": null,
           "plane": 3,
+          "profile": "nodalarc:profiles/frr-router.yaml",
           "role": "router",
           "routing_instances": [
             {
@@ -8406,6 +8466,7 @@
           "node_id": "leo-b-sat-p04s00",
           "originated_prefixes": null,
           "plane": 4,
+          "profile": "nodalarc:profiles/frr-router.yaml",
           "role": "router",
           "routing_instances": [
             {
@@ -8525,6 +8586,7 @@
           "node_id": "leo-b-sat-p04s01",
           "originated_prefixes": null,
           "plane": 4,
+          "profile": "nodalarc:profiles/frr-router.yaml",
           "role": "router",
           "routing_instances": [
             {
@@ -8644,6 +8706,7 @@
           "node_id": "leo-b-sat-p04s02",
           "originated_prefixes": null,
           "plane": 4,
+          "profile": "nodalarc:profiles/frr-router.yaml",
           "role": "router",
           "routing_instances": [
             {
@@ -8763,6 +8826,7 @@
           "node_id": "leo-b-sat-p04s03",
           "originated_prefixes": null,
           "plane": 4,
+          "profile": "nodalarc:profiles/frr-router.yaml",
           "role": "router",
           "routing_instances": [
             {
@@ -8882,6 +8946,7 @@
           "node_id": "leo-b-sat-p04s04",
           "originated_prefixes": null,
           "plane": 4,
+          "profile": "nodalarc:profiles/frr-router.yaml",
           "role": "router",
           "routing_instances": [
             {
@@ -9001,6 +9066,7 @@
           "node_id": "leo-b-sat-p04s05",
           "originated_prefixes": null,
           "plane": 4,
+          "profile": "nodalarc:profiles/frr-router.yaml",
           "role": "router",
           "routing_instances": [
             {
@@ -9120,6 +9186,7 @@
           "node_id": "leo-b-sat-p05s00",
           "originated_prefixes": null,
           "plane": 5,
+          "profile": "nodalarc:profiles/frr-router.yaml",
           "role": "router",
           "routing_instances": [
             {
@@ -9239,6 +9306,7 @@
           "node_id": "leo-b-sat-p05s01",
           "originated_prefixes": null,
           "plane": 5,
+          "profile": "nodalarc:profiles/frr-router.yaml",
           "role": "router",
           "routing_instances": [
             {
@@ -9362,6 +9430,7 @@
           "node_id": "leo-b-sat-p05s02",
           "originated_prefixes": null,
           "plane": 5,
+          "profile": "nodalarc:profiles/frr-router.yaml",
           "role": "router",
           "routing_instances": [
             {
@@ -9481,6 +9550,7 @@
           "node_id": "leo-b-sat-p05s03",
           "originated_prefixes": null,
           "plane": 5,
+          "profile": "nodalarc:profiles/frr-router.yaml",
           "role": "router",
           "routing_instances": [
             {
@@ -9600,6 +9670,7 @@
           "node_id": "leo-b-sat-p05s04",
           "originated_prefixes": null,
           "plane": 5,
+          "profile": "nodalarc:profiles/frr-router.yaml",
           "role": "router",
           "routing_instances": [
             {
@@ -9719,6 +9790,7 @@
           "node_id": "leo-b-sat-p05s05",
           "originated_prefixes": null,
           "plane": 5,
+          "profile": "nodalarc:profiles/frr-router.yaml",
           "role": "router",
           "routing_instances": [
             {
@@ -9838,6 +9910,7 @@
           "node_id": "meo-sat-p00s00",
           "originated_prefixes": null,
           "plane": 0,
+          "profile": "nodalarc:profiles/frr-router.yaml",
           "role": "router",
           "routing_instances": [
             {
@@ -9953,6 +10026,7 @@
           "node_id": "meo-sat-p00s01",
           "originated_prefixes": null,
           "plane": 0,
+          "profile": "nodalarc:profiles/frr-router.yaml",
           "role": "router",
           "routing_instances": [
             {
@@ -10064,6 +10138,7 @@
           "node_id": "meo-sat-p00s02",
           "originated_prefixes": null,
           "plane": 0,
+          "profile": "nodalarc:profiles/frr-router.yaml",
           "role": "router",
           "routing_instances": [
             {
@@ -10179,6 +10254,7 @@
           "node_id": "meo-sat-p00s03",
           "originated_prefixes": null,
           "plane": 0,
+          "profile": "nodalarc:profiles/frr-router.yaml",
           "role": "router",
           "routing_instances": [
             {
@@ -10290,6 +10366,7 @@
           "node_id": "meo-sat-p01s00",
           "originated_prefixes": null,
           "plane": 1,
+          "profile": "nodalarc:profiles/frr-router.yaml",
           "role": "router",
           "routing_instances": [
             {
@@ -10405,6 +10482,7 @@
           "node_id": "meo-sat-p01s01",
           "originated_prefixes": null,
           "plane": 1,
+          "profile": "nodalarc:profiles/frr-router.yaml",
           "role": "router",
           "routing_instances": [
             {
@@ -10516,6 +10594,7 @@
           "node_id": "meo-sat-p01s02",
           "originated_prefixes": null,
           "plane": 1,
+          "profile": "nodalarc:profiles/frr-router.yaml",
           "role": "router",
           "routing_instances": [
             {
@@ -10631,6 +10710,7 @@
           "node_id": "meo-sat-p01s03",
           "originated_prefixes": null,
           "plane": 1,
+          "profile": "nodalarc:profiles/frr-router.yaml",
           "role": "router",
           "routing_instances": [
             {
@@ -10742,6 +10822,7 @@
           "node_id": "meo-sat-p02s00",
           "originated_prefixes": null,
           "plane": 2,
+          "profile": "nodalarc:profiles/frr-router.yaml",
           "role": "router",
           "routing_instances": [
             {
@@ -10857,6 +10938,7 @@
           "node_id": "meo-sat-p02s01",
           "originated_prefixes": null,
           "plane": 2,
+          "profile": "nodalarc:profiles/frr-router.yaml",
           "role": "router",
           "routing_instances": [
             {
@@ -10968,6 +11050,7 @@
           "node_id": "meo-sat-p02s02",
           "originated_prefixes": null,
           "plane": 2,
+          "profile": "nodalarc:profiles/frr-router.yaml",
           "role": "router",
           "routing_instances": [
             {
@@ -11083,6 +11166,7 @@
           "node_id": "meo-sat-p02s03",
           "originated_prefixes": null,
           "plane": 2,
+          "profile": "nodalarc:profiles/frr-router.yaml",
           "role": "router",
           "routing_instances": [
             {
@@ -11194,6 +11278,7 @@
           "node_id": "meo-sat-p03s00",
           "originated_prefixes": null,
           "plane": 3,
+          "profile": "nodalarc:profiles/frr-router.yaml",
           "role": "router",
           "routing_instances": [
             {
@@ -11305,6 +11390,7 @@
           "node_id": "meo-sat-p03s01",
           "originated_prefixes": null,
           "plane": 3,
+          "profile": "nodalarc:profiles/frr-router.yaml",
           "role": "router",
           "routing_instances": [
             {
@@ -11416,6 +11502,7 @@
           "node_id": "meo-sat-p03s02",
           "originated_prefixes": null,
           "plane": 3,
+          "profile": "nodalarc:profiles/frr-router.yaml",
           "role": "router",
           "routing_instances": [
             {
@@ -11527,6 +11614,7 @@
           "node_id": "meo-sat-p03s03",
           "originated_prefixes": null,
           "plane": 3,
+          "profile": "nodalarc:profiles/frr-router.yaml",
           "role": "router",
           "routing_instances": [
             {
@@ -11638,6 +11726,7 @@
           "node_id": "meo-sat-p04s00",
           "originated_prefixes": null,
           "plane": 4,
+          "profile": "nodalarc:profiles/frr-router.yaml",
           "role": "router",
           "routing_instances": [
             {
@@ -11749,6 +11838,7 @@
           "node_id": "meo-sat-p04s01",
           "originated_prefixes": null,
           "plane": 4,
+          "profile": "nodalarc:profiles/frr-router.yaml",
           "role": "router",
           "routing_instances": [
             {
@@ -11864,6 +11954,7 @@
           "node_id": "meo-sat-p04s02",
           "originated_prefixes": null,
           "plane": 4,
+          "profile": "nodalarc:profiles/frr-router.yaml",
           "role": "router",
           "routing_instances": [
             {
@@ -11975,6 +12066,7 @@
           "node_id": "meo-sat-p04s03",
           "originated_prefixes": null,
           "plane": 4,
+          "profile": "nodalarc:profiles/frr-router.yaml",
           "role": "router",
           "routing_instances": [
             {
@@ -12090,6 +12182,7 @@
           "node_id": "meo-sat-p05s00",
           "originated_prefixes": null,
           "plane": 5,
+          "profile": "nodalarc:profiles/frr-router.yaml",
           "role": "router",
           "routing_instances": [
             {
@@ -12201,6 +12294,7 @@
           "node_id": "meo-sat-p05s01",
           "originated_prefixes": null,
           "plane": 5,
+          "profile": "nodalarc:profiles/frr-router.yaml",
           "role": "router",
           "routing_instances": [
             {
@@ -12312,6 +12406,7 @@
           "node_id": "meo-sat-p05s02",
           "originated_prefixes": null,
           "plane": 5,
+          "profile": "nodalarc:profiles/frr-router.yaml",
           "role": "router",
           "routing_instances": [
             {
@@ -12423,6 +12518,7 @@
           "node_id": "meo-sat-p05s03",
           "originated_prefixes": null,
           "plane": 5,
+          "profile": "nodalarc:profiles/frr-router.yaml",
           "role": "router",
           "routing_instances": [
             {
@@ -12534,6 +12630,7 @@
           "node_id": "heo-relay-sat-p00s00",
           "originated_prefixes": null,
           "plane": 0,
+          "profile": "nodalarc:profiles/frr-router.yaml",
           "role": "router",
           "routing_instances": [
             {
@@ -12661,6 +12758,7 @@
           "node_id": "heo-relay-sat-p00s01",
           "originated_prefixes": null,
           "plane": 0,
+          "profile": "nodalarc:profiles/frr-router.yaml",
           "role": "router",
           "routing_instances": [
             {
@@ -12788,6 +12886,7 @@
           "node_id": "heo-relay-sat-p00s02",
           "originated_prefixes": null,
           "plane": 0,
+          "profile": "nodalarc:profiles/frr-router.yaml",
           "role": "router",
           "routing_instances": [
             {
@@ -12915,6 +13014,7 @@
           "node_id": "geo-relay-sat-p00s00",
           "originated_prefixes": null,
           "plane": 0,
+          "profile": "nodalarc:profiles/frr-router.yaml",
           "role": "router",
           "routing_instances": [
             {
@@ -13038,6 +13138,7 @@
           "node_id": "geo-relay-sat-p00s01",
           "originated_prefixes": null,
           "plane": 0,
+          "profile": "nodalarc:profiles/frr-router.yaml",
           "role": "router",
           "routing_instances": [
             {
@@ -13165,6 +13266,7 @@
           "node_id": "geo-relay-sat-p00s02",
           "originated_prefixes": null,
           "plane": 0,
+          "profile": "nodalarc:profiles/frr-router.yaml",
           "role": "router",
           "routing_instances": [
             {
@@ -13288,6 +13390,7 @@
           "node_id": "geo-relay-sat-p00s03",
           "originated_prefixes": null,
           "plane": 0,
+          "profile": "nodalarc:profiles/frr-router.yaml",
           "role": "router",
           "routing_instances": [
             {
@@ -13411,6 +13514,7 @@
           "node_id": "geo-relay-sat-p00s04",
           "originated_prefixes": null,
           "plane": 0,
+          "profile": "nodalarc:profiles/frr-router.yaml",
           "role": "router",
           "routing_instances": [
             {
@@ -13538,6 +13642,7 @@
           "node_id": "geo-relay-sat-p00s05",
           "originated_prefixes": null,
           "plane": 0,
+          "profile": "nodalarc:profiles/frr-router.yaml",
           "role": "router",
           "routing_instances": [
             {
@@ -13661,6 +13766,7 @@
           "node_id": "geo-relay-sat-p00s06",
           "originated_prefixes": null,
           "plane": 0,
+          "profile": "nodalarc:profiles/frr-router.yaml",
           "role": "router",
           "routing_instances": [
             {
@@ -13784,6 +13890,7 @@
           "node_id": "geo-relay-sat-p00s07",
           "originated_prefixes": null,
           "plane": 0,
+          "profile": "nodalarc:profiles/frr-router.yaml",
           "role": "router",
           "routing_instances": [
             {
@@ -13911,6 +14018,7 @@
           "node_id": "luna-relay-sat-p00s00",
           "originated_prefixes": null,
           "plane": 0,
+          "profile": "nodalarc:profiles/frr-router.yaml",
           "role": "router",
           "routing_instances": [
             {
@@ -14026,6 +14134,7 @@
           "node_id": "luna-relay-sat-p00s01",
           "originated_prefixes": null,
           "plane": 0,
+          "profile": "nodalarc:profiles/frr-router.yaml",
           "role": "router",
           "routing_instances": [
             {
@@ -14147,6 +14256,7 @@
             ]
           },
           "plane": null,
+          "profile": "nodalarc:profiles/frr-router.yaml",
           "role": "router",
           "routing_instances": [
             {
@@ -14252,6 +14362,7 @@
             ]
           },
           "plane": null,
+          "profile": "nodalarc:profiles/frr-router.yaml",
           "role": "router",
           "routing_instances": [
             {
@@ -14349,6 +14460,7 @@
             ]
           },
           "plane": null,
+          "profile": "nodalarc:profiles/frr-router.yaml",
           "role": "router",
           "routing_instances": [
             {
@@ -14450,6 +14562,7 @@
             ]
           },
           "plane": null,
+          "profile": "nodalarc:profiles/frr-router.yaml",
           "role": "router",
           "routing_instances": [
             {
@@ -14547,6 +14660,7 @@
             ]
           },
           "plane": null,
+          "profile": "nodalarc:profiles/frr-router.yaml",
           "role": "router",
           "routing_instances": [
             {
@@ -14648,6 +14762,7 @@
             ]
           },
           "plane": null,
+          "profile": "nodalarc:profiles/frr-router.yaml",
           "role": "router",
           "routing_instances": [
             {
@@ -14745,6 +14860,7 @@
             ]
           },
           "plane": null,
+          "profile": "nodalarc:profiles/frr-router.yaml",
           "role": "router",
           "routing_instances": [
             {
@@ -14846,6 +14962,7 @@
             ]
           },
           "plane": null,
+          "profile": "nodalarc:profiles/frr-router.yaml",
           "role": "router",
           "routing_instances": [
             {
@@ -14947,6 +15064,7 @@
             ]
           },
           "plane": null,
+          "profile": "nodalarc:profiles/frr-router.yaml",
           "role": "router",
           "routing_instances": [
             {
@@ -15048,6 +15166,7 @@
             ]
           },
           "plane": null,
+          "profile": "nodalarc:profiles/frr-router.yaml",
           "role": "router",
           "routing_instances": [
             {
@@ -15149,6 +15268,7 @@
             ]
           },
           "plane": null,
+          "profile": "nodalarc:profiles/frr-router.yaml",
           "role": "router",
           "routing_instances": [
             {
@@ -15246,6 +15366,7 @@
             ]
           },
           "plane": null,
+          "profile": "nodalarc:profiles/frr-router.yaml",
           "role": "router",
           "routing_instances": [
             {
@@ -15347,6 +15468,7 @@
             ]
           },
           "plane": null,
+          "profile": "nodalarc:profiles/frr-router.yaml",
           "role": "router",
           "routing_instances": [
             {
@@ -15448,6 +15570,7 @@
             ]
           },
           "plane": null,
+          "profile": "nodalarc:profiles/frr-router.yaml",
           "role": "router",
           "routing_instances": [
             {
@@ -15548,6 +15671,7 @@
             ]
           },
           "plane": null,
+          "profile": "nodalarc:profiles/frr-router.yaml",
           "role": "router",
           "routing_instances": [
             {
@@ -15645,6 +15769,7 @@
             ]
           },
           "plane": null,
+          "profile": "nodalarc:profiles/frr-router.yaml",
           "role": "router",
           "routing_instances": [
             {
@@ -15742,6 +15867,7 @@
             ]
           },
           "plane": null,
+          "profile": "nodalarc:profiles/frr-router.yaml",
           "role": "router",
           "routing_instances": [
             {
@@ -15830,6 +15956,7 @@
             ]
           },
           "plane": null,
+          "profile": "nodalarc:profiles/frr-router.yaml",
           "role": "router",
           "routing_instances": [
             {
@@ -15926,6 +16053,7 @@
             ]
           },
           "plane": null,
+          "profile": "nodalarc:profiles/frr-router.yaml",
           "role": "router",
           "routing_instances": [
             {
@@ -16057,6 +16185,7 @@
             ]
           },
           "plane": null,
+          "profile": "nodalarc:profiles/frr-router.yaml",
           "role": "router",
           "routing_instances": [
             {
@@ -16188,6 +16317,7 @@
             ]
           },
           "plane": null,
+          "profile": "nodalarc:profiles/frr-router.yaml",
           "role": "router",
           "routing_instances": [
             {
@@ -16319,6 +16449,7 @@
             ]
           },
           "plane": null,
+          "profile": "nodalarc:profiles/frr-router.yaml",
           "role": "router",
           "routing_instances": [
             {
@@ -16407,6 +16538,7 @@
             ]
           },
           "plane": null,
+          "profile": "nodalarc:profiles/frr-router.yaml",
           "role": "router",
           "routing_instances": [
             {

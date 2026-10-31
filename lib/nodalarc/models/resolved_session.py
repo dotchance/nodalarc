@@ -49,6 +49,8 @@ from nodalarc.models.terminal_physics import SatGroundTerminalBoresight, Termina
 from nodalarc.tle import tle_epoch_unix, tle_norad_id, validate_tle_pair
 
 type NodeKind = Literal["satellite", "ground_station"]
+# The authored object a resolution refusal names, when its raise site knows it.
+type ResolutionSubjectKind = Literal["segment", "link_rule", "node"]
 
 
 class InterfaceRates(NamedTuple):

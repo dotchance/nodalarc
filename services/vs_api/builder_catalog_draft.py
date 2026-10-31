@@ -11,7 +11,9 @@ from nodalarc.catalog_closure import (
     CatalogClosureCollector,
     CatalogClosureError,
     CatalogReadDocument,
+    CatalogReadError,
     CatalogReadView,
+    load_catalog_object,
     preserved_catalog_path,
 )
 from nodalarc.catalog_refs import CatalogRef
@@ -50,7 +52,7 @@ from nodalarc.models.catalog import (
     Node,
     Terminal,
 )
-from nodalarc.runtime_support import RuntimeSupport, UnsupportedFeature
+from nodalarc.runtime_support import RuntimeSupport
 from pydantic import TypeAdapter, ValidationError
 
 from .builder_catalog_service import BuilderCatalogAuthoringService, CatalogAuthoringError
@@ -144,28 +146,6 @@ def _decode_pointer(value: str) -> tuple[str, ...]:
             )
         tokens.append(token)
     return tuple(tokens)
-
-
-def _runtime_features(
-    family: CatalogComponentFamily,
-    canonical: CanonicalConfigurationDocument,
-) -> tuple[tuple[UnsupportedFeature, str], ...]:
-    support = RuntimeSupport.earth_luna()
-    model = catalog_family_spec(family).validate_document(canonical.canonical_json)
-    findings: list[tuple[UnsupportedFeature, str]] = []
-    if family == "orbits":
-        feature = support.check_propagator(cast(Any, model).propagator)
-        if feature is not None:
-            findings.append((feature, "/orbit/propagator"))
-    elif family == "payloads":
-        feature = support.check_payloads(True)
-        if feature is not None:
-            findings.append((feature, "/payload"))
-    elif family == "nodes":
-        feature = support.check_payloads(bool(cast(Any, model).payloads))
-        if feature is not None:
-            findings.append((feature, "/node/payloads"))
-    return tuple(findings)
 
 
 def _structural_issues(
@@ -299,11 +279,23 @@ def _analyze(
     family: CatalogComponentFamily,
     target_ref: CatalogRef,
     document: JsonDocument,
+    *,
+    view: CatalogReadView,
 ) -> tuple[CanonicalConfigurationDocument | None, tuple[CatalogDraftIssue, ...]]:
     try:
         canonical = canonicalize_persisted_configuration(target_ref, document)
     except (ValidationError, TypeError, ValueError) as error:
         return None, _structural_issues(family, target_ref, document, error)
+    model = catalog_family_spec(family).validate_document(canonical.canonical_json)
+    try:
+        findings = RuntimeSupport.earth_luna().check_catalog_object(
+            model,
+            body_id=lambda ref: str(cast(Any, load_catalog_object(CatalogRef(ref), view)[1]).id),
+        )
+    except CatalogReadError, ValidationError, ValueError:
+        # A body reference that does not read is the reference check's refusal,
+        # which blocks save and deploy; its runtime support has nothing to judge.
+        findings = ()
     runtime_issues = tuple(
         CatalogDraftIssue(
             code=f"catalog_draft.runtime_support.{feature.category.value}.{feature.value}",
@@ -312,7 +304,7 @@ def _analyze(
             pointer=pointer,
             blocks=("deploy",),
         )
-        for feature, pointer in _runtime_features(family, canonical)
+        for feature, pointer in findings
     )
     return canonical, runtime_issues
 
@@ -373,8 +365,10 @@ def _control_build(
     )
 
 
-def _envelope(state: CatalogComponentDraftState) -> CatalogComponentDraftEnvelope:
-    canonical, issues = _analyze(state.family, state.target_ref, state.document)
+def _envelope(
+    state: CatalogComponentDraftState, *, view: CatalogReadView
+) -> CatalogComponentDraftEnvelope:
+    canonical, issues = _analyze(state.family, state.target_ref, state.document, view=view)
     projected_yaml = (
         canonical.yaml_bytes.decode("utf-8")
         if canonical is not None
@@ -580,7 +574,8 @@ class BuilderCatalogDraftService:
                 family=request.family,
                 target_ref=target_ref,
                 document={wrapper: {"id": request.object_id}},
-            )
+            ),
+            view=snapshot,
         )
 
     def open(self, request: CatalogDraftOpenRequest) -> CatalogComponentDraftEnvelope:
@@ -622,7 +617,8 @@ class BuilderCatalogDraftService:
                 expected_source_revision=str(source.revision),
                 expected_target_revision=target_revision,
                 document=document,
-            )
+            ),
+            view=snapshot,
         )
 
     def mutate_controls(
@@ -634,7 +630,8 @@ class BuilderCatalogDraftService:
         if not isinstance(request, CatalogDraftControlMutationRequest):
             raise TypeError("request must be a CatalogDraftControlMutationRequest")
         self._assert_draft_revision(request.draft, request.expected_draft_revision)
-        self._assert_catalog_revisions(request.draft, _snapshot(self._context))
+        snapshot = _snapshot(self._context)
+        self._assert_catalog_revisions(request.draft, snapshot)
         control_build = _control_build(
             request.draft.family,
             request.draft.document,
@@ -665,7 +662,7 @@ class BuilderCatalogDraftService:
                 ref=request.draft.target_ref,
                 cause=error,
             )
-        return _envelope(_next_state(request.draft, document))
+        return _envelope(_next_state(request.draft, document), view=snapshot)
 
     def add_site_node(
         self,
@@ -754,7 +751,7 @@ class BuilderCatalogDraftService:
             }
         )
         site["nodes"] = nodes
-        return _envelope(_next_state(request.draft, document))
+        return _envelope(_next_state(request.draft, document), view=snapshot)
 
     def add_node_terminal_mount(
         self,
@@ -822,7 +819,7 @@ class BuilderCatalogDraftService:
             }
         )
         node["terminals"] = mounts
-        return _envelope(_next_state(request.draft, document))
+        return _envelope(_next_state(request.draft, document), view=snapshot)
 
     def add_node_ethernet_port(
         self,
@@ -863,7 +860,7 @@ class BuilderCatalogDraftService:
             port_id = f"terr{port_index}"
         ethernet.append({"id": port_id})
         node["ethernet"] = ethernet
-        return _envelope(_next_state(request.draft, document))
+        return _envelope(_next_state(request.draft, document), view=snapshot)
 
     def apply_yaml(
         self,
@@ -874,7 +871,8 @@ class BuilderCatalogDraftService:
         if not isinstance(request, CatalogDraftApplyYamlRequest):
             raise TypeError("request must be a CatalogDraftApplyYamlRequest")
         self._assert_draft_revision(request.draft, request.expected_draft_revision)
-        self._assert_catalog_revisions(request.draft, _snapshot(self._context))
+        snapshot = _snapshot(self._context)
+        self._assert_catalog_revisions(request.draft, snapshot)
         document, source_map, refusal_issues = _parse_yaml_application(
             request.draft.family,
             request.draft.target_ref,
@@ -882,13 +880,13 @@ class BuilderCatalogDraftService:
         )
         if document is None:
             return CatalogDraftApplyYamlResult(
-                draft=_envelope(request.draft),
+                draft=_envelope(request.draft, view=snapshot),
                 yaml_text=request.yaml_text,
                 applied=False,
                 canonicalization_required=False,
                 issues=refusal_issues,
             )
-        applied = _envelope(_next_state(request.draft, document))
+        applied = _envelope(_next_state(request.draft, document), view=snapshot)
         if source_map is not None:
             applied = CatalogComponentDraftEnvelope(
                 **{
@@ -900,7 +898,7 @@ class BuilderCatalogDraftService:
             )
         if any(issue.stage == "structural" for issue in applied.issues):
             return CatalogDraftApplyYamlResult(
-                draft=_envelope(request.draft),
+                draft=_envelope(request.draft, view=snapshot),
                 yaml_text=request.yaml_text,
                 applied=False,
                 canonicalization_required=False,
@@ -925,13 +923,14 @@ class BuilderCatalogDraftService:
             request.draft.family,
             request.draft.target_ref,
             request.draft.document,
+            view=snapshot,
         )
         if canonical is not None:
             issues = (
                 *issues,
                 *_reference_issues(snapshot, request.draft.target_ref, canonical),
             )
-        draft = _envelope(request.draft)
+        draft = _envelope(request.draft, view=snapshot)
         if draft.issues != issues:
             draft = CatalogComponentDraftEnvelope(
                 **{
@@ -995,7 +994,8 @@ class BuilderCatalogDraftService:
                 expected_source_revision=revision,
                 expected_target_revision=revision,
                 document=result.document.canonical_json,
-            )
+            ),
+            view=snapshot,
         )
         saved_compile = CatalogDraftCompileResult(
             draft=saved_draft,

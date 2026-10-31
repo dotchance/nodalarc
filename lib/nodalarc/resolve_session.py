@@ -166,6 +166,10 @@ class _ResolutionCatalog:
     def read(self, ref: CatalogRef) -> CatalogReadDocument:
         return self._view.read(ref)
 
+    def loaded(self) -> tuple[BaseModel, ...]:
+        """Every object this resolution has loaded so far."""
+        return tuple(model for _, model in self._objects.values())
+
     def load(self, ref: CatalogRef) -> tuple[str | None, BaseModel]:
         """The validated object behind ``ref``; a failed load is not remembered."""
         loaded = self._objects.get(ref)
@@ -210,6 +214,7 @@ def resolve_session_with_assets(
     _check_runtime_support(cfg, support, resolution_catalog)
 
     expanded_nodes, segments = _expand_segments(cfg, resolution_catalog)
+    _check_catalog_objects(resolution_catalog, support)
     _check_node_workloads(tuple(expanded_nodes), support)
     allocated_nodes, ethernet_segments = _allocate_segment_addressing(list(expanded_nodes))
     runtime_nodes = _apply_addressing(cfg, tuple(allocated_nodes))
@@ -220,8 +225,7 @@ def resolve_session_with_assets(
     resolved_nodes = tuple(item.node for item in runtime_nodes)
     _check_ground_scheduling_support(resolved_nodes, support)
     body_facts = _collect_body_facts(runtime_nodes)
-    _check_body_support(resolved_nodes, body_facts, support)
-    _check_propagator_support(resolved_nodes, support)
+    _check_frame_body_support(body_facts, support)
     ephemeris = _resolve_ephemeris(cfg, resolution_catalog, resolved_nodes)
     link_rules = tuple(_resolve_link_rule(rule, runtime_nodes) for rule in cfg.link_rules or ())
     _validate_routing_boundaries(cfg, routing_domains, link_rules)
@@ -406,58 +410,41 @@ def _check_runtime_support(
         raise UnsupportedFeatureError(unsupported)
 
 
-def _check_body_support(
-    nodes: tuple[ResolvedNode, ...],
-    body_facts: tuple[ResolvedBodyFacts, ...],
-    support: RuntimeSupport,
-) -> None:
-    """Gate resolved body usage against the runtime-support profile.
+def _check_catalog_objects(catalog: _ResolutionCatalog, support: RuntimeSupport) -> None:
+    """Gate every catalog object the session reached against the runtime-support
+    profile, through the check the Builder's component window also runs.
 
-    Body names are also constrained by model Literals, but the support profile
-    is the single typed authority for what the *selected* runtime implements —
-    an Earth-only profile must reject a Luna session with a typed reason, not
-    rely on schema width.
+    The grammar carries propagators and bodies the runtime cannot fly yet (e.g.
+    "crtbp" three-body trajectories). Those fail here with a typed reason;
+    propagating them through Kepler machinery would emit plausible-looking but
+    physically false trajectories.
     """
-    unsupported = []
+    unsupported: list[UnsupportedFeature] = []
     seen: set[tuple[str, str]] = set()
-
-    def _add(feature: UnsupportedFeature | None) -> None:
-        if feature is not None and (feature.category, feature.value) not in seen:
-            seen.add((feature.category, feature.value))
-            unsupported.append(feature)
-
-    for node in nodes:
-        if node.central_body is not None:
-            _add(support.check_central_body(node.central_body))
-        if node.reference_body is not None:
-            _add(support.check_reference_body(node.reference_body))
-    for facts in body_facts:
-        _add(support.check_frame_body(facts.body_id))
+    for model in catalog.loaded():
+        for feature, _ in support.check_catalog_object(
+            model,
+            body_id=lambda ref: str(_load_expected(ref, catalog, "body")["id"]),
+        ):
+            if (feature.category, feature.value) not in seen:
+                seen.add((feature.category, feature.value))
+                unsupported.append(feature)
     if unsupported:
         raise UnsupportedFeatureError(unsupported)
 
 
-def _check_propagator_support(
-    nodes: tuple[ResolvedNode, ...],
+def _check_frame_body_support(
+    body_facts: tuple[ResolvedBodyFacts, ...],
     support: RuntimeSupport,
 ) -> None:
-    """Gate orbit propagators against the runtime-support profile.
-
-    The grammar carries propagators the runtime cannot fly yet (e.g. "crtbp"
-    three-body NRHO/halo trajectories). Those must fail here with a typed
-    reason — propagating them through Kepler machinery would emit
-    plausible-looking but physically false trajectories.
-    """
+    """Gate the bodies whose frames the session uses against the runtime-support profile."""
     unsupported = []
     seen: set[str] = set()
-    for node in nodes:
-        if node.orbit is None:
+    for facts in body_facts:
+        if facts.body_id in seen:
             continue
-        propagator = node.orbit.propagator
-        if propagator in seen:
-            continue
-        seen.add(propagator)
-        if feature := support.check_propagator(propagator):
+        seen.add(facts.body_id)
+        if feature := support.check_frame_body(facts.body_id):
             unsupported.append(feature)
     if unsupported:
         raise UnsupportedFeatureError(unsupported)
@@ -2401,17 +2388,14 @@ def _check_node_workloads(
     runtime_nodes: tuple[_RuntimeNode, ...],
     support: RuntimeSupport,
 ) -> None:
-    """Refuse a node the runtime cannot execute as declared.
+    """Refuse a node whose workload adapter the runtime does not register.
 
-    Its workload adapter must be registered and its forwarding class one the
-    runtime executes.
+    Its forwarding class is its node definition's, gated with that object.
     """
     unsupported: list[UnsupportedFeature] = []
     for item in runtime_nodes:
         adapter = item.profile_adapter
         if adapter is not None and (feature := support.check_workload_adapter(adapter)):
-            unsupported.append(feature)
-        if feature := support.check_forwarding_class(item.node.forwarding):
             unsupported.append(feature)
     if unsupported:
         raise UnsupportedFeatureError(unsupported)

@@ -12,13 +12,14 @@ The matrix is data, not code branches: ``resolve_session`` takes a
 supported sets, with no change to call sites.
 """
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from enum import StrEnum
 
 from pydantic import BaseModel, ConfigDict, Field
 
 from adapters.registry import registered_adapter_support
 from nodalarc.model_validation import ADDRESS_FAMILIES, AddressFamily
+from nodalarc.models.catalog import BodyFixedFrameWrapper, Node, Orbit, Site, SpaceNodeSet
 from nodalarc.models.segment_session import BfdConfig
 from nodalarc.workloads.adapter import BfdSupport, RoutingProtocolSupport
 
@@ -705,6 +706,50 @@ class RuntimeSupport(BaseModel):
         if model in self.supported_clock_models:
             return None
         return self._unsupported(FeatureCategory.CLOCK_MODEL, model, "clock model")
+
+    def check_catalog_object(
+        self,
+        model: BaseModel,
+        *,
+        body_id: Callable[[str], str],
+    ) -> tuple[tuple[UnsupportedFeature, str], ...]:
+        """What the runtime cannot run in one catalog object, each at its JSON pointer.
+
+        These are the gates the object decides alone, with the bodies its
+        references reach (``body_id`` reads a body reference's id): a node's
+        forwarding class, an orbit's propagator and central body, a TLE
+        placement's central body, and a site's frame body. Gates that depend on
+        placement or profile precedence belong to the session's resolution.
+        """
+        findings: list[tuple[UnsupportedFeature, str]] = []
+
+        def add(feature: UnsupportedFeature | None, pointer: str) -> None:
+            if feature is not None:
+                findings.append((feature, pointer))
+
+        if isinstance(model, Node):
+            add(self.check_forwarding_class(model.forwarding), "/node/forwarding")
+        elif isinstance(model, Orbit):
+            add(self.check_propagator(model.propagator), "/orbit/propagator")
+            add(
+                self.check_central_body(body_id(str(model.central_body))),
+                "/orbit/central_body",
+            )
+        elif isinstance(model, SpaceNodeSet):
+            for index, entry in enumerate(model.nodes):
+                if entry.sgp4_tle is not None:
+                    pointer = f"/space_node_set/nodes/{index}/sgp4_tle"
+                    add(self.check_propagator("sgp4_tle"), pointer)
+                    add(
+                        self.check_central_body(body_id(str(entry.sgp4_tle.central_body))),
+                        f"{pointer}/central_body",
+                    )
+        elif isinstance(model, Site) and isinstance(model.frame, BodyFixedFrameWrapper):
+            add(
+                self.check_reference_body(body_id(str(model.frame.body_fixed.body))),
+                "/site/frame/body_fixed/body",
+            )
+        return tuple(findings)
 
     def check_payloads(self, has_payloads: bool) -> UnsupportedFeature | None:
         """Gate space-placed onboard execution: bus ports and payload mounts.

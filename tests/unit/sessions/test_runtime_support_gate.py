@@ -166,6 +166,17 @@ class TestMandatoryGate:
         resolved = resolve_session(raw)
         assert {n.central_body for n in resolved.nodes if n.kind == "satellite"} == {"luna"}
 
+    def test_earth_only_profile_refuses_luna_orbits_and_sites_at_their_objects(self) -> None:
+        raw = _lunar_constellation(_session())
+        _move_ground_sites_to_luna(raw)
+        with pytest.raises(UnsupportedFeatureError) as refusal:
+            resolve_session(raw, runtime_support=RuntimeSupport.earth_multi_regime())
+        # The orbit's central body and the site's frame body are each the
+        # object's own gate, the one the Builder's component window runs.
+        found = {(feature.category, feature.value) for feature in refusal.value.features}
+        assert (FeatureCategory.CENTRAL_BODY, "luna") in found
+        assert (FeatureCategory.REFERENCE_BODY, "luna") in found
+
 
 class TestCrossBodyAccess:
     def test_earth_ground_to_luna_satellite_access_rejected_at_resolve(self) -> None:

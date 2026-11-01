@@ -9,6 +9,9 @@
  * drag-to-reorder columns, drag-handle column resize, a flexible last column,
  * row click. Sorting/data stay controlled by the consumer — the table renders
  * and reports; it never owns data semantics.
+ *
+ * The table's root is the one element that sets a text size. Header text and
+ * column widths are em of it, so a consumer's textSize scales the whole table.
  */
 
 import { useRef, useState, type ReactNode } from "react";
@@ -17,8 +20,9 @@ import { Icon } from "./icons/Icon";
 export interface TableColumn<K extends string = string> {
   key: K;
   label: string;
-  /** Fixed px width; omit for the flexible column (usually the last). */
+  /** Fixed width in em of the table's text size; omit for the flexible column (usually the last). */
   width?: number;
+  /** In em, like width. */
   minWidth?: number;
   sortable?: boolean;
   /** Value renders in the data face by default. */
@@ -45,7 +49,11 @@ interface DataTableProps<Row, K extends string> {
   scrollRef?: React.RefObject<HTMLDivElement | null>;
   label: string;
   emptyText?: string;
+  /** Text size in px; omitted, the design system's --font-size-xs. */
+  textSize?: number;
 }
+
+const DEFAULT_MIN_WIDTH = 3.5;
 
 export function DataTable<Row, K extends string>({
   columns,
@@ -60,12 +68,14 @@ export function DataTable<Row, K extends string>({
   scrollRef,
   label,
   emptyText = "No rows",
+  textSize,
 }: DataTableProps<Row, K>) {
   const [dragOver, setDragOver] = useState<K | null>(null);
   const dragKey = useRef<K | null>(null);
+  const rootRef = useRef<HTMLDivElement>(null);
 
   const template = columns
-    .map((c) => (c.width !== undefined ? `${c.width}px` : "minmax(0, 1fr)"))
+    .map((c) => (c.width !== undefined ? `${c.width}em` : "minmax(0, 1fr)"))
     .join(" ");
 
   const headerClick = (col: TableColumn<K>) => {
@@ -81,9 +91,11 @@ export function DataTable<Row, K extends string>({
     e.stopPropagation();
     const startX = e.clientX;
     const startW = col.width;
-    const min = col.minWidth ?? 40;
+    const min = col.minWidth ?? DEFAULT_MIN_WIDTH;
+    // The pointer moves in px; widths are em of the size the root renders at.
+    const em = parseFloat(getComputedStyle(rootRef.current!).fontSize);
     const onMove = (ev: PointerEvent) => {
-      const w = Math.max(min, startW + ev.clientX - startX);
+      const w = Math.max(min, startW + (ev.clientX - startX) / em);
       onColumnsChange(columns.map((c) => (c.key === col.key ? { ...c, width: w } : c)));
     };
     const onUp = () => {
@@ -106,7 +118,13 @@ export function DataTable<Row, K extends string>({
   };
 
   return (
-    <div className="ui-table" role="table" aria-label={label}>
+    <div
+      ref={rootRef}
+      className="ui-table"
+      role="table"
+      aria-label={label}
+      style={textSize === undefined ? undefined : { fontSize: textSize }}
+    >
       <div className="ui-table-head" role="row" style={{ gridTemplateColumns: template }}>
         {columns.map((col) => (
           <div

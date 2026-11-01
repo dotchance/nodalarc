@@ -13,6 +13,7 @@ import { IconButton } from "../ui/Button";
 import { Icon } from "../ui/icons/Icon";
 import { setSearchTarget } from "../ui/searchFocus";
 import { formatTime } from "../translate";
+import { tokens } from "../styles/tokens";
 import type {
   DebugSourceControl,
   OpsLevel,
@@ -67,10 +68,10 @@ const LEVEL_CLASS: Record<OpsLevel, string> = {
 };
 
 const LOG_COLUMNS: TableColumn[] = [
-  { key: "timestamp", label: "timestamp", width: 90, minWidth: 60, sortable: true },
-  { key: "source", label: "source", width: 80, minWidth: 50, sortable: true },
-  { key: "level", label: "level", width: 65, minWidth: 45, sortable: true },
-  { key: "code", label: "code", width: 100, minWidth: 50, sortable: true },
+  { key: "timestamp", label: "timestamp", width: 8, minWidth: 5.5, sortable: true },
+  { key: "source", label: "source", width: 7.5, minWidth: 4.5, sortable: true },
+  { key: "level", label: "level", width: 6, minWidth: 4, sortable: true },
+  { key: "code", label: "code", width: 9, minWidth: 4.5, sortable: true },
   { key: "message", label: "message", sortable: true, mono: false },
 ];
 
@@ -91,12 +92,11 @@ export function LogPanel({
   const [hiddenLevels, setHiddenLevels] = useState<ReadonlySet<OpsLevel>>(new Set());
   const [sourceFilter, setSourceFilter] = useState<string>("all");
   const [searchPattern, setSearchPattern] = useState("");
-  const [searchValid, setSearchValid] = useState(true);
   const [debugDropdownOpen, setDebugDropdownOpen] = useState(false);
   // An enable the page sent, by source: the request_seq VS-API showed for that source
   // when it was sent. It is pending until a later request's outcome arrives.
   const [debugPending, setDebugPending] = useState<Map<ServiceSource, number>>(new Map());
-  const [fontSize, setFontSize] = useState(11);
+  const [textSize, setTextSize] = useState(() => parseFloat(tokens.fontSizeXs));
   // A clear hides every row VS-API had sent when it was pressed: the newest seq then,
   // in the seq space of that token. Event timestamps come from the servers' clocks, so
   // they cannot be compared with the browser's.
@@ -105,20 +105,7 @@ export function LogPanel({
 
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const autoScrollRef = useRef(true);
-  const prevFontSizeRef = useRef(fontSize);
   const debugRootRef = useRef<HTMLDivElement>(null);
-
-  // Column widths track the font scale so resized columns stay proportional.
-  useEffect(() => {
-    if (prevFontSizeRef.current === fontSize) return;
-    const scale = fontSize / prevFontSizeRef.current;
-    prevFontSizeRef.current = fontSize;
-    const rescale = (cols: TableColumn[]) =>
-      cols.map((c) =>
-        c.width !== undefined ? { ...c, width: Math.max(c.minWidth ?? 40, Math.round(c.width * scale)) } : c,
-      );
-    setLogColumns(rescale);
-  }, [fontSize]);
 
   useEffect(() => {
     if (!paused) setPausedEvents([]);
@@ -162,15 +149,13 @@ export function LogPanel({
     return () => document.removeEventListener("pointerdown", onPointerDown);
   }, [debugDropdownOpen]);
 
-  const searchRegex = useMemo(() => {
-    if (!searchPattern) return null;
+  // Whether the pattern is valid is a fact of the pattern, derived with its regex.
+  const { searchRegex, searchValid } = useMemo(() => {
+    if (!searchPattern) return { searchRegex: null, searchValid: true };
     try {
-      const re = new RegExp(searchPattern, "i");
-      setSearchValid(true);
-      return re;
+      return { searchRegex: new RegExp(searchPattern, "i"), searchValid: true };
     } catch {
-      setSearchValid(false);
-      return null;
+      return { searchRegex: null, searchValid: false };
     }
   }, [searchPattern]);
 
@@ -295,8 +280,8 @@ export function LogPanel({
       persistKey="logs"
       headerExtras={
         <>
-          <IconButton icon="minus" label="Smaller text" onClick={() => setFontSize((s) => Math.max(9, s - 1))} />
-          <IconButton icon="plus" label="Larger text" onClick={() => setFontSize((s) => Math.min(16, s + 1))} />
+          <IconButton icon="minus" label="Smaller text" onClick={() => setTextSize((s) => Math.max(9, s - 1))} />
+          <IconButton icon="plus" label="Larger text" onClick={() => setTextSize((s) => Math.min(16, s + 1))} />
         </>
       }
     >
@@ -402,9 +387,10 @@ export function LogPanel({
           {paused ? "resume" : "pause"}
         </button>
       </div>
-      <div className="log-table" style={{ fontSize }}>
+      <div className="log-table">
         <DataTable
             label="System logs"
+            textSize={textSize}
             columns={logColumns}
             onColumnsChange={setLogColumns}
             rows={sortedLogs}

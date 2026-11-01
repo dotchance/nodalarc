@@ -10,7 +10,7 @@ import { Tabs } from "../Tabs";
 afterEach(cleanup);
 
 const COLUMNS: TableColumn[] = [
-  { key: "time", label: "Time", width: 90, sortable: true },
+  { key: "time", label: "Time", width: 8, sortable: true },
   { key: "msg", label: "Message" },
 ];
 
@@ -21,7 +21,7 @@ const ROWS: DemoRow[] = [
   { id: "b", time: "02:00", msg: "second" },
 ];
 
-function renderTable(over: { rows?: DemoRow[]; sort?: SortState | null } = {}) {
+function renderTable(over: { rows?: DemoRow[]; sort?: SortState | null; textSize?: number } = {}) {
   const onSortChange = vi.fn();
   const onColumnsChange = vi.fn();
   render(
@@ -34,6 +34,7 @@ function renderTable(over: { rows?: DemoRow[]; sort?: SortState | null } = {}) {
       renderCell={(r: DemoRow, k: string) => r[k as keyof DemoRow]}
       sort={over.sort ?? null}
       onSortChange={onSortChange}
+      textSize={over.textSize}
     />,
   );
   return { onSortChange, onColumnsChange };
@@ -59,6 +60,23 @@ describe("DataTable", () => {
     const { onSortChange } = renderTable();
     fireEvent.click(screen.getByText("Message"));
     expect(onSortChange).not.toHaveBeenCalled();
+  });
+
+  it("sizes text and column widths from its one text size, and resizes in em of it", () => {
+    const { onColumnsChange } = renderTable({ textSize: 14 });
+    const table = screen.getByRole("table");
+    expect(table.style.fontSize).toBe("14px");
+    for (const row of screen.getAllByRole("row")) {
+      expect(row.style.gridTemplateColumns).toBe("8em minmax(0, 1fr)");
+    }
+
+    // 28 px of pointer travel at 14 px text is 2 em.
+    const handle = table.querySelector(".ui-table-resize")!;
+    handle.dispatchEvent(new MouseEvent("pointerdown", { bubbles: true, clientX: 100 }));
+    window.dispatchEvent(new MouseEvent("pointermove", { clientX: 128 }));
+    window.dispatchEvent(new MouseEvent("pointerup", {}));
+    const next = onColumnsChange.mock.lastCall![0] as TableColumn[];
+    expect(next[0]!.width).toBe(10);
   });
 
   it("drag-and-drop reorders columns", () => {

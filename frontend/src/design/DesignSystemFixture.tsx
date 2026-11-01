@@ -75,9 +75,9 @@ function setTheme(name: ThemeName) {
 }
 
 const DEMO_COLUMNS: TableColumn[] = [
-  { key: "time", label: "Time", width: 90, sortable: true },
-  { key: "source", label: "Source", width: 90, sortable: true },
-  { key: "level", label: "Level", width: 70, sortable: true },
+  { key: "time", label: "Time", width: 8, sortable: true },
+  { key: "source", label: "Source", width: 8, sortable: true },
+  { key: "level", label: "Level", width: 6.5, sortable: true },
   { key: "message", label: "Message", mono: false },
 ];
 

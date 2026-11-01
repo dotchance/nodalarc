@@ -125,6 +125,27 @@ describe("LogPanel", () => {
     expect(shownMessages()).toEqual(["export waiting for kernel proof"]);
   });
 
+  it("sets the table's text size from the window's text buttons", () => {
+    renderPanel();
+    const table = screen.getByRole("table", { name: "System logs" });
+    expect(table.style.fontSize).toBe("11px");
+    fireEvent.click(screen.getByRole("button", { name: "Larger text" }));
+    fireEvent.click(screen.getByRole("button", { name: "Larger text" }));
+    expect(table.style.fontSize).toBe("13px");
+    fireEvent.click(screen.getByRole("button", { name: "Smaller text" }));
+    expect(table.style.fontSize).toBe("12px");
+  });
+
+  it("drops the invalid mark when an invalid search is erased", () => {
+    renderPanel();
+    const search = screen.getByPlaceholderText(/Search/);
+    fireEvent.change(search, { target: { value: "(unclosed" } });
+    expect(screen.getByText("invalid regex")).toBeTruthy();
+    fireEvent.change(search, { target: { value: "" } });
+    expect(screen.queryByText("invalid regex")).toBeNull();
+    expect(shownMessages()).toHaveLength(2);
+  });
+
   it("level chip toggles filter rows out", () => {
     renderPanel();
     fireEvent.click(screen.getByRole("button", { name: "error" }));

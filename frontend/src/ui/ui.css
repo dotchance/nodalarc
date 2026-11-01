@@ -321,7 +321,8 @@
   align-items: center;
   gap: var(--space-1);
   font-family: var(--font-ui);
-  font-size: var(--font-size-xxs);
+  /* A step below the cells; em so the table's text size scales it. */
+  font-size: 0.9em;
   font-weight: var(--font-weight-semibold);
   text-transform: uppercase;
   letter-spacing: 0.04em;

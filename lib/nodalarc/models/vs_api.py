@@ -462,8 +462,9 @@ class StateSnapshot(BaseModel):
     # Identifies VS-API's seq space; a change means VS-API restarted and the client
     # replaces its scrollback.
     ops_log_token: str
-    # The latest debug events; empty while no service acknowledged an enable.
-    debug_events: list[OpsEvent]
+    # The latest debug events, stamped from the same seq space as ops_events; empty while
+    # no service acknowledged an enable.
+    debug_events: list[StampedOpsEvent]
     # VS-API's last debug control request to each service it has asked.
     debug_control: list[DebugSourceControl]
     # Whether VS-API's own subscription to the debug stream is open.

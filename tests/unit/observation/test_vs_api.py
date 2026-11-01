@@ -2964,16 +2964,47 @@ class TestSessionHistory:
             state="stopped", error="failed to record LinkUp"
         )
 
+    def test_debug_events_carry_the_seq_ops_events_carry(self, monkeypatch, caplog):
+        import asyncio
+        from collections import deque
+
+        import vs_api.main as m
+        from vs_api.ops_log import stamp_ops_event
+
+        monkeypatch.setattr(m, "_debug_events", deque(maxlen=500))
+        before = stamp_ops_event(_ops_event_dict("BEFORE")).seq
+        for code in ("FIRST", "SECOND"):
+            msg = _Message()
+            msg.data = json.dumps({**_ops_event_dict(code), "level": "debug"}).encode()
+            asyncio.run(m._on_debug_event(msg))
+        after = stamp_ops_event(_ops_event_dict("AFTER")).seq
+
+        # One seq space with the ops events: each debug event gets its own arrival seq.
+        assert [(event.code, event.seq) for event in m._debug_events] == [
+            ("FIRST", before + 1),
+            ("SECOND", before + 2),
+        ]
+        assert after == before + 3
+
+        # A message that is not an ops event is refused at ingestion and logged.
+        malformed = _Message()
+        malformed.data = b'{"code": "NO_SOURCE"}'
+        with caplog.at_level("ERROR"):
+            asyncio.run(m._on_debug_event(malformed))
+        assert len(m._debug_events) == 2
+        assert "NODALARC_DEBUG message is not an ops event" in caplog.text
+
     def test_both_state_routes_serve_the_frame_vs_api_built(self, tmp_path, monkeypatch):
         from types import SimpleNamespace
 
         import vs_api.main as m
-        from nodalarc.models.events import OpsEvent
 
         ctx = _recorded_context(tmp_path / "run-history-0001.db")
         ctx._record_history("session metadata", ctx._open_history)
         ctx.sim_time = "2026-09-24T12:00:00+00:00"
-        debug_event = OpsEvent.model_validate({**_ops_event_dict("TICK"), "level": "debug"})
+        debug_event = StampedOpsEvent.model_validate(
+            {**_ops_event_dict("TICK"), "level": "debug", "seq": 7}
+        )
         monkeypatch.setattr(m, "_API_KEY", "")
         monkeypatch.setattr(m, "_active_context", ctx)
         monkeypatch.setattr(

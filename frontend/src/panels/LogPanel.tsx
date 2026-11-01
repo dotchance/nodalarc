@@ -13,11 +13,20 @@ import { IconButton } from "../ui/Button";
 import { Icon } from "../ui/icons/Icon";
 import { setSearchTarget } from "../ui/searchFocus";
 import { formatTime } from "../translate";
-import type { DebugSourceControl, OpsEvent, OpsLevel, ServiceSource, StateSocketCommand } from "../generated/vsApi";
+import type {
+  DebugSourceControl,
+  OpsLevel,
+  ServiceSource,
+  StampedOpsEvent,
+  StateSocketCommand,
+} from "../generated/vsApi";
 
 interface LogPanelProps {
-  events: readonly OpsEvent[];
-  debugEvents: readonly OpsEvent[];
+  /** VS-API's ops and debug events; each carries the arrival seq that identifies it. */
+  events: readonly StampedOpsEvent[];
+  debugEvents: readonly StampedOpsEvent[];
+  /** VS-API's seq space; a new token means VS-API restarted and seq began again at 1. */
+  opsLogToken: string | null;
   debugControl: readonly DebugSourceControl[];
   debugSubscriptionOpen: boolean;
   sendMessage: (command: StateSocketCommand) => void;
@@ -69,13 +78,14 @@ const LOG_COLUMNS: TableColumn[] = [
 export function LogPanel({
   events,
   debugEvents,
+  opsLogToken,
   debugControl,
   debugSubscriptionOpen,
   sendMessage,
   onClose,
 }: LogPanelProps) {
   const [paused, setPaused] = useState(false);
-  const [pausedEvents, setPausedEvents] = useState<OpsEvent[]>([]);
+  const [pausedEvents, setPausedEvents] = useState<StampedOpsEvent[]>([]);
   const [sort, setSort] = useState<SortState | null>({ key: "timestamp", dir: "desc" });
   // The levels the user hid; a row is dropped only when its level is hidden.
   const [hiddenLevels, setHiddenLevels] = useState<ReadonlySet<OpsLevel>>(new Set());
@@ -87,7 +97,10 @@ export function LogPanel({
   // when it was sent. It is pending until a later request's outcome arrives.
   const [debugPending, setDebugPending] = useState<Map<ServiceSource, number>>(new Map());
   const [fontSize, setFontSize] = useState(11);
-  const [clearedAt, setClearedAt] = useState<number | null>(null);
+  // A clear hides every row VS-API had sent when it was pressed: the newest seq then,
+  // in the seq space of that token. Event timestamps come from the servers' clocks, so
+  // they cannot be compared with the browser's.
+  const [cleared, setCleared] = useState<{ token: string | null; throughSeq: number } | null>(null);
   const [logColumns, setLogColumns] = useState(LOG_COLUMNS);
 
   const scrollRef = useRef<HTMLDivElement | null>(null);
@@ -164,15 +177,10 @@ export function LogPanel({
   const displayEvents = useMemo(() => {
     const opsSource = paused ? pausedEvents : events;
     const allEvents = debugActive.length > 0 ? [...opsSource, ...debugEvents] : opsSource;
-    if (clearedAt === null) return allEvents;
-    return allEvents.filter((e) => {
-      try {
-        return new Date(e.timestamp).getTime() > clearedAt;
-      } catch {
-        return true;
-      }
-    });
-  }, [paused, pausedEvents, events, debugEvents, debugActive.length, clearedAt]);
+    // Under another token every row shown arrived after the clear.
+    if (cleared === null || cleared.token !== opsLogToken) return allEvents;
+    return allEvents.filter((e) => e.seq > cleared.throughSeq);
+  }, [paused, pausedEvents, events, debugEvents, debugActive.length, cleared, opsLogToken]);
 
   const sortedLogs = useMemo(() => {
     let result = displayEvents.filter((e) => {
@@ -188,9 +196,17 @@ export function LogPanel({
     if (sort) {
       const { key, dir } = sort;
       result = [...result].sort((a, b) => {
-        const av = a[key as keyof OpsEvent] ?? "";
-        const bv = b[key as keyof OpsEvent] ?? "";
-        const cmp = av < bv ? -1 : av > bv ? 1 : 0;
+        // Timestamps compare as times (VS-API writes fractions only when they are
+        // non-zero, so the strings do not order); events in one instant keep VS-API's
+        // arrival order.
+        let cmp: number;
+        if (key === "timestamp") {
+          cmp = Date.parse(a.timestamp) - Date.parse(b.timestamp) || a.seq - b.seq;
+        } else {
+          const av = a[key as keyof StampedOpsEvent] ?? "";
+          const bv = b[key as keyof StampedOpsEvent] ?? "";
+          cmp = av < bv ? -1 : av > bv ? 1 : 0;
+        }
         return dir === "asc" ? cmp : -cmp;
       });
     }
@@ -365,7 +381,16 @@ export function LogPanel({
         />
         {!searchValid && <span className="log-invalid">invalid regex</span>}
         <span className="log-spring" />
-        <button className="log-chip" onClick={() => setClearedAt(Date.now())} title="Hide rows older than now">
+        <button
+          className="log-chip"
+          onClick={() =>
+            setCleared({
+              token: opsLogToken,
+              throughSeq: Math.max(0, ...events.map((e) => e.seq), ...debugEvents.map((e) => e.seq)),
+            })
+          }
+          title="Hide the rows received so far"
+        >
           clear
         </button>
         <button
@@ -383,7 +408,9 @@ export function LogPanel({
             columns={logColumns}
             onColumnsChange={setLogColumns}
             rows={sortedLogs}
-            rowKey={(e) => `${e.timestamp}-${e.source}-${e.code}-${e.message}`}
+            // VS-API's seq identifies each event; two events alike in every shown
+            // field are still two rows.
+            rowKey={(e) => String(e.seq)}
             sort={sort}
             onSortChange={setSort}
             scrollRef={scrollRef}
@@ -397,7 +424,7 @@ export function LogPanel({
                   <span title={e.details ? JSON.stringify(e.details) : e.message}>{highlight(e.message)}</span>
                 );
               }
-              return highlight(String(e[key as keyof OpsEvent] ?? ""));
+              return highlight(String(e[key as keyof StampedOpsEvent] ?? ""));
             }}
           />
       </div>

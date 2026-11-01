@@ -554,6 +554,7 @@ function AppInner() {
         <LogPanel
           events={snapshot?.ops_events ?? []}
           debugEvents={snapshot?.debug_events ?? []}
+          opsLogToken={snapshot?.ops_log_token ?? null}
           debugControl={snapshot?.debug_control ?? []}
           debugSubscriptionOpen={snapshot?.debug_subscription_open ?? false}
           sendMessage={sendMessage}

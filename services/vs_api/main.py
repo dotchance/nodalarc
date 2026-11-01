@@ -384,7 +384,7 @@ _debug_sub: object | None = None
 # VS-API's last debug control request to each service, and what came back.
 _debug_control: dict[ServiceSource, DebugSourceControl] = {}
 _debug_request_seq = itertools.count(1)
-_debug_events: deque[OpsEvent] = deque(maxlen=500)
+_debug_events: deque[StampedOpsEvent] = deque(maxlen=500)
 
 
 def _get_transition_operation_store() -> TransitionOperationStore:
@@ -698,9 +698,18 @@ async def _cleanup_debug_client(ws_id: int) -> None:
 
 
 async def _on_debug_event(msg) -> None:
-    """Callback for NODALARC_DEBUG stream subscription."""
-    with contextlib.suppress(Exception):
-        _debug_events.append(OpsEvent.model_validate_json(msg.data))
+    """Callback for NODALARC_DEBUG stream subscription.
+
+    Each event is stamped with the arrival seq ops events carry, so a reader
+    tells two events apart by VS-API's identity. A message that is not an ops
+    event is refused here and logged with its content.
+    """
+    try:
+        event = OpsEvent.model_validate_json(msg.data)
+    except ValidationError as error:
+        log.error("NODALARC_DEBUG message is not an ops event: %s; data=%r", error, msg.data[:500])
+        return
+    _debug_events.append(stamp_ops_event(event.model_dump(mode="json")))
 
 
 async def _handle_ws_debug_command(

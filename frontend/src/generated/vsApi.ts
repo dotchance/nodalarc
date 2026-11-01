@@ -594,19 +594,6 @@ export interface OperatorRepairResponse {
   readonly message: string;
 }
 
-/** Operational event for the NODALARC_OPS JetStream stream. Published by any component that needs to surface operational telemetry (validation failures, deployment progress, runtime anomalies) to a centralized event bus. */
-export interface OpsEvent {
-  readonly timestamp: string;
-  readonly tenant_id: string;
-  readonly session_id: string;
-  readonly source: ServiceSource;
-  readonly hostname: string;
-  readonly level: OpsLevel;
-  readonly code: string;
-  readonly message: string;
-  readonly details: Readonly<Record<string, JsonValue>> | null;
-}
-
 /** Filters on the operator-visible ops log. */
 export interface OpsEventsQuery {
   readonly source?: ServiceSource | null;
@@ -740,7 +727,7 @@ export interface StateSnapshot {
   readonly history_recording: HistoryRecordingState | null;
   readonly ops_events: ReadonlyArray<StampedOpsEvent>;
   readonly ops_log_token: string;
-  readonly debug_events: ReadonlyArray<OpsEvent>;
+  readonly debug_events: ReadonlyArray<StampedOpsEvent>;
   readonly debug_control: ReadonlyArray<DebugControlAcknowledgedFact | DebugControlRejectedFact | DebugControlUnansweredFact | DebugControlFailedFact>;
   readonly debug_subscription_open: boolean;
 }

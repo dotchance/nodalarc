@@ -19,11 +19,17 @@ Every deployment follows one interpretation path:
 YAML text
   -> strict YAML data model
   -> structural grammar in this document
-  -> catalog reference resolution
-  -> cross-object semantic validation
-  -> current-runtime support validation
+  -> current-runtime support validation of the session's own declarations
+  -> catalog reference resolution and segment expansion
+  -> cross-object semantic validation, with current-runtime support validation
+     of the referenced catalog objects, workloads, ground scheduling and bodies
   -> resolved session
 ```
+
+A feature the session itself declares is refused before any reference is
+resolved when the current runtime does not support it. A feature that only a
+referenced catalog object declares is refused while the resolver expands that
+object.
 
 The YAML loader accepts one document and rejects duplicate mapping keys before
 structural validation. Unknown mapping keys, wrong scalar kinds, invalid closed

@@ -107,10 +107,14 @@ ping 10.0.0.5
 traceroute 10.255.1.1
 ```
 
-Real ICMP ping and traceroute through the emulated network. Packets traverse
-real kernel interfaces with real latency shaping. For long-delay links, such as
-cislunar relay paths, use command-line timeout options; default ping or
-traceroute settings may expire before the emulated path can respond.
+Real ping and traceroute through the emulated network. Packets traverse
+real kernel interfaces with real latency shaping. The router terminal's `ping`
+accepts `source`, `count` and `dontfragment`, and its `traceroute` accepts only
+a destination, so neither takes a timeout option. The defaults allow for
+long-delay paths. `ping` waits up to 10 seconds for its first reply.
+`traceroute` waits up to 5 seconds for each probe. A round trip to the Moon
+takes about 2.5 seconds. A hop whose round trip takes longer than 5 seconds
+shows as `*` in the traceroute.
 
 ## What You're Actually Seeing
 

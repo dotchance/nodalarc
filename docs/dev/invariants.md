@@ -207,9 +207,9 @@ Ground terminal carrier (`gnd0`, `gnd1`, ...) is driven by host-side veth state
 
 FRR detects carrier loss without waiting for hold timers. This is the fastest convergence path.
 
-## rp_filter at Pod Creation
+## rp_filter on Every Session Pod
 
-`rp_filter=0` is set by the Operator as pod-level sysctls at creation time. The Node Agent does not set it. Without it, IS-IS/OSPF multicast hellos fail reverse-path filtering silently - routing appears broken with no errors in any log.
+`rp_filter=0` is set on every session pod during wiring. The Operator writes `net.ipv4.conf.all.rp_filter=0` and `net.ipv4.conf.default.rp_filter=0` into each node's `sysctls` in the wiring manifest. The Node Agent writes them into the pod's network namespace before it creates any ISL or ground interface. The pod spec carries no sysctls. Without it, IS-IS/OSPF multicast hellos fail reverse-path filtering silently - routing appears broken with no errors in any log.
 
 ## No Eliminated Patterns
 

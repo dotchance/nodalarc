@@ -106,21 +106,11 @@ class ResolvedAddressingView:
                     continue
                 self._sat_by_plane_slot[key] = node.node_id
 
-    @property
-    def has_type_registry(self) -> bool:
-        return bool(self._node_types)
-
     def node_type(self, node_id: str) -> str:
         try:
             return self._node_types[node_id]
         except KeyError as exc:
             raise KeyError(f"node_id {node_id!r} not in resolved OME node registry") from exc
-
-    def is_ground_segment(self, node_id: str) -> bool:
-        return self.node_type(node_id) == "ground_station"
-
-    def is_satellite(self, node_id: str) -> bool:
-        return self.node_type(node_id) == "satellite"
 
     def sat_id(self, plane: int, slot: int) -> str:
         if (plane, slot) in self._ambiguous_plane_slots:

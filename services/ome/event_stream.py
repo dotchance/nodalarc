@@ -44,7 +44,6 @@ from nodalarc.models.ground_policy import (
     RankingComponent,
     SelectionPolicySpec,
 )
-from nodalarc.models.link_decisions import GroundPolicyAudit
 from nodalarc.models.link_state import SchedulingState
 from nodalarc.models.session import GroundSchedulingConfig
 from nodalarc.ome_runtime import (
@@ -284,7 +283,6 @@ class StepContext:
     ground_cross_tenant_displacement: str
     ground_bbm_acquire_timeout_ticks: int
     ignored_ground_capacity_fields: tuple[str, ...]
-    ground_policy_audit: GroundPolicyAudit
     ground_link_model: Literal["geometry_only", "terminal_physics"]
     gs_terminal_profiles: dict[str, TerminalPhysicsProfile]
     sat_ground_terminal_profiles: dict[str, tuple[TerminalPhysicsProfile, ...]]
@@ -426,42 +424,6 @@ def _resolve_active_bodies_for_context(
             "StepContext active_bodies omits resolved node body/bodies: " + ", ".join(missing)
         )
     return active_bodies
-
-
-def _build_policy_audit(
-    *,
-    gs_selection_policies: dict[str, SelectionPolicySpec],
-    gs_handover_policies: dict[str, HandoverPolicySpec],
-    ground_scheduling: GroundSchedulingConfig,
-    gs_handover_modes: dict[str, Literal["bbm", "mbb"]],
-    gs_mbb_overlap_ticks: dict[str, int],
-    gs_mbb_reserve: dict[str, int],
-    ignored_capacity_fields: tuple[str, ...],
-) -> GroundPolicyAudit:
-    return GroundPolicyAudit(
-        selection_policies={k: v.name for k, v in sorted(gs_selection_policies.items())},
-        selection_policy_params={
-            k: dict(v.params) for k, v in sorted(gs_selection_policies.items())
-        },
-        handover_policies={k: v.name for k, v in sorted(gs_handover_policies.items())},
-        handover_policy_params={k: dict(v.params) for k, v in sorted(gs_handover_policies.items())},
-        ranking_order=tuple(ground_scheduling.ranking_order),
-        handover_mode=(
-            next(iter(set(gs_handover_modes.values())))
-            if len(set(gs_handover_modes.values())) == 1
-            else "mixed"
-        ),
-        handover_modes=dict(sorted(gs_handover_modes.items())),
-        mbb_preemption=ground_scheduling.mbb_preemption,
-        successor_abort_policy=ground_scheduling.successor_abort_policy,
-        cross_tenant_displacement=ground_scheduling.cross_tenant_displacement,
-        mbb_overlap_ticks=max(gs_mbb_overlap_ticks.values(), default=0),
-        mbb_overlap_ticks_by_gs=dict(sorted(gs_mbb_overlap_ticks.items())),
-        mbb_reserve=max(gs_mbb_reserve.values(), default=0),
-        mbb_reserve_by_gs=dict(sorted(gs_mbb_reserve.items())),
-        bbm_acquire_timeout_ticks=ground_scheduling.bbm_acquire_timeout_ticks,
-        ignored_capacity_fields=ignored_capacity_fields,
-    )
 
 
 def build_step_context(
@@ -671,15 +633,6 @@ def build_step_context(
     )
 
     ignored_capacity_tuple = tuple(sorted(set(ignored_capacity_fields)))
-    policy_audit = _build_policy_audit(
-        gs_selection_policies=gs_selection_policies,
-        gs_handover_policies=gs_handover_policies,
-        ground_scheduling=ground_scheduling,
-        gs_handover_modes=gs_handover_modes,
-        gs_mbb_overlap_ticks=gs_mbb_overlap_ticks,
-        gs_mbb_reserve=gs_mbb_reserve,
-        ignored_capacity_fields=ignored_capacity_tuple,
-    )
     resolved_active_bodies = _resolve_active_bodies_for_context(
         satellites=satellites,
         gs_reference_bodies=gs_reference_bodies,
@@ -706,7 +659,6 @@ def build_step_context(
         ground_cross_tenant_displacement=ground_scheduling.cross_tenant_displacement,
         ground_bbm_acquire_timeout_ticks=ground_scheduling.bbm_acquire_timeout_ticks,
         ignored_ground_capacity_fields=ignored_capacity_tuple,
-        ground_policy_audit=policy_audit,
         ground_link_model=ground_link_model,
         gs_terminal_profiles=gs_terminal_profiles,
         sat_ground_terminal_profiles=sat_ground_terminal_profiles,
@@ -1172,26 +1124,6 @@ def write_timeline_jsonl(events: list[TimelineEvent], output_path: Path) -> None
             }
             f.write(json.dumps(record) + "\n")
     logger.info(f"Wrote {len(events)} events to {output_path}")
-
-
-def append_timeline_jsonl(events: list[TimelineEvent], output_path: Path) -> None:
-    """Append events to an existing JSONL file (or create it).
-
-    Uses fsync to ensure the dispatcher's tail-reader sees complete lines.
-    """
-    import os
-
-    with open(output_path, "a") as f:
-        for event in events:
-            record = {
-                "timestamp_s": event.timestamp_s,
-                "event_type": event.event_type,
-                "data": event.data.model_dump(mode="json"),
-            }
-            f.write(json.dumps(record) + "\n")
-        f.flush()
-        os.fsync(f.fileno())
-    logger.info(f"Appended {len(events)} events to {output_path}")
 
 
 def read_timeline_jsonl(path: Path) -> list[dict]:

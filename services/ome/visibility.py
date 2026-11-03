@@ -29,14 +29,6 @@ from nodalarc.models.terminal_physics import SatGroundTerminalBoresight, Termina
 from ome.propagator import GeoPosition, Vec3
 
 
-class VisibilityResult(NamedTuple):
-    """Result of a visibility check between two nodes."""
-
-    visible: bool
-    range_km: float
-    reason: str  # "ok", "los_blocked", "range_exceeded", "field_of_regard", "elevation_below_min", "tracking_exceeded"
-
-
 class GroundVisibility(NamedTuple):
     """Ground station to satellite visibility details.
 

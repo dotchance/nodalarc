@@ -43,6 +43,7 @@ C = 299792.458
 TOLERANCE_S = 1e-6
 POINTING_TOLERANCE_RAD = 1e-9
 SPICE_NAME = {"earth": "EARTH", "luna": "MOON"}
+SHAPES = {"earth": EARTH_TEST_BODY_FRAME, "luna": LUNA_TEST_BODY_FRAME}
 SPICE_FRAME = {"earth": "ITRF93", "luna": "MOON_ME_DE440_ME421"}
 INSTANTS = [
     datetime(2026, 11, 3, 12, tzinfo=UTC).timestamp(),
@@ -153,9 +154,15 @@ def test_body_pair_light_time_matches_spice(physics_context: PhysicsContext, t: 
         obspos, "EARTH", "ITRF93", et, "J2000", "TARGET", "XCN", "MOON"
     )
 
-    up = signals_sent_at(physics_context, [GOLDSTONE_SITE], [MOON_CENTRE], t).light_time_s[0]
-    down = signals_received_at(physics_context, [MOON_CENTRE], [GOLDSTONE_SITE], t).light_time_s[0]
-    moon_tx = signals_sent_at(physics_context, [MOON_CENTRE], [GOLDSTONE_SITE], t).light_time_s[0]
+    up = signals_sent_at(physics_context, SHAPES, [GOLDSTONE_SITE], [MOON_CENTRE], t).light_time_s[
+        0
+    ]
+    down = signals_received_at(
+        physics_context, SHAPES, [MOON_CENTRE], [GOLDSTONE_SITE], t
+    ).light_time_s[0]
+    moon_tx = signals_sent_at(
+        physics_context, SHAPES, [MOON_CENTRE], [GOLDSTONE_SITE], t
+    ).light_time_s[0]
 
     assert abs(up - up_ref) < TOLERANCE_S
     assert abs(down - down_ref) < TOLERANCE_S
@@ -186,10 +193,10 @@ def test_body_pair_pointing_matches_spice(physics_context: PhysicsContext, t: fl
         > 1e3 * POINTING_TOLERANCE_RAD
     )
 
-    up = signals_sent_at(physics_context, [GOLDSTONE_SITE], [MOON_CENTRE], t)
-    down = signals_received_at(physics_context, [MOON_CENTRE], [GOLDSTONE_SITE], t)
-    moon_up = signals_sent_at(physics_context, [MOON_CENTRE], [GOLDSTONE_SITE], t)
-    moon_down = signals_received_at(physics_context, [GOLDSTONE_SITE], [MOON_CENTRE], t)
+    up = signals_sent_at(physics_context, SHAPES, [GOLDSTONE_SITE], [MOON_CENTRE], t)
+    down = signals_received_at(physics_context, SHAPES, [MOON_CENTRE], [GOLDSTONE_SITE], t)
+    moon_up = signals_sent_at(physics_context, SHAPES, [MOON_CENTRE], [GOLDSTONE_SITE], t)
+    moon_down = signals_received_at(physics_context, SHAPES, [GOLDSTONE_SITE], [MOON_CENTRE], t)
     cases = [
         (up.transmitter_pointing[0], from_goldstone(et, "XCN+S")),
         (up.receiver_pointing[0], from_moon(et + up.light_time_s[0], "CN+S")),
@@ -212,7 +219,9 @@ def test_moving_endpoints_match_a_spice_state_reference(
         (_orbit(LUNAR, "luna", t - 3600.0), GOLDSTONE_SITE),
         (GOLDSTONE_SITE, _orbit(LUNAR, "luna", t - 3600.0)),
     ]
-    produced = signals_sent_at(physics_context, [a for a, _ in pairs], [b for _, b in pairs], t)
+    produced = signals_sent_at(
+        physics_context, SHAPES, [a for a, _ in pairs], [b for _, b in pairs], t
+    )
     for row, (a, b) in enumerate(pairs):
         tau, transmitter_pointing, receiver_pointing = _reference_sent(a, b, t, physics_context)
         assert abs(produced.light_time_s[row] - tau) < TOLERANCE_S
@@ -230,8 +239,10 @@ def test_the_two_time_indexes_describe_one_signal(
     """A signal sent at t and received at t + tau has reception-time light time tau, and both
     ends point the same way in either index."""
     sender, receiver = GOLDSTONE_SITE, _orbit(LUNAR, "luna", t - 3600.0)
-    sent = signals_sent_at(physics_context, [sender], [receiver], t)
-    received = signals_received_at(physics_context, [sender], [receiver], t + sent.light_time_s[0])
+    sent = signals_sent_at(physics_context, SHAPES, [sender], [receiver], t)
+    received = signals_received_at(
+        physics_context, SHAPES, [sender], [receiver], t + sent.light_time_s[0]
+    )
     assert abs(received.light_time_s[0] - sent.light_time_s[0]) < 2e-9
     assert _angle(received.transmitter_pointing[0], sent.transmitter_pointing[0]) < 1e-9
     assert _angle(received.receiver_pointing[0], sent.receiver_pointing[0]) < 1e-9
@@ -240,7 +251,7 @@ def test_the_two_time_indexes_describe_one_signal(
 def test_light_time_outside_the_data_coverage_is_refused(physics_context: PhysicsContext) -> None:
     beyond = datetime(2200, 1, 1, tzinfo=UTC).timestamp()
     with pytest.raises(PhysicsDataError, match="does not cover"):
-        signals_sent_at(physics_context, [GOLDSTONE_SITE], [MOON_CENTRE], beyond)
+        signals_sent_at(physics_context, SHAPES, [GOLDSTONE_SITE], [MOON_CENTRE], beyond)
 
 
 @pytest.mark.parametrize(

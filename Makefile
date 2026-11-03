@@ -474,6 +474,7 @@ typecheck: ## Type-check Builder, session-configuration, and OME frame authority
 		lib/nodalarc/physics/kepler.py \
 		lib/nodalarc/physics/lighttime.py \
 		lib/nodalarc/physics/motion.py \
+		lib/nodalarc/physics/occlusion.py \
 		lib/nodalarc/physics/samples.py \
 		lib/nodalarc/physics/satellites.py \
 		lib/nodalarc/physics/session.py \

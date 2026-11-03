@@ -49,6 +49,7 @@ from nodalarc.physics.datasets import (
 from nodalarc.physics.ephemeris_table import (
     FILES,
     ORIGIN_NAIF_ID,
+    SUN_ID,
     SUN_NAIF_ID,
     body_data,
     select_file_ids,
@@ -188,14 +189,17 @@ class PhysicsContext:
         end = min(w[1].to_unix_seconds() for w in windows)
         return _Coverage(start_unix=start, end_unix=end)
 
-    def sun_state(self, master_sim_time_unix: float) -> BodyState:
-        """The Sun's center in the common frame (origin at Earth's center, ICRF axes)."""
+    def _require_sun_coverage(self, master_sim_time_unix: float) -> None:
         coverage = self._sun_coverage
         if not (coverage.start_unix <= master_sim_time_unix <= coverage.end_unix):
             raise PhysicsDataError(
                 f"ephemeris data for the Sun does not cover {epoch_of(master_sim_time_unix)}; "
                 f"coverage is {epoch_of(coverage.start_unix)} to {epoch_of(coverage.end_unix)}"
             )
+
+    def sun_state(self, master_sim_time_unix: float) -> BodyState:
+        """The Sun's center in the common frame (origin at Earth's center, ICRF axes)."""
+        self._require_sun_coverage(master_sim_time_unix)
         state = self._almanac.translate(
             _inertial_frame(SUN_NAIF_ID),
             _inertial_frame(ORIGIN_NAIF_ID),
@@ -203,20 +207,25 @@ class PhysicsContext:
             None,
         )
         return BodyState(
-            body_id="sun",
+            body_id=SUN_ID,
             position_km=Vec3(state.x_km, state.y_km, state.z_km),
             velocity_km_s=Vec3(state.vx_km_s, state.vy_km_s, state.vz_km_s),
         )
 
     def barycentric_state(self, body_id: str, tdb_seconds: float) -> tuple[np.ndarray, np.ndarray]:
-        """The body's center relative to the solar system barycenter, ICRF axes: position (km)
-        and velocity (km/s) at a TDB epoch. Signal travel is computed in this frame, so
-        Earth-relative vectors are never differenced across two epochs."""
-        data = body_data(body_id)
+        """The center of a session body or of the Sun (``SUN_ID``) relative to the solar system
+        barycenter, ICRF axes: position (km) and velocity (km/s) at a TDB epoch. Signal travel is
+        computed in this frame, so Earth-relative vectors are never differenced across two
+        epochs."""
         epoch = Epoch.init_from_tdb_seconds(float(tdb_seconds))
-        self.require_coverage(body_id, epoch.to_unix_seconds())
+        if body_id == SUN_ID:
+            self._require_sun_coverage(epoch.to_unix_seconds())
+            naif_id = SUN_NAIF_ID
+        else:
+            self.require_coverage(body_id, epoch.to_unix_seconds())
+            naif_id = body_data(body_id).naif_id
         state = self._almanac.translate(
-            _inertial_frame(data.naif_id), _inertial_frame(_SSB_NAIF_ID), epoch, None
+            _inertial_frame(naif_id), _inertial_frame(_SSB_NAIF_ID), epoch, None
         )
         return (
             np.array([state.x_km, state.y_km, state.z_km]),

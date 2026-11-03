@@ -164,6 +164,11 @@ ORIGIN_NAIF_ID = 399
 # planetary positions file, which every context loads, so lighting needs no
 # extra file and does not make the Sun a session body.
 SUN_NAIF_ID = 10
+SUN_ID = "sun"
+# The solar disk obstructs link paths (solar conjunction). The Sun is not a catalog body, so its
+# radius is a platform constant like its NAIF ID: the IAU 2015 nominal solar radius
+# (Resolution B3), 695,700 km.
+SUN_RADIUS_KM = 695_700.0
 
 
 def select_file_ids(body_ids: Iterable[str]) -> tuple[str, ...]:

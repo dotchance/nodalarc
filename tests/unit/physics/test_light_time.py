@@ -198,12 +198,12 @@ def test_body_pair_pointing_matches_spice(physics_context: PhysicsContext, t: fl
     moon_up = signals_sent_at(physics_context, SHAPES, [MOON_CENTRE], [GOLDSTONE_SITE], t)
     moon_down = signals_received_at(physics_context, SHAPES, [GOLDSTONE_SITE], [MOON_CENTRE], t)
     cases = [
-        (up.transmitter_pointing[0], from_goldstone(et, "XCN+S")),
-        (up.receiver_pointing[0], from_moon(et + up.light_time_s[0], "CN+S")),
-        (down.receiver_pointing[0], from_goldstone(et, "CN+S")),
-        (down.transmitter_pointing[0], from_moon(et - down.light_time_s[0], "XCN+S")),
-        (moon_up.transmitter_pointing[0], from_moon(et, "XCN+S")),
-        (moon_down.receiver_pointing[0], from_moon(et, "CN+S")),
+        (up.transmitter.pointing[0], from_goldstone(et, "XCN+S")),
+        (up.receiver.pointing[0], from_moon(et + up.light_time_s[0], "CN+S")),
+        (down.receiver.pointing[0], from_goldstone(et, "CN+S")),
+        (down.transmitter.pointing[0], from_moon(et - down.light_time_s[0], "XCN+S")),
+        (moon_up.transmitter.pointing[0], from_moon(et, "XCN+S")),
+        (moon_down.receiver.pointing[0], from_moon(et, "CN+S")),
     ]
     for produced, reference in cases:
         assert _angle(produced, reference) < POINTING_TOLERANCE_RAD
@@ -226,10 +226,10 @@ def test_moving_endpoints_match_a_spice_state_reference(
         tau, transmitter_pointing, receiver_pointing = _reference_sent(a, b, t, physics_context)
         assert abs(produced.light_time_s[row] - tau) < TOLERANCE_S
         assert (
-            _angle(produced.transmitter_pointing[row], transmitter_pointing)
+            _angle(produced.transmitter.pointing[row], transmitter_pointing)
             < POINTING_TOLERANCE_RAD
         )
-        assert _angle(produced.receiver_pointing[row], receiver_pointing) < POINTING_TOLERANCE_RAD
+        assert _angle(produced.receiver.pointing[row], receiver_pointing) < POINTING_TOLERANCE_RAD
 
 
 @pytest.mark.parametrize("t", INSTANTS)
@@ -244,8 +244,8 @@ def test_the_two_time_indexes_describe_one_signal(
         physics_context, SHAPES, [sender], [receiver], t + sent.light_time_s[0]
     )
     assert abs(received.light_time_s[0] - sent.light_time_s[0]) < 2e-9
-    assert _angle(received.transmitter_pointing[0], sent.transmitter_pointing[0]) < 1e-9
-    assert _angle(received.receiver_pointing[0], sent.receiver_pointing[0]) < 1e-9
+    assert _angle(received.transmitter.pointing[0], sent.transmitter.pointing[0]) < 1e-9
+    assert _angle(received.receiver.pointing[0], sent.receiver.pointing[0]) < 1e-9
 
 
 def test_light_time_outside_the_data_coverage_is_refused(physics_context: PhysicsContext) -> None:
@@ -268,3 +268,54 @@ def test_receiver_epochs_convert_to_master_sim_time_exactly(start: float) -> Non
     epochs = tdb_seconds_of(start) + np.linspace(0.0, 1400.0, 701)
     exact = np.array([unix_seconds_of_tdb(float(epoch)) for epoch in epochs])
     assert np.all(np.abs(_unix_seconds(epochs) - exact) <= 2 * np.spacing(exact))
+
+
+@pytest.mark.usefixtures("spice_reference")
+@pytest.mark.parametrize("t", INSTANTS)
+def test_each_end_in_its_body_frame_matches_spice(
+    physics_context: PhysicsContext, t: float
+) -> None:
+    """Goldstone sends to the Moon's center: each end's body-fixed position and pointing at its
+    own epoch, against SPICE's apparent positions turned into ITRF93 and the lunar frame."""
+    signals = signals_sent_at(physics_context, SHAPES, [GOLDSTONE_SITE], [MOON_CENTRE], t)
+    sent, end = signals.transmitter, signals.receiver
+    et = _et(t)
+    arrival = et + signals.light_time_s[0]
+    obspos = list(GOLDSTONE)
+    up = spiceypy.spkcpo("MOON", et, "J2000", "OBSERVER", "XCN+S", obspos, "EARTH", "ITRF93")[0]
+    down = spiceypy.spkcpt(obspos, "EARTH", "ITRF93", arrival, "J2000", "TARGET", "CN+S", "MOON")[0]
+    assert np.linalg.norm(sent.fixed_km[0] - np.array(GOLDSTONE)) < 1e-6
+    assert np.linalg.norm(end.fixed_km[0]) == 0.0
+    to_itrf = np.array(spiceypy.pxform("J2000", "ITRF93", et))
+    to_moon = np.array(spiceypy.pxform("J2000", SPICE_FRAME["luna"], arrival))
+    assert _angle(sent.pointing_fixed[0], to_itrf @ np.array(up[:3])) < POINTING_TOLERANCE_RAD
+    assert _angle(end.pointing_fixed[0], to_moon @ np.array(down[:3])) < POINTING_TOLERANCE_RAD
+
+
+def _sight_direction(physics: PhysicsContext, a, b, t: float, frame_body: str | None) -> np.ndarray:
+    """Unit line of sight from a (at t) to b (at arrival), on ICRF axes or in a body's frame."""
+    signals = signals_sent_at(physics, SHAPES, [a], [b], t)
+    sight = signals.receiver.position_km[0] - signals.transmitter.position_km[0]
+    if frame_body is not None:
+        rotations, _ = physics.motion.orientations(frame_body, signals.transmitter.epoch_tdb[:1])
+        sight = rotations[0] @ sight
+    return _unit(sight)
+
+
+@pytest.mark.parametrize("t", INSTANTS)
+def test_line_of_sight_rate_is_its_time_derivative(
+    physics_context: PhysicsContext, t: float
+) -> None:
+    """A LEO pair in Earth's rotating frame and a lunar orbiter seen from Goldstone on inertial
+    axes: the rate equals the central difference of the line of sight over 0.5 s."""
+    cases = [
+        (_orbit(LEO_A, "earth", t - 600.0), _orbit(LEO_B, "earth", t - 600.0), "earth"),
+        (GOLDSTONE_SITE, _orbit(LUNAR, "luna", t - 3600.0), None),
+    ]
+    h = 0.25
+    for a, b, frame_body in cases:
+        rate = signals_sent_at(physics_context, SHAPES, [a], [b], t).transmitter.rate_rad_s[0]
+        before = _sight_direction(physics_context, a, b, t - h, frame_body)
+        after = _sight_direction(physics_context, a, b, t + h, frame_body)
+        numerical = np.linalg.norm(after - before) / (2 * h)
+        assert abs(rate - numerical) < 1e-4 * numerical

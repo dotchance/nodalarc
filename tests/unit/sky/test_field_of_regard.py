@@ -1,4 +1,4 @@
-"""Tests for field of regard visibility check (Work Stream 5).
+"""Tests for the ISL field of regard check.
 
 Verifies:
 - 360° FoR (omnidirectional) always passes regardless of geometry
@@ -6,13 +6,17 @@ Verifies:
 - 180° separation in same plane: LOS goes through Earth (steep elevation, blocked)
 - Targets far above/below local horizontal are blocked
 - FoR measured from local horizontal plane (not velocity axis)
+
+Each case states both satellites at one instant and runs OME's per-direction ISL checks on that
+geometry (tests/direction_inputs.py) with no range, tracking or polar-seam limit, so the field of
+regard is the one constraint that can reject.
 """
 
 import math
 
 from nodalarc.frames import Vec3
-from ome.visibility import check_field_of_regard, check_isl_visibility
 
+from tests.direction_inputs import isl_reason
 from tests.physics_fixtures import EARTH_TEST_BODY_FRAME
 
 # Orbital velocity at 550 km altitude (approx)
@@ -52,14 +56,21 @@ def _polar_orbit_state(raan_deg: float, true_anomaly_deg: float, altitude_km: fl
     return pos, vel
 
 
+def _within_field_of_regard(pos_a, vel_a, pos_b, vel_b, field_of_regard_deg: float) -> bool:
+    """Whether both ends point within half the field of regard of their local horizontal."""
+    reason = isl_reason(pos_a, vel_a, pos_b, vel_b, field_of_regard_deg=field_of_regard_deg)
+    assert reason in ("ok", "field_of_regard"), reason
+    return reason == "ok"
+
+
 class TestCheckFieldOfRegard:
-    """Unit tests for check_field_of_regard()."""
+    """The field of regard alone."""
 
     def test_omnidirectional_always_passes(self):
         """360° FoR should always pass regardless of geometry."""
         pos_a, vel_a = _polar_orbit_state(0, 0)
         pos_b, vel_b = _polar_orbit_state(90, 0)  # 90° RAAN offset
-        assert check_field_of_regard(pos_a, vel_a, pos_b, vel_b, 360.0) is True
+        assert _within_field_of_regard(pos_a, vel_a, pos_b, vel_b, 360.0) is True
 
     def test_same_plane_adjacent_feasible(self):
         """Two satellites in the same plane, adjacent slots (~32.7° apart).
@@ -68,26 +79,26 @@ class TestCheckFieldOfRegard:
         """
         pos_a, vel_a = _polar_orbit_state(0, 0)
         pos_b, vel_b = _polar_orbit_state(0, 32.7)  # Next slot in same plane
-        assert check_field_of_regard(pos_a, vel_a, pos_b, vel_b, 120.0) is True
+        assert _within_field_of_regard(pos_a, vel_a, pos_b, vel_b, 120.0) is True
 
     def test_same_plane_adjacent_aft_also_feasible(self):
         """The aft neighbor (looking backward) should also be feasible."""
         pos_a, vel_a = _polar_orbit_state(0, 32.7)
         pos_b, vel_b = _polar_orbit_state(0, 0)  # Previous slot (behind A)
-        assert check_field_of_regard(pos_a, vel_a, pos_b, vel_b, 120.0) is True
+        assert _within_field_of_regard(pos_a, vel_a, pos_b, vel_b, 120.0) is True
 
     def test_180_separation_infeasible(self):
         """Two satellites 180° apart in the same plane: LOS points through
         Earth center, so the elevation from local horizontal is ~90° → blocked."""
         pos_a, vel_a = _polar_orbit_state(0, 0)
         pos_b, vel_b = _polar_orbit_state(0, 180)  # Opposite side of orbit
-        assert check_field_of_regard(pos_a, vel_a, pos_b, vel_b, 120.0) is False
+        assert _within_field_of_regard(pos_a, vel_a, pos_b, vel_b, 120.0) is False
 
     def test_180_separation_feasible_with_large_for(self):
         """With 200° FoR (100° half-angle), even 90° elevation passes."""
         pos_a, vel_a = _polar_orbit_state(0, 0)
         pos_b, vel_b = _polar_orbit_state(0, 180)
-        assert check_field_of_regard(pos_a, vel_a, pos_b, vel_b, 200.0) is True
+        assert _within_field_of_regard(pos_a, vel_a, pos_b, vel_b, 200.0) is True
 
     def test_cross_plane_equator_feasible(self):
         """Cross-plane peer at the equator with 31.6° RAAN offset.
@@ -99,13 +110,13 @@ class TestCheckFieldOfRegard:
         """
         pos_a, vel_a = _polar_orbit_state(0, 0)
         pos_b, vel_b = _polar_orbit_state(31.6, 0)  # Adjacent plane at equator
-        assert check_field_of_regard(pos_a, vel_a, pos_b, vel_b, 120.0) is True
+        assert _within_field_of_regard(pos_a, vel_a, pos_b, vel_b, 120.0) is True
 
     def test_cross_plane_large_raan_offset_still_feasible(self):
         """Even with 90° RAAN offset, same-altitude LOS stays near-horizontal."""
         pos_a, vel_a = _polar_orbit_state(0, 0)
         pos_b, vel_b = _polar_orbit_state(90, 0)
-        assert check_field_of_regard(pos_a, vel_a, pos_b, vel_b, 120.0) is True
+        assert _within_field_of_regard(pos_a, vel_a, pos_b, vel_b, 120.0) is True
 
     def test_target_far_below_horizontal_blocked(self):
         """A target far below the local horizontal (e.g., much lower orbit)
@@ -115,87 +126,77 @@ class TestCheckFieldOfRegard:
         pos_b, vel_b = _polar_orbit_state(0, 10, altitude_km=100)
         # The LOS points steeply downward — large elevation angle from horizontal
         # With narrow FoR (e.g., 20° = 10° half-angle), this should fail
-        assert check_field_of_regard(pos_a, vel_a, pos_b, vel_b, 20.0) is False
+        assert _within_field_of_regard(pos_a, vel_a, pos_b, vel_b, 20.0) is False
 
     def test_zero_velocity_passes(self):
-        """Edge case: zero velocity should not crash, returns True."""
+        """Edge case: one end at rest builds a valid direction, and the field of regard
+        depends on positions only."""
         pos_a = Vec3(6921, 0, 0)
         vel_a = Vec3(0, 0, 0)
         pos_b = Vec3(0, 6921, 0)
         vel_b = Vec3(0, 0, 7.58)
-        assert check_field_of_regard(pos_a, vel_a, pos_b, vel_b, 120.0) is True
-
-    def test_same_position_passes(self):
-        """Edge case: identical positions should not crash."""
-        pos = Vec3(6921, 0, 0)
-        vel = Vec3(0, 0, 7.58)
-        assert check_field_of_regard(pos, vel, pos, vel, 120.0) is True
+        assert _within_field_of_regard(pos_a, vel_a, pos_b, vel_b, 120.0) is True
 
 
 class TestFieldOfRegardInPipeline:
-    """FoR check integrated into check_isl_visibility()."""
+    """The field of regard in the full ISL check order: line of sight, range, field of
+    regard, tracking rate, polar seam."""
 
     def test_for_blocks_in_full_pipeline(self):
-        """180° separation should be blocked in the full pipeline
-        (by LOS or FoR — both Earth occlusion and steep elevation)."""
+        """180° separation is rejected: Earth blocks the path, and the line of sight is
+        checked first; without that blockage the steep pointing still fails the field of
+        regard. (Earth's blockage of this geometry is tested from real endpoints in
+        test_occlusion.py.)"""
         pos_a, vel_a = _polar_orbit_state(0, 0)
         pos_b, vel_b = _polar_orbit_state(0, 180)
-        result = check_isl_visibility(
-            pos_a,
-            vel_a,
-            pos_b,
-            vel_b,
-            max_range_km=50000.0,  # Very large to not trigger range check
-            field_of_regard_deg=120.0,
-            body_frame=EARTH_TEST_BODY_FRAME,
-        )
-        assert result.visible is False
+        common = {
+            "max_range_km": 50000.0,  # Very large to not trigger range check
+            "field_of_regard_deg": 120.0,
+        }
+        assert isl_reason(pos_a, vel_a, pos_b, vel_b, blocked=True, **common) == "los_blocked"
+        assert isl_reason(pos_a, vel_a, pos_b, vel_b, **common) == "field_of_regard"
 
     def test_cross_plane_equator_passes_in_pipeline(self):
         """Cross-plane at equator passes FoR (near-horizontal LOS)."""
         pos_a, vel_a = _polar_orbit_state(0, 0)
         pos_b, vel_b = _polar_orbit_state(31.6, 0)
-        result = check_isl_visibility(
+        result = isl_reason(
             pos_a,
             vel_a,
             pos_b,
             vel_b,
             max_range_km=50000.0,
             field_of_regard_deg=120.0,
-            body_frame=EARTH_TEST_BODY_FRAME,
         )
-        assert result.visible is True
-        assert result.reason == "ok"
+        assert result == "ok"
 
     def test_adjacent_passes_in_pipeline(self):
         """Same-plane adjacent passes FoR check in the full pipeline."""
         pos_a, vel_a = _polar_orbit_state(0, 0)
         pos_b, vel_b = _polar_orbit_state(0, 32.7)
-        result = check_isl_visibility(
+        result = isl_reason(
             pos_a,
             vel_a,
             pos_b,
             vel_b,
             max_range_km=50000.0,
             field_of_regard_deg=120.0,
-            body_frame=EARTH_TEST_BODY_FRAME,
         )
-        assert result.visible is True
+        assert result == "ok"
 
     def test_default_360_skips_for_check(self):
         """Default 360° FoR should not block anything."""
         pos_a, vel_a = _polar_orbit_state(0, 0)
         pos_b, vel_b = _polar_orbit_state(31.6, 0)
-        result = check_isl_visibility(
+        result = isl_reason(
             pos_a,
             vel_a,
             pos_b,
             vel_b,
             max_range_km=50000.0,
             # field_of_regard_deg defaults to 360.0
-            body_frame=EARTH_TEST_BODY_FRAME,
         )
-        assert result.reason != "field_of_regard"
+        assert result != "field_of_regard"
 
 
 class TestFieldOfRegardComparison:
@@ -225,7 +226,7 @@ class TestFieldOfRegardComparison:
             for j in range(i + 1, n_planes):
                 pos_a, vel_a = states[i]
                 pos_b, vel_b = states[j]
-                if check_field_of_regard(pos_a, vel_a, pos_b, vel_b, field_of_regard_deg):
+                if _within_field_of_regard(pos_a, vel_a, pos_b, vel_b, field_of_regard_deg):
                     feasible += 1
 
         return feasible

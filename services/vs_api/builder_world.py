@@ -41,9 +41,11 @@ from nodalarc.resolve_session import (
     SessionResolution,
     SessionResolutionError,
 )
+from ome.direction_checks import IslLimits, PairSignals
 from ome.event_stream import build_session_ephemeris, build_step_context
-from ome.propagation_engine import PropagatedState, propagate_satellites
-from ome.visibility import check_ground_visibility, check_isl_visibility
+from ome.ground_visibility_engine import GroundGeometry
+from ome.isl_engine import isl_pair_reasons
+from ome.propagation_engine import PropagatedState, propagate_satellites, satellite_endpoints
 
 from vs_api.resolved_runtime_views import routing_instances_by_node_id
 
@@ -299,7 +301,11 @@ def _isl_terminal_type(node_id: str, candidate: Any, ctx: Any) -> str | None:
     return term.terminal_type if term is not None else None
 
 
-def _isl_verdict(
+# A pair the preview judges with geometry: (kind, node ids, ISL limits or None).
+type _GeometryRequest = tuple[str, str, str, IslLimits | None]
+
+
+def _isl_request(
     node_a: str,
     node_b: str,
     candidate: Any,
@@ -307,22 +313,18 @@ def _isl_verdict(
     ctx: Any,
     rule: ResolvedLinkRule,
     central_body: str,
-) -> str:
-    """The frozen-epoch ISL verdict — LOS, range, and field-of-regard via the
-    visibility composite, plus the one allocator-layer gate the runtime applies
-    before geometry: terminal-type compatibility. The runtime
-    (evaluate_isl_feasibility) refuses to bring up a pair between incompatible
-    ISL terminal types, so the preview reports terminal_type_mismatch and draws
-    no line rather than a false-positive candidate. (terminal_role_mismatch and
-    the motion gates stay out — role compatibility is enforced upstream by the
-    allocated interfaces, and the motion gates are time semantics a frozen epoch
-    does not judge.)"""
-    state_a = sat_states.get(node_a)
-    state_b = sat_states.get(node_b)
-    if state_a is None or state_b is None:
+) -> str | _GeometryRequest:
+    """The frozen-epoch ISL check, or its verdict when no geometry is needed: LOS, range and
+    field of regard through the runtime's per-direction evaluation, plus the one
+    allocator-layer gate the runtime applies before geometry: terminal-type compatibility. The
+    runtime (evaluate_isl_feasibility) refuses to bring up a pair between incompatible ISL
+    terminal types, so the preview reports terminal_type_mismatch and draws no line rather than
+    a false-positive candidate. (terminal_role_mismatch and the motion gates stay out — role
+    compatibility is enforced upstream by the allocated interfaces, and the motion gates are
+    time semantics a frozen epoch does not judge.)"""
+    if sat_states.get(node_a) is None or sat_states.get(node_b) is None:
         return "no_geometry"
-    body_frame = ctx.body_frames.get(central_body)
-    if body_frame is None:
+    if ctx.body_frames.get(central_body) is None:
         return "no_geometry"
     type_a = _isl_terminal_type(node_a, candidate, ctx)
     type_b = _isl_terminal_type(node_b, candidate, ctx)
@@ -331,51 +333,29 @@ def _isl_verdict(
     max_range, fov = _isl_limits(node_a, node_b, candidate, ctx, rule)
     if max_range is None:
         return "no_geometry"
-    result = check_isl_visibility(
-        state_a.position_ecef_km,
-        state_a.velocity_ecef_km_s,
-        state_b.position_ecef_km,
-        state_b.velocity_ecef_km_s,
+    limits = IslLimits(
         max_range_km=max_range,
-        body_frame=body_frame,
-        max_tracking_rate_deg_s=None,  # motion gate — off for a frozen epoch
         field_of_regard_deg=fov,
-        polar_seam_enabled=False,  # motion gate — off for a frozen epoch
-        geo_a=state_a.geodetic,
-        geo_b=state_b.geodetic,
+        max_tracking_rate_deg_s=None,  # motion gate — off for a frozen epoch
+        polar_seam=False,  # motion gate — off for a frozen epoch
     )
-    return "ok" if result.visible else result.reason
+    return ("isl", node_a, node_b, limits)
 
 
-def _ground_verdict(
-    gs_node: ResolvedNode,
-    sat_state: Any,
-    ctx: Any,
-) -> str:
+def _ground_request(
+    gs_node: ResolvedNode, sat_id: str, sat_state: Any, ctx: Any
+) -> str | _GeometryRequest:
     if sat_state is None:
         return "no_geometry"
-    gs_pos = ctx.gs_positions.get(gs_node.node_id)
-    if gs_pos is None:
+    if ctx.gs_positions.get(gs_node.node_id) is None:
         return "no_geometry"
-    gs_ecef, gs_geo = gs_pos
     reference_body = ctx.gs_reference_bodies.get(gs_node.node_id)
-    body_frame = ctx.body_frames.get(reference_body) if reference_body else None
-    if body_frame is None:
+    if reference_body is None or ctx.body_frames.get(reference_body) is None:
         return "no_geometry"
-    # The effective cross-rule mask OME's engine enforces at this GS — never the
-    # rule's own endpoint mask (geometry_only carries no boresight/FoR/range).
-    min_elev = ctx.gs_min_elevations[gs_node.node_id]
-    gv = check_ground_visibility(
-        gs_ecef,
-        gs_geo,
-        sat_state.position_ecef_km,
-        min_elev,
-        body_frame=body_frame,
-    )
-    return "ok" if gv.visible else gv.reject_reason
+    return ("ground", gs_node.node_id, sat_id, None)
 
 
-def _pair_verdict(
+def _pair_request(
     node_a: str,
     node_b: str,
     candidate: Any,
@@ -383,7 +363,7 @@ def _pair_verdict(
     sat_states: dict[str, Any],
     ctx: Any,
     rule: ResolvedLinkRule,
-) -> str:
+) -> str | _GeometryRequest:
     left = node_by_id.get(node_a)
     right = node_by_id.get(node_b)
     if left is None or right is None:
@@ -391,13 +371,68 @@ def _pair_verdict(
     a_sat = left.kind == "satellite"
     b_sat = right.kind == "satellite"
     if a_sat and b_sat:
-        return _isl_verdict(node_a, node_b, candidate, sat_states, ctx, rule, left.central_body)
+        return _isl_request(node_a, node_b, candidate, sat_states, ctx, rule, left.central_body)
     if a_sat != b_sat:
         gs_node = right if a_sat else left
         sat_id = node_a if a_sat else node_b
-        return _ground_verdict(gs_node, sat_states.get(sat_id), ctx)
+        return _ground_request(gs_node, sat_id, sat_states.get(sat_id), ctx)
     # Ground-ground inside a computed rule: no visibility to compute.
     return "no_geometry"
+
+
+def _isl_limits_of(request: _GeometryRequest) -> IslLimits:
+    limits = request[3]
+    if limits is None:
+        raise ValueError(f"ISL preview request {request[1]}<->{request[2]} carries no limits")
+    return limits
+
+
+def _geometry_verdicts(requests: list[_GeometryRequest], ctx: Any, epoch_unix: float) -> list[str]:
+    """The runtime's per-direction verdicts for the requested pairs at the preview epoch, from
+    one signals call. The ground preview is geometry only: the effective cross-rule mask OME's
+    engine enforces at the station, never the rule's own endpoint mask, and no terminal
+    limits."""
+    isl_rows = [row for row, request in enumerate(requests) if request[0] == "isl"]
+    ground_rows = [row for row, request in enumerate(requests) if request[0] == "ground"]
+    isl_pairs = [(requests[row][1], requests[row][2]) for row in isl_rows]
+    ground_pairs = [(requests[row][1], requests[row][2]) for row in ground_rows]
+    geometry = GroundGeometry(
+        physics=ctx.physics,
+        body_frames=ctx.body_frames,
+        gs_positions=ctx.gs_positions,
+        gs_min_elevations=ctx.gs_min_elevations,
+        gs_reference_bodies=ctx.gs_reference_bodies,
+        ground_link_model="geometry_only",
+        gs_terminal_profiles=None,
+        sat_ground_terminal_profiles=None,
+        pairs=ground_pairs,
+    )
+    endpoints = {
+        **satellite_endpoints(
+            satellites=ctx.satellites,
+            addressing=ctx.addressing,
+            propagator_id=ctx.propagator_id,
+            body_frames=ctx.body_frames,
+        ),
+        **geometry.station_endpoints,
+    }
+    signals = PairSignals.sent_at(
+        ctx.physics, ctx.body_frames, endpoints, isl_pairs + ground_pairs, epoch_unix
+    )
+    isl = isl_pair_reasons(
+        signals=signals,
+        body_frames=ctx.body_frames,
+        pairs=isl_pairs,
+        limits=[_isl_limits_of(requests[row]) for row in isl_rows],
+        latitude_threshold_deg=ctx.latitude_threshold_deg,
+    )
+    ground = geometry.verdicts(ground_pairs, *signals.directions(ground_pairs))
+    verdicts = [""] * len(requests)
+    for row, reason in zip(isl_rows, isl, strict=True):
+        verdicts[row] = reason
+    for row, verdict in zip(ground_rows, ground, strict=True):
+        verdicts[row] = "ok" if verdict.visible else verdict.reason
+    return verdicts
 
 
 def _computed_preview(
@@ -406,6 +441,7 @@ def _computed_preview(
     sat_states: dict[str, Any],
     ctx: Any,
     fixed: dict[str, list[Any]],
+    epoch_unix: float,
 ) -> BuilderRulePreview:
     mode = rule.topology.mode
     if mode in ("explicit_pairs", "nearest_n"):
@@ -428,9 +464,8 @@ def _computed_preview(
     tested = min(pairs_total, _PREVIEW_TESTED_BUDGET)
     ep0 = set(rule.endpoints[0].node_ids)
     ep1 = set(rule.endpoints[1].node_ids)
-    reason_counts: dict[str, int] = {}
-    drawn: list[BuilderPreviewPair] = []
-    passing = 0
+    displays: list[tuple[str, str]] = []
+    outcomes: list[str | _GeometryRequest] = []
     for index, (na, nb, candidate) in enumerate(pair_iter):
         if index >= tested:
             break
@@ -456,7 +491,16 @@ def _computed_preview(
                 )
             if not forward:
                 display_a, display_b = nb, na
-        verdict = _pair_verdict(na, nb, candidate, node_by_id, sat_states, ctx, rule)
+        displays.append((display_a, display_b))
+        outcomes.append(_pair_request(na, nb, candidate, node_by_id, sat_states, ctx, rule))
+
+    requests = [outcome for outcome in outcomes if not isinstance(outcome, str)]
+    judged = iter(_geometry_verdicts(requests, ctx, epoch_unix) if requests else [])
+    reason_counts: dict[str, int] = {}
+    drawn: list[BuilderPreviewPair] = []
+    passing = 0
+    for (display_a, display_b), outcome in zip(displays, outcomes, strict=True):
+        verdict = outcome if isinstance(outcome, str) else next(judged)
         if verdict == "ok":
             passing += 1
             if len(drawn) < _PREVIEW_DRAW_CAP:
@@ -491,6 +535,7 @@ def _builder_rule_previews(
     resolved: ResolvedSession,
     ctx: Any,
     sat_states: dict[str, PropagatedState],
+    epoch_unix: float,
 ) -> tuple[BuilderRulePreview, ...]:
     """Frozen-epoch visibility verdicts for every rule — the server's preview,
     computed once per resolve through the runtime's own composites."""
@@ -518,7 +563,7 @@ def _builder_rule_previews(
     previews: list[BuilderRulePreview] = []
     for rule in resolved.link_rules:
         if scopes[rule.rule_id] == "computed":
-            previews.append(_computed_preview(rule, node_by_id, sat_states, ctx, fixed))
+            previews.append(_computed_preview(rule, node_by_id, sat_states, ctx, fixed, epoch_unix))
         else:
             previews.append(
                 BuilderRulePreview(
@@ -617,7 +662,7 @@ def world_from_resolution(resolution: SessionResolution) -> BuilderWorld:
             for node_id, state in sat_states.items()
         }
         ephemeris = build_session_ephemeris(ctx, epoch_unix, 0)
-        rule_previews = _builder_rule_previews(resolved, ctx, sat_states)
+        rule_previews = _builder_rule_previews(resolved, ctx, sat_states, epoch_unix)
         physics = ctx.physics
     else:
         ephemeris, rule_previews = _satellite_less_world_view(resolved, epoch_unix)

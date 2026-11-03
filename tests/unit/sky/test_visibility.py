@@ -1,24 +1,24 @@
-"""Test visibility computation — LOS, range, elevation, scheduling."""
+"""Test link constraints (range, elevation, ground and satellite field of regard, tracking rate,
+polar seam) and ISL terminal scheduling.
+
+Each constraint case states both ends at one instant and runs OME's per-direction checks on that
+geometry (tests/direction_inputs.py). Line of sight through a body is tested against real
+endpoints in tests/unit/physics/test_occlusion.py.
+"""
 
 import math
 
-from nodalarc.body_frames import BodyFrame
-from nodalarc.frames import EcefVec3, GeoPosition, Vec3
+from nodalarc.frames import GeoPosition, Vec3
 from nodalarc.geo import compute_range_km
 from nodalarc.models.terminal_physics import SatGroundTerminalBoresight, TerminalBoresight
-from nodalarc.physics import body_fixed_from_geodetic
 from ome.visibility import (
     ScheduledLink,
-    check_ground_visibility,
-    check_isl_visibility,
-    compute_elevation_angle,
     enforce_symmetric_scheduling,
-    has_line_of_sight,
     schedule_isl_terminals,
 )
 
+from tests.direction_inputs import ground_verdict, isl_reason
 from tests.physics_fixtures import (
-    EARTH_TEST_BODY_FRAME,
     earth_elements_from_params,
     earth_geodetic_to_ecef,
     earth_propagate_eci,
@@ -27,41 +27,6 @@ from tests.physics_fixtures import (
 from tests.seam_reference import DeclaredShell, encounter, state, verdict
 
 EPOCH = 1735689600.0
-
-
-def _body_fixed(geo, body_frame):
-    return EcefVec3(body_fixed_from_geodetic(geo, body_frame))
-
-
-class TestLineOfSight:
-    def test_same_plane_sats_have_los(self):
-        """Two satellites in the same orbital plane, nearby, should have LOS."""
-        e1 = earth_elements_from_params(550.0, 53.0, 0.0, 0.0)
-        e2 = earth_elements_from_params(550.0, 53.0, 0.0, 36.0)  # 36° apart
-        pos1, _, _ = earth_propagate_keplerian(e1, EPOCH, 0.0)
-        pos2, _, _ = earth_propagate_keplerian(e2, EPOCH, 0.0)
-        assert has_line_of_sight(pos1, pos2, EARTH_TEST_BODY_FRAME)
-
-    def test_opposite_side_sats_no_los(self):
-        """Two satellites on opposite sides of Earth should NOT have LOS."""
-        e1 = earth_elements_from_params(550.0, 53.0, 0.0, 0.0)
-        e2 = earth_elements_from_params(550.0, 53.0, 0.0, 180.0)
-        pos1, _, _ = earth_propagate_keplerian(e1, EPOCH, 0.0)
-        pos2, _, _ = earth_propagate_keplerian(e2, EPOCH, 0.0)
-        assert not has_line_of_sight(pos1, pos2, EARTH_TEST_BODY_FRAME)
-
-    def test_gs_and_overhead_sat_have_los(self):
-        """GS and a satellite directly overhead should have LOS."""
-        gs = earth_geodetic_to_ecef(GeoPosition(0.0, 0.0, 0.0))
-        sat = earth_geodetic_to_ecef(GeoPosition(0.0, 0.0, 550.0))
-        assert has_line_of_sight(gs, sat, EARTH_TEST_BODY_FRAME)
-
-    def test_gs_and_horizon_sat(self):
-        """GS and satellite just above the horizon should have LOS."""
-        gs = earth_geodetic_to_ecef(GeoPosition(0.0, 0.0, 0.0))
-        # Satellite at ~20° elevation
-        sat = earth_geodetic_to_ecef(GeoPosition(10.0, 0.0, 550.0))
-        assert has_line_of_sight(gs, sat, EARTH_TEST_BODY_FRAME)
 
 
 class TestRange:
@@ -76,13 +41,18 @@ class TestRange:
         assert 4000.0 < r < 4600.0
 
 
+def _elevation_deg(gs_ecef, gs_geo, sat_ecef) -> float:
+    """The station's elevation of the satellite, with no elevation mask."""
+    return ground_verdict(gs_ecef, gs_geo, sat_ecef, min_elevation_deg=-90.0).elevation_deg
+
+
 class TestElevationAngle:
     def test_overhead_satellite(self):
         """Satellite directly overhead → ~90° elevation."""
         gs_geo = GeoPosition(0.0, 0.0, 0.0)
         gs_ecef = earth_geodetic_to_ecef(gs_geo)
         sat_ecef = earth_geodetic_to_ecef(GeoPosition(0.0, 0.0, 550.0))
-        elev = compute_elevation_angle(gs_ecef, gs_geo, sat_ecef)
+        elev = _elevation_deg(gs_ecef, gs_geo, sat_ecef)
         assert 85.0 < elev <= 90.0
 
     def test_horizon_satellite(self):
@@ -91,7 +61,7 @@ class TestElevationAngle:
         gs_ecef = earth_geodetic_to_ecef(gs_geo)
         # Satellite at 10° lat, 550km — should be above horizon but not high
         sat_ecef = earth_geodetic_to_ecef(GeoPosition(10.0, 0.0, 550.0))
-        elev = compute_elevation_angle(gs_ecef, gs_geo, sat_ecef)
+        elev = _elevation_deg(gs_ecef, gs_geo, sat_ecef)
         # Should be positive but moderate
         assert 0.0 < elev < 45.0
 
@@ -100,7 +70,7 @@ class TestElevationAngle:
         gs_geo = GeoPosition(0.0, 0.0, 0.0)
         gs_ecef = earth_geodetic_to_ecef(gs_geo)
         sat_ecef = earth_geodetic_to_ecef(GeoPosition(60.0, 0.0, 550.0))
-        elev = compute_elevation_angle(gs_ecef, gs_geo, sat_ecef)
+        elev = _elevation_deg(gs_ecef, gs_geo, sat_ecef)
         assert elev < 0.0
 
     def test_analytic_horizon_is_near_zero_elevation(self):
@@ -115,7 +85,7 @@ class TestElevationAngle:
             orbit_radius_km * math.sin(central_angle),
             0.0,
         )
-        elev = compute_elevation_angle(gs_ecef, gs_geo, sat_ecef)
+        elev = _elevation_deg(gs_ecef, gs_geo, sat_ecef)
         assert abs(elev) < 1e-9
 
 
@@ -124,97 +94,64 @@ class TestGroundVisibility:
         gs_geo = GeoPosition(0.0, 0.0, 0.0)
         gs_ecef = earth_geodetic_to_ecef(gs_geo)
         sat_ecef = earth_geodetic_to_ecef(GeoPosition(0.0, 0.0, 550.0))
-        result = check_ground_visibility(
-            gs_ecef,
-            gs_geo,
-            sat_ecef,
-            min_elevation_deg=25.0,
-            body_frame=EARTH_TEST_BODY_FRAME,
-        )
+        result = ground_verdict(gs_ecef, gs_geo, sat_ecef, min_elevation_deg=25.0)
         assert result.visible
-        assert result.reject_reason == "ok"
+        assert result.reason == "ok"
 
     def test_below_min_elevation(self):
         """LEO sat at 550km, 10° latitude offset from a ground station
-        at the equator: LOS is clear, but elevation is ~20° — below the
-        25° mask. Must reject with `elevation_below_min`, not
-        `los_blocked`. (At 25° lat offset Earth occludes LOS, which is
-        a separate rejection — see `test_los_blocked_pair`.)"""
+        at the equator: elevation is ~20° — below the 25° mask. Must
+        reject with `elevation_below_min`. (The line of sight of this
+        pair is clear; test_occlusion.py tests it from real endpoints.)"""
         gs_geo = GeoPosition(0.0, 0.0, 0.0)
         gs_ecef = earth_geodetic_to_ecef(gs_geo)
         sat_ecef = earth_geodetic_to_ecef(GeoPosition(10.0, 0.0, 550.0))
-        result = check_ground_visibility(
-            gs_ecef,
-            gs_geo,
-            sat_ecef,
-            min_elevation_deg=25.0,
-            body_frame=EARTH_TEST_BODY_FRAME,
-        )
+        result = ground_verdict(gs_ecef, gs_geo, sat_ecef, min_elevation_deg=25.0)
         assert not result.visible
-        assert result.reject_reason == "elevation_below_min"
+        assert result.reason == "elevation_below_min"
         # The elevation value carries the actual computed angle, not a
         # sentinel. This distinguishes elevation_below_min from los_blocked.
         assert 0.0 < result.elevation_deg < 25.0
 
-    def test_los_blocked_pair(self):
-        """Antipodal pair must reject with `los_blocked` and carry the
-        -90.0 elevation sentinel only because Earth occlusion makes
-        elevation undefined; the reject_reason field is the
-        authoritative attribution, not the elevation value."""
-        gs_geo = GeoPosition(0.0, 0.0, 0.0)
-        gs_ecef = earth_geodetic_to_ecef(gs_geo)
-        # Satellite on the opposite side of Earth — LOS blocked.
-        sat_ecef = earth_geodetic_to_ecef(GeoPosition(0.0, 180.0, 550.0))
-        result = check_ground_visibility(
-            gs_ecef,
-            gs_geo,
-            sat_ecef,
-            min_elevation_deg=25.0,
-            body_frame=EARTH_TEST_BODY_FRAME,
-        )
-        assert not result.visible
-        assert result.reject_reason == "los_blocked"
-        assert result.elevation_deg == -90.0
-
     def test_range_limit_rejects_visible_overhead_satellite(self):
+        """Both terminals declare a 100 km range, so the rejection names both endpoints."""
         gs_geo = GeoPosition(0.0, 0.0, 0.0)
         gs_ecef = earth_geodetic_to_ecef(gs_geo)
         sat_ecef = earth_geodetic_to_ecef(GeoPosition(0.0, 0.0, 550.0))
-        result = check_ground_visibility(
+        assert compute_range_km(gs_ecef, sat_ecef) > 500.0
+        result = ground_verdict(
             gs_ecef,
             gs_geo,
             sat_ecef,
             min_elevation_deg=25.0,
-            max_range_km=100.0,
-            body_frame=EARTH_TEST_BODY_FRAME,
+            gs_max_range_km=100.0,
+            sat_max_range_km=100.0,
         )
         assert not result.visible
-        assert result.reject_reason == "range_exceeded"
+        assert result.reason == "range_exceeded"
         assert result.rejecting_endpoint == "both"
-        assert result.range_km > 500.0
 
     def test_ground_field_of_regard_rejects_off_boresight_satellite(self):
         gs_geo = GeoPosition(0.0, 0.0, 0.0)
         gs_ecef = earth_geodetic_to_ecef(gs_geo)
         sat_ecef = earth_geodetic_to_ecef(GeoPosition(10.0, 0.0, 550.0))
-        result = check_ground_visibility(
+        result = ground_verdict(
             gs_ecef,
             gs_geo,
             sat_ecef,
             min_elevation_deg=0.0,
             gs_boresight=TerminalBoresight(mode="local_vertical"),
             gs_field_of_regard_deg=10.0,
-            body_frame=EARTH_TEST_BODY_FRAME,
         )
         assert not result.visible
-        assert result.reject_reason == "field_of_regard"
+        assert result.reason == "field_of_regard"
         assert result.rejecting_endpoint == "ground"
 
     def test_satellite_nadir_field_of_regard_rejects_off_axis_ground_station(self):
         gs_geo = GeoPosition(0.0, 0.0, 0.0)
         gs_ecef = earth_geodetic_to_ecef(gs_geo)
         sat_ecef = earth_geodetic_to_ecef(GeoPosition(10.0, 0.0, 550.0))
-        result = check_ground_visibility(
+        result = ground_verdict(
             gs_ecef,
             gs_geo,
             sat_ecef,
@@ -224,27 +161,27 @@ class TestGroundVisibility:
                 mode="nadir",
             ),
             sat_field_of_regard_deg=10.0,
-            body_frame=EARTH_TEST_BODY_FRAME,
         )
         assert not result.visible
-        assert result.reject_reason == "field_of_regard"
+        assert result.reason == "field_of_regard"
         assert result.rejecting_endpoint == "satellite"
 
     def test_tracking_rate_limit_rejects_fast_overhead_satellite(self):
+        """Both terminals declare 0.1 deg/s, so the rejection names both endpoints."""
         gs_geo = GeoPosition(0.0, 0.0, 0.0)
         gs_ecef = earth_geodetic_to_ecef(gs_geo)
         sat_ecef = earth_geodetic_to_ecef(GeoPosition(0.0, 0.0, 550.0))
-        result = check_ground_visibility(
+        result = ground_verdict(
             gs_ecef,
             gs_geo,
             sat_ecef,
             min_elevation_deg=25.0,
-            max_tracking_rate_deg_s=0.1,
-            sat_velocity_ecef_km_s=Vec3(0.0, 10.0, 0.0),
-            body_frame=EARTH_TEST_BODY_FRAME,
+            gs_max_tracking_rate_deg_s=0.1,
+            sat_max_tracking_rate_deg_s=0.1,
+            sat_velocity_km_s=Vec3(0.0, 10.0, 0.0),
         )
         assert not result.visible
-        assert result.reject_reason == "tracking_exceeded"
+        assert result.reason == "tracking_exceeded"
         assert result.rejecting_endpoint == "both"
 
 
@@ -255,16 +192,7 @@ class TestIslVisibility:
         pos1, vel1 = earth_propagate_eci(e1, 0.0)
         pos2, vel2 = earth_propagate_eci(e2, 0.0)
         # Use ECI positions as approximate ECEF (t=0 acceptable for test)
-        result = check_isl_visibility(
-            pos1,
-            vel1,
-            pos2,
-            vel2,
-            max_range_km=5016.0,
-            body_frame=EARTH_TEST_BODY_FRAME,
-        )
-        assert result.visible
-        assert result.reason == "ok"
+        assert isl_reason(pos1, vel1, pos2, vel2, max_range_km=5016.0) == "ok"
 
     def test_range_exceeded(self):
         """Two nearby sats with LOS but beyond a tight range limit."""
@@ -273,22 +201,15 @@ class TestIslVisibility:
         pos1, vel1 = earth_propagate_eci(e1, 0.0)
         pos2, vel2 = earth_propagate_eci(e2, 0.0)
         # Range is ~4300 km, limit to 1000 km
-        result = check_isl_visibility(
-            pos1,
-            vel1,
-            pos2,
-            vel2,
-            max_range_km=1000.0,
-            body_frame=EARTH_TEST_BODY_FRAME,
-        )
-        assert not result.visible
-        assert result.reason == "range_exceeded"
+        assert isl_reason(pos1, vel1, pos2, vel2, max_range_km=1000.0) == "range_exceeded"
 
     def test_range_exceedance_and_recovery_follow_the_seam_reference(self):
         """The shipped polar shell's counter-rotating seam pair, at times the
         declared-parameter reference model puts just inside, just outside and
         back inside the terminal's 6000 km range; the reference computes the
-        states, the production check decides."""
+        states, the production check decides. The production path length of
+        this pair is compared with the reference in
+        tests/unit/physics/test_line_of_sight_rate.py."""
         shell = DeclaredShell(780.0, 86.4, 31.6, 6, 10.0)
         expected = [(700, "ok"), (1500, "range_exceeded"), (3720, "ok")]
         for t_s, reason in expected:
@@ -303,23 +224,22 @@ class TestIslVisibility:
                 )
                 == reason
             )
-            result = check_isl_visibility(
-                Vec3(*pos_a),
-                Vec3(*vel_a),
-                Vec3(*pos_b),
-                Vec3(*vel_b),
+            result = isl_reason(
+                pos_a,
+                vel_a,
+                pos_b,
+                vel_b,
                 max_range_km=6000.0,
                 max_tracking_rate_deg_s=2.0,
-                body_frame=EARTH_TEST_BODY_FRAME,
             )
-            assert result.reason == reason, (t_s, result)
-            assert result.visible == (reason == "ok")
-            assert abs(result.range_km - reference_range) < 1.0
+            assert result == reason, (t_s, result)
 
     def test_tracking_exceedance_and_recovery_with_range_and_line_of_sight_permitting(self):
         """The seam-crossing shell's close pass: line of sight clear and range
         two orders of magnitude inside the limit at every sample, so the
-        tracking rate is the one binding constraint, exceeded then recovered."""
+        tracking rate is the one binding constraint, exceeded then recovered.
+        The production rate and path length of this pass are compared with
+        the reference in tests/unit/physics/test_line_of_sight_rate.py."""
         shell = DeclaredShell(780.0, 86.4, 31.6, 6, 15.0)
         expected = [(2870, "ok", 1.41), (2890, "tracking_exceeded", 3.64), (2910, "ok", 1.38)]
         for t_s, reason, reference_rate in expected:
@@ -328,38 +248,33 @@ class TestIslVisibility:
             range_km, rate, clear = encounter(shell, (5, 0), (0, 2), t_s)
             assert clear and range_km < 400.0, (t_s, range_km)
             assert abs(rate - reference_rate) < 0.02, (t_s, rate)
-            result = check_isl_visibility(
-                Vec3(*pos_a),
-                Vec3(*vel_a),
-                Vec3(*pos_b),
-                Vec3(*vel_b),
+            result = isl_reason(
+                pos_a,
+                vel_a,
+                pos_b,
+                vel_b,
                 max_range_km=6000.0,
                 max_tracking_rate_deg_s=2.0,
-                body_frame=EARTH_TEST_BODY_FRAME,
             )
-            assert result.reason == reason, (t_s, result)
-            assert abs(result.angular_velocity_deg_s - rate) < 0.02, (t_s, result)
-            assert result.range_km < 400.0
+            assert result == reason, (t_s, result)
 
     def test_seam_closest_approach_of_the_range_experiment_stays_feasible(self):
         """The range experiment's closest approach (1954 km, 0.43 deg/s) is feasible:
         the shipped phasing never lets tracking bind, which is why that session
-        is range coverage only."""
+        is range coverage only. The production path length and rate at this
+        approach are checked in tests/unit/physics/test_line_of_sight_rate.py."""
         shell = DeclaredShell(780.0, 86.4, 31.6, 6, 10.0)
         pos_a, vel_a = state(shell, 5, 0, 1090)
         pos_b, vel_b = state(shell, 0, 0, 1090)
-        result = check_isl_visibility(
-            Vec3(*pos_a),
-            Vec3(*vel_a),
-            Vec3(*pos_b),
-            Vec3(*vel_b),
+        result = isl_reason(
+            pos_a,
+            vel_a,
+            pos_b,
+            vel_b,
             max_range_km=6000.0,
             max_tracking_rate_deg_s=2.0,
-            body_frame=EARTH_TEST_BODY_FRAME,
         )
-        assert result.visible and result.reason == "ok"
-        assert 1900.0 < result.range_km < 2000.0
-        assert 0.40 < result.angular_velocity_deg_s < 0.46
+        assert result == "ok"
 
     def test_polar_seam_cutoff(self):
         """Cross-plane ISL at polar latitude should be blocked by polar seam config."""
@@ -368,20 +283,16 @@ class TestIslVisibility:
         geo_b = GeoPosition(80.0, 10.0, 550.0)
         pos_a = earth_geodetic_to_ecef(geo_a)
         pos_b = earth_geodetic_to_ecef(geo_b)
-        result = check_isl_visibility(
+        result = isl_reason(
             pos_a,
             Vec3(0, 0, 0),
             pos_b,
             Vec3(0, 0, 0),
             max_range_km=5016.0,
-            polar_seam_enabled=True,
+            polar_seam_latitudes_deg=(geo_a.lat_deg, geo_b.lat_deg),
             latitude_threshold_deg=75.0,
-            geo_a=geo_a,
-            geo_b=geo_b,
-            body_frame=EARTH_TEST_BODY_FRAME,
         )
-        assert not result.visible
-        assert result.reason == "polar_seam"
+        assert result == "polar_seam"
 
 
 class TestIslTerminalScheduling:
@@ -460,46 +371,3 @@ class TestSymmetricScheduling:
         assert result["B"][0].scheduled is True
         # A→C: asymmetric (C doesn't schedule A), A→C gets unscheduled
         assert result["A"][1].scheduled is False
-
-
-class TestSurfaceObserverLineOfSight:
-    """The surface-representation class: an observer authored ON the body
-    ellipsoid (alt 0) converts from geodetic coordinates to a point within
-    float ULPs of the surface — sometimes one ULP INSIDE it. LOS must read
-    "on the surface" as outside the body, or any zero-altitude site is
-    permanently blind to its entire sky (luna-artemis-base at lat -89.4,
-    alt 0, rejected a 123 km zenith pass as los_blocked)."""
-
-    LUNA = BodyFrame(
-        name="luna",
-        mean_radius_km=1737.4,
-        equatorial_radius_km=1738.1,
-        polar_radius_km=1736.0,
-        gravitational_parameter_km3_s2=4902.800066,
-        j2=0.0,
-    )
-
-    def test_polar_surface_site_sees_zenith_satellite(self):
-        gs_geo = GeoPosition(-89.4, 30.0, 0.0)
-        gs = _body_fixed(gs_geo, self.LUNA)
-        sat = _body_fixed(GeoPosition(-89.4, 30.0, 100.0), self.LUNA)
-        assert has_line_of_sight(gs, sat, self.LUNA), (
-            "a surface observer must not be occluded by the body it stands on"
-        )
-
-    def test_zero_altitude_site_full_ground_visibility_decision(self):
-        gs_geo = GeoPosition(-89.4, 30.0, 0.0)
-        gs = _body_fixed(gs_geo, self.LUNA)
-        sat = _body_fixed(GeoPosition(-89.4, 30.0, 100.0), self.LUNA)
-        gv = check_ground_visibility(gs, gs_geo, sat, 10.0, body_frame=self.LUNA)
-        assert gv.visible, f"zenith pass rejected: {gv.reject_reason}"
-        assert gv.elevation_deg > 80.0
-
-    def test_occlusion_still_blocks_through_the_body(self):
-        gs_geo = GeoPosition(-89.4, 30.0, 0.0)
-        gs = _body_fixed(gs_geo, self.LUNA)
-        # Satellite over the OPPOSITE pole: the segment crosses the body.
-        sat = _body_fixed(GeoPosition(89.4, 30.0, 100.0), self.LUNA)
-        assert not has_line_of_sight(gs, sat, self.LUNA), (
-            "the surface tolerance must not disable real occlusion"
-        )

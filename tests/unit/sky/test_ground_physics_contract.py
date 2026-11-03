@@ -4,6 +4,10 @@
 
 These tests lock the ground-physics invariant: a scheduled ground link must first pass
 body-aware LOS, range, field-of-regard, and topocentric tracking constraints.
+
+The constraint cases state both ends at one instant and run OME's per-direction checks on that
+geometry (tests/direction_inputs.py). Line of sight at the tangent point is tested against real
+endpoints in tests/unit/physics/test_occlusion.py.
 """
 
 from __future__ import annotations
@@ -13,6 +17,7 @@ import math
 import pytest
 from nodalarc.body_frames import BodyFrame
 from nodalarc.frames import GeoPosition, Vec3
+from nodalarc.geo import compute_range_km
 from nodalarc.ground_terminals import TerminalPhysicsProfile
 from nodalarc.models.ground_policy import HandoverPolicySpec, SelectionPolicySpec
 from nodalarc.models.session import GroundSchedulingConfig
@@ -26,12 +31,8 @@ from nodalarc.ome_runtime import (
 )
 from ome.event_stream import build_step_context, compute_step
 from ome.propagation_engine import propagate_satellites
-from ome.visibility import (
-    check_ground_visibility,
-    compute_elevation_angle,
-    has_line_of_sight,
-)
 
+from tests.direction_inputs import ground_verdict
 from tests.ome_runtime_fixtures import StaticOmeAddressing
 from tests.physics_fixtures import (
     EARTH_ORIGIN_BODY_STATES,
@@ -88,8 +89,9 @@ def test_analytic_tangent_point_is_zero_elevation_for_supported_bodies(body_fram
         0.0,
     )
 
-    assert has_line_of_sight(observer, target, body_frame)
-    elevation = compute_elevation_angle(observer, observer_geo, target)
+    elevation = ground_verdict(
+        observer, observer_geo, target, min_elevation_deg=-90.0
+    ).elevation_deg
     assert elevation == pytest.approx(0.0, abs=1e-9)
 
 
@@ -103,7 +105,7 @@ def test_subsatellite_point_is_ninety_degree_elevation_for_supported_bodies(
     observer = Vec3(body_frame.equatorial_radius_km, 0.0, 0.0)
     target = Vec3(body_frame.equatorial_radius_km + 550.0, 0.0, 0.0)
 
-    result = check_ground_visibility(
+    result = ground_verdict(
         observer,
         observer_geo,
         target,
@@ -117,11 +119,10 @@ def test_subsatellite_point_is_ninety_degree_elevation_for_supported_bodies(
             mode="nadir",
         ),
         sat_field_of_regard_deg=120.0,
-        body_frame=body_frame,
     )
 
     assert result.visible
-    assert result.reject_reason == "ok"
+    assert result.reason == "ok"
     assert result.rejecting_endpoint == "none"
     assert result.elevation_deg == pytest.approx(90.0, abs=1e-9)
 
@@ -152,7 +153,8 @@ def test_range_constraint_rejects_clear_los_before_allocator_can_see_pair(
         0.0,
     )
 
-    result = check_ground_visibility(
+    assert compute_range_km(observer, target) == pytest.approx(desired_slant_km, abs=1e-6)
+    result = ground_verdict(
         observer,
         observer_geo,
         target,
@@ -166,11 +168,9 @@ def test_range_constraint_rejects_clear_los_before_allocator_can_see_pair(
             mode="nadir",
         ),
         sat_field_of_regard_deg=180.0,
-        body_frame=body_frame,
     )
 
-    assert result.range_km == pytest.approx(desired_slant_km, abs=1e-6)
-    assert result.reject_reason == "range_exceeded"
+    assert result.reason == "range_exceeded"
     assert result.rejecting_endpoint == "ground"
     assert not result.visible
 
@@ -295,11 +295,12 @@ def test_compute_step_schedules_only_pairs_that_pass_applied_ground_physics():
             sat_id = next(endpoint for endpoint in scheduled_pair if endpoint != gs_id)
             gs_ecef, gs_geo = ctx.gs_positions[gs_id]
             gs_profile, sat_profile = _terminal_profiles()
-            recomputed = check_ground_visibility(
+            # The tick's states at one instant pass the same terminal limits.
+            recomputed = ground_verdict(
                 gs_ecef,
                 gs_geo,
                 result.propagated_states[sat_id].position_ecef_km,
-                ctx.gs_min_elevations[gs_id],
+                min_elevation_deg=ctx.gs_min_elevations[gs_id],
                 gs_max_range_km=gs_profile.max_range_km,
                 sat_max_range_km=sat_profile.max_range_km,
                 gs_boresight=gs_profile.boresight,
@@ -308,11 +309,10 @@ def test_compute_step_schedules_only_pairs_that_pass_applied_ground_physics():
                 sat_field_of_regard_deg=sat_profile.field_of_regard_deg,
                 gs_max_tracking_rate_deg_s=gs_profile.max_tracking_rate_deg_s,
                 sat_max_tracking_rate_deg_s=sat_profile.max_tracking_rate_deg_s,
-                sat_velocity_ecef_km_s=result.propagated_states[sat_id].velocity_ecef_km_s,
-                body_frame=EARTH_TEST_BODY_FRAME,
+                sat_velocity_km_s=result.propagated_states[sat_id].velocity_ecef_km_s,
             )
             assert recomputed.visible
-            assert recomputed.reject_reason == "ok"
+            assert recomputed.reason == "ok"
 
     assert saw_scheduled_pair
     assert pair in associations

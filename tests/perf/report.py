@@ -17,6 +17,7 @@ SEGMENT_LABELS: tuple[tuple[str, str], ...] = (
     ("dwell", "remaining-pass dwell estimator"),
     ("visibility", "ground visibility checks"),
     ("propagation", "orbit propagation"),
+    ("signals", "signal light time, pointing and occlusion"),
     ("isl", "inter-satellite link evaluation"),
     ("allocator", "ground link allocation"),
     ("diff", "event diffs + snapshot prep"),

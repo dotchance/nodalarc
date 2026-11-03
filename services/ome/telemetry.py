@@ -27,6 +27,7 @@ from pydantic import BaseModel, ConfigDict
 
 # Physics segments (recorded inside compute_step).
 SEG_PROPAGATION = "propagation"
+SEG_SIGNALS = "signals"  # light time, pointing and occlusion of every candidate direction
 SEG_ISL = "isl"
 SEG_VISIBILITY = "visibility"  # evaluate_ground_visibility INCLUDING dwell
 SEG_DWELL = "dwell"  # the remaining-pass estimator inside visibility

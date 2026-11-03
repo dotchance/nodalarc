@@ -1,8 +1,18 @@
 # Copyright 2024-2026 .chance (dotchance)
 # Licensed under the Apache License, Version 2.0. See LICENSE file.
-"""Unit tests for OME ground visibility evaluation."""
+"""Unit tests for OME ground visibility evaluation.
+
+The engine decides each candidate from the tick's ground geometry and signals. Tests that reach
+a decision build both from the engine's own arguments, as compute_step does: one geometry over
+every declared candidate, and both directions of each candidate sent at one instant from real
+endpoints. A satellite the test holds at a fixed point above a body is a site at that altitude,
+at the same position as its propagated state. Tests that refuse their inputs before reading the
+geometry or a signal pass an empty geometry and signals for no pair.
+"""
 
 from __future__ import annotations
+
+from collections.abc import Mapping
 
 import pytest
 from nodalarc.frames import CommonVec3, EcefVec3, GeoPosition, Vec3
@@ -17,9 +27,17 @@ from nodalarc.ome_runtime import (
     SatelliteGroundTerminal,
     SatelliteNode,
 )
+from nodalarc.physics import PhysicsContext
+from nodalarc.physics.lighttime import Endpoint, SiteEndpoint
+from ome.direction_checks import PairSignals
 from ome.event_stream import build_step_context
-from ome.ground_visibility_engine import GroundPassLookahead, evaluate_ground_visibility
-from ome.propagation_engine import PropagatedState, propagate_satellites
+from ome.ground_visibility_engine import (
+    GroundGeometry,
+    GroundPassLookahead,
+    GroundVisibilityEvaluation,
+    evaluate_ground_visibility,
+)
+from ome.propagation_engine import PropagatedState, propagate_satellites, satellite_endpoints
 
 from tests.ome_runtime_fixtures import StaticOmeAddressing
 from tests.physics_fixtures import (
@@ -32,14 +50,74 @@ from tests.physics_fixtures import (
 )
 
 TEST_BODY_FRAMES = {"earth": EARTH_TEST_BODY_FRAME, "luna": LUNA_TEST_BODY_FRAME}
+EPOCH = 1735689600.0
 
 
-class _StubSatNode:
-    """Lookahead satellite stub: the frontier walker selects nodes by
-    satellite_node_id (resolver-assigned node_id) before propagating."""
+def _physics() -> PhysicsContext:
+    return physics_for("earth", "luna")
 
-    def __init__(self, node_id: str):
-        self.node_id = node_id
+
+def _candidate_pairs(candidates_by_gs: Mapping[str, tuple[str, ...]]) -> list[tuple[str, str]]:
+    return [(gs_id, sat_id) for gs_id, sat_ids in candidates_by_gs.items() for sat_id in sat_ids]
+
+
+def _geometry(arguments: Mapping) -> GroundGeometry:
+    """The tick's ground geometry over every declared candidate, from the engine's arguments,
+    as the step context builds it."""
+    return GroundGeometry(
+        physics=_physics(),
+        body_frames=arguments["body_frames"],
+        gs_positions=arguments["gs_positions"],
+        gs_min_elevations=arguments["gs_min_elevations"],
+        gs_reference_bodies=arguments["gs_reference_bodies"],
+        ground_link_model=arguments["ground_link_model"],
+        gs_terminal_profiles=arguments.get("gs_terminal_profiles"),
+        sat_ground_terminal_profiles=arguments.get("sat_ground_terminal_profiles"),
+        pairs=_candidate_pairs(arguments["candidate_satellite_ids_by_gs"]),
+    )
+
+
+def _signals(
+    geometry: GroundGeometry,
+    sat_endpoints: Mapping[str, Endpoint],
+    candidates_by_gs: Mapping[str, tuple[str, ...]],
+) -> PairSignals:
+    """Both directions of every candidate, sent at EPOCH."""
+    return PairSignals.sent_at(
+        _physics(),
+        geometry.body_frames,
+        {**sat_endpoints, **geometry.station_endpoints},
+        _candidate_pairs(candidates_by_gs),
+        EPOCH,
+    )
+
+
+def _evaluate(sat_endpoints: Mapping[str, Endpoint], **arguments) -> GroundVisibilityEvaluation:
+    """evaluate_ground_visibility with the geometry and signals its own arguments describe."""
+    geometry = _geometry(arguments)
+    return evaluate_ground_visibility(
+        **arguments,
+        geometry=geometry,
+        signals=_signals(geometry, sat_endpoints, arguments["candidate_satellite_ids_by_gs"]),
+    )
+
+
+def _refused(**arguments) -> GroundVisibilityEvaluation:
+    """evaluate_ground_visibility for inputs it refuses before reading the geometry or a
+    signal: an empty geometry and signals for no pair."""
+    geometry = GroundGeometry(
+        physics=_physics(),
+        body_frames=TEST_BODY_FRAMES,
+        gs_positions={},
+        gs_min_elevations={},
+        gs_reference_bodies={},
+        ground_link_model="geometry_only",
+        gs_terminal_profiles=None,
+        sat_ground_terminal_profiles=None,
+        pairs=[],
+    )
+    signals = PairSignals.sent_at(_physics(), TEST_BODY_FRAMES, {}, [], EPOCH)
+    return evaluate_ground_visibility(**arguments, geometry=geometry, signals=signals)
 
 
 def _ground_scheduling() -> GroundSchedulingConfig:
@@ -64,6 +142,13 @@ def _state(node_id: str, geo: GeoPosition, velocity: Vec3 | None = None) -> Prop
         velocity_common_km_s=CommonVec3(*vel),
         body_origin_common_km=CommonVec3(0.0, 0.0, 0.0),
     )
+
+
+def _held(geo: GeoPosition) -> SiteEndpoint:
+    """The signal endpoint of a satellite held at ``geo`` above Earth, where ``_state`` puts
+    it."""
+    ecef = earth_geodetic_to_ecef(geo)
+    return SiteEndpoint("earth", (ecef.x, ecef.y, ecef.z))
 
 
 def _gs_default_kwargs(
@@ -118,7 +203,8 @@ def test_ground_visibility_evaluates_all_station_satellite_pairs_with_physical_c
     gs_geo = GeoPosition(0.0, 0.0, 0.0)
     sat_geo = GeoPosition(0.0, 0.0, 550.0)
 
-    result = evaluate_ground_visibility(
+    result = _evaluate(
+        {"sat-a": _held(sat_geo)},
         satellite_ids=("sat-a",),
         sat_states={"sat-a": _state("sat-a", sat_geo)},
         gs_positions={"gs-equator": (earth_geodetic_to_ecef(gs_geo), gs_geo)},
@@ -146,7 +232,11 @@ def test_ground_visibility_evaluates_all_station_satellite_pairs_with_physical_c
     assert decision.applied_sat_max_tracking_rate_deg_s == 6.0
     assert decision.applied_gs_boresight_mode == "local_vertical"
     assert decision.applied_sat_boresight_mode == "nadir"
-    assert decision.sat_off_nadir_deg == pytest.approx(0.0)
+    # The satellite points along its apparent direction to the station below it. Light time and
+    # aberration cancel between the two ends except for the speed Earth's rotation gives the
+    # 550 km between them: 7.29e-5 rad/s * 550 km / c = 1.34e-7 rad, 7.7e-6 degrees (measured
+    # 7.68e-6).
+    assert decision.sat_off_nadir_deg == pytest.approx(0.0, abs=1e-5)
     assert decision.applied_gs_terminal_profile == "gs-equator.terminals"
     assert decision.applied_sat_terminal_profile == "sat-a.ground_terminals"
     assert result.visible_per_station["gs-equator"][0].sat_id == "sat-a"
@@ -155,7 +245,8 @@ def test_ground_visibility_evaluates_all_station_satellite_pairs_with_physical_c
 def test_physical_visibility_rejects_range_before_allocator_candidate_set():
     gs_geo = GeoPosition(0.0, 0.0, 0.0)
 
-    result = evaluate_ground_visibility(
+    result = _evaluate(
+        {"sat-a": _held(GeoPosition(0.0, 0.0, 550.0))},
         satellite_ids=("sat-a",),
         sat_states={"sat-a": _state("sat-a", GeoPosition(0.0, 0.0, 550.0))},
         gs_positions={"gs-equator": (earth_geodetic_to_ecef(gs_geo), gs_geo)},
@@ -186,7 +277,8 @@ def test_satellite_field_of_regard_rejection_carries_off_nadir_angle():
         )
     }
 
-    result = evaluate_ground_visibility(
+    result = _evaluate(
+        {sat_id: _held(GeoPosition(8.0, 0.0, 550.0))},
         satellite_ids=(sat_id,),
         sat_states={sat_id: _state(sat_id, GeoPosition(8.0, 0.0, 550.0))},
         gs_positions={"gs-equator": (earth_geodetic_to_ecef(gs_geo), gs_geo)},
@@ -207,7 +299,7 @@ def test_physical_visibility_requires_endpoint_profiles():
     gs_geo = GeoPosition(0.0, 0.0, 0.0)
 
     with pytest.raises(ValueError, match="ground terminal profiles"):
-        evaluate_ground_visibility(
+        _refused(
             satellite_ids=("sat-a",),
             sat_states={"sat-a": _state("sat-a", GeoPosition(0.0, 0.0, 550.0))},
             gs_positions={"gs-equator": (earth_geodetic_to_ecef(gs_geo), gs_geo)},
@@ -220,7 +312,7 @@ def test_ground_visibility_missing_propagated_state_fails_loudly():
     gs_geo = GeoPosition(0.0, 0.0, 0.0)
 
     with pytest.raises(ValueError, match="Missing propagated satellite state"):
-        evaluate_ground_visibility(
+        _refused(
             satellite_ids=("sat-missing",),
             sat_states={},
             gs_positions={"gs-equator": (earth_geodetic_to_ecef(gs_geo), gs_geo)},
@@ -234,7 +326,7 @@ def test_ground_visibility_missing_tenant_fails_loudly():
     """Direction 2: every visibility decision must carry tenant scope."""
     gs_geo = GeoPosition(0.0, 0.0, 0.0)
     with pytest.raises(ValueError, match="tenant_id"):
-        evaluate_ground_visibility(
+        _refused(
             satellite_ids=("sat-a",),
             sat_states={"sat-a": _state("sat-a", GeoPosition(0.0, 0.0, 550.0))},
             gs_positions={"gs-equator": (earth_geodetic_to_ecef(gs_geo), gs_geo)},
@@ -250,7 +342,7 @@ def test_ground_visibility_missing_reference_body_fails_loudly():
     """Direction 3: every visibility decision is anchored to a specific body."""
     gs_geo = GeoPosition(0.0, 0.0, 0.0)
     with pytest.raises(ValueError, match="reference_body"):
-        evaluate_ground_visibility(
+        _refused(
             satellite_ids=("sat-a",),
             sat_states={"sat-a": _state("sat-a", GeoPosition(0.0, 0.0, 550.0))},
             gs_positions={"gs-equator": (earth_geodetic_to_ecef(gs_geo), gs_geo)},
@@ -266,7 +358,8 @@ def test_ground_visibility_carries_rejection_reason_for_invisible_pair():
     """Non-visible pairs carry the typed `reject_reason`."""
     gs_geo = GeoPosition(0.0, 0.0, 0.0)
     sat_geo = GeoPosition(10.0, 0.0, 550.0)
-    result = evaluate_ground_visibility(
+    result = _evaluate(
+        {"sat-a": _held(sat_geo)},
         satellite_ids=("sat-a",),
         sat_states={"sat-a": _state("sat-a", sat_geo)},
         gs_positions={"gs-equator": (earth_geodetic_to_ecef(gs_geo), gs_geo)},
@@ -310,29 +403,37 @@ def test_longest_remaining_pass_lookahead_uses_real_propagation():
     # numerically treated as body-occluded by the exact surface.
     gs_geo = GeoPosition(current_geo.lat_deg, current_geo.lon_deg, 0.01)
 
+    arguments = {
+        "satellite_ids": (sat_id,),
+        "sat_states": sat_states,
+        "gs_positions": {gs_id: (earth_geodetic_to_ecef(gs_geo), gs_geo)},
+        "gs_min_elevations": {gs_id: 0.0},
+        "gs_selection_policy_names": {gs_id: "longest-remaining-pass"},
+        "ground_link_model": "geometry_only",
+        **_gs_default_kwargs(gs_id, sat_ids=(sat_id,)),
+    }
+    # The lookahead samples future ticks with the tick's geometry and the satellite's and
+    # station's endpoints, as compute_step passes them.
+    geometry = _geometry(arguments)
+    sat_endpoints = satellite_endpoints(
+        satellites=[satellite],
+        addressing=addressing,
+        propagator_id="keplerian-circular",
+        body_frames=TEST_BODY_FRAMES,
+    )
     result = evaluate_ground_visibility(
-        satellite_ids=(sat_id,),
-        sat_states=sat_states,
-        gs_positions={gs_id: (earth_geodetic_to_ecef(gs_geo), gs_geo)},
-        gs_min_elevations={gs_id: 0.0},
-        gs_selection_policy_names={gs_id: "longest-remaining-pass"},
+        **arguments,
         pass_lookahead=GroundPassLookahead(
-            satellites=(satellite,),
-            addressing=addressing,
             epoch_unix=epoch_unix,
             step=0,
             step_seconds=1,
             horizon_ticks=2,
             horizon_ticks_by_gs={gs_id: 2},
-            gs_reference_bodies={gs_id: "earth"},
-            body_frames=TEST_BODY_FRAMES,
-            physics=physics_for("earth", "luna"),
-            propagator_id="keplerian-circular",
-            ground_link_model="geometry_only",
-            active_bodies=frozenset({"earth"}),
+            geometry=geometry,
+            endpoints={**sat_endpoints, **geometry.station_endpoints},
         ),
-        ground_link_model="geometry_only",
-        **_gs_default_kwargs(gs_id, sat_ids=(sat_id,)),
+        geometry=geometry,
+        signals=_signals(geometry, sat_endpoints, arguments["candidate_satellite_ids_by_gs"]),
     )
 
     pair = (min(gs_id, sat_id), max(gs_id, sat_id))
@@ -347,7 +448,7 @@ def test_longest_remaining_pass_without_lookahead_fails_loudly():
     gs_geo = GeoPosition(0.0, 0.0, 0.0)
 
     with pytest.raises(ValueError, match="requires pass lookahead"):
-        evaluate_ground_visibility(
+        _refused(
             satellite_ids=("sat-a",),
             sat_states={"sat-a": _state("sat-a", GeoPosition(0.0, 0.0, 550.0))},
             gs_positions={"gs-equator": (earth_geodetic_to_ecef(gs_geo), gs_geo)},
@@ -359,34 +460,39 @@ def test_longest_remaining_pass_without_lookahead_fails_loudly():
 
 
 def test_longest_remaining_pass_lookahead_requires_reference_body():
+    """The tick finds the satellite visible; the lookahead's geometry carries no reference body
+    for the station, so the dwell estimate refuses before sampling a future tick."""
     gs_geo = GeoPosition(0.0, 0.0, 0.0)
+    gs_positions = {"gs-equator": (earth_geodetic_to_ecef(gs_geo), gs_geo)}
+    gs_min_elevations = {"gs-equator": 25.0}
+    lookahead_geometry = GroundGeometry(
+        physics=_physics(),
+        body_frames=TEST_BODY_FRAMES,
+        gs_positions=gs_positions,
+        gs_min_elevations=gs_min_elevations,
+        gs_reference_bodies={},
+        ground_link_model="geometry_only",
+        gs_terminal_profiles=None,
+        sat_ground_terminal_profiles=None,
+        pairs=[],
+    )
 
     with pytest.raises(ValueError, match="missing reference_body"):
-        evaluate_ground_visibility(
+        _evaluate(
+            {"sat-a": _held(GeoPosition(0.0, 0.0, 550.0))},
             satellite_ids=("sat-a",),
             sat_states={"sat-a": _state("sat-a", GeoPosition(0.0, 0.0, 550.0))},
-            gs_positions={"gs-equator": (earth_geodetic_to_ecef(gs_geo), gs_geo)},
-            gs_min_elevations={"gs-equator": 25.0},
+            gs_positions=gs_positions,
+            gs_min_elevations=gs_min_elevations,
             gs_selection_policy_names={"gs-equator": "longest-remaining-pass"},
             pass_lookahead=GroundPassLookahead(
-                satellites=(
-                    _StubSatNode("sat-short"),
-                    _StubSatNode("sat-long"),
-                    _StubSatNode("sat-a"),
-                    _StubSatNode("sat-b"),
-                ),
-                addressing=object(),
-                epoch_unix=0.0,
+                epoch_unix=EPOCH,
                 step=0,
                 step_seconds=1,
                 horizon_ticks=5,
                 horizon_ticks_by_gs={"gs-equator": 5},
-                gs_reference_bodies={},
-                body_frames=TEST_BODY_FRAMES,
-                physics=physics_for("earth", "luna"),
-                propagator_id="test",
-                ground_link_model="geometry_only",
-                active_bodies=frozenset({"earth"}),
+                geometry=lookahead_geometry,
+                endpoints={},
             ),
             ground_link_model="geometry_only",
             **_gs_default_kwargs(),
@@ -412,7 +518,8 @@ def test_satellite_profiles_select_matching_target_body_for_cislunar_relay():
         CommonVec3(0.0, 0.0, 0.0),
     )
 
-    result = evaluate_ground_visibility(
+    result = _evaluate(
+        {sat_id: SiteEndpoint("luna", (luna_radius + 550.0, 0.0, 0.0))},
         satellite_ids=(sat_id,),
         sat_states={sat_id: sat_state},
         gs_positions={gs_id: (gs_ecef, gs_geo)},
@@ -548,6 +655,12 @@ def test_cislunar_resolved_terminal_facts_flow_through_build_context_to_engine()
     gs_id = addressing.gs_id("luna")
     luna_radius = LUNA_TEST_BODY_FRAME.equatorial_radius_km
     gs_geo = GeoPosition(0.0, 0.0, 0.0)
+    # The satellite is held 550 km above the lunar station, as its state below places it.
+    signals = _signals(
+        ctx.ground_geometry,
+        {sat_id: SiteEndpoint("luna", (luna_radius + 550.0, 0.0, 0.0))},
+        ctx.ground_candidate_satellites_by_gs,
+    )
     result = evaluate_ground_visibility(
         satellite_ids=(sat_id,),
         sat_states={
@@ -573,6 +686,8 @@ def test_cislunar_resolved_terminal_facts_flow_through_build_context_to_engine()
         sat_ground_terminal_profiles=ctx.sat_ground_terminal_profiles,
         candidate_satellite_ids_by_gs=ctx.ground_candidate_satellites_by_gs,
         body_frames=TEST_BODY_FRAMES,
+        geometry=ctx.ground_geometry,
+        signals=signals,
     )
 
     decision = result.decisions[(min(gs_id, sat_id), max(gs_id, sat_id))]

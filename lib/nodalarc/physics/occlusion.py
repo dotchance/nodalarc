@@ -86,17 +86,44 @@ def obstructions(
         return occulters, blocked
     motion = physics.motion
     for column, body_id in enumerate(occulters):
-        at_emission, _ = motion.states(body_id, transmitters.tdb_seconds)
-        at_arrival, _ = motion.states(body_id, receivers.tdb_seconds)
+        radius = SUN_RADIUS_KM if body_id == SUN_ID else shapes[body_id].equatorial_radius_km
+        # Coarse pass with the body held at the emission epoch: the path cannot touch the body
+        # unless its closest approach comes within the body's radius plus the distance the body
+        # moves over the light time (plus 1 km for its acceleration and rounding, far above
+        # either). Only paths inside that reach are evaluated at their crossing epochs.
+        at_emission, body_velocity = motion.states(body_id, transmitters.tdb_seconds)
+        start = transmitters.position_km - at_emission
+        end = receivers.position_km - at_emission
+        nearest = start + _closest_fraction(start, end)[:, None] * (end - start)
+        reach = (
+            radius
+            + np.linalg.norm(body_velocity, axis=1)
+            * (receivers.tdb_seconds - transmitters.tdb_seconds)
+            + 1.0
+        )
+        rows = np.nonzero(np.einsum("ni,ni->n", nearest, nearest) < reach * reach)[0]
+        if len(rows) == 0:
+            continue
+        tx = PathEnds(
+            transmitters.body_ids[rows],
+            transmitters.relative_km[rows],
+            transmitters.position_km[rows],
+            transmitters.tdb_seconds[rows],
+        )
+        rx = PathEnds(
+            receivers.body_ids[rows],
+            receivers.relative_km[rows],
+            receivers.position_km[rows],
+            receivers.tdb_seconds[rows],
+        )
+        at_arrival, _ = motion.states(body_id, rx.tdb_seconds)
         fraction = _closest_fraction(
-            transmitters.position_km - at_emission, receivers.position_km - at_arrival
+            tx.position_km - at_emission[rows], rx.position_km - at_arrival
         )
-        crossing = transmitters.tdb_seconds + fraction * (
-            receivers.tdb_seconds - transmitters.tdb_seconds
-        )
+        crossing = tx.tdb_seconds + fraction * (rx.tdb_seconds - tx.tdb_seconds)
         centre, velocity = motion.states(body_id, crossing)
-        start = _relative_to(body_id, transmitters, centre, velocity, crossing)
-        end = _relative_to(body_id, receivers, centre, velocity, crossing)
+        start = _relative_to(body_id, tx, centre, velocity, crossing)
+        end = _relative_to(body_id, rx, centre, velocity, crossing)
         if body_id == SUN_ID:
             scale = np.full(3, 1.0 / SUN_RADIUS_KM)
         else:
@@ -109,5 +136,5 @@ def obstructions(
             )
         start, end = start * scale, end * scale
         nearest = start + _closest_fraction(start, end)[:, None] * (end - start)
-        blocked[:, column] = np.einsum("ni,ni->n", nearest, nearest) < 1.0 - SURFACE_TOLERANCE
+        blocked[rows, column] = np.einsum("ni,ni->n", nearest, nearest) < 1.0 - SURFACE_TOLERANCE
     return occulters, blocked

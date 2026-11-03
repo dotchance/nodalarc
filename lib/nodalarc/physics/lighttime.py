@@ -199,6 +199,14 @@ class _EndStates:
     def velocity_km_s(self) -> np.ndarray:
         return self.relative_km_s + self.body_km_s
 
+    def take(self, rows: np.ndarray) -> _EndStates:
+        return _EndStates(
+            self.relative_km[rows],
+            self.relative_km_s[rows],
+            self.body_km[rows],
+            self.body_km_s[rows],
+        )
+
 
 def _states(
     physics: PhysicsContext, prepared: _PreparedEndpoints, tdb_seconds: np.ndarray
@@ -231,74 +239,159 @@ def _states(
         rotations, rates = motion.orientations(site.body_id, tdb_seconds[site.rows])
         turned = np.einsum("nji,nj->ni", rotations, site.fixed_km)
         relative[site.rows] = turned
-        relative_velocity[site.rows] = np.cross(rates, turned)
+        relative_velocity[site.rows] = _cross(rates, turned)
     for body_id, rows in prepared.bodies:
         body[rows], body_velocity[rows] = motion.states(body_id, tdb_seconds[rows])
     return _EndStates(relative, relative_velocity, body, body_velocity)
+
+
+def _cross(a: np.ndarray, b: np.ndarray) -> np.ndarray:
+    """Row-wise cross product of (N, 3) arrays; numpy's general cross costs 27 us per call in
+    axis handling, most of a small tick's signal time."""
+    return np.stack(
+        [
+            a[:, 1] * b[:, 2] - a[:, 2] * b[:, 1],
+            a[:, 2] * b[:, 0] - a[:, 0] * b[:, 2],
+            a[:, 0] * b[:, 1] - a[:, 1] * b[:, 0],
+        ],
+        axis=1,
+    )
 
 
 def _aberrated(direction_km: np.ndarray, velocity_km_s: np.ndarray) -> np.ndarray:
     """Unit apparent directions: each direction turned toward the observer's barycentric velocity
     by phi, sin(phi) = |u x v / c| (SPICE stelab; pass the negated velocity for stlabx)."""
     unit = direction_km / np.linalg.norm(direction_km, axis=1, keepdims=True)
-    h = np.cross(unit, velocity_km_s / SPEED_OF_LIGHT_KM_S)
+    h = _cross(unit, velocity_km_s / SPEED_OF_LIGHT_KM_S)
     sine = np.linalg.norm(h, axis=1, keepdims=True)
     if np.any(sine >= 1.0):
         raise ValueError("an endpoint's barycentric speed is not below the speed of light")
     cosine = np.sqrt(1.0 - sine * sine)
     # Rotating u about h / |h| by phi: h is perpendicular to u, so the turn is
     # u cos(phi) + (h / |h|) x u sin(phi) = u cos(phi) + h x u (|h| = sin(phi)).
-    return unit * cosine + np.cross(h, unit)
+    return unit * cosine + _cross(h, unit)
+
+
+@dataclass(frozen=True)
+class SignalEnd:
+    """One end of every signal, at that end's own epoch (TDB seconds past J2000): the
+    transmitter at emission or the receiver at arrival.
+
+    ``position_km`` is barycentric on ICRF axes. ``fixed_km`` is the position relative to the
+    end's central body in that body's fixed frame. ``pointing`` (ICRF) and ``pointing_fixed``
+    (the body's fixed frame) are the unit apparent direction the end points along.
+    ``rate_rad_s`` is the angular rate of the line of sight to the other end: in the body's
+    rotating frame when both ends share a central body, inertial when they do not.
+    """
+
+    body_ids: np.ndarray
+    epoch_tdb: np.ndarray
+    position_km: np.ndarray
+    fixed_km: np.ndarray
+    pointing: np.ndarray
+    pointing_fixed: np.ndarray
+    rate_rad_s: np.ndarray
+
+    def take(self, rows: np.ndarray) -> SignalEnd:
+        return SignalEnd(*(getattr(self, name)[rows] for name in self.__dataclass_fields__))
 
 
 @dataclass(frozen=True)
 class Signals:
     """One signal per (transmitter, receiver) pair.
 
-    Epochs are TDB seconds past J2000. Positions are barycentric on ICRF axes, km: the
-    transmitter's at emission and the receiver's at arrival. Pointing directions are unit vectors
-    on ICRF axes. The end found by iteration (the receiver of a signal sent at an instant, the
-    transmitter of one received at an instant) is evaluated at the last iteration's epoch, within
-    1 ns of its reported epoch. ``occluded`` (N, B) states, per path, whether each body in
-    ``occulters`` (every session body, then the Sun) blocks it.
+    The end found by iteration (the receiver of a signal sent at an instant, the transmitter of
+    one received at an instant) is evaluated at the last iteration's epoch, within 1 ns of its
+    reported epoch. ``occluded`` (N, B) states, per path, whether each body in ``occulters``
+    (every session body, then the Sun) blocks it.
     """
 
     light_time_s: np.ndarray
-    emitted_tdb: np.ndarray
-    received_tdb: np.ndarray
-    transmitter_km: np.ndarray
-    receiver_km: np.ndarray
-    transmitter_pointing: np.ndarray
-    receiver_pointing: np.ndarray
+    transmitter: SignalEnd
+    receiver: SignalEnd
     occulters: tuple[str, ...]
     occluded: np.ndarray
+
+    def take(self, rows: np.ndarray) -> Signals:
+        return Signals(
+            light_time_s=self.light_time_s[rows],
+            transmitter=self.transmitter.take(rows),
+            receiver=self.receiver.take(rows),
+            occulters=self.occulters,
+            occluded=self.occluded[rows],
+        )
+
+
+def _signal_end(
+    physics: PhysicsContext,
+    body_ids: np.ndarray,
+    other_body_ids: np.ndarray,
+    epochs: np.ndarray,
+    this: _EndStates,
+    that: _EndStates,
+    pointing: np.ndarray,
+) -> SignalEnd:
+    count = len(body_ids)
+    rotations = np.empty((count, 3, 3))
+    spin = np.empty((count, 3))
+    for body_id in set(body_ids):
+        rows = body_ids == body_id
+        rotations[rows], spin[rows] = physics.motion.orientations(body_id, epochs[rows])
+    sight = that.position_km - this.position_km
+    relative_velocity = that.velocity_km_s - this.velocity_km_s
+    same_body = body_ids == other_body_ids
+    relative_velocity[same_body] -= _cross(spin[same_body], sight[same_body])
+    distance = np.linalg.norm(sight, axis=1)
+    along = np.einsum("ni,ni->n", relative_velocity, sight) / distance
+    across = relative_velocity - (along / distance)[:, None] * sight
+    return SignalEnd(
+        body_ids=body_ids,
+        epoch_tdb=epochs,
+        position_km=this.position_km,
+        fixed_km=np.einsum("nij,nj->ni", rotations, this.relative_km),
+        pointing=pointing,
+        pointing_fixed=np.einsum("nij,nj->ni", rotations, pointing),
+        rate_rad_s=np.linalg.norm(across, axis=1) / distance,
+    )
 
 
 def _signals(
     physics: PhysicsContext,
     shapes: Mapping[str, BodyFrame],
-    ends: tuple[_PreparedEndpoints, _PreparedEndpoints],
+    body_ids: tuple[np.ndarray, np.ndarray],
     epochs: tuple[np.ndarray, np.ndarray],
     states: tuple[_EndStates, _EndStates],
     light_time_s: np.ndarray,
 ) -> Signals:
-    (sending, receiving), (emitted, received), (transmitter, receiver) = ends, epochs, states
+    (sending, receiving), (emitted, received), (transmitter, receiver) = body_ids, epochs, states
     origin, arrival = transmitter.position_km, receiver.position_km
     path = arrival - origin
     occulters, occluded = obstructions(
         physics,
         shapes,
-        PathEnds(sending.body_ids, transmitter.relative_km, origin, emitted),
-        PathEnds(receiving.body_ids, receiver.relative_km, arrival, received),
+        PathEnds(sending, transmitter.relative_km, origin, emitted),
+        PathEnds(receiving, receiver.relative_km, arrival, received),
     )
     return Signals(
         light_time_s=light_time_s,
-        emitted_tdb=emitted,
-        received_tdb=received,
-        transmitter_km=origin,
-        receiver_km=arrival,
-        transmitter_pointing=_aberrated(path, -transmitter.velocity_km_s),
-        receiver_pointing=_aberrated(-path, receiver.velocity_km_s),
+        transmitter=_signal_end(
+            physics,
+            sending,
+            receiving,
+            emitted,
+            transmitter,
+            receiver,
+            _aberrated(path, -transmitter.velocity_km_s),
+        ),
+        receiver=_signal_end(
+            physics,
+            receiving,
+            sending,
+            received,
+            receiver,
+            transmitter,
+            _aberrated(-path, receiver.velocity_km_s),
+        ),
         occulters=occulters,
         occluded=occluded,
     )
@@ -315,36 +408,96 @@ def _not_converged() -> RuntimeError:
     )
 
 
+def _distinct(
+    transmitters: Sequence[Endpoint], receivers: Sequence[Endpoint], instants: np.ndarray
+) -> tuple[list[Endpoint], np.ndarray, np.ndarray, np.ndarray]:
+    """The distinct (endpoint, instant) rows of both lists, their instants, and each list's rows
+    into them. Callers pass the same endpoint object for a node in both directions of its
+    links, so a node is evaluated once per instant however many links it has."""
+    rows: dict[tuple[int, float], int] = {}
+    distinct: list[Endpoint] = []
+    distinct_instants: list[float] = []
+
+    def index(endpoints: Sequence[Endpoint]) -> np.ndarray:
+        found = []
+        for endpoint, instant in zip(endpoints, instants.tolist(), strict=True):
+            key = (id(endpoint), instant)
+            if key not in rows:
+                rows[key] = len(distinct)
+                distinct.append(endpoint)
+                distinct_instants.append(instant)
+            found.append(rows[key])
+        return np.array(found, dtype=np.int64)
+
+    tx_rows, rx_rows = index(transmitters), index(receivers)
+    return distinct, np.array(distinct_instants), tx_rows, rx_rows
+
+
+def _first_guess(separation_km: np.ndarray, velocity_km_s: np.ndarray) -> np.ndarray:
+    """Light time with the iterated end moving straight at its velocity at the instant: the
+    positive root of |r + v tau| = c tau. Its error is half the end's acceleration times tau
+    squared over c, so a LEO link starts within 1e-12 s and converges in one iteration."""
+    c = SPEED_OF_LIGHT_KM_S
+    along = np.einsum("ni,ni->n", separation_km, velocity_km_s)
+    a = c * c - np.einsum("ni,ni->n", velocity_km_s, velocity_km_s)
+    r_sq = np.einsum("ni,ni->n", separation_km, separation_km)
+    return (along + np.sqrt(along * along + a * r_sq)) / a
+
+
+def _tdb_seconds(instants_unix: np.ndarray) -> np.ndarray:
+    distinct, index = np.unique(instants_unix, return_inverse=True)
+    return np.array([tdb_seconds_of(float(instant)) for instant in distinct])[index]
+
+
+def _signals_at(
+    physics: PhysicsContext,
+    shapes: Mapping[str, BodyFrame],
+    transmitters: Sequence[Endpoint],
+    receivers: Sequence[Endpoint],
+    instants_unix: float | Sequence[float] | np.ndarray,
+    *,
+    sent: bool,
+) -> Signals:
+    _check_pairs(transmitters, receivers)
+    at = _tdb_seconds(
+        np.broadcast_to(np.asarray(instants_unix, dtype=np.float64), (len(transmitters),))
+    )
+    distinct, distinct_at, tx_rows, rx_rows = _distinct(transmitters, receivers, at)
+    prepared = _prepare(distinct)
+    at_instant = _states(physics, prepared, distinct_at)
+    transmitter, receiver = at_instant.take(tx_rows), at_instant.take(rx_rows)
+    tx_bodies, rx_bodies = prepared.body_ids[tx_rows], prepared.body_ids[rx_rows]
+    moving = _prepare(receivers if sent else transmitters)
+    separation = receiver.position_km - transmitter.position_km
+    tau = _first_guess(separation, receiver.velocity_km_s if sent else transmitter.velocity_km_s)
+    for _ in range(MAX_ITERATIONS):
+        if sent:
+            receiver = _states(physics, moving, at + tau)
+        else:
+            transmitter = _states(physics, moving, at - tau)
+        new = (
+            np.linalg.norm(receiver.position_km - transmitter.position_km, axis=1)
+            / SPEED_OF_LIGHT_KM_S
+        )
+        if np.max(np.abs(new - tau), initial=0.0) < CONVERGENCE_S:
+            epochs = (at, at + new) if sent else (at - new, at)
+            return _signals(
+                physics, shapes, (tx_bodies, rx_bodies), epochs, (transmitter, receiver), new
+            )
+        tau = new
+    raise _not_converged()
+
+
 def signals_sent_at(
     physics: PhysicsContext,
     shapes: Mapping[str, BodyFrame],
     transmitters: Sequence[Endpoint],
     receivers: Sequence[Endpoint],
-    sent_unix: float,
+    sent_unix: float | Sequence[float] | np.ndarray,
 ) -> Signals:
-    """The signal each transmitter sends at ``sent_unix`` (master sim time) to its receiver.
-    ``shapes`` holds the catalog shape of every session body."""
-    _check_pairs(transmitters, receivers)
-    sending, receiving = _prepare(transmitters), _prepare(receivers)
-    sent = np.full(len(transmitters), tdb_seconds_of(sent_unix))
-    transmitter = _states(physics, sending, sent)
-    origin = transmitter.position_km
-    receiver = _states(physics, receiving, sent)
-    tau = np.linalg.norm(receiver.position_km - origin, axis=1) / SPEED_OF_LIGHT_KM_S
-    for _ in range(MAX_ITERATIONS):
-        receiver = _states(physics, receiving, sent + tau)
-        new = np.linalg.norm(receiver.position_km - origin, axis=1) / SPEED_OF_LIGHT_KM_S
-        if np.max(np.abs(new - tau), initial=0.0) < CONVERGENCE_S:
-            return _signals(
-                physics,
-                shapes,
-                (sending, receiving),
-                (sent, sent + new),
-                (transmitter, receiver),
-                new,
-            )
-        tau = new
-    raise _not_converged()
+    """The signal each transmitter sends at ``sent_unix`` (master sim time; one instant, or one
+    per row) to its receiver. ``shapes`` holds the catalog shape of every session body."""
+    return _signals_at(physics, shapes, transmitters, receivers, sent_unix, sent=True)
 
 
 def signals_received_at(
@@ -352,28 +505,9 @@ def signals_received_at(
     shapes: Mapping[str, BodyFrame],
     transmitters: Sequence[Endpoint],
     receivers: Sequence[Endpoint],
-    received_unix: float,
+    received_unix: float | Sequence[float] | np.ndarray,
 ) -> Signals:
-    """The signal each receiver takes in at ``received_unix`` (master sim time) from its
-    transmitter. ``shapes`` holds the catalog shape of every session body."""
-    _check_pairs(transmitters, receivers)
-    sending, receiving = _prepare(transmitters), _prepare(receivers)
-    received = np.full(len(receivers), tdb_seconds_of(received_unix))
-    receiver = _states(physics, receiving, received)
-    destination = receiver.position_km
-    transmitter = _states(physics, sending, received)
-    tau = np.linalg.norm(destination - transmitter.position_km, axis=1) / SPEED_OF_LIGHT_KM_S
-    for _ in range(MAX_ITERATIONS):
-        transmitter = _states(physics, sending, received - tau)
-        new = np.linalg.norm(destination - transmitter.position_km, axis=1) / SPEED_OF_LIGHT_KM_S
-        if np.max(np.abs(new - tau), initial=0.0) < CONVERGENCE_S:
-            return _signals(
-                physics,
-                shapes,
-                (sending, receiving),
-                (received - new, received),
-                (transmitter, receiver),
-                new,
-            )
-        tau = new
-    raise _not_converged()
+    """The signal each receiver takes in at ``received_unix`` (master sim time; one instant, or
+    one per row) from its transmitter. ``shapes`` holds the catalog shape of every session
+    body."""
+    return _signals_at(physics, shapes, transmitters, receivers, received_unix, sent=False)

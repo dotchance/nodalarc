@@ -26,6 +26,7 @@ from nodalarc.ome_runtime import (
 )
 from nodalarc.physics import BodyState, PhysicsContext
 from nodalarc.physics.kepler import OrbitModel
+from nodalarc.physics.lighttime import Endpoint, OrbitEndpoint, TleEndpoint
 from nodalarc.physics.satellites import (
     SatelliteStates,
     analytic_satellite_states,
@@ -106,6 +107,36 @@ def element_anchor_epoch_unix(sat, node_id: str) -> float:
             "refuses unanchored keplerian elements"
         )
     return anchor
+
+
+def satellite_endpoints(
+    *,
+    satellites: list[SatelliteNode],
+    addressing: OmeAddressing,
+    propagator_id: SessionPropagatorId,
+    body_frames: Mapping[str, BodyFrame],
+) -> dict[str, Endpoint]:
+    """Each satellite as a signal endpoint, with the orbit model, elements and anchor
+    ``propagate_satellites`` uses, so a signal sent at a tick starts where the tick's state is."""
+    endpoints: dict[str, Endpoint] = {}
+    for sat in satellites:
+        node_id = satellite_node_id(sat, addressing)
+        sat_propagator_id = satellite_propagator_id(sat, propagator_id)
+        if sat_propagator_id == "sgp4-tle":
+            if sat.central_body != "earth" or sat.tle_line_1 is None or sat.tle_line_2 is None:
+                raise ValueError(
+                    f"Satellite {node_id} needs Earth TLE lines for orbit.propagator='sgp4-tle'"
+                )
+            endpoints[node_id] = TleEndpoint("earth", sat.tle_line_1, sat.tle_line_2)
+            continue
+        endpoints[node_id] = OrbitEndpoint(
+            sat.central_body,
+            _required_body_frame(body_frames, sat.central_body, node_id),
+            orbit_model_for(sat_propagator_id),
+            sat.elements,
+            element_anchor_epoch_unix(sat, node_id),
+        )
+    return endpoints
 
 
 def propagate_satellites(

@@ -13,6 +13,7 @@ import json
 import logging
 from collections.abc import Mapping
 from datetime import UTC, datetime
+from functools import cached_property
 from pathlib import Path
 from typing import Any, Literal
 
@@ -56,6 +57,7 @@ from nodalarc.ome_runtime import (
 from nodalarc.physics import PhysicsContext, advance_mean_elements, body_fixed_from_geodetic
 from nodalarc.physics.satellites import orbit_model_for
 
+from ome.direction_checks import PairSignals
 from ome.event_diff import diff_ground_visibility_events, diff_isl_visibility_events
 from ome.ground_allocator import (
     GroundAllocationResult,
@@ -64,6 +66,7 @@ from ome.ground_allocator import (
 from ome.ground_selection_policies import validate_selection_score_scale_compatibility
 from ome.ground_visibility_engine import (
     DwellPassState,
+    GroundGeometry,
     GroundPassLookahead,
     evaluate_ground_visibility,
 )
@@ -80,6 +83,7 @@ from ome.propagation_engine import (
     build_node_positions,
     element_anchor_epoch_unix,
     propagate_satellites,
+    satellite_endpoints,
 )
 from ome.snapshot_builder import LinkSnapshotSource
 from ome.snapshot_builder import build_link_state_snapshot as build_link_state_snapshot
@@ -88,6 +92,7 @@ from ome.telemetry import (
     SEG_DIFF,
     SEG_ISL,
     SEG_PROPAGATION,
+    SEG_SIGNALS,
     SEG_VISIBILITY,
     StepTimings,
 )
@@ -281,6 +286,42 @@ class StepContext:
     def __post_init__(self) -> None:
         if not self.active_bodies:
             raise ValueError("StepContext requires active_bodies derived from resolved session")
+
+    @cached_property
+    def signal_pairs(self) -> list[tuple[str, str]]:
+        """Every ISL candidate (sorted ends) and ground candidate (station, satellite)."""
+        isl = sorted(
+            {
+                (min(node_id, assignment.peer_node_id), max(node_id, assignment.peer_node_id))
+                for node_id, assignments in self.by_node.items()
+                for assignment in assignments
+            }
+        )
+        ground = [
+            (gs_id, sat_id)
+            for gs_id, sat_ids in self.ground_candidate_satellites_by_gs.items()
+            for sat_id in sat_ids
+        ]
+        return isl + ground
+
+    @cached_property
+    def ground_geometry(self) -> GroundGeometry:
+        """Every declared ground candidate's limits, resolved once for the session."""
+        return GroundGeometry(
+            physics=self.physics,
+            body_frames=self.body_frames,
+            gs_positions=self.gs_positions,
+            gs_min_elevations=self.gs_min_elevations,
+            gs_reference_bodies=self.gs_reference_bodies,
+            ground_link_model=self.ground_link_model,
+            gs_terminal_profiles=self.gs_terminal_profiles,
+            sat_ground_terminal_profiles=self.sat_ground_terminal_profiles,
+            pairs=[
+                (gs_id, sat_id)
+                for gs_id, sat_ids in self.ground_candidate_satellites_by_gs.items()
+                for sat_id in sat_ids
+            ],
+        )
 
 
 @dataclass(frozen=True)
@@ -772,8 +813,24 @@ def compute_step(
         TimelineEvent(timestamp_s, "ClockTick", clock_tick),
     ]
 
-    # 3-4. Evaluate ISL physics and allocate ISL terminals.
+    # 3. Signals for both directions of every ISL and ground candidate, sent at this tick
+    #    from the endpoints propagation used for the tick's states, in one call.
     node_order = [satellite_node_id(sat, ctx.addressing) for sat in ctx.satellites]
+    signal_endpoints = {
+        **satellite_endpoints(
+            satellites=ctx.satellites,
+            addressing=ctx.addressing,
+            propagator_id=ctx.propagator_id,
+            body_frames=ctx.body_frames,
+        ),
+        **ctx.ground_geometry.station_endpoints,
+    }
+    with timings.measure(SEG_SIGNALS):
+        tick_signals = PairSignals.sent_at(
+            ctx.physics, ctx.body_frames, signal_endpoints, ctx.signal_pairs, epoch_unix + dt
+        )
+
+    # 4. Evaluate ISL physics and allocate ISL terminals.
     with timings.measure(SEG_ISL):
         isl_feasibility = evaluate_isl_feasibility(
             node_order=node_order,
@@ -783,6 +840,7 @@ def compute_step(
             body_frames=ctx.body_frames,
             polar_seam_enabled=ctx.polar_seam_enabled,
             latitude_threshold_deg=ctx.latitude_threshold_deg,
+            signals=tick_signals,
         )
         isl_links = schedule_isl_links(
             feasibility=isl_feasibility,
@@ -819,21 +877,13 @@ def compute_step(
             gs_selection_policy_names=ctx.gs_selection_policy_names,
             pass_lookahead=(
                 GroundPassLookahead(
-                    satellites=tuple(ctx.satellites),
-                    addressing=ctx.addressing,
                     epoch_unix=epoch_unix,
                     step=step,
                     step_seconds=step_seconds,
                     horizon_ticks=ctx.ground_policy_lookahead_horizon_ticks,
                     horizon_ticks_by_gs=ctx.ground_policy_lookahead_horizon_ticks_by_gs,
-                    propagator_id=ctx.propagator_id,
-                    ground_link_model=ctx.ground_link_model,
-                    gs_reference_bodies=ctx.gs_reference_bodies,
-                    gs_terminal_profiles=ctx.gs_terminal_profiles,
-                    sat_ground_terminal_profiles=ctx.sat_ground_terminal_profiles,
-                    body_frames=ctx.body_frames,
-                    physics=ctx.physics,
-                    active_bodies=ctx.active_bodies,
+                    geometry=ctx.ground_geometry,
+                    endpoints=signal_endpoints,
                 )
                 if "longest-remaining-pass" in set(ctx.gs_selection_policy_names.values())
                 else None
@@ -843,6 +893,8 @@ def compute_step(
             sat_ground_terminal_profiles=ctx.sat_ground_terminal_profiles,
             candidate_satellite_ids_by_gs=ctx.ground_candidate_satellites_by_gs,
             dwell_state=dwell_state,
+            geometry=ctx.ground_geometry,
+            signals=tick_signals,
         )
 
     # 7. Scored, hysteresis-aware ground link allocation.

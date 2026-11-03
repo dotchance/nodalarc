@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import math
 import threading
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 import numpy as np
@@ -56,6 +57,8 @@ class BodyMotionTable:
         self._physics = physics
         self._states: dict[tuple[str, int], tuple[np.ndarray, np.ndarray]] = {}
         self._rotations: dict[tuple[str, int], np.ndarray] = {}
+        self._cells: dict[tuple[str, int], np.ndarray] = {}
+        self._turns: dict[tuple[str, int], _Turn] = {}
         self._lock = threading.Lock()
 
     def _state(self, body_id: str, k: int) -> tuple[np.ndarray, np.ndarray]:
@@ -80,30 +83,56 @@ class BodyMotionTable:
                     _keep(self._rotations, key, rotation)
         return rotation
 
+    def _cell_states(self, body_id: str, k: int) -> np.ndarray:
+        """Hermite coefficients of cell k: rows p0, h v0, p1, h v1."""
+        key = (body_id, k)
+        cell = self._cells.get(key)
+        if cell is None:
+            p0, v0 = self._state(body_id, k)
+            p1, v1 = self._state(body_id, k + 1)
+            cell = np.stack([p0, GRID_SPACING_S * v0, p1, GRID_SPACING_S * v1])
+            with self._lock:
+                _keep(self._cells, key, cell)
+        return cell
+
+    def _cell_turn(self, body_id: str, k: int) -> _Turn:
+        """The constant-rate turn from grid point k to k + 1."""
+        key = (body_id, k)
+        turn = self._turns.get(key)
+        if turn is None:
+            r0 = self._rotation(body_id, k)
+            step = self._rotation(body_id, k + 1) @ r0.T
+            axis = (
+                np.array(
+                    [step[2, 1] - step[1, 2], step[0, 2] - step[2, 0], step[1, 0] - step[0, 1]]
+                )
+                / 2
+            )
+            sine = float(np.linalg.norm(axis))
+            angle = math.atan2(sine, (np.trace(step) - 1) / 2)
+            unit = axis / sine if sine > 0.0 else np.zeros(3)
+            kx = np.array([[0, -unit[2], unit[1]], [unit[2], 0, -unit[0]], [-unit[1], unit[0], 0]])
+            turn = _Turn(r0, unit, angle, kx, kx @ kx)
+            with self._lock:
+                _keep(self._turns, key, turn)
+        return turn
+
     def states(self, body_id: str, tdb_seconds: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
         """Barycentric positions (N, 3) and velocities (N, 3) at TDB epochs (N,)."""
         h = GRID_SPACING_S
-        cells = np.floor(tdb_seconds / h).astype(np.int64)
         positions = np.empty((len(tdb_seconds), 3))
         velocities = np.empty((len(tdb_seconds), 3))
-        for k in np.unique(cells):
-            rows = cells == k
-            p0, v0 = self._state(body_id, int(k))
-            p1, v1 = self._state(body_id, int(k) + 1)
+        for k, rows in _cells_of(tdb_seconds):
+            coefficients = self._cell_states(body_id, k)
             s = (tdb_seconds[rows] - k * h) / h
-            s2, s3 = s * s, s * s * s
-            positions[rows] = (
-                (2 * s3 - 3 * s2 + 1)[:, None] * p0
-                + (s3 - 2 * s2 + s)[:, None] * (h * v0)
-                + (-2 * s3 + 3 * s2)[:, None] * p1
-                + (s3 - s2)[:, None] * (h * v1)
+            s2 = s * s
+            s3 = s2 * s
+            basis = np.stack([2 * s3 - 3 * s2 + 1, s3 - 2 * s2 + s, 3 * s2 - 2 * s3, s3 - s2], 1)
+            slope = np.stack(
+                [6 * s2 - 6 * s, 3 * s2 - 4 * s + 1, 6 * s - 6 * s2, 3 * s2 - 2 * s], 1
             )
-            velocities[rows] = (
-                (6 * s2 - 6 * s)[:, None] * (p0 / h)
-                + (3 * s2 - 4 * s + 1)[:, None] * v0
-                + (6 * s - 6 * s2)[:, None] * (p1 / h)
-                + (3 * s2 - 2 * s)[:, None] * v1
-            )
+            positions[rows] = basis @ coefficients
+            velocities[rows] = (slope / h) @ coefficients
         return positions, velocities
 
     def orientations(self, body_id: str, tdb_seconds: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
@@ -114,35 +143,38 @@ class BodyMotionTable:
         R1 R0^T, so the angular velocity on ICRF axes is -(angle / spacing) R(t)^T u.
         """
         h = GRID_SPACING_S
-        cells = np.floor(tdb_seconds / h).astype(np.int64)
         rotations = np.empty((len(tdb_seconds), 3, 3))
         rates = np.empty((len(tdb_seconds), 3))
-        for k in np.unique(cells):
-            rows = cells == k
-            r0 = self._rotation(body_id, int(k))
-            r1 = self._rotation(body_id, int(k) + 1)
-            step = r1 @ r0.T
-            axis = (
-                np.array(
-                    [step[2, 1] - step[1, 2], step[0, 2] - step[2, 0], step[1, 0] - step[0, 1]]
-                )
-                / 2
-            )
-            sine = float(np.linalg.norm(axis))
-            if sine == 0.0:
-                rotations[rows] = r0
-                rates[rows] = 0.0
-                continue
-            angle = math.atan2(sine, (np.trace(step) - 1) / 2)
-            unit = axis / sine
-            kx = np.array([[0, -unit[2], unit[1]], [unit[2], 0, -unit[0]], [-unit[1], unit[0], 0]])
-            theta = (tdb_seconds[rows] - k * h) / h * angle
+        for k, rows in _cells_of(tdb_seconds):
+            turn = self._cell_turn(body_id, k)
+            theta = (tdb_seconds[rows] - k * h) / h * turn.angle
             turns = (
                 np.eye(3)[None]
-                + np.sin(theta)[:, None, None] * kx[None]
-                + (1 - np.cos(theta))[:, None, None] * (kx @ kx)[None]
+                + np.sin(theta)[:, None, None] * turn.kx[None]
+                + (1 - np.cos(theta))[:, None, None] * turn.kx_squared[None]
             )
-            turned = turns @ r0
+            turned = turns @ turn.r0
             rotations[rows] = turned
-            rates[rows] = -(angle / h) * np.einsum("nji,j->ni", turned, unit)
+            rates[rows] = -(turn.angle / h) * np.einsum("nji,j->ni", turned, turn.unit)
         return rotations, rates
+
+
+@dataclass(frozen=True)
+class _Turn:
+    r0: np.ndarray
+    unit: np.ndarray
+    angle: float
+    kx: np.ndarray
+    kx_squared: np.ndarray
+
+
+def _cells_of(tdb_seconds: np.ndarray) -> list[tuple[int, slice | np.ndarray]]:
+    """The grid cells the epochs fall in, with each cell's rows. A tick's epochs usually share
+    one cell; then every row is taken without a mask."""
+    if len(tdb_seconds) == 0:
+        return []
+    cells = np.floor(tdb_seconds / GRID_SPACING_S)
+    first, last = cells.min(), cells.max()
+    if first == last:
+        return [(int(first), slice(None))]
+    return [(int(k), cells == k) for k in np.unique(cells)]

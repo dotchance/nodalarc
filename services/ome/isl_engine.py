@@ -10,21 +10,20 @@ interface pair, never a global constellation default.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 
+import numpy as np
 from nodalarc.body_frames import BodyFrame
 from nodalarc.frames import CommonVec3, Vec3
 from nodalarc.geo import compute_latency_ms, compute_range_km
 from nodalarc.models.addressing import NeighborAssignment
+from nodalarc.physics.geodesy import geodetic_from_body_fixed_batch
+from nodalarc.physics.lighttime import SignalEnd
 
+from ome.direction_checks import DirectionEnds, IslLimits, PairSignals, isl_reasons
 from ome.propagation_engine import PropagatedState
-from ome.visibility import (
-    check_isl_visibility,
-    compute_angular_velocity,
-    enforce_symmetric_scheduling,
-    schedule_isl_terminals,
-)
+from ome.visibility import enforce_symmetric_scheduling, schedule_isl_terminals
 
 
 @dataclass(frozen=True)
@@ -108,135 +107,91 @@ def _state_vectors(
     )
 
 
-def _segment_intersects_ellipsoid(
-    a: Vec3 | CommonVec3,
-    b: Vec3 | CommonVec3,
+def _latitudes_deg(end: SignalEnd, body_frames: Mapping[str, BodyFrame]) -> np.ndarray:
+    """Geodetic latitude of each end at its own epoch, on its central body."""
+    latitudes = np.empty(len(end.body_ids))
+    for body_id in set(end.body_ids):
+        rows = end.body_ids == body_id
+        latitudes[rows], _lon, _alt = geodetic_from_body_fixed_batch(
+            end.fixed_km[rows], body_frames[body_id]
+        )
+    return latitudes
+
+
+@dataclass(frozen=True)
+class _Candidate:
+    pair: tuple[str, str]
+    link_type: str
+    constraints_a: IslTerminalConstraints
+    constraints_b: IslTerminalConstraints
+    interface_a: str
+    interface_b: str
+    range_km: float
+    limits: IslLimits
+    applied_tracking_rate: float | None
+
+
+def _result(
     *,
-    center: Vec3 | CommonVec3,
-    equatorial_radius_km: float,
-    polar_radius_km: float,
-) -> bool:
-    # Scaling z by (equatorial/polar) about the center maps the oblate
-    # ellipsoid onto a sphere of equatorial radius; the closest-approach
-    # test runs in that scaled space so the minimizing point is the
-    # ellipsoid's own, not the sphere's.
-    z_scale = equatorial_radius_km / polar_radius_km
-    ax = a.x - center.x
-    ay = a.y - center.y
-    az = (a.z - center.z) * z_scale
-    bx = b.x - center.x
-    by = b.y - center.y
-    bz = (b.z - center.z) * z_scale
-    dx = bx - ax
-    dy = by - ay
-    dz = bz - az
-    dd = dx * dx + dy * dy + dz * dz
-    if dd == 0.0:
-        return False
-    t = max(0.0, min(1.0, -(ax * dx + ay * dy + az * dz) / dd))
-    cx = ax + t * dx
-    cy = ay + t * dy
-    cz = az + t * dz
-    # Same surface-representation tolerance as visibility.has_line_of_sight:
-    # an endpoint sitting numerically ON the surface (a surface node in an
-    # inter-body link) must not read as inside it.
-    radius = equatorial_radius_km
-    return cx * cx + cy * cy + cz * cz < radius * radius * (1.0 - 1e-12)
-
-
-def _inter_body_occluded(
-    state_a: PropagatedState,
-    state_b: PropagatedState,
-    *,
-    body_frames: Mapping[str, BodyFrame],
-) -> bool:
-    """Return whether the common-frame segment is blocked by either endpoint body.
-
-    Each body's oblate ellipsoid is evaluated under the current assumed-axes
-    contract: its polar axis is taken to lie along the common-frame z axis.
-    The orientation error this admits is bounded by the body's
-    equatorial-polar radius difference: for Earth (21.4 km oblateness, mean
-    pole within ~0.4 degrees of common z) the limb error is under 0.2 km;
-    for Luna (2.2 km oblateness, pole ~24 degrees off common z) it is under
-    2.2 km. A body-orientation authority replaces this contract when one
-    exists.
-    """
-    bodies = {
-        state_a.central_body: state_a.body_origin_common_km,
-        state_b.central_body: state_b.body_origin_common_km,
-    }
-    for body_id, origin in bodies.items():
-        try:
-            frame = body_frames[body_id]
-        except KeyError as exc:
-            raise ValueError(
-                f"ISL feasibility is missing resolved body primitive facts for body {body_id!r}"
-            ) from exc
-        if _segment_intersects_ellipsoid(
-            state_a.position_common_km,
-            state_b.position_common_km,
-            center=origin,
-            equatorial_radius_km=frame.equatorial_radius_km,
-            polar_radius_km=frame.polar_radius_km,
-        ):
-            return True
-    return False
-
-
-def _off_local_horizontal_rad(
-    pos_common: Vec3 | CommonVec3,
-    other_common: Vec3 | CommonVec3,
-    origin_common: Vec3 | CommonVec3,
-) -> float:
-    los = Vec3(
-        other_common.x - pos_common.x,
-        other_common.y - pos_common.y,
-        other_common.z - pos_common.z,
-    )
-    los_mag = (los.x * los.x + los.y * los.y + los.z * los.z) ** 0.5
-    if los_mag < 1e-10:
-        return 0.0
-    radial = Vec3(
-        pos_common.x - origin_common.x,
-        pos_common.y - origin_common.y,
-        pos_common.z - origin_common.z,
-    )
-    radial_mag = (radial.x * radial.x + radial.y * radial.y + radial.z * radial.z) ** 0.5
-    if radial_mag < 1e-10:
-        return 0.0
-    cos_zenith = max(
-        -1.0,
-        min(
-            1.0,
-            (los.x * radial.x + los.y * radial.y + los.z * radial.z) / (los_mag * radial_mag),
-        ),
-    )
-    import math
-
-    return abs(math.acos(cos_zenith) - math.pi / 2.0)
-
-
-def _inter_body_field_of_regard_allows(
-    state_a: PropagatedState,
-    state_b: PropagatedState,
+    pair: tuple[str, str],
+    link_type: str,
+    constraints_a: IslTerminalConstraints,
+    constraints_b: IslTerminalConstraints,
+    interface_a: str,
+    interface_b: str,
+    range_km: float,
+    reason: str,
+    terminal_type: str,
+    max_range_km: float,
+    applied_tracking_rate: float | None,
     field_of_regard_deg: float,
-) -> bool:
-    if field_of_regard_deg >= 360.0:
-        return True
-    import math
+) -> IslFeasibilityResult:
+    return IslFeasibilityResult(
+        pair=pair,
+        link_type=link_type,
+        feasible=reason == "ok",
+        range_km=range_km,
+        orbital_one_way_ms=compute_latency_ms(range_km),
+        reject_reason=reason,
+        terminal_role_a=constraints_a.role,
+        terminal_role_b=constraints_b.role,
+        terminal_type=terminal_type,
+        interface_a=interface_a,
+        interface_b=interface_b,
+        applied_max_range_km=max_range_km,
+        applied_max_tracking_rate_deg_s=applied_tracking_rate,
+        applied_field_of_regard_deg=field_of_regard_deg,
+    )
 
-    half_angle = math.radians(field_of_regard_deg / 2.0)
-    off_a = _off_local_horizontal_rad(
-        state_a.position_common_km,
-        state_b.position_common_km,
-        state_a.body_origin_common_km,
-    )
-    off_b = _off_local_horizontal_rad(
-        state_b.position_common_km,
-        state_a.position_common_km,
-        state_b.body_origin_common_km,
-    )
-    return off_a <= half_angle and off_b <= half_angle
+
+def isl_pair_reasons(
+    *,
+    signals: PairSignals,
+    body_frames: Mapping[str, BodyFrame],
+    pairs: Sequence[tuple[str, str]],
+    limits: Sequence[IslLimits],
+    latitude_threshold_deg: float,
+) -> list[str]:
+    """Per ISL candidate, "ok" or the first failing constraint of its two directions (a->b
+    before b->a)."""
+    if not pairs:
+        return []
+    forward, backward = signals.directions(pairs)
+    reasons = []
+    for direction in (forward, backward):
+        reasons.append(
+            isl_reasons(
+                DirectionEnds.from_signals(direction),
+                limits,
+                transmitter_latitude_deg=_latitudes_deg(direction.transmitter, body_frames),
+                receiver_latitude_deg=_latitudes_deg(direction.receiver, body_frames),
+                latitude_threshold_deg=latitude_threshold_deg,
+            )
+        )
+    return [
+        str(ahead) if ahead != "ok" else str(back)
+        for ahead, back in zip(reasons[0], reasons[1], strict=True)
+    ]
 
 
 def evaluate_isl_feasibility(
@@ -248,9 +203,18 @@ def evaluate_isl_feasibility(
     body_frames: Mapping[str, BodyFrame],
     polar_seam_enabled: bool,
     latitude_threshold_deg: float,
+    signals: PairSignals,
 ) -> dict[tuple[str, str], IslFeasibilityResult]:
-    """Evaluate physical ISL feasibility for assigned neighbor pairs."""
+    """Evaluate physical ISL feasibility for assigned neighbor pairs.
+
+    Each candidate's two directions are the tick's signals: the transmitter's constraints at
+    the tick, the receiver's at arrival, each along its apparent
+    direction, and the path against every session body and the Sun. A link is feasible while
+    both directions are; the reason is the first failure, a->b before b->a. ``range_km`` is the
+    ends' geometric separation at the tick.
+    """
     results: dict[tuple[str, str], IslFeasibilityResult] = {}
+    candidates: list[_Candidate] = []
 
     for node_id in node_order:
         state_a = sat_states.get(node_id)
@@ -295,6 +259,11 @@ def evaluate_isl_feasibility(
                     f"Missing terminal constraints for {node_id}:{assignment_a.interface}<->"
                     f"{peer_id}:{assignment_b.interface}"
                 )
+            if state_a.central_body not in body_frames or state_b.central_body not in body_frames:
+                raise ValueError(
+                    f"ISL feasibility is missing resolved body primitive facts for "
+                    f"{state_a.central_body!r} or {state_b.central_body!r}"
+                )
 
             max_range_km = min(constraints_a.max_range_km, constraints_b.max_range_km)
             max_tracking_rate_deg_s = min(
@@ -308,119 +277,83 @@ def evaluate_isl_feasibility(
             applied_tracking_rate = (
                 max_tracking_rate_deg_s if assignment_a.link_type == "cross_plane_isl" else None
             )
-            terminal_type = constraints_a.terminal_type
-            pos_a, vel_a, pos_b, vel_b = _state_vectors(state_a, state_b)
-            cross_body = state_a.central_body != state_b.central_body
+            pos_a, _vel_a, pos_b, _vel_b = _state_vectors(state_a, state_b)
+            range_km = compute_range_km(pos_a, pos_b)
+            common = {
+                "pair": pair,
+                "link_type": assignment_a.link_type,
+                "constraints_a": constraints_a,
+                "constraints_b": constraints_b,
+                "interface_a": assignment_a.interface,
+                "interface_b": assignment_b.interface,
+                "range_km": range_km,
+                "max_range_km": max_range_km,
+                "applied_tracking_rate": applied_tracking_rate,
+                "field_of_regard_deg": field_of_regard_deg,
+            }
 
             if constraints_a.terminal_type != constraints_b.terminal_type:
-                range_km = compute_range_km(pos_a, pos_b)
-                results[pair] = IslFeasibilityResult(
-                    pair=pair,
-                    link_type=assignment_a.link_type,
-                    feasible=False,
-                    range_km=range_km,
-                    orbital_one_way_ms=compute_latency_ms(range_km),
-                    reject_reason="terminal_type_mismatch",
-                    terminal_role_a=constraints_a.role,
-                    terminal_role_b=constraints_b.role,
+                results[pair] = _result(
+                    reason="terminal_type_mismatch",
                     terminal_type=f"{constraints_a.terminal_type}/{constraints_b.terminal_type}",
-                    interface_a=assignment_a.interface,
-                    interface_b=assignment_b.interface,
-                    applied_max_range_km=max_range_km,
-                    applied_max_tracking_rate_deg_s=applied_tracking_rate,
-                    applied_field_of_regard_deg=field_of_regard_deg,
+                    **common,
                 )
                 continue
-
             if not _role_allows_link(
                 constraints_a.role, assignment_a.link_type
             ) or not _role_allows_link(constraints_b.role, assignment_a.link_type):
-                range_km = compute_range_km(pos_a, pos_b)
-                results[pair] = IslFeasibilityResult(
-                    pair=pair,
-                    link_type=assignment_a.link_type,
-                    feasible=False,
-                    range_km=range_km,
-                    orbital_one_way_ms=compute_latency_ms(range_km),
-                    reject_reason="terminal_role_mismatch",
-                    terminal_role_a=constraints_a.role,
-                    terminal_role_b=constraints_b.role,
-                    terminal_type=terminal_type,
-                    interface_a=assignment_a.interface,
-                    interface_b=assignment_b.interface,
-                    applied_max_range_km=max_range_km,
-                    applied_max_tracking_rate_deg_s=applied_tracking_rate,
-                    applied_field_of_regard_deg=field_of_regard_deg,
+                results[pair] = _result(
+                    reason="terminal_role_mismatch",
+                    terminal_type=constraints_a.terminal_type,
+                    **common,
                 )
                 continue
 
-            if cross_body:
-                range_km = compute_range_km(pos_a, pos_b)
-                angular_velocity = compute_angular_velocity(pos_a, vel_a, pos_b, vel_b)
-                if _inter_body_occluded(state_a, state_b, body_frames=body_frames):
-                    visible = False
-                    reason = "los_blocked"
-                elif range_km > max_range_km:
-                    visible = False
-                    reason = "range_exceeded"
-                elif not _inter_body_field_of_regard_allows(
-                    state_a,
-                    state_b,
-                    field_of_regard_deg,
-                ):
-                    visible = False
-                    reason = "field_of_regard"
-                elif applied_tracking_rate is not None and angular_velocity > applied_tracking_rate:
-                    visible = False
-                    reason = "tracking_exceeded"
-                else:
-                    visible = True
-                    reason = "ok"
-                visibility_range = range_km
-            else:
-                body_frame = body_frames.get(state_a.central_body)
-                if body_frame is None:
-                    raise ValueError(
-                        f"ISL feasibility is missing resolved body primitive facts "
-                        f"for body {state_a.central_body!r}"
-                    )
-                # Same central body: the pair is evaluated in that body's fixed frame.
-                visibility = check_isl_visibility(
-                    state_a.position_ecef_km,
-                    state_a.velocity_ecef_km_s,
-                    state_b.position_ecef_km,
-                    state_b.velocity_ecef_km_s,
-                    max_range_km=max_range_km,
-                    max_tracking_rate_deg_s=applied_tracking_rate,
-                    field_of_regard_deg=field_of_regard_deg,
-                    body_frame=body_frame,
-                    polar_seam_enabled=polar_seam_enabled
-                    and assignment_a.link_type == "cross_plane_isl",
-                    latitude_threshold_deg=latitude_threshold_deg,
-                    geo_a=state_a.geodetic,
-                    geo_b=state_b.geodetic,
+            candidates.append(
+                _Candidate(
+                    pair=pair,
+                    link_type=assignment_a.link_type,
+                    constraints_a=constraints_a,
+                    constraints_b=constraints_b,
+                    interface_a=assignment_a.interface,
+                    interface_b=assignment_b.interface,
+                    range_km=range_km,
+                    limits=IslLimits(
+                        max_range_km=max_range_km,
+                        field_of_regard_deg=field_of_regard_deg,
+                        max_tracking_rate_deg_s=applied_tracking_rate,
+                        polar_seam=polar_seam_enabled
+                        and assignment_a.link_type == "cross_plane_isl"
+                        and state_a.central_body == state_b.central_body,
+                    ),
+                    applied_tracking_rate=applied_tracking_rate,
                 )
-                visible = visibility.visible
-                reason = visibility.reason
-                visibility_range = visibility.range_km
-
-            results[pair] = IslFeasibilityResult(
-                pair=pair,
-                link_type=assignment_a.link_type,
-                feasible=visible,
-                range_km=visibility_range,
-                orbital_one_way_ms=compute_latency_ms(visibility_range),
-                reject_reason=reason,
-                terminal_role_a=constraints_a.role,
-                terminal_role_b=constraints_b.role,
-                terminal_type=terminal_type,
-                interface_a=assignment_a.interface,
-                interface_b=assignment_b.interface,
-                applied_max_range_km=max_range_km,
-                applied_max_tracking_rate_deg_s=applied_tracking_rate,
-                applied_field_of_regard_deg=field_of_regard_deg,
             )
 
+    if not candidates:
+        return results
+    reasons = isl_pair_reasons(
+        signals=signals,
+        body_frames=body_frames,
+        pairs=[candidate.pair for candidate in candidates],
+        limits=[candidate.limits for candidate in candidates],
+        latitude_threshold_deg=latitude_threshold_deg,
+    )
+    for candidate, reason in zip(candidates, reasons, strict=True):
+        results[candidate.pair] = _result(
+            pair=candidate.pair,
+            link_type=candidate.link_type,
+            constraints_a=candidate.constraints_a,
+            constraints_b=candidate.constraints_b,
+            interface_a=candidate.interface_a,
+            interface_b=candidate.interface_b,
+            range_km=candidate.range_km,
+            reason=reason,
+            terminal_type=candidate.constraints_a.terminal_type,
+            max_range_km=candidate.limits.max_range_km,
+            applied_tracking_rate=candidate.applied_tracking_rate,
+            field_of_regard_deg=candidate.limits.field_of_regard_deg,
+        )
     return results
 
 

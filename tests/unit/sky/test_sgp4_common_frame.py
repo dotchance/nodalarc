@@ -127,15 +127,10 @@ def _earth_luna_world():
 class TestCrossBodyAuthority:
     """A real SGP4 Earth endpoint against a de440s lunar endpoint."""
 
-    def _states_at(self, probe_unix):
+    def _satellites_at(self, probe_unix, inputs):
+        """The SGP4 ISS and a two-body lunar relay anchored at ``probe_unix``."""
         from nodalarc.ome_runtime import SatelliteNode, retarget_satellites
         from nodalarc.orbital import OrbitalElements
-        from ome.propagation_engine import propagate_satellites
-
-        from tests.ome_runtime_fixtures import StaticOmeAddressing
-
-        inputs, resolved = _earth_luna_world()
-        body_states = inputs.physics.body_states({"earth", "luna"}, probe_unix)
 
         iss = SatelliteNode(
             plane=0,
@@ -184,8 +179,17 @@ class TestCrossBodyAuthority:
             anchor_epoch_unix=probe_unix,
             body_frames=inputs.body_frames,
         )
+        return [iss, relay]
+
+    def _states_at(self, probe_unix):
+        from ome.propagation_engine import propagate_satellites
+
+        from tests.ome_runtime_fixtures import StaticOmeAddressing
+
+        inputs, resolved = _earth_luna_world()
+        body_states = inputs.physics.body_states({"earth", "luna"}, probe_unix)
         states = propagate_satellites(
-            satellites=[iss, relay],
+            satellites=self._satellites_at(probe_unix, inputs),
             addressing=StaticOmeAddressing(),
             epoch_unix=probe_unix,
             dt=0.0,
@@ -198,10 +202,27 @@ class TestCrossBodyAuthority:
 
     def test_cross_body_range_latency_and_verdict(self):
         from nodalarc.models.addressing import NeighborAssignment
+        from ome.direction_checks import PairSignals
         from ome.isl_engine import IslTerminalConstraints, evaluate_isl_feasibility
+        from ome.propagation_engine import satellite_endpoints
+
+        from tests.ome_runtime_fixtures import StaticOmeAddressing
 
         probe_unix = ISS_TLE_EPOCH_UNIX + 43200.0
         states, body_states, inputs = self._states_at(probe_unix)
+        # The pair's signals at the probe, from the endpoints of the same satellites.
+        signals = PairSignals.sent_at(
+            inputs.physics,
+            inputs.body_frames,
+            satellite_endpoints(
+                satellites=self._satellites_at(probe_unix, inputs),
+                addressing=StaticOmeAddressing(),
+                propagator_id="mixed",
+                body_frames=inputs.body_frames,
+            ),
+            [("earth-iss-sat-p00s00", "luna-relay-sat-p00s00")],
+            probe_unix,
+        )
 
         # Independent truth: boundary GCRS plus ephemeris origins, composed
         # by hand, never through the engine or the ISL machinery.
@@ -244,6 +265,7 @@ class TestCrossBodyAuthority:
                 body_frames=inputs.body_frames,
                 polar_seam_enabled=False,
                 latitude_threshold_deg=70.0,
+                signals=signals,
             )
             return results[("earth-iss-sat-p00s00", "luna-relay-sat-p00s00")]
 
@@ -254,8 +276,9 @@ class TestCrossBodyAuthority:
         assert abs(result.range_km - expected_range_km) < 1e-3
         assert abs(result.orbital_one_way_ms - compute_latency_ms(result.range_km)) < 1e-9
         # Tracking enforcement was active, not skipped: the applied limit
-        # is the terminal's, and squeezing it below the pair's actual
-        # common-frame relative rate (~0.001 deg/s) flips the verdict.
+        # is the terminal's, and squeezing it below the pair's line-of-sight
+        # rate (0.0010 deg/s, inertial because the ends orbit different
+        # bodies) flips the verdict.
         assert result.applied_max_tracking_rate_deg_s == 0.25
         squeezed = _evaluate(0.0005)
         assert squeezed.feasible is False

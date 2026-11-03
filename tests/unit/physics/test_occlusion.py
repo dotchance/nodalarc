@@ -34,10 +34,28 @@ from nodalarc.physics import PhysicsContext, body_fixed_from_geodetic
 from nodalarc.physics.context import tdb_seconds_of
 from nodalarc.physics.ephemeris_table import SUN_ID, SUN_RADIUS_KM
 from nodalarc.physics.kepler import ElementsBatch, orbit_states
-from nodalarc.physics.lighttime import OrbitEndpoint, SiteEndpoint, signals_received_at
+from nodalarc.physics.lighttime import (
+    Endpoint,
+    OrbitEndpoint,
+    SiteEndpoint,
+    signals_received_at,
+    signals_sent_at,
+)
 from nodalarc.physics.occlusion import PathEnds, obstructions
+from ome.direction_checks import (
+    DirectionEnds,
+    GroundLimits,
+    GroundLimitTable,
+    GroundPairVerdict,
+    ground_directions,
+    ground_pair_verdicts,
+)
 
-from tests.physics_fixtures import EARTH_TEST_BODY_FRAME, LUNA_TEST_BODY_FRAME
+from tests.physics_fixtures import (
+    EARTH_TEST_BODY_FRAME,
+    LUNA_TEST_BODY_FRAME,
+    earth_elements_from_params,
+)
 
 C = 299792.458
 SHAPES = {"earth": EARTH_TEST_BODY_FRAME, "luna": LUNA_TEST_BODY_FRAME}
@@ -302,3 +320,169 @@ def test_a_site_at_zero_altitude_sees_its_whole_sky(physics_context: PhysicsCont
             physics_context, SHAPES, [overhead], [site], _utc(2026, 11, 3, hour)
         )
         assert not signals.occluded[0, signals.occulters.index("earth")]
+
+
+# Line of sight at the geometries of OME's link-constraint tests, from real endpoints: each signal
+# leaves its transmitter at SENT and reaches its receiver one light time later. A satellite held at
+# a fixed point above a body is a site at that altitude.
+
+SENT = _utc(2026, 11, 3, 12)
+LUNAR_POLE_SITE = GeoPosition(-89.4, 30.0, 0.0)
+
+
+def _site(body: str, geo: GeoPosition) -> SiteEndpoint:
+    fixed = body_fixed_from_geodetic(geo, SHAPES[body])
+    return SiteEndpoint(body, (fixed.x, fixed.y, fixed.z))
+
+
+def _leo(true_anomaly_deg: float) -> OrbitEndpoint:
+    """A satellite 550 km up on a 53-degree orbit, at the given anomaly at SENT."""
+    elements = earth_elements_from_params(550.0, 53.0, 0.0, true_anomaly_deg)
+    return OrbitEndpoint("earth", EARTH_TEST_BODY_FRAME, "two-body", elements, SENT)
+
+
+def _blocked_both_ways(
+    physics: PhysicsContext, a: Endpoint, b: Endpoint, body: str, sent: float = SENT
+) -> list[bool]:
+    """Whether ``body`` blocks the signal a sends to b, and the one b sends to a, at ``sent``."""
+    signals = signals_sent_at(physics, SHAPES, [a, b], [b, a], sent)
+    return [bool(blocked) for blocked in signals.occluded[:, signals.occulters.index(body)]]
+
+
+def _ground_verdict(
+    physics: PhysicsContext,
+    station: GeoPosition,
+    body: str,
+    satellite: Endpoint,
+    min_elevation_deg: float,
+    sent: float = SENT,
+) -> GroundPairVerdict:
+    """OME's checks on a ground candidate with no terminal limits: the station's signal to the
+    satellite (uplink) and the satellite's to the station (downlink), both sent at ``sent``."""
+    station_end = _site(body, station)
+    signals = signals_sent_at(
+        physics, SHAPES, [station_end, satellite], [satellite, station_end], sent
+    )
+    ends = DirectionEnds.from_signals(signals)
+    table = GroundLimitTable.from_limits(
+        [GroundLimits(station.lat_deg, station.lon_deg, min_elevation_deg)]
+    )
+    up, down = np.array([0]), np.array([1])
+    uplink = ground_directions(
+        station=ends.transmitter.take(up),
+        satellite=ends.receiver.take(up),
+        path_km=ends.path_km[up],
+        blocked=ends.blocked[up],
+        table=table,
+    )
+    downlink = ground_directions(
+        station=ends.receiver.take(down),
+        satellite=ends.transmitter.take(down),
+        path_km=ends.path_km[down],
+        blocked=ends.blocked[down],
+        table=table,
+    )
+    (verdict,) = ground_pair_verdicts(uplink, downlink)
+    return verdict
+
+
+def test_satellites_36_degrees_apart_in_one_plane_see_each_other(
+    physics_context: PhysicsContext,
+) -> None:
+    assert _blocked_both_ways(physics_context, _leo(0.0), _leo(36.0), "earth") == [False, False]
+
+
+def test_earth_blocks_satellites_on_opposite_sides_of_it(physics_context: PhysicsContext) -> None:
+    assert _blocked_both_ways(physics_context, _leo(0.0), _leo(180.0), "earth") == [True, True]
+
+
+def test_a_station_sees_a_satellite_near_its_horizon(physics_context: PhysicsContext) -> None:
+    """A satellite 550 km up over latitude 10 degrees, about 20 degrees above the horizon of a
+    station on the equator."""
+    station = _site("earth", GeoPosition(0.0, 0.0, 0.0))
+    satellite = _site("earth", GeoPosition(10.0, 0.0, 550.0))
+    assert _blocked_both_ways(physics_context, station, satellite, "earth") == [False, False]
+
+
+def test_a_satellite_behind_earth_fails_line_of_sight_before_the_elevation_mask(
+    physics_context: PhysicsContext,
+) -> None:
+    """A satellite over the station's antipode: the ground decision is a line-of-sight
+    rejection, with the -90 degree elevation sentinel, although the elevation is also below the
+    mask."""
+    verdict = _ground_verdict(
+        physics_context,
+        GeoPosition(0.0, 0.0, 0.0),
+        "earth",
+        _site("earth", GeoPosition(0.0, 180.0, 550.0)),
+        min_elevation_deg=25.0,
+    )
+    assert not verdict.visible
+    assert verdict.reason == "los_blocked"
+    assert verdict.elevation_deg == -90.0
+
+
+@pytest.mark.parametrize("body", ["earth", "luna"])
+def test_the_analytic_tangent_point_is_clear_of_the_body(
+    physics_context: PhysicsContext, body: str
+) -> None:
+    """A target 550 km up on the horizon plane of an observer standing on the equator: the path
+    touches the ellipsoid only at the observer. The claim is about one instant's geometry, so
+    both ends are taken at one epoch; over a signal's light time the body turns under the path."""
+    radius = SHAPES[body].equatorial_radius_km
+    orbit_radius = radius + 550.0
+    angle = math.acos(radius / orbit_radius)
+    observer = np.array([radius, 0.0, 0.0])
+    target = np.array([orbit_radius * math.cos(angle), orbit_radius * math.sin(angle), 0.0])
+    epoch = np.array([tdb_seconds_of(SENT)])
+    rotations, _ = physics_context.motion.orientations(body, epoch)
+    centre, _ = physics_context.motion.states(body, epoch)
+
+    def end(fixed_km: np.ndarray) -> PathEnds:
+        relative = rotations[0].T @ fixed_km
+        return PathEnds(np.array([body], dtype=object), relative[None, :], centre + relative, epoch)
+
+    occulters, blocked = obstructions(physics_context, SHAPES, end(observer), end(target))
+    assert not blocked[0, occulters.index(body)]
+
+
+def test_a_lunar_polar_site_at_zero_altitude_sees_its_zenith(
+    physics_context: PhysicsContext,
+) -> None:
+    """A point on the surface is outside its body, so a satellite 100 km overhead is not
+    blocked. The site at latitude -89.4 converts from geodetic coordinates to a point one
+    rounding step inside the lunar ellipsoid (normalized radius squared 1 - 1.1e-16); turned
+    by the Moon's orientation, it lands inside or outside by rounding depending on the epoch,
+    and inside at some of these hours."""
+    site = _site("luna", LUNAR_POLE_SITE)
+    zenith = _site("luna", GeoPosition(-89.4, 30.0, 100.0))
+    for hour in range(0, 24, 3):
+        sent = _utc(2026, 11, 3, hour)
+        assert _blocked_both_ways(physics_context, site, zenith, "luna", sent) == [False, False]
+
+
+def test_a_lunar_polar_site_at_zero_altitude_accepts_a_zenith_pass(
+    physics_context: PhysicsContext,
+) -> None:
+    zenith = _site("luna", GeoPosition(-89.4, 30.0, 100.0))
+    for hour in range(0, 24, 3):
+        verdict = _ground_verdict(
+            physics_context,
+            LUNAR_POLE_SITE,
+            "luna",
+            zenith,
+            min_elevation_deg=10.0,
+            sent=_utc(2026, 11, 3, hour),
+        )
+        assert verdict.visible, f"zenith pass rejected at hour {hour}: {verdict.reason}"
+        assert verdict.elevation_deg > 80.0
+
+
+def test_the_moon_blocks_a_path_from_its_south_polar_site_to_its_north_pole(
+    physics_context: PhysicsContext,
+) -> None:
+    """The surface tolerance does not disable occlusion: the path to a satellite over the
+    opposite pole crosses the Moon."""
+    site = _site("luna", LUNAR_POLE_SITE)
+    far_side = _site("luna", GeoPosition(89.4, 30.0, 100.0))
+    assert _blocked_both_ways(physics_context, site, far_side, "luna") == [True, True]

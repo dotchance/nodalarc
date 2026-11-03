@@ -21,6 +21,8 @@ The flagship session's signals for one tick (light time and both ends' pointing,
 directions) measured 5.0 ms through this table.
 
 Grid points are read when first needed and kept, up to MAX_CACHED_POINTS (oldest dropped first).
+Reading a missing point holds a lock, so threads that share a context (VS-API request threads)
+never evict and insert at once; a hit takes no lock.
 A grid point outside the data's coverage raises, so an epoch within one spacing of the coverage
 edge needs the next point covered as well.
 """
@@ -28,6 +30,7 @@ edge needs the next point covered as well.
 from __future__ import annotations
 
 import math
+import threading
 from typing import TYPE_CHECKING
 
 import numpy as np
@@ -53,21 +56,28 @@ class BodyMotionTable:
         self._physics = physics
         self._states: dict[tuple[str, int], tuple[np.ndarray, np.ndarray]] = {}
         self._rotations: dict[tuple[str, int], np.ndarray] = {}
+        self._lock = threading.Lock()
 
     def _state(self, body_id: str, k: int) -> tuple[np.ndarray, np.ndarray]:
         key = (body_id, k)
         state = self._states.get(key)
         if state is None:
-            state = self._physics.barycentric_state(body_id, k * GRID_SPACING_S)
-            _keep(self._states, key, state)
+            with self._lock:
+                state = self._states.get(key)
+                if state is None:
+                    state = self._physics.barycentric_state(body_id, k * GRID_SPACING_S)
+                    _keep(self._states, key, state)
         return state
 
     def _rotation(self, body_id: str, k: int) -> np.ndarray:
         key = (body_id, k)
         rotation = self._rotations.get(key)
         if rotation is None:
-            rotation = self._physics.rotation_at_tdb(body_id, k * GRID_SPACING_S)
-            _keep(self._rotations, key, rotation)
+            with self._lock:
+                rotation = self._rotations.get(key)
+                if rotation is None:
+                    rotation = self._physics.rotation_at_tdb(body_id, k * GRID_SPACING_S)
+                    _keep(self._rotations, key, rotation)
         return rotation
 
     def states(self, body_id: str, tdb_seconds: np.ndarray) -> tuple[np.ndarray, np.ndarray]:

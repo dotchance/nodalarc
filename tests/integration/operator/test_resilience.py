@@ -149,7 +149,7 @@ def test_a_cut_ground_link_is_shown_as_a_fault_and_an_operator_repair_restores_t
     fault = _station_health(operator, ground)
     print(f"NodalArc shows: {fault}")
     state = operator.state()
-    names = ShownNetwork([state], {}, {})
+    names = ShownNetwork([state], {}, {}, {})
     with operator.terminal(ground) as terminal:
         neighbors = router_neighbors(terminal, names.nodes[ground], names.node_by_address())
     print(f"the router's neighbors while cut: {neighbors}")

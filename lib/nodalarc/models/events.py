@@ -451,7 +451,6 @@ class EphemerisBodyFrame(BaseModel):
     equatorial_radius_km: float
     polar_radius_km: float
     gravitational_parameter_km3_s2: float
-    rotation_rate_rad_s: float
     j2: float
     orbit_basis: Matrix3
 

@@ -239,7 +239,7 @@ def satellites_move_at_the_speed_their_orbits_require(shown: ShownNetwork) -> li
         orbital = math.sqrt(
             body["gravitational_parameter_km3_s2"] * (2 / radius - 1 / orbit["semi_major_axis_km"])
         )
-        frame = body["rotation_rate_rad_s"] * radius
+        frame = shown.angular_speed_rad_s(node["reference_body"]) * radius
         speed = math.dist(here, position_km(before[node_id], shown.bodies)) / elapsed
         compared += 1
         if (
@@ -548,7 +548,7 @@ def make_before_break_handover_holds_both_links(operator: Operator) -> list[str]
                 link_key(link) == link_key(old) and link["teardown_remaining_ticks"]
                 for link in state["links"]
             )
-            shown = ShownNetwork([state], {}, {})
+            shown = ShownNetwork([state], {}, {}, {})
             neighbors = router_neighbors(terminal, shown.nodes[ground], shown.node_by_address())
             print(f"handover: overlap shown: {still_overlapping}; router neighbors: {neighbors}")
             if (

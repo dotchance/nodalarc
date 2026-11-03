@@ -15,7 +15,7 @@ Handles:
 from __future__ import annotations
 
 import math
-from typing import Literal, NamedTuple
+from typing import NamedTuple
 
 from nodalarc.body_frames import BodyFrame
 from nodalarc.frames import CommonVec3, GeoPosition, Vec3
@@ -360,35 +360,19 @@ def compute_topocentric_angular_velocity(
     observer_ecef: Vec3,
     target_ecef: Vec3,
     target_velocity_km_s: Vec3,
-    body_frame: BodyFrame,
-    velocity_frame: Literal["body_fixed", "inertial"] = "body_fixed",
 ) -> float:
     """Apparent angular rate in the body-fixed topocentric frame of the observer.
 
-    Production propagation supplies ECEF/MCMF body-fixed velocities. In that
-    production path, ``body_frame`` is intentionally not used: a fixed ground
-    observer has zero body-fixed velocity, and the supplied target velocity is
-    already in the observer's rotating frame. The inertial path exists so tests
-    and future propagators must account for the observing body's rotation
-    instead of accidentally treating inertial velocity as topocentric-body-fixed
-    velocity.
+    The target velocity is the body-fixed velocity production propagation
+    supplies (the shared physics module derives it from the body's sampled
+    orientation and its rate). A fixed ground observer has zero body-fixed
+    velocity, so that velocity is already in the observer's rotating frame.
     """
-    if velocity_frame == "body_fixed":
-        target_velocity_body_fixed_km_s = target_velocity_km_s
-    elif velocity_frame == "inertial":
-        omega = body_frame.rotation_rate_rad_s
-        target_velocity_body_fixed_km_s = Vec3(
-            target_velocity_km_s.x + omega * target_ecef.y,
-            target_velocity_km_s.y - omega * target_ecef.x,
-            target_velocity_km_s.z,
-        )
-    else:
-        raise ValueError(f"Unsupported velocity_frame={velocity_frame!r}")
     return compute_angular_velocity(
         observer_ecef,
         Vec3(0.0, 0.0, 0.0),
         target_ecef,
-        target_velocity_body_fixed_km_s,
+        target_velocity_km_s,
     )
 
 
@@ -605,7 +589,6 @@ def check_ground_visibility(
             gs_ecef,
             sat_ecef,
             sat_velocity_ecef_km_s,
-            body_frame,
         )
         if angular_velocity > effective_max_tracking_rate_deg_s:
             return GroundVisibility(

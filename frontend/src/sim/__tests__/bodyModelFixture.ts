@@ -48,7 +48,6 @@ export function catalogEarthFrame(): EphemerisBodyFrame {
       earthBodyYaml,
       "gravitational_parameter_km3_s2",
     ),
-    rotation_rate_rad_s: 7.2921159e-5,
     j2: 1.08262668e-3,
     // Earth's orbit-element basis is the identity by definition: Earth elements
     // are measured on ICRF axes.

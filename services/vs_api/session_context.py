@@ -1417,7 +1417,6 @@ class SessionContext:
                 mean_radius_km=frame.mean_radius_km,
                 equatorial_radius_km=frame.equatorial_radius_km,
                 polar_radius_km=frame.polar_radius_km,
-                rotation_rate_rad_s=frame.rotation_rate_rad_s,
                 gravitational_parameter_km3_s2=frame.gravitational_parameter_km3_s2,
                 j2=frame.j2,
             )

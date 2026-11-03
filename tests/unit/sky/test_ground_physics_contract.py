@@ -29,7 +29,6 @@ from ome.propagation_engine import propagate_satellites
 from ome.visibility import (
     check_ground_visibility,
     compute_elevation_angle,
-    compute_topocentric_angular_velocity,
     has_line_of_sight,
 )
 
@@ -174,30 +173,6 @@ def test_range_constraint_rejects_clear_los_before_allocator_can_see_pair(
     assert result.reject_reason == "range_exceeded"
     assert result.rejecting_endpoint == "ground"
     assert not result.visible
-
-
-@pytest.mark.parametrize(
-    "body_frame", [EARTH_TEST_BODY_FRAME, LUNA_TEST_BODY_FRAME], ids=lambda b: b.name
-)
-def test_topocentric_angular_velocity_accounts_for_observing_body_rotation(
-    body_frame: BodyFrame,
-):
-    observer = Vec3(body_frame.equatorial_radius_km, 0.0, 0.0)
-    altitude_km = 550.0
-    target_radius_km = body_frame.equatorial_radius_km + altitude_km
-    target = Vec3(target_radius_km, 0.0, 0.0)
-    inertial_velocity_in_body_axes = Vec3(0.0, 7.6, 0.0)
-
-    expected_deg_s = math.degrees(
-        abs(7.6 - body_frame.rotation_rate_rad_s * target_radius_km) / altitude_km
-    )
-    assert compute_topocentric_angular_velocity(
-        observer,
-        target,
-        inertial_velocity_in_body_axes,
-        body_frame,
-        velocity_frame="inertial",
-    ) == pytest.approx(expected_deg_s, rel=1e-12, abs=1e-12)
 
 
 def test_compute_step_schedules_only_pairs_that_pass_applied_ground_physics():

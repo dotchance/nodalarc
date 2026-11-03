@@ -34,8 +34,8 @@ from nodalarc.physics import (
 )
 from nodalarc.physics.datasets import EphemerisLocation
 
-EARTH = BodyFrame("earth", 6371.0088, 6378.137, 6356.752, 7.2921159e-5, 398600.4418, 1.08262668e-3)
-LUNA = BodyFrame("luna", 1737.4, 1738.1, 1736.0, 2.6616995e-6, 4902.800066, 0.0)
+EARTH = BodyFrame("earth", 6371.0088, 6378.137, 6356.752, 398600.4418, 1.08262668e-3)
+LUNA = BodyFrame("luna", 1737.4, 1738.1, 1736.0, 4902.800066, 0.0)
 SPICE_FRAME = {"earth": "ITRF93", "luna": "MOON_ME_DE440_ME421"}
 TEN_DAYS = [0.0, 1.0, 3600.0, 86400.0, 864000.0]
 

@@ -45,7 +45,6 @@ def body_frame_from_catalog(body_id: str) -> BodyFrame:
         mean_radius_km=float(body["mean_radius_km"]),
         equatorial_radius_km=float(body["equatorial_radius_km"]),
         polar_radius_km=float(body["polar_radius_km"]),
-        rotation_rate_rad_s=support.rotation_rate_rad_s,
         gravitational_parameter_km3_s2=float(body["gravitational_parameter_km3_s2"]),
         j2=support.j2,
     )
@@ -69,7 +68,6 @@ def _earth_ephemeris_body_frame(frame: BodyFrame) -> EphemerisBodyFrame:
         equatorial_radius_km=frame.equatorial_radius_km,
         polar_radius_km=frame.polar_radius_km,
         gravitational_parameter_km3_s2=frame.gravitational_parameter_km3_s2,
-        rotation_rate_rad_s=frame.rotation_rate_rad_s,
         j2=frame.j2,
         orbit_basis=EARTH_ORBIT_BASIS,
     )

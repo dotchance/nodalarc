@@ -31,7 +31,6 @@ from nodalarc.ground_terminals import (
 from nodalarc.models.addressing import NeighborAssignment, neighbors_by_node
 from nodalarc.models.events import (
     ClockTick,
-    EphemerisBodyFrame,
     EphemerisNodeFixed,
     EphemerisNodeKeplerian,
     EphemerisNodeTLE,
@@ -46,6 +45,7 @@ from nodalarc.models.ground_policy import (
 )
 from nodalarc.models.link_state import SchedulingState
 from nodalarc.models.session import GroundSchedulingConfig
+from nodalarc.ome_inputs import ephemeris_body_frames
 from nodalarc.ome_runtime import (
     GroundStationFile,
     OmeAddressing,
@@ -200,24 +200,7 @@ def build_session_ephemeris(
             **_meta(gs_id),
         )
 
-    body_frames: dict[str, EphemerisBodyFrame] = {}
-    for body_id in sorted(ctx.active_bodies):
-        try:
-            body_frame = ctx.body_frames[body_id]
-        except KeyError as exc:
-            raise ValueError(
-                f"Session ephemeris missing resolved body primitive facts for body {body_id!r}"
-            ) from exc
-        body_frames[body_id] = EphemerisBodyFrame(
-            body_id=body_id,
-            mean_radius_km=body_frame.mean_radius_km,
-            equatorial_radius_km=body_frame.equatorial_radius_km,
-            polar_radius_km=body_frame.polar_radius_km,
-            gravitational_parameter_km3_s2=body_frame.gravitational_parameter_km3_s2,
-            rotation_rate_rad_s=body_frame.rotation_rate_rad_s,
-            j2=body_frame.j2,
-            orbit_basis=_matrix3(ctx.physics.orbit_basis(body_id)),
-        )
+    body_frames = ephemeris_body_frames(ctx.body_frames, ctx.active_bodies, ctx.physics)
 
     return SessionEphemeris(
         epoch_id=epoch_id,
@@ -226,10 +209,6 @@ def build_session_ephemeris(
         nodes=nodes,
         body_frames=body_frames,
     )
-
-
-def _matrix3(matrix) -> tuple:
-    return tuple(tuple(float(v) for v in row) for row in matrix)
 
 
 class TimelineEvent:

@@ -11,6 +11,7 @@ shapes.
 from __future__ import annotations
 
 import math
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from typing import Literal
 
@@ -234,18 +235,37 @@ def resolved_body_frames_at_epoch(
     # Coverage at the epoch is checked here, as OME checks it when it starts.
     for body_id in active:
         physics.require_coverage(body_id, epoch_unix)
+    return ephemeris_body_frames(physical, active, physics)
+
+
+def ephemeris_body_frames(
+    body_frames: Mapping[str, BodyFrame], body_ids: Iterable[str], physics: PhysicsContext
+) -> dict[str, EphemerisBodyFrame]:
+    """The SessionEphemeris body frames of ``body_ids``: constants and orbit basis.
+
+    OME's SessionEphemeris and the Builder's satellite-less world both use this.
+    """
     frames: dict[str, EphemerisBodyFrame] = {}
-    for body_id in sorted(active):
-        frame = physical[body_id]
+    for body_id in sorted(body_ids):
+        try:
+            frame = body_frames[body_id]
+        except KeyError as exc:
+            raise ValueError(
+                f"Session ephemeris missing resolved body primitive facts for body {body_id!r}"
+            ) from exc
+        basis = physics.orbit_basis(body_id)
         frames[body_id] = EphemerisBodyFrame(
             body_id=body_id,
             mean_radius_km=frame.mean_radius_km,
             equatorial_radius_km=frame.equatorial_radius_km,
             polar_radius_km=frame.polar_radius_km,
             gravitational_parameter_km3_s2=frame.gravitational_parameter_km3_s2,
-            rotation_rate_rad_s=frame.rotation_rate_rad_s,
             j2=frame.j2,
-            orbit_basis=tuple(tuple(float(v) for v in row) for row in physics.orbit_basis(body_id)),
+            orbit_basis=(
+                (float(basis[0][0]), float(basis[0][1]), float(basis[0][2])),
+                (float(basis[1][0]), float(basis[1][1]), float(basis[1][2])),
+                (float(basis[2][0]), float(basis[2][1]), float(basis[2][2])),
+            ),
         )
     return frames
 

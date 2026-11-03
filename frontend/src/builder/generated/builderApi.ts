@@ -1430,7 +1430,6 @@ export interface EphemerisBodyFrame {
   readonly equatorial_radius_km: number;
   readonly polar_radius_km: number;
   readonly gravitational_parameter_km3_s2: number;
-  readonly rotation_rate_rad_s: number;
   readonly j2: number;
   readonly orbit_basis: readonly [readonly [number, number, number], readonly [number, number, number], readonly [number, number, number]];
 }

@@ -2491,8 +2491,7 @@
       1.0
      ]
     ],
-    "polar_radius_km": 6356.752,
-    "rotation_rate_rad_s": 7.2921159e-05
+    "polar_radius_km": 6356.752
    },
    "luna": {
     "body_id": "luna",
@@ -2517,8 +2516,7 @@
       0.9109951750711145
      ]
     ],
-    "polar_radius_km": 1736.0,
-    "rotation_rate_rad_s": 2.6616995e-06
+    "polar_radius_km": 1736.0
    }
   },
   "epoch_id": 0,

@@ -72,14 +72,13 @@ def body_frame_from_facts(facts: ResolvedBodyFacts) -> BodyFrame:
     except ValueError as exc:
         raise ValueError(
             f"body {facts.body_id!r} has primitive physical facts, but the runtime "
-            "has no rotation/J2 support for that body"
+            "has no J2 support for that body"
         ) from exc
     return BodyFrame(
         name=facts.body_id,
         mean_radius_km=facts.mean_radius_km,
         equatorial_radius_km=facts.equatorial_radius_km,
         polar_radius_km=facts.polar_radius_km,
-        rotation_rate_rad_s=runtime_support.rotation_rate_rad_s,
         gravitational_parameter_km3_s2=facts.gravitational_parameter_km3_s2,
         j2=runtime_support.j2,
     )

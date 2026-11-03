@@ -475,7 +475,6 @@ class TestSurfaceObserverLineOfSight:
         mean_radius_km=1737.4,
         equatorial_radius_km=1738.1,
         polar_radius_km=1736.0,
-        rotation_rate_rad_s=2.6616995e-06,
         gravitational_parameter_km3_s2=4902.800066,
         j2=0.0,
     )

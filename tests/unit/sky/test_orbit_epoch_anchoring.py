@@ -28,7 +28,6 @@ LUNA_FRAME = BodyFrame(
     mean_radius_km=1737.4,
     equatorial_radius_km=1738.1,
     polar_radius_km=1736.0,
-    rotation_rate_rad_s=2.6617e-6,
     gravitational_parameter_km3_s2=MU_LUNA,
     j2=2.033e-4,
 )
@@ -38,7 +37,6 @@ EARTH_FRAME = BodyFrame(
     mean_radius_km=6371.0,
     equatorial_radius_km=6378.137,
     polar_radius_km=6356.752,
-    rotation_rate_rad_s=7.2921159e-5,
     gravitational_parameter_km3_s2=MU_EARTH,
     j2=1.08262668e-3,
 )

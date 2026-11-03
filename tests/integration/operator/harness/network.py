@@ -139,6 +139,15 @@ class ShownNetwork:
     snapshots: list[dict[str, Any]]
     bodies: dict[str, Any]
     orbits: dict[str, Any]
+    # The latest body-sample window: where each body is and how fast it turns.
+    body_samples: dict[str, Any]
+
+    def angular_speed_rad_s(self, body_id: str) -> float:
+        """The body's angular speed, the largest in the sample window."""
+        return max(
+            math.hypot(*sample["bodies"][body_id]["angular_velocity_rad_s"])
+            for sample in self.body_samples["samples"]
+        )
 
     @property
     def latest(self) -> dict[str, Any]:
@@ -236,7 +245,7 @@ class ShownNetwork:
         return None
 
     def and_now(self, state: dict[str, Any]) -> ShownNetwork:
-        return ShownNetwork([*self.snapshots, state], self.bodies, self.orbits)
+        return ShownNetwork([*self.snapshots, state], self.bodies, self.orbits, self.body_samples)
 
 
 @dataclass(frozen=True)
@@ -295,7 +304,11 @@ def watch(operator: Operator, seconds: float = 10.0) -> ShownNetwork:
     )
     ephemeris = [message for message in messages if message.get("msg_type") == "session_ephemeris"]
     assert ephemeris, "the state feed sent no session ephemeris"
-    return ShownNetwork(snapshots, ephemeris[0]["body_frames"], ephemeris[0]["nodes"])
+    body_samples = [message for message in messages if message.get("msg_type") == "body_samples"]
+    assert body_samples, "the state feed sent no body samples"
+    return ShownNetwork(
+        snapshots, ephemeris[0]["body_frames"], ephemeris[0]["nodes"], body_samples[-1]
+    )
 
 
 def ground_links(snapshot: dict[str, Any]) -> set[tuple[str, str]]:

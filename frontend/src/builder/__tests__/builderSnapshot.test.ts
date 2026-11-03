@@ -24,7 +24,6 @@ const EARTH_FRAME = {
   equatorial_radius_km: 6378.137,
   polar_radius_km: 6356.7523,
   gravitational_parameter_km3_s2: 398600.4418,
-  rotation_rate_rad_s: 7.2921159e-5,
   j2: 0.00108263,
   orbit_basis: [
     [1, 0, 0],

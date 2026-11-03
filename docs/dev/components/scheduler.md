@@ -199,7 +199,6 @@ and must not be dirty.
 | `dispatcher.py` | `Dispatcher`, `DispatchIntent`, `_reconcile_links`, `_build_dispatch_intent`, `_on_scenario_command`, `ActualLinkSnapshot` publication |
 | `__main__.py` | Entry point, session config loading, wiring gate, K8s setup |
 | `scenario_handler.py` | `parse_scenario_command` - pure command parsing |
-| `latency_model.py` | `PositionTable` - retained on-demand ephemeris propagation helper for diagnostics/tests, not live dispatch authority |
 | `pod_locator.py` | `PodLocationMap` - node ID to K3s node + NATS subject |
 | `agent_pool.py` | `AgentPool` - NATS client pool for Node Agents |
 | `node_agent_client.py` | `NodeAgentClient` - NATS request/reply to one agent |

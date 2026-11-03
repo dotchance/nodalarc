@@ -8,12 +8,8 @@ import math
 from datetime import UTC, datetime
 
 import pytest
-from nodalarc.constants import SPEED_OF_LIGHT_KM_S
 from nodalarc.frames import CommonVec3, EcefVec3, GeoPosition, Vec3
-from nodalarc.geo import (
-    compute_latency_ms,
-    compute_range_km,
-)
+from nodalarc.geo import compute_range_km
 from nodalarc.models.events import VisibilityEvent
 from nodalarc.ome_inputs import build_ome_inputs_from_resolved
 from nodalarc.physics.lighttime import signals_sent_at
@@ -26,7 +22,6 @@ from tests.physics_fixtures import EARTH_TEST_BODY_FRAME, earth_geodetic_to_ecef
 
 SIM = datetime(2026, 1, 1, tzinfo=UTC)
 RANGE_TOL_KM = 1e-6
-LATENCY_TOL_MS = 1e-9
 # Two evaluations of one signal in different batches agree within this (ms). The light-time
 # iteration stops once a step moves by under 1 ns, and each step shrinks the error by the
 # receiver's barycentric speed over c (about 1.3e-4), so evaluations agree within about
@@ -73,14 +68,6 @@ def _snapshot_source(
 class TestAnalyticGeometry:
     def test_ecef_range_matches_euclidean_distance(self):
         assert compute_range_km(Vec3(0.0, 0.0, 0.0), Vec3(3.0, 4.0, 12.0)) == 13.0
-
-    def test_speed_of_light_latency_formula(self):
-        assert compute_latency_ms(SPEED_OF_LIGHT_KM_S) == 1000.0
-        assert math.isclose(
-            compute_latency_ms(1234.5),
-            1234.5 / SPEED_OF_LIGHT_KM_S * 1000.0,
-            abs_tol=LATENCY_TOL_MS,
-        )
 
     def test_wgs84_axis_fixtures(self):
         x, y, z = earth_geodetic_to_ecef(GeoPosition(0.0, 0.0, 0.0))

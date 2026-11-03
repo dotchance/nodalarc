@@ -17,3 +17,7 @@
 **/README.md
 **/Dockerfile
 **/*.proto
+
+# Ephemeris datasets converted on a developer machine. Each image converts its
+# own at build time from the pinned sources.
+configs/ephemerides/anise

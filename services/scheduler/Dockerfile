@@ -34,7 +34,7 @@ COPY build/runtime-constraints.txt /tmp/nodalarc-runtime-constraints.txt
 RUN pip install --no-cache-dir \
     --constraint /tmp/nodalarc-runtime-constraints.txt \
     "pydantic>=2.0" nats-py pyyaml numpy "protobuf>=6.31.1" \
-    kubernetes jinja2 sgp4 skyfield
+    kubernetes jinja2 sgp4 skyfield anise spiceypy
 
 # Add lib/ and services/ to Python path
 ENV PYTHONPATH=/app/lib:/app/services:/app
@@ -51,5 +51,8 @@ COPY services/scheduler/ services/scheduler/
 # Copy static catalog reference data
 COPY catalog/ catalog/
 COPY configs/ephemerides/ configs/ephemerides/
+# Convert the ephemeris frame kernels for ANISE once, at build time, so the
+# running service loads only local, pinned, already-converted data.
+RUN python -m nodalarc.physics /app/configs/ephemerides
 
 ENTRYPOINT ["python", "-m", "scheduler"]

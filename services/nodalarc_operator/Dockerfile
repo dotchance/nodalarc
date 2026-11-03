@@ -32,7 +32,7 @@ COPY build/runtime-constraints.txt /tmp/nodalarc-runtime-constraints.txt
 
 RUN pip install --no-cache-dir \
     --constraint /tmp/nodalarc-runtime-constraints.txt \
-    kopf kubernetes "pydantic>=2.0" pyyaml jinja2 numpy sgp4 skyfield nats-py
+    kopf kubernetes "pydantic>=2.0" pyyaml jinja2 numpy sgp4 skyfield nats-py anise spiceypy
 
 # Add lib/ and services/ to Python path
 ENV PYTHONPATH=/app/lib:/app/services:/app
@@ -49,6 +49,9 @@ COPY adapters/ adapters/
 
 # Copy platform configuration and static catalog data used by the resolver.
 COPY configs/ configs/
+# Convert the ephemeris frame kernels for ANISE once, at build time, so the
+# running service loads only local, pinned, already-converted data.
+RUN python -m nodalarc.physics /app/configs/ephemerides
 COPY catalog/ catalog/
 
 ENTRYPOINT ["kopf", "run", "-m", "nodalarc_operator"]

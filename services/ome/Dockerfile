@@ -33,7 +33,7 @@ COPY build/runtime-constraints.txt /tmp/nodalarc-runtime-constraints.txt
 
 RUN pip install --no-cache-dir \
     --constraint /tmp/nodalarc-runtime-constraints.txt \
-    "pydantic>=2.0" nats-py pyyaml numpy sgp4 skyfield kubernetes
+    "pydantic>=2.0" nats-py pyyaml numpy sgp4 skyfield kubernetes anise spiceypy
 
 # Add lib/ to Python path so nodalarc package is importable
 ENV PYTHONPATH=/app/lib:/app/services:/app
@@ -46,6 +46,9 @@ COPY adapters/ adapters/
 COPY services/ome/ services/ome/
 COPY catalog/ catalog/
 COPY configs/ephemerides/ configs/ephemerides/
+# Convert the ephemeris frame kernels for ANISE once, at build time, so the
+# running service loads only local, pinned, already-converted data.
+RUN python -m nodalarc.physics /app/configs/ephemerides
 
 # Health probe port
 EXPOSE 8081

@@ -47,7 +47,7 @@ RUN pip install --no-cache-dir \
     --constraint /tmp/nodalarc-runtime-constraints.txt \
     "pydantic>=2.0" nats-py pyyaml fastapi uvicorn \
     "websockets>=16.0" numpy \
-    kubernetes sgp4 skyfield "asyncssh>=2.14.0"
+    kubernetes sgp4 skyfield "asyncssh>=2.14.0" anise spiceypy
 
 # Add lib/ and services/ to Python path
 ENV PYTHONPATH=/app/lib:/app/services:/app
@@ -67,6 +67,9 @@ COPY services/ome/ services/ome/
 
 # Bake in deployment templates and the static catalog.
 COPY configs/ configs/
+# Convert the ephemeris frame kernels for ANISE once, at build time, so the
+# running service loads only local, pinned, already-converted data.
+RUN python -m nodalarc.physics /app/configs/ephemerides
 COPY catalog/ catalog/
 
 # Existing published grammar linked by the Builder bootstrap.

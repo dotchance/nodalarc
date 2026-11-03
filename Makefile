@@ -464,6 +464,14 @@ typecheck: ## Type-check Builder, session-configuration, and OME frame authority
 		services/vs_api/session_deployment.py \
 		services/vs_api/transition_operations.py \
 		lib/nodalarc/frames.py \
+		lib/nodalarc/physics/__init__.py \
+		lib/nodalarc/physics/__main__.py \
+		lib/nodalarc/physics/context.py \
+		lib/nodalarc/physics/datasets.py \
+		lib/nodalarc/physics/ephemeris_table.py \
+		lib/nodalarc/physics/errors.py \
+		lib/nodalarc/physics/geodesy.py \
+		lib/nodalarc/physics/kepler.py \
 		lib/nodalarc/geo.py \
 		lib/nodalarc/ome_runtime.py \
 		lib/nodalarc/propagator.py \

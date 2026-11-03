@@ -161,3 +161,6 @@ specs/*.pdf
 specs/*.png
 
 perf-results/
+
+# Ephemeris datasets converted for ANISE at build time (python -m nodalarc.physics)
+configs/ephemerides/anise/

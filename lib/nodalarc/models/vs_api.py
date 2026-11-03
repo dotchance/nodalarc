@@ -150,6 +150,12 @@ class LinkState(BaseModel):
     transmit_mbps_b: float
     receive_mbps_b: float
     range_km: float
+    # The master sim time range_km and latency_ms describe: the
+    # LinkStateSnapshot's sim_time, or a LinkUp's or LatencyUpdate's
+    # provenance.authority_sim_time. Every writer sets it with the range. Node
+    # positions in the same snapshot move every tick, so they may describe a
+    # later instant.
+    range_sim_time: datetime
     traffic_load_pct: float | None  # None = no probe data (distinct from 0)
     interface_a: str = ""
     interface_b: str = ""

@@ -21,6 +21,7 @@ function link(overrides: Partial<LinkState> = {}): LinkState {
     transmit_mbps_b: 1000,
     receive_mbps_b: 1000,
     range_km: 12000,
+    range_sim_time: "2026-06-08T00:04:15Z",
     traffic_load_pct: null,
     interface_a: "isl0",
     interface_b: "isl1",
@@ -101,6 +102,20 @@ describe("LinkDetail", () => {
     expect(rates.getByText("leo-sat-p00s00")).toBeTruthy();
     expect(rates.getByText("meo-sat-p00s00")).toBeTruthy();
     expect(screen.queryByText("leo-sat-p00s00 → meo-sat-p00s00")).toBeNull();
+  });
+
+  it("states the sim time its range and latency describe", () => {
+    render(
+      <LinkDetail
+        link={link({ range_km: 2157.849, latency_ms: 7.198, range_sim_time: "2026-06-08T00:04:15Z" })}
+        snapshot={snapshot()}
+      />,
+    );
+
+    expect(screen.getByText("2158 km")).toBeTruthy();
+    expect(screen.getByText("7.2 ms")).toBeTruthy();
+    const asOf = screen.getByText("Range as of").closest(".detail-row");
+    expect(asOf?.textContent).toContain("2026-06-08 00:04:15 UTC");
   });
 
   it("highlights nothing in a direction whose two rates are equal", () => {

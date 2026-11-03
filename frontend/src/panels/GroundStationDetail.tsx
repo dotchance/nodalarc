@@ -19,6 +19,7 @@ import { TaxonomyChip } from "../ui/Badge";
 import { REGIME_TINT } from "../taxonomy/regime";
 import { tokens } from "../styles/tokens";
 import type { GroundLinkDecisionSnapshot, NodeState, StateSnapshot } from "../generated/vsApi";
+import { formatTimeShort } from "../translate";
 
 interface GroundStationDetailProps {
   node: NodeState;
@@ -276,7 +277,9 @@ export function GroundStationDetail({ node, snapshot, onSelect }: GroundStationD
               <span className={l.state === "active" ? "link-state--up" : "link-state--down"}>
                 {l.state === "active" ? "UP" : "DOWN"}
               </span>{" "}
-              {l.latency_ms.toFixed(1)}ms
+              <span title={`Latency as of ${formatTimeShort(l.range_sim_time)} sim time`}>
+                {l.latency_ms.toFixed(1)}ms
+              </span>
             </span>
           </div>
         );

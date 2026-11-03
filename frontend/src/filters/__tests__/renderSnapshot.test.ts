@@ -76,6 +76,7 @@ function link(node_a: string, node_b: string): LinkState {
     transmit_mbps_b: 1000,
     receive_mbps_b: 1000,
     range_km: 100,
+    range_sim_time: "2026-06-08T00:04:15Z",
     traffic_load_pct: null,
     interface_a: "isl0",
     interface_b: "isl0",

@@ -1107,6 +1107,10 @@ class TestLinkDecisionTraceState:
         assert trace.range_km == 900.0
         assert trace.orbital_one_way_ms == 3.0
         assert trace.netem_one_way_ms is None
+        # The range is stamped with the snapshot's sim time.
+        link = ctx.links[_link_key("sat-P00S00", "sat-P00S01")]
+        assert link.range_km == 900.0
+        assert link.range_sim_time == datetime(2025, 1, 1, tzinfo=UTC)
 
     def test_latency_update_refreshes_decision_trace(self):
         ctx = SessionContext.__new__(SessionContext)
@@ -1118,6 +1122,10 @@ class TestLinkDecisionTraceState:
         up = _Message()
         up.data = json.dumps(_make_link_up_event()).encode()
         asyncio.run(ctx._on_link_up(up))
+        key = _link_key("sat-P00S00", "sat-P00S01")
+        # The LinkUp's range is stamped with its provenance's authority time,
+        # not the event's dispatch time.
+        assert ctx.links[key].range_sim_time == datetime(2026, 1, 1, tzinfo=UTC)
 
         latency = _Message()
         latency.data = json.dumps(
@@ -1131,6 +1139,7 @@ class TestLinkDecisionTraceState:
                 "provenance": _make_provenance(
                     authority_source="link_state_snapshot",
                     authority_sequence=99,
+                    authority_sim_time="2026-01-01T00:00:05+00:00",
                     range_km=1800.0,
                     orbital_one_way_ms=6.0,
                     netem_one_way_ms=6.0,
@@ -1140,8 +1149,10 @@ class TestLinkDecisionTraceState:
 
         asyncio.run(ctx._on_latency_update(latency))
 
-        key = _link_key("sat-P00S00", "sat-P00S01")
+        # Value and instant change together.
         assert ctx.links[key].latency_ms == 6.0
+        assert ctx.links[key].range_km == 1800.0
+        assert ctx.links[key].range_sim_time == datetime(2026, 1, 1, 0, 0, 5, tzinfo=UTC)
         assert ctx.link_decision_traces[key].authority_sequence == 99
         assert ctx.link_decision_traces[key].range_km == 1800.0
 
@@ -1297,6 +1308,7 @@ class TestSubscriberResilience:
             transmit_mbps_b=1000.0,
             receive_mbps_b=1000.0,
             range_km=1500.0,
+            range_sim_time=datetime(2026, 1, 1, tzinfo=UTC),
             traffic_load_pct=None,
             interface_a="isl0",
             interface_b="isl1",

@@ -3,7 +3,7 @@
 /** Link detail panel — state, metrics, flow paths, history. */
 
 import { useEffect, useState } from "react";
-import { translateLinkType } from "../translate";
+import { formatTime, translateLinkType } from "../translate";
 import { linkEventLabel } from "../explain/linkEvents";
 import { REST_URL, authHeaders } from "../config";
 import { apiErrorFromException, apiErrorMessage } from "../ui/apiError";
@@ -211,6 +211,12 @@ export function LinkDetail({ link, snapshot }: LinkDetailProps) {
       <div className="detail-row">
         <span className="detail-label">Range</span>
         <span className="detail-value">{link.range_km.toFixed(0)} km</span>
+      </div>
+      {/* Range and its light-time latency describe one OME instant, which can be
+          earlier than the positions shown beside them. */}
+      <div className="detail-row" title="The sim time this range and latency describe">
+        <span className="detail-label">Range as of</span>
+        <span className="detail-value">{formatTime(link.range_sim_time)}</span>
       </div>
       <LinkRates link={link} />
       {link.traffic_load_pct != null && (

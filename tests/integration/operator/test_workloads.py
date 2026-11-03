@@ -54,7 +54,7 @@ def _run_fast_until(operator: Operator, reached, *, longest_wait: float = 300.0)
 
     def shown(messages: list[tuple[float, dict[str, Any]]]) -> bool:
         snapshot = messages[-1][1]
-        if "links" in snapshot and reached(ShownNetwork([snapshot], {}, {}, {})):
+        if "links" in snapshot and reached(ShownNetwork([snapshot], {}, {}, {}, None)):
             seen.append(True)
         return bool(seen)
 

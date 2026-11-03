@@ -20,6 +20,7 @@ import {
   type AreaColoring,
 } from "../routing/instances";
 import type { LinkState, NodeState, StateSnapshot } from "../generated/vsApi";
+import { formatTimeShort } from "../translate";
 
 /** Recently-removed link kept for fail-flash animation. */
 interface FailedLink {
@@ -312,7 +313,7 @@ export function TopologyView({
           );
           if (linkState) {
             setTooltipContent(
-              `${linkState.node_a} \u2194 ${linkState.node_b}: ${linkState.latency_ms.toFixed(1)}ms, ${linkState.state}`,
+              `${linkState.node_a} \u2194 ${linkState.node_b}: ${linkState.latency_ms.toFixed(1)}ms as of ${formatTimeShort(linkState.range_sim_time)}, ${linkState.state}`,
             );
           }
           return;

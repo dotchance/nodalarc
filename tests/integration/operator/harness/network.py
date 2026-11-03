@@ -17,6 +17,16 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 
+import numpy as np
+from nodalarc.body_frames import BodyFrame
+from nodalarc.orbital import OrbitalElements
+from nodalarc.physics import PhysicsContext
+from nodalarc.physics.satellites import (
+    analytic_satellite_states,
+    orbit_model_for,
+    tle_satellite_states,
+)
+
 from .client import Operator, Terminal
 
 Link = dict[str, Any]
@@ -141,6 +151,8 @@ class ShownNetwork:
     orbits: dict[str, Any]
     # The latest body-sample window: where each body is and how fast it turns.
     body_samples: dict[str, Any]
+    # The SessionEphemeris epoch the orbits' elements are valid at.
+    epoch_unix: float | None
 
     def angular_speed_rad_s(self, body_id: str) -> float:
         """The body's angular speed, the largest in the sample window."""
@@ -245,7 +257,9 @@ class ShownNetwork:
         return None
 
     def and_now(self, state: dict[str, Any]) -> ShownNetwork:
-        return ShownNetwork([*self.snapshots, state], self.bodies, self.orbits, self.body_samples)
+        return ShownNetwork(
+            [*self.snapshots, state], self.bodies, self.orbits, self.body_samples, self.epoch_unix
+        )
 
 
 @dataclass(frozen=True)
@@ -307,8 +321,83 @@ def watch(operator: Operator, seconds: float = 10.0) -> ShownNetwork:
     body_samples = [message for message in messages if message.get("msg_type") == "body_samples"]
     assert body_samples, "the state feed sent no body samples"
     return ShownNetwork(
-        snapshots, ephemeris[0]["body_frames"], ephemeris[0]["nodes"], body_samples[-1]
+        snapshots,
+        ephemeris[0]["body_frames"],
+        ephemeris[0]["nodes"],
+        body_samples[-1],
+        ephemeris[0]["epoch_unix"],
     )
+
+
+class ReferencePositions:
+    """Nodes' positions at a stated sim time, independent of the snapshots captured.
+
+    Positions are on Earth-centred ICRF axes, so distances between nodes of different bodies
+    are real distances. Satellites come from the session ephemeris through the shared physics
+    module (the same evaluation OME and VS-API run); a ground node keeps the body-fixed position
+    the feed shows for it, turned by its body's orientation at that time. A node with neither
+    raises LookupError naming why.
+    """
+
+    def __init__(self, shown: ShownNetwork) -> None:
+        if shown.epoch_unix is None:
+            raise LookupError("the feed's session ephemeris carries no epoch")
+        self._shown = shown
+        self._epoch_unix = shown.epoch_unix
+        self._physics = PhysicsContext(sorted(shown.bodies))
+        self._frames = {
+            body_id: BodyFrame(
+                name=body_id,
+                mean_radius_km=frame["mean_radius_km"],
+                equatorial_radius_km=frame["equatorial_radius_km"],
+                polar_radius_km=frame["polar_radius_km"],
+                gravitational_parameter_km3_s2=frame["gravitational_parameter_km3_s2"],
+                j2=frame["j2"],
+            )
+            for body_id, frame in shown.bodies.items()
+        }
+
+    def at(self, node: Node, t: float) -> np.ndarray:
+        body_id = node["reference_body"]
+        frame = self._frames.get(body_id)
+        if frame is None:
+            raise LookupError(f"{node['node_id']}: the ephemeris has no body frame for {body_id}")
+        origin = np.array(self._physics.body_state(body_id, t).position_km)
+        if node["node_type"] != "satellite":
+            fixed = np.array(position_km(node, self._shown.bodies))
+            rotation = self._physics.orientation(body_id, t).rotation
+            return origin + rotation.T @ fixed
+        orbit = self._shown.orbits.get(node["node_id"])
+        if orbit is None:
+            raise LookupError(f"{node['node_id']}: the session ephemeris has no orbit for it")
+        if orbit["type"] == "keplerian":
+            states = analytic_satellite_states(
+                self._physics,
+                body_frame=frame,
+                model=orbit_model_for(orbit["propagator"]),
+                elements=[
+                    OrbitalElements(
+                        semi_major_axis_km=orbit["semi_major_axis_km"],
+                        inclination_rad=math.radians(orbit["inclination_deg"]),
+                        raan_rad=math.radians(orbit["raan_deg"]),
+                        mean_anomaly_rad=math.radians(orbit["mean_anomaly_deg"]),
+                        eccentricity=orbit["eccentricity"],
+                        argument_of_perigee_rad=math.radians(orbit["argument_of_perigee_deg"]),
+                    )
+                ],
+                phases_s=[t - self._epoch_unix],
+                master_sim_time_unix=t,
+            )
+        elif orbit["type"] == "tle":
+            states = tle_satellite_states(
+                self._physics,
+                body_frame=frame,
+                tles=[(orbit["tle_line_1"], orbit["tle_line_2"])],
+                master_sim_time_unix=t,
+            )
+        else:
+            raise LookupError(f"{node['node_id']}: orbit type {orbit['type']!r} has no evaluation")
+        return origin + states.position_icrf_km[0]
 
 
 def ground_links(snapshot: dict[str, Any]) -> set[tuple[str, str]]:

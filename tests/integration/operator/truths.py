@@ -11,12 +11,15 @@ import math
 import re
 import time
 import uuid
+from datetime import datetime
 from typing import Any
 
+import numpy as np
 import yaml
 
 from .harness.client import Operator
 from .harness.network import (
+    ReferencePositions,
     ShownNetwork,
     link_interface,
     link_key,
@@ -179,39 +182,72 @@ def latency_shown_is_the_delay_packets_get(operator: Operator, shown: ShownNetwo
 
 
 def latency_shown_is_the_light_time_between_the_positions_shown(shown: ShownNetwork) -> list[str]:
-    """Each link's latency is its range at light speed, and its range is the distance between its ends.
+    """Each link's latency is its range at light speed, and its range is the distance between its
+    ends at the sim time the range describes.
 
-    NodalArc refreshes a link's range every few sim seconds. The range is compared with the
-    positions in the snapshot where it was refreshed.
+    A link states that time as range_sim_time. The ends' positions at that time come from a
+    captured snapshot of exactly that sim time when the feed showed one (same-body pairs), and
+    otherwise from the session's ephemeris evaluated at that time. The reported range is compared
+    unchanged. A link with no stated time, or ends with no reference position at it, is a
+    disagreement.
     """
+    reference = None
     disagreements = []
-    compared = 0
-    for key in shown.steady_links():
-        previous = None
-        for snapshot in shown.snapshots:
-            link = next(link for link in snapshot["links"] if link_key(link) == key)
+    captured = evaluated = 0
+    seen = set()
+    shown_at = {
+        round(sim_seconds(snapshot), 3): {node["node_id"]: node for node in snapshot["nodes"]}
+        for snapshot in shown.snapshots
+    }
+    for snapshot in shown.snapshots:
+        nodes = {node["node_id"]: node for node in snapshot["nodes"]}
+        for link in snapshot["links"]:
+            key = link_key(link)
             if abs(link["latency_ms"] - link["range_km"] / LIGHT_KM_PER_MS) > 1e-6:
                 disagreements.append(
                     f"{key}: latency {link['latency_ms']} ms is not the light time of {link['range_km']} km"
                 )
-                break
-            refreshed = previous is not None and link["range_km"] != previous
-            previous = link["range_km"]
-            if not refreshed:
                 continue
-            nodes = {node["node_id"]: node for node in snapshot["nodes"]}
-            a, b = nodes[key[0]], nodes[key[1]]
-            if a["reference_body"] != b["reference_body"]:
-                break  # positions are shown per body; a link between bodies is not compared
-            apart = math.dist(position_km(a, shown.bodies), position_km(b, shown.bodies))
-            compared += 1
+            stamp = link.get("range_sim_time")
+            if stamp is None:
+                disagreements.append(
+                    f"{key} at {snapshot['sim_time']}: the range states no sim time"
+                )
+                continue
+            t = round(datetime.fromisoformat(stamp).timestamp(), 3)
+            if (key, link["range_km"], t) in seen:
+                continue
+            seen.add((key, link["range_km"], t))
+            frame = shown_at.get(t, {})
+            a, b = frame.get(key[0]), frame.get(key[1])
+            if a is not None and b is not None and a["reference_body"] == b["reference_body"]:
+                apart = math.dist(position_km(a, shown.bodies), position_km(b, shown.bodies))
+                captured += 1
+            else:
+                try:
+                    if reference is None:
+                        reference = ReferencePositions(shown)
+                    ends = [nodes.get(node_id) for node_id in key]
+                    if None in ends:
+                        raise LookupError(f"the snapshot does not show {key}")
+                    apart = float(
+                        np.linalg.norm(reference.at(ends[0], t) - reference.at(ends[1], t))
+                    )
+                except LookupError as exc:
+                    disagreements.append(f"{key} at {stamp}: no reference positions ({exc})")
+                    continue
+                evaluated += 1
             if abs(apart - link["range_km"]) > RANGE_ALLOWANCE_KM:
                 disagreements.append(
-                    f"{key} at {snapshot['sim_time']}: range shown {link['range_km']:.3f} km; "
-                    f"the positions shown are {apart:.3f} km apart"
+                    f"{key} at {stamp}: range shown {link['range_km']:.3f} km; "
+                    f"its ends were {apart:.3f} km apart then"
                 )
-            break
-    print(f"geometry: {compared} links compared at the snapshot that refreshed their range")
+    print(
+        f"geometry: {captured + evaluated} ranges compared at the sim time they describe "
+        f"({captured} with captured positions, {evaluated} evaluated)"
+    )
+    if captured + evaluated == 0:
+        disagreements.append("geometry: the feed showed no range to compare")
     return disagreements
 
 
@@ -548,7 +584,7 @@ def make_before_break_handover_holds_both_links(operator: Operator) -> list[str]
                 link_key(link) == link_key(old) and link["teardown_remaining_ticks"]
                 for link in state["links"]
             )
-            shown = ShownNetwork([state], {}, {}, {})
+            shown = ShownNetwork([state], {}, {}, {}, None)
             neighbors = router_neighbors(terminal, shown.nodes[ground], shown.node_by_address())
             print(f"handover: overlap shown: {still_overlapping}; router neighbors: {neighbors}")
             if (

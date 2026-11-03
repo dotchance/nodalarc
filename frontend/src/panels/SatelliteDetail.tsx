@@ -15,7 +15,7 @@ import { PairInspectorView } from "../explain/components/PairInspectorView";
 import { FamilyBadge } from "../explain/components/FamilyBadge";
 import { isGroundLinkState, selectionTypeForNodeId } from "../networkIdentity";
 import { RoutingRows } from "./RoutingRows";
-import { translateLinkType } from "../translate";
+import { formatTimeShort, translateLinkType } from "../translate";
 import type { GroundLinkDecisionSnapshot, NodeState, StateSnapshot } from "../generated/vsApi";
 
 interface SatelliteDetailProps {
@@ -233,7 +233,11 @@ export function SatelliteDetail({ node, snapshot, anchorGsId,
                   <span className={stateUp ? "link-state--up" : "link-state--down"}>
                     {stateUp ? "UP" : "DOWN"}
                   </span>
-                  {" "}{l.latency_ms.toFixed(1)}ms {translateLinkType(l.link_type)}
+                  {" "}
+                  <span title={`Latency as of ${formatTimeShort(l.range_sim_time)} sim time`}>
+                    {l.latency_ms.toFixed(1)}ms
+                  </span>{" "}
+                  {translateLinkType(l.link_type)}
                   {!stateUp && l.link_reason ? ` — ${linkEventLabel(l.link_reason)}` : ""}
                 </span>
               </div>
@@ -262,7 +266,10 @@ export function SatelliteDetail({ node, snapshot, anchorGsId,
                   onClick={() => selectLink(l.node_a, l.node_b)}
                   title="Select link"
                 >
-                  {l.latency_ms.toFixed(1)}ms — {linkEventLabel(l.link_reason)}
+                  <span title={`Latency as of ${formatTimeShort(l.range_sim_time)} sim time`}>
+                    {l.latency_ms.toFixed(1)}ms
+                  </span>{" "}
+                  — {linkEventLabel(l.link_reason)}
                 </span>
               </div>
             );

@@ -58,6 +58,7 @@ function link(link_type: LinkState["link_type"]): LinkState {
     transmit_mbps_b: 1,
     receive_mbps_b: 1,
     range_km: 1,
+    range_sim_time: "2026-06-08T00:04:15Z",
     traffic_load_pct: null,
     interface_a: "a",
     interface_b: "b",

@@ -529,6 +529,7 @@ export interface LinkState {
   readonly transmit_mbps_b: number;
   readonly receive_mbps_b: number;
   readonly range_km: number;
+  readonly range_sim_time: string;
   readonly traffic_load_pct: number | null;
   readonly interface_a: string;
   readonly interface_b: string;

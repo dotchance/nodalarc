@@ -844,6 +844,7 @@ class SessionContext:
                     latency_ms=link.latency_ms,
                     **terminal_rates,
                     range_km=link.range_km,
+                    range_sim_time=snapshot.sim_time,
                     traffic_load_pct=None,
                     interface_a=link.interface_a,
                     interface_b=link.interface_b,
@@ -1045,6 +1046,7 @@ class SessionContext:
                 latency_ms=data["latency_ms"],
                 **terminal_rates,
                 range_km=data["range_km"],
+                range_sim_time=trace.authority_sim_time,
                 traffic_load_pct=None,
                 interface_a=data["interface_a"],
                 interface_b=data["interface_b"],
@@ -1088,7 +1090,11 @@ class SessionContext:
             if existing is not None:
                 trace = self._trace_from_latency_update(data)
                 self.links[key] = existing.model_copy(
-                    update={"latency_ms": latency_ms, "range_km": range_km}
+                    update={
+                        "latency_ms": latency_ms,
+                        "range_km": range_km,
+                        "range_sim_time": trace.authority_sim_time,
+                    }
                 )
                 self.link_decision_traces[key] = trace
         self._record_history(

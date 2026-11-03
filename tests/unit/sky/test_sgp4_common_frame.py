@@ -1,11 +1,11 @@
-"""SGP4 common-frame authority: ITRS for same-body, GCRS for cross-body.
+"""SGP4 common-frame authority: GCRS for cross-body, Earth-fixed for same-body.
 
-The SGP4 boundary evaluates Skyfield once and retains both frames. The
-common-frame slots of PropagatedState are runtime-typed and refuse
-relabeled vectors. Goldens pin both frames at the ISS fixture epoch and
-twelve hours later, where the frames' axes are nearly opposed and the
-old aliasing produced a 12,709 km error, a false range, and a false
-los_blocked verdict.
+The SGP4 boundary returns GCRS state only; the Earth-fixed state comes from
+the shared physics module's Earth orientation. The common-frame slots of
+PropagatedState are runtime-typed and refuse relabeled vectors. Goldens pin
+the GCRS state at the ISS fixture epoch and twelve hours later, where the
+inertial and Earth-fixed axes are nearly opposed and the old aliasing
+produced a 12,709 km error, a false range, and a false los_blocked verdict.
 
 There is no frontend SGP4 twin to cover: the sim worker propagates only
 Keplerian/J2 elements and TLE rendering is driven by OME snapshot
@@ -16,11 +16,11 @@ import math
 from datetime import UTC, datetime
 from pathlib import Path
 
+import numpy as np
 import pytest
-from nodalarc.body_frames import BodyFrame
 from nodalarc.frames import CommonVec3, EcefVec3, Vec3
 from nodalarc.geo import compute_latency_ms
-from nodalarc.propagator import propagate_sgp4_tle, propagate_sgp4_tle_states
+from nodalarc.propagator import propagate_sgp4_tle_gcrs
 
 from tests.catalog_session_fixtures import shipped_read_view
 
@@ -28,33 +28,18 @@ ISS_TLE_LINE_1 = "1 25544U 98067A   21075.51041667  .00001264  00000-0  29660-4 
 ISS_TLE_LINE_2 = "2 25544  51.6442  21.5417 0002426  95.1670  21.8444 15.48974333273145"
 ISS_TLE_EPOCH_UNIX = 1615896900.000275
 
-EARTH_FRAME = BodyFrame(
-    name="earth",
-    mean_radius_km=6371.0,
-    equatorial_radius_km=6378.137,
-    polar_radius_km=6356.752,
-    rotation_rate_rad_s=7.2921158553e-5,
-    gravitational_parameter_km3_s2=398600.4418,
-    j2=1.08262668e-3,
-)
-
-# Goldens from the single-evaluation Skyfield boundary. Skyfield and sgp4
-# are lockfile-pinned; a dependency upgrade that moves these numbers must
+# Goldens from the Skyfield GCRS boundary, whose conversion the published
+# references in tests/unit/physics/test_tle_reference.py qualify. Skyfield and
+# sgp4 are lockfile-pinned; a dependency upgrade that moves these numbers must
 # arrive as a deliberate diff of this table, not be absorbed by tolerance.
 GOLDEN = {
     0.0: {
-        "itrs_pos": (-4329.375350762542, 2211.9930425759426, 4740.40568912658),
-        "itrs_vel": (-5.240188571438462, -4.385887860221932, -2.731355094043767),
         "gcrs_pos": (-4231.119851995798, 2377.5438181736145, 4748.974672117138),
         "gcrs_vel": (-5.5845138643634815, -4.489569376632045, -2.719985233454282),
-        "separation_km": 192.703476,
     },
     43200.0: {
-        "itrs_pos": (-5006.790360510804, -3911.0864939752532, 2409.80449805389),
-        "itrs_vel": (4.45404594877855, -2.384642850059607, 5.357169687912351),
         "gcrs_pos": (5126.795151947043, 3759.0822575731286, 2399.3701354879504),
         "gcrs_vel": (-4.6437071007668305, 2.890797125620803, 5.366572005142366),
-        "separation_km": 12709.097249,
     },
 }
 
@@ -67,47 +52,16 @@ def _distance(a, b):
 
 
 class TestBoundaryGoldens:
-    """One Skyfield evaluation, both frames, pinned in both instants."""
+    """The GCRS boundary, pinned at both instants."""
 
     @pytest.mark.parametrize("dt_s", [0.0, 43200.0])
-    def test_both_frames_match_goldens(self, dt_s):
-        states = propagate_sgp4_tle_states(
-            ISS_TLE_LINE_1,
-            ISS_TLE_LINE_2,
-            ISS_TLE_EPOCH_UNIX,
-            dt_s,
-            body_frame=EARTH_FRAME,
+    def test_gcrs_state_matches_goldens(self, dt_s):
+        position, velocity = propagate_sgp4_tle_gcrs(
+            ISS_TLE_LINE_1, ISS_TLE_LINE_2, ISS_TLE_EPOCH_UNIX + dt_s
         )
         golden = GOLDEN[dt_s]
-        assert _distance(states.position_itrs, golden["itrs_pos"]) < POS_TOL_KM
-        assert _distance(states.velocity_itrs, golden["itrs_vel"]) < VEL_TOL_KMS
-        assert _distance(states.position_gcrs, golden["gcrs_pos"]) < POS_TOL_KM
-        assert _distance(states.velocity_gcrs, golden["gcrs_vel"]) < VEL_TOL_KMS
-
-    @pytest.mark.parametrize("dt_s", [0.0, 43200.0])
-    def test_the_frames_are_genuinely_different(self, dt_s):
-        states = propagate_sgp4_tle_states(
-            ISS_TLE_LINE_1,
-            ISS_TLE_LINE_2,
-            ISS_TLE_EPOCH_UNIX,
-            dt_s,
-            body_frame=EARTH_FRAME,
-        )
-        separation = _distance(states.position_itrs, states.position_gcrs)
-        assert abs(separation - GOLDEN[dt_s]["separation_km"]) < 1e-3
-
-    def test_itrs_wrapper_is_unchanged(self):
-        """The same-body contract every existing consumer keeps."""
-        pos, vel, geo = propagate_sgp4_tle(
-            ISS_TLE_LINE_1,
-            ISS_TLE_LINE_2,
-            ISS_TLE_EPOCH_UNIX,
-            0.0,
-            body_frame=EARTH_FRAME,
-        )
-        assert _distance(pos, GOLDEN[0.0]["itrs_pos"]) < POS_TOL_KM
-        assert _distance(vel, GOLDEN[0.0]["itrs_vel"]) < VEL_TOL_KMS
-        assert -90.0 <= geo.lat_deg <= 90.0
+        assert _distance(position, golden["gcrs_pos"]) < POS_TOL_KM
+        assert _distance(velocity, golden["gcrs_vel"]) < VEL_TOL_KMS
 
 
 class TestCommonFrameTyping:
@@ -149,16 +103,11 @@ class TestCommonFrameTyping:
     def test_boundary_gcrs_state_carries_provenance(self):
         from nodalarc.frames import GcrsVec3
 
-        states = propagate_sgp4_tle_states(
-            ISS_TLE_LINE_1,
-            ISS_TLE_LINE_2,
-            ISS_TLE_EPOCH_UNIX,
-            0.0,
-            body_frame=EARTH_FRAME,
+        position, velocity = propagate_sgp4_tle_gcrs(
+            ISS_TLE_LINE_1, ISS_TLE_LINE_2, ISS_TLE_EPOCH_UNIX
         )
-        assert isinstance(states.position_gcrs, GcrsVec3)
-        assert isinstance(states.velocity_gcrs, GcrsVec3)
-        assert not isinstance(states.position_itrs, GcrsVec3)
+        assert isinstance(position, GcrsVec3)
+        assert isinstance(velocity, GcrsVec3)
 
 
 def _earth_luna_world():
@@ -256,15 +205,11 @@ class TestCrossBodyAuthority:
 
         # Independent truth: boundary GCRS plus ephemeris origins, composed
         # by hand, never through the engine or the ISL machinery.
-        boundary = propagate_sgp4_tle_states(
-            ISS_TLE_LINE_1,
-            ISS_TLE_LINE_2,
-            ISS_TLE_EPOCH_UNIX,
-            43200.0,
-            body_frame=EARTH_FRAME,
+        boundary_position, boundary_velocity = propagate_sgp4_tle_gcrs(
+            ISS_TLE_LINE_1, ISS_TLE_LINE_2, probe_unix
         )
         earth_origin = body_states["earth"].position_km
-        iss_common_truth = tuple(o + p for o, p in zip(earth_origin, boundary.position_gcrs))
+        iss_common_truth = tuple(o + p for o, p in zip(earth_origin, boundary_position))
         relay_common = states["luna-relay-sat-p00s00"].position_common_km
         expected_range_km = _distance(iss_common_truth, relay_common)
 
@@ -316,17 +261,17 @@ class TestCrossBodyAuthority:
         assert squeezed.feasible is False
         assert squeezed.reject_reason == "tracking_exceeded"
 
-        # The old aliasing put the ITRS vector here; prove the engine's
+        # The old aliasing put the Earth-fixed vector here; prove the engine's
         # common state is GCRS-composed and far from the relabeled one.
         iss_state = states["earth-iss-sat-p00s00"]
         assert _distance(iss_state.position_common_km, iss_common_truth) < 1e-6
-        itrs_relabeled = tuple(o + p for o, p in zip(earth_origin, boundary.position_itrs))
-        assert _distance(iss_state.position_common_km, itrs_relabeled) > 12_000.0
+        fixed_relabeled = tuple(o + p for o, p in zip(earth_origin, iss_state.position_ecef_km))
+        assert _distance(iss_state.position_common_km, fixed_relabeled) > 12_000.0
 
         # Velocity flows from GCRS too: the relative angular rate computed
         # from common-frame state matches a hand composition.
         iss_vel_truth = tuple(
-            o + v for o, v in zip(body_states["earth"].velocity_km_s, boundary.velocity_gcrs)
+            o + v for o, v in zip(body_states["earth"].velocity_km_s, boundary_velocity)
         )
         assert _distance(iss_state.velocity_common_km_s, iss_vel_truth) < 1e-9
 
@@ -358,10 +303,17 @@ class TestCrossBodyAuthority:
         assert abs(link.range_km - expected_range) < 1e-3
         assert abs(link.latency_ms - compute_latency_ms(expected_range)) < 1e-3
 
-    def test_earth_local_sgp4_is_unchanged(self):
-        """Same-body geometry still consumes ITRS: the regression guard."""
+    def test_earth_fixed_state_is_the_inertial_state_in_itrf93(self):
+        """Same-body geometry consumes the GCRS state in NAIF's ITRF93 frame.
+
+        TLE satellites, analytic satellites and Earth sites take Earth
+        orientation from the one physics context.
+        """
         probe_unix = ISS_TLE_EPOCH_UNIX + 43200.0
-        states, _, _ = self._states_at(probe_unix)
+        states, _, inputs = self._states_at(probe_unix)
         iss = states["earth-iss-sat-p00s00"]
-        assert _distance(iss.position_ecef_km, GOLDEN[43200.0]["itrs_pos"]) < POS_TOL_KM
-        assert _distance(iss.velocity_ecef_km_s, GOLDEN[43200.0]["itrs_vel"]) < VEL_TOL_KMS
+        rotation = inputs.physics.orientation("earth", probe_unix).rotation
+        gcrs_position, _velocity = propagate_sgp4_tle_gcrs(
+            ISS_TLE_LINE_1, ISS_TLE_LINE_2, probe_unix
+        )
+        assert _distance(iss.position_ecef_km, rotation @ np.array(gcrs_position)) < POS_TOL_KM

@@ -43,11 +43,11 @@ class GcrsVec3(NamedTuple):
 
     Common-frame composition adds the central body's common-frame origin to
     a body-centered vector; that input must already be on the common axes.
-    A distinct runtime class for the same reason as CommonVec3: the ITRS
-    output of a propagator cannot flow into composition by relabeling. SGP4
+    A distinct runtime class for the same reason as CommonVec3: a
+    body-fixed state cannot flow into composition by relabeling. SGP4
     constructs these from Skyfield's GCRS evaluation; the two-body and J2
-    propagators construct them from their body-equatorial inertial output,
-    which the session contract composes as the common axes.
+    propagators construct them by rotating the orbit kernel's state from the
+    central body's orbit-element basis onto ICRF axes.
     """
 
     x: float

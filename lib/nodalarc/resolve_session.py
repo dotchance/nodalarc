@@ -250,7 +250,6 @@ def resolve_session_with_assets(
     _refuse_uncollapsible_access_physics(base_resolved)
     _refuse_unstated_ground_floors(base_resolved)
     _refuse_divergent_ground_masks(base_resolved)
-    _refuse_mixed_body_fixed_realizations(base_resolved)
     candidates = tuple(_resolve_link_candidates(base_resolved, cfg))
     _enforce_link_rule_constraints(base_resolved, candidates)
     resolved = ResolvedSession(
@@ -2980,60 +2979,6 @@ def _terminal_selectors_by_rule(
         rule.id: (rule.endpoints[0].terminal, rule.endpoints[1].terminal)
         for rule in cfg.link_rules or ()
     }
-
-
-def _refuse_mixed_body_fixed_realizations(resolved: ResolvedSession) -> None:
-    """One body-fixed frame realization per central body per session.
-
-    Same-body geometry (ISL feasibility, ground visibility, handover
-    ranking across candidate satellites) compares body-fixed vectors
-    directly. Mixing propagators whose realizations disagree puts a ~30 km
-    frame error inside those comparisons while every individual state looks
-    plausible. Grouping is by each satellite's effective propagator after
-    overrides, classified by the realization the implementation declares,
-    never by the session-level propagator string.
-    """
-    from nodalarc.ome_inputs import _ome_propagator_id
-    from nodalarc.ome_runtime import BODY_FIXED_REALIZATION
-
-    by_body: dict[str, dict[str, list[str]]] = {}
-    for node in resolved.nodes:
-        if node.kind != "satellite":
-            continue
-        implementation = _ome_propagator_id(node.orbit.propagator)
-        realization = BODY_FIXED_REALIZATION.get(implementation)
-        if realization is None:
-            raise ValueError(
-                f"propagator {implementation!r} declares no body-fixed frame "
-                "realization; every propagator implementation must be classified "
-                "in BODY_FIXED_REALIZATION before it can participate in a session"
-            )
-        by_body.setdefault(node.central_body, {}).setdefault(realization, []).append(node.node_id)
-
-    unsupported: list[UnsupportedFeature] = []
-    for body, families in sorted(by_body.items()):
-        if len(families) <= 1:
-            continue
-        detail = "; ".join(
-            f"{family}: {node_ids[0]}"
-            + (f" and {len(node_ids) - 1} more" if len(node_ids) > 1 else "")
-            for family, node_ids in sorted(families.items())
-        )
-        unsupported.append(
-            UnsupportedFeature(
-                category=FeatureCategory.FRAME_REALIZATION,
-                value=body,
-                message=(
-                    f"central body {body!r} carries satellites in mixed body-fixed "
-                    f"frame realizations ({detail}); same-body geometry compares "
-                    "vectors from one realization only, so the composition is "
-                    "refused until the propagators share a rotation authority"
-                ),
-                support_note="future runtime capability",
-            )
-        )
-    if unsupported:
-        raise UnsupportedFeatureError(unsupported)
 
 
 def _refuse_uncollapsible_access_physics(resolved: ResolvedSession) -> None:

@@ -24,8 +24,11 @@ from nodalarc.models.events import (
 )
 from nodalarc.orbital import OrbitalElements
 from nodalarc.physics import PhysicsContext, body_fixed_from_geodetic
-from nodalarc.physics.satellites import analytic_satellite_states, orbit_model_for
-from nodalarc.propagator import propagate_sgp4_tle
+from nodalarc.physics.satellites import (
+    analytic_satellite_states,
+    orbit_model_for,
+    tle_satellite_states,
+)
 
 
 class PositionTable:
@@ -140,15 +143,16 @@ class PositionTable:
 
         tle = self._sat_tles.get(node_id)
         if tle is not None:
-            body_frame = self._required_body_frame(self._sat_reference_bodies[node_id])
-            pos_ecef, _vel, _geo = propagate_sgp4_tle(
-                tle[0],
-                tle[1],
-                self._epoch_unix,
-                dt,
-                body_frame=body_frame,
+            if self._physics is None:
+                raise ValueError("PositionTable has no physics context; load an ephemeris first")
+            states = tle_satellite_states(
+                self._physics,
+                body_frame=self._required_body_frame(self._sat_reference_bodies[node_id]),
+                tles=[tle],
+                master_sim_time_unix=sim_time_unix,
             )
-            return pos_ecef
+            x, y, z = (float(v) for v in states.position_fixed_km[0])
+            return EcefVec3(Vec3(x, y, z))
 
         return None
 

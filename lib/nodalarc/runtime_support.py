@@ -33,7 +33,6 @@ class FeatureCategory(StrEnum):
     FRAME_BODY = "frame_body"
     PROTOCOL_ADAPTER = "protocol_adapter"
     TERMINAL_CAPABILITY = "terminal_capability"
-    FRAME_REALIZATION = "frame_realization"
     ROUTING_PROTOCOL = "routing_protocol"
     ROUTING_CAPABILITY = "routing_capability"
     ROUTING_TIMER = "routing_timer"

@@ -217,12 +217,13 @@ def test_sgp4_propagator_is_explicitly_selectable():
         **_propagation_inputs(),
     )
 
+    # The GCRS state of tests/unit/sky/test_sgp4_common_frame.py at the TLE
+    # epoch: the engine ran SGP4 for this satellite, not another model.
     state = states[SAT_0_ID]
     assert state.propagator_id == "sgp4-tle"
-    assert state.position_ecef_km.x == pytest.approx(-4329.375350762542, abs=1e-6)
-    assert state.position_ecef_km.y == pytest.approx(2211.9930425759426, abs=1e-6)
-    assert state.position_ecef_km.z == pytest.approx(4740.40568912658, abs=1e-6)
-    assert state.velocity_ecef_km_s.x == pytest.approx(-5.240188571438462, abs=1e-9)
+    assert tuple(state.position_common_km) == pytest.approx(
+        (-4231.119851995798, 2377.5438181736145, 4748.974672117138), abs=1e-6
+    )
 
 
 def test_unknown_propagator_fails_loudly():

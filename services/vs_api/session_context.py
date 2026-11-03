@@ -1365,8 +1365,12 @@ class SessionContext:
             EphemerisNodeTLE,
         )
         from nodalarc.orbital import OrbitalElements
-        from nodalarc.physics.satellites import analytic_satellite_states, orbit_model_for
-        from nodalarc.propagator import propagate_sgp4_tle
+        from nodalarc.physics.satellites import (
+            SatelliteStates,
+            analytic_satellite_states,
+            orbit_model_for,
+            tle_satellite_states,
+        )
 
         if self.cached_ephemeris_obj is None:
             return
@@ -1416,35 +1420,60 @@ class SessionContext:
                         ),
                     )
                 )
-        analytic: dict[str, tuple[GeoPosition, tuple[float, float, float]]] = {}
-        dt = sim_time_unix - ephemeris.epoch_unix
-        physics = self._physics
-        if groups and physics is None:
-            raise ValueError(
-                "SessionEphemeris names analytic satellites but this context has no session physics"
-            )
-        for (body_id, model), members in groups.items() if physics is not None else ():
-            states = analytic_satellite_states(
-                physics,
-                body_frame=body_frame_for(members[0][0], body_id),
-                model=model,
-                elements=[elements for _node_id, elements in members],
-                phases_s=[dt] * len(members),
-                master_sim_time_unix=sim_time_unix,
-            )
-            for row, (member_id, _elements) in enumerate(members):
+        tle_members = [
+            (node_id, node)
+            for node_id, node in ephemeris.nodes.items()
+            if isinstance(node, EphemerisNodeTLE)
+        ]
+        for node_id, node in tle_members:
+            if node.reference_body != "earth":
+                raise ValueError(
+                    f"Ephemeris node {node_id!r} uses TLE propagation with "
+                    f"reference_body={node.reference_body!r}; SGP4/TLE is Earth-only"
+                )
+
+        computed: dict[str, tuple[GeoPosition, tuple[float, float, float]]] = {}
+
+        def record(member_ids: list[str], states: SatelliteStates) -> None:
+            for row, member_id in enumerate(member_ids):
                 velocity = states.velocity_fixed_km_s[row]
-                analytic[member_id] = (
+                computed[member_id] = (
                     states.geodetic[row],
                     (float(velocity[0]), float(velocity[1]), float(velocity[2])),
                 )
+
+        dt = sim_time_unix - ephemeris.epoch_unix
+        physics = self._physics
+        if (groups or tle_members) and physics is None:
+            raise ValueError(
+                "SessionEphemeris names satellites but this context has no session physics"
+            )
+        if physics is not None:
+            for (body_id, model), members in groups.items():
+                states = analytic_satellite_states(
+                    physics,
+                    body_frame=body_frame_for(members[0][0], body_id),
+                    model=model,
+                    elements=[elements for _node_id, elements in members],
+                    phases_s=[dt] * len(members),
+                    master_sim_time_unix=sim_time_unix,
+                )
+                record([member_id for member_id, _elements in members], states)
+            if tle_members:
+                states = tle_satellite_states(
+                    physics,
+                    body_frame=body_frame_for(tle_members[0][0], "earth"),
+                    tles=[(node.tle_line_1, node.tle_line_2) for _node_id, node in tle_members],
+                    master_sim_time_unix=sim_time_unix,
+                )
+                record([node_id for node_id, _node in tle_members], states)
 
         with self.state_lock:
             self.sim_time = sim_time_iso
 
             for node_id, node in ephemeris.nodes.items():
-                if isinstance(node, EphemerisNodeKeplerian):
-                    geo, (vel_x, vel_y, vel_z) = analytic[node_id]
+                if isinstance(node, (EphemerisNodeKeplerian, EphemerisNodeTLE)):
+                    geo, (vel_x, vel_y, vel_z) = computed[node_id]
 
                     existing = self.nodes.get(node_id)
                     prefix = self._node_primary_prefix_by_id.get(
@@ -1462,68 +1491,6 @@ class SessionContext:
                         vel_x_km_s=vel_x,
                         vel_y_km_s=vel_y,
                         vel_z_km_s=vel_z,
-                        plane=node.plane,
-                        slot=node.slot,
-                        routing_instances=self._routing_instances_by_node_id.get(node_id, ()),
-                        role=self._role_of(node_id),
-                        prefix=prefix,
-                        addresses=addresses,
-                        beam_falloff_exponent=self.beam_falloff_exponent,
-                        reference_body=node.reference_body,
-                        frame_id=node.frame_id,
-                        tenant_id=self._tenant_of(node_id),
-                        segment_id=node.segment_id,
-                        local_node_id=node.local_node_id,
-                        namespace=node.namespace,
-                        tags=tuple(node.tags),
-                    )
-
-                elif isinstance(node, EphemerisNodeTLE):
-                    if node.reference_body != "earth":
-                        raise ValueError(
-                            f"Ephemeris node {node_id!r} uses TLE propagation with "
-                            f"reference_body={node.reference_body!r}; SGP4/TLE is Earth-only"
-                        )
-                    dt = sim_time_unix - self.cached_ephemeris_obj.epoch_unix
-                    frame = self.cached_ephemeris_obj.body_frames.get(node.reference_body)
-                    if frame is None:
-                        raise ValueError(
-                            f"Ephemeris node {node_id!r} references missing body frame "
-                            f"{node.reference_body!r}"
-                        )
-                    body_frame = BodyFrame(
-                        name=frame.body_id,
-                        mean_radius_km=frame.mean_radius_km,
-                        equatorial_radius_km=frame.equatorial_radius_km,
-                        polar_radius_km=frame.polar_radius_km,
-                        rotation_rate_rad_s=frame.rotation_rate_rad_s,
-                        gravitational_parameter_km3_s2=frame.gravitational_parameter_km3_s2,
-                        j2=frame.j2,
-                    )
-                    _pos_ecef, vel_ecef, geo = propagate_sgp4_tle(
-                        node.tle_line_1,
-                        node.tle_line_2,
-                        self.cached_ephemeris_obj.epoch_unix,
-                        dt,
-                        body_frame=body_frame,
-                    )
-
-                    existing = self.nodes.get(node_id)
-                    prefix = self._node_primary_prefix_by_id.get(
-                        node_id, existing.prefix if existing else None
-                    )
-                    addresses = self._node_addresses_by_id.get(
-                        node_id, existing.addresses if existing else ()
-                    )
-                    self.nodes[node_id] = NodeState(
-                        node_id=node_id,
-                        node_type=self._kind_of(node_id),
-                        lat_deg=geo.lat_deg,
-                        lon_deg=geo.lon_deg,
-                        alt_km=geo.alt_km,
-                        vel_x_km_s=vel_ecef.x,
-                        vel_y_km_s=vel_ecef.y,
-                        vel_z_km_s=vel_ecef.z,
                         plane=node.plane,
                         slot=node.slot,
                         routing_instances=self._routing_instances_by_node_id.get(node_id, ()),

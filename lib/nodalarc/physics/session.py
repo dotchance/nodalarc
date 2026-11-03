@@ -118,7 +118,7 @@ def session_node_positions(
     different bodies, and between ground and space nodes, are real distances.
     A node with neither orbit facts nor a surface position is refused.
     """
-    from nodalarc.propagator import propagate_sgp4_tle_states
+    from nodalarc.propagator import propagate_sgp4_tle_gcrs
 
     frames = {facts.body_id: body_frame_from_facts(facts) for facts in resolved.bodies}
     origins = physics.body_states(session_active_bodies(resolved), master_sim_time_unix)
@@ -149,14 +149,15 @@ def session_node_positions(
         elif orbit is not None and orbit.propagator == "sgp4_tle":
             if orbit.tle_line_1 is None or orbit.tle_line_2 is None:
                 raise ValueError(f"space node {node.node_id!r} is missing resolved TLE records")
-            tle_states = propagate_sgp4_tle_states(
-                orbit.tle_line_1,
-                orbit.tle_line_2,
-                master_sim_time_unix,
-                0.0,
-                body_frame=frame_for(orbit.central_body, node.node_id),
+            if orbit.central_body != "earth":
+                raise ValueError(
+                    f"space node {node.node_id!r} uses SGP4/TLE around {orbit.central_body!r}; "
+                    "SGP4/TLE is Earth-only"
+                )
+            position_gcrs, _velocity = propagate_sgp4_tle_gcrs(
+                orbit.tle_line_1, orbit.tle_line_2, master_sim_time_unix
             )
-            positions[node.node_id] = common(orbit.central_body, np.array(tle_states.position_gcrs))
+            positions[node.node_id] = common("earth", np.array(position_gcrs))
         elif orbit is not None:
             raise ValueError(
                 f"node {node.node_id!r} uses propagator {orbit.propagator!r}, which has no "

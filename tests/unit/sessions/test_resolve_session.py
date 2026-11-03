@@ -1135,14 +1135,17 @@ def test_divergent_per_rule_elevation_masks_are_refused_at_resolve() -> None:
     assert "ground-access-strict=40" in refusals[0].message
 
 
-def test_mixed_body_fixed_realizations_on_one_body_are_refused() -> None:
-    """An SGP4 satellite (Skyfield ITRS) joining an analytic population
-    (simplified GMST) under one central body is refused at resolve, with
-    the body and both families named. No link rule touches the added
-    segment: the trigger is population coexistence, because ground handover
-    ranking compares candidates across satellites even when no mixed ISL
-    pair exists."""
-    from nodalarc.runtime_support import FeatureCategory, UnsupportedFeatureError
+def test_tle_and_analytic_satellites_share_one_earth_fixed_frame() -> None:
+    """An SGP4 satellite joining an analytic population under one central
+    body resolves, and OME places both in NAIF's ITRF93 frame. Same-body
+    geometry (ISL feasibility, ground visibility, handover ranking across
+    candidate satellites) compares Earth-fixed vectors directly, so every
+    satellite's Earth-fixed state must be its inertial state under the one
+    Earth orientation."""
+    import numpy as np
+    from nodalarc.models.session import session_epoch_unix
+    from nodalarc.ome_inputs import build_ome_inputs_from_resolved
+    from ome.propagation_engine import propagate_satellites
 
     raw = _raw_session()
     set_ref = "user:space-node-sets/mixed-frame-tle.yaml"
@@ -1182,19 +1185,27 @@ def test_mixed_body_fixed_realizations_on_one_body_are_refused() -> None:
     for domain in raw["routing"]["domains"]:
         domain["selectors"].append({"segment": "tle"})
 
-    with pytest.raises(UnsupportedFeatureError) as error:
-        resolve_session(raw)
-    refusals = [
-        feature
-        for feature in error.value.features
-        if feature.category == FeatureCategory.FRAME_REALIZATION and feature.value == "earth"
-    ]
-    assert refusals, "no frame-realization refusal raised"
-    assert "simplified_gmst" in refusals[0].message
-    assert "skyfield_itrs" in refusals[0].message
-    assert not any(
-        rule["id"] not in {"ground-access", "space-isl"} for rule in raw["link_rules"]
-    ), "the trigger must not depend on any rule selecting the TLE segment"
+    resolved = resolve_session(raw)
+    inputs = build_ome_inputs_from_resolved(resolved)
+    instant = session_epoch_unix(resolved.time)
+    states = propagate_satellites(
+        satellites=inputs.satellites,
+        addressing=inputs.addressing,
+        epoch_unix=instant,
+        dt=0.0,
+        propagator_id=inputs.propagator_id,
+        body_frames=inputs.body_frames,
+        body_states=inputs.physics.body_states({"earth"}, instant),
+        physics=inputs.physics,
+    )
+
+    models = {state.propagator_id for state in states.values()}
+    assert "sgp4-tle" in models and models - {"sgp4-tle"}, models
+    rotation = inputs.physics.orientation("earth", instant).rotation
+    for state in states.values():
+        inertial = np.array(state.position_common_km) - np.array(state.body_origin_common_km)
+        fixed = np.array(state.position_ecef_km)
+        assert np.linalg.norm(fixed - rotation @ inertial) < 1e-6, state.node_id
 
 
 def test_nearest_visible_topology_fails_until_runtime_can_apply_it_per_tick() -> None:
@@ -1291,14 +1302,14 @@ def test_canonical_sgp4_space_node_set_materializes_exact_runtime_facts(
     # A spy, not a substitute: every call still runs SGP4. Ranking places each
     # TLE node once at the session epoch.
     calls = 0
-    propagate = propagator_module.propagate_sgp4_tle_states
+    propagate = propagator_module.propagate_sgp4_tle_gcrs
 
     def counted_propagation(*args, **kwargs):
         nonlocal calls
         calls += 1
         return propagate(*args, **kwargs)
 
-    monkeypatch.setattr(propagator_module, "propagate_sgp4_tle_states", counted_propagation)
+    monkeypatch.setattr(propagator_module, "propagate_sgp4_tle_gcrs", counted_propagation)
 
     resolved = resolve_session(raw)
     satellites = [node for node in resolved.nodes if node.kind == "satellite"]

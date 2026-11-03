@@ -1,16 +1,18 @@
 # Copyright 2024-2026 .chance (dotchance)
 # Licensed under the Apache License, Version 2.0. See LICENSE file.
-"""Analytic satellite states relative to their central body, in two frames.
+"""Satellite states relative to their central body, in two frames.
 
 OME, VS-API and the Scheduler's diagnostic latency helper all turn published
-orbital elements into states with this one function, so a satellite's
+orbital elements or TLEs into states with these functions, so a satellite's
 position cannot differ between them.
 
-Order of operations: the orbit kernel gives each state in the central body's
-orbit-element basis; the basis rotates it onto ICRF axes; the body's measured
-orientation turns it into the body-fixed frame, and its time derivative gives
-the body-fixed velocity (no rotation-rate constant is involved); ``geodesy``
-gives the geodetic coordinates on the catalog ellipsoid.
+Order of operations: the orbit kernel (analytic orbits) or SGP4 through
+``nodalarc.propagator`` (TLEs) gives each state on ICRF axes; the body's
+measured orientation turns it into the body-fixed frame, and its time
+derivative gives the body-fixed velocity (no rotation-rate constant is
+involved); ``geodesy`` gives the geodetic coordinates on the catalog
+ellipsoid. Analytic orbits first pass through the central body's orbit-element
+basis, which rotates the kernel's state onto ICRF axes.
 """
 
 from __future__ import annotations
@@ -26,6 +28,7 @@ from nodalarc.orbital import OrbitalElements
 from nodalarc.physics.context import PhysicsContext
 from nodalarc.physics.geodesy import geodetic_from_body_fixed_batch
 from nodalarc.physics.kepler import ElementsBatch, OrbitModel, orbit_states
+from nodalarc.propagator import propagate_sgp4_tle_gcrs
 
 
 @dataclass(frozen=True)
@@ -76,9 +79,49 @@ def analytic_satellite_states(
     velocity_basis = np.stack([states.vx[:, 0], states.vy[:, 0], states.vz[:, 0]], axis=1)
 
     basis = physics.orbit_basis(body_frame.name)
-    position_icrf = position_basis @ basis
-    velocity_icrf = velocity_basis @ basis
+    return states_from_icrf(
+        physics,
+        body_frame=body_frame,
+        position_icrf=position_basis @ basis,
+        velocity_icrf=velocity_basis @ basis,
+        master_sim_time_unix=master_sim_time_unix,
+    )
 
+
+def tle_satellite_states(
+    physics: PhysicsContext,
+    *,
+    body_frame: BodyFrame,
+    tles: Sequence[tuple[str, str]],
+    master_sim_time_unix: float,
+) -> SatelliteStates:
+    """States of Earth satellites given as TLE line pairs, at one instant."""
+    if body_frame.name != "earth":
+        raise ValueError(f"SGP4/TLE propagation is Earth-only; got body frame {body_frame.name!r}")
+    position_icrf = np.empty((len(tles), 3))
+    velocity_icrf = np.empty((len(tles), 3))
+    for row, (line_1, line_2) in enumerate(tles):
+        position, velocity = propagate_sgp4_tle_gcrs(line_1, line_2, master_sim_time_unix)
+        position_icrf[row] = position
+        velocity_icrf[row] = velocity
+    return states_from_icrf(
+        physics,
+        body_frame=body_frame,
+        position_icrf=position_icrf,
+        velocity_icrf=velocity_icrf,
+        master_sim_time_unix=master_sim_time_unix,
+    )
+
+
+def states_from_icrf(
+    physics: PhysicsContext,
+    *,
+    body_frame: BodyFrame,
+    position_icrf: np.ndarray,
+    velocity_icrf: np.ndarray,
+    master_sim_time_unix: float,
+) -> SatelliteStates:
+    """Complete states from body-centered ICRF-axes states, each (N, 3)."""
     orientation = physics.orientation(body_frame.name, master_sim_time_unix)
     position_fixed = position_icrf @ orientation.rotation.T
     velocity_fixed = (

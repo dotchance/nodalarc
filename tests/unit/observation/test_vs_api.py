@@ -40,7 +40,7 @@ from vs_api.session_context import SessionContext, _derive_link_type, _link_key
 
 from tests.asgi_client import ASGITestClient as TestClient
 from tests.catalog_session_fixtures import shipped_read_view
-from tests.physics_fixtures import EARTH_TEST_EPHEMERIS_BODY_FRAMES
+from tests.physics_fixtures import EARTH_TEST_EPHEMERIS_BODY_FRAMES, physics_for
 
 ISS_TLE_EPOCH = 1615896900.000275
 ISS_TLE_LINE_1 = "1 25544U 98067A   21075.51041667  .00001264  00000-0  29660-4 0  9993"
@@ -932,6 +932,7 @@ class TestEphemerisPositionPropagation:
     def test_tle_ephemeris_updates_satellite_position(self):
         ctx = SessionContext.__new__(SessionContext)
         ctx._init_state_only()
+        ctx._physics = physics_for("earth")
         ctx._role_by_node_id = {"sat-P00S00": "router"}
         ctx._kind_by_node_id = {"sat-P00S00": "satellite"}
         ctx._tenant_by_node_id = {"sat-P00S00": "default"}

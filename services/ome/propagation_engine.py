@@ -26,8 +26,12 @@ from nodalarc.ome_runtime import (
 )
 from nodalarc.physics import BodyState, PhysicsContext
 from nodalarc.physics.kepler import OrbitModel
-from nodalarc.physics.satellites import analytic_satellite_states, orbit_model_for
-from nodalarc.propagator import propagate_sgp4_tle_states
+from nodalarc.physics.satellites import (
+    SatelliteStates,
+    analytic_satellite_states,
+    orbit_model_for,
+    tle_satellite_states,
+)
 
 
 @dataclass(frozen=True)
@@ -119,9 +123,11 @@ def propagate_satellites(
 
     Analytic satellites (two-body and J2 mean elements) run through the shared
     physics module, one batch per central body and orbit model, each with its
-    own phase from its elements' validity epoch. SGP4/TLE requests require TLE
-    records on every such satellite; missing records fail before any other
-    model can stand in. Unsupported propagators are fatal configuration errors.
+    own phase from its elements' validity epoch. SGP4/TLE satellites run as one
+    Earth batch through the same module, so both kinds take Earth orientation
+    from one source. SGP4/TLE requests require TLE records on every such
+    satellite; missing records fail before any other model can stand in.
+    Unsupported propagators are fatal configuration errors.
     """
     if propagator_id not in (
         "mixed",
@@ -147,7 +153,7 @@ def propagate_satellites(
                 index
             )
 
-    analytic: dict[int, tuple[EcefVec3, EcefVec3, GeoPosition, GcrsVec3, GcrsVec3]] = {}
+    computed: dict[int, tuple[EcefVec3, EcefVec3, GeoPosition, GcrsVec3, GcrsVec3]] = {}
     for (central_body, model), indices in groups.items():
         body_frame = _required_body_frame(body_frames, central_body, node_ids[indices[0]])
         phases = [
@@ -161,54 +167,44 @@ def propagate_satellites(
             phases_s=phases,
             master_sim_time_unix=sim_time_unix,
         )
-        for row, sat_index in enumerate(indices):
-            analytic[sat_index] = (
-                EcefVec3(Vec3(*map(float, states.position_fixed_km[row]))),
-                EcefVec3(Vec3(*map(float, states.velocity_fixed_km_s[row]))),
-                states.geodetic[row],
-                # Body-centered on ICRF axes, the common frame's axes: the
-                # basis rotation above put the state there.
-                GcrsVec3(*map(float, states.position_icrf_km[row])),
-                GcrsVec3(*map(float, states.velocity_icrf_km_s[row])),
+        _record_rows(computed, indices, states)
+
+    tle_indices = [i for i, pid in enumerate(sat_propagator_ids) if pid == "sgp4-tle"]
+    tles: list[tuple[str, str]] = []
+    for index in tle_indices:
+        sat = satellites[index]
+        if sat.central_body != "earth":
+            raise ValueError(
+                f"Satellite {node_ids[index]} uses central_body={sat.central_body!r}; "
+                "SGP4/TLE propagation is Earth-only"
             )
+        if sat.tle_line_1 is None or sat.tle_line_2 is None:
+            raise ValueError(
+                f"Satellite {node_ids[index]} has no TLE lines; "
+                "orbit.propagator='sgp4-tle' requires a TLE constellation"
+            )
+        tles.append((sat.tle_line_1, sat.tle_line_2))
+    if tle_indices:
+        states = tle_satellite_states(
+            physics,
+            body_frame=_required_body_frame(body_frames, "earth", node_ids[tle_indices[0]]),
+            tles=tles,
+            master_sim_time_unix=sim_time_unix,
+        )
+        _record_rows(computed, tle_indices, states)
 
     states_out: dict[str, PropagatedState] = {}
     for index, sat in enumerate(satellites):
         node_id = node_ids[index]
         central_body = sat.central_body
         sat_propagator_id = sat_propagator_ids[index]
-        body_frame = _required_body_frame(body_frames, central_body, node_id)
         body_state = body_states.get(central_body)
         if body_state is None:
             raise ValueError(
                 f"Propagation missing common-frame ephemeris state for central_body={central_body!r} "
                 f"while propagating {node_id!r}"
             )
-        if index in analytic:
-            pos_ecef, vel_ecef, geo, pos_common_axes, vel_common_axes = analytic[index]
-        else:
-            if central_body != "earth":
-                raise ValueError(
-                    f"Satellite {node_id} uses central_body={central_body!r}; "
-                    "SGP4/TLE propagation is Earth-only"
-                )
-            if sat.tle_line_1 is None or sat.tle_line_2 is None:
-                raise ValueError(
-                    f"Satellite {node_id} has no TLE lines; "
-                    "orbit.propagator='sgp4-tle' requires a TLE constellation"
-                )
-            sgp4_states = propagate_sgp4_tle_states(
-                sat.tle_line_1,
-                sat.tle_line_2,
-                epoch_unix,
-                dt,
-                body_frame=body_frame,
-            )
-            pos_ecef = sgp4_states.position_itrs
-            vel_ecef = sgp4_states.velocity_itrs
-            geo = sgp4_states.geodetic
-            pos_common_axes = sgp4_states.position_gcrs
-            vel_common_axes = sgp4_states.velocity_gcrs
+        pos_ecef, vel_ecef, geo, pos_common_axes, vel_common_axes = computed[index]
         states_out[node_id] = PropagatedState(
             node_id=node_id,
             sim_time_unix=sim_time_unix,
@@ -222,6 +218,22 @@ def propagate_satellites(
             propagator_id=sat_propagator_id,
         )
     return states_out
+
+
+def _record_rows(
+    computed: dict[int, tuple[EcefVec3, EcefVec3, GeoPosition, GcrsVec3, GcrsVec3]],
+    indices: list[int],
+    states: SatelliteStates,
+) -> None:
+    for row, sat_index in enumerate(indices):
+        computed[sat_index] = (
+            EcefVec3(Vec3(*map(float, states.position_fixed_km[row]))),
+            EcefVec3(Vec3(*map(float, states.velocity_fixed_km_s[row]))),
+            states.geodetic[row],
+            # Body-centered on ICRF axes, the common frame's axes.
+            GcrsVec3(*map(float, states.position_icrf_km[row])),
+            GcrsVec3(*map(float, states.velocity_icrf_km_s[row])),
+        )
 
 
 def _required_body_frame(

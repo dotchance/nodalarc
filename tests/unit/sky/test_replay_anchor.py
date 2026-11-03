@@ -14,7 +14,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from nodalarc.models.session import resolve_session_epoch
+from nodalarc.models.session import session_epoch_unix
 from nodalarc.scheduling_checkpoint import (
     decode_retained_replay_anchor,
     encode_retained_replay_anchor,
@@ -48,10 +48,10 @@ def _session_ctx(tmp_path):
         ground_candidate_satellites_by_gs=cfg.ground_candidate_satellites_by_gs,
         node_metadata=cfg.node_metadata,
         body_frames=cfg.body_frames,
-        body_ephemeris=cfg.body_ephemeris,
+        physics=cfg.physics,
         active_bodies=cfg.active_bodies,
     )
-    epoch_unix = resolve_session_epoch(cfg.resolved.time)
+    epoch_unix = session_epoch_unix(cfg.resolved.time)
     step_seconds = int(cfg.resolved.time.step_seconds)
     ground_ids = frozenset(ctx.gs_mbb_overlap_ticks)
     return ctx, epoch_unix, step_seconds, ground_ids

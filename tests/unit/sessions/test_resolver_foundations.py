@@ -11,6 +11,7 @@ from nodalarc.models.resolved_session import (
     OspfInstanceAreas,
     ResolvedBodyFacts,
     ResolvedEndpoint,
+    ResolvedEphemerisFile,
     ResolvedInterfaceAddress,
     ResolvedLinkCandidate,
     ResolvedLinkRule,
@@ -28,6 +29,7 @@ from nodalarc.models.resolved_session import (
 from nodalarc.models.segment_session import AreaAssignment, SessionMeta, TimeConfig
 from nodalarc.models.segments import GroundScheduling
 from nodalarc.models.terminal_physics import TerminalBoresight
+from nodalarc.physics.ephemeris_table import FILES
 from nodalarc.runtime_support import (
     FeatureCategory,
     RuntimeSupport,
@@ -240,6 +242,11 @@ def _resolved_session(**overrides) -> ResolvedSession:
             compression=1,
         ),
         "source_context": SourceContext(origin="test"),
+        "ephemeris_files": (
+            ResolvedEphemerisFile(
+                file_id="de440s", filename="de440s.bsp", sha256=FILES["de440s"].sha256
+            ),
+        ),
     }
     base.update(overrides)
     return ResolvedSession(**base)
@@ -720,11 +727,10 @@ def test_earth_multi_regime_rejects_future_kinds_and_bodies() -> None:
     assert rs.check_frame_body("sun").support_note == "future runtime capability"
 
 
-def test_earth_multi_regime_rejects_protocol_adapters_and_ephemeris() -> None:
+def test_earth_multi_regime_rejects_protocol_adapters() -> None:
     rs = RuntimeSupport.earth_multi_regime()
     assert rs.check_protocol_adapter("static_ip") is not None
     assert rs.check_protocol_adapter("bgp") is not None
-    assert rs.check_ephemeris_provider("skyfield_bsp") is not None
 
 
 def test_unsupported_feature_error_message() -> None:

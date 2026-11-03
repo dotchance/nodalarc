@@ -43,7 +43,6 @@ def validate_session_readiness(
     results.extend(_check_segment_routing_indices(resolved))
     results.extend(_check_ground_mbb_capacity(resolved))
     results.extend(_check_selection_score_scale(resolved))
-    results.extend(_check_ome_runtime_support(resolved))
     results.extend(_check_access_geometry_feasibility(resolved))
     results.extend(_check_available_node_count(resolved, available_node_count))
     return results
@@ -292,42 +291,6 @@ def _check_ground_mbb_capacity(resolved: ResolvedSession) -> list[ValidationResu
                     "or configure BBM for this ground node."
                 ),
                 field_path=f"segments.{node.segment_id}.nodes.{node.local_node_id}.scheduling",
-            )
-        )
-    return results
-
-
-def _check_ome_runtime_support(resolved: ResolvedSession) -> list[ValidationResult]:
-    """Known current OME runtime limits must be visible before deployment."""
-    results: list[ValidationResult] = []
-    active_bodies = {
-        body
-        for node in resolved.nodes
-        for body in (node.central_body, node.reference_body)
-        if body is not None
-    }
-    non_earth_bodies = sorted(body for body in active_bodies if body != "earth")
-    manifest_targets = {
-        target
-        for kernel in (resolved.ephemeris.kernels if resolved.ephemeris is not None else ())
-        for target in kernel.targets
-    }
-    missing_bodies = sorted(set(non_earth_bodies) - manifest_targets)
-    if missing_bodies:
-        results.append(
-            ValidationResult(
-                level="error",
-                code="E020",
-                message=(
-                    "Session contains non-Earth body/bodies "
-                    f"{missing_bodies}, but OME did not receive a validated catalog "
-                    "ephemeris provider for those bodies."
-                ),
-                remediation=(
-                    "Add a resolved ephemeris manifest that targets every non-Earth "
-                    "body before deploying this session."
-                ),
-                field_path="ephemeris",
             )
         )
     return results

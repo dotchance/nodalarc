@@ -32,7 +32,7 @@ from vs_api.builder_session_service import (
 )
 from vs_api.catalog_context import CatalogContext
 
-from tests.ephemeris_fixtures import KERNEL_DENIAL_STAGES, deny_kernel_access
+from tests.ephemeris_fixtures import DATA_DENIAL_STAGES, DENIED_FILE, deny_data_file_access
 
 ROOT = Path(__file__).resolve().parents[3]
 SHIPPED_ROOT = ROOT / "catalog" / "nodalarc"
@@ -527,21 +527,23 @@ def test_post_commit_preparation_issue_blocks_only_deploy(
     )
 
 
-@pytest.mark.parametrize("stage", KERNEL_DENIAL_STAGES)
-def test_post_commit_kernel_access_failure_blocks_deploy_and_keeps_the_save(
+@pytest.mark.parametrize("stage", DATA_DENIAL_STAGES)
+def test_post_commit_data_access_failure_blocks_deploy_and_keeps_the_save(
     harness: SaveHarness,
+    request: pytest.FixtureRequest,
     monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
     stage: str,
 ) -> None:
-    request = _session_request(f"post-commit-kernel-{stage}", _load(LUNA_SESSION))
-    expected: list[tuple[str, str]] = []
+    save_request = _session_request(f"post-commit-data-{stage}", _load(LUNA_SESSION))
+    denied: list[Path] = []
 
     def denying_preparer(*args: Any, **kwargs: Any):
         # The denial starts with post-commit preparation; compile ran clean.
-        expected.append(deny_kernel_access(monkeypatch, stage))
+        denied.append(deny_data_file_access(request, monkeypatch, tmp_path, stage))
         return prepare_session_files(*args, **kwargs)
 
-    result = _save(request, harness, preparer=denying_preparer)
+    result = _save(save_request, harness, preparer=denying_preparer)
 
     assert result.deploy_verdict.allowed is False
     blocker = next(
@@ -549,10 +551,10 @@ def test_post_commit_kernel_access_failure_blocks_deploy_and_keeps_the_save(
         for issue in result.deploy_verdict.blockers
         if issue.code == "builder.semantic.post_commit.session_resolution"
     )
-    ((diagnostic, injected),) = expected
-    assert diagnostic in blocker.message
+    ((host_directory,),) = [denied]
+    assert DENIED_FILE in blocker.message
     assert "PermissionError" in blocker.message
-    assert injected not in blocker.message
-    assert harness.repository.snapshot(harness.scope).read_bytes(request.target_ref) == (
+    assert str(host_directory) not in blocker.message
+    assert harness.repository.snapshot(harness.scope).read_bytes(save_request.target_ref) == (
         result.session.canonical_yaml.encode("utf-8")
     )

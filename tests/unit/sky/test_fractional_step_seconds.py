@@ -14,7 +14,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-from nodalarc.models.session import resolve_session_epoch
+from nodalarc.models.session import session_epoch_unix
 from ome.event_stream import (
     build_step_context,
     compute_step,
@@ -46,10 +46,10 @@ def leo_context():
         ground_candidate_satellites_by_gs=cfg.ground_candidate_satellites_by_gs,
         node_metadata=cfg.node_metadata,
         body_frames=cfg.body_frames,
-        body_ephemeris=cfg.body_ephemeris,
+        physics=cfg.physics,
         active_bodies=cfg.active_bodies,
     )
-    return ctx, resolve_session_epoch(cfg.resolved.time)
+    return ctx, session_epoch_unix(cfg.resolved.time)
 
 
 def _states(ctx, epoch_unix, step, step_seconds):
@@ -135,10 +135,10 @@ def test_fractional_longest_remaining_pass_lookahead_runs():
         ground_candidate_satellites_by_gs=cfg.ground_candidate_satellites_by_gs,
         node_metadata=cfg.node_metadata,
         body_frames=cfg.body_frames,
-        body_ephemeris=cfg.body_ephemeris,
+        physics=cfg.physics,
         active_bodies=cfg.active_bodies,
     )
-    epoch_unix = resolve_session_epoch(cfg.resolved.time)
+    epoch_unix = session_epoch_unix(cfg.resolved.time)
 
     isl_state: dict = {}
     gs_state: dict = {}

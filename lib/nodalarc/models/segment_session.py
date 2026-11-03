@@ -6,12 +6,10 @@ from __future__ import annotations
 
 import ipaddress
 import re
-from datetime import datetime
 from typing import Annotated, Literal, get_args
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from nodalarc.catalog_refs import BodyRef
 from nodalarc.model_validation import (
     AwareTimestamp,
     Identifier,
@@ -21,8 +19,6 @@ from nodalarc.model_validation import (
     NonNegativeInteger,
     PositiveFiniteFloat,
     PositiveInteger,
-    RelativeAssetPath,
-    Sha256Hex,
     StrictBoolean,
 )
 from nodalarc.models.link_rules import LinkRule, NodeSelector
@@ -355,37 +351,6 @@ class TimeConfig(BaseModel):
     compression: PositiveFiniteFloat
 
 
-class EphemerisKernel(BaseModel):
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-    id: Identifier
-    path: RelativeAssetPath
-    sha256: Sha256Hex | None = None
-    targets: tuple[BodyRef, ...] = Field(min_length=1)
-    frame: Identifier
-    coverage_start: AwareTimestamp | None = None
-    coverage_end: AwareTimestamp | None = None
-
-    @model_validator(mode="after")
-    def _valid_coverage_window(self) -> EphemerisKernel:
-        if (self.coverage_start is None) != (self.coverage_end is None):
-            raise ValueError("ephemeris coverage_start and coverage_end must be declared together")
-        if self.coverage_start is not None and self.coverage_end is not None:
-            start = datetime.fromisoformat(self.coverage_start.replace("Z", "+00:00"))
-            end = datetime.fromisoformat(self.coverage_end.replace("Z", "+00:00"))
-            if end <= start:
-                raise ValueError("ephemeris coverage_end must be later than coverage_start")
-        return self
-
-
-class Ephemeris(BaseModel):
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-    provider: Literal["skyfield_bsp", "spice_kernel_stack", "operator_supplied_spk"]
-    quality_tier: Identifier
-    kernels: tuple[EphemerisKernel, ...] = Field(min_length=1)
-
-
 class Dispatch(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -405,7 +370,6 @@ class SegmentSessionConfig(BaseModel):
     routing: Routing | None = None
     simulation: Simulation | None = None
     time: TimeConfig
-    ephemeris: Ephemeris | None = None
     dispatch: Dispatch | None = None
 
     @model_validator(mode="after")

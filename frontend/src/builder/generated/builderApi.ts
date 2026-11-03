@@ -417,7 +417,7 @@ export interface BuilderSectionAddress {
 }
 
 /**  */
-export type BuilderSectionPointer = "/session" | "/time" | "/simulation" | "/addressing" | "/ephemeris" | "/dispatch";
+export type BuilderSectionPointer = "/session" | "/time" | "/simulation" | "/addressing" | "/dispatch";
 
 /** One terminal role and medium that some node in a segment carries. */
 export interface BuilderSegmentCapability {
@@ -1400,7 +1400,7 @@ export interface DependencyClosureInventory {
   readonly closure_digest: Sha256Digest;
 }
 
-/** Body origin in the session common frame at ``epoch_unix``. Positions and velocities are Earth-relative GCRS-like km vectors supplied by the backend ephemeris provider. The renderer may apply a visual scale or camera-relative transform, but these numbers remain the authoritative physical frame facts used to place bodies relative to one another. */
+/** Body center in the session common frame at ``epoch_unix``. Positions and velocities are km vectors relative to Earth's center on ICRF axes, from the shared physics module. The renderer may apply a visual scale or camera-relative transform, but these numbers remain the authoritative physical facts used to place bodies relative to one another. The data files behind them are recorded once, in the resolved session. */
 export interface EphemerisBodyFrame {
   readonly body_id: SupportedSurfaceBody;
   readonly mean_radius_km: number;
@@ -1415,10 +1415,6 @@ export interface EphemerisBodyFrame {
   readonly vel_x_km_s: number;
   readonly vel_y_km_s: number;
   readonly vel_z_km_s: number;
-  readonly provider: string;
-  readonly kernel_id: string;
-  readonly quality_tier: string;
-  readonly frame: string;
 }
 
 /** Fixed geodetic position for a ground station. */

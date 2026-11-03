@@ -30,7 +30,7 @@ from tests.catalog_session_fixtures import (
 from tests.catalog_session_fixtures import (
     resolve_catalog_session as resolve_session,
 )
-from tests.ephemeris_fixtures import KERNEL_DENIAL_STAGES, deny_kernel_access
+from tests.ephemeris_fixtures import DATA_DENIAL_STAGES, DENIED_FILE, deny_data_file_access
 
 ROOT = Path(__file__).resolve().parents[3]
 SHIPPED_ROOT = ROOT / "catalog" / "nodalarc"
@@ -1376,23 +1376,27 @@ def test_resolved_segments_take_the_source_name_then_its_id(tmp_path: Path) -> N
     ]
 
 
-@pytest.mark.parametrize("stage", KERNEL_DENIAL_STAGES)
-def test_inaccessible_ephemeris_kernel_is_a_typed_resolution_failure(
+@pytest.mark.parametrize("stage", DATA_DENIAL_STAGES)
+def test_unreadable_ephemeris_data_is_a_typed_resolution_failure(
+    request: pytest.FixtureRequest,
     monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
     stage: str,
 ) -> None:
     session = yaml.safe_load(
         (SHIPPED_ROOT / "sessions" / "earth-luna-dtn.yaml").read_text(encoding="utf-8")
     )
-    diagnostic, injected = deny_kernel_access(monkeypatch, stage)
+    host_directory = deny_data_file_access(request, monkeypatch, tmp_path, stage)
 
     with pytest.raises(SessionResolutionError) as raised:
         resolver_module.resolve_session(session, catalog=shipped_read_view())
 
-    assert diagnostic in str(raised.value)
-    assert "PermissionError" in str(raised.value)
-    assert injected not in str(raised.value)
-    assert injected in str(raised.value.__cause__.__cause__)
+    message = str(raised.value)
+    assert DENIED_FILE in message
+    assert "could not be read" in message
+    assert "PermissionError" in message
+    assert str(host_directory) not in message
+    assert isinstance(raised.value.__cause__.__cause__, PermissionError)
 
 
 def _ospf_session(area_assignment: dict[str, Any]) -> dict:

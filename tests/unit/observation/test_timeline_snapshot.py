@@ -20,7 +20,7 @@ from ome.event_stream import (
 )
 
 from tests.ome_runtime_fixtures import StaticOmeAddressing
-from tests.physics_fixtures import EARTH_TEST_BODY_FRAMES, earth_elements_from_params
+from tests.physics_fixtures import EARTH_TEST_BODY_FRAMES, earth_elements_from_params, physics_for
 
 EPOCH = 1735689600.0
 
@@ -148,6 +148,7 @@ def four_node_timeline():
         ground_scheduling=_ground_scheduling(),
         ground_candidate_satellites_by_gs={"gs-equator": tuple(str(sat.node_id) for sat in sats)},
         body_frames=EARTH_TEST_BODY_FRAMES,
+        physics=physics_for("earth"),
     )
     return tuple(events)
 
@@ -206,6 +207,7 @@ class TestNoGroundStations:
             propagator_id="keplerian-circular",
             step_seconds=5,
             body_frames=EARTH_TEST_BODY_FRAMES,
+            physics=physics_for("earth"),
         )
         ticks = [e for e in events if e.event_type == "ClockTick"]
         assert len(ticks) == 3  # 0, 5, 10

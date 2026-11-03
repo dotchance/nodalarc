@@ -122,7 +122,6 @@ from nodalarc.models.segment_session import (
     AggregateOf,
     AreaAssignment,
     Dispatch,
-    Ephemeris,
     RoutingBoundary,
     RoutingDomain,
     RoutingTimers,
@@ -1257,7 +1256,6 @@ _SECTION_EDITORS: Mapping[str, _ObjectEditor] = MappingProxyType(
                 ("/time", TimeConfig, "Time"),
                 ("/simulation", Simulation, "Simulation"),
                 ("/addressing", Addressing, "Addressing"),
-                ("/ephemeris", Ephemeris, "Ephemeris"),
                 ("/dispatch", Dispatch, "Dispatch"),
             )
         },

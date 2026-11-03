@@ -194,24 +194,10 @@ def _earth_luna_world():
     return build_ome_inputs_from_resolved(resolved), resolved
 
 
-def _tle_era_body_ephemeris(resolved):
-    """The session's de440s kernel re-spanned around the ISS TLE era."""
-    from nodalarc.ephemeris_runtime import SkyfieldBspEphemeris
-    from nodalarc.ome_inputs import _runtime_ephemeris_config  # noqa: SLF001
-
-    return SkyfieldBspEphemeris.from_config(
-        _runtime_ephemeris_config(resolved),
-        required_bodies=frozenset({"earth", "luna"}),
-        epoch_unix=ISS_TLE_EPOCH_UNIX,
-        end_epoch_unix=ISS_TLE_EPOCH_UNIX + 2 * 43200.0,
-    )
-
-
 class TestCrossBodyAuthority:
     """A real SGP4 Earth endpoint against a de440s lunar endpoint."""
 
     def _states_at(self, probe_unix):
-        from nodalarc.ephemeris_runtime import body_states_at
         from nodalarc.ome_runtime import SatelliteNode, retarget_satellites
         from nodalarc.orbital import OrbitalElements
         from ome.propagation_engine import propagate_satellites
@@ -219,8 +205,7 @@ class TestCrossBodyAuthority:
         from tests.ome_runtime_fixtures import StaticOmeAddressing
 
         inputs, resolved = _earth_luna_world()
-        ephemeris = _tle_era_body_ephemeris(resolved)
-        body_states = body_states_at(ephemeris, {"earth", "luna"}, probe_unix)
+        body_states = inputs.physics.body_states({"earth", "luna"}, probe_unix)
 
         iss = SatelliteNode(
             plane=0,
@@ -398,36 +383,3 @@ class TestCrossBodyAuthority:
         iss = states["earth-iss-sat-p00s00"]
         assert _distance(iss.position_ecef_km, GOLDEN[43200.0]["itrs_pos"]) < POS_TOL_KM
         assert _distance(iss.velocity_ecef_km_s, GOLDEN[43200.0]["itrs_vel"]) < VEL_TOL_KMS
-
-
-class TestEphemerisFrameGate:
-    def test_gcrs_is_the_only_supported_kernel_frame(self):
-        from nodalarc.runtime_support import FeatureCategory, RuntimeSupport
-
-        support = RuntimeSupport.earth_luna()
-        assert support.check_ephemeris_frame("gcrs") is None
-        refusal = support.check_ephemeris_frame("icrf")
-        assert refusal is not None
-        assert refusal.category is FeatureCategory.EPHEMERIS_FRAME
-        assert refusal.value == "icrf"
-        assert "ephemeris kernel frame" in refusal.message
-
-    def test_resolver_refuses_a_false_frame_label(self):
-        from nodalarc.configuration_yaml import load_configuration_yaml
-        from nodalarc.resolve_session import resolve_session
-        from nodalarc.runtime_support import FeatureCategory, UnsupportedFeatureError
-
-        root = Path(__file__).resolve().parents[3]
-        document = load_configuration_yaml(
-            (root / "catalog/nodalarc/sessions/earth-luna-dtn.yaml").read_bytes()
-        )
-        document["ephemeris"]["kernels"][0]["frame"] = "icrf"
-        with pytest.raises(UnsupportedFeatureError) as excinfo:
-            resolve_session(document, catalog=shipped_read_view())
-        frame_refusals = [
-            f
-            for f in excinfo.value.features
-            if f.category is FeatureCategory.EPHEMERIS_FRAME and f.value == "icrf"
-        ]
-        assert len(frame_refusals) == 1
-        assert "ephemeris kernel frame" in frame_refusals[0].message

@@ -9,15 +9,16 @@ and pass them explicitly to math APIs.
 
 from __future__ import annotations
 
+import functools
 from pathlib import Path
 
 import yaml
 from nodalarc.body_frames import BodyFrame, body_runtime_support_for
-from nodalarc.ephemeris_runtime import CommonBodyState
 from nodalarc.frames import GeoPosition, Vec3
 from nodalarc.geo import geodetic_to_ecef
 from nodalarc.models.events import EphemerisBodyFrame
 from nodalarc.orbital import OrbitalElements, elements_from_params
+from nodalarc.physics import BodyState, PhysicsContext
 from nodalarc.propagator import (
     ecef_to_geodetic,
     eci_to_ecef_velocity,
@@ -70,10 +71,6 @@ def ephemeris_body_frame_from_body_frame(frame: BodyFrame) -> EphemerisBodyFrame
         vel_x_km_s=0.0,
         vel_y_km_s=0.0,
         vel_z_km_s=0.0,
-        provider="test_catalog_fixture",
-        kernel_id="test_catalog_fixture",
-        quality_tier="test",
-        frame="test_common",
     )
 
 
@@ -88,14 +85,10 @@ EARTH_LUNA_TEST_EPHEMERIS_BODY_FRAMES = {
 }
 
 
-EARTH_ORIGIN_BODY_STATE = CommonBodyState(
+EARTH_ORIGIN_BODY_STATE = BodyState(
     body_id="earth",
     position_km=Vec3(0.0, 0.0, 0.0),
     velocity_km_s=Vec3(0.0, 0.0, 0.0),
-    provider="test-fixture",
-    kernel_id="earth-origin",
-    quality_tier="analytic",
-    frame="gcrs-earth-origin",
 )
 EARTH_ORIGIN_BODY_STATES = {"earth": EARTH_ORIGIN_BODY_STATE}
 
@@ -150,3 +143,9 @@ def earth_eci_to_ecef_velocity(pos_eci, vel_eci, unix_timestamp: float):
         unix_timestamp,
         body_frame=EARTH_TEST_BODY_FRAME,
     )
+
+
+@functools.cache
+def physics_for(*bodies: str) -> PhysicsContext:
+    """The platform's real ephemeris data for the given bodies, built once."""
+    return PhysicsContext(bodies)

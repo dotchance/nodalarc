@@ -32,8 +32,6 @@ class FeatureCategory(StrEnum):
     REFERENCE_BODY = "reference_body"
     FRAME_BODY = "frame_body"
     PROTOCOL_ADAPTER = "protocol_adapter"
-    EPHEMERIS_PROVIDER = "ephemeris_provider"
-    EPHEMERIS_FRAME = "ephemeris_frame"
     TERMINAL_CAPABILITY = "terminal_capability"
     FRAME_REALIZATION = "frame_realization"
     ROUTING_PROTOCOL = "routing_protocol"
@@ -75,10 +73,6 @@ FEATURE_SUPPORT_NOTES: dict[tuple[FeatureCategory, str], str] = {
     (FeatureCategory.PROTOCOL_ADAPTER, "bgp"): "future runtime capability",
     (FeatureCategory.PROTOCOL_ADAPTER, "dtn_bundle"): "future runtime capability",
     (FeatureCategory.PROTOCOL_ADAPTER, "custom"): "future runtime capability",
-    (FeatureCategory.EPHEMERIS_PROVIDER, "skyfield_bsp"): "supported by the Earth-Luna runtime",
-    (FeatureCategory.EPHEMERIS_FRAME, "gcrs"): "supported by the Earth-Luna runtime",
-    (FeatureCategory.EPHEMERIS_PROVIDER, "spice_kernel_stack"): "future runtime capability",
-    (FeatureCategory.EPHEMERIS_PROVIDER, "operator_supplied_spk"): "future runtime capability",
     (FeatureCategory.ROUTING_PROTOCOL, "bgp"): "planned runtime capability (eBGP-first)",
     (FeatureCategory.ADDRESSING_POOL, "loopbacks"): "supported pool class",
     (FeatureCategory.ADDRESSING_POOL, "point_to_point"): (
@@ -395,8 +389,6 @@ class RuntimeSupport(BaseModel):
     supported_reference_bodies: frozenset[str]
     supported_frame_bodies: frozenset[str]
     supported_protocol_adapters: frozenset[str]
-    supported_ephemeris_providers: frozenset[str]
-    supported_ephemeris_frames: frozenset[str]
     supported_routing_protocols: frozenset[str]
     supported_routing_capabilities: frozenset[str]
     supported_addressing_pools: frozenset[str]
@@ -411,8 +403,6 @@ class RuntimeSupport(BaseModel):
     supported_workload_adapters: frozenset[str]
     supported_forwarding_classes: frozenset[str]
     supports_payloads: bool
-    # Surface bodies whose presence requires an ephemeris manifest.
-    ephemeris_required_bodies: frozenset[str]
 
     @classmethod
     def earth_multi_regime(cls) -> RuntimeSupport:
@@ -428,8 +418,6 @@ class RuntimeSupport(BaseModel):
             supported_reference_bodies=frozenset({"earth"}),
             supported_frame_bodies=frozenset({"earth"}),
             supported_protocol_adapters=frozenset(),
-            supported_ephemeris_providers=frozenset(),
-            supported_ephemeris_frames=frozenset(),
             supported_routing_protocols=_registered_routing_protocols(),
             supported_routing_capabilities=_registered_routing_capabilities(),
             supported_addressing_pools=frozenset({"loopbacks"}),
@@ -446,7 +434,6 @@ class RuntimeSupport(BaseModel):
             supported_workload_adapters=frozenset(registered_adapter_support()),
             supported_forwarding_classes=frozenset({"routed", "host"}),
             supports_payloads=True,
-            ephemeris_required_bodies=frozenset({"luna", "mars"}),
         )
 
     @classmethod
@@ -458,8 +445,6 @@ class RuntimeSupport(BaseModel):
             supported_reference_bodies=frozenset({"earth", "luna"}),
             supported_frame_bodies=frozenset({"earth", "luna"}),
             supported_protocol_adapters=frozenset({"static_ip"}),
-            supported_ephemeris_providers=frozenset({"skyfield_bsp"}),
-            supported_ephemeris_frames=frozenset({"gcrs"}),
             supported_routing_protocols=_registered_routing_protocols(),
             supported_routing_capabilities=_registered_routing_capabilities(),
             supported_addressing_pools=frozenset({"loopbacks"}),
@@ -476,7 +461,6 @@ class RuntimeSupport(BaseModel):
             supported_workload_adapters=frozenset(registered_adapter_support()),
             supported_forwarding_classes=frozenset({"routed", "host"}),
             supports_payloads=True,
-            ephemeris_required_bodies=frozenset({"luna"}),
         )
 
     def _unsupported(self, category: FeatureCategory, value: str, what: str) -> UnsupportedFeature:
@@ -530,22 +514,6 @@ class RuntimeSupport(BaseModel):
         return self._unsupported(
             FeatureCategory.PROTOCOL_ADAPTER, adapter, "protocol_boundary adapter"
         )
-
-    def check_ephemeris_frame(self, frame: str) -> UnsupportedFeature | None:
-        """The frame the installed providers actually compute.
-
-        skyfield_bsp always produces Earth-relative GCRS vectors; an
-        authored kernel frame outside this set would be copied onto GCRS
-        values as a false label.
-        """
-        if frame in self.supported_ephemeris_frames:
-            return None
-        return self._unsupported(FeatureCategory.EPHEMERIS_FRAME, frame, "ephemeris kernel frame")
-
-    def check_ephemeris_provider(self, provider: str) -> UnsupportedFeature | None:
-        if provider in self.supported_ephemeris_providers:
-            return None
-        return self._unsupported(FeatureCategory.EPHEMERIS_PROVIDER, provider, "ephemeris provider")
 
     def check_routing_protocol(self, protocol: str) -> UnsupportedFeature | None:
         if protocol in self.supported_routing_protocols:

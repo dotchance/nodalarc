@@ -77,7 +77,7 @@ def _shipped_step_context(path: Path):
         ground_candidate_satellites_by_gs=cfg.ground_candidate_satellites_by_gs,
         node_metadata=cfg.node_metadata,
         body_frames=cfg.body_frames,
-        body_ephemeris=cfg.body_ephemeris,
+        physics=cfg.physics,
         active_bodies=cfg.active_bodies,
     )
     return cfg, ctx
@@ -134,11 +134,11 @@ def test_shipped_session_computes_real_steps(path: Path) -> None:
     allocation, dwell where authored, event diffing — the full per-tick
     pipeline, no mocks.
     """
-    from nodalarc.models.session import resolve_session_epoch
+    from nodalarc.models.session import session_epoch_unix
     from ome.event_stream import compute_step
 
     cfg, ctx = _shipped_step_context(path)
-    epoch_unix = resolve_session_epoch(cfg.resolved.time)
+    epoch_unix = session_epoch_unix(cfg.resolved.time)
     step_seconds = float(cfg.resolved.time.step_seconds)
 
     isl_state: dict = {}
@@ -176,11 +176,11 @@ def test_a_make_before_break_teardown_tick_round_trips() -> None:
     """The round trip above never meets a teardown in thirty ticks. earth-leo-simple
     hands over make-before-break; run it to its first pending teardown and check
     that tick's snapshot carries the teardown and survives the round trip."""
-    from nodalarc.models.session import resolve_session_epoch
+    from nodalarc.models.session import session_epoch_unix
     from ome.event_stream import compute_step
 
     cfg, ctx = _shipped_step_context(SESSIONS_DIR / "earth-leo-simple.yaml")
-    epoch_unix = resolve_session_epoch(cfg.resolved.time)
+    epoch_unix = session_epoch_unix(cfg.resolved.time)
     step_seconds = float(cfg.resolved.time.step_seconds)
     isl_state: dict = {}
     gs_state: dict = {}

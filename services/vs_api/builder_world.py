@@ -11,7 +11,6 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from typing import Any
 
-from nodalarc.ephemeris_runtime import body_states_at, session_epoch_unix
 from nodalarc.models.builder_world import (
     BuilderLinkEndpoint,
     BuilderLinkRule,
@@ -34,6 +33,7 @@ from nodalarc.models.resolved_session import (
     ResolvedSession,
     TerminalMediumLiteral,
 )
+from nodalarc.models.session import session_epoch_unix
 from nodalarc.ome_inputs import build_ome_inputs_from_resolved, resolved_body_frames_at_epoch
 from nodalarc.resolve_session import (
     SessionResolution,
@@ -589,10 +589,10 @@ def world_from_resolution(resolution: SessionResolution) -> BuilderWorld:
             ground_candidate_satellites_by_gs=runtime.ground_candidate_satellites_by_gs,
             node_metadata=runtime.node_metadata,
             body_frames=runtime.body_frames,
-            body_ephemeris=runtime.body_ephemeris,
+            physics=runtime.physics,
             active_bodies=runtime.active_bodies,
         )
-        body_states = body_states_at(ctx.body_ephemeris, set(ctx.active_bodies), epoch_unix)
+        body_states = ctx.physics.body_states(ctx.active_bodies, epoch_unix)
         sat_states = propagate_satellites(
             satellites=ctx.satellites,
             addressing=ctx.addressing,

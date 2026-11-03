@@ -10,14 +10,17 @@ NodalArc currently supports:
 
 - Mean-element propagation for catalog constellations
 - Body-parameterized propagation for Earth and Luna sessions
-- Local Skyfield/JPL BSP ephemeris for body positions in Earth-Luna sessions
+- Body positions and orientation from JPL and NAIF data through the shared
+  physics module (`lib/nodalarc/physics/`)
 - TLE/SGP4 parsing support in the model layer, with runtime use gated by the
   resolver until the full workflow is ready
 
-Earth-only LEO/MEO/GEO sessions do not need a body ephemeris manifest. Lunar
-sessions do: the session declares a local BSP kernel, and the resolver validates
-path, checksum, coverage, provider, and required body targets before OME starts.
-Runtime network fetch of ephemeris kernels is forbidden.
+Sessions do not declare ephemeris data. The platform's ephemeris table
+(`lib/nodalarc/physics/ephemeris_table.py`) maps each supported body to its data
+files, pinned by SHA-256. The resolver selects the files for a session's bodies,
+verifies them, checks the session start against their coverage, and records
+them in the resolved session. Runtime network fetch of ephemeris data is
+forbidden.
 
 ## Frames
 
@@ -72,9 +75,9 @@ for the same session, epoch, and target time.
 
 ### Resolver
 
-`lib/nodalarc/resolve_session.py` validates whether the requested propagator,
-body, and ephemeris provider are runtime-supported. It also materializes the
-body ephemeris provider for the OME when required.
+`lib/nodalarc/resolve_session.py` validates whether the requested propagator
+and body are runtime-supported, and records the ephemeris files the session's
+bodies select. OME builds its physics context from the same bodies.
 
 ### OME
 

@@ -214,54 +214,6 @@ def _lagrange_session() -> dict[str, Any]:
     }
 
 
-def _ephemeris_session() -> dict[str, Any]:
-    document = _space_session()
-    document["ephemeris"] = {
-        "provider": "skyfield_bsp",
-        "quality_tier": "test",
-        "kernels": [
-            {
-                "id": "test-kernel",
-                "path": "configs/ephemerides/test.bsp",
-                "targets": ["nodalarc:bodies/earth.yaml"],
-                "frame": "icrf",
-            }
-        ],
-    }
-    return document
-
-
-@pytest.mark.parametrize(
-    ("coverage", "message"),
-    (
-        ({"coverage_start": "2026-01-01T00:00:00Z"}, "declared together"),
-        (
-            {
-                "coverage_start": "2026-01-01T00:00:00Z",
-                "coverage_end": "2026-01-01T00:00:00Z",
-            },
-            "later than",
-        ),
-        (
-            {
-                "coverage_start": "2026-01-02T00:00:00Z",
-                "coverage_end": "2026-01-01T00:00:00Z",
-            },
-            "later than",
-        ),
-    ),
-)
-def test_ephemeris_coverage_is_a_complete_positive_window(
-    coverage: dict[str, str],
-    message: str,
-) -> None:
-    document = _ephemeris_session()
-    document["ephemeris"]["kernels"][0].update(coverage)
-
-    with pytest.raises(ValidationError, match=message):
-        SegmentSessionConfig.model_validate(document)
-
-
 @dataclass(frozen=True)
 class ReferenceSlotCase:
     id: str
@@ -391,13 +343,6 @@ REFERENCE_SLOT_CASES = (
         SegmentSessionConfig,
         _lagrange_session,
         ("segments", 0, "frame", "lagrange", "secondary_body"),
-        "bodies",
-    ),
-    ReferenceSlotCase(
-        "session.ephemeris.targets",
-        SegmentSessionConfig,
-        _ephemeris_session,
-        ("ephemeris", "kernels", 0, "targets", 0),
         "bodies",
     ),
 )

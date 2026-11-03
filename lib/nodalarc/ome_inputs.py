@@ -16,15 +16,8 @@ from datetime import datetime
 from typing import Literal
 
 from nodalarc.body_frames import BodyFrame, body_runtime_support_for
-from nodalarc.ephemeris_runtime import (
-    SkyfieldBspEphemeris,
-    body_states_at,
-    runtime_config_from_resolved,
-    session_epoch_unix,
-)
 from nodalarc.link_metadata import LinkRuleMetadata
 from nodalarc.models.addressing import IslPlaneRelation, NeighborAssignment
-from nodalarc.models.ephemeris import EphemerisConfig
 from nodalarc.models.events import EphemerisBodyFrame
 from nodalarc.models.ground_policy import HandoverPolicySpec, SelectionPolicySpec
 from nodalarc.models.resolved_session import (
@@ -34,7 +27,7 @@ from nodalarc.models.resolved_session import (
     ResolvedSession,
     ResolvedTerminalBlock,
 )
-from nodalarc.models.session import GroundSchedulingConfig
+from nodalarc.models.session import GroundSchedulingConfig, session_epoch_unix
 from nodalarc.ome_runtime import (
     GroundStation,
     GroundStationFile,
@@ -47,6 +40,7 @@ from nodalarc.ome_runtime import (
     retarget_satellites,
 )
 from nodalarc.orbital import OrbitalElements
+from nodalarc.physics import PhysicsContext
 from nodalarc.propagator import orbital_period_for_body
 
 GroundLinkModel = Literal["geometry_only", "terminal_physics"]
@@ -79,7 +73,7 @@ class ResolvedOmeInputs:
     ground_link_model: GroundLinkModel
     active_bodies: frozenset[str]
     body_frames: dict[str, BodyFrame]
-    body_ephemeris: SkyfieldBspEphemeris | None
+    physics: PhysicsContext
 
 
 class ResolvedAddressingView:
@@ -198,12 +192,28 @@ def build_ome_inputs_from_resolved(resolved: ResolvedSession) -> ResolvedOmeInpu
         ),
         active_bodies=active_bodies,
         body_frames=body_frames,
-        body_ephemeris=_body_ephemeris_from_resolved(
-            resolved,
-            active_bodies=active_bodies,
-            period_s=period,
-        ),
+        physics=_physics_for_recorded_files(resolved, active_bodies),
     )
+
+
+def _physics_for_recorded_files(
+    resolved: ResolvedSession, active_bodies: frozenset[str]
+) -> PhysicsContext:
+    """The physics context, refused unless it loads the files the session recorded.
+
+    The resolved session names the ephemeris files its results come from. A
+    service whose image carries different data must not run the session on
+    that data while the record names other files.
+    """
+    physics = PhysicsContext(active_bodies)
+    loaded = tuple((f.file_id, f.sha256) for f in physics.selected_files)
+    recorded = tuple((f.file_id, f.sha256) for f in resolved.ephemeris_files)
+    if loaded != recorded:
+        raise ValueError(
+            f"this service's ephemeris data {loaded} differs from the files the resolved "
+            f"session recorded {recorded}"
+        )
+    return physics
 
 
 def _body_frame_from_resolved_facts(facts: ResolvedBodyFacts) -> BodyFrame:
@@ -256,38 +266,6 @@ def _active_bodies(resolved: ResolvedSession) -> frozenset[str]:
     return active
 
 
-def _body_ephemeris_from_resolved(
-    resolved: ResolvedSession,
-    *,
-    active_bodies: frozenset[str],
-    period_s: float,
-) -> SkyfieldBspEphemeris | None:
-    required_bodies = set(active_bodies)
-    if required_bodies <= {"earth"} and resolved.ephemeris is None:
-        return None
-    if resolved.ephemeris is None:
-        raise ValueError(
-            "OME requires a resolved ephemeris manifest for non-Earth body target(s): "
-            + ", ".join(sorted(required_bodies - {"earth"}))
-        )
-    if resolved.time is None:
-        raise ValueError("OME requires catalog session time to validate ephemeris coverage")
-    epoch_unix = _session_epoch_unix(resolved)
-    runtime_config = _runtime_ephemeris_config(resolved)
-    return SkyfieldBspEphemeris.from_config(
-        runtime_config,
-        required_bodies=required_bodies,
-        epoch_unix=epoch_unix,
-        end_epoch_unix=epoch_unix + period_s,
-    )
-
-
-#: A body ephemeris spans [epoch, epoch + period]. A satellite-less session has
-#: no orbital period to size it; the frames are queried only at the epoch, so any
-#: positive span that covers it works. One day is ample and cheap to load.
-_SATELLITE_LESS_EPHEMERIS_SPAN_S = 86400.0
-
-
 def resolved_body_frames_at_epoch(
     resolved: ResolvedSession, epoch_unix: float
 ) -> dict[str, EphemerisBodyFrame]:
@@ -300,12 +278,7 @@ def resolved_body_frames_at_epoch(
     satellite precondition is a runtime-readiness gate, not a grammar rule."""
     physical = _body_frames_from_resolved(resolved)
     active = _active_bodies(resolved)
-    body_ephemeris = _body_ephemeris_from_resolved(
-        resolved,
-        active_bodies=active,
-        period_s=_SATELLITE_LESS_EPHEMERIS_SPAN_S,
-    )
-    body_states = body_states_at(body_ephemeris, set(active), epoch_unix)
+    body_states = PhysicsContext(active).body_states(active, epoch_unix)
     frames: dict[str, EphemerisBodyFrame] = {}
     for body_id, state in sorted(body_states.items()):
         frame = physical[body_id]
@@ -323,24 +296,12 @@ def resolved_body_frames_at_epoch(
             vel_x_km_s=state.velocity_km_s.x,
             vel_y_km_s=state.velocity_km_s.y,
             vel_z_km_s=state.velocity_km_s.z,
-            provider=state.provider,
-            kernel_id=state.kernel_id,
-            quality_tier=state.quality_tier,
-            frame=state.frame,
         )
     return frames
 
 
 def _session_epoch_unix(resolved: ResolvedSession) -> float:
-    # Single epoch owner: nodalarc.ephemeris_runtime.session_epoch_unix.
     return session_epoch_unix(resolved.time)
-
-
-def _runtime_ephemeris_config(resolved: ResolvedSession) -> EphemerisConfig:
-    if resolved.ephemeris is None:
-        raise ValueError("resolved session has no ephemeris manifest")
-    # Single mapping owner: nodalarc.ephemeris_runtime.runtime_config_from_resolved.
-    return runtime_config_from_resolved(resolved.ephemeris)
 
 
 def _orbit_epoch_unix(raw: str, node_id: str) -> float:

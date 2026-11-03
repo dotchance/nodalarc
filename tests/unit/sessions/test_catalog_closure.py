@@ -144,18 +144,6 @@ def _session_document(
             "compression": 1,
         },
         "segments": [{"id": "space", "source": source}],
-        "ephemeris": {
-            "provider": "skyfield_bsp",
-            "quality_tier": "test",
-            "kernels": [
-                {
-                    "id": "test-kernel",
-                    "path": "configs/ephemerides/test.bsp",
-                    "targets": ["nodalarc:bodies/earth.yaml"],
-                    "frame": "gcrs",
-                }
-            ],
-        },
     }
 
 
@@ -534,7 +522,7 @@ def test_several_typed_refusals_classify_by_precedence(
     expected: CatalogClosureErrorCode,
 ) -> None:
     session = _session_document(source)
-    session["ephemeris"]["kernels"][0]["targets"] = [target]
+    session["segments"].append({"id": "second", "source": target})
 
     with pytest.raises(CatalogClosureError) as raised:
         CatalogClosureCollector.collect(

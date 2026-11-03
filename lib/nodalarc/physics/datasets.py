@@ -47,9 +47,7 @@ def production_location() -> EphemerisLocation:
         source = candidate / "configs" / "ephemerides"
         if source.is_dir():
             return EphemerisLocation(source_dir=source, converted_dir=source / "anise")
-    raise PhysicsDataError(
-        f"cannot find configs/ephemerides above {here}; the platform's ephemeris data is missing"
-    )
+    raise PhysicsDataError("the platform's ephemeris data directory configs/ephemerides is missing")
 
 
 def _anise_version() -> str:
@@ -71,12 +69,23 @@ def _file_sha256(path: Path, size: int, mtime_ns: int) -> str:
 
 def verified_path(directory: Path, filename: str, expected_sha256: str, *, label: str) -> Path:
     """The path of a data file whose content matches its pin, or a refusal."""
+    # Refusals name the data file and never the host path or the operating
+    # system's text; the chained cause keeps both for the server log.
     path = directory / filename
     try:
         stat = path.stat()
     except FileNotFoundError as exc:
         raise PhysicsDataError(f"ephemeris file {label!r} is missing: {filename}") from exc
-    actual = _file_sha256(path, stat.st_size, stat.st_mtime_ns)
+    except OSError as exc:
+        raise PhysicsDataError(
+            f"ephemeris file {label!r} could not be read: {filename} ({type(exc).__name__})"
+        ) from exc
+    try:
+        actual = _file_sha256(path, stat.st_size, stat.st_mtime_ns)
+    except OSError as exc:
+        raise PhysicsDataError(
+            f"ephemeris file {label!r} could not be read: {filename} ({type(exc).__name__})"
+        ) from exc
     if actual != expected_sha256:
         raise PhysicsDataError(
             f"ephemeris file {label!r} ({filename}) does not match its pin: "

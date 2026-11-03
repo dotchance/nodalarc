@@ -1495,7 +1495,7 @@ session with no `routing` block in which any such node's adapter cannot render
 IS-IS is refused; declare routing explicitly. When `routing` is omitted and no
 node runs a routing workload, the session runs no routing.
 
-## Simulation, time, ephemeris, and dispatch
+## Simulation, time, and dispatch
 
 ```ebnf
 CandidateLimits = MappingBegin,
@@ -1515,24 +1515,6 @@ TimeConfig = MappingBegin,
              "compression", PositiveNumber,
              MappingEnd ;
 
-BodyRefSequence = SequenceBegin, BodyRef, { BodyRef }, SequenceEnd ;
-
-EphemerisKernel = MappingBegin,
-                  "id", Identifier,
-                  "path", RelativeAssetPath,
-                  [ "sha256", ( Sha256Hex | Null ) ],
-                  "targets", BodyRefSequence,
-                  "frame", Identifier,
-                  [ "coverage_start", ( AwareTimestamp | Null ) ],
-                  [ "coverage_end", ( AwareTimestamp | Null ) ],
-                  MappingEnd ;
-
-Ephemeris = MappingBegin,
-            "provider", ( "skyfield_bsp" | "spice_kernel_stack" | "operator_supplied_spk" ),
-            "quality_tier", Identifier,
-            "kernels", SequenceBegin, EphemerisKernel, { EphemerisKernel }, SequenceEnd,
-            MappingEnd ;
-
 Dispatch = MappingBegin,
            "latency_authority", "ome",
            "max_latency_age_ticks", PositiveInteger,
@@ -1546,7 +1528,6 @@ Session = MappingBegin,
           [ "routing", ( Routing | Null ) ],
           [ "simulation", ( Simulation | Null ) ],
           "time", TimeConfig,
-          [ "ephemeris", ( Ephemeris | Null ) ],
           [ "dispatch", ( Dispatch | Null ) ],
           MappingEnd ;
 
@@ -1565,14 +1546,11 @@ requires `acknowledge_geometry_only: true`; the acknowledgement is invalid for
 `terminal_physics`. Geometry-only mode is an explicit experimental waiver, not
 an inferred fallback.
 
-Every active body other than Earth requires an ephemeris manifest target. Earth
-state is implicit in the current runtime. The current Skyfield runtime
-additionally requires exactly one local kernel, a matching SHA-256, and both
-coverage fields. `coverage_start` and `coverage_end` must be declared together,
-and `coverage_end` must be later than `coverage_start`. Resolution validates
-that `time.start_time` lies within the inclusive declared coverage; during
-playback, seek, or lookahead, the provider also rejects every requested time
-outside that coverage instead of extrapolating.
+A session does not declare ephemeris data. The platform selects the data files
+for the bodies the session uses, and the resolved session records each selected
+file with its SHA-256. Resolution refuses a session whose `time.start_time`
+lies outside the coverage of that data. Playback, seek, or lookahead outside
+the coverage fails instead of extrapolating.
 
 ## Resolver-wide constraints
 
@@ -1681,8 +1659,6 @@ construct. The production Earth-Luna profile currently supports:
 - `static_ip` routing boundaries;
 - serialized ground handovers with `handover_concurrency: one_at_a_time`, at
   most one reserved MBB overlap, and one-tick BBM acquisition;
-- `skyfield_bsp` ephemeris, with `frame: gcrs` as the only supported kernel
-  frame;
 - workload profiles at all three assignment levels, with the `frr` adapter
   and adapter-free application profiles;
 - payload mounts and node-carried Ethernet segments, on ground installations
@@ -1707,8 +1683,6 @@ runtime execution:
 - a routing-instance participant whose adapter does not render the
   instance's protocol, capabilities or BFD timers;
 - `bgp` and `dtn_bundle` routing boundaries;
-- `spice_kernel_stack` and `operator_supplied_spk` ephemeris providers;
-- ephemeris kernel frames other than `gcrs`;
 - bodies outside the supported Earth-Luna profile;
 - workload adapters other than `frr`;
 - SGP4 and analytic propagators mixed under one central body, until they

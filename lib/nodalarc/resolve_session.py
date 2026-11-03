@@ -24,12 +24,6 @@ from nodalarc.body_frames import BodyFrame, body_runtime_support_for
 from nodalarc.catalog_closure import CatalogReadDocument, CatalogReadView, load_catalog_object
 from nodalarc.catalog_refs import CatalogRef
 from nodalarc.configuration_yaml import load_configuration_yaml
-from nodalarc.ephemeris_runtime import (
-    EphemerisValidationError,
-    runtime_config_from_resolved,
-    session_epoch_unix,
-    validate_ephemeris_manifest,
-)
 from nodalarc.link_rule_candidates import generate_declared_link_candidates
 from nodalarc.model_validation import ADDRESS_FAMILIES, AddressFamily
 from nodalarc.models.catalog import EnvValueFrom, Profile, ResolvedEnvEntry
@@ -40,8 +34,7 @@ from nodalarc.models.resolved_session import (
     ResolutionSubjectKind,
     ResolvedBodyFacts,
     ResolvedEndpoint,
-    ResolvedEphemeris,
-    ResolvedEphemerisKernel,
+    ResolvedEphemerisFile,
     ResolvedEthernetSegment,
     ResolvedHostAttachment,
     ResolvedInterfaceAddress,
@@ -71,7 +64,9 @@ from nodalarc.models.segment_session import (
     SegmentSessionConfig,
 )
 from nodalarc.models.segments import GroundOverride, GroundSegment, SegmentClock, SpaceSegment
+from nodalarc.models.session import session_epoch_unix
 from nodalarc.models.terminal_physics import SatGroundTerminalBoresight, TerminalBoresight
+from nodalarc.physics import PhysicsContext, PhysicsDataError
 from nodalarc.propagator import propagate_sgp4_tle
 from nodalarc.runtime_naming import validate_runtime_node_id
 from nodalarc.runtime_support import (
@@ -226,7 +221,7 @@ def resolve_session_with_assets(
     _check_ground_scheduling_support(resolved_nodes, support)
     body_facts = _collect_body_facts(runtime_nodes)
     _check_frame_body_support(body_facts, support)
-    ephemeris = _resolve_ephemeris(cfg, resolution_catalog, resolved_nodes)
+    ephemeris_files = _resolve_ephemeris_files(cfg, resolved_nodes)
     link_rules = tuple(_resolve_link_rule(rule, runtime_nodes) for rule in cfg.link_rules or ())
     _validate_routing_boundaries(cfg, routing_domains, link_rules)
     sid_blocks = tuple(_allocate_sid_blocks(routing_domains))
@@ -246,7 +241,7 @@ def resolve_session_with_assets(
         routing=cfg.routing,
         dispatch=dispatch,
         addressing=cfg.addressing,
-        ephemeris=ephemeris,
+        ephemeris_files=ephemeris_files,
         time=cfg.time,
         source_context=context,
     )
@@ -274,7 +269,7 @@ def resolve_session_with_assets(
         routing=base_resolved.routing,
         dispatch=dispatch,
         addressing=base_resolved.addressing,
-        ephemeris=base_resolved.ephemeris,
+        ephemeris_files=base_resolved.ephemeris_files,
         time=base_resolved.time,
         source_context=base_resolved.source_context,
     )
@@ -357,12 +352,6 @@ def _check_runtime_support(
             kind = "lagrange_point"
         if feature := support.check_segment_kind(kind):
             unsupported.append(feature)
-    if cfg.ephemeris is not None:
-        if feature := support.check_ephemeris_provider(cfg.ephemeris.provider):
-            unsupported.append(feature)
-        for kernel in cfg.ephemeris.kernels:
-            if feature := support.check_ephemeris_frame(kernel.frame):
-                unsupported.append(feature)
     for domain in cfg.routing.domains if cfg.routing is not None else ():
         if feature := support.check_routing_protocol(domain.protocol):
             unsupported.append(feature)
@@ -489,72 +478,29 @@ def _collect_body_facts(runtime_nodes: tuple[_RuntimeNode, ...]) -> tuple[Resolv
     return tuple(by_id[body_id] for body_id in sorted(by_id))
 
 
-def _resolve_ephemeris(
+def _resolve_ephemeris_files(
     cfg: SegmentSessionConfig,
-    catalog: _ResolutionCatalog,
     nodes: tuple[ResolvedNode, ...],
-) -> ResolvedEphemeris | None:
+) -> tuple[ResolvedEphemerisFile, ...]:
+    """The platform ephemeris files the session's bodies select, verified.
+
+    Building the physics context checks every selected file against its
+    pin and the converted datasets against their manifest, and the session
+    epoch is checked against each body's data coverage. A session the data
+    cannot support fails here, at upload or deploy, and not in a running pod.
+    """
     active_bodies = _active_bodies(nodes)
-    if cfg.ephemeris is None:
-        missing = sorted(active_bodies - {"earth"})
-        if missing:
-            raise SessionResolutionError(
-                "non-Earth session declares no ephemeris manifest for active body target(s): "
-                + ", ".join(missing)
-            )
-        return None
-
-    kernels: list[ResolvedEphemerisKernel] = []
-    manifest_targets: set[str] = {"earth"}
-    for kernel in cfg.ephemeris.kernels:
-        targets = tuple(
-            sorted({_ephemeris_target_body_id(target, catalog) for target in kernel.targets})
-        )
-        manifest_targets.update(targets)
-        kernels.append(
-            ResolvedEphemerisKernel(
-                id=kernel.id,
-                path=kernel.path,
-                sha256=kernel.sha256,
-                targets=targets,
-                frame=kernel.frame,
-                coverage_start=kernel.coverage_start,
-                coverage_end=kernel.coverage_end,
-            )
-        )
-
-    missing_targets = sorted(active_bodies - manifest_targets)
-    if missing_targets:
-        raise SessionResolutionError(
-            "ephemeris manifest is missing required body target(s): " + ", ".join(missing_targets)
-        )
-
-    resolved_ephemeris = ResolvedEphemeris(
-        provider=cfg.ephemeris.provider,
-        quality_tier=cfg.ephemeris.quality_tier,
-        kernels=tuple(kernels),
-    )
-
-    # Manifest runtime validation happens at resolve time, not service
-    # startup: kernel existence, sha256, declared coverage vs the session
-    # epoch, and the single-kernel limit. A session whose ephemeris cannot
-    # support it must fail at upload/deploy, not kill a pod later.
     try:
+        context = PhysicsContext(active_bodies)
         epoch_unix = session_epoch_unix(cfg.time)
-        validate_ephemeris_manifest(
-            runtime_config_from_resolved(resolved_ephemeris),
-            required_bodies=active_bodies - {"earth"},
-            epoch_unix=epoch_unix,
-        )
-    except EphemerisValidationError as exc:
-        raise SessionResolutionError(f"ephemeris manifest validation failed: {exc}") from exc
-
-    return resolved_ephemeris
-
-
-def _ephemeris_target_body_id(target: Any, catalog: _ResolutionCatalog) -> str:
-    body = _load_expected(target, catalog, "body")
-    return str(body["id"])
+        for body in sorted(active_bodies):
+            context.require_coverage(body, epoch_unix)
+    except PhysicsDataError as exc:
+        raise SessionResolutionError(f"ephemeris data cannot support this session: {exc}") from exc
+    return tuple(
+        ResolvedEphemerisFile(file_id=f.file_id, filename=f.filename, sha256=f.sha256)
+        for f in context.selected_files
+    )
 
 
 @dataclass

@@ -39,6 +39,7 @@ from tests.physics_fixtures import (
     EARTH_TEST_BODY_FRAME,
     LUNA_TEST_BODY_FRAME,
     earth_elements_from_params,
+    physics_for,
 )
 
 TEST_BODY_FRAMES = {"earth": EARTH_TEST_BODY_FRAME, "luna": LUNA_TEST_BODY_FRAME}
@@ -281,6 +282,7 @@ def test_compute_step_schedules_only_pairs_that_pass_applied_ground_physics():
         ground_link_model="terminal_physics",
         ground_candidate_satellites_by_gs={"gs-overhead": (SAT_ID,)},
         body_frames=TEST_BODY_FRAMES,
+        physics=physics_for("earth", "luna"),
     )
 
     pair = (min("gs-overhead", SAT_ID), max("gs-overhead", SAT_ID))

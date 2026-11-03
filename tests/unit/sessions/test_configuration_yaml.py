@@ -13,14 +13,14 @@ from nodalarc.catalog_closure import (
     CatalogClosureErrorCode,
 )
 from nodalarc.configuration_yaml import load_configuration_yaml
+from nodalarc.model_validation import RelativeAssetPath
 from nodalarc.models.segment_session import (
-    EphemerisKernel,
     SegmentSessionConfig,
     TimeConfig,
 )
 from nodalarc.resolve_session import SessionResolutionError, resolve_session
 from nodalarc.runtime_support import FeatureCategory, UnsupportedFeatureError
-from pydantic import ValidationError
+from pydantic import TypeAdapter, ValidationError
 
 from tests.catalog_session_fixtures import shipped_read_view
 
@@ -99,14 +99,7 @@ def test_persisted_session_requires_explicit_time() -> None:
 )
 def test_asset_paths_reject_noncanonical_or_uncontained_forms(path: str) -> None:
     with pytest.raises(ValidationError):
-        EphemerisKernel.model_validate(
-            {
-                "id": "kernel",
-                "path": path,
-                "targets": ["nodalarc:bodies/earth.yaml"],
-                "frame": "gcrs",
-            }
-        )
+        TypeAdapter(RelativeAssetPath).validate_python(path)
 
 
 def test_access_candidate_requires_complete_explicit_ground_scheduling() -> None:

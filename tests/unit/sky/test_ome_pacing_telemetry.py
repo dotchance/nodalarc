@@ -117,6 +117,7 @@ class TestComputeStepAttribution:
             ground_candidate_satellites_by_gs=candidates,
             ground_link_model=session.ground_link_model,
             body_frames=session.body_frames,
+            physics=session.physics,
         )
         result = compute_step(ctx, 1704067200.0, 0, int(session.time.step_seconds), 0.0, {}, {})
 

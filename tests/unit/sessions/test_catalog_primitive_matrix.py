@@ -65,25 +65,6 @@ CONSTELLATION_GROUND_SETS = {
     "luna-nrho-relay-1": "nodalarc:site-sets/luna/luna-surface-sites.yaml",
 }
 
-LUNA_EPHEMERIS = {
-    "provider": "skyfield_bsp",
-    "quality_tier": "de440s",
-    "kernels": [
-        {
-            "id": "de440s",
-            "path": "configs/ephemerides/de440s.bsp",
-            "sha256": "c1c7feeab882263fc493a9d5a5b2ddd71b54826cdf65d8d17a76126b260a49f2",
-            "coverage_start": "1849-12-25T00:00:00Z",
-            "coverage_end": "2150-01-21T00:00:00Z",
-            "targets": [
-                "nodalarc:bodies/earth.yaml",
-                "nodalarc:bodies/luna.yaml",
-            ],
-            "frame": "gcrs",
-        }
-    ],
-}
-
 
 def _catalog_token(path: Path) -> str:
     return "nodalarc:" + str(path.relative_to(CATALOG))
@@ -140,8 +121,6 @@ def test_every_constellation_composes_into_a_session(path: Path) -> None:
         ground_stations=CONSTELLATION_GROUND_SETS[path.stem],
     )
     _select_exact_access_mount(raw, "access_s" if body == "luna" else "access_ka")
-    if body != "earth":
-        raw["ephemeris"] = LUNA_EPHEMERIS
     constellation = _load(path)["constellation"]
     node_count = int(constellation["planes"]["count"]) * int(constellation["slots_per_plane"])
     if node_count == 1:
@@ -236,8 +215,6 @@ def test_every_site_places_into_a_session(path: Path) -> None:
     raw.create_catalog(minimal_ref, minimal)
     raw["segments"][0]["source"] = minimal_ref
     _select_exact_access_mount(raw, "access_s" if body == "luna" else "access_ka")
-    if body != "earth":
-        raw["ephemeris"] = LUNA_EPHEMERIS
 
     try:
         resolved = _resolve(raw, "run-test-0051")

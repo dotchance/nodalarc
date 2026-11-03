@@ -57,6 +57,7 @@ class TestComputeStepMatchesWindow:
             step_seconds=step_seconds,
             ground_link_model=session.ground_link_model,
             body_frames=session.body_frames,
+            physics=session.physics,
         )
         window_events = window.events
 
@@ -71,6 +72,7 @@ class TestComputeStepMatchesWindow:
             ground_candidate_satellites_by_gs=ground_candidates,
             ground_link_model=session.ground_link_model,
             body_frames=session.body_frames,
+            physics=session.physics,
         )
         isl_state: dict = {}
         gs_state: dict = {}
@@ -117,6 +119,7 @@ class TestComputeStepMatchesWindow:
             step_seconds=step_seconds,
             ground_link_model=session.ground_link_model,
             body_frames=session.body_frames,
+            physics=session.physics,
         )
 
         ctx = build_step_context(
@@ -129,6 +132,7 @@ class TestComputeStepMatchesWindow:
             ground_candidate_satellites_by_gs=ground_candidates,
             ground_link_model=session.ground_link_model,
             body_frames=session.body_frames,
+            physics=session.physics,
         )
         isl_state: dict = {}
         gs_state: dict = {}
@@ -175,6 +179,7 @@ class TestComputeStepMatchesWindow:
             ground_candidate_satellites_by_gs=ground_candidates,
             ground_link_model=session.ground_link_model,
             body_frames=session.body_frames,
+            physics=session.physics,
         )
 
         window = precompute_timeline_window_from_context(
@@ -217,6 +222,7 @@ class TestComputeStepMatchesWindow:
                 ground_candidate_satellites_by_gs=ground_candidates,
                 ground_link_model=session.ground_link_model,
                 body_frames=session.body_frames,
+                physics=session.physics,
             )
 
     def test_step_result_snapshot_source_survives_zero_event_delta(self):
@@ -242,6 +248,7 @@ class TestComputeStepMatchesWindow:
             ground_candidate_satellites_by_gs=ground_candidates,
             ground_link_model=session.ground_link_model,
             body_frames=session.body_frames,
+            physics=session.physics,
         )
         isl_state: dict = {}
         gs_state: dict = {}
@@ -296,6 +303,7 @@ class TestComputeStepMatchesWindow:
             ground_candidate_satellites_by_gs=ground_candidates,
             ground_link_model=session.ground_link_model,
             body_frames=session.body_frames,
+            physics=session.physics,
         )
 
         result = compute_step(ctx, epoch_unix, 0, step_seconds, 0.0, {}, {})
@@ -338,6 +346,7 @@ class TestComputeStepMatchesWindow:
             ground_candidate_satellites_by_gs=ground_candidates,
             ground_link_model=session.ground_link_model,
             body_frames=session.body_frames,
+            physics=session.physics,
         )
         result = compute_step(ctx, epoch_unix, 0, step_seconds, 0.0, {}, {})
         allocation = result.ground_allocation

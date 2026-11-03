@@ -4,7 +4,6 @@
 
 from __future__ import annotations
 
-import hashlib
 import math
 from pathlib import Path
 
@@ -44,17 +43,7 @@ def _resolved(tmp_path: Path, raw: dict | None = None):
     )
 
 
-def _sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as fh:
-        for chunk in iter(lambda: fh.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
-
-
-def _lunar_catalog_session(
-    *, include_ephemeris: bool = True, include_sha: bool = True
-) -> CatalogSessionFixture:
+def _lunar_catalog_session() -> CatalogSessionFixture:
     raw = build_catalog_session_fixture(
         name="ome-lunar-ephemeris",
         constellation={"planes": {"count": 1, "sats_per_plane": 2}},
@@ -76,23 +65,6 @@ def _lunar_catalog_session(
             "alt_m": 0.0,
         }
         raw.write_catalog(site_ref, site_document)
-    if include_ephemeris:
-        kernel_path = Path("configs/ephemerides/de440s.bsp")
-        kernel = {
-            "id": "de440s",
-            "path": str(kernel_path),
-            "targets": ["nodalarc:bodies/luna.yaml"],
-            "frame": "gcrs",
-            "coverage_start": "2026-06-01T00:00:00Z",
-            "coverage_end": "2026-07-01T00:00:00Z",
-        }
-        if include_sha:
-            kernel["sha256"] = _sha256(kernel_path)
-        raw["ephemeris"] = {
-            "provider": "skyfield_bsp",
-            "quality_tier": "de440s",
-            "kernels": [kernel],
-        }
     return raw
 
 
@@ -168,7 +140,7 @@ def _step_context_from_bundle(cfg):
         ground_candidate_satellites_by_gs=cfg.ground_candidate_satellites_by_gs,
         node_metadata=cfg.node_metadata,
         body_frames=cfg.body_frames,
-        body_ephemeris=cfg.body_ephemeris,
+        physics=cfg.physics,
         active_bodies=cfg.active_bodies,
     )
 
@@ -321,7 +293,7 @@ def test_ome_inputs_ignore_ground_nodes_without_declared_access_candidates() -> 
     assert inactive_ground_node in runtime.node_metadata
 
 
-def test_ome_materializes_non_earth_ephemeris_provider_from_resolved_manifest(
+def test_ome_places_a_non_earth_body_from_the_platform_ephemeris(
     tmp_path: Path,
 ) -> None:
     resolved = _resolved(tmp_path, _lunar_catalog_session())
@@ -329,31 +301,12 @@ def test_ome_materializes_non_earth_ephemeris_provider_from_resolved_manifest(
     runtime = build_ome_inputs_from_resolved(resolved)
 
     assert runtime.active_bodies == frozenset({"luna"})
-    assert runtime.body_ephemeris is not None
-    state = runtime.body_ephemeris.body_state("luna", 1780876800.0)
+    state = runtime.physics.body_state("luna", 1780876800.0)
     assert state.body_id == "luna"
     assert (
         math.sqrt(state.position_km.x**2 + state.position_km.y**2 + state.position_km.z**2)
         > 300_000
     )
-
-
-def test_resolver_rejects_non_earth_ephemeris_manifest_without_checksum(tmp_path: Path) -> None:
-    # Manifest runtime validation is a resolve-time gate: a sha-less manifest
-    # must fail at upload/deploy, never reach OME input construction.
-    del tmp_path
-    raw = _lunar_catalog_session(include_sha=False)
-
-    with pytest.raises(SessionResolutionError, match="requires sha256"):
-        resolve_catalog_session(raw)
-
-
-def test_resolver_rejects_non_earth_session_without_ephemeris_manifest(tmp_path: Path) -> None:
-    del tmp_path
-    raw = _lunar_catalog_session(include_ephemeris=False)
-
-    with pytest.raises(SessionResolutionError, match="declares no ephemeris manifest"):
-        resolve_catalog_session(raw)
 
 
 def test_ome_addressing_rejects_ambiguous_global_plane_slot_lookup(tmp_path: Path) -> None:
@@ -458,3 +411,18 @@ def test_rule_endpoint_elevation_mask_is_enforced_not_just_displayed(tmp_path: P
     assert runtime.gs_file is not None
     station = next(s for s in runtime.gs_file.stations if s.name == gs_id)
     assert station.min_elevation_deg == masks[gs_id]
+
+
+def test_ome_refuses_data_that_differs_from_the_recorded_files(tmp_path: Path) -> None:
+    resolved = _resolved(tmp_path, _lunar_catalog_session())
+    altered = resolved.model_copy(
+        update={
+            "ephemeris_files": (
+                resolved.ephemeris_files[0].model_copy(update={"sha256": "0" * 64}),
+                *resolved.ephemeris_files[1:],
+            )
+        }
+    )
+
+    with pytest.raises(ValueError, match="differs from the files the resolved session recorded"):
+        build_ome_inputs_from_resolved(altered)

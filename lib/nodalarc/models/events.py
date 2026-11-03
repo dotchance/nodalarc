@@ -430,12 +430,13 @@ EphemerisNode = Annotated[
 
 
 class EphemerisBodyFrame(BaseModel):
-    """Body origin in the session common frame at ``epoch_unix``.
+    """Body center in the session common frame at ``epoch_unix``.
 
-    Positions and velocities are Earth-relative GCRS-like km vectors supplied by
-    the backend ephemeris provider. The renderer may apply a visual scale or
-    camera-relative transform, but these numbers remain the authoritative
-    physical frame facts used to place bodies relative to one another.
+    Positions and velocities are km vectors relative to Earth's center on ICRF
+    axes, from the shared physics module. The renderer may apply a visual scale
+    or camera-relative transform, but these numbers remain the authoritative
+    physical facts used to place bodies relative to one another. The data
+    files behind them are recorded once, in the resolved session.
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
@@ -453,10 +454,6 @@ class EphemerisBodyFrame(BaseModel):
     vel_x_km_s: float
     vel_y_km_s: float
     vel_z_km_s: float
-    provider: str
-    kernel_id: str
-    quality_tier: str
-    frame: str
 
 
 class SessionEphemeris(BaseModel):

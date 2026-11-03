@@ -459,28 +459,19 @@ class ResolvedRoutingDomain(BaseModel):
         raise ValueError(f"unsupported area assignment strategy {assignment.strategy!r}")
 
 
-class ResolvedEphemerisKernel(BaseModel):
-    """One ephemeris kernel after target references resolve to body IDs."""
+class ResolvedEphemerisFile(BaseModel):
+    """One platform ephemeris data file selected by the session's bodies.
+
+    The platform chooses ephemeris data from the bodies a session uses; the
+    session does not declare it. This record ties every result to the data
+    that produced it.
+    """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    id: NonEmptyReference
-    path: NonEmptyReference
-    sha256: NonEmptyReference | None = None
-    targets: tuple[FrameBodyName, ...] = Field(min_length=1)
-    frame: NonEmptyReference
-    coverage_start: NonEmptyReference | None = None
-    coverage_end: NonEmptyReference | None = None
-
-
-class ResolvedEphemeris(BaseModel):
-    """Resolved ephemeris manifest carried to runtime physics consumers."""
-
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-    provider: Literal["skyfield_bsp", "spice_kernel_stack", "operator_supplied_spk"]
-    quality_tier: NonEmptyReference
-    kernels: tuple[ResolvedEphemerisKernel, ...] = Field(min_length=1)
+    file_id: NonEmptyReference
+    filename: NonEmptyReference
+    sha256: NonEmptyReference
 
 
 class ResolvedBodyFacts(BaseModel):
@@ -837,7 +828,7 @@ class ResolvedSession(BaseModel):
     routing: Routing | None = None
     dispatch: Dispatch | None = None
     addressing: Addressing | None = None
-    ephemeris: ResolvedEphemeris | None = None
+    ephemeris_files: tuple[ResolvedEphemerisFile, ...] = Field(min_length=1)
     time: TimeConfig
     source_context: SourceContext
 

@@ -103,7 +103,7 @@ def test_component_and_partial_session_examples_are_structurally_valid() -> None
     link_rule = _yaml_block("## Link rules and selectors")["link_rules"][0]
     addressing = _yaml_block("## Address pools")["addressing"]
     routing = _yaml_block("## Routing")["routing"]
-    time_config = _yaml_block("## Time and ephemeris")["time"]
+    time_config = _yaml_block("## Time")["time"]
 
     assert NodeDocument.model_validate(node_document).node.id == "starlink-gateway"
     assert SiteDocument.model_validate(site_document).site.id == "earth-us-hawthorne"

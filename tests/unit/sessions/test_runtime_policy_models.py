@@ -7,7 +7,7 @@ from nodalarc.models.segment_session import TimeConfig
 from nodalarc.models.session import (
     GroundSchedulingConfig,
     TrafficFlowConfig,
-    resolve_session_epoch,
+    session_epoch_unix,
 )
 from pydantic import ValidationError
 
@@ -92,11 +92,11 @@ def test_scenario_traffic_flow_rejects_invalid_intent(values) -> None:
         TrafficFlowConfig.model_validate(values)
 
 
-def test_resolve_session_epoch_uses_canonical_time_config() -> None:
+def test_session_epoch_unix_uses_canonical_time_config() -> None:
     config = TimeConfig(
         start_time="2020-01-01T00:00:00+00:00",
         step_seconds=1,
         compression=1,
     )
 
-    assert resolve_session_epoch(config) == datetime(2020, 1, 1, tzinfo=UTC).timestamp()
+    assert session_epoch_unix(config) == datetime(2020, 1, 1, tzinfo=UTC).timestamp()

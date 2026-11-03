@@ -34,10 +34,11 @@ from nodalarc.models.ome_lifecycle import (
     OmeOpsCode,
 )
 from nodalarc.models.resolved_session import ResolvedSession
-from nodalarc.models.session import GroundSchedulingConfig, resolve_session_epoch
+from nodalarc.models.session import GroundSchedulingConfig, session_epoch_unix
 from nodalarc.nats_channels import MAX_TIME_ACCEL, MIN_TIME_ACCEL
 from nodalarc.ome_inputs import ResolvedAddressingView, build_ome_inputs_from_resolved
 from nodalarc.ome_runtime import GroundStationFile, SatelliteNode
+from nodalarc.physics import PhysicsContext
 from nodalarc.prepared_tree import load_prepared_tree_session_resolution
 from nodalarc.resolve_session import SessionResolution
 from nodalarc.runtime_service_config import (
@@ -81,7 +82,7 @@ class _SessionBundle(NamedTuple):
     ground_scheduling: GroundSchedulingConfig
     ground_link_model: str
     node_metadata: dict[str, dict[str, object]]
-    body_ephemeris: object | None
+    physics: PhysicsContext
     body_frames: dict
     active_bodies: frozenset[str]
 
@@ -178,7 +179,7 @@ def _session_bundle_from_resolution(resolution: SessionResolution) -> _SessionBu
         ground_scheduling=runtime.ground_scheduling,
         ground_link_model=runtime.ground_link_model,
         node_metadata=runtime.node_metadata,
-        body_ephemeris=runtime.body_ephemeris,
+        physics=runtime.physics,
         body_frames=runtime.body_frames,
         active_bodies=runtime.active_bodies,
     )
@@ -362,7 +363,7 @@ def run(
         installed_shipped_root=installed_shipped_root,
     )
     _warn_geometry_only_ground_links(cfg.ground_link_model)
-    epoch_unix = resolve_session_epoch(cfg.resolved.time)
+    epoch_unix = session_epoch_unix(cfg.resolved.time)
     _validate_sgp4_tle_inputs(cfg)
     effective_ground_scheduling = _effective_ground_scheduling_for_runtime(cfg.ground_scheduling)
     events = precompute_timeline(
@@ -380,7 +381,7 @@ def run(
         ground_link_model=cfg.ground_link_model,
         ground_candidate_satellites_by_gs=cfg.ground_candidate_satellites_by_gs,
         body_frames=cfg.body_frames,
-        body_ephemeris=cfg.body_ephemeris,
+        physics=cfg.physics,
         active_bodies=cfg.active_bodies,
     )
 
@@ -693,7 +694,7 @@ def _run_pacing(
     _warn_geometry_only_ground_links(cfg.ground_link_model)
     session = cfg.resolved
     session_id = cfg.session_id
-    epoch_unix = resolve_session_epoch(session.time)
+    epoch_unix = session_epoch_unix(session.time)
     _validate_sgp4_tle_inputs(cfg)
     compression = session.time.compression if session.time.compression else 1
 
@@ -930,7 +931,7 @@ def _run_pacing(
         ground_candidate_satellites_by_gs=cfg.ground_candidate_satellites_by_gs,
         node_metadata=cfg.node_metadata,
         body_frames=cfg.body_frames,
-        body_ephemeris=cfg.body_ephemeris,
+        physics=cfg.physics,
         active_bodies=cfg.active_bodies,
     )
 

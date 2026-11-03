@@ -54,7 +54,7 @@ def test_projection_covers_approved_resolved_semantics(resolved) -> None:
         "simulation",
         "dispatch",
         "time",
-        "ephemeris",
+        "ephemeris_files",
     }
     assert len(projection["nodes"]) == len(resolved.nodes)
     assert len(projection["links"]["candidates"]) == len(resolved.link_candidates)
@@ -70,7 +70,7 @@ def test_projection_covers_approved_resolved_semantics(resolved) -> None:
     assert projection["physics"]["orbits"]
     assert projection["physics"]["surface_positions"]
     assert projection["time"] == resolved.time.model_dump(mode="json")
-    assert projection["ephemeris"]["kernels"]
+    assert projection["ephemeris_files"]
     access_candidate = next(
         candidate
         for candidate in projection["links"]["candidates"]
@@ -139,13 +139,9 @@ def test_projection_excludes_source_run_catalog_and_presentation_metadata(resolv
         )
         for body in resolved.bodies
     )
-    changed_ephemeris = resolved.ephemeris.model_copy(
-        update={
-            "kernels": tuple(
-                kernel.model_copy(update={"id": f"renamed-{index}"})
-                for index, kernel in enumerate(resolved.ephemeris.kernels)
-            )
-        }
+    changed_ephemeris_files = tuple(
+        entry.model_copy(update={"filename": f"renamed-{index}.bin"})
+        for index, entry in enumerate(resolved.ephemeris_files)
     )
     changed = resolved.model_copy(
         update={
@@ -156,7 +152,7 @@ def test_projection_excludes_source_run_catalog_and_presentation_metadata(resolv
             ),
             "nodes": tuple(changed_nodes),
             "bodies": changed_bodies,
-            "ephemeris": changed_ephemeris,
+            "ephemeris_files": changed_ephemeris_files,
             "source_context": SourceContext(
                 origin="other.consumer",
                 session_path="/different/source/session.yaml",
@@ -245,14 +241,6 @@ def test_projection_normalizes_incidental_collection_and_endpoint_order(resolved
             )
         }
     )
-    ephemeris = resolved.ephemeris.model_copy(
-        update={
-            "kernels": tuple(
-                kernel.model_copy(update={"targets": tuple(reversed(kernel.targets))})
-                for kernel in reversed(resolved.ephemeris.kernels)
-            )
-        }
-    )
     reordered = resolved.model_copy(
         update={
             "nodes": nodes,
@@ -262,7 +250,6 @@ def test_projection_normalizes_incidental_collection_and_endpoint_order(resolved
             "link_candidates": candidates,
             "sid_blocks": sid_blocks,
             "routing": routing,
-            "ephemeris": ephemeris,
         }
     )
 
@@ -378,16 +365,11 @@ def test_projection_digest_changes_for_runtime_semantic_changes(resolved) -> Non
             "time": resolved.time.model_copy(update={"compression": resolved.time.compression + 1})
         }
     )
-    ephemeris_kernel = resolved.ephemeris.kernels[0]
     ephemeris_change = resolved.model_copy(
         update={
-            "ephemeris": resolved.ephemeris.model_copy(
-                update={
-                    "kernels": (
-                        ephemeris_kernel.model_copy(update={"sha256": "0" * 64}),
-                        *resolved.ephemeris.kernels[1:],
-                    )
-                }
+            "ephemeris_files": (
+                resolved.ephemeris_files[0].model_copy(update={"sha256": "0" * 64}),
+                *resolved.ephemeris_files[1:],
             )
         }
     )

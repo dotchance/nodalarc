@@ -15,7 +15,6 @@ from dataclasses import dataclass
 
 import numpy as np
 from nodalarc.body_frames import BodyFrame
-from nodalarc.ephemeris_runtime import CommonBodyState
 from nodalarc.frames import CommonVec3, EcefVec3, EciVec3, GcrsVec3, Vec3
 from nodalarc.models.events import NodePosition
 from nodalarc.ome_runtime import (
@@ -26,7 +25,7 @@ from nodalarc.ome_runtime import (
     satellite_node_id,
     satellite_propagator_id,
 )
-from nodalarc.physics import ElementsBatch, orbit_states
+from nodalarc.physics import BodyState, ElementsBatch, orbit_states
 from nodalarc.propagation_kernel import (
     body_rotation_angle_batch,
     eci_to_body_fixed_batch,
@@ -128,7 +127,7 @@ def propagate_satellites(
     dt: float,
     propagator_id: SessionPropagatorId,
     body_frames: Mapping[str, BodyFrame],
-    body_states: Mapping[str, CommonBodyState],
+    body_states: Mapping[str, BodyState],
 ) -> dict[str, PropagatedState]:
     """Propagate all satellites for one tick.
 

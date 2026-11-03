@@ -15,6 +15,18 @@ FIXTURES_DIR = Path(__file__).parent / "fixtures"
 
 
 @pytest.fixture(autouse=True, scope="session")
+def _converted_ephemeris_datasets():
+    """Convert the platform's frame kernels for ANISE once per test run.
+
+    Images convert at build time; a checkout converts here, into the same
+    ignored directory, so every test resolves sessions against the pinned data.
+    """
+    from nodalarc.physics.datasets import convert_datasets, production_location
+
+    convert_datasets(production_location())
+
+
+@pytest.fixture(autouse=True, scope="session")
 def _nats_url_environment():
     """The NATS URL every test process would get from the chart; tests of the
     reader's refusal clear it themselves with monkeypatch.delenv."""
@@ -124,6 +136,7 @@ def load_runtime_ome_test_inputs(*, origin: str, name: str = "earth-leo-simple")
         ground_link_model=runtime.ground_link_model,
         node_metadata=runtime.node_metadata,
         body_frames=runtime.body_frames,
+        physics=runtime.physics,
     )
     return (
         session_view,

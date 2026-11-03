@@ -118,9 +118,9 @@ def run_scenario(
     session = cfg.resolved
     step_seconds = int(session.time.step_seconds)
 
-    from nodalarc.models.session import resolve_session_epoch
+    from nodalarc.models.session import session_epoch_unix
 
-    epoch_unix = resolve_session_epoch(session.time)
+    epoch_unix = session_epoch_unix(session.time)
     step_ctx = build_step_context(
         satellites=cfg.satellites,
         addressing=cfg.addressing,
@@ -135,7 +135,7 @@ def run_scenario(
         ground_candidate_satellites_by_gs=cfg.ground_candidate_satellites_by_gs,
         node_metadata=cfg.node_metadata,
         body_frames=cfg.body_frames,
-        body_ephemeris=cfg.body_ephemeris,
+        physics=cfg.physics,
         active_bodies=cfg.active_bodies,
     )
 

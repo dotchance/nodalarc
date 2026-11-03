@@ -5,9 +5,11 @@ from pathlib import Path
 import pytest
 import vs_api.main as main
 import yaml
-from nodalarc import ephemeris_runtime
 from nodalarc.catalog_closure import CatalogClosureCollector
 from nodalarc.catalog_refs import SessionRef
+from nodalarc.physics import EphemerisLocation
+from nodalarc.physics import context as physics_context
+from nodalarc.physics.datasets import production_location
 from vs_api.catalog_context import create_catalog_context
 from vs_api.main import app
 
@@ -15,7 +17,7 @@ from tests.asgi_client import ASGITestClient as TestClient
 
 ROOT = Path(__file__).resolve().parents[3]
 SHIPPED_ROOT = ROOT / "catalog" / "nodalarc"
-DECLARED_KERNEL = "configs/ephemerides/de440s.bsp"
+UNREADABLE_FILE = "moon_pa_de440_200625.bpc"
 
 
 @pytest.fixture
@@ -34,7 +36,6 @@ def catalog_client(tmp_path: Path):
 def _persist_luna_session(context, name: str) -> tuple[SessionRef, dict]:
     raw = yaml.safe_load((SHIPPED_ROOT / "sessions/earth-luna-quic.yaml").read_bytes())
     raw["session"]["name"] = name
-    assert raw["ephemeris"]["kernels"][0]["path"] == DECLARED_KERNEL
     content = yaml.safe_dump(raw, sort_keys=False).encode("utf-8")
     ref = SessionRef(f"user:sessions/{name}.yaml")
     snapshot = context.repository.snapshot(context.scope)
@@ -52,17 +53,22 @@ def _persist_luna_session(context, name: str) -> tuple[SessionRef, dict]:
     }
 
 
-def test_switch_refusal_names_the_declared_kernel_and_hides_the_host_filesystem(
+def test_switch_refusal_names_the_data_file_and_hides_the_host_filesystem(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     catalog_client,
 ) -> None:
-    # The declared kernel path resolves, under an injected repository root, to a
-    # directory. Real validation then fails on the kernel read with an OSError
-    # whose text names the resolved absolute path.
-    injected_root = tmp_path / "injected-repo"
-    (injected_root / DECLARED_KERNEL).mkdir(parents=True)
-    monkeypatch.setattr(ephemeris_runtime, "_repo_root", lambda: injected_root)
+    # The platform's Moon orientation file is a directory in this location, so
+    # reading it fails with an OSError whose text names the absolute path.
+    real = production_location()
+    source = tmp_path / "injected-ephemerides"
+    source.mkdir()
+    for item in real.source_dir.iterdir():
+        if item.is_file() and item.name != UNREADABLE_FILE:
+            (source / item.name).symlink_to(item)
+    (source / UNREADABLE_FILE).mkdir()
+    injected = EphemerisLocation(source_dir=source, converted_dir=real.converted_dir)
+    monkeypatch.setattr(physics_context, "production_location", lambda: injected)
 
     scoped_client, context = catalog_client
     _ref, request = _persist_luna_session(context, "ephemeris-unreadable")
@@ -75,7 +81,7 @@ def test_switch_refusal_names_the_declared_kernel_and_hides_the_host_filesystem(
     body = response.json()
     assert body["code"] == "session_resolution.invalid"
     message = body["message"]
-    assert str(injected_root) not in message
+    assert str(tmp_path) not in message
     assert "Errno" not in message
-    assert DECLARED_KERNEL in message
+    assert UNREADABLE_FILE in message
     assert "could not be read" in message

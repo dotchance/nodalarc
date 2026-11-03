@@ -9,11 +9,11 @@ helpers.
 """
 
 from collections.abc import Mapping
+from datetime import datetime
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from nodalarc.ephemeris_runtime import session_epoch_unix
 from nodalarc.model_validation import NonEmptyReference
 from nodalarc.models.ground_policy import (
     CrossTenantDisplacementPolicy,
@@ -137,10 +137,21 @@ class GroundSchedulingConfig(BaseModel):
         return self
 
 
-def resolve_session_epoch(time_config: TimeConfig | None) -> float:
-    """Return the canonical session epoch used by OME runtime consumers."""
+def session_epoch_unix(time_config: TimeConfig | None) -> float:
+    """The session epoch as Unix seconds, from the declared ``start_time``.
 
-    return session_epoch_unix(time_config)
+    Requires a declared, timezone-aware ``start_time``. There is no naive
+    datetime interpretation and no wall-clock substitute: an epoch that
+    depended on the container timezone or the process start would not be a
+    session fact.
+    """
+    if time_config is None:
+        raise ValueError("catalog session time with start_time is required")
+    raw = time_config.start_time
+    epoch = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    if epoch.tzinfo is None:
+        raise ValueError(f"catalog session start_time must include timezone: {raw!r}")
+    return epoch.timestamp()
 
 
 class TrafficFlowConfig(BaseModel):

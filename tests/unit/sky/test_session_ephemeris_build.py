@@ -28,7 +28,7 @@ from ome.snapshot_builder import LinkSnapshotSource
 
 from tests.conftest import load_runtime_ome_test_inputs
 from tests.ome_runtime_fixtures import StaticOmeAddressing
-from tests.physics_fixtures import EARTH_TEST_BODY_FRAMES, earth_elements_from_params
+from tests.physics_fixtures import EARTH_TEST_BODY_FRAMES, earth_elements_from_params, physics_for
 
 
 def _ground_scheduling() -> GroundSchedulingConfig:
@@ -95,6 +95,7 @@ def _load_test_ctx():
         ground_candidate_satellites_by_gs={"gs-test": ()},
         node_metadata=_identity(*(sat.node_id for sat in sats), "gs-test"),
         body_frames=EARTH_TEST_BODY_FRAMES,
+        physics=physics_for("earth"),
     )
     return ctx, sats, gs_file
 
@@ -121,6 +122,7 @@ class TestBuildSessionEphemeris:
             ground_link_model=session.ground_link_model,
             node_metadata=session.node_metadata,
             body_frames=session.body_frames,
+            physics=session.physics,
         )
         for sat in sats:
             assert sat.elements_epoch_unix == start
@@ -217,6 +219,7 @@ class TestBuildSessionEphemeris:
             ground_link_model=ctx.ground_link_model,
             node_metadata=ctx.node_metadata,
             body_frames=ctx.body_frames,
+            physics=ctx.physics,
         )
         eph = build_session_ephemeris(ctx, EPOCH, epoch_id=0)
         sat = eph.nodes[sats[0].node_id]
@@ -240,6 +243,7 @@ class TestBuildSessionEphemeris:
             ground_link_model=ctx.ground_link_model,
             node_metadata=ctx.node_metadata,
             body_frames=ctx.body_frames,
+            physics=ctx.physics,
         )
 
         eph = build_session_ephemeris(ctx, EPOCH, epoch_id=0)
@@ -292,6 +296,7 @@ class TestBuildSessionEphemeris:
                 node_id: {"segment_id": "tle", "local_node_id": "sat-P00S00", "namespace": "tle"}
             },
             body_frames=EARTH_TEST_BODY_FRAMES,
+            physics=physics_for("earth"),
         )
 
         eph = build_session_ephemeris(ctx, EPOCH, epoch_id=0)
@@ -315,6 +320,7 @@ class TestBuildSessionEphemeris:
             ground_candidate_satellites_by_gs=ctx.ground_candidate_satellites_by_gs,
             ground_link_model=ctx.ground_link_model,
             body_frames=ctx.body_frames,
+            physics=ctx.physics,
             node_metadata={
                 **ctx.node_metadata,
                 sat_id: {

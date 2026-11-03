@@ -172,18 +172,14 @@ def test_engine_batch_path_is_bit_identical_to_scalar_wrapper():
     original = engine_mod.satellite_node_id
     engine_mod.satellite_node_id = lambda sat, addressing: sat.name
     try:
-        from nodalarc.ephemeris_runtime import CommonBodyState
         from nodalarc.frames import Vec3
+        from nodalarc.physics import BodyState
 
-        def _zero(body_id: str) -> CommonBodyState:
-            return CommonBodyState(
+        def _zero(body_id: str) -> BodyState:
+            return BodyState(
                 body_id=body_id,
                 position_km=Vec3(0.0, 0.0, 0.0),
                 velocity_km_s=Vec3(0.0, 0.0, 0.0),
-                provider="test",
-                kernel_id="test",
-                quality_tier="test",
-                frame="common",
             )
 
         states = propagate_satellites(

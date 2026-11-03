@@ -29,10 +29,6 @@ const EARTH_FRAME = {
   vel_x_km_s: 0,
   vel_y_km_s: 0,
   vel_z_km_s: 0,
-  provider: "analytic",
-  kernel_id: "none",
-  quality_tier: "test",
-  frame: "eci",
 };
 
 const EPHEMERIS: SessionEphemeris = {

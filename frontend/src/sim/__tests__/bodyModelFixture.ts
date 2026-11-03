@@ -56,10 +56,6 @@ export function catalogEarthFrame(): EphemerisBodyFrame {
     vel_x_km_s: 0,
     vel_y_km_s: 0,
     vel_z_km_s: 0,
-    provider: "test",
-    kernel_id: "test",
-    quality_tier: "test",
-    frame: "gcrs",
   };
 }
 

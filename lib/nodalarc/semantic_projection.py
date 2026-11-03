@@ -25,8 +25,6 @@ from pydantic import BaseModel
 from nodalarc.models.resolved_session import (
     ResolvedBodyFacts,
     ResolvedEndpoint,
-    ResolvedEphemeris,
-    ResolvedEphemerisKernel,
     ResolvedLinkCandidate,
     ResolvedLinkRule,
     ResolvedNode,
@@ -315,31 +313,6 @@ def _orbit_projection(node_id: str, orbit: ResolvedOrbitFacts) -> dict[str, Any]
     )
 
 
-def _ephemeris_kernel_projection(kernel: ResolvedEphemerisKernel) -> dict[str, Any]:
-    return _without_none(
-        {
-            "path": kernel.path,
-            "sha256": kernel.sha256,
-            "targets": sorted(kernel.targets),
-            "frame": kernel.frame,
-            "coverage_start": kernel.coverage_start,
-            "coverage_end": kernel.coverage_end,
-        }
-    )
-
-
-def _ephemeris_projection(ephemeris: ResolvedEphemeris | None) -> dict[str, Any] | None:
-    if ephemeris is None:
-        return None
-    return {
-        "provider": ephemeris.provider,
-        "quality_tier": ephemeris.quality_tier,
-        "kernels": _sorted_json(
-            [_ephemeris_kernel_projection(kernel) for kernel in ephemeris.kernels]
-        ),
-    }
-
-
 def resolved_session_semantic_projection(resolved: ResolvedSession) -> dict[str, Any]:
     """Return the versioned, deterministic behavior projection for a session."""
     if not isinstance(resolved, ResolvedSession):
@@ -401,7 +374,9 @@ def resolved_session_semantic_projection(resolved: ResolvedSession) -> dict[str,
         "simulation": _model_json(resolved.simulation),
         "dispatch": _model_json(resolved.dispatch),
         "time": _model_json(resolved.time),
-        "ephemeris": _ephemeris_projection(resolved.ephemeris),
+        "ephemeris_files": [
+            {"file_id": f.file_id, "sha256": f.sha256} for f in resolved.ephemeris_files
+        ],
     }
 
 

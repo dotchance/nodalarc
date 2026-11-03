@@ -52,6 +52,7 @@ class TestFoldDeterminism:
             step_seconds=step_seconds,
             ground_link_model=session.ground_link_model,
             body_frames=session.body_frames,
+            physics=session.physics,
         )
         window_events = window.events
 
@@ -65,6 +66,7 @@ class TestFoldDeterminism:
             ground_candidate_satellites_by_gs=ground_candidates,
             ground_link_model=session.ground_link_model,
             body_frames=session.body_frames,
+            physics=session.physics,
         )
         isl_state: dict = {}
         gs_state: dict = {}
@@ -115,6 +117,7 @@ class TestFoldDeterminism:
             ground_candidate_satellites_by_gs=ground_candidates,
             ground_link_model=session.ground_link_model,
             body_frames=session.body_frames,
+            physics=session.physics,
         )
         seed_isl: dict = {}
         seed_gs: dict = {}
@@ -155,6 +158,7 @@ class TestFoldDeterminism:
             initial_pending_teardowns=seed_pending,
             ground_link_model=session.ground_link_model,
             body_frames=session.body_frames,
+            physics=session.physics,
         )
         window_events = window.events
 
@@ -215,6 +219,7 @@ class TestFoldDeterminism:
             ground_candidate_satellites_by_gs=ground_candidates,
             ground_link_model=session.ground_link_model,
             body_frames=session.body_frames,
+            physics=session.physics,
         )
 
         # --- Path A: continuous 60 ticks ---

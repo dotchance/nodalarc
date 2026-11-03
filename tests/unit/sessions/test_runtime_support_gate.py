@@ -10,7 +10,6 @@ deploy — never as untyped errors after a pod is already running.
 
 from __future__ import annotations
 
-import hashlib
 from copy import deepcopy
 from pathlib import Path
 
@@ -19,6 +18,9 @@ import yaml
 from nodalarc.catalog_closure import FilesystemCatalogReadView
 from nodalarc.catalog_paths import CatalogRoots
 from nodalarc.catalog_refs import CatalogRef
+from nodalarc.physics import EphemerisLocation
+from nodalarc.physics import context as physics_context
+from nodalarc.physics.datasets import production_location
 from nodalarc.resolve_session import SessionResolutionError
 from nodalarc.runtime_support import FeatureCategory, RuntimeSupport, UnsupportedFeatureError
 
@@ -44,14 +46,6 @@ def _session(**kwargs) -> dict:
     return build_catalog_session_fixture(**defaults)
 
 
-def _sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as fh:
-        for chunk in iter(lambda: fh.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
-
-
 def _explicit_node_clock_session(
     tmp_path: Path,
     clock: dict,
@@ -70,20 +64,6 @@ def _explicit_node_clock_session(
     session["segments"][0]["source"] = "user:space-node-sets/runtime-clock-nodes.yaml"
     roots = CatalogRoots.from_catalog_root(SHIPPED_ROOT, user_root=user_root)
     return session, roots, source["space_node_set"]["nodes"][0]["id"]
-
-
-def _de440s_manifest(*, sha: str | None = None, coverage_end: str = "2026-07-01T00:00:00Z") -> dict:
-    kernel_path = Path("configs/ephemerides/de440s.bsp")
-    kernel = {
-        "id": "de440s",
-        "path": str(kernel_path),
-        "targets": ["nodalarc:bodies/luna.yaml"],
-        "frame": "gcrs",
-        "coverage_start": "2026-06-01T00:00:00Z",
-        "coverage_end": coverage_end,
-        "sha256": sha if sha is not None else _sha256(kernel_path),
-    }
-    return {"provider": "skyfield_bsp", "quality_tier": "de440s", "kernels": [kernel]}
 
 
 def _lunar_constellation(raw: CatalogSessionFixture) -> CatalogSessionFixture:
@@ -117,17 +97,6 @@ class TestMandatoryGate:
         assert FeatureCategory.ROUTING_PROTOCOL in cats
         assert any(f.value == "bgp" for f in err.value.features)
 
-    def test_unsupported_ephemeris_provider_rejected_typed_by_default(self) -> None:
-        raw = _lunar_constellation(_session())
-        raw["ephemeris"] = _de440s_manifest()
-        raw["ephemeris"]["provider"] = "spice_kernel_stack"
-        with pytest.raises(UnsupportedFeatureError) as err:
-            resolve_session(raw)
-        assert any(
-            f.category == FeatureCategory.EPHEMERIS_PROVIDER and f.value == "spice_kernel_stack"
-            for f in err.value.features
-        )
-
     def test_static_routing_domain_is_supported(self) -> None:
         raw = _session(protocol="static")
         resolved = resolve_session(raw)
@@ -147,9 +116,14 @@ class TestMandatoryGate:
     def test_luna_session_passes_default_earth_luna_gate(self) -> None:
         raw = _lunar_constellation(_session())
         _move_ground_sites_to_luna(raw)
-        raw["ephemeris"] = _de440s_manifest()
         resolved = resolve_session(raw)
         assert {n.central_body for n in resolved.nodes if n.kind == "satellite"} == {"luna"}
+        # The platform selects the data for the session's bodies.
+        assert [f.file_id for f in resolved.ephemeris_files] == [
+            "de440s",
+            "moon-orientation",
+            "moon-frames",
+        ]
 
     def test_earth_only_profile_refuses_luna_orbits_and_sites_at_their_objects(self) -> None:
         raw = _lunar_constellation(_session())
@@ -169,27 +143,34 @@ class TestCrossBodyAccess:
         # default access rule pairs them — which must be rejected as
         # cross-body, never evaluated as mixed-frame geometry.
         raw = _lunar_constellation(_session())
-        raw["ephemeris"] = _de440s_manifest()
         with pytest.raises(SessionResolutionError, match="body-local"):
             resolve_session(raw)
 
 
-class TestEphemerisManifestAtResolve:
-    def test_checksum_mismatch_fails_at_resolve(self) -> None:
+class TestEphemerisDataAtResolve:
+    def test_session_outside_the_data_coverage_fails_at_resolve(self) -> None:
         raw = _lunar_constellation(_session())
         _move_ground_sites_to_luna(raw)
-        raw["ephemeris"] = _de440s_manifest(sha="0" * 64)
-        with pytest.raises(SessionResolutionError, match="checksum mismatch"):
+        # The planetary positions file ends in January 2150.
+        raw["time"]["start_time"] = "2160-01-01T00:00:00Z"
+        with pytest.raises(SessionResolutionError, match="does not cover"):
             resolve_session(raw)
 
-    def test_stale_coverage_fails_at_resolve(self) -> None:
+    def test_data_file_that_does_not_match_its_pin_fails_at_resolve(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        real = production_location()
+        source = tmp_path / "ephemerides"
+        source.mkdir()
+        for item in real.source_dir.iterdir():
+            if item.is_file() and item.name != "moon_pa_de440_200625.bpc":
+                (source / item.name).symlink_to(item)
+        (source / "moon_pa_de440_200625.bpc").write_bytes(b"not the pinned file")
+        injected = EphemerisLocation(source_dir=source, converted_dir=real.converted_dir)
+        monkeypatch.setattr(physics_context, "production_location", lambda: injected)
         raw = _lunar_constellation(_session())
         _move_ground_sites_to_luna(raw)
-        manifest = _de440s_manifest(coverage_end="2026-06-02T00:00:00Z")
-        manifest["kernels"][0]["coverage_start"] = "2026-06-01T00:00:00Z"
-        raw["ephemeris"] = manifest
-        # Session epoch is 2026-06-08 — outside the declared coverage window.
-        with pytest.raises(SessionResolutionError, match="does not cover"):
+        with pytest.raises(SessionResolutionError, match="does not match its pin"):
             resolve_session(raw)
 
 

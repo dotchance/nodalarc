@@ -72,9 +72,7 @@ type BuilderIssueSeverity = Literal["info", "warning", "error"]
 type BuilderBlockedOperation = Literal["save", "deploy"]
 type BuilderMemberListPointer = Literal["/link_rules", "/routing/domains", "/segments"]
 # The session's singleton sections, each edited as one whole object.
-type BuilderSectionPointer = Literal[
-    "/session", "/time", "/simulation", "/addressing", "/ephemeris", "/dispatch"
-]
+type BuilderSectionPointer = Literal["/session", "/time", "/simulation", "/addressing", "/dispatch"]
 type BuilderWholeListPointer = Literal["/routing/boundaries"]
 type BuilderPendingEditStatus = Literal["applied", "stale", "invalid"]
 type BuilderSessionSaveRefusalCode = Literal[

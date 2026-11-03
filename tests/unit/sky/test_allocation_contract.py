@@ -49,6 +49,7 @@ class TestAllocationContractInvariants:
             ground_candidate_satellites_by_gs=ground_candidates,
             ground_link_model=session.ground_link_model,
             body_frames=session.body_frames,
+            physics=session.physics,
         )
 
         isl_state: dict = {}

@@ -1,43 +1,55 @@
-"""Filesystem denial injection for ephemeris kernel access."""
+"""Real filesystem conditions that make the platform's ephemeris data unreadable.
+
+Each stage builds a copy of the data directory in which reading genuinely fails
+for the test user, then points the physics module at that directory. The
+failures are the operating system's own; nothing in the read path is replaced.
+"""
 
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
 
 import pytest
+from nodalarc.physics import EphemerisLocation
+from nodalarc.physics import context as physics_context
+from nodalarc.physics.datasets import production_location
 
-KERNEL_DENIAL_STAGES = ("resolve", "open")
+DATA_DENIAL_STAGES = ("stat", "open")
+DENIED_FILE = "de440s.bsp"
 
 
-def deny_kernel_access(monkeypatch: pytest.MonkeyPatch, stage: str) -> tuple[str, str]:
-    """Make every ``.bsp`` path fail at one access stage.
+def deny_data_file_access(
+    request: pytest.FixtureRequest,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    stage: str,
+) -> Path:
+    """Make the planetary positions file unreadable at one access stage.
 
-    Returns the owner's diagnostic fragment and the injected error text. The
-    typed failure's message carries the fragment and the error's type name;
-    the injected text stays on the chained cause for the server log.
+    ``stat``: the data directory cannot be searched, so looking up the file
+    fails. ``open``: the file exists but its permissions deny reading. Returns
+    the host directory, which a refusal must not name.
     """
+    real = production_location()
+    source = tmp_path / "ephemerides"
+    source.mkdir()
+    for item in real.source_dir.iterdir():
+        if item.is_file() and item.name != DENIED_FILE:
+            (source / item.name).symlink_to(item)
+    denied = source / DENIED_FILE
+    denied.write_bytes(b"unreadable for this test")
 
-    if stage == "resolve":
-        real_resolve = Path.resolve
-        injected = "injected kernel path traversal denial"
+    def restore() -> None:
+        source.chmod(0o700)
+        denied.chmod(0o600)
 
-        def denied_resolve(self: Path, *args: Any, **kwargs: Any):
-            if self.suffix == ".bsp":
-                raise PermissionError(injected)
-            return real_resolve(self, *args, **kwargs)
-
-        monkeypatch.setattr(Path, "resolve", denied_resolve)
-        return "ephemeris kernel path could not be resolved", injected
+    request.addfinalizer(restore)
     if stage == "open":
-        real_open = Path.open
-        injected = "injected BSP read denial"
-
-        def denied_open(self: Path, *args: Any, **kwargs: Any):
-            if self.suffix == ".bsp":
-                raise PermissionError(injected)
-            return real_open(self, *args, **kwargs)
-
-        monkeypatch.setattr(Path, "open", denied_open)
-        return "ephemeris kernel file could not be read", injected
-    raise ValueError(f"unknown kernel denial stage {stage!r}")
+        denied.chmod(0o000)
+    elif stage == "stat":
+        source.chmod(0o600)
+    else:
+        raise ValueError(f"unknown data denial stage {stage!r}")
+    injected = EphemerisLocation(source_dir=source, converted_dir=real.converted_dir)
+    monkeypatch.setattr(physics_context, "production_location", lambda: injected)
+    return source

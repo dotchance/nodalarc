@@ -531,7 +531,7 @@ If `routing` is omitted, the resolver creates one instance, `default_domain`,
 running IS-IS over the routers whose adapter renders IS-IS. A session with no
 `routing` block and no router runs no routing.
 
-## Time and ephemeris
+## Time
 
 Every session declares explicit simulated time:
 
@@ -546,15 +546,12 @@ time:
 time per tick. `compression` is requested simulated seconds per wall-clock
 second.
 
-Earth-only sessions do not require an ephemeris block. Every active body other
-than Earth must appear in an ephemeris manifest target; Earth state is implicit
-in the current runtime. The current runtime supports `skyfield_bsp`; it requires
-exactly one local kernel with the declared SHA-256. Its coverage start and end
-must be declared together, and the end must be later than the start. The session
-start must lie inside those bounds, and playback, seek, or lookahead outside
-them fails rather than extrapolating. Every kernel must declare `frame: gcrs`,
-the frame the provider actually computes. A session declaring any other frame
-is refused as unsupported.
+A session does not declare ephemeris data. The platform ships JPL and NAIF data
+files for the bodies it supports, selects the files for the bodies a session
+uses, and records each selected file with its SHA-256 in the resolved session.
+A session whose start time lies outside the data's coverage is refused, and
+playback, seek, or lookahead outside that coverage fails rather than
+extrapolating.
 
 ## Deploying configuration
 

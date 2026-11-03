@@ -108,7 +108,7 @@ def _run_session_with_comparator(monkeypatch, ctx, *, epoch_unix, step_seconds, 
 
 
 def _ctx_from_session_file(session_path):
-    from nodalarc.models.session import resolve_session_epoch
+    from nodalarc.models.session import session_epoch_unix
     from ome.main import _effective_ground_scheduling_for_runtime, _load_session_config
 
     cfg = _load_session_config(session_path, run_id="run-dwell-equiv-0001")
@@ -126,10 +126,10 @@ def _ctx_from_session_file(session_path):
         ground_candidate_satellites_by_gs=cfg.ground_candidate_satellites_by_gs,
         node_metadata=cfg.node_metadata,
         body_frames=cfg.body_frames,
-        body_ephemeris=cfg.body_ephemeris,
+        physics=cfg.physics,
         active_bodies=cfg.active_bodies,
     )
-    epoch_unix = resolve_session_epoch(cfg.resolved.time)
+    epoch_unix = session_epoch_unix(cfg.resolved.time)
     return ctx, int(cfg.resolved.time.step_seconds), epoch_unix
 
 

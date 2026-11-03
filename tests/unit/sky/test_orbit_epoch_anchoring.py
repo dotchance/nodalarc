@@ -352,7 +352,6 @@ class TestWindowAuthority:
     """
 
     def test_later_window_matches_continuous_play_at_the_same_instant(self):
-        from nodalarc.ephemeris_runtime import body_states_at
         from ome.propagation_engine import propagate_satellites
 
         inputs = TestConstructionAuthority._inputs()
@@ -373,7 +372,7 @@ class TestWindowAuthority:
         probe_dt = 25.0
         absolute = window_epoch + probe_dt
 
-        body_states = body_states_at(inputs.body_ephemeris, set(inputs.active_bodies), absolute)
+        body_states = inputs.physics.body_states(inputs.active_bodies, absolute)
         continuous = propagate_satellites(
             satellites=inputs.satellites,
             addressing=inputs.addressing,
@@ -438,7 +437,7 @@ class TestWindowAuthority:
                 ground_scheduling=inputs.ground_scheduling,
                 ground_defaults_applied=True,
                 ground_candidate_satellites_by_gs=(inputs.ground_candidate_satellites_by_gs),
-                body_ephemeris=inputs.body_ephemeris,
+                physics=inputs.physics,
                 body_frames=inputs.body_frames,
                 active_bodies=inputs.active_bodies,
             )
@@ -503,18 +502,14 @@ class TestPropagationRefusals:
             central_body="earth",
             propagator_id="two-body",
         )
-        from nodalarc.ephemeris_runtime import CommonBodyState
         from nodalarc.frames import Vec3
+        from nodalarc.physics import BodyState
 
         body_states = {
-            "earth": CommonBodyState(
+            "earth": BodyState(
                 body_id="earth",
                 position_km=Vec3(0.0, 0.0, 0.0),
                 velocity_km_s=Vec3(0.0, 0.0, 0.0),
-                provider="test",
-                kernel_id="test",
-                quality_tier="test",
-                frame="common",
             )
         }
         with pytest.raises(
@@ -574,9 +569,9 @@ class TestFractionalTimeConstraint:
     """
 
     def test_fractional_mismatched_call_matches_aligned_reference(self):
-        from nodalarc.ephemeris_runtime import CommonBodyState
         from nodalarc.frames import Vec3
         from nodalarc.ome_runtime import retarget_satellites
+        from nodalarc.physics import BodyState
         from ome.propagation_engine import propagate_satellites
 
         from tests.ome_runtime_fixtures import StaticOmeAddressing
@@ -603,14 +598,10 @@ class TestFractionalTimeConstraint:
             )
 
         body_states = {
-            "earth": CommonBodyState(
+            "earth": BodyState(
                 body_id="earth",
                 position_km=Vec3(0.0, 0.0, 0.0),
                 velocity_km_s=Vec3(0.0, 0.0, 0.0),
-                provider="test",
-                kernel_id="test",
-                quality_tier="test",
-                frame="common",
             )
         }
 

@@ -137,38 +137,6 @@ def test_routing_domain_member_without_internal_candidate_is_error() -> None:
     assert any("ground_only_domain" in result.message for result in results)
 
 
-def test_missing_non_earth_ephemeris_is_reported_before_deploy() -> None:
-    resolved = _resolved()
-    nodes = []
-    updated = False
-    for node in resolved.nodes:
-        if node.kind != "satellite" or updated:
-            nodes.append(node)
-            continue
-        nodes.append(
-            node.model_copy(
-                update={
-                    "central_body": "luna",
-                    "orbit": node.orbit.model_copy(
-                        update={
-                            "central_body": "luna",
-                            "orbit_id": "luna-eccentric-test",
-                            "eccentricity": 0.25,
-                        }
-                    ),
-                }
-            )
-        )
-        updated = True
-    unsupported = resolved.model_copy(update={"nodes": tuple(nodes)})
-
-    results = validate_session_readiness(unsupported, available_node_count=100)
-
-    assert "E020" in _codes(results)
-    messages = "\n".join(result.message for result in results)
-    assert "non-Earth" in messages
-
-
 def test_complete_sgp4_tle_session_has_no_ome_readiness_error() -> None:
     raw = build_catalog_session_fixture(
         name="validator-sgp4",

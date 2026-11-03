@@ -179,6 +179,11 @@ class PhysicsContext:
             velocity_km_s=Vec3(state.vx_km_s, state.vy_km_s, state.vz_km_s),
         )
 
+    def body_states(
+        self, body_ids: Iterable[str], master_sim_time_unix: float
+    ) -> dict[str, BodyState]:
+        return {body: self.body_state(body, master_sim_time_unix) for body in sorted(set(body_ids))}
+
     def orientation(self, body_id: str, master_sim_time_unix: float) -> BodyOrientation:
         """Rotation from ICRF axes to the body-fixed frame, with its derivative."""
         self.require_coverage(body_id, master_sim_time_unix)

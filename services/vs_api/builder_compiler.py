@@ -54,7 +54,6 @@ from nodalarc.models.resolved_session import SourceContext
 from nodalarc.models.segment_session import (
     Addressing,
     Dispatch,
-    Ephemeris,
     RoutingBoundary,
     RoutingDomain,
     SessionMeta,
@@ -539,7 +538,6 @@ _SECTIONS: Mapping[BuilderSectionPointer, tuple[str, TypeAdapter[Any]]] = Mappin
         "/time": ("Time", TypeAdapter(TimeConfig)),
         "/simulation": ("Simulation", TypeAdapter(Simulation)),
         "/addressing": ("Addressing", TypeAdapter(Addressing)),
-        "/ephemeris": ("Ephemeris", TypeAdapter(Ephemeris)),
         "/dispatch": ("Dispatch", TypeAdapter(Dispatch)),
     }
 )

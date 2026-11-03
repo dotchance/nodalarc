@@ -28,6 +28,7 @@ from tests.physics_fixtures import (
     LUNA_TEST_BODY_FRAME,
     earth_elements_from_params,
     earth_geodetic_to_ecef,
+    physics_for,
 )
 
 TEST_BODY_FRAMES = {"earth": EARTH_TEST_BODY_FRAME, "luna": LUNA_TEST_BODY_FRAME}
@@ -324,6 +325,7 @@ def test_longest_remaining_pass_lookahead_uses_real_propagation():
             horizon_ticks_by_gs={gs_id: 2},
             gs_reference_bodies={gs_id: "earth"},
             body_frames=TEST_BODY_FRAMES,
+            physics=physics_for("earth", "luna"),
             propagator_id="keplerian-circular",
             ground_link_model="geometry_only",
             active_bodies=frozenset({"earth"}),
@@ -380,6 +382,7 @@ def test_longest_remaining_pass_lookahead_requires_reference_body():
                 horizon_ticks_by_gs={"gs-equator": 5},
                 gs_reference_bodies={},
                 body_frames=TEST_BODY_FRAMES,
+                physics=physics_for("earth", "luna"),
                 propagator_id="test",
                 ground_link_model="geometry_only",
                 active_bodies=frozenset({"earth"}),
@@ -538,6 +541,7 @@ def test_cislunar_resolved_terminal_facts_flow_through_build_context_to_engine()
         ground_link_model="terminal_physics",
         ground_candidate_satellites_by_gs={addressing.gs_id("luna"): (sat_id,)},
         body_frames=TEST_BODY_FRAMES,
+        physics=physics_for("earth", "luna"),
     )
 
     gs_id = addressing.gs_id("luna")

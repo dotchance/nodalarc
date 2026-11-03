@@ -9,7 +9,6 @@ from dataclasses import dataclass
 from typing import Literal
 
 from nodalarc.body_frames import BodyFrame
-from nodalarc.ephemeris_runtime import SkyfieldBspEphemeris, body_states_at
 from nodalarc.frames import EcefVec3, GeoPosition
 from nodalarc.ground_terminals import TerminalPhysicsProfile
 from nodalarc.ome_runtime import (
@@ -18,6 +17,7 @@ from nodalarc.ome_runtime import (
     SessionPropagatorId,
     satellite_node_id,
 )
+from nodalarc.physics import PhysicsContext
 
 from ome.propagation_engine import PropagatedState, propagate_satellites
 from ome.telemetry import SEG_DWELL, StepTimings
@@ -59,10 +59,10 @@ class GroundPassLookahead:
     gs_reference_bodies: Mapping[str, str]
     body_frames: Mapping[str, BodyFrame]
     propagator_id: SessionPropagatorId
+    physics: PhysicsContext
     ground_link_model: Literal["geometry_only", "terminal_physics"] = "terminal_physics"
     gs_terminal_profiles: Mapping[str, TerminalPhysicsProfile] | None = None
     sat_ground_terminal_profiles: Mapping[str, TerminalPhysicsProfileSet] | None = None
-    body_ephemeris: SkyfieldBspEphemeris | None = None
     active_bodies: frozenset[str] = frozenset()
 
     def __post_init__(self) -> None:
@@ -234,9 +234,8 @@ def _propagate_for_tick(
         dt=future_dt,
         propagator_id=lookahead.propagator_id,
         body_frames=lookahead.body_frames,
-        body_states=body_states_at(
-            lookahead.body_ephemeris,
-            set(lookahead.active_bodies),
+        body_states=lookahead.physics.body_states(
+            lookahead.active_bodies,
             lookahead.epoch_unix + future_dt,
         ),
     )

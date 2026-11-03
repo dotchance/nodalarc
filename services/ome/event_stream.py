@@ -17,7 +17,6 @@ from pathlib import Path
 from typing import Any, Literal
 
 from nodalarc.body_frames import BodyFrame
-from nodalarc.ephemeris_runtime import SkyfieldBspEphemeris, body_states_at
 from nodalarc.ground_handover import resolve_station_ground_scheduling
 from nodalarc.ground_terminals import (
     TerminalPhysicsProfile,
@@ -53,6 +52,7 @@ from nodalarc.ome_runtime import (
     isl_terminal_for_interface,
     satellite_node_id,
 )
+from nodalarc.physics import PhysicsContext
 from nodalarc.propagator import advance_mean_elements
 
 from ome.event_diff import diff_ground_visibility_events, diff_isl_visibility_events
@@ -204,7 +204,7 @@ def build_session_ephemeris(
             **_meta(gs_id),
         )
 
-    epoch_body_states = body_states_at(ctx.body_ephemeris, set(ctx.active_bodies), epoch_unix)
+    epoch_body_states = ctx.physics.body_states(ctx.active_bodies, epoch_unix)
     body_frames: dict[str, EphemerisBodyFrame] = {}
     for body_id, body_state in sorted(epoch_body_states.items()):
         try:
@@ -227,10 +227,6 @@ def build_session_ephemeris(
             vel_x_km_s=body_state.velocity_km_s.x,
             vel_y_km_s=body_state.velocity_km_s.y,
             vel_z_km_s=body_state.velocity_km_s.z,
-            provider=body_state.provider,
-            kernel_id=body_state.kernel_id,
-            quality_tier=body_state.quality_tier,
-            frame=body_state.frame,
         )
 
     return SessionEphemeris(
@@ -302,7 +298,7 @@ class StepContext:
     sat_ground_terminals: dict[str, int]  # satellite ground terminal capacity
     propagator_id: SessionPropagatorId
     body_frames: dict[str, BodyFrame]
-    body_ephemeris: SkyfieldBspEphemeris | None = None
+    physics: PhysicsContext
     active_bodies: frozenset[str] = field(default_factory=frozenset)
     polar_seam_enabled: bool = False
     latitude_threshold_deg: float = 70.0
@@ -440,11 +436,16 @@ def build_step_context(
     ground_candidate_satellites_by_gs: Mapping[str, tuple[str, ...]] | None = None,
     node_metadata: Mapping[str, Mapping[str, object]] | None = None,
     body_frames: Mapping[str, BodyFrame] | None = None,
-    body_ephemeris: SkyfieldBspEphemeris | None = None,
+    physics: PhysicsContext | None = None,
     active_bodies: frozenset[str] | None = None,
 ) -> StepContext:
     """Build the per-session-constant context for compute_step()."""
     resolved_body_frames = _require_body_frames(body_frames)
+    if physics is None:
+        raise ValueError(
+            "build_step_context requires the session's physics context; OME never "
+            "places bodies without the platform's ephemeris data"
+        )
     by_node = neighbors_by_node(neighbors)
     node_metadata_map = {node_id: dict(value) for node_id, value in (node_metadata or {}).items()}
     has_ground_stations = gs_file is not None and bool(gs_file.stations)
@@ -674,7 +675,7 @@ def build_step_context(
         sat_ground_terminals=sat_ground_terminals,
         propagator_id=propagator_id,
         body_frames=resolved_body_frames,
-        body_ephemeris=body_ephemeris,
+        physics=physics,
         active_bodies=resolved_active_bodies,
         polar_seam_enabled=polar_seam_enabled,
         latitude_threshold_deg=latitude_threshold_deg,
@@ -775,7 +776,7 @@ def compute_step(
 
     # 1. Propagate all satellite states using the session-selected engine.
     with timings.measure(SEG_PROPAGATION):
-        body_states = body_states_at(ctx.body_ephemeris, set(ctx.active_bodies), epoch_unix + dt)
+        body_states = ctx.physics.body_states(ctx.active_bodies, epoch_unix + dt)
         sat_states = propagate_satellites(
             satellites=ctx.satellites,
             addressing=ctx.addressing,
@@ -857,7 +858,7 @@ def compute_step(
                     gs_terminal_profiles=ctx.gs_terminal_profiles,
                     sat_ground_terminal_profiles=ctx.sat_ground_terminal_profiles,
                     body_frames=ctx.body_frames,
-                    body_ephemeris=ctx.body_ephemeris,
+                    physics=ctx.physics,
                     active_bodies=ctx.active_bodies,
                 )
                 if "longest-remaining-pass" in set(ctx.gs_selection_policy_names.values())
@@ -1027,7 +1028,7 @@ def precompute_timeline_window(
     initial_pending_teardowns: MbbTeardownState | None = None,
     timestamp_offset: float = 0.0,
     predictive: bool = False,
-    body_ephemeris: SkyfieldBspEphemeris | None = None,
+    physics: PhysicsContext | None = None,
     body_frames: Mapping[str, BodyFrame] | None = None,
     active_bodies: frozenset[str] | None = None,
 ) -> TimelineWindowResult:
@@ -1050,7 +1051,7 @@ def precompute_timeline_window(
         ground_defaults_applied=ground_defaults_applied,
         ground_candidate_satellites_by_gs=ground_candidate_satellites_by_gs,
         body_frames=_require_body_frames(body_frames),
-        body_ephemeris=body_ephemeris,
+        physics=physics,
         active_bodies=active_bodies,
     )
     return precompute_timeline_window_from_context(
@@ -1082,7 +1083,7 @@ def precompute_timeline(
     ground_link_model: Literal["geometry_only", "terminal_physics"] = "terminal_physics",
     ground_defaults_applied: bool = False,
     ground_candidate_satellites_by_gs: Mapping[str, tuple[str, ...]] | None = None,
-    body_ephemeris: SkyfieldBspEphemeris | None = None,
+    physics: PhysicsContext | None = None,
     body_frames: Mapping[str, BodyFrame] | None = None,
     active_bodies: frozenset[str] | None = None,
 ) -> list[TimelineEvent]:
@@ -1106,7 +1107,7 @@ def precompute_timeline(
         ground_defaults_applied=ground_defaults_applied,
         ground_candidate_satellites_by_gs=ground_candidate_satellites_by_gs,
         body_frames=_require_body_frames(body_frames),
-        body_ephemeris=body_ephemeris,
+        physics=physics,
         active_bodies=active_bodies,
     )
     return result.events

@@ -238,6 +238,7 @@ def _propagate_for_tick(
             lookahead.active_bodies,
             lookahead.epoch_unix + future_dt,
         ),
+        physics=lookahead.physics,
     )
 
 

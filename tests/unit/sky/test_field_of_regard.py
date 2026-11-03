@@ -10,7 +10,7 @@ Verifies:
 
 import math
 
-from ome.propagator import Vec3
+from nodalarc.frames import Vec3
 from ome.visibility import check_field_of_regard, check_isl_visibility
 
 from tests.physics_fixtures import EARTH_TEST_BODY_FRAME

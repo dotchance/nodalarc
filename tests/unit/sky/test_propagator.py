@@ -1,26 +1,20 @@
-"""Test Keplerian propagator — orbital mechanics validation.
+"""Orbital behaviour of the production orbit kernel and Earth's body-fixed frame.
 
-Validates against analytic properties:
-- Period, velocity, inclination bounds
-- Return to start after one period
-- ECEF↔geodetic round-trip
+Validates against analytic properties: period, inclination bounds, return to
+start after one period, apsis radii and speeds, the declared J2 rates, the
+geodetic round trip, and the body-fixed velocity as the derivative of the
+body-fixed position.
 """
 
 import math
 
+import numpy as np
 import pytest
+from nodalarc.frames import EcefVec3, GeoPosition, Vec3
 from nodalarc.geo import compute_range_km
-from nodalarc.propagator import (
-    J2000_UNIX,
-    EcefVec3,
-    GeoPosition,
-    OrbitalElements,
-    Vec3,
-    gmst,
-    j2_circular_secular_rates,
-    j2_mean_element_secular_rates,
-    orbital_period_for_body,
-)
+from nodalarc.orbital import OrbitalElements
+from nodalarc.physics import ElementsBatch, orbit_states, secular_rates
+from nodalarc.physics.kepler import orbital_period_s
 
 from tests.physics_fixtures import (
     EARTH_TEST_BODY_FRAME,
@@ -29,7 +23,6 @@ from tests.physics_fixtures import (
     earth_elements_from_params,
     earth_geodetic_to_ecef,
     earth_orbital_period,
-    earth_orbital_velocity,
     earth_propagate_eci,
     earth_propagate_j2_mean_elements,
     earth_propagate_keplerian,
@@ -39,6 +32,19 @@ from tests.physics_fixtures import (
 EPOCH = 1735689600.0
 EARTH_MU = EARTH_TEST_BODY_FRAME.gravitational_parameter_km3_s2
 EARTH_RADIUS_KM = EARTH_TEST_BODY_FRAME.mean_radius_km
+
+
+def _j2_rates(elements: OrbitalElements) -> tuple[float, float, float]:
+    rates = secular_rates(
+        ElementsBatch.from_elements([elements]),
+        model="j2-mean-elements",
+        body_frame=EARTH_TEST_BODY_FRAME,
+    )
+    return (
+        float(rates.raan_dot[0]),
+        float(rates.argument_of_perigee_dot[0]),
+        float(rates.mean_anomaly_dot[0]),
+    )
 
 
 @pytest.fixture
@@ -64,10 +70,6 @@ def molniya_elements():
     )
 
 
-def test_gmst_at_j2000():
-    assert 4.8 < gmst(J2000_UNIX) < 5.0
-
-
 class TestOrbitalPeriod:
     def test_550km_period(self):
         period = earth_orbital_period(550.0)
@@ -83,18 +85,6 @@ class TestOrbitalPeriod:
         # GEO: ~35786 km altitude, period ~86164 seconds (23h 56m 4s)
         period = earth_orbital_period(35786.0)
         assert 86000.0 < period < 86400.0
-
-
-class TestOrbitalVelocity:
-    def test_550km_velocity(self):
-        v = earth_orbital_velocity(550.0)
-        # Expected ~7.59 km/s
-        assert 7.5 < v < 7.7
-
-    def test_408km_velocity(self):
-        v = earth_orbital_velocity(408.0)
-        # Expected ~7.66 km/s
-        assert 7.6 < v < 7.8
 
 
 class TestReturnToStart:
@@ -132,10 +122,7 @@ class TestJ2MeanElementPropagation:
         assert abs(geo_k.lon_deg - geo_j2.lon_deg) < 1e-9
 
     def test_j2_raan_precession_rate_is_physical_for_starlink_shell(self, starlink_elements):
-        raan_dot, mean_anomaly_dot = j2_circular_secular_rates(
-            starlink_elements,
-            body_frame=EARTH_TEST_BODY_FRAME,
-        )
+        raan_dot, _argp_dot, mean_anomaly_dot = _j2_rates(starlink_elements)
         raan_deg_per_day = math.degrees(raan_dot) * 86400.0
         mean_motion_deg_per_s = math.degrees(mean_anomaly_dot)
 
@@ -152,36 +139,35 @@ class TestJ2MeanElementPropagation:
     def test_j2_starlink_mean_element_golden_fixture(self, starlink_elements):
         """Numeric fixture for the declared J2 mean-element model.
 
-        This is a model-contract golden, not an SGP4 realism claim. The values
-        lock down the selected first-order secular equations and the ECI→ECEF
-        conversion at the fixed test epoch.
+        This is a model-contract golden, not an SGP4 realism claim. The rates
+        lock down the first-order secular equations; the inertial state was
+        recorded from the J2 model before its Kepler code moved into the shared
+        physics module, whose Earth orbit basis is ICRF, so the model's meaning
+        did not change. Earth-fixed values are checked against SPICE in the
+        physics tests.
         """
-        raan_dot, mean_anomaly_dot = j2_circular_secular_rates(
-            starlink_elements,
-            body_frame=EARTH_TEST_BODY_FRAME,
-        )
+        raan_dot, _argp_dot, mean_anomaly_dot = _j2_rates(starlink_elements)
         assert math.degrees(raan_dot) * 86400.0 == pytest.approx(-4.505396881873124, abs=1e-12)
         assert math.degrees(mean_anomaly_dot) == pytest.approx(0.06282946126423121, abs=1e-14)
 
-        pos, vel, geo = earth_propagate_j2_mean_elements(starlink_elements, EPOCH, 21600.0)
-        assert pos.x == pytest.approx(40.70639503490179, abs=1e-9)
-        assert pos.y == pytest.approx(4220.882785953021, abs=1e-9)
-        assert pos.z == pytest.approx(-5484.7838887531525, abs=1e-9)
-        assert vel.x == pytest.approx(-7.167526871827418, abs=1e-12)
-        assert vel.y == pytest.approx(1.044862013682468, abs=1e-12)
-        assert vel.z == pytest.approx(0.7508911910687706, abs=1e-12)
-        assert geo.lat_deg == pytest.approx(-52.589124852516605, abs=1e-12)
-        assert geo.lon_deg == pytest.approx(89.44745389777408, abs=1e-12)
-        assert geo.alt_km == pytest.approx(556.3246740056284, abs=1e-9)
+        states = orbit_states(
+            ElementsBatch.from_elements([starlink_elements]),
+            np.array([21600.0]),
+            model="j2-mean-elements",
+            body_frame=EARTH_TEST_BODY_FRAME,
+        )
+        assert float(states.px[0, 0]) == pytest.approx(775.9976902218401, abs=1e-9)
+        assert float(states.py[0, 0]) == pytest.approx(-4149.136788311715, abs=1e-9)
+        assert float(states.pz[0, 0]) == pytest.approx(-5484.7838887531525, abs=1e-9)
+        assert float(states.vx[0, 0]) == pytest.approx(7.536873403401121, abs=1e-12)
+        assert float(states.vy[0, 0]) == pytest.approx(0.4169832265898894, abs=1e-12)
+        assert float(states.vz[0, 0]) == pytest.approx(0.7508911910687706, abs=1e-12)
 
     def test_j2_molniya_argument_of_perigee_rate_is_near_critical_inclination(
         self,
         molniya_elements,
     ):
-        raan_dot, argp_dot, mean_anomaly_dot = j2_mean_element_secular_rates(
-            molniya_elements,
-            body_frame=EARTH_TEST_BODY_FRAME,
-        )
+        raan_dot, argp_dot, mean_anomaly_dot = _j2_rates(molniya_elements)
 
         assert math.degrees(raan_dot) * 86400.0 < 0.0
         assert abs(math.degrees(argp_dot) * 86400.0) < 0.15
@@ -190,7 +176,7 @@ class TestJ2MeanElementPropagation:
 
 class TestEccentricPropagation:
     def test_molniya_two_body_reaches_perigee_and_apogee(self, molniya_elements):
-        period = orbital_period_for_body(molniya_elements, EARTH_TEST_BODY_FRAME)
+        period = orbital_period_s(molniya_elements, EARTH_TEST_BODY_FRAME)
         expected_perigee = molniya_elements.semi_major_axis_km * (
             1.0 - molniya_elements.eccentricity
         )

@@ -32,7 +32,8 @@ from nodalarc.models.terminal_physics import (
     TerminalBoresight,
 )
 from nodalarc.orbital import OrbitalElements
-from nodalarc.propagator import advance_mean_elements
+from nodalarc.physics.kepler import advance_mean_elements
+from nodalarc.physics.satellites import orbit_model_for
 
 
 class OmeAddressing(Protocol):
@@ -319,7 +320,7 @@ def retarget_satellites(
             sat.authored_elements,
             anchor_epoch_unix - sat.authored_epoch_unix,
             body_frame=body_frame,
-            propagator_id=sat_propagator_id,
+            model=orbit_model_for(sat_propagator_id),
         )
         sat.elements_epoch_unix = anchor_epoch_unix
 

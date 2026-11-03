@@ -3,12 +3,10 @@
 import math
 
 from nodalarc.body_frames import BodyFrame
-from nodalarc.geo import compute_range_km, geodetic_to_body_fixed
+from nodalarc.frames import EcefVec3, GeoPosition, Vec3
+from nodalarc.geo import compute_range_km
 from nodalarc.models.terminal_physics import SatGroundTerminalBoresight, TerminalBoresight
-from ome.propagator import (
-    GeoPosition,
-    Vec3,
-)
+from nodalarc.physics import body_fixed_from_geodetic
 from ome.visibility import (
     ScheduledLink,
     check_ground_visibility,
@@ -29,6 +27,10 @@ from tests.physics_fixtures import (
 from tests.seam_reference import DeclaredShell, encounter, state, verdict
 
 EPOCH = 1735689600.0
+
+
+def _body_fixed(geo, body_frame):
+    return EcefVec3(body_fixed_from_geodetic(geo, body_frame))
 
 
 class TestLineOfSight:
@@ -480,25 +482,25 @@ class TestSurfaceObserverLineOfSight:
 
     def test_polar_surface_site_sees_zenith_satellite(self):
         gs_geo = GeoPosition(-89.4, 30.0, 0.0)
-        gs = geodetic_to_body_fixed(gs_geo, self.LUNA)
-        sat = geodetic_to_body_fixed(GeoPosition(-89.4, 30.0, 100.0), self.LUNA)
+        gs = _body_fixed(gs_geo, self.LUNA)
+        sat = _body_fixed(GeoPosition(-89.4, 30.0, 100.0), self.LUNA)
         assert has_line_of_sight(gs, sat, self.LUNA), (
             "a surface observer must not be occluded by the body it stands on"
         )
 
     def test_zero_altitude_site_full_ground_visibility_decision(self):
         gs_geo = GeoPosition(-89.4, 30.0, 0.0)
-        gs = geodetic_to_body_fixed(gs_geo, self.LUNA)
-        sat = geodetic_to_body_fixed(GeoPosition(-89.4, 30.0, 100.0), self.LUNA)
+        gs = _body_fixed(gs_geo, self.LUNA)
+        sat = _body_fixed(GeoPosition(-89.4, 30.0, 100.0), self.LUNA)
         gv = check_ground_visibility(gs, gs_geo, sat, 10.0, body_frame=self.LUNA)
         assert gv.visible, f"zenith pass rejected: {gv.reject_reason}"
         assert gv.elevation_deg > 80.0
 
     def test_occlusion_still_blocks_through_the_body(self):
         gs_geo = GeoPosition(-89.4, 30.0, 0.0)
-        gs = geodetic_to_body_fixed(gs_geo, self.LUNA)
+        gs = _body_fixed(gs_geo, self.LUNA)
         # Satellite over the OPPOSITE pole: the segment crosses the body.
-        sat = geodetic_to_body_fixed(GeoPosition(89.4, 30.0, 100.0), self.LUNA)
+        sat = _body_fixed(GeoPosition(89.4, 30.0, 100.0), self.LUNA)
         assert not has_line_of_sight(gs, sat, self.LUNA), (
             "the surface tolerance must not disable real occlusion"
         )

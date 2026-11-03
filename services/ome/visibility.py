@@ -18,15 +18,13 @@ import math
 from typing import Literal, NamedTuple
 
 from nodalarc.body_frames import BodyFrame
-from nodalarc.frames import CommonVec3
+from nodalarc.frames import CommonVec3, GeoPosition, Vec3
 from nodalarc.geo import compute_range_km
 from nodalarc.models.link_decisions import (
     GroundVisibilityRejectingEndpoint,
     GroundVisibilityRejectReason,
 )
 from nodalarc.models.terminal_physics import SatGroundTerminalBoresight, TerminalBoresight
-
-from ome.propagator import GeoPosition, Vec3
 
 
 class GroundVisibility(NamedTuple):

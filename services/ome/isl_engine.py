@@ -384,11 +384,12 @@ def evaluate_isl_feasibility(
                         f"ISL feasibility is missing resolved body primitive facts "
                         f"for body {state_a.central_body!r}"
                     )
+                # Same central body: the pair is evaluated in that body's fixed frame.
                 visibility = check_isl_visibility(
-                    pos_a,
-                    vel_a,
-                    pos_b,
-                    vel_b,
+                    state_a.position_ecef_km,
+                    state_a.velocity_ecef_km_s,
+                    state_b.position_ecef_km,
+                    state_b.velocity_ecef_km_s,
                     max_range_km=max_range_km,
                     max_tracking_rate_deg_s=applied_tracking_rate,
                     field_of_regard_deg=field_of_regard_deg,

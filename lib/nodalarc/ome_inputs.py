@@ -41,7 +41,7 @@ from nodalarc.ome_runtime import (
 )
 from nodalarc.orbital import OrbitalElements
 from nodalarc.physics import PhysicsContext
-from nodalarc.propagator import orbital_period_for_body
+from nodalarc.physics.kepler import orbital_period_s
 
 GroundLinkModel = Literal["geometry_only", "terminal_physics"]
 
@@ -165,7 +165,7 @@ def build_ome_inputs_from_resolved(resolved: ResolvedSession) -> ResolvedOmeInpu
         body_frames=body_frames,
     )
     period = max(
-        orbital_period_for_body(
+        orbital_period_s(
             sat.elements,
             _required_body_frame(body_frames, sat.central_body),
         )

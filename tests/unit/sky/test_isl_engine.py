@@ -7,7 +7,7 @@ from __future__ import annotations
 import math
 
 import pytest
-from nodalarc.frames import CommonVec3
+from nodalarc.frames import CommonVec3, EcefVec3, GeoPosition, Vec3
 from nodalarc.models.addressing import NeighborAssignment
 from ome.isl_engine import (
     IslFeasibilityResult,
@@ -16,7 +16,6 @@ from ome.isl_engine import (
     schedule_isl_links,
 )
 from ome.propagation_engine import PropagatedState
-from ome.propagator import EcefVec3, GeoPosition, Vec3
 
 from tests.physics_fixtures import EARTH_TEST_BODY_FRAME, LUNA_TEST_BODY_FRAME
 from tests.seam_reference import DeclaredShell, state

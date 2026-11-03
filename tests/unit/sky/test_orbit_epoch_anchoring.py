@@ -9,16 +9,16 @@ propagators that carry their own epoch.
 
 import math
 
+import numpy as np
 import pytest
 from nodalarc.body_frames import BodyFrame
+from nodalarc.frames import Vec3
 from nodalarc.orbital import OrbitalElements
-from nodalarc.propagator import (
-    advance_mean_elements,
-    propagate_eci_for_body,
-    propagate_eci_j2_mean_elements_for_body,
-)
+from nodalarc.physics import ElementsBatch, advance_mean_elements, orbit_states
+from nodalarc.physics.satellites import analytic_satellite_states, orbit_model_for
 
 from tests.catalog_session_fixtures import shipped_read_view
+from tests.physics_fixtures import EARTH_ORIGIN_BODY_STATES, physics_for
 
 MU_LUNA = 4902.800118
 MU_EARTH = 398600.4418
@@ -67,30 +67,52 @@ def _distance(a, b):
     return math.sqrt(sum((x - y) ** 2 for x, y in zip(a, b)))
 
 
+def _inertial(elements, dt, *, body_frame, model):
+    """Body-centered inertial state from the production orbit kernel."""
+    st = orbit_states(
+        ElementsBatch.from_elements([elements]), np.array([dt]), model=model, body_frame=body_frame
+    )
+    return (
+        Vec3(float(st.px[0, 0]), float(st.py[0, 0]), float(st.pz[0, 0])),
+        Vec3(float(st.vx[0, 0]), float(st.vy[0, 0]), float(st.vz[0, 0])),
+    )
+
+
+def _body_fixed(elements, epoch, dt, *, body_frame, model):
+    """Body-fixed position at epoch + dt through the shared satellite path."""
+    states = analytic_satellite_states(
+        physics_for(body_frame.name),
+        body_frame=body_frame,
+        model=model,
+        elements=[elements],
+        phases_s=[dt],
+        master_sim_time_unix=epoch + dt,
+    )
+    return Vec3(*map(float, states.position_fixed_km[0]))
+
+
 class TestAdvanceComposition:
     """Advancing by a then propagating b equals propagating a + b."""
 
     @pytest.mark.parametrize("split_s", [1.0, 3600.0, 19509.0, 86400.0 * 3])
     def test_two_body_advance_then_propagate_matches_single_propagation(self, split_s):
         remainder_s = 1234.5
-        direct, _ = propagate_eci_for_body(ELFO, split_s + remainder_s, mu_km3_s2=MU_LUNA)
-        advanced = advance_mean_elements(
-            ELFO, split_s, body_frame=LUNA_FRAME, propagator_id="two-body"
-        )
-        composed, _ = propagate_eci_for_body(advanced, remainder_s, mu_km3_s2=MU_LUNA)
+        direct, _ = _inertial(ELFO, split_s + remainder_s, body_frame=LUNA_FRAME, model="two-body")
+        advanced = advance_mean_elements(ELFO, split_s, body_frame=LUNA_FRAME, model="two-body")
+        composed, _ = _inertial(advanced, remainder_s, body_frame=LUNA_FRAME, model="two-body")
         assert _distance(direct, composed) < 1e-6
 
     @pytest.mark.parametrize("split_s", [1.0, 3600.0, 5700.0, 86400.0])
     def test_j2_advance_then_propagate_matches_single_propagation(self, split_s):
         remainder_s = 987.0
-        direct, _ = propagate_eci_j2_mean_elements_for_body(
-            LEO, split_s + remainder_s, body_frame=EARTH_FRAME
+        direct, _ = _inertial(
+            LEO, split_s + remainder_s, body_frame=EARTH_FRAME, model="j2-mean-elements"
         )
         advanced = advance_mean_elements(
-            LEO, split_s, body_frame=EARTH_FRAME, propagator_id="j2-mean-elements"
+            LEO, split_s, body_frame=EARTH_FRAME, model="j2-mean-elements"
         )
-        composed, _ = propagate_eci_j2_mean_elements_for_body(
-            advanced, remainder_s, body_frame=EARTH_FRAME
+        composed, _ = _inertial(
+            advanced, remainder_s, body_frame=EARTH_FRAME, model="j2-mean-elements"
         )
         assert _distance(direct, composed) < 1e-6
 
@@ -103,26 +125,23 @@ class TestAdvanceComposition:
         """
         period_s = 2 * math.pi * math.sqrt(ELFO.semi_major_axis_km**3 / MU_LUNA)
         at_perilune = advance_mean_elements(
-            ELFO, period_s / 2, body_frame=LUNA_FRAME, propagator_id="two-body"
+            ELFO, period_s / 2, body_frame=LUNA_FRAME, model="two-body"
         )
-        photo_pos, _ = propagate_eci_for_body(ELFO, 0.0, mu_km3_s2=MU_LUNA)
-        perilune_pos, _ = propagate_eci_for_body(at_perilune, 0.0, mu_km3_s2=MU_LUNA)
+        photo_pos, _ = _inertial(ELFO, 0.0, body_frame=LUNA_FRAME, model="two-body")
+        perilune_pos, _ = _inertial(at_perilune, 0.0, body_frame=LUNA_FRAME, model="two-body")
         assert _distance(photo_pos, perilune_pos) > 6000.0
 
 
 class TestAdvanceContract:
     def test_zero_dt_is_the_identity_object(self):
-        assert (
-            advance_mean_elements(ELFO, 0.0, body_frame=LUNA_FRAME, propagator_id="two-body")
-            is ELFO
-        )
+        assert advance_mean_elements(ELFO, 0.0, body_frame=LUNA_FRAME, model="two-body") is ELFO
 
     def test_angles_stay_wrapped_over_long_advances(self):
         advanced = advance_mean_elements(
             LEO,
             86400.0 * 365,
             body_frame=EARTH_FRAME,
-            propagator_id="j2-mean-elements",
+            model="j2-mean-elements",
         )
         for angle in (
             advanced.mean_anomaly_rad,
@@ -132,25 +151,22 @@ class TestAdvanceContract:
             assert 0.0 <= angle < math.tau
 
     def test_negative_dt_advances_backward(self):
-        forward = advance_mean_elements(
-            ELFO, 3600.0, body_frame=LUNA_FRAME, propagator_id="two-body"
-        )
-        back = advance_mean_elements(
-            forward, -3600.0, body_frame=LUNA_FRAME, propagator_id="two-body"
-        )
+        forward = advance_mean_elements(ELFO, 3600.0, body_frame=LUNA_FRAME, model="two-body")
+        back = advance_mean_elements(forward, -3600.0, body_frame=LUNA_FRAME, model="two-body")
         assert abs(back.mean_anomaly_rad - ELFO.mean_anomaly_rad) < 1e-9
 
     def test_shape_fields_never_change(self):
         advanced = advance_mean_elements(
-            LEO, 7200.0, body_frame=EARTH_FRAME, propagator_id="j2-mean-elements"
+            LEO, 7200.0, body_frame=EARTH_FRAME, model="j2-mean-elements"
         )
         assert advanced.semi_major_axis_km == LEO.semi_major_axis_km
         assert advanced.eccentricity == LEO.eccentricity
         assert advanced.inclination_rad == LEO.inclination_rad
 
     def test_sgp4_is_refused_loudly(self):
-        with pytest.raises(ValueError, match="carry their own epoch"):
-            advance_mean_elements(LEO, 60.0, body_frame=EARTH_FRAME, propagator_id="sgp4-tle")
+        # TLE elements carry their own epoch and have no analytic model to advance.
+        with pytest.raises(ValueError, match="no analytic orbit model"):
+            orbit_model_for("sgp4-tle")
 
 
 class TestRetargetSatellites:
@@ -177,7 +193,6 @@ class TestRetargetSatellites:
     def test_seek_equals_play_through_the_body_fixed_pipeline(self):
         """Position at T is identical whether reached by play or by seek."""
         from nodalarc.ome_runtime import retarget_satellites
-        from nodalarc.propagator import propagate_keplerian_for_body
 
         t0 = 1_780_000_000.0
         target = t0 + 19_509.0  # half the ELFO period past the epoch
@@ -190,8 +205,8 @@ class TestRetargetSatellites:
             anchor_epoch_unix=t0,
             body_frames={"luna": LUNA_FRAME},
         )
-        pos_played, _, _, _, _ = propagate_keplerian_for_body(
-            played.elements, t0, probe - t0, body_frame=LUNA_FRAME
+        pos_played = _body_fixed(
+            played.elements, t0, probe - t0, body_frame=LUNA_FRAME, model="two-body"
         )
 
         sought = self._sat()
@@ -201,8 +216,8 @@ class TestRetargetSatellites:
             anchor_epoch_unix=target,
             body_frames={"luna": LUNA_FRAME},
         )
-        pos_sought, _, _, _, _ = propagate_keplerian_for_body(
-            sought.elements, target, probe - target, body_frame=LUNA_FRAME
+        pos_sought = _body_fixed(
+            sought.elements, target, probe - target, body_frame=LUNA_FRAME, model="two-body"
         )
 
         assert _distance(pos_played, pos_sought) < 1e-6
@@ -381,6 +396,7 @@ class TestWindowAuthority:
             propagator_id=inputs.propagator_id,
             body_states=body_states,
             body_frames=inputs.body_frames,
+            physics=inputs.physics,
         )
         windowed = propagate_satellites(
             satellites=inputs.satellites,
@@ -390,6 +406,7 @@ class TestWindowAuthority:
             propagator_id=inputs.propagator_id,
             body_states=body_states,
             body_frames=inputs.body_frames,
+            physics=inputs.physics,
         )
         for node_id, state in continuous.items():
             error_km = _distance(state.position_ecef_km, windowed[node_id].position_ecef_km)
@@ -524,9 +541,10 @@ class TestPropagationRefusals:
                 propagator_id="two-body",
                 body_frames={"earth": EARTH_FRAME},
                 body_states=body_states,
+                physics=physics_for("earth"),
             )
 
-    def test_nonuniform_j2_anchors_in_one_batch_are_refused(self):
+    def test_nonuniform_j2_anchors_each_propagate_from_their_own_anchor(self):
         from nodalarc.ome_runtime import SatelliteNode
         from ome.propagation_engine import propagate_satellites
 
@@ -545,28 +563,24 @@ class TestPropagationRefusals:
                 propagator_id="j2-mean-elements",
             )
 
-        with pytest.raises(
-            ValueError,
-            match="non-uniform element anchors.*earth",
-        ):
-            propagate_satellites(
-                satellites=[sat(0, 1_780_876_800.0), sat(1, 1_780_880_400.0)],
-                addressing=StaticOmeAddressing(),
-                epoch_unix=1_780_876_800.0,
-                dt=0.0,
-                propagator_id="j2-mean-elements",
-                body_frames={"earth": EARTH_FRAME},
-                body_states={},
+        epoch = 1_780_876_800.0
+        anchors = (epoch, epoch + 3600.0)
+        states = propagate_satellites(
+            satellites=[sat(0, anchors[0]), sat(1, anchors[1])],
+            addressing=StaticOmeAddressing(),
+            epoch_unix=epoch,
+            dt=0.0,
+            propagator_id="j2-mean-elements",
+            body_frames={"earth": EARTH_FRAME},
+            body_states=EARTH_ORIGIN_BODY_STATES,
+            physics=physics_for("earth"),
+        )
+        for slot, anchor in enumerate(anchors):
+            expected, _ = _inertial(
+                LEO, epoch - anchor, body_frame=EARTH_FRAME, model="j2-mean-elements"
             )
-
-
-class TestFractionalTimeConstraint:
-    """Phase and the reported instant derive from one authoritative time.
-
-    A mismatched anchor with fractional epoch and dt once evaluated state
-    238 ns away from the timestamp it reported, about 3.2 mm at orbital
-    velocity. Both quantities now come from sim_time = epoch_unix + dt.
-    """
+            got = states[f"earth-leo-sat-p00s{slot:02d}"].position_common_km
+            assert _distance(got, expected) < 1e-9
 
     def test_fractional_mismatched_call_matches_aligned_reference(self):
         from nodalarc.frames import Vec3
@@ -621,6 +635,7 @@ class TestFractionalTimeConstraint:
                 "propagator_id": propagator,
                 "body_frames": {"earth": EARTH_FRAME},
                 "body_states": body_states,
+                "physics": physics_for("earth"),
             }
             got = propagate_satellites(satellites=[mismatched], **kwargs)
             want = propagate_satellites(satellites=[aligned], **kwargs)
@@ -633,24 +648,15 @@ class TestFractionalTimeConstraint:
             # The constraint, for BOTH states: each is the state of its own
             # (elements, anchor) pair at the one reported instant, spelled
             # independently through the lib primitives.
-            from nodalarc.propagator import (
-                eci_to_body_fixed,
-                propagate_eci_for_body,
-                propagate_eci_j2_mean_elements_for_body,
-            )
-
             def primitive_fixed(elements, own_anchor):
-                if propagator == "two-body":
-                    pos_inertial, _ = propagate_eci_for_body(
-                        elements,
-                        reported - own_anchor,
-                        mu_km3_s2=EARTH_FRAME.gravitational_parameter_km3_s2,
-                    )
-                else:
-                    pos_inertial, _ = propagate_eci_j2_mean_elements_for_body(
-                        elements, reported - own_anchor, body_frame=EARTH_FRAME
-                    )
-                return eci_to_body_fixed(pos_inertial, reported, EARTH_FRAME)
+                pos_inertial, _ = _inertial(
+                    elements,
+                    reported - own_anchor,
+                    body_frame=EARTH_FRAME,
+                    model=orbit_model_for(propagator),
+                )
+                rotation = physics_for("earth").orientation("earth", reported).rotation
+                return Vec3(*map(float, rotation @ np.array(pos_inertial)))
 
             got_error_km = _distance(state_got.position_ecef_km, primitive_fixed(LEO, anchor))
             assert got_error_km < 1e-12, f"{propagator}: {got_error_km} km"

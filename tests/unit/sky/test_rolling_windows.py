@@ -10,12 +10,13 @@ verify:
 from __future__ import annotations
 
 import json
+import math
 from pathlib import Path
 
 import pytest
 from nodalarc.configuration_yaml import load_configuration_yaml
-from nodalarc.orbital import elements_from_params_for_radius
-from nodalarc.propagator import orbital_period_for_body
+from nodalarc.orbital import OrbitalElements
+from nodalarc.physics.kepler import orbital_period_s
 
 from tests.physics_fixtures import EARTH_TEST_BODY_FRAME
 
@@ -24,14 +25,13 @@ PROJECT_ROOT = Path(__file__).parent.parent.parent.parent
 
 def _custom_example_period_s() -> float:
     body_frame = EARTH_TEST_BODY_FRAME
-    elements = elements_from_params_for_radius(
-        altitude_km=550.0,
-        inclination_deg=53.0,
-        raan_deg=0.0,
-        true_anomaly_deg=0.0,
-        radius_km=body_frame.equatorial_radius_km,
+    elements = OrbitalElements(
+        semi_major_axis_km=body_frame.equatorial_radius_km + 550.0,
+        inclination_rad=math.radians(53.0),
+        raan_rad=0.0,
+        mean_anomaly_rad=0.0,
     )
-    return orbital_period_for_body(elements, body_frame)
+    return orbital_period_s(elements, body_frame)
 
 
 @pytest.fixture(scope="module")

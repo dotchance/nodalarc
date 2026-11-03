@@ -292,6 +292,12 @@ def orbit_states(
     return OrbitStateBatch(px=px, py=py, pz=pz, vx=vx, vy=vy, vz=vz)
 
 
+def orbital_period_s(elements: OrbitalElements, body_frame: BodyFrame) -> float:
+    """The two-body period of an element set around its central body."""
+    a = elements.semi_major_axis_km
+    return math.tau * math.sqrt((a * a * a) / body_frame.gravitational_parameter_km3_s2)
+
+
 def advance_mean_elements(
     elements: OrbitalElements,
     dt_s: float,

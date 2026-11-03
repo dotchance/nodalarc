@@ -101,6 +101,7 @@ from nodalarc.nats_channels import (
     playback_state_subject,
     session_ephemeris_subject,
 )
+from nodalarc.physics import PhysicsContext
 from nodalarc.platform_config import get_platform_config
 from nodalarc.resolve_session import SessionResolution
 from pydantic import ValidationError
@@ -261,6 +262,9 @@ class SessionContext:
         self.last_snapshot_seq: int = 0
         self.cached_ephemeris: SessionEphemerisFrame | None = None
         self.cached_ephemeris_obj: object | None = None
+        # Physics context for the bodies of the cached ephemeris; rebuilt when
+        # a new ephemeris names different bodies.
+        self._physics: PhysicsContext | None = None
         self.almanac_lock = threading.Lock()
         self.almanac: AlmanacState = AlmanacState()
         self.continuous_tracer = None
@@ -1351,17 +1355,15 @@ class SessionContext:
         ephemeris model published by OME. Ground station positions are static.
         """
         from nodalarc.body_frames import BodyFrame
+        from nodalarc.frames import GeoPosition
         from nodalarc.models.events import (
             EphemerisNodeFixed,
             EphemerisNodeKeplerian,
             EphemerisNodeTLE,
         )
         from nodalarc.orbital import OrbitalElements
-        from nodalarc.propagator import (
-            propagate_j2_mean_elements_for_body,
-            propagate_keplerian_for_body,
-            propagate_sgp4_tle,
-        )
+        from nodalarc.physics.satellites import analytic_satellite_states, orbit_model_for
+        from nodalarc.propagator import propagate_sgp4_tle
 
         if self.cached_ephemeris_obj is None:
             return
@@ -1371,53 +1373,73 @@ class SessionContext:
         except ValueError, TypeError:
             return
 
+        ephemeris = self.cached_ephemeris_obj
+
+        def body_frame_for(node_id: str, body_id: str) -> BodyFrame:
+            frame = ephemeris.body_frames.get(body_id)
+            if frame is None:
+                raise ValueError(
+                    f"Ephemeris node {node_id!r} references body "
+                    f"{body_id!r}, but SessionEphemeris has no body frame"
+                )
+            return BodyFrame(
+                name=frame.body_id,
+                mean_radius_km=frame.mean_radius_km,
+                equatorial_radius_km=frame.equatorial_radius_km,
+                polar_radius_km=frame.polar_radius_km,
+                rotation_rate_rad_s=frame.rotation_rate_rad_s,
+                gravitational_parameter_km3_s2=frame.gravitational_parameter_km3_s2,
+                j2=frame.j2,
+            )
+
+        # The published elements are valid at the ephemeris epoch. VS-API turns
+        # them into positions with the shared physics module, the same code OME
+        # runs, one batch per central body and orbit model.
+        bodies = frozenset(ephemeris.body_frames)
+        if self._physics is None or self._physics.body_ids != tuple(sorted(bodies)):
+            self._physics = PhysicsContext(bodies)
+        groups: dict[tuple[str, str], list[tuple[str, OrbitalElements]]] = {}
+        for node_id, node in ephemeris.nodes.items():
+            if isinstance(node, EphemerisNodeKeplerian):
+                groups.setdefault(
+                    (node.reference_body, orbit_model_for(node.propagator)), []
+                ).append(
+                    (
+                        node_id,
+                        OrbitalElements(
+                            semi_major_axis_km=node.semi_major_axis_km,
+                            inclination_rad=math.radians(node.inclination_deg),
+                            raan_rad=math.radians(node.raan_deg),
+                            mean_anomaly_rad=math.radians(node.mean_anomaly_deg),
+                            eccentricity=node.eccentricity,
+                            argument_of_perigee_rad=math.radians(node.argument_of_perigee_deg),
+                        ),
+                    )
+                )
+        analytic: dict[str, tuple[GeoPosition, tuple[float, float, float]]] = {}
+        dt = sim_time_unix - ephemeris.epoch_unix
+        for (body_id, model), members in groups.items():
+            states = analytic_satellite_states(
+                self._physics,
+                body_frame=body_frame_for(members[0][0], body_id),
+                model=model,
+                elements=[elements for _node_id, elements in members],
+                phases_s=[dt] * len(members),
+                master_sim_time_unix=sim_time_unix,
+            )
+            for row, (member_id, _elements) in enumerate(members):
+                velocity = states.velocity_fixed_km_s[row]
+                analytic[member_id] = (
+                    states.geodetic[row],
+                    (float(velocity[0]), float(velocity[1]), float(velocity[2])),
+                )
+
         with self.state_lock:
             self.sim_time = sim_time_iso
 
-            for node_id, node in self.cached_ephemeris_obj.nodes.items():
+            for node_id, node in ephemeris.nodes.items():
                 if isinstance(node, EphemerisNodeKeplerian):
-                    frame = self.cached_ephemeris_obj.body_frames.get(node.reference_body)
-                    if frame is None:
-                        raise ValueError(
-                            f"Ephemeris node {node_id!r} references body "
-                            f"{node.reference_body!r}, but SessionEphemeris has no body frame"
-                        )
-                    body_frame = BodyFrame(
-                        name=frame.body_id,
-                        mean_radius_km=frame.mean_radius_km,
-                        equatorial_radius_km=frame.equatorial_radius_km,
-                        polar_radius_km=frame.polar_radius_km,
-                        rotation_rate_rad_s=frame.rotation_rate_rad_s,
-                        gravitational_parameter_km3_s2=frame.gravitational_parameter_km3_s2,
-                        j2=frame.j2,
-                    )
-                    elements = OrbitalElements(
-                        semi_major_axis_km=node.semi_major_axis_km,
-                        inclination_rad=math.radians(node.inclination_deg),
-                        raan_rad=math.radians(node.raan_deg),
-                        mean_anomaly_rad=math.radians(node.mean_anomaly_deg),
-                        eccentricity=node.eccentricity,
-                        argument_of_perigee_rad=math.radians(node.argument_of_perigee_deg),
-                    )
-                    dt = sim_time_unix - self.cached_ephemeris_obj.epoch_unix
-                    if node.propagator == "j2-mean-elements":
-                        _pos_ecef, vel_ecef, geo, _pos_inertial, _vel_inertial = (
-                            propagate_j2_mean_elements_for_body(
-                                elements,
-                                self.cached_ephemeris_obj.epoch_unix,
-                                dt,
-                                body_frame=body_frame,
-                            )
-                        )
-                    else:
-                        _pos_ecef, vel_ecef, geo, _pos_inertial, _vel_inertial = (
-                            propagate_keplerian_for_body(
-                                elements,
-                                self.cached_ephemeris_obj.epoch_unix,
-                                dt,
-                                body_frame=body_frame,
-                            )
-                        )
+                    geo, (vel_x, vel_y, vel_z) = analytic[node_id]
 
                     existing = self.nodes.get(node_id)
                     prefix = self._node_primary_prefix_by_id.get(
@@ -1432,9 +1454,9 @@ class SessionContext:
                         lat_deg=geo.lat_deg,
                         lon_deg=geo.lon_deg,
                         alt_km=geo.alt_km,
-                        vel_x_km_s=vel_ecef.x,
-                        vel_y_km_s=vel_ecef.y,
-                        vel_z_km_s=vel_ecef.z,
+                        vel_x_km_s=vel_x,
+                        vel_y_km_s=vel_y,
+                        vel_z_km_s=vel_z,
                         plane=node.plane,
                         slot=node.slot,
                         routing_instances=self._routing_instances_by_node_id.get(node_id, ()),

@@ -472,6 +472,7 @@ typecheck: ## Type-check Builder, session-configuration, and OME frame authority
 		lib/nodalarc/physics/errors.py \
 		lib/nodalarc/physics/geodesy.py \
 		lib/nodalarc/physics/kepler.py \
+		lib/nodalarc/physics/satellites.py \
 		lib/nodalarc/geo.py \
 		lib/nodalarc/ome_runtime.py \
 		lib/nodalarc/propagator.py \

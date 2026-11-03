@@ -9,12 +9,18 @@ radii, so the frame here is built from the catalog radii explicitly. In a
 comparison with SPICE a surface point built this way matched ``georec`` with
 the same radii exactly, and moved 20 km when the radii changed by 20 km.
 
-ANISE converts body-fixed coordinates to geodetic ones with Heikkinen's
-closed-form method, in 0.35 ms per 1,000 points on a development machine.
+Body-fixed to geodetic is an explicit exception to the library rule. ANISE's
+conversion (``Orbit.latlongalt`` in 0.10.6, Heikkinen's closed form) returned
+NaN for latitude and height at every point within about 12 m of the polar
+axis, including the exact pole that a 90 degree orbit crosses. A NaN position
+would be published as if it were a fact. NodalArc therefore keeps its Bowring
+iteration, vectorized here, which handles the axis; the tests compare it with
+SPICE ``recgeo``. The reverse direction, geodetic to body-fixed, is ANISE's.
 """
 
 from __future__ import annotations
 
+import numpy as np
 from anise.astro import Ellipsoid, Frame, Orbit
 from anise.time import Epoch
 
@@ -37,24 +43,42 @@ def _surface_frame(body: BodyFrame) -> Frame:
     )
 
 
+def geodetic_from_body_fixed_batch(
+    positions_km: np.ndarray, body: BodyFrame
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Geodetic latitude (deg), longitude (deg) and height (km) for (N, 3) positions.
+
+    Longitude is atan2's range, (-180, 180], the range NodalArc has always
+    published. On the polar axis atan2(0, 0) gives longitude 0, latitude is
+    +/-90 and the height is measured from the pole.
+    """
+    x = positions_km[:, 0]
+    y = positions_km[:, 1]
+    z = positions_km[:, 2]
+    a = body.equatorial_radius_km
+    b = body.polar_radius_km
+    e2 = 1.0 - (b * b) / (a * a)
+    lon = np.arctan2(y, x)
+    p = np.sqrt(x * x + y * y)
+    lat = np.arctan2(z, p * (1.0 - e2))
+    for _ in range(10):
+        sin_lat = np.sin(lat)
+        n = a / np.sqrt(1.0 - e2 * sin_lat * sin_lat)
+        lat = np.arctan2(z + e2 * n * sin_lat, p)
+    sin_lat = np.sin(lat)
+    cos_lat = np.cos(lat)
+    n = a / np.sqrt(1.0 - e2 * sin_lat * sin_lat)
+    near_axis = np.abs(cos_lat) <= 1e-10
+    safe_cos = np.where(near_axis, 1.0, cos_lat)
+    alt = np.where(near_axis, np.abs(z) - n * (1.0 - e2), p / safe_cos - n)
+    return np.degrees(lat), np.degrees(lon), alt
+
+
 def geodetic_from_body_fixed(position_km: Vec3, body: BodyFrame) -> GeoPosition:
-    orbit = Orbit.from_cartesian(
-        position_km[0],
-        position_km[1],
-        position_km[2],
-        0.0,
-        0.0,
-        0.0,
-        _ANY_EPOCH,
-        _surface_frame(body),
+    lat, lon, alt = geodetic_from_body_fixed_batch(
+        np.array([[position_km[0], position_km[1], position_km[2]]], dtype=np.float64), body
     )
-    lat_deg, lon_deg, alt_km = orbit.latlongalt()
-    # ANISE returns longitude in [0, 360). NodalArc's published longitude has
-    # always been atan2's range, (-180, 180], and the page and every wire
-    # model read it that way, so the representation is kept.
-    if lon_deg > 180.0:
-        lon_deg -= 360.0
-    return GeoPosition(lat_deg=lat_deg, lon_deg=lon_deg, alt_km=alt_km)
+    return GeoPosition(lat_deg=float(lat[0]), lon_deg=float(lon[0]), alt_km=float(alt[0]))
 
 
 def body_fixed_from_geodetic(position: GeoPosition, body: BodyFrame) -> Vec3:

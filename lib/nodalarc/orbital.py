@@ -3,8 +3,8 @@
 """Orbital element types and constructors.
 
 Pure data types and math for Keplerian mean elements. No propagation, no I/O.
-Resolved session facts are materialized into these elements before the OME
-propagators add time evolution and frame conversion.
+Resolved session facts are materialized into these elements; the shared physics
+module adds time evolution and frame conversion.
 """
 
 from __future__ import annotations
@@ -18,37 +18,6 @@ def _validate_finite(name: str, value: float) -> float:
     if not math.isfinite(value):
         raise ValueError(f"{name} must be finite")
     return value
-
-
-def mean_anomaly_to_eccentric_anomaly(mean_anomaly_rad: float, eccentricity: float) -> float:
-    """Solve Kepler's equation M = E - e sin(E)."""
-    if eccentricity == 0.0:
-        return mean_anomaly_rad
-    m = math.fmod(mean_anomaly_rad, 2.0 * math.pi)
-    if m < 0.0:
-        m += 2.0 * math.pi
-    estimate = m if eccentricity < 0.8 else math.pi
-    for _ in range(12):
-        f = estimate - eccentricity * math.sin(estimate) - m
-        fp = 1.0 - eccentricity * math.cos(estimate)
-        step = f / fp
-        estimate -= step
-        if abs(step) < 1e-14:
-            break
-    return estimate
-
-
-def eccentric_anomaly_to_true_anomaly(
-    eccentric_anomaly_rad: float,
-    eccentricity: float,
-) -> float:
-    """Convert eccentric anomaly to true anomaly for an elliptical orbit."""
-    if eccentricity == 0.0:
-        return eccentric_anomaly_rad
-    return math.atan2(
-        math.sqrt(1.0 - eccentricity * eccentricity) * math.sin(eccentric_anomaly_rad),
-        math.cos(eccentric_anomaly_rad) - eccentricity,
-    )
 
 
 def true_anomaly_to_mean_anomaly(true_anomaly_rad: float, eccentricity: float) -> float:
@@ -109,46 +78,3 @@ class OrbitalElements:
         object.__setattr__(self, "mean_anomaly_rad", mean_anomaly)
         object.__setattr__(self, "eccentricity", e)
         object.__setattr__(self, "argument_of_perigee_rad", argp)
-
-    @property
-    def true_anomaly_rad(self) -> float:
-        """True anomaly derived from epoch mean anomaly."""
-        eccentric_anomaly = mean_anomaly_to_eccentric_anomaly(
-            self.mean_anomaly_rad,
-            self.eccentricity,
-        )
-        return eccentric_anomaly_to_true_anomaly(eccentric_anomaly, self.eccentricity)
-
-
-def elements_from_params(
-    altitude_km: float,
-    inclination_deg: float,
-    raan_deg: float,
-    true_anomaly_deg: float,
-    *,
-    reference_radius_km: float,
-) -> OrbitalElements:
-    """Create OrbitalElements from human-readable parameters."""
-    return OrbitalElements(
-        semi_major_axis_km=reference_radius_km + altitude_km,
-        inclination_rad=math.radians(inclination_deg),
-        raan_rad=math.radians(raan_deg),
-        mean_anomaly_rad=math.radians(true_anomaly_deg),
-    )
-
-
-def elements_from_params_for_radius(
-    altitude_km: float,
-    inclination_deg: float,
-    raan_deg: float,
-    true_anomaly_deg: float,
-    radius_km: float,
-) -> OrbitalElements:
-    """Create circular elements around a body with the supplied reference radius."""
-    return elements_from_params(
-        altitude_km,
-        inclination_deg,
-        raan_deg,
-        true_anomaly_deg,
-        reference_radius_km=radius_km,
-    )

@@ -7,10 +7,10 @@ from __future__ import annotations
 import math
 
 import pytest
+from nodalarc.frames import GeoPosition
 from nodalarc.ome_runtime import SatelliteNode
 from nodalarc.orbital import OrbitalElements
 from ome.propagation_engine import build_node_positions, propagate_satellites
-from ome.propagator import GeoPosition
 
 from tests.ome_runtime_fixtures import StaticOmeAddressing
 from tests.physics_fixtures import (
@@ -18,6 +18,7 @@ from tests.physics_fixtures import (
     EARTH_TEST_BODY_FRAMES,
     earth_elements_from_params,
     earth_geodetic_to_ecef,
+    physics_for,
 )
 
 ISS_TLE_LINE_1 = "1 25544U 98067A   21075.51041667  .00001264  00000-0  29660-4 0  9993"
@@ -31,6 +32,7 @@ def _propagation_inputs() -> dict:
     return {
         "body_frames": EARTH_TEST_BODY_FRAMES,
         "body_states": EARTH_ORIGIN_BODY_STATES,
+        "physics": physics_for("earth"),
     }
 
 

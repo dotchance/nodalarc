@@ -302,6 +302,7 @@ def test_longest_remaining_pass_lookahead_uses_real_propagation():
         propagator_id="keplerian-circular",
         body_frames=TEST_BODY_FRAMES,
         body_states=EARTH_ORIGIN_BODY_STATES,
+        physics=physics_for("earth", "luna"),
     )
     current_geo = sat_states[sat_id].geodetic
     gs_id = "gs-underpass"

@@ -7,9 +7,7 @@ Tests:
 - Counter-rotating (walker-star) high angular velocity
 """
 
-from ome.propagator import (
-    Vec3,
-)
+from nodalarc.frames import Vec3
 from ome.visibility import compute_angular_velocity
 
 from tests.physics_fixtures import (

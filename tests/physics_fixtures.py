@@ -10,24 +10,25 @@ and pass them explicitly to math APIs.
 from __future__ import annotations
 
 import functools
+import math
 from pathlib import Path
 
+import numpy as np
 import yaml
 from nodalarc.body_frames import BodyFrame, body_runtime_support_for
-from nodalarc.frames import GeoPosition, Vec3
-from nodalarc.geo import geodetic_to_ecef
+from nodalarc.frames import EcefVec3, GeoPosition, Vec3
 from nodalarc.models.events import EphemerisBodyFrame
-from nodalarc.orbital import OrbitalElements, elements_from_params
-from nodalarc.physics import BodyState, PhysicsContext
-from nodalarc.propagator import (
-    ecef_to_geodetic,
-    eci_to_ecef_velocity,
-    orbital_period,
-    orbital_velocity,
-    propagate_eci,
-    propagate_j2_mean_elements,
-    propagate_keplerian,
+from nodalarc.orbital import OrbitalElements
+from nodalarc.physics import (
+    BodyState,
+    ElementsBatch,
+    PhysicsContext,
+    body_fixed_from_geodetic,
+    geodetic_from_body_fixed,
+    orbit_states,
 )
+from nodalarc.physics.kepler import OrbitModel, orbital_period_s
+from nodalarc.physics.satellites import analytic_satellite_states
 
 _PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
@@ -99,50 +100,76 @@ def earth_elements_from_params(
     raan_deg: float,
     true_anomaly_deg: float,
 ) -> OrbitalElements:
-    return elements_from_params(
-        altitude_km,
-        inclination_deg,
-        raan_deg,
-        true_anomaly_deg,
-        reference_radius_km=EARTH_TEST_BODY_FRAME.mean_radius_km,
+    """A circular Earth orbit; for e == 0 the true and mean anomalies agree."""
+    return OrbitalElements(
+        semi_major_axis_km=EARTH_TEST_BODY_FRAME.mean_radius_km + altitude_km,
+        inclination_rad=math.radians(inclination_deg),
+        raan_rad=math.radians(raan_deg),
+        mean_anomaly_rad=math.radians(true_anomaly_deg),
     )
 
 
 def earth_orbital_period(altitude_km: float) -> float:
-    return orbital_period(altitude_km, body_frame=EARTH_TEST_BODY_FRAME)
-
-
-def earth_orbital_velocity(altitude_km: float) -> float:
-    return orbital_velocity(altitude_km, body_frame=EARTH_TEST_BODY_FRAME)
+    return orbital_period_s(
+        earth_elements_from_params(altitude_km, 0.0, 0.0, 0.0), EARTH_TEST_BODY_FRAME
+    )
 
 
 def earth_propagate_eci(elements: OrbitalElements, dt: float):
-    return propagate_eci(elements, dt, body_frame=EARTH_TEST_BODY_FRAME)
+    """Two-body state on ICRF axes (Earth's orbit basis is ICRF) from the production kernel."""
+    states = orbit_states(
+        ElementsBatch.from_elements([elements]),
+        np.array([dt]),
+        model="two-body",
+        body_frame=EARTH_TEST_BODY_FRAME,
+    )
+    return (
+        Vec3(float(states.px[0, 0]), float(states.py[0, 0]), float(states.pz[0, 0])),
+        Vec3(float(states.vx[0, 0]), float(states.vy[0, 0]), float(states.vz[0, 0])),
+    )
+
+
+def _earth_fixed(elements: OrbitalElements, epoch: float, dt: float, model: OrbitModel):
+    states = analytic_satellite_states(
+        physics_for("earth"),
+        body_frame=EARTH_TEST_BODY_FRAME,
+        model=model,
+        elements=[elements],
+        phases_s=[dt],
+        master_sim_time_unix=epoch + dt,
+    )
+    return (
+        EcefVec3(Vec3(*map(float, states.position_fixed_km[0]))),
+        EcefVec3(Vec3(*map(float, states.velocity_fixed_km_s[0]))),
+        states.geodetic[0],
+    )
 
 
 def earth_propagate_keplerian(elements: OrbitalElements, epoch: float, dt: float):
-    return propagate_keplerian(elements, epoch, dt, body_frame=EARTH_TEST_BODY_FRAME)
+    """Earth-fixed position, velocity and geodetic position, two-body model."""
+    return _earth_fixed(elements, epoch, dt, "two-body")
 
 
 def earth_propagate_j2_mean_elements(elements: OrbitalElements, epoch: float, dt: float):
-    return propagate_j2_mean_elements(elements, epoch, dt, body_frame=EARTH_TEST_BODY_FRAME)
+    """Earth-fixed position, velocity and geodetic position, J2 mean-element model."""
+    return _earth_fixed(elements, epoch, dt, "j2-mean-elements")
 
 
 def earth_geodetic_to_ecef(geo: GeoPosition):
-    return geodetic_to_ecef(geo, EARTH_TEST_BODY_FRAME)
+    return EcefVec3(body_fixed_from_geodetic(geo, EARTH_TEST_BODY_FRAME))
 
 
 def earth_ecef_to_geodetic(ecef):
-    return ecef_to_geodetic(ecef, body_frame=EARTH_TEST_BODY_FRAME)
+    return geodetic_from_body_fixed(ecef, EARTH_TEST_BODY_FRAME)
 
 
 def earth_eci_to_ecef_velocity(pos_eci, vel_eci, unix_timestamp: float):
-    return eci_to_ecef_velocity(
-        pos_eci,
-        vel_eci,
-        unix_timestamp,
-        body_frame=EARTH_TEST_BODY_FRAME,
+    """Velocity relative to the rotating Earth, from Earth's measured orientation."""
+    orientation = physics_for("earth").orientation("earth", unix_timestamp)
+    velocity = orientation.rotation @ np.array(vel_eci) + orientation.rotation_rate @ np.array(
+        pos_eci
     )
+    return EcefVec3(Vec3(*map(float, velocity)))
 
 
 @functools.cache

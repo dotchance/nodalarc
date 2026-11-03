@@ -1,45 +1,16 @@
 # Copyright 2024-2026 .chance (dotchance)
 # Licensed under the Apache License, Version 2.0. See LICENSE file.
-"""Geodetic/body-fixed conversion and range/latency computation.
+"""Range and one-way latency between two positions in one shared frame.
 
-OME is the geometry authority; callers must pass the resolved body frame from
-the session. This module does not choose a default body.
+Geodetic conversion lives in the shared physics module (``nodalarc.physics``).
 """
 
 from __future__ import annotations
 
 import math
 
-from nodalarc.body_frames import BodyFrame
 from nodalarc.constants import SPEED_OF_LIGHT_KM_S
-from nodalarc.frames import CommonVec3, EcefVec3, GeoPosition, Vec3
-
-
-def geodetic_to_body_fixed(
-    pos: GeoPosition,
-    body_frame: BodyFrame,
-) -> EcefVec3:
-    """Convert geodetic latitude/longitude/altitude to a body-fixed XYZ vector."""
-    lat_rad = math.radians(pos.lat_deg)
-    lon_rad = math.radians(pos.lon_deg)
-    sin_lat = math.sin(lat_rad)
-    cos_lat = math.cos(lat_rad)
-    a = body_frame.equatorial_radius_km
-    b = body_frame.polar_radius_km
-    e2 = 1.0 - (b * b) / (a * a)
-    n = a / math.sqrt(1.0 - e2 * sin_lat * sin_lat)
-    x = (n + pos.alt_km) * cos_lat * math.cos(lon_rad)
-    y = (n + pos.alt_km) * cos_lat * math.sin(lon_rad)
-    z = (n * (1.0 - e2) + pos.alt_km) * sin_lat
-    return EcefVec3(Vec3(x, y, z))
-
-
-def geodetic_to_ecef(
-    pos: GeoPosition,
-    body_frame: BodyFrame,
-) -> EcefVec3:
-    """Convert geodetic (lat, lon, alt) to body-fixed xyz in km."""
-    return geodetic_to_body_fixed(pos, body_frame)
+from nodalarc.frames import CommonVec3, Vec3
 
 
 def compute_range_km(

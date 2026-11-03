@@ -13,9 +13,8 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass
 
-import numpy as np
 from nodalarc.body_frames import BodyFrame
-from nodalarc.frames import CommonVec3, EcefVec3, EciVec3, GcrsVec3, Vec3
+from nodalarc.frames import CommonVec3, EcefVec3, GcrsVec3, GeoPosition, Vec3
 from nodalarc.models.events import NodePosition
 from nodalarc.ome_runtime import (
     OmeAddressing,
@@ -25,24 +24,10 @@ from nodalarc.ome_runtime import (
     satellite_node_id,
     satellite_propagator_id,
 )
-from nodalarc.physics import BodyState, ElementsBatch, orbit_states
-from nodalarc.propagation_kernel import (
-    body_rotation_angle_batch,
-    eci_to_body_fixed_batch,
-    eci_to_body_fixed_velocity_batch,
-)
-from nodalarc.propagator import (
-    body_fixed_to_geodetic,
-    eci_to_body_fixed,
-    eci_to_body_fixed_velocity,
-    propagate_eci_for_body,
-)
-
-from ome.propagator import (
-    GeoPosition,
-    propagate_keplerian_for_body,
-    propagate_sgp4_tle_states,
-)
+from nodalarc.physics import BodyState, PhysicsContext
+from nodalarc.physics.kepler import OrbitModel
+from nodalarc.physics.satellites import analytic_satellite_states, orbit_model_for
+from nodalarc.propagator import propagate_sgp4_tle_states
 
 
 @dataclass(frozen=True)
@@ -128,12 +113,15 @@ def propagate_satellites(
     propagator_id: SessionPropagatorId,
     body_frames: Mapping[str, BodyFrame],
     body_states: Mapping[str, BodyState],
+    physics: PhysicsContext,
 ) -> dict[str, PropagatedState]:
     """Propagate all satellites for one tick.
 
-    Unsupported propagators are fatal configuration/engine errors. SGP4/TLE
-    requests require actual TLE records on every satellite; missing records
-    fail before any lower-fidelity substitute can be used.
+    Analytic satellites (two-body and J2 mean elements) run through the shared
+    physics module, one batch per central body and orbit model, each with its
+    own phase from its elements' validity epoch. SGP4/TLE requests require TLE
+    records on every such satellite; missing records fail before any other
+    model can stand in. Unsupported propagators are fatal configuration errors.
     """
     if propagator_id not in (
         "mixed",
@@ -145,120 +133,59 @@ def propagate_satellites(
         raise ValueError(f"Unsupported OME propagator: {propagator_id!r}")
 
     sim_time_unix = epoch_unix + dt
-    states_by_body = dict(body_states)
-    states: dict[str, PropagatedState] = {}
+    node_ids = [satellite_node_id(sat, addressing) for sat in satellites]
+    sat_propagator_ids: list[PropagatorId] = [
+        satellite_propagator_id(sat, propagator_id) for sat in satellites
+    ]
 
-    # The J2 mean-element population — the hot path — propagates as ONE
-    # kernel batch per central body instead of satellite by satellite.
-    # The kernel is bit-identical to the scalar wrapper (enforced by the
-    # equivalence suite), geodetic conversion below consumes those
-    # identical body-fixed positions, and states are still assembled in
-    # the ORIGINAL satellite order, so every downstream value and
-    # iteration order is byte-unchanged from the scalar path.
-    j2_by_body: dict[str, list[int]] = {}
-    sat_propagator_ids: list[PropagatorId] = []
-    for index, sat in enumerate(satellites):
-        sat_propagator_ids.append(satellite_propagator_id(sat, propagator_id))
-        if sat_propagator_ids[-1] == "j2-mean-elements":
-            j2_by_body.setdefault(sat.central_body, []).append(index)
-
-    j2_states: dict[int, tuple] = {}
-    dt_column = np.array([dt], dtype=np.float64)
-    time_column = np.array([sim_time_unix], dtype=np.float64)
-    for central_body, indices in j2_by_body.items():
-        first_node_id = satellite_node_id(satellites[indices[0]], addressing)
-        try:
-            body_frame = body_frames[central_body]
-        except KeyError as exc:
-            raise ValueError(
-                f"Propagation missing resolved body primitive facts for central_body={central_body!r} "
-                f"while propagating {first_node_id!r}"
-            ) from exc
-        anchor = element_anchor_epoch_unix(satellites[indices[0]], first_node_id)
-        for i in indices[1:]:
-            other = element_anchor_epoch_unix(
-                satellites[i], satellite_node_id(satellites[i], addressing)
+    groups: dict[tuple[str, OrbitModel], list[int]] = {}
+    for index, (sat, sat_propagator_id) in enumerate(
+        zip(satellites, sat_propagator_ids, strict=True)
+    ):
+        if sat_propagator_id != "sgp4-tle":
+            groups.setdefault((sat.central_body, orbit_model_for(sat_propagator_id)), []).append(
+                index
             )
-            if other != anchor:
-                raise ValueError(
-                    f"non-uniform element anchors in one propagation batch for "
-                    f"central_body={central_body!r}: {anchor!r} != {other!r}"
-                )
-        batch = ElementsBatch.from_elements([satellites[i].elements for i in indices])
-        canonical_phase = sim_time_unix - anchor
-        phase_column = (
-            dt_column if canonical_phase == dt else np.array([canonical_phase], dtype=np.float64)
-        )
-        eci = orbit_states(batch, phase_column, model="j2-mean-elements", body_frame=body_frame)
-        theta = body_rotation_angle_batch(body_frame, time_column)
-        bx, by, bz = eci_to_body_fixed_batch(eci.px, eci.py, eci.pz, theta)
-        vbx, vby, vbz = eci_to_body_fixed_velocity_batch(
-            eci.vx,
-            eci.vy,
-            eci.vz,
-            bx,
-            by,
-            theta,
-            rotation_rate_rad_s=body_frame.rotation_rate_rad_s,
+
+    analytic: dict[int, tuple[EcefVec3, EcefVec3, GeoPosition, GcrsVec3, GcrsVec3]] = {}
+    for (central_body, model), indices in groups.items():
+        body_frame = _required_body_frame(body_frames, central_body, node_ids[indices[0]])
+        phases = [
+            sim_time_unix - element_anchor_epoch_unix(satellites[i], node_ids[i]) for i in indices
+        ]
+        states = analytic_satellite_states(
+            physics,
+            body_frame=body_frame,
+            model=model,
+            elements=[satellites[i].elements for i in indices],
+            phases_s=phases,
+            master_sim_time_unix=sim_time_unix,
         )
         for row, sat_index in enumerate(indices):
-            pos_fixed = EcefVec3(Vec3(float(bx[row, 0]), float(by[row, 0]), float(bz[row, 0])))
-            vel_fixed = EcefVec3(Vec3(float(vbx[row, 0]), float(vby[row, 0]), float(vbz[row, 0])))
-            pos_inertial = EciVec3(
-                Vec3(float(eci.px[row, 0]), float(eci.py[row, 0]), float(eci.pz[row, 0]))
+            analytic[sat_index] = (
+                EcefVec3(Vec3(*map(float, states.position_fixed_km[row]))),
+                EcefVec3(Vec3(*map(float, states.velocity_fixed_km_s[row]))),
+                states.geodetic[row],
+                # Body-centered on ICRF axes, the common frame's axes: the
+                # basis rotation above put the state there.
+                GcrsVec3(*map(float, states.position_icrf_km[row])),
+                GcrsVec3(*map(float, states.velocity_icrf_km_s[row])),
             )
-            vel_inertial = EciVec3(
-                Vec3(float(eci.vx[row, 0]), float(eci.vy[row, 0]), float(eci.vz[row, 0]))
-            )
-            geo = body_fixed_to_geodetic(pos_fixed, body_frame)
-            j2_states[sat_index] = (pos_fixed, vel_fixed, geo, pos_inertial, vel_inertial)
 
+    states_out: dict[str, PropagatedState] = {}
     for index, sat in enumerate(satellites):
-        node_id = satellite_node_id(sat, addressing)
+        node_id = node_ids[index]
         central_body = sat.central_body
         sat_propagator_id = sat_propagator_ids[index]
-        try:
-            body_frame = body_frames[central_body]
-        except KeyError as exc:
-            raise ValueError(
-                f"Propagation missing resolved body primitive facts for central_body={central_body!r} "
-                f"while propagating {node_id!r}"
-            ) from exc
-        body_state = states_by_body.get(central_body)
+        body_frame = _required_body_frame(body_frames, central_body, node_id)
+        body_state = body_states.get(central_body)
         if body_state is None:
             raise ValueError(
                 f"Propagation missing common-frame ephemeris state for central_body={central_body!r} "
                 f"while propagating {node_id!r}"
             )
-        if sat_propagator_id == "j2-mean-elements":
-            pos_ecef, vel_ecef, geo, pos_inertial, vel_inertial = j2_states[index]
-            # Body-equatorial inertial axes enter composition as the common
-            # axes by session contract; the wrap is that deliberate claim.
-            pos_common_axes = GcrsVec3(*pos_inertial)
-            vel_common_axes = GcrsVec3(*vel_inertial)
-        elif sat_propagator_id in ("two-body", "keplerian-circular"):
-            anchor = element_anchor_epoch_unix(sat, node_id)
-            canonical_phase = sim_time_unix - anchor
-            if canonical_phase == dt:
-                pos_ecef, vel_ecef, geo, pos_inertial, vel_inertial = propagate_keplerian_for_body(
-                    sat.elements,
-                    epoch_unix,
-                    dt,
-                    body_frame=body_frame,
-                )
-            else:
-                pos_inertial, vel_inertial = propagate_eci_for_body(
-                    sat.elements,
-                    canonical_phase,
-                    mu_km3_s2=body_frame.gravitational_parameter_km3_s2,
-                )
-                pos_ecef = eci_to_body_fixed(pos_inertial, sim_time_unix, body_frame)
-                vel_ecef = eci_to_body_fixed_velocity(
-                    pos_inertial, vel_inertial, sim_time_unix, body_frame
-                )
-                geo = body_fixed_to_geodetic(pos_ecef, body_frame)
-            pos_common_axes = GcrsVec3(*pos_inertial)
-            vel_common_axes = GcrsVec3(*vel_inertial)
+        if index in analytic:
+            pos_ecef, vel_ecef, geo, pos_common_axes, vel_common_axes = analytic[index]
         else:
             if central_body != "earth":
                 raise ValueError(
@@ -282,21 +209,31 @@ def propagate_satellites(
             geo = sgp4_states.geodetic
             pos_common_axes = sgp4_states.position_gcrs
             vel_common_axes = sgp4_states.velocity_gcrs
-        pos_common = _common_vec(body_state.position_km, pos_common_axes)
-        vel_common = _common_vec(body_state.velocity_km_s, vel_common_axes)
-        states[node_id] = PropagatedState(
+        states_out[node_id] = PropagatedState(
             node_id=node_id,
             sim_time_unix=sim_time_unix,
             position_ecef_km=pos_ecef,
             velocity_ecef_km_s=vel_ecef,
-            position_common_km=pos_common,
-            velocity_common_km_s=vel_common,
+            position_common_km=_common_vec(body_state.position_km, pos_common_axes),
+            velocity_common_km_s=_common_vec(body_state.velocity_km_s, vel_common_axes),
             body_origin_common_km=CommonVec3(*body_state.position_km),
             central_body=central_body,
             geodetic=geo,
             propagator_id=sat_propagator_id,
         )
-    return states
+    return states_out
+
+
+def _required_body_frame(
+    body_frames: Mapping[str, BodyFrame], central_body: str, node_id: str
+) -> BodyFrame:
+    try:
+        return body_frames[central_body]
+    except KeyError as exc:
+        raise ValueError(
+            f"Propagation missing resolved body primitive facts for central_body={central_body!r} "
+            f"while propagating {node_id!r}"
+        ) from exc
 
 
 def build_node_positions(

@@ -12,6 +12,7 @@ import math
 
 import pytest
 from nodalarc.body_frames import BodyFrame
+from nodalarc.frames import GeoPosition, Vec3
 from nodalarc.ground_terminals import TerminalPhysicsProfile
 from nodalarc.models.ground_policy import HandoverPolicySpec, SelectionPolicySpec
 from nodalarc.models.session import GroundSchedulingConfig
@@ -25,7 +26,6 @@ from nodalarc.ome_runtime import (
 )
 from ome.event_stream import build_step_context, compute_step
 from ome.propagation_engine import propagate_satellites
-from ome.propagator import GeoPosition, Vec3
 from ome.visibility import (
     check_ground_visibility,
     compute_elevation_angle,
@@ -245,6 +245,7 @@ def test_compute_step_schedules_only_pairs_that_pass_applied_ground_physics():
         propagator_id="keplerian-circular",
         body_frames=TEST_BODY_FRAMES,
         body_states=EARTH_ORIGIN_BODY_STATES,
+        physics=physics_for("earth", "luna"),
     )
     sat_state = propagated[SAT_ID]
     gs_file = GroundStationFile(

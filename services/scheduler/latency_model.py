@@ -14,8 +14,8 @@ from __future__ import annotations
 import math
 
 from nodalarc.body_frames import BodyFrame
-from nodalarc.frames import EcefVec3, GeoPosition
-from nodalarc.geo import compute_latency_ms, compute_range_km, geodetic_to_ecef
+from nodalarc.frames import EcefVec3, GeoPosition, Vec3
+from nodalarc.geo import compute_latency_ms, compute_range_km
 from nodalarc.models.events import (
     EphemerisNodeFixed,
     EphemerisNodeKeplerian,
@@ -23,11 +23,9 @@ from nodalarc.models.events import (
     SessionEphemeris,
 )
 from nodalarc.orbital import OrbitalElements
-from nodalarc.propagator import (
-    propagate_j2_mean_elements_for_body,
-    propagate_keplerian_for_body,
-    propagate_sgp4_tle,
-)
+from nodalarc.physics import PhysicsContext, body_fixed_from_geodetic
+from nodalarc.physics.satellites import analytic_satellite_states, orbit_model_for
+from nodalarc.propagator import propagate_sgp4_tle
 
 
 class PositionTable:
@@ -39,13 +37,14 @@ class PositionTable:
     """
 
     def __init__(self) -> None:
-        self._sat_elements: dict[str, object] = {}  # node_id -> OrbitalElements
+        self._sat_elements: dict[str, OrbitalElements] = {}
         self._sat_propagators: dict[str, str] = {}
         self._sat_reference_bodies: dict[str, str] = {}
         self._sat_tles: dict[str, tuple[str, str]] = {}
         self._body_frames: dict[str, BodyFrame] = {}
         self._gs_ecef: dict[str, EcefVec3] = {}
         self._epoch_unix: float = 0.0
+        self._physics: PhysicsContext | None = None
         self._loaded = False
 
     @property
@@ -77,6 +76,7 @@ class PositionTable:
         }
         self._gs_ecef.clear()
         self._epoch_unix = ephemeris.epoch_unix
+        self._physics = PhysicsContext(ephemeris.body_frames)
 
         for node_id, node in ephemeris.nodes.items():
             if isinstance(node, EphemerisNodeKeplerian):
@@ -95,11 +95,12 @@ class PositionTable:
                 self._sat_reference_bodies[node_id] = node.reference_body
             elif isinstance(node, EphemerisNodeFixed):
                 body_frame = self._required_body_frame(node.reference_body)
-                ecef = geodetic_to_ecef(
-                    GeoPosition(node.lat_deg, node.lon_deg, node.alt_km),
-                    body_frame,
+                self._gs_ecef[node_id] = EcefVec3(
+                    body_fixed_from_geodetic(
+                        GeoPosition(node.lat_deg, node.lon_deg, node.alt_km),
+                        body_frame,
+                    )
                 )
-                self._gs_ecef[node_id] = ecef
 
         self._loaded = True
 
@@ -123,27 +124,19 @@ class PositionTable:
         elements = self._sat_elements.get(node_id)
         dt = sim_time_unix - self._epoch_unix
         if elements is not None:
-            propagator = self._sat_propagators[node_id]
+            if self._physics is None:
+                raise ValueError("PositionTable has no physics context; load an ephemeris first")
             body_frame = self._required_body_frame(self._sat_reference_bodies[node_id])
-            if propagator == "j2-mean-elements":
-                pos_ecef, _vel, _geo, _pos_inertial, _vel_inertial = (
-                    propagate_j2_mean_elements_for_body(
-                        elements,
-                        self._epoch_unix,
-                        dt,
-                        body_frame=body_frame,
-                    )
-                )
-            elif propagator in ("two-body", "keplerian-circular"):
-                pos_ecef, _vel, _geo, _pos_inertial, _vel_inertial = propagate_keplerian_for_body(
-                    elements,
-                    self._epoch_unix,
-                    dt,
-                    body_frame=body_frame,
-                )
-            else:
-                raise ValueError(f"Unsupported ephemeris propagator for {node_id}: {propagator!r}")
-            return pos_ecef
+            states = analytic_satellite_states(
+                self._physics,
+                body_frame=body_frame,
+                model=orbit_model_for(self._sat_propagators[node_id]),
+                elements=[elements],
+                phases_s=[dt],
+                master_sim_time_unix=sim_time_unix,
+            )
+            x, y, z = (float(v) for v in states.position_fixed_km[0])
+            return EcefVec3(Vec3(x, y, z))
 
         tle = self._sat_tles.get(node_id)
         if tle is not None:

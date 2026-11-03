@@ -140,7 +140,8 @@ class TestBuildSessionEphemeris:
 
         from nodalarc.ome_runtime import SatelliteNode, satellite_propagator_id
         from nodalarc.orbital import OrbitalElements
-        from nodalarc.propagator import advance_mean_elements
+        from nodalarc.physics import advance_mean_elements
+        from nodalarc.physics.satellites import orbit_model_for
 
         ctx, sats, _ = _load_test_ctx()
         eccentric = SatelliteNode(
@@ -177,7 +178,7 @@ class TestBuildSessionEphemeris:
                 sat.elements,
                 3600.0,
                 body_frame=ctx.body_frames[sat.central_body],
-                propagator_id=satellite_propagator_id(sat, ctx.propagator_id),
+                model=orbit_model_for(satellite_propagator_id(sat, ctx.propagator_id)),
             )
             assert node.semi_major_axis_km == expected.semi_major_axis_km
             assert node.eccentricity == expected.eccentricity

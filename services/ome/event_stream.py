@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 from nodalarc.body_frames import BodyFrame
+from nodalarc.frames import EcefVec3, GeoPosition
 from nodalarc.ground_handover import resolve_station_ground_scheduling
 from nodalarc.ground_terminals import (
     TerminalPhysicsProfile,
@@ -52,8 +53,8 @@ from nodalarc.ome_runtime import (
     isl_terminal_for_interface,
     satellite_node_id,
 )
-from nodalarc.physics import PhysicsContext
-from nodalarc.propagator import advance_mean_elements
+from nodalarc.physics import PhysicsContext, advance_mean_elements, body_fixed_from_geodetic
+from nodalarc.physics.satellites import orbit_model_for
 
 from ome.event_diff import diff_ground_visibility_events, diff_isl_visibility_events
 from ome.ground_allocator import (
@@ -79,11 +80,6 @@ from ome.propagation_engine import (
     build_node_positions,
     element_anchor_epoch_unix,
     propagate_satellites,
-)
-from ome.propagator import (
-    EcefVec3,
-    GeoPosition,
-    geodetic_to_ecef,
 )
 from ome.snapshot_builder import LinkSnapshotSource
 from ome.snapshot_builder import build_link_state_snapshot as build_link_state_snapshot
@@ -167,7 +163,7 @@ def build_session_ephemeris(
                 sat.elements,
                 epoch_unix - element_anchor_epoch_unix(sat, node_id),
                 body_frame=ctx.body_frames[reference_body],
-                propagator_id=sat_propagator_id,
+                model=orbit_model_for(sat_propagator_id),
             )
             nodes[node_id] = EphemerisNodeKeplerian(
                 propagator=sat_propagator_id,
@@ -535,7 +531,7 @@ def build_step_context(
                     f"Ground station {node_id!r} references body {station.reference_body!r}, "
                     "but resolved body primitive facts are missing"
                 ) from exc
-            ecef = geodetic_to_ecef(geo, body_frame)
+            ecef = EcefVec3(body_fixed_from_geodetic(geo, body_frame))
             gs_positions[node_id] = (ecef, geo)
             gs_min_elevations[node_id] = (
                 station.min_elevation_deg
@@ -785,6 +781,7 @@ def compute_step(
             propagator_id=ctx.propagator_id,
             body_states=body_states,
             body_frames=ctx.body_frames,
+            physics=ctx.physics,
         )
 
     # 2. Build positions dict (for LinkStateSnapshot latency) and ClockTick

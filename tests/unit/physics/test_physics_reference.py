@@ -19,7 +19,7 @@ import numpy as np
 import pytest
 import spiceypy
 from nodalarc.body_frames import BodyFrame
-from nodalarc.frames import GeoPosition
+from nodalarc.frames import GeoPosition, Vec3
 from nodalarc.orbital import OrbitalElements
 from nodalarc.physics import (
     ElementsBatch,
@@ -118,6 +118,31 @@ def test_site_position_on_icrf_axes_matches_spice(
         icrf = physics_context.orientation(body, t).rotation.T @ fixed
         ref_icrf = np.array(spiceypy.pxform(SPICE_FRAME[body], "J2000", _et(t))) @ ref_fixed
         assert np.linalg.norm(icrf - ref_icrf) < 0.1
+
+
+@pytest.mark.parametrize(
+    ("body", "position"),
+    [
+        (EARTH, (0.0, 0.0, 6356.752 + 550.0)),
+        (EARTH, (0.0, 0.0, -(6356.752 + 550.0))),
+        (EARTH, (0.012, 0.0, 6356.752 + 550.0)),
+        (EARTH, (4.2e-13, 0.0, 6356.752)),
+        (EARTH, (6928.137, 0.0, 0.0)),
+        (EARTH, (-2500.0, 4000.0, -4800.0)),
+        (LUNA, (0.0, 0.0, -1836.0)),
+        (LUNA, (900.0, -1200.0, 600.0)),
+    ],
+)
+def test_body_fixed_to_geodetic_matches_spice_recgeo(body: BodyFrame, position) -> None:
+    flattening = (body.equatorial_radius_km - body.polar_radius_km) / body.equatorial_radius_km
+    ref_lon, ref_lat, ref_alt = spiceypy.recgeo(
+        list(position), body.equatorial_radius_km, flattening
+    )
+    geo = geodetic_from_body_fixed(Vec3(*position), body)
+    assert geo.lat_deg == pytest.approx(math.degrees(ref_lat), abs=1e-9)
+    assert geo.alt_km == pytest.approx(ref_alt, abs=1e-6)
+    if math.hypot(position[0], position[1]) > 1e-6:
+        assert geo.lon_deg == pytest.approx(math.degrees(ref_lon), abs=1e-9)
 
 
 def test_geodetic_round_trip_and_longitude_range() -> None:

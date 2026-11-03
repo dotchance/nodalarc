@@ -601,6 +601,7 @@ def world_from_resolution(resolution: SessionResolution) -> BuilderWorld:
             propagator_id=ctx.propagator_id,
             body_states=body_states,
             body_frames=ctx.body_frames,
+            physics=ctx.physics,
         )
         epoch_positions = {
             node_id: NodePosition(

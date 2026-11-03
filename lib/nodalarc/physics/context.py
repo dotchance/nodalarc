@@ -36,6 +36,7 @@ import numpy as np
 from anise import Almanac
 from anise.astro import Frame
 from anise.constants import Orientations
+from anise.rotation import DCM
 from anise.time import Epoch
 
 from nodalarc.frames import Vec3
@@ -53,11 +54,22 @@ from nodalarc.physics.ephemeris_table import (
     select_file_ids,
 )
 from nodalarc.physics.errors import PhysicsDataError
+from nodalarc.physics.motion import BodyMotionTable
 
 
 def epoch_of(master_sim_time_unix: float) -> Epoch:
     """The single conversion from master sim time to an ANISE epoch."""
     return Epoch.init_from_unix_seconds(float(master_sim_time_unix))
+
+
+def tdb_seconds_of(master_sim_time_unix: float) -> float:
+    """Master sim time as TDB seconds past J2000, the time scale of signal travel."""
+    return float(epoch_of(master_sim_time_unix).to_tdb_seconds())
+
+
+def unix_seconds_of_tdb(tdb_seconds: float) -> float:
+    """TDB seconds past J2000 as master sim time."""
+    return float(Epoch.init_from_tdb_seconds(float(tdb_seconds)).to_unix_seconds())
 
 
 @dataclass(frozen=True, slots=True)
@@ -108,6 +120,10 @@ class _Coverage:
     end_unix: float
 
 
+# The solar system barycenter, origin of the frame signal travel is computed in.
+_SSB_NAIF_ID = 0
+
+
 def _inertial_frame(naif_id: int) -> Frame:
     return Frame(naif_id, Orientations.J2000)
 
@@ -142,6 +158,7 @@ class PhysicsContext:
         self._coverage = {body: self._read_coverage(body) for body in self._body_ids}
         self._sun_coverage = self._read_sun_coverage()
         self._bases = {body: self._orbit_basis(body) for body in self._body_ids}
+        self._motion = BodyMotionTable(self)
 
     @property
     def selected_files(self) -> tuple[SelectedFile, ...]:
@@ -191,6 +208,39 @@ class PhysicsContext:
             velocity_km_s=Vec3(state.vx_km_s, state.vy_km_s, state.vz_km_s),
         )
 
+    def barycentric_state(self, body_id: str, tdb_seconds: float) -> tuple[np.ndarray, np.ndarray]:
+        """The body's center relative to the solar system barycenter, ICRF axes: position (km)
+        and velocity (km/s) at a TDB epoch. Signal travel is computed in this frame, so
+        Earth-relative vectors are never differenced across two epochs."""
+        data = body_data(body_id)
+        epoch = Epoch.init_from_tdb_seconds(float(tdb_seconds))
+        self.require_coverage(body_id, epoch.to_unix_seconds())
+        state = self._almanac.translate(
+            _inertial_frame(data.naif_id), _inertial_frame(_SSB_NAIF_ID), epoch, None
+        )
+        return (
+            np.array([state.x_km, state.y_km, state.z_km]),
+            np.array([state.vx_km_s, state.vy_km_s, state.vz_km_s]),
+        )
+
+    @property
+    def motion(self) -> BodyMotionTable:
+        """This context's interpolation table of barycentric body positions and orientations."""
+        return self._motion
+
+    def rotation_at_tdb(self, body_id: str, tdb_seconds: float) -> np.ndarray:
+        """Rotation from ICRF axes to the body-fixed frame at a TDB epoch (signal travel's time
+        scale; ``orientation`` takes master sim time)."""
+        epoch = Epoch.init_from_tdb_seconds(float(tdb_seconds))
+        self.require_coverage(body_id, epoch.to_unix_seconds())
+        return np.asarray(self._rotate(body_id, epoch).rot_mat, dtype=np.float64)
+
+    def _rotate(self, body_id: str, epoch: Epoch) -> DCM:
+        data = body_data(body_id)
+        return self._almanac.rotate(
+            _inertial_frame(data.naif_id), Frame(data.naif_id, data.fixed_orientation_id), epoch
+        )
+
     def require_coverage(self, body_id: str, master_sim_time_unix: float) -> None:
         coverage = self._coverage.get(body_id)
         if coverage is None:
@@ -229,12 +279,7 @@ class PhysicsContext:
     def orientation(self, body_id: str, master_sim_time_unix: float) -> BodyOrientation:
         """Rotation from ICRF axes to the body-fixed frame, with its derivative."""
         self.require_coverage(body_id, master_sim_time_unix)
-        data = body_data(body_id)
-        dcm = self._almanac.rotate(
-            _inertial_frame(data.naif_id),
-            Frame(data.naif_id, data.fixed_orientation_id),
-            epoch_of(master_sim_time_unix),
-        )
+        dcm = self._rotate(body_id, epoch_of(master_sim_time_unix))
         if dcm.rot_mat_dt is None:
             raise PhysicsDataError(f"orientation data for {body_id!r} carries no rotation rate")
         return BodyOrientation(

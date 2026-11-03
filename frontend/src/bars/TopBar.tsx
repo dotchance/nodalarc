@@ -206,6 +206,21 @@ export function TopBar({ snapshot, historicalMode, onToggleHistorical, activeSes
           <option value={120}>120x</option>
           <option value={300}>300x</option>
         </select>
+        {snapshot?.playback_pause_reason === "ephemeris_coverage_ended" &&
+          snapshot.playback_coverage && (
+            <span
+              className="topbar-pacing"
+              role="status"
+              title={
+                `The ${snapshot.playback_coverage.body_id} ephemeris data supports this ` +
+                `session from ${formatTime(snapshot.playback_coverage.usable_from)} to ` +
+                `${formatTime(snapshot.playback_coverage.usable_until)}. The clock stopped at ` +
+                `the last tick the data supports; seek back into that span to continue.`
+              }
+            >
+              Ephemeris data ends {formatTime(snapshot.playback_coverage.usable_until)}
+            </span>
+          )}
         {snapshot?.pacing_degraded && snapshot.playback_achieved != null && (
           <span
             className="topbar-pacing"

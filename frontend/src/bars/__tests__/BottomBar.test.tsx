@@ -29,6 +29,8 @@ function snapshot(history_recording: HistoryRecordingState | null): StateSnapsho
     session_status: "ready",
     session_status_detail: null,
     playback_paused: false,
+    playback_pause_reason: null,
+    playback_coverage: null,
     playback_speed: 1,
     stale: false,
     history_recording,

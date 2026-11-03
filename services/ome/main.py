@@ -13,6 +13,7 @@ import logging
 import math
 import os
 import time
+from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal, NamedTuple
@@ -26,6 +27,8 @@ from nodalarc.models.events import (
     PlaybackControlCommand,
     PlaybackControlFailed,
     PlaybackControlRefused,
+    PlaybackCoverageLimit,
+    PlaybackPauseReason,
     PlaybackState,
     SchedulingCheckpoint,
 )
@@ -37,9 +40,18 @@ from nodalarc.models.ome_lifecycle import (
 from nodalarc.models.resolved_session import ResolvedSession
 from nodalarc.models.session import GroundSchedulingConfig, session_epoch_unix
 from nodalarc.nats_channels import MAX_TIME_ACCEL, MIN_TIME_ACCEL
-from nodalarc.ome_inputs import ResolvedAddressingView, build_ome_inputs_from_resolved
+from nodalarc.ome_inputs import (
+    ResolvedAddressingView,
+    build_ome_inputs_from_resolved,
+    coverage_requirement,
+)
 from nodalarc.ome_runtime import GroundStationFile, SatelliteNode
 from nodalarc.physics import PhysicsContext
+from nodalarc.physics.coverage import (
+    TickCoverageGap,
+    describe_tick_coverage_gap,
+    tick_coverage_gap,
+)
 from nodalarc.prepared_tree import load_prepared_tree_session_resolution
 from nodalarc.resolve_session import SessionResolution
 from nodalarc.runtime_service_config import (
@@ -284,6 +296,29 @@ _seeking: bool = False  # True while seek in progress — mutex for pause/set_sp
 _initial_epoch_committed: bool = (
     False  # playback controls other than status wait for step-0 authority
 )
+# Set when the pacing thread paused the clock at the end of the ephemeris data; only a seek back
+# into covered time clears it.
+_pause_reason: PlaybackPauseReason | None = None
+_coverage_limit: PlaybackCoverageLimit | None = None
+# The session's coverage check for a tick at a sim time (set once the session is loaded).
+_coverage_gap_at: Callable[[float], TickCoverageGap | None] | None = None
+
+
+def _limit_of(gap: TickCoverageGap) -> PlaybackCoverageLimit:
+    return PlaybackCoverageLimit(
+        body_id=gap.body_id,
+        usable_from=datetime.fromtimestamp(gap.usable_start_unix, UTC),
+        usable_until=datetime.fromtimestamp(gap.usable_end_unix, UTC),
+    )
+
+
+def _playback_state(epoch_id: int, state: Literal["seeking", "playing", "paused"]) -> PlaybackState:
+    """The playback state, with OME's own pause reason when it stopped at the end of the data."""
+    if state == "paused" and _pause_reason is not None:
+        return PlaybackState(
+            epoch_id=epoch_id, state=state, reason=_pause_reason, coverage=_coverage_limit
+        )
+    return PlaybackState(epoch_id=epoch_id, state=state)
 
 
 async def _handle_playback_control_command(
@@ -299,7 +334,7 @@ async def _handle_playback_control_command(
     helper, publishes ``PlaybackState(playing)`` after the new snapshot,
     decision snapshot, and checkpoint have committed.
     """
-    global _time_accel, _paused, _seeking, _seek_target, _epoch_id
+    global _time_accel, _paused, _seeking, _seek_target, _epoch_id, _pause_reason, _coverage_limit
 
     action = cmd.action
     if not _initial_epoch_committed:
@@ -318,6 +353,15 @@ async def _handle_playback_control_command(
         await publish_playback_state("paused")
         logging.info("Playback paused (speed=%.1f)", _time_accel)
     elif action == "resume":
+        if _pause_reason == "ephemeris_coverage_ended":
+            return PlaybackControlRefused(
+                reason="ephemeris_coverage_ended",
+                message=(
+                    "The clock stopped at the last tick the ephemeris data supports; seek back "
+                    "into the usable interval"
+                ),
+                coverage=_coverage_limit,
+            )
         _paused = False
         await publish_playback_state("playing")
         logging.info("Playback resumed (speed=%.1f)", _time_accel)
@@ -333,12 +377,25 @@ async def _handle_playback_control_command(
         _time_accel = factor
         logging.info("Playback speed set to %.1fx", factor)
     elif action == "seek":
+        target = (
+            cmd.target_sim_time.timestamp()
+            if cmd.target_sim_time
+            else datetime.now(UTC).timestamp()
+        )
+        if _coverage_gap_at is None:
+            raise RuntimeError("seek before the session's coverage check exists")
+        gap = _coverage_gap_at(target)
+        if gap is not None:
+            return PlaybackControlRefused(
+                reason="ephemeris_coverage",
+                message=f"Cannot seek there: {describe_tick_coverage_gap(gap)}",
+                coverage=_limit_of(gap),
+            )
         _epoch_id += 1
         _seeking = True
-        if cmd.target_sim_time:
-            _seek_target = cmd.target_sim_time.timestamp()
-        else:
-            _seek_target = datetime.now(UTC).timestamp()
+        _seek_target = target
+        _pause_reason = None
+        _coverage_limit = None
         _paused = False
         await publish_playback_state("seeking")
         target_iso = datetime.fromtimestamp(_seek_target, UTC).isoformat()
@@ -347,7 +404,7 @@ async def _handle_playback_control_command(
     state: Literal["seeking", "playing", "paused"] = (
         "seeking" if _seeking else "paused" if _paused else "playing"
     )
-    return PlaybackControlAccepted(state=PlaybackState(epoch_id=_epoch_id, state=state))
+    return PlaybackControlAccepted(state=_playback_state(_epoch_id, state))
 
 
 def run(
@@ -457,9 +514,9 @@ async def _nats_publisher_loop(
     await _connect_logging(nc)
     logging.debug("OME NATS publisher connected to %s (session_id=%s)", nats_url(), session_id)
 
-    async def _publish_playback_state(state: str) -> None:
+    async def _publish_playback_state(state: Literal["seeking", "playing", "paused"]) -> None:
         """Publish PlaybackState to NODALARC_SESSION stream."""
-        ps = PlaybackState(epoch_id=_epoch_id, state=state)
+        ps = _playback_state(_epoch_id, state)
         await js.publish(_subj_playback, ps.model_dump_json().encode())
         logging.debug("PlaybackState published: state=%s epoch_id=%d", state, _epoch_id)
 
@@ -670,6 +727,7 @@ def _run_pacing(
             associations=assoc_flat,
             pending_teardowns=td_flat,
             paused=_paused,
+            pause_reason=_pause_reason,
             time_accel=_time_accel,
             written_at=time.time(),
             # Closure read, like _paused/_time_accel above: the current
@@ -723,12 +781,15 @@ def _run_pacing(
     # Initialize Pacemaker rate from static compression.
     # Runtime set_speed commands replace this value dynamically.
     global _time_accel, _seek_target, _seeking, _paused, _epoch_id, _initial_epoch_committed
+    global _pause_reason, _coverage_limit, _coverage_gap_at
     _time_accel = float(compression)
     _seek_target = None
     _seeking = False
     _paused = False
     _epoch_id = 0
     _initial_epoch_committed = False
+    _pause_reason = None
+    _coverage_limit = None
     platform_snapshot_interval_s = get_platform_config().ome_link_state_snapshot_interval_s
 
     interface_map = cfg.interface_map
@@ -942,6 +1003,17 @@ def _run_pacing(
     # Grammar-legal fractional steps execute as declared; truncating here
     # once ran step_seconds 1.5 as 1 and crashed on 0.5.
     step_seconds = float(session.time.step_seconds)
+    requirement = coverage_requirement(cfg.resolved)
+
+    def _gap_at(sim_time_unix: float) -> TickCoverageGap | None:
+        return tick_coverage_gap(
+            cfg.physics,
+            sim_time_unix,
+            light_time_bound_s=requirement.light_time_bound_s,
+            lookahead_s=requirement.lookahead_s,
+        )
+
+    _coverage_gap_at = _gap_at
     anchor_interval_ticks = max(1, int(300 / step_seconds))
     snapshot_interval_s = _authority_snapshot_interval_s(
         platform_snapshot_interval_s=platform_snapshot_interval_s,
@@ -1425,6 +1497,7 @@ def _run_pacing(
     # it stays paused. Fresh deployment starts playing (normal UX).
     if recovered_checkpoint is not None:
         _paused = recovered_checkpoint.paused
+        _pause_reason = recovered_checkpoint.pause_reason
         _time_accel = recovered_checkpoint.time_accel
         current_rate = _time_accel
     else:
@@ -1448,8 +1521,16 @@ def _run_pacing(
         _publish_mbb_lifecycle_events(initial_step_result, epoch_id=initial_epoch_id)
     _publish_checkpoint(initial_step_result, epoch_id=initial_epoch_id)
 
-    initial_playback_state = "paused" if _paused else "playing"
-    ps = PlaybackState(epoch_id=initial_epoch_id, state=initial_playback_state)
+    initial_playback_state: Literal["paused", "playing"] = "paused" if _paused else "playing"
+    if _pause_reason is not None:
+        recovered_gap = _coverage_gap_at(epoch_unix + (initial_step_result.step + 1) * step_seconds)
+        if recovered_gap is None:
+            raise RuntimeError(
+                "the checkpoint records a pause at the end of the ephemeris data, and the data "
+                "now covers the next tick"
+            )
+        _coverage_limit = _limit_of(recovered_gap)
+    ps = _playback_state(initial_epoch_id, initial_playback_state)
     _enqueue(subj_playback, ps)
     if not _paused:
         _publish_clock_tick(initial_step_result, current_rate, epoch_id=initial_epoch_id)
@@ -1486,6 +1567,11 @@ def _run_pacing(
             seek_to = _seek_target
             if seek_to is not None:
                 _seek_target = None
+                # A seek implies resume. This thread may have set an end-of-data pause while the
+                # seek command was being accepted; pause and resume are refused during a seek.
+                _paused = False
+                _pause_reason = None
+                _coverage_limit = None
                 seek_epoch_id = _epoch_id
                 old_epoch_id = active_epoch_id
                 old_step = max(0, step - 1)
@@ -1645,6 +1731,23 @@ def _run_pacing(
                 # Durable speed: recovery restores time_accel from the
                 # checkpoint, which otherwise lags the command by a tick.
                 _publish_checkpoint(last_step_result, epoch_id=last_epoch_id)
+
+            # --- Coverage gate: the next tick runs only when the data covers every query it makes.
+            # Otherwise the clock pauses at the last committed tick and says why.
+            gate_epoch_id = _epoch_id
+            next_gap = _coverage_gap_at(epoch_unix + step * step_seconds)
+            if next_gap is not None:
+                if _epoch_id != gate_epoch_id or _seek_target is not None:
+                    continue  # a seek arrived during the check; take it at the top
+                _pause_reason = "ephemeris_coverage_ended"
+                _coverage_limit = _limit_of(next_gap)
+                _paused = True
+                logging.warning(
+                    "Clock paused at the end of the ephemeris data: %s",
+                    describe_tick_coverage_gap(next_gap),
+                )
+                _enqueue(subj_playback, _playback_state(gate_epoch_id, "paused"))
+                continue
 
             # --- Compute one step (Physicist role) ---
             tick_epoch_id = _epoch_id

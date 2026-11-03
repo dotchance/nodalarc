@@ -28,6 +28,7 @@ from nodalarc.models.resolved_session import (
 )
 from nodalarc.models.session import GroundSchedulingConfig, session_epoch_unix
 from nodalarc.ome_runtime import (
+    PASS_SAMPLE_CHUNK_TICKS,
     GroundStation,
     GroundStationFile,
     GroundTerminal,
@@ -39,6 +40,7 @@ from nodalarc.ome_runtime import (
     retarget_satellites,
 )
 from nodalarc.physics import PhysicsContext
+from nodalarc.physics.coverage import light_time_bound_s
 from nodalarc.physics.kepler import orbital_period_s
 from nodalarc.physics.session import (
     body_frame_from_facts,
@@ -584,3 +586,46 @@ def _allocator_wide_ground_scheduling(nodes: list[ResolvedNode]) -> GroundSchedu
             + ", ".join(mismatched)
         )
     return first
+
+
+@dataclass(frozen=True)
+class CoverageRequirement:
+    """How far beyond a tick a session's queries reach: the longest possible light time between
+    its endpoints, and the ground-pass lookahead (its largest horizon plus one sampling chunk)."""
+
+    light_time_bound_s: float
+    lookahead_s: float
+
+
+def coverage_requirement(resolved: ResolvedSession) -> CoverageRequirement:
+    """The session's coverage requirement, read from the resolved session. The endpoints of space
+    signals are the satellites and the stations with access terminals, which are the stations
+    OME schedules. Each such station's lookahead comes from its own selection policy, which OME's
+    station resolution keeps over every default. A session without satellites or access stations
+    has no light time and no lookahead."""
+    body_frames = _body_frames_from_resolved(resolved)
+    selected_access = resolved.selected_access_terminals_by_node()
+    access_ground_ids = frozenset(resolved.ground_candidate_satellites_by_gs())
+    reach_km: dict[str, float] = {}
+    horizon_ticks = 0
+    for node in resolved.nodes:
+        if node.kind == "satellite":
+            sat = _satellite_from_resolved(node, ())
+            apoapsis = sat.elements.semi_major_axis_km * (1.0 + sat.elements.eccentricity)
+            reach_km[sat.central_body] = max(reach_km.get(sat.central_body, 0.0), apoapsis)
+        elif node.node_id in access_ground_ids and selected_access.get(node.node_id):
+            if node.surface_position is None or node.ground_scheduling is None:
+                raise ValueError(
+                    f"ground node {node.node_id!r} is missing its surface position or scheduling"
+                )
+            body = _node_reference_body(node)
+            radius = body_frames[body].equatorial_radius_km + node.surface_position.alt_m / 1000.0
+            reach_km[body] = max(reach_km.get(body, 0.0), radius)
+            policy = _ground_scheduling_config(node.ground_scheduling).selection_policy
+            if policy.name == "longest-remaining-pass":
+                horizon_ticks = max(horizon_ticks, int(policy.params["lookahead_horizon_ticks"]))
+    lookahead_ticks = horizon_ticks + PASS_SAMPLE_CHUNK_TICKS if horizon_ticks else 0
+    return CoverageRequirement(
+        light_time_bound_s=light_time_bound_s(reach_km),
+        lookahead_s=lookahead_ticks * float(resolved.time.step_seconds),
+    )

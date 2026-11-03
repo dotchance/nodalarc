@@ -9,9 +9,13 @@ LinkStateSnapshot.
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
+
 import pytest
 from nodalarc.models.events import (
     EphemerisNodeKeplerian,
+    PlaybackCoverageLimit,
+    PlaybackState,
 )
 from pydantic import ValidationError
 
@@ -53,6 +57,30 @@ class TestEphemerisNodeKeplerian:
 # ---------------------------------------------------------------------------
 # PlaybackState
 # ---------------------------------------------------------------------------
+
+_COVERAGE = PlaybackCoverageLimit(
+    body_id="earth",
+    usable_from=datetime(2000, 1, 1, 1, 10, tzinfo=UTC),
+    usable_until=datetime(2126, 11, 2, 17, 50, tzinfo=UTC),
+)
+
+
+class TestPlaybackState:
+    """A playback state cannot claim the clock stopped at the end of the data unless it is paused
+    and names the data that ends."""
+
+    @pytest.mark.parametrize("state", ["playing", "seeking"])
+    def test_only_a_pause_carries_the_end_of_the_data(self, state):
+        with pytest.raises(ValidationError, match="pause reason on a"):
+            PlaybackState(
+                epoch_id=1, state=state, reason="ephemeris_coverage_ended", coverage=_COVERAGE
+            )
+
+    def test_the_end_of_the_data_comes_with_its_limit(self):
+        with pytest.raises(ValidationError, match="come together"):
+            PlaybackState(epoch_id=1, state="paused", reason="ephemeris_coverage_ended")
+        with pytest.raises(ValidationError, match="come together"):
+            PlaybackState(epoch_id=1, state="paused", coverage=_COVERAGE)
 
 
 # ---------------------------------------------------------------------------

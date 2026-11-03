@@ -24,6 +24,8 @@ function snapshotWithActuationNotice(): StateSnapshot {
     session_status: "ready",
     session_status_detail: null,
     playback_paused: false,
+    playback_pause_reason: null,
+    playback_coverage: null,
     playback_speed: 1,
     stale: false,
     history_recording: null,
@@ -145,4 +147,34 @@ describe("TopBar actuation notices", () => {
     expect(screen.queryByRole("dialog", { name: /actuation condition details/i })).toBeNull();
   });
 
+});
+
+describe("TopBar clock stopped at the end of the ephemeris data", () => {
+  it("says the data ended, when, and how to continue", () => {
+    renderTopBar({
+      ...snapshotWithActuationNotice(),
+      actuation_notices: [],
+      playback_paused: true,
+      playback_pause_reason: "ephemeris_coverage_ended",
+      playback_coverage: {
+        body_id: "earth",
+        usable_from: "2000-01-01T01:10:00Z",
+        usable_until: "2126-11-02T17:50:00Z",
+      },
+    });
+
+    const status = screen.getByRole("status");
+    expect(status.textContent).toBe("Ephemeris data ends 2126-11-02 17:50:00 UTC");
+    expect(status.getAttribute("title")).toBe(
+      "The earth ephemeris data supports this session from 2000-01-01 01:10:00 UTC to " +
+        "2126-11-02 17:50:00 UTC. The clock stopped at the last tick the data supports; " +
+        "seek back into that span to continue.",
+    );
+  });
+
+  it("says nothing about the data on a pause the user made", () => {
+    renderTopBar({ ...snapshotWithActuationNotice(), actuation_notices: [], playback_paused: true });
+
+    expect(screen.queryByText(/Ephemeris data ends/)).toBeNull();
+  });
 });

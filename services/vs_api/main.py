@@ -894,6 +894,8 @@ def _build_snapshot(*, ops_after: int = 0) -> StateSnapshot | None:
             session_status=_session_manager.status,
             session_status_detail=_session_manager.status_detail,
             playback_paused=ctx.playback_paused,
+            playback_pause_reason=ctx.playback_pause_reason,
+            playback_coverage=ctx.playback_coverage,
             playback_speed=ctx.playback_speed,
             playback_achieved=ctx.playback_achieved,
             pacing_degraded=ctx.pacing_degraded,
@@ -2959,11 +2961,14 @@ def _create_continuous_tracer(ctx: SessionContext) -> ContinuousTracer:
 
 _PLAYBACK_REPLY: TypeAdapter[PlaybackControlReply] = TypeAdapter(PlaybackControlReply)
 # The status a refused playback command answers with: a command the clock cannot take
-# right now conflicts with its state; a speed outside the range is a bad request.
+# right now conflicts with its state; a speed outside the range, or a seek to a time the
+# ephemeris data does not cover, is a bad request.
 _PLAYBACK_REFUSAL_STATUS: dict[PlaybackRefusalReason, int] = {
     "bootstrapping": 409,
     "seeking": 409,
     "speed_out_of_range": 400,
+    "ephemeris_coverage": 400,
+    "ephemeris_coverage_ended": 409,
 }
 
 
@@ -2999,6 +3004,8 @@ async def playback_control(command: PlaybackControlCommand) -> Any:
     ctx = _active_context
     if ctx is not None:
         ctx.playback_paused = reply.state.state == "paused"
+        ctx.playback_pause_reason = reply.state.reason
+        ctx.playback_coverage = reply.state.coverage
         if command.factor is not None:
             ctx.playback_speed = command.factor
     return reply.state

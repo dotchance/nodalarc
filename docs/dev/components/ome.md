@@ -93,7 +93,8 @@ The OME handles pause/resume/set_speed/seek via NATS core request/reply on `noda
 - **Pause:** Pacing thread stops sleeping, sim_time frozen
 - **Resume:** Pacing thread resumes sleeping, sim_time advances
 - **Set speed:** Changes the `time.sleep()` divisor (2x speed = half the sleep time)
-- **Seek:** Discontinuous sim_time jump. Resets epoch state, forces new LinkStateSnapshot, implies resume
+- **Seek:** Discontinuous sim_time jump. Resets epoch state, forces new LinkStateSnapshot, implies resume. A target outside the usable interval of the ephemeris data is refused (`ephemeris_coverage`) before any state changes
+- **End of data:** Before each tick the pacing thread checks that the data covers every read the tick makes: body samples, light time in both directions, and the ground-pass lookahead. When it does not, the clock pauses at the last committed tick and publishes PlaybackState(paused) with the reason `ephemeris_coverage_ended` and the usable interval. Resume is refused until a seek moves the clock back into the interval. The checkpoint keeps the reason, so a restarted OME stays paused
 
 ## Checkpoint and Recovery
 

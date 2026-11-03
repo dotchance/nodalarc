@@ -15,7 +15,10 @@ from nodalarc.models.events import (
     PlaybackState,
 )
 from nodalarc.models.link_decisions import GroundPolicyAudit
+from nodalarc.physics.coverage import tick_coverage_gap
 from ome.types import GroundVisibilityDecision
+
+from tests.physics_fixtures import physics_for
 
 
 def _policy_audit() -> GroundPolicyAudit:
@@ -66,13 +69,23 @@ def _decision(pair: tuple[str, str], *, visible: bool = False) -> GroundVisibili
     )
 
 
+_EARTH_PHYSICS = physics_for("earth")
+
+
 def _reset_playback_globals() -> None:
+    """The playback state of a loaded Earth session with no light time and no lookahead, checked
+    against the shipped data as the pacing thread checks it."""
     ome_main._time_accel = 1.0
     ome_main._seek_target = None
     ome_main._seeking = False
     ome_main._paused = False
     ome_main._epoch_id = 0
     ome_main._initial_epoch_committed = False
+    ome_main._pause_reason = None
+    ome_main._coverage_limit = None
+    ome_main._coverage_gap_at = lambda sim_time_unix: tick_coverage_gap(
+        _EARTH_PHYSICS, sim_time_unix, light_time_bound_s=0.0, lookahead_s=0.0
+    )
 
 
 def test_playback_control_rejects_mutating_commands_before_initial_commit():
@@ -156,3 +169,75 @@ def test_playback_control_refuses_a_speed_outside_the_range_and_keeps_the_clock(
     assert isinstance(reply, PlaybackControlRefused)
     assert reply.reason == "speed_out_of_range"
     assert ome_main._time_accel == 1.0
+
+
+def test_a_seek_past_the_data_is_refused_before_anything_changes():
+    _reset_playback_globals()
+    ome_main._initial_epoch_committed = True
+    ome_main._epoch_id = 2
+    published: list[str] = []
+
+    async def _publish(state: str) -> None:
+        published.append(state)
+
+    reply = asyncio.run(
+        ome_main._handle_playback_control_command(
+            PlaybackControlCommand(action="seek", target_sim_time=datetime(2200, 1, 1, tzinfo=UTC)),
+            _publish,
+        )
+    )
+
+    assert isinstance(reply, PlaybackControlRefused)
+    assert reply.reason == "ephemeris_coverage"
+    assert reply.coverage is not None
+    assert reply.coverage.body_id == "earth"
+    # Earth's data ends 2126-11-03T00:00Z; a tick reads 6 h 10 min ahead (to within float rounding).
+    until = datetime(2126, 11, 2, 17, 50, tzinfo=UTC)
+    assert abs((reply.coverage.usable_until - until).total_seconds()) < 1e-3
+    assert published == []
+    assert (ome_main._epoch_id, ome_main._seeking, ome_main._seek_target) == (2, False, None)
+
+
+def test_a_clock_stopped_at_the_end_of_the_data_resumes_only_through_a_seek_back():
+    _reset_playback_globals()
+    ome_main._initial_epoch_committed = True
+    end_gap = ome_main._coverage_gap_at(datetime(2126, 11, 3, tzinfo=UTC).timestamp())
+    assert end_gap is not None
+    ome_main._pause_reason = "ephemeris_coverage_ended"
+    ome_main._coverage_limit = ome_main._limit_of(end_gap)
+    ome_main._paused = True
+    published: list[str] = []
+
+    async def _publish(state: str) -> None:
+        published.append(state)
+
+    resumed = asyncio.run(
+        ome_main._handle_playback_control_command(PlaybackControlCommand(action="resume"), _publish)
+    )
+    assert isinstance(resumed, PlaybackControlRefused)
+    assert resumed.reason == "ephemeris_coverage_ended"
+    assert ome_main._paused is True
+    assert published == []
+
+    status = asyncio.run(
+        ome_main._handle_playback_control_command(
+            PlaybackControlCommand(action="get_status"), _publish
+        )
+    )
+    assert isinstance(status, PlaybackControlAccepted)
+    assert status.state.reason == "ephemeris_coverage_ended"
+    assert status.state.coverage == ome_main._limit_of(end_gap)
+
+    back = asyncio.run(
+        ome_main._handle_playback_control_command(
+            PlaybackControlCommand(action="seek", target_sim_time=datetime(2126, 1, 1, tzinfo=UTC)),
+            _publish,
+        )
+    )
+    assert isinstance(back, PlaybackControlAccepted)
+    assert back.state == PlaybackState(epoch_id=1, state="seeking")
+    assert (ome_main._paused, ome_main._pause_reason, ome_main._coverage_limit) == (
+        False,
+        None,
+        None,
+    )

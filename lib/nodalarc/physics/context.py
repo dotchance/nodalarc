@@ -129,6 +129,18 @@ def _inertial_frame(naif_id: int) -> Frame:
     return Frame(naif_id, Orientations.J2000)
 
 
+@dataclass(frozen=True)
+class CoverageGap:
+    """The data does not cover a required span: the body whose data falls short, and the span
+    every required body's data covers, in master sim time (Unix seconds)."""
+
+    body_id: str
+    required_start_unix: float
+    required_end_unix: float
+    covered_start_unix: float
+    covered_end_unix: float
+
+
 class PhysicsContext:
     """Body physics for one session's bodies."""
 
@@ -188,6 +200,27 @@ class PhysicsContext:
         start = max(w[0].to_unix_seconds() for w in windows)
         end = min(w[1].to_unix_seconds() for w in windows)
         return _Coverage(start_unix=start, end_unix=end)
+
+    def coverage_gap(self, start_unix: float, end_unix: float) -> CoverageGap | None:
+        """None when every session body's data and the Sun's cover [start, end]. Otherwise the
+        body whose data ends first (or, when only the start falls short, starts last) and the
+        span all of them cover."""
+        spans = {**self._coverage, SUN_ID: self._sun_coverage}
+        covered_start = max(span.start_unix for span in spans.values())
+        covered_end = min(span.end_unix for span in spans.values())
+        if covered_start <= start_unix and end_unix <= covered_end:
+            return None
+        if end_unix > covered_end:
+            short = min(sorted(spans), key=lambda body: spans[body].end_unix)
+        else:
+            short = max(sorted(spans), key=lambda body: spans[body].start_unix)
+        return CoverageGap(
+            body_id=short,
+            required_start_unix=start_unix,
+            required_end_unix=end_unix,
+            covered_start_unix=covered_start,
+            covered_end_unix=covered_end,
+        )
 
     def _require_sun_coverage(self, master_sim_time_unix: float) -> None:
         coverage = self._sun_coverage

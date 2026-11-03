@@ -1548,9 +1548,21 @@ an inferred fallback.
 
 A session does not declare ephemeris data. The platform selects the data files
 for the bodies the session uses, and the resolved session records each selected
-file with its SHA-256. Resolution refuses a session whose `time.start_time`
-lies outside the coverage of that data. Playback, seek, or lookahead outside
-the coverage fails instead of extrapolating.
+file with its SHA-256.
+
+A tick reads the data at other times than its own. Body samples for the page
+reach one hour before the tick and six hours after it. The ground-pass
+lookahead reads ahead to the end of its horizon. A signal reads the data at
+both ends of its travel time. The usable interval of a session is the span in
+which every read of every tick lies inside the data. Resolution refuses a
+session whose `time.start_time` lies outside the usable interval. A seek outside the
+interval is refused with `400 playback.ephemeris_coverage`. The refusal
+message names the limiting body and the usable interval. A running clock
+pauses at the last tick inside the interval. The state then reports
+`playback_pause_reason` as `ephemeris_coverage_ended`. The state's
+`playback_coverage` holds the limiting body and the interval. A resume is
+refused with `409 playback.ephemeris_coverage_ended`. A seek back into the
+interval runs the clock again. No reading of the data is extrapolated.
 
 ## Resolver-wide constraints
 

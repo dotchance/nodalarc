@@ -170,6 +170,14 @@ SUN_ID = "sun"
 # (Resolution B3), 695,700 km.
 SUN_RADIUS_KM = 695_700.0
 
+# The largest distance between two supported bodies' centers the shipped data can hold, per pair:
+# the bound on how far ahead or behind a signal between them can query the data. Earth-Moon:
+# 406,719.705 km, the largest distance in de440s (1849 to 2150), found by a 3 h scan of its whole
+# coverage refined around the peak (2125-02-03); recorded rounded up to the kilometre.
+FARTHEST_SEPARATION_KM: dict[frozenset[str], float] = {
+    frozenset({"earth", "luna"}): 406_720.0,
+}
+
 
 def select_file_ids(body_ids: Iterable[str]) -> tuple[str, ...]:
     """The files the session's bodies need, in load order, each once."""

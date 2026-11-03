@@ -571,6 +571,21 @@ class BodySamples(BaseModel):
         return self
 
 
+# Why OME paused on its own: the ephemeris data ends before the next tick's queries do.
+PlaybackPauseReason = Literal["ephemeris_coverage_ended"]
+
+
+class PlaybackCoverageLimit(BaseModel):
+    """The data that limits a session: the body (or the Sun) whose data falls short, and the usable
+    interval, the span of master sim time in which the session's ticks can run on the data."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    body_id: str
+    usable_from: datetime
+    usable_until: datetime
+
+
 class PlaybackState(BaseModel):
     """OME playback state — seeking/playing/paused.
 
@@ -578,12 +593,25 @@ class PlaybackState(BaseModel):
     state transition. Late-joining subscribers immediately know current
     state. The 'seeking' state is a mutex — edges must suspend until
     all epoch dependencies are satisfied.
+
+    ``reason`` and ``coverage`` are set only on a pause OME made itself: the clock stopped at the
+    last tick the ephemeris data supports.
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     epoch_id: int
     state: Literal["seeking", "playing", "paused"]
+    reason: PlaybackPauseReason | None = None
+    coverage: PlaybackCoverageLimit | None = None
+
+    @model_validator(mode="after")
+    def _reason_only_on_pause(self) -> PlaybackState:
+        if (self.reason is None) != (self.coverage is None):
+            raise ValueError("a pause reason and its coverage limit come together")
+        if self.reason is not None and self.state != "paused":
+            raise ValueError(f"a pause reason on a {self.state!r} playback state")
+        return self
 
 
 class PlaybackControlCommand(BaseModel):
@@ -612,7 +640,13 @@ class PlaybackControlCommand(BaseModel):
 
 
 # Why OME did not apply a playback command.
-PlaybackRefusalReason = Literal["bootstrapping", "seeking", "speed_out_of_range"]
+PlaybackRefusalReason = Literal[
+    "bootstrapping",
+    "seeking",
+    "speed_out_of_range",
+    "ephemeris_coverage",
+    "ephemeris_coverage_ended",
+]
 
 
 class PlaybackControlAccepted(BaseModel):
@@ -632,6 +666,8 @@ class PlaybackControlRefused(BaseModel):
     reply: Literal["refused"] = "refused"
     reason: PlaybackRefusalReason
     message: str
+    # Set on the two coverage refusals: the data that limits the session.
+    coverage: PlaybackCoverageLimit | None = None
 
 
 class PlaybackControlFailed(BaseModel):
@@ -729,6 +765,8 @@ class SchedulingCheckpoint(BaseModel):
     associations: dict[str, CheckpointAssociation]  # pair_key → association
     pending_teardowns: dict[str, TeardownEntry]  # pair_key → entry
     paused: bool
+    # Set when OME paused itself at the end of the ephemeris data, so a restart stays paused there.
+    pause_reason: PlaybackPauseReason | None = None
     time_accel: float
     written_at: float  # wall clock (time.time()) when checkpoint was published
     # Exact epoch anchor. sim_time above is microsecond-quantized by
@@ -738,6 +776,12 @@ class SchedulingCheckpoint(BaseModel):
     # field existed; recovery falls back to the quantized reconstruction
     # and logs that it did.
     epoch_unix: float | None = None
+
+    @model_validator(mode="after")
+    def _reason_only_on_pause(self) -> SchedulingCheckpoint:
+        if self.pause_reason is not None and not self.paused:
+            raise ValueError("a pause reason on a checkpoint that is not paused")
+        return self
 
 
 class ReplayAnchor(BaseModel):

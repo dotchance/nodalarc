@@ -14,6 +14,7 @@ from nodalarc.frames import EcefVec3, GeoPosition
 from nodalarc.geo import compute_range_km
 from nodalarc.ground_terminals import TerminalPhysicsProfile
 from nodalarc.models.terminal_physics import GroundBoresightMode, SatGroundBoresightMode
+from nodalarc.ome_runtime import PASS_SAMPLE_CHUNK_TICKS
 from nodalarc.physics import PhysicsContext
 from nodalarc.physics.lighttime import Endpoint, Signals, SiteEndpoint
 
@@ -30,9 +31,6 @@ from ome.propagation_engine import PropagatedState
 from ome.telemetry import SEG_DWELL, StepTimings
 from ome.types import GroundVisibilityDecision, GroundVisibilityDecisionMap
 from ome.visibility import GroundVisibility
-
-# Future ticks a pass lookahead samples per signals call for one pair.
-PASS_SAMPLE_CHUNK_TICKS = 32
 
 type TerminalPhysicsProfileSet = TerminalPhysicsProfile | Sequence[TerminalPhysicsProfile]
 

@@ -549,9 +549,19 @@ second.
 A session does not declare ephemeris data. The platform ships JPL and NAIF data
 files for the bodies it supports, selects the files for the bodies a session
 uses, and records each selected file with its SHA-256 in the resolved session.
-A session whose start time lies outside the data's coverage is refused, and
-playback, seek, or lookahead outside that coverage fails rather than
-extrapolating.
+A tick reads the data at other times than its own. Body samples for the page
+reach one hour before the tick and six hours after it. The ground-pass
+lookahead reads ahead to the end of its horizon. A signal reads the data at
+both ends of its travel time. The usable interval of a session is the span in
+which every read of every tick lies inside the data. Resolution refuses a
+session whose start time lies outside the usable interval. A seek outside the
+interval is refused with `400 playback.ephemeris_coverage`. The refusal
+message names the limiting body and the usable interval. A running clock
+pauses at the last tick inside the interval. The state then reports
+`playback_pause_reason` as `ephemeris_coverage_ended`. The state's
+`playback_coverage` holds the limiting body and the interval. A resume is
+refused with `409 playback.ephemeris_coverage_ended`. A seek back into the
+interval runs the clock again. No reading of the data is extrapolated.
 
 ## Deploying configuration
 

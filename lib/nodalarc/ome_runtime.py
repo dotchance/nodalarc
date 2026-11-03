@@ -129,6 +129,11 @@ class GroundStation(BaseModel):
         return self
 
 
+# Future ticks the ground-pass lookahead samples per signals call for one pair. The data must
+# cover them too, so the coverage requirement reads this value.
+PASS_SAMPLE_CHUNK_TICKS = 32
+
+
 class GroundStationFile(BaseModel):
     """Resolved collection of OME ground-node facts."""
 

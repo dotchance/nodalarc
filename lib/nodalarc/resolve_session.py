@@ -65,7 +65,9 @@ from nodalarc.models.segment_session import (
 from nodalarc.models.segments import GroundOverride, GroundSegment, SegmentClock, SpaceSegment
 from nodalarc.models.session import session_epoch_unix
 from nodalarc.models.terminal_physics import SatGroundTerminalBoresight, TerminalBoresight
+from nodalarc.ome_inputs import coverage_requirement
 from nodalarc.physics import PhysicsContext, PhysicsDataError
+from nodalarc.physics.coverage import describe_tick_coverage_gap, tick_coverage_gap
 from nodalarc.physics.session import session_node_positions, session_physics
 from nodalarc.runtime_naming import validate_runtime_node_id
 from nodalarc.runtime_support import (
@@ -282,11 +284,30 @@ def resolve_session_with_assets(
     _check_profile_env(workload_profiles, resolved_nodes)
     _refuse_bfd_where_peers_mix_families(resolved, workload_profiles)
     _refuse_routing_beyond_adapter_limits(resolved, workload_profiles)
+    _require_coverage_of_the_first_tick(resolved, session_physics(resolved))
     return SessionResolution(
         resolved=resolved,
         catalog_session=cfg,
         workload_profiles=workload_profiles,
     )
+
+
+def _require_coverage_of_the_first_tick(resolved: ResolvedSession, physics: PhysicsContext) -> None:
+    """The ephemeris data must cover everything the session's first tick queries: its light
+    times, its ground-pass lookahead and its body samples. A session the data cannot start fails
+    here, not when its clock reaches the edge of the data."""
+    requirement = coverage_requirement(resolved)
+    gap = tick_coverage_gap(
+        physics,
+        session_epoch_unix(resolved.time),
+        light_time_bound_s=requirement.light_time_bound_s,
+        lookahead_s=requirement.lookahead_s,
+    )
+    if gap is not None:
+        raise SessionResolutionError(
+            f"ephemeris data cannot support this session's start time: "
+            f"{describe_tick_coverage_gap(gap)}"
+        )
 
 
 def _resolve_dispatch(cfg: SegmentSessionConfig) -> Dispatch:

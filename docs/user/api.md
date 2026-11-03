@@ -246,6 +246,7 @@ The state snapshot contains:
 - **recent_events** - last 50 link state changes and handoffs
 - **sim_time** / **wall_time** - current simulation and wall-clock time
 - **playback_paused** / **playback_speed** - time control state
+- **playback_pause_reason** / **playback_coverage** - set when the clock paused itself at the end of the ephemeris data: the reason `ephemeris_coverage_ended`, the limiting body, and the usable interval (`usable_from`, `usable_until`)
 
 Runtime node IDs are assigned by the shared resolver. Generated space-node IDs
 combine the segment ID with the generated local node ID, such as

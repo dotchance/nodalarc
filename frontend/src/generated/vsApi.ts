@@ -627,10 +627,19 @@ export interface PlaybackControlCommand {
   readonly target_sim_time?: string | null;
 }
 
-/** OME playback state — seeking/playing/paused. Published to NODALARC_SESSION stream (MaxMsgsPerSubject=1) at every state transition. Late-joining subscribers immediately know current state. The 'seeking' state is a mutex — edges must suspend until all epoch dependencies are satisfied. */
+/** The data that limits a session: the body (or the Sun) whose data falls short, and the usable interval, the span of master sim time in which the session's ticks can run on the data. */
+export interface PlaybackCoverageLimit {
+  readonly body_id: string;
+  readonly usable_from: string;
+  readonly usable_until: string;
+}
+
+/** OME playback state — seeking/playing/paused. Published to NODALARC_SESSION stream (MaxMsgsPerSubject=1) at every state transition. Late-joining subscribers immediately know current state. The 'seeking' state is a mutex — edges must suspend until all epoch dependencies are satisfied. ``reason`` and ``coverage`` are set only on a pause OME made itself: the clock stopped at the last tick the ephemeris data supports. */
 export interface PlaybackState {
   readonly epoch_id: number;
   readonly state: "seeking" | "playing" | "paused";
+  readonly reason: "ephemeris_coverage_ended" | null;
+  readonly coverage: PlaybackCoverageLimit | null;
 }
 
 /** The project's attribution and the build serving it. */
@@ -734,6 +743,8 @@ export interface StateSnapshot {
   readonly session_status: SessionStatus;
   readonly session_status_detail: string | null;
   readonly playback_paused: boolean;
+  readonly playback_pause_reason: "ephemeris_coverage_ended" | null;
+  readonly playback_coverage: PlaybackCoverageLimit | null;
   readonly playback_speed: number;
   readonly playback_achieved: number | null;
   readonly pacing_degraded: boolean;

@@ -6,7 +6,11 @@ from datetime import UTC, datetime
 
 import pytest
 from nodalarc.models.events import SchedulingCheckpoint
-from nodalarc.scheduling_checkpoint import decode_retained_scheduling_checkpoint
+from nodalarc.scheduling_checkpoint import (
+    decode_retained_scheduling_checkpoint,
+    encode_retained_scheduling_checkpoint,
+)
+from pydantic import ValidationError
 
 
 def _checkpoint(**overrides) -> SchedulingCheckpoint:
@@ -143,3 +147,18 @@ class TestExactEpochAnchor:
         assert decoded is not None
         assert decoded == ckpt
         assert decoded.epoch_unix == fractional_epoch
+
+
+def test_a_pause_at_the_end_of_the_data_survives_the_retained_checkpoint():
+    """A restarted OME reads the reason back, so it stays paused at the end of the data."""
+    paused = _checkpoint(paused=True, pause_reason="ephemeris_coverage_ended")
+
+    recovered = decode_retained_scheduling_checkpoint(encode_retained_scheduling_checkpoint(paused))
+
+    assert recovered is not None
+    assert (recovered.paused, recovered.pause_reason) == (True, "ephemeris_coverage_ended")
+
+
+def test_a_checkpoint_cannot_give_a_pause_reason_while_playing():
+    with pytest.raises(ValidationError, match="not paused"):
+        _checkpoint(paused=False, pause_reason="ephemeris_coverage_ended")

@@ -6,6 +6,7 @@ import sqlite3
 from datetime import UTC, datetime
 from functools import cache
 from pathlib import Path
+from typing import get_args
 
 import pytest
 import yaml
@@ -19,7 +20,12 @@ from nodalarc.db.queries import (
     query_nearest_snapshot,
 )
 from nodalarc.db.schema import create_tables
-from nodalarc.models.events import EphemerisNodeFixed, EphemerisNodeTLE, SessionEphemeris
+from nodalarc.models.events import (
+    EphemerisNodeFixed,
+    EphemerisNodeTLE,
+    PlaybackRefusalReason,
+    SessionEphemeris,
+)
 from nodalarc.models.resolved_session import InterfaceRates, SourceContext
 from nodalarc.models.vs_api import (
     DebugControlAcknowledgedFact,
@@ -667,8 +673,59 @@ class TestPlaybackRoute:
         response = client.post("/api/v1/playback", json={"action": "set_speed", "factor": 10.0})
 
         assert response.status_code == 200
-        assert response.json() == {"epoch_id": 3, "state": "playing"}
+        assert response.json() == {
+            "epoch_id": 3,
+            "state": "playing",
+            "reason": None,
+            "coverage": None,
+        }
         assert (ctx.playback_speed, ctx.playback_paused) == (10.0, False)
+
+    @pytest.mark.parametrize("reason", get_args(PlaybackRefusalReason))
+    def test_every_refusal_ome_can_send_answers_its_reason(self, monkeypatch, reason):
+        from nodalarc.models.events import PlaybackControlRefused
+
+        client, ctx = self._relay(
+            monkeypatch, PlaybackControlRefused(reason=reason, message="refused")
+        )
+
+        response = client.post("/api/v1/playback", json={"action": "resume"})
+
+        assert response.status_code in (400, 409)
+        assert response.json()["code"] == f"playback.{reason}"
+
+    def test_a_state_paused_at_the_end_of_the_data_reaches_the_page(self, monkeypatch):
+        from nodalarc.models.events import (
+            PlaybackControlAccepted,
+            PlaybackCoverageLimit,
+            PlaybackState,
+        )
+
+        coverage = PlaybackCoverageLimit(
+            body_id="earth",
+            usable_from=datetime(2000, 1, 1, 1, 10, tzinfo=UTC),
+            usable_until=datetime(2126, 11, 2, 17, 50, tzinfo=UTC),
+        )
+        client, ctx = self._relay(
+            monkeypatch,
+            PlaybackControlAccepted(
+                state=PlaybackState(
+                    epoch_id=3,
+                    state="paused",
+                    reason="ephemeris_coverage_ended",
+                    coverage=coverage,
+                )
+            ),
+        )
+
+        response = client.post("/api/v1/playback", json={"action": "get_status"})
+
+        assert response.status_code == 200
+        assert (ctx.playback_paused, ctx.playback_pause_reason, ctx.playback_coverage) == (
+            True,
+            "ephemeris_coverage_ended",
+            coverage,
+        )
 
 
 def test_a_node_states_its_body_and_frame():

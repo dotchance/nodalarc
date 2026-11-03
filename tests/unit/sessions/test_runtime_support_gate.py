@@ -156,6 +156,23 @@ class TestEphemerisDataAtResolve:
         with pytest.raises(SessionResolutionError, match="does not cover"):
             resolve_session(raw)
 
+    def test_session_whose_first_tick_queries_past_the_data_fails_at_resolve(self) -> None:
+        """The epoch itself is covered, and the first tick's body samples (6 h ahead) are not:
+        Earth's orientation data ends 2126-11-03T00:00Z. The refusal gives the usable interval."""
+        raw = _session()
+        raw["time"]["start_time"] = "2126-11-02T20:00:00Z"
+        with pytest.raises(SessionResolutionError) as refusal:
+            resolve_session(raw)
+        assert str(refusal.value) == (
+            "ephemeris data cannot support this session's start time: the earth data supports "
+            "this session from 2000-01-01T01:10:00+00:00 to 2126-11-02T17:50:00+00:00"
+        )
+
+    def test_session_whose_first_tick_queries_stay_inside_the_data_resolves(self) -> None:
+        raw = _session()
+        raw["time"]["start_time"] = "2126-11-02T12:00:00Z"
+        resolve_session(raw)
+
     def test_data_file_that_does_not_match_its_pin_fails_at_resolve(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:

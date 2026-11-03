@@ -19,6 +19,8 @@ from nodalarc.models.events import (
     DebugControlAction,
     OpsEvent,
     OpsLevel,
+    PlaybackCoverageLimit,
+    PlaybackPauseReason,
     ServiceSource,
     SessionEphemeris,
 )
@@ -454,6 +456,9 @@ class StateSnapshot(BaseModel):
     session_status: SessionStatus
     session_status_detail: str | None = None
     playback_paused: bool = False
+    # Set when OME paused the clock itself at the end of the ephemeris data.
+    playback_pause_reason: PlaybackPauseReason | None = None
+    playback_coverage: PlaybackCoverageLimit | None = None
     playback_speed: float = 1.0
     # Rate honesty: playback_speed is the COMMANDED rate (from ClockTick
     # compression_ratio); playback_achieved is what the engine measured

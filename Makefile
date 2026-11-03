@@ -467,6 +467,7 @@ typecheck: ## Type-check Builder, session-configuration, and OME frame authority
 		lib/nodalarc/physics/__init__.py \
 		lib/nodalarc/physics/__main__.py \
 		lib/nodalarc/physics/context.py \
+		lib/nodalarc/physics/coverage.py \
 		lib/nodalarc/physics/datasets.py \
 		lib/nodalarc/physics/ephemeris_table.py \
 		lib/nodalarc/physics/errors.py \

@@ -56,7 +56,12 @@ from nodalarc.models.decision_explanation import (
     GsDecisionTimelineFacts,
     PendingActuation,
 )
-from nodalarc.models.events import OpsEvent
+from nodalarc.models.events import (
+    OpsEvent,
+    PlaybackCoverageLimit,
+    PlaybackPauseReason,
+    PlaybackState,
+)
 from nodalarc.models.link_decisions import GroundLinkDecisionSnapshot
 from nodalarc.models.link_events import LatencyUpdate, LinkDown, LinkUp
 from nodalarc.models.ome_lifecycle import MbbTeardownLifecycleDetails
@@ -249,6 +254,9 @@ class SessionContext:
         # wall time for it.
         self.sim_time: str | None = None
         self.playback_paused: bool = False
+        # OME's own pause at the end of the ephemeris data: its reason and the data's limit.
+        self.playback_pause_reason: PlaybackPauseReason | None = None
+        self.playback_coverage: PlaybackCoverageLimit | None = None
         self.playback_speed: float = 1.0
         self.playback_achieved: float | None = None
         self.pacing_degraded: bool = False
@@ -741,13 +749,11 @@ class SessionContext:
             )
 
     async def _on_playback_state(self, msg) -> None:
-        data = json.loads(msg.data)
-        state = data.get("state")
-        if not state:
-            log.error("Malformed PlaybackState — missing state: %s", data)
-            raise ValueError("PlaybackState missing state")
+        playback = PlaybackState.model_validate_json(msg.data)
         with self.state_lock:
-            self.playback_paused = state == "paused"
+            self.playback_paused = playback.state == "paused"
+            self.playback_pause_reason = playback.reason
+            self.playback_coverage = playback.coverage
 
     async def _on_clock_tick(self, msg) -> None:
         data = json.loads(msg.data)

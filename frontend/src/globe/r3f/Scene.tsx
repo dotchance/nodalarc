@@ -21,12 +21,8 @@ import { useCallback, useEffect, useMemo, useRef, useState, type MutableRefObjec
 import * as THREE from "three";
 import type { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { onSnapshot, setPlaybackPaused, resetSimClock } from "../../sim/simClock";
-import {
-  acceptBodySampleWindow,
-  acceptEphemerisEpoch,
-  resetBodySamples,
-  skyAt,
-} from "../../sim/bodySamples";
+import { peekSkyAt } from "../../sim/bodySamples";
+import { useBodySampleStore } from "./useBodySampleStore";
 import { useDecisionExplanation } from "../../explain/useDecisionExplanation";
 import { useGroundCandidates } from "../../explain/useGroundCandidates";
 import { gsCandidateRelations } from "../../explain/gsCandidateRelations";
@@ -60,7 +56,7 @@ import { Labels } from "./Labels";
 import { Tooltip, type HoverInfo } from "./Tooltip";
 import { SelectionOverlay } from "./SelectionOverlay";
 import { FrameDriver, type SkyAvailability } from "./FrameDriver";
-import { bodyPose } from "./bodyPose";
+import { placedBodiesAt } from "./bodyPose";
 import { kmToRender } from "./units";
 import {
   cameraDistanceForSceneRadius,
@@ -194,15 +190,9 @@ export function Scene({
     () => (ephemeris ? kmPerRenderUnitFromEphemeris(ephemeris) : null),
     [ephemeris],
   );
-  // The store pairs each window with its epoch's SessionEphemeris. Effects run in
-  // declaration order, so an ephemeris and a window of one render are taken in that order.
-  useEffect(() => {
-    if (ephemeris === null) resetBodySamples();
-    else acceptEphemerisEpoch(ephemeris);
-  }, [ephemeris]);
-  useEffect(() => {
-    if (bodySamples !== null) acceptBodySampleWindow(bodySamples);
-  }, [bodySamples]);
+  // This scene owns the body-sample store while mounted; its version changes whenever the
+  // accepted samples do.
+  const bodySamplesVersion = useBodySampleStore(ephemeris, bodySamples);
   const [skyAvailability, setSkyAvailability] = useState<SkyAvailability>("waiting-for-clock");
   const skyAvailable = skyAvailability === "available";
 
@@ -225,24 +215,15 @@ export function Scene({
   }, [ephemeris, nodes, kmPerRenderUnit]);
   const bodyIds = useMemo(() => bodies.map((body) => body.id), [bodies]);
   // Body centres at the snapshot's sim time, for camera framing and picking. A body
-  // with no sample covering that time has no centre to frame or pick.
-  const placedBodies = useMemo(() => {
-    if (simTimeUnix === null || kmPerRenderUnit === null) return [];
-    const sky = skyAt(simTimeUnix);
-    if (!sky) return [];
-    return bodies.flatMap((body) => {
-      const pose = bodyPose(sky, body.id, referenceFrame);
-      if (!pose) return [];
-      const [x, y, z] = pose.positionKm;
-      const position: [number, number, number] = [
-        kmToRender(x, kmPerRenderUnit),
-        kmToRender(z, kmPerRenderUnit),
-        -kmToRender(y, kmPerRenderUnit),
-      ];
-      return [{ ...body, position }];
-    });
-    // bodySamples: a new window can make an uncovered snapshot time covered.
-  }, [bodies, simTimeUnix, kmPerRenderUnit, referenceFrame, bodySamples]);
+  // with no sample covering that time has no centre to frame or pick. Read without releasing
+  // windows (a render must not change the store); recomputed when the accepted samples change.
+  const placedBodies = useMemo(
+    () =>
+      simTimeUnix === null || kmPerRenderUnit === null
+        ? []
+        : placedBodiesAt(bodies, peekSkyAt(simTimeUnix), referenceFrame, kmPerRenderUnit),
+    [bodies, simTimeUnix, kmPerRenderUnit, referenceFrame, bodySamplesVersion],
+  );
   const controlsMaxDistance = useMemo(
     () =>
       cameraDistanceForSceneRadius(

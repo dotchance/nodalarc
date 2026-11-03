@@ -231,14 +231,24 @@ let _epoch: EpochIdentity | null = null;
 /** Windows the store holds, in arrival order of acceptance (oldest first). */
 let _windows: BodySamples[] = [];
 let _version = 0;
+const _listeners = new Set<() => void>();
 
 function changed(): void {
   _version += 1;
+  for (const listener of _listeners) listener();
 }
 
-/** Bumped whenever the displayable windows change; the worker bridge resends on change. */
+/** Bumped whenever the displayable windows change; the worker bridge resends on change, and
+ *  React reads it through useSyncExternalStore so render-time reads recompute. */
 export function bodySamplesVersion(): number {
   return _version;
+}
+
+export function subscribeBodySamples(listener: () => void): () => void {
+  _listeners.add(listener);
+  return () => {
+    _listeners.delete(listener);
+  };
 }
 
 export function resetBodySamples(): void {
@@ -299,6 +309,14 @@ export function displayableWindows(): readonly BodySamples[] {
   if (_epoch === null) return [];
   const epochId = _epoch.epoch_id;
   return _windows.filter((window) => window.epoch_id === epochId);
+}
+
+/**
+ * Every body and the Sun at `t` without releasing any window: for reads during a
+ * React render, which must not change the store.
+ */
+export function peekSkyAt(t: number): SkyState | null {
+  return interpolateWindows(displayableWindows(), t);
 }
 
 /**

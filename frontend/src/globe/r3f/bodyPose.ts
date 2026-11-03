@@ -77,6 +77,28 @@ export function bodyPose(sky: SkyState, bodyId: string, mode: ReferenceFrame): B
   };
 }
 
+/** Bodies with their centres on world render axes at the sky's instant, for camera framing
+ *  and picking; a body with no state in the sky (or no sky) is left out. */
+export function placedBodiesAt<B extends { id: string }>(
+  bodies: readonly B[],
+  sky: SkyState | null,
+  mode: ReferenceFrame,
+  kmPerRenderUnit: number,
+): (B & { position: [number, number, number] })[] {
+  if (!sky) return [];
+  return bodies.flatMap((body) => {
+    const pose = bodyPose(sky, body.id, mode);
+    if (!pose) return [];
+    const [x, y, z] = pose.positionKm;
+    const position: [number, number, number] = [
+      x / kmPerRenderUnit,
+      z / kmPerRenderUnit,
+      -y / kmPerRenderUnit,
+    ];
+    return [{ ...body, position }];
+  });
+}
+
 /** The Sun's direction on world axes (unit vector, km axes). */
 export function sunDirection(sky: SkyState, mode: ReferenceFrame): Vector3 | null {
   const view = viewRotation(sky, mode);

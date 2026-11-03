@@ -12,13 +12,15 @@ Bounds and measured worst values (Earth and the Moon):
 
 from __future__ import annotations
 
+import gc
+import weakref
 from datetime import UTC, datetime
 
 import numpy as np
 import pytest
 import spiceypy
 from anise.time import Epoch
-from nodalarc.physics import PhysicsContext, PhysicsDataError
+from nodalarc.physics import EphemerisLocation, PhysicsContext, PhysicsDataError
 from nodalarc.physics.context import tdb_seconds_of
 from nodalarc.physics.motion import GRID_SPACING_S
 
@@ -95,3 +97,19 @@ def test_grid_points_lie_on_the_tdb_grid(physics_context: PhysicsContext) -> Non
     assert np.array_equal(physics_context.motion.states("luna", on_grid)[0][0], position)
     rotation = physics_context.rotation_at_tdb("luna", k * GRID_SPACING_S)
     assert np.array_equal(physics_context.motion.orientations("luna", on_grid)[0][0], rotation)
+
+
+def test_a_dropped_context_is_freed_without_the_cycle_collector(
+    physics_location: EphemerisLocation,
+) -> None:
+    """A context and its motion table form no reference cycle: the last reference going away
+    frees the context's ephemeris data at once."""
+    gc.disable()
+    try:
+        physics = PhysicsContext(["earth", "luna"], location=physics_location)
+        physics.motion.states("earth", np.array([tdb_seconds_of(STARTS[0])]))
+        dropped = weakref.ref(physics)
+        del physics
+        assert dropped() is None
+    finally:
+        gc.enable()

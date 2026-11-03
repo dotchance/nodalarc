@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import math
 import threading
+import weakref
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
@@ -54,7 +55,11 @@ class BodyMotionTable:
     """Interpolated barycentric positions and orientations for one physics context."""
 
     def __init__(self, physics: PhysicsContext) -> None:
-        self._physics = physics
+        # The context owns this table, so the table refers back to it weakly. A strong reference
+        # made a cycle that kept every dropped context (about 55 MB of ephemeris data each) alive
+        # until the cycle collector ran: 30 contexts built in a row held 2,148 MB, and VS-API was
+        # killed at its 2 GiB limit during a session switch.
+        self._physics_ref = weakref.ref(physics)
         self._states: dict[tuple[str, int], tuple[np.ndarray, np.ndarray]] = {}
         self._rotations: dict[tuple[str, int], np.ndarray] = {}
         self._cells: dict[tuple[str, int], np.ndarray] = {}
@@ -68,7 +73,7 @@ class BodyMotionTable:
             with self._lock:
                 state = self._states.get(key)
                 if state is None:
-                    state = self._physics.barycentric_state(body_id, k * GRID_SPACING_S)
+                    state = self._physics().barycentric_state(body_id, k * GRID_SPACING_S)
                     _keep(self._states, key, state)
         return state
 
@@ -79,9 +84,15 @@ class BodyMotionTable:
             with self._lock:
                 rotation = self._rotations.get(key)
                 if rotation is None:
-                    rotation = self._physics.rotation_at_tdb(body_id, k * GRID_SPACING_S)
+                    rotation = self._physics().rotation_at_tdb(body_id, k * GRID_SPACING_S)
                     _keep(self._rotations, key, rotation)
         return rotation
+
+    def _physics(self) -> PhysicsContext:
+        physics = self._physics_ref()
+        if physics is None:
+            raise RuntimeError("the physics context that owns this motion table no longer exists")
+        return physics
 
     def _cell_states(self, body_id: str, k: int) -> np.ndarray:
         """Hermite coefficients of cell k: rows p0, h v0, p1, h v1."""

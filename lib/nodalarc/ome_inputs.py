@@ -42,6 +42,7 @@ from nodalarc.ome_runtime import (
 from nodalarc.orbital import OrbitalElements
 from nodalarc.physics import PhysicsContext
 from nodalarc.physics.kepler import orbital_period_s
+from nodalarc.physics.session import session_active_bodies, session_physics
 
 GroundLinkModel = Literal["geometry_only", "terminal_physics"]
 
@@ -172,7 +173,7 @@ def build_ome_inputs_from_resolved(resolved: ResolvedSession) -> ResolvedOmeInpu
         for sat in satellites
     )
     ground_scheduling = _allocator_wide_ground_scheduling(ground_nodes)
-    active_bodies = _active_bodies(resolved)
+    active_bodies = session_active_bodies(resolved)
     return ResolvedOmeInputs(
         satellites=satellites,
         addressing=addressing,
@@ -192,28 +193,8 @@ def build_ome_inputs_from_resolved(resolved: ResolvedSession) -> ResolvedOmeInpu
         ),
         active_bodies=active_bodies,
         body_frames=body_frames,
-        physics=_physics_for_recorded_files(resolved, active_bodies),
+        physics=session_physics(resolved),
     )
-
-
-def _physics_for_recorded_files(
-    resolved: ResolvedSession, active_bodies: frozenset[str]
-) -> PhysicsContext:
-    """The physics context, refused unless it loads the files the session recorded.
-
-    The resolved session names the ephemeris files its results come from. A
-    service whose image carries different data must not run the session on
-    that data while the record names other files.
-    """
-    physics = PhysicsContext(active_bodies)
-    loaded = tuple((f.file_id, f.sha256) for f in physics.selected_files)
-    recorded = tuple((f.file_id, f.sha256) for f in resolved.ephemeris_files)
-    if loaded != recorded:
-        raise ValueError(
-            f"this service's ephemeris data {loaded} differs from the files the resolved "
-            f"session recorded {recorded}"
-        )
-    return physics
 
 
 def _body_frame_from_resolved_facts(facts: ResolvedBodyFacts) -> BodyFrame:
@@ -237,7 +218,7 @@ def _body_frame_from_resolved_facts(facts: ResolvedBodyFacts) -> BodyFrame:
 
 def _body_frames_from_resolved(resolved: ResolvedSession) -> dict[str, BodyFrame]:
     frames = {facts.body_id: _body_frame_from_resolved_facts(facts) for facts in resolved.bodies}
-    active = _active_bodies(resolved)
+    active = session_active_bodies(resolved)
     missing = sorted(active - set(frames))
     if missing:
         raise ValueError(
@@ -254,18 +235,6 @@ def _required_body_frame(body_frames: dict[str, BodyFrame], body_id: str) -> Bod
         raise ValueError(f"resolved runtime is missing body frame for {body_id!r}") from exc
 
 
-def _active_bodies(resolved: ResolvedSession) -> frozenset[str]:
-    active = frozenset(
-        body
-        for node in resolved.nodes
-        for body in (node.central_body, node.reference_body)
-        if body is not None
-    )
-    if not active:
-        raise ValueError("resolved session contains no active body references")
-    return active
-
-
 def resolved_body_frames_at_epoch(
     resolved: ResolvedSession, epoch_unix: float
 ) -> dict[str, EphemerisBodyFrame]:
@@ -277,8 +246,8 @@ def resolved_body_frames_at_epoch(
     session (render scale anchors on a body frame) rather than wall it — the OME
     satellite precondition is a runtime-readiness gate, not a grammar rule."""
     physical = _body_frames_from_resolved(resolved)
-    active = _active_bodies(resolved)
-    body_states = PhysicsContext(active).body_states(active, epoch_unix)
+    active = session_active_bodies(resolved)
+    body_states = session_physics(resolved).body_states(active, epoch_unix)
     frames: dict[str, EphemerisBodyFrame] = {}
     for body_id, state in sorted(body_states.items()):
         frame = physical[body_id]

@@ -1,10 +1,13 @@
+import dataclasses
 from pathlib import Path
 
+import pytest
 import yaml
 from nodalarc.catalog_closure import FilesystemCatalogReadView
 from nodalarc.catalog_paths import CatalogRoots
 from nodalarc.models.resolved_session import IsisInstanceAreas, SourceContext
 from nodalarc.models.vs_api import NodeInstanceInterface, NodeRoutingInstance
+from nodalarc.physics import PhysicsDataError
 from nodalarc.resolve_session import resolve_session_with_assets
 from vs_api.resolved_runtime_views import (
     routing_instances_by_node_id,
@@ -174,3 +177,31 @@ def test_the_luna_boundary_relays_are_reported_as_as_boundary_routers():
     )
     assert instances["luna-relay-sat-p00s00"]["luna_domain"].areas == ("49.0001",)
     assert instances["geo-relay-sat-p00s03"]["earth_domain"].areas == ("49.0001",)
+
+
+def test_session_context_refuses_data_that_differs_from_the_recorded_files():
+    """VS-API publishes positions only from the files the resolution recorded,
+    the same refusal OME applies (tests/unit/sky/test_ome_catalog_runtime.py)."""
+    resolution = _resolution()
+    resolved = resolution.resolved
+    altered = dataclasses.replace(
+        resolution,
+        resolved=resolved.model_copy(
+            update={
+                "ephemeris_files": (
+                    resolved.ephemeris_files[0].model_copy(update={"sha256": "0" * 64}),
+                    *resolved.ephemeris_files[1:],
+                )
+            }
+        ),
+    )
+
+    with pytest.raises(
+        PhysicsDataError, match="differs from the files the resolved session recorded"
+    ):
+        SessionContext(
+            "run-test-resolved-0002",
+            resolution=altered,
+            source_id="user:sessions/resolved-test.yaml",
+            history_path=None,
+        )

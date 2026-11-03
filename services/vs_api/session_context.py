@@ -102,6 +102,7 @@ from nodalarc.nats_channels import (
     session_ephemeris_subject,
 )
 from nodalarc.physics import PhysicsContext
+from nodalarc.physics.session import session_physics
 from nodalarc.platform_config import get_platform_config
 from nodalarc.resolve_session import SessionResolution
 from pydantic import ValidationError
@@ -210,6 +211,10 @@ class SessionContext:
             else None
         )
 
+        # Positions for this session come from the ephemeris files its
+        # resolution recorded; a VS-API image with other data refuses the
+        # session here, as OME does.
+        self._physics: PhysicsContext | None = session_physics(resolved)
         self._init_runtime_state()
         self._seed_resolved_static_nodes()
 
@@ -262,9 +267,6 @@ class SessionContext:
         self.last_snapshot_seq: int = 0
         self.cached_ephemeris: SessionEphemerisFrame | None = None
         self.cached_ephemeris_obj: object | None = None
-        # Physics context for the bodies of the cached ephemeris; rebuilt when
-        # a new ephemeris names different bodies.
-        self._physics: PhysicsContext | None = None
         self.almanac_lock = threading.Lock()
         self.almanac: AlmanacState = AlmanacState()
         self.continuous_tracer = None
@@ -350,6 +352,7 @@ class SessionContext:
         self.beam_falloff_exponent = 2.0
         self.actuation_expected_latency_ms = 250.0
         self.actuation_fault_after_ms = 1200.0
+        self._physics = None
         self._init_runtime_state()
 
     def is_ready(self) -> bool:
@@ -1395,9 +1398,6 @@ class SessionContext:
         # The published elements are valid at the ephemeris epoch. VS-API turns
         # them into positions with the shared physics module, the same code OME
         # runs, one batch per central body and orbit model.
-        bodies = frozenset(ephemeris.body_frames)
-        if self._physics is None or self._physics.body_ids != tuple(sorted(bodies)):
-            self._physics = PhysicsContext(bodies)
         groups: dict[tuple[str, str], list[tuple[str, OrbitalElements]]] = {}
         for node_id, node in ephemeris.nodes.items():
             if isinstance(node, EphemerisNodeKeplerian):
@@ -1418,9 +1418,14 @@ class SessionContext:
                 )
         analytic: dict[str, tuple[GeoPosition, tuple[float, float, float]]] = {}
         dt = sim_time_unix - ephemeris.epoch_unix
-        for (body_id, model), members in groups.items():
+        physics = self._physics
+        if groups and physics is None:
+            raise ValueError(
+                "SessionEphemeris names analytic satellites but this context has no session physics"
+            )
+        for (body_id, model), members in groups.items() if physics is not None else ():
             states = analytic_satellite_states(
-                self._physics,
+                physics,
                 body_frame=body_frame_for(members[0][0], body_id),
                 model=model,
                 elements=[elements for _node_id, elements in members],

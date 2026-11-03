@@ -1,48 +1,87 @@
 // Copyright 2024-2026 .chance (dotchance)
 // Licensed under the Apache License, Version 2.0. See LICENSE file.
 /**
- * FrameDriver — applies the reference-frame rotation each frame, reproducing the legacy
- * GlobeView render-loop rotation law. The relative rotation between the Earth frame and
- * the star frame is always +gmst(simTime); the active mode decides which group carries it:
- *   earth-inertial: earthFrame.rotation.y = +gmst, starFrame = 0 (Earth visibly rotates)
- *   earth-fixed:    earthFrame.rotation.y = 0,     starFrame = -gmst (sky counter-rotates)
+ * FrameDriver — places and turns every body group, and the starfield, each frame from
+ * OME's body samples at the interpolated sim time (bodyPose.ts has the law). The inertial
+ * view shows ICRF axes, so Earth turns; the Earth-fixed view shows Earth's axes, so the
+ * sky and the other bodies turn around it. Both views take Earth's orientation from the
+ * same samples, so satellites, ground stations and bodies stay in one frame.
  *
- * gmst comes from the reused astronomy.gmstRadians on the EMA-interpolated sim time, so the
- * Earth rotation and satellite propagation stay in lockstep off one clock. Runs at a
- * negative useFrame priority so the rotation is set BEFORE any world-position consumer
+ * Runs at a negative useFrame priority so poses are set BEFORE any world-position consumer
  * (selection ring, links, labels, camera) reads getNodeWorldPosition this frame — and
  * negative (not positive) so R3F keeps auto-rendering rather than handing us the render loop.
+ *
+ * When no sample window covers the render time, or the Earth-fixed view is asked of a
+ * session without Earth, it reports that through `onAvailabilityChange` and moves nothing:
+ * the scene shows the state instead of a placement it does not have.
  */
 
 import * as THREE from "three";
+import { useRef } from "react";
 import { useFrame } from "@react-three/fiber";
+import { skyAt } from "../../sim/bodySamples";
 import { interpolatedSimTimeMs } from "../../sim/simClock";
-import { gmstRadians } from "../astronomy";
 import type { ReferenceFrame } from "../../types";
+import { bodyPose, toRenderQuaternion, toRenderVector, viewRotation } from "./bodyPose";
+import { getBodyFrame } from "./positions";
 
-/** The rotation law: which group carries +gmst, given the reference frame. Pure. */
-export function frameRotations(
-  gmstRad: number,
-  mode: ReferenceFrame,
-): { earthRotY: number; starRotY: number } {
-  return mode === "earth-inertial"
-    ? { earthRotY: gmstRad, starRotY: 0 }
-    : { earthRotY: 0, starRotY: -gmstRad };
-}
+/** Why the scene can or cannot place bodies at the render time. */
+export type SkyAvailability =
+  | "available"
+  | "waiting-for-clock"
+  | "no-body-samples"
+  | "no-earth-for-fixed-view";
 
 interface FrameDriverProps {
-  earthFrame: React.RefObject<THREE.Group | null>;
   starFrame: React.RefObject<THREE.Group | null>;
   referenceFrame: ReferenceFrame;
+  kmPerRenderUnit: number;
+  bodyIds: readonly string[];
+  onAvailabilityChange: (availability: SkyAvailability) => void;
 }
 
-export function FrameDriver({ earthFrame, starFrame, referenceFrame }: FrameDriverProps) {
+export function FrameDriver({
+  starFrame,
+  referenceFrame,
+  kmPerRenderUnit,
+  bodyIds,
+  onAvailabilityChange,
+}: FrameDriverProps) {
+  const reported = useRef<SkyAvailability | null>(null);
+  const report = (availability: SkyAvailability) => {
+    if (reported.current === availability) return;
+    reported.current = availability;
+    onAvailabilityChange(availability);
+  };
+
   useFrame(() => {
     const interpMs = interpolatedSimTimeMs(performance.now());
-    const gmstRad = interpMs !== null ? gmstRadians(interpMs / 1000) : 0;
-    const { earthRotY, starRotY } = frameRotations(gmstRad, referenceFrame);
-    if (earthFrame.current) earthFrame.current.rotation.y = earthRotY;
-    if (starFrame.current) starFrame.current.rotation.y = starRotY;
+    if (interpMs === null) {
+      report("waiting-for-clock");
+      return;
+    }
+    const sky = skyAt(interpMs / 1000);
+    if (!sky) {
+      report("no-body-samples");
+      return;
+    }
+    const view = viewRotation(sky, referenceFrame);
+    if (!view) {
+      report("no-earth-for-fixed-view");
+      return;
+    }
+    for (const bodyId of bodyIds) {
+      const pose = bodyPose(sky, bodyId, referenceFrame);
+      if (!pose) {
+        throw new Error(`body samples carry no state for rendered body ${bodyId}`);
+      }
+      const group = getBodyFrame(bodyId);
+      if (!group) continue;
+      toRenderVector(pose.positionKm, group.position, 1 / kmPerRenderUnit);
+      toRenderQuaternion(pose.rotation, group.quaternion);
+    }
+    if (starFrame.current) toRenderQuaternion(view, starFrame.current.quaternion);
+    report("available");
   }, -2);
   return null;
 }

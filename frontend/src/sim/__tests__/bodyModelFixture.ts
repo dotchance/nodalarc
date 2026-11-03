@@ -50,12 +50,13 @@ export function catalogEarthFrame(): EphemerisBodyFrame {
     ),
     rotation_rate_rad_s: 7.2921159e-5,
     j2: 1.08262668e-3,
-    origin_x_km: 0,
-    origin_y_km: 0,
-    origin_z_km: 0,
-    vel_x_km_s: 0,
-    vel_y_km_s: 0,
-    vel_z_km_s: 0,
+    // Earth's orbit-element basis is the identity by definition: Earth elements
+    // are measured on ICRF axes.
+    orbit_basis: [
+      [1, 0, 0],
+      [0, 1, 0],
+      [0, 0, 1],
+    ],
   };
 }
 

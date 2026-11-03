@@ -46,6 +46,11 @@ export function setBodyFrame(
 }
 
 /** Upsert a node's body-local position + the body it lives in (zero-alloc after first sighting). */
+/** The registered group that holds a body's body-fixed frame. */
+export function getBodyFrame(bodyId: string): THREE.Object3D | undefined {
+  return bodyFrames.get(bodyId);
+}
+
 export function setNodeLocalPosition(
   nodeId: string,
   body: string,

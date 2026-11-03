@@ -5,7 +5,7 @@
 import { useEffect, useRef, useState, useCallback } from "react";
 import { getWsUrl, fetchApiKey } from "../config";
 import { mergeSnapshot } from "../snapshotMerge";
-import type { SessionEphemeris } from "../builder/generated/builderApi";
+import type { BodySamples, SessionEphemeris } from "../builder/generated/builderApi";
 import type { StateFeedFrame, StateSnapshot, StateSocketCommand } from "../generated/vsApi";
 
 /** A state snapshot and when its frame arrived (performance.now() at decode). */
@@ -17,6 +17,8 @@ export interface ReceivedSnapshot {
 interface WebSocketState {
   received: ReceivedSnapshot | null;
   ephemeris: SessionEphemeris | null;
+  /** The latest body-sample window received; the scene's store decides what it may show. */
+  bodySamples: BodySamples | null;
   connected: boolean;
   hasEverConnected: boolean;
   sessionTransitioning: boolean;
@@ -32,6 +34,7 @@ interface WebSocketState {
 export function useWebSocket(): WebSocketState {
   const [received, setReceived] = useState<ReceivedSnapshot | null>(null);
   const [ephemeris, setEphemeris] = useState<SessionEphemeris | null>(null);
+  const [bodySamples, setBodySamples] = useState<BodySamples | null>(null);
   const [connected, setConnected] = useState(false);
   const [hasEverConnected, setHasEverConnected] = useState(false);
   const [sessionTransitioning, setSessionTransitioning] = useState(false);
@@ -75,6 +78,10 @@ export function useWebSocket(): WebSocketState {
         case "session_ephemeris":
           setEphemeris(frame);
           return;
+        // Sent on connect and whenever OME publishes a new window.
+        case "body_samples":
+          setBodySamples(frame);
+          return;
         // Wiring progress from the Node Agent.
         case "wiring_progress":
           setReceived((prev) =>
@@ -89,6 +96,7 @@ export function useWebSocket(): WebSocketState {
           if (!sessionTransitioning) {
             setReceived(null);
             setEphemeris(null);
+            setBodySamples(null);
           }
           setSessionTransitioning(true);
           setSessionError(null);
@@ -171,6 +179,7 @@ export function useWebSocket(): WebSocketState {
   return {
     received,
     ephemeris,
+    bodySamples,
     connected,
     hasEverConnected,
     sessionTransitioning,

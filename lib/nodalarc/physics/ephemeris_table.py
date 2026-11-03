@@ -160,6 +160,11 @@ def body_data(body_id: str) -> BodyData:
 ORIGIN_FILE_ID = "de440s"
 ORIGIN_NAIF_ID = 399
 
+# The Sun's position lights the page's bodies. It comes from the same
+# planetary positions file, which every context loads, so lighting needs no
+# extra file and does not make the Sun a session body.
+SUN_NAIF_ID = 10
+
 
 def select_file_ids(body_ids: Iterable[str]) -> tuple[str, ...]:
     """The files the session's bodies need, in load order, each once."""

@@ -3,77 +3,36 @@
 // Licensed under the Apache License, Version 2.0. See LICENSE file.
 import { describe, it, expect } from "vitest";
 import {
-  gmstRadians,
   propagateToSceneXYZ,
   geoToSceneXYZ,
-  J2000_UNIX_SECONDS,
+  sampleOrbitPathSceneXYZ,
+  type KeplerianElements,
 } from "../orbitalMath";
+import type { Matrix3 } from "../bodySamples";
 import { catalogEarthBodyMath } from "./bodyModelFixture";
+
+// Geometric properties of the orbit model (altitude, period, shape) hold under any
+// body orientation, so these tests fix the orientation at the identity. The sampled
+// orientation is checked against the backend in satelliteStates.test.ts.
+const IDENTITY: Matrix3 = [
+  [1, 0, 0],
+  [0, 1, 0],
+  [0, 0, 1],
+];
+const J2000_UNIX_SECONDS = 946728000.0;
+
+function propagate(elements: KeplerianElements, epoch: number, t: number) {
+  return propagateToSceneXYZ(elements, epoch, t, IDENTITY);
+}
+
+function samplePath(elements: KeplerianElements, epoch: number, t: number, samples?: number) {
+  return sampleOrbitPathSceneXYZ(elements, epoch, t, IDENTITY, samples);
+}
 
 const EARTH_BODY = catalogEarthBodyMath();
 const EARTH_KM_PER_RENDER_UNIT = EARTH_BODY.kmPerRenderUnit;
 const EARTH_SURFACE_RENDER = EARTH_BODY.equatorialRadiusKm / EARTH_KM_PER_RENDER_UNIT;
 const ORBIT_BASE_RADIUS_KM = EARTH_BODY.meanRadiusKm;
-
-describe("gmstRadians — backend contract", () => {
-  // Reference values computed from services/ome/propagator.py:gmst().
-  // Do not edit without re-running the backend reference computation.
-  const REFERENCE_VALUES: Array<{
-    name: string;
-    unixSeconds: number;
-    expectedGmstRad: number;
-  }> = [
-    { name: "J2000 epoch", unixSeconds: 946728000.0, expectedGmstRad: 4.894961212735793 },
-    { name: "J2000 + 12h", unixSeconds: 946771200.0, expectedGmstRad: 1.761969955048685 },
-    { name: "J2000 + 1 sidereal day", unixSeconds: 946814164.0905, expectedGmstRad: 4.894961210487280 },
-    { name: "2026-04-04T00:00:00Z", unixSeconds: 1775260800.0, expectedGmstRad: 3.356722590080810 },
-    { name: "2026-04-04T12:00:00Z", unixSeconds: 1775304000.0, expectedGmstRad: 0.223731332394507 },
-    { name: "Far future 2050-01-01", unixSeconds: 2524608000.0, expectedGmstRad: 1.760088545761268 },
-  ];
-
-  for (const ref of REFERENCE_VALUES) {
-    it(`matches backend gmst() at ${ref.name}`, () => {
-      const actual = gmstRadians(ref.unixSeconds);
-      // 1e-9 rad ≈ 0.2 milliarcseconds — far below any visual resolution.
-      expect(Math.abs(actual - ref.expectedGmstRad)).toBeLessThan(1e-9);
-      expect(actual).toBeGreaterThanOrEqual(0);
-      expect(actual).toBeLessThan(2 * Math.PI);
-    });
-  }
-
-  it("handles negative days (pre-J2000) without sign errors", () => {
-    // NodalArc sessions won't encounter these, but correctness over
-    // assumption: JS % of float differs from Python for negative inputs.
-    const preJ2000 = J2000_UNIX_SECONDS - 86400; // 1999-12-31 12:00:00 UTC
-    const g = gmstRadians(preJ2000);
-    expect(g).toBeGreaterThanOrEqual(0);
-    expect(g).toBeLessThan(2 * Math.PI);
-    expect(Number.isFinite(g)).toBe(true);
-  });
-
-  it("increases monotonically over short spans (modulo wrap)", () => {
-    // GMST advances ~7.29e-5 rad/s. Over 1 second it advances but doesn't
-    // wrap. Check that adjacent samples differ by roughly the right amount.
-    const t0 = 1775260800; // 2026-04-04T00:00:00Z
-    const t1 = t0 + 1;
-    const g0 = gmstRadians(t0);
-    const g1 = gmstRadians(t1);
-    const delta = g1 - g0;
-    // Expect ~7.292e-5 rad per second (sidereal rate, 360.985/86400 deg/sec).
-    expect(delta).toBeGreaterThan(7.2e-5);
-    expect(delta).toBeLessThan(7.4e-5);
-  });
-
-  it("wraps cleanly across the 2π boundary", () => {
-    // The J2000 angle and sidereal rate place the first wrap at 19037.33 s.
-    const before = gmstRadians(J2000_UNIX_SECONDS + 19037);
-    const after = gmstRadians(J2000_UNIX_SECONDS + 19038);
-    expect(before).toBeGreaterThan(2 * Math.PI - 0.0001);
-    expect(before).toBeLessThan(2 * Math.PI);
-    expect(after).toBeGreaterThanOrEqual(0);
-    expect(after).toBeLessThan(0.0001);
-  });
-});
 
 describe("orbitalMath", () => {
   describe("geoToSceneXYZ geometric correctness", () => {
@@ -166,7 +125,7 @@ describe("orbitalMath", () => {
 
     it("produces a position at the correct orbital altitude", () => {
       const epoch = J2000_UNIX_SECONDS;
-      const [x, y, z] = propagateToSceneXYZ(iss, epoch, epoch);
+      const [x, y, z] = propagate(iss, epoch, epoch);
       const dist = Math.sqrt(x * x + y * y + z * z);
       const expectedDist = EARTH_SURFACE_RENDER + issAltitudeKm / EARTH_KM_PER_RENDER_UNIT;
       // WGS84 ellipsoid altitude differs from spherical by up to ~21km
@@ -176,8 +135,8 @@ describe("orbitalMath", () => {
 
     it("moves the satellite over time (not static)", () => {
       const epoch = J2000_UNIX_SECONDS;
-      const [x0, y0, z0] = propagateToSceneXYZ(iss, epoch, epoch);
-      const [x1, y1, z1] = propagateToSceneXYZ(iss, epoch, epoch + 600);
+      const [x0, y0, z0] = propagate(iss, epoch, epoch);
+      const [x1, y1, z1] = propagate(iss, epoch, epoch + 600);
       const moved = Math.sqrt(
         (x1 - x0) ** 2 + (y1 - y0) ** 2 + (z1 - z0) ** 2,
       );
@@ -191,7 +150,7 @@ describe("orbitalMath", () => {
       const expectedDist = EARTH_SURFACE_RENDER + issAltitudeKm / EARTH_KM_PER_RENDER_UNIT;
 
       for (let t = 0; t < period; t += period / 20) {
-        const [x, y, z] = propagateToSceneXYZ(iss, epoch, epoch + t);
+        const [x, y, z] = propagate(iss, epoch, epoch + t);
         const dist = Math.sqrt(x * x + y * y + z * z);
         expect(dist).toBeCloseTo(expectedDist, 0);
       }
@@ -202,8 +161,8 @@ describe("orbitalMath", () => {
       const a = iss.semi_major_axis_km;
       const period = 2 * Math.PI * Math.sqrt((a ** 3) / EARTH_BODY.gravitationalParameterKm3S2);
 
-      const [x0, y0, z0] = propagateToSceneXYZ(iss, epoch, epoch);
-      const [x1, y1, z1] = propagateToSceneXYZ(iss, epoch, epoch + period);
+      const [x0, y0, z0] = propagate(iss, epoch, epoch);
+      const [x1, y1, z1] = propagate(iss, epoch, epoch + period);
 
       // Won't be exact due to Earth rotation (ECEF coords), but the
       // orbital radius and inclination should match closely.
@@ -237,7 +196,10 @@ describe("orbitalMath", () => {
         frame_id: "earth" as const,
       };
 
-      const legacyPos = propagateNode(elements, epoch, simTime, EARTH_BODY);
+      const legacyPos = propagateNode(elements, epoch, simTime, EARTH_BODY, {
+        rotation: IDENTITY,
+        angularVelocityRadS: [0, 0, 0],
+      });
       const legacyWorld = geoToWorld(
         legacyPos.latDeg,
         legacyPos.lonDeg,
@@ -246,7 +208,7 @@ describe("orbitalMath", () => {
         EARTH_KM_PER_RENDER_UNIT,
       );
 
-      const [nx, ny, nz] = propagateToSceneXYZ(
+      const [nx, ny, nz] = propagate(
         {
           semi_major_axis_km: elements.semi_major_axis_km,
           eccentricity: elements.eccentricity,
@@ -276,12 +238,12 @@ describe("orbitalMath", () => {
         mean_anomaly_deg: 20,
         body: EARTH_BODY,
       };
-      const keplerian = propagateToSceneXYZ(
+      const keplerian = propagate(
         { ...elements, propagator: "two-body" },
         epoch,
         epoch + 86400,
       );
-      const j2 = propagateToSceneXYZ(
+      const j2 = propagate(
         { ...elements, propagator: "j2-mean-elements" },
         epoch,
         epoch + 86400,
@@ -299,7 +261,6 @@ describe("sampleOrbitPathSceneXYZ", () => {
   const earth = catalogEarthBodyMath();
 
   it("samples a closed elliptical path whose radii match a(1±e)", async () => {
-    const { sampleOrbitPathSceneXYZ } = await import("../orbitalMath");
     // Molniya-class HEO: perigee 600 km, apogee 39700 km.
     const a = 6371.0088 + (600 + 39700) / 2;
     const e = (39700 - 600) / (2 * a + 600 + 39700 - (39700 - 600));
@@ -314,7 +275,7 @@ describe("sampleOrbitPathSceneXYZ", () => {
       body: earth,
     };
     void e;
-    const path = sampleOrbitPathSceneXYZ(elements, 0, 600, 180);
+    const path = samplePath(elements, 0, 600, 180);
     expect(path.length).toBe(181 * 3);
     // Closed: first and last vertices coincide (E=0 and E=2π).
     expect(path[0]).toBeCloseTo(path[180 * 3]!, 6);
@@ -337,7 +298,6 @@ describe("sampleOrbitPathSceneXYZ", () => {
   });
 
   it("degenerates to the circular radius for e=0", async () => {
-    const { sampleOrbitPathSceneXYZ } = await import("../orbitalMath");
     const elements = {
       propagator: "two-body" as const,
       semi_major_axis_km: 6371.0088 + 550,
@@ -348,7 +308,7 @@ describe("sampleOrbitPathSceneXYZ", () => {
       mean_anomaly_deg: 0,
       body: earth,
     };
-    const path = sampleOrbitPathSceneXYZ(elements, 0, 0, 90);
+    const path = samplePath(elements, 0, 0, 90);
     const km = earth.kmPerRenderUnit;
     for (let i = 0; i < path.length; i += 3) {
       const rKm = Math.hypot(path[i]!, path[i + 1]!, path[i + 2]!) * km;
@@ -358,7 +318,6 @@ describe("sampleOrbitPathSceneXYZ", () => {
   });
 
   it("samples non-Earth bodies in their own frame (lunar ELFO)", async () => {
-    const { sampleOrbitPathSceneXYZ } = await import("../orbitalMath");
     const lunaRadius = 1737.4;
     const luna = {
       bodyId: "luna",
@@ -367,12 +326,12 @@ describe("sampleOrbitPathSceneXYZ", () => {
       polarRadiusKm: 1736.0,
       gravitationalParameterKm3S2: 4902.800066,
       j2: 0,
-      rotationRateRadS: 2.6616995e-6,
+      orbitBasis: IDENTITY,
       kmPerRenderUnit: earth.kmPerRenderUnit,
     };
     const a = lunaRadius + (673 + 7332) / 2;
     const ecc = (7332 - 673) / (673 + 7332 + 2 * lunaRadius);
-    const path = sampleOrbitPathSceneXYZ(
+    const path = samplePath(
       {
         propagator: "two-body" as const,
         semi_major_axis_km: a,

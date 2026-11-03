@@ -200,9 +200,8 @@ def build_session_ephemeris(
             **_meta(gs_id),
         )
 
-    epoch_body_states = ctx.physics.body_states(ctx.active_bodies, epoch_unix)
     body_frames: dict[str, EphemerisBodyFrame] = {}
-    for body_id, body_state in sorted(epoch_body_states.items()):
+    for body_id in sorted(ctx.active_bodies):
         try:
             body_frame = ctx.body_frames[body_id]
         except KeyError as exc:
@@ -217,12 +216,7 @@ def build_session_ephemeris(
             gravitational_parameter_km3_s2=body_frame.gravitational_parameter_km3_s2,
             rotation_rate_rad_s=body_frame.rotation_rate_rad_s,
             j2=body_frame.j2,
-            origin_x_km=body_state.position_km.x,
-            origin_y_km=body_state.position_km.y,
-            origin_z_km=body_state.position_km.z,
-            vel_x_km_s=body_state.velocity_km_s.x,
-            vel_y_km_s=body_state.velocity_km_s.y,
-            vel_z_km_s=body_state.velocity_km_s.z,
+            orbit_basis=_matrix3(ctx.physics.orbit_basis(body_id)),
         )
 
     return SessionEphemeris(
@@ -232,6 +226,10 @@ def build_session_ephemeris(
         nodes=nodes,
         body_frames=body_frames,
     )
+
+
+def _matrix3(matrix) -> tuple:
+    return tuple(tuple(float(v) for v in row) for row in matrix)
 
 
 class TimelineEvent:

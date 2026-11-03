@@ -21,6 +21,7 @@ import { SAT_RADIUS, SAT_SEGMENTS, getPlaneColor } from "../../config";
 import { tokens } from "../../styles/tokens";
 import { REGIME_TINT, type Regime } from "../../taxonomy/regime";
 import { geoToWorld } from "../geo";
+import { skyAt } from "../../sim/bodySamples";
 import { interpolatedSimTimeMs } from "../../sim/simClock";
 import { isWorkerReady, readPosition, requestPropagate } from "../../sim/workerBridge";
 import { propagateToSceneXYZ } from "../../sim/orbitalMath";
@@ -192,8 +193,14 @@ export function Constellation({
     const simTimeUnix = simMs / 1000;
     const epochUnix = ephemeris.epoch_unix;
     const kmPerRenderUnit = kmPerRenderUnitFromEphemeris(ephemeris);
+    // Each body's orientation comes from the body samples; without them there is no
+    // body-fixed frame to place satellites in, and the scene shows that state.
+    const sky = skyAt(simTimeUnix);
+    if (!sky) return;
     const workerReady = isWorkerReady();
-    if (workerReady && now - lastPropagateRef.current > 2000) {
+    // Asked every 2 s whether or not the last window arrived: a window the worker could
+    // not compute (no samples yet) must be asked for again once samples arrive.
+    if (now - lastPropagateRef.current > 2000) {
       requestPropagate(simTimeUnix, 1.0);
       lastPropagateRef.current = now;
     }
@@ -212,6 +219,10 @@ export function Constellation({
         if (!frame) {
           throw new Error(`SessionEphemeris missing body frame for node ${nodeId}: ${nodeBody}`);
         }
+        const bodyState = sky.bodies[nodeBody];
+        if (!bodyState) {
+          throw new Error(`body samples carry no state for ${nodeBody} (node ${nodeId})`);
+        }
         [x, y, z] = propagateToSceneXYZ(
           {
             ...keplerianNode,
@@ -219,6 +230,7 @@ export function Constellation({
           },
           epochUnix,
           simTimeUnix,
+          bodyState.rotation,
         );
       }
       _tmpMatrix.makeTranslation(x, y, z);

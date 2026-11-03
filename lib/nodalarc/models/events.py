@@ -429,14 +429,19 @@ EphemerisNode = Annotated[
 ]
 
 
-class EphemerisBodyFrame(BaseModel):
-    """Body center in the session common frame at ``epoch_unix``.
+Vector3 = tuple[float, float, float]
+# A 3x3 matrix as three rows.
+Matrix3 = tuple[Vector3, Vector3, Vector3]
 
-    Positions and velocities are km vectors relative to Earth's center on ICRF
-    axes, from the shared physics module. The renderer may apply a visual scale
-    or camera-relative transform, but these numbers remain the authoritative
-    physical facts used to place bodies relative to one another. The data
-    files behind them are recorded once, in the resolved session.
+
+class EphemerisBodyFrame(BaseModel):
+    """A session body's constants for propagating its satellites' elements.
+
+    Where the body is and how it is turned at any instant comes from
+    BodySamples. ``orbit_basis`` holds the body's orbit-element frame: its rows are that
+    frame's x, y and z axes on ICRF axes, so a state computed from orbital
+    elements in that frame is ``orbit_basis^T @ r`` on ICRF axes. Earth's is
+    the identity; every other body's z axis is its pole at J2000.
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
@@ -448,12 +453,7 @@ class EphemerisBodyFrame(BaseModel):
     gravitational_parameter_km3_s2: float
     rotation_rate_rad_s: float
     j2: float
-    origin_x_km: float
-    origin_y_km: float
-    origin_z_km: float
-    vel_x_km_s: float
-    vel_y_km_s: float
-    vel_z_km_s: float
+    orbit_basis: Matrix3
 
 
 class SessionEphemeris(BaseModel):
@@ -484,6 +484,83 @@ class SessionEphemeris(BaseModel):
                 "SessionEphemeris is missing body frame(s) for referenced body "
                 f"id(s): {', '.join(missing)}"
             )
+        return self
+
+
+class BodySample(BaseModel):
+    """One body at one sample instant."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    position_km: Vector3
+    velocity_km_s: Vector3
+    rotation: Matrix3
+    angular_velocity_rad_s: Vector3
+
+
+class SunSample(BaseModel):
+    """The Sun at one sample instant."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    position_km: Vector3
+    velocity_km_s: Vector3
+
+
+class BodySampleInstant(BaseModel):
+    """Every session body, and the Sun, at one instant."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    sim_time_unix: float
+    bodies: dict[SupportedSurfaceBody, BodySample]
+    sun: SunSample
+
+
+class BodySamples(BaseModel):
+    """Sampled body states for one window of simulation time.
+
+    Published by OME to NODALARC_SESSION (MaxMsgsPerSubject=1) at session
+    start, after OME recovers, after each seek, and before the current window
+    runs out. Bodies have no model in the page; it interpolates between these
+    samples.
+
+    - Origin: Earth's center. Axes: ICRF.
+    - Times: Unix seconds, the time scale of every OME timestamp.
+    - Units: km, km/s, rad/s.
+    - ``rotation`` maps ICRF axes to the body-fixed frame:
+      ``v_fixed = rotation @ v_icrf``.
+    - ``angular_velocity_rad_s`` is the body's angular velocity on ICRF axes:
+      a body-fixed velocity is ``rotation @ (v - angular_velocity x r)``.
+
+    Sample times are ``start + k * interval_s`` on a grid aligned to multiples
+    of ``interval_s`` since the Unix epoch, so two windows that share an
+    instant carry identical values there. ``epoch_id`` fences the window to
+    the epoch whose SessionEphemeris it accompanies.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    epoch_id: int
+    interval_s: float = Field(gt=0)
+    samples: tuple[BodySampleInstant, ...] = Field(min_length=2)
+
+    @model_validator(mode="after")
+    def _validate_grid(self):
+        start = self.samples[0].sim_time_unix
+        bodies = set(self.samples[0].bodies)
+        for index, sample in enumerate(self.samples):
+            expected = start + index * self.interval_s
+            if sample.sim_time_unix != expected:
+                raise ValueError(
+                    f"BodySamples sample {index} is at {sample.sim_time_unix}; "
+                    f"the grid places it at {expected}"
+                )
+            if set(sample.bodies) != bodies:
+                raise ValueError(
+                    f"BodySamples sample {index} carries bodies {sorted(sample.bodies)}; "
+                    f"the window carries {sorted(bodies)}"
+                )
         return self
 
 

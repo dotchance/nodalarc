@@ -225,15 +225,17 @@ def resolved_body_frames_at_epoch(
     """The session's body frames at one epoch, WITHOUT any satellite input.
 
     ``build_ome_inputs_from_resolved`` refuses a satellite-less session, but a
-    body's physical facts and its position at the epoch are satellite-
-    independent. This lets the builder render a grammar-valid ground-only
+    body's physical facts are satellite-independent. This lets the builder render a grammar-valid ground-only
     session (render scale anchors on a body frame) rather than wall it — the OME
     satellite precondition is a runtime-readiness gate, not a grammar rule."""
     physical = _body_frames_from_resolved(resolved)
     active = session_active_bodies(resolved)
-    body_states = session_physics(resolved).body_states(active, epoch_unix)
+    physics = session_physics(resolved)
+    # Coverage at the epoch is checked here, as OME checks it when it starts.
+    for body_id in active:
+        physics.require_coverage(body_id, epoch_unix)
     frames: dict[str, EphemerisBodyFrame] = {}
-    for body_id, state in sorted(body_states.items()):
+    for body_id in sorted(active):
         frame = physical[body_id]
         frames[body_id] = EphemerisBodyFrame(
             body_id=body_id,
@@ -243,12 +245,7 @@ def resolved_body_frames_at_epoch(
             gravitational_parameter_km3_s2=frame.gravitational_parameter_km3_s2,
             rotation_rate_rad_s=frame.rotation_rate_rad_s,
             j2=frame.j2,
-            origin_x_km=state.position_km.x,
-            origin_y_km=state.position_km.y,
-            origin_z_km=state.position_km.z,
-            vel_x_km_s=state.velocity_km_s.x,
-            vel_y_km_s=state.velocity_km_s.y,
-            vel_z_km_s=state.velocity_km_s.z,
+            orbit_basis=tuple(tuple(float(v) for v in row) for row in physics.orbit_basis(body_id)),
         )
     return frames
 

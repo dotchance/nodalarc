@@ -90,7 +90,7 @@ export function App() {
 }
 
 function AppInner() {
-  const { snapshot, snapshotArrivalMs, ephemeris, connected, hasEverConnected, sessionTransitioning, sessionError, switchDetail, tokenError, frameError, historicalMode, setHistoricalMode, fetchHistorical, historicalError, sendMessage } =
+  const { snapshot, snapshotArrivalMs, ephemeris, bodySamples, connected, hasEverConnected, sessionTransitioning, sessionError, switchDetail, tokenError, frameError, historicalMode, setHistoricalMode, fetchHistorical, historicalError, sendMessage } =
     useSnapshot();
   const { selection, select, clearSelection, anchorGsId } = useSelection();
   const preselectedAppliedRef = useRef(false);
@@ -439,6 +439,7 @@ function AppInner() {
             snapshot={renderedSnapshot}
             snapshotArrivalMs={snapshotArrivalMs}
             ephemeris={ephemeris}
+            bodySamples={bodySamples}
             colorMode={colorMode}
             globeMode={globeMode}
             referenceFrame={referenceFrame}

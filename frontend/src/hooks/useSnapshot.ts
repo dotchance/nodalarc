@@ -5,7 +5,7 @@
 import { useState, useCallback, useEffect, useRef } from "react";
 import { REST_URL, authHeaders } from "../config";
 import { useWebSocket, type ReceivedSnapshot } from "./useWebSocket";
-import type { SessionEphemeris } from "../builder/generated/builderApi";
+import type { BodySamples, SessionEphemeris } from "../builder/generated/builderApi";
 import type { StateSnapshot, StateSocketCommand } from "../generated/vsApi";
 import { apiErrorFromException, apiErrorMessage } from "../ui/apiError";
 
@@ -14,6 +14,7 @@ interface SnapshotState {
   /** When the shown snapshot arrived (performance.now()); null with no snapshot. */
   snapshotArrivalMs: number | null;
   ephemeris: SessionEphemeris | null;
+  bodySamples: BodySamples | null;
   connected: boolean;
   hasEverConnected: boolean;
   sessionTransitioning: boolean;
@@ -32,6 +33,7 @@ export function useSnapshot(): SnapshotState {
   const {
     received: live,
     ephemeris,
+    bodySamples,
     connected,
     hasEverConnected,
     sessionTransitioning,
@@ -105,6 +107,7 @@ export function useSnapshot(): SnapshotState {
     snapshot: shown?.snapshot ?? null,
     snapshotArrivalMs: shown?.arrivalMs ?? null,
     ephemeris,
+    bodySamples,
     connected,
     hasEverConnected,
     sessionTransitioning,

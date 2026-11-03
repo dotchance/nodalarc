@@ -12,6 +12,7 @@
  *  geometry), which is intentionally outside this fixture.
  */
 import type { BuilderWorld, BuilderWorldNode } from "../../builderTypes";
+import { BODY_SAMPLE_FIXTURE } from "../../../sim/__tests__/bodySampleFixture";
 
 type TerminalBlock = BuilderWorldNode["terminal_inventory"][number];
 
@@ -86,6 +87,8 @@ export function tinyWorld(
       nodes: {},
       body_frames: {},
     },
+    // Not rendered here: the world needs a window, the tests read none of it.
+    body_samples: BODY_SAMPLE_FIXTURE.windows[0],
     nodes: [
       node("g1", groundId, "ground_station", [block("access", "rf", groundFloor)]),
       node("s1", spaceId, "satellite", [block("access", "rf", 0), block("isl", "optical", 0)]),

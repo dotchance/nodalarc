@@ -4,6 +4,7 @@
 // Allocates the double-buffered SharedArrayBuffer, sends ephemeris data
 // to the Worker, and reads interpolated positions for the render loop.
 
+import { bodySamplesVersion, displayableWindows } from "./bodySamples";
 import { bodyMathFromFrame, kmPerRenderUnitFromEphemeris } from "./ephemeris";
 import type { KeplerianElements } from "./orbitalMath";
 import type { EphemerisNodeKeplerian, SessionEphemeris } from "../builder/generated/builderApi";
@@ -24,6 +25,8 @@ let bufferB: { header: Float64Array; positions: Float32Array } | null = null;
 let satIds: string[] = [];
 let satIdToIndex = new Map<string, number>();
 let ready = false;
+/** The body-sample store version the worker last received. */
+let sentBodySamplesVersion = -1;
 let sabSupported = typeof SharedArrayBuffer !== "undefined";
 
 // --- SAB allocation ---
@@ -58,10 +61,14 @@ function createWorkerAndSab(): void {
   };
 
   worker = new Worker(new URL("./sgp4Worker.ts", import.meta.url), { type: "module" });
+  sentBodySamplesVersion = -1;
 
   worker.onmessage = (e: MessageEvent) => {
     if (e.data.type === "windowReady") {
       ready = true;
+    }
+    if (e.data.type === "windowUnavailable") {
+      ready = false;
     }
   };
 
@@ -128,14 +135,25 @@ export function sendEphemeris(ephemeris: SessionEphemeris): void {
   });
 }
 
+/** The worker holds the displayable body-sample windows, sent again whenever they change. */
+function sendBodySamplesIfChanged(): void {
+  if (!worker) return;
+  const version = bodySamplesVersion();
+  if (version === sentBodySamplesVersion) return;
+  worker.postMessage({ type: "bodySamples", windows: [...displayableWindows()] });
+  sentBodySamplesVersion = version;
+}
+
 export function requestPropagate(simTimeUnix: number, playbackSpeed: number): void {
   if (!worker) return;
+  sendBodySamplesIfChanged();
   worker.postMessage({ type: "propagate", simTimeUnix, playbackSpeed });
 }
 
 export function requestFlush(simTimeUnix: number, playbackSpeed: number): void {
   if (!worker) return;
   ready = false;
+  sendBodySamplesIfChanged();
   worker.postMessage({ type: "flush", simTimeUnix, playbackSpeed });
 }
 

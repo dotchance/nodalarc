@@ -69,6 +69,7 @@ from nodalarc.models.scheduler_ops import (
 )
 from nodalarc.models.vs_api import (
     AlmanacState,
+    BodySamplesFrame,
     HistoryRecordingState,
     LinkDecisionTrace,
     LinkState,
@@ -99,6 +100,7 @@ from nodalarc.nats_channels import (
     ome_heartbeat_subject,
     ops_subscribe_subject,
     playback_state_subject,
+    session_body_samples_subject,
     session_ephemeris_subject,
 )
 from nodalarc.physics import PhysicsContext
@@ -266,6 +268,7 @@ class SessionContext:
         self.last_heartbeat_wall_time: float = 0.0
         self.last_snapshot_seq: int = 0
         self.cached_ephemeris: SessionEphemerisFrame | None = None
+        self.cached_body_samples: BodySamplesFrame | None = None
         self.cached_ephemeris_obj: object | None = None
         self.almanac_lock = threading.Lock()
         self.almanac: AlmanacState = AlmanacState()
@@ -472,6 +475,15 @@ class SessionContext:
                     ordered_consumer=True,
                     deliver_policy=state_policy,
                     cb=self._on_session_ephemeris,
+                )
+            )
+            self._subscriptions.append(
+                await js.subscribe(
+                    session_body_samples_subject(sid),
+                    stream=STREAM_SESSION_EVENTS,
+                    ordered_consumer=True,
+                    deliver_policy=state_policy,
+                    cb=self._on_body_samples,
                 )
             )
             self._subscriptions.append(
@@ -716,6 +728,17 @@ class SessionContext:
             self._ephemeris_received = True
             log.info("SessionContext ephemeris received: session_id=%s", self.session_id)
             self._check_ready()
+
+    async def _on_body_samples(self, msg) -> None:
+        try:
+            self.cached_body_samples = BodySamplesFrame.model_validate_json(msg.data)
+        except ValidationError as exc:
+            log.warning(
+                "Ignoring schema-incompatible retained BodySamples on %s; "
+                "waiting for OME to publish the current window: %s",
+                msg.subject,
+                exc,
+            )
 
     async def _on_playback_state(self, msg) -> None:
         data = json.loads(msg.data)

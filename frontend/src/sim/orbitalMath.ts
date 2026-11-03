@@ -6,9 +6,9 @@
 // Both the main thread (ephemeris.ts, astronomy.ts) and the SGP4 Worker
 // import from here. This module is the single source for the physics.
 
-// --- Constants ---
+import { matTVec, matVec, type Matrix3, type Vector3 } from "./bodySamples";
 
-export const J2000_UNIX_SECONDS = 946728000.0;
+// --- Constants ---
 
 const DEG2RAD = Math.PI / 180.0;
 
@@ -23,7 +23,8 @@ export interface BodyMath {
   polarRadiusKm: number;
   gravitationalParameterKm3S2: number;
   j2: number;
-  rotationRateRadS: number;
+  /** Rows are the body's orbit-element frame axes on ICRF axes (SessionEphemeris). */
+  orbitBasis: Matrix3;
   kmPerRenderUnit: number;
 }
 
@@ -31,16 +32,6 @@ export function ellipsoidE2(body: BodyMath): number {
   const a = body.equatorialRadiusKm;
   const b = body.polarRadiusKm;
   return 1.0 - (b * b) / (a * a);
-}
-
-// --- GMST ---
-
-export function gmstRadians(unixSeconds: number): number {
-  const daysSinceJ2000 = (unixSeconds - J2000_UNIX_SECONDS) / 86400.0;
-  const degrees = 280.46061837 + 360.98564736629 * daysSinceJ2000;
-  let wrapped = degrees % 360.0;
-  if (wrapped < 0) wrapped += 360.0;
-  return wrapped * DEG2RAD;
 }
 
 // --- Keplerian mean-element propagation ---
@@ -153,22 +144,23 @@ function propagateEciJ2MeanElements(
   return rotatePerifocal(xPf, yPf, raan, inclinationRad, argumentOfPerigee);
 }
 
-function eciToEcef(
-  x: number, y: number, z: number,
-  unixTimestamp: number,
+/**
+ * A state computed from orbital elements, in the body's orbit-element frame,
+ * to the body-fixed frame: the basis puts it on ICRF axes, and `rotation` (the
+ * body's sampled orientation at the instant, ICRF to body-fixed) turns it into
+ * the body-fixed frame. The backend does the same in physics/satellites.py.
+ */
+export function elementsToBodyFixed(
+  position: Vector3,
   body: BodyMath,
-): [number, number, number] {
-  const theta =
-    body.bodyId === "earth"
-      ? gmstRadians(unixTimestamp)
-      : (unixTimestamp - J2000_UNIX_SECONDS) * body.rotationRateRadS;
-  const cosT = Math.cos(theta);
-  const sinT = Math.sin(theta);
-  return [
-    cosT * x + sinT * y,
-    -sinT * x + cosT * y,
-    z,
-  ];
+  rotation: Matrix3,
+): Vector3 {
+  return matVec(rotation, elementsToIcrf(position, body));
+}
+
+/** A vector in the body's orbit-element frame to ICRF axes (body-centred). */
+export function elementsToIcrf(vector: Vector3, body: BodyMath): Vector3 {
+  return matTVec(body.orbitBasis, vector);
 }
 
 function ecefToGeodetic(
@@ -237,10 +229,12 @@ export interface KeplerianElements {
   body: BodyMath;
 }
 
+/** `rotation` is the body's orientation at `simTimeUnix`, from the body samples. */
 export function propagateToSceneXYZ(
   elements: KeplerianElements,
   epochUnix: number,
   simTimeUnix: number,
+  rotation: Matrix3,
 ): [number, number, number] {
   const body = elements.body;
   const referenceRadiusKm = body.equatorialRadiusKm;
@@ -283,14 +277,7 @@ export function propagateToSceneXYZ(
           body.gravitationalParameterKm3S2,
         );
 
-  const currentTime = epochUnix + dt;
-  const posEcef = eciToEcef(
-    posEci[0],
-    posEci[1],
-    posEci[2],
-    currentTime,
-    body,
-  );
+  const posEcef = elementsToBodyFixed(posEci, body, rotation);
   if (body.bodyId !== "earth") {
     return bodyFixedToSceneXYZ(
       posEcef[0],
@@ -319,8 +306,9 @@ export function propagateToSceneXYZ(
  * scene. The path is sampled uniformly in ECCENTRIC anomaly (dense around
  * perigee where the trajectory curves fastest), with J2 secular drift applied
  * to RAAN/argument-of-perigee at the seed instant and the body rotation
- * frozen at `simTimeUnix` — the same snapshot semantics as the circular
- * rings, which are also seeded once and inertially static.
+ * frozen at `simTimeUnix` (`rotation`, the body's sampled orientation then) —
+ * the same snapshot semantics as the circular rings, which are also seeded
+ * once and inertially static.
  *
  * Coordinates are scene-LOCAL to the node's body frame (identical pipeline to
  * propagateToSceneXYZ); callers transform them into world space through the
@@ -330,6 +318,7 @@ export function sampleOrbitPathSceneXYZ(
   elements: KeplerianElements,
   epochUnix: number,
   simTimeUnix: number,
+  rotation: Matrix3,
   samples = 180,
 ): Float32Array {
   const body = elements.body;
@@ -358,7 +347,7 @@ export function sampleOrbitPathSceneXYZ(
     const xPf = a * (Math.cos(eccentricAnomaly) - e);
     const yPf = a * sqrtOneMinusE2 * Math.sin(eccentricAnomaly);
     const eci = rotatePerifocal(xPf, yPf, raanRad, inclinationRad, argumentOfPerigeeRad);
-    const ecef = eciToEcef(eci[0], eci[1], eci[2], simTimeUnix, body);
+    const ecef = elementsToBodyFixed(eci, body, rotation);
     let scene: [number, number, number];
     if (body.bodyId !== "earth") {
       scene = bodyFixedToSceneXYZ(ecef[0], ecef[1], ecef[2], body.kmPerRenderUnit);

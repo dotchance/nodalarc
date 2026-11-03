@@ -1,20 +1,27 @@
 // Copyright 2024-2026 .chance (dotchance)
 // Licensed under the Apache License, Version 2.0. See LICENSE file.
 /**
- * Contract tests for the TypeScript Keplerian propagator.
+ * Properties of the page's Keplerian propagator and geodetic conversion.
  *
- * Golden values computed from Python: lib/nodalarc/propagator.py
- * Epoch: 2025-01-01T00:00:00 UTC (Unix 1735689600.0)
- * Constellation: 550km, 53deg inclination, circular orbit
- *
- * Tolerance: 0.001 degrees lat/lon — matches Python output within
- * the precision of the simplified GMST model and Bowring geodetic.
+ * Positions against the backend's, through the sampled orientation, are in
+ * satelliteStates.test.ts. These tests fix the orientation at the identity:
+ * the properties checked here (latitude bound, altitude, speed, RAAN offset)
+ * hold under any orientation that keeps the pole.
  */
 
 import { describe, expect, it } from "vitest";
 import { ecefToGeodetic, propagateNode } from "../ephemeris";
 import { catalogEarthBodyMath, catalogEarthFrame } from "./bodyModelFixture";
 import type { EphemerisNodeKeplerian } from "../../builder/generated/builderApi";
+
+const IDENTITY_ORIENTATION = {
+  rotation: [
+    [1, 0, 0],
+    [0, 1, 0],
+    [0, 0, 1],
+  ],
+  angularVelocityRadS: [0, 0, 0],
+} as const;
 
 const EPOCH = 1735689600.0; // 2025-01-01T00:00:00 UTC
 const TOL = 0.01; // degrees tolerance
@@ -61,29 +68,9 @@ const SAT_RAAN90: EphemerisNodeKeplerian = {
 };
 
 describe("propagateNode - Keplerian satellites", () => {
-  it("matches Python at t=0", () => {
-    const pos = propagateNode(SAT_P00S00, EPOCH, EPOCH, EARTH_BODY);
-    expect(pos.latDeg).toBeCloseTo(0.0, 1);
-    expect(pos.lonDeg).toBeCloseTo(-100.9, 0);
-    expect(pos.altKm).toBeCloseTo(542.86, 0);
-  });
-
-  it("matches Python at t=300 (5 minutes)", () => {
-    const pos = propagateNode(SAT_P00S00, EPOCH, EPOCH + 300, EARTH_BODY);
-    expect(pos.latDeg).toBeCloseTo(15.04, 1);
-    expect(pos.lonDeg).toBeCloseTo(-90.54, 0);
-    expect(pos.altKm).toBeCloseTo(544.29, 0);
-  });
-
-  it("matches Python at t=1800 (30 minutes)", () => {
-    const pos = propagateNode(SAT_P00S00, EPOCH, EPOCH + 1800, EARTH_BODY);
-    expect(pos.latDeg).toBeCloseTo(47.46, 1);
-    expect(pos.altKm).toBeCloseTo(554.43, 0);
-  });
-
   it("different RAAN produces different position", () => {
-    const pos1 = propagateNode(SAT_P00S00, EPOCH, EPOCH, EARTH_BODY);
-    const pos2 = propagateNode(SAT_RAAN90, EPOCH, EPOCH, EARTH_BODY);
+    const pos1 = propagateNode(SAT_P00S00, EPOCH, EPOCH, EARTH_BODY, IDENTITY_ORIENTATION);
+    const pos2 = propagateNode(SAT_RAAN90, EPOCH, EPOCH, EARTH_BODY, IDENTITY_ORIENTATION);
     // Same lat (both at ascending node at t=0)
     expect(Math.abs(pos1.latDeg - pos2.latDeg)).toBeLessThan(TOL);
     // Different lon (90deg RAAN offset)
@@ -93,21 +80,21 @@ describe("propagateNode - Keplerian satellites", () => {
   it("latitude bounded by inclination", () => {
     // Check every 60 seconds for one orbit (~5730s)
     for (let t = 0; t < 5730; t += 60) {
-      const pos = propagateNode(SAT_P00S00, EPOCH, EPOCH + t, EARTH_BODY);
+      const pos = propagateNode(SAT_P00S00, EPOCH, EPOCH + t, EARTH_BODY, IDENTITY_ORIENTATION);
       expect(Math.abs(pos.latDeg)).toBeLessThanOrEqual(54.0);
     }
   });
 
   it("altitude stays constant for circular orbit", () => {
     for (let t = 0; t < 6000; t += 300) {
-      const pos = propagateNode(SAT_P00S00, EPOCH, EPOCH + t, EARTH_BODY);
+      const pos = propagateNode(SAT_P00S00, EPOCH, EPOCH + t, EARTH_BODY, IDENTITY_ORIENTATION);
       expect(pos.altKm).toBeGreaterThan(530);
       expect(pos.altKm).toBeLessThan(560);
     }
   });
 
   it("velocity is non-zero for satellites", () => {
-    const pos = propagateNode(SAT_P00S00, EPOCH, EPOCH, EARTH_BODY);
+    const pos = propagateNode(SAT_P00S00, EPOCH, EPOCH, EARTH_BODY, IDENTITY_ORIENTATION);
     const speed = Math.sqrt(
       pos.velXKmS ** 2 + pos.velYKmS ** 2 + pos.velZKmS ** 2,
     );
@@ -133,49 +120,3 @@ describe("ecefToGeodetic round-trip", () => {
   });
 });
 
-describe("propagateNode - eccentric (Molniya) Python parity", () => {
-  // Reference values generated from the production Python propagator
-  // (propagate_j2_mean_elements) with the shipped catalog Earth body facts
-  // and the shipped earth-heo-molniya element set. This is the regime that
-  // distinguishes the eccentric Kepler/J2 math from the old circular path —
-  // a sign error in argument-of-perigee handling passes every e=0 fixture.
-  const MOLNIYA: EphemerisNodeKeplerian = {
-    type: "keplerian",
-    propagator: "j2-mean-elements",
-    semi_major_axis_km: 26521.0088,
-    eccentricity: 0.7371514465166197,
-    inclination_deg: 63.4,
-    raan_deg: 270.0,
-    argument_of_perigee_deg: 270.0,
-    mean_anomaly_deg: 0.0,
-    plane: 0,
-    slot: 0,
-    segment_id: "earth",
-    local_node_id: "sat",
-    namespace: "earth",
-    tags: [],
-    reference_body: "earth",
-    frame_id: "earth",
-  };
-
-  it("matches Python at perigee (t=0)", () => {
-    const pos = propagateNode(MOLNIYA, EPOCH, EPOCH, EARTH_BODY);
-    expect(pos.latDeg).toBeCloseTo(-63.5404, 2);
-    expect(pos.lonDeg).toBeCloseTo(79.1004, 2);
-    expect(pos.altKm).toBeCloseTo(609.985, 1);
-  });
-
-  it("matches Python on the ascending climb (t=3600)", () => {
-    const pos = propagateNode(MOLNIYA, EPOCH, EPOCH + 3600, EARTH_BODY);
-    expect(pos.latDeg).toBeCloseTo(28.0735, 2);
-    expect(pos.lonDeg).toBeCloseTo(169.5099, 2);
-    expect(pos.altKm).toBeCloseTo(13391.666, 1);
-  });
-
-  it("matches Python at the apogee dwell (t=21540)", () => {
-    const pos = propagateNode(MOLNIYA, EPOCH, EPOCH + 21540, EARTH_BODY);
-    expect(pos.latDeg).toBeCloseTo(63.4212, 2);
-    expect(pos.lonDeg).toBeCloseTo(169.2663, 2);
-    expect(pos.altKm).toBeCloseTo(39709.812, 1);
-  });
-});

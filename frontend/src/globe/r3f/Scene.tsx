@@ -4,10 +4,13 @@
  * The R3F scene root and orchestrator. Composes the full declarative scene — Earth +
  * starfield, instanced constellation, ground stations, links/beams, flow paths, coverage
  * footprint, orbital trails, full-constellation orbit rings, ground tracks, the selection
- * overlay, and the HTML label layer — and drives the reference-frame rotation (FrameDriver).
- * It owns the cross-cutting lifecycle the legacy GlobeView held: feeding the EMA sim-clock
- * per snapshot, pausing the clock, driving the SGP4 worker on ephemeris change, and
- * registering each active body group as a position-registry frame.
+ * overlay, and the HTML label layer — and drives body placement and the reference frame
+ * from OME's body samples (FrameDriver). It owns the cross-cutting lifecycle the legacy
+ * GlobeView held: feeding the EMA sim-clock per snapshot, pausing the clock, feeding the
+ * body-sample store with each SessionEphemeris and BodySamples window, driving the
+ * propagation worker on ephemeris change, and registering each active body group as a
+ * position-registry frame. Without body samples for the render time it shows that state
+ * and draws no world.
  *
  * World-frame layers (links, flows, trails, all-orbits, selection ring, labels) are scene-root
  * children; body-local layers (planet/moon appearance, sats, GS, footprint, ground tracks) are
@@ -18,6 +21,12 @@ import { useCallback, useEffect, useMemo, useRef, useState, type MutableRefObjec
 import * as THREE from "three";
 import type { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { onSnapshot, setPlaybackPaused, resetSimClock } from "../../sim/simClock";
+import {
+  acceptBodySampleWindow,
+  acceptEphemerisEpoch,
+  resetBodySamples,
+  skyAt,
+} from "../../sim/bodySamples";
 import { useDecisionExplanation } from "../../explain/useDecisionExplanation";
 import { useGroundCandidates } from "../../explain/useGroundCandidates";
 import { gsCandidateRelations } from "../../explain/gsCandidateRelations";
@@ -34,7 +43,7 @@ import { isGroundNode } from "../../networkIdentity";
 import { Universe } from "./Universe";
 import { GlobeActionsBridge } from "./GlobeActionsBridge";
 import { Body } from "./Body";
-import { Earth, Moon, Starfield } from "./Earth";
+import { Earth, Moon, Starfield, SunLight } from "./Earth";
 import { Constellation, satColor } from "./Constellation";
 import type { AreaColoring } from "../../routing/instances";
 import { GroundStations } from "./GroundStation";
@@ -50,7 +59,8 @@ import { LinkPicker } from "./LinkPicker";
 import { Labels } from "./Labels";
 import { Tooltip, type HoverInfo } from "./Tooltip";
 import { SelectionOverlay } from "./SelectionOverlay";
-import { FrameDriver } from "./FrameDriver";
+import { FrameDriver, type SkyAvailability } from "./FrameDriver";
+import { bodyPose } from "./bodyPose";
 import { kmToRender } from "./units";
 import {
   cameraDistanceForSceneRadius,
@@ -59,7 +69,11 @@ import {
   sceneRadiusForCamera,
 } from "./cameraBounds";
 import type { NodeState, StateSnapshot } from "../../generated/vsApi";
-import type { EphemerisBodyFrame, SessionEphemeris, SupportedSurfaceBody } from "../../builder/generated/builderApi";
+import type {
+  BodySamples,
+  SessionEphemeris,
+  SupportedSurfaceBody,
+} from "../../builder/generated/builderApi";
 
 const MAX_PINS = 7;
 
@@ -83,6 +97,8 @@ interface SceneProps {
   /** When the snapshot arrived (performance.now() at decode); anchors the clock phase. */
   snapshotArrivalMs: number | null;
   ephemeris: SessionEphemeris | null;
+  /** The latest body-sample window received; the store decides what is displayable. */
+  bodySamples: BodySamples | null;
   colorMode: ColorMode;
   globeMode: GlobeMode;
   referenceFrame: ReferenceFrame;
@@ -115,6 +131,7 @@ export function Scene({
   snapshot,
   snapshotArrivalMs,
   ephemeris,
+  bodySamples,
   colorMode,
   globeMode,
   referenceFrame,
@@ -177,7 +194,18 @@ export function Scene({
     () => (ephemeris ? kmPerRenderUnitFromEphemeris(ephemeris) : null),
     [ephemeris],
   );
-  const earthRotationRateRadS = ephemeris?.body_frames?.earth?.rotation_rate_rad_s ?? null;
+  // The store pairs each window with its epoch's SessionEphemeris. Effects run in
+  // declaration order, so an ephemeris and a window of one render are taken in that order.
+  useEffect(() => {
+    if (ephemeris === null) resetBodySamples();
+    else acceptEphemerisEpoch(ephemeris);
+  }, [ephemeris]);
+  useEffect(() => {
+    if (bodySamples !== null) acceptBodySampleWindow(bodySamples);
+  }, [bodySamples]);
+  const [skyAvailability, setSkyAvailability] = useState<SkyAvailability>("waiting-for-clock");
+  const skyAvailable = skyAvailability === "available";
+
   const bodies = useMemo(() => {
     if (!ephemeris || kmPerRenderUnit === null) return [];
     const frames = ephemeris.body_frames;
@@ -192,28 +220,39 @@ export function Scene({
         if (!frame) {
           throw new Error(`SessionEphemeris missing body frame for rendered body ${id}`);
         }
-        return {
-          id,
-          radiusKm: frame.equatorial_radius_km,
-          position: bodyFramePosition(
-            frame,
-            ephemeris?.epoch_unix ?? null,
-            simTimeUnix,
-            kmPerRenderUnit,
-          ),
-        };
+        return { id, radiusKm: frame.equatorial_radius_km };
       });
-  }, [ephemeris, nodes, simTimeUnix, kmPerRenderUnit]);
+  }, [ephemeris, nodes, kmPerRenderUnit]);
+  const bodyIds = useMemo(() => bodies.map((body) => body.id), [bodies]);
+  // Body centres at the snapshot's sim time, for camera framing and picking. A body
+  // with no sample covering that time has no centre to frame or pick.
+  const placedBodies = useMemo(() => {
+    if (simTimeUnix === null || kmPerRenderUnit === null) return [];
+    const sky = skyAt(simTimeUnix);
+    if (!sky) return [];
+    return bodies.flatMap((body) => {
+      const pose = bodyPose(sky, body.id, referenceFrame);
+      if (!pose) return [];
+      const [x, y, z] = pose.positionKm;
+      const position: [number, number, number] = [
+        kmToRender(x, kmPerRenderUnit),
+        kmToRender(z, kmPerRenderUnit),
+        -kmToRender(y, kmPerRenderUnit),
+      ];
+      return [{ ...body, position }];
+    });
+    // bodySamples: a new window can make an uncovered snapshot time covered.
+  }, [bodies, simTimeUnix, kmPerRenderUnit, referenceFrame, bodySamples]);
   const controlsMaxDistance = useMemo(
     () =>
       cameraDistanceForSceneRadius(
-        sceneRadiusForCamera(bodies, nodes, kmPerRenderUnit),
+        sceneRadiusForCamera(placedBodies, nodes, kmPerRenderUnit),
       ),
-    [bodies, nodes, kmPerRenderUnit],
+    [placedBodies, nodes, kmPerRenderUnit],
   );
   const sceneFrame = useMemo(
-    () => sceneFrameForCamera(bodies, nodes, kmPerRenderUnit),
-    [bodies, nodes, kmPerRenderUnit],
+    () => sceneFrameForCamera(placedBodies, nodes, kmPerRenderUnit),
+    [placedBodies, nodes, kmPerRenderUnit],
   );
   const cameraFar = useMemo(
     () => cameraFarForMaxDistance(controlsMaxDistance),
@@ -221,7 +260,7 @@ export function Scene({
   );
   const bodyPickTargets = useMemo(
     () =>
-      bodies.map((body) => ({
+      placedBodies.map((body) => ({
         id: body.id,
         center: new THREE.Vector3(body.position[0], body.position[1], body.position[2]),
         radius:
@@ -229,7 +268,7 @@ export function Scene({
             ? 0
             : kmToRender(body.radiusKm, kmPerRenderUnit),
       })),
-    [bodies, kmPerRenderUnit],
+    [placedBodies, kmPerRenderUnit],
   );
 
   // On-select decision data, lifted here so the globe is internally single-sourced: the GS
@@ -321,12 +360,14 @@ export function Scene({
         controlsMaxDistance={controlsMaxDistance}
         cameraFar={cameraFar}
         afterControls={
-          <Labels
-            nodes={nodes}
-            containerRef={labelContainerRef}
-            selectedGsId={selection?.type === "ground_station" ? selection.id : null}
-            selectedNodeId={selection?.id ?? null}
-          />
+          skyAvailable ? (
+            <Labels
+              nodes={nodes}
+              containerRef={labelContainerRef}
+              selectedGsId={selection?.type === "ground_station" ? selection.id : null}
+              selectedNodeId={selection?.id ?? null}
+            />
+          ) : null
         }
       >
         {actionsRef && (
@@ -352,11 +393,16 @@ export function Scene({
           onFocusBody={focusBody}
           handlerRef={missedRef}
         />
-        <FrameDriver
-          earthFrame={earthGroupRef}
-          starFrame={starGroupRef}
-          referenceFrame={referenceFrame}
-        />
+        {kmPerRenderUnit !== null && (
+          <FrameDriver
+            starFrame={starGroupRef}
+            referenceFrame={referenceFrame}
+            kmPerRenderUnit={kmPerRenderUnit}
+            bodyIds={bodyIds}
+            onAvailabilityChange={setSkyAvailability}
+          />
+        )}
+        <SunLight referenceFrame={referenceFrame} />
         <group ref={starGroupRef} name="starFrame">
           <Starfield />
         </group>
@@ -366,41 +412,45 @@ export function Scene({
             meaningless (legacy flushTrails on each of those). epoch_id stays 0 across a plain
             switch, so constellation must be in the key in its own right. */}
         <Trails
-          enabled={showTrails}
+          enabled={showTrails && skyAvailable}
           nodes={nodes}
           resetKey={`${ephemeris?.epoch_id ?? "none"}|${referenceFrame}|${constellation ?? "none"}`}
         />
-        {ephemeris !== null && kmPerRenderUnit !== null && earthRotationRateRadS !== null && (
+        {skyAvailable && ephemeris !== null && kmPerRenderUnit !== null && (
           <AllOrbits
             nodes={earthNodes}
             show={showSatPaths}
             earthFrame={earthGroupRef}
             referenceFrame={referenceFrame}
             kmPerRenderUnit={kmPerRenderUnit}
-            earthRotationRateRadS={earthRotationRateRadS}
             ephemeris={ephemeris}
           />
         )}
-        {ephemeris !== null && kmPerRenderUnit !== null && earthRotationRateRadS !== null && (
+        {skyAvailable && ephemeris !== null && kmPerRenderUnit !== null && (
           <OrbitPins
             pinnedIds={pinnedIds}
             nodes={earthNodes}
             earthFrame={earthGroupRef}
             referenceFrame={referenceFrame}
             kmPerRenderUnit={kmPerRenderUnit}
-            earthRotationRateRadS={earthRotationRateRadS}
             ephemeris={ephemeris}
           />
         )}
-        <Links
-          links={snapshot?.links ?? []}
-          kernelActualPairs={snapshot?.kernel_actual_pairs ?? []}
-          showIslLinks={showIslLinks}
-          showGroundLinks={showGroundLinks}
-          resetKey={constellation ?? "none"}
-        />
-        <FlowPaths tracedPaths={snapshot?.traced_paths ?? []} groundNodeIds={groundNodeIds} />
-        {worldLayers}
+        {/* World layers read node positions through the body groups; without body samples
+            for the render time there is nothing true to draw them from. */}
+        {skyAvailable && (
+          <>
+            <Links
+              links={snapshot?.links ?? []}
+              kernelActualPairs={snapshot?.kernel_actual_pairs ?? []}
+              showIslLinks={showIslLinks}
+              showGroundLinks={showGroundLinks}
+              resetKey={constellation ?? "none"}
+            />
+            <FlowPaths tracedPaths={snapshot?.traced_paths ?? []} groundNodeIds={groundNodeIds} />
+            {worldLayers}
+          </>
+        )}
         {kmPerRenderUnit !== null && bodies.map((body) => {
           const bodyNodes = nodes.filter((node) => node.reference_body === body.id);
           return (
@@ -409,12 +459,12 @@ export function Scene({
               id={body.id}
               radiusKm={body.radiusKm}
               kmPerRenderUnit={kmPerRenderUnit}
-              position={body.position}
+              visible={skyAvailable}
               onFocusBody={focusBody}
               ref={body.id === "earth" ? earthGroupRef : undefined}
             >
               {body.id === "earth" ? (
-                <Earth globeMode={globeMode} simTimeIso={snapshot?.sim_time ?? null} />
+                <Earth globeMode={globeMode} />
               ) : body.id === "luna" ? (
                 <Moon />
               ) : null}
@@ -445,7 +495,7 @@ export function Scene({
             </Body>
           );
         })}
-        <SelectionOverlay selection={selection} />
+        {skyAvailable && <SelectionOverlay selection={selection} />}
       </Universe>
       {/* HTML label overlay — Labels (inside the canvas) projects positions into these divs. */}
       <div
@@ -462,24 +512,19 @@ export function Scene({
       />
       <Tooltip hover={hover} regime={hover ? regimeById.get(hover.node.node_id) : undefined} />
       <div className="scene-hud">Focus: {cameraFocusLabel}</div>
+      {ephemeris !== null && !skyAvailable && (
+        <div className="scene-unavailable" role="status">
+          {SKY_AVAILABILITY_TEXT[skyAvailability]}
+        </div>
+      )}
     </div>
   );
 }
 
-function bodyFramePosition(
-  frame: EphemerisBodyFrame | undefined,
-  epochUnix: number | null,
-  simTimeUnix: number | null,
-  kmPerRenderUnit: number,
-): [number, number, number] {
-  if (!frame) return [0, 0, 0];
-  const dt = epochUnix !== null && simTimeUnix !== null ? simTimeUnix - epochUnix : 0;
-  const xKm = frame.origin_x_km + frame.vel_x_km_s * dt;
-  const yKm = frame.origin_y_km + frame.vel_y_km_s * dt;
-  const zKm = frame.origin_z_km + frame.vel_z_km_s * dt;
-  return [
-    kmToRender(xKm, kmPerRenderUnit),
-    kmToRender(zKm, kmPerRenderUnit),
-    -kmToRender(yKm, kmPerRenderUnit),
-  ];
-}
+const SKY_AVAILABILITY_TEXT: Record<SkyAvailability, string> = {
+  available: "",
+  "waiting-for-clock": "Waiting for the simulation clock.",
+  "no-body-samples":
+    "Body positions are unavailable: no body samples for this session epoch cover the simulation time.",
+  "no-earth-for-fixed-view": "The Earth-fixed view needs Earth in the session.",
+};

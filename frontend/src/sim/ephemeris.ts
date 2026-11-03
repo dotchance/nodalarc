@@ -3,23 +3,25 @@
 /**
  * Local Keplerian orbital propagator for the Visualization Frontend.
  *
- * Direct port of lib/nodalarc/propagator.py. Computes satellite positions
- * from orbital elements at any sim_time. Ground stations are static.
+ * The same computation as the backend's shared satellite function
+ * (lib/nodalarc/physics/satellites.py): elements to ICRF axes through the body's
+ * orbit basis, then to the body-fixed frame through the body's sampled
+ * orientation. Ground stations are static.
  *
  * This module enables 60fps satellite rendering without per-tick position
  * data from the WebSocket. The OME distributes orbital elements once per
  * epoch via SessionEphemeris; the VF propagates locally every frame.
  *
- * Contract: propagateNode() MUST produce results matching the Python
- * propagator within 0.001 degrees lat/lon for a 95-minute propagation
- * horizon. See __tests__/ephemeris.test.ts.
+ * __tests__/satelliteStates.test.ts compares the page's results with the
+ * backend's, from fixtures the backend writes.
  */
 
-import { gmstRadians } from "../globe/astronomy";
 import type { EphemerisBodyFrame, SessionEphemeris } from "../builder/generated/builderApi";
+import { cross, matVec, type BodyStateAt } from "./bodySamples";
 import {
-  J2000_UNIX_SECONDS,
   SCENE_EARTH_RADIUS,
+  elementsToBodyFixed,
+  elementsToIcrf,
   ellipsoidE2,
   solveEccentricAnomaly,
   type BodyMath,
@@ -60,8 +62,8 @@ export function bodyMathFromFrame(frame: EphemerisBodyFrame, kmPerRenderUnit: nu
     equatorialRadiusKm: frame.equatorial_radius_km,
     polarRadiusKm: frame.polar_radius_km,
     gravitationalParameterKm3S2: frame.gravitational_parameter_km3_s2,
-    rotationRateRadS: frame.rotation_rate_rad_s,
     j2: frame.j2,
+    orbitBasis: frame.orbit_basis,
     kmPerRenderUnit,
   };
 }
@@ -235,52 +237,20 @@ function propagateEciJ2MeanElements(
 }
 
 /**
- * Convert ECI position to ECEF via GMST rotation.
+ * A velocity computed from orbital elements to the body-fixed frame:
+ * rotation · (v − ω × r), with r and v on ICRF axes and the body's sampled
+ * orientation and angular velocity at the instant.
  */
-function eciToEcef(
-  posEci: [number, number, number],
-  unixTimestamp: number,
+function elementsVelocityToBodyFixed(
+  posElements: [number, number, number],
+  velElements: [number, number, number],
   body: BodyMath,
-): [number, number, number] {
-  const theta =
-    body.bodyId === "earth"
-      ? gmstRadians(unixTimestamp)
-      : (unixTimestamp - J2000_UNIX_SECONDS) * body.rotationRateRadS;
-  const cosT = Math.cos(theta);
-  const sinT = Math.sin(theta);
-  return [
-    cosT * posEci[0] + sinT * posEci[1],
-    -sinT * posEci[0] + cosT * posEci[1],
-    posEci[2],
-  ];
-}
-
-/**
- * Convert ECI velocity to ECEF velocity (includes Earth rotation subtraction).
- */
-function eciToEcefVelocity(
-  posEci: [number, number, number],
-  velEci: [number, number, number],
-  unixTimestamp: number,
-  body: BodyMath,
-): [number, number, number] {
-  const theta =
-    body.bodyId === "earth"
-      ? gmstRadians(unixTimestamp)
-      : (unixTimestamp - J2000_UNIX_SECONDS) * body.rotationRateRadS;
-  const cosT = Math.cos(theta);
-  const sinT = Math.sin(theta);
-
-  let vx = cosT * velEci[0] + sinT * velEci[1];
-  let vy = -sinT * velEci[0] + cosT * velEci[1];
-  const vz = velEci[2];
-
-  // Subtract Earth rotation: omega x r_ecef
-  const posEcef = eciToEcef(posEci, unixTimestamp, body);
-  vx -= -body.rotationRateRadS * posEcef[1];
-  vy -= body.rotationRateRadS * posEcef[0];
-
-  return [vx, vy, vz];
+  orientation: Pick<BodyStateAt, "rotation" | "angularVelocityRadS">,
+): readonly [number, number, number] {
+  const r = elementsToIcrf(posElements, body);
+  const v = elementsToIcrf(velElements, body);
+  const w = cross(orientation.angularVelocityRadS, r);
+  return matVec(orientation.rotation, [v[0] - w[0], v[1] - w[1], v[2] - w[2]]);
 }
 
 /**
@@ -329,7 +299,8 @@ export function ecefToGeodetic(
 /**
  * Propagate a single node to the given sim_time.
  *
- * For keplerian nodes: runs full ECI → ECEF → geodetic pipeline.
+ * For keplerian nodes: elements → ICRF axes (the body's orbit basis) →
+ * body-fixed (the body's sampled orientation at simTimeUnix) → geodetic.
  * For fixed nodes: returns static position.
  */
 export function propagateNode(
@@ -337,6 +308,7 @@ export function propagateNode(
   epochUnix: number,
   simTimeUnix: number,
   body?: BodyMath,
+  orientation?: Pick<BodyStateAt, "rotation" | "angularVelocityRadS">,
 ): PropagatedPosition {
   if (node.type === "fixed") {
     return {
@@ -355,6 +327,11 @@ export function propagateNode(
   if (!body) {
     throw new Error(
       `propagateNode requires a body frame for keplerian node reference_body=${node.reference_body}`,
+    );
+  }
+  if (!orientation) {
+    throw new Error(
+      `propagateNode requires the sampled orientation of ${node.reference_body} at ${simTimeUnix}`,
     );
   }
 
@@ -394,9 +371,8 @@ export function propagateNode(
           dt,
           body,
         );
-  const currentTime = epochUnix + dt;
-  const posEcef = eciToEcef(posEci, currentTime, body);
-  const velEcef = eciToEcefVelocity(posEci, velEci, currentTime, body);
+  const posEcef = elementsToBodyFixed(posEci, body, orientation.rotation);
+  const velEcef = elementsVelocityToBodyFixed(posEci, velEci, body, orientation);
   const geo = ecefToGeodetic(posEcef[0], posEcef[1], posEcef[2], body);
 
   return {

@@ -245,6 +245,11 @@ def session_ephemeris_subject(session_id: str) -> str:
     return f"{ROOT_SESSION}.{session_id}.ephemeris"
 
 
+def session_body_samples_subject(session_id: str) -> str:
+    """Sampled body states subject for a specific session."""
+    return f"{ROOT_SESSION}.{session_id}.body_samples"
+
+
 def playback_state_subject(session_id: str) -> str:
     """Playback state subject for a specific session."""
     return f"{ROOT_SESSION}.{session_id}.playback_state"

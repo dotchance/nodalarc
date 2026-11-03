@@ -6,6 +6,7 @@
 // The runtime contracts VS-API serves and the clients it accepts.
 
 import type {
+  BodySampleInstant,
   EphemerisBodyFrame,
   EphemerisNodeFixed,
   EphemerisNodeKeplerian,
@@ -20,7 +21,7 @@ import type {
   TopologyMode,
 } from "../builder/generated/builderApi";
 
-export type StateFeedFrame = StateSnapshot | SessionEphemerisFrame | WiringProgressFrame | SessionTransitioningFrame | SessionReadyFrame | SessionFailedFrame;
+export type StateFeedFrame = StateSnapshot | SessionEphemerisFrame | BodySamplesFrame | WiringProgressFrame | SessionTransitioningFrame | SessionReadyFrame | SessionFailedFrame;
 
 export type StateSocketCommand = DebugStreamCommand | DebugStopCommand | DebugStopAllCommand;
 
@@ -97,6 +98,14 @@ export interface AuthToken {
 
 /**  */
 export type BindingReasonCode = DecisionReasonCode | FailingActuationState | ActuationExplanationReason;
+
+/** The latest body-sample window as the state socket sends it: on connect and whenever OME publishes a new window. */
+export interface BodySamplesFrame {
+  readonly epoch_id: number;
+  readonly interval_s: number;
+  readonly samples: ReadonlyArray<BodySampleInstant>;
+  readonly msg_type: "body_samples";
+}
 
 /** The pair the card leads with. Ordering is by meaning, resolved by the composer: a viable-but-withheld pair (`viable_withheld=True` — cleared physics/terminal gates, withheld by policy/capacity) dominates a physics near-miss. Only when no viable pair exists is the closest-to-visible rejected pair chosen. */
 export interface CandidateFacts {

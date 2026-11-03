@@ -26,15 +26,16 @@ interface BodyProps {
   id: string;
   radiusKm: number;
   kmPerRenderUnit: number;
-  /** Body centre in the universe frame (render units). Earth sits at origin today. */
-  position?: [number, number, number];
+  /** False while the scene has no body samples for the render time. FrameDriver sets the
+   *  group's position and rotation each frame from the samples. */
+  visible: boolean;
   onFocusBody?: (bodyId: string) => void;
   children?: ReactNode;
 }
 
 /** ref exposes the body's group so the render loop can drive its frame rotation. */
 export const Body = forwardRef<THREE.Group, BodyProps>(function Body(
-  { id, radiusKm, kmPerRenderUnit, position = [0, 0, 0], onFocusBody, children },
+  { id, radiusKm, kmPerRenderUnit, visible, onFocusBody, children },
   ref,
 ) {
   const radiusRender = kmToRender(radiusKm, kmPerRenderUnit);
@@ -54,7 +55,7 @@ export const Body = forwardRef<THREE.Group, BodyProps>(function Body(
       <group
         ref={attach}
         name={`body-${id}`}
-        position={position}
+        visible={visible}
         onDoubleClick={(e) => {
           if (!onFocusBody) return;
           e.stopPropagation();

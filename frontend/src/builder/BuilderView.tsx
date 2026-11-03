@@ -2418,6 +2418,7 @@ export function BuilderView({
               snapshot={snapshot}
               snapshotArrivalMs={snapshotArrivalMs}
               ephemeris={world.ephemeris}
+              bodySamples={world.body_samples}
               colorMode={colorMode}
               globeMode={globeMode}
               referenceFrame={referenceFrame}

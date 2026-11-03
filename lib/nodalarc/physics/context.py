@@ -48,6 +48,7 @@ from nodalarc.physics.datasets import (
 from nodalarc.physics.ephemeris_table import (
     FILES,
     ORIGIN_NAIF_ID,
+    SUN_NAIF_ID,
     body_data,
     select_file_ids,
 )
@@ -89,6 +90,17 @@ class BodyOrientation:
     rotation: np.ndarray
     rotation_rate: np.ndarray
 
+    @property
+    def angular_velocity_rad_s(self) -> np.ndarray:
+        """The body's angular velocity vector on ICRF axes, rad/s.
+
+        ``rotation_rate = -rotation @ [w]x``, so ``[w]x = -rotation.T @
+        rotation_rate``, and a body-fixed velocity is
+        ``rotation @ (v - w x r)``.
+        """
+        skew = -self.rotation.T @ self.rotation_rate
+        return np.array([skew[2, 1], skew[0, 2], skew[1, 0]])
+
 
 @dataclass(frozen=True, slots=True)
 class _Coverage:
@@ -128,6 +140,7 @@ class PhysicsContext:
         self._almanac = almanac
         self._selected = tuple(selected)
         self._coverage = {body: self._read_coverage(body) for body in self._body_ids}
+        self._sun_coverage = self._read_sun_coverage()
         self._bases = {body: self._orbit_basis(body) for body in self._body_ids}
 
     @property
@@ -148,6 +161,35 @@ class PhysicsContext:
         start = max(w[0].to_unix_seconds() for w in windows)
         end = min(w[1].to_unix_seconds() for w in windows)
         return _Coverage(start_unix=start, end_unix=end)
+
+    def _read_sun_coverage(self) -> _Coverage:
+        windows = [
+            self._almanac.spk_domain(SUN_NAIF_ID),
+            self._almanac.spk_domain(ORIGIN_NAIF_ID),
+        ]
+        start = max(w[0].to_unix_seconds() for w in windows)
+        end = min(w[1].to_unix_seconds() for w in windows)
+        return _Coverage(start_unix=start, end_unix=end)
+
+    def sun_state(self, master_sim_time_unix: float) -> BodyState:
+        """The Sun's center in the common frame (origin at Earth's center, ICRF axes)."""
+        coverage = self._sun_coverage
+        if not (coverage.start_unix <= master_sim_time_unix <= coverage.end_unix):
+            raise PhysicsDataError(
+                f"ephemeris data for the Sun does not cover {epoch_of(master_sim_time_unix)}; "
+                f"coverage is {epoch_of(coverage.start_unix)} to {epoch_of(coverage.end_unix)}"
+            )
+        state = self._almanac.translate(
+            _inertial_frame(SUN_NAIF_ID),
+            _inertial_frame(ORIGIN_NAIF_ID),
+            epoch_of(master_sim_time_unix),
+            None,
+        )
+        return BodyState(
+            body_id="sun",
+            position_km=Vec3(state.x_km, state.y_km, state.z_km),
+            velocity_km_s=Vec3(state.vx_km_s, state.vy_km_s, state.vz_km_s),
+        )
 
     def require_coverage(self, body_id: str, master_sim_time_unix: float) -> None:
         coverage = self._coverage.get(body_id)

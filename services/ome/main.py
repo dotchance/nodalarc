@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+import math
 import os
 import time
 from datetime import UTC, datetime
@@ -600,8 +601,10 @@ def _run_pacing(
         playback_state_subject,
         replay_anchor_subject,
         scheduling_checkpoint_subject,
+        session_body_samples_subject,
         session_ephemeris_subject,
     )
+    from nodalarc.physics.samples import body_sample_window, next_window_due_unix
     from nodalarc.platform_config import get_platform_config
 
     from ome.event_stream import build_session_ephemeris
@@ -704,6 +707,7 @@ def _run_pacing(
     subj_link_snapshot = link_state_snapshot_subject(session_id)
     subj_link_decisions = ground_link_decision_snapshot_subject(session_id)
     subj_ephemeris = session_ephemeris_subject(session_id)
+    subj_body_samples = session_body_samples_subject(session_id)
     subj_playback = playback_state_subject(session_id)
     subj_checkpoint = scheduling_checkpoint_subject(session_id)
     subj_mbb_lifecycle = ops_event_subject(
@@ -962,6 +966,9 @@ def _run_pacing(
     snapshot_seq = 0
     last_snapshot_sim_s: float = -snapshot_interval_s  # force immediate on first step
     force_first_snapshot = True
+    # Sim time at which the next body-sample window is due; set by every
+    # window OME publishes (session start, recovery, seek, and each due tick).
+    body_window_due_unix = math.inf
 
     # Reference-point pacing model.
     # Resets on rate change, unpause, or seek to avoid drift.
@@ -1102,6 +1109,16 @@ def _run_pacing(
         )
         last_snapshot_sim_s = step_result.step * step_seconds
         force_first_snapshot = False
+
+    def _publish_body_samples(step_result, *, epoch_id: int) -> None:
+        """Publish the body-sample window around a committed step's sim time."""
+        nonlocal body_window_due_unix
+        produced_at = step_result.sim_time.timestamp()
+        window = body_sample_window(
+            step_ctx.physics, epoch_id=epoch_id, produced_at_unix=produced_at
+        )
+        _enqueue(subj_body_samples, window)
+        body_window_due_unix = next_window_due_unix(produced_at)
 
     def _publish_checkpoint(step_result, *, epoch_id: int) -> None:
         ckpt = _build_scheduling_checkpoint(
@@ -1420,6 +1437,9 @@ def _run_pacing(
     eph = build_session_ephemeris(step_ctx, epoch_unix, _epoch_id)
     _enqueue(subj_ephemeris, eph)
     logging.debug("Published SessionEphemeris epoch_id=%d (%d nodes)", _epoch_id, len(eph.nodes))
+    # A recovered OME produces its first window from the recovered sim time,
+    # which may lie days after the epoch anchor.
+    _publish_body_samples(initial_step_result, epoch_id=_epoch_id)
 
     initial_epoch_id = _epoch_id
     active_epoch_id = initial_epoch_id
@@ -1551,6 +1571,7 @@ def _run_pacing(
                 # are intentionally not published; StepResult is the state carrier.
                 eph = build_session_ephemeris(step_ctx, epoch_unix, seek_epoch_id)
                 _enqueue(subj_ephemeris, eph)
+                _publish_body_samples(seek_result, epoch_id=seek_epoch_id)
                 _publish_link_authority(seek_result, epoch_id=seek_epoch_id)
                 if seek_result.ground_allocation.lifecycle_events:
                     _publish_mbb_lifecycle_events(seek_result, epoch_id=seek_epoch_id)
@@ -1659,6 +1680,8 @@ def _run_pacing(
                         _enqueue(subj_visibility, te.data)
                 # ClockTick with real wall_time (not precomputed placeholder)
                 _publish_clock_tick(step_result, current_rate, epoch_id=tick_epoch_id)
+                if step_result.sim_time.timestamp() >= body_window_due_unix:
+                    _publish_body_samples(step_result, epoch_id=tick_epoch_id)
 
             # LinkStateSnapshot at interval, and immediately for terminal MBB
             # lifecycle outcomes so the OpsEvent can reference a same-tick

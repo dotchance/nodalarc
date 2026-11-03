@@ -57,7 +57,12 @@ EARTH_TEST_BODY_FRAMES = {"earth": EARTH_TEST_BODY_FRAME}
 LUNA_TEST_BODY_FRAMES = {"luna": LUNA_TEST_BODY_FRAME}
 
 
-def ephemeris_body_frame_from_body_frame(frame: BodyFrame) -> EphemerisBodyFrame:
+# Earth's orbit-element basis is the identity by definition (elements are
+# measured on ICRF axes); see PhysicsContext.orbit_basis.
+EARTH_ORBIT_BASIS = ((1.0, 0.0, 0.0), (0.0, 1.0, 0.0), (0.0, 0.0, 1.0))
+
+
+def _earth_ephemeris_body_frame(frame: BodyFrame) -> EphemerisBodyFrame:
     return EphemerisBodyFrame(
         body_id=frame.name,
         mean_radius_km=frame.mean_radius_km,
@@ -66,23 +71,13 @@ def ephemeris_body_frame_from_body_frame(frame: BodyFrame) -> EphemerisBodyFrame
         gravitational_parameter_km3_s2=frame.gravitational_parameter_km3_s2,
         rotation_rate_rad_s=frame.rotation_rate_rad_s,
         j2=frame.j2,
-        origin_x_km=0.0,
-        origin_y_km=0.0,
-        origin_z_km=0.0,
-        vel_x_km_s=0.0,
-        vel_y_km_s=0.0,
-        vel_z_km_s=0.0,
+        orbit_basis=EARTH_ORBIT_BASIS,
     )
 
 
-EARTH_TEST_EPHEMERIS_BODY_FRAME = ephemeris_body_frame_from_body_frame(EARTH_TEST_BODY_FRAME)
-LUNA_TEST_EPHEMERIS_BODY_FRAME = ephemeris_body_frame_from_body_frame(LUNA_TEST_BODY_FRAME)
+EARTH_TEST_EPHEMERIS_BODY_FRAME = _earth_ephemeris_body_frame(EARTH_TEST_BODY_FRAME)
 EARTH_TEST_EPHEMERIS_BODY_FRAMES = {
     "earth": EARTH_TEST_EPHEMERIS_BODY_FRAME,
-}
-EARTH_LUNA_TEST_EPHEMERIS_BODY_FRAMES = {
-    "earth": EARTH_TEST_EPHEMERIS_BODY_FRAME,
-    "luna": LUNA_TEST_EPHEMERIS_BODY_FRAME,
 }
 
 

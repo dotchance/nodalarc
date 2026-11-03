@@ -20,7 +20,10 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import * as THREE from "three";
 import { useFrame, useLoader, useThree } from "@react-three/fiber";
-import type { GlobeMode } from "../../types";
+import type { GlobeMode, ReferenceFrame } from "../../types";
+import { skyAt } from "../../sim/bodySamples";
+import { interpolatedSimTimeMs } from "../../sim/simClock";
+import { sunDirection, toRenderVector } from "./bodyPose";
 import { tokens } from "../../styles/tokens";
 import { useBodyFrame } from "./BodyFrame";
 import { EARTH_RADIUS_RENDER } from "./units";
@@ -76,46 +79,6 @@ void main() {
 }
 `;
 
-/** Sun direction in the Earth-fixed frame (subsolar point), from Spencer's
- *  Fourier series for solar declination and the equation of time — accurate
- *  to ~0.3 degrees, so seasons and the day/night line track the real sun.
- *  Presentation-layer only: the OME models no sun physics; this drives
- *  lighting and the rendered sun disc, never link or visibility facts. */
-export function sunDirectionForDate(date: Date, target = new THREE.Vector3()): THREE.Vector3 {
-  if (Number.isNaN(date.getTime())) {
-    throw new Error("invalid date for sun direction");
-  }
-  const startOfYearMs = Date.UTC(date.getUTCFullYear(), 0, 1);
-  const dayOfYear = (date.getTime() - startOfYearMs) / 86400000; // 0-based, fractional
-  const hourUTC = date.getUTCHours() + date.getUTCMinutes() / 60 + date.getUTCSeconds() / 3600;
-  // Spencer (1971) fractional-year angle.
-  const g = ((2 * Math.PI) / 365) * (dayOfYear + (hourUTC - 12) / 24);
-  const declRad =
-    0.006918 -
-    0.399912 * Math.cos(g) +
-    0.070257 * Math.sin(g) -
-    0.006758 * Math.cos(2 * g) +
-    0.000907 * Math.sin(2 * g) -
-    0.002697 * Math.cos(3 * g) +
-    0.00148 * Math.sin(3 * g);
-  // Equation of time (minutes): true solar time minus clock time at Greenwich.
-  const eotMinutes =
-    229.18 *
-    (0.000075 +
-      0.001868 * Math.cos(g) -
-      0.032077 * Math.sin(g) -
-      0.014615 * Math.cos(2 * g) -
-      0.040849 * Math.sin(2 * g));
-  const hourAngle = ((hourUTC + eotMinutes / 60 - 12) / 24) * 2 * Math.PI;
-  return target
-    .set(
-      Math.cos(declRad) * Math.cos(hourAngle),
-      Math.sin(declRad),
-      Math.cos(declRad) * Math.sin(hourAngle),
-    )
-    .normalize();
-}
-
 function Atmosphere({ radiusRender, visible }: { radiusRender: number; visible: boolean }) {
   return (
     <mesh visible={visible}>
@@ -132,44 +95,68 @@ function Atmosphere({ radiusRender, visible }: { radiusRender: number; visible: 
   );
 }
 
-/** Sun directional light (in the Earth body frame) + the day/night shader's sun direction.
- *  Position from the approximate UTC sun model; world direction synced each frame. */
-function Sun({
-  simTimeIso,
-  intensity,
-  dayNightMaterial,
-  radiusRender,
-}: {
-  simTimeIso: string | null;
-  intensity: number;
-  dayNightMaterial: THREE.ShaderMaterial | null;
-  radiusRender: number;
-}) {
+/** Shaders that light themselves from the Sun's world direction (Earth's day/night). */
+const sunlitShaders = new Set<THREE.ShaderMaterial>();
+/** The Sun's direction on world render axes this frame; null when no samples cover it. */
+const sunWorldDirection = new THREE.Vector3();
+let sunDirectionKnown = false;
+
+/** The Sun: a directional light from the Sun's direction, the sun disc on the star shell,
+ *  and the direction day/night shaders read. The direction comes from OME's body samples at
+ *  the interpolated sim time (Earth-centred; the Sun's parallax between Earth and the Moon
+ *  is 0.15 degrees, below what shading shows), on the world axes of the reference frame.
+ *  It lives at the scene root, so every body is lit, with or without Earth in the session.
+ *  Runs after FrameDriver (-2) and before the default-priority consumers. */
+export function SunLight({ referenceFrame }: { referenceFrame: ReferenceFrame }) {
   const lightRef = useRef<THREE.DirectionalLight>(null);
-  const worldPos = useMemo(() => new THREE.Vector3(), []);
-  const localSunDir = useMemo(() => new THREE.Vector3(), []);
+  const spriteRef = useRef<THREE.Sprite>(null);
+  const camera = useThree((s) => s.camera);
+  const cameraWorld = useMemo(() => new THREE.Vector3(), []);
+  const sunTexture = useMemo(makeSunTexture, []);
+  useEffect(() => () => sunTexture.dispose(), [sunTexture]);
 
-  // Reposition the sun on sim_time change (globe/earth.ts updateSunPosition).
-  useEffect(() => {
-    const light = lightRef.current;
-    if (!light || !simTimeIso) return;
-    const date = new Date(simTimeIso);
-    if (Number.isNaN(date.getTime())) return;
-    const dist = radiusRender * 50;
-    sunDirectionForDate(date, localSunDir);
-    light.position.copy(localSunDir).multiplyScalar(dist);
-  }, [localSunDir, simTimeIso, radiusRender]);
-
-  // After the frame rotation (FrameDriver -2), feed the post-rotation sun world direction
-  // into the day/night shader. Default priority runs after the rotation is set this frame.
   useFrame(() => {
     const light = lightRef.current;
-    if (!light || !dayNightMaterial) return;
-    light.getWorldPosition(worldPos).normalize();
-    dayNightMaterial.uniforms.u_sunDirection!.value.copy(worldPos);
-  });
+    const sprite = spriteRef.current;
+    const interpMs = interpolatedSimTimeMs(performance.now());
+    const sky = interpMs === null ? null : skyAt(interpMs / 1000);
+    const direction = sky ? sunDirection(sky, referenceFrame) : null;
+    sunDirectionKnown = direction !== null;
+    if (light) light.visible = sunDirectionKnown;
+    if (sprite) sprite.visible = sunDirectionKnown;
+    if (!direction) return;
+    toRenderVector(direction, sunWorldDirection);
+    for (const shader of sunlitShaders) {
+      shader.uniforms.u_sunDirection!.value.copy(sunWorldDirection);
+    }
+    if (light) light.position.copy(sunWorldDirection).multiplyScalar(EARTH_RADIUS_RENDER * 50);
+    if (sprite) {
+      camera.getWorldPosition(cameraWorld);
+      const shell = starShellRadiusForCameraFar(camera.far) * 0.98;
+      sprite.position.copy(cameraWorld).addScaledVector(sunWorldDirection, shell);
+      const scale = shell * tokens.sceneSunDiscScale;
+      sprite.scale.set(scale, scale, 1);
+    }
+  }, -1);
 
-  return <directionalLight ref={lightRef} color={0xffffff} intensity={intensity} />;
+  return (
+    <>
+      <directionalLight
+        ref={lightRef}
+        color={0xffffff}
+        intensity={tokens.sceneSunIntensity}
+        visible={false}
+      />
+      <sprite ref={spriteRef} frustumCulled={false} visible={false}>
+        <spriteMaterial
+          map={sunTexture}
+          transparent
+          depthWrite={false}
+          blending={THREE.AdditiveBlending}
+        />
+      </sprite>
+    </>
+  );
 }
 
 /** Radial sun texture: hot core fading through the sun tint to transparent.
@@ -189,54 +176,6 @@ function makeSunTexture(): THREE.CanvasTexture {
   ctx.fillStyle = g;
   ctx.fillRect(0, 0, size, size);
   return new THREE.CanvasTexture(canvas);
-}
-
-/** The visible sun: a glowing disc at the sun direction on the camera-centered
- *  star shell. Depth-tested, so Earth truthfully occludes it at sunrise/sunset
- *  viewing angles. Apparent size is sceneSunDiscScale of the shell radius. */
-function SunReference({ simTimeIso }: { simTimeIso: string | null }) {
-  const spriteRef = useRef<THREE.Sprite>(null);
-  const camera = useThree((s) => s.camera);
-  const cameraWorld = useMemo(() => new THREE.Vector3(), []);
-  const cameraLocal = useMemo(() => new THREE.Vector3(), []);
-  const sunTexture = useMemo(makeSunTexture, []);
-  useEffect(() => () => sunTexture.dispose(), [sunTexture]);
-  const direction = useMemo(() => {
-    if (!simTimeIso) return null;
-    const date = new Date(simTimeIso);
-    if (Number.isNaN(date.getTime())) return null;
-    return sunDirectionForDate(date);
-  }, [simTimeIso]);
-  useFrame(() => {
-    const sprite = spriteRef.current;
-    if (!sprite || !direction) {
-      if (sprite) sprite.visible = false;
-      return;
-    }
-    sprite.visible = true;
-    const parent = sprite.parent;
-    camera.getWorldPosition(cameraWorld);
-    if (parent) {
-      parent.worldToLocal(cameraLocal.copy(cameraWorld));
-      sprite.position.copy(cameraLocal);
-    } else {
-      sprite.position.copy(cameraWorld);
-    }
-    const shell = starShellRadiusForCameraFar(camera.far) * 0.98;
-    sprite.position.addScaledVector(direction, shell);
-    const scale = shell * tokens.sceneSunDiscScale;
-    sprite.scale.set(scale, scale, 1);
-  });
-  return (
-    <sprite ref={spriteRef} frustumCulled={false} visible={false}>
-      <spriteMaterial
-        map={sunTexture}
-        transparent
-        depthWrite={false}
-        blending={THREE.AdditiveBlending}
-      />
-    </sprite>
-  );
 }
 
 /** Country boundaries: Natural Earth 110m as one LineSegments at
@@ -309,13 +248,7 @@ function Boundaries({ radiusRender }: { radiusRender: number }) {
 }
 
 /** The Earth body appearance — blue-marble + day/night meshes + atmosphere + sun + borders. */
-export function Earth({
-  globeMode,
-  simTimeIso,
-}: {
-  globeMode: GlobeMode;
-  simTimeIso: string | null;
-}) {
+export function Earth({ globeMode }: { globeMode: GlobeMode }) {
   const { radiusRender } = useBodyFrame();
   const textures = useLoader(THREE.TextureLoader, ["/earth-blue-marble.jpg", "/earth-night.jpg"]);
   const dayTexture = textures[0]!;
@@ -339,12 +272,17 @@ export function Earth({
     [dayTexture, nightTexture],
   );
   useEffect(() => () => dayNightMaterial.dispose(), [dayNightMaterial]);
+  useEffect(() => {
+    sunlitShaders.add(dayNightMaterial);
+    if (sunDirectionKnown) dayNightMaterial.uniforms.u_sunDirection!.value.copy(sunWorldDirection);
+    return () => {
+      sunlitShaders.delete(dayNightMaterial);
+    };
+  }, [dayNightMaterial]);
 
   const showBlueMarble = globeMode === "blue-marble";
   const showDayNight = globeMode === "day-night";
   const showPolitical = globeMode === "political";
-  // Earth day-night mode does its own shader lighting; the directional remains for other bodies.
-  const sunIntensity = tokens.sceneSunIntensity;
 
   return (
     <>
@@ -366,13 +304,6 @@ export function Earth({
       </mesh>
       <Atmosphere radiusRender={radiusRender} visible={!showPolitical} />
       <Boundaries radiusRender={radiusRender} />
-      <Sun
-        simTimeIso={simTimeIso}
-        intensity={sunIntensity}
-        dayNightMaterial={dayNightMaterial}
-        radiusRender={radiusRender}
-      />
-      <SunReference simTimeIso={simTimeIso} />
     </>
   );
 }

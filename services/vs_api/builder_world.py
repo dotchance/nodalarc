@@ -35,6 +35,8 @@ from nodalarc.models.resolved_session import (
 )
 from nodalarc.models.session import session_epoch_unix
 from nodalarc.ome_inputs import build_ome_inputs_from_resolved, resolved_body_frames_at_epoch
+from nodalarc.physics.samples import body_sample_window
+from nodalarc.physics.session import session_physics
 from nodalarc.resolve_session import (
     SessionResolution,
     SessionResolutionError,
@@ -616,8 +618,11 @@ def world_from_resolution(resolution: SessionResolution) -> BuilderWorld:
         }
         ephemeris = build_session_ephemeris(ctx, epoch_unix, 0)
         rule_previews = _builder_rule_previews(resolved, ctx, sat_states)
+        physics = ctx.physics
     else:
         ephemeris, rule_previews = _satellite_less_world_view(resolved, epoch_unix)
+        physics = session_physics(resolved)
+    body_samples = body_sample_window(physics, epoch_id=0, produced_at_unix=epoch_unix)
 
     local_to_runtime = {
         (node.segment_id, node.local_node_id): node.node_id for node in resolved.nodes
@@ -662,6 +667,7 @@ def world_from_resolution(resolution: SessionResolution) -> BuilderWorld:
         session=resolved.session,
         epoch_unix=epoch_unix,
         ephemeris=ephemeris,
+        body_samples=body_samples,
         nodes=nodes,
         link_rules=tuple(
             _builder_link_rule(rule, local_to_runtime) for rule in resolved.link_rules

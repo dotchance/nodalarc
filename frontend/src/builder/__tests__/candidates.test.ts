@@ -18,6 +18,7 @@ import type {
   BuilderRulePreview,
   BuilderWorld,
 } from "../builderTypes";
+import { BODY_SAMPLE_FIXTURE } from "../../sim/__tests__/bodySampleFixture";
 
 function preview(over: Partial<BuilderRulePreview>): BuilderRulePreview {
   return {
@@ -64,6 +65,8 @@ function world(
     session: { name: "t", display_name: null, description: null },
     epoch_unix: 0,
     ephemeris: { epoch_id: 0, sim_time: "", epoch_unix: 0, nodes: {}, body_frames: {} },
+    // Not rendered here: the world needs a window, the tests read none of it.
+    body_samples: BODY_SAMPLE_FIXTURE.windows[0],
     nodes: [],
     link_rules: rules,
     segments: [],

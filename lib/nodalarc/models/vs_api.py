@@ -15,6 +15,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from nodalarc.body_frames import SupportedSurfaceBody
 from nodalarc.model_validation import AddressFamily
 from nodalarc.models.events import (
+    BodySamples,
     DebugControlAction,
     OpsEvent,
     OpsLevel,
@@ -480,6 +481,15 @@ class SessionEphemerisFrame(SessionEphemeris):
     msg_type: Literal["session_ephemeris"] = "session_ephemeris"
 
 
+class BodySamplesFrame(BodySamples):
+    """The latest body-sample window as the state socket sends it: on connect and
+    whenever OME publishes a new window."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    msg_type: Literal["body_samples"] = "body_samples"
+
+
 class WiringProgressFrame(BaseModel):
     """A wiring progress line from the Node Agent, relayed as it arrives."""
 
@@ -520,6 +530,7 @@ class SessionFailedFrame(BaseModel):
 StateFeedFrame = Annotated[
     StateSnapshot
     | SessionEphemerisFrame
+    | BodySamplesFrame
     | WiringProgressFrame
     | SessionTransitioningFrame
     | SessionReadyFrame

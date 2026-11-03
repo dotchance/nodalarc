@@ -17,6 +17,7 @@
  */
 
 import { bodyMathFromFrame, kmPerRenderUnitFromEphemeris, propagateNode, type EphemerisNode } from "../sim/ephemeris";
+import { interpolateWindow } from "../sim/bodySamples";
 import type { BuilderWorld, BuilderWorldNode } from "./builderTypes";
 import type { NodeState } from "../generated/vsApi";
 import type { SceneSnapshot } from "../globe/r3f/Scene";
@@ -68,11 +69,22 @@ function _satelliteNodeState(
     );
   }
   const kmPerRenderUnit = kmPerRenderUnitFromEphemeris(world.ephemeris);
+  // The body's orientation at the epoch, from the world's body samples (the same
+  // generator OME runs).
+  const orientation = interpolateWindow(world.body_samples, world.epoch_unix)?.bodies[
+    entry.reference_body
+  ];
+  if (!orientation) {
+    throw new Error(
+      `builder world's body samples do not cover ${entry.reference_body} at its epoch`,
+    );
+  }
   const position = propagateNode(
     entry,
     world.epoch_unix,
     world.epoch_unix,
     bodyMathFromFrame(frame, kmPerRenderUnit),
+    orientation,
   );
   return {
     node_id: node.node_id,

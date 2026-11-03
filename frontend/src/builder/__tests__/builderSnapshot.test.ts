@@ -11,9 +11,12 @@
 import { describe, expect, it } from "vitest";
 import { builderSnapshotFromWorld, distinctGroundStationSites } from "../builderSnapshot";
 import type { BuilderWorld, BuilderWorldNode, SessionEphemeris } from "../builderTypes";
+import { BODY_SAMPLE_FIXTURE } from "../../sim/__tests__/bodySampleFixture";
 
-const EPOCH_ISO = "2026-06-08T00:00:00+00:00";
-const EPOCH_UNIX = Date.parse(EPOCH_ISO) / 1000;
+// The epoch and body samples of the backend fixture (fixtures/bodySamples.json), so
+// satellite placement uses a real sampled Earth orientation at the epoch.
+const EPOCH_ISO = BODY_SAMPLE_FIXTURE.ephemeris.sim_time;
+const EPOCH_UNIX = BODY_SAMPLE_FIXTURE.ephemeris.epoch_unix;
 
 const EARTH_FRAME = {
   body_id: "earth" as const,
@@ -23,12 +26,11 @@ const EARTH_FRAME = {
   gravitational_parameter_km3_s2: 398600.4418,
   rotation_rate_rad_s: 7.2921159e-5,
   j2: 0.00108263,
-  origin_x_km: 0,
-  origin_y_km: 0,
-  origin_z_km: 0,
-  vel_x_km_s: 0,
-  vel_y_km_s: 0,
-  vel_z_km_s: 0,
+  orbit_basis: [
+    [1, 0, 0],
+    [0, 1, 0],
+    [0, 0, 1],
+  ] as const,
 };
 
 const EPHEMERIS: SessionEphemeris = {
@@ -83,6 +85,7 @@ const WORLD: BuilderWorld = {
   session: { name: "test-session", display_name: null, description: null },
   epoch_unix: EPOCH_UNIX,
   ephemeris: EPHEMERIS,
+  body_samples: BODY_SAMPLE_FIXTURE.windows[0],
   link_rules: [],
   segments: [],
   allocations: [],

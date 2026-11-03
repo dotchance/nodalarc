@@ -4,6 +4,8 @@
 // Writes satellite positions into a double-buffered SharedArrayBuffer.
 // Main thread reads the active buffer with zero contention.
 
+import type { BodySamples } from "../builder/generated/builderApi";
+import { interpolateWindows, type Matrix3 } from "./bodySamples";
 import { propagateToSceneXYZ, type KeplerianElements } from "./orbitalMath";
 
 // --- Message types ---
@@ -33,7 +35,13 @@ interface FlushMsg {
   playbackSpeed: number;
 }
 
-type WorkerMsg = InitMsg | EphemerisMsg | PropagateMsg | FlushMsg;
+/** The displayable body-sample windows of the ephemeris' epoch. */
+interface BodySamplesMsg {
+  type: "bodySamples";
+  windows: BodySamples[];
+}
+
+type WorkerMsg = InitMsg | EphemerisMsg | PropagateMsg | FlushMsg | BodySamplesMsg;
 
 // --- SAB layout constants ---
 // Control block: 32 bytes (Int32Array view)
@@ -59,6 +67,7 @@ let samplesPerWindow = 50;
 
 let epochUnix = 0;
 let satellites: { id: string; elements: KeplerianElements }[] = [];
+let bodyWindows: BodySamples[] = [];
 
 function initBuffers(sab: SharedArrayBuffer, maxSatellites: number, samples: number): void {
   maxSats = maxSatellites;
@@ -97,15 +106,36 @@ function flipActiveBuffer(): void {
 }
 
 function computeWindow(startSimTime: number, sampleInterval: number): void {
+  // Each body's orientation at every sample time, from the body samples. A
+  // time no window covers leaves the window unpublished: the page then shows
+  // that positions are unavailable rather than a guess.
+  const rotations = new Map<string, Matrix3[]>();
+  for (let j = 0; j < samplesPerWindow; j++) {
+    const sky = interpolateWindows(bodyWindows, startSimTime + j * sampleInterval);
+    if (!sky) {
+      self.postMessage({ type: "windowUnavailable", startSimTime });
+      return;
+    }
+    for (const [bodyId, body] of Object.entries(sky.bodies)) {
+      const list = rotations.get(bodyId) ?? [];
+      list.push(body.rotation);
+      rotations.set(bodyId, list);
+    }
+  }
+
   const buf = getInactiveBuffer();
   buf.header[0] = startSimTime;
   buf.header[1] = sampleInterval;
 
   for (let si = 0; si < satellites.length && si < maxSats; si++) {
     const sat = satellites[si]!;
+    const bodyRotations = rotations.get(sat.elements.body.bodyId);
+    if (!bodyRotations) {
+      throw new Error(`body samples carry no orientation for ${sat.elements.body.bodyId}`);
+    }
     for (let j = 0; j < samplesPerWindow; j++) {
       const t = startSimTime + j * sampleInterval;
-      const [x, y, z] = propagateToSceneXYZ(sat.elements, epochUnix, t);
+      const [x, y, z] = propagateToSceneXYZ(sat.elements, epochUnix, t, bodyRotations[j]!);
       const offset = (si * samplesPerWindow + j) * 3;
       buf.positions[offset] = x;
       buf.positions[offset + 1] = y;
@@ -133,6 +163,10 @@ self.onmessage = (e: MessageEvent<WorkerMsg>) => {
       epochUnix = msg.epochUnix;
       satellites = msg.satellites;
       self.postMessage({ type: "ephemerisLoaded", count: satellites.length });
+      break;
+
+    case "bodySamples":
+      bodyWindows = msg.windows;
       break;
 
     case "propagate": {

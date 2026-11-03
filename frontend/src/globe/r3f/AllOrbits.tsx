@@ -18,10 +18,11 @@
  * large bounds set, identical to the legacy and the link batch, so hidden/garbage vertices
  * never poison culling (the batch is frustumCulled=false anyway).
  *
- * The integrator supplies the live view-frame rotation. The frame rotation is whatever the
- * Earth body group carries this frame (set by <FrameDriver>); the angular velocity is
- * the resolved Earth body-frame rotation in earth-inertial and 0 in earth-fixed — derived here
- * from `referenceFrame` so callers pass the same two inputs FrameDriver already gets.
+ * The frame rotation is whatever the Earth body group carries this frame (set by
+ * <FrameDriver> from the body samples); the angular velocity of Earth's frame relative to the
+ * world comes from the same samples through bodyPose (Earth's sampled angular velocity in the
+ * inertial view, zero in the Earth-fixed view). Eccentric and non-Earth paths use the body's
+ * sampled orientation at the seed time.
  *
  * useFrame runs at DEFAULT priority (0): after FrameDriver (-2) has set the frame rotation and
  * <Constellation> (-1) has written this frame's positions into the registry, so the world
@@ -36,11 +37,12 @@ import { LineSegmentsGeometry } from "three/addons/lines/LineSegmentsGeometry.js
 import { LineMaterial } from "three/addons/lines/LineMaterial.js";
 import { getPlaneColor } from "../../config";
 import { velocityToScene } from "../geo";
-import { worldVelocity } from "../astronomy";
+import { bodyPose, toRenderVector, worldVelocity } from "./bodyPose";
 import { computeOrbitPositions, ORBIT_SAMPLES, supportsStaticOrbitRing } from "./orbitGeometry";
 import { sampleOrbitPathSceneXYZ } from "../../sim/orbitalMath";
 import { bodyMathFromFrame } from "../../sim/ephemeris";
 import { interpolatedSimTimeMs } from "../../sim/simClock";
+import { skyAt, type SkyState } from "../../sim/bodySamples";
 import type { ReferenceFrame } from "../../types";
 import { bodyLocalToWorld, getNodeLocalPosition, getNodeWorldPosition } from "./positions";
 import type { NodeState } from "../../generated/vsApi";
@@ -54,6 +56,7 @@ const _worldPos = new THREE.Vector3();
 const _localPos = new THREE.Vector3();
 const _velEcef = new THREE.Vector3();
 const _velWorld = new THREE.Vector3();
+const _omegaLocal = new THREE.Vector3();
 const _color = new THREE.Color();
 
 /** NaN/garbage-safe bounds, identical to allOrbits.ts and linkBatch.ts. */
@@ -76,19 +79,11 @@ interface AllOrbitsProps {
   nodes: readonly NodeState[];
   /** The "Satellite Paths" toggle. When false, the batch is torn down. */
   show: boolean;
-  /**
-   * Live Earth body group whose rotation.y is the current view-frame rotation (set each
-   * frame by <FrameDriver>). Mirrors the legacy `earthFrame.rotation.y` argument.
-   */
+  /** Live Earth body group, posed each frame by <FrameDriver>. */
   earthFrame: React.RefObject<THREE.Group | null>;
-  /**
-   * Active reference frame — selects the frame angular velocity (dθ/dt): non-zero only in
-   * earth-inertial (resolved body-frame rotation), zero in earth-fixed. Mirrors the legacy
-   * `angularVelocityRadS` argument.
-   */
+  /** Active reference frame — selects Earth's angular velocity relative to the world. */
   referenceFrame: ReferenceFrame;
   kmPerRenderUnit: number;
-  earthRotationRateRadS: number;
   ephemeris: SessionEphemeris;
 }
 
@@ -98,7 +93,6 @@ export function AllOrbits({
   earthFrame,
   referenceFrame,
   kmPerRenderUnit,
-  earthRotationRateRadS,
   ephemeris,
 }: AllOrbitsProps) {
   const groupRef = useRef<THREE.Group>(null);
@@ -118,8 +112,6 @@ export function AllOrbits({
   refFrameRef.current = referenceFrame;
   const kmPerRenderUnitRef = useRef(kmPerRenderUnit);
   kmPerRenderUnitRef.current = kmPerRenderUnit;
-  const earthRotationRateRef = useRef(earthRotationRateRadS);
-  earthRotationRateRef.current = earthRotationRateRadS;
   const ephemerisRef = useRef(ephemeris);
   ephemerisRef.current = ephemeris;
   const sizeRef = useRef(size);
@@ -149,15 +141,13 @@ export function AllOrbits({
   // parameters. The count gate alone never catches this — the sat set is unchanged on a toggle.
   useEffect(() => {
     teardown();
-  }, [referenceFrame, earthRotationRateRadS, ephemeris.epoch_id, teardown]);
+  }, [referenceFrame, ephemeris.epoch_id, teardown]);
 
   // Rebuild the batch from the current satellite set.
   // Returns false if no rings were produced (count gate keeps retrying next frame).
   const rebuild = (
     sats: readonly NodeState[],
-    viewFrameRotationRad: number,
-    frameAngularVelocityRadS: number,
-    simTimeUnix: number | null,
+    sky: SkyState,
   ): void => {
     teardown();
     const group = groupRef.current;
@@ -188,20 +178,26 @@ export function AllOrbits({
             kmPerRenderUnitRef.current,
           ),
         );
-        worldVelocity(_localPos, _velEcef, viewFrameRotationRad, frameAngularVelocityRadS, _velWorld);
+        const earth = earthFrame.current;
+        const pose = bodyPose(sky, "earth", refFrameRef.current);
+        if (!earth || !pose) continue;
+        toRenderVector(pose.angularVelocityLocalRadS, _omegaLocal);
+        worldVelocity(_localPos, _velEcef, earth.quaternion, _omegaLocal, _velWorld);
         positions = computeOrbitPositions(_worldPos, _velWorld);
       } else {
         // Eccentric (HEO/ELFO) and/or non-Earth Keplerian: sample the true
         // osculating ellipse from the elements in the node's body frame — a
         // world great-circle would lie about both the shape and the centre.
         renderableCount++;
-        if (simTimeUnix == null) continue;
+        const bodyState = sky.bodies[ephNode.reference_body];
+        if (!bodyState) continue;
         const frame = ephemerisRef.current.body_frames[ephNode.reference_body];
         if (!frame) continue;
         const local = sampleOrbitPathSceneXYZ(
           { ...ephNode, body: bodyMathFromFrame(frame, kmPerRenderUnitRef.current) },
           ephemerisRef.current.epoch_unix,
-          simTimeUnix,
+          sky.simTimeUnix,
+          bodyState.rotation,
           ORBIT_SAMPLES,
         );
         let transformed = true;
@@ -288,11 +284,10 @@ export function AllOrbits({
       materialRef.current?.resolution.set(sizeRef.current.width, sizeRef.current.height);
       return;
     }
-    const viewFrameRotationRad = earthFrame.current?.rotation.y ?? 0;
-    const frameAngularVelocityRadS =
-      refFrameRef.current === "earth-inertial" ? earthRotationRateRef.current : 0;
     const simMs = interpolatedSimTimeMs(performance.now());
-    rebuild(sats, viewFrameRotationRad, frameAngularVelocityRadS, simMs === null ? null : simMs / 1000);
+    const sky = simMs === null ? null : skyAt(simMs / 1000);
+    if (!sky) return;
+    rebuild(sats, sky);
   });
 
   return <group ref={groupRef} name="all-orbits" />;

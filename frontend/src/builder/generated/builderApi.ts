@@ -30,6 +30,28 @@ export interface ApiRefusal {
   readonly cause_type: string | null;
 }
 
+/** One body at one sample instant. */
+export interface BodySample {
+  readonly position_km: readonly [number, number, number];
+  readonly velocity_km_s: readonly [number, number, number];
+  readonly rotation: readonly [readonly [number, number, number], readonly [number, number, number], readonly [number, number, number]];
+  readonly angular_velocity_rad_s: readonly [number, number, number];
+}
+
+/** Every session body, and the Sun, at one instant. */
+export interface BodySampleInstant {
+  readonly sim_time_unix: number;
+  readonly bodies: Readonly<Record<string, BodySample>>;
+  readonly sun: SunSample;
+}
+
+/** Sampled body states for one window of simulation time. Published by OME to NODALARC_SESSION (MaxMsgsPerSubject=1) at session start, after OME recovers, after each seek, and before the current window runs out. Bodies have no model in the page; it interpolates between these samples. - Origin: Earth's center. Axes: ICRF. - Times: Unix seconds, the time scale of every OME timestamp. - Units: km, km/s, rad/s. - ``rotation`` maps ICRF axes to the body-fixed frame: ``v_fixed = rotation @ v_icrf``. - ``angular_velocity_rad_s`` is the body's angular velocity on ICRF axes: a body-fixed velocity is ``rotation @ (v - angular_velocity x r)``. Sample times are ``start + k * interval_s`` on a grid aligned to multiples of ``interval_s`` since the Unix epoch, so two windows that share an instant carry identical values there. ``epoch_id`` fences the window to the epoch whose SessionEphemeris it accompanies. */
+export interface BodySamples {
+  readonly epoch_id: number;
+  readonly interval_s: number;
+  readonly samples: ReadonlyArray<BodySampleInstant>;
+}
+
 /**  */
 export type BuilderBlockedOperation = "save" | "deploy";
 
@@ -991,6 +1013,7 @@ export interface BuilderWorld {
   readonly session: SessionMeta;
   readonly epoch_unix: number;
   readonly ephemeris: SessionEphemeris;
+  readonly body_samples: BodySamples;
   readonly nodes: ReadonlyArray<BuilderWorldNode>;
   readonly link_rules: ReadonlyArray<BuilderLinkRule>;
   readonly segments: ReadonlyArray<BuilderWorldSegment>;
@@ -1400,7 +1423,7 @@ export interface DependencyClosureInventory {
   readonly closure_digest: Sha256Digest;
 }
 
-/** Body center in the session common frame at ``epoch_unix``. Positions and velocities are km vectors relative to Earth's center on ICRF axes, from the shared physics module. The renderer may apply a visual scale or camera-relative transform, but these numbers remain the authoritative physical facts used to place bodies relative to one another. The data files behind them are recorded once, in the resolved session. */
+/** A session body's constants for propagating its satellites' elements. Where the body is and how it is turned at any instant comes from BodySamples. ``orbit_basis`` holds the body's orbit-element frame: its rows are that frame's x, y and z axes on ICRF axes, so a state computed from orbital elements in that frame is ``orbit_basis^T @ r`` on ICRF axes. Earth's is the identity; every other body's z axis is its pole at J2000. */
 export interface EphemerisBodyFrame {
   readonly body_id: SupportedSurfaceBody;
   readonly mean_radius_km: number;
@@ -1409,12 +1432,7 @@ export interface EphemerisBodyFrame {
   readonly gravitational_parameter_km3_s2: number;
   readonly rotation_rate_rad_s: number;
   readonly j2: number;
-  readonly origin_x_km: number;
-  readonly origin_y_km: number;
-  readonly origin_z_km: number;
-  readonly vel_x_km_s: number;
-  readonly vel_y_km_s: number;
-  readonly vel_z_km_s: number;
+  readonly orbit_basis: readonly [readonly [number, number, number], readonly [number, number, number], readonly [number, number, number]];
 }
 
 /** Fixed geodetic position for a ground station. */
@@ -1598,6 +1616,12 @@ export interface SessionMeta {
   readonly name: string;
   readonly display_name: string | null;
   readonly description: string | null;
+}
+
+/** The Sun at one sample instant. */
+export interface SunSample {
+  readonly position_km: readonly [number, number, number];
+  readonly velocity_km_s: readonly [number, number, number];
 }
 
 /**  */

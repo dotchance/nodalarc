@@ -15,7 +15,7 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict
 
 from nodalarc.models.catalog import MountRole
-from nodalarc.models.events import NodePosition, SessionEphemeris
+from nodalarc.models.events import BodySamples, NodePosition, SessionEphemeris
 from nodalarc.models.link_rules import LinkLabel, TopologyMode
 from nodalarc.models.resolved_session import (
     NodeKind,
@@ -246,6 +246,8 @@ class BuilderWorld(BaseModel):
     session: SessionMeta
     epoch_unix: float
     ephemeris: SessionEphemeris
+    # The body-sample window around the epoch, from the generator OME uses.
+    body_samples: BodySamples
     nodes: tuple[BuilderWorldNode, ...]
     link_rules: tuple[BuilderLinkRule, ...] = ()
     segments: tuple[BuilderWorldSegment, ...] = ()

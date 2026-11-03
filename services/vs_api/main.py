@@ -1328,6 +1328,8 @@ async def _activate_session_context_from_cr(
 
     if new_ctx.cached_ephemeris is not None:
         await _broadcast_to_all(new_ctx.cached_ephemeris.model_dump_json())
+    if new_ctx.cached_body_samples is not None:
+        await _broadcast_to_all(new_ctx.cached_body_samples.model_dump_json())
     first_snapshot = _build_snapshot()
     if first_snapshot is None:
         raise RuntimeError(f"activated session {ready.session_id} built no state snapshot")
@@ -2140,10 +2142,27 @@ async def ws_state(websocket: WebSocket) -> None:
 
     done = asyncio.Event()
 
-    async def _sender():
+    # The epoch facts this connection last received. The page displays an
+    # epoch only with its SessionEphemeris and a BodySamples window of the
+    # same epoch, so each new one is sent before the next snapshot.
+    sent_ephemeris: list[object | None] = [None]
+    sent_body_samples: list[object | None] = [None]
+
+    async def _send_epoch_facts() -> None:
         ctx = _active_context
-        if ctx and ctx.cached_ephemeris is not None:
-            await websocket.send_text(ctx.cached_ephemeris.model_dump_json())
+        if ctx is None:
+            return
+        ephemeris = ctx.cached_ephemeris
+        if ephemeris is not None and ephemeris is not sent_ephemeris[0]:
+            await websocket.send_text(ephemeris.model_dump_json())
+            sent_ephemeris[0] = ephemeris
+        body_samples = ctx.cached_body_samples
+        if body_samples is not None and body_samples is not sent_body_samples[0]:
+            await websocket.send_text(body_samples.model_dump_json())
+            sent_body_samples[0] = body_samples
+
+    async def _sender():
+        await _send_epoch_facts()
         # Latest-wins delivery (the websocket form of replace-not-merge):
         # the producer fills a one-slot mailbox on an absolute 1 s
         # schedule and never blocks on the socket; the shipper always
@@ -2186,6 +2205,7 @@ async def ws_state(websocket: WebSocket) -> None:
                 await fresh.wait()
                 fresh.clear()
                 snapshot = latest[0]
+                await _send_epoch_facts()
                 if snapshot is not None:
                     await websocket.send_text(snapshot.model_dump_json())
         finally:

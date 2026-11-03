@@ -38,6 +38,7 @@ def test_every_builder_output_lands_in_a_deployed_stream_or_a_declared_exception
         nc.link_up_subject(sid),
         nc.actuation_state_subject(sid, "gs-1"),
         nc.session_ephemeris_subject(sid),
+        nc.session_body_samples_subject(sid),
         nc.scheduling_checkpoint_subject(sid),
         nc.ops_event_subject(sid, "ome", "X"),
         nc.debug_event_subject(sid, "ome", "X"),

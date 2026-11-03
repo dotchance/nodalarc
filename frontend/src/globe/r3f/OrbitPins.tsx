@@ -20,11 +20,12 @@ import { LineSegmentsGeometry } from "three/addons/lines/LineSegmentsGeometry.js
 import { LineMaterial } from "three/addons/lines/LineMaterial.js";
 import { getPlaneColor } from "../../config";
 import { velocityToScene } from "../geo";
-import { worldVelocity } from "../astronomy";
+import { bodyPose, toRenderVector, worldVelocity } from "./bodyPose";
 import { computeOrbitPositions, ORBIT_SAMPLES, supportsStaticOrbitRing } from "./orbitGeometry";
 import { sampleOrbitPathSceneXYZ } from "../../sim/orbitalMath";
 import { bodyMathFromFrame } from "../../sim/ephemeris";
 import { interpolatedSimTimeMs } from "../../sim/simClock";
+import { skyAt } from "../../sim/bodySamples";
 import type { ReferenceFrame } from "../../types";
 import { bodyLocalToWorld, getNodeLocalPosition, getNodeWorldPosition } from "./positions";
 import type { NodeState } from "../../generated/vsApi";
@@ -36,6 +37,7 @@ const _worldPos = new THREE.Vector3();
 const _localPos = new THREE.Vector3();
 const _velEcef = new THREE.Vector3();
 const _velWorld = new THREE.Vector3();
+const _omegaLocal = new THREE.Vector3();
 const _color = new THREE.Color();
 
 function createGeometry(positions: Float32Array, colors: Float32Array): LineSegmentsGeometry {
@@ -59,7 +61,6 @@ interface OrbitPinsProps {
   earthFrame: React.RefObject<THREE.Group | null>;
   referenceFrame: ReferenceFrame;
   kmPerRenderUnit: number;
-  earthRotationRateRadS: number;
   ephemeris: SessionEphemeris;
 }
 
@@ -69,7 +70,6 @@ export function OrbitPins({
   earthFrame,
   referenceFrame,
   kmPerRenderUnit,
-  earthRotationRateRadS,
   ephemeris,
 }: OrbitPinsProps) {
   const groupRef = useRef<THREE.Group>(null);
@@ -99,13 +99,14 @@ export function OrbitPins({
     teardown();
     const group = groupRef.current;
     if (!group || pinnedIds.length === 0) return;
-    const rotY = earthFrame.current?.rotation.y ?? 0;
-    const angVel = referenceFrame === "earth-inertial" ? earthRotationRateRadS : 0;
 
     const pos = new Float32Array(pinnedIds.length * FLOATS_PER_ORBIT);
     const col = new Float32Array(pinnedIds.length * FLOATS_PER_ORBIT);
     let n = 0;
     const simMs = interpolatedSimTimeMs(performance.now());
+    // Body states at the seed time, from the samples; none, and nothing is seeded.
+    const sky = simMs === null ? null : skyAt(simMs / 1000);
+    if (!sky) return;
     for (const id of pinnedIds) {
       const ns = byIdRef.current.get(id);
       if (!ns) continue;
@@ -120,18 +121,24 @@ export function OrbitPins({
         _velEcef.copy(
           velocityToScene(ns.vel_x_km_s, ns.vel_y_km_s, ns.vel_z_km_s, kmPerRenderUnit),
         );
-        worldVelocity(_localPos, _velEcef, rotY, angVel, _velWorld);
+        const earth = earthFrame.current;
+        const pose = bodyPose(sky, "earth", referenceFrame);
+        if (!earth || !pose) continue;
+        toRenderVector(pose.angularVelocityLocalRadS, _omegaLocal);
+        worldVelocity(_localPos, _velEcef, earth.quaternion, _omegaLocal, _velWorld);
         ring = computeOrbitPositions(_worldPos, _velWorld);
       } else {
         // Eccentric (HEO/ELFO) and/or non-Earth pins: true osculating
         // ellipse from the elements, transformed through the body frame.
-        if (simMs === null) continue;
+        const bodyState = sky.bodies[ephNode.reference_body];
+        if (!bodyState) continue;
         const frame = ephemeris.body_frames[ephNode.reference_body];
         if (!frame) continue;
         const local = sampleOrbitPathSceneXYZ(
           { ...ephNode, body: bodyMathFromFrame(frame, kmPerRenderUnit) },
           ephemeris.epoch_unix,
-          simMs / 1000,
+          sky.simTimeUnix,
+          bodyState.rotation,
           ORBIT_SAMPLES,
         );
         let transformed = true;
@@ -189,7 +196,7 @@ export function OrbitPins({
     group.add(batch);
     batchRef.current = batch;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pinKey, referenceFrame, kmPerRenderUnit, earthRotationRateRadS, ephemeris]);
+  }, [pinKey, referenceFrame, kmPerRenderUnit, ephemeris]);
 
   // Keep the fat-line resolution in sync with the canvas.
   useEffect(() => {

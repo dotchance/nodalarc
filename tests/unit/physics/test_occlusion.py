@@ -22,7 +22,6 @@ from __future__ import annotations
 import math
 from collections.abc import Callable, Iterator
 from datetime import UTC, datetime
-from pathlib import Path
 
 import numpy as np
 import pytest
@@ -33,7 +32,6 @@ from nodalarc.orbital import OrbitalElements
 from nodalarc.physics import PhysicsContext, body_fixed_from_geodetic
 from nodalarc.physics.context import tdb_seconds_of
 from nodalarc.physics.ephemeris_table import SUN_ID, SUN_RADIUS_KM
-from nodalarc.physics.kepler import ElementsBatch, orbit_states
 from nodalarc.physics.lighttime import (
     Endpoint,
     OrbitEndpoint,
@@ -56,6 +54,7 @@ from tests.physics_fixtures import (
     LUNA_TEST_BODY_FRAME,
     earth_elements_from_params,
 )
+from tests.spice_endpoints import write_endpoint_spk
 
 C = 299792.458
 SHAPES = {"earth": EARTH_TEST_BODY_FRAME, "luna": LUNA_TEST_BODY_FRAME}
@@ -106,53 +105,6 @@ def _utc(year: int, month: int, day: int, hour: int = 0, minute: int = 0) -> flo
     return datetime(year, month, day, hour, minute, tzinfo=UTC).timestamp()
 
 
-def _write_spk(path: Path, physics: PhysicsContext) -> None:
-    first, last = _et(ORBIT_START), _et(ORBIT_START + 27 * 3600.0)
-    handle = spiceypy.spkopn(str(path), "occultation reference", 0)
-    station = [*GOLDSTONE_FIXED, 0.0, 0.0, 0.0]
-    spiceypy.spkw08(
-        handle,
-        GOLDSTONE_ID,
-        399,
-        "ITRF93",
-        first,
-        last,
-        "GOLDSTONE",
-        1,
-        2,
-        [station, station],
-        first,
-        last - first,
-    )
-    epochs = np.arange(first, last + 10.0, 10.0)
-    phases = np.array(
-        [Epoch.init_from_et_seconds(float(e)).to_unix_seconds() - ORBIT_START for e in epochs]
-    )
-    states = orbit_states(
-        ElementsBatch.from_elements([LOW_LUNAR_ORBIT]),
-        phases[None, :],
-        model="two-body",
-        body_frame=LUNA_TEST_BODY_FRAME,
-    )
-    basis = physics.orbit_basis("luna")
-    positions = np.stack([states.px[0], states.py[0], states.pz[0]], axis=1) @ basis
-    velocities = np.stack([states.vx[0], states.vy[0], states.vz[0]], axis=1) @ basis
-    spiceypy.spkw13(
-        handle,
-        ORBITER_ID,
-        301,
-        "J2000",
-        float(epochs[0]),
-        float(epochs[-1]),
-        "ORBITER",
-        7,
-        len(epochs),
-        np.hstack([positions, velocities]).tolist(),
-        epochs.tolist(),
-    )
-    spiceypy.spkcls(handle)
-
-
 @pytest.fixture(scope="module")
 def occult_reference(
     spice_reference: None,
@@ -160,7 +112,14 @@ def occult_reference(
     tmp_path_factory: pytest.TempPathFactory,
 ) -> Iterator[None]:
     path = tmp_path_factory.mktemp("occult") / "endpoints.bsp"
-    _write_spk(path, physics_context)
+    write_endpoint_spk(
+        path,
+        physics_context,
+        start_unix=ORBIT_START,
+        end_unix=ORBIT_START + 27 * 3600.0,
+        sites={GOLDSTONE_ID: (399, "ITRF93", GOLDSTONE_FIXED)},
+        orbits={ORBITER_ID: (301, ORBITER)},
+    )
     spiceypy.furnsh(str(path))
     for name, values in POOL.items():
         spiceypy.pdpool(name, values)

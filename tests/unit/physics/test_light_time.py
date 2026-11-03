@@ -8,12 +8,12 @@ states and frames plus the same orbit model, and applies SPICE's stlabx and stel
 
 Tolerances: 1 microsecond for light time, 1e-9 rad for pointing (stellar aberration itself is
 up to about 1e-4 rad). Measured worst differences:
-- light time: 0.1 ps for the body pairs, 4.8 ps for the moving endpoints, 0.24 ps between the two
-  time indexes of one signal;
+- light time: 0.1 ps for the body pairs, 4.8 ps for the moving endpoints at transmission and
+  5.1 ps at reception, 0.24 ps between the two time indexes of one signal;
 - pointing: 2.7e-13 rad for the body pairs, 4.6e-13 rad for the lunar orbiter and Goldstone,
-  7.0e-13 rad between the two time indexes, and 5.5e-10 rad for the LEO pair (1.1 mm at
-  2,016 km). Both the produced value and the reference hold master sim time as float64 Unix
-  seconds, in steps of 2.4e-7 s, which is 1.8 mm of LEO motion.
+  7.0e-13 rad between the two time indexes, and 5.5e-10 rad for the LEO pair at transmission and
+  4.5e-10 rad at reception (1.1 mm at 2,016 km). Both the produced value and the reference hold
+  master sim time as float64 Unix seconds, in steps of 2.4e-7 s, which is 1.8 mm of LEO motion.
 """
 
 from __future__ import annotations
@@ -209,6 +209,23 @@ def test_body_pair_pointing_matches_spice(physics_context: PhysicsContext, t: fl
         assert _angle(produced, reference) < POINTING_TOLERANCE_RAD
 
 
+def _reference_received(a, b, t: float, physics):
+    """Light time and both pointing directions for a signal b receives from a at t: SPICE states,
+    SPICE stlabx at the transmitter and stelab at the receiver."""
+    et = _et(t)
+    arrival, arrival_velocity = _spice_state(b, et, physics, t)
+    tau = np.linalg.norm(arrival - _spice_state(a, et, physics, t)[0]) / C
+    for _ in range(10):
+        tau = np.linalg.norm(arrival - _spice_state(a, et - tau, physics, t)[0]) / C
+    origin, origin_velocity = _spice_state(a, et - tau, physics, t)
+    path = arrival - origin
+    return (
+        float(tau),
+        spiceypy.stlabx(path, origin_velocity),
+        spiceypy.stelab(-path, arrival_velocity),
+    )
+
+
 @pytest.mark.usefixtures("spice_reference")
 @pytest.mark.parametrize("t", INSTANTS)
 def test_moving_endpoints_match_a_spice_state_reference(
@@ -224,6 +241,30 @@ def test_moving_endpoints_match_a_spice_state_reference(
     )
     for row, (a, b) in enumerate(pairs):
         tau, transmitter_pointing, receiver_pointing = _reference_sent(a, b, t, physics_context)
+        assert abs(produced.light_time_s[row] - tau) < TOLERANCE_S
+        assert (
+            _angle(produced.transmitter.pointing[row], transmitter_pointing)
+            < POINTING_TOLERANCE_RAD
+        )
+        assert _angle(produced.receiver.pointing[row], receiver_pointing) < POINTING_TOLERANCE_RAD
+
+
+@pytest.mark.usefixtures("spice_reference")
+@pytest.mark.parametrize("t", INSTANTS)
+def test_moving_endpoints_received_match_a_spice_state_reference(
+    physics_context: PhysicsContext, t: float
+) -> None:
+    """Reception time: the receiver at t, the transmitter when the signal left it."""
+    pairs = [
+        (_orbit(LEO_A, "earth", t - 600.0), _orbit(LEO_B, "earth", t - 600.0)),
+        (_orbit(LUNAR, "luna", t - 3600.0), GOLDSTONE_SITE),
+        (GOLDSTONE_SITE, _orbit(LUNAR, "luna", t - 3600.0)),
+    ]
+    produced = signals_received_at(
+        physics_context, SHAPES, [a for a, _ in pairs], [b for _, b in pairs], t
+    )
+    for row, (a, b) in enumerate(pairs):
+        tau, transmitter_pointing, receiver_pointing = _reference_received(a, b, t, physics_context)
         assert abs(produced.light_time_s[row] - tau) < TOLERANCE_S
         assert (
             _angle(produced.transmitter.pointing[row], transmitter_pointing)

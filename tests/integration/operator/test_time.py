@@ -101,6 +101,7 @@ def test_the_clock_stops_where_the_ephemeris_data_ends(operator: Operator, clock
     still = _sim_times(operator, max(5.0, 2.5 * clock.wall_seconds_per_step))
     assert set(still) == {stopped_at.timestamp()}, f"sim time moved after the stop: {still}"
 
+    operator.playback("set_speed", factor=1.0)  # the truths below hold at 1x
     operator.playback(
         "seek", target_sim_time=datetime.fromtimestamp(clock.sim_time, UTC).isoformat()
     )

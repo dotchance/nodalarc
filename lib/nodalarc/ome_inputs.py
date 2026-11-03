@@ -12,17 +12,15 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
-from datetime import datetime
 from typing import Literal
 
-from nodalarc.body_frames import BodyFrame, body_runtime_support_for
+from nodalarc.body_frames import BodyFrame
 from nodalarc.link_metadata import LinkRuleMetadata
 from nodalarc.models.addressing import IslPlaneRelation, NeighborAssignment
 from nodalarc.models.events import EphemerisBodyFrame
 from nodalarc.models.ground_policy import HandoverPolicySpec, SelectionPolicySpec
 from nodalarc.models.resolved_session import (
     ResolvedAccessTerminalSelection,
-    ResolvedBodyFacts,
     ResolvedNode,
     ResolvedSession,
     ResolvedTerminalBlock,
@@ -39,10 +37,15 @@ from nodalarc.ome_runtime import (
     SessionPropagatorId,
     retarget_satellites,
 )
-from nodalarc.orbital import OrbitalElements
 from nodalarc.physics import PhysicsContext
 from nodalarc.physics.kepler import orbital_period_s
-from nodalarc.physics.session import session_active_bodies, session_physics
+from nodalarc.physics.session import (
+    body_frame_from_facts,
+    orbit_epoch_unix,
+    orbital_elements_from_facts,
+    session_active_bodies,
+    session_physics,
+)
 
 GroundLinkModel = Literal["geometry_only", "terminal_physics"]
 
@@ -197,27 +200,8 @@ def build_ome_inputs_from_resolved(resolved: ResolvedSession) -> ResolvedOmeInpu
     )
 
 
-def _body_frame_from_resolved_facts(facts: ResolvedBodyFacts) -> BodyFrame:
-    try:
-        runtime_support = body_runtime_support_for(facts.body_id)
-    except ValueError as exc:
-        raise ValueError(
-            f"body {facts.body_id!r} has primitive physical facts, but the runtime "
-            "has no rotation/J2 support for that body"
-        ) from exc
-    return BodyFrame(
-        name=facts.body_id,
-        mean_radius_km=facts.mean_radius_km,
-        equatorial_radius_km=facts.equatorial_radius_km,
-        polar_radius_km=facts.polar_radius_km,
-        rotation_rate_rad_s=runtime_support.rotation_rate_rad_s,
-        gravitational_parameter_km3_s2=facts.gravitational_parameter_km3_s2,
-        j2=runtime_support.j2,
-    )
-
-
 def _body_frames_from_resolved(resolved: ResolvedSession) -> dict[str, BodyFrame]:
-    frames = {facts.body_id: _body_frame_from_resolved_facts(facts) for facts in resolved.bodies}
+    frames = {facts.body_id: body_frame_from_facts(facts) for facts in resolved.bodies}
     active = session_active_bodies(resolved)
     missing = sorted(active - set(frames))
     if missing:
@@ -273,14 +257,6 @@ def _session_epoch_unix(resolved: ResolvedSession) -> float:
     return session_epoch_unix(resolved.time)
 
 
-def _orbit_epoch_unix(raw: str, node_id: str) -> float:
-    """The orbit's declared epoch as unix seconds; refuses naive timestamps."""
-    parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
-    if parsed.tzinfo is None or parsed.utcoffset() is None:
-        raise ValueError(f"satellite {node_id!r} orbit epoch {raw!r} lacks an explicit UTC offset")
-    return parsed.timestamp()
-
-
 def _satellite_from_resolved(
     node: ResolvedNode,
     access_selections: tuple[ResolvedAccessTerminalSelection, ...],
@@ -298,14 +274,7 @@ def _satellite_from_resolved(
     isl_blocks = [
         block for block in node.terminal_inventory if block.endpoint_role in {"isl", "crosslink"}
     ]
-    authored_elements = OrbitalElements(
-        semi_major_axis_km=node.orbit.semi_major_axis_km,
-        inclination_rad=math.radians(node.orbit.inclination_deg),
-        raan_rad=math.radians(node.orbit.raan_deg),
-        mean_anomaly_rad=math.radians(node.orbit.mean_anomaly_deg),
-        eccentricity=node.orbit.eccentricity,
-        argument_of_perigee_rad=math.radians(node.orbit.argument_of_perigee_deg),
-    )
+    authored_elements = orbital_elements_from_facts(node.orbit)
     return SatelliteNode(
         plane=node.plane or 0,
         slot=node.slot or 0,
@@ -317,7 +286,7 @@ def _satellite_from_resolved(
         central_body=node.central_body,
         elements=authored_elements,
         authored_elements=authored_elements,
-        authored_epoch_unix=_orbit_epoch_unix(node.orbit.epoch, node.node_id),
+        authored_epoch_unix=orbit_epoch_unix(node.orbit.epoch, node.node_id),
         isl_terminal_count=sum(block.count for block in isl_blocks),
         ground_terminal_count=sum(len(item.interface_indices) for item in access_selections),
         isl_terminals=tuple(_isl_terminal(block) for block in isl_blocks),

@@ -9,6 +9,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
+import nodalarc.propagator as propagator_module
 import nodalarc.resolve_session as resolver_module
 import pytest
 import yaml
@@ -1287,15 +1288,17 @@ def test_canonical_sgp4_space_node_set_materializes_exact_runtime_facts(
 ) -> None:
     raw = _raw_session(name="resolver-sgp4", ground_stations={"stations": ["a"]})
     install_tle_space_node_set(raw)
+    # A spy, not a substitute: every call still runs SGP4. Ranking places each
+    # TLE node once at the session epoch.
     calls = 0
-    propagate = resolver_module.propagate_sgp4_tle
+    propagate = propagator_module.propagate_sgp4_tle_states
 
     def counted_propagation(*args, **kwargs):
         nonlocal calls
         calls += 1
         return propagate(*args, **kwargs)
 
-    monkeypatch.setattr(resolver_module, "propagate_sgp4_tle", counted_propagation)
+    monkeypatch.setattr(propagator_module, "propagate_sgp4_tle_states", counted_propagation)
 
     resolved = resolve_session(raw)
     satellites = [node for node in resolved.nodes if node.kind == "satellite"]

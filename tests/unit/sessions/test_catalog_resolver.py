@@ -579,9 +579,10 @@ def test_routers_receiving_boundary_exports_are_as_boundary_routers() -> None:
     )
 
     # Each boundary link joins an Earth relay and a Luna relay, and the
-    # exports run both ways.
+    # exports run both ways. Nearest-one ranking at the session epoch picks,
+    # for each lunar relay, the GEO relay nearest to it in the common frame.
     assert resolved.as_boundary_instances_by_node() == {
-        "geo-relay-sat-p00s03": ("earth_domain",),
+        "geo-relay-sat-p00s00": ("earth_domain",),
         "geo-relay-sat-p00s07": ("earth_domain",),
         "luna-relay-sat-p00s00": ("luna_domain",),
         "luna-relay-sat-p00s01": ("luna_domain",),

@@ -170,13 +170,13 @@ def test_the_luna_boundary_relays_are_reported_as_as_boundary_routers():
     }
 
     assert instances["luna-relay-sat-p00s00"]["luna_domain"].as_boundary
-    assert instances["geo-relay-sat-p00s03"]["earth_domain"].as_boundary
+    assert instances["geo-relay-sat-p00s00"]["earth_domain"].as_boundary
     # One flat area per instance: no area border routers.
     assert not any(
         instance.area_border for items in instances.values() for instance in items.values()
     )
     assert instances["luna-relay-sat-p00s00"]["luna_domain"].areas == ("49.0001",)
-    assert instances["geo-relay-sat-p00s03"]["earth_domain"].areas == ("49.0001",)
+    assert instances["geo-relay-sat-p00s00"]["earth_domain"].areas == ("49.0001",)
 
 
 def test_session_context_refuses_data_that_differs_from_the_recorded_files():

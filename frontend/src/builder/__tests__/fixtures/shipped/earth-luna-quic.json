@@ -9725,7 +9725,7 @@
               "areas": [
                 "49.0001"
               ],
-              "as_boundary": false,
+              "as_boundary": true,
               "domain_id": "earth_domain",
               "interfaces": [
                 {
@@ -10097,7 +10097,7 @@
               "areas": [
                 "49.0001"
               ],
-              "as_boundary": true,
+              "as_boundary": false,
               "domain_id": "earth_domain",
               "interfaces": [
                 {

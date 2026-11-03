@@ -20,7 +20,6 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ValidationError
 
-from nodalarc.body_frames import BodyFrame, body_runtime_support_for
 from nodalarc.catalog_closure import CatalogReadDocument, CatalogReadView, load_catalog_object
 from nodalarc.catalog_refs import CatalogRef
 from nodalarc.configuration_yaml import load_configuration_yaml
@@ -67,7 +66,7 @@ from nodalarc.models.segments import GroundOverride, GroundSegment, SegmentClock
 from nodalarc.models.session import session_epoch_unix
 from nodalarc.models.terminal_physics import SatGroundTerminalBoresight, TerminalBoresight
 from nodalarc.physics import PhysicsContext, PhysicsDataError
-from nodalarc.propagator import propagate_sgp4_tle
+from nodalarc.physics.session import session_node_positions, session_physics
 from nodalarc.runtime_naming import validate_runtime_node_id
 from nodalarc.runtime_support import (
     FeatureCategory,
@@ -3488,14 +3487,28 @@ def _validate_fixed_interface_capacity(
             )
 
 
+# Pair distances are ranked to the millimetre. A Walker constellation has many
+# pairs at exactly the same distance by symmetry; floating-point noise below a
+# millimetre would otherwise decide those ties, and nearest-N's degree-capped
+# greedy selection carries one arbitrary choice into the next, so a change of
+# arithmetic changed the selected links. Rounded ties fall to the
+# deterministic node-key order.
+_RANK_DECIMALS_KM = 6
+
+
 def _pair_rank_map(resolved: ResolvedSession) -> dict[tuple[str, str], float]:
-    node_by_id = {node.node_id: node for node in resolved.nodes}
-    radius_by_body = {facts.body_id: facts.mean_radius_km for facts in resolved.bodies}
-    tle_positions = _tle_rank_positions(resolved)
-    positions = {
-        node.node_id: _static_rank_position(node, radius_by_body, tle_positions)
-        for node in resolved.nodes
-    }
+    """Distance at the session epoch for every declared pair, for nearest-N ranking.
+
+    Positions come from the shared physics module in the common frame, so a
+    ground-to-space pair and a pair on two different bodies rank by their real
+    separation. Ranking by positions in mixed frames (inertial orbits at their
+    own epochs, Earth-fixed TLE states and body-fixed surface points without
+    body origins), as the resolver once did, compared distances that did not
+    exist.
+    """
+    positions = session_node_positions(
+        resolved, session_physics(resolved), session_epoch_unix(resolved.time)
+    )
     ranks: dict[tuple[str, str], float] = {}
     for rule in resolved.link_rules:
         for a in rule.endpoints[0].node_ids:
@@ -3503,136 +3516,8 @@ def _pair_rank_map(resolved: ResolvedSession) -> dict[tuple[str, str], float]:
                 if a == b:
                     continue
                 pair = (a, b) if a < b else (b, a)
-                ranks[pair] = _pair_static_rank(
-                    node_by_id[a],
-                    node_by_id[b],
-                    positions,
-                )
+                ranks[pair] = round(math.dist(positions[a], positions[b]), _RANK_DECIMALS_KM)
     return ranks
-
-
-def _pair_static_rank(
-    left: ResolvedNode,
-    right: ResolvedNode,
-    positions: dict[str, tuple[float, float, float] | None],
-) -> float:
-    left_pos = positions[left.node_id]
-    right_pos = positions[right.node_id]
-    if left_pos is None or right_pos is None:
-        raise SessionResolutionError(
-            f"cannot rank pair {left.node_id}<->{right.node_id} by distance: a node "
-            "has neither resolved orbit facts nor a surface position"
-        )
-    return math.dist(left_pos, right_pos)
-
-
-def _static_rank_position(
-    node: ResolvedNode,
-    radius_by_body: dict[str, float],
-    tle_positions: dict[str, tuple[float, float, float]],
-) -> tuple[float, float, float] | None:
-    """Epoch position for nearest-N ranking: orbital state for space nodes,
-    body-fixed surface position for placed ground nodes (resolved body radius,
-    never a hardcoded constant). A "nearest" rank derived from node-id
-    character sums would be geometry theater."""
-    orbital = tle_positions.get(node.node_id) or _orbit_rank_position(node)
-    if orbital is not None:
-        return orbital
-    if node.surface_position is None:
-        return None
-    body = node.surface_position
-    radius = radius_by_body.get(body.body)
-    if radius is None:
-        raise SessionResolutionError(
-            f"cannot rank {node.node_id!r}: no resolved body facts for {body.body!r}"
-        )
-    lat = math.radians(body.lat_deg)
-    lon = math.radians(body.lon_deg)
-    return (
-        radius * math.cos(lat) * math.cos(lon),
-        radius * math.cos(lat) * math.sin(lon),
-        radius * math.sin(lat),
-    )
-
-
-def _tle_rank_positions(resolved: ResolvedSession) -> dict[str, tuple[float, float, float]]:
-    tle_nodes = [
-        node
-        for node in resolved.nodes
-        if node.orbit is not None and node.orbit.propagator == "sgp4_tle"
-    ]
-    if not tle_nodes:
-        return {}
-    if resolved.time is None:
-        raise SessionResolutionError("SGP4/TLE nearest-node ranking requires session time")
-    epoch_unix = session_epoch_unix(resolved.time)
-    body_facts = {facts.body_id: facts for facts in resolved.bodies}
-    positions: dict[str, tuple[float, float, float]] = {}
-    for node in tle_nodes:
-        orbit = node.orbit
-        if orbit is None or orbit.tle_line_1 is None or orbit.tle_line_2 is None:
-            raise SessionResolutionError(
-                f"space node {node.node_id!r} is missing resolved TLE records"
-            )
-        facts = body_facts.get(orbit.central_body)
-        if facts is None:
-            raise SessionResolutionError(
-                f"space node {node.node_id!r} is missing body facts for {orbit.central_body!r}"
-            )
-        support = body_runtime_support_for(facts.body_id)
-        frame = BodyFrame(
-            name=facts.body_id,
-            mean_radius_km=facts.mean_radius_km,
-            equatorial_radius_km=facts.equatorial_radius_km,
-            polar_radius_km=facts.polar_radius_km,
-            rotation_rate_rad_s=support.rotation_rate_rad_s,
-            gravitational_parameter_km3_s2=facts.gravitational_parameter_km3_s2,
-            j2=support.j2,
-        )
-        position, _velocity, _geodetic = propagate_sgp4_tle(
-            orbit.tle_line_1,
-            orbit.tle_line_2,
-            epoch_unix,
-            0.0,
-            body_frame=frame,
-        )
-        positions[node.node_id] = (position.x, position.y, position.z)
-    return positions
-
-
-def _orbit_rank_position(node: ResolvedNode) -> tuple[float, float, float] | None:
-    if node.orbit is None:
-        return None
-    orbit = node.orbit
-    if orbit.propagator == "sgp4_tle":
-        return None
-    mean_rad = math.radians(orbit.mean_anomaly_deg)
-    eccentric_anomaly = mean_rad
-    if orbit.eccentricity > 0:
-        for _ in range(10):
-            eccentric_anomaly -= (
-                eccentric_anomaly - orbit.eccentricity * math.sin(eccentric_anomaly) - mean_rad
-            ) / (1.0 - orbit.eccentricity * math.cos(eccentric_anomaly))
-    true_anomaly = math.atan2(
-        math.sqrt(1.0 - orbit.eccentricity**2) * math.sin(eccentric_anomaly),
-        math.cos(eccentric_anomaly) - orbit.eccentricity,
-    )
-    radius = orbit.semi_major_axis_km * (1.0 - orbit.eccentricity * math.cos(eccentric_anomaly))
-    raan = math.radians(orbit.raan_deg)
-    inclination = math.radians(orbit.inclination_deg)
-    argp = math.radians(orbit.argument_of_perigee_deg)
-    u = argp + true_anomaly
-    cos_raan = math.cos(raan)
-    sin_raan = math.sin(raan)
-    cos_i = math.cos(inclination)
-    sin_i = math.sin(inclination)
-    cos_u = math.cos(u)
-    sin_u = math.sin(u)
-    return (
-        radius * (cos_raan * cos_u - sin_raan * cos_i * sin_u),
-        radius * (sin_raan * cos_u + cos_raan * cos_i * sin_u),
-        radius * sin_i * sin_u,
-    )
 
 
 def _eval_node_selector(

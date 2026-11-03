@@ -1,11 +1,19 @@
-"""Light time in both time indexes against SPICE, with the platform's own data files.
+"""Signals in both time indexes against SPICE, with the platform's own data files: light time,
+and the apparent direction each end points along.
 
-Body-pair references come from SPICE's light-time corrections: XCN for a signal transmitted at
-the epoch, CN for one received at it (spkcpo / spkcpt, a fixed site on Earth as one end). Moving
+Body-pair references come from SPICE's corrections: XCN (+S) for a signal transmitted at the
+epoch, CN (+S) for one received at it (spkcpo / spkcpt, a fixed site on Earth as one end). Moving
 satellite endpoints have no SPICE object, so their reference iterates on SPICE barycentric body
-states plus the same orbit model. Tolerance: 1 microsecond. Measured worst
-differences: 0.1 ps for the body pairs, 4.8 ps for the moving endpoints, and 0.24 ps between the
-two time indexes of one signal.
+states and frames plus the same orbit model, and applies SPICE's stlabx and stelab.
+
+Tolerances: 1 microsecond for light time, 1e-9 rad for pointing (stellar aberration itself is
+up to about 1e-4 rad). Measured worst differences:
+- light time: 0.1 ps for the body pairs, 4.8 ps for the moving endpoints, 0.24 ps between the two
+  time indexes of one signal;
+- pointing: 2.7e-13 rad for the body pairs, 4.6e-13 rad for the lunar orbiter and Goldstone,
+  7.0e-13 rad between the two time indexes, and 5.5e-10 rad for the LEO pair (1.1 mm at
+  2,016 km). Both the produced value and the reference hold master sim time as float64 Unix
+  seconds, in steps of 2.4e-7 s, which is 1.8 mm of LEO motion.
 """
 
 from __future__ import annotations
@@ -25,14 +33,17 @@ from nodalarc.physics.lighttime import (
     OrbitEndpoint,
     SiteEndpoint,
     _unix_seconds,
-    reception_light_times,
-    transmission_light_times,
+    signals_received_at,
+    signals_sent_at,
 )
 
 from tests.physics_fixtures import EARTH_TEST_BODY_FRAME, LUNA_TEST_BODY_FRAME
 
 C = 299792.458
 TOLERANCE_S = 1e-6
+POINTING_TOLERANCE_RAD = 1e-9
+SPICE_NAME = {"earth": "EARTH", "luna": "MOON"}
+SPICE_FRAME = {"earth": "ITRF93", "luna": "MOON_ME_DE440_ME421"}
 INSTANTS = [
     datetime(2026, 11, 3, 12, tzinfo=UTC).timestamp(),
     datetime(2027, 3, 21, 4, 30, tzinfo=UTC).timestamp(),
@@ -80,15 +91,25 @@ def _orbit(elements: OrbitalElements, body: str, t0: float) -> OrbitEndpoint:
     return OrbitEndpoint(body, frame, "two-body", elements, t0)
 
 
-def _spice_barycentric(endpoint, et: float, physics: PhysicsContext, t0: float) -> np.ndarray:
-    """An endpoint's barycentric position from SPICE body states plus the shared orbit model."""
+def _unit(v) -> np.ndarray:
+    v = np.asarray(v, dtype=np.float64)
+    return v / np.linalg.norm(v)
+
+
+def _angle(a, b) -> float:
+    a, b = _unit(a), _unit(b)
+    return float(np.arctan2(np.linalg.norm(np.cross(a, b)), a @ b))
+
+
+def _spice_state(endpoint, et: float, physics: PhysicsContext, t0: float):
+    """An endpoint's barycentric position and velocity from SPICE body states and frames plus
+    the shared orbit model."""
     body = endpoint.body_id
-    centre, _ = spiceypy.spkezr("EARTH" if body == "earth" else "MOON", et, "J2000", "NONE", "SSB")
+    centre = np.array(spiceypy.spkezr(SPICE_NAME[body], et, "J2000", "NONE", "SSB")[0])
     if isinstance(endpoint, SiteEndpoint):
-        frame = "ITRF93" if body == "earth" else "MOON_ME_DE440_ME421"
-        return np.array(centre[:3]) + np.array(spiceypy.pxform(frame, "J2000", et)) @ np.array(
-            endpoint.fixed_km
-        )
+        transform = np.array(spiceypy.sxform(SPICE_FRAME[body], "J2000", et))
+        site = transform @ np.concatenate([endpoint.fixed_km, np.zeros(3)])
+        return centre[:3] + site[:3], centre[3:] + site[3:]
     # Satellite phase on master sim time (et seconds map to Unix seconds through ANISE).
     unix = t0 + (et - _et(t0))
     states = orbit_states(
@@ -97,17 +118,27 @@ def _spice_barycentric(endpoint, et: float, physics: PhysicsContext, t0: float) 
         model="two-body",
         body_frame=endpoint.body_frame,
     )
-    in_basis = np.array([states.px[0, 0], states.py[0, 0], states.pz[0, 0]])
-    return np.array(centre[:3]) + in_basis @ physics.orbit_basis(body)
+    basis = physics.orbit_basis(body)
+    position = np.array([states.px[0, 0], states.py[0, 0], states.pz[0, 0]]) @ basis
+    velocity = np.array([states.vx[0, 0], states.vy[0, 0], states.vz[0, 0]]) @ basis
+    return centre[:3] + position, centre[3:] + velocity
 
 
-def _reference_transmission(a, b, t: float, physics) -> float:
+def _reference_sent(a, b, t: float, physics):
+    """Light time and both pointing directions for a signal a sends to b at t: SPICE states,
+    SPICE stlabx at the transmitter and stelab at the receiver."""
     et = _et(t)
-    origin = _spice_barycentric(a, et, physics, t)
-    tau = np.linalg.norm(_spice_barycentric(b, et, physics, t) - origin) / C
+    origin, origin_velocity = _spice_state(a, et, physics, t)
+    tau = np.linalg.norm(_spice_state(b, et, physics, t)[0] - origin) / C
     for _ in range(10):
-        tau = np.linalg.norm(_spice_barycentric(b, et + tau, physics, t) - origin) / C
-    return float(tau)
+        tau = np.linalg.norm(_spice_state(b, et + tau, physics, t)[0] - origin) / C
+    arrival, arrival_velocity = _spice_state(b, et + tau, physics, t)
+    path = arrival - origin
+    return (
+        float(tau),
+        spiceypy.stlabx(path, origin_velocity),
+        spiceypy.stelab(-path, arrival_velocity),
+    )
 
 
 @pytest.mark.usefixtures("spice_reference")
@@ -122,13 +153,53 @@ def test_body_pair_light_time_matches_spice(physics_context: PhysicsContext, t: 
         obspos, "EARTH", "ITRF93", et, "J2000", "TARGET", "XCN", "MOON"
     )
 
-    up = transmission_light_times(physics_context, [GOLDSTONE_SITE], [MOON_CENTRE], t)[0]
-    down = reception_light_times(physics_context, [MOON_CENTRE], [GOLDSTONE_SITE], t)[0]
-    moon_tx = transmission_light_times(physics_context, [MOON_CENTRE], [GOLDSTONE_SITE], t)[0]
+    up = signals_sent_at(physics_context, [GOLDSTONE_SITE], [MOON_CENTRE], t).light_time_s[0]
+    down = signals_received_at(physics_context, [MOON_CENTRE], [GOLDSTONE_SITE], t).light_time_s[0]
+    moon_tx = signals_sent_at(physics_context, [MOON_CENTRE], [GOLDSTONE_SITE], t).light_time_s[0]
 
     assert abs(up - up_ref) < TOLERANCE_S
     assert abs(down - down_ref) < TOLERANCE_S
     assert abs(moon_tx - moon_tx_ref) < TOLERANCE_S
+
+
+@pytest.mark.usefixtures("spice_reference")
+@pytest.mark.parametrize("t", INSTANTS)
+def test_body_pair_pointing_matches_spice(physics_context: PhysicsContext, t: float) -> None:
+    """Each end of each signal against SPICE's XCN+S (transmitting) or CN+S (receiving)
+    apparent position, at that end's own epoch."""
+    et = _et(t)
+    obspos = list(GOLDSTONE)
+
+    def from_goldstone(epoch: float, correction: str) -> np.ndarray:
+        return spiceypy.spkcpo(
+            "MOON", epoch, "J2000", "OBSERVER", correction, obspos, "EARTH", "ITRF93"
+        )[0][:3]
+
+    def from_moon(epoch: float, correction: str) -> np.ndarray:
+        return spiceypy.spkcpt(
+            obspos, "EARTH", "ITRF93", epoch, "J2000", "TARGET", correction, "MOON"
+        )[0][:3]
+
+    # Stellar aberration from Earth's orbital speed is about 1e-4 rad; the bound is far below it.
+    assert (
+        _angle(from_goldstone(et, "XCN+S"), from_goldstone(et, "XCN"))
+        > 1e3 * POINTING_TOLERANCE_RAD
+    )
+
+    up = signals_sent_at(physics_context, [GOLDSTONE_SITE], [MOON_CENTRE], t)
+    down = signals_received_at(physics_context, [MOON_CENTRE], [GOLDSTONE_SITE], t)
+    moon_up = signals_sent_at(physics_context, [MOON_CENTRE], [GOLDSTONE_SITE], t)
+    moon_down = signals_received_at(physics_context, [GOLDSTONE_SITE], [MOON_CENTRE], t)
+    cases = [
+        (up.transmitter_pointing[0], from_goldstone(et, "XCN+S")),
+        (up.receiver_pointing[0], from_moon(et + up.light_time_s[0], "CN+S")),
+        (down.receiver_pointing[0], from_goldstone(et, "CN+S")),
+        (down.transmitter_pointing[0], from_moon(et - down.light_time_s[0], "XCN+S")),
+        (moon_up.transmitter_pointing[0], from_moon(et, "XCN+S")),
+        (moon_down.receiver_pointing[0], from_moon(et, "CN+S")),
+    ]
+    for produced, reference in cases:
+        assert _angle(produced, reference) < POINTING_TOLERANCE_RAD
 
 
 @pytest.mark.usefixtures("spice_reference")
@@ -141,28 +212,35 @@ def test_moving_endpoints_match_a_spice_state_reference(
         (_orbit(LUNAR, "luna", t - 3600.0), GOLDSTONE_SITE),
         (GOLDSTONE_SITE, _orbit(LUNAR, "luna", t - 3600.0)),
     ]
-    produced = transmission_light_times(
-        physics_context, [a for a, _ in pairs], [b for _, b in pairs], t
-    )
-    for (a, b), tau in zip(pairs, produced, strict=True):
-        assert abs(tau - _reference_transmission(a, b, t, physics_context)) < TOLERANCE_S
+    produced = signals_sent_at(physics_context, [a for a, _ in pairs], [b for _, b in pairs], t)
+    for row, (a, b) in enumerate(pairs):
+        tau, transmitter_pointing, receiver_pointing = _reference_sent(a, b, t, physics_context)
+        assert abs(produced.light_time_s[row] - tau) < TOLERANCE_S
+        assert (
+            _angle(produced.transmitter_pointing[row], transmitter_pointing)
+            < POINTING_TOLERANCE_RAD
+        )
+        assert _angle(produced.receiver_pointing[row], receiver_pointing) < POINTING_TOLERANCE_RAD
 
 
 @pytest.mark.parametrize("t", INSTANTS)
 def test_the_two_time_indexes_describe_one_signal(
     physics_context: PhysicsContext, t: float
 ) -> None:
-    """A signal sent at t and received at t + tau has reception-time light time tau."""
+    """A signal sent at t and received at t + tau has reception-time light time tau, and both
+    ends point the same way in either index."""
     sender, receiver = GOLDSTONE_SITE, _orbit(LUNAR, "luna", t - 3600.0)
-    sent = transmission_light_times(physics_context, [sender], [receiver], t)[0]
-    received = reception_light_times(physics_context, [sender], [receiver], t + sent)[0]
-    assert abs(received - sent) < 2e-9
+    sent = signals_sent_at(physics_context, [sender], [receiver], t)
+    received = signals_received_at(physics_context, [sender], [receiver], t + sent.light_time_s[0])
+    assert abs(received.light_time_s[0] - sent.light_time_s[0]) < 2e-9
+    assert _angle(received.transmitter_pointing[0], sent.transmitter_pointing[0]) < 1e-9
+    assert _angle(received.receiver_pointing[0], sent.receiver_pointing[0]) < 1e-9
 
 
 def test_light_time_outside_the_data_coverage_is_refused(physics_context: PhysicsContext) -> None:
     beyond = datetime(2200, 1, 1, tzinfo=UTC).timestamp()
     with pytest.raises(PhysicsDataError, match="does not cover"):
-        transmission_light_times(physics_context, [GOLDSTONE_SITE], [MOON_CENTRE], beyond)
+        signals_sent_at(physics_context, [GOLDSTONE_SITE], [MOON_CENTRE], beyond)
 
 
 @pytest.mark.parametrize(

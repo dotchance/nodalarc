@@ -210,7 +210,9 @@ export function Constellation({
       const keplerianNode: EphemerisNodeKeplerian = ephNode;
       const nodeBody = keplerianNode.reference_body;
       let x: number, y: number, z: number;
-      if (workerReady && nodeBody === "earth" && readPosition(nodeId, simTimeUnix, _workerPos)) {
+      // The worker propagates satellites of every body: each body's orientation comes
+      // from the body samples it receives, as on this thread.
+      if (workerReady && readPosition(nodeId, simTimeUnix, _workerPos)) {
         x = _workerPos.x;
         y = _workerPos.y;
         z = _workerPos.z;

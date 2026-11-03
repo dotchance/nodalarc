@@ -104,7 +104,6 @@ export function sendEphemeris(ephemeris: SessionEphemeris): void {
     if (node.type !== "keplerian") continue;
     const kep = node as EphemerisNodeKeplerian;
     const referenceBody = kep.reference_body;
-    if (referenceBody !== "earth") continue;
     const frame = ephemeris.body_frames[referenceBody];
     if (!frame) {
       throw new Error(`SessionEphemeris missing body frame for worker node ${id}: ${referenceBody}`);

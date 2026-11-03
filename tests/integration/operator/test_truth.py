@@ -29,12 +29,17 @@ def test_the_latency_shown_is_the_delay_packets_get(operator: Operator) -> None:
     assert not disagreements, "\n".join(disagreements)
 
 
-def test_the_latency_shown_is_the_light_time_between_the_positions_shown(
+def test_the_range_shown_is_the_distance_between_the_positions_shown(
     operator: Operator,
 ) -> None:
-    disagreements = truths.latency_shown_is_the_light_time_between_the_positions_shown(
+    disagreements = truths.range_shown_is_the_distance_between_the_positions_shown(
         watch(operator, 14.0)
     )
+    assert not disagreements, "\n".join(disagreements)
+
+
+def test_the_latency_shown_is_the_light_time_of_each_direction(operator: Operator) -> None:
+    disagreements = truths.latency_shown_is_the_light_time_of_each_direction(watch(operator, 14.0))
     assert not disagreements, "\n".join(disagreements)
 
 

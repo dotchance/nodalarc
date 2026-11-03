@@ -72,6 +72,8 @@ class GroundVisibilityDecision:
     reference_body: SupportedSurfaceBody
     visible: bool
     range_km: float
+    latency_a_to_b_ms: float
+    latency_b_to_a_ms: float
     elevation_deg: float
     azimuth_deg: float | None
     sat_off_nadir_deg: float | None

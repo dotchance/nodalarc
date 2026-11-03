@@ -211,6 +211,25 @@ def _validate_terminal_rates(entry, *, operation: str) -> None:
         )
 
 
+def _validate_peer_latency(entry, *, operation: str) -> None:
+    """A LOCAL ground entry wires both ends and carries the peer end's egress delay; every other
+    entry wires one end and carries none."""
+    local_ground = (
+        entry.link_type == node_agent_pb2.LINK_TYPE_GROUND
+        and entry.locality == node_agent_pb2.LOCALITY_LOCAL
+    )
+    if local_ground and entry.peer_latency_ms < 0:
+        raise CommandContractError(
+            node_agent_pb2.NODE_AGENT_INVALID_FIELD,
+            f"{operation} peer_latency_ms must be >= 0",
+        )
+    if not local_ground and entry.peer_latency_ms != 0.0:
+        raise CommandContractError(
+            node_agent_pb2.NODE_AGENT_INVALID_FIELD,
+            f"{operation} peer_latency_ms applies only to LOCAL ground entries",
+        )
+
+
 def validate_batch_link_up_request(request, *, fence: RuntimeFence) -> None:
     validate_envelope(request, expected_kind=KIND_BATCH_LINK_UP, fence=fence)
     for iface in request.interfaces:
@@ -220,6 +239,7 @@ def validate_batch_link_up_request(request, *, fence: RuntimeFence) -> None:
                 node_agent_pb2.NODE_AGENT_INVALID_FIELD,
                 "latency_ms must be >= 0",
             )
+        _validate_peer_latency(iface, operation=KIND_BATCH_LINK_UP)
         _validate_terminal_rates(iface, operation=KIND_BATCH_LINK_UP)
 
 
@@ -275,6 +295,7 @@ def validate_kernel_inventory_request(request, *, fence: RuntimeFence) -> None:
                     "latency_ms must be >= 0 for expected-up verification",
                 )
             _validate_terminal_rates(entry, operation=KIND_KERNEL_INVENTORY)
+        _validate_peer_latency(entry, operation=KIND_KERNEL_INVENTORY)
         if entry.locality == node_agent_pb2.LOCALITY_CROSS_NODE:
             if entry.vni <= 0:
                 raise CommandContractError(

@@ -4,11 +4,9 @@
 
 from __future__ import annotations
 
-import math
 from datetime import UTC, datetime
 
 import pytest
-from nodalarc.geo import compute_latency_ms
 from nodalarc.models.link_decisions import GroundPolicyAudit
 from ome.event_diff import diff_ground_visibility_events, diff_isl_visibility_events
 from ome.ground_allocator import GroundAllocationResult
@@ -44,6 +42,7 @@ def _decision(
     range_km: float,
     elevation_deg: float,
     reject_reason: str = "ok",
+    latencies_ms: tuple[float, float] = (6.6712, 6.6718),
 ) -> GroundVisibilityDecision:
     """Build a typed visibility decision for test inputs.
 
@@ -57,6 +56,8 @@ def _decision(
         reference_body="earth",
         visible=visible,
         range_km=range_km,
+        latency_a_to_b_ms=latencies_ms[0],
+        latency_b_to_a_ms=latencies_ms[1],
         elevation_deg=elevation_deg,
         azimuth_deg=None,
         sat_off_nadir_deg=None,
@@ -78,6 +79,9 @@ def _decision(
 
 
 SIM = datetime(2026, 1, 1, tzinfo=UTC)
+# A link's committed one-way delays, a_to_b then b_to_a. Unequal, as light times of a moving
+# pair are, so an event that swaps or merges the directions shows.
+ISL_ONE_WAY_MS = (4.1178, 4.1189)
 
 
 def _isl_result(pair: tuple[str, str], *, feasible: bool = True) -> IslFeasibilityResult:
@@ -86,7 +90,8 @@ def _isl_result(pair: tuple[str, str], *, feasible: bool = True) -> IslFeasibili
         link_type="intra_plane_isl",
         feasible=feasible,
         range_km=1234.5,
-        orbital_one_way_ms=compute_latency_ms(1234.5),
+        one_way_a_to_b_ms=ISL_ONE_WAY_MS[0],
+        one_way_b_to_a_ms=ISL_ONE_WAY_MS[1],
         reject_reason="ok" if feasible else "range_exceeded",
         terminal_type="optical",
         terminal_role_a="intra-plane",
@@ -105,7 +110,8 @@ def _scheduled(pair: tuple[str, str], *, scheduled: bool = True) -> ScheduledIsl
         terminal_role_a="intra-plane",
         terminal_role_b="intra-plane",
         range_km=1234.5,
-        orbital_one_way_ms=compute_latency_ms(1234.5),
+        one_way_a_to_b_ms=ISL_ONE_WAY_MS[0],
+        one_way_b_to_a_ms=ISL_ONE_WAY_MS[1],
         scheduled=scheduled,
         unscheduled_reason=None if scheduled else "capacity",
     )
@@ -126,7 +132,9 @@ def test_isl_event_diff_emits_only_state_changes_and_preserves_authority_values(
     event = diff.events[0]
     assert event.link_type == "isl"
     assert event.range_km == result.range_km
-    assert event.latency_ms == result.orbital_one_way_ms
+    # The event carries the result's committed delay of each direction, in pair order.
+    assert event.latency_a_to_b_ms == result.one_way_a_to_b_ms
+    assert event.latency_b_to_a_ms == result.one_way_b_to_a_ms
 
     unchanged = diff_isl_visibility_events(
         sim_time=SIM,
@@ -167,11 +175,10 @@ def test_ground_event_diff_sets_terminal_indices_and_one_way_latency():
         allocation_events=(),
     )
 
+    decision = _decision(pair, visible=True, range_km=2000.0, elevation_deg=37.5)
     diff = diff_ground_visibility_events(
         sim_time=SIM,
-        visibility_decisions={
-            pair: _decision(pair, visible=True, range_km=2000.0, elevation_deg=37.5)
-        },
+        visibility_decisions={pair: decision},
         allocation=allocation,
         terminal_types={pair: "rf"},
         previous_state={},
@@ -183,7 +190,9 @@ def test_ground_event_diff_sets_terminal_indices_and_one_way_latency():
     assert event.link_type == "ground"
     assert event.gs_terminal_index == 1
     assert event.sat_terminal_index == 0
-    assert math.isclose(event.latency_ms or 0.0, compute_latency_ms(2000.0))
+    # The event carries the decision's committed delay of each direction, in pair order.
+    assert event.latency_a_to_b_ms == decision.latency_a_to_b_ms
+    assert event.latency_b_to_a_ms == decision.latency_b_to_a_ms
 
 
 def test_ground_event_diff_marks_mbb_teardown_state():

@@ -129,6 +129,7 @@ message InterfaceUp {
   string interface_name = 2;
   // field 3 reserved — PID looked up by Node Agent internally
   LinkType link_type = 4;
+  // Egress delay of (node_id, interface_name): the light time of the direction it transmits.
   double latency_ms = 5;
   // field 6 reserved — one symmetric pair rate, replaced by per-terminal rates
   reserved 6;
@@ -151,6 +152,9 @@ message InterfaceUp {
   // Rates of the terminal behind (peer_node_id, peer_interface_name); set
   // only on LOCAL ground entries, where one entry wires both ends.
   TerminalRates peer_rates = 18;
+  // LOCAL ground entries describe both ends: the peer end's egress delay (the direction the
+  // peer transmits). Unused on entries that name one end.
+  double peer_latency_ms = 19;
 }
 
 message BatchLinkUpRequest {
@@ -226,6 +230,7 @@ message KernelInventoryEntry {
   string peer_interface_name = 7;
   Locality locality = 8;
   int32 vni = 9;
+  // Expected egress delay of (node_id, interface_name): the direction it transmits.
   double latency_ms = 10;
   // field 11 reserved — one symmetric pair rate, replaced by per-terminal rates
   reserved 11;
@@ -235,6 +240,8 @@ message KernelInventoryEntry {
   // interface_name), and on LOCAL entries the peer terminal's rates.
   TerminalRates rates = 14;
   TerminalRates peer_rates = 15;
+  // LOCAL entries prove both ends: the peer end's expected egress delay.
+  double peer_latency_ms = 16;
 }
 
 message KernelInventoryRequest {

@@ -38,6 +38,6 @@ Navigation and selection work the same as in globe view:
 
 The same keyboard shortcuts work in both views (L for links, G for ground links, color modes, etc.).
 
-## Link Labels
+## Link Latency
 
-In topology view, links can show latency labels - the current one-way propagation delay in milliseconds. As satellites move, these values update continuously reflecting the changing distance between connected nodes.
+Hovering a link in topology view shows its latency in each direction, with the sim time the values describe. Each direction is the light time of a signal one end sends to the other: both ends move while the signal travels, so the two directions can differ. The values update as the nodes move.

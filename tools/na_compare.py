@@ -186,7 +186,8 @@ def report_link_events(conn: sqlite3.Connection, sessions: dict[str, str]) -> st
     for a in aliases:
         lines.append(f"--- {a} ---")
         rows = conn.execute(
-            f"""SELECT sim_time, event_type, node_a, node_b, latency_ms, reason
+            f"""SELECT sim_time, event_type, node_a, node_b, latency_a_to_b_ms,
+                latency_b_to_a_ms, reason
                 FROM {a}.link_events WHERE session_id = ? ORDER BY sim_time""",
             (sessions[a],),
         ).fetchall()
@@ -196,16 +197,23 @@ def report_link_events(conn: sqlite3.Connection, sessions: dict[str, str]) -> st
             lines.append("")
             continue
 
-        header = f"  {'sim_time':<26} {'type':<16} {'node_a':<14} {'node_b':<14} {'latency_ms':>10} {'reason'}"
+        header = (
+            f"  {'sim_time':<26} {'type':<16} {'node_a':<14} {'node_b':<14} "
+            f"{'a->b ms':>10} {'b->a ms':>10} {'reason'}"
+        )
         lines.append(header)
         lines.append("  " + "-" * (len(header) - 2))
         for row in rows:
-            lat = f"{row['latency_ms']:.1f}" if row["latency_ms"] is not None else "-"
+            ahead, back = row["latency_a_to_b_ms"], row["latency_b_to_a_ms"]
+            lat = (
+                f"{ahead:.1f}" if ahead is not None else "-",
+                f"{back:.1f}" if back is not None else "-",
+            )
             reason = row["reason"] or "-"
             lines.append(
                 f"  {row['sim_time']:<26} {row['event_type']:<16} "
                 f"{row['node_a']:<14} {row['node_b']:<14} "
-                f"{lat:>10} {reason}"
+                f"{lat[0]:>10} {lat[1]:>10} {reason}"
             )
         lines.append("")
 

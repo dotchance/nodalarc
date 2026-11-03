@@ -146,7 +146,7 @@ browser's TypeScript types are generated from the same models into
     {"node_id": "space-sat-p00s00", "node_type": "satellite", "segment_id": "space", "reference_body": "earth", ...}
   ],
   "links": [
-    {"node_a": "space-sat-p00s00", "node_b": "space-sat-p00s01", "link_type": "isl", "latency_ms": 13.0, ...}
+    {"node_a": "space-sat-p00s00", "node_b": "space-sat-p00s01", "link_type": "isl", "latency_a_to_b_ms": 13.0, "latency_b_to_a_ms": 13.0, ...}
   ],
   "recent_events": [
     {"sim_time": "...", "node_id": "ground-gs-hawthorne", "event_type": "link_up", "summary": "..."}

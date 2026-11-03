@@ -471,6 +471,20 @@ def _ground_link_down(
         return _fail(node_agent_pb2.NODE_AGENT_KERNEL_MUTATION_FAILED, msg, dirty_kernel=True)
 
 
+def _local_ground_delays(message) -> tuple[float, float]:
+    """(station egress, satellite egress) delay of a LOCAL ground message, which names one end
+    as node_id (its delay in latency_ms) and the other as its peer (peer_latency_ms). Each end's
+    egress carries the direction that end transmits."""
+    if message.node_id == message.gs_id:
+        return message.latency_ms, message.peer_latency_ms
+    if message.node_id == message.sat_id:
+        return message.peer_latency_ms, message.latency_ms
+    raise ValueError(
+        f"LOCAL ground message names {message.node_id!r}, neither its station "
+        f"{message.gs_id!r} nor its satellite {message.sat_id!r}"
+    )
+
+
 def _ground_terminal_rates(
     entry: node_agent_pb2.InterfaceUp | node_agent_pb2.KernelInventoryEntry,
 ) -> tuple[node_agent_pb2.TerminalRates, node_agent_pb2.TerminalRates]:
@@ -532,13 +546,12 @@ def _ground_link_up(
             sat_ifname=sat_ifname,
         )
         gs_rates, sat_rates = _ground_terminal_rates(iface)
+        gs_delay_ms, sat_delay_ms = _local_ground_delays(iface)
         gs_port = ground_bridge._gs_host_veth(iface.gs_id, gs_ifname)
         sat_host = ground_bridge._sat_host_veth(iface.sat_id, sat_ifname)
+        namespace_ops.apply_transmit_shaping(gs_pid, gs_ifname, gs_delay_ms, gs_rates.transmit_mbps)
         namespace_ops.apply_transmit_shaping(
-            gs_pid, gs_ifname, iface.latency_ms, gs_rates.transmit_mbps
-        )
-        namespace_ops.apply_transmit_shaping(
-            sat_pid, sat_ifname, iface.latency_ms, sat_rates.transmit_mbps
+            sat_pid, sat_ifname, sat_delay_ms, sat_rates.transmit_mbps
         )
         namespace_ops.apply_receive_shaping(gs_port, gs_rates.receive_mbps)
         namespace_ops.apply_receive_shaping(sat_host, sat_rates.receive_mbps)
@@ -550,13 +563,13 @@ def _ground_link_up(
             kernel_verifier.verify_qdisc(
                 gs_pid,
                 gs_ifname,
-                delay_ms=iface.latency_ms,
+                delay_ms=gs_delay_ms,
                 transmit_mbps=gs_rates.transmit_mbps,
             ),
             kernel_verifier.verify_qdisc(
                 sat_pid,
                 sat_ifname,
-                delay_ms=iface.latency_ms,
+                delay_ms=sat_delay_ms,
                 transmit_mbps=sat_rates.transmit_mbps,
             ),
             kernel_verifier.verify_receive_shaping(gs_port, receive_mbps=gs_rates.receive_mbps),
@@ -1240,6 +1253,7 @@ def _verify_kernel_inventory_entry(
                 # both pod namespaces and both host-side veths; each end is
                 # proven against its own terminal's rates.
                 gs_rates, sat_rates = _ground_terminal_rates(entry)
+                gs_delay_ms, sat_delay_ms = _local_ground_delays(entry)
                 gs_pid = _require_pid(entry.gs_id, pm)
                 sat_pid = _require_pid(entry.sat_id, pm)
                 gs_port = ground_bridge._gs_host_veth(entry.gs_id, gs_ifname)
@@ -1253,13 +1267,13 @@ def _verify_kernel_inventory_entry(
                         kernel_verifier.verify_qdisc(
                             gs_pid,
                             gs_ifname,
-                            delay_ms=entry.latency_ms,
+                            delay_ms=gs_delay_ms,
                             transmit_mbps=gs_rates.transmit_mbps,
                         ),
                         kernel_verifier.verify_qdisc(
                             sat_pid,
                             sat_ifname,
-                            delay_ms=entry.latency_ms,
+                            delay_ms=sat_delay_ms,
                             transmit_mbps=sat_rates.transmit_mbps,
                         ),
                         kernel_verifier.verify_receive_shaping(

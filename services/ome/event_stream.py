@@ -746,12 +746,20 @@ def _build_link_snapshot_source(
             )
         ground_state[pair] = (visible, scheduled)
 
+    latencies_ms: dict[tuple[str, str], tuple[float, float]] = {
+        pair: (isl_feasibility[pair].one_way_a_to_b_ms, isl_feasibility[pair].one_way_b_to_a_ms)
+        for pair in isl_state
+    }
+    for pair in ground_state:
+        decision = ground_decisions[pair]
+        latencies_ms[pair] = (decision.latency_a_to_b_ms, decision.latency_b_to_a_ms)
     return LinkSnapshotSource(
         isl_state=isl_state,
         ground_state=ground_state,
         associations=dict(ground_allocation.associations),
         pending_teardowns=dict(ground_allocation.pending_teardowns),
         propagated_states=dict(propagated_states),
+        latencies_ms=latencies_ms,
     )
 
 

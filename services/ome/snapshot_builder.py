@@ -28,7 +28,7 @@ from dataclasses import asdict, dataclass
 from datetime import datetime
 
 from nodalarc.frames import CommonVec3, EcefVec3, GeoPosition, Vec3
-from nodalarc.geo import compute_latency_ms, compute_range_km
+from nodalarc.geo import compute_range_km
 from nodalarc.link_metadata import LinkRuleMetadata
 from nodalarc.models.link_decisions import (
     GroundAllocationEvent,
@@ -67,6 +67,9 @@ class LinkSnapshotSource:
     associations: Mapping[tuple[str, str], tuple[int, int]]
     pending_teardowns: MbbTeardownState
     propagated_states: Mapping[str, PropagatedState]
+    # Each link's committed one-way light times (pair[0] to pair[1], pair[1] to pair[0]) from
+    # the tick's signals.
+    latencies_ms: Mapping[tuple[str, str], tuple[float, float]]
 
 
 def build_link_decision_snapshot(
@@ -148,11 +151,11 @@ def build_link_state_snapshot(
         for node_id, (position_ecef, _geo) in fixed_positions.items():
             ecef[node_id] = position_ecef
 
-    def _link_range_latency(
+    def _link_range(
         node_a: str,
         node_b: str,
         link_type: str,
-    ) -> tuple[float, float]:
+    ) -> float:
         pa: Vec3 | CommonVec3 | None
         pb: Vec3 | CommonVec3 | None
         if link_type == "isl" and central_body.get(node_a) != central_body.get(node_b):
@@ -166,8 +169,16 @@ def build_link_state_snapshot(
                 f"{link_type} link {node_a}<->{node_b}: missing same-tick ECEF state "
                 f"for {missing}"
             )
-        range_km = compute_range_km(pa, pb)
-        return range_km, compute_latency_ms(range_km)
+        return compute_range_km(pa, pb)
+
+    def _committed_latencies(pair: tuple[str, str]) -> tuple[float, float]:
+        try:
+            return source.latencies_ms[pair]
+        except KeyError as exc:
+            raise ValueError(
+                f"Cannot build authoritative LinkStateSnapshot for active link {pair}: "
+                "the tick committed no light time for it"
+            ) from exc
 
     def _link_rule_metadata(pair: tuple[str, str]) -> LinkRuleMetadata | None:
         if rule_map is None:
@@ -184,9 +195,9 @@ def build_link_state_snapshot(
             )
         ifaces = interface_map[pair]
         carrier = CarrierState.UP if visible and scheduled else CarrierState.DOWN
-        range_latency = (
-            _link_range_latency(pair[0], pair[1], "isl") if carrier == CarrierState.UP else None
-        )
+        up = carrier == CarrierState.UP
+        range_km = _link_range(pair[0], pair[1], "isl") if up else None
+        latencies = _committed_latencies(pair) if up else None
         rule_meta = _link_rule_metadata(pair)
         links.append(
             LinkState.model_construct(
@@ -197,8 +208,9 @@ def build_link_state_snapshot(
                 admin=AdminState.UP,
                 carrier=carrier,
                 routing=RoutingState.UNKNOWN,
-                range_km=range_latency[0] if range_latency else None,
-                latency_ms=range_latency[1] if range_latency else None,
+                range_km=range_km,
+                latency_a_to_b_ms=latencies[0] if latencies else None,
+                latency_b_to_a_ms=latencies[1] if latencies else None,
                 link_type="isl",
                 # An ISL has no make-before-break teardown.
                 scheduling_state="active",
@@ -244,9 +256,9 @@ def build_link_state_snapshot(
             carrier = CarrierState.LOWERLAYERDOWN
         else:
             carrier = CarrierState.DOWN
-        range_latency = (
-            _link_range_latency(pair[0], pair[1], "ground") if carrier == CarrierState.UP else None
-        )
+        up = carrier == CarrierState.UP
+        range_km = _link_range(pair[0], pair[1], "ground") if up else None
+        latencies = _committed_latencies(pair) if up else None
         gs_ti: int | None
         sat_ti: int | None
         if carrier == CarrierState.UP:
@@ -287,8 +299,9 @@ def build_link_state_snapshot(
                 admin=AdminState.UP,
                 carrier=carrier,
                 routing=RoutingState.UNKNOWN,
-                range_km=range_latency[0] if range_latency else None,
-                latency_ms=range_latency[1] if range_latency else None,
+                range_km=range_km,
+                latency_a_to_b_ms=latencies[0] if latencies else None,
+                latency_b_to_a_ms=latencies[1] if latencies else None,
                 link_type="ground",
                 gs_terminal_index=gs_ti,
                 sat_terminal_index=sat_ti,

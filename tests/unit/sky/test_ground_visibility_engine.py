@@ -28,7 +28,7 @@ from nodalarc.ome_runtime import (
     SatelliteNode,
 )
 from nodalarc.physics import PhysicsContext
-from nodalarc.physics.lighttime import Endpoint, SiteEndpoint
+from nodalarc.physics.lighttime import Endpoint, SiteEndpoint, signals_sent_at
 from ome.direction_checks import PairSignals
 from ome.event_stream import build_step_context
 from ome.ground_visibility_engine import (
@@ -51,6 +51,11 @@ from tests.physics_fixtures import (
 
 TEST_BODY_FRAMES = {"earth": EARTH_TEST_BODY_FRAME, "luna": LUNA_TEST_BODY_FRAME}
 EPOCH = 1735689600.0
+# Two evaluations of one signal in different batches agree within this (ms). The light-time
+# iteration stops once a step moves by under 1 ns, and each step shrinks the error by the
+# receiver's barycentric speed over c (about 1.3e-4), so evaluations agree within about
+# 3e-13 s.
+SAME_SIGNAL_MS = 1e-9
 
 
 def _physics() -> PhysicsContext:
@@ -260,6 +265,49 @@ def test_physical_visibility_rejects_range_before_allocator_candidate_set():
     assert decision.reject_reason == "range_exceeded"
     assert decision.rejecting_endpoint == "both"
     assert result.visible_per_station["gs-equator"] == []
+
+
+def test_each_decision_carries_each_directions_light_time_in_pair_order():
+    """A decision's pair is sorted by name, so the station is its first node for one satellite
+    and its second for another. For both, and whatever the verdict, a_to_b is the light time of
+    the signal the pair's first node sends at the tick and b_to_a the one its second node
+    sends, computed here directly by the signal layer. The two directions differ (the ends move
+    with Earth around the Sun during each flight), so a swap fails."""
+    gs_id = "gs-equator"
+    gs_geo = GeoPosition(0.0, 0.0, 0.0)
+    held = {
+        "sat-a": GeoPosition(0.0, 0.0, 550.0),  # after the station by name; overhead, visible
+        "a-sat": GeoPosition(10.0, 0.0, 550.0),  # before it; below the 25-degree mask
+    }
+    sat_endpoints = {sat_id: _held(geo) for sat_id, geo in held.items()}
+    result = _evaluate(
+        sat_endpoints,
+        satellite_ids=tuple(held),
+        sat_states={sat_id: _state(sat_id, geo) for sat_id, geo in held.items()},
+        gs_positions={gs_id: (earth_geodetic_to_ecef(gs_geo), gs_geo)},
+        gs_min_elevations={gs_id: 25.0},
+        ground_link_model="geometry_only",
+        **_gs_default_kwargs(gs_id, sat_ids=tuple(held)),
+    )
+
+    station = earth_geodetic_to_ecef(gs_geo)
+    endpoints = {gs_id: SiteEndpoint("earth", (station.x, station.y, station.z)), **sat_endpoints}
+    assert {pair: decision.visible for pair, decision in result.decisions.items()} == {
+        ("gs-equator", "sat-a"): True,
+        ("a-sat", "gs-equator"): False,
+    }
+    for (node_a, node_b), decision in result.decisions.items():
+        sent = signals_sent_at(
+            _physics(),
+            TEST_BODY_FRAMES,
+            [endpoints[node_a], endpoints[node_b]],
+            [endpoints[node_b], endpoints[node_a]],
+            EPOCH,
+        )
+        a_to_b, b_to_a = (float(seconds) * 1000.0 for seconds in sent.light_time_s)
+        assert abs(a_to_b - b_to_a) > 100 * SAME_SIGNAL_MS, (node_a, node_b)
+        assert decision.latency_a_to_b_ms == pytest.approx(a_to_b, rel=0.0, abs=SAME_SIGNAL_MS)
+        assert decision.latency_b_to_a_ms == pytest.approx(b_to_a, rel=0.0, abs=SAME_SIGNAL_MS)
 
 
 def test_satellite_field_of_regard_rejection_carries_off_nadir_angle():

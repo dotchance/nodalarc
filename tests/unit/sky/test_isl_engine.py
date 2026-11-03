@@ -23,7 +23,7 @@ from nodalarc.ome_runtime import SatelliteNode
 from nodalarc.orbital import OrbitalElements
 from nodalarc.physics import PhysicsContext
 from nodalarc.physics.context import tdb_seconds_of
-from nodalarc.physics.lighttime import Endpoint, SiteEndpoint
+from nodalarc.physics.lighttime import Endpoint, SiteEndpoint, signals_sent_at
 from ome.direction_checks import IslLimits, PairSignals
 from ome.isl_engine import (
     IslFeasibilityResult,
@@ -40,6 +40,11 @@ from tests.seam_reference import DeclaredShell
 
 TEST_BODY_FRAMES = {"earth": EARTH_TEST_BODY_FRAME, "luna": LUNA_TEST_BODY_FRAME}
 EPOCH = 1735689600.0
+# Two evaluations of one signal in different batches agree within this (ms). The light-time
+# iteration stops once a step moves by under 1 ns, and each step shrinks the error by the
+# receiver's barycentric speed over c (about 1.3e-4), so evaluations agree within about
+# 3e-13 s; measured 5e-17 s. The two directions of a pair differ by 132 ns or more here.
+SAME_SIGNAL_MS = 1e-9
 
 
 def _physics() -> PhysicsContext:
@@ -294,17 +299,45 @@ def test_cross_plane_tracking_recovery_restores_feasibility():
         assert result.range_km < 400.0
 
 
+def _radially_aligned_pair() -> tuple[dict[str, PropagatedState], dict[str, Endpoint]]:
+    """Two prograde equatorial satellites at 6921 km and 7121 km, 200 km apart on one radial
+    line at the tick."""
+    return _propagated(
+        [
+            _satellite(
+                "sat-A",
+                OrbitalElements(
+                    semi_major_axis_km=6921.0,
+                    inclination_rad=0.0,
+                    raan_rad=0.0,
+                    mean_anomaly_rad=0.0,
+                ),
+            ),
+            _satellite(
+                "sat-B",
+                OrbitalElements(
+                    semi_major_axis_km=7121.0,
+                    inclination_rad=0.0,
+                    raan_rad=0.0,
+                    mean_anomaly_rad=0.0,
+                ),
+            ),
+        ],
+        "keplerian-circular",
+        EPOCH,
+    )
+
+
 def test_terminal_role_mismatch_is_auditable_rejection():
+    states, endpoints = _radially_aligned_pair()
+    by_node = {
+        "sat-A": [_assignment("isl0", "sat-B", "cross_plane_isl", 1)],
+        "sat-B": [_assignment("isl0", "sat-A", "cross_plane_isl", 1)],
+    }
     feasibility = evaluate_isl_feasibility(
         node_order=["sat-A", "sat-B"],
-        sat_states={
-            "sat-A": _state("sat-A", Vec3(6921.0, 0.0, 0.0), Vec3(0.0, 7.59, 0.0)),
-            "sat-B": _state("sat-B", Vec3(7121.0, 0.0, 0.0), Vec3(0.0, 7.59, 0.0)),
-        },
-        by_node={
-            "sat-A": [_assignment("isl0", "sat-B", "cross_plane_isl", 1)],
-            "sat-B": [_assignment("isl0", "sat-A", "cross_plane_isl", 1)],
-        },
+        sat_states=states,
+        by_node=by_node,
         terminal_constraints={
             "sat-A": {"isl0": _constraints("intra-plane")},
             "sat-B": {"isl0": _constraints("cross-plane")},
@@ -312,7 +345,7 @@ def test_terminal_role_mismatch_is_auditable_rejection():
         polar_seam_enabled=False,
         latitude_threshold_deg=70.0,
         body_frames=TEST_BODY_FRAMES,
-        signals=_no_signals(),
+        signals=_tick_signals(endpoints, by_node, EPOCH),
     )
 
     result = feasibility[("sat-A", "sat-B")]
@@ -321,7 +354,88 @@ def test_terminal_role_mismatch_is_auditable_rejection():
     assert result.interface_a == "isl0"
     assert result.interface_b == "isl0"
     assert result.range_km > 0.0
-    assert result.orbital_one_way_ms > 0.0
+    assert result.one_way_a_to_b_ms > 0.0
+    assert result.one_way_b_to_a_ms > 0.0
+
+
+def test_every_result_carries_each_directions_signal_light_time():
+    """Every result, feasible or rejected for its terminals, carries as a_to_b the light time of
+    the signal its pair's first node sends at the tick and as b_to_a the one its second node
+    sends, each computed here directly by the signal layer. The two directions differ on every
+    pair (the satellites move with Earth around the Sun during each flight; 133 ns on the
+    radial pair), so a swap anywhere fails."""
+    satellites = [
+        _satellite(
+            node_id,
+            OrbitalElements(
+                semi_major_axis_km=radius_km,
+                inclination_rad=0.0,
+                raan_rad=0.0,
+                mean_anomaly_rad=math.radians(anomaly_deg),
+            ),
+        )
+        for node_id, radius_km, anomaly_deg in (
+            ("sat-A", 6921.0, 0.0),
+            ("sat-B", 7121.0, 0.0),
+            ("sat-C", 6921.0, 20.0),
+        )
+    ]
+    states, endpoints = _propagated(satellites, "keplerian-circular", EPOCH)
+    by_node = {
+        "sat-A": [
+            _assignment("isl0", "sat-B", "intra_plane_isl", 1),
+            _assignment("isl1", "sat-C", "cross_plane_isl", 2),
+        ],
+        "sat-B": [
+            _assignment("isl0", "sat-A", "intra_plane_isl", 1),
+            _assignment("isl1", "sat-C", "intra_plane_isl", 1),
+        ],
+        "sat-C": [
+            _assignment("isl0", "sat-A", "cross_plane_isl", 2),
+            _assignment("isl1", "sat-B", "intra_plane_isl", 1),
+        ],
+    }
+    optical = IslTerminalConstraints(
+        role="intra-plane",
+        max_range_km=4400.0,
+        max_tracking_rate_deg_s=4.0,
+        field_of_regard_deg=360.0,
+        terminal_type="optical",
+    )
+    feasibility = evaluate_isl_feasibility(
+        node_order=["sat-A", "sat-B", "sat-C"],
+        sat_states=states,
+        by_node=by_node,
+        terminal_constraints={
+            # sat-A's cross-plane link runs on an intra-plane terminal: a role mismatch.
+            "sat-A": {"isl0": _constraints("intra-plane"), "isl1": _constraints("intra-plane")},
+            "sat-B": {"isl0": _constraints("intra-plane"), "isl1": _constraints("intra-plane")},
+            # sat-C's link to sat-B pairs an optical terminal with an RF one.
+            "sat-C": {"isl0": _constraints("cross-plane"), "isl1": optical},
+        },
+        polar_seam_enabled=False,
+        latitude_threshold_deg=70.0,
+        body_frames=TEST_BODY_FRAMES,
+        signals=_tick_signals(endpoints, by_node, EPOCH),
+    )
+
+    assert {pair: result.reject_reason for pair, result in feasibility.items()} == {
+        ("sat-A", "sat-B"): "ok",
+        ("sat-A", "sat-C"): "terminal_role_mismatch",
+        ("sat-B", "sat-C"): "terminal_type_mismatch",
+    }
+    for (node_a, node_b), result in feasibility.items():
+        sent = signals_sent_at(
+            _physics(),
+            TEST_BODY_FRAMES,
+            [endpoints[node_a], endpoints[node_b]],
+            [endpoints[node_b], endpoints[node_a]],
+            EPOCH,
+        )
+        a_to_b, b_to_a = (float(seconds) * 1000.0 for seconds in sent.light_time_s)
+        assert abs(a_to_b - b_to_a) > 100 * SAME_SIGNAL_MS, (node_a, node_b)
+        assert result.one_way_a_to_b_ms == pytest.approx(a_to_b, rel=0.0, abs=SAME_SIGNAL_MS)
+        assert result.one_way_b_to_a_ms == pytest.approx(b_to_a, rel=0.0, abs=SAME_SIGNAL_MS)
 
 
 def test_lunar_same_body_isl_uses_lunar_occluder_not_earth_default():
@@ -462,7 +576,8 @@ def test_symmetric_isl_scheduling_respects_terminal_capacity_and_priority():
         link_type="intra_plane_isl",
         feasible=True,
         range_km=1000.0,
-        orbital_one_way_ms=3.3356409519815204,
+        one_way_a_to_b_ms=3.3356409519815204,
+        one_way_b_to_a_ms=3.3356409519815204,
         reject_reason="ok",
         terminal_type="optical",
         terminal_role_a="intra-plane",
@@ -478,7 +593,8 @@ def test_symmetric_isl_scheduling_respects_terminal_capacity_and_priority():
         link_type="intra_plane_isl",
         feasible=True,
         range_km=1100.0,
-        orbital_one_way_ms=3.6692050471796723,
+        one_way_a_to_b_ms=3.6692050471796723,
+        one_way_b_to_a_ms=3.6692050471796723,
         reject_reason="ok",
         terminal_type="optical",
         terminal_role_a="intra-plane",

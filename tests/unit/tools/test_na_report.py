@@ -64,7 +64,8 @@ def session_db(tmp_path: Path) -> str:
             link_type="isl",
             interface_a="isl0",
             interface_b="isl0",
-            latency_ms=3.5,
+            latency_a_to_b_ms=3.5,
+            latency_b_to_a_ms=4.0,
             range_km=1049.273603,
             reason="vis_gained",
         ),
@@ -80,7 +81,8 @@ def session_db(tmp_path: Path) -> str:
             link_type="isl",
             interface_a="isl1",
             interface_b="isl1",
-            latency_ms=12.0,
+            latency_a_to_b_ms=12.0,
+            latency_b_to_a_ms=12.5,
             range_km=3597.509496,
             reason="vis_gained",
         ),
@@ -328,6 +330,16 @@ def _parse_convergence_stats(output: str) -> dict[str, float | int]:
     return stats
 
 
+def _parse_link_event_delays(output: str) -> list[tuple[str, str, str, str]]:
+    """Timeline rows as (event_type, node_b, a->b ms, b->a ms)."""
+    rows = []
+    for line in output.splitlines():
+        parts = line.split()
+        if len(parts) == 6 and parts[1] in {"LinkUp", "LinkDown", "LatencyUpdate"}:
+            rows.append((parts[1], parts[3], parts[4], parts[5]))
+    return rows
+
+
 def _parse_link_type_counts(output: str) -> dict[str, int]:
     counts = {}
     for line in output.splitlines():
@@ -438,6 +450,12 @@ class TestReportLinkEvents:
             "sat-P00S01": 2,
             "sat-P01S00": 1,
         }
+        # Each timeline row shows node_a's delay, then node_b's; a LinkDown has none.
+        assert _parse_link_event_delays(output) == [
+            ("LinkUp", "sat-P00S01", "3.5", "4.0"),
+            ("LinkUp", "sat-P01S00", "12.0", "12.5"),
+            ("LinkDown", "sat-P00S01", "-", "-"),
+        ]
 
     def test_empty_db(self, empty_db: str):
         output = _run_db_report(empty_db, report_link_events)

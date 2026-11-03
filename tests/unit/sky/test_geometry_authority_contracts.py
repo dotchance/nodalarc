@@ -14,15 +14,24 @@ from nodalarc.geo import (
     compute_latency_ms,
     compute_range_km,
 )
-from ome.event_stream import build_link_state_snapshot
-from ome.propagation_engine import PropagatedState
+from nodalarc.models.events import VisibilityEvent
+from nodalarc.ome_inputs import build_ome_inputs_from_resolved
+from nodalarc.physics.lighttime import signals_sent_at
+from ome.event_stream import build_link_state_snapshot, build_step_context, compute_step
+from ome.propagation_engine import PropagatedState, satellite_endpoints
 from ome.snapshot_builder import LinkSnapshotSource
 
+from tests.conftest import load_runtime_ome_test_inputs
 from tests.physics_fixtures import EARTH_TEST_BODY_FRAME, earth_geodetic_to_ecef
 
 SIM = datetime(2026, 1, 1, tzinfo=UTC)
 RANGE_TOL_KM = 1e-6
 LATENCY_TOL_MS = 1e-9
+# Two evaluations of one signal in different batches agree within this (ms). The light-time
+# iteration stops once a step moves by under 1 ns, and each step shrinks the error by the
+# receiver's barycentric speed over c (about 1.3e-4), so evaluations agree within about
+# 3e-13 s. The two directions of a link differ by 10.6 ns or more on the tick tested here.
+SAME_SIGNAL_MS = 1e-9
 WGS84_A = EARTH_TEST_BODY_FRAME.equatorial_radius_km
 WGS84_B = EARTH_TEST_BODY_FRAME.polar_radius_km
 
@@ -49,6 +58,7 @@ def _snapshot_source(
     isl_state: dict[tuple[str, str], tuple[bool, bool]] | None = None,
     ground_state: dict[tuple[str, str], tuple[bool, bool, str]] | None = None,
     propagated_states: dict[str, PropagatedState] | None = None,
+    latencies_ms: dict[tuple[str, str], tuple[float, float]],
 ) -> LinkSnapshotSource:
     return LinkSnapshotSource(
         isl_state=isl_state or {},
@@ -56,6 +66,7 @@ def _snapshot_source(
         associations={},
         pending_teardowns={},
         propagated_states=propagated_states or {},
+        latencies_ms=latencies_ms,
     )
 
 
@@ -84,14 +95,21 @@ class TestAnalyticGeometry:
 
 
 class TestOmeSnapshotGeometry:
-    def test_snapshot_range_and_latency_match_authoritative_geometry_formula(self):
+    def test_snapshot_range_is_geometric_and_delays_are_the_committed_ones(self):
+        """Range is the same-tick distance between the ends; each direction's delay is the one
+        the tick committed for it, in the pair's order."""
         pair = ("sat-a", "sat-b")
         propagated_states = {
             "sat-a": _propagated_state("sat-a", 0.0, 0.0, 550.0),
             "sat-b": _propagated_state("sat-b", 0.0, 5.0, 550.0),
         }
+        committed = (2.08291, 2.08297)
         snapshot = build_link_state_snapshot(
-            _snapshot_source(isl_state={pair: (True, True)}, propagated_states=propagated_states),
+            _snapshot_source(
+                isl_state={pair: (True, True)},
+                propagated_states=propagated_states,
+                latencies_ms={pair: committed},
+            ),
             interface_map={pair: ("isl0", "isl1")},
             sim_time=SIM,
             seq=1,
@@ -105,13 +123,100 @@ class TestOmeSnapshotGeometry:
         )
 
         assert link.range_km is not None
-        assert link.latency_ms is not None
         assert math.isclose(link.range_km, expected_range, abs_tol=RANGE_TOL_KM)
-        assert math.isclose(
-            link.latency_ms,
-            compute_latency_ms(expected_range),
-            abs_tol=LATENCY_TOL_MS,
+        assert (link.latency_a_to_b_ms, link.latency_b_to_a_ms) == committed
+
+    def test_every_delay_a_tick_shows_is_the_light_time_of_that_directions_signal(self):
+        """One OME tick of a session with ISLs and a ground station: every VisibilityEvent and
+        every up link of the LinkStateSnapshot (built as OME's main loop builds it) carries, for
+        node_a to node_b and node_b to node_a, the light time of the signal that end sends at
+        the tick, computed directly by the signal layer. The two directions differ on every
+        link (by 10.6 ns at least on this tick), so a swap or a merge of directions anywhere
+        fails."""
+        session, resolved, gs_file, satellites, addressing, neighbors, candidates = (
+            load_runtime_ome_test_inputs(origin="test.geometry_authority")
         )
+        ctx = build_step_context(
+            satellites=satellites,
+            addressing=addressing,
+            gs_file=gs_file,
+            neighbors=neighbors,
+            propagator_id=session.orbit.propagator,
+            ground_scheduling=session.scheduling.ground,
+            ground_candidate_satellites_by_gs=candidates,
+            ground_link_model=session.ground_link_model,
+            body_frames=session.body_frames,
+            physics=session.physics,
+        )
+        result = compute_step(
+            ctx,
+            1704067200.0,
+            step=0,
+            step_seconds=session.time.step_seconds,
+            timestamp_offset=0.0,
+            isl_state={},
+            gs_state={},
+            current_associations={},
+        )
+        snapshot = build_link_state_snapshot(
+            result.link_snapshot_source,
+            interface_map=build_ome_inputs_from_resolved(resolved).interface_map,
+            sim_time=result.sim_time,
+            seq=1,
+            interval_s=5.0,
+            fixed_positions=ctx.gs_positions,
+            epoch_id=0,
+            mbb_overlap_ticks_by_gs=ctx.gs_mbb_overlap_ticks,
+            current_step=result.step,
+        )
+        events = [
+            timeline.data for timeline in result.events if timeline.event_type == "VisibilityEvent"
+        ]
+        assert all(isinstance(event, VisibilityEvent) for event in events)
+        up_links = [link for link in snapshot.links if link.carrier == "UP"]
+        shown = {
+            (event.node_a, event.node_b): (event.latency_a_to_b_ms, event.latency_b_to_a_ms)
+            for event in events
+        }
+        assert {link.link_type for link in up_links} == {"isl", "ground"}
+        assert {event.link_type for event in events} == {"isl", "ground"}
+
+        endpoints = {
+            **satellite_endpoints(
+                satellites=satellites,
+                addressing=addressing,
+                propagator_id=session.orbit.propagator,
+                body_frames=session.body_frames,
+            ),
+            **ctx.ground_geometry.station_endpoints,
+        }
+        pairs = sorted(set(shown) | {(link.node_a, link.node_b) for link in up_links})
+        signals = signals_sent_at(
+            session.physics,
+            session.body_frames,
+            [endpoints[a] for a, _b in pairs] + [endpoints[b] for _a, b in pairs],
+            [endpoints[b] for _a, b in pairs] + [endpoints[a] for a, _b in pairs],
+            result.sim_time_unix,
+        )
+        light_ms = {
+            pair: (
+                float(signals.light_time_s[row]) * 1000.0,
+                float(signals.light_time_s[row + len(pairs)]) * 1000.0,
+            )
+            for row, pair in enumerate(pairs)
+        }
+
+        # The tick and this check evaluate each signal in different batches. They agree within
+        # SAME_SIGNAL_MS; a pair's two directions differ by far more, so a swap still fails.
+        assert all(
+            abs(a_to_b - b_to_a) > 100 * SAME_SIGNAL_MS for a_to_b, b_to_a in light_ms.values()
+        )
+        for pair, delays in shown.items():
+            assert delays == pytest.approx(light_ms[pair], rel=0.0, abs=SAME_SIGNAL_MS), pair
+        for link in up_links:
+            pair = (link.node_a, link.node_b)
+            delays = (link.latency_a_to_b_ms, link.latency_b_to_a_ms)
+            assert delays == pytest.approx(light_ms[pair], rel=0.0, abs=SAME_SIGNAL_MS), pair
 
     def test_active_snapshot_link_missing_authority_fails_loudly(self):
         pair = ("sat-a", "sat-b")
@@ -123,6 +228,29 @@ class TestOmeSnapshotGeometry:
                     propagated_states={
                         "sat-a": _propagated_state("sat-a", 0.0, 0.0, 550.0),
                     },
+                    latencies_ms={pair: (2.08291, 2.08297)},
+                ),
+                interface_map={pair: ("isl0", "isl1")},
+                sim_time=SIM,
+                seq=1,
+                interval_s=1.0,
+                epoch_id=0,
+            )
+
+    def test_active_snapshot_link_without_committed_delays_fails_loudly(self):
+        """An up link the tick committed no light time for is refused, never published with an
+        invented delay."""
+        pair = ("sat-a", "sat-b")
+
+        with pytest.raises(ValueError, match="committed no light time"):
+            build_link_state_snapshot(
+                _snapshot_source(
+                    isl_state={pair: (True, True)},
+                    propagated_states={
+                        "sat-a": _propagated_state("sat-a", 0.0, 0.0, 550.0),
+                        "sat-b": _propagated_state("sat-b", 0.0, 5.0, 550.0),
+                    },
+                    latencies_ms={},
                 ),
                 interface_map={pair: ("isl0", "isl1")},
                 sim_time=SIM,

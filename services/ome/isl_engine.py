@@ -16,7 +16,7 @@ from dataclasses import dataclass
 import numpy as np
 from nodalarc.body_frames import BodyFrame
 from nodalarc.frames import CommonVec3, Vec3
-from nodalarc.geo import compute_latency_ms, compute_range_km
+from nodalarc.geo import compute_range_km
 from nodalarc.models.addressing import NeighborAssignment
 from nodalarc.physics.geodesy import geodetic_from_body_fixed_batch
 from nodalarc.physics.lighttime import SignalEnd
@@ -51,7 +51,8 @@ class IslFeasibilityResult:
     link_type: str
     feasible: bool
     range_km: float
-    orbital_one_way_ms: float
+    one_way_a_to_b_ms: float
+    one_way_b_to_a_ms: float
     reject_reason: str
     terminal_role_a: str | None
     terminal_role_b: str | None
@@ -71,7 +72,8 @@ class ScheduledIsl:
     terminal_role_a: str | None
     terminal_role_b: str | None
     range_km: float
-    orbital_one_way_ms: float
+    one_way_a_to_b_ms: float
+    one_way_b_to_a_ms: float
     scheduled: bool
     unscheduled_reason: str | None
 
@@ -140,6 +142,7 @@ def _result(
     interface_a: str,
     interface_b: str,
     range_km: float,
+    one_way_ms: tuple[float, float],
     reason: str,
     terminal_type: str,
     max_range_km: float,
@@ -151,7 +154,8 @@ def _result(
         link_type=link_type,
         feasible=reason == "ok",
         range_km=range_km,
-        orbital_one_way_ms=compute_latency_ms(range_km),
+        one_way_a_to_b_ms=one_way_ms[0],
+        one_way_b_to_a_ms=one_way_ms[1],
         reject_reason=reason,
         terminal_role_a=constraints_a.role,
         terminal_role_b=constraints_b.role,
@@ -215,6 +219,7 @@ def evaluate_isl_feasibility(
     """
     results: dict[tuple[str, str], IslFeasibilityResult] = {}
     candidates: list[_Candidate] = []
+    rejected: list[tuple[dict, str, str]] = []
 
     for node_id in node_order:
         state_a = sat_states.get(node_id)
@@ -293,20 +298,18 @@ def evaluate_isl_feasibility(
             }
 
             if constraints_a.terminal_type != constraints_b.terminal_type:
-                results[pair] = _result(
-                    reason="terminal_type_mismatch",
-                    terminal_type=f"{constraints_a.terminal_type}/{constraints_b.terminal_type}",
-                    **common,
+                rejected.append(
+                    (
+                        common,
+                        "terminal_type_mismatch",
+                        f"{constraints_a.terminal_type}/{constraints_b.terminal_type}",
+                    )
                 )
                 continue
             if not _role_allows_link(
                 constraints_a.role, assignment_a.link_type
             ) or not _role_allows_link(constraints_b.role, assignment_a.link_type):
-                results[pair] = _result(
-                    reason="terminal_role_mismatch",
-                    terminal_type=constraints_a.terminal_type,
-                    **common,
-                )
+                rejected.append((common, "terminal_role_mismatch", constraints_a.terminal_type))
                 continue
 
             candidates.append(
@@ -330,6 +333,24 @@ def evaluate_isl_feasibility(
                 )
             )
 
+    all_pairs = [common["pair"] for common, _reason, _type in rejected] + [
+        candidate.pair for candidate in candidates
+    ]
+    if not all_pairs:
+        return results
+    # Each direction's one-way light time of a signal sent at this tick.
+    forward, backward = signals.directions(all_pairs)
+    one_way = {
+        pair: (float(ahead) * 1000.0, float(back) * 1000.0)
+        for pair, ahead, back in zip(
+            all_pairs, forward.light_time_s, backward.light_time_s, strict=True
+        )
+    }
+    for common, reason, terminal_type in rejected:
+        pair = common["pair"]
+        results[pair] = _result(
+            reason=reason, terminal_type=terminal_type, one_way_ms=one_way[pair], **common
+        )
     if not candidates:
         return results
     reasons = isl_pair_reasons(
@@ -348,6 +369,7 @@ def evaluate_isl_feasibility(
             interface_a=candidate.interface_a,
             interface_b=candidate.interface_b,
             range_km=candidate.range_km,
+            one_way_ms=one_way[candidate.pair],
             reason=reason,
             terminal_type=candidate.constraints_a.terminal_type,
             max_range_km=candidate.limits.max_range_km,
@@ -412,7 +434,8 @@ def schedule_isl_links(
             terminal_role_a=result.terminal_role_a,
             terminal_role_b=result.terminal_role_b,
             range_km=result.range_km,
-            orbital_one_way_ms=result.orbital_one_way_ms,
+            one_way_a_to_b_ms=result.one_way_a_to_b_ms,
+            one_way_b_to_a_ms=result.one_way_b_to_a_ms,
             scheduled=is_scheduled,
             unscheduled_reason=reason,
         )

@@ -53,7 +53,10 @@ def diff_link_state(
             pair
             for pair in common_pairs
             if (
-                abs(actual[pair].latency_ms - desired[pair].latency_ms) > latency_tolerance_ms
+                abs(actual[pair].latency_a_to_b_ms - desired[pair].latency_a_to_b_ms)
+                > latency_tolerance_ms
+                or abs(actual[pair].latency_b_to_a_ms - desired[pair].latency_b_to_a_ms)
+                > latency_tolerance_ms
                 or actual[pair].range_km != desired[pair].range_km
             )
         },

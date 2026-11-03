@@ -18,19 +18,22 @@ from nodalarc.models.link_state import AdminState, CarrierState, LinkState
 class ActiveLinkInfo:
     """Mutable internal state for a desired or active link.
 
+    Delays are per direction in the pair's order (node_a, node_b): ``a_to_b`` is the direction
+    node_a transmits, carried on node_a's egress; ``b_to_a`` the direction node_b transmits.
+
     TODO(trust-gap-closure#10): Make this a frozen dataclass. Mutability
     exists only because latency updates on active links currently assign
-    latency_ms in place. Replace with dataclasses.replace() on a frozen
-    type — the mutation pattern is self._actual_links[pair] = replace(info,
-    latency_ms=new). This eliminates the mutable-value-in-frozen-intent
+    the commanded delays in place. Replace with dataclasses.replace() on a frozen
+    type. This eliminates the mutable-value-in-frozen-intent
     contract gap where DispatchIntent is frozen but its dict values are not.
     """
 
     __slots__ = (
         "interface_a",
         "interface_b",
-        "latency_ms",
-        "netem_one_way_ms",
+        "latency_a_to_b_ms",
+        "latency_b_to_a_ms",
+        "commanded_netem_ms",
         "link_type",
         "range_km",
         "authority_sim_time",
@@ -38,29 +41,35 @@ class ActiveLinkInfo:
         "authority_sequence",
     )
 
+    @property
+    def latencies_ms(self) -> tuple[float, float]:
+        return (self.latency_a_to_b_ms, self.latency_b_to_a_ms)
+
     def __init__(
         self,
         interface_a: str,
         interface_b: str,
-        latency_ms: float,
+        latency_a_to_b_ms: float,
+        latency_b_to_a_ms: float,
         *,
         link_type: str,
         range_km: float | None = None,
         authority_sim_time: datetime | None = None,
         authority_source: str | None = None,
         authority_sequence: int | None = None,
-        netem_one_way_ms: float | None = None,
+        commanded_netem_ms: tuple[float, float] | None = None,
     ) -> None:
         self.interface_a = interface_a
         self.interface_b = interface_b
-        self.latency_ms = latency_ms
-        # The netem delay actually COMMANDED to the Node Agent for this link
-        # (orbital latency minus the substrate compensation measured at
-        # dispatch time). Set by the command builders when a LinkUp or
-        # SetLatency is sent; kernel proofs assert against this value, never
+        self.latency_a_to_b_ms = latency_a_to_b_ms
+        self.latency_b_to_a_ms = latency_b_to_a_ms
+        # The netem delays actually COMMANDED to the Node Agent for this link,
+        # (a_to_b, b_to_a): orbital latency minus the substrate compensation
+        # measured at dispatch time. Set by the command builders when a LinkUp or
+        # SetLatency is sent; kernel proofs assert against these values, never
         # against a live recomputation - compensation inputs drift between
         # dispatch and proof, and that drift is not kernel divergence.
-        self.netem_one_way_ms = netem_one_way_ms
+        self.commanded_netem_ms = commanded_netem_ms
         self.link_type = link_type
         self.range_km = range_km
         self.authority_sim_time = authority_sim_time
@@ -72,10 +81,11 @@ def require_ome_geometry(
     pair: tuple[str, str],
     *,
     range_km: float | None,
-    latency_ms: float | None,
+    latency_a_to_b_ms: float | None,
+    latency_b_to_a_ms: float | None,
     source: str,
-) -> tuple[float, float]:
-    """Require OME-authoritative range and one-way latency.
+) -> tuple[float, float, float]:
+    """Require OME-authoritative range and each direction's one-way latency.
 
     The Scheduler is not a physics authority. Missing range/latency is a
     corrupt control-plane input, not a condition to paper over with a fallback.
@@ -83,13 +93,18 @@ def require_ome_geometry(
     """
     if range_km is None:
         raise ValueError(f"{source} for {pair} is missing OME-authoritative range_km")
-    if latency_ms is None:
-        raise ValueError(f"{source} for {pair} is missing OME-authoritative latency_ms")
     if range_km < 0:
         raise ValueError(f"{source} for {pair} has negative range_km={range_km}")
-    if latency_ms < 0:
-        raise ValueError(f"{source} for {pair} has negative latency_ms={latency_ms}")
-    return range_km, latency_ms
+    if latency_a_to_b_ms is None:
+        raise ValueError(f"{source} for {pair} is missing OME-authoritative latency_a_to_b_ms")
+    if latency_b_to_a_ms is None:
+        raise ValueError(f"{source} for {pair} is missing OME-authoritative latency_b_to_a_ms")
+    if latency_a_to_b_ms < 0 or latency_b_to_a_ms < 0:
+        raise ValueError(
+            f"{source} for {pair} has a negative latency: a_to_b={latency_a_to_b_ms}, "
+            f"b_to_a={latency_b_to_a_ms}"
+        )
+    return range_km, latency_a_to_b_ms, latency_b_to_a_ms
 
 
 def _ground_interfaces(
@@ -130,10 +145,11 @@ def desired_link_from_visibility(
 ) -> tuple[tuple[str, str], ActiveLinkInfo]:
     """Build one desired link from a scheduled visible OME event."""
     pair = (vis.node_a, vis.node_b)
-    range_km, latency = require_ome_geometry(
+    range_km, a_to_b, b_to_a = require_ome_geometry(
         pair,
         range_km=vis.range_km,
-        latency_ms=vis.latency_ms,
+        latency_a_to_b_ms=vis.latency_a_to_b_ms,
+        latency_b_to_a_ms=vis.latency_b_to_a_ms,
         source="VisibilityEvent",
     )
 
@@ -155,7 +171,8 @@ def desired_link_from_visibility(
     return pair, ActiveLinkInfo(
         interface_a=ifaces[0],
         interface_b=ifaces[1],
-        latency_ms=latency,
+        latency_a_to_b_ms=a_to_b,
+        latency_b_to_a_ms=b_to_a,
         link_type=vis.link_type,
         range_km=range_km,
         authority_sim_time=vis.sim_time,
@@ -182,10 +199,11 @@ def desired_link_from_snapshot_link(
         )
 
     pair = (link.node_a, link.node_b)
-    range_km, latency = require_ome_geometry(
+    range_km, a_to_b, b_to_a = require_ome_geometry(
         pair,
         range_km=link.range_km,
-        latency_ms=link.latency_ms,
+        latency_a_to_b_ms=link.latency_a_to_b_ms,
+        latency_b_to_a_ms=link.latency_b_to_a_ms,
         source="LinkStateSnapshot",
     )
 
@@ -207,7 +225,8 @@ def desired_link_from_snapshot_link(
     return pair, ActiveLinkInfo(
         interface_a=ifaces[0],
         interface_b=ifaces[1],
-        latency_ms=latency,
+        latency_a_to_b_ms=a_to_b,
+        latency_b_to_a_ms=b_to_a,
         link_type=link.link_type,
         range_km=range_km,
         authority_sim_time=snapshot_sim_time,

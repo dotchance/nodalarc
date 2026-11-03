@@ -8,6 +8,7 @@ import pytest
 from nodalarc.db.queries import (
     get_metadata,
     insert_convergence_result,
+    insert_latency_update,
     insert_link_up,
     insert_ome_lifecycle_event,
     insert_operator_intervention_event,
@@ -25,7 +26,7 @@ from nodalarc.db.schema import (
     require_schema_version,
 )
 from nodalarc.models.events import OpsEvent
-from nodalarc.models.link_events import LinkUp
+from nodalarc.models.link_events import LatencyUpdate, LinkUp
 from nodalarc.models.metrics import ConvergenceResult
 from nodalarc.models.ome_lifecycle import MbbTeardownLifecycleDetails
 from nodalarc.models.scheduler_ops import ActuationFailureClass, ActuationOpsDetails
@@ -45,7 +46,8 @@ def _link_up(sim_time=T0) -> LinkUp:
         link_type="isl",
         interface_a="isl0",
         interface_b="isl1",
-        latency_ms=2.5,
+        latency_a_to_b_ms=2.5,
+        latency_b_to_a_ms=2.5,
         range_km=749.481145,
         reason="visibility",
     )
@@ -139,7 +141,8 @@ class TestLinkEventQueries:
                 link_type="isl",
                 interface_a="isl0",
                 interface_b="isl1",
-                latency_ms=2.5,
+                latency_a_to_b_ms=2.5,
+                latency_b_to_a_ms=2.5,
                 range_km=749.481145,
                 reason="vis",
             ),
@@ -147,6 +150,45 @@ class TestLinkEventQueries:
         )
         results = query_link_events(db, node="sat-P00S00", session_id="run-test")
         assert len(results) == 1
+
+    def test_each_direction_is_stored_and_read_back_on_its_own_column(self, db):
+        """A LinkUp and a LatencyUpdate, each with a different delay per direction, come back
+        from the history file with each delay on its own column, in the event's node order."""
+        events = [
+            LinkUp(
+                sim_time=T0,
+                wall_time=WALL,
+                node_a="sat-P00S00",
+                node_b="sat-P00S01",
+                link_type="isl",
+                interface_a="isl0",
+                interface_b="isl1",
+                latency_a_to_b_ms=2.5,
+                latency_b_to_a_ms=2.75,
+                range_km=749.481145,
+                reason="vis_gained",
+            ),
+            LatencyUpdate(
+                sim_time=T1,
+                wall_time=WALL,
+                node_a="sat-P00S01",
+                node_b="sat-P00S00",
+                latency_a_to_b_ms=3.5,
+                latency_b_to_a_ms=3.125,
+                range_km=940.0,
+            ),
+        ]
+        insert_link_up(db, events[0], session_id="run-test")
+        insert_latency_update(db, events[1], session_id="run-test")
+
+        rows = query_link_events(db, session_id="run-test")
+        assert [
+            (row["node_a"], row["node_b"], row["latency_a_to_b_ms"], row["latency_b_to_a_ms"])
+            for row in rows
+        ] == [
+            (event.node_a, event.node_b, event.latency_a_to_b_ms, event.latency_b_to_a_ms)
+            for event in events
+        ]
 
 
 class TestConvergenceQueries:

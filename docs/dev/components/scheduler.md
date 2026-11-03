@@ -90,20 +90,33 @@ For each link pair, the Scheduler determines whether both endpoints are on the s
 
 ## Latency Updates
 
-Live dispatch latency is OME-authoritative. The OME includes `range_km` and
-one-way `latency_ms` on `VisibilityEvent` and active `LinkStateSnapshot` links.
+Live dispatch latency is OME-authoritative. The OME includes `range_km` and two
+one-way latencies on `VisibilityEvent` and active `LinkStateSnapshot` links:
+`latency_a_to_b_ms`, the light time of a signal `node_a` sends to `node_b` at the
+stated sim time, and `latency_b_to_a_ms`, the signal `node_b` sends to `node_a`.
+The two differ because both ends move while a signal travels. `range_km` is the
+distance between the two ends at that sim time.
+
 The Scheduler preserves those values in `ActiveLinkInfo`, refuses to dispatch
 when they are missing, and sends `SetLatency` when an authoritative snapshot or
-visibility event changes the desired latency for an already-active link.
+visibility event changes the desired latency of either direction for an
+already-active link.
+
+Each end's netem delay is on its egress interface, so it carries the direction
+that end transmits. Substrate compensation subtracts the measured one-way share
+of the substrate round trip from each direction:
 
 ```
-latency_ms = range_km / 299792.458 * 1000
+substrate_one_way_ms = substrate_rtt_ms / 2
+netem_a_to_b_ms = latency_a_to_b_ms - substrate_one_way_ms   (node_a's egress)
+netem_b_to_a_ms = latency_b_to_a_ms - substrate_one_way_ms   (node_b's egress)
 ```
 
-For CROSS_NODE links, substrate compensation applies:
-```
-netem_ms = max(0, orbital_latency_ms - substrate_latency_ms)
-```
+A negative result means the substrate is slower than the emulated link. The
+Scheduler does not clamp it: the link is unrepresentable and dispatch stops for
+it. A ground station and satellite on the same server share one Node Agent
+message, which carries the station's delay in `latency_ms` and the satellite's
+in `peer_latency_ms`.
 
 Substrate latency is measured by Node Agents from manifest-required
 Kubernetes-node pairs and written to generation-scoped

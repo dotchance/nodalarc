@@ -374,7 +374,7 @@ class Dispatcher:
         self._gs_active_count: dict[str, int] = {}
         self._sat_active_count: dict[str, int] = {}
 
-        self._last_latencies: dict[tuple[str, str], float] = {}
+        self._last_latencies: dict[tuple[str, str], tuple[float, float]] = {}
         self._current_sim_time: datetime | None = None
         self._running = False
         # Set by stop(); run() waits on it instead of polling _running.
@@ -2902,7 +2902,7 @@ class Dispatcher:
                 )
                 for pair in sorted(up_result.succeeded_pairs):
                     self._actual_links[pair] = authority[pair]
-                    self._last_latencies[pair] = authority[pair].latency_ms
+                    self._last_latencies[pair] = authority[pair].latencies_ms
                     self._increment_active_counts(pair)
                 if set(authority) - set(up_result.succeeded_pairs):
                     raise RuntimeError(
@@ -3109,22 +3109,20 @@ class Dispatcher:
         )
 
     def _latency_compensation(
-        self, node_a: str, node_b: str, orbital_one_way_ms: float
+        self, node_a: str, node_b: str, orbital_ms: tuple[float, float]
     ) -> LatencyCompensation:
-        """Compute auditable netem compensation from OME latency and substrate RTT."""
+        """Compute auditable netem compensation from OME's per-direction latency (a_to_b,
+        b_to_a) and the measured substrate RTT."""
         substrate_rtt_ms = self._get_substrate_rtt_ms(node_a, node_b)
         try:
             return compensate_latency(
-                orbital_one_way_ms=orbital_one_way_ms,
+                orbital_a_to_b_ms=orbital_ms[0],
+                orbital_b_to_a_ms=orbital_ms[1],
                 substrate_rtt_ms=substrate_rtt_ms,
                 rtt_to_one_way_policy=self._rtt_to_one_way_policy,
             )
         except ValueError as exc:
             raise ValueError(f"Unrepresentable latency for {node_a}<->{node_b}: {exc}") from exc
-
-    def _netem_delay_ms(self, node_a: str, node_b: str, orbital_one_way_ms: float) -> float:
-        """Compute netem one-way delay from OME latency and measured substrate RTT."""
-        return self._latency_compensation(node_a, node_b, orbital_one_way_ms).netem_one_way_ms
 
     @staticmethod
     def _link_provenance(
@@ -3145,10 +3143,12 @@ class Dispatcher:
             authority_sequence=info.authority_sequence,
             authority_age_ms=authority_age_ms,
             range_km=info.range_km,
-            orbital_one_way_ms=info.latency_ms,
+            orbital_a_to_b_ms=info.latency_a_to_b_ms,
+            orbital_b_to_a_ms=info.latency_b_to_a_ms,
             substrate_rtt_ms=compensation.substrate_rtt_ms,
             substrate_one_way_ms=compensation.substrate_one_way_ms,
-            netem_one_way_ms=compensation.netem_one_way_ms,
+            netem_a_to_b_ms=compensation.netem_a_to_b_ms,
+            netem_b_to_a_ms=compensation.netem_b_to_a_ms,
             rtt_to_one_way_policy=compensation.rtt_to_one_way_policy,
         )
 
@@ -3309,7 +3309,7 @@ class Dispatcher:
                     )
                     for pair in sorted(up_result.succeeded_pairs):
                         self._actual_links[pair] = desired[pair]
-                        self._last_latencies[pair] = desired[pair].latency_ms
+                        self._last_latencies[pair] = desired[pair].latencies_ms
                         self._increment_active_counts(pair)
             else:
                 await self._reconcile_mbb(
@@ -3394,7 +3394,7 @@ class Dispatcher:
         for pair in result.succeeded_pairs:
             info = desired[pair]
             self._actual_links[pair] = info
-            self._last_latencies[pair] = info.latency_ms
+            self._last_latencies[pair] = info.latencies_ms
         return result
 
     async def _reconcile_mbb(
@@ -3536,7 +3536,7 @@ class Dispatcher:
             added = set(up_result.succeeded_pairs)
             for pair in sorted(added):
                 self._actual_links[pair] = desired[pair]
-                self._last_latencies[pair] = desired[pair].latency_ms
+                self._last_latencies[pair] = desired[pair].latencies_ms
                 self._increment_active_counts(pair)
         else:
             added = set()

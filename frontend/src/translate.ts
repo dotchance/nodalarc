@@ -6,7 +6,7 @@
  * src/explain/linkEvents.ts (linkEventLabel). The old REASON_MAP was a parallel, untaxonomized
  * vocabulary that conflicted with the registry — removed so there is one source. */
 
-import type { PublicLinkType } from "./generated/vsApi";
+import type { LinkState, PublicLinkType } from "./generated/vsApi";
 
 /** VF spec Section 8.4 — link type translation */
 const LINK_TYPE_MAP: Record<PublicLinkType, string> = {
@@ -20,11 +20,32 @@ export function translateLinkType(linkType: PublicLinkType): string {
   return LINK_TYPE_MAP[linkType];
 }
 
-/** Format milliseconds as human-readable duration. */
+/** Format milliseconds as a readable duration: milliseconds to 0.1 ms below a second, seconds
+ *  to the millisecond below a minute, minutes beyond (a Mars link is about 20 minutes). */
 export function formatDuration(ms: number): string {
-  if (ms < 1000) return `${ms.toFixed(0)}ms`;
-  if (ms < 60000) return `${(ms / 1000).toFixed(1)}s`;
-  return `${(ms / 60000).toFixed(1)}m`;
+  if (ms < 1000) return `${ms.toFixed(1)} ms`;
+  if (ms < 60000) return `${(ms / 1000).toFixed(3)} s`;
+  return `${(ms / 60000).toFixed(2)} min`;
+}
+
+/** "out X · in Y": a link's latency out of and into one of its ends. */
+export function formatLinkEndLatency(
+  link: Pick<LinkState, "node_a" | "latency_a_to_b_ms" | "latency_b_to_a_ms">,
+  nodeId: string,
+): string {
+  const { outbound, inbound } = linkLatencies(link, nodeId);
+  return `out ${formatDuration(outbound)} · in ${formatDuration(inbound)}`;
+}
+
+/** A link's one-way latency out of and into one of its ends. Each direction has its own light
+ *  time: a_to_b is the signal node_a sends to node_b. */
+export function linkLatencies(
+  link: Pick<LinkState, "node_a" | "latency_a_to_b_ms" | "latency_b_to_a_ms">,
+  nodeId: string,
+): { outbound: number; inbound: number } {
+  return nodeId === link.node_a
+    ? { outbound: link.latency_a_to_b_ms, inbound: link.latency_b_to_a_ms }
+    : { outbound: link.latency_b_to_a_ms, inbound: link.latency_a_to_b_ms };
 }
 
 /** Format ISO datetime string to full YYYY-MM-DD HH:MM:SS UTC. */

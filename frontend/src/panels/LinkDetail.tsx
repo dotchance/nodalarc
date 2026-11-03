@@ -3,7 +3,7 @@
 /** Link detail panel — state, metrics, flow paths, history. */
 
 import { useEffect, useState } from "react";
-import { formatTime, translateLinkType } from "../translate";
+import { formatDuration, formatTime, translateLinkType } from "../translate";
 import { linkEventLabel } from "../explain/linkEvents";
 import { REST_URL, authHeaders } from "../config";
 import { apiErrorFromException, apiErrorMessage } from "../ui/apiError";
@@ -204,9 +204,15 @@ export function LinkDetail({ link, snapshot }: LinkDetailProps) {
       <LinkEndRouting snapshot={snapshot} nodeId={link.node_b} interfaceName={link.interface_b} />
 
       <h3>Metrics</h3>
+      {/* Each direction has its own light time: the signal one end sends reaches the other
+          end at its own later epoch. */}
       <div className="detail-row">
-        <span className="detail-label">Latency</span>
-        <span className="detail-value">{link.latency_ms.toFixed(1)} ms</span>
+        <span className="detail-label">Latency {link.node_a} → {link.node_b}</span>
+        <span className="detail-value">{formatDuration(link.latency_a_to_b_ms)}</span>
+      </div>
+      <div className="detail-row">
+        <span className="detail-label">Latency {link.node_b} → {link.node_a}</span>
+        <span className="detail-value">{formatDuration(link.latency_b_to_a_ms)}</span>
       </div>
       <div className="detail-row">
         <span className="detail-label">Range</span>

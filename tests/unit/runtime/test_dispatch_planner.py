@@ -4,15 +4,24 @@
 
 from __future__ import annotations
 
+import pytest
 from scheduler.desired_state import ActiveLinkInfo
 from scheduler.dispatch_planner import classify_mbb_changes, diff_link_state
 
 
-def _info(latency: float = 3.0, range_km: float = 1000.0, link_type: str = "isl"):
+def _info(
+    latency: float = 3.0,
+    range_km: float = 1000.0,
+    link_type: str = "isl",
+    *,
+    b_to_a: float | None = None,
+):
+    """A link with ``latency`` in both directions, or ``b_to_a`` in the second direction."""
     return ActiveLinkInfo(
         "isl0",
         "isl1",
         latency,
+        latency if b_to_a is None else b_to_a,
         link_type=link_type,
         range_km=range_km,
     )
@@ -41,6 +50,35 @@ def test_diff_link_state_ignores_sub_tolerance_latency_jitter():
     diff = diff_link_state(
         {pair: _info(latency=3.0, range_km=1000.0)},
         {pair: _info(latency=3.0 + 1e-10, range_km=1000.0)},
+    )
+
+    assert not diff.has_changes
+
+
+def _moved(direction: str, step_ms: float) -> ActiveLinkInfo:
+    """The (3.0, 4.0) ms link with one direction moved by ``step_ms``."""
+    delays = {"a_to_b": 3.0, "b_to_a": 4.0}
+    delays[direction] += step_ms
+    return _info(latency=delays["a_to_b"], b_to_a=delays["b_to_a"])
+
+
+@pytest.mark.parametrize("step_ms", [2e-9, -2e-9])
+@pytest.mark.parametrize("direction", ["a_to_b", "b_to_a"])
+def test_a_change_beyond_tolerance_in_one_direction_alone_is_a_latency_update(direction, step_ms):
+    pair = ("sat-a", "sat-b")
+    diff = diff_link_state(
+        {pair: _info(latency=3.0, b_to_a=4.0)}, {pair: _moved(direction, step_ms)}
+    )
+
+    assert diff.to_update_latency == {pair}
+
+
+@pytest.mark.parametrize("step_ms", [5e-10, -5e-10])
+@pytest.mark.parametrize("direction", ["a_to_b", "b_to_a"])
+def test_jitter_within_tolerance_in_one_direction_alone_is_no_change(direction, step_ms):
+    pair = ("sat-a", "sat-b")
+    diff = diff_link_state(
+        {pair: _info(latency=3.0, b_to_a=4.0)}, {pair: _moved(direction, step_ms)}
     )
 
     assert not diff.has_changes

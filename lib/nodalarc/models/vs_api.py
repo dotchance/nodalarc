@@ -140,7 +140,9 @@ class LinkState(BaseModel):
     state: Literal["active"]
     link_type: PublicLinkType
     link_reason: str | None
-    latency_ms: float
+    # One-way light time each direction: node_a to node_b and node_b to node_a.
+    latency_a_to_b_ms: float
+    latency_b_to_a_ms: float
     # Each end's own terminal rates: node_a's terminal sends at transmit_mbps_a
     # and takes in at receive_mbps_a; node_b's at transmit_mbps_b and
     # receive_mbps_b. A direction carries no more than its sender transmits or
@@ -150,7 +152,7 @@ class LinkState(BaseModel):
     transmit_mbps_b: float
     receive_mbps_b: float
     range_km: float
-    # The master sim time range_km and latency_ms describe: the
+    # The master sim time range_km and the latencies describe: the
     # LinkStateSnapshot's sim_time, or a LinkUp's or LatencyUpdate's
     # provenance.authority_sim_time. Every writer sets it with the range. Node
     # positions in the same snapshot move every tick, so they may describe a
@@ -185,10 +187,12 @@ class LinkDecisionTrace(BaseModel):
     authority_sequence: int | None = None
     authority_age_ms: float
     range_km: float
-    orbital_one_way_ms: float
+    orbital_a_to_b_ms: float
+    orbital_b_to_a_ms: float
     substrate_rtt_ms: float | None
     substrate_one_way_ms: float | None
-    netem_one_way_ms: float | None
+    netem_a_to_b_ms: float | None
+    netem_b_to_a_ms: float | None
     rtt_to_one_way_policy: str | None
     link_rule_id: str | None = None
     topology_mode: TopologyMode | None = None
@@ -713,7 +717,8 @@ class LinkHistoryEvent(BaseModel):
     node_b: str
     interface_a: str | None
     interface_b: str | None
-    latency_ms: float | None
+    latency_a_to_b_ms: float | None
+    latency_b_to_a_ms: float | None
     range_km: float | None
     reason: str | None
 

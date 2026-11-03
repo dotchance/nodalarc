@@ -33,7 +33,7 @@ from scheduler.actuation import (
 )
 from scheduler.desired_state import ActiveLinkInfo
 from scheduler.dispatch_planner import gs_id_for_pair
-from scheduler.latency_compensator import LatencyCompensation
+from scheduler.latency_compensator import LatencyCompensation, egress_ms
 from scheduler.node_agent_batches import (
     build_link_down_batch_plan,
     build_link_up_batch_plan,
@@ -85,7 +85,7 @@ def _log_actuation_latency(
 
 
 LinkPair = tuple[str, str]
-LatencyCompensationFn = Callable[[str, str, float], LatencyCompensation]
+LatencyCompensationFn = Callable[[str, str, tuple[float, float]], LatencyCompensation]
 
 AuthorityFreshnessValidator = Callable[..., None]
 LinkProvenanceBuilder = Callable[..., object]
@@ -355,19 +355,19 @@ def _ground_inventory_entries_for_pair(
         if locality == node_agent_pb2.LOCALITY_CROSS_NODE
         else 0
     )
-    latency_ms = 0.0
+    commanded = (0.0, 0.0)
     if expected_admin_up:
         # Prove the kernel against what was COMMANDED, never against a live
         # recomputation: compensation reads measured substrate RTT, which
         # drifts between dispatch and proof, and that drift is not kernel
         # divergence. A link is only proven up after this Scheduler commanded
         # it, and dispatch records the commanded delay on its info.
-        if info.netem_one_way_ms is None:
+        if info.commanded_netem_ms is None:
             raise ValueError(
                 f"ground link {pair} is proven up with no commanded delay; "
                 "only commanded links are proven"
             )
-        latency_ms = info.netem_one_way_ms
+        commanded = info.commanded_netem_ms
 
     entries_by_agent: dict[str, list[node_agent_pb2.KernelInventoryEntry]] = {}
     ack_keys: set[InterfaceAck] = set()
@@ -389,9 +389,11 @@ def _ground_inventory_entries_for_pair(
             locality=locality,
             vni=vni,
             remote_node_ip=_remote_ip(peer_node),
-            latency_ms=latency_ms,
+            latency_ms=egress_ms(pair, node_id, commanded),
             expected_admin_up=expected_admin_up,
         )
+        if locality == node_agent_pb2.LOCALITY_LOCAL:
+            entry.peer_latency_ms = egress_ms(pair, peer_node, commanded)
         if expected_admin_up:
             # Each end is proven against its own terminal; a LOCAL entry
             # proves both ends on the one agent that owns them.
@@ -690,7 +692,8 @@ async def send_batch_up(
             node_b=pair[1],
             interface_a=info.interface_a,
             interface_b=info.interface_b,
-            latency_ms=info.latency_ms,
+            latency_a_to_b_ms=info.latency_a_to_b_ms,
+            latency_b_to_a_ms=info.latency_b_to_a_ms,
             range_km=info.range_km,
             reason="vis_gained",
             link_type=info.link_type,
@@ -743,11 +746,12 @@ async def send_authoritative_latency_updates(
         pair_gs_id[pair] = _gs_id_for_pair(pair, gs_capacities, info.link_type)
         node_a, node_b = pair
         validate_authority_freshness(pair, info, sim_time, operation="LatencyUpdate")
-        compensation = latency_compensation(node_a, node_b, info.latency_ms)
+        compensation = latency_compensation(node_a, node_b, info.latencies_ms)
         pair_compensation[pair] = compensation
-        netem_ms = compensation.netem_one_way_ms
-        # Remember what was COMMANDED: kernel proofs assert against this value.
-        info.netem_one_way_ms = netem_ms
+        # Each end's egress carries the direction it transmits.
+        netem = (compensation.netem_a_to_b_ms, compensation.netem_b_to_a_ms)
+        # Remember what was COMMANDED: kernel proofs assert against these values.
+        info.commanded_netem_ms = netem
 
         if info.link_type == "ground":
             gs_id, sat_id, gs_iface, sat_iface = required_ground_endpoints(
@@ -766,7 +770,7 @@ async def send_authoritative_latency_updates(
                     node_agent_pb2.LatencyEntry(
                         node_id=endpoint_id,
                         interface_name=endpoint_iface,
-                        latency_ms=netem_ms,
+                        latency_ms=egress_ms(pair, endpoint_id, netem),
                         rates=terminal_rates_message(interface_rates, endpoint_id, endpoint_iface),
                         link_type=node_agent_pb2.LINK_TYPE_GROUND,
                         gs_id=gs_id,
@@ -781,7 +785,7 @@ async def send_authoritative_latency_updates(
                     node_agent_pb2.LatencyEntry(
                         node_id=nid,
                         interface_name=ifname,
-                        latency_ms=netem_ms,
+                        latency_ms=egress_ms(pair, nid, netem),
                         rates=terminal_rates_message(interface_rates, nid, ifname),
                         link_type=node_agent_pb2.LINK_TYPE_ISL,
                     ),
@@ -833,7 +837,8 @@ async def send_authoritative_latency_updates(
             wall_time=now,
             node_a=pair[0],
             node_b=pair[1],
-            latency_ms=info.latency_ms,
+            latency_a_to_b_ms=info.latency_a_to_b_ms,
+            latency_b_to_a_ms=info.latency_b_to_a_ms,
             range_km=info.range_km,
             provenance=link_provenance(info, pair_compensation[pair], sim_time),
         )

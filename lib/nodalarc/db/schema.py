@@ -15,7 +15,7 @@ to a model nested in it, or to what VS-API adds to a recorded frame bumps it.
 
 import sqlite3
 
-SCHEMA_VERSION = 10
+SCHEMA_VERSION = 11
 
 
 class HistorySchemaError(RuntimeError):
@@ -33,7 +33,8 @@ CREATE TABLE IF NOT EXISTS link_events (
     node_b TEXT NOT NULL,
     interface_a TEXT,
     interface_b TEXT,
-    latency_ms REAL,
+    latency_a_to_b_ms REAL,
+    latency_b_to_a_ms REAL,
     range_km REAL,
     reason TEXT
 );

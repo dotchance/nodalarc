@@ -21,7 +21,7 @@ from nodalarc.vxlan import compute_vni
 
 from scheduler.desired_state import ActiveLinkInfo
 from scheduler.dispatch_planner import GroundEndpoints, ground_endpoints
-from scheduler.latency_compensator import LatencyCompensation
+from scheduler.latency_compensator import LatencyCompensation, egress_ms
 
 LinkPair = tuple[str, str]
 InterfaceAck = tuple[str, str, str]  # agent_addr, node_id, interface_name
@@ -204,7 +204,7 @@ def build_link_up_batch_plan(
     desired: Mapping[LinkPair, ActiveLinkInfo],
     locator: LinkLocator,
     gs_capacities: Mapping[str, int],
-    compensation_for_pair: Callable[[str, str, float], LatencyCompensation],
+    compensation_for_pair: Callable[[str, str, tuple[float, float]], LatencyCompensation],
     interface_rates: Mapping[tuple[str, str], InterfaceRates],
 ) -> LinkUpBatchPlan:
     """Build per-agent BatchLinkUp operations and per-pair latency provenance.
@@ -224,13 +224,14 @@ def build_link_up_batch_plan(
         node_a, node_b = pair
         locality = locator.link_locality(node_a, node_b)
 
-        compensation = compensation_for_pair(node_a, node_b, info.latency_ms)
+        compensation = compensation_for_pair(node_a, node_b, info.latencies_ms)
         pair_compensation[pair] = compensation
-        netem_ms = compensation.netem_one_way_ms
-        # Remember what was COMMANDED: kernel proofs assert against this value.
+        # Each end's egress carries the direction it transmits.
+        netem = (compensation.netem_a_to_b_ms, compensation.netem_b_to_a_ms)
+        # Remember what was COMMANDED: kernel proofs assert against these values.
         # Recomputing compensation at proof time reads live substrate RTT and
         # reports normal measurement drift as kernel divergence.
-        info.netem_one_way_ms = netem_ms
+        info.commanded_netem_ms = netem
 
         if info.link_type == "ground":
             gs_id, sat_id, gs_iface, sat_iface = required_ground_endpoints(
@@ -250,7 +251,8 @@ def build_link_up_batch_plan(
                     peer_node_id=sat_id,
                     peer_interface_name=sat_iface,
                     link_type=node_agent_pb2.LINK_TYPE_GROUND,
-                    latency_ms=netem_ms,
+                    latency_ms=egress_ms(pair, gs_id, netem),
+                    peer_latency_ms=egress_ms(pair, sat_id, netem),
                     rates=terminal_rates_message(interface_rates, gs_id, gs_iface),
                     peer_rates=terminal_rates_message(interface_rates, sat_id, sat_iface),
                     gs_id=gs_id,
@@ -273,7 +275,7 @@ def build_link_up_batch_plan(
                         peer_node_id=peer_nid,
                         peer_interface_name=peer_iface,
                         link_type=node_agent_pb2.LINK_TYPE_GROUND,
-                        latency_ms=netem_ms,
+                        latency_ms=egress_ms(pair, nid, netem),
                         rates=terminal_rates_message(interface_rates, nid, iface),
                         gs_id=gs_id,
                         sat_id=sat_id,
@@ -302,7 +304,7 @@ def build_link_up_batch_plan(
                 node_id=nid,
                 interface_name=ifname,
                 link_type=node_agent_pb2.LINK_TYPE_ISL,
-                latency_ms=netem_ms,
+                latency_ms=egress_ms(pair, nid, netem),
                 rates=terminal_rates_message(interface_rates, nid, ifname),
                 locality=locality,
                 remote_node_ip=remote_ip,

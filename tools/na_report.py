@@ -195,14 +195,16 @@ def report_link_events(conn: sqlite3.Connection, session_id: str) -> str:
         return "\n".join(lines)
 
     # Timeline
-    header = f"{'sim_time':<26} {'type':<16} {'node_a':<14} {'node_b':<14} {'latency_ms':>10}"
+    header = f"{'sim_time':<26} {'type':<16} {'node_a':<14} {'node_b':<14} {'a->b ms':>10} {'b->a ms':>10}"
     lines.append(header)
     lines.append("-" * len(header))
     for e in events:
-        lat = f"{e['latency_ms']:.1f}" if e.get("latency_ms") is not None else "-"
+        ahead, back = e.get("latency_a_to_b_ms"), e.get("latency_b_to_a_ms")
+        a_to_b = f"{ahead:.1f}" if ahead is not None else "-"
+        b_to_a = f"{back:.1f}" if back is not None else "-"
         lines.append(
             f"{e['sim_time']:<26} {e['event_type']:<16} "
-            f"{e['node_a']:<14} {e['node_b']:<14} {lat:>10}"
+            f"{e['node_a']:<14} {e['node_b']:<14} {a_to_b:>10} {b_to_a:>10}"
         )
     lines.append("")
 

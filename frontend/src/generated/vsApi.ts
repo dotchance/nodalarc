@@ -345,6 +345,8 @@ export interface GroundVisibilityDecisionWire {
   readonly reference_body: SupportedSurfaceBody;
   readonly visible: boolean;
   readonly range_km: number;
+  readonly latency_a_to_b_ms: number;
+  readonly latency_b_to_a_ms: number;
   readonly elevation_deg: number;
   readonly azimuth_deg: number | null;
   readonly sat_off_nadir_deg: number | null;
@@ -464,10 +466,12 @@ export interface LinkDecisionTrace {
   readonly authority_sequence: number | null;
   readonly authority_age_ms: number;
   readonly range_km: number;
-  readonly orbital_one_way_ms: number;
+  readonly orbital_a_to_b_ms: number;
+  readonly orbital_b_to_a_ms: number;
   readonly substrate_rtt_ms: number | null;
   readonly substrate_one_way_ms: number | null;
-  readonly netem_one_way_ms: number | null;
+  readonly netem_a_to_b_ms: number | null;
+  readonly netem_b_to_a_ms: number | null;
   readonly rtt_to_one_way_policy: string | null;
   readonly link_rule_id: string | null;
   readonly topology_mode: TopologyMode | null;
@@ -491,7 +495,8 @@ export interface LinkHistoryEvent {
   readonly node_b: string;
   readonly interface_a: string | null;
   readonly interface_b: string | null;
-  readonly latency_ms: number | null;
+  readonly latency_a_to_b_ms: number | null;
+  readonly latency_b_to_a_ms: number | null;
   readonly range_km: number | null;
   readonly reason: string | null;
 }
@@ -523,7 +528,8 @@ export interface LinkState {
   readonly state: "active";
   readonly link_type: PublicLinkType;
   readonly link_reason: string | null;
-  readonly latency_ms: number;
+  readonly latency_a_to_b_ms: number;
+  readonly latency_b_to_a_ms: number;
   readonly transmit_mbps_a: number;
   readonly receive_mbps_a: number;
   readonly transmit_mbps_b: number;

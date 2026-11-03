@@ -49,7 +49,8 @@ import json, sys
 s = json.load(sys.stdin)
 for link in s['links']:
     if link.get('link_type') == 'ground':
-        print(f\"{link['node_a']} <-> {link['node_b']}  {link['latency_ms']:.1f}ms\")
+        print(f\"{link['node_a']} -> {link['node_b']} {link['latency_a_to_b_ms']:.1f} ms, \"
+              f\"{link['node_b']} -> {link['node_a']} {link['latency_b_to_a_ms']:.1f} ms\")
 "
 ```
 

@@ -293,10 +293,12 @@ def _make_provenance(**overrides):
         "authority_sequence": None,
         "authority_age_ms": 0.0,
         "range_km": 1500.0,
-        "orbital_one_way_ms": 5.0,
+        "orbital_a_to_b_ms": 5.0,
+        "orbital_b_to_a_ms": 5.0,
         "substrate_rtt_ms": 0.0,
         "substrate_one_way_ms": 0.0,
-        "netem_one_way_ms": 5.0,
+        "netem_a_to_b_ms": 5.0,
+        "netem_b_to_a_ms": 5.0,
         "rtt_to_one_way_policy": "half-rtt",
     }
     provenance.update(overrides)
@@ -318,7 +320,8 @@ def _make_link_up_event(node_a="sat-P00S00", node_b="sat-P00S01", **overrides):
         "node_b": node_b,
         "interface_a": "isl0",
         "interface_b": "isl1",
-        "latency_ms": 5.0,
+        "latency_a_to_b_ms": 5.0,
+        "latency_b_to_a_ms": 5.0,
         "range_km": 1500.0,
         "reason": "vis_gained",
         "sim_time": datetime.now(UTC).isoformat(),
@@ -1017,7 +1020,19 @@ class TestLinkDecisionTraceState:
 
         import asyncio
 
-        event = _make_link_up_event()
+        # Each direction has its own delay; the link and its trace keep the event's order.
+        event = _make_link_up_event(
+            latency_a_to_b_ms=5.0,
+            latency_b_to_a_ms=5.5,
+            provenance=_make_provenance(
+                orbital_a_to_b_ms=5.0,
+                orbital_b_to_a_ms=5.5,
+                substrate_rtt_ms=2.0,
+                substrate_one_way_ms=1.0,
+                netem_a_to_b_ms=4.0,
+                netem_b_to_a_ms=4.5,
+            ),
+        )
         msg = _Message()
         msg.data = json.dumps(event).encode()
 
@@ -1031,12 +1046,14 @@ class TestLinkDecisionTraceState:
             link.transmit_mbps_b,
             link.receive_mbps_b,
         ) == (2000.0, 1500.0, 100.0, 2000.0)
+        assert (link.latency_a_to_b_ms, link.latency_b_to_a_ms) == (5.0, 5.5)
         trace = ctx.link_decision_traces[key]
         assert isinstance(trace, LinkDecisionTrace)
         assert trace.geometry_authority == "ome"
         assert trace.authority_source == "visibility_event"
         assert trace.range_km == 1500.0
-        assert trace.netem_one_way_ms == 5.0
+        assert (trace.orbital_a_to_b_ms, trace.orbital_b_to_a_ms) == (5.0, 5.5)
+        assert (trace.netem_a_to_b_ms, trace.netem_b_to_a_ms) == (4.0, 4.5)
 
     def test_link_up_requires_provenance(self):
         ctx = SessionContext.__new__(SessionContext)
@@ -1091,7 +1108,8 @@ class TestLinkDecisionTraceState:
                         "carrier": "UP",
                         "routing": "UNKNOWN",
                         "range_km": 900.0,
-                        "latency_ms": 3.0,
+                        "latency_a_to_b_ms": 3.0,
+                        "latency_b_to_a_ms": 3.25,
                         "link_type": "isl",
                         "sim_time": "2025-01-01T00:00:00+00:00",
                     }
@@ -1105,10 +1123,11 @@ class TestLinkDecisionTraceState:
         assert trace.authority_source == "link_state_snapshot"
         assert trace.authority_sequence == 12
         assert trace.range_km == 900.0
-        assert trace.orbital_one_way_ms == 3.0
-        assert trace.netem_one_way_ms is None
+        assert (trace.orbital_a_to_b_ms, trace.orbital_b_to_a_ms) == (3.0, 3.25)
+        assert (trace.netem_a_to_b_ms, trace.netem_b_to_a_ms) == (None, None)
         # The range is stamped with the snapshot's sim time.
         link = ctx.links[_link_key("sat-P00S00", "sat-P00S01")]
+        assert (link.latency_a_to_b_ms, link.latency_b_to_a_ms) == (3.0, 3.25)
         assert link.range_km == 900.0
         assert link.range_sim_time == datetime(2025, 1, 1, tzinfo=UTC)
 
@@ -1134,15 +1153,18 @@ class TestLinkDecisionTraceState:
                 "wall_time": datetime.now(UTC).isoformat(),
                 "node_a": "sat-P00S00",
                 "node_b": "sat-P00S01",
-                "latency_ms": 6.0,
+                "latency_a_to_b_ms": 6.0,
+                "latency_b_to_a_ms": 6.25,
                 "range_km": 1800.0,
                 "provenance": _make_provenance(
                     authority_source="link_state_snapshot",
                     authority_sequence=99,
                     authority_sim_time="2026-01-01T00:00:05+00:00",
                     range_km=1800.0,
-                    orbital_one_way_ms=6.0,
-                    netem_one_way_ms=6.0,
+                    orbital_a_to_b_ms=6.0,
+                    orbital_b_to_a_ms=6.25,
+                    netem_a_to_b_ms=6.0,
+                    netem_b_to_a_ms=6.25,
                 ),
             }
         ).encode()
@@ -1150,11 +1172,93 @@ class TestLinkDecisionTraceState:
         asyncio.run(ctx._on_latency_update(latency))
 
         # Value and instant change together.
-        assert ctx.links[key].latency_ms == 6.0
+        assert (ctx.links[key].latency_a_to_b_ms, ctx.links[key].latency_b_to_a_ms) == (6.0, 6.25)
         assert ctx.links[key].range_km == 1800.0
         assert ctx.links[key].range_sim_time == datetime(2026, 1, 1, 0, 0, 5, tzinfo=UTC)
         assert ctx.link_decision_traces[key].authority_sequence == 99
         assert ctx.link_decision_traces[key].range_km == 1800.0
+
+    @pytest.mark.parametrize(
+        "update_order",
+        [("sat-P00S00", "sat-P00S01"), ("sat-P00S01", "sat-P00S00")],
+        ids=["links-order", "reverse-order"],
+    )
+    def test_latency_update_delays_are_stored_under_their_transmitting_end(self, update_order):
+        """A LatencyUpdate may name the link's ends in either order. Whichever it uses, the link
+        and its trace keep their own order and store each delay under the end that transmits
+        it: a_to_b is node_a's delay, b_to_a is node_b's."""
+        ctx = SessionContext.__new__(SessionContext)
+        ctx._init_state_only()
+        ctx._interface_rates = _ISL_RATES
+
+        import asyncio
+
+        up = _Message()
+        up.data = json.dumps(
+            _make_link_up_event(
+                latency_a_to_b_ms=5.0,
+                latency_b_to_a_ms=5.5,
+                provenance=_make_provenance(
+                    orbital_a_to_b_ms=5.0,
+                    orbital_b_to_a_ms=5.5,
+                    substrate_rtt_ms=2.0,
+                    substrate_one_way_ms=1.0,
+                    netem_a_to_b_ms=4.0,
+                    netem_b_to_a_ms=4.5,
+                ),
+            )
+        ).encode()
+        asyncio.run(ctx._on_link_up(up))
+        key = _link_key("sat-P00S00", "sat-P00S01")
+
+        # Each end's own delays, all different, keyed by the end that transmits.
+        orbital = {"sat-P00S00": 7.0, "sat-P00S01": 7.5}
+        netem = {"sat-P00S00": 6.0, "sat-P00S01": 6.5}
+        first, second = update_order
+        latency = _Message()
+        latency.data = json.dumps(
+            {
+                "sim_time": datetime.now(UTC).isoformat(),
+                "wall_time": datetime.now(UTC).isoformat(),
+                "node_a": first,
+                "node_b": second,
+                "latency_a_to_b_ms": orbital[first],
+                "latency_b_to_a_ms": orbital[second],
+                "range_km": 2100.0,
+                "provenance": _make_provenance(
+                    authority_source="link_state_snapshot",
+                    authority_sequence=100,
+                    authority_sim_time="2026-01-01T00:00:10+00:00",
+                    range_km=2100.0,
+                    orbital_a_to_b_ms=orbital[first],
+                    orbital_b_to_a_ms=orbital[second],
+                    substrate_rtt_ms=2.0,
+                    substrate_one_way_ms=1.0,
+                    netem_a_to_b_ms=netem[first],
+                    netem_b_to_a_ms=netem[second],
+                ),
+            }
+        ).encode()
+        asyncio.run(ctx._on_latency_update(latency))
+
+        link = ctx.links[key]
+        assert (link.node_a, link.node_b) == ("sat-P00S00", "sat-P00S01")
+        assert (link.latency_a_to_b_ms, link.latency_b_to_a_ms) == (
+            orbital[link.node_a],
+            orbital[link.node_b],
+        )
+        assert link.range_km == 2100.0
+        trace = ctx.link_decision_traces[key]
+        assert (trace.node_a, trace.node_b) == (link.node_a, link.node_b)
+        assert (trace.orbital_a_to_b_ms, trace.orbital_b_to_a_ms) == (
+            orbital[trace.node_a],
+            orbital[trace.node_b],
+        )
+        assert (trace.netem_a_to_b_ms, trace.netem_b_to_a_ms) == (
+            netem[trace.node_a],
+            netem[trace.node_b],
+        )
+        assert trace.authority_sequence == 100
 
 
 class TestSubscriberResilience:
@@ -1222,7 +1326,8 @@ class TestSubscriberResilience:
                         "carrier": "UP",
                         "routing": "UNKNOWN",
                         "range_km": 900.0,
-                        "latency_ms": 3.0,
+                        "latency_a_to_b_ms": 3.0,
+                        "latency_b_to_a_ms": 3.0,
                         "link_type": "isl",
                         "scheduling_state": "teardown",
                         "teardown_remaining_ticks": 7,
@@ -1276,7 +1381,8 @@ class TestSubscriberResilience:
                         "carrier": "UP",
                         "routing": "UNKNOWN",
                         "range_km": 900.0,
-                        "latency_ms": 3.0,
+                        "latency_a_to_b_ms": 3.0,
+                        "latency_b_to_a_ms": 3.0,
                         "link_type": "isl",
                         "scheduling_state": "teardown",
                         "teardown_remaining_ticks": 7,
@@ -1302,7 +1408,8 @@ class TestSubscriberResilience:
             state="active",
             link_type="isl",
             link_reason="vis_gained",
-            latency_ms=5.0,
+            latency_a_to_b_ms=5.0,
+            latency_b_to_a_ms=5.0,
             transmit_mbps_a=1000.0,
             receive_mbps_a=1000.0,
             transmit_mbps_b=1000.0,
@@ -1332,7 +1439,8 @@ class TestSubscriberResilience:
                         "admin": "UP",
                         "carrier": "UP",
                         "routing": "UNKNOWN",
-                        "latency_ms": 3.0,
+                        "latency_a_to_b_ms": 3.0,
+                        "latency_b_to_a_ms": 3.0,
                         "link_type": "isl",
                         "sim_time": "2025-01-01T00:00:00+00:00",
                     }
@@ -1452,6 +1560,8 @@ def _decision_snapshot_payload() -> dict:
                 "reference_body": "earth",
                 "visible": True,
                 "range_km": 900.0,
+                "latency_a_to_b_ms": 3.0,
+                "latency_b_to_a_ms": 3.0,
                 "elevation_deg": 70.0,
                 "azimuth_deg": 180.0,
                 "observer_frame": "body_local",
@@ -1476,6 +1586,8 @@ def _decision_snapshot_payload() -> dict:
                 "reference_body": "earth",
                 "visible": True,
                 "range_km": 1100.0,
+                "latency_a_to_b_ms": 3.7,
+                "latency_b_to_a_ms": 3.7,
                 "elevation_deg": 30.0,
                 "azimuth_deg": 90.0,
                 "observer_frame": "body_local",
@@ -1500,6 +1612,8 @@ def _decision_snapshot_payload() -> dict:
                 "reference_body": "earth",
                 "visible": False,
                 "range_km": 5000.0,
+                "latency_a_to_b_ms": 16.7,
+                "latency_b_to_a_ms": 16.7,
                 "elevation_deg": -10.0,
                 "azimuth_deg": None,
                 "observer_frame": "body_local",

@@ -37,10 +37,14 @@ class LinkDecisionProvenance(BaseModel):
     authority_sequence: int | None
     authority_age_ms: float
     range_km: float
-    orbital_one_way_ms: float
+    # OME's one-way light time each direction (node_a to node_b, node_b to node_a), the
+    # substrate's measured one-way share, and the delay each direction's egress commands.
+    orbital_a_to_b_ms: float
+    orbital_b_to_a_ms: float
     substrate_rtt_ms: float
     substrate_one_way_ms: float
-    netem_one_way_ms: float
+    netem_a_to_b_ms: float
+    netem_b_to_a_ms: float
     rtt_to_one_way_policy: str
 
 
@@ -55,7 +59,8 @@ class LinkUp(BaseModel):
     node_b: str
     interface_a: str
     interface_b: str
-    latency_ms: float
+    latency_a_to_b_ms: float
+    latency_b_to_a_ms: float
     range_km: float
     reason: str  # vis_gained, gs_above_horizon, scenario_inject_up, scenario_reconciliation
     link_type: Literal["isl", "ground"]
@@ -86,6 +91,7 @@ class LatencyUpdate(BaseModel):
     wall_time: datetime
     node_a: str
     node_b: str
-    latency_ms: float
+    latency_a_to_b_ms: float
+    latency_b_to_a_ms: float
     range_km: float
     provenance: LinkDecisionProvenance | None = None

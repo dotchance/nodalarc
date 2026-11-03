@@ -60,6 +60,9 @@ def _decision_kwargs_wire() -> dict:
         "reference_body": "earth",
         "visible": True,
         "range_km": 1234.5,
+        # Unequal, so a conversion that swaps or drops a direction shows.
+        "latency_a_to_b_ms": 4.1178,
+        "latency_b_to_a_ms": 4.1182,
         "elevation_deg": 42.0,
         "azimuth_deg": 180.0,
         "sat_off_nadir_deg": 0.0,
@@ -114,6 +117,8 @@ class TestGroundVisibilityDecisionHotPath:
             "reference_body",
             "visible",
             "range_km",
+            "latency_a_to_b_ms",
+            "latency_b_to_a_ms",
             "elevation_deg",
             "observer_frame",
             "reject_reason",

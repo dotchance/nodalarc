@@ -386,7 +386,8 @@ def ground_directions(
     outside_envelope = (table.regard_mode == 1) & ~(
         (min_az <= azimuth) & (azimuth <= max_az) & (min_el <= elevation) & (elevation <= max_el)
     )
-    target = local / np.linalg.norm(local, axis=1, keepdims=True)
+    length = np.linalg.norm(local, axis=1, keepdims=True)
+    target = np.divide(local, length, out=np.zeros_like(local), where=length > 0.0)
     cone_cosine = np.clip(np.einsum("ni,ni->n", table.cone[:, :3], target), -1.0, 1.0)
     outside_cone = (table.regard_mode == 2) & (
         np.degrees(np.arccos(cone_cosine)) > table.cone[:, 3]

@@ -258,10 +258,19 @@ def _cross(a: np.ndarray, b: np.ndarray) -> np.ndarray:
     )
 
 
+def _unit_rows(vectors: np.ndarray) -> np.ndarray:
+    """Each row scaled to unit length. Two ends at one position (two identical constellations,
+    or overlapping segments in a Builder draft) have no direction between them: their row stays
+    zero, and every direction limit reads it as satisfied, as OME's checks always have."""
+    length = np.linalg.norm(vectors, axis=1, keepdims=True)
+    return np.divide(vectors, length, out=np.zeros_like(vectors), where=length > 0.0)
+
+
 def _aberrated(direction_km: np.ndarray, velocity_km_s: np.ndarray) -> np.ndarray:
     """Unit apparent directions: each direction turned toward the observer's barycentric velocity
-    by phi, sin(phi) = |u x v / c| (SPICE stelab; pass the negated velocity for stlabx)."""
-    unit = direction_km / np.linalg.norm(direction_km, axis=1, keepdims=True)
+    by phi, sin(phi) = |u x v / c| (SPICE stelab; pass the negated velocity for stlabx). A zero
+    direction stays zero."""
+    unit = _unit_rows(direction_km)
     h = _cross(unit, velocity_km_s / SPEED_OF_LIGHT_KM_S)
     sine = np.linalg.norm(h, axis=1, keepdims=True)
     if np.any(sine >= 1.0):
@@ -342,8 +351,9 @@ def _signal_end(
     same_body = body_ids == other_body_ids
     relative_velocity[same_body] -= _cross(spin[same_body], sight[same_body])
     distance = np.linalg.norm(sight, axis=1)
-    along = np.einsum("ni,ni->n", relative_velocity, sight) / distance
-    across = relative_velocity - (along / distance)[:, None] * sight
+    toward = _unit_rows(sight)
+    along = np.einsum("ni,ni->n", relative_velocity, toward)
+    across = relative_velocity - along[:, None] * toward
     return SignalEnd(
         body_ids=body_ids,
         epoch_tdb=epochs,
@@ -351,7 +361,12 @@ def _signal_end(
         fixed_km=np.einsum("nij,nj->ni", rotations, this.relative_km),
         pointing=pointing,
         pointing_fixed=np.einsum("nij,nj->ni", rotations, pointing),
-        rate_rad_s=np.linalg.norm(across, axis=1) / distance,
+        rate_rad_s=np.divide(
+            np.linalg.norm(across, axis=1),
+            distance,
+            out=np.zeros_like(distance),
+            where=distance > 0.0,
+        ),
     )
 
 

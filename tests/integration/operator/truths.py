@@ -43,9 +43,10 @@ from .harness.workloads import (
     send_a_bundle,
 )
 
+# The light-time acceptance: each direction within 1 microsecond.
+LIGHT_TIME_ALLOWANCE_MS = 1e-3
 # A reply is late by the time FRR and the kernel spend on it, and the delay NodalArc applies
 # follows the moving range in steps. The fastest of several replies is compared, with this margin.
-LIGHT_KM_PER_MS = 299.792458
 RANGE_ALLOWANCE_KM = 0.05
 SPEED_ALLOWANCE_KM_S = 0.05
 PROCESSING_ALLOWANCE_MS = 0.5
@@ -116,7 +117,8 @@ def links_shown_are_the_routers_neighbors(operator: Operator, shown: ShownNetwor
 def latency_shown_is_the_delay_packets_get(operator: Operator, shown: ShownNetwork) -> list[str]:
     """A ground router pings the satellite it is shown linked to; the round trip is twice the latency.
 
-    The latency shown moves with the range, so it is read just before and just after each ping,
+    The round trip is the latency out plus the latency back; each direction has its own light
+    time. The latency shown moves with the range, so it is read just before and just after each ping,
     and the fastest reply has to fall between the two readings. A reply can be late because the
     routers are busy (a session that just started); a delay that is wrong stays wrong. A late
     result is measured once more over three times as many replies before it counts.
@@ -127,7 +129,9 @@ def latency_shown_is_the_delay_packets_get(operator: Operator, shown: ShownNetwo
 
     def latency_now(key: tuple[str, str]) -> float | None:
         now = {link_key(link): link for link in operator.state()["links"]}.get(key)
-        return now["latency_ms"] if now is not None and now["state"] == "active" else None
+        if now is None or now["state"] != "active":
+            return None
+        return now["latency_a_to_b_ms"] + now["latency_b_to_a_ms"]
 
     measured = 0
     disagreements = []
@@ -144,7 +148,7 @@ def latency_shown_is_the_delay_packets_get(operator: Operator, shown: ShownNetwo
                 after = latency_now(key)
                 if before is None or after is None:
                     return None
-                return replies, 2 * min(before, after), 2 * max(before, after)
+                return replies, min(before, after), max(before, after)
 
             result = ping(5.0)
             if result is not None and result[0]:
@@ -181,9 +185,8 @@ def latency_shown_is_the_delay_packets_get(operator: Operator, shown: ShownNetwo
     return disagreements
 
 
-def latency_shown_is_the_light_time_between_the_positions_shown(shown: ShownNetwork) -> list[str]:
-    """Each link's latency is its range at light speed, and its range is the distance between its
-    ends at the sim time the range describes.
+def range_shown_is_the_distance_between_the_positions_shown(shown: ShownNetwork) -> list[str]:
+    """Each link's range is the distance between its ends at the sim time the range describes.
 
     A link states that time as range_sim_time. The ends' positions at that time come from a
     captured snapshot of exactly that sim time when the feed showed one (same-body pairs), and
@@ -203,11 +206,6 @@ def latency_shown_is_the_light_time_between_the_positions_shown(shown: ShownNetw
         nodes = {node["node_id"]: node for node in snapshot["nodes"]}
         for link in snapshot["links"]:
             key = link_key(link)
-            if abs(link["latency_ms"] - link["range_km"] / LIGHT_KM_PER_MS) > 1e-6:
-                disagreements.append(
-                    f"{key}: latency {link['latency_ms']} ms is not the light time of {link['range_km']} km"
-                )
-                continue
             stamp = link.get("range_sim_time")
             if stamp is None:
                 disagreements.append(
@@ -248,6 +246,58 @@ def latency_shown_is_the_light_time_between_the_positions_shown(shown: ShownNetw
     )
     if captured + evaluated == 0:
         disagreements.append("geometry: the feed showed no range to compare")
+    return disagreements
+
+
+def latency_shown_is_the_light_time_of_each_direction(shown: ShownNetwork) -> list[str]:
+    """Each direction's latency is the light time of a signal its sending end transmits at the
+    sim time the link states (range_sim_time): the receiving end's position at arrival, both
+    from the session's ephemeris and the shown ground positions, iterated in the barycentric
+    frame. Allowance: 1 microsecond (the light-time acceptance). A link with no stated time, or
+    ends with no reference position, is a disagreement.
+    """
+    reference = None
+    disagreements = []
+    compared = 0
+    seen = set()
+    for snapshot in shown.snapshots:
+        nodes = {node["node_id"]: node for node in snapshot["nodes"]}
+        for link in snapshot["links"]:
+            stamp = link.get("range_sim_time")
+            if stamp is None:
+                disagreements.append(
+                    f"{link['node_a']}<->{link['node_b']}: the latency states no sim time"
+                )
+                continue
+            t = datetime.fromisoformat(stamp).timestamp()
+            ends = (link["node_a"], link["node_b"])
+            shown_ms = (link["latency_a_to_b_ms"], link["latency_b_to_a_ms"])
+            if (ends, shown_ms, round(t, 3)) in seen:
+                continue
+            seen.add((ends, shown_ms, round(t, 3)))
+            try:
+                if reference is None:
+                    reference = ReferencePositions(shown)
+                a, b = nodes.get(ends[0]), nodes.get(ends[1])
+                if a is None or b is None:
+                    raise LookupError(f"the snapshot does not show {ends}")
+                expected = (reference.light_time_ms(a, b, t), reference.light_time_ms(b, a, t))
+            except LookupError as exc:
+                disagreements.append(f"{ends} at {stamp}: no reference light time ({exc})")
+                continue
+            compared += 1
+            for sender, receiver, got, want in (
+                (ends[0], ends[1], shown_ms[0], expected[0]),
+                (ends[1], ends[0], shown_ms[1], expected[1]),
+            ):
+                if abs(got - want) > LIGHT_TIME_ALLOWANCE_MS:
+                    disagreements.append(
+                        f"{sender} -> {receiver} at {stamp}: latency shown {got:.6f} ms; a signal "
+                        f"sent then takes {want:.6f} ms"
+                    )
+    print(f"light time: {compared} links compared in both directions at the sim time they state")
+    if compared == 0:
+        disagreements.append("light time: the feed showed no link to compare")
     return disagreements
 
 
@@ -310,20 +360,20 @@ def quic_clients_download_from_their_servers(
             )
             continue
         server = servers[client.server_address]
-        before = watch(operator, 4.0).least_latency_ms(client.node_id, server)
+        before = watch(operator, 4.0).least_round_trip_ms(client.node_id, server)
         with operator.terminal(client.node_id) as terminal:
             status, printed = run_in_shell(
                 terminal,
                 f"cd /tmp && picoquicdemo -D -n server {client.server_address} 4433 /1000000",
                 timeout=600.0,
             )
-        after = watch(operator, 4.0).least_latency_ms(client.node_id, server)
+        after = watch(operator, 4.0).least_round_trip_ms(client.node_id, server)
         received = re.search(r"Received (\d+) bytes in ([0-9.]+) seconds", printed)
         downloaded = status == 0 and received and "Stream 0 ended after 1000000 bytes" in printed
         print(
             f"quic: {client.node_id} -> {server}: "
             f"{received.group(0) if downloaded else 'no file arrived'}; "
-            f"least latency shown {before} ms before, {after} ms after"
+            f"least round trip shown {before} ms before, {after} ms after"
         )
         if before is None and after is None:
             if downloaded:
@@ -339,7 +389,7 @@ def quic_clients_download_from_their_servers(
                 f"not complete: {printed[-600:]}"
             )
         elif float(received.group(2)) < (
-            least_s := 2 * min(before, after) / 1000 * (1 - MOVING_RANGE_ALLOWANCE)
+            least_s := min(before, after) / 1000 * (1 - MOVING_RANGE_ALLOWANCE)
         ):
             disagreements.append(
                 f"{client.node_id}: the download took {received.group(2)} s; the shortest path "
@@ -406,7 +456,7 @@ def far_sites_answer_no_sooner_than_light(operator: Operator, shown: ShownNetwor
 
     One pair per routing domain: the first ground router pings a site address of the last one.
     While NodalArc shows a path between them the ping is answered, and the round trip is at least
-    twice the least latency of any path shown.
+    the least latency of any path out plus that of any path back.
     """
     by_domain: dict[tuple[str, str], list[str]] = {}
     for ground, _, link in shown.routed_ground_links():
@@ -423,14 +473,14 @@ def far_sites_answer_no_sooner_than_light(operator: Operator, shown: ShownNetwor
         ]
         if source == destination or not targets:
             continue
-        before = watch(operator, 4.0).least_latency_ms(source, destination)
+        before = watch(operator, 4.0).least_round_trip_ms(source, destination)
         with operator.terminal(source) as terminal:
             replies = ping_reply_times_ms(terminal.run(f"ping {targets[0]}", interrupt_after=5.0))
-        after = watch(operator, 4.0).least_latency_ms(source, destination)
+        after = watch(operator, 4.0).least_round_trip_ms(source, destination)
         print(
             f"far: {domain}: {source} -> {destination} ({targets[0]}): "
             f"round trips {[round(reply, 1) for reply in replies]} ms; "
-            f"least latency shown {before} ms before, {after} ms after"
+            f"least round trip shown {before} ms before, {after} ms after"
         )
         if before is None or after is None:
             continue  # no path shown at one end of the ping: a missing reply is not judged
@@ -439,7 +489,7 @@ def far_sites_answer_no_sooner_than_light(operator: Operator, shown: ShownNetwor
                 f"{source} -> {destination}: NodalArc shows a path and ping gets no reply"
             )
             continue
-        least = 2 * min(before, after) * (1 - MOVING_RANGE_ALLOWANCE)
+        least = min(before, after) * (1 - MOVING_RANGE_ALLOWANCE)
         if min(replies) < least:
             disagreements.append(
                 f"{source} -> {destination}: a reply came back in {min(replies):.3f} ms; the "
@@ -530,7 +580,8 @@ def assert_session_is_truthful(operator: Operator) -> None:
     disagreements = [
         *clock_runs_at_the_reported_speed(operator),
         *satellites_move_at_the_speed_their_orbits_require(shown),
-        *latency_shown_is_the_light_time_between_the_positions_shown(shown),
+        *range_shown_is_the_distance_between_the_positions_shown(shown),
+        *latency_shown_is_the_light_time_of_each_direction(shown),
         *links_shown_are_the_routers_neighbors(operator, shown),
         *latency_shown_is_the_delay_packets_get(operator, shown),
         *far_sites_answer_no_sooner_than_light(operator, shown),

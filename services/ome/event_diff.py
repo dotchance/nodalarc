@@ -15,7 +15,6 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import cast
 
-from nodalarc.geo import compute_latency_ms
 from nodalarc.models.events import (
     UnscheduledReason,
     VisibilityEvent,
@@ -103,7 +102,8 @@ def diff_isl_visibility_events(
                 visible=visible,
                 scheduled=scheduled,
                 range_km=result.range_km,
-                latency_ms=result.orbital_one_way_ms,
+                latency_a_to_b_ms=result.one_way_a_to_b_ms,
+                latency_b_to_a_ms=result.one_way_b_to_a_ms,
                 elevation_deg=None,
                 terminal_type=result.terminal_type,
                 link_type="isl",
@@ -181,7 +181,8 @@ def diff_ground_visibility_events(
                 visible=decision.visible,
                 scheduled=scheduled,
                 range_km=decision.range_km,
-                latency_ms=compute_latency_ms(decision.range_km),
+                latency_a_to_b_ms=decision.latency_a_to_b_ms,
+                latency_b_to_a_ms=decision.latency_b_to_a_ms,
                 elevation_deg=decision.elevation_deg,
                 terminal_type=terminal_types[pair],
                 link_type="ground",

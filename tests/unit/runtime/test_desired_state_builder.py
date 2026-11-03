@@ -19,18 +19,38 @@ SIM = datetime(2026, 1, 1, tzinfo=UTC)
 PAIR = ("sat-a", "sat-b")
 
 
+def _geometry(range_km, a_to_b, b_to_a):
+    return require_ome_geometry(
+        PAIR,
+        range_km=range_km,
+        latency_a_to_b_ms=a_to_b,
+        latency_b_to_a_ms=b_to_a,
+        source="event",
+    )
+
+
 def test_require_ome_geometry_rejects_missing_or_negative_values():
     with pytest.raises(ValueError, match="range_km"):
-        require_ome_geometry(PAIR, range_km=None, latency_ms=1.0, source="event")
+        _geometry(None, 1.0, 1.0)
 
-    with pytest.raises(ValueError, match="latency_ms"):
-        require_ome_geometry(PAIR, range_km=1.0, latency_ms=None, source="event")
+    with pytest.raises(ValueError, match="latency_a_to_b_ms"):
+        _geometry(1.0, None, 1.0)
+
+    with pytest.raises(ValueError, match="latency_b_to_a_ms"):
+        _geometry(1.0, 1.0, None)
 
     with pytest.raises(ValueError, match="negative range_km"):
-        require_ome_geometry(PAIR, range_km=-1.0, latency_ms=1.0, source="event")
+        _geometry(-1.0, 1.0, 1.0)
 
-    with pytest.raises(ValueError, match="negative latency_ms"):
-        require_ome_geometry(PAIR, range_km=1.0, latency_ms=-1.0, source="event")
+    with pytest.raises(ValueError, match="negative latency"):
+        _geometry(1.0, -1.0, 1.0)
+
+    with pytest.raises(ValueError, match="negative latency"):
+        _geometry(1.0, 1.0, -1.0)
+
+
+def test_require_ome_geometry_returns_range_and_each_direction():
+    assert _geometry(2222.25, 7.412, 7.415) == (2222.25, 7.412, 7.415)
 
 
 def test_visibility_event_builds_desired_link_without_recomputing_geometry():
@@ -41,7 +61,8 @@ def test_visibility_event_builds_desired_link_without_recomputing_geometry():
         visible=True,
         scheduled=True,
         range_km=2222.25,
-        latency_ms=7.412,
+        latency_a_to_b_ms=7.412,
+        latency_b_to_a_ms=7.415,
         elevation_deg=None,
         terminal_type="optical",
         link_type="isl",
@@ -59,7 +80,9 @@ def test_visibility_event_builds_desired_link_without_recomputing_geometry():
     assert info.interface_a == "isl0"
     assert info.interface_b == "isl1"
     assert info.range_km == event.range_km
-    assert info.latency_ms == event.latency_ms
+    assert info.latency_a_to_b_ms == event.latency_a_to_b_ms
+    assert info.latency_b_to_a_ms == event.latency_b_to_a_ms
+    assert info.latencies_ms == (7.412, 7.415)
     assert info.authority_sim_time == SIM
     assert info.authority_source == "visibility_event"
 
@@ -72,7 +95,8 @@ def test_ground_visibility_event_uses_terminal_indices():
         visible=True,
         scheduled=True,
         range_km=1500.0,
-        latency_ms=5.0,
+        latency_a_to_b_ms=5.0,
+        latency_b_to_a_ms=5.0,
         elevation_deg=45.0,
         terminal_type="rf",
         link_type="ground",
@@ -102,7 +126,8 @@ def test_ground_visibility_event_maps_interfaces_by_endpoint_role_for_sat_first_
         visible=True,
         scheduled=True,
         range_km=1800.0,
-        latency_ms=6.0,
+        latency_a_to_b_ms=6.0,
+        latency_b_to_a_ms=6.0,
         elevation_deg=38.0,
         terminal_type="rf",
         link_type="ground",
@@ -132,7 +157,8 @@ def test_ground_visibility_event_requires_exactly_one_ground_endpoint():
         visible=True,
         scheduled=True,
         range_km=1800.0,
-        latency_ms=6.0,
+        latency_a_to_b_ms=6.0,
+        latency_b_to_a_ms=6.0,
         elevation_deg=38.0,
         terminal_type="rf",
         link_type="ground",
@@ -165,7 +191,8 @@ def test_missing_isl_interface_map_fails_loudly():
         visible=True,
         scheduled=True,
         range_km=2222.25,
-        latency_ms=7.412,
+        latency_a_to_b_ms=7.412,
+        latency_b_to_a_ms=7.412,
         elevation_deg=None,
         terminal_type="optical",
         link_type="isl",
@@ -191,7 +218,8 @@ def test_snapshot_link_builds_desired_link_and_skips_down_links():
         carrier=CarrierState.DOWN,
         routing=RoutingState.UNKNOWN,
         range_km=None,
-        latency_ms=None,
+        latency_a_to_b_ms=None,
+        latency_b_to_a_ms=None,
         link_type="isl",
         sim_time=SIM,
     )
@@ -211,7 +239,8 @@ def test_snapshot_link_builds_desired_link_and_skips_down_links():
             "admin": AdminState.UP,
             "carrier": CarrierState.UP,
             "range_km": 3333.0,
-            "latency_ms": 11.118,
+            "latency_a_to_b_ms": 11.118,
+            "latency_b_to_a_ms": 11.121,
         }
     )
     pair, info = desired_link_from_snapshot_link(
@@ -223,7 +252,7 @@ def test_snapshot_link_builds_desired_link_and_skips_down_links():
     )
     assert pair == PAIR
     assert info.range_km == 3333.0
-    assert info.latency_ms == 11.118
+    assert info.latencies_ms == (11.118, 11.121)
     assert info.authority_sim_time == SIM
     assert info.authority_source == "link_state_snapshot"
     assert info.authority_sequence == 42
@@ -240,7 +269,8 @@ def test_snapshot_ground_link_maps_interfaces_by_endpoint_role_for_sat_first_pai
         carrier=CarrierState.UP,
         routing=RoutingState.UNKNOWN,
         range_km=1800.0,
-        latency_ms=6.0,
+        latency_a_to_b_ms=6.0,
+        latency_b_to_a_ms=6.0,
         link_type="ground",
         sim_time=SIM,
         gs_terminal_index=0,
@@ -271,7 +301,8 @@ def test_snapshot_link_sim_time_mismatch_fails_loudly():
         carrier=CarrierState.UP,
         routing=RoutingState.UNKNOWN,
         range_km=3333.0,
-        latency_ms=11.118,
+        latency_a_to_b_ms=11.118,
+        latency_b_to_a_ms=11.118,
         link_type="isl",
         sim_time=SIM - timedelta(seconds=1),
     )

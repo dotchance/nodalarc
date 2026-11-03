@@ -172,7 +172,10 @@ class VisibilityEvent(BaseModel):
     visible: bool
     scheduled: bool
     range_km: float
-    latency_ms: float | None = None  # authoritative OME one-way propagation delay
+    # Authoritative OME one-way light time of a signal sent at sim_time, each direction:
+    # node_a to node_b and node_b to node_a.
+    latency_a_to_b_ms: float | None = None
+    latency_b_to_a_ms: float | None = None
     elevation_deg: float | None  # None for ISLs, float for ground links
     terminal_type: str  # "optical" or "rf"
     link_type: Literal["isl", "ground"]  # set by OME from node type registry
@@ -190,6 +193,11 @@ class VisibilityEvent(BaseModel):
         if a > b:
             values["node_a"] = b
             values["node_b"] = a
+            # Each delay belongs to its transmitting end, so it follows the swap.
+            values["latency_a_to_b_ms"], values["latency_b_to_a_ms"] = (
+                values.get("latency_b_to_a_ms"),
+                values.get("latency_a_to_b_ms"),
+            )
         return values
 
     @model_validator(mode="after")

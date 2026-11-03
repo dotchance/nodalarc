@@ -283,6 +283,12 @@ class GroundVisibilityDecisionWire(BaseModel):
     reference_body: SupportedSurfaceBody
     visible: bool
     range_km: float
+    latency_a_to_b_ms: float = Field(
+        description="One-way light time of a signal pair[0] sends to pair[1] at the decision's tick."
+    )
+    latency_b_to_a_ms: float = Field(
+        description="One-way light time of a signal pair[1] sends to pair[0] at the decision's tick."
+    )
     elevation_deg: float
     azimuth_deg: float | None
     sat_off_nadir_deg: float | None = Field(

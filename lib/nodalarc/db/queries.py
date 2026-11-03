@@ -46,8 +46,9 @@ def recorded_session_id(conn: sqlite3.Connection, schema: str = "main") -> str:
 def insert_link_up(conn: sqlite3.Connection, event: LinkUp, *, session_id: str) -> int:
     cur = conn.execute(
         """INSERT INTO link_events (session_id, sim_time, wall_time, event_type, node_a,
-           node_b, interface_a, interface_b, latency_ms, range_km, reason)
-           VALUES (?, ?, ?, 'LinkUp', ?, ?, ?, ?, ?, ?, ?)""",
+           node_b, interface_a, interface_b, latency_a_to_b_ms, latency_b_to_a_ms, range_km,
+           reason)
+           VALUES (?, ?, ?, 'LinkUp', ?, ?, ?, ?, ?, ?, ?, ?)""",
         (
             session_id,
             history_time(event.sim_time),
@@ -56,7 +57,8 @@ def insert_link_up(conn: sqlite3.Connection, event: LinkUp, *, session_id: str) 
             event.node_b,
             event.interface_a,
             event.interface_b,
-            event.latency_ms,
+            event.latency_a_to_b_ms,
+            event.latency_b_to_a_ms,
             event.range_km,
             event.reason,
         ),
@@ -90,15 +92,16 @@ def insert_latency_update(
 ) -> int:
     cur = conn.execute(
         """INSERT INTO link_events (session_id, sim_time, wall_time, event_type, node_a,
-           node_b, interface_a, interface_b, latency_ms, range_km)
-           VALUES (?, ?, ?, 'LatencyUpdate', ?, ?, NULL, NULL, ?, ?)""",
+           node_b, interface_a, interface_b, latency_a_to_b_ms, latency_b_to_a_ms, range_km)
+           VALUES (?, ?, ?, 'LatencyUpdate', ?, ?, NULL, NULL, ?, ?, ?)""",
         (
             session_id,
             history_time(event.sim_time),
             history_time(event.wall_time),
             event.node_a,
             event.node_b,
-            event.latency_ms,
+            event.latency_a_to_b_ms,
+            event.latency_b_to_a_ms,
             event.range_km,
         ),
     )

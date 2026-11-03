@@ -45,6 +45,45 @@ class TestVisibilityEvent:
         assert evt.node_a == "sat-P00S00"
         assert evt.node_b == "sat-P01S00"
 
+    @pytest.mark.parametrize(
+        ("link_type", "given_order"),
+        [
+            ("isl", ("sat-P00S00", "sat-P01S00")),
+            ("isl", ("sat-P01S00", "sat-P00S00")),
+            ("ground", ("gs-den", "sat-P00S00")),
+            ("ground", ("sat-P00S00", "gs-den")),
+        ],
+        ids=["isl-sorted", "isl-reversed", "ground-sorted", "ground-reversed"],
+    )
+    def test_each_delay_stays_with_its_transmitting_end(self, link_type, given_order):
+        """However the producer orders the nodes, the event's a_to_b is the delay of the signal
+        its node_a sends and b_to_a the one its node_b sends, and a JSON round trip keeps
+        them there."""
+        first, second = given_order
+        sent_by = {first: 7.4121, second: 7.4127}
+        evt = VisibilityEvent(
+            sim_time=NOW,
+            node_a=first,
+            node_b=second,
+            link_type=link_type,
+            visible=True,
+            scheduled=True,
+            range_km=2222.0,
+            latency_a_to_b_ms=sent_by[first],
+            latency_b_to_a_ms=sent_by[second],
+            elevation_deg=40.0 if link_type == "ground" else None,
+            gs_terminal_index=0 if link_type == "ground" else None,
+            sat_terminal_index=0 if link_type == "ground" else None,
+            terminal_type="rf" if link_type == "ground" else "optical",
+            visibility_reject_reason="ok",
+            unscheduled_reason=None,
+        )
+
+        assert evt.node_a < evt.node_b
+        for stored in (evt, VisibilityEvent.model_validate_json(evt.model_dump_json())):
+            assert stored.latency_a_to_b_ms == sent_by[stored.node_a]
+            assert stored.latency_b_to_a_ms == sent_by[stored.node_b]
+
     def test_visibility_reject_reason_required(self):
         """No default. Producer MUST declare physical state."""
         from pydantic import ValidationError

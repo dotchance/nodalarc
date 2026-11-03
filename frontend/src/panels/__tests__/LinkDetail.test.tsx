@@ -15,7 +15,8 @@ function link(overrides: Partial<LinkState> = {}): LinkState {
     link_reason: "link_state_snapshot",
     teardown_remaining_ticks: null,
     successor_pair: null,
-    latency_ms: 42,
+    latency_a_to_b_ms: 42,
+    latency_b_to_a_ms: 42,
     transmit_mbps_a: 1000,
     receive_mbps_a: 1000,
     transmit_mbps_b: 1000,
@@ -107,15 +108,34 @@ describe("LinkDetail", () => {
   it("states the sim time its range and latency describe", () => {
     render(
       <LinkDetail
-        link={link({ range_km: 2157.849, latency_ms: 7.198, range_sim_time: "2026-06-08T00:04:15Z" })}
+        link={link({
+          range_km: 2157.849,
+          latency_a_to_b_ms: 7.198,
+          latency_b_to_a_ms: 7.198,
+          range_sim_time: "2026-06-08T00:04:15Z",
+        })}
         snapshot={snapshot()}
       />,
     );
 
     expect(screen.getByText("2158 km")).toBeTruthy();
-    expect(screen.getByText("7.2 ms")).toBeTruthy();
     const asOf = screen.getByText("Range as of").closest(".detail-row");
     expect(asOf?.textContent).toContain("2026-06-08 00:04:15 UTC");
+  });
+
+  it("shows each direction's latency on its own row", () => {
+    // The two directions of a light-second link differ by hundreds of microseconds.
+    const shown = link({ latency_a_to_b_ms: 7.198, latency_b_to_a_ms: 1248.504 });
+    render(<LinkDetail link={shown} snapshot={snapshot()} />);
+
+    const ahead = screen
+      .getByText(`Latency ${shown.node_a} → ${shown.node_b}`)
+      .closest(".detail-row");
+    const back = screen
+      .getByText(`Latency ${shown.node_b} → ${shown.node_a}`)
+      .closest(".detail-row");
+    expect(ahead?.textContent).toContain("7.2 ms");
+    expect(back?.textContent).toContain("1.249 s");
   });
 
   it("highlights nothing in a direction whose two rates are equal", () => {

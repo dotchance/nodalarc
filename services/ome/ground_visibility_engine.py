@@ -599,22 +599,28 @@ def evaluate_ground_visibility(
                 )
             pairs.append((gs_id, sat_id))
 
-    verdicts = geometry.verdicts(pairs, *signals.directions(pairs))
+    uplink, downlink = signals.directions(pairs)
+    verdicts = geometry.verdicts(pairs, uplink, downlink)
 
     visible_candidates_requiring_dwell: set[tuple[str, str]] = set()
     for gs_id in gs_positions:
         visible_per_station[gs_id] = []
-    for (gs_id, sat_id), verdict in zip(pairs, verdicts, strict=True):
+    for row, ((gs_id, sat_id), verdict) in enumerate(zip(pairs, verdicts, strict=True)):
         gs_ecef, _gs_geo = gs_positions[gs_id]
         gs_profile, sat_profile = geometry.profiles(gs_id, sat_id)
         applied = _applied_constraints(gs_profile, sat_profile)
         pair = (min(gs_id, sat_id), max(gs_id, sat_id))
+        # Each direction's one-way light time of a signal sent at this tick, in pair order.
+        up_ms = float(uplink.light_time_s[row]) * 1000.0
+        down_ms = float(downlink.light_time_s[row]) * 1000.0
         decisions[pair] = GroundVisibilityDecision(
             pair=pair,
             tenant_id=gs_tenant_ids[gs_id],
             reference_body=gs_reference_bodies[gs_id],
             visible=verdict.visible,
             range_km=compute_range_km(gs_ecef, sat_states[sat_id].position_ecef_km),
+            latency_a_to_b_ms=up_ms if pair[0] == gs_id else down_ms,
+            latency_b_to_a_ms=down_ms if pair[0] == gs_id else up_ms,
             elevation_deg=verdict.elevation_deg,
             azimuth_deg=verdict.azimuth_deg,
             sat_off_nadir_deg=verdict.sat_off_nadir_deg,

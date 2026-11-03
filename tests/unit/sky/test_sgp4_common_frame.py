@@ -19,7 +19,6 @@ from pathlib import Path
 import numpy as np
 import pytest
 from nodalarc.frames import CommonVec3, EcefVec3, Vec3
-from nodalarc.geo import compute_latency_ms
 from nodalarc.propagator import propagate_sgp4_tle_gcrs
 
 from tests.catalog_session_fixtures import shipped_read_view
@@ -200,18 +199,15 @@ class TestCrossBodyAuthority:
         )
         return states, body_states, inputs
 
-    def test_cross_body_range_latency_and_verdict(self):
-        from nodalarc.models.addressing import NeighborAssignment
+    def _signals_at(self, probe_unix, inputs):
+        """Both directions of the ISS-relay pair, sent at ``probe_unix`` from the endpoints of
+        the same satellites ``_states_at`` propagates."""
         from ome.direction_checks import PairSignals
-        from ome.isl_engine import IslTerminalConstraints, evaluate_isl_feasibility
         from ome.propagation_engine import satellite_endpoints
 
         from tests.ome_runtime_fixtures import StaticOmeAddressing
 
-        probe_unix = ISS_TLE_EPOCH_UNIX + 43200.0
-        states, body_states, inputs = self._states_at(probe_unix)
-        # The pair's signals at the probe, from the endpoints of the same satellites.
-        signals = PairSignals.sent_at(
+        return PairSignals.sent_at(
             inputs.physics,
             inputs.body_frames,
             satellite_endpoints(
@@ -223,6 +219,14 @@ class TestCrossBodyAuthority:
             [("earth-iss-sat-p00s00", "luna-relay-sat-p00s00")],
             probe_unix,
         )
+
+    def test_cross_body_range_latency_and_verdict(self):
+        from nodalarc.models.addressing import NeighborAssignment
+        from ome.isl_engine import IslTerminalConstraints, evaluate_isl_feasibility
+
+        probe_unix = ISS_TLE_EPOCH_UNIX + 43200.0
+        states, body_states, inputs = self._states_at(probe_unix)
+        signals = self._signals_at(probe_unix, inputs)
 
         # Independent truth: boundary GCRS plus ephemeris origins, composed
         # by hand, never through the engine or the ISL machinery.
@@ -274,7 +278,11 @@ class TestCrossBodyAuthority:
         assert result.reject_reason == "ok"
         assert result.link_type == "cross_plane_isl"
         assert abs(result.range_km - expected_range_km) < 1e-3
-        assert abs(result.orbital_one_way_ms - compute_latency_ms(result.range_km)) < 1e-9
+        # Each direction's delay is the light time of the signal that end sends at the probe.
+        iss_sends, relay_sends = signals.in_order()
+        assert result.one_way_a_to_b_ms == float(iss_sends.light_time_s[0]) * 1000.0
+        assert result.one_way_b_to_a_ms == float(relay_sends.light_time_s[0]) * 1000.0
+        assert result.one_way_a_to_b_ms != result.one_way_b_to_a_ms
         # Tracking enforcement was active, not skipped: the applied limit
         # is the terminal's, and squeezing it below the pair's line-of-sight
         # rate (0.0010 deg/s, inertial because the ends orbit different
@@ -304,6 +312,12 @@ class TestCrossBodyAuthority:
         probe_unix = ISS_TLE_EPOCH_UNIX + 43200.0
         states, body_states, inputs = self._states_at(probe_unix)
         pair = ("earth-iss-sat-p00s00", "luna-relay-sat-p00s00")
+        # The tick commits each direction's light time of a signal sent at the probe.
+        iss_sends, relay_sends = self._signals_at(probe_unix, inputs).in_order()
+        committed = (
+            float(iss_sends.light_time_s[0]) * 1000.0,
+            float(relay_sends.light_time_s[0]) * 1000.0,
+        )
 
         source = LinkSnapshotSource(
             isl_state={pair: (True, True)},
@@ -311,6 +325,7 @@ class TestCrossBodyAuthority:
             associations={},
             pending_teardowns={},
             propagated_states=states,
+            latencies_ms={pair: committed},
         )
         snapshot = build_link_state_snapshot(
             source,
@@ -324,7 +339,7 @@ class TestCrossBodyAuthority:
             states[pair[0]].position_common_km, states[pair[1]].position_common_km
         )
         assert abs(link.range_km - expected_range) < 1e-3
-        assert abs(link.latency_ms - compute_latency_ms(expected_range)) < 1e-3
+        assert (link.latency_a_to_b_ms, link.latency_b_to_a_ms) == committed
 
     def test_earth_fixed_state_is_the_inertial_state_in_itrf93(self):
         """Same-body geometry consumes the GCRS state in NAIF's ITRF93 frame.

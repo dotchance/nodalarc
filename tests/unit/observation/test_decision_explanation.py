@@ -34,6 +34,9 @@ def _decision(
         reference_body="earth",
         visible=visible,
         range_km=range_km,
+        # The composer reads no delay; both directions carry the light time of the range.
+        latency_a_to_b_ms=range_km / 299.792458,
+        latency_b_to_a_ms=range_km / 299.792458,
         elevation_deg=elevation_deg,
         azimuth_deg=180.0 if elevation_deg > -90 else None,
         sat_off_nadir_deg=sat_off_nadir_deg,

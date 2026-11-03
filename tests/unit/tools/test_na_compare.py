@@ -48,9 +48,9 @@ def two_session_dbs(tmp_path):
         for i, etype in enumerate(["LinkUp", "LinkDown", "LinkUp"]):
             conn.execute(
                 """INSERT INTO link_events
-                   (session_id, sim_time, wall_time, event_type, node_a, node_b, latency_ms,
-                    reason)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                   (session_id, sim_time, wall_time, event_type, node_a, node_b,
+                    latency_a_to_b_ms, latency_b_to_a_ms, reason)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     session_id,
                     f"2026-01-01T00:00:{i:02d}",
@@ -59,6 +59,7 @@ def two_session_dbs(tmp_path):
                     "sat-P00S00",
                     "sat-P00S01",
                     12.5 + i,
+                    13.0 + i,
                     "test",
                 ),
             )
@@ -227,6 +228,22 @@ def _parse_convergence_deltas(output: str) -> dict[str, dict[str, float | int]]:
     return deltas
 
 
+def _parse_link_event_delays(output: str) -> dict[str, list[tuple[str, str, str]]]:
+    """Each session's timeline rows as (event_type, a->b ms, b->a ms)."""
+    rows: dict[str, list[tuple[str, str, str]]] = {}
+    current_alias = None
+    for line in output.splitlines():
+        stripped = line.strip()
+        if stripped in {"--- s1 ---", "--- s2 ---"}:
+            current_alias = stripped.strip("- ")
+            rows[current_alias] = []
+            continue
+        parts = stripped.split()
+        if current_alias and len(parts) == 7 and parts[0].startswith("2026-"):
+            rows[current_alias].append((parts[1], parts[4], parts[5]))
+    return rows
+
+
 def _parse_link_event_counts(output: str) -> dict[str, tuple[int, int]]:
     counts = {}
     for line in output.splitlines():
@@ -340,6 +357,12 @@ class TestReportLinkEvents:
             "LinkDown": (1, 1),
             "LatencyUpdate": (0, 0),
         }
+        # Each timeline row shows node_a's delay, then node_b's, as the fixture recorded them.
+        expected = [
+            (event_type, f"{12.5 + i:.1f}", f"{13.0 + i:.1f}")
+            for i, event_type in enumerate(["LinkUp", "LinkDown", "LinkUp"])
+        ]
+        assert _parse_link_event_delays(output) == {"s1": expected, "s2": expected}
 
 
 class TestReportProbeResults:

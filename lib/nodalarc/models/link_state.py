@@ -71,7 +71,10 @@ class LinkState(BaseModel):
     carrier: CarrierState
     routing: RoutingState
     range_km: float | None = None  # None when carrier is not UP
-    latency_ms: float | None  # None when carrier is not UP
+    # One-way light time of a signal sent at sim_time, each direction: node_a to node_b and
+    # node_b to node_a. None when carrier is not UP.
+    latency_a_to_b_ms: float | None
+    latency_b_to_a_ms: float | None
     link_type: Literal["isl", "ground"]
     link_rule_id: str | None = None
     topology_mode: TopologyMode | None = None

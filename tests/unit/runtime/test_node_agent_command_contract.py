@@ -318,3 +318,113 @@ def test_no_command_is_admitted_before_the_lease_was_observed() -> None:
     )
     with pytest.raises(WriterLeaseNotObserved):
         validate_set_latency_request(_latency_request(1, fence=fence), fence=fence)
+
+
+# A LOCAL ground entry wires both ends and carries the peer end's egress delay in
+# peer_latency_ms (>= 0); every other entry wires one end and must leave it at zero.
+
+
+def _isl_cross_node_up(**fields) -> node_agent_pb2.InterfaceUp:
+    return _isl_up(
+        locality=node_agent_pb2.LOCALITY_CROSS_NODE, remote_node_ip="10.0.0.2", vni=4242, **fields
+    )
+
+
+def _cross_node_ground_up(**fields) -> node_agent_pb2.InterfaceUp:
+    entry = _local_ground_up(
+        locality=node_agent_pb2.LOCALITY_CROSS_NODE, remote_node_ip="10.0.0.2", vni=4242, **fields
+    )
+    entry.ClearField("peer_rates")
+    return entry
+
+
+def _local_inventory_up(**fields) -> node_agent_pb2.KernelInventoryEntry:
+    return _inventory_entry(
+        expected_admin_up=True,
+        latency_ms=120.0,
+        rates=_rates(600.0, 50.0),
+        peer_rates=_rates(50.0, 600.0),
+        **fields,
+    )
+
+
+def _cross_node_inventory_up(**fields) -> node_agent_pb2.KernelInventoryEntry:
+    return _inventory_entry(
+        expected_admin_up=True,
+        latency_ms=120.0,
+        rates=_rates(600.0, 50.0),
+        locality=node_agent_pb2.LOCALITY_CROSS_NODE,
+        vni=4242,
+        remote_node_ip="10.0.0.2",
+        **fields,
+    )
+
+
+def _check_peer_delay(validate, request, *, local_ground: bool, peer_latency_ms: float) -> None:
+    """Admitted when zero, or non-negative on a LOCAL ground entry; refused otherwise."""
+    if peer_latency_ms == 0.0 or (local_ground and peer_latency_ms > 0.0):
+        validate(request, fence=_FENCE)
+        return
+    reason = "must be >= 0" if local_ground else "applies only to LOCAL ground entries"
+    with pytest.raises(CommandContractError, match=f"peer_latency_ms {reason}") as refused:
+        validate(request, fence=_FENCE)
+    assert refused.value.code == node_agent_pb2.NODE_AGENT_INVALID_FIELD
+
+
+@pytest.mark.parametrize("peer_latency_ms", [0.0, 5.0, -5.0])
+@pytest.mark.parametrize(
+    ("make_entry", "local_ground"),
+    [
+        (_isl_up, False),
+        (_isl_cross_node_up, False),
+        (_local_ground_up, True),
+        (_cross_node_ground_up, False),
+    ],
+    ids=["isl-local", "isl-cross-node", "ground-local", "ground-cross-node"],
+)
+def test_link_up_admits_a_peer_delay_only_on_a_local_ground_entry(
+    make_entry, local_ground, peer_latency_ms
+) -> None:
+    _check_peer_delay(
+        validate_batch_link_up_request,
+        _link_up(make_entry(peer_latency_ms=peer_latency_ms)),
+        local_ground=local_ground,
+        peer_latency_ms=peer_latency_ms,
+    )
+
+
+def _local_inventory_down(**fields) -> node_agent_pb2.KernelInventoryEntry:
+    return _inventory_entry(expected_admin_up=False, **fields)
+
+
+def _cross_node_inventory_down(**fields) -> node_agent_pb2.KernelInventoryEntry:
+    return _inventory_entry(
+        expected_admin_up=False,
+        locality=node_agent_pb2.LOCALITY_CROSS_NODE,
+        vni=4242,
+        remote_node_ip="10.0.0.2",
+        **fields,
+    )
+
+
+@pytest.mark.parametrize("peer_latency_ms", [0.0, 5.0, -5.0])
+@pytest.mark.parametrize(
+    ("make_entry", "local_ground"),
+    [
+        (_local_inventory_up, True),
+        (_cross_node_inventory_up, False),
+        (_local_inventory_down, True),
+        (_cross_node_inventory_down, False),
+    ],
+    ids=["ground-local-up", "ground-cross-node-up", "ground-local-down", "ground-cross-node-down"],
+)
+def test_inventory_admits_a_peer_delay_only_on_a_local_entry(
+    make_entry, local_ground, peer_latency_ms
+) -> None:
+    """KernelInventory carries ground entries only; expected-down entries follow the same rule."""
+    _check_peer_delay(
+        validate_kernel_inventory_request,
+        _inventory(make_entry(peer_latency_ms=peer_latency_ms)),
+        local_ground=local_ground,
+        peer_latency_ms=peer_latency_ms,
+    )

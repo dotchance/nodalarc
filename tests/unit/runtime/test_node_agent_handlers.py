@@ -13,6 +13,7 @@ import pytest
 from nodalarc.proto import node_agent_pb2
 from node_agent.command_contract import RuntimeFence, WriterEpochFloor
 from node_agent.handlers import (
+    _local_ground_delays,
     handle_batch_link_down,
     handle_batch_link_up,
     handle_set_latency,
@@ -171,3 +172,53 @@ class TestSetLatency:
         resp = handle_set_latency(req, handles=EMPTY_PID_MAP, fence=FENCE)
         assert resp.success is False
         assert resp.entries_updated == 0
+
+
+class TestLocalGroundDelays:
+    """A LOCAL ground message may name either end as node_id (its egress delay in latency_ms)
+    and the other as its peer (peer_latency_ms). The handler shapes each pod by identity, so it
+    must return (station delay, satellite delay) whichever end the message names."""
+
+    DELAYS = {"earth-gs-a": 120.0, "geo-tdrs-0": 119.5}
+
+    @pytest.mark.parametrize(
+        ("node_id", "peer_node_id"),
+        [("earth-gs-a", "geo-tdrs-0"), ("geo-tdrs-0", "earth-gs-a")],
+        ids=["station-named", "satellite-named"],
+    )
+    @pytest.mark.parametrize(
+        "message_type", [node_agent_pb2.InterfaceUp, node_agent_pb2.KernelInventoryEntry]
+    )
+    def test_each_end_gets_its_own_delay_whichever_end_is_named(
+        self, message_type, node_id, peer_node_id
+    ):
+        message = message_type(
+            node_id=node_id,
+            peer_node_id=peer_node_id,
+            gs_id="earth-gs-a",
+            sat_id="geo-tdrs-0",
+            link_type=node_agent_pb2.LINK_TYPE_GROUND,
+            locality=node_agent_pb2.LOCALITY_LOCAL,
+            latency_ms=self.DELAYS[node_id],
+            peer_latency_ms=self.DELAYS[peer_node_id],
+        )
+
+        assert _local_ground_delays(message) == (
+            self.DELAYS[message.gs_id],
+            self.DELAYS[message.sat_id],
+        )
+
+    @pytest.mark.parametrize(
+        "message_type", [node_agent_pb2.InterfaceUp, node_agent_pb2.KernelInventoryEntry]
+    )
+    def test_a_message_naming_neither_end_is_refused(self, message_type):
+        message = message_type(
+            node_id="other-node",
+            peer_node_id="geo-tdrs-0",
+            gs_id="earth-gs-a",
+            sat_id="geo-tdrs-0",
+            latency_ms=120.0,
+            peer_latency_ms=119.5,
+        )
+        with pytest.raises(ValueError, match="neither its station"):
+            _local_ground_delays(message)

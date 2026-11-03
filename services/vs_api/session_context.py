@@ -813,7 +813,8 @@ class SessionContext:
                 missing = [
                     field
                     for field in (
-                        "latency_ms",
+                        "latency_a_to_b_ms",
+                        "latency_b_to_a_ms",
                         "range_km",
                         "interface_a",
                         "interface_b",
@@ -841,7 +842,8 @@ class SessionContext:
                     state="active",
                     link_type=public_link_type,
                     link_reason="",
-                    latency_ms=link.latency_ms,
+                    latency_a_to_b_ms=link.latency_a_to_b_ms,
+                    latency_b_to_a_ms=link.latency_b_to_a_ms,
                     **terminal_rates,
                     range_km=link.range_km,
                     range_sim_time=snapshot.sim_time,
@@ -1043,7 +1045,8 @@ class SessionContext:
                 state="active",
                 link_type=public_link_type,
                 link_reason=data["reason"],
-                latency_ms=data["latency_ms"],
+                latency_a_to_b_ms=data["latency_a_to_b_ms"],
+                latency_b_to_a_ms=data["latency_b_to_a_ms"],
                 **terminal_rates,
                 range_km=data["range_km"],
                 range_sim_time=trace.authority_sim_time,
@@ -1080,7 +1083,7 @@ class SessionContext:
         event = self._parse_link_event(LatencyUpdate, msg)
         data = event.model_dump(mode="json")
         node_a, node_b = event.node_a, event.node_b
-        latency_ms, range_km = event.latency_ms, event.range_km
+        range_km = event.range_km
         if data.get("provenance") is None:
             log.error("Malformed LatencyUpdate — missing provenance: %s", data)
             raise ValueError("LatencyUpdate missing required field: provenance")
@@ -1089,9 +1092,15 @@ class SessionContext:
             existing = self.links.get(key)
             if existing is not None:
                 trace = self._trace_from_latency_update(data)
+                a_to_b, b_to_a = _in_order_of(
+                    existing.node_a,
+                    node_a,
+                    (event.latency_a_to_b_ms, event.latency_b_to_a_ms),
+                )
                 self.links[key] = existing.model_copy(
                     update={
-                        "latency_ms": latency_ms,
+                        "latency_a_to_b_ms": a_to_b,
+                        "latency_b_to_a_ms": b_to_a,
                         "range_km": range_km,
                         "range_sim_time": trace.authority_sim_time,
                     }
@@ -1665,10 +1674,12 @@ class SessionContext:
             authority_sequence=snapshot.snapshot_seq,
             authority_age_ms=0.0,
             range_km=link.range_km,
-            orbital_one_way_ms=link.latency_ms,
+            orbital_a_to_b_ms=link.latency_a_to_b_ms,
+            orbital_b_to_a_ms=link.latency_b_to_a_ms,
             substrate_rtt_ms=None,
             substrate_one_way_ms=None,
-            netem_one_way_ms=None,
+            netem_a_to_b_ms=None,
+            netem_b_to_a_ms=None,
             rtt_to_one_way_policy=None,
             link_rule_id=link.link_rule_id,
             topology_mode=link.topology_mode,
@@ -1688,10 +1699,12 @@ class SessionContext:
             "authority_sequence",
             "authority_age_ms",
             "range_km",
-            "orbital_one_way_ms",
+            "orbital_a_to_b_ms",
+            "orbital_b_to_a_ms",
             "substrate_rtt_ms",
             "substrate_one_way_ms",
-            "netem_one_way_ms",
+            "netem_a_to_b_ms",
+            "netem_b_to_a_ms",
             "rtt_to_one_way_policy",
         )
         missing = [field for field in required if field not in provenance]
@@ -1706,11 +1719,14 @@ class SessionContext:
                 f"{event_type} range_km disagrees with provenance: "
                 f"event={data['range_km']} provenance={provenance['range_km']}"
             )
-        if abs(float(data["latency_ms"]) - float(provenance["orbital_one_way_ms"])) > 1e-9:
-            raise ValueError(
-                f"{event_type} latency_ms disagrees with provenance orbital_one_way_ms: "
-                f"event={data['latency_ms']} provenance={provenance['orbital_one_way_ms']}"
-            )
+        for direction in ("a_to_b", "b_to_a"):
+            event_ms = float(data[f"latency_{direction}_ms"])
+            orbital_ms = float(provenance[f"orbital_{direction}_ms"])
+            if abs(event_ms - orbital_ms) > 1e-9:
+                raise ValueError(
+                    f"{event_type} latency_{direction}_ms disagrees with provenance "
+                    f"orbital_{direction}_ms: event={event_ms} provenance={orbital_ms}"
+                )
 
     def _trace_from_link_event(self, data: dict, *, link_type: str) -> LinkDecisionTrace:
         provenance = self._require_provenance(data, "LinkUp")
@@ -1729,10 +1745,12 @@ class SessionContext:
             authority_sequence=provenance["authority_sequence"],
             authority_age_ms=provenance["authority_age_ms"],
             range_km=provenance["range_km"],
-            orbital_one_way_ms=provenance["orbital_one_way_ms"],
+            orbital_a_to_b_ms=provenance["orbital_a_to_b_ms"],
+            orbital_b_to_a_ms=provenance["orbital_b_to_a_ms"],
             substrate_rtt_ms=provenance["substrate_rtt_ms"],
             substrate_one_way_ms=provenance["substrate_one_way_ms"],
-            netem_one_way_ms=provenance["netem_one_way_ms"],
+            netem_a_to_b_ms=provenance["netem_a_to_b_ms"],
+            netem_b_to_a_ms=provenance["netem_b_to_a_ms"],
             rtt_to_one_way_policy=provenance["rtt_to_one_way_policy"],
             link_rule_id=data.get("link_rule_id"),
             topology_mode=data.get("topology_mode"),
@@ -1749,9 +1767,19 @@ class SessionContext:
                 f"LatencyUpdate for {data['node_a']}<->{data['node_b']} has no existing "
                 "LinkDecisionTrace"
             )
+        orbital = _in_order_of(
+            existing.node_a,
+            data["node_a"],
+            (provenance["orbital_a_to_b_ms"], provenance["orbital_b_to_a_ms"]),
+        )
+        netem = _in_order_of(
+            existing.node_a,
+            data["node_a"],
+            (provenance["netem_a_to_b_ms"], provenance["netem_b_to_a_ms"]),
+        )
         return LinkDecisionTrace(
-            node_a=data["node_a"],
-            node_b=data["node_b"],
+            node_a=existing.node_a,
+            node_b=existing.node_b,
             link_type=existing.link_type,
             state="active",
             interface_a=existing.interface_a,
@@ -1763,10 +1791,12 @@ class SessionContext:
             authority_sequence=provenance["authority_sequence"],
             authority_age_ms=provenance["authority_age_ms"],
             range_km=provenance["range_km"],
-            orbital_one_way_ms=provenance["orbital_one_way_ms"],
+            orbital_a_to_b_ms=orbital[0],
+            orbital_b_to_a_ms=orbital[1],
             substrate_rtt_ms=provenance["substrate_rtt_ms"],
             substrate_one_way_ms=provenance["substrate_one_way_ms"],
-            netem_one_way_ms=provenance["netem_one_way_ms"],
+            netem_a_to_b_ms=netem[0],
+            netem_b_to_a_ms=netem[1],
             rtt_to_one_way_policy=provenance["rtt_to_one_way_policy"],
             link_rule_id=existing.link_rule_id,
             topology_mode=existing.topology_mode,
@@ -1938,6 +1968,13 @@ class SessionContext:
 # ------------------------------------------------------------------
 # Module-level utilities (no state, pure functions)
 # ------------------------------------------------------------------
+
+
+def _in_order_of[T](target_node_a: str, source_node_a: str, values: tuple[T, T]) -> tuple[T, T]:
+    """A pair of per-direction values given in a source's node order, in a target's order: the
+    same order when both name the same first node, swapped when they do not. Each value belongs
+    to its transmitting end."""
+    return values if target_node_a == source_node_a else (values[1], values[0])
 
 
 def _link_key(node_a: str, node_b: str) -> str:

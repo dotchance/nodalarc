@@ -319,3 +319,18 @@ def test_line_of_sight_rate_is_its_time_derivative(
         after = _sight_direction(physics_context, a, b, t + h, frame_body)
         numerical = np.linalg.norm(after - before) / (2 * h)
         assert abs(rate - numerical) < 1e-4 * numerical
+
+
+def test_ends_at_one_position_have_no_direction(physics_context: PhysicsContext) -> None:
+    """Two identical orbits put two satellites at one position: the signal between them takes no
+    time, and pointing and line-of-sight rate are zero, never NaN."""
+    t = INSTANTS[0]
+    first = _orbit(LEO_A, "earth", t - 600.0)
+    twin = _orbit(LEO_A, "earth", t - 600.0)
+    with np.errstate(all="raise"):
+        signals = signals_sent_at(physics_context, SHAPES, [first, twin], [twin, first], t)
+    assert np.all(signals.light_time_s == 0.0)
+    for end in (signals.transmitter, signals.receiver):
+        assert np.all(end.pointing == 0.0)
+        assert np.all(end.pointing_fixed == 0.0)
+        assert np.all(end.rate_rad_s == 0.0)

@@ -21,6 +21,7 @@ import numpy as np
 from nodalarc.body_frames import BodyFrame
 from nodalarc.orbital import OrbitalElements
 from nodalarc.physics import PhysicsContext
+from nodalarc.physics.context import tdb_seconds_of
 from nodalarc.physics.satellites import (
     analytic_satellite_states,
     orbit_model_for,
@@ -28,6 +29,8 @@ from nodalarc.physics.satellites import (
 )
 
 from .client import Operator, Terminal
+
+LIGHT_KM_PER_S = 299792.458
 
 Link = dict[str, Any]
 Node = dict[str, Any]
@@ -225,8 +228,17 @@ class ShownNetwork:
                     members.setdefault(lan, []).append(node_id)
         return members
 
+    def least_round_trip_ms(self, source: str, destination: str) -> float | None:
+        """The least latency out plus the least latency back; None when either way has no
+        path shown."""
+        out = self.least_latency_ms(source, destination)
+        back = self.least_latency_ms(destination, source)
+        return None if out is None or back is None else out + back
+
     def least_latency_ms(self, source: str, destination: str) -> float | None:
-        """The least total latency from one node to another over the links shown active now.
+        """The least total latency from one node to another over the links shown active now,
+        each link taken in the direction travelled (its two directions have their own light
+        time).
 
         Nodes on one LAN (a site, a spacecraft bus) are joined at no delay. None when the links
         shown do not connect the two nodes.
@@ -235,8 +247,8 @@ class ShownNetwork:
         reach: dict[str, dict[str, float]] = {node_id: {} for node_id in nodes}
         for link in self.latest["links"]:
             if link["state"] == "active":
-                a, b = link_key(link)
-                reach[a][b] = reach[b][a] = link["latency_ms"]
+                reach[link["node_a"]][link["node_b"]] = link["latency_a_to_b_ms"]
+                reach[link["node_b"]][link["node_a"]] = link["latency_b_to_a_ms"]
         for together in self.lans().values():
             for a in together:
                 for b in together:
@@ -356,6 +368,25 @@ class ReferencePositions:
             )
             for body_id, frame in shown.bodies.items()
         }
+
+    def barycentric_at(self, node: Node, t: float) -> np.ndarray:
+        """The node's position relative to the solar system barycenter, ICRF axes, at sim time
+        t: its body's barycentric position (read from the ephemeris directly) plus its position
+        relative to that body."""
+        body_id = node["reference_body"]
+        origin = np.array(self._physics.body_state(body_id, t).position_km)
+        body, _velocity = self._physics.barycentric_state(body_id, tdb_seconds_of(t))
+        return body + (self.at(node, t) - origin)
+
+    def light_time_ms(self, transmitter: Node, receiver: Node, t: float) -> float:
+        """One-way light time of a signal the transmitter sends at sim time t: the receiver's
+        state at arrival, iterated in the barycentric frame."""
+        origin = self.barycentric_at(transmitter, t)
+        tau = float(np.linalg.norm(self.barycentric_at(receiver, t) - origin)) / LIGHT_KM_PER_S
+        for _ in range(10):
+            arrival = self.barycentric_at(receiver, t + tau)
+            tau = float(np.linalg.norm(arrival - origin)) / LIGHT_KM_PER_S
+        return tau * 1000.0
 
     def at(self, node: Node, t: float) -> np.ndarray:
         body_id = node["reference_body"]

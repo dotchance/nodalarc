@@ -26,12 +26,11 @@ from nodalarc.ome_runtime import (
     satellite_node_id,
     satellite_propagator_id,
 )
+from nodalarc.physics import ElementsBatch, orbit_states
 from nodalarc.propagation_kernel import (
-    ElementsBatch,
     body_rotation_angle_batch,
     eci_to_body_fixed_batch,
     eci_to_body_fixed_velocity_batch,
-    propagate_eci_batch,
 )
 from nodalarc.propagator import (
     body_fixed_to_geodetic,
@@ -191,7 +190,7 @@ def propagate_satellites(
         phase_column = (
             dt_column if canonical_phase == dt else np.array([canonical_phase], dtype=np.float64)
         )
-        eci = propagate_eci_batch(batch, phase_column, body_frame=body_frame)
+        eci = orbit_states(batch, phase_column, model="j2-mean-elements", body_frame=body_frame)
         theta = body_rotation_angle_batch(body_frame, time_column)
         bx, by, bz = eci_to_body_fixed_batch(eci.px, eci.py, eci.pz, theta)
         vbx, vby, vbz = eci_to_body_fixed_velocity_batch(

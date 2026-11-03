@@ -32,7 +32,7 @@ COPY build/runtime-constraints.txt /tmp/nodalarc-runtime-constraints.txt
 
 RUN pip install --no-cache-dir \
     --constraint /tmp/nodalarc-runtime-constraints.txt \
-    kopf kubernetes "pydantic>=2.0" pyyaml jinja2 numpy sgp4 skyfield nats-py anise spiceypy
+    kopf kubernetes "pydantic>=2.0" pyyaml jinja2 numpy sgp4 skyfield nats-py anise
 
 # Add lib/ and services/ to Python path
 ENV PYTHONPATH=/app/lib:/app/services:/app

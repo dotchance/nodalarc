@@ -1,16 +1,16 @@
-"""The shared physics module against SPICE.
+"""The shared physics module against SPICE and against a numerical J2 reference.
 
 Body centers within 1 m and 1 mm/s; body orientation within 1 millidegree;
 the orbit-element basis within 1 millidegree of the same construction in
-SPICE; a surface site on ICRF axes within 100 m; the analytic orbit models
-within 1 cm and 1 mm/s of their references after 10 days, including the
-singular cases, and their velocities within 1 mm/s of a numerical
-derivative of their positions.
+SPICE; a surface site on ICRF axes within 100 m. The production orbit kernel
+within 1 cm and 1 mm/s of SPICE after 10 days for both orbit models,
+including the singular cases, with each velocity within 1 mm/s of a
+numerical derivative of the positions. The declared J2 rates within 0.1 %
+of the rates of a numerically integrated J2 orbit.
 """
 
 from __future__ import annotations
 
-import json
 import math
 from datetime import UTC, datetime
 from pathlib import Path
@@ -22,21 +22,22 @@ from nodalarc.body_frames import BodyFrame
 from nodalarc.frames import GeoPosition
 from nodalarc.orbital import OrbitalElements
 from nodalarc.physics import (
-    SPICE_LOCK,
+    ElementsBatch,
+    OrbitModel,
     PhysicsContext,
     PhysicsDataError,
     body_fixed_from_geodetic,
     epoch_of,
     geodetic_from_body_fixed,
-    j2_mean_states,
-    two_body_states,
+    orbit_states,
+    secular_rates,
 )
 from nodalarc.physics.datasets import EphemerisLocation
 
-FIXTURE = Path(__file__).resolve().parents[2] / "fixtures" / "physics"
 EARTH = BodyFrame("earth", 6371.0088, 6378.137, 6356.752, 7.2921159e-5, 398600.4418, 1.08262668e-3)
 LUNA = BodyFrame("luna", 1737.4, 1738.1, 1736.0, 2.6616995e-6, 4902.800066, 0.0)
 SPICE_FRAME = {"earth": "ITRF93", "luna": "MOON_ME_DE440_ME421"}
+TEN_DAYS = [0.0, 1.0, 3600.0, 86400.0, 864000.0]
 
 
 def _dates() -> list[float]:
@@ -58,8 +59,7 @@ def _angle_deg(a: np.ndarray, b: np.ndarray) -> float:
 def test_moon_center_matches_spice(physics_context: PhysicsContext) -> None:
     for t in _dates():
         state = physics_context.body_state("luna", t)
-        with SPICE_LOCK:
-            ref, _ = spiceypy.spkezr("MOON", _et(t), "J2000", "NONE", "EARTH")
+        ref, _ = spiceypy.spkezr("MOON", _et(t), "J2000", "NONE", "EARTH")
         assert np.linalg.norm(np.array(state.position_km) - ref[:3]) < 1e-3
         assert np.linalg.norm(np.array(state.velocity_km_s) - ref[3:]) < 1e-6
 
@@ -69,8 +69,7 @@ def test_moon_center_matches_spice(physics_context: PhysicsContext) -> None:
 def test_orientation_and_rate_match_spice(physics_context: PhysicsContext, body: str) -> None:
     for t in _dates():
         orientation = physics_context.orientation(body, t)
-        with SPICE_LOCK:
-            ref = np.array(spiceypy.sxform("J2000", SPICE_FRAME[body], _et(t)))
+        ref = np.array(spiceypy.sxform("J2000", SPICE_FRAME[body], _et(t)))
         assert _angle_deg(orientation.rotation, ref[:3, :3]) < 1e-3
         assert np.abs(orientation.rotation_rate - ref[3:, :3]).max() < 1e-10
         h = 1.0
@@ -81,8 +80,7 @@ def test_orientation_and_rate_match_spice(physics_context: PhysicsContext, body:
 
 @pytest.mark.usefixtures("spice_reference")
 def test_lunar_orbit_basis_matches_spice_construction(physics_context: PhysicsContext) -> None:
-    with SPICE_LOCK:
-        pole = np.array(spiceypy.pxform("J2000", "MOON_ME_DE440_ME421", 0.0))[2, :]
+    pole = np.array(spiceypy.pxform("J2000", "MOON_ME_DE440_ME421", 0.0))[2, :]
     x = np.cross([0.0, 0.0, 1.0], pole)
     x /= np.linalg.norm(x)
     reference = np.vstack([x, np.cross(pole, x), pole])
@@ -106,21 +104,19 @@ def test_site_position_on_icrf_axes_matches_spice(
     frame = EARTH if body == "earth" else LUNA
     fixed = np.array(body_fixed_from_geodetic(site, frame))
     flattening = (frame.equatorial_radius_km - frame.polar_radius_km) / frame.equatorial_radius_km
-    with SPICE_LOCK:
-        ref_fixed = np.array(
-            spiceypy.georec(
-                math.radians(site.lon_deg),
-                math.radians(site.lat_deg),
-                site.alt_km,
-                frame.equatorial_radius_km,
-                flattening,
-            )
+    ref_fixed = np.array(
+        spiceypy.georec(
+            math.radians(site.lon_deg),
+            math.radians(site.lat_deg),
+            site.alt_km,
+            frame.equatorial_radius_km,
+            flattening,
         )
+    )
     assert np.linalg.norm(fixed - ref_fixed) < 1e-6
     for t in _dates():
         icrf = physics_context.orientation(body, t).rotation.T @ fixed
-        with SPICE_LOCK:
-            ref_icrf = np.array(spiceypy.pxform(SPICE_FRAME[body], "J2000", _et(t))) @ ref_fixed
+        ref_icrf = np.array(spiceypy.pxform(SPICE_FRAME[body], "J2000", _et(t))) @ ref_fixed
         assert np.linalg.norm(icrf - ref_icrf) < 0.1
 
 
@@ -134,7 +130,7 @@ def test_geodetic_round_trip_and_longitude_range() -> None:
         assert geo.alt_km == pytest.approx(alt, abs=1e-9)
 
 
-TWO_BODY_CASES = {
+ORBIT_CASES = {
     "exactly-circular": (
         EARTH,
         OrbitalElements(6928.137, math.radians(53), math.radians(40), mean_anomaly_rad=0.0),
@@ -154,7 +150,7 @@ TWO_BODY_CASES = {
             mean_anomaly_rad=0.0,
         ),
     ),
-    "at-apoapsis": (
+    "at-apoapsis-e0.3": (
         EARTH,
         OrbitalElements(
             26600.0,
@@ -165,7 +161,18 @@ TWO_BODY_CASES = {
             mean_anomaly_rad=math.pi,
         ),
     ),
-    "retrograde-93deg": (
+    "retrograde-98deg-e0.01": (
+        EARTH,
+        OrbitalElements(
+            7078.137,
+            math.radians(98.2),
+            math.radians(120),
+            eccentricity=0.01,
+            argument_of_perigee_rad=math.radians(90),
+            mean_anomaly_rad=0.5,
+        ),
+    ),
+    "retrograde-93deg-lunar": (
         LUNA,
         OrbitalElements(
             1837.4, math.radians(93), math.radians(30), eccentricity=1e-4, mean_anomaly_rad=0.0
@@ -174,78 +181,156 @@ TWO_BODY_CASES = {
 }
 
 
-def _elements_state(el: OrbitalElements, mu: float) -> np.ndarray:
-    rp = el.semi_major_axis_km * (1.0 - el.eccentricity)
-    with SPICE_LOCK:
-        return np.array(
-            spiceypy.conics(
-                [
-                    rp,
-                    el.eccentricity,
-                    el.inclination_rad,
-                    el.raan_rad,
-                    el.argument_of_perigee_rad,
-                    el.mean_anomaly_rad,
-                    0.0,
-                    mu,
-                ],
-                0.0,
-            )
-        )
-
-
-@pytest.mark.parametrize("case", sorted(TWO_BODY_CASES))
-def test_two_body_state_contract(case: str) -> None:
-    body, el = TWO_BODY_CASES[case]
-    mu = body.gravitational_parameter_km3_s2
-    start = _elements_state(el, mu)
-    times = [1.0, 3600.0, 86400.0, 864000.0]
-    states = two_body_states([el] * len(times), times, mu_km3_s2=mu)
-    for index, t in enumerate(times):
-        with SPICE_LOCK:
-            ref = np.array(spiceypy.prop2b(mu, start, t))
-        assert np.linalg.norm(states.position_km[index] - ref[:3]) < 1e-5
-        assert np.linalg.norm(states.velocity_km_s[index] - ref[3:]) < 1e-6
-    h = 0.5
-    ahead = two_body_states([el], [86400.0 + h], mu_km3_s2=mu).position_km[0]
-    behind = two_body_states([el], [86400.0 - h], mu_km3_s2=mu).position_km[0]
-    assert np.linalg.norm((ahead - behind) / (2 * h) - states.velocity_km_s[2]) < 1e-6
-
-
-def test_j2_states_match_previous_model_and_their_own_derivative() -> None:
-    reference = json.loads((FIXTURE / "j2_mean_elements_reference.json").read_text())
-    body = reference["body"]
-    frame = BodyFrame(
-        "earth",
-        6371.0088,
-        body["equatorial_radius_km"],
-        body["polar_radius_km"],
-        7.2921159e-5,
-        body["gravitational_parameter_km3_s2"],
-        body["j2"],
+def _kernel(el: OrbitalElements, times: list[float], model: OrbitModel, body: BodyFrame):
+    states = orbit_states(
+        ElementsBatch.from_elements([el]), np.array(times), model=model, body_frame=body
     )
-    for name, case in reference["cases"].items():
-        c = case["elements_deg"]
-        el = OrbitalElements(
-            c["a"],
-            math.radians(c["i"]),
-            math.radians(c["raan"]),
-            eccentricity=c["e"],
-            argument_of_perigee_rad=math.radians(c["argp"]),
-            mean_anomaly_rad=math.radians(c["m"]),
+    position = np.stack([states.px[0], states.py[0], states.pz[0]], axis=1)
+    velocity = np.stack([states.vx[0], states.vy[0], states.vz[0]], axis=1)
+    return position, velocity
+
+
+def _spice_conics(el: OrbitalElements, mu: float, *, raan, argp, mean_anomaly) -> np.ndarray:
+    perifocal = el.semi_major_axis_km * (1.0 - el.eccentricity)
+    return np.array(
+        spiceypy.conics(
+            [perifocal, el.eccentricity, el.inclination_rad, raan, argp, mean_anomaly, 0.0, mu],
+            0.0,
         )
-        times = [s["dt_s"] for s in case["samples"]]
-        states = j2_mean_states([el] * len(times), times, body_frame=frame)
-        for index, sample in enumerate(case["samples"]):
-            assert np.linalg.norm(states.position_km[index] - sample["position_km"]) < 1e-5, name
-            assert np.linalg.norm(states.velocity_km_s[index] - sample["velocity_km_s"]) < 1e-6, (
-                name
-            )
-        h = 0.5
-        ahead = j2_mean_states([el], [86400.0 + h], body_frame=frame).position_km[0]
-        behind = j2_mean_states([el], [86400.0 - h], body_frame=frame).position_km[0]
-        at = j2_mean_states([el], [86400.0], body_frame=frame).velocity_km_s[0]
-        assert np.linalg.norm((ahead - behind) / (2 * h) - at) < 1e-6, name
+    )
+
+
+def _assert_velocity_is_position_derivative(
+    el: OrbitalElements, model: OrbitModel, body: BodyFrame
+) -> None:
+    h = 0.5
+    position, velocity = _kernel(el, [86400.0 - h, 86400.0, 86400.0 + h], model, body)
+    assert np.linalg.norm((position[2] - position[0]) / (2 * h) - velocity[1]) < 1e-6
+
+
+@pytest.mark.parametrize("case", sorted(ORBIT_CASES))
+def test_two_body_kernel_matches_spice_prop2b(case: str) -> None:
+    body, el = ORBIT_CASES[case]
+    mu = body.gravitational_parameter_km3_s2
+    start = _spice_conics(
+        el, mu, raan=el.raan_rad, argp=el.argument_of_perigee_rad, mean_anomaly=el.mean_anomaly_rad
+    )
+    position, velocity = _kernel(el, TEN_DAYS, "two-body", body)
+    for index, t in enumerate(TEN_DAYS):
+        ref = np.array(spiceypy.prop2b(mu, start, t))
+        assert np.linalg.norm(position[index] - ref[:3]) < 1e-5, (case, t)
+        assert np.linalg.norm(velocity[index] - ref[3:]) < 1e-6, (case, t)
+    _assert_velocity_is_position_derivative(el, "two-body", body)
+
+
+@pytest.mark.parametrize("case", sorted(ORBIT_CASES))
+def test_j2_kernel_matches_spice_conics_under_the_declared_rates(case: str) -> None:
+    body, el = ORBIT_CASES[case]
+    mu = body.gravitational_parameter_km3_s2
+    rates = secular_rates(
+        ElementsBatch.from_elements([el]), model="j2-mean-elements", body_frame=body
+    )
+    raan_dot = float(rates.raan_dot[0])
+    argp_dot = float(rates.argument_of_perigee_dot[0])
+    mean_anomaly_dot = float(rates.mean_anomaly_dot[0])
+    mean_motion = math.sqrt(mu / el.semi_major_axis_km**3)
+    position, velocity = _kernel(el, TEN_DAYS, "j2-mean-elements", body)
+    for index, t in enumerate(TEN_DAYS):
+        ref = _spice_conics(
+            el,
+            mu,
+            raan=el.raan_rad + raan_dot * t,
+            argp=el.argument_of_perigee_rad + argp_dot * t,
+            mean_anomaly=el.mean_anomaly_rad + mean_anomaly_dot * t,
+        )
+        r = ref[:3]
+        normal = np.cross(r, ref[3:])
+        normal /= np.linalg.norm(normal)
+        ref_velocity = (
+            (mean_anomaly_dot / mean_motion) * ref[3:]
+            + raan_dot * np.cross([0.0, 0.0, 1.0], r)
+            + argp_dot * np.cross(normal, r)
+        )
+        assert np.linalg.norm(position[index] - r) < 1e-5, (case, t)
+        assert np.linalg.norm(velocity[index] - ref_velocity) < 1e-6, (case, t)
+    _assert_velocity_is_position_derivative(el, "j2-mean-elements", body)
+
+
+def _j2_acceleration(r: np.ndarray, body: BodyFrame) -> np.ndarray:
+    mu = body.gravitational_parameter_km3_s2
+    re = body.equatorial_radius_km
+    x, y, z = r
+    r2 = x * x + y * y + z * z
+    rn = math.sqrt(r2)
+    k = 1.5 * body.j2 * mu * re * re / (rn**5)
+    zz = 5.0 * z * z / r2
+    return -mu * r / rn**3 + k * np.array([x * (zz - 1.0), y * (zz - 1.0), z * (zz - 3.0)])
+
+
+def _osculating(
+    r: np.ndarray, v: np.ndarray, mu: float
+) -> tuple[float, float, float, float, float]:
+    h = np.cross(r, v)
+    node = np.cross([0.0, 0.0, 1.0], h)
+    e_vec = np.cross(v, h) / mu - r / np.linalg.norm(r)
+    a = 1.0 / (2.0 / np.linalg.norm(r) - (v @ v) / mu)
+    inc = math.acos(h[2] / np.linalg.norm(h))
+    raan = math.atan2(node[1], node[0])
+    argp = math.atan2((np.cross(node, e_vec) @ h) / np.linalg.norm(h), node @ e_vec)
+    return a, float(np.linalg.norm(e_vec)), inc, raan, argp
+
+
+def test_declared_j2_rates_match_a_numerically_integrated_j2_orbit() -> None:
+    """Accuracy of the declared approximation, separate from implementation agreement.
+
+    A fourth-order Runge-Kutta integration of two-body plus J2 acceleration
+    runs three days from the kernel's state. Straight-line fits to the
+    osculating node and argument of perigee give the numerical secular
+    rates, and the declared rates are evaluated at the run's mean elements.
+    """
+    el = OrbitalElements(
+        7000.0,
+        math.radians(53.0),
+        math.radians(40.0),
+        eccentricity=0.01,
+        argument_of_perigee_rad=math.radians(30.0),
+        mean_anomaly_rad=0.0,
+    )
+    mu = EARTH.gravitational_parameter_km3_s2
+    position, velocity = _kernel(el, [0.0], "j2-mean-elements", EARTH)
+    state = np.concatenate([position[0], velocity[0]])
+    step = 20.0
+    steps = int(3 * 86400 / step)
+
+    def derivative(s: np.ndarray) -> np.ndarray:
+        return np.concatenate([s[3:], _j2_acceleration(s[:3], EARTH)])
+
+    samples = []
+    for index in range(steps + 1):
+        if index % 15 == 0:
+            samples.append((index * step, *_osculating(state[:3], state[3:], mu)))
+        k1 = derivative(state)
+        k2 = derivative(state + 0.5 * step * k1)
+        k3 = derivative(state + 0.5 * step * k2)
+        k4 = derivative(state + step * k3)
+        state = state + step / 6.0 * (k1 + 2 * k2 + 2 * k3 + k4)
+    table = np.array(samples)
+    t = table[:, 0]
+    raan_fit = np.polyfit(t, np.unwrap(table[:, 4]), 1)[0]
+    argp_fit = np.polyfit(t, np.unwrap(table[:, 5]), 1)[0]
+    mean = OrbitalElements(
+        float(table[:, 1].mean()),
+        float(table[:, 3].mean()),
+        el.raan_rad,
+        eccentricity=float(table[:, 2].mean()),
+        argument_of_perigee_rad=el.argument_of_perigee_rad,
+        mean_anomaly_rad=0.0,
+    )
+    declared = secular_rates(
+        ElementsBatch.from_elements([mean]), model="j2-mean-elements", body_frame=EARTH
+    )
+    assert float(declared.raan_dot[0]) == pytest.approx(raan_fit, rel=1e-3)
+    assert float(declared.argument_of_perigee_dot[0]) == pytest.approx(argp_fit, rel=1e-3)
 
 
 def test_time_outside_coverage_is_refused(physics_context: PhysicsContext) -> None:
@@ -256,10 +341,18 @@ def test_time_outside_coverage_is_refused(physics_context: PhysicsContext) -> No
         physics_context.orientation("earth", datetime(1999, 1, 1, tzinfo=UTC).timestamp())
 
 
-def test_body_outside_the_context_is_refused(physics_location: EphemerisLocation) -> None:
-    earth_only = PhysicsContext(["earth"], location=physics_location)
+def test_session_without_earth_loads_no_earth_orientation(
+    physics_location: EphemerisLocation,
+) -> None:
+    luna_only = PhysicsContext(["luna"], location=physics_location)
+    assert [f.file_id for f in luna_only.selected_files] == [
+        "de440s",
+        "moon-orientation",
+        "moon-frames",
+    ]
+    assert luna_only.body_state("luna", 1.78e9).position_km[0] != 0.0
     with pytest.raises(PhysicsDataError, match="not in this session"):
-        earth_only.body_state("luna", 1.78e9)
+        luna_only.orientation("earth", 1.78e9)
 
 
 def test_file_that_does_not_match_its_pin_is_refused(
@@ -281,14 +374,3 @@ def test_unconverted_datasets_are_refused(
     location = EphemerisLocation(source_dir=physics_location.source_dir, converted_dir=tmp_path)
     with pytest.raises(PhysicsDataError, match="converted ephemeris datasets are missing"):
         PhysicsContext(["luna"], location=location)
-
-
-def test_selected_files_name_every_loaded_file(physics_context: PhysicsContext) -> None:
-    assert [f.file_id for f in physics_context.selected_files] == [
-        "de440s",
-        "earth-orientation-predict",
-        "earth-orientation-measured",
-        "moon-orientation",
-        "moon-frames",
-    ]
-    assert all(len(f.sha256) == 64 for f in physics_context.selected_files)

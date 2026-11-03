@@ -18,12 +18,8 @@ import numpy as np
 import pytest
 from nodalarc.body_frames import BodyFrame
 from nodalarc.orbital import OrbitalElements
-from nodalarc.propagation_kernel import (
-    ElementsBatch,
-    body_rotation_angle_batch,
-    eci_to_body_fixed_batch,
-    propagate_eci_batch,
-)
+from nodalarc.physics import ElementsBatch, orbit_states
+from nodalarc.propagation_kernel import body_rotation_angle_batch, eci_to_body_fixed_batch
 from nodalarc.propagator import (
     eci_to_body_fixed,
     propagate_eci_j2_mean_elements_for_body,
@@ -81,7 +77,7 @@ def test_kernel_positions_and_velocities_are_bit_identical_to_scalar(body):
     elements = _elements_grid(60)
     dts = np.array([0.0, 1.0, 10.0, 3600.0, 86400.0], dtype=np.float64)
     batch = ElementsBatch.from_elements(elements)
-    state = propagate_eci_batch(batch, dts, body_frame=body)
+    state = orbit_states(batch, dts, model="j2-mean-elements", body_frame=body)
     theta = body_rotation_angle_batch(body, EPOCH + dts)
     bx, by, bz = eci_to_body_fixed_batch(state.px, state.py, state.pz, theta)
 
@@ -107,16 +103,16 @@ def test_kernel_is_arrangement_invariant():
     elements = _elements_grid(24, seed=11)
     dts = np.array([5.0, 60.0, 600.0], dtype=np.float64)
     batch = ElementsBatch.from_elements(elements)
-    full = propagate_eci_batch(batch, dts, body_frame=EARTH)
+    full = orbit_states(batch, dts, model="j2-mean-elements", body_frame=EARTH)
 
     for j in range(len(dts)):
-        col = propagate_eci_batch(batch, dts[j : j + 1], body_frame=EARTH)
+        col = orbit_states(batch, dts[j : j + 1], model="j2-mean-elements", body_frame=EARTH)
         assert np.array_equal(col.px[:, 0], full.px[:, j])
         assert np.array_equal(col.vy[:, 0], full.vy[:, j])
 
     for i in range(0, len(elements), 7):
         single = ElementsBatch.from_elements(elements[i : i + 1])
-        cell = propagate_eci_batch(single, dts, body_frame=EARTH)
+        cell = orbit_states(single, dts, model="j2-mean-elements", body_frame=EARTH)
         assert np.array_equal(cell.pz[0, :], full.pz[i, :])
         assert np.array_equal(cell.vx[0, :], full.vx[i, :])
 
@@ -133,7 +129,7 @@ def test_kernel_validations_mirror_scalar():
         mean_anomaly_rad=np.array([0.0]),
     )
     with pytest.raises(ValueError, match="semi-latus rectum"):
-        propagate_eci_batch(bad, np.array([1.0]), body_frame=EARTH)
+        orbit_states(bad, np.array([1.0]), model="j2-mean-elements", body_frame=EARTH)
 
 
 def test_elements_batch_rejects_ragged_shapes():

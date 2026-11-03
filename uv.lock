@@ -51,7 +51,6 @@ runtime = [
     { name = "pyyaml" },
     { name = "sgp4" },
     { name = "skyfield" },
-    { name = "spiceypy", specifier = ">=8.3.0" },
     { name = "uvicorn" },
     { name = "websockets", specifier = ">=16.0" },
 ]

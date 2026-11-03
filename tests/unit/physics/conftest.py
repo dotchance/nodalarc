@@ -12,7 +12,7 @@ from pathlib import Path
 
 import pytest
 import spiceypy
-from nodalarc.physics import SPICE_LOCK, EphemerisLocation, PhysicsContext
+from nodalarc.physics import EphemerisLocation, PhysicsContext
 from nodalarc.physics.datasets import convert_datasets
 from nodalarc.physics.ephemeris_table import FILES, select_file_ids
 
@@ -37,13 +37,10 @@ def physics_context(physics_location: EphemerisLocation) -> PhysicsContext:
 def spice_reference() -> Iterator[None]:
     """SPICE with the platform's files loaded in the table's load order.
 
-    SPICE keeps one process-wide kernel pool and is not thread safe, so the
-    platform's SPICE lock is held while files are loaded and unloaded.
+    SPICE keeps one process-wide kernel pool; the pool is cleared afterwards.
     """
-    with SPICE_LOCK:
-        spiceypy.kclear()
-        for file_id in select_file_ids(["earth", "luna"]):
-            spiceypy.furnsh(str(EPHEMERIS_DIR / FILES[file_id].filename))
+    spiceypy.kclear()
+    for file_id in select_file_ids(["earth", "luna"]):
+        spiceypy.furnsh(str(EPHEMERIS_DIR / FILES[file_id].filename))
     yield
-    with SPICE_LOCK:
-        spiceypy.kclear()
+    spiceypy.kclear()

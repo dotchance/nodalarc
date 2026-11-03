@@ -34,7 +34,7 @@ COPY build/runtime-constraints.txt /tmp/nodalarc-runtime-constraints.txt
 RUN pip install --no-cache-dir \
     --constraint /tmp/nodalarc-runtime-constraints.txt \
     "pydantic>=2.0" nats-py pyyaml numpy "protobuf>=6.31.1" \
-    kubernetes jinja2 sgp4 skyfield anise spiceypy
+    kubernetes jinja2 sgp4 skyfield anise
 
 # Add lib/ and services/ to Python path
 ENV PYTHONPATH=/app/lib:/app/services:/app

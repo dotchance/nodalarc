@@ -47,7 +47,7 @@ RUN pip install --no-cache-dir \
     --constraint /tmp/nodalarc-runtime-constraints.txt \
     "pydantic>=2.0" nats-py pyyaml fastapi uvicorn \
     "websockets>=16.0" numpy \
-    kubernetes sgp4 skyfield "asyncssh>=2.14.0" anise spiceypy
+    kubernetes sgp4 skyfield "asyncssh>=2.14.0" anise
 
 # Add lib/ and services/ to Python path
 ENV PYTHONPATH=/app/lib:/app/services:/app

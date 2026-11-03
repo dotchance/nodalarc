@@ -33,7 +33,7 @@ COPY build/runtime-constraints.txt /tmp/nodalarc-runtime-constraints.txt
 
 RUN pip install --no-cache-dir \
     --constraint /tmp/nodalarc-runtime-constraints.txt \
-    "pydantic>=2.0" nats-py pyyaml numpy sgp4 skyfield kubernetes anise spiceypy
+    "pydantic>=2.0" nats-py pyyaml numpy sgp4 skyfield kubernetes anise
 
 # Add lib/ to Python path so nodalarc package is importable
 ENV PYTHONPATH=/app/lib:/app/services:/app

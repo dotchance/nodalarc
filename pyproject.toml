@@ -15,7 +15,6 @@ runtime = [
     "protobuf>=6.31.1,<7",
     "asyncssh>=2.23.1",
     "anise>=0.10.6",
-    "spiceypy>=8.3.0",
 ]
 dev = [
     { include-group = "runtime" },
@@ -29,6 +28,7 @@ dev = [
     "pre-commit>=3.7.0",
     "vulture>=2.14",
     "kopf>=1.37",
+    "spiceypy>=8.3.0",
 ]
 
 [tool.pytest.ini_options]

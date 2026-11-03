@@ -45,10 +45,13 @@ from nodalarc.physics.datasets import (
     production_location,
     verified_path,
 )
-from nodalarc.physics.ephemeris_table import FILES, body_data, select_file_ids
+from nodalarc.physics.ephemeris_table import (
+    FILES,
+    ORIGIN_NAIF_ID,
+    body_data,
+    select_file_ids,
+)
 from nodalarc.physics.errors import PhysicsDataError
-
-_EARTH_NAIF_ID = 399
 
 
 def epoch_of(master_sim_time_unix: float) -> Epoch:
@@ -67,7 +70,7 @@ class SelectedFile:
 
 @dataclass(frozen=True, slots=True)
 class BodyState:
-    """A body's center relative to Earth's center, on ICRF axes."""
+    """A body's center in the common frame: relative to Earth's center, ICRF axes."""
 
     body_id: str
     position_km: Vec3
@@ -107,7 +110,7 @@ class PhysicsContext:
         location: EphemerisLocation | None = None,
     ) -> None:
         self._location = location if location is not None else production_location()
-        self._body_ids = tuple(sorted(set(body_ids) | {"earth"}))
+        self._body_ids = tuple(sorted(set(body_ids)))
         selected: list[SelectedFile] = []
         almanac: Almanac | None = None
         for file_id in select_file_ids(self._body_ids):
@@ -139,7 +142,7 @@ class PhysicsContext:
         data = body_data(body_id)
         windows = [
             self._almanac.spk_domain(data.naif_id),
-            self._almanac.spk_domain(_EARTH_NAIF_ID),
+            self._almanac.spk_domain(ORIGIN_NAIF_ID),
             self._almanac.bpc_domain(data.coverage_orientation_id),
         ]
         start = max(w[0].to_unix_seconds() for w in windows)
@@ -159,14 +162,14 @@ class PhysicsContext:
             )
 
     def body_state(self, body_id: str, master_sim_time_unix: float) -> BodyState:
-        """The body's center relative to Earth's center, ICRF axes."""
+        """The body's center in the common frame (origin at Earth's center, ICRF axes)."""
         self.require_coverage(body_id, master_sim_time_unix)
         if body_id == "earth":
             zero = Vec3(0.0, 0.0, 0.0)
             return BodyState(body_id="earth", position_km=zero, velocity_km_s=zero)
         state = self._almanac.translate(
             _inertial_frame(body_data(body_id).naif_id),
-            _inertial_frame(_EARTH_NAIF_ID),
+            _inertial_frame(ORIGIN_NAIF_ID),
             epoch_of(master_sim_time_unix),
             None,
         )

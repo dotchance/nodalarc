@@ -153,14 +153,21 @@ def body_data(body_id: str) -> BodyData:
         ) from exc
 
 
-def select_file_ids(body_ids: Iterable[str]) -> tuple[str, ...]:
-    """The files the given bodies need, in load order, each once.
+# The common frame NodalArc publishes in is centered on Earth's center with
+# ICRF axes. That center is a coordinate origin, read from the planetary
+# positions file, which carries every planet; it does not make Earth part of
+# a session. A Mars and Venus session loads no Earth orientation data.
+ORIGIN_FILE_ID = "de440s"
+ORIGIN_NAIF_ID = 399
 
-    Earth is always included: Earth is the origin of the common frame, so
-    every session needs Earth's position data even when no node is on Earth.
-    """
-    ordered: list[str] = []
-    for body_id in ("earth", *sorted(set(body_ids) - {"earth"})):
+
+def select_file_ids(body_ids: Iterable[str]) -> tuple[str, ...]:
+    """The files the session's bodies need, in load order, each once."""
+    bodies = sorted(set(body_ids))
+    if not bodies:
+        raise PhysicsDataError("a physics context needs at least one body")
+    ordered: list[str] = [ORIGIN_FILE_ID]
+    for body_id in bodies:
         for file_id in body_data(body_id).file_ids:
             if file_id not in ordered:
                 ordered.append(file_id)

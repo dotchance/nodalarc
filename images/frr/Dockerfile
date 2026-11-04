@@ -1,4 +1,11 @@
-FROM quay.io/frrouting/frr:10.7.1@sha256:e995beaa50fdc9edb35eadcfefa29b7f062cc06f2b812613789b68fa541554d2
+# FRR is pinned to 10.6.2. FRR 10.7.0 added a zebra shortcut that skips the kernel write when a
+# route is re-sent with an unchanged next-hop group id. When a router's only link loses carrier,
+# the kernel deletes that group and the routes that use it without telling zebra. Zebra re-creates
+# the group under the same id and never writes those routes back, while it reports them installed.
+# On FRR 10.7.1 a lunar station lost its route to its relay this way after one link drop and
+# return; on 10.6.2 the same sequence restored every route. The upstream fix is pending:
+# https://github.com/FRRouting/frr/pull/23560
+FROM quay.io/frrouting/frr:10.6.2@sha256:89e5e1ec8b17c5dffaf57dbac58a29ebeb3731a84e5bc09dad1662adff2ba7f5
 ARG PROJECT_VERSION=0+unknown
 ARG VCS_REF=unknown
 ARG BUILD_DATE=unknown
@@ -39,7 +46,7 @@ RUN apk add --no-cache openssh-server traceroute && \
 # FRR's docker-start and frrcommon.sh are bash scripts — removing bash
 # breaks FRR's startup chain. The security boundary for interactive
 # terminal access is: SSH login shell = /usr/bin/vtysh (not bash),
-# vtysh "terminal shell" disabled (verified in official FRR 10.7.1),
+# vtysh "terminal shell" disabled (verified in official FRR 10.6.2),
 # read-only root filesystem (set by session_deployer.py).
 
 # Our entrypoint configures SSH, then hands off to FRR's stock

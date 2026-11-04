@@ -1,0 +1,38 @@
+node:
+  id: mars-ion-relay-tgo
+  display_name: TGO-class Mars relay orbiter carrying an ION relay host
+  forwarding: routed
+  profile: nodalarc:profiles/frr-router.yaml
+  ethernet:
+  - id: bus1
+  terminals:
+  - id: access_uhf
+    role: access
+    terminal: nodalarc:terminals/rf/rf-uhf-electra-orbiter.yaml
+    count: 1
+    boresight:
+      mode: nadir
+  - id: relay_x
+    role: crosslink
+    terminal: nodalarc:terminals/rf/rf-x-mars-relay-crosslink.yaml
+    count: 1
+  payloads:
+  - id: dtn
+    payload: nodalarc:payloads/ion-host.yaml
+    count: 1
+    attach: bus1
+    tags:
+    - ion_tgo
+  originated_prefixes:
+    ipv4:
+    - bus1
+    ipv6:
+    - bus1
+  reference: https://assets.science.nasa.gov/content/dam/science/psd/mars/files/mars-relay-network/MRN%20Handbook_v4_final_URS_cleared.pdf
+  notes: A low Mars relay orbiter of the ExoMars Trace Gas Orbiter class with its Electra UHF
+    relay terminal toward surface users, and an X-band crosslink toward a
+    future areostationary relay, which today's orbiters do not carry. The
+    ION host on its payload bus is a DTN relay; the router originates the
+    bus so the host is reachable whenever the orbiter is. The model differs
+    from the other low relay model only in its payload tag, the address
+    handle of the relay host.

@@ -1,0 +1,42 @@
+node:
+  id: mars-areostationary-ion-relay
+  display_name: Areostationary Mars relay carrying an ION relay host
+  forwarding: routed
+  profile: nodalarc:profiles/frr-router.yaml
+  ethernet:
+  - id: bus1
+  terminals:
+  - id: access_uhf
+    role: access
+    terminal: nodalarc:terminals/rf/rf-uhf-mars-areostationary-relay.yaml
+    count: 3
+    boresight:
+      mode: nadir
+  - id: relay_x
+    role: crosslink
+    terminal: nodalarc:terminals/rf/rf-x-mars-relay-crosslink.yaml
+    count: 2
+  - id: trunk
+    role: crosslink
+    terminal: nodalarc:terminals/optical/optical-mars-trunk.yaml
+    count: 1
+  payloads:
+  - id: dtn
+    payload: nodalarc:payloads/ion-host.yaml
+    count: 1
+    attach: bus1
+    tags:
+    - ion_mto
+  originated_prefixes:
+    ipv4:
+    - bus1
+    ipv6:
+    - bus1
+  reference: https://www.nasa.gov/news-release/nasa-selects-blue-origin-as-mars-telecommunications-network-provider/
+  notes: A future Mars telecommunications relay of the kind NASA's Mars
+    Telecommunications Network calls for (orbiter by the end of 2028, network
+    at Mars by 2030; store-and-forward, Bundle Protocol 7). It carries UHF
+    proximity terminals toward surface users, X-band crosslinks toward low
+    orbiters and an optical trunk toward an Earth relay, and an ION relay host on its payload bus.
+    NASA has not published the network's orbit; the areostationary placement
+    is this model's choice.

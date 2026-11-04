@@ -1,0 +1,568 @@
+session:
+  name: earth-luna-mars-dtn
+  display_name: Earth, Luna and Mars DTN networks under one sky
+  description: 'The earth-luna-dtn sky and the earth-mars-hdtn-relay chain in one session.
+    Around Earth and Luna: a polar LEO shell, a GEO relay ring and a cislunar DTN relay vehicle,
+    with QUIC labs and uD3TN endpoints at Tidbinbilla and the lunar south pole. Toward Mars:
+    three Mars bases, low and areostationary Mars relays, an optical trunk across the Earth-Mars
+    light time (338 s one way at the 2027 opposition) to an Earth GEO deep-space relay and
+    two optical ground stations, every relay and endpoint host running NASA HDTN over LTP.
+    The two DTN networks are independent; each Earth relay network reaches its far body through
+    a static boundary.'
+segments:
+- id: leo
+  source: nodalarc:constellations/earth/leo/earth-leo-polar-66.yaml
+- id: geo_relay
+  source: nodalarc:constellations/earth/geo/earth-geo-ring-8.yaml
+- id: luna_relay
+  source: nodalarc:space-node-sets/luna/luna-dtn-relay-1.yaml
+- id: client_ground
+  placement:
+    from_site_set: nodalarc:site-sets/earth/earth-quic-lab-sites.yaml
+  apply:
+    scheduling:
+      selection_policy:
+        highest_elevation: {}
+      handover_policy:
+        hysteresis:
+          discount_factor: 1.1
+          mask_fade_range_deg: 3.0
+      handover_mode: mbb
+      mbb_overlap_ticks: 30
+      mbb_reserve: 1
+      handover_concurrency: one_at_a_time
+      ranking_order:
+      - service_priority
+      - per_gs_rank
+      - satellite_ground_terminal_capacity
+      - lex_pair
+      mbb_preemption: 'off'
+      successor_abort_policy: hard_release
+      cross_tenant_displacement: 'off'
+      bbm_acquire_timeout_ticks: 1
+    originated_prefixes:
+      ipv4:
+      - default
+- id: relay_ground
+  placement:
+    from_site_set: nodalarc:site-sets/earth/earth-quic-relay-sites.yaml
+  apply:
+    scheduling:
+      selection_policy:
+        highest_elevation: {}
+      handover_policy:
+        hysteresis:
+          discount_factor: 1.1
+          mask_fade_range_deg: 3.0
+      handover_mode: mbb
+      mbb_overlap_ticks: 30
+      mbb_reserve: 1
+      handover_concurrency: one_at_a_time
+      ranking_order:
+      - service_priority
+      - per_gs_rank
+      - satellite_ground_terminal_capacity
+      - lex_pair
+      mbb_preemption: 'off'
+      successor_abort_policy: hard_release
+      cross_tenant_displacement: 'off'
+      bbm_acquire_timeout_ticks: 1
+- id: luna_ground
+  placement:
+    from_site_set: nodalarc:site-sets/luna/luna-quic-lab-sites.yaml
+  apply:
+    scheduling:
+      selection_policy:
+        highest_elevation: {}
+      handover_policy:
+        hysteresis:
+          discount_factor: 1.1
+          mask_fade_range_deg: 3.0
+      handover_mode: mbb
+      mbb_overlap_ticks: 30
+      mbb_reserve: 1
+      handover_concurrency: one_at_a_time
+      ranking_order:
+      - service_priority
+      - per_gs_rank
+      - satellite_ground_terminal_capacity
+      - lex_pair
+      mbb_preemption: 'off'
+      successor_abort_policy: hard_release
+      cross_tenant_displacement: 'off'
+      bbm_acquire_timeout_ticks: 1
+- id: dtn_earth_ground
+  placement:
+    from_site_set: nodalarc:site-sets/earth/earth-tidbinbilla-dtn-lab-sites.yaml
+  apply:
+    scheduling:
+      selection_policy:
+        highest_elevation: {}
+      handover_policy:
+        hysteresis:
+          discount_factor: 1.1
+          mask_fade_range_deg: 3.0
+      handover_mode: mbb
+      mbb_overlap_ticks: 30
+      mbb_reserve: 1
+      handover_concurrency: one_at_a_time
+      ranking_order:
+      - service_priority
+      - per_gs_rank
+      - satellite_ground_terminal_capacity
+      - lex_pair
+      mbb_preemption: 'off'
+      successor_abort_policy: hard_release
+      cross_tenant_displacement: 'off'
+      bbm_acquire_timeout_ticks: 1
+    originated_prefixes:
+      ipv4:
+      - default
+- id: dtn_luna_ground
+  placement:
+    from_site_set: nodalarc:site-sets/luna/luna-dtn-lab-sites.yaml
+  apply:
+    scheduling:
+      selection_policy:
+        highest_elevation: {}
+      handover_policy:
+        hysteresis:
+          discount_factor: 1.1
+          mask_fade_range_deg: 3.0
+      handover_mode: mbb
+      mbb_overlap_ticks: 30
+      mbb_reserve: 1
+      handover_concurrency: one_at_a_time
+      ranking_order:
+      - service_priority
+      - per_gs_rank
+      - satellite_ground_terminal_capacity
+      - lex_pair
+      mbb_preemption: 'off'
+      successor_abort_policy: hard_release
+      cross_tenant_displacement: 'off'
+      bbm_acquire_timeout_ticks: 1
+- id: mars_relays
+  source: nodalarc:space-node-sets/mars/mars-dtn-relays.yaml
+- id: deep_space_relay
+  source: nodalarc:space-node-sets/earth/geo/earth-deep-space-relay-1.yaml
+- id: mars_bases
+  placement:
+    from_site_set: nodalarc:site-sets/mars/mars-dtn-bases.yaml
+  apply:
+    scheduling:
+      selection_policy:
+        highest_elevation: {}
+      handover_policy:
+        hysteresis:
+          discount_factor: 1.1
+          mask_fade_range_deg: 3.0
+      handover_mode: mbb
+      mbb_overlap_ticks: 30
+      mbb_reserve: 1
+      handover_concurrency: one_at_a_time
+      ranking_order:
+      - service_priority
+      - per_gs_rank
+      - satellite_ground_terminal_capacity
+      - lex_pair
+      mbb_preemption: 'off'
+      successor_abort_policy: hard_release
+      cross_tenant_displacement: 'off'
+      bbm_acquire_timeout_ticks: 1
+- id: deep_space_ogs
+  placement:
+    from_site_set: nodalarc:site-sets/earth/earth-mars-dtn-ogs-sites.yaml
+  apply:
+    scheduling:
+      selection_policy:
+        highest_elevation: {}
+      handover_policy:
+        hard_release: {}
+      handover_mode: bbm
+      mbb_overlap_ticks: 0
+      mbb_reserve: 0
+      handover_concurrency: one_at_a_time
+      ranking_order:
+      - service_priority
+      - per_gs_rank
+      - satellite_ground_terminal_capacity
+      - lex_pair
+      mbb_preemption: 'off'
+      successor_abort_policy: hard_release
+      cross_tenant_displacement: 'off'
+      bbm_acquire_timeout_ticks: 1
+link_rules:
+- id: client_access
+  topology:
+    mode: visible_candidates
+  endpoints:
+  - select:
+      all:
+      - segment: client_ground
+      - tag: leo
+    terminal:
+      all:
+      - role: access
+      - medium: rf
+    min_elevation_deg: 10
+  - select:
+      segment: leo
+    terminal:
+      all:
+      - role: access
+      - medium: rf
+- id: relay_leo_access
+  topology:
+    mode: visible_candidates
+  endpoints:
+  - select:
+      all:
+      - segment: relay_ground
+      - tag: leo
+    terminal:
+      all:
+      - role: access
+      - medium: rf
+    min_elevation_deg: 10
+  - select:
+      segment: leo
+    terminal:
+      all:
+      - role: access
+      - medium: rf
+- id: relay_geo_access
+  topology:
+    mode: visible_candidates
+  endpoints:
+  - select:
+      all:
+      - segment: relay_ground
+      - tag: geo
+    terminal:
+      all:
+      - role: access
+      - medium: rf
+      - mount: access_ka
+    min_elevation_deg: 5
+  - select:
+      segment: geo_relay
+    terminal:
+      all:
+      - role: access
+      - medium: rf
+      - mount: access_ka
+- id: leo_isl
+  topology:
+    mode: nearest_n
+    n: 4
+  endpoints:
+  - select:
+      segment: leo
+    terminal:
+      all:
+      - role: isl
+      - medium: optical
+  - select:
+      segment: leo
+    terminal:
+      all:
+      - role: isl
+      - medium: optical
+- id: leo_to_geo
+  topology:
+    mode: nearest_n
+    n: 1
+  endpoints:
+  - select:
+      segment: leo
+    terminal:
+      all:
+      - role: crosslink
+      - medium: optical
+  - select:
+      segment: geo_relay
+    terminal:
+      all:
+      - role: crosslink
+      - medium: optical
+- id: geo_isl
+  topology:
+    mode: nearest_n
+    n: 2
+  endpoints:
+  - select:
+      segment: geo_relay
+    terminal:
+      all:
+      - role: isl
+      - medium: optical
+  - select:
+      segment: geo_relay
+    terminal:
+      all:
+      - role: isl
+      - medium: optical
+- id: geo_to_luna
+  topology:
+    mode: nearest_n
+    n: 1
+  endpoints:
+  - select:
+      segment: geo_relay
+    terminal:
+      all:
+      - role: crosslink
+      - medium: optical
+  - select:
+      segment: luna_relay
+    terminal:
+      all:
+      - role: crosslink
+      - medium: optical
+- id: luna_access
+  topology:
+    mode: visible_candidates
+  endpoints:
+  - select:
+      all:
+      - segment: luna_ground
+      - tag: luna
+    terminal:
+      all:
+      - role: access
+      - medium: rf
+    min_elevation_deg: 10
+  - select:
+      segment: luna_relay
+    terminal:
+      all:
+      - role: access
+      - medium: rf
+- id: dtn_earth_access
+  topology:
+    mode: visible_candidates
+  endpoints:
+  - select:
+      all:
+      - segment: dtn_earth_ground
+      - tag: leo
+    terminal:
+      all:
+      - role: access
+      - medium: rf
+    min_elevation_deg: 10
+  - select:
+      segment: leo
+    terminal:
+      all:
+      - role: access
+      - medium: rf
+- id: dtn_luna_access
+  topology:
+    mode: visible_candidates
+  endpoints:
+  - select:
+      all:
+      - segment: dtn_luna_ground
+      - tag: luna
+    terminal:
+      all:
+      - role: access
+      - medium: rf
+    min_elevation_deg: 10
+  - select:
+      segment: luna_relay
+    terminal:
+      all:
+      - role: access
+      - medium: rf
+- id: mars_uhf
+  topology:
+    mode: visible_candidates
+  endpoints:
+  - select:
+      segment: mars_bases
+    terminal:
+      all:
+      - role: access
+      - medium: rf
+      - mount: prox_uhf
+    min_elevation_deg: 10
+  - select:
+      segment: mars_relays
+    terminal:
+      all:
+      - role: access
+      - medium: rf
+      - mount: access_uhf
+- id: mars_relay_crosslink
+  topology:
+    mode: visible_candidates
+  endpoints:
+  - select:
+      all:
+      - segment: mars_relays
+      - tag: lmo
+    terminal:
+      all:
+      - role: crosslink
+      - medium: rf
+      - mount: relay_x
+  - select:
+      all:
+      - segment: mars_relays
+      - tag: areo
+    terminal:
+      all:
+      - role: crosslink
+      - medium: rf
+      - mount: relay_x
+- id: earth_mars_trunk
+  topology:
+    mode: nearest_n
+    n: 1
+  endpoints:
+  - select:
+      all:
+      - segment: mars_relays
+      - tag: areo
+    terminal:
+      all:
+      - role: crosslink
+      - medium: optical
+      - mount: trunk
+  - select:
+      segment: deep_space_relay
+    terminal:
+      all:
+      - role: crosslink
+      - medium: optical
+      - mount: trunk
+- id: earth_optical
+  topology:
+    mode: visible_candidates
+  endpoints:
+  - select:
+      segment: deep_space_ogs
+    terminal:
+      all:
+      - role: access
+      - medium: optical
+      - mount: access_optical
+    min_elevation_deg: 20
+  - select:
+      segment: deep_space_relay
+    terminal:
+      all:
+      - role: access
+      - medium: optical
+      - mount: access_optical
+addressing:
+  loopbacks:
+  - id: node_loopbacks
+    applies_to:
+      any:
+      - segment: leo
+      - segment: geo_relay
+      - segment: luna_relay
+      - segment: client_ground
+      - segment: relay_ground
+      - segment: luna_ground
+      - segment: dtn_earth_ground
+      - segment: dtn_luna_ground
+      - segment: mars_relays
+      - segment: deep_space_relay
+      - segment: mars_bases
+      - segment: deep_space_ogs
+    ipv4_pool: 10.255.0.0/16
+    prefix_length: 32
+    allocation: by_node_order
+routing:
+  domains:
+  - id: earth_domain
+    protocol: isis
+    selectors:
+    - any:
+      - segment: leo
+      - segment: geo_relay
+      - all:
+        - segment: client_ground
+        - tag: leo
+      - segment: relay_ground
+      - all:
+        - segment: dtn_earth_ground
+        - tag: leo
+    area_assignment:
+      strategy: flat
+  - id: luna_domain
+    protocol: isis
+    selectors:
+    - any:
+      - segment: luna_relay
+      - all:
+        - segment: luna_ground
+        - tag: luna
+      - all:
+        - segment: dtn_luna_ground
+        - tag: luna
+    area_assignment:
+      strategy: flat
+  - id: mars_domain
+    protocol: isis
+    selectors:
+    - any:
+      - segment: mars_relays
+      - segment: mars_bases
+    area_assignment:
+      strategy: flat
+  - id: deep_space_domain
+    protocol: isis
+    selectors:
+    - any:
+      - segment: deep_space_relay
+      - segment: deep_space_ogs
+    area_assignment:
+      strategy: flat
+  boundaries:
+  - over: geo_to_luna
+    adapter: static_ip
+    export:
+    - from: earth_domain
+      to: luna_domain
+      prefixes:
+        aggregate_of: originated
+      export_node_loopbacks: true
+      install_via: peer_loopback
+    - from: luna_domain
+      to: earth_domain
+      prefixes:
+        aggregate_of: originated
+      export_node_loopbacks: true
+      install_via: peer_loopback
+  - over: earth_mars_trunk
+    adapter: static_ip
+    export:
+    - from: mars_domain
+      to: deep_space_domain
+      prefixes:
+        aggregate_of: originated
+      export_node_loopbacks: true
+      install_via: peer_loopback
+    - from: deep_space_domain
+      to: mars_domain
+      prefixes:
+        aggregate_of: originated
+      export_node_loopbacks: true
+      install_via: peer_loopback
+simulation:
+  candidate_limits:
+    max_pairs_per_rule: 2000
+    max_pairs_per_tick: 10000
+time:
+  start_time: '2027-02-19T00:00:00Z'
+  step_seconds: 1
+  compression: 1
+dispatch:
+  latency_authority: ome
+  max_latency_age_ticks: 10

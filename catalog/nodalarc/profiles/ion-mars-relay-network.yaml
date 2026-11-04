@@ -1,0 +1,95 @@
+# The Mars relay network's DTN network, run by NASA JPL's ION (4.2.0,
+# packaged unmodified in nodalarc-ion). Every member runs this one profile:
+# ion-node in the image finds which member it is from its own address,
+# numbers the members in name order (arcadia ipn:1 ... tgo ipn:6; an
+# endpoint's file receiver is ipn:n.1) and runs LTP over UDP to each
+# neighbour. The member addresses arrive from the platform, each from the
+# payload that carries the member's tag; no address is authored here.
+#
+# The contacts, light times, rates, LTP span parameters and heap size are
+# this example's experiment parameters, and the user owns them: change them,
+# or run ION with a configuration of your own. Each contact is
+# <a>-<b>:<one-way light time s>:<a to b bytes/s>:<b to a bytes/s>, in ION's
+# units. ION's ranges are whole light seconds, so every proximity link here
+# is declared at 1 s, above its physical light time (tens of milliseconds);
+# the emulated links carry the physical delay. Rates are the terminals'
+# (UHF proximity: 2.048 Mbit/s up from a base and 256 kbit/s down from a low
+# orbiter; X-band relay crosslinks 25 Mbit/s). The span parameters are
+# <max export sessions> <max import sessions> <max segment bytes>
+# <aggregation bytes> <aggregation seconds>; segments of 1400 bytes fit one
+# 1500-byte Ethernet frame with their UDP and IP headers.
+profile:
+  id: ion-mars-relay-network
+  display_name: ION Mars relay network member
+  registry: node01:5000
+  image: nodalarc-ion/ion@sha256:0a2b388ceb8e425524dcc49d2f1f661c4df1410fd56f43d2bcf11198afafae87
+  env:
+  - name: ION_ADDR_arcadia
+    value_from:
+      tag: ion_arcadia
+      interface: terr0
+      family: ipv4
+  - name: ION_ADDR_gale
+    value_from:
+      tag: ion_gale
+      interface: terr0
+      family: ipv4
+  - name: ION_ADDR_jezero
+    value_from:
+      tag: ion_jezero
+      interface: terr0
+      family: ipv4
+  - name: ION_ADDR_mro
+    value_from:
+      tag: ion_mro
+      interface: bus1
+      family: ipv4
+  - name: ION_ADDR_mto
+    value_from:
+      tag: ion_mto
+      interface: bus1
+      family: ipv4
+  - name: ION_ADDR_tgo
+    value_from:
+      tag: ion_tgo
+      interface: bus1
+      family: ipv4
+  - name: ION_ENDPOINTS
+    value: arcadia gale jezero
+  - name: ION_LTP_SPAN
+    value: 64 64 1400 100000 1
+  - name: ION_HEAP_WORDS
+    value: '33554432'
+  - name: ION_CONTACTS
+    value: >-
+      mto-jezero:1:256000:256000
+      mto-gale:1:256000:256000
+      mto-mro:1:3125000:3125000
+      mto-tgo:1:3125000:3125000
+      mro-jezero:1:32000:256000
+      mro-gale:1:32000:256000
+      mro-arcadia:1:32000:256000
+      tgo-jezero:1:32000:256000
+      tgo-gale:1:32000:256000
+      tgo-arcadia:1:32000:256000
+  command:
+  - ion-node
+  root_filesystem: read_only
+  volumes:
+  - name: run
+    kind: ephemeral
+    medium: memory
+    size_mi: 512
+  mounts:
+  - volume: run
+    path: /run/ion
+    read_only: false
+  terminal:
+    surface: exec
+    command:
+    - /bin/bash
+    - -l
+  resources:
+    requests: {cpu_m: 50, memory_mi: 128}
+    limits: {cpu_m: 1000, memory_mi: 1024}
+  reference: https://github.com/nasa-jpl/ION-DTN

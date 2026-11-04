@@ -1,0 +1,109 @@
+session:
+  name: mars-ion-relay-network
+  display_name: Mars relay network (ION)
+  description: 'Three Mars surface bases exchange bundles through the Mars relay
+    network: UHF to two low relay orbiters (MRO and TGO class) and to an
+    areostationary relay over 105 E, with X-band crosslinks between the
+    relays. Every relay and endpoint host runs NASA JPL ION with LTP over
+    UDP and contact graph routing; the Mars routers run one IS-IS instance.
+    The session has no Earth: Mars is its only body.'
+segments:
+- id: mars_relays
+  source: nodalarc:space-node-sets/mars/mars-ion-relays.yaml
+- id: mars_bases
+  placement:
+    from_site_set: nodalarc:site-sets/mars/mars-ion-bases.yaml
+  apply:
+    scheduling:
+      selection_policy:
+        highest_elevation: {}
+      handover_policy:
+        hysteresis:
+          discount_factor: 1.1
+          mask_fade_range_deg: 3.0
+      handover_mode: mbb
+      mbb_overlap_ticks: 30
+      mbb_reserve: 1
+      handover_concurrency: one_at_a_time
+      ranking_order:
+      - service_priority
+      - per_gs_rank
+      - satellite_ground_terminal_capacity
+      - lex_pair
+      mbb_preemption: 'off'
+      successor_abort_policy: hard_release
+      cross_tenant_displacement: 'off'
+      bbm_acquire_timeout_ticks: 1
+link_rules:
+- id: mars_uhf
+  topology:
+    mode: visible_candidates
+  endpoints:
+  - select:
+      segment: mars_bases
+    terminal:
+      all:
+      - role: access
+      - medium: rf
+      - mount: prox_uhf
+    min_elevation_deg: 10
+  - select:
+      segment: mars_relays
+    terminal:
+      all:
+      - role: access
+      - medium: rf
+      - mount: access_uhf
+- id: mars_relay_crosslink
+  topology:
+    mode: visible_candidates
+  endpoints:
+  - select:
+      all:
+      - segment: mars_relays
+      - tag: lmo
+    terminal:
+      all:
+      - role: crosslink
+      - medium: rf
+      - mount: relay_x
+  - select:
+      all:
+      - segment: mars_relays
+      - tag: areo
+    terminal:
+      all:
+      - role: crosslink
+      - medium: rf
+      - mount: relay_x
+addressing:
+  loopbacks:
+  - id: node_loopbacks
+    applies_to:
+      any:
+      - segment: mars_relays
+      - segment: mars_bases
+    ipv4_pool: 10.255.0.0/16
+    prefix_length: 32
+    allocation: by_node_order
+routing:
+  domains:
+  - id: mars_domain
+    protocol: isis
+    selectors:
+    - any:
+      - segment: mars_relays
+      - segment: mars_bases
+    area_assignment:
+      strategy: flat
+simulation:
+  candidate_limits:
+    max_pairs_per_rule: 2000
+    max_pairs_per_tick: 10000
+time:
+  start_time: '2027-02-19T00:00:00Z'
+  step_seconds: 1
+  compression: 1
+dispatch:
+  latency_authority: ome
+  max_latency_age_ticks: 10

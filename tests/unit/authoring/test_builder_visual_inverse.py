@@ -336,7 +336,23 @@ _OFFERED_CARDS: dict[str, tuple[tuple[str, ...], tuple[str, ...], tuple[int, ...
         (),
         (),
     ),
+    "earth-luna-mars-dtn": (
+        (
+            "client_access",
+            "relay_leo_access",
+            "leo_isl",
+            "leo_to_geo",
+            "geo_isl",
+            "geo_to_luna",
+            "luna_access",
+            "dtn_earth_access",
+            "dtn_luna_access",
+        ),
+        ("mars_domain", "deep_space_domain"),
+        (),
+    ),
     "earth-mars-hdtn-relay": ((), ("mars_domain", "earth_domain"), ()),
+    "mars-ion-relay-network": ((), ("mars_domain",), ()),
     "earth-meo-gps": (("meo_access", "meo_isl"), (), ()),
 }
 

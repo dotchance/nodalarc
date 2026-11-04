@@ -126,6 +126,13 @@ SHIPPED_SESSION_SHAPES = {
     # with an HDTN host; 9 UHF pairs (3 bases by 3 relays), 2 relay
     # crosslinks, 2 optical ground links and the trunk.
     "earth-mars-hdtn-relay.yaml": (18, 14),
+    # 12/11: the Mars side of earth-mars-hdtn-relay with ION hosts in place of
+    # HDTN ones: three bases and three relays, each a router with an ION host;
+    # 9 UHF pairs and 2 relay crosslinks.
+    "mars-ion-relay-network.yaml": (12, 11),
+    # 104/371: earth-luna-dtn (86/357) and earth-mars-hdtn-relay (18/14) in one
+    # session; the two compositions share no node and no link rule.
+    "earth-luna-mars-dtn.yaml": (104, 371),
     # 43/246: four feeder-class bridge sites added (Djibouti, Singapore,
     # Cape Town, Tokyo — authored ranges cover the 780 km shell at the
     # declared mask) and the ISL rule pinned to the 30 physically visible

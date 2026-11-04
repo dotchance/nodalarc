@@ -1,0 +1,9 @@
+payload:
+  id: ion-host
+  display_name: ION store-and-forward host
+  forwarding: host
+  profile: nodalarc:profiles/ion-mars-relay-network.yaml
+  notes: A carried host environment running a NASA JPL ION bundle node.
+    Attaches to whichever segment its mount names; addresses arrive from
+    allocation. The authored profile is the Mars relay network's; a session
+    whose DTN network differs states its own profile on the segment.

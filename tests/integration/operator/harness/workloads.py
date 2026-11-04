@@ -129,17 +129,20 @@ def send_a_file(
     """From the sender's shell, send one file to the receiver.
 
     Returns the sender's clock when it sent, the bundle bytes its node accepted, and what the
-    shell printed. bpsendfile keeps running after it sends, so it is stopped after 15 s.
+    shell printed. bpsendfile keeps running after it sends, so it is stopped after 15 s with an
+    interrupt, on which it prints its totals; they go to a log file, read afterwards.
     """
+    log = f"/run/hdtn/outbox/{name}.log"
     with operator.terminal(sender.node_id) as outbox:
         _, printed = run_in_shell(
             outbox,
             f"mkdir -p /run/hdtn/outbox && printf '%s' '{payload}' > /run/hdtn/outbox/{name} "
-            f"&& echo sent-at $(date +%s.%N) && timeout 15 bpsendfile --use-bp-version-7 "
+            f"&& echo sent-at $(date +%s.%N) && timeout -s INT 15 bpsendfile --use-bp-version-7 "
             f"--bundle-lifetime-milliseconds=86400000 --my-uri-eid={sender.sender_eid} "
             f"--dest-uri-eid={receiver.receiver_eid} "
             f"--outducts-config-file=/run/hdtn/app-outduct.json "
-            f"--file-or-folder-path=/run/hdtn/outbox/{name} 2>&1 | grep totalBundleBytesAcked",
+            f"--file-or-folder-path=/run/hdtn/outbox/{name} > {log} 2>&1; "
+            f"grep totalBundleBytesAcked {log}",
             timeout=40.0,
         )
     sent = re.search(r"^sent-at (\d+\.\d+)$", printed, re.M)

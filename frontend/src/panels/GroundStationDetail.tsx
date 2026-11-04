@@ -16,8 +16,7 @@ import { selectionTypeForNodeId } from "../networkIdentity";
 import { RoutingRows } from "./RoutingRows";
 import { Icon } from "../ui/icons/Icon";
 import { TaxonomyChip } from "../ui/Badge";
-import { REGIME_TINT } from "../taxonomy/regime";
-import { tokens } from "../styles/tokens";
+import { BODY_IDENTITY } from "../taxonomy/bodies";
 import type { GroundLinkDecisionSnapshot, NodeState, StateSnapshot } from "../generated/vsApi";
 import { formatLinkEndLatency, formatTimeShort } from "../translate";
 
@@ -164,7 +163,7 @@ export function GroundStationDetail({ node, snapshot, onSelect }: GroundStationD
         <span className="object-head-icon"><Icon name="satellite-dish" size={16} /></span>
         <h2>{node.node_id}</h2>
         <TaxonomyChip
-          color={node.reference_body === "luna" ? REGIME_TINT.luna.css : tokens.mediumTerrestrial}
+          color={BODY_IDENTITY[node.reference_body].tintCss}
           title="Surface body"
         >
           {node.reference_body}

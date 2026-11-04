@@ -14,12 +14,13 @@
  */
 
 import { tokens } from "../styles/tokens";
+import { BODY_IDENTITY, BODY_REGIMES, type BodyRegime, isBodyRegime } from "./bodies";
 import type { EphemerisNode } from "../sim/ephemeris";
 import type { SessionEphemeris } from "../builder/generated/builderApi";
 
-export type Regime = "leo" | "meo" | "geo" | "heo" | "luna" | "unknown";
+export type Regime = "leo" | "meo" | "geo" | "heo" | BodyRegime | "unknown";
 
-export const REGIMES: readonly Regime[] = ["leo", "meo", "geo", "heo", "luna", "unknown"];
+export const REGIMES: readonly Regime[] = ["leo", "meo", "geo", "heo", ...BODY_REGIMES, "unknown"];
 
 interface RegimeTint {
   css: string;
@@ -31,12 +32,16 @@ function tint(css: string, label: string): RegimeTint {
   return { css, hex: parseInt(css.replace("#", ""), 16), label };
 }
 
+const BODY_REGIME_TINT = Object.fromEntries(
+  BODY_REGIMES.map((body) => [body, tint(BODY_IDENTITY[body].tintCss, BODY_IDENTITY[body].label)]),
+) as Record<BodyRegime, RegimeTint>;
+
 export const REGIME_TINT: Record<Regime, RegimeTint> = {
   leo: tint(tokens.regimeLeo, "LEO"),
   meo: tint(tokens.regimeMeo, "MEO"),
   geo: tint(tokens.regimeGeo, "GEO"),
   heo: tint(tokens.regimeHeo, "HEO"),
-  luna: tint(tokens.regimeLuna, "Lunar"),
+  ...BODY_REGIME_TINT,
   unknown: tint("#" + tokens.colorNodeUnknown.toString(16).padStart(6, "0"), "Unclassified"),
 };
 
@@ -50,7 +55,7 @@ const HEO_ECCENTRICITY = 0.25;
 
 /** Classify one ephemeris node from its authored elements. Pure. */
 export function classifyRegime(node: EphemerisNode, bodyMeanRadiusKm: number | undefined): Regime {
-  if (node.reference_body === "luna") return "luna";
+  if (isBodyRegime(node.reference_body)) return node.reference_body;
   if (node.reference_body !== "earth") return "unknown";
   if (node.type !== "keplerian") return "unknown"; // tle is runtime-future; fixed is ground
   if (bodyMeanRadiusKm === undefined) return "unknown";

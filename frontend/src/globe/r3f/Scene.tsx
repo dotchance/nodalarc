@@ -71,6 +71,21 @@ import type {
   SupportedSurfaceBody,
 } from "../../builder/generated/builderApi";
 
+/** Each supported body's surface, keyed by every body the backend supports: a supported body
+ *  without a surface fails the type check. */
+const BODY_SURFACE: Record<SupportedSurfaceBody, (props: { globeMode: GlobeMode }) => React.ReactNode> = {
+  earth: ({ globeMode }) => <Earth globeMode={globeMode} />,
+  luna: () => <Moon />,
+};
+
+function BodySurface({ id, globeMode }: { id: string; globeMode: GlobeMode }) {
+  const surface = BODY_SURFACE[id as SupportedSurfaceBody];
+  if (surface === undefined) {
+    throw new Error(`no surface for body ${id}: the page supports ${Object.keys(BODY_SURFACE).join(", ")}`);
+  }
+  return <>{surface({ globeMode })}</>;
+}
+
 const MAX_PINS = 7;
 
 /** The state fields the scene renders. The live feed passes its frame; the
@@ -444,11 +459,7 @@ export function Scene({
               onFocusBody={focusBody}
               ref={body.id === "earth" ? earthGroupRef : undefined}
             >
-              {body.id === "earth" ? (
-                <Earth globeMode={globeMode} />
-              ) : body.id === "luna" ? (
-                <Moon />
-              ) : null}
+              <BodySurface id={body.id} globeMode={globeMode} />
               <Constellation
                 nodes={bodyNodes}
                 ephemeris={ephemeris}

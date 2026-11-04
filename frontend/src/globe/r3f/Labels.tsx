@@ -25,7 +25,8 @@ import * as THREE from "three";
 import { useFrame, useThree } from "@react-three/fiber";
 import { isOccludedBySphere, getLabelsEnabled } from "../labels";
 import { getGsLabelsEnabled } from "../groundStations";
-import { getNodeBodySphere, getNodeWorldPosition } from "./positions";
+import { bodyWorldSpheres, getNodeBodySphere, getNodeWorldPosition } from "./positions";
+import type { BodySphere } from "./linkCurve";
 import type { NodeState } from "../../generated/vsApi";
 import { isGroundNode } from "../../networkIdentity";
 
@@ -47,6 +48,9 @@ const BODY_FOLD_SCREEN_RADIUS_PX = 90;
 // packing.
 const LABEL_CHAR_PX = 6.5;
 const LABEL_HEIGHT_PX = 14;
+// A body chip's box: the label height plus its padding and a gap.
+const CHIP_HEIGHT_PX = 18;
+const CHIP_PADDING_PX = 12;
 
 // Per-frame projection temporaries — hoisted to module scope (zero useFrame heap alloc).
 const _worldPos = new THREE.Vector3();
@@ -58,6 +62,51 @@ interface PlacedRect {
   y: number;
   w: number;
   h: number;
+}
+
+/**
+ * Whether a body hides `point` from the camera. A label is drawn only where its object can be
+ * seen, and any body in the session can stand between them, not only the object's own body.
+ * `skipCenter` names one body to leave out: a body's own chip sits at its centre, which its own
+ * sphere always covers. Exported for tests.
+ */
+export function occludedByBodies(
+  point: THREE.Vector3,
+  cameraPos: THREE.Vector3,
+  spheres: readonly BodySphere[],
+  skipCenter: THREE.Vector3 | null,
+): boolean {
+  for (const sphere of spheres) {
+    if (skipCenter !== null && sphere.center.distanceToSquared(skipCenter) < 1e-12) continue;
+    if (
+      isOccludedBySphere(
+        point.x, point.y, point.z,
+        cameraPos.x, cameraPos.y, cameraPos.z,
+        sphere.center.x, sphere.center.y, sphere.center.z,
+        sphere.radius,
+      )
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * Screen rows for body chips that would overlap: each chip, in the order given (nearest body
+ * first), keeps its body's point unless an earlier chip holds that space, and then moves down one
+ * chip height at a time until it is clear. Two bodies close on screen (Earth and Luna at
+ * interplanetary scale) so get two readable chips instead of one printed over the other.
+ * Returns each chip's top edge. Exported for tests.
+ */
+export function stackChipRows(chips: readonly { x: number; y: number; w: number }[]): number[] {
+  const placed: PlacedRect[] = [];
+  return chips.map((chip) => {
+    const rect: PlacedRect = { x: chip.x, y: chip.y, w: chip.w, h: CHIP_HEIGHT_PX };
+    while (overlapsPlaced(placed, rect)) rect.y += CHIP_HEIGHT_PX;
+    placed.push(rect);
+    return rect.y;
+  });
 }
 
 /** Greedy overlap test against already-placed label boxes. Exported for tests. */
@@ -211,6 +260,8 @@ interface FoldEntry {
   sx: number;
   sy: number;
   segments: Set<string>;
+  center: THREE.Vector3;
+  distance: number;
 }
 const _seenSats = new Set<string>();
 const _seenGs = new Set<string>();
@@ -220,6 +271,11 @@ const _bodyByNode = new Map<string, string>();
 const _foldedBodies = new Map<string, FoldEntry>();
 const _foldEntryPool = new Map<string, FoldEntry>();
 const _placedRects: PlacedRect[] = [];
+const _shownChips: [string, FoldEntry][] = [];
+
+function chipText(body: string, fold: FoldEntry): string {
+  return `${body} · ${fold.segments.size} segment${fold.segments.size === 1 ? "" : "s"} — zoom in`;
+}
 
 /** The per-frame state the hoisted placement closures read. One pooled instance,
  *  repopulated each frame — the closures move to module scope so useFrame does
@@ -235,6 +291,7 @@ interface FrameCtx {
   placedRects: PlacedRect[];
   foldedBodies: Map<string, FoldEntry>;
   bodyByNode: Map<string, string>;
+  spheres: readonly BodySphere[];
 }
 const _ctx: FrameCtx = {
   width: 0,
@@ -247,6 +304,7 @@ const _ctx: FrameCtx = {
   placedRects: _placedRects,
   foldedBodies: _foldedBodies,
   bodyByNode: _bodyByNode,
+  spheres: [],
 };
 
 /** Fold visibility predicate (pure, canvas-free): a non-selected node whose body
@@ -280,13 +338,7 @@ function placeGsLabel(ctx: FrameCtx, id: string, div: HTMLDivElement): void {
     div.style.display = "none";
     return;
   }
-  const bodySphere = getNodeBodySphere(id, _bodyCenter);
-  if (bodySphere && isOccludedBySphere(
-    _worldPos.x, _worldPos.y, _worldPos.z,
-    ctx.cameraPos.x, ctx.cameraPos.y, ctx.cameraPos.z,
-    _bodyCenter.x, _bodyCenter.y, _bodyCenter.z,
-    bodySphere.radius,
-  )) {
+  if (occludedByBodies(_worldPos, ctx.cameraPos, ctx.spheres, null)) {
     div.style.display = "none";
     return;
   }
@@ -333,13 +385,7 @@ function placeSatLabel(ctx: FrameCtx, id: string, div: HTMLDivElement): void {
     div.style.display = "none";
     return;
   }
-  const bodySphere = getNodeBodySphere(id, _bodyCenter);
-  if (bodySphere && isOccludedBySphere(
-    _worldPos.x, _worldPos.y, _worldPos.z,
-    ctx.cameraPos.x, ctx.cameraPos.y, ctx.cameraPos.z,
-    _bodyCenter.x, _bodyCenter.y, _bodyCenter.z,
-    bodySphere.radius,
-  )) {
+  if (occludedByBodies(_worldPos, ctx.cameraPos, ctx.spheres, null)) {
     div.style.display = "none";
     return;
   }
@@ -500,12 +546,14 @@ export function Labels({
       if (_ndc.z > 1) continue;
       let entry = _foldEntryPool.get(body);
       if (!entry) {
-        entry = { sx: 0, sy: 0, segments: counted };
+        entry = { sx: 0, sy: 0, segments: counted, center: new THREE.Vector3(), distance: 0 };
         _foldEntryPool.set(body, entry);
       }
       entry.sx = (_ndc.x * 0.5 + 0.5) * width;
       entry.sy = (-_ndc.y * 0.5 + 0.5) * height;
       entry.segments = counted;
+      entry.center.copy(_bodyCenter);
+      entry.distance = dist;
       _foldedBodies.set(body, entry);
     }
     _bodyByNode.clear();
@@ -513,22 +561,40 @@ export function Labels({
       if (node.reference_body) _bodyByNode.set(node.node_id, node.reference_body);
     }
 
-    // Reconcile chip divs against this frame's folded set.
+    // Reconcile chip divs against this frame's folded set. A folded body hidden behind another
+    // body shows no chip (its node labels stay folded); the rest are stacked, nearest body
+    // first, so chips of bodies close on screen do not print over each other.
+    _ctx.spheres = bodyWorldSpheres();
+    _shownChips.length = 0;
     for (const [body, fold] of _foldedBodies) {
+      if (!occludedByBodies(fold.center, cameraPos, _ctx.spheres, fold.center)) {
+        _shownChips.push([body, fold]);
+      }
+    }
+    _shownChips.sort((a, b) => a[1].distance - b[1].distance);
+    const rows = stackChipRows(
+      _shownChips.map(([body, fold]) => ({
+        x: fold.sx + 12,
+        y: fold.sy - 8,
+        w: chipText(body, fold).length * LABEL_CHAR_PX + CHIP_PADDING_PX,
+      })),
+    );
+    _shownChips.forEach(([body, fold], index) => {
       let chip = bodyChips.current.get(body);
       if (!chip) {
         chip = createBodyChip();
         container.appendChild(chip);
         bodyChips.current.set(body, chip);
       }
-      const text = `${body} · ${fold.segments.size} segment${fold.segments.size === 1 ? "" : "s"} — zoom in`;
+      const text = chipText(body, fold);
       if (chip.textContent !== text) chip.textContent = text;
       if (chip.style.display !== "block") chip.style.display = "block";
       chip.style.left = `${fold.sx + 12}px`;
-      chip.style.top = `${fold.sy - 8}px`;
-    }
+      chip.style.top = `${rows[index]}px`;
+    });
     for (const [body, chip] of bodyChips.current) {
-      if (!_foldedBodies.has(body) && chip.style.display !== "none") chip.style.display = "none";
+      const shown = _shownChips.some(([shownBody]) => shownBody === body);
+      if (!shown && chip.style.display !== "none") chip.style.display = "none";
     }
 
     // Greedy de-overlap boxes placed this frame (ground labels first, then

@@ -182,3 +182,40 @@ describe("isFolded — fold visibility predicate (selection survives the fold)",
     expect(isFolded(null, new Map(), lunaFolded, "orphan")).toBe(false);
   });
 });
+
+describe("occludedByBodies — a label hides behind any body in the session", () => {
+  it("hides a far body's chip behind a nearer body and shows it beside that body", async () => {
+    const THREE = await import("three");
+    const { occludedByBodies } = await import("../Labels");
+    const camera = new THREE.Vector3(0, 0, 0);
+    const luna = { center: new THREE.Vector3(0, 0, -400), radius: 27 };
+    const mars = { center: new THREE.Vector3(0, 0, -9_000_000), radius: 53 };
+    const spheres = [luna, mars];
+
+    // Mars straight behind Luna: Luna covers it; Mars's own sphere is left out for its chip.
+    expect(occludedByBodies(mars.center, camera, spheres, mars.center)).toBe(true);
+    // Mars off to the side of Luna's disc: nothing covers it.
+    const beside = new THREE.Vector3(9_000_000, 0, -9_000_000);
+    expect(occludedByBodies(beside, camera, [luna, { center: beside, radius: 53 }], beside)).toBe(
+      false,
+    );
+    // A point in front of Luna is never hidden by it.
+    expect(occludedByBodies(new THREE.Vector3(0, 0, -300), camera, spheres, null)).toBe(false);
+  });
+});
+
+describe("stackChipRows — overlapping body chips both stay readable", () => {
+  it("moves a chip that would print over a nearer body's chip down until it is clear", async () => {
+    const { stackChipRows } = await import("../Labels");
+    // Earth and Luna at interplanetary scale: one screen point, nearer body first.
+    expect(stackChipRows([
+      { x: 400, y: 300, w: 160 },
+      { x: 402, y: 301, w: 150 },
+    ])).toEqual([300, 319]); // its own row, 301, plus one chip height: clear of 300-318
+    // A chip clear of the others keeps its own row.
+    expect(stackChipRows([
+      { x: 400, y: 300, w: 160 },
+      { x: 900, y: 300, w: 150 },
+    ])).toEqual([300, 300]);
+  });
+});

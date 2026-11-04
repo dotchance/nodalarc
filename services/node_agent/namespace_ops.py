@@ -23,6 +23,7 @@ from nodalarc.platform_config import get_platform_config
 from pyroute2 import IPRoute
 from pyroute2.netlink.rtnl import TC_H_ROOT
 
+from node_agent import netem_plugin
 from node_agent.kernel_constants import (
     NETEM_HANDLE,
     SHAPER_CLASS_HANDLE,
@@ -31,12 +32,15 @@ from node_agent.kernel_constants import (
 )
 from node_agent.tc_dump import interface_qdiscs
 from node_agent.tc_units import (
-    delay_ms_to_netem_us,
+    delay_ms_to_netem_ns,
     htb_class,
     netem_limit_packets,
 )
 
 log = logging.getLogger(__name__)
+
+# Netem requests below carry their delay as delay_ns, which only this plugin encodes.
+netem_plugin.register()
 
 _T = TypeVar("_T")
 _libc = ctypes.CDLL("libc.so.6", use_errno=True)
@@ -229,7 +233,7 @@ def apply_transmit_shaping(pid: int, ifname: str, delay_ms: float, transmit_mbps
     previously shaped or an orphaned interface. Called on LinkUp; later
     delay-only changes use update_delay().
     """
-    delay_us = delay_ms_to_netem_us(delay_ms)
+    delay_ns = delay_ms_to_netem_ns(delay_ms)
     limit = netem_limit_packets(transmit_mbps, delay_ms)
 
     def _op(ipr: IPRoute) -> None:
@@ -244,7 +248,7 @@ def apply_transmit_shaping(pid: int, ifname: str, delay_ms: float, transmit_mbps
             index=idx,
             handle=_NETEM_HANDLE,
             parent=_SHAPER_CLASS,
-            delay=delay_us,
+            delay_ns=delay_ns,
             limit=limit,
         )
 
@@ -278,7 +282,7 @@ def update_delay(pid: int, ifname: str, delay_ms: float, transmit_mbps: float) -
     Every change carries the limit, because pyroute2 sets a change that
     omits it to the kernel default of 1000 packets.
     """
-    delay_us = delay_ms_to_netem_us(delay_ms)
+    delay_ns = delay_ms_to_netem_ns(delay_ms)
     limit = netem_limit_packets(transmit_mbps, delay_ms)
 
     def _op(ipr: IPRoute) -> None:
@@ -291,7 +295,7 @@ def update_delay(pid: int, ifname: str, delay_ms: float, transmit_mbps: float) -
             index=links[0],
             handle=_NETEM_HANDLE,
             parent=_SHAPER_CLASS,
-            delay=delay_us,
+            delay_ns=delay_ns,
             limit=limit,
         )
 

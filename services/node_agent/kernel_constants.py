@@ -13,11 +13,6 @@ NETEM_HANDLE = 0x00100000
 # classifies (all of it; the shaper installs no filters) takes the rate class.
 SHAPER_DEFAULT_CLASS = 0x1
 
-# Netem delay is configured in microseconds but reported back by pyroute2 as
-# tc scheduler ticks. A one-tick tolerance covers integer conversion rounding;
-# larger drift means the kernel state no longer matches the command.
-NETEM_TICK_TOLERANCE = 1
-
 # The per-device switch that lets the kernel accept labeled packets on a
 # pod interface. Written by the operation that creates the interface and
 # read back by the verifier; both name it through this one function.

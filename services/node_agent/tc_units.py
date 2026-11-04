@@ -10,16 +10,17 @@ from typing import NamedTuple
 from pyroute2.netlink.rtnl.tcmsg import common as tc_common
 
 
-def delay_ms_to_netem_us(delay_ms: float) -> int:
-    """Convert milliseconds to the integer microseconds accepted by netem.
+def delay_ms_to_netem_ns(delay_ms: float) -> int:
+    """Convert milliseconds to the integer nanoseconds netem keeps.
 
-    tc/netem cannot represent fractional microseconds. Use nearest integer
-    microsecond so the programmed value is the closest kernel-representable
-    value to the scheduler's floating-point latency.
+    Netem holds a qdisc's delay as signed 64-bit nanoseconds and reports it
+    back unchanged in TCA_NETEM_LATENCY64. The nearest nanosecond is the
+    kernel-representable value closest to the scheduler's floating-point
+    latency.
     """
-    if delay_ms < 0:
+    if not delay_ms >= 0:
         raise ValueError(f"netem delay must be non-negative, got {delay_ms}")
-    return int(math.floor(delay_ms * 1000.0 + 0.5))
+    return int(math.floor(delay_ms * 1_000_000.0 + 0.5))
 
 
 def mbps_to_bytes_per_second(rate_mbps: float) -> int:
@@ -76,10 +77,3 @@ def netem_limit_packets(transmit_mbps: float, delay_ms: float) -> int:
         raise ValueError(f"netem delay must be non-negative, got {delay_ms}")
     in_flight_bytes = mbps_to_bytes_per_second(transmit_mbps) * delay_ms / 1000.0
     return math.ceil(in_flight_bytes / NETEM_IN_FLIGHT_PACKET_BYTES) + NETEM_BUFFER_PACKETS
-
-
-def netem_us_to_ticks(delay_us: int) -> int:
-    """Convert netem microseconds to the scheduler ticks reported by pyroute2."""
-    if delay_us < 0:
-        raise ValueError(f"netem delay must be non-negative, got {delay_us}")
-    return int(tc_common.time2tick(delay_us))

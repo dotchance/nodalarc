@@ -17,21 +17,20 @@ from node_agent.kernel_constants import (
     IFF_UP,
     MPLS_INPUT_ENABLED,
     NETEM_HANDLE,
-    NETEM_TICK_TOLERANCE,
     SHAPER_CLASS_HANDLE,
     SHAPER_DEFAULT_CLASS,
     SHAPER_ROOT_HANDLE,
     mpls_input_sysctl,
 )
 from node_agent.namespace_ops import _in_namespace, in_host_namespace
+from node_agent.netem_plugin import latency_ns
 from node_agent.tc_dump import interface_qdiscs
 from node_agent.tc_units import (
     HtbClass,
-    delay_ms_to_netem_us,
+    delay_ms_to_netem_ns,
     htb_burst_ticks,
     htb_class,
     netem_limit_packets,
-    netem_us_to_ticks,
 )
 
 
@@ -176,18 +175,6 @@ def _shaper_netem(rows: list[dict[str, Any]]) -> dict[str, Any] | None:
     return None
 
 
-def _netem_delay_ticks(netem: dict[str, Any]) -> int | None:
-    """The delay field of netem's TCA_OPTIONS, in tc scheduler ticks.
-
-    None means the kernel reported no readable delay; the caller fails the proof.
-    """
-    options = netem["options"]
-    if options is None or "delay" not in options:
-        return None
-    delay = options["delay"]
-    return delay if isinstance(delay, int) else None
-
-
 def _shaper_root_default_class(root: dict[str, Any]) -> int | None:
     """The default class of the HTB shaper root, from its TCA_HTB_INIT options."""
     options = root["options"]
@@ -302,21 +289,17 @@ def verify_qdisc(pid: int, ifname: str, *, delay_ms: float, transmit_mbps: float
     if netem is None:
         return Proof.fail(f"missing netem qdisc on {ifname}", *evidence)
 
-    # Netem delay is configured in integer microseconds, but the kernel
-    # reports it in tc scheduler ticks. Use the same normalization as the
-    # mutator, then mirror pyroute2's encoder so proof compares the exact
-    # kernel value.
-    expected_delay_us = delay_ms_to_netem_us(delay_ms)
-    expected_delay_ticks = netem_us_to_ticks(expected_delay_us)
-    actual_delay_ticks = _netem_delay_ticks(netem)
-    if actual_delay_ticks is None:
+    # Netem keeps the delay in nanoseconds and reports it back unchanged in its
+    # 64-bit attribute, so the proof compares the commanded nanoseconds exactly.
+    expected_delay_ns = delay_ms_to_netem_ns(delay_ms)
+    actual_delay_ns = latency_ns(netem["options"])
+    if actual_delay_ns is None:
         return Proof.fail(f"cannot read netem delay for {ifname}", *evidence)
-    if abs(actual_delay_ticks - expected_delay_ticks) > NETEM_TICK_TOLERANCE:
+    if actual_delay_ns != expected_delay_ns:
         return Proof.fail(
             f"netem delay mismatch on {ifname}",
-            f"expected_us={expected_delay_us}",
-            f"expected_ticks={expected_delay_ticks}",
-            f"actual_ticks={actual_delay_ticks}",
+            f"expected_ns={expected_delay_ns}",
+            f"actual_ns={actual_delay_ns}",
             *evidence,
         )
     expected_limit = netem_limit_packets(transmit_mbps, delay_ms)
@@ -342,8 +325,7 @@ def verify_qdisc(pid: int, ifname: str, *, delay_ms: float, transmit_mbps: float
 
     return Proof.ok(
         f"qdisc verified on {ifname}",
-        f"delay_us={expected_delay_us}",
-        f"delay_ticks={actual_delay_ticks}",
+        f"delay_ns={actual_delay_ns}",
         *evidence,
     )
 

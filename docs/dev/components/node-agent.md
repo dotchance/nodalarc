@@ -106,10 +106,19 @@ ISL and ground links use different CROSS_NODE paths:
 
 Update the netem delay beneath an existing shaper; the rate class is
 unchanged. Each entry carries the interface's transmit rate, because the netem
-queue limit follows rate and delay:
+queue limit follows rate and delay. For a delay under 274.9 s the iproute2
+equivalent is:
 ```
-tc qdisc change dev isl0 parent 1:1 handle 10: netem delay {latency_us}us limit {packets}
+tc qdisc change dev isl0 parent 1:1 handle 10: netem delay {latency}s limit {packets}
 ```
+
+The Node Agent writes every delay in nanoseconds in netem's 64-bit attribute
+`TCA_NETEM_LATENCY64`, and its proof reads that attribute back and compares it
+with the commanded nanoseconds exactly. The 32-bit delay field of netem's
+options counts scheduler ticks and stops at 274.9 s; above that it reports its
+largest value. iproute2 6.1's `tc` refuses a delay of 275 s or more and prints
+275 s for every longer delay, so a long delay is read with pyroute2 through the
+Node Agent's netem plugin (`services/node_agent/netem_plugin.py`).
 
 Netem holds every packet for the link delay, so its limit is the packets the
 link carries in flight at the transmit rate, counted at 1500 bytes, plus a

@@ -30,6 +30,8 @@ from collections.abc import Iterable, Iterator
 
 from pyroute2.netlink.rtnl.tcmsg import tcmsg
 
+from node_agent import netem_plugin
+
 _RTM_NEWQDISC = 36
 _RTM_GETQDISC = 38
 _NLM_F_REQUEST = 0x1
@@ -41,6 +43,9 @@ _NLMSG_HEADER = struct.Struct("=LHHLL")
 # struct tcmsg: family (B), three pad bytes, then the interface index (i).
 _TCM_IFINDEX = struct.Struct("=Bxxxi")
 _RECV_BYTES = 1 << 16
+
+# A netem qdisc's delay is read from its 64-bit attribute, which only this plugin decodes.
+netem_plugin.register()
 
 
 def interface_qdiscs(ifindex: int) -> list[tcmsg]:

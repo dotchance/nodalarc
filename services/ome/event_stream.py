@@ -96,7 +96,7 @@ from ome.telemetry import (
     SEG_VISIBILITY,
     StepTimings,
 )
-from ome.types import GroundVisibilityDecisionMap, MbbTeardownState
+from ome.types import GroundVisibilityDecisionMap, MbbTeardownState, ReceiveWindows
 
 logger = logging.getLogger(__name__)
 
@@ -378,6 +378,7 @@ class TimelineWindowResult:
     gs_state: dict[tuple[str, str], tuple[bool, bool, SchedulingState]]
     associations: dict[tuple[str, str], tuple[int, int]]
     pending_teardowns: MbbTeardownState
+    receive_windows: ReceiveWindows
     predictive: bool = False
 
 
@@ -775,6 +776,7 @@ def compute_step(
     current_associations: dict[tuple[str, str], tuple[int, int]] | None = None,
     mbb_pending_teardowns: MbbTeardownState | None = None,
     dwell_state: dict[tuple[str, str], DwellPassState] | None = None,
+    receive_windows: ReceiveWindows | None = None,
 ) -> StepResult:
     """Compute one step of the timeline. Mutates isl_state and gs_state in place.
 
@@ -782,6 +784,11 @@ def compute_step(
     stations, mutated in place like isl_state/gs_state and reset wherever
     they reset. Callers that do not thread it still get identical results,
     at full-horizon re-walk cost per tick.
+
+    receive_windows holds the ground terminals still receiving from a peer the allocator
+    released, mutated in place and reset wherever isl_state/gs_state reset. It is allocator
+    state: a caller that runs more than one tick threads it, or terminals look free while they
+    still receive. A single-tick caller passes None and starts from no reception.
 
     Returns a StepResult with named physics, scheduling, and allocation fields.
 
@@ -933,7 +940,16 @@ def compute_step(
             cross_tenant_displacement=ctx.ground_cross_tenant_displacement,
             bbm_acquire_timeout_ticks=ctx.ground_bbm_acquire_timeout_ticks,
             ignored_capacity_fields=ctx.ignored_ground_capacity_fields,
+            sim_time_unix=epoch_unix + dt,
+            pair_delays_ms={
+                pair: (decision.latency_a_to_b_ms, decision.latency_b_to_a_ms)
+                for pair, decision in ground_visibility.decisions.items()
+            },
+            receive_windows=receive_windows if receive_windows is not None else {},
         )
+    if receive_windows is not None and ground_allocation.receive_windows is not None:
+        receive_windows.clear()
+        receive_windows.update(ground_allocation.receive_windows)
     # 8. Emit ground visibility events on state changes (triple state).
     with timings.measure(SEG_DIFF):
         ground_diff = diff_ground_visibility_events(
@@ -987,6 +1003,7 @@ def precompute_timeline_window_from_context(
     initial_gs_state: dict[tuple[str, str], tuple[bool, bool, SchedulingState]] | None = None,
     initial_associations: dict[tuple[str, str], tuple[int, int]] | None = None,
     initial_pending_teardowns: MbbTeardownState | None = None,
+    initial_receive_windows: ReceiveWindows | None = None,
     timestamp_offset: float = 0.0,
     predictive: bool = False,
 ) -> TimelineWindowResult:
@@ -1012,6 +1029,7 @@ def precompute_timeline_window_from_context(
         dict(initial_pending_teardowns) if initial_pending_teardowns else {}
     )
     dwell_state: dict[tuple[str, str], DwellPassState] = {}
+    receive_windows: ReceiveWindows = dict(initial_receive_windows or {})
 
     events: list[TimelineEvent] = []
     steps = int(duration_s / step_seconds)
@@ -1027,6 +1045,7 @@ def precompute_timeline_window_from_context(
             associations,
             pending_teardowns,
             dwell_state=dwell_state,
+            receive_windows=receive_windows,
         )
         events.extend(result.events)
         associations = result.associations
@@ -1038,6 +1057,7 @@ def precompute_timeline_window_from_context(
         gs_state=gs_state,
         associations=associations,
         pending_teardowns=pending_teardowns,
+        receive_windows=receive_windows,
         predictive=predictive,
     )
 
@@ -1061,6 +1081,7 @@ def precompute_timeline_window(
     initial_gs_state: dict[tuple[str, str], tuple[bool, bool, SchedulingState]] | None = None,
     initial_associations: dict[tuple[str, str], tuple[int, int]] | None = None,
     initial_pending_teardowns: MbbTeardownState | None = None,
+    initial_receive_windows: ReceiveWindows | None = None,
     timestamp_offset: float = 0.0,
     predictive: bool = False,
     physics: PhysicsContext | None = None,
@@ -1098,6 +1119,7 @@ def precompute_timeline_window(
         initial_gs_state=initial_gs_state,
         initial_associations=initial_associations,
         initial_pending_teardowns=initial_pending_teardowns,
+        initial_receive_windows=initial_receive_windows,
         timestamp_offset=timestamp_offset,
         predictive=predictive,
     )

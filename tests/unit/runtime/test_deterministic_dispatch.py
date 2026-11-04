@@ -17,6 +17,8 @@ from nodalarc.models.ground_policy import (
 from ome.ground_allocator import allocate_ground_links
 from ome.visibility import GroundVisibility
 
+from tests.ome_runtime_fixtures import allocator_timing_kwargs
+
 
 def _policy_kwargs(gs_id: str) -> dict:
     return {
@@ -33,6 +35,7 @@ def _policy_kwargs(gs_id: str) -> dict:
         "cross_tenant_displacement": "off",
         "bbm_acquire_timeout_ticks": 1,
         "ignored_capacity_fields": (),
+        **allocator_timing_kwargs(),
     }
 
 

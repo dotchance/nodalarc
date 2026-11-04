@@ -22,6 +22,8 @@ from ome.ground_allocator import (
 )
 from ome.visibility import GroundVisibility
 
+from tests.ome_runtime_fixtures import allocator_timing_kwargs
+
 
 def _selection_policy(name: str) -> SelectionPolicySpec:
     params = {"lookahead_horizon_ticks": 600} if name == "longest-remaining-pass" else {}
@@ -50,6 +52,7 @@ def _policy_kwargs(policy: str, handover_mode: str) -> dict:
         "cross_tenant_displacement": "off",
         "bbm_acquire_timeout_ticks": 1,
         "ignored_capacity_fields": (),
+        **allocator_timing_kwargs(),
     }
 
 

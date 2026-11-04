@@ -299,6 +299,16 @@ export const REASON_REGISTRY: Record<ReasonCode, ReasonRecord> = {
     sentence: "Break-before-make: the incumbent was released before the successor was available — a coverage gap.",
     producer: "ome_allocator",
   }),
+  retargeted_before_last_arrival: rec({
+    code: "retargeted_before_last_arrival",
+    gate: "handover_policy",
+    family: "expected_no_link",
+    severity: "warning",
+    label: "Retargeted before last arrival",
+    sentence:
+      "A terminal turned to a new peer while signals from its old peer were still arriving; those signals are lost.",
+    producer: "ome_allocator",
+  }),
 
   // --- Actuation states (Scheduler / Node Agent) ---
   clean: rec({

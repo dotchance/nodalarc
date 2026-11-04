@@ -177,6 +177,16 @@ current runtime supports one reserved overlap. An explicit MBB configuration
 with insufficient capacity is rejected before deployment. NodalArc neither
 invents the overlap nor silently reduces the requested policy to BBM.
 
+A terminal released from a peer keeps pointing at it until the last signal
+that peer sent before the release arrives, one light time later. A new link
+takes a terminal with no signal still arriving when one is free. When the
+handoff policy needs a terminal that is still receiving, such as a
+break-before-make handoff on a single terminal, the old peer's signals still
+in flight are lost. The ground link decisions then report a
+`retargeted_before_last_arrival` event that names the terminal, the time
+those signals would still have been arriving, and why the old link was
+released.
+
 How many terminals a node has comes from its catalog node definition and how
 many the site installs - not from inline session fields.
 

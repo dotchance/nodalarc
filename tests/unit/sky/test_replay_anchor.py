@@ -57,7 +57,7 @@ def _session_ctx(tmp_path):
     return ctx, epoch_unix, step_seconds, ground_ids
 
 
-def _run(ctx, epoch_unix, step_seconds, *, start, end, isl, gs, assoc, td):
+def _run(ctx, epoch_unix, step_seconds, *, start, end, isl, gs, assoc, td, windows):
     """Drive compute_step over [start, end], returning gap events + state."""
     dwell: dict = {}
     events = []
@@ -74,11 +74,12 @@ def _run(ctx, epoch_unix, step_seconds, *, start, end, isl, gs, assoc, td):
             assoc,
             td,
             dwell_state=dwell,
+            receive_windows=windows,
         )
         assoc = result.associations
         td = result.pending_teardowns
         events.extend((step, e.event_type, e.data.model_dump_json()) for e in result.events)
-    return events, isl, gs, assoc, td, result
+    return events, isl, gs, assoc, td, windows, result
 
 
 def _full_run_with_anchor(tmp_path, ground_ids_override=None):
@@ -90,12 +91,23 @@ def _full_run_with_anchor(tmp_path, ground_ids_override=None):
     assoc: dict = {}
     td: dict = {}
     dwell: dict = {}
+    windows: dict = {}
     anchor = None
     gap_events = []
     result = None
     for step in range(FINAL_STEP + 1):
         result = compute_step(
-            ctx, epoch_unix, step, step_seconds, 0.0, isl, gs, assoc, td, dwell_state=dwell
+            ctx,
+            epoch_unix,
+            step,
+            step_seconds,
+            0.0,
+            isl,
+            gs,
+            assoc,
+            td,
+            dwell_state=dwell,
+            receive_windows=windows,
         )
         assoc = result.associations
         td = result.pending_teardowns
@@ -108,6 +120,7 @@ def _full_run_with_anchor(tmp_path, ground_ids_override=None):
                     gs_state=gs,
                     associations=assoc,
                     teardowns=td,
+                    receive_windows=windows,
                     ground_station_ids=ground_ids_override or ground_ids,
                     written_at=123.0,
                 )
@@ -115,7 +128,7 @@ def _full_run_with_anchor(tmp_path, ground_ids_override=None):
             anchor = decode_retained_replay_anchor(wire)
         if step > ANCHOR_STEP:
             gap_events.extend((step, e.event_type, e.data.model_dump_json()) for e in result.events)
-    return ctx, epoch_unix, step_seconds, anchor, gap_events, (isl, gs, assoc, td, result)
+    return ctx, epoch_unix, step_seconds, anchor, gap_events, (isl, gs, assoc, td, windows, result)
 
 
 def test_anchor_plus_gap_replay_equals_full_replay(tmp_path):
@@ -125,8 +138,8 @@ def test_anchor_plus_gap_replay_equals_full_replay(tmp_path):
     assert anchor is not None and anchor.step == ANCHOR_STEP
     assert anchor.gs_state, "anchor captured no ground state — scenario has no churn"
 
-    isl, gs, assoc, td = replay_state_from_anchor(anchor)
-    gap_events, isl, gs, assoc, td, result = _run(
+    isl, gs, assoc, td, windows = replay_state_from_anchor(anchor)
+    gap_events, isl, gs, assoc, td, windows, result = _run(
         ctx,
         epoch_unix,
         step_seconds,
@@ -136,14 +149,16 @@ def test_anchor_plus_gap_replay_equals_full_replay(tmp_path):
         gs=gs,
         assoc=assoc,
         td=td,
+        windows=windows,
     )
 
-    full_isl, full_gs, full_assoc, full_td, full_result = full_final
+    full_isl, full_gs, full_assoc, full_td, full_windows, full_result = full_final
     assert gap_events == full_gap_events  # every event of the gap, byte-equal
     assert isl == full_isl
     assert gs == full_gs
     assert assoc == full_assoc
     assert td == full_td
+    assert windows == full_windows
     # The recovery-published snapshot is built from the final StepResult:
     # its authoritative source must match too.
     assert result.link_snapshot_source.ground_state == full_result.link_snapshot_source.ground_state
@@ -159,7 +174,7 @@ def test_anchor_equality_has_teeth(tmp_path):
     ctx, epoch_unix, step_seconds, anchor, full_gap_events, _full_final = _full_run_with_anchor(
         tmp_path
     )
-    isl, _gs, assoc, td = replay_state_from_anchor(anchor)
+    isl, _gs, assoc, td, windows = replay_state_from_anchor(anchor)
     gap_events, *_ = _run(
         ctx,
         epoch_unix,
@@ -170,6 +185,7 @@ def test_anchor_equality_has_teeth(tmp_path):
         gs={},  # deliberately dropped
         assoc=assoc,
         td=td,
+        windows=windows,
     )
     assert gap_events != full_gap_events
 

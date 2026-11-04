@@ -14,7 +14,11 @@ from typing import Annotated, Literal, get_args
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from nodalarc.body_frames import SupportedSurfaceBody
-from nodalarc.models.link_decisions import GroundUnscheduledReason, GroundVisibilityRejectReason
+from nodalarc.models.link_decisions import (
+    GroundTerminalReleaseCause,
+    GroundUnscheduledReason,
+    GroundVisibilityRejectReason,
+)
 from nodalarc.models.link_state import SchedulingState
 
 # A platform service that publishes ops events and answers debug control,
@@ -727,6 +731,20 @@ class TeardownEntry(BaseModel):
     successor_node_b: str
 
 
+class ReceiveWindowEntry(BaseModel):
+    """A ground terminal still receiving from a released peer, in a ReplayAnchor: until the old
+    peer's last emission arrives (master sim time, Unix seconds)."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    node_id: str
+    terminal_index: int
+    until_unix: float = Field(allow_inf_nan=False)
+    old_node_a: str
+    old_node_b: str
+    released_by: GroundTerminalReleaseCause
+
+
 class CheckpointAssociation(BaseModel):
     """Single ground association retained in a SchedulingCheckpoint.
 
@@ -815,6 +833,8 @@ class ReplayAnchor(BaseModel):
     gs_state: dict[str, tuple[bool, bool, SchedulingState]]
     associations: dict[str, CheckpointAssociation]
     pending_teardowns: dict[str, TeardownEntry]
+    # Ground terminals still receiving from a peer the allocator released, keyed "node:index".
+    receive_windows: dict[str, ReceiveWindowEntry]
     written_at: float
 
 

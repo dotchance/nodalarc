@@ -19,10 +19,15 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from nodalarc.models.events import CheckpointAssociation, ReplayAnchor, TeardownEntry
+from nodalarc.models.events import (
+    CheckpointAssociation,
+    ReceiveWindowEntry,
+    ReplayAnchor,
+    TeardownEntry,
+)
 from nodalarc.models.link_state import SchedulingState
 
-from ome.types import MbbTeardown, MbbTeardownState
+from ome.types import MbbTeardown, MbbTeardownState, ReceiveWindow, ReceiveWindows
 
 
 def _pair_key(pair: tuple[str, str]) -> str:
@@ -44,6 +49,7 @@ def build_replay_anchor(
     gs_state: dict[tuple[str, str], tuple[bool, bool, SchedulingState]],
     associations: dict[tuple[str, str], tuple[int, int]],
     teardowns: MbbTeardownState,
+    receive_windows: ReceiveWindows,
     ground_station_ids: frozenset[str],
     written_at: float,
 ) -> ReplayAnchor:
@@ -98,6 +104,17 @@ def build_replay_anchor(
         gs_state={_pair_key(p): v for p, v in gs_state.items()},
         associations=assoc_flat,
         pending_teardowns=td_flat,
+        receive_windows={
+            f"{node_id}:{index}": ReceiveWindowEntry(
+                node_id=node_id,
+                terminal_index=index,
+                until_unix=window.until_unix,
+                old_node_a=window.old_pair[0],
+                old_node_b=window.old_pair[1],
+                released_by=window.released_by,
+            )
+            for (node_id, index), window in receive_windows.items()
+        },
         written_at=written_at,
     )
 
@@ -109,10 +126,11 @@ def replay_state_from_anchor(
     dict[tuple[str, str], tuple[bool, bool, SchedulingState]],
     dict[tuple[str, str], tuple[int, int]],
     MbbTeardownState,
+    ReceiveWindows,
 ]:
     """Rebuild the internal replay-carried state from a decoded anchor.
 
-    Returns (isl_state, gs_state, associations, pending_teardowns) in the
+    Returns (isl_state, gs_state, associations, pending_teardowns, receive_windows) in the
     exact shapes the pacing loop threads through compute_step.
     """
     isl_state = {_key_pair(k): (bool(v[0]), bool(v[1])) for k, v in anchor.isl_state.items()}
@@ -128,7 +146,15 @@ def replay_state_from_anchor(
         )
         for k, entry in anchor.pending_teardowns.items()
     }
-    return isl_state, gs_state, associations, teardowns
+    windows: ReceiveWindows = {
+        (entry.node_id, entry.terminal_index): ReceiveWindow(
+            until_unix=entry.until_unix,
+            old_pair=(entry.old_node_a, entry.old_node_b),
+            released_by=entry.released_by,
+        )
+        for entry in anchor.receive_windows.values()
+    }
+    return isl_state, gs_state, associations, teardowns, windows
 
 
 @dataclass(frozen=True)
@@ -145,6 +171,7 @@ class DeferredReplayAnchor:
     gs_state: dict
     associations: dict
     teardowns: MbbTeardownState
+    receive_windows: ReceiveWindows
     ground_station_ids: frozenset[str]
     written_at: float
 
@@ -156,6 +183,7 @@ class DeferredReplayAnchor:
             gs_state=self.gs_state,
             associations=self.associations,
             teardowns=self.teardowns,
+            receive_windows=self.receive_windows,
             ground_station_ids=self.ground_station_ids,
             written_at=self.written_at,
         )

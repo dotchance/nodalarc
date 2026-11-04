@@ -147,6 +147,7 @@ def run_scenario(
         associations: dict = {}
         teardowns: dict = {}
         dwell_state: dict = {}
+        receive_windows: dict = {}
         step_ms: list[float] = []
         segments: list[dict[str, float]] = []
         for step in range(steps + warmup):
@@ -162,6 +163,7 @@ def run_scenario(
                 associations,
                 teardowns,
                 dwell_state=dwell_state,
+                receive_windows=receive_windows,
             )
             elapsed_ms = (time.perf_counter() - wall_start) * 1000
             associations = result.associations

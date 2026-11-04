@@ -166,6 +166,7 @@ class TestFoldDeterminism:
         tick_gs = dict(seed_gs)
         tick_assoc = seed_assoc
         tick_pending = seed_pending
+        tick_windows: dict = {}
         tick_events = []
         for step in range(n_steps + 1):
             result = compute_step(
@@ -178,6 +179,7 @@ class TestFoldDeterminism:
                 tick_gs,
                 tick_assoc,
                 tick_pending,
+                receive_windows=tick_windows,
             )
             tick_assoc = result.associations
             tick_pending = result.pending_teardowns

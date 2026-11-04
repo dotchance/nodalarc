@@ -274,7 +274,7 @@ export type FunnelGate = "line_of_sight" | "range" | "elevation_mask" | "field_o
 /**  */
 export type GateState = "pass" | "fail" | "not_evaluated" | "not_applicable";
 
-/** Typed non-steady transition produced by the ground allocator. `policy_kind` names the taxonomy for `policy_name`. Events that are not caused by a policy decision, such as physical incumbent visibility loss, set both fields to `None`. */
+/** Typed non-steady transition produced by the ground allocator. `policy_kind` names the taxonomy for `policy_name`. Events that are not caused by a policy decision, such as physical incumbent visibility loss, set both fields to `None`. `retargeted_before_last_arrival` reports a terminal given a new peer while signals the old peer emitted were still arriving: `pair` is the old pair, `successor_pair` the new one, `terminal_node_id` and `terminal_index` the terminal, `remaining_arrival_ms` how long the old peer's signals would still have been arriving, and `released_by` why the old pair was released. Those four fields are set on that category only. */
 export interface GroundAllocationEvent {
   readonly category: GroundAllocationEventCategory;
   readonly pair: readonly [string, string];
@@ -285,10 +285,14 @@ export interface GroundAllocationEvent {
   readonly challenger_pair: readonly [string, string] | null;
   readonly policy_kind: GroundAllocationPolicyKind | null;
   readonly policy_name: GroundAllocationPolicyName | null;
+  readonly terminal_node_id: string | null;
+  readonly terminal_index: number | null;
+  readonly remaining_arrival_ms: number | null;
+  readonly released_by: GroundTerminalReleaseCause | null;
 }
 
 /**  */
-export type GroundAllocationEventCategory = "mbb_overlap_started" | "teardown_completed" | "teardown_invalidated_by_epoch" | "successor_aborted" | "failed_successor" | "failed_acquire" | "incumbent_lost" | "bbm_gap";
+export type GroundAllocationEventCategory = "mbb_overlap_started" | "teardown_completed" | "teardown_invalidated_by_epoch" | "successor_aborted" | "failed_successor" | "failed_acquire" | "incumbent_lost" | "bbm_gap" | "retargeted_before_last_arrival";
 
 /**  */
 export type GroundAllocationPolicyKind = "selection_policy" | "handover_policy" | "handover_mode" | "successor_abort_policy" | "mbb_preemption" | "cross_tenant_displacement";
@@ -334,6 +338,9 @@ export interface GroundPolicyAudit {
   readonly bbm_acquire_timeout_ticks: number;
   readonly ignored_capacity_fields: ReadonlyArray<string>;
 }
+
+/**  */
+export type GroundTerminalReleaseCause = "bbm_gap" | "incumbent_lost" | "teardown_completed" | "successor_aborted" | "failed_successor" | "sat_capacity";
 
 /**  */
 export type GroundUnscheduledReason = "gs_capacity" | "sat_capacity" | "hysteresis_hold" | "incumbent_held" | "bbm_no_spare" | "mbb_overlap_locked" | "replaced_by_successor" | "successor_aborted" | "failed_successor" | "failed_acquire";

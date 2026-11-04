@@ -30,6 +30,7 @@ from nodalarc.models.link_decisions import (
     GroundAllocationPolicyKind,
     GroundAllocationPolicyName,
     GroundPolicyAudit,
+    GroundTerminalReleaseCause,
     GroundUnscheduledReason,
     UnscheduledPair,
 )
@@ -40,7 +41,13 @@ from ome.ground_handover_policies import (
     evaluate_handover,
 )
 from ome.ground_selection_policies import SelectionContext, score_candidate
-from ome.types import MbbTeardown, MbbTeardownLifecycleEvent, MbbTeardownState
+from ome.types import (
+    MbbTeardown,
+    MbbTeardownLifecycleEvent,
+    MbbTeardownState,
+    ReceiveWindow,
+    ReceiveWindows,
+)
 from ome.visibility import GroundVisibility
 
 
@@ -61,6 +68,8 @@ class GroundAllocationResult:
     policy_audit: GroundPolicyAudit
     allocation_events: tuple[GroundAllocationEvent, ...]
     lifecycle_events: tuple[MbbTeardownLifecycleEvent, ...] = ()
+    # Terminals still receiving from a released peer after this tick, for the next tick.
+    receive_windows: ReceiveWindows | None = None
 
 
 @dataclass(frozen=True)
@@ -307,6 +316,10 @@ def _make_event(
     challenger_pair: tuple[str, str] | None = None,
     policy_kind: GroundAllocationPolicyKind | None = None,
     policy_name: GroundAllocationPolicyName | None = None,
+    terminal_node_id: str | None = None,
+    terminal_index: int | None = None,
+    remaining_arrival_ms: float | None = None,
+    released_by: GroundTerminalReleaseCause | None = None,
 ) -> GroundAllocationEvent:
     return GroundAllocationEvent(
         category=category,
@@ -318,6 +331,10 @@ def _make_event(
         challenger_pair=challenger_pair,
         policy_kind=policy_kind,
         policy_name=policy_name,
+        terminal_node_id=terminal_node_id,
+        terminal_index=terminal_index,
+        remaining_arrival_ms=remaining_arrival_ms,
+        released_by=released_by,
     )
 
 
@@ -467,6 +484,9 @@ def allocate_ground_links(
     cross_tenant_displacement: CrossTenantDisplacementPolicy,
     bbm_acquire_timeout_ticks: int,
     ignored_capacity_fields: Sequence[str],
+    sim_time_unix: float,
+    pair_delays_ms: Mapping[tuple[str, str], tuple[float, float]],
+    receive_windows: ReceiveWindows,
 ) -> GroundAllocationResult:
     """Allocate ground links for one tick.
 
@@ -483,6 +503,16 @@ def allocate_ground_links(
     was held last tick (capacity 1, or full churn), the allocator falls back
     to reuse and the Scheduler's dispatch staging owns ordering the release
     before the acquire.
+
+    Terminal occupancy over time: a released association leaves each of its two terminals
+    receiving until the signals its old peer emitted up to the release arrive (the release time
+    plus that direction's light time, from ``pair_delays_ms``: each candidate pair's
+    (pair[0] to pair[1], pair[1] to pair[0]) delays this tick). A terminal points at its old peer
+    until then. New links prefer a terminal that is neither held nor still receiving; when the
+    declared policy needs one that is still receiving, the allocator assigns it and reports a
+    ``retargeted_before_last_arrival`` event with the remaining arrival time and the release
+    cause. ``receive_windows`` carries the windows across ticks; the result returns the ones
+    still open.
     """
 
     if step < 0:
@@ -619,18 +649,18 @@ def allocate_ground_links(
     )
     gs_occupied: dict[str, set[int]] = {gs: set() for gs in gs_terminal_counts}
     sat_occupied: dict[str, set[int]] = {sat: set() for sat in sat_ground_terminals}
-    # Terminal indices allocated in the previously published authority state.
-    # An index that was held last tick and is free now ("hot") may still be
-    # physically wired until the Scheduler actuates the release; landing a
-    # new link on it makes the handover break-before-make by necessity.
-    # New allocations therefore prefer indices that were idle last tick and
-    # fall back to hot indices only when nothing else is free.
-    prior_gs_occupancy: dict[str, set[int]] = {}
-    prior_sat_occupancy: dict[str, set[int]] = {}
+    # Which association held each terminal index in the previously published authority
+    # state. An index released this tick still receives from its old peer (and may still be
+    # wired until the Scheduler actuates the release), so new links prefer indices with no
+    # reception in progress (window_for below) and fall back to one only when nothing else is
+    # free; the Scheduler's dispatch staging orders that release before the acquire.
+    prior_holder: dict[tuple[str, int], tuple[str, str]] = {}
     for _pair, (_gs_idx, _sat_idx) in current_associations.items():
         _gs_id, _sat_id = _ground_and_satellite_ids(_pair, ground_station_ids)
-        prior_gs_occupancy.setdefault(_gs_id, set()).add(_gs_idx)
-        prior_sat_occupancy.setdefault(_sat_id, set()).add(_sat_idx)
+        prior_holder[(_gs_id, _gs_idx)] = _pair
+        prior_holder[(_sat_id, _sat_idx)] = _pair
+    # Why each association released this tick was released; the first cause recorded stands.
+    release_cause: dict[tuple[str, str], GroundTerminalReleaseCause] = {}
     new_associations: dict[tuple[str, str], tuple[int, int]] = {}
     # Per-station / per-satellite association indexes, maintained at the
     # three mutation points below. dicts-as-ordered-sets so per-GS pair
@@ -695,13 +725,87 @@ def allocate_ground_links(
         reference_body = gs_reference_bodies[candidate.gs_id]
         return f"{candidate.sat_id}.ground_terminals[{reference_body}]"
 
+    def released(pair: tuple[str, str], cause: GroundTerminalReleaseCause) -> None:
+        release_cause.setdefault(pair, cause)
+
+    def light_time_into_ms(pair: tuple[str, str], node_id: str) -> float:
+        try:
+            a_to_b, b_to_a = pair_delays_ms[pair]
+        except KeyError as exc:
+            raise ValueError(
+                f"released ground pair {pair!r} has no delays this tick; its terminals' "
+                "reception windows cannot be bounded"
+            ) from exc
+        return a_to_b if node_id == pair[1] else b_to_a
+
+    def window_for(node_id: str, index: int) -> ReceiveWindow | None:
+        """The reception still arriving on a terminal: from a release earlier this tick, or a
+        window carried from an earlier tick that has not ended."""
+        holder = prior_holder.get((node_id, index))
+        if holder is not None and holder not in new_associations:
+            cause = release_cause.get(holder)
+            if cause is None:
+                raise ValueError(
+                    f"terminal {node_id}[{index}] was released from {holder!r} with no recorded "
+                    "cause; the allocator must record every release"
+                )
+            return ReceiveWindow(
+                until_unix=sim_time_unix + light_time_into_ms(holder, node_id) / 1000.0,
+                old_pair=holder,
+                released_by=cause,
+            )
+        window = receive_windows.get((node_id, index))
+        if window is not None and window.until_unix > sim_time_unix:
+            return window
+        return None
+
+    def retargeted(node_id: str, index: int, candidate: _Candidate) -> None:
+        window = window_for(node_id, index)
+        if window is None or window.old_pair == candidate.pair:
+            # Free, or the same peer taking its terminal back: the pointing does not change.
+            return
+        remaining_ms = (window.until_unix - sim_time_unix) * 1000.0
+        policy = {
+            "bbm_gap": ("handover_mode", "bbm"),
+            "teardown_completed": ("handover_mode", "mbb"),
+        }.get(window.released_by)
+        allocation_events.append(
+            _make_event(
+                category="retargeted_before_last_arrival",
+                pair=window.old_pair,
+                gs_id=candidate.gs_id,
+                gs_tenant_ids=gs_tenant_ids,
+                gs_reference_bodies=gs_reference_bodies,
+                message=(
+                    f"terminal {node_id}[{index}] turned from {window.old_pair!r} to "
+                    f"{candidate.pair!r} while the old peer's signals were still arriving for "
+                    f"{remaining_ms:.3f} ms; released by {window.released_by}"
+                ),
+                successor_pair=candidate.pair,
+                policy_kind=policy[0] if policy else None,
+                policy_name=policy[1] if policy else None,
+                terminal_node_id=node_id,
+                terminal_index=index,
+                remaining_arrival_ms=remaining_ms,
+                released_by=window.released_by,
+            )
+        )
+
     def next_sat_terminal_index(candidate: _Candidate) -> int | None:
+        """A free index of the satellite's pool for the candidate's body, preferring one that
+        is not still receiving from a released peer."""
         occupied = sat_occupied.setdefault(candidate.sat_id, set())
         pool = sat_terminal_pool(candidate)
-        hot = prior_sat_occupancy.get(candidate.sat_id, set())
-        cold = next((idx for idx in pool if idx not in occupied and idx not in hot), None)
-        if cold is not None:
-            return cold
+        quiet = next(
+            (
+                idx
+                for idx in pool
+                if idx not in occupied and window_for(candidate.sat_id, idx) is None
+            ),
+            None,
+        )
+        if quiet is not None:
+            return quiet
         return next((idx for idx in pool if idx not in occupied), None)
 
     def satellite_has_capacity(candidate: _Candidate) -> bool:
@@ -711,9 +815,12 @@ def allocate_ground_links(
         gs_occ = gs_occupied.setdefault(candidate.gs_id, set())
         sat_occ = sat_occupied.setdefault(candidate.sat_id, set())
         gs_pool = gs_terminal_pools[candidate.gs_id]
-        gs_hot = prior_gs_occupancy.get(candidate.gs_id, set())
         gs_idx = next(
-            (index for index in gs_pool if index not in gs_occ and index not in gs_hot),
+            (
+                index
+                for index in gs_pool
+                if index not in gs_occ and window_for(candidate.gs_id, index) is None
+            ),
             None,
         )
         if gs_idx is None:
@@ -721,6 +828,8 @@ def allocate_ground_links(
         sat_idx = next_sat_terminal_index(candidate)
         if gs_idx is None or sat_idx is None:
             return False
+        retargeted(candidate.gs_id, gs_idx, candidate)
+        retargeted(candidate.sat_id, sat_idx, candidate)
         gs_occ.add(gs_idx)
         sat_occ.add(sat_idx)
         new_associations[candidate.pair] = (gs_idx, sat_idx)
@@ -828,6 +937,7 @@ def allocate_ground_links(
         )
 
     def emit_incumbent_lost(pair: tuple[str, str], message: str) -> None:
+        released(pair, "incumbent_lost")
         gs_id, _sat_id = _ground_and_satellite_ids(pair, ground_station_ids)
         allocation_events.append(
             _make_event(
@@ -969,6 +1079,8 @@ def allocate_ground_links(
                 )
             drop_current_pairs.add(pair)
             drop_current_pairs.add(successor)
+            released(pair, category)
+            released(successor, category)
             if successor_visible:
                 _record_rejection(
                     rejected,
@@ -991,6 +1103,7 @@ def allocate_ground_links(
 
         if elapsed >= mbb_overlap_ticks_for(gs_id) or not pair_visible:
             drop_current_pairs.add(pair)
+            released(pair, "teardown_completed")
             completion_message = (
                 f"MBB teardown completed for old pair {pair!r}; successor {successor!r} "
                 f"remains scheduled; elapsed_ticks={elapsed}; old_pair_visible={pair_visible}"
@@ -1158,6 +1271,7 @@ def allocate_ground_links(
                 continue
 
             if gs_displacement is not None and handover_mode_for(gs_id) == "bbm":
+                released(gs_displacement.pair, "bbm_gap")
                 remove_association(gs_displacement.pair)
                 if gs_displacement.pair in visible_set:
                     _record_rejection(
@@ -1171,6 +1285,7 @@ def allocate_ground_links(
                 progress = True
 
             if sat_displacement is not None:
+                released(sat_displacement.pair, "sat_capacity")
                 remove_association(sat_displacement.pair)
                 _record_rejection(
                     rejected,
@@ -1263,6 +1378,27 @@ def allocate_ground_links(
             )
         )
 
+    # Windows still open for the next tick: those carried from earlier ticks that have not
+    # ended, and those this tick's releases opened, on terminals no new link took.
+    held = {
+        (node_id, index)
+        for pair, (gs_idx, sat_idx) in new_associations.items()
+        for node_id, index in zip(
+            _ground_and_satellite_ids(pair, ground_station_ids), (gs_idx, sat_idx), strict=True
+        )
+    }
+    open_windows: ReceiveWindows = {
+        key: window
+        for key, window in receive_windows.items()
+        if window.until_unix > sim_time_unix and key not in held
+    }
+    for key, holder in prior_holder.items():
+        if holder in new_associations or key in held:
+            continue
+        window = window_for(*key)
+        if window is not None:
+            open_windows[key] = window
+
     return GroundAllocationResult(
         associations=new_associations,
         pending_teardowns=new_pending_teardowns,
@@ -1271,4 +1407,5 @@ def allocate_ground_links(
         policy_audit=policy_audit,
         allocation_events=tuple(allocation_events),
         lifecycle_events=tuple(lifecycle_events),
+        receive_windows=open_windows,
     )

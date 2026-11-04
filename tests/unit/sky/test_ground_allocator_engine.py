@@ -11,8 +11,10 @@ from nodalarc.models.ground_policy import (
     SelectionPolicySpec,
 )
 from ome.ground_allocator import allocate_ground_links
-from ome.types import MbbTeardown
+from ome.types import MbbTeardown, ReceiveWindow
 from ome.visibility import GroundVisibility
+
+from tests.ome_runtime_fixtures import UniformPairDelays, allocator_timing_kwargs
 
 
 def _selection_policy(name: str) -> SelectionPolicySpec:
@@ -64,6 +66,7 @@ def _policy_kwargs(
         "cross_tenant_displacement": "off",
         "bbm_acquire_timeout_ticks": 1,
         "ignored_capacity_fields": (),
+        **allocator_timing_kwargs(),
     }
 
 
@@ -92,8 +95,16 @@ def _allocate(
     sat_terminals: dict[str, int] | None = None,
     mbb_overlap_ticks: int = 3,
     mbb_reserve: int = 0,
+    timing: dict | None = None,
 ):
     sat_caps = sat_terminals or {gv.sat_id: 1 for gv in visible}
+    policy_kwargs = _policy_kwargs(
+        {"gs-A"},
+        policy=policy,
+        handover_policy=handover_policy,
+        handover_mode="mbb" if mbb_reserve > 0 else "bbm",
+    )
+    policy_kwargs.update(timing or {})
     return allocate_ground_links(
         step=10,
         visible_per_station={"gs-A": visible},
@@ -101,12 +112,7 @@ def _allocate(
         current_associations=current or {},
         pending_teardowns=pending or {},
         gs_terminal_indices=_gs_pools({"gs-A": gs_terminals}),
-        **_policy_kwargs(
-            {"gs-A"},
-            policy=policy,
-            handover_policy=handover_policy,
-            handover_mode="mbb" if mbb_reserve > 0 else "bbm",
-        ),
+        **policy_kwargs,
         gs_min_elevations={"gs-A": 25.0},
         gs_service_priorities={"gs-A": 10},
         gs_tenant_ids={"gs-A": "default"},
@@ -1444,3 +1450,114 @@ def test_allocator_rejects_unimplemented_multi_tick_bbm_gap_timeout():
             sat_ground_terminals={"sat-a": 1},
             sat_ground_terminal_indices_by_body=_sat_body_pools({"sat-a": 1}),
         )
+
+
+# --- Terminal occupancy over time -----------------------------------------------------------
+# A released association leaves each terminal receiving until its old peer's signals arrive:
+# about 1.3 s for an Earth-Moon link, longer than a 1 s tick.
+
+EARTH_MOON_MS = 1300.0
+NOW = 1000.0
+
+
+def _lunar_timing(windows: dict | None = None) -> dict:
+    return {
+        "sim_time_unix": NOW,
+        "pair_delays_ms": UniformPairDelays(EARTH_MOON_MS),
+        "receive_windows": windows or {},
+    }
+
+
+def _seen(sat_id: str, elevation_deg: float) -> GroundVisibility:
+    return GroundVisibility(
+        sat_id=sat_id,
+        visible=True,
+        elevation_deg=elevation_deg,
+        range_km=1000.0,
+        remaining_visible_s=None,
+        reject_reason="ok",
+    )
+
+
+def _retargets(result) -> list:
+    return [
+        event
+        for event in result.allocation_events
+        if event.category == "retargeted_before_last_arrival"
+    ]
+
+
+def test_a_bbm_handover_on_one_terminal_reports_the_signals_still_arriving():
+    """The station's only terminal turns to the challenger while the incumbent's last 1.3 s of
+    signals are still arriving: the event names the terminal, the time left and the BBM
+    release. The incumbent's own terminal keeps receiving into the next tick."""
+    incumbent, challenger = ("gs-A", "sat-incumbent"), ("gs-A", "sat-challenger")
+    result = _allocate(
+        [_seen("sat-incumbent", 26.0), _seen("sat-challenger", 80.0)],
+        current={incumbent: (0, 0)},
+        gs_terminals=1,
+        timing=_lunar_timing(),
+    )
+
+    assert result.associations == {challenger: (0, 0)}
+    (event,) = _retargets(result)
+    assert (event.pair, event.successor_pair) == (incumbent, challenger)
+    assert (event.terminal_node_id, event.terminal_index) == ("gs-A", 0)
+    assert event.remaining_arrival_ms == pytest.approx(EARTH_MOON_MS)
+    assert event.released_by == "bbm_gap"
+    assert (event.policy_kind, event.policy_name) == ("handover_mode", "bbm")
+    assert set(result.receive_windows) == {("sat-incumbent", 0)}
+    assert result.receive_windows[("sat-incumbent", 0)].until_unix == pytest.approx(NOW + 1.3)
+
+
+def test_a_lost_incumbents_terminal_stays_quiet_while_a_spare_one_takes_the_new_peer():
+    old, new = ("gs-A", "sat-old"), ("gs-A", "sat-new")
+    result = _allocate(
+        [_seen("sat-new", 60.0)], current={old: (0, 0)}, gs_terminals=2, timing=_lunar_timing()
+    )
+
+    assert result.associations == {new: (1, 0)}
+    assert _retargets(result) == []
+    assert result.receive_windows[("gs-A", 0)].old_pair == old
+    assert result.receive_windows[("gs-A", 0)].released_by == "incumbent_lost"
+
+
+def test_a_lost_incumbents_only_terminal_turning_to_a_new_peer_reports_the_loss():
+    old, new = ("gs-A", "sat-old"), ("gs-A", "sat-new")
+    result = _allocate(
+        [_seen("sat-new", 60.0)], current={old: (0, 0)}, gs_terminals=1, timing=_lunar_timing()
+    )
+
+    assert result.associations == {new: (0, 0)}
+    (event,) = _retargets(result)
+    assert event.released_by == "incumbent_lost"
+    assert (event.policy_kind, event.policy_name) == (None, None)
+
+
+@pytest.mark.parametrize(
+    ("until_unix", "gs_terminals", "expected_index", "remaining_ms"),
+    [
+        (NOW + 0.3, 2, 1, None),  # still receiving: the spare terminal takes the new peer
+        (NOW + 0.3, 1, 0, 300.0),  # still receiving and the only terminal: reported
+        (NOW - 0.1, 1, 0, None),  # the last signal has arrived: free, nothing to report
+    ],
+)
+def test_a_window_from_an_earlier_tick_holds_its_terminal_until_the_last_arrival(
+    until_unix, gs_terminals, expected_index, remaining_ms
+):
+    window = ReceiveWindow(
+        until_unix=until_unix, old_pair=("gs-A", "sat-old"), released_by="incumbent_lost"
+    )
+    result = _allocate(
+        [_seen("sat-new", 60.0)],
+        gs_terminals=gs_terminals,
+        timing=_lunar_timing({("gs-A", 0): window}),
+    )
+
+    assert result.associations == {("gs-A", "sat-new"): (expected_index, 0)}
+    events = _retargets(result)
+    if remaining_ms is None:
+        assert events == []
+    else:
+        assert events[0].remaining_arrival_ms == pytest.approx(remaining_ms)
+    assert (("gs-A", 0) in result.receive_windows) == (until_unix > NOW and expected_index != 0)

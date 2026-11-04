@@ -10,6 +10,7 @@ from typing import get_args
 from nodalarc.body_frames import SUPPORTED_BODY_NAMES, SupportedSurfaceBody
 from nodalarc.models.link_decisions import (
     GroundAllocationEventCategory,
+    GroundTerminalReleaseCause,
     GroundVisibilityRejectingEndpoint,
     GroundVisibilityRejectReason,
     ObserverFrame,
@@ -26,6 +27,21 @@ class MbbTeardown:
 
 
 MbbTeardownState = dict[tuple[str, str], MbbTeardown]
+
+
+@dataclass(frozen=True)
+class ReceiveWindow:
+    """A ground terminal still receiving from a peer the allocator released: the signals that
+    peer emitted until its release keep arriving until ``until_unix`` (master sim time). The
+    terminal points at that peer until then."""
+
+    until_unix: float
+    old_pair: tuple[str, str]
+    released_by: GroundTerminalReleaseCause
+
+
+# Keyed by (node id, terminal index): a station's termN or a satellite's gndN.
+ReceiveWindows = dict[tuple[str, int], ReceiveWindow]
 
 
 @dataclass(frozen=True)

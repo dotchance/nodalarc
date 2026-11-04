@@ -1,5 +1,7 @@
 """Test doubles for the resolved OME runtime contract."""
 
+from collections.abc import Iterator, Mapping
+
 
 class StaticOmeAddressing:
     """Explicit runtime node registry for isolated OME algorithm tests."""
@@ -45,3 +47,32 @@ class StaticOmeAddressing:
             if name in self._node_types and self._node_types[name] == "ground_station":
                 return name
             raise KeyError(f"unknown test ground station alias {name!r}") from exc
+
+
+class UniformPairDelays(Mapping[tuple[str, str], tuple[float, float]]):
+    """The same one-way delay in both directions for every pair: a stand-in for the tick's
+    ground decisions in allocator tests whose links are short (LEO-like), where no test reads a
+    particular pair's delay."""
+
+    def __init__(self, delay_ms: float) -> None:
+        self._delays = (delay_ms, delay_ms)
+
+    def __getitem__(self, pair: tuple[str, str]) -> tuple[float, float]:
+        return self._delays
+
+    def __iter__(self) -> Iterator[tuple[str, str]]:
+        return iter(())
+
+    def __len__(self) -> int:
+        return 0
+
+
+def allocator_timing_kwargs() -> dict:
+    """The allocator's per-tick timing inputs for tests that do not exercise reception windows:
+    a fixed tick time, 3 ms each way on every pair, and no reception carried from earlier
+    ticks."""
+    return {
+        "sim_time_unix": 1000.0,
+        "pair_delays_ms": UniformPairDelays(3.0),
+        "receive_windows": {},
+    }

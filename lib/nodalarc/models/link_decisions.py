@@ -119,6 +119,7 @@ type GroundAllocationEventCategory = Literal[
     "failed_acquire",
     "incumbent_lost",
     "bbm_gap",
+    "retargeted_before_last_arrival",
 ]
 """Operator-facing ground-allocation transition/audit event category.
 
@@ -193,12 +194,31 @@ class GroundPolicyAudit(BaseModel):
     ignored_capacity_fields: tuple[str, ...]
 
 
+type GroundTerminalReleaseCause = Literal[
+    "bbm_gap",
+    "incumbent_lost",
+    "teardown_completed",
+    "successor_aborted",
+    "failed_successor",
+    "sat_capacity",
+]
+"""Why the allocator released a ground association: the BBM handover, the incumbent's lost
+visibility, an MBB teardown or abort, or displacement by a candidate that needed the satellite's
+terminal."""
+
+
 class GroundAllocationEvent(BaseModel):
     """Typed non-steady transition produced by the ground allocator.
 
     `policy_kind` names the taxonomy for `policy_name`. Events that are not
     caused by a policy decision, such as physical incumbent visibility loss,
     set both fields to `None`.
+
+    `retargeted_before_last_arrival` reports a terminal given a new peer while signals the old
+    peer emitted were still arriving: `pair` is the old pair, `successor_pair` the new one,
+    `terminal_node_id` and `terminal_index` the terminal, `remaining_arrival_ms` how long the
+    old peer's signals would still have been arriving, and `released_by` why the old pair was
+    released. Those four fields are set on that category only.
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
@@ -212,6 +232,28 @@ class GroundAllocationEvent(BaseModel):
     challenger_pair: tuple[str, str] | None
     policy_kind: GroundAllocationPolicyKind | None
     policy_name: GroundAllocationPolicyName | None
+    terminal_node_id: str | None = None
+    terminal_index: int | None = None
+    remaining_arrival_ms: float | None = Field(default=None, ge=0.0, allow_inf_nan=False)
+    released_by: GroundTerminalReleaseCause | None = None
+
+    @model_validator(mode="after")
+    def _retarget_fields_on_their_category_only(self) -> GroundAllocationEvent:
+        retarget = self.category == "retargeted_before_last_arrival"
+        fields = (
+            self.terminal_node_id,
+            self.terminal_index,
+            self.remaining_arrival_ms,
+            self.released_by,
+        )
+        if retarget and (any(value is None for value in fields) or self.successor_pair is None):
+            raise ValueError(
+                "a retarget event names the terminal, the remaining arrival time, the release "
+                "cause and the new pair"
+            )
+        if not retarget and any(value is not None for value in fields):
+            raise ValueError(f"terminal retarget fields on a {self.category!r} event")
+        return self
 
     @model_validator(mode="after")
     def _policy_name_matches_kind(self) -> GroundAllocationEvent:

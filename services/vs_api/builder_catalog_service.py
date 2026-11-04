@@ -573,7 +573,7 @@ class BuilderCatalogAuthoringService:
             )
             for family, spec in sorted(CATALOG_FAMILY_REGISTRY.items())
         )
-        runtime = RuntimeSupport.earth_luna()
+        runtime = RuntimeSupport.production()
         return BuilderCatalogBootstrap(
             public_grammar_href=self._public_grammar_href,
             capabilities=BuilderCatalogCapabilities(),

@@ -716,13 +716,13 @@ def test_earth_multi_regime_rejects_space_node_set_with_support_note() -> None:
     feat = rs.check_segment_kind("space_node_set")
     assert isinstance(feat, UnsupportedFeature)
     assert feat.category is FeatureCategory.SEGMENT_KIND
-    assert feat.support_note == "supported by the Earth-Luna runtime"
+    assert feat.support_note == "supported by the production runtime"
 
 
 def test_earth_multi_regime_rejects_future_kinds_and_bodies() -> None:
     rs = RuntimeSupport.earth_multi_regime()
     assert rs.check_segment_kind("lagrange_point").support_note == "future runtime capability"
-    assert rs.check_central_body("luna").support_note == "supported by the Earth-Luna runtime"
+    assert rs.check_central_body("luna").support_note == "supported by the production runtime"
     assert rs.check_central_body("mars").support_note == "future runtime capability"
     assert rs.check_frame_body("sun").support_note == "future runtime capability"
 

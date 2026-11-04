@@ -192,7 +192,7 @@ def _analyze(
         return None, _structural_issues(family, target_ref, document, error)
     model = catalog_family_spec(family).validate_document(canonical.canonical_json)
     try:
-        findings = RuntimeSupport.earth_luna().check_catalog_object(
+        findings = RuntimeSupport.production().check_catalog_object(
             model,
             body_id=lambda ref: str(cast(Any, load_catalog_object(CatalogRef(ref), view)[1]).id),
         )

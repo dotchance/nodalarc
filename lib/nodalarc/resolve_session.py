@@ -203,10 +203,10 @@ def resolve_session_with_assets(
     context = source_context or SourceContext(origin="resolve_session")
     cfg = SegmentSessionConfig.model_validate(raw_session)
     resolution_catalog = _ResolutionCatalog(catalog)
-    # The runtime-support gate is mandatory. Production always runs the
-    # Earth-Luna profile; callers may only widen/narrow it explicitly. A None
+    # The runtime-support gate is mandatory. Production always runs the one
+    # production profile; callers may only widen/narrow it explicitly. A None
     # here must never mean "skip the typed UnsupportedFeature layer".
-    support = runtime_support or RuntimeSupport.earth_luna()
+    support = runtime_support or RuntimeSupport.production()
     _check_runtime_support(cfg, support, resolution_catalog)
 
     expanded_nodes, segments = _expand_segments(cfg, resolution_catalog)

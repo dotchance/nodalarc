@@ -54,21 +54,21 @@ class FeatureCategory(StrEnum):
 
 # Informational notes shown with unsupported features.
 FEATURE_SUPPORT_NOTES: dict[tuple[FeatureCategory, str], str] = {
-    (FeatureCategory.SEGMENT_KIND, "space_node_set"): "supported by the Earth-Luna runtime",
+    (FeatureCategory.SEGMENT_KIND, "space_node_set"): "supported by the production runtime",
     (FeatureCategory.SEGMENT_KIND, "lagrange_point"): "future runtime capability",
-    (FeatureCategory.CENTRAL_BODY, "luna"): "supported by the Earth-Luna runtime",
+    (FeatureCategory.CENTRAL_BODY, "luna"): "supported by the production runtime",
     (FeatureCategory.CENTRAL_BODY, "mars"): "future runtime capability",
     (FeatureCategory.CENTRAL_BODY, "sun"): "future runtime capability",
-    (FeatureCategory.REFERENCE_BODY, "luna"): "supported by the Earth-Luna runtime",
+    (FeatureCategory.REFERENCE_BODY, "luna"): "supported by the production runtime",
     (FeatureCategory.REFERENCE_BODY, "mars"): "future runtime capability",
-    (FeatureCategory.FRAME_BODY, "luna"): "supported by the Earth-Luna runtime",
+    (FeatureCategory.FRAME_BODY, "luna"): "supported by the production runtime",
     (FeatureCategory.FRAME_BODY, "mars"): "future runtime capability",
     (FeatureCategory.FRAME_BODY, "sun"): "future runtime capability",
     (FeatureCategory.PROPAGATOR, "crtbp"): (
         "future runtime capability - three-body (CR3BP) propagation for NRHO/halo "
         "orbits; Kepler elements cannot represent these trajectories truthfully"
     ),
-    (FeatureCategory.PROTOCOL_ADAPTER, "static_ip"): "supported by the Earth-Luna runtime",
+    (FeatureCategory.PROTOCOL_ADAPTER, "static_ip"): "supported by the production runtime",
     (FeatureCategory.PROTOCOL_ADAPTER, "bgp"): "future runtime capability",
     (FeatureCategory.PROTOCOL_ADAPTER, "dtn_bundle"): "future runtime capability",
     (FeatureCategory.PROTOCOL_ADAPTER, "custom"): "future runtime capability",
@@ -80,7 +80,7 @@ FEATURE_SUPPORT_NOTES: dict[tuple[FeatureCategory, str], str] = {
     (FeatureCategory.ADDRESSING_POOL, "terrestrial_prefixes"): (
         "future runtime capability — segment subnets are resolver-allocated"
     ),
-    (FeatureCategory.PAYLOAD, "space_payload_execution"): ("supported by the Earth-Luna runtime"),
+    (FeatureCategory.PAYLOAD, "space_payload_execution"): ("supported by the production runtime"),
     (FeatureCategory.CLOCK_MODEL, "session"): "supported clock model",
     (FeatureCategory.CLOCK_MODEL, "affine"): "future runtime capability",
     (FeatureCategory.FORWARDING_CLASS, "bridge"): "future runtime capability",
@@ -436,8 +436,9 @@ class RuntimeSupport(BaseModel):
         )
 
     @classmethod
-    def earth_luna(cls) -> RuntimeSupport:
-        """Earth + Luna runtime with explicit cislunar relay support."""
+    def production(cls) -> RuntimeSupport:
+        """The one runtime profile production resolves sessions against: the bodies the shipped
+        data and code support (Earth and Luna), with cislunar relay support."""
         return cls(
             supported_segment_kinds=frozenset({"constellation", "ground_set", "space_node_set"}),
             supported_central_bodies=frozenset({"earth", "luna"}),

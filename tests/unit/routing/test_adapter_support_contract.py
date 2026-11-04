@@ -71,14 +71,14 @@ def test_runtime_support_sets_are_the_union_of_registered_declarations() -> None
         for protocol, protocol_support in support.routing.items()
         for capability in protocol_support.capabilities
     }
-    for profile in (RuntimeSupport.earth_luna(), RuntimeSupport.earth_multi_regime()):
+    for profile in (RuntimeSupport.production(), RuntimeSupport.earth_multi_regime()):
         assert profile.supported_workload_adapters == set(declarations)
         assert profile.supported_routing_protocols == protocols
         assert profile.supported_routing_capabilities == capabilities
 
 
 def test_runtime_support_follows_whatever_adapters_are_registered(stub_declarations) -> None:
-    support = RuntimeSupport.earth_luna()
+    support = RuntimeSupport.production()
 
     assert support.supported_workload_adapters == {"stub", "host-only"}
     assert support.supported_routing_protocols == {"isis", "static"}
@@ -111,7 +111,7 @@ def test_declarations_load_without_the_rendering_dependency() -> None:
         "sys.modules['jinja2'] = None\n"
         "from nodalarc.resolve_session import resolve_session\n"
         "from nodalarc.runtime_support import RuntimeSupport\n"
-        "assert RuntimeSupport.earth_luna().supported_workload_adapters\n"
+        "assert RuntimeSupport.production().supported_workload_adapters\n"
         "rendering = [m for m in sys.modules if m in "
         "('adapters.frr.adapter', 'adapters.frr.stack', 'adapters.frr.template_vars')]\n"
         "assert not rendering, rendering\n"

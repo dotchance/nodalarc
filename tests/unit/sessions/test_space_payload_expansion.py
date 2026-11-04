@@ -17,7 +17,7 @@ from tests.catalog_session_fixtures import (
 
 # Onboard execution is production-supported; a narrowed profile must still
 # refuse typed — the boundary mechanism outlives any one profile's width.
-NO_ONBOARD_SUPPORT = RuntimeSupport.earth_luna().model_copy(update={"supports_payloads": False})
+NO_ONBOARD_SUPPORT = RuntimeSupport.production().model_copy(update={"supports_payloads": False})
 
 
 def _fixture_with_vehicle():

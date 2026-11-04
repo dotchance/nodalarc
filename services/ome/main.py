@@ -398,7 +398,9 @@ async def _handle_playback_control_command(
         _coverage_limit = None
         _paused = False
         await publish_playback_state("seeking")
-        target_iso = datetime.fromtimestamp(_seek_target, UTC).isoformat()
+        # The pacing thread may take the seek (and clear _seek_target) during the await above;
+        # the reply describes this command's own target.
+        target_iso = datetime.fromtimestamp(target, UTC).isoformat()
         logging.info("Seek requested: %s epoch_id=%d (auto-resumed)", target_iso, _epoch_id)
 
     state: Literal["seeking", "playing", "paused"] = (

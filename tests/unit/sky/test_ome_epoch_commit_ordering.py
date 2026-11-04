@@ -241,3 +241,24 @@ def test_a_clock_stopped_at_the_end_of_the_data_resumes_only_through_a_seek_back
         None,
         None,
     )
+
+
+def test_a_seek_the_pacing_thread_takes_during_its_publish_is_still_accepted():
+    """The pacing thread may take a seek while the handler awaits the "seeking" publish. The
+    command was applied, so the reply accepts it."""
+    _reset_playback_globals()
+    ome_main._initial_epoch_committed = True
+    target = datetime(2026, 6, 8, 5, tzinfo=UTC)
+
+    async def _publish_while_the_pacing_thread_takes_the_seek(state: str) -> None:
+        ome_main._seek_target = None
+
+    reply = asyncio.run(
+        ome_main._handle_playback_control_command(
+            PlaybackControlCommand(action="seek", target_sim_time=target),
+            _publish_while_the_pacing_thread_takes_the_seek,
+        )
+    )
+
+    assert isinstance(reply, PlaybackControlAccepted)
+    assert reply.state.epoch_id == 1

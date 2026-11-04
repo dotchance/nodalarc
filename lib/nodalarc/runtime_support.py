@@ -57,12 +57,12 @@ FEATURE_SUPPORT_NOTES: dict[tuple[FeatureCategory, str], str] = {
     (FeatureCategory.SEGMENT_KIND, "space_node_set"): "supported by the production runtime",
     (FeatureCategory.SEGMENT_KIND, "lagrange_point"): "future runtime capability",
     (FeatureCategory.CENTRAL_BODY, "luna"): "supported by the production runtime",
-    (FeatureCategory.CENTRAL_BODY, "mars"): "future runtime capability",
+    (FeatureCategory.CENTRAL_BODY, "mars"): "supported by the production runtime",
     (FeatureCategory.CENTRAL_BODY, "sun"): "future runtime capability",
     (FeatureCategory.REFERENCE_BODY, "luna"): "supported by the production runtime",
-    (FeatureCategory.REFERENCE_BODY, "mars"): "future runtime capability",
+    (FeatureCategory.REFERENCE_BODY, "mars"): "supported by the production runtime",
     (FeatureCategory.FRAME_BODY, "luna"): "supported by the production runtime",
-    (FeatureCategory.FRAME_BODY, "mars"): "future runtime capability",
+    (FeatureCategory.FRAME_BODY, "mars"): "supported by the production runtime",
     (FeatureCategory.FRAME_BODY, "sun"): "future runtime capability",
     (FeatureCategory.PROPAGATOR, "crtbp"): (
         "future runtime capability - three-body (CR3BP) propagation for NRHO/halo "
@@ -438,12 +438,12 @@ class RuntimeSupport(BaseModel):
     @classmethod
     def production(cls) -> RuntimeSupport:
         """The one runtime profile production resolves sessions against: the bodies the shipped
-        data and code support (Earth and Luna), with cislunar relay support."""
+        data and code support (Earth, Luna and Mars), with space relay support."""
         return cls(
             supported_segment_kinds=frozenset({"constellation", "ground_set", "space_node_set"}),
-            supported_central_bodies=frozenset({"earth", "luna"}),
-            supported_reference_bodies=frozenset({"earth", "luna"}),
-            supported_frame_bodies=frozenset({"earth", "luna"}),
+            supported_central_bodies=frozenset({"earth", "luna", "mars"}),
+            supported_reference_bodies=frozenset({"earth", "luna", "mars"}),
+            supported_frame_bodies=frozenset({"earth", "luna", "mars"}),
             supported_protocol_adapters=frozenset({"static_ip"}),
             supported_routing_protocols=_registered_routing_protocols(),
             supported_routing_capabilities=_registered_routing_capabilities(),

@@ -18,8 +18,8 @@ The spacetime view is the primary work surface, not decorative scene chrome.
 It is where an operator understands the experiment: what exists, what can see
 what, what is connected, what is blocked, what changed, and why.
 
-The viewer is multi-body by design. Earth, Luna, and future bodies are peer
-scene targets: camera movement, focus, follow, picking, labels, links, and
+The viewer is multi-body by design. Earth, Luna, Mars, and future bodies are
+peer scene targets: camera movement, focus, follow, picking, labels, links, and
 overlays must work from the active body or selected object rather than assuming
 Earth is the permanent center of interaction.
 

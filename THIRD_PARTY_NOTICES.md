@@ -78,6 +78,37 @@ own license or usage terms.
 - Changes in NodalArc: converted from TIFF to JPEG and renamed for
   application packaging; no other image content changes.
 
+### Mars Color Texture
+
+- Path: `frontend/public/mars-viking-color.jpg`
+- Work: Mars Viking MDIM 2.1 Colorized Global Mosaic, 1 km per pixel JPEG
+  (21339x10670)
+- Source: USGS Astrogeology Science Center
+- Source URL: <https://astrogeology.usgs.gov/search/map/mars_viking_colorized_global_mosaic_232m>
+- Direct source file: <https://astrogeology.usgs.gov/ckan/dataset/7131d503-cdc9-45a5-8f83-5126c0fd397e/resource/5ea881c6-01b3-41fa-a7af-42d2131b54f1/download/mars_viking_mdim21_clrmosaic_1km.jpg>
+- Source file hash: `sha256:fdfcd335559c3dc67052b7e8a9565d850e336ac0d1f3ea7f5eb7826ffb44ecb2`
+- Local file hash: `sha256:e2f9fdb040a8169a6f04cf6931eae32fdcd50500143fa8d3ba84452fd9d44472`
+- Changes in NodalArc: resampled to 4096x2048 and metadata removed for
+  application packaging; no other image content changes.
+
+### Mars Relief Map
+
+- Path: `frontend/public/mars-mola-height.png`
+- Work: Mars Global Surveyor MOLA Mission Experiment Gridded Data Record,
+  topography at 16 pixels per degree (`megt90n000eb.img`, 5760x2880, signed
+  16-bit heights in metres)
+- Source: NASA Planetary Data System Geosciences Node
+- Source URL: <https://pds-geosciences.wustl.edu/missions/mgs/megdr.html>
+- Direct source file: <https://pds-geosciences.wustl.edu/mgs/mgs-m-mola-5-megdr-l3-v1/mgsl_300x/meg016/megt90n000eb.img>
+- Source file hash: `sha256:d18d9b9ab8c5516d02e157dd2cde0f1d0d160c21940e953ba22391269a545e7b`
+- Local file hash: `sha256:b4c49aca048b393f875e941e763fb466308ee37ea64eabd6eb8d2432c3fe986c`
+- Changes in NodalArc: shifted half a turn in longitude so 180 W is at the
+  left edge, as in the color texture; heights from -8,177 m to 21,171 m scaled
+  linearly to 8-bit gray; resampled to 2048x1024.
+
+USGS-authored or produced data are in the U.S. public domain; USGS asks that it
+be credited as the source.
+
 NASA content is generally not subject to copyright in the United States when used
 factually, but NASA should be acknowledged as the source and use must not imply
 NASA endorsement of NodalArc, its authors, or any related product or service.

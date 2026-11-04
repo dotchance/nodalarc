@@ -39,7 +39,7 @@ import { isGroundNode } from "../../networkIdentity";
 import { Universe } from "./Universe";
 import { GlobeActionsBridge } from "./GlobeActionsBridge";
 import { Body } from "./Body";
-import { Earth, Moon, Starfield, SunLight } from "./Earth";
+import { Earth, Mars, Moon, Starfield, SunLight } from "./Earth";
 import { Constellation, satColor } from "./Constellation";
 import type { AreaColoring } from "../../routing/instances";
 import { GroundStations } from "./GroundStation";
@@ -76,6 +76,7 @@ import type {
 const BODY_SURFACE: Record<SupportedSurfaceBody, (props: { globeMode: GlobeMode }) => React.ReactNode> = {
   earth: ({ globeMode }) => <Earth globeMode={globeMode} />,
   luna: () => <Moon />,
+  mars: () => <Mars />,
 };
 
 function BodySurface({ id, globeMode }: { id: string; globeMode: GlobeMode }) {

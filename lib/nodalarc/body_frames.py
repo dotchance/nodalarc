@@ -12,14 +12,14 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Literal
 
-type SupportedSurfaceBody = Literal["earth", "luna"]
-SUPPORTED_BODY_NAMES: tuple[SupportedSurfaceBody, ...] = ("earth", "luna")
+type SupportedSurfaceBody = Literal["earth", "luna", "mars"]
+SUPPORTED_BODY_NAMES: tuple[SupportedSurfaceBody, ...] = ("earth", "luna", "mars")
 
 # Frame bodies extend surface bodies with celestial frames that are not surface
 # bodies for ground-station math. "sun" is a frame body only (Lagrange /
 # interplanetary frames); it has no surface-physics BodyFrame entry.
-FrameBodyName = Literal["earth", "luna", "sun"]
-FRAME_BODY_NAMES: tuple[FrameBodyName, ...] = ("earth", "luna", "sun")
+FrameBodyName = Literal["earth", "luna", "mars", "sun"]
+FRAME_BODY_NAMES: tuple[FrameBodyName, ...] = ("earth", "luna", "mars", "sun")
 
 
 @dataclass(frozen=True, slots=True)
@@ -55,6 +55,11 @@ BODY_RUNTIME_SUPPORT: dict[SupportedSurfaceBody, BodyRuntimeSupport] = {
     "luna": BodyRuntimeSupport(
         body_id="luna",
         j2=0.0,
+    ),
+    # NASA NSSDCA Mars fact sheet (updated 2025-05-19): J2 1960.45e-6.
+    "mars": BodyRuntimeSupport(
+        body_id="mars",
+        j2=1.96045e-3,
     ),
 }
 

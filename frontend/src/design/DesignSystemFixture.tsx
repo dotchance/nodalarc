@@ -280,6 +280,7 @@ export function DesignSystemFixture() {
           <Swatch name="regimeGeo" value={tokens.regimeGeo} label="GEO" />
           <Swatch name="regimeHeo" value={tokens.regimeHeo} label="HEO" />
           <Swatch name="regimeLuna" value={tokens.regimeLuna} label="Luna" />
+          <Swatch name="regimeMars" value={tokens.regimeMars} label="Mars" />
         </div>
         <div className="fx-grid">
           {LINK_MEDIUMS.map((m) => (

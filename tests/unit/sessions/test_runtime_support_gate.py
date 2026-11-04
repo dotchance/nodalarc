@@ -68,12 +68,17 @@ def _explicit_node_clock_session(
 
 
 def _lunar_constellation(raw: CatalogSessionFixture) -> CatalogSessionFixture:
+    return _constellation_around(raw, "luna", altitude_km=100)
+
+
+def _constellation_around(
+    raw: CatalogSessionFixture, body: str, *, altitude_km: float
+) -> CatalogSessionFixture:
     assert raw.orbit_ref is not None
     orbit_document = raw.read_catalog(raw.orbit_ref)
     orbit = orbit_document["orbit"]
-    orbit["central_body"] = "nodalarc:bodies/luna.yaml"
-    orbit["id"] = "luna-low-test"
-    orbit["shape"] = {"altitude_km": 100}
+    orbit["central_body"] = f"nodalarc:bodies/{body}.yaml"
+    orbit["shape"] = {"altitude_km": altitude_km}
     orbit["orientation"]["inclination_deg"] = 90
     orbit["id"] = raw.orbit_ref.relative_path.stem
     raw.write_catalog(raw.orbit_ref, orbit_document)
@@ -81,10 +86,14 @@ def _lunar_constellation(raw: CatalogSessionFixture) -> CatalogSessionFixture:
 
 
 def _move_ground_sites_to_luna(raw: CatalogSessionFixture) -> None:
+    _move_ground_sites_to(raw, "luna")
+
+
+def _move_ground_sites_to(raw: CatalogSessionFixture, body: str) -> None:
     for site_ref in raw.site_refs:
         site_document = raw.read_catalog(site_ref)
         site = site_document["site"]
-        site["frame"]["body_fixed"]["body"] = "nodalarc:bodies/luna.yaml"
+        site["frame"]["body_fixed"]["body"] = f"nodalarc:bodies/{body}.yaml"
         site["location"] = {"lat_deg": -80.0, "lon_deg": 0.0, "alt_m": 0.0}
         raw.write_catalog(site_ref, site_document)
 
@@ -124,6 +133,17 @@ class TestMandatoryGate:
             "de440s",
             "moon-orientation",
             "moon-frames",
+        ]
+
+    def test_mars_session_passes_the_production_gate(self) -> None:
+        raw = _constellation_around(_session(), "mars", altitude_km=400)
+        _move_ground_sites_to(raw, "mars")
+        resolved = resolve_session(raw)
+        assert {n.central_body for n in resolved.nodes if n.kind == "satellite"} == {"mars"}
+        assert [f.file_id for f in resolved.ephemeris_files] == [
+            "de440s",
+            "mars-satellites",
+            "planetary-constants",
         ]
 
     def test_earth_only_profile_refuses_luna_orbits_and_sites_at_their_objects(self) -> None:

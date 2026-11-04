@@ -168,6 +168,7 @@ export const tokens = {
   regimeGeo: "#68d98b",
   regimeHeo: "#82b7ff",
   regimeLuna: "#c9c4bb",
+  regimeMars: "#d0714f",
 
   // --- Taxonomy: link medium (theme-invariant) ---
   mediumRf: "#f0c15c",

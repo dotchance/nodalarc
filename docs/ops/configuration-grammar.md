@@ -1645,11 +1645,11 @@ context-free EBNF alone:
 ## Current runtime support
 
 Structural validity does not imply that the installed runtime can execute a
-construct. The production Earth-Luna profile currently supports:
+construct. The production profile currently supports:
 
 - `constellation`, `space_node_set` with orbit- or Earth-TLE-placed nodes, and
   body-fixed ground-site-set segments;
-- Earth and Luna body facts;
+- Earth, Luna and Mars body facts;
 - `two_body` and `j2_mean_elements` reusable-orbit propagation;
 - Earth `sgp4_tle` placement on fixed space nodes;
 - `session` clocks;
@@ -1702,7 +1702,7 @@ runtime execution:
 - `bgp` and `dtn_bundle` routing boundaries;
 - an access link between ground stations on two bodies (a direct
   surface-to-surface link across bodies);
-- bodies outside the supported Earth-Luna profile;
+- bodies other than Earth, Luna and Mars;
 - workload adapters other than `frr`;
 - SGP4 and analytic propagators mixed under one central body, until they
   share a body-fixed rotation authority;

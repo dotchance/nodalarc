@@ -323,6 +323,33 @@ export function Moon() {
   );
 }
 
+/** Mars: the Viking colour mosaic, with MOLA heights as a bump map so terrain shows relief
+ *  under the Sun's light. Both maps share the mosaic's layout (180 W at the left edge), the
+ *  layout the Earth and Moon maps use. The relief is shading only and its scale is a display
+ *  choice: the sphere keeps the body's radius and no position moves. */
+export function Mars() {
+  const { radiusRender } = useBodyFrame();
+  const colorTexture = useLoader(THREE.TextureLoader, "/mars-viking-color.jpg");
+  const heightTexture = useLoader(THREE.TextureLoader, "/mars-mola-height.png");
+  useMemo(() => {
+    colorTexture.colorSpace = THREE.SRGBColorSpace;
+    colorTexture.anisotropy = 4;
+    heightTexture.anisotropy = 4;
+  }, [colorTexture, heightTexture]);
+  return (
+    <mesh>
+      <sphereGeometry args={[radiusRender, 128, 128]} />
+      <meshStandardMaterial
+        map={colorTexture}
+        bumpMap={heightTexture}
+        bumpScale={4}
+        roughness={1.0}
+        metalness={0.0}
+      />
+    </mesh>
+  );
+}
+
 export function starShellRadiusForCameraFar(cameraFar: number): number {
   if (!Number.isFinite(cameraFar) || cameraFar <= 0) {
     throw new Error(`invalid camera far plane for starfield: ${cameraFar}`);

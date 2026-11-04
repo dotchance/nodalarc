@@ -9,8 +9,9 @@
  * positions with cubic Hermite polynomials from the position and velocity at
  * both ends, rotations at a constant rate about one axis between two samples,
  * angular velocity linearly. The backend measured the error of this scheme at
- * 600 s spacing: 0.1 mm for the Moon's position and 9.5e-12 rad for Earth's
- * orientation (tests/unit/physics/test_body_samples.py).
+ * 600 s spacing: 0.1 mm for the Moon's position, 2.6 mm for Mars's (the data's
+ * evaluation noise at 2.1e8 km, the same at every spacing), and at most
+ * 2.9e-11 rad for any body's orientation (tests/unit/physics/test_body_samples.py).
  *
  * The store holds what the page may display. An epoch is displayable only with
  * its SessionEphemeris and a window of the same epoch: windows that arrive

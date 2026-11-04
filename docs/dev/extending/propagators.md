@@ -9,7 +9,7 @@ simulation time to a common-frame position and velocity.
 NodalArc currently supports:
 
 - Mean-element propagation for catalog constellations
-- Body-parameterized propagation for Earth and Luna sessions
+- Body-parameterized propagation for Earth, Luna and Mars sessions
 - Body positions and orientation from JPL and NAIF data through the shared
   physics module (`lib/nodalarc/physics/`)
 - TLE/SGP4 parsing support in the model layer, with runtime use gated by the
@@ -44,7 +44,7 @@ velocity around Luna.
   constellations
 - **Lagrange or deep-space relays** - explicit external ephemeris or SPK-backed
   state vectors
-- **Mars or other bodies** - additional body constants, body frames, surface
+- **Other bodies** - additional body constants, body frames, surface
   models, and ephemeris targets
 
 Unsupported propagation grammar must fail validation. Do not approximate a

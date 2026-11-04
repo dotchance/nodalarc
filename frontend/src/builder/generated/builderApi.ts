@@ -1624,7 +1624,7 @@ export interface SunSample {
 }
 
 /**  */
-export type SupportedSurfaceBody = "earth" | "luna";
+export type SupportedSurfaceBody = "earth" | "luna" | "mars";
 
 /** Boresight reference for a ground terminal field-of-regard cone. The cone width itself lives on the terminal's ``field_of_regard_deg`` field as the full apex angle. This model only states what direction that cone is centered on. */
 export interface TerminalBoresight {

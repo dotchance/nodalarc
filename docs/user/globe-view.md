@@ -32,9 +32,9 @@ center of Earth.
 
 ### Bodies
 
-Earth and Luna render as bodies with local surface frames. Body rendering is a
-view concern; the OME owns the physical body positions and publishes the
-ephemeris facts needed by the frontend.
+Earth, Luna and Mars render as bodies with local surface frames. Body
+rendering is a view concern; the OME owns the physical body positions and
+publishes the ephemeris facts needed by the frontend.
 
 ### Satellites and Relay Nodes
 

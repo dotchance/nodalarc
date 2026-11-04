@@ -20,6 +20,7 @@ export interface BodyIdentity {
 export const BODY_IDENTITY: Record<SupportedSurfaceBody, BodyIdentity> = {
   earth: { label: "Earth", tintCss: tokens.mediumTerrestrial },
   luna: { label: "Lunar", tintCss: tokens.regimeLuna },
+  mars: { label: "Martian", tintCss: tokens.regimeMars },
 };
 
 /** A body other than Earth, whose orbits form one regime each. */

@@ -1,0 +1,9 @@
+body:
+  id: mars
+  display_name: Mars
+  gravitational_parameter_km3_s2: 42828.373621
+  mean_radius_km: 3389.5
+  equatorial_radius_km: 3396.19
+  polar_radius_km: 3376.2
+  reference: https://ssd.jpl.nasa.gov/planets/phys_par.html
+  notes: 'IAU 2015 radii (Archinal et al. 2018), as in NAIF pck00011: equatorial 3396.19 km, polar 3376.20 km; mean radius 3389.50 km from JPL planetary physical parameters. Gravitational parameter of the planet from DE440 (NAIF gm_de440.tpc, BODY499_GM).'

@@ -723,7 +723,7 @@ def test_earth_multi_regime_rejects_future_kinds_and_bodies() -> None:
     rs = RuntimeSupport.earth_multi_regime()
     assert rs.check_segment_kind("lagrange_point").support_note == "future runtime capability"
     assert rs.check_central_body("luna").support_note == "supported by the production runtime"
-    assert rs.check_central_body("mars").support_note == "future runtime capability"
+    assert rs.check_central_body("mars").support_note == "supported by the production runtime"
     assert rs.check_frame_body("sun").support_note == "future runtime capability"
 
 

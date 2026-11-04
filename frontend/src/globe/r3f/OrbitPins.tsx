@@ -27,7 +27,12 @@ import { bodyMathFromFrame } from "../../sim/ephemeris";
 import { interpolatedSimTimeMs } from "../../sim/simClock";
 import { skyAt } from "../../sim/bodySamples";
 import type { ReferenceFrame } from "../../types";
-import { bodyLocalToWorld, getNodeLocalPosition, getNodeWorldPosition } from "./positions";
+import {
+  bodyLocalToWorld,
+  getNodeLocalPosition,
+  getNodeWorldPosition,
+  onWorldShift,
+} from "./positions";
 import type { NodeState } from "../../generated/vsApi";
 import type { SessionEphemeris } from "../../builder/generated/builderApi";
 
@@ -86,6 +91,17 @@ export function OrbitPins({
     }
   };
 
+  // The rings hold world coordinates from their build. A move of the world's centre moves the
+  // group by the same amount, in the frame it happens, so the rings stay where they were drawn
+  // and keep the precision of their build; a rebuild puts the group back at the centre.
+  useEffect(
+    () =>
+      onWorldShift((shift) => {
+        groupRef.current?.position.sub(shift);
+      }),
+    [],
+  );
+
   const pinKey = useMemo(() => [...pinnedIds].sort().join(","), [pinnedIds]);
   // Read node data through a ref: a pinned ring is seeded ONCE (at pin time / frame toggle) and is
   // static thereafter — the satellite moves along it. Rebuilding on every snapshot (byId in deps)
@@ -99,6 +115,7 @@ export function OrbitPins({
     teardown();
     const group = groupRef.current;
     if (!group || pinnedIds.length === 0) return;
+    group.position.set(0, 0, 0);
 
     const pos = new Float32Array(pinnedIds.length * FLOATS_PER_ORBIT);
     const col = new Float32Array(pinnedIds.length * FLOATS_PER_ORBIT);

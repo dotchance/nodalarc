@@ -31,7 +31,7 @@
 import { useEffect, useMemo, useRef } from "react";
 import * as THREE from "three";
 import { useFrame } from "@react-three/fiber";
-import { getNodeWorldPosition } from "./positions";
+import { getNodeWorldPosition, onWorldShift } from "./positions";
 import { tokens } from "../../styles/tokens";
 import type { NodeState } from "../../generated/vsApi";
 
@@ -356,6 +356,17 @@ export function Trails({ enabled, nodes, resetKey }: TrailsProps) {
     batch.resetSession();
     lastFrameRef.current = null;
   }, [batch, resetKey]);
+
+  // A move of the world's centre leaves the history in the old coordinates; a trail joining
+  // them to new samples would draw a line across the scene, so the history is dropped.
+  useEffect(
+    () =>
+      onWorldShift(() => {
+        batch.flush();
+        lastFrameRef.current = null;
+      }),
+    [batch],
+  );
 
   // Hide + flush when disabled, so
   // re-enabling starts clean rather than connecting across the gap.

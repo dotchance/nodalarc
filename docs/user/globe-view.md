@@ -18,7 +18,8 @@ Luna, and cislunar relays.
 | Zoom toward focus | Scroll wheel |
 | Pan | Right-click + drag |
 | Select node | Click a satellite or ground node |
-| Fly to node/body | Double-click, or select from the filter drawer |
+| Fly to node/body | Double-click, select from the filter drawer, or use the body buttons beside Focus |
+| Frame the whole session | Session button beside Focus |
 | Deselect | Press Escape or click empty space |
 | Follow selected node | Press F |
 | Top-down view | Press V |
@@ -27,6 +28,12 @@ The camera uses a focus point. When you fly to Luna, a GEO satellite, or a
 cislunar relay, orbit and zoom controls pivot around that target. That keeps
 deep-space navigation usable instead of forcing every interaction around the
 center of Earth.
+
+The view is centered on the body you last flew to, or the body of the node or
+link you flew to, and the camera moves with that body. The closest zoom is
+1.05 times that body's radius from the focus point. In a session that spans
+planets, a body can be smaller than a pixel in the whole-session view; the
+body buttons beside Focus fly to it.
 
 ## Visual Elements
 

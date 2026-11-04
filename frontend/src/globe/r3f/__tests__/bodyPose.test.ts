@@ -9,7 +9,10 @@ import { interpolateWindows, matMul, matVec, transpose, type Matrix3 } from "../
 import { BODY_SAMPLE_FIXTURE } from "../../../sim/__tests__/bodySampleFixture";
 import {
   bodyPose,
+  placedBodiesAt,
+  relativeToOrigin,
   sunDirection,
+  sunRelativeToOrigin,
   toRenderQuaternion,
   toRenderVector,
   viewRotation,
@@ -102,5 +105,41 @@ describe("render axes", () => {
     const group = toRenderQuaternion(pose.rotation, new THREE.Quaternion());
     const velocity = worldVelocity(local, new THREE.Vector3(), group, omega, new THREE.Vector3());
     expect(velocity.length()).toBeCloseTo(6378.137 * Math.hypot(...earth.angularVelocityRadS), 9);
+  });
+});
+
+describe("render origin", () => {
+  it("centres the world on the origin body and keeps every separation", () => {
+    expect(relativeToOrigin(sky, "luna", "earth-inertial", "luna")).toEqual([0, 0, 0]);
+    const earthFromLuna = relativeToOrigin(sky, "earth", "earth-inertial", "luna")!;
+    expect(earthFromLuna).toEqual(luna.positionKm.map((v) => -v));
+    // An Earth origin is the samples' own origin.
+    expect(relativeToOrigin(sky, "luna", "earth-inertial", "earth")).toEqual(luna.positionKm);
+  });
+
+  it("places the Sun relative to the origin body, so each body is lit from its own side", () => {
+    const sunFromLuna = sunRelativeToOrigin(sky, "earth-inertial", "luna")!;
+    expect(sunFromLuna).toEqual(sky.sunPositionKm.map((v, i) => v - luna.positionKm[i]!));
+  });
+
+  it("frames bodies relative to the origin, in render units", () => {
+    const placed = placedBodiesAt(
+      [{ id: "earth" }, { id: "luna" }],
+      sky,
+      "earth-inertial",
+      10,
+      "luna",
+    );
+    expect(Math.hypot(...placed.find((b) => b.id === "luna")!.position)).toBe(0);
+    const earthAt = placed.find((b) => b.id === "earth")!.position;
+    const [x, y, z] = luna.positionKm;
+    expect(earthAt[0]).toBeCloseTo(-x / 10, 9);
+    expect(earthAt[1]).toBeCloseTo(-z / 10, 9);
+    expect(earthAt[2]).toBeCloseTo(y / 10, 9);
+  });
+
+  it("has no centre for an origin the sky does not carry", () => {
+    expect(relativeToOrigin(sky, "earth", "earth-inertial", "mars")).toBeNull();
+    expect(sunRelativeToOrigin(sky, "earth-inertial", "mars")).toBeNull();
   });
 });

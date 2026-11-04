@@ -3,7 +3,6 @@
 
 import * as THREE from "three";
 import { CAMERA_FOV } from "../../config";
-import { EARTH_RADIUS_RENDER } from "./units";
 
 const HALF_FOV_SIN = Math.sin((CAMERA_FOV * Math.PI) / 360);
 
@@ -17,10 +16,8 @@ export function fitDistanceForRadius(radius: number, floor: number): number {
   return Math.max(floor, (radius / Math.max(0.001, HALF_FOV_SIN)) * 1.35);
 }
 
-export function focusDistanceForFrame(
-  frame: FocusFrame,
-  floor = EARTH_RADIUS_RENDER * 2.5,
-): number {
+/** `floor` comes from the radius of the body being framed. */
+export function focusDistanceForFrame(frame: FocusFrame, floor: number): number {
   return fitDistanceForRadius(frame.radius, floor);
 }
 
@@ -65,13 +62,16 @@ export function flightEndPosition(
   return out;
 }
 
+/** The frame of a link's two endpoints; `minRadius` (from the endpoints' body radii) keeps a
+ *  very short link from framing closer than a node. */
 export function frameEndpoints(
   a: THREE.Vector3,
   b: THREE.Vector3,
   outCenter: THREE.Vector3,
+  minRadius: number,
 ): FocusFrame {
   outCenter.copy(a).add(b).multiplyScalar(0.5);
-  return { center: outCenter, radius: Math.max(a.distanceTo(b) * 0.5, EARTH_RADIUS_RENDER * 0.08) };
+  return { center: outCenter, radius: Math.max(a.distanceTo(b) * 0.5, minRadius) };
 }
 
 export function framePoints(points: readonly THREE.Vector3[], outCenter: THREE.Vector3): FocusFrame | null {

@@ -25,7 +25,7 @@ const BODIES = [
 function useScene(e: SessionEphemeris, w: BodySamples, t: number) {
   const version = useBodySampleStore(e, w);
   return useMemo(
-    () => placedBodiesAt(BODIES, peekSkyAt(t), "earth-inertial", 63.78137),
+    () => placedBodiesAt(BODIES, peekSkyAt(t), "earth-inertial", 63.78137, "earth"),
     [t, version],
   );
 }

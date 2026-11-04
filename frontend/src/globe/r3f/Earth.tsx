@@ -23,7 +23,7 @@ import { useFrame, useLoader, useThree } from "@react-three/fiber";
 import type { GlobeMode, ReferenceFrame } from "../../types";
 import { skyAt } from "../../sim/bodySamples";
 import { interpolatedSimTimeMs } from "../../sim/simClock";
-import { sunDirection, toRenderVector } from "./bodyPose";
+import { sunDirection, sunRelativeToOrigin, toRenderVector } from "./bodyPose";
 import { tokens } from "../../styles/tokens";
 import { useBodyFrame } from "./BodyFrame";
 import { EARTH_RADIUS_RENDER } from "./units";
@@ -101,17 +101,30 @@ const sunlitShaders = new Set<THREE.ShaderMaterial>();
 const sunWorldDirection = new THREE.Vector3();
 let sunDirectionKnown = false;
 
-/** The Sun: a directional light from the Sun's direction, the sun disc on the star shell,
- *  and the direction day/night shaders read. The direction comes from OME's body samples at
- *  the interpolated sim time (Earth-centred; the Sun's parallax between Earth and the Moon
- *  is 0.15 degrees, below what shading shows), on the world axes of the reference frame.
- *  It lives at the scene root, so every body is lit, with or without Earth in the session.
- *  Runs after FrameDriver (-2) and before the default-priority consumers. */
-export function SunLight({ referenceFrame }: { referenceFrame: ReferenceFrame }) {
-  const lightRef = useRef<THREE.DirectionalLight>(null);
+/** The Sun: a point light at the Sun's position, the sun disc on the star shell, and the
+ *  direction Earth's day/night shader reads. Positions come from OME's body samples at the
+ *  interpolated sim time, on the world axes of the reference frame, relative to the render
+ *  origin. A point light lights each body from the Sun as seen from that body; a directional
+ *  light along the Sun's direction from Earth (the rejected alternative) lit Mars from a
+ *  direction up to tens of degrees wrong. The light has no distance falloff (decay 0), so its
+ *  intensity is the directional light's. It lives at the scene root, so every body is lit,
+ *  with or without Earth in the session. Runs after FrameDriver (-2) and before the
+ *  default-priority consumers. */
+export function SunLight({
+  referenceFrame,
+  kmPerRenderUnit,
+  originBodyId,
+}: {
+  referenceFrame: ReferenceFrame;
+  kmPerRenderUnit: number | null;
+  originBodyId: string | null;
+}) {
+  const lightRef = useRef<THREE.PointLight>(null);
   const spriteRef = useRef<THREE.Sprite>(null);
   const camera = useThree((s) => s.camera);
   const cameraWorld = useMemo(() => new THREE.Vector3(), []);
+  const sunWorld = useMemo(() => new THREE.Vector3(), []);
+  const towardSun = useMemo(() => new THREE.Vector3(), []);
   const sunTexture = useMemo(makeSunTexture, []);
   useEffect(() => () => sunTexture.dispose(), [sunTexture]);
 
@@ -121,19 +134,23 @@ export function SunLight({ referenceFrame }: { referenceFrame: ReferenceFrame })
     const interpMs = interpolatedSimTimeMs(performance.now());
     const sky = interpMs === null ? null : skyAt(interpMs / 1000);
     const direction = sky ? sunDirection(sky, referenceFrame) : null;
-    sunDirectionKnown = direction !== null;
+    const sunKm =
+      sky && originBodyId !== null ? sunRelativeToOrigin(sky, referenceFrame, originBodyId) : null;
+    sunDirectionKnown = direction !== null && sunKm !== null && kmPerRenderUnit !== null;
     if (light) light.visible = sunDirectionKnown;
     if (sprite) sprite.visible = sunDirectionKnown;
-    if (!direction) return;
+    if (!direction || !sunKm || kmPerRenderUnit === null) return;
     toRenderVector(direction, sunWorldDirection);
     for (const shader of sunlitShaders) {
       shader.uniforms.u_sunDirection!.value.copy(sunWorldDirection);
     }
-    if (light) light.position.copy(sunWorldDirection).multiplyScalar(EARTH_RADIUS_RENDER * 50);
+    toRenderVector(sunKm, sunWorld, 1 / kmPerRenderUnit);
+    if (light) light.position.copy(sunWorld);
     if (sprite) {
       camera.getWorldPosition(cameraWorld);
+      towardSun.copy(sunWorld).sub(cameraWorld).normalize();
       const shell = starShellRadiusForCameraFar(camera.far) * 0.98;
-      sprite.position.copy(cameraWorld).addScaledVector(sunWorldDirection, shell);
+      sprite.position.copy(cameraWorld).addScaledVector(towardSun, shell);
       const scale = shell * tokens.sceneSunDiscScale;
       sprite.scale.set(scale, scale, 1);
     }
@@ -141,10 +158,12 @@ export function SunLight({ referenceFrame }: { referenceFrame: ReferenceFrame })
 
   return (
     <>
-      <directionalLight
+      <pointLight
         ref={lightRef}
         color={0xffffff}
         intensity={tokens.sceneSunIntensity}
+        decay={0}
+        distance={0}
         visible={false}
       />
       <sprite ref={spriteRef} frustumCulled={false} visible={false}>

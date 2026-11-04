@@ -3,20 +3,15 @@
 /**
  * Universe: the scene root — the R3F Canvas, camera rig, OrbitControls, lighting, and
  * background. Children are bodies (and, later, inter-body relay paths and the selection
- * overlay). Camera and controls reproduce the legacy globe (config.ts) at the shared
- * 100-units-per-Earth-radius scale. preserveDrawingBuffer is required for the screenshot
- * GlobeAction. The floating-origin camera rebase is added here when a second body lands.
+ * overlay). The scale is 100 units per Earth radius; the world is centred on the render
+ * origin body (bodyPose.ts), and the controls' closest approach comes from that body's
+ * radius. preserveDrawingBuffer is required for the screenshot GlobeAction.
  */
 
 import { Suspense, useEffect, useRef, type MutableRefObject, type ReactNode } from "react";
 import { Canvas, useFrame, useThree } from "@react-three/fiber";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
-import {
-  CAMERA_FOV,
-  CAMERA_DISTANCE,
-  CAMERA_MIN_DISTANCE,
-  CAMERA_MAX_DISTANCE,
-} from "../../config";
+import { CAMERA_FOV, CAMERA_DISTANCE, CAMERA_MAX_DISTANCE } from "../../config";
 import { tokens } from "../../styles/tokens";
 
 /**
@@ -28,23 +23,27 @@ import { tokens } from "../../styles/tokens";
  */
 function Controls({
   controlsRef,
+  minDistance,
   maxDistance,
 }: {
   controlsRef?: MutableRefObject<OrbitControls | null>;
+  minDistance: number;
   maxDistance: number;
 }) {
   const camera = useThree((s) => s.camera);
   const gl = useThree((s) => s.gl);
   const localRef = useRef<OrbitControls | null>(null);
+  const minDistanceRef = useRef(minDistance);
   const maxDistanceRef = useRef(maxDistance);
   useEffect(() => {
+    minDistanceRef.current = minDistance;
     maxDistanceRef.current = maxDistance;
-  }, [maxDistance]);
+  }, [minDistance, maxDistance]);
   useEffect(() => {
     const controls = new OrbitControls(camera, gl.domElement);
     controls.enableDamping = true;
     controls.dampingFactor = 0.05;
-    controls.minDistance = CAMERA_MIN_DISTANCE;
+    controls.minDistance = minDistanceRef.current;
     controls.maxDistance = maxDistanceRef.current;
     localRef.current = controls;
     if (controlsRef) controlsRef.current = controls;
@@ -57,9 +56,10 @@ function Controls({
   useEffect(() => {
     const controls = localRef.current;
     if (!controls) return;
+    controls.minDistance = minDistance;
     controls.maxDistance = maxDistance;
     controls.update();
-  }, [maxDistance]);
+  }, [minDistance, maxDistance]);
   useFrame(() => localRef.current?.update());
   return null;
 }
@@ -78,6 +78,7 @@ export function Universe({
   afterControls,
   controlsRef,
   onPointerMissed,
+  controlsMinDistance,
   controlsMaxDistance = CAMERA_MAX_DISTANCE,
   cameraFar = 10000,
 }: {
@@ -87,6 +88,8 @@ export function Universe({
   /** Canvas-level miss handler: fires on a click that hit no interactive object (empty space /
    *  Earth / a non-pickable beam) — the hook the LinkPicker uses for link-select + deselect. */
   onPointerMissed?: (event: MouseEvent) => void;
+  /** The controls' closest approach to their target: 1.05 radii of the render origin body. */
+  controlsMinDistance: number;
   controlsMaxDistance?: number;
   cameraFar?: number;
 }) {
@@ -104,13 +107,17 @@ export function Universe({
       onPointerMissed={onPointerMissed}
     >
       <color attach="background" args={[tokens.bgMain]} />
-      {/* Ambient fill only; the sun directional lives in <Earth> (earth frame), positioned by
-          the sim-time sun model so the terminator tracks the frame rotation. */}
+      {/* Ambient fill only; the Sun's light is <SunLight> (Earth.tsx), at the Sun's sampled
+          position. */}
       <ambientLight intensity={tokens.sceneAmbientIntensity} />
       <CameraClip far={cameraFar} />
       <Suspense fallback={null}>{children}</Suspense>
       {/* Controls run after scene writers/follow-cam; projection consumers mount after this. */}
-      <Controls controlsRef={controlsRef} maxDistance={controlsMaxDistance} />
+      <Controls
+        controlsRef={controlsRef}
+        minDistance={controlsMinDistance}
+        maxDistance={controlsMaxDistance}
+      />
       <Suspense fallback={null}>{afterControls}</Suspense>
     </Canvas>
   );

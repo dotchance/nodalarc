@@ -44,7 +44,12 @@ import { bodyMathFromFrame } from "../../sim/ephemeris";
 import { interpolatedSimTimeMs } from "../../sim/simClock";
 import { skyAt, type SkyState } from "../../sim/bodySamples";
 import type { ReferenceFrame } from "../../types";
-import { bodyLocalToWorld, getNodeLocalPosition, getNodeWorldPosition } from "./positions";
+import {
+  bodyLocalToWorld,
+  getNodeLocalPosition,
+  getNodeWorldPosition,
+  onWorldShift,
+} from "./positions";
 import type { NodeState } from "../../generated/vsApi";
 import type { SessionEphemeris } from "../../builder/generated/builderApi";
 
@@ -135,6 +140,17 @@ export function AllOrbits({
 
   useEffect(() => teardown, [teardown]);
 
+  // The rings hold world coordinates from their build. A move of the world's centre moves the
+  // group by the same amount, in the frame it happens, so the rings stay where they were drawn
+  // and keep the precision of their build; a rebuild puts the group back at the centre.
+  useEffect(
+    () =>
+      onWorldShift((shift) => {
+        groupRef.current?.position.sub(shift);
+      }),
+    [],
+  );
+
   // Reference-frame toggle: the rings are world-space great circles seeded with the frame's
   // angular velocity, so they are invalid in the new frame (mirrors legacy clearAllOrbits on
   // frame toggle → lazy recreate). Tear down; the next useFrame rebuilds with the new frame's
@@ -152,6 +168,7 @@ export function AllOrbits({
     teardown();
     const group = groupRef.current;
     if (!group) return;
+    group.position.set(0, 0, 0);
 
     const orbitPositions = new Float32Array(sats.length * FLOATS_PER_ORBIT);
     const orbitColors = new Float32Array(sats.length * FLOATS_PER_ORBIT);

@@ -21,6 +21,35 @@
   white-space: nowrap;
 }
 
+/* The session and per-body view buttons inside the HUD; the HUD itself passes pointer
+   events through to the scene. */
+.scene-hud-views {
+  display: inline-flex;
+  gap: var(--space-2);
+  margin-left: var(--space-4);
+  pointer-events: auto;
+}
+
+.scene-hud-view {
+  padding: 0 var(--space-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-secondary);
+  font: inherit;
+  cursor: pointer;
+}
+
+.scene-hud-view:hover {
+  color: var(--text-primary);
+  border-color: var(--border-strong);
+}
+
+.scene-hud-view--active {
+  color: var(--text-primary);
+  border-color: var(--border-strong);
+}
+
 /* The scene has no body samples for the render time (or no axes for the chosen view):
    the world is hidden and this states why. */
 .scene-unavailable {

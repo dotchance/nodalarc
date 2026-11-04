@@ -7,6 +7,12 @@
  * sky and the other bodies turn around it. Both views take Earth's orientation from the
  * same samples, so satellites, ground stations and bodies stay in one frame.
  *
+ * The world is centred on the render origin body (bodyPose.ts says why). When the origin
+ * changes, the frame that first applies it announces the move of the world's centre
+ * (shiftWorld), this frame's vector from the old origin body to the new one, taken from the
+ * same samples that place the bodies, so the camera and every cached world coordinate move
+ * with it and the view does not jump.
+ *
  * Runs at a negative useFrame priority so poses are set BEFORE any world-position consumer
  * (selection ring, links, labels, camera) reads getNodeWorldPosition this frame — and
  * negative (not positive) so R3F keeps auto-rendering rather than handing us the render loop.
@@ -22,8 +28,14 @@ import { useFrame } from "@react-three/fiber";
 import { skyAt } from "../../sim/bodySamples";
 import { interpolatedSimTimeMs } from "../../sim/simClock";
 import type { ReferenceFrame } from "../../types";
-import { bodyPose, toRenderQuaternion, toRenderVector, viewRotation } from "./bodyPose";
-import { getBodyFrame } from "./positions";
+import {
+  bodyPose,
+  relativeToOrigin,
+  toRenderQuaternion,
+  toRenderVector,
+  viewRotation,
+} from "./bodyPose";
+import { getBodyFrame, shiftWorld } from "./positions";
 
 /** Why the scene can or cannot place bodies at the render time. */
 export type SkyAvailability =
@@ -37,17 +49,23 @@ interface FrameDriverProps {
   referenceFrame: ReferenceFrame;
   kmPerRenderUnit: number;
   bodyIds: readonly string[];
+  /** The body the rendered world is centred on; one of bodyIds. */
+  originBodyId: string;
   onAvailabilityChange: (availability: SkyAvailability) => void;
 }
+
+const _shift = new THREE.Vector3();
 
 export function FrameDriver({
   starFrame,
   referenceFrame,
   kmPerRenderUnit,
   bodyIds,
+  originBodyId,
   onAvailabilityChange,
 }: FrameDriverProps) {
   const reported = useRef<SkyAvailability | null>(null);
+  const appliedOrigin = useRef<string | null>(null);
   const report = (availability: SkyAvailability) => {
     if (reported.current === availability) return;
     reported.current = availability;
@@ -70,14 +88,25 @@ export function FrameDriver({
       report("no-earth-for-fixed-view");
       return;
     }
+    const previous = appliedOrigin.current;
+    if (previous !== originBodyId) {
+      // A previous origin the sky no longer carries (a session switch) has no move to report.
+      const move =
+        previous === null ? null : relativeToOrigin(sky, originBodyId, referenceFrame, previous);
+      if (move) shiftWorld(toRenderVector(move, _shift, 1 / kmPerRenderUnit));
+      appliedOrigin.current = originBodyId;
+    }
     for (const bodyId of bodyIds) {
       const pose = bodyPose(sky, bodyId, referenceFrame);
-      if (!pose) {
-        throw new Error(`body samples carry no state for rendered body ${bodyId}`);
+      const centre = relativeToOrigin(sky, bodyId, referenceFrame, originBodyId);
+      if (!pose || !centre) {
+        throw new Error(
+          `body samples carry no state for rendered body ${bodyId} or origin ${originBodyId}`,
+        );
       }
       const group = getBodyFrame(bodyId);
       if (!group) continue;
-      toRenderVector(pose.positionKm, group.position, 1 / kmPerRenderUnit);
+      toRenderVector(centre, group.position, 1 / kmPerRenderUnit);
       toRenderQuaternion(pose.rotation, group.quaternion);
     }
     if (starFrame.current) toRenderQuaternion(view, starFrame.current.quaternion);

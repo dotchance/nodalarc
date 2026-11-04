@@ -155,6 +155,29 @@ export function getBodyWorldSphere(
   return { body: bodyId, radius };
 }
 
+/**
+ * A move of the world's centre: the render origin body changed (bodyPose.ts says why the world
+ * is centred on one body), so every world coordinate held across frames is off by the move.
+ * FrameDriver announces the move on the frame that first places bodies relative to the new
+ * origin, before anything reads or draws them; each holder corrects itself in the same frame
+ * (the camera rig moves by it, cached orbit rings move their group, trails drop their history).
+ */
+type WorldShiftListener = (shift: THREE.Vector3) => void;
+const worldShiftListeners = new Set<WorldShiftListener>();
+
+/** Listen for moves of the world's centre; returns the unsubscribe. */
+export function onWorldShift(listener: WorldShiftListener): () => void {
+  worldShiftListeners.add(listener);
+  return () => {
+    worldShiftListeners.delete(listener);
+  };
+}
+
+/** Announce a move of the world's centre (render units, new origin minus old). */
+export function shiftWorld(shift: THREE.Vector3): void {
+  for (const listener of worldShiftListeners) listener(shift);
+}
+
 const _bodySpheres: BodySphere[] = [];
 
 /** Every registered body's world-space center and render radius (reused array; read, don't keep). */

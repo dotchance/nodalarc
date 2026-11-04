@@ -4,10 +4,16 @@
  * GlobeActionsBridge — the R3F implementation of the imperative GlobeActions handle the rest of
  * the app drives (Toolbar buttons, keyboard shortcuts, NodePopover, view-switch fly-to). It lives
  * INSIDE the Canvas so it can read the live camera / renderer / canvas size via useThree, and it
- * owns the follow-cam useFrame. Every method reproduces the legacy GlobeView actionsRef block
- * verbatim at the shared 100-units-per-Earth-radius scale (EARTH_RADIUS_RENDER == legacy
- * EARTH_RADIUS), reading node positions from the shared registry (getNodeWorldPosition) so a
- * flight / projection sees the same per-frame truth as the meshes.
+ * owns the follow-cam useFrame. Node positions come from the shared registry
+ * (getNodeWorldPosition), so a flight / projection sees the same per-frame truth as the meshes.
+ * Framing distances are multiples of the radius of the body being framed, so a view of Mars or
+ * the Moon frames that body the way a view of Earth frames Earth.
+ *
+ * Each focus names the body it looks at, and the bridge asks for that body as the render
+ * origin (bodyPose.ts says why the world is centred on one body). FrameDriver announces the
+ * move of the world's centre when it applies the new origin (shiftWorld); the bridge moves the
+ * camera, the controls target and any flight in progress by the same amount, so the view does
+ * not jump.
  *
  * The OrbitControls instance comes from <Universe> via controlsRef (the bridge cannot construct
  * its own — there must be exactly one). The follow-cam runs at default useFrame priority, after
@@ -23,11 +29,14 @@ import {
   CAMERA_FLY_TO_MAX_MS,
   CAMERA_FLY_TO_MIN_MS,
   CAMERA_FLY_TO_SPEED_UNITS_PER_SECOND,
-  CAMERA_MIN_DISTANCE,
 } from "../../config";
 import { isOccludedBySphere } from "../labels";
-import { getBodyWorldSphere, getNodeBodySphere, getNodeWorldPosition } from "./positions";
-import { EARTH_RADIUS_RENDER } from "./units";
+import {
+  getBodyWorldSphere,
+  getNodeBodySphere,
+  getNodeWorldPosition,
+  onWorldShift,
+} from "./positions";
 import type { GlobeActions } from "../actions";
 import type { CameraSceneFrame } from "./cameraBounds";
 import {
@@ -52,6 +61,12 @@ const _sceneCenter = new THREE.Vector3();
 const _flightPos = new THREE.Vector3();
 const _avoidCenter = new THREE.Vector3();
 const _flightTarget = new THREE.Vector3();
+const _nodeBodyCenter = new THREE.Vector3();
+
+/** The body a node lives in and that body's render radius, or null until both are registered. */
+function nodeBody(nodeId: string): { body: string; radius: number } | null {
+  return getNodeBodySphere(nodeId, _nodeBodyCenter);
+}
 
 type ActiveFocus =
   | { kind: "body"; bodyId: string; follow: true }
@@ -98,6 +113,10 @@ interface GlobeActionsBridgeProps {
   controlsRef: MutableRefObject<OrbitControls | null>;
   sceneFitDistance: number;
   sceneFrame: CameraSceneFrame;
+  /** The controls' closest approach to their target, from the render origin body's radius. */
+  minDistance: number;
+  /** Ask for a body as the render origin. */
+  onOriginRequest: (bodyId: string) => void;
   onFocusChange?: (label: string) => void;
 }
 
@@ -106,6 +125,8 @@ export function GlobeActionsBridge({
   controlsRef,
   sceneFitDistance,
   sceneFrame,
+  minDistance,
+  onOriginRequest,
   onFocusChange,
 }: GlobeActionsBridgeProps) {
   const camera = useThree((s) => s.camera);
@@ -118,6 +139,28 @@ export function GlobeActionsBridge({
   const flightRef = useRef<CameraFlight | null>(null);
   const sceneFrameRef = useRef(sceneFrame);
   sceneFrameRef.current = sceneFrame;
+  const minDistanceRef = useRef(minDistance);
+  minDistanceRef.current = minDistance;
+  const onOriginRequestRef = useRef(onOriginRequest);
+  onOriginRequestRef.current = onOriginRequest;
+
+  // A move of the world's centre moves everything positioned in world coordinates by the
+  // same amount: the camera, the controls target and a flight's endpoints.
+  useEffect(
+    () =>
+      onWorldShift((shift) => {
+        camera.position.sub(shift);
+        controlsRef.current?.target.sub(shift);
+        const flight = flightRef.current;
+        if (flight) {
+          flight.startPosition.sub(shift);
+          flight.startTarget.sub(shift);
+          flight.endPosition.sub(shift);
+          flight.endTarget.sub(shift);
+        }
+      }),
+    [camera, controlsRef],
+  );
 
   const resolveFocusFrame = (focus: ActiveFocus): FocusFrame | null => {
     if (focus.kind === "body") {
@@ -125,19 +168,31 @@ export function GlobeActionsBridge({
       return sphere ? { center: _world, radius: sphere.radius } : null;
     }
     if (focus.kind === "node") {
-      return getNodeWorldPosition(focus.nodeId, _world)
-        ? { center: _world, radius: EARTH_RADIUS_RENDER * 0.08 }
+      const body = nodeBody(focus.nodeId);
+      return body && getNodeWorldPosition(focus.nodeId, _world)
+        ? { center: _world, radius: body.radius * 0.08 }
         : null;
     }
+    const bodyA = nodeBody(focus.nodeA);
+    const bodyB = nodeBody(focus.nodeB);
+    if (!bodyA || !bodyB) return null;
     if (!getNodeWorldPosition(focus.nodeA, _linkA)) return null;
     if (!getNodeWorldPosition(focus.nodeB, _linkB)) return null;
-    return frameEndpoints(_linkA, _linkB, _centroid);
+    return frameEndpoints(_linkA, _linkB, _centroid, Math.max(bodyA.radius, bodyB.radius) * 0.08);
+  };
+
+  /** Ask for the body a node lives in as the render origin; false when it is not known yet. */
+  const requestNodeOrigin = (nodeId: string): boolean => {
+    const body = nodeBody(nodeId);
+    if (!body) return false;
+    onOriginRequestRef.current(body.body);
+    return true;
   };
 
   const applyFrame = (
     frame: FocusFrame,
     {
-      floor = CAMERA_MIN_DISTANCE * 1.15,
+      floor = minDistanceRef.current * 1.15,
       distance,
       avoid = null,
     }: { floor?: number; distance?: number; avoid?: AvoidSphere | null } = {},
@@ -211,7 +266,8 @@ export function GlobeActionsBridge({
       focusBody: (bodyId: string) => {
         const focus: ActiveFocus = { kind: "body", bodyId, follow: true };
         const frame = resolveFocusFrame(focus);
-        setFocus(focus, frame, { floor: EARTH_RADIUS_RENDER * 1.5 });
+        if (frame) onOriginRequestRef.current(bodyId);
+        setFocus(focus, frame, { floor: frame ? frame.radius * 1.5 : 0 });
       },
       focusNode: (nodeId: string, options?: { follow?: boolean }) => {
         const focus: ActiveFocus = { kind: "node", nodeId, follow: options?.follow ?? false };
@@ -222,7 +278,8 @@ export function GlobeActionsBridge({
         const avoid = bodySphere
           ? { center: _avoidCenter.clone(), radius: bodySphere.radius }
           : null;
-        setFocus(focus, frame, { floor: CAMERA_MIN_DISTANCE * 1.15, avoid });
+        if (frame) requestNodeOrigin(nodeId);
+        setFocus(focus, frame, { floor: (bodySphere?.radius ?? 0) * 1.05 * 1.15, avoid });
       },
       focusLink: (nodeA: string, nodeB: string, options?: { follow?: boolean }) => {
         const focus: ActiveFocus = {
@@ -232,7 +289,12 @@ export function GlobeActionsBridge({
           follow: options?.follow ?? false,
         };
         const frame = resolveFocusFrame(focus);
-        setFocus(focus, frame, { floor: EARTH_RADIUS_RENDER * 1.6 });
+        const bodyA = nodeBody(nodeA);
+        const bodyB = nodeBody(nodeB);
+        if (frame) requestNodeOrigin(nodeA);
+        setFocus(focus, frame, {
+          floor: Math.max(bodyA?.radius ?? 0, bodyB?.radius ?? 0) * 1.6,
+        });
       },
       flyToTopView: () => {
         focusRef.current = null;
@@ -261,7 +323,7 @@ export function GlobeActionsBridge({
             endPosition,
             endTarget: target,
             endDirection: cameraDirectionFromTarget(camera.position, target, new THREE.Vector3()),
-            floor: CAMERA_MIN_DISTANCE * 1.15,
+            floor: minDistanceRef.current * 1.15,
             distance: sceneFitDistance,
           };
         }
@@ -274,7 +336,8 @@ export function GlobeActionsBridge({
         }
         const focus: ActiveFocus = { kind: "node", nodeId, follow: true };
         const frame = resolveFocusFrame(focus);
-        setFocus(focus, frame, { floor: CAMERA_MIN_DISTANCE * 1.15 });
+        if (frame) requestNodeOrigin(nodeId);
+        setFocus(focus, frame, { floor: (nodeBody(nodeId)?.radius ?? 0) * 1.05 * 1.15 });
       },
       captureScreenshot: () => {
         // Composite the live drawing buffer (preserveDrawingBuffer is set in Universe) onto a 2D
@@ -301,7 +364,8 @@ export function GlobeActionsBridge({
       flyToNode: (nodeId: string) => {
         const focus: ActiveFocus = { kind: "node", nodeId, follow: false };
         const frame = resolveFocusFrame(focus);
-        setFocus(focus, frame, { floor: CAMERA_MIN_DISTANCE * 1.15 });
+        if (frame) requestNodeOrigin(nodeId);
+        setFocus(focus, frame, { floor: (nodeBody(nodeId)?.radius ?? 0) * 1.05 * 1.15 });
       },
       flyToSegment: (nodeIds: string[]) => {
         const points: THREE.Vector3[] = [];
@@ -311,7 +375,11 @@ export function GlobeActionsBridge({
           }
         }
         const frame = framePoints(points, _centroid);
-        if (frame) setFrameOnly("Segment", frame, { floor: EARTH_RADIUS_RENDER * 4 });
+        // A segment's nodes share one body.
+        const body = nodeIds.length > 0 ? nodeBody(nodeIds[0]!) : null;
+        if (!frame || !body) return;
+        onOriginRequestRef.current(body.body);
+        setFrameOnly("Segment", frame, { floor: body.radius * 4 });
       },
       getNodeScreenPosition: (nodeId: string) => {
         if (!getNodeWorldPosition(nodeId, _world)) return null;
@@ -383,7 +451,10 @@ export function GlobeActionsBridge({
     if (!frame) return;
     const controls = controlsRef.current;
     if (!controls) return;
-    const dist = Math.max(camera.position.distanceTo(controls.target), CAMERA_MIN_DISTANCE * 1.15);
+    const dist = Math.max(
+      camera.position.distanceTo(controls.target),
+      minDistanceRef.current * 1.15,
+    );
     _followDir.copy(camera.position).sub(controls.target);
     if (_followDir.lengthSq() < 1e-6) _followDir.set(0, 0, 1);
     _followDir.normalize();

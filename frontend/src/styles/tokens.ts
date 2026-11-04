@@ -321,7 +321,6 @@ export const tokens = {
   gsSize: 2.1,
   cameraFov: 45,
   cameraDistance: 250,
-  cameraMinDistance: 105,
   cameraMaxDistance: 3000,
 };
 

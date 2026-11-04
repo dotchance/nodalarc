@@ -17,12 +17,23 @@ describe("camera focus framing", () => {
     const b = new THREE.Vector3(100, 0, 0);
     const center = new THREE.Vector3();
 
-    const frame = frameEndpoints(a, b, center);
+    const frame = frameEndpoints(a, b, center, 8);
 
     expect(frame.center.x).toBe(50);
     expect(frame.center.y).toBe(0);
     expect(frame.center.z).toBe(0);
     expect(frame.radius).toBe(50);
+  });
+
+  it("frames a link shorter than its endpoints' body scale at that scale", () => {
+    // A 2-unit link between two Mars orbiters frames at 0.08 Mars radii (53.3 units).
+    const frame = frameEndpoints(
+      new THREE.Vector3(0, 0, 0),
+      new THREE.Vector3(2, 0, 0),
+      new THREE.Vector3(),
+      53.3 * 0.08,
+    );
+    expect(frame.radius).toBeCloseTo(4.264);
   });
 
   it("frames a point set by centroid and maximum radius", () => {

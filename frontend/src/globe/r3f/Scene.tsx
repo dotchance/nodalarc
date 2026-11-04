@@ -230,15 +230,34 @@ export function Scene({
       });
   }, [ephemeris, nodes, kmPerRenderUnit]);
   const bodyIds = useMemo(() => bodies.map((body) => body.id), [bodies]);
+  // The render origin: the body the world is centred on (bodyPose.ts says why). A focus asks
+  // for its body; until one does, and when the asked body is not in this session, the world
+  // is centred on the first body (Earth when the session has it).
+  const [requestedOrigin, setRequestedOrigin] = useState<string | null>(null);
+  const originBody =
+    bodies.find((body) => body.id === requestedOrigin) ?? bodies[0] ?? null;
+  const originBodyId = originBody?.id ?? null;
+  // The controls stop 5 % above the origin body's surface radius (105 units at Earth).
+  // Before the session's bodies are known nothing is drawn, so nothing bounds the approach.
+  const controlsMinDistance =
+    originBody === null || kmPerRenderUnit === null
+      ? 0
+      : kmToRender(originBody.radiusKm, kmPerRenderUnit) * 1.05;
   // Body centres at the snapshot's sim time, for camera framing and picking. A body
   // with no sample covering that time has no centre to frame or pick. Read without releasing
   // windows (a render must not change the store); recomputed when the accepted samples change.
   const placedBodies = useMemo(
     () =>
-      simTimeUnix === null || kmPerRenderUnit === null
+      simTimeUnix === null || kmPerRenderUnit === null || originBodyId === null
         ? []
-        : placedBodiesAt(bodies, peekSkyAt(simTimeUnix), referenceFrame, kmPerRenderUnit),
-    [bodies, simTimeUnix, kmPerRenderUnit, referenceFrame, bodySamplesVersion],
+        : placedBodiesAt(
+            bodies,
+            peekSkyAt(simTimeUnix),
+            referenceFrame,
+            kmPerRenderUnit,
+            originBodyId,
+          ),
+    [bodies, simTimeUnix, kmPerRenderUnit, referenceFrame, originBodyId, bodySamplesVersion],
   );
   const controlsMaxDistance = useMemo(
     () =>
@@ -354,6 +373,7 @@ export function Scene({
       <Universe
         controlsRef={controlsRef}
         onPointerMissed={(e) => missedRef.current(e)}
+        controlsMinDistance={controlsMinDistance}
         controlsMaxDistance={controlsMaxDistance}
         cameraFar={cameraFar}
         afterControls={
@@ -373,6 +393,8 @@ export function Scene({
             controlsRef={controlsRef}
             sceneFitDistance={controlsMaxDistance}
             sceneFrame={sceneFrame}
+            minDistance={controlsMinDistance}
+            onOriginRequest={setRequestedOrigin}
             onFocusChange={setCameraFocusLabel}
           />
         )}
@@ -390,16 +412,21 @@ export function Scene({
           onFocusBody={focusBody}
           handlerRef={missedRef}
         />
-        {kmPerRenderUnit !== null && (
+        {kmPerRenderUnit !== null && originBodyId !== null && (
           <FrameDriver
             starFrame={starGroupRef}
             referenceFrame={referenceFrame}
             kmPerRenderUnit={kmPerRenderUnit}
             bodyIds={bodyIds}
+            originBodyId={originBodyId}
             onAvailabilityChange={setSkyAvailability}
           />
         )}
-        <SunLight referenceFrame={referenceFrame} />
+        <SunLight
+          referenceFrame={referenceFrame}
+          kmPerRenderUnit={kmPerRenderUnit}
+          originBodyId={originBodyId}
+        />
         <group ref={starGroupRef} name="starFrame">
           <Starfield />
         </group>
@@ -504,7 +531,35 @@ export function Scene({
         }}
       />
       <Tooltip hover={hover} regime={hover ? regimeById.get(hover.node.node_id) : undefined} />
-      <div className="scene-hud">Focus: {cameraFocusLabel}</div>
+      <div className="scene-hud">
+        Focus: {cameraFocusLabel}
+        {/* A view of the whole session and one per body. At interplanetary scale a body can
+            be smaller than a pixel in the session view, so these name what a double-click on
+            the body cannot reach. */}
+        {actionsRef && bodies.length > 1 && (
+          <span className="scene-hud-views">
+            <button
+              type="button"
+              className={`scene-hud-view${cameraFocusLabel === "Scene" ? " scene-hud-view--active" : ""}`}
+              onClick={() => actionsRef.current?.frameScene()}
+              title="Frame the whole session"
+            >
+              Session
+            </button>
+            {bodyIds.map((id) => (
+              <button
+                key={id}
+                type="button"
+                className={`scene-hud-view${cameraFocusLabel === id ? " scene-hud-view--active" : ""}`}
+                onClick={() => focusBody(id)}
+                title={`Fly to ${id}`}
+              >
+                {id}
+              </button>
+            ))}
+          </span>
+        )}
+      </div>
       {ephemeris !== null && !skyAvailable && (
         <div className="scene-unavailable" role="status">
           {SKY_AVAILABILITY_TEXT[skyAvailability]}

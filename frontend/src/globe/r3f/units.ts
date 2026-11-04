@@ -6,9 +6,8 @@
  * frames, which are sourced from catalog primitives.
  *
  * Node coordinates stay local to each body and the body frame is placed in the shared
- * universe. Cislunar distances are still small enough at this scale for the demonstrator;
- * the future Mars/Lagrange fidelity layer should add camera-relative/floating-origin render
- * coordinates without changing these truth units.
+ * universe, centred on the render origin body (bodyPose.ts says why). Neither changes these
+ * truth units.
  */
 
 import { SCENE_EARTH_RADIUS } from "../../sim/orbitalMath";

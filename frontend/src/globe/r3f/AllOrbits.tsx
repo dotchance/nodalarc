@@ -61,6 +61,7 @@ const _worldPos = new THREE.Vector3();
 const _localPos = new THREE.Vector3();
 const _velEcef = new THREE.Vector3();
 const _velWorld = new THREE.Vector3();
+const _earthCenter = new THREE.Vector3();
 const _omegaLocal = new THREE.Vector3();
 const _color = new THREE.Color();
 
@@ -200,7 +201,8 @@ export function AllOrbits({
         if (!earth || !pose) continue;
         toRenderVector(pose.angularVelocityLocalRadS, _omegaLocal);
         worldVelocity(_localPos, _velEcef, earth.quaternion, _omegaLocal, _velWorld);
-        positions = computeOrbitPositions(_worldPos, _velWorld);
+        if (!bodyLocalToWorld("earth", _earthCenter.set(0, 0, 0))) continue;
+        positions = computeOrbitPositions(_worldPos, _velWorld, _earthCenter);
       } else {
         // Eccentric (HEO/ELFO) and/or non-Earth Keplerian: sample the true
         // osculating ellipse from the elements in the node's body frame — a

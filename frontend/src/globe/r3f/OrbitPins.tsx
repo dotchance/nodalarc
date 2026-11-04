@@ -42,6 +42,7 @@ const _worldPos = new THREE.Vector3();
 const _localPos = new THREE.Vector3();
 const _velEcef = new THREE.Vector3();
 const _velWorld = new THREE.Vector3();
+const _earthCenter = new THREE.Vector3();
 const _omegaLocal = new THREE.Vector3();
 const _color = new THREE.Color();
 
@@ -143,7 +144,8 @@ export function OrbitPins({
         if (!earth || !pose) continue;
         toRenderVector(pose.angularVelocityLocalRadS, _omegaLocal);
         worldVelocity(_localPos, _velEcef, earth.quaternion, _omegaLocal, _velWorld);
-        ring = computeOrbitPositions(_worldPos, _velWorld);
+        if (!bodyLocalToWorld("earth", _earthCenter.set(0, 0, 0))) continue;
+        ring = computeOrbitPositions(_worldPos, _velWorld, _earthCenter);
       } else {
         // Eccentric (HEO/ELFO) and/or non-Earth pins: true osculating
         // ellipse from the elements, transformed through the body frame.

@@ -14,10 +14,11 @@ export function supportsStaticOrbitRing(eccentricity: number | null | undefined)
 }
 
 /**
- * Compute a closed great-circle orbit ring, in world coordinates, from a satellite's world
- * position, its velocity relative to its central body, and that body's world centre. The ring
- * turns about the body's centre: the world is centred on whichever body the view is on, so the
- * world origin is the satellite's central body only while that body is in view.
+ * Compute a closed great-circle orbit ring from a satellite's world position, its velocity
+ * relative to its central body, and that body's world centre. The ring turns about the body's
+ * centre and its vertices are relative to that centre, in world axes: the world is centred on
+ * whichever body the view is on and the body moves in it, so a ring is drawn where its body is
+ * now by placing its group at the body's centre each frame.
  */
 export function computeOrbitPositions(
   pos: THREE.Vector3,
@@ -33,7 +34,7 @@ export function computeOrbitPositions(
   for (let i = 0; i <= samples; i++) {
     const angle = (i * 2 * Math.PI) / samples;
     q.setFromAxisAngle(normal, angle);
-    const p = radial.clone().applyQuaternion(q).add(center);
+    const p = radial.clone().applyQuaternion(q);
     positions[i * 3] = p.x;
     positions[i * 3 + 1] = p.y;
     positions[i * 3 + 2] = p.z;

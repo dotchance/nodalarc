@@ -48,7 +48,7 @@ import {
   bodyLocalToWorld,
   getNodeLocalPosition,
   getNodeWorldPosition,
-  onWorldShift,
+  placeAtBodyCenter,
 } from "./positions";
 import type { NodeState } from "../../generated/vsApi";
 import type { SessionEphemeris } from "../../builder/generated/builderApi";
@@ -141,17 +141,6 @@ export function AllOrbits({
 
   useEffect(() => teardown, [teardown]);
 
-  // The rings hold world coordinates from their build. A move of the world's centre moves the
-  // group by the same amount, in the frame it happens, so the rings stay where they were drawn
-  // and keep the precision of their build; a rebuild puts the group back at the centre.
-  useEffect(
-    () =>
-      onWorldShift((shift) => {
-        groupRef.current?.position.sub(shift);
-      }),
-    [],
-  );
-
   // Reference-frame toggle: the rings are world-space great circles seeded with the frame's
   // angular velocity, so they are invalid in the new frame (mirrors legacy clearAllOrbits on
   // frame toggle → lazy recreate). Tear down; the next useFrame rebuilds with the new frame's
@@ -169,7 +158,9 @@ export function AllOrbits({
     teardown();
     const group = groupRef.current;
     if (!group) return;
-    group.position.set(0, 0, 0);
+    // Rings are stored relative to Earth's centre at the build: the world is centred on the body
+    // in view and Earth moves in it, so the group follows Earth's centre every frame (below).
+    if (!bodyLocalToWorld("earth", _earthCenter.set(0, 0, 0))) return;
 
     const orbitPositions = new Float32Array(sats.length * FLOATS_PER_ORBIT);
     const orbitColors = new Float32Array(sats.length * FLOATS_PER_ORBIT);
@@ -201,13 +192,17 @@ export function AllOrbits({
         if (!earth || !pose) continue;
         toRenderVector(pose.angularVelocityLocalRadS, _omegaLocal);
         worldVelocity(_localPos, _velEcef, earth.quaternion, _omegaLocal, _velWorld);
-        if (!bodyLocalToWorld("earth", _earthCenter.set(0, 0, 0))) continue;
         positions = computeOrbitPositions(_worldPos, _velWorld, _earthCenter);
       } else {
         // Eccentric (HEO/ELFO) and/or non-Earth Keplerian: sample the true
         // osculating ellipse from the elements in the node's body frame — a
         // world great-circle would lie about both the shape and the centre.
         renderableCount++;
+        if (ephNode.reference_body !== "earth") {
+          throw new Error(
+            `AllOrbits draws Earth satellites' rings only; ${ns.node_id} orbits ${ephNode.reference_body}`,
+          );
+        }
         const bodyState = sky.bodies[ephNode.reference_body];
         if (!bodyState) continue;
         const frame = ephemerisRef.current.body_frames[ephNode.reference_body];
@@ -226,9 +221,9 @@ export function AllOrbits({
             transformed = false;
             break;
           }
-          local[i] = _worldPos.x;
-          local[i + 1] = _worldPos.y;
-          local[i + 2] = _worldPos.z;
+          local[i] = _worldPos.x - _earthCenter.x;
+          local[i + 1] = _worldPos.y - _earthCenter.y;
+          local[i + 2] = _worldPos.z - _earthCenter.z;
         }
         if (!transformed) continue;
         positions = local;
@@ -301,12 +296,13 @@ export function AllOrbits({
     // Steady state: only sync the fat-line resolution (matching legacy behavior).
     if (sats.length === lastSatCountRef.current && batchRef.current) {
       materialRef.current?.resolution.set(sizeRef.current.width, sizeRef.current.height);
-      return;
+    } else {
+      const simMs = interpolatedSimTimeMs(performance.now());
+      const sky = simMs === null ? null : skyAt(simMs / 1000);
+      if (!sky) return;
+      rebuild(sats, sky);
     }
-    const simMs = interpolatedSimTimeMs(performance.now());
-    const sky = simMs === null ? null : skyAt(simMs / 1000);
-    if (!sky) return;
-    rebuild(sats, sky);
+    placeAtBodyCenter(groupRef.current, "earth");
   });
 
   return <group ref={groupRef} name="all-orbits" />;

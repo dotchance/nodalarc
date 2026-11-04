@@ -111,6 +111,17 @@ export function bodyLocalToWorld(bodyId: string, target: THREE.Vector3): boolean
   return true;
 }
 
+/**
+ * Put an object at a body's world centre, keeping its own axes: overlays stored relative to a
+ * body's centre (orbit rings) follow the body as it moves in a world centred on another body.
+ * With the body's frame not registered the object is hidden, never left at a stale place.
+ */
+export function placeAtBodyCenter(object: THREE.Object3D | null, bodyId: string): void {
+  if (!object) return;
+  const placed = bodyLocalToWorld(bodyId, object.position.set(0, 0, 0));
+  object.visible = placed;
+}
+
 export function getNodeWorldPosition(nodeId: string, target: THREE.Vector3): boolean {
   const e = localPositions.get(nodeId);
   if (!e) return false;

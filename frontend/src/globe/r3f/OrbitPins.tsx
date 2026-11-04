@@ -14,7 +14,7 @@
 
 import { useEffect, useMemo, useRef } from "react";
 import * as THREE from "three";
-import { useThree } from "@react-three/fiber";
+import { useFrame, useThree } from "@react-three/fiber";
 import { LineSegments2 } from "three/addons/lines/LineSegments2.js";
 import { LineSegmentsGeometry } from "three/addons/lines/LineSegmentsGeometry.js";
 import { LineMaterial } from "three/addons/lines/LineMaterial.js";
@@ -31,7 +31,7 @@ import {
   bodyLocalToWorld,
   getNodeLocalPosition,
   getNodeWorldPosition,
-  onWorldShift,
+  placeAtBodyCenter,
 } from "./positions";
 import type { NodeState } from "../../generated/vsApi";
 import type { SessionEphemeris } from "../../builder/generated/builderApi";
@@ -92,16 +92,9 @@ export function OrbitPins({
     }
   };
 
-  // The rings hold world coordinates from their build. A move of the world's centre moves the
-  // group by the same amount, in the frame it happens, so the rings stay where they were drawn
-  // and keep the precision of their build; a rebuild puts the group back at the centre.
-  useEffect(
-    () =>
-      onWorldShift((shift) => {
-        groupRef.current?.position.sub(shift);
-      }),
-    [],
-  );
+  // Rings are stored relative to Earth's centre at the seed: the world is centred on the body in
+  // view and Earth moves in it, so the group follows Earth's centre every frame.
+  useFrame(() => placeAtBodyCenter(groupRef.current, "earth"));
 
   const pinKey = useMemo(() => [...pinnedIds].sort().join(","), [pinnedIds]);
   // Read node data through a ref: a pinned ring is seeded ONCE (at pin time / frame toggle) and is
@@ -116,6 +109,7 @@ export function OrbitPins({
     teardown();
     const group = groupRef.current;
     if (!group || pinnedIds.length === 0) return;
+    if (!bodyLocalToWorld("earth", _earthCenter.set(0, 0, 0))) return;
     group.position.set(0, 0, 0);
 
     const pos = new Float32Array(pinnedIds.length * FLOATS_PER_ORBIT);
@@ -144,11 +138,15 @@ export function OrbitPins({
         if (!earth || !pose) continue;
         toRenderVector(pose.angularVelocityLocalRadS, _omegaLocal);
         worldVelocity(_localPos, _velEcef, earth.quaternion, _omegaLocal, _velWorld);
-        if (!bodyLocalToWorld("earth", _earthCenter.set(0, 0, 0))) continue;
         ring = computeOrbitPositions(_worldPos, _velWorld, _earthCenter);
       } else {
         // Eccentric (HEO/ELFO) and/or non-Earth pins: true osculating
         // ellipse from the elements, transformed through the body frame.
+        if (ephNode.reference_body !== "earth") {
+          throw new Error(
+            `OrbitPins draws Earth satellites' rings only; ${id} orbits ${ephNode.reference_body}`,
+          );
+        }
         const bodyState = sky.bodies[ephNode.reference_body];
         if (!bodyState) continue;
         const frame = ephemeris.body_frames[ephNode.reference_body];
@@ -167,9 +165,9 @@ export function OrbitPins({
             transformed = false;
             break;
           }
-          local[i] = _worldPos.x;
-          local[i + 1] = _worldPos.y;
-          local[i + 2] = _worldPos.z;
+          local[i] = _worldPos.x - _earthCenter.x;
+          local[i + 1] = _worldPos.y - _earthCenter.y;
+          local[i + 2] = _worldPos.z - _earthCenter.z;
         }
         if (!transformed) continue;
         ring = local;

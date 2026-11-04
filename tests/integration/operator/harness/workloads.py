@@ -6,7 +6,9 @@ settings its shell has, the way a user who opens that shell does.
 
 from __future__ import annotations
 
+import json
 import re
+import uuid
 from dataclasses import dataclass
 
 from .client import Operator, Terminal
@@ -86,20 +88,28 @@ def send_a_bundle(
 
 
 @dataclass(frozen=True)
-class HdtnEndpoint:
+class BundleFileEndpoint:
+    """A node running a DTN stack's file receiver, packaged by one of the stack images."""
+
+    stack: str  # "hdtn" or "ion": the image whose launcher runs the node
     node_id: str
-    member: str  # the network member the node's HDTN launcher found itself to be
-    receiver_eid: str  # files sent here land in the node's /run/hdtn/received
-    sender_eid: str  # the number a sending application on this node uses
+    member: str  # the network member the node's launcher found itself to be
+    receiver_eid: str  # files sent here land in the node's received directory
+    sender_eid: str  # the endpoint a sending application on this node uses
+
+    @property
+    def directory(self) -> str:
+        return f"/run/{self.stack}"
 
 
-def find_hdtn_endpoints(operator: Operator, shown: ShownNetwork) -> list[HdtnEndpoint]:
-    """Open the shell of every host node and keep those running an HDTN endpoint.
+def find_bundle_file_endpoints(operator: Operator, shown: ShownNetwork) -> list[BundleFileEndpoint]:
+    """Open the shell of every host node and keep those running an HDTN or ION endpoint.
 
-    The node's HDTN launcher writes which member it is into its configuration and the numbering
-    into /run/hdtn/members, the same table it prints when it starts.
+    Each stack's launcher writes the network numbering into members in its directory, the same
+    table it prints when it starts, and the node's own number into the configuration it wrote:
+    HDTN's hdtn.json names it, ION's node.ionrc starts with ION's initialize command.
     """
-    endpoints: list[HdtnEndpoint] = []
+    endpoints: list[BundleFileEndpoint] = []
     for node_id, node in sorted(shown.nodes.items()):
         if node["role"] != "host":
             continue
@@ -108,62 +118,158 @@ def find_hdtn_endpoints(operator: Operator, shown: ShownNetwork) -> list[HdtnEnd
                 continue
             _, found = run_in_shell(
                 terminal,
-                "command -v hdtn-one-process >/dev/null && test -d /run/hdtn/received "
-                '&& sed -n \'s/.*"hdtnConfigName": "\\([a-z0-9]*\\) (ipn:\\([0-9]*\\))".*/'
-                "self=\\1 \\2/p' /run/hdtn/hdtn.json && cat /run/hdtn/members",
+                "if command -v hdtn-one-process >/dev/null; then "
+                '  sed -n \'s/.*"hdtnConfigName": "[a-z0-9]* (ipn:\\([0-9]*\\))".*/'
+                "self=hdtn \\1/p' /run/hdtn/hdtn.json && cat /run/hdtn/members; "
+                "  test -d /run/hdtn/received && echo has-received; "
+                "elif command -v ionadmin >/dev/null; then "
+                "  sed -n 's/^1 \\([0-9]*\\) .*/self=ion \\1/p' /run/ion/node.ionrc "
+                "&& cat /run/ion/members; test -d /run/ion/received && echo has-received; fi",
             )
-            me = re.search(r"^self=(\S+) (\d+)$", found, re.M)
+            me = re.search(r"^self=(hdtn|ion) (\d+)$", found, re.M)
             if me is None:
                 continue
-            row = re.search(rf"^{me.group(1)} ipn:{me.group(2)} (ipn:\d+\.1)$", found, re.M)
-            assert row, f"{node_id}: /run/hdtn/members has no receiver row for {me.group(1)}"
-            endpoints.append(
-                HdtnEndpoint(node_id, me.group(1), row.group(1), f"ipn:{2000 + int(me.group(2))}.1")
+            stack, number = me.group(1), int(me.group(2))
+            row = re.search(rf"^(\S+) ipn:{number} (ipn:\d+\.1)$", found, re.M)
+            if row is None:
+                continue  # a relay: the members table names no receiver for it
+            assert re.search(r"^has-received$", found, re.M), (
+                f"{node_id}: the members table names a receiver for {row.group(1)}, but the "
+                f"node has no /run/{stack}/received"
             )
+            # HDTN applications are nodes of their own, numbered 2000 + the node; ION
+            # applications attach to the node and send from its service 2.
+            sender = f"ipn:{2000 + number}.1" if stack == "hdtn" else f"ipn:{number}.2"
+            endpoints.append(BundleFileEndpoint(stack, node_id, row.group(1), row.group(2), sender))
     return endpoints
 
 
 def send_a_file(
-    operator: Operator, sender: HdtnEndpoint, receiver: HdtnEndpoint, name: str, payload: str
-) -> tuple[float | None, int, str]:
-    """From the sender's shell, send one file to the receiver.
+    operator: Operator, sender: BundleFileEndpoint, receiver: BundleFileEndpoint, payload: str
+) -> tuple[float | None, bool, str]:
+    """From the sender's shell, send one file holding `payload` to the receiver.
 
-    Returns the sender's clock when it sent, the bundle bytes its node accepted, and what the
-    shell printed. bpsendfile keeps running after it sends, so it is stopped after 15 s with an
-    interrupt, on which it prints its totals; they go to a log file, read afterwards.
+    Returns the sender's clock when it sent, whether the sender's node accepted the bundle, and
+    what the shell printed. Each stack reports acceptance its own way:
+    - HDTN's bpsendfile keeps running after it sends, so it is stopped after 15 s with an
+      interrupt, on which it prints its totals; the bundle bytes its node acknowledged show
+      acceptance. The totals go to a log file, read afterwards.
+    - ION's bpsendfile sends one bundle and exits 0 on most failures; it writes "sent" with
+      the file's name into the node's ion.log only when the node took the bundle.
     """
-    log = f"/run/hdtn/outbox/{name}.log"
-    with operator.terminal(sender.node_id) as outbox:
-        _, printed = run_in_shell(
-            outbox,
-            f"mkdir -p /run/hdtn/outbox && printf '%s' '{payload}' > /run/hdtn/outbox/{name} "
-            f"&& echo sent-at $(date +%s.%N) && timeout -s INT 15 bpsendfile --use-bp-version-7 "
+    outbox = f"{sender.directory}/outbox"
+    name = f"optest-{uuid.uuid4().hex[:12]}.txt"
+    path = f"{outbox}/{name}"
+    write = f"mkdir -p {outbox} && printf '%s' '{payload}' > {path} && echo sent-at $(date +%s.%N)"
+    if sender.stack == "hdtn":
+        log = f"{path}.log"
+        send = (
+            f"timeout -s INT 15 bpsendfile --use-bp-version-7 "
             f"--bundle-lifetime-milliseconds=86400000 --my-uri-eid={sender.sender_eid} "
             f"--dest-uri-eid={receiver.receiver_eid} "
             f"--outducts-config-file=/run/hdtn/app-outduct.json "
-            f"--file-or-folder-path=/run/hdtn/outbox/{name} > {log} 2>&1; "
-            f"grep totalBundleBytesAcked {log}",
-            timeout=40.0,
+            f"--file-or-folder-path={path} > {log} 2>&1; grep totalBundleBytesAcked {log}"
         )
+    else:
+        send = (
+            f"cd /run/ion && bpsendfile {sender.sender_eid} {receiver.receiver_eid} {path} 0 86400"
+            f"; grep -c \"bpsendfile sent '{path}'\" ion.log"
+        )
+    with operator.terminal(sender.node_id) as terminal:
+        _, printed = run_in_shell(terminal, f"{write} && {send}", timeout=40.0)
     sent = re.search(r"^sent-at (\d+\.\d+)$", printed, re.M)
-    acked = re.search(r"totalBundleBytesAcked (\d+)", printed)
-    return (
-        float(sent.group(1)) if sent else None,
-        int(acked.group(1)) if acked else 0,
-        printed,
-    )
+    if sender.stack == "hdtn":
+        acked = re.search(r"totalBundleBytesAcked (\d+)", printed)
+        accepted = acked is not None and int(acked.group(1)) > 0
+    else:
+        accepted = re.search(r"^1$", printed, re.M) is not None
+    return (float(sent.group(1)) if sent else None, accepted, printed)
 
 
-def received_files(operator: Operator, receiver: HdtnEndpoint) -> dict[str, tuple[float, str]]:
-    """The files in the receiver's /run/hdtn/received: name -> (its clock when written, content)."""
+def received_files(operator: Operator, receiver: BundleFileEndpoint) -> dict[str, float]:
+    """The files in the receiver's received directory: content -> its clock when written.
+
+    Files are told apart by content: HDTN's receiver keeps the sent name, ION's names files
+    testfileN in arrival order and writes its own ion.log beside them.
+    """
+    files_glob = "testfile*" if receiver.stack == "ion" else "*"
     with operator.terminal(receiver.node_id) as inbox:
         _, printed = run_in_shell(
             inbox,
-            'for f in /run/hdtn/received/*; do [ -f "$f" ] && '
-            'echo "file $(basename "$f") $(date -r "$f" +%s.%N) $(cat "$f")"; done; true',
+            f'for f in {receiver.directory}/received/{files_glob}; do [ -f "$f" ] && '
+            'echo "file $(date -r "$f" +%s.%N) $(cat "$f")"; done; true',
         )
-    files: dict[str, tuple[float, str]] = {}
+    files: dict[str, float] = {}
     for line in printed.splitlines():
-        if found := re.match(r"^file (\S+) (\d+\.\d+) (.*)$", line):
-            files[found.group(1)] = (float(found.group(2)), found.group(3))
+        if found := re.match(r"^file (\d+\.\d+) (.*)$", line):
+            files[found.group(2)] = float(found.group(1))
     return files
+
+
+@dataclass(frozen=True)
+class HdtnLink:
+    peer: str  # the neighbour member
+    index: int  # HDTN's outduct index: the node's neighbours in name order
+    timeout_s: float  # LTP's wait before it retries a ping: 2 x (light time + margin)
+
+
+@dataclass(frozen=True)
+class HdtnNode:
+    node_id: str
+    member: str
+    links: tuple[HdtnLink, ...]
+
+
+_BEGIN, _END = "--begin--", "--end--"
+
+
+def find_hdtn_nodes(operator: Operator, shown: ShownNetwork) -> list[HdtnNode]:
+    """Every host node running HDTN, relays included, with the LTP links its configuration names."""
+    nodes: list[HdtnNode] = []
+    for node_id, node in sorted(shown.nodes.items()):
+        if node["role"] != "host":
+            continue
+        with operator.terminal(node_id) as terminal:
+            if terminal.is_routing_cli:
+                continue
+            _, printed = run_in_shell(
+                terminal,
+                f"command -v hdtn-one-process >/dev/null && echo {_BEGIN} "
+                f"&& tr -d '\\n' < /run/hdtn/hdtn.json && echo && echo {_END}",
+            )
+        if _BEGIN not in printed:
+            continue
+        body = printed.split(_BEGIN, 1)[1].split(_END, 1)[0].replace("\r", "").strip()
+        config = json.loads(body)
+        member = re.match(r"(\S+) \(ipn:\d+\)", config["hdtnConfigName"])
+        assert member, f"{node_id}: hdtn.json names no member: {config['hdtnConfigName']!r}"
+        links = []
+        for index, outduct in enumerate(config["outductsConfig"]["outductVector"]):
+            peer = re.match(r"ltp-to-(\S+)$", outduct["name"])
+            if peer is None:
+                continue  # the node's own file receiver
+            links.append(
+                HdtnLink(
+                    peer.group(1),
+                    index,
+                    2 * (outduct["oneWayLightTimeMs"] + outduct["oneWayMarginTimeMs"]) / 1000.0,
+                )
+            )
+        nodes.append(HdtnNode(node_id, member.group(1), tuple(links)))
+    return nodes
+
+
+def hdtn_links_up(operator: Operator, node: HdtnNode) -> set[int]:
+    """The outduct indexes whose last link event in the node's log is LINK UP."""
+    with operator.terminal(node.node_id) as terminal:
+        _, printed = run_in_shell(
+            terminal,
+            "grep -o 'LINK \\(UP\\|DOWN\\) Event sent for outductArrayIndex=[0-9]*' "
+            "/run/hdtn/hdtn.log; true",
+        )
+    state: dict[int, bool] = {}
+    for event, index in re.findall(
+        r"LINK (UP|DOWN) Event sent for outductArrayIndex=(\d+)", printed
+    ):
+        state[int(index)] = event == "UP"
+    return {index for index, up in state.items() if up}

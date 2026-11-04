@@ -7,6 +7,7 @@ returns the disagreements it found. A scenario (a switch, a seek, a repair) ends
 
 from __future__ import annotations
 
+import ipaddress
 import math
 import re
 import time
@@ -19,6 +20,8 @@ import yaml
 
 from .harness.client import Operator
 from .harness.network import (
+    Link,
+    Node,
     ReferencePositions,
     ShownNetwork,
     link_interface,
@@ -35,11 +38,15 @@ from .harness.network import (
     watch,
 )
 from .harness.workloads import (
+    BundleFileEndpoint,
     DtnEndpoint,
-    HdtnEndpoint,
+    HdtnLink,
+    HdtnNode,
     QuicClient,
     expect_a_bundle,
+    find_hdtn_nodes,
     find_workloads,
+    hdtn_links_up,
     received_files,
     run_in_shell,
     send_a_bundle,
@@ -454,8 +461,54 @@ def dtn_bundles_arrive(operator: Operator, dtn_endpoints: list[DtnEndpoint]) -> 
     return disagreements
 
 
-def hdtn_files_arrive(operator: Operator, endpoints: list[HdtnEndpoint]) -> list[str]:
-    """A file sent from each HDTN endpoint arrives at each other one.
+def hdtn_raises_each_link_nodalarc_shows(operator: Operator, shown: ShownNetwork) -> list[str]:
+    """Each HDTN node declares up every LTP link whose two ends NodalArc shows a path between.
+
+    HDTN sends over an LTP link only after a ping across it is answered. A ping lost because
+    the path did not exist yet (a session that just started) is retried after LTP's timeout,
+    2 x (light time + margin), and the retry is answered within that timeout; so a shown path
+    is declared up within twice the timeout plus a minute. The wait starts now; a link whose
+    ends have no path shown is not judged.
+    """
+    nodes = find_hdtn_nodes(operator, shown)
+    node_of = {node.member: node.node_id for node in nodes}
+    waiting: dict[tuple[str, int], tuple[HdtnNode, HdtnLink, float]] = {}
+    started = time.monotonic()
+    for node in nodes:
+        for link in node.links:
+            peer = node_of.get(link.peer)
+            if peer is None or shown.least_latency_ms(node.node_id, peer) is None:
+                print(f"hdtn: {node.member} -> {link.peer}: no path shown; not judged")
+                continue
+            waiting[(node.node_id, link.index)] = (node, link, started + 2 * link.timeout_s + 60)
+    disagreements: list[str] = []
+    while waiting:
+        for node in {entry[0].node_id: entry[0] for entry in waiting.values()}.values():
+            up = hdtn_links_up(operator, node)
+            for link in node.links:
+                entry = waiting.get((node.node_id, link.index))
+                if entry is None:
+                    continue
+                if link.index in up:
+                    del waiting[(node.node_id, link.index)]
+                    took = time.monotonic() - started
+                    print(
+                        f"hdtn: {node.member} -> {link.peer}: link up ({took:.0f} s into the wait)"
+                    )
+                elif time.monotonic() > entry[2]:
+                    del waiting[(node.node_id, link.index)]
+                    disagreements.append(
+                        f"HDTN at {node.member} ({node.node_id}) has not declared its link to "
+                        f"{link.peer} up within {2 * link.timeout_s + 60:.0f} s, while NodalArc "
+                        "shows a path between them"
+                    )
+        if waiting:
+            time.sleep(30.0)
+    return disagreements
+
+
+def bundle_files_arrive(operator: Operator, endpoints: list[BundleFileEndpoint]) -> list[str]:
+    """A file sent from each HDTN or ION endpoint arrives at each other one.
 
     Every file is sent first and then awaited, since a path to Mars takes minutes each way.
     While NodalArc shows a path when the file is sent, the file arrives within the least latency
@@ -465,54 +518,60 @@ def hdtn_files_arrive(operator: Operator, endpoints: list[HdtnEndpoint]) -> list
     """
     disagreements: list[str] = []
     shown = watch(operator, 4.0)
-    waiting: list[tuple[HdtnEndpoint, HdtnEndpoint, str, str, float | None, float, float]] = []
+    judged = 0  # pairs NodalArc showed a path for, so their arrival is judged
+    waiting: list[
+        tuple[BundleFileEndpoint, BundleFileEndpoint, str, float | None, float, float]
+    ] = []
     for sender in endpoints:
         for receiver in endpoints:
             if sender is receiver:
                 continue
-            name = f"optest-{uuid.uuid4().hex[:12]}.txt"
             payload = f"file-{uuid.uuid4().hex}"
             least = shown.least_latency_ms(sender.node_id, receiver.node_id)
-            sent_at, acked, printed = send_a_file(operator, sender, receiver, name, payload)
-            if sent_at is None or acked == 0:
+            sent_at, accepted, printed = send_a_file(operator, sender, receiver, payload)
+            if sent_at is None or not accepted:
                 disagreements.append(f"{sender.node_id} could not send a file: {printed}")
                 continue
             allowed_s = least / 1000.0 + 300.0 if least is not None else 60.0
             waiting.append(
-                (sender, receiver, name, payload, least, sent_at, time.monotonic() + allowed_s)
+                (sender, receiver, payload, least, sent_at, time.monotonic() + allowed_s)
             )
     while waiting:
         by_receiver = {entry[1].node_id: entry[1] for entry in waiting}
         found = {node_id: received_files(operator, r) for node_id, r in by_receiver.items()}
         for entry in list(waiting):
-            sender, receiver, name, payload, least, sent_at, deadline = entry
-            arrived = found[receiver.node_id].get(name)
-            route = f"{sender.member} -> {receiver.member}"
-            if arrived is None:
+            sender, receiver, payload, least, sent_at, deadline = entry
+            written_at = found[receiver.node_id].get(payload)
+            route = f"{sender.stack}: {sender.member} -> {receiver.member}"
+            if written_at is None:
                 if time.monotonic() < deadline:
                     continue
                 waiting.remove(entry)
                 if least is None:
-                    print(f"hdtn: {route}: no path shown; the file is held; not judged")
+                    print(f"{route}: no path shown; the file is held; not judged")
                 else:
+                    judged += 1
                     disagreements.append(
                         f"NodalArc shows a path from {sender.node_id} to {receiver.node_id} "
                         f"needing {least:.0f} ms; the file did not arrive within 300 s after it"
                     )
                 continue
             waiting.remove(entry)
-            written_at, content = arrived
+            judged += least is not None
             took_ms = (written_at - sent_at) * 1000.0
-            print(f"hdtn: {route}: arrived after {took_ms:.0f} ms; least latency shown {least} ms")
-            if content != payload:
-                disagreements.append(f"{receiver.node_id} received {content!r}, sent {payload!r}")
-            elif least is not None and took_ms < least * (1 - MOVING_RANGE_ALLOWANCE):
+            print(f"{route}: arrived after {took_ms:.0f} ms; least latency shown {least} ms")
+            if least is not None and took_ms < least * (1 - MOVING_RANGE_ALLOWANCE):
                 disagreements.append(
                     f"{route}: the file arrived after {took_ms:.0f} ms; the shortest path "
                     f"NodalArc shows needs {least:.0f} ms"
                 )
         if waiting:
             time.sleep(10.0)
+    if judged == 0 and not disagreements:
+        disagreements.append(
+            "NodalArc showed no path between any two endpoints when their files were sent, so no "
+            "arrival was judged"
+        )
     return disagreements
 
 
@@ -714,3 +773,147 @@ def make_before_break_handover_holds_both_links(operator: Operator) -> list[str]
                     f"{new_side}; the router never held both neighbors at once"
                 ]
             time.sleep(1.0)
+
+
+# Each direction measured from IP timestamps against the delay shown for it: 1 ms truncation at
+# each of two stamps, the offset between the two routers' servers' clocks (both disciplined by
+# the same LAN NTP server), forwarding time, and the change in delay over one latency update.
+DIRECTION_ALLOWANCE_MS = 5.0
+# The directions are judged only when the delays shown for them differ by more than this. At
+# four times the allowance, a kernel that swapped the two directions, or gave both their mean,
+# is off by at least twice the allowance in each direction and fails.
+ASYMMETRY_TO_JUDGE_MS = 4 * DIRECTION_ALLOWANCE_MS
+MIDNIGHT_MS = 86_400_000
+
+
+def _host_on(shown: ShownNetwork, router: str) -> str | None:
+    """A host node on one of the router's site segments: its site address lies in the router's
+    site prefix."""
+    prefix = shown.nodes[router].get("prefix")
+    if prefix is None:
+        return None
+    network = ipaddress.ip_network(prefix)
+    for node_id, node in sorted(shown.nodes.items()):
+        if node["role"] != "host":
+            continue
+        for address in node["addresses"]:
+            if (
+                address["purpose"] == "site_interface"
+                and address["family"] == "ipv4"
+                and ipaddress.ip_interface(address["address"]).ip in network
+            ):
+                return node_id
+    return None
+
+
+def _site_ipv4(node: Node) -> str:
+    return next(
+        address["address"].split("/")[0]
+        for address in node["addresses"]
+        if address["purpose"] == "site_interface" and address["family"] == "ipv4"
+    )
+
+
+def _timestamps_ms(reply: str) -> list[int]:
+    """The IP timestamps ping printed for one reply, as ms since midnight UTC: the first is
+    absolute, each next one is printed as its difference from the one before."""
+    values = [int(value) for value in re.findall(r"^\s+(-?\d+)(?: absolute)?$", reply, re.M)]
+    first = re.search(r"TS:\s+(\d+) absolute", reply)
+    if first is None:
+        return []
+    stamps = [int(first.group(1))]
+    for delta in values:
+        stamps.append(stamps[-1] + delta)
+    return [stamp % MIDNIGHT_MS for stamp in stamps]
+
+
+def _shown_directions(
+    operator: Operator, key: tuple[str, str]
+) -> tuple[float, float, float, float]:
+    """For the link, read now: (sim time its latency states, a to b ms, b to a ms, the state's
+    sim time minus its wall time)."""
+    state = operator.state()
+    link = {link_key(link): link for link in state["links"]}[key]
+    stamp = datetime.fromisoformat(link["range_sim_time"]).timestamp()
+    offset = (
+        datetime.fromisoformat(state["sim_time"]).timestamp()
+        - datetime.fromisoformat(state["wall_time"]).timestamp()
+    )
+    return stamp, link["latency_a_to_b_ms"], link["latency_b_to_a_ms"], offset
+
+
+def each_direction_of_a_long_delay_link_takes_its_own_delay(
+    operator: Operator, shown: ShownNetwork, link: Link
+) -> list[str]:
+    """A numbered ping across the link records, in IP timestamps, when each router forwards it.
+
+    The ping runs between hosts on the two end routers' site segments. The sending host stamps
+    as it sends, each router as it receives, the receiving host as it receives and again as it
+    answers, and the sending host as the answer arrives: eight stamps, S a b R R b a S, when the
+    request and the reply each cross the link once and pass no other router. Any other count
+    means another path, and the reply is not judged. The third stamp minus the second is the
+    link's delay from a to b (router a stamps before its transmit delay); the seventh minus the
+    sixth is the delay from b to a. Each is compared with the delay NodalArc showed for that
+    direction at the sim time the router sent it, interpolated between readings taken before
+    the ping and after its replies (the delay changes with the range).
+    """
+    a, b = link["node_a"], link["node_b"]
+    sender, receiver = _host_on(shown, a), _host_on(shown, b)
+    if sender is None or receiver is None:
+        return [f"{a}<->{b}: no host on each end router's segment to ping between"]
+    before = _shown_directions(operator, (a, b))
+    wall_before = time.time()
+    sim_minus_wall = before[3]
+
+    def sim_of(stamp_ms: int) -> float:
+        """The sim time of an IP timestamp (ms since midnight UTC); the session runs at 1x."""
+        wall = wall_before - wall_before % 86400.0 + stamp_ms / 1000.0
+        if wall < wall_before - 3600.0:
+            wall += 86400.0  # stamped after the next midnight
+        return wall + sim_minus_wall
+
+    wait_s = int((before[1] + before[2]) / 1000.0) + 120
+    with operator.terminal(sender) as terminal:
+        _, printed = run_in_shell(
+            terminal,
+            f"ping -c 3 -i 2 -w {wait_s} -T tsonly {_site_ipv4(shown.nodes[receiver])}",
+            timeout=wait_s + 60.0,
+        )
+    after = _shown_directions(operator, (a, b))
+
+    def shown_at(sim_time: float, index: int) -> float:
+        span = after[0] - before[0]
+        weight = 0.0 if span <= 0 else (sim_time - before[0]) / span
+        return before[index] + weight * (after[index] - before[index])
+
+    disagreements = []
+    replies = re.split(r"(?m)^(?=\d+ bytes from )", printed)[1:]
+    if not replies:
+        return [f"{sender} -> {receiver}: no reply across {a}<->{b} within {wait_s} s: {printed}"]
+    for reply in replies:
+        seq = re.search(r"icmp_seq=(\d+)", reply)
+        stamps = _timestamps_ms(reply)
+        if len(stamps) != 8 or "Unrecorded hops" in reply:
+            disagreements.append(
+                f"{sender} -> {receiver}: reply {seq.group(1) if seq else '?'} recorded "
+                f"{len(stamps)} stamps; a path host, {a}, {b}, host records 8: {reply}"
+            )
+            continue
+        forward = (stamps[2] - stamps[1]) % MIDNIGHT_MS
+        back = (stamps[6] - stamps[5]) % MIDNIGHT_MS
+        expected_forward = shown_at(sim_of(stamps[1]), 1)
+        expected_back = shown_at(sim_of(stamps[5]), 2)
+        print(
+            f"direction: {a}->{b} reply {seq.group(1) if seq else '?'}: a to b {forward} ms "
+            f"(shown {expected_forward:.1f}), b to a {back} ms (shown {expected_back:.1f}); "
+            f"difference {forward - back} ms (shown {expected_forward - expected_back:.1f})"
+        )
+        for name, got, want in (
+            (f"{a} -> {b}", forward, expected_forward),
+            (f"{b} -> {a}", back, expected_back),
+        ):
+            if abs(got - want) > DIRECTION_ALLOWANCE_MS:
+                disagreements.append(
+                    f"{name}: the packet took {got} ms; NodalArc shows {want:.1f} ms for it"
+                )
+    return disagreements

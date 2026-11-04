@@ -14,21 +14,22 @@ import pytest
 from .harness.client import Operator
 from .harness.network import Clock, ShownNetwork, watch
 from .harness.workloads import (
+    BundleFileEndpoint,
     DtnEndpoint,
-    HdtnEndpoint,
     QuicClient,
     expect_a_bundle,
-    find_hdtn_endpoints,
+    find_bundle_file_endpoints,
     find_workloads,
     send_a_bundle,
 )
 from .truths import (
+    bundle_files_arrive,
     dtn_bundles_arrive,
-    hdtn_files_arrive,
+    hdtn_raises_each_link_nodalarc_shows,
     quic_clients_download_from_their_servers,
 )
 
-pytestmark = [pytest.mark.integration, pytest.mark.timeout(1800)]
+pytestmark = [pytest.mark.integration, pytest.mark.timeout(3600)]
 
 
 @pytest.fixture(scope="module")
@@ -55,16 +56,21 @@ def test_a_bundle_sent_from_a_dtn_endpoint_arrives_at_another(
 
 
 @pytest.fixture(scope="module")
-def hdtn_endpoints(operator: Operator) -> list[HdtnEndpoint]:
-    return find_hdtn_endpoints(operator, watch(operator, 6.0))
+def bundle_file_endpoints(operator: Operator) -> list[BundleFileEndpoint]:
+    return find_bundle_file_endpoints(operator, watch(operator, 6.0))
 
 
-def test_a_file_sent_from_an_hdtn_endpoint_arrives_at_another(
-    operator: Operator, hdtn_endpoints: list[HdtnEndpoint]
+def test_a_file_sent_from_an_ltp_bundle_endpoint_arrives_at_another(
+    operator: Operator, bundle_file_endpoints: list[BundleFileEndpoint]
 ) -> None:
-    if len(hdtn_endpoints) < 2:
-        pytest.skip("did not run: the session has fewer than two HDTN endpoints")
-    assert not hdtn_files_arrive(operator, hdtn_endpoints)
+    """HDTN and ION endpoints alike: each runs LTP over UDP and keeps the files it receives."""
+    if len(bundle_file_endpoints) < 2:
+        pytest.skip("did not run: the session has fewer than two HDTN or ION endpoints")
+    # Files are judged from the moment the stack can send them: HDTN first declares each link.
+    not_up = hdtn_raises_each_link_nodalarc_shows(operator, watch(operator, 6.0))
+    assert not not_up, "\n".join(not_up)
+    disagreements = bundle_files_arrive(operator, bundle_file_endpoints)
+    assert not disagreements, "\n".join(disagreements)
 
 
 def _run_fast_until(operator: Operator, reached, *, longest_wait: float = 300.0) -> bool:

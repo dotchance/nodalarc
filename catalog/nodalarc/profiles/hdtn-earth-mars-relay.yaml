@@ -18,7 +18,7 @@ profile:
   id: hdtn-earth-mars-relay
   display_name: HDTN Earth-Mars relay network member
   registry: node01:5000
-  image: nodalarc-hdtn/hdtn@sha256:cd59eff7dce987de2c68da031d9c996fea7dc7e57fef6a48181bc294f3fc68bc
+  image: nodalarc-hdtn/hdtn@sha256:b429a08c954a63da09bbc73f50a6d09bcc3cebada69dfd4744bcf16e4536c366
   env:
   - name: HDTN_ADDR_arcadia
     value_from:

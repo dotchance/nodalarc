@@ -18,6 +18,7 @@ import yaml
 from nodalarc.catalog_closure import FilesystemCatalogReadView
 from nodalarc.catalog_paths import CatalogRoots
 from nodalarc.catalog_refs import CatalogRef
+from nodalarc.models.terminal_physics import SatGroundTerminalBoresight
 from nodalarc.physics import EphemerisLocation
 from nodalarc.physics import context as physics_context
 from nodalarc.physics.datasets import production_location
@@ -138,13 +139,20 @@ class TestMandatoryGate:
 
 
 class TestCrossBodyAccess:
-    def test_earth_ground_to_luna_satellite_access_rejected_at_resolve(self) -> None:
-        # Ground sites stay on Earth; the constellation moves to Luna; the
-        # default access rule pairs them — which must be rejected as
-        # cross-body, never evaluated as mixed-frame geometry.
-        raw = _lunar_constellation(_session())
-        with pytest.raises(SessionResolutionError, match="body-local"):
-            resolve_session(raw)
+    def test_earth_ground_to_luna_satellites_aims_their_access_terminals_at_earth(self) -> None:
+        """Ground sites stay on Earth, the constellation moves to Luna, and the default access
+        rule pairs them: a station and orbiters of another body. Each orbiter's access terminal
+        points at Earth, the body of the stations it serves."""
+        resolved = resolve_session(_lunar_constellation(_session()))
+        satellites = [node for node in resolved.nodes if node.kind == "satellite"]
+        assert satellites
+        for node in satellites:
+            assert node.central_body == "luna"
+            assert {
+                block.boresight.target_body
+                for block in node.terminal_inventory
+                if isinstance(block.boresight, SatGroundTerminalBoresight)
+            } == {"earth"}
 
 
 class TestEphemerisDataAtResolve:

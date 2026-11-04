@@ -181,20 +181,13 @@ _PREVIEW_TESTED_BUDGET = 4000
 _PREVIEW_DRAW_CAP = 800
 
 
-def _preview_body_of(node: ResolvedNode) -> str | None:
-    """The body a node sits on — ``central_body`` for satellites,
-    ``reference_body`` for ground."""
-    if node.kind == "satellite":
-        return node.central_body
-    return node.reference_body
-
-
 def _preview_scope(rule: ResolvedLinkRule, node_by_id: dict[str, ResolvedNode]) -> PreviewScope:
     """Whether a rule's geometry is computed, and if not, the preview status —
-    decided from body/kind/enabled facts alone, no OME. A disabled rule ships no
+    decided from kind and enabled facts alone, no OME. A disabled rule ships no
     geometry; a rule with no satellite endpoint is static-terrestrial (the
-    runtime does not visibility-compute it); a rule whose endpoint members
-    straddle bodies is inter-body (same-body composites cannot judge it)."""
+    runtime does not visibility-compute it). Every other rule is computed through
+    the runtime's own signals and checks, whose ends may belong to one body or two
+    (an inter-body relay, or an Earth station and a lunar orbiter)."""
     if not rule.enabled:
         return "disabled"
     members = [
@@ -205,9 +198,6 @@ def _preview_scope(rule: ResolvedLinkRule, node_by_id: dict[str, ResolvedNode]) 
     ]
     if not any(node.kind == "satellite" for node in members):
         return "terrestrial_pending"
-    bodies = {b for b in (_preview_body_of(node) for node in members) if b is not None}
-    if len(bodies) > 1:
-        return "inter_body_pending"
     return "computed"
 
 
@@ -587,7 +577,7 @@ def _satellite_less_world_view(
 
     The ephemeris carries no node ephemerides (there is nothing to propagate and
     OME cannot be built) but POPULATED body frames, so render scale still anchors
-    on a body. Every rule is accurately terrestrial/inter_body_pending — with no
+    on a body. Every rule is accurately terrestrial_pending — with no
     space segment there is nothing to visibility-compute, and a per-rule "add a
     satellite" note would be a false state for a static terrestrial link."""
     ephemeris = SessionEphemeris(

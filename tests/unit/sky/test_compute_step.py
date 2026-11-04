@@ -276,7 +276,9 @@ class TestComputeStepMatchesWindow:
             pair for pair, (visible, _scheduled) in source.isl_state.items() if visible
         } | {pair for pair, (visible, _scheduled) in source.ground_state.items() if visible}
         assert previously_visible <= stable_visible
-        assert source.propagated_states == stable.propagated_states
+        links = set(source.isl_state) | set(source.ground_state)
+        assert set(source.ranges_km) == links
+        assert set(source.latencies_ms) == links
         assert source.associations == stable.associations
         assert source.pending_teardowns == stable.pending_teardowns
 

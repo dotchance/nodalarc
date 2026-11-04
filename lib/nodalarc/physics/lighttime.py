@@ -109,6 +109,8 @@ class _PreparedEndpoints:
 
     count: int
     body_ids: np.ndarray
+    # True for an endpoint fixed on a body's surface (a site), per row.
+    on_surface: np.ndarray
     orbits: tuple[_OrbitGroup, ...]
     sites: tuple[_SiteGroup, ...]
     tles: tuple[tuple[int, TleEndpoint], ...]
@@ -131,6 +133,9 @@ def _prepare(endpoints: Sequence[Endpoint]) -> _PreparedEndpoints:
     return _PreparedEndpoints(
         count=len(endpoints),
         body_ids=np.array([endpoint.body_id for endpoint in endpoints], dtype=object),
+        on_surface=np.array(
+            [isinstance(endpoint, SiteEndpoint) for endpoint in endpoints], dtype=bool
+        ),
         orbits=tuple(
             _OrbitGroup(
                 rows=np.array([row for row, _ in members]),
@@ -289,8 +294,10 @@ class SignalEnd:
     ``position_km`` is barycentric on ICRF axes. ``fixed_km`` is the position relative to the
     end's central body in that body's fixed frame. ``pointing`` (ICRF) and ``pointing_fixed``
     (the body's fixed frame) are the unit apparent direction the end points along.
-    ``rate_rad_s`` is the angular rate of the line of sight to the other end: in the body's
-    rotating frame when both ends share a central body, inertial when they do not.
+    ``toward_other_body_fixed`` is the unit direction from the end to the centre of the other
+    end's body, in the end's body frame. ``rate_rad_s`` is the angular rate of the line of sight
+    to the other end: in the end's body's rotating frame when the end is a site or both ends share
+    a central body, inertial for an orbiter whose peer belongs to another body.
     """
 
     body_ids: np.ndarray
@@ -299,6 +306,7 @@ class SignalEnd:
     fixed_km: np.ndarray
     pointing: np.ndarray
     pointing_fixed: np.ndarray
+    toward_other_body_fixed: np.ndarray
     rate_rad_s: np.ndarray
 
     def take(self, rows: np.ndarray) -> SignalEnd:
@@ -335,6 +343,7 @@ def _signal_end(
     physics: PhysicsContext,
     body_ids: np.ndarray,
     other_body_ids: np.ndarray,
+    on_surface: np.ndarray,
     epochs: np.ndarray,
     this: _EndStates,
     that: _EndStates,
@@ -348,8 +357,19 @@ def _signal_end(
         rotations[rows], spin[rows] = physics.motion.orientations(body_id, epochs[rows])
     sight = that.position_km - this.position_km
     relative_velocity = that.velocity_km_s - this.velocity_km_s
-    same_body = body_ids == other_body_ids
-    relative_velocity[same_body] -= _cross(spin[same_body], sight[same_body])
+    # A site turns with its body, so its line of sight is tracked in that rotating frame whatever
+    # body the other end belongs to. Two ends of one central body share its rotating frame.
+    rotating = (body_ids == other_body_ids) | on_surface
+    relative_velocity[rotating] -= _cross(spin[rotating], sight[rotating])
+    # The direction from this end toward the centre of the other end's body, in this end's body
+    # frame: a satellite's nadir for a terminal that serves stations of that body. For two ends of
+    # one body it is the direction to this end's own body centre.
+    toward = np.empty((count, 3))
+    for other_body in set(other_body_ids):
+        rows = other_body_ids == other_body
+        centre, _velocity = physics.motion.states(other_body, epochs[rows])
+        toward[rows] = centre - this.position_km[rows]
+    toward_fixed = _unit_rows(np.einsum("nij,nj->ni", rotations, toward))
     distance = np.linalg.norm(sight, axis=1)
     toward = _unit_rows(sight)
     along = np.einsum("ni,ni->n", relative_velocity, toward)
@@ -361,6 +381,7 @@ def _signal_end(
         fixed_km=np.einsum("nij,nj->ni", rotations, this.relative_km),
         pointing=pointing,
         pointing_fixed=np.einsum("nij,nj->ni", rotations, pointing),
+        toward_other_body_fixed=toward_fixed,
         rate_rad_s=np.divide(
             np.linalg.norm(across, axis=1),
             distance,
@@ -374,11 +395,13 @@ def _signals(
     physics: PhysicsContext,
     shapes: Mapping[str, BodyFrame],
     body_ids: tuple[np.ndarray, np.ndarray],
+    surfaces: tuple[np.ndarray, np.ndarray],
     epochs: tuple[np.ndarray, np.ndarray],
     states: tuple[_EndStates, _EndStates],
     light_time_s: np.ndarray,
 ) -> Signals:
     (sending, receiving), (emitted, received), (transmitter, receiver) = body_ids, epochs, states
+    sending_on_surface, receiving_on_surface = surfaces
     origin, arrival = transmitter.position_km, receiver.position_km
     path = arrival - origin
     occulters, occluded = obstructions(
@@ -393,6 +416,7 @@ def _signals(
             physics,
             sending,
             receiving,
+            sending_on_surface,
             emitted,
             transmitter,
             receiver,
@@ -402,6 +426,7 @@ def _signals(
             physics,
             receiving,
             sending,
+            receiving_on_surface,
             received,
             receiver,
             transmitter,
@@ -482,6 +507,7 @@ def _signals_at(
     at_instant = _states(physics, prepared, distinct_at)
     transmitter, receiver = at_instant.take(tx_rows), at_instant.take(rx_rows)
     tx_bodies, rx_bodies = prepared.body_ids[tx_rows], prepared.body_ids[rx_rows]
+    surfaces = (prepared.on_surface[tx_rows], prepared.on_surface[rx_rows])
     moving = _prepare(receivers if sent else transmitters)
     separation = receiver.position_km - transmitter.position_km
     tau = _first_guess(separation, receiver.velocity_km_s if sent else transmitter.velocity_km_s)
@@ -497,7 +523,13 @@ def _signals_at(
         if np.max(np.abs(new - tau), initial=0.0) < CONVERGENCE_S:
             epochs = (at, at + new) if sent else (at - new, at)
             return _signals(
-                physics, shapes, (tx_bodies, rx_bodies), epochs, (transmitter, receiver), new
+                physics,
+                shapes,
+                (tx_bodies, rx_bodies),
+                surfaces,
+                epochs,
+                (transmitter, receiver),
+                new,
             )
         tau = new
     raise _not_converged()

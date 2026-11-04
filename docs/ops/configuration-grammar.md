@@ -564,7 +564,12 @@ Node = MappingBegin,
 
 Ethernet-port ids, terminal-mount ids, and payload-mount ids are independently
 unique within a node. `TerminalMount.boresight` is valid only on an `access`
-mount. A satellite access mount requires `boresight: {mode: nadir}`. A ground
+mount. A satellite access mount requires `boresight: {mode: nadir}`. Nadir
+refers to the body of the ground stations whose access rules select the
+terminal, so a relay can point one access terminal at the Moon's stations and
+another at Earth's. A terminal that access rules pair with stations on two
+bodies is invalid; a terminal no access rule selects refers to the satellite's
+own body. A ground
 access mount must omit node-level boresight because its orientation belongs to
 the site installation. A node is a reusable definition and contains no
 location or addressing. A node definition's `profile` is the authored workload
@@ -1695,6 +1700,8 @@ runtime execution:
 - a routing-instance participant whose adapter does not render the
   instance's protocol, capabilities or BFD timers;
 - `bgp` and `dtn_bundle` routing boundaries;
+- an access link between ground stations on two bodies (a direct
+  surface-to-surface link across bodies);
 - bodies outside the supported Earth-Luna profile;
 - workload adapters other than `frr`;
 - SGP4 and analytic propagators mixed under one central body, until they

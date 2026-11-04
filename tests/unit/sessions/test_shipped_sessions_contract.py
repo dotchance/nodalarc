@@ -162,7 +162,7 @@ def test_shipped_session_computes_real_steps(path: Path) -> None:
         )
         associations = result.associations
         teardowns = result.pending_teardowns
-        propagated_nodes.update(result.link_snapshot_source.propagated_states)
+        propagated_nodes.update(result.propagated_states)
         _assert_tick_round_trips(cfg, ctx, result, step, step_seconds)
 
     sat_count = len(cfg.satellites)

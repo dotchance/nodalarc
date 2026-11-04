@@ -10,7 +10,7 @@ from typing import Literal
 
 import numpy as np
 from nodalarc.body_frames import BodyFrame
-from nodalarc.frames import EcefVec3, GeoPosition
+from nodalarc.frames import CommonVec3, EcefVec3, GeoPosition
 from nodalarc.geo import compute_range_km
 from nodalarc.ground_terminals import TerminalPhysicsProfile
 from nodalarc.models.terminal_physics import GroundBoresightMode, SatGroundBoresightMode
@@ -192,6 +192,23 @@ class GroundGeometry:
             )
             limits.append(_limits(gs_geo, gs_min_elevations[gs_id], gs_profile, sat_profile))
         self._table = GroundLimitTable.from_limits(limits)
+
+    def station_positions_common(self, sim_time_unix: float) -> dict[str, CommonVec3]:
+        """Each station's position in the common frame (Earth's centre, ICRF axes) at an instant:
+        its body's centre plus its body-fixed position turned onto ICRF axes. A station and a
+        satellite of another body are then measured in one frame."""
+        positions: dict[str, CommonVec3] = {}
+        by_body: dict[str, list[tuple[str, Endpoint]]] = {}
+        for gs_id, endpoint in self.station_endpoints.items():
+            by_body.setdefault(endpoint.body_id, []).append((gs_id, endpoint))
+        for body_id, stations in by_body.items():
+            centre = self.physics.body_state(body_id, sim_time_unix).position_km
+            to_icrf = self.physics.orientation(body_id, sim_time_unix).rotation.T
+            for gs_id, endpoint in stations:
+                assert isinstance(endpoint, SiteEndpoint)
+                x, y, z = to_icrf @ np.asarray(endpoint.fixed_km, dtype=np.float64)
+                positions[gs_id] = CommonVec3(centre.x + x, centre.y + y, centre.z + z)
+        return positions
 
     def profiles(
         self, gs_id: str, sat_id: str
@@ -473,6 +490,7 @@ def evaluate_ground_visibility(
     dwell_state: dict[tuple[str, str], DwellPassState] | None = None,
     geometry: GroundGeometry,
     signals: PairSignals,
+    station_positions_common: Mapping[str, CommonVec3],
 ) -> GroundVisibilityEvaluation:
     """Evaluate geometric GS/satellite visibility for one tick.
 
@@ -586,15 +604,6 @@ def evaluate_ground_visibility(
                     f"Missing propagated satellite state for {sat_id}; "
                     "ground visibility cannot be evaluated authoritatively"
                 )
-            if state.central_body != reference_body:
-                # The resolver rejects cross-body access candidates; if one
-                # reaches this engine anyway, evaluating it would mix two
-                # body-fixed frames and emit plausible-looking garbage.
-                raise ValueError(
-                    f"cross-body ground visibility pair {gs_id}<->{sat_id}: "
-                    f"GS reference_body={reference_body!r} vs satellite "
-                    f"central_body={state.central_body!r}; access visibility is body-local"
-                )
             pairs.append((gs_id, sat_id))
 
     uplink, downlink = signals.directions(pairs)
@@ -604,7 +613,6 @@ def evaluate_ground_visibility(
     for gs_id in gs_positions:
         visible_per_station[gs_id] = []
     for row, ((gs_id, sat_id), verdict) in enumerate(zip(pairs, verdicts, strict=True)):
-        gs_ecef, _gs_geo = gs_positions[gs_id]
         gs_profile, sat_profile = geometry.profiles(gs_id, sat_id)
         applied = _applied_constraints(gs_profile, sat_profile)
         pair = (min(gs_id, sat_id), max(gs_id, sat_id))
@@ -616,7 +624,11 @@ def evaluate_ground_visibility(
             tenant_id=gs_tenant_ids[gs_id],
             reference_body=gs_reference_bodies[gs_id],
             visible=verdict.visible,
-            range_km=compute_range_km(gs_ecef, sat_states[sat_id].position_ecef_km),
+            # Same-instant distance in the common frame, for a station and a satellite of one
+            # body or of two.
+            range_km=compute_range_km(
+                station_positions_common[gs_id], sat_states[sat_id].position_common_km
+            ),
             latency_a_to_b_ms=up_ms if pair[0] == gs_id else down_ms,
             latency_b_to_a_ms=down_ms if pair[0] == gs_id else up_ms,
             elevation_deg=verdict.elevation_deg,

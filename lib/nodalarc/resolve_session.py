@@ -224,6 +224,7 @@ def resolve_session_with_assets(
     _check_frame_body_support(body_facts, support)
     ephemeris_files = _resolve_ephemeris_files(cfg, resolved_nodes)
     link_rules = tuple(_resolve_link_rule(rule, runtime_nodes) for rule in cfg.link_rules or ())
+    resolved_nodes = _aim_satellite_access_terminals(cfg, resolved_nodes, link_rules)
     _validate_routing_boundaries(cfg, routing_domains, link_rules)
     sid_blocks = tuple(_allocate_sid_blocks(routing_domains))
     dispatch = _resolve_dispatch(cfg)
@@ -3167,6 +3168,83 @@ def _refuse_selected_multi_user_terminals(
         raise UnsupportedFeatureError(unsupported)
 
 
+def _aim_satellite_access_terminals(
+    cfg: SegmentSessionConfig,
+    nodes: tuple[ResolvedNode, ...],
+    link_rules: tuple[ResolvedLinkRule, ...],
+) -> tuple[ResolvedNode, ...]:
+    """Point each satellite access terminal at the body of the ground stations it serves.
+
+    A satellite access mount declares a nadir boresight; the body that nadir refers to is the body
+    of the stations whose access rules select the terminal. A relay can carry one access terminal
+    for lunar stations and another for Earth stations, each selected by its own rule. One terminal
+    points one way, so a terminal that rules pair with stations on two bodies is refused. A
+    terminal no access rule selects keeps the satellite's own body.
+    """
+    selectors = _terminal_selectors_by_rule(cfg)
+    node_by_id = {node.node_id: node for node in nodes}
+    targets: dict[tuple[str, str], dict[str, set[str]]] = {}
+    for rule in link_rules:
+        if rule.kind != "access" or not rule.enabled:
+            continue
+        sides = list(zip(rule.endpoints, selectors[rule.rule_id], strict=True))
+        for (endpoint, selector), (other, _other_selector) in (
+            (sides[0], sides[1]),
+            (sides[1], sides[0]),
+        ):
+            station_bodies = {
+                node_by_id[node_id].reference_body
+                for node_id in other.node_ids
+                if node_by_id[node_id].kind == "ground_station"
+            }
+            for node_id in endpoint.node_ids:
+                node = node_by_id[node_id]
+                if node.kind != "satellite":
+                    continue
+                for block in node.terminal_inventory:
+                    if block.endpoint_role == "access" and _terminal_matches(block, selector):
+                        by_body = targets.setdefault((node_id, block.terminal_id), {})
+                        for body in station_bodies:
+                            if body is not None:
+                                by_body.setdefault(body, set()).add(rule.rule_id)
+    for (node_id, terminal_id), by_body in sorted(targets.items()):
+        if len(by_body) > 1:
+            pairs = "; ".join(
+                f"{body} through {', '.join(sorted(rules))}"
+                for body, rules in sorted(by_body.items())
+            )
+            raise SessionResolutionError(
+                f"satellite {node_id!r} access terminal {terminal_id!r} is paired with ground "
+                f"stations on {len(by_body)} bodies ({pairs}); one terminal points at one body, "
+                "so give each body its own access terminal and select it by mount",
+                subject_kind="link_rule",
+                subject_id=sorted(next(iter(by_body.values())))[0],
+                node_id=node_id,
+            )
+    aimed: list[ResolvedNode] = []
+    for node in nodes:
+        blocks = []
+        changed = False
+        for block in node.terminal_inventory:
+            by_body = targets.get((node.node_id, block.terminal_id))
+            if by_body and isinstance(block.boresight, SatGroundTerminalBoresight):
+                (body,) = by_body
+                if block.boresight.target_body != body:
+                    block = block.model_copy(
+                        update={
+                            "boresight": SatGroundTerminalBoresight(
+                                target_body=body, mode=block.boresight.mode
+                            )
+                        }
+                    )
+                    changed = True
+            blocks.append(block)
+        aimed.append(
+            node.model_copy(update={"terminal_inventory": tuple(blocks)}) if changed else node
+        )
+    return tuple(aimed)
+
+
 def _validate_access_terminal_bindings(
     cfg: SegmentSessionConfig, resolved: ResolvedSession
 ) -> None:
@@ -3276,7 +3354,7 @@ def _resolve_link_candidates(
         left = node_by_id[node_a]
         right = node_by_id[node_b]
         if candidate.kind == "access":
-            _validate_access_candidate_endpoints(left, right)
+            _validate_access_candidate_endpoints(left, right, candidate.rule_id)
             iface_a = iface_b = None
         else:
             iface_a = _fixed_iface(node_a, candidate.rule_id)
@@ -3382,25 +3460,33 @@ def _enforce_candidate_limits(
         )
 
 
-def _validate_access_candidate_endpoints(left: ResolvedNode, right: ResolvedNode) -> None:
+def _validate_access_candidate_endpoints(
+    left: ResolvedNode, right: ResolvedNode, rule_id: str
+) -> None:
+    """An access candidate joins one ground station and one satellite, on the same body or on
+    two bodies (a station and an orbiter of another body). Two stations on two bodies are a direct
+    surface-to-surface link, which the runtime does not support."""
     left_ground = left.kind == "ground_station"
     right_ground = right.kind == "ground_station"
+    if left_ground and right_ground and left.reference_body != right.reference_body:
+        raise UnsupportedFeatureError(
+            [
+                UnsupportedFeature(
+                    category=FeatureCategory.LINK_TOPOLOGY,
+                    value="surface_to_surface_cross_body",
+                    message=(
+                        f"link rule {rule_id!r} joins ground stations on {left.reference_body} "
+                        f"and {right.reference_body} ({left.node_id}<->{right.node_id}); a "
+                        "direct link between the surfaces of two bodies is not supported; relay "
+                        "through an orbiter"
+                    ),
+                )
+            ]
+        )
     if left_ground == right_ground:
         raise SessionResolutionError(
             f"access candidate requires exactly one ground station endpoint: "
             f"{left.node_id}<->{right.node_id}"
-        )
-    ground, satellite = (left, right) if left_ground else (right, left)
-    # Ground access visibility is body-local: the GS body-fixed frame and the
-    # satellite central-body frame must be the same body, or every range and
-    # elevation number downstream is cross-frame garbage. Cross-body paths use
-    # inter-body relays, never direct ground access.
-    if ground.reference_body != satellite.central_body:
-        raise SessionResolutionError(
-            f"access link {ground.node_id}<->{satellite.node_id} is cross-body "
-            f"(ground reference_body={ground.reference_body!r}, satellite "
-            f"central_body={satellite.central_body!r}); ground access visibility is "
-            "body-local — use an inter-body relay path instead"
         )
 
 

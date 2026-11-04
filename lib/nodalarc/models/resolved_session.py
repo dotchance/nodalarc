@@ -661,18 +661,15 @@ class ResolvedNode(BaseModel):
                         f"ground node {self.node_id!r} access terminal "
                         f"{block.terminal_id!r} requires a ground boresight"
                     )
-                if self.kind == "satellite":
-                    if not isinstance(block.boresight, SatGroundTerminalBoresight):
-                        raise ValueError(
-                            f"satellite {self.node_id!r} access terminal "
-                            f"{block.terminal_id!r} requires a spacecraft nadir boresight"
-                        )
-                    if block.boresight.target_body != self.central_body:
-                        raise ValueError(
-                            f"satellite {self.node_id!r} access terminal "
-                            f"{block.terminal_id!r} targets {block.boresight.target_body!r}, "
-                            f"not central body {self.central_body!r}"
-                        )
+                # The body a satellite access terminal points at is the body of the stations its
+                # access rules select (resolver-derived); it may differ from the central body.
+                if self.kind == "satellite" and not isinstance(
+                    block.boresight, SatGroundTerminalBoresight
+                ):
+                    raise ValueError(
+                        f"satellite {self.node_id!r} access terminal "
+                        f"{block.terminal_id!r} requires a spacecraft nadir boresight"
+                    )
             elif block.boresight is not None:
                 raise ValueError(
                     f"node {self.node_id!r} non-access terminal {block.terminal_id!r} "

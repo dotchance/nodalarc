@@ -347,11 +347,14 @@ def _sight_direction(physics: PhysicsContext, a, b, t: float, frame_body: str | 
 def test_line_of_sight_rate_is_its_time_derivative(
     physics_context: PhysicsContext, t: float
 ) -> None:
-    """A LEO pair in Earth's rotating frame and a lunar orbiter seen from Goldstone on inertial
-    axes: the rate equals the central difference of the line of sight over 0.5 s."""
+    """The rate equals the central difference of the line of sight over 0.5 s, in the frame the
+    transmitting end tracks in: a LEO pair in Earth's rotating frame, Goldstone tracking a lunar
+    orbiter in Earth's rotating frame (a station turns with its body whatever it tracks), and the
+    lunar orbiter tracking a LEO satellite of another body on inertial axes."""
     cases = [
         (_orbit(LEO_A, "earth", t - 600.0), _orbit(LEO_B, "earth", t - 600.0), "earth"),
-        (GOLDSTONE_SITE, _orbit(LUNAR, "luna", t - 3600.0), None),
+        (GOLDSTONE_SITE, _orbit(LUNAR, "luna", t - 3600.0), "earth"),
+        (_orbit(LUNAR, "luna", t - 3600.0), _orbit(LEO_A, "earth", t - 600.0), None),
     ]
     h = 0.25
     for a, b, frame_body in cases:

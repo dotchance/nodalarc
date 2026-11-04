@@ -40,14 +40,21 @@ from nodalarc.physics.lighttime import Endpoint, Signals, signals_sent_at
 @dataclass(frozen=True)
 class EndArrays:
     """One end of every direction at its own epoch: position in its body's fixed frame (K, 3),
-    unit pointing in that frame (K, 3), and line-of-sight angular rate (K,) in rad/s."""
+    unit pointing in that frame (K, 3), line-of-sight angular rate (K,) in rad/s, and the unit
+    direction toward the centre of the other end's body in that frame (K, 3)."""
 
     fixed_km: np.ndarray
     pointing_fixed: np.ndarray
     rate_rad_s: np.ndarray
+    toward_other_body_fixed: np.ndarray
 
     def take(self, rows: np.ndarray) -> EndArrays:
-        return EndArrays(self.fixed_km[rows], self.pointing_fixed[rows], self.rate_rad_s[rows])
+        return EndArrays(
+            self.fixed_km[rows],
+            self.pointing_fixed[rows],
+            self.rate_rad_s[rows],
+            self.toward_other_body_fixed[rows],
+        )
 
 
 @dataclass(frozen=True)
@@ -68,11 +75,13 @@ class DirectionEnds:
                 signals.transmitter.fixed_km,
                 signals.transmitter.pointing_fixed,
                 signals.transmitter.rate_rad_s,
+                signals.transmitter.toward_other_body_fixed,
             ),
             receiver=EndArrays(
                 signals.receiver.fixed_km,
                 signals.receiver.pointing_fixed,
                 signals.receiver.rate_rad_s,
+                signals.receiver.toward_other_body_fixed,
             ),
         )
 
@@ -395,7 +404,10 @@ def ground_directions(
     outside_ground = outside_envelope | outside_cone
 
     has_boresight = np.isfinite(table.satellite_half_deg)
-    nadir = -satellite.fixed_km / np.linalg.norm(satellite.fixed_km, axis=1, keepdims=True)
+    # The satellite terminal's nadir points at the centre of the body its station stands on:
+    # the satellite's own body for a same-body pair, another body for a lunar orbiter serving an
+    # Earth station.
+    nadir = satellite.toward_other_body_fixed
     nadir_cosine = np.clip(np.einsum("ni,ni->n", nadir, satellite.pointing_fixed), -1.0, 1.0)
     off_nadir = np.where(has_boresight, np.degrees(np.arccos(nadir_cosine)), np.nan)
     outside_satellite = has_boresight & (off_nadir > table.satellite_half_deg)

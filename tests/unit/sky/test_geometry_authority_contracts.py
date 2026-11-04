@@ -13,6 +13,7 @@ from nodalarc.geo import compute_range_km
 from nodalarc.models.events import VisibilityEvent
 from nodalarc.ome_inputs import build_ome_inputs_from_resolved
 from nodalarc.physics.lighttime import signals_sent_at
+from nodalarc.physics.session import session_node_positions
 from ome.event_stream import build_link_state_snapshot, build_step_context, compute_step
 from ome.propagation_engine import PropagatedState, satellite_endpoints
 from ome.snapshot_builder import LinkSnapshotSource
@@ -52,7 +53,7 @@ def _snapshot_source(
     *,
     isl_state: dict[tuple[str, str], tuple[bool, bool]] | None = None,
     ground_state: dict[tuple[str, str], tuple[bool, bool, str]] | None = None,
-    propagated_states: dict[str, PropagatedState] | None = None,
+    ranges_km: dict[tuple[str, str], float],
     latencies_ms: dict[tuple[str, str], tuple[float, float]],
 ) -> LinkSnapshotSource:
     return LinkSnapshotSource(
@@ -60,7 +61,7 @@ def _snapshot_source(
         ground_state=ground_state or {},
         associations={},
         pending_teardowns={},
-        propagated_states=propagated_states or {},
+        ranges_km=ranges_km,
         latencies_ms=latencies_ms,
     )
 
@@ -82,19 +83,15 @@ class TestAnalyticGeometry:
 
 
 class TestOmeSnapshotGeometry:
-    def test_snapshot_range_is_geometric_and_delays_are_the_committed_ones(self):
-        """Range is the same-tick distance between the ends; each direction's delay is the one
-        the tick committed for it, in the pair's order."""
+    def test_snapshot_shows_the_range_and_delays_the_tick_committed(self):
+        """The snapshot carries each up link's range and each direction's delay as the tick
+        committed them, in the pair's order; it computes neither."""
         pair = ("sat-a", "sat-b")
-        propagated_states = {
-            "sat-a": _propagated_state("sat-a", 0.0, 0.0, 550.0),
-            "sat-b": _propagated_state("sat-b", 0.0, 5.0, 550.0),
-        }
         committed = (2.08291, 2.08297)
         snapshot = build_link_state_snapshot(
             _snapshot_source(
                 isl_state={pair: (True, True)},
-                propagated_states=propagated_states,
+                ranges_km={pair: 624.4},
                 latencies_ms={pair: committed},
             ),
             interface_map={pair: ("isl0", "isl1")},
@@ -104,13 +101,8 @@ class TestOmeSnapshotGeometry:
             epoch_id=0,
         )
         link = snapshot.links[0]
-        expected_range = compute_range_km(
-            earth_geodetic_to_ecef(GeoPosition(0.0, 0.0, 550.0)),
-            earth_geodetic_to_ecef(GeoPosition(0.0, 5.0, 550.0)),
-        )
 
-        assert link.range_km is not None
-        assert math.isclose(link.range_km, expected_range, abs_tol=RANGE_TOL_KM)
+        assert link.range_km == 624.4
         assert (link.latency_a_to_b_ms, link.latency_b_to_a_ms) == committed
 
     def test_every_delay_a_tick_shows_is_the_light_time_of_that_directions_signal(self):
@@ -205,16 +197,25 @@ class TestOmeSnapshotGeometry:
             delays = (link.latency_a_to_b_ms, link.latency_b_to_a_ms)
             assert delays == pytest.approx(light_ms[pair], rel=0.0, abs=SAME_SIGNAL_MS), pair
 
+        # Every up link's range is the same-instant distance between its ends, against the
+        # shared physics module's own positions of every node at the tick (satellites from their
+        # orbits, stations from their bodies' orientation), a separate path from OME's.
+        positions = session_node_positions(resolved, session.physics, result.sim_time_unix)
+        for link in up_links:
+            assert link.range_km == pytest.approx(
+                compute_range_km(positions[link.node_a], positions[link.node_b]),
+                rel=0.0,
+                abs=RANGE_TOL_KM,
+            ), (link.node_a, link.node_b)
+
     def test_active_snapshot_link_missing_authority_fails_loudly(self):
         pair = ("sat-a", "sat-b")
 
-        with pytest.raises(ValueError, match="missing same-tick ECEF state"):
+        with pytest.raises(ValueError, match="committed no range"):
             build_link_state_snapshot(
                 _snapshot_source(
                     isl_state={pair: (True, True)},
-                    propagated_states={
-                        "sat-a": _propagated_state("sat-a", 0.0, 0.0, 550.0),
-                    },
+                    ranges_km={},
                     latencies_ms={pair: (2.08291, 2.08297)},
                 ),
                 interface_map={pair: ("isl0", "isl1")},
@@ -233,10 +234,7 @@ class TestOmeSnapshotGeometry:
             build_link_state_snapshot(
                 _snapshot_source(
                     isl_state={pair: (True, True)},
-                    propagated_states={
-                        "sat-a": _propagated_state("sat-a", 0.0, 0.0, 550.0),
-                        "sat-b": _propagated_state("sat-b", 0.0, 5.0, 550.0),
-                    },
+                    ranges_km={pair: 624.4},
                     latencies_ms={},
                 ),
                 interface_map={pair: ("isl0", "isl1")},

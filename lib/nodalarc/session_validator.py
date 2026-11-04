@@ -323,6 +323,11 @@ def _check_access_geometry_feasibility(resolved: ResolvedSession) -> list[Valida
         ground, sat = (node_a, node_b) if node_a.kind == "ground_station" else (node_b, node_a)
         if ground.surface_position is None or sat.orbit is None:
             continue
+        # The inclination band bounds where a satellite passes over its own body. It says
+        # nothing about a site on another body (an Earth station and a lunar orbiter), so this
+        # check judges same-body pairs only.
+        if ground.reference_body != sat.orbit.central_body:
+            continue
         body_radius = radius_by_body.get(sat.orbit.central_body)
         if body_radius is None:
             continue

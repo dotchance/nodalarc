@@ -110,9 +110,6 @@ describe("adapter: drawable pairs and the dark-rule mapping", () => {
 
 describe("note-mapping table — one row at a time", () => {
   it("(a) a non-computed scope supersedes other notes", () => {
-    expect(only(world([preview({ preview_scope: "inter_body_pending" })])).note).toBe(
-      "inter-body span — preview pending, runtime computes contacts",
-    );
     expect(only(world([preview({ preview_scope: "terrestrial_pending" })])).note).toBe(
       "terrestrial run — surface routing preview pending",
     );

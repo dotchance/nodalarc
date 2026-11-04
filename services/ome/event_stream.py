@@ -704,7 +704,6 @@ def _build_link_snapshot_source(
     isl_links: Mapping[tuple[str, str], ScheduledIsl],
     ground_decisions: GroundVisibilityDecisionMap,
     ground_allocation: GroundAllocationResult,
-    propagated_states: Mapping[str, PropagatedState],
 ) -> LinkSnapshotSource:
     """Derive authoritative snapshot state from current tick facts.
 
@@ -750,15 +749,17 @@ def _build_link_snapshot_source(
         pair: (isl_feasibility[pair].one_way_a_to_b_ms, isl_feasibility[pair].one_way_b_to_a_ms)
         for pair in isl_state
     }
+    ranges_km = {pair: isl_feasibility[pair].range_km for pair in isl_state}
     for pair in ground_state:
         decision = ground_decisions[pair]
         latencies_ms[pair] = (decision.latency_a_to_b_ms, decision.latency_b_to_a_ms)
+        ranges_km[pair] = decision.range_km
     return LinkSnapshotSource(
         isl_state=isl_state,
         ground_state=ground_state,
         associations=dict(ground_allocation.associations),
         pending_teardowns=dict(ground_allocation.pending_teardowns),
-        propagated_states=dict(propagated_states),
+        ranges_km=ranges_km,
         latencies_ms=latencies_ms,
     )
 
@@ -903,6 +904,7 @@ def compute_step(
             dwell_state=dwell_state,
             geometry=ctx.ground_geometry,
             signals=tick_signals,
+            station_positions_common=ctx.ground_geometry.station_positions_common(epoch_unix + dt),
         )
 
     # 7. Scored, hysteresis-aware ground link allocation.
@@ -952,7 +954,6 @@ def compute_step(
             isl_links=isl_links,
             ground_decisions=ground_visibility.decisions,
             ground_allocation=ground_allocation,
-            propagated_states=sat_states,
         )
 
     return StepResult(

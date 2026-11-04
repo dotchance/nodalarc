@@ -13,7 +13,6 @@ geodetic positions, body-local and presentation-only.
 """
 
 import math
-from datetime import UTC, datetime
 from pathlib import Path
 
 import numpy as np
@@ -306,40 +305,25 @@ class TestCrossBodyAuthority:
         )
         assert _distance(iss_state.velocity_common_km_s, iss_vel_truth) < 1e-9
 
-    def test_snapshot_publishes_gcrs_composed_range(self):
-        from ome.snapshot_builder import LinkSnapshotSource, build_link_state_snapshot
+    def test_an_inter_body_isl_range_is_the_gcrs_composed_distance(self):
+        """The ISL engine measures a pair whose ends orbit two bodies (the ISS and the lunar
+        relay) between their common-frame positions, which compose SGP4's GCRS state with
+        Earth's barycentric position."""
+        from nodalarc.geo import compute_range_km
+        from ome.isl_engine import _state_vectors
 
         probe_unix = ISS_TLE_EPOCH_UNIX + 43200.0
-        states, body_states, inputs = self._states_at(probe_unix)
-        pair = ("earth-iss-sat-p00s00", "luna-relay-sat-p00s00")
-        # The tick commits each direction's light time of a signal sent at the probe.
-        iss_sends, relay_sends = self._signals_at(probe_unix, inputs).in_order()
-        committed = (
-            float(iss_sends.light_time_s[0]) * 1000.0,
-            float(relay_sends.light_time_s[0]) * 1000.0,
-        )
+        states, _body_states, _inputs = self._states_at(probe_unix)
+        iss, relay = states["earth-iss-sat-p00s00"], states["luna-relay-sat-p00s00"]
+        position_a, _velocity_a, position_b, _velocity_b = _state_vectors(iss, relay)
 
-        source = LinkSnapshotSource(
-            isl_state={pair: (True, True)},
-            ground_state={},
-            associations={},
-            pending_teardowns={},
-            propagated_states=states,
-            latencies_ms={pair: committed},
+        assert (
+            abs(
+                compute_range_km(position_a, position_b)
+                - _distance(iss.position_common_km, relay.position_common_km)
+            )
+            < 1e-9
         )
-        snapshot = build_link_state_snapshot(
-            source,
-            interface_map={pair: ("isl0", "isl0")},
-            sim_time=datetime.fromtimestamp(probe_unix, UTC),
-            seq=1,
-            interval_s=5.0,
-        )
-        link = next(entry for entry in snapshot.links if (entry.node_a, entry.node_b) == pair)
-        expected_range = _distance(
-            states[pair[0]].position_common_km, states[pair[1]].position_common_km
-        )
-        assert abs(link.range_km - expected_range) < 1e-3
-        assert (link.latency_a_to_b_ms, link.latency_b_to_a_ms) == committed
 
     def test_earth_fixed_state_is_the_inertial_state_in_itrf93(self):
         """Same-body geometry consumes the GCRS state in NAIF's ITRF93 frame.

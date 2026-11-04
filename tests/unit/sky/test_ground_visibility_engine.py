@@ -97,6 +97,15 @@ def _signals(
     )
 
 
+def _station_positions(
+    gs_positions: Mapping[str, tuple[EcefVec3, GeoPosition]],
+) -> dict[str, CommonVec3]:
+    """The fixtures put each body's centre at the origin with its fixed axes on ICRF (their
+    satellite states carry position_common_km equal to the body-fixed position), so a station's
+    common-frame position is its body-fixed position."""
+    return {gs_id: CommonVec3(*ecef) for gs_id, (ecef, _geo) in gs_positions.items()}
+
+
 def _evaluate(sat_endpoints: Mapping[str, Endpoint], **arguments) -> GroundVisibilityEvaluation:
     """evaluate_ground_visibility with the geometry and signals its own arguments describe."""
     geometry = _geometry(arguments)
@@ -104,6 +113,7 @@ def _evaluate(sat_endpoints: Mapping[str, Endpoint], **arguments) -> GroundVisib
         **arguments,
         geometry=geometry,
         signals=_signals(geometry, sat_endpoints, arguments["candidate_satellite_ids_by_gs"]),
+        station_positions_common=_station_positions(arguments["gs_positions"]),
     )
 
 
@@ -122,7 +132,9 @@ def _refused(**arguments) -> GroundVisibilityEvaluation:
         pairs=[],
     )
     signals = PairSignals.sent_at(_physics(), TEST_BODY_FRAMES, {}, [], EPOCH)
-    return evaluate_ground_visibility(**arguments, geometry=geometry, signals=signals)
+    return evaluate_ground_visibility(
+        **arguments, geometry=geometry, signals=signals, station_positions_common={}
+    )
 
 
 def _ground_scheduling() -> GroundSchedulingConfig:
@@ -482,6 +494,7 @@ def test_longest_remaining_pass_lookahead_uses_real_propagation():
         ),
         geometry=geometry,
         signals=_signals(geometry, sat_endpoints, arguments["candidate_satellite_ids_by_gs"]),
+        station_positions_common=_station_positions(arguments["gs_positions"]),
     )
 
     pair = (min(gs_id, sat_id), max(gs_id, sat_id))
@@ -736,9 +749,101 @@ def test_cislunar_resolved_terminal_facts_flow_through_build_context_to_engine()
         body_frames=TEST_BODY_FRAMES,
         geometry=ctx.ground_geometry,
         signals=signals,
+        station_positions_common={gs_id: CommonVec3(luna_radius, 0.0, 0.0)},
     )
 
     decision = result.decisions[(min(gs_id, sat_id), max(gs_id, sat_id))]
     assert decision.visible
     assert decision.reference_body == "luna"
     assert decision.applied_sat_terminal_profile == f"{sat_id}.ground_terminals[1]"
+
+
+def test_a_lunar_orbiters_earth_terminal_points_at_earth():
+    """Goldstone and an orbiter 100 km above the Moon whose ground terminal serves Earth: the
+    terminal's nadir points at Earth's centre, so a 10 degree cone around it holds Goldstone
+    (within about 1 degree of Earth's centre seen from the Moon) whenever the geometry allows the
+    contact. Measured from the Moon's centre, Goldstone would sit far outside the cone."""
+    import math
+
+    import numpy as np
+    from nodalarc.orbital import OrbitalElements
+    from nodalarc.physics import body_fixed_from_geodetic
+    from nodalarc.physics.lighttime import OrbitEndpoint
+
+    start = 1793721600.0  # 2026-11-03T16:00Z
+    goldstone = GeoPosition(35.426, -116.89, 1.0)
+    orbiter = OrbitEndpoint(
+        "luna",
+        LUNA_TEST_BODY_FRAME,
+        "two-body",
+        OrbitalElements(
+            semi_major_axis_km=1737.4 + 100.0,
+            inclination_rad=math.radians(90.0),
+            raan_rad=math.radians(40.0),
+            mean_anomaly_rad=0.0,
+            eccentricity=0.0,
+            argument_of_perigee_rad=0.0,
+        ),
+        start,
+    )
+
+    def geometry(link_model) -> GroundGeometry:
+        reach = 500_000.0
+        return GroundGeometry(
+            physics=_physics(),
+            body_frames=TEST_BODY_FRAMES,
+            gs_positions={
+                "gs": (
+                    EcefVec3(body_fixed_from_geodetic(goldstone, EARTH_TEST_BODY_FRAME)),
+                    goldstone,
+                )
+            },
+            gs_min_elevations={"gs": 10.0},
+            gs_reference_bodies={"gs": "earth"},
+            ground_link_model=link_model,
+            gs_terminal_profiles={
+                "gs": TerminalPhysicsProfile(
+                    profile_id="gs.terminals",
+                    max_range_km=reach,
+                    field_of_regard_deg=180.0,
+                    max_tracking_rate_deg_s=10.0,
+                    boresight=TerminalBoresight(mode="local_vertical"),
+                )
+            }
+            if link_model == "terminal_physics"
+            else None,
+            sat_ground_terminal_profiles={
+                "orbiter": (
+                    TerminalPhysicsProfile(
+                        profile_id="orbiter.ground_terminals[0]",
+                        max_range_km=reach,
+                        field_of_regard_deg=10.0,
+                        max_tracking_rate_deg_s=10.0,
+                        boresight=SatGroundTerminalBoresight(target_body="earth", mode="nadir"),
+                        target_body="earth",
+                    ),
+                )
+            }
+            if link_model == "terminal_physics"
+            else None,
+            pairs=[("gs", "orbiter")],
+        )
+
+    physical, geometric = geometry("terminal_physics"), geometry("geometry_only")
+    endpoints = {"gs": physical.station_endpoints["gs"], "orbiter": orbiter}
+    instants = start + np.arange(0.0, 12 * 3600.0, 600.0)
+    signals = PairSignals.sent_at(
+        _physics(), TEST_BODY_FRAMES, endpoints, [("gs", "orbiter")] * len(instants), instants
+    )
+    uplink, downlink = signals.in_order()
+    pairs = [("gs", "orbiter")] * len(instants)
+    with_terminals = physical.verdicts(pairs, uplink, downlink)
+    geometry_only = geometric.verdicts(pairs, uplink, downlink)
+
+    open_ticks = [row for row, verdict in enumerate(geometry_only) if verdict.visible]
+    assert len(open_ticks) >= 10, "the window holds too few contacts to judge"
+    for row in open_ticks:
+        verdict = with_terminals[row]
+        assert verdict.visible, (row, verdict.reason, verdict.rejecting_endpoint)
+        assert verdict.sat_off_nadir_deg is not None
+        assert 0.0 < verdict.sat_off_nadir_deg < 1.0

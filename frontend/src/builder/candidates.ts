@@ -39,7 +39,6 @@ const REASON_COPY: Record<BuilderPreviewRejectReason, string> = {
 
 /** Notes for preview scopes the server did not compute. */
 const SCOPE_NOTE: Record<Exclude<PreviewScope, "computed">, string> = {
-  inter_body_pending: "inter-body span — preview pending, runtime computes contacts",
   terrestrial_pending: "terrestrial run — surface routing preview pending",
   disabled: "rule disabled",
 };

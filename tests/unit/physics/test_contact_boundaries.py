@@ -12,8 +12,8 @@ SPK, light time and stellar aberration from SPICE's XCN+S and CN+S corrections, 
 SPICE's occult with the catalog radii.
 
 The acceptance tolerance for a contact boundary is one step; these compare within 1 ms. Measured:
-OME and SPICE land in the same 0.1 ms bisection interval at every change (4 for the ground pair, 22
-for the Earth-Moon pair). The tolerance tells the corrections apart: a reference with geometric
+OME and SPICE land in the same 0.1 ms bisection interval at every change for the ground pair (4)
+and the Earth-Moon pair (22), and within 57 us for Goldstone and the lunar orbiter (5 changes). The tolerance tells the corrections apart: a reference with geometric
 directions moves the ground changes by up to 45 ms, one with no correction by up to 6 ms, and
 evaluating both ends of the Earth-Moon link at one instant moves its changes by up to 1.32 s.
 """
@@ -232,5 +232,67 @@ def test_an_earth_moon_link_opens_and_closes_when_spice_says(
                 if code < 0:
                     return False
         return True
+
+    _assert_same_changes(_changes(produced, 30.0), _changes(reference, 30.0))
+
+
+@pytest.mark.usefixtures("endpoints_in_spice")
+def test_an_earth_station_contact_with_a_lunar_orbiter_opens_and_closes_when_spice_says(
+    physics_context: PhysicsContext,
+) -> None:
+    """Goldstone and an orbiter 100 km above the Moon, a ground pair across two bodies: open while
+    both directions clear Goldstone's 10 degree mask and no body blocks either direction. The
+    window holds moonrise, moonset and the orbiter's passes behind the Moon."""
+    geometry = GroundGeometry(
+        physics=physics_context,
+        body_frames=SHAPES,
+        gs_positions={"gs": (EcefVec3(GOLDSTONE_FIXED), GOLDSTONE_GEO)},
+        gs_min_elevations={"gs": MASK_DEG},
+        gs_reference_bodies={"gs": "earth"},
+        ground_link_model="geometry_only",
+        gs_terminal_profiles=None,
+        sat_ground_terminal_profiles=None,
+        pairs=[("gs", "orbiter")],
+    )
+    endpoints = {"gs": geometry.station_endpoints["gs"], "orbiter": ORBITER}
+
+    def produced(t: float) -> bool:
+        signals = PairSignals.sent_at(physics_context, SHAPES, endpoints, [("gs", "orbiter")], t)
+        uplink, downlink = signals.directions([("gs", "orbiter")])
+        return geometry.verdicts([("gs", "orbiter")], uplink, downlink)[0].visible
+
+    def clear(sender: int, receiver: int, received_et: float) -> bool:
+        return all(
+            spiceypy.occult(
+                str(sender),
+                "POINT",
+                " ",
+                body,
+                "ELLIPSOID",
+                frame,
+                "CN",
+                str(receiver),
+                received_et,
+            )  # fmt: skip
+            >= 0
+            for body, frame in OCCULTERS
+        )
+
+    def reference(t: float) -> bool:
+        et = et_of(t)
+        uplink, up_tau = spiceypy.spkpos(str(ORBITER_ID), et, "J2000", "XCN+S", str(GOLDSTONE_ID))
+        _, down_tau = spiceypy.spkpos(str(GOLDSTONE_ID), et, "J2000", "XCN", str(ORBITER_ID))
+        downlink, _ = spiceypy.spkpos(
+            str(ORBITER_ID), et + down_tau, "J2000", "CN+S", str(GOLDSTONE_ID)
+        )
+        return (
+            min(
+                _station_elevation_deg(np.array(uplink), et),
+                _station_elevation_deg(np.array(downlink), et + down_tau),
+            )
+            >= MASK_DEG
+            and clear(GOLDSTONE_ID, ORBITER_ID, et + up_tau)
+            and clear(ORBITER_ID, GOLDSTONE_ID, et + down_tau)
+        )
 
     _assert_same_changes(_changes(produced, 30.0), _changes(reference, 30.0))

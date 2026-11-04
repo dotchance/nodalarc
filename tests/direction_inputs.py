@@ -55,9 +55,15 @@ def _ends(
     relative = _array(vel_b) - _array(vel_a)
     across = relative - (relative @ toward_b) * toward_b
     rate = np.array([float(np.linalg.norm(across)) / distance])
-    end_a = EndArrays(a[None, :], toward_b[None, :], rate)
-    end_b = EndArrays(b[None, :], -toward_b[None, :], rate)
+    # Both ends belong to one body centred at the origin, so each points toward it along -position.
+    end_a = EndArrays(a[None, :], toward_b[None, :], rate, _toward_centre(a))
+    end_b = EndArrays(b[None, :], -toward_b[None, :], rate, _toward_centre(b))
     return end_a, end_b, distance
+
+
+def _toward_centre(position: np.ndarray) -> np.ndarray:
+    length = float(np.linalg.norm(position))
+    return (-position / length if length > 0.0 else np.zeros(3))[None, :]
 
 
 def _stack(first: EndArrays, second: EndArrays) -> EndArrays:
@@ -65,6 +71,7 @@ def _stack(first: EndArrays, second: EndArrays) -> EndArrays:
         np.concatenate([first.fixed_km, second.fixed_km]),
         np.concatenate([first.pointing_fixed, second.pointing_fixed]),
         np.concatenate([first.rate_rad_s, second.rate_rad_s]),
+        np.concatenate([first.toward_other_body_fixed, second.toward_other_body_fixed]),
     )
 
 

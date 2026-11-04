@@ -1534,7 +1534,7 @@ export interface NodeRoutingInstance {
 }
 
 /**  */
-export type PreviewScope = "computed" | "inter_body_pending" | "terrestrial_pending" | "disabled";
+export type PreviewScope = "computed" | "terrestrial_pending" | "disabled";
 
 /**  */
 export type ResolutionSubjectKind = "segment" | "link_rule" | "node";

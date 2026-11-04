@@ -152,7 +152,7 @@ expressions; a link's class is **derived** from the endpoint roles, not authored
 
 | Class (derived) | Meaning |
 |-----------------|---------|
-| access | Body-local ground-to-space access: Earth ground to Earth orbit, or lunar ground to lunar orbit. |
+| access | Ground-to-space access: a ground station and a satellite of the same body, such as lunar ground to lunar orbit, or of two bodies, such as an Earth station to a lunar orbiter. |
 | inter-constellation | Space-to-space links within the same body frame. |
 | inter-body relay | Space-to-space relay across body frames, such as Earth relay to lunar relay. |
 
@@ -214,8 +214,9 @@ to run an approximation that looks correct. Current limits include:
 - The product session format is the segment grammar. Old top-level
   `constellation` / `ground_stations` session files are not a supported product
   path.
-- `access` links are body-local. Cross-body connectivity uses an inter-body
-  relay.
+- An `access` link joins one ground station and one satellite. A direct link
+  between ground stations on two bodies is refused as unsupported; relay
+  through an orbiter.
 - The cislunar demos include realistic Earth-Luna range and latency, but
   deep-space protocol conversion (DSN/DTN) is future work.
 - Router configuration capture/replay and per-class template overlays are future

@@ -27,8 +27,7 @@ from collections.abc import Mapping
 from dataclasses import asdict, dataclass
 from datetime import datetime
 
-from nodalarc.frames import CommonVec3, EcefVec3, GeoPosition, Vec3
-from nodalarc.geo import compute_range_km
+from nodalarc.frames import EcefVec3, GeoPosition
 from nodalarc.link_metadata import LinkRuleMetadata
 from nodalarc.models.link_decisions import (
     GroundAllocationEvent,
@@ -46,7 +45,6 @@ from nodalarc.models.link_state import (
     SchedulingState,
 )
 
-from ome.propagation_engine import PropagatedState
 from ome.types import GroundVisibilityDecisionMap, MbbTeardownState
 
 IslSnapshotState = Mapping[tuple[str, str], tuple[bool, bool]]
@@ -66,7 +64,9 @@ class LinkSnapshotSource:
     ground_state: GroundSnapshotState
     associations: Mapping[tuple[str, str], tuple[int, int]]
     pending_teardowns: MbbTeardownState
-    propagated_states: Mapping[str, PropagatedState]
+    # Each link's committed same-instant range (km) from the tick's ISL feasibility and ground
+    # decisions, measured in the common frame when its ends belong to two bodies.
+    ranges_km: Mapping[tuple[str, str], float]
     # Each link's committed one-way light times (pair[0] to pair[1], pair[1] to pair[0]) from
     # the tick's signals.
     latencies_ms: Mapping[tuple[str, str], tuple[float, float]]
@@ -135,41 +135,19 @@ def build_link_state_snapshot(
 ) -> LinkStateSnapshot:
     """Build a LinkStateSnapshot from committed OME StepResult state.
 
-    Active links require same-tick propagated ECEF state so range and
-    one-way latency are OME-authoritative. Missing state for an active link is
-    fatal here; publishing an active link without geometry would force
+    Every up link carries the range and the two one-way delays the tick committed. A missing
+    value for an up link is fatal here; publishing an up link without geometry would force
     downstream components to decide whether to invent or reject physics.
     """
-    ecef: dict[str, EcefVec3] = {}
-    common: dict[str, CommonVec3] = {}
-    central_body: dict[str, str] = {}
-    for node_id, state in source.propagated_states.items():
-        ecef[node_id] = state.position_ecef_km
-        common[node_id] = state.position_common_km
-        central_body[node_id] = state.central_body
-    if fixed_positions:
-        for node_id, (position_ecef, _geo) in fixed_positions.items():
-            ecef[node_id] = position_ecef
 
-    def _link_range(
-        node_a: str,
-        node_b: str,
-        link_type: str,
-    ) -> float:
-        pa: Vec3 | CommonVec3 | None
-        pb: Vec3 | CommonVec3 | None
-        if link_type == "isl" and central_body.get(node_a) != central_body.get(node_b):
-            pa, pb = common.get(node_a), common.get(node_b)
-        else:
-            pa, pb = ecef.get(node_a), ecef.get(node_b)
-        if pa is None or pb is None:
-            missing = ", ".join(node for node, pos in ((node_a, pa), (node_b, pb)) if pos is None)
+    def _link_range(pair: tuple[str, str]) -> float:
+        try:
+            return source.ranges_km[pair]
+        except KeyError as exc:
             raise ValueError(
-                "Cannot build authoritative LinkStateSnapshot for active "
-                f"{link_type} link {node_a}<->{node_b}: missing same-tick ECEF state "
-                f"for {missing}"
-            )
-        return compute_range_km(pa, pb)
+                "Cannot build authoritative LinkStateSnapshot: the tick committed no range for "
+                f"up link {pair[0]}<->{pair[1]}"
+            ) from exc
 
     def _committed_latencies(pair: tuple[str, str]) -> tuple[float, float]:
         try:
@@ -196,7 +174,7 @@ def build_link_state_snapshot(
         ifaces = interface_map[pair]
         carrier = CarrierState.UP if visible and scheduled else CarrierState.DOWN
         up = carrier == CarrierState.UP
-        range_km = _link_range(pair[0], pair[1], "isl") if up else None
+        range_km = _link_range(pair) if up else None
         latencies = _committed_latencies(pair) if up else None
         rule_meta = _link_rule_metadata(pair)
         links.append(
@@ -257,7 +235,7 @@ def build_link_state_snapshot(
         else:
             carrier = CarrierState.DOWN
         up = carrier == CarrierState.UP
-        range_km = _link_range(pair[0], pair[1], "ground") if up else None
+        range_km = _link_range(pair) if up else None
         latencies = _committed_latencies(pair) if up else None
         gs_ti: int | None
         sat_ti: int | None

@@ -77,7 +77,7 @@ The OME does not infer cross-segment connectivity from proximity alone.
 `link_rules` declare the candidate universe. Each link's class is derived from
 the roles at its endpoints - authors never write a class:
 
-- access - body-local ground-to-space access
+- access - ground-to-space access, between a station and a satellite of the same body or of two bodies
 - inter-constellation - space-to-space within the same body frame
 - inter-body relay - space-to-space across body frames, carrying an explicit
   protocol boundary

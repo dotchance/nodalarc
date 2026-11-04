@@ -6,7 +6,6 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
-from nodalarc.frames import EcefVec3, GeoPosition, Vec3
 from nodalarc.link_metadata import LinkRuleMetadata
 from nodalarc.models.events import (
     EphemerisNodeFixed,
@@ -394,17 +393,13 @@ class TestLinkStateSnapshotEpochId:
                 ground_state={},
                 associations={},
                 pending_teardowns={},
-                propagated_states={},
+                ranges_km={pair: 2000.0},
                 latencies_ms={pair: (6.6713, 6.6716)},
             ),
             interface_map={pair: ("isl0", "isl1")},
             sim_time=datetime(2025, 1, 1, tzinfo=UTC),
             seq=1,
             interval_s=5.0,
-            fixed_positions={
-                pair[0]: (EcefVec3(Vec3(7000.0, 0.0, 0.0)), GeoPosition(0.0, 0.0, 0.0)),
-                pair[1]: (EcefVec3(Vec3(9000.0, 0.0, 0.0)), GeoPosition(0.0, 0.0, 0.0)),
-            },
             rule_map={
                 pair: LinkRuleMetadata(
                     link_rule_id="leo-to-meo-relay-candidates",

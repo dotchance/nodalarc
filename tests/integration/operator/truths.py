@@ -36,11 +36,14 @@ from .harness.network import (
 )
 from .harness.workloads import (
     DtnEndpoint,
+    HdtnEndpoint,
     QuicClient,
     expect_a_bundle,
     find_workloads,
+    received_files,
     run_in_shell,
     send_a_bundle,
+    send_a_file,
 )
 
 # The light-time acceptance: each direction within 1 microsecond.
@@ -448,6 +451,68 @@ def dtn_bundles_arrive(operator: Operator, dtn_endpoints: list[DtnEndpoint]) -> 
                     f"{sender.eid} -> {receiver.eid}: the bundle arrived after {took_ms:.0f} ms; "
                     f"the shortest path NodalArc shows needs {least:.0f} ms"
                 )
+    return disagreements
+
+
+def hdtn_files_arrive(operator: Operator, endpoints: list[HdtnEndpoint]) -> list[str]:
+    """A file sent from each HDTN endpoint arrives at each other one.
+
+    Every file is sent first and then awaited, since a path to Mars takes minutes each way.
+    While NodalArc shows a path when the file is sent, the file arrives within the least latency
+    shown plus 300 s, and no sooner than that latency allows; arrival is read from the
+    receiver's clock against the sender's. With no path shown the endpoints hold the file; its
+    arrival is not judged.
+    """
+    disagreements: list[str] = []
+    shown = watch(operator, 4.0)
+    waiting: list[tuple[HdtnEndpoint, HdtnEndpoint, str, str, float | None, float, float]] = []
+    for sender in endpoints:
+        for receiver in endpoints:
+            if sender is receiver:
+                continue
+            name = f"optest-{uuid.uuid4().hex[:12]}.txt"
+            payload = f"file-{uuid.uuid4().hex}"
+            least = shown.least_latency_ms(sender.node_id, receiver.node_id)
+            sent_at, acked, printed = send_a_file(operator, sender, receiver, name, payload)
+            if sent_at is None or acked == 0:
+                disagreements.append(f"{sender.node_id} could not send a file: {printed}")
+                continue
+            allowed_s = least / 1000.0 + 300.0 if least is not None else 60.0
+            waiting.append(
+                (sender, receiver, name, payload, least, sent_at, time.monotonic() + allowed_s)
+            )
+    while waiting:
+        by_receiver = {entry[1].node_id: entry[1] for entry in waiting}
+        found = {node_id: received_files(operator, r) for node_id, r in by_receiver.items()}
+        for entry in list(waiting):
+            sender, receiver, name, payload, least, sent_at, deadline = entry
+            arrived = found[receiver.node_id].get(name)
+            route = f"{sender.member} -> {receiver.member}"
+            if arrived is None:
+                if time.monotonic() < deadline:
+                    continue
+                waiting.remove(entry)
+                if least is None:
+                    print(f"hdtn: {route}: no path shown; the file is held; not judged")
+                else:
+                    disagreements.append(
+                        f"NodalArc shows a path from {sender.node_id} to {receiver.node_id} "
+                        f"needing {least:.0f} ms; the file did not arrive within 300 s after it"
+                    )
+                continue
+            waiting.remove(entry)
+            written_at, content = arrived
+            took_ms = (written_at - sent_at) * 1000.0
+            print(f"hdtn: {route}: arrived after {took_ms:.0f} ms; least latency shown {least} ms")
+            if content != payload:
+                disagreements.append(f"{receiver.node_id} received {content!r}, sent {payload!r}")
+            elif least is not None and took_ms < least * (1 - MOVING_RANGE_ALLOWANCE):
+                disagreements.append(
+                    f"{route}: the file arrived after {took_ms:.0f} ms; the shortest path "
+                    f"NodalArc shows needs {least:.0f} ms"
+                )
+        if waiting:
+            time.sleep(10.0)
     return disagreements
 
 

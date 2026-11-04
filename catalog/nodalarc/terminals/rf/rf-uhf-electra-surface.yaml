@@ -1,0 +1,31 @@
+terminal:
+  id: rf-uhf-electra-surface
+  display_name: Electra-compatible UHF proximity terminal, surface side
+  medium: rf
+  signal:
+    band: uhf
+    frequency_hz: 401585625
+  bandwidth_mbps:
+    transmit: 2.048
+    receive: 2.048
+  tracking_capacity: 1
+  max_range_km: 25000
+  limits:
+    azimuth_deg:
+      min: -180
+      max: 180
+    elevation_deg:
+      min: 0
+      max: 90
+    max_tracking_rate_deg_s: 2.0
+  reference: https://assets.science.nasa.gov/content/dam/science/psd/mars/files/mars-relay-network/MRN%20Handbook_v4_final_URS_cleared.pdf
+  notes: 'Surface UHF relay terminal of a Mars base. Transmit is the return
+    link, channel 0 at 401.585625 MHz; Electra-class radios run 1 to 2048
+    kbps (Mars Relay Network Handbook Release 4 Table 2-4; Perseverance
+    returns at 2 Mbps), and a base radio is taken at 2048 kbps both ways.
+    Today''s rovers receive the forward link at up to 256 kbps (DESCANSO
+    Article 14). One terminal type serves low orbiters and an areostationary
+    relay alike, since the runtime decides a station''s visibility with one
+    physics profile; range covers an areostationary relay''s slant range
+    (about 21000 km). Relay passes use a 10 degree minimum elevation (Mars
+    Relay Network Handbook Release 4, 5.2.1); sites set it on installation.'

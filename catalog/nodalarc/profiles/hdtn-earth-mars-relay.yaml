@@ -1,0 +1,107 @@
+# The Earth-Mars relay chain's DTN network, run by NASA Glenn's HDTN
+# (v3.0.0, packaged unmodified in nodalarc-hdtn). Every member runs this one
+# profile: hdtn-node in the image finds which member it is from its own
+# address, numbers the members in name order (arcadia ipn:1 ... tgo ipn:9;
+# an endpoint's file receiver is ipn:1000+n) and runs LTP over UDP to each
+# neighbour. The member addresses arrive from the platform, each from the
+# payload that carries the member's tag; no address is authored here.
+#
+# The contacts, their light times, margins and rates are this example's
+# experiment parameters, and the user owns them: change them, or run HDTN
+# with a configuration of your own. Each contact is
+# <a>-<b>:<one-way light time ms>:<margin ms>:<a to b bit/s>:<b to a bit/s>.
+# geo-mto: 338300 ms is the Earth-Mars one-way light time at the session
+# start (2027-02-19, the 2027 opposition); the rate is the trunk
+# terminal's (optical-mars-trunk). Surface and proximity contacts carry
+# their terminals' rates; light times cover the longest slant range of each.
+profile:
+  id: hdtn-earth-mars-relay
+  display_name: HDTN Earth-Mars relay network member
+  registry: node01:5000
+  image: nodalarc-hdtn/hdtn@sha256:cd59eff7dce987de2c68da031d9c996fea7dc7e57fef6a48181bc294f3fc68bc
+  env:
+  - name: HDTN_ADDR_arcadia
+    value_from:
+      tag: hdtn_arcadia
+      interface: terr0
+      family: ipv4
+  - name: HDTN_ADDR_gale
+    value_from:
+      tag: hdtn_gale
+      interface: terr0
+      family: ipv4
+  - name: HDTN_ADDR_geo
+    value_from:
+      tag: hdtn_geo
+      interface: bus1
+      family: ipv4
+  - name: HDTN_ADDR_haleakala
+    value_from:
+      tag: hdtn_haleakala
+      interface: terr0
+      family: ipv4
+  - name: HDTN_ADDR_jezero
+    value_from:
+      tag: hdtn_jezero
+      interface: terr0
+      family: ipv4
+  - name: HDTN_ADDR_mro
+    value_from:
+      tag: hdtn_mro
+      interface: bus1
+      family: ipv4
+  - name: HDTN_ADDR_mto
+    value_from:
+      tag: hdtn_mto
+      interface: bus1
+      family: ipv4
+  - name: HDTN_ADDR_octl
+    value_from:
+      tag: hdtn_octl
+      interface: terr0
+      family: ipv4
+  - name: HDTN_ADDR_tgo
+    value_from:
+      tag: hdtn_tgo
+      interface: bus1
+      family: ipv4
+  - name: HDTN_ENDPOINTS
+    value: arcadia gale jezero haleakala octl
+  - name: HDTN_STORAGE_BYTES
+    value: '268435456'
+  - name: HDTN_CONTACTS
+    value: >-
+      octl-geo:130:1000:1200000000:1200000000
+      haleakala-geo:130:1000:1200000000:1200000000
+      geo-mto:338300:30000:15000000:15000000
+      mto-jezero:70:1000:2048000:2048000
+      mto-gale:70:1000:2048000:2048000
+      mto-mro:80:1000:25000000:25000000
+      mto-tgo:80:1000:25000000:25000000
+      mro-jezero:10:1000:256000:2048000
+      mro-gale:10:1000:256000:2048000
+      mro-arcadia:10:1000:256000:2048000
+      tgo-jezero:10:1000:256000:2048000
+      tgo-gale:10:1000:256000:2048000
+      tgo-arcadia:10:1000:256000:2048000
+  command:
+  - hdtn-node
+  root_filesystem: read_only
+  volumes:
+  - name: run
+    kind: ephemeral
+    medium: memory
+    size_mi: 512
+  mounts:
+  - volume: run
+    path: /run/hdtn
+    read_only: false
+  terminal:
+    surface: exec
+    command:
+    - /bin/bash
+    - -l
+  resources:
+    requests: {cpu_m: 50, memory_mi: 128}
+    limits: {cpu_m: 1000, memory_mi: 1024}
+  reference: https://github.com/nasa/HDTN

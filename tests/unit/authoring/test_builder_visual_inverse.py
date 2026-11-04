@@ -336,6 +336,7 @@ _OFFERED_CARDS: dict[str, tuple[tuple[str, ...], tuple[str, ...], tuple[int, ...
         (),
         (),
     ),
+    "earth-mars-hdtn-relay": ((), ("mars_domain", "earth_domain"), ()),
     "earth-meo-gps": (("meo_access", "meo_isl"), (), ()),
 }
 

@@ -1,0 +1,30 @@
+terminal:
+  id: rf-x-mars-relay-crosslink
+  display_name: X-band Mars relay crosslink terminal
+  medium: rf
+  signal:
+    band: x
+    frequency_hz: 8400000000
+  bandwidth_mbps:
+    transmit: 25
+    receive: 25
+  tracking_capacity: 1
+  max_range_km: 25000
+  limits:
+    azimuth_deg:
+      min: -180
+      max: 180
+    elevation_deg:
+      min: -90
+      max: 90
+    max_tracking_rate_deg_s: 1.0
+  reference: https://www.militaryaerospace.com/communications/news/55361810/nasa-outlines-requirements-for-high-performance-mars-telecommunications-network-spacecraft
+  notes: 'Crosslink between a future Mars telecommunications relay and a low
+    relay orbiter, which today''s orbiters do not carry. Rate: the Mars
+    Telecommunications Network requirement for an advanced non-UHF proximity
+    link of at least 25 Mbps per user (NASA requirements as reported by
+    Military and Aerospace Electronics, 2026-03-05); the requirement names no
+    band. X band follows the 2009 Mars Telecommunications Orbiter concept''s
+    UHF and X-band relay links (Wilson et al., LPSC 2004 abstract 1775). Range
+    covers an areostationary relay to a low orbiter in its view (about 24000
+    km at most).'

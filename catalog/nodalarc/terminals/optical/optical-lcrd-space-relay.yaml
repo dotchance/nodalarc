@@ -1,0 +1,23 @@
+terminal:
+  id: optical-lcrd-space-relay
+  display_name: LCRD-class optical relay terminal, GEO side
+  medium: optical
+  signal:
+    wavelength_nm: 1550
+  bandwidth_mbps:
+    transmit: 1200
+    receive: 1200
+  tracking_capacity: 1
+  max_range_km: 45000
+  limits:
+    azimuth_deg:
+      min: -180
+      max: 180
+    elevation_deg:
+      min: -90
+      max: 90
+    max_tracking_rate_deg_s: 0.1
+  reference: https://ntrs.nasa.gov/api/citations/20240011794/downloads/LCRD%20KaConf%20Presentation%202024.pdf
+  notes: 'Space side of NASA''s Laser Communications Relay Demonstration: two
+    optical space terminals with maximum rates of 1.244 Gbps (NASA KaConf
+    2024). The reciprocal ground terminal is optical-lcrd-ground-ogs.'

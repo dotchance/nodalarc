@@ -1,0 +1,20 @@
+orbit:
+  id: mars-lmo-tgo
+  central_body: nodalarc:bodies/mars.yaml
+  epoch: '2027-02-19T00:00:00Z'
+  elements:
+    semi_major_axis_km: 3781.89
+    eccentricity: 0.0069
+  orientation:
+    inclination_deg: 75.9
+    raan_deg: 0.0
+    argument_of_perigee_deg: 0.0
+  phase:
+    mean_anomaly_deg: 90.0
+  propagator: j2_mean_elements
+  reference: https://assets.science.nasa.gov/content/dam/science/psd/mars/files/mars-relay-network/MRN%20Handbook_v4_final_URS_cleared.pdf
+  notes: 'ExoMars Trace Gas Orbiter science orbit, Mars Relay Network
+    Handbook Release 4 Table 3-17 (epoch 2026-01-24): semi-major axis
+    3781.89 km, eccentricity 0.0069, inclination 75.9 degrees, period
+    117.91 min (about 360 by 412 km). The node, periapsis and mean anomaly
+    are not the spacecraft''s: no source for them was found.'

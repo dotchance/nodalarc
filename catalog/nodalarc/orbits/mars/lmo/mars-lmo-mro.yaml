@@ -1,0 +1,25 @@
+orbit:
+  id: mars-lmo-mro
+  central_body: nodalarc:bodies/mars.yaml
+  epoch: '2027-02-19T00:00:00Z'
+  shape:
+    perigee_altitude_km: 252
+    apogee_altitude_km: 317
+  orientation:
+    inclination_deg: 92.6
+    raan_deg: 333.275
+    argument_of_perigee_deg: 270.0
+  phase:
+    mean_anomaly_deg: 0.0
+  propagator: j2_mean_elements
+  reference: https://assets.science.nasa.gov/content/dam/science/psd/mars/files/mars-relay-network/MRN%20Handbook_v4_final_URS_cleared.pdf
+  notes: 'Mars Reconnaissance Orbiter relay orbit, Mars Relay Network Handbook
+    Release 4 Table 3-11 (epoch 2026-01-09): periapsis 252 km over the south
+    pole, apoapsis 317 km over the north pole, inclination 92.6 degrees,
+    ascending node at 3:09 PM local mean solar time. Altitudes here are above
+    the equatorial radius. The node is placed 47.25 degrees east of the true
+    Sun at the epoch (286.025 degrees on Mars''s J2000 equator), so its local
+    time is 15:09 true solar time; mean and true solar time differ by Mars''s
+    equation of time. j2_mean_elements with Mars''s J2 precesses the node
+    0.52 degrees per day, the sun-synchronous rate (0.524). The mean anomaly
+    is not the spacecraft''s.'

@@ -1,0 +1,29 @@
+terminal:
+  id: rf-uhf-electra-orbiter
+  display_name: Electra UHF proximity terminal, orbiter side
+  medium: rf
+  signal:
+    band: uhf
+    frequency_hz: 437100000
+  bandwidth_mbps:
+    transmit: 0.256
+    receive: 2.048
+  tracking_capacity: 1
+  max_range_km: 2000
+  limits:
+    azimuth_deg:
+      min: -180
+      max: 180
+    elevation_deg:
+      min: -75
+      max: 90
+    max_tracking_rate_deg_s: 2.0
+  reference: https://assets.science.nasa.gov/content/dam/science/psd/mars/files/mars-relay-network/MRN%20Handbook_v4_final_URS_cleared.pdf
+  notes: 'Electra UHF relay transceiver as flown on MRO and TGO (Mars Relay
+    Network Handbook Release 4 Table 2-4): forward link (orbiter transmits)
+    435-450 MHz, channel 0 at 437.1 MHz; return link 390-405 MHz; 1 to 2048
+    kbps. Transmit is the forward rate surface users run, up to 256 kbps
+    (DESCANSO Article 14, MSL forward 2-256 kbps); receive is the 2048 kbps
+    return maximum. Range: no specification was found; 2000 km exceeds the
+    slant range at a 10 degree mask from MRO (317 km apoapsis, about 1100 km)
+    and TGO (412 km, about 1220 km).'

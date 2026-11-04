@@ -1,0 +1,6 @@
+space_node_set:
+  id: earth-deep-space-relay-1
+  nodes:
+  - id: geo
+    node: nodalarc:nodes/space/lcrd-deep-space-relay.yaml
+    orbit: nodalarc:orbits/earth/geo/earth-geo-deep-space-relay-112w.yaml

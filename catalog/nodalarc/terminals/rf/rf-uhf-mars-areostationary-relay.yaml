@@ -1,0 +1,28 @@
+terminal:
+  id: rf-uhf-mars-areostationary-relay
+  display_name: UHF proximity terminal, areostationary relay side
+  medium: rf
+  signal:
+    band: uhf
+    frequency_hz: 437100000
+  bandwidth_mbps:
+    transmit: 2.048
+    receive: 2.048
+  tracking_capacity: 1
+  max_range_km: 25000
+  limits:
+    azimuth_deg:
+      min: -180
+      max: 180
+    elevation_deg:
+      min: -90
+      max: 90
+    max_tracking_rate_deg_s: 0.5
+  reference: https://www.militaryaerospace.com/communications/news/55361810/nasa-outlines-requirements-for-high-performance-mars-telecommunications-network-spacecraft
+  notes: 'UHF proximity terminal of a future Mars telecommunications relay:
+    the Mars Telecommunications Network requirement of a UHF proximity link
+    of at least 2 Mbps per user (NASA requirements as reported by Military and
+    Aerospace Electronics, 2026-03-05), at the Electra channel 0 forward
+    frequency and the Electra maximum of 2048 kbps. Range covers an
+    areostationary relay''s slant range to a site at low elevation (about
+    21000 km).'

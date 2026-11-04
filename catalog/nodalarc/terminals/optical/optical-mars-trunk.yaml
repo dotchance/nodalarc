@@ -1,0 +1,33 @@
+terminal:
+  id: optical-mars-trunk
+  display_name: Mars-to-Earth optical trunk terminal
+  medium: optical
+  signal:
+    wavelength_nm: 1550
+  bandwidth_mbps:
+    transmit: 15
+    receive: 15
+  tracking_capacity: 1
+  max_range_km: 405000000
+  limits:
+    azimuth_deg:
+      min: -180
+      max: 180
+    elevation_deg:
+      min: -90
+      max: 90
+    max_tracking_rate_deg_s: 0.25
+  reference: https://www.militaryaerospace.com/communications/news/55361810/nasa-outlines-requirements-for-high-performance-mars-telecommunications-network-spacecraft
+  notes: 'Trunk between a Mars relay and an Earth relay, both ends one terminal
+    type: the runtime pairs a crosslink only between terminals of one type, so
+    the trunk carries one rate both ways. The rate follows the Mars
+    Telecommunications Network requirement for the return link to Earth, at
+    least 1 Mbps at about 400 million km, scaled to the 1.014e8 km of the
+    2027-02-19 opposition by the inverse square of distance (15.6 Mbps;
+    recorded rounded down). The requirement''s forward link, 0.1 Mbps at that
+    distance (1.56 Mbps scaled), is ten times lower, so the forward rate here
+    is overstated. The rate holds for that geometry only: the terminal rate
+    does not follow range. 1550 nm is the downlink wavelength of NASA''s Deep
+    Space Optical Communications demonstration, which reached 25 Mbps at 226
+    million km. Range covers the largest Earth-Mars separation in the shipped
+    data (400.2 million km).'

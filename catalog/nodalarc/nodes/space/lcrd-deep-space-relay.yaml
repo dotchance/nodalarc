@@ -1,0 +1,36 @@
+node:
+  id: lcrd-deep-space-relay
+  display_name: Earth GEO deep-space relay carrying an HDTN relay host
+  forwarding: routed
+  profile: nodalarc:profiles/frr-router.yaml
+  ethernet:
+  - id: bus1
+  terminals:
+  - id: access_optical
+    role: access
+    terminal: nodalarc:terminals/optical/optical-lcrd-space-relay.yaml
+    count: 2
+    boresight:
+      mode: nadir
+  - id: trunk
+    role: crosslink
+    terminal: nodalarc:terminals/optical/optical-mars-trunk.yaml
+    count: 1
+  payloads:
+  - id: dtn
+    payload: nodalarc:payloads/hdtn-host.yaml
+    profile: nodalarc:profiles/hdtn-earth-mars-relay.yaml
+    count: 1
+    attach: bus1
+    tags:
+    - hdtn_geo
+  originated_prefixes:
+    ipv4:
+    - bus1
+    ipv6:
+    - bus1
+  reference: https://ntrs.nasa.gov/api/citations/20240011794/downloads/LCRD%20KaConf%20Presentation%202024.pdf
+  notes: An Earth-orbit relay for deep-space traffic, a concept with no flying
+    counterpart. It is an LCRD-class optical relay (two 1.244 Gbps ground
+    terminals) with an added optical trunk toward Mars and an HDTN relay host
+    on its payload bus.

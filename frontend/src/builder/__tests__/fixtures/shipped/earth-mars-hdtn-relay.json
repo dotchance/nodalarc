@@ -1,0 +1,1905 @@
+{
+  "compile": {
+    "canonical_session_json": {
+      "addressing": {
+        "loopbacks": [
+          {
+            "allocation": "by_node_order",
+            "applies_to": {
+              "any": [
+                {
+                  "segment": "mars_relays"
+                },
+                {
+                  "segment": "earth_relay"
+                },
+                {
+                  "segment": "mars_bases"
+                },
+                {
+                  "segment": "earth_ogs"
+                }
+              ]
+            },
+            "id": "node_loopbacks",
+            "ipv4_pool": "10.255.0.0/16",
+            "prefix_length": 32
+          }
+        ]
+      },
+      "dispatch": {
+        "latency_authority": "ome",
+        "max_latency_age_ticks": 10
+      },
+      "link_rules": [
+        {
+          "enabled": true,
+          "endpoints": [
+            {
+              "min_elevation_deg": 10.0,
+              "select": {
+                "segment": "mars_bases"
+              },
+              "terminal": {
+                "all": [
+                  {
+                    "role": "access"
+                  },
+                  {
+                    "medium": "rf"
+                  },
+                  {
+                    "mount": "prox_uhf"
+                  }
+                ]
+              }
+            },
+            {
+              "select": {
+                "segment": "mars_relays"
+              },
+              "terminal": {
+                "all": [
+                  {
+                    "role": "access"
+                  },
+                  {
+                    "medium": "rf"
+                  },
+                  {
+                    "mount": "access_uhf"
+                  }
+                ]
+              }
+            }
+          ],
+          "id": "mars_uhf",
+          "topology": {
+            "mode": "visible_candidates"
+          }
+        },
+        {
+          "enabled": true,
+          "endpoints": [
+            {
+              "select": {
+                "all": [
+                  {
+                    "segment": "mars_relays"
+                  },
+                  {
+                    "tag": "lmo"
+                  }
+                ]
+              },
+              "terminal": {
+                "all": [
+                  {
+                    "role": "crosslink"
+                  },
+                  {
+                    "medium": "rf"
+                  },
+                  {
+                    "mount": "relay_x"
+                  }
+                ]
+              }
+            },
+            {
+              "select": {
+                "all": [
+                  {
+                    "segment": "mars_relays"
+                  },
+                  {
+                    "tag": "areo"
+                  }
+                ]
+              },
+              "terminal": {
+                "all": [
+                  {
+                    "role": "crosslink"
+                  },
+                  {
+                    "medium": "rf"
+                  },
+                  {
+                    "mount": "relay_x"
+                  }
+                ]
+              }
+            }
+          ],
+          "id": "mars_relay_crosslink",
+          "topology": {
+            "mode": "visible_candidates"
+          }
+        },
+        {
+          "enabled": true,
+          "endpoints": [
+            {
+              "select": {
+                "all": [
+                  {
+                    "segment": "mars_relays"
+                  },
+                  {
+                    "tag": "areo"
+                  }
+                ]
+              },
+              "terminal": {
+                "all": [
+                  {
+                    "role": "crosslink"
+                  },
+                  {
+                    "medium": "optical"
+                  },
+                  {
+                    "mount": "trunk"
+                  }
+                ]
+              }
+            },
+            {
+              "select": {
+                "segment": "earth_relay"
+              },
+              "terminal": {
+                "all": [
+                  {
+                    "role": "crosslink"
+                  },
+                  {
+                    "medium": "optical"
+                  },
+                  {
+                    "mount": "trunk"
+                  }
+                ]
+              }
+            }
+          ],
+          "id": "earth_mars_trunk",
+          "topology": {
+            "mode": "nearest_n",
+            "n": 1
+          }
+        },
+        {
+          "enabled": true,
+          "endpoints": [
+            {
+              "min_elevation_deg": 20.0,
+              "select": {
+                "segment": "earth_ogs"
+              },
+              "terminal": {
+                "all": [
+                  {
+                    "role": "access"
+                  },
+                  {
+                    "medium": "optical"
+                  },
+                  {
+                    "mount": "access_optical"
+                  }
+                ]
+              }
+            },
+            {
+              "select": {
+                "segment": "earth_relay"
+              },
+              "terminal": {
+                "all": [
+                  {
+                    "role": "access"
+                  },
+                  {
+                    "medium": "optical"
+                  },
+                  {
+                    "mount": "access_optical"
+                  }
+                ]
+              }
+            }
+          ],
+          "id": "earth_optical",
+          "topology": {
+            "mode": "visible_candidates"
+          }
+        }
+      ],
+      "routing": {
+        "boundaries": [
+          {
+            "adapter": "static_ip",
+            "export": [
+              {
+                "export_node_loopbacks": true,
+                "from": "mars_domain",
+                "install_via": "peer_loopback",
+                "prefixes": {
+                  "aggregate_of": "originated"
+                },
+                "to": "earth_domain"
+              },
+              {
+                "export_node_loopbacks": true,
+                "from": "earth_domain",
+                "install_via": "peer_loopback",
+                "prefixes": {
+                  "aggregate_of": "originated"
+                },
+                "to": "mars_domain"
+              }
+            ],
+            "over": "earth_mars_trunk"
+          }
+        ],
+        "domains": [
+          {
+            "area_assignment": {
+              "strategy": "flat"
+            },
+            "id": "mars_domain",
+            "protocol": "isis",
+            "selectors": [
+              {
+                "any": [
+                  {
+                    "segment": "mars_relays"
+                  },
+                  {
+                    "segment": "mars_bases"
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "area_assignment": {
+              "strategy": "flat"
+            },
+            "id": "earth_domain",
+            "protocol": "isis",
+            "selectors": [
+              {
+                "any": [
+                  {
+                    "segment": "earth_relay"
+                  },
+                  {
+                    "segment": "earth_ogs"
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      "segments": [
+        {
+          "id": "mars_relays",
+          "source": "nodalarc:space-node-sets/mars/mars-dtn-relays.yaml"
+        },
+        {
+          "id": "earth_relay",
+          "source": "nodalarc:space-node-sets/earth/geo/earth-deep-space-relay-1.yaml"
+        },
+        {
+          "apply": {
+            "scheduling": {
+              "bbm_acquire_timeout_ticks": 1,
+              "cross_tenant_displacement": "off",
+              "handover_concurrency": "one_at_a_time",
+              "handover_mode": "mbb",
+              "handover_policy": {
+                "hysteresis": {
+                  "discount_factor": 1.1,
+                  "mask_fade_range_deg": 3.0
+                }
+              },
+              "mbb_overlap_ticks": 30,
+              "mbb_preemption": "off",
+              "mbb_reserve": 1,
+              "ranking_order": [
+                "service_priority",
+                "per_gs_rank",
+                "satellite_ground_terminal_capacity",
+                "lex_pair"
+              ],
+              "selection_policy": {
+                "highest_elevation": {}
+              },
+              "successor_abort_policy": "hard_release"
+            }
+          },
+          "id": "mars_bases",
+          "placement": {
+            "from_site_set": "nodalarc:site-sets/mars/mars-dtn-bases.yaml"
+          }
+        },
+        {
+          "apply": {
+            "scheduling": {
+              "bbm_acquire_timeout_ticks": 1,
+              "cross_tenant_displacement": "off",
+              "handover_concurrency": "one_at_a_time",
+              "handover_mode": "bbm",
+              "handover_policy": {
+                "hard_release": {}
+              },
+              "mbb_overlap_ticks": 0,
+              "mbb_preemption": "off",
+              "mbb_reserve": 0,
+              "ranking_order": [
+                "service_priority",
+                "per_gs_rank",
+                "satellite_ground_terminal_capacity",
+                "lex_pair"
+              ],
+              "selection_policy": {
+                "highest_elevation": {}
+              },
+              "successor_abort_policy": "hard_release"
+            }
+          },
+          "id": "earth_ogs",
+          "placement": {
+            "from_site_set": "nodalarc:site-sets/earth/earth-mars-dtn-ogs-sites.yaml"
+          }
+        }
+      ],
+      "session": {
+        "description": "Three Mars surface bases reach Earth through relays: UHF to two low relay orbiters (MRO and TGO class) and to an areostationary relay over 105 E, X-band crosslinks between them, an optical trunk across the Earth-Mars light time (338 s one way at the 2027 opposition) to an Earth GEO relay, and LCRD-class optical links to two ground stations. Every relay and endpoint host runs NASA HDTN with LTP over UDP; Mars and Earth each run an IS-IS instance, joined by a static boundary over the trunk.",
+        "display_name": "Earth to Mars DTN relay chain (HDTN)",
+        "name": "earth-mars-hdtn-relay"
+      },
+      "simulation": {
+        "acknowledge_geometry_only": false,
+        "candidate_limits": {
+          "max_pairs_per_rule": 2000,
+          "max_pairs_per_tick": 10000
+        },
+        "ground_link_model": "terminal_physics"
+      },
+      "time": {
+        "compression": 1.0,
+        "start_time": "2027-02-19T00:00:00Z",
+        "step_seconds": 1.0
+      }
+    },
+    "resolved_preview": {
+      "link_rules": [
+        {
+          "enabled": true,
+          "endpoints": [
+            {
+              "min_elevation_deg": 10.0,
+              "node_ids": [
+                "mars-jezero-dtn-base-gw1",
+                "mars-gale-dtn-base-gw1",
+                "mars-arcadia-dtn-base-gw1"
+              ],
+              "segment_id": "mars_bases",
+              "terminal_medium": "rf",
+              "terminal_role": "access"
+            },
+            {
+              "min_elevation_deg": null,
+              "node_ids": [
+                "mars-relays-mto",
+                "mars-relays-mro",
+                "mars-relays-tgo"
+              ],
+              "segment_id": "mars_relays",
+              "terminal_medium": "rf",
+              "terminal_role": "access"
+            }
+          ],
+          "explicit_pairs": [],
+          "kind": "access",
+          "max_range_km": null,
+          "rule_id": "mars_uhf",
+          "topology_mode": "visible_candidates",
+          "topology_n": null
+        },
+        {
+          "enabled": true,
+          "endpoints": [
+            {
+              "min_elevation_deg": null,
+              "node_ids": [
+                "mars-relays-mro",
+                "mars-relays-tgo"
+              ],
+              "segment_id": "mars_relays",
+              "terminal_medium": "rf",
+              "terminal_role": "crosslink"
+            },
+            {
+              "min_elevation_deg": null,
+              "node_ids": [
+                "mars-relays-mto"
+              ],
+              "segment_id": "mars_relays",
+              "terminal_medium": "rf",
+              "terminal_role": "crosslink"
+            }
+          ],
+          "explicit_pairs": [],
+          "kind": "isl",
+          "max_range_km": null,
+          "rule_id": "mars_relay_crosslink",
+          "topology_mode": "visible_candidates",
+          "topology_n": null
+        },
+        {
+          "enabled": true,
+          "endpoints": [
+            {
+              "min_elevation_deg": null,
+              "node_ids": [
+                "mars-relays-mto"
+              ],
+              "segment_id": "mars_relays",
+              "terminal_medium": "optical",
+              "terminal_role": "crosslink"
+            },
+            {
+              "min_elevation_deg": null,
+              "node_ids": [
+                "earth-relay-geo"
+              ],
+              "segment_id": "earth_relay",
+              "terminal_medium": "optical",
+              "terminal_role": "crosslink"
+            }
+          ],
+          "explicit_pairs": [],
+          "kind": "inter_body",
+          "max_range_km": null,
+          "rule_id": "earth_mars_trunk",
+          "topology_mode": "nearest_n",
+          "topology_n": 1
+        },
+        {
+          "enabled": true,
+          "endpoints": [
+            {
+              "min_elevation_deg": 20.0,
+              "node_ids": [
+                "earth-us-ca-table-mountain-dtn-ogs-gw1",
+                "earth-us-hi-haleakala-dtn-ogs-gw1"
+              ],
+              "segment_id": "earth_ogs",
+              "terminal_medium": "optical",
+              "terminal_role": "access"
+            },
+            {
+              "min_elevation_deg": null,
+              "node_ids": [
+                "earth-relay-geo"
+              ],
+              "segment_id": "earth_relay",
+              "terminal_medium": "optical",
+              "terminal_role": "access"
+            }
+          ],
+          "explicit_pairs": [],
+          "kind": "access",
+          "max_range_km": null,
+          "rule_id": "earth_optical",
+          "topology_mode": "visible_candidates",
+          "topology_n": null
+        }
+      ],
+      "nodes": [
+        {
+          "epoch_position": {
+            "alt_km": 17031.500002867193,
+            "lat_deg": 0.021752490177031337,
+            "lon_deg": 104.99998522189382,
+            "vel_x_km_s": 4.3592466814068587e-07,
+            "vel_y_km_s": 9.357427166456489e-09,
+            "vel_z_km_s": 0.0002738936317541438
+          },
+          "forwarding": "routed",
+          "interfaces": {
+            "ethernet": {
+              "bus1": {
+                "ipv4": "172.16.7.1/24",
+                "ipv6": "fd00:da7a:0:7::1/64"
+              }
+            },
+            "lo0": {
+              "ipv4": "10.255.0.1/32",
+              "ipv6": null
+            }
+          },
+          "kind": "satellite",
+          "local_node_id": "mto",
+          "namespace": "mars_relays",
+          "node_id": "mars-relays-mto",
+          "originated_prefixes": {
+            "ipv4": [
+              "172.16.7.0/24"
+            ],
+            "ipv6": [
+              "fd00:da7a:0:7::/64"
+            ]
+          },
+          "plane": null,
+          "profile": "nodalarc:profiles/frr-router.yaml",
+          "role": "router",
+          "routing_instances": [
+            {
+              "area_border": false,
+              "areas": [
+                "49.0001"
+              ],
+              "as_boundary": true,
+              "domain_id": "mars_domain",
+              "interfaces": [
+                {
+                  "area_id": null,
+                  "name": "bus1"
+                },
+                {
+                  "area_id": null,
+                  "name": "gnd0"
+                },
+                {
+                  "area_id": null,
+                  "name": "gnd1"
+                },
+                {
+                  "area_id": null,
+                  "name": "gnd2"
+                },
+                {
+                  "area_id": null,
+                  "name": "isl0"
+                },
+                {
+                  "area_id": null,
+                  "name": "isl1"
+                }
+              ],
+              "protocol": "isis"
+            }
+          ],
+          "segment_id": "mars_relays",
+          "slot": null,
+          "surface_position": null,
+          "tags": [
+            "areo"
+          ],
+          "tenant_id": "default",
+          "terminal_inventory": [
+            {
+              "boresight": {
+                "mode": "nadir",
+                "target_body": "mars"
+              },
+              "count": 3,
+              "endpoint_role": "access",
+              "field_of_regard_deg": 180.0,
+              "installed_min_elevation_deg": null,
+              "link_role": null,
+              "max_range_km": 25000.0,
+              "medium": "rf",
+              "min_elevation_deg": -90.0,
+              "owner_node_id": "mars-relays-mto",
+              "receive_mbps": 2.048,
+              "source_ref": "nodalarc:terminals/rf/rf-uhf-mars-areostationary-relay.yaml",
+              "source_terminal_id": "rf-uhf-mars-areostationary-relay",
+              "terminal_id": "access_uhf",
+              "tracking_capacity": 1,
+              "tracking_rate_deg_s": 0.5,
+              "transmit_mbps": 2.048
+            },
+            {
+              "boresight": null,
+              "count": 2,
+              "endpoint_role": "crosslink",
+              "field_of_regard_deg": 360.0,
+              "installed_min_elevation_deg": null,
+              "link_role": null,
+              "max_range_km": 25000.0,
+              "medium": "rf",
+              "min_elevation_deg": -90.0,
+              "owner_node_id": "mars-relays-mto",
+              "receive_mbps": 25.0,
+              "source_ref": "nodalarc:terminals/rf/rf-x-mars-relay-crosslink.yaml",
+              "source_terminal_id": "rf-x-mars-relay-crosslink",
+              "terminal_id": "relay_x",
+              "tracking_capacity": 1,
+              "tracking_rate_deg_s": 1.0,
+              "transmit_mbps": 25.0
+            },
+            {
+              "boresight": null,
+              "count": 1,
+              "endpoint_role": "crosslink",
+              "field_of_regard_deg": 360.0,
+              "installed_min_elevation_deg": null,
+              "link_role": null,
+              "max_range_km": 405000000.0,
+              "medium": "optical",
+              "min_elevation_deg": -90.0,
+              "owner_node_id": "mars-relays-mto",
+              "receive_mbps": 15.0,
+              "source_ref": "nodalarc:terminals/optical/optical-mars-trunk.yaml",
+              "source_terminal_id": "optical-mars-trunk",
+              "terminal_id": "trunk",
+              "tracking_capacity": 1,
+              "tracking_rate_deg_s": 0.25,
+              "transmit_mbps": 15.0
+            }
+          ]
+        },
+        {
+          "epoch_position": {
+            "alt_km": 17031.500002867193,
+            "lat_deg": 0.021752490177031337,
+            "lon_deg": 104.99998522189382,
+            "vel_x_km_s": 4.3592466814068587e-07,
+            "vel_y_km_s": 9.357427166456489e-09,
+            "vel_z_km_s": 0.0002738936317541438
+          },
+          "forwarding": "host",
+          "interfaces": {
+            "ethernet": {
+              "bus1": {
+                "ipv4": "172.16.7.2/24",
+                "ipv6": "fd00:da7a:0:7::2/64"
+              }
+            },
+            "lo0": {
+              "ipv4": "10.255.0.2/32",
+              "ipv6": null
+            }
+          },
+          "kind": "satellite",
+          "local_node_id": "mto-dtn",
+          "namespace": "mars-relays-mto",
+          "node_id": "mars-relays-mto-dtn",
+          "originated_prefixes": null,
+          "plane": null,
+          "profile": "nodalarc:profiles/hdtn-earth-mars-relay.yaml",
+          "role": "host",
+          "routing_instances": [],
+          "segment_id": "mars_relays",
+          "slot": null,
+          "surface_position": null,
+          "tags": [
+            "areo",
+            "hdtn_mto"
+          ],
+          "tenant_id": "default",
+          "terminal_inventory": []
+        },
+        {
+          "epoch_position": {
+            "alt_km": 271.94990302374754,
+            "lat_deg": -87.45078937954432,
+            "lon_deg": -28.42302169035108,
+            "vel_x_km_s": -1.649171303825671,
+            "vel_y_km_s": -3.024091344627724,
+            "vel_z_km_s": -0.0004940438442649657
+          },
+          "forwarding": "routed",
+          "interfaces": {
+            "ethernet": {
+              "bus1": {
+                "ipv4": "172.16.6.1/24",
+                "ipv6": "fd00:da7a:0:6::1/64"
+              }
+            },
+            "lo0": {
+              "ipv4": "10.255.0.3/32",
+              "ipv6": null
+            }
+          },
+          "kind": "satellite",
+          "local_node_id": "mro",
+          "namespace": "mars_relays",
+          "node_id": "mars-relays-mro",
+          "originated_prefixes": {
+            "ipv4": [
+              "172.16.6.0/24"
+            ],
+            "ipv6": [
+              "fd00:da7a:0:6::/64"
+            ]
+          },
+          "plane": null,
+          "profile": "nodalarc:profiles/frr-router.yaml",
+          "role": "router",
+          "routing_instances": [
+            {
+              "area_border": false,
+              "areas": [
+                "49.0001"
+              ],
+              "as_boundary": false,
+              "domain_id": "mars_domain",
+              "interfaces": [
+                {
+                  "area_id": null,
+                  "name": "bus1"
+                },
+                {
+                  "area_id": null,
+                  "name": "gnd0"
+                },
+                {
+                  "area_id": null,
+                  "name": "isl0"
+                }
+              ],
+              "protocol": "isis"
+            }
+          ],
+          "segment_id": "mars_relays",
+          "slot": null,
+          "surface_position": null,
+          "tags": [
+            "lmo"
+          ],
+          "tenant_id": "default",
+          "terminal_inventory": [
+            {
+              "boresight": {
+                "mode": "nadir",
+                "target_body": "mars"
+              },
+              "count": 1,
+              "endpoint_role": "access",
+              "field_of_regard_deg": 180.0,
+              "installed_min_elevation_deg": null,
+              "link_role": null,
+              "max_range_km": 2000.0,
+              "medium": "rf",
+              "min_elevation_deg": -75.0,
+              "owner_node_id": "mars-relays-mro",
+              "receive_mbps": 2.048,
+              "source_ref": "nodalarc:terminals/rf/rf-uhf-electra-orbiter.yaml",
+              "source_terminal_id": "rf-uhf-electra-orbiter",
+              "terminal_id": "access_uhf",
+              "tracking_capacity": 1,
+              "tracking_rate_deg_s": 2.0,
+              "transmit_mbps": 0.256
+            },
+            {
+              "boresight": null,
+              "count": 1,
+              "endpoint_role": "crosslink",
+              "field_of_regard_deg": 360.0,
+              "installed_min_elevation_deg": null,
+              "link_role": null,
+              "max_range_km": 25000.0,
+              "medium": "rf",
+              "min_elevation_deg": -90.0,
+              "owner_node_id": "mars-relays-mro",
+              "receive_mbps": 25.0,
+              "source_ref": "nodalarc:terminals/rf/rf-x-mars-relay-crosslink.yaml",
+              "source_terminal_id": "rf-x-mars-relay-crosslink",
+              "terminal_id": "relay_x",
+              "tracking_capacity": 1,
+              "tracking_rate_deg_s": 1.0,
+              "transmit_mbps": 25.0
+            }
+          ]
+        },
+        {
+          "epoch_position": {
+            "alt_km": 271.94990302374754,
+            "lat_deg": -87.45078937954432,
+            "lon_deg": -28.42302169035108,
+            "vel_x_km_s": -1.649171303825671,
+            "vel_y_km_s": -3.024091344627724,
+            "vel_z_km_s": -0.0004940438442649657
+          },
+          "forwarding": "host",
+          "interfaces": {
+            "ethernet": {
+              "bus1": {
+                "ipv4": "172.16.6.2/24",
+                "ipv6": "fd00:da7a:0:6::2/64"
+              }
+            },
+            "lo0": {
+              "ipv4": "10.255.0.4/32",
+              "ipv6": null
+            }
+          },
+          "kind": "satellite",
+          "local_node_id": "mro-dtn",
+          "namespace": "mars-relays-mro",
+          "node_id": "mars-relays-mro-dtn",
+          "originated_prefixes": null,
+          "plane": null,
+          "profile": "nodalarc:profiles/hdtn-earth-mars-relay.yaml",
+          "role": "host",
+          "routing_instances": [],
+          "segment_id": "mars_relays",
+          "slot": null,
+          "surface_position": null,
+          "tags": [
+            "hdtn_mro",
+            "lmo"
+          ],
+          "tenant_id": "default",
+          "terminal_inventory": []
+        },
+        {
+          "epoch_position": {
+            "alt_km": 404.6859974674999,
+            "lat_deg": 76.00513089197634,
+            "lon_deg": 1.2874255454231605,
+            "vel_x_km_s": 0.1061015205112512,
+            "vel_y_km_s": 3.291323141169557,
+            "vel_z_km_s": -0.021423630167533035
+          },
+          "forwarding": "routed",
+          "interfaces": {
+            "ethernet": {
+              "bus1": {
+                "ipv4": "172.16.8.1/24",
+                "ipv6": "fd00:da7a:0:8::1/64"
+              }
+            },
+            "lo0": {
+              "ipv4": "10.255.0.5/32",
+              "ipv6": null
+            }
+          },
+          "kind": "satellite",
+          "local_node_id": "tgo",
+          "namespace": "mars_relays",
+          "node_id": "mars-relays-tgo",
+          "originated_prefixes": {
+            "ipv4": [
+              "172.16.8.0/24"
+            ],
+            "ipv6": [
+              "fd00:da7a:0:8::/64"
+            ]
+          },
+          "plane": null,
+          "profile": "nodalarc:profiles/frr-router.yaml",
+          "role": "router",
+          "routing_instances": [
+            {
+              "area_border": false,
+              "areas": [
+                "49.0001"
+              ],
+              "as_boundary": false,
+              "domain_id": "mars_domain",
+              "interfaces": [
+                {
+                  "area_id": null,
+                  "name": "bus1"
+                },
+                {
+                  "area_id": null,
+                  "name": "gnd0"
+                },
+                {
+                  "area_id": null,
+                  "name": "isl0"
+                }
+              ],
+              "protocol": "isis"
+            }
+          ],
+          "segment_id": "mars_relays",
+          "slot": null,
+          "surface_position": null,
+          "tags": [
+            "lmo"
+          ],
+          "tenant_id": "default",
+          "terminal_inventory": [
+            {
+              "boresight": {
+                "mode": "nadir",
+                "target_body": "mars"
+              },
+              "count": 1,
+              "endpoint_role": "access",
+              "field_of_regard_deg": 180.0,
+              "installed_min_elevation_deg": null,
+              "link_role": null,
+              "max_range_km": 2000.0,
+              "medium": "rf",
+              "min_elevation_deg": -75.0,
+              "owner_node_id": "mars-relays-tgo",
+              "receive_mbps": 2.048,
+              "source_ref": "nodalarc:terminals/rf/rf-uhf-electra-orbiter.yaml",
+              "source_terminal_id": "rf-uhf-electra-orbiter",
+              "terminal_id": "access_uhf",
+              "tracking_capacity": 1,
+              "tracking_rate_deg_s": 2.0,
+              "transmit_mbps": 0.256
+            },
+            {
+              "boresight": null,
+              "count": 1,
+              "endpoint_role": "crosslink",
+              "field_of_regard_deg": 360.0,
+              "installed_min_elevation_deg": null,
+              "link_role": null,
+              "max_range_km": 25000.0,
+              "medium": "rf",
+              "min_elevation_deg": -90.0,
+              "owner_node_id": "mars-relays-tgo",
+              "receive_mbps": 25.0,
+              "source_ref": "nodalarc:terminals/rf/rf-x-mars-relay-crosslink.yaml",
+              "source_terminal_id": "rf-x-mars-relay-crosslink",
+              "terminal_id": "relay_x",
+              "tracking_capacity": 1,
+              "tracking_rate_deg_s": 1.0,
+              "transmit_mbps": 25.0
+            }
+          ]
+        },
+        {
+          "epoch_position": {
+            "alt_km": 404.6859974674999,
+            "lat_deg": 76.00513089197634,
+            "lon_deg": 1.2874255454231605,
+            "vel_x_km_s": 0.1061015205112512,
+            "vel_y_km_s": 3.291323141169557,
+            "vel_z_km_s": -0.021423630167533035
+          },
+          "forwarding": "host",
+          "interfaces": {
+            "ethernet": {
+              "bus1": {
+                "ipv4": "172.16.8.2/24",
+                "ipv6": "fd00:da7a:0:8::2/64"
+              }
+            },
+            "lo0": {
+              "ipv4": "10.255.0.6/32",
+              "ipv6": null
+            }
+          },
+          "kind": "satellite",
+          "local_node_id": "tgo-dtn",
+          "namespace": "mars-relays-tgo",
+          "node_id": "mars-relays-tgo-dtn",
+          "originated_prefixes": null,
+          "plane": null,
+          "profile": "nodalarc:profiles/hdtn-earth-mars-relay.yaml",
+          "role": "host",
+          "routing_instances": [],
+          "segment_id": "mars_relays",
+          "slot": null,
+          "surface_position": null,
+          "tags": [
+            "hdtn_tgo",
+            "lmo"
+          ],
+          "tenant_id": "default",
+          "terminal_inventory": []
+        },
+        {
+          "epoch_position": {
+            "alt_km": 35786.03309894039,
+            "lat_deg": 0.12340691899101863,
+            "lon_deg": -111.7998774751042,
+            "vel_x_km_s": -4.730525042795364e-07,
+            "vel_y_km_s": -1.0947907056468864e-05,
+            "vel_z_km_s": -0.004805856084711686
+          },
+          "forwarding": "routed",
+          "interfaces": {
+            "ethernet": {
+              "bus1": {
+                "ipv4": "172.16.0.1/24",
+                "ipv6": "fd00:da7a::1/64"
+              }
+            },
+            "lo0": {
+              "ipv4": "10.255.0.7/32",
+              "ipv6": null
+            }
+          },
+          "kind": "satellite",
+          "local_node_id": "geo",
+          "namespace": "earth_relay",
+          "node_id": "earth-relay-geo",
+          "originated_prefixes": {
+            "ipv4": [
+              "172.16.0.0/24"
+            ],
+            "ipv6": [
+              "fd00:da7a::/64"
+            ]
+          },
+          "plane": null,
+          "profile": "nodalarc:profiles/frr-router.yaml",
+          "role": "router",
+          "routing_instances": [
+            {
+              "area_border": false,
+              "areas": [
+                "49.0001"
+              ],
+              "as_boundary": true,
+              "domain_id": "earth_domain",
+              "interfaces": [
+                {
+                  "area_id": null,
+                  "name": "bus1"
+                },
+                {
+                  "area_id": null,
+                  "name": "gnd0"
+                },
+                {
+                  "area_id": null,
+                  "name": "gnd1"
+                }
+              ],
+              "protocol": "isis"
+            }
+          ],
+          "segment_id": "earth_relay",
+          "slot": null,
+          "surface_position": null,
+          "tags": [],
+          "tenant_id": "default",
+          "terminal_inventory": [
+            {
+              "boresight": {
+                "mode": "nadir",
+                "target_body": "earth"
+              },
+              "count": 2,
+              "endpoint_role": "access",
+              "field_of_regard_deg": 180.0,
+              "installed_min_elevation_deg": null,
+              "link_role": null,
+              "max_range_km": 45000.0,
+              "medium": "optical",
+              "min_elevation_deg": -90.0,
+              "owner_node_id": "earth-relay-geo",
+              "receive_mbps": 1200.0,
+              "source_ref": "nodalarc:terminals/optical/optical-lcrd-space-relay.yaml",
+              "source_terminal_id": "optical-lcrd-space-relay",
+              "terminal_id": "access_optical",
+              "tracking_capacity": 1,
+              "tracking_rate_deg_s": 0.1,
+              "transmit_mbps": 1200.0
+            },
+            {
+              "boresight": null,
+              "count": 1,
+              "endpoint_role": "crosslink",
+              "field_of_regard_deg": 360.0,
+              "installed_min_elevation_deg": null,
+              "link_role": null,
+              "max_range_km": 405000000.0,
+              "medium": "optical",
+              "min_elevation_deg": -90.0,
+              "owner_node_id": "earth-relay-geo",
+              "receive_mbps": 15.0,
+              "source_ref": "nodalarc:terminals/optical/optical-mars-trunk.yaml",
+              "source_terminal_id": "optical-mars-trunk",
+              "terminal_id": "trunk",
+              "tracking_capacity": 1,
+              "tracking_rate_deg_s": 0.25,
+              "transmit_mbps": 15.0
+            }
+          ]
+        },
+        {
+          "epoch_position": {
+            "alt_km": 35786.03309894039,
+            "lat_deg": 0.12340691899101863,
+            "lon_deg": -111.7998774751042,
+            "vel_x_km_s": -4.730525042795364e-07,
+            "vel_y_km_s": -1.0947907056468864e-05,
+            "vel_z_km_s": -0.004805856084711686
+          },
+          "forwarding": "host",
+          "interfaces": {
+            "ethernet": {
+              "bus1": {
+                "ipv4": "172.16.0.2/24",
+                "ipv6": "fd00:da7a::2/64"
+              }
+            },
+            "lo0": {
+              "ipv4": "10.255.0.8/32",
+              "ipv6": null
+            }
+          },
+          "kind": "satellite",
+          "local_node_id": "geo-dtn",
+          "namespace": "earth-relay-geo",
+          "node_id": "earth-relay-geo-dtn",
+          "originated_prefixes": null,
+          "plane": null,
+          "profile": "nodalarc:profiles/hdtn-earth-mars-relay.yaml",
+          "role": "host",
+          "routing_instances": [],
+          "segment_id": "earth_relay",
+          "slot": null,
+          "surface_position": null,
+          "tags": [
+            "hdtn_geo"
+          ],
+          "tenant_id": "default",
+          "terminal_inventory": []
+        },
+        {
+          "epoch_position": null,
+          "forwarding": "routed",
+          "interfaces": {
+            "ethernet": {
+              "terr0": {
+                "ipv4": "172.16.5.1/24",
+                "ipv6": "fd00:da7a:0:5::1/64"
+              }
+            },
+            "lo0": {
+              "ipv4": "10.255.0.9/32",
+              "ipv6": null
+            }
+          },
+          "kind": "ground_station",
+          "local_node_id": "mars-jezero-dtn-base-gw1",
+          "namespace": "mars-jezero-dtn-base",
+          "node_id": "mars-jezero-dtn-base-gw1",
+          "originated_prefixes": {
+            "ipv4": [
+              "172.16.5.0/24"
+            ],
+            "ipv6": [
+              "fd00:da7a:0:5::/64"
+            ]
+          },
+          "plane": null,
+          "profile": "nodalarc:profiles/frr-router.yaml",
+          "role": "router",
+          "routing_instances": [
+            {
+              "area_border": false,
+              "areas": [
+                "49.0001"
+              ],
+              "as_boundary": false,
+              "domain_id": "mars_domain",
+              "interfaces": [
+                {
+                  "area_id": null,
+                  "name": "term0"
+                },
+                {
+                  "area_id": null,
+                  "name": "term1"
+                },
+                {
+                  "area_id": null,
+                  "name": "terr0"
+                }
+              ],
+              "protocol": "isis"
+            }
+          ],
+          "segment_id": "mars_bases",
+          "slot": null,
+          "surface_position": {
+            "alt_m": 0.0,
+            "body": "mars",
+            "lat_deg": 18.64875816,
+            "lon_deg": 77.45088572
+          },
+          "tags": [
+            "mars"
+          ],
+          "tenant_id": "default",
+          "terminal_inventory": [
+            {
+              "boresight": {
+                "configured_az_deg": null,
+                "configured_el_deg": null,
+                "max_az_deg": null,
+                "max_el_deg": null,
+                "min_az_deg": null,
+                "min_el_deg": null,
+                "mode": "local_vertical"
+              },
+              "count": 2,
+              "endpoint_role": "access",
+              "field_of_regard_deg": 160.0,
+              "installed_min_elevation_deg": 10.0,
+              "link_role": null,
+              "max_range_km": 25000.0,
+              "medium": "rf",
+              "min_elevation_deg": 10.0,
+              "owner_node_id": "mars-jezero-dtn-base-gw1",
+              "receive_mbps": 2.048,
+              "source_ref": "nodalarc:terminals/rf/rf-uhf-electra-surface.yaml",
+              "source_terminal_id": "rf-uhf-electra-surface",
+              "terminal_id": "prox_uhf",
+              "tracking_capacity": 1,
+              "tracking_rate_deg_s": 2.0,
+              "transmit_mbps": 2.048
+            }
+          ]
+        },
+        {
+          "epoch_position": null,
+          "forwarding": "host",
+          "interfaces": {
+            "ethernet": {
+              "terr0": {
+                "ipv4": "172.16.5.2/24",
+                "ipv6": "fd00:da7a:0:5::2/64"
+              }
+            },
+            "lo0": {
+              "ipv4": "10.255.0.10/32",
+              "ipv6": null
+            }
+          },
+          "kind": "ground_station",
+          "local_node_id": "mars-jezero-dtn-base-gw1-dtn",
+          "namespace": "mars-jezero-dtn-base",
+          "node_id": "mars-jezero-dtn-base-gw1-dtn",
+          "originated_prefixes": null,
+          "plane": null,
+          "profile": "nodalarc:profiles/hdtn-earth-mars-relay.yaml",
+          "role": "host",
+          "routing_instances": [],
+          "segment_id": "mars_bases",
+          "slot": null,
+          "surface_position": {
+            "alt_m": 0.0,
+            "body": "mars",
+            "lat_deg": 18.64875816,
+            "lon_deg": 77.45088572
+          },
+          "tags": [
+            "hdtn_jezero",
+            "mars"
+          ],
+          "tenant_id": "default",
+          "terminal_inventory": []
+        },
+        {
+          "epoch_position": null,
+          "forwarding": "routed",
+          "interfaces": {
+            "ethernet": {
+              "terr0": {
+                "ipv4": "172.16.4.1/24",
+                "ipv6": "fd00:da7a:0:4::1/64"
+              }
+            },
+            "lo0": {
+              "ipv4": "10.255.0.11/32",
+              "ipv6": null
+            }
+          },
+          "kind": "ground_station",
+          "local_node_id": "mars-gale-dtn-base-gw1",
+          "namespace": "mars-gale-dtn-base",
+          "node_id": "mars-gale-dtn-base-gw1",
+          "originated_prefixes": {
+            "ipv4": [
+              "172.16.4.0/24"
+            ],
+            "ipv6": [
+              "fd00:da7a:0:4::/64"
+            ]
+          },
+          "plane": null,
+          "profile": "nodalarc:profiles/frr-router.yaml",
+          "role": "router",
+          "routing_instances": [
+            {
+              "area_border": false,
+              "areas": [
+                "49.0001"
+              ],
+              "as_boundary": false,
+              "domain_id": "mars_domain",
+              "interfaces": [
+                {
+                  "area_id": null,
+                  "name": "term0"
+                },
+                {
+                  "area_id": null,
+                  "name": "term1"
+                },
+                {
+                  "area_id": null,
+                  "name": "terr0"
+                }
+              ],
+              "protocol": "isis"
+            }
+          ],
+          "segment_id": "mars_bases",
+          "slot": null,
+          "surface_position": {
+            "alt_m": 0.0,
+            "body": "mars",
+            "lat_deg": -4.643851,
+            "lon_deg": 137.4417
+          },
+          "tags": [
+            "mars"
+          ],
+          "tenant_id": "default",
+          "terminal_inventory": [
+            {
+              "boresight": {
+                "configured_az_deg": null,
+                "configured_el_deg": null,
+                "max_az_deg": null,
+                "max_el_deg": null,
+                "min_az_deg": null,
+                "min_el_deg": null,
+                "mode": "local_vertical"
+              },
+              "count": 2,
+              "endpoint_role": "access",
+              "field_of_regard_deg": 160.0,
+              "installed_min_elevation_deg": 10.0,
+              "link_role": null,
+              "max_range_km": 25000.0,
+              "medium": "rf",
+              "min_elevation_deg": 10.0,
+              "owner_node_id": "mars-gale-dtn-base-gw1",
+              "receive_mbps": 2.048,
+              "source_ref": "nodalarc:terminals/rf/rf-uhf-electra-surface.yaml",
+              "source_terminal_id": "rf-uhf-electra-surface",
+              "terminal_id": "prox_uhf",
+              "tracking_capacity": 1,
+              "tracking_rate_deg_s": 2.0,
+              "transmit_mbps": 2.048
+            }
+          ]
+        },
+        {
+          "epoch_position": null,
+          "forwarding": "host",
+          "interfaces": {
+            "ethernet": {
+              "terr0": {
+                "ipv4": "172.16.4.2/24",
+                "ipv6": "fd00:da7a:0:4::2/64"
+              }
+            },
+            "lo0": {
+              "ipv4": "10.255.0.12/32",
+              "ipv6": null
+            }
+          },
+          "kind": "ground_station",
+          "local_node_id": "mars-gale-dtn-base-gw1-dtn",
+          "namespace": "mars-gale-dtn-base",
+          "node_id": "mars-gale-dtn-base-gw1-dtn",
+          "originated_prefixes": null,
+          "plane": null,
+          "profile": "nodalarc:profiles/hdtn-earth-mars-relay.yaml",
+          "role": "host",
+          "routing_instances": [],
+          "segment_id": "mars_bases",
+          "slot": null,
+          "surface_position": {
+            "alt_m": 0.0,
+            "body": "mars",
+            "lat_deg": -4.643851,
+            "lon_deg": 137.4417
+          },
+          "tags": [
+            "hdtn_gale",
+            "mars"
+          ],
+          "tenant_id": "default",
+          "terminal_inventory": []
+        },
+        {
+          "epoch_position": null,
+          "forwarding": "routed",
+          "interfaces": {
+            "ethernet": {
+              "terr0": {
+                "ipv4": "172.16.3.1/24",
+                "ipv6": "fd00:da7a:0:3::1/64"
+              }
+            },
+            "lo0": {
+              "ipv4": "10.255.0.13/32",
+              "ipv6": null
+            }
+          },
+          "kind": "ground_station",
+          "local_node_id": "mars-arcadia-dtn-base-gw1",
+          "namespace": "mars-arcadia-dtn-base",
+          "node_id": "mars-arcadia-dtn-base-gw1",
+          "originated_prefixes": {
+            "ipv4": [
+              "172.16.3.0/24"
+            ],
+            "ipv6": [
+              "fd00:da7a:0:3::/64"
+            ]
+          },
+          "plane": null,
+          "profile": "nodalarc:profiles/frr-router.yaml",
+          "role": "router",
+          "routing_instances": [
+            {
+              "area_border": false,
+              "areas": [
+                "49.0001"
+              ],
+              "as_boundary": false,
+              "domain_id": "mars_domain",
+              "interfaces": [
+                {
+                  "area_id": null,
+                  "name": "term0"
+                },
+                {
+                  "area_id": null,
+                  "name": "term1"
+                },
+                {
+                  "area_id": null,
+                  "name": "terr0"
+                }
+              ],
+              "protocol": "isis"
+            }
+          ],
+          "segment_id": "mars_bases",
+          "slot": null,
+          "surface_position": {
+            "alt_m": 0.0,
+            "body": "mars",
+            "lat_deg": 38.9674,
+            "lon_deg": -169.846
+          },
+          "tags": [
+            "mars"
+          ],
+          "tenant_id": "default",
+          "terminal_inventory": [
+            {
+              "boresight": {
+                "configured_az_deg": null,
+                "configured_el_deg": null,
+                "max_az_deg": null,
+                "max_el_deg": null,
+                "min_az_deg": null,
+                "min_el_deg": null,
+                "mode": "local_vertical"
+              },
+              "count": 2,
+              "endpoint_role": "access",
+              "field_of_regard_deg": 160.0,
+              "installed_min_elevation_deg": 10.0,
+              "link_role": null,
+              "max_range_km": 25000.0,
+              "medium": "rf",
+              "min_elevation_deg": 10.0,
+              "owner_node_id": "mars-arcadia-dtn-base-gw1",
+              "receive_mbps": 2.048,
+              "source_ref": "nodalarc:terminals/rf/rf-uhf-electra-surface.yaml",
+              "source_terminal_id": "rf-uhf-electra-surface",
+              "terminal_id": "prox_uhf",
+              "tracking_capacity": 1,
+              "tracking_rate_deg_s": 2.0,
+              "transmit_mbps": 2.048
+            }
+          ]
+        },
+        {
+          "epoch_position": null,
+          "forwarding": "host",
+          "interfaces": {
+            "ethernet": {
+              "terr0": {
+                "ipv4": "172.16.3.2/24",
+                "ipv6": "fd00:da7a:0:3::2/64"
+              }
+            },
+            "lo0": {
+              "ipv4": "10.255.0.14/32",
+              "ipv6": null
+            }
+          },
+          "kind": "ground_station",
+          "local_node_id": "mars-arcadia-dtn-base-gw1-dtn",
+          "namespace": "mars-arcadia-dtn-base",
+          "node_id": "mars-arcadia-dtn-base-gw1-dtn",
+          "originated_prefixes": null,
+          "plane": null,
+          "profile": "nodalarc:profiles/hdtn-earth-mars-relay.yaml",
+          "role": "host",
+          "routing_instances": [],
+          "segment_id": "mars_bases",
+          "slot": null,
+          "surface_position": {
+            "alt_m": 0.0,
+            "body": "mars",
+            "lat_deg": 38.9674,
+            "lon_deg": -169.846
+          },
+          "tags": [
+            "hdtn_arcadia",
+            "mars"
+          ],
+          "tenant_id": "default",
+          "terminal_inventory": []
+        },
+        {
+          "epoch_position": null,
+          "forwarding": "routed",
+          "interfaces": {
+            "ethernet": {
+              "terr0": {
+                "ipv4": "172.16.1.1/24",
+                "ipv6": "fd00:da7a:0:1::1/64"
+              }
+            },
+            "lo0": {
+              "ipv4": "10.255.0.15/32",
+              "ipv6": null
+            }
+          },
+          "kind": "ground_station",
+          "local_node_id": "earth-us-ca-table-mountain-dtn-ogs-gw1",
+          "namespace": "earth-us-ca-table-mountain-dtn-ogs",
+          "node_id": "earth-us-ca-table-mountain-dtn-ogs-gw1",
+          "originated_prefixes": {
+            "ipv4": [
+              "172.16.1.0/24"
+            ],
+            "ipv6": [
+              "fd00:da7a:0:1::/64"
+            ]
+          },
+          "plane": null,
+          "profile": "nodalarc:profiles/frr-router.yaml",
+          "role": "router",
+          "routing_instances": [
+            {
+              "area_border": false,
+              "areas": [
+                "49.0001"
+              ],
+              "as_boundary": false,
+              "domain_id": "earth_domain",
+              "interfaces": [
+                {
+                  "area_id": null,
+                  "name": "term0"
+                },
+                {
+                  "area_id": null,
+                  "name": "terr0"
+                }
+              ],
+              "protocol": "isis"
+            }
+          ],
+          "segment_id": "earth_ogs",
+          "slot": null,
+          "surface_position": {
+            "alt_m": 2259.49,
+            "body": "earth",
+            "lat_deg": 34.3817491,
+            "lon_deg": -117.682838
+          },
+          "tags": [
+            "earth"
+          ],
+          "tenant_id": "default",
+          "terminal_inventory": [
+            {
+              "boresight": {
+                "configured_az_deg": null,
+                "configured_el_deg": null,
+                "max_az_deg": null,
+                "max_el_deg": null,
+                "min_az_deg": null,
+                "min_el_deg": null,
+                "mode": "local_vertical"
+              },
+              "count": 1,
+              "endpoint_role": "access",
+              "field_of_regard_deg": 140.0,
+              "installed_min_elevation_deg": 20.0,
+              "link_role": null,
+              "max_range_km": 45000.0,
+              "medium": "optical",
+              "min_elevation_deg": 20.0,
+              "owner_node_id": "earth-us-ca-table-mountain-dtn-ogs-gw1",
+              "receive_mbps": 1200.0,
+              "source_ref": "nodalarc:terminals/optical/optical-lcrd-ground-ogs.yaml",
+              "source_terminal_id": "optical-lcrd-ground-ogs",
+              "terminal_id": "access_optical",
+              "tracking_capacity": 1,
+              "tracking_rate_deg_s": 1.0,
+              "transmit_mbps": 1200.0
+            }
+          ]
+        },
+        {
+          "epoch_position": null,
+          "forwarding": "host",
+          "interfaces": {
+            "ethernet": {
+              "terr0": {
+                "ipv4": "172.16.1.2/24",
+                "ipv6": "fd00:da7a:0:1::2/64"
+              }
+            },
+            "lo0": {
+              "ipv4": "10.255.0.16/32",
+              "ipv6": null
+            }
+          },
+          "kind": "ground_station",
+          "local_node_id": "earth-us-ca-table-mountain-dtn-ogs-gw1-dtn",
+          "namespace": "earth-us-ca-table-mountain-dtn-ogs",
+          "node_id": "earth-us-ca-table-mountain-dtn-ogs-gw1-dtn",
+          "originated_prefixes": null,
+          "plane": null,
+          "profile": "nodalarc:profiles/hdtn-earth-mars-relay.yaml",
+          "role": "host",
+          "routing_instances": [],
+          "segment_id": "earth_ogs",
+          "slot": null,
+          "surface_position": {
+            "alt_m": 2259.49,
+            "body": "earth",
+            "lat_deg": 34.3817491,
+            "lon_deg": -117.682838
+          },
+          "tags": [
+            "earth",
+            "hdtn_octl"
+          ],
+          "tenant_id": "default",
+          "terminal_inventory": []
+        },
+        {
+          "epoch_position": null,
+          "forwarding": "routed",
+          "interfaces": {
+            "ethernet": {
+              "terr0": {
+                "ipv4": "172.16.2.1/24",
+                "ipv6": "fd00:da7a:0:2::1/64"
+              }
+            },
+            "lo0": {
+              "ipv4": "10.255.0.17/32",
+              "ipv6": null
+            }
+          },
+          "kind": "ground_station",
+          "local_node_id": "earth-us-hi-haleakala-dtn-ogs-gw1",
+          "namespace": "earth-us-hi-haleakala-dtn-ogs",
+          "node_id": "earth-us-hi-haleakala-dtn-ogs-gw1",
+          "originated_prefixes": {
+            "ipv4": [
+              "172.16.2.0/24"
+            ],
+            "ipv6": [
+              "fd00:da7a:0:2::/64"
+            ]
+          },
+          "plane": null,
+          "profile": "nodalarc:profiles/frr-router.yaml",
+          "role": "router",
+          "routing_instances": [
+            {
+              "area_border": false,
+              "areas": [
+                "49.0001"
+              ],
+              "as_boundary": false,
+              "domain_id": "earth_domain",
+              "interfaces": [
+                {
+                  "area_id": null,
+                  "name": "term0"
+                },
+                {
+                  "area_id": null,
+                  "name": "terr0"
+                }
+              ],
+              "protocol": "isis"
+            }
+          ],
+          "segment_id": "earth_ogs",
+          "slot": null,
+          "surface_position": {
+            "alt_m": 3040.0,
+            "body": "earth",
+            "lat_deg": 20.708,
+            "lon_deg": -156.258
+          },
+          "tags": [
+            "earth"
+          ],
+          "tenant_id": "default",
+          "terminal_inventory": [
+            {
+              "boresight": {
+                "configured_az_deg": null,
+                "configured_el_deg": null,
+                "max_az_deg": null,
+                "max_el_deg": null,
+                "min_az_deg": null,
+                "min_el_deg": null,
+                "mode": "local_vertical"
+              },
+              "count": 1,
+              "endpoint_role": "access",
+              "field_of_regard_deg": 140.0,
+              "installed_min_elevation_deg": 20.0,
+              "link_role": null,
+              "max_range_km": 45000.0,
+              "medium": "optical",
+              "min_elevation_deg": 20.0,
+              "owner_node_id": "earth-us-hi-haleakala-dtn-ogs-gw1",
+              "receive_mbps": 1200.0,
+              "source_ref": "nodalarc:terminals/optical/optical-lcrd-ground-ogs.yaml",
+              "source_terminal_id": "optical-lcrd-ground-ogs",
+              "terminal_id": "access_optical",
+              "tracking_capacity": 1,
+              "tracking_rate_deg_s": 1.0,
+              "transmit_mbps": 1200.0
+            }
+          ]
+        },
+        {
+          "epoch_position": null,
+          "forwarding": "host",
+          "interfaces": {
+            "ethernet": {
+              "terr0": {
+                "ipv4": "172.16.2.2/24",
+                "ipv6": "fd00:da7a:0:2::2/64"
+              }
+            },
+            "lo0": {
+              "ipv4": "10.255.0.18/32",
+              "ipv6": null
+            }
+          },
+          "kind": "ground_station",
+          "local_node_id": "earth-us-hi-haleakala-dtn-ogs-gw1-dtn",
+          "namespace": "earth-us-hi-haleakala-dtn-ogs",
+          "node_id": "earth-us-hi-haleakala-dtn-ogs-gw1-dtn",
+          "originated_prefixes": null,
+          "plane": null,
+          "profile": "nodalarc:profiles/hdtn-earth-mars-relay.yaml",
+          "role": "host",
+          "routing_instances": [],
+          "segment_id": "earth_ogs",
+          "slot": null,
+          "surface_position": {
+            "alt_m": 3040.0,
+            "body": "earth",
+            "lat_deg": 20.708,
+            "lon_deg": -156.258
+          },
+          "tags": [
+            "earth",
+            "hdtn_haleakala"
+          ],
+          "tenant_id": "default",
+          "terminal_inventory": []
+        }
+      ],
+      "segments": [
+        {
+          "capabilities": [
+            {
+              "endpoint_role": "access",
+              "medium": "rf"
+            },
+            {
+              "endpoint_role": "crosslink",
+              "medium": "optical"
+            },
+            {
+              "endpoint_role": "crosslink",
+              "medium": "rf"
+            }
+          ],
+          "display_name": "mars-dtn-relays",
+          "segment_id": "mars_relays"
+        },
+        {
+          "capabilities": [
+            {
+              "endpoint_role": "access",
+              "medium": "optical"
+            },
+            {
+              "endpoint_role": "crosslink",
+              "medium": "optical"
+            }
+          ],
+          "display_name": "earth-deep-space-relay-1",
+          "segment_id": "earth_relay"
+        },
+        {
+          "capabilities": [
+            {
+              "endpoint_role": "access",
+              "medium": "rf"
+            }
+          ],
+          "display_name": "Mars DTN bases",
+          "segment_id": "mars_bases"
+        },
+        {
+          "capabilities": [
+            {
+              "endpoint_role": "access",
+              "medium": "optical"
+            }
+          ],
+          "display_name": "Earth optical ground stations for Mars DTN",
+          "segment_id": "earth_ogs"
+        }
+      ],
+      "session": {
+        "description": "Three Mars surface bases reach Earth through relays: UHF to two low relay orbiters (MRO and TGO class) and to an areostationary relay over 105 E, X-band crosslinks between them, an optical trunk across the Earth-Mars light time (338 s one way at the 2027 opposition) to an Earth GEO relay, and LCRD-class optical links to two ground stations. Every relay and endpoint host runs NASA HDTN with LTP over UDP; Mars and Earth each run an IS-IS instance, joined by a static boundary over the trunk.",
+        "display_name": "Earth to Mars DTN relay chain (HDTN)",
+        "name": "earth-mars-hdtn-relay"
+      }
+    }
+  },
+  "source_ref": "nodalarc:sessions/earth-mars-hdtn-relay.yaml"
+}

@@ -1,0 +1,24 @@
+node:
+  id: mars-dtn-base
+  display_name: Mars surface base gateway carrying an HDTN endpoint host
+  forwarding: routed
+  profile: nodalarc:profiles/frr-router.yaml
+  ethernet:
+  - id: terr0
+  terminals:
+  - id: prox_uhf
+    role: access
+    terminal: nodalarc:terminals/rf/rf-uhf-electra-surface.yaml
+    count: 2
+  payloads:
+  - id: dtn
+    payload: nodalarc:payloads/hdtn-host.yaml
+    profile: nodalarc:profiles/hdtn-earth-mars-relay.yaml
+    count: 1
+    attach: terr0
+  reference: https://assets.science.nasa.gov/content/dam/science/psd/mars/files/mars-relay-network/MRN%20Handbook_v4_final_URS_cleared.pdf
+  notes: A Mars surface base's router with UHF relay terminals toward low
+    relay orbiters (as Curiosity and Perseverance use) and a future
+    areostationary relay, plus a mounted HDTN endpoint host on its LAN port.
+    Site files choose installed terminal and payload counts and the host's
+    tag.

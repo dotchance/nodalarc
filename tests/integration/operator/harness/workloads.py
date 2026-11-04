@@ -83,3 +83,84 @@ def send_a_bundle(
         return run_in_shell(
             outbox, f"aap2-send --socket {sender.socket} {receiver.eid}{agent} {payload}"
         )
+
+
+@dataclass(frozen=True)
+class HdtnEndpoint:
+    node_id: str
+    member: str  # the network member the node's HDTN launcher found itself to be
+    receiver_eid: str  # files sent here land in the node's /run/hdtn/received
+    sender_eid: str  # the number a sending application on this node uses
+
+
+def find_hdtn_endpoints(operator: Operator, shown: ShownNetwork) -> list[HdtnEndpoint]:
+    """Open the shell of every host node and keep those running an HDTN endpoint.
+
+    The node's HDTN launcher writes which member it is into its configuration and the numbering
+    into /run/hdtn/members, the same table it prints when it starts.
+    """
+    endpoints: list[HdtnEndpoint] = []
+    for node_id, node in sorted(shown.nodes.items()):
+        if node["role"] != "host":
+            continue
+        with operator.terminal(node_id) as terminal:
+            if terminal.is_routing_cli:
+                continue
+            _, found = run_in_shell(
+                terminal,
+                "command -v hdtn-one-process >/dev/null && test -d /run/hdtn/received "
+                '&& sed -n \'s/.*"hdtnConfigName": "\\([a-z0-9]*\\) (ipn:\\([0-9]*\\))".*/'
+                "self=\\1 \\2/p' /run/hdtn/hdtn.json && cat /run/hdtn/members",
+            )
+            me = re.search(r"^self=(\S+) (\d+)$", found, re.M)
+            if me is None:
+                continue
+            row = re.search(rf"^{me.group(1)} ipn:{me.group(2)} (ipn:\d+\.1)$", found, re.M)
+            assert row, f"{node_id}: /run/hdtn/members has no receiver row for {me.group(1)}"
+            endpoints.append(
+                HdtnEndpoint(node_id, me.group(1), row.group(1), f"ipn:{2000 + int(me.group(2))}.1")
+            )
+    return endpoints
+
+
+def send_a_file(
+    operator: Operator, sender: HdtnEndpoint, receiver: HdtnEndpoint, name: str, payload: str
+) -> tuple[float | None, int, str]:
+    """From the sender's shell, send one file to the receiver.
+
+    Returns the sender's clock when it sent, the bundle bytes its node accepted, and what the
+    shell printed. bpsendfile keeps running after it sends, so it is stopped after 15 s.
+    """
+    with operator.terminal(sender.node_id) as outbox:
+        _, printed = run_in_shell(
+            outbox,
+            f"mkdir -p /run/hdtn/outbox && printf '%s' '{payload}' > /run/hdtn/outbox/{name} "
+            f"&& echo sent-at $(date +%s.%N) && timeout 15 bpsendfile --use-bp-version-7 "
+            f"--bundle-lifetime-milliseconds=86400000 --my-uri-eid={sender.sender_eid} "
+            f"--dest-uri-eid={receiver.receiver_eid} "
+            f"--outducts-config-file=/run/hdtn/app-outduct.json "
+            f"--file-or-folder-path=/run/hdtn/outbox/{name} 2>&1 | grep totalBundleBytesAcked",
+            timeout=40.0,
+        )
+    sent = re.search(r"^sent-at (\d+\.\d+)$", printed, re.M)
+    acked = re.search(r"totalBundleBytesAcked (\d+)", printed)
+    return (
+        float(sent.group(1)) if sent else None,
+        int(acked.group(1)) if acked else 0,
+        printed,
+    )
+
+
+def received_files(operator: Operator, receiver: HdtnEndpoint) -> dict[str, tuple[float, str]]:
+    """The files in the receiver's /run/hdtn/received: name -> (its clock when written, content)."""
+    with operator.terminal(receiver.node_id) as inbox:
+        _, printed = run_in_shell(
+            inbox,
+            'for f in /run/hdtn/received/*; do [ -f "$f" ] && '
+            'echo "file $(basename "$f") $(date -r "$f" +%s.%N) $(cat "$f")"; done; true',
+        )
+    files: dict[str, tuple[float, str]] = {}
+    for line in printed.splitlines():
+        if found := re.match(r"^file (\S+) (\d+\.\d+) (.*)$", line):
+            files[found.group(1)] = (float(found.group(2)), found.group(3))
+    return files

@@ -364,6 +364,7 @@ class TestTickRateContract:
         "earth-luna-dtn": 1,
         "earth-luna-dtn-custody": 1,
         "earth-luna-quic": 1,
+        "earth-mars-hdtn-relay": 1,
         # GEO-only sessions: near-stationary geometry, deliberate 10 s tick.
         "earth-geo-inmarsat": 10,
         "earth-geo-tdrs": 10,

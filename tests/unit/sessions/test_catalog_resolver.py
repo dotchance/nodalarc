@@ -121,6 +121,11 @@ SHIPPED_SESSION_SHAPES = {
     # differs (storage-backed custody contact manager).
     "earth-luna-dtn-custody.yaml": (86, 357),
     "earth-luna-quic.yaml": (81, 290),
+    # 18/14: three Mars bases, two low relay orbiters, an areostationary relay,
+    # an Earth GEO relay and two optical ground stations, each a router
+    # with an HDTN host; 9 UHF pairs (3 bases by 3 relays), 2 relay
+    # crosslinks, 2 optical ground links and the trunk.
+    "earth-mars-hdtn-relay.yaml": (18, 14),
     # 43/246: four feeder-class bridge sites added (Djibouti, Singapore,
     # Cape Town, Tokyo — authored ranges cover the 780 km shell at the
     # declared mask) and the ISL rule pinned to the 30 physically visible

@@ -606,6 +606,7 @@ make session DEFAULT_SESSION=catalog/nodalarc/sessions/earth-leo-walker.yaml
 | `earth-luna-dtn` | The QUIC sky with the lunar relay replaced by a DTN relay vehicle carrying a uD3TN store-and-forward host on its payload bus. |
 | `earth-luna-dtn-custody` | The DTN sky with the relay recomposed for bundle-layer custody: its uD3TN payload manages its own contact plan and holds bundles in storage through occlusions. |
 | `earth-luna-quic` | Earth-to-Luna QUIC application path with host endpoints at both ends. |
+| `earth-mars-hdtn-relay` | Three Mars bases reach two Earth optical ground stations through low Mars relay orbiters, an areostationary relay, an optical trunk across the Earth-Mars light time and an Earth GEO relay; every relay and endpoint host runs NASA HDTN over LTP. |
 
 The shipped sessions are examples assembled from a larger reusable catalog.
 Eight omit explicit routing and therefore use the default IS-IS instance. The

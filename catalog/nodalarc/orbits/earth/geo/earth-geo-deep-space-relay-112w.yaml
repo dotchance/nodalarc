@@ -1,0 +1,23 @@
+orbit:
+  id: earth-geo-deep-space-relay-112w
+  central_body: nodalarc:bodies/earth.yaml
+  epoch: '2027-02-19T00:00:00Z'
+  elements:
+    semi_major_axis_km: 42164.17
+    eccentricity: 0.0
+  orientation:
+    inclination_deg: 0.0
+    raan_deg: 0.0
+    argument_of_perigee_deg: 0.0
+  phase:
+    mean_anomaly_deg: 36.5713
+  propagator: two_body
+  reference: https://ntrs.nasa.gov/api/citations/20160001877/downloads/20160001877.pdf
+  notes: 'Geostationary station at 111.8 W, the longitude third-party
+    tracking gives for STPSat-6, the host of NASA''s Laser Communications
+    Relay Demonstration (orbitalfocus.uk, stated accuracy 3 degrees); NASA''s
+    design range for LCRD is 107 W to 172 W. The semi-major axis is the
+    circular orbit whose period is one sidereal day (86164.0905 s) with the
+    catalog gravitational parameter. The mean anomaly places the sub-satellite
+    point at 111.80 W at the epoch through the platform''s Earth orientation.
+    two_body keeps the period, as station-keeping does.'

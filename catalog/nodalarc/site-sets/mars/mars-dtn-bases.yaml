@@ -1,0 +1,10 @@
+site_set:
+  id: mars-dtn-bases
+  display_name: Mars DTN bases
+  sites:
+  - nodalarc:sites/mars/mars-jezero-dtn-base.yaml
+  - nodalarc:sites/mars/mars-gale-dtn-base.yaml
+  - nodalarc:sites/mars/mars-arcadia-dtn-base.yaml
+  notes: Three Mars surface bases with HDTN endpoint hosts, at Perseverance's
+    and Curiosity's landing sites and a candidate crewed-base region in
+    Arcadia Planitia.

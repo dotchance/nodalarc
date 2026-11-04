@@ -15,12 +15,18 @@ from .harness.client import Operator
 from .harness.network import Clock, ShownNetwork, watch
 from .harness.workloads import (
     DtnEndpoint,
+    HdtnEndpoint,
     QuicClient,
     expect_a_bundle,
+    find_hdtn_endpoints,
     find_workloads,
     send_a_bundle,
 )
-from .truths import dtn_bundles_arrive, quic_clients_download_from_their_servers
+from .truths import (
+    dtn_bundles_arrive,
+    hdtn_files_arrive,
+    quic_clients_download_from_their_servers,
+)
 
 pytestmark = [pytest.mark.integration, pytest.mark.timeout(1800)]
 
@@ -46,6 +52,19 @@ def test_a_bundle_sent_from_a_dtn_endpoint_arrives_at_another(
     if len(dtn_endpoints) < 2:
         pytest.skip("did not run: the session has fewer than two DTN endpoints")
     assert not dtn_bundles_arrive(operator, dtn_endpoints)
+
+
+@pytest.fixture(scope="module")
+def hdtn_endpoints(operator: Operator) -> list[HdtnEndpoint]:
+    return find_hdtn_endpoints(operator, watch(operator, 6.0))
+
+
+def test_a_file_sent_from_an_hdtn_endpoint_arrives_at_another(
+    operator: Operator, hdtn_endpoints: list[HdtnEndpoint]
+) -> None:
+    if len(hdtn_endpoints) < 2:
+        pytest.skip("did not run: the session has fewer than two HDTN endpoints")
+    assert not hdtn_files_arrive(operator, hdtn_endpoints)
 
 
 def _run_fast_until(operator: Operator, reached, *, longest_wait: float = 300.0) -> bool:

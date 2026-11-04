@@ -149,12 +149,19 @@ def test_every_orbit_primitive_is_physically_sane(path: Path) -> None:
     radius = float(body["mean_radius_km"])
     assert radius > 0
 
-    shape = orbit["shape"]
-    if "altitude_km" in shape:
-        perigee = apogee = float(shape["altitude_km"])
+    if "elements" in orbit:
+        # Elements give the orbit's own size; altitudes are above the body's equator, as the
+        # resolver reads the shape form.
+        semi_major = float(orbit["elements"]["semi_major_axis_km"])
+        eccentricity = float(orbit["elements"]["eccentricity"])
+        equator = float(body["equatorial_radius_km"])
+        perigee = semi_major * (1.0 - eccentricity) - equator
+        apogee = semi_major * (1.0 + eccentricity) - equator
+    elif "altitude_km" in orbit["shape"]:
+        perigee = apogee = float(orbit["shape"]["altitude_km"])
     else:
-        perigee = float(shape["perigee_altitude_km"])
-        apogee = float(shape["apogee_altitude_km"])
+        perigee = float(orbit["shape"]["perigee_altitude_km"])
+        apogee = float(orbit["shape"]["apogee_altitude_km"])
     assert perigee > 0, f"{path.name}: perigee below the surface"
     assert apogee >= perigee, f"{path.name}: apogee below perigee"
 

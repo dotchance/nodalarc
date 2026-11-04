@@ -1,0 +1,18 @@
+space_node_set:
+  id: mars-dtn-relays
+  nodes:
+  - id: mto
+    node: nodalarc:nodes/space/mars-areostationary-relay.yaml
+    orbit: nodalarc:orbits/mars/areo/mars-areostationary-105e.yaml
+    tags:
+    - areo
+  - id: mro
+    node: nodalarc:nodes/space/mars-relay-mro.yaml
+    orbit: nodalarc:orbits/mars/lmo/mars-lmo-mro.yaml
+    tags:
+    - lmo
+  - id: tgo
+    node: nodalarc:nodes/space/mars-relay-tgo.yaml
+    orbit: nodalarc:orbits/mars/lmo/mars-lmo-tgo.yaml
+    tags:
+    - lmo

@@ -1,0 +1,8 @@
+payload:
+  id: hdtn-host
+  display_name: HDTN store-and-forward host
+  forwarding: host
+  profile: nodalarc:profiles/hdtn-earth-mars-relay.yaml
+  notes: A carried host environment running a NASA HDTN bundle node.
+    Attaches to whichever segment its mount names; addresses arrive from
+    allocation.

@@ -1,0 +1,55 @@
+site:
+  id: earth-us-ca-table-mountain-dtn-ogs
+  display_name: Table Mountain optical ground station (OGS-1 + HDTN endpoint host)
+  verified:
+    source: nodalarc_catalog
+    notes: 'LCRD''s OGS-1 at JPL''s Optical Communications Telescope Laboratory,
+      Table Mountain, at the NAIF coordinates (octl_2011_nov_11.tf: 34.3817491 N,
+      117.682838 W, 2259.49 m). LCRD''s ground stations work above 20 degrees elevation (Luzhansky et al.
+      2016). Weather is not modelled.'
+  ethernet:
+  - id: lan0
+  nodes:
+  - id: gw1
+    display_name: Optical ground station
+    node: nodalarc:nodes/ground/earth-dtn-ogs.yaml
+    payloads:
+      dtn:
+        installed_count: 1
+        tags:
+        - hdtn_octl
+    terminals:
+      access_optical:
+        installed_count: 1
+        capabilities:
+          bandwidth_mbps:
+            transmit: 1200.0
+            receive: 1200.0
+          tracking_capacity: 1
+          max_range_km: 45000.0
+          limits:
+            azimuth_deg:
+              min: -180
+              max: 180
+            elevation_deg:
+              min: 20
+              max: 90
+            max_tracking_rate_deg_s: 1.0
+          boresight:
+            mode: local_vertical
+    interfaces:
+      terr0: lan0
+    tags:
+    - earth
+    originated_prefixes:
+      ipv4:
+      - lan0
+      ipv6:
+      - lan0
+  frame:
+    body_fixed:
+      body: nodalarc:bodies/earth.yaml
+  location:
+    lat_deg: 34.3817491
+    lon_deg: -117.682838
+    alt_m: 2259.49

@@ -1,0 +1,7 @@
+site_set:
+  id: earth-mars-dtn-ogs-sites
+  display_name: Earth optical ground stations for Mars DTN
+  sites:
+  - nodalarc:sites/earth/us/ca/earth-us-ca-table-mountain-dtn-ogs.yaml
+  - nodalarc:sites/earth/us/hi/earth-us-hi-haleakala-dtn-ogs.yaml
+  notes: LCRD's two optical ground stations with HDTN endpoint hosts.

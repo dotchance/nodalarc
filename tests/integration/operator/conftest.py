@@ -24,6 +24,18 @@ def operator() -> Operator:
 
 
 @pytest.fixture
+def created(operator: Operator) -> Iterator[list[str]]:
+    """User catalog refs the test creates. Afterward the found session runs and they are deleted."""
+    found = next(session for session in operator.sessions() if session.get("active"))
+    refs: list[str] = []
+    yield refs
+    if operator.state()["constellation_name"] != found["name"]:
+        operator.run_session(found)
+    for ref in reversed(refs):  # a session before the objects it refers to
+        operator.delete_user_object(ref)
+
+
+@pytest.fixture
 def clock(operator: Operator) -> Iterator[Clock]:
     """The clock before the test touches it. Afterward the session runs at 1x again."""
     before = read_clock(operator)

@@ -6,7 +6,7 @@ Each test ends on the session it found and deletes the user catalog objects it c
 from __future__ import annotations
 
 from collections import Counter
-from collections.abc import Callable, Iterator
+from collections.abc import Callable
 from typing import Any
 
 import pytest
@@ -24,18 +24,6 @@ from .harness.network import watch
 from .truths import assert_session_is_truthful
 
 pytestmark = [pytest.mark.integration, pytest.mark.timeout(2400)]
-
-
-@pytest.fixture
-def created(operator: Operator) -> Iterator[list[str]]:
-    """User catalog refs the test creates. Afterward the found session runs and they are deleted."""
-    found = next(session for session in operator.sessions() if session.get("active"))
-    refs: list[str] = []
-    yield refs
-    if operator.state()["constellation_name"] != found["name"]:
-        operator.run_session(found)
-    for ref in reversed(refs):  # a session before the objects it refers to
-        operator.delete_user_object(ref)
 
 
 def _shipped_session_yaml(

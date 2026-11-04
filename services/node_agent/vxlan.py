@@ -46,7 +46,13 @@ from nodalarc.runtime_naming import (
 
 from node_agent import kernel_verifier
 from node_agent.ground_bridge import _tc_mirred_redirect, _tc_mirred_remove, install_redirect_pair
-from node_agent.namespace_ops import _get_host_ns_fd, _in_namespace, _libc, _ns_lock
+from node_agent.namespace_ops import (
+    _get_host_ns_fd,
+    _in_namespace,
+    _libc,
+    _ns_lock,
+    assign_link_mac,
+)
 
 log = logging.getLogger(__name__)
 
@@ -112,6 +118,7 @@ def _enter_host_namespace() -> None:
 
 def create_vxlan_link(
     pid: int,
+    node_id: str,
     ifname: str,
     local_ip: str,
     remote_ip: str,
@@ -133,6 +140,8 @@ def create_vxlan_link(
 
     Args:
         pid: PID of the target pod.
+        node_id: The pod's node; with ifname it gives the pod end its MAC address, the one every
+            host derives for it (``runtime_naming.link_interface_mac``).
         ifname: Target interface name inside the pod (e.g., "isl0", "term0", "gnd0").
         local_ip: This node's IP (VXLAN local endpoint).
         remote_ip: Peer node's IP (VXLAN remote endpoint).
@@ -262,8 +271,10 @@ def create_vxlan_link(
     finally:
         os.close(pod_ns_fd)
 
-    # 5. Inside pod namespace: bring the pod end UP
+    # 5. Inside pod namespace: give the pod end its MAC address, as a same-host link's pod end
+    # has, so the far host can pin a static neighbour to it, then bring it UP
     def _configure_in_pod(ns_ipr):
+        assign_link_mac(pid, ifname, node_id, ipr=ns_ipr)
         ns_ipr.link("set", index=ns_ipr.link_lookup(ifname=ifname)[0], state="up")
 
     _in_namespace(pid, _configure_in_pod)

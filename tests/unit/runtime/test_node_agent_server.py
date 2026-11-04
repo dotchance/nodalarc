@@ -47,6 +47,7 @@ def _handles(pids):
             pid=pid,
             netns_id=netns_identity(pid) or "0",
             mpls_enable=False,
+            static_neighbors=(),
         )
         for node_id, pid in pids.items()
     }

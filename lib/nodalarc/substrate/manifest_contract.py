@@ -135,12 +135,25 @@ class IslInterface(_StrictModel):
     name: str
     peer_node: str
     peer_iface: str
+    # The peer addresses the Node Agent pins to the peer's link address on this
+    # interface: on a long-delay link, address resolution takes seconds and
+    # cannot complete across a light-minute delay. Empty on a local link.
+    static_neighbors: list[str]
 
     @field_validator("name", "peer_node", "peer_iface")
     @classmethod
     def _nonempty(cls, value: str) -> str:
         if not value:
             raise ValueError("ISL interface fields must be non-empty")
+        return value
+
+    @field_validator("static_neighbors")
+    @classmethod
+    def _addresses(cls, value: list[str]) -> list[str]:
+        for address in value:
+            ipaddress.ip_address(address)
+        if len(set(value)) != len(value):
+            raise ValueError("static neighbor addresses must be distinct")
         return value
 
 

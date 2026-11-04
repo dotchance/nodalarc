@@ -17,6 +17,7 @@ from node_agent.kernel_constants import (
     IFF_UP,
     MPLS_INPUT_ENABLED,
     NETEM_HANDLE,
+    NUD_PERMANENT,
     SHAPER_CLASS_HANDLE,
     SHAPER_DEFAULT_CLASS,
     SHAPER_ROOT_HANDLE,
@@ -73,6 +74,59 @@ def verify_pod_interface_exists(pid: int, ifname: str) -> Proof:
     if not rows:
         return Proof.fail(f"pod interface {ifname} missing", f"pid={pid}")
     return Proof.ok(f"pod interface {ifname} exists", f"pid={pid}", rows[0]["raw"])
+
+
+def verify_link_mac(pid: int, ifname: str, mac: str) -> Proof:
+    """A pod interface carries the MAC address every host derives for it."""
+
+    def _op(ipr):
+        idx = ipr.link_lookup(ifname=ifname)
+        return ipr.get_links(idx[0])[0].get_attr("IFLA_ADDRESS") if idx else None
+
+    observed = _in_namespace(pid, _op)
+    if observed is None:
+        return Proof.fail(f"pod interface {ifname} missing", f"pid={pid}")
+    if observed.lower() != mac.lower():
+        return Proof.fail(
+            f"MAC address mismatch on {ifname}", f"expected={mac}", f"observed={observed}"
+        )
+    return Proof.ok(f"MAC address of {ifname} is {mac}", f"pid={pid}")
+
+
+def verify_static_neighbors(
+    pid: int, ifname: str, lladdr: str, addresses: tuple[str, ...]
+) -> Proof:
+    """Each address is a permanent neighbor entry on the pod interface, at ``lladdr``."""
+
+    def _op(ipr):
+        idx = ipr.link_lookup(ifname=ifname)
+        if not idx:
+            return None
+        rows = {}
+        for family in (socket.AF_INET, socket.AF_INET6):
+            for entry in ipr.get_neighbours(family=family, ifindex=idx[0]):
+                rows[entry.get_attr("NDA_DST")] = (entry.get_attr("NDA_LLADDR"), entry["state"])
+        return rows
+
+    rows = _in_namespace(pid, _op)
+    if rows is None:
+        return Proof.fail(f"pod interface {ifname} missing", f"pid={pid}")
+    wrong = []
+    for address in addresses:
+        found = rows.get(address)
+        if found is None:
+            wrong.append(f"{address}: absent")
+            continue
+        observed_lladdr, state = found
+        if (observed_lladdr or "").lower() != lladdr.lower() or not state & NUD_PERMANENT:
+            wrong.append(f"{address}: lladdr={observed_lladdr} state={state:#x}")
+    if wrong:
+        return Proof.fail(
+            f"static neighbors wrong on {ifname}", f"expected lladdr={lladdr}", *wrong
+        )
+    return Proof.ok(
+        f"static neighbors on {ifname}", f"lladdr={lladdr}", *(f"dst={a}" for a in addresses)
+    )
 
 
 def verify_mpls_input(pid: int, ifname: str) -> Proof:

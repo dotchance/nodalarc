@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import hashlib
 import re
+from collections.abc import Iterable
 from typing import NamedTuple
 
 from nodalarc.vxlan import VNI_MAX, VNI_MIN
@@ -117,3 +118,25 @@ def site_lan_member_pod_ifname(vni: int, member_index: int) -> str:
     if not 0 <= member_index <= 99:
         raise ValueError(f"site LAN member index out of range: {member_index}")
     return f"sp{vni:08d}{member_index:02d}"
+
+
+def link_interface_mac(node_id: str, ifname: str) -> str:
+    """The MAC address of a pod's link interface, the same on every host that computes it.
+
+    Format: 02:XX:XX:XX:XX:XX, the five XX bytes from SHA-256 of ``node_id:ifname``; 02 sets the
+    locally-administered bit. Every host derives the far end's address from the wiring manifest
+    alone, which a static neighbor entry on a long-delay link needs. The derivation is not unique
+    by construction, so a session's addresses are checked with ``duplicate_link_macs`` before it
+    is wired.
+    """
+    digest = hashlib.sha256(f"{node_id}:{ifname}".encode()).digest()
+    return f"02:{digest[0]:02x}:{digest[1]:02x}:{digest[2]:02x}:{digest[3]:02x}:{digest[4]:02x}"
+
+
+def duplicate_link_macs(interfaces: Iterable[tuple[str, str]]) -> list[tuple[str, list[str]]]:
+    """Every MAC address two or more of the ``(node_id, ifname)`` link interfaces would share,
+    with the interfaces that share it; empty when every address is unique."""
+    by_mac: dict[str, list[str]] = {}
+    for node_id, ifname in interfaces:
+        by_mac.setdefault(link_interface_mac(node_id, ifname), []).append(f"{node_id}/{ifname}")
+    return sorted((mac, sorted(owners)) for mac, owners in by_mac.items() if len(owners) > 1)

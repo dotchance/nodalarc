@@ -9,6 +9,7 @@ Called by kopf handlers in handlers.py.
 from __future__ import annotations
 
 import hashlib
+import ipaddress
 import json
 import logging
 import os
@@ -22,7 +23,7 @@ from nodalarc.catalog_upload import CatalogUploadSelection
 from nodalarc.content_identity import canonical_json_bytes
 from nodalarc.cr_runtime_config import ConstellationSpecSpec, load_cr_runtime_config
 from nodalarc.kube_watch import list_then_watch, object_uid
-from nodalarc.models.resolved_session import ResolvedSession
+from nodalarc.models.resolved_session import ResolvedNode, ResolvedSession
 from nodalarc.nats_channels import sanitize_session_id, session_purge_filters
 from nodalarc.platform_config import (
     compute_pod_placement,
@@ -35,6 +36,7 @@ from nodalarc.runtime_config import (
     RuntimeConfigProof,
     RuntimeDeploymentContext,
 )
+from nodalarc.runtime_naming import duplicate_link_macs
 from nodalarc.runtime_service_config import (
     CATALOG_UPLOAD_SELECTION_FILENAME,
     SESSION_RUN_ID_FILENAME,
@@ -340,17 +342,38 @@ def _pod_inventory(resolved: ResolvedSession) -> dict[str, dict]:
     return inventory
 
 
-def _fixed_link_interfaces_by_node(resolved: ResolvedSession) -> dict[str, list[dict[str, str]]]:
-    by_node: dict[str, list[dict[str, str]]] = {}
+def _static_neighbors(peer: ResolvedNode) -> list[str]:
+    """The peer addresses to pin on a long-delay link: the peer's loopbacks, the next hops of
+    the routes NodalArc renders over a point-to-point link (unnumbered interfaces borrow the
+    loopback; a static boundary installs its routes via the peer loopback)."""
+    if peer.interfaces is None:
+        raise ValueError(f"long-delay link peer {peer.node_id!r} has no allocated interfaces")
+    loopback = peer.interfaces.lo0
+    return [
+        str(ipaddress.ip_interface(address).ip)
+        for address in (loopback.ipv4, loopback.ipv6)
+        if address is not None
+    ]
+
+
+def _fixed_link_interfaces_by_node(resolved: ResolvedSession) -> dict[str, list[dict[str, Any]]]:
+    nodes = {node.node_id: node for node in resolved.nodes}
+    by_node: dict[str, list[dict[str, Any]]] = {}
     for candidate in resolved.link_candidates:
         if candidate.kind == "access":
             continue
         interface_a, interface_b = candidate.fixed_interfaces
+        # Address resolution takes seconds; across a long-delay link it cannot complete, so the
+        # Node Agent pins each next hop to the peer's link address. Local links keep resolving.
+        long_delay = candidate.delay_class == "long_delay"
         by_node.setdefault(candidate.node_a, []).append(
             {
                 "name": interface_a,
                 "peer_node": candidate.node_b,
                 "peer_iface": interface_b,
+                "static_neighbors": _static_neighbors(nodes[candidate.node_b])
+                if long_delay
+                else [],
             }
         )
         by_node.setdefault(candidate.node_b, []).append(
@@ -358,6 +381,9 @@ def _fixed_link_interfaces_by_node(resolved: ResolvedSession) -> dict[str, list[
                 "name": interface_b,
                 "peer_node": candidate.node_a,
                 "peer_iface": interface_a,
+                "static_neighbors": _static_neighbors(nodes[candidate.node_a])
+                if long_delay
+                else [],
             }
         )
     return {
@@ -911,6 +937,20 @@ def write_wiring_manifest(
             ground_bridges[node.node_id] = {}
             continue
         raise ValueError(f"unsupported node kind in wiring manifest: {node.kind!r}")
+
+    # Every link interface's MAC address comes from its node and name on whichever host wires it
+    # (a long-delay link's static neighbors name the far end's). The derivation is a hash, so the
+    # session's addresses are proven unique here, before anything is wired.
+    duplicates = duplicate_link_macs(
+        (node_id, iface["name"])
+        for node_id, spec in nodes.items()
+        for iface in (*spec["isl_interfaces"], *spec["gnd_interfaces"])
+    )
+    if duplicates:
+        raise ValueError(
+            "link interface MAC addresses collide: "
+            + "; ".join(f"{mac} for {', '.join(owners)}" for mac, owners in duplicates)
+        )
 
     # Count unique ISL links
     isl_pairs: set[tuple[str, str]] = set()

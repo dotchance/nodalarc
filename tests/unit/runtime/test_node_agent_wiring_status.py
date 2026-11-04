@@ -83,6 +83,7 @@ def _handle(node_id: str, *, pod_uid: str):
         pid=4242,
         netns_id="4026532100",
         mpls_enable=False,
+        static_neighbors=(),
     )
 
 

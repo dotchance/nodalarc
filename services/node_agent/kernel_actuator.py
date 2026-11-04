@@ -22,6 +22,7 @@ def update_terminal_delay(pid: int, ifname: str, delay_ms: float, transmit_mbps:
 def create_cross_node_vxlan(
     *,
     pid: int,
+    node_id: str,
     ifname: str,
     local_ip: str,
     remote_ip: str,
@@ -30,6 +31,7 @@ def create_cross_node_vxlan(
     """Create the cross-node link; True when created here, False when reused."""
     return vxlan.create_vxlan_link(
         pid=pid,
+        node_id=node_id,
         ifname=ifname,
         local_ip=local_ip,
         remote_ip=remote_ip,

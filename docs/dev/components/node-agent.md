@@ -74,6 +74,14 @@ def _in_namespace(pid: int, fn: Callable):
 3. Shape the host-side veth that feeds the pod-side interface at the
    terminal's receive rate (HTB class, no delay)
 4. For ground links: attach to ground bridge via tc mirred redirect
+5. For a long-delay link (an `isl_interfaces` entry with `static_neighbors`):
+   install a permanent neighbor entry for each listed peer address at the
+   peer interface's MAC address, and prove both those entries and this end's
+   own MAC address. Address resolution cannot complete across a light-minute
+   delay. Every pod link interface carries the MAC address
+   `runtime_naming.link_interface_mac(node, interface)` on whichever host
+   wires it, so each end derives the other's; the Operator refuses a session
+   in which two link interfaces would share one.
 
 Each end of a link is shaped from its own terminal. A terminal that transmits
 at 2 Mbit/s and receives at 100 Mbit/s keeps those two rates regardless of the
@@ -88,7 +96,8 @@ ISL and ground links use different CROSS_NODE paths:
 
 - **ISL:** create a VXLAN interface, create a host/pod veth pair, redirect VXLAN
   to the veth host end with tc mirred, move the pod end into the target
-  namespace, bring it UP, then apply shaping.
+  namespace, give it its link MAC address, bring it UP, then apply shaping
+  (and, on a long-delay link, its static neighbors).
 - **Ground:** attach a VXLAN interface to the already-wired local host-side
   ground interface with tc mirred, shape the local terminal endpoint (transmit
   on the pod interface, receive on its host-side veth), and verify VXLAN,

@@ -41,9 +41,11 @@ import re
 from collections.abc import Mapping
 from dataclasses import dataclass
 
+from nodalarc.runtime_naming import link_interface_mac
 from nodalarc.substrate.manifest_contract import (
     POD_OWNER_UID_LABEL,
     POD_SESSION_RUN_LABEL,
+    NodeSpec,
 )
 from nodalarc.workload_target import NODE_ID_LABEL
 
@@ -61,6 +63,43 @@ _CONTAINER_DIR_RE = re.compile(r"(?:cri-containerd-|crio-|docker-)?([0-9a-f]{64}
 
 
 @dataclass(frozen=True, slots=True)
+class StaticNeighbors:
+    """The far end's link address and the far-end addresses pinned to it on one interface of a
+    long-delay link."""
+
+    lladdr: str
+    addresses: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class NodeManifestFacts:
+    """What the wiring manifest requires of one local node's kernel state: its MPLS requirement
+    and, per long-delay link interface, the static neighbors it carries."""
+
+    mpls_enable: bool
+    static_neighbors: tuple[tuple[str, StaticNeighbors], ...]
+
+
+def manifest_facts(node: NodeSpec) -> NodeManifestFacts:
+    """A local node's manifest facts. The far end's link address is derived from its node and
+    interface name, as the far host derives it (``runtime_naming.link_interface_mac``)."""
+    return NodeManifestFacts(
+        mpls_enable=node.mpls_enable,
+        static_neighbors=tuple(
+            (
+                iface.name,
+                StaticNeighbors(
+                    lladdr=link_interface_mac(iface.peer_node, iface.peer_iface),
+                    addresses=tuple(iface.static_neighbors),
+                ),
+            )
+            for iface in node.isl_interfaces
+            if iface.static_neighbors
+        ),
+    )
+
+
+@dataclass(frozen=True, slots=True)
 class NamespaceHandle:
     """One validated pod network-namespace handle.
 
@@ -70,9 +109,10 @@ class NamespaceHandle:
     before kernel mutations: a sandbox recreation invalidates the handle
     even though the pod UID is unchanged.
 
-    ``mpls_enable`` is the wiring manifest's requirement for this node,
-    bound when the handle is built so every consumer of a published handle
-    reads the manifest's value and never a default.
+    ``mpls_enable`` and ``static_neighbors`` are the wiring manifest's
+    requirements for this node, bound when the handle is built so every
+    consumer of a published handle reads the manifest's value and never a
+    default.
     """
 
     node_id: str
@@ -82,6 +122,11 @@ class NamespaceHandle:
     pid: int
     netns_id: str
     mpls_enable: bool
+    static_neighbors: tuple[tuple[str, StaticNeighbors], ...]
+
+    def static_neighbors_on(self, ifname: str) -> StaticNeighbors | None:
+        """The static neighbors the manifest gives ``ifname``; None on a local link."""
+        return dict(self.static_neighbors).get(ifname)
 
 
 def netns_identity(pid: int) -> str | None:
@@ -159,7 +204,7 @@ def _validated_sandbox_handle(
     pod,
     processes: PodProcesses,
     *,
-    mpls_enable: bool,
+    facts: NodeManifestFacts,
 ) -> NamespaceHandle | None:
     """Find the pod's sandbox process and return a fully validated handle, or None.
 
@@ -231,7 +276,8 @@ def _validated_sandbox_handle(
         sandbox_id=sandbox_id,
         pid=pid,
         netns_id=netns,
-        mpls_enable=mpls_enable,
+        mpls_enable=facts.mpls_enable,
+        static_neighbors=facts.static_neighbors,
     )
 
 
@@ -241,7 +287,7 @@ def discover_local_pod_handles(
     *,
     session_run_id: str,
     owner_uid: str,
-    requirements: Mapping[str, bool],
+    requirements: Mapping[str, NodeManifestFacts],
 ) -> dict[str, NamespaceHandle]:
     """Discover validated namespace handles for current-run pods on this node.
 
@@ -251,9 +297,9 @@ def discover_local_pod_handles(
     and never conclude from this map alone.
 
     ``requirements`` maps every node the manifest places on this host to its
-    MPLS requirement. It is the only source of a handle's ``mpls_enable``;
-    a current-run pod whose node is not in it is not expected here and gets
-    no handle.
+    manifest facts. It is the only source of a handle's ``mpls_enable`` and
+    ``static_neighbors``; a current-run pod whose node is not in it is not
+    expected here and gets no handle.
     """
     import kubernetes
     import kubernetes.client
@@ -314,7 +360,7 @@ def discover_local_pod_handles(
     result: dict[str, NamespaceHandle] = {}
     for node_id, pod in candidates.items():
         handle = _validated_sandbox_handle(
-            node_id, pod, processes[pod.metadata.uid], mpls_enable=requirements[node_id]
+            node_id, pod, processes[pod.metadata.uid], facts=requirements[node_id]
         )
         if handle is None:
             continue

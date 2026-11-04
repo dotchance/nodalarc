@@ -12,20 +12,23 @@ Never use pyroute2 NetNS() directly in the Node Agent.
 from __future__ import annotations
 
 import ctypes
-import hashlib
+import ipaddress
 import logging
 import os
+import socket
 import threading
 from collections.abc import Callable
 from typing import TypeVar
 
 from nodalarc.platform_config import get_platform_config
+from nodalarc.runtime_naming import link_interface_mac
 from pyroute2 import IPRoute
 from pyroute2.netlink.rtnl import TC_H_ROOT
 
 from node_agent import netem_plugin
 from node_agent.kernel_constants import (
     NETEM_HANDLE,
+    NUD_PERMANENT,
     SHAPER_CLASS_HANDLE,
     SHAPER_DEFAULT_CLASS,
     SHAPER_ROOT_HANDLE,
@@ -125,14 +128,23 @@ def in_host_namespace(fn: Callable[[IPRoute], _T]) -> _T:
 # construction.
 
 
-def deterministic_mac(node_id: str, ifname: str) -> str:
-    """Derive a deterministic locally-administered unicast MAC address.
+def assign_link_mac(pid: int, ifname: str, node_id: str, ipr: IPRoute | None = None) -> None:
+    """Give a pod's link interface its MAC address (``runtime_naming.link_interface_mac``).
 
-    Format: 02:XX:XX:XX:XX:XX where XX bytes come from SHA-256 of
-    node_id + ifname. The 02 prefix sets the locally-administered bit.
+    If ipr is provided, we are already inside _in_namespace and use it directly.
     """
-    digest = hashlib.sha256(f"{node_id}:{ifname}".encode()).digest()
-    return f"02:{digest[0]:02x}:{digest[1]:02x}:{digest[2]:02x}:{digest[3]:02x}:{digest[4]:02x}"
+    mac = link_interface_mac(node_id, ifname)
+
+    def _do_assign(handle: IPRoute) -> None:
+        idx = handle.link_lookup(ifname=ifname)
+        if not idx:
+            raise FileNotFoundError(f"Interface {ifname} not found in ns({pid})")
+        handle.link("set", index=idx[0], address=mac)
+
+    if ipr is not None:
+        _do_assign(ipr)
+    else:
+        _in_namespace(pid, _do_assign)
 
 
 # ---------------------------------------------------------------------------
@@ -360,13 +372,10 @@ def configure_interface(pid: int, ifname: str, node_id: str, ipr: IPRoute | None
     _in_namespace — zero additional setns hops). If not, wraps all
     work in one _in_namespace call.
     """
-    mac = deterministic_mac(node_id, ifname)
+    mac = link_interface_mac(node_id, ifname)
 
     def _do_configure(handle: IPRoute) -> None:
-        idx = handle.link_lookup(ifname=ifname)
-        if not idx:
-            raise FileNotFoundError(f"Interface {ifname} not found in ns({pid})")
-        handle.link("set", index=idx[0], address=mac)
+        assign_link_mac(pid, ifname, node_id, ipr=handle)
         # Disable IPv6 autoconfig — already in namespace, pass handle
         disable_ipv6_autoconfig(pid, ifname, ipr=handle)
 
@@ -375,3 +384,34 @@ def configure_interface(pid: int, ifname: str, node_id: str, ipr: IPRoute | None
     else:
         _in_namespace(pid, _do_configure)
     log.debug("Configured %s in ns(%d): mac=%s, ipv6_autoconfig=off", ifname, pid, mac)
+
+
+def install_static_neighbors(
+    pid: int, ifname: str, lladdr: str, addresses: tuple[str, ...]
+) -> None:
+    """Pin each peer address to the peer's link address on a pod interface.
+
+    On a long-delay link address resolution cannot complete: the kernel gives up on an ARP or
+    neighbor-discovery request after about 3 s, and the reply needs twice the light time. A
+    permanent entry is what a point-to-point link without resolution has. ``replace`` makes the
+    write idempotent across repeated LinkUps.
+    """
+
+    def _do(handle: IPRoute) -> None:
+        idx = handle.link_lookup(ifname=ifname)
+        if not idx:
+            raise FileNotFoundError(f"Interface {ifname} not found in ns({pid})")
+        for address in addresses:
+            family = (
+                socket.AF_INET6 if ipaddress.ip_address(address).version == 6 else socket.AF_INET
+            )
+            handle.neigh(
+                "replace",
+                dst=address,
+                lladdr=lladdr,
+                ifindex=idx[0],
+                state=NUD_PERMANENT,
+                family=family,
+            )
+
+    _in_namespace(pid, _do)

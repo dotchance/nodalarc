@@ -26,7 +26,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 
 from nodalarc.proto import node_agent_pb2
-from nodalarc.runtime_naming import vxlan_host_ifnames
+from nodalarc.runtime_naming import link_interface_mac, vxlan_host_ifnames
 
 from node_agent import (
     ground_bridge,
@@ -841,6 +841,13 @@ def _isl_link_up_carrier_stage(
             pid, iface.interface_name, iface.latency_ms, iface.rates.transmit_mbps
         )
         namespace_ops.apply_receive_shaping(host_ifname, iface.rates.receive_mbps)
+        # A long-delay link carries static neighbors: address resolution cannot complete across
+        # it. Installed at every LinkUp, since a cross-host link's pod end is new each time.
+        neighbors = handles[iface.node_id].static_neighbors_on(iface.interface_name)
+        if neighbors is not None:
+            namespace_ops.install_static_neighbors(
+                pid, iface.interface_name, neighbors.lladdr, neighbors.addresses
+            )
         proofs = [
             kernel_verifier.verify_pod_interface_exists(pid, iface.interface_name),
             kernel_verifier.verify_qdisc(
@@ -855,6 +862,21 @@ def _isl_link_up_carrier_stage(
         ]
         if _requires_mpls(iface.node_id, handles):
             proofs.append(kernel_verifier.verify_mpls_input(pid, iface.interface_name))
+        if neighbors is not None:
+            proofs.extend(
+                [
+                    # This end's own address, the one the far end pinned; the far end proves
+                    # its own the same way.
+                    kernel_verifier.verify_link_mac(
+                        pid,
+                        iface.interface_name,
+                        link_interface_mac(iface.node_id, iface.interface_name),
+                    ),
+                    kernel_verifier.verify_static_neighbors(
+                        pid, iface.interface_name, neighbors.lladdr, neighbors.addresses
+                    ),
+                ]
+            )
         if iface.locality == node_agent_pb2.LOCALITY_LOCAL:
             host_a = ground_bridge._isl_host_name(
                 iface.node_id, ground_bridge._isl_idx_from_ifname(iface.interface_name)
@@ -1056,6 +1078,7 @@ def handle_batch_link_up(
                 pid = _require_pid(iface.node_id, pm)
                 created = vxlan.create_vxlan_link(
                     pid=pid,
+                    node_id=iface.node_id,
                     ifname=iface.interface_name,
                     local_ip=local_ip,
                     remote_ip=iface.remote_node_ip,

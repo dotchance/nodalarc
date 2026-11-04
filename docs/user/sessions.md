@@ -164,6 +164,15 @@ Topology modes:
 | `nearest_n` | Rank pairs by physical distance and greedily cap each selected node at `n` candidates; a node may receive fewer when a peer's cap is already full. |
 | `explicit_pairs` | Use the exact declared candidate pairs. |
 
+Each link is a local link or a long-delay link: a long-delay link's one-way
+delay can exceed the platform's long-delay bound (10 s by default), and a
+local link's never does. Links between Earth or the Moon and Mars are
+long-delay. Links between two nodes of one body, and links between Earth and
+the Moon, are local. A link whose delay can fall on both sides of the
+bound is refused. On a long-delay link the two ends hold static neighbor
+entries for each other: address resolution (ARP and IPv6 neighbor discovery)
+gives up after about 3 s, and across such a link its reply needs minutes.
+
 ## Ground handoff policy
 
 Ground handoff is a property of a ground node. Segment `apply.scheduling`

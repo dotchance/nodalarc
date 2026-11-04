@@ -21,3 +21,8 @@ MPLS_INPUT_ENABLED = "1"
 
 def mpls_input_sysctl(ifname: str) -> str:
     return f"net.mpls.conf.{ifname}.input"
+
+
+# A neighbor entry's NUD state: permanent entries are never resolved, aged or
+# replaced by the kernel (include/uapi/linux/neighbour.h NUD_PERMANENT).
+NUD_PERMANENT = 0x80

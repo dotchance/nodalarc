@@ -46,7 +46,11 @@ from node_agent.namespace_ops import (
     _write_sysctl_in_netns,
     configure_interface,
 )
-from node_agent.pid_discovery import NamespaceHandle, discover_local_pod_handles
+from node_agent.pid_discovery import (
+    NamespaceHandle,
+    discover_local_pod_handles,
+    manifest_facts,
+)
 from node_agent.proof_delivery import deliver_proof_file, kubelet_pods_dir
 from node_agent.substrate_monitor import prove_host_path_mtu
 
@@ -255,10 +259,11 @@ def discover_expected_handles(
     """
     import time
 
-    # The manifest owns each node's MPLS requirement; discovery binds it to
-    # the handle before the handle can be published, so no consumer reads a
-    # default. Rebuilt on every discovery: replacement and Case B included.
-    requirements = {node_id: manifest.nodes[node_id].mpls_enable for node_id in expected_local}
+    # The manifest owns each node's MPLS requirement and long-delay static
+    # neighbors; discovery binds them to the handle before the handle can be
+    # published, so no consumer reads a default. Rebuilt on every discovery:
+    # replacement and Case B included.
+    requirements = {node_id: manifest_facts(manifest.nodes[node_id]) for node_id in expected_local}
     handles: dict[str, NamespaceHandle] = {}
     for attempt in range(1, max_attempts + 1):
         if superseded():

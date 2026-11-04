@@ -78,6 +78,9 @@ network:
   # UDP port of NodalArc's VXLAN tunnels between hosts: free on every host,
   # open between them, outside the ephemeral and NodePort ranges.
   vxlanPort: 14789
+  # Seconds of one-way delay that separate local links from long-delay links.
+  # A link whose delay can exceed it is a long-delay link.
+  longDelayBoundSeconds: 10.0
 
 # VS-API: FastAPI server for visualization state
 vsApi:

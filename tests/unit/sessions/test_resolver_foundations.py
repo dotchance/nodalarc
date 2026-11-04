@@ -242,6 +242,7 @@ def _resolved_session(**overrides) -> ResolvedSession:
             compression=1,
         ),
         "source_context": SourceContext(origin="test"),
+        "long_delay_bound_s": 10.0,
         "ephemeris_files": (
             ResolvedEphemerisFile(
                 file_id="de440s", filename="de440s.bsp", sha256=FILES["de440s"].sha256
@@ -486,6 +487,7 @@ def test_link_candidate_maps_and_ground_candidates() -> None:
         topology_mode="visible_candidates",
         priority=0,
         endpoint_segments=("ground", "leo"),
+        delay_class="local",
     )
     rs = _resolved_session(
         nodes=(sat, gs),
@@ -523,6 +525,7 @@ def test_link_interface_map_contains_only_fixed_candidates() -> None:
         topology_mode="visible_candidates",
         priority=0,
         endpoint_segments=("leo", "leo"),
+        delay_class="local",
     )
     resolved = _resolved_session(
         nodes=(left, right),
@@ -547,6 +550,7 @@ def test_access_candidate_rejects_fabricated_fixed_interfaces() -> None:
             topology_mode="visible_candidates",
             priority=0,
             endpoint_segments=("ground", "leo"),
+            delay_class="local",
         )
 
 
@@ -563,6 +567,7 @@ def test_fixed_candidate_requires_both_interfaces() -> None:
             topology_mode="visible_candidates",
             priority=0,
             endpoint_segments=("leo", "leo"),
+            delay_class="local",
         )
 
 
@@ -580,6 +585,7 @@ def test_link_candidate_rejects_self_pair() -> None:
             topology_mode="visible_candidates",
             priority=0,
             endpoint_segments=("leo", "leo"),
+            delay_class="local",
         )
 
 

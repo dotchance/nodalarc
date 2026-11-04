@@ -55,6 +55,7 @@ def _init_platform_config():
         session_data_root="/var/nodalarc/sessions",
         veth_interface_mtu_bytes=9000,
         vxlan_udp_port=14789,
+        long_delay_bound_s=10.0,
         node_agent_loads_kernel_modules=False,
         kubelet_root_dir="/var/lib/kubelet",
         vs_api_visual_beam_falloff_exponent=2.0,

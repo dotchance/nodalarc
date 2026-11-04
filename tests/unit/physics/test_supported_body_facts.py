@@ -15,7 +15,7 @@ import pytest
 import yaml
 from nodalarc.body_frames import BODY_RUNTIME_SUPPORT, SupportedSurfaceBody
 from nodalarc.models.catalog import Body
-from nodalarc.physics.ephemeris_table import BODIES, FARTHEST_SEPARATION_KM, FILES
+from nodalarc.physics.ephemeris_table import BODIES, BODY_SEPARATION_KM, FILES
 from nodalarc.runtime_support import RuntimeSupport
 
 from tests.catalog_session_fixtures import SHIPPED_ROOT
@@ -42,4 +42,6 @@ def test_a_supported_body_has_every_runtime_fact(body: str) -> None:
 
 @pytest.mark.parametrize(("a", "b"), list(combinations(SUPPORTED, 2)))
 def test_every_pair_of_supported_bodies_has_a_largest_separation(a: str, b: str) -> None:
-    assert frozenset({a, b}) in FARTHEST_SEPARATION_KM
+    separation = BODY_SEPARATION_KM.get(frozenset({a, b}))
+    assert separation is not None
+    assert 0 < separation.nearest_km < separation.farthest_km

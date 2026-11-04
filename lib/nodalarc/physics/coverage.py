@@ -25,8 +25,7 @@ from itertools import combinations_with_replacement
 
 from nodalarc.constants import SPEED_OF_LIGHT_KM_S
 from nodalarc.physics.context import PhysicsContext
-from nodalarc.physics.ephemeris_table import FARTHEST_SEPARATION_KM
-from nodalarc.physics.errors import PhysicsDataError
+from nodalarc.physics.ephemeris_table import body_separation
 from nodalarc.physics.motion import GRID_SPACING_S
 from nodalarc.physics.samples import WINDOW_AFTER_S, WINDOW_BEFORE_S
 
@@ -40,12 +39,7 @@ def light_time_bound_s(reach_km: Mapping[str, float]) -> float:
         if a == b:
             distance_km = 2.0 * reach_km[a]
         else:
-            separation = FARTHEST_SEPARATION_KM.get(frozenset({a, b}))
-            if separation is None:
-                raise PhysicsDataError(
-                    f"no largest separation is recorded for bodies {a!r} and {b!r}"
-                )
-            distance_km = separation + reach_km[a] + reach_km[b]
+            distance_km = body_separation(a, b).farthest_km + reach_km[a] + reach_km[b]
         longest_km = max(longest_km, distance_km)
     return longest_km / SPEED_OF_LIGHT_KM_S
 

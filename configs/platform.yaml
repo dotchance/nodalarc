@@ -68,6 +68,15 @@ platform:
   # replaces it at install.
   vxlan_udp_port: 14789
 
+  # Seconds of one-way delay that separate local links from long-delay links.
+  # A link whose delay can exceed it is a long-delay link; every other link is
+  # a local link. The resolver classifies each link candidate once, from the
+  # smallest and largest delay it can have over the shipped ephemeris data, and
+  # refuses a candidate whose delays span it. A long-delay link carries static
+  # neighbor entries: address resolution takes seconds and cannot complete
+  # across it. Chart value network.longDelayBoundSeconds replaces it at install.
+  long_delay_bound_s: 10.0
+
   # Whether the Node Agent loads the kernel modules a session needs (MPLS)
   # on its host when the session is wired. Off: the host's own configuration
   # must load them, and a session that needs one the host lacks is refused.

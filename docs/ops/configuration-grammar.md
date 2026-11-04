@@ -1703,6 +1703,10 @@ runtime execution:
 - an access link between ground stations on two bodies (a direct
   surface-to-surface link across bodies);
 - bodies other than Earth, Luna and Mars;
+- a link candidate whose one-way delay can fall on both sides of the
+  platform's long-delay bound (chart value `network.longDelayBoundSeconds`,
+  10 s by default), bounded from the endpoints' bodies, orbits and sites and
+  the reach of their terminals;
 - workload adapters other than `frr`;
 - SGP4 and analytic propagators mixed under one central body, until they
   share a body-fixed rotation authority;

@@ -492,6 +492,12 @@ class ResolvedBodyFacts(BaseModel):
     reference: str
 
 
+# A link whose one-way delay can exceed the platform's long-delay bound is a
+# long-delay link; every other link is a local link. The resolver classifies
+# each candidate once, from every delay the candidate can have.
+type LinkDelayClass = Literal["local", "long_delay"]
+
+
 class ResolvedLinkCandidate(BaseModel):
     """One declared candidate pair.
 
@@ -515,6 +521,7 @@ class ResolvedLinkCandidate(BaseModel):
     topology_mode: TopologyMode
     priority: int = Field(ge=0)
     endpoint_segments: tuple[NonEmptyReference, NonEmptyReference]
+    delay_class: LinkDelayClass
 
     @model_validator(mode="after")
     def _candidate_invariants(self) -> ResolvedLinkCandidate:
@@ -826,6 +833,8 @@ class ResolvedSession(BaseModel):
     dispatch: Dispatch | None = None
     addressing: Addressing | None = None
     ephemeris_files: tuple[ResolvedEphemerisFile, ...] = Field(min_length=1)
+    # The platform's long-delay bound the candidates were classified against.
+    long_delay_bound_s: float = Field(gt=0, allow_inf_nan=False)
     time: TimeConfig
     source_context: SourceContext
 

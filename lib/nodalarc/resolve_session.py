@@ -25,10 +25,11 @@ from nodalarc.catalog_refs import CatalogRef
 from nodalarc.configuration_yaml import load_configuration_yaml
 from nodalarc.link_rule_candidates import generate_declared_link_candidates
 from nodalarc.model_validation import ADDRESS_FAMILIES, AddressFamily
-from nodalarc.models.catalog import EnvValueFrom, Profile, ResolvedEnvEntry
+from nodalarc.models.catalog import EnvValueFrom, MountRole, Profile, ResolvedEnvEntry
 from nodalarc.models.identity import IdentityMode
 from nodalarc.models.link_rules import LinkLabel, LinkRule, NodeSelector, TerminalSelector
 from nodalarc.models.resolved_session import (
+    LinkDelayClass,
     OspfInstanceAreas,
     ResolutionSubjectKind,
     ResolvedBodyFacts,
@@ -68,7 +69,9 @@ from nodalarc.models.terminal_physics import SatGroundTerminalBoresight, Termina
 from nodalarc.ome_inputs import coverage_requirement
 from nodalarc.physics import PhysicsContext, PhysicsDataError
 from nodalarc.physics.coverage import describe_tick_coverage_gap, tick_coverage_gap
-from nodalarc.physics.session import session_node_positions, session_physics
+from nodalarc.physics.link_delay import link_delay_range_s
+from nodalarc.physics.session import node_link_end, session_node_positions, session_physics
+from nodalarc.platform_config import get_platform_config
 from nodalarc.runtime_naming import validate_runtime_node_id
 from nodalarc.runtime_support import (
     FeatureCategory,
@@ -244,6 +247,7 @@ def resolve_session_with_assets(
         dispatch=dispatch,
         addressing=cfg.addressing,
         ephemeris_files=ephemeris_files,
+        long_delay_bound_s=get_platform_config().long_delay_bound_s,
         time=cfg.time,
         source_context=context,
     )
@@ -271,6 +275,7 @@ def resolve_session_with_assets(
         dispatch=dispatch,
         addressing=base_resolved.addressing,
         ephemeris_files=base_resolved.ephemeris_files,
+        long_delay_bound_s=base_resolved.long_delay_bound_s,
         time=base_resolved.time,
         source_context=base_resolved.source_context,
     )
@@ -3325,6 +3330,7 @@ def _resolve_link_candidates(
     node_by_id = {node.node_id: node for node in resolved.nodes}
     selectors = _terminal_selectors_by_rule(cfg)
     rules_by_id = {rule.rule_id: rule for rule in resolved.link_rules}
+    bodies = {facts.body_id: facts for facts in resolved.bodies}
     used_ifaces: dict[str, set[str]] = {}
 
     def _fixed_iface(node_id: str, rule_id: str) -> str:
@@ -3375,11 +3381,81 @@ def _resolve_link_candidates(
                 topology_mode=candidate.topology_mode,
                 priority=candidate.priority,
                 endpoint_segments=candidate.endpoint_segments,
+                delay_class=_candidate_delay_class(
+                    candidate.rule_id,
+                    (left, role_a),
+                    (right, role_b),
+                    bodies,
+                    resolved.long_delay_bound_s,
+                ),
             )
         )
     _validate_fixed_interface_capacity(candidates, node_by_id)
     _enforce_candidate_limits(candidates, resolved)
     return candidates
+
+
+def _largest_terminal_range_km(node: ResolvedNode, role: MountRole, rule_id: str) -> float:
+    """The largest range of any terminal ``node`` carries in ``role``: the farthest a link of
+    that role can reach from the node, whichever of those terminals holds it."""
+    ranges = [
+        block.max_range_km for block in node.terminal_inventory if block.endpoint_role == role
+    ]
+    if not ranges:
+        raise SessionResolutionError(
+            f"link rule {rule_id!r} pairs {node.node_id!r} as a {role} endpoint, but it carries "
+            f"no {role} terminal",
+            subject_kind="link_rule",
+            subject_id=rule_id,
+            segment_id=node.segment_id,
+            node_id=node.node_id,
+        )
+    return max(ranges)
+
+
+def _candidate_delay_class(
+    rule_id: str,
+    end_a: tuple[ResolvedNode, MountRole],
+    end_b: tuple[ResolvedNode, MountRole],
+    bodies: Mapping[str, ResolvedBodyFacts],
+    bound_s: float,
+) -> LinkDelayClass:
+    """A candidate's link class, from every one-way delay the candidate can have.
+
+    The delays are bounded once, from the endpoints' bodies, orbit sizes and site radii, the two
+    bodies' separation over the shipped data's whole coverage, and the farthest the endpoints'
+    terminals reach; a session declares no end time, so its own interval cannot bound them. A
+    candidate whose largest delay is under the bound is local, and one whose smallest delay is
+    over it is long-delay. A candidate whose delays span the bound would change class during the
+    session, and what the substrate holds for each class cannot follow, so it is refused. At the
+    shipped 10 s bound no pair of supported bodies has such a candidate: Earth-Moon delays stay
+    under 1.5 s and Earth-Mars delays above 185 s.
+    """
+    (left, role_a), (right, role_b) = end_a, end_b
+    terminal_reach_km = min(
+        _largest_terminal_range_km(left, role_a, rule_id),
+        _largest_terminal_range_km(right, role_b, rule_id),
+    )
+    shortest_s, longest_s = link_delay_range_s(
+        node_link_end(left, bodies), node_link_end(right, bodies), range_limit_km=terminal_reach_km
+    )
+    if longest_s < bound_s:
+        return "local"
+    if shortest_s > bound_s:
+        return "long_delay"
+    raise UnsupportedFeatureError(
+        [
+            UnsupportedFeature(
+                category=FeatureCategory.LINK_TOPOLOGY,
+                value="delay_spans_long_delay_bound",
+                message=(
+                    f"link rule {rule_id!r} joins {left.node_id} and {right.node_id}, whose "
+                    f"one-way delay can be from {shortest_s:.3f} s to {longest_s:.3f} s; a link's "
+                    f"delays must stay on one side of the {bound_s:g} s long-delay bound"
+                ),
+            )
+        ]
+    )
 
 
 def _enforce_declared_candidate_bounds(

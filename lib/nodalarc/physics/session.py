@@ -24,11 +24,15 @@ from nodalarc.physics.context import PhysicsContext
 from nodalarc.physics.errors import PhysicsDataError
 from nodalarc.physics.geodesy import body_fixed_from_geodetic
 from nodalarc.physics.kepler import OrbitModel
+from nodalarc.physics.link_delay import LinkEnd
 from nodalarc.physics.satellites import analytic_satellite_states
 
 if TYPE_CHECKING:
+    from collections.abc import Mapping
+
     from nodalarc.models.resolved_session import (
         ResolvedBodyFacts,
+        ResolvedNode,
         ResolvedOrbitFacts,
         ResolvedSession,
     )
@@ -186,3 +190,21 @@ def session_node_positions(
         for row, (node_id, _elements, _phase) in enumerate(members):
             positions[node_id] = common(body, states.position_icrf_km[row])
     return positions
+
+
+def node_link_end(node: ResolvedNode, bodies: Mapping[str, ResolvedBodyFacts]) -> LinkEnd:
+    """A node as a link endpoint: the body it orbits or stands on, and the farthest it gets from
+    that body's center (an orbit's apoapsis radius; a site's equatorial radius plus altitude)."""
+    if node.orbit is not None:
+        reach_km = node.orbit.semi_major_axis_km * (1.0 + node.orbit.eccentricity)
+        return LinkEnd(node.orbit.central_body, reach_km)
+    if node.surface_position is not None:
+        site = node.surface_position
+        try:
+            radius_km = bodies[site.body].equatorial_radius_km
+        except KeyError as exc:
+            raise ValueError(f"node {node.node_id!r} needs body facts for {site.body!r}") from exc
+        return LinkEnd(site.body, radius_km + site.alt_m / 1000.0)
+    raise ValueError(
+        f"node {node.node_id!r} has neither resolved orbit facts nor a surface position"
+    )

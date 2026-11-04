@@ -27,6 +27,7 @@ def _valid_config_dict() -> dict:
         "session_data_root": "/var/nodalarc/sessions",
         "veth_interface_mtu_bytes": 9000,
         "vxlan_udp_port": 14789,
+        "long_delay_bound_s": 10.0,
         "node_agent_loads_kernel_modules": False,
         "kubelet_root_dir": "/var/lib/kubelet",
         "vs_api_visual_beam_falloff_exponent": 2.0,
@@ -89,6 +90,7 @@ class TestPlatformConfig:
         assert "namespace" not in values
         assert platform["veth_interface_mtu_bytes"] == values["network"]["linkMtu"]
         assert platform["vxlan_udp_port"] == values["network"]["vxlanPort"]
+        assert platform["long_delay_bound_s"] == values["network"]["longDelayBoundSeconds"]
         assert (
             platform["node_agent_loads_kernel_modules"] == values["nodeAgent"]["loadKernelModules"]
         )

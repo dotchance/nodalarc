@@ -214,18 +214,43 @@ SUN_ID = "sun"
 # (Resolution B3), 695,700 km.
 SUN_RADIUS_KM = 695_700.0
 
-# The largest distance between two supported bodies' centers the shipped data can hold, per pair:
-# the bound on how far ahead or behind a signal between them can query the data. Earth-Moon:
-# 406,719.705 km, the largest distance in de440s (1849 to 2150), found by a 3 h scan of its whole
-# coverage refined around the peak (2125-02-03); recorded rounded up to the kilometre. Pairs with
-# Mars: the largest distances over the Mars satellite ephemeris's coverage (1995 to 2050), found by
-# a 1 day (Earth) and 3 h (Luna) scan with each of the twelve largest local maxima refined to 1 s
-# and 0.1 s: Earth-Mars 400,223,838.066 km (2019-08-28), Luna-Mars 400,283,850.226 km (2034-08-25).
-FARTHEST_SEPARATION_KM: dict[frozenset[str], float] = {
-    frozenset({"earth", "luna"}): 406_720.0,
-    frozenset({"earth", "mars"}): 400_223_839.0,
-    frozenset({"luna", "mars"}): 400_283_851.0,
+
+@dataclass(frozen=True, slots=True)
+class BodySeparation:
+    """The smallest and largest distance between two bodies' centers in the shipped data."""
+
+    nearest_km: float
+    farthest_km: float
+
+
+# The distance between two supported bodies' centers, per pair, over the whole coverage of the
+# shipped data, which bounds every sim time a session can reach (seeks included). The farthest
+# distance bounds how far ahead or behind a signal between the two bodies queries the data; both
+# bound the delay of every link between them. Nearest distances are recorded rounded down to the
+# kilometre and farthest ones rounded up.
+#
+# Earth-Moon in de440s (1849 to 2150), from a 3 h scan of the whole coverage refined around each
+# extremum: nearest 356,375.394 km (1912-01-04), farthest 406,719.705 km (2125-02-03).
+# Pairs with Mars, over the Mars satellite ephemeris's coverage (1995 to 2050), from a 1 day
+# (Earth) and 3 h (Luna) scan with each of the twelve most extreme local extrema refined to 1 s
+# and 0.1 s: Earth-Mars nearest 55,758,005.714 km (2003-08-27), farthest 400,223,838.066 km
+# (2019-08-28); Luna-Mars nearest 56,124,307.277 km (2003-08-24), farthest 400,283,850.226 km
+# (2034-08-25).
+BODY_SEPARATION_KM: dict[frozenset[str], BodySeparation] = {
+    frozenset({"earth", "luna"}): BodySeparation(nearest_km=356_375.0, farthest_km=406_720.0),
+    frozenset({"earth", "mars"}): BodySeparation(
+        nearest_km=55_758_005.0, farthest_km=400_223_839.0
+    ),
+    frozenset({"luna", "mars"}): BodySeparation(nearest_km=56_124_307.0, farthest_km=400_283_851.0),
 }
+
+
+def body_separation(a: str, b: str) -> BodySeparation:
+    """The recorded separation of two different bodies; refused when none is recorded."""
+    separation = BODY_SEPARATION_KM.get(frozenset({a, b}))
+    if a == b or separation is None:
+        raise PhysicsDataError(f"no separation is recorded for bodies {a!r} and {b!r}")
+    return separation
 
 
 def select_file_ids(body_ids: Iterable[str]) -> tuple[str, ...]:

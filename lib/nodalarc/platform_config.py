@@ -54,6 +54,11 @@ class PlatformConfig(BaseModel):
     # The UDP port of every VXLAN device NodalArc creates between hosts. Set
     # at install (chart value network.vxlanPort).
     vxlan_udp_port: int = Field(ge=1024, le=65535)
+    # A link whose one-way delay can exceed this many seconds is a long-delay
+    # link; every other link is a local link. The resolver classifies each link
+    # candidate once, from every delay the candidate can have. Set at install
+    # (chart value network.longDelayBoundSeconds).
+    long_delay_bound_s: float = Field(gt=0, allow_inf_nan=False)
     # Whether the Node Agent may load kernel modules a session needs (MPLS)
     # on its host. Set at install (chart value nodeAgent.loadKernelModules).
     node_agent_loads_kernel_modules: bool
@@ -204,6 +209,10 @@ CHART_TEMPLATED_SETTINGS = {
     ),
     "vxlan_udp_port": (
         '{{ required "network.vxlanPort is required" .Values.network.vxlanPort | int }}'
+    ),
+    "long_delay_bound_s": (
+        '{{ required "network.longDelayBoundSeconds is required" '
+        ".Values.network.longDelayBoundSeconds | float64 }}"
     ),
     "node_agent_loads_kernel_modules": (
         '{{ required "nodeAgent.loadKernelModules is required" '

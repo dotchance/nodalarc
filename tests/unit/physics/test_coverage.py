@@ -23,7 +23,7 @@ from nodalarc.physics.coverage import (
     light_time_bound_s,
     tick_coverage_gap,
 )
-from nodalarc.physics.ephemeris_table import FARTHEST_SEPARATION_KM
+from nodalarc.physics.ephemeris_table import body_separation
 from nodalarc.physics.geodesy import body_fixed_from_geodetic
 from nodalarc.physics.lighttime import (
     Endpoint,
@@ -102,7 +102,7 @@ def test_data_too_short_for_any_tick_says_so() -> None:
 def test_the_light_time_bound_is_the_farthest_two_endpoints_can_be() -> None:
     earth_reach, luna_reach = 42_164.0, 7_000.0
     bound = light_time_bound_s({"earth": earth_reach, "luna": luna_reach})
-    separation = FARTHEST_SEPARATION_KM[frozenset({"earth", "luna"})]
+    separation = body_separation("earth", "luna").farthest_km
     assert bound == pytest.approx((separation + earth_reach + luna_reach) / SPEED_OF_LIGHT_KM_S)
     assert light_time_bound_s({"earth": earth_reach}) == pytest.approx(
         2 * earth_reach / SPEED_OF_LIGHT_KM_S
@@ -110,7 +110,7 @@ def test_the_light_time_bound_is_the_farthest_two_endpoints_can_be() -> None:
 
 
 def test_a_body_pair_with_no_recorded_separation_has_no_bound() -> None:
-    with pytest.raises(PhysicsDataError, match="no largest separation"):
+    with pytest.raises(PhysicsDataError, match="no separation is recorded"):
         light_time_bound_s({"earth": 7_000.0, "sun": 700_000.0})
 
 

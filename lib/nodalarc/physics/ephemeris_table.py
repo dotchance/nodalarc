@@ -21,7 +21,7 @@ from typing import Literal
 
 from nodalarc.physics.errors import PhysicsDataError
 
-type DataKind = Literal["spk", "bpc", "fk"]
+type DataKind = Literal["spk", "bpc", "fk", "tpc", "gm"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -31,8 +31,10 @@ class EphemerisFile:
     file_id: str
     filename: str
     sha256: str
-    # spk: positions; bpc: binary orientation; fk: frame definitions, which
-    # ANISE reads only after a build-time conversion (see datasets.py).
+    # spk: positions; bpc: binary orientation; fk: frame definitions; tpc:
+    # text planetary constants (IAU rotation models); gm: gravitational
+    # parameters. ANISE reads fk and tpc only after a build-time conversion
+    # (see datasets.py); the gm file is an input of the tpc conversion only.
     kind: DataKind
     source_url: str
 
@@ -55,8 +57,9 @@ class BodyData:
     # ANISE orientation id whose loaded data bound the coverage of that
     # body-fixed frame. For Luna the mean Earth/polar axis frame is a fixed
     # rotation of the principal-axes data, so coverage is the principal-axes
-    # file's coverage.
-    coverage_orientation_id: int
+    # file's coverage. None for a frame from an IAU rotation model, which
+    # holds at every epoch: only the body's positions bound its coverage.
+    coverage_orientation_id: int | None
     file_ids: tuple[str, ...]
 
 
@@ -99,6 +102,29 @@ FILES: dict[str, EphemerisFile] = {
             ),
         ),
         EphemerisFile(
+            file_id="mars-satellites",
+            filename="mar099s.bsp",
+            sha256="997dc93ba640e476da7a494d2237dcdeb145e528db37be8ccee588c615e4e1ff",
+            kind="spk",
+            source_url=(
+                "https://naif.jpl.nasa.gov/pub/naif/generic_kernels/spk/satellites/mar099s.bsp"
+            ),
+        ),
+        EphemerisFile(
+            file_id="planetary-constants",
+            filename="pck00011.tpc",
+            sha256="3dff7b1dbeceaa01f25467767d3fa25816051c85d162d1edf04acb310ee28bb1",
+            kind="tpc",
+            source_url="https://naif.jpl.nasa.gov/pub/naif/generic_kernels/pck/pck00011.tpc",
+        ),
+        EphemerisFile(
+            file_id="planetary-gravity",
+            filename="gm_de440.tpc",
+            sha256="924ddf4fb9ead9fe8a1aa55780bcabde40b09d00065d58226e24b68d8092f140",
+            kind="gm",
+            source_url="https://naif.jpl.nasa.gov/pub/naif/generic_kernels/pck/gm_de440.tpc",
+        ),
+        EphemerisFile(
             file_id="moon-frames",
             filename="moon_de440_250416.tf",
             sha256="a47c71e9c9f33796bdafb2c9d69a7ee447b6016ecad80f71cd6f3e479f9cf768",
@@ -123,6 +149,17 @@ FILES: dict[str, EphemerisFile] = {
 # fixed rotation in NAIF's lunar frame kernel. The principal-axes frame is a
 # dynamical frame 0.029 degrees from the map frame, which moves a surface
 # point by about 875 m.
+#
+# Mars's body-fixed frame is IAU_MARS (id 499) from the IAU rotation model in
+# NAIF's planetary constants (pck00011); it matched SPICE within 0.0012
+# millidegrees. de440s carries only the Mars system barycenter (id 4); the
+# planet's center (id 499) comes from NAIF's Mars satellite ephemeris, whose
+# short version covers 1995 to 2050 and so bounds a Mars session's dates. That
+# file also carries Earth, the Earth-Moon barycenter and the Sun, as de440s
+# does, and pck00011 also defines IAU rotation frames for Earth and the Moon.
+# Neither changes Earth or Luna: Luna and Sun states and Earth and Luna
+# orientation with and without Mars's files were identical, bit for bit, at
+# 4,000 instants from 2001 to 2049.
 BODIES: dict[str, BodyData] = {
     b.body_id: b
     for b in (
@@ -139,6 +176,13 @@ BODIES: dict[str, BodyData] = {
             fixed_orientation_id=31009,
             coverage_orientation_id=31008,
             file_ids=("de440s", "moon-orientation", "moon-frames"),
+        ),
+        BodyData(
+            body_id="mars",
+            naif_id=499,
+            fixed_orientation_id=499,
+            coverage_orientation_id=None,
+            file_ids=("de440s", "mars-satellites", "planetary-constants"),
         ),
     )
 }
@@ -173,9 +217,14 @@ SUN_RADIUS_KM = 695_700.0
 # The largest distance between two supported bodies' centers the shipped data can hold, per pair:
 # the bound on how far ahead or behind a signal between them can query the data. Earth-Moon:
 # 406,719.705 km, the largest distance in de440s (1849 to 2150), found by a 3 h scan of its whole
-# coverage refined around the peak (2125-02-03); recorded rounded up to the kilometre.
+# coverage refined around the peak (2125-02-03); recorded rounded up to the kilometre. Pairs with
+# Mars: the largest distances over the Mars satellite ephemeris's coverage (1995 to 2050), found by
+# a 1 day (Earth) and 3 h (Luna) scan with each of the twelve largest local maxima refined to 1 s
+# and 0.1 s: Earth-Mars 400,223,838.066 km (2019-08-28), Luna-Mars 400,283,850.226 km (2034-08-25).
 FARTHEST_SEPARATION_KM: dict[frozenset[str], float] = {
     frozenset({"earth", "luna"}): 406_720.0,
+    frozenset({"earth", "mars"}): 400_223_839.0,
+    frozenset({"luna", "mars"}): 400_283_851.0,
 }
 
 

@@ -156,7 +156,7 @@ class PhysicsContext:
         almanac: Almanac | None = None
         for file_id in select_file_ids(self._body_ids):
             entry = FILES[file_id]
-            if entry.kind == "fk":
+            if entry.kind in ("fk", "tpc"):
                 path = converted_path(self._location, entry)
             else:
                 path = verified_path(
@@ -186,8 +186,9 @@ class PhysicsContext:
         windows = [
             self._almanac.spk_domain(data.naif_id),
             self._almanac.spk_domain(ORIGIN_NAIF_ID),
-            self._almanac.bpc_domain(data.coverage_orientation_id),
         ]
+        if data.coverage_orientation_id is not None:
+            windows.append(self._almanac.bpc_domain(data.coverage_orientation_id))
         start = max(w[0].to_unix_seconds() for w in windows)
         end = min(w[1].to_unix_seconds() for w in windows)
         return _Coverage(start_unix=start, end_unix=end)

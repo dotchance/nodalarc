@@ -116,17 +116,22 @@ def test_sample_values_match_spice(physics_context: PhysicsContext) -> None:
             assert np.linalg.norm(fixed_velocity - (ref @ np.concatenate([r, v]))[3:]) < 1e-9
 
 
+POSITION_BOUND_KM = {"earth": 1e-6, "luna": 1e-6, "mars": 1e-5}
+
+
 @pytest.mark.parametrize("body_id", sorted(BODIES))
 def test_interpolation_error_at_the_sample_spacing(
-    physics_context: PhysicsContext, body_id: str
+    table_context: PhysicsContext, body_id: str
 ) -> None:
     """Cubic Hermite positions and constant-rate rotation between samples.
 
-    Bounds: 1 mm for body positions; 1e-10 rad for orientation (4.2 mm at GEO
-    radius). Measured for Earth and Luna: 0.1 mm and 9.5e-12 rad. The Sun's
-    bound is 10 mm: its error measured 3.0 mm at sample spacings from 150 s to
-    1200 s alike, so it is the data's evaluation noise at the Sun's distance
-    (2e-14 of it), not interpolation error.
+    Bounds: 1 mm for Earth and Luna positions; 1e-10 rad for orientation (4.2 mm
+    at GEO radius). Measured for Earth and Luna: 0.1 mm and 2.7e-11 rad. The
+    Sun's bound is 10 mm: its error measured 3.0 mm at sample spacings from 150 s
+    to 1200 s alike, so it is the data's evaluation noise at the Sun's distance
+    (2e-14 of it), not interpolation error. Mars has the same 10 mm bound for the
+    same reason: 2.1 to 2.6 mm at 2.1e8 km from Earth at spacings from 150 s to
+    1200 s, and 5.6 mm at 75 s; orientation measured 2.9e-11 rad.
     """
     h = SAMPLE_INTERVAL_S
     worst_position = 0.0
@@ -135,12 +140,12 @@ def test_interpolation_error_at_the_sample_spacing(
     for k in range(48):
         ta = PRODUCED + k * 1800.0
         tb = ta + h
-        state_a = physics_context.body_state(body_id, ta)
-        state_b = physics_context.body_state(body_id, tb)
-        sun_a = physics_context.sun_state(ta)
-        sun_b = physics_context.sun_state(tb)
-        rotation_a = physics_context.orientation(body_id, ta).rotation
-        rotation_b = physics_context.orientation(body_id, tb).rotation
+        state_a = table_context.body_state(body_id, ta)
+        state_b = table_context.body_state(body_id, tb)
+        sun_a = table_context.sun_state(ta)
+        sun_b = table_context.sun_state(tb)
+        rotation_a = table_context.orientation(body_id, ta).rotation
+        rotation_b = table_context.orientation(body_id, tb).rotation
         step = rotation_b @ rotation_a.T
         step_vector = _vee(step - step.T) / 2.0
         step_vector *= np.arcsin(min(1.0, np.linalg.norm(step_vector))) / max(
@@ -149,16 +154,16 @@ def test_interpolation_error_at_the_sample_spacing(
         for s in (0.25, 0.5, 0.75):
             t = ta + s * h
             body_error = _hermite_error(
-                state_a, state_b, physics_context.body_state(body_id, t), h, s
+                state_a, state_b, table_context.body_state(body_id, t), h, s
             )
-            sun_error = _hermite_error(sun_a, sun_b, physics_context.sun_state(t), h, s)
+            sun_error = _hermite_error(sun_a, sun_b, table_context.sun_state(t), h, s)
             worst_position = max(worst_position, body_error)
             worst_sun = max(worst_sun, sun_error)
             estimate_rotation = _rotation_from_vector(s * step_vector) @ rotation_a
-            truth_rotation = physics_context.orientation(body_id, t).rotation
+            truth_rotation = table_context.orientation(body_id, t).rotation
             worst_angle = max(worst_angle, _rotation_angle(estimate_rotation, truth_rotation))
 
-    assert worst_position < 1e-6
+    assert worst_position < POSITION_BOUND_KM[body_id]
     assert worst_sun < 1e-5
     assert worst_angle < 1e-10
 

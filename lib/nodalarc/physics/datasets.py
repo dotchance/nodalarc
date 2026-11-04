@@ -95,23 +95,34 @@ def verified_path(directory: Path, filename: str, expected_sha256: str, *, label
 
 
 def converted_filename(entry: EphemerisFile) -> str:
-    return f"{Path(entry.filename).stem}.epa"
+    """Frame kernels convert to ANISE ``.epa`` files, planetary constants to ``.pca`` files."""
+    suffix = ".pca" if entry.kind == "tpc" else ".epa"
+    return f"{Path(entry.filename).stem}{suffix}"
 
 
 def convert_datasets(location: EphemerisLocation) -> None:
-    """Convert every frame kernel in the table and write the manifest."""
-    from anise.utils import convert_fk
+    """Convert every frame kernel and planetary-constants file in the table and write the
+    manifest. Planetary constants convert together with the table's one gravity file, which
+    ANISE's conversion requires."""
+    from anise.utils import convert_fk, convert_tpc
 
     location.converted_dir.mkdir(parents=True, exist_ok=True)
     outputs: dict[str, dict[str, str]] = {}
+    (gravity,) = (entry for entry in FILES.values() if entry.kind == "gm")
     for entry in FILES.values():
-        if entry.kind != "fk":
+        if entry.kind not in ("fk", "tpc"):
             continue
         source = verified_path(
             location.source_dir, entry.filename, entry.sha256, label=entry.file_id
         )
         target = location.converted_dir / converted_filename(entry)
-        convert_fk(str(source), str(target), False, True)
+        if entry.kind == "fk":
+            convert_fk(str(source), str(target), False, True)
+        else:
+            gm = verified_path(
+                location.source_dir, gravity.filename, gravity.sha256, label=gravity.file_id
+            )
+            convert_tpc(str(source), str(gm), str(target), True)
         outputs[entry.file_id] = {
             "source_sha256": entry.sha256,
             "output": target.name,

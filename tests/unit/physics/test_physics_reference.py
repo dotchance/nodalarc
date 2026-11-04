@@ -399,3 +399,51 @@ def test_unconverted_datasets_are_refused(
     location = EphemerisLocation(source_dir=physics_location.source_dir, converted_dir=tmp_path)
     with pytest.raises(PhysicsDataError, match="converted ephemeris datasets are missing"):
         PhysicsContext(["luna"], location=location)
+
+
+def _mars_dates() -> list[float]:
+    start = datetime(2026, 1, 15, tzinfo=UTC).timestamp()
+    end = datetime(2049, 6, 15, tzinfo=UTC).timestamp()
+    return list(np.linspace(start, end, 12))
+
+
+@pytest.mark.usefixtures("spice_reference")
+def test_mars_center_and_orientation_match_spice(table_context: PhysicsContext) -> None:
+    """Mars's center (from the Mars satellite ephemeris) within 1 m and 1 mm/s; IAU_MARS from
+    the planetary constants within 1 millidegree, with its rate."""
+    for t in _mars_dates():
+        state = table_context.body_state("mars", t)
+        ref, _ = spiceypy.spkezr("MARS", _et(t), "J2000", "NONE", "EARTH")
+        assert np.linalg.norm(np.array(state.position_km) - ref[:3]) < 1e-3
+        assert np.linalg.norm(np.array(state.velocity_km_s) - ref[3:]) < 1e-6
+        orientation = table_context.orientation("mars", t)
+        rotation = np.array(spiceypy.sxform("J2000", "IAU_MARS", _et(t)))
+        assert _angle_deg(orientation.rotation, rotation[:3, :3]) < 1e-3
+        assert np.abs(orientation.rotation_rate - rotation[3:, :3]).max() < 1e-10
+
+
+def test_mars_data_covers_1995_to_2050(physics_location: EphemerisLocation) -> None:
+    """A Mars session loads no Earth orientation data, so the Mars satellite ephemeris alone
+    bounds its dates. The file's limits are TDB midnights, 69 s before the UTC midnights."""
+    context = PhysicsContext(["mars"], location=physics_location)
+    start = datetime(1995, 1, 1, tzinfo=UTC).timestamp()
+    end = datetime(2050, 1, 1, tzinfo=UTC).timestamp()
+    assert context.coverage_gap(start + 3600.0, end - 3600.0) is None
+    gap = context.coverage_gap(start + 3600.0, end + 3600.0)
+    assert gap is not None and gap.body_id == "mars"
+
+
+def test_mars_files_leave_earth_and_luna_unchanged(
+    physics_context: PhysicsContext, table_context: PhysicsContext
+) -> None:
+    """Mars's satellite ephemeris also carries Earth, the Earth-Moon barycenter and the Sun, and
+    its planetary constants define IAU frames for Earth and the Moon. Loading them changes no
+    Earth or Luna fact."""
+    for t in _dates():
+        assert table_context.body_state("luna", t) == physics_context.body_state("luna", t)
+        assert table_context.sun_state(t) == physics_context.sun_state(t)
+        for body in ("earth", "luna"):
+            with_mars = table_context.orientation(body, t)
+            without = physics_context.orientation(body, t)
+            assert np.array_equal(with_mars.rotation, without.rotation)
+            assert np.array_equal(with_mars.rotation_rate, without.rotation_rate)

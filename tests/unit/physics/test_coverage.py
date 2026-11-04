@@ -111,7 +111,7 @@ def test_the_light_time_bound_is_the_farthest_two_endpoints_can_be() -> None:
 
 def test_a_body_pair_with_no_recorded_separation_has_no_bound() -> None:
     with pytest.raises(PhysicsDataError, match="no largest separation"):
-        light_time_bound_s({"earth": 7_000.0, "mars": 3_400.0})
+        light_time_bound_s({"earth": 7_000.0, "sun": 700_000.0})
 
 
 @pytest.mark.parametrize(

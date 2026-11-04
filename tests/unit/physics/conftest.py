@@ -14,7 +14,7 @@ import pytest
 import spiceypy
 from nodalarc.physics import EphemerisLocation, PhysicsContext
 from nodalarc.physics.datasets import convert_datasets
-from nodalarc.physics.ephemeris_table import FILES, select_file_ids
+from nodalarc.physics.ephemeris_table import BODIES, FILES, select_file_ids
 
 EPHEMERIS_DIR = Path(__file__).resolve().parents[3] / "configs" / "ephemerides"
 
@@ -35,12 +35,18 @@ def physics_context(physics_location: EphemerisLocation) -> PhysicsContext:
 
 @pytest.fixture(scope="session")
 def spice_reference() -> Iterator[None]:
-    """SPICE with the platform's files loaded in the table's load order.
+    """SPICE with every table body's files loaded in the table's load order.
 
     SPICE keeps one process-wide kernel pool; the pool is cleared afterwards.
     """
     spiceypy.kclear()
-    for file_id in select_file_ids(["earth", "luna"]):
+    for file_id in select_file_ids(BODIES):
         spiceypy.furnsh(str(EPHEMERIS_DIR / FILES[file_id].filename))
     yield
     spiceypy.kclear()
+
+
+@pytest.fixture(scope="session")
+def table_context(physics_location: EphemerisLocation) -> PhysicsContext:
+    """A context with every body the ephemeris table carries."""
+    return PhysicsContext(sorted(BODIES), location=physics_location)

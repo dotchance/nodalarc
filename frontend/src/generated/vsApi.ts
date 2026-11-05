@@ -514,7 +514,7 @@ export interface LinkDecisionTracesQuery {
 }
 
 /**  */
-export type LinkEndCloseCause = "end_of_contact" | "drain_deadline" | "seek" | "scenario" | "reopened";
+export type LinkEndCloseCause = "end_of_contact" | "drain_deadline" | "seek" | "scenario" | "reopened" | "retargeted";
 
 /** What one link end lost during its contact, from the Node Agent's counts at each stage. ``discarded_at_close`` is what the end's delay queue still held when it closed. With ``discarded_exact`` it is a count: admission had stopped at both ends, so nothing entered the queue between the read and the reset. Without it, it is a sample read just before the close of a local link, which keeps admitting until then. ``queue_dropped`` is what the end's delay queue dropped at its limit, and ``transmit_dropped`` what its transmit queue dropped at its limit (both substrate resource loss). On a long-delay end, ``refused_before_open`` is what its stopped admission refused while the contact was being prepared, ``untransmitted_at_stop`` what still waited to be transmitted when the contact ended (purged at the stop, never sent), and ``admission_taken`` what its stopped admission refused after the stop; all three are 0 on a local link. */
 export interface LinkEndLoss {

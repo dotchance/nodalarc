@@ -1152,8 +1152,16 @@ class SessionContext:
         node_a, node_b = event.node_a, event.node_b
         key = _link_key(node_a, node_b)
         with self.state_lock:
-            self.links.pop(key, None)
-            self.link_decision_traces.pop(key, None)
+            # A long-delay ground pair can hold a newer contact while an earlier one still
+            # drains on other terminals: the earlier contact's LinkDown leaves the newer link.
+            current = self.links.get(key)
+            if (
+                event.contact_id is None
+                or current is None
+                or current.contact_id in (None, event.contact_id)
+            ):
+                self.links.pop(key, None)
+                self.link_decision_traces.pop(key, None)
             if event.losses:
                 self.contact_losses.append(
                     ContactLoss(

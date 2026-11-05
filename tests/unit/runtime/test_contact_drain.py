@@ -217,3 +217,55 @@ def test_a_stage_that_reports_a_count_it_does_not_produce_is_refused():
             info=_trunk(),
             stage=node_agent_pb2.LINK_UP_STAGE_OPEN,
         )
+
+
+def _pass(term: str, gnd: str, *, opened: datetime):
+    """A long-delay ground pass between a Deep Space Network station and a Mars orbiter."""
+    return ActiveLinkInfo(
+        interface_a=term,
+        interface_b=gnd,
+        latency_a_to_b_ms=A_TO_B_MS,
+        latency_b_to_a_ms=B_TO_A_MS,
+        link_type="ground",
+        range_km=3.338e8,
+        contact=Contact(epoch_id=0, opened_at=opened),
+    )
+
+
+GROUND = ("dss-43", "mars-orbiter")
+
+
+def test_a_ground_pass_on_other_terminals_opens_beside_the_draining_one():
+    """OME may give a pair's next pass other terminals while the last pass still drains: the
+    last pass keeps draining on its own terminals and the new one opens beside it. On the same
+    terminals the new pass reopens the queue in place."""
+    later = OPENED + timedelta(minutes=30)
+    draining = _pass("term0", "gnd0", opened=OPENED)
+    draining.drain = start_drain(
+        GROUND, draining, stopped_mono=100.0, stopped_wall=OPENED, reason="vis_lost"
+    )
+    elsewhere = plan_long_delay_contacts(
+        {GROUND: draining},
+        {GROUND: _pass("term1", "gnd0", opened=later)},
+        epoch_id=0,
+        down_reasons={},
+    )
+    assert elsewhere.relocate == frozenset({GROUND}) and elsewhere.open == frozenset({GROUND})
+    assert not elsewhere.stop
+
+    in_place = plan_long_delay_contacts(
+        {GROUND: draining},
+        {GROUND: _pass("term0", "gnd0", opened=later)},
+        epoch_id=0,
+        down_reasons={},
+    )
+    assert in_place.open == frozenset({GROUND}) and not in_place.relocate
+
+    # An open pass whose pair OME moves to other terminals stops and drains first.
+    moved = plan_long_delay_contacts(
+        {GROUND: _pass("term0", "gnd0", opened=OPENED)},
+        {GROUND: _pass("term1", "gnd1", opened=later)},
+        epoch_id=0,
+        down_reasons={},
+    )
+    assert moved.stop == frozenset({GROUND}) and moved.relocate == frozenset({GROUND})

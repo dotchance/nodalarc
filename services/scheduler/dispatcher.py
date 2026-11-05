@@ -108,6 +108,7 @@ from pydantic import ValidationError
 
 from scheduler.actuation import (
     ActuationResult,
+    EndSurvey,
     GroundActuationState,
     next_verify_time,
 )
@@ -116,6 +117,8 @@ from scheduler.agent_pool import AgentPool
 from scheduler.contact_drain import (
     LongDelayPlan,
     due_ends,
+    end_terminals,
+    ends_on,
     next_close_due,
     plan_long_delay_contacts,
     recover_drain,
@@ -137,6 +140,7 @@ from scheduler.dispatch_actuator import (
     send_batch_down,
     send_batch_up,
     stage_only_records,
+    survey_ground_terminals,
     survey_long_delay_ends,
     verify_ground_kernel_inventory,
     verify_long_delay_ends,
@@ -154,6 +158,7 @@ from scheduler.long_delay_adoption import (
     AdoptedOpen,
     adopted_link_info,
     classify_surveyed_pair,
+    ground_contacts,
 )
 from scheduler.node_agent_batches import LinkUpBatchPlan
 from scheduler.pod_locator import PodLocationMap
@@ -269,7 +274,12 @@ class Dispatcher:
             raise ValueError(
                 "long_delay_bounds_s is required: the resolved session's long-delay links"
             )
-        unmapped = sorted(pair for pair in long_delay_bounds_s if pair not in interface_map)
+        ground_ids = frozenset(gs_terminal_capacities or {})
+        unmapped = sorted(
+            pair
+            for pair in long_delay_bounds_s
+            if pair not in interface_map and not ground_ids.intersection(pair)
+        )
         if unmapped:
             raise ValueError(f"long-delay links with no fixed interfaces: {unmapped}")
         # The fixed links the resolver classes long-delay, with the longest one-way delay it
@@ -398,6 +408,9 @@ class Dispatcher:
         # Actuator state: what IS active (confirmed by Node Agent).
         # Written ONLY by the dispatch worker after Node Agent ACK.
         self._actual_links: dict[tuple[str, str], ActiveLinkInfo] = {}
+        # Earlier contacts of a ground pair still draining on their own terminals after the
+        # pair's next pass opened on others, by (pair, contact id). Each closes on its own.
+        self._overlapping: dict[tuple[tuple[str, str], str], ActiveLinkInfo] = {}
 
         # Scheduler-owned in_flight -> faulted clock: per-pair wall-clock origin of a
         # desired-but-not-kernel-actual pair, captured at fold time. value =
@@ -560,7 +573,11 @@ class Dispatcher:
         """
         self._gs_active_count.clear()
         self._sat_active_count.clear()
-        for (node_a, node_b), info in self._actual_links.items():
+        held = [
+            *self._actual_links.items(),
+            *((key[0], info) for key, info in self._overlapping.items()),
+        ]
+        for (node_a, node_b), info in held:
             if info.link_type == "ground":
                 for nid in (node_a, node_b):
                     if nid in self._gs_capacities:
@@ -1469,12 +1486,19 @@ class Dispatcher:
                 pair,
                 None if info.drain is None else frozenset(end.node_id for end in info.drain.ends),
             )
-            for pair, info in self._actual_links.items()
+            for pair, info in [
+                *self._actual_links.items(),
+                *((key[0], info) for key, info in self._overlapping.items()),
+            ]
         )
 
     def _draining_contact_rows(self) -> list[DrainingContact]:
         rows = []
-        for pair, info in sorted(self._actual_links.items()):
+        drains = [
+            *self._actual_links.items(),
+            *((key[0], info) for key, info in self._overlapping.items()),
+        ]
+        for pair, info in sorted(drains, key=lambda item: (item[0], str(item[1].contact))):
             if info.drain is None:
                 continue
             if info.contact is None:
@@ -2366,6 +2390,7 @@ class Dispatcher:
             pool=self._pool,
             sim_iso=sim_time.isoformat(),
             interface_rates=self._interface_rates,
+            gs_capacities=self._gs_capacities,
             session_id=self._session_id,
             wiring_generation=self._wiring_generation,
             writer_epoch=self._writer_epoch,
@@ -3370,6 +3395,16 @@ class Dispatcher:
                 epoch_id=self._last_snapshot_epoch_id,
                 down_reasons=down_reasons,
             )
+            # A long-delay ground pass opens to a station only while its kernel state is
+            # dispatchable, as every ground LinkUp does; stops and closes still run.
+            long_delay = replace(
+                long_delay,
+                open=frozenset(
+                    self._filter_blocked_ground_mutations(
+                        set(long_delay.open), operation="BatchLinkUp"
+                    )
+                ),
+            )
             due = {
                 pair: ends
                 for pair, ends in due_ends(self._actual_links, now_mono=self._monotonic()).items()
@@ -3745,13 +3780,15 @@ class Dispatcher:
         sim_time: datetime,
         ends: Mapping[tuple[str, str], frozenset[str]] | None = None,
         contact_ids: Mapping[tuple[str, str], str] | None = None,
+        links: Mapping[tuple[str, str], ActiveLinkInfo] | None = None,
     ) -> ActuationResult:
         """One stage of long-delay contacts: STOP_ADMISSION at both ends of each pair (or the
-        named ends), or CLOSE of the named ends. The Dispatcher records the result and the
+        named ends), or CLOSE of the named ends. ``links`` are the records the stage reaches,
+        each pair's current contact unless given. The Dispatcher records the result and the
         teardown."""
         return await send_batch_down(
             pairs=pairs,
-            actual_links=self._actual_links,
+            actual_links=self._actual_links if links is None else links,
             locator=self._loc,
             pool=self._pool,
             js=self._js,
@@ -3768,29 +3805,6 @@ class Dispatcher:
             contact_ids=contact_ids,
         )
 
-    async def _record_long_delay_teardown(
-        self,
-        pair: tuple[str, str],
-        info: ActiveLinkInfo,
-        *,
-        sim_time: datetime,
-        reason: str,
-        losses: tuple[LinkEndLoss, ...],
-    ) -> None:
-        """Every end of a long-delay contact closed: the link record goes and its LinkDown, with
-        what each end lost, is published."""
-        self._actual_links.pop(pair, None)
-        self._last_latencies.pop(pair, None)
-        await publish_link_down(
-            js=self._js,
-            subject=self._subj_link_down,
-            pair=pair,
-            info=info,
-            sim_time=sim_time,
-            reason=reason,
-            losses=losses,
-        )
-
     async def _reconcile_long_delay(
         self,
         plan: LongDelayPlan,
@@ -3801,15 +3815,26 @@ class Dispatcher:
         nc,
         down_reasons: Mapping[tuple[str, str], str],
     ) -> None:
-        """Move each long-delay contact one step: forced closes, stops, due closes, opens and
-        delay changes, in that order. A failure of any stage is fatal, as for every ISL."""
+        """Move each long-delay contact one step: forced closes, stops, relocations, due closes,
+        opens and delay changes, in that order. A failure of any stage is fatal, as for every
+        ISL.
+
+        A pair holds its current contact in ``_actual_links``. A ground pair whose new pass uses
+        other terminals keeps its earlier contact draining on its own terminals as an
+        overlapping record (``_overlapping``, by pair and contact); each closes on its own."""
         stop_stage = node_agent_pb2.LINK_DOWN_STAGE_STOP_ADMISSION
-        close_stage = node_agent_pb2.LINK_DOWN_STAGE_CLOSE
 
         # A seek or a scenario command ends the contact at once. Both transmitters stop first,
         # so nothing enters a queue between its count and its reset; then every end still open
-        # or draining closes, and what it held is discarded and counted with the cause.
-        if plan.forced:
+        # or draining closes, and what it held is discarded and counted with the cause. Earlier
+        # contacts of the pair still draining end the same way.
+        forced_overlap = {
+            key: ("seek" if info.contact.epoch_id < self._last_snapshot_epoch_id else "scenario")
+            for key, info in self._overlapping.items()
+            if info.contact is not None
+            and (info.contact.epoch_id < self._last_snapshot_epoch_id or key[0] in down_reasons)
+        }
+        if plan.forced or forced_overlap:
             open_forced = {pair for pair in plan.forced if self._actual_links[pair].drain is None}
             if open_forced:
                 stopped = await self._send_long_delay_stage(
@@ -3822,27 +3847,32 @@ class Dispatcher:
                     record_stage_losses(
                         stopped, pair=pair, info=self._actual_links[pair], stage=stop_stage
                     )
-            ends = {pair: remaining_ends(pair, self._actual_links[pair]) for pair in plan.forced}
-            closed = await self._send_long_delay_stage(
-                set(plan.forced), stage=close_stage, sim_iso=sim_iso, sim_time=sim_time, ends=ends
+            await self._close_long_delay_ends(
+                [
+                    (
+                        pair,
+                        pair,
+                        self._actual_links[pair],
+                        remaining_ends(pair, self._actual_links[pair]),
+                        cause,
+                    )
+                    for pair, cause in sorted(plan.forced.items())
+                ]
+                + [
+                    (key, key[0], info, remaining_ends(key[0], info), forced_overlap[key])
+                    for key, info in sorted(self._overlapping.items())
+                    if key in forced_overlap
+                ],
+                prove=False,
+                sim_iso=sim_iso,
+                sim_time=sim_time,
+                down_reasons=down_reasons,
+                context="long_delay_forced_close",
             )
-            await self._handle_actuation_result(
-                closed, sim_time=sim_time, operation_context="long_delay_forced_close"
-            )
-            for pair in sorted(closed.succeeded_pairs):
-                info = self._actual_links[pair]
-                cause = plan.forced[pair]
-                earlier = info.drain.closed if info.drain is not None else ()
-                await self._record_long_delay_teardown(
-                    pair,
-                    info,
-                    sim_time=sim_time,
-                    reason="seek" if cause == "seek" else down_reasons[pair],
-                    losses=earlier + end_loss_records(closed, pair=pair, info=info, cause=cause),
-                )
 
-        # A contact OME ended: both transmitters stop admitting, and packets already sent keep
-        # arriving. The contact stays in the link record, draining, until its ends close.
+        # A contact OME ended, or one whose pair's next pass moved to other terminals: both
+        # transmitters stop admitting, and packets already sent keep arriving. The contact stays
+        # in a link record, draining, until its ends close.
         if plan.stop:
             stopped = await self._send_long_delay_stage(
                 set(plan.stop), stage=stop_stage, sim_iso=sim_iso, sim_time=sim_time
@@ -3876,55 +3906,47 @@ class Dispatcher:
                     ),
                 )
 
+        # The pair's draining contact keeps its own terminals; the new pass opens beside it.
+        for pair in sorted(plan.relocate):
+            held = self._actual_links.get(pair)
+            if held is None or held.drain is None or held.contact is None:
+                continue
+            self._overlapping[(pair, held.contact.contact_id)] = held
+            del self._actual_links[pair]
+            self._last_latencies.pop(pair, None)
+
         # Ends whose last packet has arrived: the Node Agent first proves each is still the
         # draining contact the Scheduler stopped, then closes it and counts what it still held.
-        if due:
-            proven = await verify_long_delay_ends(
-                ends=due,
-                actual_links=self._actual_links,
-                locator=self._loc,
-                pool=self._pool,
+        now_mono = self._monotonic()
+        overlap_due = due_ends(self._overlapping, now_mono=now_mono)
+        due_records = [
+            (pair, pair, self._actual_links[pair], ends, "drain_deadline")
+            for pair, ends in sorted(due.items())
+            if pair in self._actual_links and pair not in plan.relocate
+        ] + [
+            (key, key[0], self._overlapping[key], ends, "drain_deadline")
+            for key, ends in sorted(overlap_due.items())
+        ]
+        if due_records:
+            await self._close_long_delay_ends(
+                due_records,
+                prove=True,
                 sim_iso=sim_iso,
-                interface_rates=self._interface_rates,
-                session_id=self._session_id,
-                wiring_generation=self._wiring_generation,
-                writer_epoch=self._writer_epoch,
+                sim_time=sim_time,
+                down_reasons=down_reasons,
+                context="long_delay_close",
             )
-            await self._handle_actuation_result(
-                proven, sim_time=sim_time, operation_context="long_delay_drain_proof"
-            )
-            closed = await self._send_long_delay_stage(
-                set(due), stage=close_stage, sim_iso=sim_iso, sim_time=sim_time, ends=due
-            )
-            await self._handle_actuation_result(
-                closed, sim_time=sim_time, operation_context="long_delay_close"
-            )
-            for pair in sorted(closed.succeeded_pairs):
-                info = self._actual_links[pair]
-                if info.drain is None:
-                    raise RuntimeError(f"closed an end of {pair}, which was not draining")
-                info.drain = replace(
-                    info.drain,
-                    ends=tuple(end for end in info.drain.ends if end.node_id not in due[pair]),
-                    closed=info.drain.closed
-                    + end_loss_records(closed, pair=pair, info=info, cause="drain_deadline"),
-                )
-                if not info.drain.ends:
-                    await self._record_long_delay_teardown(
-                        pair,
-                        info,
-                        sim_time=sim_time,
-                        reason=info.drain.reason,
-                        losses=info.drain.closed,
-                    )
 
         # Contacts to open, in two stages. PREPARE builds each end with admission stopped, so no
         # packet crosses before both receive paths delay it; OPEN admits at both ends only once
-        # both proved PREPARE. A pair that still drains, or whose contact OME renamed, reopens in
-        # place: its queue keeps the packets in flight, which go to this same receiver, and the
-        # contact that ended is recorded once the new one is prepared at both ends, before the
-        # new contact's LinkUp.
+        # both proved PREPARE. A pair that still drains on the same terminals, or whose contact
+        # OME renamed, reopens in place: its queue keeps the packets in flight, which go to this
+        # same receiver, and the contact that ended is recorded once the new one is prepared at
+        # both ends, before the new contact's LinkUp.
         if plan.open:
+            await self._retarget_terminals(
+                plan.open, desired, sim_iso=sim_iso, sim_time=sim_time, down_reasons=down_reasons
+            )
             ended = {
                 pair: self._actual_links[pair] for pair in plan.open if pair in self._actual_links
             }
@@ -3935,6 +3957,9 @@ class Dispatcher:
                 prepared, sim_time=sim_time, operation_context="long_delay_prepare"
             )
             for pair in sorted(prepared.succeeded_pairs):
+                await self._reopen_overlapping_ends(
+                    pair, desired[pair], prepared, sim_time=sim_time
+                )
                 old = ended.get(pair)
                 if old is None:
                     continue
@@ -3950,6 +3975,7 @@ class Dispatcher:
                 )
                 self._actual_links.pop(pair, None)
                 self._last_latencies.pop(pair, None)
+                self._decrement_active_counts(pair, old)
                 await publish_link_down(
                     js=self._js,
                     subject=self._subj_link_down,
@@ -3957,7 +3983,7 @@ class Dispatcher:
                     info=old,
                     sim_time=sim_time,
                     reason=old.drain.reason if old.drain is not None else "vis_lost",
-                    losses=(old.drain.closed if old.drain is not None else ()) + reopened,
+                    losses=closed_before + reopened,
                 )
             # The barrier: OPEN goes only to contacts whose two ends both proved PREPARE.
             ready = set(prepared.succeeded_pairs)
@@ -3977,6 +4003,7 @@ class Dispatcher:
                 )
                 self._actual_links[pair] = info
                 self._last_latencies[pair] = info.latencies_ms
+                self._increment_active_counts(pair)
 
         if plan.latency:
             changed = await self._send_authoritative_latency_updates(
@@ -3986,47 +4013,313 @@ class Dispatcher:
                 changed, sim_time=sim_time, operation_context="long_delay_latency"
             )
 
+    async def _close_long_delay_ends(
+        self,
+        records: list[tuple[object, tuple[str, str], ActiveLinkInfo, frozenset[str], str]],
+        *,
+        prove: bool,
+        sim_iso: str,
+        sim_time: datetime,
+        down_reasons: Mapping[tuple[str, str], str],
+        context: str,
+    ) -> None:
+        """CLOSE the named ends of long-delay link records, each ``(key, pair, record, ends,
+        cause)``: the key is the pair for a pair's current contact, or (pair, contact) for an
+        earlier contact still draining. ``prove`` first proves each end in the stage the
+        Scheduler holds it in. A record whose last end closes is torn down with its LinkDown.
+        Records of one pair close in separate commands: each names its own contact."""
+        remaining = list(records)
+        while remaining:
+            seen: set[tuple[str, str]] = set()
+            batch, later = [], []
+            for record in remaining:
+                (later if record[1] in seen else batch).append(record)
+                seen.add(record[1])
+            remaining = later
+            links = {pair: info for _key, pair, info, _ends, _cause in batch}
+            ends = {pair: end_ids for _key, pair, _info, end_ids, _cause in batch}
+            if prove:
+                proven = await verify_long_delay_ends(
+                    ends=ends,
+                    actual_links=links,
+                    locator=self._loc,
+                    pool=self._pool,
+                    sim_iso=sim_iso,
+                    interface_rates=self._interface_rates,
+                    gs_capacities=self._gs_capacities,
+                    session_id=self._session_id,
+                    wiring_generation=self._wiring_generation,
+                    writer_epoch=self._writer_epoch,
+                )
+                await self._handle_actuation_result(
+                    proven, sim_time=sim_time, operation_context=f"{context}_proof"
+                )
+            closed = await self._send_long_delay_stage(
+                set(ends),
+                stage=node_agent_pb2.LINK_DOWN_STAGE_CLOSE,
+                sim_iso=sim_iso,
+                sim_time=sim_time,
+                ends=ends,
+                links=links,
+            )
+            await self._handle_actuation_result(
+                closed, sim_time=sim_time, operation_context=context
+            )
+            for key, pair, info, end_ids, cause in batch:
+                if pair not in closed.succeeded_pairs:
+                    continue
+                records_now = end_loss_records(closed, pair=pair, info=info, cause=cause)
+                if info.drain is not None:
+                    info.drain = replace(
+                        info.drain,
+                        ends=tuple(end for end in info.drain.ends if end.node_id not in end_ids),
+                        closed=info.drain.closed + records_now,
+                    )
+                    if info.drain.ends:
+                        continue
+                    losses = info.drain.closed
+                    reason = info.drain.reason
+                else:
+                    losses = records_now
+                    reason = "vis_lost"
+                if cause == "seek":
+                    reason = "seek"
+                elif cause == "scenario":
+                    reason = down_reasons[pair]
+                await self._tear_down_long_delay_record(
+                    key, pair, info, sim_time=sim_time, reason=reason, losses=losses
+                )
+
+    async def _tear_down_long_delay_record(
+        self,
+        key: object,
+        pair: tuple[str, str],
+        info: ActiveLinkInfo,
+        *,
+        sim_time: datetime,
+        reason: str,
+        losses: tuple[LinkEndLoss, ...],
+    ) -> None:
+        """Every end of a long-delay contact closed: its record goes, its terminals are free, and
+        its LinkDown, with what each end lost, is published."""
+        if key == pair:
+            self._actual_links.pop(pair, None)
+            self._last_latencies.pop(pair, None)
+        else:
+            self._overlapping.pop(key, None)  # type: ignore[arg-type]
+        self._decrement_active_counts(pair, info)
+        await publish_link_down(
+            js=self._js,
+            subject=self._subj_link_down,
+            pair=pair,
+            info=info,
+            sim_time=sim_time,
+            reason=reason,
+            losses=losses,
+        )
+
+    async def _retarget_terminals(
+        self,
+        opening: frozenset[tuple[str, str]],
+        desired: Mapping[tuple[str, str], ActiveLinkInfo],
+        *,
+        sim_iso: str,
+        sim_time: datetime,
+        down_reasons: Mapping[tuple[str, str], str],
+    ) -> None:
+        """Before contacts open, close every draining end of another pair on a terminal they
+        use: OME pointed that terminal at a new peer before the old peer's last packet arrived,
+        so what the end still holds can no longer be received ("retargeted"). A draining end of
+        the same pair on such a terminal stays: the same peer takes its terminal back, and the
+        new contact's PREPARE reopens that queue in place. A terminal still open for another
+        contact is a broken allocation, refused."""
+        wanted: dict[tuple[str, str], tuple[str, str]] = {}
+        for pair in sorted(opening):
+            for node_id, interface in end_terminals(pair, desired[pair]).items():
+                wanted[(node_id, interface)] = pair
+        records: list[tuple[object, tuple[str, str], ActiveLinkInfo]] = [
+            (pair, pair, info) for pair, info in self._actual_links.items()
+        ] + [(key, key[0], info) for key, info in self._overlapping.items()]
+        retargets = []
+        for key, pair, info in sorted(records, key=lambda r: str(r[0])):
+            if info.drain is None:
+                taken = {
+                    terminal
+                    for terminal in end_terminals(pair, info).items()
+                    if terminal in wanted and wanted[terminal] != pair
+                }
+                if taken:
+                    raise RuntimeError(
+                        f"terminals {sorted(taken)} of open contact {pair} are wanted by "
+                        f"{sorted({wanted[t] for t in taken})}"
+                    )
+                continue
+            ends = frozenset(
+                end.node_id
+                for end in info.drain.ends
+                if (end.node_id, end.interface) in wanted
+                and wanted[(end.node_id, end.interface)] != pair
+            )
+            if ends:
+                retargets.append((key, pair, info, ends, "retargeted"))
+        if retargets:
+            await self._close_long_delay_ends(
+                retargets,
+                prove=False,
+                sim_iso=sim_iso,
+                sim_time=sim_time,
+                down_reasons=down_reasons,
+                context="long_delay_retarget_close",
+            )
+
+    async def _reopen_overlapping_ends(
+        self,
+        pair: tuple[str, str],
+        new: ActiveLinkInfo,
+        prepared: ActuationResult,
+        *,
+        sim_time: datetime,
+    ) -> None:
+        """An earlier contact of ``pair`` still draining on a terminal its new contact uses: the
+        new contact's PREPARE reopened that end's queue in place, and reported what the earlier
+        contact lost there. That end leaves the earlier contact's drain; the contact is torn down
+        when no end of it remains."""
+        wanted = set(end_terminals(pair, new).items())
+        for key, info in sorted(self._overlapping.items(), key=lambda item: str(item[0])):
+            if key[0] != pair or info.drain is None:
+                continue
+            ends = ends_on(pair, info, wanted)
+            if not ends:
+                continue
+            reopened = tuple(
+                loss
+                for loss in end_loss_records(prepared, pair=pair, info=info, cause="reopened")
+                if loss.node_id in ends
+            )
+            info.drain = replace(
+                info.drain,
+                ends=tuple(end for end in info.drain.ends if end.node_id not in ends),
+                closed=info.drain.closed + reopened,
+            )
+            if not info.drain.ends:
+                await self._tear_down_long_delay_record(
+                    key,
+                    pair,
+                    info,
+                    sim_time=sim_time,
+                    reason=info.drain.reason,
+                    losses=info.drain.closed,
+                )
+
     async def _adopt_long_delay_state(self) -> None:
         """Adopt the long-delay contacts the kernel carries (``scheduler.long_delay_adoption``):
-        survey both ends of every long-delay link, keep each consistently open contact, and stop
-        and drain every other carried contact. A survey or stop that fails refuses the start: a
-        Scheduler that cannot see the kernel's contacts cannot command them."""
-        if not self._long_delay_bounds_s:
-            return
+        survey both ends of every fixed long-delay link and every access terminal of a node with
+        long-delay ground peers, keep each consistently open contact, and stop and drain every
+        other carried contact. A ground pair's older passes still draining become overlapping
+        records. A survey or stop that fails refuses the start: a Scheduler that cannot see the
+        kernel's contacts cannot command them."""
         when = self._current_sim_time if self._current_sim_time is not None else self._now()
         sim_iso = when.isoformat()
-        surveyed = await survey_long_delay_ends(
-            pairs=set(self._long_delay_bounds_s),
-            interface_map=self._interface_map,
-            locator=self._loc,
-            pool=self._pool,
-            sim_iso=sim_iso,
-            session_id=self._session_id,
-            wiring_generation=self._wiring_generation,
-            writer_epoch=self._writer_epoch,
-        )
-        unproven = sorted(set(self._long_delay_bounds_s) - set(surveyed.succeeded_pairs))
-        if unproven:
-            log.error(
-                "Long-delay survey failed for %s: %s", unproven, surveyed.node_agent_details()
+        adopted: list[tuple[object, tuple[str, str], ActiveLinkInfo, object]] = []
+
+        fixed = {pair for pair in self._long_delay_bounds_s if pair in self._interface_map}
+        if fixed:
+            surveyed = await survey_long_delay_ends(
+                pairs=fixed,
+                interface_map=self._interface_map,
+                locator=self._loc,
+                pool=self._pool,
+                sim_iso=sim_iso,
+                session_id=self._session_id,
+                wiring_generation=self._wiring_generation,
+                writer_epoch=self._writer_epoch,
             )
-            raise RuntimeError(f"long-delay survey failed for {unproven}; refusing to start")
-        reports = surveyed.surveys
-        recovered = {}
-        for pair in sorted(self._long_delay_bounds_s):
-            interfaces = self._interface_map[pair]
-            found = classify_surveyed_pair(
-                pair,
-                {
-                    pair[0]: reports[(pair[0], interfaces[0])],
-                    pair[1]: reports[(pair[1], interfaces[1])],
-                },
+            unproven = sorted(fixed - set(surveyed.succeeded_pairs))
+            if unproven:
+                log.error(
+                    "Long-delay survey failed for %s: %s", unproven, surveyed.node_agent_details()
+                )
+                raise RuntimeError(f"long-delay survey failed for {unproven}; refusing to start")
+            reports = surveyed.surveys
+            for pair in sorted(fixed):
+                interfaces = self._interface_map[pair]
+                found = classify_surveyed_pair(
+                    pair,
+                    {
+                        pair[0]: reports[(pair[0], interfaces[0])],
+                        pair[1]: reports[(pair[1], interfaces[1])],
+                    },
+                )
+                if found is not None:
+                    info = adopted_link_info(pair, interfaces, found, link_type="isl")
+                    adopted.append((pair, pair, info, found))
+
+        ground = {pair for pair in self._long_delay_bounds_s if pair not in self._interface_map}
+        if ground:
+            nodes = {node_id for pair in ground for node_id in pair}
+            terminals = sorted(
+                (node_id, interface)
+                for node_id, interface in self._interface_rates
+                if node_id in nodes and interface.startswith(("term", "gnd"))
             )
-            if found is None:
-                continue
-            info = adopted_link_info(pair, interfaces, found)
-            self._actual_links[pair] = info
-            self._last_latencies[pair] = info.latencies_ms
+            surveyed = await survey_ground_terminals(
+                terminals=terminals,
+                gs_capacities=self._gs_capacities,
+                locator=self._loc,
+                pool=self._pool,
+                sim_iso=sim_iso,
+                session_id=self._session_id,
+                wiring_generation=self._wiring_generation,
+                writer_epoch=self._writer_epoch,
+            )
+            unproven = sorted(set(terminals) - set(surveyed.succeeded_pairs))
+            if unproven:
+                log.error(
+                    "Ground terminal survey failed for %s: %s",
+                    unproven,
+                    surveyed.node_agent_details(),
+                )
+                raise RuntimeError(
+                    f"ground terminal survey failed for {unproven}; refusing to start"
+                )
+            empty = EndSurvey(
+                carried_contact_id="",
+                admission_stopped=False,
+                receive_latency_ms=0.0,
+                carried_peer="",
+            )
+            by_pair: dict[tuple[str, str], list[tuple[ActiveLinkInfo, object]]] = {}
+            for (pair, name), (interfaces, surveys) in ground_contacts(surveyed.surveys).items():
+                if pair not in ground:
+                    raise RuntimeError(
+                        f"a terminal carries contact {name} of {pair}, which the session does not "
+                        "class long-delay"
+                    )
+                found = classify_surveyed_pair(
+                    pair, {node_id: surveys.get(node_id, empty) for node_id in pair}
+                )
+                info = adopted_link_info(
+                    pair, (interfaces[pair[0]], interfaces[pair[1]]), found, link_type="ground"
+                )
+                by_pair.setdefault(pair, []).append((info, found))
+            for pair, passes in sorted(by_pair.items()):
+                passes.sort(key=lambda item: (item[1].contact.epoch_id, item[1].contact.opened_at))
+                adopted.append((pair, pair, *passes[-1]))
+                for info, found in passes[:-1]:
+                    if isinstance(found, AdoptedOpen):
+                        raise RuntimeError(
+                            f"{pair} carries an open contact {found.contact.contact_id} older than "
+                            "another of its contacts"
+                        )
+                    adopted.append(((pair, found.contact.contact_id), pair, info, found))
+
+        recovered = []
+        for key, pair, info, found in adopted:
+            if key == pair:
+                self._actual_links[pair] = info
+                self._last_latencies[pair] = info.latencies_ms
+            else:
+                self._overlapping[key] = info  # type: ignore[index]
             if isinstance(found, AdoptedOpen):
                 log.info(
                     "Adopted open long-delay contact %s of %s<->%s",
@@ -4035,62 +4328,79 @@ class Dispatcher:
                     pair[1],
                 )
             else:
-                recovered[pair] = found
-        if not recovered:
-            return
-        # Every end that carries a contact stops, naming the contact it carries: an interrupted
-        # stop finishes, and what waited to be transmitted is purged and counted. The drain
-        # counts from this acknowledgement, the proof that both transmitters stopped.
-        stop_stage = node_agent_pb2.LINK_DOWN_STAGE_STOP_ADMISSION
-        interfaces_of = {
-            pair: dict(zip(pair, self._interface_map[pair], strict=True)) for pair in recovered
-        }
-        stopped = await self._send_long_delay_stage(
-            set(recovered),
-            stage=stop_stage,
-            sim_iso=sim_iso,
-            sim_time=when,
-            ends={pair: frozenset(found.carried) for pair, found in recovered.items()},
-            contact_ids={
-                (node_id, interfaces_of[pair][node_id]): name
-                for pair, found in recovered.items()
-                for node_id, name in found.carried.items()
-            },
-        )
-        unstopped = sorted(set(recovered) - set(stopped.succeeded_pairs))
-        if unstopped:
-            log.error(
-                "Stop of recovered long-delay contacts failed for %s: %s",
-                unstopped,
-                stopped.node_agent_details(),
-            )
-            raise RuntimeError(
-                f"stop of recovered long-delay contacts failed for {unstopped}; refusing to start"
-            )
-        stopped_mono = self._monotonic()
-        stopped_wall = self._now()
-        for pair, found in sorted(recovered.items()):
-            info = self._actual_links[pair]
-            record_stage_losses(stopped, pair=pair, info=info, stage=stop_stage)
-            info.drain = recover_drain(
-                pair,
-                info,
-                carried=found.carried,
-                stopped_mono=stopped_mono,
-                stopped_wall=stopped_wall,
-                longest_delay_s=self._long_delay_bounds_s[pair],
-            )
-            log.info(
-                "Recovered long-delay contact %s of %s<->%s: ends %s stopped, close at %s",
-                found.contact.contact_id,
-                pair[0],
-                pair[1],
-                ", ".join(f"{node} ({name})" for node, name in sorted(found.carried.items())),
-                ", ".join(
-                    f"{end.node_id} {end.receives_until.isoformat()}" for end in info.drain.ends
-                ),
-            )
+                recovered.append((key, pair, info, found))
+        if recovered:
+            await self._recover_long_delay_contacts(recovered, sim_iso=sim_iso, when=when)
+        self._rebaseline_active_counts()
         self._arm_drain_wakeup()
+
+    async def _recover_long_delay_contacts(
+        self,
+        recovered: list[tuple[object, tuple[str, str], ActiveLinkInfo, object]],
+        *,
+        sim_iso: str,
+        when: datetime,
+    ) -> None:
+        """Stop every end that carries a recovered contact, naming the contact it carries: an
+        interrupted stop finishes, and what waited to be transmitted is purged and counted. Each
+        contact then drains from this acknowledgement, the proof that its transmitters stopped.
+        Contacts of one pair stop in separate commands: each names its own contact."""
+        stop_stage = node_agent_pb2.LINK_DOWN_STAGE_STOP_ADMISSION
+        remaining = list(recovered)
+        while remaining:
+            seen: set[tuple[str, str]] = set()
+            batch, later = [], []
+            for record in remaining:
+                (later if record[1] in seen else batch).append(record)
+                seen.add(record[1])
+            remaining = later
+            links = {pair: info for _key, pair, info, _found in batch}
+            stopped = await self._send_long_delay_stage(
+                set(links),
+                stage=stop_stage,
+                sim_iso=sim_iso,
+                sim_time=when,
+                ends={pair: frozenset(found.carried) for _key, pair, _info, found in batch},
+                contact_ids={
+                    (node_id, end_terminals(pair, info)[node_id]): name
+                    for _key, pair, info, found in batch
+                    for node_id, name in found.carried.items()
+                },
+                links=links,
+            )
+            unstopped = sorted(set(links) - set(stopped.succeeded_pairs))
+            if unstopped:
+                log.error(
+                    "Stop of recovered long-delay contacts failed for %s: %s",
+                    unstopped,
+                    stopped.node_agent_details(),
+                )
+                raise RuntimeError(
+                    f"stop of recovered long-delay contacts failed for {unstopped}; refusing to "
+                    "start"
+                )
+            stopped_mono = self._monotonic()
+            stopped_wall = self._now()
+            for _key, pair, info, found in batch:
+                record_stage_losses(stopped, pair=pair, info=info, stage=stop_stage)
+                info.drain = recover_drain(
+                    pair,
+                    info,
+                    carried=found.carried,
+                    stopped_mono=stopped_mono,
+                    stopped_wall=stopped_wall,
+                    longest_delay_s=self._long_delay_bounds_s[pair],
+                )
+                log.info(
+                    "Recovered long-delay contact %s of %s<->%s: ends %s stopped, close at %s",
+                    found.contact.contact_id,
+                    pair[0],
+                    pair[1],
+                    ", ".join(f"{node} ({name})" for node, name in sorted(found.carried.items())),
+                    ", ".join(
+                        f"{end.node_id} {end.receives_until.isoformat()}" for end in info.drain.ends
+                    ),
+                )
 
     def _arm_drain_wakeup(self) -> None:
         """Wake the dispatch worker when the next draining end is due to close. The wake-up only
@@ -4098,7 +4408,12 @@ class Dispatcher:
         if self._drain_wakeup is not None:
             self._drain_wakeup.cancel()
             self._drain_wakeup = None
-        due = next_close_due(self._actual_links)
+        dues = [
+            due
+            for due in (next_close_due(self._actual_links), next_close_due(self._overlapping))
+            if due is not None
+        ]
+        due = min(dues) if dues else None
         if due is None or not self._running:
             return
         self._drain_wakeup = asyncio.create_task(self._wake_for_drain(due))

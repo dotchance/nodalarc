@@ -50,17 +50,21 @@ class LongDelayPlan:
     ``forced``: contacts that end at once, with the cause; every end still open or draining
     closes now. ``stop``: open contacts that ended; both transmitters stop admitting.
     ``open``: desired contacts to open, including one that reopens a draining or renamed
-    contact on the same pair. ``latency``: open contacts whose delays changed.
+    contact on the same pair. ``relocate``: pairs whose new contact uses other terminals than
+    the contact they hold (a ground pair OME gave other terminals): the held contact keeps
+    draining on its own terminals as its own record, stopping first if it is open, and the new
+    contact opens beside it. ``latency``: open contacts whose delays changed.
     """
 
     forced: Mapping[LinkPair, ForcedCause]
     stop: frozenset[LinkPair]
     open: frozenset[LinkPair]
     latency: frozenset[LinkPair]
+    relocate: frozenset[LinkPair] = frozenset()
 
     @property
     def empty(self) -> bool:
-        return not (self.forced or self.stop or self.open or self.latency)
+        return not (self.forced or self.stop or self.open or self.latency or self.relocate)
 
 
 def plan_long_delay_contacts(
@@ -77,6 +81,7 @@ def plan_long_delay_contacts(
     stop: set[LinkPair] = set()
     opening: set[LinkPair] = set()
     latency: set[LinkPair] = set()
+    relocate: set[LinkPair] = set()
     for pair in sorted(set(actual) | set(desired)):
         held = actual.get(pair)
         wanted = desired.get(pair)
@@ -97,7 +102,16 @@ def plan_long_delay_contacts(
             elif held.drain is None:
                 stop.add(pair)
             continue
-        if held is None or held.drain is not None or held.contact != wanted.contact:
+        if (
+            held is not None
+            and held.contact != wanted.contact
+            and terminals(held) != terminals(wanted)
+        ):
+            relocate.add(pair)
+            if held.drain is None:
+                stop.add(pair)
+            opening.add(pair)
+        elif held is None or held.drain is not None or held.contact != wanted.contact:
             opening.add(pair)
         elif (
             abs(held.latency_a_to_b_ms - wanted.latency_a_to_b_ms) > latency_tolerance_ms
@@ -110,6 +124,33 @@ def plan_long_delay_contacts(
         stop=frozenset(stop),
         open=frozenset(opening),
         latency=frozenset(latency),
+        relocate=frozenset(relocate),
+    )
+
+
+def terminals(info: ActiveLinkInfo) -> tuple[str, str]:
+    """The interfaces a link record's contact uses, in pair order."""
+    return (info.interface_a, info.interface_b)
+
+
+def end_terminals(pair: LinkPair, info: ActiveLinkInfo) -> dict[str, str]:
+    """Each end's interface, by node id."""
+    return {pair[0]: info.interface_a, pair[1]: info.interface_b}
+
+
+def draining_terminals(pair: LinkPair, info: ActiveLinkInfo) -> set[tuple[str, str]]:
+    """The (node id, interface) of every end of a record that still drains."""
+    if info.drain is None:
+        return set()
+    return {(end.node_id, end.interface) for end in info.drain.ends}
+
+
+def ends_on(pair: LinkPair, info: ActiveLinkInfo, wanted: set[tuple[str, str]]) -> frozenset[str]:
+    """The draining ends of a record on any of the ``wanted`` terminals, by node id."""
+    if info.drain is None:
+        return frozenset()
+    return frozenset(
+        end.node_id for end in info.drain.ends if (end.node_id, end.interface) in wanted
     )
 
 

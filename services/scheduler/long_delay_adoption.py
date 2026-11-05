@@ -78,8 +78,41 @@ def classify_surveyed_pair(
     return RecoveredContact(contact=contacts[0], carried=carried, receive_ms=receive_ms)
 
 
+def ground_contacts(
+    reports: Mapping[tuple[str, str], EndSurvey],
+) -> dict[tuple[LinkPair, str], tuple[dict[str, str], dict[str, EndSurvey]]]:
+    """The long-delay ground passes the surveyed terminals carry, by (pair, contact): each pass's
+    interfaces by node (a carrying end's own, and the peer interface its tag names) and the
+    survey of each end that carries that contact. A ground terminal links to a peer chosen per
+    pass, so a pass's two ends are found by the contact and the peer each end records."""
+    passes: dict[tuple[LinkPair, str], tuple[dict[str, str], dict[str, EndSurvey]]] = {}
+    for (node_id, interface), survey in sorted(reports.items()):
+        if not survey.carried_contact_id:
+            continue
+        peer_node, separator, peer_interface = survey.carried_peer.partition("/")
+        if not separator or not peer_node or not peer_interface:
+            raise ValueError(
+                f"{node_id}/{interface} carries contact {survey.carried_contact_id} with no "
+                f"peer end ({survey.carried_peer!r})"
+            )
+        pair = (min(node_id, peer_node), max(node_id, peer_node))
+        interfaces, surveys = passes.setdefault((pair, survey.carried_contact_id), ({}, {}))
+        if interfaces.get(node_id, interface) != interface:
+            raise ValueError(
+                f"contact {survey.carried_contact_id} of {pair} names two interfaces of {node_id}"
+            )
+        interfaces[node_id] = interface
+        interfaces.setdefault(peer_node, peer_interface)
+        surveys[node_id] = survey
+    return passes
+
+
 def adopted_link_info(
-    pair: LinkPair, interfaces: tuple[str, str], found: AdoptedOpen | RecoveredContact
+    pair: LinkPair,
+    interfaces: tuple[str, str],
+    found: AdoptedOpen | RecoveredContact,
+    *,
+    link_type: str,
 ) -> ActiveLinkInfo:
     """The link record of an adopted contact. The orbital delays are OME's and unknown until its
     next snapshot; the record holds the delays the kernel queues carry, which the first
@@ -92,7 +125,7 @@ def adopted_link_info(
         interface_b=interfaces[1],
         latency_a_to_b_ms=a_to_b,
         latency_b_to_a_ms=b_to_a,
-        link_type="isl",
+        link_type=link_type,
         commanded_netem_ms=(a_to_b, b_to_a),
         contact=found.contact,
     )

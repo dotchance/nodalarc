@@ -3427,6 +3427,37 @@ class TestLongDelayContacts:
         assert contact.contact_id == "0@2027-02-18T12:00:00.000000Z"
         assert [end.model_dump() for end in contact.ends] == ends
 
+    def test_an_earlier_contacts_linkdown_leaves_the_pairs_newer_link(self):
+        """A ground pair's earlier contact can still drain on its own terminals after the pair's
+        next pass opened on others: that contact's LinkDown records its losses and leaves the
+        open link in place; the open contact's own LinkDown removes it."""
+        import asyncio
+
+        ctx = SessionContext.__new__(SessionContext)
+        ctx._init_state_only()
+        ctx._interface_rates = {
+            ("dss-43", "isl0"): InterfaceRates(transmit_mbps=20.0, receive_mbps=2.0),
+            ("mars-orbiter", "isl1"): InterfaceRates(transmit_mbps=2.0, receive_mbps=20.0),
+        }
+        older, newer = "0@2027-02-18T12:00:00.000000Z", "0@2027-02-18T12:20:00.000000Z"
+        asyncio.run(
+            ctx._on_link_up(
+                _message(_make_link_up_event("dss-43", "mars-orbiter", contact_id=newer))
+            )
+        )
+        asyncio.run(
+            ctx._on_link_down(
+                _message(_make_link_down_event("dss-43", "mars-orbiter", contact_id=older))
+            )
+        )
+        assert ctx.links[_link_key("dss-43", "mars-orbiter")].contact_id == newer
+        asyncio.run(
+            ctx._on_link_down(
+                _message(_make_link_down_event("dss-43", "mars-orbiter", contact_id=newer))
+            )
+        )
+        assert _link_key("dss-43", "mars-orbiter") not in ctx.links
+
 
 class TestWallClockJudgment:
     """VS-API judges the continuous trace's round trips against OME's time-control record,

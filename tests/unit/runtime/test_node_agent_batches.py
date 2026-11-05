@@ -444,3 +444,70 @@ def test_a_local_link_has_no_prepare():
             interface_rates=ANY_INTERFACE_RATES,
             stage=node_agent_pb2.LINK_UP_STAGE_PREPARE,
         )
+
+
+def test_a_long_delay_ground_pass_stages_each_end_with_its_own_contact():
+    """Each end of a long-delay ground pass gets its own entry on one server too, carrying the
+    delay of the direction it receives; a close names the contact each end carries."""
+    from dataclasses import replace
+    from datetime import UTC, datetime
+
+    from scheduler.contact_drain import start_drain
+    from scheduler.desired_state import Contact
+
+    pair = ("dss-43", "mars-orbiter")
+    info = ActiveLinkInfo(
+        interface_a="term0",
+        interface_b="gnd2",
+        latency_a_to_b_ms=338_346.0,
+        latency_b_to_a_ms=338_350.0,
+        link_type="ground",
+        range_km=1.0e8,
+        contact=Contact(epoch_id=1, opened_at=datetime(2027, 2, 19, tzinfo=UTC)),
+    )
+    plan = build_link_up_batch_plan(
+        pairs={pair},
+        desired={pair: info},
+        locator=_Locator(node_agent_pb2.LOCALITY_LOCAL),
+        gs_capacities={"dss-43": 1},
+        compensation_for_pair=_compensation,
+        interface_rates=ANY_INTERFACE_RATES,
+        stage=node_agent_pb2.LINK_UP_STAGE_PREPARE,
+    )
+    entries = {e.node_id: e for batch in plan.agent_ifaces.values() for e in batch}
+    assert set(entries) == set(pair)
+    station, orbiter = entries["dss-43"], entries["mars-orbiter"]
+    assert (station.interface_name, station.peer_interface_name) == ("term0", "gnd2")
+    assert station.contact_id == orbiter.contact_id == info.contact.contact_id
+    assert not station.HasField("peer_rates") and not orbiter.HasField("peer_rates")
+    # The station receives what the orbiter transmits, less the 1 ms substrate share.
+    assert station.receive_latency_ms == pytest.approx(338_350.0 - 1.0)
+    assert orbiter.receive_latency_ms == pytest.approx(338_346.0 - 1.0)
+
+    # The orbiter's end still drains an earlier contact the station's end no longer carries.
+    drain = start_drain(
+        pair,
+        info,
+        stopped_mono=0.0,
+        stopped_wall=datetime(2027, 2, 19, tzinfo=UTC),
+        reason="vis_lost",
+    )
+    info.drain = replace(
+        drain,
+        ends=tuple(
+            replace(end, contact_id="1@2027-02-19T00:30:00.000000Z")
+            if end.node_id == "mars-orbiter"
+            else end
+            for end in drain.ends
+        ),
+    )
+    down = build_link_down_batch_plan(
+        pairs={pair},
+        actual_links={pair: info},
+        locator=_Locator(node_agent_pb2.LOCALITY_LOCAL),
+        gs_capacities={"dss-43": 1},
+        stage=node_agent_pb2.LINK_DOWN_STAGE_CLOSE,
+        ends={pair: frozenset({"mars-orbiter"})},
+    )
+    (close,) = [e for batch in down.agent_ifaces.values() for e in batch]
+    assert (close.node_id, close.contact_id) == ("mars-orbiter", "1@2027-02-19T00:30:00.000000Z")

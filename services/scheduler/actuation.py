@@ -68,6 +68,8 @@ class EndSurvey:
     carried_contact_id: str
     admission_stopped: bool
     receive_latency_ms: float
+    # The peer end the carried contact names, "node/interface"; "" when none.
+    carried_peer: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -295,6 +297,7 @@ def classify_agent_response(
             carried_contact_id=entry.carried_contact_id,
             admission_stopped=entry.admission_stopped,
             receive_latency_ms=entry.receive_latency_ms,
+            carried_peer=entry.carried_peer,
         )
         for entry in entries
         if entry.success

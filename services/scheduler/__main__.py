@@ -638,10 +638,13 @@ def _run_scheduler() -> None:
             substrate_measurements=substrate_measurements,
             read_lifecycle_identity=_make_lifecycle_identity_reader(k8s_v1, ns),
             writer_epoch=writer_epoch,
+            # Fixed links by their canonical pair; ground pairs sorted, as OME keys them.
             long_delay_bounds_s={
-                candidate.pair: candidate.longest_delay_s
+                (
+                    candidate.pair if candidate.kind != "access" else tuple(sorted(candidate.pair))
+                ): candidate.longest_delay_s
                 for candidate in resolved.link_candidates
-                if candidate.pair in resolved.long_delay_fixed_pairs()
+                if candidate.delay_class == "long_delay"
             },
         )
 

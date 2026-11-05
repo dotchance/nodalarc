@@ -695,6 +695,68 @@ async def survey_long_delay_ends(
     )
 
 
+async def survey_ground_terminals(
+    *,
+    terminals: list[tuple[str, str]],
+    gs_capacities: Mapping[str, int],
+    locator: Any,
+    pool: Any,
+    sim_iso: str,
+    session_id: str,
+    wiring_generation: str,
+    writer_epoch: int,
+) -> ActuationResult:
+    """Read what each access terminal of a node with long-delay ground peers carries
+    (KernelInventory with ``survey``): the contact, its peer end, whether admission is stopped,
+    the receive queue's delay. The peer of a pass is what the survey finds, so each entry names
+    its terminal and its side only. Results are keyed by (node id, interface). Changes nothing."""
+    entries_by_agent: dict[str, list[node_agent_pb2.KernelInventoryEntry]] = {}
+    keys: dict[tuple[str, str], set[InterfaceAck]] = {}
+    for node_id, interface in sorted(terminals):
+        agent = locator.agent_addr(node_id)
+        station = node_id in gs_capacities
+        entries_by_agent.setdefault(agent, []).append(
+            node_agent_pb2.KernelInventoryEntry(
+                node_id=node_id,
+                interface_name=interface,
+                link_type=node_agent_pb2.LINK_TYPE_GROUND,
+                locality=node_agent_pb2.LOCALITY_LOCAL,
+                gs_id=node_id if station else "",
+                sat_id="" if station else node_id,
+                survey=True,
+            )
+        )
+        keys[(node_id, interface)] = {(agent, node_id, interface)}
+    agent_results: list[AgentCommandResult] = []
+    if entries_by_agent:
+        agent_results = list(
+            await asyncio.gather(
+                *[
+                    _send_kernel_inventory_to_agent(
+                        addr=agent_addr,
+                        entries=entries_by_agent[agent_addr],
+                        pool=pool,
+                        sim_iso=sim_iso,
+                        session_id=session_id,
+                        wiring_generation=wiring_generation,
+                        writer_epoch=writer_epoch,
+                        gs_id="",
+                    )
+                    for agent_addr in sorted(entries_by_agent)
+                ]
+            )
+        )
+    requested = sorted(keys)
+    return build_actuation_result(
+        operation="KernelInventory",
+        requested_pairs=requested,
+        pair_agent_ifaces=keys,
+        pair_link_type=dict.fromkeys(requested, "ground"),
+        pair_gs_id=dict.fromkeys(requested),
+        agent_results=agent_results,
+    )
+
+
 async def publish_link_down(
     *,
     js: Any,
@@ -728,6 +790,7 @@ def long_delay_inventory_entries(
     node_ids: frozenset[str],
     locator: Any,
     interface_rates: Mapping[tuple[str, str], InterfaceRates],
+    gs_capacities: Mapping[str, int],
 ) -> tuple[dict[str, list[node_agent_pb2.KernelInventoryEntry]], set[InterfaceAck]]:
     """KernelInventory entries proving the named ends of a long-delay contact in the stage the
     Scheduler holds it in: open (admission open) or draining (admission stopped); either way
@@ -738,10 +801,19 @@ def long_delay_inventory_entries(
         raise ValueError(f"long-delay link {pair} has no commanded delay to prove")
     node_a, node_b = pair
     locality = locator.link_locality(node_a, node_b)
-    vni = (
-        compute_vni(node_a, node_b, info.interface_a, info.interface_b)
-        if locality == node_agent_pb2.LOCALITY_CROSS_NODE
-        else 0
+    cross = locality == node_agent_pb2.LOCALITY_CROSS_NODE
+    ground: dict[str, str] = {}
+    if info.link_type == "ground":
+        # A ground pass's tunnel is named from its station and satellite, as its LinkUp names it.
+        gs_id, sat_id, gs_iface, sat_iface = required_ground_endpoints(pair, info, gs_capacities)
+        ground = {"gs_id": gs_id, "sat_id": sat_id}
+        vni = compute_vni(gs_id, sat_id, gs_iface, sat_iface) if cross else 0
+    else:
+        vni = compute_vni(node_a, node_b, info.interface_a, info.interface_b) if cross else 0
+    link_type = (
+        node_agent_pb2.LINK_TYPE_GROUND
+        if info.link_type == "ground"
+        else node_agent_pb2.LINK_TYPE_ISL
     )
     entries_by_agent: dict[str, list[node_agent_pb2.KernelInventoryEntry]] = {}
     ack_keys: set[InterfaceAck] = set()
@@ -755,7 +827,7 @@ def long_delay_inventory_entries(
         entry = node_agent_pb2.KernelInventoryEntry(
             node_id=nid,
             interface_name=ifname,
-            link_type=node_agent_pb2.LINK_TYPE_ISL,
+            link_type=link_type,
             peer_node_id=peer_nid,
             peer_interface_name=peer_ifname,
             locality=locality,
@@ -765,6 +837,7 @@ def long_delay_inventory_entries(
                 if locality == node_agent_pb2.LOCALITY_CROSS_NODE
                 else ""
             ),
+            **ground,
             expected_admin_up=True,
             contact_id=info.end_contact_id(nid),
             receive_latency_ms=egress_ms(pair, peer_nid, info.commanded_netem_ms),
@@ -784,6 +857,7 @@ async def verify_long_delay_ends(
     pool: Any,
     sim_iso: str,
     interface_rates: Mapping[tuple[str, str], InterfaceRates],
+    gs_capacities: Mapping[str, int],
     session_id: str,
     wiring_generation: str,
     writer_epoch: int,
@@ -798,6 +872,7 @@ async def verify_long_delay_ends(
             node_ids=node_ids,
             locator=locator,
             interface_rates=interface_rates,
+            gs_capacities=gs_capacities,
         )
         pair_agent_ifaces[pair] = ack_keys
         for agent, entries in agent_entries.items():
@@ -826,8 +901,11 @@ async def verify_long_delay_ends(
         operation="KernelInventory",
         requested_pairs=requested,
         pair_agent_ifaces=pair_agent_ifaces,
-        pair_link_type=dict.fromkeys(requested, "isl"),
-        pair_gs_id=dict.fromkeys(requested),
+        pair_link_type={pair: actual_links[pair].link_type for pair in requested},
+        pair_gs_id={
+            pair: _gs_id_for_pair(pair, gs_capacities, actual_links[pair].link_type)
+            for pair in requested
+        },
         agent_results=agent_results,
     )
 
@@ -1249,19 +1327,22 @@ async def send_authoritative_latency_updates(
             else:
                 endpoint_agents.append((gs_id, gs_iface, locator.agent_addr(gs_id)))
             for endpoint_id, endpoint_iface, agent in endpoint_agents:
-                _add_entry(
-                    pair,
-                    agent,
-                    node_agent_pb2.LatencyEntry(
-                        node_id=endpoint_id,
-                        interface_name=endpoint_iface,
-                        latency_ms=egress_ms(pair, endpoint_id, netem),
-                        rates=terminal_rates_message(interface_rates, endpoint_id, endpoint_iface),
-                        link_type=node_agent_pb2.LINK_TYPE_GROUND,
-                        gs_id=gs_id,
-                        sat_id=sat_id,
-                    ),
+                entry = node_agent_pb2.LatencyEntry(
+                    node_id=endpoint_id,
+                    interface_name=endpoint_iface,
+                    latency_ms=egress_ms(pair, endpoint_id, netem),
+                    rates=terminal_rates_message(interface_rates, endpoint_id, endpoint_iface),
+                    link_type=node_agent_pb2.LINK_TYPE_GROUND,
+                    gs_id=gs_id,
+                    sat_id=sat_id,
                 )
+                if info.contact is not None:
+                    # A long-delay ground end's delay queue holds the direction its peer
+                    # transmits, as on a long-delay fixed link.
+                    peer_id = sat_id if endpoint_id == gs_id else gs_id
+                    entry.contact_id = info.contact.contact_id
+                    entry.receive_latency_ms = egress_ms(pair, peer_id, netem)
+                _add_entry(pair, agent, entry)
         else:
             for nid, ifname, peer_nid in [
                 (node_a, info.interface_a, node_b),

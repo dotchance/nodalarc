@@ -34,11 +34,17 @@ BOUND_S = 1_335.2
 def _survey(earth: tuple[Contact | None, bool], mars: tuple[Contact | None, bool]):
     def end(contact, stopped, delay_ms):
         if contact is None:
-            return EndSurvey(carried_contact_id="", admission_stopped=False, receive_latency_ms=0.0)
+            return EndSurvey(
+                carried_contact_id="",
+                admission_stopped=False,
+                receive_latency_ms=0.0,
+                carried_peer="",
+            )
         return EndSurvey(
             carried_contact_id=contact.contact_id,
             admission_stopped=stopped,
             receive_latency_ms=delay_ms,
+            carried_peer="peer/isl0",
         )
 
     return {
@@ -51,7 +57,7 @@ def test_a_contact_open_at_both_ends_is_adopted_with_the_delays_its_queues_carry
     found = classify_surveyed_pair(TRUNK, _survey((OLD, False), (OLD, False)))
     assert isinstance(found, AdoptedOpen)
     assert found.contact == OLD
-    info = adopted_link_info(TRUNK, INTERFACES, found)
+    info = adopted_link_info(TRUNK, INTERFACES, found, link_type="isl")
     # node_a's transmissions are delayed in node_b's receive queue.
     assert (info.latency_a_to_b_ms, info.latency_b_to_a_ms) == (MARS_RECEIVES_MS, EARTH_RECEIVES_MS)
     assert info.commanded_netem_ms == (MARS_RECEIVES_MS, EARTH_RECEIVES_MS)
@@ -86,7 +92,10 @@ def test_a_link_whose_ends_carry_nothing_is_not_adopted():
 def test_a_carried_name_that_is_no_contact_is_refused():
     surveys = _survey((OLD, False), (OLD, False))
     surveys[TRUNK[0]] = EndSurvey(
-        carried_contact_id="garbage", admission_stopped=False, receive_latency_ms=1.0
+        carried_contact_id="garbage",
+        admission_stopped=False,
+        receive_latency_ms=1.0,
+        carried_peer="",
     )
     with pytest.raises(ValueError, match="not a long-delay contact name"):
         classify_surveyed_pair(TRUNK, surveys)
@@ -97,7 +106,7 @@ def test_a_recovered_drain_closes_each_end_after_the_bound_from_the_proven_stop(
     resolver's bound on the link's one-way delay: a packet queued under a longer delay than the
     queue now carries still arrives before its end closes."""
     found = classify_surveyed_pair(TRUNK, _survey((NEW, True), (OLD, True)))
-    info = adopted_link_info(TRUNK, INTERFACES, found)
+    info = adopted_link_info(TRUNK, INTERFACES, found, link_type="isl")
     stopped_wall = datetime(2026, 11, 5, 19, tzinfo=UTC)
     drain = recover_drain(
         TRUNK,
@@ -135,7 +144,7 @@ def test_a_recovered_drain_closes_each_end_after_the_bound_from_the_proven_stop(
 
 def test_the_recovery_stop_reaches_only_carrying_ends_with_their_own_contacts():
     found = classify_surveyed_pair(TRUNK, _survey((None, False), (OLD, False)))
-    info = adopted_link_info(TRUNK, INTERFACES, found)
+    info = adopted_link_info(TRUNK, INTERFACES, found, link_type="isl")
     plan = build_link_down_batch_plan(
         pairs={TRUNK},
         actual_links={TRUNK: info},
@@ -151,7 +160,10 @@ def test_the_recovery_stop_reaches_only_carrying_ends_with_their_own_contacts():
 
 def test_an_end_stopped_at_recovery_that_reports_nothing_at_the_reopen_keeps_its_record():
     info = adopted_link_info(
-        TRUNK, INTERFACES, classify_surveyed_pair(TRUNK, _survey((OLD, False), (OLD, True)))
+        TRUNK,
+        INTERFACES,
+        classify_surveyed_pair(TRUNK, _survey((OLD, False), (OLD, True))),
+        link_type="isl",
     )
     info.stage_losses = {
         TRUNK[0]: StageLoss(untransmitted_at_stop=40, transmit_dropped=1),
@@ -172,3 +184,44 @@ class _Locator:
 
     def agent_addr(self, node_id: str) -> str:
         return f"agent-{node_id}"
+
+
+def test_ground_ends_are_grouped_into_passes_by_contact_and_peer():
+    """A restarted Scheduler finds a ground pass's two ends by the contact and the peer each
+    end's tag records: the station's term0 and the orbiter's gnd0 carry one pass; the station's
+    term1 still drains an earlier pass whose orbiter end already closed."""
+    from scheduler.long_delay_adoption import ground_contacts
+
+    station, orbiter = "dss-43", "mars-orbiter"
+
+    def carried(contact, peer, *, stopped):
+        return EndSurvey(
+            carried_contact_id=contact.contact_id,
+            admission_stopped=stopped,
+            receive_latency_ms=MARS_RECEIVES_MS,
+            carried_peer=peer,
+        )
+
+    reports = {
+        (station, "term0"): carried(NEW, f"{orbiter}/gnd0", stopped=False),
+        (orbiter, "gnd0"): carried(NEW, f"{station}/term0", stopped=False),
+        (station, "term1"): carried(OLD, f"{orbiter}/gnd1", stopped=True),
+        (orbiter, "gnd1"): EndSurvey(
+            carried_contact_id="", admission_stopped=False, receive_latency_ms=0.0, carried_peer=""
+        ),
+    }
+    passes = ground_contacts(reports)
+    pair = (station, orbiter)
+    assert set(passes) == {(pair, NEW.contact_id), (pair, OLD.contact_id)}
+    interfaces, surveys = passes[(pair, NEW.contact_id)]
+    assert interfaces == {station: "term0", orbiter: "gnd0"} and set(surveys) == set(pair)
+    assert isinstance(classify_surveyed_pair(pair, surveys), AdoptedOpen)
+
+    interfaces, surveys = passes[(pair, OLD.contact_id)]
+    assert interfaces == {station: "term1", orbiter: "gnd1"} and set(surveys) == {station}
+    empty = reports[(orbiter, "gnd1")]
+    found = classify_surveyed_pair(pair, {node: surveys.get(node, empty) for node in pair})
+    assert isinstance(found, RecoveredContact)
+    assert found.carried == {station: OLD.contact_id}
+    info = adopted_link_info(pair, ("term1", "gnd1"), found, link_type="ground")
+    assert (info.link_type, info.interface_a, info.interface_b) == ("ground", "term1", "gnd1")

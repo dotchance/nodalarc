@@ -29,6 +29,7 @@ const CLOSE_CAUSE_LABELS: Record<LinkEndCloseCause, string> = {
   seek: "seek",
   scenario: "scenario command",
   reopened: "reopened while draining",
+  retargeted: "terminal repointed before the last arrival",
 };
 
 /** One end's losses: what its delay queue still held at the close (a count when both

@@ -74,8 +74,12 @@ class LinkUp(BaseModel):
 # light time of the direction it receives ("drain_deadline"); a seek or a scenario command closes
 # it before then. A long-delay end whose next contact opens while it still drains keeps its
 # queue for that contact ("reopened"): nothing is discarded, and what the end counted until the
-# new contact was prepared is the ended contact's.
-type LinkEndCloseCause = Literal["end_of_contact", "drain_deadline", "seek", "scenario", "reopened"]
+# new contact was prepared is the ended contact's. A long-delay end whose terminal OME points at
+# another peer before its last packet arrives closes then ("retargeted"): what it still held can
+# no longer be received.
+type LinkEndCloseCause = Literal[
+    "end_of_contact", "drain_deadline", "seek", "scenario", "reopened", "retargeted"
+]
 
 
 class LinkEndLoss(BaseModel):

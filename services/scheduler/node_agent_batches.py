@@ -124,6 +124,36 @@ def build_link_down_batch_plan(
                 else 0
             )
 
+            if info.contact is not None:
+                closing = ends.get(pair) if ends is not None else None
+                for nid, peer_nid in ((gs_id, sat_id), (sat_id, gs_id)):
+                    if closing is not None and nid not in closing:
+                        continue
+                    iface = gs_iface if nid == gs_id else sat_iface
+                    peer_iface = sat_iface if nid == gs_id else gs_iface
+                    agent = locator.agent_addr(nid)
+                    iface_msg = node_agent_pb2.InterfaceDown(
+                        node_id=nid,
+                        interface_name=iface,
+                        peer_node_id=peer_nid,
+                        peer_interface_name=peer_iface,
+                        link_type=node_agent_pb2.LINK_TYPE_GROUND,
+                        gs_id=gs_id,
+                        sat_id=sat_id,
+                        locality=locality,
+                        remote_node_ip=(
+                            locator.node_ip(locator.k3s_node(peer_nid))
+                            if locality == node_agent_pb2.LOCALITY_CROSS_NODE
+                            else ""
+                        ),
+                        vni=vni,
+                        stage=stage,
+                        contact_id=(contact_ids or {}).get((nid, iface))
+                        or info.end_contact_id(nid),
+                    )
+                    agent_ifaces.setdefault(agent, []).append(iface_msg)
+                    pair_agent_ifaces.setdefault(pair, set()).add(_ack_key(agent, iface_msg))
+                continue
             if locality == node_agent_pb2.LOCALITY_LOCAL:
                 agent = locator.agent_addr(sat_id)
                 iface_msg = node_agent_pb2.InterfaceDown(
@@ -284,7 +314,38 @@ def build_link_up_batch_plan(
                 else 0
             )
 
-            if locality == node_agent_pb2.LOCALITY_LOCAL:
+            if info.contact is not None:
+                # A long-delay ground pass stages each end on its own, in both localities, as a
+                # long-delay fixed link does: each end holds the delay queue of the direction it
+                # receives.
+                for nid, peer_nid in ((gs_id, sat_id), (sat_id, gs_id)):
+                    iface = gs_iface if nid == gs_id else sat_iface
+                    peer_iface = sat_iface if nid == gs_id else gs_iface
+                    agent = locator.agent_addr(nid)
+                    iface_msg = node_agent_pb2.InterfaceUp(
+                        node_id=nid,
+                        interface_name=iface,
+                        peer_node_id=peer_nid,
+                        peer_interface_name=peer_iface,
+                        link_type=node_agent_pb2.LINK_TYPE_GROUND,
+                        latency_ms=egress_ms(pair, nid, netem),
+                        rates=terminal_rates_message(interface_rates, nid, iface),
+                        gs_id=gs_id,
+                        sat_id=sat_id,
+                        locality=locality,
+                        remote_node_ip=(
+                            locator.node_ip(locator.k3s_node(peer_nid))
+                            if locality == node_agent_pb2.LOCALITY_CROSS_NODE
+                            else ""
+                        ),
+                        vni=vni,
+                        stage=stage,
+                        contact_id=info.contact.contact_id,
+                        receive_latency_ms=egress_ms(pair, peer_nid, netem),
+                    )
+                    agent_ifaces.setdefault(agent, []).append(iface_msg)
+                    pair_agent_ifaces.setdefault(pair, set()).add(_ack_key(agent, iface_msg))
+            elif locality == node_agent_pb2.LOCALITY_LOCAL:
                 agent = locator.agent_addr(sat_id)
                 iface_msg = node_agent_pb2.InterfaceUp(
                     node_id=gs_id,

@@ -28,10 +28,10 @@ def _valid_config_dict() -> dict:
         "veth_interface_mtu_bytes": 9000,
         "vxlan_udp_port": 14789,
         "long_delay_bound_s": 10.0,
-        "long_delay_envelope_sustained_mbps": 1.0,
+        "long_delay_envelope_sustained_mbps": 0.1,
         "long_delay_envelope_packet_bytes": 1472,
-        "long_delay_envelope_burst_packets": 1000,
-        "queue_memory_bytes_per_packet": 2299,
+        "long_delay_envelope_burst_packets": 250,
+        "queue_memory_bytes_per_buffer": 73728,
         "queue_memory_server_share": 0.1,
         "node_agent_loads_kernel_modules": False,
         "kubelet_root_dir": "/var/lib/kubelet",
@@ -101,7 +101,7 @@ class TestPlatformConfig:
         assert platform["long_delay_envelope_packet_bytes"] == envelope["packetBytes"]
         assert platform["long_delay_envelope_burst_packets"] == envelope["burstPackets"]
         memory = values["network"]["queueMemory"]
-        assert platform["queue_memory_bytes_per_packet"] == memory["bytesPerPacket"]
+        assert platform["queue_memory_bytes_per_buffer"] == memory["bytesPerBuffer"]
         assert platform["queue_memory_server_share"] == memory["serverShare"]
         assert (
             platform["node_agent_loads_kernel_modules"] == values["nodeAgent"]["loadKernelModules"]

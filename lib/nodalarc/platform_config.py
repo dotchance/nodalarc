@@ -64,17 +64,18 @@ class PlatformConfig(BaseModel):
     # The traffic NodalArc carries on each direction of a long-delay link: a sustained load at a
     # packet size, plus a burst. It sizes every long-delay delay queue (a terminal's line rate
     # over a light-minute delay would ask for gigabytes per queue); traffic above it is dropped
-    # at the queue's limit and reported as substrate loss. Set at install (chart values
-    # network.longDelayEnvelope.*); the shipped defaults suit the development cluster, and an
-    # installation sizes them for its own servers.
+    # at the queue's limit and reported as substrate loss. Terminal rates are not changed by it.
+    # Set at install (chart values network.longDelayEnvelope.*); the shipped defaults are sized
+    # for small installations, and an installation with more memory raises them.
     long_delay_envelope_sustained_mbps: float = Field(gt=0, allow_inf_nan=False)
     long_delay_envelope_packet_bytes: int = Field(gt=0)
     long_delay_envelope_burst_packets: int = Field(ge=0)
-    # Kernel memory one queued packet of the envelope's size occupies, measured on the
-    # installation's kernel. Set at install (chart value network.queueMemory.bytesPerPacket).
-    queue_memory_bytes_per_packet: int = Field(gt=0)
-    # The share of each server's Kubernetes allocatable memory that a session's link queues on
-    # that server may hold. Allocatable memory is the server's capacity for pods, not its unused
+    # The memory the long-delay queue capacity estimate counts for each queued buffer: buffers up
+    # to 64 KiB on servers with 4 KiB pages. Node qualification refuses a server whose page size or
+    # GSO/GRO limits need more. Set at install (chart value network.queueMemory.bytesPerBuffer).
+    queue_memory_bytes_per_buffer: int = Field(gt=0)
+    # The share of each server's Kubernetes allocatable memory that a session's long-delay queues
+    # on that server may hold by the estimate; local link queues are not counted. Allocatable memory is the server's capacity for pods, not its unused
     # memory, so the share leaves room for every other consumer. Set at install (chart value
     # network.queueMemory.serverShare).
     queue_memory_server_share: float = Field(gt=0, le=1, allow_inf_nan=False)
@@ -254,9 +255,9 @@ CHART_TEMPLATED_SETTINGS = {
         '{{ required "network.longDelayEnvelope.burstPackets is required" '
         ".Values.network.longDelayEnvelope.burstPackets | int }}"
     ),
-    "queue_memory_bytes_per_packet": (
-        '{{ required "network.queueMemory.bytesPerPacket is required" '
-        ".Values.network.queueMemory.bytesPerPacket | int }}"
+    "queue_memory_bytes_per_buffer": (
+        '{{ required "network.queueMemory.bytesPerBuffer is required" '
+        ".Values.network.queueMemory.bytesPerBuffer | int }}"
     ),
     "queue_memory_server_share": (
         '{{ required "network.queueMemory.serverShare is required" '

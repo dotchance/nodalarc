@@ -82,22 +82,23 @@ network:
   # A link whose delay can exceed it is a long-delay link.
   longDelayBoundSeconds: 10.0
   # The traffic NodalArc carries on each direction of a long-delay link; it
-  # sizes the long-delay delay queues. Size it for the installation's servers.
+  # sets the packet limit of the long-delay delay queues and changes no
+  # terminal rate. The defaults are sized for small installations.
   longDelayEnvelope:
-    sustainedMbps: 1.0
+    sustainedMbps: 0.1
     packetBytes: 1472
-    burstPackets: 1000
-  # Kernel memory per queued packet of the envelope's size (measured on the
-  # installation's kernel), and the share of each server's allocatable memory
-  # a session's link queues may hold there. A session whose queues would need
-  # more on a server is refused, naming the server and its largest link ends.
-  # Allocatable memory is what Kubernetes offers pods on the server (its
-  # capacity less system reservations), not the memory unused at the time, so
-  # the share leaves room for everything else the server runs. The defaults
-  # were measured on the development cluster; another kernel, NIC or server
-  # size needs its own numbers.
+    burstPackets: 250
+  # The long-delay queue capacity estimate: the memory counted per queued
+  # buffer (buffers up to 64 KiB on servers with 4 KiB pages; node
+  # qualification refuses a server that needs more), and the share of each
+  # server's allocatable memory a session's long-delay queues may hold there by
+  # that estimate. Local link queues are not counted. A session over it is
+  # refused, naming the server and its long-delay link ends. Allocatable memory is what
+  # Kubernetes offers pods on the server (its capacity less system
+  # reservations), not the memory unused at the time, so the share leaves room
+  # for everything else the server runs.
   queueMemory:
-    bytesPerPacket: 2299
+    bytesPerBuffer: 73728
     serverShare: 0.1
 
 # VS-API: FastAPI server for visualization state

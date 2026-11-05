@@ -538,10 +538,11 @@ class TestWiringManifest:
         return _extract_manifest(mock_v1)
 
     def test_wiring_waits_on_no_queue_budget_the_observed_pods_exceed(self, tmp_path):
-        """Before wiring, the Operator checks the queue memory on the servers the pods are on.
-        An Earth-Mars session whose pods all sit on node01 needs about 660 MB there; with 1 GiB
-        allocatable and the shipped share of 0.1, node01 is refused and no manifest is
-        written; with 32 GiB the manifest is written."""
+        """Before wiring, the Operator checks the long-delay queue capacity estimate on the
+        servers the pods are on. Under the test platform's envelope, an Earth-Mars session whose
+        pods all sit on node01 needs an estimated 18.5 GiB there for its two trunk ends; with
+        1 GiB allocatable and a share of 0.1, node01 is refused and no manifest is written; with
+        256 GiB the manifest is written."""
         from nodalarc.substrate.queue_budget import QueueMemoryRefused
 
         spec = {
@@ -550,12 +551,15 @@ class TestWiringManifest:
             )
         }
         refused_v1 = create_autospec(kubernetes.client.CoreV1Api, instance=True)
-        with pytest.raises(QueueMemoryRefused, match=r"^server node01 would hold up to"):
+        with pytest.raises(
+            QueueMemoryRefused,
+            match=r"^long-delay queue capacity estimate: server node01 needs an estimated",
+        ):
             self._build_and_extract(tmp_path, spec, mock_v1=refused_v1, allocatable_memory="1Gi")
         refused_v1.create_namespaced_config_map.assert_not_called()
         refused_v1.replace_namespaced_config_map.assert_not_called()
 
-        manifest = self._build_and_extract(tmp_path, spec, allocatable_memory="32Gi")
+        manifest = self._build_and_extract(tmp_path, spec, allocatable_memory="256Gi")
         assert manifest["nodes"]
 
     def test_manifest_requires_runtime_session_id(self, tmp_path):

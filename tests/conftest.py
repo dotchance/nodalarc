@@ -59,7 +59,7 @@ def _init_platform_config():
         long_delay_envelope_sustained_mbps=1.0,
         long_delay_envelope_packet_bytes=1250,
         long_delay_envelope_burst_packets=500,
-        queue_memory_bytes_per_packet=2304,
+        queue_memory_bytes_per_buffer=73728,
         queue_memory_server_share=0.1,
         node_agent_loads_kernel_modules=False,
         kubelet_root_dir="/var/lib/kubelet",

@@ -23,7 +23,7 @@ from typing import TypeVar
 
 from nodalarc.platform_config import get_platform_config
 from nodalarc.runtime_naming import link_interface_mac
-from nodalarc.substrate.queue_sizing import queue_limit_packets
+from nodalarc.substrate.queue_sizing import LONG_DELAY_TRANSMIT_LEAF_PACKETS, queue_limit_packets
 from pyroute2 import IPRoute
 from pyroute2.netlink.rtnl import TC_H_ROOT
 
@@ -338,8 +338,8 @@ def update_delay(pid: int, ifname: str, delay_ms: float, transmit_mbps: float) -
 
 def apply_long_delay_transmit_shaping(pid: int, ifname: str, transmit_mbps: float) -> None:
     """Shape a long-delay end's transmitting pod interface: the terminal's rate, no delay queue,
-    and the rate class's queue as an explicit pfifo leaf (handle 20:) of the interface's queue
-    length.
+    and the rate class's queue as an explicit pfifo leaf (handle 20:) of
+    ``LONG_DELAY_TRANSMIT_LEAF_PACKETS``, the limit the memory budget counts.
 
     The leaf is explicit so the stop can purge it: deleting a leaf drops what it holds and adds
     the count to the root qdisc's drops, which is how the stop counts the untransmitted backlog
@@ -371,14 +371,13 @@ def apply_long_delay_transmit_shaping(pid: int, ifname: str, transmit_mbps: floa
                 f"the rate class of long-delay transmitter {ifname} holds a "
                 f"{leaf.get_attr('TCA_KIND')} qdisc (handle {leaf['handle']:#x}), not its leaf"
             )
-        (link,) = ipr.get_links(idx)
         ipr.tc(
             "add",
             kind="pfifo",
             index=idx,
             handle=TRANSMIT_LEAF_HANDLE,
             parent=_SHAPER_CLASS,
-            limit=int(link.get_attr("IFLA_TXQLEN")),
+            limit=LONG_DELAY_TRANSMIT_LEAF_PACKETS,
         )
 
     _in_namespace(pid, _op)

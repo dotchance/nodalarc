@@ -26,6 +26,10 @@ from dataclasses import dataclass
 LOCAL_IN_FLIGHT_PACKET_BYTES = 1500
 # The kernel's default netem limit, kept as every local queue's buffer.
 LOCAL_BUFFER_PACKETS = 1000
+# The packet limit of a long-delay end's transmit leaf, the queue behind its rate shaper: the
+# kernel's default interface queue length. The Node Agent creates the leaf with it and the memory
+# budget counts the leaf full at it, so the two cannot disagree.
+LONG_DELAY_TRANSMIT_LEAF_PACKETS = 1000
 
 
 @dataclass(frozen=True, slots=True)

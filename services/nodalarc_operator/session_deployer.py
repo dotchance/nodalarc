@@ -48,7 +48,7 @@ from nodalarc.substrate.manifest_contract import POD_OWNER_UID_LABEL, WIRING_MAN
 from nodalarc.substrate.queue_budget import (
     QueueMemoryRefused,
     check_queue_budget,
-    session_queue_demand,
+    long_delay_queue_demand,
 )
 from nodalarc.substrate.routing_requirements import (
     address_family_sysctls,
@@ -239,29 +239,34 @@ def _server_allocatable_memory(
     return memory
 
 
-def check_session_queue_memory(
+def check_long_delay_queue_capacity(
     v1: kubernetes.client.CoreV1Api,
     resolved_session: ResolvedSession,
     placement: Mapping[str, str],
 ) -> None:
-    """Refuse a session whose link queues would exceed a server's memory budget where
-    ``placement`` puts its pods: the placement computed before pod creation, or the one observed
-    before wiring (``nodalarc.substrate.queue_budget``)."""
+    """The long-delay queue capacity estimate: refuse a session whose long-delay queues would
+    exceed a server's budget where ``placement`` puts its pods, the placement computed before pod
+    creation or the one observed before wiring (``nodalarc.substrate.queue_budget``). A session
+    without long-delay links has nothing to check; local link queues are not part of the
+    estimate."""
     config = get_platform_config()
-    demand = session_queue_demand(
+    demand = long_delay_queue_demand(
         resolved_session,
         placement,
         envelope=config.long_delay_envelope,
-        bytes_per_packet=config.queue_memory_bytes_per_packet,
+        bytes_per_buffer=config.queue_memory_bytes_per_buffer,
     )
+    if not demand:
+        return
     check_queue_budget(
         demand,
         allocatable_bytes=_server_allocatable_memory(v1, set(demand)),
         share=config.queue_memory_server_share,
+        bytes_per_buffer=config.queue_memory_bytes_per_buffer,
     )
     for server, server_demand in demand.items():
         log.info(
-            "Link queue memory on %s: up to %d bytes over %d link ends",
+            "Long-delay queue capacity estimate on %s: %d bytes over %d long-delay ends",
             server,
             server_demand.bytes,
             len(server_demand.interfaces),
@@ -630,10 +635,10 @@ def ensure_session_configmaps(
         ", ".join(f"{n}={c}" for n, c in sorted(node_counts.items())),
     )
 
-    # --- Step 9: Link queue memory on each server of the placement ---
-    _progress("Checking link queue memory on each server")
+    # --- Step 9: Long-delay queue capacity estimate on each server of the placement ---
+    _progress("Checking the long-delay queue capacity estimate on each server")
     try:
-        check_session_queue_memory(v1, resolved_session, pod_placement)
+        check_long_delay_queue_capacity(v1, resolved_session, pod_placement)
     except QueueMemoryRefused as exc:
         import kopf
 
@@ -919,8 +924,9 @@ def write_wiring_manifest(
     v1 = _get_v1()
 
     # The pods are where Kubernetes put them, which a reconciliation that recreated some of them
-    # may not have computed: the queue memory is checked again on the observed placement.
-    check_session_queue_memory(v1, resolved_session, pod_placement)
+    # may not have computed: the long-delay queue capacity estimate is checked again on the
+    # observed placement.
+    check_long_delay_queue_capacity(v1, resolved_session, pod_placement)
 
     # A new manifest needs no proof cleanup: each pod's wiring proof names its
     # session and wiring generation, and no proof of another generation is

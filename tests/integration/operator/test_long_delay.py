@@ -87,5 +87,23 @@ def test_each_direction_of_a_long_delay_link_takes_its_own_delay(
         )
     finally:
         if target != started:
-            operator.playback("seek", target_sim_time=started.isoformat())
+            _seek_back(operator, started, target)
     assert not disagreements, "\n".join(disagreements)
+
+
+def _seek_back(operator: Operator, started: datetime, left: datetime) -> None:
+    """Seek to where the test found the session and wait until the feed shows it there: a
+    session still seeking refuses every other playback action, the next test's included."""
+    operator.playback("seek", target_sim_time=started.isoformat())
+    heard = operator.watch_state(
+        180.0,
+        until=lambda messages: (
+            "links" in messages[-1][1]
+            and started.timestamp() <= sim_seconds(messages[-1][1]) < left.timestamp()
+        ),
+    )
+    back = sim_seconds(heard[-1][1])
+    assert started.timestamp() <= back < left.timestamp(), (
+        f"the seek back to {started.isoformat()} did not arrive; the session shows "
+        f"{datetime.fromtimestamp(back, UTC).isoformat()}"
+    )

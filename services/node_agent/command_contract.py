@@ -298,7 +298,15 @@ def _validate_long_delay_inventory(request) -> None:
         _require_nonempty(entry.node_id, "node_id")
         _require_nonempty(entry.interface_name, "interface_name")
         _validate_locality(entry.locality)
-        if entry.link_type == node_agent_pb2.LINK_TYPE_GROUND:
+        if entry.link_type == node_agent_pb2.LINK_TYPE_GROUND and entry.survey:
+            # A survey of a ground terminal names the end and its side only: the peer is what
+            # the survey reports.
+            if entry.node_id not in (entry.gs_id, entry.sat_id):
+                raise CommandContractError(
+                    node_agent_pb2.NODE_AGENT_INVALID_FIELD,
+                    "a ground survey entry names its node as its station or its satellite",
+                )
+        elif entry.link_type == node_agent_pb2.LINK_TYPE_GROUND:
             # A long-delay ground end, audited like a fixed long-delay end.
             _require_nonempty(entry.gs_id, "gs_id")
             _require_nonempty(entry.sat_id, "sat_id")

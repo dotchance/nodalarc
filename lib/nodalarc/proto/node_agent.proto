@@ -339,6 +339,8 @@ message KernelInventoryEntryResult {
   string carried_contact_id = 10;
   bool admission_stopped = 11;
   double receive_latency_ms = 12;
+  // The peer end the carried contact names ("node/interface"), "" when none.
+  string carried_peer = 13;
 }
 
 message KernelInventoryResponse {

@@ -491,24 +491,31 @@ class ContactTag:
     restart would report its earlier loss again."""
 
     contact_id: str
+    # The end the contact links this one to, "node/interface": a ground terminal links to a peer
+    # chosen per pass, and a restarted Scheduler finds each pass's two ends by it.
+    peer: str
     taken_reported: int
     dropped_reported: int
     transmit_dropped_reported: int
 
     def encoded(self) -> str:
         return (
-            f"{self.contact_id};taken={self.taken_reported};dropped={self.dropped_reported};"
-            f"tx_dropped={self.transmit_dropped_reported}"
+            f"{self.contact_id};peer={self.peer};taken={self.taken_reported};"
+            f"dropped={self.dropped_reported};tx_dropped={self.transmit_dropped_reported}"
         )
 
     @classmethod
     def decoded(cls, alias: str) -> ContactTag:
         contact_id, *fields = alias.split(";")
         values = dict(field.partition("=")[::2] for field in fields)
-        if not contact_id or set(values) != {"taken", "dropped", "tx_dropped"}:
+        if not contact_id or set(values) != {"peer", "taken", "dropped", "tx_dropped"}:
             raise ValueError(f"a contact tag of an unknown form: {alias!r}")
         return cls(
-            contact_id, int(values["taken"]), int(values["dropped"]), int(values["tx_dropped"])
+            contact_id,
+            values["peer"],
+            int(values["taken"]),
+            int(values["dropped"]),
+            int(values["tx_dropped"]),
         )
 
 

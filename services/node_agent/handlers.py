@@ -149,8 +149,9 @@ class EntryOutcome:
     loss: node_agent_pb2.LinkEndLoss | None = None
     # A stage for a contact the end no longer carries: it changed nothing.
     superseded: bool = False
-    # A survey's report: (carried contact or "", admission stopped, receive queue delay in ms).
-    survey: tuple[str, bool, float] | None = None
+    # A survey's report: (carried contact or "", admission stopped, receive queue delay in ms,
+    # the carried contact's peer end "node/interface" or "").
+    survey: tuple[str, bool, float, str] | None = None
 
     @property
     def success(self) -> bool:
@@ -1392,6 +1393,7 @@ def _prepare_long_delay_contact(
             host_ifname,
             namespace_ops.ContactTag(
                 contact_id=iface.contact_id,
+                peer=f"{iface.peer_node_id}/{iface.peer_interface_name}",
                 taken_reported=taken,
                 dropped_reported=loss.QueueDevice(host_ifname, None).counts().dropped,
                 transmit_dropped_reported=transmit_dropped,
@@ -1941,6 +1943,7 @@ def _kernel_inventory_entry_result(
         carried_contact_id=outcome.survey[0] if outcome.survey else "",
         admission_stopped=outcome.survey[1] if outcome.survey else False,
         receive_latency_ms=outcome.survey[2] if outcome.survey else 0.0,
+        carried_peer=outcome.survey[3] if outcome.survey else "",
     )
 
 
@@ -1955,13 +1958,21 @@ def _survey_long_delay_end(
         if handles is None:
             raise ValueError("handles is None — wiring not complete?")
         pid = _require_pid(entry.node_id, handles)
-        if not _long_delay_entry(entry, handles):
+        # A ground terminal is surveyed for whatever pass it carries: its node must have a
+        # long-delay access peer, whichever peer the pass links it to.
+        surveyable = (
+            handles[entry.node_id].carries_long_delay_access
+            if entry.link_type == node_agent_pb2.LINK_TYPE_GROUND
+            else _long_delay_entry(entry, handles)
+        )
+        if not surveyable:
             return _fail(
                 node_agent_pb2.NODE_AGENT_INVALID_FIELD,
                 f"{entry.node_id}/{entry.interface_name} is not a long-delay end",
             )
         host_ifname = _end_host_ifname(entry)
-        carried = namespace_ops.contact_of(host_ifname) or ""
+        tag = namespace_ops.contact_tag(host_ifname)
+        carried = tag.contact_id if tag is not None else ""
         stopped = False
         if carried:
             stopped = admission.read_admission(pid, entry.interface_name).stopped
@@ -1976,7 +1987,7 @@ def _survey_long_delay_end(
                     f"receive_delay_ms={delay_ms}",
                 )
             ),
-            survey=(carried, stopped, delay_ms),
+            survey=(carried, stopped, delay_ms, tag.peer if tag is not None else ""),
         )
     except Exception as exc:
         msg = f"long-delay survey failed {entry.node_id}/{entry.interface_name}: {exc}"

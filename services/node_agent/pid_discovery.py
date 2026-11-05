@@ -78,6 +78,7 @@ class NodeManifestFacts:
 
     mpls_enable: bool
     static_neighbors: tuple[tuple[str, StaticNeighbors], ...]
+    long_delay_interfaces: frozenset[str]
 
 
 def manifest_facts(node: NodeSpec) -> NodeManifestFacts:
@@ -95,6 +96,9 @@ def manifest_facts(node: NodeSpec) -> NodeManifestFacts:
             )
             for iface in node.isl_interfaces
             if iface.static_neighbors
+        ),
+        long_delay_interfaces=frozenset(
+            iface.name for iface in node.isl_interfaces if iface.long_delay
         ),
     )
 
@@ -123,10 +127,15 @@ class NamespaceHandle:
     netns_id: str
     mpls_enable: bool
     static_neighbors: tuple[tuple[str, StaticNeighbors], ...]
+    long_delay_interfaces: frozenset[str]
 
     def static_neighbors_on(self, ifname: str) -> StaticNeighbors | None:
         """The static neighbors the manifest gives ``ifname``; None on a local link."""
         return dict(self.static_neighbors).get(ifname)
+
+    def is_long_delay(self, ifname: str) -> bool:
+        """Whether the manifest classes ``ifname``'s link as long-delay."""
+        return ifname in self.long_delay_interfaces
 
 
 def netns_identity(pid: int) -> str | None:
@@ -278,6 +287,7 @@ def _validated_sandbox_handle(
         netns_id=netns,
         mpls_enable=facts.mpls_enable,
         static_neighbors=facts.static_neighbors,
+        long_delay_interfaces=facts.long_delay_interfaces,
     )
 
 

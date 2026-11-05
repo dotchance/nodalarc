@@ -59,6 +59,33 @@ enum Locality {
   LOCALITY_CROSS_NODE = 2;   // Pods on different nodes — VXLAN tunnel
 }
 
+// What a BatchLinkDown entry does to its end of a link. Every entry states it: an omitted stage
+// is refused, so no entry tears down a long-delay link's queue by default.
+enum LinkDownStage {
+  LINK_DOWN_STAGE_UNSPECIFIED = 0;
+  // Long-delay ends only: this end's transmitting interface stops admitting packets; its queues
+  // and delivery path stay, so packets already sent keep arriving. The acknowledgement proves
+  // admission stopped, not that the contact closed.
+  LINK_DOWN_STAGE_STOP_ADMISSION = 1;
+  // This end's remaining link resources are removed, and what its queues still held is counted.
+  // On a local link this is the whole LinkDown.
+  LINK_DOWN_STAGE_CLOSE = 2;
+}
+
+// What one end of a link lost, by cause. Substrate loss only: nothing here is loss the
+// experiment's declared conditions cause.
+message LinkEndLoss {
+  // Packets this end's admission filter took while admission was stopped.
+  uint64 admission_taken = 1;
+  // Packets this end's delay queue dropped at its limit: traffic above the queue's envelope.
+  uint64 queue_dropped = 2;
+  // Packets this end's queue held when it closed.
+  uint64 discarded_at_close = 3;
+  // True when discarded_at_close is an exact count (nothing entered the queue during the close);
+  // false when it is a queue-length sample.
+  bool discarded_exact = 4;
+}
+
 message CommandFailureResponse {
   bool success = 1;
   NodeAgentErrorCode error_code = 2;
@@ -84,6 +111,10 @@ message InterfaceDown {
   // Peer info for host-mediated ISL (host-side veth name computation)
   string peer_node_id = 12;
   string peer_interface_name = 13;
+  LinkDownStage stage = 14;
+  // The contact this entry ends (OME names contacts). Required on long-delay ends: a stage for a
+  // contact the end no longer carries changes nothing of the contact it carries now.
+  string contact_id = 15;
 }
 
 message BatchLinkDownRequest {
@@ -103,16 +134,22 @@ message InterfaceResult {
   bool dirty_kernel = 7;
   string proof_summary = 8;
   repeated string proof_evidence = 9;
+  // BatchLinkDown CLOSE entries and long-delay STOP_ADMISSION entries: what this end lost.
+  LinkEndLoss loss = 10;
 }
 
 message BatchLinkDownResponse {
   bool success = 1;
   string error_message = 2;
+  // Entries whose end closed (CLOSE). STOP_ADMISSION entries are counted apart: a stopped
+  // admission is not a closed link.
   int32 interfaces_downed = 3;
   float apply_time_ms = 4;
   repeated InterfaceResult interface_results = 5;
   NodeAgentErrorCode error_code = 6;
   bool dirty_kernel = 7;
+  // Entries whose admission stopped (STOP_ADMISSION).
+  int32 admissions_stopped = 8;
 }
 
 // --- BatchLinkUp ---
@@ -155,6 +192,10 @@ message InterfaceUp {
   // LOCAL ground entries describe both ends: the peer end's egress delay (the direction the
   // peer transmits). Unused on entries that name one end.
   double peer_latency_ms = 19;
+  // Long-delay ends: the contact this LinkUp opens (OME names contacts), and the delay of the
+  // direction this end receives, which its receive-side queue applies.
+  string contact_id = 20;
+  double receive_latency_ms = 21;
 }
 
 message BatchLinkUpRequest {
@@ -190,6 +231,10 @@ message LatencyEntry {
   // The rates of the terminal behind this interface. The netem queue limit
   // follows its transmit rate times delay, so every delay change carries them.
   TerminalRates rates = 11;
+  // Long-delay ends: the contact whose receive-side queue this entry updates, and the delay of
+  // the direction this end receives.
+  string contact_id = 12;
+  double receive_latency_ms = 13;
 }
 
 message SetLatencyRequest {
@@ -242,6 +287,11 @@ message KernelInventoryEntry {
   TerminalRates peer_rates = 15;
   // LOCAL entries prove both ends: the peer end's expected egress delay.
   double peer_latency_ms = 16;
+  // Long-delay ends: the contact the end must carry, the delay of the direction it receives, and
+  // whether its admission must be stopped (a draining contact) or open.
+  string contact_id = 17;
+  double receive_latency_ms = 18;
+  bool expected_admission_stopped = 19;
 }
 
 message KernelInventoryRequest {

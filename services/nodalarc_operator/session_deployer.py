@@ -374,6 +374,7 @@ def _fixed_link_interfaces_by_node(resolved: ResolvedSession) -> dict[str, list[
                 "static_neighbors": _static_neighbors(nodes[candidate.node_b])
                 if long_delay
                 else [],
+                "long_delay": long_delay,
             }
         )
         by_node.setdefault(candidate.node_b, []).append(
@@ -384,6 +385,7 @@ def _fixed_link_interfaces_by_node(resolved: ResolvedSession) -> dict[str, list[
                 "static_neighbors": _static_neighbors(nodes[candidate.node_a])
                 if long_delay
                 else [],
+                "long_delay": long_delay,
             }
         )
     return {

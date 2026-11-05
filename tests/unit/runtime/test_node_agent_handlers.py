@@ -71,13 +71,14 @@ class TestBatchLinkDown:
                     locality=node_agent_pb2.LOCALITY_LOCAL,
                     peer_node_id="sat-P00S01",
                     peer_interface_name="isl1",
+                    stage=node_agent_pb2.LINK_DOWN_STAGE_CLOSE,
                 ),
             ],
         )
         resp = handle_batch_link_down(req, handles=EMPTY_PID_MAP, fence=FENCE)
         assert resp.success is False
         assert resp.interfaces_downed == 0
-        assert resp.error_message != ""
+        assert "sat-P00S00" in resp.error_message
         assert len(resp.interface_results) == 1
         assert resp.interface_results[0].node_id == "sat-P00S00"
         assert resp.interface_results[0].interface_name == "isl0"
@@ -222,3 +223,80 @@ class TestLocalGroundDelays:
         )
         with pytest.raises(ValueError, match="neither its station"):
             _local_ground_delays(message)
+
+
+def _isl_down(**fields) -> node_agent_pb2.InterfaceDown:
+    base = {
+        "node_id": "mars-relays-mto",
+        "interface_name": "isl3",
+        "link_type": node_agent_pb2.LINK_TYPE_ISL,
+        "locality": node_agent_pb2.LOCALITY_LOCAL,
+        "peer_node_id": "earth-relay-geo",
+        "peer_interface_name": "isl2",
+    }
+    base.update(fields)
+    return node_agent_pb2.InterfaceDown(**base)
+
+
+def _handle(*, long_delay: frozenset[str]):
+    from node_agent.pid_discovery import NamespaceHandle
+
+    return {
+        "mars-relays-mto": NamespaceHandle(
+            node_id="mars-relays-mto",
+            pod_name="mars-relays-mto",
+            pod_uid="uid",
+            sandbox_id="sandbox",
+            pid=1,
+            netns_id="1",
+            mpls_enable=False,
+            static_neighbors=(),
+            long_delay_interfaces=long_delay,
+        )
+    }
+
+
+class TestLinkDownStages:
+    """Every LinkDown entry states its stage; a local end only closes; a long-delay end names
+    the contact it ends. Each refusal comes before any kernel change."""
+
+    def test_an_entry_without_a_stage_is_refused_before_any_change(self):
+        req = node_agent_pb2.BatchLinkDownRequest(
+            envelope=_env("BatchLinkDown", "no-stage"), interfaces=[_isl_down()]
+        )
+        resp = handle_batch_link_down(
+            req, handles=_handle(long_delay=frozenset({"isl3"})), fence=FENCE
+        )
+        assert resp.success is False
+        assert resp.error_code == node_agent_pb2.NODE_AGENT_INVALID_FIELD
+        assert "states no stage" in resp.error_message
+        assert resp.interfaces_downed == 0 and resp.admissions_stopped == 0
+
+    def test_a_local_end_cannot_stop_admission(self):
+        req = node_agent_pb2.BatchLinkDownRequest(
+            envelope=_env("BatchLinkDown", "local-stop"),
+            interfaces=[_isl_down(stage=node_agent_pb2.LINK_DOWN_STAGE_STOP_ADMISSION)],
+        )
+        resp = handle_batch_link_down(req, handles=_handle(long_delay=frozenset()), fence=FENCE)
+        (result,) = resp.interface_results
+        assert result.success is False
+        assert result.error_code == node_agent_pb2.NODE_AGENT_INVALID_FIELD
+        assert "closes at once" in result.error_message
+        assert resp.admissions_stopped == 0
+
+    @pytest.mark.parametrize(
+        "stage",
+        [node_agent_pb2.LINK_DOWN_STAGE_STOP_ADMISSION, node_agent_pb2.LINK_DOWN_STAGE_CLOSE],
+    )
+    def test_a_long_delay_end_must_name_the_contact_it_ends(self, stage):
+        req = node_agent_pb2.BatchLinkDownRequest(
+            envelope=_env("BatchLinkDown", "no-contact"), interfaces=[_isl_down(stage=stage)]
+        )
+        resp = handle_batch_link_down(
+            req, handles=_handle(long_delay=frozenset({"isl3"})), fence=FENCE
+        )
+        (result,) = resp.interface_results
+        assert result.success is False
+        assert result.error_code == node_agent_pb2.NODE_AGENT_INVALID_FIELD
+        assert "names no contact" in result.error_message
+        assert resp.interfaces_downed == 0 and resp.admissions_stopped == 0

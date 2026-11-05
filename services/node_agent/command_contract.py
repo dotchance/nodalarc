@@ -247,6 +247,16 @@ def validate_batch_link_down_request(request, *, fence: RuntimeFence) -> None:
     validate_envelope(request, expected_kind=KIND_BATCH_LINK_DOWN, fence=fence)
     for iface in request.interfaces:
         _validate_common_interface(iface, operation=KIND_BATCH_LINK_DOWN)
+        # Every entry states what it does: an omitted stage would otherwise read as a close, and
+        # a close of a long-delay end discards packets still on their way.
+        if iface.stage not in (
+            node_agent_pb2.LINK_DOWN_STAGE_STOP_ADMISSION,
+            node_agent_pb2.LINK_DOWN_STAGE_CLOSE,
+        ):
+            raise CommandContractError(
+                node_agent_pb2.NODE_AGENT_INVALID_FIELD,
+                f"BatchLinkDown entry {iface.node_id}/{iface.interface_name} states no stage",
+            )
 
 
 def validate_set_latency_request(request, *, fence: RuntimeFence) -> None:
@@ -266,9 +276,39 @@ def validate_set_latency_request(request, *, fence: RuntimeFence) -> None:
             _require_nonempty(entry.sat_id, "sat_id")
 
 
+def _validate_long_delay_inventory(request) -> None:
+    """A KernelInventory request with no ground station audits long-delay ISL ends: each entry
+    names one end, the contact it must carry, and when up the received delay, its rates and
+    whether its admission must be stopped."""
+    for entry in request.entries:
+        _require_nonempty(entry.node_id, "node_id")
+        _require_nonempty(entry.interface_name, "interface_name")
+        _validate_locality(entry.locality)
+        if entry.link_type != node_agent_pb2.LINK_TYPE_ISL:
+            raise CommandContractError(
+                node_agent_pb2.NODE_AGENT_INVALID_FIELD,
+                "a KernelInventory request without gs_id audits ISL ends only",
+            )
+        _require_nonempty(entry.contact_id, "contact_id")
+        if entry.expected_admin_up:
+            if not entry.receive_latency_ms > 0:
+                raise CommandContractError(
+                    node_agent_pb2.NODE_AGENT_INVALID_FIELD,
+                    "an expected-up long-delay end needs receive_latency_ms > 0",
+                )
+            _validate_terminal_rates(entry, operation=KIND_KERNEL_INVENTORY)
+        if entry.locality == node_agent_pb2.LOCALITY_CROSS_NODE and entry.vni <= 0:
+            raise CommandContractError(
+                node_agent_pb2.NODE_AGENT_INVALID_FIELD,
+                "KernelInventory CROSS_NODE entry requires vni > 0",
+            )
+
+
 def validate_kernel_inventory_request(request, *, fence: RuntimeFence) -> None:
     validate_envelope(request, expected_kind=KIND_KERNEL_INVENTORY, fence=fence)
-    _require_nonempty(request.gs_id, "gs_id")
+    if not request.gs_id:
+        _validate_long_delay_inventory(request)
+        return
     for entry in request.entries:
         _require_nonempty(entry.node_id, "node_id")
         _require_nonempty(entry.interface_name, "interface_name")

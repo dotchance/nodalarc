@@ -60,20 +60,3 @@ def htb_burst_ticks(rate: int, burst: int) -> int:
     """A burst as HTB carries it: the time to send it at ``rate``, in scheduler
     ticks. pyroute2 sends this value and the kernel reports it back unchanged."""
     return tc_common.calc_xmittime(rate, burst)
-
-
-# Netem counts packets, and it holds every packet for the link delay. Its limit
-# is the packets a link carries in flight at the terminal's transmit rate,
-# counted at a standard Ethernet MTU, plus a buffer for packets waiting to be
-# sent. The buffer is the kernel's default netem limit, which every link ran
-# with before the in-flight room was added.
-NETEM_IN_FLIGHT_PACKET_BYTES = 1500
-NETEM_BUFFER_PACKETS = 1000
-
-
-def netem_limit_packets(transmit_mbps: float, delay_ms: float) -> int:
-    """The netem queue limit for a link end transmitting at ``transmit_mbps``."""
-    if delay_ms < 0:
-        raise ValueError(f"netem delay must be non-negative, got {delay_ms}")
-    in_flight_bytes = mbps_to_bytes_per_second(transmit_mbps) * delay_ms / 1000.0
-    return math.ceil(in_flight_bytes / NETEM_IN_FLIGHT_PACKET_BYTES) + NETEM_BUFFER_PACKETS

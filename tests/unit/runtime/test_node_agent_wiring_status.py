@@ -84,6 +84,7 @@ def _handle(node_id: str, *, pod_uid: str):
         netns_id="4026532100",
         mpls_enable=False,
         static_neighbors=(),
+        long_delay_interfaces=frozenset(),
     )
 
 

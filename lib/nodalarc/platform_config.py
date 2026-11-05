@@ -15,6 +15,8 @@ from typing import Any, Literal
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from nodalarc.substrate.queue_sizing import TrafficEnvelope
+
 # The largest MTU any emulated interface may have. Hosts run a 9100-byte
 # MTU so that a 9000-byte emulated packet crosses hosts whole inside VXLAN.
 MAX_EMULATED_MTU_BYTES = 9000
@@ -59,6 +61,23 @@ class PlatformConfig(BaseModel):
     # candidate once, from every delay the candidate can have. Set at install
     # (chart value network.longDelayBoundSeconds).
     long_delay_bound_s: float = Field(gt=0, allow_inf_nan=False)
+    # The traffic NodalArc carries on each direction of a long-delay link: a sustained load at a
+    # packet size, plus a burst. It sizes every long-delay delay queue (a terminal's line rate
+    # over a light-minute delay would ask for gigabytes per queue); traffic above it is dropped
+    # at the queue's limit and reported as substrate loss. Set at install (chart values
+    # network.longDelayEnvelope.*); the shipped defaults suit the development cluster, and an
+    # installation sizes them for its own servers.
+    long_delay_envelope_sustained_mbps: float = Field(gt=0, allow_inf_nan=False)
+    long_delay_envelope_packet_bytes: int = Field(gt=0)
+    long_delay_envelope_burst_packets: int = Field(ge=0)
+    # Kernel memory one queued packet of the envelope's size occupies, measured on the
+    # installation's kernel. Set at install (chart value network.queueMemory.bytesPerPacket).
+    queue_memory_bytes_per_packet: int = Field(gt=0)
+    # The share of each server's Kubernetes allocatable memory that a session's delay queues on
+    # that server may hold. Allocatable memory is the server's capacity for pods, not its unused
+    # memory, so the share leaves room for every other consumer. Set at install (chart value
+    # network.queueMemory.serverShare).
+    queue_memory_server_share: float = Field(gt=0, le=1, allow_inf_nan=False)
     # Whether the Node Agent may load kernel modules a session needs (MPLS)
     # on its host. Set at install (chart value nodeAgent.loadKernelModules).
     node_agent_loads_kernel_modules: bool
@@ -100,6 +119,15 @@ class PlatformConfig(BaseModel):
                 "vs_api_actuation_fault_after_ms must exceed vs_api_actuation_expected_latency_ms"
             )
         return self
+
+    @property
+    def long_delay_envelope(self) -> TrafficEnvelope:
+        """The traffic envelope every long-delay delay queue is sized for."""
+        return TrafficEnvelope(
+            sustained_mbps=self.long_delay_envelope_sustained_mbps,
+            packet_bytes=self.long_delay_envelope_packet_bytes,
+            burst_packets=self.long_delay_envelope_burst_packets,
+        )
 
 
 def _deterministic_node(node_id: str, available_nodes: list[str]) -> str:
@@ -213,6 +241,26 @@ CHART_TEMPLATED_SETTINGS = {
     "long_delay_bound_s": (
         '{{ required "network.longDelayBoundSeconds is required" '
         ".Values.network.longDelayBoundSeconds | float64 }}"
+    ),
+    "long_delay_envelope_sustained_mbps": (
+        '{{ required "network.longDelayEnvelope.sustainedMbps is required" '
+        ".Values.network.longDelayEnvelope.sustainedMbps | float64 }}"
+    ),
+    "long_delay_envelope_packet_bytes": (
+        '{{ required "network.longDelayEnvelope.packetBytes is required" '
+        ".Values.network.longDelayEnvelope.packetBytes | int }}"
+    ),
+    "long_delay_envelope_burst_packets": (
+        '{{ required "network.longDelayEnvelope.burstPackets is required" '
+        ".Values.network.longDelayEnvelope.burstPackets | int }}"
+    ),
+    "queue_memory_bytes_per_packet": (
+        '{{ required "network.queueMemory.bytesPerPacket is required" '
+        ".Values.network.queueMemory.bytesPerPacket | int }}"
+    ),
+    "queue_memory_server_share": (
+        '{{ required "network.queueMemory.serverShare is required" '
+        ".Values.network.queueMemory.serverShare | float64 }}"
     ),
     "node_agent_loads_kernel_modules": (
         '{{ required "nodeAgent.loadKernelModules is required" '

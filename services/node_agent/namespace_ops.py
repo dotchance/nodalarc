@@ -22,6 +22,7 @@ from typing import TypeVar
 
 from nodalarc.platform_config import get_platform_config
 from nodalarc.runtime_naming import link_interface_mac
+from nodalarc.substrate.queue_sizing import queue_limit_packets
 from pyroute2 import IPRoute
 from pyroute2.netlink.rtnl import TC_H_ROOT
 
@@ -37,7 +38,6 @@ from node_agent.tc_dump import interface_qdiscs
 from node_agent.tc_units import (
     delay_ms_to_netem_ns,
     htb_class,
-    netem_limit_packets,
 )
 
 log = logging.getLogger(__name__)
@@ -246,7 +246,9 @@ def apply_transmit_shaping(pid: int, ifname: str, delay_ms: float, transmit_mbps
     delay-only changes use update_delay().
     """
     delay_ns = delay_ms_to_netem_ns(delay_ms)
-    limit = netem_limit_packets(transmit_mbps, delay_ms)
+    limit = queue_limit_packets(
+        long_delay=False, transmit_mbps=transmit_mbps, delay_ms=delay_ms, envelope=None
+    )
 
     def _op(ipr: IPRoute) -> None:
         links = ipr.link_lookup(ifname=ifname)
@@ -295,7 +297,9 @@ def update_delay(pid: int, ifname: str, delay_ms: float, transmit_mbps: float) -
     omits it to the kernel default of 1000 packets.
     """
     delay_ns = delay_ms_to_netem_ns(delay_ms)
-    limit = netem_limit_packets(transmit_mbps, delay_ms)
+    limit = queue_limit_packets(
+        long_delay=False, transmit_mbps=transmit_mbps, delay_ms=delay_ms, envelope=None
+    )
 
     def _op(ipr: IPRoute) -> None:
         links = ipr.link_lookup(ifname=ifname)
@@ -312,6 +316,144 @@ def update_delay(pid: int, ifname: str, delay_ms: float, transmit_mbps: float) -
         )
 
     _in_namespace(pid, _op)
+
+
+# ---------------------------------------------------------------------------
+# Long-delay link ends: the delay queue on the receiving side
+# ---------------------------------------------------------------------------
+#
+# A long-delay direction's delay queue lives on the receiving end's host-side veth, whose egress
+# is the receiving pod interface's ingress; the transmitting pod interface keeps only the
+# terminal's rate. A packet that entered the queue is already on its way to that receiver, so a
+# transmitter given a new peer never hands it the old peer's packets, and stopping admission at
+# the transmitter leaves the queue to drain. Rejected alternative: the delay queue on the
+# transmitting interface, as local links have it. Measured in scratch namespaces: with the queue
+# there, all 200 packets queued for peer A were delivered to peer B after the transmitter was
+# repointed; with one queue per contact on the receiving side, A received its 200 and B only its
+# own.
+
+
+def apply_long_delay_transmit_shaping(pid: int, ifname: str, transmit_mbps: float) -> None:
+    """Shape a long-delay end's transmitting pod interface: the terminal's rate, no delay queue.
+
+    The interface's class is fixed for the session, so a delay queue found on it is another
+    link class's state, refused rather than removed.
+    """
+
+    def _op(ipr: IPRoute) -> None:
+        links = ipr.link_lookup(ifname=ifname)
+        if not links:
+            raise FileNotFoundError(f"Interface {ifname} not found in ns({pid})")
+        idx = links[0]
+        netem = [q for q in interface_qdiscs(idx) if q.get_attr("TCA_KIND") == "netem"]
+        if netem:
+            raise RuntimeError(
+                f"{ifname} is a long-delay terminal interface and holds a delay queue; its "
+                "delay belongs on the receiving side"
+            )
+        _rate_limit_egress(ipr, idx, transmit_mbps)
+
+    _in_namespace(pid, _op)
+
+
+def apply_receive_delay_queue(
+    host_ifname: str, receive_mbps: float, delay_ms: float, limit_packets: int
+) -> None:
+    """Give a long-delay end's host-side veth its receive queue: the terminal's receive rate and
+    the delay of the direction the end receives, held in a queue of ``limit_packets``."""
+    delay_ns = delay_ms_to_netem_ns(delay_ms)
+
+    def _op(ipr: IPRoute) -> None:
+        links = ipr.link_lookup(ifname=host_ifname)
+        if not links:
+            raise FileNotFoundError(f"Host interface {host_ifname} not found")
+        idx = links[0]
+        _rate_limit_egress(ipr, idx, receive_mbps)
+        ipr.tc(
+            "replace",
+            kind="netem",
+            index=idx,
+            handle=_NETEM_HANDLE,
+            parent=_SHAPER_CLASS,
+            delay_ns=delay_ns,
+            limit=limit_packets,
+        )
+
+    in_host_namespace(_op)
+
+
+def update_receive_delay(host_ifname: str, delay_ms: float, limit_packets: int) -> None:
+    """Change a long-delay end's receive delay, and the queue limit sized for it. Every change
+    carries the limit, because pyroute2 sets a change that omits it to netem's default."""
+    delay_ns = delay_ms_to_netem_ns(delay_ms)
+
+    def _op(ipr: IPRoute) -> None:
+        links = ipr.link_lookup(ifname=host_ifname)
+        if not links:
+            raise FileNotFoundError(f"Host interface {host_ifname} not found")
+        ipr.tc(
+            "change",
+            kind="netem",
+            index=links[0],
+            handle=_NETEM_HANDLE,
+            parent=_SHAPER_CLASS,
+            delay_ns=delay_ns,
+            limit=limit_packets,
+        )
+
+    in_host_namespace(_op)
+
+
+def host_peer_of(pid: int, ifname: str) -> str:
+    """The host-side veth paired with a pod link interface, read from the kernel: a veth pod end
+    records its peer's index in the host namespace."""
+
+    def _pod(ipr: IPRoute) -> int:
+        links = ipr.link_lookup(ifname=ifname)
+        if not links:
+            raise FileNotFoundError(f"Interface {ifname} not found in ns({pid})")
+        (link,) = ipr.get_links(links[0])
+        peer = link.get_attr("IFLA_LINK")
+        if not peer:
+            raise RuntimeError(f"{ifname} in ns({pid}) names no peer device")
+        return int(peer)
+
+    peer_index = _in_namespace(pid, _pod)
+
+    def _host(ipr: IPRoute) -> str:
+        (link,) = ipr.get_links(peer_index)
+        return str(link.get_attr("IFLA_IFNAME"))
+
+    return in_host_namespace(_host)
+
+
+def tag_contact(host_ifname: str, contact_id: str) -> None:
+    """Record on a long-delay end's host-side veth the contact its receive queue belongs to (the
+    interface alias), so a stage for an earlier contact can never change a later one. The kernel
+    keeps it: a restarted Node Agent reads the contact from the device."""
+
+    def _op(ipr: IPRoute) -> None:
+        links = ipr.link_lookup(ifname=host_ifname)
+        if not links:
+            raise FileNotFoundError(f"Host interface {host_ifname} not found")
+        ipr.link("set", index=links[0], ifalias=contact_id)
+
+    in_host_namespace(_op)
+
+
+def contact_of(host_ifname: str) -> str | None:
+    """The contact a long-delay end's host-side veth carries; None when it carries none (its
+    alias empty) or the device is gone."""
+
+    def _op(ipr: IPRoute) -> str | None:
+        links = ipr.link_lookup(ifname=host_ifname)
+        if not links:
+            return None
+        (link,) = ipr.get_links(links[0])
+        alias = link.get_attr("IFLA_IFALIAS")
+        return alias or None
+
+    return in_host_namespace(_op)
 
 
 # ---------------------------------------------------------------------------

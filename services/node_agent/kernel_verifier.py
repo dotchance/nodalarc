@@ -11,6 +11,7 @@ from typing import Any
 
 from nodalarc.platform_config import get_platform_config
 from nodalarc.runtime_naming import vxlan_host_ifnames
+from nodalarc.substrate.queue_sizing import queue_limit_packets
 from pyroute2.netlink.rtnl import TC_H_INGRESS
 
 from node_agent.kernel_constants import (
@@ -23,7 +24,7 @@ from node_agent.kernel_constants import (
     SHAPER_ROOT_HANDLE,
     mpls_input_sysctl,
 )
-from node_agent.namespace_ops import _in_namespace, in_host_namespace
+from node_agent.namespace_ops import _in_namespace, contact_of, in_host_namespace
 from node_agent.netem_plugin import latency_ns
 from node_agent.tc_dump import interface_qdiscs
 from node_agent.tc_units import (
@@ -31,7 +32,6 @@ from node_agent.tc_units import (
     delay_ms_to_netem_ns,
     htb_burst_ticks,
     htb_class,
-    netem_limit_packets,
 )
 
 
@@ -339,33 +339,14 @@ def verify_qdisc(pid: int, ifname: str, *, delay_ms: float, transmit_mbps: float
     evidence = [f"pid={pid}", f"ifname={ifname}", *(row["raw"] for row in rows)]
     if not any(row["kind"] == "htb" and row["handle"] == SHAPER_ROOT_HANDLE for row in rows):
         return Proof.fail(f"missing htb shaper on {ifname}", *evidence)
-    netem = _shaper_netem(rows)
-    if netem is None:
-        return Proof.fail(f"missing netem qdisc on {ifname}", *evidence)
-
-    # Netem keeps the delay in nanoseconds and reports it back unchanged in its
-    # 64-bit attribute, so the proof compares the commanded nanoseconds exactly.
-    expected_delay_ns = delay_ms_to_netem_ns(delay_ms)
-    actual_delay_ns = latency_ns(netem["options"])
-    if actual_delay_ns is None:
-        return Proof.fail(f"cannot read netem delay for {ifname}", *evidence)
-    if actual_delay_ns != expected_delay_ns:
-        return Proof.fail(
-            f"netem delay mismatch on {ifname}",
-            f"expected_ns={expected_delay_ns}",
-            f"actual_ns={actual_delay_ns}",
-            *evidence,
-        )
-    expected_limit = netem_limit_packets(transmit_mbps, delay_ms)
-    actual_limit = _netem_limit(netem)
-    if actual_limit != expected_limit:
-        return Proof.fail(
-            f"netem limit mismatch on {ifname}",
-            f"expected_packets={expected_limit}",
-            f"actual_packets={actual_limit}",
-            *evidence,
-        )
-
+    limit = queue_limit_packets(
+        long_delay=False, transmit_mbps=transmit_mbps, delay_ms=delay_ms, envelope=None
+    )
+    failed = _prove_delay_queue(
+        rows, where=ifname, delay_ms=delay_ms, limit=limit, evidence=evidence
+    )
+    if failed is not None:
+        return failed
     failed = _prove_rate(
         rows,
         observed,
@@ -379,9 +360,112 @@ def verify_qdisc(pid: int, ifname: str, *, delay_ms: float, transmit_mbps: float
 
     return Proof.ok(
         f"qdisc verified on {ifname}",
-        f"delay_ns={actual_delay_ns}",
+        f"delay_ns={delay_ms_to_netem_ns(delay_ms)}",
         *evidence,
     )
+
+
+def _prove_delay_queue(
+    rows: list[dict[str, Any]], *, where: str, delay_ms: float, limit: int, evidence: list[str]
+) -> Proof | None:
+    """A failed proof of the netem delay queue under the shaper class, or None when it holds
+    the commanded delay and limit."""
+    netem = _shaper_netem(rows)
+    if netem is None:
+        return Proof.fail(f"missing netem qdisc on {where}", *evidence)
+    # Netem keeps the delay in nanoseconds and reports it back unchanged in its
+    # 64-bit attribute, so the proof compares the commanded nanoseconds exactly.
+    expected_delay_ns = delay_ms_to_netem_ns(delay_ms)
+    actual_delay_ns = latency_ns(netem["options"])
+    if actual_delay_ns is None:
+        return Proof.fail(f"cannot read netem delay for {where}", *evidence)
+    if actual_delay_ns != expected_delay_ns:
+        return Proof.fail(
+            f"netem delay mismatch on {where}",
+            f"expected_ns={expected_delay_ns}",
+            f"actual_ns={actual_delay_ns}",
+            *evidence,
+        )
+    actual_limit = _netem_limit(netem)
+    if actual_limit != limit:
+        return Proof.fail(
+            f"netem limit mismatch on {where}",
+            f"expected_packets={limit}",
+            f"actual_packets={actual_limit}",
+            *evidence,
+        )
+    return None
+
+
+def verify_long_delay_transmit(pid: int, ifname: str, *, transmit_mbps: float) -> Proof:
+    """Prove a long-delay end's transmitting pod interface: the terminal's rate and no delay
+    queue (its direction's delay is on the receiving side)."""
+
+    def _op(ipr):
+        rows = _qdisc_rows(ipr, ifname)
+        observed, class_evidence = _shaper_class(ipr, ifname)
+        return rows, observed, class_evidence
+
+    try:
+        rows, observed, class_evidence = _in_namespace(pid, _op)
+    except Exception as exc:
+        return Proof.fail(f"transmit proof failed for {ifname}", f"pid={pid}", str(exc))
+    evidence = [f"pid={pid}", f"ifname={ifname}", *(row["raw"] for row in rows)]
+    if any(row["kind"] == "netem" for row in rows):
+        return Proof.fail(f"a delay queue on long-delay transmitter {ifname}", *evidence)
+    failed = _prove_rate(
+        rows, observed, class_evidence, where=ifname, rate_mbps=transmit_mbps, evidence=evidence
+    )
+    if failed is not None:
+        return failed
+    return Proof.ok(f"long-delay transmit shaping verified on {ifname}", *evidence)
+
+
+def verify_receive_delay_queue(
+    host_ifname: str, *, receive_mbps: float, delay_ms: float, limit: int
+) -> Proof:
+    """Prove a long-delay end's receive queue on its host-side veth: the receive rate, and the
+    received direction's delay in a queue of the envelope's limit."""
+
+    def _op(ipr):
+        rows = _qdisc_rows(ipr, host_ifname)
+        observed, class_evidence = _shaper_class(ipr, host_ifname)
+        return rows, observed, class_evidence
+
+    try:
+        rows, observed, class_evidence = in_host_namespace(_op)
+    except Exception as exc:
+        return Proof.fail(f"receive queue proof failed for {host_ifname}", str(exc))
+    evidence = [f"host_ifname={host_ifname}", *(row["raw"] for row in rows)]
+    where = f"host/{host_ifname}"
+    failed = _prove_delay_queue(
+        rows, where=where, delay_ms=delay_ms, limit=limit, evidence=evidence
+    )
+    if failed is not None:
+        return failed
+    failed = _prove_rate(
+        rows, observed, class_evidence, where=where, rate_mbps=receive_mbps, evidence=evidence
+    )
+    if failed is not None:
+        return failed
+    return Proof.ok(
+        f"receive delay queue verified on {where}",
+        f"delay_ns={delay_ms_to_netem_ns(delay_ms)}",
+        f"limit={limit}",
+        *evidence,
+    )
+
+
+def verify_contact(host_ifname: str, contact_id: str) -> Proof:
+    """Prove the contact a long-delay end's host-side veth carries."""
+    try:
+        carried = contact_of(host_ifname)
+    except Exception as exc:
+        return Proof.fail(f"contact proof failed for {host_ifname}", str(exc))
+    evidence = (f"host_ifname={host_ifname}", f"contact={carried}", f"expected={contact_id}")
+    if carried != contact_id:
+        return Proof.fail(f"host/{host_ifname} carries another contact", *evidence)
+    return Proof.ok(f"contact verified on host/{host_ifname}", *evidence)
 
 
 def verify_receive_shaping(host_ifname: str, *, receive_mbps: float) -> Proof:

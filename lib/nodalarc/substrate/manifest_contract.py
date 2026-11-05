@@ -139,6 +139,9 @@ class IslInterface(_StrictModel):
     # interface: on a long-delay link, address resolution takes seconds and
     # cannot complete across a light-minute delay. Empty on a local link.
     static_neighbors: list[str]
+    # The link's class (the resolver's delay class): a long-delay interface gets the
+    # admission hook at wiring, and its contacts drain at their end.
+    long_delay: bool
 
     @field_validator("name", "peer_node", "peer_iface")
     @classmethod
@@ -155,6 +158,15 @@ class IslInterface(_StrictModel):
         if len(set(value)) != len(value):
             raise ValueError("static neighbor addresses must be distinct")
         return value
+
+    @model_validator(mode="after")
+    def _neighbors_follow_the_class(self) -> IslInterface:
+        if self.long_delay != bool(self.static_neighbors):
+            raise ValueError(
+                f"interface {self.name!r}: a long-delay interface pins static neighbors and a "
+                "local one pins none"
+            )
+        return self
 
 
 class SiteLanMember(_StrictModel):

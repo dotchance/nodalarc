@@ -23,15 +23,19 @@ from __future__ import annotations
 import logging
 import time as _time
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
+from nodalarc.platform_config import get_platform_config
 from nodalarc.proto import node_agent_pb2
 from nodalarc.runtime_naming import link_interface_mac, vxlan_host_ifnames
+from nodalarc.substrate.queue_sizing import queue_limit_packets
 
 from node_agent import (
+    admission,
     ground_bridge,
     kernel_actuator,
     kernel_verifier,
+    loss,
     namespace_ops,
     ops_events,
     vxlan,
@@ -141,6 +145,8 @@ class EntryOutcome:
     dirty_kernel: bool = False
     proof_summary: str = "operation verified"
     proof_evidence: tuple[str, ...] = ()
+    # What the end lost, on entries that close it.
+    loss: node_agent_pb2.LinkEndLoss | None = None
 
     @property
     def success(self) -> bool:
@@ -236,6 +242,7 @@ def _interface_result(iface, outcome: EntryOutcome) -> node_agent_pb2.InterfaceR
         dirty_kernel=outcome.dirty_kernel,
         proof_summary=outcome.proof_summary,
         proof_evidence=list(outcome.proof_evidence),
+        loss=outcome.loss,
     )
 
 
@@ -425,6 +432,103 @@ def _isl_link_down(
         return _fail(node_agent_pb2.NODE_AGENT_KERNEL_MUTATION_FAILED, msg, dirty_kernel=True)
 
 
+def _host_ifname_down(iface: node_agent_pb2.InterfaceDown) -> str:
+    """The host-side veth that feeds a pod ISL interface, for a LinkDown entry."""
+    if iface.locality == node_agent_pb2.LOCALITY_CROSS_NODE:
+        return vxlan_host_ifnames(iface.vni).host_veth
+    return ground_bridge._isl_host_name(
+        iface.node_id, ground_bridge._isl_idx_from_ifname(iface.interface_name)
+    )
+
+
+def _set_host_down(host_ifname: str) -> None:
+    def _op(ipr) -> None:
+        links = ipr.link_lookup(ifname=host_ifname)
+        if not links:
+            raise FileNotFoundError(f"Host interface {host_ifname} not found")
+        ipr.link("set", index=links[0], state="down")
+
+    namespace_ops.in_host_namespace(_op)
+
+
+def _superseded(iface: node_agent_pb2.InterfaceDown, host_ifname: str) -> EntryOutcome | None:
+    """The outcome of a stage for a contact this end no longer carries, or None when it carries
+    that contact. A stage for an earlier contact changes nothing of the contact the end carries
+    now; on an end that carries none, it was already closed."""
+    carried = namespace_ops.contact_of(host_ifname)
+    if carried == iface.contact_id:
+        return None
+    summary = (
+        f"{iface.node_id}/{iface.interface_name} carries contact {carried}, not {iface.contact_id}"
+        if carried
+        else f"{iface.node_id}/{iface.interface_name} carries no contact: already closed"
+    )
+    return _ok(kernel_verifier.Proof.ok(summary, f"host_ifname={host_ifname}"))
+
+
+def _stop_long_delay_admission(
+    iface: node_agent_pb2.InterfaceDown, handles: dict[str, NamespaceHandle]
+) -> EntryOutcome:
+    """STOP_ADMISSION on a long-delay end: its transmitting interface admits nothing more; its
+    queues and delivery path stay, so packets already sent keep arriving."""
+    try:
+        pid = _require_pid(iface.node_id, handles)
+        host_ifname = _host_ifname_down(iface)
+        superseded = _superseded(iface, host_ifname)
+        if superseded is not None:
+            return superseded
+        admission.stop_admission(pid, iface.interface_name)
+        return _combine_proofs(
+            "long-delay admission stopped",
+            [
+                admission.verify_admission_hook(pid, iface.interface_name, stopped=True),
+                kernel_verifier.verify_contact(host_ifname, iface.contact_id),
+            ],
+        )
+    except Exception as exc:
+        msg = f"stop admission failed {iface.node_id}/{iface.interface_name}: {exc}"
+        log.warning(msg)
+        return _fail(node_agent_pb2.NODE_AGENT_KERNEL_MUTATION_FAILED, msg, dirty_kernel=True)
+
+
+def _close_long_delay_end(
+    iface: node_agent_pb2.InterfaceDown, handles: dict[str, NamespaceHandle]
+) -> EntryOutcome:
+    """CLOSE on a long-delay end: its receive queue is reset by bringing its host-side veth down,
+    and what the queue still held is counted exactly (both ends stopped admitting before the
+    close, so nothing enters it); then the end's link resources go. Reports what the end lost."""
+    try:
+        pid = _require_pid(iface.node_id, handles)
+        host_ifname = _host_ifname_down(iface)
+        superseded = _superseded(iface, host_ifname)
+        if superseded is not None:
+            return superseded
+        taken = admission.read_admission(pid, iface.interface_name).taken or 0
+        device = loss.QueueDevice(host_ifname, None)
+        before = device.counts()
+        (discarded,) = loss.counted_reset([device], lambda: _set_host_down(host_ifname))
+        if iface.locality == node_agent_pb2.LOCALITY_CROSS_NODE:
+            vxlan.destroy_vxlan_link(pid, iface.interface_name, iface.vni)
+            proof = kernel_verifier.verify_vxlan_absent(iface.vni)
+        else:
+            namespace_ops.tag_contact(host_ifname, "")
+            proof = kernel_verifier.verify_host_interface_state(host_ifname, admin_up=False)
+        outcome = _combine_proofs("long-delay end closed", [proof])
+        return replace(
+            outcome,
+            loss=node_agent_pb2.LinkEndLoss(
+                admission_taken=taken,
+                queue_dropped=before.dropped,
+                discarded_at_close=discarded,
+                discarded_exact=True,
+            ),
+        )
+    except Exception as exc:
+        msg = f"close failed {iface.node_id}/{iface.interface_name}: {exc}"
+        log.warning(msg)
+        return _fail(node_agent_pb2.NODE_AGENT_KERNEL_MUTATION_FAILED, msg, dirty_kernel=True)
+
+
 def _ground_link_down(
     iface: node_agent_pb2.InterfaceDown, handles: dict[str, NamespaceHandle] | None = None
 ) -> EntryOutcome:
@@ -587,6 +691,57 @@ def _ground_link_up(
         return _fail(node_agent_pb2.NODE_AGENT_KERNEL_MUTATION_FAILED, msg, dirty_kernel=True)
 
 
+def _update_long_delay_receive(entry: node_agent_pb2.LatencyEntry, pid: int) -> EntryOutcome:
+    """A long-delay end's delay change: the received direction's delay, and the queue limit sized
+    for it from the envelope, on its host-side veth. An update for a contact the end no longer
+    carries changes nothing."""
+    if not entry.contact_id or not entry.receive_latency_ms > 0:
+        return _fail(
+            node_agent_pb2.NODE_AGENT_INVALID_FIELD,
+            f"long-delay SetLatency of {entry.node_id}/{entry.interface_name} needs its contact "
+            "and the received delay",
+        )
+    host_ifname = namespace_ops.host_peer_of(pid, entry.interface_name)
+    carried = namespace_ops.contact_of(host_ifname)
+    if carried != entry.contact_id:
+        return _ok(
+            kernel_verifier.Proof.ok(
+                f"{entry.node_id}/{entry.interface_name} carries contact {carried}, not "
+                f"{entry.contact_id}: unchanged",
+                f"host_ifname={host_ifname}",
+            )
+        )
+    limit = _long_delay_limit(entry.receive_latency_ms, entry.rates.receive_mbps)
+    plan = OperationPlan(
+        operation_id=f"SetLatency:{entry.node_id}:{entry.interface_name}",
+        operation_kind="SetLatency",
+        target=f"{entry.node_id}/{entry.interface_name}",
+        steps=(
+            OperationStep(
+                name="tc-netem-change-receive",
+                action=lambda: namespace_ops.update_receive_delay(
+                    host_ifname, entry.receive_latency_ms, limit
+                ),
+                verify=lambda: kernel_verifier.verify_receive_delay_queue(
+                    host_ifname,
+                    receive_mbps=entry.rates.receive_mbps,
+                    delay_ms=entry.receive_latency_ms,
+                    limit=limit,
+                ),
+                dirty_on_failure=True,
+            ),
+        ),
+    )
+    result = execute_plan(plan)
+    if not result.success:
+        return _fail(
+            node_agent_pb2.NODE_AGENT_KERNEL_MUTATION_FAILED,
+            result.error_message,
+            dirty_kernel=result.dirty_kernel,
+        )
+    return _combine_proofs("long-delay SetLatency verified", result.proofs)
+
+
 def _update_latency_entry(
     entry: node_agent_pb2.LatencyEntry, handles: dict[str, NamespaceHandle] | None = None
 ) -> EntryOutcome:
@@ -599,6 +754,10 @@ def _update_latency_entry(
             raise ValueError("handles is None — wiring not complete?")
         pm = handles
         pid = _require_pid(entry.node_id, pm)
+        if entry.link_type == node_agent_pb2.LINK_TYPE_ISL and pm[entry.node_id].is_long_delay(
+            entry.interface_name
+        ):
+            return _update_long_delay_receive(entry, pid)
         plan = OperationPlan(
             operation_id=f"SetLatency:{entry.node_id}:{entry.interface_name}",
             operation_kind="SetLatency",
@@ -651,6 +810,7 @@ def handle_batch_link_down(
     start = _time.monotonic()
     outcomes: dict[tuple[str, str], EntryOutcome] = {}
     downed = 0
+    stopped = 0
 
     if fence is None:
         raise ValueError("RuntimeFence is required")
@@ -676,7 +836,49 @@ def handle_batch_link_down(
     if handles is None:
         raise ValueError("handles is None — wiring not complete?")
     pm = handles
+    samples: dict[tuple[str, str], node_agent_pb2.LinkEndLoss] = {}
     for iface in request.interfaces:
+        handle = pm.get(iface.node_id)
+        long_delay = (
+            iface.link_type == node_agent_pb2.LINK_TYPE_ISL
+            and handle is not None
+            and handle.is_long_delay(iface.interface_name)
+        )
+        if long_delay:
+            if not iface.contact_id:
+                outcomes[_iface_key(iface)] = _fail(
+                    node_agent_pb2.NODE_AGENT_INVALID_FIELD,
+                    f"long-delay LinkDown of {iface.node_id}/{iface.interface_name} names no "
+                    "contact",
+                )
+                continue
+            stage_op = (
+                _stop_long_delay_admission
+                if iface.stage == node_agent_pb2.LINK_DOWN_STAGE_STOP_ADMISSION
+                else _close_long_delay_end
+            )
+            futures[_BATCH_POOL.submit(stage_op, iface, pm)] = iface
+            continue
+        if iface.stage == node_agent_pb2.LINK_DOWN_STAGE_STOP_ADMISSION:
+            # A local link has no admission hook and no drain: it closes at once.
+            outcomes[_iface_key(iface)] = _fail(
+                node_agent_pb2.NODE_AGENT_INVALID_FIELD,
+                f"{iface.node_id}/{iface.interface_name} is a local link end; it closes at once",
+            )
+            continue
+        try:
+            sample = _local_queue_sample(iface, pm)
+        except Exception as exc:
+            # The LinkDown still runs; its result then carries no loss, and this log names why.
+            log.error(
+                "LinkDown %s/%s: its queues could not be sampled before the close: %s",
+                iface.node_id,
+                iface.interface_name,
+                exc,
+            )
+            sample = None
+        if sample is not None:
+            samples[_iface_key(iface)] = sample
         if iface.locality == node_agent_pb2.LOCALITY_CROSS_NODE and iface.vni:
             if iface.link_type == node_agent_pb2.LINK_TYPE_GROUND:
                 # CROSS_NODE GROUND: detach VXLAN from existing host-side interface
@@ -741,7 +943,11 @@ def handle_batch_link_down(
                     else kernel_verifier.Proof.ok("cleanup operation completed")
                 )
                 outcome = _ok(proof)
-            if outcome.success:
+            if outcome.success and _iface_key(iface) in samples:
+                outcome = replace(outcome, loss=samples[_iface_key(iface)])
+            if outcome.success and iface.stage == node_agent_pb2.LINK_DOWN_STAGE_STOP_ADMISSION:
+                stopped += 1
+            elif outcome.success:
                 downed += 1
                 # Track exact VXLAN peer lifecycle for diagnostics.
                 if iface.locality == node_agent_pb2.LOCALITY_CROSS_NODE and iface.remote_node_ip:
@@ -800,12 +1006,94 @@ def handle_batch_link_down(
         error_message=error_msg,
         dirty_kernel=_dirty(ordered_outcomes),
         interfaces_downed=downed,
+        admissions_stopped=stopped,
         apply_time_ms=elapsed,
         interface_results=[
             _interface_result(iface, outcome)
             for iface, outcome in zip(request.interfaces, ordered_outcomes, strict=True)
         ],
     )
+
+
+def _local_queue_sample(
+    iface: node_agent_pb2.InterfaceDown, handles: dict[str, NamespaceHandle]
+) -> node_agent_pb2.LinkEndLoss | None:
+    """What a local link end's delay queues hold just before its LinkDown: a sample, not a
+    count. A local link closes at once with no admission stop, so packets keep entering and
+    leaving between this read and the reset; the result says so (``discarded_exact`` false).
+    The queues are the transmit queues on the pod interfaces the entry closes; an end on another
+    host is not sampled here."""
+    if iface.link_type == node_agent_pb2.LINK_TYPE_GROUND:
+        gs_ifname, sat_ifname = _extract_ground_ifaces(iface)
+        ends = [(iface.gs_id, gs_ifname), (iface.sat_id, sat_ifname)]
+    else:
+        ends = [(iface.node_id, iface.interface_name)]
+    held = 0
+    dropped = 0
+    sampled = False
+    for node_id, ifname in ends:
+        handle = handles.get(node_id)
+        if handle is None:
+            continue
+        counts = loss.QueueDevice(ifname, handle.pid).counts()
+        held += counts.held
+        dropped += counts.dropped
+        sampled = True
+    if not sampled:
+        return None
+    return node_agent_pb2.LinkEndLoss(
+        queue_dropped=dropped, discarded_at_close=held, discarded_exact=False
+    )
+
+
+def _long_delay_limit(delay_ms: float, transmit_mbps: float) -> int:
+    return queue_limit_packets(
+        long_delay=True,
+        transmit_mbps=transmit_mbps,
+        delay_ms=delay_ms,
+        envelope=get_platform_config().long_delay_envelope,
+    )
+
+
+def _open_long_delay_contact(
+    pid: int, host_ifname: str, iface: node_agent_pb2.InterfaceUp
+) -> list[kernel_verifier.Proof]:
+    """Open a contact on a long-delay end: admission open on the transmitting pod interface,
+    which keeps only the terminal's rate; the received direction's delay queue on the host-side
+    veth, sized from the traffic envelope; and the contact recorded on that veth. Returns the
+    proofs. A contact that reopens while the last one drains keeps the drained packets in the same
+    queue: they were sent to this same receiver."""
+    if not iface.contact_id:
+        raise ValueError(
+            f"long-delay LinkUp of {iface.node_id}/{iface.interface_name} names no contact"
+        )
+    if not iface.receive_latency_ms > 0:
+        raise ValueError(
+            f"long-delay LinkUp of {iface.node_id}/{iface.interface_name} has no received delay"
+        )
+    limit = _long_delay_limit(iface.receive_latency_ms, iface.rates.receive_mbps)
+    admission.open_admission(pid, iface.interface_name)
+    namespace_ops.apply_long_delay_transmit_shaping(
+        pid, iface.interface_name, iface.rates.transmit_mbps
+    )
+    namespace_ops.apply_receive_delay_queue(
+        host_ifname, iface.rates.receive_mbps, iface.receive_latency_ms, limit
+    )
+    namespace_ops.tag_contact(host_ifname, iface.contact_id)
+    return [
+        kernel_verifier.verify_pod_interface_exists(pid, iface.interface_name),
+        admission.verify_admission_hook(pid, iface.interface_name, stopped=False),
+        kernel_verifier.verify_long_delay_transmit(
+            pid, iface.interface_name, transmit_mbps=iface.rates.transmit_mbps
+        ),
+        kernel_verifier.verify_receive_delay_queue(
+            host_ifname,
+            receive_mbps=iface.rates.receive_mbps,
+            delay_ms=iface.receive_latency_ms,
+            limit=limit,
+        ),
+        kernel_verifier.verify_contact(host_ifname, iface.contact_id),
+    ]
 
 
 def _isl_link_up_carrier_stage(
@@ -837,10 +1125,26 @@ def _isl_link_up_carrier_stage(
                 iface.peer_interface_name,
             )
         host_ifname = _isl_host_ifname(iface)
-        namespace_ops.apply_transmit_shaping(
-            pid, iface.interface_name, iface.latency_ms, iface.rates.transmit_mbps
-        )
-        namespace_ops.apply_receive_shaping(host_ifname, iface.rates.receive_mbps)
+        long_delay = handles[iface.node_id].is_long_delay(iface.interface_name)
+        if long_delay:
+            proofs = _open_long_delay_contact(pid, host_ifname, iface)
+        else:
+            namespace_ops.apply_transmit_shaping(
+                pid, iface.interface_name, iface.latency_ms, iface.rates.transmit_mbps
+            )
+            namespace_ops.apply_receive_shaping(host_ifname, iface.rates.receive_mbps)
+            proofs = [
+                kernel_verifier.verify_pod_interface_exists(pid, iface.interface_name),
+                kernel_verifier.verify_qdisc(
+                    pid,
+                    iface.interface_name,
+                    delay_ms=iface.latency_ms,
+                    transmit_mbps=iface.rates.transmit_mbps,
+                ),
+                kernel_verifier.verify_receive_shaping(
+                    host_ifname, receive_mbps=iface.rates.receive_mbps
+                ),
+            ]
         # A long-delay link carries static neighbors: address resolution cannot complete across
         # it. Installed at every LinkUp, since a cross-host link's pod end is new each time.
         neighbors = handles[iface.node_id].static_neighbors_on(iface.interface_name)
@@ -848,18 +1152,6 @@ def _isl_link_up_carrier_stage(
             namespace_ops.install_static_neighbors(
                 pid, iface.interface_name, neighbors.lladdr, neighbors.addresses
             )
-        proofs = [
-            kernel_verifier.verify_pod_interface_exists(pid, iface.interface_name),
-            kernel_verifier.verify_qdisc(
-                pid,
-                iface.interface_name,
-                delay_ms=iface.latency_ms,
-                transmit_mbps=iface.rates.transmit_mbps,
-            ),
-            kernel_verifier.verify_receive_shaping(
-                host_ifname, receive_mbps=iface.rates.receive_mbps
-            ),
-        ]
         if _requires_mpls(iface.node_id, handles):
             proofs.append(kernel_verifier.verify_mpls_input(pid, iface.interface_name))
         if neighbors is not None:
@@ -1093,6 +1385,10 @@ def handle_batch_link_up(
                         local_ifname=iface.interface_name,
                     )
                 )
+                if created and pm[iface.node_id].is_long_delay(iface.interface_name):
+                    # The pod end is new and carries nothing yet: its admission hook goes on now,
+                    # before traffic, so stopping admission later changes only a filter.
+                    admission.install_admission_hook(pid, iface.interface_name)
                 if _requires_mpls(iface.node_id, pm):
                     # The creating operation configures what it created and
                     # only verifies what it reused; a mismatch on reuse is a
@@ -1227,6 +1523,69 @@ def _kernel_inventory_entry_result(
         proof_summary=outcome.proof_summary,
         proof_evidence=list(outcome.proof_evidence),
     )
+
+
+def _verify_long_delay_inventory_entry(
+    entry: node_agent_pb2.KernelInventoryEntry,
+    handles: dict[str, NamespaceHandle] | None = None,
+) -> EntryOutcome:
+    """Read-only proof of a long-delay ISL end in the stage its contact is in: open or draining
+    (the contact on the host-side veth, admission open or stopped, the rate shaper, the received
+    direction's delay queue), or closed (the end carries no contact)."""
+    try:
+        if handles is None:
+            raise ValueError("handles is None — wiring not complete?")
+        pid = _require_pid(entry.node_id, handles)
+        if not handles[entry.node_id].is_long_delay(entry.interface_name):
+            return _fail(
+                node_agent_pb2.NODE_AGENT_INVALID_FIELD,
+                f"{entry.node_id}/{entry.interface_name} is not a long-delay end",
+            )
+        if entry.locality == node_agent_pb2.LOCALITY_CROSS_NODE:
+            host_ifname = vxlan_host_ifnames(entry.vni).host_veth
+        else:
+            host_ifname = ground_bridge._isl_host_name(
+                entry.node_id, ground_bridge._isl_idx_from_ifname(entry.interface_name)
+            )
+        if not entry.expected_admin_up:
+            carried = namespace_ops.contact_of(host_ifname)
+            if carried == entry.contact_id:
+                return _fail(
+                    node_agent_pb2.NODE_AGENT_KERNEL_PROOF_FAILED,
+                    f"{entry.node_id}/{entry.interface_name} still carries closed contact "
+                    f"{entry.contact_id}",
+                    dirty_kernel=True,
+                )
+            return _ok(
+                kernel_verifier.Proof.ok(
+                    f"{entry.node_id}/{entry.interface_name} closed",
+                    f"host_ifname={host_ifname}",
+                    f"contact={carried}",
+                )
+            )
+        limit = _long_delay_limit(entry.receive_latency_ms, entry.rates.receive_mbps)
+        return _combine_proofs(
+            "long-delay end verified",
+            [
+                kernel_verifier.verify_contact(host_ifname, entry.contact_id),
+                admission.verify_admission_hook(
+                    pid, entry.interface_name, stopped=entry.expected_admission_stopped
+                ),
+                kernel_verifier.verify_long_delay_transmit(
+                    pid, entry.interface_name, transmit_mbps=entry.rates.transmit_mbps
+                ),
+                kernel_verifier.verify_receive_delay_queue(
+                    host_ifname,
+                    receive_mbps=entry.rates.receive_mbps,
+                    delay_ms=entry.receive_latency_ms,
+                    limit=limit,
+                ),
+            ],
+        )
+    except Exception as exc:
+        msg = f"long-delay inventory failed {entry.node_id}/{entry.interface_name}: {exc}"
+        log.warning(msg)
+        return _fail(node_agent_pb2.NODE_AGENT_KERNEL_PROOF_FAILED, msg, dirty_kernel=True)
 
 
 def _verify_kernel_inventory_entry(
@@ -1397,7 +1756,13 @@ def handle_kernel_inventory(
         raise ValueError("handles is None — wiring not complete?")
 
     futures = {
-        _BATCH_POOL.submit(_verify_kernel_inventory_entry, entry, handles): entry
+        _BATCH_POOL.submit(
+            _verify_long_delay_inventory_entry
+            if entry.link_type == node_agent_pb2.LINK_TYPE_ISL
+            else _verify_kernel_inventory_entry,
+            entry,
+            handles,
+        ): entry
         for entry in request.entries
     }
     outcomes: dict[tuple[str, str], EntryOutcome] = {}

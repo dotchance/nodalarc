@@ -34,7 +34,7 @@ from pydantic import ValidationError
 from pyroute2 import IPRoute
 from pyroute2.netlink.exceptions import NetlinkError
 
-from node_agent import cni0_lockdown
+from node_agent import admission, cni0_lockdown
 from node_agent.ground_bridge import (
     create_ground_bridge,
     create_mediated_isl,
@@ -541,6 +541,23 @@ def execute_wiring(
                 _record_failure(nid_a, "isl_interfaces", f"mediated ISL to {nid_b}: {exc}")
                 _record_failure(nid_b, "isl_interfaces", f"mediated ISL to {nid_a}: {exc}")
     log.info("Created %d host-mediated ISL pairs", len(created_links))
+
+    # Admission hooks on the long-delay ISL endpoints, now, before the links carry traffic: a
+    # stop at the end of a contact then changes only a filter. A hook the interface already
+    # carries is reused. Local links get none. Endpoints on another host get theirs at LinkUp.
+    long_delay = {
+        (node_id, iface["name"])
+        for node_id, node_spec in nodes.items()
+        for iface in node_spec.get("isl_interfaces", [])
+        if iface.get("long_delay")
+    }
+    for nid, pid, ifname, _created in isl_endpoints:
+        if (nid, ifname) not in long_delay:
+            continue
+        try:
+            admission.install_admission_hook(pid, ifname)
+        except Exception as exc:
+            _record_failure(nid, "isl_interfaces", f"admission hook on {ifname}: {exc}")
     if requires_mpls:
         _write_progress(f"Created {len(created_links)} ISL pairs. Enabling MPLS...")
     else:

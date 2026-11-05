@@ -81,6 +81,18 @@ network:
   # Seconds of one-way delay that separate local links from long-delay links.
   # A link whose delay can exceed it is a long-delay link.
   longDelayBoundSeconds: 10.0
+  # The traffic NodalArc carries on each direction of a long-delay link; it
+  # sizes the long-delay delay queues. Size it for the installation's servers.
+  longDelayEnvelope:
+    sustainedMbps: 1.0
+    packetBytes: 1472
+    burstPackets: 1000
+  # Kernel memory per queued packet of the envelope's size (measured on the
+  # installation's kernel), and the share of each server's allocatable memory
+  # a session's delay queues may hold there.
+  queueMemory:
+    bytesPerPacket: 2299
+    serverShare: 0.1
 
 # VS-API: FastAPI server for visualization state
 vsApi:

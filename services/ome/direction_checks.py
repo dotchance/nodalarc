@@ -14,8 +14,13 @@ are the ones OME applied to both ends at one instant before light time existed:
 - Ground: line of sight, range, elevation mask, ground field of regard, satellite off-nadir field
   of regard, tracking rate.
 
-Range is the direction's path length (c times its light time). Where both ends declare a limit,
-the smaller one applies to both ends, and the rejecting endpoint names the end that declared it.
+Range is the direction's path length (c times its light time). A limit on one quantity both ends
+share takes the smaller of the two terminals' values, and the rejecting endpoint names the end
+that declared it: range (one path length). A limit on what each end does on its own applies to
+that end alone: a ground pair's tracking rate, since each end slews at its own rate (a station
+turns with its body; an orbiter of another body holds the station with an inertial rate), and the
+rejecting endpoint names the end whose rate exceeded its own limit. An ISL's two terminals are
+one terminal type, so its single tracking limit is each end's own.
 """
 
 from __future__ import annotations
@@ -231,6 +236,11 @@ def limiting_endpoint(
     return "ground" if gs_value < sat_value else "satellite"
 
 
+def _unbounded_if_none(value: float | None) -> float:
+    """A terminal limit as a number: no limit in effect (geometry-only links) never binds."""
+    return math.inf if value is None else value
+
+
 def _smaller(a: float | None, b: float | None) -> float:
     values = [v for v in (a, b) if v is not None]
     return min(values) if values else math.inf
@@ -302,13 +312,13 @@ class GroundLimitTable:
     lon_deg: np.ndarray
     min_elevation_deg: np.ndarray
     max_range_km: np.ndarray
-    max_rate_deg_s: np.ndarray
+    gs_max_rate_deg_s: np.ndarray
+    sat_max_rate_deg_s: np.ndarray
     regard_mode: np.ndarray
     envelope: np.ndarray
     cone: np.ndarray
     satellite_half_deg: np.ndarray
     range_rejector: np.ndarray
-    tracking_rejector: np.ndarray
 
     @classmethod
     def from_limits(cls, limits: Sequence[GroundLimits]) -> GroundLimitTable:
@@ -330,11 +340,12 @@ class GroundLimitTable:
                 [_smaller(limit.gs_max_range_km, limit.sat_max_range_km) for limit in limits],
                 dtype=float,
             ),
-            max_rate_deg_s=np.array(
-                [
-                    _smaller(limit.gs_max_tracking_rate_deg_s, limit.sat_max_tracking_rate_deg_s)
-                    for limit in limits
-                ],
+            gs_max_rate_deg_s=np.array(
+                [_unbounded_if_none(limit.gs_max_tracking_rate_deg_s) for limit in limits],
+                dtype=float,
+            ),
+            sat_max_rate_deg_s=np.array(
+                [_unbounded_if_none(limit.sat_max_tracking_rate_deg_s) for limit in limits],
                 dtype=float,
             ),
             regard_mode=mode,
@@ -346,15 +357,6 @@ class GroundLimitTable:
             range_rejector=np.array(
                 [
                     limiting_endpoint(limit.gs_max_range_km, limit.sat_max_range_km)
-                    for limit in limits
-                ],
-                dtype=object,
-            ),
-            tracking_rejector=np.array(
-                [
-                    limiting_endpoint(
-                        limit.gs_max_tracking_rate_deg_s, limit.sat_max_tracking_rate_deg_s
-                    )
                     for limit in limits
                 ],
                 dtype=object,
@@ -412,9 +414,13 @@ def ground_directions(
     off_nadir = np.where(has_boresight, np.degrees(np.arccos(nadir_cosine)), np.nan)
     outside_satellite = has_boresight & (off_nadir > table.satellite_half_deg)
 
-    tracking = (np.degrees(station.rate_rad_s) > table.max_rate_deg_s) | (
-        np.degrees(satellite.rate_rad_s) > table.max_rate_deg_s
-    )
+    # Each end against its own terminal's limit: the two ends slew at different rates.
+    station_over = np.degrees(station.rate_rad_s) > table.gs_max_rate_deg_s
+    satellite_over = np.degrees(satellite.rate_rad_s) > table.sat_max_rate_deg_s
+    tracking = station_over | satellite_over
+    tracking_rejector = np.where(
+        station_over & satellite_over, "both", np.where(station_over, "ground", "satellite")
+    ).astype(object)
     out_of_range = path_km > table.max_range_km
     conditions = [
         blocked,
@@ -444,7 +450,7 @@ def ground_directions(
             np.full(len(reason), "none", dtype=object),
             np.full(len(reason), "ground", dtype=object),
             np.full(len(reason), "satellite", dtype=object),
-            table.tracking_rejector,
+            tracking_rejector,
         ],
         default="none",
     ).astype(object)

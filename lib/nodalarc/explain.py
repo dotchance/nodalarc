@@ -137,7 +137,12 @@ def _gate_numbers(
             return (d.sat_off_nadir_deg, threshold)
         return (None, threshold)
     if gate == "tracking_rate":
-        # Required slew rate is not carried on the decision wire; only the limit is.
+        # Required slew rate is not carried on the decision wire; only the limit is. OME holds
+        # each end to its own terminal's limit, so a rung one end rejected shows that end's limit.
+        if d.rejecting_endpoint == "satellite":
+            return (None, d.applied_sat_max_tracking_rate_deg_s)
+        if d.rejecting_endpoint == "ground":
+            return (None, d.applied_gs_max_tracking_rate_deg_s)
         return (
             None,
             _min_opt(d.applied_gs_max_tracking_rate_deg_s, d.applied_sat_max_tracking_rate_deg_s),

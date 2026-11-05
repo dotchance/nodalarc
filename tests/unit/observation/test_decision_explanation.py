@@ -526,3 +526,31 @@ def test_closest_rejected_ranks_by_funnel_depth_not_raw_elevation():
     assert facts is not None
     assert facts.pair == (GS, "sat-lo")
     assert facts.binding_reason_code == "elevation_below_min"
+
+
+def test_a_tracking_rejection_shows_the_limit_of_the_end_that_exceeded_it():
+    """OME holds each end to its own tracking limit; the binding rung names that end's limit, not
+    the smaller of the two."""
+    for rejecting, limit in (("satellite", 0.001), ("ground", 1.0)):
+        decision = _decision(
+            "sat-P00S03",
+            visible=False,
+            range_km=960.0,
+            elevation_deg=31.6,
+            reject_reason="tracking_exceeded",
+            rejecting_endpoint=rejecting,
+        ).model_copy(
+            update={
+                "applied_gs_max_tracking_rate_deg_s": 1.0,
+                "applied_sat_max_tracking_rate_deg_s": 0.001,
+            }
+        )
+        facts = compose_gs_explanation(
+            gs_id=GS,
+            snapshot=_snapshot([decision]),
+            active_pairs=frozenset(),
+            actuation_state_by_gs={},
+        )
+        assert facts is not None
+        assert facts.binding_gate == "tracking_rate"
+        assert _gate(facts, "tracking_rate").threshold == limit, rejecting

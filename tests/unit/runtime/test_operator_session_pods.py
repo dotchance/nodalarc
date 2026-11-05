@@ -172,3 +172,24 @@ class TestCurrencyClassification:
     def test_current_does_not_require_scheduling_or_running(self):
         pending = _pod("sat-p00s00", k8s_node=None, pod_ip=None, phase="Pending", running=0)
         assert _identity().classify(pending) is PodClass.CURRENT
+
+
+def test_a_container_the_kernel_killed_is_named_and_not_counted_as_running():
+    """A workload its memory cgroup killed stays terminated (session pods never restart a
+    container): its pod is not running, and the status the Operator publishes names the kill."""
+    from nodalarc_operator.session_pods import SessionPodView, _observed
+
+    killed = _pod("sat-p00s00", phase="Failed")
+    killed.status.container_statuses[0].state = kubernetes.client.V1ContainerState(
+        terminated=kubernetes.client.V1ContainerStateTerminated(exit_code=137, reason="OOMKilled")
+    )
+    identity = _identity()
+    view = SessionPodView(
+        identity=identity,
+        pods=tuple(
+            _observed(pod, identity.classify(pod))
+            for pod in (killed, _pod("sat-p00s01"), _pod("gs-denver"))
+        ),
+    )
+    assert view.running_count == 2
+    assert view.describe_terminations() == "sat-p00s00/c0 OOMKilled (exit 137)"

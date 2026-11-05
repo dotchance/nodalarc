@@ -209,6 +209,37 @@ class SessionPodIdentity:
 
 
 @dataclass(frozen=True, slots=True)
+class ContainerTermination:
+    """A terminated session pod container as Kubernetes reports it. Session pods never restart a
+    container (restartPolicy Never), so a killed workload stays terminated. ``reason`` is the
+    kubelet's: OOMKilled when the kernel's memory cgroup killed it."""
+
+    container: str
+    reason: str
+    exit_code: int
+
+    def describe(self, node_id: str) -> str:
+        return f"{node_id}/{self.container} {self.reason or 'terminated'} (exit {self.exit_code})"
+
+
+def _terminations(pod: Any) -> tuple[ContainerTermination, ...]:
+    status = getattr(pod, "status", None)
+    found = []
+    for entry in (getattr(status, "container_statuses", None) or []) if status else []:
+        terminated = getattr(getattr(entry, "state", None), "terminated", None)
+        if terminated is None:
+            continue
+        found.append(
+            ContainerTermination(
+                container=str(getattr(entry, "name", "") or ""),
+                reason=str(getattr(terminated, "reason", "") or ""),
+                exit_code=int(getattr(terminated, "exit_code", 0) or 0),
+            )
+        )
+    return tuple(found)
+
+
+@dataclass(frozen=True, slots=True)
 class ObservedPod:
     """One session pod as one observation saw it."""
 
@@ -223,6 +254,8 @@ class ObservedPod:
     # The Node Agent's wiring proof for this pod incarnation, as written; None
     # until the Node Agent writes one. Validated where it is judged.
     wiring_proof: str | None = None
+    # The pod's terminated containers.
+    terminations: tuple[ContainerTermination, ...] = ()
 
     @property
     def provisioned(self) -> bool:
@@ -246,6 +279,7 @@ def _observed(pod: Any, pod_class: PodClass) -> ObservedPod:
         wiring_proof=(
             dict(getattr(metadata, "annotations", None) or {}).get(WIRING_STATUS_ANNOTATION) or None
         ),
+        terminations=_terminations(pod),
     )
 
 
@@ -321,6 +355,16 @@ class SessionPodView:
                 "missing session pod placement for manifest nodes: " + ", ".join(missing[:20])
             )
         return placement
+
+    def describe_terminations(self, limit: int = 5) -> str:
+        """The current pods' terminated containers (OOMKilled among them), or empty."""
+        found = [
+            termination.describe(pod.node_id)
+            for pod in self.current
+            for termination in pod.terminations
+        ]
+        more = len(found) - limit
+        return ", ".join(found[:limit]) + (f", and {more} more" if more > 0 else "")
 
     def describe_foreign(self, limit: int = 10) -> str:
         shown = ", ".join(f"{pod.name} (owner: {pod.owners})" for pod in self.foreign[:limit])

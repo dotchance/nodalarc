@@ -79,6 +79,7 @@ from nodalarc_operator.session_pods import (
     OwnerIdentity,
     SessionPodIdentity,
     SessionPodStateError,
+    SessionPodView,
     delete_all_owned_pods,
     delete_ineligible_pods,
     observe_session_pods,
@@ -461,6 +462,13 @@ def _runtime_identity(spec: dict, meta: dict) -> tuple[str, str]:
         generation=generation,
     )
     return session_name, run_id
+
+
+def _terminated_suffix(view: SessionPodView) -> str:
+    """The status message's note of terminated session pod containers, so a container the kernel
+    killed (OOMKilled) is named, not only counted as not running."""
+    described = view.describe_terminations()
+    return f" Containers terminated: {described}." if described else ""
 
 
 def _status_identity_fields(spec: dict, meta: dict) -> dict:
@@ -1205,7 +1213,8 @@ async def _reconcile_session(
                     "readyPods": ready,
                     "podCount": expected_count,
                     "wiredPods": wired_count,
-                    "message": f"Wired; pods running: {ready}/{expected_count}",
+                    "message": f"Wired; pods running: {ready}/{expected_count}"
+                    + _terminated_suffix(view),
                     **status_fields,
                 },
             ),

@@ -23,6 +23,7 @@ from nodalarc.models.events import (
     PlaybackPauseReason,
     ServiceSource,
     SessionEphemeris,
+    TimeRegime,
 )
 from nodalarc.models.link_events import LinkEndLoss
 from nodalarc.models.link_rules import TopologyMode
@@ -254,6 +255,20 @@ class TraceRequest(BaseModel):
     dst_node: str = Field(min_length=1)
 
 
+class WallClockMarking(BaseModel):
+    """Whether a result NodalArc measured on wall time describes the emulated world.
+
+    ``representative`` is true when OME ran the whole measurement at 1x, playing, delivering the
+    commanded rate, with no change of time controls; false otherwise, and ``regimes`` then lists
+    every regime the measurement ran through. It is None when OME's time-control record does not
+    reach back to the start of the measurement. The measured values stay as measured."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    representative: bool | None
+    regimes: list[TimeRegime]
+
+
 class TracedPath(BaseModel):
     """The live measured path between two nodes: one traceroute per direction.
 
@@ -291,6 +306,11 @@ class TracedPath(BaseModel):
     traced_at: str
     sim_time: str
     stop_reason: TraceStopReason | None = None
+    # The measurement on OME's wall clock: from the start of both traceroutes until the later
+    # one ended (None while either runs), and whether its round trips describe the emulated world.
+    measured_from: datetime
+    measured_until: datetime | None
+    wall_clock: WallClockMarking
 
     @model_validator(mode="after")
     def _outcomes_match_their_states(self) -> TracedPath:

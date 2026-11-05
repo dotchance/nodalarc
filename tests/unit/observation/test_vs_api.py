@@ -667,18 +667,24 @@ class TestPlaybackRoute:
 
         client, ctx = self._relay(
             monkeypatch,
-            PlaybackControlAccepted(state=PlaybackState(epoch_id=3, state="playing")),
+            PlaybackControlAccepted(
+                state=PlaybackState(
+                    epoch_id=3, state="playing", time_regimes=_time_regimes("playing", 10.0)
+                )
+            ),
         )
 
         response = client.post("/api/v1/playback", json={"action": "set_speed", "factor": 10.0})
 
         assert response.status_code == 200
-        assert response.json() == {
+        body = response.json()
+        assert {key: body[key] for key in ("epoch_id", "state", "reason", "coverage")} == {
             "epoch_id": 3,
             "state": "playing",
             "reason": None,
             "coverage": None,
         }
+        assert body["time_regimes"][-1]["commanded_rate"] == 10.0
         assert (ctx.playback_speed, ctx.playback_paused) == (10.0, False)
 
     @pytest.mark.parametrize("reason", get_args(PlaybackRefusalReason))
@@ -714,6 +720,7 @@ class TestPlaybackRoute:
                     state="paused",
                     reason="ephemeris_coverage_ended",
                     coverage=coverage,
+                    time_regimes=_time_regimes("paused", 1.0),
                 )
             ),
         )
@@ -2423,6 +2430,20 @@ def _recording_error(ctx: SessionContext) -> str | None:
     return ctx.history.error
 
 
+def _time_regimes(state: str, rate: float):
+    from nodalarc.models.events import TimeRegime
+
+    return (
+        TimeRegime(
+            started_at=datetime(2026, 1, 1, tzinfo=UTC),
+            cause="start",
+            state=state,
+            commanded_rate=rate,
+            pacing_degraded=False,
+        ),
+    )
+
+
 def _message(payload: dict):
 
     msg = _Message()
@@ -2498,6 +2519,8 @@ class TestContinuousTraceSession:
                 namespace="nodalarc",
                 core_v1=lambda: None,
                 read_sim_time=context.read_sim_time,
+                read_engine_now=context.engine_now,
+                judge_wall_clock=context.judge_wall_clock,
             ),
         )
         return m, ctx
@@ -2629,6 +2652,9 @@ def test_a_running_trace_has_no_stop_reason():
             traced_at="2026-09-24T00:00:00+00:00",
             sim_time="2026-06-08T00:00:00+00:00",
             stop_reason="time_limit",
+            measured_from=datetime(2026, 9, 24, tzinfo=UTC),
+            measured_until=None,
+            wall_clock={"representative": None, "regimes": []},
         )
 
 
@@ -3397,3 +3423,94 @@ class TestLongDelayContacts:
         (contact,) = ctx.contact_losses
         assert contact.contact_id == "0@2027-02-18T12:00:00.000000Z"
         assert [end.model_dump() for end in contact.ends] == ends
+
+
+class TestWallClockJudgment:
+    """VS-API judges the continuous trace's round trips against OME's time-control record,
+    on OME's clock, over the whole measurement."""
+
+    _T0 = datetime(2027, 2, 19, 12, 0, tzinfo=UTC)
+
+    def _regime(self, seconds, cause, *, state="playing", rate=1.0):
+        from nodalarc.models.events import TimeRegime
+
+        return TimeRegime(
+            started_at=self._T0 + timedelta(seconds=seconds),
+            cause=cause,
+            state=state,
+            commanded_rate=rate,
+            pacing_degraded=False,
+        )
+
+    def _playback(self, ctx, *regimes):
+        import asyncio
+
+        from nodalarc.models.events import PlaybackState
+
+        msg = _Message()
+        msg.data = (
+            PlaybackState(epoch_id=0, state=regimes[-1].state, time_regimes=regimes)
+            .model_dump_json()
+            .encode()
+        )
+        asyncio.run(ctx._on_playback_state(msg))
+
+    def _trace(self, start_s, end_s):
+        from nodalarc.models.vs_api import TracedPath
+
+        return TracedPath(
+            continuous_trace=True,
+            src_node="gs-a",
+            dst_node="gs-b",
+            hops=["gs-a", "gs-b"],
+            hop_rtts=[None, 12.0],
+            state="reached",
+            rtt_ms=12.0,
+            error=None,
+            reverse_hops=["gs-b", "gs-a"],
+            reverse_hop_rtts=[None, 12.1],
+            reverse_state="reached",
+            reverse_rtt_ms=12.1,
+            reverse_error=None,
+            asymmetry_detected=False,
+            tracing=True,
+            traced_at="2027-02-19T12:01:30+00:00",
+            sim_time="2027-02-19T12:01:30+00:00",
+            measured_from=self._T0 + timedelta(seconds=start_s),
+            measured_until=self._T0 + timedelta(seconds=end_s),
+            wall_clock={"representative": True, "regimes": []},
+        )
+
+    def test_a_change_learned_after_the_trace_ended_still_marks_it_and_the_mark_stays(self):
+        ctx = SessionContext.__new__(SessionContext)
+        ctx._init_state_only()
+        self._playback(ctx, self._regime(0, "start"))
+        traced = self._trace(90, 95)
+        assert ctx.rejudged_trace(traced).wall_clock.representative is True
+
+        # OME's record reports a speed change at 93 s, inside the trace, after it was judged.
+        self._playback(ctx, self._regime(0, "start"), self._regime(93, "speed", rate=10.0))
+        marked = ctx.rejudged_trace(traced).wall_clock
+        assert marked.representative is False
+        assert [regime.cause for regime in marked.regimes] == ["start", "speed"]
+
+        # The record moved past the trace's start: the judgment it last had stands.
+        self._playback(ctx, self._regime(700, "speed", rate=1.0))
+        assert ctx.rejudged_trace(traced).wall_clock == marked
+
+    def test_no_record_yet_leaves_the_judgment_unknown(self):
+        ctx = SessionContext.__new__(SessionContext)
+        ctx._init_state_only()
+        verdict = ctx.judge_wall_clock(self._T0, self._T0 + timedelta(seconds=4))
+        assert verdict.representative is None
+
+    def test_measurements_stand_on_omes_clock(self):
+        import time as _time
+
+        ctx = SessionContext.__new__(SessionContext)
+        ctx._init_state_only()
+        # OME stamped this tick 2 s ago by this process's monotonic clock.
+        ctx.tick_wall_time = self._T0.isoformat()
+        ctx.last_clock_tick_wall_time = _time.monotonic() - 2.0
+        now = ctx.engine_now()
+        assert self._T0 + timedelta(seconds=2) <= now < self._T0 + timedelta(seconds=3)

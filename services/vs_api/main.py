@@ -869,7 +869,7 @@ def _build_snapshot(*, ops_after: int = 0) -> StateSnapshot | None:
         if ctx.continuous_tracer is not None:
             tp = ctx.continuous_tracer.traced_path
             if tp is not None:
-                _traced.append(tp)
+                _traced.append(ctx.rejudged_trace(tp))
 
         snapshot = StateSnapshot(
             sim_time=sim_time,
@@ -2947,6 +2947,8 @@ def _create_path_tracer(ctx: SessionContext) -> PathTracer:
         namespace=get_platform_config().kubernetes_namespace,
         core_v1=k8s.core_v1,
         read_sim_time=ctx.read_sim_time,
+        read_engine_now=ctx.engine_now,
+        judge_wall_clock=ctx.judge_wall_clock,
     )
 
 

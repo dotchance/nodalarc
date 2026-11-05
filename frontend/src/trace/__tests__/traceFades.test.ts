@@ -26,6 +26,9 @@ function trace(name: string, tracing: boolean): TracedPath {
     asymmetry_detected: null,
     tracing,
     traced_at: "2026-09-24T00:00:00Z",
+    measured_from: "2026-09-24T00:00:00Z",
+    measured_until: "2026-09-24T00:00:00Z",
+    wall_clock: { representative: true, regimes: [] },
     sim_time: "2026-09-24T00:00:00Z",
     stop_reason: tracing ? null : "time_limit",
   };

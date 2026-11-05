@@ -48,6 +48,9 @@ function reachedTrace(): TracedPath {
     asymmetry_detected: false,
     tracing: true,
     traced_at: "2026-09-23T00:00:00Z",
+    measured_from: "2026-09-23T00:00:00Z",
+    measured_until: "2026-09-23T00:00:00Z",
+    wall_clock: { representative: true, regimes: [] },
     sim_time: "2026-09-23T00:00:00Z",
     stop_reason: null,
   };
@@ -173,5 +176,50 @@ describe("TraceDialog outcomes", () => {
       <TraceDialog nodes={NODES} snapshot={snapshotWith({ ...reachedTrace(), asymmetry_detected: true })} />,
     );
     expect(screen.getByText("Path asymmetry detected")).toBeTruthy();
+  });
+});
+
+describe("TraceDialog wall-clock marking", () => {
+  const regime = (cause: string, state: string, rate: number, startedAt: string) => ({
+    started_at: startedAt,
+    cause,
+    state,
+    commanded_rate: rate,
+    pacing_degraded: false,
+  });
+
+  it("marks round trips measured across a speed change, back at 1x included", () => {
+    const traced = {
+      ...reachedTrace(),
+      wall_clock: {
+        representative: false,
+        regimes: [
+          regime("start", "playing", 1, "2026-09-23T00:00:00Z"),
+          regime("speed", "playing", 10, "2026-09-23T00:00:01Z"),
+          regime("speed", "playing", 1, "2026-09-23T00:00:02Z"),
+        ],
+      },
+    } as unknown as TracedPath;
+    render(<TraceDialog nodes={NODES} snapshot={snapshotWith(traced)} />);
+    expect(
+      screen.getByText(
+        "Round trips not representative of the emulated world: the trace ran through a speed change, 10× playback.",
+      ),
+    ).toBeTruthy();
+    // The values stay as measured.
+    expect(screen.getByText(/560\.0ms fwd \/ 2862\.0ms rev/)).toBeTruthy();
+  });
+
+  it("says when OME's record cannot judge the trace, and says nothing at 1x", () => {
+    const unknown = {
+      ...reachedTrace(),
+      wall_clock: { representative: null, regimes: [] },
+    } as unknown as TracedPath;
+    render(<TraceDialog nodes={NODES} snapshot={snapshotWith(unknown)} />);
+    expect(screen.getByText(/whether these round trips ran at 1× is unknown/i)).toBeTruthy();
+    cleanup();
+
+    render(<TraceDialog nodes={NODES} snapshot={snapshotWithActiveTrace()} />);
+    expect(screen.queryByText(/not representative|is unknown/)).toBeNull();
   });
 });

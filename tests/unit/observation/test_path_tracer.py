@@ -2,9 +2,13 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
 import pytest
+from nodalarc.models.events import TimeRegime
+from nodalarc.models.vs_api import WallClockMarking
+from nodalarc.time_regime import regimes_during, representative
 from nodalarc.workload_target import NODE_ID_LABEL
 from vs_api.path_tracer import PathTracer, UntraceableNodeError
 from vs_api.resolved_runtime_views import TracerNode
@@ -12,6 +16,22 @@ from vs_api.resolved_runtime_views import TracerNode
 from tests.unit.routing.test_workload_target import pod_document
 
 SIM_TIME = "2026-03-13T10:00:00+00:00"
+ENGINE_NOW = datetime(2026, 3, 13, 10, 0, tzinfo=UTC)
+# OME's record: one regime at 1x since an hour before the trace.
+_RECORD = (
+    TimeRegime(
+        started_at=ENGINE_NOW - timedelta(hours=1),
+        cause="start",
+        state="playing",
+        commanded_rate=1.0,
+        pacing_degraded=False,
+    ),
+)
+
+
+def _one_regime_at_1x(start: datetime, end: datetime | None) -> WallClockMarking:
+    during = regimes_during(start, end, _RECORD)
+    return WallClockMarking(representative=representative(during), regimes=during)
 
 
 def _node(
@@ -88,6 +108,8 @@ def _tracer(cluster: _Cluster) -> PathTracer:
         namespace="nodalarc",
         core_v1=lambda: cluster,
         read_sim_time=lambda: SIM_TIME,
+        read_engine_now=lambda: ENGINE_NOW,
+        judge_wall_clock=_one_regime_at_1x,
     )
 
 
@@ -98,6 +120,8 @@ def test_an_address_assigned_to_two_nodes_is_refused() -> None:
             namespace="nodalarc",
             core_v1=lambda: None,
             read_sim_time=lambda: SIM_TIME,
+            read_engine_now=lambda: ENGINE_NOW,
+            judge_wall_clock=_one_regime_at_1x,
         )
 
 
@@ -116,6 +140,8 @@ def test_a_node_without_a_loopback_cannot_be_traced() -> None:
         namespace="nodalarc",
         core_v1=lambda: None,
         read_sim_time=lambda: SIM_TIME,
+        read_engine_now=lambda: ENGINE_NOW,
+        judge_wall_clock=_one_regime_at_1x,
     )
 
     with pytest.raises(UntraceableNodeError, match="gateway gs-gone"):

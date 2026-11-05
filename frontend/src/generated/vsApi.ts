@@ -684,6 +684,7 @@ export interface PlaybackState {
   readonly state: "seeking" | "playing" | "paused";
   readonly reason: "ephemeris_coverage_ended" | null;
   readonly coverage: PlaybackCoverageLimit | null;
+  readonly time_regimes: ReadonlyArray<TimeRegime>;
 }
 
 /** The project's attribution and the build serving it. */
@@ -827,6 +828,18 @@ export interface TerminalResize {
   readonly rows: number;
 }
 
+/** One stretch of OME's time controls, from ``started_at`` (OME's wall clock) until the next regime starts: the playback state, the commanded rate and whether OME delivered it. */
+export interface TimeRegime {
+  readonly started_at: string;
+  readonly cause: TimeRegimeCause;
+  readonly state: "seeking" | "playing" | "paused";
+  readonly commanded_rate: number;
+  readonly pacing_degraded: boolean;
+}
+
+/**  */
+export type TimeRegimeCause = "start" | "pause" | "resume" | "speed" | "seek" | "pacing_degraded" | "pacing_recovered" | "coverage_pause";
+
 /** The two nodes a trace runs between. */
 export interface TraceRequest {
   readonly src_node: string;
@@ -859,6 +872,9 @@ export interface TracedPath {
   readonly traced_at: string;
   readonly sim_time: string;
   readonly stop_reason: TraceStopReason | null;
+  readonly measured_from: string;
+  readonly measured_until: string | null;
+  readonly wall_clock: WallClockMarking;
 }
 
 /** A pair that was visible but not scheduled, with the reason. Carried in `GroundLinkDecisionSnapshot.unscheduled_pairs`. A pair appears here when `GroundVisibilityDecisionWire.visible=True` but the allocator did not schedule it. Teardown-overlap pairs do NOT appear here — they are scheduled (the old terminal is still active) and carry `scheduling_state="teardown"` on `VisibilityEvent` / `LinkState`. `incumbent_pair` is populated when this pair was rejected because a specific incumbent held the slot (`hysteresis_hold` or `incumbent_held`). `capacity_constraint` is populated when the reason names a specific resource that ran out (e.g., the sat ground-terminal id). */
@@ -869,6 +885,12 @@ export interface UnscheduledPair {
   readonly unscheduled_reason: GroundUnscheduledReason;
   readonly incumbent_pair: readonly [string, string] | null;
   readonly capacity_constraint: string | null;
+}
+
+/** Whether a result NodalArc measured on wall time describes the emulated world. ``representative`` is true when OME ran the whole measurement at 1x, playing, delivering the commanded rate, with no change of time controls; false otherwise, and ``regimes`` then lists every regime the measurement ran through. It is None when OME's time-control record does not reach back to the start of the measurement. The measured values stay as measured. */
+export interface WallClockMarking {
+  readonly representative: boolean | null;
+  readonly regimes: ReadonlyArray<TimeRegime>;
 }
 
 /** A wiring progress line from the Node Agent, relayed as it arrives. */

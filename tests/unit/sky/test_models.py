@@ -401,6 +401,9 @@ class TestTracedPath:
             "tracing": True,
             "traced_at": "2026-09-23T00:00:00+00:00",
             "sim_time": "2026-06-08T00:00:00+00:00",
+            "measured_from": "2026-09-23T00:00:00+00:00",
+            "measured_until": "2026-09-23T00:00:04+00:00",
+            "wall_clock": {"representative": None, "regimes": []},
         }
         return {**fields, **overrides}
 

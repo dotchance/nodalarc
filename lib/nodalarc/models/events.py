@@ -610,6 +610,39 @@ class PlaybackCoverageLimit(BaseModel):
     usable_until: datetime
 
 
+# Why OME's time controls changed: the session clock started, an operator paused, resumed,
+# changed the speed or sought, OME's delivered rate fell below or recovered to the commanded rate,
+# or OME stopped the clock at the end of the ephemeris data.
+type TimeRegimeCause = Literal[
+    "start",
+    "pause",
+    "resume",
+    "speed",
+    "seek",
+    "pacing_degraded",
+    "pacing_recovered",
+    "coverage_pause",
+]
+
+
+class TimeRegime(BaseModel):
+    """One stretch of OME's time controls, from ``started_at`` (OME's wall clock) until the next
+    regime starts: the playback state, the commanded rate and whether OME delivered it."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    started_at: datetime
+    cause: TimeRegimeCause
+    state: Literal["seeking", "playing", "paused"]
+    commanded_rate: float = Field(gt=0, allow_inf_nan=False)
+    pacing_degraded: bool
+
+    @property
+    def at_world_speed(self) -> bool:
+        """Sim time advancing with wall time: playing at 1x and delivering it."""
+        return self.state == "playing" and self.commanded_rate == 1.0 and not self.pacing_degraded
+
+
 class PlaybackState(BaseModel):
     """OME playback state — seeking/playing/paused.
 
@@ -628,6 +661,11 @@ class PlaybackState(BaseModel):
     state: Literal["seeking", "playing", "paused"]
     reason: PlaybackPauseReason | None = None
     coverage: PlaybackCoverageLimit | None = None
+    # OME's record of its time controls: the regime in effect at the start of a trailing window
+    # and every regime since, in the order they started; the last is the current one. OME
+    # publishes a PlaybackState at every change of regime, the speed and its delivered rate
+    # included, so a consumer judges a wall-clock measurement over its whole interval.
+    time_regimes: tuple[TimeRegime, ...] = Field(min_length=1)
 
     @model_validator(mode="after")
     def _reason_only_on_pause(self) -> PlaybackState:
@@ -635,6 +673,18 @@ class PlaybackState(BaseModel):
             raise ValueError("a pause reason and its coverage limit come together")
         if self.reason is not None and self.state != "paused":
             raise ValueError(f"a pause reason on a {self.state!r} playback state")
+        return self
+
+    @model_validator(mode="after")
+    def _record_ends_in_this_state(self) -> PlaybackState:
+        starts = [regime.started_at for regime in self.time_regimes]
+        if starts != sorted(starts):
+            raise ValueError("time regimes must be in the order they started")
+        if self.time_regimes[-1].state != self.state:
+            raise ValueError(
+                f"the current time regime is {self.time_regimes[-1].state!r}, the playback "
+                f"state {self.state!r}"
+            )
         return self
 
 

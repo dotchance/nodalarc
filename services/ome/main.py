@@ -12,7 +12,9 @@ import argparse
 import logging
 import math
 import os
+import threading
 import time
+from collections import deque
 from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
@@ -31,6 +33,8 @@ from nodalarc.models.events import (
     PlaybackPauseReason,
     PlaybackState,
     SchedulingCheckpoint,
+    TimeRegime,
+    TimeRegimeCause,
 )
 from nodalarc.models.ome_lifecycle import (
     MbbPairAuthority,
@@ -302,6 +306,50 @@ _pause_reason: PlaybackPauseReason | None = None
 _coverage_limit: PlaybackCoverageLimit | None = None
 # The session's coverage check for a tick at a sim time (set once the session is loaded).
 _coverage_gap_at: Callable[[float], TickCoverageGap | None] | None = None
+# Whether the pacing thread delivers less than the commanded rate (its hysteresis judgment).
+_pacing_degraded_now: bool = False
+
+# OME's record of its time controls over a trailing window: the regime in effect at the window's
+# start and every regime since. Every PlaybackState carries it, so a consumer judges a wall-clock
+# measurement over its whole interval; the window is longer than any measurement NodalArc makes
+# (a traceroute ends within seconds). Both threads append (operator controls on the publisher
+# thread, delivered-rate changes on the pacing thread), so the lock guards it.
+_TIME_REGIME_WINDOW_S = 600.0
+_time_regimes: deque[TimeRegime] = deque()
+_time_regimes_lock = threading.Lock()
+
+
+def _play_state() -> Literal["seeking", "playing", "paused"]:
+    return "seeking" if _seeking else "paused" if _paused else "playing"
+
+
+def _record_time_regime(
+    cause: TimeRegimeCause, *, state: Literal["seeking", "playing", "paused"] | None = None
+) -> None:
+    """Start a regime now, in ``state`` (the current playback state unless named), at the
+    commanded rate and the delivered-rate judgment in force."""
+    now = datetime.now(UTC)
+    with _time_regimes_lock:
+        if _time_regimes and now < _time_regimes[-1].started_at:
+            # The wall clock stepped back; the record keeps its order rather than its stamp.
+            now = _time_regimes[-1].started_at
+        _time_regimes.append(
+            TimeRegime(
+                started_at=now,
+                cause=cause,
+                state=state if state is not None else _play_state(),
+                commanded_rate=_time_accel,
+                pacing_degraded=_pacing_degraded_now,
+            )
+        )
+        window_start = now.timestamp() - _TIME_REGIME_WINDOW_S
+        while len(_time_regimes) >= 2 and _time_regimes[1].started_at.timestamp() <= window_start:
+            _time_regimes.popleft()
+
+
+def _time_regime_record() -> tuple[TimeRegime, ...]:
+    with _time_regimes_lock:
+        return tuple(_time_regimes)
 
 
 def _limit_of(gap: TickCoverageGap) -> PlaybackCoverageLimit:
@@ -316,9 +364,13 @@ def _playback_state(epoch_id: int, state: Literal["seeking", "playing", "paused"
     """The playback state, with OME's own pause reason when it stopped at the end of the data."""
     if state == "paused" and _pause_reason is not None:
         return PlaybackState(
-            epoch_id=epoch_id, state=state, reason=_pause_reason, coverage=_coverage_limit
+            epoch_id=epoch_id,
+            state=state,
+            reason=_pause_reason,
+            coverage=_coverage_limit,
+            time_regimes=_time_regime_record(),
         )
-    return PlaybackState(epoch_id=epoch_id, state=state)
+    return PlaybackState(epoch_id=epoch_id, state=state, time_regimes=_time_regime_record())
 
 
 async def _handle_playback_control_command(
@@ -350,6 +402,7 @@ async def _handle_playback_control_command(
 
     if action == "pause":
         _paused = True
+        _record_time_regime("pause")
         await publish_playback_state("paused")
         logging.info("Playback paused (speed=%.1f)", _time_accel)
     elif action == "resume":
@@ -363,6 +416,7 @@ async def _handle_playback_control_command(
                 coverage=_coverage_limit,
             )
         _paused = False
+        _record_time_regime("resume")
         await publish_playback_state("playing")
         logging.info("Playback resumed (speed=%.1f)", _time_accel)
     elif action == "set_speed":
@@ -375,6 +429,10 @@ async def _handle_playback_control_command(
                 message=f"Speed {factor} is outside [{MIN_TIME_ACCEL}, {MAX_TIME_ACCEL}]",
             )
         _time_accel = factor
+        _record_time_regime("speed")
+        # A speed change is a change of regime: consumers judging wall-clock measurements
+        # learn it at once, in the current playback state.
+        await publish_playback_state(_play_state())
         logging.info("Playback speed set to %.1fx", factor)
     elif action == "seek":
         target = (
@@ -397,6 +455,7 @@ async def _handle_playback_control_command(
         _pause_reason = None
         _coverage_limit = None
         _paused = False
+        _record_time_regime("seek")
         await publish_playback_state("seeking")
         # The pacing thread may take the seek (and clear _seek_target) during the await above;
         # the reply describes this command's own target.
@@ -646,7 +705,6 @@ def _run_pacing(
         CheckpointAssociation,
         ClockTick,
         HeartbeatTick,
-        PlaybackState,
         SchedulingCheckpoint,
         TeardownEntry,
     )
@@ -1074,6 +1132,7 @@ def _run_pacing(
 
     def _update_rate_honesty() -> None:
         nonlocal _pacing_degraded
+        global _pacing_degraded_now
         achieved = telemetry_window.achieved_ratio(step_seconds=float(step_seconds))
         if achieved is None or current_rate <= 0:
             return
@@ -1084,6 +1143,13 @@ def _run_pacing(
         elif _pacing_degraded and ratio >= _RECOVERED_ABOVE:
             _pacing_degraded = False
             _emit_rate_transition(OmeOpsCode.RATE_RECOVERED, "info", achieved)
+        else:
+            return
+        # The delivered rate is part of the regime: sim time no longer advances at the commanded
+        # rate (or advances at it again).
+        _pacing_degraded_now = _pacing_degraded
+        _record_time_regime("pacing_degraded" if _pacing_degraded else "pacing_recovered")
+        _enqueue(subj_playback, _playback_state(_epoch_id, _play_state()))
 
     def _emit_rate_transition(code: OmeOpsCode, level: str, achieved: float) -> None:
         stats = telemetry_window.snapshot(
@@ -1545,6 +1611,7 @@ def _run_pacing(
                 "now covers the next tick"
             )
         _coverage_limit = _limit_of(recovered_gap)
+    _record_time_regime("start", state=initial_playback_state)
     ps = _playback_state(initial_epoch_id, initial_playback_state)
     _enqueue(subj_playback, ps)
     if not _paused:
@@ -1682,7 +1749,8 @@ def _run_pacing(
                     _publish_mbb_lifecycle_events(seek_result, epoch_id=seek_epoch_id)
                 _publish_checkpoint(seek_result, epoch_id=seek_epoch_id)
 
-                ps = PlaybackState(epoch_id=seek_epoch_id, state="playing")
+                _record_time_regime("seek", state="playing")
+                ps = _playback_state(seek_epoch_id, "playing")
                 _enqueue(subj_playback, ps)
                 _publish_clock_tick(seek_result, current_rate, epoch_id=seek_epoch_id)
                 last_step_result = seek_result
@@ -1765,6 +1833,7 @@ def _run_pacing(
                     "Clock paused at the end of the ephemeris data: %s",
                     describe_tick_coverage_gap(next_gap),
                 )
+                _record_time_regime("coverage_pause", state="paused")
                 _enqueue(subj_playback, _playback_state(gate_epoch_id, "paused"))
                 continue
 

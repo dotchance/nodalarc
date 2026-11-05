@@ -8,7 +8,15 @@ import { useState, useEffect, useCallback } from "react";
 import { REST_URL, TRACE_FORWARD_COLOR, TRACE_REVERSE_COLOR, authHeaders, hexToCSS } from "../config";
 import { apiErrorFromException, apiErrorMessage } from "../ui/apiError";
 import { formatTime } from "../translate";
-import type { NodeState, StateSnapshot, TraceState, TraceStopReason } from "../generated/vsApi";
+import type {
+  NodeState,
+  StateSnapshot,
+  TimeRegime,
+  TimeRegimeCause,
+  TraceState,
+  TraceStopReason,
+  WallClockMarking,
+} from "../generated/vsApi";
 import { isGroundNode } from "../networkIdentity";
 
 // Forward and reverse hops take their line colors, so the lists match the globe.
@@ -20,6 +28,50 @@ const STOP_REASON_TEXT: Record<TraceStopReason, string> = {
   time_limit: "STOPPED · time limit reached",
   internal_error: "STOPPED · internal error",
 };
+
+/** A change of OME's time controls inside a measurement, as the warning names it. */
+const REGIME_CHANGE_TEXT: Record<TimeRegimeCause, string | null> = {
+  start: null,
+  pause: "a pause",
+  resume: "a resume",
+  speed: "a speed change",
+  seek: "a seek",
+  pacing_degraded: "a drop in OME's delivered rate",
+  pacing_recovered: "a recovery of OME's delivered rate",
+  coverage_pause: "a stop at the end of the ephemeris data",
+};
+
+/** What a regime the measurement ran through had other than 1x play. */
+function regimeConditions(regime: TimeRegime): string[] {
+  const conditions: string[] = [];
+  if (regime.state === "paused") conditions.push("a pause");
+  if (regime.state === "seeking") conditions.push("a seek");
+  if (regime.state === "playing" && regime.commanded_rate !== 1) {
+    conditions.push(`${regime.commanded_rate}× playback`);
+  }
+  if (regime.pacing_degraded) conditions.push("OME delivering below its commanded rate");
+  return conditions;
+}
+
+/** Why the round trips do not describe the emulated world, or null when they do. Round trips
+ *  are measured on wall time; sim time runs at another rate, stops or jumps under the time
+ *  controls, so only a trace run entirely at 1x describes the experiment. */
+export function wallClockWarning(marking: WallClockMarking): string | null {
+  if (marking.representative === true) return null;
+  if (marking.representative === null) {
+    return (
+      "Whether these round trips ran at 1× is unknown: OME's time-control record does not " +
+      "reach back to the start of this trace."
+    );
+  }
+  const reasons = new Set<string>();
+  marking.regimes.forEach((regime, index) => {
+    const change = index > 0 ? REGIME_CHANGE_TEXT[regime.cause] : null;
+    if (change) reasons.add(change);
+    for (const condition of regimeConditions(regime)) reasons.add(condition);
+  });
+  return `Round trips not representative of the emulated world: the trace ran through ${[...reasons].join(", ")}.`;
+}
 
 interface TraceDialogProps {
   nodes: readonly NodeState[];
@@ -167,6 +219,10 @@ export function TraceDialog({ nodes, selectedNodeId, snapshot }: TraceDialogProp
           <div style={{ fontSize: 10, color: "var(--text-dim)", marginBottom: 4 }}>
             Measured at sim {formatTime(tp.sim_time)}
           </div>
+
+          {wallClockWarning(tp.wall_clock) && (
+            <div className="trace-warn trace-warn--block">{wallClockWarning(tp.wall_clock)}</div>
+          )}
 
           {tp.asymmetry_detected === true && (
             <div className="trace-warn">Path asymmetry detected</div>

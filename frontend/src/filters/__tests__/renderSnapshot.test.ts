@@ -22,6 +22,9 @@ function traced(hops: string[], reverseHops: string[]): TracedPath {
     asymmetry_detected: null,
     tracing: true,
     traced_at: "2026-09-23T00:00:00Z",
+    measured_from: "2026-09-23T00:00:00Z",
+    measured_until: "2026-09-23T00:00:00Z",
+    wall_clock: { representative: true, regimes: [] },
     sim_time: "2026-09-23T00:00:00Z",
     stop_reason: null,
   };

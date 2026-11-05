@@ -33,7 +33,7 @@ import threading
 import time as _time
 from collections import Counter, deque
 from collections.abc import Callable
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Literal
 
@@ -61,6 +61,7 @@ from nodalarc.models.events import (
     PlaybackCoverageLimit,
     PlaybackPauseReason,
     PlaybackState,
+    TimeRegime,
 )
 from nodalarc.models.link_decisions import GroundLinkDecisionSnapshot
 from nodalarc.models.link_events import LatencyUpdate, LinkDown, LinkUp
@@ -89,6 +90,8 @@ from nodalarc.models.vs_api import (
     SessionEphemerisFrame,
     StampedOpsEvent,
     StateSnapshot,
+    TracedPath,
+    WallClockMarking,
 )
 from nodalarc.nats_channels import (
     STREAM_LINK_EVENTS,
@@ -115,6 +118,7 @@ from nodalarc.physics import PhysicsContext
 from nodalarc.physics.session import session_physics
 from nodalarc.platform_config import get_platform_config
 from nodalarc.resolve_session import SessionResolution
+from nodalarc.time_regime import TimeRegimeRecordGap, regimes_during, representative
 from pydantic import ValidationError
 
 from vs_api.history_recorder import HistoryRecorder
@@ -256,6 +260,11 @@ class SessionContext:
         self.ground_decision_samples_by_gs: dict[str, deque] = {}
         self.recent_events: list[RecentEvent] = []
         self.contact_losses: list[ContactLoss] = []
+        # OME's time-control record, from its latest PlaybackState; empty until one arrives.
+        self.time_regimes: tuple[TimeRegime, ...] = ()
+        # The latest judgment of the continuous trace's result, by its start, kept when OME's
+        # record no longer reaches back to the start of that result.
+        self._trace_wall_clock: tuple[str, WallClockMarking] | None = None
         # Unknown until the session clock reports it; no reader substitutes
         # wall time for it.
         self.sim_time: str | None = None
@@ -760,6 +769,7 @@ class SessionContext:
             self.playback_paused = playback.state == "paused"
             self.playback_pause_reason = playback.reason
             self.playback_coverage = playback.coverage
+            self.time_regimes = playback.time_regimes
 
     async def _on_clock_tick(self, msg) -> None:
         data = json.loads(msg.data)
@@ -792,6 +802,45 @@ class SessionContext:
         with self.state_lock:
             self.heartbeat_wall_time = wall_time_str
             self.last_heartbeat_wall_time = _time.monotonic()
+
+    def engine_now(self) -> datetime:
+        """Now on OME's wall clock: its freshest stamp plus the time since that stamp arrived,
+        on this process's monotonic clock. Rejected alternative: this server's wall clock, which
+        differs from OME's server's by their clock offset; a measurement judged against OME's
+        record of time controls must stand on OME's clock."""
+        if self.last_heartbeat_wall_time > self.last_clock_tick_wall_time:
+            stamp, received = self.heartbeat_wall_time, self.last_heartbeat_wall_time
+        else:
+            stamp, received = self.tick_wall_time, self.last_clock_tick_wall_time
+        if stamp is None:
+            raise SessionClockPendingError()
+        return datetime.fromisoformat(stamp) + timedelta(seconds=_time.monotonic() - received)
+
+    def judge_wall_clock(
+        self, measured_from: datetime, measured_until: datetime | None
+    ) -> WallClockMarking:
+        """Whether a wall-clock measurement over the interval ran at the emulated world's speed,
+        from OME's time-control record (``nodalarc.time_regime``). A change OME published within
+        the NATS delivery time before the interval's end reaches this process after it; the
+        continuous trace's result is judged again on every state frame (``rejudged_trace``)."""
+        try:
+            during = regimes_during(measured_from, measured_until, self.time_regimes)
+        except TimeRegimeRecordGap:
+            return WallClockMarking(representative=None, regimes=[])
+        return WallClockMarking(representative=representative(during), regimes=during)
+
+    def rejudged_trace(self, traced: TracedPath) -> TracedPath:
+        """The continuous trace's result judged on OME's latest record. Once the record no longer
+        reaches back to the result's start, the last judgment stands. Caller holds
+        ``state_lock``."""
+        verdict = self.judge_wall_clock(traced.measured_from, traced.measured_until)
+        key = f"{traced.src_node}|{traced.dst_node}|{traced.traced_at}"
+        if verdict.representative is None and self._trace_wall_clock is not None:
+            kept_key, kept = self._trace_wall_clock
+            if kept_key == key:
+                verdict = kept
+        self._trace_wall_clock = (key, verdict)
+        return traced.model_copy(update={"wall_clock": verdict})
 
     def engine_wall_time(self) -> str | None:
         """Freshest engine wall stamp: the last ClockTick's during play,

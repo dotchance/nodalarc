@@ -22,7 +22,7 @@ from datetime import UTC, datetime
 
 import kubernetes.client
 import kubernetes.stream
-from nodalarc.models.vs_api import TracedPath, TraceState
+from nodalarc.models.vs_api import TracedPath, TraceState, WallClockMarking
 from nodalarc.workload_target import WorkloadTargetError, read_workload_target
 
 from vs_api.resolved_runtime_views import TracerNode
@@ -86,6 +86,8 @@ class PathTracer:
         namespace: str,
         core_v1: Callable[[], kubernetes.client.CoreV1Api],
         read_sim_time: Callable[[], str],
+        read_engine_now: Callable[[], datetime],
+        judge_wall_clock: Callable[[datetime, datetime | None], WallClockMarking],
     ) -> None:
         self._node_registry = node_registry
         self._node_by_address: dict[str, str] = {}
@@ -97,6 +99,10 @@ class PathTracer:
         self._namespace = namespace
         self._core_v1 = core_v1
         self._read_sim_time = read_sim_time
+        # Round trips are wall-clock results: each trace's interval is stamped on OME's clock and
+        # judged against OME's time-control record.
+        self._read_engine_now = read_engine_now
+        self._judge_wall_clock = judge_wall_clock
 
     def endpoint(self, node_id: str) -> TraceEndpoint:
         """The node and the workload that traces for it; refuses a node it cannot trace."""
@@ -141,8 +147,11 @@ class PathTracer:
         """
         sim_time = self._read_sim_time()
         traced_at = datetime.now(UTC).isoformat()
+        measured_from = self._read_engine_now()
 
-        def assemble(forward: _Direction, reverse: _Direction) -> TracedPath:
+        def assemble(
+            forward: _Direction, reverse: _Direction, measured_until: datetime | None = None
+        ) -> TracedPath:
             return self._assemble(
                 src,
                 dst,
@@ -152,6 +161,8 @@ class PathTracer:
                 tracing=tracing,
                 traced_at=traced_at,
                 sim_time=sim_time,
+                measured_from=measured_from,
+                measured_until=measured_until,
             )
 
         forward_progress = None
@@ -178,7 +189,7 @@ class PathTracer:
             reverse_future = pool.submit(self._trace_direction, dst, src, reverse_progress, stopped)
             forward = forward_future.result()
             reverse = reverse_future.result()
-        return assemble(forward, reverse)
+        return assemble(forward, reverse, self._read_engine_now())
 
     def measuring(
         self, src: TraceEndpoint, dst: TraceEndpoint, *, continuous_trace: bool
@@ -193,6 +204,8 @@ class PathTracer:
             tracing=True,
             traced_at=datetime.now(UTC).isoformat(),
             sim_time=self._read_sim_time(),
+            measured_from=self._read_engine_now(),
+            measured_until=None,
         )
 
     def failed(
@@ -208,6 +221,8 @@ class PathTracer:
             tracing=False,
             traced_at=datetime.now(UTC).isoformat(),
             sim_time=self._read_sim_time(),
+            measured_from=(now := self._read_engine_now()),
+            measured_until=now,
         )
 
     def _trace_direction(
@@ -384,6 +399,8 @@ class PathTracer:
         tracing: bool,
         traced_at: str,
         sim_time: str,
+        measured_from: datetime,
+        measured_until: datetime | None,
     ) -> TracedPath:
         return TracedPath(
             continuous_trace=continuous_trace,
@@ -403,6 +420,9 @@ class PathTracer:
             tracing=tracing,
             traced_at=traced_at,
             sim_time=sim_time,
+            measured_from=measured_from,
+            measured_until=measured_until,
+            wall_clock=self._judge_wall_clock(measured_from, measured_until),
         )
 
     def _asymmetry(self, forward: _Direction, reverse: _Direction) -> bool | None:

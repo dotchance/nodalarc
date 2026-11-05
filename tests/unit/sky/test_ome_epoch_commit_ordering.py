@@ -12,7 +12,6 @@ from nodalarc.models.events import (
     PlaybackControlAccepted,
     PlaybackControlCommand,
     PlaybackControlRefused,
-    PlaybackState,
 )
 from nodalarc.models.link_decisions import GroundPolicyAudit
 from nodalarc.physics.coverage import tick_coverage_gap
@@ -86,6 +85,10 @@ def _reset_playback_globals() -> None:
     ome_main._coverage_gap_at = lambda sim_time_unix: tick_coverage_gap(
         _EARTH_PHYSICS, sim_time_unix, light_time_bound_s=0.0, lookahead_s=0.0
     )
+    # The session clock started playing at 1x: the first regime of OME's record.
+    ome_main._pacing_degraded_now = False
+    ome_main._time_regimes.clear()
+    ome_main._record_time_regime("start", state="playing")
 
 
 def test_playback_control_rejects_mutating_commands_before_initial_commit():
@@ -146,7 +149,8 @@ def test_playback_control_seek_mutex_rejects_pause_but_allows_seek_retry():
         )
     )
     assert isinstance(retry_reply, PlaybackControlAccepted)
-    assert retry_reply.state == PlaybackState(epoch_id=5, state="seeking")
+    assert (retry_reply.state.epoch_id, retry_reply.state.state) == (5, "seeking")
+    assert retry_reply.state.time_regimes[-1].cause == "seek"
     assert ome_main._paused is False
     assert published == ["seeking"]
     assert ome_main._seek_target == target.timestamp()
@@ -206,6 +210,8 @@ def test_a_clock_stopped_at_the_end_of_the_data_resumes_only_through_a_seek_back
     ome_main._pause_reason = "ephemeris_coverage_ended"
     ome_main._coverage_limit = ome_main._limit_of(end_gap)
     ome_main._paused = True
+    # The pacing thread records the stop in OME's time-control record as it pauses.
+    ome_main._record_time_regime("coverage_pause", state="paused")
     published: list[str] = []
 
     async def _publish(state: str) -> None:
@@ -235,7 +241,7 @@ def test_a_clock_stopped_at_the_end_of_the_data_resumes_only_through_a_seek_back
         )
     )
     assert isinstance(back, PlaybackControlAccepted)
-    assert back.state == PlaybackState(epoch_id=1, state="seeking")
+    assert (back.state.epoch_id, back.state.state) == (1, "seeking")
     assert (ome_main._paused, ome_main._pause_reason, ome_main._coverage_limit) == (
         False,
         None,

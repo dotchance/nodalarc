@@ -55,6 +55,7 @@ def _manifest_data() -> dict:
                 "sysctls": {"net.ipv4.ip_forward": "1"},
                 "isl_interfaces": [],
                 "gnd_interfaces": [{"name": "term0"}],
+                "long_delay_access_peers": {},
                 "mpls_enable": False,
                 "remove_default_route": True,
             },
@@ -66,6 +67,7 @@ def _manifest_data() -> dict:
                 "sysctls": {"net.ipv4.ip_forward": "1"},
                 "isl_interfaces": [],
                 "gnd_interfaces": [{"name": "term0"}],
+                "long_delay_access_peers": {},
                 "mpls_enable": False,
                 "remove_default_route": True,
             },
@@ -133,6 +135,7 @@ class TestManifestContract:
             "sysctls": {"net.ipv4.conf.all.rp_filter": "0"},
             "isl_interfaces": [],
             "gnd_interfaces": [],
+            "long_delay_access_peers": {},
             "mpls_enable": False,
             "remove_default_route": True,
         }

@@ -29,6 +29,7 @@ def _manifest(hosts: dict[str, str], mpls: frozenset[str] = frozenset()) -> Wiri
             "sysctls": {"net.ipv4.ip_forward": "1"},
             "isl_interfaces": [],
             "gnd_interfaces": [],
+            "long_delay_access_peers": {},
             "mpls_enable": node_id in mpls,
             "remove_default_route": False,
             "plane": 0,

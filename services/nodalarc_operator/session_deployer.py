@@ -414,6 +414,22 @@ def _static_neighbors(peer: ResolvedNode) -> list[str]:
     ]
 
 
+def _long_delay_access_peers_by_node(resolved: ResolvedSession) -> dict[str, dict[str, list[str]]]:
+    """For each node, the peers it can reach over a long-delay access link and the addresses to
+    pin for each: the same loopbacks a fixed long-delay link pins, at each ground LinkUp."""
+    nodes = {node.node_id: node for node in resolved.nodes}
+    by_node: dict[str, dict[str, list[str]]] = {}
+    for candidate in resolved.link_candidates:
+        if candidate.kind != "access" or candidate.delay_class != "long_delay":
+            continue
+        for node_id, peer in (
+            (candidate.node_a, candidate.node_b),
+            (candidate.node_b, candidate.node_a),
+        ):
+            by_node.setdefault(node_id, {})[peer] = _static_neighbors(nodes[peer])
+    return {node_id: dict(sorted(peers.items())) for node_id, peers in by_node.items()}
+
+
 def _fixed_link_interfaces_by_node(resolved: ResolvedSession) -> dict[str, list[dict[str, Any]]]:
     nodes = {node.node_id: node for node in resolved.nodes}
     by_node: dict[str, list[dict[str, Any]]] = {}
@@ -942,6 +958,7 @@ def write_wiring_manifest(
         "net.ipv4.ping_group_range": "0 2147483647",
     }
     fixed_interfaces = _fixed_link_interfaces_by_node(resolved_session)
+    access_peers = _long_delay_access_peers_by_node(resolved_session)
     ground_indices = resolved_session.ground_index_by_node_id()
 
     # Build per-node wiring spec
@@ -962,6 +979,7 @@ def write_wiring_manifest(
                 "sysctls": {**base_sysctls, **address_family_sysctls(node)},
                 "isl_interfaces": [],
                 "gnd_interfaces": [],
+                "long_delay_access_peers": {},
                 "mpls_enable": False,
                 "remove_default_route": True,
             }
@@ -993,6 +1011,7 @@ def write_wiring_manifest(
                     for iface in node.wan_interfaces
                     if iface.name.startswith("gnd")
                 ],
+                "long_delay_access_peers": access_peers.get(node.node_id, {}),
                 "mpls_enable": requirements.mpls_enable,
                 "remove_default_route": True,
             }
@@ -1005,6 +1024,7 @@ def write_wiring_manifest(
                 "sysctls": dict(node_sysctls),
                 "isl_interfaces": [],
                 "gnd_interfaces": [{"name": iface.name} for iface in node.wan_interfaces],
+                "long_delay_access_peers": access_peers.get(node.node_id, {}),
                 "mpls_enable": requirements.mpls_enable,
                 "remove_default_route": True,
             }

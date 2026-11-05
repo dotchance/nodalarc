@@ -79,6 +79,7 @@ class NodeManifestFacts:
     mpls_enable: bool
     static_neighbors: tuple[tuple[str, StaticNeighbors], ...]
     long_delay_interfaces: frozenset[str]
+    long_delay_access_peers: tuple[tuple[str, tuple[str, ...]], ...]
 
 
 def manifest_facts(node: NodeSpec) -> NodeManifestFacts:
@@ -99,6 +100,10 @@ def manifest_facts(node: NodeSpec) -> NodeManifestFacts:
         ),
         long_delay_interfaces=frozenset(
             iface.name for iface in node.isl_interfaces if iface.long_delay
+        ),
+        long_delay_access_peers=tuple(
+            (peer, tuple(addresses))
+            for peer, addresses in sorted(node.long_delay_access_peers.items())
         ),
     )
 
@@ -128,10 +133,22 @@ class NamespaceHandle:
     mpls_enable: bool
     static_neighbors: tuple[tuple[str, StaticNeighbors], ...]
     long_delay_interfaces: frozenset[str]
+    long_delay_access_peers: tuple[tuple[str, tuple[str, ...]], ...]
 
     def static_neighbors_on(self, ifname: str) -> StaticNeighbors | None:
         """The static neighbors the manifest gives ``ifname``; None on a local link."""
         return dict(self.static_neighbors).get(ifname)
+
+    def access_neighbors_for(self, peer_node_id: str, peer_ifname: str) -> StaticNeighbors | None:
+        """The static neighbors this node pins on an access interface linked to ``peer_node_id``
+        over a long-delay access link (the peer's addresses at the peer access interface's link
+        address); None when the pair is not long-delay."""
+        addresses = dict(self.long_delay_access_peers).get(peer_node_id)
+        if addresses is None:
+            return None
+        return StaticNeighbors(
+            lladdr=link_interface_mac(peer_node_id, peer_ifname), addresses=addresses
+        )
 
     def is_long_delay(self, ifname: str) -> bool:
         """Whether the manifest classes ``ifname``'s link as long-delay."""
@@ -288,6 +305,7 @@ def _validated_sandbox_handle(
         mpls_enable=facts.mpls_enable,
         static_neighbors=facts.static_neighbors,
         long_delay_interfaces=facts.long_delay_interfaces,
+        long_delay_access_peers=facts.long_delay_access_peers,
     )
 
 

@@ -253,6 +253,11 @@ class NodeSpec(_StrictModel):
     sysctls: dict[str, str]
     isl_interfaces: list[IslInterface]
     gnd_interfaces: list[InterfaceName]
+    # By peer node id: the peer addresses the Node Agent pins to the peer's link address on
+    # this node's access interface while it is linked to that peer, for each peer it can reach
+    # over a long-delay access link. Address resolution cannot complete across a light-minute
+    # delay; the peer is chosen per pass, so the pin is made at each ground LinkUp.
+    long_delay_access_peers: dict[str, list[str]]
     mpls_enable: bool
     remove_default_route: bool
     plane: int | None = None
@@ -269,9 +274,25 @@ class NodeSpec(_StrictModel):
 
     @model_validator(mode="after")
     def _host_attachment_rules(self) -> NodeSpec:
-        if self.node_type == "host" and (self.isl_interfaces or self.gnd_interfaces):
+        if self.node_type == "host" and (
+            self.isl_interfaces or self.gnd_interfaces or self.long_delay_access_peers
+        ):
             raise ValueError("host nodes carry no ISL or ground interfaces")
+        if self.long_delay_access_peers and not self.gnd_interfaces:
+            raise ValueError("a node without access interfaces has no long-delay access peers")
         return self
+
+    @field_validator("long_delay_access_peers")
+    @classmethod
+    def _access_peer_addresses(cls, value: dict[str, list[str]]) -> dict[str, list[str]]:
+        for peer, addresses in value.items():
+            if not peer or not addresses:
+                raise ValueError("a long-delay access peer needs a node id and addresses")
+            for address in addresses:
+                ipaddress.ip_address(address)
+            if len(set(addresses)) != len(addresses):
+                raise ValueError(f"long-delay access peer {peer!r}: addresses must be distinct")
+        return value
 
     @field_validator("gnd_interfaces")
     @classmethod

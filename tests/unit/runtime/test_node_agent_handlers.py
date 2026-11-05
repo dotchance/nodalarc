@@ -253,6 +253,7 @@ def _handle(*, long_delay: frozenset[str]):
             mpls_enable=False,
             static_neighbors=(),
             long_delay_interfaces=long_delay,
+            long_delay_access_peers=(),
         )
     }
 

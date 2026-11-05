@@ -12,6 +12,7 @@ Never use pyroute2 NetNS() directly in the Node Agent.
 from __future__ import annotations
 
 import ctypes
+import errno
 import ipaddress
 import logging
 import os
@@ -25,6 +26,7 @@ from nodalarc.platform_config import get_platform_config
 from nodalarc.runtime_naming import link_interface_mac
 from nodalarc.substrate.queue_sizing import LONG_DELAY_TRANSMIT_LEAF_PACKETS, queue_limit_packets
 from pyroute2 import IPRoute
+from pyroute2.netlink.exceptions import NetlinkError
 from pyroute2.netlink.rtnl import TC_H_ROOT
 
 from node_agent import netem_plugin
@@ -630,5 +632,27 @@ def install_static_neighbors(
                 state=NUD_PERMANENT,
                 family=family,
             )
+
+    _in_namespace(pid, _do)
+
+
+def remove_static_neighbors(pid: int, ifname: str, addresses: tuple[str, ...]) -> None:
+    """Remove the pins ``install_static_neighbors`` made on a pod interface. An access interface
+    is linked to another peer on its next pass, so the last peer's pins go at its LinkDown. An
+    address with no entry is already removed (a repeated LinkDown)."""
+
+    def _do(handle: IPRoute) -> None:
+        idx = handle.link_lookup(ifname=ifname)
+        if not idx:
+            raise FileNotFoundError(f"Interface {ifname} not found in ns({pid})")
+        for address in addresses:
+            family = (
+                socket.AF_INET6 if ipaddress.ip_address(address).version == 6 else socket.AF_INET
+            )
+            try:
+                handle.neigh("del", dst=address, ifindex=idx[0], family=family)
+            except NetlinkError as exc:
+                if exc.code != errno.ENOENT:
+                    raise
 
     _in_namespace(pid, _do)

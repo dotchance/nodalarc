@@ -129,6 +129,29 @@ def verify_static_neighbors(
     )
 
 
+def verify_static_neighbors_absent(pid: int, ifname: str, addresses: tuple[str, ...]) -> Proof:
+    """No address keeps a permanent neighbor entry on the pod interface: the pins of a
+    long-delay access link's last peer are gone."""
+
+    def _op(ipr):
+        idx = ipr.link_lookup(ifname=ifname)
+        if not idx:
+            return None
+        rows = {}
+        for family in (socket.AF_INET, socket.AF_INET6):
+            for entry in ipr.get_neighbours(family=family, ifindex=idx[0]):
+                rows[entry.get_attr("NDA_DST")] = entry["state"]
+        return rows
+
+    rows = _in_namespace(pid, _op)
+    if rows is None:
+        return Proof.fail(f"pod interface {ifname} missing", f"pid={pid}")
+    pinned = [address for address in addresses if rows.get(address, 0) & NUD_PERMANENT]
+    if pinned:
+        return Proof.fail(f"static neighbors left on {ifname}", *pinned)
+    return Proof.ok(f"no static neighbors on {ifname}", *(f"dst={a}" for a in addresses))
+
+
 def verify_mpls_input(pid: int, ifname: str) -> Proof:
     """Read a pod interface's MPLS input switch back from the kernel.
 

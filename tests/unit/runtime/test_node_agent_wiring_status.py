@@ -20,6 +20,7 @@ def _manifest() -> WiringManifest:
                     "sysctls": {"net.ipv6.conf.all.forwarding": "1"},
                     "isl_interfaces": [],
                     "gnd_interfaces": [],
+                    "long_delay_access_peers": {},
                     "mpls_enable": True,
                     "remove_default_route": True,
                 }
@@ -85,6 +86,7 @@ def _handle(node_id: str, *, pod_uid: str):
         mpls_enable=False,
         static_neighbors=(),
         long_delay_interfaces=frozenset(),
+        long_delay_access_peers=(),
     )
 
 

@@ -34,6 +34,7 @@ def _manifest_dict() -> dict:
                 "sysctls": {"net.ipv4.ip_forward": "1"},
                 "isl_interfaces": [],
                 "gnd_interfaces": [],
+                "long_delay_access_peers": {},
                 "mpls_enable": True,
                 "remove_default_route": True,
                 "plane": 0,

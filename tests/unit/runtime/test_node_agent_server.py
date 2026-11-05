@@ -49,6 +49,7 @@ def _handles(pids):
             mpls_enable=False,
             static_neighbors=(),
             long_delay_interfaces=frozenset(),
+            long_delay_access_peers=(),
         )
         for node_id, pid in pids.items()
     }

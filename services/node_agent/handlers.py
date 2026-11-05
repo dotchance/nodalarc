@@ -587,6 +587,45 @@ def _close_long_delay_end(
         return _fail(node_agent_pb2.NODE_AGENT_KERNEL_MUTATION_FAILED, msg, dirty_kernel=True)
 
 
+def _pin_access_neighbors(
+    node_id: str,
+    ifname: str,
+    peer_node_id: str,
+    peer_ifname: str,
+    handles: dict[str, NamespaceHandle],
+) -> list[kernel_verifier.Proof]:
+    """On a long-delay access link, pin the peer's addresses to the peer access interface's link
+    address on this end, as a fixed long-delay link does: address resolution cannot complete
+    across it. The peer is chosen per pass, so the pin is made at each ground LinkUp. Returns
+    the proofs of this end's own link address and the pins; none on a local access link."""
+    neighbors = handles[node_id].access_neighbors_for(peer_node_id, peer_ifname)
+    if neighbors is None:
+        return []
+    pid = _require_pid(node_id, handles)
+    namespace_ops.install_static_neighbors(pid, ifname, neighbors.lladdr, neighbors.addresses)
+    return [
+        kernel_verifier.verify_link_mac(pid, ifname, link_interface_mac(node_id, ifname)),
+        kernel_verifier.verify_static_neighbors(pid, ifname, neighbors.lladdr, neighbors.addresses),
+    ]
+
+
+def _unpin_access_neighbors(
+    node_id: str,
+    ifname: str,
+    peer_node_id: str,
+    peer_ifname: str,
+    handles: dict[str, NamespaceHandle],
+) -> list[kernel_verifier.Proof]:
+    """Remove a long-delay access link's pins at its ground LinkDown, and prove them gone: the
+    interface's next pass may link it to another peer."""
+    neighbors = handles[node_id].access_neighbors_for(peer_node_id, peer_ifname)
+    if neighbors is None:
+        return []
+    pid = _require_pid(node_id, handles)
+    namespace_ops.remove_static_neighbors(pid, ifname, neighbors.addresses)
+    return [kernel_verifier.verify_static_neighbors_absent(pid, ifname, neighbors.addresses)]
+
+
 def _ground_link_down(
     iface: node_agent_pb2.InterfaceDown, handles: dict[str, NamespaceHandle] | None = None
 ) -> EntryOutcome:
@@ -625,12 +664,38 @@ def _ground_link_down(
                 kernel_verifier.verify_host_interface_state(gs_port, admin_up=False),
                 kernel_verifier.verify_host_interface_state(sat_host, admin_up=False),
                 kernel_verifier.verify_pod_interface_exists(sat_pid, sat_ifname),
+                *_unpin_access_neighbors(iface.gs_id, gs_ifname, iface.sat_id, sat_ifname, pm),
+                *_unpin_access_neighbors(iface.sat_id, sat_ifname, iface.gs_id, gs_ifname, pm),
             ],
         )
     except Exception as exc:
         msg = f"Ground down failed {iface.gs_id}<->{iface.sat_id}: {exc}"
         log.warning(msg)
         return _fail(node_agent_pb2.NODE_AGENT_KERNEL_MUTATION_FAILED, msg, dirty_kernel=True)
+
+
+def _cross_node_ground_down(
+    iface: node_agent_pb2.InterfaceDown,
+    handles: dict[str, NamespaceHandle],
+    host_ifname: str,
+    sat_pid: int | None,
+    sat_ifname: str,
+) -> EntryOutcome | None:
+    """This host's end of a cross-node ground LinkDown: the VXLAN detach, then on a long-delay
+    access link the removal of the pins this end made. None when there are no pins: the caller
+    proves the VXLAN gone, as for every cross-node detach."""
+    vxlan.detach_cross_node_ground(host_ifname, iface.vni, sat_pid, sat_ifname)
+    if iface.node_id not in handles:
+        return None
+    unpinned = _unpin_access_neighbors(
+        iface.node_id, iface.interface_name, iface.peer_node_id, iface.peer_interface_name, handles
+    )
+    if not unpinned:
+        return None
+    return _combine_proofs(
+        "CROSS_NODE ground LinkDown verified",
+        [kernel_verifier.verify_vxlan_absent(iface.vni), *unpinned],
+    )
 
 
 def _local_ground_delays(message) -> tuple[float, float]:
@@ -736,6 +801,8 @@ def _ground_link_up(
             ),
             kernel_verifier.verify_receive_shaping(gs_port, receive_mbps=gs_rates.receive_mbps),
             kernel_verifier.verify_receive_shaping(sat_host, receive_mbps=sat_rates.receive_mbps),
+            *_pin_access_neighbors(iface.gs_id, gs_ifname, iface.sat_id, sat_ifname, pm),
+            *_pin_access_neighbors(iface.sat_id, sat_ifname, iface.gs_id, gs_ifname, pm),
         ]
         # Each endpoint by its own manifest requirement.
         if _requires_mpls(iface.gs_id, pm):
@@ -962,9 +1029,10 @@ def handle_batch_link_down(
                     host_ifname = ground_bridge._gs_host_veth(iface.node_id, gs_ifname)
                     sat_pid = None
                 fut = _BATCH_POOL.submit(
-                    vxlan.detach_cross_node_ground,
+                    _cross_node_ground_down,
+                    iface,
+                    pm,
                     host_ifname,
-                    iface.vni,
                     sat_pid if is_sat else None,
                     sat_ifname,
                 )
@@ -1532,6 +1600,15 @@ def handle_batch_link_up(
                     ground_proofs.append(
                         kernel_verifier.verify_mpls_input(local_pid, iface.interface_name)
                     )
+                ground_proofs.extend(
+                    _pin_access_neighbors(
+                        iface.node_id,
+                        iface.interface_name,
+                        iface.peer_node_id,
+                        iface.peer_interface_name,
+                        pm,
+                    )
+                )
                 outcomes[_iface_key(iface)] = _combine_proofs(
                     "CROSS_NODE ground LinkUp verified", ground_proofs
                 )

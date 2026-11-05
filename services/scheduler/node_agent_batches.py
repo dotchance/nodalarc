@@ -78,13 +78,16 @@ def build_link_down_batch_plan(
     gs_capacities: Mapping[str, int],
     stage: int,
     ends: Mapping[LinkPair, frozenset[str]] | None = None,
+    contact_ids: Mapping[tuple[str, str], str] | None = None,
 ) -> LinkDownBatchPlan:
     """Build per-agent BatchLinkDown operations.
 
     Every entry carries ``stage``. A local link only closes, all at once. A long-delay link
     first stops admission at both ends (STOP_ADMISSION), then closes each end on its own
-    (CLOSE): ``ends`` names the ends of each pair to close, and its entries name the contact so
-    a close cannot reach a newer contact on the same terminal.
+    (CLOSE): ``ends`` names the ends of each pair the stage reaches, and each entry names the
+    contact its end carries (``ActiveLinkInfo.end_contact_id``, or ``contact_ids`` by node id
+    and interface where a restarted Scheduler found an end carrying another), so a stage cannot
+    reach a newer contact on the same terminal.
 
     Missing actual links are ignored because there is nothing to remove.
     """
@@ -190,7 +193,11 @@ def build_link_down_batch_plan(
                 peer_node_id=peer_nid,
                 peer_interface_name=peer_ifname,
                 stage=stage,
-                contact_id=info.contact.contact_id if info.contact is not None else "",
+                contact_id=(
+                    ""
+                    if info.contact is None
+                    else (contact_ids or {}).get((nid, ifname)) or info.end_contact_id(nid)
+                ),
             )
             agent_ifaces.setdefault(agent, []).append(iface_msg)
             pair_agent_ifaces.setdefault(pair, set()).add(_ack_key(agent, iface_msg))

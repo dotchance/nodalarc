@@ -91,7 +91,7 @@ def _scheduler(agent: _NodeAgent, published: _Published) -> Dispatcher:
         gs_terminal_capacities={"gs-a": 1},
         gs_handover_modes={"gs-a": "bbm"},
         sat_ground_terminal_capacities={PAIR[0]: 1},
-        long_delay_pairs=frozenset(),
+        long_delay_bounds_s={},
     )
     scheduler._js = published
     scheduler._nc = published

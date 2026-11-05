@@ -60,6 +60,17 @@ class EndLossCounts:
 
 
 @dataclass(frozen=True, slots=True)
+class EndSurvey:
+    """What a long-delay end's kernel carries, as a Node Agent's survey read it: the contact on
+    its host-side veth ("" when none), whether its admission is stopped, and its receive
+    queue's delay in ms."""
+
+    carried_contact_id: str
+    admission_stopped: bool
+    receive_latency_ms: float
+
+
+@dataclass(frozen=True, slots=True)
 class AgentCommandResult:
     agent_addr: str
     operation: str
@@ -75,6 +86,8 @@ class AgentCommandResult:
     details: dict[str, Any]
     # The loss each successful entry reported, by (node_id, interface_name).
     end_losses: Mapping[tuple[str, str], EndLossCounts] = field(default_factory=dict)
+    # What each successful KernelInventory entry's end carries, by (node_id, interface_name).
+    surveys: Mapping[tuple[str, str], EndSurvey] = field(default_factory=dict)
 
 
 @dataclass(frozen=True, slots=True)
@@ -151,6 +164,14 @@ class ActuationResult:
         merged: dict[tuple[str, str], EndLossCounts] = {}
         for result in self.agent_results:
             merged.update(result.end_losses)
+        return merged
+
+    @property
+    def surveys(self) -> dict[tuple[str, str], EndSurvey]:
+        """What every surveyed end carries, by (node_id, interface)."""
+        merged: dict[tuple[str, str], EndSurvey] = {}
+        for result in self.agent_results:
+            merged.update(result.surveys)
         return merged
 
 
@@ -269,6 +290,17 @@ def classify_agent_response(
         and "loss" in entry.DESCRIPTOR.fields_by_name
         and entry.HasField("loss")
     }
+    surveys = {
+        (entry.node_id, entry.interface_name): EndSurvey(
+            carried_contact_id=entry.carried_contact_id,
+            admission_stopped=entry.admission_stopped,
+            receive_latency_ms=entry.receive_latency_ms,
+        )
+        for entry in entries
+        if entry.success
+        and entry.verified
+        and "carried_contact_id" in entry.DESCRIPTOR.fields_by_name
+    }
     return AgentCommandResult(
         agent_addr=agent_addr,
         operation=operation,
@@ -281,6 +313,7 @@ def classify_agent_response(
         writer_fenced=writer_fenced,
         details=details,
         end_losses=end_losses,
+        surveys=surveys,
     )
 
 

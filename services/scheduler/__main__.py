@@ -638,7 +638,11 @@ def _run_scheduler() -> None:
             substrate_measurements=substrate_measurements,
             read_lifecycle_identity=_make_lifecycle_identity_reader(k8s_v1, ns),
             writer_epoch=writer_epoch,
-            long_delay_pairs=resolved.long_delay_fixed_pairs(),
+            long_delay_bounds_s={
+                candidate.pair: candidate.longest_delay_s
+                for candidate in resolved.link_candidates
+                if candidate.pair in resolved.long_delay_fixed_pairs()
+            },
         )
 
     try:

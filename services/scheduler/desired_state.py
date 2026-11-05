@@ -10,7 +10,7 @@ fails loudly when required authority is missing.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 
 from nodalarc.models.events import VisibilityEvent
 from nodalarc.models.link_events import LinkEndLoss
@@ -29,17 +29,35 @@ class Contact:
     def contact_id(self) -> str:
         return contact_id(self.epoch_id, self.opened_at)
 
+    @classmethod
+    def from_contact_id(cls, text: str) -> Contact:
+        """The contact a Node Agent reports an end carries, from its name. A name that is not
+        one ``contact_id`` makes is refused."""
+        epoch, separator, opened = text.partition("@")
+        if not separator or not epoch.isdigit() or not opened.endswith("Z"):
+            raise ValueError(f"{text!r} is not a long-delay contact name")
+        contact = cls(
+            epoch_id=int(epoch),
+            opened_at=datetime.strptime(opened, "%Y-%m-%dT%H:%M:%S.%fZ").replace(tzinfo=UTC),
+        )
+        if contact.contact_id != text:
+            raise ValueError(f"{text!r} is not a long-delay contact name")
+        return contact
+
 
 @dataclass(frozen=True, slots=True)
 class DrainingEnd:
     """One end of a draining contact that still receives. It closes at ``close_due`` on the
-    Scheduler's monotonic clock: the proven stop plus the OME light time of the direction it
-    receives. ``receives_until`` is the same instant on the wall clock, for observation."""
+    Scheduler's monotonic clock: the proven stop plus the light time of the direction it
+    receives. ``receives_until`` is the same instant on the wall clock, for observation.
+    ``contact_id`` is the contact the end's kernel carries, the one its close names: the link
+    record's contact, except at an end a restarted Scheduler found carrying another."""
 
     node_id: str
     interface: str
     close_due: float
     receives_until: datetime
+    contact_id: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -150,6 +168,17 @@ class ActiveLinkInfo:
     @property
     def long_delay(self) -> bool:
         return self.contact is not None
+
+    def end_contact_id(self, node_id: str) -> str:
+        """The contact an end of this long-delay link carries: its draining end's, else the
+        record's."""
+        if self.contact is None:
+            raise ValueError("a local link carries no contact")
+        if self.drain is not None:
+            for end in self.drain.ends:
+                if end.node_id == node_id:
+                    return end.contact_id
+        return self.contact.contact_id
 
 
 def require_ome_geometry(

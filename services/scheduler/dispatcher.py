@@ -118,6 +118,7 @@ from scheduler.contact_drain import (
     due_ends,
     next_close_due,
     plan_long_delay_contacts,
+    recover_drain,
     remaining_ends,
     start_drain,
 )
@@ -135,6 +136,8 @@ from scheduler.dispatch_actuator import (
     send_authoritative_latency_updates,
     send_batch_down,
     send_batch_up,
+    stage_only_records,
+    survey_long_delay_ends,
     verify_ground_kernel_inventory,
     verify_long_delay_ends,
 )
@@ -147,6 +150,11 @@ from scheduler.dispatch_planner import (
 )
 from scheduler.epoch_sync import EpochSyncState
 from scheduler.latency_compensator import LatencyCompensation, compensate_latency
+from scheduler.long_delay_adoption import (
+    AdoptedOpen,
+    adopted_link_info,
+    classify_surveyed_pair,
+)
 from scheduler.node_agent_batches import LinkUpBatchPlan
 from scheduler.pod_locator import PodLocationMap
 from scheduler.substrate_latency import (
@@ -250,20 +258,25 @@ class Dispatcher:
         now: Callable[[], datetime] | None = None,
         read_lifecycle_identity: Callable[[], tuple[str | None, tuple[str, str] | None]]
         | None = None,
-        long_delay_pairs: frozenset[tuple[str, str]] | None = None,
+        long_delay_bounds_s: Mapping[tuple[str, str], float] | None = None,
         monotonic: Callable[[], float] | None = None,
     ) -> None:
         self._now = now if now is not None else lambda: datetime.now(UTC)
         # Drain deadlines are elapsed real time: the kernel releases queued packets on its
         # monotonic clock, at every playback speed and through a pause.
         self._monotonic = monotonic if monotonic is not None else time.monotonic
-        if long_delay_pairs is None:
-            raise ValueError("long_delay_pairs is required: the resolved session's link classes")
-        unmapped = sorted(pair for pair in long_delay_pairs if pair not in interface_map)
+        if long_delay_bounds_s is None:
+            raise ValueError(
+                "long_delay_bounds_s is required: the resolved session's long-delay links"
+            )
+        unmapped = sorted(pair for pair in long_delay_bounds_s if pair not in interface_map)
         if unmapped:
             raise ValueError(f"long-delay links with no fixed interfaces: {unmapped}")
-        # The fixed links the resolver classes long-delay: their contacts drain at their end.
-        self._long_delay_pairs = long_delay_pairs
+        # The fixed links the resolver classes long-delay, with the longest one-way delay it
+        # bounded for each: their contacts drain at their end, and a restarted Scheduler drains
+        # a contact it recovers for that long.
+        self._long_delay_bounds_s = dict(long_delay_bounds_s)
+        self._long_delay_pairs = frozenset(long_delay_bounds_s)
         # Wakes the dispatch worker when the next draining end is due to close.
         self._drain_wakeup: asyncio.Task | None = None
         # Authoritative lifecycle reader: returns (ConstellationSpec
@@ -882,6 +895,9 @@ class Dispatcher:
         # worker begins serving; nothing shares the loop yet.
         self._reload_substrate_status()
         await self._publish_startup_actuation_roster()
+        # The long-delay contacts an earlier Scheduler left in the kernel are adopted before the
+        # first baseline, so it shows what the kernel carries.
+        await self._adopt_long_delay_state()
         # Recoverable kernel-actual baseline for this instance: on a fresh start
         # _actual_links is empty (rebuilt by reconcile from OME snapshots), but
         # publishing it now means VS-API recovers an authoritative "this instance
@@ -3728,9 +3744,11 @@ class Dispatcher:
         sim_iso: str,
         sim_time: datetime,
         ends: Mapping[tuple[str, str], frozenset[str]] | None = None,
+        contact_ids: Mapping[tuple[str, str], str] | None = None,
     ) -> ActuationResult:
-        """One stage of long-delay contacts: STOP_ADMISSION at both ends of each pair, or CLOSE
-        of the named ends. The Dispatcher records the result and the teardown."""
+        """One stage of long-delay contacts: STOP_ADMISSION at both ends of each pair (or the
+        named ends), or CLOSE of the named ends. The Dispatcher records the result and the
+        teardown."""
         return await send_batch_down(
             pairs=pairs,
             actual_links=self._actual_links,
@@ -3747,6 +3765,7 @@ class Dispatcher:
             writer_epoch=self._writer_epoch,
             stage=stage,
             ends=ends,
+            contact_ids=contact_ids,
         )
 
     async def _record_long_delay_teardown(
@@ -3922,6 +3941,13 @@ class Dispatcher:
                 # Only an end that still held the ended contact's queue reports it: an end
                 # already closed was prepared fresh, its loss recorded at its close.
                 reopened = end_loss_records(prepared, pair=pair, info=old, cause="reopened")
+                closed_before = old.drain.closed if old.drain is not None else ()
+                reopened += stage_only_records(
+                    pair,
+                    old,
+                    reported=frozenset(loss.node_id for loss in (*closed_before, *reopened)),
+                    cause="reopened",
+                )
                 self._actual_links.pop(pair, None)
                 self._last_latencies.pop(pair, None)
                 await publish_link_down(
@@ -3959,6 +3985,112 @@ class Dispatcher:
             await self._handle_actuation_result(
                 changed, sim_time=sim_time, operation_context="long_delay_latency"
             )
+
+    async def _adopt_long_delay_state(self) -> None:
+        """Adopt the long-delay contacts the kernel carries (``scheduler.long_delay_adoption``):
+        survey both ends of every long-delay link, keep each consistently open contact, and stop
+        and drain every other carried contact. A survey or stop that fails refuses the start: a
+        Scheduler that cannot see the kernel's contacts cannot command them."""
+        if not self._long_delay_bounds_s:
+            return
+        when = self._current_sim_time if self._current_sim_time is not None else self._now()
+        sim_iso = when.isoformat()
+        surveyed = await survey_long_delay_ends(
+            pairs=set(self._long_delay_bounds_s),
+            interface_map=self._interface_map,
+            locator=self._loc,
+            pool=self._pool,
+            sim_iso=sim_iso,
+            session_id=self._session_id,
+            wiring_generation=self._wiring_generation,
+            writer_epoch=self._writer_epoch,
+        )
+        unproven = sorted(set(self._long_delay_bounds_s) - set(surveyed.succeeded_pairs))
+        if unproven:
+            log.error(
+                "Long-delay survey failed for %s: %s", unproven, surveyed.node_agent_details()
+            )
+            raise RuntimeError(f"long-delay survey failed for {unproven}; refusing to start")
+        reports = surveyed.surveys
+        recovered = {}
+        for pair in sorted(self._long_delay_bounds_s):
+            interfaces = self._interface_map[pair]
+            found = classify_surveyed_pair(
+                pair,
+                {
+                    pair[0]: reports[(pair[0], interfaces[0])],
+                    pair[1]: reports[(pair[1], interfaces[1])],
+                },
+            )
+            if found is None:
+                continue
+            info = adopted_link_info(pair, interfaces, found)
+            self._actual_links[pair] = info
+            self._last_latencies[pair] = info.latencies_ms
+            if isinstance(found, AdoptedOpen):
+                log.info(
+                    "Adopted open long-delay contact %s of %s<->%s",
+                    found.contact.contact_id,
+                    pair[0],
+                    pair[1],
+                )
+            else:
+                recovered[pair] = found
+        if not recovered:
+            return
+        # Every end that carries a contact stops, naming the contact it carries: an interrupted
+        # stop finishes, and what waited to be transmitted is purged and counted. The drain
+        # counts from this acknowledgement, the proof that both transmitters stopped.
+        stop_stage = node_agent_pb2.LINK_DOWN_STAGE_STOP_ADMISSION
+        interfaces_of = {
+            pair: dict(zip(pair, self._interface_map[pair], strict=True)) for pair in recovered
+        }
+        stopped = await self._send_long_delay_stage(
+            set(recovered),
+            stage=stop_stage,
+            sim_iso=sim_iso,
+            sim_time=when,
+            ends={pair: frozenset(found.carried) for pair, found in recovered.items()},
+            contact_ids={
+                (node_id, interfaces_of[pair][node_id]): name
+                for pair, found in recovered.items()
+                for node_id, name in found.carried.items()
+            },
+        )
+        unstopped = sorted(set(recovered) - set(stopped.succeeded_pairs))
+        if unstopped:
+            log.error(
+                "Stop of recovered long-delay contacts failed for %s: %s",
+                unstopped,
+                stopped.node_agent_details(),
+            )
+            raise RuntimeError(
+                f"stop of recovered long-delay contacts failed for {unstopped}; refusing to start"
+            )
+        stopped_mono = self._monotonic()
+        stopped_wall = self._now()
+        for pair, found in sorted(recovered.items()):
+            info = self._actual_links[pair]
+            record_stage_losses(stopped, pair=pair, info=info, stage=stop_stage)
+            info.drain = recover_drain(
+                pair,
+                info,
+                carried=found.carried,
+                stopped_mono=stopped_mono,
+                stopped_wall=stopped_wall,
+                longest_delay_s=self._long_delay_bounds_s[pair],
+            )
+            log.info(
+                "Recovered long-delay contact %s of %s<->%s: ends %s stopped, close at %s",
+                found.contact.contact_id,
+                pair[0],
+                pair[1],
+                ", ".join(f"{node} ({name})" for node, name in sorted(found.carried.items())),
+                ", ".join(
+                    f"{end.node_id} {end.receives_until.isoformat()}" for end in info.drain.ends
+                ),
+            )
+        self._arm_drain_wakeup()
 
     def _arm_drain_wakeup(self) -> None:
         """Wake the dispatch worker when the next draining end is due to close. The wake-up only

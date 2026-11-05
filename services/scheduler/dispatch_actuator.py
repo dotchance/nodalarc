@@ -588,6 +588,113 @@ def end_loss_records(
     return tuple(records)
 
 
+def stage_only_records(
+    pair: LinkPair,
+    info: ActiveLinkInfo,
+    *,
+    reported: frozenset[str],
+    cause: LinkEndCloseCause,
+) -> tuple[LinkEndLoss, ...]:
+    """The record of each end of ``pair`` that reported losses at ``info``'s OPEN or STOP but
+    neither closed nor reported again when its next contact was prepared: an end a restarted
+    Scheduler stopped that already carried the contact being opened. ``reported`` names the ends
+    whose records already exist."""
+    interfaces = {pair[0]: info.interface_a, pair[1]: info.interface_b}
+    return tuple(
+        LinkEndLoss(
+            node_id=node_id,
+            interface=interfaces[node_id],
+            cause=cause,
+            refused_before_open=stage.refused_before_open,
+            untransmitted_at_stop=stage.untransmitted_at_stop,
+            admission_taken=0,
+            transmit_dropped=stage.transmit_dropped,
+            queue_dropped=0,
+            discarded_at_close=0,
+            discarded_exact=True,
+        )
+        for node_id, stage in sorted(info.stage_losses.items())
+        if node_id not in reported
+    )
+
+
+async def survey_long_delay_ends(
+    *,
+    pairs: set[LinkPair],
+    interface_map: Mapping[LinkPair, tuple[str, str]],
+    locator: Any,
+    pool: Any,
+    sim_iso: str,
+    session_id: str,
+    wiring_generation: str,
+    writer_epoch: int,
+) -> ActuationResult:
+    """Read what both ends of every long-delay link carry (KernelInventory with ``survey``): the
+    contact, whether admission is stopped, the receive queue's delay. Changes nothing."""
+    entries_by_agent: dict[str, list[node_agent_pb2.KernelInventoryEntry]] = {}
+    pair_agent_ifaces: dict[LinkPair, set[InterfaceAck]] = {}
+    requested = sorted(pairs)
+    for pair in requested:
+        node_a, node_b = pair
+        interface_a, interface_b = interface_map[pair]
+        locality = locator.link_locality(node_a, node_b)
+        vni = (
+            compute_vni(node_a, node_b, interface_a, interface_b)
+            if locality == node_agent_pb2.LOCALITY_CROSS_NODE
+            else 0
+        )
+        for nid, ifname, peer_nid, peer_ifname in (
+            (node_a, interface_a, node_b, interface_b),
+            (node_b, interface_b, node_a, interface_a),
+        ):
+            agent = locator.agent_addr(nid)
+            entries_by_agent.setdefault(agent, []).append(
+                node_agent_pb2.KernelInventoryEntry(
+                    node_id=nid,
+                    interface_name=ifname,
+                    link_type=node_agent_pb2.LINK_TYPE_ISL,
+                    peer_node_id=peer_nid,
+                    peer_interface_name=peer_ifname,
+                    locality=locality,
+                    vni=vni,
+                    remote_node_ip=(
+                        locator.node_ip(locator.k3s_node(peer_nid))
+                        if locality == node_agent_pb2.LOCALITY_CROSS_NODE
+                        else ""
+                    ),
+                    survey=True,
+                )
+            )
+            pair_agent_ifaces.setdefault(pair, set()).add((agent, nid, ifname))
+    agent_results: list[AgentCommandResult] = []
+    if entries_by_agent:
+        agent_results = list(
+            await asyncio.gather(
+                *[
+                    _send_kernel_inventory_to_agent(
+                        addr=agent_addr,
+                        entries=entries_by_agent[agent_addr],
+                        pool=pool,
+                        sim_iso=sim_iso,
+                        session_id=session_id,
+                        wiring_generation=wiring_generation,
+                        writer_epoch=writer_epoch,
+                        gs_id="",
+                    )
+                    for agent_addr in sorted(entries_by_agent)
+                ]
+            )
+        )
+    return build_actuation_result(
+        operation="KernelInventory",
+        requested_pairs=requested,
+        pair_agent_ifaces=pair_agent_ifaces,
+        pair_link_type=dict.fromkeys(requested, "isl"),
+        pair_gs_id=dict.fromkeys(requested),
+        agent_results=agent_results,
+    )
+
+
 async def publish_link_down(
     *,
     js: Any,
@@ -659,7 +766,7 @@ def long_delay_inventory_entries(
                 else ""
             ),
             expected_admin_up=True,
-            contact_id=info.contact.contact_id,
+            contact_id=info.end_contact_id(nid),
             receive_latency_ms=egress_ms(pair, peer_nid, info.commanded_netem_ms),
             expected_admission_stopped=info.drain is not None,
         )
@@ -742,6 +849,7 @@ async def send_batch_down(
     writer_epoch: int,
     stage: int,
     ends: Mapping[LinkPair, frozenset[str]] | None = None,
+    contact_ids: Mapping[tuple[str, str], str] | None = None,
 ) -> ActuationResult:
     """Send BatchLinkDown to Node Agents.
 
@@ -757,6 +865,7 @@ async def send_batch_down(
         gs_capacities=gs_capacities,
         stage=stage,
         ends=ends,
+        contact_ids=contact_ids,
     )
     agent_results: list[AgentCommandResult] = []
     agent_addrs = list(plan.agent_ifaces.keys())

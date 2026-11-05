@@ -22,6 +22,12 @@ netem delay alone would cut the last packets by that latency.
 
 A seek or a scenario command ends a contact at once: its ends close without waiting, and the
 packets still in flight are discarded and counted with that cause.
+
+A restarted Scheduler recovers a drain it did not start (``recover_drain``). It does not know
+the delays its predecessor commanded, and a delay change never retimes packets already queued,
+so each end closes after the longest one-way delay the resolver bounded for the link, counted
+from the proof that both transmitters stopped. Rejected alternative: counting from the
+restart, which can precede that proof and close a queue while packets are still due.
 """
 
 from __future__ import annotations
@@ -128,9 +134,46 @@ def start_drain(
                 interface=interface,
                 close_due=stopped_mono + receive_ms / 1000.0,
                 receives_until=stopped_wall + timedelta(milliseconds=receive_ms),
+                contact_id=info.end_contact_id(node_id),
             )
         )
     return Drain(stopped_at=stopped_wall, reason=reason, ends=tuple(ends))
+
+
+# The LinkDown reason of a contact a restarted Scheduler found and drained.
+RECOVERED_REASON = "scheduler_restart"
+
+
+def recover_drain(
+    pair: LinkPair,
+    info: ActiveLinkInfo,
+    *,
+    carried: Mapping[str, str],
+    stopped_mono: float,
+    stopped_wall: datetime,
+    longest_delay_s: float,
+) -> Drain:
+    """The drain of a contact a restarted Scheduler found, once every end in ``carried`` (node
+    id -> the contact its kernel carries) proved admission stopped at ``stopped_mono``. Each
+    end closes after ``longest_delay_s``, the resolver's bound on the link's one-way delay,
+    which covers a packet queued under any delay the earlier Scheduler commanded."""
+    interfaces = {pair[0]: info.interface_a, pair[1]: info.interface_b}
+    if not carried or not set(carried) <= set(pair):
+        raise ValueError(
+            f"a recovered drain of {pair} needs ends of the pair, got {sorted(carried)}"
+        )
+    ends = tuple(
+        DrainingEnd(
+            node_id=node_id,
+            interface=interfaces[node_id],
+            close_due=stopped_mono + longest_delay_s,
+            receives_until=stopped_wall + timedelta(seconds=longest_delay_s),
+            contact_id=carried[node_id],
+        )
+        for node_id in pair
+        if node_id in carried
+    )
+    return Drain(stopped_at=stopped_wall, reason=RECOVERED_REASON, ends=ends)
 
 
 def due_ends(

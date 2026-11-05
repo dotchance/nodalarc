@@ -526,19 +526,30 @@ def end_loss_records(
 ) -> tuple[LinkEndLoss, ...]:
     """What each end of ``pair`` that this result closed reported losing, with the cause."""
     pair_ends = {(pair[0], info.interface_a), (pair[1], info.interface_b)}
-    return tuple(
-        LinkEndLoss(
-            node_id=node_id,
-            interface=interface,
-            cause=cause,
-            admission_taken=counts.admission_taken,
-            queue_dropped=counts.queue_dropped,
-            discarded_at_close=counts.discarded_at_close,
-            discarded_exact=counts.discarded_exact,
+    records = []
+    for (node_id, interface), counts in sorted(result.end_losses.items()):
+        if (node_id, interface) not in pair_ends:
+            continue
+        # A reopened end's queue counted earlier contacts' drops; this contact's are the rest.
+        baseline = info.queue_drop_baselines.get(node_id, 0)
+        if counts.queue_dropped < baseline:
+            raise ValueError(
+                f"{node_id}/{interface}: its queue reports {counts.queue_dropped} drops, fewer "
+                f"than the {baseline} it had counted when contact "
+                f"{info.contact.contact_id if info.contact else None} opened"
+            )
+        records.append(
+            LinkEndLoss(
+                node_id=node_id,
+                interface=interface,
+                cause=cause,
+                admission_taken=counts.admission_taken,
+                queue_dropped=counts.queue_dropped - baseline,
+                discarded_at_close=counts.discarded_at_close,
+                discarded_exact=counts.discarded_exact,
+            )
         )
-        for (node_id, interface), counts in sorted(result.end_losses.items())
-        if (node_id, interface) in pair_ends
-    )
+    return tuple(records)
 
 
 async def publish_link_down(

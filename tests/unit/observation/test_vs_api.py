@@ -3514,3 +3514,37 @@ class TestWallClockJudgment:
         ctx.last_clock_tick_wall_time = _time.monotonic() - 2.0
         now = ctx.engine_now()
         assert self._T0 + timedelta(seconds=2) <= now < self._T0 + timedelta(seconds=3)
+
+
+def test_a_playback_state_that_arrives_after_a_newer_one_changes_nothing():
+    """OME's pacing thread queues its playback states while the control handler publishes at
+    once, so an older one can arrive last; the state and the record stay the newer ones."""
+    import asyncio
+
+    from nodalarc.models.events import PlaybackState, TimeRegime
+
+    def _message_of(*regimes):
+        msg = _Message()
+        msg.data = (
+            PlaybackState(epoch_id=0, state=regimes[-1].state, time_regimes=regimes)
+            .model_dump_json()
+            .encode()
+        )
+        return msg
+
+    t0 = datetime(2027, 2, 19, tzinfo=UTC)
+    start = TimeRegime(
+        started_at=t0, cause="start", state="playing", commanded_rate=1.0, pacing_degraded=False
+    )
+    recovered = start.model_copy(
+        update={"started_at": t0 + timedelta(seconds=1), "cause": "pacing_recovered"}
+    )
+    fast = start.model_copy(
+        update={"started_at": t0 + timedelta(seconds=2), "cause": "speed", "commanded_rate": 100.0}
+    )
+    ctx = SessionContext.__new__(SessionContext)
+    ctx._init_state_only()
+    asyncio.run(ctx._on_playback_state(_message_of(start, recovered, fast)))
+    asyncio.run(ctx._on_playback_state(_message_of(start, recovered)))
+
+    assert ctx.time_regimes[-1].commanded_rate == 100.0

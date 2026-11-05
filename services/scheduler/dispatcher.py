@@ -3902,19 +3902,21 @@ class Dispatcher:
                 opened, sim_time=sim_time, operation_context="long_delay_open"
             )
             for pair in sorted(opened.succeeded_pairs):
-                self._actual_links[pair] = desired[pair]
-                self._last_latencies[pair] = desired[pair].latencies_ms
+                info = desired[pair]
+                self._actual_links[pair] = info
+                self._last_latencies[pair] = info.latencies_ms
                 old = ended.get(pair)
                 if old is None:
                     continue
-                draining = remaining_ends(pair, old) if old.drain is not None else frozenset()
-                # Admission counts of ends already closed cover the time the end had no
-                # contact; they were counted for the ended contact at its close.
-                taken = tuple(
-                    loss
-                    for loss in end_loss_records(opened, pair=pair, info=old, cause="reopened")
-                    if loss.node_id in draining
-                )
+                # Only an end that still held the ended contact's queue reports it: an end
+                # already closed opened fresh, its loss recorded at its close.
+                reopened = end_loss_records(opened, pair=pair, info=old, cause="reopened")
+                ends = {(pair[0], info.interface_a), (pair[1], info.interface_b)}
+                info.queue_drop_baselines = {
+                    node_id: counts.queue_dropped
+                    for (node_id, interface), counts in opened.end_losses.items()
+                    if (node_id, interface) in ends
+                }
                 await publish_link_down(
                     js=self._js,
                     subject=self._subj_link_down,
@@ -3922,7 +3924,7 @@ class Dispatcher:
                     info=old,
                     sim_time=sim_time,
                     reason=old.drain.reason if old.drain is not None else "vis_lost",
-                    losses=(old.drain.closed if old.drain is not None else ()) + taken,
+                    losses=(old.drain.closed if old.drain is not None else ()) + reopened,
                 )
 
         if plan.latency:

@@ -766,6 +766,20 @@ class SessionContext:
     async def _on_playback_state(self, msg) -> None:
         playback = PlaybackState.model_validate_json(msg.data)
         with self.state_lock:
+            # OME publishes from two threads, so a message can arrive after a newer one. Its
+            # current regime started earlier than the one held: it describes the past, and
+            # neither its state nor its record replaces the newer ones.
+            if (
+                self.time_regimes
+                and playback.time_regimes[-1].started_at < self.time_regimes[-1].started_at
+            ):
+                log.debug(
+                    "Dropping a PlaybackState whose current regime started at %s, before the "
+                    "held one's %s",
+                    playback.time_regimes[-1].started_at.isoformat(),
+                    self.time_regimes[-1].started_at.isoformat(),
+                )
+                return
             self.playback_paused = playback.state == "paused"
             self.playback_pause_reason = playback.reason
             self.playback_coverage = playback.coverage

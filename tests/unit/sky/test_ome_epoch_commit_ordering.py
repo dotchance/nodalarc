@@ -92,8 +92,8 @@ def _reset_playback_globals() -> None:
 
 
 def test_playback_control_rejects_mutating_commands_before_initial_commit():
-    async def _publish(state: str) -> None:
-        published.append(state)
+    async def _publish() -> None:
+        published.append(ome_main._playback_state(ome_main._epoch_id).state)
 
     commands = (
         PlaybackControlCommand(action="pause"),
@@ -127,8 +127,8 @@ def test_playback_control_seek_mutex_rejects_pause_but_allows_seek_retry():
     ome_main._seek_target = datetime(2030, 1, 1, tzinfo=UTC).timestamp()
     published: list[str] = []
 
-    async def _publish(state: str) -> None:
-        published.append(state)
+    async def _publish() -> None:
+        published.append(ome_main._playback_state(ome_main._epoch_id).state)
 
     pause_reply = asyncio.run(
         ome_main._handle_playback_control_command(
@@ -160,8 +160,8 @@ def test_playback_control_refuses_a_speed_outside_the_range_and_keeps_the_clock(
     _reset_playback_globals()
     ome_main._initial_epoch_committed = True
 
-    async def _publish(state: str) -> None:
-        raise AssertionError(f"a refused command published {state}")
+    async def _publish() -> None:
+        raise AssertionError("a refused command published a playback state")
 
     reply = asyncio.run(
         ome_main._handle_playback_control_command(
@@ -181,8 +181,8 @@ def test_a_seek_past_the_data_is_refused_before_anything_changes():
     ome_main._epoch_id = 2
     published: list[str] = []
 
-    async def _publish(state: str) -> None:
-        published.append(state)
+    async def _publish() -> None:
+        published.append(ome_main._playback_state(ome_main._epoch_id).state)
 
     reply = asyncio.run(
         ome_main._handle_playback_control_command(
@@ -214,8 +214,8 @@ def test_a_clock_stopped_at_the_end_of_the_data_resumes_only_through_a_seek_back
     ome_main._record_time_regime("coverage_pause", state="paused")
     published: list[str] = []
 
-    async def _publish(state: str) -> None:
-        published.append(state)
+    async def _publish() -> None:
+        published.append(ome_main._playback_state(ome_main._epoch_id).state)
 
     resumed = asyncio.run(
         ome_main._handle_playback_control_command(PlaybackControlCommand(action="resume"), _publish)
@@ -256,7 +256,7 @@ def test_a_seek_the_pacing_thread_takes_during_its_publish_is_still_accepted():
     ome_main._initial_epoch_committed = True
     target = datetime(2026, 6, 8, 5, tzinfo=UTC)
 
-    async def _publish_while_the_pacing_thread_takes_the_seek(state: str) -> None:
+    async def _publish_while_the_pacing_thread_takes_the_seek() -> None:
         ome_main._seek_target = None
 
     reply = asyncio.run(

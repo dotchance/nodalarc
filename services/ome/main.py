@@ -360,17 +360,24 @@ def _limit_of(gap: TickCoverageGap) -> PlaybackCoverageLimit:
     )
 
 
-def _playback_state(epoch_id: int, state: Literal["seeking", "playing", "paused"]) -> PlaybackState:
-    """The playback state, with OME's own pause reason when it stopped at the end of the data."""
+def _playback_state(epoch_id: int) -> PlaybackState:
+    """The playback state, with OME's own pause reason when it stopped at the end of the data.
+
+    The state is the current regime of one copy of the time-control record, taken under its
+    lock. Rejected alternative: the state read apart from the record. Two threads append to the
+    record, and a regime appended between the two reads would publish a state the record
+    contradicts."""
+    record = _time_regime_record()
+    state = record[-1].state
     if state == "paused" and _pause_reason is not None:
         return PlaybackState(
             epoch_id=epoch_id,
             state=state,
             reason=_pause_reason,
             coverage=_coverage_limit,
-            time_regimes=_time_regime_record(),
+            time_regimes=record,
         )
-    return PlaybackState(epoch_id=epoch_id, state=state, time_regimes=_time_regime_record())
+    return PlaybackState(epoch_id=epoch_id, state=state, time_regimes=record)
 
 
 async def _handle_playback_control_command(
@@ -403,7 +410,7 @@ async def _handle_playback_control_command(
     if action == "pause":
         _paused = True
         _record_time_regime("pause")
-        await publish_playback_state("paused")
+        await publish_playback_state()
         logging.info("Playback paused (speed=%.1f)", _time_accel)
     elif action == "resume":
         if _pause_reason == "ephemeris_coverage_ended":
@@ -417,7 +424,7 @@ async def _handle_playback_control_command(
             )
         _paused = False
         _record_time_regime("resume")
-        await publish_playback_state("playing")
+        await publish_playback_state()
         logging.info("Playback resumed (speed=%.1f)", _time_accel)
     elif action == "set_speed":
         if cmd.factor is None:
@@ -428,11 +435,12 @@ async def _handle_playback_control_command(
                 reason="speed_out_of_range",
                 message=f"Speed {factor} is outside [{MIN_TIME_ACCEL}, {MAX_TIME_ACCEL}]",
             )
-        _time_accel = factor
-        _record_time_regime("speed")
-        # A speed change is a change of regime: consumers judging wall-clock measurements
-        # learn it at once, in the current playback state.
-        await publish_playback_state(_play_state())
+        if factor != _time_accel:
+            _time_accel = factor
+            _record_time_regime("speed")
+            # A speed change is a change of regime: consumers judging wall-clock measurements
+            # learn it at once. The same speed again changes nothing and records nothing.
+            await publish_playback_state()
         logging.info("Playback speed set to %.1fx", factor)
     elif action == "seek":
         target = (
@@ -456,16 +464,13 @@ async def _handle_playback_control_command(
         _coverage_limit = None
         _paused = False
         _record_time_regime("seek")
-        await publish_playback_state("seeking")
+        await publish_playback_state()
         # The pacing thread may take the seek (and clear _seek_target) during the await above;
         # the reply describes this command's own target.
         target_iso = datetime.fromtimestamp(target, UTC).isoformat()
         logging.info("Seek requested: %s epoch_id=%d (auto-resumed)", target_iso, _epoch_id)
 
-    state: Literal["seeking", "playing", "paused"] = (
-        "seeking" if _seeking else "paused" if _paused else "playing"
-    )
-    return PlaybackControlAccepted(state=_playback_state(_epoch_id, state))
+    return PlaybackControlAccepted(state=_playback_state(_epoch_id))
 
 
 def run(
@@ -575,11 +580,11 @@ async def _nats_publisher_loop(
     await _connect_logging(nc)
     logging.debug("OME NATS publisher connected to %s (session_id=%s)", nats_url(), session_id)
 
-    async def _publish_playback_state(state: Literal["seeking", "playing", "paused"]) -> None:
+    async def _publish_playback_state() -> None:
         """Publish PlaybackState to NODALARC_SESSION stream."""
-        ps = _playback_state(_epoch_id, state)
+        ps = _playback_state(_epoch_id)
         await js.publish(_subj_playback, ps.model_dump_json().encode())
-        logging.debug("PlaybackState published: state=%s epoch_id=%d", state, _epoch_id)
+        logging.debug("PlaybackState published: state=%s epoch_id=%d", ps.state, ps.epoch_id)
 
     # --- Playback control subscriber ---
 
@@ -1149,7 +1154,7 @@ def _run_pacing(
         # rate (or advances at it again).
         _pacing_degraded_now = _pacing_degraded
         _record_time_regime("pacing_degraded" if _pacing_degraded else "pacing_recovered")
-        _enqueue(subj_playback, _playback_state(_epoch_id, _play_state()))
+        _enqueue(subj_playback, _playback_state(_epoch_id))
 
     def _emit_rate_transition(code: OmeOpsCode, level: str, achieved: float) -> None:
         stats = telemetry_window.snapshot(
@@ -1612,7 +1617,7 @@ def _run_pacing(
             )
         _coverage_limit = _limit_of(recovered_gap)
     _record_time_regime("start", state=initial_playback_state)
-    ps = _playback_state(initial_epoch_id, initial_playback_state)
+    ps = _playback_state(initial_epoch_id)
     _enqueue(subj_playback, ps)
     if not _paused:
         _publish_clock_tick(initial_step_result, current_rate, epoch_id=initial_epoch_id)
@@ -1750,7 +1755,7 @@ def _run_pacing(
                 _publish_checkpoint(seek_result, epoch_id=seek_epoch_id)
 
                 _record_time_regime("seek", state="playing")
-                ps = _playback_state(seek_epoch_id, "playing")
+                ps = _playback_state(seek_epoch_id)
                 _enqueue(subj_playback, ps)
                 _publish_clock_tick(seek_result, current_rate, epoch_id=seek_epoch_id)
                 last_step_result = seek_result
@@ -1834,7 +1839,7 @@ def _run_pacing(
                     describe_tick_coverage_gap(next_gap),
                 )
                 _record_time_regime("coverage_pause", state="paused")
-                _enqueue(subj_playback, _playback_state(gate_epoch_id, "paused"))
+                _enqueue(subj_playback, _playback_state(gate_epoch_id))
                 continue
 
             # --- Compute one step (Physicist role) ---

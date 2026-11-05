@@ -101,10 +101,11 @@ def test_ome_publishes_every_speed_change_with_its_record():
     _reset_ome_controls()
     published: list[PlaybackState] = []
 
-    async def _publish(state: str) -> None:
-        published.append(ome_main._playback_state(ome_main._epoch_id, state))
+    async def _publish() -> None:
+        published.append(ome_main._playback_state(ome_main._epoch_id))
 
-    for factor in (10.0, 1.0):
+    # The same speed again is no change of regime.
+    for factor in (10.0, 10.0, 1.0):
         asyncio.run(
             ome_main._handle_playback_control_command(
                 PlaybackControlCommand(action="set_speed", factor=factor), _publish

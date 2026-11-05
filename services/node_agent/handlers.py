@@ -147,6 +147,8 @@ class EntryOutcome:
     proof_evidence: tuple[str, ...] = ()
     # What the end lost, on entries that close it.
     loss: node_agent_pb2.LinkEndLoss | None = None
+    # A stage for a contact the end no longer carries: it changed nothing.
+    superseded: bool = False
 
     @property
     def success(self) -> bool:
@@ -454,16 +456,27 @@ def _set_host_down(host_ifname: str) -> None:
 def _superseded(iface: node_agent_pb2.InterfaceDown, host_ifname: str) -> EntryOutcome | None:
     """The outcome of a stage for a contact this end no longer carries, or None when it carries
     that contact. A stage for an earlier contact changes nothing of the contact the end carries
-    now; on an end that carries none, it was already closed."""
+    now. A close of an end that carries none repeats a close that already ran. A stop of an end
+    that carries none cannot be proven: the end's contact is gone from the kernel."""
     carried = namespace_ops.contact_of(host_ifname)
     if carried == iface.contact_id:
         return None
+    end = f"{iface.node_id}/{iface.interface_name}"
+    if not carried and iface.stage == node_agent_pb2.LINK_DOWN_STAGE_STOP_ADMISSION:
+        return _fail(
+            node_agent_pb2.NODE_AGENT_KERNEL_PROOF_FAILED,
+            f"{end} carries no contact (host-side {host_ifname} absent or untagged); the stop of "
+            f"contact {iface.contact_id} cannot be proven",
+            dirty_kernel=True,
+        )
     summary = (
-        f"{iface.node_id}/{iface.interface_name} carries contact {carried}, not {iface.contact_id}"
+        f"{end} carries contact {carried}, not {iface.contact_id}"
         if carried
-        else f"{iface.node_id}/{iface.interface_name} carries no contact: already closed"
+        else f"{end} carries no contact: already closed"
     )
-    return _ok(kernel_verifier.Proof.ok(summary, f"host_ifname={host_ifname}"))
+    return replace(
+        _ok(kernel_verifier.Proof.ok(summary, f"host_ifname={host_ifname}")), superseded=True
+    )
 
 
 def _stop_long_delay_admission(
@@ -503,7 +516,16 @@ def _close_long_delay_end(
         superseded = _superseded(iface, host_ifname)
         if superseded is not None:
             return superseded
-        taken = admission.read_admission(pid, iface.interface_name).taken or 0
+        state = admission.read_admission(pid, iface.interface_name)
+        if not state.stopped or state.taken is None:
+            # The close counts what the queue holds while nothing enters it; with admission
+            # open, packets enter between the count and the reset.
+            return _fail(
+                node_agent_pb2.NODE_AGENT_KERNEL_PROOF_FAILED,
+                f"close of {iface.node_id}/{iface.interface_name}: its admission is not stopped",
+                dirty_kernel=True,
+            )
+        taken = state.taken
         device = loss.QueueDevice(host_ifname, None)
         before = device.counts()
         (discarded,) = loss.counted_reset([device], lambda: _set_host_down(host_ifname))
@@ -869,14 +891,15 @@ def handle_batch_link_down(
         try:
             sample = _local_queue_sample(iface, pm)
         except Exception as exc:
-            # The LinkDown still runs; its result then carries no loss, and this log names why.
-            log.error(
-                "LinkDown %s/%s: its queues could not be sampled before the close: %s",
-                iface.node_id,
-                iface.interface_name,
-                exc,
+            # The loss the close reports is part of its result: an end whose queues cannot be
+            # read is not closed with an unknown loss.
+            msg = (
+                f"LinkDown {iface.node_id}/{iface.interface_name}: its queues could not be read "
+                f"before the close: {exc}"
             )
-            sample = None
+            log.error(msg)
+            outcomes[_iface_key(iface)] = _fail(node_agent_pb2.NODE_AGENT_KERNEL_PROOF_FAILED, msg)
+            continue
         if sample is not None:
             samples[_iface_key(iface)] = sample
         if iface.locality == node_agent_pb2.LOCALITY_CROSS_NODE and iface.vni:
@@ -945,7 +968,11 @@ def handle_batch_link_down(
                 outcome = _ok(proof)
             if outcome.success and _iface_key(iface) in samples:
                 outcome = replace(outcome, loss=samples[_iface_key(iface)])
-            if outcome.success and iface.stage == node_agent_pb2.LINK_DOWN_STAGE_STOP_ADMISSION:
+            if outcome.success and outcome.superseded:
+                # A stage for a contact the end no longer carries changed nothing: no count, and
+                # the substrate peer stays with the contact the end carries.
+                pass
+            elif outcome.success and iface.stage == node_agent_pb2.LINK_DOWN_STAGE_STOP_ADMISSION:
                 stopped += 1
             elif outcome.success:
                 downed += 1
@@ -1057,13 +1084,16 @@ def _long_delay_limit(delay_ms: float, transmit_mbps: float) -> int:
 
 def _open_long_delay_contact(
     pid: int, host_ifname: str, iface: node_agent_pb2.InterfaceUp
-) -> tuple[list[kernel_verifier.Proof], int | None]:
+) -> tuple[list[kernel_verifier.Proof], node_agent_pb2.LinkEndLoss | None]:
     """Open a contact on a long-delay end: admission open on the transmitting pod interface,
     which keeps only the terminal's rate; the received direction's delay queue on the host-side
     veth, sized from the traffic envelope; and the contact recorded on that veth. Returns the
-    proofs, and the packets the admission filter took while stopped (None when admission was
-    open). A contact that reopens while the last one drains keeps the drained packets in the
-    same queue: they were sent to this same receiver."""
+    proofs, and on a reopen what the contact that ended lost at this end.
+
+    A contact that reopens while the last one drains keeps the drained packets in the same
+    queue: they were sent to this same receiver. The ended contact's loss is what its stopped
+    admission took and what the queue dropped at its limit until now; the queue's drop counter
+    goes on counting for the new contact, which subtracts this value at its close."""
     if not iface.contact_id:
         raise ValueError(
             f"long-delay LinkUp of {iface.node_id}/{iface.interface_name} names no contact"
@@ -1074,6 +1104,7 @@ def _open_long_delay_contact(
         )
     limit = _long_delay_limit(iface.receive_latency_ms, iface.rates.receive_mbps)
     fresh = namespace_ops.contact_of(host_ifname) is None
+    dropped_so_far = None if fresh else loss.QueueDevice(host_ifname, None).counts().dropped
     taken = admission.open_admission(pid, iface.interface_name)
     namespace_ops.apply_long_delay_transmit_shaping(
         pid, iface.interface_name, iface.rates.transmit_mbps
@@ -1095,7 +1126,16 @@ def _open_long_delay_contact(
             limit=limit,
         ),
         kernel_verifier.verify_contact(host_ifname, iface.contact_id),
-    ], taken
+    ], (
+        None
+        if dropped_so_far is None
+        else node_agent_pb2.LinkEndLoss(
+            # Admission open at the reopen (a contact renamed without a stop) took nothing.
+            admission_taken=taken if taken is not None else 0,
+            queue_dropped=dropped_so_far,
+            discarded_exact=True,
+        )
+    )
 
 
 def _isl_link_up_carrier_stage(
@@ -1128,9 +1168,9 @@ def _isl_link_up_carrier_stage(
             )
         host_ifname = _isl_host_ifname(iface)
         long_delay = handles[iface.node_id].is_long_delay(iface.interface_name)
-        taken_while_stopped: int | None = None
+        ended: node_agent_pb2.LinkEndLoss | None = None
         if long_delay:
-            proofs, taken_while_stopped = _open_long_delay_contact(pid, host_ifname, iface)
+            proofs, ended = _open_long_delay_contact(pid, host_ifname, iface)
         else:
             namespace_ops.apply_transmit_shaping(
                 pid, iface.interface_name, iface.latency_ms, iface.rates.transmit_mbps
@@ -1186,15 +1226,10 @@ def _isl_link_up_carrier_stage(
                 ]
             )
         outcome = _combine_proofs("ISL LinkUp verified", proofs)
-        if taken_while_stopped is not None:
-            # The end reopened during a drain: what the stopped admission took is the only loss
-            # of the contact that ended; its queue carries on into this one, nothing discarded.
-            outcome = replace(
-                outcome,
-                loss=node_agent_pb2.LinkEndLoss(
-                    admission_taken=taken_while_stopped, discarded_exact=True
-                ),
-            )
+        if ended is not None:
+            # The end reopened: what the contact that ended lost here (its queue carries on
+            # into this one, nothing discarded).
+            outcome = replace(outcome, loss=ended)
         return outcome
     except Exception as exc:
         msg = f"ISL up carrier stage failed {iface.node_id}/{iface.interface_name}: {exc}"

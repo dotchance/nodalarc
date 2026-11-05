@@ -82,6 +82,7 @@ class ActiveLinkInfo:
         "authority_sequence",
         "contact",
         "drain",
+        "queue_drop_baselines",
     )
 
     @property
@@ -124,6 +125,10 @@ class ActiveLinkInfo:
         # Set on an actual long-delay link once both transmitters proved admission stopped;
         # cleared when the link record goes (last end closed) or the pair reopens.
         self.drain: Drain | None = None
+        # By end node id: the drops a reopened end's receive queue had counted for earlier
+        # contacts when this contact opened in it. A close subtracts it, so each contact reports
+        # its own drops.
+        self.queue_drop_baselines: dict[str, int] = {}
 
     @property
     def long_delay(self) -> bool:

@@ -128,7 +128,10 @@ from scheduler.desired_state import (
 )
 from scheduler.dispatch_actuator import (
     end_loss_records,
+    open_prepared_contacts,
+    prepare_long_delay_contacts,
     publish_link_down,
+    record_stage_losses,
     send_authoritative_latency_updates,
     send_batch_down,
     send_batch_up,
@@ -144,6 +147,7 @@ from scheduler.dispatch_planner import (
 )
 from scheduler.epoch_sync import EpochSyncState
 from scheduler.latency_compensator import LatencyCompensation, compensate_latency
+from scheduler.node_agent_batches import LinkUpBatchPlan
 from scheduler.pod_locator import PodLocationMap
 from scheduler.substrate_latency import (
     load_substrate_status_documents,
@@ -3795,6 +3799,10 @@ class Dispatcher:
                 await self._handle_actuation_result(
                     stopped, sim_time=sim_time, operation_context="long_delay_forced_stop"
                 )
+                for pair in sorted(stopped.succeeded_pairs):
+                    record_stage_losses(
+                        stopped, pair=pair, info=self._actual_links[pair], stage=stop_stage
+                    )
             ends = {pair: remaining_ends(pair, self._actual_links[pair]) for pair in plan.forced}
             closed = await self._send_long_delay_stage(
                 set(plan.forced), stage=close_stage, sim_iso=sim_iso, sim_time=sim_time, ends=ends
@@ -3831,6 +3839,7 @@ class Dispatcher:
                 info = self._actual_links[pair]
                 if info.contact is None:
                     raise RuntimeError(f"stopped long-delay link {pair} has no contact")
+                record_stage_losses(stopped, pair=pair, info=info, stage=stop_stage)
                 info.drain = start_drain(
                     pair,
                     info,
@@ -3890,33 +3899,31 @@ class Dispatcher:
                         losses=info.drain.closed,
                     )
 
-        # Contacts to open. A pair that still drains, or whose contact OME renamed, reopens in
-        # place: its queue keeps the packets in flight, which go to this same receiver. The
-        # contact that ended is recorded with what its stopped admission took.
+        # Contacts to open, in two stages. PREPARE builds each end with admission stopped, so no
+        # packet crosses before both receive paths delay it; OPEN admits at both ends only once
+        # both proved PREPARE. A pair that still drains, or whose contact OME renamed, reopens in
+        # place: its queue keeps the packets in flight, which go to this same receiver, and the
+        # contact that ended is recorded once the new one is prepared at both ends, before the
+        # new contact's LinkUp.
         if plan.open:
             ended = {
                 pair: self._actual_links[pair] for pair in plan.open if pair in self._actual_links
             }
-            opened = await self._send_batch_up(set(plan.open), desired, sim_iso, sim_time, nc)
-            await self._handle_actuation_result(
-                opened, sim_time=sim_time, operation_context="long_delay_open"
+            up_plan, prepared = await self._prepare_long_delay(
+                set(plan.open), desired, sim_iso, sim_time
             )
-            for pair in sorted(opened.succeeded_pairs):
-                info = desired[pair]
-                self._actual_links[pair] = info
-                self._last_latencies[pair] = info.latencies_ms
+            await self._handle_actuation_result(
+                prepared, sim_time=sim_time, operation_context="long_delay_prepare"
+            )
+            for pair in sorted(prepared.succeeded_pairs):
                 old = ended.get(pair)
                 if old is None:
                     continue
                 # Only an end that still held the ended contact's queue reports it: an end
-                # already closed opened fresh, its loss recorded at its close.
-                reopened = end_loss_records(opened, pair=pair, info=old, cause="reopened")
-                ends = {(pair[0], info.interface_a), (pair[1], info.interface_b)}
-                info.queue_drop_baselines = {
-                    node_id: counts.queue_dropped
-                    for (node_id, interface), counts in opened.end_losses.items()
-                    if (node_id, interface) in ends
-                }
+                # already closed was prepared fresh, its loss recorded at its close.
+                reopened = end_loss_records(prepared, pair=pair, info=old, cause="reopened")
+                self._actual_links.pop(pair, None)
+                self._last_latencies.pop(pair, None)
                 await publish_link_down(
                     js=self._js,
                     subject=self._subj_link_down,
@@ -3926,6 +3933,24 @@ class Dispatcher:
                     reason=old.drain.reason if old.drain is not None else "vis_lost",
                     losses=(old.drain.closed if old.drain is not None else ()) + reopened,
                 )
+            # The barrier: OPEN goes only to contacts whose two ends both proved PREPARE.
+            ready = set(prepared.succeeded_pairs)
+            opened = (
+                await self._open_prepared(up_plan, ready, desired, sim_iso, sim_time)
+                if ready
+                else None
+            )
+            if opened is not None:
+                await self._handle_actuation_result(
+                    opened, sim_time=sim_time, operation_context="long_delay_open"
+                )
+            for pair in sorted(opened.succeeded_pairs if opened is not None else ()):
+                info = desired[pair]
+                record_stage_losses(
+                    opened, pair=pair, info=info, stage=node_agent_pb2.LINK_UP_STAGE_OPEN
+                )
+                self._actual_links[pair] = info
+                self._last_latencies[pair] = info.latencies_ms
 
         if plan.latency:
             changed = await self._send_authoritative_latency_updates(
@@ -3961,6 +3986,56 @@ class Dispatcher:
             self._build_dispatch_intent(sim_time=self._current_sim_time, source="drain")
         )
 
+    async def _prepare_long_delay(
+        self,
+        pairs: set[tuple[str, str]],
+        desired: dict[tuple[str, str], ActiveLinkInfo],
+        sim_iso: str,
+        sim_time: datetime,
+    ) -> tuple[LinkUpBatchPlan, ActuationResult]:
+        """PREPARE long-delay contacts at both ends; nothing is published."""
+        return await prepare_long_delay_contacts(
+            pairs=pairs,
+            desired=desired,
+            locator=self._loc,
+            pool=self._pool,
+            sim_iso=sim_iso,
+            sim_time=sim_time,
+            gs_capacities=self._gs_capacities,
+            latency_compensation=self._latency_compensation,
+            validate_authority_freshness=self._validate_authority_freshness,
+            interface_rates=self._interface_rates,
+            session_id=self._session_id,
+            wiring_generation=self._wiring_generation,
+            writer_epoch=self._writer_epoch,
+        )
+
+    async def _open_prepared(
+        self,
+        plan: LinkUpBatchPlan,
+        pairs: set[tuple[str, str]],
+        desired: dict[tuple[str, str], ActiveLinkInfo],
+        sim_iso: str,
+        sim_time: datetime,
+    ) -> ActuationResult:
+        """OPEN prepared long-delay contacts and publish LinkUp for each one proven."""
+        return await open_prepared_contacts(
+            plan=plan,
+            pairs=pairs,
+            desired=desired,
+            pool=self._pool,
+            js=self._js,
+            subj_link_up=self._subj_link_up,
+            sim_iso=sim_iso,
+            sim_time=sim_time,
+            gs_capacities=self._gs_capacities,
+            validate_authority_freshness=self._validate_authority_freshness,
+            link_provenance=self._link_provenance,
+            session_id=self._session_id,
+            wiring_generation=self._wiring_generation,
+            writer_epoch=self._writer_epoch,
+        )
+
     async def _send_batch_up(
         self,
         pairs: set[tuple[str, str]],
@@ -3969,7 +4044,7 @@ class Dispatcher:
         sim_time: datetime,
         nc,
     ) -> ActuationResult:
-        """Send BatchLinkUp to Node Agents. Returns structured proof results."""
+        """Open local links (BatchLinkUp, OPEN). Returns structured proof results."""
         return await send_batch_up(
             pairs=pairs,
             desired=desired,

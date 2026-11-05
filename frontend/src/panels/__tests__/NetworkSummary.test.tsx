@@ -108,7 +108,10 @@ describe("NetworkSummary", () => {
               node_id: "earth-relay",
               interface: "isl3",
               cause: "drain_deadline",
+              refused_before_open: 12,
+              untransmitted_at_stop: 135,
               admission_taken: 412,
+              transmit_dropped: 4,
               queue_dropped: 3,
               discarded_at_close: 0,
               discarded_exact: true,
@@ -127,7 +130,10 @@ describe("NetworkSummary", () => {
               node_id: "sat-1",
               interface: "isl0",
               cause: "end_of_contact",
+              refused_before_open: 0,
+              untransmitted_at_stop: 0,
               admission_taken: 0,
+              transmit_dropped: 0,
               queue_dropped: 0,
               discarded_at_close: 17,
               discarded_exact: false,
@@ -140,10 +146,12 @@ describe("NetworkSummary", () => {
     render(<NetworkSummary snapshot={snapshot} />);
 
     expect(value("earth-relay/isl3")).toBe(
-      "drain deadline: 0 discarded (count), 3 dropped at the queue limit, 412 refused after the stop",
+      "drain deadline: 12 refused before open, 135 untransmitted at contact end, " +
+        "412 refused after the stop, 4 dropped at the transmit queue limit, " +
+        "3 dropped at the receive queue limit, 0 discarded (count)",
     );
     expect(value("sat-1/isl0")).toBe(
-      "contact ended: 17 discarded (sample), 0 dropped at the queue limit, 0 refused after the stop",
+      "contact ended: 17 discarded (sample), 0 dropped at the queue limit",
     );
     // Newest first.
     const pairs = screen.getAllByText(/ ↔ /).map((element) => element.textContent);

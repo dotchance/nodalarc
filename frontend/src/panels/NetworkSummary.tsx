@@ -31,12 +31,22 @@ const CLOSE_CAUSE_LABELS: Record<LinkEndCloseCause, string> = {
   reopened: "reopened while draining",
 };
 
-/** One end's losses: what its queue still held at the close (a count when both transmitters
- *  had stopped, a sample on a local link), what its queue dropped at its limit, and what its
- *  stopped transmitter refused. */
-function endLossText(end: LinkEndLoss): string {
+/** One end's losses: what its delay queue still held at the close (a count when both
+ *  transmitters had stopped, a sample on a local link) and what it dropped at its limit. A
+ *  long-delay end also shows, in the order they happen, what its stopped admission refused
+ *  while the contact was prepared, what was never transmitted when the contact ended, what its
+ *  stopped admission refused after the stop, and what its transmit queue dropped at its limit. */
+function endLossText(end: LinkEndLoss, longDelay: boolean): string {
   const held = `${end.discarded_at_close} discarded (${end.discarded_exact ? "count" : "sample"})`;
-  return `${CLOSE_CAUSE_LABELS[end.cause]}: ${held}, ${end.queue_dropped} dropped at the queue limit, ${end.admission_taken} refused after the stop`;
+  const cause = CLOSE_CAUSE_LABELS[end.cause];
+  if (!longDelay) return `${cause}: ${held}, ${end.queue_dropped} dropped at the queue limit`;
+  return (
+    `${cause}: ${end.refused_before_open} refused before open, ` +
+    `${end.untransmitted_at_stop} untransmitted at contact end, ` +
+    `${end.admission_taken} refused after the stop, ` +
+    `${end.transmit_dropped} dropped at the transmit queue limit, ` +
+    `${end.queue_dropped} dropped at the receive queue limit, ${held}`
+  );
 }
 
 interface InstanceTally {
@@ -185,7 +195,9 @@ export function NetworkSummary({ snapshot }: NetworkSummaryProps) {
                     <span className="detail-label">
                       {end.node_id}/{end.interface}
                     </span>
-                    <span className="detail-value">{endLossText(end)}</span>
+                    <span className="detail-value">
+                      {endLossText(end, contact.contact_id !== null)}
+                    </span>
                   </div>
                 ))}
               </div>

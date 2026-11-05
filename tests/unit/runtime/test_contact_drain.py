@@ -126,48 +126,94 @@ def test_a_scenario_command_closes_a_contact_without_a_drain():
     assert not plan.stop
 
 
-def test_a_reopened_queue_reports_each_contacts_own_drops():
-    """A contact that reopens while the last drains keeps its queue, and the queue's drop
-    counter runs on. The new contact's close reports only the drops after it opened."""
+def _result(operation: str, counts):
+    """One Node Agent result for the Mars end of the trunk, carrying ``counts``."""
     from nodalarc.models.scheduler_ops import ActuationFailureClass
-    from scheduler.actuation import AgentCommandResult, EndLossCounts, build_actuation_result
-    from scheduler.dispatch_actuator import end_loss_records
+    from scheduler.actuation import AgentCommandResult, build_actuation_result
 
-    def closed(dropped: int):
-        agent = AgentCommandResult(
-            agent_addr="agent-mars",
-            operation="BatchLinkDown",
-            requested=(("mars-relay", "isl0"),),
-            success_acks=frozenset({("agent-mars", "mars-relay", "isl0")}),
-            failure_class=ActuationFailureClass.NONE,
-            dirty_kernel=False,
-            unknown_outcome=False,
-            fence_failure=False,
-            writer_fenced=False,
-            details={},
-            end_losses={
-                ("mars-relay", "isl0"): EndLossCounts(
-                    admission_taken=40,
-                    queue_dropped=dropped,
-                    discarded_at_close=2,
-                    discarded_exact=True,
-                )
-            },
+    agent = AgentCommandResult(
+        agent_addr="agent-mars",
+        operation=operation,
+        requested=(("mars-relay", "isl0"),),
+        success_acks=frozenset({("agent-mars", "mars-relay", "isl0")}),
+        failure_class=ActuationFailureClass.NONE,
+        dirty_kernel=False,
+        unknown_outcome=False,
+        fence_failure=False,
+        writer_fenced=False,
+        details={},
+        end_losses={("mars-relay", "isl0"): counts},
+    )
+    return build_actuation_result(
+        operation=operation,
+        requested_pairs=[TRUNK],
+        pair_agent_ifaces={TRUNK: {("agent-mars", "mars-relay", "isl0")}},
+        pair_link_type={TRUNK: "isl"},
+        pair_gs_id={TRUNK: None},
+        agent_results=[agent],
+    )
+
+
+def _counts(**reported):
+    from scheduler.actuation import EndLossCounts
+
+    fields = dict.fromkeys(
+        (
+            "admission_taken",
+            "queue_dropped",
+            "discarded_at_close",
+            "untransmitted_at_stop",
+            "transmit_dropped",
+        ),
+        0,
+    )
+    return EndLossCounts(**{**fields, **reported}, discarded_exact=True)
+
+
+def test_an_ends_record_joins_what_it_reported_at_open_stop_and_close():
+    """The Node Agent reports each count once, at the stage that counted it: refused while the
+    contact was prepared (OPEN), purged before transmission and the transmit queue's drops
+    (STOP), refused after the stop, receive queue drops and what the queue held (CLOSE)."""
+    from nodalarc.proto import node_agent_pb2
+    from scheduler.dispatch_actuator import end_loss_records, record_stage_losses
+
+    contact = _trunk()
+    record_stage_losses(
+        _result("BatchLinkUp", _counts(admission_taken=12)),
+        pair=TRUNK,
+        info=contact,
+        stage=node_agent_pb2.LINK_UP_STAGE_OPEN,
+    )
+    record_stage_losses(
+        _result("BatchLinkDown", _counts(untransmitted_at_stop=135, transmit_dropped=4)),
+        pair=TRUNK,
+        info=contact,
+        stage=node_agent_pb2.LINK_DOWN_STAGE_STOP_ADMISSION,
+    )
+    closed = _result(
+        "BatchLinkDown", _counts(admission_taken=1775, queue_dropped=7, discarded_at_close=2)
+    )
+    (loss,) = end_loss_records(closed, pair=TRUNK, info=contact, cause="drain_deadline")
+    assert (loss.node_id, loss.cause) == ("mars-relay", "drain_deadline")
+    assert loss.refused_before_open == 12
+    assert loss.untransmitted_at_stop == 135
+    assert loss.transmit_dropped == 4
+    assert loss.admission_taken == 1775
+    assert (loss.queue_dropped, loss.discarded_at_close, loss.discarded_exact) == (7, 2, True)
+
+    # The next contact on the same terminal starts its own record.
+    (fresh,) = end_loss_records(closed, pair=TRUNK, info=_trunk(), cause="drain_deadline")
+    assert (fresh.refused_before_open, fresh.untransmitted_at_stop) == (0, 0)
+
+
+def test_a_stage_that_reports_a_count_it_does_not_produce_is_refused():
+    from nodalarc.proto import node_agent_pb2
+    from scheduler.dispatch_actuator import record_stage_losses
+
+    with pytest.raises(ValueError, match="does not produce"):
+        record_stage_losses(
+            _result("BatchLinkUp", _counts(admission_taken=3, queue_dropped=1)),
+            pair=TRUNK,
+            info=_trunk(),
+            stage=node_agent_pb2.LINK_UP_STAGE_OPEN,
         )
-        return build_actuation_result(
-            operation="BatchLinkDown",
-            requested_pairs=[TRUNK],
-            pair_agent_ifaces={TRUNK: {("agent-mars", "mars-relay", "isl0")}},
-            pair_link_type={TRUNK: "isl"},
-            pair_gs_id={TRUNK: None},
-            agent_results=[agent],
-        )
-
-    second = _trunk(opened=OPENED + timedelta(hours=1))
-    # The first contact's queue had dropped 7 at its limit when the second reopened it.
-    second.queue_drop_baselines = {"mars-relay": 7}
-    (loss,) = end_loss_records(closed(dropped=19), pair=TRUNK, info=second, cause="drain_deadline")
-    assert (loss.node_id, loss.queue_dropped, loss.discarded_at_close) == ("mars-relay", 12, 2)
-
-    with pytest.raises(ValueError, match="fewer than the 7"):
-        end_loss_records(closed(dropped=3), pair=TRUNK, info=second, cause="drain_deadline")

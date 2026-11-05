@@ -78,6 +78,7 @@ def test_cross_node_isl_link_up_plan_builds_two_remote_interfaces():
         locator=locator,
         gs_capacities={},
         compensation_for_pair=_compensation,
+        stage=node_agent_pb2.LINK_UP_STAGE_OPEN,
     )
 
     assert set(plan.agent_ifaces) == {"agent-sat-a", "agent-sat-b"}
@@ -122,6 +123,7 @@ def test_cross_node_link_up_missing_remote_ip_fails_loudly():
             locator=locator,
             gs_capacities={},
             compensation_for_pair=_compensation,
+            stage=node_agent_pb2.LINK_UP_STAGE_OPEN,
         )
 
 
@@ -181,6 +183,7 @@ def test_link_up_without_terminal_rates_for_an_interface_fails_loudly():
             ),
             gs_capacities={},
             compensation_for_pair=_compensation,
+            stage=node_agent_pb2.LINK_UP_STAGE_OPEN,
         )
 
 
@@ -232,6 +235,7 @@ def test_every_end_carries_the_delay_of_the_direction_it_transmits(locality):
         ),
         gs_capacities={"gs-den": 1, "gs-hou": 1},
         compensation_for_pair=_compensation,
+        stage=node_agent_pb2.LINK_UP_STAGE_OPEN,
     )
 
     described: set[str] = set()
@@ -284,6 +288,7 @@ def test_a_long_delay_link_up_names_its_contact_and_the_delay_each_end_receives(
         gs_capacities={},
         compensation_for_pair=_compensation,
         interface_rates=ANY_INTERFACE_RATES,
+        stage=node_agent_pb2.LINK_UP_STAGE_PREPARE,
     )
     earth = plan.agent_ifaces["agent-earth-relay"][0]
     mars = plan.agent_ifaces["agent-mars-relay"][0]
@@ -357,4 +362,85 @@ def test_a_local_link_has_no_admission_stage():
             locator=_Locator(node_agent_pb2.LOCALITY_LOCAL),
             gs_capacities={},
             stage=node_agent_pb2.LINK_DOWN_STAGE_STOP_ADMISSION,
+        )
+
+
+def test_a_long_delay_contact_opens_with_the_entries_it_was_prepared_with():
+    """OPEN reuses PREPARE's entries with the stage changed: the delays the receive queues were
+    built with are the ones OPEN verifies, whatever the substrate measurement does between."""
+    from scheduler.node_agent_batches import restage_link_up_plan
+
+    measured = iter((2.0, 9.0))
+
+    def drifting(_a, _b, orbital_ms):
+        return compensate_latency(
+            orbital_a_to_b_ms=orbital_ms[0],
+            orbital_b_to_a_ms=orbital_ms[1],
+            substrate_rtt_ms=next(measured),
+        )
+
+    locator = _Locator(
+        node_agent_pb2.LOCALITY_CROSS_NODE,
+        {"k3s-earth-relay": "10.0.0.1", "k3s-mars-relay": "10.0.0.2"},
+    )
+    prepared = build_link_up_batch_plan(
+        pairs={TRUNK},
+        desired={TRUNK: _trunk()},
+        locator=locator,
+        gs_capacities={},
+        compensation_for_pair=drifting,
+        interface_rates=ANY_INTERFACE_RATES,
+        stage=node_agent_pb2.LINK_UP_STAGE_PREPARE,
+    )
+    opened = restage_link_up_plan(prepared, pairs=[TRUNK], stage=node_agent_pb2.LINK_UP_STAGE_OPEN)
+    for agent, entries in prepared.agent_ifaces.items():
+        (entry,) = entries
+        (restaged,) = opened.agent_ifaces[agent]
+        assert entry.stage == node_agent_pb2.LINK_UP_STAGE_PREPARE
+        assert restaged.stage == node_agent_pb2.LINK_UP_STAGE_OPEN
+        restaged.stage = entry.stage
+        assert restaged == entry
+    assert opened.pair_agent_ifaces == prepared.pair_agent_ifaces
+    # Built anew, OPEN would carry the drifted measurement's delays, not the prepared queue's.
+    rebuilt = build_link_up_batch_plan(
+        pairs={TRUNK},
+        desired={TRUNK: _trunk()},
+        locator=locator,
+        gs_capacities={},
+        compensation_for_pair=drifting,
+        interface_rates=ANY_INTERFACE_RATES,
+        stage=node_agent_pb2.LINK_UP_STAGE_OPEN,
+    )
+    assert (
+        rebuilt.agent_ifaces["agent-mars-relay"][0].receive_latency_ms
+        != opened.agent_ifaces["agent-mars-relay"][0].receive_latency_ms
+    )
+    # Only the pairs named open: a pair whose PREPARE failed gets no OPEN.
+    assert (
+        restage_link_up_plan(
+            prepared, pairs=[], stage=node_agent_pb2.LINK_UP_STAGE_OPEN
+        ).agent_ifaces
+        == {}
+    )
+
+
+def test_a_local_link_has_no_prepare():
+    pair = ("sat-a", "sat-b")
+    local = ActiveLinkInfo(
+        interface_a="isl0",
+        interface_b="isl1",
+        latency_a_to_b_ms=10.0,
+        latency_b_to_a_ms=10.0,
+        link_type="isl",
+        range_km=2997.9,
+    )
+    with pytest.raises(ValueError, match="opens at once"):
+        build_link_up_batch_plan(
+            pairs={pair},
+            desired={pair: local},
+            locator=_Locator(node_agent_pb2.LOCALITY_LOCAL),
+            gs_capacities={},
+            compensation_for_pair=_compensation,
+            interface_rates=ANY_INTERFACE_RATES,
+            stage=node_agent_pb2.LINK_UP_STAGE_PREPARE,
         )

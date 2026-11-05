@@ -47,13 +47,16 @@ class GroundActuationState:
 
 @dataclass(frozen=True, slots=True)
 class EndLossCounts:
-    """What one closed link end's queues lost, as its Node Agent counted it (the proto
-    ``LinkEndLoss``); the cause is the Scheduler's, added when it records the close."""
+    """What one link end reported losing at one stage, as its Node Agent counted it since its
+    last report (the proto ``LinkEndLoss``); the cause is the Scheduler's, added when it records
+    the end's close."""
 
     admission_taken: int
     queue_dropped: int
     discarded_at_close: int
     discarded_exact: bool
+    untransmitted_at_stop: int
+    transmit_dropped: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -256,6 +259,8 @@ def classify_agent_response(
             queue_dropped=entry.loss.queue_dropped,
             discarded_at_close=entry.loss.discarded_at_close,
             discarded_exact=entry.loss.discarded_exact,
+            untransmitted_at_stop=entry.loss.untransmitted_at_stop,
+            transmit_dropped=entry.loss.transmit_dropped,
         )
         for entry in entries
         if entry.success

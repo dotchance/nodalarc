@@ -56,6 +56,24 @@ class Drain:
     closed: tuple[LinkEndLoss, ...] = ()
 
 
+@dataclass(frozen=True, slots=True)
+class StageLoss:
+    """What one long-delay end reported at its contact's OPEN (refused while the contact was
+    prepared) and STOP (purged before transmission, and its transmit queue's drops until then).
+    The Node Agent reports each count once, since its last report."""
+
+    refused_before_open: int = 0
+    untransmitted_at_stop: int = 0
+    transmit_dropped: int = 0
+
+    def plus(self, other: StageLoss) -> StageLoss:
+        return StageLoss(
+            refused_before_open=self.refused_before_open + other.refused_before_open,
+            untransmitted_at_stop=self.untransmitted_at_stop + other.untransmitted_at_stop,
+            transmit_dropped=self.transmit_dropped + other.transmit_dropped,
+        )
+
+
 class ActiveLinkInfo:
     """Mutable internal state for a desired or active link.
 
@@ -82,7 +100,7 @@ class ActiveLinkInfo:
         "authority_sequence",
         "contact",
         "drain",
-        "queue_drop_baselines",
+        "stage_losses",
     )
 
     @property
@@ -125,10 +143,9 @@ class ActiveLinkInfo:
         # Set on an actual long-delay link once both transmitters proved admission stopped;
         # cleared when the link record goes (last end closed) or the pair reopens.
         self.drain: Drain | None = None
-        # By end node id: the drops a reopened end's receive queue had counted for earlier
-        # contacts when this contact opened in it. A close subtracts it, so each contact reports
-        # its own drops.
-        self.queue_drop_baselines: dict[str, int] = {}
+        # By end node id: what a long-delay end reported losing at this contact's OPEN and STOP,
+        # kept until the end's close or reopen completes its record.
+        self.stage_losses: dict[str, StageLoss] = {}
 
     @property
     def long_delay(self) -> bool:

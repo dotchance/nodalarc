@@ -73,26 +73,34 @@ class LinkUp(BaseModel):
 # A long-delay end closes when the last packet sent before its peer stopped admitting has had the
 # light time of the direction it receives ("drain_deadline"); a seek or a scenario command closes
 # it before then. A long-delay end whose next contact opens while it still drains keeps its
-# queue for that contact ("reopened"): nothing is discarded, and only what the stopped admission
-# took is the ended contact's.
+# queue for that contact ("reopened"): nothing is discarded, and what the end counted until the
+# new contact was prepared is the ended contact's.
 type LinkEndCloseCause = Literal["end_of_contact", "drain_deadline", "seek", "scenario", "reopened"]
 
 
 class LinkEndLoss(BaseModel):
-    """What one link end's queues lost when it closed, from the Node Agent's close.
+    """What one link end lost during its contact, from the Node Agent's counts at each stage.
 
-    ``discarded_at_close`` is what the end's delay queue still held. With ``discarded_exact`` it is
-    a count: admission had stopped at both ends, so nothing entered the queue between the read
-    and the reset. Without it, it is a sample read just before the close of a local link, which
-    keeps admitting until then. ``queue_dropped`` is what the queue dropped at its limit
-    (substrate resource loss), and ``admission_taken`` what the stopped admission filter took."""
+    ``discarded_at_close`` is what the end's delay queue still held when it closed. With
+    ``discarded_exact`` it is a count: admission had stopped at both ends, so nothing entered the
+    queue between the read and the reset. Without it, it is a sample read just before the close
+    of a local link, which keeps admitting until then. ``queue_dropped`` is what the end's delay
+    queue dropped at its limit, and ``transmit_dropped`` what its transmit queue dropped at its
+    limit (both substrate resource loss). On a long-delay end, ``refused_before_open`` is what
+    its stopped admission refused while the contact was being prepared, ``untransmitted_at_stop``
+    what still waited to be transmitted when the contact ended (purged at the stop, never sent),
+    and ``admission_taken`` what its stopped admission refused after the stop; all three are 0 on
+    a local link."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     node_id: str
     interface: str
     cause: LinkEndCloseCause
+    refused_before_open: int = Field(ge=0)
+    untransmitted_at_stop: int = Field(ge=0)
     admission_taken: int = Field(ge=0)
+    transmit_dropped: int = Field(ge=0)
     queue_dropped: int = Field(ge=0)
     discarded_at_close: int = Field(ge=0)
     discarded_exact: bool

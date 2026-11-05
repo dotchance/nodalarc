@@ -232,12 +232,18 @@ def build_link_up_batch_plan(
     gs_capacities: Mapping[str, int],
     compensation_for_pair: Callable[[str, str, tuple[float, float]], LatencyCompensation],
     interface_rates: Mapping[tuple[str, str], InterfaceRates],
+    stage: int,
 ) -> LinkUpBatchPlan:
     """Build per-agent BatchLinkUp operations and per-pair latency provenance.
 
     Every entry carries the terminal rates of the interfaces it wires, so the
-    Node Agent shapes each end as its own terminal.
+    Node Agent shapes each end as its own terminal, and ``stage``. A local link
+    opens at once (OPEN). A long-delay contact is built first at both ends with
+    admission stopped (PREPARE) and admitted after both ends proved it (OPEN,
+    from ``restage_link_up_plan`` so both stages carry the same delays).
     """
+    if stage not in (node_agent_pb2.LINK_UP_STAGE_PREPARE, node_agent_pb2.LINK_UP_STAGE_OPEN):
+        raise ValueError(f"a LinkUp is built for PREPARE or OPEN, not stage {stage}")
     agent_ifaces: dict[str, list[node_agent_pb2.InterfaceUp]] = {}
     pair_agent_ifaces: dict[LinkPair, set[InterfaceAck]] = {}
     pair_compensation: dict[LinkPair, LatencyCompensation] = {}
@@ -246,6 +252,8 @@ def build_link_up_batch_plan(
         info = desired.get(pair)
         if info is None:
             raise RuntimeError(f"Dispatch planner requested LinkUp for missing desired pair {pair}")
+        if info.contact is None and stage != node_agent_pb2.LINK_UP_STAGE_OPEN:
+            raise ValueError(f"{pair} is a local link; it opens at once and has no PREPARE")
 
         node_a, node_b = pair
         locality = locator.link_locality(node_a, node_b)
@@ -286,6 +294,7 @@ def build_link_up_batch_plan(
                     locality=locality,
                     remote_node_ip="",
                     vni=vni,
+                    stage=stage,
                 )
                 agent_ifaces.setdefault(agent, []).append(iface_msg)
                 pair_agent_ifaces.setdefault(pair, set()).add(_ack_key(agent, iface_msg))
@@ -308,6 +317,7 @@ def build_link_up_batch_plan(
                         locality=locality,
                         remote_node_ip=remote_ip,
                         vni=vni,
+                        stage=stage,
                     )
                     agent_ifaces.setdefault(agent_addr, []).append(iface_msg)
                     pair_agent_ifaces.setdefault(pair, set()).add(_ack_key(agent_addr, iface_msg))
@@ -337,6 +347,7 @@ def build_link_up_batch_plan(
                 vni=vni,
                 peer_node_id=peer_nid,
                 peer_interface_name=peer_ifname,
+                stage=stage,
             )
             if info.contact is not None:
                 # A long-delay end holds the delay queue of the direction it receives: the one its
@@ -350,4 +361,30 @@ def build_link_up_batch_plan(
         agent_ifaces=agent_ifaces,
         pair_agent_ifaces=pair_agent_ifaces,
         pair_compensation=pair_compensation,
+    )
+
+
+def restage_link_up_plan(
+    plan: LinkUpBatchPlan, *, pairs: Iterable[LinkPair], stage: int
+) -> LinkUpBatchPlan:
+    """The entries of ``pairs`` in ``plan`` with their stage replaced: the OPEN of contacts both
+    of whose ends PREPARE proved. Every other field is the prepared one, so OPEN verifies the
+    queue PREPARE built with the delays it was built with. Rejected alternative: building OPEN
+    anew, which recomputes latency compensation from a substrate measurement that may have moved
+    since PREPARE; an OPEN whose delay differs from its queue's is refused."""
+    chosen = {pair: plan.pair_agent_ifaces[pair] for pair in pairs}
+    acks: set[InterfaceAck] = set().union(*chosen.values()) if chosen else set()
+    agent_ifaces: dict[str, list[node_agent_pb2.InterfaceUp]] = {}
+    for agent, entries in plan.agent_ifaces.items():
+        for entry in entries:
+            if _ack_key(agent, entry) not in acks:
+                continue
+            restaged = node_agent_pb2.InterfaceUp()
+            restaged.CopyFrom(entry)
+            restaged.stage = stage
+            agent_ifaces.setdefault(agent, []).append(restaged)
+    return LinkUpBatchPlan(
+        agent_ifaces=agent_ifaces,
+        pair_agent_ifaces=chosen,
+        pair_compensation={pair: plan.pair_compensation[pair] for pair in chosen},
     )

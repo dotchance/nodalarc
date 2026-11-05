@@ -32,18 +32,21 @@ from nodalarc.vxlan import compute_vni
 from scheduler.actuation import (
     ActuationResult,
     AgentCommandResult,
+    EndLossCounts,
     InterfaceAck,
     build_actuation_result,
     classify_agent_exception,
     classify_agent_response,
 )
-from scheduler.desired_state import ActiveLinkInfo
+from scheduler.desired_state import ActiveLinkInfo, StageLoss
 from scheduler.dispatch_planner import gs_id_for_pair
 from scheduler.latency_compensator import LatencyCompensation, egress_ms
 from scheduler.node_agent_batches import (
+    LinkUpBatchPlan,
     build_link_down_batch_plan,
     build_link_up_batch_plan,
     required_ground_endpoints,
+    restage_link_up_plan,
     terminal_rates_message,
 )
 
@@ -205,13 +208,14 @@ async def _send_batch_up_to_agent(
     session_id: str,
     wiring_generation: str,
     writer_epoch: int,
+    label: str,
 ) -> AgentCommandResult:
     return await _send_chunked_command(
         addr=addr,
         items=interfaces,
         pool=pool,
         operation="BatchLinkUp",
-        operation_id_base=f"{sim_iso}-up-{addr}",
+        operation_id_base=f"{sim_iso}-{label}-{addr}",
         session_id=session_id,
         wiring_generation=wiring_generation,
         writer_epoch=writer_epoch,
@@ -517,6 +521,39 @@ async def verify_ground_kernel_inventory(
     )
 
 
+def _stage_loss(counts: EndLossCounts, *, stage: int, end: str) -> StageLoss:
+    """What a long-delay end reported at OPEN or STOP. Each stage reports only its own counts;
+    another count from it is a contract the Scheduler does not understand, and it refuses."""
+    if stage == node_agent_pb2.LINK_UP_STAGE_OPEN:
+        unexpected = counts.queue_dropped or counts.discarded_at_close
+        unexpected = unexpected or counts.untransmitted_at_stop or counts.transmit_dropped
+        loss = StageLoss(refused_before_open=counts.admission_taken)
+    elif stage == node_agent_pb2.LINK_DOWN_STAGE_STOP_ADMISSION:
+        unexpected = counts.admission_taken or counts.queue_dropped or counts.discarded_at_close
+        loss = StageLoss(
+            untransmitted_at_stop=counts.untransmitted_at_stop,
+            transmit_dropped=counts.transmit_dropped,
+        )
+    else:
+        raise ValueError(f"stage {stage} is not one whose loss waits for the end's close")
+    if unexpected:
+        raise ValueError(f"{end} reported counts its stage {stage} does not produce: {counts}")
+    return loss
+
+
+def record_stage_losses(
+    result: ActuationResult, *, pair: LinkPair, info: ActiveLinkInfo, stage: int
+) -> None:
+    """Keep what each end of ``pair`` reported at its contact's OPEN or STOP on the contact's
+    record, until the end's close or reopen completes the end's loss."""
+    pair_ends = {(pair[0], info.interface_a), (pair[1], info.interface_b)}
+    for (node_id, interface), counts in sorted(result.end_losses.items()):
+        if (node_id, interface) not in pair_ends:
+            continue
+        reported = _stage_loss(counts, stage=stage, end=f"{node_id}/{interface}")
+        info.stage_losses[node_id] = info.stage_losses.get(node_id, StageLoss()).plus(reported)
+
+
 def end_loss_records(
     result: ActuationResult,
     *,
@@ -524,27 +561,26 @@ def end_loss_records(
     info: ActiveLinkInfo,
     cause: LinkEndCloseCause,
 ) -> tuple[LinkEndLoss, ...]:
-    """What each end of ``pair`` that this result closed reported losing, with the cause."""
+    """What each end of ``pair`` that this result closed, or reopened for a new contact, lost
+    during ``info``'s contact, with the cause: its close's counts and what it reported at the
+    contact's OPEN and STOP. The Node Agent reports every count once, since its last report, so
+    the counts add."""
     pair_ends = {(pair[0], info.interface_a), (pair[1], info.interface_b)}
     records = []
     for (node_id, interface), counts in sorted(result.end_losses.items()):
         if (node_id, interface) not in pair_ends:
             continue
-        # A reopened end's queue counted earlier contacts' drops; this contact's are the rest.
-        baseline = info.queue_drop_baselines.get(node_id, 0)
-        if counts.queue_dropped < baseline:
-            raise ValueError(
-                f"{node_id}/{interface}: its queue reports {counts.queue_dropped} drops, fewer "
-                f"than the {baseline} it had counted when contact "
-                f"{info.contact.contact_id if info.contact else None} opened"
-            )
+        stage = info.stage_losses.get(node_id, StageLoss())
         records.append(
             LinkEndLoss(
                 node_id=node_id,
                 interface=interface,
                 cause=cause,
+                refused_before_open=stage.refused_before_open,
+                untransmitted_at_stop=stage.untransmitted_at_stop + counts.untransmitted_at_stop,
                 admission_taken=counts.admission_taken,
-                queue_dropped=counts.queue_dropped - baseline,
+                transmit_dropped=stage.transmit_dropped + counts.transmit_dropped,
+                queue_dropped=counts.queue_dropped,
                 discarded_at_close=counts.discarded_at_close,
                 discarded_exact=counts.discarded_exact,
             )
@@ -789,42 +825,20 @@ async def send_batch_down(
     return result
 
 
-async def send_batch_up(
+async def _dispatch_link_up_plan(
     *,
-    pairs: set[LinkPair],
+    plan: LinkUpBatchPlan,
+    pairs: list[LinkPair],
     desired: Mapping[LinkPair, ActiveLinkInfo],
-    locator: Any,
     pool: Any,
-    js: Any,
-    subj_link_up: str,
     sim_iso: str,
-    sim_time: datetime,
     gs_capacities: Mapping[str, int],
-    latency_compensation: LatencyCompensationFn,
-    validate_authority_freshness: AuthorityFreshnessValidator,
-    link_provenance: LinkProvenanceBuilder,
-    interface_rates: Mapping[tuple[str, str], InterfaceRates],
     session_id: str,
     wiring_generation: str,
     writer_epoch: int,
+    label: str,
 ) -> ActuationResult:
-    """Send BatchLinkUp to Node Agents and publish LinkUp proof events."""
-    sorted_pairs = sorted(pairs)
-    for pair in sorted_pairs:
-        info = desired.get(pair)
-        if info is None:
-            raise RuntimeError(f"Dispatch planner requested LinkUp for missing desired pair {pair}")
-        validate_authority_freshness(pair, info, sim_time, operation="LinkUp")
-
-    plan = build_link_up_batch_plan(
-        pairs=sorted_pairs,
-        desired=desired,
-        locator=locator,
-        gs_capacities=gs_capacities,
-        compensation_for_pair=latency_compensation,
-        interface_rates=interface_rates,
-    )
-
+    """Send one BatchLinkUp plan to its Node Agents and judge every pair on the acks."""
     agent_results: list[AgentCommandResult] = []
     agent_addrs = list(plan.agent_ifaces.keys())
     dispatch_started = time.monotonic()
@@ -840,6 +854,7 @@ async def send_batch_up(
                         session_id=session_id,
                         wiring_generation=wiring_generation,
                         writer_epoch=writer_epoch,
+                        label=label,
                     )
                     for addr in agent_addrs
                 ]
@@ -847,13 +862,13 @@ async def send_batch_up(
         )
     dispatch_elapsed_ms = (time.monotonic() - dispatch_started) * 1000.0
 
-    pair_link_type = {pair: desired[pair].link_type for pair in sorted_pairs}
+    pair_link_type = {pair: desired[pair].link_type for pair in pairs}
     pair_gs_id = {
-        pair: _gs_id_for_pair(pair, gs_capacities, pair_link_type[pair]) for pair in sorted_pairs
+        pair: _gs_id_for_pair(pair, gs_capacities, pair_link_type[pair]) for pair in pairs
     }
     result = build_actuation_result(
         operation="BatchLinkUp",
-        requested_pairs=sorted_pairs,
+        requested_pairs=pairs,
         pair_agent_ifaces=plan.pair_agent_ifaces,
         pair_link_type=pair_link_type,
         pair_gs_id=pair_gs_id,
@@ -862,12 +877,26 @@ async def send_batch_up(
     if agent_addrs:
         _log_actuation_latency(
             operation="BatchLinkUp",
-            pair_count=len(sorted_pairs),
+            pair_count=len(pairs),
             agent_count=len(agent_addrs),
             elapsed_ms=dispatch_elapsed_ms,
             result=result,
         )
+    return result
 
+
+async def _publish_link_ups(
+    *,
+    result: ActuationResult,
+    plan: LinkUpBatchPlan,
+    desired: Mapping[LinkPair, ActiveLinkInfo],
+    js: Any,
+    subj_link_up: str,
+    sim_time: datetime,
+    validate_authority_freshness: AuthorityFreshnessValidator,
+    link_provenance: LinkProvenanceBuilder,
+) -> None:
+    """Publish LinkUp for every pair the Node Agents proved open."""
     now = datetime.now(UTC)
     for pair in sorted(result.succeeded_pairs):
         info = desired[pair]
@@ -890,6 +919,163 @@ async def send_batch_up(
             contact_id=info.contact.contact_id if info.contact is not None else None,
         )
         await js.publish(subj_link_up, event.model_dump_json().encode())
+
+
+async def send_batch_up(
+    *,
+    pairs: set[LinkPair],
+    desired: Mapping[LinkPair, ActiveLinkInfo],
+    locator: Any,
+    pool: Any,
+    js: Any,
+    subj_link_up: str,
+    sim_iso: str,
+    sim_time: datetime,
+    gs_capacities: Mapping[str, int],
+    latency_compensation: LatencyCompensationFn,
+    validate_authority_freshness: AuthorityFreshnessValidator,
+    link_provenance: LinkProvenanceBuilder,
+    interface_rates: Mapping[tuple[str, str], InterfaceRates],
+    session_id: str,
+    wiring_generation: str,
+    writer_epoch: int,
+) -> ActuationResult:
+    """Open local links in one stage (OPEN) and publish LinkUp for each one proven."""
+    sorted_pairs = sorted(pairs)
+    for pair in sorted_pairs:
+        info = desired.get(pair)
+        if info is None:
+            raise RuntimeError(f"Dispatch planner requested LinkUp for missing desired pair {pair}")
+        validate_authority_freshness(pair, info, sim_time, operation="LinkUp")
+
+    plan = build_link_up_batch_plan(
+        pairs=sorted_pairs,
+        desired=desired,
+        locator=locator,
+        gs_capacities=gs_capacities,
+        compensation_for_pair=latency_compensation,
+        interface_rates=interface_rates,
+        stage=node_agent_pb2.LINK_UP_STAGE_OPEN,
+    )
+    result = await _dispatch_link_up_plan(
+        plan=plan,
+        pairs=sorted_pairs,
+        desired=desired,
+        pool=pool,
+        sim_iso=sim_iso,
+        gs_capacities=gs_capacities,
+        session_id=session_id,
+        wiring_generation=wiring_generation,
+        writer_epoch=writer_epoch,
+        label="up",
+    )
+    await _publish_link_ups(
+        result=result,
+        plan=plan,
+        desired=desired,
+        js=js,
+        subj_link_up=subj_link_up,
+        sim_time=sim_time,
+        validate_authority_freshness=validate_authority_freshness,
+        link_provenance=link_provenance,
+    )
+    return result
+
+
+async def prepare_long_delay_contacts(
+    *,
+    pairs: set[LinkPair],
+    desired: Mapping[LinkPair, ActiveLinkInfo],
+    locator: Any,
+    pool: Any,
+    sim_iso: str,
+    sim_time: datetime,
+    gs_capacities: Mapping[str, int],
+    latency_compensation: LatencyCompensationFn,
+    validate_authority_freshness: AuthorityFreshnessValidator,
+    interface_rates: Mapping[tuple[str, str], InterfaceRates],
+    session_id: str,
+    wiring_generation: str,
+    writer_epoch: int,
+) -> tuple[LinkUpBatchPlan, ActuationResult]:
+    """PREPARE long-delay contacts at both ends: each end builds its shaping, receive queue and
+    neighbours with admission stopped, so nothing crosses the link yet. Publishes nothing; the
+    plan returned is the one ``open_prepared_contacts`` admits."""
+    sorted_pairs = sorted(pairs)
+    for pair in sorted_pairs:
+        info = desired.get(pair)
+        if info is None or info.contact is None:
+            raise RuntimeError(f"PREPARE requested for {pair}, which is no desired contact")
+        validate_authority_freshness(pair, info, sim_time, operation="LinkUp")
+    plan = build_link_up_batch_plan(
+        pairs=sorted_pairs,
+        desired=desired,
+        locator=locator,
+        gs_capacities=gs_capacities,
+        compensation_for_pair=latency_compensation,
+        interface_rates=interface_rates,
+        stage=node_agent_pb2.LINK_UP_STAGE_PREPARE,
+    )
+    result = await _dispatch_link_up_plan(
+        plan=plan,
+        pairs=sorted_pairs,
+        desired=desired,
+        pool=pool,
+        sim_iso=sim_iso,
+        gs_capacities=gs_capacities,
+        session_id=session_id,
+        wiring_generation=wiring_generation,
+        writer_epoch=writer_epoch,
+        label="prepare",
+    )
+    return plan, result
+
+
+async def open_prepared_contacts(
+    *,
+    plan: LinkUpBatchPlan,
+    pairs: set[LinkPair],
+    desired: Mapping[LinkPair, ActiveLinkInfo],
+    pool: Any,
+    js: Any,
+    subj_link_up: str,
+    sim_iso: str,
+    sim_time: datetime,
+    gs_capacities: Mapping[str, int],
+    validate_authority_freshness: AuthorityFreshnessValidator,
+    link_provenance: LinkProvenanceBuilder,
+    session_id: str,
+    wiring_generation: str,
+    writer_epoch: int,
+) -> ActuationResult:
+    """OPEN contacts both of whose ends PREPARE proved, with the prepared entries, and publish
+    LinkUp for each contact whose two ends acknowledged the open."""
+    sorted_pairs = sorted(pairs)
+    open_plan = restage_link_up_plan(
+        plan, pairs=sorted_pairs, stage=node_agent_pb2.LINK_UP_STAGE_OPEN
+    )
+    result = await _dispatch_link_up_plan(
+        plan=open_plan,
+        pairs=sorted_pairs,
+        desired=desired,
+        pool=pool,
+        sim_iso=sim_iso,
+        gs_capacities=gs_capacities,
+        session_id=session_id,
+        wiring_generation=wiring_generation,
+        writer_epoch=writer_epoch,
+        label="open",
+    )
+    await _publish_link_ups(
+        result=result,
+        plan=open_plan,
+        desired=desired,
+        js=js,
+        subj_link_up=subj_link_up,
+        sim_time=sim_time,
+        validate_authority_freshness=validate_authority_freshness,
+        link_provenance=link_provenance,
+    )
     return result
 
 

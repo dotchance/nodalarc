@@ -542,9 +542,10 @@ def execute_wiring(
                 _record_failure(nid_b, "isl_interfaces", f"mediated ISL to {nid_a}: {exc}")
     log.info("Created %d host-mediated ISL pairs", len(created_links))
 
-    # Admission hooks on the long-delay ISL endpoints, now, before the links carry traffic: a
-    # stop at the end of a contact then changes only a filter. A hook the interface already
-    # carries is reused. Local links get none. Endpoints on another host get theirs at LinkUp.
+    # Admission hooks on the long-delay ISL endpoints, now, before the links carry traffic, with
+    # admission stopped: a contact admits packets only at its OPEN, and a stop at its end changes
+    # only a filter. A hook the interface already carries is reused and stopped. Local links get
+    # none. Endpoints on another host get theirs when their pod end is created.
     long_delay = {
         (node_id, iface["name"])
         for node_id, node_spec in nodes.items()
@@ -555,7 +556,7 @@ def execute_wiring(
         if (nid, ifname) not in long_delay:
             continue
         try:
-            admission.install_admission_hook(pid, ifname)
+            admission.install_stopped_hook(pid, ifname)
         except Exception as exc:
             _record_failure(nid, "isl_interfaces", f"admission hook on {ifname}: {exc}")
     if requires_mpls:

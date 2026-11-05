@@ -67,9 +67,22 @@ enum LinkDownStage {
   // and delivery path stay, so packets already sent keep arriving. The acknowledgement proves
   // admission stopped, not that the contact closed.
   LINK_DOWN_STAGE_STOP_ADMISSION = 1;
+  // (STOP_ADMISSION also purges this end's untransmitted backlog: the packets waiting behind its
+  // transmit rate shaper never left the terminal before the contact ended. The acknowledgement
+  // proves the transmit queue empty.)
   // This end's remaining link resources are removed, and what its queues still held is counted.
   // On a local link this is the whole LinkDown.
   LINK_DOWN_STAGE_CLOSE = 2;
+}
+
+// What a BatchLinkUp entry does to its end of a link. Every entry states it. A long-delay end
+// opens in two stages, so no packet is admitted before both receive paths delay it: PREPARE
+// builds and proves the end with its admission stopped; OPEN admits packets on a prepared end.
+// A local end opens at once with OPEN.
+enum LinkUpStage {
+  LINK_UP_STAGE_UNSPECIFIED = 0;
+  LINK_UP_STAGE_PREPARE = 1;
+  LINK_UP_STAGE_OPEN = 2;
 }
 
 // What one end of a link lost, by cause. Substrate loss only: nothing here is loss the
@@ -84,6 +97,12 @@ message LinkEndLoss {
   // True when discarded_at_close is an exact count (nothing entered the queue during the close);
   // false when it is a queue-length sample.
   bool discarded_exact = 4;
+  // Packets waiting behind this end's transmit rate shaper when admission stopped: never
+  // transmitted before the contact ended. Counted by the kernel as the purge drops them.
+  uint64 untransmitted_at_stop = 5;
+  // Packets this end's transmit rate queue dropped at its limit: offered faster than the
+  // terminal's rate, beyond what its queue holds.
+  uint64 transmit_dropped = 6;
 }
 
 message CommandFailureResponse {
@@ -196,6 +215,7 @@ message InterfaceUp {
   // direction this end receives, which its receive-side queue applies.
   string contact_id = 20;
   double receive_latency_ms = 21;
+  LinkUpStage stage = 22;
 }
 
 message BatchLinkUpRequest {
@@ -292,6 +312,9 @@ message KernelInventoryEntry {
   string contact_id = 17;
   double receive_latency_ms = 18;
   bool expected_admission_stopped = 19;
+  // Long-delay ends only: report what the end carries (its contact, admission, receive queue)
+  // and prove nothing. A restarted Scheduler surveys every long-delay end before it dispatches.
+  bool survey = 20;
 }
 
 message KernelInventoryRequest {
@@ -311,6 +334,11 @@ message KernelInventoryEntryResult {
   bool dirty_kernel = 7;
   string proof_summary = 8;
   repeated string proof_evidence = 9;
+  // A survey's report: the contact the end carries (empty: none), whether its admission is
+  // stopped, and the delay its receive queue holds (0: no receive queue).
+  string carried_contact_id = 10;
+  bool admission_stopped = 11;
+  double receive_latency_ms = 12;
 }
 
 message KernelInventoryResponse {

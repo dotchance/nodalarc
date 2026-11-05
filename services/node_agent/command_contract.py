@@ -241,6 +241,16 @@ def validate_batch_link_up_request(request, *, fence: RuntimeFence) -> None:
             )
         _validate_peer_latency(iface, operation=KIND_BATCH_LINK_UP)
         _validate_terminal_rates(iface, operation=KIND_BATCH_LINK_UP)
+        # Every entry states what it does: an omitted stage would otherwise open a long-delay end
+        # before its peer's receive queue delays what it sends.
+        if iface.stage not in (
+            node_agent_pb2.LINK_UP_STAGE_PREPARE,
+            node_agent_pb2.LINK_UP_STAGE_OPEN,
+        ):
+            raise CommandContractError(
+                node_agent_pb2.NODE_AGENT_INVALID_FIELD,
+                f"BatchLinkUp entry {iface.node_id}/{iface.interface_name} states no stage",
+            )
 
 
 def validate_batch_link_down_request(request, *, fence: RuntimeFence) -> None:
@@ -289,6 +299,14 @@ def _validate_long_delay_inventory(request) -> None:
                 node_agent_pb2.NODE_AGENT_INVALID_FIELD,
                 "a KernelInventory request without gs_id audits ISL ends only",
             )
+        if entry.locality == node_agent_pb2.LOCALITY_CROSS_NODE and entry.vni <= 0:
+            raise CommandContractError(
+                node_agent_pb2.NODE_AGENT_INVALID_FIELD,
+                "KernelInventory CROSS_NODE entry requires vni > 0",
+            )
+        if entry.survey:
+            # A survey reports what the end carries; it names no contact and proves nothing.
+            continue
         _require_nonempty(entry.contact_id, "contact_id")
         if entry.expected_admin_up:
             if not entry.receive_latency_ms > 0:

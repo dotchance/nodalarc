@@ -18,6 +18,7 @@ import os
 import socket
 import threading
 from collections.abc import Callable
+from dataclasses import dataclass
 from typing import TypeVar
 
 from nodalarc.platform_config import get_platform_config
@@ -188,6 +189,8 @@ def set_interface_down(pid: int, ifname: str) -> None:
 _SHAPER_ROOT = SHAPER_ROOT_HANDLE  # 1:
 _SHAPER_CLASS = SHAPER_CLASS_HANDLE  # 1:1
 _NETEM_HANDLE = NETEM_HANDLE  # 10:
+# The explicit leaf of a long-delay transmitter's rate class: its untransmitted backlog.
+TRANSMIT_LEAF_HANDLE = 0x00140000  # 20:
 
 
 def _is_shaper_root(qdisc) -> bool:
@@ -334,7 +337,15 @@ def update_delay(pid: int, ifname: str, delay_ms: float, transmit_mbps: float) -
 
 
 def apply_long_delay_transmit_shaping(pid: int, ifname: str, transmit_mbps: float) -> None:
-    """Shape a long-delay end's transmitting pod interface: the terminal's rate, no delay queue.
+    """Shape a long-delay end's transmitting pod interface: the terminal's rate, no delay queue,
+    and the rate class's queue as an explicit pfifo leaf (handle 20:) of the interface's queue
+    length.
+
+    The leaf is explicit so the stop can purge it: deleting a leaf drops what it holds and adds
+    the count to the root qdisc's drops, which is how the stop counts the untransmitted backlog
+    exactly (``admission.purge_untransmitted``). Rejected alternative: HTB's default leaf, which
+    has no handle and cannot be deleted. Called with admission stopped, so the leaf it replaces
+    holds nothing.
 
     The interface's class is fixed for the session, so a delay queue found on it is another
     link class's state, refused rather than removed.
@@ -352,6 +363,23 @@ def apply_long_delay_transmit_shaping(pid: int, ifname: str, transmit_mbps: floa
                 "delay belongs on the receiving side"
             )
         _rate_limit_egress(ipr, idx, transmit_mbps)
+        leaf = next((q for q in interface_qdiscs(idx) if q["parent"] == _SHAPER_CLASS), None)
+        if leaf is not None:
+            if leaf["handle"] == TRANSMIT_LEAF_HANDLE and leaf.get_attr("TCA_KIND") == "pfifo":
+                return
+            raise RuntimeError(
+                f"the rate class of long-delay transmitter {ifname} holds a "
+                f"{leaf.get_attr('TCA_KIND')} qdisc (handle {leaf['handle']:#x}), not its leaf"
+            )
+        (link,) = ipr.get_links(idx)
+        ipr.tc(
+            "add",
+            kind="pfifo",
+            index=idx,
+            handle=TRANSMIT_LEAF_HANDLE,
+            parent=_SHAPER_CLASS,
+            limit=int(link.get_attr("IFLA_TXQLEN")),
+        )
 
     _in_namespace(pid, _op)
 
@@ -436,33 +464,72 @@ def host_peer_of(pid: int, ifname: str) -> str:
     return in_host_namespace(_host)
 
 
-def tag_contact(host_ifname: str, contact_id: str) -> None:
+@dataclass(frozen=True, slots=True)
+class ContactTag:
+    """What a long-delay end's host-side veth records about the contact its queues belong to:
+    the contact, and the counts already reported for it (packets its admission filter took,
+    drops of its receive queue, drops of its transmit rate queue). Each report from the end is
+    the counts above these.
+
+    The kernel keeps it, in the device's alias. Rejected alternative: keeping the reported counts
+    in the Scheduler's memory or this process's. Either restarts, and a contact that outlives the
+    restart would report its earlier loss again."""
+
+    contact_id: str
+    taken_reported: int
+    dropped_reported: int
+    transmit_dropped_reported: int
+
+    def encoded(self) -> str:
+        return (
+            f"{self.contact_id};taken={self.taken_reported};dropped={self.dropped_reported};"
+            f"tx_dropped={self.transmit_dropped_reported}"
+        )
+
+    @classmethod
+    def decoded(cls, alias: str) -> ContactTag:
+        contact_id, *fields = alias.split(";")
+        values = dict(field.partition("=")[::2] for field in fields)
+        if not contact_id or set(values) != {"taken", "dropped", "tx_dropped"}:
+            raise ValueError(f"a contact tag of an unknown form: {alias!r}")
+        return cls(
+            contact_id, int(values["taken"]), int(values["dropped"]), int(values["tx_dropped"])
+        )
+
+
+def tag_contact(host_ifname: str, tag: ContactTag | None) -> None:
     """Record on a long-delay end's host-side veth the contact its receive queue belongs to (the
-    interface alias), so a stage for an earlier contact can never change a later one. The kernel
-    keeps it: a restarted Node Agent reads the contact from the device."""
+    interface alias), so a stage for an earlier contact can never change a later one; None
+    clears it. The kernel keeps it: a restarted Node Agent reads the contact from the device."""
 
     def _op(ipr: IPRoute) -> None:
         links = ipr.link_lookup(ifname=host_ifname)
         if not links:
             raise FileNotFoundError(f"Host interface {host_ifname} not found")
-        ipr.link("set", index=links[0], ifalias=contact_id)
+        ipr.link("set", index=links[0], ifalias="" if tag is None else tag.encoded())
 
     in_host_namespace(_op)
 
 
-def contact_of(host_ifname: str) -> str | None:
+def contact_tag(host_ifname: str) -> ContactTag | None:
     """The contact a long-delay end's host-side veth carries; None when it carries none (its
     alias empty) or the device is gone."""
 
-    def _op(ipr: IPRoute) -> str | None:
+    def _op(ipr: IPRoute) -> ContactTag | None:
         links = ipr.link_lookup(ifname=host_ifname)
         if not links:
             return None
         (link,) = ipr.get_links(links[0])
         alias = link.get_attr("IFLA_IFALIAS")
-        return alias or None
+        return ContactTag.decoded(alias) if alias else None
 
     return in_host_namespace(_op)
+
+
+def contact_of(host_ifname: str) -> str | None:
+    """The contact id a long-delay end's host-side veth carries, None when it carries none."""
+    tag = contact_tag(host_ifname)
+    return tag.contact_id if tag is not None else None
 
 
 # ---------------------------------------------------------------------------

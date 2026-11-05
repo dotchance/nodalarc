@@ -12,7 +12,7 @@ from typing import Any
 from nodalarc.platform_config import get_platform_config
 from nodalarc.runtime_naming import vxlan_host_ifnames
 from nodalarc.substrate.queue_sizing import queue_limit_packets
-from pyroute2.netlink.rtnl import TC_H_INGRESS
+from pyroute2.netlink.rtnl import TC_H_INGRESS, TC_H_ROOT
 
 from node_agent.kernel_constants import (
     IFF_UP,
@@ -397,9 +397,17 @@ def _prove_delay_queue(
     return None
 
 
-def verify_long_delay_transmit(pid: int, ifname: str, *, transmit_mbps: float) -> Proof:
+# The explicit pfifo leaf of a long-delay transmitter's rate class (namespace_ops).
+_TRANSMIT_LEAF_HANDLE = 0x00140000
+
+
+def verify_long_delay_transmit(
+    pid: int, ifname: str, *, transmit_mbps: float, leaf: bool = True
+) -> Proof:
     """Prove a long-delay end's transmitting pod interface: the terminal's rate and no delay
-    queue (its direction's delay is on the receiving side)."""
+    queue (its direction's delay is on the receiving side), and while its contact is prepared or
+    open (``leaf``), the rate class's explicit leaf that a stop purges. After a stop the leaf is
+    gone."""
 
     def _op(ipr):
         rows = _qdisc_rows(ipr, ifname)
@@ -418,7 +426,42 @@ def verify_long_delay_transmit(pid: int, ifname: str, *, transmit_mbps: float) -
     )
     if failed is not None:
         return failed
+    has_leaf = any(
+        row["kind"] == "pfifo"
+        and row["handle"] == _TRANSMIT_LEAF_HANDLE
+        and row["parent"] == SHAPER_CLASS_HANDLE
+        for row in rows
+    )
+    if has_leaf != leaf:
+        return Proof.fail(
+            f"long-delay transmitter {ifname} "
+            + ("lacks its rate class's leaf" if leaf else "still holds its purged leaf"),
+            *evidence,
+        )
     return Proof.ok(f"long-delay transmit shaping verified on {ifname}", *evidence)
+
+
+def verify_transmit_queue_empty(pid: int, ifname: str) -> Proof:
+    """Prove a stopped long-delay transmitter holds nothing to transmit: its root qdisc is
+    empty."""
+
+    def _op(ipr):
+        rows = _qdisc_rows(ipr, ifname)
+        return [row for row in rows if row["parent"] == TC_H_ROOT]
+
+    try:
+        roots = _in_namespace(pid, _op)
+    except Exception as exc:
+        return Proof.fail(f"transmit queue proof failed for {ifname}", f"pid={pid}", str(exc))
+    evidence = [f"pid={pid}", f"ifname={ifname}", *(row["raw"] for row in roots)]
+    if len(roots) != 1:
+        return Proof.fail(f"{ifname} has {len(roots)} root qdiscs", *evidence)
+    from node_agent import loss
+
+    held = _in_namespace(pid, lambda ipr: loss.root_counts(ipr, ifname)).held
+    if held:
+        return Proof.fail(f"{ifname} still holds {held} packets to transmit", *evidence)
+    return Proof.ok(f"nothing left to transmit on {ifname}", *evidence)
 
 
 def verify_receive_delay_queue(
@@ -454,6 +497,24 @@ def verify_receive_delay_queue(
         f"limit={limit}",
         *evidence,
     )
+
+
+def receive_queue_delay_ms(host_ifname: str) -> float:
+    """The delay a long-delay end's receive queue holds on its host-side veth, in ms; 0 when the
+    veth holds no receive queue or is gone."""
+
+    def _op(ipr):
+        if not ipr.link_lookup(ifname=host_ifname):
+            return None
+        return _shaper_netem(_qdisc_rows(ipr, host_ifname))
+
+    netem = in_host_namespace(_op)
+    if netem is None:
+        return 0.0
+    delay_ns = latency_ns(netem["options"])
+    if delay_ns is None:
+        raise RuntimeError(f"cannot read the receive queue delay of {host_ifname}")
+    return delay_ns / 1_000_000.0
 
 
 def verify_contact(host_ifname: str, contact_id: str) -> Proof:

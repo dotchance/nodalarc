@@ -123,6 +123,8 @@ def create_vxlan_link(
     local_ip: str,
     remote_ip: str,
     vni: int,
+    *,
+    long_delay: bool,
     mtu: int | None = None,
 ) -> bool:
     """Create a VXLAN-backed interface in a pod namespace, or reuse the proven one.
@@ -143,6 +145,9 @@ def create_vxlan_link(
         node_id: The pod's node; with ifname it gives the pod end its MAC address, the one every
             host derives for it (``runtime_naming.link_interface_mac``).
         ifname: Target interface name inside the pod (e.g., "isl0", "term0", "gnd0").
+        long_delay: The interface is a long-delay link's end: it gets its admission hook with
+            admission stopped before it comes up, so it forwards nothing until its contact
+            opens (``admission.install_stopped_hook_with``).
         local_ip: This node's IP (VXLAN local endpoint).
         remote_ip: Peer node's IP (VXLAN remote endpoint).
         vni: VXLAN Network Identifier.
@@ -275,6 +280,10 @@ def create_vxlan_link(
     # has, so the far host can pin a static neighbour to it, then bring it UP
     def _configure_in_pod(ns_ipr):
         assign_link_mac(pid, ifname, node_id, ipr=ns_ipr)
+        if long_delay:
+            from node_agent import admission
+
+            admission.install_stopped_hook_with(ns_ipr, ifname)
         ns_ipr.link("set", index=ns_ipr.link_lookup(ifname=ifname)[0], state="up")
 
     _in_namespace(pid, _configure_in_pod)

@@ -43,7 +43,7 @@ class QueueCounts:
         return self.held + self.sent + self.dropped
 
 
-def _root_counts(ipr: IPRoute, ifname: str) -> QueueCounts:
+def root_counts(ipr: IPRoute, ifname: str) -> QueueCounts:
     found = ipr.link_lookup(ifname=ifname)
     if not found:
         raise FileNotFoundError(f"interface {ifname} not found")
@@ -70,8 +70,8 @@ class QueueDevice:
 
     def counts(self) -> QueueCounts:
         if self.pid is None:
-            return in_host_namespace(lambda ipr: _root_counts(ipr, self.ifname))
-        return _in_namespace(self.pid, lambda ipr: _root_counts(ipr, self.ifname))
+            return in_host_namespace(lambda ipr: root_counts(ipr, self.ifname))
+        return _in_namespace(self.pid, lambda ipr: root_counts(ipr, self.ifname))
 
 
 def counted_reset(devices: list[QueueDevice], reset: Callable[[], None]) -> list[int]:

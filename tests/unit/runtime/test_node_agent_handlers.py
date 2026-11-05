@@ -139,6 +139,7 @@ class TestBatchLinkUp:
                     rates=node_agent_pb2.TerminalRates(transmit_mbps=1000.0, receive_mbps=1000.0),
                     peer_node_id="sat-P00S01",
                     peer_interface_name="isl1",
+                    stage=node_agent_pb2.LINK_UP_STAGE_OPEN,
                 ),
             ],
         )

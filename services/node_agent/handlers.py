@@ -149,6 +149,8 @@ class EntryOutcome:
     loss: node_agent_pb2.LinkEndLoss | None = None
     # A stage for a contact the end no longer carries: it changed nothing.
     superseded: bool = False
+    # A survey's report: (carried contact or "", admission stopped, receive queue delay in ms).
+    survey: tuple[str, bool, float] | None = None
 
     @property
     def success(self) -> bool:
@@ -479,24 +481,53 @@ def _superseded(iface: node_agent_pb2.InterfaceDown, host_ifname: str) -> EntryO
     )
 
 
+def _since_reported(count: int, reported: int) -> int:
+    """What a kernel counter counted since the end last reported it. A counter only grows, so a
+    count below the reported value belongs to a counter created after the report (a new
+    admission filter, a fresh receive queue): all of it is new."""
+    return count - reported if count >= reported else count
+
+
 def _stop_long_delay_admission(
     iface: node_agent_pb2.InterfaceDown, handles: dict[str, NamespaceHandle]
 ) -> EntryOutcome:
-    """STOP_ADMISSION on a long-delay end: its transmitting interface admits nothing more; its
-    queues and delivery path stay, so packets already sent keep arriving."""
+    """STOP_ADMISSION on a long-delay end: its transmitting interface admits nothing more, and
+    what waited behind its rate shaper is purged and counted, never transmitted before the
+    contact ended. Its receive queue and delivery path stay, so packets already transmitted keep
+    arriving. The acknowledgement proves admission stopped and the transmit queue empty."""
     try:
         pid = _require_pid(iface.node_id, handles)
         host_ifname = _host_ifname_down(iface)
         superseded = _superseded(iface, host_ifname)
         if superseded is not None:
             return superseded
+        tag = namespace_ops.contact_tag(host_ifname)
+        if tag is None:
+            raise RuntimeError(f"{host_ifname} lost its contact tag during the stop")
         admission.stop_admission(pid, iface.interface_name)
-        return _combine_proofs(
-            "long-delay admission stopped",
+        purge = admission.purge_untransmitted(pid, iface.interface_name)
+        # The transmit queue's drops are now reported up to the purge, and the purge itself.
+        namespace_ops.tag_contact(
+            host_ifname,
+            replace(tag, transmit_dropped_reported=purge.dropped_before + purge.purged),
+        )
+        outcome = _combine_proofs(
+            "long-delay admission stopped, untransmitted backlog purged",
             [
                 admission.verify_admission_hook(pid, iface.interface_name, stopped=True),
+                kernel_verifier.verify_transmit_queue_empty(pid, iface.interface_name),
                 kernel_verifier.verify_contact(host_ifname, iface.contact_id),
             ],
+        )
+        return replace(
+            outcome,
+            loss=node_agent_pb2.LinkEndLoss(
+                untransmitted_at_stop=purge.purged,
+                transmit_dropped=_since_reported(
+                    purge.dropped_before, tag.transmit_dropped_reported
+                ),
+                discarded_exact=True,
+            ),
         )
     except Exception as exc:
         msg = f"stop admission failed {iface.node_id}/{iface.interface_name}: {exc}"
@@ -509,13 +540,17 @@ def _close_long_delay_end(
 ) -> EntryOutcome:
     """CLOSE on a long-delay end: its receive queue is reset by bringing its host-side veth down,
     and what the queue still held is counted exactly (both ends stopped admitting before the
-    close, so nothing enters it); then the end's link resources go. Reports what the end lost."""
+    close, so nothing enters it); then the end's link resources go. Reports what the end lost
+    since its contact's last report, from the counts its contact tag records."""
     try:
         pid = _require_pid(iface.node_id, handles)
         host_ifname = _host_ifname_down(iface)
         superseded = _superseded(iface, host_ifname)
         if superseded is not None:
             return superseded
+        tag = namespace_ops.contact_tag(host_ifname)
+        if tag is None:
+            raise RuntimeError(f"{host_ifname} lost its contact tag during the close")
         state = admission.read_admission(pid, iface.interface_name)
         if not state.stopped or state.taken is None:
             # The close counts what the queue holds while nothing enters it; with admission
@@ -525,7 +560,7 @@ def _close_long_delay_end(
                 f"close of {iface.node_id}/{iface.interface_name}: its admission is not stopped",
                 dirty_kernel=True,
             )
-        taken = state.taken
+        transmit_dropped = loss.QueueDevice(iface.interface_name, pid).counts().dropped
         device = loss.QueueDevice(host_ifname, None)
         before = device.counts()
         (discarded,) = loss.counted_reset([device], lambda: _set_host_down(host_ifname))
@@ -533,14 +568,15 @@ def _close_long_delay_end(
             vxlan.destroy_vxlan_link(pid, iface.interface_name, iface.vni)
             proof = kernel_verifier.verify_vxlan_absent(iface.vni)
         else:
-            namespace_ops.tag_contact(host_ifname, "")
+            namespace_ops.tag_contact(host_ifname, None)
             proof = kernel_verifier.verify_host_interface_state(host_ifname, admin_up=False)
         outcome = _combine_proofs("long-delay end closed", [proof])
         return replace(
             outcome,
             loss=node_agent_pb2.LinkEndLoss(
-                admission_taken=taken,
-                queue_dropped=before.dropped,
+                admission_taken=_since_reported(state.taken, tag.taken_reported),
+                queue_dropped=_since_reported(before.dropped, tag.dropped_reported),
+                transmit_dropped=_since_reported(transmit_dropped, tag.transmit_dropped_reported),
                 discarded_at_close=discarded,
                 discarded_exact=True,
             ),
@@ -885,7 +921,7 @@ def handle_batch_link_down(
             # A local link has no admission hook and no drain: it closes at once.
             outcomes[_iface_key(iface)] = _fail(
                 node_agent_pb2.NODE_AGENT_INVALID_FIELD,
-                f"{iface.node_id}/{iface.interface_name} is a local link end; it closes at once",
+                f"{iface.node_id}/{iface.interface_name} is not a long-delay link end; it closes at once",
             )
             continue
         try:
@@ -1082,18 +1118,21 @@ def _long_delay_limit(delay_ms: float, transmit_mbps: float) -> int:
     )
 
 
-def _open_long_delay_contact(
+def _prepare_long_delay_contact(
     pid: int, host_ifname: str, iface: node_agent_pb2.InterfaceUp
 ) -> tuple[list[kernel_verifier.Proof], node_agent_pb2.LinkEndLoss | None]:
-    """Open a contact on a long-delay end: admission open on the transmitting pod interface,
-    which keeps only the terminal's rate; the received direction's delay queue on the host-side
-    veth, sized from the traffic envelope; and the contact recorded on that veth. Returns the
-    proofs, and on a reopen what the contact that ended lost at this end.
+    """PREPARE a contact on a long-delay end, with its admission stopped first: the transmitting
+    pod interface's rate shaper and explicit leaf, the received direction's delay queue on the
+    host-side veth (sized from the traffic envelope), and the contact recorded on that veth.
+    Nothing crosses the link until OPEN. Returns the proofs, and on a reopen what the contact
+    that ended lost at this end.
 
-    A contact that reopens while the last one drains keeps the drained packets in the same
-    queue: they were sent to this same receiver. The ended contact's loss is what its stopped
-    admission took and what the queue dropped at its limit until now; the queue's drop counter
-    goes on counting for the new contact, which subtracts this value at its close."""
+    A repeated PREPARE of the contact the end carries changes and reports nothing. A contact that
+    reopens while the last one drains keeps the drained packets in the same queue: they were
+    sent to this same receiver. The ended contact's loss is what its admission filter took and
+    what the queue dropped since the contact's last report; the new contact's tag starts from
+    the counts as they stand. On a fresh end, refusals while the end carried no contact belong to
+    no contact and are left out."""
     if not iface.contact_id:
         raise ValueError(
             f"long-delay LinkUp of {iface.node_id}/{iface.interface_name} names no contact"
@@ -1103,19 +1142,40 @@ def _open_long_delay_contact(
             f"long-delay LinkUp of {iface.node_id}/{iface.interface_name} has no received delay"
         )
     limit = _long_delay_limit(iface.receive_latency_ms, iface.rates.receive_mbps)
-    fresh = namespace_ops.contact_of(host_ifname) is None
-    dropped_so_far = None if fresh else loss.QueueDevice(host_ifname, None).counts().dropped
-    taken = admission.open_admission(pid, iface.interface_name)
+    admission.stop_admission(pid, iface.interface_name)
+    taken = admission.read_admission(pid, iface.interface_name).taken
+    if taken is None:
+        raise RuntimeError(f"admission on {iface.interface_name} did not stop")
+    tag = namespace_ops.contact_tag(host_ifname)
     namespace_ops.apply_long_delay_transmit_shaping(
         pid, iface.interface_name, iface.rates.transmit_mbps
     )
+    transmit_dropped = loss.QueueDevice(iface.interface_name, pid).counts().dropped
+    ended: node_agent_pb2.LinkEndLoss | None = None
+    if tag is not None and tag.contact_id != iface.contact_id:
+        dropped = loss.QueueDevice(host_ifname, None).counts().dropped
+        ended = node_agent_pb2.LinkEndLoss(
+            admission_taken=_since_reported(taken, tag.taken_reported),
+            queue_dropped=_since_reported(dropped, tag.dropped_reported),
+            transmit_dropped=_since_reported(transmit_dropped, tag.transmit_dropped_reported),
+            discarded_exact=True,
+        )
     namespace_ops.apply_receive_delay_queue(
-        host_ifname, iface.rates.receive_mbps, iface.receive_latency_ms, limit, fresh=fresh
+        host_ifname, iface.rates.receive_mbps, iface.receive_latency_ms, limit, fresh=tag is None
     )
-    namespace_ops.tag_contact(host_ifname, iface.contact_id)
+    if tag is None or tag.contact_id != iface.contact_id:
+        namespace_ops.tag_contact(
+            host_ifname,
+            namespace_ops.ContactTag(
+                contact_id=iface.contact_id,
+                taken_reported=taken,
+                dropped_reported=loss.QueueDevice(host_ifname, None).counts().dropped,
+                transmit_dropped_reported=transmit_dropped,
+            ),
+        )
     return [
         kernel_verifier.verify_pod_interface_exists(pid, iface.interface_name),
-        admission.verify_admission_hook(pid, iface.interface_name, stopped=False),
+        admission.verify_admission_hook(pid, iface.interface_name, stopped=True),
         kernel_verifier.verify_long_delay_transmit(
             pid, iface.interface_name, transmit_mbps=iface.rates.transmit_mbps
         ),
@@ -1126,15 +1186,58 @@ def _open_long_delay_contact(
             limit=limit,
         ),
         kernel_verifier.verify_contact(host_ifname, iface.contact_id),
-    ], (
-        None
-        if dropped_so_far is None
-        else node_agent_pb2.LinkEndLoss(
-            # Admission open at the reopen (a contact renamed without a stop) took nothing.
-            admission_taken=taken if taken is not None else 0,
-            queue_dropped=dropped_so_far,
-            discarded_exact=True,
+    ], ended
+
+
+def _open_prepared_contact(
+    pid: int, host_ifname: str, iface: node_agent_pb2.InterfaceUp
+) -> EntryOutcome:
+    """OPEN a prepared long-delay contact: admit packets on the end. The end must carry the
+    contact with its shaping and receive queue as PREPARE built them; anything else refuses, so a
+    late OPEN never admits onto another contact. Reports what the stopped admission refused
+    between PREPARE and OPEN. A repeated OPEN of an open contact changes and reports nothing."""
+    tag = namespace_ops.contact_tag(host_ifname)
+    if tag is None or tag.contact_id != iface.contact_id:
+        return _fail(
+            node_agent_pb2.NODE_AGENT_KERNEL_PROOF_FAILED,
+            f"OPEN of {iface.node_id}/{iface.interface_name}: the end carries "
+            f"{tag.contact_id if tag else 'no contact'}, not prepared contact {iface.contact_id}",
+            dirty_kernel=True,
         )
+    limit = _long_delay_limit(iface.receive_latency_ms, iface.rates.receive_mbps)
+    prepared = [
+        kernel_verifier.verify_long_delay_transmit(
+            pid, iface.interface_name, transmit_mbps=iface.rates.transmit_mbps
+        ),
+        kernel_verifier.verify_receive_delay_queue(
+            host_ifname,
+            receive_mbps=iface.rates.receive_mbps,
+            delay_ms=iface.receive_latency_ms,
+            limit=limit,
+        ),
+    ]
+    if not all(proof.verified for proof in prepared):
+        return _combine_proofs("prepared contact not found for OPEN", prepared)
+    # The admission filter's count is frozen first, so every packet it refused is reported, and
+    # reported once: the tag records the count before the filter goes.
+    frozen = admission.freeze_admission(pid, iface.interface_name)
+    refused = 0
+    if frozen is not None:
+        refused = _since_reported(frozen, tag.taken_reported)
+        namespace_ops.tag_contact(host_ifname, replace(tag, taken_reported=frozen))
+        admission.open_admission(pid, iface.interface_name)
+        # The filter and its count are gone; the next stop's filter counts from 0.
+        namespace_ops.tag_contact(host_ifname, replace(tag, taken_reported=0))
+    outcome = _combine_proofs(
+        "long-delay contact open",
+        [
+            *prepared,
+            admission.verify_admission_hook(pid, iface.interface_name, stopped=False),
+            kernel_verifier.verify_contact(host_ifname, iface.contact_id),
+        ],
+    )
+    return replace(
+        outcome, loss=node_agent_pb2.LinkEndLoss(admission_taken=refused, discarded_exact=True)
     )
 
 
@@ -1159,6 +1262,12 @@ def _isl_link_up_carrier_stage(
         if handles is None:
             raise ValueError("handles is None — wiring not complete?")
         pid = _require_pid(iface.node_id, handles)
+        long_delay = handles[iface.node_id].is_long_delay(iface.interface_name)
+        if long_delay and iface.stage == node_agent_pb2.LINK_UP_STAGE_OPEN:
+            return _open_prepared_contact(pid, _isl_host_ifname(iface), iface)
+        if long_delay:
+            # Admission stops before the host side can forward: nothing crosses until OPEN.
+            admission.stop_admission(pid, iface.interface_name)
         if iface.locality == node_agent_pb2.LOCALITY_LOCAL:
             ground_bridge.attach_isl(
                 iface.node_id,
@@ -1167,10 +1276,9 @@ def _isl_link_up_carrier_stage(
                 iface.peer_interface_name,
             )
         host_ifname = _isl_host_ifname(iface)
-        long_delay = handles[iface.node_id].is_long_delay(iface.interface_name)
         ended: node_agent_pb2.LinkEndLoss | None = None
         if long_delay:
-            proofs, ended = _open_long_delay_contact(pid, host_ifname, iface)
+            proofs, ended = _prepare_long_delay_contact(pid, host_ifname, iface)
         else:
             namespace_ops.apply_transmit_shaping(
                 pid, iface.interface_name, iface.latency_ms, iface.rates.transmit_mbps
@@ -1310,18 +1418,41 @@ def handle_batch_link_up(
                 message=str(exc),
             )
 
+    # A long-delay ISL end opens in two stages, PREPARE then OPEN; every other end opens at once
+    # (OPEN). A wrong stage is refused before any change.
+    stage_refused: set[tuple[str, str]] = set()
+    for iface in request.interfaces:
+        long_delay = iface.link_type == node_agent_pb2.LINK_TYPE_ISL and pm[
+            iface.node_id
+        ].is_long_delay(iface.interface_name)
+        if not long_delay and iface.stage == node_agent_pb2.LINK_UP_STAGE_PREPARE:
+            outcomes[_iface_key(iface)] = _fail(
+                node_agent_pb2.NODE_AGENT_INVALID_FIELD,
+                f"{iface.node_id}/{iface.interface_name} is not a long-delay link end; it opens at once",
+            )
+            stage_refused.add(_iface_key(iface))
+
     # Preparation stage: Create VXLAN tunnels for CROSS_NODE interfaces.
     # Each interface carries its own locality — only CROSS_NODE interfaces
-    # need VXLAN. LOCAL interfaces in the same batch are unaffected.
+    # need VXLAN. LOCAL interfaces in the same batch are unaffected. A long-delay end's tunnel
+    # is created at PREPARE; its OPEN finds the prepared one.
     #
     # ISL CROSS_NODE: create VXLAN + veth pair, move veth into pod namespace
     # GROUND CROSS_NODE: create VXLAN in host ns, tc mirred to existing host-side
     #   interface (satellite _gnd_{sat} or GS _gbr-{gs}). Pod-side gnd0 already
     #   exists from wiring. Same carrier model as LOCAL ground links.
     local_ip: str | None = None
-    preparation_failed: set[tuple[str, str]] = set()
+    preparation_failed: set[tuple[str, str]] = set(stage_refused)
     for iface in request.interfaces:
-        if iface.locality != node_agent_pb2.LOCALITY_CROSS_NODE:
+        if iface.locality != node_agent_pb2.LOCALITY_CROSS_NODE or _iface_key(iface) in (
+            stage_refused
+        ):
+            continue
+        if (
+            iface.link_type == node_agent_pb2.LINK_TYPE_ISL
+            and iface.stage == node_agent_pb2.LINK_UP_STAGE_OPEN
+            and pm[iface.node_id].is_long_delay(iface.interface_name)
+        ):
             continue
         try:
             if local_ip is None:
@@ -1423,6 +1554,7 @@ def handle_batch_link_up(
                     local_ip=local_ip,
                     remote_ip=iface.remote_node_ip,
                     vni=iface.vni,
+                    long_delay=pm[iface.node_id].is_long_delay(iface.interface_name),
                 )
                 substrate_monitor.add_peer_ref(
                     substrate_monitor.PeerRef(
@@ -1433,10 +1565,6 @@ def handle_batch_link_up(
                         local_ifname=iface.interface_name,
                     )
                 )
-                if created and pm[iface.node_id].is_long_delay(iface.interface_name):
-                    # The pod end is new and carries nothing yet: its admission hook goes on now,
-                    # before traffic, so stopping admission later changes only a filter.
-                    admission.install_admission_hook(pid, iface.interface_name)
                 if _requires_mpls(iface.node_id, pm):
                     # The creating operation configures what it created and
                     # only verifies what it reused; a mismatch on reuse is a
@@ -1570,7 +1698,55 @@ def _kernel_inventory_entry_result(
         dirty_kernel=outcome.dirty_kernel,
         proof_summary=outcome.proof_summary,
         proof_evidence=list(outcome.proof_evidence),
+        carried_contact_id=outcome.survey[0] if outcome.survey else "",
+        admission_stopped=outcome.survey[1] if outcome.survey else False,
+        receive_latency_ms=outcome.survey[2] if outcome.survey else 0.0,
     )
+
+
+def _survey_long_delay_end(
+    entry: node_agent_pb2.KernelInventoryEntry,
+    handles: dict[str, NamespaceHandle] | None = None,
+) -> EntryOutcome:
+    """Read-only report of what a long-delay ISL end carries: its contact, whether its admission
+    is stopped, and its receive queue's delay. A restarted Scheduler adopts it before it
+    dispatches. A cross-node end whose pod interface is gone carries nothing."""
+    try:
+        if handles is None:
+            raise ValueError("handles is None — wiring not complete?")
+        pid = _require_pid(entry.node_id, handles)
+        if not handles[entry.node_id].is_long_delay(entry.interface_name):
+            return _fail(
+                node_agent_pb2.NODE_AGENT_INVALID_FIELD,
+                f"{entry.node_id}/{entry.interface_name} is not a long-delay end",
+            )
+        if entry.locality == node_agent_pb2.LOCALITY_CROSS_NODE:
+            host_ifname = vxlan_host_ifnames(entry.vni).host_veth
+        else:
+            host_ifname = ground_bridge._isl_host_name(
+                entry.node_id, ground_bridge._isl_idx_from_ifname(entry.interface_name)
+            )
+        carried = namespace_ops.contact_of(host_ifname) or ""
+        stopped = False
+        if carried:
+            stopped = admission.read_admission(pid, entry.interface_name).stopped
+        delay_ms = kernel_verifier.receive_queue_delay_ms(host_ifname) if carried else 0.0
+        return replace(
+            _ok(
+                kernel_verifier.Proof.ok(
+                    f"{entry.node_id}/{entry.interface_name} surveyed",
+                    f"host_ifname={host_ifname}",
+                    f"contact={carried or None}",
+                    f"admission_stopped={stopped}",
+                    f"receive_delay_ms={delay_ms}",
+                )
+            ),
+            survey=(carried, stopped, delay_ms),
+        )
+    except Exception as exc:
+        msg = f"long-delay survey failed {entry.node_id}/{entry.interface_name}: {exc}"
+        log.warning(msg)
+        return _fail(node_agent_pb2.NODE_AGENT_KERNEL_PROOF_FAILED, msg)
 
 
 def _verify_long_delay_inventory_entry(
@@ -1620,7 +1796,11 @@ def _verify_long_delay_inventory_entry(
                     pid, entry.interface_name, stopped=entry.expected_admission_stopped
                 ),
                 kernel_verifier.verify_long_delay_transmit(
-                    pid, entry.interface_name, transmit_mbps=entry.rates.transmit_mbps
+                    pid,
+                    entry.interface_name,
+                    transmit_mbps=entry.rates.transmit_mbps,
+                    # A stop purged the leaf; an open or prepared contact holds it.
+                    leaf=not entry.expected_admission_stopped,
                 ),
                 kernel_verifier.verify_receive_delay_queue(
                     host_ifname,
@@ -1805,7 +1985,9 @@ def handle_kernel_inventory(
 
     futures = {
         _BATCH_POOL.submit(
-            _verify_long_delay_inventory_entry
+            _survey_long_delay_end
+            if entry.survey
+            else _verify_long_delay_inventory_entry
             if entry.link_type == node_agent_pb2.LINK_TYPE_ISL
             else _verify_kernel_inventory_entry,
             entry,

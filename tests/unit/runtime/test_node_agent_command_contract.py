@@ -64,6 +64,7 @@ def _isl_up(**fields) -> node_agent_pb2.InterfaceUp:
         "locality": node_agent_pb2.LOCALITY_LOCAL,
         "latency_ms": 4.0,
         "rates": _rates(2000.0, 2000.0),
+        "stage": node_agent_pb2.LINK_UP_STAGE_OPEN,
     }
     base.update(fields)
     return node_agent_pb2.InterfaceUp(**base)
@@ -82,6 +83,7 @@ def _local_ground_up(**fields) -> node_agent_pb2.InterfaceUp:
         "sat_id": "geo-tdrs-0",
         "rates": _rates(600.0, 50.0),
         "peer_rates": _rates(50.0, 600.0),
+        "stage": node_agent_pb2.LINK_UP_STAGE_OPEN,
     }
     base.update(fields)
     return node_agent_pb2.InterfaceUp(**base)
@@ -428,3 +430,10 @@ def test_inventory_admits_a_peer_delay_only_on_a_local_entry(
         local_ground=local_ground,
         peer_latency_ms=peer_latency_ms,
     )
+
+
+def test_a_link_up_entry_without_a_stage_is_refused():
+    with pytest.raises(CommandContractError, match="states no stage"):
+        validate_batch_link_up_request(
+            _link_up(_isl_up(stage=node_agent_pb2.LINK_UP_STAGE_UNSPECIFIED)), fence=_FENCE
+        )

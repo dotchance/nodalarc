@@ -168,7 +168,8 @@ def build_link_state_snapshot(
     links: list[LinkState] = []
 
     for pair in source.contacts_opened:
-        if source.isl_state.get(pair) != (True, True):
+        state = source.isl_state.get(pair, source.ground_state.get(pair))
+        if state != (True, True):
             raise ValueError(
                 f"Cannot build LinkStateSnapshot: long-delay link {pair[0]}<->{pair[1]} has an "
                 "open contact but its carrier is not up"
@@ -300,6 +301,7 @@ def build_link_state_snapshot(
                 link_rule_id=rule_meta.link_rule_id if rule_meta is not None else None,
                 topology_mode=rule_meta.topology_mode if rule_meta is not None else None,
                 endpoint_segments=rule_meta.endpoint_segments if rule_meta is not None else None,
+                contact_opened_at=source.contacts_opened.get(pair) if up else None,
             )
         )
 

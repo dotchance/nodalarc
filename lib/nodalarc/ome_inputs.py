@@ -75,6 +75,9 @@ class ResolvedOmeInputs:
     interface_map: dict[tuple[str, str], tuple[str, str]]
     rule_map: dict[tuple[str, str], LinkRuleMetadata]
     ground_candidate_satellites_by_gs: dict[str, tuple[str, ...]]
+    # The ground pairs (station, satellite) the resolver classed long-delay, sorted like every
+    # ground pair: each pass between them is a contact OME names, as on a fixed long-delay link.
+    long_delay_access_pairs: frozenset[tuple[str, str]]
     node_metadata: dict[str, dict[str, object]]
     ground_scheduling: GroundSchedulingConfig
     ground_link_model: GroundLinkModel
@@ -190,6 +193,11 @@ def build_ome_inputs_from_resolved(resolved: ResolvedSession) -> ResolvedOmeInpu
         interface_map=resolved.link_interface_map(),
         rule_map=_rule_map_from_resolved(resolved),
         ground_candidate_satellites_by_gs=ground_candidate_satellites_by_gs,
+        long_delay_access_pairs=frozenset(
+            tuple(sorted(candidate.pair))
+            for candidate in resolved.link_candidates
+            if candidate.kind == "access" and candidate.delay_class == "long_delay"
+        ),
         node_metadata=_node_metadata(resolved),
         ground_scheduling=ground_scheduling,
         ground_link_model=(

@@ -117,6 +117,7 @@ class TestOmeSnapshotGeometry:
             load_runtime_ome_test_inputs(origin="test.geometry_authority")
         )
         ctx = build_step_context(
+            long_delay_access_pairs=frozenset(),
             satellites=satellites,
             addressing=addressing,
             gs_file=gs_file,

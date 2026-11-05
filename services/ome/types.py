@@ -46,7 +46,7 @@ ReceiveWindows = dict[tuple[str, int], ReceiveWindow]
 
 # The sim time each fixed long-delay link's open contact opened, by canonical pair. Carried from
 # tick to tick like the ISL state, reset at a seek, and captured in the replay anchor.
-IslContacts = dict[tuple[str, str], datetime]
+LongDelayContacts = dict[tuple[str, str], datetime]
 
 
 @dataclass(frozen=True)

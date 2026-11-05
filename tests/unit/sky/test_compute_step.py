@@ -45,6 +45,7 @@ class TestComputeStepMatchesWindow:
 
         # Batch: compute a window of n_steps
         window = precompute_timeline_window(
+            long_delay_access_pairs=frozenset(),
             satellites=sats,
             addressing=addressing,
             gs_file=gs_file,
@@ -63,6 +64,7 @@ class TestComputeStepMatchesWindow:
 
         # Per-step: compute the same steps one at a time
         ctx = build_step_context(
+            long_delay_access_pairs=frozenset(),
             satellites=sats,
             addressing=addressing,
             gs_file=gs_file,
@@ -107,6 +109,7 @@ class TestComputeStepMatchesWindow:
         step_seconds = session.time.step_seconds
 
         window = precompute_timeline_window(
+            long_delay_access_pairs=frozenset(),
             satellites=sats,
             addressing=addressing,
             gs_file=gs_file,
@@ -123,6 +126,7 @@ class TestComputeStepMatchesWindow:
         )
 
         ctx = build_step_context(
+            long_delay_access_pairs=frozenset(),
             satellites=sats,
             addressing=addressing,
             gs_file=gs_file,
@@ -165,6 +169,7 @@ class TestComputeStepMatchesWindow:
         step_seconds = session.time.step_seconds
 
         ctx = build_step_context(
+            long_delay_access_pairs=frozenset(),
             satellites=sats,
             addressing=addressing,
             gs_file=gs_file,
@@ -211,6 +216,7 @@ class TestComputeStepMatchesWindow:
 
         with pytest.raises(ValueError, match="incompatible score scales"):
             build_step_context(
+                long_delay_access_pairs=frozenset(),
                 satellites=sats,
                 addressing=addressing,
                 gs_file=gs_file,
@@ -239,6 +245,7 @@ class TestComputeStepMatchesWindow:
         step_seconds = session.time.step_seconds
 
         ctx = build_step_context(
+            long_delay_access_pairs=frozenset(),
             satellites=sats,
             addressing=addressing,
             gs_file=gs_file,
@@ -296,6 +303,7 @@ class TestComputeStepMatchesWindow:
         step_seconds = session.time.step_seconds
 
         ctx = build_step_context(
+            long_delay_access_pairs=frozenset(),
             satellites=sats,
             addressing=addressing,
             gs_file=gs_file,
@@ -339,6 +347,7 @@ class TestComputeStepMatchesWindow:
         step_seconds = session.time.step_seconds
 
         ctx = build_step_context(
+            long_delay_access_pairs=frozenset(),
             satellites=sats,
             addressing=addressing,
             gs_file=gs_file,

@@ -74,7 +74,7 @@ from ome.event_stream import (
     precompute_timeline,
     write_timeline_jsonl,
 )
-from ome.types import IslContacts, MbbTeardownLifecycleEvent, MbbTeardownState, ReceiveWindows
+from ome.types import LongDelayContacts, MbbTeardownLifecycleEvent, MbbTeardownState, ReceiveWindows
 
 if TYPE_CHECKING:
     pass
@@ -96,6 +96,7 @@ class _SessionBundle(NamedTuple):
     interface_map: dict[tuple[str, str], tuple[str, str]]
     rule_map: dict[tuple[str, str], LinkRuleMetadata]
     ground_candidate_satellites_by_gs: dict[str, tuple[str, ...]]
+    long_delay_access_pairs: frozenset[tuple[str, str]]
     ground_scheduling: GroundSchedulingConfig
     ground_link_model: str
     node_metadata: dict[str, dict[str, object]]
@@ -193,6 +194,7 @@ def _session_bundle_from_resolution(resolution: SessionResolution) -> _SessionBu
         interface_map=runtime.interface_map,
         rule_map=runtime.rule_map,
         ground_candidate_satellites_by_gs=runtime.ground_candidate_satellites_by_gs,
+        long_delay_access_pairs=runtime.long_delay_access_pairs,
         ground_scheduling=runtime.ground_scheduling,
         ground_link_model=runtime.ground_link_model,
         node_metadata=runtime.node_metadata,
@@ -504,6 +506,7 @@ def run(
         latitude_threshold_deg=cfg.latitude_threshold_deg,
         ground_link_model=cfg.ground_link_model,
         ground_candidate_satellites_by_gs=cfg.ground_candidate_satellites_by_gs,
+        long_delay_access_pairs=cfg.long_delay_access_pairs,
         body_frames=cfg.body_frames,
         physics=cfg.physics,
         active_bodies=cfg.active_bodies,
@@ -1059,6 +1062,7 @@ def _run_pacing(
         ground_link_model=cfg.ground_link_model,
         ground_defaults_applied=True,
         ground_candidate_satellites_by_gs=cfg.ground_candidate_satellites_by_gs,
+        long_delay_access_pairs=cfg.long_delay_access_pairs,
         node_metadata=cfg.node_metadata,
         body_frames=cfg.body_frames,
         physics=cfg.physics,
@@ -1101,7 +1105,7 @@ def _run_pacing(
     # pending teardowns, mutated in place by compute_step.
     receive_windows: ReceiveWindows = {}
     # The opening of each fixed long-delay link's open contact; carried like isl_state.
-    isl_contacts: IslContacts = {}
+    long_delay_contacts: LongDelayContacts = {}
     current_associations: dict[tuple[str, str], tuple[int, int]] = {}
     mbb_pending_teardowns: MbbTeardownState = {}
     step = 0
@@ -1296,7 +1300,7 @@ def _run_pacing(
                 associations=step_result.associations,
                 teardowns=step_result.pending_teardowns,
                 receive_windows=dict(receive_windows),
-                isl_contacts=dict(isl_contacts),
+                long_delay_contacts=dict(long_delay_contacts),
                 ground_station_ids=frozenset(step_ctx.gs_mbb_overlap_ticks),
                 written_at=time.time(),
             ),
@@ -1491,7 +1495,7 @@ def _run_pacing(
             current_associations = seeded[2]
             mbb_pending_teardowns = seeded[3]
             receive_windows.update(seeded[4])
-            isl_contacts.update(seeded[5])
+            long_delay_contacts.update(seeded[5])
             replay_start = recovered_anchor.step + 1
             logging.info(
                 "Bounded replay: anchor at step %d covers %d steps; replaying %d",
@@ -1539,7 +1543,7 @@ def _run_pacing(
                 mbb_pending_teardowns,
                 dwell_state=dwell_state,
                 receive_windows=receive_windows,
-                isl_contacts=isl_contacts,
+                long_delay_contacts=long_delay_contacts,
             )
             initial_step_result = replay_result
             current_associations = replay_result.associations
@@ -1570,7 +1574,7 @@ def _run_pacing(
             mbb_pending_teardowns,
             dwell_state=dwell_state,
             receive_windows=receive_windows,
-            isl_contacts=isl_contacts,
+            long_delay_contacts=long_delay_contacts,
         )
         current_associations = initial_step_result.associations
         mbb_pending_teardowns = initial_step_result.pending_teardowns
@@ -1688,7 +1692,7 @@ def _run_pacing(
                 gs_state = {}
                 dwell_state = {}
                 receive_windows = {}
-                isl_contacts = {}
+                long_delay_contacts = {}
                 current_associations = {}
                 mbb_pending_teardowns = {}
                 step = 0
@@ -1713,7 +1717,7 @@ def _run_pacing(
                         mbb_pending_teardowns,
                         dwell_state=dwell_state,
                         receive_windows=receive_windows,
-                        isl_contacts=isl_contacts,
+                        long_delay_contacts=long_delay_contacts,
                     )
                 except Exception as exc:
                     target_master_sim_time = datetime.fromtimestamp(epoch_unix, UTC).isoformat()
@@ -1856,7 +1860,7 @@ def _run_pacing(
                 mbb_pending_teardowns,
                 dwell_state=dwell_state,
                 receive_windows=receive_windows,
-                isl_contacts=isl_contacts,
+                long_delay_contacts=long_delay_contacts,
             )
             if _epoch_id != tick_epoch_id or _seek_target is not None:
                 logging.info(

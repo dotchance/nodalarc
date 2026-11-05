@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import json
 import logging
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from datetime import UTC, datetime
 from functools import cached_property
 from pathlib import Path
@@ -96,7 +96,12 @@ from ome.telemetry import (
     SEG_VISIBILITY,
     StepTimings,
 )
-from ome.types import GroundVisibilityDecisionMap, IslContacts, MbbTeardownState, ReceiveWindows
+from ome.types import (
+    GroundVisibilityDecisionMap,
+    LongDelayContacts,
+    MbbTeardownState,
+    ReceiveWindows,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -268,6 +273,8 @@ class StepContext:
     gs_tenant_ids: dict[str, str]
     gs_reference_bodies: dict[str, str]
     ground_candidate_satellites_by_gs: dict[str, tuple[str, ...]]
+    # The ground pairs the resolver classed long-delay: each pass between them is a contact.
+    long_delay_access_pairs: frozenset[tuple[str, str]]
     ground_pair_terminal_types: dict[tuple[str, str], str]
     node_metadata: dict[str, dict[str, object]]
     by_node: dict[str, list[NeighborAssignment]]
@@ -389,7 +396,7 @@ class TimelineWindowResult:
     associations: dict[tuple[str, str], tuple[int, int]]
     pending_teardowns: MbbTeardownState
     receive_windows: ReceiveWindows
-    isl_contacts: IslContacts
+    long_delay_contacts: LongDelayContacts
     predictive: bool = False
 
 
@@ -464,8 +471,14 @@ def build_step_context(
     body_frames: Mapping[str, BodyFrame] | None = None,
     physics: PhysicsContext | None = None,
     active_bodies: frozenset[str] | None = None,
+    long_delay_access_pairs: frozenset[tuple[str, str]] | None = None,
 ) -> StepContext:
     """Build the per-session-constant context for compute_step()."""
+    if long_delay_access_pairs is None:
+        raise ValueError(
+            "build_step_context requires the session's long-delay ground pairs (an empty set "
+            "when it has none): each pass between them is a contact OME names"
+        )
     resolved_body_frames = _require_body_frames(body_frames)
     if physics is None:
         raise ValueError(
@@ -693,6 +706,7 @@ def build_step_context(
         gs_tenant_ids=gs_tenant_ids,
         gs_reference_bodies=gs_reference_bodies,
         ground_candidate_satellites_by_gs=declared_ground_candidates,
+        long_delay_access_pairs=frozenset(long_delay_access_pairs),
         ground_pair_terminal_types=ground_pair_terminal_types,
         node_metadata=node_metadata_map,
         by_node=by_node,
@@ -714,7 +728,7 @@ def _build_link_snapshot_source(
     *,
     isl_feasibility: Mapping[tuple[str, str], IslFeasibilityResult],
     isl_links: Mapping[tuple[str, str], ScheduledIsl],
-    isl_contacts: IslContacts,
+    long_delay_contacts: LongDelayContacts,
     ground_decisions: GroundVisibilityDecisionMap,
     ground_allocation: GroundAllocationResult,
 ) -> LinkSnapshotSource:
@@ -776,26 +790,27 @@ def _build_link_snapshot_source(
         latencies_ms=latencies_ms,
         # A copy: the pacing loop changes the contacts in place on the next tick, and the
         # snapshot is built later on the publisher thread.
-        contacts_opened=dict(isl_contacts),
+        contacts_opened=dict(long_delay_contacts),
     )
 
 
-def _track_isl_contacts(
-    isl_contacts: IslContacts,
+def _track_long_delay_contacts(
+    long_delay_contacts: LongDelayContacts,
     *,
-    long_delay_pairs: frozenset[tuple[str, str]],
-    isl_state: Mapping[tuple[str, str], tuple[bool, bool]],
+    pairs: frozenset[tuple[str, str]],
+    up: Callable[[tuple[str, str]], bool],
     sim_time: datetime,
 ) -> None:
-    """Open a contact on each long-delay link that is visible and scheduled and has none, at this
-    tick; end the contact of each that is not. A caller that starts with no contacts (one tick,
-    or a window from a given ISL state) opens the contacts of the links already up at its first
-    tick."""
-    for pair in long_delay_pairs:
-        if isl_state.get(pair) == (True, True):
-            isl_contacts.setdefault(pair, sim_time)
+    """Open a contact on each long-delay link of ``pairs`` that is visible and scheduled (``up``)
+    and has none, at this tick; end the contact of each that is not. The fixed long-delay links
+    and the long-delay ground pairs are tracked alike: a ground pass that ends and a later pass
+    between the same pair are two contacts. A caller that starts with no contacts (one tick, or
+    a window from a given state) opens the contacts of the links already up at its first tick."""
+    for pair in pairs:
+        if up(pair):
+            long_delay_contacts.setdefault(pair, sim_time)
         else:
-            isl_contacts.pop(pair, None)
+            long_delay_contacts.pop(pair, None)
 
 
 def compute_step(
@@ -810,7 +825,7 @@ def compute_step(
     mbb_pending_teardowns: MbbTeardownState | None = None,
     dwell_state: dict[tuple[str, str], DwellPassState] | None = None,
     receive_windows: ReceiveWindows | None = None,
-    isl_contacts: IslContacts | None = None,
+    long_delay_contacts: LongDelayContacts | None = None,
 ) -> StepResult:
     """Compute one step of the timeline. Mutates isl_state and gs_state in place.
 
@@ -824,7 +839,7 @@ def compute_step(
     state: a caller that runs more than one tick threads it, or terminals look free while they
     still receive. A single-tick caller passes None and starts from no reception.
 
-    isl_contacts holds the opening of each long-delay link's open contact, mutated in place and
+    long_delay_contacts holds the opening of each long-delay link's open contact, mutated in place and
     reset wherever isl_state resets. A caller that passes None starts from no contacts, so the
     long-delay links up at this tick open their contacts at it.
 
@@ -837,8 +852,8 @@ def compute_step(
         current_associations = {}
     if mbb_pending_teardowns is None:
         mbb_pending_teardowns = {}
-    if isl_contacts is None:
-        isl_contacts = {}
+    if long_delay_contacts is None:
+        long_delay_contacts = {}
     timings = StepTimings()
     dt = step * step_seconds
     timestamp_s = dt + timestamp_offset
@@ -916,10 +931,10 @@ def compute_step(
         )
         isl_state.clear()
         isl_state.update(isl_diff.state)
-        _track_isl_contacts(
-            isl_contacts,
-            long_delay_pairs=ctx.long_delay_pairs,
-            isl_state=isl_state,
+        _track_long_delay_contacts(
+            long_delay_contacts,
+            pairs=ctx.long_delay_pairs,
+            up=lambda pair: isl_state.get(pair) == (True, True),
             sim_time=sim_time,
         )
         events.extend(
@@ -1005,9 +1020,16 @@ def compute_step(
             allocation=ground_allocation,
             previous_state=gs_state,
             terminal_types=ctx.ground_pair_terminal_types,
+            long_delay_pairs=ctx.long_delay_access_pairs,
         )
         gs_state.clear()
         gs_state.update(ground_diff.state)
+        _track_long_delay_contacts(
+            long_delay_contacts,
+            pairs=ctx.long_delay_access_pairs,
+            up=lambda pair: gs_state.get(pair, (False, False, "active"))[:2] == (True, True),
+            sim_time=sim_time,
+        )
         events.extend(
             TimelineEvent(timestamp_s, "VisibilityEvent", event) for event in ground_diff.events
         )
@@ -1015,7 +1037,7 @@ def compute_step(
         link_snapshot_source = _build_link_snapshot_source(
             isl_feasibility=isl_feasibility,
             isl_links=isl_links,
-            isl_contacts=isl_contacts,
+            long_delay_contacts=long_delay_contacts,
             ground_decisions=ground_visibility.decisions,
             ground_allocation=ground_allocation,
         )
@@ -1052,7 +1074,7 @@ def precompute_timeline_window_from_context(
     initial_associations: dict[tuple[str, str], tuple[int, int]] | None = None,
     initial_pending_teardowns: MbbTeardownState | None = None,
     initial_receive_windows: ReceiveWindows | None = None,
-    initial_isl_contacts: IslContacts | None = None,
+    initial_long_delay_contacts: LongDelayContacts | None = None,
     timestamp_offset: float = 0.0,
     predictive: bool = False,
 ) -> TimelineWindowResult:
@@ -1079,7 +1101,7 @@ def precompute_timeline_window_from_context(
     )
     dwell_state: dict[tuple[str, str], DwellPassState] = {}
     receive_windows: ReceiveWindows = dict(initial_receive_windows or {})
-    isl_contacts: IslContacts = dict(initial_isl_contacts or {})
+    long_delay_contacts: LongDelayContacts = dict(initial_long_delay_contacts or {})
 
     events: list[TimelineEvent] = []
     steps = int(duration_s / step_seconds)
@@ -1096,7 +1118,7 @@ def precompute_timeline_window_from_context(
             pending_teardowns,
             dwell_state=dwell_state,
             receive_windows=receive_windows,
-            isl_contacts=isl_contacts,
+            long_delay_contacts=long_delay_contacts,
         )
         events.extend(result.events)
         associations = result.associations
@@ -1109,7 +1131,7 @@ def precompute_timeline_window_from_context(
         associations=associations,
         pending_teardowns=pending_teardowns,
         receive_windows=receive_windows,
-        isl_contacts=isl_contacts,
+        long_delay_contacts=long_delay_contacts,
         predictive=predictive,
     )
 
@@ -1139,6 +1161,7 @@ def precompute_timeline_window(
     physics: PhysicsContext | None = None,
     body_frames: Mapping[str, BodyFrame] | None = None,
     active_bodies: frozenset[str] | None = None,
+    long_delay_access_pairs: frozenset[tuple[str, str]] | None = None,
 ) -> TimelineWindowResult:
     """Precompute a single window of the timeline (batch mode).
 
@@ -1161,6 +1184,7 @@ def precompute_timeline_window(
         body_frames=_require_body_frames(body_frames),
         physics=physics,
         active_bodies=active_bodies,
+        long_delay_access_pairs=long_delay_access_pairs,
     )
     return precompute_timeline_window_from_context(
         ctx,
@@ -1195,6 +1219,7 @@ def precompute_timeline(
     physics: PhysicsContext | None = None,
     body_frames: Mapping[str, BodyFrame] | None = None,
     active_bodies: frozenset[str] | None = None,
+    long_delay_access_pairs: frozenset[tuple[str, str]] | None = None,
 ) -> list[TimelineEvent]:
     """Single-window convenience wrapper.
 
@@ -1218,6 +1243,7 @@ def precompute_timeline(
         body_frames=_require_body_frames(body_frames),
         physics=physics,
         active_bodies=active_bodies,
+        long_delay_access_pairs=long_delay_access_pairs,
     )
     return result.events
 

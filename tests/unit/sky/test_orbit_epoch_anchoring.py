@@ -442,6 +442,7 @@ class TestWindowAuthority:
 
         def window(inputs):
             return precompute_timeline_window(
+                long_delay_access_pairs=frozenset(),
                 satellites=inputs.satellites,
                 addressing=inputs.addressing,
                 gs_file=inputs.gs_file,

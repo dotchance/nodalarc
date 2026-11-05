@@ -127,6 +127,7 @@ def test_ome_inputs_are_resolved_owned_and_materialize_ground_candidates(tmp_pat
 
 def _step_context_from_bundle(cfg):
     return build_step_context(
+        long_delay_access_pairs=frozenset(),
         satellites=cfg.satellites,
         addressing=cfg.addressing,
         gs_file=cfg.gs_file,

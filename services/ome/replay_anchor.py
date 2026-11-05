@@ -28,7 +28,13 @@ from nodalarc.models.events import (
 )
 from nodalarc.models.link_state import SchedulingState
 
-from ome.types import IslContacts, MbbTeardown, MbbTeardownState, ReceiveWindow, ReceiveWindows
+from ome.types import (
+    LongDelayContacts,
+    MbbTeardown,
+    MbbTeardownState,
+    ReceiveWindow,
+    ReceiveWindows,
+)
 
 
 def _pair_key(pair: tuple[str, str]) -> str:
@@ -51,7 +57,7 @@ def build_replay_anchor(
     associations: dict[tuple[str, str], tuple[int, int]],
     teardowns: MbbTeardownState,
     receive_windows: ReceiveWindows,
-    isl_contacts: IslContacts,
+    long_delay_contacts: LongDelayContacts,
     ground_station_ids: frozenset[str],
     written_at: float,
 ) -> ReplayAnchor:
@@ -117,7 +123,7 @@ def build_replay_anchor(
             )
             for (node_id, index), window in receive_windows.items()
         },
-        isl_contacts={_pair_key(p): opened for p, opened in isl_contacts.items()},
+        long_delay_contacts={_pair_key(p): opened for p, opened in long_delay_contacts.items()},
         written_at=written_at,
     )
 
@@ -130,12 +136,12 @@ def replay_state_from_anchor(
     dict[tuple[str, str], tuple[int, int]],
     MbbTeardownState,
     ReceiveWindows,
-    IslContacts,
+    LongDelayContacts,
 ]:
     """Rebuild the internal replay-carried state from a decoded anchor.
 
     Returns (isl_state, gs_state, associations, pending_teardowns, receive_windows,
-    isl_contacts) in the exact shapes the pacing loop threads through compute_step.
+    long_delay_contacts) in the exact shapes the pacing loop threads through compute_step.
     """
     isl_state = {_key_pair(k): (bool(v[0]), bool(v[1])) for k, v in anchor.isl_state.items()}
     gs_state = {_key_pair(k): (v[0], v[1], v[2]) for k, v in anchor.gs_state.items()}
@@ -159,7 +165,7 @@ def replay_state_from_anchor(
         for entry in anchor.receive_windows.values()
     }
     contacts: dict[tuple[str, str], datetime] = {
-        _key_pair(k): opened for k, opened in anchor.isl_contacts.items()
+        _key_pair(k): opened for k, opened in anchor.long_delay_contacts.items()
     }
     return isl_state, gs_state, associations, teardowns, windows, contacts
 
@@ -179,7 +185,7 @@ class DeferredReplayAnchor:
     associations: dict
     teardowns: MbbTeardownState
     receive_windows: ReceiveWindows
-    isl_contacts: IslContacts
+    long_delay_contacts: LongDelayContacts
     ground_station_ids: frozenset[str]
     written_at: float
 
@@ -192,7 +198,7 @@ class DeferredReplayAnchor:
             associations=self.associations,
             teardowns=self.teardowns,
             receive_windows=self.receive_windows,
-            isl_contacts=self.isl_contacts,
+            long_delay_contacts=self.long_delay_contacts,
             ground_station_ids=self.ground_station_ids,
             written_at=self.written_at,
         )

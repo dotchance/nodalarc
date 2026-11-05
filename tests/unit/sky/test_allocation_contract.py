@@ -40,6 +40,7 @@ class TestAllocationContractInvariants:
         step_seconds = session.time.step_seconds
 
         ctx = build_step_context(
+            long_delay_access_pairs=frozenset(),
             satellites=sats,
             addressing=addressing,
             gs_file=gs_file,

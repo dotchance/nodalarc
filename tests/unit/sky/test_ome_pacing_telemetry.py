@@ -108,6 +108,7 @@ class TestComputeStepAttribution:
             load_runtime_ome_test_inputs(origin="test.pacing_telemetry")
         )
         ctx = build_step_context(
+            long_delay_access_pairs=frozenset(),
             satellites=sats,
             addressing=addressing,
             gs_file=gs_file,

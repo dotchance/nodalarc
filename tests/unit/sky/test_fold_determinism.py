@@ -40,6 +40,7 @@ class TestFoldDeterminism:
         step_seconds = session.time.step_seconds
 
         window = precompute_timeline_window(
+            long_delay_access_pairs=frozenset(),
             satellites=sats,
             addressing=addressing,
             gs_file=gs_file,
@@ -57,6 +58,7 @@ class TestFoldDeterminism:
         window_events = window.events
 
         ctx = build_step_context(
+            long_delay_access_pairs=frozenset(),
             satellites=sats,
             addressing=addressing,
             gs_file=gs_file,
@@ -108,6 +110,7 @@ class TestFoldDeterminism:
 
         # Simulate: first build associations from first 10 ticks (warm-up seed)
         ctx = build_step_context(
+            long_delay_access_pairs=frozenset(),
             satellites=sats,
             addressing=addressing,
             gs_file=gs_file,
@@ -142,6 +145,7 @@ class TestFoldDeterminism:
         seed_epoch = epoch_unix + 11 * step_seconds
 
         window = precompute_timeline_window(
+            long_delay_access_pairs=frozenset(),
             satellites=sats,
             addressing=addressing,
             gs_file=gs_file,
@@ -212,6 +216,7 @@ class TestFoldDeterminism:
         boundary = 30
 
         ctx = build_step_context(
+            long_delay_access_pairs=frozenset(),
             satellites=sats,
             addressing=addressing,
             gs_file=gs_file,

@@ -158,6 +158,7 @@ def test_ome_evaluates_an_earth_station_and_the_lunar_relay_at_their_true_range(
     resolved = resolve_session(_two_face_session(), catalog=catalog)
     inputs = build_ome_inputs_from_resolved(resolved)
     ctx = build_step_context(
+        long_delay_access_pairs=frozenset(),
         satellites=inputs.satellites,
         addressing=inputs.addressing,
         gs_file=inputs.gs_file,

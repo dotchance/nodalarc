@@ -139,6 +139,7 @@ def four_node_timeline():
     )
 
     events = precompute_timeline(
+        long_delay_access_pairs=frozenset(),
         satellites=sats,
         addressing=addressing,
         gs_file=gs_file,
@@ -200,6 +201,7 @@ class TestNoGroundStations:
         sats, addressing, neighbors = _four_node_runtime()
 
         events = precompute_timeline(
+            long_delay_access_pairs=frozenset(),
             satellites=sats,
             addressing=addressing,
             gs_file=None,

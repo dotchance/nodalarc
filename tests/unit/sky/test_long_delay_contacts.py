@@ -27,7 +27,7 @@ from nodalarc.scheduling_checkpoint import (
     encode_retained_replay_anchor,
 )
 from ome.event_diff import diff_isl_visibility_events
-from ome.event_stream import _track_isl_contacts
+from ome.event_stream import _track_long_delay_contacts
 from ome.isl_engine import IslFeasibilityResult, ScheduledIsl
 from ome.replay_anchor import build_replay_anchor, replay_state_from_anchor
 from ome.snapshot_builder import LinkSnapshotSource, build_link_state_snapshot
@@ -76,10 +76,11 @@ def test_a_contact_opens_at_the_tick_its_link_comes_up_and_keeps_that_opening():
     seen = []
     for tick, state in enumerate(states):
         sim_time = T0 + timedelta(seconds=tick)
-        _track_isl_contacts(
+        isl_state = {TRUNK: state, LOCAL: (True, True)}
+        _track_long_delay_contacts(
             contacts,
-            long_delay_pairs=frozenset({TRUNK}),
-            isl_state={TRUNK: state, LOCAL: (True, True)},
+            pairs=frozenset({TRUNK}),
+            up=lambda pair, isl_state=isl_state: isl_state.get(pair) == (True, True),
             sim_time=sim_time,
         )
         seen.append(contacts.get(TRUNK))
@@ -235,7 +236,7 @@ def test_the_replay_anchor_keeps_each_contact_opening():
         associations={},
         teardowns={},
         receive_windows={},
-        isl_contacts={TRUNK: T0},
+        long_delay_contacts={TRUNK: T0},
         ground_station_ids=frozenset(),
         written_at=1.0,
     )
@@ -271,7 +272,16 @@ def test_a_shipped_trunk_keeps_its_contact_while_up_and_a_seek_opens_a_new_one()
         trunk_states = []
         for step in range(steps):
             result = compute_step(
-                ctx, start_unix, step, 60.0, 0.0, isl, gs, assoc, teardowns, isl_contacts=contacts
+                ctx,
+                start_unix,
+                step,
+                60.0,
+                0.0,
+                isl,
+                gs,
+                assoc,
+                teardowns,
+                long_delay_contacts=contacts,
             )
             assoc, teardowns = result.associations, result.pending_teardowns
             snapshot = _assert_tick_round_trips(cfg, ctx, result, step, 60.0)

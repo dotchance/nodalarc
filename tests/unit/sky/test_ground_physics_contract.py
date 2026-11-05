@@ -249,6 +249,7 @@ def test_compute_step_schedules_only_pairs_that_pass_applied_ground_physics():
         ],
     )
     ctx = build_step_context(
+        long_delay_access_pairs=frozenset(),
         satellites=[sat],
         addressing=addressing,
         gs_file=gs_file,

@@ -64,6 +64,7 @@ def _shipped_step_context(path: Path):
 
     cfg = _load_session_config(str(path), run_id="run-shipped-smoke-0001")
     ctx = build_step_context(
+        long_delay_access_pairs=frozenset(),
         satellites=cfg.satellites,
         addressing=cfg.addressing,
         gs_file=cfg.gs_file,

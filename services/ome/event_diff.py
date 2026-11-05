@@ -127,6 +127,7 @@ def diff_ground_visibility_events(
     allocation: GroundAllocationResult,
     previous_state: Mapping[tuple[str, str], tuple[bool, bool, SchedulingState]],
     terminal_types: Mapping[tuple[str, str], str],
+    long_delay_pairs: frozenset[tuple[str, str]],
 ) -> GroundEventDiff:
     """Emit ground VisibilityEvents for changed visibility/allocation state.
 
@@ -153,10 +154,20 @@ def diff_ground_visibility_events(
         sched_state = "teardown" if pair in allocation.pending_teardowns else "active"
         new_state = (decision.visible, scheduled, sched_state)
 
-        if new_state == state.get(pair, (False, False, "active")):
+        previous = state.get(pair, (False, False, "active"))
+        if new_state == previous:
             continue
 
         state[pair] = new_state
+        # A pass between long-delay ground peers is a contact; it opens on the event that makes
+        # the pair visible and scheduled. A later change of the same pass (its teardown state)
+        # continues it.
+        opens_contact = (
+            pair in long_delay_pairs
+            and decision.visible
+            and scheduled
+            and not (previous[0] and previous[1])
+        )
         indices = allocation.associations[pair] if scheduled else None
         # unscheduled_reason is set only when the pair is visible AND
         # not scheduled. An invisible pair never reached the allocator.
@@ -196,6 +207,7 @@ def diff_ground_visibility_events(
                 scheduling_state=sched_state,
                 visibility_reject_reason=decision.reject_reason,
                 unscheduled_reason=unscheduled_reason,
+                contact_opened_at=sim_time if opens_contact else None,
             )
         )
 

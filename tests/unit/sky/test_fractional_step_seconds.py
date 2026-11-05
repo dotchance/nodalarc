@@ -33,6 +33,7 @@ SESSION = Path(__file__).resolve().parents[3] / "catalog/nodalarc/sessions/earth
 def leo_context():
     cfg = _load_session_config(str(SESSION), run_id="run-fractional-0001")
     ctx = build_step_context(
+        long_delay_access_pairs=frozenset(),
         satellites=cfg.satellites,
         addressing=cfg.addressing,
         gs_file=cfg.gs_file,
@@ -122,6 +123,7 @@ def test_fractional_longest_remaining_pass_lookahead_runs():
     session = SESSION.parent / "earth-geo-inmarsat.yaml"
     cfg = _load_session_config(str(session), run_id="run-fractional-0002")
     ctx = build_step_context(
+        long_delay_access_pairs=frozenset(),
         satellites=cfg.satellites,
         addressing=cfg.addressing,
         gs_file=cfg.gs_file,

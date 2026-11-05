@@ -35,6 +35,7 @@ def _session_ctx(tmp_path):
     )
     cfg = _load_session_config(str(session_path), run_id="run-anchor-equality")
     ctx = build_step_context(
+        long_delay_access_pairs=frozenset(),
         satellites=cfg.satellites,
         addressing=cfg.addressing,
         gs_file=cfg.gs_file,
@@ -75,7 +76,7 @@ def _run(ctx, epoch_unix, step_seconds, *, start, end, isl, gs, assoc, td, windo
             td,
             dwell_state=dwell,
             receive_windows=windows,
-            isl_contacts=contacts,
+            long_delay_contacts=contacts,
         )
         assoc = result.associations
         td = result.pending_teardowns
@@ -110,7 +111,7 @@ def _full_run_with_anchor(tmp_path, ground_ids_override=None):
             td,
             dwell_state=dwell,
             receive_windows=windows,
-            isl_contacts=contacts,
+            long_delay_contacts=contacts,
         )
         assoc = result.associations
         td = result.pending_teardowns
@@ -124,7 +125,7 @@ def _full_run_with_anchor(tmp_path, ground_ids_override=None):
                     associations=assoc,
                     teardowns=td,
                     receive_windows=windows,
-                    isl_contacts=contacts,
+                    long_delay_contacts=contacts,
                     ground_station_ids=ground_ids_override or ground_ids,
                     written_at=123.0,
                 )

@@ -84,8 +84,9 @@ class LinkState(BaseModel):
     scheduling_state: SchedulingState = "active"
     teardown_remaining_ticks: int | None = None
     successor_pair: tuple[str, str] | None = None
-    # The sim time the link's current contact opened, on a fixed long-delay link whose carrier is
-    # up; None on every other link. With the snapshot's epoch it names the contact
+    # The sim time the link's current contact opened, on a long-delay link (fixed, or a ground
+    # pass between long-delay peers) whose carrier is up; None on every other link. With the
+    # snapshot's epoch it names the contact
     # (``contact_id``): the Node Agent keeps one delay queue per contact, and a command for one
     # contact never changes another.
     contact_opened_at: datetime | None = None
@@ -95,10 +96,10 @@ class LinkState(BaseModel):
     def _contact_only_on_an_up_isl(self) -> LinkState:
         if self.contact_opened_at is None:
             return self
-        if self.link_type != "isl" or self.carrier != CarrierState.UP:
+        if self.carrier != CarrierState.UP:
             raise ValueError(
-                f"link {self.node_a}<->{self.node_b}: a contact opening belongs only to a fixed "
-                f"link whose carrier is up (link_type={self.link_type}, carrier={self.carrier})"
+                f"link {self.node_a}<->{self.node_b}: a contact opening belongs only to a "
+                f"long-delay link whose carrier is up (carrier={self.carrier})"
             )
         if self.contact_opened_at > self.sim_time:
             raise ValueError(

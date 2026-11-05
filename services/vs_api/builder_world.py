@@ -624,6 +624,7 @@ def world_from_resolution(resolution: SessionResolution) -> BuilderWorld:
             ground_link_model=runtime.ground_link_model,
             ground_defaults_applied=True,
             ground_candidate_satellites_by_gs=runtime.ground_candidate_satellites_by_gs,
+            long_delay_access_pairs=runtime.long_delay_access_pairs,
             node_metadata=runtime.node_metadata,
             body_frames=runtime.body_frames,
             physics=runtime.physics,

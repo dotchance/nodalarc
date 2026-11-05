@@ -122,6 +122,7 @@ def run_scenario(
 
     epoch_unix = session_epoch_unix(session.time)
     step_ctx = build_step_context(
+        long_delay_access_pairs=frozenset(),
         satellites=cfg.satellites,
         addressing=cfg.addressing,
         gs_file=cfg.gs_file,

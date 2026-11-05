@@ -701,6 +701,7 @@ def test_cislunar_resolved_terminal_facts_flow_through_build_context_to_engine()
         ],
     )
     ctx = build_step_context(
+        long_delay_access_pairs=frozenset(),
         satellites=satellites,
         addressing=addressing,
         gs_file=gs_file,

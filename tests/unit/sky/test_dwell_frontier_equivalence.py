@@ -113,6 +113,7 @@ def _ctx_from_session_file(session_path):
 
     cfg = _load_session_config(session_path, run_id="run-dwell-equiv-0001")
     ctx = build_step_context(
+        long_delay_access_pairs=frozenset(),
         satellites=cfg.satellites,
         addressing=cfg.addressing,
         gs_file=cfg.gs_file,

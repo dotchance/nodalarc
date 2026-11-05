@@ -180,6 +180,7 @@ def test_ground_event_diff_sets_terminal_indices_and_one_way_latency():
 
     decision = _decision(pair, visible=True, range_km=2000.0, elevation_deg=37.5)
     diff = diff_ground_visibility_events(
+        long_delay_pairs=frozenset(),
         sim_time=SIM,
         visibility_decisions={pair: decision},
         allocation=allocation,
@@ -211,6 +212,7 @@ def test_ground_event_diff_marks_mbb_teardown_state():
     )
 
     diff = diff_ground_visibility_events(
+        long_delay_pairs=frozenset(),
         sim_time=SIM,
         visibility_decisions={
             pair: _decision(pair, visible=True, range_km=1900.0, elevation_deg=25.0)
@@ -248,6 +250,7 @@ def test_ground_event_diff_propagates_visibility_reject_reason_for_invisible_pai
     )
 
     diff = diff_ground_visibility_events(
+        long_delay_pairs=frozenset(),
         sim_time=SIM,
         visibility_decisions={
             pair: _decision(
@@ -294,6 +297,7 @@ def test_ground_event_diff_propagates_unscheduled_reason_for_visible_but_unalloc
     )
 
     diff = diff_ground_visibility_events(
+        long_delay_pairs=frozenset(),
         sim_time=SIM,
         visibility_decisions={
             pair: _decision(pair, visible=True, range_km=900.0, elevation_deg=80.0),
@@ -330,6 +334,7 @@ def test_ground_event_diff_fails_loud_when_allocator_omits_attribution_for_visib
 
     with pytest.raises(ValueError, match="did not attribute an unscheduled_reason"):
         diff_ground_visibility_events(
+            long_delay_pairs=frozenset(),
             sim_time=SIM,
             visibility_decisions={
                 pair: _decision(pair, visible=True, range_km=900.0, elevation_deg=80.0),
@@ -355,6 +360,7 @@ def test_ground_event_diff_clears_unscheduled_reason_for_scheduled_pair():
     )
 
     diff = diff_ground_visibility_events(
+        long_delay_pairs=frozenset(),
         sim_time=SIM,
         visibility_decisions={
             pair: _decision(pair, visible=True, range_km=900.0, elevation_deg=80.0)
@@ -369,3 +375,45 @@ def test_ground_event_diff_clears_unscheduled_reason_for_scheduled_pair():
     assert event.scheduled is True
     assert event.visibility_reject_reason == "ok"
     assert event.unscheduled_reason is None
+
+
+def test_a_pass_between_long_delay_ground_peers_opens_a_contact_once():
+    """A pass between ground peers the resolver classed long-delay is a contact: it opens on the
+    event that makes the pair visible and scheduled. Its later teardown state continues it; a
+    pass after the pair went down is a new contact."""
+    pair = ("dss-43", "mars-orbiter")
+
+    def step(previous, *, visible, scheduled, teardown=False):
+        allocation = GroundAllocationResult(
+            associations={pair: (0, 0)} if scheduled else {},
+            pending_teardowns={pair: MbbTeardown(10, ("dss-43", "other"))} if teardown else {},
+            scheduled_pairs=frozenset({pair}) if scheduled else frozenset(),
+            unscheduled_pairs=(),
+            policy_audit=_policy_audit(),
+            allocation_events=(),
+        )
+        return diff_ground_visibility_events(
+            long_delay_pairs=frozenset({pair}),
+            sim_time=SIM,
+            visibility_decisions={
+                pair: _decision(
+                    pair,
+                    visible=visible,
+                    range_km=1.0e8,
+                    elevation_deg=30.0,
+                    reject_reason="ok" if visible else "elevation_below_min",
+                )
+            },
+            allocation=allocation,
+            terminal_types={pair: "rf"},
+            previous_state=previous,
+        )
+
+    opened = step({}, visible=True, scheduled=True)
+    assert opened.events[0].contact_opened_at == SIM
+    continued = step(opened.state, visible=True, scheduled=True, teardown=True)
+    assert continued.events[0].contact_opened_at is None
+    ended = step(continued.state, visible=False, scheduled=False)
+    assert ended.events[0].contact_opened_at is None
+    again = step(ended.state, visible=True, scheduled=True)
+    assert again.events[0].contact_opened_at == SIM

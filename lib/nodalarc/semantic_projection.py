@@ -33,7 +33,7 @@ from nodalarc.models.resolved_session import (
     ResolvedSession,
 )
 
-SEMANTIC_PROJECTION_SCHEMA = "nodalarc.resolved-semantics.v1"
+SEMANTIC_PROJECTION_SCHEMA = "nodalarc.resolved-semantics.v2"
 
 
 def _model_json(model: BaseModel | None) -> dict[str, Any] | None:
@@ -279,6 +279,12 @@ def _link_candidate_projection(candidate: ResolvedLinkCandidate) -> dict[str, An
             "endpoints": endpoints,
             "topology_mode": candidate.topology_mode,
             "priority": candidate.priority,
+            # The link's class decides kernel state (static neighbours, admission hooks, where
+            # its delay queues live and how they drain) and its longest delay the memory its
+            # queues may hold: two resolutions that disagree on either describe different
+            # runtimes.
+            "delay_class": candidate.delay_class,
+            "longest_delay_s": candidate.longest_delay_s,
         }
     )
 
@@ -365,6 +371,7 @@ def resolved_session_semantic_projection(resolved: ResolvedSession) -> dict[str,
         "links": {
             "rules": rules,
             "candidates": candidates,
+            "long_delay_bound_s": resolved.long_delay_bound_s,
         },
         "physics": {
             "bodies": bodies,

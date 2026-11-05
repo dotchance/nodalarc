@@ -158,3 +158,26 @@ def test_a_bound_inside_a_links_delay_range_is_refused(bound_s) -> None:
     assert (feature.category, feature.value) == ("link_topology", "delay_spans_long_delay_bound")
     assert "a link's delays must stay on one side of the 1.2 s long-delay bound" in feature.message
     assert "link rule '" in feature.message
+
+
+def test_a_resolution_under_another_bound_has_another_semantic_digest(bound_s) -> None:
+    """Deployment checks compare the resolved semantic digest to prove two resolutions describe
+    one runtime. Under a 0.5 s bound the links between Earth and the Moon are long-delay (static
+    neighbours, admission hooks, drained contacts); under 10 s they are local. The two
+    resolutions differ only in the bound and the classes it gives, and their digests differ."""
+    from nodalarc.semantic_projection import (
+        resolved_session_semantic_digest,
+        resolved_session_semantic_projection,
+    )
+
+    local = _resolve()
+    bound_s(0.5)
+    long_delay = _resolve()
+
+    assert resolved_session_semantic_digest(local) != resolved_session_semantic_digest(long_delay)
+    projected = resolved_session_semantic_projection(long_delay)["links"]
+    assert projected["long_delay_bound_s"] == 0.5
+    assert {candidate["delay_class"] for candidate in projected["candidates"]} == {
+        "local",
+        "long_delay",
+    }

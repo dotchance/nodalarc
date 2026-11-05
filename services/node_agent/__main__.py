@@ -116,6 +116,25 @@ def _require_kubelet_pods_dir() -> None:
         raise
 
 
+def _require_exact_purge_counts() -> None:
+    """Refuse to start on a kernel that does not count a transmit purge exactly: a long-delay
+    stop would report a wrong untransmitted count (``qualification.check_purge_counts``)."""
+    from node_agent.qualification import check_purge_counts
+
+    check = check_purge_counts()
+    if check.passed:
+        log.info("Startup check passed: %s", check.line())
+        return
+    log.error("Startup check failed: %s", check.line())
+    ops_events.spool_failure(
+        code="STARTUP_PURGE_COUNT_INEXACT",
+        message=check.line(),
+        details={"node_name": os.environ.get("NODE_NAME", "")},
+        session_id="",
+    )
+    raise SystemExit(f"Node Agent refused to start: {check.line()}")
+
+
 def _require_writer_lease_observed(view: WriterLeaseView) -> None:
     if view.wait_listed(0):
         return
@@ -184,6 +203,7 @@ async def main() -> None:
 
     _require_host_ip_for_vxlan_capable_startup()
     _require_kubelet_pods_dir()
+    _require_exact_purge_counts()
 
     log.info(
         "Node Agent starting [build=%s, node=%s]",

@@ -150,7 +150,10 @@ def install_stopped_hook_with(ipr: IPRoute, ifname: str) -> None:
     """Give an interface in the namespace ``ipr`` speaks to its admission hook with admission
     stopped, or reuse the hook it carries and stop it. Called where the interface is created,
     before it can forward: a long-delay end admits nothing until its contact opens (OPEN), so no
-    packet crosses the link before both receive paths delay it. A ``clsact`` qdisc is reused as
+    packet crosses the link before both receive paths delay it. Adding the ``clsact`` qdisc to
+    an interface that holds queued packets empties its transmit queue without counting them
+    (kernel 6.8: 58 queued, none counted as dropped), so the hook goes on before the interface
+    carries traffic, and a stop never adds it. A ``clsact`` qdisc is reused as
     it stands; any other qdisc on the interface's ingress side is refused, and nothing is
     replaced."""
     _install_hook(ipr, ifname)

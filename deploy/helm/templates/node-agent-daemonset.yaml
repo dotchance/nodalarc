@@ -71,6 +71,7 @@ spec:
                   --host-ip "$HOST_IP"
                   --link-mtu {{ required "network.linkMtu is required" .Values.network.linkMtu | int }}
                   --vxlan-port {{ required "network.vxlanPort is required" .Values.network.vxlanPort | int }}
+                  --queue-bytes-per-buffer {{ required "network.queueMemory.bytesPerBuffer is required" .Values.network.queueMemory.bytesPerBuffer | int }}
             periodSeconds: 10
             timeoutSeconds: 5
           resources:

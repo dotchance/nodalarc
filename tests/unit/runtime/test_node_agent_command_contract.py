@@ -126,6 +126,24 @@ def test_local_ground_link_up_requires_the_peer_terminal_rates() -> None:
         validate_batch_link_up_request(_link_up(entry), fence=_FENCE)
 
 
+def test_one_end_of_a_long_delay_ground_pass_stages_on_its_own_on_one_server() -> None:
+    """An entry that names a contact is one end of a long-delay pass: it carries its own rates
+    and no peer's, even when both ends are on one server; a local pass's entry still wires both
+    ends and needs the peer's."""
+    end = _local_ground_up(
+        contact_id="0@2027-02-19T00:00:00.000000Z",
+        receive_latency_ms=338_346.0,
+        latency_ms=0.0,
+        stage=node_agent_pb2.LINK_UP_STAGE_PREPARE,
+    )
+    end.ClearField("peer_rates")
+    validate_batch_link_up_request(_link_up(end), fence=_FENCE)
+
+    end.peer_rates.CopyFrom(_rates(50.0, 600.0))
+    with pytest.raises(CommandContractError, match="only to LOCAL ground"):
+        validate_batch_link_up_request(_link_up(end), fence=_FENCE)
+
+
 def test_peer_rates_are_refused_outside_local_ground() -> None:
     with pytest.raises(CommandContractError, match="only to LOCAL ground"):
         validate_batch_link_up_request(

@@ -277,17 +277,24 @@ def apply_transmit_shaping(pid: int, ifname: str, delay_ms: float, transmit_mbps
     )
 
 
-def apply_receive_shaping(host_ifname: str, receive_mbps: float) -> None:
+def apply_receive_shaping(host_ifname: str, receive_mbps: float, *, access: bool = False) -> None:
     """Shape what a pod interface receives: its terminal's receive rate.
 
     Every pod interface is fed through its host-side veth, so that veth's
-    egress is the pod interface's ingress.
+    egress is the pod interface's ingress. An access interface (``access``) links to a peer per
+    pass, and a long-delay pass leaves its receive delay queue under the rate class; a local pass
+    carries its delay on the transmitting side, so that queue goes. The end carries no contact
+    then: the long-delay pass closed, and its queue was counted at the close.
     """
 
     def _op(ipr: IPRoute) -> None:
         links = ipr.link_lookup(ifname=host_ifname)
         if not links:
             raise FileNotFoundError(f"Host interface {host_ifname} not found")
+        if access:
+            for qdisc in interface_qdiscs(links[0]):
+                if qdisc["parent"] == _SHAPER_CLASS and qdisc.get_attr("TCA_KIND") == "netem":
+                    ipr.tc("del", index=links[0], handle=qdisc["handle"], parent=_SHAPER_CLASS)
         _rate_limit_egress(ipr, links[0], receive_mbps)
 
     in_host_namespace(_op)
@@ -338,7 +345,9 @@ def update_delay(pid: int, ifname: str, delay_ms: float, transmit_mbps: float) -
 # own.
 
 
-def apply_long_delay_transmit_shaping(pid: int, ifname: str, transmit_mbps: float) -> None:
+def apply_long_delay_transmit_shaping(
+    pid: int, ifname: str, transmit_mbps: float, *, access: bool = False
+) -> None:
     """Shape a long-delay end's transmitting pod interface: the terminal's rate, no delay queue,
     and the rate class's queue as an explicit pfifo leaf (handle 20:) of
     ``LONG_DELAY_TRANSMIT_LEAF_PACKETS``, the limit the memory budget counts.
@@ -349,8 +358,11 @@ def apply_long_delay_transmit_shaping(pid: int, ifname: str, transmit_mbps: floa
     has no handle and cannot be deleted. Called with admission stopped, so the leaf it replaces
     holds nothing.
 
-    The interface's class is fixed for the session, so a delay queue found on it is another
-    link class's state, refused rather than removed.
+    A fixed link's class is fixed for the session, so a delay queue found on it is another link
+    class's state, refused rather than removed. An access interface (``access``) links to a peer
+    per pass, and a peer's class is that pass's: the delay queue a local pass left on it is
+    replaced. The end carries no contact then (PREPARE checks it), so the queue holds only what
+    the ended local pass still had, already lost at its LinkDown.
     """
 
     def _op(ipr: IPRoute) -> None:
@@ -359,11 +371,13 @@ def apply_long_delay_transmit_shaping(pid: int, ifname: str, transmit_mbps: floa
             raise FileNotFoundError(f"Interface {ifname} not found in ns({pid})")
         idx = links[0]
         netem = [q for q in interface_qdiscs(idx) if q.get_attr("TCA_KIND") == "netem"]
-        if netem:
+        if netem and not access:
             raise RuntimeError(
                 f"{ifname} is a long-delay terminal interface and holds a delay queue; its "
                 "delay belongs on the receiving side"
             )
+        if netem:
+            ipr.tc("del", index=idx, parent=TC_H_ROOT)
         _rate_limit_egress(ipr, idx, transmit_mbps)
         leaf = next((q for q in interface_qdiscs(idx) if q["parent"] == _SHAPER_CLASS), None)
         if leaf is not None:
@@ -603,6 +617,19 @@ def configure_interface(pid: int, ifname: str, node_id: str, ipr: IPRoute | None
     else:
         _in_namespace(pid, _do_configure)
     log.debug("Configured %s in ns(%d): mac=%s, ipv6_autoconfig=off", ifname, pid, mac)
+
+
+def set_pod_interface_down(pid: int, ifname: str) -> None:
+    """Bring a pod interface admin down: a satellite's terminal deactivated at the close of its
+    long-delay ground pass, as at a local ground LinkDown."""
+
+    def _do(handle: IPRoute) -> None:
+        idx = handle.link_lookup(ifname=ifname)
+        if not idx:
+            raise FileNotFoundError(f"Interface {ifname} not found in ns({pid})")
+        handle.link("set", index=idx[0], state="down")
+
+    _in_namespace(pid, _do)
 
 
 def install_static_neighbors(

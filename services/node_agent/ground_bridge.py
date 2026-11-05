@@ -159,6 +159,54 @@ def _tc_mirred_remove(ifname: str) -> None:
         ipr.close()
 
 
+def attach_ground_end(
+    gs_id: str, own_host: str, peer_host: str, sat_pid: int | None, sat_ifname: str
+) -> None:
+    """Join one end of a long-delay ground pass on one host: both host veths up, this end's
+    redirect toward its peer (``own_host`` ingress to ``peer_host`` egress), and a satellite's
+    terminal interface up. Each end of a long-delay pass installs and removes its own direction
+    (``remove_redirect``), so a pass that reopens while its other end still drains finds that
+    end's direction in place. A redirect already proven toward the peer is reused; any other
+    occupant of the ingress side is refused and nothing is replaced. Serialized per station."""
+    with _gs_locks[gs_id]:
+        with IPRoute() as ipr:
+            for name in (own_host, peer_host):
+                idx = ipr.link_lookup(ifname=name)
+                if not idx:
+                    raise FileNotFoundError(f"{name} not found")
+                ipr.link("set", index=idx[0], state="up")
+            kind = kernel_verifier.ingress_qdisc_kind(ipr.link_lookup(ifname=own_host)[0])
+            proofs: tuple[kernel_verifier.Proof, ...] = ()
+            if kind is not None:
+                proofs = (kernel_verifier.prove_mirred_redirect(ipr, own_host, peer_host),)
+            reuse = kernel_verifier.reuse_or_refuse(
+                subject=f"redirect {own_host}->{peer_host}",
+                absent=kind is None,
+                complete=kind is not None,
+                proofs=proofs,
+                evidence=(f"{own_host} ingress ({kind})",) if kind is not None else (),
+            )
+        if not reuse:
+            _tc_mirred_redirect(own_host, peer_host)
+        if sat_pid is not None:
+
+            def _up(ns_ipr: IPRoute) -> None:
+                idx = ns_ipr.link_lookup(ifname=sat_ifname)
+                if not idx:
+                    raise FileNotFoundError(f"{sat_ifname} not found in sat ns({sat_pid})")
+                ns_ipr.link("set", index=idx[0], state="up")
+
+            _in_namespace(sat_pid, _up)
+
+
+def remove_redirect(gs_id: str, host_ifname: str) -> None:
+    """Remove one host-side veth's outgoing redirect: the end of a long-delay ground pass that
+    closed while its peer still drains. The peer's redirect toward it stays until the peer
+    closes. Serialized with attach and detach on the station."""
+    with _gs_locks[gs_id]:
+        _tc_mirred_remove(host_ifname)
+
+
 # ---------------------------------------------------------------------------
 # Attach / detach (link_manager.py L782-858)
 # ---------------------------------------------------------------------------

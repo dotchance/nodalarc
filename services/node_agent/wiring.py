@@ -615,19 +615,30 @@ def execute_wiring(
         except Exception as exc:
             raise _MplsStepFailed(str(exc)) from exc
 
-    def _create_ground_bridge_task(gs_id: str, gs_pid: int, gnd_ifaces: list, mpls: bool) -> None:
+    # An access interface of a node with a long-delay access peer may carry a long-delay pass:
+    # like a long-delay fixed end, it gets its admission hook stopped before it can forward, so
+    # nothing crosses until that pass opens. A local pass on it opens the hook at its LinkUp.
+    def _create_ground_bridge_task(
+        gs_id: str, gs_pid: int, gnd_ifaces: list, mpls: bool, hooked: bool
+    ) -> None:
         for iface_spec in gnd_ifaces:
             ifname = iface_spec["name"]
             veth = create_ground_bridge(gs_id, gs_pid, ifname=ifname)
             configure_interface(gs_pid, ifname, gs_id)
+            if hooked:
+                admission.install_stopped_hook(gs_pid, ifname)
             if mpls:
                 _ground_mpls(gs_pid, ifname, gs_id, veth.created)
 
-    def _create_sat_ground_task(node_id: str, pid: int, gnd_ifaces: list, mpls: bool) -> None:
+    def _create_sat_ground_task(
+        node_id: str, pid: int, gnd_ifaces: list, mpls: bool, hooked: bool
+    ) -> None:
         for iface_spec in gnd_ifaces:
             ifname = iface_spec["name"]
             veth = create_satellite_ground_veth(node_id, pid, ifname=ifname)
             configure_interface(pid, ifname, node_id)
+            if hooked:
+                admission.install_stopped_hook(pid, ifname)
             if mpls:
                 _ground_mpls(pid, ifname, node_id, veth.created)
 
@@ -642,7 +653,14 @@ def execute_wiring(
             gs_ifaces = gs_node["gnd_interfaces"]
             gs_mpls = bool(gs_node.get("mpls_enable", False)) and gs_id not in mpls_refused
             gnd_futures[
-                pool.submit(_create_ground_bridge_task, gs_id, gs_pid, gs_ifaces, gs_mpls)
+                pool.submit(
+                    _create_ground_bridge_task,
+                    gs_id,
+                    gs_pid,
+                    gs_ifaces,
+                    gs_mpls,
+                    bool(gs_node["long_delay_access_peers"]),
+                )
             ] = gs_id
 
         for node_id, node_spec in nodes.items():
@@ -654,7 +672,14 @@ def execute_wiring(
             sat_ifaces = node_spec["gnd_interfaces"]
             sat_mpls = bool(node_spec.get("mpls_enable", False)) and node_id not in mpls_refused
             gnd_futures[
-                pool.submit(_create_sat_ground_task, node_id, pid, sat_ifaces, sat_mpls)
+                pool.submit(
+                    _create_sat_ground_task,
+                    node_id,
+                    pid,
+                    sat_ifaces,
+                    sat_mpls,
+                    bool(node_spec["long_delay_access_peers"]),
+                )
             ] = node_id
 
         gs_created = 0

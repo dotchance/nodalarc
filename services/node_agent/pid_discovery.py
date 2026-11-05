@@ -139,6 +139,16 @@ class NamespaceHandle:
         """The static neighbors the manifest gives ``ifname``; None on a local link."""
         return dict(self.static_neighbors).get(ifname)
 
+    def long_delay_access_peer(self, peer_node_id: str) -> bool:
+        """Whether the manifest classes this node's access link to ``peer_node_id`` long-delay."""
+        return peer_node_id in dict(self.long_delay_access_peers)
+
+    @property
+    def carries_long_delay_access(self) -> bool:
+        """Whether any access link of this node is long-delay: its access interfaces carry the
+        admission hook from wiring."""
+        return bool(self.long_delay_access_peers)
+
     def access_neighbors_for(self, peer_node_id: str, peer_ifname: str) -> StaticNeighbors | None:
         """The static neighbors this node pins on an access interface linked to ``peer_node_id``
         over a long-delay access link (the peer's addresses at the peer access interface's link

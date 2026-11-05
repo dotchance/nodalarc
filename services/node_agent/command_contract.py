@@ -190,6 +190,16 @@ def _validate_rates_field(entry, field: str, *, operation: str) -> None:
             )
 
 
+def _wires_both_ground_ends(entry) -> bool:
+    """A LOCAL ground entry of a local pass wires both ends in one operation. An entry naming a
+    contact is one end of a long-delay pass, whose ends stage on their own in both localities."""
+    return (
+        entry.link_type == node_agent_pb2.LINK_TYPE_GROUND
+        and entry.locality == node_agent_pb2.LOCALITY_LOCAL
+        and not getattr(entry, "contact_id", "")
+    )
+
+
 def _validate_terminal_rates(entry, *, operation: str) -> None:
     """Each wired terminal carries its own positive transmit and receive rates.
 
@@ -197,10 +207,7 @@ def _validate_terminal_rates(entry, *, operation: str) -> None:
     both ends in one operation and so also carries the peer terminal's
     ``peer_rates``; every other entry wires one end and carries none.
     """
-    local_ground = (
-        entry.link_type == node_agent_pb2.LINK_TYPE_GROUND
-        and entry.locality == node_agent_pb2.LOCALITY_LOCAL
-    )
+    local_ground = _wires_both_ground_ends(entry)
     fields = ("rates", "peer_rates") if local_ground else ("rates",)
     for field in fields:
         _validate_rates_field(entry, field, operation=operation)
@@ -214,10 +221,7 @@ def _validate_terminal_rates(entry, *, operation: str) -> None:
 def _validate_peer_latency(entry, *, operation: str) -> None:
     """A LOCAL ground entry wires both ends and carries the peer end's egress delay; every other
     entry wires one end and carries none."""
-    local_ground = (
-        entry.link_type == node_agent_pb2.LINK_TYPE_GROUND
-        and entry.locality == node_agent_pb2.LOCALITY_LOCAL
-    )
+    local_ground = _wires_both_ground_ends(entry)
     if local_ground and entry.peer_latency_ms < 0:
         raise CommandContractError(
             node_agent_pb2.NODE_AGENT_INVALID_FIELD,
@@ -287,18 +291,19 @@ def validate_set_latency_request(request, *, fence: RuntimeFence) -> None:
 
 
 def _validate_long_delay_inventory(request) -> None:
-    """A KernelInventory request with no ground station audits long-delay ISL ends: each entry
-    names one end, the contact it must carry, and when up the received delay, its rates and
-    whether its admission must be stopped."""
+    """A KernelInventory request with no ground station audits long-delay ends, fixed or ground:
+    each entry names one end, the contact it must carry, and when up the received delay, its
+    rates and whether its admission must be stopped."""
     for entry in request.entries:
         _require_nonempty(entry.node_id, "node_id")
         _require_nonempty(entry.interface_name, "interface_name")
         _validate_locality(entry.locality)
-        if entry.link_type != node_agent_pb2.LINK_TYPE_ISL:
-            raise CommandContractError(
-                node_agent_pb2.NODE_AGENT_INVALID_FIELD,
-                "a KernelInventory request without gs_id audits ISL ends only",
-            )
+        if entry.link_type == node_agent_pb2.LINK_TYPE_GROUND:
+            # A long-delay ground end, audited like a fixed long-delay end.
+            _require_nonempty(entry.gs_id, "gs_id")
+            _require_nonempty(entry.sat_id, "sat_id")
+            _require_nonempty(entry.peer_node_id, "peer_node_id")
+            _require_nonempty(entry.peer_interface_name, "peer_interface_name")
         if entry.locality == node_agent_pb2.LOCALITY_CROSS_NODE and entry.vni <= 0:
             raise CommandContractError(
                 node_agent_pb2.NODE_AGENT_INVALID_FIELD,
@@ -315,11 +320,6 @@ def _validate_long_delay_inventory(request) -> None:
                     "an expected-up long-delay end needs receive_latency_ms > 0",
                 )
             _validate_terminal_rates(entry, operation=KIND_KERNEL_INVENTORY)
-        if entry.locality == node_agent_pb2.LOCALITY_CROSS_NODE and entry.vni <= 0:
-            raise CommandContractError(
-                node_agent_pb2.NODE_AGENT_INVALID_FIELD,
-                "KernelInventory CROSS_NODE entry requires vni > 0",
-            )
 
 
 def validate_kernel_inventory_request(request, *, fence: RuntimeFence) -> None:
